@@ -31,6 +31,7 @@ import {
   validateDesktopNativeBuildHost,
 } from "./lib/desktop-platform-build-config.ts";
 import { stageDesktopRuntimeResources } from "./lib/desktop-runtime-resources.ts";
+import { assertPackagedThirdPartyNotice } from "./lib/desktop-artifact-notices.ts";
 import {
   SYNARA_PACKAGED_DESKTOP_FLAVORS,
   type SynaraPackagedDesktopFlavor,
@@ -1252,6 +1253,8 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   yield* fs.copy(distDirs.desktopDist, path.join(stageAppDir, "apps/desktop/dist-electron"));
   yield* fs.copy(distDirs.desktopResources, stageResourcesDir);
   yield* fs.copy(distDirs.serverDist, path.join(stageAppDir, "apps/server/dist"));
+  const thirdPartyNotices = yield* fs.readFileString(path.join(repoRoot, "THIRD_PARTY_NOTICES.md"));
+  yield* fs.writeFileString(path.join(stageAppDir, "THIRD_PARTY_NOTICES.md"), thirdPartyNotices);
   yield* stageClientFavicons(stageAppDir, options.flavor);
 
   yield* timedBuildStage(
@@ -1411,6 +1414,15 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
       message: `Build completed but dist directory was not found at ${stageDistDir}`,
     });
   }
+
+  yield* Effect.tryPromise({
+    try: () => assertPackagedThirdPartyNotice(stageDistDir, thirdPartyNotices),
+    catch: (cause) =>
+      new BuildScriptError({
+        message: "Packaged app is missing the staged THIRD_PARTY_NOTICES.md resource.",
+        cause,
+      }),
+  });
 
   if (options.platform === "mac") {
     yield* assertPackagedMacDeviceHelper(stageDistDir, artifactIdentity.identity.displayName);

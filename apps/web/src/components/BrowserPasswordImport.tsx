@@ -1,0 +1,373 @@
+import type { BrowserPasswordImportResult, BrowserVaultMethods } from "@synara/contracts";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { BrowserVaultMaster } from "./BrowserVaultMaster";
+import { Button } from "./ui/button";
+import { Checkbox } from "./ui/checkbox";
+import {
+  getNavigatorPlatform,
+  isLinuxPlatform,
+  isMacPlatform,
+  isWindowsPlatform,
+} from "~/lib/utils";
+
+type Inventory = Awaited<ReturnType<BrowserVaultMethods["inventoryChromiumProfiles"]>>;
+
+function countLabel(count: number | null, kind: string, status: string) {
+  if (status === "locked") return `${kind}: locked`;
+  if (status === "unavailable") return `${kind}: unavailable`;
+  if (count === null) return kind;
+  return `${count} ${kind}`;
+}
+
+function failureMessage(result: Extract<BrowserPasswordImportResult, { ok: false }>) {
+  switch (result.code) {
+    case "cancelled":
+      return "Password import cancelled.";
+    case "permission_denied":
+      return "macOS denied access to this browser's saved-password data. Check profile access and approve any Keychain prompt, then retry.";
+    case "keychain_unavailable":
+      return "The browser's saved-password key is unavailable in Keychain.";
+    case "timed_out":
+      return "The browser Keychain request timed out. Close the browser and retry.";
+    case "source_missing":
+      return "This browser profile is no longer available. Refresh the list and retry.";
+    case "source_too_large":
+      return "This profile exceeds the safe password import size limit.";
+    case "too_many_logins":
+      return "This profile has more saved passwords than Synara can safely import in one operation.";
+    case "vault_locked":
+      return "Unlock or set up Saved Logins below, then retry the import.";
+    case "vault_failed":
+      return "Synara could not save these passwords. Check available disk space and try again.";
+    case "unsupported_platform":
+      return "Password import for this browser is not available on this operating system yet.";
+    case "reader_failed":
+      return "Synara could not read this profile's saved passwords. Close the browser and retry.";
+  }
+}
+
+export function BrowserPasswordImport({
+  api,
+  disabled = false,
+  onBusyChange,
+}: {
+  api: BrowserVaultMethods;
+  disabled?: boolean;
+  onBusyChange?: (busy: boolean) => void;
+}) {
+  const platform = getNavigatorPlatform();
+  const passwordImportSupported = isMacPlatform(platform);
+  const [inventory, setInventory] = useState<Inventory>([]);
+  const [selected, setSelected] = useState<Record<string, boolean>>({});
+  const [confirmed, setConfirmed] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [masterBusy, setMasterBusy] = useState(false);
+  const [status, setStatus] = useState<string | null>(null);
+  const [inventoryStatus, setInventoryStatus] = useState<"loading" | "ready" | "error">("loading");
+  const [vaultAction, setVaultAction] = useState<"setup" | "unlock" | null>(null);
+  const [vaultStatus, setVaultStatus] = useState<"loading" | "ready" | "error">("loading");
+  const [masterAction, setMasterAction] = useState<"setup" | "unlock" | null>(null);
+  const cancelRequested = useRef(false);
+  const activeOperation = useRef<string | null>(null);
+  const inventoryRequest = useRef(0);
+  const vaultRequest = useRef(0);
+
+  const refreshVaultAccess = useCallback(async () => {
+    const request = ++vaultRequest.current;
+    setVaultStatus("loading");
+    try {
+      const snapshot = await api.snapshot();
+      if (request !== vaultRequest.current) return;
+      setVaultAction(
+        snapshot.protection.locked ? (snapshot.protection.configured ? "unlock" : "setup") : null,
+      );
+      setVaultStatus("ready");
+    } catch {
+      if (request === vaultRequest.current) {
+        setStatus("Saved Logins could not be inspected. Try again before importing passwords.");
+        setVaultStatus("error");
+      }
+    }
+  }, [api]);
+
+  const loadInventory = useCallback(async () => {
+    const request = ++inventoryRequest.current;
+    setInventoryStatus("loading");
+    setInventory([]);
+    try {
+      const next = await api.inventoryChromiumProfiles();
+      if (request !== inventoryRequest.current) return;
+      setInventory(next);
+      setSelected(
+        Object.fromEntries(
+          next.flatMap((browser) =>
+            browser.profiles.map((profile) => [
+              `${browser.id}:${profile.id}`,
+              profile.passwordStatus === "available",
+            ]),
+          ),
+        ),
+      );
+      setInventoryStatus("ready");
+    } catch {
+      if (request === inventoryRequest.current) setInventoryStatus("error");
+    }
+  }, [api]);
+
+  useEffect(() => {
+    if (!passwordImportSupported) return;
+    void loadInventory();
+    void refreshVaultAccess();
+    const unsubscribe = api.onChanged(() => void refreshVaultAccess());
+    return () => {
+      inventoryRequest.current++;
+      vaultRequest.current++;
+      unsubscribe();
+    };
+  }, [api, loadInventory, passwordImportSupported, refreshVaultAccess]);
+
+  const selectedProfiles = useMemo(
+    () =>
+      inventory.flatMap((browser) =>
+        browser.profiles
+          .filter(
+            (profile) =>
+              profile.passwordStatus === "available" &&
+              selected[`${browser.id}:${profile.id}`] === true,
+          )
+          .map((profile) => ({ browser, profile })),
+      ),
+    [inventory, selected],
+  );
+
+  const run = async () => {
+    if (busy || masterBusy || disabled || !confirmed || selectedProfiles.length === 0) return;
+    cancelRequested.current = false;
+    setBusy(true);
+    onBusyChange?.(true);
+    setStatus(null);
+    const outcomes: string[] = [];
+    try {
+      for (const { browser, profile } of selectedProfiles) {
+        if (cancelRequested.current) break;
+        const operationId = crypto.randomUUID();
+        activeOperation.current = operationId;
+        try {
+          const result = await api.importPasswords({
+            operationId,
+            browser: browser.id,
+            profile: profile.id,
+            confirmed: true,
+          });
+          outcomes.push(
+            result.ok
+              ? `${browser.name} — ${profile.name}: ${result.imported} imported, ${result.skipped} skipped${result.warnings.includes("provenance_not_saved") ? "; provenance could not be saved" : ""}${result.warnings.includes("audit_not_saved") ? "; import audit could not be saved" : ""}.`
+              : `${browser.name} — ${profile.name}: ${failureMessage(result)}`,
+          );
+          if (!result.ok && result.code === "cancelled") break;
+          if (!result.ok && result.code === "vault_locked") {
+            void refreshVaultAccess();
+            break;
+          }
+          if (!result.ok && result.code === "vault_failed") break;
+        } catch {
+          outcomes.push(`${browser.name} — ${profile.name}: Synara could not finish this import.`);
+          break;
+        }
+      }
+    } finally {
+      activeOperation.current = null;
+      setStatus(outcomes.join(" "));
+      setBusy(false);
+      setConfirmed(false);
+      onBusyChange?.(masterBusy);
+    }
+  };
+
+  return (
+    <section
+      className="mt-4 space-y-3 border-t pt-4 text-ui leading-snug"
+      aria-label="Import saved passwords"
+    >
+      <h3 className="text-ui-lg font-medium">Saved passwords</h3>
+      {!passwordImportSupported ? (
+        <p className="text-ui-sm text-muted-foreground">
+          {isLinuxPlatform(platform) || isWindowsPlatform(platform)
+            ? "Saved-password import is not supported on Linux or Windows yet."
+            : "Saved-password import is not available on this platform yet."}
+        </p>
+      ) : inventoryStatus === "loading" ? (
+        <p role="status" className="text-ui-sm text-muted-foreground">
+          Looking for installed Chromium browsers…
+        </p>
+      ) : inventoryStatus === "error" ? (
+        <div className="space-y-2">
+          <p role="alert" className="text-ui-sm text-destructive">
+            Installed browser profiles could not be inspected.
+          </p>
+          <Button size="sm" variant="outline" onClick={() => void loadInventory()}>
+            Retry browser detection
+          </Button>
+        </div>
+      ) : inventory.length === 0 ? (
+        <p className="text-ui-sm text-muted-foreground">
+          No installed Chromium browser profiles are available for password import.
+        </p>
+      ) : (
+        <ul className="space-y-3">
+          {inventory.map((browser) => (
+            <li key={browser.id} className="space-y-2 rounded-lg border p-3">
+              <div className="font-medium">{browser.name}</div>
+              {browser.profiles.length === 0 ? (
+                <p className="text-ui-sm text-muted-foreground">
+                  {browser.profileStatus === "unavailable"
+                    ? "Profile data unavailable"
+                    : "No profiles found"}
+                </p>
+              ) : (
+                <ul className="space-y-1 pl-3">
+                  {browser.profiles.map((profile) => {
+                    const id = `${browser.id}:${profile.id}`;
+                    return (
+                      <li key={profile.id}>
+                        <label className="flex items-start gap-2">
+                          <Checkbox
+                            checked={selected[id] === true}
+                            disabled={
+                              busy ||
+                              masterBusy ||
+                              disabled ||
+                              profile.passwordStatus !== "available"
+                            }
+                            onCheckedChange={(checked) =>
+                              setSelected((current) => ({ ...current, [id]: checked === true }))
+                            }
+                          />
+                          <span>
+                            {profile.name}
+                            {profile.isDefault ? " (default)" : ""}
+                            <span className="block text-ui-sm text-muted-foreground">
+                              {countLabel(profile.cookieCount, "cookies", profile.cookieStatus)} ·{" "}
+                              {countLabel(
+                                profile.passwordCount,
+                                "saved passwords",
+                                profile.passwordStatus,
+                              )}
+                            </span>
+                          </span>
+                        </label>
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+      {passwordImportSupported && vaultAction ? (
+        <div className="space-y-2 rounded-md border p-3">
+          <p className="text-ui-sm text-muted-foreground">
+            {vaultAction === "setup"
+              ? "Set up Saved Logins before importing passwords."
+              : "Unlock Saved Logins before importing passwords."}
+          </p>
+          {masterAction ? (
+            <BrowserVaultMaster
+              api={api}
+              disabled={busy || disabled}
+              onBusyChange={(value) => {
+                setMasterBusy(value);
+                onBusyChange?.(busy || value);
+              }}
+              action={{ kind: masterAction }}
+              onDone={() => {
+                setMasterAction(null);
+                void refreshVaultAccess();
+              }}
+            />
+          ) : (
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={busy || masterBusy || disabled}
+              onClick={() => setMasterAction(vaultAction)}
+            >
+              {vaultAction === "setup" ? "Set up Saved Logins" : "Unlock Saved Logins"}
+            </Button>
+          )}
+        </div>
+      ) : null}
+      {passwordImportSupported && vaultStatus === "loading" ? (
+        <p role="status" className="text-ui-sm text-muted-foreground">
+          Checking Saved Logins protection…
+        </p>
+      ) : passwordImportSupported && vaultStatus === "error" ? (
+        <Button size="sm" variant="outline" onClick={() => void refreshVaultAccess()}>
+          Retry Saved Logins check
+        </Button>
+      ) : null}
+      {inventory.length > 0 ? (
+        <>
+          <label className="flex items-start gap-2">
+            <Checkbox
+              checked={confirmed}
+              disabled={busy || masterBusy || disabled || selectedProfiles.length === 0}
+              onCheckedChange={(checked) => setConfirmed(checked === true)}
+            />
+            <span>
+              I authorize Synara to read saved passwords from the selected profiles and copy them
+              into Saved Logins. Existing logins will be skipped.
+            </span>
+          </label>
+          {status ? (
+            <p role="status" className="text-muted-foreground">
+              {status}
+            </p>
+          ) : null}
+          <div className="flex justify-end gap-2">
+            {busy ? (
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => {
+                  cancelRequested.current = true;
+                  const operationId = activeOperation.current;
+                  if (operationId)
+                    void api
+                      .cancelPasswordImport(operationId)
+                      .catch(() =>
+                        setStatus(
+                          "Cancellation could not be sent. The remaining profiles will be skipped.",
+                        ),
+                      );
+                }}
+              >
+                Cancel password import
+              </Button>
+            ) : null}
+            <Button
+              size="sm"
+              disabled={
+                busy ||
+                masterBusy ||
+                disabled ||
+                !confirmed ||
+                selectedProfiles.length === 0 ||
+                vaultStatus !== "ready" ||
+                vaultAction !== null
+              }
+              onClick={() => void run()}
+            >
+              {busy ? "Importing…" : "Import selected passwords"}
+            </Button>
+          </div>
+        </>
+      ) : status ? (
+        <p role="status" className="text-muted-foreground">
+          {status}
+        </p>
+      ) : null}
+    </section>
+  );
+}

@@ -289,6 +289,7 @@ import { registerBrowserVaultIpc } from "./browserVaultIpc";
 import { registerSafariAccessIpc } from "./safariAccessIpc";
 import { showInFileManager } from "./showInFileManager";
 import { BrowserCookieImport } from "./browserAutomation/browserCookieImport";
+import { BrowserPasswordImport } from "./browserAutomation/browserPasswordImport";
 import { shutdownBrowserServices } from "./browserAutomation/browserShutdown";
 import {
   registerBrowserIpcHandlers,
@@ -5591,6 +5592,7 @@ function registerIpcHandlers(): void {
         }
       },
     ),
+    new BrowserPasswordImport(browserVault),
   );
 }
 

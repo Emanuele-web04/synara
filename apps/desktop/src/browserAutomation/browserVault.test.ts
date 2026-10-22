@@ -75,6 +75,65 @@ describe("browser vault", { timeout: VAULT_TEST_TIMEOUT_MS }, () => {
     expect(available).not.toHaveBeenCalled();
   });
 
+  it("imports without agent access, skips duplicate identities, and never overwrites", async () => {
+    const { vault } = await fixture();
+    try {
+      await vault.configure({ agentUse: false, offerSave: false, autosave: false });
+      const first = await vault.importPasswords([
+        {
+          origin: "https://www.example.test/login",
+          username: "alice",
+          password: "first-synthetic-password",
+        },
+        {
+          origin: "https://example.test/other",
+          username: "ALICE",
+          password: "replacement-synthetic-password",
+        },
+      ]);
+      expect(first).toEqual({ imported: 1, skipped: 1, provenanceSaved: true });
+      const saved = (await vault.snapshot()).logins;
+      expect(saved).toHaveLength(1);
+      expect(saved[0]).toMatchObject({ origin: "https://www.example.test", source: "user" });
+      expect(await vault.reveal({ id: saved[0]!.id, password: master })).toMatchObject({
+        password: "first-synthetic-password",
+      });
+
+      const again = await vault.importPasswords([
+        {
+          origin: "https://example.test",
+          username: "alice",
+          password: "different-synthetic-password",
+        },
+      ]);
+      expect(again).toEqual({ imported: 0, skipped: 1, provenanceSaved: true });
+      expect((await vault.snapshot()).logins).toHaveLength(1);
+      expect(await vault.reveal({ id: saved[0]!.id, password: master })).toMatchObject({
+        password: "first-synthetic-password",
+      });
+    } finally {
+      vault.dispose();
+    }
+  });
+
+  it("bounds a maximum-size distinct password import at vault capacity", async () => {
+    const { vault } = await fixture();
+    try {
+      const entries = Array.from({ length: 50_000 }, (_, index) => ({
+        origin: `https://site-${index}.example.test`,
+        username: "owner",
+        password: "synthetic-password",
+      }));
+      const result = await vault.importPasswords(entries);
+      expect(result).toMatchObject({ imported: 4096, skipped: 50_000 - 4096 });
+      expect((await vault.snapshot()).logins).toHaveLength(4096);
+      const duplicate = await vault.importPasswords(entries);
+      expect(duplicate).toMatchObject({ imported: 0, skipped: 50_000 });
+    } finally {
+      vault.dispose();
+    }
+  });
+
   it.each([false, true])(
     "preserves saved passwords when provenance persistence fails (update=%s)",
     async (update) => {
@@ -326,3 +385,29 @@ describe("browser vault", { timeout: VAULT_TEST_TIMEOUT_MS }, () => {
     vault.dispose();
   });
 });
+
+it(
+  "preserves committed import counts and provenance when the audit file is unwritable",
+  async () => {
+    const { home, vault } = await fixture();
+    try {
+      const audit = join(home, "vault", "audit.jsonl");
+      await rm(audit, { force: true });
+      await mkdir(audit);
+      const result = await vault.importPasswords([
+        { origin, username: "audit-test", password: "synthetic-secret" },
+      ]);
+      expect(result).toEqual({ imported: 1, skipped: 0, provenanceSaved: true, auditSaved: false });
+      const saved = (await vault.snapshot()).logins;
+      expect(saved).toMatchObject([{ username: "audit-test", source: "user" }]);
+      expect(
+        await vault.importPasswords([
+          { origin, username: "audit-test", password: "synthetic-secret" },
+        ]),
+      ).toMatchObject({ imported: 0, skipped: 1 });
+    } finally {
+      vault.dispose();
+    }
+  },
+  VAULT_TEST_TIMEOUT_MS,
+);

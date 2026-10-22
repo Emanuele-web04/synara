@@ -94,6 +94,9 @@ describe("createDesktopPlatformBuildConfig", () => {
         to: MAC_ICON_ASSETS_CAR_BUNDLE_PATH,
       },
     ]);
+    assert.deepStrictEqual(config.extraResources, [
+      { from: "THIRD_PARTY_NOTICES.md", to: "THIRD_PARTY_NOTICES.md" },
+    ]);
     assert.equal(MAC_ICON_ASSETS_CAR_STAGE_PATH, "apps/desktop/resources/Assets.car");
     assert.equal(MAC_ICON_ASSETS_CAR_BUNDLE_PATH, "Resources/Assets.car");
     // macOS 26 reads the layered icon out of Assets.car; without this key the
@@ -178,6 +181,7 @@ describe("createDesktopPlatformBuildConfig", () => {
     assert.equal(linux.mac, undefined);
     assert.equal(linux.extraFiles, undefined);
     assert.deepStrictEqual(linux.extraResources, [
+      { from: "THIRD_PARTY_NOTICES.md", to: "THIRD_PARTY_NOTICES.md" },
       { from: "apps/desktop/resources/cua-driver", to: "cua-driver" },
     ]);
     assert.ok(linux.files?.includes("!apps/desktop/resources/cua-driver/**"));
@@ -197,7 +201,9 @@ describe("createDesktopPlatformBuildConfig", () => {
 
     assert.equal(win.mac, undefined);
     assert.equal(win.extraFiles, undefined);
-    assert.equal(win.extraResources, undefined);
+    assert.deepStrictEqual(win.extraResources, [
+      { from: "THIRD_PARTY_NOTICES.md", to: "THIRD_PARTY_NOTICES.md" },
+    ]);
     assert.deepStrictEqual(win.asarUnpack, ["node_modules/node-pty/**"]);
     assert.equal(WINDOWS_INSTALLER_GUID, "368107a8-afe6-5db5-ab3b-d4f331684868");
     assert.deepStrictEqual(win.nsis, {

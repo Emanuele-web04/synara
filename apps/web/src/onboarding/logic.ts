@@ -10,6 +10,7 @@ import type { ProviderKind, ServerProviderStatus } from "@synara/contracts";
 export const ONBOARDING_STEPS = [
   "welcome",
   "tour",
+  "browser-import",
   "providers",
   "theme",
   "project",
@@ -84,16 +85,14 @@ export interface OnboardingGateInputs {
  * snapshots and settings arrive instead of latching the first non-pending answer.
  */
 export function resolveOnboardingGate(input: OnboardingGateInputs): OnboardingGate {
-  if (
-    input.installationKeyStatus === "pending" ||
-    !input.threadsHydrated ||
-    !input.settingsSettled
-  ) {
-    return "pending";
-  }
+  if (input.installationKeyStatus === "pending" || !input.settingsSettled) return "pending";
   if (input.installationKeyStatus === "error") return "hidden";
   const completed = input.serverCompletedAt !== null || input.localCompletedAt !== null;
-  return !completed && input.projectCount === 0 ? "show" : "hidden";
+  // A completion marker is enough to know this is not first-run. Waiting for the
+  // project list in that case can block unrelated startup announcements indefinitely.
+  if (completed) return "hidden";
+  if (!input.threadsHydrated) return "pending";
+  return input.projectCount === 0 ? "show" : "hidden";
 }
 
 export interface OnboardingReconcileInputs {

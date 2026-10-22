@@ -208,6 +208,32 @@ export class BrowserVault {
     return this.snapshot();
   }
 
+  /** Stores an explicitly imported set of credentials without upserting existing logins. */
+  async importPasswords(
+    entries: Array<{ origin: string; username: string; password: string }>,
+  ): Promise<{ imported: number; skipped: number; provenanceSaved: boolean; auditSaved?: false }> {
+    await this.ready;
+    if ((await this.keys.status()).locked) throw new Error("Unlock the browser vault first.");
+    const result = await this.vault.ownerImportMany(entries);
+    for (const id of result.ids) this.sources.set(id, "user");
+    let provenanceSaved = true;
+    if (result.imported > 0) {
+      try {
+        await this.persist();
+      } catch {
+        // The encrypted credentials are already durable; keep the honest counts.
+        provenanceSaved = false;
+      }
+      this.changed();
+    }
+    return {
+      imported: result.imported,
+      skipped: result.skipped,
+      provenanceSaved,
+      ...(result.auditWarning ? { auditSaved: false as const } : {}),
+    };
+  }
+
   private async request(action: Action, payload: Payload, origin: string, source: Source) {
     const result = await this.vault.handleRequest(
       action,

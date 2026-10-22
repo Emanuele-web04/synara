@@ -37,6 +37,8 @@ const RECONCILE_BASE = {
 describe("onboarding steps", () => {
   it("clamps navigation at both ends", () => {
     expect(nextOnboardingStep("welcome")).toBe("tour");
+    expect(nextOnboardingStep("tour")).toBe("browser-import");
+    expect(previousOnboardingStep("providers")).toBe("browser-import");
     expect(nextOnboardingStep("done")).toBe("done");
     expect(previousOnboardingStep("tour")).toBe("welcome");
     expect(previousOnboardingStep("welcome")).toBe("welcome");
@@ -45,6 +47,7 @@ describe("onboarding steps", () => {
   it("treats everything after the tour as a setup step", () => {
     expect(isOnboardingSetupStep("welcome")).toBe(false);
     expect(isOnboardingSetupStep("tour")).toBe(false);
+    expect(isOnboardingSetupStep("browser-import")).toBe(true);
     expect(isOnboardingSetupStep("providers")).toBe(true);
     expect(isOnboardingSetupStep("done")).toBe(true);
   });
@@ -75,6 +78,23 @@ describe("resolveOnboardingGate", () => {
     expect(resolveOnboardingGate({ ...GATE_BASE, serverCompletedAt: COMPLETED_AT })).toBe("hidden");
     // A local marker covers a completion whose server write failed.
     expect(resolveOnboardingGate({ ...GATE_BASE, localCompletedAt: COMPLETED_AT })).toBe("hidden");
+  });
+
+  it("does not wait for project hydration after a scoped completion marker", () => {
+    expect(
+      resolveOnboardingGate({
+        ...GATE_BASE,
+        threadsHydrated: false,
+        serverCompletedAt: COMPLETED_AT,
+      }),
+    ).toBe("hidden");
+    expect(
+      resolveOnboardingGate({
+        ...GATE_BASE,
+        threadsHydrated: false,
+        localCompletedAt: COMPLETED_AT,
+      }),
+    ).toBe("hidden");
   });
 });
 

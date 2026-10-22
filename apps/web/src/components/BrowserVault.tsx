@@ -10,6 +10,7 @@ import { DisclosureRegion } from "./ui/DisclosureRegion";
 import { Switch } from "./ui/switch";
 import { BrowserVaultMaster } from "./BrowserVaultMaster";
 import { BrowserCookieImport, type BrowserCookieDestination } from "./BrowserCookieImport";
+import { BrowserPasswordImport } from "./BrowserPasswordImport";
 
 const OPEN_EVENT = "synara:open-browser-vault";
 
@@ -41,7 +42,13 @@ export function BrowserVaultDialog() {
   const [open, setOpen] = useState(false);
   const [snapshot, setSnapshot] = useState<BrowserVaultSnapshot>();
   const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
+  const [acting, setBusy] = useState(false);
+  const [cookiesBusy, setCookiesBusy] = useState(false);
+  const [passwordsBusy, setPasswordsBusy] = useState(false);
+  const [masterBusy, setMasterBusy] = useState(false);
+  const busy = acting || cookiesBusy || passwordsBusy || masterBusy;
+  const busyRef = useRef(busy);
+  busyRef.current = busy;
   const [deleting, setDeleting] = useState<string | null>(null);
   const [master, setMaster] = useState<
     { kind: "setup" | "unlock" } | { kind: "reveal"; id: string } | null
@@ -70,6 +77,7 @@ export function BrowserVaultDialog() {
   useEffect(() => {
     mounted.current = true;
     const show = (event: Event) => {
+      if (busyRef.current) return;
       setDestination((event as CustomEvent<BrowserCookieDestination | undefined>).detail);
       setOpen(true);
       void reload();
@@ -110,6 +118,7 @@ export function BrowserVaultDialog() {
     <Dialog
       open={open}
       onOpenChange={(next) => {
+        if (busy) return;
         setOpen(next);
         if (!next) {
           setDeleting(null);
@@ -167,6 +176,8 @@ export function BrowserVaultDialog() {
                 <BrowserVaultMaster
                   key={master.kind}
                   api={api}
+                  disabled={acting || cookiesBusy || passwordsBusy}
+                  onBusyChange={setMasterBusy}
                   action={master}
                   onDone={() => {
                     setMaster(null);
@@ -215,7 +226,14 @@ export function BrowserVaultDialog() {
                   <div className="flex flex-col items-center gap-3 py-6 text-center">
                     <CentralIcon name="keyhole" className="size-7 text-muted-foreground/60" />
                     <p className="text-ui leading-snug text-muted-foreground">No saved logins.</p>
-                    <Button size="sm" variant="ghost" onClick={() => setOpen(false)}>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      disabled={busy}
+                      onClick={() => {
+                        if (!busyRef.current) setOpen(false);
+                      }}
+                    >
                       Back to browser
                     </Button>
                   </div>
@@ -279,6 +297,8 @@ export function BrowserVaultDialog() {
                             <BrowserVaultMaster
                               key={login.id}
                               api={api}
+                              disabled={acting || cookiesBusy || passwordsBusy}
+                              onBusyChange={setMasterBusy}
                               action={master}
                               onDone={() => setMaster(null)}
                             />
@@ -373,12 +393,23 @@ export function BrowserVaultDialog() {
                   />
                 </label>
               </section>
-              {open && destination ? (
-                <BrowserCookieImport
-                  key={`${destination.threadId}:${destination.tabId}:${destination.origin}`}
-                  api={api}
-                  destination={destination}
-                />
+              {open ? (
+                <>
+                  {destination ? (
+                    <BrowserCookieImport
+                      key={`${destination.threadId}:${destination.tabId}:${destination.origin}`}
+                      api={api}
+                      destination={destination}
+                      disabled={acting || passwordsBusy || masterBusy}
+                      onBusyChange={setCookiesBusy}
+                    />
+                  ) : null}
+                  <BrowserPasswordImport
+                    api={api}
+                    disabled={acting || cookiesBusy || masterBusy}
+                    onBusyChange={setPasswordsBusy}
+                  />
+                </>
               ) : null}
             </>
           )}

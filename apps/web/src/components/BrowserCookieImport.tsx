@@ -1,3 +1,5 @@
+import { BrowserCookieSource } from "@synara/contracts";
+import { Schema } from "effect";
 import { useEffect, useRef, useState } from "react";
 import type { BrowserCookieImportResult, BrowserVaultMethods, ThreadId } from "@synara/contracts";
 import { Button } from "./ui/button";
@@ -27,8 +29,16 @@ function importFailure(
     return "The selected profile is no longer available. Choose another profile or open the source browser first.";
   if (result.code === "reader_unavailable")
     return "The native cookie reader is unavailable. Reinstall Synara with its optional native dependencies, or sign in directly.";
-  if (result.code === "persistence_failed")
-    return "Cookies were imported, but secure storage could not save their session state for future launches. Existing sessions may have changed.";
+  if (result.code === "source_too_large")
+    return "Synara stopped safely because this profile exceeds the secure cookie transfer limit. Use the chat cookie control to import one site, or sign in directly.";
+  if (result.code === "redaction_capacity")
+    return "Synara stopped because the secure cookie cleanup limit was reached and restarted its browser worker. Reopen the target and retry, or sign in directly.";
+  if (result.code === "target_capacity")
+    return "Synara stopped because this target profile has reached Chromium's safe cookie capacity. Existing target cookies were preserved.";
+  if (result.code === "target_eviction")
+    return "Synara stopped because Chromium removed existing target cookies during transfer. Review the target profile before retrying.";
+  if (result.code === "target_failed")
+    return "Synara could not add these cookies to the target profile. Existing sessions may have changed; review the profile before retrying.";
   if (result.code === "reader_failed" && result.stage === "acquisition")
     return "The native reader could not open or acquire the source cookie store. A permission denial was not confirmed. Check that the source profile is available and Synara has access to it.";
   if (result.code === "reader_failed" && (result.stage === "parse" || result.stage === "decode"))
@@ -43,16 +53,23 @@ function importFailure(
 export function BrowserCookieImport({
   api,
   destination,
+  disabled = false,
+  onBusyChange,
 }: {
   api: BrowserVaultMethods;
   destination: BrowserCookieDestination;
+  disabled?: boolean | undefined;
+  onBusyChange?: ((busy: boolean) => void) | undefined;
 }) {
   const [open, setOpen] = useState(false);
   const [sources, setSources] = useState<Choice[]>([]);
   const [profiles, setProfiles] = useState<Choice[]>([]);
   const [source, setSource] = useState("");
   const [profile, setProfile] = useState("");
-  const [busy, setBusy] = useState(false);
+  const [importBusy, setBusy] = useState(false);
+  const [discoveryBusy, setDiscoveryBusy] = useState(false);
+  const busy = importBusy || discoveryBusy || disabled;
+  useEffect(() => onBusyChange?.(importBusy), [importBusy, onBusyChange]);
   const [status, setStatus] = useState<string | null>(null);
   const [scope, setScope] = useState<"site" | "profile">(destination.origin ? "site" : "profile");
   const [confirmed, setConfirmed] = useState(false);
@@ -70,7 +87,7 @@ export function BrowserCookieImport({
     setConfirmed(false);
     setProfile("");
     setProfiles([]);
-    setBusy(true);
+    setDiscoveryBusy(true);
     setStatus(null);
     try {
       const choices = await api.cookieProfiles(browser);
@@ -82,13 +99,13 @@ export function BrowserCookieImport({
       if (request === generation.current)
         setStatus("Profiles could not be read. Check browser installation and system permissions.");
     } finally {
-      if (request === generation.current) setBusy(false);
+      if (request === generation.current) setDiscoveryBusy(false);
     }
   };
 
   const load = async () => {
     setOpen(true);
-    setBusy(true);
+    setDiscoveryBusy(true);
     setStatus(null);
     const request = ++generation.current;
     try {
@@ -98,12 +115,12 @@ export function BrowserCookieImport({
       if (choices[0]) await loadProfiles(choices[0].id);
       else {
         setStatus("Cookie import is unavailable on this platform.");
-        setBusy(false);
+        setDiscoveryBusy(false);
       }
     } catch {
       if (request === generation.current) {
         setStatus("Cookie import is unavailable. Sign in directly in the browser instead.");
-        setBusy(false);
+        setDiscoveryBusy(false);
       }
     }
   };
@@ -112,11 +129,10 @@ export function BrowserCookieImport({
     if (
       busy ||
       !profile ||
-      !["chrome", "safari", "edge"].includes(source) ||
+      !Schema.is(BrowserCookieSource)(source) ||
       (scope === "profile" && !confirmed)
     )
       return;
-    if (source !== "chrome" && source !== "safari" && source !== "edge") return;
     const request = ++generation.current;
     setBusy(true);
     setStatus(null);
@@ -136,7 +152,7 @@ export function BrowserCookieImport({
       if (request === generation.current && result)
         setStatus(
           result.ok
-            ? `${result.imported} ${result.imported === 1 ? "cookie" : "cookies"} imported. ${result.skipped} skipped.${result.warnings.length ? " Some cookies could not be transferred; you may need to sign in again." : ""}`
+            ? `${result.imported} ${result.imported === 1 ? "cookie" : "cookies"} imported. ${result.skipped} skipped.${result.warnings.length ? " Some cookies could not be transferred; you may need to sign in again." : ""}${result.sessionRestore === "unavailable" ? " Secure restoration of session-only cookies is unavailable; some sign-ins may not survive restart." : ""}`
             : importFailure(result, source),
         );
     } catch {
