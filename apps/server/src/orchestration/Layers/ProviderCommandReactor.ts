@@ -383,13 +383,19 @@ function shouldDropResumeCursorForProviderOptionsChange(input: {
 }
 
 // Providers whose fresh-session transcript bootstrap is also persisted on the
-// provider binding (OpenCode, plus Devin and Grok after a stale-cursor fresh
-// start). Synara must clear that durable flag once the bootstrap is consumed,
+// provider binding (OpenCode and providers whose native resume can fall back to
+// a fresh session). Synara must clear that flag once the bootstrap is consumed,
 // or every later start of the session would ask for the transcript again.
 function persistsPriorTranscriptBootstrap(
   provider: string | undefined,
-): provider is "opencode" | "devin" | "grok" {
-  return provider === "opencode" || provider === "devin" || provider === "grok";
+): provider is "opencode" | "devin" | "grok" | "codex" | "claudeAgent" {
+  return (
+    provider === "opencode" ||
+    provider === "devin" ||
+    provider === "grok" ||
+    provider === "codex" ||
+    provider === "claudeAgent"
+  );
 }
 
 function escapeRegExp(value: string): string {
@@ -3999,6 +4005,7 @@ const make = Effect.gen(function* () {
         activeSession?.provider === "droid" &&
         (sidechatBootstrapText !== null || priorTranscriptBootstrapText !== null);
       const tracksDurableContextAcceptance =
+        selectedProvider !== "codex" &&
         persistsPriorTranscriptBootstrap(selectedProvider) &&
         ((hasPendingFreshSessionTranscriptBootstrap &&
           (priorTranscriptBootstrapRetiresOnAcceptedTurn ||
@@ -4213,6 +4220,7 @@ const make = Effect.gen(function* () {
     if (
       shouldBootstrapSidechatContext &&
       input.reviewTarget === undefined &&
+      input.dispatchMode !== "steer" &&
       pendingContextBootstrapAttempt === undefined &&
       (sidechatBootstrapText !== null || !hasSidechatBootstrapContent)
     ) {
@@ -4221,10 +4229,12 @@ const make = Effect.gen(function* () {
     const retiresPriorTranscriptBootstrap =
       priorTranscriptBootstrapRetiresOnAcceptedTurn &&
       input.reviewTarget === undefined &&
+      input.dispatchMode !== "steer" &&
       pendingContextBootstrapAttempt === undefined;
     const completesSpecializedBootstrapImmediately =
       specializedBootstrapCompletesFreshSessionContext &&
       input.reviewTarget === undefined &&
+      input.dispatchMode !== "steer" &&
       pendingContextBootstrapAttempt === undefined;
     if (retiresPriorTranscriptBootstrap || completesSpecializedBootstrapImmediately) {
       let durableCompletionSucceeded = true;

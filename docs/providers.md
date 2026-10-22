@@ -52,6 +52,9 @@ Codex native resume is confirmed only when the runtime returns the requested thr
 If a recoverable resume failure starts a fresh Codex thread instead, Synara treats its native
 history as unavailable and carries the stored transcript through the existing bounded recovery
 summary. Starting the replacement process alone does not prove that native history was restored.
+Recovery remains pending until Codex acknowledges the recap turn, or another provider reports
+matching terminal success. Synara then retires the durable recovery marker; rejected
+submissions keep it for retry, and an explicit stop discards it.
 
 Codex's internal `turn/moderationMetadata` notifications stay in local native event logs
 when logging is enabled and do not create conversation activity rows. Actual provider
