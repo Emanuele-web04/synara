@@ -15,6 +15,194 @@ import { isComputerToolName } from "./lib/computerToolPresentation";
 import { isPlainRuntimeNoticeWorkEntry } from "./components/chat/agentActivity.logic";
 
 describe("deriveSubagentTaskEnds", () => {
+  it.each([
+    { turnId: undefined, includeToolUseId: false },
+    { turnId: "another-turn", includeToolUseId: false },
+    { turnId: undefined, includeToolUseId: true },
+    { turnId: "another-turn", includeToolUseId: true },
+  ])(
+    "correlates completion across turns ($turnId, explicit tool: $includeToolUseId)",
+    ({ turnId, includeToolUseId }) => {
+      const activities = [
+        makeActivity({
+          id: "start",
+          kind: "task.started",
+          sequence: 1,
+          turnId: "launch-turn",
+          createdAt: "2026-10-09T08:49:00Z",
+          payload: { taskId: "task-a", toolUseId: "tool-a", taskType: "subagent" },
+        }),
+        makeActivity({
+          id: "done",
+          kind: "task.completed",
+          sequence: 2,
+          ...(turnId ? { turnId } : {}),
+          createdAt: "2026-10-09T08:49:36Z",
+          payload: {
+            taskId: "task-a",
+            status: "completed",
+            ...(includeToolUseId ? { toolUseId: "tool-a" } : {}),
+          },
+        }),
+      ];
+      expect(deriveSubagentTaskEnds(activities).get("tool-a")).toEqual({
+        outcome: "completed",
+        endedAt: "2026-10-09T08:49:36Z",
+        startedAt: "2026-10-09T08:49:00Z",
+      });
+    },
+  );
+
+  it("does not settle unrelated tasks or nonterminal patches", () => {
+    expect(
+      deriveSubagentTaskEnds([
+        makeActivity({
+          id: "start",
+          sequence: 1,
+          kind: "task.started",
+          payload: { taskId: "task-a", toolUseId: "tool-a" },
+        }),
+        makeActivity({
+          id: "running",
+          sequence: 2,
+          kind: "task.updated",
+          payload: { taskId: "task-a", status: "running", isBackgrounded: true },
+        }),
+        makeActivity({
+          id: "other",
+          sequence: 3,
+          kind: "task.completed",
+          payload: { taskId: "unknown", status: "completed" },
+        }),
+      ]).size,
+    ).toBe(0);
+  });
+
+  it.each([
+    ["completed", "completed"],
+    ["failed", "failed"],
+    ["killed", "stopped"],
+  ])("settles terminal task.updated patches (%s)", (status, outcome) => {
+    expect(
+      deriveSubagentTaskEnds([
+        makeActivity({
+          id: "start",
+          kind: "task.started",
+          payload: { taskId: "task-a", toolUseId: "tool-a" },
+        }),
+        makeActivity({ id: "patch", kind: "task.updated", payload: { taskId: "task-a", status } }),
+      ]).get("tool-a"),
+    ).toMatchObject({ outcome });
+  });
+
+  it("keeps resumed invocations separate when only starts name their tool", () => {
+    const activities = [
+      makeActivity({
+        id: "start",
+        sequence: 1,
+        kind: "task.started",
+        payload: { taskId: "task-first", toolUseId: "a" },
+      }),
+      makeActivity({
+        id: "done",
+        sequence: 2,
+        kind: "task.updated",
+        createdAt: "2026-10-10T00:00:08Z",
+        payload: { taskId: "task-first", status: "completed" },
+      }),
+      makeActivity({
+        id: "notification",
+        sequence: 3,
+        kind: "task.completed",
+        createdAt: "2026-10-10T00:00:09Z",
+        payload: { taskId: "task-first", status: "completed" },
+      }),
+      makeActivity({
+        id: "resume",
+        sequence: 4,
+        kind: "task.started",
+        createdAt: "2026-10-10T00:01:00Z",
+        payload: { taskId: "task-second", toolUseId: "a" },
+      }),
+      makeActivity({
+        id: "failed",
+        sequence: 5,
+        kind: "task.completed",
+        createdAt: "2026-10-10T00:01:03Z",
+        payload: { taskId: "task-second", status: "failed" },
+      }),
+    ];
+    expect(deriveSubagentTaskEnds(activities.toReversed()).get("a")).toEqual({
+      outcome: "failed",
+      endedAt: "2026-10-10T00:01:03Z",
+      startedAt: "2026-10-10T00:01:00Z",
+      previous: {
+        outcome: "completed",
+        endedAt: "2026-10-10T00:00:09Z",
+        startedAt: "2026-02-23T00:00:00.000Z",
+      },
+    });
+  });
+
+  it("does not let an old task's delayed notification settle a resumed agent", () => {
+    const activities = [
+      makeActivity({
+        id: "start",
+        sequence: 1,
+        kind: "task.started",
+        createdAt: "2026-10-10T00:00:00Z",
+        payload: { taskId: "first", toolUseId: "a" },
+      }),
+      makeActivity({
+        id: "done",
+        sequence: 2,
+        kind: "task.updated",
+        createdAt: "2026-10-10T00:00:08Z",
+        payload: { taskId: "first", status: "completed" },
+      }),
+      makeActivity({
+        id: "resume",
+        sequence: 3,
+        kind: "task.started",
+        createdAt: "2026-10-10T00:01:00Z",
+        payload: { taskId: "second", toolUseId: "a" },
+      }),
+      makeActivity({
+        id: "late",
+        sequence: 4,
+        kind: "task.completed",
+        createdAt: "2026-10-10T00:01:01Z",
+        payload: { taskId: "first", status: "completed" },
+      }),
+    ];
+    expect(deriveSubagentTaskEnds(activities).get("a")).toEqual({
+      outcome: "completed",
+      endedAt: "2026-10-10T00:00:08Z",
+      startedAt: "2026-10-10T00:00:00Z",
+    });
+    expect(
+      deriveSubagentTaskEnds([
+        ...activities,
+        makeActivity({
+          id: "second-done",
+          sequence: 5,
+          kind: "task.completed",
+          createdAt: "2026-10-10T00:01:03Z",
+          payload: { taskId: "second", status: "failed" },
+        }),
+      ]).get("a"),
+    ).toEqual({
+      outcome: "failed",
+      endedAt: "2026-10-10T00:01:03Z",
+      startedAt: "2026-10-10T00:01:00Z",
+      previous: {
+        outcome: "completed",
+        endedAt: "2026-10-10T00:00:08Z",
+        startedAt: "2026-10-10T00:00:00Z",
+      },
+    });
+  });
+
   it("preserves settled invocations while a resumed task waits for its own completion", () => {
     const firstEnd = makeActivity({
       id: "done",
@@ -37,6 +225,7 @@ describe("deriveSubagentTaskEnds", () => {
     expect(deriveSubagentTaskEnds([firstEnd, restart, latestEnd]).get("a")).toEqual({
       outcome: "failed",
       endedAt: latestEnd.createdAt,
+      startedAt: restart.createdAt,
       previous: { outcome: "completed", endedAt: firstEnd.createdAt },
     });
   });

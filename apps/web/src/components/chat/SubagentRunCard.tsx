@@ -49,7 +49,10 @@ const EMPTY_TASK_ENDS: SubagentRunContextValue["taskEndByToolUseId"] = new Map()
 /** Name, role, and model of one subagent: the identity line every row shares. */
 export function SubagentIdentityLine({ item }: { item: ComposerSubagentStripItem }) {
   return (
-    <span className="flex min-w-0 items-baseline gap-1.5" title={item.fullLabel}>
+    <span
+      className="flex min-w-0 flex-wrap items-baseline gap-x-1.5 gap-y-0.5"
+      title={item.fullLabel}
+    >
       <span className="min-w-0 truncate font-medium text-foreground/88">{item.primaryLabel}</span>
       {item.role ? (
         <span className="shrink-0 text-ui-sm text-muted-foreground/60">{item.role}</span>
@@ -80,9 +83,13 @@ function renderInlineCode(text: string): ReactNode {
 
 function ActionText({ action }: { action: SubagentRunAction }) {
   return action.command ? (
-    <code className="min-w-0 truncate">{action.command}</code>
+    <code className="min-w-0 flex-1 basis-24 truncate" title={action.command}>
+      {action.command}
+    </code>
   ) : (
-    <span className="min-w-0 truncate">{action.label}</span>
+    <span className="min-w-0 flex-1 basis-24 truncate" title={action.label ?? undefined}>
+      {action.label}
+    </span>
   );
 }
 
@@ -128,25 +135,27 @@ function SubagentRunRowView({
           onClick={openThread}
           aria-label={`Open ${row.item.primaryLabel}`}
         >
-          <span className="flex min-w-0 flex-1 items-center gap-2">
+          <span className="flex min-w-0 flex-1 flex-col items-stretch gap-0.5">
             <SubagentIdentityLine item={row.item} />
-            <span className="chat-markdown flex min-w-0 items-center gap-1.5 text-ui-sm text-muted-foreground/70">
-              {live || row.phase === "starting" ? (
-                <LiveStatusSpinner
-                  className={cn("size-3 shrink-0", subagentStatusTextToneClassName("running"))}
-                />
-              ) : row.phase === "done" ? (
-                <CheckIcon className={cn("size-3 shrink-0", wordToneClassName)} />
-              ) : null}
-              <span className={cn("shrink-0", wordToneClassName)}>{description.word}</span>
+            <span className="chat-markdown flex min-w-0 flex-wrap items-center gap-1.5 text-ui-sm text-muted-foreground/70">
+              <span className="flex shrink-0 items-center gap-1.5">
+                {live || row.phase === "starting" ? (
+                  <LiveStatusSpinner
+                    className={cn("size-3 shrink-0", subagentStatusTextToneClassName("running"))}
+                  />
+                ) : row.phase === "done" ? (
+                  <CheckIcon className={cn("size-3 shrink-0", wordToneClassName)} />
+                ) : null}
+                <span className={cn("shrink-0", wordToneClassName)}>{description.word}</span>
+                {description.durationLabel ? (
+                  <>
+                    <Separator />
+                    <span className="shrink-0 tabular-nums">{description.durationLabel}</span>
+                  </>
+                ) : null}
+              </span>
               {description.detail?.kind === "action" ? (
                 <ActionText action={description.detail.action} />
-              ) : null}
-              {description.durationLabel ? (
-                <>
-                  <Separator />
-                  <span className="shrink-0 tabular-nums">{description.durationLabel}</span>
-                </>
               ) : null}
               {description.detail?.kind === "outcome" ? (
                 <span className="min-w-0 truncate">

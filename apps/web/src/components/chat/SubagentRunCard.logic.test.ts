@@ -6,7 +6,11 @@
 import { ThreadId, TurnId, type MessageId } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 
-import type { WorkLogEntry, WorkLogSubagent } from "../../session-logic";
+import {
+  deriveSubagentTaskEnds,
+  type WorkLogEntry,
+  type WorkLogSubagent,
+} from "../../session-logic";
 import { makeActivity } from "../../storeTestFixtures";
 import {
   deriveSubagentRunCard,
@@ -321,6 +325,64 @@ describe("foldSubagentRunWorkEntries", () => {
 
 describe("deriveSubagentRunCard", () => {
   const launchedAt = "2026-10-10T00:00:00.000Z";
+
+  it.each([
+    { reusesTaskId: false, phases: ["done", "running"] },
+    { reusesTaskId: true, phases: ["done", "done"] },
+  ])(
+    "scopes compact replay completions to their invocation (same taskId: $reusesTaskId)",
+    ({ reusesTaskId, phases }) => {
+      const folded = foldSubagentRunWorkEntries([
+        spawn("first", launchedAt, [
+          { threadId: "a", rawStatus: reusesTaskId ? "completed" : "running" },
+        ]),
+        spawn(
+          "resume",
+          "2026-10-10T00:01:00.000Z",
+          [{ threadId: "a", rawStatus: "running" }],
+          "turn-2",
+        ),
+      ]);
+      // A compact snapshot retains only the latest terminal patch per task ID.
+      // Distinct IDs can deliver the old task's end late; a reused ID must
+      // attach its latest completion to the resumed invocation.
+      const taskEndByToolUseId = deriveSubagentTaskEnds([
+        makeActivity({
+          id: "first-start",
+          sequence: 1,
+          kind: "task.started",
+          createdAt: launchedAt,
+          payload: { taskId: "first", toolUseId: "a" },
+        }),
+        makeActivity({
+          id: "second-start",
+          sequence: 2,
+          kind: "task.started",
+          createdAt: "2026-10-10T00:01:00.000Z",
+          payload: { taskId: reusesTaskId ? "first" : "second", toolUseId: "a" },
+        }),
+        makeActivity({
+          id: "late-end",
+          sequence: 3,
+          kind: "task.completed",
+          createdAt: "2026-10-10T00:01:01.000Z",
+          payload: { taskId: "first", status: "completed" },
+        }),
+      ]);
+      const models = folded.map((work) =>
+        deriveSubagentRunCard({
+          subagents: work.subagents!,
+          run: work.subagentRun!,
+          threads: [],
+          parentThreadId: PARENT,
+          launchTurnLive: false,
+          backgroundedProviderThreadIds: new Set(["a"]),
+          taskEndByToolUseId,
+        }),
+      );
+      expect(models.map((model) => model.rows[0]!.phase)).toEqual(phases);
+    },
+  );
 
   it("keeps a reused child's answer, action and descendants in their original invocation", () => {
     const resumedAt = "2026-10-10T00:01:00.000Z";

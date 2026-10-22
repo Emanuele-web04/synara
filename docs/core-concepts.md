@@ -85,6 +85,9 @@ input, including during ripples. The decoration pauses while its chat is hidden.
   where finished subagents stay one click away after the strip hides. In split view, the list
   stays beside the chat in its pane when opening a child or returning to its parent. Failed
   Stop or background requests report an error so the run is not mistaken for stopped.
+  Transcript subagent cards stop their clocks and remove Stop controls when the task reports
+  completion, failure, or cancellation, including after reopening the chat. Interrupting the
+  parent alone does not mark background subagents as finished.
   In a split view, dragging the divider resizes both chats continuously; releasing it saves the layout.
   A definitive provider failure leaves a **Task interrupted** notice attached to its turn,
   including when no final assistant reply arrives. The notice survives reopening and session
