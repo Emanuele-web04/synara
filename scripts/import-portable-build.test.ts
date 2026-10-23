@@ -29,7 +29,7 @@ it("imports a verified portable archive from a path containing a drive colon", (
     ...["main", "preload", "guestPreload", "cuaDriverHostStandalone"].map(
       (name) => `apps/desktop/dist-electron/${name}.js`,
     ),
-    ...["index", "restoreMigrationBackup", "runtimeDependencySmoke"].map(
+    ...["index", "restoreMigrationBackup", "runtimeDependencySmoke", "languageWorker"].map(
       (name) => `apps/server/dist/${name}.mjs`,
     ),
     "apps/server/dist/client/index.html",
@@ -57,5 +57,8 @@ it("imports a verified portable archive from a path containing a drive colon", (
   expect(imported.status, imported.stderr).toBe(0);
   expect(readFileSync(join(destination, "apps/server/dist/index.mjs"), "utf8")).toBe(
     "apps/server/dist/index.mjs",
+  );
+  expect(readFileSync(join(destination, "apps/server/dist/languageWorker.mjs"), "utf8")).toBe(
+    "apps/server/dist/languageWorker.mjs",
   );
 });
