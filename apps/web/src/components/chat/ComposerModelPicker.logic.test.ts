@@ -16,6 +16,41 @@ import {
 } from "./ComposerModelPicker.logic";
 import { getComposerTraitSelection } from "./composerTraits";
 
+describe("Haiku 5.5 context controls", () => {
+  it("keeps Claude auto-compact options out of Cursor's fallback picker", () => {
+    const claude = getComposerTraitSelection("claudeAgent", "claude-haiku-5-5", "", undefined);
+    expect(claude.contextWindowDescriptor?.id).toBe("autoCompactWindow");
+    expect(claude.contextWindowOptions.map((option) => option.value)).toEqual([
+      "auto",
+      "200k",
+      "1m",
+    ]);
+    const cursor = getComposerTraitSelection("cursor", "claude-haiku-5-5", "", undefined);
+    expect(cursor.contextWindowDescriptor).toBeNull();
+    expect(cursor.contextWindowOptions).toEqual([]);
+  });
+
+  it("uses Cursor's discovered context selector without a Claude-only override", () => {
+    const selection = getComposerTraitSelection(
+      "cursor",
+      "claude-haiku-5-5",
+      "",
+      { contextWindow: "1m" },
+      {
+        slug: "claude-haiku-5-5",
+        name: "Claude Haiku 5.5",
+        contextWindowOptions: [
+          { value: "200k", label: "200K", isDefault: true },
+          { value: "1m", label: "1M" },
+        ],
+      },
+    );
+    expect(selection.contextWindowDescriptor?.id).toBe("contextWindow");
+    expect(selection.contextWindow).toBe("1m");
+    expect(selection.contextWindowOptions.map((option) => option.value)).toEqual(["200k", "1m"]);
+  });
+});
+
 const CODEX_HIGH_FAST: StarredModel = {
   provider: "codex",
   model: "gpt-5.5",
