@@ -1,13 +1,27 @@
 import CoreGraphics
 import Foundation
 
-private let leftOptionKeyCode = CGKeyCode(0x3A)
-private let rightOptionKeyCode = CGKeyCode(0x3D)
-private let leftOptionDeviceFlagMask = CGEventFlags(rawValue: 0x20)
-private let rightOptionDeviceFlagMask = CGEventFlags(rawValue: 0x40)
 private let eventTapRetryInterval = 5.0
 
-private func optionEventTapCallback(
+/// The modifier whose left and right keys, held together, trigger a capture.
+/// Device flag masks are the side-specific NX_DEVICE*KEYMASK bits.
+enum AppSnapChordModifier: String {
+    case option
+    case command
+
+    var leftKeyCode: CGKeyCode { self == .option ? CGKeyCode(0x3A) : CGKeyCode(0x37) }
+    var rightKeyCode: CGKeyCode { self == .option ? CGKeyCode(0x3D) : CGKeyCode(0x36) }
+    var leftDeviceFlagMask: CGEventFlags {
+        CGEventFlags(rawValue: self == .option ? 0x20 : 0x08)
+    }
+    var rightDeviceFlagMask: CGEventFlags {
+        CGEventFlags(rawValue: self == .option ? 0x40 : 0x10)
+    }
+    var flagMask: CGEventFlags { self == .option ? .maskAlternate : .maskCommand }
+    var displayName: String { self == .option ? "Option" : "Command" }
+}
+
+private func modifierPairEventTapCallback(
     proxy: CGEventTapProxy,
     type: CGEventType,
     event: CGEvent,
@@ -16,25 +30,31 @@ private func optionEventTapCallback(
     guard let userInfo else {
         return Unmanaged.passUnretained(event)
     }
-    let monitor = Unmanaged<OptionChordMonitor>.fromOpaque(userInfo).takeUnretainedValue()
+    let monitor = Unmanaged<ModifierPairChordMonitor>.fromOpaque(userInfo).takeUnretainedValue()
     monitor.handleEvent(type: type, event: event)
     return Unmanaged.passUnretained(event)
 }
 
-final class OptionChordMonitor {
+final class ModifierPairChordMonitor {
     private let emitter: NDJSONEmitter
+    private let modifier: AppSnapChordModifier
     private let onChord: () -> Void
     private var eventTap: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
     private var retryTimer: Timer?
     private var chordIsLatched = false
-    private var leftOptionIsDown = false
-    private var rightOptionIsDown = false
+    private var leftKeyIsDown = false
+    private var rightKeyIsDown = false
     private var lastInstallErrorCode: String?
     private var emittedReady = false
 
-    init(emitter: NDJSONEmitter, onChord: @escaping () -> Void) {
+    init(
+        emitter: NDJSONEmitter,
+        modifier: AppSnapChordModifier,
+        onChord: @escaping () -> Void
+    ) {
         self.emitter = emitter
+        self.modifier = modifier
         self.onChord = onChord
     }
 
@@ -53,7 +73,7 @@ final class OptionChordMonitor {
             emitter.emitError(
                 AppSnapFailure(
                     code: "event_tap_disabled",
-                    message: "macOS disabled the Option-key listener; the helper re-enabled it."
+                    message: "macOS disabled the \(modifier.displayName)-key listener; the helper re-enabled it."
                 ),
                 capturedAt: appSnapTimestamp()
             )
@@ -67,32 +87,30 @@ final class OptionChordMonitor {
         let changedKeyCode = CGKeyCode(
             event.getIntegerValueField(.keyboardEventKeycode)
         )
-        switch changedKeyCode {
-        case leftOptionKeyCode, rightOptionKeyCode:
-            leftOptionIsDown = event.flags.contains(leftOptionDeviceFlagMask)
-            rightOptionIsDown = event.flags.contains(rightOptionDeviceFlagMask)
-        default:
+        guard changedKeyCode == modifier.leftKeyCode || changedKeyCode == modifier.rightKeyCode else {
             return
         }
+        leftKeyIsDown = event.flags.contains(modifier.leftDeviceFlagMask)
+        rightKeyIsDown = event.flags.contains(modifier.rightDeviceFlagMask)
 
-        if !event.flags.contains(.maskAlternate) {
+        if !event.flags.contains(modifier.flagMask) {
             resetChordState()
             return
         }
 
-        let bothOptionsAreDown = leftOptionIsDown && rightOptionIsDown
+        let bothKeysAreDown = leftKeyIsDown && rightKeyIsDown
 
-        if bothOptionsAreDown, !chordIsLatched {
+        if bothKeysAreDown, !chordIsLatched {
             chordIsLatched = true
             onChord()
-        } else if !bothOptionsAreDown {
+        } else if !bothKeysAreDown {
             chordIsLatched = false
         }
     }
 
     private func resetChordState() {
-        leftOptionIsDown = false
-        rightOptionIsDown = false
+        leftKeyIsDown = false
+        rightKeyIsDown = false
         chordIsLatched = false
     }
 
@@ -105,7 +123,7 @@ final class OptionChordMonitor {
             reportInstallFailure(
                 AppSnapFailure(
                     code: "input-monitoring-required",
-                    message: "Input Monitoring permission is required to watch both Option keys."
+                    message: "Input Monitoring permission is required to watch both \(modifier.displayName) keys."
                 )
             )
             return false
@@ -117,13 +135,13 @@ final class OptionChordMonitor {
             place: .headInsertEventTap,
             options: .listenOnly,
             eventsOfInterest: mask,
-            callback: optionEventTapCallback,
+            callback: modifierPairEventTapCallback,
             userInfo: Unmanaged.passUnretained(self).toOpaque()
         ) else {
             reportInstallFailure(
                 AppSnapFailure(
                     code: "event_tap_unavailable",
-                    message: "macOS could not create the passive Option-key listener."
+                    message: "macOS could not create the passive \(modifier.displayName)-key listener."
                 )
             )
             return false
@@ -134,7 +152,7 @@ final class OptionChordMonitor {
             reportInstallFailure(
                 AppSnapFailure(
                     code: "event_tap_unavailable",
-                    message: "macOS could not attach the Option-key listener to the run loop."
+                    message: "macOS could not attach the \(modifier.displayName)-key listener to the run loop."
                 )
             )
             return false

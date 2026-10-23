@@ -2,7 +2,6 @@
 // Purpose: Record, validate, and save AppSnap's global two-key shortcut.
 
 import {
-  type DesktopAppSnapKeyChord,
   type DesktopAppSnapShortcut,
   type DesktopAppSnapShortcutAvailability,
   type DesktopAppSnapShortcutModifier,
@@ -12,9 +11,11 @@ import {
 import {
   DEFAULT_APP_SNAP_SHORTCUT,
   appSnapModifierFromEventCode,
+  appSnapModifierPairFromEventCodes,
   appSnapShortcutLabels,
   appSnapShortcutModifierLabel,
   appSnapShortcutSystemConflict,
+  isAppSnapModifierPairShortcut,
   isAppSnapShortcutKey,
   sameAppSnapShortcut,
 } from "@synara/shared/appSnapShortcut";
@@ -83,18 +84,20 @@ export function AppSnapShortcutControl({
     setCheckState({ status: "checked", availability: { available: false, reason } });
   }
 
-  async function checkCandidate(nextCandidate: DesktopAppSnapKeyChord) {
+  async function checkCandidate(nextCandidate: DesktopAppSnapShortcut) {
     const checkId = ++checkIdRef.current;
-    const conflictCommand = appSnapShortcutConflictCommand(nextCandidate, keybindings);
-    if (conflictCommand) {
-      const commandLabel = shortcutSheetCommandLabel(conflictCommand) ?? conflictCommand;
-      reportUnavailable(`Synara already uses this for “${commandLabel}”.`);
-      return;
-    }
-    const systemConflict = appSnapShortcutSystemConflict(nextCandidate);
-    if (systemConflict) {
-      reportUnavailable(systemConflict);
-      return;
+    if (!isAppSnapModifierPairShortcut(nextCandidate)) {
+      const conflictCommand = appSnapShortcutConflictCommand(nextCandidate, keybindings);
+      if (conflictCommand) {
+        const commandLabel = shortcutSheetCommandLabel(conflictCommand) ?? conflictCommand;
+        reportUnavailable(`Synara already uses this for “${commandLabel}”.`);
+        return;
+      }
+      const systemConflict = appSnapShortcutSystemConflict(nextCandidate);
+      if (systemConflict) {
+        reportUnavailable(systemConflict);
+        return;
+      }
     }
     const bridge = window.desktopBridge?.appSnap;
     if (!bridge) {
@@ -131,6 +134,11 @@ export function AppSnapShortcutControl({
     const code = event.code;
     if (appSnapModifierFromEventCode(code)) {
       if (!heldCodesRef.current.includes(code)) heldCodesRef.current.push(code);
+      const modifierPair = appSnapModifierPairFromEventCodes(heldCodesRef.current);
+      if (modifierPair) {
+        acceptCandidate(modifierPair);
+        return;
+      }
       setCapture((previous) => ({
         ...previous,
         heldModifierCodes: [...heldCodesRef.current],
@@ -159,7 +167,10 @@ export function AppSnapShortcutControl({
       setCapture((previous) => ({ ...previous, hint: "Hold only one modifier." }));
       return;
     }
-    const nextCandidate: DesktopAppSnapKeyChord = { kind: "key-chord", modifier, key: code };
+    acceptCandidate({ kind: "key-chord", modifier, key: code });
+  }
+
+  function acceptCandidate(nextCandidate: DesktopAppSnapShortcut) {
     stopCapture();
     setCandidate(nextCandidate);
     void checkCandidate(nextCandidate);
@@ -206,7 +217,7 @@ export function AppSnapShortcutControl({
     ? (capture.hint ??
       (capturedModifiers.length > 0
         ? "Now press the other key…"
-        : "Hold a modifier, then press one other key. Esc cancels."))
+        : "Hold a modifier, then press one other key, or press both ⌘ or both ⌥ keys. Esc cancels."))
     : checkState.status === "checking"
       ? "Checking macOS and other apps…"
       : checkState.availability
@@ -265,7 +276,7 @@ export function AppSnapShortcutControl({
           <Button size="xs" disabled={!canSave} onClick={() => void saveShortcut(candidate)}>
             Save
           </Button>
-        ) : candidate.kind !== "both-option-keys" ? (
+        ) : candidate.kind !== DEFAULT_APP_SNAP_SHORTCUT.kind ? (
           <Button
             size="xs"
             variant="ghost"
