@@ -4,6 +4,7 @@ import { join } from "node:path";
 import waitOn from "wait-on";
 
 import { buildAppSnapHelper } from "./build-appsnap-helper.mjs";
+import { buildPasskeyHelper } from "./build-passkey-helper.mjs";
 import { buildWindowMaterialAddon } from "./build-window-material-addon.mjs";
 import { configureMacLauncher, desktopDir, resolveElectronPath } from "./electron-launcher.mjs";
 import { createSourceDesktopEnvironment } from "./source-desktop-launch.mjs";
@@ -32,6 +33,7 @@ if (process.platform === "darwin") {
   buildAppSnapHelper({ arch: process.arch });
   buildWindowMaterialAddon({ arch: process.arch });
 }
+if (["darwin", "linux"].includes(process.platform)) await buildPasskeyHelper();
 
 await waitOn({
   resources: [`tcp:${port}`, ...requiredFiles.map((filePath) => `file:${filePath}`)],

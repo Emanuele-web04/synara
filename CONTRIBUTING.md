@@ -58,6 +58,8 @@ That gives you a chance to check whether the direction fits before spending time
 
 ## Testing
 
+macOS and Linux desktop source launches build the phone-passkey helper with Rust/Cargo. See the [native helper build instructions](apps/desktop/native/passkeys/README.md) for toolchain dependencies, isolated smoke tests and the required signed-macOS/real-phone validation. Packaged apps include the helper and do not require users to install Rust.
+
 Run the full workspace test suite from the repository root with:
 
 ```bash

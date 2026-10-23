@@ -167,7 +167,7 @@ const ensureDialogMonitor = async (
     ensureCdpAttached(webContents);
     const monitor: DialogMonitor = { captures: new Set() };
     const onMessage = (_event: Electron.Event, method: string, params: Record<string, unknown>) => {
-      if (method !== "Page.javascriptDialogOpening") return;
+      if (method !== "Page.javascriptDialogOpening" || monitor.captures.size === 0) return;
       const dialog = normalizeDialog(params);
       const policy = DIALOG_POLICY[dialog.kind];
       // This path deliberately bypasses sendCdpCommand: it must be able to

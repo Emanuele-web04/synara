@@ -821,6 +821,26 @@ describe("wsNativeApi", () => {
     expect(nextState.tabs[0]?.url).toBe("about:blank");
   });
 
+  it("keeps phone-passkey confirmation on the local desktop bridge", async () => {
+    const passkeys = {
+      snapshot: vi.fn(async () => null),
+      start: vi.fn(async () => {}),
+      cancel: vi.fn(async () => {}),
+      onChanged: vi.fn(() => () => {}),
+    };
+    Object.defineProperty(getWindowForTest(), "desktopBridge", {
+      configurable: true,
+      writable: true,
+      value: { browser: { passkeys } },
+    });
+    const { createWsNativeApi } = await import("./wsNativeApi");
+    const api = createWsNativeApi();
+    expect(api.browser.passkeys).toBe(passkeys);
+    await api.browser.passkeys!.start("synthetic-passkey");
+    expect(passkeys.start).toHaveBeenCalledWith("synthetic-passkey");
+    expect(requestMock).not.toHaveBeenCalled();
+  });
+
   it("forwards context menu metadata to desktop bridge", async () => {
     vi.stubGlobal("navigator", { platform: "Win32" });
     const showContextMenu = vi.fn().mockResolvedValue("delete");

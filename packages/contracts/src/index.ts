@@ -13,6 +13,7 @@ export * from "./browserAutomationToolInputs";
 export * from "./browserAutomationToolOutputs";
 export * from "./browserAutomationToolCatalogue";
 export * from "./browserVault";
+export * from "./browserPasskeys";
 export * from "./browserAnnotations";
 export * from "./ipc";
 export * from "./terminal";

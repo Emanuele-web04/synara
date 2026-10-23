@@ -71,6 +71,12 @@ ipcMain.on(BROWSER_IPC_CHANNELS.webMcpCompatibilityPolicy, (event) => {
   event.returnValue = browserManager.isWebMcpCompatibilityAllowed(event.sender.id);
 });
 
+// The isolated E2E host has no native passkey helper. Always acknowledge the
+// guest preload's synchronous capability check so page navigation cannot hang.
+ipcMain.on(BROWSER_IPC_CHANNELS.passkeys.available, (event) => {
+  event.returnValue = false;
+});
+
 ipcMain.handle(
   "synara-e2e:attach-webview",
   (event, input: { readonly tabId: string; readonly webContentsId: number }) =>

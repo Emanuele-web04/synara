@@ -359,6 +359,16 @@ contextBridge.exposeInMainWorld("desktopBridge", {
     transcribeVoice: (input) => ipcRenderer.invoke(IPC.transcribeVoice, input),
   },
   browser: {
+    passkeys: {
+      snapshot: () => ipcRenderer.invoke(IPC.browser.passkeys.snapshot),
+      start: (id) => ipcRenderer.invoke(IPC.browser.passkeys.start, id),
+      cancel: (id) => ipcRenderer.invoke(IPC.browser.passkeys.cancel, id),
+      onChanged: (listener) => {
+        const wrapped = () => listener();
+        ipcRenderer.on(IPC.browser.passkeys.changed, wrapped);
+        return () => ipcRenderer.removeListener(IPC.browser.passkeys.changed, wrapped);
+      },
+    },
     vault: {
       snapshot: () => ipcRenderer.invoke(IPC.browser.vault.snapshot),
       configure: (input) => ipcRenderer.invoke(IPC.browser.vault.configure, input),
