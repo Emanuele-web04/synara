@@ -63,6 +63,60 @@ describe("createDesktopPlatformBuildConfig", () => {
     }
   });
 
+  it("emits every requested Linux package from one builder pass", () => {
+    const linux = createDesktopPlatformBuildConfig({
+      platform: "linux",
+      target: "AppImage, deb ,rpm",
+    }).linux as Record<string, unknown>;
+    assert.deepStrictEqual(linux.target, ["AppImage", "deb", "rpm"]);
+    // A single AppImage still resolves to one target, so the existing path
+    // cannot silently regress into a list-shaped config.
+    assert.deepStrictEqual(
+      (
+        createDesktopPlatformBuildConfig({ platform: "linux", target: "AppImage" }).linux as Record<
+          string,
+          unknown
+        >
+      ).target,
+      ["AppImage"],
+    );
+  });
+
+  it("gives only AppImage events updater authority in the pinned builder", async () => {
+    const requireScripts = createRequire(new URL("./package.json", import.meta.url));
+    const requireBuilder = createRequire(requireScripts.resolve("electron-builder"));
+    const requireAppBuilder = createRequire(requireBuilder.resolve("app-builder-lib"));
+    const { getPublishConfigs } = requireAppBuilder("./publish/PublishManager.js");
+    const config = createDesktopPlatformBuildConfig({
+      platform: "linux",
+      target: "AppImage,deb,rpm",
+    });
+    const publish = [{ provider: "generic", url: "https://example.invalid/updates" }];
+    const packager = {
+      config: { publish, ...config },
+      platformSpecificBuildOptions: config.linux,
+      info: { config: { detectUpdateChannel: false } },
+      expandMacro: (value: string) => value,
+    };
+    assert.deepStrictEqual(await getPublishConfigs(packager, config.deb, 1, false), null);
+    assert.deepStrictEqual(await getPublishConfigs(packager, config.rpm, 1, false), null);
+    assert.deepStrictEqual(await getPublishConfigs(packager, {}, 1, false), publish);
+    for (const target of ["deb", "rpm", "deb,rpm"]) {
+      const standalone = createDesktopPlatformBuildConfig({ platform: "linux", target });
+      assert.equal(standalone.publish, null);
+    }
+    for (const target of [
+      "",
+      "AppImage,",
+      "AppImage,,deb",
+      "deb,deb",
+      "rpm,rpm",
+      "AppImage,snap",
+    ]) {
+      assert.throws(() => createDesktopPlatformBuildConfig({ platform: "linux", target }));
+    }
+  });
+
   it("adds explicit microphone entitlements to macOS builds", () => {
     const config = createDesktopPlatformBuildConfig({
       platform: "mac",

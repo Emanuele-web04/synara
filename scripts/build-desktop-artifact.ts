@@ -65,10 +65,19 @@ import {
 import { Command, Flag } from "effect/unstable/cli";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
+import { parseLinuxPackageTargets } from "./lib/linux-package-targets.ts";
+
 const BuildPlatform = Schema.Literals(["mac", "linux", "win"]);
 const BuildArch = Schema.Literals(["arm64", "x64", "universal"]);
 const BuildFlavor = Schema.Literals(SYNARA_PACKAGED_DESKTOP_FLAVORS);
 const requireFromScriptsWorkspace = createRequire(new URL("./package.json", import.meta.url));
+
+// Package metadata that lands in the Linux .deb control file and the RPM
+// maintainer field, and is therefore user-visible for the life of the package.
+// Keep all three here so a maintainer change is one reviewable edit.
+const DESKTOP_PACKAGE_AUTHOR_NAME = "Emanuele Di Pietro";
+const DESKTOP_PACKAGE_AUTHOR_EMAIL = "feedback@trysynara.com";
+const DESKTOP_PACKAGE_HOMEPAGE = "https://www.trysynara.com";
 
 const RepoRoot = Effect.service(Path.Path).pipe(
   Effect.flatMap((path) => path.fromFileUrl(new URL("..", import.meta.url))),
@@ -156,6 +165,16 @@ class BuildScriptError extends Data.TaggedError("BuildScriptError")<{
   readonly cause?: unknown;
 }> {}
 
+function assertPackageContactMetadata(): void {
+  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(DESKTOP_PACKAGE_AUTHOR_EMAIL)) {
+    throw new BuildScriptError({
+      message:
+        "DESKTOP_PACKAGE_AUTHOR_EMAIL must be a valid email address; electron-builder " +
+        "writes it into the .deb control file and the RPM maintainer field.",
+    });
+  }
+}
+
 function resolveGitCommitHash(repoRoot: string): string | undefined {
   const result = spawnSync("git", ["rev-parse", "HEAD"], {
     cwd: repoRoot,
@@ -240,7 +259,8 @@ interface StagePackageJson {
   readonly synaraWindowsPublisherSubject: string | null;
   readonly private: true;
   readonly description: string;
-  readonly author: string;
+  readonly author: { readonly name: string; readonly email: string };
+  readonly homepage: string;
   readonly main: string;
   readonly build: Record<string, unknown>;
   readonly dependencies: Record<string, unknown>;
@@ -320,6 +340,12 @@ export const resolveBuildOptions = Effect.fn("resolveBuildOptions")(function* (
   }
 
   const target = mergeOptions(input.target, env.target, PLATFORM_CONFIG[platform].defaultTarget);
+  if (platform === "linux") {
+    yield* Effect.try({
+      try: () => parseLinuxPackageTargets(target),
+      catch: (cause) => new BuildScriptError({ message: String(cause), cause }),
+    });
+  }
   // Flavor is deliberately a build flag, never inherited from a source
   // launcher's SYNARA_DESKTOP_FLAVOR environment variable.
   const flavor = Option.getOrElse(input.flavor, () => "production" as const);
@@ -1249,6 +1275,7 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   yield* fs.makeDirectory(path.join(stageAppDir, "apps/server"), { recursive: true });
 
   yield* Effect.log("[desktop-artifact] Staging release app...");
+  assertPackageContactMetadata();
   yield* fs.copy(distDirs.desktopDist, path.join(stageAppDir, "apps/desktop/dist-electron"));
   yield* fs.copy(distDirs.desktopResources, stageResourcesDir);
   yield* fs.copy(distDirs.serverDist, path.join(stageAppDir, "apps/server/dist"));
@@ -1330,7 +1357,14 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
     synaraWindowsPublisherSubject: resolvedBuildConfig.windowsPublisherSubject,
     private: true,
     description: "Synara desktop build",
-    author: "Emanuele Di Pietro",
+    // electron-builder's fpm target (deb/rpm) refuses to run without a
+    // homepage and a maintainer email, and writes both into the package
+    // control metadata. Windows and macOS ignore these fields.
+    author: {
+      name: DESKTOP_PACKAGE_AUTHOR_NAME,
+      email: DESKTOP_PACKAGE_AUTHOR_EMAIL,
+    },
+    homepage: DESKTOP_PACKAGE_HOMEPAGE,
     main: "apps/desktop/dist-electron/main.js",
     build: resolvedBuildConfig.buildConfig,
     dependencies: {
@@ -1524,7 +1558,7 @@ const buildDesktopArtifactCli = Command.make("build-desktop-artifact", {
   ),
   target: Flag.string("target").pipe(
     Flag.withDescription(
-      "Artifact target, for example dmg/AppImage/nsis (env: SYNARA_DESKTOP_TARGET).",
+      "Artifact target: dmg/nsis or comma-separated Linux AppImage,deb,rpm (env: SYNARA_DESKTOP_TARGET).",
     ),
     Flag.optional,
   ),
