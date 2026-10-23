@@ -395,6 +395,8 @@ import {
   deriveSidebarProjectData,
   createSidebarThreadHoverAnchorId,
   findWorkspaceRootMatch,
+  canSnoozeSidebarThread,
+  mayBelongToGroup,
   getPinnedThreadsForSidebar,
   orderPinnedProjectsForSidebar,
   pullRequestRepositoryConfigFingerprint,
@@ -1757,7 +1759,8 @@ export default function Sidebar() {
   const sidebarTreeThreads = useStore(selectSidebarTreeThreads);
   const selectProjectLastActivityAt = useMemo(() => createProjectLastActivityAtSelector(), []);
   const projectLastActivityAt = useStore(selectProjectLastActivityAt);
-  const { summaryFor, summariesByProjectId, coordinatorThreadIds } = useProjectAgentSummaries();
+  const { summaryFor, summariesByProjectId, coordinatorThreadIds, membersLoaded } =
+    useProjectAgentSummaries();
   // The bell and Inbox read current threads. Activity also receives snoozed rows
   // for its separate section, so badges never point at work the user set aside.
   const {
@@ -1841,14 +1844,23 @@ export default function Sidebar() {
     (
       thread: Pick<
         SidebarThreadSummary,
-        "id" | "projectId" | "parentThreadId" | "sidechatSourceThreadId" | "sidechatContext"
+        | "id"
+        | "projectId"
+        | "creationSource"
+        | "sourceThreadId"
+        | "parentThreadId"
+        | "sidechatSourceThreadId"
+        | "sidechatContext"
       >,
     ) =>
-      !thread.parentThreadId &&
-      !groupProjectIdSet.has(thread.projectId) &&
-      !coordinatorThreadIds.has(thread.id) &&
-      !isSidechatThread(thread),
-    [groupProjectIdSet, coordinatorThreadIds],
+      canSnoozeSidebarThread({
+        thread,
+        groupProjectIds: groupProjectIdSet,
+        summariesByProjectId,
+        coordinatorThreadIds,
+        membersLoaded,
+      }),
+    [groupProjectIdSet, summariesByProjectId, coordinatorThreadIds, membersLoaded],
   );
   const resolveThreadStatusForSidebar = useCallback(
     (thread: SidebarThreadSummary) =>
@@ -3438,9 +3450,20 @@ export default function Sidebar() {
         worktreePath: thread.worktreePath,
       });
       // Group actions only make sense for threads in ordinary (non-group)
-      // projects; group threads already belong to a group.
+      // projects; group threads, workers included, already belong to a group.
       const canUseHubActions =
-        GROUPS_ON && !groupProjectIdSet.has(thread.projectId) && !thread.parentThreadId;
+        GROUPS_ON &&
+        !mayBelongToGroup({
+          threadId,
+          projectId: thread.projectId,
+          creationSource: thread.creationSource,
+          sourceThreadId: thread.sourceThreadId,
+          groupProjectIds: groupProjectIdSet,
+          summariesByProjectId,
+          coordinatorThreadIds,
+          membersLoaded,
+        }) &&
+        !thread.parentThreadId;
       // Paused and archived groups can't run a coordinator turn, so they
       // aren't move targets — the server refuses the turn either way.
       const eligibleGroups = canUseHubActions
@@ -3763,6 +3786,7 @@ export default function Sidebar() {
       forkThread,
       groupProjectIdSet,
       handoffThread,
+      membersLoaded,
       moveThreadToGroup,
       handleMarkThreadUnread,
       navigate,
@@ -3776,6 +3800,7 @@ export default function Sidebar() {
       sidebarThreadSummaryById,
       setThreadSnoozedUntil,
       snoozeThread,
+      summariesByProjectId,
       summaryFor,
       toggleThreadPinned,
     ],
