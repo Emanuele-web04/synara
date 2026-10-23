@@ -11,14 +11,28 @@ export class HubWorkRepositoryError extends Schema.TaggedErrorClass<HubWorkRepos
 ) {}
 
 export interface HubWorkRepositoryShape {
-  readonly submit: (
-    records: readonly HubWorkRecord[],
-  ) => Effect.Effect<
+  /**
+   * Persist the tasks of one Hub request that have no frozen decision yet. Tasks
+   * already frozen under the same scope replay instead of forking, so callers may
+   * safely retry across turns, restarts and providers.
+   */
+  readonly submit: (input: {
+    readonly projectId: ProjectId;
+    readonly requestId: string;
+    readonly scopeKey: string;
+    readonly fingerprint: string;
+    readonly legacyFingerprint?: string;
+    readonly records: readonly HubWorkRecord[];
+  }) => Effect.Effect<
     { readonly items: readonly HubWorkRecord[]; readonly replayed: boolean },
     HubWorkRepositoryError
   >;
   readonly list: (
     projectId: ProjectId,
+  ) => Effect.Effect<readonly HubWorkRecord[], HubWorkRepositoryError>;
+  readonly listByScope: (
+    projectId: ProjectId,
+    scopeKey: string,
   ) => Effect.Effect<readonly HubWorkRecord[], HubWorkRepositoryError>;
   readonly get: (id: string) => Effect.Effect<HubWorkRecord | null, HubWorkRepositoryError>;
   readonly findByWorker: (
