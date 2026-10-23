@@ -1,5 +1,42 @@
 # Remote connections — punto di ripartenza
 
+## Delivered — Remote .29 and TestFlight 0.1 (153) — 2026-10-23
+
+- Published [Synara Remote 1.0.6-remote.29](https://github.com/Emanuele-web04/synara/releases/tag/v1.0.6-remote.29)
+  for Mac Apple Silicon, Windows x64 and Linux x64. The immutable release source is
+  `b975d335426befde70be2c1c10c0a5df9fadc3e5`. All **11 public assets**, three Remote
+  update feeds and platform provenance records were checked against that source,
+  the release lockfile and public payload hashes. Stable Latest remains unchanged.
+- Universal iPhone/iPad TestFlight **0.1 (153)** is now **Testing** in both existing
+  tester groups, from native source `207feef4c7389409909e3ba0c1233a8593dfbe45`.
+  The native availability handoff is recorded in `f4140d71` of its own repository.
+- Includes all 21 upstream commits through `29b11e10`, including the chat and
+  Environment actions, trailing new-tab control and continuous landing pattern
+  beneath the composer's surface. Remote retains its separate identity and feeds,
+  retained-process update admission and controller-backed frame presentation.
+  Native background-task replay corrects only provisional stops; completed or
+  failed outcomes cannot be reopened by ordinary late events.
+- Verification: **66 selected browser integration cases**, **352 native Core tests
+  / 38 suites** and **87 wire-contract checks** passed. The
+  [exact-tag release CI](https://github.com/Emanuele-web04/synara/actions/runs/39981445955)
+  finished green on attempt 2, including quality, the complete server suite and
+  packaged startup on all three desktop platforms. The earlier three local test
+  failures were repaired in tests only; both affected files pass **350 tests**,
+  preserving data and task-outcome assertions without changing production migrations,
+  adding skips or increasing timeouts.
+- The first Windows runner stalled during packaged startup and was cancelled only
+  after direct user approval. Its exact stalled subphase was not established.
+  A fresh run of the same immutable tag passed; no tag moved or qualification gate
+  was weakened. Mac signing/notarization passed. Windows remains explicitly
+  unsigned for this release; its version-scoped exception was restored to the
+  prior repository value `1.0.9-beta.1`. Fresh Defender evidence matches the public
+  Windows installer.
+- Limits: this pass did not exercise a real Devin/new-provider turn, a physical
+  iPhone, or a manual upgrade of the real Mac apps, and does not qualify every Linux
+  compositor. It did not install or restart the user's Mac apps, modify their data,
+  generate keys or change signing configuration. Earlier entries below are the
+  historical preparation timeline, including their then-current build counts.
+
 ## Main integration and next release preparation — 2026-10-23
 
 - Integrated the 21 upstream commits through `29b11e10` with ordinary merges,
