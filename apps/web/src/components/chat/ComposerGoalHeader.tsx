@@ -1,21 +1,16 @@
 // FILE: ComposerGoalHeader.tsx
-// Purpose: Persistent thread-goal strip stacked flush onto the top of the composer,
-// mirroring the live file-changes/queued headers. Collapsed it shows a one-line
-// preview that fades out at the end plus the live pursuit timer; the chevron
-// expands the full objective. Edit / pause-resume / delete act on the persisted goal.
+// Purpose: Persistent thread-goal capsule above the composer, beside the live
+// file-changes/task capsules: the pursuit state plus the live timer. Clicking it opens the
+// full objective with Edit / pause-resume / delete, which act on the persisted goal.
 // Layer: Chat composer UI
 // Exports: ComposerGoalHeader, goalElapsedMs
-
-import { useState } from "react";
 
 import { useNowMs } from "~/hooks/useNowMs";
 import { GoalIcon, PauseOutlineIcon, PencilIcon, PlayOutlineIcon, TrashCanIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 import { formatClockDuration } from "../../session-logic";
-import { DisclosureChevron } from "../ui/DisclosureChevron";
-import { DisclosureRegion } from "../ui/DisclosureRegion";
 import { IconButton } from "../ui/icon-button";
-import { ComposerStackedPanel } from "./ComposerStackedPanel";
+import { ComposerCapsulePopover } from "./ComposerCapsule";
 import {
   ComposerStackedPanelRow,
   ComposerStackedPanelRowLabel,
@@ -55,7 +50,6 @@ interface ComposerGoalHeaderProps {
   onEdit: () => void;
   onSetPaused: (paused: boolean) => void | Promise<void>;
   onClear: () => void | Promise<void>;
-  attachedToPrevious?: boolean;
   // False while the goal is only staged on a draft thread: pursuit has not
   // started, so pausing has nothing to act on and the control is hidden.
   canPause?: boolean;
@@ -68,85 +62,89 @@ export function ComposerGoalHeader({
   onEdit,
   onSetPaused,
   onClear,
-  attachedToPrevious: attachedToPreviousProp,
   canPause = true,
 }: ComposerGoalHeaderProps) {
-  const [open, setOpen] = useState(false);
-  const attachedToPrevious = attachedToPreviousProp ?? false;
   const paused = (goalPausedAt ?? null) !== null;
   const nowMs = useNowMs(!paused && goalStartedAt != null);
   const elapsedMs = goalElapsedMs({ goalStartedAt, goalPausedAt }, nowMs);
+  const stateLabel = canPause ? (paused ? "Goal paused" : "Pursuing goal") : "Goal";
+  const elapsedLabel = elapsedMs !== null ? formatClockDuration(elapsedMs) : null;
 
   return (
-    <ComposerStackedPanel
-      attachedToPrevious={attachedToPrevious}
-      data-testid="composer-goal-header"
+    <ComposerCapsulePopover
+      icon={<GoalIcon className={COMPOSER_STACKED_PANEL_ICON_CLASS_NAME} />}
+      label={
+        <>
+          {stateLabel}
+          {elapsedLabel ? (
+            <span className="ml-1.5 tabular-nums text-muted-foreground">{elapsedLabel}</span>
+          ) : null}
+        </>
+      }
+      title={goal}
+      testId="composer-goal-header"
     >
-      <ComposerStackedPanelRow>
-        <ComposerStackedPanelRowMain>
-          <GoalIcon className={COMPOSER_STACKED_PANEL_ICON_CLASS_NAME} />
-          <ComposerStackedPanelRowLabel className="shrink-0">
-            {canPause ? (paused ? "Goal paused" : "Pursuing goal") : "Goal"}
-          </ComposerStackedPanelRowLabel>
-          {open ? null : (
-            <span
-              data-testid="composer-goal-preview"
-              // Fade-out instead of an ellipsis so the preview reads as a peek
-              // into the full objective behind the chevron.
-              className="min-w-0 flex-1 overflow-hidden whitespace-nowrap text-muted-foreground/80 [mask-image:linear-gradient(to_right,black_calc(100%-2.5rem),transparent)]"
+      {(close) => (
+        <>
+          <ComposerStackedPanelRow>
+            <ComposerStackedPanelRowMain>
+              <GoalIcon className={COMPOSER_STACKED_PANEL_ICON_CLASS_NAME} />
+              <ComposerStackedPanelRowLabel className="shrink-0">
+                {stateLabel}
+              </ComposerStackedPanelRowLabel>
+              {elapsedLabel ? (
+                <span className="shrink-0 tabular-nums text-muted-foreground/80">
+                  {elapsedLabel}
+                </span>
+              ) : null}
+            </ComposerStackedPanelRowMain>
+            <div className="flex shrink-0 items-center gap-0">
+              <IconButton
+                variant="ghost"
+                size="icon-chip"
+                label="Edit goal"
+                onClick={() => {
+                  close();
+                  onEdit();
+                }}
+              >
+                <PencilIcon />
+              </IconButton>
+              {canPause ? (
+                <IconButton
+                  variant="ghost"
+                  size="icon-chip"
+                  label={paused ? "Resume goal" : "Pause goal"}
+                  onClick={() => void onSetPaused(!paused)}
+                >
+                  {paused ? <PlayOutlineIcon /> : <PauseOutlineIcon />}
+                </IconButton>
+              ) : null}
+              <IconButton
+                variant="ghost"
+                size="icon-chip"
+                label="Delete goal"
+                onClick={() => void onClear()}
+              >
+                <TrashCanIcon />
+              </IconButton>
+            </div>
+          </ComposerStackedPanelRow>
+          <div
+            className={cn(
+              COMPOSER_STACKED_PANEL_BODY_PADDING_CLASS_NAME,
+              COMPOSER_STACKED_PANEL_SCROLL_REGION_CLASS_NAME,
+            )}
+          >
+            <p
+              data-testid="composer-goal-text"
+              className="whitespace-pre-wrap break-words text-ui text-muted-foreground/80"
             >
               {goal}
-            </span>
-          )}
-          {elapsedMs !== null ? (
-            <span className="shrink-0 tabular-nums text-muted-foreground/80">
-              {formatClockDuration(elapsedMs)}
-            </span>
-          ) : null}
-        </ComposerStackedPanelRowMain>
-        <div className="flex shrink-0 items-center gap-0">
-          <IconButton variant="ghost" size="icon-chip" label="Edit goal" onClick={onEdit}>
-            <PencilIcon />
-          </IconButton>
-          {canPause ? (
-            <IconButton
-              variant="ghost"
-              size="icon-chip"
-              label={paused ? "Resume goal" : "Pause goal"}
-              onClick={() => void onSetPaused(!paused)}
-            >
-              {paused ? <PlayOutlineIcon /> : <PauseOutlineIcon />}
-            </IconButton>
-          ) : null}
-          <IconButton
-            variant="ghost"
-            size="icon-chip"
-            label="Delete goal"
-            onClick={() => void onClear()}
-          >
-            <TrashCanIcon />
-          </IconButton>
-          <IconButton
-            variant="ghost"
-            size="icon-chip"
-            label={open ? "Collapse goal" : "Expand goal"}
-            aria-expanded={open}
-            onClick={() => setOpen((current) => !current)}
-          >
-            <DisclosureChevron open={open} />
-          </IconButton>
-        </div>
-      </ComposerStackedPanelRow>
-      <DisclosureRegion open={open}>
-        <div
-          className={cn(
-            COMPOSER_STACKED_PANEL_BODY_PADDING_CLASS_NAME,
-            COMPOSER_STACKED_PANEL_SCROLL_REGION_CLASS_NAME,
-          )}
-        >
-          <p className="whitespace-pre-wrap break-words text-ui text-muted-foreground/80">{goal}</p>
-        </div>
-      </DisclosureRegion>
-    </ComposerStackedPanel>
+            </p>
+          </div>
+        </>
+      )}
+    </ComposerCapsulePopover>
   );
 }

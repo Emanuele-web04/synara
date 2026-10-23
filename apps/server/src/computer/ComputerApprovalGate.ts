@@ -14,10 +14,19 @@ interface TaskApprovalInput {
   readonly publish: (requestId: string, decision?: ProviderApprovalDecision) => Promise<void>;
 }
 
+/**
+ * How a published consent resolved. `decline` is a real user decision —
+ * including an explicit cancel — and sticks for the turn. `cancel` means
+ * the prompt died before anyone answered: a newer turn replaced it, the
+ * thread ended, or the caller's signal aborted, so nothing was decided
+ * and a fresh prompt may be shown.
+ */
+export type ComputerTaskApprovalOutcome = "accept" | "decline" | "cancel";
+
 interface TaskApproval {
   readonly turnId: string;
   granted?: boolean;
-  pending?: Promise<boolean> | undefined;
+  pending?: Promise<ComputerTaskApprovalOutcome> | undefined;
 }
 
 /** Rejection when no more consent prompts fit, global or for one chat. */
@@ -35,6 +44,20 @@ export class ComputerApprovalQueueFullError extends Error {
         : "Too many computer approvals are waiting.",
     );
     this.name = "ComputerApprovalQueueFullError";
+  }
+}
+
+/** An unanswered card is not a user decision and must not become a turn-long denial. */
+export class ComputerApprovalExpiredError extends Error {
+  readonly code = "approval_expired";
+  readonly effect = "not-dispatched";
+  readonly retryable = true;
+  constructor() {
+    super(
+      "The computer approval expired without an answer; no input was sent. " +
+        "Request approval again only if the action is still needed.",
+    );
+    this.name = "ComputerApprovalExpiredError";
   }
 }
 
@@ -83,15 +106,17 @@ export class ComputerApprovalGate {
   }
 
   /** One consent for routine actions in the exact active turn, never a provider-wide grant. */
-  requestTask(input: TaskApprovalInput): Promise<boolean> {
-    return this.requestTaskIn(this.tasks, input);
+  async requestTask(input: TaskApprovalInput): Promise<boolean> {
+    return (await this.requestTaskIn(this.tasks, input)) === "accept";
   }
 
   /**
    * One consent to bring windows in front of the user for the exact active
    * turn. A decline also sticks for the turn, so the task is not re-prompted.
+   * Callers need the full outcome: a cancelled prompt was never answered and
+   * must not be reported to the model as a user decline.
    */
-  requestForegroundTask(input: TaskApprovalInput): Promise<boolean> {
+  requestForegroundTask(input: TaskApprovalInput): Promise<ComputerTaskApprovalOutcome> {
     return this.requestTaskIn(this.foregroundTasks, input);
   }
 
@@ -104,7 +129,7 @@ export class ComputerApprovalGate {
   private async requestTaskIn(
     tasks: Map<string, TaskApproval>,
     input: TaskApprovalInput,
-  ): Promise<boolean> {
+  ): Promise<ComputerTaskApprovalOutcome> {
     input.signal.throwIfAborted();
     let task = tasks.get(input.threadId);
     if (task?.turnId !== input.turnId) {
@@ -114,13 +139,13 @@ export class ComputerApprovalGate {
       task = { turnId: input.turnId };
       tasks.set(input.threadId, task);
     }
-    if (task.granted !== undefined) return task.granted;
+    if (task.granted !== undefined) return task.granted ? "accept" : "decline";
     const current = task;
-    current.pending ??= this.request(input)
-      .then((accepted) => {
-        if (tasks.get(input.threadId) !== current || input.signal.aborted) return false;
-        current.granted = accepted;
-        return accepted;
+    current.pending ??= this.requestDecision(input)
+      .then((decision) => {
+        if (tasks.get(input.threadId) !== current || input.signal.aborted) return "cancel";
+        current.granted = decision === "accept";
+        return current.granted ? "accept" : "decline";
       })
       .finally(() => {
         current.pending = undefined;
@@ -132,15 +157,15 @@ export class ComputerApprovalGate {
       cancel = () => reject(input.signal.reason);
       input.signal.addEventListener("abort", cancel, { once: true });
     });
-    let accepted: boolean;
+    let outcome: ComputerTaskApprovalOutcome;
     try {
       input.signal.throwIfAborted();
-      accepted = await Promise.race([current.pending, aborted]);
+      outcome = await Promise.race([current.pending, aborted]);
     } finally {
       if (cancel) input.signal.removeEventListener("abort", cancel);
     }
     input.signal.throwIfAborted();
-    return accepted && tasks.get(input.threadId) === current;
+    return tasks.get(input.threadId) === current ? outcome : "cancel";
   }
 
   private cancelStaleTurns(threadId: string, turnId: string): void {
@@ -170,6 +195,15 @@ export class ComputerApprovalGate {
     signal: AbortSignal;
     publish: (requestId: string, decision?: ProviderApprovalDecision) => Promise<void>;
   }): Promise<boolean> {
+    return (await this.requestDecision(input)) === "accept";
+  }
+
+  private async requestDecision(input: {
+    threadId: string;
+    turnId?: string | undefined;
+    signal: AbortSignal;
+    publish: (requestId: string, decision?: ProviderApprovalDecision) => Promise<void>;
+  }): Promise<ProviderApprovalDecision> {
     input.signal.throwIfAborted();
     // A stuck turn must not starve every other chat: each thread gets a small
     // cap inside the shared one, and both refuse retryably so the model waits
@@ -185,8 +219,8 @@ export class ComputerApprovalGate {
       throw new ComputerApprovalQueueFullError("global");
     }
     const requestId = `computer:${randomUUID()}`;
-    let settle!: (decision: ProviderApprovalDecision) => void;
-    const answer = new Promise<ProviderApprovalDecision>((resolve) => {
+    let settle!: (decision: ProviderApprovalDecision | "expired") => void;
+    const answer = new Promise<ProviderApprovalDecision | "expired">((resolve) => {
       settle = resolve;
     });
     this.pending.set(requestId, {
@@ -196,7 +230,7 @@ export class ComputerApprovalGate {
     });
     const cancel = () => settle("cancel");
     input.signal.addEventListener("abort", cancel, { once: true });
-    const timeout = setTimeout(cancel, 5 * 60_000);
+    const timeout = setTimeout(() => settle("expired"), 5 * 60_000);
     timeout.unref?.();
     let decision: ProviderApprovalDecision = "cancel";
     try {
@@ -207,14 +241,17 @@ export class ComputerApprovalGate {
       const published = input.publish(requestId).then(() => "ok" as const);
       const outcome = await Promise.race([published, answer]);
       void published.catch(() => undefined);
+      let answered: ProviderApprovalDecision | "expired";
       if (outcome === "ok") {
         if (input.signal.aborted) cancel();
-        decision = await answer;
+        answered = await answer;
       } else {
-        decision = outcome;
+        answered = outcome;
       }
       input.signal.throwIfAborted();
-      return decision === "accept";
+      if (answered === "expired") throw new ComputerApprovalExpiredError();
+      decision = answered;
+      return decision;
     } finally {
       clearTimeout(timeout);
       input.signal.removeEventListener("abort", cancel);

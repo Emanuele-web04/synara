@@ -310,33 +310,6 @@ export function deriveContextWindowMeterDisplay(
   };
 }
 
-/** 16-unit meter glyph: a pie inside an outline ring (1.5 stroke) with a one-unit gap. */
-export const CONTEXT_WINDOW_METER_GEOMETRY = {
-  center: 8,
-  pieRadius: 5.25,
-  outlineRadius: 7,
-} as const;
-
-/**
- * Filled pie sector for a usage percentage, starting at 12 o'clock and running clockwise.
- * A filled sector inside a closed outline reads as a gauge; the open stroked arc it replaces
- * looked like a loading spinner.
- */
-export function contextWindowMeterSectorPath(percentage: number): string | null {
-  const fraction = Math.max(0, Math.min(100, percentage)) / 100;
-  if (fraction <= 0) return null;
-  const c = CONTEXT_WINDOW_METER_GEOMETRY.center;
-  const r = CONTEXT_WINDOW_METER_GEOMETRY.pieRadius;
-  if (fraction >= 1) {
-    return `M ${c} ${c - r} A ${r} ${r} 0 1 1 ${c} ${c + r} A ${r} ${r} 0 1 1 ${c} ${c - r} Z`;
-  }
-  const angle = fraction * 2 * Math.PI;
-  const x = c + r * Math.sin(angle);
-  const y = c - r * Math.cos(angle);
-  const largeArc = fraction > 0.5 ? 1 : 0;
-  return `M ${c} ${c} L ${c} ${c - r} A ${r} ${r} 0 ${largeArc} 1 ${x.toFixed(3)} ${y.toFixed(3)} Z`;
-}
-
 export function deriveCumulativeCostUsd(
   activities: ReadonlyArray<OrchestrationThreadActivity>,
 ): number | null {

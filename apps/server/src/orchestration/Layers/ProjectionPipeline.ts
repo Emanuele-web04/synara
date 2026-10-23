@@ -85,6 +85,7 @@ import {
   parseThreadSegmentFromAttachmentId,
   toSafeThreadAttachmentSegment,
 } from "../../attachmentStore.ts";
+import { inlineVisualThreadDirectory } from "../../inlineVisualStore.ts";
 import {
   DEFERRED_THREAD_SHELL_SUMMARY_EVENT_TYPES,
   shouldApplyDeferredThreadShellSummary,
@@ -456,6 +457,14 @@ const runAttachmentSideEffects = Effect.fn(function* (sideEffects: AttachmentSid
           ? fileSystem.remove(path.join(attachmentsRootDir, relativePath), { force: true })
           : Effect.void;
       });
+      // Inline visuals live in their own per-thread folder, outside the scan above.
+      const visualsDirectory = inlineVisualThreadDirectory({
+        attachmentsDir: attachmentsRootDir,
+        threadId,
+      });
+      if (visualsDirectory !== null) {
+        yield* fileSystem.remove(visualsDirectory, { recursive: true, force: true });
+      }
     }),
   );
 
@@ -1512,6 +1521,9 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
             yield* projectionTurnRepository.upsertByTurnId({
               ...existingTurn.value,
               state: nextState,
+              // Live reconciliation can restore an incorrectly interrupted
+              // turn. Its completion timestamp must be reopened with it.
+              completedAt: nextState === "running" ? null : existingTurn.value.completedAt,
               pendingMessageId:
                 existingTurn.value.pendingMessageId ??
                 (Option.isSome(pendingTurnStart) ? pendingTurnStart.value.messageId : null),

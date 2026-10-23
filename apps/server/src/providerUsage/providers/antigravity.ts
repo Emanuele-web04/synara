@@ -1,7 +1,8 @@
 // FILE: providerUsage/providers/antigravity.ts
-// Purpose: Live Antigravity usage fetcher. Reads Gemini CLI OAuth (`oauth_creds.json`) or
-// the agy token file (`antigravity-cli/antigravity-oauth-token`), refreshes through Google's
-// public Gemini-CLI client, then calls Cloud Code loadCodeAssist + retrieveUserQuota.
+// Purpose: Live Antigravity usage fetcher. Reads the agy token file
+// (`antigravity-cli/antigravity-oauth-token`) or Gemini CLI OAuth (`oauth_creds.json`), refreshes
+// through the Google client that issued it, then calls Cloud Code retrieveUserQuotaSummary
+// (falling back to loadCodeAssist + retrieveUserQuota).
 
 import nodePath from "node:path";
 
@@ -14,7 +15,7 @@ import {
   writeJsonFileAtomic,
   type OAuthRefreshResult,
 } from "../credentials";
-import { fetchJson, isAuthFailureStatus } from "../http";
+import { fetchJson, isAuthFailureStatus, isRateLimitStatus } from "../http";
 import {
   asFiniteNumber,
   asRecord,
@@ -32,6 +33,7 @@ import type { ProviderUsageContext, ProviderUsageFetcher } from "../types";
 const SOURCE = "antigravity-cloudcode";
 const LOAD_URL = "https://cloudcode-pa.googleapis.com/v1internal:loadCodeAssist";
 const QUOTA_URL = "https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuota";
+const QUOTA_SUMMARY_URL = "https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary";
 const REFRESH_URL = "https://oauth2.googleapis.com/token";
 const CLOUD_CODE_ORIGIN = new URL(LOAD_URL).origin;
 // Public Gemini CLI installed-app OAuth client (not a Synara-issued secret).
@@ -41,28 +43,79 @@ const GEMINI_OAUTH_CLIENT_ID = [
   "apps.googleusercontent.com",
 ].join(".");
 const GEMINI_OAUTH_CLIENT_SECRET = ["GOCSPX", "4uHgMPm-1o7Sk-geV6Cu5clXFsxl"].join("-");
+// Public Antigravity installed-app OAuth client shipped with the app and `agy`. Google only
+// refreshes a token with the client that issued it, so agy tokens cannot use the Gemini CLI pair.
+const ANTIGRAVITY_OAUTH_CLIENT_ID = [
+  "1071006060591-tmhssin2h21lcre235vtolojh4g403ep",
+  "apps.googleusercontent.com",
+].join(".");
+const ANTIGRAVITY_OAUTH_CLIENT_SECRET = ["GOCSPX", "K58FWR486LdLJ1mLB8sXC4z6qDAf"].join("-");
+// Cloud Code licenses Antigravity quota by client: without this User-Agent, consumer accounts get
+// 403 "You do not have a valid license" from every quota endpoint.
+const CLOUD_CODE_USER_AGENT = "antigravity";
 const REFRESH_BUFFER_MS = 5 * 60 * 1000;
 const MAX_QUOTA_WINDOWS = 4;
+const FIVE_HOUR_WINDOW_MINS = 5 * 60;
+const WEEKLY_WINDOW_MINS = 7 * 24 * 60;
+// retrieveUserQuotaSummary pools: Gemini (Pro + Flash) and third-party (Claude, GPT-OSS), each
+// with a rolling 5-hour and a weekly window. Matched by exact bucket id so a new bucket never
+// silently joins a pool. The Gemini pool keeps the plain labels the usage rings select.
+const QUOTA_SUMMARY_BUCKETS: ReadonlyArray<{
+  bucketId: string;
+  window: string;
+  windowDurationMins: number;
+}> = [
+  { bucketId: "gemini-5h", window: "5h", windowDurationMins: FIVE_HOUR_WINDOW_MINS },
+  { bucketId: "gemini-weekly", window: "Weekly", windowDurationMins: WEEKLY_WINDOW_MINS },
+  { bucketId: "3p-5h", window: "Claude 5h", windowDurationMins: FIVE_HOUR_WINDOW_MINS },
+  { bucketId: "3p-weekly", window: "Claude Weekly", windowDurationMins: WEEKLY_WINDOW_MINS },
+];
+
+type GoogleOAuthClientKind = "antigravity" | "gemini-cli";
+
+interface GeminiCredCandidate {
+  path: string;
+  client: GoogleOAuthClientKind;
+}
 
 interface GeminiOAuthCreds {
   path: string;
+  client: GoogleOAuthClientKind;
   record: Record<string, unknown>;
   accessToken: string;
   refreshToken?: string;
   expiresAtMs?: number;
 }
 
-function geminiCredPaths(ctx: ProviderUsageContext): string[] {
+function geminiCredPaths(ctx: ProviderUsageContext): GeminiCredCandidate[] {
   const geminiHome = ctx.env.GEMINI_CONFIG_DIR?.trim() || nodePath.join(ctx.homeDir, ".gemini");
-  return [
-    nodePath.join(geminiHome, "antigravity-cli", "antigravity-oauth-token"),
-    nodePath.join(geminiHome, "antigravity-cli", "oauth_creds.json"),
-    nodePath.join(geminiHome, "oauth_creds.json"),
-    nodePath.join(ctx.homeDir, ".gemini", "antigravity-cli", "antigravity-oauth-token"),
-    nodePath.join(ctx.homeDir, ".gemini", "antigravity-cli", "oauth_creds.json"),
-    nodePath.join(ctx.homeDir, ".gemini", "oauth_creds.json"),
-    nodePath.join(ctx.homeDir, ".config", "gemini", "oauth_creds.json"),
-  ].filter((value, index, all) => all.indexOf(value) === index);
+  const candidates: GeminiCredCandidate[] = [
+    {
+      path: nodePath.join(geminiHome, "antigravity-cli", "antigravity-oauth-token"),
+      client: "antigravity",
+    },
+    {
+      path: nodePath.join(geminiHome, "antigravity-cli", "oauth_creds.json"),
+      client: "antigravity",
+    },
+    { path: nodePath.join(geminiHome, "oauth_creds.json"), client: "gemini-cli" },
+    {
+      path: nodePath.join(ctx.homeDir, ".gemini", "antigravity-cli", "antigravity-oauth-token"),
+      client: "antigravity",
+    },
+    {
+      path: nodePath.join(ctx.homeDir, ".gemini", "antigravity-cli", "oauth_creds.json"),
+      client: "antigravity",
+    },
+    { path: nodePath.join(ctx.homeDir, ".gemini", "oauth_creds.json"), client: "gemini-cli" },
+    {
+      path: nodePath.join(ctx.homeDir, ".config", "gemini", "oauth_creds.json"),
+      client: "gemini-cli",
+    },
+  ];
+  return candidates.filter(
+    (candidate, index) => candidates.findIndex((other) => other.path === candidate.path) === index,
+  );
 }
 
 function expiryMsFromUnknown(value: unknown): number | undefined {
@@ -77,7 +130,7 @@ function expiryMsFromUnknown(value: unknown): number | undefined {
   return Number.isNaN(parsed) ? undefined : parsed;
 }
 
-function readGeminiCreds(path: string, value: unknown): GeminiOAuthCreds | null {
+function readGeminiCreds(candidate: GeminiCredCandidate, value: unknown): GeminiOAuthCreds | null {
   const record = asRecord(value);
   if (!record) return null;
   const tokenRecord = asRecord(record.token) ?? record;
@@ -90,7 +143,7 @@ function readGeminiCreds(path: string, value: unknown): GeminiOAuthCreds | null 
     expiryMsFromUnknown(record.expiry);
   const refreshToken = asString(tokenRecord.refresh_token) ?? asString(record.refresh_token);
   return {
-    path,
+    ...candidate,
     record,
     accessToken,
     ...(refreshToken ? { refreshToken } : {}),
@@ -99,8 +152,8 @@ function readGeminiCreds(path: string, value: unknown): GeminiOAuthCreds | null 
 }
 
 async function resolveGeminiCreds(ctx: ProviderUsageContext): Promise<GeminiOAuthCreds | null> {
-  for (const credPath of geminiCredPaths(ctx)) {
-    const creds = readGeminiCreds(credPath, await readJsonFile(credPath));
+  for (const candidate of geminiCredPaths(ctx)) {
+    const creds = readGeminiCreds(candidate, await readJsonFile(candidate.path));
     if (creds) return creds;
   }
   return null;
@@ -110,10 +163,36 @@ function googleHeaders(accessToken: string): Record<string, string> {
   return {
     Authorization: `Bearer ${accessToken}`,
     "Content-Type": "application/json",
+    "User-Agent": CLOUD_CODE_USER_AGENT,
   };
 }
 
-function geminiOAuthClient(ctx: ProviderUsageContext): { clientId: string; clientSecret: string } {
+const LOAD_CODE_ASSIST_BODY = {
+  metadata: {
+    ideType: "GEMINI_CLI",
+    platform: "PLATFORM_UNSPECIFIED",
+    pluginType: "GEMINI",
+  },
+};
+
+function postCloudCode(url: string, accessToken: string, body: unknown) {
+  return fetchJson({
+    service: "provider-usage-antigravity",
+    url,
+    allowedOrigins: [CLOUD_CODE_ORIGIN],
+    method: "POST",
+    headers: googleHeaders(accessToken),
+    body,
+  });
+}
+
+function googleOAuthClient(
+  kind: GoogleOAuthClientKind,
+  ctx: ProviderUsageContext,
+): { clientId: string; clientSecret: string } {
+  if (kind === "antigravity") {
+    return { clientId: ANTIGRAVITY_OAUTH_CLIENT_ID, clientSecret: ANTIGRAVITY_OAUTH_CLIENT_SECRET };
+  }
   return {
     clientId: ctx.env.GEMINI_OAUTH_CLIENT_ID?.trim() || GEMINI_OAUTH_CLIENT_ID,
     clientSecret: ctx.env.GEMINI_OAUTH_CLIENT_SECRET?.trim() || GEMINI_OAUTH_CLIENT_SECRET,
@@ -140,6 +219,47 @@ function antigravityPlanName(loadAssist: unknown): string | undefined {
   if (tierId === "free-tier") return "Free";
   if (tierId === "legacy-tier") return "Legacy";
   return tierId ? titleCase(tierId.replaceAll("_", " ")) : undefined;
+}
+
+/**
+ * Map retrieveUserQuotaSummary to the pool windows. Undefined means the body is not a summary
+ * (no `groups`), so the caller may fall back to the legacy per-model quota endpoint.
+ */
+export function parseAntigravityQuotaSummary(
+  quota: unknown,
+): ServerProviderUsageLimit[] | undefined {
+  const groups = asRecord(quota)?.groups;
+  if (!Array.isArray(groups)) return undefined;
+  const bucketsById = new Map<string, Record<string, unknown>>();
+  for (const group of groups) {
+    const buckets = asRecord(group)?.buckets;
+    for (const bucket of Array.isArray(buckets) ? buckets : []) {
+      const record = asRecord(bucket);
+      const bucketId = asString(record?.bucketId);
+      if (record && bucketId && !bucketsById.has(bucketId)) {
+        bucketsById.set(bucketId, record);
+      }
+    }
+  }
+  return QUOTA_SUMMARY_BUCKETS.flatMap((spec) => {
+    const bucket = bucketsById.get(spec.bucketId);
+    if (!bucket) return [];
+    const remainingFraction = asFiniteNumber(bucket.remainingFraction);
+    const usedPercent =
+      remainingFraction !== undefined
+        ? clampPercent(Math.round((1 - remainingFraction) * 100))
+        : undefined;
+    const resetsAt = isoFromString(bucket.resetTime);
+    if (usedPercent === undefined && !resetsAt) return [];
+    return [
+      {
+        window: spec.window,
+        ...(usedPercent !== undefined ? { usedPercent } : {}),
+        ...(resetsAt ? { resetsAt } : {}),
+        windowDurationMins: spec.windowDurationMins,
+      },
+    ];
+  });
 }
 
 export function parseAntigravityQuota(input: {
@@ -219,7 +339,7 @@ async function refreshGeminiCreds(
   ctx: ProviderUsageContext,
 ): Promise<GeminiOAuthCreds | "dead" | null> {
   if (!creds.refreshToken) return null;
-  const client = geminiOAuthClient(ctx);
+  const client = googleOAuthClient(creds.client, ctx);
   const refreshed = await refreshOAuthAccessToken({
     service: "provider-usage-antigravity-refresh",
     refreshUrl: REFRESH_URL,
@@ -299,20 +419,41 @@ export const antigravityUsageFetcher: ProviderUsageFetcher = {
 
     let planName: string | undefined;
     try {
-      const loadResult = await fetchJson({
-        service: "provider-usage-antigravity",
-        url: LOAD_URL,
-        allowedOrigins: [CLOUD_CODE_ORIGIN],
-        method: "POST",
-        headers: googleHeaders(creds.accessToken),
-        body: {
-          metadata: {
-            ideType: "GEMINI_CLI",
-            platform: "PLATFORM_UNSPECIFIED",
-            pluginType: "GEMINI",
-          },
-        },
-      });
+      const summaryResult = await postCloudCode(QUOTA_SUMMARY_URL, creds.accessToken, {});
+      const summaryLimits = summaryResult.ok
+        ? parseAntigravityQuotaSummary(summaryResult.json)
+        : undefined;
+      if (summaryLimits) {
+        // The plan only labels the card; a failed lookup must not hide quota that already loaded.
+        const planResult = await postCloudCode(
+          LOAD_URL,
+          creds.accessToken,
+          LOAD_CODE_ASSIST_BODY,
+        ).catch(() => null);
+        planName = planResult?.ok ? antigravityPlanName(planResult.json) : undefined;
+        return buildSnapshot({
+          provider: "antigravity",
+          nowMs: ctx.nowMs,
+          status: "ok",
+          source: SOURCE,
+          limits: summaryLimits,
+          ...(planName ? { planName } : {}),
+        });
+      }
+      if (summaryResult.status === 401) {
+        return needsAuthSnapshot("antigravity", ctx.nowMs, SOURCE);
+      }
+      if (isRateLimitStatus(summaryResult.status) || summaryResult.status >= 500) {
+        return errorSnapshot(
+          "antigravity",
+          ctx.nowMs,
+          SOURCE,
+          `Antigravity quota request failed (${summaryResult.status}).`,
+        );
+      }
+
+      // Accounts without the summary RPC: per-model Gemini quota, 5-hour windows only.
+      const loadResult = await postCloudCode(LOAD_URL, creds.accessToken, LOAD_CODE_ASSIST_BODY);
       if (isAuthFailureStatus(loadResult.status)) {
         return needsAuthSnapshot("antigravity", ctx.nowMs, SOURCE);
       }
@@ -331,14 +472,11 @@ export const antigravityUsageFetcher: ProviderUsageFetcher = {
         asString(assist?.cloudaicompanionProject) ??
         ctx.env.GOOGLE_CLOUD_PROJECT?.trim() ??
         ctx.env.GOOGLE_CLOUD_PROJECT_ID?.trim();
-      const quotaResult = await fetchJson({
-        service: "provider-usage-antigravity",
-        url: QUOTA_URL,
-        allowedOrigins: [CLOUD_CODE_ORIGIN],
-        method: "POST",
-        headers: googleHeaders(creds.accessToken),
-        body: projectId ? { project: projectId } : {},
-      });
+      const quotaResult = await postCloudCode(
+        QUOTA_URL,
+        creds.accessToken,
+        projectId ? { project: projectId } : {},
+      );
       if (!quotaResult.ok) {
         const snapshot = isAuthFailureStatus(quotaResult.status)
           ? needsAuthSnapshot("antigravity", ctx.nowMs, SOURCE)

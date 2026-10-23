@@ -8,6 +8,7 @@ import { PlusIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 import { Button } from "../ui/button";
 import { COMPOSER_EXTRAS_TRIGGER_ATTRIBUTE } from "./ComposerExtrasPanel";
+import { COMPOSER_ACTION_CIRCLE_CLASS_NAME } from "./composerPickerStyles";
 
 export function ComposerExtrasTrigger(props: {
   open: boolean;
@@ -17,10 +18,10 @@ export function ComposerExtrasTrigger(props: {
   return (
     <Button
       size="icon-sm"
-      variant="chrome"
+      variant="circle"
       className={cn(
-        "shrink-0 rounded-md",
-        props.open && "bg-[var(--color-background-button-secondary)]",
+        COMPOSER_ACTION_CIRCLE_CLASS_NAME,
+        props.open && "bg-[var(--color-background-button-secondary-hover)]",
       )}
       aria-label="Composer extras"
       aria-expanded={props.open}
@@ -28,7 +29,7 @@ export function ComposerExtrasTrigger(props: {
       {...{ [COMPOSER_EXTRAS_TRIGGER_ATTRIBUTE]: "" }}
       onClick={props.onToggle}
     >
-      <PlusIcon aria-hidden="true" className="size-4 text-primary" />
+      <PlusIcon aria-hidden="true" className="size-3.5" />
     </Button>
   );
 }

@@ -1,4 +1,13 @@
+import {
+  EditorDebugStartInput,
+  EditorDebugStartResult,
+  EditorDebugActionInput,
+  EditorDebugActionResult,
+  EditorDebugPollInput,
+  EditorDebugSnapshot,
+} from "./editorDebug";
 import { Schema } from "effect";
+import { EditorIntelligenceInput, EditorIntelligenceResult } from "./editorIntelligence";
 import * as Rpc from "effect/unstable/rpc/Rpc";
 import * as RpcGroup from "effect/unstable/rpc/RpcGroup";
 
@@ -92,6 +101,14 @@ import {
   ExternalMcpRefreshPairingInput,
   ExternalMcpRevokeIntegrationInput,
 } from "./externalMcp";
+import {
+  McpConnector,
+  McpConnectorConnectInput,
+  McpConnectorConnectResult,
+  McpConnectorDisconnectInput,
+  McpConnectorDisconnectResult,
+  McpConnectorSetup,
+} from "./mcpConnectors";
 import {
   DEVICE_WS_METHODS,
   DeviceAttachInput,
@@ -467,6 +484,15 @@ export const WsOrchestrationGetTurnDiffRpc = Rpc.make(ORCHESTRATION_WS_METHODS.g
   error: WsRpcError,
 });
 
+export const WsOrchestrationGetInlineVisualRpc = Rpc.make(
+  ORCHESTRATION_WS_METHODS.getInlineVisual,
+  {
+    payload: OrchestrationRpcSchemas.getInlineVisual.input,
+    success: OrchestrationRpcSchemas.getInlineVisual.output,
+    error: WsRpcError,
+  },
+);
+
 export const WsOrchestrationGetFullThreadDiffRpc = Rpc.make(
   ORCHESTRATION_WS_METHODS.getFullThreadDiff,
   {
@@ -602,6 +628,28 @@ export const WsProjectsSearchContentRpc = Rpc.make(WS_METHODS.projectsSearchCont
 export const WsProjectsPrewarmSearchIndexRpc = Rpc.make(WS_METHODS.projectsPrewarmSearchIndex, {
   payload: ProjectPrewarmSearchIndexInput,
   success: ProjectPrewarmSearchIndexResult,
+  error: WsRpcError,
+});
+
+export const WsEditorDebugStartRpc = Rpc.make(WS_METHODS.editorDebugStart, {
+  payload: EditorDebugStartInput,
+  success: EditorDebugStartResult,
+  error: WsRpcError,
+});
+export const WsEditorDebugActionRpc = Rpc.make(WS_METHODS.editorDebugAction, {
+  payload: EditorDebugActionInput,
+  success: EditorDebugActionResult,
+  error: WsRpcError,
+});
+export const WsEditorDebugPollRpc = Rpc.make(WS_METHODS.editorDebugPoll, {
+  payload: EditorDebugPollInput,
+  success: EditorDebugSnapshot,
+  error: WsRpcError,
+});
+
+export const WsEditorIntelligenceRpc = Rpc.make(WS_METHODS.editorIntelligence, {
+  payload: EditorIntelligenceInput,
+  success: EditorIntelligenceResult,
   error: WsRpcError,
 });
 
@@ -1396,6 +1444,30 @@ export const WsServerRefreshExternalMcpPairingRpc = Rpc.make(
   },
 );
 
+export const WsServerListMcpConnectorsRpc = Rpc.make(WS_METHODS.serverListMcpConnectors, {
+  payload: Schema.Struct({}),
+  success: Schema.Array(McpConnector),
+  error: WsRpcError,
+});
+
+export const WsServerConnectMcpConnectorRpc = Rpc.make(WS_METHODS.serverConnectMcpConnector, {
+  payload: McpConnectorConnectInput,
+  success: McpConnectorConnectResult,
+  error: WsRpcError,
+});
+
+export const WsServerDisconnectMcpConnectorRpc = Rpc.make(WS_METHODS.serverDisconnectMcpConnector, {
+  payload: McpConnectorDisconnectInput,
+  success: McpConnectorDisconnectResult,
+  error: WsRpcError,
+});
+
+export const WsServerGetMcpConnectorSetupRpc = Rpc.make(WS_METHODS.serverGetMcpConnectorSetup, {
+  payload: Schema.Struct({}),
+  success: McpConnectorSetup,
+  error: WsRpcError,
+});
+
 export const WsServerListWorktreesRpc = Rpc.make(WS_METHODS.serverListWorktrees, {
   payload: Schema.Struct({}),
   success: ServerListWorktreesResult,
@@ -1915,6 +1987,7 @@ export const WsFeatureRpcGroup = RpcGroup.make(
   WsOrchestrationRepairStateRpc,
   WsOrchestrationGetTurnDiffRpc,
   WsOrchestrationGetFullThreadDiffRpc,
+  WsOrchestrationGetInlineVisualRpc,
   WsOrchestrationReplayEventsRpc,
   WsOrchestrationListProviderDeliveryBlockersRpc,
   WsOrchestrationReconcileProviderDeliveryRpc,
@@ -1930,6 +2003,10 @@ export const WsFeatureRpcGroup = RpcGroup.make(
   WsProjectsSearchLocalEntriesRpc,
   WsProjectsSearchContentRpc,
   WsProjectsPrewarmSearchIndexRpc,
+  WsEditorIntelligenceRpc,
+  WsEditorDebugStartRpc,
+  WsEditorDebugActionRpc,
+  WsEditorDebugPollRpc,
   WsProjectsReadFileRpc,
   WsProjectsSubscribeFileChangeRpc,
   WsProjectsResolveWorkspaceFileReferencesRpc,
@@ -2000,6 +2077,10 @@ export const WsFeatureRpcGroup = RpcGroup.make(
   WsServerCreateExternalMcpIntegrationRpc,
   WsServerRevokeExternalMcpIntegrationRpc,
   WsServerRefreshExternalMcpPairingRpc,
+  WsServerListMcpConnectorsRpc,
+  WsServerConnectMcpConnectorRpc,
+  WsServerDisconnectMcpConnectorRpc,
+  WsServerGetMcpConnectorSetupRpc,
   WsServerListWorktreesRpc,
   WsServerListLocalServersRpc,
   WsServerStopLocalServerRpc,

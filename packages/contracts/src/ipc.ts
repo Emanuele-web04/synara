@@ -1,3 +1,11 @@
+import type {
+  EditorDebugStartInput,
+  EditorDebugActionInput,
+  EditorDebugActionResult,
+  EditorDebugPollInput,
+  EditorDebugSnapshot,
+} from "./editorDebug";
+import type { EditorIntelligenceInput, EditorIntelligenceResult } from "./editorIntelligence";
 import { Schema } from "effect";
 import type {
   LoadProjectImportHistoryInput,
@@ -29,6 +37,14 @@ import type {
   ExternalMcpRefreshPairingInput,
   ExternalMcpRevokeIntegrationInput,
 } from "./externalMcp";
+import type {
+  McpConnector,
+  McpConnectorConnectInput,
+  McpConnectorConnectResult,
+  McpConnectorDisconnectInput,
+  McpConnectorDisconnectResult,
+  McpConnectorSetup,
+} from "./mcpConnectors";
 import type {
   AutomationCancelRunInput,
   AutomationCancelRunResult,
@@ -275,6 +291,10 @@ import type {
 } from "./computer";
 import type { ComputerGetAuditHistoryInput, ComputerGetAuditHistoryResult } from "./computerAudit";
 import type { StudioListThreadOutputsInput, StudioListThreadOutputsResult } from "./studio";
+import type {
+  OrchestrationGetInlineVisualInput,
+  OrchestrationGetInlineVisualResult,
+} from "./inlineVisual";
 import type {
   ServerConfig,
   ServerDiagnosticsResult,
@@ -824,9 +844,21 @@ export interface SynaraStorageSnapshot {
   readonly entries: Readonly<Record<string, string>>;
 }
 
+/**
+ * Full Disk Access as observed by the desktop main process when the info was
+ * requested. "unknown" means there was no Safari data to prove it either way.
+ */
+export type DesktopSafariFullDiskAccess = "granted" | "denied" | "unknown";
+
 export type DesktopSafariAccessInfo =
   | { supported: false }
-  | { supported: true; appName: string; appPath: string | null };
+  | {
+      supported: true;
+      appName: string;
+      appPath: string | null;
+      /** Absent from desktop builds that predate the access probe. */
+      fullDiskAccess?: DesktopSafariFullDiskAccess;
+    };
 
 /**
  * One frame of the desktop app's native computer preview tap: a complete JPEG
@@ -1155,6 +1187,19 @@ export interface NativeApi {
     close: (input: TerminalCloseInput) => Promise<void>;
     onEvent: (callback: (event: TerminalEvent) => void) => () => void;
   };
+  /** Absent on older servers. Core editing remains available without language services. */
+  editor?: {
+    debugStart?: (
+      input: EditorDebugStartInput,
+      options?: { signal?: AbortSignal },
+    ) => Promise<{ sessionId: string }>;
+    debugAction?: (input: EditorDebugActionInput) => Promise<EditorDebugActionResult>;
+    debugPoll?: (input: EditorDebugPollInput) => Promise<EditorDebugSnapshot>;
+    intelligence: (
+      input: EditorIntelligenceInput,
+      options?: { signal?: AbortSignal },
+    ) => Promise<EditorIntelligenceResult>;
+  };
   projects: {
     discoverScripts: (input: ProjectDiscoverScriptsInput) => Promise<ProjectDiscoverScriptsResult>;
     listDirectories: (input: ProjectListDirectoriesInput) => Promise<ProjectListDirectoriesResult>;
@@ -1302,6 +1347,12 @@ export interface NativeApi {
     refreshExternalMcpPairing: (
       input: ExternalMcpRefreshPairingInput,
     ) => Promise<ExternalMcpCreateIntegrationResult>;
+    listMcpConnectors: () => Promise<ReadonlyArray<McpConnector>>;
+    connectMcpConnector: (input: McpConnectorConnectInput) => Promise<McpConnectorConnectResult>;
+    disconnectMcpConnector: (
+      input: McpConnectorDisconnectInput,
+    ) => Promise<McpConnectorDisconnectResult>;
+    getMcpConnectorSetup: () => Promise<McpConnectorSetup>;
     refreshProviders: () => Promise<ServerRefreshProvidersResult>;
     updateProvider: (input: ServerProviderUpdateInput) => Promise<ServerProviderUpdateResult>;
     listWorktrees: () => Promise<ServerListWorktreesResult>;
@@ -1379,6 +1430,9 @@ export interface NativeApi {
     getFullThreadDiff: (
       input: OrchestrationGetFullThreadDiffInput,
     ) => Promise<OrchestrationGetFullThreadDiffResult>;
+    getInlineVisual: (
+      input: OrchestrationGetInlineVisualInput,
+    ) => Promise<OrchestrationGetInlineVisualResult>;
     replayEvents: (
       fromSequenceExclusive: number,
       threadId?: ThreadId,

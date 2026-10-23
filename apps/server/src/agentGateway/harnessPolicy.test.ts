@@ -157,9 +157,25 @@ describe("Synara harness policy", () => {
   });
 
   it("keeps the gateway policy below its prompt budget", () => {
-    // The hub-role line (W0) is the only addition since the 6,030-character
-    // guard; the cap stays tight around the current policy text.
+    // Role guidance adds one line; keep the optional visual guidance in its own budget.
     assert.isAtMost(renderSynaraHarnessPolicy({ gatewayControlAvailable: true }).length, 6_250);
+    assert.isAtMost(
+      renderSynaraHarnessPolicy({ gatewayControlAvailable: true, inlineVisuals: true }).length,
+      6_380,
+    );
+  });
+
+  it("points to synara_show_visual only when the session can call it", () => {
+    const visualLine = "call synara_show_visual and place its block in your reply";
+    assert.include(
+      renderSynaraHarnessPolicy({ gatewayControlAvailable: true, inlineVisuals: true }),
+      visualLine,
+    );
+    assert.notInclude(renderSynaraHarnessPolicy({ gatewayControlAvailable: true }), visualLine);
+    assert.notInclude(
+      renderSynaraHarnessPolicy({ gatewayControlAvailable: false, inlineVisuals: true }),
+      visualLine,
+    );
   });
 
   it("withholds device guidance from sessions with no gateway control", () => {

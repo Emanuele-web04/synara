@@ -19,6 +19,7 @@ import {
   RestoreOrCreateChatRoute,
   type RestoreRouteResolver,
 } from "../components/RestoreOrCreateChatRoute";
+import { HubsEmptyState } from "../components/HubsEmptyState";
 import { resolveGroupsListEmptyState } from "../components/SidebarGroupsSurface.logic";
 import { sortThreadsForSidebar } from "../components/Sidebar.logic";
 import { readSidebarUiState } from "../components/Sidebar.uiState";
@@ -80,7 +81,9 @@ function HubsIndexRouteView() {
   // The most recent hub chat (if any), used to restore the surface instead of always opening
   // a brand-new draft.
   const latestGroupThreadId =
-    sortThreadsForSidebar(groupThreadSummaries, appSettings.sidebarThreadSortOrder)[0]?.id ?? null;
+    sortThreadsForSidebar(groupThreadSummaries, appSettings.sidebarThreadSortOrder, {
+      attentionFirst: appSettings.sidebarThreadAttentionFirst,
+    })[0]?.id ?? null;
 
   // Same landing policy as the Hubs segment switch and settings back: remembered route first
   // (scoped to hub threads plus the stored draft), then the stored draft, then the latest
@@ -147,14 +150,7 @@ function HubsIndexRouteView() {
     groupCount: groupProjectIds.size,
   });
   if (groupsEmptyState === "no-groups") {
-    return (
-      <div className="flex h-full flex-col items-center justify-center gap-1 px-6 text-center">
-        <p className="text-ui-lg font-medium text-foreground">No hubs yet</p>
-        <p className="text-ui text-muted-foreground">
-          Create one from the sidebar to coordinate work across repos.
-        </p>
-      </div>
-    );
+    return <HubsEmptyState />;
   }
 
   // The resolver and `handleNewGroupChat` both read the server welcome's workspace paths.

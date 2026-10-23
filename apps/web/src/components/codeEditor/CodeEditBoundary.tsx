@@ -1,3 +1,8 @@
+// FILE: CodeEditBoundary.tsx
+// Purpose: Lazy Pierre edit-engine load with a Retry fallback (Stable's engine).
+// Layer: Web editor UI (Pierre engine)
+// Exports: CodeEditBoundary
+
 import { EditProvider, Virtualizer, type CreateEditor } from "@pierre/diffs/react";
 import { useEffect, useState, type ReactNode } from "react";
 

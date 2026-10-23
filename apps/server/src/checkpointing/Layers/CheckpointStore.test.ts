@@ -2,7 +2,16 @@
 // Purpose: Verifies filesystem checkpoint store behavior around expensive Git capture work.
 // Layer: Checkpointing tests.
 // Exports: Vitest coverage for CheckpointStoreLive.
-import { mkdtempSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  utimesSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -13,8 +22,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { CheckpointStoreLive } from "./CheckpointStore.ts";
 import { CheckpointStore } from "../Services/CheckpointStore.ts";
 import { GitCore, type GitCoreShape } from "../../git/Services/GitCore.ts";
+import { GitCoreLive } from "../../git/Layers/GitCore.ts";
 import { GitCommandError } from "../../git/Errors.ts";
-import { CheckpointRef } from "@synara/contracts";
+import { ServerConfig } from "../../config.ts";
+import { CheckpointRef, ThreadId, TurnId } from "@synara/contracts";
+import { checkpointRefForThreadTurn, checkpointRefForThreadTurnLive } from "../Utils.ts";
 
 async function waitFor(predicate: () => boolean, timeoutMs = 1_000): Promise<void> {
   const started = Date.now();
@@ -290,6 +302,52 @@ describe("CheckpointStoreLive", () => {
     );
   });
 
+  it("keeps a/ and b/ prefixes on turn diffs and file undo under diff.noprefix", async () => {
+    const cwd = mkdtempSync(join(tmpdir(), "synara-checkpoint-prefix-test-"));
+    const git = (args: string[]) => execFileSync("git", args, { cwd, stdio: "ignore" });
+    try {
+      git(["init", "--initial-branch=main"]);
+      git(["config", "user.email", "test@example.com"]);
+      git(["config", "user.name", "Test User"]);
+      git(["config", "core.autocrlf", "false"]);
+      git(["config", "diff.noprefix", "true"]);
+      mkdirSync(join(cwd, "src"));
+      writeFileSync(join(cwd, "src", "file.ts"), "before\n");
+      git(["add", "."]);
+      git(["commit", "-m", "Initial"]);
+      runtime = ManagedRuntime.make(
+        CheckpointStoreLive.pipe(
+          Layer.provide(
+            GitCoreLive.pipe(
+              Layer.provide(ServerConfig.layerTest(cwd, { prefix: "synara-checkpoint-prefix-" })),
+            ),
+          ),
+          Layer.provide(NodeServices.layer),
+        ),
+      );
+      const fromRef = CheckpointRef.makeUnsafe("refs/synara-checkpoints/thread/turn/start");
+      const toRef = CheckpointRef.makeUnsafe("refs/synara-checkpoints/thread/turn/end");
+
+      const diff = await runtime.runPromise(
+        Effect.gen(function* () {
+          const store = yield* CheckpointStore;
+          yield* store.captureCheckpoint({ cwd, checkpointRef: fromRef });
+          writeFileSync(join(cwd, "src", "file.ts"), "after\n");
+          yield* store.captureCheckpoint({ cwd, checkpointRef: toRef });
+          const range = { cwd, fromCheckpointRef: fromRef, toCheckpointRef: toRef };
+          const diff = yield* store.diffCheckpoints({ ...range, ignoreWhitespace: false });
+          yield* store.reverseCheckpointDiff(range);
+          return diff;
+        }),
+      );
+
+      expect(diff).toContain("diff --git a/src/file.ts b/src/file.ts");
+      expect(readFileSync(join(cwd, "src", "file.ts"), "utf8")).toBe("before\n");
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
   it("restores the worktree patch when resetting the index fails during file undo", async () => {
     const fromRef = CheckpointRef.makeUnsafe("refs/synara-checkpoints/thread/turn/start");
     const toRef = CheckpointRef.makeUnsafe("refs/synara-checkpoints/thread/turn/end");
@@ -352,6 +410,72 @@ describe("CheckpointStoreLive", () => {
     expect(result).toBe("GitCommandError");
     expect(commands.filter((command) => command.startsWith("apply "))).toHaveLength(2);
     expect(commands.at(-1)).toMatch(/^apply --whitespace=nowarn -- /);
+  });
+
+  it("purges published and crash-orphaned live refs without touching another thread or final checkpoints", async () => {
+    const cwd = mkdtempSync(join(tmpdir(), "synara-live-ref-cleanup-"));
+    const git = (args: string[]) =>
+      execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+    try {
+      git(["init", "--initial-branch=main"]);
+      git(["config", "user.email", "test@example.com"]);
+      git(["config", "user.name", "Test User"]);
+      writeFileSync(join(cwd, "file.txt"), "before\n");
+      git(["add", "."]);
+      git(["commit", "-m", "Initial"]);
+      const threadId = ThreadId.makeUnsafe("owned-thread");
+      const turnId = TurnId.makeUnsafe("owned-turn");
+      const ownRefs = ["published", "crashed-before-publish"].map((revision) =>
+        checkpointRefForThreadTurnLive(threadId, turnId, revision),
+      );
+      const keptRefs = [
+        checkpointRefForThreadTurn(threadId, 1),
+        checkpointRefForThreadTurnLive(ThreadId.makeUnsafe("peer-thread"), turnId, "peer"),
+      ];
+      for (const ref of [...ownRefs, ...keptRefs]) git(["update-ref", ref, "HEAD"]);
+      writeFileSync(join(cwd, "file.txt"), "working changes\n");
+      const index = readFileSync(join(cwd, ".git", "index"));
+      // Linux/macOS Git emits LF; retain the same real Git deletion proof while
+      // exercising the Windows-style command-output boundary as well.
+      const crlfGit = Layer.effect(
+        GitCore,
+        Effect.map(Effect.service(GitCore), (core) => ({
+          ...core,
+          execute: (input: Parameters<GitCoreShape["execute"]>[0]) =>
+            core
+              .execute(input)
+              .pipe(
+                Effect.map((result) =>
+                  input.args[0] === "for-each-ref"
+                    ? { ...result, stdout: result.stdout.replaceAll("\n", "\r\n") }
+                    : result,
+                ),
+              ),
+        })),
+      ).pipe(
+        Layer.provide(
+          GitCoreLive.pipe(
+            Layer.provide(ServerConfig.layerTest(cwd, { prefix: "synara-live-cleanup-" })),
+          ),
+        ),
+      );
+      runtime = ManagedRuntime.make(
+        CheckpointStoreLive.pipe(Layer.provide(crlfGit), Layer.provide(NodeServices.layer)),
+      );
+      await runtime.runPromise(
+        Effect.gen(function* () {
+          const store = yield* CheckpointStore;
+          yield* store.deleteCheckpointRefs({ cwd, checkpointRefs: [], liveThreadId: threadId });
+        }),
+      );
+      const refs = git(["for-each-ref", "--format=%(refname)"]);
+      for (const ref of ownRefs) expect(refs).not.toContain(ref);
+      for (const ref of keptRefs) expect(refs).toContain(ref);
+      expect(readFileSync(join(cwd, ".git", "index"))).toEqual(index);
+      expect(readFileSync(join(cwd, "file.txt"), "utf8")).toBe("working changes\n");
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
   });
 
   it("fails when a checkpoint ref cannot be deleted", async () => {

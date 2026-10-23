@@ -21,6 +21,8 @@ import {
   type ServerSettings,
 } from "@synara/contracts";
 import { MEMORY_AUTO_DOCUMENT_PATH, memoryThreadDocumentPath } from "@synara/shared/projectAgent";
+import { vi } from "vitest";
+import { PersistenceSqlError } from "../../persistence/Errors.ts";
 import { Cause, Deferred, Effect, Fiber, Layer, Option, Stream } from "effect";
 import { TestClock } from "effect/testing";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
@@ -6360,6 +6362,101 @@ it.effect("keeps taskless and settled managed workers from delegating further th
         assert.equal(result._tag, "Failure");
         if (result._tag === "Failure") assert.equal(result.failure.code, "forbidden");
       }
+    }
+  }).pipe(Effect.provide(harness.layer));
+});
+
+// A failed Hub must not prevent independent startup recovery for the next one.
+it.effect("recovers later Hub inboxes when one startup wake fails", () => {
+  const harness = makeTestLayer();
+  return Effect.gen(function* () {
+    const service = yield* ProjectAgentService;
+    const repository = yield* ProjectAgentRepository;
+    yield* configureTestGroup(service, "first-startup-hub");
+    yield* configureTestGroup(service, "second-startup-hub", { projectId: groupId2 });
+    for (const projectId of [groupId, groupId2]) {
+      yield* repository.insertInboxEvent({
+        id: ProjectInboxEventId.makeUnsafe(`startup-${projectId}`),
+        projectId,
+        sourceThreadId: groupMemberThreadId,
+        sourceEventId: `startup-${projectId}`,
+        eventType: "worker.error",
+        taskId: null,
+        eligibleWake: true,
+        createdAt: now,
+      });
+    }
+    const cursor = repository.getCursor;
+    const fault = vi
+      .spyOn(repository, "getCursor")
+      .mockImplementation((projectId) =>
+        projectId === groupId
+          ? Effect.fail(
+              new PersistenceSqlError({ operation: "fixture", detail: "first Hub unavailable" }),
+            )
+          : cursor(projectId),
+      );
+    try {
+      yield* service.reconcilePendingWakes();
+      assert.equal(
+        (yield* repository.getCursor(groupId2)).processedThroughInboxId,
+        `startup-${groupId2}`,
+      );
+      assert.equal(harness.runNowCalls.length, 1);
+    } finally {
+      fault.mockRestore();
+    }
+  }).pipe(Effect.provide(harness.layer));
+});
+
+it.effect("does not report a settlement after both real monitor CAS writes lose", () => {
+  const harness = makeTestLayer();
+  return Effect.gen(function* () {
+    const service = yield* ProjectAgentService;
+    const repository = yield* ProjectAgentRepository;
+    const overview = yield* configureTestGroup(service, "settle-cas-retry");
+    const workerId = ThreadId.makeUnsafe("cas-racing-worker");
+    yield* service.recordManagedWorkerThreads({
+      requestId: "settle-cas-worker",
+      callerThreadId: overview.config!.coordinatorThreadId,
+      threadIds: [workerId],
+      titles: ["Racing worker"],
+    });
+    const save = repository.saveManagedWorkerMonitor;
+    let writes = 0;
+    const competing = vi.spyOn(repository, "saveManagedWorkerMonitor").mockImplementation((input) =>
+      Effect.gen(function* () {
+        const current = Option.getOrThrow(yield* repository.findManagedWorkerByThread(workerId));
+        yield* repository.upsertManagedWorker({
+          ...current,
+          updatedAt: `2026-10-18T12:00:0${++writes}.000Z`,
+        });
+        return yield* save(input);
+      }),
+    );
+    try {
+      harness.dispatched.length = 0;
+      yield* service.ingestSettledThreadEvent({
+        threadId: workerId,
+        sourceEventId: "racing-settle",
+        eventType: "thread.turn-diff-completed",
+        createdAt: now,
+      });
+      assert.equal(writes, 2);
+      assert.equal(
+        Option.getOrThrow(yield* repository.findManagedWorkerByThread(workerId)).settleOutcome,
+        null,
+      );
+      assert.equal(
+        harness.dispatched.filter(
+          (command) =>
+            command.type === "thread.activity.append" &&
+            command.activity.kind === "synara.worker.settled",
+        ).length,
+        0,
+      );
+    } finally {
+      competing.mockRestore();
     }
   }).pipe(Effect.provide(harness.layer));
 });

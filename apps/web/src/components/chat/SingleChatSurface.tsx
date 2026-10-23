@@ -17,8 +17,7 @@ import {
 } from "react";
 import type { EditorLeaveGuard } from "../EditorWorkspaceView";
 
-import { closeTerminalSurface } from "../../hooks/useTerminalSurfaceController";
-import { dockTerminalThreadId } from "../../lib/dockTerminalScope";
+import { closeDockTerminalPane } from "../../hooks/useTerminalSurfaceController";
 import { useAppSettings } from "../../appSettings";
 import { useComposerDraftStore } from "../../composerDraftStore";
 import type { DiffRouteSearch } from "../../diffRouteSearch";
@@ -452,8 +451,9 @@ export function SingleChatSurface(props: {
     });
   };
 
-  const handleSelectEditorFile = (filePath: string) =>
+  const handleSelectEditorFile = (filePath: string, beforeOpen?: () => void) =>
     guardEditorLeave(() => {
+      beforeOpen?.();
       setEditorCenterMode("file");
       setEditorEditTarget(null);
       void navigate({
@@ -480,8 +480,9 @@ export function SingleChatSurface(props: {
     });
   };
 
-  const handleEditFileInEditorView = (filePath: string) =>
+  const handleEditFileInEditorView = (filePath: string, beforeOpen?: () => void) =>
     guardEditorLeave(() => {
+      beforeOpen?.();
       setEditorEditTarget({
         filePath,
         basePath: null,
@@ -538,15 +539,17 @@ export function SingleChatSurface(props: {
       });
     });
 
-  const handleUpdateEditorDiffPanelState = (
-    patch: Partial<Pick<SplitViewPanePanelState, "panel" | "diffTurnId" | "diffFilePath">>,
-  ) => {
-    setEditorDiffPanelState((previous) => ({
-      panel: "diff",
-      diffTurnId: "diffTurnId" in patch ? (patch.diffTurnId ?? null) : previous.diffTurnId,
-      diffFilePath: "diffFilePath" in patch ? (patch.diffFilePath ?? null) : previous.diffFilePath,
-    }));
-  };
+  const handleUpdateEditorDiffPanelState = useCallback(
+    (patch: Partial<Pick<SplitViewPanePanelState, "panel" | "diffTurnId" | "diffFilePath">>) => {
+      setEditorDiffPanelState((previous) => ({
+        panel: "diff",
+        diffTurnId: "diffTurnId" in patch ? (patch.diffTurnId ?? null) : previous.diffTurnId,
+        diffFilePath:
+          "diffFilePath" in patch ? (patch.diffFilePath ?? null) : previous.diffFilePath,
+      }));
+    },
+    [],
+  );
   const handleEditorDiffFilesChange = (
     files: ReadonlyArray<FileDiffMetadata>,
     isLoading: boolean,
@@ -567,9 +570,6 @@ export function SingleChatSurface(props: {
         diffFilePath: filePath,
       }));
     });
-  const handleEditorDiffOptionsChange = (control: ReactNode | null) => {
-    setEditorDiffOptionsControl(control);
-  };
   const handleReferenceInChat = (reference: ChatFileReference) => {
     appendChatFileReference(props.threadId, reference);
   };
@@ -597,9 +597,10 @@ export function SingleChatSurface(props: {
   // Other references retain the existing dock file preview and external-editor
   // fallback behavior.
   const dockFileOpener: WorkspaceFileOpener = {
-    openFile: (path) => {
+    openFile: (path, beforeOpen) => {
       const directoryPath = resolveWorkspaceDirectoryOpenTarget(path, workspaceRoot);
       if (directoryPath !== null) {
+        beforeOpen?.();
         requestImmediateDockHydration("explorer");
         openPane(props.threadId, { kind: "explorer" });
         requestExplorerReveal(props.threadId, directoryPath);
@@ -612,6 +613,7 @@ export function SingleChatSurface(props: {
       if (!targetPath) {
         return false;
       }
+      beforeOpen?.();
       requestImmediateDockHydration("file");
       openPane(props.threadId, { kind: "file", filePath: targetPath });
       return true;
@@ -621,7 +623,7 @@ export function SingleChatSurface(props: {
   // Editor surface: the center file pane is already the file viewer, so file
   // references select into it instead of opening a dock pane.
   const editorFileOpener: WorkspaceFileOpener = {
-    openFile: (path) => {
+    openFile: (path, beforeOpen) => {
       if (!workspaceRoot) {
         return false;
       }
@@ -629,7 +631,7 @@ export function SingleChatSurface(props: {
       if (!relativePath) {
         return false;
       }
-      handleSelectEditorFile(relativePath);
+      handleSelectEditorFile(relativePath, beforeOpen);
       return true;
     },
     prefetchFile: prefetchOpenerFile,
@@ -768,6 +770,7 @@ export function SingleChatSurface(props: {
     const latestThread = sortThreadsForSidebar(
       threadSummaries.filter((thread) => thread.projectId === projectId),
       appSettings.sidebarThreadSortOrder,
+      { attentionFirst: appSettings.sidebarThreadAttentionFirst },
     )[0];
 
     if (latestThread) {
@@ -1113,7 +1116,7 @@ export function SingleChatSurface(props: {
                   queriesEnabled
                   hideHeader
                   onRenderableFilesChange={handleEditorDiffFilesChange}
-                  onEditorDiffOptionsChange={handleEditorDiffOptionsChange}
+                  onEditorDiffOptionsChange={setEditorDiffOptionsControl}
                   onVisibleFileChange={handleEditorDiffVisibleFileChange}
                 />
               }
@@ -1218,21 +1221,11 @@ export function SingleChatSurface(props: {
           onSelectPane={handleSelectDockPane}
           onClosePane={(paneId) => {
             if (dockState.panes.find((pane) => pane.id === paneId)?.kind === "terminal") {
-              void closeTerminalSurface(
-                dockTerminalThreadId(props.threadId),
-                appSettings.confirmTerminalTabClose,
+              void closeDockTerminalPane({
+                hostThreadId: props.threadId,
                 paneId,
-              )
-                .then((closed) => {
-                  if (closed) closePane(props.threadId, paneId);
-                })
-                .catch((error: unknown) => {
-                  toastManager.add({
-                    type: "error",
-                    title: "Unable to close terminal",
-                    description: error instanceof Error ? error.message : "Please try again.",
-                  });
-                });
+                confirmationEnabled: appSettings.confirmTerminalTabClose,
+              });
               return;
             }
             if (dockState.panes.find((pane) => pane.id === paneId)?.kind !== "explorer") {

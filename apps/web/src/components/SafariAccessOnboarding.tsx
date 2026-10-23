@@ -57,7 +57,10 @@ export function SafariAccessSetupButton() {
   );
 }
 
-/** Intro decisions are persisted, never permission claims. No protected files are probed here. */
+/**
+ * Intro decisions are persisted, never permission claims. Full Disk Access is
+ * reported per launch by the desktop process that reads Safari's cookies.
+ */
 export function SafariAccessOnboarding({
   children,
   startup = false,
@@ -73,7 +76,10 @@ export function SafariAccessOnboarding({
   const [busy, setBusy] = useState(false);
   const sheetRef = useRef<HTMLDivElement>(null);
   const generation = useRef(0);
-  const wantsOpen = info?.supported === true && (decision === "unseen" || revisit);
+  const granted = info?.supported === true && info.fullDiskAccess === "granted";
+  // Once access is on there is nothing left to set up, so only a deliberate
+  // revisit opens the sheet; the stored decision is left untouched.
+  const wantsOpen = info?.supported === true && ((decision === "unseen" && !granted) || revisit);
   const { open: startupOpen } = useAnnouncementSheetSlot(startup && wantsOpen && !revisit);
   // Local setup and deliberate Settings revisits must not depend on the root's
   // first-run gate or wait behind an automatic announcement.
@@ -146,7 +152,13 @@ export function SafariAccessOnboarding({
               </DialogDescription>
             </DialogHeader>
 
-            {info?.supported ? (
+            {info?.supported && info.fullDiskAccess === "granted" ? (
+              <p className="mx-6 mt-5 text-ui leading-relaxed text-muted-foreground">
+                Full Disk Access is on for{" "}
+                <span className="font-medium text-foreground">{info.appName}</span>. You can import
+                Safari logins from the browser's Saved logins › Import browser cookies.
+              </p>
+            ) : info?.supported ? (
               <ol className="mx-6 mt-5 space-y-3 text-ui leading-relaxed">
                 <Step n={1}>
                   Open <span className="font-medium text-foreground">System Settings</span> ›

@@ -15,13 +15,11 @@ import { ComposerTipRow } from "./ComposerTipRow";
 interface ComposerComputerControlEffortHintProps {
   onApply: () => void;
   onDismiss: () => void;
-  attachedToPrevious?: boolean;
 }
 
 export function ComposerComputerControlEffortHint({
   onApply,
   onDismiss,
-  attachedToPrevious,
 }: ComposerComputerControlEffortHintProps) {
   return (
     <ComposerTipRow
@@ -30,7 +28,6 @@ export function ComposerComputerControlEffortHint({
       actionLabel={COMPUTER_CONTROL_HINT_ACTION_LABEL}
       onAction={onApply}
       onDismiss={onDismiss}
-      attachedToPrevious={attachedToPrevious ?? false}
       testId="composer-computer-control-effort-hint"
     />
   );

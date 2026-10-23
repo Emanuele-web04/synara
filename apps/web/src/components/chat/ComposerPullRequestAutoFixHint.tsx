@@ -31,7 +31,6 @@ interface ComposerPullRequestAutoFixHintProps {
   /** The PR git status reports for the chat's checked-out branch. */
   pullRequest: { url: string; state: "open" | "closed" | "merged" } | null;
   isWorking: boolean;
-  attachedToPrevious?: boolean;
 }
 
 export function ComposerPullRequestAutoFixHint({
@@ -39,7 +38,6 @@ export function ComposerPullRequestAutoFixHint({
   isServerThread,
   pullRequest,
   isWorking,
-  attachedToPrevious,
 }: ComposerPullRequestAutoFixHintProps) {
   const queryClient = useQueryClient();
   const { settings, updateSettings } = useAppSettings();
@@ -87,7 +85,6 @@ export function ComposerPullRequestAutoFixHint({
       actionDisabled={mutation.isPending}
       onAction={() => turnOn(pullRequest.url)}
       onDismiss={() => updateSettings({ dismissedPullRequestAutoFixHint: true })}
-      attachedToPrevious={attachedToPrevious ?? false}
       testId="composer-pull-request-auto-fix-hint"
     />
   );

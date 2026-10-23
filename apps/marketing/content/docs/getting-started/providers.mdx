@@ -152,3 +152,11 @@ Continue with [Troubleshooting](/docs/troubleshooting) when the runtime works in
   Open the [Provider guides](/docs/providers) for exact installation, authentication, verification,
   capabilities, update paths, and provider-specific failure checks.
 </Callout>
+
+## Model discovery in 1.0.6
+
+Claude effort levels, adaptive thinking and fast mode use installed CLI metadata when supplied. Unset effort keeps Claude Code's native default; older CLIs retain fallbacks for missing fields.
+
+Partial or fallback discovery cannot replace a complete saved catalog. Synara retries on demand after a thirty-second cooldown. The cache format upgrade discards its old catalog snapshot once and rediscovers models; saved selections, accounts and running sessions remain unchanged. Antigravity quota lookup uses its matching OAuth client and quota-summary endpoint, with legacy fallback.
+
+Source evidence: Synara 1.0.6 `docs/providers.md`, `ClaudeAdapter.ts`, `providerModelDiscoveryCache.ts` and `providerUsage/providers/antigravity.ts`.
