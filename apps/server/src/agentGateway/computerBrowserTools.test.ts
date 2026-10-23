@@ -306,7 +306,7 @@ describe("computer_browser_* gateway tools", () => {
       requestForegroundConsent: async () => {
         order.push("foreground");
         granted = true;
-        return true;
+        return "authorized" as const;
       },
     });
     const result = await call("computer_browser_prepare", {
@@ -320,7 +320,7 @@ describe("computer_browser_* gateway tools", () => {
   });
 
   it("never shows the visible-use card on Linux, which refuses visible launches", async () => {
-    const consent = vi.fn(async () => true);
+    const consent = vi.fn(async () => "authorized" as const);
     const authorizeAction = vi.fn(async () => true);
     const { backend, call } = await setup({
       authorizeAction,

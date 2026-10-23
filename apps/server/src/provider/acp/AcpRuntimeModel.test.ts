@@ -164,6 +164,43 @@ describe("AcpRuntimeModel", () => {
     }
   });
 
+  it("retains ACP extension metadata on tool and streamed content updates", () => {
+    const toolMetadata = {
+      "cognition.ai/subagent_started": {
+        agentId: "agent-1",
+        title: "Explore the API",
+        task: "Inspect the public API surface",
+        isBackground: true,
+      },
+    };
+    const toolCall = parseSessionUpdateEvent({
+      sessionId: "session-1",
+      update: {
+        sessionUpdate: "tool_call_update",
+        toolCallId: "agent-1",
+        status: "in_progress",
+        _meta: toolMetadata,
+      },
+    } satisfies Acp.SessionNotification).events[0];
+    expect(toolCall?._tag).toBe("ToolCallUpdated");
+    if (toolCall?._tag !== "ToolCallUpdated") throw new Error("Expected tool call update");
+    expect(toolCall.toolCall.metadata).toEqual(toolMetadata);
+
+    const content = parseSessionUpdateEvent({
+      sessionId: "session-1",
+      update: {
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text: "child output" },
+        _meta: { "cognition.ai/subagent_context": { parentAgentId: "agent-1" } },
+      },
+    } satisfies Acp.SessionNotification).events[0];
+    expect(content).toMatchObject({
+      _tag: "ContentDelta",
+      text: "child output",
+      metadata: { "cognition.ai/subagent_context": { parentAgentId: "agent-1" } },
+    });
+  });
+
   it.each(["_toolName", "toolName", "tool_name"] as const)(
     "projects the authoritative %s Computer name on initial calls and updates",
     (nameKey) => {

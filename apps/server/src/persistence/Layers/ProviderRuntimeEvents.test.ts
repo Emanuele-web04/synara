@@ -436,6 +436,9 @@ layer("ProviderRuntimeEventRepository", (it) => {
       const repository = yield* ProviderRuntimeEventRepository;
       const first = yield* repository.append(runtimeEvent("runtime-event-1", "hello"));
       const duplicate = yield* repository.append(runtimeEvent("runtime-event-1", "hello"));
+      const initialReadBound = yield* repository.getHighWaterSequence;
+      // An append after a reader captures its upper bound belongs to the next
+      // window; it must not be acknowledged by that earlier empty/partial read.
       const second = yield* repository.append(runtimeEvent("runtime-event-2", " world"));
 
       assert.strictEqual(duplicate.sequence, first.sequence);
@@ -474,13 +477,68 @@ layer("ProviderRuntimeEventRepository", (it) => {
       assert.deepStrictEqual(
         (yield* repository.readThreadEvents({
           threadId: "thread-runtime-journal",
-          throughSequenceInclusive: second.sequence,
+          throughSequenceInclusive: initialReadBound,
           beforeSequenceExclusive: second.sequence,
           turnId: "turn-runtime-journal",
           eventTypes: ["content.delta"],
           limit: 10,
         })).map((row) => row.event.eventId),
         ["runtime-event-1"],
+      );
+
+      // Incremental turn readers must not replay the already-checked prefix.
+      assert.deepStrictEqual(
+        (yield* repository.readThreadEvents({
+          threadId: "thread-runtime-journal",
+          turnId: "turn-runtime-journal",
+          throughSequenceInclusive: second.sequence,
+          afterSequenceExclusive: first.sequence,
+          limit: 10,
+        })).map((row) => row.event.eventId),
+        ["runtime-event-2"],
+      );
+      assert.lengthOf(
+        yield* repository.readThreadEvents({
+          threadId: "thread-runtime-journal",
+          turnId: "turn-runtime-journal",
+          throughSequenceInclusive: second.sequence,
+          afterSequenceExclusive: second.sequence,
+          limit: 10,
+        }),
+        0,
+      );
+
+      const exactRevision = yield* repository.readThreadEvents({
+        threadId: "thread-runtime-journal",
+        turnId: "turn-runtime-journal",
+        eventId: "runtime-event-1",
+        eventTypes: ["content.delta"],
+        throughSequenceInclusive: second.sequence,
+        limit: 1,
+      });
+      assert.deepStrictEqual(
+        exactRevision.map((row) => row.event.eventId),
+        ["runtime-event-1"],
+      );
+      assert.lengthOf(
+        yield* repository.readThreadEvents({
+          threadId: "other-thread",
+          turnId: "turn-runtime-journal",
+          eventId: "runtime-event-1",
+          throughSequenceInclusive: second.sequence,
+          limit: 1,
+        }),
+        0,
+      );
+      assert.lengthOf(
+        yield* repository.readThreadEvents({
+          threadId: "thread-runtime-journal",
+          turnId: "other-turn",
+          eventId: "runtime-event-1",
+          throughSequenceInclusive: second.sequence,
+          limit: 1,
+        }),
+        0,
       );
 
       const skipped = yield* repository.advanceConsumerCursor({

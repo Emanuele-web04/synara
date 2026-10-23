@@ -1,7 +1,7 @@
 // Purpose: Ensures resource leases and ordinary clients cannot restart the desktop owner.
 // Layer: Server RPC admission tests, including busy and failed idleness reads.
 import { Effect } from "effect";
-import { ThreadId, TurnId } from "@synara/contracts";
+import { ThreadId, TurnId, type ProviderSession } from "@synara/contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { requestDesktopUpdate } from "./desktopUpdateBridge";
@@ -27,6 +27,87 @@ beforeEach(() => {
 });
 
 describe("desktop updater RPC authorization", () => {
+  it.each([
+    { status: "running" as const, activeTurnId: TurnId.makeUnsafe("retained-turn") },
+    { status: "closed" as const, activeTurnId: TurnId.makeUnsafe("retained-turn") },
+    { status: "closed" as const },
+  ])("waits for retained process cleanup (session=$status)", async (retainedState) => {
+    const threadId = ThreadId.makeUnsafe("retained-owner");
+    let retained: readonly ProviderSession[] = [
+      {
+        provider: "pi",
+        threadId,
+        runtimeMode: "full-access",
+        createdAt: "2026-10-23T00:00:00.000Z",
+        updatedAt: "2026-10-23T00:00:00.000Z",
+        ...retainedState,
+      },
+    ];
+    const handlers = makeDesktopUpdateRpcHandlers(
+      hasDesktopUpdateProviderWork(
+        [],
+        [],
+        () => Effect.succeed(false),
+        () => Effect.sync(() => retained),
+      ),
+    );
+    const install = () =>
+      Effect.runPromise(
+        provideWsConnectionSession(
+          handlers.action({
+            action: "install",
+            expectedVersion: "1.0.1-remote.1",
+            confirmRestart: true,
+            restartToken: "received-token",
+          }),
+          {
+            role: "owner",
+            attachmentPrincipal: { ownerKind: "session", ownerId: "owner" },
+            desktopUpdateAuthority: desktopUpdateAuthorityForSession("owner", "owner"),
+          },
+        ),
+      );
+    expect(await install()).toMatchObject({ accepted: false, status: { busy: true } });
+    expect(
+      vi.mocked(requestDesktopUpdate).mock.calls.some(([request]) => request.action === "install"),
+    ).toBe(false);
+
+    retained = [];
+    expect(await install()).toMatchObject({ accepted: true, status: { busy: false } });
+    expect(
+      vi.mocked(requestDesktopUpdate).mock.calls.some(([request]) => request.action === "install"),
+    ).toBe(true);
+  });
+
+  it("refuses restart when retained process ownership cannot be read", async () => {
+    const readBusy = hasDesktopUpdateProviderWork(
+      [],
+      [],
+      () => Effect.succeed(false),
+      () => Effect.die(new Error("retained ownership unavailable")),
+    );
+    const handlers = makeDesktopUpdateRpcHandlers(readBusy);
+    const result = await Effect.runPromise(
+      provideWsConnectionSession(
+        handlers.action({
+          action: "install",
+          expectedVersion: "1.0.1-remote.1",
+          confirmRestart: true,
+          restartToken: "received-token",
+        }),
+        {
+          role: "owner",
+          attachmentPrincipal: { ownerKind: "session", ownerId: "owner" },
+          desktopUpdateAuthority: desktopUpdateAuthorityForSession("owner", "owner"),
+        },
+      ),
+    );
+    expect(result).toMatchObject({ accepted: false, status: { busy: true } });
+    expect(
+      vi.mocked(requestDesktopUpdate).mock.calls.some(([request]) => request.action === "install"),
+    ).toBe(false);
+  });
+
   it("refuses restart for a ready provider whose foreground turn ended but background work is live", async () => {
     const threadId = ThreadId.makeUnsafe("background-owner");
     const readBusy = hasDesktopUpdateProviderWork([{ threadId, status: "ready" }], [threadId], () =>

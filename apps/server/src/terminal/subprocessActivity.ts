@@ -118,10 +118,11 @@ export function inspectSubprocessActivity(
  */
 export async function captureProcessChildrenMap(): Promise<ProcessChildrenMap | null> {
   try {
+    // Use the runner's bounded 8 MiB budget: ordinary process tables with long
+    // command lines exceed 256 KiB. Incomplete snapshots still fail closed.
     const psResult = await runProcess("ps", ["-eo", "pid=,ppid=,command="], {
       timeoutMs: 1_000,
       allowNonZeroExit: true,
-      maxBufferBytes: 262_144,
       outputMode: "truncate",
     });
     if (psResult.code !== 0) return null;

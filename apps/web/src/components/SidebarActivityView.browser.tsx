@@ -14,7 +14,7 @@ import type { Project, SidebarThreadSummary } from "../types";
 import { DEFAULT_PROJECT_ICON, type ProjectAppearance } from "../lib/projectAppearance";
 import { resolveThreadStatusPill, type ThreadStatusPill } from "./Sidebar.logic";
 import { SidebarActivityView } from "./SidebarActivityView";
-import type { ActivityScopeSelection } from "./SidebarActivityView.logic";
+import type { ActivityGroupMode, ActivityScopeSelection } from "./SidebarActivityView.logic";
 
 const projectFavicon = `data:image/svg+xml,${encodeURIComponent(
   '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16"><circle cx="8" cy="8" r="8" fill="red"/></svg>',
@@ -115,6 +115,7 @@ function renderActivity(input: {
 function ActivityHarness(input: Parameters<typeof renderActivity>[0]) {
   const projects = input.projects ?? [makeProject(PROJECT_A, "Project A")];
   const [localScope, setLocalScope] = useState<ActivityScopeSelection>(null);
+  const [groupMode, setGroupMode] = useState<ActivityGroupMode>("time");
   return (
     <SidebarActivityView
       threads={input.threads}
@@ -129,6 +130,8 @@ function ActivityHarness(input: Parameters<typeof renderActivity>[0]) {
       threadsHydrated={input.threadsHydrated ?? true}
       scopeSelection={input.scope ? input.scope.selection : localScope}
       onScopeSelectionChange={input.scope ? input.scope.onChange : setLocalScope}
+      groupMode={groupMode}
+      onChangeGroupMode={setGroupMode}
       prByThreadId={input.prByThreadId ?? new Map()}
       threadJumpLabelByThreadId={new Map()}
       onVisibleThreadIdsChange={input.onVisibleThreadIdsChange ?? (() => {})}

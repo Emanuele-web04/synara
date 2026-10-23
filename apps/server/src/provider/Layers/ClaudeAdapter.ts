@@ -401,6 +401,9 @@ interface ClaudeSubagentRun {
   // its prompt as a user message; a background spawn or resume does not, so
   // the launching call supplies it and a later forwarded copy is skipped.
   lastBrief: string | undefined;
+  // The last resolved model id surfaced for this subagent (from its assistant
+  // messages), so the child thread is updated once per distinct model.
+  reportedModel: string | undefined;
 }
 
 type ClaudeTokenUsageState = "current" | "skip-compaction-call" | "awaiting-fresh-assistant";
@@ -4000,6 +4003,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         launchTurnId: launcher.turnState?.turnId,
         launchTool,
         lastBrief: undefined,
+        reportedModel: undefined,
         title:
           typeof launchTool?.input.description === "string"
             ? nonEmptyTrimmed(launchTool.input.description)
@@ -4817,13 +4821,14 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
     // A background subagent's launching tool call completed long before the
     // subagent did. Re-publish that call with the subagent's final state so a
     // failed or stopped background run does not keep reading "Completed".
+    // Session stop passes the launcher it resolved before clearing run history.
     const emitSubagentFinalState = (
       root: ClaudeSessionContext,
       run: ClaudeSubagentRun,
       status: "completed" | "failed" | "stopped",
+      launcher: ClaudeSessionContext = subagentLauncherContext(root, run),
     ): Effect.Effect<void> =>
       Effect.gen(function* () {
-        const launcher = subagentLauncherContext(root, run);
         const tool = run.launchTool;
         if (!tool || findInFlightTool(launcher, run.toolUseId)) {
           return;
@@ -6244,6 +6249,37 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         }
       });
 
+    // The SDK resolves a subagent's model from its agent definition, env or the
+    // Agent tool input; the assistant messages carry the id that actually ran.
+    const reportSubagentResolvedModel = (
+      run: ClaudeSubagentRun,
+      message: Extract<SDKMessage, { type: "assistant" }>,
+    ): Effect.Effect<void> =>
+      Effect.gen(function* () {
+        const rawModel = message.message.model;
+        if (typeof rawModel !== "string" || rawModel.length === 0 || rawModel === "<synthetic>") {
+          return;
+        }
+        const model = stripClaudeContextWindowSuffix(rawModel);
+        if (model.length === 0 || model === run.reportedModel) {
+          return;
+        }
+        run.reportedModel = model;
+        const stamp = yield* makeEventStamp();
+        yield* offerRuntimeEvent(run.context, {
+          type: "thread.metadata.updated",
+          eventId: stamp.eventId,
+          provider: PROVIDER,
+          createdAt: stamp.createdAt,
+          threadId: run.context.session.threadId,
+          ...(run.context.turnState
+            ? { turnId: asCanonicalTurnId(run.context.turnState.turnId) }
+            : {}),
+          payload: { metadata: { model } },
+          providerRefs: nativeProviderRefs(run.context),
+        });
+      });
+
     const handleSdkMessage = (
       context: ClaudeSessionContext,
       message: SDKMessage,
@@ -6270,6 +6306,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
               yield* handleUserMessage(run.context, message);
               return;
             case "assistant":
+              yield* reportSubagentResolvedModel(run, message);
               yield* handleAssistantMessage(run.context, message);
               return;
             default:
@@ -6464,6 +6501,29 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             yield* completeTurn(run.context, "interrupted", "Session stopped.");
           }
         }
+        // The stopped completions below are published after this bookkeeping is
+        // cleared. Keep each live task's launching tool call, as its own
+        // task_notification would carry, or the parent's card never sees it end.
+        // A live run can be in neither task set: async_launched drops it from
+        // the foreground before background_tasks_changed lists it.
+        const retiredTaskToolUseIds = new Map<string, string | undefined>();
+        for (const taskId of new Set([
+          ...Array.from(context.subagentRuns.values()).flatMap((run) =>
+            run.taskId !== undefined ? [run.taskId] : [],
+          ),
+          ...context.knownBackgroundTaskIds,
+          ...context.foregroundTasks.keys(),
+        ])) {
+          retiredTaskToolUseIds.set(
+            taskId,
+            resolveTaskEventOwner(context, taskId).run?.toolUseId ??
+              context.foregroundTasks.get(taskId),
+          );
+        }
+        // Their launching items carry the state the strip, roster and dock read.
+        const retiredBackgroundRuns = Array.from(context.subagentRuns.values())
+          .filter((run) => run.background && run.launchTool !== undefined)
+          .map((run) => ({ run, launcher: subagentLauncherContext(context, run) }));
         context.subagentRuns.clear();
         context.subagentRunHistory.clear();
         context.subagentToolOwners.clear();
@@ -6511,10 +6571,19 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         // Publish terminal evidence only after the owned process has exited so
         // replaying this thread in a replacement session cannot resurrect them.
         // Foreground tasks a stale synthetic turn left open retire with them.
+        // Tasks that already ended (the root turn's own end settled them, or a
+        // lagging snapshot re-listed a notified task) keep their own outcome.
+        // The live sets still count: a message mid-handling may register a
+        // task after the snapshot.
         for (const taskId of new Set([
+          ...retiredTaskToolUseIds.keys(),
           ...context.knownBackgroundTaskIds,
           ...context.foregroundTasks.keys(),
         ])) {
+          if (context.terminalTaskIds.has(taskId)) continue;
+          context.terminalTaskIds.add(taskId);
+          const toolUseId =
+            retiredTaskToolUseIds.get(taskId) ?? context.foregroundTasks.get(taskId);
           const stamp = yield* makeEventStamp();
           yield* offerRuntimeEvent(context, {
             type: "task.completed",
@@ -6525,9 +6594,16 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             ...(context.taskTurnIds.has(taskId)
               ? { turnId: context.taskTurnIds.get(taskId)! }
               : {}),
-            payload: { taskId: RuntimeTaskId.makeUnsafe(taskId), status: "stopped" },
+            payload: {
+              taskId: RuntimeTaskId.makeUnsafe(taskId),
+              status: "stopped",
+              ...(toolUseId !== undefined ? { toolUseId } : {}),
+            },
             providerRefs: nativeProviderRefs(context),
           });
+        }
+        for (const { run, launcher } of retiredBackgroundRuns) {
+          yield* emitSubagentFinalState(context, run, "stopped", launcher);
         }
         context.knownBackgroundTaskIds.clear();
         context.foregroundTasks.clear();

@@ -38,6 +38,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import * as projectImportPaths from "../projectImportPaths.ts";
 
 import { CheckpointStoreLive } from "../../checkpointing/Layers/CheckpointStore.ts";
+import { CheckpointDiffQueryLive } from "../../checkpointing/Layers/CheckpointDiffQuery.ts";
+import { CheckpointDiffQuery } from "../../checkpointing/Services/CheckpointDiffQuery.ts";
 import {
   CheckpointStore,
   type CheckpointStoreShape,
@@ -73,7 +75,28 @@ import {
   ProviderService,
   type ProviderServiceShape,
 } from "../../provider/Services/ProviderService.ts";
-import { ProviderSessionNotFoundError, type ProviderServiceError } from "../../provider/Errors.ts";
+import {
+  ProviderAdapterProcessError,
+  ProviderSessionNotFoundError,
+  type ProviderAdapterError,
+  type ProviderServiceError,
+} from "../../provider/Errors.ts";
+import type { ProviderAdapterShape } from "../../provider/Services/ProviderAdapter.ts";
+import { AntigravityAdapter } from "../../provider/Services/AntigravityAdapter.ts";
+import { ClaudeAdapter } from "../../provider/Services/ClaudeAdapter.ts";
+import { CodexAdapter } from "../../provider/Services/CodexAdapter.ts";
+import { CursorAdapter } from "../../provider/Services/CursorAdapter.ts";
+import { DevinAdapter } from "../../provider/Services/DevinAdapter.ts";
+import { DroidAdapter } from "../../provider/Services/DroidAdapter.ts";
+import { GrokAdapter } from "../../provider/Services/GrokAdapter.ts";
+import { OmpAdapter } from "../../provider/Services/OmpAdapter.ts";
+import { OpenCodeAdapter } from "../../provider/Services/OpenCodeAdapter.ts";
+import { PiAdapter } from "../../provider/Services/PiAdapter.ts";
+import { ProviderAdapterRegistryLive } from "../../provider/Layers/ProviderAdapterRegistry.ts";
+import { makeProviderServiceLive } from "../../provider/Layers/ProviderService.ts";
+import { ProviderSessionDirectoryLive } from "../../provider/Layers/ProviderSessionDirectory.ts";
+import { ProviderSessionRuntimeRepositoryLive } from "../../persistence/Layers/ProviderSessionRuntime.ts";
+import { ServerSecretStore } from "../../auth/Services/ServerSecretStore.ts";
 import {
   CHECKPOINT_REFS_PREFIX,
   checkpointRefForThreadMessageStart,
@@ -134,6 +157,7 @@ function createProviderServiceHarness(
   providerStatus: ProviderSession["status"] = "ready",
   activeTurnId?: TurnId,
   runtimeEventCapacity?: number,
+  retainedSessions?: ReadonlyArray<ProviderSession>,
 ) {
   const now = new Date().toISOString();
   const runtimeEventPubSub = Effect.runSync(
@@ -179,6 +203,9 @@ function createProviderServiceHarness(
     respondToUserInput: () => unsupported(),
     stopSession: () => unsupported(),
     listSessions,
+    ...(retainedSessions === undefined
+      ? {}
+      : { listRetainedSessions: () => Effect.succeed(retainedSessions) }),
     getPersistedSessionProfile: () => Effect.succeed(undefined),
     getCapabilities: () => Effect.succeed({ sessionModelSwitch: "in-session" }),
     rollbackConversation,
@@ -202,6 +229,135 @@ function createProviderServiceHarness(
   };
 }
 
+// The real ProviderService over the real adapter registry. Each driver gets a
+// small fake. Like PiAdapter, a fake marks its context stopped before teardown,
+// and while a teardown cannot prove the processes exited the context stays
+// with its turn id and lists as closed. One teardown fails unless a test asks
+// for more, and a test can keep each fake to register a context on it.
+function createRetainingPiProviderServiceLayer(options?: {
+  readonly stopFailures?: number;
+  readonly adapters?: Map<ProviderKind, ProviderAdapterShape<ProviderAdapterError>>;
+}) {
+  const unsupported = () => Effect.die(new Error("Unsupported adapter call in test"));
+  const adapterFor = <P extends ProviderKind>(
+    provider: P,
+  ): ProviderAdapterShape<ProviderAdapterError> & { readonly provider: P } => {
+    const sessions = new Map<ThreadId, ProviderSession>();
+    const stopped = new Set<ThreadId>();
+    const failuresLeft = new Map<ThreadId, number>();
+    const update = (threadId: ThreadId, patch: Partial<ProviderSession>) => {
+      const session = sessions.get(threadId);
+      if (session) sessions.set(threadId, { ...session, ...patch });
+    };
+    const adapter: ProviderAdapterShape<ProviderAdapterError> & { readonly provider: P } = {
+      provider,
+      capabilities: { sessionModelSwitch: "in-session" },
+      startSession: (input) =>
+        Effect.sync(() => {
+          const now = new Date().toISOString();
+          const session: ProviderSession = {
+            provider,
+            status: "ready",
+            runtimeMode: input.runtimeMode,
+            threadId: input.threadId,
+            ...(input.providerInstanceId ? { providerInstanceId: input.providerInstanceId } : {}),
+            ...(input.cwd ? { cwd: input.cwd } : {}),
+            createdAt: now,
+            updatedAt: now,
+          };
+          sessions.set(input.threadId, session);
+          return session;
+        }),
+      sendTurn: (input) =>
+        Effect.sync(() => {
+          const turnId = asTurnId(`${provider}-unproven-turn`);
+          update(input.threadId, { status: "running", activeTurnId: turnId });
+          return { threadId: input.threadId, turnId };
+        }),
+      interruptTurn: () => Effect.void,
+      respondToRequest: () => unsupported(),
+      respondToUserInput: () => unsupported(),
+      stopSession: (threadId) =>
+        Effect.suspend(() => {
+          const failures = failuresLeft.get(threadId) ?? options?.stopFailures ?? 1;
+          if (failures === 0) {
+            sessions.delete(threadId);
+            stopped.delete(threadId);
+            failuresLeft.delete(threadId);
+            return Effect.void;
+          }
+          failuresLeft.set(threadId, failures - 1);
+          stopped.add(threadId);
+          update(threadId, { status: "closed" });
+          return Effect.fail(
+            new ProviderAdapterProcessError({
+              provider,
+              threadId,
+              detail: "Failed to prove the subprocess trees exited.",
+            }),
+          );
+        }),
+      listSessions: () => Effect.sync(() => Array.from(sessions.values())),
+      hasSession: (threadId) => Effect.sync(() => sessions.has(threadId) && !stopped.has(threadId)),
+      ...(provider === "pi"
+        ? { hasRetainedSession: (threadId: ThreadId) => Effect.sync(() => sessions.has(threadId)) }
+        : {}),
+      readThread: () => unsupported(),
+      rollbackThread: () => unsupported(),
+      stopAll: () => Effect.void,
+      streamEvents: Stream.never,
+    };
+    options?.adapters?.set(provider, adapter);
+    return adapter;
+  };
+  const settingsLayer = ServerSettingsService.layerTest();
+  const registryLayer = ProviderAdapterRegistryLive.pipe(
+    Layer.provide(
+      Layer.mergeAll(
+        Layer.succeed(CodexAdapter, adapterFor("codex")),
+        Layer.succeed(ClaudeAdapter, {
+          ...adapterFor("claudeAgent"),
+          steerTurn: () => unsupported(),
+          stopTask: () => unsupported(),
+          backgroundTask: () => unsupported(),
+          steerSubagent: () => unsupported(),
+        }),
+        Layer.succeed(CursorAdapter, adapterFor("cursor")),
+        Layer.succeed(DevinAdapter, {
+          ...adapterFor("devin"),
+          stopTask: () => unsupported(),
+          backgroundTask: () => unsupported(),
+        }),
+        Layer.succeed(AntigravityAdapter, adapterFor("antigravity")),
+        Layer.succeed(GrokAdapter, adapterFor("grok")),
+        Layer.succeed(DroidAdapter, adapterFor("droid")),
+        Layer.succeed(OpenCodeAdapter, adapterFor("opencode")),
+        Layer.succeed(OmpAdapter, adapterFor("omp")),
+        Layer.succeed(PiAdapter, adapterFor("pi")),
+        settingsLayer,
+      ),
+    ),
+  );
+  return makeProviderServiceLive().pipe(
+    Layer.provide(registryLayer),
+    Layer.provide(
+      ProviderSessionDirectoryLive.pipe(
+        Layer.provide(ProviderSessionRuntimeRepositoryLive),
+        Layer.provide(SqlitePersistenceMemory),
+      ),
+    ),
+    Layer.provide(settingsLayer),
+    Layer.provide(
+      Layer.succeed(ServerSecretStore, {
+        get: () => Effect.succeed(null),
+        set: () => Effect.void,
+        getOrCreateRandom: (_name, bytes) => Effect.succeed(new Uint8Array(bytes)),
+        remove: () => Effect.void,
+      }),
+    ),
+  );
+}
+
 async function waitForThread(
   engine: OrchestrationEngineShape,
   predicate: (thread: {
@@ -210,6 +366,7 @@ async function waitForThread(
     checkpoints: ReadonlyArray<{
       turnId: string;
       checkpointTurnCount: number;
+      checkpointRef: string;
       status: "ready" | "missing" | "error";
       assistantMessageId?: MessageId | null;
       files?: ReadonlyArray<{ path: string }>;
@@ -229,6 +386,7 @@ async function waitForThread(
     checkpoints: ReadonlyArray<{
       turnId: string;
       checkpointTurnCount: number;
+      checkpointRef: string;
       status: "ready" | "missing" | "error";
       assistantMessageId?: MessageId | null;
       files?: ReadonlyArray<{ path: string }>;
@@ -390,6 +548,8 @@ describe("CheckpointReactor", () => {
     readonly providerName?: ProviderKind;
     readonly providerStatus?: ProviderSession["status"];
     readonly providerActiveTurnId?: TurnId;
+    readonly providerRetainedSessions?: ReadonlyArray<ProviderSession>;
+    readonly providerServiceLayer?: Layer.Layer<ProviderService, unknown>;
     readonly hasInitialCommit?: boolean;
     readonly runtimeEventCapacity?: number;
     readonly sqlStatements?: string[];
@@ -399,6 +559,7 @@ describe("CheckpointReactor", () => {
     readonly hubWakes?: string[];
     readonly hubMonitorLive?: boolean;
     readonly hubRuntimeIngestion?: boolean;
+    readonly runtimeIngestion?: boolean;
   }) {
     const cwd = createGitRepository(options?.hasInitialCommit ?? true);
     tempDirs.push(cwd);
@@ -410,6 +571,7 @@ describe("CheckpointReactor", () => {
       options?.providerStatus ?? "ready",
       options?.providerActiveTurnId,
       options?.runtimeEventCapacity,
+      options?.providerRetainedSessions,
     );
 
     // Installed after the harness has seeded its checkpoints, so a test can fail
@@ -497,13 +659,19 @@ describe("CheckpointReactor", () => {
       ? Layer.merge(monitorLayer, ProviderRuntimeIngestionLive)
       : monitorLayer;
     const layer = (
-      options?.hubWakes ? Layer.merge(checkpointLayer, hubLayer) : checkpointLayer
+      options?.hubWakes
+        ? Layer.merge(checkpointLayer, hubLayer)
+        : options?.runtimeIngestion
+          ? Layer.merge(checkpointLayer, ProviderRuntimeIngestionLive)
+          : checkpointLayer
     ).pipe(
       Layer.provideMerge(orchestrationLayer),
       Layer.provideMerge(OrchestrationProjectionSnapshotQueryLive),
       Layer.provideMerge(RuntimeReceiptBusLive),
       Layer.provideMerge(TurnCheckpointCoordinatorLive),
-      Layer.provideMerge(Layer.succeed(ProviderService, provider.service)),
+      Layer.provideMerge(
+        options?.providerServiceLayer ?? Layer.succeed(ProviderService, provider.service),
+      ),
       Layer.provideMerge(checkpointStoreLayer),
       Layer.provideMerge(ServerConfigLayer),
       Layer.provideMerge(ServerSettingsService.layerTest()),
@@ -533,11 +701,14 @@ describe("CheckpointReactor", () => {
     scope = await Effect.runPromise(Scope.make("sequential"));
     const startReactor = () => Effect.runPromise(reactor.start.pipe(Scope.provide(scope!)));
     if (options?.startReactor !== false) await startReactor();
-    const ingestion = options?.hubRuntimeIngestion
-      ? await runtime.runPromise(
-          Effect.serviceOption(ProviderRuntimeIngestionService).pipe(Effect.map(Option.getOrThrow)),
-        )
-      : undefined;
+    const ingestion =
+      options?.hubRuntimeIngestion || options?.runtimeIngestion
+        ? await runtime.runPromise(
+            Effect.serviceOption(ProviderRuntimeIngestionService).pipe(
+              Effect.map(Option.getOrThrow),
+            ),
+          )
+        : undefined;
     if (ingestion) await Effect.runPromise(ingestion.start.pipe(Scope.provide(scope!)));
     const runtimeEvents = await runtime.runPromise(
       Effect.service(ProviderRuntimeEventRepository).pipe(
@@ -5364,104 +5535,710 @@ describe("CheckpointReactor", () => {
     ).toBe(false);
   });
 
-  it("derives a live turn-diff placeholder from git for claude file edits mid-turn", async () => {
+  it("reads the exact streamed Codex patch before completion without later checkout edits", async () => {
     const harness = await createHarness({
       seedFilesystemCheckpoints: false,
-      providerName: "claudeAgent",
+      runtimeIngestion: true,
     });
-    const threadId = ThreadId.makeUnsafe("thread-1");
-    const turnId = asTurnId("turn-claude-live");
-    const createdAt = new Date().toISOString();
-
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.session.set",
-        commandId: CommandId.makeUnsafe("cmd-session-set-claude-live"),
-        threadId,
-        session: {
-          threadId,
-          status: "running",
-          providerName: "claudeAgent",
-          runtimeMode: "approval-required",
-          activeTurnId: turnId,
-          lastError: null,
-          updatedAt: createdAt,
-        },
-        createdAt,
-      }),
+    vi.spyOn(harness.provider.service, "getCapabilities").mockReturnValue(
+      Effect.succeed({ sessionModelSwitch: "in-session", supportsLiveTurnDiffPatch: true }),
     );
-
+    const threadId = ThreadId.makeUnsafe("thread-1");
+    const turnId = asTurnId("codex-raw-live");
+    const createdAt = new Date().toISOString();
+    fs.writeFileSync(path.join(harness.cwd, "whitespace.txt"), "hello world\n", "utf8");
+    runGit(harness.cwd, ["add", "."]);
+    runGit(harness.cwd, ["commit", "-m", "Fixture whitespace baseline"]);
+    fs.writeFileSync(path.join(harness.cwd, "README.md"), "dirty baseline\n", "utf8");
     await harness.prepareBaseline(turnId);
-    // #1900: turn start, the live diff and turn completion read the thread
-    // shell, its checkpoint context and single messages, never the full detail.
-    const query = await runtime!.runPromise(Effect.service(ProjectionSnapshotQuery));
-    const detailReads = vi.spyOn(query, "getThreadDetailById");
     harness.provider.emit({
       type: "turn.started",
-      eventId: EventId.makeUnsafe("evt-turn-started-claude-live"),
-      provider: "claudeAgent",
-      createdAt: new Date().toISOString(),
+      eventId: EventId.makeUnsafe("codex-raw-start"),
+      provider: "codex",
       threadId,
       turnId,
+      createdAt,
     });
-    await waitForGitRefExists(harness.cwd, checkpointRefForThreadTurnStart(threadId, turnId));
-
-    // A file edit completes while the turn is still running (no turn.completed yet).
-    fs.writeFileSync(path.join(harness.cwd, "live.txt"), "live\n", "utf8");
-    harness.provider.emit({
-      type: "item.completed",
-      eventId: EventId.makeUnsafe("evt-item-file-change-live"),
-      provider: "claudeAgent",
-      createdAt: new Date().toISOString(),
-      threadId,
-      turnId,
-      itemId: "item-file-change-1",
-      payload: { itemType: "file_change", status: "completed" },
+    await Effect.runPromise(harness.ingestion!.drain);
+    const baselineRef = checkpointRefForThreadTurnStart(threadId, turnId);
+    const patchRaw = (patch: string) => ({
+      source: "codex.app-server.notification",
+      method: "turn/diff/updated",
+      payload: { unifiedDiffBytes: Buffer.byteLength(patch, "utf8") },
     });
-
-    const liveThread = await waitForThread(harness.engine, (entry) =>
-      entry.checkpoints.some(
-        (checkpoint) =>
-          checkpoint.status === "missing" &&
-          checkpoint.files?.map((file) => file.path).includes("live.txt") === true,
+    const emitPatch = async (id: string, text: string) => {
+      fs.writeFileSync(path.join(harness.cwd, "README.md"), text, "utf8");
+      fs.writeFileSync(path.join(harness.cwd, "whitespace.txt"), "hello  world\n", "utf8");
+      const patch = runGit(harness.cwd, [
+        "diff",
+        "--binary",
+        "--full-index",
+        baselineRef,
+        "--",
+        "README.md",
+        "whitespace.txt",
+      ]);
+      harness.provider.emit({
+        type: "turn.diff.updated",
+        eventId: EventId.makeUnsafe(id),
+        provider: "codex",
+        threadId,
+        turnId,
+        createdAt,
+        payload: { unifiedDiff: patch },
+        raw: patchRaw(patch),
+      });
+      return patch;
+    };
+    const firstPatch = await emitPatch("codex-raw-first", "first revision\n");
+    await waitForThread(harness.engine, (thread) =>
+      thread.checkpoints.some(
+        (checkpoint) => checkpoint.checkpointRef === "provider-diff:codex-raw-first",
       ),
     );
-    const livePlaceholder = liveThread.checkpoints.find(
-      (checkpoint) => checkpoint.status === "missing",
+    const query = await runtime!.runPromise(Effect.service(ProjectionSnapshotQuery));
+    const diffQuery = await runtime!.runPromise(
+      Effect.service(CheckpointDiffQuery).pipe(
+        Effect.provide(CheckpointDiffQueryLive),
+        Effect.provideService(ProjectionSnapshotQuery, query),
+        Effect.provideService(CheckpointStore, harness.checkpointStore),
+        Effect.provideService(ProviderRuntimeEventRepository, harness.runtimeEvents),
+      ),
     );
-    expect(livePlaceholder?.checkpointTurnCount).toBe(1);
-    const liveFile = livePlaceholder?.files?.find((file) => file.path === "live.txt") as
-      | { readonly path: string; readonly additions?: number; readonly deletions?: number }
-      | undefined;
-    expect(liveFile?.additions).toBe(1);
-    // The throwaway snapshot ref must not linger as a durable checkpoint.
-    expect(gitRefExists(harness.cwd, checkpointRefForThreadTurnLive(threadId, turnId))).toBe(false);
-
-    // The terminal turn.completed capture must overwrite the placeholder with the
-    // authoritative git checkpoint (status "ready"), keeping a single entry.
-    fs.writeFileSync(path.join(harness.cwd, "second.txt"), "second\n", "utf8");
+    // The peer edit and real staging state are newer than the chosen event.
+    fs.writeFileSync(path.join(harness.cwd, "README.md"), "peer edit after event\n", "utf8");
+    fs.writeFileSync(path.join(harness.cwd, "peer.txt"), "unrelated staged work\n", "utf8");
+    runGit(harness.cwd, ["add", "peer.txt"]);
+    const indexBefore = fs.readFileSync(path.join(harness.cwd, ".git", "index"));
+    for (const ignoreWhitespace of [false, true]) {
+      const selected = await Effect.runPromise(
+        diffQuery.getTurnDiff({ threadId, fromTurnCount: 0, toTurnCount: 1, ignoreWhitespace }),
+      );
+      expect(selected.diff).toContain("+first revision");
+      expect(selected.diff).not.toContain("peer");
+      expect(selected.diff.includes("whitespace.txt")).toBe(!ignoreWhitespace);
+    }
+    expect(fs.readFileSync(path.join(harness.cwd, ".git", "index"))).toEqual(indexBefore);
+    expect(fs.readFileSync(path.join(harness.cwd, "README.md"), "utf8")).toBe(
+      "peer edit after event\n",
+    );
+    const padHeader =
+      firstPatch +
+      "diff --git a/pad.txt b/pad.txt\nnew file mode 100644\n--- /dev/null\n+++ b/pad.txt\n@@ -0,0 +1 @@\n+";
+    const completePrefix =
+      padHeader + "x".repeat(64 * 1024 - Buffer.byteLength(padHeader) - 1) + "\n";
+    const oversizedPatch =
+      completePrefix +
+      "diff --git a/huge.txt b/huge.txt\nnew file mode 100644\n--- /dev/null\n+++ b/huge.txt\n@@ -0,0 +1 @@\n+" +
+      "y".repeat(2 * 1024 * 1024) +
+      "\n";
+    for (const [id, patch, raw] of [
+      ["codex-raw-malformed", "not a patch", undefined],
+      ["codex-raw-mismatch", firstPatch.replace("-dirty baseline", "-wrong baseline"), undefined],
+      [
+        "codex-raw-truncated",
+        firstPatch,
+        {
+          source: "codex.app-server.notification",
+          method: "turn/diff/updated",
+          payload: { synaraTruncated: true },
+        },
+      ],
+      ["codex-raw-legacy", firstPatch, null],
+      [
+        "codex-raw-wrong-size",
+        firstPatch,
+        {
+          source: "codex.app-server.notification",
+          method: "turn/diff/updated",
+          payload: { unifiedDiffBytes: Buffer.byteLength(firstPatch) + 1 },
+        },
+      ],
+      ["codex-raw-oversized", oversizedPatch, undefined],
+    ] as const) {
+      harness.provider.emit({
+        type: "turn.diff.updated",
+        eventId: EventId.makeUnsafe(id),
+        provider: "codex",
+        threadId,
+        turnId,
+        createdAt,
+        payload: { unifiedDiff: patch },
+        ...(raw === null ? {} : { raw: raw ?? patchRaw(patch) }),
+      });
+      await waitForThread(harness.engine, (thread) =>
+        thread.checkpoints.some((checkpoint) => checkpoint.checkpointRef === `provider-diff:${id}`),
+      );
+      await expect(
+        Effect.runPromise(diffQuery.getTurnDiff({ threadId, fromTurnCount: 0, toTurnCount: 1 })),
+      ).rejects.toThrow();
+    }
+    expect(fs.readFileSync(path.join(harness.cwd, ".git", "index"))).toEqual(indexBefore);
+    await emitPatch("codex-raw-second", "later revision\n");
+    await waitForThread(harness.engine, (thread) =>
+      thread.checkpoints.some(
+        (checkpoint) => checkpoint.checkpointRef === "provider-diff:codex-raw-second",
+      ),
+    );
+    const next = await Effect.runPromise(
+      diffQuery.getTurnDiff({ threadId, fromTurnCount: 0, toTurnCount: 1 }),
+    );
+    expect(next.diff).toContain("+later revision");
+    expect(next.diff).not.toContain("+first revision");
+    // Removing this exact journal revision must not expose another turn/thread's
+    // patch or silently substitute an older/newer event.
+    await runtime!.runPromise(
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        yield* sql`DELETE FROM provider_runtime_events WHERE event_id = ${"codex-raw-second"}`;
+      }),
+    );
+    await harness.runtimeEvents.append({
+      type: "turn.diff.updated",
+      eventId: EventId.makeUnsafe("foreign-revision"),
+      provider: "codex",
+      threadId: ThreadId.makeUnsafe("foreign-thread"),
+      turnId,
+      createdAt,
+      payload: { unifiedDiff: firstPatch },
+    });
+    await expect(
+      Effect.runPromise(diffQuery.getTurnDiff({ threadId, fromTurnCount: 0, toTurnCount: 1 })),
+    ).rejects.toThrow("not available");
     harness.provider.emit({
       type: "turn.completed",
-      eventId: EventId.makeUnsafe("evt-turn-completed-claude-live"),
-      provider: "claudeAgent",
-      createdAt: new Date().toISOString(),
+      eventId: EventId.makeUnsafe("codex-raw-complete"),
+      provider: "codex",
       threadId,
       turnId,
+      createdAt,
       payload: { state: "completed" },
     });
-
-    const finalThread = await waitForThread(harness.engine, (entry) =>
-      entry.checkpoints.some(
-        (checkpoint) => checkpoint.checkpointTurnCount === 1 && checkpoint.status === "ready",
-      ),
+    await waitForThread(harness.engine, (thread) =>
+      thread.checkpoints.some((checkpoint) => checkpoint.status === "ready"),
     );
-    expect(finalThread.checkpoints).toHaveLength(1);
-    expect(finalThread.checkpoints[0]?.files?.map((file) => file.path).sort()).toEqual([
-      "live.txt",
-      "second.txt",
-    ]);
-    expect(detailReads).not.toHaveBeenCalled();
+    const final = await Effect.runPromise(
+      diffQuery.getTurnDiff({ threadId, fromTurnCount: 0, toTurnCount: 1 }),
+    );
+    expect(final.diff).toContain("peer.txt");
   });
+
+  it.each(["completed", "interrupted"] as const)(
+    "derives a live turn-diff placeholder from git for claude file edits mid-turn (%s)",
+    async (terminalState) => {
+      const harness = await createHarness({
+        seedFilesystemCheckpoints: false,
+        providerName: "claudeAgent",
+        liveTurnDiffThrottleWindowMs: 0,
+      });
+      const threadId = ThreadId.makeUnsafe("thread-1");
+      const turnId = asTurnId("turn-claude-live");
+      const createdAt = new Date().toISOString();
+      const terminalReads = vi.spyOn(harness.runtimeEvents, "readThreadEvents");
+
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.session.set",
+          commandId: CommandId.makeUnsafe("cmd-session-set-claude-live"),
+          threadId,
+          session: {
+            threadId,
+            // Model the independent consumer seeing a captured start while
+            // ingestion has not yet projected running/active for this turn.
+            status: terminalState === "interrupted" ? "ready" : "running",
+            providerName: "claudeAgent",
+            runtimeMode: "approval-required",
+            activeTurnId: terminalState === "interrupted" ? null : turnId,
+            lastError: null,
+            updatedAt: createdAt,
+          },
+          createdAt,
+        }),
+      );
+
+      fs.writeFileSync(path.join(harness.cwd, "whitespace.txt"), "hello world\n", "utf8");
+      await harness.prepareBaseline(turnId);
+      // #1900: turn start, the live diff and turn completion read the thread
+      // shell, its checkpoint context and single messages, never the full detail.
+      const query = await runtime!.runPromise(Effect.service(ProjectionSnapshotQuery));
+      const detailReads = vi.spyOn(query, "getThreadDetailById");
+      harness.provider.emit({
+        type: "turn.started",
+        eventId: EventId.makeUnsafe("evt-turn-started-claude-live"),
+        provider: "claudeAgent",
+        createdAt: new Date().toISOString(),
+        threadId,
+        turnId,
+      });
+      await waitForGitRefExists(harness.cwd, checkpointRefForThreadTurnStart(threadId, turnId));
+
+      // A file edit completes while the turn is still running (no turn.completed yet).
+      fs.writeFileSync(path.join(harness.cwd, "whitespace.txt"), "hello  world\n", "utf8");
+      fs.writeFileSync(path.join(harness.cwd, "live.txt"), "live\n", "utf8");
+      harness.provider.emit({
+        type: "item.completed",
+        eventId: EventId.makeUnsafe("evt-item-file-change-live"),
+        provider: "claudeAgent",
+        createdAt: new Date().toISOString(),
+        threadId,
+        turnId,
+        itemId: "item-file-change-1",
+        payload: { itemType: "file_change", status: "completed" },
+      });
+
+      const liveThread = await waitForThread(harness.engine, (entry) =>
+        entry.checkpoints.some(
+          (checkpoint) =>
+            checkpoint.status === "missing" &&
+            checkpoint.files?.map((file) => file.path).includes("live.txt") === true,
+        ),
+      );
+      const livePlaceholder = liveThread.checkpoints.find(
+        (checkpoint) => checkpoint.status === "missing",
+      );
+      expect(livePlaceholder?.checkpointTurnCount).toBe(1);
+      const liveFile = livePlaceholder?.files?.find((file) => file.path === "live.txt") as
+        | { readonly path: string; readonly additions?: number; readonly deletions?: number }
+        | undefined;
+      expect(liveFile?.additions).toBe(1);
+      const diffQuery = await Effect.runPromise(
+        Effect.service(CheckpointDiffQuery).pipe(
+          Effect.provide(CheckpointDiffQueryLive),
+          Effect.provideService(ProjectionSnapshotQuery, query),
+          Effect.provideService(CheckpointStore, harness.checkpointStore),
+          Effect.provideService(ProviderRuntimeEventRepository, harness.runtimeEvents),
+        ),
+      );
+      // A client reconnect must retain the selectable turn; command/Undo readers
+      // keep their completed-only checkpoint context.
+      if (terminalState === "completed") {
+        const hydrated = Option.getOrThrow(
+          await Effect.runPromise(query.getThreadDetailSnapshotById(threadId)),
+        );
+        expect(hydrated.thread.checkpoints.map((checkpoint) => checkpoint.checkpointRef)).toContain(
+          "provider-diff:evt-item-file-change-live",
+        );
+        const full = await Effect.runPromise(query.getSnapshot());
+        expect(
+          full.threads
+            .find((thread) => thread.id === threadId)
+            ?.checkpoints.map((checkpoint) => checkpoint.checkpointRef),
+        ).toContain("provider-diff:evt-item-file-change-live");
+        const commandContext = Option.getOrThrow(
+          await Effect.runPromise(query.getThreadCheckpointContext(threadId)),
+        );
+        expect(commandContext.checkpoints).toHaveLength(0);
+      }
+      // Query the immutable tool-completion snapshot, not newer work in the checkout.
+      fs.writeFileSync(path.join(harness.cwd, "not-yet-captured.txt"), "later\n", "utf8");
+      for (const ignoreWhitespace of [false, true]) {
+        const liveDiff = await Effect.runPromise(
+          diffQuery.getTurnDiff({ threadId, fromTurnCount: 0, toTurnCount: 1, ignoreWhitespace }),
+        );
+        expect(liveDiff.diff).toContain("+live");
+        expect(liveDiff.diff).not.toContain("not-yet-captured.txt");
+        expect(liveDiff.diff.includes("whitespace.txt")).toBe(!ignoreWhitespace);
+      }
+      fs.rmSync(path.join(harness.cwd, "not-yet-captured.txt"));
+      expect(
+        gitRefExists(
+          harness.cwd,
+          checkpointRefForThreadTurnLive(threadId, turnId, "evt-item-file-change-live"),
+        ),
+      ).toBe(true);
+
+      const diffCheckpoints = harness.checkpointStore.diffCheckpoints;
+      const failedCandidate = checkpointRefForThreadTurnLive(
+        threadId,
+        turnId,
+        "evt-item-file-change-failed",
+      );
+      const diffFailure = vi
+        .spyOn(harness.checkpointStore, "diffCheckpoints")
+        .mockImplementation((input) =>
+          input.toCheckpointRef === failedCandidate
+            ? Effect.fail(
+                new GitCommandError({
+                  operation: "live-diff",
+                  cwd: input.cwd,
+                  command: "git diff",
+                  detail: "Injected live diff failure",
+                }),
+              )
+            : diffCheckpoints(input),
+        );
+      harness.provider.emit({
+        type: "item.completed",
+        eventId: EventId.makeUnsafe("evt-item-file-change-failed"),
+        provider: "claudeAgent",
+        createdAt,
+        threadId,
+        turnId,
+        itemId: "failed-capture",
+        payload: { itemType: "file_change", status: "completed" },
+      });
+      await harness.drain();
+      expect(
+        (
+          await Effect.runPromise(
+            diffQuery.getTurnDiff({ threadId, fromTurnCount: 0, toTurnCount: 1 }),
+          )
+        ).diff,
+      ).toContain("+live");
+      expect(gitRefExists(harness.cwd, failedCandidate)).toBe(false);
+      diffFailure.mockRestore();
+
+      // A second snapshot can have identical stats and timestamps; its ref still
+      // identifies a new patch, and the previous ref retires only after publication.
+      fs.writeFileSync(path.join(harness.cwd, "live.txt"), "next\n", "utf8");
+      harness.provider.emit({
+        type: "item.completed",
+        eventId: EventId.makeUnsafe("evt-item-file-change-next"),
+        provider: "claudeAgent",
+        createdAt,
+        threadId,
+        turnId,
+        itemId: "item-file-change-next",
+        payload: { itemType: "file_change", status: "completed" },
+      });
+      await waitForThread(harness.engine, (entry) =>
+        entry.checkpoints.some(
+          (checkpoint) => checkpoint.checkpointRef === "provider-diff:evt-item-file-change-next",
+        ),
+      );
+      const nextDiff = await Effect.runPromise(
+        diffQuery.getTurnDiff({ threadId, fromTurnCount: 0, toTurnCount: 1 }),
+      );
+      expect(nextDiff.diff).toContain("+next");
+      expect(nextDiff.diff).not.toContain("+live");
+      expect(
+        gitRefExists(
+          harness.cwd,
+          checkpointRefForThreadTurnLive(threadId, turnId, "evt-item-file-change-live"),
+        ),
+      ).toBe(false);
+      // Each probe scans only new journal rows; the real repository test also
+      // verifies its lower bound excludes the previously checked prefix.
+      const liveProbes = terminalReads.mock.calls.map(([input]) => input);
+      expect(liveProbes.length).toBeGreaterThanOrEqual(3);
+      expect(liveProbes[0]?.afterSequenceExclusive).toBe(0);
+      for (let index = 1; index < liveProbes.length; index++) {
+        expect(liveProbes[index]?.afterSequenceExclusive).toBe(
+          liveProbes[index - 1]?.throughSequenceInclusive,
+        );
+      }
+      const lastLiveRef = checkpointRefForThreadTurnLive(
+        threadId,
+        turnId,
+        "evt-item-file-change-next",
+      );
+      expect(gitRefExists(harness.cwd, lastLiveRef)).toBe(true);
+
+      // Failed final capture must not discard the last readable preview.
+      const captureCheckpoint = harness.checkpointStore.captureCheckpoint;
+      const capture = vi
+        .spyOn(harness.checkpointStore, "captureCheckpoint")
+        .mockImplementation((input) =>
+          input.checkpointRef === checkpointRefForThreadTurn(threadId, 1)
+            ? Effect.fail(
+                new GitCommandError({
+                  operation: "capture",
+                  cwd: input.cwd,
+                  command: "git write-tree",
+                  detail: "Injected final capture failure",
+                }),
+              )
+            : captureCheckpoint(input),
+        );
+      harness.provider.emit({
+        type: "turn.completed",
+        eventId: EventId.makeUnsafe("evt-turn-completed-claude-live-failed"),
+        provider: "claudeAgent",
+        createdAt: new Date().toISOString(),
+        threadId,
+        turnId,
+        payload: { state: "interrupted" },
+      });
+      await waitForThread(harness.engine, (entry) =>
+        entry.activities.some((activity) => activity.kind === "checkpoint.capture.failed"),
+      );
+      expect(
+        (
+          await Effect.runPromise(
+            diffQuery.getTurnDiff({ threadId, fromTurnCount: 0, toTurnCount: 1 }),
+          )
+        ).diff,
+      ).toContain("+next");
+      expect(gitRefExists(harness.cwd, lastLiveRef)).toBe(true);
+      // The independent checkpoint consumer can settle the journal before
+      // runtime ingestion projects the terminal session/turn state.
+      capture.mockClear();
+      const beforeLateSequence = await Effect.runPromise(
+        harness.runtimeEvents.getHighWaterSequence,
+      );
+      fs.writeFileSync(
+        path.join(harness.cwd, "after-terminal.txt"),
+        "unowned later work\n",
+        "utf8",
+      );
+      harness.provider.emit({
+        type: "item.completed",
+        eventId: EventId.makeUnsafe("evt-item-after-terminal"),
+        provider: "claudeAgent",
+        createdAt: new Date().toISOString(),
+        threadId,
+        turnId,
+        itemId: "after-terminal",
+        payload: { itemType: "file_change", status: "completed" },
+      });
+      await vi.waitFor(async () =>
+        expect(await Effect.runPromise(harness.runtimeEvents.getHighWaterSequence)).toBeGreaterThan(
+          beforeLateSequence,
+        ),
+      );
+      await harness.drain();
+      expect(
+        await Effect.runPromise(
+          harness.runtimeEvents.getConsumerCursor(CHECKPOINT_RUNTIME_CONSUMER),
+        ),
+      ).toBeGreaterThan(beforeLateSequence);
+      expect(capture).not.toHaveBeenCalled();
+      expect(
+        (
+          await Effect.runPromise(
+            diffQuery.getTurnDiff({ threadId, fromTurnCount: 0, toTurnCount: 1 }),
+          )
+        ).diff,
+      ).toContain("+next");
+      fs.rmSync(path.join(harness.cwd, "after-terminal.txt"));
+      capture.mockRestore();
+
+      // The terminal turn.completed capture must overwrite the placeholder with the
+      // authoritative git checkpoint (status "ready"), keeping a single entry.
+      fs.writeFileSync(path.join(harness.cwd, "second.txt"), "second\n", "utf8");
+      harness.provider.emit({
+        type: "turn.completed",
+        eventId: EventId.makeUnsafe("evt-turn-completed-claude-live"),
+        provider: "claudeAgent",
+        createdAt: new Date().toISOString(),
+        threadId,
+        turnId,
+        payload: { state: terminalState },
+      });
+
+      const finalThread = await waitForThread(harness.engine, (entry) =>
+        entry.checkpoints.some(
+          (checkpoint) =>
+            checkpoint.checkpointTurnCount === 1 &&
+            checkpoint.checkpointRef === checkpointRefForThreadTurn(threadId, 1) &&
+            checkpoint.status === (terminalState === "completed" ? "ready" : "missing"),
+        ),
+      );
+      expect(finalThread.checkpoints).toHaveLength(1);
+      expect(finalThread.checkpoints[0]?.files?.map((file) => file.path).sort()).toEqual([
+        "live.txt",
+        "second.txt",
+        "whitespace.txt",
+      ]);
+      const finalDiff = await Effect.runPromise(
+        diffQuery.getTurnDiff({ threadId, fromTurnCount: 0, toTurnCount: 1 }),
+      );
+      expect(finalDiff.diff).toContain("second.txt");
+      const settledHydration = Option.getOrThrow(
+        await Effect.runPromise(query.getThreadDetailSnapshotById(threadId)),
+      );
+      expect(settledHydration.thread.checkpoints).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            checkpointRef: checkpointRefForThreadTurn(threadId, 1),
+            status: terminalState === "completed" ? "ready" : "missing",
+          }),
+        ]),
+      );
+      const settledFull = await Effect.runPromise(query.getSnapshot());
+      expect(settledFull.threads.find((thread) => thread.id === threadId)?.checkpoints).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            checkpointRef: checkpointRefForThreadTurn(threadId, 1),
+            status: terminalState === "completed" ? "ready" : "missing",
+          }),
+        ]),
+      );
+      if (terminalState === "interrupted") {
+        // A captured target without this exact turn's baseline is still unsafe;
+        // legacy turn-zero/previous-final refs cannot stand in for that boundary.
+        await Effect.runPromise(
+          harness.checkpointStore.deleteCheckpointRefs({
+            cwd: harness.cwd,
+            checkpointRefs: [checkpointRefForThreadTurnStart(threadId, turnId)],
+          }),
+        );
+        expect(gitRefExists(harness.cwd, checkpointRefForThreadTurn(threadId, 1))).toBe(true);
+        await expect(
+          Effect.runPromise(diffQuery.getTurnDiff({ threadId, fromTurnCount: 0, toTurnCount: 1 })),
+        ).rejects.toThrow("Checkpoint diff is not available yet");
+      }
+      expect(
+        gitRefExists(
+          harness.cwd,
+          checkpointRefForThreadTurnLive(threadId, turnId, "evt-item-file-change-live"),
+        ),
+      ).toBe(false);
+      expect(gitRefExists(harness.cwd, lastLiveRef)).toBe(false);
+      expect(detailReads).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["completed", "interrupted"] as const)(
+    "keeps the last preview after %s final capture failure when a late file event arrives",
+    async (terminalState) => {
+      const harness = await createHarness({
+        seedFilesystemCheckpoints: false,
+        providerName: "claudeAgent",
+        runtimeIngestion: true,
+        liveTurnDiffThrottleWindowMs: 0,
+      });
+      const threadId = ThreadId.makeUnsafe("thread-1");
+      const turnId = asTurnId("turn-interrupted-live");
+      const createdAt = new Date().toISOString();
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.session.set",
+          commandId: CommandId.makeUnsafe("interrupted-live-session"),
+          threadId,
+          session: {
+            threadId,
+            status: "running",
+            providerName: "claudeAgent",
+            runtimeMode: "approval-required",
+            activeTurnId: turnId,
+            lastError: null,
+            updatedAt: createdAt,
+          },
+          createdAt,
+        }),
+      );
+      await harness.prepareBaseline(turnId);
+      harness.provider.emit({
+        type: "turn.started",
+        eventId: EventId.makeUnsafe("interrupted-live-start"),
+        provider: "claudeAgent",
+        threadId,
+        turnId,
+        createdAt,
+      });
+      await waitForGitRefExists(harness.cwd, checkpointRefForThreadTurnStart(threadId, turnId));
+      fs.writeFileSync(path.join(harness.cwd, "live.txt"), "owned preview\n", "utf8");
+      harness.provider.emit({
+        type: "item.completed",
+        eventId: EventId.makeUnsafe("interrupted-live-edit"),
+        provider: "claudeAgent",
+        threadId,
+        turnId,
+        createdAt,
+        itemId: "initial-edit",
+        payload: { itemType: "file_change", status: "completed" },
+      });
+      await waitForThread(harness.engine, (thread) =>
+        thread.checkpoints.some(
+          (checkpoint) => checkpoint.checkpointRef === "provider-diff:interrupted-live-edit",
+        ),
+      );
+      const query = await runtime!.runPromise(Effect.service(ProjectionSnapshotQuery));
+      const diffQuery = await Effect.runPromise(
+        Effect.service(CheckpointDiffQuery).pipe(
+          Effect.provide(CheckpointDiffQueryLive),
+          Effect.provideService(ProjectionSnapshotQuery, query),
+          Effect.provideService(CheckpointStore, harness.checkpointStore),
+          Effect.provideService(ProviderRuntimeEventRepository, harness.runtimeEvents),
+        ),
+      );
+      const previous = await Effect.runPromise(
+        diffQuery.getTurnDiff({
+          threadId,
+          fromTurnCount: 0,
+          toTurnCount: 1,
+        }),
+      );
+      const captureCheckpoint = harness.checkpointStore.captureCheckpoint;
+      const capture = vi
+        .spyOn(harness.checkpointStore, "captureCheckpoint")
+        .mockImplementation((input) =>
+          input.checkpointRef === checkpointRefForThreadTurn(threadId, 1)
+            ? Effect.fail(
+                new GitCommandError({
+                  operation: "capture",
+                  cwd: input.cwd,
+                  command: "git write-tree",
+                  detail: "Injected final capture failure",
+                }),
+              )
+            : captureCheckpoint(input),
+        );
+      harness.provider.emit({
+        type: "turn.completed",
+        eventId: EventId.makeUnsafe("interrupted-live-stop"),
+        provider: "claudeAgent",
+        threadId,
+        turnId,
+        createdAt: new Date().toISOString(),
+        payload: { state: terminalState },
+      });
+      await waitForThread(harness.engine, (thread) =>
+        thread.activities.some((activity) => activity.kind === "checkpoint.capture.failed"),
+      );
+      await Effect.runPromise(harness.ingestion!.drain);
+      const stopped = (await Effect.runPromise(harness.engine.getReadModel())).threads.find(
+        (thread) => thread.id === threadId,
+      )!;
+      expect(stopped.session?.status).toBe(terminalState === "completed" ? "ready" : "interrupted");
+      expect(stopped.session?.activeTurnId).toBeNull();
+      capture.mockClear();
+      const beforeLateSequence = await Effect.runPromise(
+        harness.runtimeEvents.getHighWaterSequence,
+      );
+      fs.writeFileSync(path.join(harness.cwd, "other-work.txt"), "after Stop\n", "utf8");
+      harness.provider.emit({
+        type: "item.completed",
+        eventId: EventId.makeUnsafe("interrupted-live-late"),
+        provider: "claudeAgent",
+        threadId,
+        turnId,
+        createdAt: new Date().toISOString(),
+        itemId: "late-edit",
+        payload: { itemType: "file_change", status: "completed" },
+      });
+      await vi.waitFor(async () =>
+        expect(await Effect.runPromise(harness.runtimeEvents.getHighWaterSequence)).toBeGreaterThan(
+          beforeLateSequence,
+        ),
+      );
+      await Effect.runPromise(harness.ingestion!.drain);
+      await harness.drain();
+      expect(
+        await Effect.runPromise(
+          harness.runtimeEvents.getConsumerCursor(CHECKPOINT_RUNTIME_CONSUMER),
+        ),
+      ).toBeGreaterThan(beforeLateSequence);
+      expect(capture).not.toHaveBeenCalled();
+      const afterLate = await Effect.runPromise(
+        diffQuery.getTurnDiff({
+          threadId,
+          fromTurnCount: 0,
+          toTurnCount: 1,
+        }),
+      );
+      expect(afterLate.diff).toBe(previous.diff);
+      expect(afterLate.diff).not.toContain("other-work.txt");
+      expect(
+        gitRefExists(
+          harness.cwd,
+          checkpointRefForThreadTurnLive(threadId, turnId, "interrupted-live-late"),
+        ),
+      ).toBe(false);
+      capture.mockRestore();
+    },
+  );
 
   it("throttles live turn-diff captures per thread and ends a burst with its last edit", async () => {
     // About twice the ~0.25 s the five drained edits below take locally.
@@ -5505,7 +6282,7 @@ describe("CheckpointReactor", () => {
     const liveRef = checkpointRefForThreadTurnLive(threadId, turnId);
     const captures = vi.spyOn(harness.checkpointStore, "captureCheckpoint");
     const liveCaptures = () =>
-      captures.mock.calls.filter(([input]) => input.checkpointRef === liveRef).length;
+      captures.mock.calls.filter(([input]) => input.checkpointRef.startsWith(`${liveRef}_`)).length;
     const emitFileChange = (index: number) => {
       fs.writeFileSync(path.join(harness.cwd, `burst-${index}.txt`), `edit ${index}\n`, "utf8");
       harness.provider.emit({
@@ -5538,10 +6315,38 @@ describe("CheckpointReactor", () => {
       ),
     );
     expect(liveCaptures()).toBe(2);
-    expect(gitRefExists(harness.cwd, liveRef)).toBe(false);
+    const retainedLiveRefs = () =>
+      captures.mock.calls
+        .map(([input]) => input.checkpointRef)
+        .filter((ref) => ref.startsWith(`${liveRef}_`) && gitRefExists(harness.cwd, ref));
+    await vi.waitFor(() => expect(retainedLiveRefs()).toHaveLength(1));
 
-    // An edit inside the next window stays pending; turn completion drops it.
+    // A stale completion for another turn must not cancel this turn's pending
+    // capture or replace its journal watermark with a terminal fence.
     emitFileChange(6);
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    await harness.drain();
+    harness.provider.emit({
+      type: "turn.completed",
+      eventId: EventId.makeUnsafe("evt-old-turn-completed-claude-burst"),
+      provider: "claudeAgent",
+      createdAt: new Date().toISOString(),
+      threadId,
+      turnId: asTurnId("old-burst-turn"),
+      payload: { state: "completed" },
+    });
+    await waitForThread(
+      harness.engine,
+      (entry) =>
+        entry.checkpoints.some((checkpoint) =>
+          checkpoint.files?.some((file) => file.path === "burst-6.txt"),
+        ),
+      2000,
+    );
+    expect(liveCaptures()).toBe(3);
+
+    // An edit inside the next window stays pending; its own completion drops it.
+    emitFileChange(7);
     await new Promise((resolve) => setTimeout(resolve, 25));
     await harness.drain();
     harness.provider.emit({
@@ -5560,7 +6365,8 @@ describe("CheckpointReactor", () => {
     );
     await new Promise((resolve) => setTimeout(resolve, throttleWindowMs + 200));
     await harness.drain();
-    expect(liveCaptures()).toBe(2);
+    expect(liveCaptures()).toBe(3);
+    expect(retainedLiveRefs()).toHaveLength(0);
     const thread = (await Effect.runPromise(harness.engine.getReadModel())).threads.find(
       (entry) => entry.id === threadId,
     );
@@ -5569,6 +6375,7 @@ describe("CheckpointReactor", () => {
     expect(thread?.checkpoints[0]?.files?.map((file) => file.path).toSorted()).toEqual([
       ...burstFiles,
       "burst-6.txt",
+      "burst-7.txt",
     ]);
   });
 
@@ -6262,6 +7069,537 @@ describe("CheckpointReactor", () => {
     expect(harness.provider.rollbackConversation).not.toHaveBeenCalled();
   });
 
+  it.each([
+    {
+      holder: "the thread",
+      holderId: "thread-1",
+      detail:
+        "Thread 'thread-1' has an active turn. Interrupt the current turn before reverting checkpoints.",
+    },
+    {
+      holder: "a peer thread",
+      holderId: "retained-turn-peer",
+      detail:
+        "Another thread is working in this workspace. Stop its active turn before undoing changes.",
+    },
+  ])(
+    "refuses a files-only Undo while $holder keeps a retained turn running",
+    async ({ holder, holderId, detail }) => {
+      // A failed Antigravity stop keeps its context with the running turn, the
+      // live listing leaves that context out, and the provider reactor projects
+      // the thread stopped with no active turn. The retained listing is the
+      // only signal left that the process may still be writing to the worktree.
+      const createdAt = new Date().toISOString();
+      const holderThreadId = ThreadId.makeUnsafe(holderId);
+      const harness = await createHarness({
+        hasSession: holder === "a peer thread",
+        providerRetainedSessions: [
+          {
+            provider: "antigravity",
+            status: "running",
+            runtimeMode: "full-access",
+            threadId: holderThreadId,
+            activeTurnId: asTurnId("retained-antigravity-turn"),
+            createdAt,
+            updatedAt: createdAt,
+          },
+        ],
+      });
+      const threadId = ThreadId.makeUnsafe("thread-1");
+      const setSession = (sessionThreadId: ThreadId, status: "ready" | "stopped") =>
+        Effect.runPromise(
+          harness.engine.dispatch({
+            type: "thread.session.set",
+            commandId: CommandId.makeUnsafe(`retained-turn-session-${sessionThreadId}`),
+            threadId: sessionThreadId,
+            session: {
+              threadId: sessionThreadId,
+              status,
+              providerName: "antigravity",
+              runtimeMode: "full-access",
+              activeTurnId: null,
+              lastError: null,
+              updatedAt: createdAt,
+            },
+            createdAt,
+          }),
+        );
+      if (holder === "a peer thread") {
+        await setSession(threadId, "ready");
+        await Effect.runPromise(
+          harness.engine.dispatch({
+            type: "thread.create",
+            commandId: CommandId.makeUnsafe("retained-turn-peer-create"),
+            threadId: holderThreadId,
+            projectId: asProjectId("project-1"),
+            title: "Stopped peer",
+            modelSelection: { provider: "antigravity", model: "gemini-3-pro" },
+            interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+            runtimeMode: "full-access",
+            branch: null,
+            worktreePath: harness.cwd,
+            createdAt,
+          }),
+        );
+      }
+      await setSession(holderThreadId, "stopped");
+      for (const turnCount of [1, 2] as const) {
+        await Effect.runPromise(
+          harness.engine.dispatch({
+            type: "thread.turn.diff.complete",
+            commandId: CommandId.makeUnsafe(`retained-turn-diff-${turnCount}`),
+            threadId,
+            turnId: asTurnId(`turn-${turnCount}`),
+            completedAt: createdAt,
+            checkpointRef: checkpointRefForThreadTurn(threadId, turnCount),
+            status: "ready",
+            files:
+              turnCount === 2
+                ? [{ path: "README.md", kind: "modified", additions: 1, deletions: 1 }]
+                : [],
+            checkpointTurnCount: turnCount,
+            createdAt,
+          }),
+        );
+      }
+
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.checkpoint.revert",
+          commandId: CommandId.makeUnsafe("retained-turn-files-undo"),
+          threadId,
+          turnCount: 2,
+          scope: "files",
+          createdAt,
+        }),
+      );
+      await harness.drain();
+
+      expect(fs.readFileSync(path.join(harness.cwd, "README.md"), "utf8")).toBe("v3\n");
+      const state = await Effect.runPromise(harness.engine.getReadModel());
+      const target = state.threads.find((entry) => entry.id === threadId);
+      expect(
+        target?.activities.find((activity) => activity.kind === "checkpoint.revert.failed")
+          ?.payload,
+      ).toMatchObject({ detail });
+      expect(
+        target?.checkpoints.find((checkpoint) => checkpoint.checkpointTurnCount === 2)?.files,
+      ).toHaveLength(1);
+      expect(harness.provider.rollbackConversation).not.toHaveBeenCalled();
+      expect(listRevertRescueRefs(harness.cwd)).toEqual([]);
+    },
+  );
+
+  it.each([
+    {
+      name: "refuses it while the thread keeps an unproven turn",
+      holderId: "thread-1",
+      turn: true,
+      detail:
+        "Thread 'thread-1' has an active turn. Interrupt the current turn before reverting checkpoints.",
+    },
+    {
+      name: "refuses it while a peer thread keeps an unproven turn",
+      holderId: "unproven-pi-peer",
+      turn: true,
+      detail:
+        "Another thread is working in this workspace. Stop its active turn before undoing changes.",
+    },
+    {
+      name: "allows it when the kept context has no turn",
+      holderId: "thread-1",
+      turn: false,
+      detail: undefined,
+    },
+  ])(
+    "guards a files-only Undo after a failed Pi stop: $name",
+    async ({ holderId, turn, detail }) => {
+      // Through the real ProviderService and adapter registry. Pi lists the
+      // context a failed stop keeps as closed, with the turn id it had, and the
+      // provider reactor projects the thread stopped with no turn. That turn id
+      // is the only signal left that the process may still be writing.
+      const harness = await createHarness({
+        providerServiceLayer: createRetainingPiProviderServiceLayer(),
+      });
+      const providerService = await runtime!.runPromise(Effect.service(ProviderService));
+      const createdAt = new Date().toISOString();
+      const threadId = ThreadId.makeUnsafe("thread-1");
+      const holderThreadId = ThreadId.makeUnsafe(holderId);
+      if (holderThreadId !== threadId) {
+        await Effect.runPromise(
+          harness.engine.dispatch({
+            type: "thread.create",
+            commandId: CommandId.makeUnsafe("unproven-pi-peer-create"),
+            threadId: holderThreadId,
+            projectId: asProjectId("project-1"),
+            title: "Stopped peer",
+            modelSelection: { provider: "pi", model: "openai/gpt-4o" },
+            interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+            runtimeMode: "full-access",
+            branch: null,
+            worktreePath: harness.cwd,
+            createdAt,
+          }),
+        );
+      }
+      await runtime!.runPromise(
+        Effect.gen(function* () {
+          yield* providerService.startSession(holderThreadId, {
+            provider: "pi",
+            threadId: holderThreadId,
+            cwd: harness.cwd,
+            runtimeMode: "full-access",
+          });
+          if (turn) {
+            yield* providerService.sendTurn({ threadId: holderThreadId, input: "edit README.md" });
+          }
+          const stop = yield* Effect.result(
+            providerService.stopRuntimeSession!({ threadId: holderThreadId }),
+          );
+          expect(stop._tag).toBe("Failure");
+        }),
+      );
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.session.set",
+          commandId: CommandId.makeUnsafe("unproven-pi-session-stopped"),
+          threadId: holderThreadId,
+          session: {
+            threadId: holderThreadId,
+            status: "stopped",
+            providerName: "pi",
+            runtimeMode: "full-access",
+            activeTurnId: null,
+            lastError: null,
+            updatedAt: createdAt,
+          },
+          createdAt,
+        }),
+      );
+      for (const turnCount of [1, 2] as const) {
+        await Effect.runPromise(
+          harness.engine.dispatch({
+            type: "thread.turn.diff.complete",
+            commandId: CommandId.makeUnsafe(`unproven-pi-diff-${turnCount}`),
+            threadId,
+            turnId: asTurnId(`turn-${turnCount}`),
+            completedAt: createdAt,
+            checkpointRef: checkpointRefForThreadTurn(threadId, turnCount),
+            status: "ready",
+            files:
+              turnCount === 2
+                ? [{ path: "README.md", kind: "modified", additions: 1, deletions: 1 }]
+                : [],
+            checkpointTurnCount: turnCount,
+            createdAt,
+          }),
+        );
+      }
+
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.checkpoint.revert",
+          commandId: CommandId.makeUnsafe("unproven-pi-files-undo"),
+          threadId,
+          turnCount: 2,
+          scope: "files",
+          createdAt,
+        }),
+      );
+      await harness.drain();
+
+      expect(fs.readFileSync(path.join(harness.cwd, "README.md"), "utf8")).toBe(
+        turn ? "v3\n" : "v2\n",
+      );
+      const state = await Effect.runPromise(harness.engine.getReadModel());
+      const target = state.threads.find((entry) => entry.id === threadId);
+      expect(
+        target?.activities.find((activity) => activity.kind === "checkpoint.revert.failed")
+          ?.payload,
+      ).toEqual(detail === undefined ? undefined : expect.objectContaining({ detail }));
+      expect(listRevertRescueRefs(harness.cwd)).toEqual([]);
+    },
+  );
+
+  it.each([
+    {
+      name: "refuses it while the thread keeps a retained turn beside an idle live session",
+      holder: "thread-1",
+      retainedTurn: true,
+      liveTurn: false,
+      detail:
+        "Thread 'thread-1' has an active turn. Interrupt the current turn before reverting checkpoints.",
+    },
+    {
+      name: "refuses it while a peer keeps a retained turn here beside an idle live session elsewhere",
+      holder: "live-and-retained-peer",
+      retainedTurn: true,
+      liveTurn: false,
+      detail:
+        "Another thread is working in this workspace. Stop its active turn before undoing changes.",
+    },
+    {
+      name: "refuses it while the thread runs a live turn beside an idle retained context",
+      holder: "thread-1",
+      retainedTurn: false,
+      liveTurn: true,
+      detail:
+        "Thread 'thread-1' has an active turn. Interrupt the current turn before reverting checkpoints.",
+    },
+    {
+      name: "refuses it while a peer's projected turn and idle live session are here beside a retained turn elsewhere",
+      holder: "live-and-retained-peer",
+      retainedTurn: true,
+      liveTurn: false,
+      retainedElsewhere: true,
+      turnReport: "projected",
+      detail:
+        "Another thread is working in this workspace. Stop its active turn before undoing changes.",
+    },
+    {
+      name: "refuses it while a peer's pending turn and idle live session are here beside a retained turn elsewhere",
+      holder: "live-and-retained-peer",
+      retainedTurn: true,
+      liveTurn: false,
+      retainedElsewhere: true,
+      turnReport: "pending",
+      detail:
+        "Another thread is working in this workspace. Stop its active turn before undoing changes.",
+    },
+    {
+      name: "refuses it while a peer's idle live session is here and its workspace and retained turn are elsewhere",
+      holder: "live-and-retained-peer",
+      retainedTurn: true,
+      liveTurn: false,
+      retainedElsewhere: true,
+      workspace: "retained",
+      turnReport: "projected",
+      detail:
+        "Another thread is working in this workspace. Stop its active turn before undoing changes.",
+    },
+    {
+      name: "refuses it with no live session while a peer's projected turn is here and its retained turn is elsewhere",
+      holder: "live-and-retained-peer",
+      liveSession: false,
+      retainedTurn: true,
+      liveTurn: false,
+      retainedElsewhere: true,
+      turnReport: "projected",
+      detail:
+        "Another thread is working in this workspace. Stop its active turn before undoing changes.",
+    },
+    {
+      name: "refuses it with no live session while a peer's pending turn is here and its retained turn is elsewhere",
+      holder: "live-and-retained-peer",
+      liveSession: false,
+      retainedTurn: true,
+      liveTurn: false,
+      retainedElsewhere: true,
+      turnReport: "pending",
+      detail:
+        "Another thread is working in this workspace. Stop its active turn before undoing changes.",
+    },
+    {
+      name: "keeps refusing it with no live session while a peer's projected turn and idle retained context are here and its workspace is elsewhere",
+      holder: "live-and-retained-peer",
+      liveSession: false,
+      retainedTurn: false,
+      liveTurn: false,
+      turnReport: "projected",
+      detail:
+        "Another thread is working in this workspace. Stop its active turn before undoing changes.",
+    },
+  ])(
+    "guards a files-only Undo over a live session and a retained context: $name",
+    async ({
+      holder,
+      liveSession,
+      retainedTurn,
+      liveTurn,
+      retainedElsewhere,
+      workspace,
+      turnReport,
+      detail,
+    }) => {
+      // A thread can list a live session and a retained context at once. The
+      // service starts a replacement over a retained context whose binding it
+      // does not hold and only logs that context's failed stale stop, so the
+      // Pi context is registered on its adapter directly, as a startup whose
+      // cleanup failed leaves it. The peer's live session works in another
+      // repository and only its retained context in this one, or the other
+      // way round, and the projection or a pending start can report a turn
+      // for the peer while its live session is idle. A peer can also have no
+      // live session at all, and the turn reported for it then starts in the
+      // thread workspace, not where its retained context lists.
+      const fakes = new Map<ProviderKind, ProviderAdapterShape<ProviderAdapterError>>();
+      const harness = await createHarness({
+        providerServiceLayer: createRetainingPiProviderServiceLayer({
+          stopFailures: 2,
+          adapters: fakes,
+        }),
+      });
+      const providerService = await runtime!.runPromise(Effect.service(ProviderService));
+      const createdAt = new Date().toISOString();
+      const threadId = ThreadId.makeUnsafe("thread-1");
+      const holderThreadId = ThreadId.makeUnsafe(holder);
+      let liveCwd = harness.cwd;
+      let retainedCwd = harness.cwd;
+      if (holderThreadId !== threadId) {
+        const elsewhere = createGitRepository();
+        tempDirs.push(elsewhere);
+        if (retainedElsewhere) retainedCwd = elsewhere;
+        else liveCwd = elsewhere;
+        await Effect.runPromise(
+          harness.engine.dispatch({
+            type: "thread.create",
+            commandId: CommandId.makeUnsafe("live-and-retained-peer-create"),
+            threadId: holderThreadId,
+            projectId: asProjectId("project-1"),
+            title: "Peer elsewhere",
+            modelSelection: { provider: "codex", model: "gpt-5-codex" },
+            interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+            runtimeMode: "full-access",
+            branch: null,
+            worktreePath: workspace === "retained" ? retainedCwd : liveCwd,
+            createdAt,
+          }),
+        );
+      }
+      const pi = fakes.get("pi")!;
+      await runtime!.runPromise(
+        Effect.gen(function* () {
+          yield* pi.startSession({
+            provider: "pi",
+            threadId: holderThreadId,
+            cwd: retainedCwd,
+            runtimeMode: "full-access",
+          });
+          if (retainedTurn) {
+            yield* pi.sendTurn({ threadId: holderThreadId, input: "edit README.md" });
+          }
+          const stop = yield* Effect.result(pi.stopSession(holderThreadId));
+          expect(stop._tag).toBe("Failure");
+          if (liveSession !== false) {
+            // No binding names the kept context, so this start reaches the
+            // stale stop, whose second teardown failure is only logged.
+            yield* providerService.startSession(holderThreadId, {
+              provider: "codex",
+              threadId: holderThreadId,
+              cwd: liveCwd,
+              runtimeMode: "full-access",
+            });
+            if (liveTurn) {
+              yield* providerService.sendTurn({
+                threadId: holderThreadId,
+                input: "edit README.md",
+              });
+            }
+          }
+          const [live, retained] = yield* Effect.all([
+            providerService.listSessions(),
+            providerService.listRetainedSessions?.() ??
+              Effect.succeed<ReadonlyArray<ProviderSession>>([]),
+          ]);
+          expect(
+            [...live, ...retained].map((session) => [
+              session.provider,
+              session.status,
+              session.activeTurnId ?? null,
+              session.cwd,
+            ]),
+          ).toEqual([
+            ...(liveSession === false
+              ? []
+              : [
+                  [
+                    "codex",
+                    liveTurn ? "running" : "ready",
+                    liveTurn ? "codex-unproven-turn" : null,
+                    liveCwd,
+                  ],
+                ]),
+            ["pi", "closed", retainedTurn ? "pi-unproven-turn" : null, retainedCwd],
+          ]);
+        }),
+      );
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.session.set",
+          commandId: CommandId.makeUnsafe("live-and-retained-session-ready"),
+          threadId: holderThreadId,
+          session: {
+            threadId: holderThreadId,
+            status: turnReport === "projected" ? "running" : "ready",
+            providerName: "codex",
+            runtimeMode: "full-access",
+            activeTurnId: turnReport === "projected" ? asTurnId("peer-projected-turn") : null,
+            lastError: null,
+            updatedAt: createdAt,
+          },
+          createdAt,
+        }),
+      );
+      if (turnReport === "pending") {
+        await Effect.runPromise(
+          harness.engine.dispatch({
+            type: "thread.turn.start",
+            commandId: CommandId.makeUnsafe("live-and-retained-pending-start"),
+            threadId: holderThreadId,
+            message: {
+              messageId: MessageId.makeUnsafe("live-and-retained-pending-message"),
+              role: "user",
+              text: "edit README.md",
+              attachments: [],
+            },
+            interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+            runtimeMode: "full-access",
+            createdAt,
+          }),
+        );
+      }
+      for (const turnCount of [1, 2] as const) {
+        await Effect.runPromise(
+          harness.engine.dispatch({
+            type: "thread.turn.diff.complete",
+            commandId: CommandId.makeUnsafe(`live-and-retained-diff-${turnCount}`),
+            threadId,
+            turnId: asTurnId(`turn-${turnCount}`),
+            completedAt: createdAt,
+            checkpointRef: checkpointRefForThreadTurn(threadId, turnCount),
+            status: "ready",
+            files:
+              turnCount === 2
+                ? [{ path: "README.md", kind: "modified", additions: 1, deletions: 1 }]
+                : [],
+            checkpointTurnCount: turnCount,
+            createdAt,
+          }),
+        );
+      }
+
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.checkpoint.revert",
+          commandId: CommandId.makeUnsafe("live-and-retained-files-undo"),
+          threadId,
+          turnCount: 2,
+          scope: "files",
+          createdAt,
+        }),
+      );
+      await harness.drain();
+
+      expect(fs.readFileSync(path.join(harness.cwd, "README.md"), "utf8")).toBe("v3\n");
+      const state = await Effect.runPromise(harness.engine.getReadModel());
+      const target = state.threads.find((entry) => entry.id === threadId);
+      expect(
+        target?.activities.find((activity) => activity.kind === "checkpoint.revert.failed")
+          ?.payload,
+      ).toMatchObject({ detail });
+      expect(listRevertRescueRefs(harness.cwd)).toEqual([]);
+    },
+  );
+
   it("rejects a child-thread revert while its parent-owned provider session is active", async () => {
     const harness = await createHarness({
       providerStatus: "running",
@@ -6326,6 +7664,7 @@ describe("CheckpointReactor", () => {
     { location: "worktree", state: "projected", scope: "thread", allowed: true },
     { location: "same", state: "error", scope: "thread", allowed: true },
     { location: "same", state: "idle", scope: "files", allowed: true },
+    { location: "same", state: "closed", scope: "files", allowed: true },
   ] as const)(
     "guards shared workspace Undo: $location / $state / $scope",
     async ({ location, state: peerState, scope: revertScope, allowed }) => {
@@ -6379,7 +7718,9 @@ describe("CheckpointReactor", () => {
             createdAt,
           }),
         );
-      if (peerState === "runtime") {
+      // A live session that reads closed keeps a stale turn id. Only the
+      // retained listing makes a turn id count whatever the status.
+      if (peerState === "runtime" || peerState === "closed") {
         const listSessions = harness.provider.service.listSessions;
         vi.spyOn(harness.provider.service, "listSessions").mockImplementation(() =>
           listSessions().pipe(
@@ -6387,7 +7728,7 @@ describe("CheckpointReactor", () => {
               ...sessions,
               {
                 provider: "codex",
-                status: "running",
+                status: peerState === "closed" ? "closed" : "running",
                 runtimeMode: "full-access",
                 threadId: peerId,
                 cwd: peerCwd,

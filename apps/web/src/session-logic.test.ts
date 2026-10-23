@@ -18,6 +18,10 @@ import {
   isLatestTurnSettled,
   PROVIDER_OPTIONS,
   countOutstandingBackgroundWork,
+  deriveRunningSubagentTasks,
+  isSessionAliveForSubagents,
+  isSessionRuntimeRetired,
+  NO_RUNNING_SUBAGENT_TASKS,
 } from "./session-logic";
 import { makeActivity } from "./storeTestFixtures";
 
@@ -354,6 +358,133 @@ describe("countOutstandingBackgroundWork", () => {
       countOutstandingBackgroundWork({ activities, session: { orchestrationStatus: "stopped" } }),
     ).toBe(0);
     expect(countOutstandingBackgroundWork({ activities, session: null })).toBe(0);
+  });
+});
+
+describe("deriveRunningSubagentTasks", () => {
+  let sequence = 0;
+  const task = (
+    kind: "task.started" | "task.updated" | "task.completed",
+    payload: OrchestrationThreadActivity["payload"],
+    turnId = "turn-1",
+  ) =>
+    makeActivity({
+      id: `task-${(sequence += 1)}`,
+      createdAt: `2026-02-23T00:00:${String(sequence).padStart(2, "0")}.000Z`,
+      kind,
+      tone: "info",
+      turnId,
+      payload,
+    });
+  const running = (
+    activities: OrchestrationThreadActivity[],
+    liveTurnId: string | null = null,
+    sessionStatus: Parameters<typeof deriveRunningSubagentTasks>[0]["sessionStatus"] = "ready",
+  ) =>
+    deriveRunningSubagentTasks({
+      activities,
+      liveTurnId: liveTurnId ? TurnId.makeUnsafe(liveTurnId) : null,
+      sessionStatus,
+    });
+
+  it("keeps a backgrounded OpenCode subagent after its turn until it ends", () => {
+    const started = [
+      task("task.started", { taskId: "oc", taskType: "subagent", toolUseId: "call-oc" }),
+      task("task.updated", { taskId: "oc", isBackgrounded: true }),
+    ];
+    expect(running(started).running).toEqual([
+      { taskId: "oc", toolUseId: "call-oc", resumed: false },
+    ]);
+    expect(
+      running([...started, task("task.completed", { taskId: "oc", status: "completed" })]).running,
+    ).toEqual([]);
+  });
+
+  it("counts a subagent task without a spawning call only in its live turn", () => {
+    const activities = [task("task.started", { taskId: "droid-call", taskType: "subagent" })];
+    expect(running(activities, "turn-1").running).toEqual([
+      { taskId: "droid-call", toolUseId: null, resumed: false },
+    ]);
+    expect(running(activities, "turn-2").running).toEqual([]);
+    expect(running(activities).trackedKeys.has("droid-call")).toBe(true);
+  });
+
+  it("keeps a Claude agent across turns and ignores work that is not an agent", () => {
+    const result = running(
+      [
+        task("task.started", {
+          taskId: "claude",
+          taskType: "local_agent",
+          subagentType: "general-purpose",
+          toolUseId: "toolu_agent",
+        }),
+        task("task.started", { taskId: "turn", taskType: "default" }),
+        task("task.started", { taskId: "plan", taskType: "plan" }),
+        task("task.started", { taskId: "bash", taskType: "local_bash", toolUseId: "toolu_bash" }),
+        task("task.started", { taskId: "anon-agent", taskType: "local_agent" }),
+        task("task.started", {
+          taskId: "member",
+          taskType: "local_agent",
+          toolUseId: "toolu_member",
+          workflowTaskId: "workflow",
+        }),
+      ],
+      "turn-9",
+    );
+    expect(result.running).toEqual([
+      { taskId: "claude", toolUseId: "toolu_agent", resumed: false },
+    ]);
+    expect([...result.trackedKeys]).toEqual(["toolu_agent"]);
+  });
+
+  it("marks an agent started again after it ended as resumed", () => {
+    const launch = { taskId: "claude", taskType: "local_agent", toolUseId: "toolu_agent" };
+    const resumed = [
+      task("task.started", launch),
+      task("task.completed", { taskId: "claude", status: "completed" }),
+      task("task.started", launch, "turn-2"),
+    ];
+    expect(running(resumed).running).toEqual([
+      { taskId: "claude", toolUseId: "toolu_agent", resumed: true },
+    ]);
+    expect(
+      running([...resumed, task("task.completed", { taskId: "claude", status: "completed" })])
+        .running,
+    ).toEqual([]);
+  });
+
+  it("remembers settled agents for deduping child threads", () => {
+    const result = running([
+      task("task.started", { taskId: "oc", taskType: "subagent", toolUseId: "call-oc" }),
+      task("task.completed", { taskId: "oc", status: "completed" }),
+    ]);
+    expect(result.running).toEqual([]);
+    expect(result.trackedKeys.has("call-oc")).toBe(true);
+  });
+
+  it("is empty until the session is known and once its runtime has ended", () => {
+    const activities = [
+      task("task.started", { taskId: "claude", taskType: "local_agent", toolUseId: "toolu_agent" }),
+    ];
+    expect(running(activities, null, null)).toBe(NO_RUNNING_SUBAGENT_TASKS);
+    expect(running(activities, null, "stopped")).toBe(NO_RUNNING_SUBAGENT_TASKS);
+    // A failed turn leaves the runtime, and its background agents, alive.
+    expect(running(activities, null, "error").running).toHaveLength(1);
+  });
+});
+
+describe("session runtime liveness", () => {
+  it.each([
+    [null, false, false],
+    ["starting", false, true],
+    ["running", false, true],
+    ["ready", false, true],
+    ["interrupted", false, true],
+    ["error", false, true],
+    ["stopped", true, false],
+  ] as const)("%s: retired %s, alive %s", (status, retired, alive) => {
+    expect(isSessionRuntimeRetired(status)).toBe(retired);
+    expect(isSessionAliveForSubagents(status)).toBe(alive);
   });
 });
 

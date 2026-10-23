@@ -423,8 +423,18 @@ export interface AgentGatewayComputerToolsOptions {
     args: Record<string, unknown>,
     context: ToolContext,
     signal: AbortSignal,
-  ) => Promise<boolean>;
+  ) => Promise<ForegroundConsentOutcome>;
 }
+
+/**
+ * How a foreground/visible-use consent ask ended. `authorized` means the task
+ * may bring windows forward this turn. `declined` means the user answered no
+ * (including a card cancel) or the recorded consent no longer applies — the
+ * refusal sticks for the turn and must not be re-asked. `cancelled` means the
+ * prompt closed before anyone answered — a newer turn, a thread end, a lost
+ * card surface — so nothing was decided and asking once more is allowed.
+ */
+export type ForegroundConsentOutcome = "authorized" | "declined" | "cancelled";
 
 /**
  * Whether a call can move a window in front of the user, mirroring every site
@@ -2013,22 +2023,29 @@ export function makeAgentGatewayComputerTools(
           }
           // Visible-use consent is collected here, before the desktop queue, so
           // a prompt the user has not answered yet never holds the desktop.
-          if (
+          const foregroundConsent =
             options.requestForegroundConsent !== undefined &&
             callNeedsForeground(name, args, manager.agentDialect) &&
-            !(await foregroundAuthorization(context)).userRequestedVisibleUse &&
-            !(await options.requestForegroundConsent(name, args, context, abortSignal))
-          ) {
+            !(await foregroundAuthorization(context)).userRequestedVisibleUse
+              ? await options.requestForegroundConsent(name, args, context, abortSignal)
+              : ("authorized" as const);
+          if (foregroundConsent !== "authorized") {
             audit({ effect: "refused", code: COMPUTER_FOREGROUND_NOT_REQUESTED_CODE });
             return {
               result: {
                 ...mcpToolResultJson({
                   error: COMPUTER_FOREGROUND_NOT_REQUESTED_CODE,
                   message:
-                    "Showing windows on screen was declined or cancelled for " +
-                    "this task, so no window was raised and no input was sent. Do not ask again " +
-                    "in this turn: continue with background input, or report what cannot be " +
-                    "done without the foreground.",
+                    foregroundConsent === "cancelled"
+                      ? "The approval prompt for showing windows on screen closed " +
+                        "before the user answered, so no window was raised and no input " +
+                        "was sent. Nothing was declined: you may show a fresh prompt once " +
+                        "more if this step still needs the foreground, otherwise continue " +
+                        "with background input or report what cannot be done without it."
+                      : "Showing windows on screen was declined or cancelled for " +
+                        "this task, so no window was raised and no input was sent. Do not ask again " +
+                        "in this turn: continue with background input, or report what cannot be " +
+                        "done without the foreground.",
                 }),
                 isError: true,
               },

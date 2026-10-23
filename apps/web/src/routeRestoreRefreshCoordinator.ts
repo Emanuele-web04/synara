@@ -7,6 +7,21 @@ export const EMPTY_ROUTE_PROJECTION_POLL_ATTEMPTS = 12;
 export const EMPTY_ROUTE_PROJECTION_POLL_INTERVAL_MS = 500;
 
 let activeEmptyRouteRestoreRefreshHandler: EmptyRouteRestoreRefreshHandler | null = null;
+let activeShellSnapshotRefreshHandler: ((minSequence: number) => Promise<boolean>) | null = null;
+
+/** Keep receipt-fenced refreshes behind EventRouter's live shell ordering. */
+export function registerShellSnapshotRefresh(
+  handler: (minSequence: number) => Promise<boolean>,
+): () => void {
+  activeShellSnapshotRefreshHandler = handler;
+  return () => {
+    if (activeShellSnapshotRefreshHandler === handler) activeShellSnapshotRefreshHandler = null;
+  };
+}
+
+export function requestShellSnapshotRefresh(minSequence: number): Promise<boolean> {
+  return activeShellSnapshotRefreshHandler?.(minSequence) ?? Promise.resolve(false);
+}
 
 export function registerEmptyRouteRestoreRefresh(
   handler: EmptyRouteRestoreRefreshHandler,

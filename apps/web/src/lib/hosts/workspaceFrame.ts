@@ -1,6 +1,7 @@
 import type { WorkspaceAutomationDraft } from "./automationWorkspace";
 import type {
   DesktopCustomTitleBarState,
+  DesktopWindowTranslucency,
   ExecutionEnvironmentDescriptor,
   FilesystemBrowseInput,
   FilesystemBrowseResult,
@@ -85,6 +86,8 @@ export interface WorkspaceFrameBinding {
   readonly controller: {
     readonly desktop?: boolean;
     readonly presentation?: {
+      /** Display-only window backing; never grants controller-native operations. */
+      readWindowTranslucency?(): DesktopWindowTranslucency | null;
       readZoomFactor(): number;
       subscribeZoomFactor(listener: (zoomFactor: number) => void): () => void;
       readCustomTitleBarState(): Promise<DesktopCustomTitleBarState> | undefined;

@@ -1,6 +1,6 @@
 // FILE: ComposerCapsule.tsx
 // Purpose: Floating capsules above the composer input. Activity that used to stack as
-// w-14/15 strips (live changes, tasks, workflow, goal, tips, background agents,
+// w-14/15 strips (live changes, tasks, workflow, goal, tips, running agents,
 // reconnecting) collapses into one compact pill each, in a wrapping row that floats over
 // the transcript. A capsule can act on click, carry trailing actions, or open its full
 // panel in a popover above it. Queued follow-ups stay a stacked panel.

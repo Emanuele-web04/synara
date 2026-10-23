@@ -25,6 +25,7 @@ import { Terminal } from "@xterm/xterm";
 
 import { readNativeApi } from "~/nativeApi";
 import { suppressQueryResponses } from "~/lib/suppressQueryResponses";
+import { hasOpenDismissibleOverlay } from "~/lib/editableEventTarget";
 
 import { openInPreferredEditor } from "../../editorPreferences";
 import { isTerminalClearShortcut, terminalNavigationShortcutData } from "../../keybindings";
@@ -1120,6 +1121,37 @@ export function createRuntimeEntry(config: TerminalRuntimeConfig): TerminalRunti
   return entry;
 }
 
+function scheduleAutomaticTerminalFocus(
+  entry: TerminalRuntimeEntry,
+  focusOwner = document.activeElement,
+): void {
+  // Automatic activation must not bring a background window forward. Recheck
+  // after the frame too: the user may blur the window or choose another control.
+  if (!document.hasFocus() || hasOpenDismissibleOverlay(entry.container)) return;
+  window.requestAnimationFrame(() => {
+    if (
+      entry.disposed ||
+      !entry.viewState.autoFocus ||
+      !entry.viewState.isVisible ||
+      !entry.container?.isConnected ||
+      !document.hasFocus() ||
+      hasOpenDismissibleOverlay(entry.container)
+    ) {
+      return;
+    }
+    const activeElement = document.activeElement;
+    if (
+      activeElement !== focusOwner &&
+      activeElement !== document.body &&
+      activeElement !== document.documentElement &&
+      !entry.wrapper.contains(activeElement)
+    ) {
+      return;
+    }
+    entry.terminal.focus();
+  });
+}
+
 function openTerminal(entry: TerminalRuntimeEntry): void {
   const api = readNativeApi();
   if (!api || entry.opened) return;
@@ -1130,6 +1162,8 @@ function openTerminal(entry: TerminalRuntimeEntry): void {
   setRuntimeStatus(entry, "connecting");
   const outputEventVersionAtOpen = entry.outputEventVersion;
   const openInput = buildOpenInput(entry);
+  const windowHadFocusAtOpen = document.hasFocus();
+  const focusOwnerAtOpen = document.activeElement;
 
   void api.terminal
     .open(openInput)
@@ -1183,10 +1217,8 @@ function openTerminal(entry: TerminalRuntimeEntry): void {
             });
         }, OPEN_SNAPSHOT_RECONCILE_DELAY_MS);
       }
-      if (entry.viewState.autoFocus) {
-        window.requestAnimationFrame(() => {
-          entry.terminal.focus();
-        });
+      if (entry.viewState.autoFocus && windowHadFocusAtOpen) {
+        scheduleAutomaticTerminalFocus(entry, focusOwnerAtOpen);
       }
     })
     .catch((error) => {
@@ -1237,9 +1269,7 @@ export function updateRuntimeViewState(
   }
 
   if (nextViewState.autoFocus) {
-    window.requestAnimationFrame(() => {
-      entry.terminal.focus();
-    });
+    scheduleAutomaticTerminalFocus(entry);
   }
 }
 

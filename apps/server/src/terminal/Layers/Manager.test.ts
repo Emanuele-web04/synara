@@ -1219,6 +1219,31 @@ describe("TerminalManager", () => {
     }
   });
 
+  it("keeps newly submitted input while the shell has not spawned a child yet", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-01-01T00:00:00Z"));
+    const { manager, ptyAdapter } = makeManager(5, {
+      subprocessChecker: async () => false,
+      subprocessPollIntervalMs: 60_000,
+    });
+    try {
+      await manager.open(openInput());
+      await manager.write({ threadId: "thread-1", terminalId: "default", data: "sleep 120\r" });
+      vi.setSystemTime(new Date("2026-01-01T00:00:00.200Z"));
+      const close = { threadId: "thread-1", terminalId: "default", onlyIfIdle: true };
+      await expect(manager.close(close)).rejects.toThrow(/busy/i);
+      expect(ptyAdapter.processes[0]?.killed).toBe(false);
+      expect(ptyAdapter.processes[0]?.writes).toEqual(["sleep 120\r"]);
+
+      // Once input has settled, a fresh empty snapshot still permits normal reuse.
+      vi.setSystemTime(new Date("2026-01-01T00:00:02Z"));
+      await manager.close(close);
+      expect(ptyAdapter.processes[0]?.killed).toBe(true);
+    } finally {
+      manager.dispose();
+    }
+  });
+
   it.each(["unavailable", "busy", "failed"])(
     "preserves a terminal when the process snapshot is %s during an idle-only close",
     async (state) => {

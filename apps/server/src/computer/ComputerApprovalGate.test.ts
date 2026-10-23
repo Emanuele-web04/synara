@@ -34,7 +34,7 @@ describe("ComputerApprovalGate", () => {
         const retry = gate[request](input);
         expect(prompts).toHaveLength(2);
         gate.respond("a", prompts[1]!, "accept");
-        await expect(retry).resolves.toBe(true);
+        await expect(retry).resolves.toBe(request === "requestTask" ? true : "accept");
       } finally {
         vi.useRealTimers();
       }
@@ -361,9 +361,9 @@ describe("ComputerApprovalGate", () => {
     expect(await routine).toBe(true);
     expect(gate.hasForegroundGrant("a", "turn-1")).toBe(false);
     gate.respond("a", ids[1]!, "accept");
-    expect(await foreground).toBe(true);
+    expect(await foreground).toBe("accept");
     expect(gate.hasForegroundGrant("a", "turn-1")).toBe(true);
-    expect(await gate.requestForegroundTask(input("turn-1"))).toBe(true);
+    expect(await gate.requestForegroundTask(input("turn-1"))).toBe("accept");
     expect(ids).toHaveLength(2);
     expect(gate.hasForegroundGrant("a", "turn-2")).toBe(false);
     gate.revokeTaskGrants();
@@ -384,8 +384,8 @@ describe("ComputerApprovalGate", () => {
         }
       },
     };
-    expect(await gate.requestForegroundTask(input)).toBe(false);
-    expect(await gate.requestForegroundTask(input)).toBe(false);
+    expect(await gate.requestForegroundTask(input)).toBe("decline");
+    expect(await gate.requestForegroundTask(input)).toBe("decline");
     expect(prompts).toBe(1);
   });
 });

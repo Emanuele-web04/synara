@@ -1625,10 +1625,11 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           assistant_message_id AS "assistantMessageId",
           COALESCE(completed_at, started_at, requested_at) AS "completedAt"
         FROM projection_turns
-        -- Provider-diff placeholders can reserve checkpoint metadata before the
-        -- turn is complete; snapshot checkpoint summaries require completedAt.
+        -- Client hydration keeps live turn selectors after reload/reconnect;
+        -- command and Undo contexts use the completed-only per-thread default.
         WHERE checkpoint_turn_count IS NOT NULL
-          AND completed_at IS NOT NULL
+          AND (completed_at IS NOT NULL
+            OR (checkpoint_status = 'missing' AND checkpoint_ref LIKE 'provider-diff:%'))
         ORDER BY thread_id ASC, checkpoint_turn_count ASC
       `,
   });
@@ -2606,9 +2607,12 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
   });
 
   const listCheckpointRowsByThread = SqlSchema.findAll({
-    Request: ThreadIdLookupInput,
+    Request: Schema.Struct({
+      threadId: ThreadId,
+      includeLiveCheckpoints: Schema.optional(Schema.Boolean),
+    }),
     Result: ProjectionCheckpointDbRowSchema,
-    execute: ({ threadId }) =>
+    execute: ({ threadId, includeLiveCheckpoints }) =>
       sql`
         SELECT
           thread_id AS "threadId",
@@ -2621,11 +2625,15 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           started_at AS "startedAt",
           COALESCE(completed_at, started_at, requested_at) AS "completedAt"
         FROM projection_turns
-        -- Keep incomplete provider-diff placeholders out of the public
-        -- checkpoint summary contract, which requires completedAt.
+        -- Default reads retain the completed-checkpoint contract. The read-only
+        -- diff query and client hydration opt into live placeholders explicitly.
         WHERE thread_id = ${threadId}
           AND checkpoint_turn_count IS NOT NULL
-          AND completed_at IS NOT NULL
+          AND (
+            completed_at IS NOT NULL
+            OR (${includeLiveCheckpoints ? 1 : 0} AND checkpoint_status = 'missing'
+              AND checkpoint_ref LIKE 'provider-diff:%')
+          )
         ORDER BY checkpoint_turn_count ASC
       `,
   });
@@ -3416,7 +3424,10 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         return Option.none<ProjectionThreadCheckpointContext>();
       }
 
-      const checkpointRows = yield* listCheckpointRowsByThread({ threadId }).pipe(
+      const checkpointRows = yield* listCheckpointRowsByThread({
+        threadId,
+        includeLiveCheckpoints: options?.includeLiveCheckpoints ?? false,
+      }).pipe(
         Effect.mapError(
           toPersistenceSqlOrDecodeError(
             "ProjectionSnapshotQuery.getThreadCheckpointContext:listCheckpoints:query",
@@ -3765,6 +3776,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
       // Server reads that never look at the timeline skip its query, the most
       // expensive part of a detail read on long threads. Defaults to true.
       readonly includeActivities?: boolean;
+      readonly includeLiveCheckpoints?: boolean;
     } = {
       messageLimit: MAX_THREAD_MESSAGES,
       tracePrefix: "ProjectionSnapshotQuery.getThreadDetailById",
@@ -3833,7 +3845,10 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
             ),
           ),
         ),
-        listCheckpointRowsByThread({ threadId }).pipe(
+        listCheckpointRowsByThread({
+          threadId,
+          includeLiveCheckpoints: options.includeLiveCheckpoints,
+        }).pipe(
           Effect.mapError(
             toPersistenceSqlOrDecodeError(
               `${options.tracePrefix}:listCheckpoints:query`,
@@ -4038,6 +4053,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
             messageLimit: MAX_THREAD_MESSAGES,
             tracePrefix: "ProjectionSnapshotQuery.getThreadDetailSnapshotById",
             linkTurnRequests: true,
+            includeLiveCheckpoints: true,
           }),
           listProjectionStateRows(undefined).pipe(
             Effect.mapError(

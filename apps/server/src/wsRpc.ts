@@ -601,6 +601,7 @@ const makeWsRpcHandlersLayer = () =>
             sessions,
             model.threads.map((thread) => thread.id),
             providerService.hasLiveRuntimeTasks,
+            providerService.listRetainedSessions,
           );
         }),
       );

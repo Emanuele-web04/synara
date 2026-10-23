@@ -52,6 +52,7 @@ import { useStore } from "../../store";
 import { useComposerDraftStore } from "../../composerDraftStore";
 import { rawSocketUrl } from "../../wsTransport";
 import { readDesktopZoomFactor, subscribeDesktopZoomFactor } from "../../lib/desktopZoom";
+import { readDesktopWindowTranslucency } from "../../lib/desktopWindowTranslucency";
 import { createWorkspaceChat, openWorkspaceTerminal } from "../../lib/hosts/workspaceCommands";
 import { addWsTransportStateListener, type WsTransportState } from "../../wsTransportEvents";
 import {
@@ -158,6 +159,7 @@ function WorkspacePanel({
         controller: {
           desktop: isElectron,
           presentation: {
+            readWindowTranslucency: readDesktopWindowTranslucency,
             readZoomFactor: readDesktopZoomFactor,
             subscribeZoomFactor: subscribeDesktopZoomFactor,
             readCustomTitleBarState: () => window.desktopBridge?.customTitleBar?.getState(),

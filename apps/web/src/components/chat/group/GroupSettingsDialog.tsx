@@ -60,6 +60,7 @@ import {
   buildGroupSettingsBaseline,
   isGroupOnboardingDiscardable,
   groupSettingsDirtySections,
+  rebaseGroupSettingsBaseline,
   resolveSaveAttemptRequestId,
   saveAttemptFingerprint,
   saveGroupSettings,
@@ -154,6 +155,12 @@ export function GroupSettingsDialog(props: {
     setBaseline(base);
     setDraft(base.draft);
   }, [agent.overview, config, draft, props.defaultModelSelection, props.open, props.projectName]);
+
+  // Pause, Resume, and Archive (from this dialog or elsewhere) bump the config revision.
+  // Keep Save's expected revision current when nothing else changed.
+  useEffect(() => {
+    setBaseline((current) => (current ? rebaseGroupSettingsBaseline(current, config) : current));
+  }, [config]);
 
   // The project can be renamed while the dialog is open; re-seed the name into
   // baseline, and into the draft too when the user has not edited it.

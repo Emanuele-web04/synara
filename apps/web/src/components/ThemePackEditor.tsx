@@ -28,6 +28,7 @@ import { SettingsSegmentedControl } from "./settings/SettingControls";
 import { SettingsCard, SettingsSelectPopup } from "./settings/SettingsPanelPrimitives";
 import { copyTextToClipboard } from "../hooks/useCopyToClipboard";
 import { type ChromeTheme, type ThemeMode, type ThemeVariant, useTheme } from "../hooks/useTheme";
+import { readDesktopWindowTranslucency } from "../lib/desktopWindowTranslucency";
 import { cn } from "../lib/utils";
 import {
   SETTINGS_CARD_ROW_CLASS_NAME,
@@ -353,24 +354,32 @@ export function ThemePackEditor({
                 />
               </ThemeRow>
               <ThemeRow label="Blur">
-                {translucency.blur !== null ? (
-                  <Button
-                    variant="outline"
-                    size="xs"
-                    onClick={() => setWindowTranslucency(variant, { blur: null })}
-                    aria-label={`${titleLabel} automatic background blur`}
-                  >
-                    {isActive && desktopBlurUnavailable ? "Unavailable, use Auto" : "Auto"}
-                  </Button>
-                ) : null}
-                <ThemeSlider
-                  value={translucency.blur ?? VIBRANCY_EQUIVALENT_BLUR_RADIUS}
-                  {...(translucency.blur === null ? { valueLabel: "Auto" } : {})}
-                  min={DESKTOP_WINDOW_BLUR_RADIUS_MIN}
-                  max={DESKTOP_WINDOW_BLUR_RADIUS_MAX}
-                  onChange={(next) => setWindowTranslucency(variant, { blur: next })}
-                  ariaLabel={`${titleLabel} background blur`}
-                />
+                {readDesktopWindowTranslucency() === "compositor" ? (
+                  // Hyprland blurs the transparent window with its own `decoration:blur`
+                  // settings; there is no per-window radius for the app to set.
+                  <span className="text-ui-sm text-muted-foreground">Set by your compositor</span>
+                ) : (
+                  <>
+                    {translucency.blur !== null ? (
+                      <Button
+                        variant="outline"
+                        size="xs"
+                        onClick={() => setWindowTranslucency(variant, { blur: null })}
+                        aria-label={`${titleLabel} automatic background blur`}
+                      >
+                        {isActive && desktopBlurUnavailable ? "Unavailable, use Auto" : "Auto"}
+                      </Button>
+                    ) : null}
+                    <ThemeSlider
+                      value={translucency.blur ?? VIBRANCY_EQUIVALENT_BLUR_RADIUS}
+                      {...(translucency.blur === null ? { valueLabel: "Auto" } : {})}
+                      min={DESKTOP_WINDOW_BLUR_RADIUS_MIN}
+                      max={DESKTOP_WINDOW_BLUR_RADIUS_MAX}
+                      onChange={(next) => setWindowTranslucency(variant, { blur: next })}
+                      ariaLabel={`${titleLabel} background blur`}
+                    />
+                  </>
+                )}
               </ThemeRow>
             </div>
           </DisclosureRegion>

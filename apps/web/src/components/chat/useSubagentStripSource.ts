@@ -174,6 +174,7 @@ export function useSubagentStripSource(input: {
             stripRawWorkLogEntries,
             stripRelevantWorkLogThreads,
             stripSourceThreadId,
+            stripSourceActivities,
           )
         : stripRawWorkLogEntries,
     [
@@ -181,6 +182,7 @@ export function useSubagentStripSource(input: {
       hasStripWorkLogSubagents,
       stripRawWorkLogEntries,
       stripRelevantWorkLogThreads,
+      stripSourceActivities,
     ],
   );
   // The strip's liveness (running/settled) reads the child thread's own session and

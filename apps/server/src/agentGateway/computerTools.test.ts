@@ -3893,7 +3893,7 @@ describe("computer never-raise gate", () => {
     let granted = false;
     const consent = vi.fn(async () => {
       granted = true;
-      return true;
+      return "authorized" as const;
     });
     const { call, manager } = await setup(
       backend,
@@ -3916,7 +3916,7 @@ describe("computer never-raise gate", () => {
 
   it("asks once for a run whose steps raise, and never for background calls", async () => {
     const backend = new FakeComputerBackend();
-    const consent = vi.fn(async () => false);
+    const consent = vi.fn(async () => "declined" as const);
     const { call, manager } = await setup(backend, async () => true, refusing, consent);
     try {
       await call("computer_click", { window_id: "fake-calculator", x: 10, y: 10 });
@@ -3934,7 +3934,7 @@ describe("computer never-raise gate", () => {
 
   it("refuses without raising when the user keeps it in the background", async () => {
     const backend = new FakeComputerBackend();
-    const consent = vi.fn(async () => false);
+    const consent = vi.fn(async () => "declined" as const);
     const { call, manager } = await setup(backend, async () => true, refusing, consent);
     try {
       const refused = await call("computer_activate_window", { window_id: "fake-calculator" });
@@ -3942,6 +3942,27 @@ describe("computer never-raise gate", () => {
       const payload = resultJson(refused) as { error: string; message: string };
       expect(payload.error).toBe("foreground_not_requested");
       expect(payload.message).toContain("declined or cancelled");
+      expect(backend.callsFor("raiseWindow")).toEqual([]);
+      expect(backend.callsFor("focusWindow")).toEqual([]);
+    } finally {
+      await manager.dispose();
+    }
+  });
+
+  it("reports a prompt closed unanswered as cancellable, not as a user decline", async () => {
+    const backend = new FakeComputerBackend();
+    const consent = vi.fn(async () => "cancelled" as const);
+    const { call, manager } = await setup(backend, async () => true, refusing, consent);
+    try {
+      const refused = await call("computer_activate_window", { window_id: "fake-calculator" });
+      expect(refused.isError).toBe(true);
+      const payload = resultJson(refused) as { error: string; message: string };
+      expect(payload.error).toBe("foreground_not_requested");
+      // Nothing was decided, so the refusal must not claim a decline or ban a
+      // fresh prompt — that is the silent-death path from the bug report.
+      expect(payload.message).toContain("closed before the user answered");
+      expect(payload.message).not.toContain("declined or cancelled");
+      expect(payload.message).not.toContain("Do not ask again");
       expect(backend.callsFor("raiseWindow")).toEqual([]);
       expect(backend.callsFor("focusWindow")).toEqual([]);
     } finally {

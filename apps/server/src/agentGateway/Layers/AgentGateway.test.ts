@@ -4265,7 +4265,14 @@ describe("AgentGateway", () => {
       const replay = yield* harness.callTool({
         token: "token-parent",
         name: "synara_create_threads",
-        args,
+        args: {
+          ...args,
+          threads: args.threads.map((spec) => ({
+            ...spec,
+            taskKey: "ignored-outside-hubs",
+            routingReason: "Hub-only metadata does not change this standalone request",
+          })),
+        },
       });
       assert.isFalse(isToolError(first.result), toolErrorText(first.result));
       assert.isFalse(isToolError(replay.result), toolErrorText(replay.result));

@@ -53,27 +53,32 @@ export function hasDesktopUpdateProviderWork(
   sessions: ReadonlyArray<Pick<ProviderSession, "threadId" | "status" | "activeTurnId">>,
   knownThreadIds: ReadonlyArray<ThreadId>,
   hasLiveRuntimeTasks: ProviderServiceShape["hasLiveRuntimeTasks"],
+  listRetainedSessions?: ProviderServiceShape["listRetainedSessions"],
 ): Effect.Effect<boolean> {
-  if (
-    sessions.some(
-      (session) =>
-        session.status === "running" ||
-        session.status === "connecting" ||
-        session.activeTurnId != null,
+  return Effect.gen(function* () {
+    // Failed stops are not routable live sessions, but still own unproven process cleanup.
+    if (listRetainedSessions && (yield* listRetainedSessions()).length > 0) return true;
+    if (
+      sessions.some(
+        (session) =>
+          session.status === "running" ||
+          session.status === "connecting" ||
+          session.activeTurnId != null,
+      )
     )
-  )
-    return Effect.succeed(true);
-  const threadIds = [
-    ...new Set([...knownThreadIds, ...sessions.map((session) => session.threadId)]),
-  ];
-  if (threadIds.length === 0) return Effect.succeed(false);
-  if (!hasLiveRuntimeTasks) return Effect.succeed(true);
-  return Effect.forEach(threadIds, (threadId) => hasLiveRuntimeTasks({ threadId }), {
-    concurrency: 4,
-  }).pipe(
-    Effect.map((tasks) => tasks.some(Boolean)),
-    Effect.catchCause(() => Effect.succeed(true)),
-  );
+      return true;
+    const threadIds = [
+      ...new Set([...knownThreadIds, ...sessions.map((session) => session.threadId)]),
+    ];
+    if (threadIds.length === 0) return false;
+    if (!hasLiveRuntimeTasks) return true;
+    const tasks = yield* Effect.forEach(
+      threadIds,
+      (threadId) => hasLiveRuntimeTasks({ threadId }),
+      { concurrency: 4 },
+    );
+    return tasks.some(Boolean);
+  }).pipe(Effect.catchCause(() => Effect.succeed(true)));
 }
 
 const approvedRemoteSessions = new Map<string, string>();

@@ -971,6 +971,15 @@ function SettingsRouteView() {
             resetLabel: "editor section",
             ariaLabel: "Show the Editor section in the Environment panel",
           })}
+
+          {renderBooleanSettingRow({
+            settingKey: "showEnvironmentActions",
+            title: "Actions",
+            description:
+              "Show the Actions section in the chat Environment panel. The project's actions run from the top bar; this section is where they are added, edited, and deleted.",
+            resetLabel: "actions section",
+            ariaLabel: "Show the Actions section in the Environment panel",
+          })}
         </SettingsSection>
 
         <SettingsSection title="Context and notes">
@@ -1007,6 +1016,26 @@ function SettingsRouteView() {
           })}
         </SettingsSection>
       </div>
+
+      <SettingsSection title="Chat top bar">
+        {renderBooleanSettingRow({
+          settingKey: "showHeaderHandoff",
+          title: "Hand off",
+          description:
+            "Show the Hand off button in the chat top bar. Handing off stays available from a thread's sidebar menu and the composer's model picker.",
+          resetLabel: "top bar hand off",
+          ariaLabel: "Show the Hand off button in the chat top bar",
+        })}
+
+        {renderBooleanSettingRow({
+          settingKey: "showHeaderActions",
+          title: "Project actions",
+          description:
+            "Show the selected project's actions in the chat top bar. When off, actions still run from their keybindings and the Environment panel's Actions section.",
+          resetLabel: "top bar actions",
+          ariaLabel: "Show project actions in the chat top bar",
+        })}
+      </SettingsSection>
     </div>
   );
 

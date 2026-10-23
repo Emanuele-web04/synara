@@ -41,8 +41,7 @@ it.each(["light", "dark"] as const)(
         { ...originalPack, theme: { ...originalPack.theme, opaqueWindows: scope === "none" } },
         theme,
         {
-          electron: true,
-          isMac: true,
+          windowTranslucency: "native",
           translucency: { opacity: 0.8, blur: 20, sidebarOnly: scope === "sidebar" },
         },
       );

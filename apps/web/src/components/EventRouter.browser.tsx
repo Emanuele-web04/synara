@@ -87,6 +87,7 @@ import {
 import { useWorkspacePathsStore } from "../workspacePathsStore";
 import { createWsNativeApi, resetWsNativeApiForTest } from "../wsNativeApi";
 import { registerTerminalRuntimeCleanup } from "../lib/terminalStateCleanup";
+import { requestShellSnapshotRefresh } from "../routeRestoreRefreshCoordinator";
 // Pre-transform the compiler-heavy component before the first hydration deadline.
 // This suite runs on its own CI shard, so ChatView's suite cannot warm it first.
 import "./ChatView";
@@ -986,6 +987,40 @@ describe("EventRouter scoped orchestration sync", () => {
       }
     } finally {
       unregister();
+      await mounted.cleanup();
+    }
+  });
+
+  it("fences a close-action membership refresh behind newer live shell events", async () => {
+    const mounted = await mountApp();
+    const api = createWsNativeApi();
+    const shell = createShellSnapshotFromReadModel(fixture.snapshot);
+    let resolveSnapshot!: (snapshot: typeof shell) => void;
+    const snapshotRequest = vi.spyOn(api.orchestration, "getShellSnapshot").mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveSnapshot = resolve;
+        }),
+    );
+    try {
+      const refresh = requestShellSnapshotRefresh(2);
+      await vi.waitFor(() => expect(snapshotRequest).toHaveBeenCalledOnce());
+      sendShellEventPush({
+        kind: "project-upserted",
+        sequence: 3,
+        project: { ...shell.projects[0]!, title: "Newer project metadata" },
+      });
+      await vi.waitFor(() =>
+        expect(useStore.getState().projects[0]?.name).toBe("Newer project metadata"),
+      );
+      resolveSnapshot({ ...shell, snapshotSequence: 2 });
+
+      await expect(refresh).resolves.toBe(true);
+      expect(useStore.getState().projects[0]?.name).toBe("Newer project metadata");
+      await expect(requestShellSnapshotRefresh(3)).resolves.toBe(true);
+      expect(snapshotRequest).toHaveBeenCalledOnce();
+    } finally {
+      snapshotRequest.mockRestore();
       await mounted.cleanup();
     }
   });

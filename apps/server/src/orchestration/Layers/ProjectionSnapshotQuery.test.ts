@@ -977,6 +977,15 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
               assistantMessageId: asMessageId("message-1"),
               completedAt: "2026-02-24T00:00:08.000Z",
             },
+            {
+              turnId: asTurnId("turn-placeholder"),
+              checkpointTurnCount: 2,
+              checkpointRef: asCheckpointRef("provider-diff:placeholder"),
+              status: "missing",
+              files: [],
+              assistantMessageId: null,
+              completedAt: "2026-02-24T00:00:07.500Z",
+            },
           ],
           session: {
             threadId: ThreadId.makeUnsafe("thread-1"),
@@ -2875,6 +2884,17 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           ],
         });
       }
+
+      // Diff reads include the live revision; default history above stays completed-only.
+      const liveContext = Option.getOrThrow(
+        yield* snapshotQuery.getThreadCheckpointContext(ThreadId.makeUnsafe("thread-context"), {
+          includeLiveCheckpoints: true,
+        }),
+      );
+      assert.deepEqual(
+        liveContext.checkpoints.map((checkpoint) => checkpoint.turnId),
+        [asTurnId("turn-1"), asTurnId("turn-2"), asTurnId("turn-placeholder")],
+      );
 
       const outputContext = yield* snapshotQuery.getThreadCheckpointContext(
         ThreadId.makeUnsafe("thread-context"),

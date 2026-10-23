@@ -79,6 +79,8 @@ export interface ProjectionThreadCheckpointContext {
 }
 
 export interface ProjectionThreadCheckpointContextOptions {
+  /** Include in-progress provider placeholders only for read-only live diff queries. */
+  readonly includeLiveCheckpoints?: boolean;
   /** Include the narrow activity payload set used to attribute files in non-Git workspaces. */
   readonly includeFileChangeActivityPayloads?: boolean;
 }
