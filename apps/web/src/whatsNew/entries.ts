@@ -22,6 +22,60 @@ import type { WhatsNewEntry } from "./logic";
 
 export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
   {
+    version: "1.0.7",
+    date: "Oct 17",
+    features: [
+      {
+        id: "long-turn-resources",
+        title: "Lighter long-running agent work",
+        description:
+          "Long turns do less repeated Git, history and usage work, while streaming updates refresh only the rows that changed.",
+        details:
+          "Settled Markdown blocks are reused while the answer grows. Claude retains turn identifiers instead of every SDK message body. Usage reads reuse unchanged files and parse appended records; full conversation history remains available.",
+      },
+      {
+        id: "live-changes",
+        title: "Smoother live workspace updates",
+        description:
+          "Bursts of file edits share live diff captures, reducing repeated repository scans.",
+        details:
+          "The live files-changed count updates at most about every three seconds during edit bursts, with a final trailing capture. Read-only tools avoid unnecessary Git refreshes; PR status refreshes at turn end, branch changes, focus and regular polls.",
+      },
+      {
+        id: "model-switches",
+        title: "Devin and Grok model switches take effect",
+        description:
+          "Switching models, Devin Fast mode or Grok reasoning effort no longer silently reloads an incompatible native session.",
+        details:
+          "When the previous session cannot retain the requested configuration, Synara starts a fresh session with conversation context. Droid reuses its native conversation without adding a duplicate transcript after a successful reload.",
+      },
+      {
+        id: "workspace-recovery",
+        title: "Keep a recovery snapshot before editing a message",
+        description:
+          "Message edits that restore an earlier workspace retain a Git recovery snapshot before rolling back the provider conversation.",
+        details:
+          "The snapshot remains available after success or a later failure. If it cannot be captured, the edit is refused before rollback. This protects checkpointed Git workspaces; it does not guarantee every ignored or external file is captured.",
+      },
+      {
+        id: "opencode-recovery",
+        title: "Recover stopped OpenCode sessions",
+        description:
+          "A session whose stop already began is treated as inactive so the next turn can resume or start through normal recovery.",
+        details:
+          "Windows prepares its bounded process observer before starting an owned OpenCode runtime, then reads fresh teardown evidence. Cleanup still requires process identity and exit proof.",
+      },
+      {
+        id: "desktop-and-startup",
+        title: "Less background work and clearer startup errors",
+        description:
+          "Desktop browser diagnostics and frame capture settle when unused, and moved project folders report a missing working directory.",
+        details:
+          "Cookie restoration creates a temporary browser view only when needed. Browser console domains sleep after 60 seconds without automation and reactivate on acquisition; captured history and network tracking remain. Beta connectors reuse a valid rotated token on retry and report unsuccessful OpenCode tool installation. Connectors remain Beta-only.",
+      },
+    ],
+  },
+  {
     version: "1.0.6",
     date: "Oct 16",
     features: [

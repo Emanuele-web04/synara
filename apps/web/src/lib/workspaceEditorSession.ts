@@ -79,6 +79,7 @@ export class WorkspaceEditorSession {
   }
 
   change = (value: string) => {
+    if (value === this.state.value) return;
     this.editGeneration += 1;
     this.dispatch({ type: "changed", value });
     this.schedule();
@@ -238,6 +239,17 @@ export function getWorkspaceEditorSession(client: QueryClient, cwd: string, rela
     entries.set(key, session);
   }
   return session;
+}
+
+/** Read-only snapshots include dirty documents whose editor surface has been unmounted. */
+export function getUnsavedWorkspaceEditorDocuments(client: QueryClient, cwd: string) {
+  return [...(sessions.get(client)?.values() ?? [])]
+    .filter((session) => session.cwd === cwd && (session.dirty || session.saving))
+    .map((session) => ({
+      relativePath: session.relativePath,
+      contents: session.getSnapshot().value,
+      version: session.getSnapshot().version,
+    }));
 }
 
 export function hasUnsavedWorkspaceEditors(client: QueryClient, cwd?: string | null) {

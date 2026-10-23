@@ -1972,6 +1972,44 @@ describe("deriveWorkLogEntries", () => {
     });
   });
 
+  it("keeps thread-level runtime warnings visible alongside turn-scoped messages", () => {
+    const currentTurn = TurnId.makeUnsafe("current-turn");
+    const activities = [
+      makeActivity({
+        id: "thread-warning",
+        kind: "runtime.warning",
+        tone: "info",
+        payload: {
+          message: "Automatic approval review is unavailable.",
+          nativeEventType: "codex.guardianWarning",
+        },
+      }),
+      makeActivity({
+        id: "old-turn-warning",
+        kind: "runtime.warning",
+        tone: "info",
+        turnId: "old-turn",
+        payload: { message: "Earlier turn warning" },
+      }),
+      makeActivity({ id: "turnless-tool", kind: "tool.completed", tone: "tool" }),
+      makeActivity({
+        id: "unrelated-thread-warning",
+        kind: "runtime.warning",
+        tone: "info",
+        payload: { message: "Other provider notice", nativeEventType: "other-provider" },
+      }),
+    ];
+    for (const visibleTurnIds of [undefined, new Set([currentTurn])]) {
+      const entries = deriveWorkLogEntries(
+        activities,
+        currentTurn,
+        visibleTurnIds ? { visibleTurnIds } : {},
+      );
+      expect(entries.map((entry) => entry.id)).toEqual(["thread-warning"]);
+      expect(entries[0]?.detail).toBe("Automatic approval review is unavailable.");
+    }
+  });
+
   it("does not collapse identical runtime warnings across turn boundaries", () => {
     const activities: OrchestrationThreadActivity[] = [
       makeActivity({

@@ -11,6 +11,7 @@ import {
   INLINE_VISUALS_BETA_FEATURE,
   isBetaFeatureEnabled,
   MCP_CONNECTORS_BETA_FEATURE,
+  NATIVE_EDITOR_BETA_FEATURE,
   PULL_REQUEST_AUTO_FIX_BETA_FEATURE,
 } from "@synara/shared/betaFeatures";
 import { PROVIDER_DESCRIPTORS } from "@synara/shared/providerMetadata";
@@ -58,6 +59,23 @@ export const INLINE_VISUALS_ON = isBetaFeatureOn(INLINE_VISUALS_BETA_FEATURE);
  * server refuses the Connectors RPCs on Stable regardless.
  */
 export const MCP_CONNECTORS_ON = isBetaFeatureOn(MCP_CONNECTORS_BETA_FEATURE);
+
+/** Which engine edits files: the native (Code OSS) engine in Beta, Pierre on Stable. */
+export type CodeEditorEngine = "native" | "pierre";
+
+export function codeEditorEngine(
+  isOn: (feature: string) => boolean = isBetaFeatureOn,
+): CodeEditorEngine {
+  return isOn(NATIVE_EDITOR_BETA_FEATURE) ? "native" : "pierre";
+}
+
+/**
+ * The native editor is Beta-only: Stable keeps the Pierre engine for file, diff
+ * and preview editing and shows no language-service or debugger controls. The
+ * server refuses the `editor.*` RPCs on Stable regardless.
+ */
+export const CODE_EDITOR_ENGINE = codeEditorEngine();
+export const NATIVE_EDITOR_ON = CODE_EDITOR_ENGINE === "native";
 
 /**
  * Provider descriptors with Beta-only providers removed on Stable. A

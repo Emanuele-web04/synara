@@ -85,6 +85,7 @@ function createSyntheticCodexAppServer(options?: {
   readonly mcpServers?: Record<string, unknown>;
   readonly projectMcpServers?: Record<string, unknown>;
   readonly forceFullHistoryResponse?: boolean;
+  readonly pluginListFrameBytes?: number;
   readonly gatewayRenewal?:
     | "supported"
     | "unsupported"
@@ -249,6 +250,21 @@ function createSyntheticCodexAppServer(options?: {
           respond({ thread: { id: "fresh-provider-thread" } });
         } else if (request.method === "turn/start") {
           respond({ turn: { id: `synthetic-turn-${nextTurn++}` } });
+        } else if (request.method === "plugin/list" && options?.pluginListFrameBytes) {
+          const prefix = Buffer.from(
+            `{"id":${JSON.stringify(request.id)},"result":{"marketplaces":[{"name":"Synthetic catalog","path":"/synthetic/catalog","plugins":[]}],"padding":"`,
+          );
+          const suffix = Buffer.from('"}}\n');
+          const frame = Buffer.concat([
+            prefix,
+            Buffer.alloc(options.pluginListFrameBytes + 1 - prefix.length - suffix.length, 0x78),
+            suffix,
+          ]);
+          queueMicrotask(() => {
+            for (let offset = 0; offset < frame.length; offset += 64 * 1024) {
+              stdout.write(frame.subarray(offset, offset + 64 * 1024));
+            }
+          });
         } else {
           respond({});
         }
@@ -2131,6 +2147,14 @@ describe("isRecoverableThreadResumeError", () => {
   it("matches not-found resume errors", () => {
     expect(
       isRecoverableThreadResumeError(new Error("thread/resume failed: thread not found")),
+    ).toBe(true);
+  });
+
+  it("matches resume errors for threads that never wrote a rollout", () => {
+    expect(
+      isRecoverableThreadResumeError(
+        new Error("thread/resume failed: no rollout found for thread id 01a147ed"),
+      ),
     ).toBe(true);
   });
 
@@ -4124,69 +4148,74 @@ describe("CodexAppServerManager discovery", () => {
       },
     ]);
   });
-
-  it("wires plugin discovery through plugin/list", async () => {
-    const manager = new CodexAppServerManager();
-    const context = {
-      session: {
-        provider: "codex",
-        status: "ready",
-        threadId: "thread_1",
-        runtimeMode: "full-access",
-        model: "gpt-5.5",
-      },
-      account: {
-        type: "unknown",
-        planType: null,
-        sparkEnabled: true,
-      },
-      collabReceiverTurns: new Map(),
-      collabReceiverParents: new Map(),
-    };
-
-    const resolveContextForDiscovery = vi
-      .spyOn(
-        manager as unknown as {
-          resolveContextForDiscovery: (
-            threadId?: string,
-            cwd?: string,
-            codexOptions?: unknown,
-          ) => unknown;
-        },
-        "resolveContextForDiscovery",
-      )
-      .mockReturnValue(context);
-    const sendRequest = vi
-      .spyOn(
-        manager as unknown as {
-          sendRequest: (...args: unknown[]) => Promise<unknown>;
-        },
-        "sendRequest",
-      )
-      .mockResolvedValue({ result: {} });
-
-    await expect(
-      manager.listPlugins({
-        cwd: "/repo",
-        threadId: "thread_1",
-        forceRemoteSync: true,
-      }),
-    ).resolves.toMatchObject({
-      marketplaces: [],
-      source: "codex-app-server",
-      cached: false,
-    });
-    expect(resolveContextForDiscovery).toHaveBeenCalledWith(
-      "thread_1",
-      "/repo",
-      undefined,
-      expect.any(String),
-    );
-    expect(sendRequest).toHaveBeenCalledWith(context, "plugin/list", {
-      cwds: ["/repo"],
-      forceRemoteSync: true,
-    });
-  });
+  it.each([
+    { frameBytes: 16_842_752, succeeds: true },
+    { frameBytes: 32 * 1024 * 1024 + 1, succeeds: false },
+  ])(
+    "isolates a $frameBytes-byte plugin catalog from a running turn",
+    async ({ frameBytes, succeeds }) => {
+      const fake = createSyntheticCodexAppServer({ pluginListFrameBytes: frameBytes });
+      const spawnAppServer = vi.spyOn(fake, "spawnAppServer");
+      const { manager, teardownProcessTree } = createSyntheticCodexManager(fake);
+      const cwd = mkdtempSync(path.join(os.tmpdir(), "synara-codex-plugin-catalog-"));
+      const codexOptions = { homePath: cwd, binaryPath: "/synthetic/codex" };
+      const authTracking = prepareCodexAuthTracking({ env: { ...process.env }, homePath: cwd });
+      vi.spyOn(
+        manager as unknown as { buildSessionProcessEnv: () => Promise<unknown> },
+        "buildSessionProcessEnv",
+      ).mockResolvedValue({
+        env: {},
+        authTracking,
+        authFingerprint: readCodexPreparedAuthTrackingFingerprint(authTracking),
+      });
+      const threadId = asThreadId("plugin-catalog-active-turn");
+      try {
+        await manager.startSession({
+          threadId,
+          provider: "codex",
+          cwd,
+          runtimeMode: "full-access",
+          providerOptions: { codex: codexOptions },
+          agentGatewayCapabilityInput: AGENT_GATEWAY_NO_CAPABILITIES,
+        });
+        await manager.sendTurn({ threadId, input: "Keep working during discovery" });
+        const discovery = manager.listPlugins({
+          cwd,
+          threadId,
+          codexOptions,
+          forceRemoteSync: true,
+        });
+        if (succeeds) {
+          await expect(discovery).resolves.toMatchObject({
+            marketplaces: [{ name: "Synthetic catalog", path: "/synthetic/catalog", plugins: [] }],
+            cached: false,
+          });
+        } else {
+          await expect(discovery).rejects.toThrow();
+        }
+        expect(manager.listSessions()).toMatchObject([
+          { threadId, status: "running", activeTurnId: "synthetic-turn-1" },
+        ]);
+        expect(fake.children).toHaveLength(2);
+        expect(spawnAppServer).toHaveBeenLastCalledWith(
+          expect.objectContaining({ cwd, binaryPath: codexOptions.binaryPath }),
+        );
+        expect(fake.requests.find((request) => request.method === "plugin/list")?.params).toEqual({
+          cwds: [cwd],
+          forceRemoteSync: true,
+        });
+        expect(teardownProcessTree).toHaveBeenCalledTimes(succeeds ? 0 : 1);
+        if (!succeeds) {
+          expect(teardownProcessTree).toHaveBeenCalledWith(
+            expect.objectContaining({ rootPid: fake.children[1]!.pid }),
+          );
+        }
+      } finally {
+        await manager.stopAll();
+        rmSync(cwd, { recursive: true, force: true });
+      }
+    },
+  );
 });
 
 describe("thread checkpoint control", () => {

@@ -220,6 +220,7 @@ const ClearSessionResumeCursorInput = Schema.Struct({
 
 const CompletePriorTranscriptBootstrapInput = Schema.Struct({
   threadId: ThreadId,
+  expectedLifecycleGeneration: Schema.optional(TrimmedNonEmptyString),
 });
 
 const ImportExternalThreadInput = Schema.Struct({
@@ -788,6 +789,24 @@ function runtimePayloadRecord(value: unknown): Record<string, unknown> {
 
 function runtimeEventRetiredGatewayTurnAuthority(event: ProviderRuntimeEvent): boolean {
   return runtimePayloadRecord(event.raw?.payload)[AGENT_GATEWAY_TURN_AUTHORITY_RETIRED] === true;
+}
+
+/**
+ * The adapter that retired a gateway bearer is the authoritative source for
+ * its own retired state. The persisted `AGENT_GATEWAY_CREDENTIAL_ROTATION_REQUIRED`
+ * marker is only a hint: it rides a terminal runtime event that can be dropped
+ * by binding/generation/turn-applicability gates after the bearer is already
+ * fenced, so routing must also consult the adapter directly.
+ */
+function adapterReportsRetiredGatewayCredential<TError>(
+  adapter: ProviderAdapterShape<TError>,
+  threadId: ThreadId,
+): Effect.Effect<boolean> {
+  return adapter.agentGatewayCredentialRetired === undefined
+    ? Effect.succeed(false)
+    : adapter
+        .agentGatewayCredentialRetired(threadId)
+        .pipe(Effect.catch(() => Effect.succeed(false)));
 }
 
 function runtimeActiveTurnId(value: unknown): string | undefined {
@@ -2305,15 +2324,19 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
         const renewedAdapter = yield* lifecycle.runCurrent(threadId, () =>
           Effect.gen(function* () {
             let binding = yield* getCurrentBinding();
+            // The persisted marker rides a terminal event that can be dropped
+            // after the bearer is already fenced; the adapter is authoritative
+            // for its own retired state, so consult it before skipping
+            // rotation.
+            let adapter = yield* getAdapterForBinding(binding);
             const requiresCredentialRotation =
               runtimePayloadRecord(binding.runtimePayload)[
                 AGENT_GATEWAY_CREDENTIAL_ROTATION_REQUIRED
-              ] === true;
+              ] === true || (yield* adapterReportsRetiredGatewayCredential(adapter, threadId));
             if (!requiresCredentialRotation) {
               return;
             }
 
-            let adapter = yield* getAdapterForBinding(binding);
             if (!(yield* adapter.hasSession(threadId))) {
               return;
             }
@@ -2323,14 +2346,15 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
             // The drain may have waited for a while. Re-read all durable
             // routing state before stopping anything.
             binding = yield* getCurrentBinding();
+            adapter = yield* getAdapterForBinding(binding);
             if (
               runtimePayloadRecord(binding.runtimePayload)[
                 AGENT_GATEWAY_CREDENTIAL_ROTATION_REQUIRED
-              ] !== true
+              ] !== true &&
+              !(yield* adapterReportsRetiredGatewayCredential(adapter, threadId))
             ) {
               return;
             }
-            adapter = yield* getAdapterForBinding(binding);
             if (!(yield* adapter.hasSession(threadId))) {
               return;
             }
@@ -2872,7 +2896,8 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
         const requiresCredentialRotation =
           runtimePayloadRecord(binding.runtimePayload)[
             AGENT_GATEWAY_CREDENTIAL_ROTATION_REQUIRED
-          ] === true;
+          ] === true ||
+          (yield* adapterReportsRetiredGatewayCredential(providerAdapter, input.threadId));
         // A live adapter session whose persisted generation no longer matches
         // the thread's current generation is a zombie: its runtime events are
         // rejected by the stale-generation gate, so a turn routed into it can
@@ -3088,6 +3113,13 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
               const continuationResetRequested =
                 persistedBinding !== undefined &&
                 readPersistedContinuationResetRequested(persistedBinding.runtimePayload);
+              // Only a switch to another driver may abandon the persisted
+              // continuation implicitly; a same-driver home or account change
+              // still has to be resolved by the user.
+              const abandonsOtherProviderContinuation =
+                outcomeOptions?.abandonOtherProviderContinuation === true &&
+                persistedBinding !== undefined &&
+                persistedBinding.provider !== resolved.instance.driver;
               const canReusePersistedResumeCursor =
                 persistedBinding !== undefined &&
                 hasResumeCursor(persistedBinding.resumeCursor) &&
@@ -3095,6 +3127,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
               if (
                 persistedBinding !== undefined &&
                 !continuationResetRequested &&
+                !abandonsOtherProviderContinuation &&
                 ((!hasAvailableResumeCursor && !exactPersistedLaunchMatch) ||
                   (hasAvailableResumeCursor && !continuationCompatible)) &&
                 (providerUsesProtectedNativeContinuation(persistedBinding.provider) ||
@@ -3254,7 +3287,9 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                 const priorTranscriptBootstrapPending =
                   persistedPriorTranscriptBootstrapPending ||
                   staleSessionFallbackOccurred ||
-                  (outcomeOptions?.registerPriorTranscriptBootstrapOnFreshStart === true &&
+                  abandonsOtherProviderContinuation ||
+                  ((nativeResumeAttempted ||
+                    outcomeOptions?.registerPriorTranscriptBootstrapOnFreshStart === true) &&
                     !nativeResumeSucceeded);
 
                 if (session.provider !== adapter.provider) {
@@ -3465,6 +3500,17 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
             const binding = Option.getOrUndefined(yield* directory.getBinding(input.threadId));
             if (!binding) {
               return;
+            }
+            // Check under the binding lock so a delayed accepted turn cannot
+            // retire a marker written by a newer session while it was waiting.
+            if (
+              input.expectedLifecycleGeneration !== undefined &&
+              binding.lifecycleGeneration !== input.expectedLifecycleGeneration
+            ) {
+              return yield* toValidationError(
+                "ProviderService.completePriorTranscriptBootstrap",
+                "Cannot complete transcript recovery from a replaced provider session.",
+              );
             }
             yield* directory.upsert({
               threadId: input.threadId,

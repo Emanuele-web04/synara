@@ -213,6 +213,7 @@ export const makeAgentGatewayCredentials = Effect.gen(function* () {
     cancelInFlightRequests: inFlightRequests.cancel,
     cancelSessionTurnRequests,
     retireSessionTurn,
+    listRetiredWriteAuthorities: sessionRegistry.listRetiredWriteAuthorities,
     revokeSessionToken,
     connectionForThread: (threadId, provider, options) => {
       const bearerToken = issueSessionToken(threadId, provider, options);

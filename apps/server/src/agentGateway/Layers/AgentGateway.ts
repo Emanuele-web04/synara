@@ -371,6 +371,7 @@ export const makeAgentGateway = Effect.gen(function* () {
     providerRuntimeEvents,
     eventDeliveries,
     requireThreadShell,
+    listRetiredWriteAuthorities: credentials.listRetiredWriteAuthorities,
   });
 
   // --- write tools ----------------------------------------------------------

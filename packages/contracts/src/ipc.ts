@@ -7,6 +7,14 @@ import type {
 } from "./inboxRecaps";
 import type { RemoteResourceReference } from "./remoteResources";
 import type { DesktopProductAnalyticsBridge } from "./productAnalytics";
+import type {
+  EditorDebugStartInput,
+  EditorDebugActionInput,
+  EditorDebugActionResult,
+  EditorDebugPollInput,
+  EditorDebugSnapshot,
+} from "./editorDebug";
+import type { EditorIntelligenceInput, EditorIntelligenceResult } from "./editorIntelligence";
 import { Schema } from "effect";
 import type {
   LoadProjectImportHistoryInput,
@@ -870,9 +878,21 @@ export interface SynaraStorageSnapshot {
   readonly entries: Readonly<Record<string, string>>;
 }
 
+/**
+ * Full Disk Access as observed by the desktop main process when the info was
+ * requested. "unknown" means there was no Safari data to prove it either way.
+ */
+export type DesktopSafariFullDiskAccess = "granted" | "denied" | "unknown";
+
 export type DesktopSafariAccessInfo =
   | { supported: false }
-  | { supported: true; appName: string; appPath: string | null };
+  | {
+      supported: true;
+      appName: string;
+      appPath: string | null;
+      /** Absent from desktop builds that predate the access probe. */
+      fullDiskAccess?: DesktopSafariFullDiskAccess;
+    };
 
 /**
  * One frame of the desktop app's native computer preview tap: a complete JPEG
@@ -1212,6 +1232,19 @@ export interface NativeApi {
     restart: (input: TerminalRestartInput) => Promise<TerminalSessionSnapshot>;
     close: (input: TerminalCloseInput) => Promise<void>;
     onEvent: (callback: (event: TerminalEvent) => void) => () => void;
+  };
+  /** Absent on older servers. Core editing remains available without language services. */
+  editor?: {
+    debugStart?: (
+      input: EditorDebugStartInput,
+      options?: { signal?: AbortSignal },
+    ) => Promise<{ sessionId: string }>;
+    debugAction?: (input: EditorDebugActionInput) => Promise<EditorDebugActionResult>;
+    debugPoll?: (input: EditorDebugPollInput) => Promise<EditorDebugSnapshot>;
+    intelligence: (
+      input: EditorIntelligenceInput,
+      options?: { signal?: AbortSignal },
+    ) => Promise<EditorIntelligenceResult>;
   };
   projects: {
     discoverScripts: (input: ProjectDiscoverScriptsInput) => Promise<ProjectDiscoverScriptsResult>;

@@ -4538,21 +4538,27 @@ export default function ChatView({
   // thread off in place before the message is sent (same path as "Continue in
   // this thread"). The send refuses up front while the thread is busy; once the
   // message shows, a failed handoff rolls the send back into the composer.
-  const providerHandoffPendingForSend =
-    activeThread !== undefined && boundProvider !== null && selectedProvider !== boundProvider;
-  const canSendWithProviderHandoff = useStableCallback((): boolean => {
-    if (!providerHandoffPendingForSend || !handoffDisabled) {
-      return true;
-    }
-    const targetName = PROVIDER_DISPLAY_NAMES[selectedProvider] ?? selectedProvider;
-    toastManager.add({
-      type: "error",
-      title: `Cannot switch to ${targetName} yet`,
-      description:
-        "Wait for the current turn to finish and answer any pending request, then send again.",
-    });
-    return false;
-  });
+  const canSendWithProviderHandoff = useStableCallback(
+    (modelSelection?: ModelSelection): boolean => {
+      const targetProvider = modelSelection?.provider ?? selectedProvider;
+      if (
+        !activeThread ||
+        boundProvider === null ||
+        targetProvider === boundProvider ||
+        !handoffDisabled
+      ) {
+        return true;
+      }
+      const targetName = PROVIDER_DISPLAY_NAMES[targetProvider] ?? targetProvider;
+      toastManager.add({
+        type: "error",
+        title: `Cannot switch to ${targetName} yet`,
+        description:
+          "Wait for the current turn to finish and answer any pending request, then send again.",
+      });
+      return false;
+    },
+  );
   const prepareProviderHandoffForSend = useStableCallback(
     async (threadForSend: Thread, selectionForSend: ModelSelection): Promise<void> => {
       // A send owns the thread and model captured before attachment/setup waits.
@@ -4735,6 +4741,8 @@ export default function ChatView({
     armTranscriptAutoFollow,
     tailAnchorScrollInFlightRef,
     persistThreadSettingsForNextTurn,
+    canSendWithProviderHandoff,
+    prepareProviderHandoffForSend,
     setComposerDraftInteractionMode,
     rememberCustomBinaryPathForDispatch,
     workflowRunState,

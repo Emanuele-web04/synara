@@ -12,6 +12,7 @@ import type { ProviderKind, ThreadId } from "@synara/contracts";
 import { ServiceMap } from "effect";
 import type {
   AgentGatewaySessionIdentity,
+  AgentGatewayRetiredWriteAuthority,
   AgentGatewayWriteAuthority,
   AgentGatewayCapability,
 } from "./AgentGatewaySessionRegistry.ts";
@@ -94,6 +95,14 @@ export interface AgentGatewayCredentialsShape {
    * happen synchronously; the promise represents only in-flight drainage.
    */
   readonly retireSessionTurn: (token: string, turnId: string) => Promise<void>;
+  /**
+   * Live credentials for one thread whose write authority was already retired
+   * by a terminal turn. Diagnostics reads this to surface bearers that can no
+   * longer bind write authority while a newer turn is running.
+   */
+  readonly listRetiredWriteAuthorities?: (
+    threadId: string,
+  ) => ReadonlyArray<AgentGatewayRetiredWriteAuthority>;
   /** Revoke exactly one provider session credential. */
   readonly revokeSessionToken: (token: string) => void;
   /** Convenience bundle used when injecting MCP config into provider sessions. */

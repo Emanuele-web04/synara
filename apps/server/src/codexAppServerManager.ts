@@ -112,6 +112,7 @@ import {
 } from "@synara/shared/codexStderr";
 import { transcribeVoiceWithChatGptSession } from "./voiceTranscription.ts";
 import {
+  CODEX_APP_SERVER_MAX_DISCOVERY_FRAME_BYTES,
   CodexAppServerTransportError,
   CodexJsonlFramer,
   CodexJsonlWriter,
@@ -430,6 +431,9 @@ const loggedUserMcpOAuthServers = new Set<string>();
 
 const RECOVERABLE_THREAD_RESUME_ERROR_SNIPPETS = [
   "not found",
+  // Codex writes a thread's rollout on its first turn, so a thread opened and
+  // restarted before any turn (e.g. right after a handoff) has nothing to resume.
+  "no rollout found",
   "missing thread",
   "no such thread",
   "unknown thread",
@@ -3143,6 +3147,17 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     }
   }
 
+  /**
+   * Whether this session's gateway bearer was retired by a terminal turn and
+   * has not yet been replaced. This is the authoritative signal for routing:
+   * the durable rotation marker rides a runtime event that ProviderService
+   * may drop, but the in-memory fence here is what actually rejects writes.
+   */
+  isAgentGatewayCredentialRetired(threadId: ThreadId): boolean {
+    const context = this.sessions.get(threadId);
+    return context !== undefined && context.gatewayCredentialRetired === true;
+  }
+
   private async stopSessionContext(
     context: CodexSessionContext,
     emitClosedLifecycle = true,
@@ -3507,6 +3522,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       cwd ?? undefined,
       codexOptions,
       authFingerprint,
+      true,
     );
     this.assertDiscoveryAuthMatchesRequest(context, codexOptions, authFingerprint);
     const response = await this.sendRequest<Record<string, unknown>>(context, "plugin/list", {
@@ -3767,6 +3783,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     cwd?: string,
     codexOptions?: CodexDiscoveryOptions,
     expectedAuthFingerprint?: string,
+    dedicated = false,
   ): Promise<CodexSessionContext> {
     const normalizedThreadId = threadId?.trim();
     const normalizedCwd = cwd?.trim() || undefined;
@@ -3775,6 +3792,14 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       codexDiscoveryOptionsCacheKey(context.codexOptions) === optionsKey &&
       (expectedAuthFingerprint === undefined ||
         context.authFingerprint === expectedAuthFingerprint);
+    const selectContext = (context: CodexSessionContext) =>
+      dedicated
+        ? this.getOrCreateDiscoverySession(
+            context.session.cwd ?? process.cwd(),
+            codexOptions,
+            expectedAuthFingerprint,
+          )
+        : context;
     if (normalizedThreadId) {
       try {
         const session = this.requireSession(ThreadId.makeUnsafe(normalizedThreadId));
@@ -3783,7 +3808,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
           (!normalizedCwd || session.session.cwd === normalizedCwd) &&
           isCompatibleContext(session)
         ) {
-          return session;
+          return selectContext(session);
         }
       } catch {
         // Discovery is read-only metadata, so if the current draft thread does not
@@ -3798,7 +3823,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
           activeSession.session.cwd === normalizedCwd &&
           isCompatibleContext(activeSession)
         ) {
-          return activeSession;
+          return selectContext(activeSession);
         }
       }
       return this.getOrCreateDiscoverySession(normalizedCwd, codexOptions, expectedAuthFingerprint);
@@ -3807,7 +3832,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       (context) => this.isContextInitializedAndRoutable(context) && isCompatibleContext(context),
     );
     if (firstActive) {
-      return firstActive;
+      return selectContext(firstActive);
     }
     return this.getOrCreateDiscoverySession(process.cwd(), codexOptions, expectedAuthFingerprint);
   }
@@ -4005,7 +4030,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         sparkEnabled: true,
       },
       child,
-      stdoutFramer: new CodexJsonlFramer(),
+      stdoutFramer: new CodexJsonlFramer(CODEX_APP_SERVER_MAX_DISCOVERY_FRAME_BYTES),
       stdinWriter: new CodexJsonlWriter(child.stdin),
       pending: new Map(),
       pendingApprovals: new Map(),
@@ -5899,7 +5924,7 @@ export const __codexCliVersionGateTesting = {
   cacheTtlMs: CODEX_VERSION_CHECK_CACHE_TTL_MS,
 };
 
-function readResumeCursorThreadId(resumeCursor: unknown): string | undefined {
+export function readResumeCursorThreadId(resumeCursor: unknown): string | undefined {
   if (!resumeCursor || typeof resumeCursor !== "object" || Array.isArray(resumeCursor)) {
     return undefined;
   }

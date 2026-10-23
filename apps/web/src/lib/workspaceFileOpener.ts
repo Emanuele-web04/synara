@@ -29,8 +29,11 @@ export interface WorkspaceFileOpener {
    * Opens a file referenced in the chat. Returns true when the reference was
    * handled by an in-app viewer; false tells the caller to fall back to the
    * external editor (path outside the workspace, no viewer on this surface).
+   * beforeOpen runs after the save guard accepts a request, just before the
+   * viewer updates its state; callers can prepare a selection without retaining
+   * it when saving fails or another navigation supersedes this one.
    */
-  openFile: (path: string) => boolean;
+  openFile: (path: string, beforeOpen?: () => void) => boolean;
   /** Optional hover warm-up for the file contents + syntax highlighter. */
   prefetchFile?: (path: string) => void;
 }

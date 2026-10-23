@@ -1,6 +1,6 @@
 {
   "name": "@synara/cli",
-  "version": "1.0.6",
+  "version": "1.0.7",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -45,6 +45,7 @@
     "open": "^10.1.0",
     "reflect-metadata": "0.2.2",
     "smol-toml": "^1.7.0",
+    "typescript": "catalog:",
     "ws": "^8.21.0",
     "yaml": "^2.8.3",
     "zod": "4.3.6"
@@ -59,7 +60,6 @@
     "@types/node": "catalog:",
     "@types/ws": "^8.5.13",
     "tsdown": "catalog:",
-    "typescript": "catalog:",
     "vitest": "catalog:"
   },
   "engines": {

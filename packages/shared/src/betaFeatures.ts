@@ -54,11 +54,20 @@ export const INLINE_VISUALS_BETA_FEATURE = "inline-visuals";
  */
 export const MCP_CONNECTORS_BETA_FEATURE = "mcp-connectors";
 
+/**
+ * Native editor (Beta only): the Code OSS editing engine behind file, diff and
+ * preview editing, its TypeScript language service and the JavaScript
+ * debugger. Stable keeps the previous Pierre editing engine and refuses the
+ * `editor.*` RPCs; the shared keybindings for the engine's commands stay inert.
+ */
+export const NATIVE_EDITOR_BETA_FEATURE = "native-editor";
+
 export const BETA_ONLY_FEATURES: readonly BetaOnlyFeature[] = [
   "remoteConnections",
   "accountProfileSync",
   ACCOUNT_INBOX_BETA_FEATURE,
   MCP_CONNECTORS_BETA_FEATURE,
+  NATIVE_EDITOR_BETA_FEATURE,
 ];
 
 /**
