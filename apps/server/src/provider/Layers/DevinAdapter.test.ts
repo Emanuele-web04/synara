@@ -4168,9 +4168,24 @@ it.each([
     requestMetadata: { "cognition.ai/subagent_context": { parentAgentId: 12 } },
     invalid: true,
   },
+  {
+    name: "stopped child with omitted metadata",
+    toolMetadata: undefined,
+    requestMetadata: undefined,
+    invalid: true,
+    childState: "stopped",
+  },
+  {
+    name: "completed child with omitted metadata",
+    toolMetadata: undefined,
+    requestMetadata: undefined,
+    invalid: true,
+    childState: "completed",
+  },
 ] as const)(
   "keeps a Plan child's permission ownership with $name during a newer Full Access turn",
-  async ({ toolMetadata, requestMetadata, invalid }) => {
+  async (scenario) => {
+    const { toolMetadata, requestMetadata, invalid } = scenario;
     vi.useFakeTimers();
     vi.setSystemTime(1000);
     const launchPrompt = Effect.runSync(Deferred.make<Acp.PromptResponse>());
@@ -4211,6 +4226,15 @@ it.each([
         });
         yield* Deferred.succeed(launchPrompt, { stopReason: "end_turn" } as Acp.PromptResponse);
         yield* advanceTimers(100);
+        if ("childState" in scenario) {
+          if (scenario.childState === "stopped") {
+            yield* adapter.stopTask(threadId, "child");
+          } else {
+            yield* handles.emitToolCall("launch", "completed", {
+              metadata: { "cognition.ai/subagent_completed": { agentId: "child", success: true } },
+            });
+          }
+        }
         yield* adapter.sendTurn({
           threadId,
           input: "new parent work",
@@ -4229,6 +4253,12 @@ it.each([
             ? { outcome: "cancelled" }
             : { outcome: "selected", optionId: "reject-once" },
         });
+        // Rejection is child ownership, not an inactive parent or global denial.
+        expect(
+          yield* handles.requestPermission(
+            makePermissionParams("new-parent-tool", { kind: "execute" }),
+          ),
+        ).toEqual({ outcome: { outcome: "selected", optionId: "allow-once" } });
         yield* adapter.stopSession(threadId);
       }).pipe(
         Effect.scoped,

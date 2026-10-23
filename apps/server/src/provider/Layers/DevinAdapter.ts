@@ -471,8 +471,11 @@ interface DevinSessionContext extends SynaraHarnessPolicyDeliveryState {
   // ToolCallUpdated events. Devin's request_permission toolCall arrives sparse
   // (usually only {toolCallId, kind}), so the permission handler looks up this
   // tracked state to show the tool name and its arguments on the approval
-  // card. Bounded to the same window as turnToolCallIds.
+  // card. Payloads retain the ordinary turn window and still-running child tools.
   readonly devinToolCallStateById: Map<string, AcpToolCallState>;
+  // Ownership IDs survive payload pruning for this session. A late
+  // child permission must never inherit a newer parent policy; null is ambiguous.
+  readonly devinToolCallOwners: Map<string, string | null>;
   readonly devinToolCallLifecycleById: Map<string, "active" | "terminal">;
   /** Native Devin child agents keyed by provider thread/agent id. */
   readonly devinSubagents: Map<string, DevinSubagentState>;
@@ -2709,7 +2712,8 @@ export function makeDevinAdapter(
 
                 // Sparse permission metadata must not erase a tracked child's
                 // policy. Explicit identities must agree; ambiguity fails closed.
-                let ownerAgentId: string | undefined;
+                let ownerAgentId = ctx?.devinToolCallOwners.get(params.toolCall.toolCallId);
+                if (ownerAgentId === null) return { outcome: { outcome: "cancelled" as const } };
                 for (const metadata of [
                   trackedToolCall?.metadata,
                   params._meta,
@@ -2721,9 +2725,13 @@ export function makeDevinAdapter(
                     !context ||
                     (ownerAgentId !== undefined && ownerAgentId !== context.parentAgentId)
                   ) {
+                    ctx?.devinToolCallOwners.set(params.toolCall.toolCallId, null);
                     return { outcome: { outcome: "cancelled" as const } };
                   }
                   ownerAgentId = context.parentAgentId;
+                }
+                if (ownerAgentId !== undefined) {
+                  ctx?.devinToolCallOwners.set(params.toolCall.toolCallId, ownerAgentId);
                 }
                 const owner = ownerAgentId ? ctx?.devinSubagents.get(ownerAgentId) : undefined;
                 const requestTurnId = ownerAgentId ? owner?.turnId : ctx?.activeTurnId;
@@ -3025,6 +3033,7 @@ export function makeDevinAdapter(
             turnToolCallIds: new Map(),
             turnInteractionModes: new Map(),
             devinToolCallStateById: new Map(),
+            devinToolCallOwners: new Map(),
             devinToolCallLifecycleById: new Map(),
             devinSubagents: new Map(),
             devinSubagentIdByToolCallId: new Map(),
@@ -3139,6 +3148,19 @@ export function makeDevinAdapter(
 
                   case "ToolCallUpdated":
                     {
+                      const metadata = event.toolCall.metadata;
+                      if (metadata && Object.hasOwn(metadata, DEVIN_SUBAGENT_CONTEXT_META)) {
+                        const declaredOwner = readDevinSubagentContext(metadata)?.parentAgentId;
+                        const knownOwner = ctx.devinToolCallOwners.get(event.toolCall.toolCallId);
+                        ctx.devinToolCallOwners.set(
+                          event.toolCall.toolCallId,
+                          declaredOwner === undefined ||
+                            knownOwner === null ||
+                            (knownOwner !== undefined && knownOwner !== declaredOwner)
+                            ? null
+                            : declaredOwner,
+                        );
+                      }
                       // Always merge first: a later request_permission for this
                       // tool call may carry a sparse toolCall and relies on the
                       // tracked state for its approval-card label.
