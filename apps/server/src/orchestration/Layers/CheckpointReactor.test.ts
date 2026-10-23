@@ -403,6 +403,7 @@ describe("CheckpointReactor", () => {
     readonly hubWakes?: string[];
     readonly hubMonitorLive?: boolean;
     readonly hubRuntimeIngestion?: boolean;
+    readonly runtimeIngestion?: boolean;
   }) {
     const cwd = createGitRepository(options?.hasInitialCommit ?? true);
     tempDirs.push(cwd);
@@ -501,7 +502,11 @@ describe("CheckpointReactor", () => {
       ? Layer.merge(monitorLayer, ProviderRuntimeIngestionLive)
       : monitorLayer;
     const layer = (
-      options?.hubWakes ? Layer.merge(checkpointLayer, hubLayer) : checkpointLayer
+      options?.hubWakes
+        ? Layer.merge(checkpointLayer, hubLayer)
+        : options?.runtimeIngestion
+          ? Layer.merge(checkpointLayer, ProviderRuntimeIngestionLive)
+          : checkpointLayer
     ).pipe(
       Layer.provideMerge(orchestrationLayer),
       Layer.provideMerge(OrchestrationProjectionSnapshotQueryLive),
@@ -537,11 +542,14 @@ describe("CheckpointReactor", () => {
     scope = await Effect.runPromise(Scope.make("sequential"));
     const startReactor = () => Effect.runPromise(reactor.start.pipe(Scope.provide(scope!)));
     if (options?.startReactor !== false) await startReactor();
-    const ingestion = options?.hubRuntimeIngestion
-      ? await runtime.runPromise(
-          Effect.serviceOption(ProviderRuntimeIngestionService).pipe(Effect.map(Option.getOrThrow)),
-        )
-      : undefined;
+    const ingestion =
+      options?.hubRuntimeIngestion || options?.runtimeIngestion
+        ? await runtime.runPromise(
+            Effect.serviceOption(ProviderRuntimeIngestionService).pipe(
+              Effect.map(Option.getOrThrow),
+            ),
+          )
+        : undefined;
     if (ingestion) await Effect.runPromise(ingestion.start.pipe(Scope.provide(scope!)));
     const runtimeEvents = await runtime.runPromise(
       Effect.service(ProviderRuntimeEventRepository).pipe(
@@ -5617,6 +5625,149 @@ describe("CheckpointReactor", () => {
     ).toBe(false);
     expect(gitRefExists(harness.cwd, lastLiveRef)).toBe(false);
     expect(detailReads).not.toHaveBeenCalled();
+  });
+
+  it("keeps the last preview after interrupted final capture when a late file event arrives", async () => {
+    const harness = await createHarness({
+      seedFilesystemCheckpoints: false,
+      providerName: "claudeAgent",
+      runtimeIngestion: true,
+      liveTurnDiffThrottleWindowMs: 0,
+    });
+    const threadId = ThreadId.makeUnsafe("thread-1");
+    const turnId = asTurnId("turn-interrupted-live");
+    const createdAt = new Date().toISOString();
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.makeUnsafe("interrupted-live-session"),
+        threadId,
+        session: {
+          threadId,
+          status: "running",
+          providerName: "claudeAgent",
+          runtimeMode: "approval-required",
+          activeTurnId: turnId,
+          lastError: null,
+          updatedAt: createdAt,
+        },
+        createdAt,
+      }),
+    );
+    await harness.prepareBaseline(turnId);
+    harness.provider.emit({
+      type: "turn.started",
+      eventId: EventId.makeUnsafe("interrupted-live-start"),
+      provider: "claudeAgent",
+      threadId,
+      turnId,
+      createdAt,
+    });
+    await waitForGitRefExists(harness.cwd, checkpointRefForThreadTurnStart(threadId, turnId));
+    fs.writeFileSync(path.join(harness.cwd, "live.txt"), "owned preview\n", "utf8");
+    harness.provider.emit({
+      type: "item.completed",
+      eventId: EventId.makeUnsafe("interrupted-live-edit"),
+      provider: "claudeAgent",
+      threadId,
+      turnId,
+      createdAt,
+      itemId: "initial-edit",
+      payload: { itemType: "file_change", status: "completed" },
+    });
+    await waitForThread(harness.engine, (thread) =>
+      thread.checkpoints.some(
+        (checkpoint) => checkpoint.checkpointRef === "provider-diff:interrupted-live-edit",
+      ),
+    );
+    const query = await runtime!.runPromise(Effect.service(ProjectionSnapshotQuery));
+    const diffQuery = await Effect.runPromise(
+      Effect.service(CheckpointDiffQuery).pipe(
+        Effect.provide(CheckpointDiffQueryLive),
+        Effect.provideService(ProjectionSnapshotQuery, query),
+        Effect.provideService(CheckpointStore, harness.checkpointStore),
+      ),
+    );
+    const previous = await Effect.runPromise(
+      diffQuery.getTurnDiff({
+        threadId,
+        fromTurnCount: 0,
+        toTurnCount: 1,
+      }),
+    );
+    const captureCheckpoint = harness.checkpointStore.captureCheckpoint;
+    const capture = vi
+      .spyOn(harness.checkpointStore, "captureCheckpoint")
+      .mockImplementation((input) =>
+        input.checkpointRef === checkpointRefForThreadTurn(threadId, 1)
+          ? Effect.fail(
+              new GitCommandError({
+                operation: "capture",
+                cwd: input.cwd,
+                command: "git write-tree",
+                detail: "Injected final capture failure",
+              }),
+            )
+          : captureCheckpoint(input),
+      );
+    harness.provider.emit({
+      type: "turn.completed",
+      eventId: EventId.makeUnsafe("interrupted-live-stop"),
+      provider: "claudeAgent",
+      threadId,
+      turnId,
+      createdAt: new Date().toISOString(),
+      payload: { state: "interrupted" },
+    });
+    await waitForThread(harness.engine, (thread) =>
+      thread.activities.some((activity) => activity.kind === "checkpoint.capture.failed"),
+    );
+    await Effect.runPromise(harness.ingestion!.drain);
+    const stopped = (await Effect.runPromise(harness.engine.getReadModel())).threads.find(
+      (thread) => thread.id === threadId,
+    )!;
+    expect(stopped.session?.status).toBe("interrupted");
+    expect(stopped.session?.activeTurnId).toBeNull();
+    capture.mockClear();
+    const beforeLateSequence = await Effect.runPromise(harness.runtimeEvents.getHighWaterSequence);
+    fs.writeFileSync(path.join(harness.cwd, "other-work.txt"), "after Stop\n", "utf8");
+    harness.provider.emit({
+      type: "item.completed",
+      eventId: EventId.makeUnsafe("interrupted-live-late"),
+      provider: "claudeAgent",
+      threadId,
+      turnId,
+      createdAt: new Date().toISOString(),
+      itemId: "late-edit",
+      payload: { itemType: "file_change", status: "completed" },
+    });
+    await vi.waitFor(async () =>
+      expect(await Effect.runPromise(harness.runtimeEvents.getHighWaterSequence)).toBeGreaterThan(
+        beforeLateSequence,
+      ),
+    );
+    await Effect.runPromise(harness.ingestion!.drain);
+    await harness.drain();
+    expect(
+      await Effect.runPromise(harness.runtimeEvents.getConsumerCursor(CHECKPOINT_RUNTIME_CONSUMER)),
+    ).toBeGreaterThan(beforeLateSequence);
+    expect(capture).not.toHaveBeenCalled();
+    const afterLate = await Effect.runPromise(
+      diffQuery.getTurnDiff({
+        threadId,
+        fromTurnCount: 0,
+        toTurnCount: 1,
+      }),
+    );
+    expect(afterLate.diff).toBe(previous.diff);
+    expect(afterLate.diff).not.toContain("other-work.txt");
+    expect(
+      gitRefExists(
+        harness.cwd,
+        checkpointRefForThreadTurnLive(threadId, turnId, "interrupted-live-late"),
+      ),
+    ).toBe(false);
+    capture.mockRestore();
   });
 
   it("throttles live turn-diff captures per thread and ends a burst with its last edit", async () => {

@@ -1041,9 +1041,6 @@ const make = Effect.fnUntraced(function* (options?: CheckpointReactorLiveOptions
   // let a later "missing" placeholder overwrite.
   const captureLiveTurnDiff = Effect.fnUntraced(function* (
     event: Extract<ProviderRuntimeEvent, { type: "item.completed" }>,
-    // A deferred (throttled) capture runs after its event: skip it once the
-    // provider session has stopped instead of reviving a settled turn.
-    deferred = false,
   ) {
     const turnId = toTurnId(event.turnId);
     if (!turnId) {
@@ -1064,11 +1061,12 @@ const make = Effect.fnUntraced(function* (options?: CheckpointReactorLiveOptions
     if (thread.session?.activeTurnId && !sameId(thread.session.activeTurnId, turnId)) {
       return;
     }
+    // Immediate and throttled completions can arrive after Stop. Preserve the
+    // last snapshot instead of attributing later checkout work to that turn.
     if (
-      deferred &&
-      (thread.session?.status === "stopped" ||
-        thread.session?.status === "interrupted" ||
-        thread.session?.status === "error")
+      thread.session?.status === "stopped" ||
+      thread.session?.status === "interrupted" ||
+      thread.session?.status === "error"
     ) {
       return;
     }
@@ -2008,7 +2006,7 @@ const make = Effect.fnUntraced(function* (options?: CheckpointReactorLiveOptions
       }
       throttle.pending = undefined;
       throttle.lastCaptureAt = Date.now();
-      const capture = withPinnedWorkspaceLease(captureLiveTurnDiff(pending.event, true));
+      const capture = withPinnedWorkspaceLease(captureLiveTurnDiff(pending.event));
       return (
         Option.isSome(pending.workspace)
           ? capture.pipe(Effect.provideService(PinnedCheckpointWorkspace, pending.workspace.value))
