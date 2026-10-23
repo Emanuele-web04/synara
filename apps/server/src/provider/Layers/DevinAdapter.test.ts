@@ -4128,6 +4128,121 @@ it.each(["default", "plan"] as const)(
     );
   },
 );
+it.each([
+  { name: "omitted metadata", toolMetadata: undefined, requestMetadata: undefined, invalid: false },
+  { name: "empty tool metadata", toolMetadata: {}, requestMetadata: undefined, invalid: false },
+  {
+    name: "unrelated tool metadata",
+    toolMetadata: { trace: "permission" },
+    requestMetadata: undefined,
+    invalid: false,
+  },
+  { name: "empty request metadata", toolMetadata: undefined, requestMetadata: {}, invalid: false },
+  {
+    name: "unrelated request metadata",
+    toolMetadata: undefined,
+    requestMetadata: { trace: "permission" },
+    invalid: false,
+  },
+  {
+    name: "conflicting tracked owner",
+    toolMetadata: { "cognition.ai/subagent_context": { parentAgentId: "other-child" } },
+    requestMetadata: undefined,
+    invalid: true,
+  },
+  {
+    name: "conflicting request owner",
+    toolMetadata: { "cognition.ai/subagent_context": { parentAgentId: "child" } },
+    requestMetadata: { "cognition.ai/subagent_context": { parentAgentId: "other-child" } },
+    invalid: true,
+  },
+  {
+    name: "invalid tool owner",
+    toolMetadata: { "cognition.ai/subagent_context": {} },
+    requestMetadata: undefined,
+    invalid: true,
+  },
+  {
+    name: "invalid request owner",
+    toolMetadata: undefined,
+    requestMetadata: { "cognition.ai/subagent_context": { parentAgentId: 12 } },
+    invalid: true,
+  },
+] as const)(
+  "keeps a Plan child's permission ownership with $name during a newer Full Access turn",
+  async ({ toolMetadata, requestMetadata, invalid }) => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1000);
+    const launchPrompt = Effect.runSync(Deferred.make<Acp.PromptResponse>());
+    let prompts = 0;
+    const handles = makePermissionRuntime(() =>
+      ++prompts === 1 ? Deferred.await(launchPrompt) : Effect.never,
+    );
+    const runtime = {
+      ...handles.runtime,
+      getModeState: handles.runtime.getModeState.pipe(
+        Effect.map(
+          (state) =>
+            state && {
+              ...state,
+              availableModes: [...state.availableModes, { id: "plan", name: "Plan" }],
+            },
+        ),
+      ),
+    };
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const adapter = yield* DevinAdapter;
+        const threadId = ThreadId.makeUnsafe("child-permission-owner");
+        yield* adapter.startSession({ provider: "devin", threadId, runtimeMode: "full-access" });
+        yield* adapter.sendTurn({
+          threadId,
+          input: "plan",
+          interactionMode: "plan",
+          attachments: [],
+        });
+        yield* handles.emitToolCall("launch", "inProgress", {
+          metadata: { "cognition.ai/subagent_started": { agentId: "child", isBackground: true } },
+        });
+        yield* handles.emitToolCall("child-tool", "inProgress", {
+          kind: "execute",
+          metadata: { "cognition.ai/subagent_context": { parentAgentId: "child" } },
+          data: { rawInput: { command: "write-files" } },
+        });
+        yield* Deferred.succeed(launchPrompt, { stopReason: "end_turn" } as Acp.PromptResponse);
+        yield* advanceTimers(100);
+        yield* adapter.sendTurn({
+          threadId,
+          input: "new parent work",
+          interactionMode: "default",
+          attachments: [],
+        });
+        const response = yield* handles.requestPermission({
+          ...makePermissionParams("child-tool", {
+            kind: "execute",
+            ...(toolMetadata !== undefined ? { _meta: toolMetadata } : {}),
+          }),
+          ...(requestMetadata !== undefined ? { _meta: requestMetadata } : {}),
+        });
+        expect(response).toEqual({
+          outcome: invalid
+            ? { outcome: "cancelled" }
+            : { outcome: "selected", optionId: "reject-once" },
+        });
+        yield* adapter.stopSession(threadId);
+      }).pipe(
+        Effect.scoped,
+        Effect.provide(
+          makeDevinAdapterTestLayer(runtime, handles.completeProcessedEvent, {
+            turnIdleMs: 3600000,
+            toolIdleMs: 3600000,
+          }),
+        ),
+      ),
+    );
+  },
+);
+
 it("targeted child Stop keeps a sibling's shared gateway lease usable", async () => {
   vi.useFakeTimers();
   vi.setSystemTime(1000);

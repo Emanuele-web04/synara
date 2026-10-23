@@ -2707,9 +2707,24 @@ export function makeDevinAdapter(
                   ? toolCall.data.rawInput
                   : params.toolCall.rawInput;
 
-                const ownerAgentId = readDevinSubagentContext(
-                  params.toolCall._meta ?? params._meta ?? trackedToolCall?.metadata,
-                )?.parentAgentId;
+                // Sparse permission metadata must not erase a tracked child's
+                // policy. Explicit identities must agree; ambiguity fails closed.
+                let ownerAgentId: string | undefined;
+                for (const metadata of [
+                  trackedToolCall?.metadata,
+                  params._meta,
+                  params.toolCall._meta,
+                ]) {
+                  if (!metadata || !Object.hasOwn(metadata, DEVIN_SUBAGENT_CONTEXT_META)) continue;
+                  const context = readDevinSubagentContext(metadata);
+                  if (
+                    !context ||
+                    (ownerAgentId !== undefined && ownerAgentId !== context.parentAgentId)
+                  ) {
+                    return { outcome: { outcome: "cancelled" as const } };
+                  }
+                  ownerAgentId = context.parentAgentId;
+                }
                 const owner = ownerAgentId ? ctx?.devinSubagents.get(ownerAgentId) : undefined;
                 const requestTurnId = ownerAgentId ? owner?.turnId : ctx?.activeTurnId;
                 const requestInteractionMode = ownerAgentId
@@ -4076,10 +4091,14 @@ export function makeDevinAdapter(
         // free to cancel it until ctx.acp.prompt actually returns.
         ctx.activePromptResolved = false;
         pruneDevinToolCallTurnIds(ctx.turnToolCallIds, keptTurnId);
-        // Bound tracked tool-call state to the same window: permission
-        // requests only ever reference current or just-settled turn calls.
-        for (const toolCallId of ctx.devinToolCallStateById.keys()) {
-          if (!ctx.turnToolCallIds.has(toolCallId)) {
+        // Background children can request permission after a later parent turn
+        // starts. Keep their identity/policy until the child is no longer live.
+        for (const [toolCallId, toolCall] of ctx.devinToolCallStateById) {
+          const ownerAgentId = readDevinSubagentContext(toolCall.metadata)?.parentAgentId;
+          const hasLiveChildOwner =
+            ownerAgentId !== undefined &&
+            ctx.devinSubagents.get(ownerAgentId)?.status === "running";
+          if (!ctx.turnToolCallIds.has(toolCallId) && !hasLiveChildOwner) {
             ctx.devinToolCallStateById.delete(toolCallId);
           }
         }
