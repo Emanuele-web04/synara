@@ -220,7 +220,6 @@ import {
   hasLiveTurnTailWork,
   isLatestTurnSettled,
   isSessionAliveForSubagents,
-  NO_RUNNING_SUBAGENT_TASKS,
   type ActiveTaskListState,
 } from "../session-logic";
 import {
@@ -1566,23 +1565,22 @@ export default function ChatView({
   const isSubagentThreadView = Boolean(activeThread?.parentThreadId);
   const runningSubagentTasks = useMemo(
     () =>
-      isSubagentThreadView
-        ? NO_RUNNING_SUBAGENT_TASKS
-        : deriveRunningSubagentTasks({
-            activities: threadActivities,
-            liveTurnId: subagentRunLiveTurnId,
-            sessionStatus: subagentRootSessionStatus,
-          }),
-    [isSubagentThreadView, subagentRootSessionStatus, subagentRunLiveTurnId, threadActivities],
+      deriveRunningSubagentTasks({
+        activities: threadActivities,
+        liveTurnId: subagentRunLiveTurnId,
+        sessionStatus: subagentRootSessionStatus,
+      }),
+    [subagentRootSessionStatus, subagentRunLiveTurnId, threadActivities],
   );
-  const runningChildParentId =
-    !isSubagentThreadView && isSessionAliveForSubagents(subagentRootSessionStatus)
-      ? activeThreadId
-      : null;
+  const runningChildParentId = isSessionAliveForSubagents(subagentRootSessionStatus)
+    ? runningSubagentRunParentId
+    : null;
+  // Native descendants share the root parent; source identifies their launcher.
+  const runningChildSourceId = isSubagentThreadView ? activeThreadId : null;
   const runningChildThreadIds = useStore(
     useMemo(
-      () => createRunningChildThreadIdsSelector(runningChildParentId),
-      [runningChildParentId],
+      () => createRunningChildThreadIdsSelector(runningChildParentId, runningChildSourceId),
+      [runningChildParentId, runningChildSourceId],
     ),
   );
   const runningAgents = useMemo(

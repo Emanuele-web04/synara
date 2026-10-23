@@ -197,8 +197,12 @@ const EMPTY_THREAD_IDS: ReadonlyArray<ThreadIdType> = Object.freeze([]);
 
 // Child threads of `parentThreadId` still at work by their own session and latest
 // turn, for agents that no transcript card stands for. Reruns only when the
-// thread list, shells, sessions or turn states change identity.
-export function createRunningChildThreadIdsSelector(parentThreadId: ThreadIdType | null) {
+// thread list, shells, sessions or turn states change identity. In a child view,
+// sourceThreadId restricts the result to that child's own launches, not siblings.
+export function createRunningChildThreadIdsSelector(
+  parentThreadId: ThreadIdType | null,
+  sourceThreadId: ThreadIdType | null = null,
+) {
   let previousThreadIds: AppState["threadIds"] | undefined;
   let previousThreadShellById: AppState["threadShellById"] | undefined;
   let previousThreadSessionById: AppState["threadSessionById"] | undefined;
@@ -225,7 +229,12 @@ export function createRunningChildThreadIdsSelector(parentThreadId: ThreadIdType
     const running: ThreadIdType[] = [];
     for (const threadId of state.threadIds ?? []) {
       const shell = state.threadShellById?.[threadId];
-      if (!shell || shell.parentThreadId !== parentThreadId || shell.archivedAt) {
+      if (
+        !shell ||
+        shell.parentThreadId !== parentThreadId ||
+        shell.archivedAt ||
+        (sourceThreadId !== null && shell.sourceThreadId !== sourceThreadId)
+      ) {
         continue;
       }
       const statusKind = resolveSubagentThreadStatusKind({

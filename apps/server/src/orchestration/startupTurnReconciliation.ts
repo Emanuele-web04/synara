@@ -350,8 +350,7 @@ export function findRestartOrphanedTasks(
           status === "completed" ||
           status === "failed" ||
           status === "killed" ||
-          status === "paused" ||
-          payload?.isBackgrounded === false
+          status === "paused"
         ) {
           open.delete(taskId);
         } else if (payload?.isBackgrounded === true) {
@@ -606,6 +605,9 @@ export const reconcileRestartStuckTurns: Effect.Effect<
       thread.hasPendingUserInput ||
       unsettledByThread.has(thread.id) ||
       deadRuntimeThreadIds.has(thread.id) ||
+      // Native children share their root runtime and have no runtime row of
+      // their own. Hydrate their pinned task state before trusting the capped tail.
+      (thread.parentThreadId != null && deadRuntimeThreadIds.has(thread.parentThreadId)) ||
       findRestartOrphanedTasks(thread.activities ?? [], processStartedAt).length > 0,
   );
   if (threadsNeedingRestartCleanup.length === 0) {

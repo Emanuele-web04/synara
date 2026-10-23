@@ -15260,6 +15260,105 @@ describe("ChatView transcript geometry (full app)", () => {
     }
   });
 
+  it("counts nested agents in a child view without counting its siblings", async () => {
+    const base = createSnapshotForTargetUser({
+      targetMessageId: MessageId.makeUnsafe("nested-agent-root"),
+      targetText: "Delegate the review",
+    });
+    const root = base.threads[0]!;
+    const childId = ThreadId.makeUnsafe(`subagent:${THREAD_ID}:outer`);
+    const nestedId = ThreadId.makeUnsafe(`subagent:${THREAD_ID}:nested`);
+    const siblingId = ThreadId.makeUnsafe(`subagent:${THREAD_ID}:sibling`);
+    const turnId = TurnId.makeUnsafe("child-review-turn");
+    const child = {
+      ...root,
+      id: childId,
+      title: "Review worker",
+      parentThreadId: THREAD_ID,
+      sourceThreadId: THREAD_ID,
+      session: { ...root.session!, threadId: childId, status: "ready" as const },
+      latestTurn: {
+        turnId,
+        state: "completed" as const,
+        requestedAt: isoAt(1),
+        startedAt: isoAt(2),
+        completedAt: isoAt(3),
+        assistantMessageId: null,
+      },
+      messages: [],
+      // No visible card: only the durable task start remains for this provider.
+      activities: [
+        {
+          id: EventId.makeUnsafe("nested-agent-start"),
+          kind: "task.started",
+          summary: "Nested task running",
+          tone: "info" as const,
+          createdAt: isoAt(2),
+          turnId,
+          payload: {
+            taskId: "provider-nested",
+            taskType: "local_agent",
+            toolUseId: "toolu_provider_nested",
+          },
+        },
+      ],
+    };
+    const runningChild = (id: ThreadId, sourceThreadId: ThreadId) => ({
+      ...child,
+      id,
+      title: id === nestedId ? "Nested worker" : "Sibling worker",
+      sourceThreadId,
+      session: { ...child.session, threadId: id, status: "running" as const },
+      latestTurn: { ...child.latestTurn, state: "running" as const, completedAt: null },
+      activities: [],
+    });
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      initialEntry: `/${childId}`,
+      snapshot: {
+        ...base,
+        threads: [root, child, runningChild(nestedId, childId), runningChild(siblingId, THREAD_ID)],
+      },
+    });
+    try {
+      await waitForComposerEditor();
+      const capsule = await waitForElement(
+        () => document.querySelector<HTMLElement>('[data-testid="running-agents-capsule"]'),
+        "Nested agents must remain visible while their root runtime is alive.",
+      );
+      expect(capsule.textContent).toContain("2 agents running");
+      await page.screenshot({ path: "../../../../output/playwright/running-agents-child.png" });
+      // Once its own tasks finish, the child-shell fallback still sees only the nested worker.
+      useStore.getState().syncServerReadModel({
+        ...fixture.snapshot,
+        threads: fixture.snapshot.threads.map((thread) =>
+          thread.id === childId
+            ? {
+                ...thread,
+                activities: [
+                  ...thread.activities,
+                  {
+                    id: EventId.makeUnsafe("nested-agent-end"),
+                    kind: "task.completed",
+                    summary: "Nested task finished",
+                    tone: "info" as const,
+                    createdAt: isoAt(4),
+                    turnId,
+                    payload: { taskId: "provider-nested", status: "completed" },
+                  },
+                ],
+              }
+            : thread,
+        ),
+      });
+      await expect
+        .element(page.getByTestId("running-agents-capsule"))
+        .toHaveTextContent("1 agent running");
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
   it("keeps the final transcript row clear of the composer capsules", async () => {
     const mounted = await mountChatView({
       viewport: DEFAULT_VIEWPORT,
@@ -15369,6 +15468,10 @@ describe("ChatView transcript geometry (full app)", () => {
         "Unable to find the task-list capsule.",
       );
       expect(taskCapsule.textContent).toContain("1/3 tasks");
+      await expect
+        .element(page.getByTestId("running-agents-capsule"))
+        .toHaveTextContent("1 agent running");
+      await page.screenshot({ path: "../../../../output/playwright/running-agents-parent.png" });
       const composerShell = document.querySelector<HTMLElement>(
         'form[data-chat-composer-form="true"] .chat-composer-shell',
       );
