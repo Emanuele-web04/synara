@@ -19,6 +19,7 @@ import type { DesktopBrowserManager } from "../../desktop/src/browserManager";
 
 import { createBrowserMcpHarness } from "./fixtures/mcpBrowserHarness";
 import { startVisibleBrowserFixtureSite } from "./fixtures/siteServer";
+import type { FloatingBrowserHandoffFixture } from "./fixtures/floatingBrowserHandoff";
 
 const WEB_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const REPO_ROOT = resolve(WEB_DIR, "../..");
@@ -54,7 +55,9 @@ async function closeElectronApplication(application: ElectronApplication): Promi
   if (closeError) throw closeError;
 }
 
-async function launchVisibleBrowserFixture() {
+async function launchVisibleBrowserFixture(
+  options: { floatingHandoff?: boolean; recordVideoDir?: string } = {},
+) {
   const mainPath = process.env.SYNARA_E2E_ELECTRON_MAIN;
   if (!mainPath) throw new Error("Electron E2E main bundle was not prepared.");
   const site = await startVisibleBrowserFixtureSite();
@@ -71,6 +74,9 @@ async function launchVisibleBrowserFixture() {
       executablePath,
       args: [mainPath],
       cwd: DESKTOP_DIR,
+      ...(options.recordVideoDir
+        ? { recordVideo: { dir: options.recordVideoDir, size: { width: 1000, height: 760 } } }
+        : {}),
       env: {
         ...process.env,
         HOME: home,
@@ -79,6 +85,7 @@ async function launchVisibleBrowserFixture() {
         SYNARA_BROWSER_HOST_CAPABILITY: capability,
         SYNARA_E2E_SHELL_PATH: shellPath,
         SYNARA_E2E_THREAD_ID: threadId,
+        SYNARA_E2E_FLOATING_HANDOFF: options.floatingHandoff ? "1" : "0",
       },
     })
     .catch(async (error: unknown) => {
@@ -859,8 +866,191 @@ type FocusFixtureGlobals = typeof globalThis & {
     setPanelRevealEnabled(enabled: boolean): void;
     setPreviewEnabled(enabled: boolean): void;
     setSurface(surface: "native" | "renderer"): void;
+    setPageZoomFactor(value: number): void;
   };
 };
+
+type HandoffRendererGlobals = typeof globalThis & {
+  __synaraFloatingHandoffE2E: FloatingBrowserHandoffFixture;
+};
+
+test("keeps one real renderer guest across floating and sidebar handoffs", async () => {
+  const testInfo = test.info();
+  const fixture = await launchVisibleBrowserFixture({
+    floatingHandoff: true,
+    recordVideoDir: testInfo.outputPath("native-handoff-video"),
+  });
+  const { electronApp, site } = fixture;
+  const page = await electronApp.firstWindow();
+  const video = page.video();
+  try {
+    await expect(page.locator("html")).toHaveAttribute("data-shell-ready", "true");
+    await electronApp.evaluate((_, url) => {
+      const f = (globalThis as FocusFixtureGlobals).__synaraVisibleBrowserE2E;
+      f.browserManager.open({ threadId: f.threadId });
+      f.browserManager.newTab({ threadId: f.threadId, url });
+      // As in the existing renderer-input fixture, first create the native
+      // runtime, then use the real manager's promotion path to mount its guest.
+      f.setSurface("native");
+      f.setSurface("renderer");
+      f.setPageZoomFactor(0.25);
+    }, site.appUrl);
+    await expect(page.locator("html")).toHaveAttribute("data-webview-attached", "true");
+    const snapshot = () =>
+      page.evaluate(() =>
+        (globalThis as HandoffRendererGlobals).__synaraFloatingHandoffE2E.snapshot(),
+      );
+    await expect.poll(async () => (await snapshot()).chromeId).not.toBeNull();
+    await expect.poll(async () => (await snapshot()).zoom).toBe(0.25);
+    const initial = await snapshot();
+    const guestId = initial.guestId!;
+    const chromeId = initial.chromeId!;
+    const evaluateGuest = (code: string) =>
+      electronApp.evaluate(
+        ({ webContents }, input) => {
+          const guest = webContents.fromId(input.id);
+          if (!guest) throw new Error("Expected the live renderer guest.");
+          return guest.executeJavaScript(input.code);
+        },
+        { id: guestId, code },
+      );
+    const capture = async (name: string) => {
+      const png = await electronApp.evaluate(async ({ BrowserWindow }) =>
+        (await BrowserWindow.getAllWindows()[0]!.capturePage()).toPNG().toString("base64"),
+      );
+      const artifactPath = testInfo.outputPath(`${name}.png`);
+      writeFileSync(artifactPath, Buffer.from(png, "base64"));
+      await testInfo.attach(name, { path: artifactPath, contentType: "image/png" });
+    };
+    const clickChrome = async (buttonId: "drag" | "pop" | "close") => {
+      // Wait for the disclosure to expose its target before sending real native
+      // input. A coordinate click during the width transition can be clipped.
+      await expect
+        .poll(() =>
+          electronApp.evaluate(
+            async ({ webContents }, input) => {
+              const chrome = webContents.fromId(input.id);
+              if (!chrome) throw new Error("Expected the isolated chrome guest.");
+              return chrome.executeJavaScript(`(() => {
+                const button = document.getElementById(${JSON.stringify(input.buttonId)});
+                const rect = button.getBoundingClientRect();
+                const target = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
+                return target?.closest("button") === button;
+              })()`);
+            },
+            { id: chromeId, buttonId },
+          ),
+        )
+        .toBe(true);
+      await electronApp.evaluate(
+        async ({ webContents }, input) => {
+          const chrome = webContents.fromId(input.id);
+          if (!chrome) throw new Error("Expected the isolated chrome guest.");
+          const point = await chrome.executeJavaScript(`(() => {
+          const button = document.getElementById(${JSON.stringify(input.buttonId)});
+          const rect = button.getBoundingClientRect();
+          return { x: Math.round(rect.left + rect.width / 2), y: Math.round(rect.top + rect.height / 2) };
+        })()`);
+          chrome.sendInputEvent({ type: "mouseDown", button: "left", clickCount: 1, ...point });
+          chrome.sendInputEvent({ type: "mouseUp", button: "left", clickCount: 1, ...point });
+        },
+        { id: chromeId, buttonId },
+      );
+    };
+
+    await test.step("loads the real isolated chrome preload and floating page", async () => {
+      expect(initial).toMatchObject({
+        mode: "floating",
+        connected: true,
+        slot: { left: 600, top: 100, width: 320, height: 200 },
+        clipPath: "inset(0px round 16px)",
+      });
+      expect(
+        await electronApp.evaluate(async ({ webContents }, id) => {
+          const chrome = webContents.fromId(id)!;
+          return chrome.executeJavaScript(
+            "({ node: typeof require, bridge: typeof window.synaraFloatingChrome?.send })",
+          );
+        }, chromeId),
+      ).toEqual({ node: "undefined", bridge: "function" });
+      await evaluateGuest(`(() => {
+        window.__floatingHandoffSentinel = "same-live-document";
+        document.querySelector("input").value = "unsaved sidebar draft";
+        window.scrollTo(0, 120);
+      })()`);
+      await capture("floating-before-handoff");
+    });
+
+    await test.step("native chrome opens the sidebar without replacing or navigating the guest", async () => {
+      await clickChrome("drag");
+      await expect.poll(async () => (await snapshot()).messages).toContain("drag");
+      await clickChrome("pop");
+      await expect.poll(async () => (await snapshot()).mode).toBe("sidebar");
+      await electronApp.evaluate(() =>
+        (globalThis as FocusFixtureGlobals).__synaraVisibleBrowserE2E.setPageZoomFactor(1),
+      );
+      expect(await snapshot()).toMatchObject({
+        guestId,
+        navigations: initial.navigations,
+        parkKeptGuest: true,
+        connected: true,
+        zoom: 1,
+        slot: { left: 510, top: 70, width: 460, height: 650 },
+        clipPath: "",
+        guestClipPath: "",
+        guestBorderRadius: "",
+        boxShadow: "",
+      });
+      expect(
+        await evaluateGuest(`({
+        sentinel: window.__floatingHandoffSentinel,
+        draft: document.querySelector("input").value,
+      })`),
+      ).toEqual({
+        sentinel: "same-live-document",
+        draft: "unsaved sidebar draft",
+      });
+      await capture("sidebar-after-handoff");
+    });
+
+    await test.step("round-trips through the same native chrome and disposes a closed guest", async () => {
+      await page.evaluate(() =>
+        (globalThis as HandoffRendererGlobals).__synaraFloatingHandoffE2E.showFloating(),
+      );
+      await electronApp.evaluate(() =>
+        (globalThis as FocusFixtureGlobals).__synaraVisibleBrowserE2E.setPageZoomFactor(0.25),
+      );
+      expect(await snapshot()).toMatchObject({ guestId, chromeId, mode: "floating", zoom: 0.25 });
+      expect(await evaluateGuest("window.__floatingHandoffSentinel")).toBe("same-live-document");
+      await clickChrome("drag");
+      await expect
+        .poll(async () => (await snapshot()).messages.filter((kind) => kind === "drag").length)
+        .toBe(2);
+      await clickChrome("close");
+      await expect.poll(async () => (await snapshot()).mode).toBe("closed");
+      await expect
+        .poll(() =>
+          electronApp.evaluate(
+            ({ webContents }, ids) =>
+              ids.every((id) => {
+                const contents = webContents.fromId(id);
+                return !contents || contents.isDestroyed();
+              }),
+            [guestId, chromeId],
+          ),
+        )
+        .toBe(true);
+      await capture("after-close");
+    });
+  } finally {
+    await fixture.close();
+    if (video)
+      await testInfo.attach("native-handoff-interaction", {
+        path: await video.path(),
+        contentType: "video/webm",
+      });
+  }
+});
 
 test("preserves composer keyboard ownership while hovering two background browsers", async () => {
   const fixture = await launchVisibleBrowserFixture();

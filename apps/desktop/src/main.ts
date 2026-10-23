@@ -340,7 +340,8 @@ import {
   MAX_MICROPHONE_ID_LENGTH,
 } from "./audioLevelMonitor";
 import { AUDIO_TRAIL_BETA_FEATURE, isBetaFeatureEnabled } from "@synara/shared/betaFeatures";
-import { hardenBrowserAnnotationWebviewPreferences } from "./browserAnnotations/webviewSecurity";
+import { FLOATING_BROWSER_CHROME_PARTITION } from "@synara/shared/browserSession";
+import { hardenIsolatedWebviewPreferences } from "./browserAnnotations/webviewSecurity";
 import { LOCAL_HTML_PREVIEW_SCHEME } from "./localHtmlPreviewProtocol";
 import {
   APP_SNAP_SETTINGS_PANE_URLS,
@@ -590,6 +591,7 @@ let unreadBackgroundNotificationCount = 0;
 const desktopNotificationRetainer = createDesktopNotificationRetainer<Notification>();
 let browserPerfInterval: ReturnType<typeof setInterval> | null = null;
 const annotationGuestPreload = Path.join(__dirname, "guestPreload.js");
+const floatingChromePreload = Path.join(__dirname, "floatingBrowserChromePreload.js");
 const browserOsKeyStore = {
   available: async () => {
     await app.whenReady();
@@ -5717,9 +5719,24 @@ function createWindow(): BrowserWindow {
 
   window.webContents.on("will-attach-webview", (event, webPreferences, params) => {
     const partition = params.partition;
+    if (partition === FLOATING_BROWSER_CHROME_PARTITION) {
+      if (
+        !hardenIsolatedWebviewPreferences({
+          partition,
+          expectedPartition: FLOATING_BROWSER_CHROME_PARTITION,
+          preloadPath: floatingChromePreload,
+          webPreferences,
+        })
+      ) {
+        event.preventDefault();
+        return;
+      }
+      webPreferences.backgroundThrottling = false;
+      return;
+    }
     if (
       partition === undefined ||
-      !hardenBrowserAnnotationWebviewPreferences({
+      !hardenIsolatedWebviewPreferences({
         partition,
         expectedPartition: BROWSER_SESSION_PARTITION,
         preloadPath: annotationGuestPreload,
