@@ -104,7 +104,7 @@ function projectData(thread: SidebarThreadSummary): SidebarDerivedProjectData {
     allProjectThreadCount: 1,
     projectThreads: [thread],
     orderedProjectThreadIds: [thread.id],
-    visibleEntries: [{ kind: "thread", rowId: thread.id, rootRowId: thread.id, thread, depth: 0 }],
+    visibleEntries: [{ kind: "thread", rowId: thread.id, thread }],
     threadListExtraPages: 0,
     canShowMoreThreads: false,
     canShowLessThreads: false,
@@ -144,8 +144,12 @@ function Harness(props: { threadsHydrated: boolean; callbacks: Callbacks }) {
         projectSidebarDataById={props.callbacks.dataById}
         threadsHydrated={props.threadsHydrated}
         visualActiveThreadId={null}
-        threadSortOrder="updated_at"
-        onThreadSortOrderChange={() => {}}
+        threadSortMenuProps={{
+          threadSortOrder: "updated_at",
+          onThreadSortOrderChange: () => {},
+          threadAttentionFirst: true,
+          onThreadAttentionFirstChange: () => {},
+        }}
         renderThreadRow={(thread) => (
           <li key={thread.id} data-testid={`thread-row-${thread.id}`}>
             {thread.title}

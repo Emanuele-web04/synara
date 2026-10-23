@@ -25,10 +25,13 @@ import {
 import {
   decodeFrameResyncRequest,
   makeFrameSink,
+  type FrameByteStream,
   type FrameSink,
 } from "@synara/shared/frameTransport";
 import { Effect, Layer } from "effect";
 import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
+
+import { frameSocketByteStream } from "../frameSocketByteStream.ts";
 
 import { DeviceService } from "./Services/DeviceService.ts";
 import type { DeviceFrameSink } from "./deviceFrameTransport.ts";
@@ -58,6 +61,7 @@ export interface DeviceFrameSocketWriter {
 export function makeDeviceFrameSink(options: {
   readonly send: (bytes: Uint8Array) => Promise<void> | void;
   readonly isOpen: () => boolean;
+  readonly byteStream?: FrameByteStream | undefined;
 }): DeviceFrameSink {
   return makeFrameSink(options);
 }
@@ -97,12 +101,15 @@ export function makeDeviceFrameRouteLayer<R = never>(options: {
             return HttpServerResponse.text("Forbidden", { status: 403 });
           }
 
+          // Read before the upgrade hands the socket to the WebSocket layer.
+          const byteStream = frameSocketByteStream(request);
           const socket = yield* request.upgrade;
           const writer = yield* socket.writer;
           let open = true;
           const sink = makeDeviceFrameSink({
             send: (bytes) => Effect.runPromise(writer(bytes)).catch(() => undefined),
             isOpen: () => open,
+            byteStream,
           });
           const unsubscribe = deviceService.value.manager.subscribeFrames(udid, sink);
           yield* Effect.addFinalizer(() =>

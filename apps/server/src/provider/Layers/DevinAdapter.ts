@@ -740,7 +740,9 @@ function readDevinProviderStartOptions(providerOptions: unknown):
   };
 }
 
-function parseDevinResume(resumeCursor: unknown): { readonly sessionId: string } | undefined {
+function parseDevinResume(
+  resumeCursor: unknown,
+): { readonly sessionId: string; readonly model?: string } | undefined {
   if (!isRecord(resumeCursor)) {
     return undefined;
   }
@@ -753,7 +755,8 @@ function parseDevinResume(resumeCursor: unknown): { readonly sessionId: string }
   ) {
     return undefined;
   }
-  return { sessionId: sessionId.trim() };
+  const model = typeof resumeCursor.model === "string" ? resumeCursor.model.trim() : "";
+  return { sessionId: sessionId.trim(), ...(model ? { model } : {}) };
 }
 
 function normalizeModeToken(value: string): string {
@@ -2556,7 +2559,8 @@ export function makeDevinAdapter(
           );
 
           let ctx!: DevinSessionContext;
-          const resumeSessionId = parseDevinResume(input.resumeCursor)?.sessionId;
+          const resume = parseDevinResume(input.resumeCursor);
+          const resumeSessionId = resume?.sessionId;
           const acpNativeLoggers = makeAcpNativeLoggers({
             nativeEventLogger,
             provider: PROVIDER,
@@ -2597,6 +2601,30 @@ export function makeDevinAdapter(
               ? { environment: configuredEnvironment }
               : {}),
           };
+
+          // `devin acp --model` only applies to new sessions: session/load keeps
+          // the model the native session was created with. Reloading a session
+          // created for another model (or one whose cursor predates recording
+          // it) would keep running the old one, e.g. a Fast variant after Fast
+          // was turned off. Report the cursor as unusable so ProviderService
+          // starts a fresh session and carries the transcript instead.
+          if (
+            resume !== undefined &&
+            effectiveModel !== undefined &&
+            resume.model !== effectiveModel
+          ) {
+            yield* Effect.logInfo("devin.acp.resume.model-mismatch", {
+              threadId: input.threadId,
+              resumedModel: resume.model,
+              model: effectiveModel,
+            });
+            return yield* new ProviderAdapterProcessError({
+              provider: PROVIDER,
+              threadId: input.threadId,
+              detail: `Devin session '${resume.sessionId}' runs on ${resume.model ? `model '${resume.model}'` : "an unrecorded model"}, not '${effectiveModel}'.`,
+              reason: "resume-state-unavailable",
+            });
+          }
 
           yield* Effect.logInfo("devin.acp.start", {
             marker: DEVIN_ACP_TRANSPORT_DEBUG_MARKER,
@@ -2926,6 +2954,10 @@ export function makeDevinAdapter(
 
           const resumeReplayReady =
             resumeSessionId !== undefined ? yield* Deferred.make<void>() : undefined;
+          const nativeModel =
+            resume !== undefined && started.sessionId === resume.sessionId
+              ? resume.model
+              : effectiveModel;
           const sessionConfigReady = yield* Deferred.make<void>();
           const now = yield* nowIso;
           const session: ProviderSession = {
@@ -2943,6 +2975,9 @@ export function makeDevinAdapter(
             resumeCursor: {
               schemaVersion: DEVIN_RESUME_VERSION,
               sessionId: started.sessionId,
+              // The model this native session actually runs on, so a later
+              // restart can tell whether reloading it would honor `--model`.
+              ...(nativeModel !== undefined ? { model: nativeModel } : {}),
             },
             createdAt: now,
             updatedAt: now,
@@ -4344,16 +4379,18 @@ export function makeDevinAdapter(
       providerThreadId,
     ) =>
       Effect.gen(function* () {
-        const cancelledRecovery = yield* cancelWedgeRecovery(threadId, turnId);
-        const ctx = sessions.get(threadId);
-        // The caller may still know only the original turn during restart.
-        if (cancelledRecovery && (!ctx || (turnId !== undefined && ctx.activeTurnId !== turnId)))
-          return;
+        // A targeted child stop must never cancel its parent's pending recovery.
+        // If the shared runtime is unavailable, preserve that failure for the UI.
         if (providerThreadId !== undefined) {
           const active = yield* requireSession(threadId);
           yield* stopDevinSubagentInternal(active, providerThreadId, turnId);
           return;
         }
+        const cancelledRecovery = yield* cancelWedgeRecovery(threadId, turnId);
+        const ctx = sessions.get(threadId);
+        // The caller may still know only the original turn during restart.
+        if (cancelledRecovery && (!ctx || (turnId !== undefined && ctx.activeTurnId !== turnId)))
+          return;
         yield* interruptDevinTurn(threadId, turnId);
       });
 

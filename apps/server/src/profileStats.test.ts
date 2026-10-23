@@ -82,11 +82,19 @@ describe("ProfileStatsQuery", () => {
             ${parentThreadId}, ${creationSource}, ${sourceTurnId})
         `;
         }
-        const addActivity = (id: string, threadId: string, turnId: string, payload: object) => sql`
+        // A subagent is judged against the parent results that follow it, so
+        // rows carry the order they would have had in a real session.
+        const addActivity = (
+          id: string,
+          threadId: string,
+          turnId: string,
+          payload: object,
+          createdAt = "2026-09-10T12:00:00Z",
+        ) => sql`
         INSERT INTO projection_thread_activities
           (activity_id, thread_id, turn_id, tone, kind, summary, payload_json, sequence, created_at)
         VALUES (${id}, ${threadId}, ${turnId}, 'info', 'turn.completed', 'done',
-          ${JSON.stringify(payload)}, ${Number(id)}, '2026-09-10T12:00:00Z')
+          ${JSON.stringify(payload)}, ${Number(id)}, ${createdAt})
       `;
         const versioned = {
           tokenAccountingVersion: 1,
@@ -113,26 +121,34 @@ describe("ProfileStatsQuery", () => {
             },
           },
         };
-        yield* addActivity("1", "root", "first", versioned);
-        yield* addActivity("2", "root", "first", versioned);
-        yield* addActivity("3", "mirrored-child", "mirrored", versioned);
+        // Same-time child completion is covered even when its own sequence is larger
+        // than the parent result: sequence numbers belong to different threads.
+        yield* addActivity("1", "root", "first", versioned, "2026-09-10T11:00:00Z");
+        yield* addActivity("2", "root", "first", versioned, "2026-09-10T11:00:00Z");
+        yield* addActivity("3", "mirrored-child", "mirrored", versioned, "2026-09-10T11:00:00Z");
         yield* addActivity("4", "root", "legacy", { modelUsage: versioned.modelUsage });
         yield* addActivity("5", "root", "unrecoverable", { modelUsage: versioned.modelUsage });
         // An earlier private build emitted a compact shape whose input already
         // included cache tokens. Its explicit total remains authoritative.
-        yield* addActivity("6", "root", "compact", {
-          tokenAccountingVersion: 1,
-          mainLoopTokens: 1_000,
-          modelUsage: {
-            "claude-fable-5": {
-              inputTokens: 900,
-              outputTokens: 100,
-              totalTokens: 1_000,
-              cacheReadInputTokens: 800,
-              cacheCreationInputTokens: 60,
+        yield* addActivity(
+          "6",
+          "root",
+          "compact",
+          {
+            tokenAccountingVersion: 1,
+            mainLoopTokens: 1_000,
+            modelUsage: {
+              "claude-fable-5": {
+                inputTokens: 900,
+                outputTokens: 100,
+                totalTokens: 1_000,
+                cacheReadInputTokens: 800,
+                cacheCreationInputTokens: 60,
+              },
             },
           },
-        });
+          "2026-09-10T12:30:00Z",
+        );
         // A malformed nonempty breakdown must not suppress the verified
         // main-loop fallback or make SQLite JSON functions fail.
         yield* addActivity("7", "root", "fallback", {
@@ -143,17 +159,23 @@ describe("ProfileStatsQuery", () => {
         yield* addActivity("8", "independent-child", "independent", versioned);
         // A previous parent turn with a complete breakdown must not suppress a
         // later provider-native child whose own parent turn was interrupted.
-        yield* addActivity("9-parent", "uncovered-parent", "previous-parent-turn", {
-          tokenAccountingVersion: 1,
-          modelUsage: {
-            "claude-fable-5": {
-              inputTokens: 2_000,
-              outputTokens: 1_000,
-              cacheReadInputTokens: 0,
-              cacheCreationInputTokens: 0,
+        yield* addActivity(
+          "9-parent",
+          "uncovered-parent",
+          "previous-parent-turn",
+          {
+            tokenAccountingVersion: 1,
+            modelUsage: {
+              "claude-fable-5": {
+                inputTokens: 2_000,
+                outputTokens: 1_000,
+                cacheReadInputTokens: 0,
+                cacheCreationInputTokens: 0,
+              },
             },
           },
-        });
+          "2026-09-10T11:00:00Z",
+        );
         // Malformed historical payloads are ignored by the fallback probe
         // instead of making the entire Profile query fail.
         yield* sql`
@@ -183,12 +205,15 @@ describe("ProfileStatsQuery", () => {
           tokenAccountingVersion: 1,
           mainLoopTokens: 700,
         });
-        // A scalar model entry in the matching parent is unusable, and must not
-        // fail the SQLite query or suppress this child's valid fallback.
-        yield* addActivity("9-scalar-parent-child", "scalar-parent-child", "scalar-child-turn", {
-          tokenAccountingVersion: 1,
-          mainLoopTokens: 400,
-        });
+        // A scalar model entry in the parent result that follows is unusable,
+        // and must not fail the SQLite query or suppress this child's fallback.
+        yield* addActivity(
+          "9-scalar-parent-child",
+          "scalar-parent-child",
+          "scalar-child-turn",
+          { tokenAccountingVersion: 1, mainLoopTokens: 400 },
+          "2026-09-10T11:59:00Z",
+        );
         // A malformed numeric field must not make a parent look usable and
         // suppress the child's valid usage.
         yield* sql`

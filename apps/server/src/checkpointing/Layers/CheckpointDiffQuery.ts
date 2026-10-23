@@ -12,6 +12,7 @@ import {
   checkpointRefForThreadTurn,
   checkpointRefForThreadTurnInManagedFamily,
   checkpointRefForThreadTurnStart,
+  checkpointRefForThreadTurnLive,
   checkpointRefForThreadTurnStartInManagedFamily,
   resolveThreadWorkspaceCwd,
 } from "../Utils.ts";
@@ -64,6 +65,7 @@ const make = Effect.gen(function* () {
 
       const threadContext = yield* projectionSnapshotQuery.getThreadCheckpointContext(
         input.threadId,
+        { includeLiveCheckpoints: true },
       );
       if (Option.isNone(threadContext)) {
         return yield* new CheckpointInvariantError({
@@ -123,7 +125,25 @@ const make = Effect.gen(function* () {
           : threadContext.value.checkpoints.find(
               (checkpoint) => checkpoint.checkpointTurnCount === input.fromTurnCount,
             );
-      if (fromCheckpoint?.status === "missing") {
+      const isLiveSnapshot =
+        toCheckpoint.status === "missing" &&
+        toCheckpoint.checkpointRef.startsWith("provider-diff:") &&
+        input.toTurnCount === input.fromTurnCount + 1;
+      // An interrupted turn may have a captured canonical ref while retaining
+      // status missing. Its exact start/ref pair remains a readable single turn.
+      const isCapturedInterruptedSnapshot =
+        toCheckpoint.status === "missing" &&
+        input.toTurnCount === input.fromTurnCount + 1 &&
+        checkpointRefForThreadTurnInManagedFamily(
+          toCheckpoint.checkpointRef,
+          input.threadId,
+          input.toTurnCount,
+        ) === toCheckpoint.checkpointRef;
+      if (
+        fromCheckpoint?.status === "missing" &&
+        !isLiveSnapshot &&
+        !isCapturedInterruptedSnapshot
+      ) {
         return yield* new CheckpointUnavailableError({
           threadId: input.threadId,
           turnCount: input.fromTurnCount,
@@ -138,9 +158,11 @@ const make = Effect.gen(function* () {
         )
         .find((checkpointRef) => checkpointRef !== null);
       let fromCheckpointRef =
-        input.fromTurnCount === 0
-          ? (earliestManagedBaselineRef ?? checkpointRefForThreadTurn(input.threadId, 0))
-          : fromCheckpoint?.checkpointRef;
+        isLiveSnapshot || isCapturedInterruptedSnapshot
+          ? checkpointRefForThreadTurnStart(input.threadId, toCheckpoint.turnId)
+          : input.fromTurnCount === 0
+            ? (earliestManagedBaselineRef ?? checkpointRefForThreadTurn(input.threadId, 0))
+            : fromCheckpoint?.checkpointRef;
       if (!fromCheckpointRef) {
         return yield* new CheckpointUnavailableError({
           threadId: input.threadId,
@@ -149,28 +171,44 @@ const make = Effect.gen(function* () {
         });
       }
 
-      const toCheckpointRef = toCheckpoint.checkpointRef;
-      if (toCheckpoint.status === "missing") {
+      const toCheckpointRef = isLiveSnapshot
+        ? checkpointRefForThreadTurnLive(
+            input.threadId,
+            toCheckpoint.turnId,
+            toCheckpoint.checkpointRef.slice("provider-diff:".length),
+          )
+        : toCheckpoint.checkpointRef;
+      const turnStartCheckpointRef =
+        checkpointRefForThreadTurnStartInManagedFamily(
+          toCheckpointRef,
+          input.threadId,
+          toCheckpoint.turnId,
+        ) ?? checkpointRefForThreadTurnStart(input.threadId, toCheckpoint.turnId);
+      const turnStartExists =
+        input.toTurnCount === input.fromTurnCount + 1
+          ? yield* checkpointStore.hasCheckpointRef({
+              cwd: workspaceCwd,
+              checkpointRef: turnStartCheckpointRef,
+            })
+          : false;
+      // Missing metadata alone never proves a patch: both an exact turn baseline
+      // and its immutable live/captured ref must exist. Never read today's tree.
+      const missingSnapshotExists =
+        isLiveSnapshot || isCapturedInterruptedSnapshot
+          ? yield* checkpointStore.hasCheckpointRef({
+              cwd: workspaceCwd,
+              checkpointRef: toCheckpointRef,
+            })
+          : false;
+      if (toCheckpoint.status === "missing" && (!turnStartExists || !missingSnapshotExists)) {
         return yield* new CheckpointUnavailableError({
           threadId: input.threadId,
           turnCount: input.toTurnCount,
           detail: `Checkpoint diff is not available yet for turn ${input.toTurnCount}.`,
         });
       }
-      if (input.toTurnCount === input.fromTurnCount + 1) {
-        const turnStartCheckpointRef =
-          checkpointRefForThreadTurnStartInManagedFamily(
-            toCheckpointRef,
-            input.threadId,
-            toCheckpoint.turnId,
-          ) ?? checkpointRefForThreadTurnStart(input.threadId, toCheckpoint.turnId);
-        const turnStartExists = yield* checkpointStore.hasCheckpointRef({
-          cwd: workspaceCwd,
-          checkpointRef: turnStartCheckpointRef,
-        });
-        if (turnStartExists) {
-          fromCheckpointRef = turnStartCheckpointRef;
-        }
+      if (turnStartExists) {
+        fromCheckpointRef = turnStartCheckpointRef;
       }
 
       const diff = yield* checkpointStore.diffCheckpoints({

@@ -1,3 +1,4 @@
+import { inlineVisualFilePath } from "../../inlineVisualStore.ts";
 import { ProjectionThreadMessageRepository } from "../../persistence/Services/ProjectionThreadMessages.ts";
 import { ProjectionThreadMessageRepositoryLive } from "../../persistence/Layers/ProjectionThreadMessages.ts";
 import {
@@ -4435,6 +4436,21 @@ it.layer(
       yield* fileSystem.writeFileString(otherThreadAttachmentPath, "other-thread");
       assert.isTrue(yield* exists(threadAttachmentPath));
       assert.isTrue(yield* exists(otherThreadAttachmentPath));
+      // Inline visuals sit in a per-thread folder the root scan never visits.
+      const threadVisualPath = inlineVisualFilePath({
+        attachmentsDir,
+        threadId,
+        visualId: `vis_${"a".repeat(32)}`,
+      })!;
+      const otherThreadVisualPath = inlineVisualFilePath({
+        attachmentsDir,
+        threadId: "thread-delete-files-extra",
+        visualId: `vis_${"b".repeat(32)}`,
+      })!;
+      for (const visualPath of [threadVisualPath, otherThreadVisualPath]) {
+        yield* fileSystem.makeDirectory(path.dirname(visualPath), { recursive: true });
+        yield* fileSystem.writeFileString(visualPath, "<svg></svg>");
+      }
 
       yield* appendAndProject({
         type: "thread.deleted",
@@ -4454,6 +4470,8 @@ it.layer(
 
       assert.isFalse(yield* exists(threadAttachmentPath));
       assert.isTrue(yield* exists(otherThreadAttachmentPath));
+      assert.isFalse(yield* exists(path.dirname(threadVisualPath)));
+      assert.isTrue(yield* exists(otherThreadVisualPath));
     }),
   );
 });
@@ -5777,6 +5795,47 @@ it.layer(
         },
       ]);
     }),
+  );
+
+  it.effect(
+    "reopens an interrupted turn's completion timestamp when live ownership is restored",
+    () =>
+      Effect.gen(function* () {
+        const eventStore = yield* OrchestrationEventStore;
+        const projectionPipeline = yield* OrchestrationProjectionPipeline;
+        const sql = yield* SqlClient.SqlClient;
+        const threadId = ThreadId.makeUnsafe("thread-live-realignment");
+        const turnId = TurnId.makeUnsafe("turn-live-realignment");
+        const append = makeScenarioAppender(
+          makeAppendAndProject(eventStore, projectionPipeline),
+          "live-realignment",
+        );
+        for (const [index, status] of (["running", "interrupted", "running"] as const).entries()) {
+          const updatedAt = `2026-09-11T20:0${index}:00.000Z`;
+          yield* append({
+            type: "thread.session-set",
+            aggregateKind: "thread",
+            aggregateId: threadId,
+            occurredAt: updatedAt,
+            payload: {
+              threadId,
+              session: {
+                threadId,
+                status,
+                providerName: "codex",
+                runtimeMode: "full-access",
+                activeTurnId: status === "running" ? turnId : null,
+                lastError: null,
+                updatedAt,
+              },
+            },
+          });
+        }
+        assert.deepEqual(
+          yield* sql`SELECT state, completed_at AS "completedAt", started_at AS "startedAt" FROM projection_turns WHERE thread_id = ${threadId}`,
+          [{ state: "running", completedAt: null, startedAt: "2026-09-11T20:00:00.000Z" }],
+        );
+      }),
   );
 
   it.effect("projects steer dispatch mode onto the triggering user message", () =>

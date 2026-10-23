@@ -1,6 +1,6 @@
 {
   "name": "@synara/cli",
-  "version": "1.0.3",
+  "version": "1.0.7",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -33,6 +33,7 @@
     "@earendil-works/pi-coding-agent": "^0.87.1",
     "@effect/platform-node": "catalog:",
     "@effect/sql-sqlite-bun": "catalog:",
+    "@modelcontextprotocol/sdk": "1.29.0",
     "@opencode-ai/sdk": "1.18.31",
     "@opencode/client": "2.0.25",
     "@pierre/diffs": "^1.2.12",
@@ -41,6 +42,7 @@
     "node-pty": "^1.1.0",
     "open": "^10.1.0",
     "smol-toml": "^1.7.0",
+    "typescript": "catalog:",
     "ws": "^8.21.0",
     "yaml": "^2.8.3",
     "zod": "4.3.6"
@@ -55,7 +57,6 @@
     "@types/node": "catalog:",
     "@types/ws": "^8.5.13",
     "tsdown": "catalog:",
-    "typescript": "catalog:",
     "vitest": "catalog:"
   },
   "engines": {

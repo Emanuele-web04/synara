@@ -4,13 +4,15 @@
 // Exports: row derivation, structural sharing, copy/timer helpers
 
 import {
+  type InlineVisualActivityPayload,
   type MessageId,
   type OrchestrationLatestTurn,
   type OrchestrationThreadActivity,
   type TurnId,
 } from "@synara/contracts";
+import { readInlineVisualEmbedIds } from "@synara/shared/inlineVisual";
 import { type TimelineEntry, type WorkLogEntry, formatElapsed } from "../../session-logic";
-import type { WorkLogUserInputExchangeItem } from "../../workLog";
+import { isCodexRuntimeWarningType, type WorkLogUserInputExchangeItem } from "../../workLog";
 import { normalizeCompactToolLabel as normalizeCompactToolLabelValue } from "../../lib/toolCallLabel";
 import { isCodexActivityStatusWorkEntry } from "./agentActivity.logic";
 import {
@@ -599,6 +601,9 @@ export type MessagesTimelineRow =
       // Set on the terminal assistant, or the request if an interrupted turn
       // produced no assistant/work rows.
       turnHeader?: TurnHeader;
+      // Set when a kept visual row opens the response and renders this header,
+      // so the header sits above the visuals and the answer instead of between.
+      turnHeaderRowId?: string;
       // Set on the last row of a stopped turn that has no settled header.
       turnEndMarker?: TurnEndMarker;
       durationStart: string;
@@ -633,6 +638,20 @@ export type MessagesTimelineRow =
       id: string;
       createdAt: string;
       entry: WorkLogEntry & { userInputExchange: ReadonlyArray<WorkLogUserInputExchangeItem> };
+    }
+  | {
+      // A visual the agent published with `synara_show_visual`. Like the plan
+      // card and answered questions it stays visible when the turn folds.
+      kind: "inline-visual";
+      id: string;
+      createdAt: string;
+      visual: InlineVisualActivityPayload;
+      turnId?: TurnId;
+      // The settled terminal message whose turn header this row renders above
+      // its visual: set on the first visual a settled turn keeps.
+      turnHeaderSource?: Extract<MessagesTimelineRow, { kind: "message" }>;
+      // Set when a stopped turn without a settled header ends on this visual.
+      turnEndMarker?: TurnEndMarker;
     }
   | { kind: "working"; id: string; createdAt: string | null }
   | {
@@ -691,7 +710,10 @@ export function resolveWorkEntryJumpTarget(
         (item) => item.kind === "work" && item.entry.id === entryId,
       )
     ) {
-      return { rowIndex, expandCollapsedWorkMessageId: row.message.id };
+      return {
+        rowIndex: turnHeaderRowIndex(rows, rowIndex),
+        expandCollapsedWorkMessageId: row.message.id,
+      };
     }
   }
   return null;
@@ -740,7 +762,7 @@ export function resolveThreadFindJumpTarget(
       continue;
     }
     return {
-      rowIndex,
+      rowIndex: turnHeaderRowIndex(rows, rowIndex),
       visibleMessageId: row.message.id,
       expandCollapsedWorkMessageId: row.message.id,
       collapsedNarrationMessageId: messageId,
@@ -748,6 +770,16 @@ export function resolveThreadFindJumpTarget(
   }
 
   return null;
+}
+
+// The row that renders a settled message's turn header, and so its folded
+// work: the message's own row, or the first visual its turn kept.
+function turnHeaderRowIndex(rows: readonly MessagesTimelineRow[], messageRowIndex: number): number {
+  const row = rows[messageRowIndex];
+  const headerRowId = row?.kind === "message" ? row.turnHeaderRowId : undefined;
+  if (headerRowId === undefined) return messageRowIndex;
+  const headerRowIndex = rows.findIndex((candidate) => candidate.id === headerRowId);
+  return headerRowIndex >= 0 ? headerRowIndex : messageRowIndex;
 }
 
 export function computeMessageDurationStart(
@@ -954,16 +986,28 @@ export function deriveTerminalAssistantMessageIds(
   return terminalAssistantMessageIds;
 }
 
-// Server-posted coordinator notices and provider handoff boundaries keep their own
-// row: they are not turn work, so they never merge into or fold with a turn.
+// Thread-scoped notices and provider handoff boundaries keep their own row:
+// they are not turn work, so they never merge into or fold with a turn.
 export function isStandaloneWorkEntry(
   entry: Pick<
     WorkLogEntry,
-    "synaraWorkerNotice" | "providerHandoff" | "turnFailure" | "subagentRun"
+    | "synaraWorkerNotice"
+    | "providerHandoff"
+    | "turnFailure"
+    | "subagentRun"
+    | "activityKind"
+    | "nativeEventType"
+    | "turnId"
   >,
 ): boolean {
   return Boolean(
-    entry.synaraWorkerNotice || entry.providerHandoff || entry.turnFailure || entry.subagentRun,
+    entry.synaraWorkerNotice ||
+    entry.providerHandoff ||
+    entry.turnFailure ||
+    entry.subagentRun ||
+    (entry.activityKind === "runtime.warning" &&
+      entry.turnId == null &&
+      isCodexRuntimeWarningType(entry.nativeEventType)),
   );
 }
 
@@ -991,6 +1035,7 @@ export function deriveMessagesTimelineRows(input: {
   conversationOnly?: boolean;
 }): MessagesTimelineRow[] {
   const nextRows: MessagesTimelineRow[] = [];
+  const embeddedVisualOwners = collectInlineVisualEmbedOwners(input.timelineEntries);
   // A finished background task wakes the agent into a new response, so it ends
   // the previous response and starts the next one's clock like a user message.
   const responseMessages = input.timelineEntries.flatMap((entry): TimelineDurationMessage[] =>
@@ -1094,6 +1139,29 @@ export function deriveMessagesTimelineRows(input: {
               groupedEntries: [runEntry.entry],
             });
           }
+          continue;
+        }
+        const inlineVisual = runEntry.entry.inlineVisual;
+        if (inlineVisual) {
+          // A visual the reply places renders inside that message. One the
+          // running turn has not placed yet waits for its reply instead of
+          // showing above it and then jumping into the text.
+          if (
+            embeddedVisualOwners.has(inlineVisual.visualId) ||
+            (input.activeTurnInProgress === true &&
+              runEntry.entry.turnId != null &&
+              runEntry.entry.turnId === input.activeTurnId)
+          ) {
+            continue;
+          }
+          flushPendingWorkGroup({ attachToPreviousAssistant: false });
+          nextRows.push({
+            kind: "inline-visual",
+            id: runEntry.id,
+            createdAt: runEntry.createdAt,
+            visual: inlineVisual,
+            ...(runEntry.entry.turnId ? { turnId: runEntry.entry.turnId } : {}),
+          });
           continue;
         }
         const userInputExchange = runEntry.entry.userInputExchange;
@@ -1297,6 +1365,9 @@ function markInterruptedTurnsWithoutHeader(
       for (const entry of row.groupedEntries) {
         if (entry.turnId) lastRowIndexByTurnId.set(entry.turnId, index);
       }
+    } else if (row.kind === "inline-visual" && row.turnId) {
+      // A visual published before the stop still belongs above the stop line.
+      lastRowIndexByTurnId.set(row.turnId, index);
     } else if (
       row.kind === "message" &&
       row.message.role === "user" &&
@@ -1311,7 +1382,7 @@ function markInterruptedTurnsWithoutHeader(
     const timing = turnTimingByTurnId.get(turnId);
     if (!timing || (!timing.interrupted && !timing.failed) || headedTurnIds.has(turnId)) continue;
     const row = rows[index]!;
-    if (row.kind !== "work" && row.kind !== "message") continue;
+    if (row.kind !== "work" && row.kind !== "message" && row.kind !== "inline-visual") continue;
     row.turnEndMarker = {
       elapsed:
         timing.startedAt && timing.completedAt
@@ -1492,6 +1563,8 @@ function collapseSettledTurns(
     // mini-turns can have distinct turnIds inside one assistant answer, so the
     // user message boundary is the stable UI grouping point.
     const foldIndices: number[] = [];
+    // Scanning backwards, so this ends as the earliest visual the turn keeps.
+    let firstKeptVisual: Extract<MessagesTimelineRow, { kind: "inline-visual" }> | null = null;
     let wokenAt: string | null = null;
     let resumedBy: TurnResumedBy[] | null = null;
     for (let scan = pass - 1; scan >= 0; scan -= 1) {
@@ -1524,9 +1597,14 @@ function collapseSettledTurns(
         foldIndices.push(scan);
         continue;
       }
-      if (prev.kind === "proposed-plan" || prev.kind === "user-input") {
-        // The plan card and answered questions stay visible, but they should not strand earlier
-        // narration/work outside the final turn header disclosure.
+      if (
+        prev.kind === "proposed-plan" ||
+        prev.kind === "user-input" ||
+        prev.kind === "inline-visual"
+      ) {
+        // The plan card, answered questions, and visuals stay visible, but they should not
+        // strand earlier narration/work outside the final turn header disclosure.
+        if (prev.kind === "inline-visual") firstKeptVisual = prev;
         continue;
       }
       break;
@@ -1658,6 +1736,12 @@ function collapseSettledTurns(
       continue;
     }
     row.turnHeader = header;
+    if (firstKeptVisual) {
+      // The header opens the whole response; kept visuals belong to the answer
+      // below it. Their row renders it, so a live frame never changes parent.
+      row.turnHeaderRowId = firstKeptVisual.id;
+      firstKeptVisual.turnHeaderSource = row;
+    }
     if (collapsedItems.length > 0) {
       row.collapsedTurnItems = collapsedItems;
       delete row.leadingWorkEntries;
@@ -2046,6 +2130,17 @@ function isRowUnchanged(a: MessagesTimelineRow, b: MessagesTimelineRow): boolean
     case "user-input":
       return a.entry.userInputExchange === (b as typeof a).entry.userInputExchange;
 
+    case "inline-visual": {
+      const bv = b as typeof a;
+      return (
+        a.visual === bv.visual &&
+        turnEndMarkersEqual(a.turnEndMarker, bv.turnEndMarker) &&
+        (a.turnHeaderSource === undefined || bv.turnHeaderSource === undefined
+          ? a.turnHeaderSource === bv.turnHeaderSource
+          : isRowUnchanged(a.turnHeaderSource, bv.turnHeaderSource))
+      );
+    }
+
     case "work":
       return (
         a.createdAt === (b as typeof a).createdAt &&
@@ -2063,6 +2158,7 @@ function isRowUnchanged(a: MessagesTimelineRow, b: MessagesTimelineRow): boolean
         a.inlineWorkGroupId === bm.inlineWorkGroupId &&
         collapsedTurnItemsEqual(a.collapsedTurnItems, bm.collapsedTurnItems) &&
         turnHeadersEqual(a.turnHeader, bm.turnHeader) &&
+        a.turnHeaderRowId === bm.turnHeaderRowId &&
         turnEndMarkersEqual(a.turnEndMarker, bm.turnEndMarker) &&
         a.durationStart === bm.durationStart &&
         a.showAssistantCopyButton === bm.showAssistantCopyButton &&
@@ -2078,4 +2174,43 @@ function isRowUnchanged(a: MessagesTimelineRow, b: MessagesTimelineRow): boolean
       return a.message === bm.message && a.segmentIndex === bm.segmentIndex;
     }
   }
+}
+
+/** Every visual the transcript holds, by id, for replies that place them in their text. */
+export function collectInlineVisuals(
+  timelineEntries: ReadonlyArray<TimelineEntry>,
+): ReadonlyMap<string, InlineVisualActivityPayload> {
+  const visuals = new Map<string, InlineVisualActivityPayload>();
+  for (const entry of timelineEntries) {
+    if (entry.kind === "work" && entry.entry.inlineVisual) {
+      visuals.set(entry.entry.inlineVisual.visualId, entry.entry.inlineVisual);
+    }
+  }
+  return visuals;
+}
+
+/** Only the last visible assistant reply in the publishing turn can place its visual. */
+export function collectInlineVisualEmbedOwners(
+  entries: ReadonlyArray<TimelineEntry>,
+): ReadonlyMap<string, string> {
+  const turnByVisual = new Map<string, string>();
+  const replyByTurn = new Map<string, { id: string; text: string }>();
+  for (const entry of entries) {
+    if (entry.kind === "work" && entry.entry.inlineVisual && entry.entry.turnId) {
+      turnByVisual.set(entry.entry.inlineVisual.visualId, entry.entry.turnId);
+    } else if (
+      (entry.kind === "message" || entry.kind === "message-segment") &&
+      entry.message.role === "assistant" &&
+      entry.message.turnId
+    ) {
+      replyByTurn.set(entry.message.turnId, entry.message);
+    }
+  }
+  const owners = new Map<string, string>();
+  for (const [turnId, reply] of replyByTurn) {
+    for (const id of readInlineVisualEmbedIds(reply.text)) {
+      if (turnByVisual.get(id) === turnId) owners.set(id, reply.id);
+    }
+  }
+  return owners;
 }

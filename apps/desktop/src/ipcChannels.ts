@@ -58,6 +58,10 @@ export const DESKTOP_IPC_CHANNELS = {
   wsUrl: "desktop:get-ws-url",
   transcribeVoice: "desktop:server-transcribe-voice",
   computerPreviewFrame: "computerPreview.frame",
+  // Renderer preview demand for the native frame tap: the helper captures only
+  // while a main-window preview is subscribed.
+  computerPreviewSubscribe: "desktop:computer-preview-subscribe",
+  computerPreviewUnsubscribe: "desktop:computer-preview-unsubscribe",
   computerSetCursorStyle: "desktop:computer-set-cursor-style",
   audioLevel: {
     setSource: "desktop:audio-level-set-source",

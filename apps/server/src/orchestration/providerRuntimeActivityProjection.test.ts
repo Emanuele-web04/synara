@@ -1333,6 +1333,25 @@ describe("provider runtime activity projection", () => {
       ["fast-mode-with-context:fast-mode", "fast-mode.state"],
     ]);
 
+    const [resultlessTurn] = projectProviderRuntimeActivities(
+      runtimeEvent({
+        type: "turn.completed",
+        eventId: "resultless-turn",
+        provider: "claudeAgent",
+        turnId: TURN_ID,
+        payload: {
+          state: "completed",
+          tokenAccountingVersion: 1,
+          mainLoopTokens: 10,
+          claudeResultObserved: false,
+        },
+      }),
+    );
+    expect(resultlessTurn?.payload).toMatchObject({
+      claudeResultObserved: false,
+      mainLoopTokens: 10,
+    });
+
     const [turn] = projectProviderRuntimeActivities(
       runtimeEvent({
         type: "turn.completed",
@@ -1341,6 +1360,7 @@ describe("provider runtime activity projection", () => {
         turnId: TURN_ID,
         payload: {
           state: "completed",
+          claudeResultObserved: true,
           tokenAccountingVersion: 1,
           mainLoopTokens: 1_000,
           modelUsage: {
@@ -1360,6 +1380,7 @@ describe("provider runtime activity projection", () => {
       payload: {
         state: "completed",
         provider: "claudeAgent",
+        claudeResultObserved: true,
         tokenAccountingVersion: 1,
         mainLoopTokens: 1_000,
         modelUsage: {

@@ -66,6 +66,8 @@ import {
 } from "../session-logic";
 import { localSubagentThreadId } from "./ChatView.selectors";
 import { buildModelSelection, type ProviderModelOption } from "../providerModelOptions";
+import { resolvePromptEffortFromModelSelection } from "../lib/composerSend";
+import { autoRuntimeModeSelectionIssue } from "@synara/shared/runtimeMode";
 
 export const LAST_INVOKED_SCRIPT_BY_PROJECT_KEY = "synara:last-invoked-script-by-project";
 export const DISMISSED_PROVIDER_HEALTH_BANNERS_KEY = "synara:dismissed-provider-health-banners";
@@ -905,6 +907,111 @@ export function threadHasProviderLockingActivity(
   );
 }
 
+type ProviderLockingThread = Pick<
+  Thread,
+  "messages" | "sidechatSourceThreadId" | "latestTurn" | "session" | "modelSelection"
+>;
+
+/**
+ * A send whose provider differs from the one an already-running thread uses.
+ * It must hand the thread off first: Hand off checks background tasks and
+ * records the switch, which a plain settings save would skip.
+ */
+export function turnNeedsProviderHandoff(input: {
+  readonly thread: ProviderLockingThread;
+  readonly modelSelection: ModelSelection;
+}): boolean {
+  return (
+    threadHasProviderLockingActivity(input.thread) &&
+    input.modelSelection.provider !== input.thread.modelSelection.provider
+  );
+}
+
+/**
+ * A message sent right after a handoff was stamped before the target started.
+ * Move it after the handoff row, even when the server clock runs ahead.
+ */
+export function createdAtAfterProviderHandoff(input: {
+  readonly activities:
+    | ReadonlyArray<{ readonly kind: string; readonly createdAt: string }>
+    | undefined;
+  readonly createdAt: string;
+}): string {
+  const handoffCreatedAt = input.activities?.findLast(
+    (activity) => activity.kind === "provider.handoff",
+  )?.createdAt;
+  return new Date(
+    Math.max(Date.now(), Date.parse(handoffCreatedAt ?? input.createdAt) + 1),
+  ).toISOString();
+}
+
+/**
+ * The model selection an access-mode change may save with it. A provider
+ * picked in the composer over a thread that already runs on another one is a
+ * pending Hand off, which only Send performs; saving it here would switch the
+ * thread's provider without one.
+ */
+export function accessModeModelSelectionToPersist(input: {
+  readonly thread: ProviderLockingThread;
+  readonly selectedModelSelection: ModelSelection;
+}): ModelSelection | undefined {
+  return turnNeedsProviderHandoff({
+    thread: input.thread,
+    modelSelection: input.selectedModelSelection,
+  })
+    ? undefined
+    : input.selectedModelSelection;
+}
+
+/**
+ * Auto picked for a pending provider switch that the thread's current model
+ * cannot run. It can only be chosen once Send has handed the thread off.
+ */
+export function autoWaitsForProviderHandoff(input: {
+  readonly thread: ProviderLockingThread;
+  readonly selectedModelSelection: ModelSelection;
+}): boolean {
+  return (
+    accessModeModelSelectionToPersist(input) === undefined &&
+    autoRuntimeModeSelectionIssue({
+      runtimeMode: "auto",
+      modelSelection: input.thread.modelSelection,
+    }) !== null
+  );
+}
+
+/**
+ * A queued turn follows the thread when its provider changed after the turn
+ * was queued (a Hand off while the queue was paused). Sending the queued
+ * provider would quietly switch the thread back.
+ */
+export function retargetQueuedTurnToThreadProvider<T extends QueuedComposerTurn>(
+  queuedTurn: T,
+  thread: ProviderLockingThread,
+): T {
+  if (!turnNeedsProviderHandoff({ thread, modelSelection: queuedTurn.modelSelection })) {
+    return queuedTurn;
+  }
+  const { providerOptionsForDispatch: _queuedProviderOptions, ...rest } = queuedTurn;
+  // Auto is provider-specific too. A model that cannot run it would make the
+  // server reject the turn on every retry, so fall back to asking for approval.
+  const runtimeMode =
+    autoRuntimeModeSelectionIssue({
+      runtimeMode: queuedTurn.runtimeMode,
+      modelSelection: thread.modelSelection,
+    }) === null
+      ? queuedTurn.runtimeMode
+      : "approval-required";
+  return {
+    ...rest,
+    modelSelection: thread.modelSelection,
+    selectedProvider: thread.modelSelection.provider,
+    selectedModel: thread.modelSelection.model,
+    selectedPromptEffort: resolvePromptEffortFromModelSelection(thread.modelSelection),
+    runtimeMode,
+  } as T;
+}
+
 export function revokeBlobPreviewUrl(previewUrl: string | undefined): void {
   if (!previewUrl || typeof URL === "undefined" || !previewUrl.startsWith("blob:")) {
     return;
@@ -1436,13 +1543,11 @@ export function resolveWorkingLabel(input: {
   isConnecting?: boolean;
   isSettlingTurnDispatch?: boolean;
   providerName?: string;
-  hasProviderActivity?: boolean;
 }): WorkingLabel {
   if (input.isSettlingTurnDispatch) return "Checking message delivery…";
   if (input.isSendBusy && !input.turnTakenOver) {
     return "Loading";
   }
-  if (input.hasProviderActivity) return "Thinking";
   if (input.isConnecting && input.providerName) {
     return `Starting ${input.providerName}…`;
   }

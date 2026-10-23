@@ -70,10 +70,19 @@ export interface ProviderSessionStartOutcome {
 export interface ProviderSessionStartOutcomeOptions {
   /**
    * Persist a pending transcript bootstrap when this start cannot restore
-   * provider-native context. The caller clears it only after the provider has
-   * accepted the bootstrap turn.
+   * provider-native context, even if no native resume was attempted. A failed
+   * native resume always registers it. The caller clears it only after the
+   * provider has accepted the bootstrap turn.
    */
   readonly registerPriorTranscriptBootstrapOnFreshStart?: boolean;
+  /**
+   * The caller moves the thread to this provider on purpose (a stored provider
+   * rebind). A persisted binding owned by another provider driver gives up its
+   * native continuation, like the reset a handoff requests first, and the
+   * fresh session carries the prior transcript instead. A binding of the same
+   * driver stays protected: another home or account still cannot take it over.
+   */
+  readonly abandonOtherProviderContinuation?: boolean;
 }
 
 export interface PersistedProviderSessionProfile {
@@ -120,6 +129,11 @@ export interface ProviderServiceShape {
   /** Mark a persisted prior-transcript bootstrap as accepted by the provider. */
   readonly completePriorTranscriptBootstrap?: (input: {
     readonly threadId: ThreadId;
+    /**
+     * Pin terminal-confirmed acceptance to its runtime. Explicit discard and
+     * immediate Codex acknowledgement do not supply a terminal generation.
+     */
+    readonly expectedLifecycleGeneration?: string;
   }) => Effect.Effect<void, ProviderServiceError>;
 
   /**
@@ -222,6 +236,8 @@ export interface ProviderServiceShape {
    */
   readonly stopRuntimeSession?: (input: {
     readonly threadId: ThreadId;
+    /** Idle reapers must revalidate activity and live ownership under the lifecycle lock. */
+    readonly onlyIfIdleSince?: string;
   }) => Effect.Effect<void, ProviderServiceError>;
 
   /**
@@ -248,6 +264,14 @@ export interface ProviderServiceShape {
    * Aggregates runtime session lists from all registered adapters.
    */
   readonly listSessions: () => Effect.Effect<ReadonlyArray<ProviderSession>>;
+
+  /**
+   * List the contexts an adapter keeps after a failed stop for cleanup
+   * retries. They are not live and `listSessions` leaves them out, but their
+   * process may still be running, so safety checks such as the checkpoint
+   * revert guard read this view as well.
+   */
+  readonly listRetainedSessions?: () => Effect.Effect<ReadonlyArray<ProviderSession>>;
 
   /** Read the settings that produced a persisted native resume cursor. */
   readonly getPersistedSessionProfile: (

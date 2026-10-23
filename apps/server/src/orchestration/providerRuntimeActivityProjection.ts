@@ -838,6 +838,10 @@ export function projectProviderRuntimeActivities(
     case "runtime.warning": {
       const raw = asObject((event as { raw?: unknown }).raw);
       const nativeType = asString(asObject(raw?.payload)?.type);
+      const nativeMethod = asString(raw?.method);
+      const isCodexThreadWarning =
+        event.provider === "codex" &&
+        (nativeMethod === "guardianWarning" || nativeMethod === "warning");
       // Claude backgrounding notices arrive as warnings whose detail is the
       // SDK background_tasks_changed message; they present as a plain info
       // line ("Moved to background: <work>"), not as a runtime warning.
@@ -884,11 +888,13 @@ export function projectProviderRuntimeActivities(
             message,
             detail: message,
             ...(willRetry ? { willRetry: true } : {}),
-            ...(isBackgroundMove || isClaudeRetry || isMonitorEvent
-              ? { nativeEventType: detailSubtype }
-              : nativeType
-                ? { nativeEventType: nativeType }
-                : {}),
+            ...(isCodexThreadWarning
+              ? { nativeEventType: `codex.${nativeMethod}` }
+              : isBackgroundMove || isClaudeRetry || isMonitorEvent
+                ? { nativeEventType: detailSubtype }
+                : nativeType
+                  ? { nativeEventType: nativeType }
+                  : {}),
             ...activityDataField(event.payload.detail),
           }),
           turnId: toTurnId(event.turnId) ?? null,
@@ -1373,7 +1379,17 @@ export function projectProviderRuntimeActivities(
             state,
             ...(event.provider === "claudeAgent" ? { provider: event.provider } : {}),
             ...(event.payload.tokenAccountingVersion === 1
-              ? { tokenAccountingVersion: 1, mainLoopTokens: event.payload.mainLoopTokens }
+              ? {
+                  tokenAccountingVersion: 1,
+                  mainLoopTokens: event.payload.mainLoopTokens,
+                  ...(event.payload.mainLoopCacheReadTokens !== undefined
+                    ? { mainLoopCacheReadTokens: event.payload.mainLoopCacheReadTokens }
+                    : {}),
+                }
+              : {}),
+            ...(event.provider === "claudeAgent" &&
+            typeof event.payload.claudeResultObserved === "boolean"
+              ? { claudeResultObserved: event.payload.claudeResultObserved }
               : {}),
             ...(modelUsage ? { modelUsage } : {}),
             ...(typeof event.payload.totalCostUsd === "number"

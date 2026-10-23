@@ -308,8 +308,30 @@ To put a feature behind the list:
 
 Promote a feature to Stable by deleting its entry; every gate resolves itself.
 
-The list is currently empty. Hubs, Tasks, Inbox, Auto-fix CI, Oh My Pi,
-the rail sidebar layout, and message trail sound are available in both apps.
+Connectors (`mcp-connectors`) are Beta-only: Stable refuses their RPCs, OAuth callback, and
+proxy routes, hides Settings → Connectors, and never reads the saved `mcp-connectors` secret.
+See [Connectors](docs/mcp-connectors.md).
+
+The native editor (`native-editor`) is Beta-only: the Code OSS editing engine behind the file
+editor, editable diffs and editable previews, its TypeScript language service and the JavaScript
+debugger. Stable edits with the previous Pierre engine, refuses the `editor.*` RPCs
+(`NATIVE_EDITOR_UNAVAILABLE`), and hides the editor commands from the Shortcuts sheet and
+Settings → Keybindings; their default bindings stay in the shared config and are inert there.
+See [Native editor intelligence](docs/editor/intelligence.md).
+
+HTML visuals execute only in the desktop apps (Stable and Beta), where native subframe navigation is blocked.
+HTTP-hosted clients retain native component visuals but never execute HTML. The trusted
+bootstrap removes WebRTC capabilities before page scripts and stops parsing if that boundary
+cannot be enforced. HTML messages cannot open external URLs through the host.
+
+The list currently holds `mcp-connectors` and `native-editor`. Inline visuals are available in Stable and Beta:
+the `synara_show_visual` agent tool, its transcript rows, and the `orchestration.getInlineVisual`
+read all use the shared policy. Both native component specs and sandboxed HTML retain their
+existing rendering and interactions. Nothing is migrated; each app keeps visual documents
+under its own attachments directory, without importing Beta data into Stable.
+
+Hubs, Tasks, Inbox, Auto-fix CI, Oh My Pi, the rail sidebar layout, and message
+trail sound are available in both apps.
 
 Hubs became available in Stable 1.0.2. The same shared policy enables the Hub
 APIs, Library, coordinator wakes, monitoring, check-ins, completion evaluations,

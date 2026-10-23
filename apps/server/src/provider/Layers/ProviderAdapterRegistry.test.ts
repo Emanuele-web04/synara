@@ -24,7 +24,7 @@ import { PiAdapter, PiAdapterShape } from "../Services/PiAdapter.ts";
 import { OmpAdapter, OmpAdapterShape } from "../Services/OmpAdapter.ts";
 import { ProviderAdapterRegistry } from "../Services/ProviderAdapterRegistry.ts";
 import { ProviderAdapterRegistryLive } from "./ProviderAdapterRegistry.ts";
-import { ProviderUnsupportedError } from "../Errors.ts";
+import { ProviderAdapterProcessError, ProviderUnsupportedError } from "../Errors.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { ServerSettingsService } from "../../serverSettings.ts";
 
@@ -304,6 +304,7 @@ layer("ProviderAdapterRegistryLive", (it) => {
 
       assert.equal(instanceAdapter.provider, "codex");
       assert.notEqual(instanceAdapter, fakeCodexAdapter);
+      assert.isUndefined(instanceAdapter.hasRetainedSession);
       assert.ok((yield* registry.listInstances()).includes(asProviderInstanceId("codex_work")));
     }),
   );
@@ -508,6 +509,95 @@ layer("ProviderAdapterRegistryLive", (it) => {
     }),
   );
 });
+
+it.effect("scopes retained cleanup probes to their provider instance", () => {
+  const ownThread = ThreadId.makeUnsafe("retained-work");
+  const otherThread = ThreadId.makeUnsafe("retained-other");
+  const missingThread = ThreadId.makeUnsafe("retained-missing");
+  const liveThread = ThreadId.makeUnsafe("live-work");
+  const now = new Date().toISOString();
+  const sessions: ProviderSession[] = [ownThread, otherThread, liveThread].map((threadId) => ({
+    provider: "codex",
+    providerInstanceId: asProviderInstanceId(threadId === otherThread ? "codex" : "codex_work"),
+    threadId,
+    runtimeMode: "full-access",
+    status: "closed",
+    createdAt: now,
+    updatedAt: now,
+  }));
+  const stopError = new ProviderAdapterProcessError({
+    provider: "codex",
+    threadId: ownThread,
+    detail: "session teardown could not prove exit",
+  });
+  const stopSession = vi.fn(() => Effect.fail(stopError));
+  const adapter: CodexAdapterShape = {
+    ...fakeCodexAdapter,
+    stopSession,
+    listSessions: () => Effect.succeed(sessions),
+    hasSession: (threadId) => Effect.succeed(threadId === liveThread || threadId === otherThread),
+    hasRetainedSession: (threadId) =>
+      Effect.succeed(sessions.some((session) => session.threadId === threadId)),
+  };
+  return Effect.gen(function* () {
+    const registry = yield* ProviderAdapterRegistry;
+    const scoped = yield* registry.getByInstance!(asProviderInstanceId("codex_work"));
+    assert.isTrue(yield* adapter.hasRetainedSession!(otherThread));
+    assert.isTrue(yield* scoped.hasRetainedSession!(ownThread));
+    assert.isFalse(yield* scoped.hasRetainedSession!(otherThread));
+    assert.isFalse(yield* scoped.hasRetainedSession!(missingThread));
+    assert.isFalse(yield* scoped.hasSession(ownThread));
+    assert.isFalse(yield* scoped.hasSession(otherThread));
+    assert.isFalse(yield* scoped.hasSession(missingThread));
+    assert.isTrue(yield* scoped.hasSession(liveThread));
+    assert.isTrue(yield* scoped.hasRetainedSession!(liveThread));
+    yield* scoped.stopSession(otherThread);
+    yield* scoped.stopSession(missingThread);
+    assert.lengthOf(stopSession.mock.calls, 0);
+    assertFailure(yield* Effect.result(scoped.stopSession(ownThread)), stopError);
+    assertFailure(yield* Effect.result(scoped.stopSession(ownThread)), stopError);
+    assert.lengthOf(stopSession.mock.calls, 2);
+    assert.isTrue(yield* scoped.hasRetainedSession!(ownThread));
+    assertFailure(yield* Effect.result(scoped.stopAll()), stopError);
+    assert.lengthOf(stopSession.mock.calls, 3);
+  }).pipe(Effect.provide(registryLayer(adapter)));
+});
+
+for (const adapter of [
+  fakeCodexAdapter,
+  fakeClaudeAdapter,
+  fakeCursorAdapter,
+  fakeDevinAdapter,
+  fakeGrokAdapter,
+  fakeDroidAdapter,
+  fakeOpenCodeAdapter,
+  fakeOmpAdapter,
+]) {
+  it.effect(`preserves membership probes for ${adapter.provider} without a retained probe`, () =>
+    Effect.gen(function* () {
+      const registry = yield* ProviderAdapterRegistry;
+      const threadId = ThreadId.makeUnsafe(`listed-${adapter.provider}`);
+      const now = new Date().toISOString();
+      vi.mocked(adapter.listSessions).mockReturnValue(
+        Effect.succeed([
+          {
+            provider: adapter.provider,
+            threadId,
+            runtimeMode: "full-access",
+            status: "closed",
+            createdAt: now,
+            updatedAt: now,
+          },
+        ]),
+      );
+      vi.mocked(adapter.hasSession).mockReturnValue(Effect.succeed(false));
+      const scoped = yield* registry.getByInstance!(asProviderInstanceId(adapter.provider));
+      assert.isUndefined(scoped.hasRetainedSession);
+      assert.isTrue(yield* scoped.hasSession(threadId));
+      assert.isFalse(yield* scoped.hasSession(ThreadId.makeUnsafe("missing")));
+    }).pipe(Effect.provide(registryLayer())),
+  );
+}
 
 it("rejects missing required methods while constructing the registry", async () => {
   const malformed = { ...fakeCodexAdapter };

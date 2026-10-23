@@ -12,7 +12,7 @@ import { render } from "vitest-browser-react";
 
 import type { Project, SidebarThreadSummary } from "../types";
 import { DEFAULT_PROJECT_ICON, type ProjectAppearance } from "../lib/projectAppearance";
-import type { ThreadStatusPill } from "./Sidebar.logic";
+import { resolveThreadStatusPill, type ThreadStatusPill } from "./Sidebar.logic";
 import { SidebarActivityView } from "./SidebarActivityView";
 import type { ActivityScopeSelection } from "./SidebarActivityView.logic";
 
@@ -83,6 +83,7 @@ function renderActivity(input: {
   threads: readonly SidebarThreadSummary[];
   projects?: readonly Project[];
   activeThreadId?: ThreadId | null;
+  visualActiveThreadId?: ThreadId | null;
   pinnedThreadIdSet?: ReadonlySet<ThreadId>;
   settledOverrideByThreadId?: ReadonlyMap<ThreadId, boolean>;
   prByThreadId?: ReadonlyMap<ThreadId, OrchestrationThreadPullRequest | null>;
@@ -114,6 +115,9 @@ function ActivityHarness(input: Parameters<typeof renderActivity>[0]) {
       threads={input.threads}
       projectById={new Map(projects.map((project) => [project.id, project]))}
       activeThreadId={input.activeThreadId ?? null}
+      {...(input.visualActiveThreadId === undefined
+        ? {}
+        : { visualActiveThreadId: input.visualActiveThreadId })}
       pinnedThreadIdSet={input.pinnedThreadIdSet ?? new Set()}
       settledOverrideByThreadId={input.settledOverrideByThreadId ?? new Map()}
       threadsHydrated={input.threadsHydrated ?? true}
@@ -141,6 +145,28 @@ function ActivityHarness(input: Parameters<typeof renderActivity>[0]) {
   );
 }
 
+/** The status pill the sidebar really resolves, so Priority tiers follow live thread state. */
+function realThreadStatus(thread: SidebarThreadSummary): ThreadStatusPill | null {
+  return resolveThreadStatusPill({
+    thread,
+    hasPendingApprovals: thread.hasPendingApprovals,
+    hasPendingUserInput: thread.hasPendingUserInput,
+  });
+}
+
+/** Section labels ("# Label") and row ids in document order. */
+function activityLayout(): string[] {
+  return [
+    ...document.querySelectorAll(
+      '[data-slot="activity-section-label"], [data-testid^="activity-thread-"]',
+    ),
+  ].map((element) =>
+    element.getAttribute("data-slot") === "activity-section-label"
+      ? `# ${element.textContent}`
+      : element.getAttribute("data-testid")!.replace("activity-thread-", ""),
+  );
+}
+
 describe("SidebarActivityView", () => {
   beforeEach(() => {
     vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-08-02T12:00:00.000Z"));
@@ -149,6 +175,32 @@ describe("SidebarActivityView", () => {
     vi.restoreAllMocks();
     document.body.innerHTML = "";
   });
+
+  it.each([false, true])(
+    "selects a hidden child's root without marking that root read (child open: %s)",
+    async (childOpen) => {
+      const root = makeThread(301, { lastVisitedAt: "2026-08-02T09:00:00.000Z" });
+      const mounted = await render(
+        renderActivity({
+          threads: [root],
+          activeThreadId: childOpen ? ThreadId.makeUnsafe("open-subagent") : root.id,
+          visualActiveThreadId: root.id,
+          resolveThreadStatus: () => ({
+            label: "Completed",
+            colorClass: "text-emerald-600",
+            dotClass: "bg-emerald-500",
+            pulse: false,
+          }),
+        }),
+      );
+      const row = mounted.getByTestId(`activity-thread-${root.id}`).element();
+      expect(row.getAttribute("aria-current")).toBe("page");
+      const unreadDot = row.parentElement?.querySelector('[aria-label="Unread completion"]');
+      if (childOpen) expect(unreadDot).not.toBeNull();
+      else expect(unreadDot).toBeNull();
+      await mounted.unmount();
+    },
+  );
 
   it("keeps a snoozed pin out of normal rows and returns it through its own section", async () => {
     const thread = makeThread(40, { snoozedUntil: "2026-08-02T13:00:00.000Z" });
@@ -629,7 +681,7 @@ describe("SidebarActivityView", () => {
     await mounted.unmount();
   });
 
-  it("shows unread pins once in open Pinned and suppresses a stale dot on the open thread", async () => {
+  it("moves an unread pin into Priority once and suppresses a stale dot on the open thread", async () => {
     const pinnedUnread = makeThread(300, { lastVisitedAt: "2026-08-02T09:00:00.000Z" });
     const openThread = makeThread(301, { lastVisitedAt: "2026-08-02T09:00:00.000Z" });
     const completedStatus: ThreadStatusPill = {
@@ -647,9 +699,11 @@ describe("SidebarActivityView", () => {
       }),
     );
 
+    // Priority lists the pin, so Pinned has nothing left to show.
+    await expect.element(page.getByText("Priority", { exact: true })).toBeVisible();
     await expect
       .element(page.getByRole("button", { name: "Pinned", exact: true }))
-      .toHaveAttribute("aria-expanded", "true");
+      .not.toBeInTheDocument();
     expect(
       document.querySelectorAll(`[data-testid="activity-thread-${pinnedUnread.id}"]`),
     ).toHaveLength(1);
@@ -667,6 +721,174 @@ describe("SidebarActivityView", () => {
     ).toBeNull();
     await mounted.unmount();
   });
+
+  it.each(["persisted", "optimistic"] as const)(
+    "returns a Done pin from Priority to Pinned (%s)",
+    async (mode) => {
+      const pinned = makeThread(930, { hasPendingApprovals: true });
+      const props = {
+        threads: [pinned],
+        pinnedThreadIdSet: new Set([pinned.id]),
+        resolveThreadStatus: realThreadStatus,
+      };
+      const mounted = await render(renderActivity(props));
+      await expect.poll(activityLayout).toEqual(["# Priority", pinned.id]);
+      await mounted.rerender(
+        renderActivity({
+          ...props,
+          threads: [
+            {
+              ...pinned,
+              hasPendingApprovals: false,
+              ...(mode === "persisted" ? { settledAt: "2026-08-02T12:00:00.000Z" } : {}),
+            },
+          ],
+          settledOverrideByThreadId:
+            mode === "optimistic" ? new Map([[pinned.id, true]]) : new Map(),
+        }),
+      );
+      await expect.poll(activityLayout).toEqual([pinned.id]);
+      await expect.element(page.getByRole("button", { name: "Pinned", exact: true })).toBeVisible();
+      await mounted.unmount();
+    },
+  );
+
+  it("shows a preparing first worktree in its project scope while excluding plain drafts and children", async () => {
+    const preparing = makeThread(940, { latestTurn: null, latestHumanMessageAt: null });
+    const draft = makeThread(941, { latestTurn: null, latestHumanMessageAt: null });
+    const child = makeThread(942, { latestTurn: null, parentThreadId: preparing.id });
+    const archived = makeThread(943, { latestTurn: null, archivedAt: "2026-08-02T11:00:00.000Z" });
+    const onChange = vi.fn();
+    const status = (thread: SidebarThreadSummary) =>
+      resolveThreadStatusPill({
+        thread,
+        hasPendingApprovals: false,
+        hasPendingUserInput: false,
+        isPreparingWorktree: thread.id !== draft.id,
+      });
+    const mounted = await render(
+      renderActivity({
+        threads: [preparing, draft, child, archived],
+        resolveThreadStatus: status,
+        scope: { selection: PROJECT_A, onChange },
+      }),
+    );
+    await expect.poll(activityLayout).toEqual(["# Priority", preparing.id]);
+    expect(onChange).not.toHaveBeenCalled();
+    await mounted.unmount();
+  });
+
+  it("lists every chat that needs the user or is running in Priority, with no cap", async () => {
+    const running = Array.from({ length: 6 }, (_, index) =>
+      makeThread(900 + index, { hasLiveTailWork: true }),
+    );
+    const unread = makeThread(910, { lastVisitedAt: "2026-08-02T09:00:00.000Z" });
+    const waiting = makeThread(911, { hasPendingApprovals: true });
+    const idle = makeThread(912);
+    const onVisibleThreadIdsChange = vi.fn();
+    const mounted = await render(
+      renderActivity({
+        threads: [...running, unread, waiting, idle],
+        resolveThreadStatus: realThreadStatus,
+        onVisibleThreadIdsChange,
+      }),
+    );
+    const priorityOrder = [
+      waiting.id,
+      unread.id,
+      ...running.map((thread) => thread.id).toReversed(),
+    ];
+    await vi.waitFor(() => {
+      expect(activityLayout()).toEqual(["# Priority", ...priorityOrder, "# Today", idle.id]);
+      expect(onVisibleThreadIdsChange).toHaveBeenLastCalledWith([...priorityOrder, idle.id]);
+    });
+    await mounted.unmount();
+  });
+
+  it.each(["clear read", "grouping roundtrip"] as const)(
+    "holds Priority still while chats change and resets read rows (%s)",
+    async (reset) => {
+      const waiting = makeThread(920, { hasPendingApprovals: true });
+      const unread = makeThread(921, { lastVisitedAt: "2026-08-02T09:00:00.000Z" });
+      const running = makeThread(922, { hasLiveTailWork: true });
+      const idle = makeThread(923);
+      const onOpenThread = vi.fn();
+      const mounted = await render(
+        renderActivity({
+          threads: [waiting, unread, running, idle],
+          resolveThreadStatus: realThreadStatus,
+          onOpenThread,
+        }),
+      );
+      await vi.waitFor(() => {
+        expect(activityLayout()).toEqual([
+          "# Priority",
+          waiting.id,
+          unread.id,
+          running.id,
+          "# Today",
+          idle.id,
+        ]);
+      });
+      await page.getByRole("button", { name: "Activity options" }).click();
+      await expect
+        .element(page.getByRole("menuitem", { name: "Clear read from Priority" }))
+        .toHaveAttribute("aria-disabled", "true");
+      await userEvent.keyboard("{Escape}");
+
+      // The approval is answered and runs, the unread chat is opened, the running one
+      // finishes unseen, and the idle one asks for input: rows keep their places, the
+      // read row stays listed, and the newcomer joins at the end.
+      const answered = { ...waiting, hasPendingApprovals: false, hasLiveTailWork: true };
+      const opened = { ...unread, lastVisitedAt: "2026-08-02T12:00:00.000Z" };
+      const finished = {
+        ...running,
+        hasLiveTailWork: false,
+        lastVisitedAt: "2026-08-02T09:00:00.000Z",
+      };
+      const asking = { ...idle, hasPendingUserInput: true };
+      await mounted.rerender(
+        renderActivity({
+          threads: [answered, opened, finished, asking],
+          resolveThreadStatus: realThreadStatus,
+          onOpenThread,
+        }),
+      );
+      await vi.waitFor(() => {
+        expect(activityLayout()).toEqual([
+          "# Priority",
+          waiting.id,
+          unread.id,
+          running.id,
+          idle.id,
+        ]);
+      });
+
+      await page.getByRole("button", { name: "Activity options" }).click();
+      if (reset === "clear read") {
+        await page.getByRole("menuitem", { name: "Clear read from Priority" }).click();
+      } else {
+        await page.getByRole("menuitemradio", { name: "Project", exact: true }).click();
+        // Radio choices keep the shared menu open; switch back in that same popup.
+        await expect.element(page.getByText("Priority", { exact: true })).not.toBeInTheDocument();
+        await page.getByRole("menuitemradio", { name: "Time", exact: true }).click();
+        await expect
+          .element(page.getByRole("menuitemradio", { name: "Time", exact: true }))
+          .toHaveAttribute("aria-checked", "true");
+      }
+      // The menu interaction has committed. A fresh sort returns read rows to Today.
+      expect(activityLayout()).toEqual([
+        "# Priority",
+        idle.id,
+        running.id,
+        waiting.id,
+        "# Today",
+        unread.id,
+      ]);
+      expect(onOpenThread).not.toHaveBeenCalled();
+      await mounted.unmount();
+    },
+  );
 
   it("reveals a selected Activity row without moving focus or following background updates", async () => {
     const leading = Array.from({ length: 8 }, (_, index) => makeThread(700 + index));

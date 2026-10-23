@@ -3,7 +3,7 @@
 //          by both the full editor view and the right-dock explorer pane.
 // Layer: Chat workspace-browsing UI primitives
 // Exports: WorkspaceFilesSidebar, WorkspaceSearchSidebar, WorkspaceExplorerSidebar,
-//          ExplorerActivityBarButton, useExplorerEntryPrefetch, setFileReferenceDragData.
+//          useExplorerEntryPrefetch, setFileReferenceDragData, ExplorerActivityBarButton.
 
 import type { ProjectEntry, ProjectFileSystemEntry } from "@synara/contracts";
 import { useDebouncedValue } from "@tanstack/react-pacer";

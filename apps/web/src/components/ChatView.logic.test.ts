@@ -16,7 +16,10 @@ import type { QueuedComposerChatTurn } from "../composerDraftStore";
 import type { WorkLogEntry } from "../session-logic";
 
 import {
+  accessModeModelSelectionToPersist,
   appendVoiceTranscriptToPrompt,
+  autoWaitsForProviderHandoff,
+  createdAtAfterProviderHandoff,
   buildBlockedComposerSendToastCopy,
   buildCollapsedCursorModelOptionsReset,
   buildTranscriptAutoFollowSignal,
@@ -32,6 +35,7 @@ import {
   failWorktreeSetupSnapshot,
   filterSidechatTranscriptMessages,
   threadHasProviderLockingActivity,
+  turnNeedsProviderHandoff,
   threadHasProviderLockingMessages,
   hasFileUndoSettled,
   type LocalDispatchSnapshot,
@@ -46,6 +50,7 @@ import {
   queuedChatTurnDispatchFields,
   queuedPlanFollowUpDispatchFields,
   resolveQueuedTurnDispatchSettings,
+  retargetQueuedTurnToThreadProvider,
   turnStartDispatchFields,
   type TurnDispatchSettings,
   hasLiveTurnTakenOver,
@@ -947,6 +952,168 @@ describe("voice helpers", () => {
         messages: importedOnly.messages,
       }),
     ).toBe(true);
+  });
+
+  const codexThreadWithTurn = {
+    sidechatSourceThreadId: null,
+    session: null,
+    messages: [],
+    modelSelection: { provider: "codex" as const, model: "gpt-5-codex" },
+    latestTurn: {
+      turnId: "turn-1" as never,
+      state: "error" as const,
+      requestedAt: "2026-05-02T10:00:00.000Z",
+      startedAt: null,
+      completedAt: null,
+      assistantMessageId: null,
+    },
+  };
+  const claudeSelection = {
+    provider: "claudeAgent" as const,
+    model: "claude-sonnet-5",
+    options: { effort: "high" as const },
+  };
+
+  it("leaves a pending provider switch out of an access-mode save", () => {
+    // Switching providers on a thread that already ran belongs to Hand off at Send.
+    expect(
+      accessModeModelSelectionToPersist({
+        thread: codexThreadWithTurn,
+        selectedModelSelection: claudeSelection,
+      }),
+    ).toBeUndefined();
+    const codexSelection = { provider: "codex" as const, model: "gpt-5.5" };
+    expect(
+      accessModeModelSelectionToPersist({
+        thread: codexThreadWithTurn,
+        selectedModelSelection: codexSelection,
+      }),
+    ).toBe(codexSelection);
+    // A thread that has not run yet still adopts the picked provider.
+    expect(
+      accessModeModelSelectionToPersist({
+        thread: { ...codexThreadWithTurn, latestTurn: null },
+        selectedModelSelection: claudeSelection,
+      }),
+    ).toBe(claudeSelection);
+  });
+
+  it("moves a queued turn onto the provider the thread switched to", () => {
+    const queued = {
+      id: "queued-1",
+      kind: "plan-follow-up" as const,
+      createdAt: "2026-05-02T10:00:00.000Z",
+      previewText: "implement",
+      text: "implement",
+      interactionMode: "default" as const,
+      selectedProvider: "codex" as const,
+      selectedModel: "gpt-5-codex",
+      selectedPromptEffort: "xhigh",
+      modelSelection: { provider: "codex" as const, model: "gpt-5-codex" },
+      providerOptionsForDispatch: { codex: { homePath: "/tmp/codex-home" } },
+      runtimeMode: "full-access" as const,
+    };
+    const claudeThread = { ...codexThreadWithTurn, modelSelection: claudeSelection };
+
+    const retargeted = retargetQueuedTurnToThreadProvider(queued, claudeThread);
+
+    expect(retargeted).toMatchObject({
+      id: "queued-1",
+      text: "implement",
+      modelSelection: claudeSelection,
+      selectedProvider: "claudeAgent",
+      selectedModel: "claude-sonnet-5",
+      selectedPromptEffort: "high",
+    });
+    expect(retargeted).not.toHaveProperty("providerOptionsForDispatch");
+    expect(retargetQueuedTurnToThreadProvider(queued, codexThreadWithTurn)).toBe(queued);
+    expect(retargetQueuedTurnToThreadProvider(queued, { ...claudeThread, latestTurn: null })).toBe(
+      queued,
+    );
+
+    // Auto travels only to a model that can run it.
+    const queuedAuto = { ...queued, runtimeMode: "auto" as const };
+    const openCodeThread = {
+      ...codexThreadWithTurn,
+      modelSelection: { provider: "opencode" as const, model: "openai/gpt-5" },
+    };
+    expect(retargetQueuedTurnToThreadProvider(queuedAuto, openCodeThread).runtimeMode).toBe(
+      "approval-required",
+    );
+    expect(
+      retargetQueuedTurnToThreadProvider(
+        {
+          ...queuedAuto,
+          modelSelection: claudeSelection,
+          selectedProvider: "claudeAgent" as const,
+        },
+        codexThreadWithTurn,
+      ).runtimeMode,
+    ).toBe("auto");
+  });
+
+  it("hands off any send that picks another provider for a thread that already ran", () => {
+    expect(
+      turnNeedsProviderHandoff({ thread: codexThreadWithTurn, modelSelection: claudeSelection }),
+    ).toBe(true);
+    expect(
+      turnNeedsProviderHandoff({
+        thread: codexThreadWithTurn,
+        modelSelection: { provider: "codex", model: "gpt-5.5" },
+      }),
+    ).toBe(false);
+    expect(
+      turnNeedsProviderHandoff({
+        thread: { ...codexThreadWithTurn, latestTurn: null },
+        modelSelection: claudeSelection,
+      }),
+    ).toBe(false);
+  });
+
+  it("orders a message sent after a handoff behind the handoff row", () => {
+    const handoffAt = "2999-01-01T00:00:00.000Z";
+    expect(
+      createdAtAfterProviderHandoff({
+        activities: [
+          { kind: "provider.handoff", createdAt: "2026-05-02T09:00:00.000Z" },
+          { kind: "provider.handoff", createdAt: handoffAt },
+        ],
+        createdAt: "2026-05-02T10:00:00.000Z",
+      }),
+    ).toBe("2999-01-01T00:00:00.001Z");
+    const now = Date.now();
+    expect(
+      Date.parse(
+        createdAtAfterProviderHandoff({ activities: [], createdAt: "2000-01-01T00:00:00.000Z" }),
+      ),
+    ).toBeGreaterThanOrEqual(now);
+  });
+
+  it("waits for Send before Auto when only the picked provider can run it", () => {
+    const openCodeThread = {
+      ...codexThreadWithTurn,
+      modelSelection: { provider: "opencode" as const, model: "openai/gpt-5" },
+    };
+    const codexSelection = { provider: "codex" as const, model: "gpt-5.5" };
+    expect(
+      autoWaitsForProviderHandoff({
+        thread: openCodeThread,
+        selectedModelSelection: codexSelection,
+      }),
+    ).toBe(true);
+    // The current provider can run Auto, so it is saved against it now.
+    expect(
+      autoWaitsForProviderHandoff({
+        thread: codexThreadWithTurn,
+        selectedModelSelection: claudeSelection,
+      }),
+    ).toBe(false);
+    expect(
+      autoWaitsForProviderHandoff({
+        thread: { ...openCodeThread, latestTurn: null },
+        selectedModelSelection: codexSelection,
+      }),
+    ).toBe(false);
   });
 
   it("appends a transcript to the existing prompt without disturbing spacing", () => {
@@ -2406,28 +2573,6 @@ describe("resolveWorkingLabel", () => {
     expect(
       resolveWorkingLabel({ isSendBusy: false, turnTakenOver: false, isConnecting: true }),
     ).toBe("Thinking");
-  });
-
-  it("does not show Starting after provider output proves the turn is running", () => {
-    expect(
-      resolveWorkingLabel({
-        isSendBusy: true,
-        turnTakenOver: true,
-        isConnecting: true,
-        providerName: "Devin",
-        hasProviderActivity: true,
-      }),
-    ).toBe("Thinking");
-  });
-
-  it("keeps a new send on Loading while an earlier background task is still active", () => {
-    expect(
-      resolveWorkingLabel({
-        isSendBusy: true,
-        turnTakenOver: false,
-        hasProviderActivity: true,
-      }),
-    ).toBe("Loading");
   });
 });
 

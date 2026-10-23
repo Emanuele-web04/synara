@@ -1,6 +1,7 @@
 import "./httpRuntime";
 import { showDiagnosticStartupDialog } from "./startupDiagnosticDialog";
 import { BackendIssueDetector } from "./backendIssueDetector";
+import { attachAppSubframeNavigationGuard } from "./subframeNavigationGuard";
 import { CuaDriverHost, sweepOrphanedCuaDrivers } from "./cuaDriverHost";
 import { createLinuxCuaDriverHost } from "./linuxCuaDriverHost";
 import { LinuxEscapeKillSwitchMonitor, linuxEscapeSession } from "./linuxEscapeKillSwitchMonitor";
@@ -967,11 +968,13 @@ function initializePackagedLogging(): void {
       filePath: Path.join(LOG_DIR, DESKTOP_LOG_FILE_NAME),
       maxBytes: LOG_FILE_MAX_BYTES,
       maxFiles: LOG_FILE_MAX_FILES,
+      keepFileOpen: true,
     });
     backendLogSink = new RotatingFileSink({
       filePath: Path.join(LOG_DIR, BACKEND_LOG_FILE_NAME),
       maxBytes: LOG_FILE_MAX_BYTES,
       maxFiles: LOG_FILE_MAX_FILES,
+      keepFileOpen: true,
     });
     installStdIoCapture();
     writeDesktopLogHeader(`runtime log capture enabled logDir=${LOG_DIR}`);
@@ -3887,6 +3890,14 @@ const audioLevelSubscribers = new Map<
   { readonly contents: Electron.WebContents; readonly release: () => void }
 >();
 let linuxEscapeKillSwitchMonitor: LinuxEscapeKillSwitchMonitor | undefined;
+let computerFrameTap: ComputerFrameTap | undefined;
+// Main-window renderers whose preview currently wants tap frames, keyed by
+// webContents id. The native capture helper runs only while this is non-empty.
+const computerPreviewSubscribers = new Map<number, () => void>();
+
+function syncComputerFrameTapDemand(): void {
+  computerFrameTap?.setSubscribed(computerPreviewSubscribers.size > 0);
+}
 
 function stopComputerInputFromEscape(): void {
   // Native interruption owns the drain. The backend notice only relays the
@@ -3935,6 +3946,17 @@ async function startCuaHost(): Promise<void> {
     );
     return;
   }
+  const frameTap = new ComputerFrameTap({
+    helperPath: resolveAppSnapHelperPath(),
+    send: (channel, frame) => {
+      if (mainWindow && !mainWindow.isDestroyed() && !mainWindow.webContents.isDestroyed()) {
+        mainWindow.webContents.send(channel, frame);
+      }
+    },
+    onError: (error) => safeConsoleError("[desktop] computer frame tap failed", error),
+  });
+  computerFrameTap = frameTap;
+  syncComputerFrameTapDemand();
   const host = new CuaDriverHost({
     onInputMonitorArmedChange: (armed) => escapeKillSwitchMonitor?.setArmed(armed),
     inputMonitorState: () =>
@@ -3993,15 +4015,7 @@ async function startCuaHost(): Promise<void> {
       initializeDesktopAppSnap();
       await appSnapManager!.releaseHeldInput();
     },
-    frameTap: new ComputerFrameTap({
-      helperPath: resolveAppSnapHelperPath(),
-      send: (channel, frame) => {
-        if (mainWindow && !mainWindow.isDestroyed() && !mainWindow.webContents.isDestroyed()) {
-          mainWindow.webContents.send(channel, frame);
-        }
-      },
-      onError: (error) => safeConsoleError("[desktop] computer frame tap failed", error),
-    }),
+    frameTap,
     // The masked-activation shield host: same AppSnap helper binary, its own
     // long-lived process, lazily spawned on the first engage. Always wired —
     // the server decides per call whether the armed flag + per-app opt-in
@@ -4669,6 +4683,9 @@ function startBackend(trigger: BackendStartTrigger = "lifecycle"): void {
     isCurrent: () => backendProcess === child,
     onReady: () => {
       backendSupervision.recordReadiness();
+      // Startup blocks are classified only before readiness; stop scanning
+      // every later output chunk for the rest of this backend's life.
+      startupBlockDetector.freeze();
       maybeTrackBetaInstalled();
     },
   });
@@ -4794,6 +4811,7 @@ async function disposeBrowserHostPipeServerForShutdown(reason: string): Promise<
   linuxEscapeKillSwitchMonitor = undefined;
   await cuaDriverHost?.dispose();
   cuaDriverHost = undefined;
+  computerFrameTap = undefined;
   cuaHostEndpoint = undefined;
   const pipeServer = browserHostPipeServer;
   browserHostPipeServer = null;
@@ -4855,6 +4873,10 @@ async function shutdownDesktopRuntime(reason: string): Promise<void> {
       }
       desktopShutdownComplete = true;
       writeDesktopLogHeader(`${reason} shutdown complete`);
+      // Release the persistent log descriptors. close() is idempotent and a
+      // late write (e.g. a quit-path log line) simply reopens the file.
+      backendLogSink?.close();
+      desktopLogSink?.close();
     },
     { runAfterShutdownFailure: true },
   );
@@ -5173,6 +5195,7 @@ function registerIpcHandlers(): void {
     isTrustedRenderer: (id) => browserManager.isTrustedRenderer(id),
     openExternal: (url) => shell.openExternal(url),
     showItemInFolder: (path) => shell.showItemInFolder(path),
+    homeDir: OS.homedir(),
   });
 
   ipcMain.removeHandler(IPC.openExternal);
@@ -5298,6 +5321,37 @@ function registerIpcHandlers(): void {
         safeConsoleError("[desktop] live cursor style push failed", error);
       });
     }
+  });
+
+  ipcMain.removeAllListeners(IPC.computerPreviewSubscribe);
+  ipcMain.on(IPC.computerPreviewSubscribe, (event: IpcMainEvent) => {
+    const sender = event.sender;
+    // Frames are only ever sent to the main window; other renderers cannot
+    // consume them and must not keep the capture helper alive.
+    if (
+      computerPreviewSubscribers.has(sender.id) ||
+      !mainWindow ||
+      mainWindow.isDestroyed() ||
+      mainWindow.webContents.id !== sender.id
+    ) {
+      return;
+    }
+    // A closed or reloaded window must not keep the capture helper alive.
+    const release = () => {
+      sender.off("destroyed", release);
+      sender.off("did-navigate", release);
+      if (computerPreviewSubscribers.get(sender.id) !== release) return;
+      computerPreviewSubscribers.delete(sender.id);
+      syncComputerFrameTapDemand();
+    };
+    sender.once("destroyed", release);
+    sender.once("did-navigate", release);
+    computerPreviewSubscribers.set(sender.id, release);
+    syncComputerFrameTapDemand();
+  });
+  ipcMain.removeAllListeners(IPC.computerPreviewUnsubscribe);
+  ipcMain.on(IPC.computerPreviewUnsubscribe, (event: IpcMainEvent) => {
+    computerPreviewSubscribers.get(event.sender.id)?.();
   });
 
   ipcMain.removeHandler(IPC.audioLevel.setSource);
@@ -5719,6 +5773,7 @@ function createWindow(): BrowserWindow {
     }
     return { action: "deny" };
   });
+  attachAppSubframeNavigationGuard(window.webContents);
 
   window.on("page-title-updated", (event) => {
     event.preventDefault();
