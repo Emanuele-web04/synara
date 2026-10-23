@@ -896,44 +896,73 @@ describe("deriveWorkLogEntries", () => {
       ).toEqual(["failed", "finished", "stopped"]);
     });
 
-    it("lets a late provider completion correct a local stopped result", () => {
-      const entries = deriveWorkLogEntries(
-        [
-          launchCall("launch", "toolu_late", "bun run build", "2026-10-10T00:09:57.000Z"),
-          taskStarted("task-late", "toolu_late", "2026-10-10T00:09:57.100Z"),
-          makeActivity({
-            id: "task-late-background",
-            createdAt: "2026-10-10T00:09:57.200Z",
-            kind: "task.updated",
-            summary: "Task running in background",
-            tone: "info",
-            turnId: "turn-bg",
-            payload: { taskId: "task-late", status: "running", isBackgrounded: true },
-          }),
-          taskCompleted("task-late", "stopped", "Build stopped", "2026-10-10T00:09:58.000Z"),
-          taskCompleted(
-            "task-late",
-            "completed",
-            "Build finished",
-            "2026-10-10T00:09:59.000Z",
-            true,
-          ),
-        ],
-        undefined,
-        options,
-      );
+    it.each([
+      { status: "completed", confirmed: true, expected: "finished" },
+      { status: "running", confirmed: true, expected: "running" },
+      { status: "running", confirmed: false, expected: "stopped" },
+    ] as const)(
+      "reconciles a stopped task with $status, confirmed=$confirmed",
+      ({ status, confirmed, expected }) => {
+        const nativeUpdate =
+          status === "completed"
+            ? taskCompleted(
+                "task-late",
+                "completed",
+                "Build finished",
+                "2026-10-10T00:09:59.000Z",
+                true,
+              )
+            : makeActivity({
+                id: "native-replayed-running",
+                createdAt: "2026-10-10T00:09:59.000Z",
+                kind: "task.updated",
+                summary: "Task running",
+                tone: "info",
+                turnId: "turn-bg",
+                payload: {
+                  taskId: "task-late",
+                  status: "running",
+                  isBackgrounded: true,
+                  reconcilesStop: confirmed,
+                },
+              });
+        const entries = deriveWorkLogEntries(
+          [
+            launchCall("launch", "toolu_late", "bun run build", "2026-10-10T00:09:57.000Z"),
+            taskStarted("task-late", "toolu_late", "2026-10-10T00:09:57.100Z"),
+            makeActivity({
+              id: "task-late-background",
+              createdAt: "2026-10-10T00:09:57.200Z",
+              kind: "task.updated",
+              summary: "Task running in background",
+              tone: "info",
+              turnId: "turn-bg",
+              payload: { taskId: "task-late", status: "running", isBackgrounded: true },
+            }),
+            taskCompleted("task-late", "stopped", "Build stopped", "2026-10-10T00:09:58.000Z"),
+            nativeUpdate,
+          ],
+          undefined,
+          options,
+        );
 
-      expect(entries.filter((entry) => entry.backgroundTask)).toMatchObject([
-        {
-          id: "launch",
-          backgroundTask: {
-            taskId: "task-late",
-            status: "finished",
-            completedAt: "2026-10-10T00:09:59.000Z",
+        expect(entries.filter((entry) => entry.backgroundTask)).toMatchObject([
+          {
+            id: "launch",
+            backgroundTask: {
+              taskId: "task-late",
+              status: expected,
+              completedAt:
+                expected === "running"
+                  ? null
+                  : expected === "stopped"
+                    ? "2026-10-10T00:09:58.000Z"
+                    : "2026-10-10T00:09:59.000Z",
+            },
           },
-        },
-      ]);
-    });
+        ]);
+      },
+    );
 
     it("treats completions and Monitor events inside a working turn as updates, not wake-ups", () => {
       const entries = deriveWorkLogEntries(

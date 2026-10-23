@@ -734,6 +734,13 @@ function deriveBackgroundTaskStates(ordered: ReadonlyArray<OrchestrationThreadAc
     const task = tasks.get(taskId);
     const reconcilesStop = payload?.reconcilesStop === true && task?.status === "stopped";
     if (!task || (task.status !== "running" && !reconcilesStop)) continue;
+    // Only explicit native replay evidence can reopen a provisional local stop.
+    if (reconcilesStop && activity.kind === "task.updated" && payload?.status === "running") {
+      task.status = "running";
+      task.completedAt = null;
+      task.exitCode = null;
+      continue;
+    }
     if (activity.kind === "task.updated" || activity.kind === "task.completed") {
       const outcome = backgroundTaskOutcome(payload?.status);
       if (!outcome) continue;
