@@ -21,7 +21,11 @@ import {
   summarizeRunningAgents,
   type SubagentRunThread,
 } from "./SubagentRunCard.logic";
-import { NO_RUNNING_SUBAGENT_TASKS, type RunningSubagentTasks } from "../../session-logic";
+import {
+  deriveSubagentTaskEnds,
+  NO_RUNNING_SUBAGENT_TASKS,
+  type RunningSubagentTasks,
+} from "../../session-logic";
 
 const PARENT = ThreadId.makeUnsafe("parent");
 const launchedAtIso = "2026-10-10T00:00:00.000Z";
@@ -324,6 +328,84 @@ describe("foldSubagentRunWorkEntries", () => {
 });
 
 describe("deriveSubagentRunCard", () => {
+  it.each([
+    { outcome: "stopped", confirmed: true, phase: "running" },
+    { outcome: "stopped", confirmed: false, phase: "stopped" },
+    { outcome: "completed", confirmed: true, phase: "done" },
+    { outcome: "failed", confirmed: true, phase: "failed" },
+  ] as const)(
+    "reconciles a same-ID $outcome task only with native running confirmation=$confirmed",
+    ({ outcome, confirmed, phase }) => {
+      const startedAt = "2026-10-10T00:01:00.000Z";
+      const originalEnd = makeActivity({
+        id: "prior-end",
+        kind: "task.completed",
+        createdAt: "2026-10-10T00:00:08.000Z",
+        payload: { taskId: "same-id", toolUseId: "same-id", status: "completed" },
+      });
+      const history = [
+        originalEnd,
+        makeActivity({
+          id: "current-launch",
+          kind: "task.started",
+          createdAt: startedAt,
+          payload: { taskId: "same-id", toolUseId: "same-id" },
+        }),
+        makeActivity({
+          id: "local-stop",
+          kind: "task.completed",
+          createdAt: "2026-10-10T00:01:05.000Z",
+          payload: { taskId: "same-id", toolUseId: "same-id", status: outcome },
+        }),
+        makeActivity({
+          id: "native-replay",
+          kind: "task.updated",
+          createdAt: "2026-10-10T00:01:06.000Z",
+          payload: {
+            taskId: "same-id",
+            toolUseId: "same-id",
+            status: "running",
+            reconcilesStop: confirmed,
+          },
+        }),
+      ];
+      const work = foldSubagentRunWorkEntries([
+        spawn("launch", startedAt, [
+          { threadId: "same-id", rawStatus: "running", background: true },
+        ]),
+      ])[0]!;
+      const model = deriveSubagentRunCard({
+        subagents: work.subagents!,
+        run: work.subagentRun!,
+        threads: [],
+        parentThreadId: PARENT,
+        launchTurnLive: false,
+        taskEndByToolUseId: deriveSubagentTaskEnds(history),
+      });
+      expect(model.rows[0]?.phase).toBe(phase);
+      if (phase === "running") {
+        expect(deriveSubagentTaskEnds(history).get("same-id")).toMatchObject({
+          outcome: "completed",
+          endedAt: originalEnd.createdAt,
+        });
+        const completedAt = "2026-10-10T00:01:20.000Z";
+        const settled = deriveSubagentTaskEnds([
+          ...history,
+          makeActivity({
+            id: "native-completion",
+            kind: "task.completed",
+            createdAt: completedAt,
+            payload: { taskId: "same-id", status: "completed" },
+          }),
+        ]);
+        expect(settled.get("same-id")).toMatchObject({
+          outcome: "completed",
+          endedAt: completedAt,
+          previous: { outcome: "completed", endedAt: originalEnd.createdAt },
+        });
+      }
+    },
+  );
   const launchedAt = "2026-10-10T00:00:00.000Z";
 
   it("keeps a reused child's answer, action and descendants in their original invocation", () => {

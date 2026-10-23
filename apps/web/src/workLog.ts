@@ -884,6 +884,22 @@ export function deriveSubagentTaskEnds(
     if (activity.kind === "task.started" && ownToolUseId && ends.has(ownToolUseId)) {
       resumed.add(ownToolUseId);
     }
+    if (
+      activity.kind === "task.updated" &&
+      payload?.reconcilesStop === true &&
+      payload.status === "running" &&
+      ownToolUseId
+    ) {
+      const stopped = ends.get(ownToolUseId);
+      if (stopped?.outcome === "stopped") {
+        // Explicit native replay retracts only the provisional stop, retaining
+        // earlier invocations and the correlation for its eventual completion.
+        if (stopped.previous) ends.set(ownToolUseId, stopped.previous);
+        else ends.delete(ownToolUseId);
+        resumed.add(ownToolUseId);
+        if (taskId) openToolUseIdByTaskId.set(taskId, ownToolUseId);
+      }
+    }
     if (activity.kind !== "task.completed") continue;
     const toolUseId = ownToolUseId ?? (taskId ? openToolUseIdByTaskId.get(taskId) : undefined);
     if (taskId) openToolUseIdByTaskId.delete(taskId);
