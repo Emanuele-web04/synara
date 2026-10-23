@@ -25,6 +25,7 @@ import { Terminal } from "@xterm/xterm";
 
 import { readNativeApi } from "~/nativeApi";
 import { suppressQueryResponses } from "~/lib/suppressQueryResponses";
+import { hasOpenDismissibleOverlay } from "~/lib/editableEventTarget";
 
 import { openInPreferredEditor } from "../../editorPreferences";
 import { isTerminalClearShortcut, terminalNavigationShortcutData } from "../../keybindings";
@@ -1126,14 +1127,15 @@ function scheduleAutomaticTerminalFocus(
 ): void {
   // Automatic activation must not bring a background window forward. Recheck
   // after the frame too: the user may blur the window or choose another control.
-  if (!document.hasFocus()) return;
+  if (!document.hasFocus() || hasOpenDismissibleOverlay(entry.container)) return;
   window.requestAnimationFrame(() => {
     if (
       entry.disposed ||
       !entry.viewState.autoFocus ||
       !entry.viewState.isVisible ||
       !entry.container?.isConnected ||
-      !document.hasFocus()
+      !document.hasFocus() ||
+      hasOpenDismissibleOverlay(entry.container)
     ) {
       return;
     }
