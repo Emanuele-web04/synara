@@ -4,6 +4,7 @@
 
 import { strict as assert } from "node:assert";
 import { verifyRemoteTlsRuntime } from "./remoteTransport/runtimeSmoke";
+import { verifyEditorLanguageRuntime } from "./editor/runtimeSmoke";
 
 import { loadAcpSdk } from "./provider/acp/AcpSdk.ts";
 import { loadClaudeAgentSdk } from "./provider/claudeAgentSdk.ts";
@@ -27,4 +28,5 @@ const patches = parsePatchFiles(
   "diff --git a/smoke.txt b/smoke.txt\n--- a/smoke.txt\n+++ b/smoke.txt\n@@ -1 +1 @@\n-before\n+after\n",
 );
 assert.equal(patches[0]?.files[0]?.name, "smoke.txt");
+await verifyEditorLanguageRuntime();
 console.log("Packaged runtime dependency smoke passed.");

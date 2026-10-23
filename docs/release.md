@@ -248,6 +248,11 @@ after merge and before the next release: the exact fingerprint changes with that
 logic, so an unmerged candidate cannot reuse the old producer's artifacts. Native
 preparation within its own run still works and can be validated before merge.
 
+Portable outputs require the editor language worker alongside the server entrypoints.
+The packaged runtime smoke starts that worker with an isolated TypeScript fixture,
+checking a real diagnostic that depends on the packaged standard-library declarations.
+Missing workers or stripped declarations block qualification.
+
 Portable outputs are same-run artifacts, never cross-release caches. Import
 rejects archive links and unexpected paths before extraction into an isolated
 directory, verifies the complete file inventory, source, lockfile and build

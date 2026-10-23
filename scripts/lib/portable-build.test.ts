@@ -14,7 +14,7 @@ function fixture() {
     ...["main", "preload", "guestPreload", "cuaDriverHostStandalone"].map(
       (name) => `apps/desktop/dist-electron/${name}.js`,
     ),
-    ...["index", "restoreMigrationBackup", "runtimeDependencySmoke"].map(
+    ...["index", "restoreMigrationBackup", "runtimeDependencySmoke", "languageWorker"].map(
       (name) => `apps/server/dist/${name}.mjs`,
     ),
     "apps/server/dist/client/index.html",
@@ -35,6 +35,13 @@ describe("portable release outputs", () => {
     expect(() =>
       verifyPortableBuild(root, commit, JSON.parse(JSON.stringify(manifest)), {}),
     ).not.toThrow();
+  });
+  it("rejects a portable server without its editor language worker", () => {
+    const root = fixture();
+    rmSync(join(root, "apps/server/dist/languageWorker.mjs"));
+    expect(() => portableBuildManifest(root, commit, {})).toThrow(
+      "Missing portable build output: apps/server/dist/languageWorker.mjs",
+    );
   });
   it("rejects stale source, lockfile, publisher and Vite settings", () => {
     const root = fixture();
