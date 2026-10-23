@@ -5387,6 +5387,7 @@ describe("CheckpointReactor", () => {
       const threadId = ThreadId.makeUnsafe("thread-1");
       const turnId = asTurnId("turn-claude-live");
       const createdAt = new Date().toISOString();
+      const terminalReads = vi.spyOn(harness.runtimeEvents, "readThreadEvents");
 
       await Effect.runPromise(
         harness.engine.dispatch({
@@ -5568,6 +5569,16 @@ describe("CheckpointReactor", () => {
           checkpointRefForThreadTurnLive(threadId, turnId, "evt-item-file-change-live"),
         ),
       ).toBe(false);
+      // Each probe scans only new journal rows; the real repository test also
+      // verifies its lower bound excludes the previously checked prefix.
+      const liveProbes = terminalReads.mock.calls.map(([input]) => input);
+      expect(liveProbes.length).toBeGreaterThanOrEqual(3);
+      expect(liveProbes[0]?.afterSequenceExclusive).toBe(0);
+      for (let index = 1; index < liveProbes.length; index++) {
+        expect(liveProbes[index]?.afterSequenceExclusive).toBe(
+          liveProbes[index - 1]?.throughSequenceInclusive,
+        );
+      }
       const lastLiveRef = checkpointRefForThreadTurnLive(
         threadId,
         turnId,
@@ -5961,8 +5972,32 @@ describe("CheckpointReactor", () => {
         .filter((ref) => ref.startsWith(`${liveRef}_`) && gitRefExists(harness.cwd, ref));
     await vi.waitFor(() => expect(retainedLiveRefs()).toHaveLength(1));
 
-    // An edit inside the next window stays pending; turn completion drops it.
+    // A stale completion for another turn must not cancel this turn's pending
+    // capture or replace its journal watermark with a terminal fence.
     emitFileChange(6);
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    await harness.drain();
+    harness.provider.emit({
+      type: "turn.completed",
+      eventId: EventId.makeUnsafe("evt-old-turn-completed-claude-burst"),
+      provider: "claudeAgent",
+      createdAt: new Date().toISOString(),
+      threadId,
+      turnId: asTurnId("old-burst-turn"),
+      payload: { state: "completed" },
+    });
+    await waitForThread(
+      harness.engine,
+      (entry) =>
+        entry.checkpoints.some((checkpoint) =>
+          checkpoint.files?.some((file) => file.path === "burst-6.txt"),
+        ),
+      2000,
+    );
+    expect(liveCaptures()).toBe(3);
+
+    // An edit inside the next window stays pending; its own completion drops it.
+    emitFileChange(7);
     await new Promise((resolve) => setTimeout(resolve, 25));
     await harness.drain();
     harness.provider.emit({
@@ -5981,7 +6016,7 @@ describe("CheckpointReactor", () => {
     );
     await new Promise((resolve) => setTimeout(resolve, throttleWindowMs + 200));
     await harness.drain();
-    expect(liveCaptures()).toBe(2);
+    expect(liveCaptures()).toBe(3);
     expect(retainedLiveRefs()).toHaveLength(0);
     const thread = (await Effect.runPromise(harness.engine.getReadModel())).threads.find(
       (entry) => entry.id === threadId,
@@ -5991,6 +6026,7 @@ describe("CheckpointReactor", () => {
     expect(thread?.checkpoints[0]?.files?.map((file) => file.path).toSorted()).toEqual([
       ...burstFiles,
       "burst-6.txt",
+      "burst-7.txt",
     ]);
   });
 

@@ -44,6 +44,8 @@ export interface ProviderRuntimeEventRepositoryShape {
     readonly threadId: string;
     readonly throughSequenceInclusive: number;
     readonly beforeSequenceExclusive?: number;
+    /** Incremental readers check only the journal tail after their last successful bound. */
+    readonly afterSequenceExclusive?: number;
     readonly limit: number;
     readonly turnId?: string;
     readonly eventTypes?: ReadonlyArray<string>;

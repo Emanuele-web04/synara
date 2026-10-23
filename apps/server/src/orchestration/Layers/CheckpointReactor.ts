@@ -1087,16 +1087,30 @@ const make = Effect.fnUntraced(function* (options?: CheckpointReactorLiveOptions
       return;
     // This independent consumer can observe terminal capture failure before
     // ingestion projects it. Reuse the indexed journal owner at capture cadence.
-    const terminalEvents = yield* runtimeRepository
-      .readThreadEvents({
-        threadId: thread.id,
-        turnId,
-        throughSequenceInclusive: yield* runtimeRepository.getHighWaterSequence,
-        eventTypes: ["turn.completed", "turn.aborted"],
-        limit: 1,
-      })
-      .pipe(Effect.orDie);
-    if (terminalEvents.length > 0) return;
+    const throttle = liveTurnDiffThrottles.get(thread.id);
+    const previousFence =
+      throttle?.terminalFence?.turnId === turnId ? throttle.terminalFence : undefined;
+    if (previousFence?.settled) return;
+    const throughSequence = yield* runtimeRepository.getHighWaterSequence;
+    if (previousFence === undefined || throughSequence > previousFence.throughSequence) {
+      const terminalEvents = yield* runtimeRepository
+        .readThreadEvents({
+          threadId: thread.id,
+          turnId,
+          throughSequenceInclusive: throughSequence,
+          afterSequenceExclusive: previousFence?.throughSequence ?? 0,
+          eventTypes: ["turn.completed", "turn.aborted"],
+          limit: 1,
+        })
+        .pipe(Effect.orDie);
+      // Advance only the successfully queried bound; concurrent journal appends
+      // belong to the next probe. A terminal observation remains sticky.
+      const settled =
+        terminalEvents.length > 0 ||
+        (throttle?.terminalFence?.turnId === turnId && throttle.terminalFence.settled === true);
+      if (throttle) throttle.terminalFence = { turnId, throughSequence, settled };
+      if (settled) return;
+    }
 
     // Never override a real (non-placeholder) checkpoint already captured for
     // this turn by the terminal turn.completed path.
@@ -2012,6 +2026,11 @@ const make = Effect.fnUntraced(function* (options?: CheckpointReactorLiveOptions
   // processLane) and stays the authoritative checkpoint.
   type LiveTurnDiffThrottle = {
     lastCaptureAt: number;
+    terminalFence?: {
+      readonly turnId: TurnId;
+      readonly throughSequence: number;
+      readonly settled: boolean;
+    };
     pending:
       | {
           readonly event: Extract<ProviderRuntimeEvent, { type: "item.completed" }>;
@@ -2021,8 +2040,13 @@ const make = Effect.fnUntraced(function* (options?: CheckpointReactorLiveOptions
   };
   const liveTurnDiffThrottles = new Map<ThreadId, LiveTurnDiffThrottle>();
   const reactorScope = yield* Effect.scope;
-  const cancelLiveTurnDiff = (threadId: ThreadId) => {
-    liveTurnDiffThrottles.delete(threadId);
+  const cancelLiveTurnDiff = (threadId: ThreadId, turnId: TurnId | null, sequence: number) => {
+    const throttle = liveTurnDiffThrottles.get(threadId);
+    if (!throttle || !turnId) return;
+    const owningTurn = throttle.pending?.event.turnId ?? throttle.terminalFence?.turnId;
+    if (owningTurn !== turnId) return;
+    throttle.pending = undefined;
+    throttle.terminalFence = { turnId, throughSequence: sequence, settled: true };
   };
   const captureTrailingLiveTurnDiff = (threadId: ThreadId, throttle: LiveTurnDiffThrottle) =>
     Effect.suspend(() => {
@@ -2053,22 +2077,29 @@ const make = Effect.fnUntraced(function* (options?: CheckpointReactorLiveOptions
     event: Extract<ProviderRuntimeEvent, { type: "item.completed" }>,
   ) {
     const now = Date.now();
-    const throttle = liveTurnDiffThrottles.get(event.threadId);
+    const cachedThrottle = liveTurnDiffThrottles.get(event.threadId);
+    const throttle =
+      cachedThrottle?.terminalFence && cachedThrottle.terminalFence.turnId !== event.turnId
+        ? undefined
+        : cachedThrottle;
     if (
       throttle === undefined ||
       (throttle.pending === undefined &&
         now - throttle.lastCaptureAt >= liveTurnDiffThrottleWindowMs)
     ) {
-      // Entries whose window closed with nothing pending carry no state.
-      for (const [threadId, entry] of liveTurnDiffThrottles) {
-        if (
-          entry.pending === undefined &&
-          now - entry.lastCaptureAt >= liveTurnDiffThrottleWindowMs
-        ) {
-          liveTurnDiffThrottles.delete(threadId);
+      // Preserve the exact-turn journal watermark across quiet windows. Retain
+      // at most one per thread; ordinary capacity eviction may recheck a prefix.
+      if (throttle === undefined && liveTurnDiffThrottles.size >= CHECKPOINT_REACTOR_CAPACITY) {
+        for (const [threadId, entry] of liveTurnDiffThrottles) {
+          if (entry.pending === undefined) {
+            liveTurnDiffThrottles.delete(threadId);
+            break;
+          }
         }
       }
-      liveTurnDiffThrottles.set(event.threadId, { lastCaptureAt: now, pending: undefined });
+      const current = throttle ?? { lastCaptureAt: now, pending: undefined };
+      current.lastCaptureAt = now;
+      liveTurnDiffThrottles.set(event.threadId, current);
       yield* captureLiveTurnDiff(event);
       return;
     }
@@ -2206,6 +2237,8 @@ const make = Effect.fnUntraced(function* (options?: CheckpointReactorLiveOptions
       for (const [threadId, workspace] of keys) {
         if (workspace.projectId === event.aggregateId) changedWorkspaceThreads.add(threadId);
       }
+    } else if (event.type === "thread.deleted") {
+      liveTurnDiffThrottles.delete(event.payload.threadId);
     } else if (event.type === "thread.session-set") {
       workspaceConfigurationSequence = event.sequence;
       if (keys.has(event.aggregateId)) changedSessionThreads.add(event.aggregateId);
@@ -3053,7 +3086,13 @@ const make = Effect.fnUntraced(function* (options?: CheckpointReactorLiveOptions
             if (!supersededLiveDiff) {
               const work =
                 nextRuntime.event.type === "turn.completed"
-                  ? Effect.sync(() => cancelLiveTurnDiff(nextRuntime.event.threadId)).pipe(
+                  ? Effect.sync(() =>
+                      cancelLiveTurnDiff(
+                        nextRuntime.event.threadId,
+                        toTurnId(nextRuntime.event.turnId),
+                        nextRuntime.sequence,
+                      ),
+                    ).pipe(
                       Effect.andThen(
                         processNativeCompletion(nextRuntime.sequence, nextRuntime.event),
                       ),

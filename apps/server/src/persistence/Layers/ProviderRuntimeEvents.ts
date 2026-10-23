@@ -270,6 +270,7 @@ const make = Effect.gen(function* () {
 
   const readThreadEvents: ProviderRuntimeEventRepositoryShape["readThreadEvents"] = (input) => {
     const beforeSequence = input.beforeSequenceExclusive ?? Number.MAX_SAFE_INTEGER;
+    const afterSequence = input.afterSequenceExclusive ?? 0;
     const turnFilter = input.turnId === undefined ? sql`` : sql`AND turn_id = ${input.turnId}`;
     const typeFilter =
       input.eventTypes === undefined || input.eventTypes.length === 0
@@ -282,6 +283,7 @@ const make = Effect.gen(function* () {
         WHERE thread_id = ${input.threadId}
           AND sequence <= ${input.throughSequenceInclusive}
           AND sequence < ${beforeSequence}
+          AND sequence > ${afterSequence}
           ${turnFilter}
           ${typeFilter}
         ORDER BY sequence DESC
