@@ -125,6 +125,10 @@ export function useKanbanTaskScratchDraft(input: {
     useComposerDraftStore.getState().clearAssistantSelections(scratchThreadId);
   };
 
+  const removeComposerAssistantSelection = (selectionId: string) => {
+    useComposerDraftStore.getState().removeAssistantSelection(scratchThreadId, selectionId);
+  };
+
   const clearComposerFileComments = () => {
     useComposerDraftStore.getState().clearFileComments(scratchThreadId);
   };
@@ -157,6 +161,7 @@ export function useKanbanTaskScratchDraft(input: {
     addComposerImages,
     removeComposerImage,
     clearComposerAssistantSelections,
+    removeComposerAssistantSelection,
     clearComposerFileComments,
     removeComposerTerminalContext,
   };

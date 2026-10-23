@@ -1170,3 +1170,48 @@ describe("composerDraftStore syncPersistedAttachments", () => {
     ).not.toHaveProperty("appIconDataUrl");
   });
 });
+
+const makeAssistantSelection = (id: string, comment?: string) => ({
+  type: "assistant-selection" as const,
+  id,
+  assistantMessageId: "assistant-1",
+  text: `Quote ${id}`,
+  ...(comment ? { comment } : {}),
+});
+
+describe("composerDraftStore updateAssistantSelectionComment", () => {
+  const threadId = ThreadId.makeUnsafe("thread-selection-comment");
+
+  beforeEach(() => {
+    resetComposerDraftStore();
+  });
+
+  it("rewrites, trims, and clears one selection's comment in place", () => {
+    const store = useComposerDraftStore.getState();
+    store.addAssistantSelection(threadId, makeAssistantSelection("sel-1", "first"));
+    store.addAssistantSelection(threadId, makeAssistantSelection("sel-2", "second"));
+
+    store.updateAssistantSelectionComment(threadId, "sel-1", "  rewritten  ");
+    let selections =
+      useComposerDraftStore.getState().draftsByThreadId[threadId]!.assistantSelections;
+    expect(selections.map((entry) => [entry.id, entry.comment])).toEqual([
+      ["sel-1", "rewritten"],
+      ["sel-2", "second"],
+    ]);
+
+    store.updateAssistantSelectionComment(threadId, "sel-1", "   ");
+    selections = useComposerDraftStore.getState().draftsByThreadId[threadId]!.assistantSelections;
+    expect(selections[0]).not.toHaveProperty("comment");
+    expect(selections[0]!.text).toBe("Quote sel-1");
+  });
+
+  it("ignores unknown selections and unchanged comments", () => {
+    const store = useComposerDraftStore.getState();
+    store.addAssistantSelection(threadId, makeAssistantSelection("sel-1", "same"));
+    const before = useComposerDraftStore.getState().draftsByThreadId;
+
+    store.updateAssistantSelectionComment(threadId, "missing", "text");
+    store.updateAssistantSelectionComment(threadId, "sel-1", "same");
+    expect(useComposerDraftStore.getState().draftsByThreadId).toBe(before);
+  });
+});
