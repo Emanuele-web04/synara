@@ -68,6 +68,12 @@ export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
           "Hyprland uses compositor blur when it is confirmed enabled. Linux artwork is registered per app flavor, and connected panes retain the controlling window's styling.",
       },
       {
+        id: "continuous-landing-pattern",
+        title: "A continuous empty-chat background",
+        description:
+          "The ASCII pattern continues beneath the composer, which keeps its own surface. Reduced-motion and pause-when-hidden behavior stay in place.",
+      },
+      {
         id: "native-companion-153",
         title: "Companion build 153, prepared separately",
         description:

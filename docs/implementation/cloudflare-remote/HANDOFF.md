@@ -2,11 +2,12 @@
 
 ## Main integration and next release preparation — 2026-10-23
 
-- Integrated the 19 upstream commits through `d7542782` with ordinary merges,
+- Integrated the 21 upstream commits through `29b11e10` with ordinary merges,
   preserving the published Remote history and separate app identity. This includes
   provider stop/recovery, Devin background work, Hub routing, captured turn diffs,
   persisted Activity grouping, terminal reuse, window behavior and Stable 1.0.8
-  documentation. The source branch keeps its Remote versions; release assembly
+  documentation, verified download references and the continuous landing pattern
+  beneath the composer's own surface. The source branch keeps its Remote versions; release assembly
   assigns the next Remote version separately.
 - Remote software-update admission now also checks retained provider sessions.
   Failed process cleanup or a failed retained-session read keeps restart blocked;
@@ -28,6 +29,10 @@
 - Native Core passes **352 tests / 38 suites**. Release qualification is still in
   progress; the last confirmed published builds remain Remote **.28** and universal
   TestFlight **0.1 (152)** until their successors are independently verified.
+- All **60 selected browser integration cases** pass. Two apparent tab-control
+  failures came from desktop fixtures extending beyond the mobile-sized test
+  viewport; explicit desktop bounds and viewport restoration retain every original
+  geometry and click assertion without changing production UI.
 
 ## Recupero dopo il vecchio rifiuto — 17 ottobre 2026
 

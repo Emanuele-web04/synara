@@ -20,13 +20,15 @@
 - Orphaned agent work settles instead of remaining active indefinitely. Stopped Pi and Antigravity sessions recover through the normal next-turn path, and unanswered foreground Computer Use prompts report cancellation.
 - Hyprland uses compositor-backed blur when blur is confirmed enabled. Linux app artwork remains isolated by flavor, and connected workspace panes retain the controlling window's display capability without gaining native controls.
 
+- The empty-chat ASCII pattern stays continuous beneath the composer, which keeps its own surface. Reduced-motion and pause-when-hidden behavior remain in place.
+
 ### Companion iPhone and iPad
 
 - Universal build 153 is prepared separately with background-task replay corrections, stable terminal task states, preserved command/start-time metadata and matching Stop availability. Upload and tester availability are verified independently; this desktop update does not install the mobile build.
 
 ### Verification
 
-- Integrates main through `d7542782fd52a1dedf9634e1765ab62fa60e259f` while retaining all published Remote .28 source, release history, identities, data homes and update feeds.
+- Integrates main through `29b11e105200c7bc6e2c71a06a375513d4c8a72d` while retaining all published Remote .28 source, release history, identities, data homes and update feeds.
 - Local checks qualify the reviewed candidate. Publication still requires exact-tag quality and server suites, all three packaged platform checks, macOS signing/notarization, Windows Defender and source/lockfile-bound artifact provenance. Pending gates are not passed gates.
 - Remote ships macOS Apple Silicon, Windows x64 and Linux x64 installers. Windows retains its exact-version unsigned exception and may show SmartScreen. Physical-device behavior, compositor integration and manual installed-app upgrades need separate verification.
 
