@@ -122,3 +122,7 @@ the disk, while disposing a pipe reader can interrupt the app. Use `Logger`,
 `NSLog`, or `os_log` for output that should appear in these tools.
 Input errors after partial delivery are never replayed automatically. A launch or
 wait with `settled: false` is not evidence that the resulting screen is ready.
+
+## Idle simulator ownership in 1.0.8
+
+Synara releases agent-booted simulators after their owned work settles. Overlapping turns and renewed use retain their leases, so another active turn is not shut down by delayed cleanup. This does not authorize stopping a simulator started outside Synara's ownership.

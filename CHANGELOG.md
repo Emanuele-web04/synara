@@ -1,5 +1,39 @@
 # Changelog
 
+## 1.0.8 — 2026-10-23
+
+**Reliable handoffs and recovery, clearer parallel work, captured live diffs and workspace refinements.**
+
+This Stable release covers all 32 commits after `v1.0.7` through `f9ba953a6a26769bf73c78c2bae673e5a09ba62f`. The native editor, connectors and diagnostics remain Beta-only. Stable and Beta keep separate identities, data homes and update feeds.
+
+### Added
+
+- A new-thread + follows the chat tabs and creates a chat in the current workspace. Environment offers shared project-action creation and editing; header actions are grouped with independent visibility preferences.
+- Running subagents appear above the composer. Devin ACP background work and child agents retain task, permission and turn ownership across replay and recovery; Claude child chats report their resolved model.
+- Turn diffs expose captured live snapshots and complete Codex cumulative patches against their exact baseline, including Ignore whitespace. Incomplete evidence remains unavailable until a complete update or final checkpoint.
+- Hyprland supports compositor-backed translucency when blur is confirmed enabled; Linux artwork is isolated by app flavor.
+
+### Changed
+
+- Hub context distinguishes coordinator and worker roles and labels provenance. Original human requests and attachment references accompany delegated work; stable task keys make replay idempotent. Ordinary follow-ups queue; steering can interrupt.
+- SQLite free pages are reclaimed incrementally. Existing databases convert only after clean shutdown with sufficient reclaimable pages and scratch space, under a bounded subprocess deadline. This is not guaranteed emergency disk recovery.
+- Idle agent-booted simulators are released after owned work settles, preserving overlapping and renewed leases.
+
+### Fixed
+
+- Send, Continue task and Implement use Hand off consistently. Auto-mode saves preserve pending provider switches; queued work follows the current provider/model. Stored-selection recovery preserves protected history and refuses switches that would silently end background tasks.
+- Codex fresh-resume fallback restores prior transcript context, handles threads without rollouts and discloses omitted or shortened messages. Runtime warnings surface in chat. Plugin discovery is isolated from live sessions, and retired gateway write authority is renewed without reviving old credentials.
+- Hubs settle non-Git workers and preserve settings saves after pause/resume. Orphaned agent tasks settle. Stopped Pi and Antigravity sessions report inactivity for normal next-turn recovery.
+- Done and Archive stay within the active Space; Activity grouping persists. New-thread creation validates current hydration, and window activation, composer updates and terminal activation preserve chosen keyboard focus.
+- Cmd/Ctrl+W closes the focused chat tab or dock terminal. Idle terminal reuse works with large process tables and retains input while commands start.
+- Safari setup detects an existing Full Disk Access grant. Unanswered foreground Computer Use prompts report cancellation. Nested untracked repositories no longer break ordinary working-tree diffs.
+
+### Verification
+
+The complete candidate receives brand, formatting, lint, typecheck, release smoke, focused tests and the relevant Windows runtime boundary check. One publication workflow on the exact tag SHA supplies the complete quality/server suites, portable build, native packages, signing/notarization, provenance, Windows Defender and packaged startup gates. Results are recorded in the publication notes after verification; pending gates are not passed gates.
+
+See [source audit](docs/releases/1.0.8-source-audit.md) for every commit and the durable documentation audit. Release preparation changes visible release text only through the existing surfaces. Manual installed-app upgrades, live provider/microphone behavior and browser-download reputation remain separately unqualified.
+
 ## 1.0.6-remote.26 — 2026-10-18
 
 ### Fixed

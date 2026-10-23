@@ -182,3 +182,9 @@ Separate or revert them. The handoff does not expand the original ownership boun
   The Synara task still owns one body of work. Create a separate task and worktree when both
   providers should proceed independently.
 </Callout>
+
+## Queued work and recovery in 1.0.8
+
+Send, **Continue task** and **Implement** use the same provider-handoff path. Saving Auto access mode leaves a pending provider switch to Send. Queued messages follow the chat's current provider and model instead of switching it back; unsupported Auto falls back to Ask for approval. A stored provider change cannot silently terminate background work.
+
+If Codex cannot resume its saved native session, Synara can start fresh and pass the saved conversation context, including a handoff session that never wrote a first rollout. A recovery notice discloses omitted or shortened messages. Review the recovered conversation and workspace before assuming that every detail transferred. Native runtime warnings are visible in chat.

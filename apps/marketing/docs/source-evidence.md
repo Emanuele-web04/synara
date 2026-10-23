@@ -417,3 +417,9 @@ Unrelated dirty files in the older local website checkout remain untouched.
 ## Synara 1.0.6 release audit — 2026-10-16
 
 Source: Stable range `v1.0.5..612aff6d8fdcdb9e849d8c8750a8683e7e2dca81` (16 commits). Provider discovery and troubleshooting updates cite their owning source files inline. Changelog highlights mirror the app entry; no Beta-only feature is promoted. Download snapshots are refreshed only after publication.
+
+## Stable 1.0.8 and Beta 1.0.9-beta.1 source audit
+
+Audited application source: `f9ba953a6a26769bf73c78c2bae673e5a09ba62f`, all 32 commits after Stable 1.0.7, plus the prior Stable changes since Beta 1.0.6-beta.1. Evidence: `docs/releases/1.0.8-source-audit.md`, `docs/editor/intelligence.md`, `docs/hubs.md`, `docs/providers.md`, `docs/core-concepts.md`, `docs/sqlite-space-reclamation.md`, shared Beta feature policy, server editor gate, provider/runtime adapters, checkpoint queries, keyboard bindings and desktop window/Safari handlers.
+
+Updated existing guides and their navigation dependencies for editor/debugger limits, live diffs, handoffs, Hubs, subagents, navigation/focus, actions, terminal reuse, Safari access, simulator ownership and conservative storage maintenance. Native editor and connectors remain Beta-only; Stable retains its editor. Publication and deployed-site verification are recorded separately after the exact release candidates pass.

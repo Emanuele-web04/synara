@@ -67,3 +67,7 @@ Source evidence: Synara v1.0.4 (`a62d7c733d19f5538ffc0d126d57437b3b578ff1`) `app
 Stable 1.0.5 and Beta preserve composer focus while the agent clicks, types or inspects a native browser tab. Hovering over the native page also keeps your existing keyboard target. This uses tab protocol input and does not guarantee that every website accepts the action; inspect the page's actual result.
 
 Source evidence: feature head `4b2441d`; `apps/desktop/src/browserAutomation/betterwrightCdp.ts`, `screenshotCapture.ts` and `apps/web/src/components/ChatView.tsx`.
+
+## Safari access detection in 1.0.8
+
+Synara checks Safari Full Disk Access from the desktop process that reads cookies. After access is granted and the app is relaunched, setup no longer repeats; revisiting Settings shows the granted status. A failed or unavailable probe can remain unknown, so inspect the current status instead of assuming the grant succeeded.

@@ -15511,6 +15511,7 @@ describe("Claude subagent tracking", () => {
       const harness = makeHarness();
       const BG = "toolu_background_agent_notified";
       const TASK = "task-bg-notified";
+      const LIVE_TASK = "task-bg-still-live";
       return Effect.gen(function* () {
         const events = yield* eventsThroughStop(
           harness,
@@ -15524,13 +15525,22 @@ describe("Claude subagent tracking", () => {
               summary: "Done.",
             }),
             system("background_tasks_changed", {
-              tasks: [{ task_id: TASK, task_type: "local_agent", description: "Background job" }],
+              tasks: [
+                { task_id: TASK, task_type: "local_agent", description: "Background job" },
+                { task_id: LIVE_TASK, task_type: "local_bash", description: "Still-running shell" },
+              ],
             }),
           ],
-          (event) => event.type === "runtime.warning" && detailTaskIds(event).includes(TASK),
+          // The completed task is suppressed; the live sibling proves the snapshot drained.
+          (event) => event.type === "runtime.warning" && detailTaskIds(event).includes(LIVE_TASK),
+        );
+        assert.deepEqual(
+          events.filter((event) => event.type === "runtime.warning").flatMap(detailTaskIds),
+          [LIVE_TASK],
         );
         assert.deepEqual(taskCompletions(events), [
           { taskId: TASK, status: "completed", toolUseId: BG, onRoot: true },
+          { taskId: LIVE_TASK, status: "stopped", toolUseId: undefined, onRoot: true },
         ]);
       }).pipe(
         Effect.provideService(Random.Random, makeDeterministicRandomService()),
