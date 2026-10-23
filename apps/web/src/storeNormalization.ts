@@ -61,6 +61,7 @@ export type ProjectNormalizationInput = Pick<
   | "defaultModelSelection"
   | "scripts"
   | "isPinned"
+  | "titleRefreshMode"
   | "spaceId"
   | "createdAt"
   | "updatedAt"
@@ -185,6 +186,9 @@ export function threadShellsEqual(left: ThreadShell | undefined, right: ThreadSh
     (left.snoozeReminderAt ?? null) === (right.snoozeReminderAt ?? null) &&
     left.updatedAt === right.updatedAt &&
     (left.isPinned ?? false) === (right.isPinned ?? false) &&
+    (left.manualTitlePinned ?? false) === (right.manualTitlePinned ?? false) &&
+    (left.titleRefreshMode ?? null) === (right.titleRefreshMode ?? null) &&
+    (left.pendingSuggestedTitle ?? null) === (right.pendingSuggestedTitle ?? null) &&
     left.envMode === right.envMode &&
     left.branch === right.branch &&
     left.worktreePath === right.worktreePath &&
@@ -454,6 +458,7 @@ export function normalizeProject(
     previous.defaultModelSelection === defaultModelSelection &&
     previous.expanded === expanded &&
     (previous.isPinned ?? false) === (incoming.isPinned ?? false) &&
+    (previous.titleRefreshMode ?? null) === (incoming.titleRefreshMode ?? null) &&
     (previous.spaceId ?? null) === (incoming.spaceId ?? null) &&
     previous.createdAt === incoming.createdAt &&
     previous.updatedAt === incoming.updatedAt &&
@@ -475,6 +480,7 @@ export function normalizeProject(
     defaultModelSelection,
     expanded,
     isPinned: incoming.isPinned ?? false,
+    titleRefreshMode: incoming.titleRefreshMode ?? null,
     spaceId: incoming.spaceId ?? null,
     createdAt: incoming.createdAt,
     updatedAt: incoming.updatedAt,
@@ -1937,6 +1943,9 @@ export function normalizeThreadFromReadModel(
     previous.snoozeSequence === snoozeSequence &&
     previous.updatedAt === incoming.updatedAt &&
     (previous.isPinned ?? false) === (incoming.isPinned ?? false) &&
+    (previous.manualTitlePinned ?? false) === (incoming.manualTitlePinned ?? false) &&
+    (previous.titleRefreshMode ?? null) === (incoming.titleRefreshMode ?? null) &&
+    (previous.pendingSuggestedTitle ?? null) === (incoming.pendingSuggestedTitle ?? null) &&
     previous.latestTurn === latestTurn &&
     previous.pendingSourceProposedPlan === pendingSourceProposedPlan &&
     previous.pendingTurnStartMessageId === pendingTurnStartMessageId &&
@@ -2004,6 +2013,9 @@ export function normalizeThreadFromReadModel(
     ...(snoozeSequence !== undefined ? { snoozeSequence } : {}),
     updatedAt: incoming.updatedAt,
     isPinned: incoming.isPinned ?? false,
+    manualTitlePinned: incoming.manualTitlePinned ?? false,
+    titleRefreshMode: incoming.titleRefreshMode ?? null,
+    pendingSuggestedTitle: incoming.pendingSuggestedTitle ?? null,
     latestTurn,
     ...(pendingSourceProposedPlan ? { pendingSourceProposedPlan } : {}),
     ...(pendingTurnStartMessageId !== undefined ? { pendingTurnStartMessageId } : {}),
@@ -2155,6 +2167,9 @@ export function normalizeThreadShellSnapshot(
     ...(snoozeSequence !== undefined ? { snoozeSequence } : {}),
     updatedAt: incoming.updatedAt,
     isPinned: incoming.isPinned ?? false,
+    manualTitlePinned: incoming.manualTitlePinned ?? false,
+    titleRefreshMode: incoming.titleRefreshMode ?? null,
+    pendingSuggestedTitle: incoming.pendingSuggestedTitle ?? null,
     envMode: incoming.envMode ?? "local",
     branch: resolvedBranch,
     worktreePath: nextWorktreePath,

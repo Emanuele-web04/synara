@@ -3,7 +3,7 @@
 // Layer: UI component
 // Exports: EditProjectDialog, EditProjectValue
 
-import { useEffect, useId, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 
 import type { ProjectAppearance } from "~/lib/projectAppearance";
 import { PROJECT_DIALOG_FIELD_CONTROL_CLASS_NAME } from "./CreateGitHubProjectFields";
@@ -35,6 +35,7 @@ export interface EditProjectDialogProps {
   initialValue: EditProjectValue;
   onOpenChange: (open: boolean) => void;
   onSave: (value: EditProjectValue) => void;
+  belowField?: ReactNode | undefined;
 }
 
 export function EditProjectDialog({
@@ -44,6 +45,7 @@ export function EditProjectDialog({
   initialValue,
   onOpenChange,
   onSave,
+  belowField,
 }: EditProjectDialogProps) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -59,6 +61,7 @@ export function EditProjectDialog({
           initialValue={initialValue}
           onOpenChange={onOpenChange}
           onSave={onSave}
+          belowField={belowField}
         />
       </DialogPopup>
     </Dialog>
@@ -71,6 +74,7 @@ function EditProjectForm({
   initialValue,
   onOpenChange,
   onSave,
+  belowField,
 }: Omit<EditProjectDialogProps, "open">) {
   const [name, setName] = useState(initialValue.name);
   const [appearance, setAppearance] = useState(initialValue.appearance);
@@ -155,6 +159,7 @@ function EditProjectForm({
             />
           </PopoverPopup>
         </Popover>
+        {belowField}
       </DialogPanel>
       <DialogFooter>
         <Button variant="outline" size="sm" onClick={() => onOpenChange(false)}>
