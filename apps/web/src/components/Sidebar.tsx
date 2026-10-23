@@ -5320,7 +5320,7 @@ export default function Sidebar() {
           title={thread.title}
           timeLabel={formatRelativeTime(thread.updatedAt ?? thread.createdAt)}
           projectName={hoverMetadata.projectName}
-          projectCwd={hoverMetadata.projectCwd}
+          projectId={hoverProject?.id ?? null}
           projectAppearance={hoverProject?.appearance ?? null}
           sourceProjectName={hoverMetadata.sourceProjectName}
           branch={hoverMetadata.branch}
@@ -5360,7 +5360,7 @@ export default function Sidebar() {
       >
         <ProjectHoverCardContent
           name={project.name}
-          cwd={project.cwd}
+          projectId={project.id}
           appearance={project.appearance ?? null}
           isPinned={pinnedProjectIdSet.has(project.id)}
           chatCount={chatCount}
@@ -5865,7 +5865,8 @@ export default function Sidebar() {
                 className={projectFolderIconClassName}
               >
                 <ProjectSidebarIcon
-                  cwd={project.cwd}
+                  projectId={project.id}
+                  presentation="favicon"
                   expanded={project.expanded}
                   appearance={project.appearance}
                 />
@@ -5977,7 +5978,8 @@ export default function Sidebar() {
         >
           <SidebarLeadingIcon size="sm" tone={SIDEBAR_ROW_LABEL_TEXT_CLASS_NAME}>
             <ProjectSidebarIcon
-              cwd={project.cwd}
+              projectId={project.id}
+              presentation="favicon"
               expanded={false}
               appearance={project.appearance}
             />
@@ -6961,7 +6963,7 @@ export default function Sidebar() {
     return [
       {
         id: shortcut.key,
-        glyphs: railProjectGlyphs(project.cwd, project.appearance ?? null),
+        glyphs: railProjectGlyphs(project.id, project.appearance ?? null),
         label: resolveSidebarProjectRowLabel(project),
         badge: null,
         active: activeRailShortcutKey === shortcut.key,
@@ -8075,7 +8077,7 @@ export default function Sidebar() {
       {editProjectDialogProject ? (
         <EditProjectDialog
           open={editProjectDialog?.open ?? false}
-          cwd={editProjectDialogProject.cwd}
+          projectId={editProjectDialogProject.id}
           folderName={editProjectDialogProject.folderName}
           initialValue={{
             name: editProjectDialogProject.localName ?? "",
