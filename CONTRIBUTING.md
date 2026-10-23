@@ -10,6 +10,18 @@ Large, unfocused, or direction-changing PRs may still be closed quickly.
 
 PRs are automatically labeled with a `vouch:*` trust status and a `size:*` diff size based on changed lines.
 
+Size buckets are XXS (0–9), XS (10–49), S (50–199), M (200–599),
+L (600–999), XL (1,000–2,999), XXL (3,000–5,999), 3XL (6,000–11,999),
+4XL (12,000–24,999), 5XL (25,000–49,999), and 6XL (50,000+).
+Counts exclude lockfiles, generated output, media, evidence, and tests;
+test-only PRs use their test-line count. If GitHub truncates the file list,
+the workflow warns and leaves existing size labels unchanged for manual review.
+
+Conservative path rules in [.github/labeler.json](.github/labeler.json) also add
+`area:*` and `provider:*` labels. These are additive hints, not exhaustive ownership
+classification; labels assigned manually are preserved. `regression`, `performance`,
+and `accessibility` are assigned during triage.
+
 If you are an external contributor, expect `vouch:unvouched` until we explicitly add you to [.github/VOUCHED.td](.github/VOUCHED.td).
 
 ## What We Are Most Likely To Accept
