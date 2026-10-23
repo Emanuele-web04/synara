@@ -402,11 +402,15 @@ export function makeHubWorkService(dependencies: HubWorkDependencies): HubWorkSe
             requestId: input.requestId,
             scopeKey,
             fingerprint,
+            ...(legacyPlanFingerprint === null ? {} : { legacyFingerprint: legacyPlanFingerprint }),
             records,
           })
           .pipe(Effect.mapError(serviceError));
-        yield* Effect.forEach(result.items, notify, { discard: true });
-        return result;
+        const items = result.items.filter((record) =>
+          claimedKeys.has(hubWorkLogicalTaskKey(record)),
+        );
+        yield* Effect.forEach(items, notify, { discard: true });
+        return { ...result, items };
       }),
 
     claimNext: (projectId) =>

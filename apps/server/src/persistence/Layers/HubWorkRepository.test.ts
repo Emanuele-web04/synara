@@ -140,8 +140,10 @@ layer("Hub work durable admission", (it) => {
           [record.id],
         );
         // A frozen task is never forked by a retry that carries a different plan.
-        const changed = yield* submitWork(repository, [{ ...record, fingerprint: "changed" }]);
-        assert.equal(changed.replayed, true);
+        const changed = yield* Effect.exit(
+          submitWork(repository, [{ ...record, fingerprint: "changed" }]),
+        );
+        assert.equal(Exit.isFailure(changed), true);
         // The same request id may not be reused for a different source scope.
         const rescoped = yield* Effect.exit(
           submitWork(repository, [{ ...record, id: "rescoped", scopeKey: "other-source" }], {
@@ -169,6 +171,83 @@ layer("Hub work durable admission", (it) => {
         assert.equal(Exit.isFailure(stale), true);
         assert.deepEqual((yield* repository.get(record.id))?.progress, saved.progress);
       }),
+  );
+
+  it.effect(
+    "appends concurrently prepared task keys without colliding at their provisional index",
+    () =>
+      Effect.gen(function* () {
+        const repository = yield* HubWorkRepository;
+        const hub = ProjectId.makeUnsafe("hub-concurrent-plans");
+        const alpha = {
+          ...work("alpha", 0),
+          projectId: hub,
+          taskKey: "alpha",
+          taskFingerprint: "alpha-plan",
+        };
+        const beta = {
+          ...alpha,
+          id: "beta",
+          taskKey: "beta",
+          taskFingerprint: "beta-plan",
+          requestId: "beta-request",
+          fingerprint: "beta-request-plan",
+        };
+        // Both plans were prepared before either transaction allocated its index.
+        const appended = yield* Effect.all(
+          [submitWork(repository, [alpha]), submitWork(repository, [beta])],
+          { concurrency: 2 },
+        );
+        assert.equal(
+          appended.every((result) => !result.replayed),
+          true,
+        );
+        const stored = yield* repository.list(hub);
+        assert.deepEqual(stored.map((record) => record.id).toSorted(), ["alpha", "beta"]);
+        assert.deepEqual(stored.map((record) => record.taskIndex).toSorted(), [0, 1]);
+        // Retrying one exact request must not expand it to a different key set.
+        const changedRequest = yield* Effect.exit(
+          submitWork(repository, [
+            {
+              ...beta,
+              id: "gamma",
+              taskKey: "gamma",
+              taskFingerprint: "gamma-plan",
+              fingerprint: "gamma-request-plan",
+            },
+          ]),
+        );
+        assert.equal(Exit.isFailure(changedRequest), true);
+        assert.equal((yield* repository.list(hub)).length, 2);
+      }),
+  );
+
+  it.effect("rejects an incompatible decision prepared before another request froze its key", () =>
+    Effect.gen(function* () {
+      const repository = yield* HubWorkRepository;
+      const original = {
+        ...work("frozen-key", 0),
+        projectId: ProjectId.makeUnsafe("hub-frozen-decision"),
+        taskKey: "alpha",
+        taskFingerprint: "original-plan",
+      };
+      yield* submitWork(repository, [original]);
+      const changed = yield* Effect.exit(
+        submitWork(repository, [
+          {
+            ...original,
+            requestId: "concurrent-decision",
+            taskFingerprint: "different-plan",
+            creationSpec: { ...original.creationSpec, prompt: "Different work" },
+          },
+        ]),
+      );
+      assert.equal(Exit.isFailure(changed), true);
+      assert.equal(
+        (yield* repository.get(original.id))?.creationSpec.prompt,
+        original.creationSpec.prompt,
+      );
+    }),
   );
 
   it.effect("never starts cancelled work or paused hubs", () =>

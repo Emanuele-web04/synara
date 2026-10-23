@@ -21,6 +21,7 @@ export interface HubWorkRepositoryShape {
     readonly requestId: string;
     readonly scopeKey: string;
     readonly fingerprint: string;
+    readonly legacyFingerprint?: string;
     readonly records: readonly HubWorkRecord[];
   }) => Effect.Effect<
     { readonly items: readonly HubWorkRecord[]; readonly replayed: boolean },

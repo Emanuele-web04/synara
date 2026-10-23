@@ -172,6 +172,8 @@ matched against that frozen decision:
 A per-turn limit applies only to genuinely new tasks, so a replay of work that is already stored
 still returns its cards instead of failing on the limit. Unkeyed requests follow the same rules, but
 a message can only carry the tasks of its original plan until the coordinator gives them keys.
+Use a new request ID when adding task keys: an existing request ID always refers to its original
+set of tasks. A replay returns only that request's cards, even if later requests added more work.
 
 The sidebar's attention indicator includes the Hub's owned workers in linked repositories and
 workers whose recovery needs your help. For a closed Hub, recovery attention refreshes on return

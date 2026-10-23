@@ -8,7 +8,9 @@ import {
   type OrchestrationThreadShell,
 } from "@synara/contracts";
 import { Effect, Exit, Layer, Option } from "effect";
+import * as SqlClient from "effect/unstable/sql/SqlClient";
 
+import { stableGatewayDigest } from "../agentGateway/creationUtils";
 import { OrchestrationCommandReceiptRepositoryLive } from "../persistence/Layers/OrchestrationCommandReceipts";
 import { ProjectionThreadMessageRepositoryLive } from "../persistence/Layers/ProjectionThreadMessages";
 import { OrchestrationCommandReceiptRepository } from "../persistence/Services/OrchestrationCommandReceipts";
@@ -353,8 +355,48 @@ tests("Hub work provenance, ownership and lifecycle", (it) => {
       assert.equal(frozen.workerThreadId, h.workerId);
       assert.equal(frozen.taskIndex, 0);
       assert.equal((yield* h.repository.get(extended.items[1]!.id))?.taskIndex, 1);
+      const originalReplay = yield* submit(["alpha"], "plan-one");
+      assert.deepEqual(
+        originalReplay.items.map((item) => item.id),
+        [first.items[0]!.id],
+      );
       yield* h.service.setState({ workItemId: frozen.id, state: "completed" });
       assert.equal((yield* h.service.claimNext(h.projectId))?.id, extended.items[1]?.id);
+    }),
+  );
+
+  it.effect("replays an unkeyed request persisted before keyed routing", () =>
+    Effect.gen(function* () {
+      const h = yield* harness("legacy-routing");
+      const initial = yield* h.service.submit(h.input);
+      const legacyFingerprint = stableGatewayDigest(
+        {
+          sourceMessages: h.input.sourceMessages,
+          tasks: h.input.tasks,
+        },
+        64,
+      );
+      // Model the pre-upgrade durable record and request receipt together.
+      for (const item of initial.items) {
+        const { taskKey: _key, taskFingerprint: _fingerprint, ...record } = item;
+        yield* h.repository.save({
+          record: {
+            ...record,
+            fingerprint: legacyFingerprint,
+            revision: item.revision + 1,
+          },
+          expectedRevision: item.revision,
+        });
+      }
+      const sql = yield* SqlClient.SqlClient;
+      yield* sql`UPDATE project_agent_work_requests SET fingerprint = ${legacyFingerprint}
+        WHERE project_id = ${h.projectId} AND request_id = ${h.input.requestId}`;
+      const replay = yield* h.restart().submit(h.input);
+      assert.equal(replay.replayed, true);
+      assert.deepEqual(
+        replay.items.map((record) => record.id),
+        initial.items.map((record) => record.id),
+      );
     }),
   );
 

@@ -53,43 +53,66 @@ export const makeHubWorkRepository = Effect.gen(function* () {
       sql
         .withTransaction(
           Effect.gen(function* () {
-            // A request id belongs to one frozen source scope. Reusing it for a
-            // different scope is a different decision and must not be mistaken
-            // for a replay of the first one.
-            const [request] = yield* sql<{ readonly scopeKey: string }>`
-              SELECT scope_key AS "scopeKey" FROM project_agent_work_requests
+            // A request id freezes its source scope and task set; extending the
+            // plan requires a new request id, including after a restart.
+            const [request] = yield* sql<{
+              readonly scopeKey: string;
+              readonly fingerprint: string;
+            }>`
+              SELECT scope_key AS "scopeKey", fingerprint FROM project_agent_work_requests
               WHERE project_id = ${input.projectId} AND request_id = ${input.requestId}
             `;
-            if (request && request.scopeKey !== input.scopeKey) {
+            if (
+              request &&
+              (request.scopeKey !== input.scopeKey ||
+                (request.fingerprint !== input.fingerprint &&
+                  request.fingerprint !== input.legacyFingerprint))
+            ) {
               return yield* Effect.fail(
                 conflict("This request ID already belongs to a different hub work plan."),
               );
             }
             const existing = yield* readScope(input.projectId, input.scopeKey);
-            const frozen = new Set(existing.map((record) => record.id));
+            const frozen = new Map(existing.map((record) => [record.id, record]));
+            // Recheck the decision under the write transaction: the service's
+            // earlier scope read may have raced another coordinator submission.
+            for (const record of input.records) {
+              const previous = frozen.get(record.id);
+              if (
+                record.projectId !== input.projectId ||
+                record.requestId !== input.requestId ||
+                record.scopeKey !== input.scopeKey ||
+                record.fingerprint !== input.fingerprint ||
+                (previous &&
+                  (previous.taskFingerprint ?? previous.fingerprint) !==
+                    (record.taskFingerprint ?? record.fingerprint))
+              ) {
+                return yield* Effect.fail(
+                  conflict("This task already belongs to a different frozen hub work plan."),
+                );
+              }
+            }
             // Already frozen under this scope: keep the first decision instead of
             // forking a second worker for the same task.
             const records = input.records.filter((record) => !frozen.has(record.id));
+            let taskIndex = existing.reduce(
+              (highest, record) => Math.max(highest, record.taskIndex),
+              -1,
+            );
             for (const record of records) {
+              // Only the transaction can allocate an append position safely.
+              const stored = { ...record, taskIndex: ++taskIndex };
               yield* sql`
-                INSERT OR IGNORE INTO project_agent_work_items
+                INSERT INTO project_agent_work_items
                   (work_item_id, project_id, scope_key, task_index, state, worker_thread_id, slot_held, revision, record_json)
-                VALUES (${record.id}, ${record.projectId}, ${record.scopeKey}, ${record.taskIndex},
-                  ${record.state}, ${record.workerThreadId}, ${record.slotHeld ? 1 : 0}, ${record.revision}, ${JSON.stringify(record)})
+                VALUES (${stored.id}, ${stored.projectId}, ${stored.scopeKey}, ${stored.taskIndex},
+                  ${stored.state}, ${stored.workerThreadId}, ${stored.slotHeld ? 1 : 0}, ${stored.revision}, ${JSON.stringify(stored)})
               `;
             }
             const items = yield* readScope(input.projectId, input.scopeKey);
-            if (records.some((record) => !items.some((item) => item.id === record.id))) {
-              return yield* Effect.fail(
-                conflict(
-                  "Another request is persisting this hub task. Retry with the same request.",
-                ),
-              );
-            }
             yield* sql`
-              INSERT INTO project_agent_work_requests (project_id, request_id, scope_key, fingerprint)
+              INSERT OR IGNORE INTO project_agent_work_requests (project_id, request_id, scope_key, fingerprint)
               VALUES (${input.projectId}, ${input.requestId}, ${input.scopeKey}, ${input.fingerprint})
-              ON CONFLICT (project_id, request_id) DO UPDATE SET fingerprint = excluded.fingerprint
             `;
             return { items, replayed: records.length === 0 };
           }),
