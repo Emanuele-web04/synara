@@ -1,4 +1,7 @@
 import { Effect } from "effect";
+import { mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -17,8 +20,9 @@ import {
   MAX_COMPUTER_CLIPBOARD_BYTES,
 } from "../computer/ComputerBackend.ts";
 import { ComputerTargetError } from "../computer/uiTreeTargeting.ts";
-import { ComputerManager } from "../computer/ComputerManager.ts";
+import { ComputerManager, type ComputerManagerOptions } from "../computer/ComputerManager.ts";
 import { CuaActionError } from "../computer/CuaComputerBackend.ts";
+import { ComputerApprovalExpiredError } from "../computer/ComputerApprovalGate.ts";
 import { desktopDeliveryMode } from "../computer/DesktopOperationQueue.ts";
 import { FakeComputerBackend } from "../computer/FakeComputerBackend.ts";
 import { isModelDesktopObservationActive } from "../computer/modelDesktopObservation.ts";
@@ -88,10 +92,12 @@ async function setup(
     userRequestedVisibleUse: true,
   }),
   requestForegroundConsent?: AgentGatewayComputerToolsOptions["requestForegroundConsent"],
+  managerOptions: Pick<ComputerManagerOptions, "measureScrollTravel"> = {},
+  resolveWorkspaceRoot?: AgentGatewayComputerToolsOptions["resolveWorkspaceRoot"],
 ) {
   // A zero settle delay: these tests assert on what the post-action capture
   // does, not on how long the desktop is given to repaint.
-  const manager = new ComputerManager({ backend, actionSettleMs: 0 });
+  const manager = new ComputerManager({ backend, actionSettleMs: 0, ...managerOptions });
   const browserTools = manager.supportsBrowser
     ? makeAgentGatewayComputerBrowserTools({
         manager,
@@ -106,6 +112,7 @@ async function setup(
     resolveForegroundAuthorization,
     ...(requestForegroundConsent ? { requestForegroundConsent } : {}),
     relatedTools: browserTools,
+    ...(resolveWorkspaceRoot ? { resolveWorkspaceRoot } : {}),
   });
   const byName = new Map([...tools, ...browserTools].map((tool) => [tool.definition.name, tool]));
   const call = async (
@@ -1497,6 +1504,263 @@ describe("agent gateway computer tools", () => {
     });
     expect(backend.callsFor("pressKey")).toHaveLength(2);
   });
+  it.each(["direct", "batch"])(
+    "uses stable explicit verification through %s to release only the verified window",
+    async (route) => {
+      const { backend, manager, call } = await setup();
+      const calculator = { window_id: "fake-calculator", key: "enter", include_screenshot: false };
+      const terminal = { ...calculator, window_id: "fake-terminal" };
+      try {
+        for (const args of [calculator, calculator, terminal, terminal]) {
+          expect((await call("computer_press_key", args)).isError).not.toBe(true);
+        }
+        const verification = {
+          window_id: "fake-calculator",
+          expect: [{ element: { selector: { role: "AXStaticText" }, value_equals: "0" } }],
+        };
+        const verified =
+          route === "direct"
+            ? await call("computer_verify_state", verification)
+            : await call("computer_run", {
+                steps: [{ type: "verify_state", ...verification }],
+                include_screenshot: false,
+              });
+        expect(verified.isError).not.toBe(true);
+        expect((await call("computer_press_key", calculator)).isError).not.toBe(true);
+        expect(resultJson(await call("computer_press_key", terminal))).toMatchObject({
+          error: { code: "repeated_unverified_action" },
+        });
+        expect(backend.callsFor("pressKey")).toHaveLength(5);
+      } finally {
+        await manager.dispose();
+      }
+    },
+  );
+
+  it.each([
+    { status: "unknown", stable: false },
+    { status: "unsatisfied", stable: true },
+    { status: "satisfied", stable: false },
+  ] as const)(
+    "keeps uncertain input blocked after $status / stable=$stable verification",
+    async (verdict) => {
+      const { backend, manager, call } = await setup();
+      vi.spyOn(backend, "verifyState").mockResolvedValue({
+        ...verdict,
+        samples: 1,
+        elapsedMs: 0,
+        predicates: [],
+      });
+      const args = { window_id: "fake-calculator", key: "enter", include_screenshot: false };
+      try {
+        await call("computer_press_key", args);
+        await call("computer_press_key", args);
+        await call("computer_verify_state", {
+          window_id: "fake-calculator",
+          expect: [{ element: { selector: { role: "AXStaticText" }, value_equals: "0" } }],
+        });
+        expect(resultJson(await call("computer_press_key", args))).toMatchObject({
+          error: { code: "repeated_unverified_action" },
+        });
+        expect(backend.callsFor("pressKey")).toHaveLength(2);
+      } finally {
+        await manager.dispose();
+      }
+    },
+  );
+
+  it.each([false, true])(
+    "does not count read-only batches as unverified input (skipped mutation: %s)",
+    async (skippedMutation) => {
+      const { backend, manager, call } = await setup();
+      const observation = { type: "get_state", window_id: "fake-calculator" };
+      const conditionalMutation = {
+        type: "press_key",
+        key: "enter",
+        window_id: "fake-calculator",
+        if_element: { window_id: "fake-calculator", label: "Missing synthetic test control" },
+      };
+      try {
+        for (let attempt = 0; attempt < 4; attempt += 1) {
+          const observed = await call("computer_run", {
+            steps: skippedMutation ? [conditionalMutation, observation] : [observation],
+            include_screenshot: false,
+          });
+          expect(observed.isError, `read-only batch ${attempt + 1}`).not.toBe(true);
+          expect(resultJson(observed)).toMatchObject({
+            completed: 1,
+            stopped: false,
+            ...(skippedMutation ? { skipped: 1 } : {}),
+          });
+        }
+        expect(backend.callsFor("pressKey")).toHaveLength(0);
+      } finally {
+        await manager.dispose();
+      }
+    },
+  );
+
+  it("allows continued scrolling when each action measures content movement", async () => {
+    const backend = new FakeComputerBackend();
+    backend.queueScreenshots(Array.from({ length: 20 }, (_, index) => `scroll-frame-${index}`));
+    const { manager, call, see } = await setup(backend, undefined, undefined, undefined, {
+      measureScrollTravel: () => 20,
+    });
+    try {
+      await see();
+      for (let attempt = 0; attempt < 4; attempt += 1) {
+        const result = await call("computer_scroll", {
+          window_id: "fake-calculator",
+          delta_y: 20,
+        });
+        expect(result.isError).not.toBe(true);
+        expect(resultJson(result)).toMatchObject({
+          scroll: { traveledY: 20 },
+          scrollObservation: { status: "movement-observed" },
+        });
+      }
+      expect(backend.callsFor("scroll")).toHaveLength(4);
+    } finally {
+      await manager.dispose();
+    }
+  });
+
+  it.each(["implicit", "batch"])(
+    "attributes %s mutation history to its actual window before explicit verification",
+    async (route) => {
+      const { backend, manager, call } = await setup();
+      const key = vi.spyOn(backend, "pressKey").mockResolvedValue({ windowId: "fake-calculator" });
+      const send = () =>
+        route === "implicit"
+          ? call("computer_press_key", { key: "enter", include_screenshot: false })
+          : call("computer_run", {
+              steps: [{ type: "press_key", key: "enter", window_id: "fake-calculator" }],
+              include_screenshot: false,
+            });
+      const verify = (window_id: string) =>
+        call("computer_verify_state", {
+          window_id,
+          expect: [{ element: { selector: { role: "AXStaticText" }, exists: true } }],
+        });
+      try {
+        expect((await send()).isError).not.toBe(true);
+        expect((await send()).isError).not.toBe(true);
+        await verify("fake-terminal");
+        expect(resultJson(await send())).toMatchObject({
+          error: { code: "repeated_unverified_action" },
+        });
+        await verify("fake-calculator");
+        expect((await send()).isError).not.toBe(true);
+        expect(key).toHaveBeenCalledTimes(3);
+      } finally {
+        await manager.dispose();
+      }
+    },
+  );
+
+  it.each(["missing", "mixed", "mixed batch"])(
+    "does not clear unscoped history with %s mutation identities",
+    async (identities) => {
+      const { backend, manager, call } = await setup();
+      const key = vi.spyOn(backend, "pressKey");
+      if (identities === "mixed") {
+        key
+          .mockResolvedValueOnce({ windowId: "fake-calculator" })
+          .mockResolvedValueOnce({ windowId: "fake-terminal" });
+      }
+      const send = () =>
+        identities === "mixed batch"
+          ? call("computer_run", {
+              steps: [
+                { type: "press_key", key: "enter", window_id: "fake-calculator" },
+                { type: "press_key", key: "enter", window_id: "fake-terminal" },
+              ],
+              include_screenshot: false,
+            })
+          : call("computer_press_key", { key: "enter", include_screenshot: false });
+      try {
+        await send();
+        await send();
+        for (const window_id of ["fake-calculator", "fake-terminal"]) {
+          await call("computer_verify_state", {
+            window_id,
+            expect: [{ element: { selector: { role: "AXStaticText" }, exists: true } }],
+          });
+          expect(resultJson(await send())).toMatchObject({
+            error: { code: "repeated_unverified_action" },
+          });
+        }
+        expect(key).toHaveBeenCalledTimes(identities === "mixed batch" ? 4 : 2);
+      } finally {
+        await manager.dispose();
+      }
+    },
+  );
+
+  it.each([
+    { placement: "after", verificationWindow: "fake-calculator", shouldBlock: false },
+    { placement: "after", verificationWindow: "fake-terminal", shouldBlock: true },
+    { placement: "before", verificationWindow: "fake-calculator", shouldBlock: true },
+  ])(
+    "uses inline verification $placement mutations on $verificationWindow without hiding later uncertainty",
+    async ({ placement, verificationWindow, shouldBlock }) => {
+      const { backend, manager, call } = await setup();
+      const mutation = { type: "press_key", key: "enter", window_id: "fake-calculator" };
+      const verification = {
+        type: "verify_state",
+        window_id: verificationWindow,
+        expect: [{ element: { selector: { role: "AXStaticText" }, exists: true } }],
+      };
+      const args = {
+        steps: placement === "after" ? [mutation, verification] : [verification, mutation],
+        include_screenshot: false,
+      };
+      try {
+        expect((await call("computer_run", args)).isError).not.toBe(true);
+        expect((await call("computer_run", args)).isError).not.toBe(true);
+        const third = await call("computer_run", args);
+        if (shouldBlock) {
+          expect(resultJson(third)).toMatchObject({
+            error: { code: "repeated_unverified_action" },
+          });
+        } else {
+          expect(third.isError).not.toBe(true);
+          expect(resultJson(third)).toMatchObject({ completed: 2, stopped: false });
+        }
+        expect(backend.callsFor("pressKey")).toHaveLength(shouldBlock ? 2 : 3);
+      } finally {
+        await manager.dispose();
+      }
+    },
+  );
+
+  it("reports expired approval as retryable without dispatch or arming a refusal loop", async () => {
+    let attempts = 0;
+    const { backend, manager, call } = await setup(new FakeComputerBackend(), async () => {
+      if (attempts++ < 4) throw new ComputerApprovalExpiredError();
+      return true;
+    });
+    const audit = vi.spyOn(manager, "recordComputerAudit");
+    const args = { window_id: "fake-calculator", key: "enter", include_screenshot: false };
+    try {
+      for (let attempt = 0; attempt < 4; attempt += 1) {
+        const expired = await call("computer_press_key", args);
+        expect(expired.isError).toBe(true);
+        expect(resultJson(expired)).toMatchObject({
+          error: { code: "approval_expired", effect: "not-dispatched", retryable: true },
+        });
+      }
+      expect(backend.callsFor("pressKey")).toHaveLength(0);
+      expect(audit).toHaveBeenLastCalledWith(
+        expect.objectContaining({ effect: "not-dispatched", code: "approval_expired" }),
+      );
+      expect((await call("computer_press_key", args)).isError).not.toBe(true);
+      expect(backend.callsFor("pressKey")).toHaveLength(1);
+    } finally {
+      await manager.dispose();
+    }
+  });
+
   it("does not turn lease refusals into repeated input or block a later corrected call", async () => {
     const { backend, manager, call } = await setup();
     try {
@@ -2568,6 +2832,110 @@ describe("agent gateway computer tools", () => {
     expect(opened.content.map((entry) => entry.type)).toEqual(["text", "image"]);
   });
 
+  it.each(["before", "during"] as const)(
+    "keeps the exact text target screenshot when a same-app accessory appears %s the write",
+    async (appears) => {
+      const backend = Object.assign(new FakeComputerBackend(), {
+        focusNeutralSemanticText: true,
+      });
+      const { call, manager } = await setup(backend);
+      try {
+        // Establish an earlier action's window baseline. A background semantic
+        // write must not inherit that action's apparent newly opened windows.
+        await call("computer_press_key", { key: "enter", window_id: "fake-calculator" });
+        const before = await backend.listWindows();
+        const target = before.find((window) => window.id === "fake-calculator")!;
+        const showAccessory = () =>
+          backend.emitWindowsChanged([
+            ...before,
+            {
+              ...target,
+              id: "same-app-accessory",
+              title: "",
+              bounds: { x: 6, y: 39, width: 66, height: 20 },
+              focused: false,
+              stackingIndex: 0,
+            },
+          ]);
+        const typeText = backend.typeText.bind(backend);
+        backend.typeText = async (value) => {
+          const result = await typeText(value);
+          if (appears === "during") showAccessory();
+          return {
+            ...result,
+            deliveryPath: "cua-ax-background",
+            verified: "unverifiable",
+            effect: "dispatched-unknown",
+          };
+        };
+        if (appears === "before") showAccessory();
+
+        const typed = await call("computer_type_text", {
+          text: "synthetic paragraph END",
+          label: "Display",
+          role: "text-field",
+          window_id: "fake-calculator",
+        });
+        expect(typed.isError).not.toBe(true);
+        expect(resultJson(typed)).toMatchObject({
+          windowId: "fake-calculator",
+          delivery: { verified: "unverifiable", effect: "dispatched-unknown" },
+          screenshot: { windowId: "fake-calculator", region: target.bounds },
+        });
+        expect(backend.callsFor("typeText")).toHaveLength(1);
+      } finally {
+        await manager.dispose();
+      }
+    },
+  );
+
+  it.each(["changed", "unseen"] as const)(
+    "keeps the %s target image when a click also reveals a same-app accessory",
+    async (previousFrame) => {
+      const { backend, call, manager } = await setup();
+      try {
+        if (previousFrame === "changed") {
+          await call("computer_screenshot", { window_id: "fake-calculator" });
+          backend.queueScreenshots(["changed-target-pixels"]);
+        }
+        const capturesBefore = backend.callsFor("captureScreenshot").length;
+        const before = await backend.listWindows();
+        const target = before.find((window) => window.id === "fake-calculator")!;
+        const click = backend.click.bind(backend);
+        backend.click = async (...args: Parameters<typeof click>) => {
+          const result = await click(...args);
+          backend.emitWindowsChanged([
+            ...before,
+            {
+              ...target,
+              id: "same-app-accessory",
+              title: "",
+              bounds: { x: 6, y: 39, width: 66, height: 20 },
+              focused: false,
+              stackingIndex: 0,
+            },
+          ]);
+          return result;
+        };
+
+        const clicked = await call("computer_click", {
+          label: "Display",
+          window_id: "fake-calculator",
+        });
+        expect(clicked.isError).not.toBe(true);
+        expect(resultJson(clicked)).toMatchObject({
+          windowId: "fake-calculator",
+          observationEvidence: "fresh-frame",
+          screenshot: { windowId: "fake-calculator", region: target.bounds },
+        });
+        expect(backend.callsFor("captureScreenshot").slice(capturesBefore)).toHaveLength(1);
+        expect(backend.callsFor("click")).toHaveLength(1);
+      } finally {
+        await manager.dispose();
+      }
+    },
+  );
+
   it("says an unchanged frame is unsettled rather than asserting the action missed", async () => {
     const { call } = await setup();
     await call("computer_press_key", {
@@ -3525,7 +3893,7 @@ describe("computer never-raise gate", () => {
     let granted = false;
     const consent = vi.fn(async () => {
       granted = true;
-      return true;
+      return "authorized" as const;
     });
     const { call, manager } = await setup(
       backend,
@@ -3548,7 +3916,7 @@ describe("computer never-raise gate", () => {
 
   it("asks once for a run whose steps raise, and never for background calls", async () => {
     const backend = new FakeComputerBackend();
-    const consent = vi.fn(async () => false);
+    const consent = vi.fn(async () => "declined" as const);
     const { call, manager } = await setup(backend, async () => true, refusing, consent);
     try {
       await call("computer_click", { window_id: "fake-calculator", x: 10, y: 10 });
@@ -3566,14 +3934,35 @@ describe("computer never-raise gate", () => {
 
   it("refuses without raising when the user keeps it in the background", async () => {
     const backend = new FakeComputerBackend();
-    const consent = vi.fn(async () => false);
+    const consent = vi.fn(async () => "declined" as const);
     const { call, manager } = await setup(backend, async () => true, refusing, consent);
     try {
       const refused = await call("computer_activate_window", { window_id: "fake-calculator" });
       expect(refused.isError).toBe(true);
       const payload = resultJson(refused) as { error: string; message: string };
       expect(payload.error).toBe("foreground_not_requested");
-      expect(payload.message).toContain("declined, cancelled or left unanswered");
+      expect(payload.message).toContain("declined or cancelled");
+      expect(backend.callsFor("raiseWindow")).toEqual([]);
+      expect(backend.callsFor("focusWindow")).toEqual([]);
+    } finally {
+      await manager.dispose();
+    }
+  });
+
+  it("reports a prompt closed unanswered as cancellable, not as a user decline", async () => {
+    const backend = new FakeComputerBackend();
+    const consent = vi.fn(async () => "cancelled" as const);
+    const { call, manager } = await setup(backend, async () => true, refusing, consent);
+    try {
+      const refused = await call("computer_activate_window", { window_id: "fake-calculator" });
+      expect(refused.isError).toBe(true);
+      const payload = resultJson(refused) as { error: string; message: string };
+      expect(payload.error).toBe("foreground_not_requested");
+      // Nothing was decided, so the refusal must not claim a decline or ban a
+      // fresh prompt — that is the silent-death path from the bug report.
+      expect(payload.message).toContain("closed before the user answered");
+      expect(payload.message).not.toContain("declined or cancelled");
+      expect(payload.message).not.toContain("Do not ask again");
       expect(backend.callsFor("raiseWindow")).toEqual([]);
       expect(backend.callsFor("focusWindow")).toEqual([]);
     } finally {
@@ -4218,6 +4607,74 @@ describe("computer_run", () => {
 });
 
 describe("computer_paste", () => {
+  it("pastes a canonical workspace image and rejects an outside symlink before clipboard access", async () => {
+    const temporary = await mkdtemp(join(tmpdir(), "synara-native-paste-"));
+    const root = await realpath(await mkdtemp(join(temporary, "workspace-")));
+    const inside = join(root, "image.png");
+    const outside = join(temporary, "private.png");
+    const link = join(root, "linked.png");
+    await writeFile(inside, "fixture");
+    await writeFile(outside, "private fixture");
+    await symlink(outside, link);
+    const prepare = vi.fn(async () => async () => true);
+    const backend = Object.assign(new FakeComputerBackend(), { prepareClipboardPaste: prepare });
+    const { manager, call } = await setup(backend, undefined, undefined, undefined, {}, () =>
+      Effect.succeed(root),
+    );
+    try {
+      const accepted = await call("computer_paste", {
+        image_path: inside,
+        window_id: "fake-calculator",
+      });
+      expect(accepted.isError).not.toBe(true);
+      expect(prepare).toHaveBeenCalledWith({ imagePath: inside });
+      const rejected = await call("computer_paste", {
+        image_path: link,
+        window_id: "fake-calculator",
+      });
+      expect(rejected.isError).toBe(true);
+      expect(JSON.stringify(rejected.content)).toContain("outside the active workspace");
+      expect(prepare).toHaveBeenCalledTimes(1);
+      expect(backend.callsFor("hotkey")).toHaveLength(1);
+    } finally {
+      await manager.dispose();
+      await rm(temporary, { recursive: true, force: true });
+    }
+  });
+
+  it.each(["direct", "batch"])("bounds %s file paste before any input is sent", async (route) => {
+    const { backend, manager, call } = await setup();
+    try {
+      const paste = { image_path: "/unscoped/image.png", window_id: "fake-calculator" };
+      const result =
+        route === "direct"
+          ? await call("computer_paste", paste)
+          : await call("computer_run", {
+              steps: [
+                { type: "press_key", key: "enter", window_id: "fake-calculator" },
+                { type: "paste", ...paste },
+              ],
+              include_screenshot: false,
+            });
+      expect(result.isError).toBe(true);
+      expect(result.content).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            type: "text",
+            text: expect.stringContaining(
+              "No canonical workspace is available for native file paste",
+            ),
+          }),
+        ]),
+      );
+      expect(backend.callsFor("pressKey")).toHaveLength(0);
+      expect(backend.callsFor("hotkey")).toHaveLength(0);
+      expect(backend.callsFor("writeClipboard")).toHaveLength(0);
+    } finally {
+      await manager.dispose();
+    }
+  });
+
   it("saves, pastes, and restores the shared clipboard", async () => {
     const { backend, manager, call } = await setup();
     try {

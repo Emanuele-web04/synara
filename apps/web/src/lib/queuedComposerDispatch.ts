@@ -5,7 +5,10 @@
 
 import type { AssistantDeliveryMode, MessageId, ThreadId } from "@synara/contracts";
 
-import { persistModelSelectionBeforeRuntimeMode } from "../components/ChatView.logic";
+import {
+  persistModelSelectionBeforeRuntimeMode,
+  retargetQueuedTurnToThreadProvider,
+} from "../components/ChatView.logic";
 import { useComposerDraftStore, type QueuedComposerTurn } from "../composerDraftStore";
 import { readNativeApi } from "../nativeApi";
 import { clearPendingTurnDispatch, markPendingTurnDispatch } from "../pendingTurnDispatch";
@@ -63,7 +66,7 @@ async function dispatchQueuedComposerTurnOnce(
 
   const createdAt = new Date().toISOString();
   const messageId = input.messageId ?? newMessageId();
-  const queuedTurn = input.queuedTurn;
+  const queuedTurn = retargetQueuedTurnToThreadProvider(input.queuedTurn, thread);
 
   if (queuedTurn.kind === "plan-follow-up") {
     const trimmed = queuedTurn.text.trim();

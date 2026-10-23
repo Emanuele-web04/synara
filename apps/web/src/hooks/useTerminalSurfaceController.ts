@@ -9,9 +9,12 @@ import {
   resolveTerminalCloseTitle,
   shouldPromptForTerminalClose,
 } from "~/lib/terminalCloseConfirmation";
+import { dockTerminalThreadId } from "~/lib/dockTerminalScope";
 import { readNativeApi } from "~/nativeApi";
+import { selectRightDockState, useRightDockStore } from "~/rightDockStore";
 import { selectThreadTerminalState, useTerminalStateStore } from "~/terminalStateStore";
 import { disposeAndCloseTerminalSession } from "~/components/terminal/terminalSession";
+import { toastManager } from "~/components/ui/toast";
 
 type TerminalMetadata = { cliKind: TerminalCliKind | null; label: string };
 type TerminalActivity = {
@@ -104,4 +107,44 @@ export async function closeTerminalSurface(
   await disposeAndCloseTerminalSession({ api, threadId, terminalId, requireStructuredClose: true });
   store.closeTerminal(threadId, terminalId);
   return true;
+}
+
+// Dock-terminal panes in the regular chat layout run their session under a synthetic
+// scope (dockTerminalThreadId) while the pane itself lives in the right dock, so the
+// host thread's terminalOpen/activeTerminalId cannot reach them. Focus tells the two
+// surfaces apart: the focused element sits inside the pane's data-dock-pane-id marker.
+export function focusedDockTerminalPaneId(hostThreadId: ThreadId): string | null {
+  const activeElement = document.activeElement;
+  const paneId =
+    activeElement instanceof Element
+      ? (activeElement.closest("[data-dock-pane-id]")?.getAttribute("data-dock-pane-id") ?? null)
+      : null;
+  if (paneId === null) return null;
+  const pane = selectRightDockState(hostThreadId)(useRightDockStore.getState()).panes.find(
+    (candidate) => candidate.id === paneId,
+  );
+  return pane?.kind === "terminal" ? paneId : null;
+}
+
+export async function closeDockTerminalPane(input: {
+  hostThreadId: ThreadId;
+  paneId: string;
+  confirmationEnabled: boolean;
+}): Promise<void> {
+  try {
+    const closed = await closeTerminalSurface(
+      dockTerminalThreadId(input.hostThreadId),
+      input.confirmationEnabled,
+      input.paneId,
+    );
+    if (closed) {
+      useRightDockStore.getState().closePane(input.hostThreadId, input.paneId);
+    }
+  } catch (error: unknown) {
+    toastManager.add({
+      type: "error",
+      title: "Unable to close terminal",
+      description: error instanceof Error ? error.message : "Please try again.",
+    });
+  }
 }

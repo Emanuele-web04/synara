@@ -1,22 +1,24 @@
-// Right-dock viewers on a whole-window glass shell: real Pierre markup in Chromium, since the
-// fill lives in shadow-root CSS that only resolves against the page's custom properties.
+// Right-dock viewers on a whole-window glass shell: verify the real editor
+// DOM, computed native theme fills, horizontal scrolling and changed rows.
 import "../../index.css";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { createRef } from "react";
 import { page } from "vitest/browser";
 import { afterEach, expect, it } from "vitest";
-import { render } from "vitest-browser-react";
+import { cleanup, render } from "vitest-browser-react";
 
 import { CodeDiffEditorPane } from "../codeEditor/CodeDiffEditorPane";
 import { CodeEditorPane } from "../codeEditor/CodeEditorPane";
-import type { CodeEditHistoryControls } from "../codeEditor/pierreEdit";
+import type { CodeEditHistoryControls } from "../codeEditor/codeEditHistory";
 import { DiffPanelShell } from "../DiffPanelShell";
+import { monaco } from "../codeEditor/editorRuntime";
 
 const root = document.documentElement;
 
 const originalRootStyle = root.getAttribute("style");
 const originalRootClassName = root.className;
-afterEach(() => {
+afterEach(async () => {
+  await cleanup();
   root.removeAttribute("data-window-translucency");
   root.className = originalRootClassName;
   if (originalRootStyle === null) root.removeAttribute("style");
@@ -54,21 +56,33 @@ function mountDockPane(options: { glass: boolean; maximized?: boolean; editor?: 
   );
 }
 
-function viewerParts() {
-  const shadow = page.getByRole("textbox").element().getRootNode() as ShadowRoot;
+async function viewerParts() {
+  const find = () =>
+    monaco.editor
+      .getEditors()
+      .find(
+        (editor) =>
+          editor.getModel()?.uri.scheme === "synara-standalone" && editor.getDomNode()?.isConnected,
+      );
+  // The first test must include cold loading of the lazy editor, unlike the
+  // later parameterized cases. Bound the wait without relaxing any CSS check.
+  await expect.poll(find, { timeout: 10_000 }).toBeDefined();
+  const editor = find()!;
+  const host = editor.getDomNode()!;
   const query = (selector: string) => {
-    const element = shadow.querySelector<HTMLElement>(selector);
+    const element = host.querySelector<HTMLElement>(selector);
     if (!element) throw new Error(`Missing ${selector}`);
     return element;
   };
+  await expect.poll(() => host.querySelector(".view-line")).not.toBeNull();
   return {
     shell: page.getByText("Header").element().closest<HTMLElement>(".app-content-surface"),
-    host: shadow.host,
-    code: query("[data-code]"),
-    file: query("pre"),
-    line: query("[data-line]"),
-    lineNumber: query("[data-column-number]"),
-    gutter: query("[data-gutter]"),
+    editor,
+    host,
+    code: query(".monaco-editor-background"),
+    line: query(".view-line"),
+    lineNumber: query(".line-numbers"),
+    gutter: query(".margin"),
   };
 }
 
@@ -85,14 +99,13 @@ it.each([
     // The shell's fill is the theme's `--app-content-surface`, applied by useTheme at runtime.
     root.style.setProperty("--app-content-surface", "transparent");
     const view = await mountDockPane({ glass: true, editor });
-    await expect.element(page.getByRole("textbox")).toBeVisible();
-    const { shell, host, code, file, line, lineNumber, gutter } = viewerParts();
+    const { shell, host, code, line, lineNumber, gutter, editor: surface } = await viewerParts();
 
-    expect([shell, host, file, code, line, lineNumber, gutter].map(isClear)).not.toContain(false);
+    expect([shell, host, code, line, lineNumber, gutter].map(isClear)).not.toContain(false);
 
-    code.scrollLeft = 120;
+    surface.setScrollLeft(120, monaco.editor.ScrollType.Immediate);
     await expect.poll(() => isClear(gutter)).toBe(false);
-    code.scrollLeft = 0;
+    surface.setScrollLeft(0, monaco.editor.ScrollType.Immediate);
     await expect.poll(() => isClear(gutter)).toBe(true);
 
     root.style.removeProperty("--app-content-surface");
@@ -105,18 +118,18 @@ it.each([
   { name: "a maximized dock", glass: true, maximized: true },
 ])("keeps the viewer's own fill on $name", async ({ glass, maximized }) => {
   const view = await mountDockPane({ glass, maximized });
-  await expect.element(page.getByRole("textbox")).toBeVisible();
-  const { host, code, file, line, lineNumber, gutter } = viewerParts();
+  const { host, code, gutter, editor } = await viewerParts();
 
-  expect([host, file, code, line, lineNumber].map(isClear)).not.toContain(true);
-  // No backing animation either: the gutter's cells already paint the viewer fill.
-  code.scrollLeft = 120;
+  // Monaco's rows inherit these opaque surfaces; they do not repaint each cell.
+  expect([host, code, gutter].map(isClear)).not.toContain(true);
+  editor.setScrollLeft(120, monaco.editor.ScrollType.Immediate);
+  expect(isClear(gutter)).toBe(false);
   expect(getComputedStyle(gutter).animationName).toBe("none");
   await view.unmount();
 });
 
 // Changed rows stay glass on a clear viewer, but keep a visible tint of their own.
-// Exercise actual Pierre split/unified rows, rather than testing CSS source strings.
+// Exercise actual split/unified diff rows, rather than testing CSS source strings.
 it.each([
   { theme: "light" as const, split: false },
   { theme: "light" as const, split: true },
@@ -136,7 +149,6 @@ it.each([
           <div data-right-dock-content style={{ width: 600, height: 240, display: "flex" }}>
             <CodeDiffEditorPane
               original="const unchanged = 0;\nconst before = 1;\n"
-              originalVersion={0}
               modified="const unchanged = 0;\nconst after = 2;\n"
               modifiedVersion={0}
               fileName="sample.ts"
@@ -149,20 +161,16 @@ it.each([
         </div>
       </QueryClientProvider>,
     );
-    await expect.element(page.getByRole("textbox")).toBeVisible();
-    const shadow = page.getByRole("textbox").element().getRootNode() as ShadowRoot;
-    const changes = [
-      ...shadow.querySelectorAll<HTMLElement>(
-        '[data-line-type="change-addition"], [data-line-type="change-deletion"]',
-      ),
-    ];
-    expect(changes.length).toBeGreaterThan(0);
+    const find = () =>
+      document.querySelector<HTMLElement>(".synara-code-editor .monaco-diff-editor");
+    await expect.poll(find).not.toBeNull();
+    const diff = find()!;
+    const changedRows = () => [...diff.querySelectorAll<HTMLElement>(".line-insert, .line-delete")];
+    await expect.poll(() => changedRows().length).toBeGreaterThan(0);
+    const changes = changedRows();
     // Tinted (not washed out to clear) yet see-through. Context stays clear.
     for (const row of changes) {
-      const color = getComputedStyle(
-        row,
-        row.hasAttribute("data-line") ? "::after" : null,
-      ).backgroundColor;
+      const color = getComputedStyle(row).backgroundColor;
 
       const alpha = color.includes("/")
         ? Number(color.match(/\/ ([\d.]+)\)$/)?.[1])
@@ -172,7 +180,8 @@ it.each([
       expect(alpha, color).toBeGreaterThan(0.05);
       expect(alpha, color).toBeLessThan(0.5);
     }
-    expect(isClear(shadow.querySelector("[data-code]"))).toBe(true);
+    for (const background of diff.querySelectorAll(".monaco-editor-background"))
+      expect(isClear(background)).toBe(true);
     await view.unmount();
     root.classList.remove("dark");
   },

@@ -3,7 +3,6 @@
 // Layer: Web transport tests
 // Depends on: the global WebSocket constructor shim and desktop bridge URL contract.
 
-import { ServerBusyController } from "./serverBusyState";
 import { Cause, Effect, Exit, Stream } from "effect";
 import { RpcClientError } from "effect/unstable/rpc";
 import { Socket } from "effect/unstable/socket";
@@ -69,6 +68,8 @@ import {
   resetThreadDetailResumeCursorsForTests,
 } from "./threadDetailResumeCursors";
 import { markRequestNotSent } from "./lib/rpcTransportFailure";
+import { RpcRequestQueue } from "./lib/rpcRequestQueue";
+import { WS_REQUEST_CLASS_LIMITS } from "@synara/shared/wsRequestClass";
 import {
   addWsCompatibilityIssueListener,
   emitWsCompatibilityIssue,
@@ -279,6 +280,7 @@ function makeBareTransport(): {
         }),
     }),
     reconnect: vi.fn(async () => ({})),
+    unaryRequestQueue: new RpcRequestQueue(WS_REQUEST_CLASS_LIMITS),
   });
   return { transport, internals };
 }
@@ -518,12 +520,7 @@ it("recovers a failed thread subscription on a responsive session using its late
     await vi.advanceTimersByTimeAsync(500);
     expect(internals.reconnect).toHaveBeenCalledOnce();
     expect(subscribe).toHaveBeenCalledTimes(2);
-    expect(subscribe).toHaveBeenLastCalledWith({
-      threadId,
-      afterSequence: 12,
-      batchReplay: true,
-      messageWindow: { limit: 100 },
-    });
+    expect(subscribe).toHaveBeenLastCalledWith({ threadId, afterSequence: 12, batchReplay: true });
   } finally {
     internals.disposed = true;
     await internals.stopStream(`orchestration.thread:${threadId}`);
@@ -689,7 +686,6 @@ it.each(["orchestration.shell", "orchestration.thread:capped-overflow"])(
         threadId,
         afterSequence: 42,
         batchReplay: true,
-        messageWindow: { limit: 100 },
       });
       expect(internals.reconnect).not.toHaveBeenCalled();
       expect(internals.streamCapacityRetryTimers.has(key)).toBe(false);
@@ -1593,12 +1589,7 @@ describe("WsTransport", () => {
         await vi.advanceTimersByTimeAsync(250);
 
         expect(restartedInputs).toEqual([
-          {
-            threadId: "thread-overflow",
-            afterSequence: 100,
-            batchReplay: true,
-            messageWindow: { limit: 100 },
-          },
+          { threadId: "thread-overflow", afterSequence: 100, batchReplay: true },
         ]);
         expect(reconnect).not.toHaveBeenCalled();
       } finally {
@@ -2240,6 +2231,224 @@ describe("WsTransport", () => {
         Cause.fail({ code: "WS_PROTOCOL_INCOMPATIBLE", retryable: false }),
       ),
     ).toBeNull();
+  });
+
+  it("queues unary requests beyond their class budget instead of sending them", async () => {
+    const { transport, internals } = makeBareTransport();
+    const pendingResults: Array<(value: unknown) => void> = [];
+    const runPromise = vi.fn(
+      () =>
+        new Promise((resolve) => {
+          pendingResults.push(resolve);
+        }),
+    );
+    Object.assign(internals, {
+      getClient: vi.fn(async () => ({
+        "projects.readFile": () => Effect.succeed({ contents: "ok" }),
+      })),
+      getClientRuntime: () => ({ runPromise }),
+    });
+
+    const reads = [0, 1, 2].map(() =>
+      transport.request(WS_METHODS.projectsReadFile, {}, { timeoutMs: null }),
+    );
+    await vi.waitFor(() => expect(runPromise).toHaveBeenCalledTimes(2));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(runPromise).toHaveBeenCalledTimes(2);
+
+    pendingResults[0]!({ contents: "first" });
+    await vi.waitFor(() => expect(runPromise).toHaveBeenCalledTimes(3));
+    pendingResults[1]!({ contents: "second" });
+    pendingResults[2]!({ contents: "third" });
+    await expect(Promise.all(reads)).resolves.toEqual([
+      { contents: "first" },
+      { contents: "second" },
+      { contents: "third" },
+    ]);
+  });
+
+  it("fails a request that waited out the capacity budget without ever sending it", async () => {
+    vi.useFakeTimers();
+    bindWindowTimersToCurrentGlobals();
+    try {
+      const { transport, internals } = makeBareTransport();
+      const runPromise = vi.fn(() => new Promise(() => undefined));
+      Object.assign(internals, {
+        state: "open",
+        openedAtMs: Number.NEGATIVE_INFINITY,
+        getClient: vi.fn(async () => ({
+          "projects.readFile": () => Effect.succeed({ contents: "ok" }),
+        })),
+        getClientRuntime: () => ({ runPromise }),
+      });
+
+      void transport.request(WS_METHODS.projectsReadFile, {}, { timeoutMs: null });
+      void transport.request(WS_METHODS.projectsReadFile, {}, { timeoutMs: null });
+      // No deadline of its own: the queue still bounds the wait.
+      const queued = transport.request(WS_METHODS.projectsReadFile, {}, { timeoutMs: null });
+      const rejected = expect(queued).rejects.toMatchObject({
+        code: "RPC_EXPENSIVE_READ_CAPACITY_EXCEEDED",
+        retryable: true,
+      });
+      await vi.advanceTimersByTimeAsync(2_999);
+      expect(runPromise).toHaveBeenCalledTimes(2);
+      await vi.advanceTimersByTimeAsync(1);
+      await rejected;
+      expect(runPromise).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not spend the queue budget while the transport is still connecting", async () => {
+    vi.useFakeTimers();
+    bindWindowTimersToCurrentGlobals();
+    try {
+      const { transport, internals } = makeBareTransport();
+      let connect!: (client: unknown) => void;
+      const connected = new Promise((resolve) => {
+        connect = resolve;
+      });
+      const runPromise = vi.fn(async () => ({ contents: "ok" }));
+      Object.assign(internals, {
+        state: "connecting",
+        getClient: vi.fn(() => connected),
+        getClientRuntime: () => ({ runPromise }),
+      });
+
+      const reads = [0, 1, 2, 3].map(() =>
+        transport.request(WS_METHODS.projectsReadFile, {}, { timeoutMs: null }),
+      );
+      // A slow reconnect is not capacity: nothing may fail while it lasts.
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(runPromise).not.toHaveBeenCalled();
+
+      Object.assign(internals, { state: "open", openedAtMs: Date.now() });
+      connect({ "projects.readFile": () => Effect.succeed({ contents: "ok" }) });
+      await expect(Promise.all(reads)).resolves.toHaveLength(4);
+      expect(runPromise).toHaveBeenCalledTimes(4);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("reports a deadline spent in the queue as capacity, not as an uncertain turn", async () => {
+    const { transport, internals } = makeBareTransport();
+    const runPromise = vi.fn(() => new Promise(() => undefined));
+    const settleTurnDispatch = vi.fn();
+    Object.assign(internals, {
+      compatibility: {
+        ...NEGOTIATION_RESULT,
+        capabilities: [WS_TURN_DISPATCH_SETTLEMENT_CAPABILITY],
+      },
+      unaryRequestQueue: new RpcRequestQueue({ ...WS_REQUEST_CLASS_LIMITS, control: 1 }),
+      getClient: vi.fn(async () => ({
+        [ORCHESTRATION_WS_METHODS.dispatchCommand]: () => Effect.succeed({ sequence: 1 }),
+      })),
+      getClientRuntime: () => ({ runPromise }),
+      settleTurnDispatch,
+    });
+    const turnStart = (commandId: string) => ({
+      command: {
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe(commandId),
+        threadId: ThreadId.makeUnsafe("thread-queued"),
+        message: {
+          messageId: MessageId.makeUnsafe(`message-${commandId}`),
+          role: "user",
+          text: "hello",
+          attachments: [],
+        },
+        createdAt: "2026-10-15T00:00:00.000Z",
+      },
+    });
+
+    void transport.request(ORCHESTRATION_WS_METHODS.dispatchCommand, turnStart("held"), {
+      timeoutMs: null,
+    });
+    await vi.waitFor(() => expect(runPromise).toHaveBeenCalledTimes(1));
+    await expect(
+      transport.request(ORCHESTRATION_WS_METHODS.dispatchCommand, turnStart("queued"), {
+        timeoutMs: 20,
+      }),
+    ).rejects.toMatchObject({ code: "RPC_REQUEST_CAPACITY_EXCEEDED", retryable: true });
+    expect(runPromise).toHaveBeenCalledTimes(1);
+    expect(settleTurnDispatch).not.toHaveBeenCalled();
+  });
+
+  it("drops a cancelled queued request and hands its place to the next caller", async () => {
+    const { transport, internals } = makeBareTransport();
+    const pendingResults: Array<(value: unknown) => void> = [];
+    const runPromise = vi.fn(
+      () =>
+        new Promise((resolve) => {
+          pendingResults.push(resolve);
+        }),
+    );
+    Object.assign(internals, {
+      getClient: vi.fn(async () => ({
+        "projects.readFile": () => Effect.succeed({ contents: "ok" }),
+      })),
+      getClientRuntime: () => ({ runPromise }),
+    });
+
+    void transport.request(WS_METHODS.projectsReadFile, {}, { timeoutMs: null });
+    void transport.request(WS_METHODS.projectsReadFile, {}, { timeoutMs: null });
+    const controller = new AbortController();
+    const cancelled = transport.request(
+      WS_METHODS.projectsReadFile,
+      {},
+      { timeoutMs: null, signal: controller.signal },
+    );
+    const next = transport.request(WS_METHODS.projectsReadFile, {}, { timeoutMs: null });
+    await vi.waitFor(() => expect(runPromise).toHaveBeenCalledTimes(2));
+    controller.abort();
+    await expect(cancelled).rejects.toMatchObject({ code: "WS_REQUEST_ABORTED" });
+
+    pendingResults[0]!({ contents: "first" });
+    await vi.waitFor(() => expect(runPromise).toHaveBeenCalledTimes(3));
+    pendingResults[2]!({ contents: "next" });
+    await expect(next).resolves.toEqual({ contents: "next" });
+  });
+
+  it("rejects queued requests when the transport is disposed", async () => {
+    const { transport, internals } = makeBareTransport();
+    const runPromise = vi.fn(() => new Promise(() => undefined));
+    Object.assign(internals, {
+      clientPromise: Promise.resolve(),
+      takeCurrentRuntime: () => null,
+      getClient: vi.fn(async () => ({
+        "projects.readFile": () => Effect.succeed({ contents: "ok" }),
+      })),
+      getClientRuntime: () => ({ runPromise }),
+    });
+    void transport.request(WS_METHODS.projectsReadFile, {}, { timeoutMs: null });
+    void transport.request(WS_METHODS.projectsReadFile, {}, { timeoutMs: null });
+    const queued = transport.request(WS_METHODS.projectsReadFile, {}, { timeoutMs: null });
+    await vi.waitFor(() => expect(runPromise).toHaveBeenCalledTimes(2));
+
+    await transport.dispose();
+    await expect(queued).rejects.toThrow("Transport disposed");
+    expect(runPromise).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not queue stream-backed actions behind unary traffic", async () => {
+    const { transport, internals } = makeBareTransport();
+    const runRecoverableGitAction = vi.fn(async () => ({ status: "ok" }));
+    Object.assign(internals, {
+      unaryRequestQueue: new RpcRequestQueue({ ...WS_REQUEST_CLASS_LIMITS, standard: 1 }),
+      getClient: vi.fn(async () => ({
+        [WS_METHODS.gitListBranches]: () => Effect.succeed({ branches: [] }),
+      })),
+      getClientRuntime: () => ({ runPromise: vi.fn(() => new Promise(() => undefined)) }),
+      runRecoverableGitAction,
+    });
+    void transport.request(WS_METHODS.gitListBranches, {}, { timeoutMs: null });
+
+    await expect(
+      transport.request(WS_METHODS.gitRunStackedAction, {}, { timeoutMs: null }),
+    ).resolves.toEqual({ status: "ok" });
+    expect(runRecoverableGitAction).toHaveBeenCalledTimes(1);
   });
 
   it("retries capacity-rejected unary requests in place with the server-provided delay", async () => {
@@ -3380,116 +3589,81 @@ describe("WsTransport", () => {
   });
 });
 
-it("tracks the real unary wait while keeping the heartbeat out of pending counts", async () => {
+it("times out a stuck unary request with the default deadline and retry guidance", async () => {
   vi.useFakeTimers();
   bindWindowTimersToCurrentGlobals();
   const { transport, internals } = makeBareTransport();
-  const serverBusy = new ServerBusyController();
-  const client = {
-    [WS_METHODS.serverGetRuntimeStatus]: () =>
-      Effect.succeed({
-        available: false,
-        sampleWindowMs: 0,
-        sampleCount: 0,
-        delayP50Ms: 0,
-        delayP99Ms: 0,
-        delayMaxMs: 0,
-        utilization: 0,
-        stallWindowCount: 0,
-        maxStallMs: 0,
-        lastStall: null,
-      }),
-    [WS_METHODS.gitStatus]: () => Effect.never,
-  };
   Object.assign(internals, {
-    serverBusy,
-    state: "connecting",
-    stateListeners: new Set(),
-    compatibility: { ...NEGOTIATION_RESULT, capabilities: [WS_SERVER_RUNTIME_STATUS_CAPABILITY] },
-    getClient: async () => client,
+    getClient: async () => ({ [WS_METHODS.gitStatus]: () => Effect.never }),
     getClientRuntime: () => ({ runPromise: Effect.runPromise }),
   });
-  (transport as unknown as { setState(state: string): void }).setState("open");
-  const verdict = transport.request(WS_METHODS.gitStatus).catch((error) => error);
-  await vi.advanceTimersByTimeAsync(15000);
-  expect(serverBusy.getSnapshot()).toMatchObject({
-    reason: null,
-    pendingRequests: 1,
-    slowRequests: 1,
-  });
-  await vi.advanceTimersByTimeAsync(45000);
-  expect(await verdict).toMatchObject({
-    message: expect.stringContaining("Try again when the server responds"),
-  });
-  expect(serverBusy.getSnapshot()).toMatchObject({
-    reason: null,
-    pendingRequests: 0,
-    slowRequests: 0,
-  });
-  serverBusy.dispose();
-  vi.useRealTimers();
-});
-
-it("uses the caller's long-operation budget for providerCompactThread", async () => {
-  vi.useFakeTimers();
-  bindWindowTimersToCurrentGlobals();
-  const { transport, internals } = makeBareTransport();
-  const serverBusy = new ServerBusyController();
-  const caller = new AbortController();
-  Object.assign(internals, {
-    serverBusy,
-    getClient: async () => ({ [WS_METHODS.providerCompactThread]: () => Effect.never }),
-    getClientRuntime: () => ({ runPromise: Effect.runPromise }),
-  });
-  const pending = transport
-    .request(
-      WS_METHODS.providerCompactThread,
-      {},
-      {
-        timeoutMs: null,
-        signal: caller.signal,
-      },
-    )
-    .catch((error) => error);
   try {
-    await vi.advanceTimersByTimeAsync(15_000);
-    expect(serverBusy.getSnapshot()).toMatchObject({ pendingRequests: 1, slowRequests: 0 });
-    await vi.advanceTimersByTimeAsync(105_000);
-    expect(serverBusy.getSnapshot().slowRequests).toBe(1);
-    caller.abort();
-    expect(await pending).toMatchObject({ code: "WS_REQUEST_ABORTED" });
-    expect(serverBusy.getSnapshot().pendingRequests).toBe(0);
+    const verdict = transport.request(WS_METHODS.gitStatus).catch((error) => error);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(await verdict).toMatchObject({
+      code: "WS_REQUEST_TIMEOUT",
+      message: expect.stringContaining("Try again when the server responds"),
+    });
   } finally {
-    caller.abort();
-    serverBusy.dispose();
     vi.useRealTimers();
   }
 });
 
-it.each([true, false])(
-  "uses busy liveness only when the optional capability is present (%s)",
-  async (supported) => {
-    vi.useFakeTimers();
-    bindWindowTimersToCurrentGlobals();
-    const { transport, internals } = makeBareTransport();
-    const serverBusy = new ServerBusyController();
-    Object.assign(internals, {
-      serverBusy,
-      state: "connecting",
-      stateListeners: new Set(),
-      compatibility: {
-        ...NEGOTIATION_RESULT,
-        capabilities: supported ? [WS_SERVER_RUNTIME_STATUS_CAPABILITY] : [],
-      },
-      getClient: async () => ({ [WS_METHODS.serverGetRuntimeStatus]: () => Effect.never }),
-      getClientRuntime: () => ({ runPromise: Effect.runPromise }),
+it("lets providerCompactThread outlive the default deadline until its caller cancels", async () => {
+  vi.useFakeTimers();
+  bindWindowTimersToCurrentGlobals();
+  const { transport, internals } = makeBareTransport();
+  const caller = new AbortController();
+  Object.assign(internals, {
+    getClient: async () => ({ [WS_METHODS.providerCompactThread]: () => Effect.never }),
+    getClientRuntime: () => ({ runPromise: Effect.runPromise }),
+  });
+  let settled = false;
+  const pending = transport
+    .request(WS_METHODS.providerCompactThread, {}, { timeoutMs: null, signal: caller.signal })
+    .catch((error) => error)
+    .finally(() => {
+      settled = true;
     });
-    (transport as unknown as { setState(state: string): void }).setState("open");
-    await vi.advanceTimersByTimeAsync(3000);
-    expect(serverBusy.getSnapshot().reason).toBe(supported ? "unresponsive" : null);
-    (transport as unknown as { setState(state: string): void }).setState("connecting");
-    expect(serverBusy.getSnapshot().reason).toBe(null);
-    serverBusy.dispose();
+  try {
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(settled).toBe(false);
+    caller.abort();
+    expect(await pending).toMatchObject({ code: "WS_REQUEST_ABORTED" });
+  } finally {
+    caller.abort();
     vi.useRealTimers();
-  },
-);
+  }
+});
+
+it("does not poll server runtime status on an open socket that advertises it", async () => {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(() =>
+      Promise.resolve(
+        jsonResponse(200, {
+          ...NEGOTIATION_RESULT,
+          capabilities: [...NEGOTIATION_RESULT.capabilities, WS_SERVER_RUNTIME_STATUS_CAPABILITY],
+        }),
+      ),
+    ),
+  );
+  vi.useFakeTimers();
+  bindWindowTimersToCurrentGlobals();
+  const transport = new WsTransport("ws://localhost:3020");
+  try {
+    await vi.waitFor(() => expect(sockets).toHaveLength(1));
+    const socket = sockets[0]!;
+    socket.serveVoidRpc();
+    await vi.waitFor(() => expect(transport.getState()).toBe("open"));
+    await vi.advanceTimersByTimeAsync(30_000);
+    const requestedTags = socket.sent
+      .map((data) => JSON.parse(String(data)) as { _tag?: string; tag?: string })
+      .filter((frame) => frame._tag === "Request")
+      .map((frame) => frame.tag);
+    expect(requestedTags).not.toContain(WS_METHODS.serverGetRuntimeStatus);
+  } finally {
+    await transport.dispose();
+    vi.useRealTimers();
+  }
+});

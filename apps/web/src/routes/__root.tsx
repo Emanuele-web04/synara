@@ -1,5 +1,3 @@
-import { hydrateCachedThreadDetail, startThreadDetailCachePersistence } from "../threadDetailCache";
-import { ServerBusyIndicator } from "../components/ServerBusyIndicator";
 import { EditorDirtyRouteGuard } from "../components/EditorDirtyRouteGuard";
 import {
   ORCHESTRATION_STREAM_OVERFLOW_CODE,
@@ -100,7 +98,10 @@ import {
   readLatestWsCompatibilityIssue,
 } from "../wsTransportEvents";
 import { providerQueryKeys } from "../lib/providerReactQuery";
-import { invalidateProjectFileQueriesForCwds, projectQueryKeys } from "../lib/projectReactQuery";
+import {
+  invalidateProjectFileQueriesForCwdsAfterActivity,
+  projectQueryKeys,
+} from "../lib/projectReactQuery";
 import {
   collectActiveTerminalThreadIds,
   removeOrphanedTerminalRuntimes,
@@ -131,7 +132,6 @@ import {
   createPreSnapshotThreadEventBuffer,
   drainPreSnapshotThreadEvents,
   shouldApplyThreadStreamSnapshot,
-  isCompleteAppliedThreadReplay,
   type PreSnapshotThreadEventBuffer,
 } from "./-threadDetailSnapshotOrdering";
 import {
@@ -140,7 +140,10 @@ import {
 } from "./-threadTerminalFence";
 import { getThreadFromState, getThreadsFromState } from "../threadDerivation";
 import { coalesceOrchestrationUiEvents } from "../orchestrationEventCoalescing";
-import { isThreadDetailVerifiedInSync } from "../threadDetailCatchupPolicy";
+import {
+  isLiveThreadStreamDelivering,
+  isThreadDetailVerifiedInSync,
+} from "../threadDetailCatchupPolicy";
 import { useAppDensity } from "../hooks/useAppDensity";
 import { useChatWidth } from "../hooks/useChatWidth";
 import { useCommittedPathname } from "../hooks/useCommittedPathname";
@@ -151,7 +154,11 @@ import { usePreloadRouteChunks } from "../hooks/usePreloadRouteChunks";
 import { useSyncDesktopTopBarTrafficLightGutterZoom } from "../hooks/useDesktopTopBarGutter";
 import { useTheme } from "../hooks/useTheme";
 import { useNativeFontSmoothing } from "../hooks/useNativeFontSmoothing";
-import { invalidateGitQueries, invalidateGitQueriesForCwds } from "../lib/gitReactQuery";
+import {
+  invalidateGitQueries,
+  refreshGitQueriesForCwdsAfterActivity,
+  refreshLocalGitQueriesForCwdsAfterActivity,
+} from "../lib/gitReactQuery";
 import { shouldRepairDesktopProjectSnapshot } from "../lib/desktopProjectRecovery";
 import {
   registerEmptyRouteRestoreRefresh,
@@ -197,6 +204,9 @@ import {
   getGitInvalidationThreadIdForEvent,
   getProjectFileInvalidationThreadIdForEvent,
   getStudioOutputInvalidationThreadIdForEvent,
+  getTurnDiffInvalidationThreadIdForEvent,
+  invalidateFinalizedTurnDiffQueries,
+  isLocalGitActivityInvalidationEvent,
   resolveGitInvalidationCwdForThreadId,
   shouldInvalidateGitQueriesForEvent,
   shouldInvalidateProviderQueriesForEvent,
@@ -323,7 +333,6 @@ function RootRouteView() {
   const desktopChrome = (
     <>
       <RunningChatsQuitCoordinator />
-      <ServerBusyIndicator />
       {desktopWindowControls}
     </>
   );
@@ -1336,11 +1345,13 @@ function EventRouter() {
     const api = readNativeApi();
     if (!api) return;
     let disposed = false;
-    const stopThreadDetailCachePersistence = startThreadDetailCachePersistence();
     let needsProviderInvalidation = false;
     let needsBroadGitInvalidation = false;
     let pendingGitInvalidationThreadIds = new Set<ThreadId>();
+    // Tool completions: local Git state only (no GitHub repository / pull-request reads).
+    let pendingLocalGitInvalidationThreadIds = new Set<ThreadId>();
     let pendingProjectFileInvalidationThreadIds = new Set<ThreadId>();
+    let pendingTurnDiffInvalidationThreadIds = new Set<ThreadId>();
     let pendingStudioOutputInvalidationThreadIds = new Set<ThreadId>();
     let pendingDomainEvents: OrchestrationEvent[] = [];
     const immediatelyFlushedAssistantMessageIds = new Set<string>();
@@ -1427,6 +1438,9 @@ function EventRouter() {
       lastProjectionReconciledAt: number | null;
     }
     const threadCatchupBackoffById = new Map<ThreadId, ThreadCatchupBackoff>();
+    // When each subscribed thread's own live stream last applied an event; replay
+    // polls wait for a delivering stream to go quiet (threadDetailCatchupPolicy).
+    const lastLiveThreadEventAtById = new Map<ThreadId, number>();
     const resolveThreadCatchupBackoff = (threadId: ThreadId): ThreadCatchupBackoff => {
       const turnId = getThreadFromState(useStore.getState(), threadId)?.latestTurn?.turnId ?? null;
       let entry = threadCatchupBackoffById.get(threadId);
@@ -1486,12 +1500,6 @@ function EventRouter() {
       return THREAD_DETAIL_PROJECTION_RECONCILE_INTERVAL_MS * 2 ** entry.reconcileNoopStreak;
     };
 
-    const cachedThreadVerificationTimers = new Map<ThreadId, number>();
-    const clearCachedVerificationTimer = (threadId: ThreadId) => {
-      const timer = cachedThreadVerificationTimers.get(threadId);
-      if (timer !== undefined) window.clearTimeout(timer);
-      cachedThreadVerificationTimers.delete(threadId);
-    };
     const beginThreadSubscription = (threadId: ThreadId) => {
       // Cursor resume delivers no snapshot: the stream replays only the gap on
       // top of the cached detail. Seed the live cursor so gap/live events apply
@@ -1514,28 +1522,9 @@ function EventRouter() {
       threadProjectionReconcilePendingById.delete(threadId);
       clearThreadProjectionTerminalFence(threadId);
       threadCatchupBackoffById.delete(threadId);
+      lastLiveThreadEventAtById.delete(threadId);
       nextThreadSubscriptionGeneration += 1;
       threadSubscriptionGenerationById.set(threadId, nextThreadSubscriptionGeneration);
-      clearCachedVerificationTimer(threadId);
-      if (useStore.getState().threadDetailSyncById?.[threadId] === "cached") {
-        const generation = nextThreadSubscriptionGeneration;
-        // Older servers suppress an empty batched replay. A scoped authoritative
-        // snapshot verifies restored controls even when no stream item arrives.
-        cachedThreadVerificationTimers.set(
-          threadId,
-          window.setTimeout(() => {
-            cachedThreadVerificationTimers.delete(threadId);
-            if (
-              !disposed &&
-              subscribedThreadIds.has(threadId) &&
-              threadSubscriptionGenerationById.get(threadId) === generation &&
-              useStore.getState().threadDetailSyncById?.[threadId] === "cached"
-            ) {
-              void reconcileThreadProjection(threadId).catch(() => undefined);
-            }
-          }, 2000),
-        );
-      }
       nextThreadProjectionReconcileAtById.set(
         threadId,
         Date.now() + THREAD_DETAIL_PROJECTION_RECONCILE_INTERVAL_MS,
@@ -1583,6 +1572,7 @@ function EventRouter() {
         backoff.nextReplayAt = 0;
         backoff.appliedEventSerial += 1;
       }
+      if (source === "stream") lastLiveThreadEventAtById.set(threadId, Date.now());
       return true;
     };
 
@@ -1639,9 +1629,9 @@ function EventRouter() {
         threadProjectionReconcilePendingById.delete(threadId);
         clearThreadProjectionTerminalFence(threadId);
         threadSubscriptionGenerationById.delete(threadId);
-        clearCachedVerificationTimer(threadId);
         nextThreadProjectionReconcileAtById.delete(threadId);
         threadCatchupBackoffById.delete(threadId);
+        lastLiveThreadEventAtById.delete(threadId);
         subscribedThreadIds.delete(threadId);
       }
       // A retention eviction can refresh a thread whose lease is dropping in the
@@ -1655,8 +1645,6 @@ function EventRouter() {
         ),
       );
 
-      await Promise.all(additions.map((threadId) => hydrateCachedThreadDetail(threadId)));
-      if (disposed) return;
       for (const threadId of additions) {
         beginThreadSubscription(threadId);
         subscribedThreadIds.add(threadId);
@@ -1731,9 +1719,7 @@ function EventRouter() {
         // never-synced detail), so a cursor resume would skip exactly the
         // snapshot being requested.
         clearThreadDetailResumeCursor(threadId);
-        await api.orchestration
-          .subscribeThread(buildThreadSubscribeInput(threadId))
-          .catch(() => undefined);
+        await api.orchestration.subscribeThread({ threadId }).catch(() => undefined);
       }).finally(() => {
         threadSnapshotRequestInFlight.delete(threadId);
         if (!threadSnapshotRefreshPending.delete(threadId)) {
@@ -1855,11 +1841,29 @@ function EventRouter() {
       }),
     );
 
+    // Counts successful socket opens so the first welcome can tell whether the
+    // mount-time bootstrap already subscribed on the connection that sent it.
+    // Requests issued while connecting land on the next open, hence `+ 1`.
+    let transportOpenCount = 0;
+    let transportOpen = false;
+    const unsubTransportOpenCount = addWsTransportStateListener(
+      (state) => {
+        if (state === "open" && !transportOpen) transportOpenCount += 1;
+        transportOpen = state === "open";
+      },
+      { replayCurrent: true },
+    );
+    const currentTransportConnection = () =>
+      transportOpen ? transportOpenCount : transportOpenCount + 1;
+    let scopedSubscriptionConnection: number | null = null;
+    let awaitingInitialWelcome = true;
+
     let scopedSubscriptionRefresh: Promise<void> | null = null;
     const ensureScopedSubscriptions = () => {
       if (scopedSubscriptionRefresh) {
         return scopedSubscriptionRefresh;
       }
+      scopedSubscriptionConnection = currentTransportConnection();
       shellSubscriptionGeneration += 1;
       const generation = shellSubscriptionGeneration;
       if (shellSnapshotFallbackTimer !== null) {
@@ -1875,8 +1879,6 @@ function EventRouter() {
           .catch(() => loadBootstrapShellSnapshotIfMissing(generation));
         await enqueueThreadSubscriptionOperation(async () => {
           threadSnapshotSequenceById.clear();
-          for (const threadId of cachedThreadVerificationTimers.keys())
-            clearCachedVerificationTimer(threadId);
           threadResumeSeedSequenceById.clear();
           pendingThreadEventsById.clear();
           threadSnapshotRequestInFlight.clear();
@@ -1889,6 +1891,7 @@ function EventRouter() {
           threadSubscriptionGenerationById.clear();
           nextThreadProjectionReconcileAtById.clear();
           threadCatchupBackoffById.clear();
+          lastLiveThreadEventAtById.clear();
           const previousThreadIds = [...subscribedThreadIds];
           subscribedThreadIds.clear();
           // Reconnect drops every lease at once, so the reconcile below sees no
@@ -1945,11 +1948,25 @@ function EventRouter() {
       if (needsProviderInvalidation) {
         needsProviderInvalidation = false;
         pendingProjectFileInvalidationThreadIds = new Set();
+        pendingTurnDiffInvalidationThreadIds = new Set();
         void queryClient.invalidateQueries({ queryKey: providerQueryKeys.all });
         // Invalidate workspace entry queries so the @-mention file picker
         // reflects files created, deleted, or restored during this turn.
         void queryClient.invalidateQueries({ queryKey: projectQueryKeys.all });
-      } else if (pendingProjectFileInvalidationThreadIds.size > 0) {
+      } else if (pendingTurnDiffInvalidationThreadIds.size > 0) {
+        // Scoped to the finalized turns' threads; their file queries ride the
+        // file-change pass below unless every project cache was already dropped.
+        const scoped = invalidateFinalizedTurnDiffQueries(
+          queryClient,
+          useStore.getState(),
+          pendingTurnDiffInvalidationThreadIds,
+        );
+        pendingTurnDiffInvalidationThreadIds = new Set();
+        if (!scoped) {
+          pendingProjectFileInvalidationThreadIds = new Set();
+        }
+      }
+      if (pendingProjectFileInvalidationThreadIds.size > 0) {
         // Mid-turn file-change activities: refresh the editor file tree and
         // open file preview for just the affected workspaces.
         const currentState = useStore.getState();
@@ -1962,7 +1979,7 @@ function EventRouter() {
         }
         pendingProjectFileInvalidationThreadIds = new Set();
         if (fileChangeCwds.size > 0) {
-          void invalidateProjectFileQueriesForCwds(queryClient, fileChangeCwds);
+          invalidateProjectFileQueriesForCwdsAfterActivity(queryClient, fileChangeCwds);
         } else {
           void queryClient.invalidateQueries({ queryKey: projectQueryKeys.all });
         }
@@ -1979,24 +1996,40 @@ function EventRouter() {
       if (needsBroadGitInvalidation) {
         needsBroadGitInvalidation = false;
         pendingGitInvalidationThreadIds = new Set();
+        pendingLocalGitInvalidationThreadIds = new Set();
         void invalidateGitQueries(queryClient);
-      } else if (pendingGitInvalidationThreadIds.size > 0) {
+      } else if (
+        pendingGitInvalidationThreadIds.size > 0 ||
+        pendingLocalGitInvalidationThreadIds.size > 0
+      ) {
         const currentState = useStore.getState();
         const scopedCwds = new Set<string>();
+        const localCwds = new Set<string>();
         let hasUnresolvedThread = false;
-        for (const threadId of pendingGitInvalidationThreadIds) {
-          const cwd = resolveGitInvalidationCwdForThreadId(currentState, threadId);
-          if (cwd) {
-            scopedCwds.add(cwd);
-          } else {
-            hasUnresolvedThread = true;
+        for (const [threadIds, cwds] of [
+          [pendingGitInvalidationThreadIds, scopedCwds],
+          [pendingLocalGitInvalidationThreadIds, localCwds],
+        ] as const) {
+          for (const threadId of threadIds) {
+            const cwd = resolveGitInvalidationCwdForThreadId(currentState, threadId);
+            if (cwd) {
+              cwds.add(cwd);
+            } else {
+              hasUnresolvedThread = true;
+            }
           }
         }
         pendingGitInvalidationThreadIds = new Set();
-        if (hasUnresolvedThread || scopedCwds.size === 0) {
+        pendingLocalGitInvalidationThreadIds = new Set();
+        if (hasUnresolvedThread || (scopedCwds.size === 0 && localCwds.size === 0)) {
           void invalidateGitQueries(queryClient);
         } else {
-          void invalidateGitQueriesForCwds(queryClient, scopedCwds);
+          refreshGitQueriesForCwdsAfterActivity(queryClient, scopedCwds);
+          // A full refresh for the same checkout already covers its local state.
+          refreshLocalGitQueriesForCwdsAfterActivity(
+            queryClient,
+            [...localCwds].filter((cwd) => !scopedCwds.has(cwd)),
+          );
         }
       }
     };
@@ -2015,6 +2048,10 @@ function EventRouter() {
       if (shouldInvalidateProviderQueriesForEvent(event)) {
         needsProviderInvalidation = true;
       }
+      const turnDiffThreadId = getTurnDiffInvalidationThreadIdForEvent(event);
+      if (turnDiffThreadId) {
+        pendingTurnDiffInvalidationThreadIds.add(turnDiffThreadId);
+      }
       const projectFileThreadId = getProjectFileInvalidationThreadIdForEvent(event);
       if (projectFileThreadId) {
         pendingProjectFileInvalidationThreadIds.add(projectFileThreadId);
@@ -2025,7 +2062,9 @@ function EventRouter() {
       }
       if (shouldInvalidateGitQueriesForEvent(event)) {
         const threadId = getGitInvalidationThreadIdForEvent(event);
-        if (threadId) {
+        if (threadId && isLocalGitActivityInvalidationEvent(event)) {
+          pendingLocalGitInvalidationThreadIds.add(threadId);
+        } else if (threadId) {
           pendingGitInvalidationThreadIds.add(threadId);
         } else {
           needsBroadGitInvalidation = true;
@@ -2119,10 +2158,7 @@ function EventRouter() {
       let projectionSatisfiesTerminalFence = false;
       let projectionAttemptFailed = false;
       try {
-        const snapshot = await api.orchestration.getThreadDetailSnapshot({
-          threadId,
-          messageWindow: { limit: 100 },
-        });
+        const snapshot = await api.orchestration.getThreadDetailSnapshot({ threadId });
         if (
           snapshot === null ||
           disposed ||
@@ -2175,7 +2211,11 @@ function EventRouter() {
         // authoritative and can repair a client that advanced its cursor while
         // dropping or failing to reduce one of the corresponding live events.
         const stateBeforeProjectionApply = useStore.getState();
-        syncServerThreadDetailHotPath(snapshot.thread, snapshot.snapshotSequence, snapshot.history);
+        syncServerThreadDetailHotPath(
+          snapshot.thread,
+          snapshot.snapshotSequence,
+          snapshot.historyRevisionSequence,
+        );
         threadResumeSeedSequenceById.delete(threadId);
         reconcilePromotedDraftFromThreadDetail(snapshot.thread);
         flushThreadBuffer(threadId, snapshot.snapshotSequence);
@@ -2192,7 +2232,8 @@ function EventRouter() {
         if (projectionSettlesCurrentTurn || projectionRepairsTerminalFence) {
           // Mirror terminal-event invalidation when recovery came from the
           // projection rather than the live stream.
-          needsProviderInvalidation = true;
+          pendingTurnDiffInvalidationThreadIds.add(threadId);
+          pendingProjectFileInvalidationThreadIds.add(threadId);
           pendingGitInvalidationThreadIds.add(threadId);
           pendingStudioOutputInvalidationThreadIds.add(threadId);
           domainEventFlushThrottler.maybeExecute();
@@ -2405,7 +2446,7 @@ function EventRouter() {
         syncServerThreadDetailHotPath(
           item.snapshot.thread,
           item.snapshot.snapshotSequence,
-          item.snapshot.history,
+          item.snapshot.historyRevisionSequence,
         );
         // The projection can discard a tombstoned snapshot (deleted thread or
         // project) instead of applying it; committing the cursor or the stream
@@ -2419,7 +2460,6 @@ function EventRouter() {
           return;
         }
         threadSnapshotSequenceById.set(threadId, item.snapshot.snapshotSequence);
-        clearCachedVerificationTimer(threadId);
         threadResumeSeedSequenceById.delete(threadId);
         toastManager.close(threadOverflowToastId(threadId));
         threadSnapshotNotFoundRetryAttempted.delete(threadId);
@@ -2449,30 +2489,6 @@ function EventRouter() {
         }
         domainEventFlushThrottler.cancel();
         flushPendingDomainEvents();
-        const replayThreadId =
-          item.threadId ??
-          (item.events[0]?.aggregateKind === "thread"
-            ? (item.events[0].aggregateId as ThreadId)
-            : undefined);
-        if (
-          replayThreadId &&
-          subscribedThreadIds.has(replayThreadId) &&
-          threadResumeSeedSequenceById.has(replayThreadId) &&
-          item.events.every((event) => isThreadDetailEventFor(event, replayThreadId))
-        ) {
-          if (
-            isCompleteAppliedThreadReplay({
-              threadId: replayThreadId,
-              resumeSeedSequence: threadResumeSeedSequenceById.get(replayThreadId),
-              appliedSequence:
-                useStore.getState().threadDetailAppliedSequenceById?.[replayThreadId],
-              events: item.events,
-            })
-          ) {
-            useStore.getState().confirmThreadDetailReplay(replayThreadId);
-            clearCachedVerificationTimer(replayThreadId);
-          }
-        }
         return;
       }
       applyThreadStreamEvent(item.event);
@@ -2629,7 +2645,17 @@ function EventRouter() {
           studioWorkspaceRoot: payload.studioWorkspaceRoot,
           groupsWorkspaceRoot: payload.groupsWorkspaceRoot,
         });
-        await ensureScopedSubscriptions();
+        // The first welcome of the connection the mount-time bootstrap already
+        // subscribed on carries nothing new. Resubscribing would interrupt the open
+        // chat's snapshot and load it twice; later welcomes still resynchronize.
+        const coveredByBootstrap =
+          awaitingInitialWelcome && scopedSubscriptionConnection === currentTransportConnection();
+        awaitingInitialWelcome = false;
+        if (coveredByBootstrap) {
+          await scopedSubscriptionRefresh;
+        } else {
+          await ensureScopedSubscriptions();
+        }
         if (disposed) {
           return;
         }
@@ -2768,9 +2794,15 @@ function EventRouter() {
           } else if (
             // A pending dispatch is the exact lost-event failure this poll
             // repairs, so it always polls at base cadence; otherwise honor the
-            // empty-replay backoff (reset on any applied event or a new turn).
+            // empty-replay backoff (reset on any applied event or a new turn)
+            // and wait for a delivering live stream to go quiet first.
             hasPendingTurnDispatch(threadId) ||
-            now >= resolveThreadCatchupBackoff(threadId).nextReplayAt
+            (now >= resolveThreadCatchupBackoff(threadId).nextReplayAt &&
+              !isLiveThreadStreamDelivering(
+                lastLiveThreadEventAtById.get(threadId) ?? null,
+                now,
+                THREAD_DETAIL_CATCHUP_INTERVAL_MS,
+              ))
           ) {
             // A late replay result must not recreate backoff state for a thread
             // whose lease was dropped (cleanup deleted it) or re-leased (a new
@@ -2838,9 +2870,6 @@ function EventRouter() {
 
     return () => {
       flushPendingDomainEvents();
-      stopThreadDetailCachePersistence();
-      for (const threadId of cachedThreadVerificationTimers.keys())
-        clearCachedVerificationTimer(threadId);
       disposed = true;
       if (shellSnapshotFallbackTimer !== null) {
         window.clearTimeout(shellSnapshotFallbackTimer);
@@ -2850,6 +2879,8 @@ function EventRouter() {
       needsProviderInvalidation = false;
       needsBroadGitInvalidation = false;
       pendingGitInvalidationThreadIds = new Set();
+      pendingLocalGitInvalidationThreadIds = new Set();
+      pendingTurnDiffInvalidationThreadIds = new Set();
       pendingStudioOutputInvalidationThreadIds = new Set();
       threadProjectionReconcileInFlight.clear();
       threadProjectionTerminalFencePending.clear();
@@ -2858,6 +2889,7 @@ function EventRouter() {
       threadSubscriptionGenerationById.clear();
       nextThreadProjectionReconcileAtById.clear();
       threadCatchupBackoffById.clear();
+      lastLiveThreadEventAtById.clear();
       domainEventFlushThrottler.cancel();
       reconcileThreadSubscriptionsRef.current = null;
       unregisterEmptyRouteRestoreRefresh();
@@ -2886,6 +2918,7 @@ function EventRouter() {
       unsubServerConfigUpdated();
       unsubProviderStatusesUpdated();
       unsubWsTransportState();
+      unsubTransportOpenCount();
       unsubServerSettingsUpdated();
     };
   }, [

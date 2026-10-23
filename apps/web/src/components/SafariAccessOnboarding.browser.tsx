@@ -1,5 +1,5 @@
 import "../index.css";
-import type { DesktopBridge } from "@synara/contracts";
+import type { DesktopBridge, DesktopSafariAccessInfo } from "@synara/contracts";
 import { page } from "vitest/browser";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";
@@ -12,12 +12,14 @@ import {
 } from "./SafariAccessOnboarding";
 
 const originalBridge = window.desktopBridge;
+const SUPPORTED_INFO = {
+  supported: true,
+  appName: "Synara (Dev)",
+  appPath: "/Applications/Synara (Dev).app",
+} as const;
+const defaultInfo = async (): Promise<DesktopSafariAccessInfo> => SUPPORTED_INFO;
 const api = {
-  getInfo: vi.fn(async () => ({
-    supported: true as const,
-    appName: "Synara (Dev)",
-    appPath: "/Applications/Synara (Dev).app",
-  })),
+  getInfo: vi.fn(defaultInfo),
   openSettings: vi.fn(async () => true),
   revealApp: vi.fn(async () => true),
 };
@@ -30,6 +32,7 @@ beforeEach(() => {
     betaWelcomePending: false,
   });
   vi.clearAllMocks();
+  api.getInfo.mockImplementation(defaultInfo);
   localStorage.removeItem(SAFARI_ACCESS_STORAGE_KEY);
   window.desktopBridge = { safariAccess: api } as unknown as DesktopBridge;
 });
@@ -113,6 +116,35 @@ describe("Safari access onboarding", () => {
     expect(api.openSettings).not.toHaveBeenCalled();
     expect(localStorage.getItem(SAFARI_ACCESS_STORAGE_KEY)).toBeNull();
   });
+
+  it("does not show startup guidance once Full Disk Access is granted", async () => {
+    api.getInfo.mockResolvedValue({ ...SUPPORTED_INFO, fullDiskAccess: "granted" });
+    await render(<Harness />);
+    await expect.element(page.getByText("Next welcome")).toBeVisible();
+    await expect.element(page.getByRole("dialog")).not.toBeInTheDocument();
+    expect(localStorage.getItem(SAFARI_ACCESS_STORAGE_KEY)).toBeNull();
+    await page.getByRole("button", { name: "Safari import setup" }).click();
+    const dialog = page.getByRole("dialog");
+    await expect.element(dialog).toHaveTextContent("Full Disk Access is on for Synara (Dev).");
+    await expect.element(dialog).toHaveTextContent("Saved logins › Import browser cookies");
+    await expect.element(dialog).not.toHaveTextContent("Quit and reopen");
+    await expect
+      .element(page.getByRole("button", { name: "Show app in Finder" }))
+      .not.toBeInTheDocument();
+  });
+
+  it.each(["denied", "unknown"] as const)(
+    "keeps the setup steps when Full Disk Access is %s",
+    async (fullDiskAccess) => {
+      api.getInfo.mockResolvedValue({ ...SUPPORTED_INFO, fullDiskAccess });
+      await render(<Harness />);
+      const dialog = page.getByRole("dialog");
+      await expect.element(dialog).toBeVisible();
+      await expect.element(dialog).toHaveTextContent("Quit and reopen Synara.");
+      await expect.element(dialog).not.toHaveTextContent("Full Disk Access is on");
+      await expect.element(page.getByRole("button", { name: "Show app in Finder" })).toBeVisible();
+    },
+  );
 
   it("persists Not now across remounts and allows revisiting", async () => {
     const mounted = await render(<Harness />);

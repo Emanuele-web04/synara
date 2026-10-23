@@ -693,3 +693,140 @@ it("keeps dollar filenames separate from math and rejects escaped delimiters", a
   expect(markup).not.toContain("alias.md");
   expect(markup.match(/href=/g)).toHaveLength(1);
 });
+
+describe("ChatMarkdown streaming block split", () => {
+  // Each sample renders block by block while streaming (split path) and as a
+  // single parse once complete; both must produce identical markup.
+  const PARITY_CORPUS: Readonly<Record<string, string>> = {
+    prose: [
+      "# Plan",
+      "",
+      "Read `/tmp/project/src/app.ts` and [docs](https://example.com) first.",
+      "",
+      "## Steps",
+      "",
+      "Costs $5 and $10, with $x^2$ inline math.",
+      "",
+      "---",
+      "",
+      "Closing [[notes/todo]] link.",
+    ].join("\n"),
+    fences: [
+      "Intro.",
+      "",
+      "```ts",
+      "const a = 1;",
+      "",
+      "# not a heading",
+      "```",
+      "After the fence.",
+      "",
+      "~~~",
+      "raw",
+      "~~~",
+      "",
+      "## Done",
+    ].join("\n"),
+    lists: [
+      "- one",
+      "- two",
+      "",
+      "  continued",
+      "",
+      "1. Step",
+      "",
+      "   ```bash",
+      "   npm i",
+      "",
+      "   npm test",
+      "   ```",
+      "",
+      "2. Next",
+      "",
+      "## Tasks",
+      "",
+      "- [ ] open task",
+      "- [x] done task",
+      "",
+      "## End",
+    ].join("\n"),
+    tables: [
+      "## Table",
+      "",
+      "| a | b | c |",
+      "|---|---|",
+      "| 1 | 2 | 3 |",
+      "",
+      "## Next",
+      "",
+      "Text.",
+    ].join("\n"),
+    quotes: [
+      "> [!WARNING]",
+      "> Careful here.",
+      "",
+      "# Heading",
+      "",
+      "> quote",
+      ">",
+      "> # quoted heading",
+      "",
+      "***",
+      "",
+      "End.",
+    ].join("\n"),
+    math: ["Before.", "", "$$", "a = b", "", "c = d", "$$", "", "## After", "", "$$x$$"].join("\n"),
+    html: ["<details>", "", "## Inside", "", "</details>", "", "## After", ""].join("\n"),
+    htmlComment: ["## Before", "", "<!--", "", "# hidden", "", "-->", "", "## After"].join("\n"),
+    references:
+      "See [the docs][docs].\n\n## Section\n\nMore[^1].\n\n[docs]: https://example.com\n\n[^1]: A note.",
+  };
+
+  async function renderStreamingAndComplete(
+    text: string,
+    props: Partial<React.ComponentProps<typeof import("./ChatMarkdown").default>> = {},
+  ) {
+    const { default: ChatMarkdown } = await import("./ChatMarkdown");
+    const render = (isStreaming: boolean) =>
+      renderWithQueryClient(
+        <ChatMarkdown text={text} cwd="/tmp/project" isStreaming={isStreaming} {...props} />,
+      );
+    return { streaming: render(true), complete: render(false) };
+  }
+
+  it.each(Object.entries(PARITY_CORPUS))(
+    "renders %s identically while streaming and when complete",
+    async (_name, text) => {
+      const { streaming, complete } = await renderStreamingAndComplete(text);
+      expect(streaming).toBe(complete);
+      // A find query exposes every text node's source offset in the markup.
+      const found = await renderStreamingAndComplete(text, { findQuery: "e" });
+      expect(found.streaming).toBe(found.complete);
+      expect(found.streaming).toContain("data-chat-find-start");
+    },
+  );
+
+  it("splits the streaming samples into several blocks", async () => {
+    const { splitStreamingMarkdownBlocks } = await import("./chat/streamingMarkdownBlocks");
+    for (const [name, text] of Object.entries(PARITY_CORPUS)) {
+      const blockCount = splitStreamingMarkdownBlocks(text).blocks.length;
+      // Definitions and comment blocks spanning blank lines are never split.
+      if (name === "references" || name === "htmlComment") expect(blockCount, name).toBe(1);
+      else expect(blockCount, name).toBeGreaterThan(1);
+    }
+  });
+
+  it("keeps find offsets and bidi blocks aligned in later blocks", async () => {
+    const text = PARITY_CORPUS.fences! + "\n\nAn error appears here, and `/tmp/error.ts` too.";
+    const startOffset = text.lastIndexOf("error");
+    const { streaming, complete } = await renderStreamingAndComplete(text, {
+      findQuery: "error",
+      findActiveRange: { startOffset, endOffset: startOffset + "error".length },
+      directionMode: "auto-blocks",
+    });
+    expect(streaming).toBe(complete);
+    expect(streaming).toContain(`data-chat-find-start="${String(startOffset)}"`);
+    expect(streaming).toContain('data-chat-find-match="active"');
+    expect(streaming).toContain('<h2 dir="auto">');
+  });
+});

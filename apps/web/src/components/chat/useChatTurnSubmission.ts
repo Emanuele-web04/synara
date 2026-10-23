@@ -47,6 +47,7 @@ import {
   resolveBlockedComposerSendReason,
   resolveEnvironmentPanelPreferenceAfterFirstSend,
   resolveQueuedTurnDispatchSettings,
+  turnNeedsProviderHandoff,
   type BlockedComposerSendReason,
 } from "../ChatView.logic";
 import { toastManager } from "../ui/toast";
@@ -61,7 +62,6 @@ import { resolveChatPromptCaptures } from "./resolveChatPromptCaptures";
 import { useChatTurnExecution } from "./useChatTurnExecution";
 import { useStore } from "../../store";
 import { getThreadFromState } from "../../threadDerivation";
-import { isThreadDetailAwaitingVerification } from "../../threadDetailAuthority";
 
 // One toast per chat: pressing Send again refreshes it instead of stacking copies.
 function notifyBlockedComposerSend(threadId: ThreadId, reason: BlockedComposerSendReason): void {
@@ -287,11 +287,10 @@ export function useChatTurnSubmission({
         isSendBusy ||
         sendPreflightInFlightRef.current ||
         sendInFlightRef.current;
-      const awaitingVerification = isThreadDetailAwaitingVerification(activeThread.id);
-      if (sendInFlight || isConnecting || awaitingVerification) {
+      if (sendInFlight || isConnecting) {
         const blockedReason = resolveBlockedComposerSendReason({
           sendInFlight,
-          sessionStarting: isConnecting || awaitingVerification,
+          sessionStarting: isConnecting,
           hasComposerContent:
             (composerEditorRef.current?.readSnapshot().value ?? promptRef.current).trim().length >
               0 ||
@@ -305,8 +304,7 @@ export function useChatTurnSubmission({
         return false;
       }
       const hasPendingCacheReview = () =>
-        getThreadFromState(useStore.getState(), activeThread.id)?.claudeCacheReview != null ||
-        isThreadDetailAwaitingVerification(activeThread.id);
+        getThreadFromState(useStore.getState(), activeThread.id)?.claudeCacheReview != null;
       if (hasPendingCacheReview()) return false;
       const resumeQueueAfterSend =
         !queuedTurn || dispatchMode === "steer"
@@ -330,7 +328,15 @@ export function useChatTurnSubmission({
         await waitForPendingComposerImages();
         sendPreflightInFlightRef.current = false;
       }
-      if (!queuedTurn && !activePendingProgress && canSendWithProviderHandoff?.() === false) {
+      if (
+        !activePendingProgress &&
+        (!queuedTurn ||
+          turnNeedsProviderHandoff({
+            thread: activeThread,
+            modelSelection: queuedTurn.modelSelection,
+          })) &&
+        canSendWithProviderHandoff?.(queuedTurn?.modelSelection) === false
+      ) {
         return false;
       }
       if (hasPendingCacheReview()) return false;

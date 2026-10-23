@@ -1,8 +1,12 @@
 // FILE: EditorWorkspaceView.tsx
-// Purpose: Read-only editor-style thread surface with file explorer, workspace
-//          file search, file/diff preview, and chat.
+// Purpose: Native editing surface with file explorer, workspace text search,
+//          file/diff editing and previews, and chat.
 // Layer: Chat route presentation
 
+import {
+  WorkspaceFileOpenerContext,
+  resolveWorkspaceFileOpenTarget,
+} from "~/lib/workspaceFileOpener";
 import type { ProjectId } from "@synara/contracts";
 import type { FileDiffMetadata } from "@pierre/diffs/react";
 import {
@@ -13,6 +17,7 @@ import {
   type RefObject,
   useCallback,
   useEffect,
+  useEffectEvent,
   useImperativeHandle,
   useRef,
   useState,
@@ -50,6 +55,8 @@ import {
 import type { FileCommentSelection } from "~/lib/fileComments";
 import { cn } from "~/lib/utils";
 import { useTheme } from "~/hooks/useTheme";
+import { useEditorRailStore, type EditorRailItem } from "~/editorRailStore";
+import { NATIVE_EDITOR_ON } from "~/betaFeatures";
 import { Skeleton } from "./ui/skeleton";
 import {
   ChatHeaderButton,
@@ -104,7 +111,7 @@ interface EditorWorkspaceViewProps {
   editDiffBasePath?: string | null;
   editDiffBaseRev: DiffEditBaseRev | null;
   onCenterModeChange: (mode: EditorCenterMode) => void;
-  onEditFile: (filePath: string) => void;
+  onEditFile: (filePath: string, beforeOpen?: () => void) => void;
   onCloseEdit: () => void;
   onExitEditorView: () => void;
   /**
@@ -457,6 +464,48 @@ export function EditorWorkspaceView(props: EditorWorkspaceViewProps) {
     setSearchPaneActive(false);
     onCenterModeChange(item);
   };
+  // Files / Diff / Search live in the fixed rail while this view is mounted
+  // (editorRailStore), so the editor has one icon column. Re-clicking the
+  // active item collapses the sidebar; a center-pane switch goes through the
+  // dirty-editor guard first.
+  const selectRailItem = useEffectEvent((item: EditorActivityBarItem) => {
+    if (editorActivityBarSelectionLeavesEditor(activityBarSelection(item)))
+      guardLeavingEdit(() => handleActivityBarSelectItem(item));
+    else handleActivityBarSelectItem(item);
+  });
+  const publishRailItems = useEditorRailStore((store) => store.publish);
+  const clearRailItems = useEditorRailStore((store) => store.clear);
+  const filesActive = sidebarVisible && !searchPaneActive && centerFamily === "file";
+  const diffActive = sidebarVisible && !searchPaneActive && centerFamily === "diff";
+  const searchActive = sidebarVisible && searchPaneActive;
+  useEffect(() => {
+    if (!NATIVE_EDITOR_ON) return;
+    const items: EditorRailItem[] = [
+      {
+        id: "file",
+        glyph: FoldersIcon,
+        label: filesActive ? "Hide files sidebar" : "Files",
+        active: filesActive,
+        onSelect: () => selectRailItem("file"),
+      },
+      {
+        id: "diff",
+        glyph: ChangesIcon,
+        label: diffActive ? "Hide diff sidebar" : "Diff",
+        active: diffActive,
+        onSelect: () => selectRailItem("diff"),
+      },
+      {
+        id: "search",
+        glyph: SearchIcon,
+        label: searchActive ? "Hide search sidebar" : "Search files",
+        active: searchActive,
+        onSelect: () => selectRailItem("search"),
+      },
+    ];
+    publishRailItems(items);
+  }, [filesActive, diffActive, searchActive, publishRailItems]);
+  useEffect(() => clearRailItems, [clearRailItems]);
   const toggleChatPaneVisible = () => {
     setChatPaneVisible((previous) => {
       const next = !previous;
@@ -647,17 +696,26 @@ export function EditorWorkspaceView(props: EditorWorkspaceViewProps) {
           <span className="truncate font-normal">Chat</span>
         </ChatHeaderButton>
       </div>
-      <div className="flex min-h-0 min-w-0 flex-1 overflow-hidden">
-        <EditorActivityBar
-          centerMode={props.centerMode}
-          searchActive={searchPaneActive}
-          sidebarVisible={sidebarVisible}
-          onSelectItem={(item) =>
-            editorActivityBarSelectionLeavesEditor(activityBarSelection(item))
-              ? guardLeavingEdit(() => handleActivityBarSelectItem(item))
-              : handleActivityBarSelectItem(item)
-          }
-        />
+      {/* The body sits on the content block below the top bar; clip the opaque
+          panes to the block's rounded corners so none paints a square over them. */}
+      <div
+        className={cn(
+          "flex min-h-0 min-w-0 flex-1 overflow-hidden",
+          NATIVE_EDITOR_ON && "[border-radius:var(--app-rail-block-radii,0)]",
+        )}
+      >
+        {!NATIVE_EDITOR_ON && (
+          <EditorActivityBar
+            centerMode={props.centerMode}
+            searchActive={searchPaneActive}
+            sidebarVisible={sidebarVisible}
+            onSelectItem={(item) =>
+              editorActivityBarSelectionLeavesEditor(activityBarSelection(item))
+                ? guardLeavingEdit(() => handleActivityBarSelectItem(item))
+                : handleActivityBarSelectItem(item)
+            }
+          />
+        )}
         <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden lg:flex-row">
           {!sidebarVisible ? null : searchPaneActive ? (
             <WorkspaceSearchSidebar
@@ -688,48 +746,65 @@ export function EditorWorkspaceView(props: EditorWorkspaceViewProps) {
               onReferenceInChat={props.onReferenceInChat}
             />
           )}
-          <main className="flex min-h-[16rem] min-w-0 flex-1 border-b border-border/65 lg:h-full lg:border-b-0">
-            {/* Keep the diff panel mounted while browsing files: unmounting it
+          <WorkspaceFileOpenerContext.Provider
+            value={{
+              openFile: (path, beforeOpen) => {
+                const target = resolveWorkspaceFileOpenTarget(path, props.workspaceRoot);
+                if (!target) return false;
+                // The parent owns the final save guard and prepares the reveal
+                // only when it accepts this editing request.
+                props.onEditFile(target, beforeOpen);
+                return true;
+              },
+            }}
+          >
+            <main className="flex min-h-[16rem] min-w-0 flex-1 border-b border-border/65 lg:h-full lg:border-b-0">
+              {/* Keep the diff panel mounted while browsing files: unmounting it
                 drops the parsed patch, diff worker pool, and query subscriptions,
                 which made every Files -> Diff switch a cold multi-second reload. */}
-            <div className={cn("min-h-0 min-w-0 flex-1", props.centerMode !== "diff" && "hidden")}>
-              {props.diffPanel}
-            </div>
-            {props.centerMode === "fileEdit" && props.editFilePath !== null ? (
-              <div className="flex min-h-0 min-w-0 flex-1">
-                <WorkspaceFileEditorPane
-                  workspaceRoot={props.workspaceRoot}
-                  filePath={props.editFilePath}
-                  resolvedTheme={editorResolvedTheme}
-                  onClose={props.onCloseEdit}
-                />
+              <div
+                className={cn("min-h-0 min-w-0 flex-1", props.centerMode !== "diff" && "hidden")}
+              >
+                {props.diffPanel}
               </div>
-            ) : props.centerMode === "diffEdit" && props.editFilePath !== null ? (
-              <div className="flex min-h-0 min-w-0 flex-1">
-                <WorkspaceFileDiffEditorPane
-                  workspaceRoot={props.workspaceRoot}
-                  filePath={props.editFilePath}
-                  basePath={props.editDiffBasePath ?? null}
-                  baseRev={props.editDiffBaseRev ?? { rev: "HEAD" }}
-                  resolvedTheme={editorResolvedTheme}
-                  onClose={props.onCloseEdit}
-                />
-              </div>
-            ) : props.centerMode === "file" ? (
-              <div className="flex min-h-0 min-w-0 flex-1">
-                <WorkspaceFilePreview
-                  workspaceRoot={props.workspaceRoot}
-                  filePath={props.selectedFilePath}
-                  markdownPreviewEnabled={markdownPreviewModes.get(markdownPreviewKey) ?? true}
-                  onMarkdownPreviewChange={handleMarkdownPreviewChange}
-                  onReferenceInChat={props.onReferenceInChat}
-                  onAskWhyInChat={props.onAskWhyInChat}
-                  onCommentInChat={props.onCommentInChat}
-                  onEditFile={props.onEditFile}
-                />
-              </div>
-            ) : null}
-          </main>
+              {props.centerMode === "fileEdit" && props.editFilePath !== null ? (
+                <div className="flex min-h-0 min-w-0 flex-1">
+                  <WorkspaceFileEditorPane
+                    onReferenceInChat={props.onReferenceInChat}
+                    workspaceRoot={props.workspaceRoot}
+                    filePath={props.editFilePath}
+                    resolvedTheme={editorResolvedTheme}
+                    onClose={props.onCloseEdit}
+                  />
+                </div>
+              ) : props.centerMode === "diffEdit" && props.editFilePath !== null ? (
+                <div className="flex min-h-0 min-w-0 flex-1">
+                  <WorkspaceFileDiffEditorPane
+                    onReferenceInChat={props.onReferenceInChat}
+                    workspaceRoot={props.workspaceRoot}
+                    filePath={props.editFilePath}
+                    basePath={props.editDiffBasePath ?? null}
+                    baseRev={props.editDiffBaseRev ?? { rev: "HEAD" }}
+                    resolvedTheme={editorResolvedTheme}
+                    onClose={props.onCloseEdit}
+                  />
+                </div>
+              ) : props.centerMode === "file" ? (
+                <div className="flex min-h-0 min-w-0 flex-1">
+                  <WorkspaceFilePreview
+                    workspaceRoot={props.workspaceRoot}
+                    filePath={props.selectedFilePath}
+                    markdownPreviewEnabled={markdownPreviewModes.get(markdownPreviewKey) ?? true}
+                    onMarkdownPreviewChange={handleMarkdownPreviewChange}
+                    onReferenceInChat={props.onReferenceInChat}
+                    onAskWhyInChat={props.onAskWhyInChat}
+                    onCommentInChat={props.onCommentInChat}
+                    onEditFile={props.onEditFile}
+                  />
+                </div>
+              ) : null}
+            </main>
+          </WorkspaceFileOpenerContext.Provider>
           <div
             role="separator"
             aria-label="Resize chat panel"

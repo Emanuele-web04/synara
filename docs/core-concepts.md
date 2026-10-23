@@ -26,11 +26,21 @@ is cancelled, the task and its prompt remain available for retry. Pressing Send 
 message for the same task is still being sent shows a notice and keeps the new text in the
 composer; it is not sent twice.
 
+Empty chats show an animated ASCII background by default. Turn it off in **Settings →
+Appearance → ASCII background**. With reduced motion enabled, the field stays still; deliberate
+clicks can still trigger a ripple. The pattern fades around the composer and stays out of the
+input, including during ripples. The decoration pauses while its chat is hidden.
+
 ## The main surfaces
 
 - **Sidebar** — projects, spaces, tasks, and activity requiring attention. The rail
   is a fixed column of icon tabs for Home, Spaces, Tasks, Code review, Automations, Hubs, and
   Settings, with the thread panel beside it and the route shown as a card inset from the window.
+  The Activity view (the bell, `mod+alt+u`) leads with **Priority**: every chat waiting on an
+  answer, then unseen finished or failed work, then running chats, with no cap. Rows keep their
+  place while you work through them, and read rows stay until **Clear read from Priority** in
+  the Activity options or until the view reopens. Other chats follow under Today, Yesterday,
+  and Earlier.
   Open saved threads appear as tabs across the top of the chat. Unsent drafts stay out of
   the tab strip until they become saved threads on the first send. Saved tabs remain
   available to return to while an unsent draft is on screen, including in the editor view.
@@ -70,10 +80,6 @@ composer; it is not sent twice.
   to-dos: add one due today, or select it to edit and delegate through the same card as Tasks.
   **All tasks** opens the complete backlog in both Stable and Beta.
 - **Conversation** — user messages, agent responses, plans, tools, approvals, and subagent activity.
-  Long conversations open at recent work. Load earlier messages, Find, pinned-message navigation,
-  and Go to first message can reach their earlier history. Reloads can reuse private local detail
-  after verifying the connected server; actions wait for reconciliation.
-  See [Thread history and reload recovery](thread-history.md) for compatibility and storage limits.
   The composer strip shows the live turn's subagents. The Environment panel's **Subagents** row
   summarizes all of them (running, queued, and done); clicking it opens the full list in the right dock,
   where finished subagents stay one click away after the strip hides. In split view, the list
@@ -104,6 +110,18 @@ native confirmation. With an open window and running chats, the quit dialog list
 will stop and offers to resume it automatically on the next launch. On macOS and Linux, a SIGINT
 or SIGTERM from a terminal or a script, such as `bun run canary:stop`, shuts the app down without
 asking.
+
+After an unexpected server shutdown, Synara automatically continues ordinary chats that
+were actively running, using their saved conversation and provider selection. The continuation
+asks the agent to verify existing operations before repeating them. Chats waiting for approval
+or an answer, chats still starting, archived chats, native subagents, delegated tasks, goals,
+and managed Hub or automation work are excluded from this fallback; their existing recovery or manual controls
+still apply. This starts a guarded continuation, not a replay of an in-flight tool call.
+
+To keep working on another provider account, add and sign in to it under **Settings → Providers**,
+then use **Hand off thread → Continue in a new thread** and select that account. The new thread
+carries the conversation history and uses the destination account's own credentials. A started
+thread's model picker cannot change its account in place.
 
 ## Projects
 
@@ -156,9 +174,10 @@ A turn is one cycle inside that task:
 A long task can contain many turns. Keep follow-ups connected to the same objective; create another
 task when the work needs a different owner, branch, or review boundary.
 
-Each settled turn has a **Worked** header with its duration, completion time, and final state.
-The model appears when it changes from the previous turn. Expand the header to read the tools and
-full narration; turning off finished-turn folding keeps the same header with the work visible.
+Finished work folds into a compact **Worked for** disclosure above the final answer. Expand it
+to read the tools and full narration; turning off finished-turn folding keeps the work visible.
+Active turns show **Working for** with a live duration. These labels use the chat font size and
+keep the divider below the label, without model badges or completion icons.
 **Stopped by you** requires a request explicitly marked as user Stop, followed by an interrupted
 outcome for that turn. Agent, automatic, steering, and historical interruptions without that actor
 say **Interrupted**; provider failures retain their reason even after Stop intent. Background commands
@@ -173,6 +192,56 @@ again. An assistant item that ends without any text does not add an empty respon
 Chat code blocks above 250,000 characters display their complete source as plain text,
 using the same highlighting limit as file previews. Find, Copy code, and soft wrap remain available.
 
+### Inline visuals
+
+In Synara and Synara Beta, an agent can answer with a visual inside its reply: headline numbers, a bar or
+line chart, a table, a side-by-side comparison, a checklist or step list, a note, a small
+calculator, follow-up choices, or tabs that combine them. Ask for one ("show this as a chart") and
+the agent calls the `synara_show_visual` tool, then places the visual in its answer like a
+paragraph, with text before and after it. This works with every provider that has Synara's thread
+tools (see [Providers](providers.md)).
+
+Most visuals are component specs: the agent sends data, and Synara draws it with its own
+components, so a visual matches the app, the current light or dark theme, custom theme colors, and
+the chat font size. Bar charts can compare before and after on each row, with the change in
+percent. Tables sort when you click a column header and fold after ten rows.
+Calculators recompute as you move a slider or type a value. Checklists can be ticked. Clicking a
+follow-up choice sends it as your next message, or adds it to the composer for review if it already holds text, attachments, or context. What you change in a visual is kept while you scroll. Anything the components cannot draw,
+such as a diagram, the agent sends as a self-contained HTML page instead; the rest of this section
+covers those pages.
+
+While a turn runs, a visual its answer has not placed yet waits for that answer, so the reply
+does not jump. A visual the agent never places appears above the answer, under **Worked for**,
+when the turn settles. Expanding or collapsing **Worked for**, or the turn settling, never
+reloads a visual.
+
+An HTML page has no border, caption, or card of its own. It sits on the chat background, spans the
+reply column, and lines up with the reply text; its title is the name screen readers announce.
+Plain headings, tables, buttons, inputs, and selects inside a page already look like Synara,
+with a visible keyboard focus ring. The tool also tells agents to draw at natural size: text that
+never scales with the column, SVG at its own size, and charts sized to their data. That guidance
+shapes the page; Synara does not rewrite it. Pages follow theme and font size changes without
+reloading.
+
+Scripts in a visual run in a sandboxed frame with its own origin. They cannot read Synara's
+pages, your session, or your files, or open windows or dialogs, and the page's fetches and remote
+scripts, fonts, and images are blocked. WebRTC entry points are removed before page scripts.
+A visual that tries to navigate
+stops and offers **Reload**: the desktop app refuses the navigation before the request. HTML
+execution is disabled in plain browsers; use native component specs there instead. HTML pages
+cannot open external links through the host. Hover
+a page to copy its source or reload it. Each page is limited to 256 KiB and each component spec to
+64 KiB, and a turn can show at most six visuals. A turn you stop after it showed a visual ends with the stop line below that
+visual.
+
+The transcript keeps following the end while a visual grows if you were at the end; scrolling
+up, including over a visual, leaves you where you are. A visual that is no longer available
+(for example after its thread was deleted) shows **Visual unavailable.** Deleting a thread
+deletes its visuals, and undoing a turn removes that turn's visuals from the conversation.
+Visuals are not included in thread exports; an exported answer shows the `synara-visual` block
+that placed one. Far-off HTML pages are unloaded as you scroll, so an interactive page restarts
+when you come back to it.
+
 If a connection drops while sending, Synara shows **Checking message delivery…** while it checks the original
 command's durable receipt. An accepted message is retained without resending it to the provider.
 If it was not accepted, Synara records a rejection that also blocks a delayed copy, then restores
@@ -181,6 +250,8 @@ older servers retain their existing error handling. If recovery reaches a server
 Synara reports that delivery is still unknown; reconnect to an updated server and check the conversation
 before sending again. Socket recovery restores active subscriptions
 and reports the connection as open only after the feature socket answers.
+Recovery snapshots include the last projected rollback or revert, so messages removed while a
+client was disconnected do not reappear. Ordinary refreshes still preserve newer streamed text.
 
 Thread runtime errors appear above the transcript. Use **Show details** to read the full error
 or **Copy error** to copy every line. **Unblock thread** is available for provider-delivery
@@ -375,6 +446,18 @@ follow a successful commit or push, so inspect the current branch before retryin
 Synara's checkpoint and revert controls can help recover task work, but committed Git history remains
 the strongest boundary for important changes.
 
+For providers whose live changes Synara captures from Git, an individual **Turn** diff can show
+its latest completed file-tool snapshot before the turn finishes. It updates when the next snapshot
+is published, survives reconnects, preserves Ignore whitespace, and switches to the final checkpoint
+after capture succeeds, including interrupted turns with a captured exact baseline. A failed terminal
+capture retains the last preview; later events cannot recapture work for the settled turn.
+It does not read uncaptured worktree edits on demand. Codex cumulative turn patches can also appear
+before completion: Synara applies the exact journal revision to its captured turn-start baseline in
+a private Git index, preserving Ignore whitespace without reading later checkout edits. A missing
+baseline, mismatched patch, compacted payload or older event without integrity metadata remains
+unavailable until a fresh complete update or final checkpoint. **All turns** still uses completed
+checkpoints; a live preview is not proof that a turn finished.
+
 File Undo and thread revert refuse to change a workspace while another thread has an active or
 pending turn in that same Git checkout. Symlinks and nested folders share this protection;
 separate Git worktrees remain independent. Stop the active turn before retrying Undo.
@@ -443,6 +526,9 @@ scaling beyond one task.
 - `mod+\` — split the current view
 - `mod+1` through `mod+9` — open a numbered sidebar thread. Hold `mod` to show the
   default numbers in the classic and Activity views.
+- `mod+alt+a` — open the next chat that needs you: one waiting on an answer first, then
+  unseen work. Repeated presses advance through that urgency order and wrap after the last
+  actionable chat, independently of Priority's held row order.
 
 Every split chat has an **X** in its header to close it. Closing an ordinary pane keeps
 the remaining chats and preserves focus on a surviving chat. Closing a forked Side

@@ -1,22 +1,15 @@
+// FILE: pierreEdit.ts
+// Purpose: The Pierre editing engine's lazy loader and history adapter. Stable
+//          edits with Pierre; Beta uses the native engine (betaFeatures.ts).
+// Layer: Web editor runtime (Pierre engine)
+// Exports: PierreEditor, loadPierreEdit, resetPierreEditLoad,
+//          createCodeEditHistoryControls, readCodeEditHistoryState
+
 import type { Editor } from "@pierre/diffs/edit";
 
+import type { CodeEditHistoryControls, CodeEditHistoryState } from "./codeEditHistory";
+
 export type PierreEditor = Editor<undefined>;
-
-export interface CodeEditHistoryControls {
-  undo: () => void;
-  redo: () => void;
-  revertTo: (value: string) => void;
-}
-
-export interface CodeEditHistoryState {
-  canUndo: boolean;
-  canRedo: boolean;
-}
-
-export const INITIAL_CODE_EDIT_HISTORY_STATE: CodeEditHistoryState = {
-  canUndo: false,
-  canRedo: false,
-};
 
 let editModule: Promise<typeof import("@pierre/diffs/edit")> | null = null;
 

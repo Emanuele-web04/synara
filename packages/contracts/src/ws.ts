@@ -1,4 +1,6 @@
+import { EditorDebugStartInput, EditorDebugActionInput, EditorDebugPollInput } from "./editorDebug";
 import { Schema, Struct } from "effect";
+import { EditorIntelligenceInput } from "./editorIntelligence";
 import {
   LoadProjectImportHistoryInput,
   ImportProjectInput,
@@ -137,6 +139,7 @@ import {
   ProjectWriteFileInput,
 } from "./project";
 import { StudioListThreadOutputsInput } from "./studio";
+import { OrchestrationGetInlineVisualInput } from "./inlineVisual";
 import { FilesystemBrowseInput } from "./filesystem";
 import {
   DEVICE_WS_CHANNELS,
@@ -216,6 +219,7 @@ import {
   ExternalMcpRefreshPairingInput,
   ExternalMcpRevokeIntegrationInput,
 } from "./externalMcp";
+import { McpConnectorConnectInput, McpConnectorDisconnectInput } from "./mcpConnectors";
 import {
   GitHubProjectProvisionInput,
   GitHubProjectProvisionProgressEvent,
@@ -231,6 +235,10 @@ export const WS_METHODS = {
   projectsSearchLocalEntries: "projects.searchLocalEntries",
   projectsSearchContent: "projects.searchContent",
   projectsPrewarmSearchIndex: "projects.prewarmSearchIndex",
+  editorIntelligence: "editor.intelligence",
+  editorDebugStart: "editor.debug.start",
+  editorDebugAction: "editor.debug.action",
+  editorDebugPoll: "editor.debug.poll",
   projectsReadFile: "projects.readFile",
   projectsSubscribeFileChange: "projects.subscribeFileChange",
   projectsResolveWorkspaceFileReferences: "projects.resolveWorkspaceFileReferences",
@@ -314,6 +322,10 @@ export const WS_METHODS = {
   serverCreateExternalMcpIntegration: "server.createExternalMcpIntegration",
   serverRevokeExternalMcpIntegration: "server.revokeExternalMcpIntegration",
   serverRefreshExternalMcpPairing: "server.refreshExternalMcpPairing",
+  serverListMcpConnectors: "server.listMcpConnectors",
+  serverConnectMcpConnector: "server.connectMcpConnector",
+  serverDisconnectMcpConnector: "server.disconnectMcpConnector",
+  serverGetMcpConnectorSetup: "server.getMcpConnectorSetup",
   serverListWorktrees: "server.listWorktrees",
   serverListLocalServers: "server.listLocalServers",
   serverStopLocalServer: "server.stopLocalServer",
@@ -467,6 +479,7 @@ const WebSocketRequestBody = Schema.Union([
   tagRequestBody(ORCHESTRATION_WS_METHODS.repairState, OrchestrationRepairStateInput),
   tagRequestBody(ORCHESTRATION_WS_METHODS.getTurnDiff, OrchestrationGetTurnDiffInput),
   tagRequestBody(ORCHESTRATION_WS_METHODS.getFullThreadDiff, OrchestrationGetFullThreadDiffInput),
+  tagRequestBody(ORCHESTRATION_WS_METHODS.getInlineVisual, OrchestrationGetInlineVisualInput),
   tagRequestBody(ORCHESTRATION_WS_METHODS.replayEvents, OrchestrationReplayEventsInput),
   tagRequestBody(ORCHESTRATION_WS_METHODS.subscribeShell, OrchestrationSubscribeShellInput),
   tagRequestBody(ORCHESTRATION_WS_METHODS.unsubscribeShell, OrchestrationUnsubscribeShellInput),
@@ -480,6 +493,10 @@ const WebSocketRequestBody = Schema.Union([
   tagRequestBody(WS_METHODS.projectsSearchLocalEntries, ProjectSearchLocalEntriesInput),
   tagRequestBody(WS_METHODS.projectsSearchContent, ProjectSearchContentInput),
   tagRequestBody(WS_METHODS.projectsPrewarmSearchIndex, ProjectPrewarmSearchIndexInput),
+  tagRequestBody(WS_METHODS.editorIntelligence, EditorIntelligenceInput),
+  tagRequestBody(WS_METHODS.editorDebugStart, EditorDebugStartInput),
+  tagRequestBody(WS_METHODS.editorDebugAction, EditorDebugActionInput),
+  tagRequestBody(WS_METHODS.editorDebugPoll, EditorDebugPollInput),
   tagRequestBody(WS_METHODS.projectsReadFile, ProjectReadFileInput),
   tagRequestBody(WS_METHODS.projectsSubscribeFileChange, ProjectWatchFileInput),
   tagRequestBody(
@@ -596,6 +613,10 @@ const WebSocketRequestBody = Schema.Union([
   tagRequestBody(WS_METHODS.serverCreateExternalMcpIntegration, ExternalMcpCreateIntegrationInput),
   tagRequestBody(WS_METHODS.serverRevokeExternalMcpIntegration, ExternalMcpRevokeIntegrationInput),
   tagRequestBody(WS_METHODS.serverRefreshExternalMcpPairing, ExternalMcpRefreshPairingInput),
+  tagRequestBody(WS_METHODS.serverListMcpConnectors, Schema.Struct({})),
+  tagRequestBody(WS_METHODS.serverConnectMcpConnector, McpConnectorConnectInput),
+  tagRequestBody(WS_METHODS.serverDisconnectMcpConnector, McpConnectorDisconnectInput),
+  tagRequestBody(WS_METHODS.serverGetMcpConnectorSetup, Schema.Struct({})),
   tagRequestBody(WS_METHODS.serverListWorktrees, Schema.Struct({})),
   tagRequestBody(WS_METHODS.serverListLocalServers, Schema.Struct({})),
   tagRequestBody(WS_METHODS.serverStopLocalServer, ServerStopLocalServerInput),

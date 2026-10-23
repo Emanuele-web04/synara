@@ -50,6 +50,7 @@ const NODE_PTY_ASAR_UNPACK_GLOBS = ["node_modules/node-pty/**"] as const;
 export interface DesktopPlatformBuildConfig {
   readonly afterSign?: string;
   readonly afterPack?: string;
+  readonly onNodeModuleFile?: string;
   readonly asarUnpack?: ReadonlyArray<string>;
   readonly dmg?: Record<string, unknown>;
   readonly extraFiles?: ReadonlyArray<Record<string, string>>;
@@ -110,11 +111,20 @@ export function createDesktopPlatformBuildConfig(
     diagnostics: preserveDependencyDiagnostics(process.env),
     linuxGlibc: typeof report?.header?.glibcVersionRuntime === "string",
   });
-  const nativePackaging = { asarUnpack: [...NODE_PTY_ASAR_UNPACK_GLOBS], files };
+  const nativePackaging = {
+    asarUnpack: [...NODE_PTY_ASAR_UNPACK_GLOBS],
+    files,
+    // TypeScript reads these declarations at runtime in the intelligence worker.
+    // electron-builder otherwise removes every dependency .d.ts file.
+    onNodeModuleFile: fileURLToPath(new URL("./desktop-runtime-files.cjs", import.meta.url)),
+  };
 
   if (input.platform === "mac") {
     const mac = {
-      target: input.target === "dmg" ? [input.target, "zip"] : [input.target],
+      // The finalizer creates the updater ZIP with ditto after notarization.
+      // Asking electron-builder for a ZIP too compresses the app twice and
+      // generates a blockmap that finalization immediately discards.
+      target: [input.target],
       icon: MAC_DMG_ICON_PATH,
       category: "public.app-category.developer-tools",
       hardenedRuntime: input.signed === true,

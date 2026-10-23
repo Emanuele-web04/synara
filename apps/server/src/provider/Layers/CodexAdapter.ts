@@ -49,6 +49,7 @@ import {
   CodexAppServerManager,
   CodexSessionAuthInvalidatedError,
   parseCodexUserInputQuestions,
+  readResumeCursorThreadId,
   type CodexAppServerSendTurnInput,
   type CodexAppServerStartSessionInput,
   type CodexSessionInspection,
@@ -103,6 +104,7 @@ import {
 import { type EventNdjsonLogger, makeEventNdjsonLogger } from "./EventNdjsonLogger.ts";
 
 const PROVIDER = "codex" as const;
+const CODEX_RUNTIME_WARNING_METHODS = new Set(["guardianWarning", "warning"]);
 
 // Backstop for an alive-but-silent codex app-server: if a turn produces no
 // activity at all for this long, abort it instead of showing "Working" forever.
@@ -1167,8 +1169,9 @@ function mapCodexHookEvent(
   };
 }
 
-// Configuration/lifecycle bookkeeping belongs in native diagnostics, not the transcript.
+// Internal metadata and configuration/lifecycle bookkeeping stay in native diagnostics.
 const DIAGNOSTIC_ONLY_CODEX_METHODS = new Set([
+  "turn/moderationMetadata",
   "item/autoApprovalReview/started",
   "remoteControl/status/changed",
   "skills/changed",
@@ -1539,16 +1542,20 @@ function mapToRuntimeEvents(
   }
 
   if (event.method === "turn/diff/updated") {
+    // Keep the cumulative body once. Metadata records its original UTF-8 size
+    // so a journal-compacted prefix cannot masquerade as a complete patch.
+    const unifiedDiff =
+      asString(payload?.unifiedDiff) ?? asString(payload?.diff) ?? asString(payload?.patch) ?? "";
+    const base = runtimeDeltaEventBase(event, canonicalThreadId);
     return [
       {
-        ...runtimeEventBase(event, canonicalThreadId),
+        ...base,
         type: "turn.diff.updated",
-        payload: {
-          unifiedDiff:
-            asString(payload?.unifiedDiff) ??
-            asString(payload?.diff) ??
-            asString(payload?.patch) ??
-            "",
+        payload: { unifiedDiff },
+        raw: {
+          source: base.raw?.source ?? eventRawSource(event),
+          method: event.method,
+          payload: { unifiedDiffBytes: Buffer.byteLength(unifiedDiff, "utf8") },
         },
       },
     ];
@@ -1828,6 +1835,28 @@ function mapToRuntimeEvents(
         payload: {
           summary: asTrimmedString(payload?.summary) ?? "Deprecation notice",
           ...(details ? { details } : {}),
+        },
+      },
+    ];
+  }
+
+  if (CODEX_RUNTIME_WARNING_METHODS.has(event.method)) {
+    const message = asTrimmedString(payload?.message);
+    if (
+      event.method === "guardianWarning" &&
+      message?.startsWith("Automatic approval review approved (")
+    ) {
+      return [];
+    }
+    return [
+      {
+        type: "runtime.warning",
+        ...withMinimalRawPayload(runtimeEventBase(event, canonicalThreadId), event),
+        payload: {
+          message: sanitizeUnmappedProviderDetail(message, 2_000) ?? "Codex runtime warning",
+          ...(event.payload !== undefined
+            ? { detail: sanitizeUnmappedProviderData(event.payload) }
+            : {}),
         },
       },
     ];
@@ -2714,7 +2743,9 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
           const runtimeEvents = sizedRuntimeEvents.map((item) => item.event);
           trackTurnWatchdogActivity(stampedEvent.threadId, runtimeEvents);
           const nativeEvent = compactCodexNativeEventForIngress(
-            hasUnmappedEvent ? sanitizeUnmappedProviderEvent(stampedEvent) : stampedEvent,
+            hasUnmappedEvent || CODEX_RUNTIME_WARNING_METHODS.has(stampedEvent.method)
+              ? sanitizeUnmappedProviderEvent(stampedEvent)
+              : stampedEvent,
           );
           const result = ingress.offer({
             nativeEvent: nativeEvent.event,
@@ -2786,6 +2817,13 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
         supportsLiveTurnDiffPatch: true,
       },
       startSession,
+      didResumeSession: (input, session) => {
+        const requestedThreadId = readResumeCursorThreadId(input.resumeCursor);
+        return (
+          requestedThreadId !== undefined &&
+          readResumeCursorThreadId(session.resumeCursor) === requestedThreadId
+        );
+      },
       sendTurn,
       steerTurn,
       startReview,
@@ -2804,6 +2842,8 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
           try: () => manager.renewAgentGatewayCredential(threadId),
           catch: (cause) => toRequestError(threadId, "thread/resume", cause),
         }),
+      agentGatewayCredentialRetired: (threadId) =>
+        Effect.sync(() => manager.isAgentGatewayCredentialRetired(threadId)),
       listSessions,
       listGeneratedImageHomePaths,
       hasSession,

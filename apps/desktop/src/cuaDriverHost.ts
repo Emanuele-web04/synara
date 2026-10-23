@@ -8,6 +8,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import {
   cuaRequest,
   cuaCleanupAcknowledged,
+  CuaTransportError,
   CUA_DRIVER_VERSION,
   CUA_NATIVE_REVISION,
   CUA_SETUP_TIMEOUT_MS,
@@ -136,8 +137,14 @@ interface Generation {
   appliedSessionCursorStyles: Map<string, string>;
   /** Latest turn using each cursor label. A delayed old-turn end cannot hide it. */
   taskCursors: Map<string, TaskCursor>;
+  /** Single-use cleanup receipts, scoped to the task and this live driver. */
+  clipboardRestores: Map<string, string>;
   retirement?: Promise<void>;
 }
+
+const CLIPBOARD_TOKEN_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const isClipboardToken = (value: unknown): value is string =>
+  typeof value === "string" && CLIPBOARD_TOKEN_PATTERN.test(value);
 
 /**
  * The driver-side lifecycle label for one thread's browser namespace. Kept
@@ -242,6 +249,17 @@ const LOGGABLE_CUA_CODES = new Set([
   "input_monitor_unavailable",
   "gui_host_required",
   "background_pixel_focus_unavailable",
+  "bring_to_front_exact_window_verified",
+  "bring_to_front_exact_window_unverified",
+  "bring_to_front_pid_out_of_range",
+  "bring_to_front_window_id_out_of_range",
+  "bring_to_front_pid_not_found",
+  "bring_to_front_window_not_found",
+  "bring_to_front_window_pid_mismatch",
+  "bring_to_front_window_not_ordinary",
+  "bring_to_front_interrupted",
+  "bring_to_front_process_verified",
+  "bring_to_front_process_unverified",
 ]);
 
 /**
@@ -742,6 +760,26 @@ export class CuaDriverHost {
       await endOperation;
       return { ok: true };
     }
+    if (
+      request.method === "call" &&
+      request.name === "clipboard_write" &&
+      request.args &&
+      typeof request.args === "object" &&
+      "restore_token" in request.args
+    ) {
+      const args = request.args as Record<string, unknown>;
+      if (
+        Array.isArray(args) ||
+        Object.keys(args).length !== 1 ||
+        !isClipboardToken(args.restore_token)
+      )
+        return {
+          ok: false,
+          error: "Clipboard cleanup accepts only a valid restore token.",
+          effect: "not-dispatched",
+        };
+      return this.restoreClipboard(args.restore_token, task);
+    }
     if (this.closed) throw new Error("Computer host is closed.");
     if (this.suspended)
       throw new Error("Computer host is suspended while the backend is stopping.");
@@ -1204,6 +1242,7 @@ export class CuaDriverHost {
   ): Promise<CuaReply> {
     let generation: Generation | undefined;
     let dispatched = false;
+    let clipboardPreservationDispatched = false;
     let cursorEnabled: boolean | undefined;
     const admittedEpoch = this.epoch;
     const admittedDesktopEpoch = this.desktopEpoch;
@@ -1357,6 +1396,22 @@ export class CuaDriverHost {
           generation.inputTask = task;
         }
         generation.inputEverDispatched ||= generation.inputInFlight;
+        const clipboardArgs = args as Record<string, unknown>;
+        if (
+          name === "clipboard_write" &&
+          clipboardArgs.preserve === true &&
+          isClipboardToken(clipboardArgs.preserve_token)
+        ) {
+          // Record before dispatch: a lost reply must not strand the original.
+          if (!generation.clipboardRestores.has(clipboardArgs.preserve_token))
+            generation.clipboardRestores.set(
+              clipboardArgs.preserve_token,
+              task ? cuaComputerTaskKey(task) : "anonymous",
+            );
+          while (generation.clipboardRestores.size > 256)
+            generation.clipboardRestores.delete(generation.clipboardRestores.keys().next().value!);
+          clipboardPreservationDispatched = true;
+        }
         const attemptReply = await cuaRequest<CuaReply>(
           generation.socket,
           {
@@ -1519,10 +1574,27 @@ export class CuaDriverHost {
       // anything was dispatched — proves nothing about the generation's
       // health: nothing it observed indicts the driver. Retiring here would
       // kill the process, its sessions, and its browser bindings on a
-      // host-side verdict alone. Every real dispatch failure still retires.
+      // host-side verdict alone. Clipboard preparation alone can retain its
+      // cleanup receipt after a confirmed drain; other dispatch failures retire.
       if (generation && !cancelledBeforeDispatch && !callCancel.signal.aborted) {
         try {
-          await this.retire(generation);
+          if (
+            clipboardPreservationDispatched &&
+            generation.cancellationReady &&
+            this.options.nativeRevision !== null
+          ) {
+            // Preparation may have succeeded despite a lost reply. Fence
+            // buffered requests and prove native work drained before retaining
+            // this generation for the caller's restore-only cleanup receipt.
+            try {
+              await this.interruptNativeInput(generation);
+            } catch (cleanupError) {
+              await this.retire(generation);
+              throw cleanupError;
+            }
+          } else {
+            await this.retire(generation);
+          }
         } catch (cleanupError) {
           detail += `; ${String(cleanupError)}`;
         }
@@ -1541,6 +1613,82 @@ export class CuaDriverHost {
       this.inFlightInputInterrupts.delete(callCancel);
       this.activeTaskCalls.delete(callCancel);
     }
+  }
+
+  private restoreClipboard(token: string, task: CuaComputerTask | undefined): Promise<CuaReply> {
+    const generation = this.generation;
+    const owner = task ? cuaComputerTaskKey(task) : "anonymous";
+    const previous = this.operations;
+    const stopping = this.stopping;
+    const operation = (async (): Promise<CuaReply> => {
+      await previous;
+      await stopping;
+      if (
+        !generation ||
+        this.generation !== generation ||
+        generation.retired ||
+        generation.didExit ||
+        generation.clipboardRestores.get(token) !== owner
+      )
+        return {
+          ok: false,
+          error: "No saved clipboard belongs to this task in the live driver.",
+          effect: "not-dispatched",
+        };
+      if (this.nativeInputCleanupPending === generation) {
+        try {
+          await this.interruptNativeInput(generation);
+        } catch (error) {
+          return { ok: false, error: String(error), effect: "not-dispatched" };
+        }
+      }
+      if (
+        this.generation !== generation ||
+        generation.retired ||
+        generation.didExit ||
+        this.nativeInputCleanupPending === generation
+      )
+        return {
+          ok: false,
+          error: "Clipboard cleanup requires the original live driver with native input drained.",
+          effect: "not-dispatched",
+        };
+      try {
+        // Cleanup survives Stop but cannot rearm input, revive a task session,
+        // or spawn a replacement. Native code also checks the saved token and
+        // clipboard change counter before restoring any bytes.
+        const reply = await cuaRequest<CuaReply>(
+          generation.socket,
+          {
+            method: "call",
+            name: "clipboard_write",
+            args: { restore_token: token, session: generation.session },
+          },
+          { timeoutMs: 5_000, mutation: true },
+        );
+        // A transport loss or native error can leave the snapshot available.
+        // Consume the host receipt only after native confirms a terminal
+        // restore decision, including skipping a newer human clipboard copy.
+        if (
+          reply.ok &&
+          !reply.result?.isError &&
+          typeof reply.result?.structuredContent?.clipboard_restored === "boolean"
+        )
+          generation.clipboardRestores.delete(token);
+        return reply;
+      } catch (error) {
+        return {
+          ok: false,
+          error: String(error),
+          effect: error instanceof CuaTransportError ? error.effect : "dispatched-unknown",
+        };
+      }
+    })();
+    this.operations = operation.then(
+      () => undefined,
+      () => undefined,
+    );
+    return operation;
   }
 
   /** A single bounded read after mint/first action, never periodic polling.
@@ -1905,6 +2053,7 @@ export class CuaDriverHost {
         appliedCursorStyle: "",
         appliedSessionCursorStyles: new Map<string, string>(),
         taskCursors: new Map<string, TaskCursor>(),
+        clipboardRestores: new Map<string, string>(),
       };
       this.generation = generation;
       this.updateInputMonitorArmed();
@@ -2468,6 +2617,16 @@ export class CuaDriverHost {
         JSON.stringify({
           event: "computer_physical_input",
           ts: new Date().toISOString(),
+          kind: event.kind,
+          eventType: event.eventType,
+          sourcePid: event.sourcePid,
+          sourceStateId: event.sourceStateId,
+          sourceTagged: event.sourceTagged,
+          modifierKey: event.modifierKey,
+          ...(event.capturedAt &&
+          /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?Z$/.test(event.capturedAt)
+            ? { capturedAt: event.capturedAt }
+            : {}),
           pid: safeNativeId(event.pid),
           windowId: safeNativeId(event.windowId),
           targets: affected.map(([, target]) => ({

@@ -85,6 +85,35 @@ function hasCompletedServerSettingsMigration(): boolean {
   return globalThis.localStorage?.getItem(SERVER_SETTINGS_MIGRATION_STORAGE_KEY) === "1";
 }
 
+// Hubs ("studio") used to start hidden in the rail, and saved settings still carry that
+// default. The first launch after it became a default item shows it once; hiding it again
+// from Customize afterwards sticks.
+const HUBS_RAIL_DEFAULT_MIGRATION_STORAGE_KEY = "synara:hubs-rail-default:v1";
+
+/**
+ * Rewrites the stored settings once, before the app renders: every `useAppSettings` mount
+ * normalizes its own copy of the stored value, so a reveal applied by one of them would be
+ * written back over by the others.
+ */
+export function revealHubsRailItemOnce(storage: Storage | undefined = globalThis.localStorage) {
+  try {
+    if (!storage || storage.getItem(HUBS_RAIL_DEFAULT_MIGRATION_STORAGE_KEY) === "1") return;
+    storage.setItem(HUBS_RAIL_DEFAULT_MIGRATION_STORAGE_KEY, "1");
+    const raw = storage.getItem(APP_SETTINGS_STORAGE_KEY);
+    if (!raw) return;
+    const stored: unknown = JSON.parse(raw);
+    if (typeof stored !== "object" || stored === null || !("hiddenRailItems" in stored)) return;
+    const hidden = stored.hiddenRailItems;
+    if (!Array.isArray(hidden) || !hidden.includes("studio")) return;
+    storage.setItem(
+      APP_SETTINGS_STORAGE_KEY,
+      JSON.stringify({ ...stored, hiddenRailItems: hidden.filter((id) => id !== "studio") }),
+    );
+  } catch {
+    // Unreadable storage keeps the saved rail as it is.
+  }
+}
+
 const MAX_CUSTOM_MODEL_COUNT = 32;
 export const MAX_CUSTOM_MODEL_LENGTH = 256;
 export const MIN_CHAT_FONT_SIZE_PX = 11;
@@ -385,6 +414,7 @@ export const AppSettingsSchema = Schema.Struct({
   // When false, the desktop chat header shows the plain thread title instead of the
   // open-thread tab strip.
   showOpenThreadTabs: Schema.Boolean.pipe(withDefaults(() => true)),
+  showAsciiBackground: Schema.Boolean.pipe(withDefaults(() => true)),
   confirmThreadDelete: Schema.Boolean.pipe(withDefaults(() => true)),
   // Opt-in: archiving a task also releases its worktree when nothing else uses it.
   archiveDeletesOrphanedWorktree: Schema.Boolean.pipe(withDefaults(() => false)),
@@ -550,6 +580,8 @@ export const AppSettingsSchema = Schema.Struct({
   sidebarThreadSortOrder: SidebarThreadSortOrder.pipe(
     withDefaults(() => DEFAULT_SIDEBAR_THREAD_SORT_ORDER),
   ),
+  // With "updated_at" order, float working and unread chats above the rest.
+  sidebarThreadAttentionFirst: Schema.Boolean.pipe(withDefaults(() => true)),
   timestampFormat: TimestampFormat.pipe(withDefaults(() => DEFAULT_TIMESTAMP_FORMAT)),
   customCodexModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),
   customClaudeModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),

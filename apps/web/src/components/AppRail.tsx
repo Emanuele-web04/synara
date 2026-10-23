@@ -17,13 +17,13 @@ import { createPortal } from "react-dom";
 
 import { TasksCoachmark } from "./OneTimeCoachmark";
 import type { RailItemId } from "~/appRail.logic";
+import { useEditorRailStore, type EditorRailItem } from "~/editorRailStore";
 import { createCentralIconComponent } from "~/lib/central-icons";
 import {
   ClockIcon,
   CodeReviewIcon,
   FoldersIcon,
   HomeIcon,
-  HubActiveIcon,
   HubIcon,
   InboxIcon,
   TasksIcon,
@@ -85,7 +85,7 @@ export function railProjectGlyphs(
 /** A rail item whose glyph has no solid twin: the same icon at rest and while active. */
 const sameGlyphs = (glyph: RailGlyph): AppRailGlyphs => ({ idle: glyph, active: glyph });
 
-/** Hugeicons rail items. Only Hubs ship a solid active glyph; the rest match at rest and active. */
+/** Hugeicons rail items: the same stroke glyph at rest and active. */
 type HugeiconRailItemId =
   | "home"
   | "inbox"
@@ -101,8 +101,8 @@ const RAIL_HUGEICON_GLYPHS: Record<HugeiconRailItemId, AppRailGlyphs> = {
   automations: sameGlyphs(ClockIcon),
   tasks: sameGlyphs(TasksIcon),
   spaces: sameGlyphs(FoldersIcon),
-  // Hubs (stored id "studio"): Hugeicons circles, with their own solid active glyph.
-  studio: { idle: HubIcon, active: HubActiveIcon },
+  // Hubs (stored id "studio"): the Hugeicons `dashboard-circle` circles.
+  studio: sameGlyphs(HubIcon),
 };
 
 /** Central glyphs matching the Codex rail for the remaining fixed rail items. */
@@ -194,6 +194,18 @@ function AppRailButton({ item }: { item: AppRailItem }) {
   );
 }
 
+/** The editor view's Files / Diff / Search as rail items (see editorRailStore). */
+function editorRailItem(item: EditorRailItem): AppRailItem {
+  return {
+    id: `editor:${item.id}`,
+    glyphs: sameGlyphs(item.glyph),
+    label: item.label,
+    badge: null,
+    active: item.active,
+    onSelect: item.onSelect,
+  };
+}
+
 export function AppRail({
   items,
   shortcuts,
@@ -202,6 +214,10 @@ export function AppRail({
   bottomSlot,
   onContextMenu,
 }: AppRailProps) {
+  // While an editor view is open its panes take the rail's active slot: the
+  // fixed items stay reachable but none reads as the current section.
+  const editorItems = useEditorRailStore((store) => store.items);
+  const fixedItems = editorItems ? items.map((item) => ({ ...item, active: false })) : items;
   return (
     <nav
       aria-label="Primary"
@@ -209,9 +225,24 @@ export function AppRail({
       className="flex w-(--app-rail-width) shrink-0 flex-col items-center gap-1.5 pt-2.5 pb-2.5 font-system-ui"
     >
       <div className="flex min-h-0 w-full flex-1 flex-col items-center gap-1.5 overflow-y-auto [scrollbar-width:none]">
-        {items.map((item) => (
+        {fixedItems.map((item) => (
           <AppRailButton key={item.id} item={item} />
         ))}
+        {editorItems && editorItems.length > 0 ? (
+          <div
+            role="group"
+            aria-label="Editor panes"
+            className="flex w-full flex-col items-center gap-1.5"
+          >
+            <div
+              aria-hidden
+              className="my-0.5 h-px w-5 shrink-0 bg-[var(--app-rail-inset-border)]"
+            />
+            {editorItems.map((item) => (
+              <AppRailButton key={item.id} item={editorRailItem(item)} />
+            ))}
+          </div>
+        ) : null}
         {shortcuts.length > 0 ? (
           <>
             <div

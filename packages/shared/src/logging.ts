@@ -7,6 +7,12 @@ export interface RotatingFileSinkOptions {
   readonly maxFiles: number;
   readonly throwOnError?: boolean;
   readonly mode?: number;
+  /**
+   * Keep one append descriptor open between writes instead of opening and
+   * closing the file for every chunk. It is reopened after rotation and after a
+   * failed write. Call `close()` when the sink is no longer used.
+   */
+  readonly keepFileOpen?: boolean;
 }
 
 export class RotatingFileSink {
@@ -15,6 +21,8 @@ export class RotatingFileSink {
   private readonly maxFiles: number;
   private readonly throwOnError: boolean;
   private readonly mode: number | undefined;
+  private readonly keepFileOpen: boolean;
+  private fd: number | null = null;
   private currentSize = 0;
 
   constructor(options: RotatingFileSinkOptions) {
@@ -30,6 +38,7 @@ export class RotatingFileSink {
     this.maxFiles = options.maxFiles;
     this.throwOnError = options.throwOnError ?? false;
     this.mode = options.mode;
+    this.keepFileOpen = options.keepFileOpen ?? false;
 
     fs.mkdirSync(path.dirname(this.filePath), { recursive: true });
     this.pruneOverflowBackups();
@@ -45,7 +54,9 @@ export class RotatingFileSink {
         this.rotate();
       }
 
-      if (this.mode === undefined) {
+      if (this.keepFileOpen) {
+        this.writeToOpenFile(buffer);
+      } else if (this.mode === undefined) {
         fs.appendFileSync(this.filePath, buffer);
       } else {
         fs.appendFileSync(this.filePath, buffer, { mode: this.mode });
@@ -56,6 +67,7 @@ export class RotatingFileSink {
         this.rotate();
       }
     } catch {
+      this.closeFile();
       this.currentSize = this.readCurrentSize();
       if (this.throwOnError) {
         throw new Error(`Failed to write log chunk to ${this.filePath}`);
@@ -63,8 +75,43 @@ export class RotatingFileSink {
     }
   }
 
+  /** Releases the open descriptor, if any. Later writes reopen the file. */
+  close(): void {
+    this.closeFile();
+  }
+
+  private writeToOpenFile(buffer: Buffer): void {
+    if (this.fd === null) {
+      this.fd =
+        this.mode === undefined
+          ? fs.openSync(this.filePath, "a")
+          : fs.openSync(this.filePath, "a", this.mode);
+    }
+    let offset = 0;
+    while (offset < buffer.length) {
+      const written = fs.writeSync(this.fd, buffer, offset, buffer.length - offset);
+      if (written <= 0) {
+        throw new Error(`Short write to ${this.filePath}`);
+      }
+      offset += written;
+    }
+  }
+
+  private closeFile(): void {
+    const fd = this.fd;
+    if (fd === null) return;
+    this.fd = null;
+    try {
+      fs.closeSync(fd);
+    } catch {
+      // The descriptor is unusable either way; the next write reopens the file.
+    }
+  }
+
   private rotate(): void {
     try {
+      // Close before renaming so the next write opens the fresh base file.
+      this.closeFile();
       const oldest = this.withSuffix(this.maxFiles);
       if (fs.existsSync(oldest)) {
         fs.rmSync(oldest, { force: true });

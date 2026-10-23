@@ -3,7 +3,6 @@
 // Layer: Web transport
 // Exports: WsTransport plus stream-selection helpers used by tests.
 
-import { ServerBusyController, publishServerBusySnapshot } from "./serverBusyState";
 import { recordRendererActivity, rendererRpcActivity } from "./lib/rendererErrorDiagnostics";
 
 import {
@@ -24,8 +23,6 @@ import {
   WS_PROJECT_FILE_WATCH_CAPABILITY,
   WS_TURN_DISPATCH_SETTLEMENT_CAPABILITY,
   WS_GIT_ACTION_RECOVERY_CAPABILITY,
-  WS_SERVER_RUNTIME_STATUS_CAPABILITY,
-  type ServerRuntimeStatus,
   type ClientOrchestrationCommand,
   type OrchestrationSettleTurnDispatchResult,
   DEVICE_WS_CHANNELS,
@@ -91,7 +88,15 @@ import { useComputerStateStore } from "./computerStateStore";
 import {
   getUnaryRpcCapacityRetryDelayMs,
   MAX_UNARY_RPC_CAPACITY_RETRY_ATTEMPTS,
+  UNARY_RPC_CAPACITY_QUEUE_WAIT_MS,
 } from "./lib/expensiveReadRetry";
+import { RpcRequestQueue, RpcRequestQueueWaitExpiredError } from "./lib/rpcRequestQueue";
+import {
+  classifyWsRequest,
+  makeWsRequestCapacityError,
+  WS_REQUEST_CLASS_LIMITS,
+  type WsRequestClass,
+} from "@synara/shared/wsRequestClass";
 import {
   classifyRpcTransportFailure,
   describeTransportFailureForDiagnostics,
@@ -104,7 +109,6 @@ import {
   clearThreadDetailResumeCursor,
   resetThreadDetailResumeCursors,
 } from "./threadDetailResumeCursors";
-import { adoptVerifiedThreadCacheIdentity } from "./threadDetailCacheIdentity";
 import { trackWsTurnSettlement, type WsTransportState } from "./wsTransportEvents";
 
 type PushListener<C extends WsPushChannel> = (message: WsPushMessage<C>) => void;
@@ -292,6 +296,12 @@ const makeRpcClient = RpcClient.make(
 );
 const makeBootstrapRpcClient = RpcClient.make(WsBootstrapRpcGroup);
 const REQUEST_TIMEOUT_MS = 60_000;
+// Stream-backed actions hold no unary admission lease on the server.
+const STREAM_BACKED_REQUEST_METHODS: ReadonlySet<string> = new Set([
+  WS_METHODS.gitRunStackedAction,
+  WS_METHODS.gitCreateDetachedWorktree,
+  WS_METHODS.projectsProvisionFromGitHub,
+]);
 const INITIAL_RECONNECT_RETRY_MS = 500;
 /**
  * A socket-level protocol failure must revive the session: the latched
@@ -959,7 +969,9 @@ export function shouldKeepServerLifecycleStream(activeChannels: ReadonlySet<stri
 }
 
 export class WsTransport {
-  private readonly serverBusy = new ServerBusyController({ onChange: publishServerBusySnapshot });
+  // Unary requests wait here for a slot of their server admission class, so the
+  // transport never sends a request the server would reject for capacity.
+  private readonly unaryRequestQueue = new RpcRequestQueue<WsRequestClass>(WS_REQUEST_CLASS_LIMITS);
   private readonly explicitUrl: string | null;
   private readonly listeners = new Map<string, Set<(message: WsPush) => void>>();
   private readonly stateListeners = new Set<(state: WsTransportState) => void>();
@@ -975,6 +987,7 @@ export class WsTransport {
   private sequence = 0;
   private sessionVersion = 0;
   private state: WsTransportState = "connecting";
+  private openedAtMs = 0;
   private disposed = false;
   private readonly runtimeByClient = new WeakMap<
     RpcClientInstance,
@@ -1024,8 +1037,6 @@ export class WsTransport {
 
   constructor(url?: string, options?: { readonly protocolOpenTimeoutMs?: number }) {
     this.explicitUrl = url ?? null;
-    if (typeof document !== "undefined")
-      document.addEventListener("visibilitychange", this.serverBusy.visibilityChanged);
     this.protocolOpenTimeoutMs = options?.protocolOpenTimeoutMs;
     this.clientPromise = this.createSession().clientPromise;
     void this.clientPromise.catch((error) => {
@@ -1043,18 +1054,16 @@ export class WsTransport {
     params?: unknown,
     options?: WsRequestOptions,
   ): Promise<T> {
-    const finish = this.serverBusy?.trackRequest(method, options);
     const activity = rendererRpcActivity(method, params);
-    if (activity) recordRendererActivity(activity, "started");
+    if (!activity) return this.requestInternal<T>(method, params, options);
+    recordRendererActivity(activity, "started");
     try {
       const result = await this.requestInternal<T>(method, params, options);
-      if (activity) recordRendererActivity(activity, "succeeded");
+      recordRendererActivity(activity, "succeeded");
       return result;
     } catch (error) {
-      if (activity) recordRendererActivity(activity, "failed");
+      recordRendererActivity(activity, "failed");
       throw error;
-    } finally {
-      finish?.();
     }
   }
 
@@ -1069,6 +1078,8 @@ export class WsTransport {
     const abortScope = makeRequestAbortScope(requestOptions);
     let uncertainTurn: Extract<ClientOrchestrationCommand, { type: "thread.turn.start" }> | null =
       null;
+    let queuedRequestClass: WsRequestClass | null = null;
+    let sendAdmitted = false;
     try {
       if (method === ORCHESTRATION_WS_METHODS.unsubscribeShell) {
         this.shellSubscribed = false;
@@ -1125,72 +1136,106 @@ export class WsTransport {
         return undefined as T;
       }
 
-      const client = await awaitWithAbort(this.getClient(), abortScope.signal);
-      if (
-        method === ORCHESTRATION_WS_METHODS.settleTurnDispatch &&
-        !this.compatibility?.capabilities.includes(WS_TURN_DISPATCH_SETTLEMENT_CAPABILITY)
-      ) {
-        throw new WsTransportRequestInterruptedError({
-          message:
-            "This server cannot check message delivery. Reconnect to an updated server and check the conversation before sending again.",
-          code: "WS_TURN_SETTLEMENT_UNAVAILABLE",
-          method,
-          retryable: false,
-        });
-      }
-
-      if (method === WS_METHODS.gitRunStackedAction) {
-        return (await this.runRecoverableGitAction(client, params, abortScope.signal)) as T;
-      }
-      if (method === WS_METHODS.gitCreateDetachedWorktree) {
-        return (await this.runWorktreeSetupStream(client, params, abortScope.signal)) as T;
-      }
-      if (method === WS_METHODS.projectsProvisionFromGitHub) {
-        return (await this.runProjectProvisionStream(client, params, abortScope.signal)) as T;
-      }
-
-      const rpcInput =
-        method === ORCHESTRATION_WS_METHODS.dispatchCommand
-          ? (params as { command: unknown }).command
-          : (params ?? {});
-      const normalizedRpcInput = omitNullUserInputAnswers(rpcInput);
-      if (
-        method === ORCHESTRATION_WS_METHODS.dispatchCommand &&
-        this.compatibility?.capabilities.includes(WS_TURN_DISPATCH_SETTLEMENT_CAPABILITY)
-      ) {
-        const command = normalizedRpcInput as ClientOrchestrationCommand;
-        if (command.type === "thread.turn.start") uncertainTurn = command;
-      }
-      const call = (
-        client as unknown as Record<
-          string,
-          (input: unknown) => Effect.Effect<unknown, WsTransportRpcError, never>
-        >
-      )[method];
-      if (!call) throw new WsTransportRpcError({ message: `Unknown RPC method: ${method}` });
-      const clientRuntime = this.getClientRuntime(client);
-      const runOptions = abortScope.signal ? { signal: abortScope.signal } : undefined;
-      let capacityAttempts = 0;
-      while (true) {
-        try {
-          const result = (await clientRuntime.runPromise(
-            call(normalizedRpcInput),
-            runOptions,
-          )) as T;
-          this.noteApplicationSuccess(clientRuntime);
-          return result;
-        } catch (error) {
-          const retryDelayMs = getUnaryRpcCapacityRetryDelayMs(error, capacityAttempts);
-          if (retryDelayMs === null) throw error;
-          capacityAttempts += 1;
-          await delayMs(retryDelayMs, abortScope.signal);
+      // Take the slot before the client: a queued request holds no server lease,
+      // sends nothing, and joins any reconnect that happens while it waits.
+      queuedRequestClass = STREAM_BACKED_REQUEST_METHODS.has(method)
+        ? null
+        : classifyWsRequest(method);
+      const releaseSlot =
+        queuedRequestClass === null
+          ? undefined
+          : await this.unaryRequestQueue
+              .acquire(queuedRequestClass, {
+                signal: abortScope.signal,
+                maxWaitMs: UNARY_RPC_CAPACITY_QUEUE_WAIT_MS,
+                // Waiting for a connection is not capacity: the limit runs out only
+                // once the transport has been open for a whole wait budget.
+                canExpire: () =>
+                  this.state === "open" &&
+                  Date.now() - this.openedAtMs >= UNARY_RPC_CAPACITY_QUEUE_WAIT_MS,
+              })
+              .catch((error: unknown) => {
+                throw error instanceof RpcRequestQueueWaitExpiredError && queuedRequestClass
+                  ? makeWsRequestCapacityError(queuedRequestClass)
+                  : error;
+              });
+      try {
+        sendAdmitted = true;
+        const client = await awaitWithAbort(this.getClient(), abortScope.signal);
+        if (
+          method === ORCHESTRATION_WS_METHODS.settleTurnDispatch &&
+          !this.compatibility?.capabilities.includes(WS_TURN_DISPATCH_SETTLEMENT_CAPABILITY)
+        ) {
+          throw new WsTransportRequestInterruptedError({
+            message:
+              "This server cannot check message delivery. Reconnect to an updated server and check the conversation before sending again.",
+            code: "WS_TURN_SETTLEMENT_UNAVAILABLE",
+            method,
+            retryable: false,
+          });
         }
+
+        if (method === WS_METHODS.gitRunStackedAction) {
+          return (await this.runRecoverableGitAction(client, params, abortScope.signal)) as T;
+        }
+        if (method === WS_METHODS.gitCreateDetachedWorktree) {
+          return (await this.runWorktreeSetupStream(client, params, abortScope.signal)) as T;
+        }
+        if (method === WS_METHODS.projectsProvisionFromGitHub) {
+          return (await this.runProjectProvisionStream(client, params, abortScope.signal)) as T;
+        }
+
+        const rpcInput =
+          method === ORCHESTRATION_WS_METHODS.dispatchCommand
+            ? (params as { command: unknown }).command
+            : (params ?? {});
+        const normalizedRpcInput = omitNullUserInputAnswers(rpcInput);
+        if (
+          method === ORCHESTRATION_WS_METHODS.dispatchCommand &&
+          this.compatibility?.capabilities.includes(WS_TURN_DISPATCH_SETTLEMENT_CAPABILITY)
+        ) {
+          const command = normalizedRpcInput as ClientOrchestrationCommand;
+          if (command.type === "thread.turn.start") uncertainTurn = command;
+        }
+        const call = (
+          client as unknown as Record<
+            string,
+            (input: unknown) => Effect.Effect<unknown, WsTransportRpcError, never>
+          >
+        )[method];
+        if (!call) throw new WsTransportRpcError({ message: `Unknown RPC method: ${method}` });
+        const clientRuntime = this.getClientRuntime(client);
+        const runOptions = abortScope.signal ? { signal: abortScope.signal } : undefined;
+        let capacityAttempts = 0;
+        while (true) {
+          try {
+            const result = (await clientRuntime.runPromise(
+              call(normalizedRpcInput),
+              runOptions,
+            )) as T;
+            this.noteApplicationSuccess(clientRuntime);
+            return result;
+          } catch (error) {
+            // The server can still reject, e.g. while it unwinds a cancelled
+            // request whose client slot is already free; retry in place.
+            const retryDelayMs = getUnaryRpcCapacityRetryDelayMs(error, capacityAttempts);
+            if (retryDelayMs === null) throw error;
+            capacityAttempts += 1;
+            await delayMs(retryDelayMs, abortScope.signal);
+          }
+        }
+      } finally {
+        releaseSlot?.();
       }
     } catch (error) {
       let failure = error;
-      if (abortScope.didTimeout()) {
+      if (abortScope.didTimeout() && queuedRequestClass !== null && !sendAdmitted) {
+        // The deadline passed in the queue: nothing was sent, so this is a plain
+        // capacity error, never an uncertain outcome.
+        failure = makeWsRequestCapacityError(queuedRequestClass);
+      } else if (abortScope.didTimeout()) {
         failure = new WsTransportRequestInterruptedError({
-          message: `WebSocket RPC ${method} timed out after ${requestOptions.timeoutMs}ms. ${this.serverBusy?.getSnapshot().reason === "unresponsive" ? "Synara server is not responding. " : "The server did not finish this request in time. "}${method === ORCHESTRATION_WS_METHODS.dispatchCommand ? "Check the result before retrying; the command may have been applied." : "Try again when the server responds."}`,
+          message: `WebSocket RPC ${method} timed out after ${requestOptions.timeoutMs}ms. The server did not finish this request in time. ${method === ORCHESTRATION_WS_METHODS.dispatchCommand ? "Check the result before retrying; the command may have been applied." : "Try again when the server responds."}`,
           code: "WS_REQUEST_TIMEOUT",
           method,
           ...(requestOptions.timeoutMs !== undefined && requestOptions.timeoutMs !== null
@@ -1450,14 +1495,12 @@ export class WsTransport {
   async dispose(): Promise<void> {
     if (this.disposed) return;
     this.disposed = true;
+    this.unaryRequestQueue.close(new Error("Transport disposed"));
     this.clearRecoveryEscalationTimer();
     // Abort before anything else: a pending negotiate must fail now rather
     // than resolve later and build a runtime this teardown will not see.
     this.lifetime.abort(new Error("Transport disposed"));
     this.setState("disposed");
-    this.serverBusy?.dispose();
-    if (typeof document !== "undefined" && this.serverBusy)
-      document.removeEventListener("visibilitychange", this.serverBusy.visibilityChanged);
     this.resetAllStreamCapacityRetries();
     this.resetAllStreamCompletionRetries();
     for (const cleanup of this.streamCleanups.values()) cleanup();
@@ -1539,7 +1582,6 @@ export class WsTransport {
       useDeviceStateStore.getState().clear();
       useComputerStateStore.getState().clear();
     }
-    adoptVerifiedThreadCacheIdentity(compatibility.serverInstanceId);
     this.lastServerInstanceId = compatibility.serverInstanceId;
     this.setCompatibility(compatibility);
     this.setCompatibilityIssue(null);
@@ -1897,19 +1939,7 @@ export class WsTransport {
   private setState(state: WsTransportState): void {
     if (this.state === state) return;
     this.state = state;
-    this.serverBusy?.stopHeartbeat();
-    if (
-      state === "open" &&
-      this.compatibility?.capabilities.includes(WS_SERVER_RUNTIME_STATUS_CAPABILITY)
-    ) {
-      this.serverBusy?.startHeartbeat((signal) =>
-        this.request<ServerRuntimeStatus>(
-          WS_METHODS.serverGetRuntimeStatus,
-          {},
-          { signal, timeoutMs: null },
-        ),
-      );
-    }
+    if (state === "open") this.openedAtMs = Date.now();
     for (const listener of this.stateListeners) {
       try {
         listener(state);

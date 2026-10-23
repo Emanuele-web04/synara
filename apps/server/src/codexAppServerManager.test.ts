@@ -82,7 +82,10 @@ type SyntheticCodexRequest = {
 };
 
 function createSyntheticCodexAppServer(options?: {
+  readonly mcpServers?: Record<string, unknown>;
+  readonly projectMcpServers?: Record<string, unknown>;
   readonly forceFullHistoryResponse?: boolean;
+  readonly pluginListFrameBytes?: number;
   readonly gatewayRenewal?:
     | "supported"
     | "unsupported"
@@ -234,10 +237,34 @@ function createSyntheticCodexAppServer(options?: {
             historicalResponses.push(result);
             respond(result);
           }
+        } else if (request.method === "config/read") {
+          respond({
+            config: {
+              mcp_servers: {
+                ...options?.mcpServers,
+                ...(typeof request.params?.cwd === "string" ? options?.projectMcpServers : {}),
+              },
+            },
+          });
         } else if (request.method === "thread/start") {
           respond({ thread: { id: "fresh-provider-thread" } });
         } else if (request.method === "turn/start") {
           respond({ turn: { id: `synthetic-turn-${nextTurn++}` } });
+        } else if (request.method === "plugin/list" && options?.pluginListFrameBytes) {
+          const prefix = Buffer.from(
+            `{"id":${JSON.stringify(request.id)},"result":{"marketplaces":[{"name":"Synthetic catalog","path":"/synthetic/catalog","plugins":[]}],"padding":"`,
+          );
+          const suffix = Buffer.from('"}}\n');
+          const frame = Buffer.concat([
+            prefix,
+            Buffer.alloc(options.pluginListFrameBytes + 1 - prefix.length - suffix.length, 0x78),
+            suffix,
+          ]);
+          queueMicrotask(() => {
+            for (let offset = 0; offset < frame.length; offset += 64 * 1024) {
+              stdout.write(frame.subarray(offset, offset + 64 * 1024));
+            }
+          });
         } else {
           respond({});
         }
@@ -343,6 +370,57 @@ const fullAccessTurnOverrides = {
   approvalsReviewer: "user",
   sandboxPolicy: { type: "dangerFullAccess" },
 } as const;
+
+it.each(["global", "project"] as const)(
+  "does not overlay a connector onto the user's same-named Codex MCP server (%s)",
+  async (layer) => {
+    const servers = { supabase_connector: { command: "user-mcp", args: ["serve"] } };
+    const fake = createSyntheticCodexAppServer({
+      ...(layer === "global" ? { mcpServers: servers } : { projectMcpServers: servers }),
+    });
+    const endpoint = "http://127.0.0.1:48123/mcp";
+    const { manager } = createSyntheticCodexManager(fake, undefined, {
+      endpointUrl: () => endpoint,
+      acquireSessionLease: (threadId, input) =>
+        acquireAgentGatewaySessionLease(
+          {
+            connectionForThread: () => ({
+              url: endpoint,
+              bearerToken: "lease",
+              connectors: [
+                { name: "supabase_connector", url: `${endpoint}/connectors/supabase` },
+                { name: "linear_connector", url: `${endpoint}/connectors/linear` },
+              ],
+            }),
+            revokeSessionToken: () => {},
+          },
+          threadId,
+          "codex",
+          input ?? AGENT_GATEWAY_NO_CAPABILITIES,
+        )!,
+    });
+    const cwd = mkdtempSync(path.join(os.tmpdir(), "synara-codex-connector-collision-"));
+    try {
+      await manager.startSession({
+        threadId: asThreadId("connector-collision"),
+        provider: "codex",
+        cwd,
+        runtimeMode: "full-access",
+        agentGatewayCapabilityInput: AGENT_GATEWAY_NO_CAPABILITIES,
+      });
+      const start = fake.requests.find((request) => request.method === "thread/start");
+      const config = start?.params?.config as { mcp_servers: Record<string, unknown> };
+      expect(config.mcp_servers.supabase_connector).toBeUndefined();
+      expect(config.mcp_servers.linear_connector).toMatchObject({
+        url: `${endpoint}/connectors/linear`,
+      });
+      expect(config.mcp_servers.synara).toBeDefined();
+    } finally {
+      await manager.stopAll();
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  },
+);
 
 it.each([
   "supported",
@@ -1286,6 +1364,20 @@ describe("classifyCodexStderrLine", () => {
     expect(classifyCodexStderrLine(line)).toBeNull();
   });
 
+  it("hides OAuth failures of MCP servers from the user's own Codex config", () => {
+    for (const server of ["stripe", "polar"]) {
+      const line = `\u001b[2m2026-10-14T10:40:19.340108Z\u001b[0m \u001b[31mERROR\u001b[0m \u001b[2mcodex_rmcp_client::oauth::refresh_transaction\u001b[0m: error=failed to refresh OAuth tokens for server ${server}: OAuth refresh token was rejected: Server returned error response: invalid_grant`;
+      expect(classifyCodexStderrLine(line)).toBeNull();
+    }
+  });
+
+  it("keeps MCP OAuth failures that concern Synara's own servers", () => {
+    for (const server of ["synara", "supabase_connector"]) {
+      const line = `2026-10-14T10:40:19.340108Z ERROR codex_rmcp_client::oauth::refresh_transaction: error=failed to refresh OAuth tokens for server ${server}: invalid_grant`;
+      expect(classifyCodexStderrLine(line)).toEqual({ message: line });
+    }
+  });
+
   it("keeps unknown structured errors", () => {
     const line = "2026-02-08T04:24:20.085687Z ERROR codex_core::runtime: unrecoverable failure";
     expect(classifyCodexStderrLine(line)).toEqual({
@@ -2016,6 +2108,14 @@ describe("isRecoverableThreadResumeError", () => {
   it("matches not-found resume errors", () => {
     expect(
       isRecoverableThreadResumeError(new Error("thread/resume failed: thread not found")),
+    ).toBe(true);
+  });
+
+  it("matches resume errors for threads that never wrote a rollout", () => {
+    expect(
+      isRecoverableThreadResumeError(
+        new Error("thread/resume failed: no rollout found for thread id 01a147ed"),
+      ),
     ).toBe(true);
   });
 
@@ -4009,69 +4109,74 @@ describe("CodexAppServerManager discovery", () => {
       },
     ]);
   });
-
-  it("wires plugin discovery through plugin/list", async () => {
-    const manager = new CodexAppServerManager();
-    const context = {
-      session: {
-        provider: "codex",
-        status: "ready",
-        threadId: "thread_1",
-        runtimeMode: "full-access",
-        model: "gpt-5.5",
-      },
-      account: {
-        type: "unknown",
-        planType: null,
-        sparkEnabled: true,
-      },
-      collabReceiverTurns: new Map(),
-      collabReceiverParents: new Map(),
-    };
-
-    const resolveContextForDiscovery = vi
-      .spyOn(
-        manager as unknown as {
-          resolveContextForDiscovery: (
-            threadId?: string,
-            cwd?: string,
-            codexOptions?: unknown,
-          ) => unknown;
-        },
-        "resolveContextForDiscovery",
-      )
-      .mockReturnValue(context);
-    const sendRequest = vi
-      .spyOn(
-        manager as unknown as {
-          sendRequest: (...args: unknown[]) => Promise<unknown>;
-        },
-        "sendRequest",
-      )
-      .mockResolvedValue({ result: {} });
-
-    await expect(
-      manager.listPlugins({
-        cwd: "/repo",
-        threadId: "thread_1",
-        forceRemoteSync: true,
-      }),
-    ).resolves.toMatchObject({
-      marketplaces: [],
-      source: "codex-app-server",
-      cached: false,
-    });
-    expect(resolveContextForDiscovery).toHaveBeenCalledWith(
-      "thread_1",
-      "/repo",
-      undefined,
-      expect.any(String),
-    );
-    expect(sendRequest).toHaveBeenCalledWith(context, "plugin/list", {
-      cwds: ["/repo"],
-      forceRemoteSync: true,
-    });
-  });
+  it.each([
+    { frameBytes: 16_842_752, succeeds: true },
+    { frameBytes: 32 * 1024 * 1024 + 1, succeeds: false },
+  ])(
+    "isolates a $frameBytes-byte plugin catalog from a running turn",
+    async ({ frameBytes, succeeds }) => {
+      const fake = createSyntheticCodexAppServer({ pluginListFrameBytes: frameBytes });
+      const spawnAppServer = vi.spyOn(fake, "spawnAppServer");
+      const { manager, teardownProcessTree } = createSyntheticCodexManager(fake);
+      const cwd = mkdtempSync(path.join(os.tmpdir(), "synara-codex-plugin-catalog-"));
+      const codexOptions = { homePath: cwd, binaryPath: "/synthetic/codex" };
+      const authTracking = prepareCodexAuthTracking({ env: { ...process.env }, homePath: cwd });
+      vi.spyOn(
+        manager as unknown as { buildSessionProcessEnv: () => Promise<unknown> },
+        "buildSessionProcessEnv",
+      ).mockResolvedValue({
+        env: {},
+        authTracking,
+        authFingerprint: readCodexPreparedAuthTrackingFingerprint(authTracking),
+      });
+      const threadId = asThreadId("plugin-catalog-active-turn");
+      try {
+        await manager.startSession({
+          threadId,
+          provider: "codex",
+          cwd,
+          runtimeMode: "full-access",
+          providerOptions: { codex: codexOptions },
+          agentGatewayCapabilityInput: AGENT_GATEWAY_NO_CAPABILITIES,
+        });
+        await manager.sendTurn({ threadId, input: "Keep working during discovery" });
+        const discovery = manager.listPlugins({
+          cwd,
+          threadId,
+          codexOptions,
+          forceRemoteSync: true,
+        });
+        if (succeeds) {
+          await expect(discovery).resolves.toMatchObject({
+            marketplaces: [{ name: "Synthetic catalog", path: "/synthetic/catalog", plugins: [] }],
+            cached: false,
+          });
+        } else {
+          await expect(discovery).rejects.toThrow();
+        }
+        expect(manager.listSessions()).toMatchObject([
+          { threadId, status: "running", activeTurnId: "synthetic-turn-1" },
+        ]);
+        expect(fake.children).toHaveLength(2);
+        expect(spawnAppServer).toHaveBeenLastCalledWith(
+          expect.objectContaining({ cwd, binaryPath: codexOptions.binaryPath }),
+        );
+        expect(fake.requests.find((request) => request.method === "plugin/list")?.params).toEqual({
+          cwds: [cwd],
+          forceRemoteSync: true,
+        });
+        expect(teardownProcessTree).toHaveBeenCalledTimes(succeeds ? 0 : 1);
+        if (!succeeds) {
+          expect(teardownProcessTree).toHaveBeenCalledWith(
+            expect.objectContaining({ rootPid: fake.children[1]!.pid }),
+          );
+        }
+      } finally {
+        await manager.stopAll();
+        rmSync(cwd, { recursive: true, force: true });
+      }
+    },
+  );
 });
 
 describe("thread checkpoint control", () => {
@@ -6172,6 +6277,117 @@ describe("collab child conversation routing", () => {
 });
 
 describe("handleServerNotification error normalization", () => {
+  it.each(["turn/completed", "turn/aborted", "error"] as const)(
+    "preserves the next turn when %s arrives after the previous completion fallback",
+    (method) => {
+      vi.useFakeTimers();
+      try {
+        const { manager, context, updateSession, emitEvent } = createCollabNotificationHarness();
+        // Exercise the real lifecycle mutations; only native event delivery is observed.
+        updateSession.mockRestore();
+        handleServerNotificationForTest(manager, context, {
+          method: "codex/event/task_complete",
+          params: {
+            id: "turn_parent",
+            msg: { type: "task_complete", turn_id: "turn_parent" },
+          },
+        });
+        // A stalled loop can expire this fallback before delivering native completion.
+        vi.advanceTimersByTime(750);
+        expect(context.session).toMatchObject({ status: "ready", activeTurnId: undefined });
+        handleServerNotificationForTest(manager, context, {
+          method: "turn/started",
+          params: { threadId: "provider_parent", turn: { id: "turn_next" } },
+        });
+        const retireTurn = vi.fn().mockResolvedValue(undefined);
+        // The next turn owns the newly acquired gateway lease too.
+        const liveContext = Object.assign(context, {
+          gatewaySessionLease: { retireTurn },
+          gatewayCredentialRetired: false,
+          gatewayCredentialRenewable: true,
+        });
+        handleServerNotificationForTest(manager, context, {
+          method,
+          params: {
+            threadId: "provider_parent",
+            turnId: "turn_parent",
+            turn: { id: "turn_parent", status: "completed" },
+            error: { message: "Previous turn failed" },
+            willRetry: false,
+          },
+        });
+        expect(context.session).toMatchObject({ status: "running", activeTurnId: "turn_next" });
+        expect(retireTurn).not.toHaveBeenCalled();
+        expect(liveContext.gatewayCredentialRetired).toBe(false);
+        expect(liveContext.gatewayCredentialRenewable).toBe(true);
+        expect(emitEvent).toHaveBeenLastCalledWith(
+          expect.objectContaining({ method, turnId: "turn_parent" }),
+        );
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it.each(["turn/completed", "turn/aborted", "error"] as const)(
+    "preserves a newer turn after %s cleans an older review chain",
+    (method) => {
+      vi.useFakeTimers();
+      try {
+        const { manager, context, updateSession } = createCollabNotificationHarness();
+        updateSession.mockRestore();
+        // Codex can extend one native review across multiple turn IDs.
+        context.reviewTurnIds.add("turn_parent");
+        handleServerNotificationForTest(manager, context, {
+          method: "turn/started",
+          params: { threadId: "provider_parent", turn: { id: "turn_review_continuation" } },
+        });
+        handleServerNotificationForTest(manager, context, {
+          method: "codex/event/task_complete",
+          params: {
+            id: "turn_review_continuation",
+            msg: { type: "task_complete", turn_id: "turn_review_continuation" },
+          },
+        });
+        vi.advanceTimersByTime(750);
+        expect(context.session).toMatchObject({ status: "ready", activeTurnId: undefined });
+        handleServerNotificationForTest(manager, context, {
+          method: "turn/started",
+          params: { threadId: "provider_parent", turn: { id: "turn_next" } },
+        });
+        const retireTurn = vi.fn().mockResolvedValue(undefined);
+        const liveContext = Object.assign(context, {
+          gatewaySessionLease: { retireTurn },
+          gatewayCredentialRetired: false,
+          gatewayCredentialRenewable: true,
+        });
+        handleServerNotificationForTest(manager, context, {
+          method,
+          params: {
+            threadId: "provider_parent",
+            turnId: "turn_parent",
+            turn: { id: "turn_parent", status: "completed" },
+            error: { message: "Previous review failed" },
+            willRetry: false,
+          },
+        });
+        handleServerNotificationForTest(manager, context, {
+          method: "item/completed",
+          params: {
+            threadId: "provider_parent",
+            item: { id: "turn_parent", type: "exitedReviewMode", review: "Old review complete." },
+          },
+        });
+        expect(context.session).toMatchObject({ status: "running", activeTurnId: "turn_next" });
+        expect(retireTurn).not.toHaveBeenCalled();
+        expect(liveContext.gatewayCredentialRetired).toBe(false);
+        expect(liveContext.gatewayCredentialRenewable).toBe(true);
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
+
   it("recovers a missing turn/completed after legacy task_complete", () => {
     vi.useFakeTimers();
     try {
@@ -6318,6 +6534,7 @@ describe("handleServerNotification error normalization", () => {
 
     for (const { expectedTurnId, notification } of terminalNotifications) {
       const { manager, context, emitEvent } = createCollabNotificationHarness();
+      context.session.activeTurnId = expectedTurnId;
       const cancelTurn = vi.fn(() => Promise.resolve());
       const retireTurn = vi.fn(() => {
         expect(emitEvent).not.toHaveBeenCalled();

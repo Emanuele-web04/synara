@@ -21,7 +21,10 @@ import {
 import { buildPromptThreadTitleFallback } from "@synara/shared/chatThreads";
 import { WORKTREE_BRANCH_PREFIX } from "@synara/shared/git";
 import { parseGitHubRepositoryNameWithOwnerFromPullRequestUrl } from "@synara/shared/githubRepository";
-import { runtimeModeEscalatesPrivilege } from "@synara/shared/runtimeMode";
+import {
+  autoRuntimeModeSelectionIssue,
+  runtimeModeEscalatesPrivilege,
+} from "@synara/shared/runtimeMode";
 import { Cause, Effect, Option, Semaphore } from "effect";
 
 import type { ServerConfigShape } from "../config.ts";
@@ -382,7 +385,17 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
         ...(callerTurnId ? { callerTurnId } : {}),
         requestId: input.requestId,
       })}`;
-      const fingerprint = stableGatewayDigest(input, 64);
+      // Hub routing metadata belongs to admission, not standalone creation or
+      // its durable retry identity.
+      const fingerprint = stableGatewayDigest(
+        {
+          ...input,
+          threads: input.threads.map(
+            ({ taskKey: _taskKey, routingReason: _routingReason, ...spec }) => spec,
+          ),
+        },
+        64,
+      );
       const externalOperationRepository =
         context.kind === "external-client" ? externalMcpRepository : undefined;
       if (context.kind === "external-client" && externalOperationRepository === undefined) {
@@ -572,10 +585,22 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
               ),
             );
           }
+          const inheritedRuntimeMode =
+            context.kind === "hub-work" ? context.inheritedRuntimeMode : undefined;
+          // An inherited default may need a stricter mode on a different provider.
+          // Explicit requests still reach validation unchanged.
+          const compatibleInheritedRuntimeMode =
+            inheritedRuntimeMode !== undefined &&
+            autoRuntimeModeSelectionIssue({
+              runtimeMode: inheritedRuntimeMode,
+              modelSelection: target,
+            }) !== null
+              ? "approval-required"
+              : inheritedRuntimeMode;
           const runtimeMode =
             externalPolicy?.runtimeMode ??
             spec.runtimeMode ??
-            (context.kind === "hub-work" ? context.inheritedRuntimeMode : undefined) ??
+            compatibleInheritedRuntimeMode ??
             (context.kind === "external-client" || caller!.runtimeMode === "auto"
               ? "approval-required"
               : caller!.runtimeMode);

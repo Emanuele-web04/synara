@@ -9,7 +9,8 @@ import { useCallback } from "react";
 
 import { newCommandId } from "~/lib/utils";
 import { readNativeApi } from "~/nativeApi";
-import { isThreadDetailAwaitingVerification } from "~/threadDetailAuthority";
+import { useStore } from "../../store";
+import { getThreadFromState } from "../../threadDerivation";
 
 import { toastManager } from "../ui/toast";
 
@@ -24,8 +25,7 @@ export function useSubagentRunControls(stripSourceThreadId: ThreadId | null) {
       const api = readNativeApi();
       // The Task tool_use lives on the strip source thread (the parent while a
       // subagent thread is open), so route the command there.
-      if (!api || !stripSourceThreadId || isThreadDetailAwaitingVerification(stripSourceThreadId))
-        return;
+      if (!api || !stripSourceThreadId) return;
       try {
         await api.orchestration.dispatchCommand({
           type: "thread.task.background",
@@ -46,24 +46,39 @@ export function useSubagentRunControls(stripSourceThreadId: ThreadId | null) {
     [stripSourceThreadId],
   );
 
-  // Stop goes through the interrupt seam: on a subagent thread the reactor
-  // resolves the tool_use_id and stops that task instead of the whole turn.
+  // Devin tasks can outlive the parent turn and use the existing task-stop command.
+  // Other providers resolve the child through their targeted interrupt seam.
   // Target the canonical child id derived from the strip source thread —
   // item.threadId can still be the raw tool_use_id while client-side thread
   // resolution lags, which the server would reject as an unknown thread.
   const stopSubagent = useCallback(
     async (item: SubagentRunTarget) => {
       const api = readNativeApi();
-      if (!api || !stripSourceThreadId || isThreadDetailAwaitingVerification(stripSourceThreadId))
-        return;
-      const childThreadId = localSubagentThreadId(stripSourceThreadId, item.providerThreadId);
-      if (isThreadDetailAwaitingVerification(childThreadId)) return;
+      if (!api || !stripSourceThreadId) return;
       try {
+        const snapshot = useStore.getState();
+        let owner = getThreadFromState(snapshot, stripSourceThreadId);
+        const visited = new Set<ThreadId>();
+        while (owner && !owner.session && owner.parentThreadId && !visited.has(owner.id)) {
+          visited.add(owner.id);
+          owner = getThreadFromState(snapshot, owner.parentThreadId);
+        }
+        const provider = owner?.session?.provider;
+        if (provider === "devin") {
+          await api.orchestration.dispatchCommand({
+            type: "thread.task.stop",
+            commandId: newCommandId(),
+            threadId: owner?.id ?? stripSourceThreadId,
+            taskId: item.providerThreadId,
+            createdAt: new Date().toISOString(),
+          });
+          return;
+        }
         await api.orchestration.dispatchCommand({
           type: "thread.turn.interrupt",
           requestedBy: "user",
           commandId: newCommandId(),
-          threadId: childThreadId,
+          threadId: localSubagentThreadId(stripSourceThreadId, item.providerThreadId),
           createdAt: new Date().toISOString(),
         });
       } catch (error) {

@@ -47,7 +47,7 @@ export interface ProcessLaunchInput {
   readonly platform?: NodeJS.Platform;
   readonly cwd?: string;
   readonly env?: NodeJS.ProcessEnv;
-  /** Fail before spawn when the native executable cannot be resolved. */
+  /** Fail before spawn when the native executable or the working directory is missing. */
   readonly requireExecutable?: boolean;
   /** Apply CPU priority before exec on POSIX, including Windows launches through WSL. */
   readonly lowerPriority?: boolean;
@@ -69,6 +69,30 @@ export class ExecutableNotFoundError extends Error {
     super(`Command not found: ${command}`);
     this.name = "ExecutableNotFoundError";
     this.command = command;
+  }
+}
+
+/**
+ * Spawning into a missing cwd fails with ENOENT, which callers (and the Claude
+ * Agent SDK) report as a missing executable. Name the folder instead.
+ */
+export class WorkingDirectoryNotFoundError extends Error {
+  readonly _tag = "WorkingDirectoryNotFoundError";
+  readonly cwd: string;
+
+  constructor(cwd: string) {
+    super(`Working directory not found: ${cwd}`);
+    this.name = "WorkingDirectoryNotFoundError";
+    this.cwd = cwd;
+  }
+}
+
+function isMissingDirectory(path: string): boolean {
+  try {
+    return statSync(path, { throwIfNoEntry: false })?.isDirectory() !== true;
+  } catch (error) {
+    // Leave other stat failures (for example EACCES) to the spawn itself.
+    return (error as NodeJS.ErrnoException).code === "ENOTDIR";
   }
 }
 
@@ -178,6 +202,10 @@ export function prepareProcess(
     };
   }
 
+  // Checked first: a qualified relative command resolves against this cwd.
+  if (input.requireExecutable && input.cwd !== undefined && isMissingDirectory(input.cwd)) {
+    throw new WorkingDirectoryNotFoundError(input.cwd);
+  }
   const resolved = nativeExecutable(command, platform, env, input.cwd);
   if (input.requireExecutable && resolved === null) {
     throw new ExecutableNotFoundError(command);

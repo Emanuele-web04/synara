@@ -20,6 +20,8 @@ import {
   DEFAULT_AUTOMATION_STOP_CONFIDENCE_THRESHOLD,
   DEFAULT_MODEL_BY_PROVIDER,
   COMPUTER_CONTROL_DENIED_ACTIVITY_KIND,
+  INLINE_VISUAL_ACTIVITY_KIND,
+  INLINE_VISUAL_TOOL_NAME,
   EventId,
   MessageId,
   ModelSelection,
@@ -441,6 +443,13 @@ function makeHarnessLayer(
     };
     /** Serves the computer_* family in the tool catalog (denial paths only need the names). */
     readonly computerService?: Layer.Layer<ComputerService>;
+    readonly retiredWriteAuthorities?: ReadonlyArray<{
+      readonly threadId: string;
+      readonly sessionKey: string;
+      readonly provider: "codex";
+      readonly retiredTurnId: string;
+      readonly issuedAt: number;
+    }>;
   } = {},
 ) {
   const inFlightRequests = makeAgentGatewayInFlightRequestRegistry();
@@ -533,6 +542,15 @@ function makeHarnessLayer(
         ? inFlightRequests.cancelTurn(`session-for-${threadId}`, turnId).settled
         : Promise.resolve();
     },
+    listRetiredWriteAuthorities: (threadId: string) =>
+      (options.retiredWriteAuthorities ?? [])
+        .filter((authority) => authority.threadId === threadId)
+        .map((authority) => ({
+          sessionKey: authority.sessionKey,
+          provider: authority.provider,
+          retiredTurnId: authority.retiredTurnId,
+          issuedAt: authority.issuedAt,
+        })),
     revokeSessionToken: () => undefined,
     connectionForThread: (threadId: ThreadIdType) => ({
       url: "http://127.0.0.1:3773/mcp",
@@ -1951,6 +1969,57 @@ describe("AgentGateway", () => {
     }).pipe(Effect.provide(gatewayLayer));
   });
 
+  it.effect("shows an inline visual as an activity on the caller's running turn", () => {
+    const { gatewayLayer, makeHarness } = makeHarnessLayer(baseThreads);
+    return Effect.gen(function* () {
+      const harness = yield* makeHarness;
+      const list = yield* harness.postRaw({
+        authorizationHeader: "Bearer token-parent",
+        body: { jsonrpc: "2.0", id: 1, method: "tools/list" },
+      });
+      const names = (list.body as { result: { tools: Array<{ name: string }> } }).result.tools.map(
+        (tool) => tool.name,
+      );
+      assert.include(names, INLINE_VISUAL_TOOL_NAME);
+
+      const args = { title: "Latency", html: "<svg width='10' height='10'></svg>", height: 240 };
+      const first = yield* harness.callTool({
+        token: "token-parent",
+        name: INLINE_VISUAL_TOOL_NAME,
+        args,
+      });
+      assert.isFalse(isToolError(first.result), toolErrorText(first.result));
+      const { visualId } = toolResultJson(first.result) as { visualId: string };
+      const visualAppends = () =>
+        harness.dispatched.flatMap((command) =>
+          command.type === "thread.activity.append" &&
+          command.activity.kind === INLINE_VISUAL_ACTIVITY_KIND
+            ? [command]
+            : [],
+        );
+      const [append] = visualAppends();
+      assert.equal(append?.threadId, "thread-parent");
+      assert.equal(append?.activity.turnId, "turn-parent-active");
+      assert.equal(append?.activity.summary, "Visual: Latency");
+      assert.deepInclude(append?.activity.payload as object, {
+        visualId,
+        title: "Latency",
+        height: 240,
+      });
+
+      // A retried call is the same visual and the same command, so the engine
+      // treats it as a replay instead of adding a second row.
+      const retry = yield* harness.callTool({
+        token: "token-parent",
+        name: INLINE_VISUAL_TOOL_NAME,
+        args,
+      });
+      assert.equal(toolResultJson(retry.result).visualId, visualId);
+      const commandIds = visualAppends().map((command) => command.commandId);
+      assert.deepEqual(commandIds, [append!.commandId, append!.commandId]);
+    }).pipe(Effect.provide(gatewayLayer));
+  });
+
   it.effect("surfaces one computer-control denial card per tool per turn", () => {
     const { gatewayLayer, makeHarness } = makeHarnessLayer(baseThreads, [], {
       computerService: makeComputerServiceLayer({
@@ -2056,6 +2125,43 @@ describe("AgentGateway", () => {
       };
       assert.equal(error.code, "capability_denied");
       assert.equal(error.details.requiredCapability, "diagnostics:read");
+    }).pipe(Effect.provide(gatewayLayer));
+  });
+
+  it.effect("surfaces a retired gateway write authority while a newer turn is running", () => {
+    const { gatewayLayer, makeHarness } = makeHarnessLayer(baseThreads, [], {
+      retiredWriteAuthorities: [
+        {
+          threadId: "thread-parent",
+          sessionKey: "session-for-thread-parent",
+          provider: "codex",
+          retiredTurnId: "turn-a",
+          issuedAt: 0,
+        },
+      ],
+    });
+    return Effect.gen(function* () {
+      const harness = yield* makeHarness;
+      const response = yield* harness.callTool({
+        token: "token-parent",
+        name: "synara_diagnose_thread",
+        args: { threadId: "thread-parent" },
+      });
+      assert.isFalse(isToolError(response.result), toolErrorText(response.result));
+      const findings = toolResultJson(response.result).findings as ReadonlyArray<{
+        severity: string;
+        code: string;
+        detail: string;
+      }>;
+      const finding = findings.find(
+        (entry) => entry.code === "agent_gateway_write_authority_retired",
+      );
+      assert.isDefined(finding);
+      assert.equal(finding?.severity, "error");
+      assert.include(finding?.detail, "turn-a");
+      assert.include(finding?.detail, "turn-parent-active");
+      assert.include(finding?.detail, "caller_turn_inactive");
+      assert.include(finding?.detail, "This session's gateway credential");
     }).pipe(Effect.provide(gatewayLayer));
   });
 
@@ -2884,6 +2990,53 @@ describe("AgentGateway", () => {
         (payload.findings as Array<{ code: string }>).map((finding) => finding.code),
         ["provider_delivery_blocked", "THREAD_STREAM_CAPACITY_EXCEEDED"],
       );
+    }).pipe(Effect.provide(gatewayLayer));
+  });
+
+  it.effect("diagnoses an abandoned startup even without delivery blockers or incidents", () => {
+    const thread = makeThreadShell("thread-parent", {
+      latestTurn: {
+        ...baseThreads[0]!.latestTurn!,
+        state: "interrupted",
+        completedAt: NOW,
+      },
+      session: {
+        threadId: ThreadId.makeUnsafe("thread-parent"),
+        status: "starting",
+        providerName: "codex",
+        runtimeMode: "approval-required",
+        activeTurnId: null,
+        lastError: null,
+        updatedAt: NOW,
+      },
+    });
+    const { gatewayLayer, makeHarness } = makeHarnessLayer([thread]);
+    return Effect.gen(function* () {
+      const harness = yield* makeHarness;
+      const diagnose = () =>
+        harness.callTool({
+          token: "token-parent",
+          name: "synara_diagnose_thread",
+          args: { threadId: "thread-parent" },
+        });
+      const payload = toolResultJson((yield* diagnose()).result);
+      assert.deepEqual(payload.providerDeliveryBlockers, []);
+      assert.deepEqual(payload.operationalIncidents, []);
+      assert.includeMembers(
+        (payload.findings as Array<{ code: string }>).map((finding) => finding.code),
+        ["provider_lifecycle_stale"],
+      );
+
+      // The same combination is normal while a new queued turn is starting.
+      const now = new Date().toISOString();
+      harness.setThreadDetail(
+        makeThreadDetail({
+          ...thread,
+          updatedAt: now,
+          session: { ...thread.session!, updatedAt: now },
+        }),
+      );
+      assert.deepEqual(toolResultJson((yield* diagnose()).result).findings, []);
     }).pipe(Effect.provide(gatewayLayer));
   });
 
@@ -3811,7 +3964,14 @@ describe("AgentGateway", () => {
       const replay = yield* harness.callTool({
         token: "token-parent",
         name: "synara_create_threads",
-        args,
+        args: {
+          ...args,
+          threads: args.threads.map((spec) => ({
+            ...spec,
+            taskKey: "ignored-outside-hubs",
+            routingReason: "Hub-only metadata does not change this standalone request",
+          })),
+        },
       });
       assert.isFalse(isToolError(first.result), toolErrorText(first.result));
       assert.isFalse(isToolError(replay.result), toolErrorText(replay.result));

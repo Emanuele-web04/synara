@@ -1,9 +1,10 @@
-import type { OrchestrationThreadActivity, ProviderRuntimeEvent } from "@synara/contracts";
+import type { OrchestrationThreadActivity } from "@synara/contracts";
 import {
   ApprovalRequestId,
   CommandId,
   EventId,
   OrchestrationCommand,
+  ProviderRuntimeEvent,
   RuntimeItemId,
   ThreadId,
   TurnId,
@@ -392,6 +393,54 @@ it("keeps the full task failure summary so the work-log reveal can show it", () 
   const cappedPayload = capped?.payload as { detail: string };
   expect(cappedPayload.detail).toHaveLength(2_000);
   expect(cappedPayload.detail.endsWith("...")).toBe(true);
+});
+
+it("persists provider confirmation when a late completion reconciles a local stop", () => {
+  const [activity] = projectProviderRuntimeActivities(
+    runtimeEvent({
+      type: "task.completed",
+      eventId: "task-completed-after-stop",
+      provider: "devin",
+      turnId: TURN_ID,
+      payload: {
+        taskId: "task-after-stop",
+        status: "completed",
+        reconcilesStop: true,
+      },
+    }),
+  );
+
+  expect(activity).toMatchObject({
+    kind: "task.completed",
+    payload: { taskId: "task-after-stop", status: "completed", reconcilesStop: true },
+  });
+  expect(() => decodeActivityAppendCommand(activity!)).not.toThrow();
+});
+
+it("persists pending provider confirmation for a stopped Devin task", () => {
+  const [activity] = projectProviderRuntimeActivities(
+    runtimeEvent({
+      type: "task.completed",
+      eventId: "task-awaiting-provider-confirmation",
+      provider: "devin",
+      turnId: TURN_ID,
+      payload: {
+        taskId: "task-awaiting-confirmation",
+        status: "stopped",
+        awaitingProviderConfirmation: true,
+      },
+    }),
+  );
+
+  expect(activity).toMatchObject({
+    kind: "task.completed",
+    payload: {
+      taskId: "task-awaiting-confirmation",
+      status: "stopped",
+      awaitingProviderConfirmation: true,
+    },
+  });
+  expect(() => decodeActivityAppendCommand(activity!)).not.toThrow();
 });
 
 it("keeps the full task update error so the work-log reveal can show it", () => {
@@ -1284,6 +1333,25 @@ describe("provider runtime activity projection", () => {
       ["fast-mode-with-context:fast-mode", "fast-mode.state"],
     ]);
 
+    const [resultlessTurn] = projectProviderRuntimeActivities(
+      runtimeEvent({
+        type: "turn.completed",
+        eventId: "resultless-turn",
+        provider: "claudeAgent",
+        turnId: TURN_ID,
+        payload: {
+          state: "completed",
+          tokenAccountingVersion: 1,
+          mainLoopTokens: 10,
+          claudeResultObserved: false,
+        },
+      }),
+    );
+    expect(resultlessTurn?.payload).toMatchObject({
+      claudeResultObserved: false,
+      mainLoopTokens: 10,
+    });
+
     const [turn] = projectProviderRuntimeActivities(
       runtimeEvent({
         type: "turn.completed",
@@ -1292,6 +1360,7 @@ describe("provider runtime activity projection", () => {
         turnId: TURN_ID,
         payload: {
           state: "completed",
+          claudeResultObserved: true,
           tokenAccountingVersion: 1,
           mainLoopTokens: 1_000,
           modelUsage: {
@@ -1311,6 +1380,7 @@ describe("provider runtime activity projection", () => {
       payload: {
         state: "completed",
         provider: "claudeAgent",
+        claudeResultObserved: true,
         tokenAccountingVersion: 1,
         mainLoopTokens: 1_000,
         modelUsage: {
@@ -1494,4 +1564,45 @@ describe("provider runtime activity projection", () => {
     });
     expect(() => decodeActivityAppendCommand(blocked!)).not.toThrow();
   });
+});
+
+it.each(["task.started", "task.updated", "task.completed"] as const)(
+  "persists the child launch mode from %s",
+  (type) => {
+    const event = Schema.decodeUnknownSync(ProviderRuntimeEvent)(
+      runtimeEvent({
+        type,
+        eventId: `policy-${type}`,
+        provider: "devin",
+        turnId: TURN_ID,
+        payload: {
+          taskId: "child-policy",
+          interactionMode: "plan",
+          ...(type === "task.started" ? {} : { status: "completed" }),
+        },
+      }),
+    );
+    const activities = projectProviderRuntimeActivities(event);
+    expect(activities[0]?.payload).toMatchObject({ interactionMode: "plan" });
+    decodeActivityAppendCommand(activities[0]!);
+  },
+);
+
+it("persists running-task stop reconciliation for resumed background work", () => {
+  const event = Schema.decodeUnknownSync(ProviderRuntimeEvent)(
+    runtimeEvent({
+      type: "task.updated",
+      eventId: "replayed-running",
+      provider: "devin",
+      turnId: TURN_ID,
+      payload: { taskId: "child", status: "running", reconcilesStop: true, isBackgrounded: true },
+    }),
+  );
+  const activity = projectProviderRuntimeActivities(event)[0]!;
+  expect(activity.payload).toMatchObject({
+    status: "running",
+    reconcilesStop: true,
+    isBackgrounded: true,
+  });
+  decodeActivityAppendCommand(activity);
 });

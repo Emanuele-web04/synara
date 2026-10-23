@@ -17,6 +17,7 @@ import {
   EXPENSIVE_READ_RETRY_OPTIONS,
   expensiveReadErrorRefetchInterval,
 } from "./expensiveReadRetry";
+import { createActivityRefreshThrottle } from "./activityRefreshThrottle";
 import { resolveWorkspaceFileReferenceBatched } from "./workspaceFileReferenceBatch";
 
 export const projectQueryKeys = {
@@ -122,6 +123,34 @@ export function invalidateProjectFileQueriesForCwds(
         queryKey: ["projects", "resolve-workspace-file-reference", cwd] as const,
       }),
       queryClient.invalidateQueries({ queryKey: ["projects", "search-entries", cwd] as const }),
+    ]),
+  );
+}
+
+/** Mid-turn file-change refresh for workspaces running agents just touched; see activityRefreshThrottle. */
+export const invalidateProjectFileQueriesForCwdsAfterActivity = createActivityRefreshThrottle(
+  (queryClient, cwd) => {
+    void invalidateProjectFileQueriesForCwds(queryClient, [cwd]);
+  },
+);
+
+/**
+ * Once a turn's diff is finalized, the workspace's other cwd-keyed project caches
+ * (script discovery, content and local searches) may be stale too. File queries are
+ * left to invalidateProjectFileQueriesForCwdsAfterActivity, which the same event feeds.
+ */
+export function invalidateSettledTurnProjectQueriesForCwds(
+  queryClient: QueryClient,
+  cwds: Iterable<string>,
+) {
+  const uniqueCwds = [...new Set([...cwds].filter((cwd) => cwd.length > 0))];
+  return Promise.all(
+    uniqueCwds.flatMap((cwd) => [
+      queryClient.invalidateQueries({ queryKey: ["projects", "discover-scripts", cwd] as const }),
+      queryClient.invalidateQueries({ queryKey: ["projects", "search-content", cwd] as const }),
+      queryClient.invalidateQueries({
+        queryKey: ["projects", "search-local-entries", cwd] as const,
+      }),
     ]),
   );
 }

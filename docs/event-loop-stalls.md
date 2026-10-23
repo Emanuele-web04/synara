@@ -53,31 +53,16 @@ No worker watchdog or continuous profiler runs in normal operation.
 
 ## Client behavior and RPC deadlines
 
-The authenticated, optional `server.runtime-status` capability enables a lightweight
-`server.getRuntimeStatus` heartbeat on the active RPC socket. It runs every **5
-seconds**, at most once concurrently, with a **3 second** responsiveness deadline.
-That implies a worst-case detection delay of roughly 8 seconds while the renderer
-is running. A busy warning states that the server is not answering and explicitly
-allows heavy load or a connection delay as explanations. It does not assert that
-a server-side stall has been proven. Once the server replies, a stall reported
-within the last 30 seconds produces a recovery notice, using server-relative age
-rather than comparing machine clocks.
-
-Unary requests get a **15 second** slow notice. Requests opting out with
-`timeoutMs: null` get **120 seconds**; explicit timeouts above 60 seconds use
-75% of their budget as the slow-notice threshold. This uses caller options, without a fixed operation
-list. Slow notices display only while the transport is open; interrupted
-connections use the reconnecting state. Tracking is capped
-at 256 requests per transport. Subscriptions and heartbeats are excluded. Older
-servers without the capability still get the slow-request explanation. The
-notice lives outside the transcript and does not affect message auto-follow.
-One compact status surface covers busy, real reconnecting and recent recovery; there
-is no separate slow-request toast. A slow RPC alone says the request is waiting,
-without claiming the connection is broken. Visibility changes, delayed renderer
-timers, reconnects and dispose fence prior
-heartbeat replies and reset liveness evidence.
-When a responsiveness timer fires over 500 ms late, the renderer gives queued
-socket responses another event-loop turn before declaring the server busy.
+The app does not poll the server for liveness or show a busy notice. An earlier
+client sent a `server.getRuntimeStatus` heartbeat every 5 seconds and showed
+"Synara server is busy" when one reply took longer than 3 seconds, plus a notice
+for any request still pending after 15 seconds. One end-to-end sample cannot tell
+a stalled server from a busy renderer, a socket queued behind stream data, or
+requests waiting for admission. With several agent threads running in parallel
+it fired while the server event loop was healthy, so it was removed. The
+authenticated `server.runtime-status` capability and RPC remain for operator
+probes and compatibility with older clients; [connection recovery](connection-recovery.md)
+still owns reconnects, and the composer still reports a real reconnect.
 
 The default **60 second acknowledgement timeout remains**. Removing it globally
 would leave reads and mutations with uncertain external effects waiting indefinitely
@@ -86,14 +71,17 @@ safe to retry. Synara already handles supported `thread.turn.start` uncertainty
 through fingerprint-bound receipt settlement; that path keeps waiting/retrying
 settlement until acceptance, rejection, caller cancellation or transport disposal.
 Known long operations already opt out of the default timeout in `wsNativeApi.ts`.
-The new indicator neither reconnects automatically on a slow heartbeat nor retries
-mutations. Connection recovery continues to use the existing Effect socket protocol.
-Stall-tolerant keepalives and bounded stream-local overflow recovery ship separately
-from this monitoring change. A network failure and a server stall can both cause
-latency; the indicator reports observed responsiveness, without proving the cause.
-Existing cancellation and receipt settlement remain in charge. Timeout copy asks
-users to check mutation results before retrying; reads can be retried once the server
-responds.
+Mutations are never retried automatically. Existing cancellation and receipt
+settlement remain in charge. Timeout copy asks users to check mutation results
+before retrying; reads can be retried once the server responds.
+
+During parallel work, live events suppress redundant replay polls until the stream goes quiet;
+pending dispatches still poll. Activity-driven Git and workspace-file refreshes share a
+2-second leading/trailing throttle per checkout. Turn-end invalidation remains immediate.
+Unary requests wait in FIFO client queues using the server's existing per-class limits.
+The capacity wait budget is 3 seconds after the transport has been open for a full window;
+cancellation removes waiters, disposal rejects them, and stream-backed actions bypass the queue.
+A request whose deadline expires before sending reports capacity rather than uncertain delivery.
 
 ## Attribution: measured limitation
 

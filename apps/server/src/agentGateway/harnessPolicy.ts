@@ -1,18 +1,26 @@
 import type { ProviderKind } from "@synara/contracts";
+import { INLINE_VISUALS_BETA_FEATURE } from "@synara/shared/betaFeatures";
+
+import { isServerBetaFeatureEnabled } from "../betaFeatureGate.ts";
 
 import { computerToolInstructions } from "./computerGuidance.ts";
 
 import { AUTOMATION_AUTHORING_GUIDANCE } from "./automationAuthoringGuidance.ts";
 
 /** Canonical, versioned host policy delivered to every supported provider. */
-export const SYNARA_HARNESS_POLICY_VERSION = "2026-10-02.1";
+export const SYNARA_HARNESS_POLICY_VERSION = "2026-10-14.1";
 export const SYNARA_HARNESS_POLICY_MARKER = `[Synara harness policy ${SYNARA_HARNESS_POLICY_VERSION}]`;
 
 export interface SynaraHarnessCapabilities {
   readonly gatewayControlAvailable: boolean;
   readonly automationAuthoring?: "tool-descriptions";
   readonly enableComputerControl?: boolean | undefined;
+  /** The `synara_show_visual` tool is offered by this session. */
+  readonly inlineVisuals?: boolean | undefined;
 }
+
+/** Whether this server offers inline visuals; the gateway catalog uses the same gate. */
+const INLINE_VISUALS_ENABLED = isServerBetaFeatureEnabled(INLINE_VISUALS_BETA_FEATURE);
 
 /**
  * Render one truthful policy. Providers without a safely thread-scoped MCP
@@ -30,11 +38,12 @@ export function renderSynaraHarnessPolicy(capabilities: SynaraHarnessCapabilitie
         "For thread discovery and diagnosis, use synara_list_threads, synara_read_thread, synara_read_thread_activity, synara_read_thread_events, synara_read_thread_runtime_events, and synara_diagnose_thread before SQLite or process logs. Use host storage only when tool coverage says required evidence is unavailable.",
         "After successfully creating a pull request for the current thread's own deliverable, call synara_set_thread_pull_request with its URL. Never associate a pull request that the thread only reviews, references, or discusses.",
         "Provider-native subagent or Task tools are implementation details: they do not create Synara threads and must not substitute for an explicit request to create Synara threads.",
+        "Hub roles come from the server: the coordinator routes assigned hub work and owns hub automations; workers do their assigned work and cannot create threads or message other threads. Other conversations retain ordinary thread tools.",
         "For a plural thread request, submit one exact synara_create_threads plan. The array length is the exact requested count.",
         "If synara_create_threads fails before returning an operationId, correct the rejected plan and reuse its requestId; no durable task was created.",
         "Use synara_capabilities to select canonical provider, model, and option values. Never guess a model slug or silently substitute a provider or model.",
         "Use synara_capabilities.targetConstruction: Codex options.reasoningEffort and Claude Agent options.effort are not interchangeable.",
-        "For requested results, use synara_wait_for_threads and wait for all, then synthesize. Hub coordinator packets allow async reports unless results are requested now.",
+        "For results, repeat synara_wait_for_threads with runIds until allTerminal, then synthesize. Await native subagents. Hub packets may allow async reports.",
         "After operationId, retry the same requestId and exact plan. Report failures; no replacement threads without a new user request. Hub retries are server-owned.",
         "Synara automations support heartbeat, standalone, and dedicated modes plus interval, once, daily, weekdays, weekly, and cron schedules. Existing everyMinutes heartbeat calls remain supported. Use fastInterval: true only when the user explicitly accepts a sub-minute bounded loop.",
         "Mode controls execution: heartbeat appends to an idle target thread; standalone opens a fresh thread per independent run; dedicated reuses one automation-owned thread so runs build on each other without writing into another thread.",
@@ -44,6 +53,11 @@ export function renderSynaraHarnessPolicy(capabilities: SynaraHarnessCapabilitie
         ...(capabilities.automationAuthoring === "tool-descriptions"
           ? []
           : [AUTOMATION_AUTHORING_GUIDANCE]),
+        ...(capabilities.inlineVisuals === true
+          ? [
+              "When a chart, table, or comparison says more than prose, call synara_show_visual and place its block in your reply.",
+            ]
+          : []),
         "Prefer synara_create_automation with suggested: true when the user has not explicitly asked to create an automation. Suggested automations remain disabled until the user accepts their proposal card.",
         "Before synara_update_automation, call synara_view_automation. Resend all mutable fields, including unchanged ones: updates replace, not merge.",
         'Automation-dispatched turns receive an identity/run/memory envelope in the current user message. Only that current turn is automation-dispatched; the status never carries into a later manual follow-up such as "continue", even in the same thread.',
@@ -70,6 +84,7 @@ export function renderSynaraHarnessPolicy(capabilities: SynaraHarnessCapabilitie
 
 export const SYNARA_GATEWAY_HARNESS_POLICY = renderSynaraHarnessPolicy({
   gatewayControlAvailable: true,
+  inlineVisuals: INLINE_VISUALS_ENABLED,
 });
 
 export interface SynaraHarnessPolicyDeliveryState {
@@ -128,6 +143,7 @@ export function takeSynaraHarnessPolicyForProviderSession(
   return takeSynaraHarnessPolicyForSession(state, {
     gatewayControlAvailable: providerHasSynaraGatewayControl(input),
     enableComputerControl: state.enableComputerControl === true,
+    inlineVisuals: INLINE_VISUALS_ENABLED,
   });
 }
 

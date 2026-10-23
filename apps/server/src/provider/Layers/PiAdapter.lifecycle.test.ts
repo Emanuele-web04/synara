@@ -240,6 +240,23 @@ async function send(adapter: PiAdapterShape) {
   return Effect.runPromise(adapter.sendTurn({ threadId, input: "Test this turn" }));
 }
 
+it("keeps idle snapshot activity stable across reads and advances it on completed work", async () => {
+  responses("success");
+  await withAdapter(async (adapter, events) => {
+    const before = (await Effect.runPromise(adapter.listSessions()))[0]!;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect((await Effect.runPromise(adapter.listSessions()))[0]?.updatedAt).toBe(before.updatedAt);
+    await send(adapter);
+    await waitFor(() => expect(completions(events)).toHaveLength(1));
+    const completed = (await Effect.runPromise(adapter.listSessions()))[0]!;
+    expect(Date.parse(completed.updatedAt)).toBeGreaterThan(Date.parse(before.updatedAt));
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect((await Effect.runPromise(adapter.listSessions()))[0]?.updatedAt).toBe(
+      completed.updatedAt,
+    );
+  });
+});
+
 it("passes the current Pi system prompt and tools to the model stream", async () => {
   responses("success");
   await withAdapter(async (adapter, events) => {
@@ -917,6 +934,35 @@ it("does not let an old prompt rejection settle a replacement session's turn", a
     expect(completions(events)[0]?.turnId).toBe(next.turnId);
     expect(events.filter((event) => event.type === "runtime.error")).toHaveLength(0);
     expect(oldTurn.turnId).not.toBe(next.turnId);
+  });
+});
+
+it("retains a failed-stop context without reporting a live session", async () => {
+  responses("success");
+  await withAdapter(async (adapter) => {
+    const dispose = vi.spyOn(captured.sessions[0]!, "dispose").mockImplementationOnce(() => {
+      throw new Error("runtime disposal failed");
+    });
+    expect(await Effect.runPromise(adapter.hasSession(threadId))).toBe(true);
+    expect(await Effect.runPromise(adapter.hasSession(ThreadId.makeUnsafe("missing")))).toBe(false);
+    expect(await Effect.runPromise(adapter.hasRetainedSession!(threadId))).toBe(true);
+    expect(
+      await Effect.runPromise(adapter.hasRetainedSession!(ThreadId.makeUnsafe("missing"))),
+    ).toBe(false);
+
+    const stopped = await Effect.runPromise(Effect.result(adapter.stopSession(threadId)));
+    expect(stopped._tag).toBe("Failure");
+    expect(await Effect.runPromise(adapter.listSessions())).toMatchObject([
+      { threadId, status: "closed" },
+    ]);
+    expect(await Effect.runPromise(adapter.hasSession(threadId))).toBe(false);
+    expect(await Effect.runPromise(adapter.hasRetainedSession!(threadId))).toBe(true);
+
+    await Effect.runPromise(adapter.stopSession(threadId));
+    expect(dispose).toHaveBeenCalledTimes(2);
+    expect(await Effect.runPromise(adapter.listSessions())).toEqual([]);
+    expect(await Effect.runPromise(adapter.hasSession(threadId))).toBe(false);
+    expect(await Effect.runPromise(adapter.hasRetainedSession!(threadId))).toBe(false);
   });
 });
 

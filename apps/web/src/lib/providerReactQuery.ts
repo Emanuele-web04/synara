@@ -24,6 +24,8 @@ interface CheckpointDiffQueryInput {
   toTurnCount: number | null;
   ignoreWhitespace: boolean;
   cacheScope?: string | null;
+  /** Live snapshots are replaced frequently; release unused full patches immediately. */
+  liveSnapshot?: boolean;
   enabled?: boolean;
 }
 
@@ -162,6 +164,7 @@ export function checkpointDiffQueryOptions(input: CheckpointDiffQueryInput) {
     },
     enabled: (input.enabled ?? true) && !!input.threadId && decodedRequest._tag === "Some",
     staleTime: Infinity,
+    ...(input.liveSnapshot ? { gcTime: 0 } : {}),
     retry: (failureCount, error) => {
       if (isRpcCapacityExceededError(error)) {
         return shouldRetryExpensiveRead(failureCount, error);
@@ -192,5 +195,31 @@ export function checkpointDiffQueryOptions(input: CheckpointDiffQueryInput) {
         ? CHECKPOINT_DIFF_PENDING_REFETCH_INTERVAL_MS
         : false;
     },
+  });
+}
+
+/**
+ * An inline visual's document. Visual ids are content-addressed per turn, so a
+ * fetched document never changes; a missing one is reported once, not retried.
+ */
+export function inlineVisualQueryOptions(input: { threadId: ThreadId; visualId: string }) {
+  return queryOptions({
+    queryKey: ["inlineVisual", input.threadId, input.visualId] as const,
+    queryFn: async () => {
+      const api = ensureNativeApi();
+      const result = await api.orchestration.getInlineVisual(input);
+      return result.html;
+    },
+    staleTime: Infinity,
+    gcTime: 10 * 60_000,
+    retry: (failureCount, error) => {
+      if (isRpcCapacityExceededError(error)) return shouldRetryExpensiveRead(failureCount, error);
+      const retryable = (error as { retryable?: unknown } | null)?.retryable;
+      return retryable !== false && failureCount < 2;
+    },
+    retryDelay: (attempt, error) =>
+      isRpcCapacityExceededError(error)
+        ? expensiveReadRetryDelay(attempt, error)
+        : Math.min(1_000, 200 * 2 ** (attempt - 1)),
   });
 }

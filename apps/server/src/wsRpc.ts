@@ -1,3 +1,6 @@
+import { EditorDebugService } from "./editor/debugService";
+import { EditorLanguageService } from "./editor/languageService";
+import { requireNativeEditor } from "./editor/nativeEditorGate";
 import { readEventLoopStatus } from "./eventLoopMonitor";
 import { makeGitActionRunner } from "./git/gitActionRunner";
 import { AgentGatewaySessionRegistry } from "./agentGateway/Services/AgentGatewaySessionRegistry";
@@ -54,6 +57,8 @@ import { RpcMiddleware, RpcSchema, RpcSerialization, RpcServer } from "effect/un
 import { AutomationService } from "./automation/Services/AutomationService";
 import { TodoService } from "./todo/Services/TodoService";
 import { isServerBetaFeatureEnabled } from "./betaFeatureGate";
+import { readInlineVisual } from "./inlineVisualStore";
+import { INLINE_VISUALS_BETA_FEATURE } from "@synara/shared/betaFeatures";
 import { ProjectAgentService } from "./projectAgent/Services/ProjectAgentService";
 import { isGroupCoordinatorHostProject } from "./projectAgent/groupCoordinatorHost";
 import {
@@ -183,6 +188,7 @@ import { ThreadSearchQuery } from "./threadSearch";
 import { redactSensitiveProcessArgs } from "./processArgumentRedaction";
 import { ServerEnvironment } from "./environment/Services/ServerEnvironment";
 import { ExternalMcpService } from "./externalMcp/Services/ExternalMcpService";
+import { type McpConnectorError, McpConnectors } from "./mcpConnectors/Services/McpConnectors";
 import { ServerLifecycleEvents } from "./serverLifecycleEvents";
 import { ServerRuntimeStartup } from "./serverRuntimeStartup";
 import { KeepAwakeService } from "./keepAwake";
@@ -499,9 +505,14 @@ const makeWsRpcHandlersLayer = () =>
       const projectAgentService = yield* ProjectAgentService;
       const projectAgentRepository = yield* ProjectAgentRepository;
       const config = yield* ServerConfig;
+      const editorLanguages = new EditorLanguageService();
+      const editorDebug = new EditorDebugService(config.stateDir);
+      yield* Effect.addFinalizer(() => Effect.promise(() => editorDebug.dispose()));
+      yield* Effect.addFinalizer(() => Effect.sync(() => editorLanguages.dispose()));
       const devServerManager = yield* DevServerManager;
       const fileSystem = yield* FileSystem.FileSystem;
       const externalMcp = yield* ExternalMcpService;
+      const mcpConnectors = yield* McpConnectors;
       const git = yield* GitCore;
       const github = yield* GitHubCli;
       const gitManager = yield* GitManager;
@@ -682,17 +693,11 @@ const makeWsRpcHandlersLayer = () =>
       // is actively running. Waiting here is safe because the cursor-safe
       // stream attaches its live tap before evaluating the snapshot effect, so
       // no event that commits during the wait is lost.
-      const loadThreadDetailSnapshotWithBootstrapWait = (
-        threadId: ThreadId,
-        messageWindow?: import("@synara/contracts").OrchestrationThreadMessageWindow,
-      ) =>
+      const loadThreadDetailSnapshotWithBootstrapWait = (threadId: ThreadId) =>
         Effect.gen(function* () {
           const deadline = Date.now() + THREAD_DETAIL_SNAPSHOT_BOOTSTRAP_TIMEOUT_MS;
           while (true) {
-            const detail = yield* projectionReadModelQuery.getThreadDetailSnapshotById(
-              threadId,
-              messageWindow,
-            );
+            const detail = yield* projectionReadModelQuery.getThreadDetailSnapshotById(threadId);
             if (Option.isSome(detail) || Date.now() >= deadline) {
               return detail;
             }
@@ -1192,6 +1197,9 @@ const makeWsRpcHandlersLayer = () =>
         });
       const whenTasksEnabled = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
         tasksEnabled ? effect : Effect.fail(tasksUnavailableError());
+      // Beta only, like the gateway tool that publishes them: a Stable server
+      // serves no visual documents even if one is somehow on disk.
+      const inlineVisualsEnabled = isServerBetaFeatureEnabled(INLINE_VISUALS_BETA_FEATURE);
 
       const toProjectProvisionRpcError = (cause: unknown) =>
         cause instanceof GitHubProjectProvisioningError
@@ -1292,16 +1300,50 @@ const makeWsRpcHandlersLayer = () =>
           ),
         );
 
-      const requireOwner = Effect.gen(function* () {
-        yield* requireWsOwnerSession;
-        if (!isLoopbackHost(config.host) || config.publicUrl !== undefined) {
+      const requireLoopbackOwner = (message: string) =>
+        Effect.gen(function* () {
+          yield* requireWsOwnerSession;
+          if (!isLoopbackHost(config.host) || config.publicUrl !== undefined) {
+            return yield* Effect.fail(new WsRpcError({ message }));
+          }
+        });
+      const requireOwner = requireLoopbackOwner(
+        "External MCP management is available only on a loopback-only instance.",
+      );
+      // Connectors (Beta): refused on Stable. Sign-in redirects to this
+      // machine's loopback port, so only a loopback-only instance can finish it.
+      const requireConnectorsOwner = Effect.gen(function* () {
+        if (!mcpConnectors.enabled) {
           return yield* Effect.fail(
             new WsRpcError({
-              message: "External MCP management is available only on a loopback-only instance.",
+              message: "Connectors are unavailable on this server.",
+              code: "mcp-connectors-unavailable",
+              retryable: false,
             }),
           );
         }
+        yield* requireLoopbackOwner(
+          "Connectors can be managed only on the computer running Synara.",
+        );
       });
+      const connectorRpc = <A>(
+        effect: Effect.Effect<A, McpConnectorError>,
+        fallbackMessage: string,
+      ) =>
+        requireConnectorsOwner.pipe(
+          Effect.andThen(
+            effect.pipe(
+              Effect.mapError(
+                (error) =>
+                  new WsRpcError({
+                    message: error.message,
+                    ...(error.code ? { code: error.code } : {}),
+                  }),
+              ),
+            ),
+          ),
+          Effect.mapError((cause) => toWsRpcError(cause, fallbackMessage)),
+        );
 
       return AdmittedWsFeatureRpcGroup.of({
         [ORCHESTRATION_WS_METHODS.settleTurnDispatch]: ({ command }) =>
@@ -1384,7 +1426,7 @@ const makeWsRpcHandlersLayer = () =>
         [ORCHESTRATION_WS_METHODS.getThreadDetailSnapshot]: (input) =>
           rpcEffect(
             projectionReadModelQuery
-              .getThreadDetailSnapshotById(input.threadId, input.messageWindow)
+              .getThreadDetailSnapshotById(input.threadId)
               .pipe(Effect.map(Option.getOrNull)),
             "Failed to load orchestration thread detail snapshot",
           ),
@@ -1399,6 +1441,37 @@ const makeWsRpcHandlersLayer = () =>
             checkpointDiffQuery.getFullThreadDiff(input),
             "Failed to load full thread diff",
           ),
+        [ORCHESTRATION_WS_METHODS.getInlineVisual]: (input) =>
+          inlineVisualsEnabled
+            ? rpcEffect(
+                Effect.tryPromise(() =>
+                  readInlineVisual({
+                    attachmentsDir: config.attachmentsDir,
+                    threadId: input.threadId,
+                    visualId: input.visualId,
+                  }),
+                ),
+                "Failed to load visual",
+              ).pipe(
+                Effect.flatMap((html) =>
+                  html === null
+                    ? Effect.fail(
+                        new WsRpcError({
+                          message: "This visual is no longer available.",
+                          code: "inline-visual-missing",
+                          retryable: false,
+                        }),
+                      )
+                    : Effect.succeed({ visualId: input.visualId, html }),
+                ),
+              )
+            : Effect.fail(
+                new WsRpcError({
+                  message: "Inline visuals are unavailable on this server.",
+                  code: "inline-visuals-unavailable",
+                  retryable: false,
+                }),
+              ),
         [ORCHESTRATION_WS_METHODS.replayEvents]: (input) => {
           const fromSequenceExclusive = clamp(input.fromSequenceExclusive, {
             maximum: Number.MAX_SAFE_INTEGER,
@@ -1568,10 +1641,7 @@ const makeWsRpcHandlersLayer = () =>
                 label: "orchestration.thread-detail",
                 onDroppedEvents: (report) => recordThreadStreamOverflow(input.threadId, report),
               },
-              snapshot: loadThreadDetailSnapshotWithBootstrapWait(
-                input.threadId,
-                input.messageWindow,
-              ).pipe(
+              snapshot: loadThreadDetailSnapshotWithBootstrapWait(input.threadId).pipe(
                 Effect.flatMap(
                   Option.match({
                     onNone: () =>
@@ -1619,7 +1689,6 @@ const makeWsRpcHandlersLayer = () =>
                   return Stream.succeed<OrchestrationThreadStreamItem>({
                     kind: "replay",
                     events: item.events,
-                    threadId: input.threadId,
                   });
                 }
                 // A silently empty snapshot would leave the client waiting forever
@@ -1714,6 +1783,65 @@ const makeWsRpcHandlersLayer = () =>
           rpcEffect(
             Effect.promise(() => createLocalPreviewGrant({ requestedPath: input.path })),
             "Failed to create local file preview grant",
+          ),
+        [WS_METHODS.editorDebugStart]: (input, { clientId }) =>
+          requireNativeEditor.pipe(
+            Effect.andThen(() => requireWsOwnerSession),
+            Effect.andThen(() => canonicalizeProjectWorkspaceRoot(input.cwd)),
+            Effect.andThen((cwd) =>
+              rpcEffect(
+                Effect.tryPromise({
+                  try: (signal) => editorDebug.start(String(clientId), { ...input, cwd }, signal),
+                  catch: (cause) =>
+                    cause instanceof Error ? cause : new Error("Debug launch failed."),
+                }),
+                "Debug launch failed",
+              ),
+            ),
+          ),
+        [WS_METHODS.editorDebugAction]: (input, { clientId }) =>
+          requireNativeEditor.pipe(
+            Effect.andThen(() => requireWsOwnerSession),
+            Effect.andThen(() =>
+              rpcEffect(
+                Effect.tryPromise({
+                  try: () => editorDebug.action(String(clientId), input),
+                  catch: (cause) =>
+                    cause instanceof Error ? cause : new Error("Debug command failed."),
+                }),
+                "Debug command failed",
+              ),
+            ),
+          ),
+        [WS_METHODS.editorDebugPoll]: (input, { clientId }) =>
+          requireNativeEditor.pipe(
+            Effect.andThen(() => requireWsOwnerSession),
+            Effect.andThen(() =>
+              rpcEffect(
+                Effect.try({
+                  try: () => editorDebug.poll(String(clientId), input.sessionId, input.after),
+                  catch: (cause) =>
+                    cause instanceof Error ? cause : new Error("Debug session is unavailable."),
+                }),
+                "Debug session is unavailable",
+              ),
+            ),
+          ),
+        [WS_METHODS.editorIntelligence]: (input, { clientId }) =>
+          requireNativeEditor.pipe(
+            Effect.andThen(() => requireWsOwnerSession),
+            Effect.andThen(() => canonicalizeProjectWorkspaceRoot(input.cwd)),
+            Effect.andThen((cwd) =>
+              rpcEffect(
+                Effect.tryPromise({
+                  try: (signal) =>
+                    editorLanguages.request(String(clientId), { ...input, cwd }, signal),
+                  catch: (cause) =>
+                    cause instanceof Error ? cause : new Error("Language service failed."),
+                }),
+                "Language service failed",
+              ),
+            ),
           ),
         [WS_METHODS.projectsWriteFile]: (input) =>
           workspaceFileSystem.writeFile(input).pipe(
@@ -2274,6 +2402,19 @@ const makeWsRpcHandlersLayer = () =>
           rpcEffect(
             requireOwner.pipe(Effect.andThen(externalMcp.refreshPairing(input))),
             "Failed to refresh external MCP pairing",
+          ),
+        [WS_METHODS.serverListMcpConnectors]: () =>
+          connectorRpc(mcpConnectors.list(), "Failed to list connectors"),
+        [WS_METHODS.serverConnectMcpConnector]: (input) =>
+          connectorRpc(mcpConnectors.connect(input), "Failed to connect"),
+        [WS_METHODS.serverGetMcpConnectorSetup]: () =>
+          connectorRpc(mcpConnectors.setup(), "Failed to read connector setup"),
+        [WS_METHODS.serverDisconnectMcpConnector]: (input) =>
+          connectorRpc(
+            mcpConnectors
+              .disconnect(input.connectorId)
+              .pipe(Effect.map((disconnected) => ({ disconnected }))),
+            "Failed to disconnect",
           ),
         [WS_METHODS.serverListWorktrees]: () =>
           rpcEffect(

@@ -21,6 +21,7 @@ import { useCallback } from "react";
 import { promoteThreadCreate } from "~/lib/threadCreatePromotion";
 import { waitForDraftThreadDispatchToSettle } from "~/lib/draftThreadDispatch";
 import { runComposerSendOnce } from "~/lib/composerSendOwnership";
+import { ProviderHandoffBackgroundTasksError } from "~/lib/threadHandoff";
 import { newCommandId, randomUUID } from "~/lib/utils";
 import { readNativeApi } from "~/nativeApi";
 import { dispatchThreadNotes } from "~/pinnedMessages";
@@ -43,18 +44,18 @@ import { armQueuedComposerSteerGate } from "../../lib/queuedComposerDrain";
 import { clearPendingTurnDispatch } from "../../pendingTurnDispatch";
 import { useStore } from "../../store";
 import { getThreadFromState } from "../../threadDerivation";
-import { isThreadDetailAwaitingVerification } from "../../threadDetailAuthority";
 import { buildModelSelection } from "../../providerModelOptions";
 import { type Thread } from "../../types";
 import {
   WorktreeSetupCancelledError,
+  createdAtAfterProviderHandoff,
   createWorktreeSetupResolution,
   hasServerReceivedSentMessage,
   resolveQueuedTurnDispatchSettings,
   revokeUserMessagePreviewUrls,
   runWorktreeCreationFlow,
   threadSettingsDispatchFields,
-  threadHasProviderLockingActivity,
+  turnNeedsProviderHandoff,
   turnStartDispatchFields,
   type TurnDispatchSettings,
 } from "../ChatView.logic";
@@ -557,11 +558,14 @@ export function useChatTurnExecution({
         // script ran (the creation-step race above only guards the first step).
         await consumeWorktreeSetupResolution();
 
+        // Queued turns already follow the thread's provider, so a differing one
+        // here comes from the composer (Continue task, a resumed workflow).
         const needsProviderHandoff =
           isServerThread &&
-          queuedChatTurn === null &&
-          threadHasProviderLockingActivity(activeThread) &&
-          dispatchSettings.modelSelection.provider !== activeThread.modelSelection.provider;
+          turnNeedsProviderHandoff({
+            thread: activeThread,
+            modelSelection: dispatchSettings.modelSelection,
+          });
         if (isServerThread) {
           await persistThreadSettingsForNextTurn({
             // The explicit handoff owns a provider switch. An ordinary metadata
@@ -616,15 +620,10 @@ export function useChatTurnExecution({
         // which returns the message to the composer.
         if (needsProviderHandoff && prepareProviderHandoffForSend) {
           await prepareProviderHandoffForSend(activeThread, dispatchSettings.modelSelection);
-          // The optimistic row predates provider startup. Position this send
-          // after its completed handoff, including when the server clock is ahead.
-          const handoffCreatedAt = getThreadFromState(
-            useStore.getState(),
-            threadIdForSend,
-          )?.activities.findLast((activity) => activity.kind === "provider.handoff")?.createdAt;
-          messageCreatedAt = new Date(
-            Math.max(Date.now(), Date.parse(handoffCreatedAt ?? messageCreatedAt) + 1),
-          ).toISOString();
+          messageCreatedAt = createdAtAfterProviderHandoff({
+            activities: getThreadFromState(useStore.getState(), threadIdForSend)?.activities,
+            createdAt: messageCreatedAt,
+          });
           if (activeThreadIdRef.current === threadIdForSend) {
             setOptimisticUserMessages((messages) =>
               messages.map((message) =>
@@ -655,10 +654,7 @@ export function useChatTurnExecution({
           providerOptions: dispatchSettings.providerOptions,
         });
         await stagedTurnAttachments.runWithDispatch(async (turnAttachments) => {
-          if (
-            getThreadFromState(useStore.getState(), threadIdForSend)?.claudeCacheReview != null ||
-            isThreadDetailAwaitingVerification(threadIdForSend)
-          ) {
+          if (getThreadFromState(useStore.getState(), threadIdForSend)?.claudeCacheReview != null) {
             throw new Error(
               "Choose how to resume the held message before sending another message.",
             );
@@ -947,7 +943,9 @@ export function useChatTurnExecution({
           if (isFocusedSend)
             setComposerTrigger(detectComposerTrigger(promptForSend, promptForSend.length));
         }
-        if (!setupCancelled) {
+        // A handoff refused by the source's background tasks is explained by
+        // the composer notice, which also offers to stop them.
+        if (!setupCancelled && !(err instanceof ProviderHandoffBackgroundTasksError)) {
           setThreadError(
             threadIdForSend,
             err instanceof Error ? err.message : "Failed to send message.",
