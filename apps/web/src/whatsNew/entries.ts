@@ -22,6 +22,108 @@ import type { WhatsNewEntry } from "./logic";
 
 export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
   {
+    version: "1.0.9-beta.1",
+    date: "Oct 23",
+    features: [
+      {
+        id: "native-editor",
+        title: "An intelligent native editor in Synara Beta",
+        description:
+          "The Code OSS editor engine brings TypeScript and JavaScript completion, diagnostics, navigation, references, rename, quick fixes and refactors into Synara\u2019s existing editing surfaces.",
+        details:
+          "JSON, CSS and HTML retain language-worker features. Other languages retain editing and highlighting. The shared native buffer owns autosave, conflicts and undo; large lightweight previews retain their fallback. Stable keeps the previous editor. There is no extension host or alternate IDE workbench.",
+      },
+      {
+        id: "javascript-debugger",
+        title: "Launch or attach a JavaScript debugger",
+        description:
+          "Set breakpoints, step through code, inspect variables and watches, and read debugger output inside Beta.",
+        details:
+          "Launching runs trusted workspace code and downloads the checksum-pinned Microsoft JavaScript debugger on first use. Attach is limited to a Node inspector on the server machine\u2019s loopback interface. TypeScript entry points depend on native Node support; browser debugging, TSX and launch.json recipes are not included.",
+      },
+      {
+        id: "handoff-recovery",
+        title: "More dependable provider handoffs",
+        description:
+          "Send, Continue task and Implement use the same handoff path; queued messages follow the provider and model the chat now uses.",
+        details:
+          "Auto access-mode saves preserve pending switches. Background tasks still require an explicit stop before a switch can replace their runtime. Failed switches retain the source session.",
+      },
+      {
+        id: "codex-context",
+        title: "Recover Codex context and see runtime warnings",
+        description:
+          "A fresh session after a failed native resume receives the saved conversation context, including handoffs made before a first rollout exists.",
+        details:
+          "Recovery notices disclose omitted or shortened messages. Native Codex warnings appear in chat, and plugin catalog discovery stays isolated from live sessions. Retired gateway write credentials are renewed rather than reused.",
+      },
+      {
+        id: "hubs-routing",
+        title: "Hubs keep requests and follow-ups together",
+        description:
+          "Hub routing preserves original requests and attachments, gives delegated work stable task keys and avoids duplicate workers across retries.",
+        details:
+          "Coordinator and worker context have distinct roles and source labels. Ordinary follow-ups queue without interrupting; steering is reserved for immediate corrections. Non-Git workers can settle, and settings remain saveable after pausing or resuming.",
+      },
+      {
+        id: "subagent-work",
+        title: "Follow Devin background work and running agents",
+        description:
+          "Devin background work and subagents retain their task identity, permission ownership and state across native replay and session recovery.",
+        details:
+          "Running subagents appear above the composer. Orphaned agent tasks settle instead of remaining active indefinitely, and Claude child chats show the model reported by the child runtime.",
+      },
+      {
+        id: "live-diffs",
+        title: "Review complete captured changes while a turn runs",
+        description:
+          "Turn diffs can show the latest captured file-tool snapshot and complete Codex cumulative patches before completion.",
+        details:
+          "Previews use a captured baseline and exact patch revision, survive reconnects and retain Ignore whitespace. Unavailable or incomplete evidence is reported rather than reconstructed from later edits. Untracked nested repositories no longer prevent ordinary working-tree diffs.",
+      },
+      {
+        id: "workspace-controls",
+        title: "New chats and project actions stay close to your workspace",
+        description:
+          "The + after the chat tabs creates a new thread in the same workspace. Environment gains shared controls to create and edit project actions.",
+        details:
+          "Header actions are grouped, with visibility settings for Environment actions, Hand off and header actions. Cmd/Ctrl+W closes the focused chat tab or dock terminal; closing a chat tab does not stop its agent.",
+      },
+      {
+        id: "navigation-focus",
+        title: "Keep your place and keyboard focus",
+        description:
+          "Done and Archive choose the next chat within the active Space. Activity grouping survives remounts and reloads.",
+        details:
+          "New-chat creation validates the live sidebar target and preserves workspace defaults. Window activation, composer updates and terminal activation retain the control you selected. Large process tables no longer prevent idle terminal reuse; input is preserved as shell commands start.",
+      },
+      {
+        id: "desktop-refinements",
+        title: "Better Safari setup and Hyprland translucency",
+        description:
+          "Safari setup recognizes an existing Full Disk Access grant. Hyprland can back the translucent shell with compositor blur when blur is confirmed enabled.",
+        details:
+          "Other Linux sessions keep their existing window backing. Linux app artwork is installed per flavor so Stable and Beta icons stay separate. An unanswered Computer Use foreground prompt is reported as cancelled.",
+      },
+      {
+        id: "idle-resources",
+        title: "Release idle simulator and database resources safely",
+        description:
+          "Agent-booted simulators are released after owned work settles, while renewed and overlapping use retains its lease. SQLite reclaims deleted free pages conservatively.",
+        details:
+          "Simulator cleanup respects ownership. Existing databases may attempt a bounded rebuild after clean shutdown when free-space and disk-space thresholds permit; insufficient space or time defers it. Stopped Pi and Antigravity sessions recover through the normal next-turn path.",
+      },
+      {
+        id: "since-last-beta",
+        title: "All reliability work since the previous Beta",
+        description:
+          "Includes the 1.0.6 and 1.0.7 improvements to long conversations, parallel streams, provider model controls, live workspace refreshes and session recovery.",
+        details:
+          "Message edits retain a recovery snapshot before rollback. Devin and Grok model changes take effect on reload, stopped OpenCode sessions recover, and Beta connectors reuse rotated credentials on retry. Connectors remain Beta-only; all app identities, data homes and update feeds stay separate.",
+      },
+    ],
+  },
+  {
     version: "1.0.8",
     date: "Oct 23",
     features: [

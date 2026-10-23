@@ -1,5 +1,32 @@
 # Changelog
 
+## 1.0.9-beta.1 — 2026-10-23
+
+**Native editor intelligence and JavaScript debugging, plus the complete reliability work since Beta 1.0.6-beta.1.**
+
+This Beta includes all 57 commits after `v1.0.6-beta.1` through shared feature source `f9ba953a6a26769bf73c78c2bae673e5a09ba62f`, plus the reviewed 1.0.8 release documentation. Its version commit stays off `main`. Native editor, connectors and diagnostics remain Beta-only; Stable keeps its existing editing engine and refuses editor RPCs. Neither app shares the other's identity, home or update feed.
+
+### Added
+
+- The Code OSS native editing engine provides TypeScript/JavaScript completion, signature help, hover, definitions, references, symbols, rename, diagnostics, text-only quick fixes/refactors, formatting, organize imports and inlay hints. JSON, CSS and HTML retain language-worker features; other languages retain editing and highlighting. Existing native document buffers own autosave, conflicts and undo across file, diff and preview surfaces. Large lightweight previews retain their fallback; no extension host or alternate workbench is added.
+- JavaScript debugging launches a trusted workspace entry or attaches to a Node inspector on the server machine's loopback interface. Breakpoints, stepping, scopes, variables, watches, console and output use Microsoft's checksum-pinned standalone debugger, downloaded on explicit first use. TypeScript execution depends on native Node support. Browser debugging, TSX, interactive stdin, remote inspector hosts and launch.json recipes are outside this release.
+
+### Changed
+
+- Includes Stable 1.0.8's Hub role provenance, original requests and idempotent task keys, Devin background/subagent ownership, captured live turn diffs, workspace actions, navigation, keyboard focus, Hyprland translucency and bounded simulator/storage maintenance. See the complete 1.0.8 entry below.
+- Since the previous Beta, 1.0.6/1.0.7 reduce repeated history, Git, usage and rendering work in long conversations and parallel streams. Claude controls follow installed CLI metadata; incomplete model discovery cannot replace a full durable catalog. Full saved conversation history remains available.
+
+### Fixed
+
+- Includes the complete 1.0.8 handoff and Codex recovery fixes, runtime warnings, retired gateway credentials, Hub non-Git completion, Space-scoped navigation, terminal reuse and Safari access detection.
+- Includes prior Stable recovery snapshots before message-edit rollback, Devin/Grok model changes on reload, OpenCode stopped-session recovery, missing-working-directory errors and bounded Windows teardown observation. Beta connector retries reuse a valid rotated token and report unsuccessful OpenCode installation. Connectors were already present in the previous Beta and are not presented as new.
+
+### Verification
+
+Shared source was prepared and checked as Stable 1.0.8; this Beta has its own final version/lockfile, brand, formatting, lint, typecheck, release smoke and focused gate tests. One separate publication workflow on the exact Beta tag SHA must pass all quality/server shards, portable/native builds, provenance, macOS signing/notarization and Intel startup, plus Windows Defender/startup under the exact `1.0.9-beta.1` unsigned exception. Public evidence is recorded after completion; Stable's workflow is not Beta qualification.
+
+See [source audit](docs/releases/1.0.8-source-audit.md) and [editor capabilities and limits](docs/editor/intelligence.md). Multi-file saves are independently checked, not transactional; debugger stop requires verified process exit. Manual installation/upgrades, browser-download reputation and live provider/microphone behavior remain separately unqualified.
+
 ## 1.0.8 — 2026-10-23
 
 **Reliable handoffs and recovery, clearer parallel work, captured live diffs and workspace refinements.**
