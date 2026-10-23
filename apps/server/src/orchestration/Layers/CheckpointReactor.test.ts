@@ -323,7 +323,11 @@ function createRetainingPiProviderServiceLayer(options?: {
           steerSubagent: () => unsupported(),
         }),
         Layer.succeed(CursorAdapter, adapterFor("cursor")),
-        Layer.succeed(DevinAdapter, adapterFor("devin")),
+        Layer.succeed(DevinAdapter, {
+          ...adapterFor("devin"),
+          stopTask: () => unsupported(),
+          backgroundTask: () => unsupported(),
+        }),
         Layer.succeed(AntigravityAdapter, adapterFor("antigravity")),
         Layer.succeed(GrokAdapter, adapterFor("grok")),
         Layer.succeed(DroidAdapter, adapterFor("droid")),
