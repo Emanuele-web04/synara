@@ -5065,17 +5065,14 @@ export const makeProjectAgentService = Effect.gen(function* () {
         // Every thread in a hub gets the group's instructions and memory;
         // unmanaged threads outside hubs get nothing. The role also decides
         // which sections the packet may carry.
-        const role: HubContextPacketRole | null =
-          principal.kind === "coordinator"
-            ? "coordinator"
-            : principal.kind === "worker"
-              ? "worker"
-              : principal.kind === "group-member"
-                ? "group-member"
-                : null;
-        if (role === null) {
+        if (
+          principal.kind !== "coordinator" &&
+          principal.kind !== "worker" &&
+          principal.kind !== "group-member"
+        ) {
           return "";
         }
+        const role: HubContextPacketRole = principal.kind;
         const isCoordinator = role === "coordinator";
         const config = yield* repository
           .getConfig(principal.projectId)
