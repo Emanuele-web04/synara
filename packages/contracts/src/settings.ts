@@ -46,6 +46,9 @@ export const CodexServerProviderSettings = Schema.Struct({
   ...ProviderSettingsBase,
   binaryPath: StringSetting.pipe(Schema.withDecodingDefault(() => "codex")),
   homePath: StringSetting.pipe(Schema.withDecodingDefault(() => "")),
+  launchArgs: Schema.String.check(Schema.isMaxLength(4096)).pipe(
+    Schema.withDecodingDefault(() => ""),
+  ),
   accounts: CodexAccountConfigs,
   selectedAccountId: CodexAccountId.pipe(
     Schema.withDecodingDefault(() => DEFAULT_CODEX_ACCOUNT_ID),
@@ -225,6 +228,7 @@ export const ServerSettingsPatch = Schema.Struct({
         Schema.Struct({
           ...ProviderSettingsBasePatch,
           homePath: Schema.optionalKey(StringSetting),
+          launchArgs: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(4096))),
           accounts: Schema.optionalKey(CodexAccountConfigs),
           selectedAccountId: Schema.optionalKey(CodexAccountId),
         }),
