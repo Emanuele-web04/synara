@@ -8,6 +8,7 @@ import {
   PROVIDER_DISPLAY_NAMES,
   type ProviderKind,
   type SidechatExpiry,
+  type ThreadAutoArchive,
 } from "@synara/contracts";
 import { GROUPS_ON, VISIBLE_PROVIDER_DESCRIPTORS } from "../betaFeatures";
 import { sameAppSnapShortcut } from "@synara/shared/appSnapShortcut";
@@ -212,6 +213,13 @@ const SIDECHAT_EXPIRY_OPTIONS = [
   { value: "24h", label: "24 hours" },
   { value: "never", label: "Never" },
 ] as const satisfies ReadonlyArray<{ value: SidechatExpiry; label: string }>;
+
+const THREAD_AUTO_ARCHIVE_OPTIONS = [
+  { value: "7d", label: "7 days" },
+  { value: "14d", label: "14 days" },
+  { value: "30d", label: "30 days" },
+  { value: "never", label: "Never" },
+] as const satisfies ReadonlyArray<{ value: ThreadAutoArchive; label: string }>;
 
 const GITHUB_LINK_OPEN_TARGET_LABELS = {
   app: "In Synara",
@@ -532,6 +540,7 @@ function SettingsRouteView() {
       : []),
     ...(settings.followUpBehavior !== defaults.followUpBehavior ? ["Follow-up behavior"] : []),
     ...(settings.sidechatExpiry !== defaults.sidechatExpiry ? ["Side chat expiry"] : []),
+    ...(settings.threadAutoArchive !== defaults.threadAutoArchive ? ["Archive idle threads"] : []),
     ...(settings.voiceEnterBehavior !== defaults.voiceEnterBehavior
       ? ["Enter while dictating"]
       : []),
@@ -1455,6 +1464,31 @@ function SettingsRouteView() {
               onValueChange={(value) => updateSettings({ sidechatExpiry: value })}
               ariaLabel="Side chat expiry"
               options={SIDECHAT_EXPIRY_OPTIONS}
+            />
+          }
+        />
+
+        <SettingsRow
+          title="Archive idle threads"
+          description="Archive a thread after it sits idle for this long. Pinned, snoozed, running and automation threads are never archived, and archived threads can be restored."
+          resetAction={
+            settings.threadAutoArchive !== defaults.threadAutoArchive ? (
+              <SettingResetButton
+                label="archive idle threads"
+                onClick={() =>
+                  updateSettings({
+                    threadAutoArchive: defaults.threadAutoArchive,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <SettingsSegmentedControl
+              value={settings.threadAutoArchive}
+              onValueChange={(value) => updateSettings({ threadAutoArchive: value })}
+              ariaLabel="Archive idle threads"
+              options={THREAD_AUTO_ARCHIVE_OPTIONS}
             />
           }
         />

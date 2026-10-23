@@ -61,6 +61,15 @@ describe("rankSettingsSearchEntries", () => {
     expect(titles("dictating")).toContain("Enter while dictating");
     expect(titles("diff colors")).toContain("Pull request diff colors");
     expect(titles("enabled providers")).toContain("Enabled providers");
+    expect(titles("auto-archive")).toContain("Archive idle threads");
+    expect(titles("don't ask again")).toContain("Ask before resuming a long idle session");
+  });
+
+  it("routes the cache preference search to the existing provider panel", () => {
+    const [entry] = rankSettingsSearchEntries("don't ask me again", 12);
+    expect(entry?.id).toBe("providers:claude-cache-confirmation");
+    expect(entry?.section).toBe("providers");
+    expect(settingsSearchEntryTarget(entry!)).toBeNull();
   });
 
   it("finds the Fold finished turns and Wait for subagents rows", () => {
