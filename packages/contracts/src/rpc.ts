@@ -2314,6 +2314,10 @@ export type WsFeatureRpc =
   | typeof WsProjectsSearchLocalEntriesRpc
   | typeof WsProjectsSearchContentRpc
   | typeof WsProjectsPrewarmSearchIndexRpc
+  | typeof WsEditorIntelligenceRpc
+  | typeof WsEditorDebugStartRpc
+  | typeof WsEditorDebugActionRpc
+  | typeof WsEditorDebugPollRpc
   | typeof WsProjectsReadFileRpc
   | typeof WsProjectsSubscribeFileChangeRpc
   | typeof WsProjectsResolveWorkspaceFileReferencesRpc
