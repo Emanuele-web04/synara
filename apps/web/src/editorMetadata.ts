@@ -31,8 +31,9 @@ import {
   XcodeIcon,
   Zed,
 } from "./components/Icons";
+import { resolveFileManagerName } from "./lib/fileManagerNaming";
 import { AppsIcon, FolderIcon } from "./lib/icons";
-import { isMacPlatform, isWindowsPlatform } from "./lib/utils";
+import { isMacPlatform } from "./lib/utils";
 import { resolveWsHttpUrl } from "./lib/wsHttpUrl";
 
 export interface EditorOption {
@@ -119,7 +120,7 @@ function resolveNativeEditorIcon(editorId: EditorId): Icon {
 // duplicating the editor list across multiple UI components.
 export function resolveEditorLabel(editorId: EditorId, platform: string): string {
   if (editorId === "file-manager") {
-    return isMacPlatform(platform) ? "Finder" : isWindowsPlatform(platform) ? "Explorer" : "Files";
+    return resolveFileManagerName(platform);
   }
 
   if (editorId === "system-default") {

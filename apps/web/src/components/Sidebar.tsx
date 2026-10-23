@@ -448,6 +448,8 @@ import {
   DISCLOSURE_INNER_CLASS,
 } from "~/lib/disclosureMotion";
 import { createClientPointMenuAnchor } from "~/lib/clientPointMenuAnchor";
+import { showFileManagerErrorToast } from "~/lib/fileManagerErrorToast";
+import { resolveFileManagerActionLabel } from "~/lib/fileManagerNaming";
 import {
   canCreateThreadHandoff,
   canContinueThreadHandoff,
@@ -590,7 +592,7 @@ const DebugFeatureFlagsMenu = import.meta.env.DEV
   : null;
 
 type ProjectContextMenuId =
-  | "open-in-finder"
+  | "open-in-file-manager"
   | "open-in-kanban"
   | "copy-path"
   | "relocate"
@@ -4160,18 +4162,11 @@ export default function Sidebar() {
       const project = projectById.get(projectId);
       if (!project) return;
 
-      if (clicked === "open-in-finder") {
+      if (clicked === "open-in-file-manager") {
         try {
           await api.shell.showInFolder(project.cwd);
         } catch (error) {
-          toastManager.add({
-            type: "error",
-            title: "Unable to open in Finder",
-            description:
-              error instanceof Error
-                ? error.message
-                : "An unknown error occurred opening the folder.",
-          });
+          showFileManagerErrorToast({ kind: "folder", error });
         }
         return;
       }
@@ -7701,12 +7696,12 @@ export default function Sidebar() {
                 onClick={() =>
                   void handleProjectContextMenuAction(
                     projectContextMenuState.projectId,
-                    "open-in-finder",
+                    "open-in-file-manager",
                   )
                 }
               >
                 <ProjectContextMenuIcon icon={FolderOpenIcon} />
-                <span>Open in Finder</span>
+                <span>{resolveFileManagerActionLabel("folder")}</span>
               </MenuItem>
               <MenuItem
                 className={PROJECT_CONTEXT_MENU_ITEM_CLASS_NAME}
