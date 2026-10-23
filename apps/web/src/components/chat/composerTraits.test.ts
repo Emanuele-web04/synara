@@ -5,6 +5,7 @@ import {
   planComposerEffortChange,
   planComposerEffortCycle,
   resolveComposerEffortLadderIndex,
+  resolveComposerTraitStatusLabel,
 } from "./composerTraits";
 
 describe("planComposerEffortCycle", () => {
@@ -210,6 +211,76 @@ describe("planComposerEffortChange", () => {
     expect(
       planComposerEffortChange({ provider: "codex", selection: free, prompt: "", value: "" }),
     ).toBeNull();
+  });
+});
+
+describe("Devin Fusion pairing selection", () => {
+  const FUSION_RUNTIME_MODEL = {
+    slug: "fusion",
+    name: "Fusion",
+    modelVariants: [
+      {
+        model: "fusion-claude-fable-5-1-high-sidekick-swe-2-medium",
+        label: "Fusion (Claude Fable 5.1 High + SWE-2 Medium)",
+        reasoningEffort: "medium",
+        fastMode: false,
+      },
+      {
+        model: "fusion-gpt-6-sol-xhigh-sidekick-glm-5-2",
+        label: "Fusion (GPT-6 Sol Extra High Thinking + GLM-5.2)",
+        reasoningEffort: "xhigh",
+        fastMode: false,
+      },
+    ],
+  };
+
+  it("exposes the pairing and reports the pinned variant as the status label", () => {
+    const selection = getComposerTraitSelection(
+      "devin",
+      "fusion",
+      "",
+      undefined,
+      FUSION_RUNTIME_MODEL,
+    );
+    expect(selection.pairing).not.toBeNull();
+    expect(selection.pairingVariantUid).toBeNull();
+    expect(selection.pairingLabel).toBe("Default");
+
+    const pinned = getComposerTraitSelection(
+      "devin",
+      "fusion",
+      "",
+      {
+        modelVariant: "fusion-gpt-6-sol-xhigh-sidekick-glm-5-2",
+      },
+      FUSION_RUNTIME_MODEL,
+    );
+    expect(pinned.pairingVariantUid).toBe("fusion-gpt-6-sol-xhigh-sidekick-glm-5-2");
+    expect(pinned.pairingLabel).toBe("GPT-6 Sol Extra High Thinking + GLM-5.2");
+    expect(resolveComposerTraitStatusLabel(pinned)).toBe("GPT-6 Sol Extra High Thinking + GLM-5.2");
+  });
+
+  it("drops a pinned variant that does not belong to the family", () => {
+    const selection = getComposerTraitSelection(
+      "devin",
+      "fusion",
+      "",
+      {
+        modelVariant: "fusion-unknown-lead-high-sidekick-swe-2-medium",
+      },
+      FUSION_RUNTIME_MODEL,
+    );
+    expect(selection.pairingVariantUid).toBeNull();
+    expect(selection.pairingLabel).toBe("Default");
+  });
+
+  it("exposes no pairing for ordinary Devin models", () => {
+    const selection = getComposerTraitSelection("devin", "swe-2", "", {
+      modelVariant: "fusion-claude-fable-5-1-high-sidekick-swe-2-medium",
+    });
+    expect(selection.pairing).toBeNull();
+    expect(selection.pairingVariantUid).toBeNull();
+    expect(selection.pairingLabel).toBeNull();
   });
 });
 
