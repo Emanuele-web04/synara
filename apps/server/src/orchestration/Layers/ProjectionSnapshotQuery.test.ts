@@ -977,6 +977,15 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
               assistantMessageId: asMessageId("message-1"),
               completedAt: "2026-02-24T00:00:08.000Z",
             },
+            {
+              turnId: asTurnId("turn-placeholder"),
+              checkpointTurnCount: 2,
+              checkpointRef: asCheckpointRef("provider-diff:placeholder"),
+              status: "missing",
+              files: [],
+              assistantMessageId: null,
+              completedAt: "2026-02-24T00:00:07.500Z",
+            },
           ],
           session: {
             threadId: ThreadId.makeUnsafe("thread-1"),

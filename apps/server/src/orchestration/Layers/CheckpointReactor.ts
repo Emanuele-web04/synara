@@ -1071,6 +1071,33 @@ const make = Effect.fnUntraced(function* (options?: CheckpointReactorLiveOptions
       return;
     }
 
+    // A ready/null session can mean either settled work or ingestion lagging a
+    // new turn. Fence by this exact turn, never by an ancestor's ready status.
+    const persistedTurn = yield* projectionTurnRepository.getByTurnId({
+      threadId: thread.id,
+      turnId,
+    });
+    if (
+      Option.isSome(persistedTurn) &&
+      (persistedTurn.value.completedAt !== null ||
+        persistedTurn.value.state === "completed" ||
+        persistedTurn.value.state === "interrupted" ||
+        persistedTurn.value.state === "error")
+    )
+      return;
+    // This independent consumer can observe terminal capture failure before
+    // ingestion projects it. Reuse the indexed journal owner at capture cadence.
+    const terminalEvents = yield* runtimeRepository
+      .readThreadEvents({
+        threadId: thread.id,
+        turnId,
+        throughSequenceInclusive: yield* runtimeRepository.getHighWaterSequence,
+        eventTypes: ["turn.completed", "turn.aborted"],
+        limit: 1,
+      })
+      .pipe(Effect.orDie);
+    if (terminalEvents.length > 0) return;
+
     // Never override a real (non-placeholder) checkpoint already captured for
     // this turn by the terminal turn.completed path.
     const existingForTurn = checkpoints.find((checkpoint) => checkpoint.turnId === turnId);

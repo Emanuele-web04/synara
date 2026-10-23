@@ -448,7 +448,9 @@ the strongest boundary for important changes.
 
 For providers whose live changes Synara captures from Git, an individual **Turn** diff can show
 its latest completed file-tool snapshot before the turn finishes. It updates when the next snapshot
-is published, preserves Ignore whitespace, and switches to the final checkpoint after capture succeeds.
+is published, survives reconnects, preserves Ignore whitespace, and switches to the final checkpoint
+after capture succeeds, including interrupted turns with a captured exact baseline. A failed terminal
+capture retains the last preview; later events cannot recapture work for the settled turn.
 It does not read uncaptured worktree edits on demand. Streamed provider patches and **All turns**
 remain dependent on completed checkpoints; a live preview is not proof that a turn finished.
 
