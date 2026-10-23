@@ -2377,6 +2377,9 @@ describe("ChatView transcript geometry (full app)", () => {
       groupsWorkspaceRoot: null,
     });
     document.body.innerHTML = "";
+    // A native pointer left by the prior fixture can open the next sidebar's
+    // hover card and intercept transcript clicks. Park it before mounting.
+    await userEvent.hover(document.body, { position: { x: 0, y: 0 } });
     wsRequests.length = 0;
     useComposerDraftStore.setState({
       draftsByThreadId: {},
