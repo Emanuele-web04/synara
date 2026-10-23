@@ -216,6 +216,7 @@ const HOT_PATH_MODULES: readonly HotPathModule[] = [
     allowedBailoutReasons: ["Cannot access refs during render"],
   },
   { relativePath: "chat/TimelineWorkEntryRow.tsx", allowedBailoutReasons: [] },
+  { relativePath: "chat/InlineVisualFrame.tsx", allowedBailoutReasons: [] },
   { relativePath: "chat/ChatTranscriptPane.tsx", allowedBailoutReasons: [] },
   // The composer surface: these three render or re-render on keystrokes while a
   // picker or the slash-command menu is open.

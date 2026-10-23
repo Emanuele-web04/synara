@@ -15,6 +15,8 @@ import {
 } from "./runningChatsQuitGuard";
 
 const IPC = DESKTOP_IPC_CHANNELS;
+// Live computerPreview.onFrame listeners in this renderer.
+let computerPreviewListenerCount = 0;
 
 function getDesktopWsUrl(): string | null {
   try {
@@ -191,8 +193,17 @@ contextBridge.exposeInMainWorld("desktopBridge", {
       };
 
       ipcRenderer.on(IPC.computerPreviewFrame, wrappedListener);
+      // A frame listener is the preview's demand signal: the main process runs
+      // the native capture helper only while this window has one.
+      computerPreviewListenerCount += 1;
+      if (computerPreviewListenerCount === 1) ipcRenderer.send(IPC.computerPreviewSubscribe);
+      let released = false;
       return () => {
+        if (released) return;
+        released = true;
         ipcRenderer.removeListener(IPC.computerPreviewFrame, wrappedListener);
+        computerPreviewListenerCount -= 1;
+        if (computerPreviewListenerCount === 0) ipcRenderer.send(IPC.computerPreviewUnsubscribe);
       };
     },
   },

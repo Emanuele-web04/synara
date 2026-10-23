@@ -235,24 +235,40 @@ const layer = it.layer(
 );
 
 layer("Hub work creation saga", (it) => {
-  for (const explicit of [undefined, "approval-required"] as const) {
-    it.effect(`uses ${explicit ?? "inherited Auto"} approval for Hub workers`, () =>
-      Effect.gen(function* () {
-        const fixture = yield* makeFixture(`mode-${explicit}`, "auto");
-        const result = yield* fixture.handler(
-          {
-            ...INPUT,
-            threads: [{ ...INPUT.threads[0]!, ...(explicit ? { runtimeMode: explicit } : {}) }],
-          },
-          { ...fixture.context, inheritedRuntimeMode: "auto" } as GatewayCreationContext,
-        );
-        assert.notEqual(result.isError, true);
-        const expected = explicit ?? "auto";
-        const create = fixture.commands.find((command) => command.type === "thread.create");
-        const start = fixture.commands.find((command) => command.type === "thread.turn.start");
-        assert.equal(create?.runtimeMode, expected);
-        assert.equal(start?.runtimeMode, expected);
-      }),
+  for (const { target, explicit, expected } of [
+    { target: TARGET, explicit: undefined, expected: "auto" },
+    { target: TARGET, explicit: "approval-required", expected: "approval-required" },
+    {
+      target: { provider: "devin", model: TARGET.model },
+      explicit: undefined,
+      expected: "approval-required",
+    },
+    {
+      target: { provider: "claudeAgent", model: TARGET.model },
+      explicit: undefined,
+      expected: "approval-required",
+    },
+  ] as const) {
+    it.effect(
+      `uses ${expected} for ${target.provider} Hub workers with ${explicit ?? "inherited Auto"}`,
+      () =>
+        Effect.gen(function* () {
+          const fixture = yield* makeFixture(`mode-${target.provider}-${explicit}`, "auto");
+          const result = yield* fixture.handler(
+            {
+              ...INPUT,
+              threads: [
+                { ...INPUT.threads[0]!, target, ...(explicit ? { runtimeMode: explicit } : {}) },
+              ],
+            },
+            { ...fixture.context, inheritedRuntimeMode: "auto" } as GatewayCreationContext,
+          );
+          assert.notEqual(result.isError, true);
+          const create = fixture.commands.find((command) => command.type === "thread.create");
+          const start = fixture.commands.find((command) => command.type === "thread.turn.start");
+          assert.equal(create?.runtimeMode, expected);
+          assert.equal(start?.runtimeMode, expected);
+        }),
     );
   }
 

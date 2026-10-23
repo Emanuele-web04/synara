@@ -1,7 +1,7 @@
 // FILE: ComposerColumnFrame.tsx
-// Purpose: Shared composer column wrapper and the stacked-activity rail that must
-// live inside it (queued follow-ups, active plan/task activity). Keeps stacked panels
-// aligned with the composer input instead of the full gutter viewport.
+// Purpose: Shared composer column wrapper and the stacked rail that must live inside it
+// (queued follow-ups). Keeps stacked panels aligned with the composer input instead of the
+// full gutter viewport.
 // Layer: Chat composer layout
 // Exports: ComposerColumnFrame, ComposerStackedHeaderFrame
 
@@ -52,8 +52,6 @@ export const ComposerColumnFrame = function ComposerColumnFrame({
 interface ComposerStackedHeaderFrameProps extends HTMLAttributes<HTMLDivElement> {
   children: ReactNode;
   ref?: Ref<HTMLDivElement> | undefined;
-  /** Lets clicks pass through the side margins to the transcript underneath. */
-  passthroughSideMargins?: boolean;
 }
 
 /** Full-width rail for panels stacked flush above the composer input. */
@@ -61,26 +59,12 @@ export const ComposerStackedHeaderFrame = memo(function ComposerStackedHeaderFra
   children,
   className,
   ref,
-  passthroughSideMargins: passthroughSideMarginsProp,
   ...rest
 }: ComposerStackedHeaderFrameProps) {
-  const passthroughSideMargins = passthroughSideMarginsProp ?? false;
   useComposerColumnFrameContext("ComposerStackedHeaderFrame");
 
-  const frameClassName = cn(COMPOSER_STACKED_HEADER_FRAME_CLASS_NAME, className);
-
-  if (passthroughSideMargins) {
-    return (
-      <div data-composer-stacked-wrapper className="pointer-events-none w-full">
-        <div ref={ref} className={cn("pointer-events-auto", frameClassName)} {...rest}>
-          {children}
-        </div>
-      </div>
-    );
-  }
-
   return (
-    <div ref={ref} className={frameClassName} {...rest}>
+    <div ref={ref} className={cn(COMPOSER_STACKED_HEADER_FRAME_CLASS_NAME, className)} {...rest}>
       {children}
     </div>
   );

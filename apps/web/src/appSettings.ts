@@ -414,6 +414,7 @@ export const AppSettingsSchema = Schema.Struct({
   // When false, the desktop chat header shows the plain thread title instead of the
   // open-thread tab strip.
   showOpenThreadTabs: Schema.Boolean.pipe(withDefaults(() => true)),
+  showAsciiBackground: Schema.Boolean.pipe(withDefaults(() => true)),
   confirmThreadDelete: Schema.Boolean.pipe(withDefaults(() => true)),
   // Opt-in: archiving a task also releases its worktree when nothing else uses it.
   archiveDeletesOrphanedWorktree: Schema.Boolean.pipe(withDefaults(() => false)),
@@ -579,6 +580,8 @@ export const AppSettingsSchema = Schema.Struct({
   sidebarThreadSortOrder: SidebarThreadSortOrder.pipe(
     withDefaults(() => DEFAULT_SIDEBAR_THREAD_SORT_ORDER),
   ),
+  // With "updated_at" order, float working and unread chats above the rest.
+  sidebarThreadAttentionFirst: Schema.Boolean.pipe(withDefaults(() => true)),
   timestampFormat: TimestampFormat.pipe(withDefaults(() => DEFAULT_TIMESTAMP_FORMAT)),
   customCodexModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),
   customClaudeModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),

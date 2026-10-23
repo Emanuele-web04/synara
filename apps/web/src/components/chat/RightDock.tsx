@@ -427,6 +427,7 @@ export function RightDock(props: RightDockProps) {
                   )}
                   aria-hidden={isVisible ? undefined : true}
                   inert={isVisible ? undefined : true}
+                  data-dock-pane-id={pane.id}
                   data-native-browser-surface={
                     pane.kind === "browser" && isActive && runtimeMode === "live"
                       ? "true"

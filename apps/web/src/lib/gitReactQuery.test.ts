@@ -19,7 +19,9 @@ import {
   gitRunStackedActionMutationOptions,
   refreshGitActionAvailability,
   refreshGitQueriesForCwd,
+  refreshGitQueriesForCwdsAfterActivity,
   refreshGitWorkingTreeDiffsForCwd,
+  refreshLocalGitQueriesForCwdsAfterActivity,
   refreshGitAfterFileWrite,
 } from "./gitReactQuery";
 
@@ -435,6 +437,124 @@ describe("git query invalidation", () => {
     await detailsRefresh;
     expect(calls).toEqual(["status", "stats", "status", "patch"]);
     for (const unsubscribe of unsubscribes) unsubscribe();
+  });
+});
+
+describe("activity-driven git refresh", () => {
+  it("refreshes each checkout at most once per window and still reads the final state", async () => {
+    vi.useFakeTimers();
+    const queryClient = new QueryClient();
+    const fetchedCwds: string[] = [];
+    const observe = (cwd: string) =>
+      new QueryObserver(queryClient, {
+        queryKey: gitQueryKeys.status(cwd),
+        queryFn: async () => {
+          fetchedCwds.push(cwd);
+          return {};
+        },
+        staleTime: Number.POSITIVE_INFINITY,
+      }).subscribe(() => undefined);
+    const unsubscribers = [observe("/repo/a"), observe("/repo/b")];
+    const fetchCount = (cwd: string) => fetchedCwds.filter((entry) => entry === cwd).length;
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      fetchedCwds.length = 0;
+
+      refreshGitQueriesForCwdsAfterActivity(queryClient, ["/repo/a"]);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(fetchedCwds).toEqual(["/repo/a"]);
+
+      // A burst of tool completions inside the window queues one trailing pass per
+      // checkout instead of one refresh per event.
+      for (let index = 0; index < 4; index += 1) {
+        refreshGitQueriesForCwdsAfterActivity(queryClient, ["/repo/a", "/repo/b"]);
+        await vi.advanceTimersByTimeAsync(300);
+      }
+      expect(fetchCount("/repo/a")).toBe(1);
+      expect(fetchCount("/repo/b")).toBe(1);
+
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(fetchCount("/repo/a")).toBe(2);
+      expect(fetchCount("/repo/b")).toBe(2);
+
+      // Quiet afterwards: no further refresh runs on its own.
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(fetchedCwds).toHaveLength(4);
+    } finally {
+      for (const unsubscribe of unsubscribers) unsubscribe();
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe("local-only git refresh", () => {
+  const observeAll = (queryClient: QueryClient, cwd: string, calls: string[]) => {
+    const observe = (queryKey: readonly unknown[], label: string) => {
+      queryClient.setQueryData(queryKey, {});
+      return new QueryObserver(queryClient, {
+        queryKey,
+        queryFn: async () => {
+          calls.push(label);
+          return {};
+        },
+        staleTime: Number.POSITIVE_INFINITY,
+      }).subscribe(() => undefined);
+    };
+    return [
+      observe(gitQueryKeys.githubRepository(cwd), "github-repository"),
+      observe(gitQueryKeys.status(cwd), "status"),
+      observe([...gitQueryKeys.pullRequest(cwd), "feature"], "pull-request"),
+      observe(gitQueryKeys.workingTreeDiffStats(cwd, "unstaged"), "stats"),
+    ];
+  };
+
+  it("leaves GitHub repository and pull-request reads to turn-level refreshes", async () => {
+    const queryClient = new QueryClient();
+    const cwd = "/repo/local-only";
+    const calls: string[] = [];
+    const unsubscribes = observeAll(queryClient, cwd, calls);
+
+    await refreshGitQueriesForCwd(queryClient, cwd, "active-details", "local");
+    expect(calls).toEqual(["status", "stats"]);
+    expect(queryClient.getQueryState(gitQueryKeys.githubRepository(cwd))?.isInvalidated).toBe(
+      false,
+    );
+
+    calls.length = 0;
+    await refreshGitQueriesForCwd(queryClient, cwd);
+    expect(calls.toSorted()).toEqual(["github-repository", "pull-request", "stats", "status"]);
+    for (const unsubscribe of unsubscribes) unsubscribe();
+  });
+
+  it("widens a queued local refresh when a full refresh joins it", async () => {
+    const queryClient = new QueryClient();
+    const cwd = "/repo/upgraded";
+    const calls: string[] = [];
+    const unsubscribes = observeAll(queryClient, cwd, calls);
+
+    const local = refreshGitQueriesForCwd(queryClient, cwd, "active-details", "local");
+    const full = refreshGitQueriesForCwd(queryClient, cwd);
+    await Promise.all([local, full]);
+
+    expect(full).toBe(local);
+    expect(calls.toSorted()).toEqual(["github-repository", "pull-request", "stats", "status"]);
+    for (const unsubscribe of unsubscribes) unsubscribe();
+  });
+
+  it("drives tool-activity refreshes without remote reads", async () => {
+    vi.useFakeTimers();
+    const queryClient = new QueryClient();
+    const cwd = "/repo/tool-activity";
+    const calls: string[] = [];
+    const unsubscribes = observeAll(queryClient, cwd, calls);
+    try {
+      refreshLocalGitQueriesForCwdsAfterActivity(queryClient, [cwd]);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(calls).toEqual(["status", "stats"]);
+    } finally {
+      for (const unsubscribe of unsubscribes) unsubscribe();
+      vi.useRealTimers();
+    }
   });
 });
 

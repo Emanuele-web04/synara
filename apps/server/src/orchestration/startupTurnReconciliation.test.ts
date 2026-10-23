@@ -2,10 +2,12 @@ import { Effect, Option } from "effect";
 import { OrchestrationEngineService } from "./Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "./Services/ProjectionSnapshotQuery.ts";
 import { ProjectionPendingInteractionRepository } from "../persistence/Services/ProjectionPendingInteractions.ts";
+import { ProviderSessionRuntimeRepository } from "../persistence/Services/ProviderSessionRuntime.ts";
 import { ApprovalRequestId, EventId, MessageId, ThreadId, TurnId } from "@synara/contracts";
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  findRestartOrphanedTasks,
   planRestartTurnReconciliation,
   reconcileRestartStuckTurns,
   type ReconcilablePendingInteraction,
@@ -726,6 +728,117 @@ describe("planRestartTurnReconciliation", () => {
   });
 });
 
+describe("findRestartOrphanedTasks", () => {
+  const BOOT = "2026-06-13T09:00:30.000Z";
+  const task = (
+    id: string,
+    kind: string,
+    payload: Record<string, unknown>,
+    sequence: number,
+    turnId?: string,
+  ) => ({
+    ...makeActivity(id, kind, payload as never, sequence),
+    ...(turnId ? { turnId: TurnId.makeUnsafe(turnId) } : {}),
+  });
+
+  it("keeps tasks opened before boot that never ended", () => {
+    expect(
+      findRestartOrphanedTasks(
+        [
+          task(
+            "a",
+            "task.started",
+            { taskId: "agent", toolUseId: "toolu_agent", workflowTaskId: "wf" },
+            1,
+            "turn-1",
+          ),
+          task("b", "task.started", { taskId: "done" }, 2),
+          task("c", "task.completed", { taskId: "done", status: "completed" }, 3),
+          task("d", "task.started", { taskId: "paused" }, 4),
+          task("e", "task.updated", { taskId: "paused", status: "paused" }, 5),
+          task("f", "task.updated", { taskId: "moved", isBackgrounded: true }, 6),
+          task(
+            "g",
+            "runtime.warning",
+            {
+              nativeEventType: "background_tasks_changed",
+              data: { tasks: [{ task_id: "noticed", task_type: "local_bash" }] },
+            },
+            7,
+          ),
+        ],
+        BOOT,
+      ),
+    ).toEqual([
+      {
+        taskId: "agent",
+        toolUseId: "toolu_agent",
+        workflowTaskId: "wf",
+        turnId: TurnId.makeUnsafe("turn-1"),
+      },
+      { taskId: "moved", turnId: null },
+      { taskId: "noticed", turnId: null },
+    ]);
+  });
+
+  it("leaves work started by this process alone", () => {
+    expect(
+      findRestartOrphanedTasks(
+        [{ ...task("a", "task.started", { taskId: "live" }, 1), createdAt: BOOT }],
+        BOOT,
+      ),
+    ).toEqual([]);
+  });
+
+  it("does not name the launching call of a task re-listed after it ended", () => {
+    expect(
+      findRestartOrphanedTasks(
+        [
+          task("a", "task.started", { taskId: "agent", toolUseId: "toolu_agent" }, 1),
+          task("b", "task.completed", { taskId: "agent", status: "completed" }, 2),
+          task(
+            "c",
+            "runtime.warning",
+            {
+              nativeEventType: "background_tasks_changed",
+              data: { tasks: [{ task_id: "agent" }] },
+            },
+            3,
+          ),
+        ],
+        BOOT,
+      ),
+    ).toEqual([{ taskId: "agent", turnId: null }]);
+  });
+
+  it("plans one stopped end per orphaned task only when asked to", () => {
+    const thread = makeThread("orphan-tasks", {
+      session: makeSession("orphan-tasks", { status: "ready", activeTurnId: null }),
+      latestTurn: { state: "completed" },
+      activities: [task("a", "task.started", { taskId: "agent", toolUseId: "toolu_agent" }, 1)],
+    });
+    expect(planRestartTurnReconciliation({ threads: [thread], now: NOW })).toEqual([]);
+    expect(
+      planRestartTurnReconciliation({
+        threads: [thread],
+        now: NOW,
+        retireTasksStartedBefore: BOOT,
+      }),
+    ).toEqual([
+      expect.objectContaining({
+        type: "thread.activity.append",
+        threadId: thread.id,
+        activity: expect.objectContaining({
+          kind: "task.completed",
+          summary: "Task stopped",
+          payload: { taskId: "agent", status: "stopped", toolUseId: "toolu_agent" },
+          sequence: 2,
+        }),
+      }),
+    ]);
+  });
+});
+
 describe("reconcileRestartStuckTurns selection", () => {
   it.each(["uncertain"] as const)(
     "finds %s callbacks on completed threads even with false summary flags",
@@ -761,6 +874,9 @@ describe("reconcileRestartStuckTurns selection", () => {
           Effect.provideService(ProjectionSnapshotQuery, { getThreadDetailById } as never),
           Effect.provideService(ProjectionPendingInteractionRepository, {
             listUnsettled: () => Effect.succeed([row]),
+          } as never),
+          Effect.provideService(ProviderSessionRuntimeRepository, {
+            list: () => Effect.succeed([]),
           } as never),
         ),
       );

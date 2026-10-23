@@ -6,6 +6,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { cleanup, render } from "vitest-browser-react";
 import { useDockExplorerBrowseStore } from "../../dockExplorerBrowseStore";
 import { DockExplorerPane } from "./DockExplorerPane";
+import { monaco } from "../codeEditor/editorRuntime";
 
 let restore: (() => void) | undefined;
 afterEach(async () => {
@@ -15,7 +16,7 @@ afterEach(async () => {
 });
 async function mount() {
   // The lightweight editor accepts native textarea input; persistence is the
-  // same shared session used by Pierre and by the full-screen/diff editors.
+  // same shared session used by the intelligent file and diff editors.
   const writeFile = vi.fn().mockResolvedValue({ relativePath: "a.ts", version: "sha256:saved" });
   const readFile = vi
     .fn<NativeApi["projects"]["readFile"]>()
@@ -49,11 +50,14 @@ async function mount() {
     <QueryClientProvider
       client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}
     >
-      <DockExplorerPane
-        threadId={ThreadId.makeUnsafe("autosave")}
-        workspaceRoot="/repo"
-        isVisible
-      />
+      {/* The fixture must provide the dimensions normally owned by the dock. */}
+      <div style={{ width: 1_000, height: 560, display: "flex" }}>
+        <DockExplorerPane
+          threadId={ThreadId.makeUnsafe("autosave")}
+          workspaceRoot="/repo"
+          isVisible
+        />
+      </div>
     </QueryClientProvider>,
   );
   await page.getByTitle("a.ts", { exact: true }).click();
@@ -99,9 +103,25 @@ it("waits for the last edits before switching files", async () => {
     }),
   );
   await page.getByTitle("a.ts", { exact: true }).click();
+  // The saved document is now small, so reopening uses the intelligent editor.
+  // Its accessible input is not the document; inspect the real model and rows.
+  await expect.element(page.getByRole("textbox", { name: "Edit a.ts" })).toBeInTheDocument();
+  const reopened = () =>
+    monaco.editor.getEditors().find((candidate) => {
+      const uri = candidate.getModel()?.uri;
+      return uri?.scheme === "synara-workspace" && uri.path === "/a.ts";
+    });
+  await expect.poll(() => reopened()?.getValue()).toBe("newest edit");
+  // Monaco renders ordinary spaces as NBSPs; the model assertion above must
+  // remain exact so a real change to the saved text cannot pass unnoticed.
   await expect
-    .element(page.getByRole("textbox", { name: "Edit a.ts" }))
-    .toHaveTextContent("newest edit");
+    .poll(() =>
+      reopened()
+        ?.getDomNode()
+        ?.querySelector(".view-lines")
+        ?.textContent?.replaceAll("\u00a0", " "),
+    )
+    .toContain("newest edit");
 });
 
 it("keeps the current file and its draft when a switch encounters a save failure", async () => {
@@ -109,7 +129,9 @@ it("keeps the current file and its draft when a switch encounters a save failure
   writeFile.mockRejectedValue(new Error("Permission denied"));
   await editor.fill("keep this draft");
   await page.getByTitle("b.ts", { exact: true }).click();
-  await expect.element(page.getByRole("alert")).toHaveTextContent("Permission denied");
+  const failure = page.getByText("Permission denied", { exact: true });
+  await expect.element(failure).toBeVisible();
+  expect(failure.element().closest('[role="alert"]')).not.toBeNull();
   await expect.element(editor).toHaveValue("keep this draft");
   await expect.element(page.getByRole("textbox", { name: "Edit b.ts" })).not.toBeInTheDocument();
 });

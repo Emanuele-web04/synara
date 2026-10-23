@@ -21,6 +21,8 @@ import {
   type ExternalMcpIntegration,
   type ExternalMcpRefreshPairingInput,
   type ExternalMcpRevokeIntegrationInput,
+  type McpConnectorConnectInput,
+  type McpConnectorDisconnectInput,
   type ThreadId,
   type ThreadBrowserState,
   type GitActionProgressEvent,
@@ -585,6 +587,18 @@ export function createWsNativeApi(): NativeApi {
       close: (input) => transport.request(WS_METHODS.terminalClose, input),
       onEvent: terminalEventListeners.subscribe,
     },
+    editor: {
+      debugStart: (input, options) =>
+        transport.request(WS_METHODS.editorDebugStart, input, {
+          ...(options?.signal ? { signal: options.signal } : {}),
+        }),
+      debugAction: (input) => transport.request(WS_METHODS.editorDebugAction, input),
+      debugPoll: (input) => transport.request(WS_METHODS.editorDebugPoll, input),
+      intelligence: (input, options) =>
+        transport.request(WS_METHODS.editorIntelligence, input, {
+          ...(options?.signal ? { signal: options.signal } : {}),
+        }),
+    },
     projects: {
       discoverScripts: (input) => transport.request(WS_METHODS.projectsDiscoverScripts, input),
       listDirectories: (input) => transport.request(WS_METHODS.projectsListDirectories, input),
@@ -773,6 +787,12 @@ export function createWsNativeApi(): NativeApi {
         transport.request(WS_METHODS.serverRevokeExternalMcpIntegration, input),
       refreshExternalMcpPairing: (input: ExternalMcpRefreshPairingInput) =>
         transport.request(WS_METHODS.serverRefreshExternalMcpPairing, input),
+      listMcpConnectors: () => transport.request(WS_METHODS.serverListMcpConnectors),
+      connectMcpConnector: (input: McpConnectorConnectInput) =>
+        transport.request(WS_METHODS.serverConnectMcpConnector, input),
+      disconnectMcpConnector: (input: McpConnectorDisconnectInput) =>
+        transport.request(WS_METHODS.serverDisconnectMcpConnector, input),
+      getMcpConnectorSetup: () => transport.request(WS_METHODS.serverGetMcpConnectorSetup),
       // Claude runs sequential CLI and auth probes, so a refresh can exceed the
       // generic 60-second RPC deadline. Keep this bounded while allowing slow
       // probes to finish; onboarding shows an error if this deadline expires.
@@ -859,6 +879,8 @@ export function createWsNativeApi(): NativeApi {
         }),
       repairState: () => transport.request(ORCHESTRATION_WS_METHODS.repairState),
       getTurnDiff: (input) => transport.request(ORCHESTRATION_WS_METHODS.getTurnDiff, input),
+      getInlineVisual: (input) =>
+        transport.request(ORCHESTRATION_WS_METHODS.getInlineVisual, input),
       getFullThreadDiff: (input) =>
         transport.request(ORCHESTRATION_WS_METHODS.getFullThreadDiff, input),
       replayEvents: (fromSequenceExclusive, threadId) =>

@@ -40,6 +40,54 @@ describe("deriveSubagentTaskEnds", () => {
       previous: { outcome: "completed", endedAt: firstEnd.createdAt },
     });
   });
+
+  it("resolves an end that names only its task through the open task's start", () => {
+    const started = makeActivity({
+      id: "started",
+      kind: "task.started",
+      createdAt: "2026-10-10T00:00:01Z",
+      payload: { taskId: "task-bg", toolUseId: "toolu_bg" },
+    });
+    const stopped = makeActivity({
+      id: "stopped",
+      kind: "task.completed",
+      createdAt: "2026-10-10T00:05:00Z",
+      payload: { taskId: "task-bg", status: "stopped" },
+    });
+    expect(deriveSubagentTaskEnds([started, stopped]).get("toolu_bg")).toEqual({
+      outcome: "stopped",
+      endedAt: stopped.createdAt,
+    });
+
+    // A late stop for a task that already ended does not overwrite its outcome.
+    const completed = makeActivity({
+      id: "completed",
+      kind: "task.completed",
+      createdAt: "2026-10-10T00:02:00Z",
+      payload: { taskId: "task-bg", toolUseId: "toolu_bg", status: "completed" },
+    });
+    expect(deriveSubagentTaskEnds([started, completed, stopped]).get("toolu_bg")).toEqual({
+      outcome: "completed",
+      endedAt: completed.createdAt,
+    });
+
+    const anonymous = makeActivity({
+      id: "anonymous",
+      kind: "task.started",
+      createdAt: "2026-10-10T00:00:01Z",
+      payload: { taskId: "task-bash" },
+    });
+    expect(
+      deriveSubagentTaskEnds([
+        anonymous,
+        makeActivity({
+          id: "bash-done",
+          kind: "task.completed",
+          payload: { taskId: "task-bash", status: "completed" },
+        }),
+      ]).size,
+    ).toBe(0);
+  });
 });
 
 describe("deriveWorkLogEntries", () => {
@@ -270,6 +318,42 @@ describe("deriveWorkLogEntries", () => {
     const timeline = deriveTimelineEntries([], [], entries);
     expect(timeline).toHaveLength(1);
     expect(timeline[0]?.kind).toBe("work");
+  });
+
+  it("reuses unchanged entry objects across passes over the same activities", () => {
+    const activities = [
+      makeActivity({
+        id: "read-completed",
+        sequence: 1,
+        kind: "tool.completed",
+        summary: "Read file",
+        turnId: "turn-1",
+        payload: { itemType: "dynamic_tool_call", data: { toolCallId: "read", toolName: "Read" } },
+      }),
+      makeActivity({
+        id: "command-completed",
+        sequence: 2,
+        kind: "tool.completed",
+        summary: "Ran checks",
+        turnId: "turn-1",
+        payload: {
+          itemType: "command_execution",
+          data: { toolCallId: "checks", command: "bun run lint" },
+        },
+      }),
+    ];
+    // A streamed text flush rebuilds the visible-turn Set with the same members.
+    const derive = () =>
+      deriveWorkLogEntries(activities, TurnId.makeUnsafe("turn-1"), {
+        visibleTurnIds: new Set([TurnId.makeUnsafe("turn-1")]),
+      });
+    const first = derive();
+    const second = derive();
+
+    expect(first).toHaveLength(2);
+    expect(second).toEqual(first);
+    second.forEach((entry, index) => expect(entry).toBe(first[index]));
+    expect(first[0]).not.toHaveProperty("collapseKey");
   });
 
   it("omits routine approval resolutions between tool lifecycle updates", () => {
@@ -669,6 +753,30 @@ describe("deriveWorkLogEntries", () => {
         turnId: "turn-bg",
         payload: { taskId, status, detail },
       });
+    const turnCompleted = (at: string) =>
+      makeActivity({
+        id: `turn-bg-completed-${at}`,
+        createdAt: at,
+        kind: "turn.completed",
+        summary: "Turn completed",
+        tone: "info",
+        turnId: "turn-bg",
+        payload: { state: "completed" },
+      });
+    const monitorEvent = (id: string, at: string) =>
+      makeActivity({
+        id,
+        createdAt: at,
+        kind: "runtime.warning",
+        summary: "Monitor event",
+        tone: "info",
+        turnId: "turn-bg",
+        payload: {
+          message: "CI checks: pass",
+          nativeEventType: "monitor_event",
+          data: { type: "system", subtype: "monitor_event", task_id: "monitor-ci", name: "CI" },
+        },
+      });
     const options = { visibleTurnIds: new Set([TurnId.makeUnsafe("turn-bg")]) };
 
     it("replaces the launch call and notice with one running row", () => {
@@ -738,6 +846,7 @@ describe("deriveWorkLogEntries", () => {
           taskStarted("task-a", "toolu_a", "2026-10-10T00:15:20.301Z"),
           taskStarted("task-b", "toolu_b", "2026-10-10T00:15:20.302Z"),
           taskStarted("task-c", "toolu_c", "2026-10-10T00:15:20.303Z"),
+          turnCompleted("2026-10-10T00:15:20.400Z"),
           taskCompleted(
             "task-a",
             "completed",
@@ -769,7 +878,8 @@ describe("deriveWorkLogEntries", () => {
         ["stopped", null, "2026-10-10T00:16:14.403Z"],
       ]);
       // No "Moved to background" notice and no launch command row remain; the
-      // completions stay only as the boundary of the response they wake.
+      // completions, which arrive after the turn ended, stay only as the
+      // boundary of the response they wake.
       expect(entries.some((entry) => entry.nativeEventType === "background_tasks_changed")).toBe(
         false,
       );
@@ -778,6 +888,43 @@ describe("deriveWorkLogEntries", () => {
           .filter((entry) => entry.backgroundTaskCompletion)
           .map((entry) => entry.backgroundTaskCompletion?.outcome),
       ).toEqual(["failed", "finished", "stopped"]);
+    });
+
+    it("treats completions and Monitor events inside a working turn as updates, not wake-ups", () => {
+      const entries = deriveWorkLogEntries(
+        [
+          launchCall("launch-a", "toolu_a", "bun run dev", "2026-10-10T00:15:20.000Z"),
+          notice("moved", [["task-a", "dev server"]], "2026-10-10T00:15:20.100Z"),
+          taskStarted("task-a", "toolu_a", "2026-10-10T00:15:20.101Z"),
+          monitorEvent("monitor-mid-turn", "2026-10-10T00:15:30.000Z"),
+          // The agent stops its own server before the turn ends.
+          launchCall("stop", "toolu_stop", "kill 123", "2026-10-10T00:16:00.000Z"),
+          taskCompleted(
+            "task-a",
+            "failed",
+            'Background command "dev server" failed with exit code 143',
+            "2026-10-10T00:16:00.500Z",
+          ),
+          turnCompleted("2026-10-10T00:16:10.000Z"),
+          monitorEvent("monitor-after-turn", "2026-10-10T00:17:00.000Z"),
+        ],
+        undefined,
+        options,
+      );
+      // The task's own row still settles in place.
+      expect(entries.find((entry) => entry.id === "launch-a")?.backgroundTask).toMatchObject({
+        status: "failed",
+        exitCode: 143,
+      });
+      expect(entries.some((entry) => entry.backgroundTaskCompletion)).toBe(false);
+      expect(
+        entries
+          .filter((entry) => entry.monitorNotification)
+          .map((entry) => [entry.id, entry.monitorNotification?.midTurn ?? false]),
+      ).toEqual([
+        ["monitor-mid-turn", true],
+        ["monitor-after-turn", false],
+      ]);
     });
 
     it("anchors the row at the notice when the launching call is not visible", () => {
@@ -1783,6 +1930,44 @@ describe("deriveWorkLogEntries", () => {
       detail: "3 notices - Provider request failed; retrying.",
       preview: "3 notices - Provider request failed; retrying.",
     });
+  });
+
+  it("keeps thread-level runtime warnings visible alongside turn-scoped messages", () => {
+    const currentTurn = TurnId.makeUnsafe("current-turn");
+    const activities = [
+      makeActivity({
+        id: "thread-warning",
+        kind: "runtime.warning",
+        tone: "info",
+        payload: {
+          message: "Automatic approval review is unavailable.",
+          nativeEventType: "codex.guardianWarning",
+        },
+      }),
+      makeActivity({
+        id: "old-turn-warning",
+        kind: "runtime.warning",
+        tone: "info",
+        turnId: "old-turn",
+        payload: { message: "Earlier turn warning" },
+      }),
+      makeActivity({ id: "turnless-tool", kind: "tool.completed", tone: "tool" }),
+      makeActivity({
+        id: "unrelated-thread-warning",
+        kind: "runtime.warning",
+        tone: "info",
+        payload: { message: "Other provider notice", nativeEventType: "other-provider" },
+      }),
+    ];
+    for (const visibleTurnIds of [undefined, new Set([currentTurn])]) {
+      const entries = deriveWorkLogEntries(
+        activities,
+        currentTurn,
+        visibleTurnIds ? { visibleTurnIds } : {},
+      );
+      expect(entries.map((entry) => entry.id)).toEqual(["thread-warning"]);
+      expect(entries[0]?.detail).toBe("Automatic approval review is unavailable.");
+    }
   });
 
   it("does not collapse identical runtime warnings across turn boundaries", () => {

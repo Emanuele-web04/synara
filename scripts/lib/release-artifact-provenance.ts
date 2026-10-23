@@ -4,6 +4,7 @@
 
 import { spawnSync } from "node:child_process";
 import { hashFile } from "./file-digest.ts";
+import { runMacCommand } from "./mac-notarization.ts";
 import { lstatSync, mkdtempSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -218,7 +219,11 @@ function verifyMacSignatures(
       );
     }
     runCommand("spctl", ["--assess", "--type", "execute", "--verbose=4", appBundlePath]);
-    runCommand("xcrun", ["stapler", "validate", appBundlePath]);
+    runMacCommand(
+      "xcrun",
+      ["stapler", "validate", appBundlePath],
+      "provenance-app-staple-validation",
+    );
 
     const diskImagePath = join(input.assetsDirectory, diskImage.fileName);
     runCommand("codesign", ["--verify", "--strict", "--verbose=4", diskImagePath]);
@@ -240,7 +245,11 @@ function verifyMacSignatures(
       "--verbose=4",
       diskImagePath,
     ]);
-    runCommand("xcrun", ["stapler", "validate", diskImagePath]);
+    runMacCommand(
+      "xcrun",
+      ["stapler", "validate", diskImagePath],
+      "provenance-dmg-staple-validation",
+    );
 
     return {
       status: "verified",

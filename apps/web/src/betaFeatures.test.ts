@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { PROVIDER_DESCRIPTORS } from "@synara/shared/providerMetadata";
 import { isBetaFeatureEnabled } from "@synara/shared/betaFeatures";
 
-import { visibleProviderDescriptors } from "./betaFeatures";
+import { codeEditorEngine, visibleProviderDescriptors } from "./betaFeatures";
 
 describe("visibleProviderDescriptors", () => {
   it("respects a disabled provider feature", () => {
@@ -19,5 +19,16 @@ describe("visibleProviderDescriptors", () => {
       isBetaFeatureEnabled(feature, "production"),
     );
     expect(visible).toEqual(PROVIDER_DESCRIPTORS);
+  });
+});
+
+describe("codeEditorEngine", () => {
+  it("keeps the Pierre engine on Stable and the native engine elsewhere", () => {
+    expect(codeEditorEngine((feature) => isBetaFeatureEnabled(feature, "production"))).toBe(
+      "pierre",
+    );
+    for (const flavor of ["beta", "canary", "development", "unknown"] as const) {
+      expect(codeEditorEngine((feature) => isBetaFeatureEnabled(feature, flavor))).toBe("native");
+    }
   });
 });

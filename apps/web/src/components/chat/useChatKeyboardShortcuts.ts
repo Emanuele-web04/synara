@@ -12,6 +12,7 @@ import { isMacNavigatorPlatform } from "~/lib/utils";
 import { projectScriptIdFromCommand } from "~/projectScripts";
 import { isElectron } from "../../env";
 import { resolveShortcutCommand } from "../../keybindings";
+import { focusedDockTerminalPaneId } from "../../hooks/useTerminalSurfaceController";
 import { isEditableEventTarget } from "../../lib/editableEventTarget";
 import { isTerminalFocused } from "../../lib/terminalFocus";
 import type { Project } from "../../types";
@@ -110,6 +111,8 @@ interface ChatKeyboardShortcutsInput {
     typeof useChatTerminalController
   >["closeActiveWorkspaceView"];
   setTerminalWorkspaceTab: ReturnType<typeof useChatTerminalController>["setTerminalWorkspaceTab"];
+  onCloseActiveThreadTab: () => boolean;
+  onCloseDockTerminalPane: (paneId: string) => void;
   onToggleDiff: () => void;
   commitAndPushTriggerRef: RefObject<(() => void) | null>;
   showGitActions: boolean;
@@ -162,6 +165,8 @@ export function useChatKeyboardShortcuts({
   openNewFullWidthTerminal,
   closeActiveWorkspaceView,
   setTerminalWorkspaceTab,
+  onCloseActiveThreadTab,
+  onCloseDockTerminalPane,
   onToggleDiff,
   commitAndPushTriggerRef,
   showGitActions,
@@ -350,6 +355,14 @@ export function useChatKeyboardShortcuts({
       if (command === "terminal.close") {
         event.preventDefault();
         event.stopPropagation();
+        // A dock-terminal pane in the regular chat layout runs under the dock's
+        // synthetic scope, so terminalOpen/activeTerminalId cannot reach it — the
+        // focused element identifies which dock pane owns the keydown.
+        const dockPaneId = focusedDockTerminalPaneId(activeThreadId);
+        if (dockPaneId !== null) {
+          void onCloseDockTerminalPane(dockPaneId);
+          return;
+        }
         if (!terminalState.terminalOpen) return;
         closeTerminal(terminalState.activeTerminalId);
         return;
@@ -389,6 +402,17 @@ export function useChatKeyboardShortcuts({
         event.stopPropagation();
         if (!terminalWorkspaceOpen) return;
         setTerminalWorkspaceTab("chat");
+        return;
+      }
+
+      // Regular chat surface (no terminal focus, no workspace): Cmd/Ctrl+W must not
+      // fall through to the window-close menu role — it closes the active thread tab.
+      // When no tab strip is mounted (tabs hidden, split view, editor rail) or the strip
+      // has no matching tab, leave the chord untouched instead of eating it.
+      if (command === "threadTab.close") {
+        if (!onCloseActiveThreadTab()) return;
+        event.preventDefault();
+        event.stopPropagation();
         return;
       }
 
@@ -506,6 +530,8 @@ export function useChatKeyboardShortcuts({
     isVoiceTranscribing,
     onVoiceRecordingEnter,
     setTerminalWorkspaceTab,
+    onCloseActiveThreadTab,
+    onCloseDockTerminalPane,
     surfaceMode,
     scheduleComposerFocus,
     toggleComposerFocus,

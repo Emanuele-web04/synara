@@ -94,10 +94,12 @@ export function getRuntimeAwareModelCapabilities(input: {
   const staticCapabilities = getModelCapabilities(input.provider, input.model);
   // Runtime discovery is authoritative when available; the static table is only a startup fallback.
   const supportsFastMode =
-    (input.provider === "codex" || input.provider === "cursor" || input.provider === "devin") &&
-    input.runtimeModel
-      ? input.runtimeModel.supportsFastMode === true
-      : staticCapabilities.supportsFastMode;
+    input.provider === "claudeAgent"
+      ? (input.runtimeModel?.supportsFastMode ?? staticCapabilities.supportsFastMode)
+      : (input.provider === "codex" || input.provider === "cursor" || input.provider === "devin") &&
+          input.runtimeModel
+        ? input.runtimeModel.supportsFastMode === true
+        : staticCapabilities.supportsFastMode;
   const supportsThinkingToggle =
     input.runtimeModel?.supportsThinkingToggle ?? staticCapabilities.supportsThinkingToggle;
   const contextWindowOptions =
@@ -108,10 +110,17 @@ export function getRuntimeAwareModelCapabilities(input: {
     })) ?? staticCapabilities.contextWindowOptions;
   const optionDescriptors =
     input.runtimeModel?.optionDescriptors ?? staticCapabilities.optionDescriptors;
-  const runtimeEfforts = input.runtimeModel?.supportedReasoningEfforts;
+  // Ignore the synthetic choice left in catalogs from the previous adapter.
+  const runtimeEfforts =
+    input.provider === "claudeAgent"
+      ? input.runtimeModel?.supportedReasoningEfforts?.filter(
+          (effort) => effort.value !== "default",
+        )
+      : input.runtimeModel?.supportedReasoningEfforts;
   // Providers with dynamic catalogs, including Droid, expose model-specific effort ladders here.
   if (
-    (input.provider !== "codex" &&
+    (input.provider !== "claudeAgent" &&
+      input.provider !== "codex" &&
       input.provider !== "cursor" &&
       input.provider !== "antigravity" &&
       input.provider !== "grok" &&
@@ -121,7 +130,7 @@ export function getRuntimeAwareModelCapabilities(input: {
       input.provider !== "devin" &&
       input.provider !== "omp") ||
     !runtimeEfforts ||
-    runtimeEfforts.length === 0
+    (runtimeEfforts.length === 0 && input.provider !== "claudeAgent")
   ) {
     return {
       ...staticCapabilities,
@@ -133,8 +142,11 @@ export function getRuntimeAwareModelCapabilities(input: {
   }
 
   const staticDefaultEffort = getDefaultEffort(staticCapabilities);
+  const reportedDefaultEffort = trimOrNull(input.runtimeModel?.defaultReasoningEffort);
   const runtimeDefaultEffort =
-    trimOrNull(input.runtimeModel?.defaultReasoningEffort) ??
+    (input.provider === "claudeAgent" && reportedDefaultEffort === "default"
+      ? null
+      : reportedDefaultEffort) ??
     (staticDefaultEffort && runtimeEfforts.some((effort) => effort.value === staticDefaultEffort)
       ? staticDefaultEffort
       : null);
@@ -166,5 +178,12 @@ export function getRuntimeAwareModelCapabilities(input: {
     supportsThinkingToggle,
     contextWindowOptions,
     reasoningEffortLevels: runtimeOptions,
+    ...(input.provider === "claudeAgent"
+      ? {
+          promptInjectedEffortLevels: staticCapabilities.promptInjectedEffortLevels.filter(
+            (value) => runtimeOptions.some((option) => option.value === value),
+          ),
+        }
+      : {}),
   };
 }

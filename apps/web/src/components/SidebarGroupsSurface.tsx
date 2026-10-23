@@ -19,7 +19,7 @@ import { cn } from "../lib/utils";
 import { useWorkspacePathsStore } from "../workspacePathsStore";
 
 import { resolveSidebarProjectRowLabel, type SidebarDerivedProjectData } from "./Sidebar.logic";
-import { ChatSortMenu } from "./Sidebar";
+import { ChatSortMenu, type ThreadSortMenuProps } from "./Sidebar";
 import { SidebarIconButton } from "./SidebarIconButton";
 import { SidebarLeadingIcon } from "./SidebarLeadingIcon";
 import { SidebarCollapsibleSection } from "./SidebarListSection";
@@ -63,12 +63,11 @@ import {
   SIDEBAR_PROJECT_NAME_CLASS_NAME,
   SIDEBAR_ROW_LABEL_TEXT_CLASS_NAME,
 } from "../sidebarRowStyles";
-import type { SidebarThreadSortOrder } from "../appSettings";
 
 // The hub row's hover toolbar holds two actions (pin, settings); only the truncating
 // name yields to it, so the trailing status fades in place instead of sliding.
 const HUB_ROW_TOOLBAR_RESERVE_CLASS_NAME =
-  "group-hover/project-header:pr-[3.25rem] group-has-[:focus-visible]/project-header:pr-[3.25rem]";
+  "group-hover/project-header:pr-[3.25rem] project-header-focus:pr-[3.25rem]";
 
 // Rename fires once per project per session; the effect re-runs on every snapshot
 // while the server has not yet echoed the new title. `inFlight` only dedupes the
@@ -89,8 +88,7 @@ export function SidebarGroupsSurface({
   projectSidebarDataById,
   threadsHydrated,
   visualActiveThreadId,
-  threadSortOrder,
-  onThreadSortOrderChange,
+  threadSortMenuProps,
   renderThreadRow,
   renderListSectionHeader,
   renderPinnedThreadsSection,
@@ -102,12 +100,10 @@ export function SidebarGroupsSurface({
   readonly projectSidebarDataById: ReadonlyMap<ProjectId, SidebarDerivedProjectData>;
   readonly threadsHydrated: boolean;
   readonly visualActiveThreadId: ThreadId | null;
-  readonly threadSortOrder: SidebarThreadSortOrder;
-  readonly onThreadSortOrderChange: (sortOrder: SidebarThreadSortOrder) => void;
+  readonly threadSortMenuProps: ThreadSortMenuProps;
   readonly renderThreadRow: (
     thread: SidebarThreadSummary,
     orderedProjectThreadIds: readonly ThreadId[],
-    depth?: number,
     topLevel?: boolean,
     projectContextLabel?: string,
   ) => ReactNode;
@@ -287,13 +283,7 @@ export function SidebarGroupsSurface({
       </SidebarGroup>
       <SidebarGroup className="px-1.5 py-1.5">
         {renderPinnedThreadsSection()}
-        {renderListSectionHeader(
-          "Hubs",
-          <ChatSortMenu
-            threadSortOrder={threadSortOrder}
-            onThreadSortOrderChange={onThreadSortOrderChange}
-          />,
-        )}
+        {renderListSectionHeader("Hubs", <ChatSortMenu {...threadSortMenuProps} />)}
         <SidebarMenu className="gap-3">
           {activeGroups.length > 0 ? (
             activeGroups.map((project) => {
@@ -476,7 +466,6 @@ export function SidebarGroupsSurface({
                           renderThreadRow(
                             entry.thread,
                             projectSidebarData?.orderedProjectThreadIds ?? [],
-                            entry.depth,
                             false,
                             entry.thread.projectId !== project.id
                               ? (projectLabelById.get(entry.thread.projectId) ?? undefined)
