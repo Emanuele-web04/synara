@@ -49,6 +49,8 @@ export interface ProviderRuntimeEventRepositoryShape {
     readonly limit: number;
     readonly turnId?: string;
     readonly eventTypes?: ReadonlyArray<string>;
+    /** Exact immutable revision lookup, using the journal's unique event identity. */
+    readonly eventId?: string;
   }) => Effect.Effect<
     ReadonlyArray<PersistedProviderRuntimeEvent>,
     ProviderRuntimeEventRepositoryError

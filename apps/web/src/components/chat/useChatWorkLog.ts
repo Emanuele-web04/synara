@@ -98,9 +98,16 @@ export function useChatWorkLog({
             rawWorkLogEntries,
             relevantWorkLogThreads,
             activeThread?.id ?? null,
+            threadActivities,
           )
         : rawWorkLogEntries,
-    [activeThread?.id, hasWorkLogSubagents, rawWorkLogEntries, relevantWorkLogThreads],
+    [
+      activeThread?.id,
+      hasWorkLogSubagents,
+      rawWorkLogEntries,
+      relevantWorkLogThreads,
+      threadActivities,
+    ],
   );
   // Preserve each launch position for timeline grouping; state-only updates and
   // progress attach to their owning invocation. The shared roster remains the

@@ -106,6 +106,7 @@ export function makeServerRuntimeServicesLayer(
   const checkpointDiffQueryLayer = CheckpointDiffQueryLive.pipe(
     Layer.provideMerge(OrchestrationLayerLive),
     Layer.provideMerge(checkpointStoreLayer),
+    Layer.provide(ProviderRuntimeEventRepositoryLive),
   );
 
   const runtimeServicesLayer = Layer.mergeAll(

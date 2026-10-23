@@ -75,7 +75,9 @@ Each message you send ends up in one of three places:
 - **Answered in place**: quick questions, status checks, and short explanations.
 - **Sent to an existing thread**: a follow-up for a thread already working in that area, instead
   of a duplicate.
-- **Started as new threads**: one thread per independent task, started in parallel.
+- **Started as new threads**: one thread per independent task, started in parallel. Each of these
+  gets a short task key, so a retry after a crash or a coordinator wake resumes the same task
+  instead of starting a second one (see [Task identity and retries](#task-identity-and-retries)).
 
 When a request could mean either "do it now" or "just suggest", the coordinator proposes a short
 list of suggested threads (title, repository, one-line brief) and waits for your confirmation.
@@ -99,6 +101,11 @@ conversation as part of its reply, each with a link to the thread.
 Inside a thread the coordinator started, the task is labelled with the hub, for example **Sent by
 the Release Synara coordinator**.
 Click it to go back to the coordinator conversation.
+
+Follow-ups to a running thread are **queued** by default: the thread finishes its current turn
+and reads the message next, and nothing is interrupted. The coordinator reserves **steering**
+for a correction that has to land immediately — it steers the live turn where the provider
+supports that, and otherwise stops the running turn so the follow-up runs next.
 
 Pending approvals from hub threads also appear above the coordinator's composer. Each card
 names the thread (click to open it), shows the command or tool request, and offers the same
@@ -152,6 +159,26 @@ and monitoring rows before the coordinator wakes, without duplicating them or re
 attempt’s report. Repository workers still wait for their checkpoint outcome. Repeating the same delegation after a coordinator wake reuses its saved task cards. An interrupted creation is reconciled conservatively;
 a failed creation remains visible instead of silently spawning a replacement. If cleanup cannot
 finish, the task retains its reserved slot until startup recovery confirms cleanup.
+
+### Task identity and retries
+
+Every delegated task has a key that identifies it inside its request: the Hub, the original human
+messages the request was decided from, and a short `taskKey` such as `login-fix`. The coordinator
+proposes the key; the Hub normalizes and freezes it with the first decision, and later retries are
+matched against that frozen decision:
+
+- retrying or restarting with the same key reuses the same task card and worker instead of creating
+  a second one, even from a new coordinator wake or after a crash;
+- reusing a key for a different plan is refused, so a regenerated key cannot quietly fork the work;
+- a new key from the same original message adds another task and leaves existing tasks untouched;
+- a task without a key keeps its original position as its identity, which is how earlier Hubs are
+  still replayed correctly.
+
+A per-turn limit applies only to genuinely new tasks, so a replay of work that is already stored
+still returns its cards instead of failing on the limit. Unkeyed requests follow the same rules, but
+a message can only carry the tasks of its original plan until the coordinator gives them keys.
+Use a new request ID when adding task keys: an existing request ID always refers to its original
+set of tasks. A replay returns only that request's cards, even if later requests added more work.
 
 The sidebar's attention indicator includes the Hub's owned workers in linked repositories and
 workers whose recovery needs your help. For a closed Hub, recovery attention refreshes on return
@@ -249,6 +276,16 @@ including threads in linked repositories, receives a context packet with:
 - The **MEMORY.md** index of shared hub memory
 - The list of **linked repositories** and the **Library** location
 - The hub's default thread model
+
+Each section of that packet names who wrote it — your instructions, Synara's own records, hub
+memory and decisions, a report from another thread, or Synara's role rules — and the packet
+states that only you grant authority. A memory note, decision, task description, or worker
+report is context: it never expands your authorized scope or authorizes spending or external actions on its own.
+
+The packet also follows the thread's role. A coordinator additionally gets its playbook, watch
+rules, worker roster, and worker reports; a worker or manual member thread gets its assignment
+and the shared hub context instead. Workers cannot route other threads; manual member threads retain ordinary user-directed tools. Your own edits to the
+playbook are kept as written — Synara only refreshes a playbook it authored itself.
 
 Edit these in hub settings → **Memory**:
 

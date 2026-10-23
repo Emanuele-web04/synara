@@ -26,6 +26,7 @@ import type {
   TerminalRuntimeViewState,
 } from "./terminalRuntimeTypes";
 import { matchesFixedShortcut } from "~/fixedShortcuts";
+import { hasOpenDismissibleOverlay } from "~/lib/editableEventTarget";
 import { TerminalSearch } from "../TerminalSearch";
 import { TerminalScrollToBottom } from "../TerminalScrollToBottom";
 
@@ -269,9 +270,17 @@ export default function TerminalViewport({
   }, [runtimeCwdReady, runtimeKey, runtimeViewState]);
 
   useEffect(() => {
-    if (!autoFocus || !runtimeCwdReady) return;
+    if (
+      !autoFocus ||
+      !isVisible ||
+      !runtimeCwdReady ||
+      !document.hasFocus() ||
+      hasOpenDismissibleOverlay(containerRef.current)
+    ) {
+      return;
+    }
     terminalRuntimeRegistry.focus(runtimeKey);
-  }, [autoFocus, focusRequestId, runtimeCwdReady, runtimeKey]);
+  }, [autoFocus, focusRequestId, isVisible, runtimeCwdReady, runtimeKey]);
 
   useEffect(() => {
     const mount = containerRef.current;

@@ -17,6 +17,7 @@ import {
   resolveThreadWorkspaceCwd,
 } from "../Utils.ts";
 import { CheckpointStore } from "../Services/CheckpointStore.ts";
+import { ProviderRuntimeEventRepository } from "../../persistence/Services/ProviderRuntimeEvents.ts";
 import {
   CheckpointDiffQuery,
   type CheckpointDiffQueryShape,
@@ -41,6 +42,7 @@ function buildTurnDiffResult(input: {
 const make = Effect.gen(function* () {
   const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
   const checkpointStore = yield* CheckpointStore;
+  const runtimeEvents = yield* ProviderRuntimeEventRepository;
 
   const getTurnDiff: CheckpointDiffQueryShape["getTurnDiff"] = (input) =>
     Effect.gen(function* () {
@@ -200,7 +202,51 @@ const make = Effect.gen(function* () {
               checkpointRef: toCheckpointRef,
             })
           : false;
-      if (toCheckpoint.status === "missing" && (!turnStartExists || !missingSnapshotExists)) {
+      let providerPatch: string | undefined;
+      if (isLiveSnapshot && turnStartExists && !missingSnapshotExists) {
+        const revisions = yield* runtimeEvents
+          .readThreadEvents({
+            threadId: input.threadId,
+            turnId: toCheckpoint.turnId,
+            eventId: toCheckpoint.checkpointRef.slice("provider-diff:".length),
+            eventTypes: ["turn.diff.updated"],
+            throughSequenceInclusive: yield* runtimeEvents.getHighWaterSequence,
+            limit: 1,
+          })
+          .pipe(Effect.catch(() => Effect.succeed([])));
+        const event = revisions[0]?.event;
+        const raw = event?.raw?.payload;
+        const truncated =
+          raw !== null &&
+          typeof raw === "object" &&
+          "synaraTruncated" in raw &&
+          raw.synaraTruncated === true;
+        // Codex cumulative patches are journal-owned. Other providers keep their
+        // existing captured-ref path; never substitute a newer/other-turn event.
+        const originalBytes =
+          raw !== null && typeof raw === "object" && "unifiedDiffBytes" in raw
+            ? raw.unifiedDiffBytes
+            : undefined;
+        if (
+          event?.type === "turn.diff.updated" &&
+          event.provider === "codex" &&
+          event.eventId === toCheckpoint.checkpointRef.slice("provider-diff:".length) &&
+          event.threadId === input.threadId &&
+          event.turnId === toCheckpoint.turnId &&
+          event.raw?.source === "codex.app-server.notification" &&
+          event.raw.method === "turn/diff/updated" &&
+          !truncated &&
+          typeof originalBytes === "number" &&
+          Number.isSafeInteger(originalBytes) &&
+          originalBytes === Buffer.byteLength(event.payload.unifiedDiff, "utf8")
+        ) {
+          providerPatch = event.payload.unifiedDiff;
+        }
+      }
+      if (
+        toCheckpoint.status === "missing" &&
+        (!turnStartExists || (!missingSnapshotExists && providerPatch === undefined))
+      ) {
         return yield* new CheckpointUnavailableError({
           threadId: input.threadId,
           turnCount: input.toTurnCount,
@@ -217,6 +263,7 @@ const make = Effect.gen(function* () {
         toCheckpointRef,
         fallbackFromToHead: false,
         ignoreWhitespace,
+        ...(providerPatch === undefined ? {} : { providerPatch }),
       });
 
       const turnDiff = buildTurnDiffResult({

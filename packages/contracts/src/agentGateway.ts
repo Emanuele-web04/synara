@@ -84,6 +84,14 @@ export const SynaraCreateThreadSpec = Schema.Struct({
   // External integrations need the "computer:control" scope; provider sessions
   // cannot delegate computer control to created threads.
   enableComputerControl: Schema.optional(Schema.Boolean),
+  // Proposed identity of one task inside a Hub request. The coordinator may
+  // propose it; the Hub routing service freezes the normalized key at the first
+  // persisted decision, so a retry reuses the same worker instead of creating a
+  // second one. Ignored outside Hubs.
+  taskKey: Schema.optional(Schema.String.check(Schema.isNonEmpty()).check(Schema.isMaxLength(128))),
+  // Short reason recorded with the routing decision and shown on the task card.
+  // It authorizes nothing and is not part of task identity.
+  routingReason: Schema.optional(Schema.String.check(Schema.isMaxLength(500))),
 });
 export type SynaraCreateThreadSpec = typeof SynaraCreateThreadSpec.Type;
 

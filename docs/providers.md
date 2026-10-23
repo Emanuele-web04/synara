@@ -101,6 +101,13 @@ and the final response. Reasoning items also end with their SDK message. Retries
 message items while the overall turn remains active until Pi settles. This applies to newly
 received messages; previously stored concatenated replies are not rewritten.
 
+Devin ACP subagents and background shells use the existing task and subagent controls. Their
+activity stays with the launching turn and child thread, including nested work that continues
+after the parent response ends. Stopping one task leaves the parent and sibling tasks running.
+A local stop remains subject to a later native completion; after restart, session replay can
+restore the original ownership and correct the recorded outcome. If native resume fails, Synara
+reports that the old task can no longer be tracked or controlled rather than claiming it completed.
+
 Claude's readable reasoning appears as compact progress text between tool actions while it works.
 Open a reasoning row to read its available detail. This text comes from the running provider;
 Synara does not make another model request to generate it. Models that do not return readable

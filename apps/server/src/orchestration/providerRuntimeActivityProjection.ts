@@ -982,6 +982,9 @@ export function projectProviderRuntimeActivities(
                 : "Task started",
           payload: toActivityPayload({
             taskId: event.payload.taskId,
+            ...(event.payload.interactionMode
+              ? { interactionMode: event.payload.interactionMode }
+              : {}),
             ...(event.payload.taskType ? { taskType: event.payload.taskType } : {}),
             ...(event.payload.subagentType ? { subagentType: event.payload.subagentType } : {}),
             ...(event.payload.workflowName ? { workflowName: event.payload.workflowName } : {}),
@@ -1062,6 +1065,9 @@ export function projectProviderRuntimeActivities(
                 : "Task completed",
           payload: toActivityPayload({
             taskId: event.payload.taskId,
+            ...(event.payload.interactionMode
+              ? { interactionMode: event.payload.interactionMode }
+              : {}),
             status: event.payload.status,
             ...(event.payload.toolUseId ? { toolUseId: event.payload.toolUseId } : {}),
             ...(event.payload.summary
@@ -1073,6 +1079,10 @@ export function projectProviderRuntimeActivities(
               : {}),
             ...(event.payload.workflowAgents
               ? { workflowAgents: event.payload.workflowAgents }
+              : {}),
+            ...(event.payload.reconcilesStop ? { reconcilesStop: true } : {}),
+            ...(event.payload.awaitingProviderConfirmation
+              ? { awaitingProviderConfirmation: true }
               : {}),
           }),
           turnId: toTurnId(event.turnId) ?? null,
@@ -1098,6 +1108,10 @@ export function projectProviderRuntimeActivities(
                   : "Task updated",
           payload: toActivityPayload({
             taskId: event.payload.taskId,
+            ...(event.payload.reconcilesStop ? { reconcilesStop: true } : {}),
+            ...(event.payload.interactionMode
+              ? { interactionMode: event.payload.interactionMode }
+              : {}),
             ...(event.payload.status ? { status: event.payload.status } : {}),
             ...(event.payload.isBackgrounded !== undefined
               ? { isBackgrounded: event.payload.isBackgrounded }

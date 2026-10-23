@@ -2631,7 +2631,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           AND checkpoint_turn_count IS NOT NULL
           AND (
             completed_at IS NOT NULL
-            OR (${includeLiveCheckpoints ?? false} AND checkpoint_status = 'missing'
+            OR (${includeLiveCheckpoints ? 1 : 0} AND checkpoint_status = 'missing'
               AND checkpoint_ref LIKE 'provider-diff:%')
           )
         ORDER BY checkpoint_turn_count ASC

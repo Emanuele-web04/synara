@@ -15,13 +15,17 @@ import { selectRightDockState, useRightDockStore } from "../rightDockStore";
 import { useStore } from "../store";
 import { dockTerminalThreadId } from "../lib/dockTerminalScope";
 import { afterEach, expect, it, vi } from "vitest";
-import { page } from "vitest/browser";
+import { page, userEvent } from "vitest/browser";
 import { render } from "vitest-browser-react";
 import ThreadTerminalDrawer from "./ThreadTerminalDrawer";
 import { terminalRuntimeRegistry } from "./terminal/terminalRuntimeRegistry";
 import { useTerminalStateStore } from "../terminalStateStore";
 import { closeTerminalSurface } from "../hooks/useTerminalSurfaceController";
 import { disposeAndCloseTerminalSession } from "./terminal/terminalSession";
+import TerminalViewport from "./terminal/TerminalViewport";
+import { Menu, MenuPopupBase, MenuTrigger } from "./ui/menu";
+import { PickerPanelShell } from "./chat/PickerPanelShell";
+import { Dialog, DialogPopup } from "./ui/dialog";
 
 const api = vi.hoisted(() => ({
   terminal: {
@@ -70,6 +74,98 @@ function panel(threadId: ThreadId, isVisible: boolean) {
     </div>
   );
 }
+
+it("keeps an open picker focused when the terminal becomes ready late", async () => {
+  const threadId = ThreadId.makeUnsafe("late-terminal-picker");
+  const onQueryChange = () => {};
+  const content = (cwd: string, focusRequestId = 0) => (
+    <div style={{ width: 720, height: 420 }}>
+      <Menu>
+        <MenuTrigger>Choose model</MenuTrigger>
+        <MenuPopupBase>
+          <PickerPanelShell
+            query=""
+            onQueryChange={onQueryChange}
+            searchPlaceholder="Search models"
+            autoFocusSearch
+          >
+            Model options
+          </PickerPanelShell>
+        </MenuPopupBase>
+      </Menu>
+      <TerminalViewport
+        threadId={threadId}
+        terminalId="default"
+        terminalLabel="Terminal"
+        cwd={cwd}
+        onSessionExited={vi.fn()}
+        onTerminalMetadataChange={vi.fn()}
+        onTerminalActivityChange={vi.fn()}
+        focusRequestId={focusRequestId}
+        autoFocus
+        isVisible
+      />
+    </div>
+  );
+  const view = await render(content(""));
+  try {
+    const trigger = page.getByRole("button", { name: "Choose model", exact: true });
+    await trigger.click();
+    const search = page.getByPlaceholder("Search models");
+    await expect.element(search).toHaveFocus();
+
+    await view.rerender(content("/tmp"));
+    await expect.poll(() => api.terminal.open.mock.calls.length).toBeGreaterThan(0);
+    for (let frame = 0; frame < 4; frame += 1) {
+      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+      expect(document.activeElement).toBe(search.element());
+      await expect.element(trigger).toHaveAttribute("aria-expanded", "true");
+    }
+    await userEvent.keyboard("{Escape}");
+    await expect.element(trigger).toHaveAttribute("aria-expanded", "false");
+    await expect.element(page.getByRole("menu")).not.toBeInTheDocument();
+
+    await view.rerender(content("/tmp", 1));
+    await expect.element(page.getByRole("textbox", { name: "Terminal input" })).toHaveFocus();
+  } finally {
+    await view.unmount();
+  }
+});
+
+it("still focuses a late-ready terminal inside its own authentication dialog", async () => {
+  const threadId = ThreadId.makeUnsafe("provider-auth:late-terminal");
+  const content = (cwd: string) => (
+    <Dialog defaultOpen>
+      <DialogPopup>
+        <div style={{ width: 720, height: 420 }}>
+          <TerminalViewport
+            threadId={threadId}
+            terminalId="default"
+            terminalLabel="Terminal"
+            cwd={cwd}
+            providerAuthInstanceId="test-auth"
+            onSessionExited={vi.fn()}
+            onTerminalMetadataChange={vi.fn()}
+            onTerminalActivityChange={vi.fn()}
+            focusRequestId={0}
+            autoFocus
+            isVisible
+          />
+        </div>
+      </DialogPopup>
+    </Dialog>
+  );
+  const view = await render(content(""));
+  try {
+    await expect.element(page.getByRole("dialog")).toBeVisible();
+    await view.rerender(content("/tmp"));
+    await expect.element(page.getByRole("textbox", { name: "Terminal input" })).toHaveFocus();
+  } finally {
+    await view.unmount();
+    // Authentication runtimes intentionally outlive ordinary chat cleanup.
+    terminalRuntimeRegistry.disposeThread(threadId);
+  }
+});
 
 it.each(["chat-panel", "dock-terminal:chat-panel"])(
   "keeps one interactive viewport across hide/show in %s",

@@ -508,6 +508,39 @@ layer("ProviderRuntimeEventRepository", (it) => {
         0,
       );
 
+      const exactRevision = yield* repository.readThreadEvents({
+        threadId: "thread-runtime-journal",
+        turnId: "turn-runtime-journal",
+        eventId: "runtime-event-1",
+        eventTypes: ["content.delta"],
+        throughSequenceInclusive: second.sequence,
+        limit: 1,
+      });
+      assert.deepStrictEqual(
+        exactRevision.map((row) => row.event.eventId),
+        ["runtime-event-1"],
+      );
+      assert.lengthOf(
+        yield* repository.readThreadEvents({
+          threadId: "other-thread",
+          turnId: "turn-runtime-journal",
+          eventId: "runtime-event-1",
+          throughSequenceInclusive: second.sequence,
+          limit: 1,
+        }),
+        0,
+      );
+      assert.lengthOf(
+        yield* repository.readThreadEvents({
+          threadId: "thread-runtime-journal",
+          turnId: "other-turn",
+          eventId: "runtime-event-1",
+          throughSequenceInclusive: second.sequence,
+          limit: 1,
+        }),
+        0,
+      );
+
       const skipped = yield* repository.advanceConsumerCursor({
         consumerName: PROVIDER_RUNTIME_INGESTION_CONSUMER,
         eventSequence: second.sequence,

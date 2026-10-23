@@ -1247,6 +1247,19 @@ const make = Effect.gen(function* () {
     if (key && fingerprint) {
       yield* Cache.set(latestActivityUpdateFingerprintByKey, key, fingerprint);
     }
+    if (
+      event.provider === "devin" &&
+      activity.kind === "tool.completed" &&
+      asObject(activity.payload)?.itemType === "collab_agent_tool_call"
+    ) {
+      // Native replay can confirm a locally stopped child is still running.
+      // Its identical pre-stop snapshot must reach the durable projection again.
+      const updateKey = providerActivityUpdateDedupeKey(event, threadId, {
+        ...activity,
+        kind: "tool.updated",
+      });
+      if (updateKey) yield* Cache.invalidate(latestActivityUpdateFingerprintByKey, updateKey);
+    }
   });
 
   const clearActivityUpdateFingerprints = Effect.fnUntraced(function* (threadId: ThreadId) {
@@ -3580,6 +3593,26 @@ const make = Effect.gen(function* () {
         });
       }
 
+      // A native subagent's resolved model (agent definition, env or tool input)
+      // only shows up in its own messages. Child threads only: the parent's
+      // model is the user's selection.
+      if (event.type === "thread.metadata.updated" && thread.id !== parentThread.id) {
+        const resolvedModel = event.payload.metadata?.model;
+        if (
+          thread.creationSource === "provider_native" &&
+          typeof resolvedModel === "string" &&
+          resolvedModel.length > 0 &&
+          resolvedModel !== thread.modelSelection.model
+        ) {
+          yield* orchestrationEngine.dispatch({
+            type: "thread.meta.update",
+            commandId: providerCommandId(event, "subagent-thread-model-update", thread.id),
+            threadId: thread.id,
+            modelSelection: { ...thread.modelSelection, model: resolvedModel },
+          });
+        }
+      }
+
       // A newer snapshot of this turn's cumulative diff later in the same journal
       // page supersedes this one (see coalesceProviderRuntimeProgress): skip the
       // patch parse and placeholder write, the survivor carries the newest files.
@@ -3625,9 +3658,10 @@ const make = Effect.gen(function* () {
               trackedPlaceholder?.files ??
               existingCheckpoint?.files ??
               [];
-            const checkpointRef =
-              livePlaceholder?.checkpointRef ??
-              CheckpointRef.makeUnsafe(`provider-diff:${event.eventId}`);
+            const checkpointRef = canParseLiveDiffPatch
+              ? CheckpointRef.makeUnsafe(`provider-diff:${event.eventId}`)
+              : (livePlaceholder?.checkpointRef ??
+                CheckpointRef.makeUnsafe(`provider-diff:${event.eventId}`));
             const checkpointTurnCount = livePlaceholder?.checkpointTurnCount ?? maxTurnCount + 1;
             // Leave assistantMessageId undefined on the placeholder: the real
             // capture performed by CheckpointReactor will resolve the actual

@@ -2989,6 +2989,101 @@ describe("ClaudeAdapterLive", () => {
     );
   });
 
+  it.effect("reports a subagent's resolved model once per distinct model", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+
+      const runtimeEventsFiber = yield* adapter.streamEvents.pipe(
+        Stream.takeUntil(
+          (event) =>
+            event.type === "turn.completed" && event.providerRefs?.providerThreadId === undefined,
+        ),
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+      const session = yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: "claudeAgent",
+        runtimeMode: "full-access",
+      });
+
+      yield* adapter.sendTurn({
+        threadId: session.threadId,
+        input: "delegate this",
+        attachments: [],
+      });
+
+      harness.query.emit({
+        type: "stream_event",
+        session_id: "sdk-session-subagent-model",
+        uuid: "stream-subagent-model-1",
+        parent_tool_use_id: null,
+        event: {
+          type: "content_block_start",
+          index: 0,
+          content_block: {
+            type: "tool_use",
+            id: "tool-task-model",
+            name: "Task",
+            input: {
+              description: "Review the database layer",
+              prompt: "Audit the SQL changes",
+              subagent_type: "code-reviewer",
+            },
+          },
+        },
+      } as unknown as SDKMessage);
+
+      const emitSubagentAssistant = (uuid: string, model: string) =>
+        harness.query.emit({
+          type: "assistant",
+          session_id: "sdk-session-subagent-model",
+          uuid,
+          parent_tool_use_id: "tool-task-model",
+          message: {
+            id: `message-${uuid}`,
+            model,
+            content: [{ type: "text", text: "Reviewing." }],
+            usage: { input_tokens: 10, output_tokens: 5 },
+          },
+        } as unknown as SDKMessage);
+      emitSubagentAssistant("assistant-subagent-model-1", "claude-haiku-5-5");
+      emitSubagentAssistant("assistant-subagent-model-2", "claude-haiku-5-5");
+      emitSubagentAssistant("assistant-subagent-model-3", "claude-haiku-5-5[1m]");
+      emitSubagentAssistant("assistant-subagent-model-4", "claude-sonnet-5-5[1m]");
+      emitSubagentAssistant("assistant-subagent-model-5", "<synthetic>");
+      emitSubagentAssistant("assistant-subagent-model-6", "");
+
+      harness.query.emit({
+        type: "result",
+        subtype: "success",
+        is_error: false,
+        errors: [],
+        session_id: "sdk-session-subagent-model",
+        uuid: "result-subagent-model-1",
+      } as unknown as SDKMessage);
+
+      const runtimeEvents = Array.from(yield* Fiber.join(runtimeEventsFiber));
+      const modelEvents = runtimeEvents.filter((event) => event.type === "thread.metadata.updated");
+      assert.deepEqual(
+        modelEvents.map((event) => event.payload),
+        [{ metadata: { model: "claude-haiku-5-5" } }, { metadata: { model: "claude-sonnet-5-5" } }],
+      );
+      assert.equal(
+        modelEvents.every((event) => event.providerRefs?.providerThreadId === "tool-task-model"),
+        true,
+      );
+      assert.equal(
+        modelEvents.every((event) => event.providerRefs?.providerParentThreadId === THREAD_ID),
+        true,
+      );
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
   it.effect("routes subagent-tagged messages to a child provider thread", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {

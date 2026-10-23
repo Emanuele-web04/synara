@@ -4,6 +4,7 @@
 // Depends on: ProviderCommandReactorLive with in-memory provider and persistence services.
 
 import * as betaOperationalIssue from "../../betaOperationalIssue";
+import { planRestartTurnReconciliation } from "../startupTurnReconciliation.ts";
 import fs from "node:fs";
 import { execFileSync } from "node:child_process";
 import os from "node:os";
@@ -384,7 +385,11 @@ function createRetainingRestartProviderServiceLayer() {
           steerSubagent: () => unsupported(),
         }),
         Layer.succeed(CursorAdapter, adapterFor("cursor")),
-        Layer.succeed(DevinAdapter, adapterFor("devin")),
+        Layer.succeed(DevinAdapter, {
+          ...adapterFor("devin"),
+          stopTask: () => unsupported(),
+          backgroundTask: () => unsupported(),
+        }),
         Layer.succeed(AntigravityAdapter, adapterFor("antigravity")),
         Layer.succeed(GrokAdapter, adapterFor("grok")),
         Layer.succeed(DroidAdapter, adapterFor("droid")),
@@ -7964,6 +7969,13 @@ describe("ProviderCommandReactor", () => {
         expect(
           harness.sendTurn.mock.calls.filter(([request]) => request.threadId === threadId),
         ).toHaveLength(0);
+        await waitFor(async () =>
+          Boolean(
+            (await readHarnessThread(harness))?.session?.lastError?.includes(
+              PROVIDER_DELIVERY_BLOCK_SUMMARY,
+            ),
+          ),
+        );
         expect((await readHarnessThread(harness))?.session?.lastError).toContain(
           PROVIDER_DELIVERY_BLOCK_SUMMARY,
         );
@@ -14285,6 +14297,8 @@ describe("ProviderCommandReactor", () => {
       .fn<CheckpointStoreShape["captureCheckpoint"]>(() => Effect.void)
       .mockImplementationOnce(() => Effect.promise(() => captureGate));
     const harness = await createHarness({
+      // Keep the held checkpoint pending while the fixture writes its 600-event backlog.
+      preTurnBaselineTimeout: Duration.minutes(1),
       checkpointStore: {
         isGitRepository: () => Effect.succeed(true),
         captureCheckpoint,
@@ -16662,7 +16676,8 @@ describe("ProviderCommandReactor", () => {
 
   it("releases a timed-out promoted turn when its live provider turn settles", async () => {
     const harness = await createHarness({
-      commandEventTimeout: Duration.millis(25),
+      // Admission must finish before the deliberately non-returning provider call times out.
+      commandEventTimeout: Duration.seconds(1),
     });
     await seedQueuedTurnBehindLiveTurn(harness, {
       liveTurnId: asTurnId("turn-running-timeout"),
@@ -17553,6 +17568,98 @@ describe("ProviderCommandReactor", () => {
     ).threads[0]?.messages.find((entry) => entry.id === "msg-steer-codex-stale");
     expect(message?.turnId).toBe("turn-1");
     expect(message?.startsNewTurn).toBe(true);
+  });
+
+  it("never interrupts the live turn for an ordinary queue follow-up", async () => {
+    // Declared policy (agentGateway/followUpDispatchPolicy.ts): queue runs
+    // after the live turn; only steer may interrupt. A steer on the same
+    // provider — the fallback path asserted below — does interrupt.
+    const harness = await createHarness({
+      threadModelSelection: {
+        provider: "cursor",
+        model: "composer-1",
+      },
+    });
+    const now = new Date().toISOString();
+
+    harness.setRuntimeSessionTurnState({
+      threadId: "thread-1",
+      status: "running",
+      activeTurnId: asTurnId("turn-running"),
+    });
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.makeUnsafe("cmd-session-running-queue-cursor"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        session: {
+          threadId: ThreadId.makeUnsafe("thread-1"),
+          status: "running",
+          providerName: "cursor",
+          runtimeMode: "approval-required",
+          activeTurnId: asTurnId("turn-running"),
+          lastError: null,
+          updatedAt: now,
+        },
+        createdAt: now,
+      }),
+    );
+
+    harness.sendTurn.mockClear();
+    harness.steerTurn.mockClear();
+    harness.interruptTurn.mockClear();
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-turn-queue-cursor"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        message: {
+          messageId: asMessageId("msg-queue-cursor"),
+          role: "user",
+          text: "one more thing",
+          attachments: [],
+        },
+        dispatchMode: "queue",
+        runtimeMode: "approval-required",
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        createdAt: now,
+      }),
+    );
+
+    await harness.drain();
+    expect(harness.sendTurn).not.toHaveBeenCalled();
+    expect(harness.steerTurn).not.toHaveBeenCalled();
+    expect(harness.interruptTurn).not.toHaveBeenCalled();
+    const queuedMessage = (
+      await Effect.runPromise(harness.engine.getReadModel())
+    ).threads[0]?.messages.find((entry) => entry.id === "msg-queue-cursor");
+    expect(queuedMessage).toMatchObject({
+      dispatchMode: "queue",
+      startsNewTurn: true,
+      turnId: null,
+    });
+
+    harness.setRuntimeSessionTurnState({ threadId: "thread-1", status: "ready" });
+    await harness.emitRuntimeEvent({
+      type: "turn.completed",
+      eventId: asEventId("evt-turn-completed-queue-cursor"),
+      provider: "cursor",
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      createdAt: new Date().toISOString(),
+      turnId: asTurnId("turn-running"),
+      payload: {
+        state: "completed",
+      },
+      providerRefs: {},
+    } as ProviderRuntimeEvent);
+
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    expect(harness.interruptTurn).not.toHaveBeenCalled();
+    expect(harness.sendTurn.mock.calls[0]?.[0]).toMatchObject({
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      input: "one more thing",
+    });
   });
 
   it("falls back to interrupt plus priority queue for steering without native support", async () => {
@@ -18719,6 +18826,207 @@ describe("ProviderCommandReactor", () => {
     expect(thread?.session?.providerName).toBe("claudeAgent");
   });
 
+  it("passes unresolved Devin stop outcomes and live tasks into provider session startup", async () => {
+    const harness = await createHarness({
+      threadModelSelection: { provider: "devin", model: "swe-1.7" },
+    });
+    const threadId = ThreadId.makeUnsafe("thread-1");
+    const appendActivity = (
+      id: string,
+      taskId: string,
+      status: string,
+      createdAt: string,
+      extra: Record<string, unknown> = {},
+      ownerId = threadId,
+      turnId: TurnId | null = null,
+      kind = "task.completed",
+    ) =>
+      harness.engine.dispatch({
+        type: "thread.activity.append",
+        commandId: CommandId.makeUnsafe(`cmd-${id}`),
+        threadId: ownerId,
+        activity: {
+          id: EventId.makeUnsafe(id),
+          kind,
+          tone: "info",
+          summary: `Task ${status}`,
+          payload: { taskId, status, ...extra },
+          turnId,
+          createdAt,
+        },
+        createdAt,
+      });
+
+    await Effect.runPromise(
+      appendActivity("pending-stop-1", "shell-pending", "stopped", "2026-10-11T00:00:01.000Z", {
+        awaitingProviderConfirmation: true,
+      }),
+    );
+    await Effect.runPromise(
+      appendActivity("ordinary-stop-2", "shell-ordinary", "stopped", "2026-10-11T00:00:02.000Z"),
+    );
+    await Effect.runPromise(
+      appendActivity(
+        "already-corrected-3",
+        "shell-corrected",
+        "completed",
+        "2026-10-11T00:00:03.000Z",
+        { reconcilesStop: true },
+      ),
+    );
+
+    for (const [id, parentId, agentId] of [
+      ["nested-parent", "thread-1", "parent-agent"],
+      ["nested-owner", "nested-parent", "nested-agent"],
+      ["unrelated-owner", null, "unrelated-agent"],
+      ["independent-owner", "thread-1", "independent-agent"],
+    ] as const) {
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.create",
+          commandId: CommandId.makeUnsafe(`create-${id}`),
+          threadId: ThreadId.makeUnsafe(id),
+          projectId: asProjectId("project-1"),
+          title: id,
+          modelSelection: { provider: "devin", model: "swe-1.7" },
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          runtimeMode: "full-access",
+          branch: null,
+          worktreePath: null,
+          parentThreadId: parentId ? ThreadId.makeUnsafe(parentId) : null,
+          subagentAgentId: agentId,
+          creationSource: "provider_native",
+          createdAt: new Date().toISOString(),
+        }),
+      );
+    }
+    // A linked child with its own runtime does not belong to this Devin session.
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.makeUnsafe("independent-owner-session"),
+        threadId: ThreadId.makeUnsafe("independent-owner"),
+        session: {
+          threadId: ThreadId.makeUnsafe("independent-owner"),
+          status: "ready",
+          providerName: "devin",
+          runtimeMode: "full-access",
+          activeTurnId: null,
+          lastError: null,
+          updatedAt: "2026-10-11T00:00:03.000Z",
+        },
+        createdAt: "2026-10-11T00:00:03.000Z",
+      }),
+    );
+    await Effect.runPromise(
+      appendActivity(
+        "independent-stop",
+        "independent-task",
+        "stopped",
+        "2026-10-11T00:00:03.000Z",
+        { awaitingProviderConfirmation: true },
+        ThreadId.makeUnsafe("independent-owner"),
+      ),
+    );
+    await Effect.runPromise(
+      appendActivity(
+        "nested-stop",
+        "nested-task",
+        "stopped",
+        "2026-10-11T00:00:04.000Z",
+        { awaitingProviderConfirmation: true, toolUseId: "nested-tool" },
+        ThreadId.makeUnsafe("nested-owner"),
+        asTurnId("original-nested-turn"),
+      ),
+    );
+    await Effect.runPromise(
+      appendActivity(
+        "unrelated-stop",
+        "unrelated-task",
+        "stopped",
+        "2026-10-11T00:00:05.000Z",
+        { awaitingProviderConfirmation: true },
+        ThreadId.makeUnsafe("unrelated-owner"),
+      ),
+    );
+
+    await Effect.runPromise(
+      appendActivity(
+        "still-running",
+        "live-agent",
+        "running",
+        "2026-10-11T00:00:06.000Z",
+        { toolUseId: "live-tool", interactionMode: "plan" },
+        threadId,
+        asTurnId("live-launch-turn"),
+        "task.started",
+      ),
+    );
+    // The same durable retirement used at boot must keep native replay correlation.
+    const beforeRestart = await readHarnessThread(harness);
+    if (!beforeRestart) throw new Error("Missing Devin thread before restart cleanup");
+    const retirementCommands = planRestartTurnReconciliation({
+      threads: [beforeRestart],
+      now: "2026-10-11T00:02:00.000Z",
+      retireTasksStartedBefore: "2026-10-11T00:01:00.000Z",
+    });
+    expect(retirementCommands).toHaveLength(1);
+    for (const command of retirementCommands) {
+      await Effect.runPromise(harness.engine.dispatch(command));
+    }
+    // Session shutdown can record an ordinary local stop even though the
+    // remote Devin child survives. Repeated native resumes must retain its
+    // original Plan launch identity rather than the newer parent's policy.
+    for (const attempt of [1, 2]) {
+      await Effect.runPromise(
+        appendActivity(
+          `resumed-live-${attempt}`,
+          "live-agent",
+          "running",
+          `2026-10-11T00:02:0${attempt * 2}.000Z`,
+          { reconcilesStop: true, toolUseId: "live-tool" },
+          threadId,
+          null,
+          "task.updated",
+        ),
+      );
+      await Effect.runPromise(
+        appendActivity(
+          `session-stop-live-${attempt}`,
+          "live-agent",
+          "stopped",
+          `2026-10-11T00:02:0${attempt * 2 + 1}.000Z`,
+          { toolUseId: "live-tool" },
+        ),
+      );
+    }
+    await dispatchHarnessUserTurn(harness, {
+      messageId: "message-devin-pending-stop",
+      text: "resume Devin",
+      createdAt: new Date().toISOString(),
+    });
+    await waitFor(() => harness.startSession.mock.calls.length === 1);
+
+    expect(harness.startSession.mock.calls[0]?.[1]).toMatchObject({
+      provider: "devin",
+      pendingTaskReconciliations: [
+        { taskId: "shell-pending" },
+        {
+          taskId: "live-agent",
+          toolUseId: "live-tool",
+          turnId: "live-launch-turn",
+          interactionMode: "plan",
+        },
+        {
+          taskId: "nested-task",
+          turnId: "original-nested-turn",
+          toolUseId: "nested-tool",
+          parentAgentId: "nested-agent",
+        },
+      ],
+    });
+  });
+
   it.each([
     { provider: "claudeAgent", model: "claude-opus-5-5" },
     { provider: "cursor", model: "auto" },
@@ -19431,7 +19739,8 @@ describe("ProviderCommandReactor", () => {
     it("settles a timed-out target start and keeps the thread usable", async () => {
       const harness = await createHarness({
         threadModelSelection: { provider: "grok", model: "grok-code-fast-1" },
-        commandEventTimeout: Duration.millis(300),
+        // Handoff consumes 90% of this budget; leave time for durable recovery writes.
+        commandEventTimeout: Duration.seconds(2),
       });
       await runFirstGrokTurn(harness);
       harness.startSession.mockImplementationOnce(() => Effect.never);

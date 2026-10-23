@@ -4352,7 +4352,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
               }
             }
 
-            if (input.providerThreadId !== undefined) {
+            if (input.providerThreadId !== undefined && routed.adapter.provider !== "devin") {
               // Child and parent share one provider MCP transport. The adapter
               // revokes that lease while stopping the child; persist the need
               // to replace the still-running parent runtime before its next

@@ -37,6 +37,7 @@
  */
 import type {
   OrchestrationCommand,
+  ModelSelection,
   OrchestrationMessage,
   OrchestrationPendingInteraction,
   OrchestrationThreadActivity,
@@ -92,6 +93,7 @@ export type ReconcilablePendingInteraction = Pick<
 export interface ReconcilableThread {
   readonly id: ThreadId;
   readonly runtimeMode: RuntimeMode;
+  readonly modelSelection?: ModelSelection;
   readonly session: OrchestrationSession | null;
   readonly latestTurn: { readonly state: "running" | "interrupted" | "completed" | "error" } | null;
   readonly activities?: ReadonlyArray<
@@ -399,6 +401,12 @@ function planOrphanedTaskCommands(input: {
         payload: {
           taskId: task.taskId,
           status: "stopped",
+          // A dead local runtime is retired now; Devin session/load can later
+          // confirm native outcomes while preserving the original task owner.
+          ...((input.thread.session?.providerName ?? input.thread.modelSelection?.provider) ===
+          "devin"
+            ? { awaitingProviderConfirmation: true }
+            : {}),
           ...(task.toolUseId ? { toolUseId: task.toolUseId } : {}),
           ...(task.workflowTaskId ? { workflowTaskId: task.workflowTaskId } : {}),
         },

@@ -1663,7 +1663,11 @@ const makeRegistrySwitchLayer = (
           steerSubagent: () => Effect.die("Unexpected subagent steering"),
         }),
         Layer.succeed(CursorAdapter, adapterFor("cursor")),
-        Layer.succeed(DevinAdapter, adapterFor("devin")),
+        Layer.succeed(DevinAdapter, {
+          ...adapterFor("devin"),
+          stopTask: () => Effect.die("Unexpected task stop"),
+          backgroundTask: () => Effect.die("Unexpected background task"),
+        }),
         Layer.succeed(AntigravityAdapter, adapterFor("antigravity")),
         Layer.succeed(GrokAdapter, adapterFor("grok")),
         Layer.succeed(DroidAdapter, adapterFor("droid")),
@@ -10348,6 +10352,34 @@ liveFallback.layer("ProviderServiceLive live-fallback settled turns", (it) => {
       assert.equal(binding?.status, "stopped");
       const payload = binding?.runtimePayload as Record<string, unknown> | undefined;
       assert.notEqual(payload?.activeTurnId, asTurnId("turn-many-settled-1"));
+    }),
+  );
+});
+
+const targetedChildStop = makeProviderServiceLayer();
+targetedChildStop.layer("targeted child transport ownership", (it) => {
+  it.effect("stopping a task preserves the shared runtime binding", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const directory = yield* ProviderSessionDirectory;
+      const threadId = asThreadId("targeted-stop-preserves-runtime");
+      Object.assign(targetedChildStop.codex.adapter, { stopTask: () => Effect.void });
+      yield* provider.startSession(threadId, {
+        threadId,
+        provider: "codex",
+        runtimeMode: "full-access",
+      });
+      const before = Option.getOrThrow(yield* directory.getBinding(threadId));
+      yield* provider.stopTask({ threadId, taskId: "child" });
+      const after = Option.getOrThrow(yield* directory.getBinding(threadId));
+      assert.equal(after.lifecycleGeneration, before.lifecycleGeneration);
+      assert.notEqual(
+        asRuntimePayloadRecord(after.runtimePayload).agentGatewayCredentialRotationRequired,
+        true,
+      );
+      const stops = targetedChildStop.codex.stopSession.mock.calls.length;
+      yield* provider.sendTurn({ threadId, input: "continue", attachments: [] });
+      assert.equal(targetedChildStop.codex.stopSession.mock.calls.length, stops);
     }),
   );
 });

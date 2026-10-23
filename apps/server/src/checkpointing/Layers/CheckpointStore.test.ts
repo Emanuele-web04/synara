@@ -5,6 +5,8 @@
 import { execFileSync } from "node:child_process";
 import {
   mkdirSync,
+  chmodSync,
+  renameSync,
   mkdtempSync,
   readFileSync,
   rmSync,
@@ -410,6 +412,107 @@ describe("CheckpointStoreLive", () => {
     expect(result).toBe("GitCommandError");
     expect(commands.filter((command) => command.startsWith("apply "))).toHaveLength(2);
     expect(commands.at(-1)).toMatch(/^apply --whitespace=nowarn -- /);
+  });
+
+  it("reconstructs provider patches from the captured baseline in a private index", async () => {
+    const cwd = mkdtempSync(join(tmpdir(), "synara-raw-patch-"));
+    const git = (args: string[]) =>
+      execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+    try {
+      git(["init", "--initial-branch=main"]);
+      git(["config", "user.email", "test@example.com"]);
+      git(["config", "user.name", "Test User"]);
+      writeFileSync(join(cwd, "internal.txt"), "hello world\n");
+      writeFileSync(join(cwd, "edges.txt"), "\t leading trailing\n");
+      writeFileSync(join(cwd, "crlf.txt"), "windows\r\n");
+      writeFileSync(join(cwd, "real.txt"), "before\n");
+      writeFileSync(join(cwd, "old name.txt"), "renamed content\n");
+      writeFileSync(join(cwd, "delete.txt"), "delete me\n");
+      writeFileSync(join(cwd, "no-newline.txt"), "before");
+      writeFileSync(join(cwd, "binary.dat"), Buffer.from([0, 1, 2]));
+      git(["add", "."]);
+      git(["commit", "-m", "Captured baseline"]);
+      const baseline = CheckpointRef.makeUnsafe("refs/synara/checkpoints/raw/turn-start/exact");
+      git(["update-ref", baseline, "HEAD"]);
+      writeFileSync(join(cwd, "internal.txt"), "hello  world\n");
+      writeFileSync(join(cwd, "edges.txt"), " leading trailing\t \n");
+      writeFileSync(join(cwd, "crlf.txt"), "windows \t\r\n");
+      writeFileSync(join(cwd, "real.txt"), "after\n");
+      writeFileSync(join(cwd, "no-newline.txt"), "after");
+      renameSync(join(cwd, "old name.txt"), join(cwd, "new name.txt"));
+      chmodSync(join(cwd, "new name.txt"), 0o755);
+      rmSync(join(cwd, "delete.txt"));
+      writeFileSync(join(cwd, "unicode-π.txt"), "added\n");
+      writeFileSync(join(cwd, "binary.dat"), Buffer.from([0, 3, 2]));
+      git(["add", "."]);
+      const providerPatch = git(["diff", "--cached", "--binary", "--full-index", baseline]);
+      // Real staged/working content can diverge after the selected provider event.
+      writeFileSync(join(cwd, "real.txt"), "another session\n");
+      writeFileSync(join(cwd, "peer.txt"), "unrelated staged work\n");
+      git(["add", "peer.txt", "real.txt"]);
+      const index = readFileSync(join(cwd, ".git", "index"));
+      const refs = git(["for-each-ref", "--format=%(refname)"]);
+      runtime = ManagedRuntime.make(
+        CheckpointStoreLive.pipe(
+          Layer.provide(
+            GitCoreLive.pipe(
+              Layer.provide(ServerConfig.layerTest(cwd, { prefix: "synara-raw-store-" })),
+            ),
+          ),
+          Layer.provide(NodeServices.layer),
+        ),
+      );
+      const store = await runtime.runPromise(Effect.service(CheckpointStore));
+      for (const ignoreWhitespace of [false, true]) {
+        const patch = await runtime.runPromise(
+          store.diffCheckpoints({
+            cwd,
+            fromCheckpointRef: baseline,
+            toCheckpointRef: CheckpointRef.makeUnsafe("provider-diff:raw"),
+            providerPatch,
+            ignoreWhitespace,
+          }),
+        );
+        expect(patch).toContain("+after");
+        expect(patch).toContain("delete.txt");
+        expect(patch).toContain("rename from old name.txt");
+        expect(patch).toContain("rename to new name.txt");
+        expect(patch).toContain("new mode 100755");
+        expect(patch).toContain("No newline at end of file");
+        expect(patch).toContain("binary.dat");
+        for (const file of ["internal.txt", "edges.txt", "crlf.txt"])
+          expect(patch.includes(file)).toBe(!ignoreWhitespace);
+        expect(patch).not.toContain("another session");
+        expect(patch).not.toContain("peer.txt");
+      }
+      await expect(
+        runtime.runPromise(
+          store.diffCheckpoints({
+            cwd,
+            fromCheckpointRef: baseline,
+            toCheckpointRef: CheckpointRef.makeUnsafe("provider-diff:bad"),
+            providerPatch: "not a patch",
+            ignoreWhitespace: false,
+          }),
+        ),
+      ).rejects.toThrow();
+      await expect(
+        runtime.runPromise(
+          store.diffCheckpoints({
+            cwd,
+            fromCheckpointRef: baseline,
+            toCheckpointRef: CheckpointRef.makeUnsafe("provider-diff:mismatch"),
+            providerPatch: providerPatch.replace("-before", "-wrong baseline"),
+            ignoreWhitespace: false,
+          }),
+        ),
+      ).rejects.toThrow();
+      expect(readFileSync(join(cwd, ".git", "index"))).toEqual(index);
+      expect(readFileSync(join(cwd, "real.txt"), "utf8")).toBe("another session\n");
+      expect(git(["for-each-ref", "--format=%(refname)"])).toBe(refs);
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
   });
 
   it("purges published and crash-orphaned live refs without touching another thread or final checkpoints", async () => {

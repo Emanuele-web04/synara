@@ -811,32 +811,52 @@ describe("findRestartOrphanedTasks", () => {
     ).toEqual([{ taskId: "agent", turnId: null }]);
   });
 
-  it("plans one stopped end per orphaned task only when asked to", () => {
-    const thread = makeThread("orphan-tasks", {
-      session: makeSession("orphan-tasks", { status: "ready", activeTurnId: null }),
-      latestTurn: { state: "completed" },
-      activities: [task("a", "task.started", { taskId: "agent", toolUseId: "toolu_agent" }, 1)],
-    });
-    expect(planRestartTurnReconciliation({ threads: [thread], now: NOW })).toEqual([]);
-    expect(
-      planRestartTurnReconciliation({
-        threads: [thread],
-        now: NOW,
-        retireTasksStartedBefore: BOOT,
-      }),
-    ).toEqual([
-      expect.objectContaining({
-        type: "thread.activity.append",
-        threadId: thread.id,
-        activity: expect.objectContaining({
-          kind: "task.completed",
-          summary: "Task stopped",
-          payload: { taskId: "agent", status: "stopped", toolUseId: "toolu_agent" },
-          sequence: 2,
+  it.each([
+    { provider: "grok", sessionProvider: null, awaitsConfirmation: false },
+    { provider: "devin", sessionProvider: null, awaitsConfirmation: true },
+    { provider: "grok", sessionProvider: "devin", awaitsConfirmation: true },
+    { provider: "devin", sessionProvider: "grok", awaitsConfirmation: false },
+  ] as const)(
+    "retires $provider tasks using the prior $sessionProvider runtime ownership",
+    ({ provider, sessionProvider, awaitsConfirmation }) => {
+      const thread = makeThread("orphan-tasks", {
+        modelSelection: { provider, model: "model-a" },
+        session: sessionProvider
+          ? makeSession("orphan-tasks", {
+              providerName: sessionProvider,
+              status: "ready",
+              activeTurnId: null,
+            })
+          : null,
+        latestTurn: { state: "completed" },
+        activities: [task("a", "task.started", { taskId: "agent", toolUseId: "toolu_agent" }, 1)],
+      });
+      expect(planRestartTurnReconciliation({ threads: [thread], now: NOW })).toEqual([]);
+      expect(
+        planRestartTurnReconciliation({
+          threads: [thread],
+          now: NOW,
+          retireTasksStartedBefore: BOOT,
         }),
-      }),
-    ]);
-  });
+      ).toEqual([
+        expect.objectContaining({
+          type: "thread.activity.append",
+          threadId: thread.id,
+          activity: expect.objectContaining({
+            kind: "task.completed",
+            summary: "Task stopped",
+            payload: {
+              taskId: "agent",
+              status: "stopped",
+              toolUseId: "toolu_agent",
+              ...(awaitsConfirmation ? { awaitingProviderConfirmation: true } : {}),
+            },
+            sequence: 2,
+          }),
+        }),
+      ]);
+    },
+  );
 });
 
 describe("reconcileRestartStuckTurns selection", () => {

@@ -638,9 +638,15 @@ function deriveBackgroundTaskStates(ordered: ReadonlyArray<OrchestrationThreadAc
   const tasks = new Map<string, BackgroundTaskState>();
   const noticesAnnouncingSubagents = new Set<string>();
   const seenTaskIds = new Set<string>();
+  // Sparse background updates reuse the description from their launch event.
   const started = new Map<
     string,
-    { toolUseId: string | null; taskType: string | null; startedAt: string }
+    {
+      toolUseId: string | null;
+      taskType: string | null;
+      description: string | null;
+      startedAt: string;
+    }
   >();
   const admit = (
     taskId: string,
@@ -670,7 +676,7 @@ function deriveBackgroundTaskStates(ordered: ReadonlyArray<OrchestrationThreadAc
     tasks.set(taskId, {
       taskId,
       taskType,
-      description: info.description,
+      description: info.description ?? launch?.description ?? null,
       command: null,
       status: "running",
       startedAt: launch?.startedAt ?? activity.createdAt,
@@ -706,6 +712,7 @@ function deriveBackgroundTaskStates(ordered: ReadonlyArray<OrchestrationThreadAc
       const launch = {
         toolUseId: asTrimmedString(payload?.toolUseId),
         taskType: asTrimmedString(payload?.taskType),
+        description: asTrimmedString(payload?.detail),
         startedAt: activity.createdAt,
       };
       started.set(taskId, launch);
@@ -732,7 +739,15 @@ function deriveBackgroundTaskStates(ordered: ReadonlyArray<OrchestrationThreadAc
       });
     }
     const task = tasks.get(taskId);
-    if (!task || task.status !== "running") continue;
+    const reconcilesStop = payload?.reconcilesStop === true && task?.status === "stopped";
+    if (!task || (task.status !== "running" && !reconcilesStop)) continue;
+    // Only explicit native replay evidence can reopen a provisional local stop.
+    if (reconcilesStop && activity.kind === "task.updated" && payload?.status === "running") {
+      task.status = "running";
+      task.completedAt = null;
+      task.exitCode = null;
+      continue;
+    }
     if (activity.kind === "task.updated" || activity.kind === "task.completed") {
       const outcome = backgroundTaskOutcome(payload?.status);
       if (!outcome) continue;
@@ -868,6 +883,22 @@ export function deriveSubagentTaskEnds(
     }
     if (activity.kind === "task.started" && ownToolUseId && ends.has(ownToolUseId)) {
       resumed.add(ownToolUseId);
+    }
+    if (
+      activity.kind === "task.updated" &&
+      payload?.reconcilesStop === true &&
+      payload.status === "running" &&
+      ownToolUseId
+    ) {
+      const stopped = ends.get(ownToolUseId);
+      if (stopped?.outcome === "stopped") {
+        // Explicit native replay retracts only the provisional stop, retaining
+        // earlier invocations and the correlation for its eventual completion.
+        if (stopped.previous) ends.set(ownToolUseId, stopped.previous);
+        else ends.delete(ownToolUseId);
+        resumed.add(ownToolUseId);
+        if (taskId) openToolUseIdByTaskId.set(taskId, ownToolUseId);
+      }
     }
     if (activity.kind !== "task.completed") continue;
     const toolUseId = ownToolUseId ?? (taskId ? openToolUseIdByTaskId.get(taskId) : undefined);

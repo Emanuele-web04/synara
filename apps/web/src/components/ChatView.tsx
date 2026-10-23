@@ -3034,15 +3034,32 @@ export default function ChatView({
     };
   }, [pendingComposerFocusRef, focusComposer, threadId]);
   useEffect(() => {
+    let pendingFrame: number | null = null;
     const handleWindowFocus = () => {
       if (!pendingComposerFocusRef.current) return;
-      window.requestAnimationFrame(() => {
+      if (pendingFrame !== null) window.cancelAnimationFrame(pendingFrame);
+      pendingFrame = window.requestAnimationFrame(() => {
+        pendingFrame = null;
+        if (!pendingComposerFocusRef.current) return;
+        const activeElement = document.activeElement;
+        // Window activation may come from clicking a picker or another input.
+        // Respect the control chosen before this deferred focus request runs.
+        if (
+          document.hasFocus() &&
+          activeElement &&
+          activeElement !== document.body &&
+          activeElement !== document.documentElement
+        ) {
+          pendingComposerFocusRef.current = false;
+          return;
+        }
         focusComposer();
       });
     };
     window.addEventListener("focus", handleWindowFocus);
     return () => {
       window.removeEventListener("focus", handleWindowFocus);
+      if (pendingFrame !== null) window.cancelAnimationFrame(pendingFrame);
     };
   }, [pendingComposerFocusRef, focusComposer]);
   // Keep the two composer picker menus mutually exclusive so shortcuts always open one surface.

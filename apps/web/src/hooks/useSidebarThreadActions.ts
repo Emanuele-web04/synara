@@ -32,6 +32,7 @@ import { deleteActiveThreadFromClient } from "../lib/activeThreadDelete";
 import { releaseOrphanedWorktreeAfterArchive } from "../lib/archiveThreadWorktreeCleanup";
 import { reconcileDeletedThreadsFromClient } from "../lib/deletedThreadClientReconciliation";
 import { gitRemoveWorktreeMutationOptions } from "../lib/gitReactQuery";
+import { reconcilePendingProjectSpaceMoves } from "../lib/spaces";
 import {
   archiveThreadFromClient,
   isThreadAlreadyUnarchivedError,
@@ -111,7 +112,7 @@ export function useSidebarThreadActions(input: {
     | "sidebarThreadSortOrder"
   >;
   readonly clearTerminalState: (threadId: ThreadId) => void;
-  /** Limits the post-snooze focus fallback to chats reachable from the active Space. */
+  /** Limits the focus fallback after snooze, Done and archive to chats reachable from the active Space. */
   readonly filterThreadsToActiveSpace?: (
     threads: readonly SidebarThreadSummary[],
   ) => readonly SidebarThreadSummary[];
@@ -290,6 +291,7 @@ export function useSidebarThreadActions(input: {
     routeSplitViewId,
     routeVersion: 0,
     sidebarTreeThreads,
+    filterThreadsToActiveSpace,
     optimisticSettledStateByThreadId,
     handleNewChat,
   });
@@ -310,10 +312,12 @@ export function useSidebarThreadActions(input: {
             closeNavigationInputRef.current.routeSplitViewId !== routeSplitViewId,
         ),
       sidebarTreeThreads,
+      filterThreadsToActiveSpace,
       optimisticSettledStateByThreadId,
       handleNewChat,
     };
   }, [
+    filterThreadsToActiveSpace,
     routeThreadId,
     routeSplitViewId,
     sidebarTreeThreads,
@@ -327,13 +331,23 @@ export function useSidebarThreadActions(input: {
       routeVersionAtDispatch: number | null,
       excludedThreadIds?: ReadonlySet<ThreadId>,
     ) => {
+      // A preceding Space move can be durable before its membership reaches this window.
+      const beforeRefresh = closeNavigationInputRef.current;
+      if (
+        beforeRefresh.routeThreadId !== threadId ||
+        beforeRefresh.routeVersion !== routeVersionAtDispatch
+      )
+        return;
+      if (beforeRefresh.filterThreadsToActiveSpace && !(await reconcilePendingProjectSpaceMoves()))
+        return;
       // Read after the command is accepted: a newer route or thread list wins.
       const current = closeNavigationInputRef.current;
       if (current.routeThreadId !== threadId || current.routeVersion !== routeVersionAtDispatch)
         return;
       const shellSnapshotSequence = useStore.getState().shellSnapshotSequence ?? 0;
       const fallbackThread = excludeHiddenProjectAgentCoordinatorThreads(
-        current.sidebarTreeThreads,
+        current.filterThreadsToActiveSpace?.(current.sidebarTreeThreads) ??
+          current.sidebarTreeThreads,
         hiddenCoordinatorThreadIds(),
       )
         .filter((thread) => {
@@ -488,15 +502,6 @@ export function useSidebarThreadActions(input: {
 
   const setThreadSnoozedUntil = dispatchThreadSnoozedUntil;
 
-  // Snooze confirms asynchronously; these refs let the confirmation see the
-  // route and thread list as they are then, not as they were when it started.
-  const snoozeFallbackThreadsRef = useRef(sidebarTreeThreads);
-  useEffect(() => {
-    snoozeFallbackThreadsRef.current = filterThreadsToActiveSpace
-      ? filterThreadsToActiveSpace(sidebarTreeThreads)
-      : sidebarTreeThreads;
-  }, [filterThreadsToActiveSpace, sidebarTreeThreads]);
-
   const snoozeThread = useCallback(
     (threadId: ThreadId, duration: SnoozeDuration) => {
       const deadline = resolveSnoozeDeadline(duration, Date.now());
@@ -507,7 +512,7 @@ export function useSidebarThreadActions(input: {
         navigationAtDispatch.routeSplitViewId === null
           ? navigationAtDispatch.routeVersion
           : null;
-      void setThreadSnoozedUntil(threadId, deadline.toISOString()).then((confirmed) => {
+      void setThreadSnoozedUntil(threadId, deadline.toISOString()).then(async (confirmed) => {
         if (!confirmed) return;
         // Same compact Undo toast as archive, so chat-level undo reads alike.
         toastManager.add({
@@ -522,6 +527,8 @@ export function useSidebarThreadActions(input: {
             },
           },
         });
+        if (routeVersionAtDispatch === null) return;
+        if (filterThreadsToActiveSpace && !(await reconcilePendingProjectSpaceMoves())) return;
         // A split opening or an away-and-back visit is newer navigation too.
         const currentNavigation = closeNavigationInputRef.current;
         if (
@@ -533,7 +540,8 @@ export function useSidebarThreadActions(input: {
           return;
         const fallbackThreadId = getFallbackThreadIdAfterSnooze({
           threads: excludeHiddenProjectAgentCoordinatorThreads(
-            snoozeFallbackThreadsRef.current,
+            currentNavigation.filterThreadsToActiveSpace?.(currentNavigation.sidebarTreeThreads) ??
+              currentNavigation.sidebarTreeThreads,
             hiddenCoordinatorThreadIds(),
           ).filter((thread) => !thread.parentThreadId),
           snoozedThreadId: threadId,
@@ -549,7 +557,13 @@ export function useSidebarThreadActions(input: {
         }
       });
     },
-    [handleNewChat, navigate, setThreadSnoozedUntil, sidebarThreadSummaryById],
+    [
+      filterThreadsToActiveSpace,
+      handleNewChat,
+      navigate,
+      setThreadSnoozedUntil,
+      sidebarThreadSummaryById,
+    ],
   );
 
   // Drop optimistic settle entries once the server-confirmed state agrees, so
