@@ -1666,6 +1666,7 @@ const makeRegistrySwitchLayer = (
         Layer.succeed(DevinAdapter, {
           ...adapterFor("devin"),
           stopTask: () => Effect.die("Unexpected task stop"),
+          backgroundTask: () => Effect.die("Unexpected background task"),
         }),
         Layer.succeed(AntigravityAdapter, adapterFor("antigravity")),
         Layer.succeed(GrokAdapter, adapterFor("grok")),

@@ -829,7 +829,12 @@ describe("deriveWorkLogEntries", () => {
       expect(entries.filter((entry) => entry.backgroundTask)).toMatchObject([
         {
           id: "launch",
-          backgroundTask: { taskId: "task-1", status: "running", command: "sleep 20" },
+          backgroundTask: {
+            taskId: "task-1",
+            status: "running",
+            command: "sleep 20",
+            description: "Run task-1",
+          },
         },
       ]);
     });

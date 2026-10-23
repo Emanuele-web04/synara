@@ -638,9 +638,15 @@ function deriveBackgroundTaskStates(ordered: ReadonlyArray<OrchestrationThreadAc
   const tasks = new Map<string, BackgroundTaskState>();
   const noticesAnnouncingSubagents = new Set<string>();
   const seenTaskIds = new Set<string>();
+  // Sparse background updates reuse the description from their launch event.
   const started = new Map<
     string,
-    { toolUseId: string | null; taskType: string | null; startedAt: string }
+    {
+      toolUseId: string | null;
+      taskType: string | null;
+      description: string | null;
+      startedAt: string;
+    }
   >();
   const admit = (
     taskId: string,
@@ -670,7 +676,7 @@ function deriveBackgroundTaskStates(ordered: ReadonlyArray<OrchestrationThreadAc
     tasks.set(taskId, {
       taskId,
       taskType,
-      description: info.description,
+      description: info.description ?? launch?.description ?? null,
       command: null,
       status: "running",
       startedAt: launch?.startedAt ?? activity.createdAt,
@@ -706,6 +712,7 @@ function deriveBackgroundTaskStates(ordered: ReadonlyArray<OrchestrationThreadAc
       const launch = {
         toolUseId: asTrimmedString(payload?.toolUseId),
         taskType: asTrimmedString(payload?.taskType),
+        description: asTrimmedString(payload?.detail),
         startedAt: activity.createdAt,
       };
       started.set(taskId, launch);

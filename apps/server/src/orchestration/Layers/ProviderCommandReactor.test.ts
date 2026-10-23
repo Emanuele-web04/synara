@@ -388,6 +388,7 @@ function createRetainingRestartProviderServiceLayer() {
         Layer.succeed(DevinAdapter, {
           ...adapterFor("devin"),
           stopTask: () => unsupported(),
+          backgroundTask: () => unsupported(),
         }),
         Layer.succeed(AntigravityAdapter, adapterFor("antigravity")),
         Layer.succeed(GrokAdapter, adapterFor("grok")),
