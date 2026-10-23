@@ -1,3 +1,5 @@
+// Purpose: Browser checks for the landing ASCII field’s rendering and lifecycle.
+// Covers hidden owners, reduced motion, Retina allocation and complete resize frames.
 import "../../index.css";
 
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
