@@ -4,12 +4,9 @@ import { page } from "vitest/browser";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";
 
-// Windows/Linux desktop use the opaque projection, without macOS vibrancy.
+// Windows/Linux desktop without a blurring compositor: the bridge announces no window
+// translucency, so the opaque projection applies.
 vi.mock("~/env", () => ({ isElectron: true }));
-vi.mock("~/lib/utils", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("~/lib/utils")>()),
-  isMacNavigatorPlatform: () => false,
-}));
 
 import { ThemePackEditor } from "./ThemePackEditor";
 import { DEFAULT_THEME_STATE, getCodeThemeSeed, parseStoredThemeState } from "~/theme/theme.logic";

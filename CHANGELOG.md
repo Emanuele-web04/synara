@@ -1,5 +1,69 @@
 # Changelog
 
+## 1.0.6-remote.29 — 2026-10-23
+
+**Clearer parallel work, captured live changes and more dependable workspace controls.**
+
+### Added
+
+- The + after the chat tabs creates a chat in the current workspace. Environment includes shared controls to create and edit project actions, with grouped header actions and separate visibility preferences.
+- Running subagents appear above the composer. Devin background work preserves task identity, turn ownership and permission handling through replay and recovery; Claude child chats show the model reported by their runtime.
+
+### Fixed
+
+- Remote Software Update refuses Restart & Install while cleanup of a retained provider process is unconfirmed or the retained-state check fails.
+- Hubs preserve original human requests and attachment references when delegating work. Coordinator and worker context keep distinct roles, stable task keys prevent duplicate workers, ordinary follow-ups queue, and settings remain saveable after pause or resume.
+- Turn diffs show captured live snapshots and complete cumulative Codex patches against their exact baseline and revision. Ignore whitespace and reconnects retain that evidence; incomplete changes remain unavailable until captured rather than being reconstructed from later edits.
+- Activity grouping survives remounts, reloads and connected workspace panes. Done and Archive choose the next chat within the active Space, and new-thread creation validates current sidebar hydration before choosing a project.
+- Window activation, composer updates and terminal activation preserve the selected control. Idle terminals remain reusable with large process tables, and typed input survives commands starting.
+- Cmd/Ctrl+W closes the focused chat tab, dock terminal or workspace surface before falling back to window close. Closing a chat tab leaves its running agent active; busy terminal closure still requires confirmation.
+- Orphaned agent work settles instead of remaining active indefinitely. Stopped Pi and Antigravity sessions recover through the normal next-turn path, and unanswered foreground Computer Use prompts report cancellation.
+- Hyprland uses compositor-backed blur when blur is confirmed enabled. Linux app artwork remains isolated by flavor, and connected workspace panes retain the controlling window's display capability without gaining native controls.
+
+### Companion iPhone and iPad
+
+- Universal build 153 is prepared separately with background-task replay corrections, stable terminal task states, preserved command/start-time metadata and matching Stop availability. Upload and tester availability are verified independently; this desktop update does not install the mobile build.
+
+### Verification
+
+- Integrates main through `d7542782fd52a1dedf9634e1765ab62fa60e259f` while retaining all published Remote .28 source, release history, identities, data homes and update feeds.
+- Local checks qualify the reviewed candidate. Publication still requires exact-tag quality and server suites, all three packaged platform checks, macOS signing/notarization, Windows Defender and source/lockfile-bound artifact provenance. Pending gates are not passed gates.
+- Remote ships macOS Apple Silicon, Windows x64 and Linux x64 installers. Windows retains its exact-version unsigned exception and may show SmartScreen. Physical-device behavior, compositor integration and manual installed-app upgrades need separate verification.
+
+## 1.0.8 — 2026-10-23
+
+**Reliable handoffs and recovery, clearer parallel work, captured live diffs and workspace refinements.**
+
+This Stable release covers all 32 commits after `v1.0.7` through `f9ba953a6a26769bf73c78c2bae673e5a09ba62f`. The native editor, connectors and diagnostics remain Beta-only. Stable and Beta keep separate identities, data homes and update feeds.
+
+### Added
+
+- A new-thread + follows the chat tabs and creates a chat in the current workspace. Environment offers shared project-action creation and editing; header actions are grouped with independent visibility preferences.
+- Running subagents appear above the composer. Devin ACP background work and child agents retain task, permission and turn ownership across replay and recovery; Claude child chats report their resolved model.
+- Turn diffs expose captured live snapshots and complete Codex cumulative patches against their exact baseline, including Ignore whitespace. Incomplete evidence remains unavailable until a complete update or final checkpoint.
+- Hyprland supports compositor-backed translucency when blur is confirmed enabled; Linux artwork is isolated by app flavor.
+
+### Changed
+
+- Hub context distinguishes coordinator and worker roles and labels provenance. Original human requests and attachment references accompany delegated work; stable task keys make replay idempotent. Ordinary follow-ups queue; steering can interrupt.
+- SQLite free pages are reclaimed incrementally. Existing databases convert only after clean shutdown with sufficient reclaimable pages and scratch space, under a bounded subprocess deadline. This is not guaranteed emergency disk recovery.
+- Idle agent-booted simulators are released after owned work settles, preserving overlapping and renewed leases.
+
+### Fixed
+
+- Send, Continue task and Implement use Hand off consistently. Auto-mode saves preserve pending provider switches; queued work follows the current provider/model. Stored-selection recovery preserves protected history and refuses switches that would silently end background tasks.
+- Codex fresh-resume fallback restores prior transcript context, handles threads without rollouts and discloses omitted or shortened messages. Runtime warnings surface in chat. Plugin discovery is isolated from live sessions, and retired gateway write authority is renewed without reviving old credentials.
+- Hubs settle non-Git workers and preserve settings saves after pause/resume. Orphaned agent tasks settle. Stopped Pi and Antigravity sessions report inactivity for normal next-turn recovery.
+- Done and Archive stay within the active Space; Activity grouping persists. New-thread creation validates current hydration, and window activation, composer updates and terminal activation preserve chosen keyboard focus.
+- Cmd/Ctrl+W closes the focused chat tab or dock terminal. Idle terminal reuse works with large process tables and retains input while commands start.
+- Safari setup detects an existing Full Disk Access grant. Unanswered foreground Computer Use prompts report cancellation. Nested untracked repositories no longer break ordinary working-tree diffs.
+
+### Verification
+
+The complete candidate receives brand, formatting, lint, typecheck, release smoke, focused tests and the relevant Windows runtime boundary check. One publication workflow on the exact tag SHA supplies the complete quality/server suites, portable build, native packages, signing/notarization, provenance, Windows Defender and packaged startup gates. Results are recorded in the publication notes after verification; pending gates are not passed gates.
+
+See [source audit](docs/releases/1.0.8-source-audit.md) for every commit and the durable documentation audit. Release preparation changes visible release text only through the existing surfaces. Manual installed-app upgrades, live provider/microphone behavior and browser-download reputation remain separately unqualified.
+
 ## 1.0.6-remote.28 — 2026-10-23
 
 **Code editing inside Synara, dependable provider switches and settled background work.**

@@ -2989,6 +2989,101 @@ describe("ClaudeAdapterLive", () => {
     );
   });
 
+  it.effect("reports a subagent's resolved model once per distinct model", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+
+      const runtimeEventsFiber = yield* adapter.streamEvents.pipe(
+        Stream.takeUntil(
+          (event) =>
+            event.type === "turn.completed" && event.providerRefs?.providerThreadId === undefined,
+        ),
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+      const session = yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: "claudeAgent",
+        runtimeMode: "full-access",
+      });
+
+      yield* adapter.sendTurn({
+        threadId: session.threadId,
+        input: "delegate this",
+        attachments: [],
+      });
+
+      harness.query.emit({
+        type: "stream_event",
+        session_id: "sdk-session-subagent-model",
+        uuid: "stream-subagent-model-1",
+        parent_tool_use_id: null,
+        event: {
+          type: "content_block_start",
+          index: 0,
+          content_block: {
+            type: "tool_use",
+            id: "tool-task-model",
+            name: "Task",
+            input: {
+              description: "Review the database layer",
+              prompt: "Audit the SQL changes",
+              subagent_type: "code-reviewer",
+            },
+          },
+        },
+      } as unknown as SDKMessage);
+
+      const emitSubagentAssistant = (uuid: string, model: string) =>
+        harness.query.emit({
+          type: "assistant",
+          session_id: "sdk-session-subagent-model",
+          uuid,
+          parent_tool_use_id: "tool-task-model",
+          message: {
+            id: `message-${uuid}`,
+            model,
+            content: [{ type: "text", text: "Reviewing." }],
+            usage: { input_tokens: 10, output_tokens: 5 },
+          },
+        } as unknown as SDKMessage);
+      emitSubagentAssistant("assistant-subagent-model-1", "claude-haiku-5-5");
+      emitSubagentAssistant("assistant-subagent-model-2", "claude-haiku-5-5");
+      emitSubagentAssistant("assistant-subagent-model-3", "claude-haiku-5-5[1m]");
+      emitSubagentAssistant("assistant-subagent-model-4", "claude-sonnet-5-5[1m]");
+      emitSubagentAssistant("assistant-subagent-model-5", "<synthetic>");
+      emitSubagentAssistant("assistant-subagent-model-6", "");
+
+      harness.query.emit({
+        type: "result",
+        subtype: "success",
+        is_error: false,
+        errors: [],
+        session_id: "sdk-session-subagent-model",
+        uuid: "result-subagent-model-1",
+      } as unknown as SDKMessage);
+
+      const runtimeEvents = Array.from(yield* Fiber.join(runtimeEventsFiber));
+      const modelEvents = runtimeEvents.filter((event) => event.type === "thread.metadata.updated");
+      assert.deepEqual(
+        modelEvents.map((event) => event.payload),
+        [{ metadata: { model: "claude-haiku-5-5" } }, { metadata: { model: "claude-sonnet-5-5" } }],
+      );
+      assert.equal(
+        modelEvents.every((event) => event.providerRefs?.providerThreadId === "tool-task-model"),
+        true,
+      );
+      assert.equal(
+        modelEvents.every((event) => event.providerRefs?.providerParentThreadId === THREAD_ID),
+        true,
+      );
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
   it.effect("routes subagent-tagged messages to a child provider thread", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {
@@ -15253,6 +15348,280 @@ describe("Claude subagent tracking", () => {
       Effect.provide(harness.layer),
     );
   });
+
+  // Feeds `messages`, waits for the event `ready` names (the one the last
+  // message produces), then stops the session and returns every event.
+  const eventsThroughStop = (
+    harness: ReturnType<typeof makeHarness>,
+    messages: ReadonlyArray<SDKMessage>,
+    ready: (event: ProviderRuntimeEvent) => boolean,
+  ) =>
+    Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const settled = yield* Deferred.make<void>();
+      const eventsFiber = yield* adapter.streamEvents.pipe(
+        Stream.tap((event) => (ready(event) ? Deferred.succeed(settled, undefined) : Effect.void)),
+        Stream.takeUntil((event) => event.type === "session.exited"),
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+      yield* startTrackingSession(adapter);
+      for (const message of messages) {
+        harness.query.emit(message);
+      }
+      yield* Deferred.await(settled);
+      yield* adapter.stopSession(THREAD_ID);
+      return Array.from(yield* Fiber.join(eventsFiber));
+    });
+
+  const taskCompletions = (events: ReadonlyArray<ProviderRuntimeEvent>) =>
+    events
+      .filter((event) => event.type === "task.completed")
+      .map((event) => ({
+        taskId: taskIdOf(event),
+        status: payloadRecord(event).status,
+        toolUseId: payloadRecord(event).toolUseId,
+        onRoot: isRootEvent(event),
+      }));
+
+  const isRootTurnCompleted = (event: ProviderRuntimeEvent) =>
+    event.type === "turn.completed" && isRootEvent(event);
+
+  // A background Agent whose launching call returned, ending the root turn.
+  const backgroundLaunch = (toolUseId: string, taskId: string, announced: boolean) => [
+    rootToolUse(0, toolUseId, "Agent", {
+      description: "Background job",
+      prompt: "Do the slow thing.",
+      run_in_background: true,
+    }),
+    system("task_started", {
+      task_id: taskId,
+      tool_use_id: toolUseId,
+      task_type: "local_agent",
+      subagent_type: "general-purpose",
+      is_backgrounded: true,
+      description: "Background job",
+    }),
+    ...(announced
+      ? [
+          system("background_tasks_changed", {
+            tasks: [{ task_id: taskId, task_type: "local_agent", description: "Background job" }],
+          }),
+        ]
+      : []),
+    userMessage(null, [trackingToolResult(toolUseId, "Async agent launched successfully.")], {
+      status: "async_launched",
+      agentId: taskId,
+    }),
+    success(),
+  ];
+
+  // Without the background snapshot, only the live run still knows the task:
+  // async_launched took it out of the foreground.
+  for (const announced of [true, false]) {
+    it.effect(
+      `names a background subagent's launching tool call when Stop retires it (announced: ${announced})`,
+      () => {
+        const harness = makeHarness();
+        const BG = "toolu_background_agent_stopped";
+        return Effect.gen(function* () {
+          const events = yield* eventsThroughStop(
+            harness,
+            backgroundLaunch(BG, "task-bg-stopped", announced),
+            isRootTurnCompleted,
+          );
+          assert.deepEqual(taskCompletions(events), [
+            { taskId: "task-bg-stopped", status: "stopped", toolUseId: BG, onRoot: true },
+          ]);
+        }).pipe(
+          Effect.provideService(Random.Random, makeDeterministicRandomService()),
+          Effect.provide(harness.layer),
+        );
+      },
+    );
+  }
+
+  it.effect(
+    "marks a background subagent's launching tool call stopped when Stop retires it",
+    () => {
+      const harness = makeHarness();
+      const BG = "toolu_background_agent_final_state";
+      return Effect.gen(function* () {
+        const events = yield* eventsThroughStop(
+          harness,
+          backgroundLaunch(BG, "task-bg-final-state", false),
+          isRootTurnCompleted,
+        );
+        const rootTurnId = events.find(
+          (event) => event.type === "turn.started" && isRootEvent(event),
+        )?.turnId;
+        const finalStates = events
+          .filter(
+            (event) =>
+              isRootEvent(event) &&
+              event.type === "item.updated" &&
+              event.providerRefs?.providerItemId === BG,
+          )
+          .map((event) => {
+            const data = payloadRecord(event).data as {
+              agentStates?: Record<string, { status: string }>;
+            };
+            return { status: data.agentStates?.[BG]?.status, turnId: event.turnId };
+          })
+          .filter((entry) => entry.status !== undefined);
+        assert.deepEqual(finalStates, [{ status: "stopped", turnId: rootTurnId }]);
+      }).pipe(
+        Effect.provideService(Random.Random, makeDeterministicRandomService()),
+        Effect.provide(harness.layer),
+      );
+    },
+  );
+
+  it.effect("retires a foreground subagent in flight at Stop exactly once", () => {
+    const harness = makeHarness();
+    const FG = "toolu_foreground_agent_stopped";
+    return Effect.gen(function* () {
+      const events = yield* eventsThroughStop(
+        harness,
+        [
+          rootToolUse(0, FG, "Agent", { description: "Foreground job", prompt: "Look around." }),
+          system("task_started", {
+            task_id: "task-fg-stopped",
+            tool_use_id: FG,
+            task_type: "local_agent",
+            subagent_type: "general-purpose",
+            is_backgrounded: false,
+            description: "Foreground job",
+          }),
+        ],
+        (event) => event.type === "task.started" && taskIdOf(event) === "task-fg-stopped",
+      );
+      assert.deepEqual(taskCompletions(events), [
+        { taskId: "task-fg-stopped", status: "stopped", toolUseId: FG, onRoot: true },
+      ]);
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect(
+    "keeps a notified background task's outcome when a lagging snapshot re-lists it",
+    () => {
+      const harness = makeHarness();
+      const BG = "toolu_background_agent_notified";
+      const TASK = "task-bg-notified";
+      const LIVE_TASK = "task-bg-still-live";
+      return Effect.gen(function* () {
+        const events = yield* eventsThroughStop(
+          harness,
+          [
+            ...backgroundLaunch(BG, TASK, false),
+            system("task_notification", {
+              task_id: TASK,
+              tool_use_id: BG,
+              status: "completed",
+              output_file: "/tmp/bg.out",
+              summary: "Done.",
+            }),
+            system("background_tasks_changed", {
+              tasks: [
+                { task_id: TASK, task_type: "local_agent", description: "Background job" },
+                { task_id: LIVE_TASK, task_type: "local_bash", description: "Still-running shell" },
+              ],
+            }),
+          ],
+          // The completed task is suppressed; the live sibling proves the snapshot drained.
+          (event) => event.type === "runtime.warning" && detailTaskIds(event).includes(LIVE_TASK),
+        );
+        assert.deepEqual(
+          events.filter((event) => event.type === "runtime.warning").flatMap(detailTaskIds),
+          [LIVE_TASK],
+        );
+        assert.deepEqual(taskCompletions(events), [
+          { taskId: TASK, status: "completed", toolUseId: BG, onRoot: true },
+          { taskId: LIVE_TASK, status: "stopped", toolUseId: undefined, onRoot: true },
+        ]);
+      }).pipe(
+        Effect.provideService(Random.Random, makeDeterministicRandomService()),
+        Effect.provide(harness.layer),
+      );
+    },
+  );
+
+  it.effect(
+    "retires a nested background subagent on the root and marks it on its launcher's thread",
+    () => {
+      const harness = makeHarness();
+      const OUTER = "toolu_outer_stopped";
+      const INNER = "toolu_inner_background_stopped";
+      return Effect.gen(function* () {
+        const events = yield* eventsThroughStop(
+          harness,
+          [
+            rootToolUse(0, OUTER, "Agent", { description: "Outer worker", prompt: "Spawn Inner." }),
+            system("task_started", {
+              task_id: "task-outer-stopped",
+              tool_use_id: OUTER,
+              task_type: "local_agent",
+              subagent_type: "general-purpose",
+              is_backgrounded: false,
+              description: "Outer worker",
+            }),
+            userMessage(OUTER, [{ type: "text", text: "Spawn Inner." }]),
+            subagentAssistant(OUTER, [
+              {
+                type: "tool_use",
+                id: INNER,
+                name: "Agent",
+                input: {
+                  description: "Inner worker",
+                  prompt: "Do the slow thing.",
+                  run_in_background: true,
+                },
+              },
+            ]),
+            system("task_started", {
+              task_id: "task-inner-stopped",
+              tool_use_id: INNER,
+              task_type: "local_agent",
+              subagent_type: "general-purpose",
+              is_backgrounded: true,
+              description: "Inner worker",
+            }),
+            userMessage(OUTER, [trackingToolResult(INNER, "Async agent launched successfully.")], {
+              status: "async_launched",
+              agentId: "task-inner-stopped",
+            }),
+          ],
+          (event) =>
+            event.type === "item.completed" &&
+            onChild(event, OUTER) &&
+            event.providerRefs?.providerItemId === INNER,
+        );
+        assert.deepEqual(taskCompletions(events), [
+          { taskId: "task-outer-stopped", status: "stopped", toolUseId: OUTER, onRoot: true },
+          { taskId: "task-inner-stopped", status: "stopped", toolUseId: INNER, onRoot: true },
+        ]);
+        const innerFinalStates = events
+          .filter(
+            (event) =>
+              event.type === "item.updated" && event.providerRefs?.providerItemId === INNER,
+          )
+          .map((event) => ({
+            status: (
+              payloadRecord(event).data as { agentStates?: Record<string, { status: string }> }
+            ).agentStates?.[INNER]?.status,
+            onLauncher: onChild(event, OUTER),
+          }))
+          .filter((entry) => entry.status !== undefined);
+        assert.deepEqual(innerFinalStates, [{ status: "stopped", onLauncher: true }]);
+      }).pipe(
+        Effect.provideService(Random.Random, makeDeterministicRandomService()),
+        Effect.provide(harness.layer),
+      );
+    },
+  );
 
   it.effect("closes a foreground subagent's child turn on its hand-back tool result", () => {
     const harness = makeHarness();

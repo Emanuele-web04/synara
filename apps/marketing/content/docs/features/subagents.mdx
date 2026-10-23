@@ -22,3 +22,7 @@ See [composer controls](/docs/features/composer) for queued follow-ups and [conv
 In Stable 1.0.5 and Beta, native subagent chats stay out of the main sidebar. Open them from launch cards, Environment or the Subagents dock; their parent remains the sidebar navigation target. Foreground Claude tasks settle when their actual parent turn ends, including errors and interruption. Late progress cannot revive a settled foreground task. Background tasks keep their separate completion lifecycle.
 
 Source evidence: feature head `4b2441d`; `apps/web/src/components/Sidebar.logic.ts`, `Sidebar.tsx`, `apps/web/src/storeSelectors.ts` and `apps/server/src/provider/Layers/ClaudeAdapter.ts`.
+
+## Background work in 1.0.8
+
+Running subagents appear above the composer. Devin ACP background work and children preserve task identity, ownership and permission routing across session recovery and native replay; orphaned tasks settle. Claude child chats report the model resolved by the child runtime when available. Provider capabilities still depend on the installed runtime.

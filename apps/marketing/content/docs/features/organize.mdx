@@ -121,3 +121,11 @@ Source evidence: feature head `4b2441d`; `apps/web/src/components/SidebarActivit
 In Stable 1.0.2 and Beta, **Settings → General → Thread tabs** controls whether the desktop single-pane chat header shows all open chats or only the current title. It is on by default. When shown, tabs keep readable widths and offer an overflow menu; split panes, mobile and the editor rail keep their existing header behavior.
 
 Source evidence: `apps/web/src/appSettings.ts`, `apps/web/src/routes/_chat.settings.tsx` and `apps/web/src/components/ChatView.tsx` in the 1.0.2 release source.
+
+## Navigation and focus in 1.0.8
+
+**Done** and **Archive** open the next eligible chat in the active Space. The Chats list and a Hub's own folder remain eligible in every Space; Void includes unfiled projects. Activity remembers its selected grouping across remounts and reloads.
+
+The **+** immediately after chat tabs creates a chat in the same workspace. Project actions are created or edited in **Environment → Actions**, with grouped launch controls in the header. Settings can hide Environment actions, Hand off and header actions independently. **mod+w** closes the focused chat tab or dock terminal. Closing a chat tab does not stop its agent.
+
+Window activation, composer updates and terminal activation preserve the control you selected; a late terminal focus request does not take focus from an active picker.

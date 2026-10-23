@@ -1695,12 +1695,15 @@ layer("historical account upgrades", (it) => {
           assert.deepStrictEqual(yield* sql`SELECT * FROM account_usage_sync`, account);
           assert.deepStrictEqual(yield* sql`SELECT * FROM remote_host_trust`, hosts);
           // RemoteAccessControls only adds columns with defaults that keep today's behaviour.
+          // Node 24 retains SELECT * metadata prepared before ALTER; prepare the canonical shape.
           assert.deepStrictEqual(
-            yield* sql`SELECT * FROM remote_device_trust`,
+            yield* sql`SELECT environment_id, root_fingerprint, device_jkt, device_public_key,
+              account_authority, owner_user_id, organization_id, label, generation, approved_at,
+              approved_invite_id, revoked_at, enrolled_via, last_connected_at FROM remote_device_trust`,
             devices.map((row) => ({ enrolled_via: "approval", last_connected_at: null, ...row })),
           );
           assert.deepStrictEqual(
-            yield* sql`SELECT * FROM remote_access_state`,
+            yield* sql`SELECT environment_id, root_fingerprint, enabled, allow_connections FROM remote_access_state`,
             access.map((row) => ({ allow_connections: 1, ...row })),
           );
           assert.deepStrictEqual(yield* sql`SELECT * FROM auth_pairing_links`, pairing);

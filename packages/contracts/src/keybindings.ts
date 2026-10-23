@@ -87,6 +87,7 @@ export const STATIC_KEYBINDING_COMMANDS = [
   "chat.attention.next",
   "threadTab.next",
   "threadTab.previous",
+  "threadTab.close",
   "editor.openFavorite",
   "editor.file.save",
   "editor.commands",

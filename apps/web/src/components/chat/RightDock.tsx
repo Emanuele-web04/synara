@@ -340,53 +340,56 @@ export function RightDock(props: RightDockProps) {
                 onSelect: onSelectPane ? () => onSelectPane(pane.id) : undefined,
                 onClose: () => props.onClosePane(pane.id),
               }))}
+              trailing={
+                props.state.panes.length === 0 ? null : props.addMenuKinds.length > 0 ? (
+                  <Menu modal={false}>
+                    <MenuTrigger
+                      render={
+                        <Button
+                          variant="chrome"
+                          size="icon-xs"
+                          aria-label="Add panel"
+                          title="Add panel"
+                          className={DOCK_HEADER_ICON_BUTTON_CLASS}
+                        />
+                      }
+                    >
+                      <PlusSignIcon className="size-4" />
+                    </MenuTrigger>
+                    <ComposerPickerMenuPopup align="end" side="bottom" className="w-44 min-w-44">
+                      {props.addMenuKinds.map((kind) => {
+                        const { Icon, label } = getRightDockPaneMeta(kind);
+                        return (
+                          <MenuItem
+                            key={kind}
+                            disabled={remotePaneUnavailable(kind)}
+                            title={
+                              remotePaneUnavailable(kind) ? REMOTE_NATIVE_UNAVAILABLE : undefined
+                            }
+                            onClick={() => props.onAddPane(kind)}
+                          >
+                            <Icon className="size-3.5 shrink-0" />
+                            <span>{label}</span>
+                          </MenuItem>
+                        );
+                      })}
+                    </ComposerPickerMenuPopup>
+                  </Menu>
+                ) : props.addAction ? (
+                  <IconButton
+                    variant="chrome"
+                    size="icon-xs"
+                    label={props.addAction.label}
+                    tooltip={props.addAction.label}
+                    tooltipSide="bottom"
+                    className={DOCK_HEADER_ICON_BUTTON_CLASS}
+                    onClick={props.addAction.onClick}
+                  >
+                    <PlusSignIcon className="size-3.5" />
+                  </IconButton>
+                ) : null
+              }
             />
-            {props.state.panes.length > 0 && props.addMenuKinds.length > 0 ? (
-              <Menu modal={false}>
-                <MenuTrigger
-                  render={
-                    <Button
-                      variant="chrome"
-                      size="icon-xs"
-                      aria-label="Add panel"
-                      title="Add panel"
-                      className={DOCK_HEADER_ICON_BUTTON_CLASS}
-                    />
-                  }
-                >
-                  <PlusSignIcon className="size-4" />
-                </MenuTrigger>
-                <ComposerPickerMenuPopup align="end" side="bottom" className="w-44 min-w-44">
-                  {props.addMenuKinds.map((kind) => {
-                    const { Icon, label } = getRightDockPaneMeta(kind);
-                    return (
-                      <MenuItem
-                        key={kind}
-                        disabled={remotePaneUnavailable(kind)}
-                        title={remotePaneUnavailable(kind) ? REMOTE_NATIVE_UNAVAILABLE : undefined}
-                        onClick={() => props.onAddPane(kind)}
-                      >
-                        <Icon className="size-3.5 shrink-0" />
-                        <span>{label}</span>
-                      </MenuItem>
-                    );
-                  })}
-                </ComposerPickerMenuPopup>
-              </Menu>
-            ) : null}
-            {props.state.panes.length > 0 && props.addMenuKinds.length === 0 && props.addAction ? (
-              <IconButton
-                variant="chrome"
-                size="icon-xs"
-                label={props.addAction.label}
-                tooltip={props.addAction.label}
-                tooltipSide="bottom"
-                className={DOCK_HEADER_ICON_BUTTON_CLASS}
-                onClick={props.addAction.onClick}
-              >
-                <PlusSignIcon className="size-3.5" />
-              </IconButton>
-            ) : null}
             {!isMobile && (maximized || activePane !== null) ? (
               <IconButton
                 variant="chrome"
@@ -442,6 +445,7 @@ export function RightDock(props: RightDockProps) {
                   )}
                   aria-hidden={isVisible ? undefined : true}
                   inert={isVisible ? undefined : true}
+                  data-dock-pane-id={pane.id}
                   data-native-browser-surface={
                     pane.kind === "browser" && isActive && runtimeMode === "live"
                       ? "true"

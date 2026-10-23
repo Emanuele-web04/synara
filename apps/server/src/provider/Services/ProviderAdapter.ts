@@ -78,6 +78,7 @@ export interface ProviderSteerSubagentPayload {
 export interface ProviderTurnDispatchOptions {
   readonly claudeCompactionCancellation?: Deferred.Deferred<void>;
 }
+
 export type ProviderConversationRollbackMode = "native" | "restart-session";
 
 export interface ProviderAdapterCapabilities {
@@ -291,6 +292,13 @@ export interface ProviderAdapterShape<TError> {
    * Check whether this adapter owns an active session id.
    */
   readonly hasSession: (threadId: ThreadId) => Effect.Effect<boolean>;
+
+  /**
+   * Check whether a context still needs cleanup, including a stopped context
+   * retained after teardown failed. Cleanup callers fall back to hasSession
+   * when omitted. Routing must continue to use hasSession.
+   */
+  readonly hasRetainedSession?: (threadId: ThreadId) => Effect.Effect<boolean>;
 
   /**
    * Read a provider thread snapshot.

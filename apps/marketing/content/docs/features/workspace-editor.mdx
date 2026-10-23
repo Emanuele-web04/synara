@@ -42,3 +42,17 @@ Continue with [Pull requests](/docs/workflows/pull-requests) for remote review a
 ## Editor defaults and insertion fixes in 0.9.0
 
 Markdown files open in **Preview** by default. Switch to editing when needed. Line insertion, subsequent typing, undo and redo now refresh editor rows correctly, with less repeated edit-time work. Existing autosave and conflict-recovery rules still apply.
+
+## Native editor and JavaScript debugger in Beta
+
+Starting with **1.0.9-beta.1**, Beta uses the Code OSS editing engine in file editors, editable diffs and previews. Stable retains the previous editing engine. TypeScript and JavaScript use the nearest project configuration for completion, hover, signatures, definitions, references, rename, diagnostics, formatting and text-only quick fixes/refactors. JSON, CSS and HTML offer their language-worker features; other languages retain highlighting and editing. Large lightweight previews keep the existing fallback.
+
+The same native document buffer owns autosave, conflict handling and undo across editing surfaces. Multi-file refactors validate each target, but saving them is not a transactional filesystem commit. No extension host, alternate workbench or crash-recovery guarantee is added.
+
+With the editor focused, use **F1** for commands, **F12** for definition, **Shift+F12** for references, **F2** for rename and **mod+.** for quick fixes. Commands are configurable in Settings → Keybindings. **F5** opens the debug launch dialog and **F9** toggles a breakpoint.
+
+Debugging launches trusted workspace JavaScript or a TypeScript entry point supported by the server's Node runtime, or attaches to a Node inspector on that machine's loopback interface. First use downloads a checksum-pinned Microsoft JavaScript debugger. Controls include pause/continue, stepping, call stack, variables, watches, console and output. Watches and console evaluation execute code in the debuggee. Closing an attached session detaches rather than killing the external process. Browser debugging, TSX, remote inspector hosts, interactive stdin and `.vscode/launch.json` recipes are not supported.
+
+## Captured live turn diffs
+
+In Stable 1.0.8 and Beta, **Turn** diffs can show the last published file-tool snapshot or a complete Codex cumulative patch while work runs. They preserve Ignore whitespace and reconnect state, then switch to the final checkpoint when capture succeeds. They do not read uncaptured edits on demand. Missing baselines, incomplete patches and failed capture can leave a preview unavailable or retain the last valid snapshot. **All turns** still uses completed checkpoints; a live preview is not proof of completion.

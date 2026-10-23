@@ -6,6 +6,7 @@ import type {
   DesktopBridge,
   DesktopComputerPreviewFrame,
   DesktopDiagnosticActivity,
+  DesktopWindowTranslucency,
   ProductAnalyticsInput,
 } from "@synara/contracts";
 import { normalizeDesktopWsUrl, resolveDesktopWsUrlFromEnv } from "./desktopWsBridge";
@@ -27,6 +28,17 @@ function getDesktopWsUrl(): string | null {
     return resolveDesktopWsUrlFromEnv(process.env);
   }
 }
+
+function getWindowTranslucency(): DesktopWindowTranslucency | undefined {
+  try {
+    const value: unknown = ipcRenderer.sendSync(IPC.windowTranslucency);
+    return value === "native" || value === "compositor" ? value : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+const windowTranslucency = getWindowTranslucency();
 
 function getBetaDiagnosticsBridge(): DesktopBridge["betaDiagnostics"] {
   try {
@@ -157,6 +169,7 @@ contextBridge.exposeInMainWorld("desktopBridge", {
   confirm: (message) => ipcRenderer.invoke(IPC.confirm, message),
   setTheme: (theme) => ipcRenderer.invoke(IPC.setTheme, theme),
   setWindowMaterial: (input) => ipcRenderer.invoke(IPC.setWindowMaterial, input),
+  ...(windowTranslucency ? { windowTranslucency } : {}),
   getAppIcon: () => ipcRenderer.invoke(IPC.getAppIcon),
   setAppIcon: (icon) => ipcRenderer.invoke(IPC.setAppIcon, icon),
   showContextMenu: (items, position) => ipcRenderer.invoke(IPC.contextMenu, items, position),

@@ -48,6 +48,8 @@ const api = vi.hoisted(() => {
       })),
       linkProject: vi.fn(),
       unlinkProject: vi.fn(),
+      pauseGroup: vi.fn(),
+      resumeGroup: vi.fn(),
       deleteGroup: vi.fn(async () => ({
         deletedProjectId: "project-group-1",
         libraryLeftOnDiskPath: null,
@@ -300,6 +302,59 @@ describe("GroupSettingsDialog", () => {
     );
     const payload = api.projectAgent.configure.mock.calls[0]?.[0] as Record<string, unknown>;
     expect(payload.coordinatorName).toBe("beta");
+  });
+
+  it("saves a rename after Pause and Resume in the same dialog", async () => {
+    await renderDialog();
+    await expect.element(page.getByLabelText("Hub name")).toBeInTheDocument();
+
+    const lifecycle = (revision: number, pausedAt: string | null) =>
+      overview({ config: { ...overview().config!, revision, pausedAt } });
+    api.projectAgent.pauseGroup.mockResolvedValue(lifecycle(5, "2026-09-02T00:00:00.000Z"));
+    api.projectAgent.getOverview.mockResolvedValue(lifecycle(5, "2026-09-02T00:00:00.000Z"));
+    await page.getByRole("button", { name: "Pause", exact: true }).click();
+    api.projectAgent.resumeGroup.mockResolvedValue(lifecycle(6, null));
+    api.projectAgent.getOverview.mockResolvedValue(lifecycle(6, null));
+    await page.getByRole("button", { name: "Resume", exact: true }).click();
+    await expect
+      .element(page.getByRole("button", { name: "Pause", exact: true }))
+      .toBeInTheDocument();
+
+    await page.getByLabelText("Hub name").fill("beta");
+    await page.getByRole("button", { name: "Save", exact: true }).click();
+
+    await vi.waitFor(() => expect(api.projectAgent.configure).toHaveBeenCalledOnce());
+    const payload = api.projectAgent.configure.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(payload.expectedRevision).toBe(6);
+  });
+
+  it("keeps the opened revision when a newer config also changed a setting", async () => {
+    await renderDialog();
+    await expect.element(page.getByLabelText("Hub name")).toBeInTheDocument();
+
+    // Another writer's save landed before this pause. Save must still report the conflict.
+    const config = overview().config!;
+    const pausedAfterOtherSave = overview({
+      config: {
+        ...config,
+        revision: 6,
+        pausedAt: "2026-09-02T00:00:00.000Z",
+        limits: { ...config.limits, maxConcurrentWorkers: 2 },
+      },
+    });
+    api.projectAgent.pauseGroup.mockResolvedValue(pausedAfterOtherSave);
+    api.projectAgent.getOverview.mockResolvedValue(pausedAfterOtherSave);
+    await page.getByRole("button", { name: "Pause", exact: true }).click();
+    await expect
+      .element(page.getByRole("button", { name: "Resume", exact: true }))
+      .toBeInTheDocument();
+
+    await page.getByLabelText("Hub name").fill("beta");
+    await page.getByRole("button", { name: "Save", exact: true }).click();
+
+    await vi.waitFor(() => expect(api.projectAgent.configure).toHaveBeenCalledOnce());
+    const payload = api.projectAgent.configure.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(payload.expectedRevision).toBe(4);
   });
 
   it("autosaves Memory instructions to instructions.md", async () => {

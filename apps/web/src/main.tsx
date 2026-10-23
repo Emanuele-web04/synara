@@ -11,7 +11,7 @@ import { getRouter } from "./router";
 import { APP_DISPLAY_NAME } from "./branding";
 import { isDesktopPresentation } from "~/lib/hosts/workspacePresentation";
 import { readWorkspaceFrame } from "./lib/hosts/workspaceFrame";
-import { isMacPlatform } from "./lib/utils";
+import { readDesktopWindowTranslucency } from "./lib/desktopWindowTranslucency";
 import { installGlassOverlayCutout } from "./lib/glassOverlayCutout";
 import { trackProductNavigation } from "./lib/productAnalytics";
 import { installRendererErrorDiagnostics } from "./lib/rendererErrorDiagnostics";
@@ -34,10 +34,11 @@ if (readWorkspaceFrame()) document.documentElement.dataset.workspaceFrame = "tru
 
 if (isDesktopPresentation) {
   document.documentElement.dataset.runtime = "electron";
-  // macOS desktop windows are transparent vibrancy windows (see getWindowMaterialOptions
-  // in apps/desktop). A `backdrop-filter` cannot hide page content over a see-through
-  // region there, so floating overlays get the page cut out from under them instead.
-  if (isMacPlatform(navigator.platform)) {
+  // Desktop windows backed by macOS vibrancy or the Hyprland compositor blur are transparent
+  // (see getWindowMaterialOptions in apps/desktop). A `backdrop-filter` cannot hide page
+  // content over a see-through region there, so floating overlays get the page cut out from
+  // under them instead.
+  if (readDesktopWindowTranslucency() !== null) {
     document.documentElement.dataset.windowTransparent = "true";
     const disposeGlassOverlayCutout = installGlassOverlayCutout(rootElement);
     if (import.meta.hot) import.meta.hot.dispose(disposeGlassOverlayCutout);

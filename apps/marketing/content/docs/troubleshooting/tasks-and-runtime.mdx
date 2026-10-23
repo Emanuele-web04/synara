@@ -199,3 +199,9 @@ Long chats avoid repeated history scans and full-detail reads during routine tur
 Runtime reconciliation preserves live turn ownership and pages through older candidates. Provider handoffs settle known outcomes without replaying native stop/start operations. These changes preserve saved history and do not justify resetting the database.
 
 Source evidence: Synara 1.0.6 `ProjectionSnapshotQuery.ts`, `ProviderCommandReactor.ts`, `ProviderRuntimeReconciler.ts`, `wsTransport.ts` and `docs/event-loop-stalls.md`.
+
+## Storage maintenance in 1.0.8
+
+Deleting chats makes SQLite pages reusable; the file may remain larger than its live data. New databases reclaim free pages incrementally. Existing databases may attempt a one-time rebuild after clean shutdown only with enough free pages and scratch space. Insufficient space or a bounded timeout defers maintenance. This does not delete additional chat content and is not an emergency disk-recovery guarantee. Do not remove the database or its WAL to force reclamation.
+
+Stopped Pi and Antigravity sessions become inactive for ordinary next-turn recovery. An unanswered foreground Computer Use prompt is cancelled; it is not recorded as a human decline. Preserve the actual error and task state before retrying.

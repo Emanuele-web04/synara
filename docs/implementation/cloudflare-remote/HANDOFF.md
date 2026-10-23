@@ -1,5 +1,34 @@
 # Remote connections — punto di ripartenza
 
+## Main integration and next release preparation — 2026-10-23
+
+- Integrated the 19 upstream commits through `d7542782` with ordinary merges,
+  preserving the published Remote history and separate app identity. This includes
+  provider stop/recovery, Devin background work, Hub routing, captured turn diffs,
+  persisted Activity grouping, terminal reuse, window behavior and Stable 1.0.8
+  documentation. The source branch keeps its Remote versions; release assembly
+  assigns the next Remote version separately.
+- Remote software-update admission now also checks retained provider sessions.
+  Failed process cleanup or a failed retained-session read keeps restart blocked;
+  filtering a session out of the live routing list is not evidence of cleanup.
+- Remote workspace frames inherit only the controller's display backing metadata.
+  Existing Mac controllers retain their prior presentation when the new getter is
+  absent; an explicit opaque result remains authoritative. No native operation or
+  new permission is exposed to the frame.
+- Companion iOS source reconciles only explicit provider corrections of provisional
+  stops. Ordinary late events cannot reopen genuinely completed or failed tasks;
+  sparse updates retain launch details. This does not add a native captured-turn
+  diff viewer or prove live provider/process behavior on every platform.
+- Local checks include the complete server run and focused repairs of its three
+  test failures: Node 24 reused pre-ALTER `SELECT *` metadata in two historical
+  fixtures, and a Claude test waited for a stale event intentionally suppressed by
+  Remote. Fresh canonical-column assertions and an observable live-task barrier
+  retain the data/outcome checks; both complete files pass **350 tests**. No
+  production migration, skipped test or increased timeout was needed.
+- Native Core passes **352 tests / 38 suites**. Release qualification is still in
+  progress; the last confirmed published builds remain Remote **.28** and universal
+  TestFlight **0.1 (152)** until their successors are independently verified.
+
 ## Recupero dopo il vecchio rifiuto — 17 ottobre 2026
 
 - Remote .14 ha accesso pubblico alle funzionalità Remote, senza pagamento o

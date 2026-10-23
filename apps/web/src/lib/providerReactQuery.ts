@@ -24,6 +24,8 @@ interface CheckpointDiffQueryInput {
   toTurnCount: number | null;
   ignoreWhitespace: boolean;
   cacheScope?: string | null;
+  /** Live snapshots are replaced frequently; release unused full patches immediately. */
+  liveSnapshot?: boolean;
   enabled?: boolean;
 }
 
@@ -162,6 +164,7 @@ export function checkpointDiffQueryOptions(input: CheckpointDiffQueryInput) {
     },
     enabled: (input.enabled ?? true) && !!input.threadId && decodedRequest._tag === "Some",
     staleTime: Infinity,
+    ...(input.liveSnapshot ? { gcTime: 0 } : {}),
     retry: (failureCount, error) => {
       if (isRpcCapacityExceededError(error)) {
         return shouldRetryExpensiveRead(failureCount, error);

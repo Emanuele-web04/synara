@@ -33,6 +33,7 @@ import {
   type ProviderInteractionMode,
   type ProviderRuntimeEvent,
   ProviderKind,
+  ProviderTaskReconciliation,
   type ProviderReviewTarget,
   type ProviderStartOptions,
   type ProviderSkillReference,
@@ -146,6 +147,8 @@ import {
 } from "../../persistence/Services/ProviderRuntimeEvents.ts";
 import { QueuedTurnPromotionRepositoryLive } from "../../persistence/Layers/QueuedTurnPromotions.ts";
 import { ProjectionPendingInteractionRepository } from "../../persistence/Services/ProjectionPendingInteractions.ts";
+import { ProjectionThreadActivityRepository } from "../../persistence/Services/ProjectionThreadActivities.ts";
+import { ProjectionThreadActivityRepositoryLive } from "../../persistence/Layers/ProjectionThreadActivities.ts";
 import { ProjectionThreadMessageRepository } from "../../persistence/Services/ProjectionThreadMessages.ts";
 import { ProjectionThreadMessageRepositoryLive } from "../../persistence/Layers/ProjectionThreadMessages.ts";
 import { orchestrationMessageFromStoredMessage } from "../../persistence/projectionThreadMessageRow.ts";
@@ -959,6 +962,7 @@ const make = Effect.gen(function* () {
   const projectAgentService = yield* Effect.serviceOption(ProjectAgentService);
   const providerHealth = yield* ProviderHealth;
   const pendingInteractions = yield* ProjectionPendingInteractionRepository;
+  const projectionThreadActivityRepository = yield* ProjectionThreadActivityRepository;
   const projectionThreadMessageRepository = yield* ProjectionThreadMessageRepository;
   const runtimeEventRepository = yield* ProviderRuntimeEventRepository;
   const checkpointStore = yield* CheckpointStore;
@@ -1705,7 +1709,14 @@ const make = Effect.gen(function* () {
       thread.session?.providerInstanceId !== requestedProviderInstanceId
         ? thread.session?.providerName
         : null;
-    const runtimeSession = (yield* providerService.listSessions()).find(
+    // A context whose teardown failed is out of the live listing, but its
+    // process may still run. Read the live listing first, then that one.
+    const [liveSessions, retainedSessions] = yield* Effect.all([
+      providerService.listSessions(),
+      providerService.listRetainedSessions?.() ??
+        Effect.succeed<ReadonlyArray<ProviderSession>>([]),
+    ]);
+    const runtimeSession = [...liveSessions, ...retainedSessions].find(
       (session) => session.threadId === input.threadId,
     );
     yield* setThreadSession({
@@ -1843,6 +1854,88 @@ const make = Effect.gen(function* () {
         orchestrationMessageFromStoredMessage,
       ),
     );
+  });
+
+  const pendingDevinTaskReconciliations = Effect.fnUntraced(function* (
+    thread: OrchestrationThreadShell | undefined,
+  ) {
+    if (!thread) return [];
+    const owned = new Map([[thread.id, thread]]);
+    const shell = yield* projectionSnapshotQuery.getShellSnapshot();
+    let discovered = true;
+    while (discovered) {
+      discovered = false;
+      for (const child of shell.threads) {
+        if (
+          child.parentThreadId == null ||
+          !owned.has(child.parentThreadId) ||
+          child.subagentAgentId == null ||
+          // Follow the same runtime boundary as resolveProviderSessionThread:
+          // a linked non-synthetic child can own an independent provider session.
+          (!child.id.startsWith("subagent:") && child.session !== null) ||
+          owned.has(child.id)
+        )
+          continue;
+        const detail = yield* resolveThreadShell(child.id);
+        if (detail) {
+          owned.set(child.id, detail);
+          discovered = true;
+        }
+      }
+    }
+    const pending = new Map<string, ProviderTaskReconciliation>();
+    for (const owner of owned.values()) {
+      // Replay needs the complete task history, not the capped transcript detail
+      // or its activity-free fast path. Avoid hydrating messages and checkpoints.
+      const activities = yield* projectionThreadActivityRepository.listByThreadId({
+        threadId: owner.id,
+      });
+      for (const activity of activities) {
+        if (
+          activity.kind !== "task.started" &&
+          activity.kind !== "task.updated" &&
+          activity.kind !== "task.completed"
+        )
+          continue;
+        const payload = activity.payload;
+        if (
+          typeof payload !== "object" ||
+          payload === null ||
+          Array.isArray(payload) ||
+          !("taskId" in payload) ||
+          typeof payload.taskId !== "string"
+        )
+          continue;
+        if (
+          activity.kind === "task.started" ||
+          (activity.kind === "task.updated" &&
+            (!("status" in payload) || payload.status === "running")) ||
+          ("status" in payload &&
+            payload.status === "stopped" &&
+            "awaitingProviderConfirmation" in payload &&
+            payload.awaitingProviderConfirmation === true)
+        ) {
+          const correlation = Schema.decodeUnknownOption(ProviderTaskReconciliation)({
+            taskId: payload.taskId,
+            ...("interactionMode" in payload ? { interactionMode: payload.interactionMode } : {}),
+            ...(activity.turnId ? { turnId: activity.turnId } : {}),
+            ...("toolUseId" in payload && typeof payload.toolUseId === "string"
+              ? { toolUseId: payload.toolUseId }
+              : {}),
+            ...(owner.subagentAgentId ? { parentAgentId: owner.subagentAgentId } : {}),
+          });
+          if (Option.isSome(correlation) && !pending.has(payload.taskId))
+            pending.set(payload.taskId, correlation.value);
+        } else if (
+          // A local session stop does not prove the remote Devin task ended.
+          // Keep its known launch identity until native replay settles it.
+          !("status" in payload && payload.status === "stopped" && pending.has(payload.taskId))
+        ) {
+          pending.delete(payload.taskId);
+        }
+      }
+    }
+    return [...pending.values()];
   });
 
   const lookupProviderSessionThread = Effect.fnUntraced(function* (threadId: ThreadId) {
@@ -2475,22 +2568,33 @@ const make = Effect.gen(function* () {
     const startProviderSessionWithOutcome = (
       resumeCursor?: unknown,
       registerPriorTranscriptBootstrapOnFreshStart = false,
-    ) => {
-      const startInput = providerSessionStartInput(resumeCursor);
-      return providerService.startSessionWithOutcome
-        ? providerService.startSessionWithOutcome(threadId, startInput, {
-            registerPriorTranscriptBootstrapOnFreshStart,
-            ...(startsStoredProvider ? { abandonOtherProviderContinuation: true } : {}),
-          })
-        : providerService.startSession(threadId, startInput).pipe(
-            Effect.map((session) => ({
-              session,
-              nativeResumeAttempted: resumeCursor !== undefined && resumeCursor !== null,
-              nativeResumeSucceeded: resumeCursor !== undefined && resumeCursor !== null,
-              priorTranscriptBootstrapPending: registerPriorTranscriptBootstrapOnFreshStart,
-            })),
-          );
-    };
+    ) =>
+      Effect.gen(function* () {
+        const pendingReconciliations =
+          preferredProvider === "devin"
+            ? yield* pendingDevinTaskReconciliations(yield* resolveThreadShell(threadId))
+            : [];
+        const startInput = {
+          ...providerSessionStartInput(resumeCursor),
+          ...(pendingReconciliations.length > 0
+            ? { pendingTaskReconciliations: pendingReconciliations }
+            : {}),
+        };
+        const startEffect = providerService.startSessionWithOutcome
+          ? providerService.startSessionWithOutcome(threadId, startInput, {
+              registerPriorTranscriptBootstrapOnFreshStart,
+              ...(startsStoredProvider ? { abandonOtherProviderContinuation: true } : {}),
+            })
+          : providerService.startSession(threadId, startInput).pipe(
+              Effect.map((session) => ({
+                session,
+                nativeResumeAttempted: resumeCursor !== undefined && resumeCursor !== null,
+                nativeResumeSucceeded: resumeCursor !== undefined && resumeCursor !== null,
+                priorTranscriptBootstrapPending: registerPriorTranscriptBootstrapOnFreshStart,
+              })),
+            );
+        return yield* startEffect;
+      });
 
     const bindSessionToThread = (session: ProviderSession) =>
       setThreadSession({
@@ -9647,6 +9751,7 @@ export const makeProviderCommandReactorLive = (options?: ProviderCommandReactorL
     }
   }
   return Layer.effect(ProviderCommandReactor, make).pipe(
+    Layer.provide(ProjectionThreadActivityRepositoryLive),
     Layer.provide(ProjectionThreadMessageRepositoryLive),
     Layer.provide(
       Layer.succeed(ProviderCommandReactorConfig, {

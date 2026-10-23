@@ -116,6 +116,7 @@ const OUTPUT_ACK_RESUME_TIMEOUT_MS = 10_000;
 const DEFAULT_OPEN_COLS = 120;
 const DEFAULT_OPEN_ROWS = 30;
 const PROVIDER_INPUT_ACTIVITY_GRACE_MS = 120_000;
+const TERMINAL_INPUT_SETTLE_MS = 1_000;
 const PROVIDER_OUTPUT_ACTIVITY_GRACE_MS = 30_000;
 const SHUTDOWN_ESCALATION_SETTLE_MS = 25;
 const TERMINAL_ENV_BLOCKLIST = new Set([
@@ -1273,7 +1274,9 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
     if (
       activity.hasRunningSubprocess ||
       session.managedAgentRunning ||
-      (session.lastInputAt !== null && session.lastInputAt >= inspectionStartedAt)
+      // A PTY write can return before the shell forks the submitted command.
+      (session.lastInputAt !== null &&
+        session.lastInputAt >= inspectionStartedAt - TERMINAL_INPUT_SETTLE_MS)
     ) {
       throw new Error("The terminal is busy. Stop its command before running this action.");
     }

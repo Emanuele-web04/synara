@@ -49,8 +49,11 @@ decoration pauses while its chat is hidden.
   chats stay out of message results. Every search word must match the message body;
   the server returns at most 50 hits with short excerpts. Message matching ignores ASCII letter case.
   Archiving the open thread or marking it **Done** opens the most recently used unfinished chat
-  across projects, ordered by its last human message (or creation time). If none remains, New
-  thread reopens an unsent draft. Actions on other threads keep the current chat open.
+  in the active Space, ordered by its last human message (or creation time). The **Chats** list
+  and a Hub's own folder belong to no Space, so their chats count in every Space. A Hub thread in
+  a linked repository follows that repository's Space. With **Void** selected, only projects not
+  filed in any Space count. If none remains, New thread reopens an unsent draft.
+  Actions on other threads keep the current chat open.
   Both Archive and Done offer an **Undo** toast; undoing an action on the open thread returns to it.
 - **Code review** — pull requests and issues from the GitHub repositories of your projects, with a
   detail pane and three actions on every item (see [Code review](#code-review))
@@ -104,9 +107,10 @@ You do not need every surface open at once. Bring each one in when it answers a 
 running, what changed, whether the UI works, or whether the task is safe to ship.
 
 Desktop quit requests ask for confirmation even when no chats are running. On macOS,
-⌘Q quits the application after confirmation; ⌘W confirms closing the window while the
-application and its running chats stay active. Quitting with no open window uses a
-native confirmation. With an open window and running chats, the quit dialog lists the work that
+⌘Q quits the application after confirmation. Cmd/Ctrl+W closes the focused terminal or
+workspace view, or the active open chat tab when available. If no surface handles the chord,
+macOS ⌘W confirms closing the window while the application and its running chats stay active.
+Quitting with no open window uses a native confirmation. With an open window and running chats, the quit dialog lists the work that
 will stop and offers to resume it automatically on the next launch. On macOS and Linux, a SIGINT
 or SIGTERM from a terminal or a script, such as `bun run canary:stop`, shuts the app down without
 asking.
@@ -462,6 +466,18 @@ follow a successful commit or push, so inspect the current branch before retryin
 
 Synara's checkpoint and revert controls can help recover task work, but committed Git history remains
 the strongest boundary for important changes.
+
+For providers whose live changes Synara captures from Git, an individual **Turn** diff can show
+its latest completed file-tool snapshot before the turn finishes. It updates when the next snapshot
+is published, survives reconnects, preserves Ignore whitespace, and switches to the final checkpoint
+after capture succeeds, including interrupted turns with a captured exact baseline. A failed terminal
+capture retains the last preview; later events cannot recapture work for the settled turn.
+It does not read uncaptured worktree edits on demand. Codex cumulative turn patches can also appear
+before completion: Synara applies the exact journal revision to its captured turn-start baseline in
+a private Git index, preserving Ignore whitespace without reading later checkout edits. A missing
+baseline, mismatched patch, compacted payload or older event without integrity metadata remains
+unavailable until a fresh complete update or final checkpoint. **All turns** still uses completed
+checkpoints; a live preview is not proof that a turn finished.
 
 File Undo and thread revert refuse to change a workspace while another thread has an active or
 pending turn in that same Git checkout. Symlinks and nested folders share this protection;

@@ -304,6 +304,14 @@ const DEFAULT_BINDINGS = compile([
     whenAst: whenIdentifier("terminalWorkspaceOpen"),
   },
   {
+    shortcut: modShortcut("w"),
+    command: "threadTab.close",
+    whenAst: whenAnd(
+      whenNot(whenIdentifier("terminalFocus")),
+      whenNot(whenIdentifier("terminalWorkspaceOpen")),
+    ),
+  },
+  {
     shortcut: ctrlShortcut("1"),
     command: "terminal.workspace.terminal",
     whenAst: whenIdentifier("terminalWorkspaceOpen"),
@@ -816,11 +824,30 @@ describe("workspace terminal tab shortcuts", () => {
       }),
       "terminal.workspace.closeActive",
     );
-    assert.isNull(
+    // With no terminal focused and no workspace open the chord closes the active
+    // open-thread tab instead of reaching the native window-close role.
+    assert.strictEqual(
       resolveShortcutCommand(event({ key: "w", metaKey: true }), DEFAULT_BINDINGS, {
         platform: "MacIntel",
         context: { terminalWorkspaceOpen: false, terminalFocus: false },
       }),
+      "threadTab.close",
+    );
+    // ...including on Linux/Windows, where the same chord is Ctrl+W.
+    assert.strictEqual(
+      resolveShortcutCommand(event({ key: "w", ctrlKey: true }), DEFAULT_BINDINGS, {
+        platform: "Linux",
+        context: { terminalWorkspaceOpen: false, terminalFocus: false },
+      }),
+      "threadTab.close",
+    );
+    // A focused terminal still owns the chord for terminal.close.
+    assert.strictEqual(
+      resolveShortcutCommand(event({ key: "w", metaKey: true }), DEFAULT_BINDINGS, {
+        platform: "MacIntel",
+        context: { terminalWorkspaceOpen: false, terminalFocus: true },
+      }),
+      "terminal.close",
     );
   });
 
