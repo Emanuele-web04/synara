@@ -2367,6 +2367,9 @@ describe("ChatView transcript geometry (full app)", () => {
     attachmentCancelBarrier = null;
     localStorage.clear();
     acknowledgeStartupAnnouncementsForTest(createBaseServerConfig());
+    // localStorage.clear does not reset Zustand's in-memory persisted state. A previous
+    // test may leave the dock's empty launcher open, narrowing this fixture's chat header.
+    useRightDockStore.setState({ dockStateByThreadId: {} });
     useProjectEnvironmentStore.setState({ envModeByProjectId: {} });
     useThreadDispatchStore.setState({ threads: {} });
     useLatestProjectStore.setState({ latestProjectId: null });
