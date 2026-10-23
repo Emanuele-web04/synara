@@ -5335,6 +5335,8 @@ export default function ChatView({
     clearComposerSlashDraft,
     composerMenuOpenRef,
     onSend,
+    onSteerQueuedComposerTurn,
+    hasComposerContent: composerSendState.hasSendableContent,
     settings,
     hasLiveTurn,
     isLocalFolderBrowserOpen,
