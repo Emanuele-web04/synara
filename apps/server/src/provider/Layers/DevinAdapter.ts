@@ -2668,6 +2668,7 @@ export function makeDevinAdapter(
 
           const acp = yield* createAcpRuntime({
             assistantItemScope: (metadata) => readDevinSubagentContext(metadata)?.parentAgentId,
+            loadReplayPolicy: { retainToolState: true },
             devinSettings: effectiveDevinSettings,
             childProcessSpawner,
             cwd,
@@ -3176,7 +3177,7 @@ export function makeDevinAdapter(
                         }
                         return;
                       }
-                      if (ctx.resumeReplayReady !== undefined) {
+                      if (ctx.resumeReplayReady !== undefined || event.replayed) {
                         ctx.devinToolCallStateById.set(event.toolCall.toolCallId, toolCall);
                         // Rebuild native control state from session/load replay,
                         // while suppressing all historical UI lifecycle events.
@@ -3301,6 +3302,9 @@ export function makeDevinAdapter(
                           ctx.devinBackgroundShells.set(shell.shellId, shell);
                         }
                         yield* noteSuppressedDevinRuntimeEvent(ctx, event._tag, "resume-replay");
+                        if (ctx.resumeReplayReady === undefined) {
+                          yield* registerReplayedDevinTasks(ctx);
+                        }
                         return;
                       }
                       const subagentContext = readDevinSubagentContext(toolCall.metadata);

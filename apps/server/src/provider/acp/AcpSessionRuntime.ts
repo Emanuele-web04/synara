@@ -437,6 +437,8 @@ export interface AcpSessionRuntimeOptions {
   readonly loadReplayPolicy?: {
     readonly quietMs?: number;
     readonly hardTimeoutMs?: number;
+    /** Forward historical tool state to an adapter that rebuilds native task ownership. */
+    readonly retainToolState?: boolean;
   };
   readonly requestLogger?: (event: AcpSessionRequestLogEvent) => Effect.Effect<void, never>;
   readonly normalizeIncomingMessage?: (message: unknown) => unknown;
@@ -1362,6 +1364,7 @@ const makeAcpSessionRuntime = (
             assistantSegmentRef,
             runtimeInstanceId,
             assistantItemScope: options.assistantItemScope,
+            retainReplayToolState: options.loadReplayPolicy?.retainToolState === true,
             resolveConfigOptionUpdateWaiters,
             skipTranscriptEvents: replay === "bounded-only",
             params: notification,
@@ -1449,6 +1452,7 @@ const makeAcpSessionRuntime = (
               assistantSegmentRef,
               runtimeInstanceId,
               assistantItemScope: options.assistantItemScope,
+              retainReplayToolState: options.loadReplayPolicy?.retainToolState === true,
               resolveConfigOptionUpdateWaiters,
               skipTranscriptEvents: false,
               params: notification,
@@ -1589,6 +1593,7 @@ const makeAcpSessionRuntime = (
             assistantSegmentRef,
             runtimeInstanceId,
             assistantItemScope: options.assistantItemScope,
+            retainReplayToolState: options.loadReplayPolicy?.retainToolState === true,
             resolveConfigOptionUpdateWaiters,
             skipTranscriptEvents: suppress,
             params: notification,
@@ -2395,6 +2400,7 @@ const processSessionUpdate = ({
   assistantSegmentRef,
   runtimeInstanceId,
   skipTranscriptEvents,
+  retainReplayToolState,
   assistantItemScope,
   resolveConfigOptionUpdateWaiters,
   params,
@@ -2410,6 +2416,7 @@ const processSessionUpdate = ({
   readonly assistantSegmentRef: Ref.Ref<AcpAssistantSegmentState>;
   readonly runtimeInstanceId: string;
   readonly skipTranscriptEvents: boolean;
+  readonly retainReplayToolState: boolean;
   readonly assistantItemScope?: AcpSessionRuntimeOptions["assistantItemScope"];
   readonly resolveConfigOptionUpdateWaiters: (
     configOptions: ReadonlyArray<Acp.SessionConfigOption>,
@@ -2445,6 +2452,11 @@ const processSessionUpdate = ({
     }
 
     if (skipTranscriptEvents) {
+      if (retainReplayToolState) {
+        for (const event of parsed.events) {
+          if (event._tag === "ToolCallUpdated") yield* offer({ ...event, replayed: true });
+        }
+      }
       return;
     }
 

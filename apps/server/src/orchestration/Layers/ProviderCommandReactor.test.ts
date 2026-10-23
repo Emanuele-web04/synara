@@ -18956,7 +18956,7 @@ describe("ProviderCommandReactor", () => {
         "live-agent",
         "running",
         "2026-10-11T00:00:06.000Z",
-        { toolUseId: "live-tool" },
+        { toolUseId: "live-tool", interactionMode: "plan" },
         threadId,
         asTurnId("live-launch-turn"),
         "task.started",
@@ -18985,7 +18985,12 @@ describe("ProviderCommandReactor", () => {
       provider: "devin",
       pendingTaskReconciliations: [
         { taskId: "shell-pending" },
-        { taskId: "live-agent", toolUseId: "live-tool", turnId: "live-launch-turn" },
+        {
+          taskId: "live-agent",
+          toolUseId: "live-tool",
+          turnId: "live-launch-turn",
+          interactionMode: "plan",
+        },
         {
           taskId: "nested-task",
           turnId: "original-nested-turn",

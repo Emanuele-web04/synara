@@ -85,6 +85,7 @@ export type AcpParsedSessionEvent =
       readonly _tag: "ToolCallUpdated";
       readonly toolCall: AcpToolCallState;
       readonly rawPayload: unknown;
+      readonly replayed?: boolean;
     }
   | {
       readonly _tag: "ContentDelta";

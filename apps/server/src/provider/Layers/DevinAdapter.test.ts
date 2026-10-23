@@ -4,6 +4,7 @@
 // Layer: Provider adapter tests
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
+import { fileURLToPath } from "node:url";
 import type * as Acp from "@agentclientprotocol/sdk";
 import { RuntimeTaskId, ThreadId, TurnId, type ProviderRuntimeEvent } from "@synara/contracts";
 import {
@@ -16,8 +17,10 @@ import {
   Queue,
   Scope,
   Semaphore,
+  ServiceMap,
   Stream,
 } from "effect";
+import { ChildProcessSpawner } from "effect/unstable/process";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { AcpRequestError, AcpTransportError } from "../acp/AcpErrors.ts";
@@ -25,6 +28,7 @@ import { ProviderAdapterProcessError } from "../Errors.ts";
 import { ServerConfig } from "../../config.ts";
 import * as AcpErrors from "../acp/AcpErrors.ts";
 import type { AcpSessionRuntimeShape } from "../acp/AcpSessionRuntime.ts";
+import { AcpSessionRuntime } from "../acp/AcpSessionRuntime.ts";
 import { makeFakeAcpSessionRuntime } from "../acp/testing/fakeAcpSessionRuntime.ts";
 import type { DevinAcpRuntimeInput } from "../acp/DevinAcpSupport.ts";
 import type { AcpParsedSessionEvent, AcpToolCallState } from "../acp/AcpRuntimeModel.ts";
@@ -3876,6 +3880,125 @@ it("routes late child tools, text and completion to the launch turn after a new 
         }),
       ),
     ),
+  );
+});
+
+it("restores native replay ownership and launch policy through the actual ACP subprocess", async () => {
+  const layer = makeDevinAdapterLive(
+    {},
+    {
+      makeAcpRuntime: (input) =>
+        Effect.gen(function* () {
+          const context = yield* Layer.build(
+            AcpSessionRuntime.layer({
+              ...input,
+              spawn: {
+                command: process.execPath,
+                args: [
+                  fileURLToPath(new URL("../../../scripts/acp-mock-agent.ts", import.meta.url)),
+                ],
+                env: { SYNARA_ACP_DEVIN_TASK_REPLAY: "1" },
+              },
+              authPolicy: "on-demand",
+            }).pipe(
+              Layer.provide(
+                Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, input.childProcessSpawner),
+              ),
+            ),
+          );
+          return ServiceMap.getUnsafe(context, AcpSessionRuntime);
+        }),
+    },
+  ).pipe(
+    Layer.provideMerge(ServerConfig.layerTest(process.cwd(), { prefix: "devin-wire-replay-" })),
+    Layer.provideMerge(NodeServices.layer),
+  );
+  await Effect.runPromise(
+    Effect.gen(function* () {
+      const adapter = yield* DevinAdapter;
+      const threadId = ThreadId.makeUnsafe("devin-wire-replay");
+      const events: ProviderRuntimeEvent[] = [];
+      yield* adapter.streamEvents.pipe(
+        Stream.runForEach((event) => Effect.sync(() => events.push(event))),
+        Effect.forkScoped,
+      );
+      yield* Effect.yieldNow;
+      yield* adapter.startSession({
+        provider: "devin",
+        threadId,
+        runtimeMode: "full-access",
+        resumeCursor: { schemaVersion: 1, sessionId: "mock-session-1" },
+        pendingTaskReconciliations: [
+          {
+            taskId: RuntimeTaskId.makeUnsafe("live-child"),
+            turnId: asTurnId("launch-turn"),
+            toolUseId: "live-child-launch",
+            interactionMode: "plan",
+          },
+          {
+            taskId: RuntimeTaskId.makeUnsafe("stopped-child"),
+            turnId: asTurnId("launch-turn"),
+            toolUseId: "stopped-child-launch",
+            interactionMode: "plan",
+          },
+          {
+            taskId: RuntimeTaskId.makeUnsafe("live-shell"),
+            turnId: asTurnId("launch-turn"),
+            toolUseId: "live-shell-tool",
+          },
+        ],
+      });
+      for (const agentId of ["live-child", "stopped-child", "completed-child", "root"]) {
+        const before = events.length;
+        yield* adapter.sendTurn({
+          threadId,
+          input: agentId,
+          attachments: [],
+          interactionMode: "default",
+        });
+        yield* Effect.whileLoop({
+          while: () => !events.slice(before).some((event) => event.type === "turn.completed"),
+          body: () => Effect.sleep(10),
+          step: () => {},
+        });
+        const text = events
+          .slice(before)
+          .filter((event) => event.type === "content.delta")
+          .map((event) => event.payload.delta)
+          .join("");
+        expect(JSON.parse(text)).toEqual(
+          agentId === "root"
+            ? { outcome: "selected", optionId: "allow-once" }
+            : agentId === "live-child"
+              ? { outcome: "selected", optionId: "reject-once" }
+              : { outcome: "cancelled" },
+        );
+      }
+      expect(
+        events.filter((event) => event.type === "task.updated").map((event) => event.payload),
+      ).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            taskId: "live-child",
+            status: "running",
+            reconcilesStop: true,
+          }),
+          expect.objectContaining({
+            taskId: "live-shell",
+            status: "running",
+            reconcilesStop: true,
+          }),
+        ]),
+      );
+      expect(
+        events
+          .filter((event) => event.type === "content.delta")
+          .map((event) => event.payload.delta)
+          .join(""),
+      ).not.toContain("historical Devin text");
+      expect(events.some((event) => event.type === "task.started")).toBe(false);
+      yield* adapter.stopSession(threadId);
+    }).pipe(Effect.scoped, Effect.provide(layer)),
   );
 });
 
