@@ -184,12 +184,7 @@ import {
   shouldRefreshIconCache,
 } from "./macIconCacheRefresh";
 import { persistMacAppIcon } from "./macAppIcon";
-import {
-  LINUX_APP_DESKTOP_FILE_NAMES,
-  linuxDataHome,
-  persistLinuxAppIcon,
-  resolveLinuxDesktopIconName,
-} from "./linuxAppIcon";
+import { linuxDataHome, persistLinuxAppIcon, resolveLinuxDesktopIconName } from "./linuxAppIcon";
 import {
   MAC_WINDOW_VIBRANCY,
   createWindowMaterialApplier,
@@ -2580,7 +2575,7 @@ function syncLinuxIconThemeArtwork(image: Electron.NativeImage): void {
   const iconName = resolveLinuxDesktopIconName({
     env: process.env,
     homeDir,
-    desktopFileNames: LINUX_APP_DESKTOP_FILE_NAMES[desktopFlavor === "beta" ? "beta" : "stable"],
+    flavor: desktopFlavor,
   });
   if (iconName === null) return;
   try {

@@ -6,23 +6,18 @@
 // Wayland has no per-window icon in the protocols Electron uses (`setIcon` only reaches
 // X11/XWayland windows). Docks, panels and launchers on Linux match the window's app_id to a
 // desktop entry and draw that entry's `Icon=` name from the icon theme. The data home is
-// searched before every system data dir, so installing the chosen artwork there under the
-// entry's own icon name makes the whole session follow Settings → Appearance.
+// searched before every system data dir. Override only this flavor's packaged icon name;
+// user-customized entries and other app/flavor names retain their own artwork.
 
 import * as FS from "node:fs";
 import * as Path from "node:path";
+
+import { synaraDesktopIdentity, type SynaraDesktopFlavor } from "@synara/shared/desktopIdentity";
 
 /** Sizes the hicolor index declares under `apps`; larger artwork would be ignored. */
 export const LINUX_APP_ICON_SIZES = [16, 24, 32, 48, 64, 96, 128, 256, 512] as const;
 
 const ICON_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
-
-// The AppImage integration names the entry after the image file ("Synara" / "Synara Beta").
-// betaChannel.ts detects the Beta install through the same name.
-export const LINUX_APP_DESKTOP_FILE_NAMES = {
-  stable: ["synara.desktop"],
-  beta: ["synara-beta.desktop"],
-} as const;
 
 /**
  * Icon name of the `[Desktop Entry]` group, the only group that carries the app's own icon.
@@ -46,31 +41,30 @@ export function desktopEntryIconName(contents: string): string | null {
 
 /**
  * Icon name of the first desktop entry found for this app, searched in XDG precedence
- * (data home, then each data dir). Null when the app has no installed entry, which is
- * the case for source/dev runs.
+ * (data home, then each data dir). Null when no entry exists or its icon was customized;
+ * a customized higher-priority entry must not fall through to a system entry.
  */
 export function resolveLinuxDesktopIconName(input: {
   readonly env: NodeJS.ProcessEnv;
   readonly homeDir: string;
-  readonly desktopFileNames: readonly string[];
+  readonly flavor: SynaraDesktopFlavor;
 }): string | null {
   const dataHome = linuxDataHome(input.env, input.homeDir);
   const dataDirs = (input.env.XDG_DATA_DIRS?.trim() || "/usr/local/share:/usr/share")
     .split(":")
     .filter((directory) => Path.isAbsolute(directory));
-  const fileNames = input.desktopFileNames.filter(
-    (name) => name.endsWith(".desktop") && Path.basename(name) === name,
-  );
+  // Packaging uses this identity for both the executable/desktop filename and Icon= name.
+  // Never repaint another flavor or an unrelated icon named by a user-customized entry.
+  const iconName = synaraDesktopIdentity(input.flavor).userDataDirectoryName;
+  const fileName = `${iconName}.desktop`;
   for (const directory of [dataHome, ...dataDirs]) {
-    for (const fileName of fileNames) {
-      let contents: string;
-      try {
-        contents = FS.readFileSync(Path.join(directory, "applications", fileName), "utf8");
-      } catch {
-        continue;
-      }
-      return desktopEntryIconName(contents);
+    let contents: string;
+    try {
+      contents = FS.readFileSync(Path.join(directory, "applications", fileName), "utf8");
+    } catch {
+      continue;
     }
+    return desktopEntryIconName(contents) === iconName ? iconName : null;
   }
   return null;
 }

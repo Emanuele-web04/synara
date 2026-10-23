@@ -9,7 +9,6 @@ import * as Path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
-  LINUX_APP_DESKTOP_FILE_NAMES,
   LINUX_APP_ICON_SIZES,
   desktopEntryIconName,
   linuxDataHome,
@@ -65,7 +64,7 @@ describe("resolveLinuxDesktopIconName", () => {
   it("prefers the data home over the data dirs", () => {
     const dataHome = temporaryDirectory();
     const dataDir = temporaryDirectory();
-    const betaFile = LINUX_APP_DESKTOP_FILE_NAMES.beta[0];
+    const betaFile = "synara-beta.desktop";
     writeDesktopEntry(dataDir, betaFile, desktopEntry("Icon=synara-beta"));
     const env = { XDG_DATA_HOME: dataHome, XDG_DATA_DIRS: `/nonexistent:${dataDir}` };
     const homeDir = temporaryDirectory();
@@ -74,7 +73,7 @@ describe("resolveLinuxDesktopIconName", () => {
       resolveLinuxDesktopIconName({
         env,
         homeDir,
-        desktopFileNames: LINUX_APP_DESKTOP_FILE_NAMES.beta,
+        flavor: "beta",
       }),
     ).toBe("synara-beta");
 
@@ -83,15 +82,15 @@ describe("resolveLinuxDesktopIconName", () => {
       resolveLinuxDesktopIconName({
         env,
         homeDir,
-        desktopFileNames: LINUX_APP_DESKTOP_FILE_NAMES.beta,
+        flavor: "beta",
       }),
-    ).toBe("synara-beta-custom");
+    ).toBeNull();
   });
 
   it("keeps the entry it finds first authoritative", () => {
     const dataHome = temporaryDirectory();
     const dataDir = temporaryDirectory();
-    const stableFile = LINUX_APP_DESKTOP_FILE_NAMES.stable[0];
+    const stableFile = "synara.desktop";
     writeDesktopEntry(dataHome, stableFile, desktopEntry("Icon=/tmp/custom.png"));
     writeDesktopEntry(dataDir, stableFile, desktopEntry("Icon=synara"));
 
@@ -99,9 +98,48 @@ describe("resolveLinuxDesktopIconName", () => {
       resolveLinuxDesktopIconName({
         env: { XDG_DATA_HOME: dataHome, XDG_DATA_DIRS: dataDir },
         homeDir: temporaryDirectory(),
-        desktopFileNames: LINUX_APP_DESKTOP_FILE_NAMES.stable,
+        flavor: "production",
       }),
     ).toBeNull();
+  });
+
+  it("keeps installed flavor icons isolated, including a customized entry naming another app", () => {
+    const dataHome = temporaryDirectory();
+    const dataDir = temporaryDirectory();
+    const env = { XDG_DATA_HOME: dataHome, XDG_DATA_DIRS: dataDir };
+    const homeDir = temporaryDirectory();
+    const flavors = [
+      ["production", "synara"],
+      ["beta", "synara-beta"],
+      ["canary", "synara-canary"],
+      ["cua", "synara-cua"],
+    ] as const;
+    for (const [, iconName] of flavors) {
+      writeDesktopEntry(dataHome, `${iconName}.desktop`, desktopEntry(`Icon=${iconName}`));
+    }
+    for (const [flavor, iconName] of flavors) {
+      const resolved = resolveLinuxDesktopIconName({ env, homeDir, flavor });
+      expect(resolved).toBe(iconName);
+      if (resolved) {
+        persistLinuxAppIcon({
+          dataHome,
+          iconName: resolved,
+          renderPng: () => Buffer.from(flavor),
+        });
+      }
+    }
+    for (const [flavor, iconName] of flavors) {
+      expect(
+        FS.readFileSync(
+          Path.join(dataHome, "icons/hicolor/256x256/apps", `${iconName}.png`),
+          "utf8",
+        ),
+      ).toBe(flavor);
+    }
+    for (const sharedIcon of ["synara", "synara-beta", "firefox"]) {
+      writeDesktopEntry(dataHome, "synara-canary.desktop", desktopEntry(`Icon=${sharedIcon}`));
+      expect(resolveLinuxDesktopIconName({ env, homeDir, flavor: "canary" })).toBeNull();
+    }
   });
 
   it("finds no icon without an installed entry, which is the case for source runs", () => {
@@ -109,19 +147,18 @@ describe("resolveLinuxDesktopIconName", () => {
       resolveLinuxDesktopIconName({
         env: { XDG_DATA_DIRS: temporaryDirectory() },
         homeDir: temporaryDirectory(),
-        desktopFileNames: LINUX_APP_DESKTOP_FILE_NAMES.stable,
+        flavor: "production",
       }),
     ).toBeNull();
   });
 
-  it("rejects names and data dirs that could leave the icon directories", () => {
+  it("ignores relative data dirs", () => {
     const dataHome = temporaryDirectory();
-    writeDesktopEntry(dataHome, "synara.desktop", desktopEntry("Icon=synara"));
     expect(
       resolveLinuxDesktopIconName({
         env: { XDG_DATA_HOME: dataHome, XDG_DATA_DIRS: "../../etc:relative/share" },
         homeDir: temporaryDirectory(),
-        desktopFileNames: ["../../synara.desktop"],
+        flavor: "production",
       }),
     ).toBeNull();
   });
