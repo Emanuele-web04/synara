@@ -259,6 +259,7 @@ type CustomModelSettingsKey =
   | "customGrokModels"
   | "customDroidModels"
   | "customDevinModels"
+  | "customClineModels"
   | "customOpenCodeModels"
   | "customPiModels"
   | "customOmpModels";
@@ -277,6 +278,7 @@ const BUILT_IN_MODEL_SLUGS_BY_PROVIDER: Record<ProviderKind, ReadonlySet<string>
   claudeAgent: new Set(getModelOptions("claudeAgent").map((option) => option.slug)),
   cursor: new Set(getModelOptions("cursor").map((option) => option.slug)),
   devin: new Set(getModelOptions("devin").map((option) => option.slug)),
+  cline: new Set(getModelOptions("cline").map((option) => option.slug)),
   antigravity: new Set(getModelOptions("antigravity").map((option) => option.slug)),
   grok: new Set(getModelOptions("grok").map((option) => option.slug)),
   droid: new Set(getModelOptions("droid").map((option) => option.slug)),
@@ -303,6 +305,7 @@ const PersistedProviderKind = Schema.Literals([
   "claudeAgent",
   "cursor",
   "devin",
+  "cline",
   "antigravity",
   "gemini",
   "grok",
@@ -393,6 +396,7 @@ export const AppSettingsSchema = Schema.Struct({
   cursorBinaryPath: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
   cursorApiEndpoint: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
   devinBinaryPath: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
+  clineBinaryPath: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
   antigravityBinaryPath: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
   // Deprecated Gemini keys remain decodable until normalization rewrites local storage.
   geminiBinaryPath: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(4096))),
@@ -587,6 +591,7 @@ export const AppSettingsSchema = Schema.Struct({
   customClaudeModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),
   customCursorModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),
   customDevinModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),
+  customClineModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),
   customAntigravityModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),
   customGeminiModels: Schema.optionalKey(Schema.Array(Schema.String)),
   customGrokModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),
@@ -698,6 +703,15 @@ const PROVIDER_CUSTOM_MODEL_CONFIG: Record<ProviderKind, ProviderCustomModelConf
     title: "Devin",
     description: "Save additional Devin model slugs for the picker and provider runtime.",
     placeholder: "devin-model-slug",
+    example: "adaptive",
+  },
+  cline: {
+    provider: "cline",
+    settingsKey: "customClineModels",
+    defaultSettingsKey: "customClineModels",
+    title: "Cline",
+    description: "Save additional Cline model slugs for the picker and provider runtime.",
+    placeholder: "provider/model-id",
     example: "adaptive",
   },
   antigravity: {
@@ -978,6 +992,7 @@ const PROVIDER_INSTANCE_PROVIDER_ORDER = [
   "claudeAgent",
   "cursor",
   "devin",
+  "cline",
   "antigravity",
   "grok",
   "droid",
@@ -1485,6 +1500,7 @@ function normalizeAppSettings(settings: AppSettings): AppSettings {
     selectedCodexAccountId,
     cursorBinaryPath: normalizeProviderBinaryPathOverride("cursor", settings.cursorBinaryPath),
     devinBinaryPath: normalizeProviderBinaryPathOverride("devin", settings.devinBinaryPath),
+    clineBinaryPath: normalizeProviderBinaryPathOverride("cline", settings.clineBinaryPath),
     antigravityBinaryPath: normalizeProviderBinaryPathOverride(
       "antigravity",
       settings.antigravityBinaryPath || legacyGeminiBinaryPath,
@@ -1508,6 +1524,7 @@ function normalizeAppSettings(settings: AppSettings): AppSettings {
     customClaudeModels: normalizeCustomModelSlugs(settings.customClaudeModels, "claudeAgent"),
     customCursorModels: normalizeCustomModelSlugs(settings.customCursorModels, "cursor"),
     customDevinModels: normalizeCustomModelSlugs(settings.customDevinModels, "devin"),
+    customClineModels: normalizeCustomModelSlugs(settings.customClineModels, "cline"),
     customAntigravityModels: normalizeCustomModelSlugs(
       [...settings.customAntigravityModels, ...(legacyCustomGeminiModels ?? [])],
       "antigravity",
@@ -1568,6 +1585,7 @@ export function serverSettingsToAppSettings(settings: ServerSettingsView): Parti
     cursorApiEndpoint: settings.providers.cursor.apiEndpoint,
     cursorBinaryPath: settings.providers.cursor.binaryPath,
     devinBinaryPath: settings.providers.devin.binaryPath,
+    clineBinaryPath: settings.providers.cline.binaryPath,
     defaultThreadEnvMode: settings.defaultThreadEnvMode,
     githubInboxIncludeUpstreams: settings.githubInboxIncludeUpstreams,
     sidechatExpiry: settings.sidechatExpiry,
@@ -1590,6 +1608,7 @@ export function serverSettingsToAppSettings(settings: ServerSettingsView): Parti
     customClaudeModels: settings.providers.claudeAgent.customModels,
     customCursorModels: settings.providers.cursor.customModels,
     customDevinModels: settings.providers.devin.customModels,
+    customClineModels: settings.providers.cline.customModels,
     customAntigravityModels: settings.providers.antigravity.customModels,
     customGrokModels: settings.providers.grok.customModels,
     customDroidModels: settings.providers.droid.customModels,
@@ -1630,6 +1649,7 @@ function touchesProviderDiscoverySettings(patch: Partial<AppSettings>): boolean 
     hasOwn(patch, "codexAccounts") ||
     hasOwn(patch, "selectedCodexAccountId") ||
     hasOwn(patch, "devinBinaryPath") ||
+    hasOwn(patch, "clineBinaryPath") ||
     hasOwn(patch, "providerInstances") ||
     hasOwn(patch, "claudeHomePath") ||
     hasOwn(patch, "openCodeBinaryPath") ||
@@ -1826,6 +1846,14 @@ export function appSettingsPatchToServerSettingsPatch(
         : {}),
     };
   }
+  if (hasOwn(patch, "clineBinaryPath") || hasOwn(patch, "customClineModels")) {
+    providers.cline = {
+      ...(hasOwn(patch, "clineBinaryPath") ? { binaryPath: patch.clineBinaryPath ?? "" } : {}),
+      ...(hasOwn(patch, "customClineModels")
+        ? { customModels: patch.customClineModels ?? [] }
+        : {}),
+    };
+  }
   if (hasOwn(patch, "antigravityBinaryPath") || hasOwn(patch, "customAntigravityModels")) {
     providers.antigravity = {
       ...(hasOwn(patch, "antigravityBinaryPath")
@@ -1948,6 +1976,7 @@ export function buildInitialServerSettingsMigrationPatch(
     "enableAssistantStreaming",
     "enableProviderUpdateChecks",
     "devinBinaryPath",
+    "clineBinaryPath",
     "keepAwakeMode",
     "antigravityBinaryPath",
     "grokBinaryPath",
@@ -1983,6 +2012,7 @@ export function buildInitialServerSettingsMigrationPatch(
     "customClaudeModels",
     "customCursorModels",
     "customDevinModels",
+    "customClineModels",
     "customAntigravityModels",
     "customGrokModels",
     "customDroidModels",
@@ -2142,6 +2172,7 @@ export function getCustomModelsByProvider(
     claudeAgent: getCustomModelsForProvider(settings, "claudeAgent"),
     cursor: getCustomModelsForProvider(settings, "cursor"),
     devin: getCustomModelsForProvider(settings, "devin"),
+    cline: getCustomModelsForProvider(settings, "cline"),
     antigravity: getCustomModelsForProvider(settings, "antigravity"),
     grok: getCustomModelsForProvider(settings, "grok"),
     droid: getCustomModelsForProvider(settings, "droid"),
@@ -2304,6 +2335,8 @@ function buildProviderStartOptionsFromInstanceConfig(
     }
     case "devin":
       return typeof binaryPath === "string" ? { devin: { binaryPath } } : undefined;
+    case "cline":
+      return typeof binaryPath === "string" ? { cline: { binaryPath } } : undefined;
     case "antigravity":
       return typeof binaryPath === "string" ? { antigravity: { binaryPath } } : undefined;
     case "grok":
@@ -2376,6 +2409,7 @@ function mergeProviderStartOptionsForApp(
       : {}),
     ...(base.pi || overlay.pi ? { pi: { ...base.pi, ...overlay.pi } } : {}),
     ...(base.omp || overlay.omp ? { omp: { ...base.omp, ...overlay.omp } } : {}),
+    ...(base.cline || overlay.cline ? { cline: { ...base.cline, ...overlay.cline } } : {}),
   };
 }
 
@@ -2399,6 +2433,7 @@ export function getProviderStartOptions(
     | "cursorApiEndpoint"
     | "cursorBinaryPath"
     | "devinBinaryPath"
+    | "clineBinaryPath"
     | "antigravityBinaryPath"
     | "grokBinaryPath"
     | "droidBinaryPath"
@@ -2419,6 +2454,7 @@ export function getProviderStartOptions(
   );
   const cursorBinaryPath = normalizeProviderBinaryPathOverride("cursor", settings.cursorBinaryPath);
   const devinBinaryPath = normalizeProviderBinaryPathOverride("devin", settings.devinBinaryPath);
+  const clineBinaryPath = normalizeProviderBinaryPathOverride("cline", settings.clineBinaryPath);
   const antigravityBinaryPath = normalizeProviderBinaryPathOverride(
     "antigravity",
     settings.antigravityBinaryPath,
@@ -2470,6 +2506,13 @@ export function getProviderStartOptions(
       ? {
           devin: {
             binaryPath: devinBinaryPath,
+          },
+        }
+      : {}),
+    ...(clineBinaryPath
+      ? {
+          cline: {
+            binaryPath: clineBinaryPath,
           },
         }
       : {}),
@@ -2629,6 +2672,7 @@ export function getCustomBinaryPathForProvider(
     | "codexBinaryPath"
     | "cursorBinaryPath"
     | "devinBinaryPath"
+    | "clineBinaryPath"
     | "antigravityBinaryPath"
     | "grokBinaryPath"
     | "droidBinaryPath"
@@ -2647,6 +2691,8 @@ export function getCustomBinaryPathForProvider(
       return normalizeProviderBinaryPathOverride(provider, settings.cursorBinaryPath);
     case "devin":
       return normalizeProviderBinaryPathOverride(provider, settings.devinBinaryPath);
+    case "cline":
+      return normalizeProviderBinaryPathOverride(provider, settings.clineBinaryPath);
     case "antigravity":
       return normalizeProviderBinaryPathOverride(provider, settings.antigravityBinaryPath);
     case "grok":

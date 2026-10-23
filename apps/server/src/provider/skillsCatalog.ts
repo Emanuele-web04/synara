@@ -528,6 +528,7 @@ const PROVIDER_SKILL_ORIGIN_PREFERENCES = {
   opencode: ["opencode", "claude", "agents"],
   pi: ["pi", "agents"],
   devin: ["devin", "claude", "agents"],
+  cline: [],
   omp: ["omp", "agents"],
 } as const satisfies Partial<Record<ProviderKind, readonly SkillsHomeOrigin[]>>;
 
