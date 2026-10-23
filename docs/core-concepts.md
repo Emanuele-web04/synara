@@ -451,8 +451,12 @@ its latest completed file-tool snapshot before the turn finishes. It updates whe
 is published, survives reconnects, preserves Ignore whitespace, and switches to the final checkpoint
 after capture succeeds, including interrupted turns with a captured exact baseline. A failed terminal
 capture retains the last preview; later events cannot recapture work for the settled turn.
-It does not read uncaptured worktree edits on demand. Streamed provider patches and **All turns**
-remain dependent on completed checkpoints; a live preview is not proof that a turn finished.
+It does not read uncaptured worktree edits on demand. Codex cumulative turn patches can also appear
+before completion: Synara applies the exact journal revision to its captured turn-start baseline in
+a private Git index, preserving Ignore whitespace without reading later checkout edits. A missing
+baseline, mismatched patch, compacted payload or older event without integrity metadata remains
+unavailable until a fresh complete update or final checkpoint. **All turns** still uses completed
+checkpoints; a live preview is not proof that a turn finished.
 
 File Undo and thread revert refuse to change a workspace while another thread has an active or
 pending turn in that same Git checkout. Symlinks and nested folders share this protection;

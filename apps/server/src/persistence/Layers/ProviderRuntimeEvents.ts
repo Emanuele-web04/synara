@@ -272,6 +272,7 @@ const make = Effect.gen(function* () {
     const beforeSequence = input.beforeSequenceExclusive ?? Number.MAX_SAFE_INTEGER;
     const afterSequence = input.afterSequenceExclusive ?? 0;
     const turnFilter = input.turnId === undefined ? sql`` : sql`AND turn_id = ${input.turnId}`;
+    const eventFilter = input.eventId === undefined ? sql`` : sql`AND event_id = ${input.eventId}`;
     const typeFilter =
       input.eventTypes === undefined || input.eventTypes.length === 0
         ? sql``
@@ -286,6 +287,7 @@ const make = Effect.gen(function* () {
           AND sequence > ${afterSequence}
           ${turnFilter}
           ${typeFilter}
+          ${eventFilter}
         ORDER BY sequence DESC
         LIMIT ${Math.max(1, Math.min(201, Math.floor(input.limit)))}
       `.pipe(Effect.mapError(toPersistenceSqlError("ProviderRuntimeEvent.readThreadEvents")));

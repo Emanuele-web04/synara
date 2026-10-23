@@ -9,7 +9,12 @@ import {
 } from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { fakeProjectionSnapshotQuery } from "../../orchestration/testing/fakeProjectionSnapshotQuery.ts";
 import { checkpointRefForThreadTurn, checkpointRefForThreadTurnStart } from "../Utils.ts";
-import { CheckpointDiffQueryLive } from "./CheckpointDiffQuery.ts";
+import { CheckpointDiffQueryLive as QueryLive } from "./CheckpointDiffQuery.ts";
+import { ProviderRuntimeEventRepositoryLive } from "../../persistence/Layers/ProviderRuntimeEvents.ts";
+import { SqlitePersistenceMemory } from "../../persistence/Layers/Sqlite.ts";
+const CheckpointDiffQueryLive = QueryLive.pipe(
+  Layer.provide(ProviderRuntimeEventRepositoryLive.pipe(Layer.provide(SqlitePersistenceMemory))),
+);
 import { CheckpointStore, type CheckpointStoreShape } from "../Services/CheckpointStore.ts";
 import { CheckpointDiffQuery } from "../Services/CheckpointDiffQuery.ts";
 

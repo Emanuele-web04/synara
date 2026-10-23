@@ -7914,7 +7914,7 @@ describe("ProviderRuntimeIngestion", () => {
     expect(checkpoints).toHaveLength(1);
     expect(checkpoints[0]).toMatchObject({
       checkpointTurnCount: 1,
-      checkpointRef: "provider-diff:evt-turn-diff-first",
+      checkpointRef: "provider-diff:evt-turn-diff-second",
       status: "missing",
       files: [
         { path: "file.txt", kind: "modified", additions: 2, deletions: 1 },
