@@ -1663,7 +1663,10 @@ const makeRegistrySwitchLayer = (
           steerSubagent: () => Effect.die("Unexpected subagent steering"),
         }),
         Layer.succeed(CursorAdapter, adapterFor("cursor")),
-        Layer.succeed(DevinAdapter, adapterFor("devin")),
+        Layer.succeed(DevinAdapter, {
+          ...adapterFor("devin"),
+          stopTask: () => Effect.die("Unexpected task stop"),
+        }),
         Layer.succeed(AntigravityAdapter, adapterFor("antigravity")),
         Layer.succeed(GrokAdapter, adapterFor("grok")),
         Layer.succeed(DroidAdapter, adapterFor("droid")),
