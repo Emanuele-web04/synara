@@ -261,6 +261,16 @@ function runPosixBackendShutdown(input: {
       if (hasExited(input.child)) {
         onExit();
       }
+      if (signal === "SIGTERM" && !settled) {
+        // A busy parent event loop can make both absolute timers overdue.
+        // Preserve TERM's grace from actual delivery instead of coalescing
+        // TERM and KILL into the same timer turn.
+        forceKillTimer = setTimeout(
+          () => signalIfRunning("SIGKILL"),
+          input.forceKillDelayMs - input.terminateDelayMs,
+        );
+        unrefTimer(forceKillTimer);
+      }
     };
     const scheduleRequestRetry = (): void => {
       if (settled || terminationStarted || hasExited(input.child) || requestRetryTimer) return;
@@ -314,14 +324,14 @@ function runPosixBackendShutdown(input: {
 
     if (settled) return;
 
-    forceKillTimer = setTimeout(() => signalIfRunning("SIGKILL"), input.forceKillDelayMs);
-    unrefTimer(forceKillTimer);
-
     deadlineTimer = setTimeout(() => {
       if (hasExited(input.child)) {
         onExit();
         return;
       }
+      // The absolute deadline still bounds late TERM delivery. Never cancel
+      // the remaining force stage while leaving a live backend un-signalled.
+      if (!forced) signalIfRunning("SIGKILL");
       settle(new PosixBackendShutdownTimeoutError(forced));
     }, input.timeoutMs);
     unrefTimer(deadlineTimer);
