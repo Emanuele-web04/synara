@@ -1592,7 +1592,13 @@ export default function Sidebar() {
     shortcutLabelForCommand(keybindings, "sidebar.addProject") ??
     (isMacNavigatorPlatform() ? "⇧⌘O" : "Ctrl+Shift+O");
   const usageSettingsShortcutLabel = shortcutLabelForCommand(keybindings, "settings.usage");
-  const { activeProjectId: focusedProjectId } = useFocusedChatContext();
+  const {
+    activeProjectId: focusedProjectId,
+    focusedThreadId,
+    activeThread: focusedThread,
+    activeDraftThread: focusedDraftThread,
+  } = useFocusedChatContext();
+  const focusedWorkspaceThread = focusedThread ?? focusedDraftThread;
   const latestProjectId = useLatestProjectStore((state) => state.latestProjectId);
   // Shared with the composer project picker, which opens this same dialog.
   const createProjectDialogOpen = useCreateProjectDialogStore((state) => state.isOpen);
@@ -8169,6 +8175,21 @@ export default function Sidebar() {
           onCreateThread={handlePrimaryNewThread}
           onAddProjectPath={addProjectFromPath}
           homeDir={homeDir}
+          activeProjectCwd={
+            focusedProjectId
+              ? resolveThreadWorkspaceCwd({
+                  projectCwd: projectCwdById.get(focusedProjectId) ?? null,
+                  envMode: focusedWorkspaceThread?.envMode,
+                  worktreePath: focusedWorkspaceThread?.worktreePath,
+                  workingDirectory: focusedWorkspaceThread?.workingDirectory,
+                })
+              : null
+          }
+          activeThreadId={focusedThreadId}
+          onOpenFile={(relativePath) => {
+            if (!focusedThreadId) return;
+            openRightDockPane(focusedThreadId, { kind: "file", filePath: relativePath });
+          }}
           onOpenSettings={(section, options) => {
             void navigate({
               to: "/settings",
@@ -8227,6 +8248,9 @@ function SidebarSearchPaletteController(props: {
   onCreateThread: () => void;
   onAddProjectPath: (path: string, options?: { createIfMissing?: boolean }) => Promise<void>;
   homeDir: string | null;
+  activeProjectCwd?: string | null | undefined;
+  activeThreadId?: string | null | undefined;
+  onOpenFile?: ((relativePath: string) => void) | undefined;
   onOpenSettings: (section?: SettingsSectionId, options?: { target?: string }) => void;
   onOpenFeedback: () => void;
   onOpenUsageSettings: () => void;
@@ -8307,6 +8331,9 @@ function SidebarSearchPaletteController(props: {
       onCreateThread={props.onCreateThread}
       onAddProjectPath={props.onAddProjectPath}
       homeDir={props.homeDir}
+      activeProjectCwd={props.activeProjectCwd}
+      activeThreadId={props.activeThreadId}
+      onOpenFile={props.onOpenFile}
       onOpenSettings={props.onOpenSettings}
       onOpenFeedback={props.onOpenFeedback}
       onOpenUsageSettings={props.onOpenUsageSettings}
