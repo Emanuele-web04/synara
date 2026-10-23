@@ -19,7 +19,8 @@ const display = (parts: readonly ts.SymbolDisplayPart[] | undefined) =>
 export function createTypeScriptService(workspaceRoot: string) {
   const root = ts.sys.realpath?.(workspaceRoot) ?? path.resolve(workspaceRoot);
   const require = createRequire(import.meta.url);
-  const libraryRoot = path.dirname(require.resolve("typescript/lib/lib.d.ts"));
+  const installedLibraryRoot = path.dirname(require.resolve("typescript/lib/lib.d.ts"));
+  const libraryRoot = ts.sys.realpath?.(installedLibraryRoot) ?? installedLibraryRoot;
   let documents = new Map<string, { contents: string; version: number; revision: number }>();
   let nextRevision = 0;
   let projectDirectory = root;
@@ -161,7 +162,9 @@ export function createTypeScriptService(workspaceRoot: string) {
       return text === undefined ? undefined : ts.ScriptSnapshot.fromString(text);
     },
     getCurrentDirectory: () => projectDirectory,
-    getDefaultLibFileName: (compilerOptions) => ts.getDefaultLibFilePath(compilerOptions),
+    // Library requests must use the same canonical root as the filesystem fence.
+    getDefaultLibFileName: (compilerOptions) =>
+      path.join(libraryRoot, ts.getDefaultLibFileName(compilerOptions)),
     getProjectVersion: () => String(projectVersion),
     useCaseSensitiveFileNames: () => ts.sys.useCaseSensitiveFileNames,
     readFile,
