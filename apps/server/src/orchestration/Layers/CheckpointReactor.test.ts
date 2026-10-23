@@ -38,6 +38,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import * as projectImportPaths from "../projectImportPaths.ts";
 
 import { CheckpointStoreLive } from "../../checkpointing/Layers/CheckpointStore.ts";
+import { CheckpointDiffQueryLive } from "../../checkpointing/Layers/CheckpointDiffQuery.ts";
+import { CheckpointDiffQuery } from "../../checkpointing/Services/CheckpointDiffQuery.ts";
 import {
   CheckpointStore,
   type CheckpointStoreShape,
@@ -210,6 +212,7 @@ async function waitForThread(
     checkpoints: ReadonlyArray<{
       turnId: string;
       checkpointTurnCount: number;
+      checkpointRef: string;
       status: "ready" | "missing" | "error";
       assistantMessageId?: MessageId | null;
       files?: ReadonlyArray<{ path: string }>;
@@ -229,6 +232,7 @@ async function waitForThread(
     checkpoints: ReadonlyArray<{
       turnId: string;
       checkpointTurnCount: number;
+      checkpointRef: string;
       status: "ready" | "missing" | "error";
       assistantMessageId?: MessageId | null;
       files?: ReadonlyArray<{ path: string }>;
@@ -5368,6 +5372,7 @@ describe("CheckpointReactor", () => {
     const harness = await createHarness({
       seedFilesystemCheckpoints: false,
       providerName: "claudeAgent",
+      liveTurnDiffThrottleWindowMs: 0,
     });
     const threadId = ThreadId.makeUnsafe("thread-1");
     const turnId = asTurnId("turn-claude-live");
@@ -5391,6 +5396,7 @@ describe("CheckpointReactor", () => {
       }),
     );
 
+    fs.writeFileSync(path.join(harness.cwd, "whitespace.txt"), "hello world\n", "utf8");
     await harness.prepareBaseline(turnId);
     // #1900: turn start, the live diff and turn completion read the thread
     // shell, its checkpoint context and single messages, never the full detail.
@@ -5407,6 +5413,7 @@ describe("CheckpointReactor", () => {
     await waitForGitRefExists(harness.cwd, checkpointRefForThreadTurnStart(threadId, turnId));
 
     // A file edit completes while the turn is still running (no turn.completed yet).
+    fs.writeFileSync(path.join(harness.cwd, "whitespace.txt"), "hello  world\n", "utf8");
     fs.writeFileSync(path.join(harness.cwd, "live.txt"), "live\n", "utf8");
     harness.provider.emit({
       type: "item.completed",
@@ -5434,8 +5441,145 @@ describe("CheckpointReactor", () => {
       | { readonly path: string; readonly additions?: number; readonly deletions?: number }
       | undefined;
     expect(liveFile?.additions).toBe(1);
-    // The throwaway snapshot ref must not linger as a durable checkpoint.
-    expect(gitRefExists(harness.cwd, checkpointRefForThreadTurnLive(threadId, turnId))).toBe(false);
+    const diffQuery = await Effect.runPromise(
+      Effect.service(CheckpointDiffQuery).pipe(
+        Effect.provide(CheckpointDiffQueryLive),
+        Effect.provideService(ProjectionSnapshotQuery, query),
+        Effect.provideService(CheckpointStore, harness.checkpointStore),
+      ),
+    );
+    // Query the immutable tool-completion snapshot, not newer work in the checkout.
+    fs.writeFileSync(path.join(harness.cwd, "not-yet-captured.txt"), "later\n", "utf8");
+    for (const ignoreWhitespace of [false, true]) {
+      const liveDiff = await Effect.runPromise(
+        diffQuery.getTurnDiff({ threadId, fromTurnCount: 0, toTurnCount: 1, ignoreWhitespace }),
+      );
+      expect(liveDiff.diff).toContain("+live");
+      expect(liveDiff.diff).not.toContain("not-yet-captured.txt");
+      expect(liveDiff.diff.includes("whitespace.txt")).toBe(!ignoreWhitespace);
+    }
+    fs.rmSync(path.join(harness.cwd, "not-yet-captured.txt"));
+    expect(
+      gitRefExists(
+        harness.cwd,
+        checkpointRefForThreadTurnLive(threadId, turnId, "evt-item-file-change-live"),
+      ),
+    ).toBe(true);
+
+    const diffCheckpoints = harness.checkpointStore.diffCheckpoints;
+    const failedCandidate = checkpointRefForThreadTurnLive(
+      threadId,
+      turnId,
+      "evt-item-file-change-failed",
+    );
+    const diffFailure = vi
+      .spyOn(harness.checkpointStore, "diffCheckpoints")
+      .mockImplementation((input) =>
+        input.toCheckpointRef === failedCandidate
+          ? Effect.fail(
+              new GitCommandError({
+                operation: "live-diff",
+                cwd: input.cwd,
+                command: "git diff",
+                detail: "Injected live diff failure",
+              }),
+            )
+          : diffCheckpoints(input),
+      );
+    harness.provider.emit({
+      type: "item.completed",
+      eventId: EventId.makeUnsafe("evt-item-file-change-failed"),
+      provider: "claudeAgent",
+      createdAt,
+      threadId,
+      turnId,
+      itemId: "failed-capture",
+      payload: { itemType: "file_change", status: "completed" },
+    });
+    await harness.drain();
+    expect(
+      (
+        await Effect.runPromise(
+          diffQuery.getTurnDiff({ threadId, fromTurnCount: 0, toTurnCount: 1 }),
+        )
+      ).diff,
+    ).toContain("+live");
+    expect(gitRefExists(harness.cwd, failedCandidate)).toBe(false);
+    diffFailure.mockRestore();
+
+    // A second snapshot can have identical stats and timestamps; its ref still
+    // identifies a new patch, and the previous ref retires only after publication.
+    fs.writeFileSync(path.join(harness.cwd, "live.txt"), "next\n", "utf8");
+    harness.provider.emit({
+      type: "item.completed",
+      eventId: EventId.makeUnsafe("evt-item-file-change-next"),
+      provider: "claudeAgent",
+      createdAt,
+      threadId,
+      turnId,
+      itemId: "item-file-change-next",
+      payload: { itemType: "file_change", status: "completed" },
+    });
+    await waitForThread(harness.engine, (entry) =>
+      entry.checkpoints.some(
+        (checkpoint) => checkpoint.checkpointRef === "provider-diff:evt-item-file-change-next",
+      ),
+    );
+    const nextDiff = await Effect.runPromise(
+      diffQuery.getTurnDiff({ threadId, fromTurnCount: 0, toTurnCount: 1 }),
+    );
+    expect(nextDiff.diff).toContain("+next");
+    expect(nextDiff.diff).not.toContain("+live");
+    expect(
+      gitRefExists(
+        harness.cwd,
+        checkpointRefForThreadTurnLive(threadId, turnId, "evt-item-file-change-live"),
+      ),
+    ).toBe(false);
+    const lastLiveRef = checkpointRefForThreadTurnLive(
+      threadId,
+      turnId,
+      "evt-item-file-change-next",
+    );
+    expect(gitRefExists(harness.cwd, lastLiveRef)).toBe(true);
+
+    // Failed final capture must not discard the last readable preview.
+    const captureCheckpoint = harness.checkpointStore.captureCheckpoint;
+    const capture = vi
+      .spyOn(harness.checkpointStore, "captureCheckpoint")
+      .mockImplementation((input) =>
+        input.checkpointRef === checkpointRefForThreadTurn(threadId, 1)
+          ? Effect.fail(
+              new GitCommandError({
+                operation: "capture",
+                cwd: input.cwd,
+                command: "git write-tree",
+                detail: "Injected final capture failure",
+              }),
+            )
+          : captureCheckpoint(input),
+      );
+    harness.provider.emit({
+      type: "turn.completed",
+      eventId: EventId.makeUnsafe("evt-turn-completed-claude-live-failed"),
+      provider: "claudeAgent",
+      createdAt: new Date().toISOString(),
+      threadId,
+      turnId,
+      payload: { state: "interrupted" },
+    });
+    await waitForThread(harness.engine, (entry) =>
+      entry.activities.some((activity) => activity.kind === "checkpoint.capture.failed"),
+    );
+    expect(
+      (
+        await Effect.runPromise(
+          diffQuery.getTurnDiff({ threadId, fromTurnCount: 0, toTurnCount: 1 }),
+        )
+      ).diff,
+    ).toContain("+next");
+    expect(gitRefExists(harness.cwd, lastLiveRef)).toBe(true);
+    capture.mockRestore();
 
     // The terminal turn.completed capture must overwrite the placeholder with the
     // authoritative git checkpoint (status "ready"), keeping a single entry.
@@ -5459,7 +5603,19 @@ describe("CheckpointReactor", () => {
     expect(finalThread.checkpoints[0]?.files?.map((file) => file.path).sort()).toEqual([
       "live.txt",
       "second.txt",
+      "whitespace.txt",
     ]);
+    const finalDiff = await Effect.runPromise(
+      diffQuery.getTurnDiff({ threadId, fromTurnCount: 0, toTurnCount: 1 }),
+    );
+    expect(finalDiff.diff).toContain("second.txt");
+    expect(
+      gitRefExists(
+        harness.cwd,
+        checkpointRefForThreadTurnLive(threadId, turnId, "evt-item-file-change-live"),
+      ),
+    ).toBe(false);
+    expect(gitRefExists(harness.cwd, lastLiveRef)).toBe(false);
     expect(detailReads).not.toHaveBeenCalled();
   });
 
@@ -5505,7 +5661,7 @@ describe("CheckpointReactor", () => {
     const liveRef = checkpointRefForThreadTurnLive(threadId, turnId);
     const captures = vi.spyOn(harness.checkpointStore, "captureCheckpoint");
     const liveCaptures = () =>
-      captures.mock.calls.filter(([input]) => input.checkpointRef === liveRef).length;
+      captures.mock.calls.filter(([input]) => input.checkpointRef.startsWith(`${liveRef}_`)).length;
     const emitFileChange = (index: number) => {
       fs.writeFileSync(path.join(harness.cwd, `burst-${index}.txt`), `edit ${index}\n`, "utf8");
       harness.provider.emit({
@@ -5538,7 +5694,11 @@ describe("CheckpointReactor", () => {
       ),
     );
     expect(liveCaptures()).toBe(2);
-    expect(gitRefExists(harness.cwd, liveRef)).toBe(false);
+    const retainedLiveRefs = () =>
+      captures.mock.calls
+        .map(([input]) => input.checkpointRef)
+        .filter((ref) => ref.startsWith(`${liveRef}_`) && gitRefExists(harness.cwd, ref));
+    expect(retainedLiveRefs()).toHaveLength(1);
 
     // An edit inside the next window stays pending; turn completion drops it.
     emitFileChange(6);
@@ -5561,6 +5721,7 @@ describe("CheckpointReactor", () => {
     await new Promise((resolve) => setTimeout(resolve, throttleWindowMs + 200));
     await harness.drain();
     expect(liveCaptures()).toBe(2);
+    expect(retainedLiveRefs()).toHaveLength(0);
     const thread = (await Effect.runPromise(harness.engine.getReadModel())).threads.find(
       (entry) => entry.id === threadId,
     );

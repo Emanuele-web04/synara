@@ -12,6 +12,7 @@ import {
   checkpointRefForThreadTurn,
   checkpointRefForThreadTurnInManagedFamily,
   checkpointRefForThreadTurnStart,
+  checkpointRefForThreadTurnLive,
   checkpointRefForThreadTurnStartInManagedFamily,
   resolveThreadWorkspaceCwd,
 } from "../Utils.ts";
@@ -64,6 +65,7 @@ const make = Effect.gen(function* () {
 
       const threadContext = yield* projectionSnapshotQuery.getThreadCheckpointContext(
         input.threadId,
+        { includeLiveCheckpoints: true },
       );
       if (Option.isNone(threadContext)) {
         return yield* new CheckpointInvariantError({
@@ -123,7 +125,11 @@ const make = Effect.gen(function* () {
           : threadContext.value.checkpoints.find(
               (checkpoint) => checkpoint.checkpointTurnCount === input.fromTurnCount,
             );
-      if (fromCheckpoint?.status === "missing") {
+      const isLiveSnapshot =
+        toCheckpoint.status === "missing" &&
+        toCheckpoint.checkpointRef.startsWith("provider-diff:") &&
+        input.toTurnCount === input.fromTurnCount + 1;
+      if (fromCheckpoint?.status === "missing" && !isLiveSnapshot) {
         return yield* new CheckpointUnavailableError({
           threadId: input.threadId,
           turnCount: input.fromTurnCount,
@@ -137,8 +143,9 @@ const make = Effect.gen(function* () {
           checkpointRefForThreadTurnInManagedFamily(checkpoint.checkpointRef, input.threadId, 0),
         )
         .find((checkpointRef) => checkpointRef !== null);
-      let fromCheckpointRef =
-        input.fromTurnCount === 0
+      let fromCheckpointRef = isLiveSnapshot
+        ? checkpointRefForThreadTurnStart(input.threadId, toCheckpoint.turnId)
+        : input.fromTurnCount === 0
           ? (earliestManagedBaselineRef ?? checkpointRefForThreadTurn(input.threadId, 0))
           : fromCheckpoint?.checkpointRef;
       if (!fromCheckpointRef) {
@@ -149,8 +156,22 @@ const make = Effect.gen(function* () {
         });
       }
 
-      const toCheckpointRef = toCheckpoint.checkpointRef;
-      if (toCheckpoint.status === "missing") {
+      const toCheckpointRef = isLiveSnapshot
+        ? checkpointRefForThreadTurnLive(
+            input.threadId,
+            toCheckpoint.turnId,
+            toCheckpoint.checkpointRef.slice("provider-diff:".length),
+          )
+        : toCheckpoint.checkpointRef;
+      // A placeholder alone is not a snapshot: streamed provider patches still
+      // wait for their final checkpoint. Never fall back to the current worktree.
+      const liveSnapshotExists = isLiveSnapshot
+        ? yield* checkpointStore.hasCheckpointRef({
+            cwd: workspaceCwd,
+            checkpointRef: toCheckpointRef,
+          })
+        : false;
+      if (toCheckpoint.status === "missing" && !liveSnapshotExists) {
         return yield* new CheckpointUnavailableError({
           threadId: input.threadId,
           turnCount: input.toTurnCount,

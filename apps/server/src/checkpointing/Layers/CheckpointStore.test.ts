@@ -25,7 +25,8 @@ import { GitCore, type GitCoreShape } from "../../git/Services/GitCore.ts";
 import { GitCoreLive } from "../../git/Layers/GitCore.ts";
 import { GitCommandError } from "../../git/Errors.ts";
 import { ServerConfig } from "../../config.ts";
-import { CheckpointRef } from "@synara/contracts";
+import { CheckpointRef, ThreadId, TurnId } from "@synara/contracts";
+import { checkpointRefForThreadTurn, checkpointRefForThreadTurnLive } from "../Utils.ts";
 
 async function waitFor(predicate: () => boolean, timeoutMs = 1_000): Promise<void> {
   const started = Date.now();
@@ -409,6 +410,55 @@ describe("CheckpointStoreLive", () => {
     expect(result).toBe("GitCommandError");
     expect(commands.filter((command) => command.startsWith("apply "))).toHaveLength(2);
     expect(commands.at(-1)).toMatch(/^apply --whitespace=nowarn -- /);
+  });
+
+  it("purges published and crash-orphaned live refs without touching another thread or final checkpoints", async () => {
+    const cwd = mkdtempSync(join(tmpdir(), "synara-live-ref-cleanup-"));
+    const git = (args: string[]) =>
+      execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+    try {
+      git(["init", "--initial-branch=main"]);
+      git(["config", "user.email", "test@example.com"]);
+      git(["config", "user.name", "Test User"]);
+      writeFileSync(join(cwd, "file.txt"), "before\n");
+      git(["add", "."]);
+      git(["commit", "-m", "Initial"]);
+      const threadId = ThreadId.makeUnsafe("owned-thread");
+      const turnId = TurnId.makeUnsafe("owned-turn");
+      const ownRefs = ["published", "crashed-before-publish"].map((revision) =>
+        checkpointRefForThreadTurnLive(threadId, turnId, revision),
+      );
+      const keptRefs = [
+        checkpointRefForThreadTurn(threadId, 1),
+        checkpointRefForThreadTurnLive(ThreadId.makeUnsafe("peer-thread"), turnId, "peer"),
+      ];
+      for (const ref of [...ownRefs, ...keptRefs]) git(["update-ref", ref, "HEAD"]);
+      writeFileSync(join(cwd, "file.txt"), "working changes\n");
+      const index = readFileSync(join(cwd, ".git", "index"));
+      runtime = ManagedRuntime.make(
+        CheckpointStoreLive.pipe(
+          Layer.provide(
+            GitCoreLive.pipe(
+              Layer.provide(ServerConfig.layerTest(cwd, { prefix: "synara-live-cleanup-" })),
+            ),
+          ),
+          Layer.provide(NodeServices.layer),
+        ),
+      );
+      await runtime.runPromise(
+        Effect.gen(function* () {
+          const store = yield* CheckpointStore;
+          yield* store.deleteCheckpointRefs({ cwd, checkpointRefs: [], liveThreadId: threadId });
+        }),
+      );
+      const refs = git(["for-each-ref", "--format=%(refname)"]);
+      for (const ref of ownRefs) expect(refs).not.toContain(ref);
+      for (const ref of keptRefs) expect(refs).toContain(ref);
+      expect(readFileSync(join(cwd, ".git", "index"))).toEqual(index);
+      expect(readFileSync(join(cwd, "file.txt"), "utf8")).toBe("working changes\n");
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
   });
 
   it("fails when a checkpoint ref cannot be deleted", async () => {
