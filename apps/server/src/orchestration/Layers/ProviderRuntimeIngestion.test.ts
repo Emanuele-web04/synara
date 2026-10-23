@@ -15,6 +15,7 @@ import type {
 } from "@synara/contracts";
 import {
   ApprovalRequestId,
+  CODEX_GENERATED_IMAGE_ARTIFACT_ORIGIN,
   CommandId,
   DEFAULT_PROVIDER_INTERACTION_MODE,
   EventId,
@@ -77,6 +78,7 @@ import { DeviceService } from "../../device/Services/DeviceService.ts";
 import { makeAgentGatewayDeviceTools } from "../../agentGateway/deviceTools.ts";
 import type { ToolContext } from "../../agentGateway/toolRuntime.ts";
 import { ProjectionSnapshotQuery } from "../Services/ProjectionSnapshotQuery.ts";
+import { resolveCodexGeneratedImagesRoot } from "../../codexGeneratedImages.ts";
 import { ServerConfig } from "../../config.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { runProviderRuntimeEventPump } from "../../provider/providerRuntimeEventPump.ts";
@@ -413,6 +415,7 @@ describe("ProviderRuntimeIngestion", () => {
       await runtime.dispose();
     }
     runtime = null;
+    vi.unstubAllEnvs();
     for (const dir of tempDirs.splice(0)) {
       fs.rmSync(dir, { recursive: true, force: true });
     }
@@ -420,6 +423,7 @@ describe("ProviderRuntimeIngestion", () => {
 
   async function createHarness(options?: {
     readonly startIngestion?: boolean;
+    readonly projectKind?: "studio";
     readonly persistedStream?: boolean;
     readonly computerManager?: ComputerManager;
     readonly deviceManager?: DeviceManager;
@@ -503,6 +507,7 @@ describe("ProviderRuntimeIngestion", () => {
         commandId: CommandId.makeUnsafe("cmd-provider-project-create"),
         projectId: asProjectId("project-1"),
         title: "Provider Project",
+        ...(options?.projectKind ? { kind: options.projectKind } : {}),
         workspaceRoot,
         defaultModelSelection: {
           provider: "codex",
@@ -564,6 +569,8 @@ describe("ProviderRuntimeIngestion", () => {
 
     return {
       engine,
+      snapshotQuery,
+      workspaceRoot,
       emit: provider.emit,
       emitPersisted: provider.emitPersisted,
       setProviderSession: provider.setSession,
@@ -3744,6 +3751,233 @@ describe("ProviderRuntimeIngestion", () => {
     );
   });
 
+  it("does not append an unmarked image-view artifact replayed from the runtime journal", async () => {
+    const harness = await createHarness();
+    const turnId = asTurnId("turn-image-view-replay");
+    const imagePath = "C:\\Users\\Test User\\QA 100%\\page.png";
+
+    harness.emit({
+      type: "turn.started",
+      eventId: asEventId("evt-image-view-replay-turn-started"),
+      provider: "codex",
+      createdAt: new Date().toISOString(),
+      threadId: asThreadId("thread-1"),
+      turnId,
+    });
+    harness.emit({
+      type: "content.delta",
+      eventId: asEventId("evt-image-view-replay-answer-delta"),
+      provider: "codex",
+      createdAt: new Date().toISOString(),
+      threadId: asThreadId("thread-1"),
+      turnId,
+      itemId: asItemId("image-view-replay-answer"),
+      payload: { streamKind: "assistant_text", delta: "Inspection complete." },
+    });
+    harness.emit({
+      type: "item.completed",
+      eventId: asEventId("evt-image-view-replay-answer-complete"),
+      provider: "codex",
+      createdAt: new Date().toISOString(),
+      threadId: asThreadId("thread-1"),
+      turnId,
+      itemId: asItemId("image-view-replay-answer"),
+      payload: { itemType: "assistant_message", status: "completed" },
+    });
+
+    await waitForThread(harness.engine, (thread) =>
+      thread.messages.some(
+        (message) =>
+          message.id === "assistant:image-view-replay-answer" &&
+          message.text === "Inspection complete." &&
+          message.streaming === false,
+      ),
+    );
+
+    harness.emit({
+      type: "item.completed",
+      eventId: asEventId("evt-image-view-replay-complete"),
+      provider: "codex",
+      createdAt: new Date().toISOString(),
+      threadId: asThreadId("thread-1"),
+      turnId,
+      itemId: asItemId("image-view-replay"),
+      payload: {
+        itemType: "image_generation",
+        status: "completed",
+        title: "Generated image",
+        detail: imagePath,
+        data: { kind: "codex.generated_image", path: imagePath, callId: "image-view-replay" },
+      },
+      raw: {
+        method: "item/completed",
+        payload: {
+          item: { type: "imageView", id: "image-view-replay", path: imagePath },
+        },
+      },
+    });
+    harness.emit({
+      type: "turn.completed",
+      eventId: asEventId("evt-image-view-replay-turn-completed"),
+      provider: "codex",
+      createdAt: new Date().toISOString(),
+      threadId: asThreadId("thread-1"),
+      turnId,
+      payload: { state: "completed" },
+    });
+
+    const thread = await waitForThread(harness.engine, (entry) =>
+      entry.activities.some((activity) => activity.id === "evt-image-view-replay-turn-completed"),
+    );
+    const assistantMessage = thread.messages.find(
+      (message) => message.id === "assistant:image-view-replay-answer",
+    );
+    expect(assistantMessage?.text).toBe("Inspection complete.");
+    expect(thread.messages.some((message) => message.text.includes(imagePath))).toBe(false);
+  });
+
+  it.each([
+    { name: "live image view", itemType: "image_view", replay: false, generated: false },
+    {
+      name: "misclassified legacy image view",
+      itemType: "image_generation",
+      replay: true,
+      generated: false,
+    },
+    {
+      name: "explicit legacy generation",
+      itemType: "image_generation",
+      replay: true,
+      generated: true,
+    },
+  ] as const)(
+    "handles $name at the Studio output boundary",
+    async ({ itemType, replay, generated }) => {
+      vi.stubEnv("SYNARA_HOME", makeTempDir("synara-image-provenance-"));
+      const harness = await createHarness({ projectKind: "studio", startIngestion: !replay });
+      const sourceRoot = resolveCodexGeneratedImagesRoot();
+      fs.mkdirSync(sourceRoot, { recursive: true });
+      const imagePath = path.join(sourceRoot, "inspection 100%.png");
+      // All cases use a real file inside the allowlist, so a rejected copy cannot
+      // pass merely because the source was missing or outside a trusted root.
+      fs.writeFileSync(imagePath, "generated image fixture");
+      const threadId = asThreadId("thread-1");
+      const turnId = asTurnId("turn-studio-provenance");
+      const createdAt = new Date().toISOString();
+      const events: ProviderRuntimeEvent[] = [
+        {
+          type: "turn.started",
+          eventId: asEventId("studio-start"),
+          provider: "codex",
+          threadId,
+          turnId,
+          createdAt,
+          payload: {},
+        },
+        {
+          type: "item.completed",
+          eventId: asEventId("studio-image"),
+          provider: "codex",
+          threadId,
+          turnId,
+          createdAt,
+          itemId: asItemId("studio-image"),
+          payload: {
+            itemType,
+            status: "completed",
+            title: "Image",
+            detail: imagePath,
+            // Intentionally unmarked: ingestion must derive provenance from raw
+            // generation evidence, never from the path or artifact shape alone.
+            data: { kind: "codex.generated_image", path: imagePath, callId: "studio-image" },
+          },
+          raw: {
+            source: "codex.app-server.notification",
+            method: generated ? "image_generation_end" : "item/completed",
+            payload: generated ? {} : { item: { type: "imageView", path: imagePath } },
+          },
+        },
+        {
+          type: "item.completed",
+          eventId: asEventId("studio-answer"),
+          provider: "codex",
+          threadId,
+          turnId,
+          createdAt,
+          itemId: asItemId("studio-answer"),
+          payload: { itemType: "assistant_message", status: "completed" },
+        },
+        {
+          type: "turn.completed",
+          eventId: asEventId("studio-end"),
+          provider: "codex",
+          threadId,
+          turnId,
+          createdAt,
+          payload: { state: "completed" },
+        },
+      ];
+      for (const event of events) {
+        if (replay) await Effect.runPromise(harness.runtimeEventRepository.append(event));
+        else harness.emit(event);
+      }
+      if (replay) await harness.startIngestion();
+      const thread = await waitForThread(harness.engine, (entry) =>
+        entry.activities.some((activity) => activity.id === "studio-end"),
+      );
+      // Read the database projection used by recovery, rather than inspecting
+      // only the event object or the ingestion instance's pending-image cache.
+      const persisted = await Effect.runPromise(
+        harness.snapshotQuery.listGeneratedImageActivitiesByTurn(threadId, turnId),
+      );
+      const recoveredPaths = collectPersistedGeneratedImagePaths(persisted);
+      const imagesDir = path.join(harness.workspaceRoot, "Outbox", "Images");
+      const copiedFiles = fs.existsSync(imagesDir) ? fs.readdirSync(imagesDir) : [];
+      if (generated) {
+        expect(copiedFiles).toHaveLength(1);
+        const copiedPath = path.join(imagesDir, copiedFiles[0]!);
+        expect(fs.readFileSync(copiedPath, "utf8")).toBe("generated image fixture");
+        expect(recoveredPaths).toEqual([copiedPath]);
+        expect(persisted).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              kind: "tool.completed",
+              payload: expect.objectContaining({
+                data: expect.objectContaining({ origin: CODEX_GENERATED_IMAGE_ARTIFACT_ORIGIN }),
+              }),
+            }),
+            expect.objectContaining({
+              kind: "studio.outputs.captured",
+              payload: expect.objectContaining({
+                data: expect.objectContaining({
+                  generatedImage: expect.objectContaining({
+                    origin: CODEX_GENERATED_IMAGE_ARTIFACT_ORIGIN,
+                    fullPath: copiedPath,
+                  }),
+                }),
+              }),
+            }),
+          ]),
+        );
+        expect(thread.messages.some((message) => message.text.includes("![Generated image]"))).toBe(
+          true,
+        );
+      } else {
+        expect(copiedFiles).toEqual([]);
+        expect(recoveredPaths).toEqual([]);
+        expect(
+          thread.activities.some((activity) => activity.kind === "studio.outputs.captured"),
+        ).toBe(false);
+        expect(
+          thread.messages.every(
+            (message) =>
+              !message.text.includes("![Generated image]") && !message.text.includes(imagePath),
+          ),
+        ).toBe(true);
+      }
+    },
+  );
+
   it("prefers a persisted Studio copy over its provider-home image source", () => {
     expect(
       collectPersistedGeneratedImagePaths([
@@ -3754,6 +3988,7 @@ describe("ProviderRuntimeIngestion", () => {
             data: {
               files: [{ path: "Outbox/Images/generated.png" }],
               generatedImage: {
+                origin: CODEX_GENERATED_IMAGE_ARTIFACT_ORIGIN,
                 sourcePath: "/codex/generated.png",
                 fullPath: "/studio/Outbox/Images/generated.png",
               },
@@ -3765,11 +4000,43 @@ describe("ProviderRuntimeIngestion", () => {
           payload: {
             itemType: "image_generation",
             status: "completed",
-            data: { kind: "codex.generated_image", path: "/codex/generated.png" },
+            data: {
+              kind: "codex.generated_image",
+              origin: CODEX_GENERATED_IMAGE_ARTIFACT_ORIGIN,
+              path: "/codex/generated.png",
+            },
           },
         },
       ]),
     ).toEqual(["/studio/Outbox/Images/generated.png"]);
+  });
+
+  it("ignores persisted generated-image records without explicit provenance", () => {
+    expect(
+      collectPersistedGeneratedImagePaths([
+        {
+          kind: "studio.outputs.captured",
+          payload: {
+            itemType: "studio_outputs",
+            data: {
+              files: [{ path: "Outbox/Images/viewed.png" }],
+              generatedImage: {
+                sourcePath: "/codex/viewed.png",
+                fullPath: "/studio/Outbox/Images/viewed.png",
+              },
+            },
+          },
+        },
+        {
+          kind: "tool.completed",
+          payload: {
+            itemType: "image_generation",
+            status: "completed",
+            data: { kind: "codex.generated_image", path: "/codex/viewed.png" },
+          },
+        },
+      ]),
+    ).toEqual([]);
   });
 
   it("recovers generated-image references from persisted turn activities", async () => {
@@ -3822,6 +4089,7 @@ describe("ProviderRuntimeIngestion", () => {
             status: "completed",
             data: {
               kind: "codex.generated_image",
+              origin: CODEX_GENERATED_IMAGE_ARTIFACT_ORIGIN,
               path: imagePath,
               callId: "persisted-recovery",
             },
@@ -3916,7 +4184,12 @@ describe("ProviderRuntimeIngestion", () => {
         status: "completed",
         title: "Generated image",
         detail: imagePath,
-        data: { kind: "codex.generated_image", path: imagePath, callId: "image-call" },
+        data: {
+          kind: "codex.generated_image",
+          origin: CODEX_GENERATED_IMAGE_ARTIFACT_ORIGIN,
+          path: imagePath,
+          callId: "image-call",
+        },
       },
     });
     // The empty final item: no deltas, no fallback detail — mirrors the real trace.
@@ -4015,7 +4288,12 @@ describe("ProviderRuntimeIngestion", () => {
         status: "completed",
         title: "Generated image",
         detail: imagePath,
-        data: { kind: "codex.generated_image", path: imagePath, callId: "call-replay" },
+        data: {
+          kind: "codex.generated_image",
+          origin: CODEX_GENERATED_IMAGE_ARTIFACT_ORIGIN,
+          path: imagePath,
+          callId: "call-replay",
+        },
       },
     };
 
@@ -10078,7 +10356,12 @@ describe("ProviderRuntimeIngestion", () => {
           status: "completed",
           title: "Generated image",
           detail: imagePath,
-          data: { kind: "codex.generated_image", path: imagePath, callId: "later-answer-image" },
+          data: {
+            kind: "codex.generated_image",
+            origin: CODEX_GENERATED_IMAGE_ARTIFACT_ORIGIN,
+            path: imagePath,
+            callId: "later-answer-image",
+          },
         },
       });
       await push(harness, turnCompleted(turnId, "later-answer-turn-completed"));
