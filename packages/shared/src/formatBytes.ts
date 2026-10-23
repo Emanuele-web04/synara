@@ -1,8 +1,3 @@
-// FILE: formatBytes.ts
-// Purpose: Small shared byte-size labels for attachment prompts and chips.
-// Layer: Shared runtime utility
-// Exports: formatBytes
-
 function trimTrailingZero(value: string): string {
   return value.endsWith(".0") ? value.slice(0, -2) : value;
 }
