@@ -19,6 +19,7 @@ import {
   ArrowRightIcon,
   Camera01Icon,
   CircleAlertIcon,
+  EraserIcon,
   ExternalLinkIcon,
   GlobeIcon,
   LinkIcon,
@@ -75,6 +76,7 @@ import {
   hasObscuringHitStackElementAboveSurface,
   normalizeBrowserAddressInput,
   resolveBrowserChromeStatus,
+  resolveBrowserSiteHost,
   resolveBrowserAddressSync,
   shouldOccludeBrowserWebview,
   applyBrowserWebviewPresentation,
@@ -89,12 +91,24 @@ import {
   type BrowserAnnotationsController,
 } from "./browser/useBrowserAnnotations";
 import { LocalServerIdentity } from "./LocalServerIdentity";
+import {
+  AlertDialog,
+  AlertDialogClose,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogPopup,
+  AlertDialogTitle,
+} from "./ui/alert-dialog";
 import { Button } from "./ui/button";
 import { ButtonGroup, ButtonGroupSeparator } from "./ui/button-group";
 import { IconButton } from "./ui/icon-button";
-import { ComposerPickerMenuPopup } from "./chat/ComposerPickerMenuPopup";
+import {
+  ComposerPickerMenuPopup,
+  ComposerPickerMenuSubPopup,
+} from "./chat/ComposerPickerMenuPopup";
 import { Input } from "./ui/input";
-import { Menu, MenuItem, MenuSeparator, MenuTrigger } from "./ui/menu";
+import { Menu, MenuItem, MenuSeparator, MenuSub, MenuSubTrigger, MenuTrigger } from "./ui/menu";
 import { Skeleton } from "./ui/skeleton";
 import { toastManager } from "./ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
@@ -648,6 +662,7 @@ export function BrowserPanel({
   const [localError, setLocalError] = useState<string | null>(null);
   const [browserRendererGeneration, setBrowserRendererGeneration] = useState(0);
   const [browserActionsMenuOpen, setBrowserActionsMenuOpen] = useState(false);
+  const [clearDataConfirm, setClearDataConfirm] = useState<"site" | "all" | null>(null);
   const [isBrowserSurfaceOccluded, setIsBrowserSurfaceOccluded] = useState(false);
   const [previewFrame, setPreviewFrame] = useState<{ tabId: string; src: string } | null>(null);
   const runtimeReady = isLiveRuntime ? workspaceReady : true;
@@ -1611,6 +1626,43 @@ export function BrowserPanel({
     });
   }, [activeTab, api, ensureLiveRuntime, runBrowserAction, threadId]);
 
+  const activeSiteHost = resolveBrowserSiteHost(activeTab?.url);
+
+  const onConfirmClearData = useCallback(() => {
+    const scope = clearDataConfirm;
+    setClearDataConfirm(null);
+    if (!scope || !ensureLiveRuntime() || !api) {
+      return;
+    }
+    const clear =
+      scope === "site"
+        ? activeTab
+          ? () => api.browser.clearSiteData({ threadId, tabId: activeTab.id })
+          : null
+        : () => api.browser.clearAllData({ threadId });
+    if (!clear) {
+      return;
+    }
+    void runBrowserAction(clear).then((state) => {
+      if (!state) {
+        return;
+      }
+      upsertThreadState(state);
+      toastManager.add({
+        type: "success",
+        title: scope === "site" ? "Site data cleared" : "Browsing data cleared",
+      });
+    });
+  }, [
+    activeTab,
+    api,
+    clearDataConfirm,
+    ensureLiveRuntime,
+    runBrowserAction,
+    threadId,
+    upsertThreadState,
+  ]);
+
   const copyActiveTabLink = useCallback(() => {
     if (!activeTab) {
       return;
@@ -1955,6 +2007,29 @@ export function BrowserPanel({
                 <BrowserActionMenuIcon icon={ExternalLinkIcon} />
                 <span>Open externally</span>
               </MenuItem>
+              <MenuSub>
+                <MenuSubTrigger className={BROWSER_ACTION_MENU_ITEM_CLASS_NAME}>
+                  <BrowserActionMenuIcon icon={EraserIcon} />
+                  <span>Clear browsing data</span>
+                </MenuSubTrigger>
+                <ComposerPickerMenuSubPopup className={BROWSER_ACTION_MENU_PANEL_CLASS_NAME}>
+                  <MenuItem
+                    className={BROWSER_ACTION_MENU_ITEM_CLASS_NAME}
+                    disabled={!activeSiteHost}
+                    onClick={() => setClearDataConfirm("site")}
+                  >
+                    <span className="min-w-0 truncate">
+                      {activeSiteHost ? `Data for ${activeSiteHost}…` : "Data for this site…"}
+                    </span>
+                  </MenuItem>
+                  <MenuItem
+                    className={BROWSER_ACTION_MENU_ITEM_CLASS_NAME}
+                    onClick={() => setClearDataConfirm("all")}
+                  >
+                    <span>All browsing data…</span>
+                  </MenuItem>
+                </ComposerPickerMenuSubPopup>
+              </MenuSub>
               <MenuSeparator />
               <MenuItem className={BROWSER_ACTION_MENU_ITEM_CLASS_NAME} onClick={onClosePanel}>
                 <BrowserActionMenuIcon icon={XIcon} />
@@ -2041,6 +2116,35 @@ export function BrowserPanel({
             ) : null}
           </div>
         </div>
+        <AlertDialog
+          open={clearDataConfirm !== null}
+          onOpenChange={(open) => {
+            if (!open) setClearDataConfirm(null);
+          }}
+        >
+          <AlertDialogPopup>
+            <AlertDialogHeader>
+              <AlertDialogTitle>
+                {clearDataConfirm === "site"
+                  ? `Clear data for ${activeSiteHost ?? "this site"}?`
+                  : "Clear all browsing data?"}
+              </AlertDialogTitle>
+              <AlertDialogDescription>
+                {clearDataConfirm === "site"
+                  ? "Removes cookies, site storage and cached files, then reloads the page. Cookies are cleared for the whole domain, so you are also signed out of its subdomains. Saved passwords are kept."
+                  : "Removes cookies, site storage and cached files for every site in the in-app browser and signs you out everywhere. Saved passwords are kept."}
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogClose render={<Button variant="outline" size="sm" />}>
+                Cancel
+              </AlertDialogClose>
+              <Button variant="destructive" size="sm" onClick={onConfirmClearData}>
+                Clear data
+              </Button>
+            </AlertDialogFooter>
+          </AlertDialogPopup>
+        </AlertDialog>
       </DiffPanelShell>
     </div>
   );

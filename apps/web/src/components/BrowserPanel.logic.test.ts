@@ -17,6 +17,7 @@ import {
   applyBrowserWebviewPresentation,
   isBrowserPanelBoundsHiddenKey,
   resolveBrowserRuntimePresentation,
+  resolveBrowserSiteHost,
 } from "./BrowserPanel.logic";
 import { ThreadId, type BrowserAnnotationEvent } from "@synara/contracts";
 import type { BrowserAnnotationDraft } from "../lib/browserAnnotations";
@@ -546,5 +547,15 @@ describe("isBrowserPanelBoundsHiddenKey", () => {
     expect(isBrowserPanelBoundsHiddenKey("renderer:hidden:zoom-1")).toBe(true);
     expect(isBrowserPanelBoundsHiddenKey("native:hidden")).toBe(true);
     expect(isBrowserPanelBoundsHiddenKey("renderer:12:40:800:600:zoom-1")).toBe(false);
+  });
+});
+
+describe("resolveBrowserSiteHost", () => {
+  it("returns the host only for web pages", () => {
+    expect(resolveBrowserSiteHost("https://mail.example.com/inbox")).toBe("mail.example.com");
+    expect(resolveBrowserSiteHost("http://localhost:5173/")).toBe("localhost:5173");
+    expect(resolveBrowserSiteHost("about:blank")).toBeNull();
+    expect(resolveBrowserSiteHost("not a url")).toBeNull();
+    expect(resolveBrowserSiteHost(undefined)).toBeNull();
   });
 });
