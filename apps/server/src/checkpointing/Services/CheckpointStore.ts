@@ -47,6 +47,8 @@ export interface DiffCheckpointsInput {
   readonly toCheckpointRef: CheckpointRef;
   readonly fallbackFromToHead?: boolean;
   readonly ignoreWhitespace: boolean;
+  /** Exact immutable provider patch; reconstruct only from fromCheckpointRef in a private index. */
+  readonly providerPatch?: string;
   readonly maxOutputBytes?: number;
 }
 

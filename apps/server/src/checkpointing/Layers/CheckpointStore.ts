@@ -393,6 +393,69 @@ const makeCheckpointStore = Effect.gen(function* () {
     Effect.gen(function* () {
       const operation = "CheckpointStore.diffCheckpoints";
 
+      if (input.providerPatch !== undefined) {
+        const baseline = yield* resolveCheckpointCommit(input.cwd, input.fromCheckpointRef);
+        if (
+          !baseline ||
+          Buffer.byteLength(input.providerPatch, "utf8") > CHECKPOINT_DIFF_MAX_OUTPUT_BYTES
+        ) {
+          return yield* new CheckpointInvariantError({
+            operation,
+            detail: "Provider patch baseline or size is unavailable.",
+          });
+        }
+        if (input.providerPatch.length === 0) return "";
+        // Reconstruct the immutable provider revision in a fresh index. Never
+        // seed from today's index/files or ask apply to merge a mismatched base.
+        return yield* Effect.acquireUseRelease(
+          fs.makeTempDirectory({ prefix: "synara-provider-patch-" }),
+          (tempDir) =>
+            Effect.gen(function* () {
+              const env = { ...process.env, GIT_INDEX_FILE: path.join(tempDir, "index") };
+              const patchPath = path.join(tempDir, "provider.patch");
+              yield* fs.writeFileString(patchPath, input.providerPatch!);
+              yield* git.execute({ operation, cwd: input.cwd, args: ["read-tree", baseline], env });
+              yield* git.execute({
+                operation,
+                cwd: input.cwd,
+                args: ["apply", "--cached", "--whitespace=nowarn", "--", patchPath],
+                env,
+              });
+              const result = yield* git.execute({
+                operation,
+                cwd: input.cwd,
+                args: [
+                  "diff",
+                  "--cached",
+                  "--patch",
+                  "--minimal",
+                  "--no-color",
+                  "--no-ext-diff",
+                  "--no-textconv",
+                  "--src-prefix=a/",
+                  "--dst-prefix=b/",
+                  ...(input.ignoreWhitespace ? ["--ignore-all-space"] : []),
+                  baseline,
+                ],
+                env,
+                maxOutputBytes: input.maxOutputBytes ?? CHECKPOINT_DIFF_MAX_OUTPUT_BYTES,
+              });
+              return result.stdout;
+            }),
+          (tempDir) => fs.remove(tempDir, { recursive: true }).pipe(Effect.orDie),
+        ).pipe(
+          Effect.mapError((cause) =>
+            cause instanceof GitCommandError || cause instanceof CheckpointInvariantError
+              ? cause
+              : new CheckpointInvariantError({
+                  operation,
+                  detail: "Could not prepare a private provider patch index.",
+                  cause,
+                }),
+          ),
+        );
+      }
+
       let [fromCommitOid, toCommitOid] = yield* Effect.all(
         [
           resolveCheckpointCommit(input.cwd, input.fromCheckpointRef),

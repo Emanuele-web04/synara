@@ -1801,7 +1801,9 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
       }
       assert.equal(firstEvent.value.turnId, "turn-1");
       assert.equal(firstEvent.value.payload.unifiedDiff, unifiedDiff);
-      assert.deepEqual(firstEvent.value.raw?.payload, {});
+      assert.deepEqual(firstEvent.value.raw?.payload, {
+        unifiedDiffBytes: Buffer.byteLength(unifiedDiff, "utf8"),
+      });
       assert.equal(firstEvent.value.raw?.method, "turn/diff/updated");
     }),
   );

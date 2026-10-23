@@ -2885,6 +2885,17 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
         });
       }
 
+      // Diff reads include the live revision; default history above stays completed-only.
+      const liveContext = Option.getOrThrow(
+        yield* snapshotQuery.getThreadCheckpointContext(ThreadId.makeUnsafe("thread-context"), {
+          includeLiveCheckpoints: true,
+        }),
+      );
+      assert.deepEqual(
+        liveContext.checkpoints.map((checkpoint) => checkpoint.turnId),
+        [asTurnId("turn-1"), asTurnId("turn-2"), asTurnId("turn-placeholder")],
+      );
+
       const outputContext = yield* snapshotQuery.getThreadCheckpointContext(
         ThreadId.makeUnsafe("thread-context"),
         { includeFileChangeActivityPayloads: true },

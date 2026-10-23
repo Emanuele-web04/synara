@@ -3625,9 +3625,10 @@ const make = Effect.gen(function* () {
               trackedPlaceholder?.files ??
               existingCheckpoint?.files ??
               [];
-            const checkpointRef =
-              livePlaceholder?.checkpointRef ??
-              CheckpointRef.makeUnsafe(`provider-diff:${event.eventId}`);
+            const checkpointRef = canParseLiveDiffPatch
+              ? CheckpointRef.makeUnsafe(`provider-diff:${event.eventId}`)
+              : (livePlaceholder?.checkpointRef ??
+                CheckpointRef.makeUnsafe(`provider-diff:${event.eventId}`));
             const checkpointTurnCount = livePlaceholder?.checkpointTurnCount ?? maxTurnCount + 1;
             // Leave assistantMessageId undefined on the placeholder: the real
             // capture performed by CheckpointReactor will resolve the actual

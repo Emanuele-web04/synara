@@ -1542,19 +1542,20 @@ function mapToRuntimeEvents(
   }
 
   if (event.method === "turn/diff/updated") {
-    // Each patch resends the whole cumulative turn diff. Keep it only in
-    // payload.unifiedDiff: copying it into raw doubles every journal write,
-    // sizing pass and decode for no reader.
+    // Keep the cumulative body once. Metadata records its original UTF-8 size
+    // so a journal-compacted prefix cannot masquerade as a complete patch.
+    const unifiedDiff =
+      asString(payload?.unifiedDiff) ?? asString(payload?.diff) ?? asString(payload?.patch) ?? "";
+    const base = runtimeDeltaEventBase(event, canonicalThreadId);
     return [
       {
-        ...runtimeDeltaEventBase(event, canonicalThreadId),
+        ...base,
         type: "turn.diff.updated",
-        payload: {
-          unifiedDiff:
-            asString(payload?.unifiedDiff) ??
-            asString(payload?.diff) ??
-            asString(payload?.patch) ??
-            "",
+        payload: { unifiedDiff },
+        raw: {
+          source: base.raw?.source ?? eventRawSource(event),
+          method: event.method,
+          payload: { unifiedDiffBytes: Buffer.byteLength(unifiedDiff, "utf8") },
         },
       },
     ];

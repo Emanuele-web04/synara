@@ -5535,6 +5535,194 @@ describe("CheckpointReactor", () => {
     ).toBe(false);
   });
 
+  it("reads the exact streamed Codex patch before completion without later checkout edits", async () => {
+    const harness = await createHarness({
+      seedFilesystemCheckpoints: false,
+      runtimeIngestion: true,
+    });
+    vi.spyOn(harness.provider.service, "getCapabilities").mockReturnValue(
+      Effect.succeed({ sessionModelSwitch: "in-session", supportsLiveTurnDiffPatch: true }),
+    );
+    const threadId = ThreadId.makeUnsafe("thread-1");
+    const turnId = asTurnId("codex-raw-live");
+    const createdAt = new Date().toISOString();
+    fs.writeFileSync(path.join(harness.cwd, "whitespace.txt"), "hello world\n", "utf8");
+    runGit(harness.cwd, ["add", "."]);
+    runGit(harness.cwd, ["commit", "-m", "Fixture whitespace baseline"]);
+    fs.writeFileSync(path.join(harness.cwd, "README.md"), "dirty baseline\n", "utf8");
+    await harness.prepareBaseline(turnId);
+    harness.provider.emit({
+      type: "turn.started",
+      eventId: EventId.makeUnsafe("codex-raw-start"),
+      provider: "codex",
+      threadId,
+      turnId,
+      createdAt,
+    });
+    await Effect.runPromise(harness.ingestion!.drain);
+    const baselineRef = checkpointRefForThreadTurnStart(threadId, turnId);
+    const patchRaw = (patch: string) => ({
+      source: "codex.app-server.notification",
+      method: "turn/diff/updated",
+      payload: { unifiedDiffBytes: Buffer.byteLength(patch, "utf8") },
+    });
+    const emitPatch = async (id: string, text: string) => {
+      fs.writeFileSync(path.join(harness.cwd, "README.md"), text, "utf8");
+      fs.writeFileSync(path.join(harness.cwd, "whitespace.txt"), "hello  world\n", "utf8");
+      const patch = runGit(harness.cwd, [
+        "diff",
+        "--binary",
+        "--full-index",
+        baselineRef,
+        "--",
+        "README.md",
+        "whitespace.txt",
+      ]);
+      harness.provider.emit({
+        type: "turn.diff.updated",
+        eventId: EventId.makeUnsafe(id),
+        provider: "codex",
+        threadId,
+        turnId,
+        createdAt,
+        payload: { unifiedDiff: patch },
+        raw: patchRaw(patch),
+      });
+      return patch;
+    };
+    const firstPatch = await emitPatch("codex-raw-first", "first revision\n");
+    await waitForThread(harness.engine, (thread) =>
+      thread.checkpoints.some(
+        (checkpoint) => checkpoint.checkpointRef === "provider-diff:codex-raw-first",
+      ),
+    );
+    const query = await runtime!.runPromise(Effect.service(ProjectionSnapshotQuery));
+    const diffQuery = await runtime!.runPromise(
+      Effect.service(CheckpointDiffQuery).pipe(
+        Effect.provide(CheckpointDiffQueryLive),
+        Effect.provideService(ProjectionSnapshotQuery, query),
+        Effect.provideService(CheckpointStore, harness.checkpointStore),
+        Effect.provideService(ProviderRuntimeEventRepository, harness.runtimeEvents),
+      ),
+    );
+    // The peer edit and real staging state are newer than the chosen event.
+    fs.writeFileSync(path.join(harness.cwd, "README.md"), "peer edit after event\n", "utf8");
+    fs.writeFileSync(path.join(harness.cwd, "peer.txt"), "unrelated staged work\n", "utf8");
+    runGit(harness.cwd, ["add", "peer.txt"]);
+    const indexBefore = fs.readFileSync(path.join(harness.cwd, ".git", "index"));
+    for (const ignoreWhitespace of [false, true]) {
+      const selected = await Effect.runPromise(
+        diffQuery.getTurnDiff({ threadId, fromTurnCount: 0, toTurnCount: 1, ignoreWhitespace }),
+      );
+      expect(selected.diff).toContain("+first revision");
+      expect(selected.diff).not.toContain("peer");
+      expect(selected.diff.includes("whitespace.txt")).toBe(!ignoreWhitespace);
+    }
+    expect(fs.readFileSync(path.join(harness.cwd, ".git", "index"))).toEqual(indexBefore);
+    expect(fs.readFileSync(path.join(harness.cwd, "README.md"), "utf8")).toBe(
+      "peer edit after event\n",
+    );
+    const padHeader =
+      firstPatch +
+      "diff --git a/pad.txt b/pad.txt\nnew file mode 100644\n--- /dev/null\n+++ b/pad.txt\n@@ -0,0 +1 @@\n+";
+    const completePrefix =
+      padHeader + "x".repeat(64 * 1024 - Buffer.byteLength(padHeader) - 1) + "\n";
+    const oversizedPatch =
+      completePrefix +
+      "diff --git a/huge.txt b/huge.txt\nnew file mode 100644\n--- /dev/null\n+++ b/huge.txt\n@@ -0,0 +1 @@\n+" +
+      "y".repeat(2 * 1024 * 1024) +
+      "\n";
+    for (const [id, patch, raw] of [
+      ["codex-raw-malformed", "not a patch", undefined],
+      ["codex-raw-mismatch", firstPatch.replace("-dirty baseline", "-wrong baseline"), undefined],
+      [
+        "codex-raw-truncated",
+        firstPatch,
+        {
+          source: "codex.app-server.notification",
+          method: "turn/diff/updated",
+          payload: { synaraTruncated: true },
+        },
+      ],
+      ["codex-raw-legacy", firstPatch, null],
+      [
+        "codex-raw-wrong-size",
+        firstPatch,
+        {
+          source: "codex.app-server.notification",
+          method: "turn/diff/updated",
+          payload: { unifiedDiffBytes: Buffer.byteLength(firstPatch) + 1 },
+        },
+      ],
+      ["codex-raw-oversized", oversizedPatch, undefined],
+    ] as const) {
+      harness.provider.emit({
+        type: "turn.diff.updated",
+        eventId: EventId.makeUnsafe(id),
+        provider: "codex",
+        threadId,
+        turnId,
+        createdAt,
+        payload: { unifiedDiff: patch },
+        ...(raw === null ? {} : { raw: raw ?? patchRaw(patch) }),
+      });
+      await waitForThread(harness.engine, (thread) =>
+        thread.checkpoints.some((checkpoint) => checkpoint.checkpointRef === `provider-diff:${id}`),
+      );
+      await expect(
+        Effect.runPromise(diffQuery.getTurnDiff({ threadId, fromTurnCount: 0, toTurnCount: 1 })),
+      ).rejects.toThrow();
+    }
+    expect(fs.readFileSync(path.join(harness.cwd, ".git", "index"))).toEqual(indexBefore);
+    await emitPatch("codex-raw-second", "later revision\n");
+    await waitForThread(harness.engine, (thread) =>
+      thread.checkpoints.some(
+        (checkpoint) => checkpoint.checkpointRef === "provider-diff:codex-raw-second",
+      ),
+    );
+    const next = await Effect.runPromise(
+      diffQuery.getTurnDiff({ threadId, fromTurnCount: 0, toTurnCount: 1 }),
+    );
+    expect(next.diff).toContain("+later revision");
+    expect(next.diff).not.toContain("+first revision");
+    // Removing this exact journal revision must not expose another turn/thread's
+    // patch or silently substitute an older/newer event.
+    await runtime!.runPromise(
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        yield* sql`DELETE FROM provider_runtime_events WHERE event_id = ${"codex-raw-second"}`;
+      }),
+    );
+    await harness.runtimeEvents.append({
+      type: "turn.diff.updated",
+      eventId: EventId.makeUnsafe("foreign-revision"),
+      provider: "codex",
+      threadId: ThreadId.makeUnsafe("foreign-thread"),
+      turnId,
+      createdAt,
+      payload: { unifiedDiff: firstPatch },
+    });
+    await expect(
+      Effect.runPromise(diffQuery.getTurnDiff({ threadId, fromTurnCount: 0, toTurnCount: 1 })),
+    ).rejects.toThrow("not available");
+    harness.provider.emit({
+      type: "turn.completed",
+      eventId: EventId.makeUnsafe("codex-raw-complete"),
+      provider: "codex",
+      threadId,
+      turnId,
+      createdAt,
+      payload: { state: "completed" },
+    });
+    await waitForThread(harness.engine, (thread) =>
+      thread.checkpoints.some((checkpoint) => checkpoint.status === "ready"),
+    );
+    const final = await Effect.runPromise(
+      diffQuery.getTurnDiff({ threadId, fromTurnCount: 0, toTurnCount: 1 }),
+    );
+    expect(final.diff).toContain("peer.txt");
+  });
+
   it.each(["completed", "interrupted"] as const)(
     "derives a live turn-diff placeholder from git for claude file edits mid-turn (%s)",
     async (terminalState) => {
@@ -5618,6 +5806,7 @@ describe("CheckpointReactor", () => {
           Effect.provide(CheckpointDiffQueryLive),
           Effect.provideService(ProjectionSnapshotQuery, query),
           Effect.provideService(CheckpointStore, harness.checkpointStore),
+          Effect.provideService(ProviderRuntimeEventRepository, harness.runtimeEvents),
         ),
       );
       // A client reconnect must retain the selectable turn; command/Undo readers
@@ -5961,6 +6150,7 @@ describe("CheckpointReactor", () => {
           Effect.provide(CheckpointDiffQueryLive),
           Effect.provideService(ProjectionSnapshotQuery, query),
           Effect.provideService(CheckpointStore, harness.checkpointStore),
+          Effect.provideService(ProviderRuntimeEventRepository, harness.runtimeEvents),
         ),
       );
       const previous = await Effect.runPromise(
