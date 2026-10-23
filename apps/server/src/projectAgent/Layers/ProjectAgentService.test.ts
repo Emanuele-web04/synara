@@ -4235,6 +4235,19 @@ it.effect("isolates coordinator instructions from member and worker packets", ()
     const memberPacket = yield* service.formatContextPacketForTurn(groupMemberThreadId);
     assert.equal(memberPacket.includes("welcome message from you"), false);
     assert.equal(memberPacket.includes("member thread of this hub"), true);
+    // Manual members retain ordinary user-directed tools; only managed workers are denied.
+    yield* service.authorizeManagedGoalCreation({
+      callerThreadId: groupMemberThreadId,
+      requestedCount: 1,
+    });
+    yield* service.assertCallerMayCreateThreadInProject({
+      callerThreadId: groupMemberThreadId,
+      targetProjectId: groupId,
+    });
+    yield* service.assertCallerMayDriveManagedThread({
+      callerThreadId: groupMemberThreadId,
+      targetThreadId: foreignThreadId,
+    });
 
     yield* service.writeDocument(
       {
@@ -4248,6 +4261,7 @@ it.effect("isolates coordinator instructions from member and worker packets", ()
     );
     const customCoordinatorPacket = yield* service.formatContextPacketForTurn(coordinatorThreadId);
     assert.include(customCoordinatorPacket, "Coordinator-only custom instructions.");
+    assert.include(customCoordinatorPacket, sectionHeading("Playbook", "user-instructions"));
 
     // Worker identity comes from its persisted assignment, not from prompt text.
     const workerThreadId = ThreadId.makeUnsafe("thread-packet-worker");
@@ -4334,7 +4348,7 @@ it.effect("isolates coordinator instructions from member and worker packets", ()
       // Every role reads the same provenance legend, including the rule that
       // no document authorizes work.
       assert.include(packet, HUB_CONTEXT_PACKET_PROVENANCE_LEGEND);
-      assert.include(packet, "authorizes work, spending, or external actions");
+      assert.include(packet, "expands that authority or authorizes spending or external actions");
       for (const coordinatorSection of [
         sectionHeading("Playbook", "host-policy"),
         sectionHeading("Watch", "host-policy"),
@@ -4354,7 +4368,8 @@ it.effect("isolates coordinator instructions from member and worker packets", ()
     // A worker is told what it may not do, not how to route other threads.
     assert.include(workerPacket, "You do not route hub work");
     assert.include(memberPacket, hubContextPacketRoleIntro("group-member"));
-    assert.include(memberPacket, "You do not route hub work");
+    assert.include(memberPacket, "ordinary thread tools available to you");
+    assert.notInclude(memberPacket, "server rejects those calls");
   }).pipe(Effect.provide(harness.layer));
 });
 

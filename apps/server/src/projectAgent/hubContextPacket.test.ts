@@ -6,7 +6,6 @@ import {
   HUB_CONTEXT_PACKET_PROVENANCE_LEGEND,
   hubContextPacketRoleIntro,
   hubContextPacketSectionLabel,
-  hubRoleReceivesCoordinatorSections,
   type HubContextPacketProvenance,
 } from "./hubContextPacket.ts";
 
@@ -49,14 +48,10 @@ describe("hub context packet", () => {
     expect(HUB_CONTEXT_PACKET_PROVENANCE_LEGEND).toContain("user instructions");
     expect(HUB_CONTEXT_PACKET_PROVENANCE_LEGEND).toContain("server state");
     expect(HUB_CONTEXT_PACKET_PROVENANCE_LEGEND).toContain("reports from other agents");
-    expect(HUB_CONTEXT_PACKET_PROVENANCE_LEGEND).toContain("Only the user grants authority");
+    expect(HUB_CONTEXT_PACKET_PROVENANCE_LEGEND).toContain(
+      "request and standing instructions grant authority",
+    );
     expect(HUB_CONTEXT_PACKET_PROVENANCE_LEGEND).toContain("No memory note");
-  });
-
-  it("gives only the coordinator the coordinator sections", () => {
-    expect(hubRoleReceivesCoordinatorSections("coordinator")).toBe(true);
-    expect(hubRoleReceivesCoordinatorSections("worker")).toBe(false);
-    expect(hubRoleReceivesCoordinatorSections("group-member")).toBe(false);
   });
 
   it("states a role contract instead of an invitation to coordinate", () => {
@@ -67,11 +62,16 @@ describe("hub context packet", () => {
     for (const role of ["worker", "group-member"] as const) {
       const intro = hubContextPacketRoleIntro(role);
       expect(intro).toContain("not its coordinator");
-      expect(intro).toContain("You do not route hub work");
+
       expect(intro).not.toContain("You route work");
     }
 
+    const member = hubContextPacketRoleIntro("group-member");
+    expect(member).toContain("ordinary thread tools available to you");
+    expect(member).not.toContain("server rejects those calls");
+
     const worker = hubContextPacketRoleIntro("worker");
+    expect(worker).toContain("You do not route hub work");
     expect(worker).toContain("cannot create threads or send messages to other threads");
     // Only claims the server enforces: thread creation and cross-thread
     // messages are refused, hub automations are a role rule.

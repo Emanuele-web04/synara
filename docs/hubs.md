@@ -258,11 +258,11 @@ including threads in linked repositories, receives a context packet with:
 Each section of that packet names who wrote it — your instructions, Synara's own records, hub
 memory and decisions, a report from another thread, or Synara's role rules — and the packet
 states that only you grant authority. A memory note, decision, task description, or worker
-report is context: it never authorizes work, spending, or external actions on its own.
+report is context: it never expands your authorized scope or authorizes spending or external actions on its own.
 
 The packet also follows the thread's role. A coordinator additionally gets its playbook, watch
 rules, worker roster, and worker reports; a worker or manual member thread gets its assignment
-and the shared hub context instead, and is told not to route hub work. Your own edits to the
+and the shared hub context instead. Workers cannot route other threads; manual member threads retain ordinary user-directed tools. Your own edits to the
 playbook are kept as written — Synara only refreshes a playbook it authored itself.
 
 Edit these in hub settings → **Memory**:

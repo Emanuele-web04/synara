@@ -3,18 +3,14 @@ import { describe, expect, it } from "vitest";
 import {
   FOLLOW_UP_DISPATCH_DESCRIPTION,
   FOLLOW_UP_MODE_DESCRIPTION,
-  FOLLOW_UP_QUEUE_POLICY,
-  FOLLOW_UP_STEER_POLICY,
 } from "./followUpDispatchPolicy.ts";
 
 describe("follow-up dispatch policy", () => {
   it("conserves queue for ordinary follow-ups and never calls it simple queueing", () => {
-    expect(FOLLOW_UP_QUEUE_POLICY).toBe("queue");
     expect(FOLLOW_UP_DISPATCH_DESCRIPTION).toContain('mode "queue" (default)');
     expect(FOLLOW_UP_DISPATCH_DESCRIPTION).toContain("never interrupts");
     // The declared behavior of a steer, including the non-native fallback the
     // runtime performs: head-of-queue plus an interrupt.
-    expect(FOLLOW_UP_STEER_POLICY).toBe("steer");
     expect(FOLLOW_UP_DISPATCH_DESCRIPTION).toContain(
       "steers the live turn where the provider supports that natively",
     );

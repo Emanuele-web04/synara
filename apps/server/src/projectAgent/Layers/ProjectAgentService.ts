@@ -170,9 +170,7 @@ import {
 import {
   HUB_CONTEXT_PACKET_PROVENANCE_LEGEND,
   hubContextPacketRoleIntro,
-  hubContextPacketSectionLabel,
-  hubRoleReceivesCoordinatorSections,
-  type HubContextPacketProvenance,
+  hubContextPacketSectionLabel as sectionLabel,
   type HubContextPacketRole,
 } from "../hubContextPacket.ts";
 import {
@@ -329,11 +327,6 @@ const SEED_INSTRUCTIONS_CONTENT = "# Instructions\n\n";
 // listSummaries compares head hashes — the instructions body never leaves
 // the document tables just to flag a customized file.
 const SEED_INSTRUCTIONS_HASH = hashDocumentContent(SEED_INSTRUCTIONS_CONTENT);
-
-// Every context-packet section names its author so instructions, server
-// records and another agent's report are never read as one voice.
-const sectionLabel = (label: string, provenance: HubContextPacketProvenance): string =>
-  hubContextPacketSectionLabel(label, provenance);
 
 const SEED_DOCUMENTS: ReadonlyArray<{ path: string; content: string }> = [
   {
@@ -5221,10 +5214,15 @@ export const makeProjectAgentService = Effect.gen(function* () {
             : []),
           // Coordinator-only: the playbook (custom or system-authored) and the
           // watch/roster sections below never reach a worker or member packet.
-          ...(hubRoleReceivesCoordinatorSections(role)
+          ...(isCoordinator
             ? [
                 {
-                  label: sectionLabel("Playbook", "host-policy"),
+                  label: sectionLabel(
+                    "Playbook",
+                    Option.isSome(playbook) && playbook.value.authorKind === "user"
+                      ? "user-instructions"
+                      : "host-policy",
+                  ),
                   text: Option.isSome(playbook) ? playbook.value.content : PROJECT_BOT_PLAYBOOK,
                 },
               ]
@@ -5243,7 +5241,7 @@ export const makeProjectAgentService = Effect.gen(function* () {
                     packet.goal?.objective ?? "None. Only create a goal if the user asked for one.",
                 },
               ]),
-          ...(hubRoleReceivesCoordinatorSections(role)
+          ...(isCoordinator
             ? []
             : [
                 {
@@ -5273,10 +5271,10 @@ export const makeProjectAgentService = Effect.gen(function* () {
                 : "Provider default.",
           },
           { label: sectionLabel("Library root", "server-state"), text: groupLibraryRoot },
-          ...(hubRoleReceivesCoordinatorSections(role)
+          ...(isCoordinator
             ? [{ label: sectionLabel("Watch", "host-policy"), text: PROJECT_BOT_WATCH_RULES }]
             : []),
-          ...(hubRoleReceivesCoordinatorSections(role)
+          ...(isCoordinator
             ? [
                 {
                   label: sectionLabel("Workers", "server-state"),

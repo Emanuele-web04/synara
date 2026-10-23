@@ -142,14 +142,12 @@ describe("Synara harness policy", () => {
     // are told nothing about hub routing they cannot perform anyway.
     const policy = renderSynaraHarnessPolicy({ gatewayControlAvailable: true });
     assert.include(policy, "Hub roles come from the server");
+    assert.include(policy, "the coordinator routes assigned hub work and owns hub automations");
     assert.include(
       policy,
-      "only the hub coordinator routes work, starts threads, and owns hub automations",
+      "workers do their assigned work and cannot create threads or message other threads",
     );
-    assert.include(
-      policy,
-      "a hub worker does its assigned work and never creates threads or messages other threads",
-    );
+    assert.include(policy, "Other conversations retain ordinary thread tools.");
     assert.notInclude(
       renderSynaraHarnessPolicy({ gatewayControlAvailable: false }),
       "Hub roles come from the server",

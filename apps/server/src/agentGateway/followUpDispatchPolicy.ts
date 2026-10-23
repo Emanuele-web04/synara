@@ -4,8 +4,7 @@
  * The gateway passes the requested mode through unchanged and the runtime
  * decides delivery (see the `thread.turn.start` handling in
  * `ProviderCommandReactor`). This module is the one place that declares what
- * each mode means, so the catalog text an agent reads and the behavior it gets
- * cannot drift apart:
+ * each mode means in the tool descriptions agents read:
  *
  * - `queue` (default) never interrupts. The message runs after the live turn
  *   finishes.
@@ -16,12 +15,6 @@
  *
  * @module agentGateway/followUpDispatchPolicy
  */
-
-/** How `mode: "queue"` behaves. Ordinary follow-ups must use it. */
-export const FOLLOW_UP_QUEUE_POLICY = "queue";
-
-/** How `mode: "steer"` behaves, including the non-native fallback. */
-export const FOLLOW_UP_STEER_POLICY = "steer";
 
 /** Catalog description for the `mode` argument. */
 export const FOLLOW_UP_MODE_DESCRIPTION =
