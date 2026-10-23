@@ -14491,6 +14491,203 @@ describe("ChatView transcript geometry (full app)", () => {
     },
   );
 
+  it("Cmd/Ctrl+W follows route changes, restores the hidden draft, and yields without a tab", async () => {
+    const snapshot = addThreadToSnapshot(
+      createSnapshotForTargetUser({
+        targetMessageId: MessageId.makeUnsafe("shortcut-close-route"),
+        targetText: "Close the visible conversation",
+      }),
+      OTHER_THREAD_ID,
+    );
+    const mounted = await mountChatView({ viewport: DEFAULT_VIEWPORT, snapshot });
+    try {
+      const draftId = ThreadId.makeUnsafe("shortcut-hidden-draft");
+      useComposerDraftStore.getState().setProjectDraftThreadId(PROJECT_ID, draftId, {});
+      useComposerDraftStore.getState().setPrompt(draftId, "Keep this unsent draft");
+      useOpenThreadTabsStore.setState({ threadIds: [draftId, THREAD_ID, OTHER_THREAD_ID] });
+      await mounted.router.navigate({ to: "/$threadId", params: { threadId: OTHER_THREAD_ID } });
+      await vi.waitFor(() =>
+        expect(
+          document.querySelector('nav[aria-label="Open threads"] button[aria-current="page"]')
+            ?.textContent,
+        ).toBe("New thread"),
+      );
+      await userEvent.click(await waitForComposerEditor());
+      expect(
+        dispatchConfiguredShortcut(document.activeElement!, { key: "w" }).defaultPrevented,
+      ).toBe(true);
+      await waitForURL(mounted.router, (path) => path === `/${THREAD_ID}`, "Close the current tab");
+      expect(useOpenThreadTabsStore.getState().threadIds).toEqual([draftId, THREAD_ID]);
+      await userEvent.click(await waitForComposerEditor());
+      expect(
+        dispatchConfiguredShortcut(document.activeElement!, { key: "w" }).defaultPrevented,
+      ).toBe(true);
+      await waitForURL(
+        mounted.router,
+        (path) => path === `/${draftId}`,
+        "Restore the hidden draft",
+      );
+      expect(useComposerDraftStore.getState().draftsByThreadId[draftId]?.prompt).toBe(
+        "Keep this unsent draft",
+      );
+      await vi.waitFor(() =>
+        expect(
+          document.querySelector('nav[aria-label="Open threads"] [data-surface-tab]'),
+        ).toBeNull(),
+      );
+      expect(dispatchConfiguredShortcut(window, { key: "w" }).defaultPrevented).toBe(false);
+    } finally {
+      await mounted.cleanup();
+      useOpenThreadTabsStore.setState({ threadIds: [] });
+    }
+  });
+
+  it("Cmd/Ctrl+W preserves a busy dock terminal on Cancel and closes its own session on confirmation", async () => {
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: MessageId.makeUnsafe("shortcut-close-dock"),
+        targetText: "Close the focused terminal",
+      }),
+      configureFixture: (nextFixture) => {
+        nextFixture.serverConfig = {
+          ...nextFixture.serverConfig,
+          keybindings: [
+            {
+              command: "terminal.close",
+              shortcut: {
+                key: "w",
+                modKey: true,
+                metaKey: false,
+                ctrlKey: false,
+                altKey: false,
+                shiftKey: false,
+              },
+              whenAst: { type: "identifier", name: "terminalFocus" },
+            },
+          ],
+        };
+      },
+    });
+    const previousNativeApi = window.nativeApi;
+    const api = readNativeApi()!;
+    const confirm = vi.fn(async () => false);
+    const close = vi.fn(async () => {});
+    Object.defineProperty(window, "nativeApi", {
+      configurable: true,
+      value: { ...api, dialogs: { ...api.dialogs, confirm }, terminal: { ...api.terminal, close } },
+    });
+    const paneId = "shortcut-close-dock-pane";
+    const scopeId = dockTerminalThreadId(THREAD_ID);
+    try {
+      useRightDockStore.getState().openPane(THREAD_ID, { kind: "terminal", paneId });
+      const terminalInput = await waitForElement<HTMLTextAreaElement>(
+        () => document.querySelector(`[data-dock-pane-id="${paneId}"] .xterm-helper-textarea`),
+        "Expected the dock terminal keyboard input",
+      );
+      const terminalId =
+        useTerminalStateStore.getState().terminalStateByThreadId[scopeId]!.dockTerminalIdsByPaneId![
+          paneId
+        ]!;
+      useTerminalStateStore.getState().setTerminalActivity(scopeId, terminalId, {
+        hasRunningSubprocess: true,
+        agentState: null,
+      });
+      terminalInput.focus();
+      expect(dispatchConfiguredShortcut(terminalInput, { key: "w" }).defaultPrevented).toBe(true);
+      await vi.waitFor(() => expect(confirm).toHaveBeenCalledTimes(1));
+      expect(close).not.toHaveBeenCalled();
+      expect(useRightDockStore.getState().dockStateByThreadId[THREAD_ID]?.panes).toEqual(
+        expect.arrayContaining([expect.objectContaining({ id: paneId })]),
+      );
+      expect(
+        useTerminalStateStore.getState().terminalStateByThreadId[scopeId]?.terminalIds,
+      ).toContain(terminalId);
+      confirm.mockResolvedValue(true);
+      terminalInput.focus();
+      dispatchConfiguredShortcut(terminalInput, { key: "w" });
+      await vi.waitFor(() =>
+        expect(close).toHaveBeenCalledWith({
+          threadId: scopeId,
+          terminalId,
+          deleteHistory: true,
+        }),
+      );
+      await vi.waitFor(() =>
+        expect(
+          useRightDockStore
+            .getState()
+            .dockStateByThreadId[THREAD_ID]?.panes.some((pane) => pane.id === paneId),
+        ).toBe(false),
+      );
+      expect(mounted.router.state.location.pathname).toBe(`/${THREAD_ID}`);
+    } finally {
+      if (previousNativeApi)
+        Object.defineProperty(window, "nativeApi", {
+          configurable: true,
+          value: previousNativeApi,
+        });
+      else Reflect.deleteProperty(window, "nativeApi");
+      await mounted.cleanup();
+    }
+  });
+
+  it("Cmd/Ctrl+W yields to the editor surface and keeps its commands working", async () => {
+    const previousNativeApi = window.nativeApi;
+    const api = readNativeApi()!;
+    Object.defineProperty(window, "nativeApi", {
+      configurable: true,
+      value: {
+        ...api,
+        projects: {
+          ...api.projects,
+          readFile: async () => ({
+            relativePath: "sample.ts",
+            contents: "const value = 1;\n",
+            truncated: false,
+            version: "sha256:keyboard-owner",
+            encoding: "utf8",
+            lineEnding: "lf",
+          }),
+        },
+      },
+    });
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: MessageId.makeUnsafe("shortcut-editor-owner"),
+        targetText: "Keep editor keyboard ownership",
+      }),
+      initialEntry: `/${THREAD_ID}?view=editor&editorFilePath=sample.ts`,
+    });
+    try {
+      await page.getByRole("button", { name: "Edit file", exact: true }).click();
+      const editorInput = await waitForElement<HTMLTextAreaElement>(
+        () => document.querySelector(".monaco-editor textarea"),
+        "Expected the native editor input",
+      );
+      editorInput.focus();
+      expect(dispatchConfiguredShortcut(editorInput, { key: "w" }).defaultPrevented).toBe(false);
+      expect(mounted.router.state.location.search.view).toBe("editor");
+      editorInput.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "F1",
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+      await expect.element(page.getByRole("dialog", { name: "Editor commands" })).toBeVisible();
+    } finally {
+      if (previousNativeApi)
+        Object.defineProperty(window, "nativeApi", {
+          configurable: true,
+          value: previousNativeApi,
+        });
+      else Reflect.deleteProperty(window, "nativeApi");
+      await mounted.cleanup();
+    }
+  });
+
   it("closing the last visible tab returns to an unsent draft hidden from the strip", async () => {
     useOpenThreadTabsStore.setState({ threadIds: [] });
     const mounted = await mountChatView({
