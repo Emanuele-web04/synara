@@ -90,6 +90,7 @@ export interface ComputerAuditEntry {
 const COMPUTER_AUDIT_SENSITIVE_ARGS: ReadonlySet<string> = new Set([
   "text",
   "value",
+  "value_equals",
   "arguments",
   "files",
   "image_path",

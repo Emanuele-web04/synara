@@ -6,6 +6,7 @@ import {
 
 /** Exact tool names owned by Synara's capability-gated Computer gateway. */
 export const SYNARA_COMPUTER_TOOL_NAMES = [
+  "computer_attach_files",
   "computer_activate_window",
   "computer_click",
   "computer_drag",

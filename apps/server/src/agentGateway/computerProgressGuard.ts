@@ -205,6 +205,25 @@ export class ComputerProgressGuard {
     }
   }
 
+  /** Reconcile one measured action, never unrelated uncertain input on the window. */
+  recordVerifiedActionProgress(action: ComputerProgressAction): void {
+    const key = scopeKey(action.scope);
+    const targets = this.scopes.get(key);
+    const target = digest(action.targetKey);
+    const history = targets?.get(target);
+    if (!history) return;
+    const actionKey = digest(action.actionKey);
+    const remaining = {
+      resolvedTargetKey: history.resolvedTargetKey,
+      uncertainActions: history.uncertainActions.filter((entry) => entry !== actionKey),
+      refusals: history.refusals.filter((entry) => entry.action !== actionKey),
+    };
+    if (remaining.uncertainActions.length || remaining.refusals.length)
+      targets!.set(target, remaining);
+    else targets!.delete(target);
+    if (targets?.size === 0) this.scopes.delete(key);
+  }
+
   /** Only an actual observed effect or a successful explicit verification qualifies. */
   recordVerifiedProgress(scope: ComputerProgressScope, targetKey: string): void {
     const key = scopeKey(scope);

@@ -1925,6 +1925,24 @@ export class CuaComputerBackend implements ComputerBackend {
       },
     };
   }
+  async typeTextWithKeyboard(value: string, windowId: string) {
+    if (desktopDeliveryMode() !== "foreground")
+      throw new CuaActionError(
+        "Keyboard text entry requires approved foreground delivery.",
+        "not-dispatched",
+        "unsupported_operation",
+      );
+    await this.refresh();
+    if (this.agentDialect !== "macos" || (this.driverNativeRevision ?? 0) < 10)
+      throw new CuaActionError(
+        "This driver cannot explicitly select the keyboard text actuator.",
+        "not-dispatched",
+        "unsupported_operation",
+      );
+    // Choose the actuator before dispatch; never first try an AX mutation.
+    return this.input("type_text", { text: value, force_synthetic: true, delay_ms: 10 }, windowId);
+  }
+
   typeText(value: string, w?: string, target?: ComputerResolvedTarget) {
     const token = target ? this.elementTokens.get(target.node) : undefined;
     if (target && (!token || !target.node.windowId))
