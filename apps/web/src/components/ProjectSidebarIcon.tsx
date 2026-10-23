@@ -1,10 +1,10 @@
 // FILE: ProjectSidebarIcon.tsx
-// Purpose: Render a project's glyph: its chosen emoji or icon, or the standard folder with an
-//          optional favicon badge overlay or a primary favicon in compact rows.
+// Purpose: Render a project's glyph: its chosen emoji or icon, its local favicon (logo), or the
+//          standard folder, which opens and closes with the project row.
 // Layer: Sidebar UI component
-// Exports: ProjectSidebarIcon, ProjectEmojiGlyph
+// Exports: ProjectSidebarIcon, ProjectEmojiGlyph, ProjectDisclosureChevron
 
-import { useEffect, useState, type CSSProperties } from "react";
+import { useEffect, useSyncExternalStore, type CSSProperties, type ReactNode } from "react";
 
 import { CentralIcon } from "~/lib/central-icons";
 import {
@@ -16,17 +16,60 @@ import {
 import { cn } from "~/lib/utils";
 import { resolveWsHttpUrl } from "~/lib/wsHttpUrl";
 import { FolderIcon, FolderOpenIcon } from "~/lib/icons";
+import { DisclosureChevron } from "./ui/DisclosureChevron";
 
-const projectFaviconPresence = new Map<string, boolean>();
+// Whether each favicon URL loads, shared so every glyph of a project (row, rail, hover card, …)
+// switches together, and a logo that fails to display falls back everywhere at once.
+const faviconLoads = new Map<string, boolean>();
+const faviconProbes = new Set<string>();
+const faviconListeners = new Set<() => void>();
 
-function resolveProjectFaviconUrl(cwd: string): string {
+function subscribeToFaviconLoads(listener: () => void) {
+  faviconListeners.add(listener);
+  return () => {
+    faviconListeners.delete(listener);
+  };
+}
+
+function recordFaviconLoad(src: string, loads: boolean) {
+  if (faviconLoads.get(src) === loads) return;
+  faviconLoads.set(src, loads);
+  for (const listener of faviconListeners) listener();
+}
+
+/** The project's favicon URL once it has loaded; null while probing or when there is none. */
+function useProjectFavicon(cwd: string): string | null {
   const params = new URLSearchParams({ cwd, fallback: "none" });
-  return resolveWsHttpUrl(`/api/project-favicon?${params.toString()}`);
+  const src = resolveWsHttpUrl(`/api/project-favicon?${params.toString()}`);
+  const loads = useSyncExternalStore(subscribeToFaviconLoads, () => faviconLoads.get(src) === true);
+
+  // Probe with Image() so Electron/file-origin behaves like the visible <img>. Probing again on
+  // each mount is cheap (the server's answer is cached for an hour) and picks up a favicon
+  // added or removed after that.
+  useEffect(() => {
+    if (faviconProbes.has(src)) return;
+    faviconProbes.add(src);
+    const image = new Image();
+    const settle = (loaded: boolean) => {
+      faviconProbes.delete(src);
+      recordFaviconLoad(src, loaded);
+    };
+    image.addEventListener("load", () => settle(true));
+    image.addEventListener("error", () => settle(false));
+    image.src = src;
+  }, [src]);
+
+  return loads ? src : null;
 }
 
 function colorStyle(color: ProjectColor | null): CSSProperties | undefined {
   return color ? { color: projectColorValue(color) } : undefined;
 }
+
+// A hairline halo in the text color keeps a black logo visible on the dark theme and a white
+// one on the light theme; it barely shows on logos that already contrast.
+const LOGO_HALO_CLASS_NAME =
+  "drop-shadow-[0_0_1px_color-mix(in_srgb,var(--foreground)_60%,transparent)]";
 
 /**
  * An emoji drawn as SVG text, so it scales with the same `size-*` box as the line icons
@@ -42,20 +85,19 @@ export function ProjectEmojiGlyph({ emoji, className }: { emoji: string; classNa
   );
 }
 
+type ProjectGlyphProps = {
+  cwd: string;
+  expanded: boolean;
+  appearance?: ProjectAppearance | null | undefined;
+};
+
+/** An emoji, icon, or folder color chosen in Edit project wins over the detected favicon. */
 export function ProjectSidebarIcon({
   cwd,
   expanded,
   appearance,
-  glyphClassName: glyphClassNameProp,
-  presentation = "badge",
-}: {
-  cwd: string;
-  expanded: boolean;
-  appearance?: ProjectAppearance | null | undefined;
-  glyphClassName?: string;
-  presentation?: "badge" | "favicon";
-}) {
-  const glyphClassName = glyphClassNameProp ?? "size-4";
+  glyphClassName = "size-4",
+}: ProjectGlyphProps & { glyphClassName?: string }) {
   if (appearance?.kind === "emoji") {
     return <ProjectEmojiGlyph emoji={appearance.emoji} className={glyphClassName} />;
   }
@@ -68,106 +110,69 @@ export function ProjectSidebarIcon({
       />
     );
   }
-  if (presentation === "favicon" && appearance?.kind === "icon" && appearance.color) {
-    const FolderGlyph = expanded ? FolderOpenIcon : FolderIcon;
-    return <FolderGlyph className={glyphClassName} style={colorStyle(appearance.color)} />;
-  }
+  const FolderGlyph = expanded ? FolderOpenIcon : FolderIcon;
+  const folder = (
+    <FolderGlyph className={glyphClassName} style={colorStyle(appearance?.color ?? null)} />
+  );
+  return appearance?.color ? (
+    folder
+  ) : (
+    <ProjectLogo cwd={cwd} className={glyphClassName} fallback={folder} />
+  );
+}
+
+function ProjectLogo({
+  cwd,
+  className,
+  fallback,
+}: {
+  cwd: string;
+  className: string;
+  fallback: ReactNode;
+}) {
+  const favicon = useProjectFavicon(cwd);
+  if (!favicon) return fallback;
   return (
-    <ProjectFolderIcon
-      cwd={cwd}
-      expanded={expanded}
-      color={appearance?.color ?? null}
-      glyphClassName={glyphClassName}
-      presentation={presentation}
+    <img
+      src={favicon}
+      alt=""
+      aria-hidden="true"
+      className={cn(className, "rounded-[2px] object-contain", LOGO_HALO_CLASS_NAME)}
+      onError={() => recordFaviconLoad(favicon, false)}
     />
   );
 }
 
-function ProjectFolderIcon({
+/**
+ * The open/closed chevron for a project row whose glyph cannot show that state: an emoji, an
+ * icon, or a logo. The folder already opens and closes with the row.
+ */
+export function ProjectDisclosureChevron({
   cwd,
   expanded,
-  color,
-  glyphClassName,
-  presentation,
+  appearance,
+  className,
+}: ProjectGlyphProps & { className?: string }) {
+  if (
+    appearance?.kind === "emoji" ||
+    (appearance?.kind === "icon" && appearance.icon !== DEFAULT_PROJECT_ICON)
+  ) {
+    return <DisclosureChevron open={expanded} className={className} />;
+  }
+  if (appearance?.color) return null;
+  return <LogoDisclosureChevron cwd={cwd} expanded={expanded} className={className} />;
+}
+
+function LogoDisclosureChevron({
+  cwd,
+  expanded,
+  className,
 }: {
   cwd: string;
   expanded: boolean;
-  color: ProjectColor | null;
-  glyphClassName: string;
-  presentation: "badge" | "favicon";
+  className: string | undefined;
 }) {
-  const faviconSrc = resolveProjectFaviconUrl(cwd);
-  // Keyed by src: a cwd change derives back to the cache-seeded default in the
-  // same render, so the probe effect never needs a synchronous setState.
-  const [probe, setProbe] = useState<{ src: string; present: boolean } | null>(() => {
-    const cached = projectFaviconPresence.get(faviconSrc);
-    return cached === undefined ? null : { src: faviconSrc, present: cached };
-  });
-  const hasFavicon = probe !== null && probe.src === faviconSrc && probe.present;
-  const FolderGlyph = expanded ? FolderOpenIcon : FolderIcon;
-
-  // Probe with Image() so Electron/file-origin behaves like the actual visible
-  // <img>. Runs even on a module-cache hit (the browser cache makes the reload
-  // instant) so the load/error handlers stay the only state writers.
-  useEffect(() => {
-    let cancelled = false;
-    const image = new Image();
-    const handleLoad = () => {
-      projectFaviconPresence.set(faviconSrc, true);
-      if (!cancelled) {
-        setProbe({ src: faviconSrc, present: true });
-      }
-    };
-    const handleError = () => {
-      projectFaviconPresence.set(faviconSrc, false);
-      if (!cancelled) {
-        setProbe({ src: faviconSrc, present: false });
-      }
-    };
-
-    image.addEventListener("load", handleLoad);
-    image.addEventListener("error", handleError);
-
-    image.src = faviconSrc;
-
-    return () => {
-      cancelled = true;
-      image.removeEventListener("load", handleLoad);
-      image.removeEventListener("error", handleError);
-    };
-  }, [faviconSrc]);
-
-  const handleImageError = () => {
-    projectFaviconPresence.set(faviconSrc, false);
-    setProbe({ src: faviconSrc, present: false });
-  };
-
-  if (presentation === "favicon") {
-    return hasFavicon ? (
-      <img
-        src={faviconSrc}
-        alt=""
-        aria-hidden="true"
-        className={`${glyphClassName} rounded-[2px] object-contain`}
-        onError={handleImageError}
-      />
-    ) : (
-      <FolderGlyph className={glyphClassName} style={colorStyle(color)} />
-    );
-  }
-
-  return (
-    <>
-      <FolderGlyph className={glyphClassName} style={colorStyle(color)} />
-      {hasFavicon ? (
-        <img
-          src={faviconSrc}
-          alt=""
-          aria-hidden="true"
-          className="absolute -right-1 -bottom-1 size-3 rounded-[4px] object-contain shadow-sm"
-          onError={handleImageError}
-        />
-      ) : null}
-    </>
-  );
+  return useProjectFavicon(cwd) ? (
+    <DisclosureChevron open={expanded} className={className} />
+  ) : null;
 }

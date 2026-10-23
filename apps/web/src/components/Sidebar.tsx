@@ -255,7 +255,7 @@ import {
 } from "./SidebarCustomizeList";
 import { AppRailMoreMenu } from "./AppRailMoreMenu";
 import { AppRailUsage } from "./AppRailUsage";
-import { ProjectSidebarIcon } from "./ProjectSidebarIcon";
+import { ProjectDisclosureChevron, ProjectSidebarIcon } from "./ProjectSidebarIcon";
 import { ThreadHoverCardContent } from "./ThreadHoverCardContent";
 import { ProjectHoverCardContent } from "./ProjectHoverCardContent";
 import {
@@ -615,6 +615,9 @@ type ProjectContextMenuState = {
 const PROJECT_CONTEXT_MENU_PANEL_CLASS_NAME = SIDEBAR_CONTEXT_MENU_PANEL_CLASS_NAME;
 const PROJECT_CONTEXT_MENU_ITEM_CLASS_NAME = SIDEBAR_CONTEXT_MENU_ITEM_CLASS_NAME;
 const PROJECT_CONTEXT_MENU_ICON_CLASS_NAME = SIDEBAR_CONTEXT_MENU_ICON_CLASS_NAME;
+
+// Same gap and tone as the Chats header chevron.
+const PROJECT_ROW_CHEVRON_CLASS_NAME = "-ml-1 text-muted-foreground/79";
 
 function ProjectContextMenuIcon({ icon }: { icon: LucideIcon }) {
   return <SidebarContextMenuIcon icon={icon} />;
@@ -5876,7 +5879,24 @@ export default function Sidebar() {
                   projectToolbarReserveClassName,
                 )}
               >
-                <span className={SIDEBAR_PROJECT_NAME_CLASS_NAME}>{projectRowLabel}</span>
+                {/* Sized to the name so the chevron follows it, like the Chats header. */}
+                <span className={cn(SIDEBAR_PROJECT_NAME_CLASS_NAME, "flex-initial")}>
+                  {projectRowLabel}
+                </span>
+                {/* The pin covers a pinned project's glyph, folder included. */}
+                {isProjectPinned ? (
+                  <DisclosureChevron
+                    open={project.expanded}
+                    className={PROJECT_ROW_CHEVRON_CLASS_NAME}
+                  />
+                ) : (
+                  <ProjectDisclosureChevron
+                    cwd={project.cwd}
+                    expanded={project.expanded}
+                    appearance={project.appearance}
+                    className={PROJECT_ROW_CHEVRON_CLASS_NAME}
+                  />
+                )}
               </div>
               {/* Closed folders surface child-chat status on the project row; open
                   folders leave that signal to their visible child thread rows. */}

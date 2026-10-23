@@ -19,7 +19,6 @@ import {
   SunIcon,
   UsageGaugeIcon,
   FolderIcon,
-  FolderOpenIcon,
 } from "~/lib/icons";
 import {
   type FilesystemBrowseResult,
@@ -1145,18 +1144,14 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
                           props.onOpenProject(project.id);
                         }}
                       >
-                        {project.appearance ? (
-                          <span className="relative inline-flex size-3.5 shrink-0 items-center justify-center text-muted-foreground">
-                            <ProjectSidebarIcon
-                              cwd={project.cwd}
-                              expanded
-                              appearance={project.appearance}
-                              glyphClassName="size-3.5"
-                            />
-                          </span>
-                        ) : (
-                          <FolderOpenIcon className={PALETTE_ICON_CLASS} />
-                        )}
+                        <span className="relative inline-flex size-3.5 shrink-0 items-center justify-center text-muted-foreground">
+                          <ProjectSidebarIcon
+                            cwd={project.cwd}
+                            expanded
+                            appearance={project.appearance}
+                            glyphClassName="size-3.5"
+                          />
+                        </span>
                         <span className={PALETTE_TEXT_CLASS}>
                           {project.name || "Untitled project"}
                         </span>

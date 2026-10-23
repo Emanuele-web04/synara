@@ -38,7 +38,8 @@ export interface ProjectIconOption {
   readonly keywords: string;
 }
 
-/** The folder every project shows by default; it opens and closes with the project row.
+/** The default folder, used as a fallback when a project has no detected favicon.
+ *  It opens and closes with the project row.
  *  The value is only the persisted key: it renders the shared Hugeicons folder, not a Central asset. */
 export const DEFAULT_PROJECT_ICON = "folder-2";
 
