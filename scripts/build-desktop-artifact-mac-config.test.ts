@@ -75,6 +75,7 @@ describe("createDesktopPlatformBuildConfig", () => {
 
     assert.deepStrictEqual(mac.target, ["dmg"]);
     assert.equal(mac.icon, "icon.icns");
+    assert.equal(mac.minimumSystemVersion, "13.0");
     assert.deepStrictEqual(config.asarUnpack, ["node_modules/node-pty/**"]);
     assert.equal(mac.hardenedRuntime, true);
     assert.equal(mac.notarize, false);
@@ -161,6 +162,7 @@ describe("createDesktopPlatformBuildConfig", () => {
       writeUpdateInfo: false,
     });
     assert.equal(config.mac?.identity, undefined);
+    assert.equal(config.mac?.minimumSystemVersion, "13.0");
   });
 
   it("seals isolated local app bundles with the existing nested signing policy", () => {
@@ -172,6 +174,7 @@ describe("createDesktopPlatformBuildConfig", () => {
     });
 
     assert.equal(config.mac?.identity, "-");
+    assert.equal(config.mac?.minimumSystemVersion, "13.0");
     assert.equal(config.mac?.timestamp, "none");
     assert.equal(config.mac?.hardenedRuntime, false);
     assert.equal(config.mac?.notarize, false);
@@ -189,6 +192,7 @@ describe("createDesktopPlatformBuildConfig", () => {
     });
 
     assert.equal(config.mac?.identity, undefined);
+    assert.equal(config.mac?.minimumSystemVersion, "13.0");
     assert.equal(config.mac?.timestamp, undefined);
     assert.equal(config.mac?.hardenedRuntime, true);
     assert.equal(config.mac?.notarize, false);

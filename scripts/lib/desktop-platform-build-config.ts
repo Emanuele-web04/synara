@@ -127,6 +127,9 @@ export function createDesktopPlatformBuildConfig(
       target: [input.target],
       icon: MAC_DMG_ICON_PATH,
       category: "public.app-category.developer-tools",
+      // The bundled Claude and Cua native executables require macOS 13.
+      // Keep the app's launch metadata consistent with its complete payload.
+      minimumSystemVersion: "13.0",
       hardenedRuntime: input.signed === true,
       // The mandatory afterSign hook splits Apple upload/wait timings and
       // staples the app before electron-builder creates either container.
