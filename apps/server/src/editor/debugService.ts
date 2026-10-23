@@ -46,6 +46,11 @@ type DebugSession = {
   teardown?: () => Promise<void>;
   stopping?: Promise<void>;
 };
+const EXECUTION_STATE_EVENTS = new Set<EditorDebugEvent["event"]>([
+  "stopped",
+  "continued",
+  "terminated",
+]);
 const requiredId = (value: number | undefined, name: string) => {
   if (value === undefined) throw new Error(`A ${name} is required for this debug command.`);
   return value;
@@ -86,6 +91,10 @@ export class EditorDebugService {
     text = "",
     extra: { threadId?: number; exitCode?: number } = {},
   ) {
+    if (EXECUTION_STATE_EVENTS.has(event))
+      session.events = session.events.filter(
+        (item) => item.connectionId !== connectionId || !EXECUTION_STATE_EVENTS.has(item.event),
+      );
     session.events.push({
       id: ++session.sequence,
       connectionId,
@@ -93,12 +102,19 @@ export class EditorDebugService {
       text: text.slice(0, 16_384),
       ...extra,
     });
-    // A slow/disconnected client cannot retain unlimited debuggee output.
+    // Pin the latest state of each tracked target, not every transition.
+    // At most eight such events fit below both history limits on their own.
     while (
       session.events.length > 500 ||
       session.events.reduce((sum, item) => sum + item.text.length, 0) > 512_000
-    )
-      session.events.shift();
+    ) {
+      const discard = session.events.findIndex(
+        (item) =>
+          !EXECUTION_STATE_EVENTS.has(item.event) || !session.connections.has(item.connectionId),
+      );
+      if (discard < 0) break;
+      session.events.splice(discard, 1);
+    }
   }
   private owned(owner: string, id: string) {
     const session = this.sessions.get(id);

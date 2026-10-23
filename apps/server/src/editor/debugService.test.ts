@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { spawn } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { EditorDebugService } from "./debugService";
 import { ensureDebugAdapter } from "./debugAdapterInstaller";
 import type { EditorDebugEvent, EditorDebugStartInput } from "@synara/contracts";
@@ -70,6 +71,61 @@ it("skips a breakpoint whose source was deleted instead of failing the launch", 
     service.start("owner", { ...input, breakpoints: [{ relativePath: "../escape.js", line: 1 }] }),
   ).rejects.toThrow("workspace-relative");
 });
+
+it.each([
+  { event: "stopped", count: 600, size: 1, limit: "event count" },
+  { event: "continued", count: 40, size: 16_384, limit: "text size" },
+  { event: "terminated", count: 600, size: 1, limit: "event count" },
+  { event: "stopped", count: 0, size: 0, limit: "control-only flood" },
+] as const)(
+  "retains $event and a quiet target's state across the $limit limit",
+  async ({ event, count, size }) => {
+    const { service, cwd, input } = await setup(async () =>
+      fileURLToPath(new URL("./test-fixtures/noisyDebugAdapter.mjs", import.meta.url)),
+    );
+    await writeFile(
+      path.join(cwd, "index.js"),
+      "// The scripted adapter never executes this fixture.\n",
+    );
+    const { sessionId } = await service.start("owner", input);
+    await expect
+      .poll(() =>
+        service
+          .poll("owner", sessionId, 0)
+          .connections.some((item) => item.id !== "root" && item.ready),
+      )
+      .toBe(true);
+    const before = service.poll("owner", sessionId, 0);
+    const quiet = before.events.find(
+      (item) => item.connectionId === "root" && item.event === "stopped",
+    )!;
+    expect(quiet).toBeDefined();
+    const child = before.connections.find((item) => item.id !== "root")!;
+    await service.action("owner", {
+      sessionId,
+      connectionId: child.id,
+      action: "evaluate",
+      context: "repl",
+      expression: JSON.stringify({ event, count, size }),
+    });
+    const snapshot = service.poll("owner", sessionId, 0);
+    expect(snapshot.events.find((item) => item.id === quiet.id)).toEqual(quiet);
+    const latest = snapshot.events.filter(
+      (item) =>
+        item.connectionId === child.id &&
+        ["stopped", "continued", "terminated"].includes(item.event),
+    );
+    expect(latest.map((item) => item.event)).toEqual([event]);
+    expect(snapshot.events.length).toBeLessThanOrEqual(500);
+    expect(
+      snapshot.events.reduce((length, item) => length + item.text.length, 0),
+    ).toBeLessThanOrEqual(512_000);
+    const incremental = service.poll("owner", sessionId, before.sequence);
+    expect(incremental.events.find((item) => item.id === latest[0]!.id)).toEqual(latest[0]);
+    expect(incremental.events.some((item) => item.id === quiet.id)).toBe(false);
+    expect(service.poll("owner", sessionId, snapshot.sequence).events).toEqual([]);
+  },
+);
 
 // SYNARA_TEST_JS_DEBUG=1 downloads the checksum-pinned upstream adapter; no fake DAP peer.
 const live = process.env.SYNARA_TEST_JS_DEBUG === "1";
