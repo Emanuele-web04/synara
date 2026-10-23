@@ -22,7 +22,7 @@ import type { WhatsNewEntry } from "./logic";
 
 export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
   {
-    version: "1.0.6-remote.27",
+    version: "1.0.6-remote.28",
     date: "Oct 23",
     features: [
       {
@@ -32,6 +32,12 @@ export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
           "The embedded Code OSS editor brings quick fixes, peek, inlay hints, problems and configurable shortcuts to file and diff editing.",
         details:
           "JavaScript debugging is available to the execution computer's owner session. Paired clients do not gain debugger access.",
+      },
+      {
+        id: "windows-code-intelligence",
+        title: "Reliable code intelligence on Windows",
+        description:
+          "The packaged editor finds its TypeScript libraries even when Windows uses a short folder alias, while keeping workspace file access restricted.",
       },
       {
         id: "provider-handoff-recovery",

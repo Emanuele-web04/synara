@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.0.6-remote.27 — 2026-10-23
+## 1.0.6-remote.28 — 2026-10-23
 
 **Code editing inside Synara, dependable provider switches and settled background work.**
 
@@ -10,6 +10,7 @@
 
 ### Fixed
 
+- Windows code intelligence resolves the bundled TypeScript libraries when a temporary folder uses a short-path alias. Workspace file-access boundaries remain in place.
 - Provider changes consistently use Hand off when sending, continuing a task or implementing a plan. Queued messages follow the thread's current provider, while switches that would silently stop background work are refused.
 - Codex recovers threads without a native rollout and carries conversation context when native resume falls back to a fresh session. Recovery limitations and actionable runtime warnings remain visible instead of silently losing context.
 - Codex plugin discovery uses a separate bounded metadata process, keeping large catalogs away from live conversation streams.
@@ -25,6 +26,13 @@
 - Integrates main through `442c649c173758f4a7a27f0e94252f9ca2c85de8` and preserves all published Remote .26 history, including packaged Claude history import, device trust and updater isolation.
 - Final candidate checks and exact-tag quality/server suites, platform startup, macOS signing/notarization, Windows Defender and artifact provenance must pass before publication. Results are recorded against the actual candidate SHA in the private release checkpoint; earlier builds do not qualify this release.
 - Remote retains separate identities, data homes and update feeds on macOS Apple Silicon, Windows x64 and Linux x64. Windows uses an exact-version unsigned exception and may show SmartScreen. Physical-device behavior and manual installed-app upgrades require their own verification.
+
+## 1.0.6-remote.27 — 2026-10-23 (not distributed)
+
+### Verification
+
+- The tag passed quality and server suites, Linux packaged checks, macOS signing/notarization and Windows Defender, but Windows packaged editor qualification failed because short-path aliases did not match the TypeScript library access fence. The declarations were present in the artifact; no .27 release or update feed was published. The tag remains unchanged.
+- Remote .28 carries the intended feature range and the corrected library paths. It must pass its own exact-tag qualification before publication.
 
 ## 1.0.6-remote.26 — 2026-10-18
 
