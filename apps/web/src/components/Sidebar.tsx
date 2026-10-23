@@ -286,6 +286,7 @@ import { SidebarIconButton, sidebarIconButtonSlotClass } from "./SidebarIconButt
 import { OneTimeCoachmark, TASKS_COACHMARK } from "./OneTimeCoachmark";
 import { SidebarLeadingIcon } from "./SidebarLeadingIcon";
 import { SidebarPrimaryAction } from "./SidebarPrimaryAction";
+import { SidebarThreadSectionPicker } from "./SidebarThreadSectionPicker";
 import { RailAutomationsPanel } from "./RailAutomationsPanel";
 import { SIDEBAR_PANEL_TITLE_CLASS_NAME, SidebarPanelTitle } from "./SidebarPanelTitle";
 import { SidebarMetaChipStack } from "./SidebarMetaChip";
@@ -330,6 +331,7 @@ import { openExternalLink } from "~/lib/linkChips";
 import { selectThreadTerminalState, useTerminalStateStore } from "../terminalStateStore";
 import { toastManager } from "./ui/toast";
 import {
+  type SidebarThreadSection,
   normalizeSidebarProjectThreadListCwd,
   persistSidebarUiState,
   readSidebarUiState,
@@ -1435,7 +1437,7 @@ export default function Sidebar() {
     () => getProviderInstanceOptions(appSettings),
     [appSettings],
   );
-  // Projects is always available; Groups and the standalone Chats footer can be hidden
+  // Projects is always available; Groups and the separate Chats list can be hidden
   // independently from Settings.
   const chatsSectionVisible = appSettings.showChatsSection;
   const groupsSectionVisible = GROUPS_ON && appSettings.showGroupsSection;
@@ -1654,6 +1656,9 @@ export default function Sidebar() {
   const [threadListExtraPagesByProjectCwd, setThreadListExtraPagesByProjectCwd] = useState<
     ReadonlyMap<string, number>
   >(() => new Map(Object.entries(readSidebarUiState().projectThreadListExtraPagesByCwd)));
+  const [threadSection, setThreadSection] = useState<SidebarThreadSection>(
+    () => readSidebarUiState().threadSection ?? "projects",
+  );
   const [chatSectionExpanded, setChatSectionExpanded] = useState(
     () => readSidebarUiState().chatSectionExpanded,
   );
@@ -1695,6 +1700,7 @@ export default function Sidebar() {
   useEffect(
     () =>
       subscribeSidebarUiState((state) => {
+        setThreadSection(state.threadSection ?? "projects");
         setChatSectionExpanded(state.chatSectionExpanded);
         setChatThreadListExtraPages(state.chatThreadListExtraPages);
         setThreadListExtraPagesByProjectCwd(
@@ -3892,6 +3898,7 @@ export default function Sidebar() {
     (nextLastThreadRoute: LastThreadRoute) => {
       setLastThreadRoute(nextLastThreadRoute);
       persistSidebarUiState({
+        threadSection,
         chatSectionExpanded,
         chatThreadListExtraPages,
         projectThreadListExtraPagesByCwd: Object.fromEntries(threadListExtraPagesByProjectCwd),
@@ -3907,6 +3914,7 @@ export default function Sidebar() {
       chatSectionExpanded,
       chatThreadListExtraPages,
       dismissedThreadStatusKeyByThreadId,
+      threadSection,
       threadListExtraPagesByProjectCwd,
     ],
   );
@@ -4542,6 +4550,33 @@ export default function Sidebar() {
       ),
     [chatWorkspaceRoot, homeDir, sortedProjects],
   );
+  const showThreadSectionPicker =
+    chatsSectionVisible &&
+    !isOnGroups &&
+    !isOnSettings &&
+    !isOnAutomations &&
+    railPanelView !== "spaces";
+  const showChatsPanel =
+    showThreadSectionPicker && !activityViewEnabled && threadSection === "chats";
+  const threadSectionAttention = useMemo(() => {
+    const chatProjectIds = new Set(chatProjects.map((project) => project.id));
+    const { groupThreads: chats, nonGroupThreads: projectThreads } =
+      partitionSidebarThreadsByProjectIds(visibleNonGroupSidebarThreads, chatProjectIds);
+    const needsAttention = (threads: readonly SidebarThreadSummary[]) =>
+      hasActivityNeedingAttention(
+        threads,
+        activeSidebarThreadId,
+        resolveActivityPriorityTierForSidebar,
+      ) ||
+      countNeedsYouActions(threads, activeSidebarThreadId, dismissedThreadStatusKeyByThreadId) > 0;
+    return { projects: needsAttention(projectThreads), chats: needsAttention(chats) };
+  }, [
+    activeSidebarThreadId,
+    chatProjects,
+    dismissedThreadStatusKeyByThreadId,
+    resolveActivityPriorityTierForSidebar,
+    visibleNonGroupSidebarThreads,
+  ]);
   const groupProjects = useMemo(
     () =>
       sortedProjects.filter((project) =>
@@ -4611,6 +4646,10 @@ export default function Sidebar() {
       renderedChatEntries: visibleEntries,
     };
   }, [activeChatPreviewEntry?.rowId, chatThreadListExtraPages, visibleChatPreviewEntries]);
+  const renderedChatThreadIds = useMemo(
+    () => renderedChatEntries.map((entry) => entry.rowId),
+    [renderedChatEntries],
+  );
   const allStandardProjectsBase = useMemo(
     () =>
       sortedProjects.filter((project) =>
@@ -4919,6 +4958,7 @@ export default function Sidebar() {
 
   useEffect(() => {
     persistSidebarUiState({
+      threadSection,
       chatSectionExpanded,
       chatThreadListExtraPages,
       projectThreadListExtraPagesByCwd: Object.fromEntries(threadListExtraPagesByProjectCwd),
@@ -4934,6 +4974,7 @@ export default function Sidebar() {
     chatThreadListExtraPages,
     dismissedThreadStatusKeyByThreadId,
     threadListExtraPagesByProjectCwd,
+    threadSection,
     lastThreadRoute,
   ]);
 
@@ -5024,15 +5065,14 @@ export default function Sidebar() {
     surfaceProjects,
   ]);
   const visibleSidebarThreadIds =
-    activityViewEnabled && !isOnGroups ? activityVisibleThreadIds : classicVisibleSidebarThreadIds;
+    activityViewEnabled && !isOnGroups
+      ? activityVisibleThreadIds
+      : showChatsPanel
+        ? renderedChatThreadIds
+        : classicVisibleSidebarThreadIds;
   const visibleSidebarThreadIdSet = useMemo(
-    () =>
-      new Set(
-        activityViewEnabled && !isOnGroups
-          ? visibleSidebarThreadIds
-          : [...visibleSidebarThreadIds, ...visibleChatThreadIds],
-      ),
-    [activityViewEnabled, isOnGroups, visibleChatThreadIds, visibleSidebarThreadIds],
+    () => new Set(visibleSidebarThreadIds),
+    [visibleSidebarThreadIds],
   );
   const visibleSidebarThreads = useMemo(
     () => sidebarThreads.filter((thread) => visibleSidebarThreadIdSet.has(thread.id)),
@@ -6794,6 +6834,31 @@ export default function Sidebar() {
     </span>
   ) : null;
 
+  const sidebarHeaderActions = (
+    <div className="ml-auto flex shrink-0 items-center gap-1">
+      <SidebarIconButton
+        icon={SearchIcon}
+        label="Search"
+        glyph="leading"
+        size="header"
+        tooltip={searchShortcutLabel ? `Search (${searchShortcutLabel})` : "Search"}
+        tooltipSide="bottom"
+        onClick={() => {
+          setSearchPaletteOpen(true);
+        }}
+      />
+      {!isOnGroups ? (
+        <SidebarActivityBellButton
+          active={activityViewEnabled}
+          showUnreadDot={hasUnreadActivity}
+          shortcutLabel={activityShortcutLabel}
+          onClick={() => setActivityViewEnabledSmoothly(!activityViewEnabled)}
+        />
+      ) : null}
+      {betaBadge}
+    </div>
+  );
+
   // Home and Spaces switch the panel; route items navigate (prewarm included). The store's
   // active item keeps one item selected.
   const isOnThreadsSection =
@@ -7052,7 +7117,9 @@ export default function Sidebar() {
       ? "groups"
       : activityViewEnabled
         ? "activity"
-        : "threads";
+        : showChatsPanel
+          ? "chats"
+          : "threads";
   const relocateProjectDialogProject = relocateProjectDialogId
     ? (projectById.get(relocateProjectDialogId) ?? null)
     : null;
@@ -7171,7 +7238,43 @@ export default function Sidebar() {
           </div>
         ) : null}
         <div className={isMobile ? "flex min-h-0 min-w-0 flex-1 flex-col" : "contents"}>
-          <SidebarContent ref={setSidebarContentElement} className="gap-0 font-system-ui">
+          {!isOnSettings && !showRailAutomationsPanel ? (
+            <div className="shrink-0 font-system-ui">
+              <div
+                // The panel has no header above it, so the title row gets breathing room from
+                // the panel's top edge. pt-1.5 puts the title's cap height as far from the top
+                // edge as its first letter is from the side.
+                className="flex shrink-0 flex-wrap items-center gap-1 pt-1.5 pb-1 pr-2.5 pl-1.5"
+              >
+                <SidebarSurfacePicker
+                  views={["threads", ...(groupsSectionVisible ? (["groups"] as const) : [])]}
+                  activeView={isOnGroups ? "groups" : "threads"}
+                  onSelectView={handleSidebarViewChange}
+                  onPrewarmView={prewarmSidebarViewTarget}
+                />
+                {sidebarHeaderActions}
+              </div>
+              {showThreadSectionPicker ? (
+                <SidebarThreadSectionPicker
+                  value={activityViewEnabled ? null : threadSection}
+                  attention={threadSectionAttention}
+                  onValueChange={(section) => {
+                    clearSelection();
+                    startTransition(() => {
+                      setThreadSection(section);
+                      setActivityViewEnabled(false);
+                      if (section === "chats") setChatSectionExpanded(true);
+                    });
+                  }}
+                />
+              ) : null}
+            </div>
+          ) : null}
+          <SidebarContent
+            key={showChatsPanel ? "chats" : "projects"}
+            ref={setSidebarContentElement}
+            className="gap-0 font-system-ui"
+          >
             {showArm64IntelBuildWarning && arm64IntelBuildWarningDescription ? (
               <SidebarGroup className="px-2 pt-2 pb-0">
                 <Alert variant="warning" className="rounded-2xl border-warning/40 bg-warning/8">
@@ -7222,46 +7325,11 @@ export default function Sidebar() {
               />
             ) : (
               <>
-                <div
-                  // The panel has no header above it, so the title row gets breathing room from
-                  // the panel's top edge. pt-1.5 puts the title's cap height as far from the top
-                  // edge as its first letter is from the side.
-                  className="flex items-center gap-1 pt-1.5 pb-1 pr-2.5 pl-1.5"
-                >
-                  <SidebarSurfacePicker
-                    views={["threads", ...(groupsSectionVisible ? (["groups"] as const) : [])]}
-                    activeView={isOnGroups ? "groups" : "threads"}
-                    onSelectView={handleSidebarViewChange}
-                    onPrewarmView={prewarmSidebarViewTarget}
-                  />
-                  <div className="ml-auto flex items-center gap-1.5">
-                    <SidebarIconButton
-                      icon={SearchIcon}
-                      label="Search"
-                      glyph="leading"
-                      size="header"
-                      tooltip={searchShortcutLabel ? `Search (${searchShortcutLabel})` : "Search"}
-                      tooltipSide="bottom"
-                      onClick={() => {
-                        setSearchPaletteOpen(true);
-                      }}
-                    />
-                    {!isOnGroups ? (
-                      <SidebarActivityBellButton
-                        active={activityViewEnabled}
-                        showUnreadDot={hasUnreadActivity}
-                        shortcutLabel={activityShortcutLabel}
-                        onClick={() => setActivityViewEnabledSmoothly(!activityViewEnabled)}
-                      />
-                    ) : null}
-                    {betaBadge}
-                  </div>
-                </div>
                 {/* The keyed content remounts with a short enter animation while the picker
                 stays mounted so its thumb can glide between Projects and Groups. */}
                 <div key={sidebarSurfaceKey} className="sidebar-surface-enter">
                   {/* Primary sidebar actions stay limited to features we currently ship. */}
-                  {!isOnGroups ? (
+                  {!isOnGroups && !showChatsPanel ? (
                     <SidebarGroup
                       className="px-1.5 pt-1 pb-1.5"
                       onContextMenu={handleNavContextMenu}
@@ -7346,7 +7414,7 @@ export default function Sidebar() {
                     </SidebarGroup>
                   ) : showRailSpacesPanel ? (
                     renderRailSpacesPanel()
-                  ) : (
+                  ) : showChatsPanel ? null : (
                     <SidebarGroup className="px-1.5 py-1.5">
                       <SpaceSwitcher
                         spaces={spaces}
@@ -7478,6 +7546,7 @@ export default function Sidebar() {
             !activityViewEnabled &&
             !showRailSpacesPanel &&
             !showRailAutomationsPanel &&
+            !showChatsPanel &&
             snoozedSidebarThreads.length > 0 ? (
               <SidebarGroup className="px-1.5 pt-1 pb-2">
                 <SidebarSnoozedThreadsSection
@@ -7487,12 +7556,7 @@ export default function Sidebar() {
                 />
               </SidebarGroup>
             ) : null}
-            {!isOnSettings &&
-            !isOnGroups &&
-            !activityViewEnabled &&
-            !showRailSpacesPanel &&
-            !showRailAutomationsPanel &&
-            chatsSectionVisible ? (
+            {showChatsPanel ? (
               // sidebar-surface-enter: mounts on the Groups -> Projects switch, so it
               // animates in step with the keyed surface wrapper above.
               <SidebarGroup className="sidebar-surface-enter px-1.5 pt-1 pb-2">
