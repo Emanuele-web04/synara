@@ -66,6 +66,7 @@ it.each(["continue", "next", "stepIn", "stepOut"] as const)(
       expect(store.getSnapshot().phase).toBe("paused");
       acknowledge({});
       await pending;
+      await store.selectTarget("target");
       expect(store.getSnapshot()).toMatchObject({ phase: "paused", busy: false, frameId: 1 });
       expect(store.getSnapshot().frames).toHaveLength(1);
       expect(store.getSnapshot().scopes).toHaveLength(1);
@@ -82,6 +83,7 @@ it("clears the old pause when the control acknowledgement precedes new events", 
     const pending = store.control("next");
     acknowledge({});
     await pending;
+    await store.selectTarget("target");
     expect(store.getSnapshot()).toMatchObject({
       phase: "running",
       busy: false,
@@ -89,6 +91,32 @@ it("clears the old pause when the control acknowledgement precedes new events", 
       scopes: [],
     });
   } finally {
+    await store.stop();
+    client.clear();
+  }
+});
+
+it("keeps a newly selected pause while an earlier target's control is acknowledged", async () => {
+  const { store, client, acknowledge } = await pausedSession();
+  try {
+    const pending = store.control("next");
+    api.editor.debugPoll.mockResolvedValue({
+      sequence: 2,
+      terminated: false,
+      connections: [
+        { id: "target", name: "Original", ready: true },
+        { id: "child", name: "Child", ready: true },
+      ],
+      events: [{ event: "stopped", connectionId: "child", threadId: 2 }],
+    });
+    await vi.advanceTimersByTimeAsync(300);
+    acknowledge({});
+    await pending;
+    expect(store.getSnapshot()).toMatchObject({ phase: "paused", connectionId: "child" });
+    await store.selectTarget("target");
+    expect(store.getSnapshot()).toMatchObject({ phase: "running", frames: [], scopes: [] });
+  } finally {
+    acknowledge({});
     await store.stop();
     client.clear();
   }
@@ -237,6 +265,111 @@ it("preserves watch edits while an earlier frame evaluation is pending", async (
       { expression: "retained", value: "current", variablesReference: 0 },
       { expression: "added", value: "current", variablesReference: 0 },
     ]);
+  } finally {
+    await store.stop();
+    client.clear();
+  }
+});
+
+it.each(["terminated", "removed"] as const)(
+  "restores a quiet paused target after the selected target is %s",
+  async (ending) => {
+    const { store, client } = await pausedSession();
+    try {
+      api.editor.debugAction.mockImplementation(async (input: EditorDebugActionInput) => {
+        const id = input.connectionId === "target" ? 1 : 2;
+        if (input.action === "threads") return { threads: [{ id, name: `Thread ${id}` }] };
+        if (input.action === "stackTrace")
+          return { frames: [{ id, name: `Frame ${id}`, line: id, column: 1 }] };
+        if (input.action === "scopes")
+          return { scopes: [{ name: `Scope ${id}`, variablesReference: id, expensive: false }] };
+        return {};
+      });
+      const ready = [
+        { id: "target", name: "Quiet", ready: true },
+        { id: "child", name: "Child", ready: true },
+        { id: "running", name: "Running", ready: true },
+      ];
+      api.editor.debugPoll.mockResolvedValue({
+        sequence: 2,
+        terminated: false,
+        connections: ready,
+        events: [{ event: "stopped", connectionId: "child", threadId: 2 }],
+      });
+      await vi.advanceTimersByTimeAsync(300);
+      expect(store.getSnapshot()).toMatchObject({
+        phase: "paused",
+        connectionId: "child",
+        frameId: 2,
+      });
+      api.editor.debugPoll.mockResolvedValue({
+        sequence: 3,
+        terminated: false,
+        connections:
+          ending === "removed"
+            ? [ready[0], ready[2]]
+            : [ready[0], { ...ready[1], ready: false }, ready[2]],
+        events: ending === "terminated" ? [{ event: "terminated", connectionId: "child" }] : [],
+      });
+      await vi.advanceTimersByTimeAsync(300);
+      expect(store.getSnapshot()).toMatchObject({
+        phase: "paused",
+        connectionId: "target",
+        threadId: 1,
+        frameId: 1,
+        frames: [{ id: 1, name: "Frame 1" }],
+        scopes: [{ name: "Scope 1" }],
+      });
+      await store.selectTarget("running");
+      expect(store.getSnapshot()).toMatchObject({ phase: "running", frames: [], scopes: [] });
+      await store.selectTarget("target");
+      expect(store.getSnapshot()).toMatchObject({ phase: "paused", frameId: 1 });
+    } finally {
+      await store.stop();
+      client.clear();
+    }
+  },
+);
+
+it("restores a pause observed before the target finishes becoming ready", async () => {
+  vi.useFakeTimers();
+  api.editor.debugStart.mockReset().mockResolvedValue({ sessionId: "session" });
+  api.editor.debugPoll.mockReset().mockResolvedValue({
+    sequence: 1,
+    terminated: false,
+    connections: [{ id: "target", name: "Starting", ready: false }],
+    events: [{ event: "stopped", connectionId: "target", threadId: 7 }],
+  });
+  api.editor.debugAction.mockReset().mockImplementation(async (input: EditorDebugActionInput) => {
+    if (input.action === "threads") return { threads: [{ id: 1 }, { id: 7 }] };
+    if (input.action === "stackTrace")
+      return { frames: [{ id: input.threadId, name: "Paused frame", line: 1, column: 1 }] };
+    return {};
+  });
+  const client = new QueryClient();
+  const store = new EditorDebugStore(client, "/qa");
+  try {
+    await store.start({
+      request: "launch",
+      program: "index.js",
+      args: [],
+      port: 9229,
+      stopOnEntry: true,
+    });
+    expect(store.getSnapshot()).toMatchObject({ connectionId: null, frames: [] });
+    api.editor.debugPoll.mockResolvedValue({
+      sequence: 2,
+      terminated: false,
+      connections: [{ id: "target", name: "Ready", ready: true }],
+      events: [{ event: "ready", connectionId: "target" }],
+    });
+    await vi.advanceTimersByTimeAsync(300);
+    expect(store.getSnapshot()).toMatchObject({
+      phase: "paused",
+      connectionId: "target",
+      threadId: 7,
+      frames: [{ id: 7, name: "Paused frame" }],
+    });
   } finally {
     await store.stop();
     client.clear();

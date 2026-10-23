@@ -12,6 +12,7 @@ import { ensureNativeApi } from "~/nativeApi";
 import { flushWorkspaceEditors } from "~/lib/workspaceEditorSession";
 
 type Watch = { expression: string; value: string; variablesReference: number };
+type TargetExecutionState = { phase: "running" | "paused"; threadId?: number };
 export type EditorDebugState = {
   phase: "idle" | "starting" | "running" | "paused" | "ended";
   sessionId: string | null;
@@ -58,6 +59,7 @@ export class EditorDebugStore {
   private frameGeneration = 0;
   private sequence = 0;
   private pollFailures = 0;
+  private targetStates = new Map<string, TargetExecutionState>();
   constructor(
     readonly client: QueryClient,
     readonly cwd: string,
@@ -87,6 +89,7 @@ export class EditorDebugStore {
       throw new Error("A debug session is already running.");
     const api = this.api();
     ++this.frameGeneration;
+    this.targetStates.clear();
     this.launchController = new AbortController();
     const signal = this.launchController.signal;
     this.update({
@@ -131,6 +134,7 @@ export class EditorDebugStore {
     ++this.generation;
     this.launchController?.abort();
     this.launchController = undefined;
+    this.targetStates.clear();
     this.update({ phase: "ended", error: null });
   }
   private async poll(generation: number) {
@@ -141,10 +145,24 @@ export class EditorDebugStore {
       if (generation !== this.generation) return;
       this.sequence = snapshot.sequence;
       this.pollFailures = 0;
+      // A target can stop before its launch handshake finishes becoming ready.
+      const trackedTargets = new Set(snapshot.connections.map((item) => item.id));
+      for (const id of this.targetStates.keys())
+        if (!trackedTargets.has(id)) this.targetStates.delete(id);
       const output = [...this.state.output];
       let stopped: { connectionId: string; threadId?: number } | undefined;
       const patch: Partial<EditorDebugState> = { connections: snapshot.connections };
       for (const event of snapshot.events) {
+        if (trackedTargets.has(event.connectionId)) {
+          if (event.event === "stopped")
+            this.targetStates.set(event.connectionId, {
+              phase: "paused",
+              ...(event.threadId === undefined ? {} : { threadId: event.threadId }),
+            });
+          if (event.event === "continued")
+            this.targetStates.set(event.connectionId, { phase: "running" });
+        }
+        if (event.event === "terminated") this.targetStates.delete(event.connectionId);
         if (event.event === "output" || event.event === "exited")
           output.push(
             event.event === "exited"
@@ -177,10 +195,14 @@ export class EditorDebugStore {
       if (!snapshot.connections.some((item) => item.id === selectedConnection && item.ready)) {
         patch.connectionId =
           snapshot.connections.find((item) => item.ready && item.id !== "root")?.id ?? null;
-        if (selectedConnection) {
+        if (selectedConnection || patch.connectionId) {
           ++this.frameGeneration;
           stopped = undefined;
-          patch.phase = "running";
+          const execution = this.targetStates.get(patch.connectionId ?? "");
+          patch.phase = execution?.phase ?? "running";
+          if (execution?.phase === "paused" && patch.connectionId) {
+            stopped = { connectionId: patch.connectionId, ...execution };
+          }
           patch.frames = [];
           patch.scopes = [];
           patch.threads = [];
@@ -192,6 +214,7 @@ export class EditorDebugStore {
         output.shift();
       patch.output = output;
       if (snapshot.terminated) {
+        this.targetStates.clear();
         patch.phase = "ended";
         patch.frames = [];
         patch.scopes = [];
@@ -240,18 +263,32 @@ export class EditorDebugStore {
     if (this.state.busy) return;
     const generation = this.generation;
     const pauseVersion = this.state.pauseVersion;
+    const connectionId = this.state.connectionId;
+    const execution = connectionId ? this.targetStates.get(connectionId) : undefined;
     this.update({ busy: true, error: null });
     try {
       let threadId = this.state.threadId;
       if (threadId === null)
-        threadId = (await this.command({ action: "threads" })).threads?.[0]?.id ?? null;
+        threadId =
+          (await this.command({ action: "threads", ...(connectionId ? { connectionId } : {}) }))
+            .threads?.[0]?.id ?? null;
       if (generation !== this.generation) return;
       if (threadId === null) throw new Error("The debug target has no active thread yet.");
-      await this.command({ action, threadId });
+      await this.command({ action, threadId, ...(connectionId ? { connectionId } : {}) });
+      if (
+        action !== "pause" &&
+        generation === this.generation &&
+        connectionId &&
+        execution &&
+        this.state.connections.some((item) => item.id === connectionId && item.ready) &&
+        this.targetStates.get(connectionId) === execution
+      )
+        this.targetStates.set(connectionId, { phase: "running" });
       // Polling can deliver the next stop (or termination) before the control
       // response. That newer state must remain authoritative.
       if (
         generation === this.generation &&
+        connectionId === this.state.connectionId &&
         pauseVersion === this.state.pauseVersion &&
         this.state.phase !== "ended" &&
         action !== "pause"
@@ -273,6 +310,7 @@ export class EditorDebugStore {
     this.update({ busy: true });
     try {
       await this.command({ action: "disconnect" });
+      this.targetStates.clear();
       this.update({ phase: "ended", frameId: null, frames: [], scopes: [], connectionId: null });
     } catch (error) {
       this.report(error);
@@ -284,14 +322,29 @@ export class EditorDebugStore {
     if (["running", "paused", "starting"].includes(this.state.phase)) return;
     ++this.generation;
     clearTimeout(this.pollTimer);
+    this.targetStates.clear();
     this.update({ ...initial(), breakpoints: this.state.breakpoints, watches: this.state.watches });
   }
   async selectTarget(connectionId: string, preferredThread?: number) {
+    if (
+      !["running", "paused"].includes(this.state.phase) ||
+      !this.state.connections.some((item) => item.id === connectionId && item.ready)
+    )
+      return;
     const generation = ++this.frameGeneration;
-    this.update({ connectionId, frames: [], scopes: [], frameId: null });
+    const execution = this.targetStates.get(connectionId);
+    this.update({
+      connectionId,
+      phase: execution?.phase ?? "running",
+      frames: [],
+      scopes: [],
+      frameId: null,
+      threads: [],
+      threadId: null,
+    });
     const { threads = [] } = await this.command({ action: "threads", connectionId });
     if (generation !== this.frameGeneration) return;
-    const threadId = preferredThread ?? threads[0]?.id ?? null;
+    const threadId = preferredThread ?? execution?.threadId ?? threads[0]?.id ?? null;
     this.update({ threads, threadId });
     if (threadId !== null && this.state.phase === "paused") await this.selectThread(threadId);
   }
