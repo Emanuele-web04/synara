@@ -8,6 +8,12 @@ const RECENT_MESSAGE_CHAR_LIMIT = 2_400;
 // message, so long threads must drop their oldest summaries rather than grow.
 const BOOTSTRAP_TRANSCRIPT_CHAR_BUDGET = 32_000;
 
+export interface TranscriptBootstrap {
+  readonly text: string;
+  readonly omittedMessages: number;
+  readonly shortenedMessages: number;
+}
+
 function normalizeMessageText(value: string): string {
   return value
     .replace(/\s+\n/g, "\n")
@@ -106,12 +112,12 @@ export function listPriorTranscriptMessages(
   });
 }
 
-function buildImportedMessagesBootstrapText(input: {
+function buildImportedMessagesBootstrap(input: {
   thread: Pick<OrchestrationThread, "title" | "branch" | "worktreePath">;
   importedMessages: ReadonlyArray<OrchestrationMessage>;
   intro: string;
   maxChars: number;
-}): string | null {
+}): TranscriptBootstrap | null {
   if (input.importedMessages.length === 0) {
     return null;
   }
@@ -120,6 +126,7 @@ function buildImportedMessagesBootstrapText(input: {
   const earlierMessages = input.importedMessages.slice(0, -RECENT_MESSAGE_COUNT);
   const recentMessages = input.importedMessages.slice(-RECENT_MESSAGE_COUNT);
   const sections: string[] = [input.intro, `Original conversation title: ${input.thread.title}`];
+  const excerpts: Array<{ start: number; end: number; shortened: boolean }> = [];
 
   if (input.thread.branch) {
     sections.push(`Git branch: ${input.thread.branch}`);
@@ -128,17 +135,47 @@ function buildImportedMessagesBootstrapText(input: {
     sections.push(`Worktree path: ${input.thread.worktreePath}`);
   }
 
-  const recentSection =
-    "Most recent imported messages:\n" +
-    recentMessages
-      .map((message) => {
-        const normalized = truncateText(
-          normalizeMessageText(message.text),
-          RECENT_MESSAGE_CHAR_LIMIT,
-        );
-        return `${roleLabel(message)}:\n${normalized}`;
-      })
-      .join("\n\n");
+  const renderMessage = (message: OrchestrationMessage, limit: number, earlier: boolean) => {
+    const normalized = normalizeMessageText(message.text);
+    const prefix = earlier ? `- ${roleLabel(message)}: ` : `${roleLabel(message)}:\n`;
+    return {
+      text: `${prefix}${truncateText(normalized, limit)}`,
+      contentOffset: prefix.length,
+      shortened: normalized.length > limit,
+    };
+  };
+  const appendMessageSection = (
+    header: string,
+    messages: ReadonlyArray<ReturnType<typeof renderMessage>>,
+    separator: string,
+  ) => {
+    let offset =
+      sections.reduce((total, section) => total + section.length + 2, 0) + header.length + 1;
+    for (const message of messages) {
+      excerpts.push({
+        start: offset + message.contentOffset,
+        end: offset + message.text.length,
+        shortened: message.shortened,
+      });
+      offset += message.text.length + separator.length;
+    }
+    sections.push(
+      messages.length > 0
+        ? `${header}\n${messages.map((message) => message.text).join(separator)}`
+        : header,
+    );
+  };
+  const recentExcerpts = recentMessages.map((message) =>
+    renderMessage(message, RECENT_MESSAGE_CHAR_LIMIT, false),
+  );
+  const recentHeader = "Most recent imported messages:";
+  const recentSectionLength =
+    recentHeader.length +
+    1 +
+    recentExcerpts.reduce(
+      (total, message, index) => total + message.text.length + (index > 0 ? 2 : 0),
+      0,
+    );
 
   if (earlierMessages.length > 0) {
     // Keep the newest earlier-message summaries that fit the remaining budget;
@@ -146,7 +183,7 @@ function buildImportedMessagesBootstrapText(input: {
     let remaining =
       maxChars -
       sections.reduce((total, section) => total + section.length + 2, 0) -
-      (recentSection.length + 2);
+      (recentSectionLength + 2);
     // Reserve space for the omission header up front so accepted summary
     // lines can never push the assembled section past `remaining`. The
     // header only shrinks as more lines are accepted (omittedCount falls
@@ -156,30 +193,37 @@ function buildImportedMessagesBootstrapText(input: {
     // just a conservative guess. The extra `+ 1` covers the "\n" that joins
     // the header to the summary lines when at least one line is kept.
     remaining -= earlierSummaryHeader(earlierMessages.length).length + 1;
-    const summaryLines: string[] = [];
+    const summaryLines: Array<ReturnType<typeof renderMessage>> = [];
     for (let index = earlierMessages.length - 1; index >= 0; index -= 1) {
       const message = earlierMessages[index]!;
-      const normalized = truncateText(
-        normalizeMessageText(message.text),
-        EARLIER_MESSAGE_CHAR_LIMIT,
-      );
-      const line = `- ${roleLabel(message)}: ${normalized}`;
-      if (remaining < line.length + 1) {
+      const line = renderMessage(message, EARLIER_MESSAGE_CHAR_LIMIT, true);
+      if (remaining < line.text.length + 1) {
         break;
       }
-      remaining -= line.length + 1;
+      remaining -= line.text.length + 1;
       summaryLines.push(line);
     }
     summaryLines.reverse();
     const omittedCount = earlierMessages.length - summaryLines.length;
     const header = earlierSummaryHeader(omittedCount);
-    sections.push(summaryLines.length > 0 ? `${header}\n${summaryLines.join("\n")}` : header);
+    appendMessageSection(header, summaryLines, "\n");
   }
 
-  sections.push(recentSection);
+  appendMessageSection(recentHeader, recentExcerpts, "\n\n");
 
   const joined = sections.join("\n\n").trim();
-  return truncateText(joined, maxChars);
+  const text = truncateText(joined, maxChars);
+  // The final input budget can also cut the recent-message section. Count
+  // only excerpts that actually reached the provider, including partial ones.
+  const retainedChars = text === joined ? text.length : Math.max(0, text.length - 3);
+  const includedExcerpts = excerpts.filter((excerpt) => excerpt.start < retainedChars);
+  return {
+    text,
+    omittedMessages: input.importedMessages.length - includedExcerpts.length,
+    shortenedMessages: includedExcerpts.filter(
+      (excerpt) => excerpt.shortened || excerpt.end > retainedChars,
+    ).length,
+  };
 }
 
 export function buildHandoffBootstrapText(
@@ -191,12 +235,14 @@ export function buildHandoffBootstrapText(
     return null;
   }
 
-  return buildImportedMessagesBootstrapText({
-    thread,
-    importedMessages,
-    intro: `This conversation was handed off from ${thread.handoff.sourceProvider}.`,
-    maxChars,
-  });
+  return (
+    buildImportedMessagesBootstrap({
+      thread,
+      importedMessages,
+      intro: `This conversation was handed off from ${thread.handoff.sourceProvider}.`,
+      maxChars,
+    })?.text ?? null
+  );
 }
 
 export function buildPriorTranscriptBootstrapText(
@@ -204,12 +250,20 @@ export function buildPriorTranscriptBootstrapText(
   currentMessageId: string | undefined,
   maxChars = BOOTSTRAP_TRANSCRIPT_CHAR_BUDGET,
 ): string | null {
+  return buildPriorTranscriptBootstrap(thread, currentMessageId, maxChars)?.text ?? null;
+}
+
+export function buildPriorTranscriptBootstrap(
+  thread: Pick<OrchestrationThread, "title" | "branch" | "worktreePath" | "messages">,
+  currentMessageId: string | undefined,
+  maxChars = BOOTSTRAP_TRANSCRIPT_CHAR_BUDGET,
+): TranscriptBootstrap | null {
   const priorMessages = listPriorTranscriptMessages(thread, currentMessageId);
   if (priorMessages.length === 0) {
     return null;
   }
 
-  return buildImportedMessagesBootstrapText({
+  return buildImportedMessagesBootstrap({
     thread,
     importedMessages: priorMessages,
     intro:
@@ -227,10 +281,12 @@ export function buildForkBootstrapText(
     return null;
   }
 
-  return buildImportedMessagesBootstrapText({
-    thread,
-    importedMessages,
-    intro: "This sidechat was cloned from an earlier conversation.",
-    maxChars,
-  });
+  return (
+    buildImportedMessagesBootstrap({
+      thread,
+      importedMessages,
+      intro: "This sidechat was cloned from an earlier conversation.",
+      maxChars,
+    })?.text ?? null
+  );
 }

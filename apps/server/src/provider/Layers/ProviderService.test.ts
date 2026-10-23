@@ -1593,6 +1593,7 @@ adapterConfirmedFreshRouting.layer("ProviderServiceLive resume confirmation", (i
   it.effect("keeps transcript bootstrap pending when the adapter rejects a supplied cursor", () =>
     Effect.gen(function* () {
       const provider = yield* ProviderService;
+      const directory = yield* ProviderSessionDirectory;
       const threadId = asThreadId("thread-adapter-rejected-resume");
 
       yield* provider.startSession(threadId, {
@@ -1601,19 +1602,20 @@ adapterConfirmedFreshRouting.layer("ProviderServiceLive resume confirmation", (i
         runtimeMode: "full-access",
       });
       yield* provider.stopRuntimeSession!({ threadId });
-      const outcome = yield* provider.startSessionWithOutcome!(
+      const outcome = yield* provider.startSessionWithOutcome!(threadId, {
+        provider: "codex",
         threadId,
-        {
-          provider: "codex",
-          threadId,
-          runtimeMode: "full-access",
-        },
-        { registerPriorTranscriptBootstrapOnFreshStart: true },
-      );
+        runtimeMode: "full-access",
+      });
 
       assert.equal(outcome.nativeResumeAttempted, true);
       assert.equal(outcome.nativeResumeSucceeded, false);
       assert.equal(outcome.priorTranscriptBootstrapPending, true);
+      const binding = Option.getOrUndefined(yield* directory.getBinding(threadId));
+      assert.equal(
+        asRuntimePayloadRecord(binding?.runtimePayload).priorTranscriptBootstrapPending,
+        true,
+      );
       yield* provider.stopSession({ threadId });
     }),
   );
@@ -1836,6 +1838,120 @@ routing.layer("ProviderServiceLive routing", (it) => {
       });
       assert.equal(handedOff.provider, "claudeAgent");
       yield* provider.stopSession({ threadId });
+    }),
+  );
+
+  it.effect("moves a live Codex thread to Claude when the caller abandons its continuation", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const directory = yield* ProviderSessionDirectory;
+      const threadId = asThreadId("thread-provider-rebind-abandon");
+      const codex = yield* provider.startSession(threadId, {
+        provider: "codex",
+        threadId,
+        runtimeMode: "full-access",
+      });
+      assert.ok(codex.resumeCursor);
+      routing.claude.startSession.mockClear();
+
+      // A stored provider rebind (Group settings, an ordinary model save) asks
+      // to leave the Codex history behind instead of resetting it first.
+      const outcome = yield* provider.startSessionWithOutcome!(
+        threadId,
+        { provider: "claudeAgent", threadId, runtimeMode: "full-access" },
+        { abandonOtherProviderContinuation: true },
+      );
+
+      assert.equal(outcome.session.provider, "claudeAgent");
+      assert.isTrue(outcome.priorTranscriptBootstrapPending);
+      assert.notProperty(routing.claude.startSession.mock.calls[0]?.[0] ?? {}, "resumeCursor");
+      assert.isFalse(yield* routing.codex.adapter.hasSession(threadId));
+      const binding = Option.getOrUndefined(yield* directory.getBinding(threadId));
+      assert.equal(binding?.provider, "claudeAgent");
+      yield* provider.stopSession({ threadId });
+    }),
+  );
+
+  it.effect(
+    "keeps a same-driver home change protected when continuation abandon is requested",
+    () =>
+      Effect.gen(function* () {
+        const provider = yield* ProviderService;
+        const threadId = asThreadId("thread-claude-home-abandon-boundary");
+        yield* provider.startSession(threadId, {
+          provider: "claudeAgent",
+          threadId,
+          providerOptions: { claudeAgent: { homePath: "/tmp/claude-abandon-home-a" } },
+          runtimeMode: "full-access",
+        });
+        yield* provider.stopRuntimeSession!({ threadId });
+        routing.claude.startSession.mockClear();
+
+        const result = yield* Effect.result(
+          provider.startSessionWithOutcome!(
+            threadId,
+            {
+              provider: "claudeAgent",
+              threadId,
+              providerOptions: { claudeAgent: { homePath: "/tmp/claude-abandon-home-b" } },
+              runtimeMode: "full-access",
+            },
+            { abandonOtherProviderContinuation: true },
+          ),
+        );
+
+        assert.equal(result._tag, "Failure");
+        assert.equal(routing.claude.startSession.mock.calls.length, 0);
+      }),
+  );
+
+  it.effect("rejects transcript completion from a replaced provider generation", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const directory = yield* ProviderSessionDirectory;
+      for (const targetProvider of ["codex", "claudeAgent"] as const) {
+        const threadId = asThreadId(`thread-rebound-bootstrap-${targetProvider}`);
+        yield* provider.startSessionWithOutcome!(
+          threadId,
+          { provider: "codex", threadId, runtimeMode: "full-access" },
+          { registerPriorTranscriptBootstrapOnFreshStart: true },
+        );
+        const previousBinding = Option.getOrUndefined(yield* directory.getBinding(threadId));
+        assert.ok(previousBinding?.lifecycleGeneration);
+        yield* provider.stopRuntimeSession!({ threadId });
+        yield* provider.startSessionWithOutcome!(
+          threadId,
+          { provider: targetProvider, threadId, runtimeMode: "full-access" },
+          { abandonOtherProviderContinuation: true },
+        );
+        const currentBinding = Option.getOrUndefined(yield* directory.getBinding(threadId));
+        assert.ok(currentBinding?.lifecycleGeneration);
+        assert.notEqual(currentBinding?.lifecycleGeneration, previousBinding?.lifecycleGeneration);
+
+        const staleCompletion = {
+          threadId,
+          expectedLifecycleGeneration: previousBinding!.lifecycleGeneration!,
+        };
+        const staleResult = yield* Effect.result(
+          provider.completePriorTranscriptBootstrap!(staleCompletion),
+        );
+        assert.equal(staleResult._tag, "Failure");
+        const retainedBinding = Option.getOrUndefined(yield* directory.getBinding(threadId));
+        assert.isTrue(
+          asRuntimePayloadRecord(retainedBinding?.runtimePayload).priorTranscriptBootstrapPending,
+        );
+
+        const acceptedCompletion = {
+          threadId,
+          expectedLifecycleGeneration: currentBinding!.lifecycleGeneration!,
+        };
+        yield* provider.completePriorTranscriptBootstrap!(acceptedCompletion);
+        const completedBinding = Option.getOrUndefined(yield* directory.getBinding(threadId));
+        assert.isFalse(
+          asRuntimePayloadRecord(completedBinding?.runtimePayload).priorTranscriptBootstrapPending,
+        );
+        yield* provider.stopSession({ threadId });
+      }
     }),
   );
 

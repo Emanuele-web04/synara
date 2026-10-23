@@ -243,6 +243,21 @@ export const DEFAULT_KEYBINDINGS: ReadonlyArray<KeybindingRule> = [
   { key: "ctrl+alt+p", command: "git.commitAndPush", when: "!terminalFocus && !isMac" },
   { key: "mod+o", command: "editor.openFavorite" },
   { key: "mod+s", command: "editor.file.save", when: "!terminalFocus" },
+  // In-app code editor. The editor only runs these while it has focus; the guard keeps
+  // F-keys flowing to terminal programs. Go to symbol, Go to line and Show problems ship
+  // unassigned: their usual chords (Mod+Shift+O / Mod+G / Mod+Shift+M) already add a
+  // project, toggle the terminal and open the model picker.
+  { key: "f1", command: "editor.commands", when: "!terminalFocus" },
+  { key: "f2", command: "editor.rename", when: "!terminalFocus" },
+  { key: "f12", command: "editor.goToDefinition", when: "!terminalFocus" },
+  { key: "shift+f12", command: "editor.findReferences", when: "!terminalFocus" },
+  { key: "mod+.", command: "editor.quickFix", when: "!terminalFocus" },
+  { key: "f5", command: "editor.debug.start", when: "!terminalFocus" },
+  { key: "shift+f5", command: "editor.debug.stop", when: "!terminalFocus" },
+  { key: "f9", command: "editor.debug.toggleBreakpoint", when: "!terminalFocus" },
+  { key: "f10", command: "editor.debug.stepOver", when: "!terminalFocus" },
+  { key: "f11", command: "editor.debug.stepInto", when: "!terminalFocus" },
+  { key: "shift+f11", command: "editor.debug.stepOut", when: "!terminalFocus" },
 ];
 
 /** @internal - Exported for testing */

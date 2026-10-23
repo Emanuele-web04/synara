@@ -1159,6 +1159,10 @@ function deriveBackgroundTaskCompletionEntries(
   return completions;
 }
 
+export function isCodexRuntimeWarningType(nativeEventType: unknown): boolean {
+  return nativeEventType === "codex.guardianWarning" || nativeEventType === "codex.warning";
+}
+
 function shouldKeepActivityForWorkLog(
   activity: OrchestrationThreadActivity,
   latestTurnId: TurnId | undefined,
@@ -1183,6 +1187,14 @@ function shouldKeepActivityForWorkLog(
   // Authentication can start or finish outside a turn. Keep its latest state
   // visible even when the transcript has turn-scoped assistant messages.
   if (activity.kind === "auth.status") return true;
+
+  // Codex Guardian and hook warnings carry no provider turn id.
+  if (
+    activity.kind === "runtime.warning" &&
+    activity.turnId === null &&
+    isCodexRuntimeWarningType(asRecord(activity.payload)?.nativeEventType)
+  )
+    return true;
 
   // Thread-level compaction progress has no provider turn id but should stay visible.
   if (activity.kind === "context-compaction" && activity.turnId === null) {
