@@ -7,6 +7,7 @@ import type { Dispatch, RefObject, SetStateAction } from "react";
 import { useCallback } from "react";
 import { newCommandId, newMessageId, newThreadId, randomUUID } from "~/lib/utils";
 import { readNativeApi } from "~/nativeApi";
+import { ProviderHandoffBackgroundTasksError } from "~/lib/threadHandoff";
 import { useComposerDraftStore } from "../../composerDraftStore";
 import { formatOutgoingComposerPrompt } from "../../lib/composerSend";
 import { reconcileDeletedThreadFromClient } from "../../lib/deletedThreadClientReconciliation";
@@ -28,15 +29,18 @@ import { truncateTitle } from "../../truncateTitle";
 import type { Project } from "../../types";
 import { type Thread } from "../../types";
 import {
+  createdAtAfterProviderHandoff,
   editAndResendDispatchFields,
   queuedChatTurnDispatchFields,
   planImplementationDispatchSettings,
   resolveQueuedTurnDispatchSettings,
   threadSettingsDispatchFields,
+  turnNeedsProviderHandoff,
   turnStartDispatchFields,
   type QueuedSteerGate,
   type TurnDispatchSettings,
 } from "../ChatView.logic";
+import type { ChatTurnSubmissionInput } from "./chatSendTypes";
 import { buildWorkflowResumePrompt } from "./WorkflowRunCard.logic";
 import { useChatComposerDraft } from "./useChatComposerDraft";
 import { useChatLocalDispatch } from "./useChatLocalDispatch";
@@ -88,6 +92,8 @@ interface ChatTurnFollowUpsInput {
   persistThreadSettingsForNextTurn: ReturnType<
     typeof useChatRuntimeModes
   >["persistThreadSettingsForNextTurn"];
+  canSendWithProviderHandoff: ChatTurnSubmissionInput["canSendWithProviderHandoff"];
+  prepareProviderHandoffForSend: ChatTurnSubmissionInput["prepareProviderHandoffForSend"];
   setComposerDraftInteractionMode: ReturnType<
     typeof useChatComposerDraft
   >["setComposerDraftInteractionMode"];
@@ -134,6 +140,8 @@ export function useChatTurnFollowUps({
   armTranscriptAutoFollow,
   tailAnchorScrollInFlightRef,
   persistThreadSettingsForNextTurn,
+  canSendWithProviderHandoff,
+  prepareProviderHandoffForSend,
   setComposerDraftInteractionMode,
   rememberCustomBinaryPathForDispatch,
   workflowRunState,
@@ -170,6 +178,22 @@ export function useChatTurnFollowUps({
       return false;
     }
 
+    const planDispatchSettings = {
+      ...resolveQueuedTurnDispatchSettings(turnDispatchSettings, queuedTurn),
+      interactionMode: nextInteractionMode,
+    };
+    const modelSelectionForPlanDispatch = planDispatchSettings.modelSelection;
+    const needsProviderHandoff = turnNeedsProviderHandoff({
+      thread: activeThread,
+      modelSelection: modelSelectionForPlanDispatch,
+    });
+    if (
+      needsProviderHandoff &&
+      canSendWithProviderHandoff?.(modelSelectionForPlanDispatch) === false
+    ) {
+      return false;
+    }
+
     const threadIdForSend = activeThread.id;
     const resumeQueueAfterSend =
       preparedQueueResume ??
@@ -177,7 +201,7 @@ export function useChatTurnFollowUps({
         ? prepareQueuedComposerResumeAfterSend(threadIdForSend)
         : undefined);
     const messageIdForSend = newMessageId();
-    const messageCreatedAt = new Date().toISOString();
+    let messageCreatedAt = new Date().toISOString();
     const outgoingMessageText = formatOutgoingComposerPrompt({
       provider: queuedTurn?.selectedProvider ?? selectedProvider,
       model: queuedTurn?.selectedModel ?? selectedModel,
@@ -208,16 +232,29 @@ export function useChatTurnFollowUps({
 
     // Nested function so the `try` body holds no value blocks — see the comment on
     // `deleteEmptyTerminalThread` above for why React Compiler requires this shape.
-    const planDispatchSettings = {
-      ...resolveQueuedTurnDispatchSettings(turnDispatchSettings, queuedTurn),
-      interactionMode: nextInteractionMode,
-    };
-    const modelSelectionForPlanDispatch = planDispatchSettings.modelSelection;
     const computerControlSequenceForSend = computerControlChangeSequence.current;
 
     const dispatchPlanFollowUpTurn = async () => {
+      if (needsProviderHandoff && prepareProviderHandoffForSend) {
+        await prepareProviderHandoffForSend(activeThread, modelSelectionForPlanDispatch);
+        messageCreatedAt = createdAtAfterProviderHandoff({
+          activities: getThreadFromState(useStore.getState(), threadIdForSend)?.activities,
+          createdAt: messageCreatedAt,
+        });
+        setOptimisticUserMessages((messages) =>
+          messages.map((message) =>
+            message.id === messageIdForSend ? { ...message, createdAt: messageCreatedAt } : message,
+          ),
+        );
+      }
       await persistThreadSettingsForNextTurn({
-        ...threadSettingsDispatchFields(planDispatchSettings),
+        // The handoff owns the model switch. Save modes only after it succeeds.
+        ...(needsProviderHandoff
+          ? {
+              runtimeMode: planDispatchSettings.runtimeMode,
+              interactionMode: planDispatchSettings.interactionMode,
+            }
+          : threadSettingsDispatchFields(planDispatchSettings)),
         threadId: threadIdForSend,
         createdAt: messageCreatedAt,
       });
@@ -301,10 +338,12 @@ export function useChatTurnFollowUps({
       setOptimisticUserMessages((existing) =>
         existing.filter((message) => message.id !== messageIdForSend),
       );
-      setThreadError(
-        threadIdForSend,
-        err instanceof Error ? err.message : "Failed to send plan follow-up.",
-      );
+      if (!(err instanceof ProviderHandoffBackgroundTasksError)) {
+        setThreadError(
+          threadIdForSend,
+          err instanceof Error ? err.message : "Failed to send plan follow-up.",
+        );
+      }
       sendInFlightRef.current = false;
       // The turn RPC failed, so no server turn exists for the watchdog to
       // recover — drop the marker armed when the dispatch began.

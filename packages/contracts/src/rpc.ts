@@ -1,4 +1,13 @@
+import {
+  EditorDebugStartInput,
+  EditorDebugStartResult,
+  EditorDebugActionInput,
+  EditorDebugActionResult,
+  EditorDebugPollInput,
+  EditorDebugSnapshot,
+} from "./editorDebug";
 import { Schema } from "effect";
+import { EditorIntelligenceInput, EditorIntelligenceResult } from "./editorIntelligence";
 import * as Rpc from "effect/unstable/rpc/Rpc";
 import * as RpcGroup from "effect/unstable/rpc/RpcGroup";
 
@@ -619,6 +628,28 @@ export const WsProjectsSearchContentRpc = Rpc.make(WS_METHODS.projectsSearchCont
 export const WsProjectsPrewarmSearchIndexRpc = Rpc.make(WS_METHODS.projectsPrewarmSearchIndex, {
   payload: ProjectPrewarmSearchIndexInput,
   success: ProjectPrewarmSearchIndexResult,
+  error: WsRpcError,
+});
+
+export const WsEditorDebugStartRpc = Rpc.make(WS_METHODS.editorDebugStart, {
+  payload: EditorDebugStartInput,
+  success: EditorDebugStartResult,
+  error: WsRpcError,
+});
+export const WsEditorDebugActionRpc = Rpc.make(WS_METHODS.editorDebugAction, {
+  payload: EditorDebugActionInput,
+  success: EditorDebugActionResult,
+  error: WsRpcError,
+});
+export const WsEditorDebugPollRpc = Rpc.make(WS_METHODS.editorDebugPoll, {
+  payload: EditorDebugPollInput,
+  success: EditorDebugSnapshot,
+  error: WsRpcError,
+});
+
+export const WsEditorIntelligenceRpc = Rpc.make(WS_METHODS.editorIntelligence, {
+  payload: EditorIntelligenceInput,
+  success: EditorIntelligenceResult,
   error: WsRpcError,
 });
 
@@ -1972,6 +2003,10 @@ export const WsFeatureRpcGroup = RpcGroup.make(
   WsProjectsSearchLocalEntriesRpc,
   WsProjectsSearchContentRpc,
   WsProjectsPrewarmSearchIndexRpc,
+  WsEditorIntelligenceRpc,
+  WsEditorDebugStartRpc,
+  WsEditorDebugActionRpc,
+  WsEditorDebugPollRpc,
   WsProjectsReadFileRpc,
   WsProjectsSubscribeFileChangeRpc,
   WsProjectsResolveWorkspaceFileReferencesRpc,

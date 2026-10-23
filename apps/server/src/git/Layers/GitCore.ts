@@ -1980,7 +1980,16 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
           ...(filePath === undefined ? [] : ["--", `:(literal)${filePath}`]),
         ],
         { allowNonZeroExit: true, ...(env ? { env } : {}) },
-      ).pipe(Effect.map((result) => result.stdout.split("\0").filter((entry) => entry.length > 0)));
+      ).pipe(
+        Effect.map((result) =>
+          result.stdout
+            .split("\0")
+            // Git lists an untracked nested repository, such as a clone or a linked
+            // worktree, as one `dir/` entry. `git diff` leaves it out and `diff --no-index`
+            // cannot read it, so skip it. Every other entry is still read, and its errors surface.
+            .filter((entry) => entry.length > 0 && !entry.endsWith("/")),
+        ),
+      );
 
     const readUntrackedPatches = (
       cwd: string,

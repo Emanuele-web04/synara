@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildProviderChildEnvironment,
   registerProviderCredentialKey,
+  stripSynaraControlPlaneEnvironment,
   withoutProviderCredentialEnvironment,
 } from "./providerChildEnvironment";
 
@@ -17,6 +18,25 @@ it("removes registered ambient provider credentials from account-scoped environm
       ACME_PROVIDER_TOKEN: "ambient-custom",
     }),
   ).toEqual({ PATH: "/usr/bin" });
+});
+
+it("gives launched programs no control-plane authority, injection hooks, or provider credentials", () => {
+  const parent = {
+    PATH: "/usr/bin",
+    APP_ENV: "development",
+    SYNARA_AUTH_TOKEN: "server-only",
+    Synara_Auth_Token: "windows-case-variant",
+    NODE_OPTIONS: "--require=/unrelated/preload.cjs",
+    node_path: "/unrelated/modules",
+    BUN_OPTIONS: "--preload=/unrelated/preload.ts",
+    ELECTRON_RUN_AS_NODE: "1",
+    OPENAI_API_KEY: "ambient-openai",
+  };
+  expect(withoutProviderCredentialEnvironment(stripSynaraControlPlaneEnvironment(parent))).toEqual({
+    PATH: "/usr/bin",
+    APP_ENV: "development",
+  });
+  expect(parent.SYNARA_AUTH_TOKEN).toBe("server-only");
 });
 
 describe("buildProviderChildEnvironment", () => {
