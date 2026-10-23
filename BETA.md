@@ -45,6 +45,8 @@ separate and off by default.
 
 Remote .15 retries temporary enrollment refusals without permanently disabling the host or revoking approved devices. Opening a populated remote home no longer constructs an empty chat ID. An update cannot distinguish a previously revoked pairing from deliberate revocation: pair that device normally again if needed; never restore trust by editing the database. The Remote updater prepares downloads in the background and installs only through its normal restart action.
 
+Remote .16 extends that recovery to temporary proof rejection and API/proxy failures. Ownership denials close admission immediately, but only repeated denials spanning five minutes permanently retire local trust. A successful authorization snapshot resets that confirmation window. Source-launched Remote/Beta use separate development bundle identities; installed identities, homes and feeds are unchanged.
+
 Signing out preserves that local database. Signing in as another account on the
 same installation does not create a separate local history: the account profile
 and saved Inbox stay account-scoped, but usage sync backfills the installation's

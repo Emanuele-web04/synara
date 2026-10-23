@@ -64,6 +64,8 @@ Authorization polls have ±10% jitter around ten seconds and account requests ha
 
 Remote .15 treats the legacy temporary enrollment refusal as unavailable access and keeps polling without revoking device trust. Admission still requires a fresh successful snapshot. Opening a populated remote workspace on its home route also no longer treats the home as an empty chat identifier. If an older build already revoked a pairing, updating does not restore it automatically: create a fresh code and pair normally. Do not erase local app data or restore revoked devices through database edits.
 
+Remote .16 treats rejected/stale proofs and transient API/proxy failures as retryable checks; they expire the existing authorization lease rather than revoking every paired device. Known ownership denials close admission immediately and only retire local trust after repeated checks spanning at least five minutes. Successful snapshots reset that window. Explicit device revocation and durable tombstones still apply immediately. Proof timestamps are sampled after private-key import, and desktop backends default to a 16-worker libuv pool so blocked filesystem work is less likely to starve DNS/crypto.
+
 Device revocation closes RPC/resources before durable tombstone/ACK. Missing ACK is retried by later snapshots. Host unlink, replaced keys, owner removal and hard proof denial fence old admission. Ordinary network loss retains the allocation. Explicit remote disable retires it, and the account sweeper removes DNS/tunnel resources in bounded batches. Failed cleanup retains resource ownership evidence. Retired names are revisited hourly to catch a provider create that completes after a timeout; cleanup never uses a newer generation's name.
 
 ## Automations on another computer

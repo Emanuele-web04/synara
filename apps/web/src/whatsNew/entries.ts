@@ -22,6 +22,342 @@ import type { WhatsNewEntry } from "./logic";
 
 export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
   {
+    version: "1.0.6-remote.26",
+    date: "Oct 18",
+    features: [
+      {
+        id: "packaged-claude-import",
+        title: "Import Claude conversations reliably",
+        description:
+          "The packaged app reads Claude history without opening another Synara window or failing with an empty JSON response.",
+      },
+      {
+        id: "retired-mcp-credential-recovery",
+        title: "Recover Codex tool access between turns",
+        description:
+          "A session renews retired per-turn MCP write access before the next turn, while old credentials stay blocked.",
+      },
+      {
+        id: "hub-non-git-completion",
+        title: "Finish Hub work outside Git projects",
+        description:
+          "Completed Hub workers settle correctly even when their workspace has no Git checkpoint.",
+      },
+      {
+        id: "bounded-sqlite-reclamation",
+        title: "Reclaim space from deleted data",
+        description:
+          "SQLite reclaims freed pages in bounded passes, with guarded maintenance for older databases after closing.",
+      },
+      {
+        id: "owned-simulator-idle-cleanup",
+        title: "Release idle agent simulators",
+        description:
+          "Simulators booted by an agent close after their work settles. Devices you started and active work stay running.",
+      },
+    ],
+  },
+  {
+    version: "1.0.6-remote.25",
+    date: "Oct 18",
+    features: [
+      {
+        id: "recap-read-recovery",
+        title: "Recap recovers from temporary errors",
+        description:
+          "Inbox retries a temporary read failure automatically, so your day recap can load without pressing Try again.",
+        details:
+          "Retries use a bounded delay. If the computer reports a permanent error or needs an update, the error remains available for you to act on.",
+      },
+    ],
+  },
+  {
+    version: "1.0.6-remote.24",
+    date: "Oct 18",
+    features: [
+      {
+        id: "remote-session-recovery",
+        title: "Recover connections without losing pairing",
+        description:
+          "Temporary account-service interruptions and expired sessions reconnect using your existing device approval. Actual revocations still require pairing again.",
+      },
+      {
+        id: "larger-remote-history",
+        title: "Open larger remote conversations",
+        description:
+          "Large remote conversation histories stream through both connection bridges with bounded memory and backpressure, instead of dropping at the former message-size limit.",
+      },
+      {
+        id: "claude-published-change-refresh",
+        title: "Claude publication updates",
+        description:
+          "Claude's published-change notifications refresh repository and pull-request information without an unhandled runtime warning.",
+      },
+    ],
+  },
+  {
+    version: "1.0.6-remote.21",
+    date: "Oct 18",
+    features: [
+      {
+        id: "pending-update-refresh",
+        title: "Prepare the latest update",
+        description:
+          "A downloaded update no longer stops periodic checks. A newer Remote release replaces the pending download before you restart.",
+        details:
+          "Automatic checks keep their four-hour cadence. You can check manually to discover a release sooner. macOS reports when a failed install handoff needs a relaunch before retrying.",
+      },
+      {
+        id: "phone-controlled-mac-updates",
+        title: "Update your Remote Mac from iPhone or iPad",
+        description:
+          "With companion build 143, open Computers to check, download and explicitly confirm Restart & Install on a packaged Remote Mac. The Mac refuses to restart while chats, tasks or pending requests still need it.",
+      },
+      {
+        id: "native-companion-143",
+        title: "Companion build 143",
+        description:
+          "The separate iPhone and iPad update fixes answers to multiple questions, adds background command output and Stop, and stabilizes the Git toolbar. History stays visible during streaming, and sending uses your latest keyboard edits.",
+        details:
+          "Build 143 also restores sent-photo thumbnails and lets you swipe down to close an unzoomed image. Install the mobile build to get these native changes.",
+      },
+      {
+        id: "ordinary-completion-alerts",
+        title: "Completion alerts on iPhone and iPad",
+        description:
+          "Companion build 143 adds ordinary completion alerts alongside Live Activities. This requires the separate account API update; the desktop updater does not change your pairing or database.",
+      },
+    ],
+  },
+  {
+    version: "1.0.6-remote.20",
+    date: "Oct 17",
+    features: [
+      {
+        id: "phone-chat-transfers",
+        title: "Attachments and voice in chats started on your phone",
+        description:
+          "Remote accepts the thread IDs created by iPhone and iPad when sending attachments or voice audio and exporting conversations. Update the execution computer and install TestFlight 141 on your phone or tablet.",
+      },
+    ],
+  },
+  {
+    version: "1.0.6-remote.19",
+    date: "Oct 17",
+    features: [
+      {
+        id: "long-turn-work",
+        title: "Less repeated work during long turns",
+        description:
+          "Long conversations avoid duplicate transcript storage, repeated repository refreshes and unnecessary Markdown updates while keeping your conversation and live activity available.",
+      },
+      {
+        id: "provider-session-recovery",
+        title: "More reliable provider recovery",
+        description:
+          "Devin and Grok keep model switches after reloading. OpenCode recovers stopped sessions, and replaying an edited message keeps a workspace recovery snapshot first.",
+      },
+      {
+        id: "connector-and-launch-recovery",
+        title: "Smoother connector retries and agent startup",
+        description:
+          "Connector retries use renewed credentials correctly. Windows process cleanup is more reliable, and missing project folders produce a clear startup error.",
+      },
+    ],
+  },
+  {
+    version: "1.0.6-remote.18",
+    date: "Oct 17",
+    features: [
+      {
+        id: "remote-usage-sharing",
+        title: "Help improve Remote",
+        description:
+          "Remote now shares limited usage and technical diagnostics by default. Turn it off in Settings → Privacy → Share usage and diagnostics. An existing off choice is preserved.",
+      },
+      {
+        id: "remote-technical-diagnostics",
+        title: "Technical reports without your conversation text",
+        description:
+          "Reports use fixed categories, numeric error locations and bounded usage counts. Prompts, files, custom model names and raw crash memory stay out of Remote analytics.",
+      },
+    ],
+  },
+  {
+    version: "1.0.6-remote.17",
+    date: "Oct 17",
+    features: [
+      {
+        id: "claude-default-effort-selection",
+        title: "Keep your Claude effort selection",
+        description:
+          "Claude's effort picker now keeps High selected when it is the model's default, including when connecting to an older host. Other explicit effort choices are preserved.",
+      },
+    ],
+  },
+  {
+    version: "1.0.6-remote.16",
+    date: "Oct 17",
+    features: [
+      {
+        id: "remote-trust-through-transient-failures",
+        title: "Keep paired devices through temporary failures",
+        description:
+          "Temporary account errors and delayed host proofs no longer forget your devices. Remote retries automatically and pauses access safely when it cannot verify the account.",
+      },
+      {
+        id: "remote-proof-under-worker-load",
+        title: "More reliable remote authorization",
+        description:
+          "Fresh host proofs and additional backend worker capacity reduce interruptions when file access or system permission prompts delay background work.",
+      },
+    ],
+  },
+  {
+    version: "1.0.6-remote.15",
+    date: "Oct 17",
+    features: [
+      {
+        id: "recover-remote-enrollment",
+        title: "Recover remote access without forgetting devices",
+        description:
+          "Temporary beta-enrollment refusals now pause access and retry automatically. Existing pairings stay intact; a device already revoked by an older build still needs to be paired again.",
+      },
+      {
+        id: "remote-home-recovery",
+        title: "Open your connected computer reliably",
+        description:
+          "Fixed a crash when opening a connected computer with existing chats from its home screen.",
+      },
+      {
+        id: "codex-runtime-recovery",
+        title: "Keep live Codex work attached",
+        description:
+          "Runtime recovery preserves live turns and settles provider handoffs without replaying work. Internal moderation events stay out of chat activity.",
+      },
+      {
+        id: "github-production-sign-in",
+        title: "Sign in with GitHub",
+        description:
+          "Use GitHub through Synara's production sign-in service, with public profile and read-only email access. Repository permissions are not requested.",
+      },
+    ],
+  },
+  {
+    version: "1.0.6-remote.14",
+    date: "Oct 16",
+    features: [
+      {
+        id: "hosted-sign-in",
+        title: "Sign in on a fresh install",
+        description:
+          "Remote now reaches its hosted account service automatically, fixing sign-in errors on freshly installed apps. Existing account sessions and local chats are preserved.",
+      },
+      {
+        id: "ready-to-sign-in",
+        title: "Your account without extra setup",
+        description:
+          "Use Google, Apple or email to sign in. Profile and usage sync work in Remote without shell configuration; product analytics remain a separate opt-in.",
+      },
+      {
+        id: "windows-linux-remote",
+        title: "Remote for Windows and Linux",
+        description:
+          "Windows x64 and Linux x64 join Mac Apple Silicon with separate Remote installers, app data and update feeds. Windows installers are unsigned and may show a system warning.",
+      },
+    ],
+  },
+  {
+    version: "1.0.6-remote.13",
+    date: "Oct 16",
+    features: [
+      {
+        id: "renewable-vercel-login",
+        title: "Renew your Vercel connection",
+        description:
+          "Vercel sign-in now requests access that can renew automatically. Reconnect an existing Vercel connector once after updating, then choose the projects it may access on Vercel's consent page.",
+      },
+    ],
+  },
+  {
+    version: "1.0.6-remote.12",
+    date: "Oct 16",
+    features: [
+      {
+        id: "paired-connector-discovery",
+        title: "Mention connectors from your phone or iPad",
+        description:
+          "Use @ in a supported chat to find services connected on the computer running it. Connector sign-in and management stay on that computer.",
+      },
+    ],
+  },
+  {
+    version: "1.0.6-remote.11",
+    date: "Oct 16",
+    features: [
+      {
+        id: "remote-chat-hover-cards",
+        title: "Preview chats on your other computer",
+        description:
+          "Hover cards now open correctly for remote chats in Activity, Projects, Pinned and Chats, using the same preview as local conversations.",
+      },
+    ],
+  },
+  {
+    version: "1.0.6-remote.10",
+    date: "Oct 16",
+    features: [
+      {
+        id: "consistent-remote-activity",
+        title: "Consistent local and remote Activity rows",
+        description:
+          "Chats on another computer show the same hover cards as local chats. Status indicators align with the row and the remote globe keeps its place when actions appear.",
+      },
+      {
+        id: "continuous-ascii-background",
+        title: "A continuous empty-chat background",
+        description:
+          "The ASCII pattern continues beneath the composer, which keeps its own surface. Reduced motion and pause-when-hidden behavior stay in place.",
+      },
+    ],
+  },
+  {
+    version: "1.0.6-remote.9",
+    date: "Oct 16",
+    features: [
+      {
+        id: "remote-thread-recap",
+        title: "Follow chats created on another computer",
+        description:
+          "The created-thread card appears in the original conversation and opens the new chat in its computer's connected workspace.",
+      },
+      {
+        id: "clear-priority",
+        title: "Clear read chats from Priority",
+        description:
+          "Use the eraser beside Priority to clear chats you have already read. Remote Activity rows keep project and branch metadata compact.",
+      },
+    ],
+  },
+  {
+    version: "1.0.6-remote.8",
+    date: "Oct 16",
+    features: [
+      {
+        id: "remote-workspace-recovery",
+        title: "Open your other computer",
+        description:
+          "Connected computers now open their workspace in the packaged app, including recovery after a reload.",
+      },
+      {
+        id: "claude-native-controls",
+        title: "Claude controls match your CLI",
+        description:
+          "Effort choices follow the installed Claude CLI. The extra Default choice is removed, including from older cached catalogs.",
+      },
+    ],
+  },
+  {
     version: "1.0.7",
     date: "Oct 17",
     features: [
