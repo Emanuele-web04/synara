@@ -102,6 +102,7 @@ const harness = vi.hoisted(() => ({
   resolveSplitViewFocusedThreadId: vi.fn(),
   splitViewsById: {} as Record<string, unknown>,
   shellSnapshotSequence: 0,
+  reconcileSpaceMoves: vi.fn(),
 }));
 
 vi.mock("react", () => ({
@@ -118,6 +119,9 @@ vi.mock("@tanstack/react-query", () => ({
 }));
 vi.mock("@tanstack/react-router", () => ({ useNavigate: () => harness.navigate }));
 vi.mock("../lib/gitReactQuery", () => ({ gitRemoveWorktreeMutationOptions: () => ({}) }));
+vi.mock("../lib/spaces", () => ({
+  reconcilePendingProjectSpaceMoves: harness.reconcileSpaceMoves,
+}));
 vi.mock("../composerDraftStore", () => ({
   useComposerDraftStore: (selector: (state: unknown) => unknown) =>
     selector({
@@ -287,6 +291,7 @@ beforeEach(() => {
   harness.shellSnapshotSequence = 0;
   harness.alreadyUnarchived = false;
   harness.splitViewsById = {};
+  harness.reconcileSpaceMoves.mockReset().mockResolvedValue(true);
   for (const mock of [
     harness.pinThread,
     harness.unpinThread,
@@ -824,6 +829,43 @@ describe("useSidebarThreadActions", () => {
 
         expect(harness.navigate).not.toHaveBeenCalled();
         expect(harness.handleNewChat).toHaveBeenCalledWith();
+      },
+    );
+
+    it.each(["archive", "done", "snooze"] as const)(
+      "filters after a pending Space move is reconciled (%s)",
+      async (action) => {
+        deferWindowTimers();
+        let finishMove!: (confirmed: boolean) => void;
+        let moved = false;
+        harness.reconcileSpaceMoves.mockImplementation(
+          () =>
+            new Promise<boolean>((resolve) => {
+              finishMove = resolve;
+            }),
+        );
+        sidebarThreads = [makeThread(THREAD_ID), makeThread(FALLBACK_ID), otherSpaceThread];
+        const controller = render({
+          routeThreadId: THREAD_ID,
+          filterThreadsToActiveSpace: (threads) =>
+            threads.filter((thread) =>
+              moved ? thread.id !== FALLBACK_ID : thread.id !== otherSpaceThread.id,
+            ),
+        });
+        const closing = action === "archive" ? controller.archiveThread(THREAD_ID) : undefined;
+        if (action === "done") controller.setThreadSettledWithToast(THREAD_ID, true);
+        if (action === "snooze") controller.snoozeThread(THREAD_ID, 30);
+        await flushActionResponses();
+        expect(harness.navigate).not.toHaveBeenCalled();
+
+        moved = true;
+        finishMove(true);
+        await closing;
+        await flushActionResponses();
+
+        expect(harness.navigate).toHaveBeenCalledWith(
+          expect.objectContaining({ params: { threadId: otherSpaceThread.id } }),
+        );
       },
     );
   });

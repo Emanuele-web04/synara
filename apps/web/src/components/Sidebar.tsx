@@ -1903,21 +1903,22 @@ export default function Sidebar() {
     [projects],
   );
   const filterThreadsToActiveSpace = useCallback(
-    (threads: readonly SidebarThreadSummary[]) =>
-      filterSidebarThreadsBySpace({
+    (threads: readonly SidebarThreadSummary[]) => {
+      const state = useStore.getState();
+      const selection = useSpacesUiStore.getState();
+      return filterSidebarThreadsBySpace({
         threads,
-        projectById,
-        spaceId: activeSpaceId,
+        // A move can be confirmed between renders; navigation must use its live membership.
+        projectById: new Map(state.projects.map((project) => [project.id, project])),
+        spaceId: resolveActiveSpaceId(
+          selection.activeSpaceId,
+          state.spaces,
+          selection.pendingActiveSpace?.spaceId,
+        ),
         paths: { homeDir, chatWorkspaceRoot, studioWorkspaceRoot, groupsWorkspaceRoot },
-      }),
-    [
-      activeSpaceId,
-      chatWorkspaceRoot,
-      groupsWorkspaceRoot,
-      homeDir,
-      projectById,
-      studioWorkspaceRoot,
-    ],
+      });
+    },
+    [chatWorkspaceRoot, groupsWorkspaceRoot, homeDir, studioWorkspaceRoot],
   );
   const {
     pinnedThreadIds,

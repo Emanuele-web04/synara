@@ -153,6 +153,7 @@ import { invalidateGitQueries, invalidateGitQueriesForCwds } from "../lib/gitRea
 import { shouldRepairDesktopProjectSnapshot } from "../lib/desktopProjectRecovery";
 import {
   registerEmptyRouteRestoreRefresh,
+  registerShellSnapshotRefresh,
   runEmptyRouteRestoreRefresh,
 } from "../routeRestoreRefreshCoordinator";
 import { useDiffRouteSearch } from "../hooks/useDiffRouteSearch";
@@ -1811,6 +1812,13 @@ function EventRouter() {
       }, SHELL_SNAPSHOT_BOOTSTRAP_FALLBACK_DELAY_MS);
     };
 
+    const unregisterShellSnapshotRefresh = registerShellSnapshotRefresh(async (minSequence) => {
+      if (disposed) return false;
+      if (shellSnapshotSequence >= minSequence) return true;
+      const snapshot = await api.orchestration.getShellSnapshot();
+      applyAuthoritativeShellSnapshot(snapshot);
+      return !disposed && shellSnapshotSequence >= minSequence;
+    });
     const unregisterEmptyRouteRestoreRefresh = registerEmptyRouteRestoreRefresh(() =>
       runEmptyRouteRestoreRefresh({
         getShellSnapshot: () => api.orchestration.getShellSnapshot(),
@@ -2798,6 +2806,7 @@ function EventRouter() {
       domainEventFlushThrottler.cancel();
       reconcileThreadSubscriptionsRef.current = null;
       unregisterEmptyRouteRestoreRefresh();
+      unregisterShellSnapshotRefresh();
       unregisterThreadDetailSyncRetry();
       void api.orchestration.unsubscribeShell().catch(() => undefined);
       // Same shape as reconnect: every lease drops at once, and a remount re-leases
