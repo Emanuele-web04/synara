@@ -64,6 +64,7 @@ describe("Sidebar.uiState", () => {
   it("defaults collapsed sidebar UI state with no thread list paging", () => {
     expect(readSidebarUiState()).toEqual({
       chatSectionExpanded: false,
+      archivedSectionExpanded: false,
       chatThreadListExtraPages: 0,
       projectThreadListExtraPagesByCwd: {},
       dismissedThreadStatusKeyByThreadId: {},
@@ -76,6 +77,7 @@ describe("Sidebar.uiState", () => {
   it("persists project thread list paging by normalized cwd", () => {
     persistSidebarUiState({
       chatSectionExpanded: true,
+      archivedSectionExpanded: true,
       chatThreadListExtraPages: 2,
       projectThreadListExtraPagesByCwd: {
         "/Users/tester/Code/demo": 1,
@@ -95,6 +97,7 @@ describe("Sidebar.uiState", () => {
 
     expect(readSidebarUiState()).toEqual({
       chatSectionExpanded: true,
+      archivedSectionExpanded: true,
       chatThreadListExtraPages: 2,
       projectThreadListExtraPagesByCwd: {
         // Duplicate cwds that normalize to the same key keep the deepest paging.
@@ -141,6 +144,7 @@ describe("Sidebar.uiState", () => {
 
     expect(readSidebarUiState()).toEqual({
       chatSectionExpanded: true,
+      archivedSectionExpanded: false,
       chatThreadListExtraPages: 0,
       projectThreadListExtraPagesByCwd: {
         [normalizeSidebarProjectThreadListCwd("/Users/tester/Code/demo")]: 2,
@@ -188,6 +192,7 @@ describe("Sidebar.uiState", () => {
 
     expect(readSidebarUiState()).toEqual({
       chatSectionExpanded: false,
+      archivedSectionExpanded: false,
       chatThreadListExtraPages: 0,
       projectThreadListExtraPagesByCwd: {},
       dismissedThreadStatusKeyByThreadId: {},
