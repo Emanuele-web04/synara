@@ -52,11 +52,21 @@ describe("EnvironmentActionsSection", () => {
     document.body.innerHTML = "";
   });
 
-  it("points at the empty state until an action exists", async () => {
+  it("starts collapsed and exposes the empty state only when opened", async () => {
     const section = await mountActionsSection();
     try {
-      expect(document.body.textContent).toContain("No actions yet.");
-      expect(page.getByRole("button", { name: "Run Setup" }).elements()).toHaveLength(0);
+      const toggle = page.getByRole("button", { name: "Actions", exact: true });
+      expect(toggle.elements()).toHaveLength(1);
+      expect(toggle.element().getAttribute("aria-expanded")).toBe("false");
+      expect(page.getByRole("button", { name: "Add action" }).elements()).toHaveLength(0);
+      await toggle.click();
+      await expect.element(toggle).toHaveAttribute("aria-expanded", "true");
+      await expect.element(page.getByText("No actions yet.", { exact: false })).toBeVisible();
+      await toggle.click();
+      await expect.element(toggle).toHaveAttribute("aria-expanded", "false");
+      await expect
+        .poll(() => page.getByRole("button", { name: "Add action" }).elements())
+        .toHaveLength(0);
     } finally {
       await section.cleanup();
     }
@@ -72,6 +82,10 @@ describe("EnvironmentActionsSection", () => {
     };
     const section = await mountActionsSection([script]);
     try {
+      const toggle = page.getByRole("button", { name: "Actions", exact: true });
+      expect(toggle.elements()).toHaveLength(1);
+      expect(toggle.element().getAttribute("aria-expanded")).toBe("false");
+      await toggle.click();
       await page.getByRole("button", { name: "Run Test" }).click();
       expect(section.onRunScript).toHaveBeenCalledWith(script);
     } finally {
@@ -82,6 +96,7 @@ describe("EnvironmentActionsSection", () => {
   it("creates an action through the shared dialog", async () => {
     const section = await mountActionsSection();
     try {
+      await page.getByRole("button", { name: "Actions", exact: true }).click();
       await page.getByRole("button", { name: "Add action" }).click();
       await expect.poll(() => document.body.textContent).toContain("Add Action");
 

@@ -62,6 +62,7 @@ import { closeDockTerminalPane } from "~/hooks/useTerminalSurfaceController";
 import { useThreadRecap } from "~/hooks/useThreadRecap";
 import { SINGLE_CHAT_PANE_SCOPE_ID } from "~/lib/chatPaneScope";
 import { formatComposerMentionToken } from "~/lib/composerMentions";
+import { hasActiveComposerSend } from "~/lib/composerSendOwnership";
 import {
   GIT_WORKING_TREE_DIFF_LIVE_REFETCH_INTERVAL_MS,
   gitBranchesQueryOptions,
@@ -5512,9 +5513,23 @@ export default function ChatView({
   const onNewThreadFromHeader = useStableCallback(() => {
     const targetProjectId = activeProject?.id ?? activeThread?.projectId ?? null;
     if (!targetProjectId) return;
+    // The shared New thread path reopens a pending draft before creating a chat. Keep
+    // that draft's workspace instead of retargeting its unsent text to the viewed chat.
+    const pendingProjectDraft = useComposerDraftStore
+      .getState()
+      .getDraftThreadByProjectId(targetProjectId);
     void handleNewThread(
       targetProjectId,
-      resolveInheritedThreadContext({ activeThread, activeDraftThread: draftThread }),
+      resolveInheritedThreadContext({
+        activeThread,
+        activeDraftThread:
+          draftThread ??
+          (pendingProjectDraft &&
+          pendingProjectDraft.isTemporary !== true &&
+          !hasActiveComposerSend(pendingProjectDraft.threadId)
+            ? pendingProjectDraft
+            : null),
+      }),
     );
   });
   const dismissActiveThreadError = useCallback(() => {

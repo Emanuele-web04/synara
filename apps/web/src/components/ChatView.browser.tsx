@@ -117,7 +117,7 @@ import { useWorkspacePathsStore } from "../workspacePathsStore";
 import { getWorkspaceEditorSession } from "../lib/workspaceEditorSession";
 import { resetWsNativeApiForTest } from "../wsNativeApi";
 import { trackWsTurnSettlement } from "../wsTransportEvents";
-import { hasActiveComposerSend } from "../lib/composerSendOwnership";
+import { hasActiveComposerSend, runComposerSendOnce } from "../lib/composerSendOwnership";
 import { useProjectAgentSummariesStore } from "./chat/project/useProjectAgentSummaries";
 import { useThreadDispatchStore } from "./chat/useChatLocalDispatch";
 import { hasUnseenSnoozeReturn } from "./Sidebar.logic";
@@ -12462,6 +12462,84 @@ describe("ChatView transcript geometry (full app)", () => {
       ).toBe(false);
     } finally {
       restoreNativeApi();
+      await mounted.cleanup();
+    }
+  });
+
+  it.each([
+    "stored project draft",
+    "active project",
+    "temporary project draft",
+    "sending project draft",
+  ] as const)("respects the %s when the thread-strip + opens a chat", async (workspaceSource) => {
+    const activeWorkspace = "/repo/worktrees/header-active";
+    const draftWorkspace = "/repo/worktrees/header-draft";
+    const snapshot = createSnapshotForTargetUser({
+      targetMessageId: MessageId.makeUnsafe("header-new-thread-workspace"),
+      targetText: "Saved chat in the active workspace",
+    });
+    const mounted = await mountChatView({
+      viewport: { ...DEFAULT_VIEWPORT, width: 1_800 },
+      snapshot: {
+        ...snapshot,
+        threads: snapshot.threads.map((thread) => ({
+          ...thread,
+          branch: "feature/active",
+          worktreePath: activeWorkspace,
+          envMode: "worktree",
+        })),
+      },
+    });
+    let releaseSend: (() => void) | undefined;
+    let pendingSend: Promise<boolean> | undefined;
+    try {
+      const reusesDraft = workspaceSource === "stored project draft";
+      if (workspaceSource !== "active project") {
+        useComposerDraftStore.getState().setProjectDraftThreadId(PROJECT_ID, OTHER_THREAD_ID, {
+          branch: "feature/draft",
+          worktreePath: draftWorkspace,
+          envMode: "worktree",
+          isTemporary: workspaceSource === "temporary project draft",
+        });
+        useComposerDraftStore.getState().setPrompt(OTHER_THREAD_ID, "Keep this unsent work");
+        if (workspaceSource === "sending project draft") {
+          pendingSend = runComposerSendOnce(
+            OTHER_THREAD_ID,
+            () =>
+              new Promise<boolean>((resolve) => {
+                releaseSend = () => resolve(true);
+              }),
+          );
+        }
+      }
+
+      await page.getByRole("button", { name: "New thread in this workspace" }).click();
+      await waitForURL(
+        mounted.router,
+        (path) => path !== `/${THREAD_ID}`,
+        "The thread-strip + should open the project draft.",
+      );
+      const targetId = ThreadId.makeUnsafe(mounted.router.state.location.pathname.slice(1));
+      if (reusesDraft) expect(targetId).toBe(OTHER_THREAD_ID);
+      else expect(targetId).not.toBe(OTHER_THREAD_ID);
+      const draft = useComposerDraftStore.getState().getDraftThread(targetId);
+      expect(draft).toMatchObject({
+        projectId: PROJECT_ID,
+        branch: reusesDraft ? "feature/draft" : "feature/active",
+        worktreePath: reusesDraft ? draftWorkspace : activeWorkspace,
+        envMode: "worktree",
+      });
+      if (reusesDraft) {
+        expect(useComposerDraftStore.getState().draftsByThreadId[targetId]?.prompt).toBe(
+          "Keep this unsent work",
+        );
+        await expect
+          .poll(async () => (await waitForComposerEditor()).textContent)
+          .toContain("Keep this unsent work");
+      }
+    } finally {
+      releaseSend?.();
+      await pendingSend;
       await mounted.cleanup();
     }
   });

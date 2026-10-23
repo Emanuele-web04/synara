@@ -20,7 +20,7 @@ import {
   ENVIRONMENT_ROW_ICON_CLASS_NAME,
   EnvironmentRow,
   EnvironmentSectionDivider,
-  EnvironmentSectionLabel,
+  EnvironmentCollapsibleSection,
 } from "./EnvironmentRow";
 
 export interface EnvironmentActionsSectionProps {
@@ -70,9 +70,9 @@ export function EnvironmentActionsSection({
   return (
     <>
       <EnvironmentSectionDivider />
-      <div className="flex flex-col gap-0.5">
-        <div className="flex items-center justify-between gap-2 pr-2">
-          <EnvironmentSectionLabel>Actions</EnvironmentSectionLabel>
+      {/* Keep action management out of the panel until explicitly expanded. */}
+      <EnvironmentCollapsibleSection label="Actions" defaultOpen={false}>
+        <div className="flex justify-end pr-2">
           <IconButton label="Add action" tooltip="Add action" onClick={openAddDialog}>
             <PlusIcon className="size-3.5" />
           </IconButton>
@@ -112,7 +112,7 @@ export function EnvironmentActionsSection({
             </div>
           ))
         )}
-      </div>
+      </EnvironmentCollapsibleSection>
 
       <ProjectActionDialog
         open={dialogOpen}
