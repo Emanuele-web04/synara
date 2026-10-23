@@ -188,6 +188,15 @@ describe("real TypeScript project intelligence", () => {
     expect(request("folding", { offset: 0 }).folding?.length).toBeGreaterThan(0);
   });
 
+  it("bounds inlay hints for a large supported document", () => {
+    const code =
+      "function retain(value: number): number { return value; }\n" +
+      Array.from({ length: 2_001 }, (_, index) => `retain(${index});`).join("\n");
+    documents = [{ relativePath: "main.ts", contents: code, version: 2 }];
+
+    expect(request("inlayHints", { offset: 0 }).hints).toHaveLength(2_000);
+  });
+
   it("honors the nearest package tsconfig in a monorepo", async () => {
     await writeFile(
       path.join(root, "tsconfig.json"),

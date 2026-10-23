@@ -591,6 +591,7 @@ export function createTypeScriptService(workspaceRoot: string) {
                 span.length ? span : { start: 0, length: document.contents.length },
                 preferences,
               )
+              .slice(0, MAX_RESULT_ITEMS)
               .map((hint) => ({
                 offset: hint.position,
                 text: hint.text,
