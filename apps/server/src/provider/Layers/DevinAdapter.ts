@@ -2410,6 +2410,7 @@ export function makeDevinAdapter(
               toolUseId: task.toolCallId,
             },
           });
+          if ("agentId" in task) yield* emitDevinSubagentItemUpdate(ctx, task);
         }
       });
 

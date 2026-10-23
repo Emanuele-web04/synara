@@ -3948,6 +3948,19 @@ it("restores native replay ownership and launch policy through the actual ACP su
           },
         ],
       });
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          type: "item.updated",
+          turnId: "launch-turn",
+          payload: expect.objectContaining({
+            itemType: "collab_agent_tool_call",
+            data: expect.objectContaining({
+              receiverThreadIds: ["live-child"],
+              agentsStates: { "live-child": { status: "running" } },
+            }),
+          }),
+        }),
+      );
       for (const agentId of ["live-child", "stopped-child", "completed-child", "root"]) {
         const before = events.length;
         yield* adapter.sendTurn({
