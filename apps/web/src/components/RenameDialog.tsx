@@ -3,7 +3,7 @@
 // Layer: Shared UI component
 // Exports: RenameDialog
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Button } from "./ui/button";
 import {
   Dialog,
@@ -29,6 +29,8 @@ export interface RenameDialogProps {
   inputType?: "text" | "datetime-local" | undefined;
   /** Extra gate on Save beyond the empty check, e.g. a date in the future. */
   isValueValid?: ((value: string) => boolean) | undefined;
+  /** Extra controls rendered between the input and the footer actions. */
+  belowField?: ReactNode | undefined;
   onOpenChange: (open: boolean) => void;
   onSave: (next: string) => Promise<void> | void;
 }
@@ -48,6 +50,7 @@ export function RenameDialog({
   saveLabel: saveLabelProp,
   inputType,
   isValueValid,
+  belowField,
   onOpenChange,
   onSave,
 }: RenameDialogProps) {
@@ -71,6 +74,7 @@ export function RenameDialog({
           saveLabel={saveLabel}
           inputType={inputType ?? "text"}
           isValueValid={isValueValid}
+          belowField={belowField}
           onOpenChange={onOpenChange}
           onSave={onSave}
         />
@@ -87,6 +91,7 @@ function RenameDialogForm({
   saveLabel,
   inputType,
   isValueValid,
+  belowField,
   onOpenChange,
   onSave,
 }: {
@@ -97,6 +102,7 @@ function RenameDialogForm({
   saveLabel: string;
   inputType: "text" | "datetime-local";
   isValueValid: ((value: string) => boolean) | undefined;
+  belowField: ReactNode | undefined;
   onOpenChange: (open: boolean) => void;
   onSave: (value: string) => Promise<void> | void;
 }) {
@@ -156,6 +162,7 @@ function RenameDialogForm({
           />
         </form>
       </DialogPanel>
+      {belowField ? <div className="px-6 pb-1">{belowField}</div> : null}
       <DialogFooter>
         <Button variant="outline" size="sm" onClick={() => onOpenChange(false)} disabled={isSaving}>
           Cancel
