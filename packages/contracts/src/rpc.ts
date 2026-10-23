@@ -1,4 +1,18 @@
 import {
+  ServerDesktopUpdateInput,
+  ServerDesktopUpdateResult,
+  ServerDesktopUpdateStatus,
+} from "./desktopUpdate";
+import {
+  AccountSaveInboxRecapInput,
+  SavedInboxRecap,
+  ListSavedInboxRecapsInput,
+  ListSavedInboxRecapsResponse,
+  SavedInboxRecapIdInput,
+} from "./inboxRecaps";
+import { RemoteAgentCall, RemoteAgentResult } from "./remoteAgentGateway";
+import { RemoteAccessInput, RemoteAccessResult } from "./remotePairing";
+import {
   EditorDebugStartInput,
   EditorDebugStartResult,
   EditorDebugActionInput,
@@ -11,6 +25,23 @@ import { EditorIntelligenceInput, EditorIntelligenceResult } from "./editorIntel
 import * as Rpc from "effect/unstable/rpc/Rpc";
 import * as RpcGroup from "effect/unstable/rpc/RpcGroup";
 
+import {
+  AccountHost,
+  AccountDeleteInput,
+  AccountAuthenticateOtpInput,
+  AccountBeginSsoInput,
+  AccountBeginSsoResult,
+  AccountCompleteSsoInput,
+  AccountMe,
+  AccountOpenVerificationUrlInput,
+  AccountSendOtpInput,
+  AccountSendOtpResult,
+  AccountStatus,
+  AccountUpdateProfileInput,
+  AccountUploadAvatarInput,
+} from "./account";
+import { GrantResponse, ListDevicesResponse } from "./hostAuth";
+import { AccountUsageSummaryInput, UsageSummary } from "./accountUsage";
 import {
   AutomationCancelRunInput,
   AutomationCancelRunResult,
@@ -268,7 +299,11 @@ import {
   OrchestrationShellStreamItem,
   OrchestrationThreadStreamItem,
 } from "./orchestration";
-import { ProviderCompactThreadInput } from "./provider";
+import {
+  ProviderCompactThreadInput,
+  ProviderPrewarmThreadInput,
+  ProviderPrewarmThreadResult,
+} from "./provider";
 import {
   ProviderGetComposerCapabilitiesInput,
   ProviderComposerCapabilities,
@@ -378,7 +413,27 @@ import {
   StatsGetRecapInput,
   StatsGetRecapResult,
 } from "./stats";
-import { WS_METHODS } from "./ws";
+import {
+  HostsEnrollmentResult,
+  HostsHostInput,
+  HostsRevokeDeviceInput,
+  HostsUpdateInput,
+  WS_METHODS,
+} from "./ws";
+import { LinkDeviceApproveRequest } from "./hostAuth";
+import { EndHostSessionInput, ListHostSessionsResponse } from "./hostSessions";
+import {
+  HostConnection,
+  HostsConnectInput,
+  HostsDisconnectInput,
+  ListHostConnectionsResponse,
+} from "./hostConnection";
+import {
+  ConfirmSyncKeyPairingRequest,
+  SyncKeyPairingCode,
+  SyncKeyPairingRequest,
+} from "./hostSecrets";
+import { ListHostsResponse } from "./account";
 import {
   WS_BOOTSTRAP_METHOD,
   WsBootstrapNegotiateInput,
@@ -395,6 +450,8 @@ export class WsRpcError extends Schema.TaggedErrorClass<WsRpcError>()("WsRpcErro
   code: Schema.optional(Schema.String),
   retryable: Schema.optional(Schema.Boolean),
   retryAfterMs: Schema.optional(Schema.Number),
+  /** Present only for the capped Sync-Key verification flow. */
+  remainingAttempts: Schema.optional(Schema.Number),
 }) {}
 
 export const WsBootstrapNegotiateRpc = Rpc.make(WS_BOOTSTRAP_METHOD, {
@@ -1384,6 +1441,18 @@ export const WsServerGetEnvironmentRpc = Rpc.make(WS_METHODS.serverGetEnvironmen
   error: WsRpcError,
 });
 
+export const WsServerDesktopUpdateStatusRpc = Rpc.make(WS_METHODS.serverDesktopUpdateStatus, {
+  payload: Schema.Struct({}),
+  success: ServerDesktopUpdateStatus,
+  error: WsRpcError,
+});
+
+export const WsServerDesktopUpdateRpc = Rpc.make(WS_METHODS.serverDesktopUpdate, {
+  payload: ServerDesktopUpdateInput,
+  success: ServerDesktopUpdateResult,
+  error: WsRpcError,
+});
+
 export const WsServerGetSettingsRpc = Rpc.make(WS_METHODS.serverGetSettings, {
   payload: Schema.Struct({}),
   success: ServerGetSettingsResult,
@@ -1632,6 +1701,12 @@ export const WsProviderCompactThreadRpc = Rpc.make(WS_METHODS.providerCompactThr
   error: WsRpcError,
 });
 
+export const WsProviderPrewarmThreadRpc = Rpc.make(WS_METHODS.providerPrewarmThread, {
+  payload: ProviderPrewarmThreadInput,
+  success: ProviderPrewarmThreadResult,
+  error: WsRpcError,
+});
+
 export const WsProviderListCommandsRpc = Rpc.make(WS_METHODS.providerListCommands, {
   payload: ProviderListCommandsInput,
   success: ProviderListCommandsResult,
@@ -1671,6 +1746,234 @@ export const WsProviderListModelsRpc = Rpc.make(WS_METHODS.providerListModels, {
 export const WsProviderListAgentsRpc = Rpc.make(WS_METHODS.providerListAgents, {
   payload: ProviderListAgentsInput,
   success: ProviderListAgentsResult,
+  error: WsRpcError,
+});
+
+export const WsAccountStatusRpc = Rpc.make(WS_METHODS.accountStatus, {
+  payload: Schema.Struct({}),
+  success: AccountStatus,
+  error: WsRpcError,
+});
+
+/**
+ * Asks WorkOS to email the caller a 6-digit sign-in code. Deliberately
+ * answers the same shape whether or not the address has an account.
+ */
+export const WsAccountSendOtpRpc = Rpc.make(WS_METHODS.accountSendOtp, {
+  payload: AccountSendOtpInput,
+  success: AccountSendOtpResult,
+  error: WsRpcError,
+});
+
+/**
+ * In-app OTP sign-in — redeems the emailed 6-digit code. The payload is a
+ * credential, so it must never be logged by transport-level request tracing;
+ * see the note on {@link OtpAuthenticateRequest}.
+ */
+export const WsAccountAuthenticateOtpRpc = Rpc.make(WS_METHODS.accountAuthenticateOtp, {
+  payload: AccountAuthenticateOtpInput,
+  success: AccountStatus,
+  error: WsRpcError,
+});
+
+/**
+ * In-app email verification — redeems the emailed 6-digit code plus the
+ * pending token from an `email_verification_required` refusal. The payload is
+ * a bearer-ish secret pair, so it takes the same no-logging rule as the OTP
+ * RPC above.
+ */
+export const WsAccountBeginSsoRpc = Rpc.make(WS_METHODS.accountBeginSso, {
+  payload: AccountBeginSsoInput,
+  success: AccountBeginSsoResult,
+  error: WsRpcError,
+});
+
+/**
+ * Long-running by design: the server waits on the loopback browser callback
+ * for as long as the attempt lives. Clients must not impose their usual RPC
+ * timeout on it.
+ */
+export const WsAccountCompleteSsoRpc = Rpc.make(WS_METHODS.accountCompleteSso, {
+  payload: AccountCompleteSsoInput,
+  success: AccountStatus,
+  error: WsRpcError,
+});
+
+export const WsAccountCancelSsoRpc = Rpc.make(WS_METHODS.accountCancelSso, {
+  payload: AccountCompleteSsoInput,
+  success: Schema.Void,
+  error: WsRpcError,
+});
+
+export const WsAccountUsageSummaryRpc = Rpc.make(WS_METHODS.accountUsageSummary, {
+  payload: AccountUsageSummaryInput,
+  success: UsageSummary,
+  error: WsRpcError,
+});
+
+export const WsAccountSaveInboxRecapRpc = Rpc.make(WS_METHODS.accountSaveInboxRecap, {
+  payload: AccountSaveInboxRecapInput,
+  success: SavedInboxRecap,
+  error: WsRpcError,
+});
+export const WsAccountListInboxRecapsRpc = Rpc.make(WS_METHODS.accountListInboxRecaps, {
+  payload: ListSavedInboxRecapsInput,
+  success: ListSavedInboxRecapsResponse,
+  error: WsRpcError,
+});
+export const WsAccountDeleteInboxRecapRpc = Rpc.make(WS_METHODS.accountDeleteInboxRecap, {
+  payload: SavedInboxRecapIdInput,
+  success: Schema.Void,
+  error: WsRpcError,
+});
+
+export const WsAccountUpdateProfileRpc = Rpc.make(WS_METHODS.accountUpdateProfile, {
+  payload: AccountUpdateProfileInput,
+  success: AccountMe,
+  error: WsRpcError,
+});
+
+export const WsAccountUploadAvatarRpc = Rpc.make(WS_METHODS.accountUploadAvatar, {
+  payload: AccountUploadAvatarInput,
+  success: AccountMe,
+  error: WsRpcError,
+});
+
+export const WsAccountDeleteAvatarRpc = Rpc.make(WS_METHODS.accountDeleteAvatar, {
+  payload: Schema.Struct({}),
+  success: AccountMe,
+  error: WsRpcError,
+});
+
+export const WsAccountDeleteRpc = Rpc.make(WS_METHODS.accountDelete, {
+  payload: AccountDeleteInput,
+  success: Schema.Void,
+  error: WsRpcError,
+});
+
+export const WsAccountSignOutRpc = Rpc.make(WS_METHODS.accountSignOut, {
+  payload: Schema.Struct({}),
+  success: Schema.Void,
+  error: WsRpcError,
+});
+
+export const WsAccountOpenVerificationUrlRpc = Rpc.make(WS_METHODS.accountOpenVerificationUrl, {
+  payload: AccountOpenVerificationUrlInput,
+  success: Schema.Void,
+  error: WsRpcError,
+});
+
+export const WsHostsListRpc = Rpc.make(WS_METHODS.hostsList, {
+  payload: Schema.Struct({}),
+  success: ListHostsResponse,
+  error: WsRpcError,
+});
+
+export const WsHostsUpdateRpc = Rpc.make(WS_METHODS.hostsUpdate, {
+  payload: HostsUpdateInput,
+  success: AccountHost,
+  error: WsRpcError,
+});
+
+export const WsHostsDeleteRpc = Rpc.make(WS_METHODS.hostsDelete, {
+  payload: HostsHostInput,
+  success: Schema.Void,
+  error: WsRpcError,
+});
+
+export const WsHostsListDevicesRpc = Rpc.make(WS_METHODS.hostsListDevices, {
+  payload: Schema.Struct({}),
+  success: ListDevicesResponse,
+  error: WsRpcError,
+});
+
+export const WsHostsRevokeDeviceRpc = Rpc.make(WS_METHODS.hostsRevokeDevice, {
+  payload: HostsRevokeDeviceInput,
+  success: Schema.Void,
+  error: WsRpcError,
+});
+
+export const WsHostsApproveDeviceLinkRpc = Rpc.make(WS_METHODS.hostsApproveDeviceLink, {
+  payload: LinkDeviceApproveRequest,
+  success: Schema.Void,
+  error: WsRpcError,
+});
+
+export const WsHostsRequestGrantRpc = Rpc.make(WS_METHODS.hostsRequestGrant, {
+  payload: HostsHostInput,
+  success: GrantResponse,
+  error: WsRpcError,
+});
+
+export const WsHostsEnrollmentRpc = Rpc.make(WS_METHODS.hostsEnrollment, {
+  payload: Schema.Struct({}),
+  success: HostsEnrollmentResult,
+  error: WsRpcError,
+});
+
+export const WsHostsUnlinkLocalHostRpc = Rpc.make(WS_METHODS.hostsUnlinkLocalHost, {
+  payload: Schema.Struct({}),
+  success: Schema.Void,
+  error: WsRpcError,
+});
+
+export const WsHostsListSessionsRpc = Rpc.make(WS_METHODS.hostsListSessions, {
+  payload: Schema.Struct({}),
+  success: ListHostSessionsResponse,
+  error: WsRpcError,
+});
+
+export const WsHostsEndSessionRpc = Rpc.make(WS_METHODS.hostsEndSession, {
+  payload: EndHostSessionInput,
+  success: Schema.Void,
+  error: WsRpcError,
+});
+
+export const WsHostsBeginSyncKeyPairingRpc = Rpc.make(WS_METHODS.hostsBeginSyncKeyPairing, {
+  payload: Schema.Struct({}),
+  success: SyncKeyPairingRequest,
+  error: WsRpcError,
+});
+
+export const WsHostsOfferSyncKeyRpc = Rpc.make(WS_METHODS.hostsOfferSyncKey, {
+  payload: SyncKeyPairingRequest,
+  success: SyncKeyPairingCode,
+  error: WsRpcError,
+});
+
+export const WsHostsReceiveSyncKeyRpc = Rpc.make(WS_METHODS.hostsReceiveSyncKey, {
+  payload: Schema.Struct({}),
+  success: SyncKeyPairingCode,
+  error: WsRpcError,
+});
+
+export const WsHostsConfirmSyncKeyRpc = Rpc.make(WS_METHODS.hostsConfirmSyncKey, {
+  payload: ConfirmSyncKeyPairingRequest,
+  success: Schema.Void,
+  error: WsRpcError,
+});
+
+export const WsHostsRemoteAccessRpc = Rpc.make(WS_METHODS.hostsRemoteAccess, {
+  payload: RemoteAccessInput,
+  success: RemoteAccessResult,
+  error: WsRpcError,
+});
+
+export const WsHostsConnectRpc = Rpc.make(WS_METHODS.hostsConnect, {
+  payload: HostsConnectInput,
+  success: HostConnection,
+  error: WsRpcError,
+});
+
+export const WsHostsDisconnectRpc = Rpc.make(WS_METHODS.hostsDisconnect, {
+  payload: HostsDisconnectInput,
+  success: Schema.Void,
+  error: WsRpcError,
+});
+
+export const WsHostsListConnectionsRpc = Rpc.make(WS_METHODS.hostsListConnections, {
+  payload: Schema.Struct({}),
+  success: ListHostConnectionsResponse,
   error: WsRpcError,
 });
 
@@ -1972,7 +2275,211 @@ export const WsSubscribeProjectAgentEventsRpc = Rpc.make(WS_METHODS.subscribePro
 
 export const WsBootstrapRpcGroup = RpcGroup.make(WsBootstrapNegotiateRpc);
 
-export const WsFeatureRpcGroup = RpcGroup.make(
+export const WsAgentGatewayCallRpc = Rpc.make(WS_METHODS.agentGatewayCall, {
+  payload: RemoteAgentCall,
+  success: RemoteAgentResult,
+  error: WsRpcError,
+});
+
+// Keep declaration emission bounded by referencing each RPC instead of expanding every schema.
+export type WsFeatureRpc =
+  | typeof WsAgentGatewayCallRpc
+  | typeof WsOrchestrationDispatchCommandRpc
+  | typeof WsOrchestrationSettleTurnDispatchRpc
+  | typeof WsOrchestrationImportThreadRpc
+  | typeof WsListProjectImportsRpc
+  | typeof WsImportProjectRpc
+  | typeof WsLoadProjectImportHistoryRpc
+  | typeof WsOrchestrationRegenerateThreadTitleRpc
+  | typeof WsOrchestrationGetSnapshotRpc
+  | typeof WsOrchestrationGetShellSnapshotRpc
+  | typeof WsOrchestrationGetThreadDetailSnapshotRpc
+  | typeof WsOrchestrationSearchThreadsRpc
+  | typeof WsOrchestrationRepairStateRpc
+  | typeof WsOrchestrationGetTurnDiffRpc
+  | typeof WsOrchestrationGetInlineVisualRpc
+  | typeof WsOrchestrationGetFullThreadDiffRpc
+  | typeof WsOrchestrationReplayEventsRpc
+  | typeof WsOrchestrationListProviderDeliveryBlockersRpc
+  | typeof WsOrchestrationReconcileProviderDeliveryRpc
+  | typeof WsOrchestrationPrepareQuitResumeRpc
+  | typeof WsOrchestrationSubscribeShellRpc
+  | typeof WsOrchestrationUnsubscribeShellRpc
+  | typeof WsOrchestrationSubscribeThreadRpc
+  | typeof WsOrchestrationUnsubscribeThreadRpc
+  | typeof WsOrchestrationSubscribeDomainEventsRpc
+  | typeof WsProjectsDiscoverScriptsRpc
+  | typeof WsProjectsListDirectoriesRpc
+  | typeof WsProjectsSearchEntriesRpc
+  | typeof WsProjectsSearchLocalEntriesRpc
+  | typeof WsProjectsSearchContentRpc
+  | typeof WsProjectsPrewarmSearchIndexRpc
+  | typeof WsEditorIntelligenceRpc
+  | typeof WsEditorDebugStartRpc
+  | typeof WsEditorDebugActionRpc
+  | typeof WsEditorDebugPollRpc
+  | typeof WsProjectsReadFileRpc
+  | typeof WsProjectsSubscribeFileChangeRpc
+  | typeof WsProjectsResolveWorkspaceFileReferencesRpc
+  | typeof WsProjectsResolveOutOfRootFileReferenceRpc
+  | typeof WsProjectsCreateLocalFilePreviewGrantRpc
+  | typeof WsProjectsWriteFileRpc
+  | typeof WsProjectsRunDevServerRpc
+  | typeof WsProjectsStopDevServerRpc
+  | typeof WsProjectsListDevServersRpc
+  | typeof WsSubscribeProjectDevServerEventsRpc
+  | typeof WsProjectsProvisionFromGitHubRpc
+  | typeof WsStudioListThreadOutputsRpc
+  | typeof WsFilesystemBrowseRpc
+  | typeof WsShellOpenInEditorRpc
+  | typeof WsGitGithubRepositoryRpc
+  | typeof WsGitStatusRpc
+  | typeof WsGitReadWorkingTreeDiffRpc
+  | typeof WsGitBlameLineRpc
+  | typeof WsGitReadFileAtRevRpc
+  | typeof WsGitWorkingTreeDiffStatsRpc
+  | typeof WsGitSummarizeDiffRpc
+  | typeof WsGitPullRpc
+  | typeof WsGitRunStackedActionRpc
+  | typeof WsGitResolvePullRequestRpc
+  | typeof WsGitPullRequestSnapshotRpc
+  | typeof WsGitPreparePullRequestThreadRpc
+  | typeof WsGitHubInboxListRpc
+  | typeof WsGitHubInboxIssueDetailRpc
+  | typeof WsGitHubInboxIssueCommentRpc
+  | typeof WsPullRequestsDetailRpc
+  | typeof WsPullRequestsDiffRpc
+  | typeof WsPullRequestsActionRpc
+  | typeof WsPullRequestsCommentRpc
+  | typeof WsPullRequestsSetPinnedRpc
+  | typeof WsPullRequestsGetAutoFixRpc
+  | typeof WsPullRequestsSetAutoFixRpc
+  | typeof WsGitListBranchesRpc
+  | typeof WsGitListRecentCommitsRpc
+  | typeof WsGitCreateWorktreeRpc
+  | typeof WsGitCreateDetachedWorktreeRpc
+  | typeof WsGitRemoveWorktreeRpc
+  | typeof WsGitCreateBranchRpc
+  | typeof WsGitCheckoutRpc
+  | typeof WsGitStashAndCheckoutRpc
+  | typeof WsGitStashDropRpc
+  | typeof WsGitStashInfoRpc
+  | typeof WsGitRemoveIndexLockRpc
+  | typeof WsGitInitRpc
+  | typeof WsGitStageFilesRpc
+  | typeof WsGitUnstageFilesRpc
+  | typeof WsGitHandoffThreadRpc
+  | typeof WsTerminalOpenRpc
+  | typeof WsTerminalWriteRpc
+  | typeof WsTerminalAckOutputRpc
+  | typeof WsTerminalResizeRpc
+  | typeof WsTerminalClearRpc
+  | typeof WsTerminalRestartRpc
+  | typeof WsTerminalCloseRpc
+  | typeof WsSubscribeTerminalEventsRpc
+  | typeof WsServerGetRuntimeStatusRpc
+  | typeof WsServerGetConfigRpc
+  | typeof WsServerGetEnvironmentRpc
+  | typeof WsServerDesktopUpdateStatusRpc
+  | typeof WsServerDesktopUpdateRpc
+  | typeof WsServerGetSettingsRpc
+  | typeof WsServerUpdateSettingsRpc
+  | typeof WsServerRefreshProvidersRpc
+  | typeof WsServerUpdateProviderRpc
+  | typeof WsServerListExternalMcpIntegrationsRpc
+  | typeof WsServerCreateExternalMcpIntegrationRpc
+  | typeof WsServerRevokeExternalMcpIntegrationRpc
+  | typeof WsServerRefreshExternalMcpPairingRpc
+  | typeof WsServerListMcpConnectorsRpc
+  | typeof WsServerConnectMcpConnectorRpc
+  | typeof WsServerDisconnectMcpConnectorRpc
+  | typeof WsServerGetMcpConnectorSetupRpc
+  | typeof WsServerListWorktreesRpc
+  | typeof WsServerListLocalServersRpc
+  | typeof WsServerStopLocalServerRpc
+  | typeof WsServerGetProviderUsageSnapshotRpc
+  | typeof WsServerListProviderUsageRpc
+  | typeof WsServerConsumeCodexResetCreditRpc
+  | typeof WsStatsGetProfileStatsRpc
+  | typeof WsStatsGetProfileTokenStatsRpc
+  | typeof WsStatsGetRecapRpc
+  | typeof WsServerGetDiagnosticsRpc
+  | typeof WsServerReadThreadDiagnosticsRpc
+  | typeof WsServerPrewarmVoiceRpc
+  | typeof WsServerTranscribeVoiceRpc
+  | typeof WsServerGenerateThreadRecapRpc
+  | typeof WsServerGenerateAutomationIntentRpc
+  | typeof WsServerUpsertKeybindingRpc
+  | typeof WsServerEditKeybindingsRpc
+  | typeof WsSubscribeServerLifecycleRpc
+  | typeof WsSubscribeServerConfigRpc
+  | typeof WsSubscribeServerProviderStatusesRpc
+  | typeof WsSubscribeServerKeepAwakeRpc
+  | typeof WsSubscribeServerSettingsRpc
+  | typeof WsProviderGetComposerCapabilitiesRpc
+  | typeof WsProviderCompactThreadRpc
+  | typeof WsProviderPrewarmThreadRpc
+  | typeof WsProviderListCommandsRpc
+  | typeof WsProviderListSkillsRpc
+  | typeof WsProviderListSkillsCatalogRpc
+  | typeof WsProviderListPluginsRpc
+  | typeof WsProviderReadPluginRpc
+  | typeof WsProviderListModelsRpc
+  | typeof WsProviderListAgentsRpc
+  | typeof WsAccountStatusRpc
+  | typeof WsAccountSendOtpRpc
+  | typeof WsAccountAuthenticateOtpRpc
+  | typeof WsAccountBeginSsoRpc
+  | typeof WsAccountCompleteSsoRpc
+  | typeof WsAccountCancelSsoRpc
+  | typeof WsAccountUsageSummaryRpc
+  | typeof WsAccountSaveInboxRecapRpc
+  | typeof WsAccountListInboxRecapsRpc
+  | typeof WsAccountDeleteInboxRecapRpc
+  | typeof WsAccountUpdateProfileRpc
+  | typeof WsAccountUploadAvatarRpc
+  | typeof WsAccountDeleteAvatarRpc
+  | typeof WsAccountDeleteRpc
+  | typeof WsAccountSignOutRpc
+  | typeof WsAccountOpenVerificationUrlRpc
+  | typeof WsHostsListRpc
+  | typeof WsHostsUpdateRpc
+  | typeof WsHostsDeleteRpc
+  | typeof WsHostsListDevicesRpc
+  | typeof WsHostsRevokeDeviceRpc
+  | typeof WsHostsApproveDeviceLinkRpc
+  | typeof WsHostsRequestGrantRpc
+  | typeof WsHostsEnrollmentRpc
+  | typeof WsHostsUnlinkLocalHostRpc
+  | typeof WsHostsListSessionsRpc
+  | typeof WsHostsEndSessionRpc
+  | typeof WsHostsBeginSyncKeyPairingRpc
+  | typeof WsHostsOfferSyncKeyRpc
+  | typeof WsHostsReceiveSyncKeyRpc
+  | typeof WsHostsConfirmSyncKeyRpc
+  | typeof WsHostsRemoteAccessRpc
+  | typeof WsHostsConnectRpc
+  | typeof WsHostsDisconnectRpc
+  | typeof WsHostsListConnectionsRpc
+  | typeof WsAutomationListRpc
+  | typeof WsAutomationGetMemoryRpc
+  | typeof WsAutomationCreateRpc
+  | typeof WsAutomationUpdateRpc
+  | typeof WsAutomationDeleteRpc
+  | typeof WsAutomationRunNowRpc
+  | typeof WsAutomationCancelRunRpc
+  | typeof WsAutomationMarkRunReadRpc
+  | typeof WsAutomationArchiveRunRpc
+  | typeof WsAutomationResolveProposalRpc
+  | typeof WsSubscribeAutomationEventsRpc
+  | typeof WsTodoListRpc
+  | typeof WsTodoCreateRpc
+  | typeof WsTodoUpdateRpc
+  | typeof WsTodoDeleteRpc
+  | typeof WsSubscribeTodoEventsRpc;
+
+export const WsFeatureRpcGroup: RpcGroup.RpcGroup<WsFeatureRpc> = RpcGroup.make(
+  WsAgentGatewayCallRpc,
   WsOrchestrationDispatchCommandRpc,
   WsOrchestrationSettleTurnDispatchRpc,
   WsOrchestrationImportThreadRpc,
@@ -2069,6 +2576,8 @@ export const WsFeatureRpcGroup = RpcGroup.make(
   WsServerGetRuntimeStatusRpc,
   WsServerGetConfigRpc,
   WsServerGetEnvironmentRpc,
+  WsServerDesktopUpdateStatusRpc,
+  WsServerDesktopUpdateRpc,
   WsServerGetSettingsRpc,
   WsServerUpdateSettingsRpc,
   WsServerRefreshProvidersRpc,
@@ -2105,6 +2614,7 @@ export const WsFeatureRpcGroup = RpcGroup.make(
   WsSubscribeServerSettingsRpc,
   WsProviderGetComposerCapabilitiesRpc,
   WsProviderCompactThreadRpc,
+  WsProviderPrewarmThreadRpc,
   WsProviderListCommandsRpc,
   WsProviderListSkillsRpc,
   WsProviderListSkillsCatalogRpc,
@@ -2112,6 +2622,41 @@ export const WsFeatureRpcGroup = RpcGroup.make(
   WsProviderReadPluginRpc,
   WsProviderListModelsRpc,
   WsProviderListAgentsRpc,
+  WsAccountStatusRpc,
+  WsAccountSendOtpRpc,
+  WsAccountAuthenticateOtpRpc,
+  WsAccountBeginSsoRpc,
+  WsAccountCompleteSsoRpc,
+  WsAccountCancelSsoRpc,
+  WsAccountUsageSummaryRpc,
+  WsAccountSaveInboxRecapRpc,
+  WsAccountListInboxRecapsRpc,
+  WsAccountDeleteInboxRecapRpc,
+  WsAccountUpdateProfileRpc,
+  WsAccountUploadAvatarRpc,
+  WsAccountDeleteAvatarRpc,
+  WsAccountDeleteRpc,
+  WsAccountSignOutRpc,
+  WsAccountOpenVerificationUrlRpc,
+  WsHostsListRpc,
+  WsHostsUpdateRpc,
+  WsHostsDeleteRpc,
+  WsHostsListDevicesRpc,
+  WsHostsRevokeDeviceRpc,
+  WsHostsApproveDeviceLinkRpc,
+  WsHostsRequestGrantRpc,
+  WsHostsEnrollmentRpc,
+  WsHostsUnlinkLocalHostRpc,
+  WsHostsListSessionsRpc,
+  WsHostsEndSessionRpc,
+  WsHostsBeginSyncKeyPairingRpc,
+  WsHostsOfferSyncKeyRpc,
+  WsHostsReceiveSyncKeyRpc,
+  WsHostsConfirmSyncKeyRpc,
+  WsHostsRemoteAccessRpc,
+  WsHostsConnectRpc,
+  WsHostsDisconnectRpc,
+  WsHostsListConnectionsRpc,
   WsAutomationListRpc,
   WsAutomationGetMemoryRpc,
   WsAutomationCreateRpc,

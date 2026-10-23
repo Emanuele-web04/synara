@@ -305,7 +305,15 @@ async function reapDeadOwner(
   const guard = await acquireReaperGuard(dbPath, lockPath);
 
   try {
-    const currentOwner = await readOwner(lockPath);
+    let currentOwner: DatabaseLifecycleLockOwner;
+    try {
+      currentOwner = await readOwner(lockPath);
+    } catch (cause) {
+      // Another reaper may have retired this exact stale lock immediately
+      // before we acquired the guard. Restart acquisition against current state.
+      if (errnoCode(cause) === "ENOENT") return;
+      throw cause;
+    }
     if (
       currentOwner.token !== observedOwner.token ||
       ownerProcessState(currentOwner.pid) !== "dead"

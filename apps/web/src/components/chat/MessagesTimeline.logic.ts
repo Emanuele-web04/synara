@@ -1897,6 +1897,8 @@ function workLogSynaraThreadCreationsEqual(
     a.operationId !== b.operationId ||
     a.requestedCount !== b.requestedCount ||
     a.createdCount !== b.createdCount ||
+    a.environmentId !== b.environmentId ||
+    a.hostName !== b.hostName ||
     a.threads.length !== b.threads.length
   ) {
     return false;

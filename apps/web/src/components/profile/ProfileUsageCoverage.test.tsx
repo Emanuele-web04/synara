@@ -1,3 +1,4 @@
+import { selectDeviceShareCardStats } from "./profileSelectors";
 // FILE: ProfileUsageCoverage.test.tsx
 // Purpose: Verify missing telemetry stays visible in profile rankings and exported cards.
 // Layer: web profile feature tests.
@@ -15,7 +16,9 @@ vi.mock("~/lib/serverReactQuery", () => ({
   serverProfileStatsQueryOptions: () => ({ queryKey: ["core"] }),
   serverProfileTokenStatsQueryOptions: () => ({ queryKey: ["tokens"] }),
 }));
-vi.mock("@tanstack/react-query", () => ({
+vi.mock("~/hooks/useAccount", () => ({ useAccount: () => ({ me: null }) }));
+vi.mock("@tanstack/react-query", async (original) => ({
+  ...(await original<typeof import("@tanstack/react-query")>()),
   useQuery: (options: { queryKey: string[] }) => ({
     data: options.queryKey[0] === "core" ? baseStats : queryState.tokenStats,
     isPending: false,
@@ -28,8 +31,8 @@ vi.mock("./EditProfileDialog", () => ({ EditProfileDialog: () => null }));
 function renderCard() {
   return renderToStaticMarkup(
     <ShareCard
-      stats={baseStats}
-      tokenStats={queryState.tokenStats}
+      cardStats={selectDeviceShareCardStats(baseStats, queryState.tokenStats)}
+      initials="S"
       displayName="Synara"
       handle="@synara"
       avatarColor="#000000"

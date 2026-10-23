@@ -761,6 +761,56 @@ describe("BetaDiagnostics", () => {
     expect(readQueue(root).filter((event) => event.event === "usage.daily")).toHaveLength(1);
   });
 
+  it("relays the turn breakdown with categories only", () => {
+    const root = makeRoot();
+    const now = new Date("2026-10-17T12:00:00.000Z");
+    const diag = new BetaDiagnostics({
+      homeDir: root,
+      appVersion: "1.0.6-remote.17",
+      platform: "darwin",
+      arch: "arm64",
+      env: {},
+      now: () => now,
+      flavor: "remote",
+    });
+    const row = {
+      provider: "claudeAgent",
+      model: "claude-fable-5-1",
+      effort: "high",
+      interactionMode: "plan",
+      runtimeMode: "full-access",
+      origin: "user",
+      outcome: "succeeded",
+      turns: 2,
+      durationMs: 1000,
+      durationSamples: 2,
+      inputTokens: 10,
+      outputTokens: 5,
+      cachedInputTokens: 1,
+      tokenSamples: 2,
+    };
+    writeFileSync(
+      join(root, "diagnostics", "usage-snapshot.json"),
+      JSON.stringify({
+        v: 1,
+        generatedAt: new Date(now.getTime() - 60_000).toISOString(),
+        providers: [],
+        projects: 0,
+        activeThreads: 0,
+        turnBreakdown: [
+          row,
+          { ...row, model: "a model with spaces" },
+          { ...row, outcome: "running" },
+          { ...row, secret: "dropped" },
+        ],
+      }),
+    );
+    diag.maybeTrackDailyUsage();
+    const [event] = readQueue(root).filter((e) => e.event === "usage.daily");
+    expect(event.flavor).toBe("remote");
+    expect(event.payload.turnBreakdown).toEqual([row, row]);
+  });
+
   it("maybeTrackDailyUsage sends once per UTC day and records the day", () => {
     const root = makeRoot();
     const now = new Date("2026-09-24T12:00:00.000Z");
@@ -1024,4 +1074,111 @@ it("passes stall reports through the shared issue allowlist and redaction pipeli
   });
   expect(queued).not.toMatch(/private|person/);
   await diagnostics.dispose();
+});
+
+describe("Remote diagnostics", () => {
+  it("labels events as Remote and collects nothing while sharing is off", () => {
+    const root = makeRoot();
+    let sharing = true;
+    const diagnostics = new BetaDiagnostics({
+      homeDir: root,
+      appVersion: "1.0.6-remote.17",
+      platform: "linux",
+      arch: "x64",
+      flavor: "remote",
+      isEnabled: () => sharing,
+    });
+    const queuePath = join(root, "diagnostics", "events.jsonl");
+    diagnostics.track("app.start", { kind: "lifecycle" });
+    expect(JSON.parse(readFileSync(queuePath, "utf8").trim())).toMatchObject({
+      flavor: "remote",
+      event: "app.start",
+    });
+
+    sharing = false;
+    diagnostics.discardQueue();
+    expect(diagnostics.isCollecting()).toBe(false);
+    diagnostics.track("app.start", { kind: "lifecycle" });
+    diagnostics.trackError("main", new Error("boom"));
+    expect(existsSync(queuePath)).toBe(false);
+  });
+});
+
+describe("Remote keeps free text on the device", () => {
+  const remote = (root: string, isEnabled: () => boolean = () => true) =>
+    new BetaDiagnostics({
+      homeDir: root,
+      appVersion: "1.0.6-remote.17",
+      platform: "darwin",
+      arch: "arm64",
+      env: {},
+      flavor: "remote",
+      isEnabled,
+    });
+  const queued = (root: string) => {
+    const path = join(root, "diagnostics", "events.jsonl");
+    return existsSync(path)
+      ? readFileSync(path, "utf8")
+          .trim()
+          .split("\n")
+          .filter(Boolean)
+          .map((line) => JSON.parse(line))
+      : [];
+  };
+
+  it("sends an error's type and frames, never its message, and no crash log", () => {
+    const root = makeRoot();
+    const diagnostics = remote(root);
+    const error = new TypeError(
+      "Failed to read /Volumes/Work/AcmeSecret/strategy.txt: customer renewal draft\n    at customer renewal draft",
+    );
+    error.stack = `TypeError: ${error.message}\n    at readPlan (main.js:10:5)\n    at run (main.js:20:3)`;
+    diagnostics.trackError("main", error);
+    diagnostics.track("app.child-process-crash", {
+      kind: "crash",
+      processType: "backend",
+      reason: "crashed",
+      logTail: "customer renewal draft",
+    });
+    diagnostics.trackIssue("main", { code: "git.push.failed", reason: "timeout", durationMs: 120 });
+    diagnostics.trackError("main", "Handled issue: private-customer-secret (private_reason)");
+    const named = new Error("PrivateCustomer");
+    named.stack = "PrivateCustomerError: hidden\n    at PrivateCustomer (main.js:30:7)";
+    diagnostics.trackError("main", named);
+    const raw = readFileSync(join(root, "diagnostics", "events.jsonl"), "utf8");
+    expect(raw).not.toContain("AcmeSecret");
+    expect(raw).not.toContain("renewal");
+    expect(raw).not.toMatch(/private-customer|private_reason|PrivateCustomer/);
+    const [errorEvent, crashEvent, issueEvent] = queued(root);
+    expect(errorEvent.payload).toMatchObject({
+      message: "TypeError at main:10:5",
+      stack: "at main:10:5\nat main:20:3",
+    });
+    expect(crashEvent.payload.logTail).toBeUndefined();
+    expect(issueEvent.payload.message).toBe("Handled issue: git.push.failed (timeout)");
+  });
+
+  it("collects no context while sharing is off and skips snapshots reaching into that time", () => {
+    const root = makeRoot();
+    let sharing = false;
+    const diagnostics = remote(root, () => sharing);
+    diagnostics.recordActivity({ activity: "git.push", phase: "started" });
+    sharing = true;
+    diagnostics.resumeSharing();
+    writeFileSync(
+      join(root, "diagnostics", "usage-snapshot.json"),
+      JSON.stringify({
+        v: 1,
+        generatedAt: new Date().toISOString(),
+        providers: [],
+        projects: 0,
+        activeThreads: 0,
+      }),
+    );
+    diagnostics.maybeTrackDailyUsage();
+    diagnostics.trackError("main", new Error("boom"));
+    const events = queued(root);
+    expect(events.some((event) => event.event === "usage.daily")).toBe(false);
+    expect(JSON.stringify(events)).not.toContain("git.push");
+  });
 });

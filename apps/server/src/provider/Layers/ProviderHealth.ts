@@ -68,7 +68,7 @@ import {
   type ProviderChildKind,
 } from "../../providerChildEnvironment.ts";
 import { buildOpenCodeServerProcessEnv } from "../providerBinaryResolution.ts";
-import { ServerSettingsService } from "../../serverSettings";
+import { ServerSettingsService, withoutNewThreadDefaultsOnlyChanges } from "../../serverSettings";
 import { isWindowsShellCommandMissingResult } from "../../shell-command-detection";
 import {
   buildCursorAgentCommand,
@@ -3701,7 +3701,12 @@ export function makeProviderHealthLive(options?: { readonly providerUpdateTimeou
         });
       }
 
-      yield* serverSettings.streamChanges.pipe(
+      // New-chat defaults change with every composer pick and never affect
+      // providers, so they must not start CLI probes.
+      yield* withoutNewThreadDefaultsOnlyChanges(
+        serverSettings.streamChanges,
+        yield* serverSettings.getSettings.pipe(Effect.catch(() => Effect.succeed(null))),
+      ).pipe(
         Stream.runForEach((settings) =>
           Effect.gen(function* () {
             // Publish settings-only projection changes immediately from the

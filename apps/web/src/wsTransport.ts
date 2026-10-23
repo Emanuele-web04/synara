@@ -1,8 +1,14 @@
+import { readWorkspaceFrame } from "./lib/hosts/workspaceFrame";
 // FILE: wsTransport.ts
 // Purpose: Browser-side Effect RPC transport over the Synara WebSocket endpoint.
 // Layer: Web transport
 // Exports: WsTransport plus stream-selection helpers used by tests.
 
+import {
+  ProductTurnObserver,
+  productRpcActivity,
+  trackProductAnalytics,
+} from "./lib/productAnalytics";
 import { recordRendererActivity, rendererRpcActivity } from "./lib/rendererErrorDiagnostics";
 
 import {
@@ -83,8 +89,6 @@ import * as Socket from "effect/unstable/socket/Socket";
 
 import { APP_VERSION } from "./branding";
 import { isRequestOutcomeUnknown } from "./lib/requestOutcome";
-import { useDeviceStateStore } from "./deviceStateStore";
-import { useComputerStateStore } from "./computerStateStore";
 import {
   getUnaryRpcCapacityRetryDelayMs,
   MAX_UNARY_RPC_CAPACITY_RETRY_ATTEMPTS,
@@ -107,7 +111,6 @@ import {
 import {
   buildThreadSubscribeInput,
   clearThreadDetailResumeCursor,
-  resetThreadDetailResumeCursors,
 } from "./threadDetailResumeCursors";
 import { trackWsTurnSettlement, type WsTransportState } from "./wsTransportEvents";
 
@@ -349,13 +352,18 @@ function delayMs(ms: number, signal: AbortSignal | undefined): Promise<void> {
 
 function resolveRpcUrl(rawUrl: string, path: string): string {
   const url = new URL(rawUrl);
-  url.pathname = path;
+  // The endpoint is captured at construction. No mutable window selection is
+  // consulted here, so controller requests can never inherit a remote prefix.
+  const prefix = url.pathname.endsWith(WS_FEATURE_PATH)
+    ? url.pathname.slice(0, -WS_FEATURE_PATH.length)
+    : url.pathname.replace(/\/$/, "");
+  url.pathname = `${prefix}${path}`;
   return url.toString();
 }
 
-function rawSocketUrl(explicitUrl: string | null): string {
+export function rawSocketUrl(explicitUrl: string | null): string {
   if (explicitUrl) return explicitUrl;
-  const bridgeUrl = window.desktopBridge?.getWsUrl();
+  const bridgeUrl = readWorkspaceFrame()?.controllerWsUrl ?? window.desktopBridge?.getWsUrl();
   const envUrl = import.meta.env.VITE_WS_URL as string | undefined;
   return bridgeUrl && bridgeUrl.length > 0
     ? bridgeUrl
@@ -380,6 +388,8 @@ export function makeFeatureSocketUrl(
     String(compatibility.negotiatedRevision),
   );
   url.searchParams.set(WS_COMPATIBILITY_QUERY.serverInstanceId, compatibility.serverInstanceId);
+  if (compatibility.remoteAttachmentId)
+    url.searchParams.set("remoteAttachment", compatibility.remoteAttachmentId);
   return url.toString();
 }
 
@@ -416,7 +426,8 @@ export async function negotiateOverHttp(
   // never runs and the transport wedges; the legacy socket path got that
   // backstop for free from the browser's WS handshake timeout. The caller's
   // lifetime signal is composed in so disposal aborts the request too.
-  const deadline = AbortSignal.timeout(NEGOTIATE_HTTP_TIMEOUT_MS);
+  const remote = new URL(rawSocketUrl(explicitUrl)).pathname.startsWith("/ws/remote/");
+  const deadline = AbortSignal.timeout(remote ? 60_000 : NEGOTIATE_HTTP_TIMEOUT_MS);
   const signal = lifetimeSignal ? AbortSignal.any([lifetimeSignal, deadline]) : deadline;
   let response: Response;
   try {
@@ -973,6 +984,8 @@ export class WsTransport {
   // transport never sends a request the server would reject for capacity.
   private readonly unaryRequestQueue = new RpcRequestQueue<WsRequestClass>(WS_REQUEST_CLASS_LIMITS);
   private readonly explicitUrl: string | null;
+  private readonly productTurns = new ProductTurnObserver();
+  private readonly analyticsMode: "local" | "remote";
   private readonly listeners = new Map<string, Set<(message: WsPush) => void>>();
   private readonly stateListeners = new Set<(state: WsTransportState) => void>();
   private readonly compatibilityListeners = new Set<(issue: WsCompatibilityError | null) => void>();
@@ -1035,8 +1048,17 @@ export class WsTransport {
   private readonly recovery: RecoveryState = createInitialRecoveryState();
   private recoveryEscalationTimer: number | null = null;
 
-  constructor(url?: string, options?: { readonly protocolOpenTimeoutMs?: number }) {
-    this.explicitUrl = url ?? null;
+  constructor(
+    url?: string,
+    private readonly options: {
+      onGenerationChanged?: () => void;
+      readonly protocolOpenTimeoutMs?: number;
+    } = {},
+  ) {
+    this.explicitUrl = rawSocketUrl(url ?? null);
+    this.analyticsMode = new URL(this.explicitUrl).pathname.startsWith("/ws/remote/")
+      ? "remote"
+      : "local";
     this.protocolOpenTimeoutMs = options?.protocolOpenTimeoutMs;
     this.clientPromise = this.createSession().clientPromise;
     void this.clientPromise.catch((error) => {
@@ -1055,14 +1077,46 @@ export class WsTransport {
     options?: WsRequestOptions,
   ): Promise<T> {
     const activity = rendererRpcActivity(method, params);
-    if (!activity) return this.requestInternal<T>(method, params, options);
-    recordRendererActivity(activity, "started");
+    const productActivity = productRpcActivity(method, params);
+    const startedAt = performance.now();
+    if (activity) recordRendererActivity(activity, "started");
     try {
       const result = await this.requestInternal<T>(method, params, options);
-      recordRendererActivity(activity, "succeeded");
+      if (activity) recordRendererActivity(activity, "succeeded");
+      if (productActivity)
+        trackProductAnalytics({
+          ...productActivity,
+          outcome: "succeeded",
+          mode: this.analyticsMode,
+          ...(productActivity.event === "feature.used"
+            ? {}
+            : { durationMs: Math.round(performance.now() - startedAt) }),
+        });
       return result;
     } catch (error) {
-      recordRendererActivity(activity, "failed");
+      if (activity) recordRendererActivity(activity, "failed");
+      if (productActivity) {
+        const cancelled = options?.signal?.aborted === true;
+        trackProductAnalytics({
+          ...productActivity,
+          outcome: cancelled ? "cancelled" : "failed",
+          mode: this.analyticsMode,
+          ...(productActivity.event === "feature.used"
+            ? {}
+            : { durationMs: Math.round(performance.now() - startedAt) }),
+          ...(cancelled || productActivity.event === "feature.used"
+            ? {}
+            : {
+                // Timed out, dropped before the host answered, or refused by the host.
+                reason:
+                  error instanceof WsTransportRequestInterruptedError
+                    ? error.code === "WS_REQUEST_TIMEOUT"
+                      ? "timeout"
+                      : "unreachable"
+                    : "other",
+              }),
+        });
+      }
       throw error;
     }
   }
@@ -1527,6 +1581,8 @@ export class WsTransport {
   private async negotiateCompatibility(): Promise<WsBootstrapNegotiateResult> {
     const httpResult = await negotiateOverHttp(this.explicitUrl, this.lifetime.signal);
     if (httpResult) return httpResult;
+    if (new URL(this.explicitUrl!).pathname.startsWith("/ws/remote/"))
+      throw new Error("Remote host negotiation unavailable");
     // dispose() may have run while the request was in flight; it captured a
     // null runtime and returned, so building one here would strand it.
     if (this.disposed) {
@@ -1566,21 +1622,7 @@ export class WsTransport {
     if (serverIdentityChanged(this.lastServerInstanceId, compatibility.serverInstanceId)) {
       this.latestPushByChannel.clear();
       this.sequence = 0;
-      // A resume cursor is only valid against the journal that issued its
-      // sequences. A new server instance may serve a different journal (fresh
-      // install, restored backup), so every cursor must reset to force full
-      // snapshots. `lastServerInstanceId` survives failed reconnects, unlike
-      // `compatibility`, so an outage longer than the first retry still
-      // detects the change. Interim tradeoff: this also drops resume across
-      // plain restarts of the same journal, acceptable until the protocol
-      // carries a durable journal epoch.
-      resetThreadDetailResumeCursors();
-      // Device thread state is gated on a per-thread version that the server
-      // restarts at 0. A stale higher version would reject the new instance's
-      // snapshots as stragglers and leave the pane showing pre-restart devices
-      // and attachments forever, so the cache is dropped with the cursors.
-      useDeviceStateStore.getState().clear();
-      useComputerStateStore.getState().clear();
+      this.options.onGenerationChanged?.();
     }
     this.lastServerInstanceId = compatibility.serverInstanceId;
     this.setCompatibility(compatibility);
@@ -1609,9 +1651,11 @@ export class WsTransport {
 
   private createSession() {
     const sessionVersion = ++this.sessionVersion;
+    const analyticsEvent = sessionVersion === 1 ? "connection.connect" : "connection.reconnect";
+    const startedAt = performance.now();
     // Reconnects reuse the cached negotiation while the server generation is
     // unchanged, so a reconnect costs exactly one WebSocket handshake.
-    const cachedCompatibility = this.compatibility;
+    const cachedCompatibility = this.compatibility?.remoteAttachmentId ? null : this.compatibility;
     const featureSession: FeatureSession = { id: ++this.featureSessionCounter, failed: false };
     const clientPromise = (async () => {
       const compatibility = cachedCompatibility ?? (await this.negotiateCompatibility());
@@ -1651,12 +1695,25 @@ export class WsTransport {
         this.adoptNegotiation(compatibility);
         this.noteFeatureSessionAdopted();
         this.setState("open");
+        trackProductAnalytics({
+          event: analyticsEvent,
+          outcome: "succeeded",
+          mode: this.analyticsMode,
+          durationMs: Math.round(performance.now() - startedAt),
+        });
       }
       return client;
     })().catch((error) => {
       if (!this.disposed && this.sessionVersion === sessionVersion) {
-        this.setCompatibility(null);
         const compatibilityError = getTerminalCompatibilityError(error);
+        trackProductAnalytics({
+          event: analyticsEvent,
+          outcome: "failed",
+          mode: this.analyticsMode,
+          durationMs: Math.round(performance.now() - startedAt),
+          reason: compatibilityError ? "incompatible" : "unreachable",
+        });
+        this.setCompatibility(null);
         if (compatibilityError) {
           this.setCompatibilityIssue(compatibilityError);
           this.setState("incompatible");
@@ -2128,6 +2185,16 @@ export class WsTransport {
   }
 
   private emit<C extends WsPushChannel>(channel: C, data: WsPushMessage<C>["data"]): void {
+    try {
+      if (channel === ORCHESTRATION_WS_CHANNELS.domainEvent) {
+        this.productTurns.observe(data as OrchestrationEvent, this.analyticsMode);
+      } else if (channel === ORCHESTRATION_WS_CHANNELS.threadEvent) {
+        const item = data as OrchestrationThreadStreamItem;
+        if (item.kind === "event") this.productTurns.observe(item.event, this.analyticsMode);
+      }
+    } catch {
+      // Optional analytics must not interrupt delivery of a valid stream item.
+    }
     const message = {
       type: "push" as const,
       sequence: ++this.sequence,

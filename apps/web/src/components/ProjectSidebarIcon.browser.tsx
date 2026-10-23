@@ -10,9 +10,10 @@ const favicon = `data:image/svg+xml,${encodeURIComponent(
   '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16"><circle cx="8" cy="8" r="8" fill="red"/></svg>',
 )}`;
 
-vi.mock("~/lib/wsHttpUrl", () => ({
-  resolveWsHttpUrl: (path: string) =>
-    path.includes("missing") ? "data:image/png;base64,AAAA" : favicon,
+vi.mock("~/lib/wsHttpUrl", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("~/lib/wsHttpUrl")>()),
+  resolveExecutionResource: ({ cwd }: { cwd: string }) =>
+    cwd.includes("missing") ? "data:image/png;base64,AAAA" : favicon,
 }));
 
 afterEach(() => {

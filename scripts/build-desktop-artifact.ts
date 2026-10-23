@@ -30,6 +30,7 @@ import {
   MAC_WINDOW_MATERIAL_ADDON_STAGE_PATH,
   validateDesktopNativeBuildHost,
 } from "./lib/desktop-platform-build-config.ts";
+import { stageCloudflared } from "./lib/cloudflared.ts";
 import { stageDesktopRuntimeResources } from "./lib/desktop-runtime-resources.ts";
 import {
   SYNARA_PACKAGED_DESKTOP_FLAVORS,
@@ -328,6 +329,11 @@ export const resolveBuildOptions = Effect.fn("resolveBuildOptions")(function* (
     catch: (cause) => new BuildScriptError({ message: String(cause), cause }),
   });
   const arch = mergeOptions(input.arch, env.arch, getDefaultArch(platform));
+  if (flavor === "remote" && (platform === "mac" ? arch !== "arm64" : arch !== "x64")) {
+    return yield* new BuildScriptError({
+      message: "Synara Remote supports macOS ARM64 and Windows/Linux x64 artifacts.",
+    });
+  }
   const version = mergeOptions(input.buildVersion, env.version, undefined);
   const sourceCommit = mergeOptions(input.sourceCommit, env.sourceCommit, undefined);
   const sourceTag = mergeOptions(input.sourceTag, env.sourceTag, undefined);
@@ -1304,6 +1310,23 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
     );
   }
 
+  yield* timedBuildStage(
+    "cloudflared-provision",
+    Effect.tryPromise({
+      try: () =>
+        stageCloudflared(
+          path.join(stageResourcesDir, "cloudflared"),
+          options.platform,
+          options.arch,
+        ),
+      catch: (cause) =>
+        new BuildScriptError({
+          message: "Could not stage the verified Cloudflare connector.",
+          cause,
+        }),
+    }),
+  );
+
   yield* stageDesktopRuntimeResources(
     stageResourcesDir,
     path.join(stageAppDir, "apps/desktop/prod-resources"),
@@ -1515,7 +1538,7 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
 
 const buildDesktopArtifactCli = Command.make("build-desktop-artifact", {
   flavor: Flag.choice("flavor", BuildFlavor.literals).pipe(
-    Flag.withDescription("Packaged identity: production (default), canary, cua, or beta."),
+    Flag.withDescription("Packaged identity: production (default), canary, cua, beta, or remote."),
     Flag.optional,
   ),
   platform: Flag.choice("platform", BuildPlatform.literals).pipe(

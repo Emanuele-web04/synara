@@ -72,6 +72,7 @@ import {
 import {
   applyClaudePromptEffortPrefix,
   getClaudeContextWindowSuffix,
+  getDefaultEffort,
   getDefaultModel,
   getEffectiveClaudeCodeEffort,
   getModelCapabilities,
@@ -1100,8 +1101,8 @@ function readClaudeModelRefusalFallback(message: unknown): ClaudeModelRefusalFal
   };
 }
 
-// VCS state transitions (commit, checkout, rebase) stream as an untyped system
-// message; match structurally so SDK type drift stays inert.
+// Git and published-change notifications stream as untyped system messages;
+// match structurally so SDK type drift stays inert.
 interface ClaudeVcsStateChange {
   readonly kind?: string;
   readonly cwd?: string;
@@ -1117,7 +1118,15 @@ function readClaudeVcsStateChange(message: unknown): ClaudeVcsStateChange | unde
     kind?: unknown;
     cwd?: unknown;
   };
-  if (record.type !== "system" || record.subtype !== "vcs_state_changed") {
+  if (record.type !== "system") {
+    return undefined;
+  }
+  if (record.subtype === "code_change_published") {
+    // Claude's publication fields are scraped, unverified hints. Trigger the
+    // existing repo-scoped Git/forge lookup without trusting its URL or branch.
+    return { kind: "code_change_published" };
+  }
+  if (record.subtype !== "vcs_state_changed") {
     return undefined;
   }
   const kind = readNonEmptyString(record.kind);
@@ -1181,12 +1190,16 @@ function toPermissionMode(value: unknown): PermissionMode | undefined {
 function claudeModelCapabilities(model: ModelInfo): ModelCapabilities {
   const base = getModelCapabilities(PROVIDER, model.resolvedModel ?? model.value);
   const apiEfforts = model.supportsEffort === false ? [] : model.supportedEffortLevels;
+  // The CLI lists levels without its default. Keep the catalog default, which an unset
+  // effort resolves to, or menus show the first level while the default is dropped.
+  const defaultEffort = getDefaultEffort(base);
   const nativeEfforts: EffortOption[] | undefined = apiEfforts?.map((value) => ({
     value,
     label:
       base.reasoningEffortLevels.find((level) => level.value === value)?.label ??
       (value === "xhigh" ? "Extra High" : value.charAt(0).toUpperCase() + value.slice(1)),
     controlSource: "api-effort",
+    ...(value === defaultEffort ? { isDefault: true as const } : {}),
   }));
   const modes = nativeEfforts?.length
     ? base.reasoningEffortLevels.filter((level) =>
@@ -5481,9 +5494,9 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           }
           const isTerminalStatus =
             status === "completed" || status === "failed" || status === "killed";
-          // A late non-terminal patch from a task settled at turn end would
-          // mark it live again; the task ended with its turn.
-          if (!isTerminalStatus && context.turnEndSettledTaskIds.has(message.task_id)) {
+          // Terminal evidence wins over queued progress/status patches. Only
+          // task_started can reopen the same native id for a resumed run.
+          if (!isTerminalStatus && context.terminalTaskIds.has(message.task_id)) {
             return;
           }
           if (isTerminalStatus) {
@@ -5959,9 +5972,9 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             return;
           }
           case "task_progress": {
-            // Zombie tail of a foreground task settled at turn end: projecting
-            // it would mark the task live again.
-            if (context.turnEndSettledTaskIds.has(message.task_id)) {
+            // A late progress message cannot resurrect a terminal task, whether
+            // it settled with its turn or through its own lifecycle notification.
+            if (context.terminalTaskIds.has(message.task_id)) {
               return;
             }
             yield* emitTaskUsageSnapshot(context, message);
@@ -6103,11 +6116,17 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
               },
             });
             return;
+          case "commands_changed":
+            // A refreshed slash-command list. supportedCommands() already returns the
+            // latest push, and commands are read on demand, so there is nothing to show.
+            return;
           case "background_tasks_changed": {
             // REPLACE semantics: the payload is the full live background set.
             // Announce only newly backgrounded work with a one-line notice;
             // removals settle through their own task lifecycle events.
-            const tasks = Array.isArray(message.tasks) ? message.tasks : [];
+            const tasks = Array.isArray(message.tasks)
+              ? message.tasks.filter((task) => !context.terminalTaskIds.has(task.task_id))
+              : [];
             const added = tasks.filter((task) => !context.knownBackgroundTaskIds.has(task.task_id));
             context.knownBackgroundTaskIds.clear();
             for (const task of tasks) {
@@ -6133,11 +6152,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
                 ownedAdded.length === 1
                   ? labels[0]!
                   : `${ownedAdded.length} tasks: ${labels.join(", ")}`.slice(0, 200);
-              yield* emitRuntimeWarning(
-                owner,
-                notice,
-                ownedTasks.length === tasks.length ? message : { ...message, tasks: ownedTasks },
-              );
+              yield* emitRuntimeWarning(owner, notice, { ...message, tasks: ownedTasks });
             }
             return;
           }

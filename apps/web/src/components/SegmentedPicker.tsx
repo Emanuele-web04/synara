@@ -1,11 +1,12 @@
 // FILE: SegmentedPicker.tsx
-// Purpose: The raised-thumb segmented control (a recessed track with a sliding selected chip that
-//          hangs past the track at either end), as a radio group with arrow-key selection.
-//          Styling lives in index.css (`.sidebar-segmented-picker`, `.sidebar-segmented-thumb`).
+// Purpose: The app's segmented control, as a radio group with arrow-key selection.
+//          "capsule" is a rounded track with a sliding pill for switching between
+//          equal views; "buttons" is a row of plain options for tab-like rows, the
+//          selected one on a soft fill.
 // Layer: Shared presentation
 // Exports: SegmentedPicker, SegmentedPickerOption
 
-import type { ReactNode } from "react";
+import type { CSSProperties, ReactNode } from "react";
 
 import { useRadioGroupKeyboardNav } from "~/hooks/useRadioGroupKeyboardNav";
 import { cn } from "~/lib/utils";
@@ -18,23 +19,10 @@ export interface SegmentedPickerOption<T extends string> {
   readonly title?: string;
 }
 
-/** How far the selected chip hangs past the track at either end. */
-const THUMB_OVERHANG = "5px";
-
-function thumbGeometry(index: number, count: number): { left: string; width: string } {
-  const cell = `(100% - 0.25rem) / ${count}`;
-  const left = `calc(0.125rem + ${index} * (${cell}))`;
-  const edgeWidth = `calc(${cell} + 0.125rem + 1px + ${THUMB_OVERHANG})`;
-  if (index === 0) return { left: `calc(-1px - ${THUMB_OVERHANG})`, width: edgeWidth };
-  return index === count - 1 ? { left, width: edgeWidth } : { left, width: `calc(${cell})` };
-}
-
-/** The end chips are wider than their cell, so their labels shift half the extra outward to
- *  stay centred on the chip rather than the cell. */
-function labelShift(index: number, count: number): string {
-  const extra = `(0.125rem + 1px + ${THUMB_OVERHANG}) / 2`;
-  if (index === 0) return `calc(-1 * ${extra})`;
-  return index === count - 1 ? `calc(${extra})` : "0px";
+/** Equal cells inside the track's 0.25rem inset; the pill covers the selected one. */
+function pillGeometry(index: number, count: number): CSSProperties {
+  const cell = `(100% - 0.5rem) / ${count}`;
+  return { left: `calc(0.25rem + ${index} * ${cell})`, width: `calc(${cell})` };
 }
 
 export function SegmentedPicker<T extends string>({
@@ -43,6 +31,7 @@ export function SegmentedPicker<T extends string>({
   onValueChange,
   ariaLabel,
   disabled: disabledProp,
+  variant: variantProp,
   className,
 }: {
   value: T;
@@ -50,63 +39,64 @@ export function SegmentedPicker<T extends string>({
   onValueChange: (value: T) => void;
   ariaLabel: string;
   disabled?: boolean;
+  variant?: "capsule" | "buttons";
   className?: string;
 }) {
   const disabled = disabledProp ?? false;
+  const variant = variantProp ?? "capsule";
   const radioItemProps = useRadioGroupKeyboardNav({
     values: options.filter((option) => !option.disabled).map((option) => option.value),
     value,
     onValueChange,
   });
   const activeIndex = options.findIndex((option) => option.value === value);
-  const thumb = activeIndex >= 0 ? thumbGeometry(activeIndex, options.length) : null;
+  const capsule = variant === "capsule";
 
   return (
-    <div className={cn("px-1", className)}>
-      <div
-        role="radiogroup"
-        aria-label={ariaLabel}
-        className="sidebar-segmented-picker relative isolate inline-flex w-full rounded-lg p-0.5"
-      >
-        {thumb ? (
-          <div
-            aria-hidden
-            className="sidebar-segmented-thumb pointer-events-none absolute -inset-y-[1.5px] z-0 rounded-md transition-[left,width] duration-300 ease-[cubic-bezier(0.32,0.72,0,1)] motion-reduce:transition-none"
-            style={thumb}
-          />
-        ) : null}
-        {options.map((option, index) => {
-          const active = option.value === value;
-          return (
-            <button
-              key={option.value}
-              type="button"
-              role="radio"
-              aria-checked={active}
-              disabled={disabled || option.disabled}
-              title={option.title}
-              className={cn(
-                "relative z-10 flex min-w-0 flex-1 items-center justify-center rounded-md px-2.5 py-1 text-ui-sm font-medium transition-colors duration-200 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:opacity-50",
-                active
-                  ? "text-[var(--color-text-foreground)]"
-                  : "text-[var(--color-text-foreground-secondary)] hover:text-[var(--color-text-foreground)]",
-              )}
-              onClick={() => onValueChange(option.value)}
-              {...radioItemProps(option.value)}
-            >
-              <span
-                className="flex min-w-0 items-center gap-1.5 transition-transform duration-300 ease-[cubic-bezier(0.32,0.72,0,1)] motion-reduce:transition-none"
-                style={{
-                  transform: `translateX(${active ? labelShift(index, options.length) : "0px"})`,
-                }}
-              >
-                {option.icon}
-                <span className="truncate">{option.label}</span>
-              </span>
-            </button>
-          );
-        })}
-      </div>
+    <div
+      role="radiogroup"
+      aria-label={ariaLabel}
+      className={cn(
+        capsule
+          ? "relative isolate grid w-full rounded-full bg-black/[0.05] p-1 dark:bg-white/[0.07]"
+          : "flex flex-wrap items-center gap-1",
+        className,
+      )}
+      style={
+        capsule ? { gridTemplateColumns: `repeat(${options.length}, minmax(0, 1fr))` } : undefined
+      }
+    >
+      {capsule && activeIndex >= 0 ? (
+        <div
+          aria-hidden
+          className="pointer-events-none absolute inset-y-1 z-0 rounded-full bg-white shadow-[0_1px_2px_rgba(0,0,0,0.12)] transition-[left] duration-300 ease-[cubic-bezier(0.32,0.72,0,1)] motion-reduce:transition-none dark:bg-background dark:shadow-none"
+          style={pillGeometry(activeIndex, options.length)}
+        />
+      ) : null}
+      {options.map((option) => {
+        const active = option.value === value;
+        return (
+          <button
+            key={option.value}
+            type="button"
+            role="radio"
+            aria-checked={active}
+            disabled={disabled || option.disabled}
+            title={option.title}
+            className={cn(
+              "relative z-10 flex min-w-0 items-center justify-center gap-1.5 text-ui font-medium transition-colors duration-200 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:opacity-50",
+              capsule ? "h-8 rounded-full px-3" : "h-8 rounded-lg px-3",
+              active ? "text-foreground" : "text-muted-foreground hover:text-foreground",
+              !capsule && (active ? "bg-foreground/[0.07]" : "hover:bg-foreground/[0.03]"),
+            )}
+            onClick={() => onValueChange(option.value)}
+            {...radioItemProps(option.value)}
+          >
+            {option.icon}
+            <span className="truncate">{option.label}</span>
+          </button>
+        );
+      })}
     </div>
   );
 }

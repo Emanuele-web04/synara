@@ -116,6 +116,9 @@ Claude's tool-use summaries also appear as expandable text between tool groups. 
 show their attempt count and reported delay. Authentication displays its latest state, including
 between turns, with a Settings hint when attention is required; raw login output is not shown.
 These rows use events already supplied by the provider and do not trigger extra model requests.
+Claude's published-change notifications refresh the task's Git and pull-request metadata through
+its existing repository lookup. They are system notifications, not additional tool calls or runtime
+warnings; the notification's URL and branch are unverified hints and do not replace that lookup.
 
 The Environment panel's Usage section shows enabled accounts for the active provider, with a
 separate row and detail menu for each account. Providers with multiple accounts show account names
@@ -390,6 +393,10 @@ If additional native threads remain loaded, native unloading or resume cannot be
 a turn was interrupted, failed, or aborted for inactivity, Synara uses the full process-restart
 recovery path. You can continue in the same task. Idle provider processes still shut down after
 10 minutes by default.
+
+Codex runtime preparation preserves an unchanged private configuration file so repeated
+session starts do not generate unnecessary config-change notifications. Changed content,
+linked files, and overly broad file permissions still use atomic replacement.
 
 ### Claude Auto / 200k / 1M selection
 

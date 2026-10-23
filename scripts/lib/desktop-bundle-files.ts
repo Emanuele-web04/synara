@@ -24,7 +24,11 @@ export function createDesktopBundleFilePatterns(
   platform: "mac" | "linux" | "win",
   options: { readonly diagnostics?: boolean; readonly linuxGlibc?: boolean } = {},
 ): string[] {
-  const files = ["**/*"];
+  const files = [
+    "**/*",
+    "!apps/desktop/resources/cloudflared/**",
+    "!apps/desktop/prod-resources/cloudflared/**",
+  ];
   if (!options.diagnostics) files.push(...DIAGNOSTIC_FILES);
 
   // node-pty is rebuilt before packaging. Its platform prebuilds are not

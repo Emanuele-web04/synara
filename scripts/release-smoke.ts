@@ -513,7 +513,7 @@ async function verifyReleaseWorkflowSafety(): Promise<void> {
     "Expected only CLI publication to combine repository reads with npm OIDC.",
   );
   const workflowDefinition = parseYaml(workflow) as {
-    jobs: Record<string, { needs: string[]; if: string }>;
+    jobs: Record<string, { needs: string[]; if: string; permissions?: Record<string, string> }>;
   };
   for (const name of ["release", "publish_cli"]) {
     const publisher = workflowDefinition.jobs[name]!;
@@ -521,37 +521,79 @@ async function verifyReleaseWorkflowSafety(): Promise<void> {
       if (!publisher.needs.includes(gate))
         throw new Error(`${name} does not directly await ${gate}.`);
     const expression = publisher.if.replace(/^\$\{\{\s*|\s*\}\}$/g, "");
-    if (/\b(?:always|cancelled|failure|success)\s*\(/.test(expression))
-      throw new Error(`${name} must retain implicit success admission.`);
-    const allows = new Function("needs", "vars", `return ${expression};`);
-    for (const publish of ["true", "false"])
-      for (const prerelease of ["true", "false"]) {
-        const needs = Object.fromEntries(
-          publisher.needs.map((gate) => [
-            gate,
-            { result: "success", outputs: {} as Record<string, string> },
-          ]),
-        );
-        needs.preflight!.outputs = { publish_release: publish, is_prerelease: prerelease };
-        if (
-          Boolean(allows(needs, { SYNARA_PUBLISH_CLI: "1" })) !==
-          (publish === "true" && (name === "release" || prerelease === "false"))
+    const hasStatusCheck = /\b(?:always|cancelled|failure|success)\s*\(/.test(expression);
+    const evaluate = new Function(
+      "needs",
+      "vars",
+      "cancelled",
+      "failure",
+      "success",
+      "always",
+      `return ${expression};`,
+    );
+    const successfulNeeds = (buildServer = "true") => {
+      const needs = Object.fromEntries(
+        publisher.needs.map((gate) => [
+          gate,
+          { result: "success", outputs: {} as Record<string, string> },
+        ]),
+      );
+      needs.preflight!.outputs = {
+        publish_release: "true",
+        is_prerelease: "false",
+        build_server: buildServer,
+      };
+      if (name === "release" && buildServer === "false")
+        needs.build_server_tarball!.result = "skipped";
+      return needs;
+    };
+    // GitHub adds success() only when the job expression has no status-check function.
+    const allows = (needs: ReturnType<typeof successfulNeeds>, cancelled = false) => {
+      const success = !cancelled && Object.values(needs).every((gate) => gate.result === "success");
+      return (
+        (hasStatusCheck || success) &&
+        Boolean(
+          evaluate(
+            needs,
+            { SYNARA_PUBLISH_CLI: "1" },
+            () => cancelled,
+            () => Object.values(needs).some((gate) => gate.result === "failure"),
+            () => success,
+            () => true,
+          ),
         )
-          throw new Error(`${name} publication policy changed.`);
-      }
-    for (const gate of ["quality", "server_tests"])
-      for (const result of ["failure", "cancelled", "skipped", ""]) {
-        const needs = Object.fromEntries(
-          publisher.needs.map((gate) => [
-            gate,
-            { result: "success", outputs: {} as Record<string, string> },
-          ]),
-        );
-        needs.preflight!.outputs = { publish_release: "true", is_prerelease: "false" };
-        needs[gate]!.result = result;
-        if (allows(needs, { SYNARA_PUBLISH_CLI: "1" }))
-          throw new Error(`${name} admits ${gate}=${result}.`);
-      }
+      );
+    };
+    for (const publish of ["true", "false"])
+      for (const prerelease of ["true", "false"])
+        for (const buildServer of ["true", "false"]) {
+          const needs = successfulNeeds(buildServer);
+          needs.preflight!.outputs.publish_release = publish;
+          needs.preflight!.outputs.is_prerelease = prerelease;
+          if (
+            allows(needs) !== (publish === "true" && (name === "release" || prerelease === "false"))
+          )
+            throw new Error(`${name} publication policy changed.`);
+        }
+    for (const buildServer of ["true", "false"]) {
+      const ready = successfulNeeds(buildServer);
+      if (!allows(ready) || allows(ready, true))
+        throw new Error(`${name} success/cancellation admission changed.`);
+      for (const gate of publisher.needs)
+        for (const result of ["failure", "cancelled", "skipped", ""]) {
+          const needs = successfulNeeds(buildServer);
+          needs[gate]!.result = result;
+          const intentionalSkip =
+            name === "release" &&
+            gate === "build_server_tarball" &&
+            buildServer === "false" &&
+            result === "skipped";
+          if (allows(needs) !== intentionalSkip || allows(needs, true))
+            throw new Error(
+              `${name} admits incorrect ${gate}=${result} (build_server=${buildServer}).`,
+            );
+        }
+    }
   }
   const serverJob = workflow.slice(
     workflow.indexOf("  build_server_tarball:\n"),
@@ -568,11 +610,9 @@ async function verifyReleaseWorkflowSafety(): Promise<void> {
     "permissions:\n      contents: read",
     "Server artifact access must remain read-only.",
   );
-  assertContains(
-    workflow,
-    "  release:\n    name: Publish GitHub Release\n    if: ${{ needs.preflight.outputs.publish_release == 'true' && needs.quality.result == 'success' && needs.server_tests.result == 'success' }}\n    needs: [preflight, quality, server_tests, build, build_server_tarball]\n    runs-on: ubuntu-24.04\n    timeout-minutes: 10\n    permissions:\n      contents: write",
-    "Expected only GitHub release publication to receive contents write access.",
-  );
+  for (const [name, job] of Object.entries(workflowDefinition.jobs))
+    if ((job.permissions?.contents === "write") !== (name === "release"))
+      throw new Error("Only GitHub release publication may receive contents write access.");
   assertContains(
     workflow,
     "repositories: ${{ github.event.repository.name }}\n          permission-contents: write",
@@ -592,11 +632,6 @@ async function verifyReleaseWorkflowSafety(): Promise<void> {
     workflow,
     "publish_release: ${{ steps.release_mode.outputs.publish_release }}",
     "Expected preflight to expose the resolved publication mode.",
-  );
-  assertContains(
-    workflow,
-    "if: ${{ needs.preflight.outputs.publish_release == 'true' && needs.quality.result == 'success' && needs.server_tests.result == 'success' }}",
-    "Expected GitHub publication to require explicit publication mode.",
   );
   assertContains(
     workflow,

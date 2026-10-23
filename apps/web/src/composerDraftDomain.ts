@@ -126,6 +126,13 @@ export type ComposerAssistantSelectionAttachment = ChatAssistantSelectionAttachm
 
 export type ModelSelectionByProviderInstance = Partial<Record<ProviderInstanceId, ModelSelection>>;
 
+/** The sticky new-chat choices, as the server shares them between clients. */
+export interface SharedNewThreadDefaults {
+  modelSelectionByProvider: ModelSelectionByProviderInstance;
+  activeProvider: ProviderInstanceId | null;
+  runtimeMode: RuntimeMode | null;
+}
+
 export interface QueuedComposerChatTurn {
   id: string;
   kind: "chat";
@@ -272,6 +279,8 @@ export interface ComposerDraftStoreState {
   projectDraftThreadIdByProjectId: Record<string, ThreadId>;
   stickyModelSelectionByProvider: ModelSelectionByProviderInstance;
   stickyActiveProvider: ProviderInstanceId | null;
+  // The access mode new chats start in; null until the user picks one.
+  stickyRuntimeMode: RuntimeMode | null;
   getDraftThreadByProjectId: (
     projectId: ProjectId,
     entryPoint?: ThreadPrimarySurface,
@@ -324,6 +333,17 @@ export interface ComposerDraftStoreState {
   finalizePromotedDraftThread: (threadId: ThreadId) => void;
   clearDraftThread: (threadId: ThreadId) => void;
   setStickyModelSelection: (modelSelection: ModelSelection | null | undefined) => void;
+  setStickyRuntimeMode: (runtimeMode: RuntimeMode) => void;
+  /**
+   * Adopts the new-chat defaults another client changed. Open new-chat drafts
+   * follow the fields that changed, so their composers update live.
+   */
+  applySharedNewThreadDefaults: (defaults: SharedNewThreadDefaults) => void;
+  /**
+   * Shows a started chat's stored selection in its composer when it changed
+   * elsewhere. A pending pick of another provider (a handoff) is left alone.
+   */
+  syncDraftWithThreadModelSelection: (threadId: ThreadId, modelSelection: ModelSelection) => void;
   setPrompt: (threadId: ThreadId, prompt: string) => void;
   setPromptHistorySavedDraft: (
     threadId: ThreadId,

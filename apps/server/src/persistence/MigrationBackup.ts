@@ -1,3 +1,4 @@
+import { validateAccountMigrationSchema } from "./AccountMigrationLineage.ts";
 import { constants as fsConstants, type Stats } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
@@ -36,6 +37,8 @@ import {
   findFirstMigrationLineageDivergence,
   LAST_SHARED_LINEAGE_MIGRATION_ID,
   migrationEntries,
+  inspectAccountMigrationRepair,
+  planAccountMigrationRepair,
   planLegacyMigration32Rename,
   planMigrationLineageAliasRepairs,
 } from "./Migrations.ts";
@@ -242,9 +245,11 @@ export const inspectMigrationBackupPlan = Effect.gen(function* () {
       : { sourceVersion: "untracked", targetVersion: latestMigrationId };
   }
 
+  const accountRepair = yield* inspectAccountMigrationRepair(recorded);
   const recordedNames = new Map(recorded.map((row) => [row.migration_id, row.name] as const));
   const highWaterMark = recorded[recorded.length - 1]!.migration_id;
   const inspectedNames = new Map(recordedNames);
+  for (const row of accountRepair?.removeTrackerRows ?? []) inspectedNames.delete(row.migration_id);
   const migration32Rename = planLegacyMigration32Rename(recordedNames);
   if (migration32Rename !== null) {
     inspectedNames.set(32, migration32Rename);
@@ -282,6 +287,12 @@ export const inspectMigrationBackupPlan = Effect.gen(function* () {
     };
   }
 
+  if (accountRepair) {
+    return {
+      sourceVersion: `account-v${highWaterMark}-${accountRepair.fingerprint}`,
+      targetVersion: latestMigrationId,
+    };
+  }
   if (migration32Rename !== null) {
     return { sourceVersion: `v${highWaterMark}-legacy32`, targetVersion: latestMigrationId };
   }
@@ -896,7 +907,7 @@ interface SqliteMigrationBackupInspection {
   readonly lineage: "canonical" | "imported" | "incompatible";
 }
 
-async function inspectSqliteMigrationBackup(
+export async function inspectSqliteMigrationBackup(
   backupPath: string,
 ): Promise<SqliteMigrationBackupInspection> {
   const backupStat = await fs.lstat(backupPath);
@@ -950,6 +961,7 @@ function readBunMigrationInspection(
         "SELECT migration_id AS migrationId, name FROM effect_sql_migrations ORDER BY migration_id ASC",
       )
       .all(),
+    (query) => database.query(query).all() as Record<string, unknown>[],
   );
 }
 
@@ -968,10 +980,14 @@ function readNodeMigrationInspection(
         "SELECT migration_id AS migrationId, name FROM effect_sql_migrations ORDER BY migration_id ASC",
       )
       .all(),
+    (query) => database.prepare(query).all() as Record<string, unknown>[],
   );
 }
 
-function inspectMigrationRows(rows: ReadonlyArray<unknown>): SqliteMigrationBackupInspection {
+function inspectMigrationRows(
+  rows: ReadonlyArray<unknown>,
+  query?: (sql: string) => Record<string, unknown>[],
+): SqliteMigrationBackupInspection {
   const recordedNames = new Map<number, string>();
   for (const row of rows) {
     const migration = row as { readonly migrationId?: unknown; readonly name?: unknown };
@@ -983,9 +999,24 @@ function inspectMigrationRows(rows: ReadonlyArray<unknown>): SqliteMigrationBack
     ) {
       throw new Error("Migration backup has an unreadable migration tracker.");
     }
+    if (recordedNames.has(migration.migrationId)) throw new Error("Duplicate migration identity");
     recordedNames.set(migration.migrationId, migration.name);
   }
 
+  const accountRepair = planAccountMigrationRepair(
+    [...recordedNames].map(([migration_id, name]) => ({ migration_id, name })),
+  );
+  if (accountRepair) {
+    if (!query) throw new Error("Account schema inspection unavailable");
+    validateAccountMigrationSchema(
+      query("PRAGMA table_info(account_usage_sync)"),
+      query("SELECT * FROM account_usage_sync"),
+      accountRepair.requiresIdentity,
+    );
+    for (const row of accountRepair.removeTrackerRows) recordedNames.delete(row.migration_id);
+  }
+  const legacy32 = planLegacyMigration32Rename(recordedNames);
+  if (legacy32) recordedNames.set(32, legacy32);
   for (const repair of planMigrationLineageAliasRepairs(recordedNames)) {
     if (repair.kind === "rename") {
       recordedNames.set(repair.migrationId, repair.name);

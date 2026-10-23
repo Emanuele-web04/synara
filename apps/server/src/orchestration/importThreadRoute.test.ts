@@ -88,6 +88,7 @@ it("scopes environment-only Claude imports to the selected provider instance", (
 
 it("does not remerge ambient credentials into Claude import child environments", () => {
   const original = process.env.ANTHROPIC_API_KEY;
+  vi.stubEnv("ELECTRON_RUN_AS_NODE", undefined);
   process.env.ANTHROPIC_API_KEY = "ambient-key";
   try {
     const environment: NodeJS.ProcessEnv = claudeHistoricalSessionChildEnvironment({
@@ -97,11 +98,42 @@ it("does not remerge ambient credentials into Claude import child environments",
     assert.deepEqual(environment, { HOME: "/tmp/synara-claude-import" });
     assert.equal((environment as NodeJS.ProcessEnv)["ANTHROPIC_API_KEY"], undefined);
   } finally {
+    vi.unstubAllEnvs();
     if (original === undefined) {
       delete process.env.ANTHROPIC_API_KEY;
     } else {
       process.env.ANTHROPIC_API_KEY = original;
     }
+  }
+});
+
+it("restores Electron Node mode only for the trusted Claude metadata helper", () => {
+  vi.stubEnv("ELECTRON_RUN_AS_NODE", "1");
+  vi.stubEnv("ANTHROPIC_API_KEY", "ambient-key");
+  vi.stubEnv("SYNARA_AUTH_TOKEN", "ambient-owner-token");
+  vi.stubEnv("NODE_OPTIONS", "--require=/untrusted/ambient.cjs");
+  try {
+    const accountEnvironment = claudeHistoricalSessionEnvironment({
+      claudeAgent: {
+        homePath: "/synara/claude-import-account",
+        environment: { ANTHROPIC_AUTH_TOKEN: "selected-account-token" },
+      },
+    });
+    assert.ok(accountEnvironment);
+    const before = { ...accountEnvironment };
+    assert.equal(accountEnvironment.ELECTRON_RUN_AS_NODE, undefined);
+
+    const childEnvironment = claudeHistoricalSessionChildEnvironment(accountEnvironment);
+
+    assert.equal(childEnvironment.ELECTRON_RUN_AS_NODE, "1");
+    assert.equal(childEnvironment.ANTHROPIC_AUTH_TOKEN, "selected-account-token");
+    assert.equal(childEnvironment.ANTHROPIC_API_KEY, undefined);
+    assert.equal(childEnvironment.SYNARA_AUTH_TOKEN, undefined);
+    assert.equal(childEnvironment.NODE_OPTIONS, undefined);
+    assert.equal(childEnvironment.HOME, accountEnvironment.HOME);
+    assert.deepEqual(accountEnvironment, before);
+  } finally {
+    vi.unstubAllEnvs();
   }
 });
 

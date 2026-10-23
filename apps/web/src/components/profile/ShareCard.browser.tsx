@@ -1,3 +1,4 @@
+import { selectDeviceShareCardStats } from "./profileSelectors";
 import "../../index.css";
 
 import type { ProviderKind } from "@synara/contracts";
@@ -29,8 +30,12 @@ it("keeps the full missing-token disclosure inside the exported card", async () 
   });
   const mounted = await render(
     <ShareCard
-      stats={baseStats}
-      tokenStats={{ ...tokenStats, heatmap, unavailableProviders }}
+      cardStats={selectDeviceShareCardStats(baseStats, {
+        ...tokenStats,
+        heatmap,
+        unavailableProviders,
+      })}
+      initials="S"
       displayName="Synara"
       handle="@synara"
       avatarColor="#2563eb"

@@ -4,7 +4,7 @@
 // Depends on: appNavigation history helpers, header Button/Tooltip primitives
 
 import { goBackInAppHistory, goForwardInAppHistory, useAppNavigationState } from "~/appNavigation";
-import { isElectron } from "~/env";
+import { isDesktopPresentation } from "~/lib/hosts/workspacePresentation";
 import { cn, isMacNavigatorPlatform } from "~/lib/utils";
 import { IoIosArrowRoundBack, IoIosArrowRoundForward } from "react-icons/io";
 import { Button } from "./ui/button";
@@ -16,7 +16,7 @@ export function AppNavigationButtons({ className }: { className?: string }) {
   const backShortcutLabel = isMac ? "⌘[" : "Alt+Left";
   const forwardShortcutLabel = isMac ? "⌘]" : "Alt+Right";
 
-  if (!isElectron) {
+  if (!isDesktopPresentation) {
     return null;
   }
 

@@ -1,3 +1,5 @@
+import { readExecutionContext } from "~/lib/hosts/executionContext";
+import { REMOTE_NATIVE_UNAVAILABLE } from "@synara/shared/remoteCapabilities";
 // FILE: DesktopSettingsPanels.tsx
 // Purpose: Own settings panels whose behavior depends on browser or desktop-native lifecycles.
 // Layer: Settings UI components
@@ -247,7 +249,19 @@ export function NotificationsSettingsPanel({
   );
 }
 
-export function AppSnapSettingsPanel({
+export function AppSnapSettingsPanel(props: AppSettingsBinding & { readonly active: boolean }) {
+  return readExecutionContext()?.remote ? (
+    props.active ? (
+      <p className="text-ui text-muted-foreground">
+        {REMOTE_NATIVE_UNAVAILABLE} Return to this computer to manage its permissions.
+      </p>
+    ) : null
+  ) : (
+    <LocalAppSnapSettingsPanel {...props} />
+  );
+}
+
+function LocalAppSnapSettingsPanel({
   settings,
   defaults,
   updateSettings,

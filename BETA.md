@@ -4,6 +4,55 @@ Synara Beta is a packaged prerelease flavor of the desktop app. It is a separate
 application that installs and updates side-by-side with stable Synara, and it never
 shares stable's data directory or update feed.
 
+## Synara Remote early access
+
+Remote .20 and universal iOS/iPadOS build 141 align resource validation with phone-created thread identifiers. Update both ends for attachment and voice transfers; old hosts reject those identifiers. Existing pairing, authorization and upload-size limits remain in force.
+
+**Synara Remote** is a separate tester app, not a rename of Synara Beta.
+Its `remote` flavor uses `com.emanueledipietro.synara.remote`, the
+`synara-remote://app` renderer, `~/.synara-remote` data and the `synara-remote`
+Electron profile. An explicit `SYNARA_REMOTE_HOME` may override its home;
+inherited `SYNARA_HOME` and `SYNARA_BETA_HOME` cannot redirect it.
+
+`vX.Y.Z-remote.N` selects the `remote` updater lane. Remote accepts only Remote
+updates, never replaces Stable/Beta, never becomes GitHub Latest and does not
+publish the CLI. From Remote .14, distribution targets macOS Apple Silicon,
+Windows x64 and Linux x64. Windows has its own NSIS registration, and Linux
+uses `synara-remote` for its executable and window class. It uses
+the existing Synara artwork; Beta's blue artwork remains specific to Beta.
+Remote enables the existing non-Stable feature gates but does not enable Beta
+diagnostics. It starts with its own local data: no Stable/Beta import or
+Try Beta installation/removal action runs from Remote. Signing in to the same
+account preserves access to account-owned cloud data and paired computers;
+local conversations remain owned by their original app home.
+
+Remote .14 also supplies its hosted account API on a normal launch; no shell
+environment setup is needed. An explicit `SYNARA_ACCOUNT_URL` still overrides
+that default. Saved account sessions retain their original issuer. The release
+qualifies startup without inheriting the operator's account URL. The hosted API's
+`REMOTE_BETA_ACCESS_ENABLED=true` setting opens beta enrollment to all authenticated
+accounts, with host ownership, registered device proof and pairing consent still
+required. Private deployments leave it unset/`false` and enroll selected users.
+
+Remote .15 restores GitHub alongside Google, Apple and email sign-in. GitHub is
+configured in the hosted WorkOS Production environment. The provider configuration
+and Chromium sign-in UI tests pass; the real production GitHub consent/callback
+has not been verified. Remote also
+enables the profile/usage sync path without an operator flag; an explicit
+`SYNARA_ACCOUNT_PROFILE_SYNC=0` still disables it. Stable remains blocked and
+generic/Beta builds still require their existing opt-in. Product analytics remain
+separate and off by default.
+
+Remote .15 retries temporary enrollment refusals without permanently disabling the host or revoking approved devices. Opening a populated remote home no longer constructs an empty chat ID. An update cannot distinguish a previously revoked pairing from deliberate revocation: pair that device normally again if needed; never restore trust by editing the database. The Remote updater prepares downloads in the background and installs only through its normal restart action.
+
+Remote .16 extends that recovery to temporary proof rejection and API/proxy failures. Ownership denials close admission immediately, but only repeated denials spanning five minutes permanently retire local trust. A successful authorization snapshot resets that confirmation window. Source-launched Remote/Beta use separate development bundle identities; installed identities, homes and feeds are unchanged.
+
+Signing out preserves that local database. Signing in as another account on the
+same installation does not create a separate local history: the account profile
+and saved Inbox stay account-scoped, but usage sync backfills the installation's
+history for the newly signed-in account. Per-account local conversation ownership
+is not implemented; do not use account switching as local history isolation.
+
 ## The short version
 
 - **One branch.** Every PR merges into `main` as usual. There is no Beta branch.
@@ -23,9 +72,10 @@ shares stable's data directory or update feed.
   `BETA_ONLY_FEATURES` in `packages/shared/src/betaFeatures.ts`. The code ships in
   both apps; Stable just switches listed features off. Remove the entry to promote
   a feature to Stable. See [Beta-only features](#beta-only-features).
-- **Diagnostics are Beta-only.** Beta sends redacted error events, raw crash
-  dumps, and anonymous usage counts to a private dashboard. Stable sends nothing. See
-  [Diagnostics](#diagnostics).
+- **Diagnostics run in Beta and Remote, never Stable.** Beta sends redacted error
+  events, raw crash dumps, and anonymous usage counts to a private dashboard. Remote
+  sends the same events except raw crash dumps, plus product usage, by default with a
+  Settings switch to stop both. Stable sends nothing. See [Diagnostics](#diagnostics).
 
 ### Release order
 
@@ -107,7 +157,8 @@ published by the same release workflow as stable, and it updates through
 
 Beta releases ride the same `release.yml` workflow. The lane is selected entirely by
 the tag shape: a version whose first prerelease identifier is `beta` resolves to the
-beta channel and the beta desktop flavor; every other suffix keeps today's behavior.
+beta channel and the beta desktop flavor. The `remote` identifier selects
+Synara Remote as described above; other suffixes keep today's behavior.
 
 1. Select the target `main` commit and inspect its CI results. Finalize the release
    notes and documentation, then prepare the Beta version on top of that commit
@@ -324,7 +375,8 @@ HTTP-hosted clients retain native component visuals but never execute HTML. The 
 bootstrap removes WebRTC capabilities before page scripts and stops parsing if that boundary
 cannot be enforced. HTML messages cannot open external URLs through the host.
 
-The list currently holds `mcp-connectors` and `native-editor`. Inline visuals are available in Stable and Beta:
+The list currently holds `remoteConnections`, `accountProfileSync`,
+`accountInbox` (account-saved Inbox history), `mcp-connectors`, and `native-editor`. Inline visuals are available in Stable and Beta:
 the `synara_show_visual` agent tool, its transcript rows, and the `orchestration.getInlineVisual`
 read all use the shared policy. Both native component specs and sandboxed HTML retain their
 existing rendering and interactions. Nothing is migrated; each app keeps visual documents
@@ -350,6 +402,19 @@ chat attention, running and finished work, review requests, and the activity rec
 The to-do list, quick-add, delegation card, and **All tasks** link appear only where
 Tasks is available, including Stable and Beta.
 
+`accountInbox` is the account-saved Inbox history. In Beta, a signed-in computer
+automatically saves account/workspace-owned daily snapshots, including project names,
+and catches up its local history; **Save privately** requests an immediate update. Saved
+history can be read from the account API while its source computers are offline and
+survives source removal. Deleting a recap prevents automatic re-creation; an explicit
+Save can restore it. Stable refuses the saved-recap RPCs and does not upload. This
+history is separate from public profile publication and aggregate usage sync.
+
+Account profiles additionally require the server opt-in `SYNARA_ACCOUNT_PROFILE_SYNC=1`;
+it activates historical aggregate usage sync for the signed-in account. The UI reads
+the server capability, and publication remains a separate explicit choice.
+See the [profiles trial guide](apps/profiles/README.md).
+
 `pull-request-auto-fix` enables the opt-in **Auto-fix CI** action in a pull
 request's menu. The server watches checks for an enabled PR and can ask its
 linked agent chat to address failures in both Stable and Beta. It keeps the chat
@@ -367,9 +432,16 @@ visible trail no longer subscribes. First use can request macOS audio access.
 
 Beta builds ship always-on diagnostics — crash reports plus anonymous usage
 counts (which providers are used, how many chats and turns) — while stable
-builds contain no sender code at all. See [diagnostics.md](docs/diagnostics.md) for
-exactly what is collected, what usage counters exclude, and how the Cloudflare
-ingest works.
+builds never enable the Beta diagnostics sender. Stable and Beta separately offer
+default-off product analytics through Settings → General → Privacy.
+
+Synara Remote shares usage and diagnostics by default: the same diagnostic events
+without raw crash dumps, and product events such as daily activity, feature use,
+connection, pairing and turn outcomes with a fixed failure category. **Share usage
+and diagnostics** in Settings → General → Privacy turns both off and clears unsent
+events. Chats, prompts, files and account details are never sent. See
+[diagnostics.md](docs/diagnostics.md) for exactly what is collected, what usage
+counters exclude, and how the Cloudflare ingest works.
 
 ## Data
 

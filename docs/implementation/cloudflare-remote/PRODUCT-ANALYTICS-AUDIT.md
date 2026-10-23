@@ -1,0 +1,136 @@
+# Product analytics implementation
+
+## Remote lane — 17 October 2026
+
+- Synara Remote shares product events (`remote` channel) and diagnostics
+  (`flavor: "remote"`) by default; Settings → General → Privacy → **Share usage and
+  diagnostics** stops both and clears unsent events. Stable stays default-off and
+  sends no diagnostics; Remote never uploads raw crash dumps.
+- New: `app.active` once per UTC day, a fixed `reason` on failed connections,
+  pairings and chat requests, and Remote server usage snapshots.
+- Dashboard: active installations over 24 hours, 7 days and 30 days (and those that
+  sent a chat request), devices by platform, failure causes, and a Beta/Remote filter
+  on the diagnostics views. D1 migration `0006_remote_lane.sql` must be applied before
+  the Worker that writes the new columns.
+
+## Audit — 16 October 2026
+
+- The common Electron sender supports macOS, Windows and Linux. Analytics remain
+  **off by default** on every installation; the Settings switch is required.
+- Desktop records accepted/failed chat requests and observed live terminal turns,
+  including available input/output/cache-read tokens. Provider buckets are Codex,
+  Claude and Other: other runtimes cannot be distinguished yet, and specific model
+  names are not collected. Request acknowledgement is not a completed response.
+- iPhone/iPad currently send request outcomes, feature, connection and startup
+  observations. Their sender has no provider/token fields and no terminal-turn
+  observer. Native usage breakdowns are therefore **not complete**. This release
+  does not silently enable analytics or claim to close that native gap.
+- Counts are consent-dependent client observations, not globally unique messages:
+  two installations observing one execution can each report it. Retries of the
+  same event UUID deduplicate in D1. Prompt/reply text is never part of this path.
+- Account profile/Inbox usage in Supabase is separate from product analytics in
+  Cloudflare D1. The existing Beta-only crash/usage diagnostic rules are unchanged.
+
+## Initial implementation — 5 October 2026
+
+Default-off product analytics for desktop Stable/Beta and native iPhone/iPad,
+using the existing Cloudflare service. Existing Beta crash diagnostics remain
+separate and Beta-only. This document describes the branch implementation;
+shipping it requires the receiving migration/Worker followed by new client builds.
+
+## Ownership and data flow
+
+| Boundary          | Implementation                                                                                                                                             |
+| ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Shared contract   | `packages/contracts/src/productAnalytics.ts`: fixed event names/enums and bounded numbers; no arbitrary property dictionary                                |
+| Desktop owner     | `apps/desktop/src/productAnalytics.ts`, trusted main-frame IPC, preload bridge; flavor-specific local consent and random identifier                        |
+| Desktop UI        | Settings → General → Privacy → Share product analytics; existing settings primitives and switch                                                            |
+| Web observers     | `apps/web/src/lib/productAnalytics.ts` and transport/navigation owners; fixed categories only; remote workspace frames use their controlling app's consent |
+| Native            | Local settings control and bounded sender in both existing native branches; no inherited consent from account or remote Mac                                |
+| Cloudflare        | `/v1/product-events`, separate `product_events` D1 table, authenticated `/api/product` aggregates and Product dashboard                                    |
+| Existing services | `/v1/events` and `/v1/crash` remain Beta-only; account usage, public profile and private Saved Inbox are not copied into analytics                         |
+
+No additional analytics vendor, browser autocapture, session replay or user
+identification service. The random installation UUID is unrelated to account,
+provider, device, hardware and Beta diagnostics identities. It groups events from
+one consenting installation; it should not be described as a unique person count.
+
+## Coverage and limits
+
+| Event                                        | Meaning                                                                                                                             |
+| -------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| `app.open`                                   | App lifecycle observation, with explicit outcome                                                                                    |
+| `performance.startup`                        | Measured readiness duration; platform-specific readiness points are not directly interchangeable                                    |
+| `feature.used`                               | Selected feature navigation/actions classified into a fixed enum                                                                    |
+| `connection.pair`                            | Pairing operation result; no pairing codes, device names or credentials                                                             |
+| `connection.connect`, `connection.reconnect` | Connection attempt outcomes and elapsed duration at each client's transport owner                                                   |
+| `chat.request`                               | Request acknowledgement, failure or cancellation; not successful assistant completion                                               |
+| `turn.completed`                             | Desktop renderer's observed live terminal activity, locally deduplicated; no snapshots/history, closed-client or native completions |
+
+Optional counters include bounded input/output/cache-read token totals only when
+available. Missing values remain unknown. Model names and arbitrary provider
+identifiers never leave this path; providers are fixed categories. Client
+observations across multiple installations are not globally deduplicated host
+execution totals. Use account usage records for complete user-facing history;
+never use these consent-dependent observations for billing or quota enforcement.
+
+No prompts, chat text, file contents, project/task names, paths, URLs, account IDs,
+error messages or model names are accepted. The receiver reconstructs allowed
+fields and validates UUIDs, timestamps, enum values and numeric bounds.
+
+## Consent and delivery
+
+- Off by default, per installation and desktop flavor. Only an explicit Settings
+  choice enables product events. Beta crash collection is unaffected.
+- At most 500 queued events, expiring after seven days; uploads contain at most
+  50 events and 64 KiB. Bounded retries/backoff and request timeouts preserve app use
+  through ingestion outages. Retried event UUIDs are idempotent in D1.
+- Opt-out cancels requests where possible and removes unsent events and the local
+  identifier. Re-enable creates a new identity. Already received requests cannot
+  be retracted by the local switch.
+- Raw product events have a 30-day retention policy and bounded scheduled cleanup.
+  This does not delete or change retention of existing Beta diagnostics.
+- Dashboard data requires the existing session/Access authentication. Public
+  ingestion uses validation, size limits and existing rate limiting; distributed
+  clients contain no ingestion secret. Public events remain untrusted telemetry.
+
+## Verification and release order
+
+Targeted checks cover default-off behavior, opt-out during sending, persistence,
+retry identity, bounds, main-frame IPC, live completion vs history, Settings save
+errors, real SQL deduplication and authenticated aggregates. Final run results
+belong in the latest handoff checkpoint; implementation alone is not proof of a
+live deployment or a signed app release.
+
+Production checkpoint (5 October 2026): the additive D1 migration and Worker
+`bd556f7d-088e-4d4c-adbf-b0d02d4ad4e3` are deployed. Synthetic ingestion,
+deduplication, authenticated dashboard aggregates and unauthenticated rejection
+passed; the single synthetic event was removed and zero probe rows remain.
+The daily retention trigger is installed; its scheduled execution is not yet observed.
+Client builds and physical-device qualification remain release work.
+
+1. Validate all client schemas against Worker acceptance.
+2. Apply the additive D1 product migration and deploy the receiving Worker/dashboard.
+3. Verify synthetic ingestion, duplicate handling and private dashboard access.
+4. Ship consent-aware desktop and native builds. Retain separate Beta diagnostic gates.
+5. Qualify native suspension/reconnection on physical devices before wider rollout.
+
+Privacy copy is synchronized in desktop diagnostics documentation, marketing
+privacy text and native privacy documents. No account data or existing diagnostics
+migration is required for the new product table.
+
+## Remote .18 receiver and disclosure qualification
+
+An additional adversarial regression reproduced free text surviving in injected
+stack lines, custom error names and spoofed handled-issue labels. Remote now uses
+the same technical-only sanitizer before desktop queueing and at Worker ingestion:
+built-in error types, contract-validated issue codes and numeric source positions.
+Function/file names and Remote log tails do not reach D1. Beta redaction stays
+unchanged. The existing desktop and real SQLite-backed Worker route regressions
+cover both boundaries, including bounded handled-issue durations.
+
+The account hash is pseudonymous: an operator with account IDs could recompute it.
+Native privacy declarations therefore include Analytics for User ID and Device ID,
+linked Product Interaction, and linked startup Performance Data, all without
+tracking. Public website copy is qualified separately and names Remote .18/mobile
+139 so older versions retain an accurate description during rollout.

@@ -1,3 +1,9 @@
+import {
+  HostConnectionRegistry,
+  HostConnectionRegistryService,
+} from "../../hostConnections/registry";
+import { ServerEnvironment } from "../../environment/Services/ServerEnvironment";
+import { EnvironmentId, type HostConnection, type RemoteAgentCall } from "@synara/contracts";
 import { assert, describe, it } from "@effect/vitest";
 import type { ModelInfo, Options as ClaudeQueryOptions } from "@anthropic-ai/claude-agent-sdk";
 import type {
@@ -382,6 +388,9 @@ function makeHarnessLayer(
   threads: ReadonlyArray<OrchestrationThreadShell>,
   automationDefinitions: ReadonlyArray<AutomationDefinition> = [],
   options: {
+    readonly remoteEnvironment?: boolean;
+    readonly remoteConnections?: HostConnectionRegistry;
+    readonly threadPrincipal?: "unmanaged" | "group-member" | "worker" | "coordinator";
     readonly listModels?: (typeof ProviderDiscoveryService)["Service"]["listModels"];
     readonly threadDetails?: ReadonlyMap<string, OrchestrationThread>;
     readonly hubCoordinator?: boolean;
@@ -854,11 +863,13 @@ function makeHarnessLayer(
   } as unknown as (typeof AutomationService)["Service"]);
 
   const projectAgentLayer = Layer.succeed(ProjectAgentService, {
-    resolvePrincipalForThread: () =>
+    resolvePrincipalForThread: (threadId: ThreadIdType) =>
       Effect.succeed(
-        options.hubCoordinator
-          ? { kind: "coordinator" as const, projectId: PROJECT_ID }
-          : { kind: "user" as const },
+        options.threadPrincipal
+          ? { kind: options.threadPrincipal, threadId, projectId: PROJECT_ID, taskId: null }
+          : options.hubCoordinator
+            ? { kind: "coordinator" as const, projectId: PROJECT_ID }
+            : { kind: "user" as const },
       ),
     assertCallerMayDriveManagedThread: () => Effect.void,
     getOverview: () =>
@@ -1359,6 +1370,24 @@ function makeHarnessLayer(
   } as unknown as (typeof ProjectionTurnRepository)["Service"]);
 
   const gatewayLayer = AgentGatewayLive.pipe(
+    Layer.provide(
+      options.remoteEnvironment
+        ? Layer.succeed(ServerEnvironment, {
+            getDescriptor: Effect.succeed({
+              environmentId: EnvironmentId.makeUnsafe("mini"),
+              label: "Mini",
+              channel: "dev",
+              platform: { os: "darwin", arch: "arm64" },
+              serverVersion: "test",
+              capabilities: {
+                repositoryIdentity: true,
+                remoteConnections: true,
+                remoteResources: true,
+              },
+            } as const),
+          })
+        : Layer.empty,
+    ),
     Layer.provide(credentialsLayer),
     Layer.provide(snapshotLayer),
     Layer.provide(engineLayer),
@@ -1373,13 +1402,15 @@ function makeHarnessLayer(
     Layer.provide(projectionTurnsLayer),
     Layer.provide(diagnosticsLayer),
     Layer.provide(eventStoreLayer),
-    Layer.provide(eventDeliveriesLayer),
-    Layer.provide(providerRuntimeEventsLayer),
+    Layer.provide(Layer.mergeAll(eventDeliveriesLayer, providerRuntimeEventsLayer)),
     Layer.provide(ServerConfig.layerTest(process.cwd(), process.cwd())),
     Layer.provide(NodeServices.layer),
     Layer.provide(
       Layer.mergeAll(
         options.computerService ?? Layer.empty,
+        options.remoteConnections
+          ? Layer.succeed(HostConnectionRegistryService, options.remoteConnections)
+          : Layer.empty,
         options.commandReceipts
           ? Layer.succeed(OrchestrationCommandReceiptRepository, options.commandReceipts)
           : Layer.empty,
@@ -2990,6 +3021,276 @@ describe("AgentGateway", () => {
         (payload.findings as Array<{ code: string }>).map((finding) => finding.code),
         ["provider_delivery_blocked", "THREAD_STREAM_CAPACITY_EXCEEDED"],
       );
+    }).pipe(Effect.provide(gatewayLayer));
+  });
+
+  for (const kind of ["unmanaged", "group-member", "worker", "coordinator"] as const) {
+    it.effect(`applies remote write policy to the real thread principal: ${kind}`, () => {
+      const connection: HostConnection = {
+        hostId: "paired-book",
+        environmentId: "book",
+        hostName: "Book",
+        state: "connected",
+        transport: "cloudflare",
+        startedAt: NOW,
+        credentialExpiresAt: "2027-01-01T00:00:00.000Z",
+        wsPath: "/unused",
+        executionScope: {
+          environmentId: "book",
+          accountAuthority: "https://example.invalid",
+          userId: "user",
+          organizationId: "org",
+          channel: "dev",
+        },
+      };
+      const forwarded: unknown[] = [];
+      const lifetime = new AbortController();
+      class TestConnections extends HostConnectionRegistry {
+        override list() {
+          return [connection];
+        }
+        override get() {
+          return connection;
+        }
+        override connectionSignal() {
+          return lifetime.signal;
+        }
+        override async call(...args: Parameters<HostConnectionRegistry["call"]>) {
+          forwarded.push(args[3]);
+          return { content: [{ type: "text", text: JSON.stringify({ accepted: true }) }] };
+        }
+      }
+      const { gatewayLayer, makeHarness } = makeHarnessLayer(baseThreads, [], {
+        remoteEnvironment: true,
+        remoteConnections: new TestConnections(),
+        threadPrincipal: kind,
+      });
+      return Effect.gen(function* () {
+        const harness = yield* makeHarness;
+        const response = yield* harness.callTool({
+          token: "token-parent",
+          name: "synara_send_message",
+          args: { environmentId: "book", threadId: "remote-target", message: "continue" },
+        });
+        const denied = kind === "worker" || kind === "coordinator";
+        assert.equal(response.status, 200);
+        assert.equal(response.result?.isError === true, denied);
+        assert.lengthOf(forwarded, denied ? 0 : 1);
+        if (denied)
+          assert.include(JSON.stringify(response.result), "ownership is local to the hub");
+        else assert.equal(toolResultJson(response.result).accepted, true);
+      }).pipe(Effect.provide(gatewayLayer));
+    });
+  }
+
+  it.effect("records a remote creation recap on the local caller turn", () => {
+    const connection: HostConnection = {
+      hostId: "paired-book",
+      environmentId: "book",
+      hostName: "Book",
+      state: "connected",
+      transport: "cloudflare",
+      startedAt: NOW,
+      credentialExpiresAt: "2027-01-01T00:00:00.000Z",
+      wsPath: "/unused",
+      executionScope: {
+        environmentId: "book",
+        accountAuthority: "https://example.invalid",
+        userId: "user",
+        organizationId: "org",
+        channel: "dev",
+      },
+    };
+    const lifetime = new AbortController();
+    let failRemote = false;
+    class TestConnections extends HostConnectionRegistry {
+      override list() {
+        return [connection];
+      }
+      override get() {
+        return connection;
+      }
+      override connectionSignal() {
+        return lifetime.signal;
+      }
+      override async call() {
+        if (failRemote)
+          return {
+            content: [
+              { type: "text", text: JSON.stringify({ error: { code: "operation_failed" } }) },
+            ],
+            isError: true,
+          };
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({
+                operationId: "gateway:create:remote",
+                requestId: "remote-hi",
+                index: 0,
+                threadId: "remote-thread",
+                projectId: "remote-project",
+                title: "Say hi",
+                target: { provider: "codex", model: "gpt-5.6-terra" },
+                provider: "codex",
+                model: "gpt-5.6-terra",
+                runtimeMode: "approval-required",
+                environment: "local",
+                branch: null,
+                worktreePath: null,
+                status: "task_dispatched",
+              }),
+            },
+          ],
+        };
+      }
+    }
+    const { gatewayLayer, makeHarness } = makeHarnessLayer(baseThreads, [], {
+      remoteEnvironment: true,
+      remoteConnections: new TestConnections(),
+    });
+    return Effect.gen(function* () {
+      const harness = yield* makeHarness;
+      const create = () =>
+        harness.callTool({
+          token: "token-parent",
+          name: "synara_create_thread",
+          args: {
+            environmentId: "book",
+            requestId: "remote-hi",
+            prompt: "hi",
+            projectId: "remote-project",
+            target: { provider: "codex", model: "gpt-5.6-terra" },
+          },
+        });
+      const created = yield* create();
+      assert.isFalse(isToolError(created.result), toolErrorText(created.result));
+      const recaps = harness.dispatched.filter(
+        (command) =>
+          command.type === "thread.activity.append" &&
+          command.activity.kind === "synara.threads.created",
+      );
+      assert.lengthOf(recaps, 1);
+      const recap = recaps[0];
+      if (recap?.type !== "thread.activity.append") throw new Error("missing recap");
+      assert.equal(recap.threadId, ThreadId.makeUnsafe("thread-parent"));
+      assert.equal(recap.activity.turnId, TurnId.makeUnsafe("turn-parent-active"));
+      assert.deepInclude(recap.activity.payload as Record<string, unknown>, {
+        source: "synara_mcp",
+        environmentId: "book",
+        hostName: "Book",
+        operationId: "gateway:create:remote",
+        createdCount: 1,
+      });
+      failRemote = true;
+      assert.isTrue(isToolError((yield* create()).result));
+      assert.lengthOf(harness.dispatched, 1);
+    }).pipe(Effect.provide(gatewayLayer));
+  });
+
+  it.effect(
+    "delegates creation durably without using a colliding local caller or its privileges",
+    () => {
+      const { gatewayLayer, makeHarness } = makeHarnessLayer(baseThreads, [], {
+        remoteEnvironment: true,
+      });
+      return Effect.gen(function* () {
+        const harness = yield* makeHarness;
+        const gateway = yield* AgentGateway;
+        const call: RemoteAgentCall = {
+          environmentId: EnvironmentId.makeUnsafe("mini"),
+          caller: {
+            environmentId: EnvironmentId.makeUnsafe("book"),
+            threadId: ThreadId.makeUnsafe("thread-parent"),
+            turnId: TurnId.makeUnsafe("remote-turn"),
+            provider: "codex",
+            runtimeMode: "approval-required",
+            envMode: "worktree",
+            capabilities: ["thread:read", "thread:write"],
+          },
+          tool: "synara_create_thread",
+          arguments: {
+            requestId: "remote-create",
+            prompt: "remote fixture",
+            target: { provider: "grok", model: DEFAULT_MODEL_BY_PROVIDER.grok },
+          },
+        };
+        const invoke = (request = call) =>
+          gateway.handleRemoteTool!(request, "remote-device:fixture");
+        assert.isTrue(
+          (yield* invoke()).isError,
+          "remote creation must not inherit a local project",
+        );
+        const input = { ...call, arguments: { ...call.arguments, projectId: PROJECT_ID } };
+        assert.isTrue(
+          (yield* invoke({ ...input, arguments: { ...input.arguments, environment: "local" } }))
+            .isError,
+        );
+        assert.isTrue(
+          (yield* invoke({
+            ...input,
+            arguments: { ...input.arguments, runtimeMode: "full-access" },
+          })).isError,
+        );
+        assert.isTrue(
+          (yield* invoke({
+            ...input,
+            arguments: { ...input.arguments, notifyCreatorOnComplete: true },
+          })).isError,
+        );
+        assert.lengthOf(harness.dispatched, 0);
+        const first = yield* invoke(input);
+        assert.isNotTrue(first.isError, JSON.stringify(first));
+        assert.deepEqual(yield* invoke(input), first, "retry returns the same durable result");
+        assert.lengthOf(harness.dispatched, 2);
+        const create = harness.dispatched[0]!;
+        assert.equal(create.type, "thread.create");
+        if (create.type === "thread.create") {
+          assert.equal(create.envMode, "worktree");
+          assert.equal(create.runtimeMode, "approval-required");
+          assert.notProperty(create, "sourceThreadId");
+          assert.notProperty(create, "parentThreadId");
+        }
+        assert.isTrue(
+          (yield* invoke({ ...input, arguments: { ...input.arguments, prompt: "different" } }))
+            .isError,
+        );
+        assert.lengthOf(harness.dispatched, 2);
+      }).pipe(Effect.provide(gatewayLayer));
+    },
+  );
+
+  it.effect("enforces origin privilege when sending messages to a remote thread", () => {
+    const { gatewayLayer, makeHarness } = makeHarnessLayer(baseThreads, [], {
+      remoteEnvironment: true,
+    });
+    return Effect.gen(function* () {
+      const harness = yield* makeHarness;
+      const gateway = yield* AgentGateway;
+      const call: RemoteAgentCall = {
+        environmentId: EnvironmentId.makeUnsafe("mini"),
+        caller: {
+          environmentId: EnvironmentId.makeUnsafe("book"),
+          threadId: ThreadId.makeUnsafe("thread-parent"),
+          turnId: TurnId.makeUnsafe("turn"),
+          provider: "codex",
+          runtimeMode: "approval-required",
+          envMode: "worktree",
+          capabilities: ["thread:write"],
+        },
+        tool: "synara_send_message",
+        arguments: { threadId: "thread-parent", message: "do work" },
+      };
+      const denied = yield* gateway.handleRemoteTool!(call, "remote-device:fixture");
+      assert.isTrue(denied.isError);
+      assert.lengthOf(harness.dispatched, 0);
+      const allowed = yield* gateway.handleRemoteTool!(
+        { ...call, caller: { ...call.caller, envMode: "local" } },
+        "remote-device:fixture",
+      );
+      assert.isNotTrue(allowed.isError, JSON.stringify(allowed));
+      assert.lengthOf(harness.dispatched, 1);
     }).pipe(Effect.provide(gatewayLayer));
   });
 

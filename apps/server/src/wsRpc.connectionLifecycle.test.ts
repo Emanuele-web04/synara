@@ -1,5 +1,6 @@
 import { makeGitActionRunner } from "./git/gitActionRunner";
 import http from "node:http";
+import { once } from "node:events";
 
 import {
   EventId,
@@ -9,6 +10,7 @@ import {
   WS_BOOTSTRAP_METHOD,
   WS_METHODS,
   WsGitRunStackedActionRpc,
+  WsServerDesktopUpdateStatusRpc,
   WS_BOOTSTRAP_PATH,
   WS_COMPATIBILITY_QUERY,
   WS_NEGOTIATE_HTTP_PATH,
@@ -22,10 +24,10 @@ import {
 } from "@synara/contracts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { Deferred, Duration, Effect, Exit, Layer, Schema, Scope, Stream } from "effect";
-import { HttpRouter, HttpServerRequest } from "effect/unstable/http";
+import { Headers, HttpRouter, HttpServerRequest } from "effect/unstable/http";
 import { Rpc, RpcGroup, RpcSerialization, RpcServer } from "effect/unstable/rpc";
 import { afterEach, describe, expect, it } from "vitest";
-import WebSocket, { type RawData } from "ws";
+import WebSocket, { WebSocketServer, type RawData } from "ws";
 
 import { ServerAuth, AuthError, type ServerAuthShape } from "./auth/Services/ServerAuth";
 import { ServerSecretStoreLive } from "./auth/Layers/ServerSecretStore";
@@ -46,11 +48,23 @@ import {
   WS_CONNECTION_SESSION_HEADER,
   WsConnectionSessions,
   type WsConnectionSessionsShape,
+  provideWsConnectionSession,
 } from "./wsConnectionSessions";
+import {
+  authorizeRemoteDesktopUpdateSession,
+  makeDesktopUpdateRpcHandlers,
+} from "./desktopUpdateRpc";
+import { bindRemoteAttachmentSession } from "./managedAttachmentPrincipal";
 import { makeCurrentWsFeatureCompatibilitySearchParams } from "./wsCompatibility";
 import { bufferLiveUiStream } from "./wsStreamBackpressure";
 import { makeCursorSafeSnapshotLiveStream } from "./wsSnapshotLiveStream";
 import { ComputerEventInterests } from "./computer/computerEventInterests";
+import { hostConnectionRouteLayer } from "./hostConnections/httpRoute";
+import {
+  HostConnectionRegistry,
+  HostConnectionRegistryService,
+  REMOTE_ATTACHMENT_QUERY,
+} from "./hostConnections/registry";
 
 const PingRpc = Rpc.make("test.ping", {
   payload: Schema.Struct({ label: Schema.String }),
@@ -66,7 +80,13 @@ const BudgetStreamRpc = Rpc.make("test.budget-stream", {
   error: WsRpcError,
   stream: true,
 });
-const PingRpcGroup = RpcGroup.make(PingRpc, SlowRpc, WsGitRunStackedActionRpc, BudgetStreamRpc);
+const PingRpcGroup = RpcGroup.make(
+  PingRpc,
+  SlowRpc,
+  WsGitRunStackedActionRpc,
+  BudgetStreamRpc,
+  WsServerDesktopUpdateStatusRpc,
+);
 
 interface RunningTestServer {
   readonly origin: string;
@@ -93,10 +113,13 @@ afterEach(() => {
 
 function connect(
   url: string,
-  options?: { readonly perMessageDeflate?: boolean },
+  options?: { readonly perMessageDeflate?: boolean; readonly headers?: Record<string, string> },
 ): Promise<WebSocket> {
   return new Promise((resolve, reject) => {
-    const socket = new WebSocket(url, { perMessageDeflate: options?.perMessageDeflate ?? false });
+    const socket = new WebSocket(url, {
+      ...options,
+      perMessageDeflate: options?.perMessageDeflate ?? false,
+    });
     openSockets.add(socket);
     socket.once("open", () => resolve(socket));
     socket.once("error", reject);
@@ -203,7 +226,9 @@ function ping(socket: WebSocket, timeoutMs = 2_000): Promise<void> {
   });
 }
 
-async function startTestServer(): Promise<RunningTestServer> {
+async function startTestServer(
+  remoteRegistry?: HostConnectionRegistry,
+): Promise<RunningTestServer> {
   const baseConfigLayer = ServerConfig.layerTest(process.cwd(), {
     prefix: "synara-ws-lifecycle-test-",
   }).pipe(Layer.provide(NodeServices.layer));
@@ -299,6 +324,11 @@ async function startTestServer(): Promise<RunningTestServer> {
         ),
       );
       return {
+        [WS_METHODS.serverDesktopUpdateStatus]: (_, context) =>
+          provideWsConnectionSession(
+            makeDesktopUpdateRpcHandlers(Effect.succeed(false)).status,
+            connectionSessions.lookup(Headers.get(context.headers, WS_CONNECTION_SESSION_HEADER)),
+          ),
         [WS_METHODS.gitRunStackedAction]: runGitAction,
         "test.budget-stream": ({
           mode,
@@ -414,14 +444,26 @@ async function startTestServer(): Promise<RunningTestServer> {
   // The negotiation layer owns WS_BOOTSTRAP_PATH, which the compression tests
   // also need: which underlying ws server (compressed vs uncompressed) handles
   // an upgrade is decided by path in nodeHttpServer.
-  const routeLayer = Layer.merge(
+  const localRoutes = Layer.merge(
     makeWebsocketNegotiationRouteLayer(),
     makeWebsocketRpcRouteLayer(rpcHttpEffectSource),
+  );
+  const routeLayer = (
+    remoteRegistry ? Layer.merge(localRoutes, hostConnectionRouteLayer) : localRoutes
   ).pipe(Layer.provide(Layer.succeed(WsConnectionSessions, connectionSessions)));
   const scope = await Effect.runPromise(Scope.make("sequential"));
   const context = await Effect.runPromise(
     Layer.buildWithScope(
-      Layer.mergeAll(configLayer, sessionsLayer, serverAuthLayer, NodeServices.layer),
+      Layer.mergeAll(
+        configLayer,
+        sessionsLayer,
+        serverAuthLayer,
+        NodeServices.layer,
+        Layer.succeed(
+          HostConnectionRegistryService,
+          remoteRegistry ?? new HostConnectionRegistry(),
+        ),
+      ),
       scope,
     ),
   );
@@ -484,9 +526,10 @@ async function connectSession(
 async function connectExistingSession(
   server: RunningTestServer,
   sessionId: AuthSessionId,
+  options?: Parameters<typeof connect>[1],
 ): Promise<{ readonly token: string; readonly socket: WebSocket }> {
   const websocket = await Effect.runPromise(server.sessions.issueWebSocketToken(sessionId));
-  const socket = await connect(featureSocketUrl(server, websocket.token));
+  const socket = await connect(featureSocketUrl(server, websocket.token), options);
   return { token: websocket.token, socket };
 }
 
@@ -656,6 +699,140 @@ describe("websocket RPC payload admission", () => {
       expect(noOrigin.status).toBe(200);
       expect(noOrigin.headers.get("access-control-allow-origin")).toBeNull();
     } finally {
+      await server.close();
+    }
+  });
+
+  it("lets desktop renderers read remote negotiation while retaining origin and owner admission", async () => {
+    const remote = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+    await once(remote, "listening");
+    const largeResponse = `${"a".repeat(9 * 1024 * 1024)}🦊`;
+    const receivedCommands: string[] = [];
+    remote.on("connection", (socket) => {
+      socket.on("message", (data) => {
+        receivedCommands.push(data.toString());
+        socket.send(largeResponse);
+      });
+    });
+    const address = remote.address();
+    if (!address || typeof address === "string") throw new Error("Expected remote address");
+    const registry = new HostConnectionRegistry();
+    let dials = 0;
+    registry.setConnector("mini", "Mini", async () => {
+      dials++;
+      const socket = new WebSocket(`ws://127.0.0.1:${address.port}`);
+      await once(socket, "open");
+      return {
+        socket,
+        compatibility: {
+          protocolEpoch: WS_PROTOCOL_EPOCH,
+          negotiatedRevision: WS_PROTOCOL_MAX_REVISION,
+          serverBuild: "remote-build",
+          serverInstanceId: "remote-instance",
+          capabilities: [],
+        },
+        environmentId: "remote-environment",
+        credential: "server-only",
+        credentialExpiresAtSeconds: Date.now() / 1000 + 3600,
+        transport: "lan",
+        race: { outcome: "unreachable", attempts: [] },
+      };
+    });
+    const server = await startTestServer(registry);
+    const url = new URL(negotiateHttpUrl(server, { token: "force-session-auth" }));
+    url.pathname = `/ws/remote/mini${WS_NEGOTIATE_HTTP_PATH}`;
+    const desktopHeaders = { origin: "synara://app" };
+    try {
+      for (const origin of ["http://evil.example", "synara://app.evil.com"]) {
+        const refused = await fetch(url, { headers: { origin } });
+        expect(refused.status).toBe(403);
+        expect(refused.headers.get("access-control-allow-origin")).toBeNull();
+      }
+      expect(dials).toBe(0);
+
+      const desktop = await fetch(url, { headers: desktopHeaders });
+      expect(desktop.status).toBe(200);
+      expect(desktop.headers.get("access-control-allow-origin")).toBe("synara://app");
+      expect(desktop.headers.get("vary")).toBe("Origin");
+      expect(desktop.headers.get("cache-control")).toBe("no-store");
+      const prepared = (await desktop.json()) as WsBootstrapNegotiateResult;
+      expect(prepared).toMatchObject({
+        serverInstanceId: "remote-instance",
+        remoteAttachmentId: expect.any(String),
+      });
+      expect(dials).toBe(1);
+
+      const rendererUrl = new URL(`${server.origin}/ws/remote/mini/ws`);
+      rendererUrl.searchParams.set("token", "force-session-auth");
+      rendererUrl.searchParams.set(REMOTE_ATTACHMENT_QUERY, prepared.remoteAttachmentId!);
+      rendererUrl.searchParams.set(
+        WS_COMPATIBILITY_QUERY.serverInstanceId,
+        prepared.serverInstanceId,
+      );
+      await expect(
+        connect(rendererUrl.toString(), { headers: { origin: "http://evil.example" } }),
+      ).rejects.toMatchObject({ statusCode: 403 });
+      rendererUrl.searchParams.delete("token");
+      await expect(
+        connect(rendererUrl.toString(), { headers: desktopHeaders }),
+      ).rejects.toMatchObject({ statusCode: 401 });
+      const pairedClient = await Effect.runPromise(server.sessions.issue({ role: "client" }));
+      const pairedTicket = await Effect.runPromise(
+        server.sessions.issueWebSocketToken(pairedClient.sessionId),
+      );
+      rendererUrl.searchParams.set("wsToken", pairedTicket.token);
+      await expect(
+        connect(rendererUrl.toString(), { headers: desktopHeaders }),
+      ).rejects.toMatchObject({ statusCode: 403 });
+      rendererUrl.searchParams.delete("wsToken");
+      rendererUrl.searchParams.set("token", "force-session-auth");
+      const renderer = await connect(rendererUrl.toString(), { headers: desktopHeaders });
+      const received = once(renderer, "message");
+      renderer.send("snapshot");
+      expect((await received)[0].toString()).toBe(largeResponse);
+      expect(renderer.readyState).toBe(WebSocket.OPEN);
+      const oversizedClosed = waitForCloseInfo(renderer);
+      renderer.send(Buffer.alloc(MAX_WEBSOCKET_MESSAGE_BYTES + 1), { binary: false });
+      await expect(oversizedClosed).resolves.toMatchObject({ code: 1009 });
+      expect(receivedCommands).toEqual(["snapshot"]);
+
+      const noOrigin = await fetch(url);
+      expect(noOrigin.status).toBe(200);
+      expect(noOrigin.headers.get("access-control-allow-origin")).toBeNull();
+      expect(dials).toBe(2);
+
+      url.searchParams.set(WS_NEGOTIATE_QUERY.minRevision, "invalid");
+      const incompatible = await fetch(url, { headers: desktopHeaders });
+      expect(incompatible.status).toBe(426);
+      expect(incompatible.headers.get("access-control-allow-origin")).toBe("synara://app");
+      url.searchParams.set(WS_NEGOTIATE_QUERY.minRevision, String(WS_PROTOCOL_MIN_REVISION));
+
+      const client = await Effect.runPromise(server.sessions.issue({ role: "client" }));
+      const ticket = await Effect.runPromise(server.sessions.issueWebSocketToken(client.sessionId));
+      url.searchParams.set("wsToken", ticket.token);
+      const forbidden = await fetch(url, { headers: desktopHeaders });
+      expect(forbidden.status).toBe(403);
+      expect(dials).toBe(2);
+
+      url.searchParams.delete("wsToken");
+      url.searchParams.delete("token");
+      const unauthorized = await fetch(url, { headers: desktopHeaders });
+      expect(unauthorized.status).toBe(401);
+      expect(dials).toBe(2);
+
+      registry.setConnector("offline", "Offline", async () => {
+        throw new Error("Remote is offline");
+      });
+      url.pathname = `/ws/remote/offline${WS_NEGOTIATE_HTTP_PATH}`;
+      url.searchParams.set("token", "force-session-auth");
+      const unavailable = await fetch(url, { headers: desktopHeaders });
+      expect(unavailable.status).toBe(503);
+      expect(unavailable.headers.get("access-control-allow-origin")).toBe("synara://app");
+      expect(await unavailable.text()).toBe("Remote host unavailable");
+    } finally {
+      registry.closeAll();
+      for (const socket of remote.clients) socket.terminate();
+      remote.close();
       await server.close();
     }
   });
@@ -934,6 +1111,71 @@ describe("websocket permessage-deflate negotiation", () => {
 });
 
 describe("websocketRpcRouteLayer connection lifecycle", () => {
+  it("admits updater status only for an authenticated owner or approved remote RPC lease", async () => {
+    const server = await startTestServer();
+    const release: Array<() => void> = [];
+    let nextId = 700;
+    const updaterStatus = (socket: WebSocket, headers: Array<[string, string]> = []) => {
+      const frame = new Promise<Record<string, unknown>>((resolve, reject) => {
+        const timeout = setTimeout(() => reject(new Error("Updater RPC did not respond")), 2_000);
+        socket.once("message", (data: RawData) => {
+          clearTimeout(timeout);
+          resolve(JSON.parse(data.toString()) as Record<string, unknown>);
+        });
+      });
+      socket.send(
+        JSON.stringify({
+          _tag: "Request",
+          id: String(nextId++),
+          tag: WS_METHODS.serverDesktopUpdateStatus,
+          payload: {},
+          headers,
+        }),
+      );
+      return frame;
+    };
+    try {
+      for (const kind of ["owner", "client", "resource", "approved-remote"] as const) {
+        const issued = await Effect.runPromise(
+          server.sessions.issue({ role: kind === "owner" ? "owner" : "client" }),
+        );
+        if (kind === "approved-remote")
+          release.push(authorizeRemoteDesktopUpdateSession(issued.sessionId));
+        if (kind === "resource")
+          release.push(
+            bindRemoteAttachmentSession(issued.sessionId, {
+              environmentId: "environment",
+              rootFingerprint: "root",
+              userId: "user",
+              deviceJkt: "device",
+              trustGeneration: 1,
+            }),
+          );
+        const { socket } = await connectExistingSession(server, issued.sessionId, {
+          // The authenticated upgrade must overwrite a client-supplied connection-session key.
+          headers: { [WS_CONNECTION_SESSION_HEADER]: "owner:forged" },
+        });
+        const response = await updaterStatus(socket);
+        expect(response._tag).toBe("Exit");
+        expect(response.exit).toMatchObject({
+          _tag: kind === "owner" || kind === "approved-remote" ? "Success" : "Failure",
+        });
+        if (kind === "owner") {
+          // Per-RPC headers can replace the upgrade key; an unknown key must fail closed.
+          const forged = await updaterStatus(socket, [
+            [WS_CONNECTION_SESSION_HEADER, "owner:forged"],
+          ]);
+          expect(forged.exit).toMatchObject({ _tag: "Failure" });
+        }
+        socket.close();
+        await waitForClose(socket);
+      }
+    } finally {
+      release.forEach((dispose) => dispose());
+      await server.close();
+    }
+  });
+
   it("exposes the authenticated session to RPC handlers for the connection lifetime", async () => {
     const server = await startTestServer();
     try {
@@ -952,6 +1194,7 @@ describe("websocketRpcRouteLayer connection lifecycle", () => {
       expect(server.connectionSessions.lookup(sessionKey)).toEqual({
         role: "owner",
         attachmentPrincipal: { ownerKind: "session", ownerId: issued.sessionId },
+        desktopUpdateAuthority: `owner:${issued.sessionId}`,
       });
 
       // A client may read Computer state without ever subscribing to its

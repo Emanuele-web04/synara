@@ -330,7 +330,7 @@ export const WorkspaceFilePreviewHeader = function WorkspaceFilePreviewHeader(
           <div
             role="radiogroup"
             aria-label="Markdown view"
-            className="flex h-7 shrink-0 items-center rounded-lg bg-[var(--color-background-elevated-secondary)] p-0.5"
+            className="flex h-7 shrink-0 items-center rounded-full bg-black/[0.05] p-0.5 dark:bg-white/[0.07]"
           >
             {MARKDOWN_VIEW_SEGMENTS.map((segment) => {
               const selected = segment.rendered === props.markdownPreviewEnabled;
@@ -342,9 +342,9 @@ export const WorkspaceFilePreviewHeader = function WorkspaceFilePreviewHeader(
                   aria-checked={selected}
                   title={segment.title}
                   className={cn(
-                    "flex h-6 w-7 cursor-pointer items-center justify-center rounded-md transition-colors",
+                    "flex h-6 w-7 cursor-pointer items-center justify-center rounded-full transition-colors",
                     selected
-                      ? "bg-[var(--color-background-button-secondary)] text-[var(--color-text-foreground)]"
+                      ? "bg-white text-foreground shadow-[0_1px_2px_rgba(0,0,0,0.12)] dark:bg-background dark:shadow-none"
                       : "text-muted-foreground hover:text-foreground",
                   )}
                   onClick={() => props.onMarkdownPreviewChange(segment.rendered)}

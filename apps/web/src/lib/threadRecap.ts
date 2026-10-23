@@ -1,7 +1,8 @@
+import { executionStorage } from "./hosts/executionStorage";
 // FILE: threadRecap.ts
 // Purpose: Build compact, low-churn inputs and browser persistence for AI-generated chat recaps.
 // Layer: Client utility
-// Exports: recap source derivation plus per-thread localStorage cache helpers.
+// Exports: recap source derivation plus per-thread executionStorage cache helpers.
 
 import type { ThreadId } from "@synara/contracts";
 import type { Thread, ChatMessage } from "~/types";
@@ -149,7 +150,7 @@ function getThreadRecapStorage(): ThreadRecapStorage | null {
     return null;
   }
   try {
-    return window.localStorage;
+    return executionStorage;
   } catch {
     return null;
   }
@@ -189,7 +190,7 @@ function sanitizePersistedThreadRecap(rawEntry: unknown): PersistedThreadRecap |
   };
 }
 
-// Keeps localStorage bounded while preserving the freshest thread memories.
+// Keeps executionStorage bounded while preserving the freshest thread memories.
 export function prunePersistedThreadRecapCache(
   cache: PersistedThreadRecapCache,
 ): PersistedThreadRecapCache {

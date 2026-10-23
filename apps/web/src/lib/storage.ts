@@ -66,6 +66,11 @@ export interface FlushBeforePageHideEnv {
  * where `beforeunload` does not. No-ops when the DOM globals are unavailable
  * (SSR / non-browser test environments), and is injectable for testing.
  */
+const deferredStorageFlushers = new Set<() => void>();
+export function flushDeferredStorage(): void {
+  for (const flush of deferredStorageFlushers) flush();
+}
+
 export function flushStorageBeforePageHide(
   flush: () => void,
   env: FlushBeforePageHideEnv = {
@@ -73,6 +78,7 @@ export function flushStorageBeforePageHide(
     document: typeof document !== "undefined" ? document : undefined,
   },
 ): void {
+  deferredStorageFlushers.add(flush);
   // Guard each capability separately: SSR-style test environments stub partial
   // globals (e.g. a `document` with only `documentElement`), and this runs at
   // module scope in store files — a missing listener API must degrade to a

@@ -75,3 +75,47 @@ it("updates hover effort and Fast from the selected account's cached catalog", a
     client.clear();
   }
 });
+
+it("marks a chat on another computer with the connection globe and its computer", async () => {
+  const client = new QueryClient();
+  const renderCard = (hostName: string | null) => (
+    <QueryClientProvider client={client}>
+      <div className="w-64">
+        <ThreadHoverCardContent
+          threadId={ThreadId.makeUnsafe("hover-remote")}
+          title="Audit PRs and merge order"
+          timeLabel="23m"
+          projectName="synara"
+          projectCwd={null}
+          projectAppearance={null}
+          sourceProjectName={null}
+          branch="codex/sidebar"
+          worktreeName={null}
+          pullRequest={null}
+          onOpenPullRequest={() => {}}
+          status={null}
+          model={null}
+          modelCatalogQueryOptions={providerModelsQueryOptions({
+            provider: "codex",
+            instanceId: "codex",
+          })}
+          hostName={hostName}
+        />
+      </div>
+    </QueryClientProvider>
+  );
+  const screen = await render(renderCard("Macmini.local"));
+  try {
+    const host = screen.getByText("Macmini.local");
+    await expect.element(host).toBeVisible();
+    const globes = () => screen.container.querySelectorAll(".text-sky-600");
+    // One beside the title, one leading the computer row.
+    expect(globes()).toHaveLength(2);
+    await screen.rerender(renderCard(null));
+    await expect.element(screen.getByText("Macmini.local")).not.toBeInTheDocument();
+    expect(globes()).toHaveLength(0);
+  } finally {
+    await screen.unmount();
+    client.clear();
+  }
+});

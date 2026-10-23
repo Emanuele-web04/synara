@@ -8,7 +8,7 @@ work** — its conversation, provider session, working environment, tool activit
 | Concept          | Meaning                                                             |
 | ---------------- | ------------------------------------------------------------------- |
 | Workspace        | The complete Synara application and the projects available in it    |
-| Project          | A local folder, preferably a Git repository                         |
+| Project          | A folder on its execution computer, preferably a Git repository     |
 | Task             | One durable unit of work inside a project                           |
 | Goal             | An explicit persistent objective attached to one task               |
 | Turn             | One user instruction followed by the provider's work and response   |
@@ -107,9 +107,10 @@ You do not need every surface open at once. Bring each one in when it answers a 
 running, what changed, whether the UI works, or whether the task is safe to ship.
 
 Desktop quit requests ask for confirmation even when no chats are running. On macOS,
-⌘Q quits the application after confirmation; ⌘W confirms closing the window while the
-application and its running chats stay active. Quitting with no open window uses a
-native confirmation. With an open window and running chats, the quit dialog lists the work that
+⌘Q quits the application after confirmation. Cmd/Ctrl+W closes the focused terminal or
+workspace view, or the active open chat tab when available. If no surface handles the chord,
+macOS ⌘W confirms closing the window while the application and its running chats stay active.
+Quitting with no open window uses a native confirmation. With an open window and running chats, the quit dialog lists the work that
 will stop and offers to resume it automatically on the next launch. On macOS and Linux, a SIGINT
 or SIGTERM from a terminal or a script, such as `bun run canary:stop`, shuts the app down without
 asking.
@@ -128,7 +129,21 @@ thread's model picker cannot change its account in place.
 
 ## Projects
 
-A project is the folder Synara works with.
+A project is the folder Synara works with. When remote connections are available, **Create project**
+lets you name it, choose a computer, and browse a source folder on that computer. A new chat's
+**Run on** picker chooses its computer; the project picker then shows that computer's folders.
+Existing chats and drafts keep their original computer when you open work elsewhere.
+
+Connected computers share the same Projects, Chats, Pinned, and Activity lists. A remote row names
+its computer; opening it changes the selected chat without switching the whole app. Empty remote
+folders stay in the project picker until they have a chat, are pinned, or are the active new project.
+Projects with the same name or path on different computers remain separate physical folders.
+
+The selected computer also owns chat creation from keyboard shortcuts and search, and terminal
+creation from the desktop menu. If that connection is unavailable, these actions ask you to
+reconnect instead of creating work locally. Window appearance, zoom, and app keybindings belong
+to the controlling app; project-script shortcuts stay with the project on its computer. Opening
+Keybindings from a remote chat takes you to the controlling app's settings.
 
 The project picker shows registered projects and local folders. Creating a task worktree does not
 add another project entry. If the current draft already uses an unregistered folder, the picker keeps
@@ -186,6 +201,9 @@ outcome for that turn. Agent, automatic, steering, and historical interruptions 
 say **Interrupted**; provider failures retain their reason even after Stop intent. Background commands
 keep one row as they run and settle; a completion that wakes the provider starts a separate **Resumed**
 response with its own live and settled duration, even when the provider reuses the launch's turn ID.
+For Claude tasks, a terminal task report wins over late progress and background snapshots. The task
+becomes live again only when Claude explicitly starts or resumes it; a new user message does not
+require stopping genuinely independent background work.
 
 **Stop** settles the turn once the provider accepts the interrupt and no provider turn is still
 running, even if the provider had already finished and its final events are still arriving.

@@ -134,7 +134,7 @@ jobs:
       matrix:
         include:
           - pkg: core
-            filters: "--filter=@synara/contracts --filter=@synara/shared --filter=@synara/scripts --filter=@synara/desktop"
+            filters: "--filter=@synara/contracts --filter=@synara/shared --filter=@synara/scripts --filter=@synara/desktop --filter=@synara/analytics"
             test-args: ""
           - pkg: web
             filters: "--filter=@synara/web"
@@ -236,6 +236,12 @@ jobs:
 
       - name: Build desktop pipeline
         run: bun run build:desktop
+
+      - name: Build analytics dashboard and bundle Worker
+        run: |
+          bun run --cwd apps/analytics build
+          cd apps/analytics
+          bunx wrangler deploy --dry-run
 
       - name: Configure Electron sandbox helper
         run: |

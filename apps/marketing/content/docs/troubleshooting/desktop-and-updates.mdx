@@ -83,6 +83,16 @@ Fully quit every Synara process, then relaunch. Do not expose or forward Synaraâ
 
 An update failure does not prove that local task data was deleted. Avoid combining an update recovery with manual data-directory cleanup.
 
+## A downloaded update is waiting
+
+Synara continues checking on its normal four-hour schedule while a downloaded update waits for installation. **Check for Updates** also checks immediately. If a newer compatible release is available, Synara downloads it and replaces the pending version; a failed check keeps the already verified download. Installation waits until checking and downloading finish.
+
+## Update a Mac from an iPhone or iPad
+
+In companion builds that support remote updates, open **Settings â†’ Connections**, select the Mac, then open **Software Update**. You can check, download, and choose **Restart & Install** for the downloaded version. This requires an approved connection to the packaged Synara Remote app on macOS; older desktop builds must first be updated on the Mac.
+
+Finish running chats, queued tasks, approvals, and development servers before installing. The Mac refuses a remote restart when it detects that work is still active or cannot establish that it is idle. Confirm the displayed version and the temporary connection interruption. The app reconnects after Synara restarts; check **Installed version** to confirm completion. A dropped connection alone does not prove installation succeeded. There is no need to delete local data or pair again for an ordinary update.
+
 ## Synara opens but providers changed after an update
 
 The application update and provider CLI updates are independent. After updating Synara:

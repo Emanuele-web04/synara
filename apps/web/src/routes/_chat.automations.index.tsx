@@ -1,3 +1,7 @@
+import {
+  clearWorkspaceAutomationDraft,
+  readWorkspaceAutomationDraft,
+} from "~/lib/hosts/automationWorkspace";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useState } from "react";
 
@@ -8,11 +12,12 @@ import { RouteSurfaceHeader } from "~/components/RouteSurface";
 import { CentralIcon } from "~/lib/central-icons";
 import { ClockIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
-import { useStore } from "~/store";
 import { useAutomations } from "./-automations.shared";
 import { AutomationCreateDialog } from "./-automations.list";
 
 export const Route = createFileRoute("/_chat/automations/")({
+  validateSearch: (search: Record<string, unknown>): { create?: string } =>
+    typeof search.create === "string" ? { create: search.create } : {},
   component: AutomationsRouteView,
 });
 
@@ -20,7 +25,7 @@ export const Route = createFileRoute("/_chat/automations/")({
 // one" landing instead of a second copy of the list.
 function AutomationsRouteView() {
   const navigate = useNavigate();
-  const projects = useStore((state) => state.projects);
+  const { create } = Route.useSearch();
   const [dialogOpen, setDialogOpen] = useState(false);
 
   const { refetch, createMutation } = useAutomations(
@@ -59,21 +64,23 @@ function AutomationsRouteView() {
           <p className="max-w-xs text-ui leading-snug text-muted-foreground">
             Pick an automation in the panel to see its runs, or schedule a new one.
           </p>
-          <Button
-            type="button"
-            size="sm"
-            className="mt-4"
-            onClick={openCreateDialog}
-            disabled={projects.length === 0}
-          >
+          <Button type="button" size="sm" className="mt-4" onClick={openCreateDialog}>
             New automation
           </Button>
         </main>
       </div>
 
       <AutomationCreateDialog
-        open={dialogOpen}
-        onOpenChange={setDialogOpen}
+        key={create ?? "local"}
+        open={dialogOpen || Boolean(create)}
+        initialDraft={readWorkspaceAutomationDraft(create)}
+        onOpenChange={(open) => {
+          setDialogOpen(open);
+          if (!open && create) {
+            clearWorkspaceAutomationDraft(create);
+            void navigate({ to: "/automations", search: {} });
+          }
+        }}
         createAutomation={(input, onCreated) =>
           createMutation.mutate(input, { onSuccess: onCreated })
         }

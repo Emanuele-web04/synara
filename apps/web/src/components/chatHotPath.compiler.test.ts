@@ -201,6 +201,7 @@ const HOT_PATH_MODULES: readonly HotPathModule[] = [
     allowedBailoutReasons: [],
   },
   { relativePath: "Sidebar.tsx", allowedBailoutReasons: [] },
+  { relativePath: "hosts/WorkspaceProjects.tsx", allowedBailoutReasons: [] },
   // Renders every group/coordinator/chat row on the Groups surface — keep it at a
   // zero-bailout budget like the sidebar itself.
   {

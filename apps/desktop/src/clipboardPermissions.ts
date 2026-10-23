@@ -4,6 +4,7 @@ import {
   SYNARA_CANARY_DESKTOP_SCHEME,
   SYNARA_CUA_DESKTOP_SCHEME,
   SYNARA_DESKTOP_SCHEME,
+  SYNARA_REMOTE_DESKTOP_SCHEME,
 } from "@synara/shared/desktopIdentity";
 
 /** Copy buttons share the OS clipboard; background reads remain denied. */
@@ -28,16 +29,26 @@ export function isClipboardWritePermission(
       page.protocol === `${SYNARA_DESKTOP_SCHEME}:` ||
       page.protocol === `${SYNARA_CANARY_DESKTOP_SCHEME}:` ||
       page.protocol === `${SYNARA_CUA_DESKTOP_SCHEME}:` ||
-      page.protocol === `${SYNARA_BETA_DESKTOP_SCHEME}:`;
+      page.protocol === `${SYNARA_BETA_DESKTOP_SCHEME}:` ||
+      page.protocol === `${SYNARA_REMOTE_DESKTOP_SCHEME}:`;
+    if (trustedScheme && (page.host !== "app" || page.username || page.password)) return false;
     if (
       page.protocol !== "https:" &&
       !trustedScheme &&
       !(page.protocol === "http:" && ["localhost", "127.0.0.1", "[::1]"].includes(page.hostname))
     )
       return false;
-    return [requestingOrigin, details.requestingUrl, details.embeddingOrigin].every(
-      (origin) => !origin || new URL(origin).origin === page.origin,
-    );
+    return [requestingOrigin, details.requestingUrl, details.embeddingOrigin].every((origin) => {
+      if (!origin) return true;
+      const source = new URL(origin);
+      // Custom desktop schemes have an opaque URL.origin; compare their real authority.
+      return trustedScheme
+        ? source.protocol === page.protocol &&
+            source.host === page.host &&
+            !source.username &&
+            !source.password
+        : source.origin === page.origin;
+    });
   } catch {
     return false;
   }

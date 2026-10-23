@@ -23,7 +23,23 @@ import {
   modelSelection,
   resetComposerDraftStore,
 } from "./composerDraftStoreTestFixtures";
-import { removeLocalStorageItem, setLocalStorageItem } from "./hooks/useLocalStorage";
+import { executionStorage } from "./lib/hosts/executionStorage";
+
+// Exercise the same scoped persistence boundary the attachment verifier reads.
+const physicalItems = new Map<string, string>();
+vi.stubGlobal("localStorage", {
+  getItem: (key: string) => physicalItems.get(key) ?? null,
+  setItem: (key: string, value: string) => physicalItems.set(key, value),
+  removeItem: (key: string) => physicalItems.delete(key),
+  key: (index: number) => [...physicalItems.keys()][index] ?? null,
+  get length() {
+    return physicalItems.size;
+  },
+  clear: () => physicalItems.clear(),
+});
+const setLocalStorageItem = <T, E>(key: string, value: T, schema: Schema.Codec<T, E>) =>
+  executionStorage.setItem(key, Schema.encodeSync(Schema.fromJsonString(schema))(value));
+const removeLocalStorageItem = (key: string) => executionStorage.removeItem(key);
 import { insertInlineTerminalContextPlaceholder } from "./lib/terminalContext";
 
 describe("composerDraftStore addImages", () => {

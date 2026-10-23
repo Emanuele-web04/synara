@@ -362,7 +362,7 @@ jobs:
             --platform "${{ inputs.platform }}" \
             --arch "${{ inputs.arch }}" \
             --version "${{ inputs.version }}" \
-            --executable-name "${{ inputs.desktop_flavor == 'beta' && 'synara-beta' || 'synara' }}"
+            --executable-name "${{ inputs.desktop_flavor == 'remote' && 'synara-remote' || inputs.desktop_flavor == 'beta' && 'synara-beta' || 'synara' }}"
 
       - name: Upload qualified artifacts
         uses: actions/upload-artifact@v7
@@ -452,4 +452,4 @@ jobs:
             --platform "${{ inputs.platform }}" \
             --arch "${{ inputs.arch }}" \
             --version "${{ inputs.version }}" \
-            --executable-name "${{ inputs.desktop_flavor == 'beta' && 'synara-beta' || 'synara' }}"
+            --executable-name "${{ inputs.desktop_flavor == 'remote' && 'synara-remote' || inputs.desktop_flavor == 'beta' && 'synara-beta' || 'synara' }}"
