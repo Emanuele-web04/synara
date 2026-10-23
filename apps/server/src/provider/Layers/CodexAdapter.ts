@@ -49,6 +49,7 @@ import {
   CodexAppServerManager,
   CodexSessionAuthInvalidatedError,
   parseCodexUserInputQuestions,
+  readResumeCursorThreadId,
   type CodexAppServerSendTurnInput,
   type CodexAppServerStartSessionInput,
   type CodexSessionInspection,
@@ -103,6 +104,7 @@ import {
 import { type EventNdjsonLogger, makeEventNdjsonLogger } from "./EventNdjsonLogger.ts";
 
 const PROVIDER = "codex" as const;
+const CODEX_RUNTIME_WARNING_METHODS = new Set(["guardianWarning", "warning"]);
 
 // Backstop for an alive-but-silent codex app-server: if a turn produces no
 // activity at all for this long, abort it instead of showing "Working" forever.
@@ -1837,6 +1839,28 @@ function mapToRuntimeEvents(
     ];
   }
 
+  if (CODEX_RUNTIME_WARNING_METHODS.has(event.method)) {
+    const message = asTrimmedString(payload?.message);
+    if (
+      event.method === "guardianWarning" &&
+      message?.startsWith("Automatic approval review approved (")
+    ) {
+      return [];
+    }
+    return [
+      {
+        type: "runtime.warning",
+        ...withMinimalRawPayload(runtimeEventBase(event, canonicalThreadId), event),
+        payload: {
+          message: sanitizeUnmappedProviderDetail(message, 2_000) ?? "Codex runtime warning",
+          ...(event.payload !== undefined
+            ? { detail: sanitizeUnmappedProviderData(event.payload) }
+            : {}),
+        },
+      },
+    ];
+  }
+
   if (event.method === "configWarning") {
     const details = asTrimmedString(payload?.details);
     const path = asTrimmedString(payload?.path);
@@ -2718,7 +2742,9 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
           const runtimeEvents = sizedRuntimeEvents.map((item) => item.event);
           trackTurnWatchdogActivity(stampedEvent.threadId, runtimeEvents);
           const nativeEvent = compactCodexNativeEventForIngress(
-            hasUnmappedEvent ? sanitizeUnmappedProviderEvent(stampedEvent) : stampedEvent,
+            hasUnmappedEvent || CODEX_RUNTIME_WARNING_METHODS.has(stampedEvent.method)
+              ? sanitizeUnmappedProviderEvent(stampedEvent)
+              : stampedEvent,
           );
           const result = ingress.offer({
             nativeEvent: nativeEvent.event,
@@ -2790,6 +2816,13 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
         supportsLiveTurnDiffPatch: true,
       },
       startSession,
+      didResumeSession: (input, session) => {
+        const requestedThreadId = readResumeCursorThreadId(input.resumeCursor);
+        return (
+          requestedThreadId !== undefined &&
+          readResumeCursorThreadId(session.resumeCursor) === requestedThreadId
+        );
+      },
       sendTurn,
       steerTurn,
       startReview,

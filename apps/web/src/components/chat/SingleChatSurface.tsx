@@ -451,8 +451,9 @@ export function SingleChatSurface(props: {
     });
   };
 
-  const handleSelectEditorFile = (filePath: string) =>
+  const handleSelectEditorFile = (filePath: string, beforeOpen?: () => void) =>
     guardEditorLeave(() => {
+      beforeOpen?.();
       setEditorCenterMode("file");
       setEditorEditTarget(null);
       void navigate({
@@ -479,8 +480,9 @@ export function SingleChatSurface(props: {
     });
   };
 
-  const handleEditFileInEditorView = (filePath: string) =>
+  const handleEditFileInEditorView = (filePath: string, beforeOpen?: () => void) =>
     guardEditorLeave(() => {
+      beforeOpen?.();
       setEditorEditTarget({
         filePath,
         basePath: null,
@@ -595,9 +597,10 @@ export function SingleChatSurface(props: {
   // Other references retain the existing dock file preview and external-editor
   // fallback behavior.
   const dockFileOpener: WorkspaceFileOpener = {
-    openFile: (path) => {
+    openFile: (path, beforeOpen) => {
       const directoryPath = resolveWorkspaceDirectoryOpenTarget(path, workspaceRoot);
       if (directoryPath !== null) {
+        beforeOpen?.();
         requestImmediateDockHydration("explorer");
         openPane(props.threadId, { kind: "explorer" });
         requestExplorerReveal(props.threadId, directoryPath);
@@ -610,6 +613,7 @@ export function SingleChatSurface(props: {
       if (!targetPath) {
         return false;
       }
+      beforeOpen?.();
       requestImmediateDockHydration("file");
       openPane(props.threadId, { kind: "file", filePath: targetPath });
       return true;
@@ -619,7 +623,7 @@ export function SingleChatSurface(props: {
   // Editor surface: the center file pane is already the file viewer, so file
   // references select into it instead of opening a dock pane.
   const editorFileOpener: WorkspaceFileOpener = {
-    openFile: (path) => {
+    openFile: (path, beforeOpen) => {
       if (!workspaceRoot) {
         return false;
       }
@@ -627,7 +631,7 @@ export function SingleChatSurface(props: {
       if (!relativePath) {
         return false;
       }
-      handleSelectEditorFile(relativePath);
+      handleSelectEditorFile(relativePath, beforeOpen);
       return true;
     },
     prefetchFile: prefetchOpenerFile,

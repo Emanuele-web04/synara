@@ -219,6 +219,7 @@ const ClearSessionResumeCursorInput = Schema.Struct({
 
 const CompletePriorTranscriptBootstrapInput = Schema.Struct({
   threadId: ThreadId,
+  expectedLifecycleGeneration: Schema.optional(TrimmedNonEmptyString),
 });
 
 const ImportExternalThreadInput = Schema.Struct({
@@ -3111,6 +3112,13 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
               const continuationResetRequested =
                 persistedBinding !== undefined &&
                 readPersistedContinuationResetRequested(persistedBinding.runtimePayload);
+              // Only a switch to another driver may abandon the persisted
+              // continuation implicitly; a same-driver home or account change
+              // still has to be resolved by the user.
+              const abandonsOtherProviderContinuation =
+                outcomeOptions?.abandonOtherProviderContinuation === true &&
+                persistedBinding !== undefined &&
+                persistedBinding.provider !== resolved.instance.driver;
               const canReusePersistedResumeCursor =
                 persistedBinding !== undefined &&
                 hasResumeCursor(persistedBinding.resumeCursor) &&
@@ -3118,6 +3126,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
               if (
                 persistedBinding !== undefined &&
                 !continuationResetRequested &&
+                !abandonsOtherProviderContinuation &&
                 ((!hasAvailableResumeCursor && !exactPersistedLaunchMatch) ||
                   (hasAvailableResumeCursor && !continuationCompatible)) &&
                 (providerUsesProtectedNativeContinuation(persistedBinding.provider) ||
@@ -3277,7 +3286,9 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                 const priorTranscriptBootstrapPending =
                   persistedPriorTranscriptBootstrapPending ||
                   staleSessionFallbackOccurred ||
-                  (outcomeOptions?.registerPriorTranscriptBootstrapOnFreshStart === true &&
+                  abandonsOtherProviderContinuation ||
+                  ((nativeResumeAttempted ||
+                    outcomeOptions?.registerPriorTranscriptBootstrapOnFreshStart === true) &&
                     !nativeResumeSucceeded);
 
                 if (session.provider !== adapter.provider) {
@@ -3488,6 +3499,17 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
             const binding = Option.getOrUndefined(yield* directory.getBinding(input.threadId));
             if (!binding) {
               return;
+            }
+            // Check under the binding lock so a delayed accepted turn cannot
+            // retire a marker written by a newer session while it was waiting.
+            if (
+              input.expectedLifecycleGeneration !== undefined &&
+              binding.lifecycleGeneration !== input.expectedLifecycleGeneration
+            ) {
+              return yield* toValidationError(
+                "ProviderService.completePriorTranscriptBootstrap",
+                "Cannot complete transcript recovery from a replaced provider session.",
+              );
             }
             yield* directory.upsert({
               threadId: input.threadId,
