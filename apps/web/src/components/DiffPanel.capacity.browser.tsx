@@ -195,7 +195,7 @@ it("refreshes a live turn patch for each snapshot and its final checkpoint witho
   };
   const liveThread = { ...THREAD, turnDiffSummaries: [summary] };
   const getDiff = vi.fn().mockResolvedValue({ diff: PATCH });
-  await mountPanel(getDiff, liveThread);
+  const client = await mountPanel(getDiff, liveThread);
   await expect.element(page.getByText("export const value = 2;", { exact: true })).toBeVisible();
 
   // Identical counts and timestamps must not reuse the previous revision forever.
@@ -210,6 +210,11 @@ it("refreshes a live turn patch for each snapshot and its final checkpoint witho
   );
   await expect.element(page.getByText("export const value = 3;", { exact: true })).toBeVisible();
   expect(getDiff).toHaveBeenCalledTimes(2);
+  await vi.waitFor(
+    () =>
+      expect(client.getQueryCache().findAll({ queryKey: providerQueryKeys.all })).toHaveLength(1),
+    { timeout: 1_000 },
+  );
 
   getDiff.mockResolvedValue({ diff: PATCH.replace("value = 2", "value = 4") });
   useStore.setState(
@@ -226,4 +231,14 @@ it("refreshes a live turn patch for each snapshot and its final checkpoint witho
   );
   await expect.element(page.getByText("export const value = 4;", { exact: true })).toBeVisible();
   expect(getDiff).toHaveBeenCalledTimes(3);
+  await vi.waitFor(
+    () =>
+      expect(client.getQueryCache().findAll({ queryKey: providerQueryKeys.all })).toHaveLength(1),
+    { timeout: 1_000 },
+  );
+  await screen!.unmount();
+  screen = undefined;
+  // Let zero-delay live-cache cleanup run; the final checkpoint keeps its normal cache lifetime.
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  expect(client.getQueryCache().findAll({ queryKey: providerQueryKeys.all })).toHaveLength(1);
 });

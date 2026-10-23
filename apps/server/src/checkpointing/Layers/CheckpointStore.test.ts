@@ -435,15 +435,32 @@ describe("CheckpointStoreLive", () => {
       for (const ref of [...ownRefs, ...keptRefs]) git(["update-ref", ref, "HEAD"]);
       writeFileSync(join(cwd, "file.txt"), "working changes\n");
       const index = readFileSync(join(cwd, ".git", "index"));
-      runtime = ManagedRuntime.make(
-        CheckpointStoreLive.pipe(
-          Layer.provide(
-            GitCoreLive.pipe(
-              Layer.provide(ServerConfig.layerTest(cwd, { prefix: "synara-live-cleanup-" })),
-            ),
+      // Linux/macOS Git emits LF; retain the same real Git deletion proof while
+      // exercising the Windows-style command-output boundary as well.
+      const crlfGit = Layer.effect(
+        GitCore,
+        Effect.map(Effect.service(GitCore), (core) => ({
+          ...core,
+          execute: (input: Parameters<GitCoreShape["execute"]>[0]) =>
+            core
+              .execute(input)
+              .pipe(
+                Effect.map((result) =>
+                  input.args[0] === "for-each-ref"
+                    ? { ...result, stdout: result.stdout.replaceAll("\n", "\r\n") }
+                    : result,
+                ),
+              ),
+        })),
+      ).pipe(
+        Layer.provide(
+          GitCoreLive.pipe(
+            Layer.provide(ServerConfig.layerTest(cwd, { prefix: "synara-live-cleanup-" })),
           ),
-          Layer.provide(NodeServices.layer),
         ),
+      );
+      runtime = ManagedRuntime.make(
+        CheckpointStoreLive.pipe(Layer.provide(crlfGit), Layer.provide(NodeServices.layer)),
       );
       await runtime.runPromise(
         Effect.gen(function* () {

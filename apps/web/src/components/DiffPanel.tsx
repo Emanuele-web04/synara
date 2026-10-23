@@ -715,6 +715,9 @@ export default function DiffPanel({
       toTurnCount: activeCheckpointRange?.toTurnCount ?? null,
       ignoreWhitespace: diffIgnoreWhitespace,
       cacheScope: selectedTurn ? resolveTurnDiffCacheScope(selectedTurn) : conversationCacheScope,
+      liveSnapshot:
+        selectedTurn?.status === "missing" &&
+        selectedTurn.checkpointRef?.startsWith("provider-diff:") === true,
       enabled:
         diffQueriesEnabled && isGitRepo && !diffEnvironmentPending && diffViewKind === "turn",
     }),

@@ -676,7 +676,8 @@ const makeCheckpointStore = Effect.gen(function* () {
           cwd: input.cwd,
           args: ["for-each-ref", "--format=%(refname)", prefix],
         });
-        for (const ref of liveRefs.stdout.split("\n")) {
+        for (const line of liveRefs.stdout.split("\n")) {
+          const ref = line.trim();
           if (ref.startsWith(prefix)) checkpointRefs.add(CheckpointRef.makeUnsafe(ref));
         }
       }
