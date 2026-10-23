@@ -32,6 +32,9 @@ export function createDesktopBundleFilePatterns(
   if (platform !== "mac") files.push("!node_modules/node-pty/prebuilds/darwin-*/**");
   if (platform !== "win") files.push("!node_modules/node-pty/prebuilds/win32-*/**");
   files.push("!node_modules/node-pty/lib/*.test.js");
+  // node-pty's emitted JS maps reference its TypeScript sources. Keep those
+  // sources with diagnostic builds, but omit them from ordinary artifacts.
+  if (!options.diagnostics) files.push("!node_modules/node-pty/src/**");
   // MSVC leaves incremental-link inputs and build logs next to the rebuilt
   // addon. These are build products, not DLLs, executables, or native addons.
   files.push(
