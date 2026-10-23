@@ -11,6 +11,7 @@ import {
   type GitWorktreeSetupProgressEvent,
   type ModelSelection,
   type ModelSlug,
+  type OrchestrationThreadActivity,
   type ProviderInstanceId,
   type ProviderApprovalDecision,
   type ProviderInteractionMode,
@@ -61,6 +62,7 @@ import {
 } from "../lib/subagentPresentation";
 import {
   hasLiveTurnTailWork,
+  deriveSubagentTaskEnds,
   isProviderFileEditWorkLogEntry,
   type WorkLogEntry,
 } from "../session-logic";
@@ -2282,12 +2284,58 @@ export function enrichSubagentWorkEntries(
   workEntries: ReadonlyArray<WorkLogEntry>,
   threads: ReadonlyArray<Thread>,
   parentThreadId: ThreadIdType | null,
+  activities: ReadonlyArray<OrchestrationThreadActivity> = [],
 ): WorkLogEntry[] {
   if (workEntries.length === 0) {
     return [];
   }
 
   const threadById = new Map(threads.map((thread) => [thread.id, thread] as const));
+  const confirmedTasks = new Map<
+    string,
+    { toolUseId: string; turnId: OrchestrationThreadActivity["turnId"]; confirmed: boolean }
+  >();
+  for (const activity of activities) {
+    if (!activity.payload || typeof activity.payload !== "object") continue;
+    const payload = activity.payload as Record<string, unknown>;
+    if (typeof payload.taskId !== "string") continue;
+    if (activity.kind === "task.started") {
+      if (typeof payload.toolUseId === "string" && activity.turnId !== null) {
+        confirmedTasks.set(payload.taskId, {
+          toolUseId: payload.toolUseId,
+          turnId: activity.turnId,
+          confirmed: false,
+        });
+      } else {
+        confirmedTasks.delete(payload.taskId);
+      }
+      continue;
+    }
+    const previous = confirmedTasks.get(payload.taskId);
+    if (
+      activity.kind === "task.completed" ||
+      (activity.kind === "task.updated" && payload.status !== "running")
+    ) {
+      if (previous) previous.confirmed = false;
+    } else if (
+      activity.kind === "task.updated" &&
+      payload.reconcilesStop === true &&
+      typeof payload.toolUseId === "string" &&
+      activity.turnId !== null
+    ) {
+      if (
+        previous &&
+        (previous.toolUseId !== payload.toolUseId || previous.turnId !== activity.turnId)
+      )
+        continue;
+      confirmedTasks.set(payload.taskId, {
+        toolUseId: payload.toolUseId,
+        turnId: activity.turnId,
+        confirmed: true,
+      });
+    }
+  }
+  const taskEnds = confirmedTasks.size > 0 ? deriveSubagentTaskEnds(activities) : undefined;
 
   return workEntries.map((entry) => {
     if ((entry.subagents?.length ?? 0) === 0) {
@@ -2301,7 +2349,20 @@ export function enrichSubagentWorkEntries(
         threadById,
         threads,
       });
-      const status = deriveSubagentStatus(matchedThread);
+      const confirmation = confirmedTasks.get(subagent.providerThreadId ?? subagent.threadId);
+      const taskEnd = entry.toolCallId ? taskEnds?.get(entry.toolCallId) : undefined;
+      // Only native replay of this exact launch can outlive a synthetic child's
+      // local shutdown marker. A linked child's own runtime stays authoritative.
+      const confirmedRunning =
+        confirmation?.confirmed === true &&
+        confirmation.toolUseId === entry.toolCallId &&
+        confirmation.turnId === entry.turnId &&
+        normalizeSubagentStatusKind(subagent.rawStatus) === "running" &&
+        !(taskEnd && Date.parse(taskEnd.endedAt) >= Date.parse(entry.createdAt)) &&
+        (!matchedThread || matchedThread.id.startsWith("subagent:") || !matchedThread.session);
+      const status = confirmedRunning
+        ? { isActive: true, label: humanizeSubagentStatus("running") ?? undefined }
+        : deriveSubagentStatus(matchedThread);
       const fallbackStatusLabel = humanizeSubagentRawStatus(subagent.rawStatus);
       const terminalStatusLabel = status.isActive
         ? undefined

@@ -7,7 +7,8 @@ import { ThreadId, TurnId, type MessageId } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 
 import type { WorkLogEntry, WorkLogSubagent } from "../../session-logic";
-import { makeActivity } from "../../storeTestFixtures";
+import { makeActivity, makeThread } from "../../storeTestFixtures";
+import { enrichSubagentWorkEntries } from "../ChatView.logic";
 import {
   deriveSubagentRunCard,
   describeSubagentRunHeader,
@@ -23,6 +24,7 @@ import {
 } from "./SubagentRunCard.logic";
 import {
   deriveSubagentTaskEnds,
+  deriveWorkLogEntries,
   NO_RUNNING_SUBAGENT_TASKS,
   type RunningSubagentTasks,
 } from "../../session-logic";
@@ -347,18 +349,21 @@ describe("deriveSubagentRunCard", () => {
         originalEnd,
         makeActivity({
           id: "current-launch",
+          turnId: "turn-1",
           kind: "task.started",
           createdAt: startedAt,
           payload: { taskId: "same-id", toolUseId: "same-id" },
         }),
         makeActivity({
           id: "local-stop",
+          turnId: "turn-1",
           kind: "task.completed",
           createdAt: "2026-10-10T00:01:05.000Z",
           payload: { taskId: "same-id", toolUseId: "same-id", status: outcome },
         }),
         makeActivity({
           id: "native-replay",
+          turnId: "turn-1",
           kind: "task.updated",
           createdAt: "2026-10-10T00:01:06.000Z",
           payload: {
@@ -369,21 +374,131 @@ describe("deriveSubagentRunCard", () => {
           },
         }),
       ];
-      const work = foldSubagentRunWorkEntries([
-        spawn("launch", startedAt, [
-          { threadId: "same-id", rawStatus: "running", background: true },
-        ]),
-      ])[0]!;
-      const model = deriveSubagentRunCard({
-        subagents: work.subagents!,
-        run: work.subagentRun!,
-        threads: [],
+      const collab = (id: string, createdAt: string, rawStatus: string) =>
+        makeActivity({
+          id,
+          createdAt,
+          turnId: "turn-1",
+          kind: rawStatus === "stopped" ? "tool.completed" : "tool.updated",
+          payload: {
+            itemType: "collab_agent_tool_call",
+            status: rawStatus === "stopped" ? "failed" : "inProgress",
+            data: {
+              toolCallId: "same-id",
+              tool: "task",
+              receiverThreadIds: ["same-id"],
+              agentsStates: { "same-id": { status: rawStatus, agentId: "same-id" } },
+            },
+          },
+        });
+      const completeHistory = [
+        ...history.slice(0, 2),
+        collab("launch", startedAt, "running"),
+        history[2]!,
+        collab("local-collab-stop", "2026-10-10T00:01:05.000Z", "stopped"),
+        history[3]!,
+        collab("native-collab-replay", "2026-10-10T00:01:06.001Z", "running"),
+      ];
+      const thread = makeThread({
+        id: ThreadId.makeUnsafe(`subagent:${PARENT}:same-id`),
         parentThreadId: PARENT,
-        launchTurnLive: false,
-        taskEndByToolUseId: deriveSubagentTaskEnds(history),
+        subagentAgentId: "same-id",
+        latestTurn: {
+          ...completedTurn(startedAt, "2026-10-10T00:01:05.000Z"),
+          state: "interrupted",
+        },
       });
-      expect(model.rows[0]?.phase).toBe(phase);
+      const derive = (activities = completeHistory, child = thread) => {
+        const work = foldSubagentRunWorkEntries(
+          enrichSubagentWorkEntries(
+            deriveWorkLogEntries(activities, undefined),
+            [child],
+            PARENT,
+            activities,
+          ),
+        ).find((entry) => entry.subagentRun)!;
+        return deriveSubagentRunCard({
+          subagents: work.subagents!,
+          run: work.subagentRun!,
+          threads: [child],
+          parentThreadId: PARENT,
+          launchTurnLive: false,
+          taskEndByToolUseId: deriveSubagentTaskEnds(activities),
+        });
+      };
+      expect(derive().rows[0]?.phase).toBe(phase);
       if (phase === "running") {
+        // A linked child with its own runtime retains its actual terminal state.
+        expect(
+          derive(completeHistory, {
+            ...thread,
+            id: ThreadId.makeUnsafe("independent-child"),
+            session: {
+              provider: "devin",
+              status: "ready",
+              orchestrationStatus: "interrupted",
+              createdAt: startedAt,
+              updatedAt: "2026-10-10T00:01:05.000Z",
+            },
+          }).rows[0]?.phase,
+        ).toBe("stopped");
+        for (const mismatch of [
+          { taskId: "other-agent" },
+          { toolUseId: "other-tool" },
+          { turnId: TurnId.makeUnsafe("other-turn") },
+        ]) {
+          const mismatched = completeHistory.map((activity) =>
+            activity.id === "native-replay"
+              ? {
+                  ...activity,
+                  ...(mismatch.turnId ? { turnId: mismatch.turnId } : {}),
+                  payload: {
+                    taskId: "same-id",
+                    toolUseId: "same-id",
+                    status: "running",
+                    reconcilesStop: true,
+                    ...mismatch,
+                  },
+                }
+              : activity,
+          );
+          expect(derive(mismatched).rows[0]?.phase).toBe("stopped");
+        }
+        // A reused agent/tool in a later invocation cannot inherit confirmation.
+        const nextStart = makeActivity({
+          id: "next-launch",
+          kind: "task.started",
+          turnId: "turn-2",
+          createdAt: "2026-10-10T00:01:07.000Z",
+          payload: { taskId: "same-id", toolUseId: "same-id" },
+        });
+        expect(derive([...completeHistory, nextStart]).rows[0]?.phase).toBe("stopped");
+        expect(
+          derive([
+            ...completeHistory,
+            nextStart,
+            makeActivity({
+              id: "late-old-replay",
+              createdAt: "2026-10-10T00:01:07.500Z",
+              kind: "task.updated",
+              turnId: "turn-1",
+              payload: history[3]!.payload,
+            }),
+          ]).rows[0]?.phase,
+        ).toBe("stopped");
+        // A later terminal task update revokes the earlier replay authority.
+        expect(
+          derive([
+            ...completeHistory,
+            makeActivity({
+              id: "native-task-stopped",
+              kind: "task.completed",
+              turnId: "turn-1",
+              createdAt: "2026-10-10T00:01:08.000Z",
+              payload: { taskId: "same-id", status: "stopped" },
+            }),
+          ]).rows[0]?.phase,
+        ).toBe("stopped");
         expect(deriveSubagentTaskEnds(history).get("same-id")).toMatchObject({
           outcome: "completed",
           endedAt: originalEnd.createdAt,
