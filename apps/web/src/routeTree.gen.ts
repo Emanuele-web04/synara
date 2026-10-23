@@ -9,6 +9,8 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
+import { Route as LoginRouteImport } from './routes/login'
+import { Route as SignupRouteImport } from './routes/signup'
 import { Route as ChatRouteImport } from './routes/_chat'
 import { Route as ChatIndexRouteImport } from './routes/_chat.index'
 import { Route as ChatSettingsRouteImport } from './routes/_chat.settings'
@@ -29,6 +31,16 @@ import { Route as ChatAutomationsAutomationIdRouteImport } from './routes/_chat.
 
 const ChatRoute = ChatRouteImport.update({
   id: '/_chat',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const LoginRoute = LoginRouteImport.update({
+  id: '/login',
+  path: '/login',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const SignupRoute = SignupRouteImport.update({
+  id: '/signup',
+  path: '/signup',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ChatIndexRoute = ChatIndexRouteImport.update({
@@ -114,6 +126,8 @@ const ChatAutomationsAutomationIdRoute =
   } as any)
 
 export interface FileRoutesByFullPath {
+  '/login': typeof LoginRoute
+  '/signup': typeof SignupRoute
   '/': typeof ChatIndexRoute
   '/$threadId': typeof ChatThreadIdRoute
   '/automations': typeof ChatAutomationsRouteWithChildren
@@ -132,6 +146,8 @@ export interface FileRoutesByFullPath {
   '/tasks/': typeof ChatTasksIndexRoute
 }
 export interface FileRoutesByTo {
+  '/login': typeof LoginRoute
+  '/signup': typeof SignupRoute
   '/$threadId': typeof ChatThreadIdRoute
   '/inbox': typeof ChatInboxRoute
   '/plugins': typeof ChatPluginsRoute
@@ -149,6 +165,8 @@ export interface FileRoutesByTo {
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
+  '/login': typeof LoginRoute
+  '/signup': typeof SignupRoute
   '/_chat': typeof ChatRouteWithChildren
   '/_chat/$threadId': typeof ChatThreadIdRoute
   '/_chat/automations': typeof ChatAutomationsRouteWithChildren
@@ -170,6 +188,8 @@ export interface FileRoutesById {
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
+    | '/login'
+    | '/signup'
     | '/'
     | '/$threadId'
     | '/automations'
@@ -188,6 +208,8 @@ export interface FileRouteTypes {
     | '/tasks/'
   fileRoutesByTo: FileRoutesByTo
   to:
+    | '/login'
+    | '/signup'
     | '/$threadId'
     | '/inbox'
     | '/plugins'
@@ -204,6 +226,8 @@ export interface FileRouteTypes {
     | '/tasks'
   id:
     | '__root__'
+    | '/login'
+    | '/signup'
     | '/_chat'
     | '/_chat/$threadId'
     | '/_chat/automations'
@@ -224,11 +248,27 @@ export interface FileRouteTypes {
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
+  LoginRoute: typeof LoginRoute
+  SignupRoute: typeof SignupRoute
   ChatRoute: typeof ChatRouteWithChildren
 }
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
+    '/login': {
+      id: '/login'
+      path: '/login'
+      fullPath: '/login'
+      preLoaderRoute: typeof LoginRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/signup': {
+      id: '/signup'
+      path: '/signup'
+      fullPath: '/signup'
+      preLoaderRoute: typeof SignupRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/_chat': {
       id: '/_chat'
       path: ''
@@ -411,6 +451,8 @@ const ChatRouteChildren: ChatRouteChildren = {
 const ChatRouteWithChildren = ChatRoute._addFileChildren(ChatRouteChildren)
 
 const rootRouteChildren: RootRouteChildren = {
+  LoginRoute: LoginRoute,
+  SignupRoute: SignupRoute,
   ChatRoute: ChatRouteWithChildren,
 }
 export const routeTree = rootRouteImport
