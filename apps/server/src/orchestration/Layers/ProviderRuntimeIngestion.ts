@@ -1247,6 +1247,19 @@ const make = Effect.gen(function* () {
     if (key && fingerprint) {
       yield* Cache.set(latestActivityUpdateFingerprintByKey, key, fingerprint);
     }
+    if (
+      event.provider === "devin" &&
+      activity.kind === "tool.completed" &&
+      asObject(activity.payload)?.itemType === "collab_agent_tool_call"
+    ) {
+      // Native replay can confirm a locally stopped child is still running.
+      // Its identical pre-stop snapshot must reach the durable projection again.
+      const updateKey = providerActivityUpdateDedupeKey(event, threadId, {
+        ...activity,
+        kind: "tool.updated",
+      });
+      if (updateKey) yield* Cache.invalidate(latestActivityUpdateFingerprintByKey, updateKey);
+    }
   });
 
   const clearActivityUpdateFingerprints = Effect.fnUntraced(function* (threadId: ThreadId) {

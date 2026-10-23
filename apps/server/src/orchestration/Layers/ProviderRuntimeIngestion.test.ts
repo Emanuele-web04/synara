@@ -3,6 +3,7 @@ import { ProjectionPendingInteractionRepository } from "../../persistence/Servic
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 import type {
   OrchestrationEvent,
@@ -82,6 +83,10 @@ import { ServerSettingsService } from "../../serverSettings.ts";
 import { runProviderRuntimeEventPump } from "../../provider/providerRuntimeEventPump.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
+import { ChildProcessSpawner } from "effect/unstable/process";
+import { AcpSessionRuntime } from "../../provider/acp/AcpSessionRuntime.ts";
+import { DevinAdapter } from "../../provider/Services/DevinAdapter.ts";
+import { makeDevinAdapterLive } from "../../provider/Layers/DevinAdapter.ts";
 
 const asProjectId = (value: string): ProjectId => ProjectId.makeUnsafe(value);
 const asItemId = (value: string): RuntimeItemId => RuntimeItemId.makeUnsafe(value);
@@ -8428,6 +8433,154 @@ describe("ProviderRuntimeIngestion", () => {
     expect(
       parentThread.activities.some((activity) => activity.id === "evt-child-turn-started"),
     ).toBe(false);
+  });
+
+  it("persists one Devin launch identity across native replay and repeated local session stops", async () => {
+    const harness = await createHarness();
+    const launchTurn = asTurnId("original-devin-launch");
+    const threadId = asThreadId("thread-1");
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.activity.append",
+        commandId: CommandId.makeUnsafe("persisted-devin-launch"),
+        threadId,
+        createdAt: new Date().toISOString(),
+        activity: {
+          id: EventId.makeUnsafe("persisted-devin-launch"),
+          kind: "task.started",
+          tone: "info",
+          summary: "subagent task started",
+          payload: {
+            taskId: "live-child",
+            taskType: "subagent",
+            toolUseId: "live-child-launch",
+            interactionMode: "plan",
+            detail: "live-child",
+          },
+          turnId: launchTurn,
+          createdAt: new Date().toISOString(),
+        },
+      }),
+    );
+    const adapterLayer = makeDevinAdapterLive(
+      {},
+      {
+        makeAcpRuntime: (input) =>
+          Effect.gen(function* () {
+            const context = yield* Layer.build(
+              AcpSessionRuntime.layer({
+                ...input,
+                spawn: {
+                  command: process.execPath,
+                  args: [
+                    fileURLToPath(new URL("../../../scripts/acp-mock-agent.ts", import.meta.url)),
+                  ],
+                  env: { SYNARA_ACP_DEVIN_TASK_REPLAY: "1" },
+                },
+                authPolicy: "on-demand",
+              }).pipe(
+                Layer.provide(
+                  Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, input.childProcessSpawner),
+                ),
+              ),
+            );
+            return ServiceMap.getUnsafe(context, AcpSessionRuntime);
+          }),
+      },
+    ).pipe(
+      Layer.provideMerge(
+        ServerConfig.layerTest(process.cwd(), { prefix: "devin-ingestion-replay-" }),
+      ),
+      Layer.provideMerge(NodeServices.layer),
+    );
+    const adapterRuntime = ManagedRuntime.make(adapterLayer);
+    const consumerScope = await Effect.runPromise(Scope.make("sequential"));
+    const adapter = await adapterRuntime.runPromise(Effect.service(DevinAdapter));
+    await Effect.runPromise(
+      adapter.streamEvents.pipe(
+        Stream.runForEach((event) => Effect.sync(() => harness.emit(event))),
+        Effect.forkIn(consumerScope),
+      ),
+    );
+    const start = () =>
+      adapter.startSession({
+        provider: "devin",
+        threadId,
+        runtimeMode: "full-access",
+        resumeCursor: { schemaVersion: 1, sessionId: "mock-session-1" },
+        pendingTaskReconciliations: [
+          {
+            taskId: RuntimeTaskId.makeUnsafe("live-child"),
+            turnId: launchTurn,
+            toolUseId: "live-child-launch",
+            interactionMode: "plan",
+          },
+        ],
+      });
+    try {
+      for (const _attempt of [1, 2]) {
+        await adapterRuntime.runPromise(start());
+        const turn = await adapterRuntime.runPromise(
+          adapter.sendTurn({ threadId, input: "root", attachments: [] }),
+        );
+        await waitForThread(
+          harness.engine,
+          (thread) =>
+            thread.latestTurn?.turnId === turn.turnId && thread.latestTurn?.state === "completed",
+        );
+        await adapterRuntime.runPromise(adapter.stopSession(threadId));
+        await waitForThread(harness.engine, (thread) => {
+          const updates = thread.activities.filter(
+            (activity: ProviderRuntimeTestActivity) =>
+              activity.kind.startsWith("tool.") &&
+              JSON.stringify(activity.payload).includes('"live-child"'),
+          );
+          return JSON.stringify(updates.at(-1)?.payload).includes('"stopped"');
+        });
+      }
+      await adapterRuntime.runPromise(start());
+      const parent = await waitForThread(harness.engine, (thread) => {
+        const updates = thread.activities.filter(
+          (activity: ProviderRuntimeTestActivity) =>
+            activity.kind === "task.updated" &&
+            (activity.payload as { taskId?: string; status?: string }).taskId === "live-child" &&
+            (activity.payload as { status?: string }).status === "running",
+        );
+        return updates.length === 3;
+      });
+      await harness.drain();
+      const projected = await harness.readProjectedThread();
+      const items = projected!.activities.filter((activity) => {
+        const payload = activity.payload as { itemType?: string; data?: { agentId?: string } };
+        return (
+          payload.itemType === "collab_agent_tool_call" && payload.data?.agentId === "live-child"
+        );
+      });
+      expect(items.length).toBeGreaterThanOrEqual(5);
+      for (const item of items) {
+        expect(item.turnId).toBe(launchTurn);
+        expect(item.payload).toMatchObject({ data: { toolCallId: "live-child-launch" } });
+      }
+      expect(items.at(-1)?.payload).toMatchObject({
+        data: { agentsStates: { "live-child": { status: "running" } } },
+      });
+      const childId = asThreadId(`subagent:${threadId}:live-child`);
+      const child = await harness.readProjectedThread(childId);
+      expect(child).toMatchObject({
+        sourceThreadId: threadId,
+        sourceTurnId: launchTurn,
+        subagentAgentId: "live-child",
+      });
+      expect(
+        parent.activities.filter(
+          (activity: ProviderRuntimeTestActivity) => activity.kind === "task.started",
+        ),
+      ).toMatchObject([{ id: "persisted-devin-launch", turnId: launchTurn }]);
+    } finally {
+      await adapterRuntime.runPromise(adapter.stopSession(threadId));
+      await Effect.runPromise(Scope.close(consumerScope, Exit.void));
+      await adapterRuntime.dispose();
+    }
   });
 
   it("preserves the parent provider instance when a subagent model is specialized", async () => {

@@ -18974,6 +18974,32 @@ describe("ProviderCommandReactor", () => {
     for (const command of retirementCommands) {
       await Effect.runPromise(harness.engine.dispatch(command));
     }
+    // Session shutdown can record an ordinary local stop even though the
+    // remote Devin child survives. Repeated native resumes must retain its
+    // original Plan launch identity rather than the newer parent's policy.
+    for (const attempt of [1, 2]) {
+      await Effect.runPromise(
+        appendActivity(
+          `resumed-live-${attempt}`,
+          "live-agent",
+          "running",
+          `2026-10-11T00:02:0${attempt * 2}.000Z`,
+          { reconcilesStop: true, toolUseId: "live-tool" },
+          threadId,
+          null,
+          "task.updated",
+        ),
+      );
+      await Effect.runPromise(
+        appendActivity(
+          `session-stop-live-${attempt}`,
+          "live-agent",
+          "stopped",
+          `2026-10-11T00:02:0${attempt * 2 + 1}.000Z`,
+          { toolUseId: "live-tool" },
+        ),
+      );
+    }
     await dispatchHarnessUserTurn(harness, {
       messageId: "message-devin-pending-stop",
       text: "resume Devin",

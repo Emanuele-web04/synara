@@ -698,6 +698,7 @@ function asDevinSubagentToolCallState(
         : {}),
     data: {
       ...toolCall.data,
+      toolCallId: subagent.toolCallId,
       kind: ACP_SUBAGENT_TOOL_KIND,
       tool: "task",
       ...(subagent.agentId ? { agentId: subagent.agentId, threadId: subagent.agentId } : {}),

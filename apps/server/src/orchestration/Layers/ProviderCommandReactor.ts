@@ -1924,7 +1924,11 @@ const make = Effect.gen(function* () {
           });
           if (Option.isSome(correlation) && !pending.has(payload.taskId))
             pending.set(payload.taskId, correlation.value);
-        } else {
+        } else if (
+          // A local session stop does not prove the remote Devin task ended.
+          // Keep its known launch identity until native replay settles it.
+          !("status" in payload && payload.status === "stopped" && pending.has(payload.taskId))
+        ) {
           pending.delete(payload.taskId);
         }
       }

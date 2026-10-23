@@ -4011,6 +4011,17 @@ it("restores native replay ownership and launch policy through the actual ACP su
       ).not.toContain("historical Devin text");
       expect(events.some((event) => event.type === "task.started")).toBe(false);
       yield* adapter.stopSession(threadId);
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          type: "item.completed",
+          payload: expect.objectContaining({
+            data: expect.objectContaining({
+              toolCallId: "live-child-launch",
+              agentsStates: { "live-child": { status: "stopped" } },
+            }),
+          }),
+        }),
+      );
     }).pipe(Effect.scoped, Effect.provide(layer)),
   );
 });
