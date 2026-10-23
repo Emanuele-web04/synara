@@ -22,6 +22,54 @@ import type { WhatsNewEntry } from "./logic";
 
 export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
   {
+    version: "1.0.6-remote.27",
+    date: "Oct 23",
+    features: [
+      {
+        id: "embedded-code-editor",
+        title: "Edit and inspect code inside Synara",
+        description:
+          "The embedded Code OSS editor brings quick fixes, peek, inlay hints, problems and configurable shortcuts to file and diff editing.",
+        details:
+          "JavaScript debugging is available to the execution computer's owner session. Paired clients do not gain debugger access.",
+      },
+      {
+        id: "provider-handoff-recovery",
+        title: "Keep context through provider switches",
+        description:
+          "Send, Continue task and Implement use the same Hand off flow. Queued messages follow the thread's current provider, and Codex restores context when native resume needs a fresh session.",
+        details:
+          "Switches that would silently stop background work are refused. Recovery limitations remain visible when earlier context cannot be included.",
+      },
+      {
+        id: "codex-runtime-feedback",
+        title: "Keep Codex discovery and warnings reliable",
+        description:
+          "Large plugin catalogs load through a separate metadata process. Actionable runtime warnings remain visible alongside the conversation.",
+      },
+      {
+        id: "terminal-background-task-settlement",
+        title: "Keep finished background tasks settled",
+        description:
+          "Late Claude progress and status updates no longer mark a finished background task as running again. Genuine task restarts still work.",
+      },
+      {
+        id: "workspace-and-safari-access",
+        title: "More dependable diffs and Safari setup",
+        description:
+          "Working-tree diffs load beside nested repositories, and Safari login setup recognizes Full Disk Access that you have already granted.",
+      },
+      {
+        id: "native-companion-152",
+        title: "Companion build 152, prepared separately",
+        description:
+          "The iPhone and iPad update includes follow-ups during background work, host-owned compaction state, custom models from the execution computer and thread-level Codex warnings.",
+        details:
+          "TestFlight upload and tester availability are verified separately. Updating the desktop does not install the mobile build.",
+      },
+    ],
+  },
+  {
     version: "1.0.6-remote.26",
     date: "Oct 18",
     features: [

@@ -1,5 +1,31 @@
 # Changelog
 
+## 1.0.6-remote.27 — 2026-10-23
+
+**Code editing inside Synara, dependable provider switches and settled background work.**
+
+### Added
+
+- The embedded Code OSS editor adds language intelligence, problems, quick fixes, peek, inlay hints and configurable shortcuts to file and diff editing. JavaScript debugging runs through the execution computer's owner-authorized session; paired clients do not gain debugger access.
+
+### Fixed
+
+- Provider changes consistently use Hand off when sending, continuing a task or implementing a plan. Queued messages follow the thread's current provider, while switches that would silently stop background work are refused.
+- Codex recovers threads without a native rollout and carries conversation context when native resume falls back to a fresh session. Recovery limitations and actionable runtime warnings remain visible instead of silently losing context.
+- Codex plugin discovery uses a separate bounded metadata process, keeping large catalogs away from live conversation streams.
+- Finished Claude background tasks stay finished when late progress, status or background-list updates arrive. A genuine task restart can still reopen its task ID.
+- Working-tree diffs load beside untracked nested repositories. Safari login setup recognizes an existing Full Disk Access grant instead of repeatedly asking for it.
+
+### Companion iPhone and iPad
+
+- Build 152 is prepared separately with follow-ups while background work continues, host-owned compaction state, the execution computer's custom models and thread-level Codex warnings outside the Worked disclosure. Its upload and tester availability are verified separately; this desktop update does not install the mobile build.
+
+### Verification
+
+- Integrates main through `442c649c173758f4a7a27f0e94252f9ca2c85de8` and preserves all published Remote .26 history, including packaged Claude history import, device trust and updater isolation.
+- Final candidate checks and exact-tag quality/server suites, platform startup, macOS signing/notarization, Windows Defender and artifact provenance must pass before publication. Results are recorded against the actual candidate SHA in the private release checkpoint; earlier builds do not qualify this release.
+- Remote retains separate identities, data homes and update feeds on macOS Apple Silicon, Windows x64 and Linux x64. Windows uses an exact-version unsigned exception and may show SmartScreen. Physical-device behavior and manual installed-app upgrades require their own verification.
+
 ## 1.0.6-remote.26 — 2026-10-18
 
 ### Fixed
