@@ -1409,7 +1409,7 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
         });
         shellCandidates = [{ shell: plan.command, args: plan.args }];
         windowsVerbatimArguments = plan.windowsVerbatimArguments;
-        terminalEnv = launch.env;
+        terminalEnv = createTerminalSpawnEnv(launch.env);
         session.cwd = launch.cwd;
       } else {
         shellCandidates = resolveShellCandidates(this.shellResolver);

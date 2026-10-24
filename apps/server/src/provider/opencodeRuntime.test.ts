@@ -376,6 +376,50 @@ describe("parseOpenCodeCliModelsOutput", () => {
 });
 
 describe("OpenCodeRuntime startup diagnostics", () => {
+  it.each([true, false])(
+    "uses a private model-list server only when CLI help advertises standalone support (%s)",
+    async (supportsStandalone) => {
+      const commands: Array<ChildProcess.StandardCommand> = [];
+      const spawnerLayer = Layer.succeed(
+        ChildProcessSpawner.ChildProcessSpawner,
+        ChildProcessSpawner.make((command) => {
+          if (command._tag !== "StandardCommand") throw new Error("Expected a standard command");
+          commands.push(command);
+          const first = commands.length === 1;
+          return Effect.succeed(
+            mockOpenCodeServerHandle({
+              stdout: first
+                ? supportsStandalone
+                  ? "FLAGS\n  --standalone  Run with a private server\n"
+                  : ""
+                : "opencode/account-model\n",
+              stderr: first ? "Unrecognized flag: --verbose in command opencode models" : "",
+              exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(first ? 1 : 0)),
+            }),
+          );
+        }),
+      );
+      const models = await Effect.runPromise(
+        Effect.gen(function* () {
+          const runtime = yield* OpenCodeRuntime;
+          return yield* runtime.listOpenCodeCliModels({
+            binaryPath: "opencode",
+            instanceId: "opencode_second",
+            isolationRootDir: testHome,
+          });
+        }).pipe(Effect.provide(makeOpenCodeRuntimeLive().pipe(Layer.provide(spawnerLayer)))),
+      );
+
+      expect(commands.map((command) => command.args)).toEqual([
+        ["models", "--verbose"],
+        supportsStandalone ? ["models", "--standalone"] : ["models"],
+      ]);
+      expect(commands[0]!.options.env?.HOME).toBe(commands[1]!.options.env?.HOME);
+      expect(commands[1]!.options.env?.HOME).toContain("provider-homes");
+      expect(models.map((model) => model.slug)).toEqual(["opencode/account-model"]);
+    },
+  );
+
   it("wraps Windows .cmd server shims before spawning", async () => {
     const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
     const spawnedCommands: Array<ChildProcess.StandardCommand> = [];
