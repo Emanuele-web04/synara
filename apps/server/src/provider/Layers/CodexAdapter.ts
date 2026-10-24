@@ -34,6 +34,7 @@ import {
   TurnId,
 } from "@synara/contracts";
 import { Cause, Effect, Layer, Option, Queue, Schema, ServiceMap, Stream } from "effect";
+import { sanitizeUserFacingErrorMessage } from "@synara/shared/errorMessages";
 
 import {
   ProviderAdapterProcessError,
@@ -180,17 +181,6 @@ function toMessage(cause: unknown, fallback: string): string {
     return sanitizeUserFacingErrorMessage(cause.message, fallback);
   }
   return fallback;
-}
-
-function sanitizeUserFacingErrorMessage(message: string, fallback: string): string {
-  const normalized = message.trim();
-  if (normalized.length === 0) {
-    return fallback;
-  }
-
-  const firstLine = normalized.split("\n")[0]?.trim() ?? "";
-  const withoutInlineStack = firstLine.replace(/\s+at file:\/\/.*$/s, "").trim();
-  return withoutInlineStack.length > 0 ? withoutInlineStack : fallback;
 }
 
 function composeCodexInputWithFileAttachments(input: {

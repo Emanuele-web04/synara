@@ -12,6 +12,7 @@ import { describe, expect, it } from "vitest";
 import {
   coalesceProviderRuntimeProgress,
   providerRuntimeProgressKey,
+  providerRuntimeCommandProgressKey,
 } from "./providerRuntimeProgressCoalescing.ts";
 
 const threadId = ThreadId.makeUnsafe("progress-thread");
@@ -33,6 +34,22 @@ const ids = (rows: ReadonlyArray<{ event: ProviderRuntimeEvent }>) =>
   rows.map((entry) => entry.event.eventId);
 
 describe("provider runtime progress coalescing", () => {
+  it("only gives stable command identity to known command snapshots with a turn", () => {
+    expect(providerRuntimeCommandProgressKey(event("bash"))).toBeDefined();
+    expect(
+      providerRuntimeCommandProgressKey(event("unknown-turn", { turnId: undefined })),
+    ).toBeUndefined();
+    expect(
+      providerRuntimeCommandProgressKey(
+        event("other-tool", {
+          payload: { toolUseId: "read", toolName: "Read", elapsedSeconds: 1 },
+        }),
+      ),
+    ).toBeUndefined();
+    expect(
+      providerRuntimeCommandProgressKey(event("other-provider", { provider: "codex" })),
+    ).toBeUndefined();
+  });
   it("preserves task boundaries and parallel tool source order", () => {
     const task = (id: string) =>
       event(id, {

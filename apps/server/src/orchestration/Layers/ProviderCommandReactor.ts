@@ -13,6 +13,7 @@ import { resolveForkSourceCutoff } from "../forkSourceCutoff.ts";
 
 import { isDeepStrictEqual } from "node:util";
 import { makeKeyedDrainableWorker } from "@synara/shared/KeyedDrainableWorker";
+import { sanitizeUserFacingErrorMessage } from "@synara/shared/errorMessages";
 import { makeKeyedLock } from "../../provider/keyedLock.ts";
 
 import {
@@ -958,6 +959,21 @@ class ProviderCommandReactorConfig extends ServiceMap.Service<
   ProviderCommandReactorConfigShape
 >()("synara/orchestration/Layers/ProviderCommandReactorConfig") {}
 
+// Recheck the observed target after awaiting provider results or logging an
+// error; matching timestamps alone cannot distinguish two turns in one tick.
+function matchesProviderSessionState(
+  current: OrchestrationSession | null | undefined,
+  expected: OrchestrationSession,
+): boolean {
+  return (
+    current?.status === expected.status &&
+    current.updatedAt === expected.updatedAt &&
+    current.activeTurnId === expected.activeTurnId &&
+    current.providerName === expected.providerName &&
+    current.providerInstanceId === expected.providerInstanceId
+  );
+}
+
 const make = Effect.gen(function* () {
   const {
     commandEventTimeout,
@@ -1662,7 +1678,7 @@ const make = Effect.gen(function* () {
         kind: input.kind,
         summary: input.summary,
         payload: {
-          detail: input.detail,
+          detail: sanitizeUserFacingErrorMessage(input.detail, input.summary),
           ...(input.requestId ? { requestId: input.requestId } : {}),
           ...(input.lifecycleGeneration ? { lifecycleGeneration: input.lifecycleGeneration } : {}),
           ...(input.responseCommandId ? { responseCommandId: input.responseCommandId } : {}),
@@ -1814,12 +1830,15 @@ const make = Effect.gen(function* () {
   const settleInterruptedProviderTurn = Effect.fnUntraced(function* (input: {
     readonly threadId: ThreadId;
     readonly createdAt: string;
+    readonly expectedSession?: OrchestrationSession;
   }) {
     const thread = yield* resolveThreadShell(input.threadId);
     const session = thread?.session;
     if (!thread || !session) {
       return;
     }
+    if (input.expectedSession && !matchesProviderSessionState(session, input.expectedSession))
+      return;
     if (session.activeTurnId === null && thread.latestTurn?.state !== "running") {
       return;
     }
@@ -1838,6 +1857,7 @@ const make = Effect.gen(function* () {
         updatedAt: input.createdAt,
       },
       createdAt: input.createdAt,
+      expectedSession: input.expectedSession ?? session,
     });
   });
 
@@ -2093,16 +2113,25 @@ const make = Effect.gen(function* () {
   // Child subagent threads share their parent's provider session, so the
   // lookup must resolve to the session-owning thread — a raw child-id lookup
   // would always miss and drain queued child messages into a live turn.
-  const resolveLiveProviderTurnId = Effect.fnUntraced(function* (threadId: ThreadId) {
+  const resolveLiveProviderSession = Effect.fnUntraced(function* (threadId: ThreadId) {
     const providerThread = yield* resolveProviderSessionThread(threadId);
     const sessionThreadId = providerThread?.id ?? threadId;
-    const session = yield* providerService
+    return yield* providerService
       .listSessions()
       .pipe(Effect.map((sessions) => sessions.find((entry) => entry.threadId === sessionThreadId)));
-    return session?.status === "running" ? session.activeTurnId : undefined;
   });
+  const resolveLiveProviderTurnId = (threadId: ThreadId) =>
+    resolveLiveProviderSession(threadId).pipe(
+      Effect.map((session) => (session?.status === "running" ? session.activeTurnId : undefined)),
+    );
   const hasLiveProviderTurn = (threadId: ThreadId) =>
     resolveLiveProviderTurnId(threadId).pipe(Effect.map((turnId) => turnId !== undefined));
+  // A provider can still be starting/running before it announces a turn ID.
+  // Its missing ID must never turn an uncertain Stop into apparent success.
+  const hasLiveProviderWork = (session: ProviderSession | undefined) =>
+    session?.status === "connecting" ||
+    session?.status === "running" ||
+    session?.activeTurnId !== undefined;
 
   const editResendTurnStartKey = (threadId: ThreadId, messageId: string) =>
     `${threadId}:${messageId}`;
@@ -6317,6 +6346,25 @@ const make = Effect.gen(function* () {
       );
     }
 
+    const liveSession = yield* resolveLiveProviderSession(input.threadId);
+    const projectionHasWork = [thread, providerThread].some(
+      (entry) =>
+        entry?.session?.status === "starting" ||
+        entry?.session?.status === "running" ||
+        entry?.session?.activeTurnId != null ||
+        entry?.latestTurn?.state === "running",
+    );
+    // A child can be working while its owner session is idle. Likewise an
+    // accepted continuation can return its ID before turn.started is projected.
+    const hasUnsettledTarget =
+      (providerThread !== null && providerThread.id !== thread.id) ||
+      (input.turnId !== undefined &&
+        input.turnId !== thread.latestTurn?.turnId &&
+        providerThread?.session?.status !== "stopped");
+    // The decider already paused the goal, and computer intent was cleared
+    // above. Repeating Stop after settlement needs no adapter call or error row.
+    if (!projectionHasWork && !hasUnsettledTarget && !hasLiveProviderWork(liveSession)) return;
+
     // The projection can lag a live turn. Only use session stop when neither
     // side owns a turn to interrupt, and retire the runtime rather than just
     // changing the UI state: a half-started session may still emit events.
@@ -6326,7 +6374,7 @@ const make = Effect.gen(function* () {
       (interruptSession.status === "starting" || interruptSession.status === "running") &&
       interruptSession.activeTurnId === null &&
       thread.latestTurn?.state !== "running" &&
-      !(yield* hasLiveProviderTurn(input.threadId))
+      !hasLiveProviderWork(liveSession)
     ) {
       return yield* processThreadSessionStop({
         threadId: input.threadId,
@@ -6340,7 +6388,7 @@ const make = Effect.gen(function* () {
         kind: "provider.turn.interrupt.failed",
         summary: "Provider turn interrupt failed",
         detail,
-        turnId: input.turnId ?? null,
+        turnId: liveSession?.activeTurnId ?? input.turnId ?? thread.session?.activeTurnId ?? null,
         createdAt: input.createdAt,
         ...(settlementStatus ? { settlementStatus } : {}),
       });
@@ -6376,18 +6424,41 @@ const make = Effect.gen(function* () {
         ...(providerThreadId ? { providerThreadId } : {}),
       }),
     });
+    const current = yield* resolveThread(input.threadId);
+    const currentRuntime = yield* resolveLiveProviderSession(input.threadId);
+    const currentTurnId = current?.latestTurn?.turnId;
+    const replaced =
+      (currentTurnId !== thread.latestTurn?.turnId && currentTurnId !== turnId) ||
+      (currentRuntime?.activeTurnId !== undefined && currentRuntime.activeTurnId !== turnId) ||
+      (currentRuntime !== undefined &&
+        (liveSession === undefined ||
+          currentRuntime.createdAt !== liveSession.createdAt ||
+          currentRuntime.provider !== liveSession.provider ||
+          currentRuntime.providerInstanceId !== liveSession.providerInstanceId));
+    // Every outcome belongs to the interrupted binding. A late rejection or
+    // timeout must not settle a replacement turn or escalate into stopping it.
+    if (replaced) {
+      if (result._tag !== "ok") {
+        yield* reportInterruptFailure(
+          result._tag === "timeout" ? result.detail : result.outcome.detail,
+          result._tag === "timeout" || result.outcome._tag === "uncertain"
+            ? "uncertain"
+            : undefined,
+        );
+      }
+      return;
+    }
     if (result._tag === "ok") {
-      // ProviderService retires a parent runtime after interrupting it, and a
-      // turn the provider had already ended (its terminal event still queued
-      // behind the stream) has nothing left to interrupt. Once no provider
-      // turn is live, a retired generation's exit is dropped, so waiting for
-      // a terminal event leaves Stop looking dead. Settle now; a terminal
-      // event still in flight applies on top of this state.
-      if (!(yield* hasLiveProviderTurn(input.threadId))) {
-        yield* settleInterruptedProviderTurn({
-          threadId: input.threadId,
-          createdAt: input.createdAt,
-        });
+      // An accepted Stop can retire the runtime before its final event arrives.
+      // Settle only that session, never a replacement started during the interrupt.
+      if (
+        current?.session &&
+        (currentTurnId === thread.latestTurn?.turnId || currentTurnId === turnId) &&
+        (current.session.activeTurnId !== null ||
+          current.session.updatedAt === thread.session?.updatedAt) &&
+        !hasLiveProviderWork(currentRuntime)
+      ) {
+        yield* settleInterruptedProviderTurn({ ...input, expectedSession: current.session });
       }
       return;
     }
@@ -6419,6 +6490,7 @@ const make = Effect.gen(function* () {
         threadId: input.threadId,
         createdAt: input.createdAt,
         interruptEscalated: true,
+        ...(current?.session ? { expectedSession: current.session } : {}),
       });
     }
 
@@ -6430,6 +6502,7 @@ const make = Effect.gen(function* () {
       return yield* settleInterruptedProviderTurn({
         threadId: input.threadId,
         createdAt: input.createdAt,
+        ...(current?.session ? { expectedSession: current.session } : {}),
       });
     }
     // Safe retries (persistence faults) keep propagating so the durable delivery
@@ -6985,12 +7058,18 @@ const make = Effect.gen(function* () {
     readonly threadId: ThreadId;
     readonly createdAt: string;
     readonly interruptEscalated?: boolean;
+    readonly expectedSession?: OrchestrationSession;
   }) {
     const thread = yield* resolveThreadShell(input.threadId);
     const providerThread = yield* resolveProviderSessionThread(input.threadId);
     if (!thread) {
       return;
     }
+    if (
+      input.expectedSession &&
+      !matchesProviderSessionState(thread.session, input.expectedSession)
+    )
+      return;
 
     const stoppedSessionThreadId = providerThread?.id ?? thread.id;
     const stopsProviderSession = providerThread === null || providerThread.id === thread.id;

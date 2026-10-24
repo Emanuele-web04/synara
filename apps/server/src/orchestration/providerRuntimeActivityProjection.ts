@@ -8,6 +8,8 @@ import {
   TurnId,
 } from "@synara/contracts";
 import { nonEmptyTrimmed } from "@synara/shared/text";
+import { sanitizeUserFacingErrorMessage } from "@synara/shared/errorMessages";
+import { providerRuntimeCommandProgressKey } from "./providerRuntimeProgressCoalescing.ts";
 
 import {
   isSensitiveKey,
@@ -677,6 +679,10 @@ export function projectProviderRuntimeActivities(
     typeof sessionSequence === "number" && Number.isInteger(sessionSequence) && sessionSequence >= 0
       ? { sequence: sessionSequence }
       : {};
+  const commandProgressKey = providerRuntimeCommandProgressKey(event);
+  const commandProgressId = commandProgressKey
+    ? EventId.makeUnsafe(`provider-command-progress:${commandProgressKey}`)
+    : event.eventId;
   // Claude previews are coalesced by ingestion; other providers publish their
   // readable reasoning only at completion. Empty/encrypted boundaries stay hidden.
   if (
@@ -825,7 +831,10 @@ export function projectProviderRuntimeActivities(
           kind: "runtime.error",
           summary: "Provider runtime error",
           payload: toActivityPayload({
-            message: truncateDetail(message, 500),
+            message: truncateDetail(
+              sanitizeUserFacingErrorMessage(message, "Provider runtime error"),
+              500,
+            ),
             ...(errorClass ? { class: errorClass } : {}),
             ...(event.payload.errorCode ? { errorCode: event.payload.errorCode } : {}),
           }),
@@ -1237,7 +1246,7 @@ export function projectProviderRuntimeActivities(
       const itemTitle = nonEmptyTrimmed(event.payload.title);
       return [
         {
-          id: event.eventId,
+          id: commandProgressId,
           createdAt: event.createdAt,
           tone: "tool",
           kind:
@@ -1320,7 +1329,7 @@ export function projectProviderRuntimeActivities(
     case "tool.progress": {
       return [
         {
-          id: event.eventId,
+          id: commandProgressId,
           createdAt: event.createdAt,
           tone: "tool",
           kind: "tool.updated",
@@ -1398,7 +1407,9 @@ export function projectProviderRuntimeActivities(
             ...(typeof event.payload.cumulativeCostUsd === "number"
               ? { cumulativeCostUsd: event.payload.cumulativeCostUsd }
               : {}),
-            ...(errorMessage ? { errorMessage } : {}),
+            ...(errorMessage
+              ? { errorMessage: sanitizeUserFacingErrorMessage(errorMessage, "Turn failed") }
+              : {}),
             ...(event.payload.errorCode ? { errorCode: event.payload.errorCode } : {}),
           }),
           turnId: toTurnId(event.turnId) ?? null,
@@ -1614,6 +1625,8 @@ export function providerActivityUpdateDedupeKey(
   if (activity.kind !== "tool.updated") {
     return undefined;
   }
+  const commandProgressKey = providerRuntimeCommandProgressKey(event);
+  if (commandProgressKey) return `${prefix}:${commandProgressKey}`;
 
   const data = asObject(payload?.data);
   const toolUpdateId =

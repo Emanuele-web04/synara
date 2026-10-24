@@ -1150,6 +1150,90 @@ describe("ProviderRuntimeIngestion", () => {
     ).toEqual(["fingerprint-4"]);
   });
 
+  it.each(["codex", "claudeAgent"] as const)(
+    "updates one %s long-command progress row across journal pages without moving it or losing raw events",
+    async (provider) => {
+      const harness = await createHarness({ startIngestion: false });
+      const firstAt = "2026-10-06T12:00:00.000Z";
+      const rows: PersistedProviderRuntimeEvent[] = [];
+      const appendProgress = async (
+        index: number,
+        turnId = "long-command-turn",
+        lifecycleGeneration?: string,
+      ) => {
+        const row = await Effect.runPromise(
+          harness.runtimeEventRepository.append({
+            type: provider === "codex" ? "item.updated" : "tool.progress",
+            eventId: asEventId(`command-progress-${index}${lifecycleGeneration ?? ""}`),
+            provider,
+            createdAt: index === 0 ? firstAt : `2026-10-06T12:00:0${index}.000Z`,
+            threadId: asThreadId("thread-1"),
+            turnId: asTurnId(turnId),
+            ...(lifecycleGeneration ? { lifecycleGeneration } : {}),
+            ...(provider === "codex" ? { itemId: asItemId("long-command") } : {}),
+            payload:
+              provider === "codex"
+                ? {
+                    itemType: "command_execution",
+                    status: "inProgress",
+                    title: "Run tests",
+                    data: { elapsedSeconds: index },
+                  }
+                : { toolUseId: "long-command", toolName: "Bash", elapsedSeconds: index },
+          } as ProviderRuntimeEvent),
+        );
+        rows.push(row);
+        return row;
+      };
+      const first = await appendProgress(0);
+      await harness.startIngestion();
+      await harness.drain();
+      for (const index of [1, 2]) {
+        await appendProgress(index);
+        await harness.drain();
+      }
+      const activities = (await harness.readProjectedThread())!.activities.filter(
+        (entry) => entry.kind === "tool.updated",
+      );
+      expect(activities).toHaveLength(1);
+      expect(activities[0]).toMatchObject({
+        createdAt: firstAt,
+        sequence: first.sequence,
+        payload: { data: { elapsedSeconds: 2 } },
+      });
+      // A replacement runtime can reuse IDs and an identical snapshot. Neither
+      // row identity nor the dedupe fingerprint may suppress its first update.
+      await appendProgress(2, "long-command-turn", "replacement-runtime");
+      await harness.drain();
+      expect(
+        (await harness.readProjectedThread())!.activities.filter(
+          (entry) => entry.kind === "tool.updated",
+        ),
+      ).toHaveLength(2);
+      // Provider item IDs can be reused by another turn: it needs its own row.
+      await appendProgress(3, "next-command-turn");
+      await harness.drain();
+      expect(
+        (await harness.readProjectedThread())!.activities.filter(
+          (entry) => entry.kind === "tool.updated",
+        ),
+      ).toHaveLength(3);
+      const raw = await Effect.runPromise(
+        harness.runtimeEventRepository.readAfter({
+          sequenceExclusive: 0,
+          throughSequenceInclusive: rows.at(-1)!.sequence,
+          limit: 100,
+        }),
+      );
+      expect(raw.map((row) => row.event.eventId)).toEqual(rows.map((row) => row.event.eventId));
+      expect(
+        await Effect.runPromise(
+          harness.runtimeEventRepository.getConsumerCursor(PROVIDER_RUNTIME_INGESTION_CONSUMER),
+        ),
+      ).toBe(rows.at(-1)!.sequence);
+    },
+  );
+
   it("coalesces changed tool snapshots during durable replay without discarding raw journal rows", async () => {
     const harness = await createHarness({ startIngestion: false });
     const rows: PersistedProviderRuntimeEvent[] = [];
@@ -7814,7 +7898,8 @@ describe("ProviderRuntimeIngestion", () => {
     expect(Array.isArray(taskPayload?.tasks)).toBe(true);
 
     const toolUpdate = thread.activities.find(
-      (activity: ProviderRuntimeTestActivity) => activity.id === "evt-item-updated",
+      (activity: ProviderRuntimeTestActivity) =>
+        activity.kind === "tool.updated" && activity.turnId === "turn-p1",
     );
     const toolUpdatePayload =
       toolUpdate?.payload && typeof toolUpdate.payload === "object"

@@ -2434,7 +2434,8 @@ describe("ProviderCommandReactor", () => {
         await expect.poll(() => cancelDiscovery.mock.calls.length).toBe(1);
         await harness.drain();
         if (commandType === "thread.turn.interrupt") {
-          expect(harness.interruptTurn).toHaveBeenCalledTimes(1);
+          // Discovery was cancelled above; its idle provider has no turn to interrupt.
+          expect(harness.interruptTurn).not.toHaveBeenCalled();
         } else if (commandType === "thread.conversation.rollback") {
           expect(harness.rollbackConversation).toHaveBeenCalledTimes(1);
         } else if (commandType === "thread.session.stop" || commandType === "thread.archive") {
@@ -8512,7 +8513,7 @@ describe("ProviderCommandReactor", () => {
     { intentionalQuit: false, stopped: true, reportsFailure: true, initiallyStopped: false },
     { intentionalQuit: true, stopped: false, reportsFailure: true, initiallyStopped: false },
     { intentionalQuit: true, stopped: true, reportsFailure: false, initiallyStopped: true },
-    { intentionalQuit: false, stopped: true, reportsFailure: true, initiallyStopped: true },
+    { intentionalQuit: false, stopped: true, reportsFailure: false, initiallyStopped: true },
   ])("settles a late interrupt rejection during quiesce: %j", async (scenario) => {
     const release = Effect.runSync(Deferred.make<void>());
     const harness = await createHarness({
@@ -12951,6 +12952,13 @@ describe("ProviderCommandReactor", () => {
     expect(
       thread?.activities.some((activity) => activity.kind === "provider.turn.start.failed"),
     ).toBe(true);
+    const failure = thread?.activities.find(
+      (activity) => activity.kind === "provider.turn.start.failed",
+    );
+    const detail = (failure?.payload as { detail?: string } | undefined)?.detail;
+    expect(detail).toContain("turn start failed");
+    expect(detail).not.toContain("\n");
+    expect(detail).not.toContain(" at ");
   });
 
   it("clears stale provider resume state and completes message edit rollback", async () => {
@@ -13324,7 +13332,8 @@ describe("ProviderCommandReactor", () => {
           createdAt,
         }),
       );
-      await waitFor(() => harness.interruptTurn.mock.calls.length === 1);
+      await harness.drain();
+      expect(harness.interruptTurn).not.toHaveBeenCalled();
       expect(manager.canContinueChatControl(threadId)).toBe(false);
       await markSessionReady();
       await Effect.runPromise(
@@ -14029,6 +14038,7 @@ describe("ProviderCommandReactor", () => {
         type: "thread.turn.interrupt",
         commandId: CommandId.makeUnsafe("cmd-interrupt-rejected"),
         threadId: ThreadId.makeUnsafe("thread-1"),
+        turnId: asTurnId("turn-1"),
         createdAt: new Date().toISOString(),
       }),
     );
@@ -22804,6 +22814,61 @@ describe("ProviderCommandReactor", () => {
     });
   });
 
+  it.each(["ready", "interrupted", "stopped", "missing"] as const)(
+    "ignores a repeated Stop on an idle %s session while still pausing the goal",
+    async (status) => {
+      const harness = await createHarness();
+      const threadId = ThreadId.makeUnsafe("thread-1");
+      const createdAt = new Date().toISOString();
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.meta.update",
+          commandId: CommandId.makeUnsafe("idle-stop-goal"),
+          threadId,
+          goal: "Keep the user's goal paused after Stop",
+          goalStartBehavior: "defer",
+        }),
+      );
+      if (status !== "missing") {
+        await Effect.runPromise(
+          harness.engine.dispatch({
+            type: "thread.session.set",
+            commandId: CommandId.makeUnsafe("idle-stop-session"),
+            threadId,
+            session: {
+              threadId,
+              status,
+              providerName: "codex",
+              runtimeMode: "approval-required",
+              activeTurnId: null,
+              lastError: null,
+              updatedAt: createdAt,
+            },
+            createdAt,
+          }),
+        );
+        if (status !== "stopped") harness.setRuntimeSessionTurnState({ threadId, status: "ready" });
+      }
+      for (const attempt of [1, 2]) {
+        await Effect.runPromise(
+          harness.engine.dispatch({
+            type: "thread.turn.interrupt",
+            commandId: CommandId.makeUnsafe(`idle-stop-${attempt}`),
+            threadId,
+            createdAt,
+          }),
+        );
+      }
+      await harness.drain();
+      const thread = await readHarnessThread(harness);
+      expect(thread?.goalPausedAt).toEqual(expect.any(String));
+      expect(thread?.activities.filter((activity) => activity.tone === "error")).toEqual([]);
+      expect(harness.interruptTurn).not.toHaveBeenCalled();
+      expect(harness.stopSession).not.toHaveBeenCalled();
+      expect(harness.sendTurn).not.toHaveBeenCalled();
+    },
+  );
+
   it("targets the live provider turn when an interrupt carries a stale projected turn", async () => {
     const harness = await createHarness();
     const now = new Date().toISOString();
@@ -22849,11 +22914,12 @@ describe("ProviderCommandReactor", () => {
   });
 
   it.each([
-    { runtimeStatus: "ready", settles: true },
-    { runtimeStatus: "running", settles: false },
+    { runtimeStatus: "ready", hasTurnId: false, settles: true },
+    { runtimeStatus: "running", hasTurnId: true, settles: false },
+    { runtimeStatus: "running", hasTurnId: false, settles: false },
   ] as const)(
     "settles an accepted Stop promptly only when the runtime has no live turn ($runtimeStatus)",
-    async ({ runtimeStatus, settles }) => {
+    async ({ runtimeStatus, hasTurnId, settles }) => {
       const harness = await createHarness();
       const now = new Date().toISOString();
       const threadId = ThreadId.makeUnsafe("thread-1");
@@ -22881,7 +22947,7 @@ describe("ProviderCommandReactor", () => {
       harness.setRuntimeSessionTurnState({
         threadId: "thread-1",
         status: runtimeStatus,
-        ...(runtimeStatus === "running" ? { activeTurnId: turnId } : {}),
+        ...(hasTurnId ? { activeTurnId: turnId } : {}),
       });
 
       await Effect.runPromise(
@@ -22904,6 +22970,97 @@ describe("ProviderCommandReactor", () => {
           ? { status: "interrupted", activeTurnId: null }
           : { status: "running", activeTurnId: turnId },
       );
+    },
+  );
+
+  it.each([
+    { outcome: "accepted", replacement: "turn" },
+    { outcome: "rejected", replacement: "turn" },
+    { outcome: "uncertain", replacement: "turn" },
+    { outcome: "accepted", replacement: "runtime" },
+    { outcome: "rejected", replacement: "runtime" },
+    { outcome: "uncertain", replacement: "runtime" },
+  ] as const)(
+    "does not settle a replacement $replacement when an earlier interrupt finishes ($outcome)",
+    async ({ outcome, replacement }) => {
+      const interrupted = Promise.withResolvers<void>();
+      const harness = await createHarness({
+        interruptTurn: () =>
+          Effect.tryPromise({
+            try: () => interrupted.promise,
+            catch: () =>
+              outcome === "rejected"
+                ? new ProviderValidationError({
+                    operation: "interruptTurn",
+                    issue: "The earlier turn is no longer active.",
+                  })
+                : new ProviderAdapterRequestError({
+                    provider: "codex",
+                    method: "turn/interrupt",
+                    detail: "The old connection closed after the request.",
+                  }),
+          }),
+      });
+      const threadId = ThreadId.makeUnsafe("thread-1");
+      const now = new Date().toISOString();
+      const setProjectedTurn = (turnId: string) =>
+        Effect.runPromise(
+          harness.engine.dispatch({
+            type: "thread.session.set",
+            commandId: CommandId.makeUnsafe(`cmd-session-${turnId}`),
+            threadId,
+            session: {
+              threadId,
+              status: "running",
+              providerName: "codex",
+              runtimeMode: "approval-required",
+              activeTurnId: asTurnId(turnId),
+              lastError: null,
+              updatedAt: now,
+            },
+            createdAt: now,
+          }),
+        );
+      await setProjectedTurn("turn-interrupted");
+      harness.setRuntimeSessionTurnState({
+        threadId,
+        status: "running",
+        activeTurnId: asTurnId("turn-interrupted"),
+      });
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.turn.interrupt",
+          commandId: CommandId.makeUnsafe("cmd-interrupt-before-replacement"),
+          threadId,
+          createdAt: now,
+        }),
+      );
+      await waitFor(() => harness.interruptTurn.mock.calls.length === 1);
+
+      // The next runtime turn already finished, but its terminal event is still
+      // pending. Absence of a live turn alone must not settle its projection.
+      const replacementTurnId = replacement === "turn" ? "turn-replacement" : "turn-interrupted";
+      if (replacement === "turn") await setProjectedTurn(replacementTurnId);
+      harness.setRuntimeSessionTurnState({ threadId, status: "ready" });
+      if (replacement === "runtime") {
+        const sessions = await Effect.runPromise(harness.listSessions());
+        const replacementSession = { ...sessions[0]!, createdAt: "2026-10-25T12:00:00.000Z" };
+        harness.listSessions.mockImplementation(() => Effect.succeed([replacementSession]));
+      }
+      if (outcome === "accepted") interrupted.resolve();
+      else interrupted.reject(new Error("Old Stop settled after the replacement"));
+      await harness.drain();
+
+      expect((await readHarnessThread(harness))?.session).toMatchObject({
+        status: "running",
+        activeTurnId: replacementTurnId,
+      });
+      expect((await readHarnessThread(harness))?.latestTurn).toMatchObject({
+        turnId: replacementTurnId,
+        state: "running",
+      });
+      expect(harness.stopSession).not.toHaveBeenCalled();
+      expect(harness.stopRuntimeSession).not.toHaveBeenCalled();
     },
   );
 
