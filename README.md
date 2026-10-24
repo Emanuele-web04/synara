@@ -129,7 +129,7 @@ Synara uses the provider installations and subscriptions already configured on t
 
 ### Run from source
 
-The development checkout uses [Bun 1.4.2](https://bun.sh/) and [Node.js 24.13.1](https://nodejs.org/).
+The development checkout uses [Bun 1.4.4](https://bun.sh/) and [Node.js 24.13.1](https://nodejs.org/).
 
 ```console
 git clone https://github.com/Emanuele-web04/synara.git
