@@ -15668,6 +15668,56 @@ describe("ChatView transcript geometry (full app)", () => {
     },
   );
 
+  it.each([
+    { sessionStatus: "ready" as const, sendsMessage: true },
+    { sessionStatus: "running" as const, sendsMessage: false },
+  ])(
+    "sends a new /goal as a visible message only when the thread is idle ($sessionStatus)",
+    async ({ sessionStatus, sendsMessage }) => {
+      useComposerDraftStore.getState().setPrompt(THREAD_ID, "/goal ship the release");
+      const restoreNativeApi = installDeterministicSendNativeApi();
+      const mounted = await mountChatView({
+        viewport: DEFAULT_VIEWPORT,
+        snapshot: createSnapshotForTargetUser({
+          targetMessageId: "msg-user-new-goal-test" as MessageId,
+          targetText: "new goal test",
+          sessionStatus,
+        }),
+      });
+
+      try {
+        const composerForm = await waitForElement(
+          () => document.querySelector<HTMLFormElement>('form[data-chat-composer-form="true"]'),
+          "Unable to find composer form.",
+        );
+        composerForm.requestSubmit();
+
+        const goalUpdateIndex = () =>
+          wsRequests.findIndex(
+            (request) => readDispatchedCommand(request)?.type === "thread.meta.update",
+          );
+        await vi.waitFor(() => expect(goalUpdateIndex()).toBeGreaterThanOrEqual(0));
+        const goalUpdate = readDispatchedCommand(wsRequests[goalUpdateIndex()]!);
+        expect(goalUpdate?.goal).toBe("ship the release");
+        // Deferred: the visible message starts the work, not a hidden continuation.
+        expect(goalUpdate?.goalStartBehavior).toBe(sendsMessage ? "defer" : undefined);
+        if (sendsMessage) {
+          await vi.waitFor(() =>
+            expect(wsRequests.map(turnStartText).filter((text) => text !== null)).toEqual([
+              "/goal ship the release",
+            ]),
+          );
+          expect(
+            wsRequests.findIndex((request) => turnStartText(request) !== null),
+          ).toBeGreaterThan(goalUpdateIndex());
+        }
+      } finally {
+        restoreNativeApi();
+        await mounted.cleanup();
+      }
+    },
+  );
+
   it("activates Debug with /debug and returns to Default from the badge and /default", async () => {
     const mounted = await mountChatView({
       viewport: DEFAULT_VIEWPORT,
