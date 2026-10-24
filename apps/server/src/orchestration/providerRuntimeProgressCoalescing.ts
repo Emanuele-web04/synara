@@ -42,6 +42,17 @@ export function providerRuntimeProgressKey(event: ProviderRuntimeEvent): string 
   ]);
 }
 
+// Commands report elapsed time repeatedly. These are replacement snapshots,
+// not new work entries; keep their identity fenced by the runtime generation.
+export function providerRuntimeCommandProgressKey(event: ProviderRuntimeEvent): string | undefined {
+  const isCommand =
+    (event.type === "item.updated" && event.payload.itemType === "command_execution") ||
+    (event.provider === "claudeAgent" &&
+      event.type === "tool.progress" &&
+      event.payload.toolName === "Bash");
+  return isCommand && event.turnId !== undefined ? providerRuntimeProgressKey(event) : undefined;
+}
+
 /**
  * Events that settle a turn's live diff placeholder. Only these close a thread's
  * turn-diff run: the diff is a whole-turn snapshot that nothing else reads, so

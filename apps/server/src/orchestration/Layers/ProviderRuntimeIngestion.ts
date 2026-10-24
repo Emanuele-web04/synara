@@ -42,6 +42,7 @@ import { providerSupportsNativeTurnSteering } from "@synara/shared/providerMetad
 import { isProviderKind } from "@synara/shared/providerInstances";
 import {
   coalesceProviderRuntimeProgress,
+  providerRuntimeCommandProgressKey,
   providerRuntimeProgressKey,
   PROVIDER_RUNTIME_PROGRESS_WINDOW_MS,
 } from "../providerRuntimeProgressCoalescing.ts";
@@ -1074,10 +1075,7 @@ const make = Effect.gen(function* () {
   });
   // Keep row identity after the text buffer is consumed. On a cache miss the
   // durable activity restores ordering and terminal state across recovery.
-  const claudeReasoningActivityById = yield* Cache.make<
-    string,
-    OrchestrationThreadActivity | undefined
-  >({
+  const stableActivityById = yield* Cache.make<string, OrchestrationThreadActivity | undefined>({
     capacity: BUFFERED_REASONING_SUMMARY_BY_KEY_CACHE_CAPACITY,
     timeToLive: BUFFERED_REASONING_SUMMARY_BY_KEY_TTL,
     lookup: () => Effect.succeed(undefined),
@@ -1182,10 +1180,10 @@ const make = Effect.gen(function* () {
       event.provider === "claudeAgent" &&
       (event.type === "item.updated" || event.type === "item.completed") &&
       event.payload.itemType === "reasoning";
-    if (isClaudeReasoning) {
-      const cached = Option.getOrUndefined(
-        yield* Cache.getOption(claudeReasoningActivityById, activity.id),
-      );
+    const hasStableActivity =
+      isClaudeReasoning || providerRuntimeCommandProgressKey(event) !== undefined;
+    if (hasStableActivity) {
+      const cached = Option.getOrUndefined(yield* Cache.getOption(stableActivityById, activity.id));
       const durable = cached
         ? undefined
         : Option.getOrUndefined(
@@ -1209,7 +1207,7 @@ const make = Effect.gen(function* () {
             }
           : undefined);
       if (previous) {
-        yield* Cache.set(claudeReasoningActivityById, activity.id, previous);
+        yield* Cache.set(stableActivityById, activity.id, previous);
         // Interruption/failure is final; a delayed delta must not reopen a
         // completed block either. Completed snapshots may refine its detail.
         if (
@@ -1241,8 +1239,8 @@ const make = Effect.gen(function* () {
       activity,
       createdAt: activity.createdAt,
     });
-    if (isClaudeReasoning) {
-      yield* Cache.set(claudeReasoningActivityById, activity.id, activity);
+    if (hasStableActivity) {
+      yield* Cache.set(stableActivityById, activity.id, activity);
     }
     if (key && fingerprint) {
       yield* Cache.set(latestActivityUpdateFingerprintByKey, key, fingerprint);
