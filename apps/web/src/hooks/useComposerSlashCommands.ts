@@ -9,6 +9,7 @@ import {
   type ProviderNativeCommandDescriptor,
   type ProviderModelOptions,
   type RuntimeMode,
+  type ThreadGoalStartBehavior,
   type ThreadId,
 } from "@synara/contracts";
 import { deriveAssociatedWorktreeMetadata } from "@synara/shared/threadWorkspace";
@@ -277,7 +278,10 @@ export function useComposerSlashCommands(input: {
   );
 
   const persistThreadGoal = useCallback(
-    async (goal: string): Promise<boolean> => {
+    async (
+      goal: string,
+      options?: { readonly startBehavior?: ThreadGoalStartBehavior },
+    ): Promise<boolean> => {
       if (!isServerThread && activeThread) {
         // Draft threads have no server row yet: stage the goal locally so the
         // header shows it immediately, then the first send persists it right
@@ -298,7 +302,7 @@ export function useComposerSlashCommands(input: {
       }
 
       try {
-        await dispatchThreadGoal(activeThread.id, goal);
+        await dispatchThreadGoal(activeThread.id, goal, options);
         return true;
       } catch (error) {
         toastManager.add({
@@ -919,6 +923,22 @@ export function useComposerSlashCommands(input: {
         return true;
       }
       if (slashInvocation.command === "goal") {
+        const goalAction = parseGoalSlashCommandArgs(slashInvocation.args);
+        // The server accepts the goal, visible message, and first turn together.
+        // Rejected commands leave the composer intact for retry.
+        if (
+          goalAction.action === "set" &&
+          isServerThread &&
+          !activeThread?.goal?.trim() &&
+          activeThread?.session?.activeTurnId == null &&
+          interactionMode !== "plan"
+        ) {
+          if (await persistThreadGoal(goalAction.goal, { startBehavior: "start-with-message" })) {
+            editorActions.clearComposerSlashDraft();
+            toastManager.add({ type: "success", title: "Thread goal updated" });
+          }
+          return true;
+        }
         editorActions.clearComposerSlashDraft();
         await runGoalSlashCommand(slashInvocation.args);
         return true;
@@ -1068,6 +1088,7 @@ export function useComposerSlashCommands(input: {
       return false;
     },
     [
+      activeThread,
       availableBuiltInSlashCommands,
       canExecuteSideCommand,
       checkClaudeFastSlashCommandAvailability,
@@ -1077,9 +1098,12 @@ export function useComposerSlashCommands(input: {
       editorActions,
       handleClearConversation,
       handleInteractionModeChange,
+      interactionMode,
+      isServerThread,
       openForkTargetPicker,
       openFeedbackDialog,
       openReviewTargetPicker,
+      persistThreadGoal,
       selectedProvider,
       selectedModelSelection.provider,
       sidechatTargetProviders,

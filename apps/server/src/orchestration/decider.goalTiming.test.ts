@@ -9,6 +9,7 @@ import {
   EventId,
   ProjectId,
   ThreadId,
+  TurnId,
   type OrchestrationEvent,
   type OrchestrationReadModel,
 } from "@synara/contracts";
@@ -122,6 +123,50 @@ async function applyEvent(
 }
 
 describe("decider thread goal timing", () => {
+  it.each(["edit", "resume", "plan", "running"] as const)(
+    "does not append a visible goal start for %s",
+    async (scenario) => {
+      const now = new Date().toISOString();
+      const readModel = await createThreadReadModel(now);
+      const thread = readModel.threads[0]!;
+      const updatedThread = {
+        ...thread,
+        ...(scenario === "edit" || scenario === "resume"
+          ? { goal: "Existing objective", goalStartedAt: now }
+          : {}),
+        ...(scenario === "resume" ? { goalPausedAt: now } : {}),
+        ...(scenario === "plan" ? { interactionMode: "plan" as const } : {}),
+        ...(scenario === "running"
+          ? {
+              session: {
+                threadId: THREAD_ID,
+                providerName: "codex" as const,
+                status: "running" as const,
+                runtimeMode: "full-access" as const,
+                activeTurnId: TurnId.makeUnsafe("active-turn"),
+                lastError: null,
+                updatedAt: now,
+              },
+            }
+          : {}),
+      };
+      const result = await Effect.runPromise(
+        decideOrchestrationCommand({
+          command: {
+            type: "thread.meta.update",
+            commandId: CommandId.makeUnsafe(`visible-goal-${scenario}`),
+            threadId: THREAD_ID,
+            goalStartBehavior: "start-with-message",
+            ...(scenario === "resume" ? { goalPaused: false } : { goal: "New wording" }),
+          },
+          readModel: { ...readModel, threads: [updatedThread] },
+        }),
+      );
+      expect(result).toMatchObject({ type: "thread.meta-updated" });
+      expect(Array.isArray(result)).toBe(false);
+    },
+  );
+
   it("preserves explicit user provenance at the interrupt command/event seam", async () => {
     const createdAt = "2026-01-01T00:00:00.000Z";
     const result = await Effect.runPromise(

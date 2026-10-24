@@ -770,6 +770,24 @@ function providerPromptOverflowIssue(goalPromptOverheadChars: number): string {
     : "The latest message is too long to include Synara Debug mode instructions. Shorten the message and retry.";
 }
 
+// First visible turns and later continuations share the same pursuit fence.
+function canContinueGoalPursuit(
+  thread: (OrchestrationThreadShell & { readonly deletedAt?: string | null }) | undefined,
+  goalStartedAt: string | null,
+): thread is OrchestrationThreadShell {
+  return (
+    thread !== undefined &&
+    thread.deletedAt == null &&
+    thread.archivedAt == null &&
+    !isExpiredSidechat(thread) &&
+    thread.parentThreadId == null &&
+    thread.interactionMode !== "plan" &&
+    Boolean(activeThreadGoal(thread)?.trim()) &&
+    thread.goalPausedAt == null &&
+    (thread.goalStartedAt ?? null) === goalStartedAt
+  );
+}
+
 function isUnavailableInteractionRuntime(cause: Cause.Cause<ProviderServiceError>): boolean {
   return Option.match(Cause.findErrorOption(cause), {
     onNone: () => false,
@@ -4889,6 +4907,30 @@ const make = Effect.gen(function* () {
         return;
       }
       if (
+        event.payload.initialGoalStartedAt !== undefined &&
+        !canContinueGoalPursuit(thread, event.payload.initialGoalStartedAt)
+      ) {
+        if (isPendingQueuedDispatch) yield* clearPendingQueuedDispatch;
+        return;
+      }
+      if (event.payload.initialGoalStartedAt !== undefined) {
+        const pending = yield* pendingInteractions.getPendingCountsByThreadId({
+          threadId: thread.id,
+        });
+        if (pending.pendingApprovalCount > 0 || pending.pendingUserInputCount > 0) {
+          // Keep the message in the durable queue while the existing goal retry
+          // owner waits outside delivery locks for the approval/question to clear.
+          yield* enqueueQueuedTurnStart(event);
+          if (isPendingQueuedDispatch) yield* clearPendingQueuedDispatch;
+          blockedGoalContinuations.set(thread.id, {
+            goalStartedAt: event.payload.initialGoalStartedAt,
+            trigger: "goal-updated",
+          });
+          yield* scheduleBlockedGoalContinuationRetry(thread.id);
+          return;
+        }
+      }
+      if (
         thread.claudeCacheReview &&
         thread.claudeCacheReview.reviewId !== acceptedCacheReview?.reviewId
       ) {
@@ -5059,7 +5101,13 @@ const make = Effect.gen(function* () {
         ...(acceptedCacheReview ? { acceptedCacheReview } : {}),
         threadId: event.payload.threadId,
         messageId: message.id,
-        messageText: message.text,
+        messageText:
+          event.payload.initialGoalStartedAt !== undefined
+            ? buildGoalContinuationInput()
+            : message.text,
+        ...(event.payload.initialGoalStartedAt !== undefined
+          ? { turnKind: "goal-continuation" as const }
+          : {}),
         dispatchOrigin: event.payload.dispatchOrigin ?? "user",
         ...(message.attachments !== undefined ? { attachments: resolvedAttachments } : {}),
         ...(message.skills !== undefined ? { skills: message.skills } : {}),
@@ -5090,6 +5138,12 @@ const make = Effect.gen(function* () {
                   failure instanceof ProviderAdapterValidationError &&
                   failure.operation === "startClaudeCompaction.cancelled";
                 const detail = Cause.pretty(cause);
+                if (event.payload.initialGoalStartedAt !== undefined) {
+                  yield* pauseActiveThreadGoal({
+                    threadId: event.payload.threadId,
+                    expectedGoalStartedAt: event.payload.initialGoalStartedAt,
+                  });
+                }
                 if (!cancelledCompaction)
                   yield* appendProviderFailureActivity({
                     threadId: event.payload.threadId,
@@ -5154,6 +5208,7 @@ const make = Effect.gen(function* () {
                     );
                   }
                   if (isPendingQueuedDispatch) yield* clearPendingQueuedDispatch;
+                  if (event.payload.initialGoalStartedAt !== undefined) return;
                   return yield* Effect.failCause(cause);
                 }
                 yield* setThreadSessionError({
@@ -5174,16 +5229,40 @@ const make = Effect.gen(function* () {
                   yield* clearPendingQueuedDispatch;
                 }
                 yield* drainQueuedTurnsForSession(event.payload.threadId);
+                // A failed autonomous start pauses once; it must not quarantine
+                // the thread and prevent the user's explicit resume.
+                if (event.payload.initialGoalStartedAt !== undefined) return;
                 return yield* Effect.failCause(cause);
               }),
         ),
         Effect.ensuring(Effect.sync(() => editResendTurnStartKeys.delete(editResendKey))),
       );
+      if (
+        startedTurn &&
+        event.payload.initialGoalStartedAt !== undefined &&
+        !canContinueGoalPursuit(
+          yield* resolveThreadShell(event.payload.threadId),
+          event.payload.initialGoalStartedAt,
+        )
+      ) {
+        yield* interruptProviderTurn({
+          threadId: event.payload.threadId,
+          turnId: startedTurn.turnId,
+          createdAt: new Date().toISOString(),
+        });
+      }
+      if (startedTurn && event.payload.initialGoalStartedAt !== undefined) {
+        blockedGoalContinuations.delete(event.payload.threadId);
+      }
       // A requested steer can still become a separate queued turn (for
       // providers without native steering, or if the live turn already
       // settled). Persist that effective boundary while leaving native steer
       // continuations unbound to a new turn.
-      if (startedTurn && event.payload.dispatchMode === "steer" && !isNativeSteer) {
+      if (
+        startedTurn &&
+        (event.payload.initialGoalStartedAt !== undefined ||
+          (event.payload.dispatchMode === "steer" && !isNativeSteer))
+      ) {
         yield* orchestrationEngine.dispatch({
           type: "thread.message.user.bind-turn",
           commandId: CommandId.makeUnsafe(
@@ -5808,6 +5887,9 @@ const make = Effect.gen(function* () {
             ? { dispatchOrigin: nextQueuedTurn.dispatchOrigin }
             : {}),
           runtimeMode: nextQueuedTurn.runtimeMode,
+          ...(nextQueuedTurn.initialGoalStartedAt !== undefined
+            ? { initialGoalStartedAt: nextQueuedTurn.initialGoalStartedAt }
+            : {}),
           interactionMode: nextQueuedTurn.interactionMode,
           ...(nextQueuedTurn.sourceProposedPlan !== undefined
             ? { sourceProposedPlan: nextQueuedTurn.sourceProposedPlan }
@@ -5903,16 +5985,7 @@ const make = Effect.gen(function* () {
 
     // A soft-deleted thread reads as missing.
     const thread = yield* resolveThreadShell(threadId);
-    if (
-      !thread ||
-      thread.archivedAt != null ||
-      isExpiredSidechat(thread) ||
-      thread.parentThreadId != null ||
-      thread.interactionMode === "plan" ||
-      !activeThreadGoal(thread)?.trim() ||
-      thread.goalPausedAt != null ||
-      (thread.goalStartedAt ?? null) !== pending.goalStartedAt
-    ) {
+    if (!canContinueGoalPursuit(thread, pending.goalStartedAt)) {
       blockedGoalContinuations.delete(threadId);
       return;
     }
@@ -6029,15 +6102,8 @@ const make = Effect.gen(function* () {
         // A soft-deleted thread reads as missing.
         const thread = yield* resolveThreadShell(event.payload.threadId);
         if (
-          !thread ||
-          thread.archivedAt != null ||
-          isExpiredSidechat(thread) ||
-          thread.parentThreadId != null ||
-          thread.interactionMode === "plan" ||
-          !activeThreadGoal(thread)?.trim() ||
-          thread.goalPausedAt != null ||
-          thread.claudeCacheReview != null ||
-          (thread.goalStartedAt ?? null) !== event.payload.goalStartedAt
+          !canContinueGoalPursuit(thread, event.payload.goalStartedAt) ||
+          thread.claudeCacheReview != null
         ) {
           blockedGoalContinuations.delete(event.payload.threadId);
           return;
@@ -6127,13 +6193,7 @@ const make = Effect.gen(function* () {
         // Stop/pause can commit while provider dispatch is awaiting acceptance.
         // Fence the accepted turn against the authoritative command model so it
         // cannot escape the interrupt event that raced it with a stale turn id.
-        if (
-          startedTurn &&
-          (!latestThread ||
-            latestThread.goalPausedAt != null ||
-            !activeThreadGoal(latestThread)?.trim() ||
-            (latestThread.goalStartedAt ?? null) !== event.payload.goalStartedAt)
-        ) {
+        if (startedTurn && !canContinueGoalPursuit(latestThread, event.payload.goalStartedAt)) {
           yield* interruptProviderTurn({
             threadId: thread.id,
             turnId: startedTurn.turnId,
@@ -7359,6 +7419,12 @@ const make = Effect.gen(function* () {
     }
 
     const createdAt = new Date().toISOString();
+    if (event.payload.initialGoalStartedAt !== undefined) {
+      yield* pauseActiveThreadGoal({
+        threadId: event.payload.threadId,
+        expectedGoalStartedAt: event.payload.initialGoalStartedAt,
+      });
+    }
     yield* setThreadSessionError({
       threadId: event.payload.threadId,
       runtimeMode: event.payload.runtimeMode,

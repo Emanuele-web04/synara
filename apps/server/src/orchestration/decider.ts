@@ -12,6 +12,7 @@ import {
 } from "@synara/shared/asyncUserInput";
 import {
   EventId,
+  MessageId,
   MAX_PINNED_PROJECTS,
   PROVIDER_SEND_TURN_MAX_INPUT_CHARS,
   PINNED_MESSAGES_MAX_COUNT,
@@ -1654,7 +1655,22 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         });
       }
       const occurredAt = nowIso();
-      return {
+      const goalPatch = resolveThreadGoalPatch(command, thread, occurredAt);
+      // Recheck admission inside the serialized command: stale clients may now
+      // be editing an existing goal or a thread that has already started work.
+      const startsWithMessage =
+        command.goalStartBehavior === "start-with-message" &&
+        command.goal !== undefined &&
+        command.goal.trim().length > 0 &&
+        !thread.goal?.trim() &&
+        goalPatch.goalStartedAt != null &&
+        command.goalAchieved !== true &&
+        thread.archivedAt == null &&
+        thread.parentThreadId == null &&
+        thread.interactionMode !== "plan" &&
+        !threadHasInFlightTurn(thread) &&
+        !isExpiredSidechat(thread);
+      const metadataEvent: Omit<OrchestrationEvent, "sequence"> = {
         ...withEventBase({
           aggregateKind: "thread",
           aggregateId: command.threadId,
@@ -1694,9 +1710,9 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
             : {}),
           ...(command.notes !== undefined ? { notes: command.notes } : {}),
           ...(command.goalStartBehavior !== undefined
-            ? { goalStartBehavior: command.goalStartBehavior }
+            ? { goalStartBehavior: startsWithMessage ? "defer" : command.goalStartBehavior }
             : {}),
-          ...resolveThreadGoalPatch(command, thread, occurredAt),
+          ...goalPatch,
           ...(command.providerHandoff === true
             ? {
                 providerHandoff: {
@@ -1710,6 +1726,55 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           updatedAt: occurredAt,
         },
       };
+      if (!startsWithMessage) return metadataEvent;
+
+      // The engine has already materialized large objectives. The same bounded
+      // reference is recorded in the message; no second raw-goal payload is sent.
+      const goal = goalPatch.goal!;
+      const messageId = MessageId.makeUnsafe(`goal:${command.commandId}`);
+      const messageEvent = userMessageUpsertEvent({
+        commandId: command.commandId,
+        threadId: command.threadId,
+        message: {
+          id: messageId,
+          role: "user",
+          text: `/goal ${/^(?:clear|pause|resume|edit)$|^--(?:\s|$)/i.test(goal.trim()) ? "-- " : ""}${goal}`,
+          dispatchMode: "queue",
+          dispatchOrigin: "user",
+          turnId: null,
+          streaming: false,
+          source: "native",
+          createdAt: occurredAt,
+          updatedAt: occurredAt,
+        },
+        turnId: null,
+        startsNewTurn: true,
+        occurredAt,
+      });
+      return [
+        metadataEvent,
+        messageEvent,
+        {
+          ...withEventBase({
+            aggregateKind: "thread",
+            aggregateId: command.threadId,
+            occurredAt,
+            commandId: command.commandId,
+          }),
+          causationEventId: messageEvent.eventId,
+          type: "thread.turn-queued",
+          payload: {
+            threadId: command.threadId,
+            messageId,
+            initialGoalStartedAt: goalPatch.goalStartedAt!,
+            dispatchMode: "queue",
+            dispatchOrigin: "user",
+            runtimeMode: thread.runtimeMode,
+            interactionMode: thread.interactionMode,
+            createdAt: occurredAt,
+          },
+        },
+      ];
     }
 
     case "thread.pinned-message.add": {
@@ -2290,6 +2355,9 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         payload: {
           threadId: command.threadId,
           messageId: command.messageId,
+          ...(command.initialGoalStartedAt !== undefined
+            ? { initialGoalStartedAt: command.initialGoalStartedAt }
+            : {}),
           ...(command.modelSelection !== undefined
             ? { modelSelection: command.modelSelection }
             : {}),
