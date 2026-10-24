@@ -6374,11 +6374,13 @@ const make = Effect.gen(function* () {
       (interruptSession.status === "starting" || interruptSession.status === "running") &&
       interruptSession.activeTurnId === null &&
       thread.latestTurn?.state !== "running" &&
-      !hasLiveProviderWork(liveSession)
+      liveSession?.status !== "running" &&
+      liveSession?.activeTurnId === undefined
     ) {
       return yield* processThreadSessionStop({
         threadId: input.threadId,
         createdAt: input.createdAt,
+        expectedSession: interruptSession,
       });
     }
 
@@ -6481,10 +6483,11 @@ const make = Effect.gen(function* () {
     // thread, which suppresses every later side effect while still leaving the
     // turn running. The stop path always settles the projection.
     if (result._tag === "timeout" || result.outcome._tag === "uncertain") {
-      const detail =
-        result._tag === "timeout"
-          ? `${result.detail} Stopping the provider session to settle the turn.`
-          : `${result.outcome.detail}\nStopping the provider session to settle the turn.`;
+      const reason = sanitizeUserFacingErrorMessage(
+        result._tag === "timeout" ? result.detail : result.outcome.detail,
+        "Provider turn interrupt failed",
+      );
+      const detail = `${reason} Stopping the provider session to settle the turn.`;
       yield* reportInterruptFailure(detail, "uncertain");
       return yield* processThreadSessionStop({
         threadId: input.threadId,

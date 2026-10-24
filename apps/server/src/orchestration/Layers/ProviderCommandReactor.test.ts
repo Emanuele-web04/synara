@@ -22869,6 +22869,174 @@ describe("ProviderCommandReactor", () => {
     },
   );
 
+  it("keeps the escalation explanation when an uncertain Stop detail contains a stack", async () => {
+    const harness = await createHarness({
+      interruptTurn: () =>
+        Effect.fail(
+          new ProviderAdapterRequestError({
+            provider: "codex",
+            method: "turn/interrupt",
+            detail: "Connection dropped\n    at interrupt (/app/provider.ts:3:1)",
+          }),
+        ),
+    });
+    const threadId = ThreadId.makeUnsafe("thread-1");
+    const turnId = asTurnId("uncertain-stop-turn");
+    const createdAt = new Date().toISOString();
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.makeUnsafe("uncertain-stop-session"),
+        threadId,
+        session: {
+          threadId,
+          status: "running",
+          providerName: "codex",
+          runtimeMode: "approval-required",
+          activeTurnId: turnId,
+          lastError: null,
+          updatedAt: createdAt,
+        },
+        createdAt,
+      }),
+    );
+    harness.setRuntimeSessionTurnState({ threadId, status: "running", activeTurnId: turnId });
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.interrupt",
+        commandId: CommandId.makeUnsafe("uncertain-stop-command"),
+        threadId,
+        turnId,
+        createdAt,
+      }),
+    );
+    await harness.drain();
+    const thread = await readHarnessThread(harness);
+    const failure = thread?.activities.find(
+      (activity) => activity.kind === "provider.turn.interrupt.failed",
+    );
+    const detail = (failure?.payload as { detail?: string } | undefined)?.detail;
+    expect(detail).toContain("Stopping the provider session to settle the turn.");
+    expect(detail).not.toContain("\n");
+    expect(detail).not.toContain(" at interrupt ");
+    expect(harness.stopRuntimeSession).toHaveBeenCalledTimes(1);
+    expect(await Effect.runPromise(harness.listSessions())).toEqual([]);
+  });
+
+  it("stops only a starting child when its parent runtime is connecting without a turn id", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+    const parent = ThreadId.makeUnsafe("thread-1");
+    const child = ThreadId.makeUnsafe("subagent:thread-1:connecting-child");
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.create",
+        commandId: CommandId.makeUnsafe("create-connecting-child"),
+        threadId: child,
+        parentThreadId: parent,
+        projectId: asProjectId("project-1"),
+        title: "Starting child",
+        modelSelection: { provider: "codex", model: "gpt-5-codex" },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        branch: null,
+        worktreePath: null,
+        createdAt: now,
+      }),
+    );
+    for (const threadId of [parent, child]) {
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.session.set",
+          commandId: CommandId.makeUnsafe(`session-${threadId}`),
+          threadId,
+          session: {
+            threadId,
+            status: "starting",
+            providerName: "codex",
+            runtimeMode: "approval-required",
+            activeTurnId: null,
+            lastError: null,
+            updatedAt: now,
+          },
+          createdAt: now,
+        }),
+      );
+    }
+    harness.setRuntimeSessionTurnState({ threadId: parent, status: "connecting" });
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.interrupt",
+        commandId: CommandId.makeUnsafe("stop-connecting-child"),
+        threadId: child,
+        createdAt: now,
+      }),
+    );
+    await harness.drain();
+    const state = await Effect.runPromise(harness.engine.getReadModel());
+    expect(state.threads.find((entry) => entry.id === child)?.session).toMatchObject({
+      status: "stopped",
+      activeTurnId: null,
+    });
+    expect(state.threads.find((entry) => entry.id === parent)?.session?.status).toBe("starting");
+    expect(await Effect.runPromise(harness.listSessions())).toMatchObject([
+      { threadId: parent, status: "connecting" },
+    ]);
+    expect(harness.stopRuntimeSession).not.toHaveBeenCalled();
+    expect(harness.stopSession).not.toHaveBeenCalled();
+    expect(harness.interruptTurn).not.toHaveBeenCalled();
+  });
+
+  it.each(["starting", "running"] as const)(
+    "stops a connecting runtime with no turn while the projection is %s",
+    async (status) => {
+      const harness = await createHarness({
+        interruptTurn: () =>
+          Effect.fail(
+            new ProviderValidationError({
+              operation: "interruptTurn",
+              issue: "No exact provider turn is bound during initialization.",
+            }),
+          ),
+      });
+      const threadId = ThreadId.makeUnsafe("thread-1");
+      const createdAt = new Date().toISOString();
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.session.set",
+          commandId: CommandId.makeUnsafe("connecting-session"),
+          threadId,
+          session: {
+            threadId,
+            status,
+            providerName: "codex",
+            runtimeMode: "approval-required",
+            activeTurnId: null,
+            lastError: null,
+            updatedAt: createdAt,
+          },
+          createdAt,
+        }),
+      );
+      harness.setRuntimeSessionTurnState({ threadId, status: "connecting" });
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.turn.interrupt",
+          commandId: CommandId.makeUnsafe("stop-initialization"),
+          threadId,
+          createdAt,
+        }),
+      );
+      await harness.drain();
+      const thread = await readHarnessThread(harness);
+      expect(thread?.session).toMatchObject({ status: "stopped", activeTurnId: null });
+      expect(harness.stopRuntimeSession).toHaveBeenCalledTimes(1);
+      expect(harness.interruptTurn).not.toHaveBeenCalled();
+      expect(await Effect.runPromise(harness.listSessions())).toEqual([]);
+      expect(thread?.activities.filter((activity) => activity.tone === "error")).toEqual([]);
+    },
+  );
+
   it("targets the live provider turn when an interrupt carries a stale projected turn", async () => {
     const harness = await createHarness();
     const now = new Date().toISOString();
