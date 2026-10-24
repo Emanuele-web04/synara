@@ -6,6 +6,7 @@ import {
   MessageId,
   ProjectId,
   THREAD_GOAL_INLINE_MAX_CHARS,
+  THREAD_GOAL_MAX_CHARS,
   ThreadId,
   TurnId,
   type OrchestrationCommand,
@@ -2049,15 +2050,16 @@ describe("OrchestrationEngine", () => {
       }),
     );
 
-    const oversizedGoal = `Long-lived objective. ${"d".repeat(THREAD_GOAL_INLINE_MAX_CHARS)}`;
-    await system.run(
-      engine.dispatch({
-        type: "thread.meta.update",
-        commandId: CommandId.makeUnsafe("cmd-goal-materialize-update"),
-        threadId,
-        goal: oversizedGoal,
-      }),
-    );
+    const oversizedGoal = "d".repeat(THREAD_GOAL_MAX_CHARS);
+    const goalCommand = {
+      type: "thread.meta.update",
+      commandId: CommandId.makeUnsafe("cmd-goal-materialize-update"),
+      threadId,
+      goal: oversizedGoal,
+      goalStartBehavior: "start-with-message",
+    } as const;
+    const firstReceipt = await system.run(engine.dispatch(goalCommand));
+    expect(await system.run(engine.dispatch(goalCommand))).toEqual(firstReceipt);
 
     const thread = (await system.run(engine.getReadModel())).threads.find(
       (entry) => entry.id === threadId,
@@ -2066,6 +2068,21 @@ describe("OrchestrationEngine", () => {
     const goalFilePath = thread?.goal?.replace("Read this file: ", "");
     expect(goalFilePath).toContain("thread-goals");
     await expect(fs.readFile(goalFilePath ?? "", "utf8")).resolves.toBe(oversizedGoal);
+    expect(thread?.messages).toMatchObject([
+      { role: "user", text: `/goal ${thread?.goal}`, startsNewTurn: true },
+    ]);
+    expect(thread!.messages[0]!.text.length).toBeLessThan(THREAD_GOAL_INLINE_MAX_CHARS);
+    const events = await system.run(Stream.runCollect(engine.readEvents(0)));
+    expect(Array.from(events).filter((event) => event.type === "thread.turn-queued")).toMatchObject(
+      [
+        {
+          payload: {
+            messageId: thread!.messages[0]!.id,
+            initialGoalStartedAt: thread?.goalStartedAt,
+          },
+        },
+      ],
+    );
 
     // Edit goal exposes this exact reference. Saving it unchanged must retain
     // the objective even though the reference itself fits the inline budget.
@@ -2078,6 +2095,10 @@ describe("OrchestrationEngine", () => {
       }),
     );
     await expect(fs.readFile(goalFilePath ?? "", "utf8")).resolves.toBe(oversizedGoal);
+    expect(
+      (await system.run(engine.getReadModel())).threads.find((entry) => entry.id === threadId)
+        ?.messages,
+    ).toHaveLength(1);
 
     // A second oversized goal gets its own file — the previous file is pruned
     // once the new reference commits, so the live file can never be clobbered.

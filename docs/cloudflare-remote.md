@@ -103,6 +103,14 @@ limit (`rpc.ts`, TS7056); direct web and CLI builds succeed. See the latest
 [qualification ledger](implementation/cloudflare-remote/STATUS.md) for test results
 and remaining gaps rather than treating a focused pass as a clean full-suite run.
 
+## Native goal command compatibility
+
+Hosts advertise `orchestration.thread-goal-visible-start` when they accept
+`goalStartBehavior: "start-with-message"`. Native clients use it only for a new,
+idle goal outside Plan mode, so the visible message and first turn are committed
+together. Older hosts keep the existing goal path; this optional capability does
+not change the required protocol revision or require re-pairing.
+
 ## Remote surface audit (2026-10-09)
 
 Tasks, Kanban, Inbox and Code review now expose the existing **Computer** picker.

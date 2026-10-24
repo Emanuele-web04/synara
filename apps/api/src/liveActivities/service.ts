@@ -18,7 +18,10 @@ type ActivityRow = {
   org_id: string;
   session_id: string;
   device_id: string;
-  request: RegisterLiveActivity & { hostGenerations?: Record<string, number> };
+  request: RegisterLiveActivity & {
+    hostGenerations?: Record<string, number>;
+    sourcesRegisteredAt?: Record<string, number>;
+  };
   created_at: Date;
   expires_at: Date;
   ended: boolean;
@@ -31,6 +34,8 @@ const fail = (message: string) => {
 };
 const key = (source: { threadId: string; turnId: string }) =>
   JSON.stringify([source.threadId, source.turnId]);
+const sourceIdentity = ({ hostId, threadId, turnId }: LiveActivitySource) =>
+  JSON.stringify([hostId, threadId, turnId]);
 const swiftEpoch = 978307200;
 
 // ActivityKit decodes the existing Swift ContentState verbatim. Its
@@ -118,6 +123,10 @@ export function createLiveActivityService(options: {
         hostGenerations: Object.fromEntries(
           hosts.rows.map((host) => [host.id, host.key_generation]),
         ),
+        // Server-owned metadata: a new exact-turn watch needs its own first-report window.
+        sourcesRegisteredAt: Object.fromEntries(
+          request.sources.map((source) => [sourceIdentity(source), Date.now()]),
+        ),
       };
       // An ordinary device token legitimately owns several exact-turn watches.
       if (kind === "liveactivity") {
@@ -157,6 +166,15 @@ export function createLiveActivityService(options: {
           fail("Activity has ended");
         }
         if (request.revision <= previous.request.revision) return;
+        const previousSources = new Set(previous.request.sources.map(sourceIdentity));
+        for (const source of request.sources) {
+          const identity = sourceIdentity(source);
+          // Rotation, aliases or another source changing must not renew this watch.
+          if (previousSources.has(identity)) {
+            boundRequest.sourcesRegisteredAt[identity] =
+              previous.request.sourcesRegisteredAt?.[identity] ?? previous.created_at.getTime();
+          }
+        }
         await db.query(
           `UPDATE live_activities SET request=$2, dirty=true, attempts=0, next_attempt_at=now() WHERE id=$1`,
           [previous.id, JSON.stringify({ ...boundRequest, activityId: previous.id })],
@@ -376,7 +394,10 @@ export function createLiveActivityService(options: {
         const turn = fresh
           ? host.snapshot?.turns.find((turn) => key(turn) === key(source))
           : undefined;
-        const awaitingFirstReport = !turn && Date.now() - activity.created_at.getTime() < 90000;
+        const registeredAt =
+          activity.request.sourcesRegisteredAt?.[sourceIdentity(source)] ??
+          activity.created_at.getTime();
+        const awaitingFirstReport = !turn && Date.now() - registeredAt < 90000;
         const state = expired
           ? "stopped"
           : (turn?.state ?? (awaitingFirstReport ? "running" : "stopped"));

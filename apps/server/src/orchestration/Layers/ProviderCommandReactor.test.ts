@@ -2434,7 +2434,8 @@ describe("ProviderCommandReactor", () => {
         await expect.poll(() => cancelDiscovery.mock.calls.length).toBe(1);
         await harness.drain();
         if (commandType === "thread.turn.interrupt") {
-          expect(harness.interruptTurn).toHaveBeenCalledTimes(1);
+          // Discovery was cancelled above; its idle provider has no turn to interrupt.
+          expect(harness.interruptTurn).not.toHaveBeenCalled();
         } else if (commandType === "thread.conversation.rollback") {
           expect(harness.rollbackConversation).toHaveBeenCalledTimes(1);
         } else if (commandType === "thread.session.stop" || commandType === "thread.archive") {
@@ -8514,7 +8515,7 @@ describe("ProviderCommandReactor", () => {
     { intentionalQuit: false, stopped: true, reportsFailure: true, initiallyStopped: false },
     { intentionalQuit: true, stopped: false, reportsFailure: true, initiallyStopped: false },
     { intentionalQuit: true, stopped: true, reportsFailure: false, initiallyStopped: true },
-    { intentionalQuit: false, stopped: true, reportsFailure: true, initiallyStopped: true },
+    { intentionalQuit: false, stopped: true, reportsFailure: false, initiallyStopped: true },
   ])("settles a late interrupt rejection during quiesce: %j", async (scenario) => {
     const release = Effect.runSync(Deferred.make<void>());
     const harness = await createHarness({
@@ -10028,24 +10029,96 @@ describe("ProviderCommandReactor", () => {
     );
   });
 
-  it("starts an idle active goal with an internal continuation turn", async () => {
-    const harness = await createHarness();
-
-    await Effect.runPromise(
-      harness.engine.dispatch({
+  it.each([
+    { startBehavior: undefined, objective: "Finish the complete implementation", visible: false },
+    { startBehavior: "start-with-message" as const, objective: "clear", visible: true },
+    {
+      startBehavior: "start-with-message" as const,
+      objective: "-- keep this literal",
+      visible: true,
+    },
+  ])(
+    "starts an idle active goal with one continuation turn ($startBehavior)",
+    async ({ startBehavior, objective, visible }) => {
+      const harness = await createHarness();
+      const command = {
         type: "thread.meta.update",
         commandId: CommandId.makeUnsafe("cmd-goal-autostart"),
         threadId: ThreadId.makeUnsafe("thread-1"),
+        goal: objective,
+        ...(startBehavior ? { goalStartBehavior: startBehavior } : {}),
+      } as const;
+      await Effect.runPromise(harness.engine.dispatch(command));
+
+      await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+      await harness.drain();
+      await Effect.runPromise(harness.engine.dispatch(command));
+      await harness.drain();
+      expect(harness.sendTurn).toHaveBeenCalledTimes(1);
+      const providerInput = harness.sendTurn.mock.calls[0]?.[0].input;
+      expect(providerInput).toContain("<synara_goal>");
+      expect(providerInput).toContain(objective);
+      expect(providerInput).toContain("Continue working toward the active thread goal");
+      const messages = (await readHarnessThread(harness))?.messages;
+      if (visible) {
+        expect(messages).toMatchObject([
+          { role: "user", text: `/goal -- ${objective}`, turnId: "turn-1" },
+        ]);
+        expect(messages).toHaveLength(1);
+      } else {
+        expect(messages).toEqual([]);
+      }
+    },
+  );
+
+  it("pauses a failed visible first goal turn and does not recover it until resumed", async () => {
+    const harness = await createHarness();
+    harness.sendTurn.mockImplementationOnce(() =>
+      Effect.fail(
+        new ProviderAdapterRequestError({
+          provider: "codex",
+          method: "turn/start",
+          detail: "Provider refused the first goal turn.",
+        }),
+      ),
+    );
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.meta.update",
+        commandId: CommandId.makeUnsafe("cmd-visible-goal-failure"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
         goal: "Finish the complete implementation",
+        goalStartBehavior: "start-with-message",
       }),
     );
-
-    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
-    const providerInput = harness.sendTurn.mock.calls[0]?.[0].input;
-    expect(providerInput).toContain("<synara_goal>");
-    expect(providerInput).toContain("Finish the complete implementation");
-    expect(providerInput).toContain("Continue working toward the active thread goal");
-    expect((await readHarnessThread(harness))?.messages).toEqual([]);
+    await waitFor(async () => (await readHarnessThread(harness))?.goalPausedAt != null);
+    await harness.drain();
+    const failedThread = (await readHarnessThread(harness))!;
+    expect(failedThread.messages).toHaveLength(1);
+    expect(failedThread.session?.status).toBe("error");
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.goal.continue",
+        commandId: CommandId.makeUnsafe("cmd-visible-goal-startup-recovery"),
+        threadId: failedThread.id,
+        goalStartedAt: failedThread.goalStartedAt!,
+        trigger: "startup-recovery",
+        createdAt: new Date().toISOString(),
+      }),
+    );
+    await harness.drain();
+    expect(harness.sendTurn).toHaveBeenCalledTimes(1);
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.meta.update",
+        commandId: CommandId.makeUnsafe("cmd-visible-goal-resume"),
+        threadId: failedThread.id,
+        goalPaused: false,
+      }),
+    );
+    await waitFor(() => harness.sendTurn.mock.calls.length === 2);
+    await harness.drain();
+    expect((await readHarnessThread(harness))?.messages).toHaveLength(1);
   });
 
   it("defers a staged draft goal until the first real user turn", async () => {
@@ -10457,143 +10530,158 @@ describe("ProviderCommandReactor", () => {
     );
   });
 
-  it("retries a goal continuation after a pending interaction clears", async () => {
-    const harness = await createHarness();
-    const now = new Date().toISOString();
-    const requestId = asApprovalRequestId("approval-before-goal-continuation");
+  it.each([false, true])(
+    "retries a goal continuation after a pending interaction clears (visible first turn: %s)",
+    async (visible) => {
+      const harness = await createHarness({ startReactor: false });
+      const now = new Date().toISOString();
+      const requestId = asApprovalRequestId("approval-before-goal-continuation");
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.meta.update",
-        commandId: CommandId.makeUnsafe("cmd-goal-before-pending-approval"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        goal: "Continue after the approval settles",
-        goalStartBehavior: "defer",
-      }),
-    );
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.activity.append",
-        commandId: CommandId.makeUnsafe("cmd-pending-approval-before-goal"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        activity: {
-          id: EventId.makeUnsafe("activity-pending-approval-before-goal"),
-          tone: "approval",
-          kind: "approval.requested",
-          summary: "Command approval requested",
-          payload: {
-            requestId,
-            requestKind: "command",
-          },
-          turnId: null,
-          createdAt: now,
-        },
-        createdAt: now,
-      }),
-    );
-    const goalStartedAt = (await readHarnessThread(harness))?.goalStartedAt;
-    expect(goalStartedAt).toBeTruthy();
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.goal.continue",
-        commandId: CommandId.makeUnsafe("cmd-goal-blocked-by-approval"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        goalStartedAt: goalStartedAt!,
-        trigger: "startup-recovery",
-        createdAt: now,
-      }),
-    );
-
-    await harness.drain();
-    expect(harness.sendTurn).not.toHaveBeenCalled();
-
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.session.set",
-        commandId: CommandId.makeUnsafe("cmd-interrupted-session-before-goal-retry"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        session: {
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.meta.update",
+          commandId: CommandId.makeUnsafe("cmd-goal-before-pending-approval"),
           threadId: ThreadId.makeUnsafe("thread-1"),
-          status: "interrupted",
-          providerName: "codex",
-          runtimeMode: "full-access",
-          activeTurnId: null,
-          lastError: null,
-          updatedAt: now,
+          goal: "Continue after the approval settles",
+          goalStartBehavior: visible ? "start-with-message" : "defer",
+        }),
+      );
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.activity.append",
+          commandId: CommandId.makeUnsafe("cmd-pending-approval-before-goal"),
+          threadId: ThreadId.makeUnsafe("thread-1"),
+          activity: {
+            id: EventId.makeUnsafe("activity-pending-approval-before-goal"),
+            tone: "approval",
+            kind: "approval.requested",
+            summary: "Command approval requested",
+            payload: {
+              requestId,
+              requestKind: "command",
+            },
+            turnId: null,
+            createdAt: now,
+          },
+          createdAt: now,
+        }),
+      );
+      const goalStartedAt = (await readHarnessThread(harness))?.goalStartedAt;
+      expect(goalStartedAt).toBeTruthy();
+      if (!visible)
+        await Effect.runPromise(
+          harness.engine.dispatch({
+            type: "thread.goal.continue",
+            commandId: CommandId.makeUnsafe("cmd-goal-blocked-by-approval"),
+            threadId: ThreadId.makeUnsafe("thread-1"),
+            goalStartedAt: goalStartedAt!,
+            trigger: "startup-recovery",
+            createdAt: now,
+          }),
+        );
+      await harness.startReactor();
+
+      await harness.drain();
+      expect(harness.sendTurn).not.toHaveBeenCalled();
+
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.session.set",
+          commandId: CommandId.makeUnsafe("cmd-interrupted-session-before-goal-retry"),
+          threadId: ThreadId.makeUnsafe("thread-1"),
+          session: {
+            threadId: ThreadId.makeUnsafe("thread-1"),
+            status: "interrupted",
+            providerName: "codex",
+            runtimeMode: "full-access",
+            activeTurnId: null,
+            lastError: null,
+            updatedAt: now,
+          },
+          createdAt: now,
+        }),
+      );
+
+      await Effect.runPromise(
+        harness.pendingInteractionRepository.deleteByIdentity({
+          threadId: ThreadId.makeUnsafe("thread-1"),
+          interactionKind: "approval",
+          requestId,
+        }),
+      );
+
+      await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+      expect(harness.sendTurn.mock.calls[0]?.[0].input).toContain(
+        "Continue working toward the active thread goal",
+      );
+      await harness.drain();
+      if (visible) {
+        expect((await readHarnessThread(harness))?.messages).toMatchObject([
+          { text: "/goal Continue after the approval settles", turnId: "turn-1" },
+        ]);
+      }
+    },
+  );
+
+  it.each([false, true])(
+    "interrupts a continuation that races a user stop (visible first turn: %s)",
+    async (visible) => {
+      const harness = await createHarness();
+      const now = new Date().toISOString();
+      let releaseSend!: (result: { readonly threadId: ThreadId; readonly turnId: TurnId }) => void;
+      const sendGate = new Promise<{ readonly threadId: ThreadId; readonly turnId: TurnId }>(
+        (resolve) => {
+          releaseSend = resolve;
         },
-        createdAt: now,
-      }),
-    );
+      );
+      harness.sendTurn.mockImplementationOnce(() => Effect.promise(() => sendGate));
 
-    await Effect.runPromise(
-      harness.pendingInteractionRepository.deleteByIdentity({
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.meta.update",
+          commandId: CommandId.makeUnsafe("cmd-goal-before-stop-race"),
+          threadId: ThreadId.makeUnsafe("thread-1"),
+          goal: "Stop this continuation",
+          goalStartBehavior: visible ? "start-with-message" : "defer",
+        }),
+      );
+      const goalStartedAt = (await readHarnessThread(harness))?.goalStartedAt;
+      expect(goalStartedAt).toBeTruthy();
+      if (!visible)
+        await Effect.runPromise(
+          harness.engine.dispatch({
+            type: "thread.goal.continue",
+            commandId: CommandId.makeUnsafe("cmd-goal-continuation-before-stop"),
+            threadId: ThreadId.makeUnsafe("thread-1"),
+            goalStartedAt: goalStartedAt!,
+            trigger: "turn-completed",
+            createdAt: now,
+          }),
+        );
+      await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.turn.interrupt",
+          commandId: CommandId.makeUnsafe("cmd-stop-racing-goal-continuation"),
+          threadId: ThreadId.makeUnsafe("thread-1"),
+          turnId: asTurnId("turn-before-goal-continuation"),
+          createdAt: now,
+        }),
+      );
+      releaseSend({
         threadId: ThreadId.makeUnsafe("thread-1"),
-        interactionKind: "approval",
-        requestId,
-      }),
-    );
+        turnId: asTurnId("turn-goal-continuation-after-stop"),
+      });
 
-    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
-    expect(harness.sendTurn.mock.calls[0]?.[0].input).toContain(
-      "Continue working toward the active thread goal",
-    );
-  });
-
-  it("interrupts a continuation that races a user stop", async () => {
-    const harness = await createHarness();
-    const now = new Date().toISOString();
-    let releaseSend!: (result: { readonly threadId: ThreadId; readonly turnId: TurnId }) => void;
-    const sendGate = new Promise<{ readonly threadId: ThreadId; readonly turnId: TurnId }>(
-      (resolve) => {
-        releaseSend = resolve;
-      },
-    );
-    harness.sendTurn.mockImplementationOnce(() => Effect.promise(() => sendGate));
-
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.meta.update",
-        commandId: CommandId.makeUnsafe("cmd-goal-before-stop-race"),
+      await waitFor(() => harness.interruptTurn.mock.calls.length >= 1);
+      expect(harness.interruptTurn.mock.calls[0]?.[0]).toMatchObject({
         threadId: ThreadId.makeUnsafe("thread-1"),
-        goal: "Stop this continuation",
-        goalStartBehavior: "defer",
-      }),
-    );
-    const goalStartedAt = (await readHarnessThread(harness))?.goalStartedAt;
-    expect(goalStartedAt).toBeTruthy();
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.goal.continue",
-        commandId: CommandId.makeUnsafe("cmd-goal-continuation-before-stop"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        goalStartedAt: goalStartedAt!,
-        trigger: "turn-completed",
-        createdAt: now,
-      }),
-    );
-    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
-
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.turn.interrupt",
-        commandId: CommandId.makeUnsafe("cmd-stop-racing-goal-continuation"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        turnId: asTurnId("turn-before-goal-continuation"),
-        createdAt: now,
-      }),
-    );
-    releaseSend({
-      threadId: ThreadId.makeUnsafe("thread-1"),
-      turnId: asTurnId("turn-goal-continuation-after-stop"),
-    });
-
-    await waitFor(() => harness.interruptTurn.mock.calls.length >= 1);
-    expect(harness.interruptTurn.mock.calls[0]?.[0]).toMatchObject({
-      threadId: ThreadId.makeUnsafe("thread-1"),
-      turnId: asTurnId("turn-goal-continuation-after-stop"),
-    });
-    expect((await readHarnessThread(harness))?.goalPausedAt).toBeTruthy();
-  });
+        turnId: asTurnId("turn-goal-continuation-after-stop"),
+      });
+      expect((await readHarnessThread(harness))?.goalPausedAt).toBeTruthy();
+    },
+  );
 
   it("preserves pending sidechat context when the first turn is an overlong provider review", async () => {
     const harness = await createHarness();
@@ -12866,6 +12954,13 @@ describe("ProviderCommandReactor", () => {
     expect(
       thread?.activities.some((activity) => activity.kind === "provider.turn.start.failed"),
     ).toBe(true);
+    const failure = thread?.activities.find(
+      (activity) => activity.kind === "provider.turn.start.failed",
+    );
+    const detail = (failure?.payload as { detail?: string } | undefined)?.detail;
+    expect(detail).toContain("turn start failed");
+    expect(detail).not.toContain("\n");
+    expect(detail).not.toContain(" at ");
   });
 
   it("clears stale provider resume state and completes message edit rollback", async () => {
@@ -13239,7 +13334,8 @@ describe("ProviderCommandReactor", () => {
           createdAt,
         }),
       );
-      await waitFor(() => harness.interruptTurn.mock.calls.length === 1);
+      await harness.drain();
+      expect(harness.interruptTurn).not.toHaveBeenCalled();
       expect(manager.canContinueChatControl(threadId)).toBe(false);
       await markSessionReady();
       await Effect.runPromise(
@@ -13944,6 +14040,7 @@ describe("ProviderCommandReactor", () => {
         type: "thread.turn.interrupt",
         commandId: CommandId.makeUnsafe("cmd-interrupt-rejected"),
         threadId: ThreadId.makeUnsafe("thread-1"),
+        turnId: asTurnId("turn-1"),
         createdAt: new Date().toISOString(),
       }),
     );
@@ -22873,6 +22970,61 @@ describe("ProviderCommandReactor", () => {
     });
   });
 
+  it.each(["ready", "interrupted", "stopped", "missing"] as const)(
+    "ignores a repeated Stop on an idle %s session while still pausing the goal",
+    async (status) => {
+      const harness = await createHarness();
+      const threadId = ThreadId.makeUnsafe("thread-1");
+      const createdAt = new Date().toISOString();
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.meta.update",
+          commandId: CommandId.makeUnsafe("idle-stop-goal"),
+          threadId,
+          goal: "Keep the user's goal paused after Stop",
+          goalStartBehavior: "defer",
+        }),
+      );
+      if (status !== "missing") {
+        await Effect.runPromise(
+          harness.engine.dispatch({
+            type: "thread.session.set",
+            commandId: CommandId.makeUnsafe("idle-stop-session"),
+            threadId,
+            session: {
+              threadId,
+              status,
+              providerName: "codex",
+              runtimeMode: "approval-required",
+              activeTurnId: null,
+              lastError: null,
+              updatedAt: createdAt,
+            },
+            createdAt,
+          }),
+        );
+        if (status !== "stopped") harness.setRuntimeSessionTurnState({ threadId, status: "ready" });
+      }
+      for (const attempt of [1, 2]) {
+        await Effect.runPromise(
+          harness.engine.dispatch({
+            type: "thread.turn.interrupt",
+            commandId: CommandId.makeUnsafe(`idle-stop-${attempt}`),
+            threadId,
+            createdAt,
+          }),
+        );
+      }
+      await harness.drain();
+      const thread = await readHarnessThread(harness);
+      expect(thread?.goalPausedAt).toEqual(expect.any(String));
+      expect(thread?.activities.filter((activity) => activity.tone === "error")).toEqual([]);
+      expect(harness.interruptTurn).not.toHaveBeenCalled();
+      expect(harness.stopSession).not.toHaveBeenCalled();
+      expect(harness.sendTurn).not.toHaveBeenCalled();
+    },
+  );
+
   it("targets the live provider turn when an interrupt carries a stale projected turn", async () => {
     const harness = await createHarness();
     const now = new Date().toISOString();
@@ -22918,11 +23070,12 @@ describe("ProviderCommandReactor", () => {
   });
 
   it.each([
-    { runtimeStatus: "ready", settles: true },
-    { runtimeStatus: "running", settles: false },
+    { runtimeStatus: "ready", hasTurnId: false, settles: true },
+    { runtimeStatus: "running", hasTurnId: true, settles: false },
+    { runtimeStatus: "running", hasTurnId: false, settles: false },
   ] as const)(
     "settles an accepted Stop promptly only when the runtime has no live turn ($runtimeStatus)",
-    async ({ runtimeStatus, settles }) => {
+    async ({ runtimeStatus, hasTurnId, settles }) => {
       const harness = await createHarness();
       const now = new Date().toISOString();
       const threadId = ThreadId.makeUnsafe("thread-1");
@@ -22950,7 +23103,7 @@ describe("ProviderCommandReactor", () => {
       harness.setRuntimeSessionTurnState({
         threadId: "thread-1",
         status: runtimeStatus,
-        ...(runtimeStatus === "running" ? { activeTurnId: turnId } : {}),
+        ...(hasTurnId ? { activeTurnId: turnId } : {}),
       });
 
       await Effect.runPromise(
@@ -22976,63 +23129,96 @@ describe("ProviderCommandReactor", () => {
     },
   );
 
-  it("does not settle a replacement turn when an earlier interrupt finishes", async () => {
-    const interrupted = Promise.withResolvers<void>();
-    const harness = await createHarness({
-      interruptTurn: () => Effect.promise(() => interrupted.promise),
-    });
-    const threadId = ThreadId.makeUnsafe("thread-1");
-    const now = new Date().toISOString();
-    const setProjectedTurn = (turnId: string) =>
-      Effect.runPromise(
-        harness.engine.dispatch({
-          type: "thread.session.set",
-          commandId: CommandId.makeUnsafe(`cmd-session-${turnId}`),
-          threadId,
-          session: {
+  it.each([
+    { outcome: "accepted", replacement: "turn" },
+    { outcome: "rejected", replacement: "turn" },
+    { outcome: "uncertain", replacement: "turn" },
+    { outcome: "accepted", replacement: "runtime" },
+    { outcome: "rejected", replacement: "runtime" },
+    { outcome: "uncertain", replacement: "runtime" },
+  ] as const)(
+    "does not settle a replacement $replacement when an earlier interrupt finishes ($outcome)",
+    async ({ outcome, replacement }) => {
+      const interrupted = Promise.withResolvers<void>();
+      const harness = await createHarness({
+        interruptTurn: () =>
+          Effect.tryPromise({
+            try: () => interrupted.promise,
+            catch: () =>
+              outcome === "rejected"
+                ? new ProviderValidationError({
+                    operation: "interruptTurn",
+                    issue: "The earlier turn is no longer active.",
+                  })
+                : new ProviderAdapterRequestError({
+                    provider: "codex",
+                    method: "turn/interrupt",
+                    detail: "The old connection closed after the request.",
+                  }),
+          }),
+      });
+      const threadId = ThreadId.makeUnsafe("thread-1");
+      const now = new Date().toISOString();
+      const setProjectedTurn = (turnId: string) =>
+        Effect.runPromise(
+          harness.engine.dispatch({
+            type: "thread.session.set",
+            commandId: CommandId.makeUnsafe(`cmd-session-${turnId}`),
             threadId,
-            status: "running",
-            providerName: "codex",
-            runtimeMode: "approval-required",
-            activeTurnId: asTurnId(turnId),
-            lastError: null,
-            updatedAt: now,
-          },
+            session: {
+              threadId,
+              status: "running",
+              providerName: "codex",
+              runtimeMode: "approval-required",
+              activeTurnId: asTurnId(turnId),
+              lastError: null,
+              updatedAt: now,
+            },
+            createdAt: now,
+          }),
+        );
+      await setProjectedTurn("turn-interrupted");
+      harness.setRuntimeSessionTurnState({
+        threadId,
+        status: "running",
+        activeTurnId: asTurnId("turn-interrupted"),
+      });
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.turn.interrupt",
+          commandId: CommandId.makeUnsafe("cmd-interrupt-before-replacement"),
+          threadId,
           createdAt: now,
         }),
       );
-    await setProjectedTurn("turn-interrupted");
-    harness.setRuntimeSessionTurnState({
-      threadId,
-      status: "running",
-      activeTurnId: asTurnId("turn-interrupted"),
-    });
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.turn.interrupt",
-        commandId: CommandId.makeUnsafe("cmd-interrupt-before-replacement"),
-        threadId,
-        createdAt: now,
-      }),
-    );
-    await waitFor(() => harness.interruptTurn.mock.calls.length === 1);
+      await waitFor(() => harness.interruptTurn.mock.calls.length === 1);
 
-    // The next runtime turn already finished, but its terminal event is still
-    // pending. Absence of a live turn alone must not settle its projection.
-    await setProjectedTurn("turn-replacement");
-    harness.setRuntimeSessionTurnState({ threadId, status: "ready" });
-    interrupted.resolve();
-    await harness.drain();
+      // The next runtime turn already finished, but its terminal event is still
+      // pending. Absence of a live turn alone must not settle its projection.
+      const replacementTurnId = replacement === "turn" ? "turn-replacement" : "turn-interrupted";
+      if (replacement === "turn") await setProjectedTurn(replacementTurnId);
+      harness.setRuntimeSessionTurnState({ threadId, status: "ready" });
+      if (replacement === "runtime") {
+        const sessions = await Effect.runPromise(harness.listSessions());
+        const replacementSession = { ...sessions[0]!, createdAt: "2026-10-25T12:00:00.000Z" };
+        harness.listSessions.mockImplementation(() => Effect.succeed([replacementSession]));
+      }
+      if (outcome === "accepted") interrupted.resolve();
+      else interrupted.reject(new Error("Old Stop settled after the replacement"));
+      await harness.drain();
 
-    expect((await readHarnessThread(harness))?.session).toMatchObject({
-      status: "running",
-      activeTurnId: "turn-replacement",
-    });
-    expect((await readHarnessThread(harness))?.latestTurn).toMatchObject({
-      turnId: "turn-replacement",
-      state: "running",
-    });
-  });
+      expect((await readHarnessThread(harness))?.session).toMatchObject({
+        status: "running",
+        activeTurnId: replacementTurnId,
+      });
+      expect((await readHarnessThread(harness))?.latestTurn).toMatchObject({
+        turnId: replacementTurnId,
+        state: "running",
+      });
+      expect(harness.stopSession).not.toHaveBeenCalled();
+      expect(harness.stopRuntimeSession).not.toHaveBeenCalled();
+    },
+  );
 
   it.each(["ready", "missing-child-shell", "missing-parent-shell"] as const)(
     "serializes child interrupts with earlier parent-session side effects in owner FIFO with %s projection",

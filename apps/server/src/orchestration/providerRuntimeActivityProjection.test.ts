@@ -82,7 +82,7 @@ it("persists terminal error identity and announced retry state in chat activitie
       eventId: "error",
       turnId: TURN_ID,
       payload: {
-        message: "Temporarily unavailable",
+        message: "Temporarily unavailable\n    at request (/app/provider.ts:12:1)",
         class: "provider_error",
         errorCode: "server_overloaded",
       },
@@ -99,12 +99,16 @@ it("persists terminal error identity and announced retry state in chat activitie
       turnId: TURN_ID,
       payload: {
         state: "failed",
-        errorMessage: "Temporarily unavailable",
+        errorMessage: "Temporarily unavailable\n    at request (/app/provider.ts:12:1)",
         errorCode: "server_overloaded",
       },
     }),
   )[0]!;
-  expect(completion.payload).toMatchObject({ errorCode: "server_overloaded", state: "failed" });
+  expect(completion.payload).toMatchObject({
+    errorCode: "server_overloaded",
+    state: "failed",
+    errorMessage: "Temporarily unavailable",
+  });
   const warning = projectProviderRuntimeActivities(
     runtimeEvent({
       type: "runtime.warning",

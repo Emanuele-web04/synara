@@ -122,6 +122,23 @@ describe.skipIf(!databaseUrl)("Live Activity durable delivery", () => {
       },
     };
   }
+  async function ageActivitySources(id: string, seconds: number) {
+    const changedAt = Date.now() - seconds * 1000;
+    const request = (await pool.query("SELECT request FROM live_activities WHERE id=$1", [id]))
+      .rows[0].request as RegisterLiveActivity;
+    const timestamps = Object.fromEntries(
+      request.sources.map(({ hostId, threadId, turnId }) => [
+        JSON.stringify([hostId, threadId, turnId]),
+        changedAt,
+      ]),
+    );
+    await pool.query(
+      `UPDATE live_activities SET created_at=to_timestamp($2::double precision/1000),
+      request=jsonb_set(request,'{sourcesRegisteredAt}',$3::jsonb) WHERE id=$1`,
+      [id, changedAt, JSON.stringify(timestamps)],
+    );
+    return changedAt;
+  }
   it("preserves each APNs environment through durable registration and restart", async () => {
     for (const environment of ["sandbox", "production"] as const) {
       const f = await fixture(environment, "both");
@@ -176,6 +193,128 @@ describe.skipIf(!databaseUrl)("Live Activity durable delivery", () => {
     expect(f.sent.at(-1)?.token).toBe("b".repeat(64));
     await f.live.remove(f.owner, f.request.activityId);
     await expect(f.live.register(f.owner, { ...f.request, revision: 4 })).rejects.toThrow();
+  });
+  it("waits for the new exact turn after sources change on an older activity", async () => {
+    const f = await fixture();
+    const request = { ...f.request, sources: [f.request.sources[0]!] };
+    await f.live.register(f.owner, request);
+    await f.publish(0, 1, "running");
+    await ageActivitySources(request.activityId, 120);
+    const source = { ...request.sources[0]!, turnId: randomUUID() };
+    const registeredAt = Date.now();
+    // Even a caller that supplies this extra field cannot choose the server's clock.
+    const identity = JSON.stringify([source.hostId, source.threadId, source.turnId]);
+    const next = {
+      ...request,
+      revision: 2,
+      sources: [source],
+      sourcesRegisteredAt: { [identity]: 1 },
+    };
+    await f.live.register(f.owner, next);
+    const stored = (
+      await pool.query("SELECT request FROM live_activities WHERE id=$1", [request.activityId])
+    ).rows[0];
+    expect(stored.request.sourcesRegisteredAt[identity]).toBeGreaterThanOrEqual(registeredAt);
+    expect(stored.request.sourcesRegisteredAt[identity]).toBeLessThanOrEqual(Date.now());
+    await f.live.flush();
+    expect(f.sent.at(-1)).toMatchObject({
+      event: "update",
+      contentState: {
+        runningConversations: [{ id: source.displayId, state: "Running" }],
+        completedConversations: [],
+      },
+    });
+  });
+  it("ends a changed source only after its own first-report grace expires", async () => {
+    const f = await fixture();
+    const request = { ...f.request, sources: [f.request.sources[0]!] };
+    await f.live.register(f.owner, request);
+    await f.publish(0, 1, "running");
+    await ageActivitySources(request.activityId, 120);
+    await f.live.register(f.owner, {
+      ...request,
+      revision: 2,
+      sources: [{ ...request.sources[0]!, turnId: randomUUID() }],
+    });
+    await ageActivitySources(request.activityId, 91);
+    await f.live.flush();
+    expect(f.sent.at(-1)).toMatchObject({
+      event: "end",
+      contentState: { runningConversations: [], completedConversations: [] },
+    });
+  });
+  it("does not renew first-report grace for token rotation, reordered sources or display aliases", async () => {
+    const f = await fixture();
+    await f.live.register(f.owner, f.request);
+    const changedAt = await ageActivitySources(f.request.activityId, 91);
+    await f.live.register(f.owner, {
+      ...f.request,
+      revision: 2,
+      token: "b".repeat(64),
+      sources: [...f.request.sources]
+        .reverse()
+        .map((source) => ({ ...source, displayId: randomUUID() })),
+    });
+    const stored = (
+      await pool.query("SELECT request FROM live_activities WHERE id=$1", [f.request.activityId])
+    ).rows[0];
+    expect(Object.values(stored.request.sourcesRegisteredAt)).toEqual([changedAt, changedAt]);
+    await f.live.flush();
+    expect(f.sent.at(-1)).toMatchObject({ token: "b".repeat(64), event: "end" });
+  });
+  it("does not revive an expired missing source when another computer changes turns", async () => {
+    const f = await fixture();
+    await f.live.register(f.owner, f.request);
+    await ageActivitySources(f.request.activityId, 120);
+    // Both snapshots are fresh, but neither contains the next watched turn.
+    await f.live.publish(f.hosts[0]!, { sequence: 1, turns: [] });
+    await f.publish(1, 1, "running");
+    const changedSource = { ...f.request.sources[1]!, turnId: randomUUID() };
+    await f.live.register(f.owner, {
+      ...f.request,
+      revision: 2,
+      sources: [f.request.sources[0]!, changedSource],
+    });
+    await f.live.flush();
+    expect(f.sent.at(-1)).toMatchObject({
+      event: "update",
+      contentState: {
+        runningConversations: [{ id: changedSource.displayId, state: "Running" }],
+        completedConversations: [],
+      },
+    });
+  });
+  it("does not settle a newly watched turn from a late completion of the previous turn", async () => {
+    const f = await fixture();
+    const request = { ...f.request, sources: [f.request.sources[0]!] };
+    await f.live.register(f.owner, request);
+    await f.publish(0, 1, "running");
+    await ageActivitySources(request.activityId, 120);
+    const source = { ...request.sources[0]!, turnId: randomUUID() };
+    await f.live.register(f.owner, { ...request, revision: 2, sources: [source] });
+    await f.publish(0, 2, "ready");
+    await f.live.flush();
+    expect(f.sent.at(-1)).toMatchObject({
+      event: "update",
+      contentState: {
+        runningConversations: [{ id: source.displayId, state: "Running" }],
+        completedConversations: [],
+      },
+    });
+    await f.live.publish(f.hosts[0]!, {
+      sequence: 3,
+      turns: [
+        { threadId: source.threadId, turnId: source.turnId, state: "ready", startedAt: 1790000100 },
+      ],
+    });
+    await f.live.flush();
+    expect(f.sent.at(-1)).toMatchObject({
+      event: "end",
+      contentState: {
+        runningConversations: [],
+        completedConversations: [{ id: source.displayId, state: "Ready" }],
+      },
+    });
   });
   it.each(
     ["device", "session", "host", "generation", "membership"].flatMap((kind) =>
@@ -384,10 +523,7 @@ describe.skipIf(!databaseUrl)("Live Activity durable delivery", () => {
           [f.request.activityId],
         );
       } else {
-        await pool.query(
-          "UPDATE live_activities SET created_at=now()-interval '2 minutes' WHERE id=$1",
-          [f.request.activityId],
-        );
+        await ageActivitySources(f.request.activityId, 120);
         await pool.query(
           "UPDATE live_activity_hosts SET updated_at=now()-interval '2 minutes' WHERE host_id=ANY($1::uuid[])",
           [f.hosts.map((host) => host.id)],

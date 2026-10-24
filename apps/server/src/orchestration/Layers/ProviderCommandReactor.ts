@@ -13,6 +13,7 @@ import { resolveForkSourceCutoff } from "../forkSourceCutoff.ts";
 
 import { isDeepStrictEqual } from "node:util";
 import { makeKeyedDrainableWorker } from "@synara/shared/KeyedDrainableWorker";
+import { sanitizeUserFacingErrorMessage } from "@synara/shared/errorMessages";
 import { makeKeyedLock } from "../../provider/keyedLock.ts";
 
 import {
@@ -770,6 +771,24 @@ function providerPromptOverflowIssue(goalPromptOverheadChars: number): string {
     : "The latest message is too long to include Synara Debug mode instructions. Shorten the message and retry.";
 }
 
+// First visible turns and later continuations share the same pursuit fence.
+function canContinueGoalPursuit(
+  thread: (OrchestrationThreadShell & { readonly deletedAt?: string | null }) | undefined,
+  goalStartedAt: string | null,
+): thread is OrchestrationThreadShell {
+  return (
+    thread !== undefined &&
+    thread.deletedAt == null &&
+    thread.archivedAt == null &&
+    !isExpiredSidechat(thread) &&
+    thread.parentThreadId == null &&
+    thread.interactionMode !== "plan" &&
+    Boolean(activeThreadGoal(thread)?.trim()) &&
+    thread.goalPausedAt == null &&
+    (thread.goalStartedAt ?? null) === goalStartedAt
+  );
+}
+
 function isUnavailableInteractionRuntime(cause: Cause.Cause<ProviderServiceError>): boolean {
   return Option.match(Cause.findErrorOption(cause), {
     onNone: () => false,
@@ -939,6 +958,21 @@ class ProviderCommandReactorConfig extends ServiceMap.Service<
   ProviderCommandReactorConfig,
   ProviderCommandReactorConfigShape
 >()("synara/orchestration/Layers/ProviderCommandReactorConfig") {}
+
+// Recheck the observed target after awaiting provider results or logging an
+// error; matching timestamps alone cannot distinguish two turns in one tick.
+function matchesProviderSessionState(
+  current: OrchestrationSession | null | undefined,
+  expected: OrchestrationSession,
+): boolean {
+  return (
+    current?.status === expected.status &&
+    current.updatedAt === expected.updatedAt &&
+    current.activeTurnId === expected.activeTurnId &&
+    current.providerName === expected.providerName &&
+    current.providerInstanceId === expected.providerInstanceId
+  );
+}
 
 const make = Effect.gen(function* () {
   const {
@@ -1644,7 +1678,7 @@ const make = Effect.gen(function* () {
         kind: input.kind,
         summary: input.summary,
         payload: {
-          detail: input.detail,
+          detail: sanitizeUserFacingErrorMessage(input.detail, input.summary),
           ...(input.requestId ? { requestId: input.requestId } : {}),
           ...(input.lifecycleGeneration ? { lifecycleGeneration: input.lifecycleGeneration } : {}),
           ...(input.responseCommandId ? { responseCommandId: input.responseCommandId } : {}),
@@ -1796,13 +1830,15 @@ const make = Effect.gen(function* () {
   const settleInterruptedProviderTurn = Effect.fnUntraced(function* (input: {
     readonly threadId: ThreadId;
     readonly createdAt: string;
-    readonly expectedSession?: Pick<OrchestrationSession, "status" | "updatedAt">;
+    readonly expectedSession?: OrchestrationSession;
   }) {
     const thread = yield* resolveThreadShell(input.threadId);
     const session = thread?.session;
     if (!thread || !session) {
       return;
     }
+    if (input.expectedSession && !matchesProviderSessionState(session, input.expectedSession))
+      return;
     if (session.activeTurnId === null && thread.latestTurn?.state !== "running") {
       return;
     }
@@ -2077,16 +2113,25 @@ const make = Effect.gen(function* () {
   // Child subagent threads share their parent's provider session, so the
   // lookup must resolve to the session-owning thread — a raw child-id lookup
   // would always miss and drain queued child messages into a live turn.
-  const resolveLiveProviderTurnId = Effect.fnUntraced(function* (threadId: ThreadId) {
+  const resolveLiveProviderSession = Effect.fnUntraced(function* (threadId: ThreadId) {
     const providerThread = yield* resolveProviderSessionThread(threadId);
     const sessionThreadId = providerThread?.id ?? threadId;
-    const session = yield* providerService
+    return yield* providerService
       .listSessions()
       .pipe(Effect.map((sessions) => sessions.find((entry) => entry.threadId === sessionThreadId)));
-    return session?.status === "running" ? session.activeTurnId : undefined;
   });
+  const resolveLiveProviderTurnId = (threadId: ThreadId) =>
+    resolveLiveProviderSession(threadId).pipe(
+      Effect.map((session) => (session?.status === "running" ? session.activeTurnId : undefined)),
+    );
   const hasLiveProviderTurn = (threadId: ThreadId) =>
     resolveLiveProviderTurnId(threadId).pipe(Effect.map((turnId) => turnId !== undefined));
+  // A provider can still be starting/running before it announces a turn ID.
+  // Its missing ID must never turn an uncertain Stop into apparent success.
+  const hasLiveProviderWork = (session: ProviderSession | undefined) =>
+    session?.status === "connecting" ||
+    session?.status === "running" ||
+    session?.activeTurnId !== undefined;
 
   const editResendTurnStartKey = (threadId: ThreadId, messageId: string) =>
     `${threadId}:${messageId}`;
@@ -4889,6 +4934,30 @@ const make = Effect.gen(function* () {
         return;
       }
       if (
+        event.payload.initialGoalStartedAt !== undefined &&
+        !canContinueGoalPursuit(thread, event.payload.initialGoalStartedAt)
+      ) {
+        if (isPendingQueuedDispatch) yield* clearPendingQueuedDispatch;
+        return;
+      }
+      if (event.payload.initialGoalStartedAt !== undefined) {
+        const pending = yield* pendingInteractions.getPendingCountsByThreadId({
+          threadId: thread.id,
+        });
+        if (pending.pendingApprovalCount > 0 || pending.pendingUserInputCount > 0) {
+          // Keep the message in the durable queue while the existing goal retry
+          // owner waits outside delivery locks for the approval/question to clear.
+          yield* enqueueQueuedTurnStart(event);
+          if (isPendingQueuedDispatch) yield* clearPendingQueuedDispatch;
+          blockedGoalContinuations.set(thread.id, {
+            goalStartedAt: event.payload.initialGoalStartedAt,
+            trigger: "goal-updated",
+          });
+          yield* scheduleBlockedGoalContinuationRetry(thread.id);
+          return;
+        }
+      }
+      if (
         thread.claudeCacheReview &&
         thread.claudeCacheReview.reviewId !== acceptedCacheReview?.reviewId
       ) {
@@ -5059,7 +5128,13 @@ const make = Effect.gen(function* () {
         ...(acceptedCacheReview ? { acceptedCacheReview } : {}),
         threadId: event.payload.threadId,
         messageId: message.id,
-        messageText: message.text,
+        messageText:
+          event.payload.initialGoalStartedAt !== undefined
+            ? buildGoalContinuationInput()
+            : message.text,
+        ...(event.payload.initialGoalStartedAt !== undefined
+          ? { turnKind: "goal-continuation" as const }
+          : {}),
         dispatchOrigin: event.payload.dispatchOrigin ?? "user",
         ...(message.attachments !== undefined ? { attachments: resolvedAttachments } : {}),
         ...(message.skills !== undefined ? { skills: message.skills } : {}),
@@ -5090,6 +5165,12 @@ const make = Effect.gen(function* () {
                   failure instanceof ProviderAdapterValidationError &&
                   failure.operation === "startClaudeCompaction.cancelled";
                 const detail = Cause.pretty(cause);
+                if (event.payload.initialGoalStartedAt !== undefined) {
+                  yield* pauseActiveThreadGoal({
+                    threadId: event.payload.threadId,
+                    expectedGoalStartedAt: event.payload.initialGoalStartedAt,
+                  });
+                }
                 if (!cancelledCompaction)
                   yield* appendProviderFailureActivity({
                     threadId: event.payload.threadId,
@@ -5154,6 +5235,7 @@ const make = Effect.gen(function* () {
                     );
                   }
                   if (isPendingQueuedDispatch) yield* clearPendingQueuedDispatch;
+                  if (event.payload.initialGoalStartedAt !== undefined) return;
                   return yield* Effect.failCause(cause);
                 }
                 yield* setThreadSessionError({
@@ -5174,16 +5256,40 @@ const make = Effect.gen(function* () {
                   yield* clearPendingQueuedDispatch;
                 }
                 yield* drainQueuedTurnsForSession(event.payload.threadId);
+                // A failed autonomous start pauses once; it must not quarantine
+                // the thread and prevent the user's explicit resume.
+                if (event.payload.initialGoalStartedAt !== undefined) return;
                 return yield* Effect.failCause(cause);
               }),
         ),
         Effect.ensuring(Effect.sync(() => editResendTurnStartKeys.delete(editResendKey))),
       );
+      if (
+        startedTurn &&
+        event.payload.initialGoalStartedAt !== undefined &&
+        !canContinueGoalPursuit(
+          yield* resolveThreadShell(event.payload.threadId),
+          event.payload.initialGoalStartedAt,
+        )
+      ) {
+        yield* interruptProviderTurn({
+          threadId: event.payload.threadId,
+          turnId: startedTurn.turnId,
+          createdAt: new Date().toISOString(),
+        });
+      }
+      if (startedTurn && event.payload.initialGoalStartedAt !== undefined) {
+        blockedGoalContinuations.delete(event.payload.threadId);
+      }
       // A requested steer can still become a separate queued turn (for
       // providers without native steering, or if the live turn already
       // settled). Persist that effective boundary while leaving native steer
       // continuations unbound to a new turn.
-      if (startedTurn && event.payload.dispatchMode === "steer" && !isNativeSteer) {
+      if (
+        startedTurn &&
+        (event.payload.initialGoalStartedAt !== undefined ||
+          (event.payload.dispatchMode === "steer" && !isNativeSteer))
+      ) {
         yield* orchestrationEngine.dispatch({
           type: "thread.message.user.bind-turn",
           commandId: CommandId.makeUnsafe(
@@ -5808,6 +5914,9 @@ const make = Effect.gen(function* () {
             ? { dispatchOrigin: nextQueuedTurn.dispatchOrigin }
             : {}),
           runtimeMode: nextQueuedTurn.runtimeMode,
+          ...(nextQueuedTurn.initialGoalStartedAt !== undefined
+            ? { initialGoalStartedAt: nextQueuedTurn.initialGoalStartedAt }
+            : {}),
           interactionMode: nextQueuedTurn.interactionMode,
           ...(nextQueuedTurn.sourceProposedPlan !== undefined
             ? { sourceProposedPlan: nextQueuedTurn.sourceProposedPlan }
@@ -5903,16 +6012,7 @@ const make = Effect.gen(function* () {
 
     // A soft-deleted thread reads as missing.
     const thread = yield* resolveThreadShell(threadId);
-    if (
-      !thread ||
-      thread.archivedAt != null ||
-      isExpiredSidechat(thread) ||
-      thread.parentThreadId != null ||
-      thread.interactionMode === "plan" ||
-      !activeThreadGoal(thread)?.trim() ||
-      thread.goalPausedAt != null ||
-      (thread.goalStartedAt ?? null) !== pending.goalStartedAt
-    ) {
+    if (!canContinueGoalPursuit(thread, pending.goalStartedAt)) {
       blockedGoalContinuations.delete(threadId);
       return;
     }
@@ -6029,15 +6129,8 @@ const make = Effect.gen(function* () {
         // A soft-deleted thread reads as missing.
         const thread = yield* resolveThreadShell(event.payload.threadId);
         if (
-          !thread ||
-          thread.archivedAt != null ||
-          isExpiredSidechat(thread) ||
-          thread.parentThreadId != null ||
-          thread.interactionMode === "plan" ||
-          !activeThreadGoal(thread)?.trim() ||
-          thread.goalPausedAt != null ||
-          thread.claudeCacheReview != null ||
-          (thread.goalStartedAt ?? null) !== event.payload.goalStartedAt
+          !canContinueGoalPursuit(thread, event.payload.goalStartedAt) ||
+          thread.claudeCacheReview != null
         ) {
           blockedGoalContinuations.delete(event.payload.threadId);
           return;
@@ -6127,13 +6220,7 @@ const make = Effect.gen(function* () {
         // Stop/pause can commit while provider dispatch is awaiting acceptance.
         // Fence the accepted turn against the authoritative command model so it
         // cannot escape the interrupt event that raced it with a stale turn id.
-        if (
-          startedTurn &&
-          (!latestThread ||
-            latestThread.goalPausedAt != null ||
-            !activeThreadGoal(latestThread)?.trim() ||
-            (latestThread.goalStartedAt ?? null) !== event.payload.goalStartedAt)
-        ) {
+        if (startedTurn && !canContinueGoalPursuit(latestThread, event.payload.goalStartedAt)) {
           yield* interruptProviderTurn({
             threadId: thread.id,
             turnId: startedTurn.turnId,
@@ -6273,6 +6360,25 @@ const make = Effect.gen(function* () {
       );
     }
 
+    const liveSession = yield* resolveLiveProviderSession(input.threadId);
+    const projectionHasWork = [thread, providerThread].some(
+      (entry) =>
+        entry?.session?.status === "starting" ||
+        entry?.session?.status === "running" ||
+        entry?.session?.activeTurnId != null ||
+        entry?.latestTurn?.state === "running",
+    );
+    // A child can be working while its owner session is idle. Likewise an
+    // accepted continuation can return its ID before turn.started is projected.
+    const hasUnsettledTarget =
+      (providerThread !== null && providerThread.id !== thread.id) ||
+      (input.turnId !== undefined &&
+        input.turnId !== thread.latestTurn?.turnId &&
+        providerThread?.session?.status !== "stopped");
+    // The decider already paused the goal, and computer intent was cleared
+    // above. Repeating Stop after settlement needs no adapter call or error row.
+    if (!projectionHasWork && !hasUnsettledTarget && !hasLiveProviderWork(liveSession)) return;
+
     // The projection can lag a live turn. Only use session stop when neither
     // side owns a turn to interrupt, and retire the runtime rather than just
     // changing the UI state: a half-started session may still emit events.
@@ -6282,7 +6388,7 @@ const make = Effect.gen(function* () {
       (interruptSession.status === "starting" || interruptSession.status === "running") &&
       interruptSession.activeTurnId === null &&
       thread.latestTurn?.state !== "running" &&
-      !(yield* hasLiveProviderTurn(input.threadId))
+      !hasLiveProviderWork(liveSession)
     ) {
       return yield* processThreadSessionStop({
         threadId: input.threadId,
@@ -6296,7 +6402,7 @@ const make = Effect.gen(function* () {
         kind: "provider.turn.interrupt.failed",
         summary: "Provider turn interrupt failed",
         detail,
-        turnId: input.turnId ?? null,
+        turnId: liveSession?.activeTurnId ?? input.turnId ?? thread.session?.activeTurnId ?? null,
         createdAt: input.createdAt,
         ...(settlementStatus ? { settlementStatus } : {}),
       });
@@ -6332,17 +6438,39 @@ const make = Effect.gen(function* () {
         ...(providerThreadId ? { providerThreadId } : {}),
       }),
     });
+    const current = yield* resolveThread(input.threadId);
+    const currentRuntime = yield* resolveLiveProviderSession(input.threadId);
+    const currentTurnId = current?.latestTurn?.turnId;
+    const replaced =
+      (currentTurnId !== thread.latestTurn?.turnId && currentTurnId !== turnId) ||
+      (currentRuntime?.activeTurnId !== undefined && currentRuntime.activeTurnId !== turnId) ||
+      (currentRuntime !== undefined &&
+        (liveSession === undefined ||
+          currentRuntime.createdAt !== liveSession.createdAt ||
+          currentRuntime.provider !== liveSession.provider ||
+          currentRuntime.providerInstanceId !== liveSession.providerInstanceId));
+    // Every outcome belongs to the interrupted binding. A late rejection or
+    // timeout must not settle a replacement turn or escalate into stopping it.
+    if (replaced) {
+      if (result._tag !== "ok") {
+        yield* reportInterruptFailure(
+          result._tag === "timeout" ? result.detail : result.outcome.detail,
+          result._tag === "timeout" || result.outcome._tag === "uncertain"
+            ? "uncertain"
+            : undefined,
+        );
+      }
+      return;
+    }
     if (result._tag === "ok") {
       // An accepted Stop can retire the runtime before its final event arrives.
       // Settle only that session, never a replacement started during the interrupt.
-      const current = yield* resolveThread(input.threadId);
-      const currentTurnId = current?.latestTurn?.turnId;
       if (
         current?.session &&
         (currentTurnId === thread.latestTurn?.turnId || currentTurnId === turnId) &&
         (current.session.activeTurnId !== null ||
           current.session.updatedAt === thread.session?.updatedAt) &&
-        !(yield* hasLiveProviderTurn(input.threadId))
+        !hasLiveProviderWork(currentRuntime)
       ) {
         yield* settleInterruptedProviderTurn({ ...input, expectedSession: current.session });
       }
@@ -6376,6 +6504,7 @@ const make = Effect.gen(function* () {
         threadId: input.threadId,
         createdAt: input.createdAt,
         interruptEscalated: true,
+        ...(current?.session ? { expectedSession: current.session } : {}),
       });
     }
 
@@ -6387,6 +6516,7 @@ const make = Effect.gen(function* () {
       return yield* settleInterruptedProviderTurn({
         threadId: input.threadId,
         createdAt: input.createdAt,
+        ...(current?.session ? { expectedSession: current.session } : {}),
       });
     }
     // Safe retries (persistence faults) keep propagating so the durable delivery
@@ -6942,12 +7072,18 @@ const make = Effect.gen(function* () {
     readonly threadId: ThreadId;
     readonly createdAt: string;
     readonly interruptEscalated?: boolean;
+    readonly expectedSession?: OrchestrationSession;
   }) {
     const thread = yield* resolveThreadShell(input.threadId);
     const providerThread = yield* resolveProviderSessionThread(input.threadId);
     if (!thread) {
       return;
     }
+    if (
+      input.expectedSession &&
+      !matchesProviderSessionState(thread.session, input.expectedSession)
+    )
+      return;
 
     const stoppedSessionThreadId = providerThread?.id ?? thread.id;
     const stopsProviderSession = providerThread === null || providerThread.id === thread.id;
@@ -7359,6 +7495,12 @@ const make = Effect.gen(function* () {
     }
 
     const createdAt = new Date().toISOString();
+    if (event.payload.initialGoalStartedAt !== undefined) {
+      yield* pauseActiveThreadGoal({
+        threadId: event.payload.threadId,
+        expectedGoalStartedAt: event.payload.initialGoalStartedAt,
+      });
+    }
     yield* setThreadSessionError({
       threadId: event.payload.threadId,
       runtimeMode: event.payload.runtimeMode,
