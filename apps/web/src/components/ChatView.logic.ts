@@ -2399,3 +2399,25 @@ export function enrichSubagentWorkEntries(
     };
   });
 }
+
+/**
+ * Keeps the composer menu's highlighted item valid: no menu means no highlight, an
+ * item that still exists keeps its highlight, and anything else falls back to the
+ * first item. Lives here so the rule is testable without rendering the chat.
+ */
+export function resolveComposerHighlightedItemId<Item extends { readonly id: string }>(input: {
+  readonly menuOpen: boolean;
+  readonly highlightedItemId: string | null;
+  readonly items: readonly Item[];
+}): string | null {
+  if (!input.menuOpen) {
+    return null;
+  }
+  if (
+    input.highlightedItemId !== null &&
+    input.items.some((item) => item.id === input.highlightedItemId)
+  ) {
+    return input.highlightedItemId;
+  }
+  return input.items[0]?.id ?? null;
+}

@@ -272,6 +272,7 @@ import {
   resolveDefaultEnvironmentPanelOpen,
   resolveDraftFallbackModelSelection,
   resolveEnvironmentPanelOpen,
+  resolveComposerHighlightedItemId,
   resolveEnvironmentPanelPreferenceUpdate,
   resolveEnvironmentPanelVisible,
   resolveGitRepoUiState,
@@ -3663,17 +3664,23 @@ export default function ChatView({
     activeThread?.id,
   ]);
 
+  const resolvedComposerHighlightedItemId = useMemo(
+    () =>
+      resolveComposerHighlightedItemId({
+        menuOpen: composerMenuOpen,
+        highlightedItemId: composerHighlightedItemId,
+        items: composerMenuItems,
+      }),
+    [composerHighlightedItemId, composerMenuItems, composerMenuOpen],
+  );
   useEffect(() => {
-    if (!composerMenuOpen) {
-      setComposerHighlightedItemId(null);
-      return;
+    // `composerMenuItems` is a new array on every render, so depending on it directly
+    // would run this effect on every commit. The resolved id is a primitive, so the
+    // effect only fires when the highlight actually changes.
+    if (resolvedComposerHighlightedItemId !== composerHighlightedItemId) {
+      setComposerHighlightedItemId(resolvedComposerHighlightedItemId);
     }
-    setComposerHighlightedItemId((existing) =>
-      existing && composerMenuItems.some((item) => item.id === existing)
-        ? existing
-        : (composerMenuItems[0]?.id ?? null),
-    );
-  }, [setComposerHighlightedItemId, composerMenuItems, composerMenuOpen]);
+  }, [composerHighlightedItemId, resolvedComposerHighlightedItemId, setComposerHighlightedItemId]);
 
   useEffect(() => {
     // Async setState (post-paint) keeps this thread-change reset out of the
