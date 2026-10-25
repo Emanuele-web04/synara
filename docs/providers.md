@@ -85,6 +85,9 @@ before sending physical control. A database retry can finish that same retiremen
 a replacement runtime or a later turn in the same runtime. The receipt uses the existing internal
 runtime payload; it adds no transport field or database migration. Failed observations remain
 retryable or explicitly uncertain rather than being acknowledged as a successful Stop.
+If the initial target cannot be saved, Stop is rejected before any adapter call; a new explicit
+Stop may observe the current target. Interrupt-only controls for steer and goal fences preserve
+queued messages and transcript bootstrap when finishing the same receipt after a retry.
 Unknown metadata or nonempty raw payloads retain their original events.
 
 This optimization requires the adapter's explicit `fresh-ids-once` delivery guarantee: each

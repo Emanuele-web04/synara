@@ -4348,6 +4348,34 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
         );
       });
 
+    // Without the first receipt there is no durable target for an automatic retry.
+    // Once pinned, persistence failures can safely resume that same control.
+    const persistStopControlTarget = (
+      binding: ProviderRuntimeBinding,
+      receipt: ProviderRuntimeStopControlReceipt,
+    ) =>
+      withBindingWriteLock(
+        binding.threadId,
+        directory.upsert({
+          threadId: binding.threadId,
+          provider: binding.provider,
+          providerInstanceId: binding.providerInstanceId,
+          runtimePayload: { providerStopControlReceipt: receipt },
+        }),
+      ).pipe(
+        Effect.mapError((cause) =>
+          runtimeStopControlReceipt(binding.runtimePayload)?.controlRequestId ===
+          receipt.controlRequestId
+            ? cause
+            : new ProviderValidationError({
+                operation: "ProviderService.recordStopTarget",
+                issue: "Stop was not sent because its target could not be saved. Try Stop again.",
+                reason: "runtime-unavailable",
+                cause,
+              }),
+        ),
+      );
+
     const interruptTurn: ProviderServiceShape["interruptTurn"] = (rawInput) =>
       Effect.gen(function* () {
         const input = yield* decodeInputOrValidationError({
@@ -4445,15 +4473,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                 input.providerThreadId !== undefined ? input.turnId : boundActiveTurnId;
               if (controlReceipt !== undefined) {
                 // Write the original target before the irreversible adapter call.
-                yield* withBindingWriteLock(
-                  input.threadId,
-                  directory.upsert({
-                    threadId: input.threadId,
-                    provider: binding.provider,
-                    providerInstanceId: binding.providerInstanceId,
-                    runtimePayload: { providerStopControlReceipt: controlReceipt },
-                  }),
-                );
+                yield* persistStopControlTarget(binding, controlReceipt);
               }
               if (providerTurnId === undefined) {
                 return yield* new ProviderValidationError({
@@ -5048,15 +5068,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
               )
                 return;
               if (controlReceipt !== undefined) {
-                yield* withBindingWriteLock(
-                  input.threadId,
-                  directory.upsert({
-                    threadId: input.threadId,
-                    provider: binding.provider,
-                    providerInstanceId: binding.providerInstanceId,
-                    runtimePayload: { providerStopControlReceipt: controlReceipt },
-                  }),
-                );
+                yield* persistStopControlTarget(binding, controlReceipt);
               }
               if (rawInput.onlyIfIdleSince !== undefined) {
                 // Runs before generation rotation, with new dispatch fenced.
