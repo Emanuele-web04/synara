@@ -1,5 +1,30 @@
 # Changelog
 
+## 1.0.6-remote.30 — 2026-10-25
+
+**More dependable Stop, quieter command progress and visible goal requests.**
+
+### Fixed
+
+- Repeating Stop after a turn has settled leaves the provider session alone. A delayed interrupt result cannot stop or settle a replacement turn; uncertain provider cleanup remains visible instead of being reported as success.
+- Long-running Codex commands and Claude Bash tools update one progress row across journal pages. Raw provider events remain intact, and replacement runtimes or later turns retain separate identities.
+- User-facing provider failures keep the readable error reason without appending stack traces. Full causes remain available in diagnostic logs.
+- A new `/goal` is visible in the transcript, preserves its full request during retries and starts atomically for compatible phone clients. Stop and pause continue to halt goal continuation.
+
+### Maintenance
+
+- Uses Bun 1.4.4, including the security fixes merged on main.
+
+### Companion iPhone and iPad
+
+- Universal build 155 is available separately through TestFlight for iPhone and iPad with the latest native fixes. Updating the desktop does not install the mobile build.
+
+### Verification
+
+- Preserves published Remote .29 history, app identities, data homes, pairing state and updater feeds. The hosted Live Activity service correction is a separate deployment and is not activated by installing this app.
+- Publication requires exact-tag quality and server suites, all three packaged platform checks, macOS signing/notarization, Windows Defender and source/lockfile-bound artifact provenance. Pending gates are not passed gates.
+- Remote ships macOS Apple Silicon, Windows x64 and Linux x64 installers. Windows uses an exact-version unsigned exception and may show SmartScreen.
+
 ## 1.0.6-remote.29 — 2026-10-23
 
 **Clearer parallel work, captured live changes and more dependable workspace controls.**

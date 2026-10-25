@@ -22,6 +22,32 @@ import type { WhatsNewEntry } from "./logic";
 
 export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
   {
+    version: "1.0.6-remote.30",
+    date: "Oct 25",
+    features: [
+      {
+        id: "predictable-stop",
+        title: "Stop stays with the turn you stopped",
+        description:
+          "Repeating Stop after a turn finishes leaves the session alone. A delayed interrupt cannot stop a newer turn or report uncertain cleanup as success.",
+      },
+      {
+        id: "one-command-progress-row",
+        title: "Follow long commands in one progress row",
+        description:
+          "Codex command and Claude Bash progress update their existing row instead of adding repeated entries. Provider errors show the readable reason without stack traces.",
+      },
+      {
+        id: "visible-goal-requests",
+        title: "Keep goal requests in the conversation",
+        description:
+          "A new /goal appears in the transcript and keeps its full request through retries. Compatible mobile clients can start the visible request and goal together.",
+        details:
+          "Stop and pause halt goal continuation. The companion iPhone and iPad build 155 is available separately through TestFlight.",
+      },
+    ],
+  },
+  {
     version: "1.0.6-remote.29",
     date: "Oct 23",
     features: [
