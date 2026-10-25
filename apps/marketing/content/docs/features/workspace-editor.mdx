@@ -43,9 +43,11 @@ Continue with [Pull requests](/docs/workflows/pull-requests) for remote review a
 
 Markdown files open in **Preview** by default. Switch to editing when needed. Line insertion, subsequent typing, undo and redo now refresh editor rows correctly, with less repeated edit-time work. Existing autosave and conflict-recovery rules still apply.
 
-## Native editor and JavaScript debugger in Beta
+<a id="native-editor-and-javascript-debugger-in-beta" />
 
-Starting with **1.0.9-beta.1**, Beta uses the Code OSS editing engine in file editors, editable diffs and previews. Stable retains the previous editing engine. TypeScript and JavaScript use the nearest project configuration for completion, hover, signatures, definitions, references, rename, diagnostics, formatting and text-only quick fixes/refactors. JSON, CSS and HTML offer their language-worker features; other languages retain highlighting and editing. Large lightweight previews keep the existing fallback.
+## Native editor and JavaScript debugger
+
+The Code OSS editing engine is available in Beta from **1.0.9-beta.1** and in Stable 1.0.9 and later, across file editors, editable diffs and previews. TypeScript and JavaScript use the nearest project configuration for completion, hover, signatures, definitions, references, rename, diagnostics, formatting and text-only quick fixes/refactors. JSON, CSS and HTML offer their language-worker features; other languages retain highlighting and editing. Large lightweight previews keep the existing fallback.
 
 The same native document buffer owns autosave, conflict handling and undo across editing surfaces. Multi-file refactors validate each target, but saving them is not a transactional filesystem commit. No extension host, alternate workbench or crash-recovery guarantee is added.
 
@@ -56,3 +58,5 @@ Debugging launches trusted workspace JavaScript or a TypeScript entry point supp
 ## Captured live turn diffs
 
 In Stable 1.0.8 and Beta, **Turn** diffs can show the last published file-tool snapshot or a complete Codex cumulative patch while work runs. They preserve Ignore whitespace and reconnect state, then switch to the final checkpoint when capture succeeds. They do not read uncaptured edits on demand. Missing baselines, incomplete patches and failed capture can leave a preview unavailable or retain the last valid snapshot. **All turns** still uses completed checkpoints; a live preview is not proof of completion.
+
+Source evidence for 1.0.9: Synara release `ebd0d22b39ce3a0f7c6051dddc6090e9b85dc7c3`; `docs/releases/1.0.9-source-audit.md`, `docs/providers.md`, `docs/core-concepts.md`, `docs/editor/intelligence.md`, `docs/mcp-connectors.md`, `apps/server/src/persistence/MigrationBackup.ts` and `docs/release.md`.

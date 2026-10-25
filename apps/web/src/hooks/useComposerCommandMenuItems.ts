@@ -306,7 +306,7 @@ export function useComposerCommandMenuItems(input: {
     readonly projects: readonly Project[];
     readonly currentThreadId: string | null;
   };
-  /** Connected connectors this provider's sessions receive (Beta). */
+  /** Connected connectors this provider's sessions receive. */
   connectors?: readonly McpConnector[];
 }): ComposerCommandItem[] {
   const {

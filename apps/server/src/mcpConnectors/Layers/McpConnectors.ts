@@ -2,7 +2,7 @@
  * McpConnectorsLive - Connectors backed by the server secret store.
  *
  * The whole connector document (names, URLs, OAuth tokens) is one secret-store
- * entry: a 0600 file that Stable never reads. Connected connectors are handed
+ * entry: a 0600 file in this app's data home. Connected connectors are handed
  * to AgentGatewayCredentials so new provider sessions receive their proxies.
  *
  * @module mcpConnectors/Layers/McpConnectors
@@ -61,7 +61,7 @@ export const makeMcpConnectors = (options: { readonly enabled?: boolean } = {}) 
       clientVersion: version,
       logWarning: (message, fields) => log.warn(message, fields),
     });
-    // Stable never reads the document, so saved connectors stay inert there.
+    // Restore only this app's connector document; Stable and Beta have separate homes.
     if (enabled) yield* Effect.promise(() => runtime.init());
 
     const unavailable = Effect.fail(

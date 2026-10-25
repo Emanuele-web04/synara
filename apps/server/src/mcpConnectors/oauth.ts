@@ -23,7 +23,7 @@ const OAUTH_MAX_RESPONSE_BYTES = 1024 * 1024;
 type McpAuthModule = typeof import("@modelcontextprotocol/sdk/client/auth.js");
 let mcpAuthModule: Promise<McpAuthModule> | undefined;
 
-/** Loaded on first use so Stable, where connectors are off, never imports it. */
+/** Loaded on first use so unused connectors do not load the OAuth client. */
 export function loadMcpAuth(): Promise<McpAuthModule> {
   mcpAuthModule ??= import("@modelcontextprotocol/sdk/client/auth.js");
   return mcpAuthModule;

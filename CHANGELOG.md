@@ -1,5 +1,36 @@
 # Changelog
 
+## 1.0.9 — 2026-10-25
+
+**Native editing and MCP Connectors in Stable, safer Stop retries and compressed recovery backups.**
+
+This Stable release covers all 15 commits after `v1.0.8` through `8e21e29c2a3d47205a0a9e834c8c44745efd0cf1`. Native editor and connector promotion was merged before release preparation. Diagnostics remain Beta-only; app identities, credentials, data homes and update feeds stay separate.
+
+### Added
+
+- Stable gains the Code OSS engine for file editors, editable diffs and previews, TypeScript/JavaScript language intelligence, editor commands and JavaScript debugging. Existing buffer ownership, save/conflict rules and large-preview fallbacks remain.
+- Stable gains Settings → Connectors and supported remote MCP connections. Provider coverage and normal tool approvals still apply; running sessions keep their starting connector set.
+- A new `/goal` in an idle persisted chat outside Plan mode commits a visible message with its first turn. Native clients can discover this optional host capability without re-pairing.
+
+### Changed
+
+- New pre-migration SQLite backups use `.sqlite.gz`; inspection and recovery accept compressed and existing plain snapshots. Scratch-space checks account for both the snapshot and compressed output. Retention and recovery safety remain enforced.
+- Local project favicons supply project glyphs across sidebar, search, pickers and previews; explicit custom glyphs take precedence and unsafe paths are rejected.
+- The build toolchain requires Bun 1.4.4 security fixes. Mac bundles declare macOS 13.0, and updater manifests use Darwin 22.0.0 to enforce that minimum.
+
+### Fixed
+
+- Conditional Stop persists its original runtime/turn target before physical control. Retries cannot adopt a replacement runtime or later turn; failed observations remain retryable or uncertain. Interrupt-only controls preserve queued messages and transcript context.
+- Command-progress activity uses durable identity across ingestion and replay. User-facing provider errors retain readable messages without inline stack details.
+- OpenCode sign-in and model-list fallback use isolated servers when `--standalone` is supported; cold V2 discovery loads models before provider metadata. Authentication terminals retain usable capabilities despite inherited `TERM=dumb` or `NO_COLOR`.
+- Hub workers omit Snooze and Hub actions. The landing ASCII field remains continuous beneath the composer's own surface.
+
+### Verification
+
+Local formatting, lint, typecheck, release smoke, brand, Windows runtime and migration checks, affected tests and marketing build are required for the finished candidate. The exact-tag publication workflow supplies full quality/server suites, portable inputs, all four native packages, macOS signing/notarization and Intel startup, provenance, Windows Defender and packaged startup. Pending gates are not passed gates; actual outcomes are recorded in the release checkpoint and public notes.
+
+See [source audit](docs/releases/1.0.9-source-audit.md). Release preparation changes versions and visible release text on existing surfaces only. Manual installation/upgrades, runtime behavior on macOS 13, live providers and connector sign-in, and browser-download reputation remain separately unverified.
+
 ## 1.0.6-remote.31 — 2026-10-25
 
 **Isolated OpenCode sign-in, clearer project identity and safer backup storage.**

@@ -44,3 +44,11 @@ Profile Stats includes providers with real turns even when token telemetry is un
 ## Desktop refinements in 1.0.8
 
 On Hyprland, the translucent shell uses compositor blur only when `decoration:blur:enabled` is confirmed enabled. Blur radius follows Hyprland settings. Other Linux sessions keep the existing window backing. Selected Linux icon artwork is installed separately for each app flavor.
+
+## Project logos in 1.0.9
+
+Projects use detected local favicon images across sidebar rows, pinned shortcuts, hover cards, search, pickers and Edit project previews. Your explicit emoji, icon or folder color takes priority; otherwise the fallback is a folder. Logos must stay inside the project and cannot execute scripts. Hub workers no longer offer Snooze or Hub actions, keeping delegated work reachable through its Hub.
+
+The empty-chat ASCII field stays continuous beneath the composer's own surface. Its existing Appearance setting and reduced-motion behavior remain available.
+
+Source evidence for 1.0.9: Synara release `ebd0d22b39ce3a0f7c6051dddc6090e9b85dc7c3`; `docs/releases/1.0.9-source-audit.md`, `docs/providers.md`, `docs/core-concepts.md`, `docs/editor/intelligence.md`, `docs/mcp-connectors.md`, `apps/server/src/persistence/MigrationBackup.ts` and `docs/release.md`.

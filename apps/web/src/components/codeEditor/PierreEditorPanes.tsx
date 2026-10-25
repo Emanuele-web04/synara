@@ -1,5 +1,5 @@
 // FILE: PierreEditorPanes.tsx
-// Purpose: Stable's editing surfaces: the Pierre engine behind the file editor
+// Purpose: Alternative editing surfaces when the native editor is disabled
 //          and the editable diff, with the same props contract as the native
 //          panes so the pane chrome does not change between flavors.
 // Layer: Web editor UI (Pierre engine)

@@ -205,3 +205,19 @@ Source evidence: Synara 1.0.6 `ProjectionSnapshotQuery.ts`, `ProviderCommandReac
 Deleting chats makes SQLite pages reusable; the file may remain larger than its live data. New databases reclaim free pages incrementally. Existing databases may attempt a one-time rebuild after clean shutdown only with enough free pages and scratch space. Insufficient space or a bounded timeout defers maintenance. This does not delete additional chat content and is not an emergency disk-recovery guarantee. Do not remove the database or its WAL to force reclamation.
 
 Stopped Pi and Antigravity sessions become inactive for ordinary next-turn recovery. An unanswered foreground Computer Use prompt is cancelled; it is not recorded as a human decline. Preserve the actual error and task state before retrying.
+
+## Stop retries and durable progress in 1.0.9
+
+Conditional Stop saves its original runtime and turn before sending physical control. A retry finishes that same target and cannot stop a replacement runtime or a later turn. If the target cannot be saved, no provider stop is sent. Failed observations remain retryable or explicitly uncertain; inspect the reported outcome before assuming work stopped. Interrupt-only controls preserve queued messages and transcript context.
+
+Command progress keeps its identity across recovery and replay. Provider errors show a readable first-line message; retain logs when deeper diagnostics are needed.
+
+## Compressed migration backups in 1.0.9
+
+New pre-migration SQLite backups end in `.sqlite.gz`. Recovery and inspection accept these compressed snapshots and older `.sqlite` backups. Keep the backup, recovery marker and provenance together; do not manually replace the live database with the compressed file.
+
+Creation needs temporary space for the full snapshot and compressed output together. Compression is not emergency disk recovery and has no guaranteed ratio. If the space check refuses startup, free space without deleting the recovery evidence, then retry. Synara retains at most five completed pre-migration backups.
+
+If startup reports migration recovery is required, stop every Synara process and use the exact `synara-restore-migration-backup` command printed for that database. The tool validates and decompresses the marked snapshot before replacing the live database. Do not invent a backup path or restore while another instance owns the database.
+
+Source evidence for 1.0.9: Synara release `ebd0d22b39ce3a0f7c6051dddc6090e9b85dc7c3`; `docs/releases/1.0.9-source-audit.md`, `docs/providers.md`, `docs/core-concepts.md`, `docs/editor/intelligence.md`, `docs/mcp-connectors.md`, `apps/server/src/persistence/MigrationBackup.ts` and `docs/release.md`.

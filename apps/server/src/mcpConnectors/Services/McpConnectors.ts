@@ -1,5 +1,5 @@
 /**
- * McpConnectors - Connectors (Beta): remote MCP servers the user signs in to
+ * McpConnectors - Connectors: remote MCP servers the user signs in to
  * from Settings. Holds their tokens, and proxies provider sessions to them
  * through the agent gateway.
  *

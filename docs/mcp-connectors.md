@@ -1,9 +1,10 @@
-# Connectors (Beta)
+# Connectors
 
 Connectors let agents in Synara use remote MCP servers such as Supabase, Linear, or Notion.
 The user signs in once in **Settings → Connectors**, and new chats get the server's tools.
-Connectors are Beta-only (`MCP_CONNECTORS_BETA_FEATURE`): Stable refuses the RPCs, the OAuth
-callback, and the proxy routes, and never reads saved connectors.
+Connectors are available in Stable and Beta builds from current `main`, including RPCs, OAuth
+callbacks and proxy routes. Each app reads only its own saved connectors; credentials are not
+copied from Beta into Stable. Existing published Stable builds do not gain this support until updated.
 
 One sign-in covers every provider account configured in Synara on this machine, such as all
 Claude accounts, Codex, and OpenCode, because the tokens live in Synara's own store rather than

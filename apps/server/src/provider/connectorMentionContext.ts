@@ -1,5 +1,5 @@
 /**
- * `@` mentions of Connectors (Beta) never reach providers as native mentions:
+ * `@` mentions of Connectors never reach providers as native mentions:
  * Codex would treat `connector://` as a plugin path and Droid as a local path.
  * They become one context block naming the MCP server to use instead.
  *
@@ -32,7 +32,7 @@ function sanitizeConnectorName(name: string): string {
 
 export function projectConnectorMentions(input: {
   readonly mentions: ReadonlyArray<ProviderMentionReference> | undefined;
-  /** False on Stable: connector mentions are dropped without a block. */
+  /** When connectors are disabled, their mentions are dropped without a block. */
   readonly enabled: boolean;
 }): ConnectorMentionProjection {
   const mentions = input.mentions ?? [];

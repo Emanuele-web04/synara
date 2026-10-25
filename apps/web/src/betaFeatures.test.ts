@@ -23,11 +23,15 @@ describe("visibleProviderDescriptors", () => {
 });
 
 describe("codeEditorEngine", () => {
-  it("keeps the Pierre engine on Stable and the native engine elsewhere", () => {
-    expect(codeEditorEngine((feature) => isBetaFeatureEnabled(feature, "production"))).toBe(
-      "pierre",
-    );
-    for (const flavor of ["beta", "canary", "development", "unknown"] as const) {
+  it("uses the native engine in Stable and all other flavors", () => {
+    for (const flavor of [
+      "production",
+      "beta",
+      "canary",
+      "cua",
+      "development",
+      "unknown",
+    ] as const) {
       expect(codeEditorEngine((feature) => isBetaFeatureEnabled(feature, flavor))).toBe("native");
     }
   });

@@ -28,7 +28,7 @@ export interface AgentGatewayMcpConnection {
   /** Bearer token bound to the calling thread. */
   readonly bearerToken: string;
   /**
-   * Connector proxies (Beta) served by this gateway and authenticated with the
+   * Connector proxies served by this gateway and authenticated with the
    * same bearer. Absent when no connector is connected.
    */
   readonly connectors?: ReadonlyArray<AgentGatewayConnectorServer>;

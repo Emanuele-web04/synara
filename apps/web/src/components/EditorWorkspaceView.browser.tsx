@@ -4,7 +4,13 @@
 
 import "../index.css";
 import { page } from "vitest/browser";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
+
+// Resolve the real feature policy as a packaged Stable host, independent of HTTP test hosting.
+vi.mock("@synara/shared/betaFeatures", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@synara/shared/betaFeatures")>()),
+  desktopFlavorFromProtocol: () => "production",
+}));
 import { render } from "vitest-browser-react";
 import { useEditorRailStore } from "../editorRailStore";
 import { installEditorWorkspaceFixture, makeView } from "./EditorWorkspaceView.test-support";
