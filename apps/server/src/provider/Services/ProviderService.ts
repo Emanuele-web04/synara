@@ -85,10 +85,20 @@ export interface ProviderSessionStartOutcomeOptions {
   readonly abandonOtherProviderContinuation?: boolean;
 }
 
+/** Durable identity of one Stop; its authority never transfers to a later turn. */
+export interface ProviderRuntimeStopControlReceipt {
+  readonly controlRequestId: string;
+  readonly observedLifecycleGeneration: string | null;
+  readonly turnId: TurnId | null;
+  readonly providerThreadId?: string;
+  readonly retiredLifecycleGeneration?: string;
+}
+
 /** Internal Stop observation, captured with the runtime under its lifecycle lock. */
 export interface ProviderRuntimeSessionStopTarget {
   readonly session: ProviderSession | null;
   readonly lifecycleGeneration: string | null;
+  readonly stopControlReceipt?: ProviderRuntimeStopControlReceipt;
 }
 
 export interface PersistedProviderSessionProfile {
@@ -194,6 +204,7 @@ export interface ProviderServiceShape {
     input: ProviderInterruptTurnInput & {
       /** Internal conditional Stop authority; never part of the wire input. */
       readonly expectedLifecycleGeneration?: string | null;
+      readonly controlRequestId?: string;
     },
   ) => Effect.Effect<void, ProviderServiceError>;
 
@@ -249,6 +260,7 @@ export interface ProviderServiceShape {
     readonly onlyIfIdleSince?: string;
     /** A conditional Stop must not tear down a replacement lifecycle epoch. */
     readonly expectedLifecycleGeneration?: string | null;
+    readonly controlRequestId?: string;
   }) => Effect.Effect<void, ProviderServiceError>;
 
   /** Observe one Stop target atomically; this is not a transport contract. */

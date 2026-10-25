@@ -108,6 +108,7 @@ import {
   ProviderServiceError,
   ProviderValidationError,
 } from "../../provider/Errors.ts";
+import { PersistenceDecodeError, PersistenceSqlError } from "../../persistence/Errors.ts";
 import { providerDisabledSettingsMessage } from "../../provider/enabledProviderAdapter.ts";
 import { buildInlineSkillInstructions } from "../../provider/skillPromptInjection.ts";
 import {
@@ -276,6 +277,14 @@ export function classifyProviderAttemptOutcome(
       return { _tag: "uncertain", detail };
   }
 }
+
+// Only conditional Stop has a durable, pinned provider target. Unwrap its
+// repository faults for delivery retry without widening other provider retries.
+const stopPersistenceError = (error: ProviderServiceError): ProviderServiceError =>
+  error._tag === "ProviderSessionDirectoryPersistenceError" &&
+  (Schema.is(PersistenceSqlError)(error.cause) || Schema.is(PersistenceDecodeError)(error.cause))
+    ? error.cause
+    : error;
 
 type BoundedProviderCallResult<E> =
   | { readonly _tag: "ok" }
@@ -5041,6 +5050,7 @@ const make = Effect.gen(function* () {
           // Preserve steer semantics: jump the queue (enqueue unshifts steers)
           // and ask the live turn to stop so the steer dispatches next.
           yield* interruptProviderTurn({
+            controlRequestId: turnStartKeyForEvent(event),
             threadId: event.payload.threadId,
             createdAt: event.payload.createdAt,
           });
@@ -5274,6 +5284,7 @@ const make = Effect.gen(function* () {
         )
       ) {
         yield* interruptProviderTurn({
+          controlRequestId: turnStartKeyForEvent(event),
           threadId: event.payload.threadId,
           turnId: startedTurn.turnId,
           createdAt: new Date().toISOString(),
@@ -6223,6 +6234,7 @@ const make = Effect.gen(function* () {
         // cannot escape the interrupt event that raced it with a stale turn id.
         if (startedTurn && !canContinueGoalPursuit(latestThread, event.payload.goalStartedAt)) {
           yield* interruptProviderTurn({
+            controlRequestId: turnStartKeyForEvent(event),
             threadId: thread.id,
             turnId: startedTurn.turnId,
             createdAt: new Date().toISOString(),
@@ -6336,6 +6348,7 @@ const make = Effect.gen(function* () {
           label: "The provider Stop target observation",
           timeout: PROVIDER_COMMAND_INTERRUPT_TIMEOUT,
           call: read({ threadId: owner?.id ?? input.threadId }).pipe(
+            Effect.mapError(stopPersistenceError),
             Effect.tap((value) =>
               Effect.sync(() => {
                 observation.target = value;
@@ -6347,24 +6360,32 @@ const make = Effect.gen(function* () {
     if (result?._tag === "ok" && observation.target) return observation.target;
     if (result?._tag === "failed" && result.outcome._tag === "safe_retry")
       return yield* Effect.failCause(result.cause);
+    const detail =
+      result?._tag === "timeout"
+        ? result.detail
+        : result?._tag === "failed"
+          ? result.outcome.detail
+          : "The cursor-preserving runtime stop is unavailable.";
     yield* appendProviderFailureActivity({
       threadId: input.threadId,
       kind: "provider.session.stop.failed",
       summary: "Provider session stop failed",
-      detail:
-        result?._tag === "timeout"
-          ? result.detail
-          : result?._tag === "failed"
-            ? result.outcome.detail
-            : "The cursor-preserving runtime stop is unavailable.",
+      detail,
       turnId: null,
       createdAt: input.createdAt,
       settlementStatus: "uncertain",
     });
-    return undefined;
+    // A missing observation proves neither retirement nor replacement. Keep the
+    // durable delivery uncertain instead of acknowledging an unsettled Stop.
+    return yield* new ProviderAdapterRequestError({
+      provider: owner?.modelSelection.provider ?? "provider",
+      method: "runtime-stop-observation",
+      detail,
+    });
   });
 
   const interruptProviderTurn = Effect.fnUntraced(function* (input: {
+    readonly controlRequestId: string;
     readonly threadId: ThreadId;
     readonly turnId?: TurnId | undefined;
     readonly createdAt: string;
@@ -6404,7 +6425,49 @@ const make = Effect.gen(function* () {
     }
 
     const observedRuntime = yield* readRuntimeStopTarget(input);
-    if (!observedRuntime) return;
+    const replayReceipt =
+      observedRuntime.stopControlReceipt?.controlRequestId === input.controlRequestId
+        ? observedRuntime.stopControlReceipt
+        : undefined;
+    if (replayReceipt) {
+      const isOriginalRuntime =
+        observedRuntime.lifecycleGeneration === replayReceipt.observedLifecycleGeneration;
+      const isOwnRetirement =
+        replayReceipt.retiredLifecycleGeneration !== undefined &&
+        observedRuntime.lifecycleGeneration === replayReceipt.retiredLifecycleGeneration &&
+        observedRuntime.session === null;
+      // The provider persists the original target before accepting physical
+      // control. Retrying a database fault can finish that Stop, never adopt T2.
+      if (!isOriginalRuntime && !isOwnRetirement) return;
+      if (
+        (replayReceipt.providerThreadId !== undefined || input.turnId !== undefined) &&
+        replayReceipt.turnId !== null &&
+        [thread.session?.activeTurnId, thread.latestTurn?.turnId].some(
+          (projectedTurnId) =>
+            projectedTurnId != null &&
+            projectedTurnId !== replayReceipt.turnId &&
+            projectedTurnId !== input.turnId,
+        )
+      )
+        return;
+      // A parent Stop may omit the projected ID or carry one that was already
+      // stale. Its persisted provider target and epoch remain authoritative; the
+      // service checks both again under lock before any control or settlement.
+      if (replayReceipt.providerThreadId === undefined) {
+        return yield* processThreadSessionStop({
+          threadId: input.threadId,
+          createdAt: input.createdAt,
+          controlRequestId: input.controlRequestId,
+          expectedLifecycleGeneration: replayReceipt.observedLifecycleGeneration,
+        });
+      }
+      if (
+        thread.session?.activeTurnId !== null &&
+        thread.session?.activeTurnId !== undefined &&
+        thread.session.activeTurnId !== replayReceipt.turnId
+      )
+        return;
+    }
     const liveSession = observedRuntime.session ?? undefined;
     const projectionHasWork = [thread, providerThread].some(
       (entry) =>
@@ -6440,6 +6503,7 @@ const make = Effect.gen(function* () {
         threadId: input.threadId,
         createdAt: input.createdAt,
         expectedLifecycleGeneration: observedRuntime.lifecycleGeneration,
+        controlRequestId: input.controlRequestId,
       });
     }
 
@@ -6475,30 +6539,40 @@ const make = Effect.gen(function* () {
     // exact generation-scoped provider turn and rejects a stale mismatch.
     const providerThreadId = resolveSubagentProviderThreadId(thread.id, providerThread.id);
     const liveTurnId = yield* resolveLiveProviderTurnId(input.threadId);
-    const turnId = liveTurnId ?? input.turnId ?? thread.session?.activeTurnId ?? undefined;
+    const turnId =
+      replayReceipt?.turnId ??
+      liveTurnId ??
+      input.turnId ??
+      thread.session?.activeTurnId ??
+      undefined;
     const result = yield* runBoundedProviderCall({
       label: "The provider interrupt",
       timeout: PROVIDER_COMMAND_INTERRUPT_TIMEOUT,
-      call: providerService.interruptTurn({
-        threadId: providerThread.id,
-        ...(turnId ? { turnId } : {}),
-        ...(providerThreadId ? { providerThreadId } : {}),
-        expectedLifecycleGeneration: observedRuntime.lifecycleGeneration,
-      }),
+      call: providerService
+        .interruptTurn({
+          threadId: providerThread.id,
+          ...(turnId ? { turnId } : {}),
+          ...(providerThreadId ? { providerThreadId } : {}),
+          expectedLifecycleGeneration: observedRuntime.lifecycleGeneration,
+          controlRequestId: input.controlRequestId,
+        })
+        .pipe(Effect.mapError(stopPersistenceError)),
     });
     const current = yield* resolveThread(input.threadId);
     const currentRuntimeTarget = yield* readRuntimeStopTarget(input);
-    if (!currentRuntimeTarget) {
-      if (result._tag === "failed" && result.outcome._tag === "safe_retry")
-        return yield* Effect.failCause(result.cause);
-      return;
-    }
     const currentRuntime = currentRuntimeTarget.session ?? undefined;
     const currentTurnId = current?.latestTurn?.turnId;
+    const retirementReceipt = currentRuntimeTarget.stopControlReceipt;
+    const isOwnRetirement =
+      currentRuntime === undefined &&
+      retirementReceipt?.controlRequestId === input.controlRequestId &&
+      retirementReceipt.observedLifecycleGeneration === observedRuntime.lifecycleGeneration &&
+      retirementReceipt.retiredLifecycleGeneration !== undefined &&
+      retirementReceipt.retiredLifecycleGeneration === currentRuntimeTarget.lifecycleGeneration;
     const replaced =
       (currentTurnId !== thread.latestTurn?.turnId && currentTurnId !== turnId) ||
       (currentRuntime?.activeTurnId !== undefined && currentRuntime.activeTurnId !== turnId) ||
-      (currentRuntime !== undefined &&
+      (!isOwnRetirement &&
         currentRuntimeTarget.lifecycleGeneration !== observedRuntime.lifecycleGeneration);
     // Every outcome belongs to the interrupted binding. A late rejection or
     // timeout must not settle a replacement turn or escalate into stopping it.
@@ -6556,7 +6630,8 @@ const make = Effect.gen(function* () {
         threadId: input.threadId,
         createdAt: input.createdAt,
         interruptEscalated: true,
-        expectedLifecycleGeneration: currentRuntimeTarget.lifecycleGeneration,
+        expectedLifecycleGeneration: observedRuntime.lifecycleGeneration,
+        controlRequestId: input.controlRequestId,
         ...(current?.session ? { expectedSession: current.session } : {}),
       });
     }
@@ -6566,7 +6641,11 @@ const make = Effect.gen(function* () {
     // thread and settle locally, since the provider never accepted the request.
     if (result.outcome._tag === "rejected") {
       yield* reportInterruptFailure(result.outcome.detail);
-      if (isStaleProviderControl(result.cause, "ProviderService.interruptTurn")) return;
+      if (
+        isStaleProviderControl(result.cause, "ProviderService.interruptTurn") ||
+        isStaleProviderControl(result.cause, "ProviderService.stopRuntimeSession")
+      )
+        return;
       const failure = Option.getOrUndefined(Cause.findErrorOption(result.cause));
       if (
         providerThreadId === undefined &&
@@ -6584,7 +6663,8 @@ const make = Effect.gen(function* () {
           threadId: input.threadId,
           createdAt: input.createdAt,
           interruptEscalated: true,
-          expectedLifecycleGeneration: currentRuntimeTarget.lifecycleGeneration,
+          expectedLifecycleGeneration: observedRuntime.lifecycleGeneration,
+          controlRequestId: input.controlRequestId,
         });
       }
       return yield* settleInterruptedProviderTurn({
@@ -6602,6 +6682,7 @@ const make = Effect.gen(function* () {
     event: Extract<ProviderIntentEvent, { type: "thread.turn-interrupt-requested" }>,
   ) {
     yield* interruptProviderTurn({
+      controlRequestId: turnStartKeyForEvent(event),
       threadId: event.payload.threadId,
       turnId: event.payload.turnId,
       createdAt: event.payload.createdAt,
@@ -7148,6 +7229,7 @@ const make = Effect.gen(function* () {
     readonly interruptEscalated?: boolean;
     readonly expectedSession?: OrchestrationSession;
     readonly expectedLifecycleGeneration?: string | null;
+    readonly controlRequestId?: string;
   }) {
     const thread = yield* resolveThreadShell(input.threadId);
     const providerThread = yield* resolveProviderSessionThread(input.threadId);
@@ -7176,14 +7258,23 @@ const make = Effect.gen(function* () {
       runBoundedProviderCall({
         label: "The provider interrupt",
         timeout: PROVIDER_COMMAND_INTERRUPT_TIMEOUT,
-        call: providerService.interruptTurn({
-          threadId: providerThread?.id ?? thread.id,
-          ...(thread.session?.activeTurnId ? { turnId: thread.session.activeTurnId } : {}),
-          ...(providerThreadId !== undefined ? { providerThreadId } : {}),
-          ...(input.expectedLifecycleGeneration !== undefined
-            ? { expectedLifecycleGeneration: input.expectedLifecycleGeneration }
-            : {}),
-        }),
+        call: providerService
+          .interruptTurn({
+            threadId: providerThread?.id ?? thread.id,
+            ...(thread.session?.activeTurnId ? { turnId: thread.session.activeTurnId } : {}),
+            ...(providerThreadId !== undefined ? { providerThreadId } : {}),
+            ...(input.controlRequestId !== undefined
+              ? { controlRequestId: input.controlRequestId }
+              : {}),
+            ...(input.expectedLifecycleGeneration !== undefined
+              ? { expectedLifecycleGeneration: input.expectedLifecycleGeneration }
+              : {}),
+          })
+          .pipe(
+            Effect.mapError((error) =>
+              input.controlRequestId !== undefined ? stopPersistenceError(error) : error,
+            ),
+          ),
       });
     let conditionalChildInterrupt: BoundedProviderCallResult<ProviderServiceError> | undefined;
 
@@ -7217,12 +7308,21 @@ const make = Effect.gen(function* () {
           const stopped = yield* runBoundedProviderCall({
             label: "The provider session stop",
             timeout: PROVIDER_COMMAND_STOP_TIMEOUT,
-            call: providerService.stopRuntimeSession({
-              threadId: providerThread.id,
-              ...(input.expectedLifecycleGeneration !== undefined
-                ? { expectedLifecycleGeneration: input.expectedLifecycleGeneration }
-                : {}),
-            }),
+            call: providerService
+              .stopRuntimeSession({
+                threadId: providerThread.id,
+                ...(input.controlRequestId !== undefined
+                  ? { controlRequestId: input.controlRequestId }
+                  : {}),
+                ...(input.expectedLifecycleGeneration !== undefined
+                  ? { expectedLifecycleGeneration: input.expectedLifecycleGeneration }
+                  : {}),
+              })
+              .pipe(
+                Effect.mapError((error) =>
+                  input.controlRequestId !== undefined ? stopPersistenceError(error) : error,
+                ),
+              ),
           });
           if (
             stopped._tag === "failed" &&
@@ -7230,6 +7330,12 @@ const make = Effect.gen(function* () {
           )
             return false;
           if (stopped._tag !== "ok") {
+            if (
+              input.expectedLifecycleGeneration !== undefined &&
+              stopped._tag === "failed" &&
+              stopped.outcome._tag === "safe_retry"
+            )
+              return yield* Effect.failCause(stopped.cause);
             yield* appendProviderFailureActivity({
               threadId: thread.id,
               kind: "provider.session.stop.failed",
@@ -7239,6 +7345,7 @@ const make = Effect.gen(function* () {
               createdAt: input.createdAt,
               settlementStatus: "uncertain",
             });
+            if (input.expectedLifecycleGeneration !== undefined) return false;
           }
         }
       }
@@ -7247,11 +7354,31 @@ const make = Effect.gen(function* () {
     if (input.expectedLifecycleGeneration !== undefined && !(yield* stopOwnedRuntime)) return;
     if (input.expectedLifecycleGeneration !== undefined && isRunningChild) {
       conditionalChildInterrupt = yield* interruptChildRuntime();
-      if (
-        conditionalChildInterrupt._tag === "failed" &&
-        isStaleProviderControl(conditionalChildInterrupt.cause, "ProviderService.interruptTurn")
-      )
+      if (conditionalChildInterrupt._tag !== "ok") {
+        if (
+          conditionalChildInterrupt._tag === "failed" &&
+          conditionalChildInterrupt.outcome._tag === "safe_retry"
+        )
+          return yield* Effect.failCause(conditionalChildInterrupt.cause);
+        if (
+          conditionalChildInterrupt._tag === "failed" &&
+          isStaleProviderControl(conditionalChildInterrupt.cause, "ProviderService.interruptTurn")
+        )
+          return;
+        yield* appendProviderFailureActivity({
+          threadId: thread.id,
+          kind: "provider.turn.interrupt.failed",
+          summary: "Provider turn interrupt failed",
+          detail:
+            conditionalChildInterrupt._tag === "timeout"
+              ? conditionalChildInterrupt.detail
+              : conditionalChildInterrupt.outcome.detail,
+          turnId: thread.session?.activeTurnId ?? null,
+          createdAt: input.createdAt,
+          settlementStatus: "uncertain",
+        });
         return;
+      }
     }
 
     const stoppedSessionThreadId = providerThread?.id ?? thread.id;

@@ -101,6 +101,7 @@ import { ProviderAdapterRegistryLive } from "../../provider/Layers/ProviderAdapt
 import { makeProviderServiceLive } from "../../provider/Layers/ProviderService.ts";
 import { ProviderSessionDirectoryLive } from "../../provider/Layers/ProviderSessionDirectory.ts";
 import { ProviderSessionRuntimeRepositoryLive } from "../../persistence/Layers/ProviderSessionRuntime.ts";
+import { ProviderSessionRuntimeRepository } from "../../persistence/Services/ProviderSessionRuntime.ts";
 import { ServerSecretStore } from "../../auth/Services/ServerSecretStore.ts";
 import { OrchestrationEventStoreLive } from "../../persistence/Layers/OrchestrationEventStore.ts";
 import { OrchestrationCommandReceiptRepositoryLive } from "../../persistence/Layers/OrchestrationCommandReceipts.ts";
@@ -123,6 +124,7 @@ import { SqlitePersistenceMemory } from "../../persistence/Layers/Sqlite.ts";
 import {
   ProviderService,
   type ProviderServiceShape,
+  type ProviderRuntimeSessionStopTarget,
 } from "../../provider/Services/ProviderService.ts";
 import {
   ProviderHealth,
@@ -309,7 +311,9 @@ async function waitFor(
 // fake. Like PiAdapter and AntigravityAdapter, a restart or a stop marks the
 // context stopped before its teardown. The first teardown fails and keeps the
 // context with the mode it was started in, a later one completes.
-function createRetainingRestartProviderServiceLayer() {
+function createRetainingRestartProviderServiceLayer(options?: {
+  readonly failFirstTeardown?: boolean;
+}) {
   const unsupported = () => Effect.die(new Error("Unsupported adapter call in test"));
   const adapterFor = <P extends ProviderKind>(
     provider: P,
@@ -319,7 +323,7 @@ function createRetainingRestartProviderServiceLayer() {
     const teardown = (threadId: ThreadId, method: string) =>
       Effect.suspend(() => {
         const session = sessions.get(threadId);
-        if (session && !stopped.has(threadId)) {
+        if (session && !stopped.has(threadId) && options?.failFirstTeardown !== false) {
           stopped.add(threadId);
           sessions.set(threadId, { ...session, status: "closed" });
           return Effect.fail(
@@ -402,9 +406,9 @@ function createRetainingRestartProviderServiceLayer() {
   );
   return makeProviderServiceLive().pipe(
     Layer.provide(registryLayer),
-    Layer.provide(
+    Layer.provideMerge(
       ProviderSessionDirectoryLive.pipe(
-        Layer.provide(ProviderSessionRuntimeRepositoryLive),
+        Layer.provideMerge(ProviderSessionRuntimeRepositoryLive),
         Layer.provide(SqlitePersistenceMemory),
       ),
     ),
@@ -1142,6 +1146,10 @@ describe("ProviderCommandReactor", () => {
 
     return {
       engine,
+      realProviderService: await runtime.runPromise(Effect.service(ProviderService)),
+      providerRuntimeRepository: Option.getOrUndefined(
+        await runtime.runPromise(Effect.serviceOption(ProviderSessionRuntimeRepository)),
+      ),
       projectionSnapshotQuery,
       seedCompletion: () =>
         runtime!.runPromise(sql`
@@ -6024,6 +6032,7 @@ describe("ProviderCommandReactor", () => {
     expect(harness.interruptTurn).not.toHaveBeenCalled();
     expect(harness.stopRuntimeSession).toHaveBeenCalledWith({
       threadId,
+      controlRequestId: "command:cmd-stop-stuck-starting",
       expectedLifecycleGeneration: null,
     });
     expect(harness.stopSession).not.toHaveBeenCalled();
@@ -6070,6 +6079,7 @@ describe("ProviderCommandReactor", () => {
     expect(harness.interruptTurn).toHaveBeenCalledWith({
       threadId,
       turnId: "turn-not-yet-projected",
+      controlRequestId: "command:cmd-stop-before-runtime-event",
       expectedLifecycleGeneration: null,
     });
     expect(harness.stopRuntimeSession).not.toHaveBeenCalled();
@@ -11358,11 +11368,13 @@ describe("ProviderCommandReactor", () => {
     expect(harness.interruptTurn).toHaveBeenCalledWith({
       threadId,
       turnId: asTurnId("turn-interrupt-escalation"),
+      controlRequestId: "command:cmd-interrupt-escalation",
       expectedLifecycleGeneration: "harness-session-1",
     });
     expect(harness.stopSession).not.toHaveBeenCalled();
     expect(harness.stopRuntimeSession).toHaveBeenCalledWith({
       threadId,
+      controlRequestId: "command:cmd-interrupt-escalation",
       expectedLifecycleGeneration: "harness-session-1",
     });
 
@@ -11422,6 +11434,7 @@ describe("ProviderCommandReactor", () => {
     await waitFor(async () => (await readHarnessThread(harness))?.session?.status === "stopped");
     expect(harness.stopRuntimeSession).toHaveBeenCalledWith({
       threadId,
+      controlRequestId: "command:cmd-interrupt-escalation-context-loss",
       expectedLifecycleGeneration: "harness-session-1",
     });
 
@@ -23029,58 +23042,61 @@ describe("ProviderCommandReactor", () => {
     },
   );
 
-  it("does not settle a live turn when its conditional interrupt cannot acquire the runtime", async () => {
-    const harness = await createHarness({
-      interruptTurn: () =>
-        Effect.fail(
-          new ProviderValidationError({
-            operation: "ProviderService.interruptTurn",
-            reason: "stale-interaction",
-            issue: "The provider lifecycle is busy.",
-          }),
-        ),
-    });
-    const threadId = ThreadId.makeUnsafe("thread-1");
-    const turnId = asTurnId("busy-conditional-turn");
-    const createdAt = new Date().toISOString();
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.session.set",
-        commandId: CommandId.makeUnsafe("busy-conditional-session"),
-        threadId,
-        session: {
+  it.each(["ProviderService.interruptTurn", "ProviderService.stopRuntimeSession"] as const)(
+    "does not settle a live turn when %s cannot acquire the observed runtime",
+    async (operation) => {
+      const harness = await createHarness({
+        interruptTurn: () =>
+          Effect.fail(
+            new ProviderValidationError({
+              operation,
+              reason: "stale-interaction",
+              issue: "The provider lifecycle is busy.",
+            }),
+          ),
+      });
+      const threadId = ThreadId.makeUnsafe("thread-1");
+      const turnId = asTurnId("busy-conditional-turn");
+      const createdAt = new Date().toISOString();
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.session.set",
+          commandId: CommandId.makeUnsafe("busy-conditional-session"),
           threadId,
-          status: "running",
-          providerName: "codex",
-          runtimeMode: "approval-required",
-          activeTurnId: turnId,
-          lastError: null,
-          updatedAt: createdAt,
-        },
-        createdAt,
-      }),
-    );
-    harness.setRuntimeSessionTurnState({ threadId, status: "running", activeTurnId: turnId });
-    const cancelQueued = vi.spyOn(harness.queuedTurnPromotionRepository, "cancelThread");
-    harness.pendingPriorTranscriptBootstraps.add(threadId);
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.turn.interrupt",
-        commandId: CommandId.makeUnsafe("busy-conditional-stop"),
-        threadId,
-        turnId,
-        createdAt,
-      }),
-    );
-    await harness.drain();
-    expect((await readHarnessThread(harness))?.session).toMatchObject({
-      status: "running",
-      activeTurnId: turnId,
-    });
-    expect(harness.stopRuntimeSession).not.toHaveBeenCalled();
-    expect(cancelQueued).not.toHaveBeenCalled();
-    expect(harness.pendingPriorTranscriptBootstraps.has(threadId)).toBe(true);
-  });
+          session: {
+            threadId,
+            status: "running",
+            providerName: "codex",
+            runtimeMode: "approval-required",
+            activeTurnId: turnId,
+            lastError: null,
+            updatedAt: createdAt,
+          },
+          createdAt,
+        }),
+      );
+      harness.setRuntimeSessionTurnState({ threadId, status: "running", activeTurnId: turnId });
+      const cancelQueued = vi.spyOn(harness.queuedTurnPromotionRepository, "cancelThread");
+      harness.pendingPriorTranscriptBootstraps.add(threadId);
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.turn.interrupt",
+          commandId: CommandId.makeUnsafe("busy-conditional-stop"),
+          threadId,
+          turnId,
+          createdAt,
+        }),
+      );
+      await harness.drain();
+      expect((await readHarnessThread(harness))?.session).toMatchObject({
+        status: "running",
+        activeTurnId: turnId,
+      });
+      expect(harness.stopRuntimeSession).not.toHaveBeenCalled();
+      expect(cancelQueued).not.toHaveBeenCalled();
+      expect(harness.pendingPriorTranscriptBootstraps.has(threadId)).toBe(true);
+    },
+  );
 
   it("preserves a replacement parent's authority and child queue when escalated child Stop is stale", async () => {
     const harness = await createHarness();
@@ -23160,6 +23176,7 @@ describe("ProviderCommandReactor", () => {
       threadId: parent,
       turnId,
       providerThreadId: "stale-stop-child",
+      controlRequestId: "command:stale-child-stop",
       expectedLifecycleGeneration: null,
     });
     expect(cancelQueued).not.toHaveBeenCalled();
@@ -23217,6 +23234,210 @@ describe("ProviderCommandReactor", () => {
     expect((await readHarnessThread(harness))?.session?.status).toBe("stopped");
   });
 
+  it.each([
+    { replaceRuntime: false, staleProjection: false, omitTurnId: false },
+    { replaceRuntime: true, staleProjection: false, omitTurnId: false },
+    { replaceRuntime: false, staleProjection: true, omitTurnId: false },
+    { replaceRuntime: false, staleProjection: true, omitTurnId: true, newQueuedWork: false },
+    { replaceRuntime: false, staleProjection: true, omitTurnId: true, newQueuedWork: true },
+  ])(
+    "replays a real Stop after its post-retirement SQL read fails without adopting a replacement (%j)",
+    async ({ replaceRuntime, staleProjection, omitTurnId, newQueuedWork = false }) => {
+      const harness = await createHarness({
+        providerServiceLayer: createRetainingRestartProviderServiceLayer({
+          failFirstTeardown: false,
+        }),
+      });
+      const provider = harness.realProviderService;
+      const repository = harness.providerRuntimeRepository;
+      if (!repository || !provider.getRuntimeSessionStopTarget)
+        throw new Error("Expected the real provider persistence fixture");
+      const threadId = ThreadId.makeUnsafe("thread-1");
+      const turnId = asTurnId("codex-turn");
+      const projectedTurnId = staleProjection ? asTurnId("stale-projected-turn") : turnId;
+      const createdAt = new Date().toISOString();
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.turn.start",
+          commandId: CommandId.makeUnsafe("receipt-first-start"),
+          threadId,
+          message: {
+            messageId: asMessageId("receipt-first-message"),
+            role: "user",
+            text: "Start",
+            attachments: [],
+          },
+          runtimeMode: "approval-required",
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          createdAt,
+        }),
+      );
+      await harness.drain();
+      const established = (await readHarnessThread(harness))?.session;
+      if (!established) throw new Error("Expected an established real provider runtime");
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.session.set",
+          commandId: CommandId.makeUnsafe("receipt-first-running"),
+          threadId,
+          session: { ...established, status: "running", activeTurnId: projectedTurnId },
+          createdAt,
+        }),
+      );
+      await harness.drain();
+      const originalTarget = await Effect.runPromise(
+        provider.getRuntimeSessionStopTarget({ threadId }),
+      );
+      let armed = false;
+      let failed = false;
+      const replayReady = Effect.runSync(Deferred.make<void>());
+      const readRuntime = provider.getRuntimeSessionStopTarget;
+      vi.spyOn(provider, "getRuntimeSessionStopTarget").mockImplementation((input) =>
+        Effect.gen(function* () {
+          if (failed) yield* Deferred.await(replayReady);
+          return yield* readRuntime(input);
+        }),
+      );
+      const readRow = repository.getByThreadId;
+      vi.spyOn(repository, "getByThreadId").mockImplementation((input) =>
+        Effect.suspend(() => {
+          if (armed && !failed) {
+            failed = true;
+            return Effect.fail(
+              new PersistenceSqlError({
+                operation: "ProviderSessionRuntimeRepository.getByThreadId",
+                detail: "Injected one post-retirement SQL read fault",
+              }),
+            );
+          }
+          return readRow(input);
+        }),
+      );
+      const interrupt = provider.interruptTurn;
+      const interruptSpy = vi.spyOn(provider, "interruptTurn").mockImplementation((input) =>
+        interrupt(input).pipe(
+          Effect.tap(() =>
+            Effect.sync(() => {
+              armed = true;
+            }),
+          ),
+        ),
+      );
+      const stopSpy = vi.spyOn(provider, "stopRuntimeSession");
+      const queuedSend = vi.spyOn(provider, "sendTurn");
+      const commandId = CommandId.makeUnsafe(`receipt-stop-${replaceRuntime}`);
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.turn.interrupt",
+          commandId,
+          threadId,
+          ...(!omitTurnId ? { turnId: projectedTurnId } : {}),
+          createdAt,
+        }),
+      );
+      await waitFor(() => failed);
+      let replacementTarget: ProviderRuntimeSessionStopTarget | undefined;
+      if (replaceRuntime) {
+        await Effect.runPromise(
+          provider.startSession(threadId, {
+            threadId,
+            provider: "codex",
+            runtimeMode: "approval-required",
+          }),
+        );
+        await Effect.runPromise(provider.sendTurn({ threadId, input: "Replacement" }));
+        replacementTarget = await Effect.runPromise(readRuntime({ threadId }));
+        expect(replacementTarget.lifecycleGeneration).not.toBe(originalTarget.lifecycleGeneration);
+        // The new runtime deliberately reuses the exact same provider turn ID.
+        await Effect.runPromise(
+          harness.engine.dispatch({
+            type: "thread.session.set",
+            commandId: CommandId.makeUnsafe("receipt-replacement-running"),
+            threadId,
+            session: {
+              ...established,
+              status: "running",
+              activeTurnId: turnId,
+              updatedAt: new Date().toISOString(),
+            },
+            createdAt,
+          }),
+        );
+      }
+      if (newQueuedWork) {
+        // Real command admission while Stop is retrying: the future turn is not
+        // allowed to bypass its owning delivery, and must survive its cleanup.
+        await Effect.runPromise(
+          harness.engine.dispatch({
+            type: "thread.turn.start",
+            commandId: CommandId.makeUnsafe("receipt-queued-after-stop"),
+            threadId,
+            message: {
+              messageId: asMessageId("receipt-queued-message"),
+              role: "user",
+              text: "Queued after the first Stop",
+              attachments: [],
+            },
+            runtimeMode: "approval-required",
+            interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+            dispatchMode: "queue",
+            createdAt: new Date().toISOString(),
+          }),
+        );
+      }
+      await Effect.runPromise(Deferred.succeed(replayReady, undefined));
+      await harness.drain();
+      const source = (
+        await Effect.runPromise(
+          Stream.runCollect(
+            harness.engine.readThreadEvents(threadId, 0, ["thread.turn-interrupt-requested"]),
+          ),
+        )
+      ).find((event) => event.commandId === commandId);
+      if (!source) throw new Error("Expected the durable interrupt request");
+      const delivery = Option.getOrThrow(
+        await Effect.runPromise(
+          harness.deliveryRepository.getDelivery({
+            consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
+            eventSequence: source.sequence,
+          }),
+        ),
+      );
+      expect(delivery).toMatchObject({ state: "succeeded", attemptCount: 2 });
+      expect(interruptSpy).toHaveBeenCalledTimes(1);
+      const finalTarget = await Effect.runPromise(readRuntime({ threadId }));
+      expect(finalTarget.stopControlReceipt).toMatchObject({
+        controlRequestId: `command:${commandId}`,
+        turnId,
+      });
+      if (newQueuedWork) {
+        expect(stopSpy).toHaveBeenCalledTimes(1);
+        expect(queuedSend).toHaveBeenCalledTimes(1);
+        expect(queuedSend.mock.calls[0]?.[0].input).toContain("Queued after the first Stop");
+        expect(finalTarget.session).not.toBeNull();
+        expect(finalTarget.lifecycleGeneration).not.toBe(
+          finalTarget.stopControlReceipt?.retiredLifecycleGeneration,
+        );
+        expect((await readHarnessThread(harness))?.session?.status).toBe("ready");
+      } else if (replaceRuntime) {
+        expect(finalTarget.lifecycleGeneration).toBe(replacementTarget?.lifecycleGeneration);
+        expect(finalTarget.session).not.toBeNull();
+        expect(stopSpy).not.toHaveBeenCalled();
+        expect((await readHarnessThread(harness))?.session).toMatchObject({
+          status: "running",
+          activeTurnId: turnId,
+        });
+      } else {
+        expect(stopSpy).toHaveBeenCalledTimes(1);
+        expect(finalTarget.session).toBeNull();
+        expect(finalTarget.lifecycleGeneration).toBe(
+          finalTarget.stopControlReceipt?.retiredLifecycleGeneration,
+        );
+        expect((await readHarnessThread(harness))?.session?.status).toBe("stopped");
+      }
+    },
+  );
+
   it("retires only the observed running runtime when its exact turn id is unavailable", async () => {
     const harness = await createHarness({
       interruptTurn: () =>
@@ -23259,6 +23480,7 @@ describe("ProviderCommandReactor", () => {
     await harness.drain();
     expect(harness.stopRuntimeSession).toHaveBeenCalledWith({
       threadId,
+      controlRequestId: "command:running-runtime-missing-turn-stop",
       expectedLifecycleGeneration: null,
     });
     expect(harness.stopSession).not.toHaveBeenCalled();
@@ -23475,6 +23697,7 @@ describe("ProviderCommandReactor", () => {
     expect(harness.interruptTurn.mock.calls[0]?.[0]).toEqual({
       threadId: "thread-1",
       turnId: "turn-live-current",
+      controlRequestId: "command:cmd-turn-interrupt-stale-projection",
       expectedLifecycleGeneration: null,
     });
   });
@@ -23546,6 +23769,8 @@ describe("ProviderCommandReactor", () => {
     { outcome: "accepted", replacement: "runtime" },
     { outcome: "rejected", replacement: "runtime" },
     { outcome: "uncertain", replacement: "runtime" },
+    { outcome: "rejected", replacement: "retired-runtime" },
+    { outcome: "uncertain", replacement: "retired-runtime" },
   ] as const)(
     "does not settle a replacement $replacement when an earlier interrupt finishes ($outcome)",
     async ({ outcome, replacement }) => {
@@ -23608,10 +23833,12 @@ describe("ProviderCommandReactor", () => {
       const replacementTurnId = replacement === "turn" ? "turn-replacement" : "turn-interrupted";
       if (replacement === "turn") await setProjectedTurn(replacementTurnId);
       harness.setRuntimeSessionTurnState({ threadId, status: "ready" });
-      if (replacement === "runtime") {
+      if (replacement === "runtime" || replacement === "retired-runtime") {
         const sessions = await Effect.runPromise(harness.listSessions());
-        const replacementSession = sessions[0]!;
-        harness.listSessions.mockImplementation(() => Effect.succeed([replacementSession]));
+        const replacementSession = replacement === "retired-runtime" ? null : sessions[0]!;
+        harness.listSessions.mockImplementation(() =>
+          Effect.succeed(replacementSession ? [replacementSession] : []),
+        );
         harness.getRuntimeSessionStopTarget.mockImplementation(() =>
           Effect.succeed({
             session: replacementSession,
@@ -23921,6 +24148,7 @@ describe("ProviderCommandReactor", () => {
       threadId: "thread-1",
       turnId: "turn-child",
       providerThreadId: "child-provider-1",
+      controlRequestId: "command:cmd-turn-interrupt-subagent",
       expectedLifecycleGeneration: null,
     });
   });
@@ -23980,6 +24208,7 @@ describe("ProviderCommandReactor", () => {
     expect(harness.interruptTurn.mock.calls[0]?.[0]).toEqual({
       threadId: "thread-1",
       providerThreadId: "child-provider-2",
+      controlRequestId: "command:cmd-turn-interrupt-subagent-sessionless",
       expectedLifecycleGeneration: null,
     });
   });
@@ -24057,6 +24286,7 @@ describe("ProviderCommandReactor", () => {
       threadId: "thread-1",
       turnId: "turn-child",
       providerThreadId: "child-provider-1",
+      controlRequestId: "command:cmd-turn-interrupt-subagent-fallback",
       expectedLifecycleGeneration: null,
     });
   });
