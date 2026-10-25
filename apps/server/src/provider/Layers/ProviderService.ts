@@ -79,7 +79,11 @@ import type {
   ProviderTurnDispatchOptions,
 } from "../Services/ProviderAdapter.ts";
 import { ProviderAdapterRegistry } from "../Services/ProviderAdapterRegistry.ts";
-import { ProviderService, type ProviderServiceShape } from "../Services/ProviderService.ts";
+import {
+  ProviderService,
+  type ProviderServiceShape,
+  type ProviderRuntimeStopControlReceipt,
+} from "../Services/ProviderService.ts";
 import {
   ProviderSessionDirectory,
   type ProviderRuntimeBinding,
@@ -807,6 +811,34 @@ function adapterReportsRetiredGatewayCredential<TError>(
     : adapter
         .agentGatewayCredentialRetired(threadId)
         .pipe(Effect.catch(() => Effect.succeed(false)));
+}
+
+function runtimeStopControlReceipt(value: unknown): ProviderRuntimeStopControlReceipt | undefined {
+  const raw = runtimePayloadRecord(runtimePayloadRecord(value).providerStopControlReceipt);
+  if (
+    typeof raw.controlRequestId !== "string" ||
+    raw.controlRequestId.length === 0 ||
+    !(
+      raw.observedLifecycleGeneration === null ||
+      typeof raw.observedLifecycleGeneration === "string"
+    ) ||
+    !(raw.turnId === null || typeof raw.turnId === "string") ||
+    !(raw.providerThreadId === undefined || typeof raw.providerThreadId === "string") ||
+    !(
+      raw.retiredLifecycleGeneration === undefined ||
+      typeof raw.retiredLifecycleGeneration === "string"
+    )
+  )
+    return undefined;
+  return {
+    controlRequestId: raw.controlRequestId,
+    observedLifecycleGeneration: raw.observedLifecycleGeneration,
+    turnId: raw.turnId === null ? null : TurnId.makeUnsafe(raw.turnId),
+    ...(raw.providerThreadId !== undefined ? { providerThreadId: raw.providerThreadId } : {}),
+    ...(raw.retiredLifecycleGeneration !== undefined
+      ? { retiredLifecycleGeneration: raw.retiredLifecycleGeneration }
+      : {}),
+  };
 }
 
 function runtimeActiveTurnId(value: unknown): string | undefined {
@@ -4264,6 +4296,58 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
         );
       });
 
+    // Called only under the lifecycle lock. A retried event keeps the original
+    // epoch and exact target even when newer work reused the same provider process.
+    const stopControlForBinding = (input: {
+      readonly binding: ProviderRuntimeBinding;
+      readonly generation: string | null;
+      readonly expectedLifecycleGeneration?: string | null | undefined;
+      readonly controlRequestId?: string | undefined;
+      readonly providerThreadId?: string | undefined;
+      readonly turnId?: string | undefined;
+      readonly operation: "ProviderService.interruptTurn" | "ProviderService.stopRuntimeSession";
+    }) =>
+      Effect.gen(function* () {
+        const previous = runtimeStopControlReceipt(input.binding.runtimePayload);
+        const pinned =
+          input.controlRequestId !== undefined &&
+          previous?.controlRequestId === input.controlRequestId
+            ? previous
+            : undefined;
+        const expected = pinned
+          ? (pinned.retiredLifecycleGeneration ?? pinned.observedLifecycleGeneration)
+          : input.expectedLifecycleGeneration;
+        const active = runtimeActiveTurnId(input.binding.runtimePayload);
+        if (
+          (expected !== undefined && expected !== input.generation) ||
+          (pinned &&
+            (pinned.providerThreadId !== input.providerThreadId ||
+              (input.providerThreadId === undefined &&
+                active !== undefined &&
+                active !== pinned.turnId) ||
+              (input.providerThreadId !== undefined &&
+                input.turnId !== undefined &&
+                input.turnId !== pinned.turnId)))
+        ) {
+          return yield* new ProviderValidationError({
+            operation: input.operation,
+            issue: "The provider runtime or turn changed after Stop was requested.",
+            reason: "stale-interaction",
+          });
+        }
+        if (input.controlRequestId === undefined) return undefined;
+        return (
+          pinned ?? {
+            controlRequestId: input.controlRequestId,
+            observedLifecycleGeneration: input.generation,
+            turnId: input.turnId === undefined ? null : TurnId.makeUnsafe(input.turnId),
+            ...(input.providerThreadId !== undefined
+              ? { providerThreadId: input.providerThreadId }
+              : {}),
+          }
+        );
+      });
+
     const interruptTurn: ProviderServiceShape["interruptTurn"] = (rawInput) =>
       Effect.gen(function* () {
         const input = yield* decodeInputOrValidationError({
@@ -4275,14 +4359,20 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
         // Conditional controls use the same deadline, but fail on contention
         // instead of bypassing the lock protecting their observed generation.
         const runInterrupt: typeof lifecycle.runCurrentUrgent =
-          input.providerThreadId === undefined || rawInput.expectedLifecycleGeneration !== undefined
+          input.providerThreadId === undefined ||
+          rawInput.expectedLifecycleGeneration !== undefined ||
+          rawInput.controlRequestId !== undefined
             ? lifecycle.runCurrentUrgent
             : lifecycle.runCurrent;
         const interruptActiveTurn = runInterrupt(
           input.threadId,
           (currentGeneration) =>
             Effect.gen(function* () {
+              const stopBinding = Option.getOrUndefined(
+                yield* directory.getBinding(input.threadId),
+              );
               if (
+                !stopBinding &&
                 rawInput.expectedLifecycleGeneration !== undefined &&
                 rawInput.expectedLifecycleGeneration !== (currentGeneration ?? null)
               ) {
@@ -4292,6 +4382,21 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                   reason: "stale-interaction",
                 });
               }
+              let controlReceipt = stopBinding
+                ? yield* stopControlForBinding({
+                    binding: stopBinding,
+                    generation: currentGeneration ?? null,
+                    expectedLifecycleGeneration: rawInput.expectedLifecycleGeneration,
+                    controlRequestId: rawInput.controlRequestId,
+                    providerThreadId: input.providerThreadId,
+                    turnId:
+                      input.providerThreadId !== undefined
+                        ? input.turnId
+                        : runtimeActiveTurnId(stopBinding.runtimePayload),
+                    operation: "ProviderService.interruptTurn",
+                  })
+                : undefined;
+              if (controlReceipt?.retiredLifecycleGeneration !== undefined) return;
               const routed = yield* resolveRoutableSession({
                 threadId: input.threadId,
                 operation: "ProviderService.interruptTurn",
@@ -4323,9 +4428,33 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                 );
               }
 
+              controlReceipt = yield* stopControlForBinding({
+                binding,
+                generation: currentGeneration ?? null,
+                expectedLifecycleGeneration: rawInput.expectedLifecycleGeneration,
+                controlRequestId: rawInput.controlRequestId,
+                providerThreadId: input.providerThreadId,
+                turnId:
+                  input.providerThreadId !== undefined
+                    ? input.turnId
+                    : runtimeActiveTurnId(binding.runtimePayload),
+                operation: "ProviderService.interruptTurn",
+              });
               const boundActiveTurnId = runtimeActiveTurnId(binding.runtimePayload);
               const providerTurnId =
                 input.providerThreadId !== undefined ? input.turnId : boundActiveTurnId;
+              if (controlReceipt !== undefined) {
+                // Write the original target before the irreversible adapter call.
+                yield* withBindingWriteLock(
+                  input.threadId,
+                  directory.upsert({
+                    threadId: input.threadId,
+                    provider: binding.provider,
+                    providerInstanceId: binding.providerInstanceId,
+                    runtimePayload: { providerStopControlReceipt: controlReceipt },
+                  }),
+                );
+              }
               if (providerTurnId === undefined) {
                 return yield* new ProviderValidationError({
                   operation: "ProviderService.interruptTurn",
@@ -4415,7 +4544,8 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                 });
               }
             }),
-          rawInput.expectedLifecycleGeneration !== undefined
+          rawInput.expectedLifecycleGeneration !== undefined ||
+            rawInput.controlRequestId !== undefined
             ? Effect.fail(
                 new ProviderValidationError({
                   operation: "ProviderService.interruptTurn",
@@ -4441,6 +4571,9 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                           threadId: input.threadId,
                           ...(rawInput.expectedLifecycleGeneration !== undefined
                             ? { expectedLifecycleGeneration: rawInput.expectedLifecycleGeneration }
+                            : {}),
+                          ...(rawInput.controlRequestId !== undefined
+                            ? { controlRequestId: rawInput.controlRequestId }
                             : {}),
                         },
                         undefined,
@@ -4726,6 +4859,9 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
               ? yield* sessionWithPersistedProviderInstance(activeSession)
               : null,
             lifecycleGeneration: generation ?? null,
+            ...(binding && runtimeStopControlReceipt(binding.runtimePayload)
+              ? { stopControlReceipt: runtimeStopControlReceipt(binding.runtimePayload)! }
+              : {}),
           };
         }),
       );
@@ -4747,14 +4883,21 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
         if (expectedIdleGeneration === undefined) {
           yield* waitForRuntimeIdleStop(input.threadId);
           // A stale targeted Stop must not disarm the replacement runtime's timer.
-          if (rawInput.expectedLifecycleGeneration === undefined)
+          if (
+            rawInput.expectedLifecycleGeneration === undefined &&
+            rawInput.controlRequestId === undefined
+          )
             clearRuntimeIdleTimer(input.threadId);
         } else if (!isExpectedIdleStopCurrent()) {
           return;
         }
         let runtimeCursorWriteBaseline = runtimeCursorWriteVersion;
         let stoppedState:
-          | { readonly binding: ProviderRuntimeBinding; readonly resumeCursor: unknown }
+          | {
+              readonly binding: ProviderRuntimeBinding;
+              readonly resumeCursor: unknown;
+              readonly controlReceipt?: ProviderRuntimeStopControlReceipt;
+            }
           | undefined;
         let releaseIdleStopFence: (() => void) | undefined;
         return yield* lifecycle
@@ -4806,6 +4949,14 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                         ...(options?.requireAgentGatewayCredentialRotation === true
                           ? { [AGENT_GATEWAY_CREDENTIAL_ROTATION_REQUIRED]: true }
                           : {}),
+                        ...(stoppedState?.controlReceipt
+                          ? {
+                              providerStopControlReceipt: {
+                                ...stoppedState.controlReceipt,
+                                retiredLifecycleGeneration: lease.generation,
+                              },
+                            }
+                          : {}),
                       },
                     });
                   }),
@@ -4815,7 +4966,14 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
               }),
             Effect.gen(function* () {
               if (!isExpectedIdleStopCurrent()) return;
+              if (rawInput.onlyIfIdleSince !== undefined) {
+                // Acquire only after the lifecycle lock. An explicit Stop holding
+                // that lock may itself be waiting for an earlier idle cleanup.
+                releaseIdleStopFence = acquireRuntimeIdleStopFence(input.threadId);
+              }
+              const binding = Option.getOrUndefined(yield* directory.getBinding(input.threadId));
               if (
+                !binding &&
                 rawInput.expectedLifecycleGeneration !== undefined &&
                 rawInput.expectedLifecycleGeneration !==
                   (lifecycle.currentGeneration(input.threadId) ?? null)
@@ -4826,15 +4984,20 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                   reason: "stale-interaction",
                 });
               }
-              if (rawInput.expectedLifecycleGeneration !== undefined)
-                clearRuntimeIdleTimer(input.threadId);
-              if (rawInput.onlyIfIdleSince !== undefined) {
-                // Acquire only after the lifecycle lock. An explicit Stop holding
-                // that lock may itself be waiting for an earlier idle cleanup.
-                releaseIdleStopFence = acquireRuntimeIdleStopFence(input.threadId);
-              }
-              const binding = Option.getOrUndefined(yield* directory.getBinding(input.threadId));
               if (!binding || !isExpectedIdleStopCurrent()) return;
+              const controlReceipt = yield* stopControlForBinding({
+                binding,
+                generation: lifecycle.currentGeneration(input.threadId) ?? null,
+                expectedLifecycleGeneration: rawInput.expectedLifecycleGeneration,
+                controlRequestId: rawInput.controlRequestId,
+                turnId: runtimeActiveTurnId(binding.runtimePayload),
+                operation: "ProviderService.stopRuntimeSession",
+              });
+              if (
+                rawInput.expectedLifecycleGeneration !== undefined ||
+                rawInput.controlRequestId !== undefined
+              )
+                clearRuntimeIdleTimer(input.threadId);
               const adapter = yield* getAdapterForBinding(binding);
               const hasActiveSession = yield* adapter.hasSession(input.threadId);
               // A context retained by a failed stop is not live, but its cursor
@@ -4849,6 +5012,17 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                 const activeSession = activeSessions.find(
                   (session) => session.threadId === input.threadId,
                 );
+                if (
+                  controlReceipt &&
+                  activeSession?.activeTurnId !== undefined &&
+                  activeSession.activeTurnId !== controlReceipt.turnId
+                ) {
+                  return yield* new ProviderValidationError({
+                    operation: "ProviderService.stopRuntimeSession",
+                    issue: "The provider turn changed after Stop was requested.",
+                    reason: "stale-interaction",
+                  });
+                }
                 if (
                   hasActiveSession &&
                   rawInput.onlyIfIdleSince !== undefined &&
@@ -4866,6 +5040,23 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                   resumeCursor = activeSession.resumeCursor;
                   runtimeCursorWriteBaseline = runtimeCursorWriteVersion;
                 }
+              }
+              if (
+                controlReceipt?.retiredLifecycleGeneration !== undefined &&
+                !hasActiveSession &&
+                !hasRetainedSession
+              )
+                return;
+              if (controlReceipt !== undefined) {
+                yield* withBindingWriteLock(
+                  input.threadId,
+                  directory.upsert({
+                    threadId: input.threadId,
+                    provider: binding.provider,
+                    providerInstanceId: binding.providerInstanceId,
+                    runtimePayload: { providerStopControlReceipt: controlReceipt },
+                  }),
+                );
               }
               if (rawInput.onlyIfIdleSince !== undefined) {
                 // Runs before generation rotation, with new dispatch fenced.
@@ -4892,9 +5083,14 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                 [adapter.stopSession(input.threadId), flushRuntimeText(input.threadId)],
                 (teardown) => teardown,
               );
-              stoppedState = { binding, resumeCursor };
+              stoppedState = {
+                binding,
+                resumeCursor,
+                ...(controlReceipt ? { controlReceipt } : {}),
+              };
             }),
-            rawInput.expectedLifecycleGeneration !== undefined
+            rawInput.expectedLifecycleGeneration !== undefined ||
+              rawInput.controlRequestId !== undefined
               ? Effect.fail(
                   new ProviderValidationError({
                     operation: "ProviderService.stopRuntimeSession",

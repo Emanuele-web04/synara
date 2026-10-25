@@ -107,6 +107,7 @@ import {
 } from "../../persistence/Layers/Sqlite.ts";
 import { AGENT_GATEWAY_TURN_AUTHORITY_RETIRED } from "../../agentGateway/sessionLease.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
+import { PersistenceSqlError } from "../../persistence/Errors.ts";
 
 // The fake adapter never prepares Codex storage. Give lifecycle tests real
 // continuation metadata without reading or writing the developer's Codex home.
@@ -713,6 +714,7 @@ function makeProviderServiceLayer(
     openCode,
     layer,
     rawLayer,
+    providerAdapterLayer,
   };
 }
 
@@ -4960,6 +4962,402 @@ routing.layer("ProviderServiceLive routing", (it) => {
         );
         yield* provider.stopSession({ threadId });
       }),
+    );
+  }
+
+  for (const operation of ["interrupt", "retirement"] as const) {
+    it.effect(`rejects a stale ${operation} control even after its binding was removed`, () =>
+      Effect.gen(function* () {
+        const provider = yield* ProviderService;
+        const threadId = asThreadId(`thread-stop-receipt-no-binding-${operation}`);
+        yield* provider.startSession(threadId, {
+          provider: "codex",
+          threadId,
+          runtimeMode: "full-access",
+        });
+        const observed = yield* provider.getRuntimeSessionStopTarget!({ threadId });
+        yield* provider.stopSession({ threadId });
+        const calls = routing.codex.stopSession.mock.calls.length;
+        const input = {
+          threadId,
+          expectedLifecycleGeneration: observed.lifecycleGeneration,
+          controlRequestId: `event:deleted-binding-${operation}`,
+        };
+        const result = yield* (
+          operation === "interrupt"
+            ? provider.interruptTurn(input)
+            : provider.stopRuntimeSession!(input)
+        ).pipe(Effect.result);
+        assert.equal(result._tag, "Failure");
+        if (result._tag === "Failure") {
+          assert.equal(result.failure._tag, "ProviderValidationError");
+          if (result.failure._tag === "ProviderValidationError")
+            assert.equal(result.failure.reason, "stale-interaction");
+        }
+        assert.equal(routing.codex.stopSession.mock.calls.length, calls);
+      }),
+    );
+  }
+
+  it.effect("records the same authoritative target that the adapter actually interrupts", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const directory = yield* ProviderSessionDirectory;
+      const threadId = asThreadId("thread-stop-receipt-binding-refresh");
+      yield* provider.startSession(threadId, {
+        provider: "codex",
+        threadId,
+        runtimeMode: "full-access",
+      });
+      yield* provider.sendTurn({ threadId, input: "turn A", attachments: [] });
+      const observed = yield* provider.getRuntimeSessionStopTarget!({ threadId });
+      const read = directory.getBinding;
+      const spy = vi.spyOn(directory, "getBinding").mockImplementationOnce((id) =>
+        read(id).pipe(
+          Effect.tap(() =>
+            directory
+              .upsert({
+                threadId,
+                provider: "codex",
+                runtimePayload: { activeTurnId: "turn-current-at-routing" },
+              })
+              .pipe(Effect.orDie),
+          ),
+        ),
+      );
+      const calls = routing.codex.interruptTurn.mock.calls.length;
+      yield* provider
+        .interruptTurn({
+          threadId,
+          expectedLifecycleGeneration: observed.lifecycleGeneration,
+          controlRequestId: "event:binding-refresh-stop",
+        })
+        .pipe(Effect.ensuring(Effect.sync(() => spy.mockRestore())));
+      const receipt = (yield* provider.getRuntimeSessionStopTarget!({ threadId }))
+        .stopControlReceipt;
+      assert.equal(routing.codex.interruptTurn.mock.calls.length, calls + 1);
+      assert.equal(receipt?.turnId, "turn-current-at-routing");
+      assert.equal(receipt?.turnId, routing.codex.interruptTurn.mock.calls.at(-1)?.[1]);
+      yield* provider.stopSession({ threadId });
+    }),
+  );
+
+  for (const failurePhase of ["before-adapter", "before-retirement", "after-retirement"] as const) {
+    it.effect(
+      `recovers the same durable Stop after a ${failurePhase} database write fails once`,
+      () =>
+        Effect.gen(function* () {
+          const provider = yield* ProviderService;
+          const directory = yield* ProviderSessionDirectory;
+          const repository = yield* ProviderSessionRuntimeRepository;
+          const threadId = asThreadId(`thread-stop-receipt-failure-${failurePhase}`);
+          const controlRequestId = `event:stop-receipt-${failurePhase}`;
+          yield* provider.startSession(threadId, {
+            provider: "codex",
+            threadId,
+            runtimeMode: "full-access",
+          });
+          yield* provider.sendTurn({ threadId, input: "turn A", attachments: [] });
+          yield* directory.upsert({
+            threadId,
+            provider: "codex",
+            runtimePayload: { providerOpaqueFixture: { native: "keep" } },
+          });
+          const observed = yield* provider.getRuntimeSessionStopTarget!({ threadId });
+          const cursor = observed.session?.resumeCursor;
+          const interrupts = routing.codex.interruptTurn.mock.calls.length;
+          const write = repository.upsert;
+          let failed = false;
+          const spy = vi.spyOn(repository, "upsert").mockImplementation((row) => {
+            const receipt = asRuntimePayloadRecord(
+              asRuntimePayloadRecord(row.runtimePayload).providerStopControlReceipt,
+            );
+            const afterInterrupt = routing.codex.interruptTurn.mock.calls.length > interrupts;
+            const retired = receipt.retiredLifecycleGeneration !== undefined;
+            const inject =
+              failurePhase === "before-adapter"
+                ? !afterInterrupt
+                : failurePhase === "before-retirement"
+                  ? afterInterrupt && !retired
+                  : retired;
+            if (
+              !failed &&
+              row.threadId === threadId &&
+              receipt.controlRequestId === controlRequestId &&
+              inject
+            ) {
+              failed = true;
+              return Effect.fail(
+                new PersistenceSqlError({
+                  operation: "ProviderSessionRuntimeRepository.upsert",
+                  detail: "injected database write failure once",
+                }),
+              );
+            }
+            return write(row);
+          });
+          const result = yield* provider
+            .interruptTurn({
+              threadId,
+              expectedLifecycleGeneration: observed.lifecycleGeneration,
+              controlRequestId,
+            })
+            .pipe(Effect.result, Effect.ensuring(Effect.sync(() => spy.mockRestore())));
+          assert.isTrue(failed);
+          assert.equal(result._tag, "Failure");
+          assert.equal(
+            routing.codex.interruptTurn.mock.calls.length,
+            interrupts + (failurePhase === "before-adapter" ? 0 : 1),
+          );
+          const pending = yield* provider.getRuntimeSessionStopTarget!({ threadId });
+          if (failurePhase === "before-adapter") {
+            assert.isUndefined(pending.stopControlReceipt);
+            yield* provider.interruptTurn({
+              threadId,
+              expectedLifecycleGeneration: observed.lifecycleGeneration,
+              controlRequestId,
+            });
+          } else {
+            assert.equal(pending.stopControlReceipt?.controlRequestId, controlRequestId);
+            assert.equal(
+              pending.stopControlReceipt?.observedLifecycleGeneration,
+              observed.lifecycleGeneration,
+            );
+            assert.isUndefined(pending.stopControlReceipt?.retiredLifecycleGeneration);
+            // Complete the already accepted control without entering its failed interrupt fence again.
+            yield* provider.stopRuntimeSession!({
+              threadId,
+              expectedLifecycleGeneration: observed.lifecycleGeneration,
+              controlRequestId,
+            });
+          }
+          const settled = yield* provider.getRuntimeSessionStopTarget!({ threadId });
+          assert.isNull(settled.session);
+          assert.equal(
+            settled.stopControlReceipt?.retiredLifecycleGeneration,
+            settled.lifecycleGeneration,
+          );
+          assert.equal(settled.stopControlReceipt?.controlRequestId, controlRequestId);
+          assert.deepEqual(
+            asRuntimePayloadRecord(
+              Option.getOrThrow(yield* directory.getBinding(threadId)).runtimePayload,
+            ).providerOpaqueFixture,
+            { native: "keep" },
+          );
+          if (cursor !== undefined)
+            assert.deepEqual(
+              Option.getOrThrow(yield* directory.getBinding(threadId)).resumeCursor,
+              cursor,
+            );
+          const stopped = routing.codex.stopSession.mock.calls.length;
+          yield* provider.stopRuntimeSession!({
+            threadId,
+            expectedLifecycleGeneration: observed.lifecycleGeneration,
+            controlRequestId,
+          });
+          assert.equal(routing.codex.stopSession.mock.calls.length, stopped);
+          assert.equal(
+            (yield* provider.getRuntimeSessionStopTarget!({ threadId })).lifecycleGeneration,
+            settled.lifecycleGeneration,
+          );
+          yield* provider.stopSession({ threadId });
+        }),
+    );
+  }
+
+  it.effect("does not transfer an accepted pending Stop to another turn in the same epoch", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const directory = yield* ProviderSessionDirectory;
+      const repository = yield* ProviderSessionRuntimeRepository;
+      const threadId = asThreadId("thread-stop-receipt-same-epoch");
+      const controlRequestId = "event:stop-receipt-original-turn";
+      yield* provider.startSession(threadId, {
+        provider: "codex",
+        threadId,
+        runtimeMode: "full-access",
+      });
+      yield* provider.sendTurn({ threadId, input: "turn A", attachments: [] });
+      const observed = yield* provider.getRuntimeSessionStopTarget!({ threadId });
+      const interrupts = routing.codex.interruptTurn.mock.calls.length;
+      const write = repository.upsert;
+      let failed = false;
+      const spy = vi.spyOn(repository, "upsert").mockImplementation((row) => {
+        if (
+          !failed &&
+          row.threadId === threadId &&
+          routing.codex.interruptTurn.mock.calls.length > interrupts &&
+          asRuntimePayloadRecord(row.runtimePayload).providerStopControlReceipt
+        ) {
+          failed = true;
+          return Effect.fail(
+            new PersistenceSqlError({
+              operation: "ProviderSessionRuntimeRepository.upsert",
+              detail: "injected after adapter accepted",
+            }),
+          );
+        }
+        return write(row);
+      });
+      yield* provider
+        .interruptTurn({
+          threadId,
+          expectedLifecycleGeneration: observed.lifecycleGeneration,
+          controlRequestId,
+        })
+        .pipe(Effect.result, Effect.ensuring(Effect.sync(() => spy.mockRestore())));
+      assert.isTrue(failed);
+      routing.codex.updateSession(threadId, (session) => ({
+        ...session,
+        status: "running",
+        activeTurnId: asTurnId("turn-B-same-epoch"),
+      }));
+      yield* directory.upsert({
+        threadId,
+        provider: "codex",
+        runtimePayload: { activeTurnId: "turn-B-same-epoch" },
+      });
+      const next = yield* provider.getRuntimeSessionStopTarget!({ threadId });
+      assert.equal(next.lifecycleGeneration, observed.lifecycleGeneration);
+      assert.equal(next.stopControlReceipt?.controlRequestId, controlRequestId);
+      const before = Option.getOrThrow(yield* directory.getBinding(threadId));
+      const stops = routing.codex.stopSession.mock.calls.length;
+      const result = yield* provider.stopRuntimeSession!({
+        threadId,
+        expectedLifecycleGeneration: next.lifecycleGeneration,
+        controlRequestId,
+      }).pipe(Effect.result);
+      assert.equal(result._tag, "Failure");
+      assert.equal(routing.codex.stopSession.mock.calls.length, stops);
+      assert.deepEqual(Option.getOrThrow(yield* directory.getBinding(threadId)), before);
+      yield* provider.stopSession({ threadId });
+    }),
+  );
+
+  it.effect("pins a durable child Stop to its original provider thread and turn", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const threadId = asThreadId("thread-stop-receipt-child-target");
+      yield* provider.startSession(threadId, {
+        provider: "codex",
+        threadId,
+        runtimeMode: "full-access",
+      });
+      yield* provider.sendTurn({ threadId, input: "parent A", attachments: [] });
+      const observed = yield* provider.getRuntimeSessionStopTarget!({ threadId });
+      const request = {
+        threadId,
+        turnId: asTurnId("child-original"),
+        providerThreadId: "provider-child-original",
+        controlRequestId: "event:child-original-stop",
+        expectedLifecycleGeneration: observed.lifecycleGeneration,
+      };
+      yield* provider.interruptTurn(request);
+      const target = yield* provider.getRuntimeSessionStopTarget!({ threadId });
+      assert.equal(target.stopControlReceipt?.turnId, request.turnId);
+      assert.equal(target.stopControlReceipt?.providerThreadId, request.providerThreadId);
+      const calls = routing.codex.interruptTurn.mock.calls.length;
+      yield* provider.interruptTurn(request);
+      assert.equal(routing.codex.interruptTurn.mock.calls.length, calls);
+      const changed = yield* provider
+        .interruptTurn({
+          ...request,
+          turnId: asTurnId("child-replacement"),
+          providerThreadId: "provider-child-replacement",
+        })
+        .pipe(Effect.result);
+      assert.equal(changed._tag, "Failure");
+      assert.equal(routing.codex.interruptTurn.mock.calls.length, calls);
+      assert.isTrue(yield* routing.codex.hasSession(threadId));
+      yield* provider.stopSession({ threadId });
+    }),
+  );
+
+  for (const kind of ["codex", "claudeAgent"] as const) {
+    it.effect(
+      `recognizes a persisted ${kind} retirement after Service restart and preserves it through provider replacement`,
+      () =>
+        Effect.gen(function* () {
+          const directory = yield* ProviderSessionDirectory;
+          const settings = yield* ServerSettingsService;
+          const threadId = asThreadId(`thread-stop-receipt-restart-${kind}`);
+          const controlRequestId = `event:stop-receipt-restart-${kind}`;
+          const layer = makeProviderServiceLive().pipe(
+            Layer.provide(routing.providerAdapterLayer),
+            Layer.provide(Layer.succeed(ProviderSessionDirectory, directory)),
+            Layer.provide(Layer.succeed(ServerSettingsService, settings)),
+          );
+          const firstScope = yield* Scope.make("sequential");
+          const firstServices = yield* Layer.buildWithScope(layer, firstScope);
+          const first = yield* Effect.service(ProviderService).pipe(Effect.provide(firstServices));
+          yield* first.startSession(threadId, {
+            provider: kind,
+            threadId,
+            runtimeMode: "full-access",
+          });
+          yield* first.sendTurn({ threadId, input: "turn A", attachments: [] });
+          const observed = yield* first.getRuntimeSessionStopTarget!({ threadId });
+          yield* first.interruptTurn({
+            threadId,
+            expectedLifecycleGeneration: observed.lifecycleGeneration,
+            controlRequestId,
+          });
+          const retired = yield* first.getRuntimeSessionStopTarget!({ threadId });
+          yield* Scope.close(firstScope, Exit.void);
+          const secondScope = yield* Scope.make("sequential");
+          yield* Effect.gen(function* () {
+            const secondServices = yield* Layer.buildWithScope(layer, secondScope);
+            const second = yield* Effect.service(ProviderService).pipe(
+              Effect.provide(secondServices),
+            );
+            const recovered = yield* second.getRuntimeSessionStopTarget!({ threadId });
+            assert.deepEqual(recovered.stopControlReceipt, retired.stopControlReceipt);
+            assert.equal(recovered.lifecycleGeneration, retired.lifecycleGeneration);
+            const adapter = kind === "codex" ? routing.codex : routing.claude;
+            const stops = adapter.stopSession.mock.calls.length;
+            yield* second.stopRuntimeSession!({
+              threadId,
+              expectedLifecycleGeneration: observed.lifecycleGeneration,
+              controlRequestId,
+            });
+            assert.equal(adapter.stopSession.mock.calls.length, stops);
+            assert.equal(
+              (yield* second.getRuntimeSessionStopTarget!({ threadId })).lifecycleGeneration,
+              retired.lifecycleGeneration,
+            );
+            const nextKind = kind === "codex" ? "claudeAgent" : "codex";
+            yield* second.startSessionWithOutcome!(
+              threadId,
+              { provider: nextKind, threadId, runtimeMode: "full-access" },
+              { abandonOtherProviderContinuation: true },
+            );
+            yield* second.sendTurn({ threadId, input: "turn B", attachments: [] });
+            const replacementAdapter = nextKind === "codex" ? routing.codex : routing.claude;
+            replacementAdapter.updateSession(threadId, (session) => ({
+              ...session,
+              createdAt: observed.session!.createdAt,
+            }));
+            const replacement = yield* second.getRuntimeSessionStopTarget!({ threadId });
+            assert.equal(replacement.session?.createdAt, observed.session!.createdAt);
+            assert.equal(
+              asRuntimePayloadRecord(
+                Option.getOrThrow(yield* directory.getBinding(threadId)).runtimePayload,
+              ).activeTurnId,
+              observed.stopControlReceipt?.turnId ?? retired.stopControlReceipt?.turnId,
+            );
+            assert.notEqual(replacement.lifecycleGeneration, retired.lifecycleGeneration);
+            assert.equal(replacement.stopControlReceipt?.controlRequestId, controlRequestId);
+            const replacementStops = replacementAdapter.stopSession.mock.calls.length;
+            const result = yield* second.stopRuntimeSession!({
+              threadId,
+              expectedLifecycleGeneration: replacement.lifecycleGeneration,
+              controlRequestId,
+            }).pipe(Effect.result);
+            assert.equal(result._tag, "Failure");
+            assert.equal(replacementAdapter.stopSession.mock.calls.length, replacementStops);
+            assert.isTrue(yield* replacementAdapter.hasSession(threadId));
+          }).pipe(Effect.ensuring(Scope.close(secondScope, Exit.void)));
+        }),
     );
   }
 

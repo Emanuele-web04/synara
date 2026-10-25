@@ -80,6 +80,11 @@ immediately. Native interruption and session teardown begin before waiting for t
 Session teardown and the text drain run concurrently under the old lifecycle generation;
 retirement waits for both, and a teardown failure preserves that generation and the accepted text.
 Stop, session replacement and graceful shutdown flush before retiring the text's owner.
+Conditional Stop records its command identity, original runtime generation and exact provider turn
+before sending physical control. A database retry can finish that same retirement, but cannot adopt
+a replacement runtime or a later turn in the same runtime. The receipt uses the existing internal
+runtime payload; it adds no transport field or database migration. Failed observations remain
+retryable or explicitly uncertain rather than being acknowledged as a successful Stop.
 Unknown metadata or nonempty raw payloads retain their original events.
 
 This optimization requires the adapter's explicit `fresh-ids-once` delivery guarantee: each

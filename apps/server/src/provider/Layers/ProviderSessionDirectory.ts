@@ -179,7 +179,14 @@ const makeProviderSessionDirectory = Effect.gen(function* () {
               ? null
               : (compatibleRuntime?.resumeCursor ?? null),
         runtimePayload: mergeRuntimePayload(
-          compatibleRuntime?.runtimePayload ?? null,
+          compatibleRuntime?.runtimePayload ??
+            (isRecord(existingRuntime?.runtimePayload) &&
+            existingRuntime.runtimePayload.providerStopControlReceipt !== undefined
+              ? {
+                  providerStopControlReceipt:
+                    existingRuntime.runtimePayload.providerStopControlReceipt,
+                }
+              : null),
           mergeRuntimePayload(binding.runtimePayload ?? null, { providerInstanceId }),
         ),
       })
