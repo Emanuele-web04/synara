@@ -50,6 +50,8 @@ export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
         title: "Keep recovery attached to the right runtime",
         description:
           "Stop retries retain their original target. Recovery checks runtime ownership and background work before clearing an uncertain delivery, including after a server restart.",
+        details:
+          "A stalled Claude session no longer shows a failed Stop after the app has confirmed it closed. Failed or unconfirmed cleanup still shows an error.",
       },
     ],
   },
