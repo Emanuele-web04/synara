@@ -161,11 +161,12 @@ export const estimateMigrationBackupRequiredBytes = (dbPath: string) =>
         snapshotBytes = mainFileBytes + walBytes;
       }
 
-      // The VACUUM snapshot and compressed output coexist. Incompressible gzip
-      // can exceed its input, so reserve overhead instead of assuming savings.
+      // The VACUUM snapshot and compressed output coexist. Bun's deflater can
+      // expand incompressible input beyond zlib's usual bound; reserve 25%
+      // overhead plus fixed metadata instead of assuming compression savings.
       const requiredBytes =
         snapshotBytes * MIGRATION_BACKUP_FREE_SPACE_FACTOR +
-        Math.ceil(snapshotBytes / 100) +
+        Math.ceil(snapshotBytes / 4) +
         64 * 1024;
       return Number.isFinite(requiredBytes) && requiredBytes >= 0 ? requiredBytes : null;
     });
@@ -351,6 +352,7 @@ function nullOnMissing(cause: unknown): null {
  */
 type DirectorySweep = {
   readonly names: ReadonlyArray<string>;
+  readonly directories: ReadonlyArray<string>;
   readonly lstat: (name: string) => Promise<Stats | null>;
   readonly unlink: (name: string) => Promise<void>;
 };
@@ -369,6 +371,7 @@ async function withCleanupDirectory(
     const entries = await fs.readdir(directory, { withFileTypes: true });
     await sweep({
       names: entries.filter((entry) => entry.isFile()).map((entry) => entry.name),
+      directories: entries.filter((entry) => entry.isDirectory()).map((entry) => entry.name),
       lstat: (name) => fs.lstat(path.join(directory, name)).catch(nullOnMissing),
       unlink: async (name) => {
         const artifactPath = path.join(directory, name);
@@ -507,6 +510,42 @@ const removeStaleRegularFiles = (directory: string, matches: (name: string) => b
 function isMigrationBackupPartial(dbBasename: string): (name: string) => boolean {
   const partialPrefix = `.${dbBasename}.pre-migration-`;
   return (name) => name.startsWith(partialPrefix) && name.endsWith(".partial");
+}
+
+/** Removes only the known snapshot file from an unchanged, real scratch directory. */
+async function removeOwnedSnapshotDirectory(directory: string, ownedStat: Stats): Promise<void> {
+  await assertDirectoryIdentity(directory, ownedStat);
+  let empty = false;
+  await withCleanupDirectory(directory, async ({ names, directories, unlink }) => {
+    if (directories.length > 0 || names.some((name) => name !== "snapshot.sqlite")) return;
+    // A symlink or any unknown entry must preserve the entire directory.
+    const entries = await fs.readdir(directory, { withFileTypes: true });
+    if (entries.some((entry) => !entry.isFile() || entry.name !== "snapshot.sqlite")) return;
+    await unlink("snapshot.sqlite");
+    empty = true;
+  });
+  if (!empty) return;
+  await assertDirectoryIdentity(directory, ownedStat);
+  await fs.rmdir(directory);
+}
+
+/** Reclaims legacy file partials and the private snapshot directory used by VACUUM. */
+async function removeMigrationBackupPartials(dbPath: string): Promise<void> {
+  const directory = migrationBackupDirectory(dbPath);
+  const matches = isMigrationBackupPartial(path.basename(dbPath));
+  await withCleanupDirectory(directory, async ({ names, directories, lstat, unlink }) => {
+    await Promise.all(names.filter(matches).map(unlink));
+    await Promise.all(
+      directories
+        .filter((name) => matches(name) && name.endsWith(".sqlite.partial"))
+        .map(async (name) => {
+          const stat = await lstat(name);
+          if (stat?.isDirectory() && !stat.isSymbolicLink()) {
+            await removeOwnedSnapshotDirectory(path.join(directory, name), stat);
+          }
+        }),
+    );
+  });
 }
 
 /**
@@ -734,10 +773,7 @@ export const pruneMigrationBackups = (dbPath: string, retention = MIGRATION_BACK
     // the database lifecycle lock, and a partial that outlived its writer can
     // never be promoted to a backup. Reclaim them unconditionally — an age
     // cutoff here is what allowed them to accumulate without bound.
-    await removeRegularFiles(
-      migrationBackupDirectory(dbPath),
-      isMigrationBackupPartial(path.basename(dbPath)),
-    );
+    await removeMigrationBackupPartials(dbPath);
     await Promise.all([
       pruneMigrationArtifactFamily(preMigrationBackupFamily(dbPath, retention)),
       pruneUnreferencedMigrationArtifacts(dbPath),
@@ -753,29 +789,25 @@ export const createMigrationBackup = (dbPath: string, plan: MigrationBackupPlan)
     // Unconditional, not age-gated. Every partial found here outlived the
     // process that wrote it, and the 24h staleness cutoff that used to guard
     // this sweep is what let a restart loop accumulate them without bound.
-    yield* attemptPromise(() =>
-      removeRegularFiles(backupDirectory, isMigrationBackupPartial(basename)),
-    );
+    yield* attemptPromise(() => removeMigrationBackupPartials(dbPath));
     const requiredBytes = yield* estimateMigrationBackupRequiredBytes(dbPath);
     yield* attemptPromise(() => assertBackupSpaceAvailable(requiredBytes, backupDirectory));
     const createdAt = new Date().toISOString();
     const uniqueSuffix = `${compactTimestamp(new Date(createdAt))}-${randomUUID()}`;
     const finalName = `${basename}.pre-migration-${safeVersionLabel(plan.sourceVersion)}-to-v${plan.targetVersion}-${uniqueSuffix}.sqlite`;
     const backupPath = path.join(backupDirectory, `${finalName}.gz`);
-    const temporaryPath = path.join(backupDirectory, `.${finalName}.partial`);
+    const snapshotDirectory = path.join(backupDirectory, `.${finalName}.partial`);
+    const temporaryPath = path.join(snapshotDirectory, "snapshot.sqlite");
     const compressedTemporaryPath = path.join(backupDirectory, `.${finalName}.gz.partial`);
-    let snapshotStat: Stats | undefined;
+    let snapshotDirectoryStat: Stats | undefined;
     let compressedStat: Stats | undefined;
 
     yield* Effect.gen(function* () {
       yield* attemptPromise(async () => {
-        const snapshot = await fs.open(temporaryPath, "wx", 0o600);
-        try {
-          snapshotStat = await snapshot.stat();
-          if (process.platform !== "win32") await snapshot.chmod(0o600);
-        } finally {
-          await snapshot.close();
-        }
+        // Bun SQLite requires a nonexistent VACUUM target. An exclusive private
+        // directory protects its bytes without pre-creating that target file.
+        await fs.mkdir(snapshotDirectory, { mode: 0o700 });
+        snapshotDirectoryStat = await fs.lstat(snapshotDirectory);
       });
       yield* sql`VACUUM INTO ${temporaryPath}`;
       yield* attemptPromise(async () => {
@@ -792,8 +824,10 @@ export const createMigrationBackup = (dbPath: string, plan: MigrationBackupPlan)
     }).pipe(
       Effect.ensuring(
         attemptPromise(async () => {
-          if (snapshotStat) {
-            await removeOwnedMigrationFile(temporaryPath, snapshotStat).catch(() => undefined);
+          if (snapshotDirectoryStat) {
+            await removeOwnedSnapshotDirectory(snapshotDirectory, snapshotDirectoryStat).catch(
+              () => undefined,
+            );
           }
           if (compressedStat) {
             await removeOwnedMigrationFile(compressedTemporaryPath, compressedStat).catch(
@@ -1329,10 +1363,7 @@ export const reclaimOrphanedMigrationArtifacts = (dbPath: string) =>
     const markerPath = migrationRecoveryMarkerPath(dbPath);
     const provenancePath = migrationBackupProvenancePath(dbPath);
     await Promise.all([
-      removeRegularFiles(
-        migrationBackupDirectory(dbPath),
-        isMigrationBackupPartial(path.basename(dbPath)),
-      ),
+      removeMigrationBackupPartials(dbPath),
       removeRegularFiles(
         path.dirname(markerPath),
         isAtomicMigrationJsonPartial(path.basename(markerPath)),
