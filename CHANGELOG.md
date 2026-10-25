@@ -1,5 +1,26 @@
 # Changelog
 
+## 1.0.6-remote.32 — 2026-10-25
+
+**Recover blocked Claude conversations without replaying uncertain messages.**
+
+### Fixed
+
+- Claude follow-ups that finish preparing after their original turn has ended are rejected before delivery. A delayed preparation error cannot mark a replacement turn as failed.
+- A quarantined conversation keeps a Stop control available even when its visible turn is idle. Explicit Stop and Unblock remain separate actions; sending a stop request is not reported as confirmed provider cleanup.
+- Recovery refuses to abandon an uncertain Claude send while its locally owned runtime or background work remains active. A verified stop can release the original blocked delivery; retries retain their original target and cannot stop a later turn.
+- Restart recovery distinguishes inherited blocked deliveries from runtimes adopted by the current server. Unknown ownership remains blocked instead of silently resending a potentially delivered message.
+
+### Companion iPhone and iPad
+
+- The matching Stop and Unblock guidance requires TestFlight build 156 or newer. Desktop and mobile apps update separately; this desktop update does not install a TestFlight build.
+
+### Verification
+
+- Keeps Remote identity, local data, approved pairings and update feeds. No account or transcript migration is introduced.
+- Publication requires exact-tag quality and server suites, all three packaged platform checks, macOS signing/notarization, Windows Defender and source-bound artifact provenance. Windows uses the existing exact-version unsigned exception and may show SmartScreen.
+- Recovery has been exercised with an isolated server and controlled provider process. The original reported Claude CLI stream stall and physical iPhone battery consumption are not claimed fixed by this desktop release.
+
 ## 1.0.9 — 2026-10-25
 
 **Native editing and MCP Connectors in Stable, safer Stop retries and compressed recovery backups.**

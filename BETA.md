@@ -6,6 +6,8 @@ shares stable's data directory or update feed.
 
 ## Synara Remote early access
 
+Remote .32 adds guarded recovery for blocked Claude deliveries. Use Stop before Unblock when the runtime still needs to retire; a Stop request alone does not confirm cleanup. Restarted hosts distinguish inherited deliveries from locally adopted runtimes. Uncertain messages are never automatically replayed. The matching iPhone/iPad recovery controls require TestFlight build 156 or newer; update each app separately.
+
 Remote .20 and universal iOS/iPadOS build 141 align resource validation with phone-created thread identifiers. Update both ends for attachment and voice transfers; old hosts reject those identifiers. Existing pairing, authorization and upload-size limits remain in force.
 
 **Synara Remote** is a separate tester app, not a rename of Synara Beta.

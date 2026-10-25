@@ -22,6 +22,32 @@ import type { WhatsNewEntry } from "./logic";
 
 export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
   {
+    version: "1.0.6-remote.32",
+    date: "Oct 25",
+    features: [
+      {
+        id: "blocked-thread-recovery",
+        title: "Recover a blocked Claude conversation",
+        description:
+          "Blocked conversations keep Stop available even when the visible turn is idle. Stop the retained runtime, then use Unblock to recover the conversation.",
+        details:
+          "A requested stop is not treated as confirmed cleanup. Recovery preserves uncertain messages and refuses to replay them automatically. Matching phone controls require TestFlight build 156 or newer.",
+      },
+      {
+        id: "stale-followup-ownership",
+        title: "Keep delayed follow-ups with their original turn",
+        description:
+          "A follow-up that finishes preparing after its turn has ended cannot reach a newer turn. A delayed preparation error cannot mark the replacement turn as failed.",
+      },
+      {
+        id: "retained-stop-ownership",
+        title: "Keep recovery attached to the right runtime",
+        description:
+          "Stop retries retain their original target. Recovery checks runtime ownership and background work before clearing an uncertain delivery, including after a server restart.",
+      },
+    ],
+  },
+  {
     version: "1.0.9",
     date: "Oct 25",
     features: [
