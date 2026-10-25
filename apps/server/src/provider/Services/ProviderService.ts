@@ -98,6 +98,8 @@ export interface ProviderRuntimeStopControlReceipt {
 export interface ProviderRuntimeSessionStopTarget {
   readonly session: ProviderSession | null;
   readonly lifecycleGeneration: string | null;
+  /** Startup-adopted ownership that no operation in this server has touched. */
+  readonly inheritedLifecycleGeneration?: string;
   readonly stopControlReceipt?: ProviderRuntimeStopControlReceipt;
 }
 
@@ -267,6 +269,13 @@ export interface ProviderServiceShape {
   readonly getRuntimeSessionStopTarget?: (input: {
     readonly threadId: ThreadId;
   }) => Effect.Effect<ProviderRuntimeSessionStopTarget, ProviderServiceError>;
+
+  /** Internal SQL-only recovery mutation under the existing lifecycle lease.
+   * The callback must not start/replay provider work or reacquire this lease. */
+  readonly withRuntimeSessionStopTarget?: <A, E, R>(
+    input: { readonly threadId: ThreadId },
+    use: (target: ProviderRuntimeSessionStopTarget) => Effect.Effect<A, E, R>,
+  ) => Effect.Effect<A, E | ProviderServiceError, R>;
 
   /**
    * Whether provider-native background tasks are currently keeping the

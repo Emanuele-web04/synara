@@ -48,6 +48,26 @@ with an error while unrelated tasks remain usable. Persisted Claude compaction r
 unavailable owner remain held for reconciliation; startup skips their provider recovery instead
 of failing or resending the held message.
 
+An uncertain delivery remains blocked after a server restart. **Unblock thread** reconciles
+that delivery; it does not stop a provider process that is still running. For a stalled Claude
+turn, use **Stop** first and wait for session retirement, then abandon the uncertain delivery
+with **Unblock thread** before explicitly sending a new message. An ambiguous Claude send
+on a root thread stays blocked while this server owns a live or unverified runtime. Stop's dispatch acknowledgement
+alone does not prove that cleanup finished. If a failed local startup leaves the session idle,
+an explicit user Stop can still retire that known local generation before Unblock. Ordinary
+idle Stops without an uncertain root Claude send remain no-ops. After a server restart, Unblock may reconcile an
+untouched inherited delivery once the new server confirms it owns no live, retained or background
+work for that task. This restores delivery; it does not prove that every process from an older
+server exited or that its external effects were cancelled. Synara does not automatically resend
+the original ambiguous message. This guard applies to ambiguous root Claude sends; child
+threads retain their existing manual-abandon behavior without stopping the parent. Child
+recovery is not covered by the root-runtime retirement proof.
+
+A Claude steer can wait for permission-mode control or attachment preparation before entering
+the native prompt queue. If its original turn ends or the runtime is replaced during that wait,
+Synara rejects the unsent steer and preserves the newer session state. Queued follow-ups retain
+their normal turn boundary and wait for any replacement turn to settle.
+
 Codex native resume is confirmed only when the runtime returns the requested thread ID.
 If a recoverable resume failure starts a fresh Codex thread instead, Synara treats its native
 history as unavailable and carries the stored transcript through the existing bounded recovery

@@ -8368,6 +8368,25 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             return yield* sendTurn(input);
           }
 
+          // Controls and attachment preparation can outlive this turn. A late
+          // steer must not resurrect its state or enter a replacement runtime.
+          const requireOriginalTurn = Effect.suspend(() => {
+            const current = context.turnState;
+            return context.stopped ||
+              sessions.get(input.threadId) !== context ||
+              current === undefined ||
+              current.turnId !== liveTurnState.turnId
+              ? Effect.fail(
+                  new ProviderAdapterValidationError({
+                    provider: PROVIDER,
+                    operation: "turn/steer.stale",
+                    issue:
+                      "Claude's original turn ended while your message was preparing. It was not sent.",
+                  }),
+                )
+              : Effect.succeed(current);
+          });
+
           // Steering across an interaction-mode change (e.g. a plan follow-up
           // that starts implementing) must flip the CLI's permission mode even
           // though no new turn starts.
@@ -8376,9 +8395,10 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             input.threadId,
             input.interactionMode,
           );
-          if (effectiveInteractionMode !== liveTurnState.interactionMode) {
+          const currentTurnState = yield* requireOriginalTurn;
+          if (effectiveInteractionMode !== currentTurnState.interactionMode) {
             context.turnState = {
-              ...liveTurnState,
+              ...currentTurnState,
               interactionMode: effectiveInteractionMode,
             };
           }
@@ -8388,6 +8408,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             attachmentsDir: serverConfig.attachmentsDir,
             nativeCommandNames: yield* resolveNativeCommandNames(context, input.input),
           });
+          yield* requireOriginalTurn;
           yield* Queue.offer(context.promptQueue, {
             type: "message",
             message,

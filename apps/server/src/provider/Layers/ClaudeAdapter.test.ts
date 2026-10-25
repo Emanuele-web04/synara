@@ -24,10 +24,12 @@ import {
 import { assert, describe, it } from "@effect/vitest";
 import { assessClaudeCache } from "@synara/shared/claudeCache";
 import {
+  Cause,
   Deferred,
   Effect,
   Exit,
   Fiber,
+  FileSystem,
   Layer,
   Option,
   Queue,
@@ -488,6 +490,7 @@ function makeHarness(config?: {
 }
 
 function makeMultiQueryHarness(config?: {
+  readonly baseDir?: string;
   readonly failCreateAt?: number;
   readonly gatewayCredentials?: AgentGatewayCredentialsShape;
   readonly onCreate?: (options: ClaudeQueryOptions) => void;
@@ -509,7 +512,12 @@ function makeMultiQueryHarness(config?: {
       return query;
     },
   }).pipe(
-    Layer.provideMerge(ServerConfig.layerTest("/tmp/claude-adapter-test", "/tmp")),
+    Layer.provideMerge(
+      ServerConfig.layerTest(
+        config?.baseDir ?? "/tmp/claude-adapter-test",
+        config?.baseDir ?? "/tmp",
+      ),
+    ),
     Layer.provideMerge(NodeServices.layer),
   );
   if (config?.gatewayCredentials) {
@@ -1814,6 +1822,161 @@ describe("ClaudeAdapterLive", () => {
       Effect.provide(harness.layer),
     );
   });
+
+  it.effect.each([
+    { transition: "completed", preparation: "permissions" },
+    { transition: "stopped", preparation: "permissions" },
+    { transition: "replacement", preparation: "permissions" },
+    { transition: "next-turn", preparation: "permissions" },
+    { transition: "completed", preparation: "attachment" },
+  ] as const)(
+    "rejects a prepared steer after its original turn is $transition during $preparation without queueing its text",
+    ({ transition, preparation }) => {
+      const baseDir = mkdtempSync(path.join(os.tmpdir(), "claude-stale-steer-"));
+      const harness = makeMultiQueryHarness({ baseDir });
+      let releaseControl!: () => void;
+      const controlReply = new Promise<void>((resolve) => {
+        releaseControl = resolve;
+      });
+      const offered = vi.spyOn(Queue, "offer");
+      const restore = [() => offered.mockRestore()];
+      return Effect.gen(function* () {
+        const adapter = yield* ClaudeAdapter;
+        const session = yield* adapter.startSession({
+          threadId: THREAD_ID,
+          runtimeMode: "full-access",
+        });
+        const first = yield* adapter.sendTurn({
+          threadId: session.threadId,
+          input: "Original work",
+        });
+        const query = harness.queries[0]!;
+        const controlEntered = yield* Deferred.make<void>();
+        const attachment = {
+          type: "image" as const,
+          id: "stale-steer-image-12345678-1234-1234-1234-123456789abc",
+          name: "synthetic.png",
+          mimeType: "image/png",
+          sizeBytes: 4,
+        };
+        if (preparation === "permissions") {
+          vi.spyOn(query, "setPermissionMode").mockImplementationOnce(async (mode) => {
+            query.setPermissionModeCalls.push(mode);
+            Effect.runSync(Deferred.succeed(controlEntered, undefined));
+            await controlReply;
+          });
+        } else {
+          const fileSystem = yield* FileSystem.FileSystem;
+          const originalRead = fileSystem.readFile;
+          const { attachmentsDir } = yield* ServerConfig;
+          const attachmentPath = path.join(attachmentsDir, attachmentRelativePath(attachment));
+          const read = vi
+            .spyOn(fileSystem, "readFile")
+            .mockImplementation((filePath) =>
+              filePath === attachmentPath
+                ? Deferred.succeed(controlEntered, undefined).pipe(
+                    Effect.andThen(Effect.promise(() => controlReply)),
+                    Effect.as(Uint8Array.of(1, 2, 3, 4)),
+                  )
+                : originalRead(filePath),
+            );
+          restore.push(() => read.mockRestore());
+        }
+        const steerText = "Late redirect";
+        const steering = yield* adapter
+          .steerTurn({
+            threadId: session.threadId,
+            input: steerText,
+            interactionMode: "plan",
+            ...(preparation === "attachment" ? { attachments: [attachment] } : {}),
+          })
+          .pipe(Effect.exit, Effect.forkChild);
+        const preparing = yield* Deferred.await(controlEntered).pipe(
+          Effect.as("entered"),
+          Effect.raceFirst(Fiber.await(steering).pipe(Effect.as("finished"))),
+        );
+        if (preparing === "finished") {
+          const finished = yield* Fiber.join(steering);
+          if (Exit.isFailure(finished)) return yield* Effect.failCause(finished.cause);
+        }
+        assert.equal(preparing, "entered", "The controlled preparation must be suspended");
+        if (transition === "completed" || transition === "next-turn") {
+          const terminal = yield* adapter.streamEvents.pipe(
+            Stream.filter(
+              (event) => event.type === "turn.completed" && event.turnId === first.turnId,
+            ),
+            Stream.take(1),
+            Stream.runDrain,
+            Effect.forkChild,
+          );
+          emitSuccessResult(query, "synthetic-stale-steer", "synthetic-terminal", {});
+          yield* Fiber.join(terminal);
+        } else {
+          yield* adapter.stopSession(session.threadId);
+        }
+        let replacementTurn: TurnId | undefined;
+        if (transition === "replacement" || transition === "next-turn") {
+          if (transition === "replacement") {
+            yield* adapter.startSession({ threadId: session.threadId, runtimeMode: "full-access" });
+          }
+          replacementTurn = (yield* adapter.sendTurn({
+            threadId: session.threadId,
+            input: "New owner",
+          })).turnId;
+        }
+        releaseControl();
+        const result = yield* Fiber.join(steering);
+        assert.isTrue(
+          Exit.isFailure(result),
+          "A stale preparation must be rejected, never re-admitted",
+        );
+        if (Exit.isFailure(result)) {
+          const error = Option.getOrUndefined(Cause.findErrorOption(result.cause));
+          assert.instanceOf(error, ProviderAdapterValidationError);
+          assert.equal((error as ProviderAdapterValidationError).operation, "turn/steer.stale");
+        }
+        const latePrompts = offered.mock.calls.filter(([, item]) => {
+          const entry = item as { type?: string; message?: SDKUserMessage };
+          const content = entry.message?.message.content;
+          return (
+            entry.type === "message" &&
+            Array.isArray(content) &&
+            content.some(
+              (block) =>
+                typeof block === "object" && block.type === "text" && block.text === steerText,
+            )
+          );
+        });
+        assert.equal(latePrompts.length, 0);
+        const current = (yield* adapter.listSessions()).find(
+          (entry) => entry.threadId === session.threadId,
+        );
+        if (transition === "completed") {
+          assert.equal(current?.status, "ready");
+          assert.equal(current?.activeTurnId, undefined);
+        } else if (transition === "stopped") {
+          assert.equal(current, undefined);
+        } else {
+          assert.equal(current?.activeTurnId, replacementTurn);
+          if (transition === "replacement") {
+            assert.equal(harness.queries[1]?.setPermissionModeCalls.length, 0);
+          } else {
+            assert.equal(harness.queries.length, 1);
+          }
+        }
+      }).pipe(
+        Effect.ensuring(Effect.sync(releaseControl)),
+        Effect.provideService(Random.Random, makeDeterministicRandomService()),
+        Effect.provide(harness.layer),
+        Effect.ensuring(
+          Effect.sync(() => {
+            restore.forEach((cleanup) => cleanup());
+            rmSync(baseDir, { recursive: true, force: true });
+          }),
+        ),
+      );
+    },
+  );
 
   it.effect("dispatches a steer as a normal turn when no turn is live", () => {
     const harness = makeHarness();
@@ -3660,6 +3823,7 @@ describe("ClaudeAdapterLive", () => {
         identifier: "42",
         action: "created",
         branch: "unverified-branch",
+        cwd: "/unverified/workspace",
       },
       expectedPayload: { kind: "code_change_published" },
     },
@@ -3670,7 +3834,10 @@ describe("ClaudeAdapterLive", () => {
         const adapter = yield* ClaudeAdapter;
         const eventsFiber = yield* adapter.streamEvents.pipe(
           Stream.filter(
-            (event) => event.type === "vcs.state.changed" || event.type === "runtime.warning",
+            (event) =>
+              event.type === "vcs.state.changed" ||
+              event.type === "runtime.warning" ||
+              event.type.startsWith("item."),
           ),
           Stream.take(2),
           Stream.runCollect,

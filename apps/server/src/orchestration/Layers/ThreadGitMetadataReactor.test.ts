@@ -500,10 +500,15 @@ describe("ThreadGitMetadataReactor", () => {
 
       await harness.publish(startedEvent(threadId, TurnId.makeUnsafe("vcs-running-turn")));
       await harness.publish(
-        vcsStateChangedEvent(threadId, { kind, ...(kind === "commit" ? { cwd } : {}) }),
+        vcsStateChangedEvent(threadId, {
+          kind,
+          ...(kind === "commit" ? { cwd } : {}),
+        }),
       );
       await waitFor(() => harness.commands.length === 1);
 
+      expect(harness.statusCwds).toEqual([cwd]);
+      expect(harness.pullRequestLookups).toEqual([pullRequest.headBranch]);
       expect(harness.commands[0]).toMatchObject({
         type: "thread.meta.update",
         threadId,

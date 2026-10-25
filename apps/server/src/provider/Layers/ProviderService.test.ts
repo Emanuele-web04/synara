@@ -108,6 +108,11 @@ import {
 import { AGENT_GATEWAY_TURN_AUTHORITY_RETIRED } from "../../agentGateway/sessionLease.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { PersistenceSqlError } from "../../persistence/Errors.ts";
+import { OrchestrationEventDeliveryRepositoryLive } from "../../persistence/Layers/OrchestrationEventDeliveries.ts";
+import {
+  OrchestrationEventDeliveryRepository,
+  PROVIDER_COMMAND_REACTOR_CONSUMER,
+} from "../../persistence/Services/OrchestrationEventDeliveries.ts";
 
 // The fake adapter never prepares Codex storage. Give lifecycle tests real
 // continuation metadata without reading or writing the developer's Codex home.
@@ -1064,6 +1069,204 @@ routing.layer("ProviderServiceLive native forks", (it) => {
       assert.equal(routing.codex.forkThread.mock.calls.length, 0);
     }),
   );
+});
+
+it.effect.each([
+  "observations",
+  "failed start",
+  "failed steer",
+  "failed compaction",
+  "failed approval",
+  "inactive control",
+  "new runtime",
+  "leased reconcile",
+] as const)("ProviderService inherited lineage after %s", (operation) => {
+  const threadId = asThreadId(`inherited-${operation.replaceAll(" ", "-")}`);
+  const claude = makeFakeCodexAdapter("claudeAgent");
+  const registry: typeof ProviderAdapterRegistry.Service = {
+    getByProvider: (provider) =>
+      provider === "claudeAgent"
+        ? Effect.succeed(claude.adapter)
+        : Effect.fail(new ProviderUnsupportedError({ provider })),
+    listProviders: () => Effect.succeed(["claudeAgent"]),
+  };
+  const directoryLayer = ProviderSessionDirectoryLive.pipe(
+    Layer.provide(
+      ProviderSessionRuntimeRepositoryLive.pipe(Layer.provide(SqlitePersistenceMemory)),
+    ),
+  );
+  const seededDirectoryLayer = Layer.effect(
+    ProviderSessionDirectory,
+    Effect.gen(function* () {
+      const directory = yield* ProviderSessionDirectory;
+      yield* directory.upsert({
+        threadId,
+        provider: "claudeAgent",
+        runtimeMode: "full-access",
+        status: "stopped",
+        lifecycleGeneration: "inherited-runtime",
+        resumeCursor: { opaque: "inherited-synthetic" },
+        runtimePayload: {
+          modelSelection: { provider: "claudeAgent", model: "claude-fable-5-1" },
+          launchOptionsAuthoritative: true,
+        },
+      });
+      return directory;
+    }),
+  ).pipe(Layer.provide(directoryLayer));
+  const providerLayer = makeProviderServiceLive().pipe(
+    Layer.provideMerge(
+      OrchestrationEventDeliveryRepositoryLive.pipe(Layer.provide(SqlitePersistenceMemory)),
+    ),
+    Layer.provideMerge(seededDirectoryLayer),
+    Layer.provide(Layer.succeed(ProviderAdapterRegistry, registry)),
+    Layer.provide(ServerSettingsService.layerTest()),
+  );
+  return Effect.gen(function* () {
+    const provider = yield* ProviderService;
+    const observe = () => provider.getRuntimeSessionStopTarget!({ threadId });
+    assert.equal((yield* observe()).inheritedLifecycleGeneration, "inherited-runtime");
+    const failure = new ProviderAdapterRequestError({
+      provider: "claudeAgent",
+      method: "synthetic-ownership",
+      detail: "Synthetic operation failed",
+    });
+    let outcome: Exit.Exit<unknown, unknown> | undefined;
+    if (operation === "observations") {
+      yield* provider.listSessions();
+      yield* provider.listRetainedSessions!();
+      yield* provider.getPersistedSessionProfile(threadId);
+    } else if (operation === "inactive control") {
+      outcome = yield* provider
+        .interruptTurn({
+          threadId,
+          turnId: asTurnId("old-turn"),
+          expectedLifecycleGeneration: "inherited-runtime",
+        })
+        .pipe(Effect.exit);
+      assert.equal(claude.interruptTurn.mock.calls.length, 0);
+    } else if (operation === "leased reconcile") {
+      const deliveries = yield* OrchestrationEventDeliveryRepository;
+      const now = new Date().toISOString();
+      yield* deliveries.advanceCursor({
+        consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
+        eventSequence: 0,
+        updatedAt: now,
+      });
+      yield* deliveries.claim({
+        consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
+        eventSequence: 1,
+        threadId,
+        claimOwner: "previous-owner",
+        claimedAt: now,
+        claimExpiresAt: now,
+      });
+      yield* deliveries.markTerminalFailure({
+        consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
+        eventSequence: 1,
+        expectedClaimOwner: "previous-owner",
+        state: "uncertain",
+        error: "Synthetic ambiguity",
+        updatedAt: now,
+      });
+      const entered = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      const routeReady = yield* Deferred.make<void>();
+      const recover = provider.withRuntimeSessionStopTarget!({ threadId }, () =>
+        Deferred.succeed(entered, undefined).pipe(
+          Effect.andThen(Deferred.await(release)),
+          Effect.andThen(
+            deliveries.reconcile({
+              reconciliationId: "leased-recovery",
+              consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
+              eventSequence: 1,
+              threadId,
+              expectedState: "uncertain",
+              outcome: "abandon",
+              reconciledBy: "test-explicit-recovery",
+              reconciledAt: now,
+            }),
+          ),
+        ),
+      );
+      yield* Effect.gen(function* () {
+        const recovering = yield* recover.pipe(Effect.forkChild);
+        yield* Deferred.await(entered);
+        claude.agentGatewayCredentialRetired.mockImplementationOnce(() =>
+          Effect.succeed(false).pipe(Effect.onExit(() => Deferred.succeed(routeReady, undefined))),
+        );
+        yield* Effect.gen(function* () {
+          const compacting = yield* provider.compactThread({ threadId }).pipe(Effect.forkChild);
+          yield* Deferred.await(routeReady);
+          yield* Effect.yieldNow;
+          // The direct compaction reached routing, but query recovery must
+          // wait until the actual reconcile SQL leaves the lifecycle lease.
+          assert.equal(claude.startSession.mock.calls.length, 0);
+          assert.isUndefined(compacting.pollUnsafe());
+          yield* Deferred.succeed(release, undefined);
+          const reconciled = yield* Fiber.join(recovering);
+          assert.isTrue(Option.isSome(reconciled));
+          yield* Fiber.join(compacting);
+          assert.equal(claude.startSession.mock.calls.length, 1);
+          assert.equal(
+            Option.getOrThrow(
+              yield* deliveries.getDelivery({
+                consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
+                eventSequence: 1,
+              }),
+            ).state,
+            "succeeded",
+          );
+        });
+      }).pipe(Effect.ensuring(Deferred.succeed(release, undefined)));
+    } else if (operation === "failed start" || operation === "new runtime") {
+      if (operation === "failed start")
+        claude.startSession.mockImplementationOnce(() => Effect.fail(failure));
+      outcome = yield* provider
+        .startSession(threadId, {
+          threadId,
+          provider: "claudeAgent",
+          runtimeMode: "full-access",
+        })
+        .pipe(Effect.exit);
+    } else if (operation === "failed steer") {
+      claude.steerTurn.mockImplementationOnce(() => Effect.fail(failure));
+      outcome = yield* provider.steerTurn({ threadId, input: "Synthetic steer" }).pipe(Effect.exit);
+    } else if (operation === "failed compaction") {
+      claude.compactThread.mockImplementationOnce(() => Effect.fail(failure));
+      outcome = yield* provider.compactThread({ threadId }).pipe(Effect.exit);
+    } else {
+      // Seed a current query under the inherited generation, then fail its
+      // actual control. A later read must not re-adopt the old lineage.
+      yield* claude.adapter.startSession({
+        threadId,
+        provider: "claudeAgent",
+        runtimeMode: "full-access",
+      });
+      claude.respondToRequest.mockImplementationOnce(() => Effect.fail(failure));
+      outcome = yield* provider
+        .respondToRequest({
+          threadId,
+          requestId: asRequestId("synthetic-approval"),
+          decision: "accept",
+          lifecycleGeneration: "inherited-runtime",
+        })
+        .pipe(Effect.exit);
+    }
+    if (outcome) assert.equal(Exit.isSuccess(outcome), operation === "new runtime");
+    const after = yield* observe();
+    const preservesLineage = operation === "observations" || operation === "inactive control";
+    assert.equal(
+      after.inheritedLifecycleGeneration,
+      preservesLineage ? "inherited-runtime" : undefined,
+    );
+    if (operation === "failed start") assert.equal(after.lifecycleGeneration, "inherited-runtime");
+    yield* provider.listSessions();
+    assert.equal(
+      (yield* observe()).inheritedLifecycleGeneration,
+      after.inheritedLifecycleGeneration,
+    );
+  }).pipe(Effect.provide(providerLayer), Effect.provide(NodeServices.layer));
 });
 
 it.effect("ProviderServiceLive keeps persisted resumable sessions on startup", () =>
