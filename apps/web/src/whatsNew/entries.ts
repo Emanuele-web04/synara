@@ -40,6 +40,12 @@ export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
           "A follow-up that finishes preparing after its turn has ended cannot reach a newer turn. A delayed preparation error cannot mark the replacement turn as failed.",
       },
       {
+        id: "claude-error-results",
+        title: "Keep failed Claude responses marked as failed",
+        description:
+          "Claude results that report a provider error no longer appear successfully completed.",
+      },
+      {
         id: "retained-stop-ownership",
         title: "Keep recovery attached to the right runtime",
         description:

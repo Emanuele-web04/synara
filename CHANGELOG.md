@@ -7,6 +7,7 @@
 ### Fixed
 
 - Claude follow-ups that finish preparing after their original turn has ended are rejected before delivery. A delayed preparation error cannot mark a replacement turn as failed.
+- Claude results that report a provider error remain failed instead of appearing successfully completed.
 - A quarantined conversation keeps a Stop control available even when its visible turn is idle. Explicit Stop and Unblock remain separate actions; sending a stop request is not reported as confirmed provider cleanup.
 - Recovery refuses to abandon an uncertain Claude send while its locally owned runtime or background work remains active. A verified stop can release the original blocked delivery; retries retain their original target and cannot stop a later turn.
 - Restart recovery distinguishes inherited blocked deliveries from runtimes adopted by the current server. Unknown ownership remains blocked instead of silently resending a potentially delivered message.
