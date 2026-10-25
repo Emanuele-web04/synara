@@ -317,6 +317,7 @@ function createRetainingRestartProviderServiceLayer(options?: {
   readonly keepLiveOnFailedTeardown?: boolean;
   readonly liveTurns?: boolean;
   readonly failStart?: () => boolean;
+  readonly interruptFailure?: boolean;
 }) {
   const unsupported = () => Effect.die(new Error("Unsupported adapter call in test"));
   const adapterFor = <P extends ProviderKind>(
@@ -388,7 +389,16 @@ function createRetainingRestartProviderServiceLayer(options?: {
             sessions.set(input.threadId, { ...session, status: "running", activeTurnId: turnId });
           return { threadId: input.threadId, turnId };
         }),
-      interruptTurn: () => Effect.void,
+      interruptTurn: () =>
+        options?.interruptFailure
+          ? Effect.fail(
+              new ProviderAdapterRequestError({
+                provider,
+                method: "turn/interrupt",
+                detail: "The Claude CLI did not acknowledge the interrupt within 10000ms.",
+              }),
+            )
+          : Effect.void,
       respondToRequest: () => unsupported(),
       respondToUserInput: () => unsupported(),
       stopSession: (threadId) => teardown(threadId, "session/stop"),
@@ -18952,14 +18962,26 @@ describe("ProviderCommandReactor", () => {
     );
   });
 
-  it.each(["session stop", "turn interrupt"] as const)(
-    "unblocks an ambiguous Claude send after the real public %s records retirement",
+  it.each([
+    "session stop",
+    "turn interrupt",
+    "turn interrupt no ACK",
+    "turn interrupt no ACK cleanup failed",
+    "turn interrupt no ACK missing receipt",
+    "turn interrupt no ACK T2",
+  ] as const)(
+    "keeps public %s recovery consistent with its real retirement receipt",
     async (stopKind) => {
+      const noAck = stopKind.includes("no ACK");
+      const cleanupFailed = stopKind.endsWith("cleanup failed");
+      const missingReceipt = stopKind.endsWith("missing receipt");
+      const replacement = stopKind.endsWith("T2");
       const harness = await createHarness({
         threadModelSelection: { provider: "claudeAgent", model: "claude-fable-5-1" },
         providerServiceLayer: createRetainingRestartProviderServiceLayer({
-          failFirstTeardown: false,
+          failFirstTeardown: cleanupFailed,
           liveTurns: true,
+          interruptFailure: noAck,
         }),
         startReactor: false,
       });
@@ -19033,9 +19055,37 @@ describe("ProviderCommandReactor", () => {
           }),
         );
       }
+      const readStopTarget = provider.getRuntimeSessionStopTarget;
+      const stopRuntime = provider.stopRuntimeSession!;
       const sends = vi.spyOn(provider, "sendTurn");
       const interrupts = vi.spyOn(provider, "interruptTurn");
       const stops = vi.spyOn(provider, "stopRuntimeSession");
+      if (replacement || missingReceipt)
+        stops.mockImplementationOnce((input) =>
+          stopRuntime(input).pipe(
+            Effect.andThen(
+              Effect.gen(function* () {
+                if (replacement) {
+                  yield* provider.startSession(threadId, {
+                    threadId,
+                    provider: "claudeAgent",
+                    runtimeMode: "approval-required",
+                  });
+                  yield* provider.sendTurn({ threadId, input: "Explicit replacement" });
+                } else {
+                  vi.spyOn(provider, "getRuntimeSessionStopTarget").mockImplementation((request) =>
+                    readStopTarget(request).pipe(
+                      Effect.map((target) => {
+                        const { stopControlReceipt: _receipt, ...unverified } = target;
+                        return unverified;
+                      }),
+                    ),
+                  );
+                }
+              }),
+            ),
+          ),
+        );
       await harness.startReactor();
       const commandId = CommandId.makeUnsafe("real-public-explicit-stop");
       await Effect.runPromise(
@@ -19058,7 +19108,40 @@ describe("ProviderCommandReactor", () => {
         ),
       );
       await harness.drain();
-      const retired = await Effect.runPromise(provider.getRuntimeSessionStopTarget({ threadId }));
+      const retired = await Effect.runPromise(readStopTarget({ threadId }));
+      const failure = (await readHarnessThread(harness))?.activities.find(
+        (activity) => activity.kind === "provider.turn.interrupt.failed",
+      );
+      if (replacement) {
+        expect(retired.session).toMatchObject({
+          status: "running",
+          activeTurnId: "claudeAgent-turn",
+        });
+        expect(retired.lifecycleGeneration).not.toBe(original.lifecycleGeneration);
+        expect(retired.stopControlReceipt?.retiredLifecycleGeneration).not.toBe(
+          retired.lifecycleGeneration,
+        );
+        expect(failure).toBeDefined();
+        expect(stops).toHaveBeenCalledTimes(1);
+        expect(sends).toHaveBeenCalledTimes(1);
+        return;
+      }
+      if (cleanupFailed) {
+        expect(retired.stopControlReceipt).toMatchObject({
+          controlRequestId: `command:${commandId}`,
+          observedLifecycleGeneration: original.lifecycleGeneration,
+        });
+        expect(retired.stopControlReceipt?.retiredLifecycleGeneration).toBeUndefined();
+        expect(retired.lifecycleGeneration).toBe(original.lifecycleGeneration);
+        expect(failure).toBeDefined();
+        expect((failure?.payload as { detail?: string })?.detail).toContain("10000ms");
+        expect(
+          (await readHarnessThread(harness))?.activities.some(
+            (activity) => activity.kind === "provider.session.stop.failed",
+          ),
+        ).toBe(true);
+        return;
+      }
       expect(retired.session).toBeNull();
       expect(retired.stopControlReceipt).toMatchObject({
         controlRequestId: `command:${commandId}`,
@@ -19076,11 +19159,17 @@ describe("ProviderCommandReactor", () => {
             outcome: "abandon",
             reconciledBy: "test-public-stop-recovery",
           }),
-        ),
-      ).toMatchObject({ state: "succeeded", outcome: "abandon" });
+        ).catch((error: unknown) => error),
+      ).toMatchObject(
+        missingReceipt
+          ? { reason: "stop-unconfirmed" }
+          : { state: "succeeded", outcome: "abandon" },
+      );
+      if (missingReceipt) expect(failure).toBeDefined();
+      else expect(failure).toBeUndefined();
       expect(sends).not.toHaveBeenCalled();
-      expect(interrupts).toHaveBeenCalledTimes(stopKind === "turn interrupt" ? 1 : 0);
-      expect(stops).toHaveBeenCalledTimes(stopKind === "session stop" ? 1 : 0);
+      expect(interrupts).toHaveBeenCalledTimes(stopKind === "session stop" ? 0 : 1);
+      expect(stops).toHaveBeenCalledTimes(stopKind === "session stop" || noAck ? 1 : 0);
     },
   );
 

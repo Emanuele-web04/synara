@@ -6759,13 +6759,17 @@ const make = Effect.gen(function* () {
     const currentRuntimeTarget = yield* readRuntimeStopTarget(input);
     const currentRuntime = currentRuntimeTarget.session ?? undefined;
     const currentTurnId = current?.latestTurn?.turnId;
-    const retirementReceipt = currentRuntimeTarget.stopControlReceipt;
-    const isOwnRetirement =
-      currentRuntime === undefined &&
-      retirementReceipt?.controlRequestId === input.controlRequestId &&
-      retirementReceipt.observedLifecycleGeneration === observedRuntime.lifecycleGeneration &&
-      retirementReceipt.retiredLifecycleGeneration !== undefined &&
-      retirementReceipt.retiredLifecycleGeneration === currentRuntimeTarget.lifecycleGeneration;
+    const hasOwnRetirement = (target: ProviderRuntimeSessionStopTarget) => {
+      const receipt = target.stopControlReceipt;
+      return (
+        target.session === null &&
+        receipt?.controlRequestId === input.controlRequestId &&
+        receipt.observedLifecycleGeneration === observedRuntime.lifecycleGeneration &&
+        receipt.retiredLifecycleGeneration !== undefined &&
+        receipt.retiredLifecycleGeneration === target.lifecycleGeneration
+      );
+    };
+    const isOwnRetirement = hasOwnRetirement(currentRuntimeTarget);
     const replaced =
       (currentTurnId !== thread.latestTurn?.turnId && currentTurnId !== turnId) ||
       (currentRuntime?.activeTurnId !== undefined && currentRuntime.activeTurnId !== turnId) ||
@@ -6822,8 +6826,14 @@ const make = Effect.gen(function* () {
         "Provider turn interrupt failed",
       );
       const detail = `${reason} Stopping the provider session to settle the turn.`;
-      yield* reportInterruptFailure(detail, "uncertain");
-      return yield* processThreadSessionStop({
+      const verifiesUserClaudeStop =
+        input.requestedBy === "user" &&
+        !input.preserveQueuedWork &&
+        providerThread.id === thread.id &&
+        observedRuntime.session?.provider === "claudeAgent" &&
+        observedRuntime.lifecycleGeneration !== null;
+      if (!verifiesUserClaudeStop) yield* reportInterruptFailure(detail, "uncertain");
+      yield* processThreadSessionStop({
         threadId: input.threadId,
         createdAt: input.createdAt,
         interruptEscalated: true,
@@ -6832,6 +6842,19 @@ const make = Effect.gen(function* () {
         ...(input.preserveQueuedWork ? { preserveQueuedWork: true } : {}),
         ...(current?.session ? { expectedSession: current.session } : {}),
       });
+      if (verifiesUserClaudeStop) {
+        // Missing native ACK is only a failed Stop if its generation could not
+        // be retired. Projection settlement alone is not teardown evidence.
+        const retired = yield* readRuntimeStopTarget(input);
+        const owner = yield* resolveProviderSessionThread(input.threadId);
+        if (
+          owner?.id !== thread.id ||
+          retired.stopControlReceipt?.providerThreadId !== undefined ||
+          !hasOwnRetirement(retired)
+        )
+          yield* reportInterruptFailure(detail, "uncertain");
+      }
+      return;
     }
 
     // Terminal rejections (validation and friends) would otherwise vanish

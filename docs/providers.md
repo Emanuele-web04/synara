@@ -53,7 +53,10 @@ that delivery; it does not stop a provider process that is still running. For a 
 turn, use **Stop** first and wait for session retirement, then abandon the uncertain delivery
 with **Unblock thread** before explicitly sending a new message. An ambiguous Claude send
 on a root thread stays blocked while this server owns a live or unverified runtime. Stop's dispatch acknowledgement
-alone does not prove that cleanup finished. If a failed local startup leaves the session idle,
+alone does not prove that cleanup finished. A missing native interrupt acknowledgement is not
+reported as a failed explicit root Claude Stop when that same command's receipt confirms retirement
+of the observed runtime generation. Failed or unverified cleanup remains an error.
+If a failed local startup leaves the session idle,
 or a locally owned query remains ready without an active turn, an explicit user Stop can retire
 that known generation before Unblock. The idle Stop refuses a newer turn or replacement runtime.
 Ordinary idle Stops without an uncertain root Claude send remain no-ops. After a server restart, Unblock may reconcile an
