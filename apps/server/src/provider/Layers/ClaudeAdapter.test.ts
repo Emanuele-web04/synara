@@ -5870,6 +5870,85 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
     );
   });
 
+  // A success envelope can still carry an error; assistant.error is optional in the SDK contract.
+  it.effect.each([
+    { label: "plain success", isError: false, assistantError: undefined, expected: "completed" },
+    {
+      label: "structured assistant error",
+      isError: true,
+      assistantError: "invalid_request",
+      expected: "failed",
+    },
+    {
+      label: "error flag without assistant error",
+      isError: true,
+      assistantError: undefined,
+      expected: "failed",
+    },
+  ] as const)(
+    "vendor result is_error boundary: $label",
+    ({ isError, assistantError, expected }) => {
+      const harness = makeHarness();
+      return Effect.gen(function* () {
+        const adapter = yield* ClaudeAdapter;
+        const eventsFiber = yield* adapter.streamEvents.pipe(
+          Stream.takeUntil((event) => event.type === "turn.completed"),
+          Stream.runCollect,
+          Effect.forkChild,
+        );
+        yield* adapter.startSession({
+          threadId: THREAD_ID,
+          provider: "claudeAgent",
+          runtimeMode: "full-access",
+        });
+        const turn = yield* adapter.sendTurn({
+          threadId: THREAD_ID,
+          input: "Synthetic boundary fixture",
+          attachments: [],
+        });
+        harness.query.emit({
+          type: "assistant",
+          session_id: "vendor-error-flag-session",
+          uuid: "vendor-error-flag-assistant",
+          parent_tool_use_id: null,
+          ...(assistantError !== undefined ? { error: assistantError } : {}),
+          message: {
+            id: "vendor-error-flag-message",
+            content: [{ type: "text", text: "Synthetic boundary fixture" }],
+          },
+        } as unknown as SDKMessage);
+        harness.query.emit({
+          type: "result",
+          subtype: "success",
+          is_error: isError,
+          stop_reason: "stop_sequence",
+          session_id: "vendor-error-flag-session",
+          uuid: "vendor-error-flag-result",
+          duration_ms: 0,
+          duration_api_ms: 0,
+          num_turns: 1,
+          total_cost_usd: 0,
+          usage: {},
+          result: "Synthetic boundary fixture",
+        } as unknown as SDKMessage);
+        const events = Array.from(yield* Fiber.join(eventsFiber));
+        const completed = events.find((event) => event.type === "turn.completed");
+        assert.equal(completed?.type, "turn.completed");
+        if (completed?.type === "turn.completed") {
+          assert.equal(String(completed.turnId), String(turn.turnId));
+          assert.equal(completed.payload.state, expected);
+        }
+        assert.equal(
+          events.some((event) => event.type === "runtime.error"),
+          expected === "failed",
+        );
+      }).pipe(
+        Effect.provideService(Random.Random, makeDeterministicRandomService()),
+        Effect.provide(harness.layer),
+      );
+    },
+  );
+
   for (const [error, messagePattern] of [
     ["authentication_failed", /claude auth login --claudeai/i],
     ["account_on_hold", /account is on hold/i],

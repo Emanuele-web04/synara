@@ -5446,6 +5446,23 @@ const make = Effect.gen(function* () {
           thread?.modelSelection.provider);
   });
 
+  const hasUncertainClaudeSendBlocker = Effect.fnUntraced(function* (
+    thread: Pick<OrchestrationThreadShell, "id" | "session" | "modelSelection">,
+  ) {
+    const blocker = yield* deliveryRepository.firstBlockingDeliveryForThread({
+      consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
+      threadId: thread.id,
+    });
+    if (Option.isNone(blocker) || blocker.value.state !== "uncertain") return false;
+    const source = yield* readOrchestrationEventAtSequence(blocker.value.eventSequence);
+    return (
+      source !== undefined &&
+      isRecoverySendEvent(source) &&
+      source.payload.threadId === thread.id &&
+      (yield* readRecoverySendProvider(source, thread)) === "claudeAgent"
+    );
+  });
+
   const readClaudeCompactionTerminal = Effect.fnUntraced(function* (
     threadId: ThreadId,
     turnId: TurnId,
@@ -6560,6 +6577,11 @@ const make = Effect.gen(function* () {
           threadId: input.threadId,
           createdAt: input.createdAt,
           controlRequestId: input.controlRequestId,
+          ...(providerThread?.id === thread.id &&
+          replayReceipt.turnId === null &&
+          (yield* hasUncertainClaudeSendBlocker(thread))
+            ? { onlyIfNoActiveTurn: true as const }
+            : {}),
           ...(input.preserveQueuedWork ? { preserveQueuedWork: true } : {}),
           expectedLifecycleGeneration: replayReceipt.observedLifecycleGeneration,
         });
@@ -6573,12 +6595,19 @@ const make = Effect.gen(function* () {
     }
     const liveSession = observedRuntime.session ?? undefined;
     const unfinishedStop = observedRuntime.stopControlReceipt;
+    const isIdleRecoveryRetry =
+      input.requestedBy === "user" &&
+      providerThread?.id === thread.id &&
+      unfinishedStop?.turnId === null &&
+      (yield* hasUncertainClaudeSendBlocker(thread));
     if (
       input.requestedBy === "user" &&
       providerThread?.id === thread.id &&
       unfinishedStop !== undefined &&
       unfinishedStop.providerThreadId === undefined &&
-      (input.turnId === undefined || input.turnId === unfinishedStop.turnId) &&
+      (input.turnId === undefined ||
+        input.turnId === unfinishedStop.turnId ||
+        isIdleRecoveryRetry) &&
       unfinishedStop.retiredLifecycleGeneration === undefined &&
       observedRuntime.inheritedLifecycleGeneration !== observedRuntime.lifecycleGeneration
     ) {
@@ -6597,6 +6626,7 @@ const make = Effect.gen(function* () {
         threadId: input.threadId,
         createdAt: input.createdAt,
         controlRequestId: unfinishedStop.controlRequestId,
+        ...(isIdleRecoveryRetry ? { onlyIfNoActiveTurn: true as const } : {}),
         expectedLifecycleGeneration: unfinishedStop.observedLifecycleGeneration,
         ...(thread.session ? { expectedSession: thread.session } : {}),
         ...(input.preserveQueuedWork ? { preserveQueuedWork: true } : {}),
@@ -6622,34 +6652,22 @@ const make = Effect.gen(function* () {
       if (
         input.requestedBy === "user" &&
         providerThread?.id === thread.id &&
-        observedRuntime.session === null &&
         observedRuntime.lifecycleGeneration !== null &&
         observedRuntime.inheritedLifecycleGeneration !== observedRuntime.lifecycleGeneration &&
         (unfinishedStop === undefined || unfinishedStop.retiredLifecycleGeneration !== undefined)
       ) {
-        // A failed local ownership attempt can rewind to an empty generation.
-        // Only a new explicit Stop for a durable ambiguous root Claude send
-        // may retire it; untouched inherited and ordinary idle Stops stay inert.
-        const blocker = yield* deliveryRepository.firstBlockingDeliveryForThread({
-          consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
-          threadId: thread.id,
-        });
-        if (Option.isSome(blocker) && blocker.value.state === "uncertain") {
-          const source = yield* readOrchestrationEventAtSequence(blocker.value.eventSequence);
-          if (
-            source &&
-            isRecoverySendEvent(source) &&
-            source.payload.threadId === thread.id &&
-            (yield* readRecoverySendProvider(source, thread)) === "claudeAgent"
-          ) {
-            return yield* processThreadSessionStop({
-              threadId: thread.id,
-              createdAt: input.createdAt,
-              controlRequestId: input.controlRequestId,
-              expectedLifecycleGeneration: observedRuntime.lifecycleGeneration,
-              ...(thread.session ? { expectedSession: thread.session } : {}),
-            });
-          }
+        // A failed local ownership attempt can rewind to an empty generation,
+        // or leave an owned idle query. Only explicit Stop for a durable root
+        // Claude send may retire it; ordinary ready and inherited Stops stay inert.
+        if (yield* hasUncertainClaudeSendBlocker(thread)) {
+          return yield* processThreadSessionStop({
+            threadId: thread.id,
+            createdAt: input.createdAt,
+            controlRequestId: input.controlRequestId,
+            expectedLifecycleGeneration: observedRuntime.lifecycleGeneration,
+            ...(observedRuntime.session !== null ? { onlyIfNoActiveTurn: true as const } : {}),
+            ...(thread.session ? { expectedSession: thread.session } : {}),
+          });
         }
       }
       if (!hasUnsettledTarget) return;
@@ -7436,6 +7454,7 @@ const make = Effect.gen(function* () {
     readonly expectedSession?: OrchestrationSession;
     readonly expectedLifecycleGeneration?: string | null;
     readonly controlRequestId?: string;
+    readonly onlyIfNoActiveTurn?: true;
     readonly preserveQueuedWork?: boolean;
   }) {
     const thread = yield* resolveThreadShell(input.threadId);
@@ -7518,6 +7537,7 @@ const make = Effect.gen(function* () {
             call: providerService
               .stopRuntimeSession({
                 threadId: providerThread.id,
+                ...(input.onlyIfNoActiveTurn === true ? { onlyIfNoActiveTurn: true as const } : {}),
                 ...(input.controlRequestId !== undefined
                   ? { controlRequestId: input.controlRequestId }
                   : {}),

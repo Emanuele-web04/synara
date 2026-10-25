@@ -54,8 +54,9 @@ turn, use **Stop** first and wait for session retirement, then abandon the uncer
 with **Unblock thread** before explicitly sending a new message. An ambiguous Claude send
 on a root thread stays blocked while this server owns a live or unverified runtime. Stop's dispatch acknowledgement
 alone does not prove that cleanup finished. If a failed local startup leaves the session idle,
-an explicit user Stop can still retire that known local generation before Unblock. Ordinary
-idle Stops without an uncertain root Claude send remain no-ops. After a server restart, Unblock may reconcile an
+or a locally owned query remains ready without an active turn, an explicit user Stop can retire
+that known generation before Unblock. The idle Stop refuses a newer turn or replacement runtime.
+Ordinary idle Stops without an uncertain root Claude send remain no-ops. After a server restart, Unblock may reconcile an
 untouched inherited delivery once the new server confirms it owns no live, retained or background
 work for that task. This restores delivery; it does not prove that every process from an older
 server exited or that its external effects were cancelled. Synara does not automatically resend

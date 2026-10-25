@@ -4942,6 +4942,18 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
           schema: ProviderStopSessionInput,
           payload: rawInput,
         });
+        const changedIdleTurn = () =>
+          new ProviderValidationError({
+            operation: "ProviderService.stopRuntimeSession",
+            issue: "The provider turn changed after the idle recovery Stop was requested.",
+            reason: "stale-interaction",
+          });
+        const requireNoActiveTurn = (binding: ProviderRuntimeBinding | undefined) =>
+          !binding ||
+          runtimeActiveTurnId(binding.runtimePayload) !== undefined ||
+          (dispatchStateByThread.get(input.threadId)?.inFlightGenerations.size ?? 0) > 0
+            ? Effect.fail(changedIdleTurn())
+            : Effect.void;
         const isExpectedIdleStopCurrent = () =>
           expectedIdleGeneration === undefined ||
           isRuntimeIdleGenerationCurrent(input.threadId, expectedIdleGeneration);
@@ -5031,7 +5043,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
               }),
             Effect.gen(function* () {
               if (!isExpectedIdleStopCurrent()) return;
-              if (rawInput.onlyIfIdleSince !== undefined) {
+              if (rawInput.onlyIfIdleSince !== undefined || rawInput.onlyIfNoActiveTurn === true) {
                 // Acquire only after the lifecycle lock. An explicit Stop holding
                 // that lock may itself be waiting for an earlier idle cleanup.
                 releaseIdleStopFence = acquireRuntimeIdleStopFence(input.threadId);
@@ -5049,6 +5061,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                   reason: "stale-interaction",
                 });
               }
+              if (rawInput.onlyIfNoActiveTurn === true) yield* requireNoActiveTurn(binding);
               if (!binding || !isExpectedIdleStopCurrent()) return;
               const controlReceipt = yield* stopControlForBinding({
                 binding,
@@ -5089,6 +5102,16 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                   });
                 }
                 if (
+                  rawInput.onlyIfNoActiveTurn === true &&
+                  hasActiveSession &&
+                  (!activeSession ||
+                    activeSession.status === "running" ||
+                    activeSession.status === "connecting" ||
+                    activeSession.activeTurnId !== undefined)
+                ) {
+                  return yield* changedIdleTurn();
+                }
+                if (
                   hasActiveSession &&
                   rawInput.onlyIfIdleSince !== undefined &&
                   (!activeSession ||
@@ -5112,6 +5135,19 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                 !hasRetainedSession
               )
                 return;
+              if (rawInput.onlyIfNoActiveTurn === true) {
+                // New dispatch waits on the existing idle-stop fence. Recheck
+                // prior dispatch and binding state after the async adapter probes.
+                yield* withBindingWriteLock(
+                  input.threadId,
+                  Effect.gen(function* () {
+                    const current = Option.getOrUndefined(
+                      yield* directory.getBinding(input.threadId),
+                    );
+                    yield* requireNoActiveTurn(current);
+                  }),
+                );
+              }
               if (controlReceipt !== undefined) {
                 yield* persistStopControlTarget(binding, controlReceipt);
               }

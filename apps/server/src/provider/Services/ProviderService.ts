@@ -260,6 +260,8 @@ export interface ProviderServiceShape {
     readonly threadId: ThreadId;
     /** Idle reapers must revalidate activity and live ownership under the lifecycle lock. */
     readonly onlyIfIdleSince?: string;
+    /** Internal recovery authority: refuse a new foreground turn under the lifecycle fence. */
+    readonly onlyIfNoActiveTurn?: true;
     /** A conditional Stop must not tear down a replacement lifecycle epoch. */
     readonly expectedLifecycleGeneration?: string | null;
     readonly controlRequestId?: string;

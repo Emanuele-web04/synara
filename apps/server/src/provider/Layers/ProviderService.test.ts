@@ -11706,3 +11706,202 @@ stoppedOpenCodeDisabledRouting.layer("ProviderServiceLive OpenCode disabled prov
       }),
   );
 });
+
+const claudeIdleStopFence = makeProviderServiceLayer();
+claudeIdleStopFence.layer("ProviderServiceLive conditional Claude idle Stop fence", (it) => {
+  it.effect("holds a new send through idle teardown and durable Stop retirement", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const directory = yield* ProviderSessionDirectory;
+      const repository = yield* ProviderSessionRuntimeRepository;
+      const threadId = asThreadId("thread-claude-idle-stop-fence-send");
+      const controlRequestId = "event:claude-idle-stop-fence-send";
+      const teardownEntered = yield* Deferred.make<void>();
+      const releaseTeardown = yield* Deferred.make<void>();
+      const retirementEntered = yield* Deferred.make<void>();
+      const releaseRetirement = yield* Deferred.make<void>();
+      const sendAttempted = yield* Deferred.make<void>();
+      const claude = claudeIdleStopFence.claude;
+      yield* provider.startSession(threadId, {
+        threadId,
+        provider: "claudeAgent",
+        runtimeMode: "full-access",
+      });
+      const observed = yield* provider.getRuntimeSessionStopTarget!({ threadId });
+      const before = Option.getOrThrow(yield* directory.getBinding(threadId));
+      assert.equal(observed.session?.status, "ready");
+      assert.isUndefined(observed.session?.activeTurnId);
+      assert.isNull(asRuntimePayloadRecord(before.runtimePayload).activeTurnId);
+      const starts = claude.startSession.mock.calls.length;
+      const sends = claude.sendTurn.mock.calls.length;
+      const stop = claude.stopSession.getMockImplementation()!;
+      claude.stopSession.mockImplementationOnce((id) =>
+        Deferred.succeed(teardownEntered, undefined).pipe(
+          Effect.andThen(Deferred.await(releaseTeardown)),
+          Effect.andThen(stop(id)),
+        ),
+      );
+      let retirementCommitted = false;
+      const write = repository.upsert;
+      const writeSpy = vi.spyOn(repository, "upsert").mockImplementation((row) => {
+        const receipt = asRuntimePayloadRecord(
+          asRuntimePayloadRecord(row.runtimePayload).providerStopControlReceipt,
+        );
+        if (
+          row.threadId === threadId &&
+          receipt.controlRequestId === controlRequestId &&
+          receipt.retiredLifecycleGeneration !== undefined
+        ) {
+          return Deferred.succeed(retirementEntered, undefined).pipe(
+            Effect.andThen(Deferred.await(releaseRetirement)),
+            Effect.andThen(write(row)),
+            Effect.tap(() =>
+              Effect.sync(() => {
+                retirementCommitted = true;
+              }),
+            ),
+          );
+        }
+        return write(row);
+      });
+      const send = claude.sendTurn.getMockImplementation()!;
+      claude.sendTurn.mockImplementationOnce((input) =>
+        Effect.gen(function* () {
+          assert.isTrue(retirementCommitted, "new dispatch requires persisted retirement");
+          return yield* send(input);
+        }),
+      );
+      yield* Effect.gen(function* () {
+        const stopping = yield* provider.stopRuntimeSession!({
+          threadId,
+          onlyIfNoActiveTurn: true,
+          expectedLifecycleGeneration: observed.lifecycleGeneration,
+          controlRequestId,
+        }).pipe(Effect.forkChild);
+        yield* Deferred.await(teardownEntered);
+        const next = yield* Deferred.succeed(sendAttempted, undefined).pipe(
+          Effect.andThen(provider.sendTurn({ threadId, input: "turn B", attachments: [] })),
+          Effect.forkChild,
+        );
+        yield* Deferred.await(sendAttempted);
+        yield* Effect.yieldNow;
+        assert.isUndefined(next.pollUnsafe());
+        assert.equal(claude.sendTurn.mock.calls.length, sends);
+        assert.equal(claude.startSession.mock.calls.length, starts);
+        const pending = asRuntimePayloadRecord(
+          asRuntimePayloadRecord(
+            Option.getOrThrow(yield* directory.getBinding(threadId)).runtimePayload,
+          ).providerStopControlReceipt,
+        );
+        assert.equal(pending.controlRequestId, controlRequestId);
+        assert.isUndefined(pending.retiredLifecycleGeneration);
+
+        yield* Deferred.succeed(releaseTeardown, undefined);
+        yield* Deferred.await(retirementEntered);
+        yield* Effect.yieldNow;
+        assert.isFalse(yield* claude.hasSession(threadId));
+        assert.isUndefined(next.pollUnsafe());
+        assert.equal(claude.sendTurn.mock.calls.length, sends);
+        assert.equal(claude.startSession.mock.calls.length, starts);
+        assert.isFalse(retirementCommitted);
+
+        yield* Deferred.succeed(releaseRetirement, undefined);
+        yield* Fiber.join(stopping);
+        const sent = yield* Fiber.join(next);
+        assert.isTrue(retirementCommitted);
+        assert.equal(claude.startSession.mock.calls.length, starts + 1);
+        assert.equal(claude.sendTurn.mock.calls.length, sends + 1);
+        assert.deepEqual(
+          claude.startSession.mock.calls.at(-1)?.[0].resumeCursor,
+          before.resumeCursor,
+        );
+        assert.isTrue(yield* claude.hasSession(threadId));
+        const current = Option.getOrThrow(yield* directory.getBinding(threadId));
+        assert.notEqual(current.lifecycleGeneration, observed.lifecycleGeneration);
+        assert.equal(asRuntimePayloadRecord(current.runtimePayload).activeTurnId, sent.turnId);
+      }).pipe(
+        Effect.ensuring(
+          Effect.gen(function* () {
+            yield* Deferred.succeed(releaseTeardown, undefined);
+            yield* Deferred.succeed(releaseRetirement, undefined);
+            writeSpy.mockRestore();
+          }),
+        ),
+      );
+      yield* provider.stopSession({ threadId });
+    }),
+  );
+
+  it.effect("rejects idle Stop while a send is in flight but the adapter still reports ready", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const directory = yield* ProviderSessionDirectory;
+      const threadId = asThreadId("thread-claude-idle-stop-inflight-send");
+      const controlRequestId = "event:claude-idle-stop-inflight-send";
+      const dispatchEntered = yield* Deferred.make<void>();
+      const releaseDispatch = yield* Deferred.make<void>();
+      const claude = claudeIdleStopFence.claude;
+      yield* provider.startSession(threadId, {
+        threadId,
+        provider: "claudeAgent",
+        runtimeMode: "full-access",
+      });
+      const observed = yield* provider.getRuntimeSessionStopTarget!({ threadId });
+      const send = claude.sendTurn.getMockImplementation()!;
+      claude.sendTurn.mockImplementationOnce((input) =>
+        Deferred.succeed(dispatchEntered, undefined).pipe(
+          Effect.andThen(Deferred.await(releaseDispatch)),
+          Effect.andThen(send(input)),
+        ),
+      );
+      yield* Effect.gen(function* () {
+        const sending = yield* provider
+          .sendTurn({ threadId, input: "turn B", attachments: [] })
+          .pipe(Effect.forkChild);
+        yield* Deferred.await(dispatchEntered);
+        const before = Option.getOrThrow(yield* directory.getBinding(threadId));
+        const current = yield* provider.getRuntimeSessionStopTarget!({ threadId });
+        assert.equal(current.lifecycleGeneration, observed.lifecycleGeneration);
+        assert.equal(current.session?.status, "ready");
+        assert.isUndefined(current.session?.activeTurnId);
+        assert.isNull(asRuntimePayloadRecord(before.runtimePayload).activeTurnId);
+        assert.isUndefined(current.stopControlReceipt);
+        const stops = claude.stopSession.mock.calls.length;
+        const starts = claude.startSession.mock.calls.length;
+        const stopped = yield* provider.stopRuntimeSession!({
+          threadId,
+          onlyIfNoActiveTurn: true,
+          expectedLifecycleGeneration: observed.lifecycleGeneration,
+          controlRequestId,
+        }).pipe(Effect.result);
+        assert.equal(stopped._tag, "Failure");
+        if (stopped._tag === "Failure") {
+          assert.equal(stopped.failure._tag, "ProviderValidationError");
+          if (stopped.failure._tag === "ProviderValidationError") {
+            assert.equal(stopped.failure.operation, "ProviderService.stopRuntimeSession");
+            assert.equal(stopped.failure.reason, "stale-interaction");
+          }
+        }
+        assert.equal(claude.stopSession.mock.calls.length, stops);
+        assert.deepEqual(Option.getOrThrow(yield* directory.getBinding(threadId)), before);
+        assert.isUndefined(
+          (yield* provider.getRuntimeSessionStopTarget!({ threadId })).stopControlReceipt,
+        );
+        assert.isTrue(yield* claude.hasSession(threadId));
+        assert.isUndefined(sending.pollUnsafe());
+        yield* Deferred.succeed(releaseDispatch, undefined);
+        const sent = yield* Fiber.join(sending);
+        const settled = Option.getOrThrow(yield* directory.getBinding(threadId));
+        assert.equal(settled.lifecycleGeneration, observed.lifecycleGeneration);
+        assert.equal(asRuntimePayloadRecord(settled.runtimePayload).activeTurnId, sent.turnId);
+        assert.equal(claude.startSession.mock.calls.length, starts);
+        assert.equal(claude.stopSession.mock.calls.length, stops);
+        assert.isTrue(yield* claude.hasSession(threadId));
+        assert.isUndefined(
+          (yield* provider.getRuntimeSessionStopTarget!({ threadId })).stopControlReceipt,
+        );
+      }).pipe(Effect.ensuring(Deferred.succeed(releaseDispatch, undefined)));
+      yield* provider.stopSession({ threadId });
+    }),
+  );
+});
