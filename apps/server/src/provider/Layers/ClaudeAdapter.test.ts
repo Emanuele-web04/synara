@@ -1824,14 +1824,16 @@ describe("ClaudeAdapterLive", () => {
   });
 
   it.effect.each([
-    { transition: "completed", preparation: "permissions" },
-    { transition: "stopped", preparation: "permissions" },
-    { transition: "replacement", preparation: "permissions" },
-    { transition: "next-turn", preparation: "permissions" },
-    { transition: "completed", preparation: "attachment" },
+    { transition: "completed", preparation: "permissions", outcome: "resolve" },
+    { transition: "stopped", preparation: "permissions", outcome: "resolve" },
+    { transition: "replacement", preparation: "permissions", outcome: "resolve" },
+    { transition: "next-turn", preparation: "permissions", outcome: "resolve" },
+    { transition: "completed", preparation: "attachment", outcome: "resolve" },
+    { transition: "replacement", preparation: "permissions", outcome: "reject" },
+    { transition: "next-turn", preparation: "attachment", outcome: "reject" },
   ] as const)(
-    "rejects a prepared steer after its original turn is $transition during $preparation without queueing its text",
-    ({ transition, preparation }) => {
+    "rejects a prepared steer after its original turn is $transition during $preparation without queueing its text ($outcome)",
+    ({ transition, preparation, outcome }) => {
       const baseDir = mkdtempSync(path.join(os.tmpdir(), "claude-stale-steer-"));
       const harness = makeMultiQueryHarness({ baseDir });
       let releaseControl!: () => void;
@@ -1864,6 +1866,7 @@ describe("ClaudeAdapterLive", () => {
             query.setPermissionModeCalls.push(mode);
             Effect.runSync(Deferred.succeed(controlEntered, undefined));
             await controlReply;
+            if (outcome === "reject") throw new Error("Synthetic delayed control rejection");
           });
         } else {
           const fileSystem = yield* FileSystem.FileSystem;
@@ -1876,7 +1879,11 @@ describe("ClaudeAdapterLive", () => {
               filePath === attachmentPath
                 ? Deferred.succeed(controlEntered, undefined).pipe(
                     Effect.andThen(Effect.promise(() => controlReply)),
-                    Effect.as(Uint8Array.of(1, 2, 3, 4)),
+                    Effect.andThen(
+                      outcome === "reject"
+                        ? originalRead(path.join(baseDir, "missing-after-turn"))
+                        : Effect.succeed(Uint8Array.of(1, 2, 3, 4)),
+                    ),
                   )
                 : originalRead(filePath),
             );

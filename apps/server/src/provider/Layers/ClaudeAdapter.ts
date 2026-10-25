@@ -8387,27 +8387,37 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
               : Effect.succeed(current);
           });
 
-          // Steering across an interaction-mode change (e.g. a plan follow-up
-          // that starts implementing) must flip the CLI's permission mode even
-          // though no new turn starts.
-          const effectiveInteractionMode = yield* applyInteractionModePermission(
-            context,
-            input.threadId,
-            input.interactionMode,
-          );
-          const currentTurnState = yield* requireOriginalTurn;
-          if (effectiveInteractionMode !== currentTurnState.interactionMode) {
-            context.turnState = {
-              ...currentTurnState,
-              interactionMode: effectiveInteractionMode,
-            };
-          }
+          const message = yield* Effect.gen(function* () {
+            // Steering across an interaction-mode change (e.g. a plan follow-up
+            // that starts implementing) must flip the CLI's permission mode even
+            // though no new turn starts.
+            const effectiveInteractionMode = yield* applyInteractionModePermission(
+              context,
+              input.threadId,
+              input.interactionMode,
+            );
+            const currentTurnState = yield* requireOriginalTurn;
+            if (effectiveInteractionMode !== currentTurnState.interactionMode) {
+              context.turnState = {
+                ...currentTurnState,
+                interactionMode: effectiveInteractionMode,
+              };
+            }
 
-          const message = yield* buildUserMessageEffect(input, {
-            fileSystem,
-            attachmentsDir: serverConfig.attachmentsDir,
-            nativeCommandNames: yield* resolveNativeCommandNames(context, input.input),
-          });
+            return yield* buildUserMessageEffect(input, {
+              fileSystem,
+              attachmentsDir: serverConfig.attachmentsDir,
+              nativeCommandNames: yield* resolveNativeCommandNames(context, input.input),
+            });
+          }).pipe(
+            // A rejected preparation also belongs to its original turn. Keep
+            // the original failure only while that ownership is still current.
+            Effect.catchCause((cause) =>
+              Cause.hasInterruptsOnly(cause)
+                ? Effect.failCause(cause)
+                : requireOriginalTurn.pipe(Effect.andThen(Effect.failCause(cause))),
+            ),
+          );
           yield* requireOriginalTurn;
           yield* Queue.offer(context.promptQueue, {
             type: "message",

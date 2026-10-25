@@ -27,6 +27,7 @@ import {
 } from "@synara/contracts";
 import { resolveLatestTailUserMessageEditTarget } from "@synara/shared/conversationEdit";
 import { getModelCapabilities, resolveApiModelId } from "@synara/shared/model";
+import { isProviderDeliveryBlockDetail } from "@synara/shared/providerDeliveryBlock";
 import {
   resolveThreadWorkspaceCwd as resolveSharedThreadWorkspaceCwd,
   resolveThreadBranchSourceCwd,
@@ -6679,6 +6680,7 @@ export default function ChatView({
                   }
                   submission={{
                     phase,
+                    recoveryStopAvailable: isProviderDeliveryBlockDetail(activeThread?.error),
                     busy: isSendBusy,
                     connecting: isConnecting,
                     expired: isSidechatExpired,

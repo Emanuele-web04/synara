@@ -8,6 +8,7 @@ import { ChatComposerFooter } from "./ChatComposerFooter";
 function mountFooter(input: {
   phase: SessionPhase;
   connecting: boolean;
+  recoveryStopAvailable?: boolean;
   onInterrupt?: () => void;
   voiceEnabled?: boolean;
   voiceRecording?: boolean;
@@ -37,6 +38,7 @@ function mountFooter(input: {
       pendingInput={null}
       submission={{
         phase: input.phase,
+        recoveryStopAvailable: input.recoveryStopAvailable ?? false,
         busy: false,
         connecting: input.connecting,
         expired: false,
@@ -66,6 +68,41 @@ describe("ChatComposerFooter stop control", () => {
       await expect.element(stop).toBeVisible();
       await stop.click();
       expect(onInterrupt).toHaveBeenCalledOnce();
+    } finally {
+      await screen.unmount();
+    }
+  });
+
+  it("keeps Stop available for an idle delivery blocker", async () => {
+    const onInterrupt = vi.fn();
+    const screen = await mountFooter({
+      phase: "ready",
+      connecting: false,
+      recoveryStopAvailable: true,
+      onInterrupt,
+    });
+    try {
+      const stop = page.getByRole("button", { name: "Stop generation" });
+      await expect.element(stop).toBeVisible();
+      await expect.element(stop).toHaveAttribute("type", "button");
+      await expect
+        .element(stop)
+        .toHaveAttribute("title", "Stop the provider runtime before unblocking this thread.");
+      expect(document.querySelector('button[aria-label="Send message"]')).toBeNull();
+      await stop.click();
+      expect(onInterrupt).toHaveBeenCalledOnce();
+    } finally {
+      await screen.unmount();
+    }
+  });
+
+  it("keeps Send for an ordinary ready session", async () => {
+    const onInterrupt = vi.fn();
+    const screen = await mountFooter({ phase: "ready", connecting: false, onInterrupt });
+    try {
+      await expect.element(page.getByRole("button", { name: "Send message" })).toBeVisible();
+      expect(document.querySelector('button[aria-label="Stop generation"]')).toBeNull();
+      expect(onInterrupt).not.toHaveBeenCalled();
     } finally {
       await screen.unmount();
     }
