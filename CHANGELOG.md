@@ -1,5 +1,31 @@
 # Changelog
 
+## 1.0.6-remote.31 — 2026-10-25
+
+**Isolated OpenCode sign-in, clearer project identity and safer backup storage.**
+
+### Fixed
+
+- OpenCode native sign-in uses its isolated provider runtime, and model discovery works before a provider session has warmed up.
+- Project logos appear as project glyphs when available. Manual emoji, icon and color choices keep priority, and the disclosure arrow stays beside the project name.
+- Hub workers no longer offer Snooze or Hub actions, including workers in linked repositories. These actions wait for Hub membership to load, so an unresolved worker cannot be snoozed out of the sidebar.
+- Mac packages declare macOS 13.0 as required by the bundled tools. Fresh and retained update ZIPs carry the matching Darwin 22.0.0 feed minimum.
+
+### Maintenance
+
+- Pre-migration SQLite snapshots are streamed into gzip files. Existing plain snapshots remain restorable and share the same five-backup retention limit.
+- Backup creation uses a private, exclusive scratch directory and conservatively estimates room for the SQLite snapshot and compressed output together. Compression does not guarantee a lower peak disk requirement.
+
+### Companion iPhone and iPad
+
+- TestFlight build 155 remains the current companion build. This desktop release does not install or replace the mobile app.
+
+### Verification
+
+- Preserves Remote app identity, data home, pairing state and update feeds, including published Remote .30 history.
+- Publication requires the exact-tag quality and server suites, all three packaged platform checks, macOS signing/notarization, Windows Defender and source/lockfile-bound artifact provenance. A declared macOS 13 minimum is not a claim of runtime testing on macOS 13.
+- Remote ships macOS Apple Silicon, Windows x64 and Linux x64 installers. Windows uses the existing exact-version unsigned exception and may show SmartScreen.
+
 ## 1.0.6-remote.30 — 2026-10-25
 
 **More dependable Stop, quieter command progress and visible goal requests.**

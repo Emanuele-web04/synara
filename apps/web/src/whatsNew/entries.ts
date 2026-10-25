@@ -22,6 +22,44 @@ import type { WhatsNewEntry } from "./logic";
 
 export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
   {
+    version: "1.0.6-remote.31",
+    date: "Oct 25",
+    features: [
+      {
+        id: "isolated-opencode-sign-in",
+        title: "Keep OpenCode sign-in in its own runtime",
+        description:
+          "OpenCode sign-in uses its isolated provider runtime, and models can be discovered before a session has warmed up.",
+      },
+      {
+        id: "project-logo-glyphs",
+        title: "Recognize projects by their logos",
+        description:
+          "Project logos replace the folder glyph when available. Your chosen emoji, icon and color keep priority. The disclosure arrow stays beside the project name.",
+      },
+      {
+        id: "hub-worker-menu-guards",
+        title: "Keep Hub workers in their Hub",
+        description:
+          "Hub worker menus hide Snooze and Hub actions, including workers in linked repositories. These actions wait for Hub membership to load.",
+      },
+      {
+        id: "compressed-migration-backups",
+        title: "Keep migration backups compressed",
+        description:
+          "New pre-migration database snapshots are compressed. Restore still accepts existing uncompressed backups, under the same five-backup retention limit.",
+        details:
+          "The snapshot and compressed output temporarily coexist during creation, so the free-space estimate accounts for both.",
+      },
+      {
+        id: "macos-minimum-alignment",
+        title: "Keep Mac installer and update requirements aligned",
+        description:
+          "Mac installers and updates now declare the same minimum: macOS 13 Ventura, matching the bundled tools.",
+      },
+    ],
+  },
+  {
     version: "1.0.6-remote.30",
     date: "Oct 25",
     features: [
