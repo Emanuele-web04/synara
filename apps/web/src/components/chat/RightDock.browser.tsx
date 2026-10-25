@@ -43,6 +43,112 @@ function renderDock(content: ReactNode) {
   return render(<QueryClientProvider client={client}>{content}</QueryClientProvider>);
 }
 
+it.each(["browser", "terminal"] as const)(
+  "remembers the resized %s dock across thread switches, collapse and remount",
+  async (kind) => {
+    await page.viewport(1280, 800);
+    const { useState } = await import("react");
+    const { createDefaultRightDockState, openPaneInState } =
+      await import("../../rightDockStore.logic");
+    const initial = openPaneInState(createDefaultRightDockState(), { paneId: kind, kind });
+    const storageKey = (thread: string) => `test_right_dock_width:${kind}:${thread}`;
+    function Harness() {
+      const [thread, setThread] = useState("a");
+      const [state, setState] = useState(initial);
+      const [mounted, setMounted] = useState(true);
+      return (
+        <>
+          <div className="relative z-50 flex w-64 flex-col">
+            <button onClick={() => setThread(thread === "a" ? "b" : "a")}>Switch thread</button>
+            <button onClick={() => setState((s) => ({ ...s, open: true }))}>Reopen</button>
+            <button onClick={() => setMounted((value) => !value)}>Toggle mount</button>
+            <button
+              onClick={() =>
+                setState((s) => openPaneInState(s, { paneId: "device", kind: "device" }))
+              }
+            >
+              Open device
+            </button>
+          </div>
+          <div style={{ display: "flex", width: 1000, height: 600 }}>
+            <div style={{ flex: 1 }}>Chat {thread}</div>
+            {mounted ? (
+              <RightDock
+                state={state}
+                motionKey={thread}
+                widthStorageKey={storageKey(thread)}
+                minWidth={300}
+                defaultWidth="500px"
+                shouldAcceptWidth={() => true}
+                addMenuKinds={[]}
+                onClosePane={() => {}}
+                onCollapse={() => setState((s) => ({ ...s, open: false }))}
+                onOpenChange={(open) => setState((s) => ({ ...s, open }))}
+                onAddPane={() => {}}
+                renderPane={() => <div>Panel content</div>}
+              />
+            ) : null}
+          </div>
+        </>
+      );
+    }
+    const screen = await renderDock(<Harness />);
+    const measure = () =>
+      Math.round(
+        screen.container
+          .querySelector<HTMLElement>("[data-slot='sidebar-container']")!
+          .getBoundingClientRect().width,
+      );
+    const resize = async (delta: number) => {
+      const rail = page.getByRole("button", { name: "Resize Sidebar" });
+      await rail.dropTo(rail, {
+        sourcePosition: { x: 4, y: 300 },
+        targetPosition: { x: 4 - delta, y: 300 },
+        force: true,
+      });
+    };
+    try {
+      await expect.poll(measure).toBe(500);
+      await resize(100);
+      await expect.poll(measure).toBe(600);
+      expect(localStorage.getItem(storageKey("a"))).toBe("600");
+
+      await screen.getByRole("button", { name: "Switch thread" }).click();
+      await expect.poll(measure).toBe(500);
+      await resize(-100);
+      await expect.poll(measure).toBe(400);
+      expect(localStorage.getItem(storageKey("b"))).toBe("400");
+      await screen.getByRole("button", { name: "Switch thread" }).click();
+      await expect.poll(measure).toBe(600);
+
+      await screen.getByRole("button", { name: "Maximize panel", exact: true }).click();
+      await expect.poll(measure).toBe(1000);
+      await screen.getByRole("button", { name: "Restore panel", exact: true }).click();
+      await expect.poll(measure).toBe(600);
+      await screen.getByRole("button", { name: "Open device", exact: true }).click();
+      await expect.poll(measure).toBe(600);
+      await screen.getByRole("button", { name: "Collapse panel", exact: true }).click();
+      await expect
+        .poll(() => document.querySelector("[data-slot='sidebar']")?.getAttribute("data-state"))
+        .toBe("collapsed");
+      await screen.getByRole("button", { name: "Reopen", exact: true }).click();
+      await expect.poll(measure).toBe(600);
+      await screen.getByRole("button", { name: "Toggle mount" }).click();
+      await expect
+        .element(page.getByText("Panel content", { exact: true }))
+        .not.toBeInTheDocument();
+      await screen.getByRole("button", { name: "Toggle mount" }).click();
+      await expect.poll(measure).toBe(600);
+      await screen.getByRole("button", { name: "Switch thread" }).click();
+      await expect.poll(measure).toBe(400);
+    } finally {
+      await screen.unmount();
+      localStorage.removeItem(storageKey("a"));
+      localStorage.removeItem(storageKey("b"));
+    }
+  },
+);
+
 it("keeps the resize rail reachable from the chat side in the rail layout", async () => {
   await page.viewport(1280, 800);
   const { createDefaultRightDockState, openPaneInState } =

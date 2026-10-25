@@ -592,6 +592,8 @@ with its own shell session. Switching tabs preserves their sessions; closing or
 exiting one terminal leaves the others running. Dock tabs and session identities
 are restored after reload. Terminals have no nested tabs, groups, splits, or bottom
 drawer. Opening the main-view terminal again focuses its existing session.
+The right dock remembers its resized width per chat across thread switches,
+panel tab changes, closing and reopening the dock, and reloads.
 Project actions open a fresh session in the right dock with the requested working
 directory and environment, keeping the center chat unchanged, including in split
 chats. They replace only the selected idle dock terminal; its busy command must

@@ -1206,6 +1206,7 @@ export function SingleChatSurface(props: {
           state={dockState}
           minWidth={SINGLE_PANEL_MIN_WIDTH}
           defaultWidth={DIFF_INLINE_DEFAULT_WIDTH}
+          widthStorageKey={`chat_right_dock_width:${props.threadId}`}
           shouldAcceptWidth={shouldAcceptDockWidth}
           addMenuKinds={availableDockPaneKinds}
           launcherItems={dockLauncherItems}
