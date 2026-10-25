@@ -2,7 +2,7 @@
 # Synara account API. Build context is the repository root so the Bun
 # workspace graph (root package.json + bun.lock + workspace packages) resolves;
 # point the builder at this file with dockerfilePath=apps/api/Dockerfile.
-FROM --platform=$BUILDPLATFORM oven/bun:1.4.2-slim AS deps
+FROM --platform=$BUILDPLATFORM oven/bun:1.4.4-slim AS deps
 ARG TARGETARCH
 WORKDIR /app
 
@@ -23,7 +23,7 @@ RUN case "$TARGETARCH" in amd64) cpu=x64 ;; arm64) cpu=arm64 ;; *) exit 1 ;; esa
     && bun install --frozen-lockfile --ignore-scripts --production \
        --filter @synara/api --os=linux --cpu="$cpu"
 
-FROM oven/bun:1.4.2-slim
+FROM oven/bun:1.4.4-slim
 WORKDIR /app
 ENV NODE_ENV=production
 
