@@ -24067,6 +24067,70 @@ describe("ProviderCommandReactor", () => {
     expect(await Effect.runPromise(harness.listSessions())).toEqual([]);
   });
 
+  it("stops only a starting child when its parent runtime is connecting without a turn id", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+    const parent = ThreadId.makeUnsafe("thread-1");
+    const child = ThreadId.makeUnsafe("subagent:thread-1:connecting-child");
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.create",
+        commandId: CommandId.makeUnsafe("create-connecting-child"),
+        threadId: child,
+        parentThreadId: parent,
+        projectId: asProjectId("project-1"),
+        title: "Starting child",
+        modelSelection: { provider: "codex", model: "gpt-5-codex" },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        branch: null,
+        worktreePath: null,
+        createdAt: now,
+      }),
+    );
+    for (const threadId of [parent, child]) {
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.session.set",
+          commandId: CommandId.makeUnsafe(`session-${threadId}`),
+          threadId,
+          session: {
+            threadId,
+            status: "starting",
+            providerName: "codex",
+            runtimeMode: "approval-required",
+            activeTurnId: null,
+            lastError: null,
+            updatedAt: now,
+          },
+          createdAt: now,
+        }),
+      );
+    }
+    harness.setRuntimeSessionTurnState({ threadId: parent, status: "connecting" });
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.interrupt",
+        commandId: CommandId.makeUnsafe("stop-connecting-child"),
+        threadId: child,
+        createdAt: now,
+      }),
+    );
+    await harness.drain();
+    const state = await Effect.runPromise(harness.engine.getReadModel());
+    expect(state.threads.find((entry) => entry.id === child)?.session).toMatchObject({
+      status: "stopped",
+      activeTurnId: null,
+    });
+    expect(state.threads.find((entry) => entry.id === parent)?.session?.status).toBe("starting");
+    expect(await Effect.runPromise(harness.listSessions())).toMatchObject([
+      { threadId: parent, status: "connecting" },
+    ]);
+    expect(harness.stopRuntimeSession).not.toHaveBeenCalled();
+    expect(harness.stopSession).not.toHaveBeenCalled();
+    expect(harness.interruptTurn).not.toHaveBeenCalled();
+  });
+
   it.each(["starting", "running"] as const)(
     "stops a connecting runtime with no turn while the projection is %s",
     async (status) => {

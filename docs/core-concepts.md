@@ -295,6 +295,12 @@ For work that should continue across several turns, set a deliberate
 clean turn, but queued user work, approvals, questions, interruptions, failures, and pause rules
 remain in control.
 
+Hosts advertise `orchestration.thread-goal-visible-start` when they accept
+`goalStartBehavior: "start-with-message"`. Native clients use it only for a new,
+idle goal outside Plan mode, so the visible message and first turn request are
+committed together. Older hosts keep the existing goal path; this optional capability does
+not change the required protocol revision or require re-pairing.
+
 Use a [thread fork](https://www.trysynara.com/docs/workflows/forks) when a new task should inherit
 the conversation or split from one exact turn. Use a
 [handoff](https://www.trysynara.com/docs/workflows/handoffs) when another provider should continue

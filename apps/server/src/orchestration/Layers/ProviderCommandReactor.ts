@@ -1916,6 +1916,7 @@ const make = Effect.gen(function* () {
         updatedAt: input.createdAt,
       },
       createdAt: input.createdAt,
+      expectedSession: input.expectedSession ?? session,
     });
   });
 
