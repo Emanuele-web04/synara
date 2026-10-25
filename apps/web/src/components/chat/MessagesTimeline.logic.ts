@@ -56,7 +56,7 @@ export function canSubmitUserMessageEdit(input: {
 // A turn can interleave tool work and intermediate assistant narration
 // (preambles), so the collapsed panel keeps both in chronological order.
 export type CollapsedTurnItem =
-  | { kind: "work"; id: string; entry: WorkLogEntry }
+  | { kind: "work"; id: string; entry: WorkLogEntry; backgroundTaskConsumed?: true }
   | { kind: "narration"; id: string; message: ChatMessage };
 
 // A settled turn's collapsed items re-chunked for rendering: consecutive
@@ -493,16 +493,20 @@ export function deriveTurnTimingByTurnId(input: {
 // A background task still running when its turn ended stays pinned under the
 // folded turn's header: its status is the turn's lasting result. One the turn
 // started and settled itself (a dev server it stopped) folds with its work.
+// A successful later response can also consume that exact task completion.
 export function isPinnedBackgroundTaskEntry(
   entry: WorkLogEntry,
   turnEndedAt: string | null,
+  backgroundTaskConsumed = false,
 ): boolean {
   const task = entry.backgroundTask;
   if (!task) return false;
   if (task.completedAt === null || turnEndedAt === null) return true;
   const completedMs = Date.parse(task.completedAt);
   const endedMs = Date.parse(turnEndedAt);
-  return Number.isNaN(completedMs) || Number.isNaN(endedMs) || completedMs > endedMs;
+  if (Number.isNaN(completedMs) || Number.isNaN(endedMs)) return true;
+  if (backgroundTaskConsumed && task.status === "finished") return false;
+  return completedMs > endedMs;
 }
 
 // "“Run delayed echo” finished", or a count when several tasks woke the turn.
@@ -1524,6 +1528,10 @@ function collapseSettledTurns(
     ? findTailTerminalAssistantMessageId(rows, terminalAssistantMessageIds)
     : null;
 
+  // Match the exact native completion activity, not a reused task id, label,
+  // or timestamp (task.updated can settle a row before task.completed wakes us).
+  const consumedCompletions = new Map<string, WorkLogEntry>();
+
   const collectWorkItems = (entries: ReadonlyArray<WorkLogEntry>, into: CollapsedTurnItem[]) => {
     for (const entry of entries) {
       into.push({ kind: "work", id: entry.id, entry });
@@ -1567,6 +1575,7 @@ function collapseSettledTurns(
     let firstKeptVisual: Extract<MessagesTimelineRow, { kind: "inline-visual" }> | null = null;
     let wokenAt: string | null = null;
     let resumedBy: TurnResumedBy[] | null = null;
+    let wakeEntries: WorkLogEntry[] = [];
     for (let scan = pass - 1; scan >= 0; scan -= 1) {
       const prev = rows[scan]!;
       // The response started where a background task woke the agent; every
@@ -1574,6 +1583,7 @@ function collapseSettledTurns(
       if (isBackgroundTaskCompletionRow(prev)) {
         wokenAt = prev.kind === "work" ? prev.createdAt : null;
         resumedBy = collectResumedBy(rows, scan);
+        wakeEntries = collectWakeEntries(rows, scan);
         break;
       }
       if (prev.kind === "work") {
@@ -1725,6 +1735,29 @@ function collapseSettledTurns(
       resumedBy,
     };
 
+    // Only a successful, settled response consumes its wake. Until then the
+    // launching row keeps the task visible; unrelated later replies cannot do so.
+    if (
+      header.outcome === "completed" &&
+      wokenAt !== null &&
+      responseEnd &&
+      Date.parse(responseEnd) >= Date.parse(wokenAt)
+    ) {
+      const consumedWakeEntries = wakeEntries.filter((entry) => {
+        const completion = entry.backgroundTaskCompletion;
+        if (!completion || (completion.outcome ?? "finished") !== "finished") return false;
+        consumedCompletions.set(entry.id, entry);
+        return true;
+      });
+      // Keep the wake's details available in Worked without duplicating a
+      // completed notification between the two genuine final answers.
+      if (options.collapseWork) {
+        collapsedItems.unshift(
+          ...consumedWakeEntries.map((entry) => ({ kind: "work" as const, id: entry.id, entry })),
+        );
+      }
+    }
+
     if (!options.collapseWork) {
       const firstAssistant = foldIndices
         .map((index) => rows[index]!)
@@ -1755,30 +1788,61 @@ function collapseSettledTurns(
       pass -= foldIndices.length;
     }
   }
+
+  if (consumedCompletions.size === 0) return;
+  for (const row of rows) {
+    if (row.kind !== "message" || !row.collapsedTurnItems) continue;
+    for (const item of row.collapsedTurnItems) {
+      if (item.kind !== "work") continue;
+      const task = item.entry.backgroundTask;
+      if (!task || task.status !== "finished" || task.completedAt === null) continue;
+      const wake = task.completionActivityId
+        ? consumedCompletions.get(task.completionActivityId)
+        : undefined;
+      const completion = wake?.backgroundTaskCompletion;
+      if (
+        !completion ||
+        completion.taskId !== task.taskId ||
+        (completion.taskType !== null &&
+          task.taskType !== null &&
+          completion.taskType !== task.taskType) ||
+        (wake?.turnId && item.entry.turnId && wake.turnId !== item.entry.turnId)
+      )
+        continue;
+      item.backgroundTaskConsumed = true;
+    }
+  }
 }
 
 // The background tasks whose completion rows end at `index`, oldest first.
+function collectWakeEntries(
+  rows: ReadonlyArray<MessagesTimelineRow>,
+  index: number,
+): WorkLogEntry[] {
+  const entries: WorkLogEntry[] = [];
+  for (let scan = index; scan >= 0; scan -= 1) {
+    const row = rows[scan]!;
+    if (!isBackgroundTaskCompletionRow(row) || row.kind !== "work") break;
+    entries.unshift(...row.groupedEntries.filter(wakesAgent));
+  }
+  return entries;
+}
+
 function collectResumedBy(
   rows: ReadonlyArray<MessagesTimelineRow>,
   index: number,
 ): TurnResumedBy[] | null {
-  const resumedBy: TurnResumedBy[] = [];
-  for (let scan = index; scan >= 0; scan -= 1) {
-    const row = rows[scan]!;
-    if (!isBackgroundTaskCompletionRow(row) || row.kind !== "work") break;
-    for (const entry of row.groupedEntries.toReversed()) {
-      if (!wakesAgent(entry)) continue;
-      const completion = entry.backgroundTaskCompletion;
-      const monitor = entry.monitorNotification;
-      resumedBy.unshift({
-        description: completion?.description ?? monitor?.name ?? null,
-        outcome:
-          completion?.outcome ??
-          (monitor?.outcome === "completed" ? "finished" : monitor?.outcome) ??
-          "finished",
-      });
-    }
-  }
+  const resumedBy = collectWakeEntries(rows, index).map((entry): TurnResumedBy => {
+    const completion = entry.backgroundTaskCompletion;
+    const monitor = entry.monitorNotification;
+    return {
+      description: completion?.description ?? monitor?.name ?? null,
+      outcome:
+        completion?.outcome ??
+        (monitor?.outcome === "completed" ? "finished" : monitor?.outcome) ??
+        "finished",
+    };
+  });
   return resumedBy.length > 0 ? resumedBy : null;
 }
 
@@ -2032,7 +2096,10 @@ function collapsedTurnItemsEqual(
     const other = right[index]!;
     if (item.kind !== other.kind || item.id !== other.id) return false;
     if (item.kind === "work" && other.kind === "work") {
-      return workLogEntryContentEqual(item.entry, other.entry);
+      return (
+        item.backgroundTaskConsumed === other.backgroundTaskConsumed &&
+        workLogEntryContentEqual(item.entry, other.entry)
+      );
     }
     if (item.kind === "narration" && other.kind === "narration") {
       return item.message === other.message;
@@ -2094,6 +2161,7 @@ function workLogBackgroundTasksEqual(
     a.description === b.description &&
     a.startedAt === b.startedAt &&
     a.completedAt === b.completedAt &&
+    a.completionActivityId === b.completionActivityId &&
     a.exitCode === b.exitCode
   );
 }

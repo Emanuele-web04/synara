@@ -1528,10 +1528,11 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   // the visuals and the answer read as one block below it.
   const renderSettledTurnHeader = (row: Extract<MessagesTimelineRow, { kind: "message" }>) => {
     const knownAbsoluteFilePaths = knownAbsoluteFilePathsForRow(row);
-    // Keep main's lifetime semantics: only tasks outliving this turn stay pinned.
+    // Outliving tasks stay visible until a successful follow-up consumes them.
     const turnEndedAt = row.turnHeader?.endedAt ?? null;
     const pinnedBackgroundEntries = (row.collapsedTurnItems ?? []).flatMap((item) =>
-      item.kind === "work" && isPinnedBackgroundTaskEntry(item.entry, turnEndedAt)
+      item.kind === "work" &&
+      isPinnedBackgroundTaskEntry(item.entry, turnEndedAt, item.backgroundTaskConsumed)
         ? [item.entry]
         : [],
     );
@@ -1542,7 +1543,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
           item.entry.synaraThreadCreation ||
           item.entry.computerSetupRequired ||
           item.entry.computerControlDenied ||
-          isPinnedBackgroundTaskEntry(item.entry, turnEndedAt)
+          isPinnedBackgroundTaskEntry(item.entry, turnEndedAt, item.backgroundTaskConsumed)
         ),
     );
     const hasCollapsedWork = Boolean(collapsedTurnItems && collapsedTurnItems.length > 0);
@@ -2434,8 +2435,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
               ),
             ).values(),
           ];
-          // Background tasks that outlived the turn stay visible under the header
-          // while it is folded; ones the turn settled itself fold with its work.
+          // Outliving background tasks stay visible until a successful follow-up
+          // consumes them; tasks settled by this turn fold with its other work.
           const turnEndedAt = row.turnHeader?.endedAt ?? null;
           const collapsedTurnItems = row.collapsedTurnItems?.filter(
             (item) =>
@@ -2444,7 +2445,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                 item.entry.synaraThreadCreation ||
                 item.entry.computerSetupRequired ||
                 item.entry.computerControlDenied ||
-                isPinnedBackgroundTaskEntry(item.entry, turnEndedAt)
+                isPinnedBackgroundTaskEntry(item.entry, turnEndedAt, item.backgroundTaskConsumed)
               ),
           );
           const hasCollapsedWork = Boolean(collapsedTurnItems?.length);

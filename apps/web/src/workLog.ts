@@ -300,6 +300,9 @@ export interface WorkLogBackgroundTask {
   status: "running" | WorkLogBackgroundTaskOutcome;
   startedAt: string;
   completedAt: string | null;
+  // Exact task.completed activity that can wake a later response. A preceding
+  // task.updated can settle the row earlier without changing this identity.
+  completionActivityId?: string;
   exitCode: number | null;
 }
 
@@ -740,16 +743,28 @@ function deriveBackgroundTaskStates(ordered: ReadonlyArray<OrchestrationThreadAc
     }
     const task = tasks.get(taskId);
     const reconcilesStop = payload?.reconcilesStop === true && task?.status === "stopped";
+    const outcome = backgroundTaskOutcome(payload?.status);
+    if (task && reconcilesStop && outcome && task.status !== outcome) {
+      delete task.completionActivityId;
+    }
+    if (
+      task &&
+      activity.kind === "task.completed" &&
+      outcome &&
+      (task.status === "running" || task.status === outcome || reconcilesStop)
+    ) {
+      task.completionActivityId ??= activity.id;
+    }
     if (!task || (task.status !== "running" && !reconcilesStop)) continue;
     // Only explicit native replay evidence can reopen a provisional local stop.
     if (reconcilesStop && activity.kind === "task.updated" && payload?.status === "running") {
       task.status = "running";
       task.completedAt = null;
+      delete task.completionActivityId;
       task.exitCode = null;
       continue;
     }
     if (activity.kind === "task.updated" || activity.kind === "task.completed") {
-      const outcome = backgroundTaskOutcome(payload?.status);
       if (!outcome) continue;
       const detail = asTrimmedString(payload?.detail);
       task.status = outcome;
