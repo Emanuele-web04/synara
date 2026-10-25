@@ -283,7 +283,7 @@ import {
 } from "./SidebarCustomizeList";
 import { AppRailMoreMenu } from "./AppRailMoreMenu";
 import { AppRailUsage } from "./AppRailUsage";
-import { ProjectSidebarIcon } from "./ProjectSidebarIcon";
+import { ProjectDisclosureChevron, ProjectSidebarIcon } from "./ProjectSidebarIcon";
 import { ThreadHoverCardContent } from "./ThreadHoverCardContent";
 import { ProjectHoverCardContent } from "./ProjectHoverCardContent";
 import {
@@ -424,6 +424,8 @@ import {
   deriveSidebarProjectData,
   createSidebarThreadHoverAnchorId,
   findWorkspaceRootMatch,
+  canSnoozeSidebarThread,
+  mayBelongToGroup,
   getPinnedThreadsForSidebar,
   orderPinnedProjectsForSidebar,
   pullRequestRepositoryConfigFingerprint,
@@ -645,6 +647,9 @@ type ProjectContextMenuState = {
 const PROJECT_CONTEXT_MENU_PANEL_CLASS_NAME = SIDEBAR_CONTEXT_MENU_PANEL_CLASS_NAME;
 const PROJECT_CONTEXT_MENU_ITEM_CLASS_NAME = SIDEBAR_CONTEXT_MENU_ITEM_CLASS_NAME;
 const PROJECT_CONTEXT_MENU_ICON_CLASS_NAME = SIDEBAR_CONTEXT_MENU_ICON_CLASS_NAME;
+
+// Same gap and tone as the Chats header chevron.
+const PROJECT_ROW_CHEVRON_CLASS_NAME = "-ml-1 text-muted-foreground/79";
 
 function ProjectContextMenuIcon({ icon }: { icon: LucideIcon }) {
   return <SidebarContextMenuIcon icon={icon} />;
@@ -1792,7 +1797,8 @@ export default function Sidebar() {
   const sidebarTreeThreads = useStore(selectSidebarTreeThreads);
   const selectProjectLastActivityAt = useMemo(() => createProjectLastActivityAtSelector(), []);
   const projectLastActivityAt = useStore(selectProjectLastActivityAt);
-  const { summaryFor, summariesByProjectId, coordinatorThreadIds } = useProjectAgentSummaries();
+  const { summaryFor, summariesByProjectId, coordinatorThreadIds, membersLoaded } =
+    useProjectAgentSummaries();
   // The bell and Inbox read current threads. Activity also receives snoozed rows
   // for its separate section, so badges never point at work the user set aside.
   const {
@@ -1876,14 +1882,23 @@ export default function Sidebar() {
     (
       thread: Pick<
         SidebarThreadSummary,
-        "id" | "projectId" | "parentThreadId" | "sidechatSourceThreadId" | "sidechatContext"
+        | "id"
+        | "projectId"
+        | "creationSource"
+        | "sourceThreadId"
+        | "parentThreadId"
+        | "sidechatSourceThreadId"
+        | "sidechatContext"
       >,
     ) =>
-      !thread.parentThreadId &&
-      !groupProjectIdSet.has(thread.projectId) &&
-      !coordinatorThreadIds.has(thread.id) &&
-      !isSidechatThread(thread),
-    [groupProjectIdSet, coordinatorThreadIds],
+      canSnoozeSidebarThread({
+        thread,
+        groupProjectIds: groupProjectIdSet,
+        summariesByProjectId,
+        coordinatorThreadIds,
+        membersLoaded,
+      }),
+    [groupProjectIdSet, summariesByProjectId, coordinatorThreadIds, membersLoaded],
   );
   const resolveThreadStatusForSidebar = useCallback(
     (thread: SidebarThreadSummary) =>
@@ -3548,9 +3563,20 @@ export default function Sidebar() {
         worktreePath: thread.worktreePath,
       });
       // Group actions only make sense for threads in ordinary (non-group)
-      // projects; group threads already belong to a group.
+      // projects; group threads, workers included, already belong to a group.
       const canUseHubActions =
-        GROUPS_ON && !groupProjectIdSet.has(thread.projectId) && !thread.parentThreadId;
+        GROUPS_ON &&
+        !mayBelongToGroup({
+          threadId,
+          projectId: thread.projectId,
+          creationSource: thread.creationSource,
+          sourceThreadId: thread.sourceThreadId,
+          groupProjectIds: groupProjectIdSet,
+          summariesByProjectId,
+          coordinatorThreadIds,
+          membersLoaded,
+        }) &&
+        !thread.parentThreadId;
       // Paused and archived groups can't run a coordinator turn, so they
       // aren't move targets — the server refuses the turn either way.
       const eligibleGroups = canUseHubActions
@@ -3873,6 +3899,7 @@ export default function Sidebar() {
       forkThread,
       groupProjectIdSet,
       handoffThread,
+      membersLoaded,
       moveThreadToGroup,
       handleMarkThreadUnread,
       navigate,
@@ -3886,6 +3913,7 @@ export default function Sidebar() {
       sidebarThreadSummaryById,
       setThreadSnoozedUntil,
       snoozeThread,
+      summariesByProjectId,
       summaryFor,
       toggleThreadPinned,
     ],
@@ -6386,6 +6414,21 @@ export default function Sidebar() {
                   />
                 }
                 label={projectRowLabel}
+                labelAccessory={
+                  isProjectPinned ? (
+                    <DisclosureChevron
+                      open={project.expanded}
+                      className={PROJECT_ROW_CHEVRON_CLASS_NAME}
+                    />
+                  ) : (
+                    <ProjectDisclosureChevron
+                      cwd={project.cwd}
+                      expanded={project.expanded}
+                      appearance={project.appearance}
+                      className={PROJECT_ROW_CHEVRON_CLASS_NAME}
+                    />
+                  )
+                }
                 iconClassName={projectFolderIconClassName}
                 reserveClassName={projectToolbarReserveClassName}
                 trailing={

@@ -304,6 +304,11 @@ Install V2 following the [official guide](https://opencode.ai/v2/docs/), then se
 model discovery. V2 uses `@opencode/cli` or `anomalyco/tap/opencode-v2` for package updates;
 V1 retains its own packages. External-server updates belong to that server's operator.
 
+V2 discovery loads models before reading provider metadata, so Console providers initialized by
+that first lookup appear on cold servers. When CLI help advertises `--standalone`, the model-list
+fallback uses a private server with the selected account's environment instead of the background
+service's shared port.
+
 Preserve the OpenCode account/data directories to retain native session IDs. OpenCode owns
 migration of its history and credentials. Synara does not copy provider databases or silently
 replace missing resumed sessions. Existing supported V1 configuration remains readable by V2;
@@ -590,6 +595,12 @@ appropriate machine. Synara never submits browser credentials or accepts consent
 Pi-family **Sign-in options** sends the native `/login` TUI command after you have completed startup
 prompts. It is never passed as a model prompt. OpenCode accounts configured for an external server
 must authenticate on that server; Synara reports this instead of changing a local account.
+
+For local OpenCode sign-in, Synara checks `auth login --help` and adds `--standalone` when supported.
+The private login server uses the selected account's home and XDG directories without connecting
+to another account's background service. Legacy CLIs keep `auth login`. Authentication terminals
+use the embedded renderer's terminal and color capabilities, including when the server inherited
+`TERM=dumb` or `NO_COLOR`.
 
 For non-default native Devin, Antigravity, and Droid accounts, the first launch saves isolated home
 and credential-directory environment settings so later managed sessions and health checks use the

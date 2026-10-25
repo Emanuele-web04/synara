@@ -22,11 +22,13 @@ import {
   isProjectsSidebarSurface,
   getUnpinnedThreadsForSidebar,
   hasUnseenCompletion,
+  canSnoozeSidebarThread,
   partitionSidebarThreadsByProjectIds,
   normalizeSidebarView,
   isLatestPinnedThreadMutation,
   isLoopbackHostname,
   isHiddenProjectAgentCoordinatorThread,
+  mayBelongToGroup,
   pruneProjectThreadListPagingForCollapsedProjects,
   recoverExistingAddProjectTarget,
   resolveAutomationCountBadge,
@@ -1456,6 +1458,176 @@ describe("normalizeSidebarView", () => {
     expect(normalizeSidebarView(null)).toBe("threads");
     expect(normalizeSidebarView(undefined)).toBe("threads");
     expect(normalizeSidebarView("bogus")).toBe("threads");
+  });
+});
+
+describe("canSnoozeSidebarThread", () => {
+  const hubId = ProjectId.makeUnsafe("hub");
+  const otherHubId = ProjectId.makeUnsafe("other-hub");
+  const repoId = ProjectId.makeUnsafe("repo");
+  const worker = makeSidebarThreadSummary({ id: ThreadId.makeUnsafe("worker"), projectId: repoId });
+  const ordinary = makeSidebarThreadSummary({
+    id: ThreadId.makeUnsafe("ordinary"),
+    projectId: repoId,
+  });
+  const coordinator = makeSidebarThreadSummary({
+    id: ThreadId.makeUnsafe("coordinator"),
+    projectId: hubId,
+  });
+  const input = {
+    groupProjectIds: new Set([hubId, otherHubId]),
+    summariesByProjectId: new Map([
+      [hubId, { memberThreadIds: [coordinator.id] }],
+      [otherHubId, { memberThreadIds: [worker.id] }],
+    ]),
+    coordinatorThreadIds: new Set<string>([coordinator.id]),
+    membersLoaded: true,
+  };
+
+  it("offers snooze for an ordinary chat, even in a repository a hub links", () => {
+    expect(canSnoozeSidebarThread({ ...input, thread: ordinary })).toBe(true);
+  });
+
+  it("withholds snooze from every chat while hubs exist and their member lists have not loaded", () => {
+    // Cold start: the hub rows arrived through the stream, so they carry no member list yet.
+    const loading = {
+      ...input,
+      summariesByProjectId: new Map([
+        [hubId, {}],
+        [otherHubId, {}],
+      ]),
+      membersLoaded: false,
+    };
+    expect(canSnoozeSidebarThread({ ...loading, thread: ordinary })).toBe(false);
+    expect(canSnoozeSidebarThread({ ...loading, thread: worker })).toBe(false);
+  });
+
+  it("offers snooze before the member lists load when the workspace has no hubs", () => {
+    expect(
+      canSnoozeSidebarThread({
+        ...input,
+        thread: ordinary,
+        groupProjectIds: new Set(),
+        summariesByProjectId: new Map(),
+        membersLoaded: false,
+      }),
+    ).toBe(true);
+  });
+
+  it("withholds snooze from the coordinator and from a hub worker in a linked repository", () => {
+    expect(canSnoozeSidebarThread({ ...input, thread: coordinator })).toBe(false);
+    expect(canSnoozeSidebarThread({ ...input, thread: worker })).toBe(false);
+  });
+
+  it("withholds snooze from a coordinator's new worker that no member list names yet", () => {
+    // It appears before its Hub index row, and a closed Hub never sends that row here.
+    const newWorker = makeSidebarThreadSummary({
+      id: ThreadId.makeUnsafe("new-worker"),
+      projectId: repoId,
+      creationSource: "synara_mcp",
+      sourceThreadId: coordinator.id,
+    });
+    expect(canSnoozeSidebarThread({ ...input, thread: newWorker })).toBe(false);
+  });
+
+  it("offers snooze for a chat that another chat's agent created in a linked repository", () => {
+    const spawned = makeSidebarThreadSummary({
+      id: ThreadId.makeUnsafe("spawned"),
+      projectId: repoId,
+      creationSource: "synara_mcp",
+      sourceThreadId: ordinary.id,
+    });
+    expect(canSnoozeSidebarThread({ ...input, thread: spawned })).toBe(true);
+  });
+
+  it("withholds snooze from chats in the hub's own project and from subagents", () => {
+    const hubChat = makeSidebarThreadSummary({
+      id: ThreadId.makeUnsafe("hub-chat"),
+      projectId: hubId,
+    });
+    const child = makeSidebarThreadSummary({
+      id: ThreadId.makeUnsafe("child"),
+      projectId: repoId,
+      parentThreadId: ordinary.id,
+    });
+    expect(canSnoozeSidebarThread({ ...input, thread: hubChat })).toBe(false);
+    expect(canSnoozeSidebarThread({ ...input, thread: child })).toBe(false);
+  });
+});
+
+describe("mayBelongToGroup", () => {
+  const hubId = ProjectId.makeUnsafe("hub");
+  const repoId = ProjectId.makeUnsafe("repo");
+  const workerId = ThreadId.makeUnsafe("worker");
+  const ordinaryId = ThreadId.makeUnsafe("ordinary");
+  const coordinatorId = ThreadId.makeUnsafe("coordinator");
+  const newWorkerId = ThreadId.makeUnsafe("new-worker");
+  const loaded = {
+    projectId: repoId,
+    creationSource: null,
+    sourceThreadId: null,
+    groupProjectIds: new Set([hubId]),
+    summariesByProjectId: new Map([[hubId, { memberThreadIds: [coordinatorId, workerId] }]]),
+    coordinatorThreadIds: new Set<string>([coordinatorId]),
+    membersLoaded: true,
+  };
+
+  it("tells a hub worker in a linked repository from an ordinary chat once members are known", () => {
+    expect(mayBelongToGroup({ ...loaded, threadId: workerId })).toBe(true);
+    expect(mayBelongToGroup({ ...loaded, threadId: ordinaryId })).toBe(false);
+  });
+
+  it("treats every chat as a possible member until the hub member lists load", () => {
+    const loading = {
+      ...loaded,
+      summariesByProjectId: new Map([[hubId, {}]]),
+      membersLoaded: false,
+    };
+    expect(mayBelongToGroup({ ...loading, threadId: ordinaryId })).toBe(true);
+    expect(mayBelongToGroup({ ...loading, threadId: workerId })).toBe(true);
+  });
+
+  it("treats a coordinator's new worker as a member before any member list names it", () => {
+    expect(
+      mayBelongToGroup({
+        ...loaded,
+        threadId: newWorkerId,
+        creationSource: "synara_mcp",
+        sourceThreadId: coordinatorId,
+      }),
+    ).toBe(true);
+  });
+
+  it("reads worker provenance the way the server does", () => {
+    // Another chat's agent made this one, or the coordinator's provider made a subagent.
+    expect(
+      mayBelongToGroup({
+        ...loaded,
+        threadId: newWorkerId,
+        creationSource: "synara_mcp",
+        sourceThreadId: ordinaryId,
+      }),
+    ).toBe(false);
+    expect(
+      mayBelongToGroup({
+        ...loaded,
+        threadId: newWorkerId,
+        creationSource: "provider_native",
+        sourceThreadId: coordinatorId,
+      }),
+    ).toBe(false);
+  });
+
+  it("needs no member lists in a workspace without hubs", () => {
+    expect(
+      mayBelongToGroup({
+        ...loaded,
+        threadId: ordinaryId,
+        groupProjectIds: new Set(),
+        summariesByProjectId: new Map(),
+        membersLoaded: false,
+      }),
+    ).toBe(false);
   });
 });
 

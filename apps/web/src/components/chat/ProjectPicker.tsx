@@ -535,7 +535,7 @@ export const ProjectPicker = memo(function ProjectPicker({
         )}
       >
         <div className="flex min-w-0 items-center gap-2">
-          {folder.appearance ? (
+          {folder.projectId ? (
             <span className="relative inline-flex size-3.5 shrink-0 items-center justify-center text-muted-foreground/70">
               <ProjectSidebarIcon
                 cwd={folder.cwd}

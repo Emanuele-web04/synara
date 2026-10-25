@@ -1710,6 +1710,10 @@ const makeOpenCodeRuntime = (options?: OpenCodeRuntimeLiveOptions) =>
             return Effect.fail(error);
           }
 
+          // V2's background service has a shared default port across account homes.
+          const supportsStandalone = /^\s*--standalone(?:\s|$)/m.test(
+            `${cause?.stdout ?? ""}\n${cause?.stderr ?? ""}`,
+          );
           return listOpenCodeCliModelsFromArgs({
             binaryPath: input.binaryPath,
             ...(input.cliSpec !== undefined ? { cliSpec: input.cliSpec } : {}),
@@ -1720,7 +1724,7 @@ const makeOpenCodeRuntime = (options?: OpenCodeRuntimeLiveOptions) =>
             ...(input.isolationRootDir !== undefined
               ? { isolationRootDir: input.isolationRootDir }
               : {}),
-            args: ["models"],
+            args: supportsStandalone ? ["models", "--standalone"] : ["models"],
           });
         }),
       );

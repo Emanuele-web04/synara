@@ -11,6 +11,7 @@ import { SidebarLeadingIcon } from "./SidebarLeadingIcon";
 export function SidebarProjectRowContent({
   icon,
   label,
+  labelAccessory,
   hostName,
   iconClassName,
   reserveClassName,
@@ -18,6 +19,7 @@ export function SidebarProjectRowContent({
 }: {
   icon: ReactNode;
   label: string;
+  labelAccessory?: ReactNode;
   hostName?: string;
   iconClassName?: string;
   reserveClassName?: string;
@@ -38,7 +40,10 @@ export function SidebarProjectRowContent({
           reserveClassName,
         )}
       >
-        <span className={SIDEBAR_PROJECT_NAME_CLASS_NAME}>{label}</span>
+        <span className={cn(SIDEBAR_PROJECT_NAME_CLASS_NAME, labelAccessory && "flex-initial")}>
+          {label}
+        </span>
+        {labelAccessory}
         {hostName ? (
           <span className="max-w-[40%] shrink-0 truncate text-ui-xs text-muted-foreground">
             {hostName}

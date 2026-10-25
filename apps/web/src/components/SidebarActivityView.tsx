@@ -287,7 +287,6 @@ export function ActivityThreadRow({
               expanded={false}
               appearance={project.appearance}
               glyphClassName={sidebarGlyphClass("meta", "text-muted-foreground/70")}
-              presentation="favicon"
             />
           ) : (
             <FolderIcon

@@ -10,6 +10,7 @@ import {
   type ThreadId,
 } from "@synara/contracts";
 import { isGroupThreadRoute } from "./SidebarGroupsSurface.logic";
+import { isSidechatThread } from "@synara/shared/sidechatThread";
 import { pluralize } from "@synara/shared/text";
 import { collectSubagentDescendants } from "@synara/shared/threadHierarchy";
 import { resolveThreadEnvironmentMode } from "@synara/shared/threadEnvironment";
@@ -1461,6 +1462,83 @@ export function partitionSidebarThreadsByProjectIds<
     }
   }
   return { groupThreads, nonGroupThreads };
+}
+
+/**
+ * Whether a thread is, or may still turn out to be, a Hub member. Workers carry their
+ * linked repo's projectId, so only a hub's member list or a coordinator's provenance tells
+ * them from ordinary chats, and those lists arrive with the summaries list, not with the
+ * stream rows that precede it. Until then every chat in a workspace with Hubs is a candidate.
+ */
+export function mayBelongToGroup(input: {
+  readonly threadId: ThreadId;
+  readonly projectId: ProjectId;
+  readonly creationSource: SidebarThreadSummary["creationSource"];
+  readonly sourceThreadId: SidebarThreadSummary["sourceThreadId"];
+  readonly groupProjectIds: ReadonlySet<ProjectId>;
+  readonly summariesByProjectId: ReadonlyMap<
+    ProjectId,
+    Pick<ProjectAgentSummary, "memberThreadIds">
+  >;
+  readonly coordinatorThreadIds: ReadonlySet<string>;
+  readonly membersLoaded: boolean;
+}): boolean {
+  return (
+    (input.groupProjectIds.size > 0 && !input.membersLoaded) ||
+    // A coordinator's worker shows up before its index row, and a closed Hub never sends
+    // that row here. Its provenance already names the Hub, the rule the server uses too.
+    (input.creationSource === "synara_mcp" &&
+      !!input.sourceThreadId &&
+      input.coordinatorThreadIds.has(input.sourceThreadId)) ||
+    isGroupThreadRoute({
+      threadId: input.threadId,
+      projectId: input.projectId,
+      groupProjectIds: input.groupProjectIds,
+      summariesByProjectId: input.summariesByProjectId,
+    })
+  );
+}
+
+/**
+ * Snoozed chats are listed in the Chats surface's Snoozed section, and Hubs has none, so a
+ * Hub thread cannot be snoozed. That includes its workers, and any chat that may still be
+ * one: a snoozed worker would leave every list.
+ */
+export function canSnoozeSidebarThread(input: {
+  readonly thread: Pick<
+    SidebarThreadSummary,
+    | "id"
+    | "projectId"
+    | "creationSource"
+    | "sourceThreadId"
+    | "parentThreadId"
+    | "sidechatSourceThreadId"
+    | "sidechatContext"
+  >;
+  readonly groupProjectIds: ReadonlySet<ProjectId>;
+  readonly summariesByProjectId: ReadonlyMap<
+    ProjectId,
+    Pick<ProjectAgentSummary, "memberThreadIds">
+  >;
+  readonly coordinatorThreadIds: ReadonlySet<string>;
+  readonly membersLoaded: boolean;
+}): boolean {
+  const { thread } = input;
+  return (
+    !thread.parentThreadId &&
+    !mayBelongToGroup({
+      threadId: thread.id,
+      projectId: thread.projectId,
+      creationSource: thread.creationSource,
+      sourceThreadId: thread.sourceThreadId,
+      groupProjectIds: input.groupProjectIds,
+      summariesByProjectId: input.summariesByProjectId,
+      coordinatorThreadIds: input.coordinatorThreadIds,
+      membersLoaded: input.membersLoaded,
+    }) &&
+    !input.coordinatorThreadIds.has(thread.id) &&
+    !isSidechatThread(thread)
+  );
 }
 
 /** Classic thread sections share the active Space; container chats remain global. */

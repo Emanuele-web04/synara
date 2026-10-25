@@ -145,6 +145,13 @@ reconnect instead of creating work locally. Window appearance, zoom, and app key
 to the controlling app; project-script shortcuts stay with the project on its computer. Opening
 Keybindings from a remote chat takes you to the controlling app's settings.
 
+Wherever a project appears (sidebar rows, pinned rail shortcuts, hover cards, search, pickers, and the
+Edit project preview), its glyph is the project's local favicon when one is available, with a folder
+as the fallback. An emoji, icon, or folder color chosen in Edit project takes priority over the
+detected favicon. The folder opens and closes with its sidebar row; a pinned row, or a row showing
+any other glyph, adds a chevron for that state. Detected logos must be image files inside the project;
+links to files outside it are ignored, and logo documents cannot run scripts.
+
 The project picker shows registered projects and local folders. Creating a task worktree does not
 add another project entry. If the current draft already uses an unregistered folder, the picker keeps
 that folder visible with its path.

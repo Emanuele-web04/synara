@@ -34,7 +34,10 @@ afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
-function fixture(provider: ProviderKind) {
+function fixture(
+  provider: ProviderKind,
+  options?: { standalone?: boolean; helpExitCode?: number },
+) {
   const root = realpathSync(mkdtempSync(path.join(os.tmpdir(), "synara-login-")));
   roots.push(root);
   const homeDir = path.join(root, "home");
@@ -49,6 +52,10 @@ function fixture(provider: ProviderKind) {
 const fs = require('node:fs');
 const path = require('node:path');
 const env = process.env;
+if (process.argv.includes('--help')) {
+  console.log(${JSON.stringify(options?.standalone === false ? "USAGE\n  auth login" : "FLAGS\n  --standalone  Run with a private server\n")});
+  process.exit(${options?.helpExitCode ?? 0});
+}
 const home = env.CODEX_HOME || env.CLAUDE_CONFIG_DIR || env.CURSOR_CONFIG_DIR || env.GROK_HOME || env.PI_CODING_AGENT_DIR || env.HOME;
 console.log(JSON.stringify({ argv: process.argv.slice(2), cwd: process.cwd(), home, user: env.USER, logname: env.LOGNAME, ambient: env.OPENAI_API_KEY || env.FACTORY_API_KEY || env.WINDSURF_API_KEY || env.GEMINI_API_KEY || '', authority: env.SYNARA_AUTH_TOKEN || '', nativeFlag: env.ELECTRON_RUN_AS_NODE || '' }));
 process.stdin.once('data', () => { fs.mkdirSync(home, { recursive: true }); fs.writeFileSync(path.join(home, 'fixture-auth.json'), 'fixture-only'); process.exit(0); });
@@ -96,7 +103,7 @@ it.skipIf(process.platform === "win32").each([
   ["antigravity", []],
   ["grok", ["login"]],
   ["droid", []],
-  ["opencode", ["auth", "login"]],
+  ["opencode", ["auth", "login", "--standalone"]],
   ["pi", []],
   ["omp", []],
 ] as const)(
@@ -183,6 +190,27 @@ it.skipIf(process.platform === "win32").each([
         }),
       ).pipe(Effect.provide(Layer.provide(NodePtyLive, NodeServices.layer))),
     );
+  },
+);
+
+it.skipIf(process.platform === "win32").each([0, 1])(
+  "detects OpenCode standalone login even when help exits with %s",
+  async (helpExitCode) => {
+    const input = fixture("opencode", { helpExitCode });
+    const launch = await resolveProviderAuthenticationLaunch(input);
+    expect(launch.args).toEqual(["auth", "login", "--standalone"]);
+    expect(launch.env.HOME).not.toBe(input.homeDir);
+    expect(launch.env.XDG_DATA_HOME).toBe(path.join(launch.env.HOME!, ".local", "share"));
+  },
+);
+
+it.skipIf(process.platform === "win32")(
+  "keeps legacy OpenCode login arguments when standalone is unavailable",
+  async () => {
+    const launch = await resolveProviderAuthenticationLaunch(
+      fixture("opencode", { standalone: false }),
+    );
+    expect(launch.args).toEqual(["auth", "login"]);
   },
 );
 

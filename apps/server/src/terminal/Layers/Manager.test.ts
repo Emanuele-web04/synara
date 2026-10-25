@@ -311,6 +311,39 @@ describe("TerminalManager", () => {
     }
   });
 
+  it("uses embedded terminal capabilities for authentication without changing the account home", async () => {
+    const { manager, ptyAdapter } = makeManager(5000, {
+      providerAuthResolver: async () => ({
+        command: process.execPath,
+        args: ["login"],
+        cwd: process.cwd(),
+        env: {
+          HOME: "/isolated/account",
+          XDG_DATA_HOME: "/isolated/account/.local/share",
+          TERM: "dumb",
+          TERM_PROGRAM: "ghostty",
+          TERMINFO: "/host/terminfo",
+          NO_COLOR: "1",
+          FORCE_COLOR: "0",
+          COLORTERM: "",
+        },
+      }),
+    });
+    try {
+      await manager.open(openInput({ providerAuthInstanceId: "opencode_work" }));
+      expect(ptyAdapter.spawnInputs[0]?.env).toMatchObject({
+        HOME: "/isolated/account",
+        XDG_DATA_HOME: "/isolated/account/.local/share",
+        TERM: process.platform === "win32" ? "xterm-color" : "xterm-256color",
+        COLORTERM: "truecolor",
+      });
+      for (const key of ["TERM_PROGRAM", "TERMINFO", "NO_COLOR", "FORCE_COLOR"])
+        expect(ptyAdapter.spawnInputs[0]?.env[key]).toBeUndefined();
+    } finally {
+      await manager.dispose();
+    }
+  });
+
   it("does not restart failed authentication or switch its account during reattach", async () => {
     const resolver = vi.fn(async () => {
       throw new Error("Account CLI missing");

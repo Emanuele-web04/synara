@@ -177,7 +177,6 @@ function InboxGlyph({
       expanded={false}
       appearance={project.appearance}
       glyphClassName={cn("shrink-0", className)}
-      presentation="favicon"
     />
   ) : null;
 }
