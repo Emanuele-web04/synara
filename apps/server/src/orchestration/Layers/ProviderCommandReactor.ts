@@ -286,6 +286,13 @@ const stopPersistenceError = (error: ProviderServiceError): ProviderServiceError
     ? error.cause
     : error;
 
+// A provider can still be starting/running before it announces a turn ID.
+// Its missing ID must never turn an uncertain Stop into apparent success.
+const hasLiveProviderWork = (session: ProviderSession | undefined) =>
+  session?.status === "connecting" ||
+  session?.status === "running" ||
+  session?.activeTurnId !== undefined;
+
 type BoundedProviderCallResult<E> =
   | { readonly _tag: "ok" }
   | { readonly _tag: "timeout"; readonly detail: string }
@@ -798,6 +805,15 @@ function canContinueGoalPursuit(
     Boolean(activeThreadGoal(thread)?.trim()) &&
     thread.goalPausedAt == null &&
     (thread.goalStartedAt ?? null) === goalStartedAt
+  );
+}
+
+function isUnrecordedStopTarget(cause: Cause.Cause<ProviderServiceError>): boolean {
+  const failure = Option.getOrUndefined(Cause.findErrorOption(cause));
+  return (
+    failure?._tag === "ProviderValidationError" &&
+    failure.operation === "ProviderService.recordStopTarget" &&
+    failure.reason === "runtime-unavailable"
   );
 }
 
@@ -1714,6 +1730,24 @@ const make = Effect.gen(function* () {
       createdAt: input.createdAt,
     });
 
+  const rejectUnrecordedStop = (
+    cause: Cause.Cause<ProviderServiceError>,
+    activity: Parameters<typeof appendProviderFailureActivity>[0],
+  ) =>
+    appendProviderFailureActivity(activity).pipe(
+      Effect.catchCause((reportCause) =>
+        Cause.hasInterruptsOnly(reportCause)
+          ? Effect.failCause(reportCause)
+          : Effect.logWarning(
+              "provider command reactor could not report the rejected Stop target",
+              { threadId: activity.threadId },
+            ),
+      ),
+      // A failed error-row write must never turn a rejected, unrecorded target
+      // into a safe retry of the entire physical control request.
+      Effect.andThen(Effect.failCause(cause)),
+    );
+
   const setThreadSession = (input: {
     readonly threadId: ThreadId;
     readonly session: OrchestrationSession;
@@ -2150,12 +2184,6 @@ const make = Effect.gen(function* () {
     );
   const hasLiveProviderTurn = (threadId: ThreadId) =>
     resolveLiveProviderTurnId(threadId).pipe(Effect.map((turnId) => turnId !== undefined));
-  // A provider can still be starting/running before it announces a turn ID.
-  // Its missing ID must never turn an uncertain Stop into apparent success.
-  const hasLiveProviderWork = (session: ProviderSession | undefined) =>
-    session?.status === "connecting" ||
-    session?.status === "running" ||
-    session?.activeTurnId !== undefined;
 
   const editResendTurnStartKey = (threadId: ThreadId, messageId: string) =>
     `${threadId}:${messageId}`;
@@ -5051,6 +5079,7 @@ const make = Effect.gen(function* () {
           // and ask the live turn to stop so the steer dispatches next.
           yield* interruptProviderTurn({
             controlRequestId: turnStartKeyForEvent(event),
+            preserveQueuedWork: true,
             threadId: event.payload.threadId,
             createdAt: event.payload.createdAt,
           });
@@ -5285,6 +5314,7 @@ const make = Effect.gen(function* () {
       ) {
         yield* interruptProviderTurn({
           controlRequestId: turnStartKeyForEvent(event),
+          preserveQueuedWork: true,
           threadId: event.payload.threadId,
           turnId: startedTurn.turnId,
           createdAt: new Date().toISOString(),
@@ -6235,6 +6265,7 @@ const make = Effect.gen(function* () {
         if (startedTurn && !canContinueGoalPursuit(latestThread, event.payload.goalStartedAt)) {
           yield* interruptProviderTurn({
             controlRequestId: turnStartKeyForEvent(event),
+            preserveQueuedWork: true,
             threadId: thread.id,
             turnId: startedTurn.turnId,
             createdAt: new Date().toISOString(),
@@ -6386,6 +6417,7 @@ const make = Effect.gen(function* () {
 
   const interruptProviderTurn = Effect.fnUntraced(function* (input: {
     readonly controlRequestId: string;
+    readonly preserveQueuedWork?: boolean;
     readonly threadId: ThreadId;
     readonly turnId?: TurnId | undefined;
     readonly createdAt: string;
@@ -6458,6 +6490,7 @@ const make = Effect.gen(function* () {
           threadId: input.threadId,
           createdAt: input.createdAt,
           controlRequestId: input.controlRequestId,
+          ...(input.preserveQueuedWork ? { preserveQueuedWork: true } : {}),
           expectedLifecycleGeneration: replayReceipt.observedLifecycleGeneration,
         });
       }
@@ -6504,6 +6537,7 @@ const make = Effect.gen(function* () {
         createdAt: input.createdAt,
         expectedLifecycleGeneration: observedRuntime.lifecycleGeneration,
         controlRequestId: input.controlRequestId,
+        ...(input.preserveQueuedWork ? { preserveQueuedWork: true } : {}),
       });
     }
 
@@ -6558,6 +6592,16 @@ const make = Effect.gen(function* () {
         })
         .pipe(Effect.mapError(stopPersistenceError)),
     });
+    if (result._tag === "failed" && isUnrecordedStopTarget(result.cause)) {
+      return yield* rejectUnrecordedStop(result.cause, {
+        threadId: input.threadId,
+        kind: "provider.turn.interrupt.failed",
+        summary: "Provider turn interrupt failed",
+        detail: result.outcome.detail,
+        turnId: turnId ?? null,
+        createdAt: input.createdAt,
+      });
+    }
     const current = yield* resolveThread(input.threadId);
     const currentRuntimeTarget = yield* readRuntimeStopTarget(input);
     const currentRuntime = currentRuntimeTarget.session ?? undefined;
@@ -6632,6 +6676,7 @@ const make = Effect.gen(function* () {
         interruptEscalated: true,
         expectedLifecycleGeneration: observedRuntime.lifecycleGeneration,
         controlRequestId: input.controlRequestId,
+        ...(input.preserveQueuedWork ? { preserveQueuedWork: true } : {}),
         ...(current?.session ? { expectedSession: current.session } : {}),
       });
     }
@@ -6665,6 +6710,7 @@ const make = Effect.gen(function* () {
           interruptEscalated: true,
           expectedLifecycleGeneration: observedRuntime.lifecycleGeneration,
           controlRequestId: input.controlRequestId,
+          ...(input.preserveQueuedWork ? { preserveQueuedWork: true } : {}),
         });
       }
       return yield* settleInterruptedProviderTurn({
@@ -6681,8 +6727,30 @@ const make = Effect.gen(function* () {
   const processTurnInterruptRequested = Effect.fnUntraced(function* (
     event: Extract<ProviderIntentEvent, { type: "thread.turn-interrupt-requested" }>,
   ) {
+    // Both generated steer interrupts and direct Stop's goal-pause event have
+    // a cause. Resolve the exact preceding event in the decider's atomic batch;
+    // only a queued steer grants interrupt-only queue semantics.
+    const cause =
+      event.causationEventId !== null
+        ? Option.getOrUndefined(
+            yield* orchestrationEngine
+              .readThreadEventsThrough(
+                event.payload.threadId,
+                Math.max(0, event.sequence - 2),
+                event.sequence - 1,
+                undefined,
+                1,
+              )
+              .pipe(Stream.runHead),
+          )
+        : undefined;
+    const preservesQueuedSteer =
+      cause?.eventId === event.causationEventId &&
+      cause?.type === "thread.turn-queued" &&
+      cause.payload.dispatchMode === "steer";
     yield* interruptProviderTurn({
       controlRequestId: turnStartKeyForEvent(event),
+      preserveQueuedWork: preservesQueuedSteer,
       threadId: event.payload.threadId,
       turnId: event.payload.turnId,
       createdAt: event.payload.createdAt,
@@ -7230,6 +7298,7 @@ const make = Effect.gen(function* () {
     readonly expectedSession?: OrchestrationSession;
     readonly expectedLifecycleGeneration?: string | null;
     readonly controlRequestId?: string;
+    readonly preserveQueuedWork?: boolean;
   }) {
     const thread = yield* resolveThreadShell(input.threadId);
     const providerThread = yield* resolveProviderSessionThread(input.threadId);
@@ -7324,6 +7393,16 @@ const make = Effect.gen(function* () {
                 ),
               ),
           });
+          if (stopped._tag === "failed" && isUnrecordedStopTarget(stopped.cause)) {
+            return yield* rejectUnrecordedStop(stopped.cause, {
+              threadId: thread.id,
+              kind: "provider.session.stop.failed",
+              summary: "Provider session stop failed",
+              detail: stopped.outcome.detail,
+              turnId: null,
+              createdAt: input.createdAt,
+            });
+          }
           if (
             stopped._tag === "failed" &&
             isStaleProviderControl(stopped.cause, "ProviderService.stopRuntimeSession")
@@ -7354,6 +7433,19 @@ const make = Effect.gen(function* () {
     if (input.expectedLifecycleGeneration !== undefined && !(yield* stopOwnedRuntime)) return;
     if (input.expectedLifecycleGeneration !== undefined && isRunningChild) {
       conditionalChildInterrupt = yield* interruptChildRuntime();
+      if (
+        conditionalChildInterrupt._tag === "failed" &&
+        isUnrecordedStopTarget(conditionalChildInterrupt.cause)
+      ) {
+        return yield* rejectUnrecordedStop(conditionalChildInterrupt.cause, {
+          threadId: thread.id,
+          kind: "provider.turn.interrupt.failed",
+          summary: "Provider turn interrupt failed",
+          detail: conditionalChildInterrupt.outcome.detail,
+          turnId: thread.session?.activeTurnId ?? null,
+          createdAt: input.createdAt,
+        });
+      }
       if (conditionalChildInterrupt._tag !== "ok") {
         if (
           conditionalChildInterrupt._tag === "failed" &&
@@ -7379,6 +7471,16 @@ const make = Effect.gen(function* () {
         });
         return;
       }
+    }
+
+    if (input.preserveQueuedWork) {
+      // Steer/goal fences interrupt a blocking turn; they never own the queued
+      // follow-up or its transcript bootstrap, including during receipt replay.
+      return yield* settleInterruptedProviderTurn({
+        threadId: thread.id,
+        createdAt: input.createdAt,
+        ...(thread.session ? { expectedSession: thread.session } : {}),
+      });
     }
 
     const stoppedSessionThreadId = providerThread?.id ?? thread.id;

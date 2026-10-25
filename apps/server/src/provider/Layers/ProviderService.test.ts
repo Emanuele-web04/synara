@@ -4939,14 +4939,16 @@ routing.layer("ProviderServiceLive routing", (it) => {
 
   for (const failurePhase of ["before-adapter", "before-retirement", "after-retirement"] as const) {
     it.effect(
-      `recovers the same durable Stop after a ${failurePhase} database write fails once`,
+      failurePhase === "before-adapter"
+        ? "rejects an unrecorded Stop before the adapter when its first target write fails"
+        : `recovers the same durable Stop after a ${failurePhase} database write fails once`,
       () =>
         Effect.gen(function* () {
           const provider = yield* ProviderService;
           const directory = yield* ProviderSessionDirectory;
           const repository = yield* ProviderSessionRuntimeRepository;
           const threadId = asThreadId(`thread-stop-receipt-failure-${failurePhase}`);
-          const controlRequestId = `event:stop-receipt-${failurePhase}`;
+          let controlRequestId = `event:stop-receipt-${failurePhase}`;
           yield* provider.startSession(threadId, {
             provider: "codex",
             threadId,
@@ -5007,6 +5009,16 @@ routing.layer("ProviderServiceLive routing", (it) => {
           const pending = yield* provider.getRuntimeSessionStopTarget!({ threadId });
           if (failurePhase === "before-adapter") {
             assert.isUndefined(pending.stopControlReceipt);
+            if (result._tag === "Failure") {
+              assert.equal(result.failure._tag, "ProviderValidationError");
+              if (result.failure._tag === "ProviderValidationError") {
+                assert.equal(result.failure.operation, "ProviderService.recordStopTarget");
+                assert.equal(result.failure.reason, "runtime-unavailable");
+              }
+            }
+            // This rejected delivery cannot retry automatically without a target.
+            // A later explicit Stop has its own identity and observes current work.
+            controlRequestId = `${controlRequestId}-manual-retry`;
             yield* provider.interruptTurn({
               threadId,
               expectedLifecycleGeneration: observed.lifecycleGeneration,
@@ -5059,6 +5071,60 @@ routing.layer("ProviderServiceLive routing", (it) => {
         }),
     );
   }
+
+  it.effect(
+    "rejects an unrecorded runtime Stop before teardown when its first target write fails",
+    () =>
+      Effect.gen(function* () {
+        const provider = yield* ProviderService;
+        const repository = yield* ProviderSessionRuntimeRepository;
+        const threadId = asThreadId("thread-stop-first-retirement-write");
+        yield* provider.startSession(threadId, {
+          provider: "codex",
+          threadId,
+          runtimeMode: "full-access",
+        });
+        yield* provider.sendTurn({ threadId, input: "turn A", attachments: [] });
+        const observed = yield* provider.getRuntimeSessionStopTarget!({ threadId });
+        const stops = routing.codex.stopSession.mock.calls.length;
+        const interrupts = routing.codex.interruptTurn.mock.calls.length;
+        const write = repository.upsert;
+        const controlRequestId = "event:stop-first-retirement-write";
+        const spy = vi.spyOn(repository, "upsert").mockImplementation((row) => {
+          const receipt = asRuntimePayloadRecord(
+            asRuntimePayloadRecord(row.runtimePayload).providerStopControlReceipt,
+          );
+          return row.threadId === threadId && receipt.controlRequestId === controlRequestId
+            ? Effect.fail(
+                new PersistenceSqlError({
+                  operation: "ProviderSessionRuntimeRepository.upsert",
+                  detail: "injected first target write failure",
+                }),
+              )
+            : write(row);
+        });
+        const result = yield* provider.stopRuntimeSession!({
+          threadId,
+          expectedLifecycleGeneration: observed.lifecycleGeneration,
+          controlRequestId,
+        }).pipe(Effect.result, Effect.ensuring(Effect.sync(() => spy.mockRestore())));
+        assert.equal(result._tag, "Failure");
+        if (result._tag === "Failure") {
+          assert.equal(result.failure._tag, "ProviderValidationError");
+          if (result.failure._tag === "ProviderValidationError") {
+            assert.equal(result.failure.operation, "ProviderService.recordStopTarget");
+            assert.equal(result.failure.reason, "runtime-unavailable");
+          }
+        }
+        assert.equal(routing.codex.stopSession.mock.calls.length, stops);
+        assert.equal(routing.codex.interruptTurn.mock.calls.length, interrupts);
+        assert.isTrue(yield* routing.codex.hasSession(threadId));
+        const current = yield* provider.getRuntimeSessionStopTarget!({ threadId });
+        assert.isUndefined(current.stopControlReceipt);
+        assert.equal(current.lifecycleGeneration, observed.lifecycleGeneration);
+        yield* provider.stopSession({ threadId });
+      }),
+  );
 
   it.effect("does not transfer an accepted pending Stop to another turn in the same epoch", () =>
     Effect.gen(function* () {

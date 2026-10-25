@@ -313,6 +313,7 @@ async function waitFor(
 // context with the mode it was started in, a later one completes.
 function createRetainingRestartProviderServiceLayer(options?: {
   readonly failFirstTeardown?: boolean;
+  readonly liveTurns?: boolean;
 }) {
   const unsupported = () => Effect.die(new Error("Unsupported adapter call in test"));
   const adapterFor = <P extends ProviderKind>(
@@ -360,7 +361,13 @@ function createRetainingRestartProviderServiceLayer(options?: {
           }),
         ),
       sendTurn: (input) =>
-        Effect.succeed({ threadId: input.threadId, turnId: asTurnId(`${provider}-turn`) }),
+        Effect.sync(() => {
+          const turnId = asTurnId(`${provider}-turn`);
+          const session = sessions.get(input.threadId);
+          if (session && options?.liveTurns)
+            sessions.set(input.threadId, { ...session, status: "running", activeTurnId: turnId });
+          return { threadId: input.threadId, turnId };
+        }),
       interruptTurn: () => Effect.void,
       respondToRequest: () => unsupported(),
       respondToUserInput: () => unsupported(),
@@ -23233,6 +23240,304 @@ describe("ProviderCommandReactor", () => {
     expect(await Effect.runPromise(harness.listSessions())).toEqual([]);
     expect((await readHarnessThread(harness))?.session?.status).toBe("stopped");
   });
+
+  async function createRealRunningStopHarness(providerName: "codex" | "cursor") {
+    const harness = await createHarness({
+      threadModelSelection: {
+        provider: providerName,
+        model: providerName === "cursor" ? "composer-1" : "gpt-5-codex",
+      },
+      providerServiceLayer: createRetainingRestartProviderServiceLayer({
+        failFirstTeardown: false,
+        liveTurns: true,
+      }),
+    });
+    const provider = harness.realProviderService;
+    const repository = harness.providerRuntimeRepository;
+    if (!repository || !provider.getRuntimeSessionStopTarget)
+      throw new Error("Expected real provider persistence");
+    const threadId = ThreadId.makeUnsafe("thread-1");
+    const turnId = asTurnId(`${providerName}-turn`);
+    const createdAt = new Date().toISOString();
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("real-stop-start"),
+        threadId,
+        message: {
+          messageId: asMessageId("real-stop-first-message"),
+          role: "user",
+          text: "First turn",
+          attachments: [],
+        },
+        runtimeMode: "approval-required",
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        createdAt,
+      }),
+    );
+    await harness.drain();
+    const established = (await readHarnessThread(harness))?.session;
+    if (!established) throw new Error("Expected an established real runtime");
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.makeUnsafe("real-stop-running"),
+        threadId,
+        session: { ...established, status: "running", activeTurnId: turnId },
+        createdAt,
+      }),
+    );
+    await harness.drain();
+    return { harness, provider, repository, threadId, turnId, createdAt };
+  }
+
+  it.each([false, true])(
+    "rejects an unrecorded real Stop without adopting T2 across retry/restart (error row fails=%s)",
+    async (failErrorRow) => {
+      const { harness, provider, repository, threadId, turnId, createdAt } =
+        await createRealRunningStopHarness("codex");
+      const readTarget = provider.getRuntimeSessionStopTarget!;
+      let reads = 0;
+      let blocked = false;
+      const retryReady = Effect.runSync(Deferred.make<void>());
+      vi.spyOn(provider, "getRuntimeSessionStopTarget").mockImplementation((input) =>
+        Effect.gen(function* () {
+          reads++;
+          if (reads >= 3) {
+            blocked = true;
+            yield* Deferred.await(retryReady);
+          }
+          return yield* readTarget(input);
+        }),
+      );
+      const write = repository.upsert;
+      let failed = false;
+      vi.spyOn(repository, "upsert").mockImplementation((row) => {
+        const payload = row.runtimePayload as { providerStopControlReceipt?: unknown } | null;
+        if (!failed && payload?.providerStopControlReceipt) {
+          failed = true;
+          return Effect.fail(
+            new PersistenceSqlError({
+              operation: "ProviderSessionRuntimeRepository.upsert",
+              detail: "First Stop target write failed once",
+            }),
+          );
+        }
+        return write(row);
+      });
+      let reportFailed = false;
+      harness.interceptEngineDispatch((command) => {
+        if (
+          failErrorRow &&
+          !reportFailed &&
+          command.type === "thread.activity.append" &&
+          command.activity.kind === "provider.turn.interrupt.failed"
+        ) {
+          reportFailed = true;
+          return Effect.fail(
+            new PersistenceSqlError({
+              operation: "append Stop failure",
+              detail: "Error row failed once",
+            }),
+          );
+        }
+        return undefined;
+      });
+      const interrupt = vi.spyOn(provider, "interruptTurn");
+      const cancelQueue = vi.spyOn(harness.queuedTurnPromotionRepository, "cancelThread");
+      const commandId = CommandId.makeUnsafe("unrecorded-stop-command");
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.turn.interrupt",
+          commandId,
+          threadId,
+          turnId,
+          createdAt,
+        }),
+      );
+      const source = (
+        await Effect.runPromise(
+          Stream.runCollect(
+            harness.engine.readThreadEvents(threadId, 0, ["thread.turn-interrupt-requested"]),
+          ),
+        )
+      ).find((event) => event.commandId === commandId);
+      if (!source) throw new Error("Expected durable Stop request");
+      const key = {
+        consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
+        eventSequence: source.sequence,
+      };
+      await waitFor(
+        async () =>
+          blocked ||
+          Option.getOrUndefined(
+            await Effect.runPromise(harness.deliveryRepository.getDelivery(key)),
+          )?.state === "succeeded",
+      );
+      expect(failed).toBe(true);
+      await Effect.runPromise(
+        provider.startSession(threadId, {
+          threadId,
+          provider: "codex",
+          runtimeMode: "approval-required",
+        }),
+      );
+      await Effect.runPromise(
+        provider.sendTurn({ threadId, input: "Replacement after rejected Stop" }),
+      );
+      const replacement = await Effect.runPromise(readTarget({ threadId }));
+      await Effect.runPromise(Deferred.succeed(retryReady, undefined));
+      await harness.drain();
+      const afterStop = await Effect.runPromise(readTarget({ threadId }));
+      expect(afterStop.session).not.toBeNull();
+      expect(afterStop.lifecycleGeneration).toBe(replacement.lifecycleGeneration);
+      expect(
+        Option.getOrThrow(await Effect.runPromise(harness.deliveryRepository.getDelivery(key))),
+      ).toMatchObject({ state: "succeeded", attemptCount: 1 });
+      expect(interrupt).toHaveBeenCalledTimes(1);
+      expect(cancelQueue).not.toHaveBeenCalled();
+      expect(reportFailed).toBe(failErrorRow);
+      expect((await readHarnessThread(harness))?.session).toMatchObject({
+        status: "running",
+        activeTurnId: turnId,
+      });
+      const restarted = await harness.restartReactor();
+      await restarted.start();
+      await Effect.runPromise(restarted.reactor.drain);
+      const afterRestart = await Effect.runPromise(readTarget({ threadId }));
+      expect(afterRestart.lifecycleGeneration).toBe(replacement.lifecycleGeneration);
+      expect(afterRestart.session).not.toBeNull();
+      expect(interrupt).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it.each([false, true])(
+    "preserves queued steer semantics and full direct Goal Stop on SQL replay (directGoalStop=%s)",
+    async (directGoalStop) => {
+      const { harness, provider, repository, threadId, turnId, createdAt } =
+        await createRealRunningStopHarness("cursor");
+      if (directGoalStop) {
+        await Effect.runPromise(
+          harness.engine.dispatch({
+            type: "thread.meta.update",
+            commandId: CommandId.makeUnsafe("real-stop-active-goal"),
+            threadId,
+            goal: "Finish the current objective",
+            goalStartBehavior: "defer",
+            goalPaused: false,
+          }),
+        );
+        await Effect.runPromise(
+          harness.engine.dispatch({
+            type: "thread.turn.start",
+            commandId: CommandId.makeUnsafe("real-queued-before-goal-stop"),
+            threadId,
+            message: {
+              messageId: asMessageId("real-steer-message"),
+              role: "user",
+              text: "Queued message before Goal Stop",
+              attachments: [],
+            },
+            dispatchMode: "queue",
+            runtimeMode: "approval-required",
+            interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+            createdAt,
+          }),
+        );
+        await harness.drain();
+      }
+      const write = repository.upsert;
+      let receiptWrites = 0;
+      let failed = false;
+      vi.spyOn(repository, "upsert").mockImplementation((row) => {
+        const receipt = (
+          row.runtimePayload as {
+            providerStopControlReceipt?: { controlRequestId?: string };
+          } | null
+        )?.providerStopControlReceipt;
+        if (receipt?.controlRequestId === "command:real-steer-command" && ++receiptWrites === 2) {
+          failed = true;
+          return Effect.fail(
+            new PersistenceSqlError({
+              operation: "ProviderSessionRuntimeRepository.upsert",
+              detail: "Accepted steer retirement write failed once",
+            }),
+          );
+        }
+        return write(row);
+      });
+      const cancelQueue = vi.spyOn(harness.queuedTurnPromotionRepository, "cancelThread");
+      const bootstrap = vi.spyOn(provider, "completePriorTranscriptBootstrap");
+      const interrupt = vi.spyOn(provider, "interruptTurn");
+      const sends = vi.spyOn(provider, "sendTurn");
+      if (directGoalStop) {
+        await Effect.runPromise(
+          harness.engine.dispatch({
+            type: "thread.turn.interrupt",
+            commandId: CommandId.makeUnsafe("real-steer-command"),
+            threadId,
+            turnId,
+            createdAt,
+          }),
+        );
+      } else {
+        await Effect.runPromise(
+          harness.engine.dispatch({
+            type: "thread.turn.start",
+            commandId: CommandId.makeUnsafe("real-steer-command"),
+            threadId,
+            message: {
+              messageId: asMessageId("real-steer-message"),
+              role: "user",
+              text: "Steer must survive receipt replay",
+              attachments: [],
+            },
+            dispatchMode: "steer",
+            runtimeMode: "approval-required",
+            interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+            createdAt,
+          }),
+        );
+      }
+      await harness.drain();
+      const interruptEvent = (
+        await Effect.runPromise(
+          Stream.runCollect(
+            harness.engine.readThreadEvents(threadId, 0, ["thread.turn-interrupt-requested"]),
+          ),
+        )
+      ).find((event) => event.commandId === "real-steer-command");
+      expect(interruptEvent).toBeDefined();
+      expect(interruptEvent?.causationEventId).not.toBeNull();
+      expect(failed).toBe(true);
+      expect(interrupt).toHaveBeenCalledTimes(1);
+      expect(cancelQueue).toHaveBeenCalledTimes(directGoalStop ? 1 : 0);
+      expect(bootstrap).toHaveBeenCalledTimes(directGoalStop ? 1 : 0);
+      expect(
+        await Effect.runPromise(
+          harness.queuedTurnPromotionRepository.hasPendingMessage({
+            threadId,
+            messageId: "real-steer-message",
+          }),
+        ),
+      ).toBe(!directGoalStop);
+      const restarted = await harness.restartReactor();
+      await restarted.start();
+      await Effect.runPromise(restarted.reactor.drain);
+      expect(sends).toHaveBeenCalledTimes(directGoalStop ? 0 : 1);
+      if (!directGoalStop)
+        expect(sends.mock.calls[0]?.[0].input).toContain("Steer must survive receipt replay");
+      expect(
+        await Effect.runPromise(
+          harness.queuedTurnPromotionRepository.hasPendingMessage({
+            threadId,
+            messageId: "real-steer-message",
+          }),
+        ),
+      ).toBe(false);
+      expect(cancelQueue).toHaveBeenCalledTimes(directGoalStop ? 1 : 0);
+    },
+  );
 
   it.each([
     { replaceRuntime: false, staleProjection: false, omitTurnId: false },
