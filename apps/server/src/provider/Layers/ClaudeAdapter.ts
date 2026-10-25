@@ -8370,21 +8370,25 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
 
           // Controls and attachment preparation can outlive this turn. A late
           // steer must not resurrect its state or enter a replacement runtime.
-          const requireOriginalTurn = Effect.suspend(() => {
+          const originalTurn = () => {
             const current = context.turnState;
             return context.stopped ||
               sessions.get(input.threadId) !== context ||
               current === undefined ||
               current.turnId !== liveTurnState.turnId
-              ? Effect.fail(
-                  new ProviderAdapterValidationError({
-                    provider: PROVIDER,
-                    operation: "turn/steer.stale",
-                    issue:
-                      "Claude's original turn ended while your message was preparing. It was not sent.",
-                  }),
-                )
-              : Effect.succeed(current);
+              ? undefined
+              : current;
+          };
+          const staleTurnError = () =>
+            new ProviderAdapterValidationError({
+              provider: PROVIDER,
+              operation: "turn/steer.stale",
+              issue:
+                "Claude's original turn ended while your message was preparing. It was not sent.",
+            });
+          const requireOriginalTurn = Effect.suspend(() => {
+            const current = originalTurn();
+            return current ? Effect.succeed(current) : Effect.fail(staleTurnError());
           });
 
           const message = yield* Effect.gen(function* () {
@@ -8396,13 +8400,15 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
               input.threadId,
               input.interactionMode,
             );
-            const currentTurnState = yield* requireOriginalTurn;
-            if (effectiveInteractionMode !== currentTurnState.interactionMode) {
-              context.turnState = {
-                ...currentTurnState,
-                interactionMode: effectiveInteractionMode,
-              };
-            }
+            const modeUpdated = yield* Effect.sync(() => {
+              const current = originalTurn();
+              if (!current) return false;
+              if (effectiveInteractionMode !== current.interactionMode) {
+                context.turnState = { ...current, interactionMode: effectiveInteractionMode };
+              }
+              return true;
+            });
+            if (!modeUpdated) return yield* staleTurnError();
 
             return yield* buildUserMessageEffect(input, {
               fileSystem,
@@ -8418,11 +8424,20 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
                 : requireOriginalTurn.pipe(Effect.andThen(Effect.failCause(cause))),
             ),
           );
-          yield* requireOriginalTurn;
-          yield* Queue.offer(context.promptQueue, {
-            type: "message",
-            message,
-          }).pipe(Effect.mapError((cause) => toRequestError(input.threadId, "turn/steer", cause)));
+          // The queue is unbounded. Keep ownership validation and admission in
+          // one callback so cooperative yielding cannot admit this steer to T2.
+          const enqueued = yield* Effect.sync(() =>
+            originalTurn()
+              ? Queue.offerUnsafe(context.promptQueue, { type: "message", message })
+              : undefined,
+          );
+          if (enqueued === undefined) return yield* staleTurnError();
+          if (!enqueued)
+            return yield* toRequestError(
+              input.threadId,
+              "turn/steer",
+              new Error("Claude's prompt queue is closed."),
+            );
 
           const steerText = input.input?.trim();
           if (steerText) {

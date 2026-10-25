@@ -1,3 +1,4 @@
+import { MixedScheduler, MaxOpsBeforeYield } from "effect/Scheduler";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -16825,5 +16826,134 @@ describe("Claude subagent tracking", () => {
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
       Effect.provide(harness.layer),
     );
+  });
+});
+
+it.effect("keeps steer admission and turn ownership atomic across cooperative yielding", () => {
+  return Effect.gen(function* () {
+    for (const budget of [8, 9, 10, 11, 12, 13, 14, 15]) {
+      for (let pauseAfter = 1; pauseAfter <= 32; pauseAfter++) {
+        const baseDir = mkdtempSync(path.join(os.tmpdir(), "claude-steer-admission-"));
+        const harness = makeHarness({ baseDir, cwd: baseDir });
+        const outcome = yield* Effect.gen(function* () {
+          const adapter = yield* ClaudeAdapter;
+          yield* adapter.startSession({ threadId: THREAD_ID, runtimeMode: "full-access" });
+          const first = yield* adapter.sendTurn({
+            threadId: THREAD_ID,
+            input: "original",
+            attachments: [],
+          });
+          const prompts = harness.getLastCreateQueryInput()!.prompt[Symbol.asyncIterator]();
+          yield* Effect.promise(() => prompts.next());
+          const scheduled: Array<() => void> = [];
+          const scheduler = new MixedScheduler("async", (task) => {
+            scheduled.push(task);
+            return () => {
+              const index = scheduled.indexOf(task);
+              if (index >= 0) scheduled.splice(index, 1);
+            };
+          });
+          const services = yield* Effect.services<never>();
+          const steering = Effect.runForkWith(services)(
+            adapter
+              .steerTurn({ threadId: THREAD_ID, input: "redirect", attachments: [] })
+              .pipe(Effect.provideService(MaxOpsBeforeYield, budget)),
+            { scheduler },
+          );
+          let slices = 0;
+          const tick = () =>
+            Effect.gen(function* () {
+              if (scheduled.length === 0) {
+                yield* Effect.promise(() => new Promise<void>((resolve) => setImmediate(resolve)));
+              }
+              const task = scheduled.shift();
+              if (task) {
+                task();
+                slices++;
+              }
+            });
+          while (slices < pauseAfter && steering.pollUnsafe() === undefined) yield* tick();
+          const pausedBeforeTransition = steering.pollUnsafe() === undefined;
+          const terminal = yield* adapter.streamEvents.pipe(
+            Stream.filter(
+              (event) => event.type === "turn.completed" && event.turnId === first.turnId,
+            ),
+            Stream.take(1),
+            Stream.runDrain,
+            Effect.forkChild,
+          );
+          emitSuccessResult(harness.query, "scheduler-synthetic", "terminal", {});
+          yield* Fiber.join(terminal);
+          const next = yield* adapter.sendTurn({
+            threadId: THREAD_ID,
+            input: "replacement",
+            attachments: [],
+          });
+          let idleTicks = 0;
+          while (steering.pollUnsafe() === undefined && slices < 256 && idleTicks < 32) {
+            const before = slices;
+            yield* tick();
+            idleTicks = before === slices ? idleTicks + 1 : 0;
+          }
+          const result = steering.pollUnsafe();
+          if (result === undefined) {
+            steering.interruptUnsafe();
+            while (scheduled.length > 0) scheduled.shift()!();
+            return { budget, pauseAfter, slices, setupFailure: "scheduler did not drain" };
+          }
+          const messages: string[] = [];
+          for (let i = 0; i < (Exit.isSuccess(result) ? 2 : 1); i++) {
+            const message = yield* Effect.promise(() => prompts.next());
+            const block = message.value?.message.content[0];
+            messages.push(
+              typeof block === "object" && block?.type === "text" ? block.text : "other",
+            );
+          }
+          const staleAdmission =
+            Exit.isSuccess(result) &&
+            result.value.turnId === first.turnId &&
+            messages[0] === "replacement" &&
+            messages[1] === "redirect";
+          assert.equal((yield* adapter.listSessions())[0]?.activeTurnId, next.turnId);
+          if (Exit.isFailure(result)) {
+            const error = Option.getOrUndefined(Cause.findErrorOption(result.cause));
+            assert.instanceOf(error, ProviderAdapterValidationError);
+            assert.equal((error as ProviderAdapterValidationError).operation, "turn/steer.stale");
+            const remaining = yield* Effect.promise(() => prompts.next()).pipe(
+              Effect.timeoutOption("1 millis"),
+              Effect.forkChild,
+            );
+            yield* TestClock.adjust("1 millis");
+            assert.isTrue(
+              Option.isNone(yield* Fiber.join(remaining)),
+              "stale text must not be queued",
+            );
+          }
+          const row = {
+            budget,
+            pauseAfter,
+            slices,
+            pausedBeforeTransition,
+            outcome: result._tag,
+            firstTurnId: first.turnId,
+            nextTurnId: next.turnId,
+            steeredTurnId: Exit.isSuccess(result) ? result.value.turnId : undefined,
+            messages,
+            staleAdmission,
+          };
+          yield* adapter.stopSession(THREAD_ID);
+          return row;
+        }).pipe(
+          Effect.provideService(Random.Random, makeDeterministicRandomService()),
+          Effect.provide(harness.layer),
+          Effect.scoped,
+          Effect.ensuring(Effect.sync(() => rmSync(baseDir, { recursive: true, force: true }))),
+        );
+        if ("setupFailure" in outcome)
+          assert.fail(`native scheduler must make progress: ${outcome.setupFailure}`);
+        assert.isFalse(outcome.staleAdmission, JSON.stringify(outcome));
+        if (outcome.pausedBeforeTransition === false) break;
+      }
+    }
   });
 });

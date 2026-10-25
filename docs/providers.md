@@ -66,8 +66,10 @@ recovery is not covered by the root-runtime retirement proof.
 
 A Claude steer can wait for permission-mode control or attachment preparation before entering
 the native prompt queue. If its original turn ends or the runtime is replaced during that wait,
-Synara rejects the unsent steer and preserves the newer session state. Queued follow-ups retain
-their normal turn boundary and wait for any replacement turn to settle.
+Synara rejects the unsent steer and preserves the newer session state. The final ownership check
+and queue admission run synchronously, so cooperative yielding cannot admit the old steer to a
+newer turn. Queued follow-ups retain their normal turn boundary and wait for any replacement turn
+to settle.
 
 Codex native resume is confirmed only when the runtime returns the requested thread ID.
 If a recoverable resume failure starts a fresh Codex thread instead, Synara treats its native
