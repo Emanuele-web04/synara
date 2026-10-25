@@ -1,7 +1,7 @@
 import "../../index.css";
 
 import { page } from "vitest/browser";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";
 
 import { SurfaceContentTabs } from "./SurfaceContentTabs";
@@ -14,6 +14,17 @@ const TITLES = [
   "Medir el uso de contexto",
   "Mover la vista previa flotante",
 ];
+
+const initialViewport = { width: window.innerWidth, height: window.innerHeight };
+
+beforeEach(async () => {
+  // Keep desktop strip fixtures and their click targets inside the browser viewport.
+  await page.viewport(1280, 800);
+});
+
+afterEach(async () => {
+  await page.viewport(initialViewport.width, initialViewport.height);
+});
 
 function mountStrip(widthPx: number, onSelect: (key: string) => void) {
   return render(
@@ -59,7 +70,7 @@ describe("SurfaceContentTabs overflow", () => {
   });
 
   it("shows no overflow menu while every tab fits", async () => {
-    const screen = await mountStrip(4000, () => {});
+    const screen = await mountStrip(1200, () => {});
     try {
       await expect.element(page.getByRole("navigation", { name: "Open threads" })).toBeVisible();
       await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
@@ -74,7 +85,7 @@ describe("SurfaceContentTabs overflow", () => {
   it("renders a trailing control inside the strip, after the last tab", async () => {
     const onTrailingClick = vi.fn();
     const screen = await render(
-      <div style={{ width: "4000px", display: "flex" }}>
+      <div style={{ width: "1200px", display: "flex" }}>
         <SurfaceContentTabs
           ariaLabel="Open threads"
           activeKey="tab-0"

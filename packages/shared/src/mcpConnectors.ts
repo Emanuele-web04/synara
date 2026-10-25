@@ -4,6 +4,8 @@
 // Exports: MCP_CONNECTOR_CATEGORIES, MCP_CONNECTOR_PRESETS, findMcpConnectorPreset,
 //   normalizeMcpConnectorUrl, defaultMcpConnectorName, mcpConnectorSlug, mcpConnectorServerName
 
+/** Synara-owned gateway identity, shared with provider diagnostics and config builders. */
+export const SYNARA_MCP_SERVER_NAME = "synara";
 /** Catalog shelves, in display order. */
 export const MCP_CONNECTOR_CATEGORIES = ["popular", "developer", "productivity"] as const;
 export type McpConnectorCategory = (typeof MCP_CONNECTOR_CATEGORIES)[number];

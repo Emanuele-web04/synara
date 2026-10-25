@@ -1,3 +1,5 @@
+import { resolveActivityDayStartMs } from "@synara/shared/inboxDay";
+export { resolveActivityDayStartMs } from "@synara/shared/inboxDay";
 // FILE: SidebarActivityView.logic.ts
 // Purpose: Pure grouping/sorting model for the sidebar Activity view (threads as tasks).
 // Exports: eligibility, stable ordering, settle helpers, the view-model builder, and the
@@ -360,20 +362,6 @@ export function resolveActivityScope(
   );
   if (!isOffered) return { scope: null, projectFilterIds: null };
   return { scope: scopeSelection, projectFilterIds: new Set([scopeSelection]) };
-}
-
-/**
- * The working day turns over at 4am, not midnight: a session that runs past
- * midnight is still the same working day.
- */
-export const ACTIVITY_DAY_START_HOUR = 4;
-
-/** Start of the working day `nowMs` belongs to, in local time. */
-export function resolveActivityDayStartMs(nowMs: number): number {
-  const dayStart = new Date(nowMs);
-  dayStart.setHours(ACTIVITY_DAY_START_HOUR, 0, 0, 0);
-  if (dayStart.getTime() > nowMs) dayStart.setDate(dayStart.getDate() - 1);
-  return dayStart.getTime();
 }
 
 /**

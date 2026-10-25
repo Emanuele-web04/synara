@@ -522,7 +522,7 @@ function TabsBlock({
         options={block.tabs.map((entry, index) => ({ value: String(index), label: entry.label }))}
         onValueChange={setActive}
         ariaLabel="Views"
-        className="-mx-1 w-full max-w-md"
+        className="max-w-md"
       />
       <div className="flex min-w-0 flex-col gap-4">
         {tab.blocks.map((child, index) => (

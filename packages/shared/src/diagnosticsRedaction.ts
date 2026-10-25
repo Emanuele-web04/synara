@@ -4,6 +4,47 @@
 // Layer: Shared text processing — used by the beta desktop diagnostics client
 // and re-run by the ingest worker as defense in depth.
 
+import { DesktopDiagnosticIssue, DESKTOP_RENDERER_ERROR_STACK_MAX_LENGTH } from "@synara/contracts";
+import { Schema } from "effect";
+
+const REMOTE_ERROR_TYPE =
+  /^(?:Error|TypeError|RangeError|ReferenceError|SyntaxError|URIError|EvalError|AggregateError)\b/;
+
+/** Remote keeps fixed issue categories or built-in error types and numeric locations only. */
+export function sanitizeRemoteDiagnosticError(input: {
+  readonly source: "main" | "renderer";
+  readonly message: string;
+  readonly stack?: string | undefined;
+}): { message: string; stack?: string } {
+  const issue = /^Handled issue: ([a-z0-9.-]+) \(([A-Za-z0-9._-]+)\)$/.exec(input.message);
+  if (issue && Schema.is(DesktopDiagnosticIssue)({ code: issue[1], reason: issue[2] })) {
+    const duration = /^durationMs=(\d{1,9})(?:\n|$)/.exec(input.stack ?? "");
+    return {
+      message: `Handled issue: ${issue[1]} (${issue[2]})`,
+      ...(duration && Number(duration[1]) <= 604_800_000
+        ? { stack: `durationMs=${Number(duration[1])}` }
+        : {}),
+    };
+  }
+  // Error messages can inject apparent frames; function/file names remain free text.
+  const frames = (input.stack ?? "")
+    .slice(0, DESKTOP_RENDERER_ERROR_STACK_MAX_LENGTH)
+    .split("\n")
+    .flatMap((line) => {
+      const location = /^\s*at\s+.*?:(\d{1,8}):(\d{1,8})\)?\s*$/.exec(line);
+      return location ? [`at ${input.source}:${location[1]}:${location[2]}`] : [];
+    })
+    .slice(0, 30);
+  const type =
+    REMOTE_ERROR_TYPE.exec(input.message)?.[0] ??
+    REMOTE_ERROR_TYPE.exec(input.stack ?? "")?.[0] ??
+    "Error";
+  return {
+    message: frames[0] ? `${type} ${frames[0]}` : type,
+    ...(frames.length > 0 ? { stack: frames.join("\n") } : {}),
+  };
+}
+
 export interface DiagnosticsRedactionOptions {
   /** Absolute home directory to collapse to `~` (callers pass os.homedir()). */
   readonly homeDir?: string | undefined;

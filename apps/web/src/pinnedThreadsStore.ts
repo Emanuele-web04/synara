@@ -1,3 +1,4 @@
+import { getExecutionStorage } from "./lib/hosts/executionStorage";
 // FILE: pinnedThreadsStore.ts
 // Purpose: Persists the globally pinned chat thread ids used by the sidebar.
 // Layer: UI state store
@@ -66,7 +67,7 @@ export const usePinnedThreadsStore = create<PinnedThreadsStoreState>()(
     }),
     {
       name: PINNED_THREADS_STORAGE_KEY,
-      storage: createJSONStorage(() => localStorage),
+      storage: createJSONStorage(getExecutionStorage),
       partialize: (state) => ({
         pinnedThreadIds: normalizePinnedIds(state.pinnedThreadIds),
       }),

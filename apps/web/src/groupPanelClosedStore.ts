@@ -1,3 +1,4 @@
+import { executionStorage } from "./lib/hosts/executionStorage";
 // FILE: groupPanelClosedStore.ts
 // Purpose: Remembers, per group project, that the user dismissed the Groups
 //          panel — so the panel can auto-open on a group's first visit while a
@@ -35,7 +36,7 @@ export const useGroupPanelClosedStore = create<GroupPanelClosedStoreState>()(
     }),
     {
       name: GROUP_PANEL_CLOSED_STORAGE_KEY,
-      storage: createJSONStorage(() => localStorage),
+      storage: createJSONStorage(() => executionStorage),
       partialize: (state) => ({
         closedProjectIds: normalizePinnedIds(state.closedProjectIds),
       }),

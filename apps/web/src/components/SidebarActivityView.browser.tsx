@@ -5,7 +5,7 @@
 import "../index.css";
 
 import { ProjectId, ThreadId, type OrchestrationThreadPullRequest } from "@synara/contracts";
-import { useState, type PointerEvent as ReactPointerEvent } from "react";
+import { useState, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import { page, userEvent } from "vitest/browser";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";
@@ -21,8 +21,8 @@ const projectFavicon = `data:image/svg+xml,${encodeURIComponent(
 )}`;
 
 vi.mock("~/lib/wsHttpUrl", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../lib/wsHttpUrl")>()),
-  resolveWsHttpUrl: () => projectFavicon,
+  ...(await importOriginal<typeof import("~/lib/wsHttpUrl")>()),
+  resolveExecutionResource: () => projectFavicon,
 }));
 
 const PROJECT_A = ProjectId.makeUnsafe("activity-project-a");
@@ -87,7 +87,12 @@ function renderActivity(input: {
   pinnedThreadIdSet?: ReadonlySet<ThreadId>;
   settledOverrideByThreadId?: ReadonlyMap<ThreadId, boolean>;
   prByThreadId?: ReadonlyMap<ThreadId, OrchestrationThreadPullRequest | null>;
+  externalRows?: ReadonlyMap<
+    ThreadId,
+    { hostName: string; onOpen: () => void; status: ThreadStatusPill | null }
+  >;
   onVisibleThreadIdsChange?: (threadIds: readonly ThreadId[]) => void;
+  renderThreadHoverCard?: (thread: SidebarThreadSummary, anchorId: string) => ReactNode;
   onOpenThread?: (threadId: ThreadId) => void;
   onSetThreadSettled?: (threadId: ThreadId, settled: boolean) => void;
   onReturnSnoozedThread?: (threadId: ThreadId) => void;
@@ -115,6 +120,7 @@ function ActivityHarness(input: Parameters<typeof renderActivity>[0]) {
     <SidebarActivityView
       threads={input.threads}
       projectById={new Map(projects.map((project) => [project.id, project]))}
+      externalRows={input.externalRows}
       activeThreadId={input.activeThreadId ?? null}
       {...(input.visualActiveThreadId === undefined
         ? {}
@@ -141,7 +147,7 @@ function ActivityHarness(input: Parameters<typeof renderActivity>[0]) {
       onThreadRenamePointerUp={input.onThreadRenamePointerUp ?? (() => {})}
       onThreadContextMenu={input.onThreadContextMenu ?? (() => {})}
       onProjectContextMenu={input.onProjectContextMenu ?? (() => {})}
-      renderThreadHoverCard={() => null}
+      renderThreadHoverCard={input.renderThreadHoverCard ?? (() => null)}
       onCreateChat={() => {}}
       onAddProject={() => {}}
     />
@@ -177,6 +183,68 @@ describe("SidebarActivityView", () => {
   afterEach(() => {
     vi.restoreAllMocks();
     document.body.innerHTML = "";
+  });
+
+  it("keeps remote pinned rows in the feed without sending them to local actions", async () => {
+    const local = makeThread(70, { lastVisitedAt: "2026-08-02T09:00:00.000Z" });
+    const remote = makeThread(71, {
+      id: ThreadId.makeUnsafe('workspace:["remote-env","thread-71"]'),
+      projectId: PROJECT_B,
+      lastVisitedAt: "2026-08-02T09:00:00.000Z",
+    });
+    const onRemoteOpen = vi.fn();
+    const onOpenThread = vi.fn();
+    const onMarkThreadRead = vi.fn();
+    const onRenameThread = vi.fn();
+    const onThreadContextMenu = vi.fn();
+    const onVisibleThreadIdsChange = vi.fn();
+    const renderThreadHoverCard = vi.fn(() => null);
+    const mounted = await render(
+      renderActivity({
+        threads: [local, remote],
+        renderThreadHoverCard,
+        projects: [makeProject(PROJECT_A, "Project A"), makeProject(PROJECT_B, "Project B")],
+        pinnedThreadIdSet: new Set([remote.id]),
+        externalRows: new Map([
+          [remote.id, { hostName: "Studio Mac", onOpen: onRemoteOpen, status: null }],
+        ]),
+        onOpenThread,
+        onMarkThreadRead,
+        onRenameThread,
+        onThreadContextMenu,
+        onVisibleThreadIdsChange,
+      }),
+    );
+
+    expect(page.getByRole("button", { name: "Pinned" })).toBeVisible();
+    const remoteRow = page.getByTestId(`activity-thread-${remote.id}`);
+    expect(remoteRow).toHaveAttribute("draggable", "false");
+    // The computer is named by the hover card and the accessible label, not the meta line.
+    expect(remoteRow).toHaveAttribute("aria-label", expect.stringContaining("Studio Mac"));
+    expect(remoteRow.element().textContent).not.toContain("Studio Mac");
+    // Remote rows open the same hover card as local ones.
+    expect(remoteRow.element().closest("[data-thread-hover-anchor]")).not.toBeNull();
+    expect(renderThreadHoverCard).toHaveBeenCalledWith(
+      expect.objectContaining({ id: remote.id }),
+      expect.any(String),
+    );
+    expect(remoteRow.element().parentElement?.querySelectorAll("button")).toHaveLength(1);
+    await remoteRow.click();
+    expect(onRemoteOpen).toHaveBeenCalledOnce();
+    expect(onOpenThread).not.toHaveBeenCalled();
+    remoteRow.element().dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
+    remoteRow.element().dispatchEvent(new MouseEvent("contextmenu", { bubbles: true }));
+    expect(onRenameThread).not.toHaveBeenCalled();
+    expect(onThreadContextMenu).not.toHaveBeenCalled();
+
+    await page.getByRole("button", { name: "Activity options" }).click();
+    await page.getByRole("menuitem", { name: "Mark all as read" }).click();
+    expect(onMarkThreadRead).toHaveBeenCalledOnce();
+    expect(onMarkThreadRead).toHaveBeenCalledWith(local.id, local.latestTurn?.completedAt);
+    await vi.waitFor(() =>
+      expect(onVisibleThreadIdsChange).toHaveBeenLastCalledWith([remote.id, local.id]),
+    );
+    await mounted.unmount();
   });
 
   it.each([false, true])(
@@ -808,7 +876,7 @@ describe("SidebarActivityView", () => {
     await mounted.unmount();
   });
 
-  it.each(["clear read", "grouping roundtrip"] as const)(
+  it.each(["clear read", "eraser", "grouping roundtrip"] as const)(
     "holds Priority still while chats change and resets read rows (%s)",
     async (reset) => {
       const waiting = makeThread(920, { hasPendingApprovals: true });
@@ -838,6 +906,10 @@ describe("SidebarActivityView", () => {
         .element(page.getByRole("menuitem", { name: "Clear read from Priority" }))
         .toHaveAttribute("aria-disabled", "true");
       await userEvent.keyboard("{Escape}");
+      // Nothing read yet, so Priority's header offers no eraser.
+      expect(
+        page.getByRole("button", { name: "Clear read from Priority" }).elements(),
+      ).toHaveLength(0);
 
       // The approval is answered and runs, the unread chat is opened, the running one
       // finishes unseen, and the idle one asks for input: rows keep their places, the
@@ -867,10 +939,13 @@ describe("SidebarActivityView", () => {
         ]);
       });
 
-      await page.getByRole("button", { name: "Activity options" }).click();
-      if (reset === "clear read") {
+      if (reset === "eraser") {
+        await page.getByRole("button", { name: "Clear read from Priority" }).click();
+      } else if (reset === "clear read") {
+        await page.getByRole("button", { name: "Activity options" }).click();
         await page.getByRole("menuitem", { name: "Clear read from Priority" }).click();
       } else {
+        await page.getByRole("button", { name: "Activity options" }).click();
         await page.getByRole("menuitemradio", { name: "Project", exact: true }).click();
         // Radio choices keep the shared menu open; switch back in that same popup.
         await expect.element(page.getByText("Priority", { exact: true })).not.toBeInTheDocument();

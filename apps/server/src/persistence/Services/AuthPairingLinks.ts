@@ -2,6 +2,65 @@ import { Option, Schema, ServiceMap } from "effect";
 import type { Effect } from "effect";
 
 import type { AuthPairingLinkRepositoryError } from "../Errors";
+import type {
+  RemoteDeviceEnrollment,
+  RemotePairingDevice,
+  RemoteTrustScope,
+} from "@synara/contracts";
+
+export interface RemotePairingRecord {
+  readonly id: string;
+  readonly credentialHash: string;
+  readonly expiresAt: string;
+  readonly consumedAt: string | null;
+  readonly revokedAt: string | null;
+  readonly pendingDevice: RemotePairingDevice | null;
+}
+
+export interface RemotePairingRepositoryShape {
+  readonly create: (input: {
+    id: string;
+    credentialHash: string;
+    scope: RemoteTrustScope;
+    createdAt: string;
+    expiresAt: string;
+  }) => Effect.Effect<void, AuthPairingLinkRepositoryError>;
+  readonly get: (
+    scope: RemoteTrustScope,
+    id: string,
+  ) => Effect.Effect<RemotePairingRecord | undefined, AuthPairingLinkRepositoryError>;
+  readonly list: (
+    scope: RemoteTrustScope,
+  ) => Effect.Effect<readonly RemotePairingRecord[], AuthPairingLinkRepositoryError>;
+  readonly requestApproval: (
+    scope: RemoteTrustScope,
+    id: string,
+    device: RemotePairingDevice,
+    now: string,
+  ) => Effect.Effect<boolean, AuthPairingLinkRepositoryError>;
+  readonly approve: (
+    scope: RemoteTrustScope,
+    id: string,
+    exactDeviceJkt: string,
+    now: string,
+    enrolledVia?: RemoteDeviceEnrollment,
+  ) => Effect.Effect<boolean, AuthPairingLinkRepositoryError>;
+  /**
+   * Records the device and approves it in one transaction (owner-grant pairing).
+   * Returns whether the device was recorded; approval may still be refused.
+   */
+  readonly enroll: (
+    scope: RemoteTrustScope,
+    id: string,
+    device: RemotePairingDevice,
+    now: string,
+  ) => Effect.Effect<boolean, AuthPairingLinkRepositoryError>;
+  readonly revoke: (
+    scope: RemoteTrustScope,
+    id: string,
+    now: string,
+  ) => Effect.Effect<void, AuthPairingLinkRepositoryError>;
+}
 
 export const AuthPairingLinkRecord = Schema.Struct({
   id: Schema.String,
@@ -53,6 +112,7 @@ export const GetAuthPairingLinkByCredentialInput = Schema.Struct({
 export type GetAuthPairingLinkByCredentialInput = typeof GetAuthPairingLinkByCredentialInput.Type;
 
 export interface AuthPairingLinkRepositoryShape {
+  readonly remote: RemotePairingRepositoryShape;
   readonly create: (
     input: CreateAuthPairingLinkInput,
   ) => Effect.Effect<void, AuthPairingLinkRepositoryError>;

@@ -1,3 +1,4 @@
+import { executionStorage } from "./lib/hosts/executionStorage";
 // FILE: projectInstructionsStore.ts
 // Purpose: Persist per-project instructions and merge them into thread notes when requested.
 // Layer: Web UI state store
@@ -59,7 +60,7 @@ export const useProjectInstructionsStore = create<ProjectInstructionsStore>()(
     }),
     {
       name: PROJECT_INSTRUCTIONS_STORAGE_KEY,
-      storage: createJSONStorage(() => localStorage),
+      storage: createJSONStorage(() => executionStorage),
     },
   ),
 );

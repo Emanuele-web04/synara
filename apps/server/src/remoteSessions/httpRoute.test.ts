@@ -1,0 +1,600 @@
+import http from "node:http";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { randomBytes } from "node:crypto";
+import { once } from "node:events";
+import * as NodeServices from "@effect/platform-node/NodeServices";
+import { Effect, Exit, Schema, Scope } from "effect";
+import { OrchestrationThreadStreamItem, WS_FEATURE_PATH } from "@synara/contracts";
+import { HttpRouter } from "effect/unstable/http";
+import WebSocket, { WebSocketServer, type RawData } from "ws";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { makeBoundedNodeHttpServer } from "../nodeHttpServer";
+import { sendBoundedRelayFrame } from "../relaySocket";
+import type { SessionCredentialServiceShape } from "../auth/Services/SessionCredentialService";
+import { bridgeRemoteSocketToLocalRpc } from "./localRpcBridge";
+import { HostConnectionRegistry } from "../hostConnections/registry";
+import { controllerProtocol } from "../hostConnections/dialer";
+import {
+  initializeRemoteTlsIdentity,
+  loadRemoteTlsIdentity,
+  remoteTlsAnchor,
+  type RemoteTlsIdentity,
+} from "../remoteTransport/certificates";
+import {
+  connectRemoteWebSocket,
+  RemoteTlsServer,
+  REMOTE_INNER_RPC_PATH,
+} from "../remoteTransport/tunnel";
+import {
+  hostRemoteWebSocketRouteLayer,
+  HOST_REMOTE_WS_PATH,
+  registerHostRemoteSocketAcceptor,
+} from "./httpRoute";
+
+describe("remote TLS at the real Effect/Node HTTP boundary", () => {
+  let directory: string;
+  let identity: RemoteTlsIdentity;
+  beforeAll(async () => {
+    directory = await fs.mkdtemp(path.join(os.tmpdir(), "synara-tls-"));
+    identity = await initializeRemoteTlsIdentity(
+      path.join(directory, "identity.json"),
+      "test-environment",
+    );
+  });
+  afterAll(async () => {
+    await fs.rm(directory, { recursive: true, force: true });
+  });
+
+  async function fixture(
+    run: (url: string, tunnel: RemoteTlsServer, captured: Buffer[]) => Promise<void>,
+    serverIdentity = identity,
+    handshakeTimeoutMs = 150,
+    accept?: (inner: WebSocket) => void | Promise<void>,
+  ) {
+    const scope = await Effect.runPromise(Scope.make("sequential"));
+    const captured: Buffer[] = [];
+    const tunnel = new RemoteTlsServer({
+      identity: serverIdentity,
+      handshakeTimeoutMs,
+      accept: async (inner) => {
+        if (accept) await accept(inner);
+        else inner.on("message", (data, binary) => inner.send(data, { binary }));
+        await Promise.resolve();
+      },
+    });
+    const unregister = registerHostRemoteSocketAcceptor((outer) => {
+      outer.on("message", (raw) => captured.push(Buffer.from(raw as Buffer)));
+      tunnel.accept(outer);
+    });
+    try {
+      const port = await Effect.runPromise(
+        Scope.provide(
+          Effect.gen(function* () {
+            const server = yield* makeBoundedNodeHttpServer(() => http.createServer(), {
+              host: "127.0.0.1",
+              port: 0,
+            });
+            const app = yield* HttpRouter.toHttpEffect(hostRemoteWebSocketRouteLayer);
+            yield* server.serve(app);
+            if (server.address._tag !== "TcpAddress") throw new Error("Expected TCP");
+            return server.address.port;
+          }).pipe(Effect.provide(NodeServices.layer)),
+          scope,
+        ),
+      );
+      await run(`ws://127.0.0.1:${port}${HOST_REMOTE_WS_PATH}`, tunnel, captured);
+    } finally {
+      unregister();
+      tunnel.close();
+      await Effect.runPromise(Scope.close(scope, Exit.void));
+    }
+  }
+
+  async function outer(url: string) {
+    const socket = new WebSocket(url, { perMessageDeflate: false, maxPayload: 2 * 1024 * 1024 });
+    socket.on("error", () => socket.terminate());
+    await once(socket, "open");
+    return socket;
+  }
+
+  async function echo(socket: WebSocket, data: string | Buffer, binary: boolean) {
+    const received = once(socket, "message");
+    socket.send(data, { binary });
+    const [value, isBinary] = (await received) as [RawData, boolean];
+    expect(isBinary).toBe(binary);
+    expect(Buffer.from(value as Buffer)).toEqual(Buffer.from(data));
+  }
+
+  it("preserves the first text frame and binary boundaries without exposing plaintext to the outer socket", async () => {
+    await fixture(async (url, tunnel, captured) => {
+      const socket = await connectRemoteWebSocket(await outer(url), remoteTlsAnchor(identity));
+      const marker = `private-coding-payload-${randomBytes(32).toString("hex")}`;
+      await echo(socket, marker, false);
+      await echo(socket, randomBytes(512 * 1024), true);
+      expect(Buffer.concat(captured).includes(Buffer.from(marker))).toBe(false);
+      expect(socket.extensions).toBe("");
+      const closed = once(socket, "close");
+      tunnel.close();
+      await closed;
+      expect(tunnel.connectionCount).toBe(0);
+    });
+  });
+
+  function longThreadSnapshot(tableRows: number) {
+    const when = "2026-10-18T00:00:00.000Z";
+    const table = Array.from(
+      { length: tableRows },
+      (_, index) => `| check-${index} | complete 🔬 café 漢字 | ${index * 7} |`,
+    ).join("\n");
+    const item = Schema.decodeUnknownSync(Schema.toCodecJson(OrchestrationThreadStreamItem))({
+      kind: "snapshot",
+      snapshot: {
+        snapshotSequence: 120,
+        thread: {
+          id: "long-remote-thread",
+          projectId: "remote-project",
+          title: "Long conversation",
+          modelSelection: { provider: "claudeAgent", model: "claude-opus-4-6" },
+          runtimeMode: "full-access",
+          branch: null,
+          worktreePath: null,
+          latestTurn: null,
+          createdAt: when,
+          updatedAt: when,
+          deletedAt: null,
+          messages: Array.from({ length: 120 }, (_, index) => ({
+            id: `message-${index}`,
+            role: index % 2 ? "assistant" : "user",
+            text: index % 2 ? table : `Review section ${index}`,
+            turnId: `turn-${Math.floor(index / 2)}`,
+            streaming: false,
+            createdAt: when,
+            updatedAt: when,
+          })),
+          activities: [],
+          proposedPlans: [],
+          checkpoints: [],
+          session: null,
+        },
+      },
+    });
+    return JSON.stringify({ _tag: "Chunk", requestId: "1", values: [item] });
+  }
+
+  it("receives a full long-thread snapshot without relaxing commands or response bounds", async () => {
+    const snapshot = longThreadSnapshot(1_400);
+    expect(Buffer.byteLength(snapshot)).toBeGreaterThan(2 * 1024 * 1024);
+    const rejectedCommands: string[] = [];
+    await fixture(
+      async (url) => {
+        const transport = await outer(url);
+        let largestOuterChunk = 0;
+        transport.on("message", (data) => {
+          largestOuterChunk = Math.max(largestOuterChunk, Buffer.byteLength(data as Buffer));
+        });
+        const socket = await connectRemoteWebSocket(transport, remoteTlsAnchor(identity));
+        const response = once(socket, "message");
+        socket.send("snapshot");
+        expect((await response)[0].toString()).toBe(snapshot);
+        expect(largestOuterChunk).toBeLessThanOrEqual(64 * 1024);
+        socket.terminate();
+
+        const oversizedCommand = await connectRemoteWebSocket(
+          await outer(url),
+          remoteTlsAnchor(identity),
+        );
+        const commandClosed = once(oversizedCommand, "close");
+        oversizedCommand.send(Buffer.alloc(2 * 1024 * 1024 + 1));
+        await commandClosed;
+        expect(rejectedCommands).toContain("WS_ERR_UNSUPPORTED_MESSAGE_LENGTH");
+
+        const oversizedResponse = await connectRemoteWebSocket(
+          await outer(url),
+          remoteTlsAnchor(identity),
+        );
+        const responseError = once(oversizedResponse, "error");
+        oversizedResponse.send("oversized-response");
+        expect((await responseError)[0]).toMatchObject({
+          code: "WS_ERR_UNSUPPORTED_MESSAGE_LENGTH",
+        });
+        oversizedResponse.terminate();
+      },
+      identity,
+      15_000,
+      (socket) => {
+        socket.on("error", (error) => {
+          if ("code" in error) rejectedCommands.push(String(error.code));
+        });
+        socket.on("message", (data) => {
+          if (data.toString() === "snapshot") socket.send(snapshot);
+          else if (data.toString() === "oversized-response") {
+            // Each fragment fits; the assembled response must still stay bounded.
+            const part = Buffer.alloc(1024 * 1024, 97);
+            for (let index = 0; index < 32; index++)
+              socket.send(part, { binary: false, fin: false });
+            socket.send("a", { fin: true });
+          }
+        });
+      },
+    );
+  }, 15_000);
+
+  it.each(["native", "desktop-controller"])(
+    "bridges a greater-than-8-MiB snapshot and following reply in order for %s",
+    async (consumer) => {
+      const snapshot = longThreadSnapshot(3_240);
+      const snapshotBytes = Buffer.from(snapshot);
+      expect(snapshotBytes.byteLength).toBeGreaterThan(9 * 1024 * 1024);
+      expect(snapshotBytes.byteLength).toBeLessThan(10 * 1024 * 1024);
+      const following = JSON.stringify({
+        _tag: "Exit",
+        requestId: "2",
+        exit: { _tag: "Success", value: "still connected 🔬 café 漢字" },
+      });
+      const requests: string[] = [];
+      const admissions: string[] = [];
+      let registry: HostConnectionRegistry | undefined;
+      let rendererServer: WebSocketServer | undefined;
+      const local = new WebSocketServer({
+        host: "127.0.0.1",
+        port: 0,
+        perMessageDeflate: false,
+        maxPayload: 2 * 1024 * 1024,
+      });
+      local.on("connection", (socket, request) => {
+        admissions.push(request.url!);
+        socket.on("error", () => {});
+        socket.on("message", (data) => {
+          requests.push(data.toString());
+          if (data.toString() === "snapshot") socket.send(snapshot);
+          else if (data.toString() === "following-small") socket.send(following);
+          else if (data.toString() === "oversized-response") {
+            socket.send("a".repeat(32 * 1024 * 1024 + 1));
+          }
+        });
+      });
+      const sessions = {
+        cookieName: "synara-test",
+        issue: () => Effect.succeed({ sessionId: "large-response-session" }),
+        issueWebSocketToken: () => Effect.succeed({ token: "large-response-ws-token" }),
+        revoke: () => Effect.succeed(true),
+      } as unknown as SessionCredentialServiceShape;
+      await once(local, "listening");
+      const address = local.address();
+      if (!address || typeof address === "string")
+        throw new Error("Expected local RPC TCP address");
+      try {
+        await fixture(
+          async (url) => {
+            let largestOuterChunk = 0;
+            const dial = async (signal?: AbortSignal) => {
+              const transport = await outer(url);
+              transport.on("message", (data) => {
+                largestOuterChunk = Math.max(largestOuterChunk, Buffer.byteLength(data as Buffer));
+              });
+              return connectRemoteWebSocket(
+                transport,
+                remoteTlsAnchor(identity),
+                REMOTE_INNER_RPC_PATH,
+                signal,
+              );
+            };
+            let socket: WebSocket;
+            if (consumer === "native") socket = await dial();
+            else {
+              registry = new HostConnectionRegistry();
+              registry.setConnector("host", "Mini", async (_client, signal) => ({
+                socket: await dial(signal),
+                compatibility: {
+                  protocolEpoch: 1,
+                  negotiatedRevision: 1,
+                  serverBuild: "fixture-host",
+                  serverInstanceId: "fixture-generation",
+                  capabilities: [],
+                },
+                environmentId: "test-environment",
+                credential: "fixture-credential",
+                credentialExpiresAtSeconds: Date.now() / 1_000 + 3_600,
+                transport: "lan",
+                race: { outcome: "unreachable", attempts: [] },
+              }));
+              const ready = await registry.prepare("host", controllerProtocol);
+              rendererServer = new WebSocketServer({
+                host: "127.0.0.1",
+                port: 0,
+                maxPayload: 2 * 1024 * 1024,
+                perMessageDeflate: false,
+              });
+              rendererServer.on("connection", (renderer, request) => {
+                renderer.on("error", () => {});
+                registry!.attach("host", request.url!.slice(1), renderer, "fixture-generation");
+              });
+              await once(rendererServer, "listening");
+              const rendererAddress = rendererServer.address();
+              if (!rendererAddress || typeof rendererAddress === "string")
+                throw new Error("Expected renderer TCP address");
+              socket = new WebSocket(
+                `ws://127.0.0.1:${rendererAddress.port}/${ready.remoteAttachmentId}`,
+                {
+                  maxPayload: 32 * 1024 * 1024,
+                  perMessageDeflate: false,
+                },
+              );
+              await once(socket, "open");
+            }
+            const received: Array<{ bytes: Buffer; binary: boolean }> = [];
+            const replies = new Promise<void>((resolve, reject) => {
+              const closed = (code: number) =>
+                reject(new Error(`Bridge closed before both replies (${code})`));
+              socket.once("close", closed);
+              socket.once("error", reject);
+              socket.on("message", (data, binary) => {
+                received.push({ bytes: Buffer.from(data as Buffer), binary });
+                if (received.length === 2) {
+                  socket.off("close", closed);
+                  socket.off("error", reject);
+                  resolve();
+                }
+              });
+            });
+            // Both replies can reach the bridge while the large message is draining.
+            // They must remain separate UTF-8 text messages in their original order.
+            socket.send("snapshot");
+            socket.send("following-small");
+            await replies;
+            expect(requests).toEqual(["snapshot", "following-small"]);
+            expect(received.map((frame) => frame.binary)).toEqual([false, false]);
+            expect(Buffer.compare(received[0]!.bytes, snapshotBytes)).toBe(0);
+            expect(received[1]!.bytes.toString("utf8")).toBe(following);
+            expect(largestOuterChunk).toBeLessThanOrEqual(64 * 1024);
+            expect(socket.readyState).toBe(WebSocket.OPEN);
+            if (registry) expect(registry.status("host").state).toBe("connected");
+            expect(admissions).toHaveLength(1);
+            const admission = new URL(admissions[0]!, "http://127.0.0.1");
+            expect(admission.pathname).toBe(WS_FEATURE_PATH);
+            expect(admission.searchParams.get("wsToken")).toBe("large-response-ws-token");
+            // The real bridge may stream a valid large reply, but must still
+            // refuse an aggregate above the independent 32 MiB response cap.
+            const closed = once(socket, "close");
+            socket.send("oversized-response");
+            expect((await closed)[0]).toBe(1009);
+            expect(received).toHaveLength(2);
+          },
+          identity,
+          15_000,
+          (inner) =>
+            bridgeRemoteSocketToLocalRpc(
+              inner,
+              {
+                userId: "response-test-user",
+                expiresAtSeconds: Math.floor(Date.now() / 1_000) + 60,
+              },
+              { listeningPort: address.port, sessions },
+            ),
+        );
+      } finally {
+        registry?.closeAll();
+        if (rendererServer) {
+          for (const socket of rendererServer.clients) socket.terminate();
+          await new Promise<void>((resolve) => rendererServer!.close(() => resolve()));
+        }
+        for (const socket of local.clients) socket.terminate();
+        await new Promise<void>((resolve) => local.close(() => resolve()));
+      }
+    },
+    15_000,
+  );
+
+  it.each(["untrusted-root", "wrong-hostname"])(
+    "refuses %s before application data",
+    async (kind) => {
+      const other = await initializeRemoteTlsIdentity(
+        path.join(directory, `${kind}.json`),
+        "another-environment",
+      );
+      await fixture(async (url) => {
+        const anchor =
+          kind === "untrusted-root"
+            ? remoteTlsAnchor(other)
+            : { ...remoteTlsAnchor(identity), environmentId: "wrong-environment" };
+        await expect(connectRemoteWebSocket(await outer(url), anchor)).rejects.toThrow();
+      });
+    },
+  );
+
+  it("closes silent and plaintext outer peers, and never exposes the old route", async () => {
+    await fixture(async (url) => {
+      for (const plaintext of [false, true]) {
+        const socket = await outer(url);
+        const closed = once(socket, "close");
+        if (plaintext) socket.send('{"v":1,"type":"session_authorize"}');
+        await closed;
+      }
+      const legacy = new WebSocket(url.replace("/v2", ""));
+      const result = await new Promise<number>((resolve) => {
+        legacy.on("error", () => {});
+        legacy.on("unexpected-response", (_request, response) => {
+          resolve(response.statusCode!);
+          response.resume();
+          legacy.terminate();
+        });
+      });
+      expect(result).toBe(404);
+    });
+  });
+
+  it("carries fragmented and coalesced TLS records through an opaque proxy and rejects altered ciphertext", async () => {
+    await fixture(
+      async (url) => {
+        const proxy = new WebSocketServer({
+          host: "127.0.0.1",
+          port: 0,
+          perMessageDeflate: false,
+          maxPayload: 2 * 1024 * 1024,
+        });
+        const sockets = new Set<WebSocket>();
+        const timers = new Set<NodeJS.Timeout>();
+        const captured: Buffer[] = [];
+        let mode: "split" | "coalesce" | "tamper" | "normal" = "split";
+        let binaryOnly = true;
+        let coalescedFrames = 0;
+        const forward = (target: WebSocket) => {
+          let pending: Buffer[] = [];
+          let timer: NodeJS.Timeout | undefined;
+          const flush = () => {
+            clearTimeout(timer);
+            if (timer) timers.delete(timer);
+            timer = undefined;
+            if (pending.length > 1) coalescedFrames += pending.length;
+            if (pending.length && target.readyState === WebSocket.OPEN)
+              target.send(Buffer.concat(pending), { binary: true });
+            pending = [];
+          };
+          return (data: RawData, binary: boolean) => {
+            const bytes = Buffer.from(data as Buffer);
+            captured.push(bytes);
+            binaryOnly &&= binary;
+            if (mode === "split") {
+              for (let offset = 0; offset < bytes.length; offset += 137)
+                target.send(bytes.subarray(offset, offset + 137), { binary });
+            } else if (mode === "coalesce") {
+              pending.push(bytes);
+              if (!timer) {
+                timer = setTimeout(flush, 10);
+                timers.add(timer);
+              }
+            } else if (mode === "tamper") {
+              mode = "normal";
+              const altered = Buffer.from(bytes);
+              altered[altered.length - 1]! ^= 1;
+              target.send(altered, { binary });
+            } else target.send(bytes, { binary });
+          };
+        };
+        proxy.on("connection", (client) => {
+          const upstream = new WebSocket(url, { perMessageDeflate: false });
+          sockets.add(client);
+          sockets.add(upstream);
+          const toHost = forward(upstream);
+          const early: Array<[RawData, boolean]> = [];
+          client.on("message", (data, binary) => {
+            if (upstream.readyState === WebSocket.OPEN) toHost(data, binary);
+            else early.push([data, binary]);
+          });
+          upstream.once("open", () => {
+            for (const [data, binary] of early.splice(0)) toHost(data, binary);
+          });
+          upstream.on("message", forward(client));
+          client.on("error", () => upstream.terminate());
+          upstream.on("error", () => client.terminate());
+          client.once("close", () => upstream.terminate());
+          upstream.once("close", () => client.terminate());
+        });
+        try {
+          await once(proxy, "listening");
+          const address = proxy.address();
+          if (!address || typeof address === "string") throw new Error("Expected TCP proxy");
+          const transport = await outer(`ws://127.0.0.1:${address.port}`);
+          sockets.add(transport);
+          const inner = await connectRemoteWebSocket(transport, remoteTlsAnchor(identity));
+          sockets.add(inner);
+          const marker = `proxy-must-not-read-${randomBytes(32).toString("hex")}`;
+          await echo(inner, marker, false);
+          await echo(inner, randomBytes(512 * 1024), true);
+          expect(Buffer.concat(captured).includes(Buffer.from(marker))).toBe(false);
+          expect(binaryOnly).toBe(true);
+          expect(Buffer.concat(captured).length).toBeGreaterThan(1024 * 1024);
+          mode = "coalesce";
+          const messages: string[] = [];
+          const all = new Promise<void>((resolve) => {
+            const collect = (data: RawData) => {
+              messages.push(data.toString());
+              if (messages.length === 8) {
+                inner.off("message", collect);
+                resolve();
+              }
+            };
+            inner.on("message", collect);
+          });
+          for (let i = 0; i < 8; i++) {
+            inner.send(`record-${i}`);
+            await new Promise<void>((resolve) => setTimeout(resolve, 1));
+          }
+          await all;
+          expect(messages).toEqual(Array.from({ length: 8 }, (_, i) => `record-${i}`));
+          expect(coalescedFrames).toBeGreaterThan(1);
+          mode = "tamper";
+          const closed = once(inner, "close");
+          let acceptedTamperedPayload = false;
+          inner.on("message", () => {
+            acceptedTamperedPayload = true;
+          });
+          inner.send("must-not-be-accepted");
+          await closed;
+          expect(acceptedTamperedPayload).toBe(false);
+        } finally {
+          for (const timer of timers) clearTimeout(timer);
+          for (const socket of sockets) socket.terminate();
+          await new Promise<void>((resolve) => proxy.close(() => resolve()));
+        }
+      },
+      identity,
+      15_000,
+    );
+  }, 15_000);
+
+  it("rejects an expired leaf and bounds writes to a paused native consumer", async () => {
+    const expired = await initializeRemoteTlsIdentity(
+      path.join(directory, "expired.json"),
+      "test-environment",
+      Date.now() - 120 * 86_400_000,
+    );
+    await fixture(async (url) => {
+      await expect(
+        connectRemoteWebSocket(await outer(url), remoteTlsAnchor(expired)),
+      ).rejects.toThrow(/expir/i);
+    }, expired);
+    await fixture(async (url) => {
+      const transport = await outer(url);
+      const socket = await connectRemoteWebSocket(transport, remoteTlsAnchor(identity));
+      socket.pause();
+      const payload = randomBytes(1024 * 1024);
+      let refused = false;
+      for (let index = 0; index < 32; index++) {
+        if (!sendBoundedRelayFrame(socket, payload)) {
+          refused = true;
+          break;
+        }
+      }
+      expect(refused).toBe(true);
+      expect(socket.bufferedAmount).toBeLessThanOrEqual(8 * 1024 * 1024);
+      const closed = once(socket, "close");
+      socket.resume();
+      await closed;
+    });
+  });
+
+  it("renews the leaf under the same root and refuses corrupt persisted keys", async () => {
+    const target = path.join(directory, "renewal.json");
+    const start = Date.now() - 61 * 86_400_000;
+    const original = await initializeRemoteTlsIdentity(target, "test-environment", start);
+    const renewed = await loadRemoteTlsIdentity(target, "test-environment");
+    expect(renewed.rootCertificate).toBe(original.rootCertificate);
+    expect(renewed.leafCertificate).not.toBe(original.leafCertificate);
+    await fixture(async (url, tunnel) => {
+      const socket = await connectRemoteWebSocket(await outer(url), remoteTlsAnchor(original));
+      tunnel.renew(renewed);
+      await echo(socket, "existing-connection-survives-renewal", false);
+      const next = await connectRemoteWebSocket(await outer(url), remoteTlsAnchor(original));
+      await echo(next, "old-root-accepts-new-leaf", false);
+      expect(() => tunnel.renew(identity)).toThrow("Root replacement");
+      socket.terminate();
+      next.terminate();
+    }, original);
+    await fs.writeFile(target, "corrupt");
+    await expect(initializeRemoteTlsIdentity(target, "test-environment")).rejects.toThrow();
+    expect(await fs.readFile(target, "utf8")).toBe("corrupt");
+  });
+});

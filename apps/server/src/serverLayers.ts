@@ -1,3 +1,5 @@
+import { RemoteHostTrustRepositoryLive } from "./persistence/Layers/RemoteHostTrust";
+import { RemoteDeviceTrustRepositoryLive } from "./persistence/Layers/RemoteDeviceTrust";
 import { ProjectionThreadMessageRepositoryLive } from "./persistence/Layers/ProjectionThreadMessages";
 import { OrchestrationCommandReceiptRepositoryLive } from "./persistence/Layers/OrchestrationCommandReceipts";
 import { QueuedTurnPromotionRepositoryLive } from "./persistence/Layers/QueuedTurnPromotions";
@@ -76,6 +78,8 @@ import { PullRequestAutoFixServiceLive } from "./pullRequestAutoFix/Layers/PullR
 import { GitHubInboxServiceLive } from "./githubInbox/Layers/GitHubInboxService";
 import { ProviderHealthLive } from "./provider/Layers/ProviderHealth";
 import { makeServerProviderLayer } from "./provider/runtimeLayer";
+import { RemoteSessionRegistryLive } from "./remoteSessions/sessionRegistry";
+import { HostConnectionRegistryLive } from "./hostConnections/registry";
 
 export { makeServerProviderLayer } from "./provider/runtimeLayer";
 
@@ -248,6 +252,8 @@ export function makeServerRuntimeServicesLayer(
     Layer.provideMerge(agentGatewayCredentialsLayer),
   );
   const agentGatewayLayer = AgentGatewayLive.pipe(
+    Layer.provideMerge(ServerEnvironmentLive),
+    Layer.provideMerge(HostConnectionRegistryLive),
     Layer.provideMerge(
       Layer.mergeAll(
         ProjectionThreadMessageRepositoryLive,
@@ -256,10 +262,14 @@ export function makeServerRuntimeServicesLayer(
         todoServiceLayer,
       ),
     ),
-    Layer.provideMerge(QueuedTurnPromotionRepositoryLive),
-    Layer.provideMerge(HubWorkRepositoryLive),
-    Layer.provideMerge(ProjectAgentRepositoryLive),
-    Layer.provideMerge(ManagedAttachmentRepositoryLive),
+    Layer.provideMerge(
+      Layer.mergeAll(
+        QueuedTurnPromotionRepositoryLive,
+        HubWorkRepositoryLive,
+        ProjectAgentRepositoryLive,
+        ManagedAttachmentRepositoryLive,
+      ),
+    ),
     Layer.provideMerge(agentGatewayCredentialsLayer),
     Layer.provideMerge(automationServiceLayer),
     Layer.provideMerge(projectAgentServiceLayer),
@@ -345,6 +355,10 @@ export function makeServerRuntimeServicesLayer(
     ServerRuntimeStartupLive,
     WorkspaceLayerLive,
     ProjectFaviconResolverLive,
+    RemoteSessionRegistryLive,
+    RemoteDeviceTrustRepositoryLive,
+    RemoteHostTrustRepositoryLive,
+    HostConnectionRegistryLive,
   ).pipe(Layer.provideMerge(serverSettingsLayer), Layer.provideMerge(NodeServices.layer));
 }
 

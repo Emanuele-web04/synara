@@ -14,6 +14,7 @@ import {
   SYNARA_CUA_BUNDLE_ID,
   SYNARA_DEVELOPMENT_BUNDLE_ID,
   SYNARA_PRODUCTION_BUNDLE_ID,
+  SYNARA_REMOTE_BUNDLE_ID,
 } from "./desktopIdentity";
 
 describe("isBetaFeatureEnabled", () => {
@@ -53,14 +54,14 @@ describe("isBetaFeatureEnabled", () => {
 
   it("offers inline visuals in Stable and all other flavors", () => {
     expect(isBetaFeatureEnabled(INLINE_VISUALS_BETA_FEATURE, "production")).toBe(true);
-    for (const flavor of ["beta", "development", "canary", "cua", "unknown"] as const) {
+    for (const flavor of ["beta", "remote", "development", "canary", "cua", "unknown"] as const) {
       expect(isBetaFeatureEnabled(INLINE_VISUALS_BETA_FEATURE, flavor)).toBe(true);
     }
   });
 
   it("keeps connectors out of Stable only", () => {
     expect(isBetaFeatureEnabled(MCP_CONNECTORS_BETA_FEATURE, "production")).toBe(false);
-    for (const flavor of ["beta", "development", "canary", "cua", "unknown"] as const) {
+    for (const flavor of ["beta", "remote", "development", "canary", "cua", "unknown"] as const) {
       expect(isBetaFeatureEnabled(MCP_CONNECTORS_BETA_FEATURE, flavor)).toBe(true);
     }
   });
@@ -98,6 +99,7 @@ describe("desktopFlavorFromBundleId", () => {
     expect(desktopFlavorFromBundleId(SYNARA_CANARY_BUNDLE_ID)).toBe("canary");
     expect(desktopFlavorFromBundleId(SYNARA_CUA_BUNDLE_ID)).toBe("cua");
     expect(desktopFlavorFromBundleId(SYNARA_BETA_BUNDLE_ID)).toBe("beta");
+    expect(desktopFlavorFromBundleId(SYNARA_REMOTE_BUNDLE_ID)).toBe("remote");
   });
 
   it("trims surrounding whitespace", () => {
@@ -115,6 +117,7 @@ describe("desktopFlavorFromBundleId", () => {
 describe("desktopFlavorFromProtocol", () => {
   it("maps each desktop scheme", () => {
     expect(desktopFlavorFromProtocol("synara-beta:", false)).toBe("beta");
+    expect(desktopFlavorFromProtocol("synara-remote:", false)).toBe("remote");
     expect(desktopFlavorFromProtocol("synara-canary:", false)).toBe("canary");
     expect(desktopFlavorFromProtocol("synara-cua:", false)).toBe("cua");
     expect(desktopFlavorFromProtocol("synara:", false)).toBe("production");

@@ -23,6 +23,7 @@ import {
   parseStoredThemeState,
   resetThemeVariant as resetThemeVariantState,
   resolveThemePack,
+  resolveProfileThemeAccent,
   resolveThemeVariant,
   serializeThemeState,
   setThemeCodeThemeId,
@@ -309,6 +310,11 @@ function setWindowTranslucency(variant: ThemeVariant, patch: Partial<WindowTrans
 
 function setCodeThemeId(variant: ThemeVariant, codeThemeId: string) {
   updateStoredThemeState((state) => setThemeCodeThemeId(state, variant, codeThemeId));
+}
+
+/** Read at mutation time so every profile writer publishes the current selection. */
+export function readProfileThemeAccent() {
+  return resolveProfileThemeAccent(readStoredThemeState());
 }
 
 export function useTheme() {

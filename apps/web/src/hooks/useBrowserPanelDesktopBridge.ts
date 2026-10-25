@@ -1,3 +1,4 @@
+import { readExecutionContext } from "~/lib/hosts/executionContext";
 import type { ThreadId } from "@synara/contracts";
 import { useEffect, useEffectEvent } from "react";
 
@@ -8,8 +9,8 @@ export function useBrowserPanelDesktopBridge(input: {
   const { onOpen, onToggle } = input;
   const handleToggle = useEffectEvent(() => onToggle?.());
   const handleOpen = useEffectEvent((threadId: ThreadId) => onOpen?.(threadId));
-  const toggleEnabled = onToggle !== null;
-  const openEnabled = onOpen !== null;
+  const toggleEnabled = !readExecutionContext()?.remote && onToggle !== null;
+  const openEnabled = !readExecutionContext()?.remote && onOpen !== null;
 
   useEffect(() => {
     const onMenuAction = window.desktopBridge?.onMenuAction;

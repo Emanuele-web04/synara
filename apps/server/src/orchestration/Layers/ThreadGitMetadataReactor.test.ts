@@ -203,14 +203,17 @@ describe("ThreadGitMetadataReactor", () => {
 
   const vcsStateChangedEvent = (
     threadId: ThreadId,
-    options?: { readonly cwd?: string; readonly eventId?: string },
+    options?: { readonly cwd?: string; readonly kind?: string; readonly eventId?: string },
   ): ProviderRuntimeEvent => ({
     type: "vcs.state.changed",
     eventId: EventId.makeUnsafe(options?.eventId ?? `vcs-${threadId}`),
     provider: "claudeAgent",
     threadId,
     createdAt: "2026-08-07T10:00:30.000Z",
-    payload: { kind: "commit", ...(options?.cwd !== undefined ? { cwd: options.cwd } : {}) },
+    payload: {
+      kind: options?.kind ?? "commit",
+      ...(options?.cwd !== undefined ? { cwd: options.cwd } : {}),
+    },
   });
 
   const runtimeErrorEvent = (threadId: ThreadId): ProviderRuntimeEvent => ({
@@ -476,35 +479,40 @@ describe("ThreadGitMetadataReactor", () => {
     expect(harness.commands).toEqual([]);
   });
 
-  it("refreshes worktree thread metadata mid-turn on a VCS state change", async () => {
-    const threadId = ThreadId.makeUnsafe("vcs-worktree-thread");
-    const cwd = "/repo/.worktrees/vcs";
-    const harness = await createHarness({
-      threads: [
-        {
-          id: threadId,
-          projectId: ProjectId.makeUnsafe("project-1"),
-          envMode: "worktree",
-          worktreePath: cwd,
-          branch: "synara/stale-branch",
-          lastKnownPr: null,
-        },
-      ],
-      branchByCwd: { [cwd]: pullRequest.headBranch },
-    });
+  it.each(["commit", "code_change_published"])(
+    "refreshes actual worktree metadata mid-turn after %s",
+    async (kind) => {
+      const threadId = ThreadId.makeUnsafe("vcs-worktree-thread");
+      const cwd = "/repo/.worktrees/vcs";
+      const harness = await createHarness({
+        threads: [
+          {
+            id: threadId,
+            projectId: ProjectId.makeUnsafe("project-1"),
+            envMode: "worktree",
+            worktreePath: cwd,
+            branch: "synara/stale-branch",
+            lastKnownPr: null,
+          },
+        ],
+        branchByCwd: { [cwd]: pullRequest.headBranch },
+      });
 
-    await harness.publish(startedEvent(threadId, TurnId.makeUnsafe("vcs-running-turn")));
-    await harness.publish(vcsStateChangedEvent(threadId, { cwd }));
-    await waitFor(() => harness.commands.length === 1);
+      await harness.publish(startedEvent(threadId, TurnId.makeUnsafe("vcs-running-turn")));
+      await harness.publish(
+        vcsStateChangedEvent(threadId, { kind, ...(kind === "commit" ? { cwd } : {}) }),
+      );
+      await waitFor(() => harness.commands.length === 1);
 
-    expect(harness.commands[0]).toMatchObject({
-      type: "thread.meta.update",
-      threadId,
-      branch: pullRequest.headBranch,
-      lastKnownPr: pullRequest,
-      associatedWorktreeBranch: pullRequest.headBranch,
-    });
-  });
+      expect(harness.commands[0]).toMatchObject({
+        type: "thread.meta.update",
+        threadId,
+        branch: pullRequest.headBranch,
+        lastKnownPr: pullRequest,
+        associatedWorktreeBranch: pullRequest.headBranch,
+      });
+    },
+  );
 
   it("ignores VCS state changes reported for a different workspace", async () => {
     const threadId = ThreadId.makeUnsafe("vcs-mismatch-thread");

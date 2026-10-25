@@ -1,3 +1,4 @@
+import { readExecutionContext } from "./hosts/executionContext";
 // FILE: folderDrop.ts
 // Purpose: Pure helpers for accepting an OS folder drop (Create Project dialog, onboarding).
 // Layer: Web domain helper (no React)
@@ -13,6 +14,10 @@ export function isFileDrag(event: globalThis.DragEvent): boolean {
 
 /** Resolves the first dropped item to an absolute folder path, or a user-facing error. */
 export function resolveDroppedFolder(dataTransfer: DataTransfer): DroppedFolderResult | null {
+  if (readExecutionContext()?.remote)
+    return {
+      error: "Browse folders on the remote computer. Dropped folders belong to this computer.",
+    };
   const item = Array.from(dataTransfer.items).find((entry) => entry.kind === "file");
   const file = item?.getAsFile() ?? dataTransfer.files[0] ?? null;
   if (!item || !file) return null;

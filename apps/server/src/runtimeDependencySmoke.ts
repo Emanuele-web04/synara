@@ -3,9 +3,14 @@
 // Layer: Release verification entrypoint
 
 import { strict as assert } from "node:assert";
+import { verifyRemoteTlsRuntime } from "./remoteTransport/runtimeSmoke";
+import { verifyEditorLanguageRuntime } from "./editor/runtimeSmoke";
 
 import { loadAcpSdk } from "./provider/acp/AcpSdk.ts";
 import { loadClaudeAgentSdk } from "./provider/claudeAgentSdk.ts";
+
+await verifyRemoteTlsRuntime();
+if (process.env.SYNARA_RUNTIME_SMOKE === "remote-tls") process.exit(0);
 
 // Keep these imports external, just like the server. Running this entrypoint
 // from app.asar exposes missing peers that the development install can hide.
@@ -23,4 +28,5 @@ const patches = parsePatchFiles(
   "diff --git a/smoke.txt b/smoke.txt\n--- a/smoke.txt\n+++ b/smoke.txt\n@@ -1 +1 @@\n-before\n+after\n",
 );
 assert.equal(patches[0]?.files[0]?.name, "smoke.txt");
+await verifyEditorLanguageRuntime();
 console.log("Packaged runtime dependency smoke passed.");

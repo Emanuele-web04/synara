@@ -1,7 +1,7 @@
 import { Schema } from "effect";
 import { IsoDateTime, TrimmedString } from "./baseSchemas";
 import { DEFAULT_GIT_TEXT_GENERATION_MODEL } from "./model";
-import { ModelSelection, ProviderKind, ThreadEnvironmentMode } from "./orchestration";
+import { ModelSelection, ProviderKind, RuntimeMode, ThreadEnvironmentMode } from "./orchestration";
 import { ProviderInstanceConfigMap, ProviderInstanceId } from "./providerInstance";
 
 const StringSetting = TrimmedString.check(Schema.isMaxLength(4096));
@@ -140,6 +140,22 @@ export const KeepAwakeMode = Schema.Literals(["always", "agent", "off"]);
 export type KeepAwakeMode = typeof KeepAwakeMode.Type;
 export const DEFAULT_KEEP_AWAKE_MODE: KeepAwakeMode = "off";
 
+// What a new chat's composer starts from on every client of this server. Clients
+// write it when the user changes a new chat's model, effort, speed or access mode,
+// and follow other clients' changes live through settings updates.
+export const NewThreadDefaults = Schema.Struct({
+  // The last selection used on each provider instance, so switching provider
+  // restores that provider's own model and options.
+  modelSelectionByProvider: Schema.Record(ProviderInstanceId, ModelSelection).pipe(
+    Schema.withDecodingDefault(() => ({})),
+  ),
+  // The provider instance a new chat starts on; null until one is chosen.
+  activeProvider: Schema.NullOr(ProviderInstanceId).pipe(Schema.withDecodingDefault(() => null)),
+  // Null until chosen; new chats then start in DEFAULT_RUNTIME_MODE.
+  runtimeMode: Schema.NullOr(RuntimeMode).pipe(Schema.withDecodingDefault(() => null)),
+});
+export type NewThreadDefaults = typeof NewThreadDefaults.Type;
+
 export const ServerSettings = Schema.Struct({
   enableAssistantStreaming: Schema.Boolean.pipe(Schema.withDecodingDefault(() => true)),
   enableProviderUpdateChecks: Schema.Boolean.pipe(Schema.withDecodingDefault(() => true)),
@@ -177,6 +193,7 @@ export const ServerSettings = Schema.Struct({
   }).pipe(Schema.withDecodingDefault(() => ({}))),
   providerInstances: ProviderInstanceConfigMap.pipe(Schema.withDecodingDefault(() => ({}))),
   skills: SkillsServerSettings.pipe(Schema.withDecodingDefault(() => ({}))),
+  newThreadDefaults: NewThreadDefaults.pipe(Schema.withDecodingDefault(() => ({}))),
   // When the first-run welcome tour was completed or skipped. Server-backed so a
   // browser-storage reset does not replay setup on an already configured install.
   onboardingCompletedAt: Schema.optionalKey(Schema.NullOr(IsoDateTime)),
@@ -276,6 +293,16 @@ export const ServerSettingsPatch = Schema.Struct({
   skills: Schema.optionalKey(
     Schema.Struct({
       disabled: Schema.optionalKey(Schema.Array(Schema.String.check(Schema.isMaxLength(256)))),
+    }),
+  ),
+  newThreadDefaults: Schema.optionalKey(
+    Schema.Struct({
+      // Each named provider instance's selection is replaced whole; the others are kept.
+      modelSelectionByProvider: Schema.optionalKey(
+        Schema.Record(ProviderInstanceId, ModelSelection),
+      ),
+      activeProvider: Schema.optionalKey(Schema.NullOr(ProviderInstanceId)),
+      runtimeMode: Schema.optionalKey(Schema.NullOr(RuntimeMode)),
     }),
   ),
   onboardingCompletedAt: Schema.optionalKey(Schema.NullOr(IsoDateTime)),

@@ -1,6 +1,46 @@
 import { describe, expect, it } from "vitest";
 import { resolveReleaseBuildScope } from "./release-build-scope.ts";
 describe("release validation scope", () => {
+  it("qualifies every supported Remote platform without weakening publication gates", () => {
+    for (const platform of ["all"]) {
+      const scope = resolveReleaseBuildScope(platform, "artifact", true, "", "remote");
+      expect(scope.matrix.include.map((entry) => entry.id)).toEqual([
+        "mac-arm64",
+        "linux-x64",
+        "win-x64",
+      ]);
+      expect(scope.cua_matrix.include.map((entry) => entry.id)).toEqual(["mac-arm64", "linux-x64"]);
+      expect(scope).toMatchObject({
+        build_server: false,
+        quality_gates: true,
+        build_icon: true,
+        build_js: true,
+        build_native: true,
+        package_artifacts: true,
+      });
+    }
+    for (const platform of ["mac-arm64", "linux-x64", "win-x64"]) {
+      expect(
+        resolveReleaseBuildScope(platform, "artifact", false, "", "remote").matrix.include.map(
+          (entry) => entry.id,
+        ),
+      ).toEqual([platform]);
+      expect(() => resolveReleaseBuildScope(platform, "artifact", true, "", "remote")).toThrow(
+        "Publication requires",
+      );
+    }
+    for (const platform of ["mac-x64"])
+      expect(() => resolveReleaseBuildScope(platform, "artifact", false, "", "remote")).toThrow(
+        "mac-arm64, linux-x64 and win-x64",
+      );
+    expect(() => resolveReleaseBuildScope("mac-arm64", "native", true, "", "remote")).toThrow(
+      "Publication requires",
+    );
+    for (const flavor of ["production", "beta"] as const)
+      expect(() => resolveReleaseBuildScope("mac-arm64", "artifact", true, "", flavor)).toThrow(
+        "Publication requires",
+      );
+  });
   it("requires the complete four-platform artifact gate for publication", () => {
     expect(resolveReleaseBuildScope("all", "artifact", true).matrix.include).toHaveLength(4);
     for (const stage of ["native", "icon", "js"])

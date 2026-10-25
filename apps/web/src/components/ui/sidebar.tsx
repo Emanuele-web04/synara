@@ -44,7 +44,7 @@ const SIDEBAR_OFFCANVAS_MOTION_CLASS = "duration-300 ease-[cubic-bezier(0.32,0.7
  */
 const SIDEBAR_OFFCANVAS_MOTION_SUPPRESSED_CLASS = "transition-none! duration-0!";
 
-type SidebarContextProps = {
+export type SidebarContextProps = {
   state: "expanded" | "collapsed";
   open: boolean;
   setOpen: (open: boolean) => void;
@@ -105,6 +105,7 @@ function SidebarProvider({
   defaultOpen: defaultOpenProp,
   open: openProp,
   onOpenChange: setOpenProp,
+  controls,
   className,
   style,
   children,
@@ -113,6 +114,8 @@ function SidebarProvider({
   defaultOpen?: boolean;
   open?: boolean;
   onOpenChange?: (open: boolean) => void;
+  /** Embedded workspace panes share their controller's sidebar, including mobile controls. */
+  controls?: SidebarContextProps | null;
 }) {
   const defaultOpen = defaultOpenProp ?? true;
   const isMobile = useIsMobile();
@@ -157,7 +160,7 @@ function SidebarProvider({
   );
 
   return (
-    <SidebarContext.Provider value={contextValue}>
+    <SidebarContext.Provider value={controls ?? contextValue}>
       <div
         className={cn(
           "group/sidebar-wrapper flex min-h-svh w-full has-data-[variant=inset]:bg-sidebar",
@@ -317,10 +320,12 @@ function Sidebar({
     );
   }
 
+  // The mobile branch already follows the controller viewport. CSS breakpoints here
+  // would hide a desktop dock when its embedded workspace is narrower than the window.
   return (
     <SidebarInstanceContext.Provider value={instanceContextValue}>
       <div
-        className="group peer hidden text-sidebar-foreground md:block"
+        className="group peer text-sidebar-foreground"
         data-collapsible={state === "collapsed" ? collapsible : ""}
         data-side={side}
         data-slot="sidebar"
@@ -347,7 +352,7 @@ function Sidebar({
             // (layout): a fixed panel relayouts its whole subtree per frame otherwise,
             // which read as a janky close on heavy sidebar content. The gap still
             // animates width — reserving layout is its job — but its subtree is empty.
-            "fixed inset-y-0 z-0 hidden h-svh w-(--sidebar-width) transition-[left,right,width,translate] duration-200 ease-linear motion-reduce:transition-none md:flex",
+            "fixed inset-y-0 z-0 flex h-svh w-(--sidebar-width) transition-[left,right,width,translate] duration-200 ease-linear motion-reduce:transition-none",
             side === "left"
               ? "left-0 group-data-[collapsible=offcanvas]:-translate-x-full"
               : "right-0 group-data-[collapsible=offcanvas]:translate-x-full",

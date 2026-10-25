@@ -8,6 +8,7 @@
 // a synthetic request header (overriding any client-supplied value), and the RPC
 // admission middleware resolves it back into handler-scoped services.
 import { randomUUID } from "node:crypto";
+import { CurrentDesktopUpdateAuthority } from "./desktopUpdateRpc";
 
 import { Effect, Layer, Scope, ServiceMap } from "effect";
 
@@ -26,6 +27,7 @@ export const CurrentWsSessionRole = ServiceMap.Reference<WsSessionRole>(
 export interface WsConnectionSession {
   readonly role: WsSessionRole;
   readonly attachmentPrincipal: ManagedAttachmentPrincipal;
+  readonly desktopUpdateAuthority?: string | undefined;
 }
 
 /**
@@ -97,6 +99,7 @@ export function provideWsConnectionSession<A, E, R>(
     ? effect.pipe(
         Effect.provideService(CurrentWsSessionRole, session.role),
         Effect.provideService(CurrentManagedAttachmentPrincipal, session.attachmentPrincipal),
+        Effect.provideService(CurrentDesktopUpdateAuthority, session.desktopUpdateAuthority),
       )
     : effect;
 }

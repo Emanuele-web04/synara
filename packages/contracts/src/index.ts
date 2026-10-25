@@ -1,3 +1,9 @@
+export * from "./account";
+export * from "./hostAuth";
+export * from "./hostSecrets";
+export * from "./hostSessions";
+export * from "./hostConnection";
+export * from "./accountUsage";
 export * from "./editorDebug";
 export * from "./auth";
 export * from "./automation";
@@ -15,6 +21,7 @@ export * from "./browserAutomationToolCatalogue";
 export * from "./browserVault";
 export * from "./browserAnnotations";
 export * from "./ipc";
+export * from "./desktopUpdate";
 export * from "./terminal";
 export * from "./provider";
 export * from "./providerDiscovery";
@@ -56,4 +63,14 @@ export * from "./computerAudit";
 export * from "./computerBrowser";
 export * from "./rpc";
 export * from "./claudeCache";
+
+export * from "./remotePairing";
+
+export * from "./remoteResources";
+
+export * from "./remoteAgentGateway";
 export * from "./todo";
+export * from "./inboxRecaps";
+export * from "./productAnalytics";
+
+export * from "./liveActivities";

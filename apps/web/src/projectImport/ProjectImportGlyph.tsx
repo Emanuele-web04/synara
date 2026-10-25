@@ -5,7 +5,7 @@
 
 import { APP_ICON_TILE_SIZE_CLASSES, AppIconTile, ConnectorDots } from "~/components/AppIconTile";
 import { ProviderIcon } from "~/components/ProviderIcon";
-import { SynaraLogo } from "~/components/SynaraLogo";
+import { SynaraLogo } from "@synara/profile-ui/logo";
 import { cn } from "~/lib/utils";
 
 type GlyphSize = "md" | "lg";

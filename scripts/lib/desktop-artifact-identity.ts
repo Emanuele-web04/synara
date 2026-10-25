@@ -1,3 +1,5 @@
+// FILE: desktop-artifact-identity.ts
+// Purpose: Keeps packaged metadata, native identity and artifact names aligned.
 import {
   synaraDesktopIdentity,
   type SynaraPackagedDesktopFlavor,
@@ -8,9 +10,9 @@ export function createDesktopArtifactIdentity(input: {
   readonly flavor: SynaraPackagedDesktopFlavor;
 }) {
   // Stable's NSIS GUID deliberately survives public bundle ID changes. An
-  // experimental installer must not register itself as that same product; beta
-  // ships its own WINDOWS_BETA_INSTALLER_GUID, so it is exempt.
-  if (input.platform === "win" && input.flavor !== "production" && input.flavor !== "beta") {
+  // experimental installer must not register itself as that same product;
+  // Beta and Remote have their own installer GUIDs.
+  if (input.platform === "win" && !["production", "beta", "remote"].includes(input.flavor)) {
     throw new Error("Isolated desktop flavors are currently supported on macOS and Linux only.");
   }
   const identity = synaraDesktopIdentity(input.flavor);

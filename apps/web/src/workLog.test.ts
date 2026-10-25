@@ -14,6 +14,12 @@ import { makeActivity } from "./storeTestFixtures";
 import { isComputerToolName } from "./lib/computerToolPresentation";
 import { isPlainRuntimeNoticeWorkEntry } from "./components/chat/agentActivity.logic";
 
+const diagnostic = (
+  level: string,
+  fields: Record<string, unknown>,
+  target = "codex_skills::interface",
+) => JSON.stringify({ timestamp: "2026-10-15T20:05:38.509122Z", level, fields, target });
+
 describe("deriveSubagentTaskEnds", () => {
   it("preserves settled invocations while a resumed task waits for its own completion", () => {
     const firstEnd = makeActivity({
@@ -1810,6 +1816,43 @@ describe("deriveWorkLogEntries", () => {
     });
   });
 
+  it("keeps the owning computer of a remote Synara thread creation recap", () => {
+    const thread = {
+      threadId: "remote-thread",
+      title: "Say hi",
+      provider: "codex",
+      model: "gpt-5.6-terra",
+      environment: "local",
+      status: "task_dispatched",
+    };
+    const recap = (payload: Record<string, unknown>) =>
+      deriveWorkLogEntries(
+        [
+          makeActivity({
+            id: "synara-created-remote-thread",
+            createdAt: "2026-02-23T00:00:05.000Z",
+            turnId: "turn-1",
+            kind: "synara.threads.created",
+            summary: "Created 1 Synara thread",
+            tone: "info",
+            payload: { operationId: "gateway:create:remote", threads: [thread], ...payload },
+          }),
+        ],
+        TurnId.makeUnsafe("turn-1"),
+      )[0]?.synaraThreadCreation;
+
+    expect(recap({ environmentId: "mini", hostName: " Mac mini " })).toEqual({
+      operationId: "gateway:create:remote",
+      requestedCount: 1,
+      createdCount: 1,
+      threads: [thread],
+      environmentId: "mini",
+      hostName: "Mac mini",
+    });
+    expect(recap({ environmentId: "mini" })).not.toHaveProperty("hostName");
+    expect(recap({ hostName: "Mac mini" })).not.toHaveProperty("hostName");
+  });
+
   it("exposes deterministic worker monitor notices for coordinator rows", () => {
     const activities: OrchestrationThreadActivity[] = [
       // Monitor rows are posted with no turn id and must survive the
@@ -1960,6 +2003,51 @@ describe("deriveWorkLogEntries", () => {
 
     const entries = deriveWorkLogEntries(activities, undefined);
     expect(entries.map((entry) => entry.id)).toEqual(["tool-complete"]);
+  });
+
+  it("omits persisted Codex diagnostic noise while retaining errors and retry notices", () => {
+    const warning = (id: string, message: string, extra: Record<string, unknown> = {}) =>
+      makeActivity({
+        id,
+        kind: "runtime.warning",
+        summary: "Runtime warning",
+        tone: "info",
+        payload: { message, ...extra },
+      });
+    const noise = diagnostic("WARN", { message: "ignoring interface.icon_small" });
+    const entries = deriveWorkLogEntries(
+      [
+        warning("old-skill-warning", noise),
+        warning(
+          "old-oauth-warning",
+          diagnostic(
+            "ERROR",
+            { error: "failed to refresh OAuth tokens for server stripe: invalid_grant" },
+            "codex_rmcp_client::oauth::refresh_transaction",
+          ),
+        ),
+        warning(
+          "real-error",
+          diagnostic(
+            "ERROR",
+            { message: "Permission denied opening the working directory" },
+            "codex_core::runtime",
+          ),
+        ),
+        warning("retry", noise, { willRetry: true }),
+        warning("json-not-log", '{"level":"WARN","message":"Check the project configuration"}'),
+      ],
+      undefined,
+    );
+    expect(entries.map((entry) => entry.id).toSorted()).toEqual([
+      "json-not-log",
+      "real-error",
+      "retry",
+    ]);
+    expect(entries.find((entry) => entry.id === "real-error")).toMatchObject({
+      label: "Permission denied opening the working directory",
+      detail: "Permission denied opening the working directory",
+    });
   });
 
   it("shows runtime warning messages and collapses repeated identical warning rows", () => {

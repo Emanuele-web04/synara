@@ -30,7 +30,7 @@ export interface ReleaseArtifactCheckpointInput extends Pick<
   | "expectedWindowsPublisher"
   | "expectedWindowsSubjectDn"
 > {
-  readonly flavor: "production" | "beta";
+  readonly flavor: "production" | "beta" | "remote";
 }
 
 function record(value: unknown, name: string): Record<string, unknown> {
@@ -129,7 +129,10 @@ export async function verifyReleaseArtifactCheckpoint(
     input.target !== validTarget ||
     !["arm64", "x64"].includes(input.arch) ||
     (input.platform !== "mac" && input.arch !== "x64") ||
-    !["production", "beta"].includes(input.flavor) ||
+    !["production", "beta", "remote"].includes(input.flavor) ||
+    (input.flavor === "remote" &&
+      ((input.platform === "mac" && input.arch !== "arm64") ||
+        !/^\d+\.\d+\.\d+-remote(?:\.|$)/.test(input.version))) ||
     !/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(input.version) ||
     !/^[0-9a-f]{40}$/i.test(input.sourceCommit) ||
     !/^[0-9a-f]{64}$/i.test(input.lockfileSha256) ||
@@ -157,7 +160,10 @@ export async function verifyReleaseArtifactCheckpoint(
 
   // AppImage names use the native x86_64 alias; provenance keeps the matrix arch x64.
   const fileArch = input.platform === "linux" ? "x86_64" : input.arch;
-  const stem = `${input.flavor === "beta" ? "Synara-Beta" : "Synara"}-${input.version}-${fileArch}`;
+  const productName = { production: "Synara", beta: "Synara-Beta", remote: "Synara-Remote" }[
+    input.flavor
+  ];
+  const stem = `${productName}-${input.version}-${fileArch}`;
   const payloads =
     input.platform === "mac"
       ? [`${stem}.dmg`, `${stem}.zip`]

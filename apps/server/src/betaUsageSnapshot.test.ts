@@ -13,7 +13,11 @@ import { Effect, FileSystem, Layer, Path } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { BETA_USAGE_SNAPSHOT_FILE_NAME, writeBetaUsageSnapshot } from "./betaUsageSnapshot";
+import {
+  BETA_USAGE_SNAPSHOT_FILE_NAME,
+  usageModelCategory,
+  writeBetaUsageSnapshot,
+} from "./betaUsageSnapshot";
 import { SqlitePersistenceMemory } from "./persistence/Layers/Sqlite";
 
 const roots: string[] = [];
@@ -63,6 +67,72 @@ const seed = Effect.gen(function* () {
                    ('th3', 'u5', 'completed', ${nowIso()}, '[]')`;
 });
 
+const turnRequest = (messageId: string, model: string, effort: string) =>
+  JSON.stringify({
+    threadId: "b1",
+    messageId,
+    modelSelection: { provider: "claudeAgent", model, options: { effort } },
+    interactionMode: "plan",
+    runtimeMode: "approval-required",
+  });
+
+describe("turn breakdown", () => {
+  it("groups finished turns by fixed categories and keeps no user-defined names", async () => {
+    const root = makeRoot();
+    await run(
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        const at = nowIso();
+        yield* sql`INSERT INTO projection_thread_sessions (thread_id, status, provider_name, updated_at)
+                  VALUES ('b1', 'idle', 'claudeAgent', ${at})`;
+        yield* sql`INSERT INTO projection_turns (thread_id, turn_id, pending_message_id, state, requested_at, started_at, completed_at, checkpoint_files_json)
+                  VALUES ('b1', 'bt1', 'm1', 'completed', ${at}, ${hoursAgoIso(0.01)}, ${at}, '[]'),
+                         ('b1', 'bt2', 'm2', 'error', ${at}, NULL, NULL, '[]'),
+                         ('b1', 'bt3', 'm3', 'running', ${at}, NULL, NULL, '[]')`;
+        let sequence = 1;
+        for (const [messageId, model, effort] of [
+          ["m1", "claude-fable-5-1", "high"],
+          ["m2", "my-private-finetune", "galaxy-brain"],
+        ] as const) {
+          yield* sql`INSERT INTO orchestration_events (event_id, aggregate_kind, stream_id, stream_version, event_type, occurred_at, actor_kind, payload_json, metadata_json)
+                    VALUES (${`ev-${messageId}`}, 'thread', 'b1', ${sequence++}, 'thread.turn-start-requested', ${at}, 'client', ${turnRequest(messageId, model, effort)}, '{}')`;
+        }
+        yield* sql`INSERT INTO projection_thread_activities (activity_id, thread_id, turn_id, tone, kind, summary, payload_json, created_at)
+                  VALUES ('a1', 'b1', 'bt1', 'info', 'turn.completed', 'done',
+                          ${JSON.stringify({ modelUsage: { "secret-model-key": { inputTokens: 10, outputTokens: 4, cacheReadInputTokens: 2 } } })}, ${at})`;
+        yield* writeBetaUsageSnapshot(root);
+      }),
+    );
+    const snapshot = JSON.parse(
+      readFileSync(join(root, "diagnostics", BETA_USAGE_SNAPSHOT_FILE_NAME), "utf8"),
+    );
+    const rows = snapshot.turnBreakdown as Array<Record<string, unknown>>;
+    expect(rows).toHaveLength(2);
+    expect(rows).toContainEqual(
+      expect.objectContaining({
+        provider: "claudeAgent",
+        model: "claude-fable-5-1",
+        effort: "high",
+        interactionMode: "plan",
+        runtimeMode: "approval-required",
+        origin: "user",
+        outcome: "succeeded",
+        turns: 1,
+        durationSamples: 1,
+        inputTokens: 10,
+        outputTokens: 4,
+        cachedInputTokens: 2,
+        tokenSamples: 1,
+      }),
+    );
+    expect(rows).toContainEqual(
+      expect.objectContaining({ model: "other", effort: "default", outcome: "failed", turns: 1 }),
+    );
+    expect(JSON.stringify(snapshot)).not.toContain("secret-model-key");
+    expect(JSON.stringify(snapshot)).not.toContain("my-private-finetune");
+  });
+});
+
 describe("writeBetaUsageSnapshot", () => {
   it("writes last-24h counts atomically with private permissions", async () => {
     const root = makeRoot();
@@ -100,19 +170,55 @@ describe("writeBetaUsageSnapshot", () => {
   });
 });
 
-describe("beta gate", () => {
-  it("main.ts starts the snapshot job only for the beta bundle id", () => {
+describe("bundle gate", () => {
+  it("main.ts starts the snapshot job only for the Beta and Remote bundle ids", () => {
     const mainSource = readFileSync(
       join(dirname(fileURLToPath(import.meta.url)), "main.ts"),
       "utf8",
     );
-    // The job is invoked inside the SYNARA_DESKTOP_BUNDLE_ID_ENV ===
-    // SYNARA_BETA_BUNDLE_ID branch, not unconditionally. The gate sits in the
-    // few lines directly above the call (the same bundle-id gate also guards
-    // the earlier beta-import block, so anchor on the call site itself).
+    // The job is invoked inside the Beta/Remote bundle-id branch, not
+    // unconditionally. The gate sits in the few lines directly above the call
+    // (a bundle-id gate also guards the earlier beta-import block, so anchor on
+    // the call site itself).
     const callIndex = mainSource.lastIndexOf("startBetaUsageSnapshotJob");
     expect(callIndex).toBeGreaterThan(0);
     const gate = mainSource.slice(callIndex - 400, callIndex + 100);
-    expect(gate).toContain("process.env[SYNARA_DESKTOP_BUNDLE_ID_ENV] === SYNARA_BETA_BUNDLE_ID");
+    expect(gate).toContain("const desktopBundleId = process.env[SYNARA_DESKTOP_BUNDLE_ID_ENV];");
+    expect(gate).toContain(
+      "desktopBundleId === SYNARA_BETA_BUNDLE_ID || desktopBundleId === SYNARA_REMOTE_BUNDLE_ID",
+    );
+  });
+});
+
+describe("usage model categories", () => {
+  it("keeps catalogued models and Claude releases, never custom names", () => {
+    expect(usageModelCategory("claudeAgent", "claude-fable-5-1")).toBe("claude-fable-5-1");
+    expect(usageModelCategory("claudeAgent", "claude-opus-7-2")).toBe("claude-opus-7-2");
+    expect(usageModelCategory("codex", "gpt-acme-secret-project")).toBe("other");
+    expect(usageModelCategory("claudeAgent", "claude-acme-secret")).toBe("other");
+    expect(usageModelCategory("opencode", "my-company/internal-model")).toBe("other");
+  });
+});
+
+describe("finished turn window", () => {
+  it("counts a long turn by when it finished, not when it was requested", async () => {
+    const root = makeRoot();
+    await run(
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        yield* sql`INSERT INTO projection_thread_sessions (thread_id, status, provider_name, updated_at)
+                  VALUES ('w1', 'idle', 'codex', ${nowIso()})`;
+        yield* sql`INSERT INTO projection_turns (thread_id, turn_id, state, requested_at, started_at, completed_at, checkpoint_files_json)
+                  VALUES ('w1', 'long', 'completed', ${hoursAgoIso(25)}, ${hoursAgoIso(25)}, ${hoursAgoIso(1)}, '[]'),
+                         ('w1', 'old', 'completed', ${hoursAgoIso(30)}, ${hoursAgoIso(30)}, ${hoursAgoIso(29)}, '[]')`;
+        yield* writeBetaUsageSnapshot(root);
+      }),
+    );
+    const snapshot = JSON.parse(
+      readFileSync(join(root, "diagnostics", BETA_USAGE_SNAPSHOT_FILE_NAME), "utf8"),
+    );
+    expect(snapshot.turnBreakdown).toEqual([
+      expect.objectContaining({ provider: "codex", outcome: "succeeded", turns: 1 }),
+    ]);
   });
 });

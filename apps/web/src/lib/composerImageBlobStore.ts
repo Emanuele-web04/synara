@@ -1,3 +1,5 @@
+import { claimLegacyExecutionStorage } from "./hosts/executionStorage";
+import { executionKey, readExecutionContext } from "./hosts/executionContext";
 // FILE: composerImageBlobStore.ts
 // Purpose: Persists large composer image blobs outside localStorage.
 // Layer: Browser storage adapter
@@ -22,7 +24,7 @@ interface StoredComposerImageBlob {
 
 function openComposerImageDatabase(): Promise<IDBDatabase> {
   return openIndexedDbDatabase({
-    name: DATABASE_NAME,
+    name: executionKey(DATABASE_NAME),
     version: DATABASE_VERSION,
     storeName: IMAGE_STORE_NAME,
     keyPath: "key",
@@ -157,5 +159,49 @@ export async function deleteComposerImageBlob(key: string): Promise<void> {
     await waitForTransaction(transaction);
   } finally {
     database.close();
+  }
+}
+
+/** Copies one legacy blob at a time, retaining the original database. A crash
+ * retries missing records only; an already edited scoped draft wins. */
+export async function migrateLocalComposerImageBlobs(): Promise<void> {
+  if (readExecutionContext()?.remote !== null || typeof indexedDB === "undefined") return;
+  if (!claimLegacyExecutionStorage(localStorage)) return;
+  const marker = executionKey("composer-image-migration:v1");
+  if (localStorage.getItem(marker)) return;
+  const source = await openIndexedDbDatabase({
+    name: DATABASE_NAME,
+    version: DATABASE_VERSION,
+    storeName: IMAGE_STORE_NAME,
+    keyPath: "key",
+    label: "legacy composer images",
+  });
+  const destination = await openComposerImageDatabase();
+  try {
+    const keysTransaction = source.transaction(IMAGE_STORE_NAME, "readonly");
+    const keys = await awaitIdbRequest(
+      keysTransaction.objectStore(IMAGE_STORE_NAME).getAllKeys(),
+      "Could not list legacy images",
+    );
+    for (const key of keys) {
+      const read = source.transaction(IMAGE_STORE_NAME, "readonly");
+      const record = await awaitIdbRequest(
+        read.objectStore(IMAGE_STORE_NAME).get(key),
+        "Could not read legacy image",
+      );
+      if (!record) continue;
+      const write = destination.transaction(IMAGE_STORE_NAME, "readwrite");
+      const done = waitForIdbTransaction(write, "Image migration");
+      const store = write.objectStore(IMAGE_STORE_NAME);
+      const existing = store.get(key);
+      existing.addEventListener("success", () => {
+        if (existing.result === undefined) store.put(record);
+      });
+      await done;
+    }
+    localStorage.setItem(marker, "copied");
+  } finally {
+    source.close();
+    destination.close();
   }
 }

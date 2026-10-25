@@ -1,3 +1,5 @@
+// FILE: release-build-scope.ts
+// Purpose: Selects qualified release platforms without weakening publication gates.
 const platforms = [
   {
     id: "mac-arm64",
@@ -40,10 +42,17 @@ export function resolveReleaseBuildScope(
   stage = "artifact",
   publish = false,
   cuaBenchmarkBaseline = "",
+  flavor: "production" | "beta" | "remote" = "production",
 ) {
   if (!["artifact", "native", "icon", "js", "preflight"].includes(stage))
     throw new Error(`Unknown build stage: ${stage}`);
-  const selected = platforms.filter((entry) => platform === "all" || platform === entry.id);
+  if (flavor === "remote" && !["all", "mac-arm64", "linux-x64", "win-x64"].includes(platform))
+    throw new Error("Synara Remote supports mac-arm64, linux-x64 and win-x64.");
+  const selected = platforms.filter(
+    (entry) =>
+      (platform === "all" || platform === entry.id) &&
+      (flavor !== "remote" || entry.id !== "mac-x64"),
+  );
   if (selected.length === 0) throw new Error(`Unknown build platform: ${platform}`);
   if (publish && (platform !== "all" || stage !== "artifact"))
     throw new Error("Publication requires all platforms and the complete artifact stage.");
@@ -78,6 +87,6 @@ export function resolveReleaseBuildScope(
     // builds, packaging or publication.
     quality_gates: stage === "artifact" || stage === "preflight",
     package_artifacts: stage === "artifact",
-    build_server: stage === "artifact" && platform === "all",
+    build_server: stage === "artifact" && platform === "all" && flavor !== "remote",
   };
 }

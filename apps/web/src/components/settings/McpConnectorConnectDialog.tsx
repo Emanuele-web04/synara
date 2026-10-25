@@ -11,7 +11,7 @@ import { useEffect, useState } from "react";
 
 import { AppIconTile, ConnectorDots } from "~/components/AppIconTile";
 import { ConnectorIcon } from "~/components/ConnectorIcon";
-import { SynaraLogo } from "~/components/SynaraLogo";
+import { SynaraLogo } from "@synara/profile-ui/logo";
 import { Button } from "~/components/ui/button";
 import { CopyTextButton } from "~/components/ui/copyTextButton";
 import {

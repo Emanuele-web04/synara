@@ -34,6 +34,15 @@ import {
 } from "../composerSlashCommands";
 import { resolveThreadHandoffModelSelection } from "../lib/threadHandoff";
 import { toastManager } from "../components/ui/toast";
+import { trackSlashCommand } from "../lib/productAnalytics";
+
+const SLASH_COMMANDS_COUNTED_ON_SEND = new Set<string>([
+  "model",
+  "goal",
+  "rename",
+  "automation",
+  "computer-use",
+]);
 import type { ComposerCommandItem } from "../components/chat/ComposerCommandMenu";
 import { buildNextProviderOptions } from "../providerModelOptions";
 import { dispatchThreadFork } from "../lib/threadFork";
@@ -41,7 +50,7 @@ import { type SplitViewId } from "../splitViewStore";
 import { useRightDockStore } from "../rightDockStore";
 import { registerSidechatCreator } from "../lib/sidechatCreatorRegistry";
 import { downloadUrlAsBlob } from "../lib/browserDownload";
-import { resolveWsHttpUrl } from "../lib/wsHttpUrl";
+import { resolveExecutionResource } from "../lib/wsHttpUrl";
 import { useFeedbackDialogStore } from "../feedbackDialogStore";
 import { useComposerDraftStore } from "../composerDraftStore";
 import { useStore } from "../store";
@@ -821,9 +830,8 @@ export function useComposerSlashCommands(input: {
       });
       return;
     }
-    const params = new URLSearchParams({ threadId: threadId });
     void downloadUrlAsBlob({
-      url: resolveWsHttpUrl(`/api/thread-export?${params.toString()}`),
+      url: resolveExecutionResource({ kind: "thread-export", threadId }),
       filename: `synara-thread-${threadId}.zip`,
     }).catch((error: unknown) => {
       toastManager.add({
@@ -876,6 +884,7 @@ export function useComposerSlashCommands(input: {
         trimmed,
         availableBuiltInSlashCommands,
       );
+      if (slashInvocation) trackSlashCommand(slashInvocation.command);
       if (!slashInvocation || slashInvocation.command === "model") {
         return false;
       }
@@ -1113,6 +1122,13 @@ export function useComposerSlashCommands(input: {
       if (!trigger) {
         return;
       }
+      // Commands that insert `/name ` are counted when that text is sent.
+      const countedOnSend =
+        SLASH_COMMANDS_COUNTED_ON_SEND.has(item.command) ||
+        (item.command === "review" &&
+          selectedProvider !== "codex" &&
+          supportsTextNativeReviewCommand);
+      if (!countedOnSend) trackSlashCommand(item.command);
 
       if (
         item.command === "model" ||

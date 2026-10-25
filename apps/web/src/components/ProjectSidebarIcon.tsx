@@ -14,7 +14,7 @@ import {
   type ProjectColor,
 } from "~/lib/projectAppearance";
 import { cn } from "~/lib/utils";
-import { resolveWsHttpUrl } from "~/lib/wsHttpUrl";
+import { resolveExecutionResource } from "~/lib/wsHttpUrl";
 import { FolderIcon, FolderOpenIcon } from "~/lib/icons";
 import { DisclosureChevron } from "./ui/DisclosureChevron";
 
@@ -39,8 +39,7 @@ function recordFaviconLoad(src: string, loads: boolean) {
 
 /** The project's favicon URL once it has loaded; null while probing or when there is none. */
 function useProjectFavicon(cwd: string): string | null {
-  const params = new URLSearchParams({ cwd, fallback: "none" });
-  const src = resolveWsHttpUrl(`/api/project-favicon?${params.toString()}`);
+  const src = resolveExecutionResource({ kind: "project-favicon", cwd });
   const loads = useSyncExternalStore(subscribeToFaviconLoads, () => faviconLoads.get(src) === true);
 
   // Probe with Image() so Electron/file-origin behaves like the visible <img>. Probing again on

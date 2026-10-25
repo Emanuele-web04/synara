@@ -3645,58 +3645,78 @@ describe("ClaudeAdapterLive", () => {
     );
   });
 
-  it.effect("projects vcs_state_changed system messages as vcs.state.changed events", () => {
-    const harness = makeHarness();
-    return Effect.gen(function* () {
-      const adapter = yield* ClaudeAdapter;
-      const eventsFiber = yield* adapter.streamEvents.pipe(
-        Stream.filter(
-          (event) => event.type === "vcs.state.changed" || event.type === "runtime.warning",
-        ),
-        Stream.take(2),
-        Stream.runCollect,
-        Effect.forkChild,
-      );
-      yield* adapter.startSession({
-        threadId: THREAD_ID,
-        provider: "claudeAgent",
-        runtimeMode: "full-access",
-      });
-
-      harness.query.emit({
-        type: "system",
-        subtype: "vcs_state_changed",
-        kind: "commit",
-        cwd: "/repo/worktree",
-        session_id: "sdk-session-vcs",
-        uuid: "vcs-1",
-      } as unknown as SDKMessage);
-      // Sentinel unknown subtype closes the collection window; the VCS event
-      // arriving first proves it did not surface as an unhandled warning.
-      harness.query.emit({
-        type: "system",
-        subtype: "totally_unknown_subtype",
-        session_id: "sdk-session-vcs",
-        uuid: "vcs-sentinel",
-      } as unknown as SDKMessage);
-
-      const events = Array.from(yield* Fiber.join(eventsFiber));
-      assert.equal(events[0]?.type, "vcs.state.changed");
-      if (events[0]?.type === "vcs.state.changed") {
-        assert.deepEqual(events[0].payload, { kind: "commit", cwd: "/repo/worktree" });
-      }
-      assert.equal(events[1]?.type, "runtime.warning");
-      if (events[1]?.type === "runtime.warning") {
-        assert.equal(
-          events[1].payload.message,
-          "Unhandled Claude system message subtype 'totally_unknown_subtype'.",
+  for (const { subtype, message, expectedPayload } of [
+    {
+      subtype: "vcs_state_changed",
+      message: { kind: "commit", cwd: "/repo/worktree" },
+      expectedPayload: { kind: "commit", cwd: "/repo/worktree" },
+    },
+    {
+      subtype: "code_change_published",
+      message: {
+        provider: "github-enterprise",
+        url: "https://unverified.example/other/repo/pull/42",
+        repo: "other/repo",
+        identifier: "42",
+        action: "created",
+        branch: "unverified-branch",
+      },
+      expectedPayload: { kind: "code_change_published" },
+    },
+  ]) {
+    it.effect(`projects ${subtype} system messages as vcs.state.changed events`, () => {
+      const harness = makeHarness();
+      return Effect.gen(function* () {
+        const adapter = yield* ClaudeAdapter;
+        const eventsFiber = yield* adapter.streamEvents.pipe(
+          Stream.filter(
+            (event) => event.type === "vcs.state.changed" || event.type === "runtime.warning",
+          ),
+          Stream.take(2),
+          Stream.runCollect,
+          Effect.forkChild,
         );
-      }
-    }).pipe(
-      Effect.provideService(Random.Random, makeDeterministicRandomService()),
-      Effect.provide(harness.layer),
-    );
-  });
+        yield* adapter.startSession({
+          threadId: THREAD_ID,
+          provider: "claudeAgent",
+          runtimeMode: "full-access",
+        });
+
+        harness.query.emit({
+          type: "system",
+          subtype,
+          ...message,
+          session_id: "sdk-session-vcs",
+          uuid: "vcs-1",
+        } as unknown as SDKMessage);
+        // The sentinel proves known Git notifications do not become warnings;
+        // publication URLs and branches never become trusted metadata either.
+        harness.query.emit({
+          type: "system",
+          subtype: "totally_unknown_subtype",
+          session_id: "sdk-session-vcs",
+          uuid: "vcs-sentinel",
+        } as unknown as SDKMessage);
+
+        const events = Array.from(yield* Fiber.join(eventsFiber));
+        assert.equal(events[0]?.type, "vcs.state.changed");
+        if (events[0]?.type === "vcs.state.changed") {
+          assert.deepEqual(events[0].payload, expectedPayload);
+          assert.equal(events[0].threadId, THREAD_ID);
+        }
+        assert.equal(events[1]?.type, "runtime.warning");
+        if (events[1]?.type === "runtime.warning") {
+          assert.equal(
+            events[1].payload.message,
+            "Unhandled Claude system message subtype 'totally_unknown_subtype'.",
+          );
+        }
+      }).pipe(
+        Effect.provideService(Random.Random, makeDeterministicRandomService()),
+        Effect.provide(harness.layer),
+      );
+    });
+  }
 
   it.effect("still announces a task backgrounded via task_updated before the snapshot", () => {
     const harness = makeHarness();
@@ -6520,6 +6540,46 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
       }).pipe(Effect.provide(layer));
     },
   );
+
+  it.effect("keeps the catalog default on native CLI effort ladders", () => {
+    const layer = makeClaudeAdapterLive({
+      createQuery: () => {
+        const query = new FakeClaudeQuery();
+        setSupportedModels(query, [
+          {
+            value: "claude-fable-5-1",
+            displayName: "Claude Fable 5.1",
+            description: "Fixture",
+            supportsEffort: true,
+            supportedEffortLevels: ["low", "medium", "high", "xhigh", "max"],
+            supportsAdaptiveThinking: true,
+            supportsFastMode: false,
+          },
+        ]);
+        return query;
+      },
+    }).pipe(
+      Layer.provideMerge(ServerConfig.layerTest("/tmp/claude-adapter-test", "/tmp")),
+      Layer.provideMerge(NodeServices.layer),
+    );
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const catalog = yield* adapter.listModels!({ provider: "claudeAgent", cwd: "/tmp/project" });
+      const effort = catalog.models[0]!.optionDescriptors?.find(
+        (descriptor) => descriptor.id === "effort",
+      );
+      assert.equal(effort?.type, "select");
+      if (effort?.type !== "select") return;
+      assert.deepEqual(
+        effort.options.filter((option) => option.isDefault).map((option) => option.id),
+        ["high"],
+      );
+      assert.equal(effort.currentValue, "high");
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(layer),
+    );
+  });
 
   it.effect(
     "uses native CLI effort metadata for discovery, default spawn and live dispatch",
@@ -15451,6 +15511,7 @@ describe("Claude subagent tracking", () => {
       const harness = makeHarness();
       const BG = "toolu_background_agent_notified";
       const TASK = "task-bg-notified";
+      const LIVE_TASK = "task-bg-still-live";
       return Effect.gen(function* () {
         const events = yield* eventsThroughStop(
           harness,
@@ -15464,13 +15525,22 @@ describe("Claude subagent tracking", () => {
               summary: "Done.",
             }),
             system("background_tasks_changed", {
-              tasks: [{ task_id: TASK, task_type: "local_agent", description: "Background job" }],
+              tasks: [
+                { task_id: TASK, task_type: "local_agent", description: "Background job" },
+                { task_id: LIVE_TASK, task_type: "local_bash", description: "Still-running shell" },
+              ],
             }),
           ],
-          (event) => event.type === "runtime.warning" && detailTaskIds(event).includes(TASK),
+          // The completed task is suppressed; the live sibling proves the snapshot drained.
+          (event) => event.type === "runtime.warning" && detailTaskIds(event).includes(LIVE_TASK),
+        );
+        assert.deepEqual(
+          events.filter((event) => event.type === "runtime.warning").flatMap(detailTaskIds),
+          [LIVE_TASK],
         );
         assert.deepEqual(taskCompletions(events), [
           { taskId: TASK, status: "completed", toolUseId: BG, onRoot: true },
+          { taskId: LIVE_TASK, status: "stopped", toolUseId: undefined, onRoot: true },
         ]);
       }).pipe(
         Effect.provideService(Random.Random, makeDeterministicRandomService()),
@@ -15934,6 +16004,94 @@ describe("Claude subagent tracking", () => {
       Effect.provide(harness.layer),
     );
   });
+
+  for (const terminalSource of ["task_updated", "task_notification"] as const) {
+    it.effect(
+      `ignores settled background task telemetry until a real restart (${terminalSource})`,
+      () => {
+        const harness = makeHarness();
+        const BG = "toolu_settled_background";
+        const taskId = "task-settled-background";
+        const task = { task_id: taskId, task_type: "local_bash", description: "Background check" };
+        const other = {
+          task_id: "task-still-live",
+          task_type: "local_bash",
+          description: "Other work",
+        };
+        return Effect.gen(function* () {
+          const adapter = yield* ClaudeAdapter;
+          const eventsFiber = yield* adapter.streamEvents.pipe(
+            Stream.takeUntil((event) => event.type === "turn.completed" && isRootEvent(event)),
+            Stream.runCollect,
+            Effect.forkChild,
+          );
+          yield* startTrackingSession(adapter);
+
+          for (const message of [
+            rootToolUse(0, BG, "Bash", { command: "check", description: task.description }),
+            system("task_started", { ...task, tool_use_id: BG, is_backgrounded: true }),
+            system("background_tasks_changed", { tasks: [task] }),
+            userMessage(null, [trackingToolResult(BG, "Moved to background.")]),
+            terminalSource === "task_updated"
+              ? system("task_updated", { task_id: taskId, patch: { status: "completed" } })
+              : system("task_notification", {
+                  task_id: taskId,
+                  status: "completed",
+                  summary: "Done.",
+                }),
+            // Queued telemetry can arrive after the terminal event. It must not
+            // keep the runtime alive or put a finished task back into Working.
+            system("task_progress", { task_id: taskId, description: "Stale progress" }),
+            system("task_updated", {
+              task_id: taskId,
+              patch: { status: "running", is_backgrounded: true },
+            }),
+            system("background_tasks_changed", { tasks: [] }),
+            system("background_tasks_changed", { tasks: [task, other] }),
+            // The same native id can be resumed. Only a new start reopens it.
+            system("task_started", { ...task, tool_use_id: BG, is_backgrounded: true }),
+            system("task_progress", { task_id: taskId, description: "Resumed progress" }),
+            system("task_updated", {
+              task_id: taskId,
+              patch: { status: "running", is_backgrounded: true },
+            }),
+            system("background_tasks_changed", { tasks: [task] }),
+            system("task_notification", {
+              task_id: taskId,
+              status: "completed",
+              summary: "Resumed done.",
+            }),
+            success(),
+          ]) {
+            harness.query.emit(message);
+          }
+
+          const events = Array.from(yield* Fiber.join(eventsFiber));
+          assert.deepEqual(
+            events
+              .filter((event) => event.type === "task.progress")
+              .map((event) => payloadRecord(event).description),
+            ["Resumed progress"],
+          );
+          const reopened = events.filter(
+            (event) => event.type === "task.updated" && payloadRecord(event).status === "running",
+          );
+          assert.equal(reopened.length, 1);
+          const notices = events.filter(
+            (event) => event.type === "runtime.warning" && detailTaskIds(event).includes(taskId),
+          );
+          assert.equal(notices.length, 2);
+          const starts = events.filter(
+            (event) => event.type === "task.started" && taskIdOf(event) === taskId,
+          );
+          assert.equal(starts.length, 2);
+        }).pipe(
+          Effect.provideService(Random.Random, makeDeterministicRandomService()),
+          Effect.provide(harness.layer),
+        );
+      },
+    );
+  }
 
   it.effect("tells the user when a queued steer never reached the subagent", () => {
     const harness = makeHarness();

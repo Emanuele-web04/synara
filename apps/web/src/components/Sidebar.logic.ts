@@ -927,11 +927,11 @@ export function resolveSidebarThreadListPaging(input: {
 
 export function getVisibleSidebarEntriesForPreview<
   T extends {
-    rowId: Thread["id"];
+    rowId: string;
   },
 >(input: {
   entries: readonly T[];
-  activeEntryId: Thread["id"] | undefined;
+  activeEntryId: string | undefined;
   previewLimit: number;
 }): {
   hasHiddenEntries: boolean;
@@ -1074,11 +1074,11 @@ export function resolveProjectEmptyState(input: {
 }
 
 // Resolve the next sidebar-visible thread for keyboard cycling with wraparound.
-export function getNextVisibleSidebarThreadId(input: {
-  visibleThreadIds: readonly Thread["id"][];
-  activeThreadId: Thread["id"] | undefined;
+export function getNextVisibleSidebarThreadId<T extends string>(input: {
+  visibleThreadIds: readonly T[];
+  activeThreadId: T | undefined;
   direction: "forward" | "backward";
-}): Thread["id"] | null {
+}): T | null {
   const { activeThreadId, direction, visibleThreadIds } = input;
   if (visibleThreadIds.length === 0) {
     return null;

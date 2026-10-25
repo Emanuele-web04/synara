@@ -1,3 +1,4 @@
+import { executionSessionStorage } from "./lib/hosts/executionStorage";
 // FILE: spacesUiStore.ts
 // Purpose: Keeps per-window Space selection and last working-context restoration.
 
@@ -20,7 +21,7 @@ function readPersisted(): PersistedSpacesUiState {
   }
   try {
     const parsed = JSON.parse(
-      window.sessionStorage.getItem(STORAGE_KEY) ?? "null",
+      executionSessionStorage.getItem(STORAGE_KEY) ?? "null",
     ) as Partial<PersistedSpacesUiState> | null;
     return {
       activeSpaceId:
@@ -44,7 +45,7 @@ function persist(
 ): void {
   if (typeof window === "undefined") return;
   try {
-    window.sessionStorage.setItem(
+    executionSessionStorage.setItem(
       STORAGE_KEY,
       JSON.stringify({
         activeSpaceId: state.activeSpaceId,

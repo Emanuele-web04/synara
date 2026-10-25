@@ -16,7 +16,10 @@ vi.mock("~/lib/utils", async (importOriginal) => ({
   getNavigatorPlatform: () => "Win32",
 }));
 
-import { KeyboardShortcutsSettingsPanel } from "./KeyboardShortcutsSettingsPanel";
+import {
+  KeyboardShortcutsSettingsPanel,
+  KeyboardShortcutsResetButton,
+} from "./KeyboardShortcutsSettingsPanel";
 
 const binding: ResolvedKeybindingRule = {
   command: "sidebar.toggle",
@@ -32,7 +35,42 @@ const binding: ResolvedKeybindingRule = {
 
 const typographyVariables = ["--app-font-size-ui", "--app-font-size-ui-sm"] as const;
 afterEach(() => {
+  vi.restoreAllMocks();
   for (const name of typographyVariables) document.documentElement.style.removeProperty(name);
+});
+
+it("opens controller settings instead of editing or resetting a remote computer's shortcuts", async () => {
+  const navigate = vi.fn();
+  const frame = Object.assign(document.createElement("iframe"), {
+    synaraWorkspace: { controller: { navigate } },
+  });
+  vi.spyOn(window, "frameElement", "get").mockReturnValue(frame);
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  client.setQueryData(serverQueryKeys.config(), {
+    keybindings: [binding],
+    defaultKeybindings: [],
+  });
+  const screen = await render(
+    <QueryClientProvider client={client}>
+      <TooltipProvider>
+        <KeyboardShortcutsResetButton />
+        <KeyboardShortcutsSettingsPanel />
+      </TooltipProvider>
+    </QueryClientProvider>,
+  );
+  try {
+    await expect.poll(() => navigate.mock.calls).toEqual([["/settings?section=shortcuts"]]);
+    await expect
+      .element(page.getByRole("button", { name: "Reset all to defaults" }))
+      .not.toBeInTheDocument();
+    await expect.element(page.getByPlaceholder("Search shortcuts")).not.toBeInTheDocument();
+    // Back can reveal this persistent frame again after opening controller settings.
+    await page.getByRole("button", { name: "Edit keybindings on this computer" }).click();
+    expect(navigate).toHaveBeenCalledTimes(2);
+  } finally {
+    await screen.unmount();
+    client.clear();
+  }
 });
 
 it.each([360, 640])(

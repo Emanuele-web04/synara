@@ -23,12 +23,14 @@ function createSidebarEdgeRowAnchor(rowSelector: string) {
   };
 }
 
+// Ids are escaped: a remote chat's id carries quotes and brackets
+// (`workspace:["env","id"]`), which would otherwise break the selector.
 export function createThreadHoverCardAnchor(anchorId: string) {
-  return createSidebarEdgeRowAnchor(`[data-thread-hover-anchor="${anchorId}"]`);
+  return createSidebarEdgeRowAnchor(`[data-thread-hover-anchor="${CSS.escape(anchorId)}"]`);
 }
 
 export function createProjectHoverCardAnchor(projectId: string) {
-  return createSidebarEdgeRowAnchor(`[data-project-hover-anchor="${projectId}"]`);
+  return createSidebarEdgeRowAnchor(`[data-project-hover-anchor="${CSS.escape(projectId)}"]`);
 }
 
 function isWindowsPath(value: string): boolean {

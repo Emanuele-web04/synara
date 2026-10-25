@@ -101,38 +101,57 @@ describe("packaged desktop startup verification", () => {
     ).toThrow("--timeout-ms must be an integer between 5000 and 180000");
   });
 
-  it("isolates user state and removes inherited runtime authority", () => {
-    const root = mkdtempSync(join(tmpdir(), "synara-packaged-smoke-env-test-"));
-    temporaryRoots.push(root);
+  it.each(["synara-beta", "synara-remote"])(
+    "isolates %s user state and removes inherited runtime authority",
+    (executableName) => {
+      const root = mkdtempSync(join(tmpdir(), "synara-packaged-smoke-env-test-"));
+      temporaryRoots.push(root);
 
-    const env = createPackagedDesktopSmokeEnvironment(
-      root,
-      { platform: "linux", version: "1.2.3", executableName: "synara-beta" },
-      {
-        PATH: process.env.PATH,
-        SYNARA_AUTH_TOKEN: "must-not-leak",
-        ELECTRON_RUN_AS_NODE: "1",
-      },
-    );
+      const env = createPackagedDesktopSmokeEnvironment(
+        root,
+        { platform: "mac", version: "1.2.3", executableName },
+        {
+          PATH: process.env.PATH,
+          SYNARA_AUTH_TOKEN: "must-not-leak",
+          SYNARA_ACCOUNT_URL: "https://operator-only.example",
+          ELECTRON_RUN_AS_NODE: "1",
+        },
+      );
 
-    expect(env.SYNARA_AUTH_TOKEN).toBeUndefined();
-    expect(env.ELECTRON_RUN_AS_NODE).toBeUndefined();
-    for (const name of [
-      "HOME",
-      "USERPROFILE",
-      "APPDATA",
-      "LOCALAPPDATA",
-      "XDG_CONFIG_HOME",
-      "XDG_CACHE_HOME",
-      "XDG_DATA_HOME",
-      "SYNARA_HOME",
-      "SYNARA_BETA_HOME",
-    ] as const) {
-      expect(env[name]?.startsWith(root)).toBe(true);
-      expect(existsSync(env[name]!)).toBe(true);
-    }
-    expect(env.SYNARA_BETA_HOME).not.toBe(env.SYNARA_HOME);
-  });
+      expect(env.SYNARA_AUTH_TOKEN).toBeUndefined();
+      expect(env.SYNARA_ACCOUNT_URL).toBeUndefined();
+      expect(env.ELECTRON_RUN_AS_NODE).toBeUndefined();
+      for (const name of [
+        "HOME",
+        "USERPROFILE",
+        "APPDATA",
+        "LOCALAPPDATA",
+        "XDG_CONFIG_HOME",
+        "XDG_CACHE_HOME",
+        "XDG_DATA_HOME",
+        "SYNARA_HOME",
+        "SYNARA_BETA_HOME",
+        "SYNARA_REMOTE_HOME",
+      ] as const) {
+        expect(env[name]?.startsWith(root)).toBe(true);
+        expect(existsSync(env[name]!)).toBe(true);
+      }
+      expect(env.SYNARA_BETA_HOME).not.toBe(env.SYNARA_HOME);
+      expect(env.SYNARA_REMOTE_HOME).not.toBe(env.SYNARA_HOME);
+      expect(env.SYNARA_REMOTE_HOME).not.toBe(env.SYNARA_BETA_HOME);
+      expect(
+        existsSync(
+          join(
+            env.HOME!,
+            "Library",
+            "Application Support",
+            executableName,
+            "last-launch-version.json",
+          ),
+        ),
+      ).toBe(true);
+    },
+  );
 
   it("rejects a missing packaged peer even when the development tree provides it", () => {
     const root = mkdtempSync(join(tmpdir(), "synara-runtime-deps-test-"));

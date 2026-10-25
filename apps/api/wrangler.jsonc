@@ -1,0 +1,31 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "synara-account-api-trial",
+  "account_id": "56e5b3e566be2fc8ade9b7d0eadf5e35",
+  "main": "cloudflare/worker.ts",
+  "compatibility_date": "2026-09-28",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": true,
+  "preview_urls": false,
+  "observability": { "enabled": true, "head_sampling_rate": 0.1 },
+  "containers": [
+    {
+      "class_name": "AccountApi",
+      "image": "./Dockerfile",
+      "image_build_context": "../..",
+      "instance_type": "basic",
+      "max_instances": 1,
+    },
+  ],
+  "durable_objects": {
+    "bindings": [{ "name": "ACCOUNT_API", "class_name": "AccountApi" }],
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["AccountApi"] }],
+  "vars": {
+    "ACCOUNT_BASE_URL": "https://synara-account-api-trial.synara-orgs.workers.dev",
+    "API_PUBLIC_URL": "https://synara-account-api-trial.synara-orgs.workers.dev/api/v1",
+  },
+  "secrets": {
+    "required": ["DATABASE_URL", "WORKOS_API_KEY", "WORKOS_CLIENT_ID", "API_SIGNING_KEY"],
+  },
+}

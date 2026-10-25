@@ -374,6 +374,24 @@ describe("macOS source bundle reopen", () => {
     assert.equal(configuration.includes("secret"), false);
   });
 
+  it("restores Remote's own home after Finder reopens the source app", (t) => {
+    const fixture = createLauncherFixture(t);
+    const executable = fixture.build();
+    const desktop = dirname(dirname(fixture.metadataPath));
+    mkdirSync(join(desktop, "dist-electron"), { recursive: true });
+    writeFileSync(join(desktop, "dist-electron/main.js"), "// current build");
+    configureMacLauncher(executable, {
+      SYNARA_DESKTOP_FLAVOR: "remote",
+      SYNARA_HOME: "/tmp/stable-home",
+      SYNARA_REMOTE_HOME: "/tmp/remote-home",
+    });
+    const result = reopen(executable, { SYNARA_HOME: "/tmp/inherited-stable" });
+    assert.deepEqual(result.errors, []);
+    assert.equal(result.environment.SYNARA_DESKTOP_FLAVOR, "remote");
+    assert.equal(result.environment.SYNARA_REMOTE_HOME, "/tmp/remote-home");
+    assert.equal(result.environment.SYNARA_HOME, "/tmp/remote-home");
+  });
+
   it("changes launch routing without rebuilding or re-signing the bundle", (t) => {
     const fixture = createLauncherFixture(t);
     const executable = fixture.build();

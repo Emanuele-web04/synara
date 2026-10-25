@@ -35,13 +35,13 @@ const pillars = [
     Icon: LuShieldCheck,
     title: "No Synara account is required",
     description:
-      "Install the desktop app and use the provider accounts already configured on your machine. Remote access remains an explicit, self-hosted capability.",
+      "Install the desktop app and use the provider accounts already configured on your machine. Optional account features and managed connections use our account services.",
   },
   {
     Icon: LuEyeOff,
-    title: "Anonymous analytics are opt-in",
+    title: "Product analytics are opt-in",
     description:
-      "Optional usage analytics are disabled by default and are designed not to include source code, prompts, or conversation history.",
+      "Product analytics are disabled by default and exclude code, prompts and conversation history. Beta crash diagnostics are separate and always on.",
   },
 ];
 

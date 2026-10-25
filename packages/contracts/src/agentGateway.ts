@@ -7,7 +7,7 @@
  */
 import { Schema } from "effect";
 
-import { ProjectId, ThreadId, TurnId } from "./baseSchemas";
+import { EnvironmentId, ProjectId, ThreadId, TurnId } from "./baseSchemas";
 import { ModelSelection, ProviderKind, RuntimeMode } from "./orchestration";
 import { ProviderModelDescriptor } from "./providerDiscovery";
 import { ProviderInstanceId } from "./providerInstance";
@@ -30,6 +30,7 @@ export const SynaraGatewayErrorCode = Schema.Literals([
   "thread_not_found",
   "wait_timed_out",
   "operation_failed",
+  "remote_unavailable",
 ]);
 export type SynaraGatewayErrorCode = typeof SynaraGatewayErrorCode.Type;
 
@@ -46,11 +47,13 @@ export const SynaraGatewayErrorResult = Schema.Struct({
 export type SynaraGatewayErrorResult = typeof SynaraGatewayErrorResult.Type;
 
 export const SynaraContextResult = Schema.Struct({
+  environmentId: Schema.optional(EnvironmentId),
   harness: Schema.Struct({
     name: Schema.Literal("Synara"),
     policyVersion: Schema.String,
   }),
   caller: Schema.Struct({
+    environmentId: Schema.optional(EnvironmentId),
     threadId: ThreadId,
     turnId: Schema.NullOr(TurnId),
     provider: ProviderKind,
@@ -158,6 +161,7 @@ export const SynaraGatewayTargetConstruction = Schema.Struct({
 export type SynaraGatewayTargetConstruction = typeof SynaraGatewayTargetConstruction.Type;
 
 export const SynaraCapabilitiesResult = Schema.Struct({
+  environmentId: Schema.optional(EnvironmentId),
   targetConstruction: Schema.Record(Schema.String, SynaraGatewayTargetConstruction),
   providers: Schema.Array(SynaraProviderCatalog),
   limits: Schema.Struct({
@@ -169,6 +173,7 @@ export const SynaraCapabilitiesResult = Schema.Struct({
 export type SynaraCapabilitiesResult = typeof SynaraCapabilitiesResult.Type;
 
 export const SynaraCreatedThreadResult = Schema.Struct({
+  environmentId: Schema.optional(EnvironmentId),
   index: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
   threadId: ThreadId,
   projectId: ProjectId,
@@ -188,6 +193,7 @@ export const SynaraCreatedThreadResult = Schema.Struct({
 export type SynaraCreatedThreadResult = typeof SynaraCreatedThreadResult.Type;
 
 export const SynaraCreateThreadsResult = Schema.Struct({
+  environmentId: Schema.optional(EnvironmentId),
   operationId: Schema.String,
   requestId: SynaraGatewayRequestId,
   requestedCount: Schema.Int.check(Schema.isGreaterThanOrEqualTo(1)),
@@ -215,6 +221,7 @@ export const SynaraWaitForThreadsInput = Schema.Struct({
 export type SynaraWaitForThreadsInput = typeof SynaraWaitForThreadsInput.Type;
 
 export const SynaraWaitedThreadResult = Schema.Struct({
+  environmentId: Schema.optional(EnvironmentId),
   threadId: ThreadId,
   runId: Schema.NullOr(TurnId),
   state: Schema.Literals(["idle", "pending", "running", "completed", "error", "interrupted"]),
@@ -225,12 +232,13 @@ export const SynaraWaitedThreadResult = Schema.Struct({
   error: Schema.NullOr(Schema.String),
   readThread: Schema.Struct({
     tool: Schema.Literal("synara_read_thread"),
-    arguments: Schema.Struct({ threadId: ThreadId }),
+    arguments: Schema.Struct({ threadId: ThreadId, environmentId: Schema.optional(EnvironmentId) }),
   }),
 });
 export type SynaraWaitedThreadResult = typeof SynaraWaitedThreadResult.Type;
 
 export const SynaraWaitForThreadsResult = Schema.Struct({
+  environmentId: Schema.optional(EnvironmentId),
   callerThreadId: ThreadId,
   runIds: Schema.Array(Schema.NullOr(TurnId)),
   allTerminal: Schema.Boolean,

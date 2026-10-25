@@ -37,6 +37,7 @@ import {
   COMPOSER_EDITOR_TYPOGRAPHY_CLASS_NAME,
 } from "~/components/chat/composerPickerStyles";
 import { Button } from "~/components/ui/button";
+import { ChatComputerLabel } from "~/components/hosts/ComputerPicker";
 import {
   Dialog,
   DialogDescription,
@@ -383,6 +384,7 @@ export function KanbanNewTaskDialog({
             <DialogTitle className="font-system-ui truncate font-medium text-ui leading-none">
               New task
             </DialogTitle>
+            <ChatComputerLabel />
           </div>
           <DialogDescription className="sr-only">
             Draft a prompt and place it in the board&apos;s Draft column. Drag it to In Progress to
