@@ -28,6 +28,7 @@ export interface ProviderLifecycleCoordinator {
     threadId: ThreadId,
     operation: (lease: ProviderLifecycleLease) => Effect.Effect<A, E, R>,
     prepare?: Effect.Effect<unknown, E, R>,
+    onLockTimeout?: Effect.Effect<A, E, R>,
   ) => Effect.Effect<A, E, R>;
   readonly runCurrent: <A, E, R>(
     threadId: ThreadId,
@@ -43,6 +44,8 @@ export interface ProviderLifecycleCoordinator {
   readonly runCurrentUrgent: <A, E, R>(
     threadId: ThreadId,
     operation: (generation: string | undefined) => Effect.Effect<A, E, R>,
+    /** Conditional controls fail on contention instead of bypassing their lock. */
+    onLockTimeout?: Effect.Effect<A, E, R>,
   ) => Effect.Effect<A, E, R>;
   readonly adoptCurrent: (threadId: ThreadId, generation: string) => void;
   readonly currentGeneration: (threadId: ThreadId) => string | undefined;
@@ -80,17 +83,21 @@ export function makeProviderLifecycleCoordinator(): ProviderLifecycleCoordinator
   const withThreadLock = <A, E, R>(
     threadId: ThreadId,
     effect: Effect.Effect<A, E, R>,
+    onLockTimeout?: Effect.Effect<A, E, R>,
   ): Effect.Effect<A, E, R> =>
-    Effect.suspend(() => {
-      const entry = referenceEntry(threadId);
-      return entry.semaphore
-        .withPermits(1)(effect)
-        .pipe(Effect.ensuring(releaseEntry(threadId, entry)));
-    });
+    onLockTimeout !== undefined
+      ? withThreadLockOrBypass(threadId, effect, onLockTimeout)
+      : Effect.suspend(() => {
+          const entry = referenceEntry(threadId);
+          return entry.semaphore
+            .withPermits(1)(effect)
+            .pipe(Effect.ensuring(releaseEntry(threadId, entry)));
+        });
 
   const withThreadLockOrBypass = <A, E, R>(
     threadId: ThreadId,
     effect: Effect.Effect<A, E, R>,
+    onLockTimeout?: Effect.Effect<A, E, R>,
   ): Effect.Effect<A, E, R> =>
     Effect.suspend(() => {
       const entry = referenceEntry(threadId);
@@ -107,6 +114,7 @@ export function makeProviderLifecycleCoordinator(): ProviderLifecycleCoordinator
               if (Date.now() < deadlineMs) {
                 return Effect.sleep(URGENT_LOCK_POLL).pipe(Effect.andThen(attempt));
               }
+              if (onLockTimeout !== undefined) return onLockTimeout;
               return Effect.logWarning(
                 "provider lifecycle lock bypassed for an urgent control-plane operation",
                 { threadId, waitedMs: Duration.toMillis(URGENT_LOCK_WAIT) },
@@ -117,7 +125,7 @@ export function makeProviderLifecycleCoordinator(): ProviderLifecycleCoordinator
       return attempt.pipe(Effect.ensuring(releaseEntry(threadId, entry)));
     });
 
-  const run: ProviderLifecycleCoordinator["run"] = (threadId, operation, prepare) =>
+  const run: ProviderLifecycleCoordinator["run"] = (threadId, operation, prepare, onLockTimeout) =>
     withThreadLock(
       threadId,
       // Reject or retire under the same lock while old events remain current.
@@ -174,6 +182,7 @@ export function makeProviderLifecycleCoordinator(): ProviderLifecycleCoordinator
           );
         }),
       ),
+      onLockTimeout,
     );
 
   return {
@@ -183,10 +192,11 @@ export function makeProviderLifecycleCoordinator(): ProviderLifecycleCoordinator
         threadId,
         Effect.suspend(() => operation(currentGenerations.get(threadId))),
       ),
-    runCurrentUrgent: (threadId, operation) =>
+    runCurrentUrgent: (threadId, operation, onLockTimeout) =>
       withThreadLockOrBypass(
         threadId,
         Effect.suspend(() => operation(currentGenerations.get(threadId))),
+        onLockTimeout,
       ),
     adoptCurrent: (threadId, generation) => currentGenerations.set(threadId, generation),
     currentGeneration: (threadId) => currentGenerations.get(threadId),

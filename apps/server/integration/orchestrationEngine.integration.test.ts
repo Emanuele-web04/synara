@@ -1143,7 +1143,10 @@ it.live("forwards thread.turn.interrupt to claudeAgent provider sessions", () =>
 
         const thread = yield* harness.waitForThread(
           THREAD_ID,
-          (entry) => entry.session?.threadId === "thread-1",
+          (entry) =>
+            entry.session?.threadId === "thread-1" &&
+            entry.session.activeTurnId !== null &&
+            entry.latestTurn?.state === "running",
         );
         assert.equal(thread.session?.threadId, "thread-1");
 

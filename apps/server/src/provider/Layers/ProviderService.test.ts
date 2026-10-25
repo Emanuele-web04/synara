@@ -2366,6 +2366,141 @@ it.effect(
 );
 
 routing.layer("ProviderServiceLive routing", (it) => {
+  it.effect("does not stop a replacement runtime even when its createdAt is unchanged", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const directory = yield* ProviderSessionDirectory;
+      const threadId = asThreadId("thread-runtime-stop-replacement-fence");
+      yield* provider.startSession(threadId, {
+        provider: "codex",
+        threadId,
+        runtimeMode: "full-access",
+      });
+      routing.codex.updateSession(threadId, (session) => ({
+        ...session,
+        status: "connecting",
+        createdAt: "2026-02-27T00:00:00.000Z",
+      }));
+      const observed = yield* provider.getRuntimeSessionStopTarget!({ threadId });
+      yield* provider.stopRuntimeSession!({ threadId });
+      yield* provider.startSession(threadId, {
+        provider: "codex",
+        threadId,
+        runtimeMode: "full-access",
+      });
+      routing.codex.updateSession(threadId, (session) => ({
+        ...session,
+        createdAt: observed.session!.createdAt,
+      }));
+      const replacementTarget = yield* provider.getRuntimeSessionStopTarget!({ threadId });
+      assert.equal(replacementTarget.session!.createdAt, observed.session!.createdAt);
+      assert.notEqual(replacementTarget.lifecycleGeneration, observed.lifecycleGeneration);
+      const replacement = replacementTarget.session;
+      const before = Option.getOrThrow(yield* directory.getBinding(threadId));
+      const stops = routing.codex.stopSession.mock.calls.length;
+      const stopped = yield* Effect.result(
+        provider.stopRuntimeSession!({
+          threadId,
+          expectedLifecycleGeneration: observed.lifecycleGeneration,
+        }),
+      );
+      assert.equal(routing.codex.stopSession.mock.calls.length, stops);
+      assert.equal(stopped._tag, "Failure");
+      if (stopped._tag === "Failure") {
+        assert.equal(stopped.failure._tag, "ProviderValidationError");
+        if (stopped.failure._tag === "ProviderValidationError")
+          assert.equal(stopped.failure.reason, "stale-interaction");
+      }
+      assert.isTrue(yield* routing.codex.hasSession(threadId));
+      assert.deepEqual(
+        (yield* provider.listSessions()).find((session) => session.threadId === threadId),
+        replacement,
+      );
+      assert.deepEqual(Option.getOrThrow(yield* directory.getBinding(threadId)), before);
+      yield* provider.stopSession({ threadId });
+    }),
+  );
+
+  it.effect("stops the observed runtime after its ordinary status and timestamp updates", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const threadId = asThreadId("thread-runtime-stop-updated-observation");
+      yield* provider.startSession(threadId, {
+        provider: "codex",
+        threadId,
+        runtimeMode: "full-access",
+      });
+      const observed = yield* provider.getRuntimeSessionStopTarget!({ threadId });
+      routing.codex.updateSession(threadId, (session) => ({
+        ...session,
+        status: "connecting",
+        updatedAt: "2099-02-27T00:00:00.000Z",
+      }));
+      const stops = routing.codex.stopSession.mock.calls.length;
+      yield* provider.stopRuntimeSession!({
+        threadId,
+        expectedLifecycleGeneration: observed.lifecycleGeneration,
+      });
+      assert.equal(routing.codex.stopSession.mock.calls.length, stops + 1);
+      assert.isFalse(yield* routing.codex.hasSession(threadId));
+    }),
+  );
+
+  it.effect("does not stop an active runtime when none was observed by Stop", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const directory = yield* ProviderSessionDirectory;
+      const threadId = asThreadId("thread-runtime-stop-unobserved-replacement");
+      const observed = yield* provider.getRuntimeSessionStopTarget!({ threadId });
+      assert.isNull(observed.session);
+      assert.isNull(observed.lifecycleGeneration);
+      yield* provider.startSession(threadId, {
+        provider: "codex",
+        threadId,
+        runtimeMode: "full-access",
+      });
+      const before = Option.getOrThrow(yield* directory.getBinding(threadId));
+      const stops = routing.codex.stopSession.mock.calls.length;
+      const stopped = yield* Effect.result(
+        provider.stopRuntimeSession!({
+          threadId,
+          expectedLifecycleGeneration: observed.lifecycleGeneration,
+        }),
+      );
+      assert.equal(stopped._tag, "Failure");
+      assert.equal(routing.codex.stopSession.mock.calls.length, stops);
+      assert.isTrue(yield* routing.codex.hasSession(threadId));
+      assert.deepEqual(Option.getOrThrow(yield* directory.getBinding(threadId)), before);
+      yield* provider.stopSession({ threadId });
+    }),
+  );
+
+  it.effect("still reaps an inactive retained runtime when none was observed by Stop", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const directory = yield* ProviderSessionDirectory;
+      const threadId = asThreadId("thread-runtime-stop-retained-unobserved");
+      yield* provider.startSession(threadId, {
+        provider: "codex",
+        threadId,
+        runtimeMode: "full-access",
+      });
+      routing.codex.retainStopped(threadId);
+      const observed = yield* provider.getRuntimeSessionStopTarget!({ threadId });
+      assert.isNull(observed.session);
+      const stops = routing.codex.stopSession.mock.calls.length;
+      yield* provider.stopRuntimeSession!({
+        threadId,
+        expectedLifecycleGeneration: observed.lifecycleGeneration,
+      });
+      assert.equal(routing.codex.stopSession.mock.calls.length, stops + 1);
+      assert.isFalse(yield* routing.codex.hasSession(threadId));
+      assert.isEmpty(yield* routing.codex.listSessions());
+      assert.equal(Option.getOrThrow(yield* directory.getBinding(threadId)).status, "stopped");
+      yield* provider.stopSession({ threadId });
+    }),
+  );
+
   it.effect("preserves a pending send before the adapter exposes its active turn", () =>
     Effect.gen(function* () {
       const provider = yield* ProviderService;
@@ -4616,6 +4751,238 @@ routing.layer("ProviderServiceLive routing", (it) => {
           }),
       );
     }
+  }
+
+  for (const target of ["parent", "child"] as const) {
+    it.effect(
+      `does not interrupt a replacement ${target} runtime with reused createdAt and turnId`,
+      () =>
+        Effect.gen(function* () {
+          const provider = yield* ProviderService;
+          const directory = yield* ProviderSessionDirectory;
+          const threadId = asThreadId(`thread-conditional-interrupt-replacement-${target}`);
+          const startInput = {
+            provider: "codex" as const,
+            threadId,
+            runtimeMode: "full-access" as const,
+          };
+          yield* provider.startSession(threadId, startInput);
+          yield* provider.sendTurn({ threadId, input: "turn A", attachments: [] });
+          routing.codex.updateSession(threadId, (session) => ({
+            ...session,
+            createdAt: "2026-02-27T00:00:00.000Z",
+          }));
+          const observed = yield* provider.getRuntimeSessionStopTarget!({ threadId });
+          const priorTurnId = asRuntimePayloadRecord(
+            Option.getOrThrow(yield* directory.getBinding(threadId)).runtimePayload,
+          ).activeTurnId;
+          yield* provider.stopRuntimeSession!({ threadId });
+          yield* provider.startSession(threadId, startInput);
+          yield* provider.sendTurn({ threadId, input: "turn B", attachments: [] });
+          routing.codex.updateSession(threadId, (session) => ({
+            ...session,
+            createdAt: observed.session!.createdAt,
+          }));
+          const replacement = yield* provider.getRuntimeSessionStopTarget!({ threadId });
+          const before = Option.getOrThrow(yield* directory.getBinding(threadId));
+          assert.equal(asRuntimePayloadRecord(before.runtimePayload).activeTurnId, priorTurnId);
+          assert.equal(replacement.session!.createdAt, observed.session!.createdAt);
+          assert.notEqual(replacement.lifecycleGeneration, observed.lifecycleGeneration);
+          const interrupts = routing.codex.interruptTurn.mock.calls.length;
+          const stops = routing.codex.stopSession.mock.calls.length;
+          const result = yield* Effect.result(
+            provider.interruptTurn({
+              threadId,
+              turnId:
+                target === "child" ? asTurnId("child-reused-id") : asTurnId(String(priorTurnId)),
+              ...(target === "child" ? { providerThreadId: "provider-child-reused" } : {}),
+              expectedLifecycleGeneration: observed.lifecycleGeneration,
+            }),
+          );
+          assert.equal(routing.codex.interruptTurn.mock.calls.length, interrupts);
+          assert.equal(routing.codex.stopSession.mock.calls.length, stops);
+          assert.equal(result._tag, "Failure");
+          if (result._tag === "Failure") {
+            assert.equal(result.failure._tag, "ProviderValidationError");
+            if (result.failure._tag === "ProviderValidationError")
+              assert.equal(result.failure.reason, "stale-interaction");
+          }
+          assert.isTrue(yield* routing.codex.hasSession(threadId));
+          assert.deepEqual(Option.getOrThrow(yield* directory.getBinding(threadId)), before);
+          yield* provider.stopSession({ threadId });
+        }),
+    );
+
+    it.effect(`interrupts the observed ${target} runtime despite benign timestamp updates`, () =>
+      Effect.gen(function* () {
+        const provider = yield* ProviderService;
+        const directory = yield* ProviderSessionDirectory;
+        const threadId = asThreadId(`thread-conditional-interrupt-current-${target}`);
+        yield* provider.startSession(threadId, {
+          provider: "codex",
+          threadId,
+          runtimeMode: "full-access",
+        });
+        yield* provider.sendTurn({ threadId, input: "turn A", attachments: [] });
+        const observed = yield* provider.getRuntimeSessionStopTarget!({ threadId });
+        routing.codex.updateSession(threadId, (session) => ({
+          ...session,
+          updatedAt: "2099-02-27T00:00:00.000Z",
+        }));
+        const before = Option.getOrThrow(yield* directory.getBinding(threadId));
+        const turnId =
+          target === "child"
+            ? asTurnId("child-current-id")
+            : asTurnId(String(asRuntimePayloadRecord(before.runtimePayload).activeTurnId));
+        const interrupts = routing.codex.interruptTurn.mock.calls.length;
+        const stops = routing.codex.stopSession.mock.calls.length;
+        yield* provider.interruptTurn({
+          threadId,
+          turnId,
+          ...(target === "child" ? { providerThreadId: "provider-child-current" } : {}),
+          expectedLifecycleGeneration: observed.lifecycleGeneration,
+        });
+        assert.equal(routing.codex.interruptTurn.mock.calls.length, interrupts + 1);
+        assert.equal(
+          routing.codex.stopSession.mock.calls.length,
+          stops + (target === "parent" ? 1 : 0),
+        );
+        assert.equal(yield* routing.codex.hasSession(threadId), target === "child");
+        assert.isTrue(
+          asRuntimePayloadRecord(
+            Option.getOrThrow(yield* directory.getBinding(threadId)).runtimePayload,
+          ).agentGatewayCredentialRotationRequired === true,
+        );
+        yield* provider.stopSession({ threadId });
+      }),
+    );
+  }
+
+  it.effect("identifies a running runtime with no exact active bound turn", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const directory = yield* ProviderSessionDirectory;
+      const threadId = asThreadId("thread-running-without-bound-turn");
+      yield* provider.startSession(threadId, {
+        provider: "codex",
+        threadId,
+        runtimeMode: "full-access",
+      });
+      routing.codex.updateSession(threadId, (session) => ({ ...session, status: "running" }));
+      yield* directory.upsert({
+        threadId,
+        provider: "codex",
+        runtimePayload: { activeTurnId: null },
+      });
+      const observed = yield* provider.getRuntimeSessionStopTarget!({ threadId });
+      assert.equal(observed.session?.status, "running");
+      assert.isUndefined(observed.session?.activeTurnId);
+      const before = Option.getOrThrow(yield* directory.getBinding(threadId));
+      const interrupts = routing.codex.interruptTurn.mock.calls.length;
+      const stops = routing.codex.stopSession.mock.calls.length;
+      const result = yield* provider
+        .interruptTurn({ threadId, expectedLifecycleGeneration: observed.lifecycleGeneration })
+        .pipe(Effect.result);
+      assert.equal(result._tag, "Failure");
+      if (result._tag === "Failure") {
+        assert.equal(result.failure._tag, "ProviderValidationError");
+        if (result.failure._tag === "ProviderValidationError") {
+          assert.equal(result.failure.operation, "ProviderService.interruptTurn");
+          assert.equal(result.failure.reason, "active-turn-unavailable");
+        }
+      }
+      assert.equal(routing.codex.interruptTurn.mock.calls.length, interrupts);
+      assert.equal(routing.codex.stopSession.mock.calls.length, stops);
+      assert.deepEqual(Option.getOrThrow(yield* directory.getBinding(threadId)), before);
+      yield* provider.stopSession({ threadId });
+    }),
+  );
+
+  for (const target of ["parent", "child", "retirement"] as const) {
+    it.effect(
+      `fails a conditional ${target} Stop on lock contention without bypassing or hanging`,
+      () =>
+        Effect.gen(function* () {
+          const provider = yield* ProviderService;
+          const directory = yield* ProviderSessionDirectory;
+          const threadId = asThreadId(`thread-conditional-lock-contention-${target}`);
+          yield* provider.startSession(threadId, {
+            provider: "codex",
+            threadId,
+            runtimeMode: "full-access",
+          });
+          yield* provider.sendTurn({ threadId, input: "hold turn", attachments: [] });
+          const observed = yield* provider.getRuntimeSessionStopTarget!({ threadId });
+          const before = Option.getOrThrow(yield* directory.getBinding(threadId));
+          const started = yield* Deferred.make<void>();
+          const release = yield* Deferred.make<void>();
+          const respond = routing.codex.respondToRequest.getMockImplementation()!;
+          routing.codex.respondToRequest.mockImplementationOnce((...args) =>
+            Deferred.succeed(started, undefined).pipe(
+              Effect.andThen(Deferred.await(release)),
+              Effect.andThen(respond(...args)),
+            ),
+          );
+          const holder = yield* provider
+            .respondToRequest({
+              threadId,
+              requestId: asRequestId("request-contention"),
+              lifecycleGeneration: observed.lifecycleGeneration!,
+              decision: "accept",
+            })
+            .pipe(Effect.forkChild);
+          yield* Deferred.await(started);
+          const interrupts = routing.codex.interruptTurn.mock.calls.length;
+          const stops = routing.codex.stopSession.mock.calls.length;
+          const now = Date.now();
+          const clock = vi
+            .spyOn(Date, "now")
+            .mockReturnValueOnce(now)
+            .mockReturnValue(now + 6000);
+          const conditional =
+            target === "retirement"
+              ? Effect.uninterruptible(
+                  provider.stopRuntimeSession!({
+                    threadId,
+                    expectedLifecycleGeneration: observed.lifecycleGeneration,
+                  }),
+                )
+              : provider.interruptTurn({
+                  threadId,
+                  expectedLifecycleGeneration: observed.lifecycleGeneration,
+                  ...(target === "child"
+                    ? {
+                        providerThreadId: "provider-contention-child",
+                        turnId: asTurnId("child-contention"),
+                      }
+                    : {}),
+                });
+          const stopped = yield* conditional.pipe(Effect.result, Effect.forkChild);
+          const completedWhileLocked = yield* Effect.gen(function* () {
+            yield* sleep(20);
+            return stopped.pollUnsafe() !== undefined;
+          }).pipe(
+            Effect.ensuring(Effect.sync(() => clock.mockRestore())),
+            Effect.ensuring(Deferred.succeed(release, undefined)),
+          );
+          yield* Fiber.join(holder);
+          const result = yield* Fiber.join(stopped);
+          assert.isTrue(
+            completedWhileLocked,
+            "conditional Stop must finish while its lock remains held",
+          );
+          assert.equal(result._tag, "Failure");
+          if (result._tag === "Failure") {
+            assert.equal(result.failure._tag, "ProviderValidationError");
+            if (result.failure._tag === "ProviderValidationError")
+              assert.equal(result.failure.reason, "stale-interaction");
+          }
+          assert.equal(routing.codex.interruptTurn.mock.calls.length, interrupts);
+          assert.equal(routing.codex.stopSession.mock.calls.length, stops);
+          assert.deepEqual(Option.getOrThrow(yield* directory.getBinding(threadId)), before);
+          yield* provider.stopSession({ threadId });
+        }),
+    );
   }
 
   it.effect("uses the authoritative active turn when an interrupt carries stale UI state", () =>

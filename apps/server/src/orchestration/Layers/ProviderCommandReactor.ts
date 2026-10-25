@@ -133,7 +133,10 @@ import {
 } from "../../git/Services/TextGeneration.ts";
 import { TextGenerationError } from "../../git/Errors.ts";
 import { resolveTextGenerationInputForSelection } from "../../git/textGenerationSelection.ts";
-import { ProviderService } from "../../provider/Services/ProviderService.ts";
+import {
+  ProviderService,
+  type ProviderRuntimeSessionStopTarget,
+} from "../../provider/Services/ProviderService.ts";
 import { ProviderHealth } from "../../provider/Services/ProviderHealth.ts";
 import { isServerGroupsEnabled } from "../../projectAgent/groupsBetaGate.ts";
 import { ProjectAgentService } from "../../projectAgent/Services/ProjectAgentService.ts";
@@ -786,6 +789,18 @@ function canContinueGoalPursuit(
     Boolean(activeThreadGoal(thread)?.trim()) &&
     thread.goalPausedAt == null &&
     (thread.goalStartedAt ?? null) === goalStartedAt
+  );
+}
+
+function isStaleProviderControl(
+  cause: Cause.Cause<ProviderServiceError>,
+  operation: "ProviderService.interruptTurn" | "ProviderService.stopRuntimeSession",
+): boolean {
+  const failure = Option.getOrUndefined(Cause.findErrorOption(cause));
+  return (
+    failure?._tag === "ProviderValidationError" &&
+    failure.operation === operation &&
+    failure.reason === "stale-interaction"
   );
 }
 
@@ -6307,6 +6322,48 @@ const make = Effect.gen(function* () {
     );
   });
 
+  // A bounded, atomic lifecycle observation is required for conditional Stop.
+  // Missing or unavailable evidence must not become an unfenced teardown.
+  const readRuntimeStopTarget = Effect.fnUntraced(function* (input: {
+    readonly threadId: ThreadId;
+    readonly createdAt: string;
+  }) {
+    const owner = yield* resolveProviderSessionThread(input.threadId);
+    const observation: { target?: ProviderRuntimeSessionStopTarget } = {};
+    const read = providerService.getRuntimeSessionStopTarget;
+    const result = read
+      ? yield* runBoundedProviderCall({
+          label: "The provider Stop target observation",
+          timeout: PROVIDER_COMMAND_INTERRUPT_TIMEOUT,
+          call: read({ threadId: owner?.id ?? input.threadId }).pipe(
+            Effect.tap((value) =>
+              Effect.sync(() => {
+                observation.target = value;
+              }),
+            ),
+          ),
+        })
+      : undefined;
+    if (result?._tag === "ok" && observation.target) return observation.target;
+    if (result?._tag === "failed" && result.outcome._tag === "safe_retry")
+      return yield* Effect.failCause(result.cause);
+    yield* appendProviderFailureActivity({
+      threadId: input.threadId,
+      kind: "provider.session.stop.failed",
+      summary: "Provider session stop failed",
+      detail:
+        result?._tag === "timeout"
+          ? result.detail
+          : result?._tag === "failed"
+            ? result.outcome.detail
+            : "The cursor-preserving runtime stop is unavailable.",
+      turnId: null,
+      createdAt: input.createdAt,
+      settlementStatus: "uncertain",
+    });
+    return undefined;
+  });
+
   const interruptProviderTurn = Effect.fnUntraced(function* (input: {
     readonly threadId: ThreadId;
     readonly turnId?: TurnId | undefined;
@@ -6346,7 +6403,9 @@ const make = Effect.gen(function* () {
       );
     }
 
-    const liveSession = yield* resolveLiveProviderSession(input.threadId);
+    const observedRuntime = yield* readRuntimeStopTarget(input);
+    if (!observedRuntime) return;
+    const liveSession = observedRuntime.session ?? undefined;
     const projectionHasWork = [thread, providerThread].some(
       (entry) =>
         entry?.session?.status === "starting" ||
@@ -6380,7 +6439,7 @@ const make = Effect.gen(function* () {
       return yield* processThreadSessionStop({
         threadId: input.threadId,
         createdAt: input.createdAt,
-        expectedSession: interruptSession,
+        expectedLifecycleGeneration: observedRuntime.lifecycleGeneration,
       });
     }
 
@@ -6424,19 +6483,23 @@ const make = Effect.gen(function* () {
         threadId: providerThread.id,
         ...(turnId ? { turnId } : {}),
         ...(providerThreadId ? { providerThreadId } : {}),
+        expectedLifecycleGeneration: observedRuntime.lifecycleGeneration,
       }),
     });
     const current = yield* resolveThread(input.threadId);
-    const currentRuntime = yield* resolveLiveProviderSession(input.threadId);
+    const currentRuntimeTarget = yield* readRuntimeStopTarget(input);
+    if (!currentRuntimeTarget) {
+      if (result._tag === "failed" && result.outcome._tag === "safe_retry")
+        return yield* Effect.failCause(result.cause);
+      return;
+    }
+    const currentRuntime = currentRuntimeTarget.session ?? undefined;
     const currentTurnId = current?.latestTurn?.turnId;
     const replaced =
       (currentTurnId !== thread.latestTurn?.turnId && currentTurnId !== turnId) ||
       (currentRuntime?.activeTurnId !== undefined && currentRuntime.activeTurnId !== turnId) ||
       (currentRuntime !== undefined &&
-        (liveSession === undefined ||
-          currentRuntime.createdAt !== liveSession.createdAt ||
-          currentRuntime.provider !== liveSession.provider ||
-          currentRuntime.providerInstanceId !== liveSession.providerInstanceId));
+        currentRuntimeTarget.lifecycleGeneration !== observedRuntime.lifecycleGeneration);
     // Every outcome belongs to the interrupted binding. A late rejection or
     // timeout must not settle a replacement turn or escalate into stopping it.
     if (replaced) {
@@ -6493,6 +6556,7 @@ const make = Effect.gen(function* () {
         threadId: input.threadId,
         createdAt: input.createdAt,
         interruptEscalated: true,
+        expectedLifecycleGeneration: currentRuntimeTarget.lifecycleGeneration,
         ...(current?.session ? { expectedSession: current.session } : {}),
       });
     }
@@ -6502,6 +6566,27 @@ const make = Effect.gen(function* () {
     // thread and settle locally, since the provider never accepted the request.
     if (result.outcome._tag === "rejected") {
       yield* reportInterruptFailure(result.outcome.detail);
+      if (isStaleProviderControl(result.cause, "ProviderService.interruptTurn")) return;
+      const failure = Option.getOrUndefined(Cause.findErrorOption(result.cause));
+      if (
+        providerThreadId === undefined &&
+        observedRuntime.session?.status === "running" &&
+        observedRuntime.session.activeTurnId === undefined &&
+        currentRuntime?.status === "running" &&
+        currentRuntime.activeTurnId === undefined &&
+        failure?._tag === "ProviderValidationError" &&
+        failure.operation === "ProviderService.interruptTurn" &&
+        failure.reason === "active-turn-unavailable"
+      ) {
+        // An explicit Stop still retires this observed runtime when its exact
+        // turn identity was lost. No text-matching or unfenced fallback applies.
+        return yield* processThreadSessionStop({
+          threadId: input.threadId,
+          createdAt: input.createdAt,
+          interruptEscalated: true,
+          expectedLifecycleGeneration: currentRuntimeTarget.lifecycleGeneration,
+        });
+      }
       return yield* settleInterruptedProviderTurn({
         threadId: input.threadId,
         createdAt: input.createdAt,
@@ -7062,6 +7147,7 @@ const make = Effect.gen(function* () {
     readonly createdAt: string;
     readonly interruptEscalated?: boolean;
     readonly expectedSession?: OrchestrationSession;
+    readonly expectedLifecycleGeneration?: string | null;
   }) {
     const thread = yield* resolveThreadShell(input.threadId);
     const providerThread = yield* resolveProviderSessionThread(input.threadId);
@@ -7073,6 +7159,100 @@ const make = Effect.gen(function* () {
       !matchesProviderSessionState(thread.session, input.expectedSession)
     )
       return;
+
+    const providerThreadId =
+      providerThread !== null
+        ? resolveSubagentProviderThreadId(thread.id, providerThread.id)
+        : undefined;
+    const isRunningChild =
+      providerThread !== null &&
+      providerThread.id !== thread.id &&
+      providerThreadId !== undefined &&
+      thread.session?.status === "running" &&
+      thread.session.activeTurnId !== null &&
+      providerThread.session !== null &&
+      providerThread.session.status !== "stopped";
+    const interruptChildRuntime = () =>
+      runBoundedProviderCall({
+        label: "The provider interrupt",
+        timeout: PROVIDER_COMMAND_INTERRUPT_TIMEOUT,
+        call: providerService.interruptTurn({
+          threadId: providerThread?.id ?? thread.id,
+          ...(thread.session?.activeTurnId ? { turnId: thread.session.activeTurnId } : {}),
+          ...(providerThreadId !== undefined ? { providerThreadId } : {}),
+          ...(input.expectedLifecycleGeneration !== undefined
+            ? { expectedLifecycleGeneration: input.expectedLifecycleGeneration }
+            : {}),
+        }),
+      });
+    let conditionalChildInterrupt: BoundedProviderCallResult<ProviderServiceError> | undefined;
+
+    // For a conditional Stop, prove retirement before touching any queue or
+    // bootstrap state. A stale request owns none of the replacement's state.
+    const stopOwnedRuntime = Effect.gen(function* () {
+      const ownsProviderSession = providerThread !== null && providerThread.id === thread.id;
+      if (
+        ownsProviderSession &&
+        (input.expectedLifecycleGeneration !== undefined ||
+          (thread.session && thread.session.status !== "stopped"))
+      ) {
+        // A stop that cannot finish must still settle the projection: the session
+        // row below is the only thing that releases the turn in the UI.
+        if (!providerService.stopRuntimeSession) {
+          yield* Effect.logWarning(
+            "provider command reactor skipped session stop: stopRuntimeSession is unavailable",
+            { threadId: thread.id },
+          );
+          yield* appendProviderFailureActivity({
+            threadId: thread.id,
+            kind: "provider.session.stop.failed",
+            summary: "Provider session stop failed",
+            detail: "The cursor-preserving runtime stop is unavailable.",
+            turnId: null,
+            createdAt: input.createdAt,
+            settlementStatus: "uncertain",
+          });
+          if (input.expectedLifecycleGeneration !== undefined) return false;
+        } else {
+          const stopped = yield* runBoundedProviderCall({
+            label: "The provider session stop",
+            timeout: PROVIDER_COMMAND_STOP_TIMEOUT,
+            call: providerService.stopRuntimeSession({
+              threadId: providerThread.id,
+              ...(input.expectedLifecycleGeneration !== undefined
+                ? { expectedLifecycleGeneration: input.expectedLifecycleGeneration }
+                : {}),
+            }),
+          });
+          if (
+            stopped._tag === "failed" &&
+            isStaleProviderControl(stopped.cause, "ProviderService.stopRuntimeSession")
+          )
+            return false;
+          if (stopped._tag !== "ok") {
+            yield* appendProviderFailureActivity({
+              threadId: thread.id,
+              kind: "provider.session.stop.failed",
+              summary: "Provider session stop failed",
+              detail: stopped._tag === "timeout" ? stopped.detail : stopped.outcome.detail,
+              turnId: null,
+              createdAt: input.createdAt,
+              settlementStatus: "uncertain",
+            });
+          }
+        }
+      }
+      return true;
+    });
+    if (input.expectedLifecycleGeneration !== undefined && !(yield* stopOwnedRuntime)) return;
+    if (input.expectedLifecycleGeneration !== undefined && isRunningChild) {
+      conditionalChildInterrupt = yield* interruptChildRuntime();
+      if (
+        conditionalChildInterrupt._tag === "failed" &&
+        isStaleProviderControl(conditionalChildInterrupt.cause, "ProviderService.interruptTurn")
+      )
+        return;
+    }
 
     const stoppedSessionThreadId = providerThread?.id ?? thread.id;
     const stopsProviderSession = providerThread === null || providerThread.id === thread.id;
@@ -7141,32 +7321,10 @@ const make = Effect.gen(function* () {
       );
     }
 
-    const providerThreadId =
-      providerThread !== null
-        ? resolveSubagentProviderThreadId(thread.id, providerThread.id)
-        : undefined;
-    const isChildProviderRuntime =
-      providerThread !== null && providerThread.id !== thread.id && providerThreadId !== undefined;
-
     // Child subagents share the parent provider session, so stop requests need
     // to interrupt the child turn rather than terminate the whole session.
-    if (
-      isChildProviderRuntime &&
-      thread.session &&
-      thread.session.status === "running" &&
-      thread.session.activeTurnId !== null &&
-      providerThread.session &&
-      providerThread.session.status !== "stopped"
-    ) {
-      const childInterrupt = yield* runBoundedProviderCall({
-        label: "The provider interrupt",
-        timeout: PROVIDER_COMMAND_INTERRUPT_TIMEOUT,
-        call: providerService.interruptTurn({
-          threadId: providerThread.id,
-          turnId: thread.session.activeTurnId,
-          providerThreadId,
-        }),
-      });
+    if (isRunningChild && thread.session) {
+      const childInterrupt = conditionalChildInterrupt ?? (yield* interruptChildRuntime());
       if (childInterrupt._tag !== "ok") {
         const detail =
           childInterrupt._tag === "timeout" ? childInterrupt.detail : childInterrupt.outcome.detail;
@@ -7206,43 +7364,7 @@ const make = Effect.gen(function* () {
       return;
     }
 
-    const ownsProviderSession = providerThread !== null && providerThread.id === thread.id;
-    if (thread.session && thread.session.status !== "stopped" && ownsProviderSession) {
-      // A stop that cannot finish must still settle the projection: the session
-      // row below is the only thing that releases the turn in the UI.
-      if (!providerService.stopRuntimeSession) {
-        yield* Effect.logWarning(
-          "provider command reactor skipped session stop: stopRuntimeSession is unavailable",
-          { threadId: thread.id },
-        );
-        yield* appendProviderFailureActivity({
-          threadId: thread.id,
-          kind: "provider.session.stop.failed",
-          summary: "Provider session stop failed",
-          detail: "The cursor-preserving runtime stop is unavailable.",
-          turnId: null,
-          createdAt: input.createdAt,
-          settlementStatus: "uncertain",
-        });
-      } else {
-        const stopped = yield* runBoundedProviderCall({
-          label: "The provider session stop",
-          timeout: PROVIDER_COMMAND_STOP_TIMEOUT,
-          call: providerService.stopRuntimeSession({ threadId: providerThread.id }),
-        });
-        if (stopped._tag !== "ok") {
-          yield* appendProviderFailureActivity({
-            threadId: thread.id,
-            kind: "provider.session.stop.failed",
-            summary: "Provider session stop failed",
-            detail: stopped._tag === "timeout" ? stopped.detail : stopped.outcome.detail,
-            turnId: null,
-            createdAt: input.createdAt,
-            settlementStatus: "uncertain",
-          });
-        }
-      }
-    }
+    if (input.expectedLifecycleGeneration === undefined && !(yield* stopOwnedRuntime)) return;
 
     yield* setThreadSession({
       threadId: thread.id,
