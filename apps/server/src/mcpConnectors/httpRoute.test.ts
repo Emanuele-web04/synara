@@ -107,7 +107,7 @@ async function withConnectorServer(
 const call = { jsonrpc: "2.0", id: 1, method: "tools/list" };
 
 describe("mcpConnectorsRouteLayer", () => {
-  it("answers 404 everywhere when connectors are off (Stable)", async () => {
+  it("answers 404 everywhere when connectors are disabled", async () => {
     await withConnectorServer({ enabled: false }, async ({ origin, forwarded, callbacks }) => {
       const post = await fetch(`${origin}/mcp/connectors/mcp_conn_1`, {
         method: "POST",

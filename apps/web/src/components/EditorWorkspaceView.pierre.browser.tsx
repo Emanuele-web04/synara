@@ -13,7 +13,7 @@ vi.mock("~/betaFeatures", async (importOriginal) => ({
 
 installEditorWorkspaceFixture();
 
-it("keeps Stable navigation in its existing activity bar", async () => {
+it("keeps the activity bar when native editing is disabled", async () => {
   await render(makeView()());
   await expect
     .element(page.getByRole("navigation", { name: "Editor activity bar", exact: true }), {

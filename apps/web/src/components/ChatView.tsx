@@ -2537,7 +2537,7 @@ export default function ChatView({
     isServerThread &&
     activeThread !== undefined &&
     threadExportBlockedReason(activeThread) === null;
-  // Connectors (Beta) are mentionable only where the session receives them.
+  // Connectors are mentionable only where the session receives them.
   const connectorsMentionable =
     MCP_CONNECTORS_ON && providerSupportsMcpConnectors(selectedProvider);
   const connectorsQuery = useQuery({

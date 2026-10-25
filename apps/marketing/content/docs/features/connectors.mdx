@@ -1,9 +1,9 @@
 ---
-title: Connectors (Beta)
+title: Connectors
 description: Connect remote MCP tools to supported agent sessions, with sign-in and provider-specific limits.
 ---
 
-Connectors are available in **Synara Beta 1.0.6-beta.1**. Open **Settings → Connectors**, select a catalog entry or a custom public HTTPS MCP URL, and complete any required sign-in in your browser. This lets an agent use another service's tools. [External MCP](/docs/workflows/external-mcp) works in the other direction, allowing outside agents to call Synara.
+Connectors are available in **Synara Beta 1.0.6-beta.1** and the next Stable release built from current `main`. Open **Settings → Connectors**, select a catalog entry or a custom public HTTPS MCP URL, and complete any required sign-in in your browser. This lets an agent use another service's tools. [External MCP](/docs/workflows/external-mcp) works in the other direction, allowing outside agents to call Synara.
 
 ## Start a connected session
 
@@ -29,6 +29,6 @@ When a service rejects refreshed credentials, the connector shows **needs sign-i
 
 Connector credentials stay in the server's local secret store and are not passed to provider processes or the web interface. Tool requests and their arguments are sent to the selected remote service. Review the service and the requested action before approving it.
 
-Stable hides Connectors and refuses their RPCs, OAuth callbacks and proxy routes. It does not read saved connector secrets. Stable and Beta keep their own data homes; see [Synara Beta](/docs/features/synara-beta).
+Stable and Beta use the same connector functionality, but keep their own credentials and data homes. Sign in separately in each app; Beta credentials are not copied into Stable. See [Synara Beta](/docs/features/synara-beta).
 
 Source evidence: feature head `4b2441d1040080324f458602e30fbb7f946cb1f5`; `docs/mcp-connectors.md`, `packages/shared/src/mcpConnectors.ts`, `apps/server/src/mcpConnectors/runtime.ts`, `apps/server/src/mcpConnectors/proxy.ts`, `apps/server/src/agentGateway/mcpInjection.ts` and `apps/web/src/components/settings/McpConnectorsSettingsPanel.tsx`.

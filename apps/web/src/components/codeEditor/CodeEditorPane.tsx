@@ -1,8 +1,8 @@
 // FILE: CodeEditorPane.tsx
 // Purpose: The editable file surface: lazy engine load with a plain-text
 //          fallback, the configured save chord, and the shared props contract
-//          used by the preview, file editor and diff editor panes. Beta edits
-//          with the native (Code OSS) engine; Stable keeps the Pierre engine.
+//          used by the preview, file editor and diff editor panes. Stable and
+//          Beta use the same native (Code OSS) engine.
 // Layer: Web editor UI
 // Exports: CodeEditorPane, CodeEditorPaneProps, EditorSurfaceBoundary,
 //          EditorSurfaceRetry, PierreEnginePane, useCodeEditorSaveKeyDownHandler
@@ -23,7 +23,7 @@ export { useCodeEditorSaveKeyDownHandler };
 
 const EditorSurface = lazy(() => import("./MonacoEditorSurface"));
 export type EditorSurfaceComponent = typeof EditorSurface;
-// Stable's engine. Loaded on demand so Beta never ships the Pierre edit code.
+// The alternative engine stays lazy when native editing is enabled.
 const PierreFilePane = lazy(() =>
   import("./PierreEditorPanes").then((module) => ({ default: module.PierreCodeEditorPane })),
 );

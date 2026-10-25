@@ -1310,7 +1310,7 @@ const makeWsRpcHandlersLayer = () =>
       const requireOwner = requireLoopbackOwner(
         "External MCP management is available only on a loopback-only instance.",
       );
-      // Connectors (Beta): refused on Stable. Sign-in redirects to this
+      // Connectors: available in Stable and Beta. Sign-in redirects to this
       // machine's loopback port, so only a loopback-only instance can finish it.
       const requireConnectorsOwner = Effect.gen(function* () {
         if (!mcpConnectors.enabled) {

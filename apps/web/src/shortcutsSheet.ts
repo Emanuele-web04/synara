@@ -491,7 +491,7 @@ export function listShortcutEditorDefinitions(): ShortcutEditorDefinition[] {
   ];
 
   const covered = new Set(definitions.flatMap((definition) => definition.commands));
-  // The native editor's commands are Beta-only; Stable has nothing that runs them.
+  // Keep editor commands aligned with the editing engine available on this host.
   const hidden = new Set(
     NATIVE_EDITOR_ON
       ? []

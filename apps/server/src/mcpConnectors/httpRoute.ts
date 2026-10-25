@@ -1,5 +1,5 @@
 /**
- * HTTP routes for Connectors (Beta).
+ * HTTP routes for Connectors.
  *
  * - `GET /oauth/mcp/callback`: the OAuth redirect target. The browser carries
  *   no Synara session, so the single-use `state` minted with the sign-in is

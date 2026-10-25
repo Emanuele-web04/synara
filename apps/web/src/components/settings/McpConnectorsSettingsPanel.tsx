@@ -1,5 +1,5 @@
 // FILE: McpConnectorsSettingsPanel.tsx
-// Purpose: Settings → Connectors (Beta): a searchable catalog laid out in shelves, the
+// Purpose: Settings → Connectors: a searchable catalog laid out in shelves, the
 //   connected services with their actions, and a dialog to add a custom MCP server URL.
 // Layer: Settings UI components
 // Exports: McpConnectorsSettingsPanel

@@ -1,4 +1,4 @@
-import { MCP_CONNECTORS_BETA_FEATURE } from "@synara/shared/betaFeatures";
+import { isBetaFeatureEnabled, MCP_CONNECTORS_BETA_FEATURE } from "@synara/shared/betaFeatures";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -20,13 +20,17 @@ describe("settings sections", () => {
     expect(isSettingsSectionAvailable("integrations", () => false)).toBe(true);
   });
 
-  it("lists every available section exactly once, Connectors included off Stable", () => {
-    // Tests run without a desktop protocol, which keeps Beta features on.
+  it("lists Connectors without a Beta badge and allows them on Stable", () => {
+    expect(
+      isSettingsSectionAvailable("connectors", (feature) =>
+        isBetaFeatureEnabled(feature, "production"),
+      ),
+    ).toBe(true);
     const ids = SETTINGS_NAV_ITEMS.map((item) => item.id);
     expect(new Set(ids).size).toBe(ids.length);
     expect(ids.toSorted()).toEqual(SETTINGS_SECTION_IDS.toSorted());
     expect(normalizeSettingsSection("connectors")).toBe("connectors");
-    expect(SETTINGS_NAV_ITEMS.find((item) => item.id === "connectors")?.badge).toBe("Beta");
+    expect(SETTINGS_NAV_ITEMS.find((item) => item.id === "connectors")?.badge).toBeUndefined();
   });
 
   it("falls back to General for unknown sections", () => {

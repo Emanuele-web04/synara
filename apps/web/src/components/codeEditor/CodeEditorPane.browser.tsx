@@ -4,6 +4,12 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { createRef, useState } from "react";
 import { page, userEvent } from "vitest/browser";
 import { afterEach, expect, it, vi } from "vitest";
+
+// Resolve the real feature policy as a packaged Stable host, independent of HTTP test hosting.
+vi.mock("@synara/shared/betaFeatures", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@synara/shared/betaFeatures")>()),
+  desktopFlavorFromProtocol: () => "production",
+}));
 import { render } from "vitest-browser-react";
 import { CodeEditorPane } from "./CodeEditorPane";
 import { monaco } from "./editorRuntime";

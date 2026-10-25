@@ -1,6 +1,6 @@
 // FILE: nativeEditorGate.ts
-// Purpose: The server-side Beta gate for the native editor: Stable refuses the
-//          language-service and debugger RPCs regardless of what the UI shows.
+// Purpose: Apply the shared native-editor availability policy to server RPCs.
+//          Stable and Beta both expose the language service and debugger.
 // Layer: Server runtime gate
 // Exports: NATIVE_EDITOR_UNAVAILABLE_CODE, nativeEditorUnavailableError, requireNativeEditor
 
@@ -19,7 +19,7 @@ export function nativeEditorUnavailableError(
 ): WsRpcError | null {
   if (isBetaFeatureEnabled(NATIVE_EDITOR_BETA_FEATURE, flavor)) return null;
   return new WsRpcError({
-    message: "The native editor is available in Synara Beta only.",
+    message: "The native editor is unavailable in this build of Synara.",
     code: NATIVE_EDITOR_UNAVAILABLE_CODE,
     retryable: false,
   });

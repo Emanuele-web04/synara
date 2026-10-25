@@ -1,4 +1,4 @@
-// Stable edits with the Pierre engine: the same pane props mount Pierre's
+// With the native engine disabled, the same pane props mount Pierre's
 // contenteditable, report edits and history, and honour the save chord.
 import "../../index.css";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
