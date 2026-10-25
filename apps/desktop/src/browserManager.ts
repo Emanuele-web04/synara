@@ -9,6 +9,7 @@ import {
   BrowserWindow,
   clipboard,
   nativeImage,
+  nativeTheme,
   session as electronSession,
   webContents as electronWebContents,
   WebContentsView,
@@ -62,14 +63,20 @@ import {
 } from "./localHtmlPreviewProtocol";
 
 export { BROWSER_SESSION_PARTITION } from "./browserSessionPolicy";
-const BROWSER_INACTIVE_TAB_SUSPEND_DELAY_MS = 1_500;
-const BROWSER_INACTIVE_TAB_SUSPEND_DELAY_PRESSURED_MS = 400;
-const BROWSER_MAX_WARM_INACTIVE_RUNTIMES_PER_THREAD = 1;
+// Switching tabs must never cost the page: an inactive tab keeps its DOM, scroll,
+// form input and history for minutes, not seconds. Memory is bounded by the
+// per-thread warm limit and the app-wide live-runtime budget below instead.
+const BROWSER_INACTIVE_TAB_SUSPEND_DELAY_MS = 10 * 60_000;
+const BROWSER_INACTIVE_TAB_SUSPEND_DELAY_PRESSURED_MS = 60_000;
+const BROWSER_MAX_WARM_INACTIVE_RUNTIMES_PER_THREAD = 5;
+// App-wide cap on browser-owned page runtimes. Past it, the least recently used
+// hidden page is suspended and reloads from its URL when shown again.
+const BROWSER_MAX_LIVE_TAB_RUNTIMES = 12;
 const BROWSER_MAX_BACKGROUND_AUTOMATION_RUNTIMES = 4;
 // Browser tools have a published maximum 30 second deadline. Keep a newly
 // acquired runtime out of the eviction pool until that action has drained.
 const BROWSER_AUTOMATION_RUNTIME_USE_GRACE_MS = 31_000;
-const BROWSER_THREAD_SUSPEND_DELAY_MS = 30_000;
+const BROWSER_THREAD_SUSPEND_DELAY_MS = 5 * 60_000;
 const BROWSER_AUTOMATION_WINDOW_OPEN_FALLBACK_MS = 2_000;
 const BROWSER_DEFERRED_PUBLICATION_DELAY_MS = 16;
 const BROWSER_AUTOMATION_INPUT_RELEASE_GRACE_MS = 100;
@@ -466,6 +473,7 @@ export class DesktopBrowserManager {
   // the panel and torn down cleanly without leaking native windows.
   private readonly popupRuntimes = new Map<BrowserWindow, OAuthPopupRuntime>();
   private readonly previewThreadIds = new Set<ThreadId>();
+  private readonly occludedThreadIds = new Set<ThreadId>();
   private readonly sessionPolicy: BrowserSessionPolicy;
   private readonly tabSuspendTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly suspendTimers = new Map<ThreadId, ReturnType<typeof setTimeout>>();
@@ -487,7 +495,15 @@ export class DesktopBrowserManager {
     warmInactiveRuntimeCount: 0,
   };
 
+  private readonly updateNativeViewBackgrounds = () => {
+    const color = nativeTheme.shouldUseDarkColors ? "#181818" : "#ffffff";
+    for (const runtime of this.runtimes.values()) {
+      if (!runtime.webContents.isDestroyed()) runtime.view?.setBackgroundColor(color);
+    }
+  };
+
   constructor(private readonly options: DesktopBrowserManagerOptions = {}) {
+    nativeTheme.on("updated", this.updateNativeViewBackgrounds);
     this.sessionPolicy = new BrowserSessionPolicy((event) => {
       this.handleSessionDownload(event);
     });
@@ -1240,6 +1256,7 @@ export class DesktopBrowserManager {
   }
 
   dispose(): void {
+    nativeTheme.removeListener("updated", this.updateNativeViewBackgrounds);
     this.disposed = true;
     this.annotations.dispose();
     this.sessionPolicy.dispose();
@@ -1268,6 +1285,7 @@ export class DesktopBrowserManager {
     this.copyLinkListeners.clear();
     this.states.clear();
     this.previewThreadIds.clear();
+    this.occludedThreadIds.clear();
     this.threadVersionById.clear();
     this.snapshotCacheByThreadId.clear();
     this.lastEmittedVersionByThreadId.clear();
@@ -1626,6 +1644,7 @@ export class DesktopBrowserManager {
   }
 
   close(input: BrowserThreadInput): ThreadBrowserState {
+    this.occludedThreadIds.delete(input.threadId);
     this.markHumanControl(input.threadId);
     this.clearSuspendTimer(input.threadId);
     this.resetRuntimePageZoomForThread(input.threadId);
@@ -1657,6 +1676,7 @@ export class DesktopBrowserManager {
   }
 
   hide(input: BrowserThreadInput): void {
+    const wasOccluded = this.occludedThreadIds.delete(input.threadId);
     const state = this.states.get(input.threadId);
     const activeTab = state ? this.getActiveTab(state) : null;
     const keepsAgentRuntimeAlive = Boolean(
@@ -1668,9 +1688,18 @@ export class DesktopBrowserManager {
     // A hidden browser must never leave the miniature presentation zoom on a
     // runtime that automation or a later screenshot can reacquire.
     this.resetRuntimePageZoomForThread(input.threadId);
+    // The panel is gone, so its last rectangle is no longer on screen. Keeping it
+    // would let open(), navigate() or a screenshot repaint the native page over
+    // whatever chat is showing now, where no later hide() can take it down.
+    this.clearActiveBoundsForThread(input.threadId);
     if (this.activeThreadId === input.threadId) {
       this.detachAttachedRuntime();
       this.activeThreadId = null;
+    } else if (wasOccluded && activeTab) {
+      // Occlusion already detached the visible panel; restore ordinary
+      // background sizing when the user subsequently hides it.
+      const runtime = this.runtimes.get(buildRuntimeKey(input.threadId, activeTab.id));
+      if (runtime) this.setRuntimeViewHidden(runtime, true);
     }
 
     if (!state?.open) {
@@ -1687,6 +1716,8 @@ export class DesktopBrowserManager {
 
   setPanelBounds(input: BrowserSetPanelBoundsInput): void {
     this.perfCounters.setPanelBoundsCalls += 1;
+    if (input.occluded) this.occludedThreadIds.add(input.threadId);
+    else this.occludedThreadIds.delete(input.threadId);
     const previewChanged = this.previewThreadIds.has(input.threadId) !== (input.preview === true);
     if (input.preview) this.previewThreadIds.add(input.threadId);
     else this.previewThreadIds.delete(input.threadId);
@@ -1743,7 +1774,7 @@ export class DesktopBrowserManager {
     if (!state.open || nextBounds === null) {
       this.resetRuntimePageZoomForThread(input.threadId);
       if (this.activeThreadId === input.threadId) {
-        this.detachAttachedRuntime();
+        this.detachAttachedRuntime(input.occluded ? (previousBounds ?? undefined) : undefined);
         this.activeThreadId = null;
         if (state.open && input.occluded === true) {
           // A menu is not a hidden chat. Keep the page's DOM and history alive
@@ -2184,7 +2215,7 @@ export class DesktopBrowserManager {
     const state = this.states.get(input.threadId);
     const runtime = this.runtimes.get(buildRuntimeKey(input.threadId, input.tabId));
     if (
-      !this.previewThreadIds.has(input.threadId) ||
+      (!this.previewThreadIds.has(input.threadId) && !this.occludedThreadIds.has(input.threadId)) ||
       !state?.open ||
       state.activeTabId !== input.tabId ||
       !runtime ||
@@ -2196,13 +2227,18 @@ export class DesktopBrowserManager {
       .catch(() => null);
     if (
       this.runtimes.get(runtime.key) !== runtime ||
-      !this.previewThreadIds.has(input.threadId) ||
+      (!this.previewThreadIds.has(input.threadId) && !this.occludedThreadIds.has(input.threadId)) ||
       state.activeTabId !== input.tabId ||
       !image ||
       image.isEmpty()
     )
       return null;
-    const thumbnail = image.getSize().width > 640 ? image.resize({ width: 640 }) : image;
+    // Toolbar overlays need a full-size replacement for the obscured page;
+    // floating cards keep their existing bounded thumbnail cost.
+    const thumbnail =
+      this.previewThreadIds.has(input.threadId) && image.getSize().width > 640
+        ? image.resize({ width: 640 })
+        : image;
     return `data:image/jpeg;base64,${thumbnail.toJPEG(70).toString("base64")}`;
   }
 
@@ -2400,7 +2436,7 @@ export class DesktopBrowserManager {
       }
       const wasSuspended = tab.status === SUSPENDED_TAB_STATUS;
       const runtime = this.ensureLiveRuntime(threadId, tab.id);
-      if (wasSuspended && !this.automationRuntimeKeys.has(runtimeKey)) {
+      if (wasSuspended && this.shouldRestoreSuspendedTab(runtime)) {
         void this.loadTab(threadId, tab.id, { force: true, runtime });
       } else {
         didChange =
@@ -2435,8 +2471,58 @@ export class DesktopBrowserManager {
    * expired hidden pages are evicted least-recently-used and restored from their
    * canonical tab URL on the next browser tool call.
    */
+  /**
+   * Bounds memory now that inactive tabs stay warm for minutes: past the
+   * app-wide cap, the least recently used hidden page is suspended. The shown
+   * page, pages an agent is acting on, and OAuth openers are never evicted.
+   */
+  private enforceLiveTabRuntimeBudget(): void {
+    const ownedRuntimes = [...this.runtimes.values()].filter((runtime) => runtime.ownsWebContents);
+    let excess = ownedRuntimes.length - BROWSER_MAX_LIVE_TAB_RUNTIMES;
+    if (excess <= 0) return;
+
+    const now = Date.now();
+    const popupOwnerRuntimeKeys = new Set(
+      [...this.popupRuntimes.values()].map((popup) => buildRuntimeKey(popup.threadId, popup.tabId)),
+    );
+    const evictionCandidates = ownedRuntimes
+      .filter(
+        (runtime) =>
+          runtime.key !== this.attachedRuntimeKey &&
+          !(
+            runtime.threadId === this.activeThreadId &&
+            this.states.get(runtime.threadId)?.activeTabId === runtime.tabId
+          ) &&
+          !this.isEmbeddedPopupFamily(runtime.threadId, runtime.tabId) &&
+          !popupOwnerRuntimeKeys.has(runtime.key) &&
+          (this.automationRuntimeProtectedUntilByKey.get(runtime.key) ?? 0) <= now,
+      )
+      .toSorted(
+        (left, right) =>
+          (this.runtimeLastActiveAtByKey.get(left.key) ?? 0) -
+          (this.runtimeLastActiveAtByKey.get(right.key) ?? 0),
+      );
+    const changedThreadIds = new Set<ThreadId>();
+    for (const runtime of evictionCandidates) {
+      if (excess <= 0) break;
+      const state = this.states.get(runtime.threadId);
+      const tab = state ? this.getTab(state, runtime.tabId) : null;
+      this.destroyRuntime(runtime.threadId, runtime.tabId);
+      if (state && tab && (suspendTabState(tab) || syncThreadLastError(state))) {
+        changedThreadIds.add(runtime.threadId);
+      }
+      excess -= 1;
+      this.perfCounters.inactiveTabBudgetEvictions += 1;
+    }
+    for (const threadId of changedThreadIds) {
+      this.markThreadStateChanged(threadId);
+      this.emitState(threadId);
+    }
+  }
+
   private enforceBackgroundAutomationRuntimeBudget(): void {
     if (this.disposed) return;
+    this.enforceLiveTabRuntimeBudget();
     if (this.backgroundAutomationEvictionTimer !== null) {
       clearTimeout(this.backgroundAutomationEvictionTimer);
       this.backgroundAutomationEvictionTimer = null;
@@ -2678,7 +2764,7 @@ export class DesktopBrowserManager {
       options.pageZoomFactor ?? this.getVisiblePageZoomFactor(threadId),
     );
     const shouldLoadProjectedUrl =
-      options.forceLoad || (wasSuspended && !this.automationRuntimeKeys.has(runtimeKey));
+      options.forceLoad || (wasSuspended && this.shouldRestoreSuspendedTab(runtime));
     if (shouldLoadProjectedUrl) {
       void this.loadTab(threadId, activeTab.id, {
         force: true,
@@ -2687,6 +2773,16 @@ export class DesktopBrowserManager {
     } else {
       this.syncRuntimeState(threadId, activeTab.id);
     }
+  }
+
+  // A suspended tab comes back as an empty WebContents. Agent tabs used to be
+  // skipped so a browser tool could restore them itself, but a user who reopened
+  // one without a tool call was left looking at a page that never loaded.
+  private shouldRestoreSuspendedTab(runtime: LiveTabRuntime): boolean {
+    if (!this.automationRuntimeKeys.has(runtime.key)) return true;
+    const toolIsActing =
+      (this.automationRuntimeProtectedUntilByKey.get(runtime.key) ?? 0) > Date.now();
+    return !toolIsActing && runtime.webContents.getURL().length === 0;
   }
 
   private attachRuntime(
@@ -2743,10 +2839,13 @@ export class DesktopBrowserManager {
       return;
     }
 
-    this.detachAttachedRuntime();
-    this.setRuntimeViewHidden(runtime, false);
-    this.bringRuntimeViewToFront(runtime);
+    // Size and raise the incoming page before revealing it, and hide the outgoing
+    // page only afterwards: hiding first left a frame with neither page on screen,
+    // which showed the panel's dark backdrop as a black flash on every tab switch.
     runtime.view.setBounds(bounds);
+    this.bringRuntimeViewToFront(runtime);
+    this.setRuntimeViewHidden(runtime, false);
+    this.detachAttachedRuntime();
     this.attachedRuntimeKey = runtime.key;
     this.attachedBoundsSignature = nextBoundsSignature;
     this.updatePopupWindowsForThread(runtime.threadId);
@@ -2764,8 +2863,8 @@ export class DesktopBrowserManager {
     window.contentView.addChildView(runtime.view);
   }
 
-  private detachAttachedRuntime(): void {
-    if (!this.window || !this.attachedRuntimeKey) {
+  private detachAttachedRuntime(occludedBounds?: BrowserPanelBounds): void {
+    if (!this.window || this.window.isDestroyed() || !this.attachedRuntimeKey) {
       this.attachedRuntimeKey = null;
       this.attachedBoundsSignature = null;
       return;
@@ -2773,7 +2872,7 @@ export class DesktopBrowserManager {
 
     const runtime = this.runtimes.get(this.attachedRuntimeKey);
     if (runtime?.view) {
-      this.setRuntimeViewHidden(runtime, true);
+      this.setRuntimeViewHidden(runtime, true, occludedBounds);
       if (!this.automationRuntimeKeys.has(runtime.key)) {
         this.window.contentView.removeChildView(runtime.view);
       }
@@ -2782,13 +2881,19 @@ export class DesktopBrowserManager {
     this.attachedBoundsSignature = null;
   }
 
-  private setRuntimeViewHidden(runtime: LiveTabRuntime, hidden: boolean): void {
-    if (!runtime.view) {
+  private setRuntimeViewHidden(
+    runtime: LiveTabRuntime,
+    hidden: boolean,
+    occludedBounds?: BrowserPanelBounds,
+  ): void {
+    if (!runtime.view || runtime.webContents.isDestroyed()) {
       return;
     }
     const keepRenderingInBackground = hidden && this.automationRuntimeKeys.has(runtime.key);
     if (keepRenderingInBackground) {
-      this.parkHiddenRuntime(runtime, BACKGROUND_AUTOMATION_BOUNDS);
+      // An overlay needs the panel's framing; ordinary background automation
+      // still uses its standard viewport.
+      this.parkHiddenRuntime(runtime, occludedBounds ?? BACKGROUND_AUTOMATION_BOUNDS);
       return;
     }
     const nativeView = runtime.view as typeof runtime.view & NativeBrowserViewVisibility;
@@ -2800,7 +2905,8 @@ export class DesktopBrowserManager {
 
   private parkHiddenRuntime(runtime: LiveTabRuntime, bounds: BrowserPanelBounds): void {
     const window = this.window;
-    if (!window || !runtime.view) return;
+    if (!window || window.isDestroyed() || !runtime.view || runtime.webContents.isDestroyed())
+      return;
     // A hidden in-bounds view can produce its first capture; an off-window view
     // may never paint. Hide before attaching or moving to prevent a visible flash.
     runtime.view.setVisible(false);
@@ -2844,6 +2950,12 @@ export class DesktopBrowserManager {
   private claimAutomationTab(threadId: ThreadId, tab: BrowserTabState): boolean {
     const key = buildRuntimeKey(threadId, tab.id);
     this.automationRuntimeKeys.add(key);
+    // A claim precedes the tool's own navigation; keep shell reveals and the
+    // live-runtime budget from loading or evicting the page underneath it.
+    this.automationRuntimeProtectedUntilByKey.set(
+      key,
+      Date.now() + BROWSER_AUTOMATION_RUNTIME_USE_GRACE_MS,
+    );
 
     const runtime = this.runtimes.get(key);
     const rendererGuestAlive = Boolean(
@@ -2902,6 +3014,9 @@ export class DesktopBrowserManager {
           : {}),
       },
     });
+    // Suspended tabs reload on activation. Without an opaque backdrop the view
+    // shows black until the page paints, which reads as a broken tab switch.
+    view.setBackgroundColor(nativeTheme.shouldUseDarkColors ? "#181818" : "#ffffff");
     const runtime: LiveTabRuntime = {
       key: buildRuntimeKey(threadId, tabId),
       threadId,
@@ -3265,8 +3380,12 @@ export class DesktopBrowserManager {
   }
 
   private destroyAllRuntimes(): void {
-    for (const runtime of this.runtimes.values()) {
+    for (const runtime of [...this.runtimes.values()]) {
       this.destroyRuntime(runtime.threadId, runtime.tabId);
+      const state = this.states.get(runtime.threadId);
+      const tab = state ? this.getTab(state, runtime.tabId) : null;
+      // Window replacement destroys the page, so its next view must restore the URL.
+      if (tab && suspendTabState(tab)) this.markThreadStateChanged(runtime.threadId);
     }
   }
 
@@ -3323,8 +3442,7 @@ export class DesktopBrowserManager {
     // interrupted renderer transition must not be able to leave an untracked
     // WebContentsView over the canonical renderer WebView. Remove it from the
     // window hierarchy defensively before closing its WebContents.
-    if (runtime.view && this.window) {
-      this.setRuntimeViewHidden(runtime, true);
+    if (runtime.view && this.window && !this.window.isDestroyed()) {
       try {
         this.window.contentView.removeChildView(runtime.view);
       } catch {
@@ -3575,7 +3693,7 @@ export class DesktopBrowserManager {
     ).length;
     if (
       threadRuntimeCount > BROWSER_MAX_WARM_INACTIVE_RUNTIMES_PER_THREAD + 1 ||
-      this.runtimes.size > 4
+      this.runtimes.size > BROWSER_MAX_LIVE_TAB_RUNTIMES
     ) {
       return BROWSER_INACTIVE_TAB_SUSPEND_DELAY_PRESSURED_MS;
     }

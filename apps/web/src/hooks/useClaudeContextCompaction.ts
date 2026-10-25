@@ -1,6 +1,7 @@
 import type { MessageId, ThreadId } from "@synara/contracts";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { toastManager } from "../components/ui/toast";
+import { toastManager, reportToastIssue } from "../components/ui/toast";
+import { diagnosticIssueReason } from "../lib/rendererErrorDiagnostics";
 import { newCommandId, newMessageId } from "../lib/utils";
 import { useClaudeCompactionRequests } from "../lib/claudeCompactionRequests";
 import { readNativeApi } from "../nativeApi";
@@ -117,6 +118,7 @@ export function useClaudeContextCompaction({
     inFlightThreadIdsRef.current.add(threadId);
     setSubmittingThreadIds((current) => new Set([...current, threadId]));
     onBegin({ expectedUserMessageId: messageId });
+    const startedAt = performance.now();
     try {
       await api.orchestration.dispatchCommand(command);
       useClaudeCompactionRequests.getState().forget(threadId, command.commandId);
@@ -140,13 +142,18 @@ export function useClaudeContextCompaction({
         error.code === "ORCHESTRATION_COMMAND_REJECTED";
       if (rejected) useClaudeCompactionRequests.getState().forget(threadId, command.commandId);
       if (activeThreadIdRef.current === threadId) onFailure();
-      toastManager.add({
+      const toastId = toastManager.add({
         type: "error",
         title: rejected ? "Could not request compaction" : "Could not confirm compaction",
         description:
           rejected && error instanceof Error
             ? error.message
             : "Retry to confirm the same request. A second compaction will not be created.",
+      });
+      reportToastIssue(toastId, {
+        code: rejected ? "claude.compaction.request-failed" : "claude.compaction.uncertain",
+        reason: diagnosticIssueReason(error),
+        durationMs: performance.now() - startedAt,
       });
       return false;
     } finally {

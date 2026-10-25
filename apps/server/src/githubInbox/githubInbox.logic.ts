@@ -34,6 +34,8 @@ export const GITHUB_INBOX_MAX_PROBE_EXTENSION_MS = 30 * 60_000;
 export const GITHUB_INBOX_RATE_LIMIT_FLOOR = 200;
 /** Pause after a rate-limit error when GitHub gave no usable reset time (secondary limits). */
 export const GITHUB_INBOX_RATE_LIMIT_FALLBACK_PAUSE_MS = 60_000;
+/** A manual refresh this soon after a full read reuses that read instead of repeating it. */
+export const GITHUB_INBOX_FORCE_REFRESH_COOLDOWN_MS = 10_000;
 /** Pull request and issue detail are cached this long on the server; mutations drop them. */
 export const GITHUB_ITEM_DETAIL_CACHE_TTL_MS = 60_000;
 export const GITHUB_INBOX_FAILURE_BACKOFF_BASE_MS = 30_000;

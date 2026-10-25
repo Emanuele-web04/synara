@@ -21,7 +21,6 @@ import {
   type ProviderListSkillsResult,
   type ProviderRuntimeEvent,
   type ProviderInstanceId,
-  type ProviderSession,
   type ServerVoiceTranscriptionResult,
   type ThreadTokenUsageSnapshot,
   type ProviderUserInputAnswers,
@@ -35,6 +34,7 @@ import {
   TurnId,
 } from "@synara/contracts";
 import { Cause, Effect, Layer, Option, Queue, Schema, ServiceMap, Stream } from "effect";
+import { sanitizeUserFacingErrorMessage } from "@synara/shared/errorMessages";
 
 import {
   ProviderAdapterProcessError,
@@ -48,9 +48,12 @@ import { CodexAdapter, type CodexAdapterShape } from "../Services/CodexAdapter.t
 import { PROVIDER_ADAPTER_RUNTIME_EVENT_BUFFER_CAPACITY } from "../Services/ProviderAdapter.ts";
 import {
   CodexAppServerManager,
+  CodexSessionAuthInvalidatedError,
   parseCodexUserInputQuestions,
+  readResumeCursorThreadId,
   type CodexAppServerSendTurnInput,
   type CodexAppServerStartSessionInput,
+  type CodexSessionInspection,
 } from "../../codexAppServerManager.ts";
 import {
   evaluateAcpTurnIdleTick,
@@ -102,6 +105,7 @@ import {
 import { type EventNdjsonLogger, makeEventNdjsonLogger } from "./EventNdjsonLogger.ts";
 
 const PROVIDER = "codex" as const;
+const CODEX_RUNTIME_WARNING_METHODS = new Set(["guardianWarning", "warning"]);
 
 // Backstop for an alive-but-silent codex app-server: if a turn produces no
 // activity at all for this long, abort it instead of showing "Working" forever.
@@ -119,8 +123,18 @@ interface CodexTurnWatchdogEntry {
   lastActivityAt: number;
 }
 
+const stampEvent = (event: ProviderEvent, instanceId: string | undefined): ProviderEvent =>
+  event.providerInstanceId === undefined && instanceId
+    ? { ...event, providerInstanceId: instanceId }
+    : event;
+
 type CodexRuntimeIngressItem = {
   readonly nativeEvent: ProviderEvent;
+  readonly inspect: () => Promise<CodexSessionInspection | undefined>;
+  readonly isAuthRejected: () => boolean;
+  readonly validationKey: object | undefined;
+  readonly rejectInspection: () => void;
+  readonly trustedClose: boolean;
   readonly runtimeEvents: ReadonlyArray<ProviderRuntimeEvent>;
   readonly bytes: number;
 };
@@ -167,17 +181,6 @@ function toMessage(cause: unknown, fallback: string): string {
     return sanitizeUserFacingErrorMessage(cause.message, fallback);
   }
   return fallback;
-}
-
-function sanitizeUserFacingErrorMessage(message: string, fallback: string): string {
-  const normalized = message.trim();
-  if (normalized.length === 0) {
-    return fallback;
-  }
-
-  const firstLine = normalized.split("\n")[0]?.trim() ?? "";
-  const withoutInlineStack = firstLine.replace(/\s+at file:\/\/.*$/s, "").trim();
-  return withoutInlineStack.length > 0 ? withoutInlineStack : fallback;
 }
 
 function composeCodexInputWithFileAttachments(input: {
@@ -263,6 +266,12 @@ function asString(value: unknown): string | undefined {
 function asTrimmedString(value: unknown): string | undefined {
   const stringValue = asString(value)?.trim();
   return stringValue ? stringValue : undefined;
+}
+
+function codexErrorCode(value: unknown): string | undefined {
+  const error = asObject(value);
+  const code = asTrimmedString(error?.codexErrorInfo) ?? asTrimmedString(error?.codex_error_info);
+  return code === "serverOverloaded" ? "server_overloaded" : code;
 }
 
 function asArray(value: unknown): unknown[] | undefined {
@@ -908,6 +917,49 @@ function withMinimalRawPayload(
   };
 }
 
+// Codex multi-agent v2 announces each spawned child with a subAgentActivity
+// item (kind "started"/"completed", agentThreadId, agentPath "/root/<task>")
+// instead of a collabAgentToolCall naming receivers, and its spawn prompt is
+// encrypted. Present it as a collab call so the shared subagent machinery
+// creates the child thread, names it after its task, and records its outcome.
+function codexSubAgentActivityCollabItem(
+  source: Record<string, unknown>,
+): Record<string, unknown> | undefined {
+  if (source.type !== "subAgentActivity") {
+    return undefined;
+  }
+  const agentThreadId = asString(source.agentThreadId);
+  if (!agentThreadId) {
+    return undefined;
+  }
+  const kind = asString(source.kind);
+  const agentPath = asString(source.agentPath);
+  const taskName = agentPath
+    ?.split("/")
+    .map((segment) => segment.trim())
+    .findLast((segment) => segment.length > 0);
+  const model = asString(source.model);
+  const effort = asString(source.reasoningEffort);
+  const settled = kind !== undefined && kind !== "started";
+  return {
+    type: "collabAgentToolCall",
+    ...(asString(source.id) ? { id: asString(source.id) } : {}),
+    tool: settled ? "subAgentSettled" : "spawnAgent",
+    status: "completed",
+    receiverThreadIds: [agentThreadId],
+    receiverAgents: [
+      {
+        threadId: agentThreadId,
+        ...(taskName ? { agentNickname: taskName } : {}),
+        ...(model ? { model } : {}),
+        ...(effort ? { reasoningEffort: effort } : {}),
+      },
+    ],
+    ...(settled ? { agentsStates: { [agentThreadId]: { status: kind } } } : {}),
+    ...(agentPath ? { agentPath } : {}),
+  };
+}
+
 function mapItemLifecycle(
   event: ProviderEvent,
   canonicalThreadId: ThreadId,
@@ -919,6 +971,20 @@ function mapItemLifecycle(
   const source = item ?? payload;
   if (!source) {
     return undefined;
+  }
+
+  const subAgentCollabItem = codexSubAgentActivityCollabItem(source);
+  if (subAgentCollabItem) {
+    return {
+      ...runtimeEventBase(event, canonicalThreadId),
+      type: lifecycle,
+      payload: {
+        itemType: "collab_agent_tool_call",
+        status: lifecycle === "item.started" ? "inProgress" : "completed",
+        title: "Subagent",
+        data: { ...payload, item: subAgentCollabItem },
+      },
+    };
   }
 
   const itemType = toCanonicalItemType(source.type ?? source.kind);
@@ -1093,8 +1159,10 @@ function mapCodexHookEvent(
   };
 }
 
-// Configuration/lifecycle bookkeeping belongs in native diagnostics, not the transcript.
+// Internal metadata and configuration/lifecycle bookkeeping stay in native diagnostics.
 const DIAGNOSTIC_ONLY_CODEX_METHODS = new Set([
+  "turn/moderationMetadata",
+  "item/autoApprovalReview/started",
   "remoteControl/status/changed",
   "skills/changed",
   "session/threadOpenRequested",
@@ -1405,6 +1473,7 @@ function mapToRuntimeEvents(
 
   if (event.method === "turn/completed") {
     const errorMessage = asString(asObject(turn?.error)?.message);
+    const errorCode = codexErrorCode(turn?.error);
     return [
       {
         ...runtimeEventBase(event, canonicalThreadId),
@@ -1418,6 +1487,7 @@ function mapToRuntimeEvents(
             ? { totalCostUsd: asNumber(turn?.totalCostUsd) }
             : {}),
           ...(errorMessage ? { errorMessage } : {}),
+          ...(errorCode ? { errorCode } : {}),
         },
       },
     ];
@@ -1462,16 +1532,20 @@ function mapToRuntimeEvents(
   }
 
   if (event.method === "turn/diff/updated") {
+    // Keep the cumulative body once. Metadata records its original UTF-8 size
+    // so a journal-compacted prefix cannot masquerade as a complete patch.
+    const unifiedDiff =
+      asString(payload?.unifiedDiff) ?? asString(payload?.diff) ?? asString(payload?.patch) ?? "";
+    const base = runtimeDeltaEventBase(event, canonicalThreadId);
     return [
       {
-        ...runtimeEventBase(event, canonicalThreadId),
+        ...base,
         type: "turn.diff.updated",
-        payload: {
-          unifiedDiff:
-            asString(payload?.unifiedDiff) ??
-            asString(payload?.diff) ??
-            asString(payload?.patch) ??
-            "",
+        payload: { unifiedDiff },
+        raw: {
+          source: base.raw?.source ?? eventRawSource(event),
+          method: event.method,
+          payload: { unifiedDiffBytes: Buffer.byteLength(unifiedDiff, "utf8") },
         },
       },
     ];
@@ -1756,6 +1830,28 @@ function mapToRuntimeEvents(
     ];
   }
 
+  if (CODEX_RUNTIME_WARNING_METHODS.has(event.method)) {
+    const message = asTrimmedString(payload?.message);
+    if (
+      event.method === "guardianWarning" &&
+      message?.startsWith("Automatic approval review approved (")
+    ) {
+      return [];
+    }
+    return [
+      {
+        type: "runtime.warning",
+        ...withMinimalRawPayload(runtimeEventBase(event, canonicalThreadId), event),
+        payload: {
+          message: sanitizeUnmappedProviderDetail(message, 2_000) ?? "Codex runtime warning",
+          ...(event.payload !== undefined
+            ? { detail: sanitizeUnmappedProviderData(event.payload) }
+            : {}),
+        },
+      },
+    ];
+  }
+
   if (event.method === "configWarning") {
     const details = asTrimmedString(payload?.details);
     const path = asTrimmedString(payload?.path);
@@ -1877,6 +1973,7 @@ function mapToRuntimeEvents(
     const message =
       asString(asObject(payload?.error)?.message) ?? event.message ?? "Provider runtime error";
     const willRetry = payload?.willRetry === true;
+    const errorCode = codexErrorCode(payload?.error);
     const treatAsWarning = willRetry || isNonFatalCodexErrorMessage(message);
     return [
       {
@@ -1885,6 +1982,8 @@ function mapToRuntimeEvents(
         payload: {
           message,
           ...(!treatAsWarning ? { class: "provider_error" as const } : {}),
+          ...(!treatAsWarning && errorCode ? { errorCode } : {}),
+          ...(willRetry ? { willRetry: true } : {}),
           ...(event.payload !== undefined ? { detail: event.payload } : {}),
         },
       },
@@ -2142,7 +2241,13 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
           ? { forkSourceResumeCursor: input.forkSourceResumeCursor }
           : {}),
         ...(input.providerOptions !== undefined ? { providerOptions: input.providerOptions } : {}),
+        ...(input.additionalDirectories !== undefined
+          ? { additionalDirectories: input.additionalDirectories }
+          : {}),
         agentGatewayCapabilityInput: captureAgentGatewayCapabilityInput(input),
+        ...(input.autoApproveSynaraTools !== undefined
+          ? { autoApproveSynaraTools: input.autoApproveSynaraTools }
+          : {}),
         runtimeMode: input.runtimeMode,
         ...codexModelSelectionOverrides(input.modelSelection),
       };
@@ -2271,6 +2376,21 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
         })),
       );
 
+    const readExternalThreadPage: NonNullable<CodexAdapterShape["readExternalThreadPage"]> = (
+      input,
+    ) =>
+      Effect.tryPromise({
+        try: () =>
+          manager.readExternalThreadPage({
+            externalThreadId: input.externalThreadId,
+            ...(input.cursor !== undefined ? { cursor: input.cursor } : {}),
+            ...(input.cwd ? { cwd: input.cwd } : {}),
+            ...(input.providerOptions?.codex ? { codexOptions: input.providerOptions.codex } : {}),
+          }),
+        catch: (cause) =>
+          toRequestError(ThreadId.makeUnsafe(input.externalThreadId), "thread/turns/list", cause),
+      }).pipe(Effect.map((page) => ({ ...page, threadId: ThreadId.makeUnsafe(page.threadId) })));
+
     const rollbackThread: CodexAdapterShape["rollbackThread"] = (threadId, numTurns) => {
       if (!Number.isInteger(numTurns) || numTurns < 1) {
         return Effect.fail(
@@ -2284,7 +2404,7 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
 
       return Effect.tryPromise({
         try: () => manager.rollbackThread(threadId, numTurns),
-        catch: (cause) => toRequestError(threadId, "thread/rollback", cause),
+        catch: (cause) => toRequestError(threadId, "thread/revert", cause),
       }).pipe(
         Effect.map((snapshot) => ({
           threadId,
@@ -2523,18 +2643,26 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
             }
             yield* nativeEventLogger.write(event, event.threadId);
           });
-        const stampEventWithLiveSession = (event: ProviderEvent): ProviderEvent => {
-          const session = manager
-            .listSessions()
-            .find((entry: ProviderSession) => entry.threadId === event.threadId);
-          return event.providerInstanceId === undefined && session?.providerInstanceId
-            ? { ...event, providerInstanceId: session.providerInstanceId }
-            : event;
-        };
+        const filterRuntimeEvents = (
+          event: ProviderEvent,
+          events: ReadonlyArray<ProviderRuntimeEvent>,
+        ) =>
+          events.filter(
+            (runtimeEvent) =>
+              runtimeEvent.type !== "event.unmapped" ||
+              (!DIAGNOSTIC_ONLY_CODEX_METHODS.has(event.method) &&
+                shouldSurfaceUnmappedEvent(event)),
+          );
 
-        const ingress = yield* makeBoundedCallbackIngress<CodexRuntimeIngressItem, never, never>(
-          (item) =>
+        const ingress = yield* makeBoundedCallbackIngress<
+          CodexRuntimeIngressItem,
+          never,
+          never,
+          CodexSessionInspection | null | undefined
+        >(
+          (item, inspection) =>
             Effect.gen(function* () {
+              if (!item.trustedClose && (inspection === null || item.isAuthRejected())) return;
               yield* writeNativeEvent(item.nativeEvent).pipe(
                 Effect.catchCause((cause) =>
                   Effect.logWarning("Codex native event logging failed", {
@@ -2554,9 +2682,34 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
                 });
                 return;
               }
-              yield* Queue.offerAll(runtimeEventQueue, runtimeEvents);
+              if (item.trustedClose || !item.isAuthRejected())
+                yield* Queue.offerAll(runtimeEventQueue, runtimeEvents);
             }),
           {
+            prepareConcurrency: 8,
+            prepareKey: (item) => (item.trustedClose ? undefined : item.validationKey),
+            prepare: ({
+              inspect,
+              trustedClose,
+              isAuthRejected,
+              rejectInspection,
+              nativeEvent: { threadId },
+            }) => {
+              if (trustedClose) return Promise.resolve(undefined);
+              if (isAuthRejected()) return Promise.resolve(null);
+              return Promise.resolve()
+                .then(inspect)
+                .catch((error: unknown) => {
+                  if (error instanceof CodexSessionAuthInvalidatedError) return null;
+                  rejectInspection();
+                  void Effect.runPromise(
+                    Effect.logError("Codex callback auth inspection failed; origin rejected", {
+                      threadId,
+                    }),
+                  );
+                  return null;
+                });
+            },
             capacity: PROVIDER_ADAPTER_RUNTIME_EVENT_BUFFER_CAPACITY,
             maxBufferedBytes: PROVIDER_RUNTIME_CALLBACK_BUFFER_MAX_BYTES,
             terminalReserve: PROVIDER_RUNTIME_CALLBACK_TERMINAL_RESERVE,
@@ -2564,37 +2717,53 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
             sizeOf: (item) => item.bytes,
           },
         );
+        let nextDroppedWarning = 1;
         const listener = (event: ProviderEvent) => {
-          const stampedEvent = stampEventWithLiveSession(event);
+          const origin = manager.getSessionEventOrigin(event.threadId, event.lifecycleGeneration);
+          const stampedEvent = stampEvent(event, origin.providerInstanceId);
           const mappedRuntimeEvents = assignDerivedProviderRuntimeEventIds(
-            mapToRuntimeEvents(
-              stampedEvent,
-              stampedEvent.threadId,
-              manager.getSessionCodexOptions(stampedEvent.threadId),
-            ),
+            mapToRuntimeEvents(stampedEvent, stampedEvent.threadId, origin.codexOptions),
           );
           const hasUnmappedEvent = mappedRuntimeEvents.some(
             (runtimeEvent) => runtimeEvent.type === "event.unmapped",
           );
-          const sizedRuntimeEvents = mappedRuntimeEvents
-            .filter(
-              (runtimeEvent) =>
-                runtimeEvent.type !== "event.unmapped" ||
-                (!DIAGNOSTIC_ONLY_CODEX_METHODS.has(stampedEvent.method) &&
-                  shouldSurfaceUnmappedEvent(stampedEvent)),
-            )
-            .map(compactProviderRuntimeEventForIngress);
+          const sizedRuntimeEvents = filterRuntimeEvents(stampedEvent, mappedRuntimeEvents).map(
+            compactProviderRuntimeEventForIngress,
+          );
           const runtimeEvents = sizedRuntimeEvents.map((item) => item.event);
           trackTurnWatchdogActivity(stampedEvent.threadId, runtimeEvents);
           const nativeEvent = compactCodexNativeEventForIngress(
-            hasUnmappedEvent ? sanitizeUnmappedProviderEvent(stampedEvent) : stampedEvent,
+            hasUnmappedEvent || CODEX_RUNTIME_WARNING_METHODS.has(stampedEvent.method)
+              ? sanitizeUnmappedProviderEvent(stampedEvent)
+              : stampedEvent,
           );
           const result = ingress.offer({
             nativeEvent: nativeEvent.event,
+            inspect: origin.inspect,
+            isAuthRejected: origin.isAuthRejected,
+            validationKey: origin.validationKey,
+            rejectInspection: origin.rejectInspection,
+            // This notice is authored by the manager, not by provider stdout.
+            // Stale auth must suppress provider output but still durably close its session.
+            trustedClose: event.kind === "session" && event.method === "session/closed",
             runtimeEvents,
             bytes:
               nativeEvent.bytes + sizedRuntimeEvents.reduce((total, item) => total + item.bytes, 0),
           });
+          if (result === "dropped" || result === "evicted-for-terminal") {
+            const status = ingress.status();
+            // Report the first loss and exponentially spaced totals, not one warning per delta.
+            if (status.dropped >= nextDroppedWarning) {
+              while (nextDroppedWarning <= status.dropped) nextDroppedWarning *= 2;
+              void Effect.runPromise(
+                Effect.logWarning("Codex callback ingress dropped provider events", {
+                  threadId: stampedEvent.threadId,
+                  method: stampedEvent.method,
+                  status,
+                }),
+              );
+            }
+          }
           if (result === "terminal-overflow") {
             // This means the reserved terminal budget itself was exhausted.
             // The runtime reconciler remains the final recovery fence.
@@ -2638,18 +2807,33 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
         supportsLiveTurnDiffPatch: true,
       },
       startSession,
+      didResumeSession: (input, session) => {
+        const requestedThreadId = readResumeCursorThreadId(input.resumeCursor);
+        return (
+          requestedThreadId !== undefined &&
+          readResumeCursorThreadId(session.resumeCursor) === requestedThreadId
+        );
+      },
       sendTurn,
       steerTurn,
       startReview,
       interruptTurn,
       readThread,
       readExternalThread,
+      readExternalThreadPage,
       rollbackThread,
       compactThread,
       forkThread,
       respondToRequest,
       respondToUserInput,
       stopSession,
+      renewAgentGatewayCredential: (threadId) =>
+        Effect.tryPromise({
+          try: () => manager.renewAgentGatewayCredential(threadId),
+          catch: (cause) => toRequestError(threadId, "thread/resume", cause),
+        }),
+      agentGatewayCredentialRetired: (threadId) =>
+        Effect.sync(() => manager.isAgentGatewayCredentialRetired(threadId)),
       listSessions,
       listGeneratedImageHomePaths,
       hasSession,
@@ -2662,6 +2846,8 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
       prewarmVoice,
       transcribeVoice,
       streamEvents: Stream.fromQueue(runtimeEventQueue),
+      // App-server notifications get a fresh local UUID; this queue has no replay.
+      runtimeEventDelivery: "fresh-ids-once",
     } satisfies CodexAdapterShape;
   });
 

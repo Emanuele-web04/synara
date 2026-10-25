@@ -13,7 +13,10 @@ vi.mock("../nativeApi", () => ({
   readNativeApi: () => ({ orchestration: { dispatchCommand: mocks.dispatchCommand } }),
   ensureNativeApi: () => ({ orchestration: { dispatchCommand: mocks.dispatchCommand } }),
 }));
-vi.mock("../components/ui/toast", () => ({ toastManager: { add: mocks.toast } }));
+vi.mock("../components/ui/toast", () => ({
+  toastManager: { add: mocks.toast },
+  reportToastIssue: vi.fn(),
+}));
 const threadId = ThreadId.makeUnsafe("claude-compact-thread");
 const thread = makeThread({
   id: threadId,

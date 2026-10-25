@@ -16,7 +16,11 @@ import type { QueuedComposerChatTurn } from "../composerDraftStore";
 import type { WorkLogEntry } from "../session-logic";
 
 import {
+  accessModeModelSelectionToPersist,
   appendVoiceTranscriptToPrompt,
+  autoWaitsForProviderHandoff,
+  createdAtAfterProviderHandoff,
+  buildBlockedComposerSendToastCopy,
   buildCollapsedCursorModelOptionsReset,
   buildTranscriptAutoFollowSignal,
   buildTranscriptTailKey,
@@ -31,6 +35,7 @@ import {
   failWorktreeSetupSnapshot,
   filterSidechatTranscriptMessages,
   threadHasProviderLockingActivity,
+  turnNeedsProviderHandoff,
   threadHasProviderLockingMessages,
   hasFileUndoSettled,
   type LocalDispatchSnapshot,
@@ -45,13 +50,16 @@ import {
   queuedChatTurnDispatchFields,
   queuedPlanFollowUpDispatchFields,
   resolveQueuedTurnDispatchSettings,
+  retargetQueuedTurnToThreadProvider,
   turnStartDispatchFields,
   type TurnDispatchSettings,
   hasLiveTurnTakenOver,
   hasServerAcknowledgedLocalDispatch,
+  hasServerReceivedSentMessage,
   isVoiceAuthExpiredMessage,
   LOCAL_DISPATCH_TURN_TAKEOVER_TIMEOUT_MS,
   resolveActiveThreadTitle,
+  resolveBlockedComposerSendReason,
   resolveDraftFallbackModelSelection,
   resolveActiveTurnLiveDiffState,
   resolveCommittedProviderModel,
@@ -62,7 +70,6 @@ import {
   resolveEnvironmentPanelPreferenceAfterFirstSend,
   resolveEnvironmentPanelPreferenceUpdate,
   resolveGitRepoUiState,
-  resolveProjectScriptTerminalTarget,
   resolveQueuedSteerGateTransition,
   resolveRuntimeModeAfterApprovalDecision,
   resolveSettledThreadBranchMismatch,
@@ -947,6 +954,168 @@ describe("voice helpers", () => {
     ).toBe(true);
   });
 
+  const codexThreadWithTurn = {
+    sidechatSourceThreadId: null,
+    session: null,
+    messages: [],
+    modelSelection: { provider: "codex" as const, model: "gpt-5-codex" },
+    latestTurn: {
+      turnId: "turn-1" as never,
+      state: "error" as const,
+      requestedAt: "2026-05-02T10:00:00.000Z",
+      startedAt: null,
+      completedAt: null,
+      assistantMessageId: null,
+    },
+  };
+  const claudeSelection = {
+    provider: "claudeAgent" as const,
+    model: "claude-sonnet-5",
+    options: { effort: "high" as const },
+  };
+
+  it("leaves a pending provider switch out of an access-mode save", () => {
+    // Switching providers on a thread that already ran belongs to Hand off at Send.
+    expect(
+      accessModeModelSelectionToPersist({
+        thread: codexThreadWithTurn,
+        selectedModelSelection: claudeSelection,
+      }),
+    ).toBeUndefined();
+    const codexSelection = { provider: "codex" as const, model: "gpt-5.5" };
+    expect(
+      accessModeModelSelectionToPersist({
+        thread: codexThreadWithTurn,
+        selectedModelSelection: codexSelection,
+      }),
+    ).toBe(codexSelection);
+    // A thread that has not run yet still adopts the picked provider.
+    expect(
+      accessModeModelSelectionToPersist({
+        thread: { ...codexThreadWithTurn, latestTurn: null },
+        selectedModelSelection: claudeSelection,
+      }),
+    ).toBe(claudeSelection);
+  });
+
+  it("moves a queued turn onto the provider the thread switched to", () => {
+    const queued = {
+      id: "queued-1",
+      kind: "plan-follow-up" as const,
+      createdAt: "2026-05-02T10:00:00.000Z",
+      previewText: "implement",
+      text: "implement",
+      interactionMode: "default" as const,
+      selectedProvider: "codex" as const,
+      selectedModel: "gpt-5-codex",
+      selectedPromptEffort: "xhigh",
+      modelSelection: { provider: "codex" as const, model: "gpt-5-codex" },
+      providerOptionsForDispatch: { codex: { homePath: "/tmp/codex-home" } },
+      runtimeMode: "full-access" as const,
+    };
+    const claudeThread = { ...codexThreadWithTurn, modelSelection: claudeSelection };
+
+    const retargeted = retargetQueuedTurnToThreadProvider(queued, claudeThread);
+
+    expect(retargeted).toMatchObject({
+      id: "queued-1",
+      text: "implement",
+      modelSelection: claudeSelection,
+      selectedProvider: "claudeAgent",
+      selectedModel: "claude-sonnet-5",
+      selectedPromptEffort: "high",
+    });
+    expect(retargeted).not.toHaveProperty("providerOptionsForDispatch");
+    expect(retargetQueuedTurnToThreadProvider(queued, codexThreadWithTurn)).toBe(queued);
+    expect(retargetQueuedTurnToThreadProvider(queued, { ...claudeThread, latestTurn: null })).toBe(
+      queued,
+    );
+
+    // Auto travels only to a model that can run it.
+    const queuedAuto = { ...queued, runtimeMode: "auto" as const };
+    const openCodeThread = {
+      ...codexThreadWithTurn,
+      modelSelection: { provider: "opencode" as const, model: "openai/gpt-5" },
+    };
+    expect(retargetQueuedTurnToThreadProvider(queuedAuto, openCodeThread).runtimeMode).toBe(
+      "approval-required",
+    );
+    expect(
+      retargetQueuedTurnToThreadProvider(
+        {
+          ...queuedAuto,
+          modelSelection: claudeSelection,
+          selectedProvider: "claudeAgent" as const,
+        },
+        codexThreadWithTurn,
+      ).runtimeMode,
+    ).toBe("auto");
+  });
+
+  it("hands off any send that picks another provider for a thread that already ran", () => {
+    expect(
+      turnNeedsProviderHandoff({ thread: codexThreadWithTurn, modelSelection: claudeSelection }),
+    ).toBe(true);
+    expect(
+      turnNeedsProviderHandoff({
+        thread: codexThreadWithTurn,
+        modelSelection: { provider: "codex", model: "gpt-5.5" },
+      }),
+    ).toBe(false);
+    expect(
+      turnNeedsProviderHandoff({
+        thread: { ...codexThreadWithTurn, latestTurn: null },
+        modelSelection: claudeSelection,
+      }),
+    ).toBe(false);
+  });
+
+  it("orders a message sent after a handoff behind the handoff row", () => {
+    const handoffAt = "2999-01-01T00:00:00.000Z";
+    expect(
+      createdAtAfterProviderHandoff({
+        activities: [
+          { kind: "provider.handoff", createdAt: "2026-05-02T09:00:00.000Z" },
+          { kind: "provider.handoff", createdAt: handoffAt },
+        ],
+        createdAt: "2026-05-02T10:00:00.000Z",
+      }),
+    ).toBe("2999-01-01T00:00:00.001Z");
+    const now = Date.now();
+    expect(
+      Date.parse(
+        createdAtAfterProviderHandoff({ activities: [], createdAt: "2000-01-01T00:00:00.000Z" }),
+      ),
+    ).toBeGreaterThanOrEqual(now);
+  });
+
+  it("waits for Send before Auto when only the picked provider can run it", () => {
+    const openCodeThread = {
+      ...codexThreadWithTurn,
+      modelSelection: { provider: "opencode" as const, model: "openai/gpt-5" },
+    };
+    const codexSelection = { provider: "codex" as const, model: "gpt-5.5" };
+    expect(
+      autoWaitsForProviderHandoff({
+        thread: openCodeThread,
+        selectedModelSelection: codexSelection,
+      }),
+    ).toBe(true);
+    // The current provider can run Auto, so it is saved against it now.
+    expect(
+      autoWaitsForProviderHandoff({
+        thread: codexThreadWithTurn,
+        selectedModelSelection: claudeSelection,
+      }),
+    ).toBe(false);
+    expect(
+      autoWaitsForProviderHandoff({
+        thread: { ...openCodeThread, latestTurn: null },
+        selectedModelSelection: codexSelection,
+      }),
+    ).toBe(false);
+  });
+
   it("appends a transcript to the existing prompt without disturbing spacing", () => {
     expect(appendVoiceTranscriptToPrompt("Hello there   ", "  next line  ")).toBe(
       "Hello there\nnext line",
@@ -1613,63 +1782,6 @@ describe("deriveComposerSendState", () => {
   });
 });
 
-describe("resolveProjectScriptTerminalTarget", () => {
-  it("reuses the base terminal only when no terminal is open or running", () => {
-    const target = resolveProjectScriptTerminalTarget({
-      baseTerminalId: "default",
-      createTerminalId: () => "new-terminal",
-      hasRunningTerminal: false,
-      terminalOpen: false,
-    });
-
-    expect(target).toEqual({
-      shouldCreateNewTerminal: false,
-      terminalId: "default",
-    });
-  });
-
-  it("creates a fresh terminal when a live terminal could keep stale cwd or env", () => {
-    expect(
-      resolveProjectScriptTerminalTarget({
-        baseTerminalId: "default",
-        createTerminalId: () => "visible-script-terminal",
-        hasRunningTerminal: false,
-        terminalOpen: true,
-      }),
-    ).toEqual({
-      shouldCreateNewTerminal: true,
-      terminalId: "visible-script-terminal",
-    });
-
-    expect(
-      resolveProjectScriptTerminalTarget({
-        baseTerminalId: "default",
-        createTerminalId: () => "running-script-terminal",
-        hasRunningTerminal: true,
-        terminalOpen: false,
-      }),
-    ).toEqual({
-      shouldCreateNewTerminal: true,
-      terminalId: "running-script-terminal",
-    });
-  });
-
-  it("honors explicit requests for a new terminal", () => {
-    const target = resolveProjectScriptTerminalTarget({
-      baseTerminalId: "default",
-      createTerminalId: () => "forced-script-terminal",
-      hasRunningTerminal: false,
-      preferNewTerminal: true,
-      terminalOpen: false,
-    });
-
-    expect(target).toEqual({
-      shouldCreateNewTerminal: true,
-      terminalId: "forced-script-terminal",
-    });
-  });
-});
-
 describe("shouldRenderProviderHealthBanner", () => {
   it("does not show chat provider health while a terminal thread is active", () => {
     expect(
@@ -1957,6 +2069,25 @@ describe("runWorktreeCreationFlow", () => {
       flow,
     };
   }
+
+  it("does not start Git if setup was resolved during task registration", async () => {
+    const resolution = createWorktreeSetupResolution();
+    resolution.resolve("cancel");
+    let starts = 0;
+    const result = await runWorktreeCreationFlow({
+      progressId: "cancelled-before-git",
+      resolution,
+      subscribeToProgress: () => () => undefined,
+      onCreationStep: () => undefined,
+      startCreation: async () => {
+        starts += 1;
+        return { worktree: { path: "/unused" } };
+      },
+      removeWorktree: async () => undefined,
+    });
+    expect(result).toEqual({ outcome: "resolved" });
+    expect(starts).toBe(0);
+  });
 
   it("advances steps only for this creation's phase-started events", async () => {
     const harness = startFlowHarness();
@@ -3175,5 +3306,77 @@ describe("turn dispatch settings", () => {
     expect(resolved.runtimeMode).toBe("approval-required");
     expect(resolved.enableComputerControl).toBe(false);
     expect(resolved.computerControlMode).toBe("off");
+  });
+});
+
+describe("blocked composer sends", () => {
+  it("reports a send refused while another send owns the thread", () => {
+    expect(
+      resolveBlockedComposerSendReason({
+        sendInFlight: true,
+        sessionStarting: true,
+        hasComposerContent: true,
+      }),
+    ).toBe("send-in-flight");
+    expect(
+      resolveBlockedComposerSendReason({
+        sendInFlight: false,
+        sessionStarting: true,
+        hasComposerContent: true,
+      }),
+    ).toBe("session-starting");
+  });
+
+  it("stays silent when nothing blocks the send or there is nothing to send", () => {
+    expect(
+      resolveBlockedComposerSendReason({
+        sendInFlight: false,
+        sessionStarting: false,
+        hasComposerContent: true,
+      }),
+    ).toBeNull();
+    expect(
+      resolveBlockedComposerSendReason({
+        sendInFlight: true,
+        sessionStarting: false,
+        hasComposerContent: false,
+      }),
+    ).toBeNull();
+  });
+
+  it("explains every blocked send instead of doing nothing", () => {
+    for (const reason of ["send-in-flight", "session-starting", "no-project"] as const) {
+      const copy = buildBlockedComposerSendToastCopy(reason);
+      expect(copy.title.length).toBeGreaterThan(0);
+      expect(copy.description.length).toBeGreaterThan(0);
+    }
+  });
+});
+
+describe("hasServerReceivedSentMessage", () => {
+  const messageId = MessageId.makeUnsafe("sent-message");
+
+  it("detects a user message the server already recorded", () => {
+    expect(
+      hasServerReceivedSentMessage(
+        {
+          messages: [
+            {
+              id: messageId,
+              role: "user",
+              text: "Reply with ok",
+              createdAt: "2026-10-09T20:00:00.000Z",
+              streaming: false,
+            },
+          ],
+        },
+        messageId,
+      ),
+    ).toBe(true);
+  });
+
+  it("treats a missing thread or message as not received", () => {
+    expect(hasServerReceivedSentMessage(undefined, messageId)).toBe(false);
+    expect(hasServerReceivedSentMessage({ messages: [] }, messageId)).toBe(false);
   });
 });

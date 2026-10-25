@@ -74,6 +74,11 @@ const PROVIDER_CREDENTIAL_GRANTS: Record<ProviderChildKind, "all" | ReadonlySet<
   omp: "all",
 };
 
+export function providerCredentialKeysFor(provider: ProviderChildKind): readonly string[] {
+  const grants = PROVIDER_CREDENTIAL_GRANTS[provider];
+  return [...(grants === "all" ? PROVIDER_CREDENTIAL_KEYS : grants)];
+}
+
 const INHERITED_NATIVE_CAPABILITY_KEYS = new Set([
   "BUN_OPTIONS",
   "ELECTRON_RUN_AS_NODE",
@@ -81,6 +86,21 @@ const INHERITED_NATIVE_CAPABILITY_KEYS = new Set([
   "NODE_PATH",
   "NODE_REPL_SANDBOX_ALLOWED_UNIX_SOCKETS",
 ]);
+
+/**
+ * Ordinary user environment for a program Synara launches on the user's behalf (a
+ * debuggee or its adapter): no Synara control-plane keys or inherited injection hooks.
+ * Keys are compared case-insensitively because Windows environments are. Environment
+ * hygiene, not a sandbox; pair with `withoutProviderCredentialEnvironment`.
+ */
+export function stripSynaraControlPlaneEnvironment(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  return Object.fromEntries(
+    Object.entries(env).filter(([key]) => {
+      const normalized = key.toUpperCase();
+      return !normalized.startsWith("SYNARA_") && !INHERITED_NATIVE_CAPABILITY_KEYS.has(normalized);
+    }),
+  );
+}
 
 const isTestHarnessKey = (key: string, env: NodeJS.ProcessEnv): boolean =>
   Boolean(env.VITEST) && (key.startsWith("SYNARA_FAKE_") || key.startsWith("SYNARA_ACP_"));

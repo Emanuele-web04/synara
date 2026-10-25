@@ -74,7 +74,7 @@ describe("running chats quit guard", () => {
     expect(send).not.toHaveBeenCalled();
   });
 
-  it("allows quit when the renderer reports no running chats", async () => {
+  it("waits for an explicit decision even when no chats are running", async () => {
     const guard = makeRunningChatsQuitGuard(() => "q1");
     const send = vi.fn();
     const decision = guard.askRenderer({
@@ -83,6 +83,9 @@ describe("running chats quit guard", () => {
     });
 
     expect(send).toHaveBeenCalledWith({ requestId: "q1", presentation: "in-app" });
+    guard.receiveResponse({ requestId: "q1", phase: "ready", runningCount: 0, chats: [] });
+    expect(guard.hasPendingAsk()).toBe(true);
+    expect(guard.hasAllowedQuit()).toBe(false);
     guard.receiveResponse({ requestId: "q1", phase: "decision", allow: true });
     await expect(decision).resolves.toBe(true);
     expect(guard.hasAllowedQuit()).toBe(true);

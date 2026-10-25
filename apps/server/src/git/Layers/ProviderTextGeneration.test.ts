@@ -12,6 +12,9 @@ import {
 } from "../Services/TextGeneration.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { ProviderTextGenerationLive } from "./ProviderTextGeneration.ts";
+import { GitCore, type GitCoreShape } from "../Services/GitCore.ts";
+import { GitHubCli, type GitHubCliShape } from "../Services/GitHubCli.ts";
+import { GitCommandError, GitHubCliError } from "../Errors.ts";
 
 function createTextGenerationDouble(label: string) {
   const generateCommitMessage = vi.fn<TextGenerationShape["generateCommitMessage"]>(() =>
@@ -99,6 +102,8 @@ function createTextGenerationDouble(label: string) {
   };
 }
 
+const withRead: GitHubCliShape["withRead"] = (effect) => effect;
+
 function makeProviderTextGenerationTestLayer(
   settingsOverrides: Parameters<typeof ServerSettingsService.layerTest>[0] = {},
 ) {
@@ -107,6 +112,20 @@ function makeProviderTextGenerationTestLayer(
   const cursor = createTextGenerationDouble("cursor");
   const droid = createTextGenerationDouble("droid");
   const opencode = createTextGenerationDouble("opencode");
+  const listRecentCommits = vi.fn<GitCoreShape["listRecentCommits"]>(() =>
+    Effect.succeed({
+      commits: [{ sha: "abc", shortSha: "abc", subject: "feat: add settings", committedAt: "" }],
+    }),
+  );
+  const execute = vi.fn<GitHubCliShape["execute"]>(() =>
+    Effect.succeed({
+      code: 0,
+      stdout: '[{"title":"feat: improve settings"}]',
+      stderr: "",
+      signal: null,
+      timedOut: false,
+    }),
+  );
   const layer = ProviderTextGenerationLive.pipe(
     Layer.provide(Layer.succeed(ClaudeTextGeneration, claude.service)),
     Layer.provide(Layer.succeed(CodexTextGeneration, codex.service)),
@@ -114,12 +133,122 @@ function makeProviderTextGenerationTestLayer(
     Layer.provide(Layer.succeed(DroidTextGeneration, droid.service)),
     Layer.provide(Layer.succeed(OpenCodeTextGeneration, opencode.service)),
     Layer.provide(ServerSettingsService.layerTest(settingsOverrides)),
+    Layer.provide(Layer.succeed(GitCore, { listRecentCommits } as unknown as GitCoreShape)),
+    Layer.provide(
+      Layer.succeed(GitHubCli, {
+        execute,
+        withRead,
+      } as unknown as GitHubCliShape),
+    ),
   );
 
-  return { layer, claude, codex, cursor, droid, opencode };
+  return { layer, claude, codex, cursor, droid, opencode, listRecentCommits, execute };
 }
 
 describe("ProviderTextGenerationLive", () => {
+  const commitInput = {
+    cwd: "/repo",
+    branch: "main",
+    stagedSummary: "settings.ts",
+    stagedPatch: "+ setting",
+  };
+  const prInput = {
+    cwd: "/repo",
+    baseBranch: "main",
+    headBranch: "feature",
+    commitSummary: "change",
+    diffSummary: "settings.ts",
+    diffPatch: "+ setting",
+  };
+
+  it("routes server writing preferences and repository examples to commits and PRs", async () => {
+    const { layer, codex, listRecentCommits, execute } = makeProviderTextGenerationTestLayer();
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const service = yield* TextGeneration;
+        yield* service.generateCommitMessage(commitInput);
+        yield* service.generatePrContent(prInput);
+      }).pipe(Effect.provide(layer)),
+    );
+    const writingPreferences = {
+      style: "repository",
+      customInstructions: "",
+      recentCommitSubjects: ["feat: add settings"],
+      recentPrTitles: ["feat: improve settings"],
+    };
+    expect(codex.generateCommitMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ writingPreferences }),
+    );
+    expect(codex.generatePrContent).toHaveBeenCalledWith(
+      expect.objectContaining({ writingPreferences }),
+    );
+    expect(listRecentCommits).toHaveBeenCalledWith({ cwd: "/repo", limit: 10 });
+    expect(execute).toHaveBeenCalledTimes(2);
+  });
+
+  it.each(["conventional", "custom"] as const)(
+    "applies %s without reading repository examples",
+    async (style) => {
+      const { layer, claude, listRecentCommits, execute } = makeProviderTextGenerationTestLayer({
+        sourceControlWritingStyle: style,
+        sourceControlCustomInstructions: "Use short bullet points.",
+      });
+      await Effect.runPromise(
+        Effect.gen(function* () {
+          const service = yield* TextGeneration;
+          yield* service.generateCommitMessage({
+            ...commitInput,
+            modelSelection: { provider: "claudeAgent", model: "claude-sonnet-4-6" },
+          });
+        }).pipe(Effect.provide(layer)),
+      );
+      expect(claude.generateCommitMessage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          writingPreferences: {
+            style,
+            customInstructions: "Use short bullet points.",
+            recentCommitSubjects: [],
+            recentPrTitles: [],
+          },
+        }),
+      );
+      expect(listRecentCommits).not.toHaveBeenCalled();
+      expect(execute).not.toHaveBeenCalled();
+    },
+  );
+
+  it("still generates when Git and GitHub examples are unavailable", async () => {
+    const { layer, codex, listRecentCommits, execute } = makeProviderTextGenerationTestLayer();
+    listRecentCommits.mockImplementation(() =>
+      Effect.fail(
+        new GitCommandError({
+          operation: "log",
+          command: "git log",
+          cwd: "/repo",
+          detail: "Empty repository",
+        }),
+      ),
+    );
+    execute.mockImplementation(() =>
+      Effect.fail(new GitHubCliError({ operation: "execute", detail: "Offline" })),
+    );
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const service = yield* TextGeneration;
+        yield* service.generateCommitMessage(commitInput);
+      }).pipe(Effect.provide(layer)),
+    );
+    expect(codex.generateCommitMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        writingPreferences: {
+          style: "repository",
+          customInstructions: "",
+          recentCommitSubjects: [],
+          recentPrTitles: [],
+        },
+      }),
+    );
+  });
   it("blocks generation when the selected provider is disabled", async () => {
     const { layer, codex, cursor, opencode } = makeProviderTextGenerationTestLayer({
       providers: {

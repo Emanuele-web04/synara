@@ -5,6 +5,7 @@ import {
   DEFAULT_MODEL_BY_PROVIDER,
   ProjectId,
   ThreadId,
+  type LoadProjectImportHistoryInput,
   type ImportProjectInput,
   type ImportProjectResult,
   type ListProjectImportsInput,
@@ -18,6 +19,7 @@ import { Effect } from "effect";
 import type {
   ProjectImportRepository,
   ProjectImportOrigin,
+  ProjectImportHistoryState,
 } from "../persistence/projectImportRepository";
 import { discoverClaudeProjects } from "../provider/claudeProjectImport";
 import { discoverCodexProjects } from "../provider/codexProjectImport";
@@ -99,6 +101,108 @@ export function makeProjectImportHandlers(options: ProjectImportRouteOptions) {
       });
     });
   const sourcePaths = { homeDir: options.homeDir, stateDir: options.stateDir };
+
+  const saveOlderPageBoundary = Effect.fn(function* (state: ProjectImportHistoryState) {
+    const page = state.pending;
+    if (
+      page?.nextCursor &&
+      !(yield* options.repository.getHistory(state.threadId, state.revision + 1))
+    ) {
+      yield* options.repository.saveHistory({
+        ...state,
+        pending: null,
+        cursor: page.nextCursor,
+        before: page.messages[0]?.createdAt ?? state.before,
+        revision: state.revision + 1,
+      });
+    }
+  });
+
+  const applyInitialHistoryPage = Effect.fn(function* (state: ProjectImportHistoryState) {
+    const page = state.pending;
+    if (!page) return;
+    for (let offset = 0; offset < page.messages.length; offset += 20) {
+      yield* options.orchestrationEngine.dispatch({
+        type: "thread.messages.import",
+        commandId: CommandId.makeUnsafe(`project-import:${state.threadId}:history:0:${offset}`),
+        threadId: state.threadId,
+        messages: page.messages.slice(offset, offset + 20),
+        createdAt: state.sourceCreatedAt,
+      });
+    }
+    yield* saveOlderPageBoundary(state);
+    yield* options.repository.saveHistory({ ...state, pending: null, cursor: page.nextCursor });
+  });
+
+  const loadProjectImportHistory = (input: LoadProjectImportHistoryInput) =>
+    imports.withLock(
+      "imports",
+      Effect.gen(function* () {
+        const model = yield* options.orchestrationEngine.getReadModel();
+        const thread = model.threads.find(
+          (entry) => entry.id === input.threadId && !entry.deletedAt,
+        );
+        if (!thread)
+          return yield* new ProjectImportError({
+            message: "The imported conversation no longer exists.",
+          });
+        if (!(yield* options.repository.isCompleted(input.threadId)))
+          return { nextCursor: null, messages: [] };
+        if (input.cursor === undefined) {
+          const initial = yield* options.repository.getHistory(input.threadId);
+          return { nextCursor: initial?.cursor ? "1" : null, messages: [] };
+        }
+        const revision = Number(input.cursor);
+        if (!Number.isSafeInteger(revision) || revision < 1 || String(revision) !== input.cursor) {
+          return yield* new ProjectImportError({ message: "Invalid imported history cursor." });
+        }
+        let state = yield* options.repository.getHistory(input.threadId, revision);
+        if (!state || !state.cursor)
+          return yield* new ProjectImportError({
+            message: "This imported history page is unavailable.",
+          });
+        if (!state.pending) {
+          yield* ensureProviderEnabled(state.provider, options.serverSettings);
+          const settings = yield* options.serverSettings.getSettings;
+          const source = resolveProjectImportSources(settings, [state.provider], sourcePaths).find(
+            (candidate) => candidate.instanceId === state!.providerInstanceId,
+          );
+          if (!source)
+            return yield* new ProjectImportError({
+              message: "The source account is unavailable. Enable it to load older messages.",
+            });
+          const currentHome = yield* projectImportPromise(() =>
+            resolveProjectImportSourceHome(source),
+          );
+          if (!workspaceRootsEqual(currentHome, state.sourceHome, { platform: process.platform })) {
+            return yield* new ProjectImportError({
+              message:
+                "The source account's history location changed. Restore it to load older messages.",
+            });
+          }
+          const page = yield* readHistory({
+            ...state,
+            cursor: state.cursor,
+            before: state.before ?? undefined,
+            providerOptions: source.providerOptions,
+            claudeEnvironment: source.claudeEnvironment,
+          });
+          if (page.nextCursor === state.cursor)
+            return yield* new ProjectImportError({
+              message: "The provider did not advance the history cursor.",
+            });
+          state = { ...state, pending: page };
+          yield* options.repository.saveHistory(state);
+        }
+        // Cache display pages independently of live messages. Retrying the same
+        // cursor returns the same page; it never appends history to an active turn.
+        yield* saveOlderPageBoundary(state);
+        return {
+          nextCursor: state.pending!.nextCursor ? String(revision + 1) : null,
+          messages: state.pending!.messages,
+        };
+      }),
+    );
 
   const readKnownBindings = Effect.fn(function* (
     destinations: ReturnType<typeof makeProjectImportDestinations>,
@@ -502,29 +606,84 @@ export function makeProjectImportHandlers(options: ProjectImportRouteOptions) {
             return yield* new ProjectImportError({
               message: "The provider did not create an independent conversation copy.",
             });
-          const messages = yield* readHistory({
-            provider: source.provider,
-            threadId,
-            nativeId,
-            sourceHome: source.sourceHome,
-            sourceCwd: source.cwd,
-            sourceCreatedAt: source.createdAt,
-            providerOptions,
-            providerInstanceId: sourceAccount.instanceId,
-            ...(sourceAccount.claudeEnvironment
-              ? { claudeEnvironment: sourceAccount.claudeEnvironment }
-              : {}),
-            ...(runtimeCwd ? { cwd: runtimeCwd } : {}),
-          });
-          for (let offset = 0; offset < messages.length; offset += 100) {
-            yield* options.orchestrationEngine.dispatch({
-              type: "thread.messages.import",
-              commandId: CommandId.makeUnsafe(`project-import:${threadId}:messages:${offset}`),
-              threadId,
-              messages: messages.slice(offset, offset + 100),
-              createdAt: origin!.createdAt,
+          let history = yield* options.repository.getHistory(threadId);
+          if (history?.nativeId !== undefined && history.nativeId !== nativeId) {
+            return yield* new ProjectImportError({
+              message: "The imported native copy changed unexpectedly.",
             });
           }
+          if (!history) {
+            const historyInput = {
+              provider: source.provider,
+              threadId,
+              nativeId,
+              sourceHome: source.sourceHome,
+              sourceCwd: source.cwd,
+              sourceCreatedAt: source.createdAt,
+              providerOptions,
+              providerInstanceId: sourceAccount.instanceId,
+              ...(sourceAccount.claudeEnvironment
+                ? { claudeEnvironment: sourceAccount.claudeEnvironment }
+                : {}),
+              ...(runtimeCwd ? { cwd: runtimeCwd } : {}),
+            };
+            let page = yield* readHistory(historyInput);
+            const legacyMessages = yield* options.repository.getLegacyMessages(threadId);
+            if (legacyMessages.length > 0) {
+              // Finish the old oldest-first import in its original live transcript.
+              // Mixing its persisted prefix with read-only older pages duplicates
+              // rows and can overwrite full text with Codex summary text.
+              const pages = [page];
+              const cursors = new Set<string>();
+              while (page.nextCursor) {
+                if (cursors.has(page.nextCursor))
+                  return yield* new ProjectImportError({
+                    message: "The provider repeated a history cursor.",
+                  });
+                cursors.add(page.nextCursor);
+                page = yield* readHistory({ ...historyInput, cursor: page.nextCursor });
+                pages.push(page);
+              }
+              const existingIds = new Set(legacyMessages.map((message) => message.messageId));
+              let previousDate = Date.parse(legacyMessages.at(-1)!.createdAt);
+              page = {
+                nextCursor: null,
+                messages: pages
+                  .reverse()
+                  .flatMap((entry) => entry.messages)
+                  .flatMap((message) => {
+                    if (existingIds.has(message.messageId)) return [];
+                    existingIds.add(message.messageId);
+                    previousDate = Math.max(previousDate + 1, Date.parse(message.createdAt));
+                    return [
+                      {
+                        ...message,
+                        createdAt: new Date(previousDate).toISOString(),
+                        updatedAt: new Date(
+                          Math.max(previousDate, Date.parse(message.updatedAt)),
+                        ).toISOString(),
+                      },
+                    ];
+                  }),
+              };
+            }
+            history = {
+              provider: source.provider,
+              threadId,
+              nativeId,
+              providerInstanceId: sourceAccount.instanceId,
+              sourceHome: source.sourceHome,
+              sourceCwd: source.cwd,
+              sourceCreatedAt: source.createdAt,
+              ...(runtimeCwd ? { cwd: runtimeCwd } : {}),
+              cursor: null,
+              before: null,
+              revision: 0,
+              pending: page,
+            };
+            yield* options.repository.saveHistory(history);
+          }
+          yield* applyInitialHistoryPage(history);
         });
         // Cleanup failure must be surfaced. It cannot be silently reported as a
         // successful import with an unproven provider process still attached.
@@ -565,5 +724,5 @@ export function makeProjectImportHandlers(options: ProjectImportRouteOptions) {
         } satisfies ImportProjectResult;
       }),
     );
-  return { listProjectImports, importProject };
+  return { listProjectImports, importProject, loadProjectImportHistory };
 }

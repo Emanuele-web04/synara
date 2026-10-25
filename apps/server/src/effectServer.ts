@@ -1,4 +1,5 @@
 import { ProjectionPendingInteractionRepositoryLive } from "./persistence/Layers/ProjectionPendingInteractions";
+import { ProviderSessionRuntimeRepositoryLive } from "./persistence/Layers/ProviderSessionRuntime";
 import http from "node:http";
 
 import type { ServerSettingsError } from "@synara/contracts";
@@ -37,8 +38,13 @@ import {
 import { ProjectionSnapshotQuery } from "./orchestration/Services/ProjectionSnapshotQuery";
 import { ProjectionPendingInteractionRepository } from "./persistence/Services/ProjectionPendingInteractions";
 import { ThreadDeletionReactor } from "./orchestration/Services/ThreadDeletionReactor";
+import { ThreadSnoozeReactor } from "./orchestration/Services/ThreadSnoozeReactor";
 import {
   claimQuitResumeRecordAtStartup,
+  captureCrashResumeRecord,
+  persistCrashResumeRecord,
+  type QuitResumeRecordRead,
+  readQuitResumeRecord,
   resumeQuitInterruptedChats,
 } from "./orchestration/quitResume";
 import { reconcileRestartStuckTurns } from "./orchestration/startupTurnReconciliation";
@@ -47,6 +53,7 @@ import { ProviderRuntimeReconciler } from "./provider/Services/ProviderRuntimeRe
 import { ProviderService, type ProviderServiceShape } from "./provider/Services/ProviderService";
 import { ServerLifecycleEvents } from "./serverLifecycleEvents";
 import { ServerRuntimeStartup } from "./serverRuntimeStartup";
+import { KeepAwakeService } from "./keepAwake";
 import { ServerSettingsService } from "./serverSettings";
 import { makeServerReadiness } from "./server/readiness";
 import { makeServerShutdownController, type ServerShutdownController } from "./serverShutdown";
@@ -56,6 +63,8 @@ import { recoverGitHandoffOperations } from "./gitHandoffOperations";
 import { externalMcpRouteLayer } from "./externalMcp/httpRoute";
 import { ExternalMcpGateway } from "./externalMcp/Services/ExternalMcpGateway";
 import { ExternalMcpService } from "./externalMcp/Services/ExternalMcpService";
+import { mcpConnectorsRouteLayer } from "./mcpConnectors/httpRoute";
+import { McpConnectors } from "./mcpConnectors/Services/McpConnectors";
 
 export interface ServerShape {
   readonly start: Effect.Effect<
@@ -66,9 +75,11 @@ export interface ServerShape {
     | AgentGatewayCredentials
     | ExternalMcpGateway
     | ExternalMcpService
+    | McpConnectors
     | FileSystem.FileSystem
     | Path.Path
     | Keybindings
+    | KeepAwakeService
     | ManagedAttachmentCleanup
     | AutomationRunReactor
     | AutomationScheduler
@@ -85,6 +96,7 @@ export interface ServerShape {
     | ServerRuntimeStartup
     | ServerSettingsService
     | ThreadDeletionReactor
+    | ThreadSnoozeReactor
     | SqlClient.SqlClient
   >;
   readonly stopSignal: Effect.Effect<void, never>;
@@ -182,12 +194,17 @@ export const createEffectServer = Effect.fn(function* (
   const providerRuntimeReconciler = yield* ProviderRuntimeReconciler;
   const runtimeStartup = yield* ServerRuntimeStartup;
   const serverSettings = yield* ServerSettingsService;
+  const keepAwake = yield* KeepAwakeService;
   const threadDeletionReactor = yield* ThreadDeletionReactor;
+  const threadSnoozeReactor = yield* ThreadSnoozeReactor;
   const readiness = yield* makeServerReadiness;
 
-  yield* keybindings.syncDefaultKeybindingsOnStartup.pipe(
+  // Start the runtime before serving config snapshots. This both performs the
+  // startup sync and attaches the file watcher; calling only the sync helper
+  // leaves live edits invisible until the next server restart.
+  yield* keybindings.start.pipe(
     Effect.catch((error) =>
-      Effect.logWarning("failed to sync keybindings defaults on startup", {
+      Effect.logWarning("failed to start keybindings runtime on startup", {
         path: error.configPath,
         detail: error.detail,
         cause: error.cause,
@@ -215,6 +232,7 @@ export const createEffectServer = Effect.fn(function* (
     websocketRpcRouteLayer,
     agentGatewayRouteLayer,
     externalMcpRouteLayer,
+    mcpConnectorsRouteLayer,
   );
   const httpApp = yield* HttpRouter.toHttpEffect(routesLayer);
   yield* httpServer
@@ -251,20 +269,39 @@ export const createEffectServer = Effect.fn(function* (
       subscriptionsScope,
     }),
   );
+  const previousResumeRecord = yield* readQuitResumeRecord(config.quitResumeStatePath);
+  let inMemoryCrashResume: QuitResumeRecordRead = { kind: "absent" };
   yield* startServerRuntimePipeline({
     orchestrationReactor,
     // Heal turns orphaned by the previous process exit (their in-memory runtimes
     // died, so they can never complete on their own) before clients can observe
     // the stale "Working" state.
-    reconcileRestartStuckTurns: reconcileRestartStuckTurns.pipe(
+    reconcileRestartStuckTurns: Effect.gen(function* () {
+      // Journal replay has finished; capture only work still orphaned now.
+      // An explicit quit record (including an invalid one) takes precedence.
+      if (previousResumeRecord.kind === "absent") {
+        const crashResumeRecord = yield* captureCrashResumeRecord;
+        if (crashResumeRecord.kind === "record") {
+          // Keep the captured intent if this startup dies during reconciliation.
+          inMemoryCrashResume = yield* persistCrashResumeRecord({
+            path: config.quitResumeStatePath,
+            record: crashResumeRecord.record,
+          });
+        }
+      }
+      yield* reconcileRestartStuckTurns;
+    }).pipe(
       Effect.provide(ProjectionPendingInteractionRepositoryLive),
+      Effect.provide(ProviderSessionRuntimeRepositoryLive),
     ),
     reactors: [
       automationScheduler,
       automationRunReactor,
       threadDeletionReactor,
+      threadSnoozeReactor,
       providerSessionReaper,
       providerRuntimeReconciler,
+      { start: () => keepAwake.start },
     ],
     subscriptionsScope,
   });
@@ -275,9 +312,12 @@ export const createEffectServer = Effect.fn(function* (
       (cause) => new ServerLifecycleError({ operation: "recoverGitHandoffOperations", cause }),
     ),
   );
-  // Claim the previous quit's "Resume chats automatically" record while no
-  // command (and so no new quit) can run yet; a missing record costs one stat.
-  const quitResumeRecord = yield* claimQuitResumeRecordAtStartup;
+  // Consume only after reconciliation, before admitting commands. If startup
+  // fails earlier, both explicit quit and crash records remain available.
+  const claimedResumeRecord = yield* claimQuitResumeRecordAtStartup;
+  // A disk claim wins. Only a failed write can supply this same-startup fallback.
+  const quitResumeRecord =
+    claimedResumeRecord.kind === "absent" ? inMemoryCrashResume : claimedResumeRecord;
   yield* runtimeStartup.markCommandReady;
   // The recorded chats get their continuation turn now that the orphaned turns
   // above are settled. Forked so the (rare) dispatch work never delays readiness.

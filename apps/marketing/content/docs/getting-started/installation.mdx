@@ -103,3 +103,9 @@ Follow the [Headless server guide](/docs/workflows/headless-server) for extracti
 ## Next
 
 Continue with the [Quickstart](/docs/getting-started/quickstart), or review the [provider overview](/docs/getting-started/providers) first.
+
+## macOS minimum in 1.0.9
+
+Synara requires **macOS 13 or later** for its bundled native tools. Stable 1.0.9 packages declare that minimum and updater feeds refuse the update on older macOS systems. Choose the installer matching your processor. Packaged startup checks on macOS 15 do not establish runtime behavior on every macOS 13 configuration.
+
+Source evidence for 1.0.9: Synara release `ebd0d22b39ce3a0f7c6051dddc6090e9b85dc7c3`; `docs/releases/1.0.9-source-audit.md`, `docs/providers.md`, `docs/core-concepts.md`, `docs/editor/intelligence.md`, `docs/mcp-connectors.md`, `apps/server/src/persistence/MigrationBackup.ts` and `docs/release.md`.

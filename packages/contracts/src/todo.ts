@@ -14,7 +14,7 @@ import {
 // whose live status the client derives. The thread's model, folder, and worktree
 // live on the thread itself, so the to-do never duplicates delegation settings.
 
-/** WsRpcError code the server uses to refuse Tasks where it is not enabled (Stable). */
+/** WsRpcError code the server uses to refuse Tasks where it is not enabled. */
 export const TASKS_UNAVAILABLE_ERROR_CODE = "TASKS_UNAVAILABLE";
 
 export const TODO_TITLE_MAX_LENGTH = 500;

@@ -35,6 +35,7 @@ describe("createProviderInstallResetPatch", () => {
       [
         "antigravityBinaryPath",
         "claudeBinaryPath",
+        "claudeConfirmColdCacheResume",
         "claudeEnableArtifacts",
         "claudeHomePath",
         "codexAccounts",
@@ -73,5 +74,15 @@ describe("providerInstanceLaunchConfigFor", () => {
     expect(
       providerInstanceLaunchConfigFor("pi", { ...defaults, piAgentDir: "~/.pi-work/agent" }),
     ).toEqual({ agentDir: "~/.pi-work/agent" });
+  });
+
+  it("keeps the Claude binary path and leaves the provider-wide Artifacts setting out", () => {
+    expect(
+      providerInstanceLaunchConfigFor("claudeAgent", {
+        ...defaults,
+        claudeBinaryPath: "/opt/homebrew/bin/claude",
+        claudeEnableArtifacts: true,
+      }),
+    ).toEqual({ binaryPath: "/opt/homebrew/bin/claude" });
   });
 });

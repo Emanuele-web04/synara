@@ -31,6 +31,9 @@ export type GitHubInboxItemKind = typeof GitHubInboxItemKind.Type;
 export const GitHubInboxState = Schema.Literals(["open", "closed"]);
 export type GitHubInboxState = typeof GitHubInboxState.Type;
 
+export const GitHubInboxSort = Schema.Literals(["created", "updated"]);
+export type GitHubInboxSort = typeof GitHubInboxSort.Type;
+
 export const GitHubIssueState = Schema.Literals(["open", "closed"]);
 export type GitHubIssueState = typeof GitHubIssueState.Type;
 
@@ -76,11 +79,13 @@ export const GitHubInboxItem = Schema.Union([GitHubInboxPullRequestItem, GitHubI
 export type GitHubInboxItem = typeof GitHubInboxItem.Type;
 
 /**
- * One superset per state. Project, kind, involvement, label, and text filters are applied by the
+ * One superset per state and sort. Project, kind, involvement, label, and text filters are applied by the
  * client, so switching them never reaches GitHub.
  */
 export const GitHubInboxListInput = Schema.Struct({
   state: GitHubInboxState,
+  /** Omitted by older clients, which use the last-updated order. */
+  sort: Schema.optional(GitHubInboxSort),
   forceRefresh: Schema.optional(Schema.Boolean),
 });
 export type GitHubInboxListInput = typeof GitHubInboxListInput.Type;

@@ -89,6 +89,7 @@ function StatefulGroupedList() {
   const [entry, setEntry] = useState<GitHubInboxItem>(() => makeEntry(false));
   return (
     <PullRequestList
+      sort="created"
       groups={groupPullRequestEntriesByInvolvement([entry], null)}
       isSectionOpen={() => true}
       onToggleSection={() => {}}

@@ -10,8 +10,10 @@ import type { ProviderKind, ProviderStartOptions } from "@synara/contracts";
 import { resolveActiveCodexHomeWritePath, resolveBaseCodexHomePath } from "../codexHomePaths.ts";
 import { resolveCodexPathIdentity } from "../codexPathIdentity.ts";
 import {
+  prepareCodexHomeOverlay,
   prepareCodexHomeOverlayFromPreparedContinuationSource,
   readCodexSharedContinuationGeneration,
+  resolveCodexProcessSourceEnvironment,
   type CodexProcessEnvInput,
 } from "../codexProcessEnv.ts";
 import { expandProviderAccountHomePath } from "../providerAccountHomePath.ts";
@@ -22,17 +24,19 @@ function canonicalStoragePath(value: string): string {
 
 function codexContinuationInput(options: ProviderStartOptions | undefined): Pick<
   CodexProcessEnvInput,
-  "homePath" | "shadowHomePath" | "accountId"
+  "homePath" | "shadowHomePath" | "accountId" | "explicitProviderEnvironment"
 > & {
   readonly env: NodeJS.ProcessEnv;
 } {
   const codex = options?.codex;
-  return {
+  const input = {
     env: { ...process.env, ...codex?.environment },
+    ...(codex?.environment ? { explicitProviderEnvironment: codex.environment } : {}),
     ...(codex?.homePath ? { homePath: codex.homePath } : {}),
     ...(codex?.shadowHomePath ? { shadowHomePath: codex.shadowHomePath } : {}),
     ...(codex?.accountId ? { accountId: codex.accountId } : {}),
   };
+  return { ...input, env: resolveCodexProcessSourceEnvironment(input) };
 }
 
 const CODEX_SHARED_CONTINUATION_V1_PREFIX = "codex:shared-v1:";
@@ -131,6 +135,22 @@ export async function prepareProviderContinuationIdentityForExplicitResume(
 ): Promise<string | undefined> {
   if (provider === "codex") {
     await prepareCodexHomeOverlayFromPreparedContinuationSource(codexContinuationInput(options));
+  }
+  return providerContinuationIdentity(provider, options);
+}
+
+/**
+ * Prepares provider-native storage for a first external import. Unlike the
+ * persisted-resume paths, a fresh import may establish the initial shared
+ * source generation; already-prepared sources keep their verified generation
+ * and damaged stores still fail instead of being recreated.
+ */
+export async function prepareProviderContinuationIdentityForImport(
+  provider: ProviderKind,
+  options: ProviderStartOptions | undefined,
+): Promise<string | undefined> {
+  if (provider === "codex") {
+    await prepareCodexHomeOverlay(codexContinuationInput(options));
   }
   return providerContinuationIdentity(provider, options);
 }

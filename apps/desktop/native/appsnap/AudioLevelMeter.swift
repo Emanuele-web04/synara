@@ -65,15 +65,17 @@ final class AudioLevelAccumulator {
 final class AudioLevelMeter {
     private let emitter: NDJSONEmitter
     private let sources: Set<AudioLevelSource>
+    private let inputDeviceUID: String?
     private let queue = DispatchQueue(label: "synara.audio-level")
     private var systemTap: SystemAudioLevelTap?
     private var microphone: MicrophoneLevelReader?
     private var timer: DispatchSourceTimer?
     private var lastEmittedSilence = false
 
-    init(emitter: NDJSONEmitter, sources: Set<AudioLevelSource>) {
+    init(emitter: NDJSONEmitter, sources: Set<AudioLevelSource>, inputDeviceUID: String?) {
         self.emitter = emitter
         self.sources = sources
+        self.inputDeviceUID = inputDeviceUID
     }
 
     func start() throws {
@@ -83,7 +85,7 @@ final class AudioLevelMeter {
             try tap.start()
         }
         if sources.contains(.microphone) {
-            let reader = MicrophoneLevelReader()
+            let reader = MicrophoneLevelReader(deviceUID: inputDeviceUID)
             microphone = reader
             try reader.start()
         }
@@ -223,7 +225,7 @@ final class SystemAudioLevelTap {
     }
 }
 
-/// The default input device, via an AVAudioEngine input tap.
+/// The chosen input device (or the default one), via an AVAudioEngine input tap.
 ///
 /// Microphone access belongs to the Synara app that spawned this helper, the
 /// same grant voice notes use. The first opt-in can request access; a denied
@@ -231,6 +233,14 @@ final class SystemAudioLevelTap {
 final class MicrophoneLevelReader {
     let accumulator = AudioLevelAccumulator(silenceFloorDecibels: microphoneSilenceFloorDecibels)
     private let engine = AVAudioEngine()
+    private let deviceUID: String?
+    private let queue = DispatchQueue(label: "synara.audio-level.microphone")
+    private var deviceID = AudioDeviceID(kAudioObjectUnknown)
+    private var ioProcID: AudioDeviceIOProcID?
+
+    init(deviceUID: String?) {
+        self.deviceUID = deviceUID
+    }
 
     func start() throws {
         let status = AVCaptureDevice.authorizationStatus(for: .audio)
@@ -250,6 +260,11 @@ final class MicrophoneLevelReader {
             guard allowed else { throw denied() }
         } else if status != .authorized {
             throw denied()
+        }
+
+        if let deviceUID {
+            try startDeviceReader(uid: deviceUID)
+            return
         }
 
         let input = engine.inputNode
@@ -274,11 +289,134 @@ final class MicrophoneLevelReader {
     }
 
     func stop() {
+        if deviceID != kAudioObjectUnknown, let ioProcID {
+            AudioDeviceStop(deviceID, ioProcID)
+            AudioDeviceDestroyIOProcID(deviceID, ioProcID)
+            self.ioProcID = nil
+            deviceID = AudioDeviceID(kAudioObjectUnknown)
+            return
+        }
         engine.inputNode.removeTap(onBus: 0)
         engine.stop()
+    }
+
+    /// Reads one device straight from Core Audio. AVAudioEngine shares one
+    /// unit between input and output on macOS, so pointing its input at a
+    /// device other than the current output fails to start. A missing device
+    /// fails instead of falling back to the default input, which may be a
+    /// Bluetooth headset whose playback quality drops once its microphone opens.
+    private func startDeviceReader(uid: String) throws {
+        guard let device = audioInputDeviceID(uid: uid) else {
+            throw AppSnapFailure(code: "microphone_unavailable", message: "The chosen microphone is not connected.")
+        }
+        let accumulator = accumulator
+        var procID: AudioDeviceIOProcID?
+        var status = AudioDeviceCreateIOProcIDWithBlock(&procID, device, queue) { _, input, _, _, _ in
+            // HAL IO procs deliver 32-bit float PCM.
+            for buffer in UnsafeMutableAudioBufferListPointer(UnsafeMutablePointer(mutating: input)) {
+                guard let data = buffer.mData else { continue }
+                let count = Int(buffer.mDataByteSize) / MemoryLayout<Float>.size
+                accumulator.add(data.assumingMemoryBound(to: Float.self), count: count)
+            }
+        }
+        guard status == noErr, let procID else {
+            throw AppSnapFailure(
+                code: "microphone_unavailable",
+                message: "Could not attach to the chosen microphone (OSStatus \(status))."
+            )
+        }
+        status = AudioDeviceStart(device, procID)
+        guard status == noErr else {
+            AudioDeviceDestroyIOProcID(device, procID)
+            throw AppSnapFailure(
+                code: "microphone_unavailable",
+                message: "Could not start the chosen microphone (OSStatus \(status))."
+            )
+        }
+        deviceID = device
+        ioProcID = procID
     }
 
     private func denied() -> AppSnapFailure {
         AppSnapFailure(code: "microphone_denied", message: "Microphone access is off for Synara.")
     }
+}
+
+// MARK: - Input devices
+
+/// Every device that can record, for the microphone picker. Only names and
+/// identifiers are read; no device is opened.
+func listAudioInputDevices() -> [[String: Any]] {
+    let defaultInput: AudioDeviceID? = readAudioProperty(
+        AudioObjectID(kAudioObjectSystemObject),
+        kAudioHardwarePropertyDefaultInputDevice
+    )
+    return audioDeviceIDs().compactMap { deviceID in
+        guard audioDeviceHasInput(deviceID),
+              let uid = readAudioString(deviceID, kAudioDevicePropertyDeviceUID) else { return nil }
+        let transport: UInt32 = readAudioProperty(deviceID, kAudioDevicePropertyTransportType) ?? 0
+        return [
+            "id": uid,
+            "name": readAudioString(deviceID, kAudioObjectPropertyName) ?? uid,
+            "bluetooth": transport == kAudioDeviceTransportTypeBluetooth
+                || transport == kAudioDeviceTransportTypeBluetoothLE,
+            "default": deviceID == defaultInput,
+        ]
+    }
+}
+
+func audioInputDeviceID(uid: String) -> AudioDeviceID? {
+    audioDeviceIDs().first { deviceID in
+        audioDeviceHasInput(deviceID) && readAudioString(deviceID, kAudioDevicePropertyDeviceUID) == uid
+    }
+}
+
+private func audioDeviceIDs() -> [AudioDeviceID] {
+    var address = AudioObjectPropertyAddress(
+        mSelector: kAudioHardwarePropertyDevices,
+        mScope: kAudioObjectPropertyScopeGlobal,
+        mElement: kAudioObjectPropertyElementMain
+    )
+    let system = AudioObjectID(kAudioObjectSystemObject)
+    var size: UInt32 = 0
+    guard AudioObjectGetPropertyDataSize(system, &address, 0, nil, &size) == noErr, size > 0 else { return [] }
+    var ids = [AudioDeviceID](repeating: 0, count: Int(size) / MemoryLayout<AudioDeviceID>.size)
+    guard AudioObjectGetPropertyData(system, &address, 0, nil, &size, &ids) == noErr else { return [] }
+    return ids
+}
+
+private func audioDeviceHasInput(_ deviceID: AudioDeviceID) -> Bool {
+    var address = AudioObjectPropertyAddress(
+        mSelector: kAudioDevicePropertyStreams,
+        mScope: kAudioDevicePropertyScopeInput,
+        mElement: kAudioObjectPropertyElementMain
+    )
+    var size: UInt32 = 0
+    return AudioObjectGetPropertyDataSize(deviceID, &address, 0, nil, &size) == noErr && size > 0
+}
+
+private func readAudioProperty<Value>(_ objectID: AudioObjectID, _ selector: AudioObjectPropertySelector) -> Value? {
+    var address = AudioObjectPropertyAddress(
+        mSelector: selector,
+        mScope: kAudioObjectPropertyScopeGlobal,
+        mElement: kAudioObjectPropertyElementMain
+    )
+    var size = UInt32(MemoryLayout<Value>.size)
+    let pointer = UnsafeMutablePointer<Value>.allocate(capacity: 1)
+    defer { pointer.deallocate() }
+    guard AudioObjectGetPropertyData(objectID, &address, 0, nil, &size, pointer) == noErr else { return nil }
+    return pointer.pointee
+}
+
+private func readAudioString(_ objectID: AudioObjectID, _ selector: AudioObjectPropertySelector) -> String? {
+    var address = AudioObjectPropertyAddress(
+        mSelector: selector,
+        mScope: kAudioObjectPropertyScopeGlobal,
+        mElement: kAudioObjectPropertyElementMain
+    )
+    var value: Unmanaged<CFString>?
+    var size = UInt32(MemoryLayout<Unmanaged<CFString>?>.size)
+    guard AudioObjectGetPropertyData(objectID, &address, 0, nil, &size, &value) == noErr,
+          let string = value?.takeRetainedValue() else { return nil }
+    return string as String
 }

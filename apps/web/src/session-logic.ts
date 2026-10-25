@@ -1,6 +1,7 @@
 import {
   type OrchestrationLatestTurn,
   type OrchestrationProposedPlanId,
+  type OrchestrationSessionStatus,
   type OrchestrationThreadActivity,
   type ProviderKind,
   type ThreadId,
@@ -26,13 +27,16 @@ export {
   type PendingUserInput,
 } from "./pendingInteractionDerivation";
 export {
+  deriveSubagentTaskEnds,
   deriveTimelineEntries,
   deriveWorkLogEntries,
   isFileChangeWorkLogEntry,
   isProviderFileEditWorkLogEntry,
   isRoutedSubagentWorkEntry,
+  isSubagentStateOnlyWorkEntry,
   omitRoutedSubagentWorkEntries,
   orderedActivities,
+  type SubagentTaskEnd,
   type TimelineEntry,
   type WorkLogAutomation,
   type WorkLogEntry,
@@ -40,6 +44,8 @@ export {
   type WorkLogLiveActivityState,
   type WorkLogSubagent,
   type WorkLogSubagentAction,
+  type WorkLogSubagentRun,
+  type WorkLogSubagentRunMember,
   type WorkLogSynaraCreatedThread,
   type WorkLogSynaraThreadCreation,
 } from "./workLog";
@@ -173,6 +179,24 @@ export function canSessionAnswerPendingRequests(
 }
 
 /**
+ * The thread's provider runtime has ended, so nothing it launched can still be
+ * running. Only a stop or exit says so: a failed turn reports "error" while the
+ * runtime, and any background subagents, keep going.
+ */
+export function isSessionRuntimeRetired(
+  status: OrchestrationSessionStatus | null | undefined,
+): boolean {
+  return status === "stopped";
+}
+
+/** A known session whose runtime has not ended; unknown while the snapshot hydrates. */
+export function isSessionAliveForSubagents(
+  status: OrchestrationSessionStatus | null | undefined,
+): boolean {
+  return status != null && !isSessionRuntimeRetired(status);
+}
+
+/**
  * Minimal view a session needs to expose to answer "is a turn live?": its status
  * label and its in-flight turn id. Kept structural (not `Pick<ThreadSession>`) so
  * the predicate also accepts the orchestration read-model session, whose status is
@@ -276,6 +300,20 @@ export function deriveActiveTaskListState(
 interface FoldedActiveTask {
   taskType?: string | undefined;
   isBackgrounded: boolean;
+  /** Spawning tool call of a provider-native subagent. */
+  toolUseId?: string | undefined;
+  subagentType?: string | undefined;
+  workflowTaskId?: string | undefined;
+  /** Turn of the first activity that reported the task. */
+  turnId?: TurnId | null | undefined;
+}
+
+function taskPayloadString(
+  payload: Record<string, unknown> | null,
+  key: "taskType" | "toolUseId" | "subagentType" | "workflowTaskId",
+): string | undefined {
+  const value = payload?.[key];
+  return typeof value === "string" && value.length > 0 ? value : undefined;
 }
 
 // Folds task.* activities into the set of still-running tasks. Pass a turnId to
@@ -341,16 +379,26 @@ function foldActiveTasks(
           : (previous?.isBackgrounded ?? false);
       const inTurn = !latestTurnId || !activity.turnId || activity.turnId === latestTurnId;
       if (previous !== undefined || (isBackgrounded && inTurn)) {
-        activeTasks.set(taskId, { taskType: previous?.taskType, isBackgrounded });
+        activeTasks.set(taskId, {
+          ...previous,
+          isBackgrounded,
+          toolUseId: previous?.toolUseId ?? taskPayloadString(payload, "toolUseId"),
+          workflowTaskId: previous?.workflowTaskId ?? taskPayloadString(payload, "workflowTaskId"),
+          turnId: previous?.turnId ?? activity.turnId ?? null,
+        });
       }
       continue;
     }
 
     const previous = activeTasks.get(taskId);
-    const taskType = payload && typeof payload.taskType === "string" ? payload.taskType : undefined;
     activeTasks.set(taskId, {
-      taskType: taskType ?? previous?.taskType,
+      ...previous,
+      taskType: taskPayloadString(payload, "taskType") ?? previous?.taskType,
       isBackgrounded: previous?.isBackgrounded ?? false,
+      toolUseId: previous?.toolUseId ?? taskPayloadString(payload, "toolUseId"),
+      subagentType: previous?.subagentType ?? taskPayloadString(payload, "subagentType"),
+      workflowTaskId: previous?.workflowTaskId ?? taskPayloadString(payload, "workflowTaskId"),
+      turnId: previous?.turnId ?? activity.turnId ?? null,
     });
   }
 
@@ -372,8 +420,8 @@ export function deriveActiveBackgroundTasksState(
 
 /**
  * Background tasks (task.updated with isBackgrounded) started by the latest
- * turn that have not reached a terminal state. Used after the latest turn
- * settles to keep the thread visibly "waiting on background work". Returns
+ * turn that have not reached a terminal state. The sidebar's "In Background"
+ * status and the completion notification wait on it after the turn settles. Returns
  * null without a latest turn or a live session: stale isBackgrounded rows from
  * older turns or a dead session must not pin the thread forever.
  */
@@ -394,6 +442,178 @@ export function derivePendingBackgroundWork(input: {
     .filter(([, task]) => task.isBackgrounded)
     .map(([taskId]) => taskId);
   return taskIds.length > 0 ? { count: taskIds.length, taskIds } : null;
+}
+
+// Background tasks still running anywhere in the thread. Unlike
+// derivePendingBackgroundWork this is not scoped to the latest turn: once a
+// finished subagent wakes the agent into a new turn, the subagents launched by
+// the earlier turn are still outstanding. Claude announces backgrounded work
+// with a "Moved to background" notice, so both that notice and an
+// isBackgrounded patch count.
+export function deriveOutstandingBackgroundTaskIds(
+  activities: ReadonlyArray<OrchestrationThreadActivity>,
+): string[] {
+  const outstanding = new Set<string>();
+  for (const activity of orderedActivities(activities)) {
+    const payload =
+      activity.payload && typeof activity.payload === "object"
+        ? (activity.payload as Record<string, unknown>)
+        : null;
+    if (activity.kind === "runtime.warning") {
+      if (payload?.nativeEventType !== "background_tasks_changed") continue;
+      const data =
+        payload.data && typeof payload.data === "object"
+          ? (payload.data as Record<string, unknown>)
+          : null;
+      if (!Array.isArray(data?.tasks)) continue;
+      for (const task of data.tasks) {
+        const taskId =
+          task && typeof task === "object" ? (task as Record<string, unknown>).task_id : null;
+        if (typeof taskId === "string") outstanding.add(taskId);
+      }
+      continue;
+    }
+    const taskId = payload && typeof payload.taskId === "string" ? payload.taskId : null;
+    if (!taskId) continue;
+    if (activity.kind === "task.completed") {
+      outstanding.delete(taskId);
+    } else if (activity.kind === "task.updated") {
+      const status = typeof payload?.status === "string" ? payload.status : undefined;
+      if (
+        status === "completed" ||
+        status === "failed" ||
+        status === "killed" ||
+        status === "paused" ||
+        payload?.isBackgrounded === false
+      ) {
+        outstanding.delete(taskId);
+      } else if (payload?.isBackgrounded === true) {
+        outstanding.add(taskId);
+      }
+    }
+  }
+  return [...outstanding];
+}
+
+// Thread-wide count of background tasks still running while their session is
+// alive. A stopped or failed session cannot finish them, so they stop counting.
+export function countOutstandingBackgroundWork(input: {
+  activities: ReadonlyArray<OrchestrationThreadActivity>;
+  session: Pick<ThreadSession, "orchestrationStatus"> | null | undefined;
+}): number {
+  const sessionStatus = input.session?.orchestrationStatus;
+  if (sessionStatus === undefined || sessionStatus === "stopped" || sessionStatus === "error") {
+    return 0;
+  }
+  return deriveOutstandingBackgroundTaskIds(input.activities).length;
+}
+
+export interface RunningSubagentTask {
+  taskId: string;
+  /** Spawning tool call; null where the provider keys the task by its own id. */
+  toolUseId: string | null;
+  /** Started again after an earlier run ended (a resume, which adds no new card). */
+  resumed: boolean;
+}
+
+export interface RunningSubagentTasks {
+  running: ReadonlyArray<RunningSubagentTask>;
+  /** `toolUseId ?? taskId` of every agent task the thread started, running or settled. */
+  trackedKeys: ReadonlySet<string>;
+}
+
+export const NO_RUNNING_SUBAGENT_TASKS: RunningSubagentTasks = Object.freeze({
+  running: Object.freeze([]),
+  trackedKeys: new Set<string>(),
+});
+
+// A provider-native subagent, as opposed to a shell, monitor, workflow member, or
+// Codex's turn-level task (typed by collaboration mode, with no spawning call).
+function isAgentTask(task: {
+  taskType?: string | undefined;
+  toolUseId?: string | undefined;
+  subagentType?: string | undefined;
+  workflowTaskId?: string | undefined;
+}): boolean {
+  if (task.workflowTaskId) return false;
+  if (task.taskType === "subagent") return true;
+  return (
+    task.toolUseId !== undefined &&
+    (task.taskType === "local_agent" || task.subagentType !== undefined)
+  );
+}
+
+/**
+ * Subagent tasks still running anywhere in the thread while its runtime lives:
+ * the source for providers whose agents have no transcript card (OpenCode,
+ * Droid, Omp). A task with no spawning call counts only in the live turn: those
+ * adapters drop it at the next turn without reporting an end.
+ */
+export function deriveRunningSubagentTasks(input: {
+  activities: ReadonlyArray<OrchestrationThreadActivity>;
+  liveTurnId: TurnId | null;
+  sessionStatus: OrchestrationSessionStatus | null | undefined;
+}): RunningSubagentTasks {
+  if (!isSessionAliveForSubagents(input.sessionStatus)) {
+    return NO_RUNNING_SUBAGENT_TASKS;
+  }
+  const trackedKeys = new Set<string>();
+  const keyByTaskId = new Map<string, string>();
+  const endedKeys = new Set<string>();
+  const resumedKeys = new Set<string>();
+  for (const activity of orderedActivities(input.activities)) {
+    const payload =
+      activity.payload && typeof activity.payload === "object"
+        ? (activity.payload as Record<string, unknown>)
+        : null;
+    const taskId = typeof payload?.taskId === "string" ? payload.taskId : null;
+    if (!taskId) continue;
+    if (activity.kind === "task.started") {
+      const task = {
+        taskType: taskPayloadString(payload, "taskType"),
+        toolUseId: taskPayloadString(payload, "toolUseId"),
+        subagentType: taskPayloadString(payload, "subagentType"),
+        workflowTaskId: taskPayloadString(payload, "workflowTaskId"),
+      };
+      if (!isAgentTask(task)) continue;
+      const key = task.toolUseId ?? taskId;
+      trackedKeys.add(key);
+      keyByTaskId.set(taskId, key);
+      if (endedKeys.has(key)) resumedKeys.add(key);
+      continue;
+    }
+    const status = typeof payload?.status === "string" ? payload.status : undefined;
+    const ended =
+      activity.kind === "task.completed" ||
+      (activity.kind === "task.updated" &&
+        (status === "completed" || status === "failed" || status === "killed"));
+    const key = keyByTaskId.get(taskId);
+    if (ended && key !== undefined) {
+      endedKeys.add(key);
+      resumedKeys.delete(key);
+    }
+  }
+  if (trackedKeys.size === 0) {
+    return NO_RUNNING_SUBAGENT_TASKS;
+  }
+  const running = new Map<string, RunningSubagentTask>();
+  for (const [taskId, task] of foldActiveTasks(input.activities, undefined)) {
+    if (!isAgentTask(task)) continue;
+    const counts =
+      task.toolUseId !== undefined ||
+      task.isBackgrounded ||
+      (input.liveTurnId !== null && task.turnId === input.liveTurnId);
+    if (!counts) continue;
+    const key = task.toolUseId ?? taskId;
+    if (!running.has(key)) {
+      running.set(key, {
+        taskId,
+        toolUseId: task.toolUseId ?? null,
+        resumed: resumedKeys.has(key),
+      });
+    }
+  }
+  return { running: [...running.values()], trackedKeys };
 }
 
 // Keeps the UI "working" while the provider still has visible assistant text or

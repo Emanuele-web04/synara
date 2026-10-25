@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
+import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { PassThrough } from "node:stream";
 import {
@@ -19,7 +21,7 @@ import {
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { afterAll, it, vi } from "@effect/vitest";
 
-import { Effect, Fiber, FileSystem, Layer, Option, Stream } from "effect";
+import { Deferred, Effect, Fiber, FileSystem, Layer, Option, Stream } from "effect";
 
 import {
   CodexAppServerManager,
@@ -30,10 +32,12 @@ import { CodexJsonlFramer, CodexJsonlWriter } from "../../codexAppServerTranspor
 import { ServerConfig } from "../../config.ts";
 import { CodexSessionStartError } from "../../codexErrorClassification.ts";
 import { resolveCodexGeneratedImagesRoots } from "../../codexGeneratedImages.ts";
+import { projectProviderRuntimeActivities } from "../../orchestration/providerRuntimeActivityProjection.ts";
 import { ProviderAdapterValidationError } from "../Errors.ts";
 import { CodexAdapter } from "../Services/CodexAdapter.ts";
 import { ProviderSessionDirectory } from "../Services/ProviderSessionDirectory.ts";
 import { makeCodexAdapterLive } from "./CodexAdapter.ts";
+import { makeEventNdjsonLogger } from "./EventNdjsonLogger.ts";
 
 const asThreadId = (value: string): ThreadId => ThreadId.makeUnsafe(value);
 const asTurnId = (value: string): TurnId => TurnId.makeUnsafe(value);
@@ -159,6 +163,29 @@ class FakeCodexManager extends CodexAppServerManager {
     return this.sessionSnapshots;
   }
 
+  private readonly rejectedOrigins = new WeakSet<object>();
+
+  override getSessionEventOrigin(threadId: ThreadId) {
+    const origin = this.sessionSnapshots.find((entry) => entry.threadId === threadId);
+    return {
+      providerInstanceId: this.sessionSnapshots.find((entry) => entry.threadId === threadId)
+        ?.providerInstanceId,
+      validationKey: origin,
+      rejectInspection: () => {
+        if (origin) this.rejectedOrigins.add(origin);
+      },
+      inspect: () => this.inspectSessionAsync(threadId),
+      isAuthRejected: () => origin !== undefined && this.rejectedOrigins.has(origin),
+      codexOptions: this.codexOptionsByThreadId.get(threadId),
+    };
+  }
+
+  override async inspectSessionAsync(threadId: ThreadId) {
+    const session = this.sessionSnapshots.find((entry) => entry.threadId === threadId);
+    const codexOptions = this.codexOptionsByThreadId.get(threadId);
+    return session ? { session, ...(codexOptions ? { codexOptions } : {}) } : undefined;
+  }
+
   override inspectSessions(): ReturnType<CodexAppServerManager["inspectSessions"]> {
     return this.sessionSnapshots.map((session) => {
       const codexOptions = this.codexOptionsByThreadId.get(session.threadId);
@@ -204,6 +231,62 @@ const validationLayer = it.layer(
 );
 
 validationLayer("CodexAdapterLive validation", (it) => {
+  it.effect("confirms native resume only when Codex returns the requested thread", () =>
+    Effect.gen(function* () {
+      const adapter = yield* CodexAdapter;
+      const now = new Date().toISOString();
+      for (const [requested, returned, expected] of [
+        [{ threadId: "original" }, { threadId: "original" }, true],
+        [{ threadId: "original" }, { threadId: "fresh-fallback" }, false],
+        [{ threadId: " original " }, { threadId: "original" }, true],
+        [{ threadId: "original" }, undefined, false],
+        [undefined, { threadId: "fresh" }, false],
+        [{ threadId: " " }, { threadId: "fresh" }, false],
+        [{ threadId: 42 }, { threadId: "fresh" }, false],
+        [[{ threadId: "original" }], { threadId: "original" }, false],
+      ] as const) {
+        assert.equal(
+          adapter.didResumeSession?.(
+            {
+              provider: "codex",
+              threadId: asThreadId("thread-resume-outcome"),
+              resumeCursor: requested,
+              runtimeMode: "approval-required",
+            },
+            {
+              provider: "codex",
+              threadId: asThreadId("thread-resume-outcome"),
+              status: "ready",
+              resumeCursor: returned,
+              runtimeMode: "approval-required",
+              createdAt: now,
+              updatedAt: now,
+            },
+          ),
+          expected,
+          `resume ${JSON.stringify(requested)} as ${JSON.stringify(returned)}`,
+        );
+      }
+    }),
+  );
+
+  it.effect("passes the Hub coordinator tool grant to the Codex manager", () =>
+    Effect.gen(function* () {
+      validationManager.startSessionImpl.mockClear();
+      const adapter = yield* CodexAdapter;
+      yield* adapter.startSession({
+        provider: "codex",
+        threadId: asThreadId("thread-coordinator"),
+        runtimeMode: "approval-required",
+        autoApproveSynaraTools: true,
+      });
+      assert.strictEqual(
+        validationManager.startSessionImpl.mock.calls[0]?.[0].autoApproveSynaraTools,
+        true,
+      );
+    }),
+  );
+
   it.effect(
     "preserves startup cleanup evidence without reclassifying unknown process failures",
     () =>
@@ -675,6 +758,107 @@ turnPreparationLayer("CodexAdapterLive turn input preparation", (it) => {
   );
 });
 
+it.effect(
+  "keeps internal Codex notifications in native logs and preserves completion warnings",
+  () =>
+    Effect.gen(function* () {
+      const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "synara-auto-approval-review-"));
+      try {
+        const logger = yield* makeEventNdjsonLogger(path.join(tempDir, "native.ndjson"), {
+          stream: "native",
+        });
+        assert.ok(logger);
+        const manager = new FakeCodexManager();
+        yield* Effect.gen(function* () {
+          const adapter = yield* CodexAdapter;
+          const eventsFiber = yield* Stream.take(adapter.streamEvents, 4).pipe(
+            Stream.runCollect,
+            Effect.forkChild,
+          );
+          const emit = (method: string, status: string) =>
+            manager.emit("event", {
+              id: asEventId(`review-${method}-${status}`),
+              kind: "notification",
+              provider: "codex",
+              createdAt: new Date().toISOString(),
+              method,
+              threadId: asThreadId("review-thread"),
+              turnId: asTurnId("review-turn"),
+              payload: { review: { status, rationale: `Review ${status}` } },
+            } satisfies ProviderEvent);
+
+          emit("item/autoApprovalReview/started", "inProgress");
+          emit("item/autoApprovalReview/completed", "approved");
+          manager.emit("event", {
+            id: asEventId("approved-guardian-warning"),
+            kind: "notification",
+            provider: "codex",
+            createdAt: new Date().toISOString(),
+            method: "guardianWarning",
+            threadId: asThreadId("review-thread"),
+            payload: {
+              message:
+                "Automatic approval review approved (risk: low): API_KEY=private-approved-key",
+            },
+          } satisfies ProviderEvent);
+          emit("item/autoApprovalReview/completed", "denied");
+          emit("item/autoApprovalReview/completed", "aborted");
+          manager.emit("event", {
+            id: asEventId("moderation-metadata-log"),
+            kind: "notification",
+            provider: "codex",
+            createdAt: new Date().toISOString(),
+            method: "turn/moderationMetadata",
+            threadId: asThreadId("review-thread"),
+            turnId: asTurnId("review-turn"),
+            payload: { threadId: "review-thread", turnId: "review-turn", moderationMetadata: {} },
+          } satisfies ProviderEvent);
+          manager.emit("event", {
+            id: asEventId("hook-warning-log"),
+            kind: "notification",
+            provider: "codex",
+            createdAt: new Date().toISOString(),
+            method: "warning",
+            threadId: asThreadId("review-thread"),
+            payload: { message: "Hook unavailable: API_KEY=private-native-warning-key" },
+          } satisfies ProviderEvent);
+          emit("session/started", "ready");
+
+          const events = Array.from(yield* Fiber.join(eventsFiber));
+          assert.deepEqual(
+            events.map((event) => event.type),
+            ["runtime.warning", "runtime.warning", "runtime.warning", "session.started"],
+          );
+          assert.deepEqual(
+            events
+              .filter((event) => event.type === "runtime.warning")
+              .map((event) => event.payload.message),
+            ["Review denied", "Review aborted", "Hook unavailable: API_KEY=[REDACTED]"],
+          );
+        }).pipe(
+          Effect.provide(
+            makeCodexAdapterLive({ manager, nativeEventLogger: logger }).pipe(
+              Layer.provideMerge(ServerConfig.layerTest(process.cwd(), process.cwd())),
+              Layer.provideMerge(providerSessionDirectoryTestLayer),
+              Layer.provideMerge(NodeServices.layer),
+            ),
+          ),
+        );
+        yield* logger.close();
+        const nativeLog = fs.readFileSync(path.join(tempDir, "review-thread.log"), "utf8");
+        assert.ok(nativeLog.includes('"method":"item/autoApprovalReview/started"'));
+        assert.ok(nativeLog.includes('"status":"inProgress"'));
+        assert.ok(nativeLog.includes('"method":"turn/moderationMetadata"'));
+        assert.ok(nativeLog.includes('"method":"guardianWarning"'));
+        assert.ok(nativeLog.includes('"method":"warning"'));
+        assert.equal(nativeLog.includes("private-native-warning-key"), false);
+        assert.equal(nativeLog.includes("private-approved-key"), false);
+      } finally {
+        fs.rmSync(tempDir, { recursive: true, force: true });
+      }
+    }),
+);
+
 const lifecycleManager = new FakeCodexManager();
 const lifecycleLayer = it.layer(
   makeCodexAdapterLive({ manager: lifecycleManager }).pipe(
@@ -827,6 +1011,62 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
     }),
   );
 
+  it.effect("retains Codex guardian and runtime warning messages as warning activities", () =>
+    Effect.gen(function* () {
+      const adapter = yield* CodexAdapter;
+      const eventsFiber = yield* Stream.take(adapter.streamEvents, 2).pipe(
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+      const warnings = [
+        [
+          "guardianWarning",
+          "Automatic approval review is unavailable. ".repeat(15).trim(),
+          "Automatic approval review is unavailable. ".repeat(15).trim(),
+        ],
+        [
+          "warning",
+          "Hook needs attention: API_KEY=private-hook-warning-key",
+          "Hook needs attention: API_KEY=[REDACTED]",
+        ],
+      ] as const;
+
+      for (const [method, message] of warnings) {
+        lifecycleManager.emit("event", {
+          id: asEventId(`evt-${method}`),
+          kind: "notification",
+          provider: "codex",
+          createdAt: new Date().toISOString(),
+          method,
+          threadId: asThreadId("thread-1"),
+          payload: { threadId: "native-thread-1", message: `  ${message}\n` },
+        } satisfies ProviderEvent);
+      }
+
+      const events = Array.from(yield* Fiber.join(eventsFiber));
+      assert.deepEqual(
+        events.map((event) => event.type),
+        ["runtime.warning", "runtime.warning"],
+      );
+      for (const [index, event] of events.entries()) {
+        assert.equal(event.type, "runtime.warning");
+        if (event.type !== "runtime.warning") continue;
+        const message = warnings[index]![2];
+        assert.equal(event.payload.message, message);
+        assert.equal(JSON.stringify(event).includes("private-hook-warning-key"), false);
+        const [activity] = projectProviderRuntimeActivities(event);
+        assert.equal(activity?.kind, "runtime.warning");
+        assert.equal(activity?.tone, "info");
+        assert.deepEqual(activity?.payload, {
+          message,
+          detail: message,
+          nativeEventType: `codex.${warnings[index]![0]}`,
+          data: { threadId: "native-thread-1", message: `  ${message}\n` },
+        });
+      }
+    }),
+  );
+
   it.effect("maps Codex 0.144 reasoning summaries from canonical item arrays", () =>
     Effect.gen(function* () {
       const adapter = yield* CodexAdapter;
@@ -952,6 +1192,80 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
         assert.equal(events[1].payload.summaryIndex, 1);
         assert.deepEqual(events[1].raw?.payload, {});
       }
+    }),
+  );
+
+  it.effect("presents multi-agent v2 subAgentActivity items as named subagent spawns", () =>
+    Effect.gen(function* () {
+      const adapter = yield* CodexAdapter;
+      const eventsFiber = yield* Stream.runCollect(Stream.take(adapter.streamEvents, 2)).pipe(
+        Effect.forkChild,
+      );
+
+      lifecycleManager.emit("event", {
+        id: asEventId("evt-subagent-started"),
+        kind: "notification",
+        provider: "codex",
+        createdAt: new Date().toISOString(),
+        method: "item/completed",
+        threadId: asThreadId("thread-1"),
+        turnId: asTurnId("turn-1"),
+        itemId: asItemId("call_spawn_1"),
+        payload: {
+          item: {
+            type: "subAgentActivity",
+            model: "gpt-6-luna",
+            reasoningEffort: "low",
+            id: "call_spawn_1",
+            kind: "started",
+            agentThreadId: "01a12294-fb86-74a3-9a94-90713254495e",
+            agentPath: "/root/count_calc",
+          },
+        },
+      } satisfies ProviderEvent);
+      lifecycleManager.emit("event", {
+        id: asEventId("evt-subagent-completed"),
+        kind: "notification",
+        provider: "codex",
+        createdAt: new Date().toISOString(),
+        method: "item/completed",
+        threadId: asThreadId("thread-1"),
+        turnId: asTurnId("turn-1"),
+        itemId: asItemId("subagent-completed-1"),
+        payload: {
+          item: {
+            type: "subAgentActivity",
+            model: null,
+            reasoningEffort: null,
+            id: "subagent-completed-1",
+            kind: "completed",
+            agentThreadId: "01a12294-fb86-74a3-9a94-90713254495e",
+            agentPath: "/root/count_calc",
+          },
+        },
+      } satisfies ProviderEvent);
+
+      const [started, completed] = Array.from(yield* Fiber.join(eventsFiber));
+      assert.equal(started?.type, "item.completed");
+      if (started?.type !== "item.completed" || completed?.type !== "item.completed") {
+        return;
+      }
+      assert.equal(started.payload.itemType, "collab_agent_tool_call");
+      const startedItem = (started.payload.data as { item: Record<string, unknown> }).item;
+      assert.deepEqual(startedItem.receiverThreadIds, ["01a12294-fb86-74a3-9a94-90713254495e"]);
+      assert.deepEqual(startedItem.receiverAgents, [
+        {
+          threadId: "01a12294-fb86-74a3-9a94-90713254495e",
+          agentNickname: "count_calc",
+          model: "gpt-6-luna",
+          reasoningEffort: "low",
+        },
+      ]);
+      assert.equal(startedItem.tool, "spawnAgent");
+      const completedItem = (completed.payload.data as { item: Record<string, unknown> }).item;
+      assert.deepEqual(completedItem.agentsStates, {
+        "01a12294-fb86-74a3-9a94-90713254495e": { status: "completed" },
+      });
     }),
   );
 
@@ -1461,6 +1775,39 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
     }),
   );
 
+  it.effect("keeps the turn diff out of raw for turn/diff/updated", () =>
+    Effect.gen(function* () {
+      const adapter = yield* CodexAdapter;
+      const firstEventFiber = yield* Stream.runHead(adapter.streamEvents).pipe(Effect.forkChild);
+      const unifiedDiff = "diff --git a/a.ts b/a.ts\n--- a/a.ts\n+++ b/a.ts\n@@ -1 +1 @@\n-a\n+b\n";
+
+      lifecycleManager.emit("event", {
+        id: asEventId("evt-turn-diff"),
+        kind: "notification",
+        provider: "codex",
+        createdAt: new Date().toISOString(),
+        method: "turn/diff/updated",
+        threadId: asThreadId("thread-1"),
+        turnId: asTurnId("turn-1"),
+        payload: { threadId: "thread-1", turnId: "turn-1", diff: unifiedDiff },
+      } satisfies ProviderEvent);
+
+      const firstEvent = yield* Fiber.join(firstEventFiber);
+
+      assert.equal(firstEvent._tag, "Some");
+      if (firstEvent._tag !== "Some" || firstEvent.value.type !== "turn.diff.updated") {
+        assert.fail("expected turn.diff.updated");
+        return;
+      }
+      assert.equal(firstEvent.value.turnId, "turn-1");
+      assert.equal(firstEvent.value.payload.unifiedDiff, unifiedDiff);
+      assert.deepEqual(firstEvent.value.raw?.payload, {
+        unifiedDiffBytes: Buffer.byteLength(unifiedDiff, "utf8"),
+      });
+      assert.equal(firstEvent.value.raw?.method, "turn/diff/updated");
+    }),
+  );
+
   it.effect("maps session/closed lifecycle events to canonical session.exited runtime events", () =>
     Effect.gen(function* () {
       const adapter = yield* CodexAdapter;
@@ -1492,7 +1839,7 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
     }),
   );
 
-  it.effect("stamps untagged Codex events with the live session provider instance", () =>
+  it.effect("stamps untagged Codex events without synchronous session filesystem reads", () =>
     Effect.gen(function* () {
       const adapter = yield* CodexAdapter;
       lifecycleManager.sessionSnapshots = [
@@ -1507,16 +1854,27 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
         },
       ];
       const firstEventFiber = yield* Stream.runHead(adapter.streamEvents).pipe(Effect.forkChild);
-
-      lifecycleManager.emit("event", {
-        id: asEventId("evt-session-closed-work"),
-        kind: "session",
-        provider: "codex",
-        threadId: asThreadId("thread-1"),
-        createdAt: new Date().toISOString(),
-        method: "session/closed",
-        message: "Work session stopped",
-      } satisfies ProviderEvent);
+      const blockingRead = () => {
+        throw new Error("Synchronous session read on the stdout callback");
+      };
+      const listSpy = vi.spyOn(lifecycleManager, "listSessions").mockImplementation(blockingRead);
+      const optionsSpy = vi
+        .spyOn(lifecycleManager, "getSessionCodexOptions")
+        .mockImplementation(blockingRead);
+      try {
+        lifecycleManager.emit("event", {
+          id: asEventId("evt-session-closed-work"),
+          kind: "session",
+          provider: "codex",
+          threadId: asThreadId("thread-1"),
+          createdAt: new Date().toISOString(),
+          method: "session/closed",
+          message: "Work session stopped",
+        } satisfies ProviderEvent);
+      } finally {
+        listSpy.mockRestore();
+        optionsSpy.mockRestore();
+      }
       const firstEvent = yield* Fiber.join(firstEventFiber);
       lifecycleManager.sessionSnapshots = [];
 
@@ -1527,6 +1885,209 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
       assert.equal(firstEvent.value.type, "session.exited");
       assert.equal(firstEvent.value.providerInstanceId, "codex_work");
     }),
+  );
+
+  it.effect("fences unexpected inspection failures but preserves trusted manager closure", () =>
+    Effect.gen(function* () {
+      const adapter = yield* CodexAdapter;
+      const threadId = asThreadId("thread-inspection-error");
+      lifecycleManager.sessionSnapshots = [
+        {
+          provider: "codex",
+          providerInstanceId: "codex_work",
+          threadId,
+          status: "ready",
+          runtimeMode: "full-access",
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        },
+      ];
+      const inspection = vi
+        .spyOn(lifecycleManager, "inspectSessionAsync")
+        .mockRejectedValue(new Error("fixture unexpected error"));
+      const collected = yield* Stream.runHead(
+        adapter.streamEvents.pipe(Stream.filter((event) => event.threadId === threadId)),
+      ).pipe(Effect.forkChild);
+      try {
+        for (const index of [0, 1])
+          lifecycleManager.emit("event", {
+            id: asEventId(`inspection-error-${index}`),
+            provider: "codex",
+            kind: "notification",
+            threadId,
+            method: "item/agentMessage/delta",
+            createdAt: new Date().toISOString(),
+            payload: { itemId: "inspection-error-assistant", delta: "rejected" },
+          } satisfies ProviderEvent);
+        lifecycleManager.emit("event", {
+          id: asEventId("inspection-error-closed"),
+          provider: "codex",
+          kind: "session",
+          threadId,
+          method: "session/closed",
+          createdAt: new Date().toISOString(),
+          message: "Session stopped",
+        } satisfies ProviderEvent);
+        const result = yield* Fiber.join(collected);
+        assert.equal(result._tag, "Some");
+        if (result._tag === "Some") assert.equal(result.value.type, "session.exited");
+        assert.equal(lifecycleManager.getSessionEventOrigin(threadId).isAuthRejected(), true);
+      } finally {
+        inspection.mockRestore();
+        lifecycleManager.sessionSnapshots = [];
+      }
+    }),
+  );
+
+  it.effect(
+    "publishes 3000 ordered deltas with slow coalesced auth checks without delta loss",
+    () =>
+      Effect.gen(function* () {
+        const adapter = yield* CodexAdapter;
+        const threadId = asThreadId("thread-throughput");
+        lifecycleManager.sessionSnapshots = [
+          {
+            provider: "codex",
+            providerInstanceId: "codex_work",
+            threadId,
+            status: "ready",
+            runtimeMode: "full-access",
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+          },
+        ];
+        const original = lifecycleManager.inspectSessionAsync.bind(lifecycleManager);
+        const releases: Array<() => void> = [];
+        let active = 0;
+        let maxActive = 0;
+        const inspection = vi
+          .spyOn(lifecycleManager, "inspectSessionAsync")
+          .mockImplementation(async (id) => {
+            if (id !== threadId) return original(id);
+            active++;
+            maxActive = Math.max(maxActive, active);
+            await new Promise<void>((resolve) => releases.push(resolve));
+            active--;
+            return original(id);
+          });
+        const firstBatch = yield* Deferred.make<void>();
+        const secondBatch = yield* Deferred.make<void>();
+        const deltas: string[] = [];
+        const collected = yield* Stream.runDrain(
+          adapter.streamEvents.pipe(
+            Stream.filter((event) => event.threadId === threadId && event.type === "content.delta"),
+            Stream.take(3000),
+            Stream.tap((event) =>
+              Effect.gen(function* () {
+                if (event.type === "content.delta") deltas.push(event.payload.delta);
+                if (deltas.length === 500) yield* Deferred.succeed(firstBatch, undefined);
+                if (deltas.length === 1900) yield* Deferred.succeed(secondBatch, undefined);
+              }),
+            ),
+          ),
+        ).pipe(Effect.forkChild);
+        const emit = (from: number, count: number) => {
+          for (let index = from; index < from + count; index++)
+            lifecycleManager.emit("event", {
+              id: asEventId(`throughput-${index}`),
+              provider: "codex",
+              kind: "notification",
+              threadId,
+              method: "item/agentMessage/delta",
+              createdAt: new Date().toISOString(),
+              payload: { itemId: "throughput-assistant", delta: `${index},` },
+            } satisfies ProviderEvent);
+        };
+        try {
+          emit(0, 500);
+          yield* Effect.promise(() => new Promise<void>((resolve) => setImmediate(resolve)));
+          assert.equal(releases.length, 1);
+          emit(500, 1400);
+          assert.equal(releases.length, 1);
+          releases[0]!();
+          yield* Deferred.await(firstBatch);
+          assert.equal(releases.length, 2);
+          releases[1]!();
+          yield* Deferred.await(secondBatch);
+          emit(1900, 1100);
+          yield* Effect.promise(() => new Promise<void>((resolve) => setImmediate(resolve)));
+          assert.equal(releases.length, 3);
+          releases[2]!();
+          yield* Fiber.join(collected);
+          assert.deepEqual(
+            deltas,
+            Array.from({ length: 3000 }, (_, index) => `${index},`),
+          );
+          assert.equal(maxActive, 1);
+        } finally {
+          for (const release of releases) release();
+          inspection.mockRestore();
+          lifecycleManager.sessionSnapshots = [];
+        }
+      }),
+  );
+
+  it.effect(
+    "retains origin identity and compact terminal events while auth inspection is pending",
+    () =>
+      Effect.gen(function* () {
+        const adapter = yield* CodexAdapter;
+        lifecycleManager.sessionSnapshots = [
+          {
+            provider: "codex",
+            providerInstanceId: "codex_work",
+            status: "ready",
+            runtimeMode: "full-access",
+            threadId: asThreadId("thread-1"),
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+          },
+        ];
+        let release!: () => void;
+        const gate = new Promise<void>((resolve) => {
+          release = resolve;
+        });
+        const inspection = vi
+          .spyOn(lifecycleManager, "inspectSessionAsync")
+          .mockImplementation(async () => {
+            await gate;
+            return undefined;
+          });
+        const collected = yield* Stream.runCollect(adapter.streamEvents.pipe(Stream.take(3))).pipe(
+          Effect.forkChild,
+        );
+        try {
+          for (let i = 0; i < 3; i++)
+            lifecycleManager.emit("event", {
+              id: asEventId(`terminal-${i}`),
+              kind: "notification",
+              provider: "codex",
+              threadId: asThreadId("thread-1"),
+              lifecycleGeneration: "original-generation",
+              createdAt: new Date().toISOString(),
+              method: "turn/completed",
+              turnId: asTurnId(`turn-${i}`),
+              payload: {
+                turn: { id: `turn-${i}`, status: "completed" },
+                diagnostic: "x".repeat(12 * 1024 * 1024),
+              },
+            } satisfies ProviderEvent);
+          lifecycleManager.sessionSnapshots = [];
+          release();
+          const events = yield* Fiber.join(collected);
+          assert.equal(events.length, 3);
+          for (const event of events) {
+            assert.equal(event.type, "turn.completed");
+            assert.equal(event.providerInstanceId, "codex_work");
+            assert.equal(event.lifecycleGeneration, "original-generation");
+            assert.ok(JSON.stringify(event).length < 512 * 1024);
+          }
+        } finally {
+          release();
+          inspection.mockRestore();
+          lifecycleManager.sessionSnapshots = [];
+        }
+      }),
   );
 
   it.effect("maps retryable Codex error notifications to runtime.warning", () =>
@@ -1562,6 +2123,37 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
       }
       assert.equal(firstEvent.value.turnId, "turn-1");
       assert.equal(firstEvent.value.payload.message, "Reconnecting... 2/5");
+      assert.equal(firstEvent.value.payload.willRetry, true);
+    }),
+  );
+
+  it.effect("preserves overload identity on definitive Codex errors and failed completions", () =>
+    Effect.gen(function* () {
+      const adapter = yield* CodexAdapter;
+      for (const method of ["error", "turn/completed"]) {
+        const eventFiber = yield* Stream.runHead(adapter.streamEvents).pipe(Effect.forkChild);
+        const error = { message: "Temporarily unavailable", codexErrorInfo: "serverOverloaded" };
+        lifecycleManager.emit("event", {
+          id: asEventId(`evt-overloaded-${method}`),
+          kind: "notification",
+          provider: "codex",
+          threadId: asThreadId("thread-1"),
+          turnId: asTurnId("turn-1"),
+          createdAt: new Date().toISOString(),
+          method,
+          payload:
+            method === "error"
+              ? { error, willRetry: false }
+              : { turn: { id: "turn-1", status: "failed", error } },
+        } satisfies ProviderEvent);
+        const event = yield* Fiber.join(eventFiber);
+        assert.equal(event._tag, "Some");
+        if (event._tag !== "Some") continue;
+        assert.equal(event.value.type, method === "error" ? "runtime.error" : "turn.completed");
+        if (event.value.type === "runtime.error" || event.value.type === "turn.completed") {
+          assert.equal(event.value.payload.errorCode, "server_overloaded");
+        }
+      }
     }),
   );
 
@@ -2372,10 +2964,10 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
       }),
   );
 
-  it.effect("keeps routine Codex startup notifications out of the activity stream", () =>
+  it.effect("keeps routine Codex notifications out of the activity stream", () =>
     Effect.gen(function* () {
       const adapter = yield* CodexAdapter;
-      const eventsFiber = yield* Stream.take(adapter.streamEvents, 3).pipe(
+      const eventsFiber = yield* Stream.take(adapter.streamEvents, 4).pipe(
         Stream.runCollect,
         Effect.forkChild,
       );
@@ -2394,18 +2986,21 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
       emit("remoteControl/status/changed");
       emit("skills/changed");
       emit("session/threadOpenRequested", "session");
+      emit("turn/moderationMetadata");
+      emit("turn/moderationMetadata");
       // Real errors and useful unknown events must survive the filter.
       emit("session/threadOpenRequested", "error");
+      emit("turn/moderationMetadata", "error");
       emit("item/future/completed");
       emit("session/started", "session");
 
       const events = Array.from(yield* Fiber.join(eventsFiber));
       assert.deepEqual(
         events.map((event) => event.type),
-        ["runtime.error", "event.unmapped", "session.started"],
+        ["runtime.error", "runtime.error", "event.unmapped", "session.started"],
       );
       assert.equal(
-        events[1]?.type === "event.unmapped" ? events[1].payload.nativeType : undefined,
+        events[2]?.type === "event.unmapped" ? events[2].payload.nativeType : undefined,
         "item/future/completed",
       );
     }),

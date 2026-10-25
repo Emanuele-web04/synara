@@ -1,9 +1,12 @@
 // FILE: ComposerSubagentStrip.logic.ts
-// Purpose: Derives the subagent rows shown in the composer strip from enriched work
-// log entries, mirroring the active-task-list scoping (live turn wins; a prior set
-// stays visible only while some subagent is still working).
-// Layer: Chat composer logic
-// Exports: deriveComposerSubagentStripItems and the strip row types
+// Purpose: Derives subagent rows (identity, status, task-control handle) from
+// enriched work log entries. The thread-level set mirrors the active-task-list
+// scoping (live turn wins; a prior set stays only while some subagent still
+// works) and drives Stop all, Ctrl+B and the "N running" chip; the transcript
+// card builds its rows from the same row items.
+// Layer: Chat logic
+// Exports: deriveComposerSubagentStripItems, toSubagentStripItem,
+// mergeSubagentSnapshots, and the row types
 
 import { ThreadId, type TurnId } from "@synara/contracts";
 
@@ -54,7 +57,10 @@ function subagentKey(subagent: WorkLogSubagent): string {
 
 // Later snapshots carry the freshest status, but may omit identity fields the spawn
 // snapshot had; keep identity via fallback while taking the status fields verbatim.
-function mergeSubagentSnapshots(previous: WorkLogSubagent, next: WorkLogSubagent): WorkLogSubagent {
+export function mergeSubagentSnapshots(
+  previous: WorkLogSubagent,
+  next: WorkLogSubagent,
+): WorkLogSubagent {
   return {
     threadId: next.threadId ?? previous.threadId,
     providerThreadId: next.providerThreadId ?? previous.providerThreadId,
@@ -74,24 +80,39 @@ function mergeSubagentSnapshots(previous: WorkLogSubagent, next: WorkLogSubagent
   };
 }
 
-function toStripItem(
+// A row may exist before the Agent tool description streams in; until then it
+// reads as starting, and settles on a neutral label (never the raw provider id).
+function anonymousSubagentLabel(statusKind: SubagentStatusKind | null): string {
+  switch (statusKind) {
+    case "completed":
+    case "failed":
+    case "stopped":
+    case "idle":
+      return "Subagent";
+    default:
+      return "Starting subagent…";
+  }
+}
+
+export function toSubagentStripItem(
   key: string,
   subagent: WorkLogSubagent,
   backgroundedThreadIds: ReadonlySet<string>,
   viewedThreadId: ThreadId | null,
 ): ComposerSubagentStripItem {
-  const presentation = resolveSubagentPresentation({
-    nickname: subagent.nickname,
-    role: subagent.role,
-    title: subagent.title,
-    fallbackId: subagent.threadId,
-  });
   const statusLabel =
     subagent.statusLabel ?? humanizeSubagentStatus(subagent.rawStatus, subagent.isActive);
   const statusKind = normalizeSubagentStatusKind(
     statusLabel ?? subagent.rawStatus,
     subagent.isActive,
   );
+  const presentation = resolveSubagentPresentation({
+    nickname: subagent.nickname,
+    role: subagent.role,
+    title: subagent.title,
+    fallbackId: subagent.threadId,
+    placeholderLabel: anonymousSubagentLabel(statusKind),
+  });
   const modelLabel = formatSubagentModelLabel(subagent.model);
   const threadId = ThreadId.makeUnsafe(subagent.resolvedThreadId ?? subagent.threadId);
 
@@ -113,14 +134,16 @@ function toStripItem(
     isViewed: viewedThreadId !== null && threadId === viewedThreadId,
     // Confirmed patches key by the Task tool_use_id — the same handle the
     // background command dispatches with — which can differ from the row key.
+    accentColor: presentation.accentColor,
     isBackground:
       subagent.background === true ||
       backgroundedThreadIds.has(subagent.providerThreadId ?? subagent.threadId),
-    accentColor: presentation.accentColor,
   };
 }
 
-function collectStripItems(
+// One row per subagent across every entry, without the live-turn scoping the strip
+// applies; the Environment panel roster lists the full history from this.
+export function collectSubagentStripItems(
   entries: ReadonlyArray<WorkLogEntry>,
   backgroundedThreadIds: ReadonlySet<string>,
   viewedThreadId: ThreadId | null,
@@ -134,7 +157,7 @@ function collectStripItems(
     }
   }
   return [...subagentByKey.entries()].map(([key, subagent]) =>
-    toStripItem(key, subagent, backgroundedThreadIds, viewedThreadId),
+    toSubagentStripItem(key, subagent, backgroundedThreadIds, viewedThreadId),
   );
 }
 
@@ -156,12 +179,18 @@ export function collectForegroundRunningSubagentStripItems(
 }
 
 const NO_BACKGROUNDED_THREAD_IDS: ReadonlySet<string> = new Set();
+// One shared empty result keeps memoized consumers (and the Ctrl+B handler built
+// from it) stable on the common no-subagent path, where every flush re-derives.
+const NO_STRIP_ROWS: ReadonlyArray<ComposerSubagentStripRow> = Object.freeze([]);
 
 function withParentRow(
   items: ComposerSubagentStripItem[],
   parentRow: { threadId: ThreadId; label: string | null } | null | undefined,
-): ComposerSubagentStripRow[] {
-  if (items.length === 0 || !parentRow) {
+): ReadonlyArray<ComposerSubagentStripRow> {
+  if (items.length === 0) {
+    return NO_STRIP_ROWS;
+  }
+  if (!parentRow) {
     return items;
   }
   return [
@@ -184,12 +213,12 @@ export function deriveComposerSubagentStripItems(input: {
   viewedThreadId?: ThreadId | null;
   // Present while a subagent thread is open: prepends a row back to the parent.
   parentRow?: { threadId: ThreadId; label: string | null } | null;
-}): ComposerSubagentStripRow[] {
+}): ReadonlyArray<ComposerSubagentStripRow> {
   const entriesWithSubagents = input.workEntries.filter(
     (entry) => (entry.subagents?.length ?? 0) > 0,
   );
   if (entriesWithSubagents.length === 0) {
-    return [];
+    return NO_STRIP_ROWS;
   }
 
   const backgroundedThreadIds = input.backgroundedProviderThreadIds ?? NO_BACKGROUNDED_THREAD_IDS;
@@ -199,11 +228,11 @@ export function deriveComposerSubagentStripItems(input: {
     : [];
   if (liveTurnEntries.length > 0) {
     const liveTurnProviderThreadIds = new Set(
-      collectStripItems(liveTurnEntries, backgroundedThreadIds, viewedThreadId).map(
+      collectSubagentStripItems(liveTurnEntries, backgroundedThreadIds, viewedThreadId).map(
         (item) => item.providerThreadId,
       ),
     );
-    const visibleItems = collectStripItems(
+    const visibleItems = collectSubagentStripItems(
       entriesWithSubagents,
       backgroundedThreadIds,
       viewedThreadId,
@@ -218,8 +247,12 @@ export function deriveComposerSubagentStripItems(input: {
 
   // No subagents spawned by the live turn: keep the latest known set visible only
   // while some subagent is still running or queued, then let the strip retire.
-  const items = collectStripItems(entriesWithSubagents, backgroundedThreadIds, viewedThreadId);
+  const items = collectSubagentStripItems(
+    entriesWithSubagents,
+    backgroundedThreadIds,
+    viewedThreadId,
+  );
   return items.some((item) => item.statusKind === "running" || item.statusKind === "queued")
     ? withParentRow(items, input.parentRow)
-    : [];
+    : NO_STRIP_ROWS;
 }

@@ -1,15 +1,16 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  buildProjectThreadTree,
   derivePinnedProjectIdsForSidebar,
   derivePinnedThreadIdsForSidebar,
   deriveSidebarProjectData,
   describeAddProjectError,
   excludeHiddenProjectAgentCoordinatorThreads,
+  filterSidebarThreadsBySpace,
   findDeepestWorkspaceRootMatch,
   findWorkspaceRootMatch,
   getFallbackThreadIdAfterDelete,
+  getSidebarThreadSortKey,
   getVisibleSidebarEntriesForPreview,
   pullRequestRepositoryConfigFingerprint,
   getPinnedThreadsForSidebar,
@@ -21,13 +22,16 @@ import {
   isProjectsSidebarSurface,
   getUnpinnedThreadsForSidebar,
   hasUnseenCompletion,
+  canSnoozeSidebarThread,
   partitionSidebarThreadsByProjectIds,
   normalizeSidebarView,
   isLatestPinnedThreadMutation,
   isLoopbackHostname,
   isHiddenProjectAgentCoordinatorThread,
+  mayBelongToGroup,
   pruneProjectThreadListPagingForCollapsedProjects,
   recoverExistingAddProjectTarget,
+  resolveAutomationCountBadge,
   runExclusiveProjectAddition,
   runProjectProvisionWithCancellationRecovery,
   resolvePullRequestReviewBadge,
@@ -37,6 +41,7 @@ import {
   resolveProjectEmptyState,
   resolveSettingsBackTarget,
   resolveProjectStatusIndicator,
+  resolveSidebarRootThreadId,
   resolveSidebarNewThreadEnvMode,
   resolveSidebarProjectRowLabel,
   resolveThreadHoverCardMetadata,
@@ -49,7 +54,8 @@ import {
   sortProjectsForSidebar,
   sortThreadsForSidebar,
 } from "./Sidebar.logic";
-import { ProjectId, ThreadId } from "@synara/contracts";
+import { ProjectId, SpaceId, ThreadId } from "@synara/contracts";
+import { buildActivityViewModel } from "./SidebarActivityView.logic";
 import {
   DEFAULT_INTERACTION_MODE,
   DEFAULT_RUNTIME_MODE,
@@ -96,6 +102,59 @@ describe("isProjectsSidebarSurface", () => {
   });
 });
 
+describe("sidebar Space thread lists", () => {
+  it("scopes pins and snoozed projects to the selected Space while keeping chats global", () => {
+    const spaceA = SpaceId.makeUnsafe("space-a");
+    const spaceB = SpaceId.makeUnsafe("space-b");
+    const projects = [
+      makeProject({ id: ProjectId.makeUnsafe("project-a"), spaceId: spaceA }),
+      makeProject({ id: ProjectId.makeUnsafe("project-b"), spaceId: spaceB }),
+      makeProject({ id: ProjectId.makeUnsafe("project-void"), spaceId: null }),
+      makeProject({ id: ProjectId.makeUnsafe("chat"), kind: "chat" }),
+    ];
+    const projectById = new Map(projects.map((project) => [project.id, project]));
+    const threads = projects.map((project) =>
+      makeSidebarThreadSummary({
+        id: ThreadId.makeUnsafe(`thread-${project.id}`),
+        projectId: project.id,
+        snoozedUntil:
+          project.kind === "chat" ? "2026-10-03T10:00:00.000Z" : "2026-10-03T09:00:00.000Z",
+      }),
+    );
+    const pinnedThreadIds = threads.map((thread) => thread.id);
+    const paths = {
+      homeDir: null,
+      chatWorkspaceRoot: null,
+      studioWorkspaceRoot: null,
+      groupsWorkspaceRoot: null,
+    };
+
+    for (const [spaceId, projectId] of [
+      [spaceA, projects[0]!.id],
+      [spaceB, projects[1]!.id],
+      [null, projects[2]!.id],
+    ] as const) {
+      const expected = [`thread-${projectId}`, "thread-chat"];
+      const snoozed = buildActivityViewModel({
+        threads: filterSidebarThreadsBySpace({ threads, projectById, spaceId, paths }),
+        pinnedThreadIdSet: new Set(pinnedThreadIds),
+      });
+      expect(snoozed.snoozed.map((thread) => thread.id)).toEqual(expected);
+      expect(snoozed.pinned).toEqual([]);
+      const pins = getPinnedThreadsForSidebar(
+        filterSidebarThreadsBySpace({
+          threads: threads.map((thread) => Object.assign({}, thread, { snoozedUntil: null })),
+          projectById,
+          spaceId,
+          paths,
+        }),
+        pinnedThreadIds,
+      );
+      expect(pins.map((thread) => thread.id)).toEqual(expected);
+    }
+  });
+});
+
 describe("resolvePullRequestReviewBadge", () => {
   it("distinguishes complete, partial, and unavailable review counts", () => {
     expect(resolvePullRequestReviewBadge({ count: 3, incomplete: false })).toEqual({
@@ -112,6 +171,18 @@ describe("resolvePullRequestReviewBadge", () => {
     expect(resolvePullRequestReviewBadge({ count: 1, incomplete: false })?.accessibleLabel).toBe(
       "1 pull request is waiting for your review",
     );
+  });
+});
+
+describe("resolveAutomationCountBadge", () => {
+  it("counts configured automations and hides the badge at zero or before load", () => {
+    expect(resolveAutomationCountBadge(undefined)).toBeNull();
+    expect(resolveAutomationCountBadge(0)).toBeNull();
+    expect(resolveAutomationCountBadge(2)).toEqual({
+      text: "2",
+      accessibleLabel: "2 automations",
+    });
+    expect(resolveAutomationCountBadge(1)?.accessibleLabel).toBe("1 automation");
   });
 });
 
@@ -791,25 +862,14 @@ describe("pin helpers", () => {
     ).toEqual([threads[2], threads[0]]);
   });
 
-  it("keeps a pinned parent in project lists so its children stay reachable and nested", () => {
-    const threads = [
-      makeThread("thread-1"),
-      {
-        ...makeThread("child-1"),
-        parentThreadId: "thread-1" as ThreadId,
-      },
-      makeThread("thread-2"),
-    ];
+  it("hides pinned threads from project lists", () => {
+    const threads = [makeThread("thread-1"), makeThread("thread-2"), makeThread("thread-3")];
 
-    // Pinning the parent must not hide child-1 entirely (buildProjectThreadTree
-    // hides children with missing parents); the parent stays in the tree,
-    // children render under it.
-    expect(getUnpinnedThreadsForSidebar(threads, ["thread-1" as ThreadId])).toEqual(threads);
-    // Childless pinned threads are still hidden from project lists.
     expect(getUnpinnedThreadsForSidebar(threads, ["thread-2" as ThreadId])).toEqual([
       threads[0],
-      threads[1],
+      threads[2],
     ]);
+    expect(getUnpinnedThreadsForSidebar(threads, [])).toEqual(threads);
   });
 
   it("lets an optimistic unpin override server and persisted pinned state", () => {
@@ -938,6 +998,32 @@ describe("resolveThreadStatusTrailingIndicator", () => {
 });
 
 describe("resolveThreadStatusPill", () => {
+  it("shows worktree preparation before there is a provider session or turn", () => {
+    const thread = {
+      interactionMode: "default" as const,
+      latestTurn: null,
+      lastVisitedAt: undefined,
+      session: null,
+      updatedAt: "2026-10-01T10:00:00.000Z",
+    };
+    expect(
+      resolveThreadStatusPill({
+        thread,
+        hasPendingApprovals: false,
+        hasPendingUserInput: false,
+        isPreparingWorktree: true,
+      }),
+    ).toMatchObject({ label: "Preparing worktree", pulse: true, dismissible: false });
+    expect(
+      resolveThreadStatusPill({
+        thread,
+        hasPendingApprovals: false,
+        hasPendingUserInput: false,
+        isPreparingWorktree: false,
+      }),
+    ).toBeNull();
+  });
+
   const baseThread = {
     interactionMode: "plan" as const,
     latestTurn: null,
@@ -1023,6 +1109,7 @@ describe("resolveThreadStatusPill", () => {
       label: "In Background",
       pulse: false,
       colorClass: "text-sky-600 dark:text-sky-300/80",
+      backgroundTaskCount: 2,
     });
   });
 
@@ -1182,119 +1269,36 @@ describe("resolveProjectStatusIndicator", () => {
   });
 });
 
-describe("buildProjectThreadTree", () => {
-  it("keeps inactive child threads out of the sidebar", () => {
-    const rows = buildProjectThreadTree({
-      threads: [
-        makeThread({
-          id: ThreadId.makeUnsafe("thread-parent"),
-          createdAt: "2026-03-09T10:02:00.000Z",
-        }),
-        makeThread({
-          id: ThreadId.makeUnsafe("thread-child"),
-          parentThreadId: ThreadId.makeUnsafe("thread-parent"),
-          createdAt: "2026-03-09T10:01:00.000Z",
-        }),
-      ],
-    });
-
-    expect(rows).toEqual([
-      expect.objectContaining({
-        thread: expect.objectContaining({ id: ThreadId.makeUnsafe("thread-parent") }),
-        depth: 0,
-      }),
-    ]);
-  });
-
-  it("hides subagent subtrees whose parent is not in the list", () => {
-    // Regression: archiving (or deleting) a parent removes it from the sidebar
-    // list; its subagent children must stay hidden instead of surfacing as
-    // top-level rows (#488).
-    const rows = buildProjectThreadTree({
-      threads: [
-        makeThread({
-          id: ThreadId.makeUnsafe("thread-other"),
-          createdAt: "2026-03-09T10:03:00.000Z",
-        }),
-        makeThread({
-          id: ThreadId.makeUnsafe("thread-child"),
-          parentThreadId: ThreadId.makeUnsafe("thread-archived-parent"),
-          createdAt: "2026-03-09T10:02:00.000Z",
-        }),
-        makeThread({
-          id: ThreadId.makeUnsafe("thread-grandchild"),
-          parentThreadId: ThreadId.makeUnsafe("thread-child"),
-          createdAt: "2026-03-09T10:01:00.000Z",
-        }),
-      ],
-    });
-
-    expect(rows).toEqual([
-      expect.objectContaining({
-        thread: expect.objectContaining({ id: ThreadId.makeUnsafe("thread-other") }),
-        depth: 0,
-      }),
-    ]);
-  });
-
-  it("reveals the active child thread and its ancestors", () => {
-    const rows = buildProjectThreadTree({
-      threads: [
-        makeThread({
-          id: ThreadId.makeUnsafe("thread-parent"),
-          createdAt: "2026-03-09T10:03:00.000Z",
-        }),
-        makeThread({
-          id: ThreadId.makeUnsafe("thread-child"),
-          parentThreadId: ThreadId.makeUnsafe("thread-parent"),
-          createdAt: "2026-03-09T10:02:00.000Z",
-        }),
-        makeThread({
-          id: ThreadId.makeUnsafe("thread-grandchild"),
-          parentThreadId: ThreadId.makeUnsafe("thread-child"),
-          createdAt: "2026-03-09T10:01:00.000Z",
-        }),
-      ],
-      forceVisibleThreadId: ThreadId.makeUnsafe("thread-grandchild"),
-    });
-
-    expect(rows.map((row) => [row.thread.id, row.depth])).toEqual([
-      [ThreadId.makeUnsafe("thread-parent"), 0],
-      [ThreadId.makeUnsafe("thread-child"), 1],
-      [ThreadId.makeUnsafe("thread-grandchild"), 2],
-    ]);
-  });
-});
-
 describe("getVisibleSidebarEntriesForPreview", () => {
-  it("caps preview by rendered rows, not root-thread count", () => {
+  const entries = ["thread-1", "thread-2", "thread-3", "thread-4"].map((id) => ({
+    rowId: ThreadId.makeUnsafe(id),
+  }));
+
+  it("caps the preview at the limit", () => {
     const result = getVisibleSidebarEntriesForPreview({
-      entries: [
-        {
-          rowId: ThreadId.makeUnsafe("thread-parent"),
-          rootRowId: ThreadId.makeUnsafe("thread-parent"),
-        },
-        {
-          rowId: ThreadId.makeUnsafe("thread-child"),
-          rootRowId: ThreadId.makeUnsafe("thread-parent"),
-        },
-        {
-          rowId: ThreadId.makeUnsafe("thread-second-root"),
-          rootRowId: ThreadId.makeUnsafe("thread-second-root"),
-        },
-        {
-          rowId: ThreadId.makeUnsafe("thread-third-root"),
-          rootRowId: ThreadId.makeUnsafe("thread-third-root"),
-        },
-      ],
+      entries,
       activeEntryId: undefined,
       previewLimit: 2,
     });
 
     expect(result.hasHiddenEntries).toBe(true);
     expect(result.visibleEntries.map((entry) => entry.rowId)).toEqual([
-      ThreadId.makeUnsafe("thread-parent"),
-      ThreadId.makeUnsafe("thread-child"),
+      ThreadId.makeUnsafe("thread-1"),
+      ThreadId.makeUnsafe("thread-2"),
+    ]);
+  });
+
+  it("keeps the open row visible past the limit", () => {
+    const result = getVisibleSidebarEntriesForPreview({
+      entries,
+      activeEntryId: ThreadId.makeUnsafe("thread-4"),
+      previewLimit: 2,
+    });
+
+    expect(result.visibleEntries.map((entry) => entry.rowId)).toEqual([
+      ThreadId.makeUnsafe("thread-1"),
+      ThreadId.makeUnsafe("thread-2"),
+      ThreadId.makeUnsafe("thread-4"),
     ]);
   });
 });
@@ -1457,7 +1461,207 @@ describe("normalizeSidebarView", () => {
   });
 });
 
+describe("canSnoozeSidebarThread", () => {
+  const hubId = ProjectId.makeUnsafe("hub");
+  const otherHubId = ProjectId.makeUnsafe("other-hub");
+  const repoId = ProjectId.makeUnsafe("repo");
+  const worker = makeSidebarThreadSummary({ id: ThreadId.makeUnsafe("worker"), projectId: repoId });
+  const ordinary = makeSidebarThreadSummary({
+    id: ThreadId.makeUnsafe("ordinary"),
+    projectId: repoId,
+  });
+  const coordinator = makeSidebarThreadSummary({
+    id: ThreadId.makeUnsafe("coordinator"),
+    projectId: hubId,
+  });
+  const input = {
+    groupProjectIds: new Set([hubId, otherHubId]),
+    summariesByProjectId: new Map([
+      [hubId, { memberThreadIds: [coordinator.id] }],
+      [otherHubId, { memberThreadIds: [worker.id] }],
+    ]),
+    coordinatorThreadIds: new Set<string>([coordinator.id]),
+    membersLoaded: true,
+  };
+
+  it("offers snooze for an ordinary chat, even in a repository a hub links", () => {
+    expect(canSnoozeSidebarThread({ ...input, thread: ordinary })).toBe(true);
+  });
+
+  it("withholds snooze from every chat while hubs exist and their member lists have not loaded", () => {
+    // Cold start: the hub rows arrived through the stream, so they carry no member list yet.
+    const loading = {
+      ...input,
+      summariesByProjectId: new Map([
+        [hubId, {}],
+        [otherHubId, {}],
+      ]),
+      membersLoaded: false,
+    };
+    expect(canSnoozeSidebarThread({ ...loading, thread: ordinary })).toBe(false);
+    expect(canSnoozeSidebarThread({ ...loading, thread: worker })).toBe(false);
+  });
+
+  it("offers snooze before the member lists load when the workspace has no hubs", () => {
+    expect(
+      canSnoozeSidebarThread({
+        ...input,
+        thread: ordinary,
+        groupProjectIds: new Set(),
+        summariesByProjectId: new Map(),
+        membersLoaded: false,
+      }),
+    ).toBe(true);
+  });
+
+  it("withholds snooze from the coordinator and from a hub worker in a linked repository", () => {
+    expect(canSnoozeSidebarThread({ ...input, thread: coordinator })).toBe(false);
+    expect(canSnoozeSidebarThread({ ...input, thread: worker })).toBe(false);
+  });
+
+  it("withholds snooze from a coordinator's new worker that no member list names yet", () => {
+    // It appears before its Hub index row, and a closed Hub never sends that row here.
+    const newWorker = makeSidebarThreadSummary({
+      id: ThreadId.makeUnsafe("new-worker"),
+      projectId: repoId,
+      creationSource: "synara_mcp",
+      sourceThreadId: coordinator.id,
+    });
+    expect(canSnoozeSidebarThread({ ...input, thread: newWorker })).toBe(false);
+  });
+
+  it("offers snooze for a chat that another chat's agent created in a linked repository", () => {
+    const spawned = makeSidebarThreadSummary({
+      id: ThreadId.makeUnsafe("spawned"),
+      projectId: repoId,
+      creationSource: "synara_mcp",
+      sourceThreadId: ordinary.id,
+    });
+    expect(canSnoozeSidebarThread({ ...input, thread: spawned })).toBe(true);
+  });
+
+  it("withholds snooze from chats in the hub's own project and from subagents", () => {
+    const hubChat = makeSidebarThreadSummary({
+      id: ThreadId.makeUnsafe("hub-chat"),
+      projectId: hubId,
+    });
+    const child = makeSidebarThreadSummary({
+      id: ThreadId.makeUnsafe("child"),
+      projectId: repoId,
+      parentThreadId: ordinary.id,
+    });
+    expect(canSnoozeSidebarThread({ ...input, thread: hubChat })).toBe(false);
+    expect(canSnoozeSidebarThread({ ...input, thread: child })).toBe(false);
+  });
+});
+
+describe("mayBelongToGroup", () => {
+  const hubId = ProjectId.makeUnsafe("hub");
+  const repoId = ProjectId.makeUnsafe("repo");
+  const workerId = ThreadId.makeUnsafe("worker");
+  const ordinaryId = ThreadId.makeUnsafe("ordinary");
+  const coordinatorId = ThreadId.makeUnsafe("coordinator");
+  const newWorkerId = ThreadId.makeUnsafe("new-worker");
+  const loaded = {
+    projectId: repoId,
+    creationSource: null,
+    sourceThreadId: null,
+    groupProjectIds: new Set([hubId]),
+    summariesByProjectId: new Map([[hubId, { memberThreadIds: [coordinatorId, workerId] }]]),
+    coordinatorThreadIds: new Set<string>([coordinatorId]),
+    membersLoaded: true,
+  };
+
+  it("tells a hub worker in a linked repository from an ordinary chat once members are known", () => {
+    expect(mayBelongToGroup({ ...loaded, threadId: workerId })).toBe(true);
+    expect(mayBelongToGroup({ ...loaded, threadId: ordinaryId })).toBe(false);
+  });
+
+  it("treats every chat as a possible member until the hub member lists load", () => {
+    const loading = {
+      ...loaded,
+      summariesByProjectId: new Map([[hubId, {}]]),
+      membersLoaded: false,
+    };
+    expect(mayBelongToGroup({ ...loading, threadId: ordinaryId })).toBe(true);
+    expect(mayBelongToGroup({ ...loading, threadId: workerId })).toBe(true);
+  });
+
+  it("treats a coordinator's new worker as a member before any member list names it", () => {
+    expect(
+      mayBelongToGroup({
+        ...loaded,
+        threadId: newWorkerId,
+        creationSource: "synara_mcp",
+        sourceThreadId: coordinatorId,
+      }),
+    ).toBe(true);
+  });
+
+  it("reads worker provenance the way the server does", () => {
+    // Another chat's agent made this one, or the coordinator's provider made a subagent.
+    expect(
+      mayBelongToGroup({
+        ...loaded,
+        threadId: newWorkerId,
+        creationSource: "synara_mcp",
+        sourceThreadId: ordinaryId,
+      }),
+    ).toBe(false);
+    expect(
+      mayBelongToGroup({
+        ...loaded,
+        threadId: newWorkerId,
+        creationSource: "provider_native",
+        sourceThreadId: coordinatorId,
+      }),
+    ).toBe(false);
+  });
+
+  it("needs no member lists in a workspace without hubs", () => {
+    expect(
+      mayBelongToGroup({
+        ...loaded,
+        threadId: ordinaryId,
+        groupProjectIds: new Set(),
+        summariesByProjectId: new Map(),
+        membersLoaded: false,
+      }),
+    ).toBe(false);
+  });
+});
+
 describe("partitionSidebarThreadsByProjectIds", () => {
+  it("keeps linked-repository hub workers out of Home restore candidates", () => {
+    const hubId = ProjectId.makeUnsafe("hub");
+    const repoId = ProjectId.makeUnsafe("repo");
+    const worker = makeSidebarThreadSummary({
+      id: ThreadId.makeUnsafe("worker"),
+      projectId: repoId,
+    });
+    const ordinary = makeSidebarThreadSummary({
+      id: ThreadId.makeUnsafe("ordinary"),
+      projectId: repoId,
+    });
+    const result = partitionSidebarThreadsByProjectIds(
+      [worker, ordinary],
+      new Set([hubId]),
+      new Map([[hubId, { memberThreadIds: [worker.id] }]]),
+    );
+    expect(result.nonGroupThreads).toEqual([ordinary]);
+    expect(result.groupThreads).toEqual([worker]);
+  });
+
+  it("ignores member indexes of projects outside the validated Hubs set", () => {
+    const thread = makeSidebarThreadSummary({ id: ThreadId.makeUnsafe("ordinary") });
+    const result = partitionSidebarThreadsByProjectIds(
+      [thread],
+      new Set(),
+      new Map([[thread.projectId, { memberThreadIds: [thread.id] }]]),
+    );
+    expect(result.nonGroupThreads).toEqual([thread]);
+  });
+
   it("splits group threads (including legacy Studio rows) from the Threads surface", () => {
     const projectThread = makeSidebarThreadSummary({
       id: ThreadId.makeUnsafe("thread-project"),
@@ -1576,7 +1780,130 @@ describe("mergeGroupMemberThreadsIntoProjectBuckets", () => {
   });
 });
 
+describe("linked Hub child status", () => {
+  it("includes only member descendants in Hub status without adding child rows", () => {
+    const hub = { ...makeProject(), id: ProjectId.makeUnsafe("hub") };
+    const otherHub = { ...makeProject(), id: ProjectId.makeUnsafe("other-hub") };
+    const repoId = ProjectId.makeUnsafe("linked-repo");
+    const parent = makeSidebarThreadSummary({
+      id: ThreadId.makeUnsafe("member"),
+      projectId: repoId,
+    });
+    const child = makeSidebarThreadSummary({
+      id: ThreadId.makeUnsafe("child"),
+      projectId: repoId,
+      parentThreadId: parent.id,
+    });
+    const nested = makeSidebarThreadSummary({
+      id: ThreadId.makeUnsafe("nested"),
+      projectId: repoId,
+      parentThreadId: child.id,
+      hasPendingApprovals: true,
+    });
+    const other = makeSidebarThreadSummary({
+      id: ThreadId.makeUnsafe("other-member"),
+      projectId: repoId,
+    });
+    const unrelated = makeSidebarThreadSummary({
+      id: ThreadId.makeUnsafe("unrelated"),
+      projectId: repoId,
+      parentThreadId: other.id,
+    });
+    const threads = [parent, child, nested, other, unrelated];
+    const membership = new Map([
+      [hub.id, new Set([parent.id])],
+      [otherHub.id, new Set([other.id])],
+    ]);
+    const visible = mergeGroupMemberThreadsIntoProjectBuckets({
+      sortedSidebarThreadsByProjectId: groupSidebarThreadsByProjectId([parent, other]),
+      threads: [parent, other],
+      memberThreadIdsByProjectId: membership,
+      sortThreads: sortThreadsById,
+    });
+    const statuses = mergeGroupMemberThreadsIntoProjectBuckets({
+      sortedSidebarThreadsByProjectId: groupSidebarThreadsByProjectId(threads),
+      threads,
+      memberThreadIdsByProjectId: membership,
+      sortThreads: sortThreadsById,
+      includeSubagentDescendants: true,
+    });
+    const data = deriveSidebarProjectData({
+      projects: [hub, otherHub],
+      sortedSidebarThreadsByProjectId: visible,
+      statusThreadsByProjectId: statuses,
+      pinnedThreadIds: [],
+      threadListExtraPagesByProjectCwd: new Map(),
+      normalizeProjectCwd: (cwd) => cwd,
+      activeSidebarThreadId: parent.id,
+      previewLimit: 5,
+      previewPageSize: 5,
+    });
+    expect(data.get(hub.id)?.projectStatus?.label).toBe("Pending Approval");
+    expect(data.get(hub.id)?.visibleEntries.map((entry) => entry.rowId)).toEqual([parent.id]);
+    expect(statuses.get(otherHub.id)?.map((thread) => thread.id)).toEqual([other.id, unrelated.id]);
+    expect(data.get(otherHub.id)?.projectStatus?.label).not.toBe("Pending Approval");
+    expect(data.get(otherHub.id)?.visibleEntries.map((entry) => entry.rowId)).toEqual([other.id]);
+  });
+});
+
+describe("hidden child navigation", () => {
+  it.each([true, false])("reveals the root while a child is open (expanded: %s)", (expanded) => {
+    const project = { ...makeProject(), expanded };
+    const first = makeSidebarThreadSummary({ id: ThreadId.makeUnsafe("first") });
+    const parent = makeSidebarThreadSummary({ id: ThreadId.makeUnsafe("parent") });
+    const child = makeSidebarThreadSummary({
+      id: ThreadId.makeUnsafe("child"),
+      parentThreadId: parent.id,
+    });
+    const nested = makeSidebarThreadSummary({
+      id: ThreadId.makeUnsafe("nested"),
+      parentThreadId: child.id,
+    });
+    const active = resolveSidebarRootThreadId(
+      nested.id,
+      Object.fromEntries([parent, child, nested].map((thread) => [thread.id, thread])),
+    );
+    const result = deriveSidebarProjectData({
+      projects: [project],
+      sortedSidebarThreadsByProjectId: groupSidebarThreadsByProjectId([first, parent]),
+      pinnedThreadIds: [],
+      threadListExtraPagesByProjectCwd: new Map(),
+      normalizeProjectCwd: (cwd) => cwd,
+      activeSidebarThreadId: active ?? undefined,
+      previewLimit: 1,
+      previewPageSize: 5,
+    }).get(project.id);
+    expect(result?.activeEntryId).toBe(parent.id);
+    expect(result?.visibleEntries.map((entry) => entry.rowId)).toEqual(
+      expanded ? [first.id, parent.id] : [parent.id],
+    );
+  });
+});
+
 describe("deriveSidebarProjectData", () => {
+  it("retains child approval status without rendering a child row", () => {
+    const project = makeProject();
+    const parent = makeSidebarThreadSummary({ id: ThreadId.makeUnsafe("parent") });
+    const child = makeSidebarThreadSummary({
+      id: ThreadId.makeUnsafe("child"),
+      parentThreadId: parent.id,
+      hasPendingApprovals: true,
+    });
+    const result = deriveSidebarProjectData({
+      projects: [project],
+      sortedSidebarThreadsByProjectId: groupSidebarThreadsByProjectId([parent]),
+      statusThreadsByProjectId: groupSidebarThreadsByProjectId([parent, child]),
+      pinnedThreadIds: [],
+      threadListExtraPagesByProjectCwd: new Map(),
+      normalizeProjectCwd: (cwd) => cwd,
+      activeSidebarThreadId: parent.id,
+      previewLimit: 5,
+      previewPageSize: 5,
+    }).get(project.id);
+    expect(result?.projectStatus?.label).toBe("Pending Approval");
+    expect(result?.visibleEntries.map((entry) => entry.rowId)).toEqual([parent.id]);
+  });
+
   it("keeps pinned threads in the total project thread count", () => {
     const project = makeProject();
     const pinnedThread = makeSidebarThreadSummary({
@@ -1675,31 +2002,32 @@ describe("deriveSidebarProjectData", () => {
     });
   });
 
-  it("reveals an active subagent and its parent beyond the preview limit", () => {
+  it("reveals the open thread beyond the preview limit", () => {
     const project = makeProject();
     const firstThread = makeSidebarThreadSummary({ id: ThreadId.makeUnsafe("thread-first") });
-    const parent = makeSidebarThreadSummary({ id: ThreadId.makeUnsafe("thread-parent") });
-    const child = makeSidebarThreadSummary({
-      id: ThreadId.makeUnsafe("thread-child"),
-      parentThreadId: parent.id,
-    });
+    const secondThread = makeSidebarThreadSummary({ id: ThreadId.makeUnsafe("thread-second") });
+    const openThread = makeSidebarThreadSummary({ id: ThreadId.makeUnsafe("thread-open") });
     const data = deriveSidebarProjectData({
       projects: [project],
-      sortedSidebarThreadsByProjectId: groupSidebarThreadsByProjectId([firstThread, parent, child]),
+      sortedSidebarThreadsByProjectId: groupSidebarThreadsByProjectId([
+        firstThread,
+        secondThread,
+        openThread,
+      ]),
       pinnedThreadIds: [],
       threadListExtraPagesByProjectCwd: new Map(),
       normalizeProjectCwd: (cwd) => cwd,
-      activeSidebarThreadId: child.id,
+      activeSidebarThreadId: openThread.id,
       previewLimit: 1,
       previewPageSize: 5,
     });
 
     expect(data.get(project.id)?.visibleEntries.map((entry) => entry.rowId)).toEqual([
       firstThread.id,
-      parent.id,
-      child.id,
+      openThread.id,
     ]);
-    expect(data.get(project.id)?.activeEntryId).toBe(child.id);
+    expect(data.get(project.id)?.activeEntryId).toBe(openThread.id);
+    expect(data.get(project.id)?.canShowMoreThreads).toBe(true);
   });
 
   it("pages the thread preview five rows at a time and clamps stale paging", () => {
@@ -1749,6 +2077,26 @@ describe("deriveSidebarProjectData", () => {
 });
 
 describe("sortThreadsForSidebar", () => {
+  it.each(["updated_at", "created_at"] as const)(
+    "surfaces a reminder ahead of newer chats with %s ordering",
+    (sortOrder) => {
+      const reminded = makeThread({
+        id: ThreadId.makeUnsafe("reminded"),
+        createdAt: "2026-01-01T10:00:00.000Z",
+        updatedAt: "2026-01-01T10:00:00.000Z",
+        snoozeReminderAt: "2026-10-02T12:00:00.000Z",
+      });
+      const newer = makeThread({
+        id: ThreadId.makeUnsafe("newer"),
+        createdAt: "2026-10-02T11:00:00.000Z",
+        updatedAt: "2026-10-02T11:00:00.000Z",
+      });
+      expect(
+        sortThreadsForSidebar([newer, reminded], sortOrder).map((thread) => thread.id),
+      ).toEqual(["reminded", "newer"]);
+    },
+  );
+
   it("sorts threads by the latest user message in recency mode", () => {
     const sorted = sortThreadsForSidebar(
       [
@@ -1994,6 +2342,75 @@ describe("sortThreadsForSidebar", () => {
       ThreadId.makeUnsafe("thread-running"),
       ThreadId.makeUnsafe("thread-newer"),
     ]);
+  });
+});
+
+describe("sortThreadsForSidebar attention and held order", () => {
+  const plain = makeThread({
+    id: ThreadId.makeUnsafe("thread-newest-plain"),
+    createdAt: "2026-03-09T11:00:00.000Z",
+    updatedAt: "2026-03-09T11:00:00.000Z",
+  });
+  const working = {
+    ...makeThread({
+      id: ThreadId.makeUnsafe("thread-working"),
+      createdAt: "2026-03-09T09:00:00.000Z",
+      updatedAt: "2026-03-09T09:00:00.000Z",
+    }),
+    hasLiveTailWork: true,
+  };
+  const unread = makeThread({
+    id: ThreadId.makeUnsafe("thread-unread"),
+    createdAt: "2026-03-09T10:00:00.000Z",
+    updatedAt: "2026-03-09T10:00:00.000Z",
+    latestTurn: makeLatestTurn({ completedAt: "2026-03-09T10:05:00.000Z" }),
+  });
+
+  it("keeps plain activity order when working and unread chats are not floated", () => {
+    const sorted = sortThreadsForSidebar([working, unread, plain], "updated_at", {
+      attentionFirst: false,
+    });
+
+    expect(sorted.map((thread) => thread.id)).toEqual([
+      ThreadId.makeUnsafe("thread-newest-plain"),
+      ThreadId.makeUnsafe("thread-unread"),
+      ThreadId.makeUnsafe("thread-working"),
+    ]);
+  });
+
+  it("holds an opened unread chat in place and slots new chats in by their live key", () => {
+    const heldKeys = new Map(
+      [unread, plain].map((thread) => [
+        thread.id,
+        getSidebarThreadSortKey(thread, "updated_at", true),
+      ]),
+    );
+    const opened = { ...unread, lastVisitedAt: "2026-03-09T12:00:00.000Z" };
+    const created = makeThread({
+      id: ThreadId.makeUnsafe("thread-created"),
+      createdAt: "2026-03-09T11:30:00.000Z",
+      updatedAt: "2026-03-09T11:30:00.000Z",
+    });
+
+    expect(sortThreadsForSidebar([plain, opened], "updated_at").map((thread) => thread.id)).toEqual(
+      [ThreadId.makeUnsafe("thread-newest-plain"), ThreadId.makeUnsafe("thread-unread")],
+    );
+    expect(
+      sortThreadsForSidebar([plain, opened, created], "updated_at", { heldKeys }).map(
+        (thread) => thread.id,
+      ),
+    ).toEqual([
+      ThreadId.makeUnsafe("thread-unread"),
+      ThreadId.makeUnsafe("thread-created"),
+      ThreadId.makeUnsafe("thread-newest-plain"),
+    ]);
+  });
+
+  it("ignores the toggle for created-at order", () => {
+    expect(getSidebarThreadSortKey(working, "created_at", true).attentionRank).toBe(0);
+    expect(getSidebarThreadSortKey(working, "updated_at", true).attentionRank).toBe(2);
+    expect(getSidebarThreadSortKey(unread, "updated_at", true).attentionRank).toBe(1);
+    expect(getSidebarThreadSortKey(unread, "updated_at", false).attentionRank).toBe(0);
   });
 });
 

@@ -4,9 +4,29 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./turnStopActivity": {
+      "types": "./src/turnStopActivity.ts",
+      "import": "./src/turnStopActivity.ts"
+    },
+    "./diagnosticIssue": {
+      "types": "./src/diagnosticIssue.ts",
+      "import": "./src/diagnosticIssue.ts"
+    },
     "./betaFeatures": {
       "types": "./src/betaFeatures.ts",
       "import": "./src/betaFeatures.ts"
+    },
+    "./mcpConnectors": {
+      "types": "./src/mcpConnectors.ts",
+      "import": "./src/mcpConnectors.ts"
+    },
+    "./inlineVisual": {
+      "types": "./src/inlineVisual.ts",
+      "import": "./src/inlineVisual.ts"
+    },
+    "./inlineVisualFormula": {
+      "types": "./src/inlineVisualFormula.ts",
+      "import": "./src/inlineVisualFormula.ts"
     },
     "./cuaActionDiagnostics": {
       "types": "./src/cuaActionDiagnostics.ts",
@@ -40,6 +60,10 @@
       "types": "./src/git.ts",
       "import": "./src/git.ts"
     },
+    "./kanban": {
+      "types": "./src/kanban.ts",
+      "import": "./src/kanban.ts"
+    },
     "./githubAvatar": {
       "types": "./src/githubAvatar.ts",
       "import": "./src/githubAvatar.ts"
@@ -51,6 +75,10 @@
     "./logging": {
       "types": "./src/logging.ts",
       "import": "./src/logging.ts"
+    },
+    "./KeyedSingleFlightCache": {
+      "types": "./src/KeyedSingleFlightCache.ts",
+      "import": "./src/KeyedSingleFlightCache.ts"
     },
     "./errorMessages": {
       "types": "./src/errorMessages.ts",
@@ -131,6 +159,10 @@
     "./Net": {
       "types": "./src/Net.ts",
       "import": "./src/Net.ts"
+    },
+    "./KeyedDrainableWorker": {
+      "types": "./src/KeyedDrainableWorker.ts",
+      "import": "./src/KeyedDrainableWorker.ts"
     },
     "./DrainableWorker": {
       "types": "./src/DrainableWorker.ts",
@@ -228,6 +260,10 @@
       "types": "./src/threadWorkspace.ts",
       "import": "./src/threadWorkspace.ts"
     },
+    "./projectFolders": {
+      "types": "./src/projectFolders.ts",
+      "import": "./src/projectFolders.ts"
+    },
     "./threadHierarchy": {
       "types": "./src/threadHierarchy.ts",
       "import": "./src/threadHierarchy.ts"
@@ -255,6 +291,10 @@
     "./path": {
       "types": "./src/path.ts",
       "import": "./src/path.ts"
+    },
+    "./pathContainment": {
+      "types": "./src/pathContainment.ts",
+      "import": "./src/pathContainment.ts"
     },
     "./text": {
       "types": "./src/text.ts",
@@ -415,10 +455,17 @@
     "./coordinatorCheckin": {
       "types": "./src/coordinatorCheckin.ts",
       "import": "./src/coordinatorCheckin.ts"
+    },
+    "./keybindingRules": {
+      "types": "./src/keybindingRules.ts",
+      "import": "./src/keybindingRules.ts"
+    },
+    "./wsRequestClass": {
+      "types": "./src/wsRequestClass.ts",
+      "import": "./src/wsRequestClass.ts"
     }
   },
   "scripts": {
-    "prepare": "effect-language-service patch",
     "typecheck": "node ../../node_modules/@typescript/native/bin/tsc --noEmit",
     "typecheck:native": "bun run typecheck",
     "typecheck:legacy": "tsc --noEmit",

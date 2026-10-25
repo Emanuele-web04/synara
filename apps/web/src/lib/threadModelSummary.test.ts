@@ -1,8 +1,48 @@
 import { describe, expect, it } from "vitest";
+import type { ProviderModelDescriptor } from "@synara/contracts";
 
 import { formatThreadModelSummaryLabel, resolveThreadModelSummary } from "./threadModelSummary";
 
 describe("resolveThreadModelSummary", () => {
+  const runtimeModel: ProviderModelDescriptor = {
+    slug: "gpt-6.1-sol",
+    name: "GPT-6.1 Sol",
+    supportedReasoningEfforts: [
+      { value: "medium", label: "Medium" },
+      { value: "xhigh", label: "Extra High" },
+    ],
+    defaultReasoningEffort: "medium",
+    supportsFastMode: true,
+  };
+
+  it("shows effort and Fast for a runtime-discovered model outside the static catalog", () => {
+    const summary = resolveThreadModelSummary(
+      {
+        provider: "codex",
+        model: "gpt-6.1-sol",
+        options: { reasoningEffort: "xhigh", fastMode: true },
+      },
+      runtimeModel,
+    );
+
+    expect(summary).toMatchObject({ statusLabel: "Extra High", fastMode: true });
+  });
+
+  it("uses the runtime default effort when no override is stored", () => {
+    expect(
+      resolveThreadModelSummary({ provider: "codex", model: "gpt-6.1-sol" }, runtimeModel),
+    ).toMatchObject({ statusLabel: "Medium", fastMode: false });
+  });
+
+  it("respects runtime Fast support instead of the static catalog", () => {
+    expect(
+      resolveThreadModelSummary(
+        { provider: "codex", model: "gpt-5.5", options: { fastMode: true } },
+        { ...runtimeModel, slug: "gpt-5.5", supportsFastMode: false },
+      ),
+    ).toMatchObject({ fastMode: false });
+  });
+
   it("summarizes a codex selection with its reasoning effort", () => {
     const summary = resolveThreadModelSummary({
       provider: "codex",

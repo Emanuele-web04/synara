@@ -9,6 +9,7 @@ import {
   DEFAULT_PROJECT_AGENT_LIMITS,
   EventId,
   MessageId,
+  NEW_HUB_MAX_CONCURRENT_WORKERS,
   PROJECT_AGENT_DIGEST_DEBOUNCE_MS,
   PROJECT_AGENT_INITIAL_SUMMARY_THREAD_COUNT,
   ProjectActivityId,
@@ -23,12 +24,14 @@ import {
   ProjectTaskAttemptId,
   ProjectTaskId,
   ThreadId,
+  TurnId,
+  ProjectManagedWorker,
   PROVIDER_DISPLAY_NAMES,
+  hubWorkItem,
   type OrchestrationCommand,
   type ProjectActivity,
   type ProjectActivityKind,
   type ProjectInboxEvent,
-  type ProjectManagedWorker,
   type OrchestrationThreadShell,
   type LibraryEntry,
   type ProjectThreadIndexEntry,
@@ -43,6 +46,7 @@ import {
   type ProviderSession,
 } from "@synara/contracts";
 import { groupThreadStateLabel, resolveGroupThreadState } from "@synara/shared/groupThreadState";
+import { HubWorkRepository } from "../../persistence/Services/HubWorkRepository";
 import { coordinatorCheckinTurnReport } from "@synara/shared/coordinatorCheckin";
 import { resolveThreadWorkspaceCwd } from "@synara/shared/threadEnvironment";
 import { isOrdinaryProjectRow } from "@synara/shared/projectContainers";
@@ -101,9 +105,11 @@ import {
   Queue,
   Ref,
   Semaphore,
+  Schema,
   Stream,
 } from "effect";
 
+import * as SqlClient from "effect/unstable/sql/SqlClient";
 import { AutomationService } from "../../automation/Services/AutomationService.ts";
 import { notifyAfterCommit } from "../../persistence/commitNotifications.ts";
 import { ServerConfig } from "../../config.ts";
@@ -120,6 +126,19 @@ import {
   normalizeDigestError,
   ProjectAgentRepository,
 } from "../../persistence/Services/ProjectAgentRepository.ts";
+import { ProjectionTurnRepository } from "../../persistence/Services/ProjectionTurns.ts";
+import { ProjectionThreadMessageRepository } from "../../persistence/Services/ProjectionThreadMessages.ts";
+import { ProjectionThreadMessageRepositoryLive } from "../../persistence/Layers/ProjectionThreadMessages.ts";
+import { ProviderSessionDirectory } from "../../provider/Services/ProviderSessionDirectory.ts";
+import { ProviderSessionDirectoryLive } from "../../provider/Layers/ProviderSessionDirectory.ts";
+import { ProviderSessionRuntimeRepositoryLive } from "../../persistence/Layers/ProviderSessionRuntime.ts";
+import { resolveProviderSessionThread } from "../../orchestration/providerSessionThread.ts";
+import { ProjectionTurnRepositoryLive } from "../../persistence/Layers/ProjectionTurns.ts";
+import {
+  canonicalImportPath,
+  findImportGitWorkspace,
+  importDirectoryExists,
+} from "../../orchestration/projectImportPaths.ts";
 import { ProjectionThreadRepository } from "../../persistence/Services/ProjectionThreads.ts";
 import { LibraryError, ProjectAgentServiceError } from "../Errors.ts";
 import { isAllowedGroupCoordinatorCreateTarget } from "../groupCreateAllowlist.ts";
@@ -148,6 +167,12 @@ import {
   projectAgentSummariesForPrincipal,
   type ProjectAgentPrincipal,
 } from "../principal.ts";
+import {
+  HUB_CONTEXT_PACKET_PROVENANCE_LEGEND,
+  hubContextPacketRoleIntro,
+  hubContextPacketSectionLabel as sectionLabel,
+  type HubContextPacketRole,
+} from "../hubContextPacket.ts";
 import {
   PROJECT_BOT_HEARTBEAT_PROMPT,
   PROJECT_BOT_PLAYBOOK,
@@ -321,10 +346,34 @@ const SEED_DOCUMENTS: ReadonlyArray<{ path: string; content: string }> = [
   },
 ];
 
+// A completion receipt stores only facts needed to finish its existing effects.
+const NonGitDelivery = Schema.Struct({
+  turnId: TurnId,
+  completedAt: Schema.String,
+  report: Schema.String,
+  goalId: Schema.NullOr(ProjectGoalId),
+  prUrl: Schema.NullOr(Schema.String),
+  worker: Schema.Struct({
+    threadId: ProjectManagedWorker.fields.threadId,
+    projectId: ProjectManagedWorker.fields.projectId,
+    batchId: ProjectManagedWorker.fields.batchId,
+    title: ProjectManagedWorker.fields.title,
+    taskId: ProjectManagedWorker.fields.taskId,
+    resultSummary: ProjectManagedWorker.fields.resultSummary,
+    activeTurnCommandId: ProjectManagedWorker.fields.activeTurnCommandId,
+  }),
+});
+const decodeNonGitDelivery = Schema.decodeUnknownSync(Schema.fromJsonString(NonGitDelivery));
+
 export const makeProjectAgentService = Effect.gen(function* () {
   const repository = yield* ProjectAgentRepository;
+  const sql = yield* SqlClient.SqlClient;
+  const hubWorkRepository = yield* Effect.serviceOption(HubWorkRepository);
   const snapshotQuery = yield* ProjectionSnapshotQuery;
   const projectionThreads = yield* ProjectionThreadRepository;
+  const projectionTurns = yield* ProjectionTurnRepository;
+  const projectionMessages = yield* ProjectionThreadMessageRepository;
+  const providerSessionDirectory = yield* ProviderSessionDirectory;
   const orchestrationEngine = yield* OrchestrationEngineService;
   const automationService = yield* AutomationService;
   const serverConfig = yield* ServerConfig;
@@ -437,6 +486,7 @@ export const makeProjectAgentService = Effect.gen(function* () {
     readonly summary: string;
     readonly payload: Record<string, unknown>;
     readonly createdAt: string;
+    readonly strict?: boolean | undefined;
   }) =>
     orchestrationEngine
       .dispatch({
@@ -454,7 +504,156 @@ export const makeProjectAgentService = Effect.gen(function* () {
         },
         createdAt: input.createdAt,
       })
-      .pipe(Effect.catch(() => Effect.void));
+      .pipe(
+        Effect.mapError(toServiceError("Failed to post worker monitor row.")),
+        Effect.catch((error) => (input.strict ? Effect.fail(error) : Effect.void)),
+      );
+
+  // A successful non-Git turn has no checkpoint event. Only the persisted turn
+  // marker plus an accessible non-Git directory may replace that signal; Git
+  // failures, startup-ready sessions and missing workspaces keep their old path.
+  const completedNonGitTurn = Effect.fnUntraced(function* (shell: OrchestrationThreadShell) {
+    const turn = shell.latestTurn;
+    if (
+      shell.session?.status !== "ready" ||
+      shell.session.activeTurnId !== null ||
+      turn?.state !== "completed" ||
+      turn.completedAt === null
+    )
+      return null;
+    if (
+      Option.isSome(
+        yield* projectionTurns
+          .getPendingTurnStartByThreadId({ threadId: shell.id })
+          .pipe(Effect.mapError(toServiceError("Failed to resolve pending worker turn."))),
+      )
+    )
+      return null;
+    const persisted = yield* projectionTurns
+      .getByTurnId({ threadId: shell.id, turnId: turn.turnId })
+      .pipe(Effect.mapError(toServiceError("Failed to resolve completed worker turn.")));
+    if (Option.isNone(persisted) || persisted.value.startedWithoutGitWorkspace !== true)
+      return null;
+    const project = yield* snapshotQuery
+      .getProjectShellById(shell.projectId)
+      .pipe(Effect.mapError(toServiceError("Failed to resolve worker workspace.")));
+    if (Option.isNone(project)) return null;
+    const owner = yield* resolveProviderSessionThread(snapshotQuery, shell.id).pipe(
+      Effect.mapError(toServiceError("Failed to resolve worker session owner.")),
+    );
+    const ownerId = owner?.id ?? shell.id;
+    const sessions = yield* providerService
+      .listSessions()
+      .pipe(Effect.mapError(toServiceError("Failed to resolve worker runtime workspace.")));
+    const liveCwd = sessions.find((session) => session.threadId === ownerId)?.cwd;
+    const binding = liveCwd
+      ? Option.none()
+      : yield* providerSessionDirectory
+          .getBinding(ownerId)
+          .pipe(Effect.mapError(toServiceError("Failed to resolve persisted worker workspace.")));
+    const payload = Option.isSome(binding) ? binding.value.runtimePayload : null;
+    const persistedCwd =
+      typeof payload === "object" &&
+      payload !== null &&
+      "cwd" in payload &&
+      typeof payload.cwd === "string" &&
+      payload.cwd.trim()
+        ? payload.cwd.trim()
+        : null;
+    const cwd =
+      liveCwd ??
+      persistedCwd ??
+      resolveThreadWorkspaceCwd({ ...shell, projectCwd: project.value.workspaceRoot });
+    if (!cwd) return null;
+    const nonGit = yield* Effect.tryPromise(async () => {
+      const physical = await canonicalImportPath(cwd);
+      return (
+        (await importDirectoryExists(physical)) && (await findImportGitWorkspace(physical)) === null
+      );
+    }).pipe(
+      // Unknown access is not non-Git proof; let other workers keep recovering.
+      Effect.catch(() =>
+        Effect.logDebug("worker completion workspace verification unavailable", {
+          threadId: shell.id,
+        }).pipe(Effect.as(false)),
+      ),
+    );
+    return nonGit ? turn : null;
+  });
+
+  // Keep the durable worker claim free of filesystem, transcript and wake I/O
+  // so non-Git admission can atomically bind it to the exact completed attempt.
+  const persistWorkerSettlement = (input: {
+    readonly worker: ProjectManagedWorker;
+    readonly outcome: ProjectManagedWorker["settleOutcome"];
+    readonly taskId: ProjectTaskId | null;
+    readonly createdAt: string;
+    readonly updatedAt?: string;
+    readonly expectedTurnCommandId?: string | null;
+  }) =>
+    Effect.gen(function* () {
+      const worker = input.worker;
+      const notice = { outcome: input.outcome };
+      const updated: ProjectManagedWorker = {
+        ...worker,
+        taskId: input.taskId ?? worker.taskId,
+        settledAt: input.createdAt,
+        settleOutcome: notice.outcome,
+        waitingSince:
+          notice.outcome === "waiting-approval" || notice.outcome === "waiting-input"
+            ? (worker.waitingSince ?? input.createdAt)
+            : null,
+        // An event means the worker is alive; any stuck episode and recovery
+        // ladder run is over, and a flagged "Waiting on you" resolves.
+        // `recoveriesUsed` only resets on a genuine success — the ladder's own
+        // re-dispatches keep the count so the cap can't loop forever.
+        recoveriesUsed: notice.outcome === "completed" ? 0 : worker.recoveriesUsed,
+        stuckKind: null,
+        stuckSince: null,
+        recoveryEpisode: null,
+        recoveryStep: 0,
+        nudgeAt: null,
+        needsYou: false,
+        needsYouAt: null,
+        updatedAt: input.updatedAt ?? input.createdAt,
+      };
+      const saved = yield* repository
+        .saveManagedWorkerMonitor({ worker: updated, expectedUpdatedAt: worker.updatedAt })
+        .pipe(Effect.mapError(toServiceError("Failed to update managed worker.")));
+      let persistedWorker = updated;
+      if (!saved.applied) {
+        // CAS miss: a concurrent write moved the row. Re-read once and apply
+        // the settle facts on top — losing a settle is worse than retrying.
+        const fresh = yield* repository
+          .findManagedWorkerByThread(worker.threadId)
+          .pipe(Effect.mapError(toServiceError("Failed to re-read managed worker.")));
+        // A non-Git completion belongs to the observed attempt, never a newer
+        // coordinator/user turn that won the monitor write while we awaited I/O.
+        if (
+          input.expectedTurnCommandId !== undefined &&
+          Option.isSome(fresh) &&
+          fresh.value.activeTurnCommandId !== input.expectedTurnCommandId
+        )
+          return null;
+        if (Option.isNone(fresh)) return null;
+        {
+          persistedWorker = {
+            ...updated,
+            taskId: fresh.value.taskId ?? updated.taskId,
+            recoveriesUsed: updated.recoveriesUsed,
+            updatedAt: fresh.value.updatedAt,
+          };
+          const retried = yield* repository
+            .saveManagedWorkerMonitor({
+              worker: persistedWorker,
+              expectedUpdatedAt: fresh.value.updatedAt,
+            })
+            .pipe(Effect.mapError(toServiceError("Failed to update managed worker.")));
+          if (!retried.applied) return null;
+        }
+      }
+      return persistedWorker;
+    });
 
   // Apply one settle/stuck event to a managed worker: post the compact system
   // row into the coordinator thread, update the durable worker row, then post
@@ -470,6 +669,9 @@ export const makeProjectAgentService = Effect.gen(function* () {
     readonly taskId: ProjectTaskId | null;
     /** Paused/archived groups keep recording worker state but post no rows. */
     readonly suppressRows?: boolean;
+    readonly expectedTurnCommandId?: string | null;
+    readonly settledWorker?: ProjectManagedWorker;
+    readonly replayDelivery?: boolean | undefined;
     /** Tracked PR association for the worker thread, when one exists. */
     readonly lastKnownPr?: { readonly url: string } | null;
   }) =>
@@ -482,6 +684,7 @@ export const makeProjectAgentService = Effect.gen(function* () {
       // second row, and a settled worker cannot go stuck. A genuinely new
       // terminal transition (missing → completed) still reports.
       if (
+        input.replayDelivery !== true &&
         isTerminalWorkerSettleOutcome(worker.settleOutcome) &&
         (notice.kind === "stuck" || notice.outcome === worker.settleOutcome)
       ) {
@@ -538,59 +741,24 @@ export const makeProjectAgentService = Effect.gen(function* () {
         });
         return;
       }
-      const updated: ProjectManagedWorker = {
-        ...worker,
-        taskId: input.taskId ?? worker.taskId,
-        settledAt: input.createdAt,
-        settleOutcome: notice.outcome,
-        waitingSince:
-          notice.outcome === "waiting-approval" || notice.outcome === "waiting-input"
-            ? (worker.waitingSince ?? input.createdAt)
-            : null,
-        // An event means the worker is alive; any stuck episode and recovery
-        // ladder run is over, and a flagged "Waiting on you" resolves.
-        // `recoveriesUsed` only resets on a genuine success — the ladder's own
-        // re-dispatches keep the count so the cap can't loop forever.
-        recoveriesUsed: notice.outcome === "completed" ? 0 : worker.recoveriesUsed,
-        stuckKind: null,
-        stuckSince: null,
-        recoveryEpisode: null,
-        recoveryStep: 0,
-        nudgeAt: null,
-        needsYou: false,
-        needsYouAt: null,
-        updatedAt: input.createdAt,
-      };
-      const saved = yield* repository
-        .saveManagedWorkerMonitor({ worker: updated, expectedUpdatedAt: worker.updatedAt })
-        .pipe(Effect.mapError(toServiceError("Failed to update managed worker.")));
-      let persistedWorker = updated;
-      if (!saved.applied) {
-        // CAS miss: a concurrent write moved the row. Re-read once and apply
-        // the settle facts on top — losing a settle is worse than retrying.
-        const fresh = yield* repository
-          .findManagedWorkerByThread(worker.threadId)
-          .pipe(Effect.mapError(toServiceError("Failed to re-read managed worker.")));
-        if (Option.isSome(fresh)) {
-          persistedWorker = {
-            ...updated,
-            taskId: fresh.value.taskId ?? updated.taskId,
-            recoveriesUsed: updated.recoveriesUsed,
-            updatedAt: fresh.value.updatedAt,
-          };
-          yield* repository
-            .saveManagedWorkerMonitor({
-              worker: persistedWorker,
-              expectedUpdatedAt: fresh.value.updatedAt,
-            })
-            .pipe(Effect.mapError(toServiceError("Failed to update managed worker.")));
-        }
-      }
+      const persistedWorker =
+        input.settledWorker ??
+        (yield* persistWorkerSettlement({
+          worker,
+          outcome: notice.outcome,
+          taskId: input.taskId,
+          createdAt: input.createdAt,
+          ...(input.expectedTurnCommandId !== undefined
+            ? { expectedTurnCommandId: input.expectedTurnCommandId }
+            : {}),
+        }));
+      if (!persistedWorker) return;
       if (input.suppressRows !== true) {
         yield* postWorkerMonitorRow({
           coordinatorThreadId: input.coordinatorThreadId,
           sourceKey: `settle:${input.sourceEventId}`,
           tone: notice.tone,
+          strict: input.replayDelivery,
           kind: "synara.worker.settled",
           summary: formatWorkerMonitorRow({
             title: worker.title,
@@ -607,15 +775,67 @@ export const makeProjectAgentService = Effect.gen(function* () {
           createdAt: input.createdAt,
         });
       }
+      yield* postWorkerBatchRollup({
+        worker: persistedWorker,
+        coordinatorThreadId: input.coordinatorThreadId,
+        createdAt: input.createdAt,
+        suppressRows: input.suppressRows,
+        taskId: input.taskId,
+        prUrl,
+        replayDelivery: input.replayDelivery,
+      });
+    });
+
+  const postWorkerBatchRollup = (input: {
+    readonly worker: ProjectManagedWorker;
+    readonly coordinatorThreadId: ThreadId;
+    readonly createdAt: string;
+    readonly suppressRows?: boolean | undefined;
+    readonly taskId?: ProjectTaskId | null;
+    readonly prUrl?: string | null;
+    readonly replayDelivery?: boolean | undefined;
+  }) =>
+    Effect.gen(function* () {
+      const worker = input.worker;
+      const prUrl = input.prUrl ?? null;
       const batch = yield* repository
         .listManagedWorkersByBatch({ projectId: worker.projectId, batchId: worker.batchId })
         .pipe(Effect.mapError(toServiceError("Failed to load worker batch.")));
       // The just-written row is freshest; swap it into the batch listing in
       // case a concurrent ingest left the read behind.
-      const peers = batch.map((row) => (row.threadId === worker.threadId ? persistedWorker : row));
+      const peers = input.replayDelivery
+        ? batch
+        : batch.map((row) => (row.threadId === worker.threadId ? worker : row));
+
+      let unstartedWork: ReadonlyArray<{ readonly title: string; readonly state: string }> = [];
+      if (worker.batchId.startsWith("hub-work-batch:")) {
+        if (Option.isNone(hubWorkRepository)) return;
+        const anchor = yield* hubWorkRepository.value
+          .findByWorker(worker.threadId)
+          .pipe(Effect.mapError(toServiceError("Failed to load hub batch scope.")));
+        if (!anchor) return;
+        const workItems = (yield* hubWorkRepository.value
+          .list(worker.projectId)
+          .pipe(Effect.mapError(toServiceError("Failed to load hub batch work.")))).filter(
+          (record) => record.scopeKey === anchor.scopeKey,
+        );
+        unstartedWork = workItems.filter((record) => record.workerThreadId === null);
+        const peerById = new Map(peers.map((peer) => [peer.threadId, peer]));
+        if (
+          workItems.some((record) => {
+            if (!record.workerThreadId)
+              return record.state !== "failed" && record.state !== "cancelled";
+            const peer = peerById.get(record.workerThreadId);
+            return (
+              !peer || peer.settledAt === null || !isTerminalWorkerSettleOutcome(peer.settleOutcome)
+            );
+          })
+        )
+          return;
+      }
       if (
         input.suppressRows !== true &&
-        peers.length > 1 &&
+        peers.length + unstartedWork.length > 1 &&
         // Waiting on approval/input records a settle row but is not an end
         // state — the roll-up waits until every worker has really finished.
         peers.every(
@@ -631,12 +851,12 @@ export const makeProjectAgentService = Effect.gen(function* () {
             sourceThreadId: worker.threadId,
             sourceEventId: `worker-batch:${rollupKey}`,
             eventType: "workers.settled",
-            taskId: input.taskId,
+            taskId: input.taskId ?? null,
             eligibleWake: true,
             createdAt: input.createdAt,
           })
           .pipe(Effect.mapError(toServiceError("Failed to record worker batch roll-up.")));
-        if (rollupInserted.inserted) {
+        if (rollupInserted.inserted || input.replayDelivery) {
           // Each finished worker's tracked PR belongs in the roll-up — the
           // current shell is already read; batch-fetch the peers' for theirs.
           const peerShells = yield* snapshotQuery
@@ -652,7 +872,10 @@ export const makeProjectAgentService = Effect.gen(function* () {
             title: row.title,
             outcome: row.settleOutcome ?? "failed",
             result: row.resultSummary,
-            pr: row.threadId === worker.threadId ? prUrl : (prByThread.get(row.threadId) ?? null),
+            pr:
+              row.threadId === worker.threadId && input.prUrl !== undefined
+                ? prUrl
+                : (prByThread.get(row.threadId) ?? null),
           }));
           const allFinished = threads.every(
             (thread) => thread.outcome === "completed" || thread.outcome === "stopped",
@@ -660,9 +883,13 @@ export const makeProjectAgentService = Effect.gen(function* () {
           yield* postWorkerMonitorRow({
             coordinatorThreadId: input.coordinatorThreadId,
             sourceKey: `rollup:${rollupKey}`,
+            strict: input.replayDelivery,
             tone: allFinished ? "info" : "approval",
             kind: "synara.workers.settled",
-            summary: formatWorkerBatchRollup({ threads }),
+            summary: [
+              formatWorkerBatchRollup({ threads }),
+              ...unstartedWork.map((item) => `${item.title}: ${item.state} before starting.`),
+            ].join("\n"),
             payload: { source: "worker_monitor", batchId: worker.batchId, threads },
             createdAt: input.createdAt,
           });
@@ -834,6 +1061,18 @@ export const makeProjectAgentService = Effect.gen(function* () {
       }
       const shell = input.shell.value;
       const sessionStatus = shell.session?.status ?? null;
+      const completedTurn = yield* completedNonGitTurn(shell);
+      if (completedTurn) {
+        yield* impl.ingestSettledThreadEvent({
+          threadId: worker.threadId,
+          sourceEventId: `worker-non-git-completed:${worker.threadId}:${completedTurn.turnId}`,
+          eventType: "worker.completed",
+          turnId: completedTurn.turnId,
+          // Inbox ordering follows admission, not the old turn's completion time.
+          createdAt: nowIso,
+        });
+        return;
+      }
       if (isFailedWorkerSessionStatus(sessionStatus)) {
         const updatedAt = shell.session?.updatedAt ?? shell.updatedAt;
         yield* ingestHealthEvent(
@@ -1370,6 +1609,7 @@ export const makeProjectAgentService = Effect.gen(function* () {
     readonly content: string;
     readonly sources?: ProjectDocumentRevision["sources"];
     readonly authorThreadId?: ThreadId | null;
+    readonly ensureMirror?: boolean;
   }) =>
     Effect.gen(function* () {
       const logicalPath = normalizeProjectDocumentPath(input.logicalPath);
@@ -1378,6 +1618,20 @@ export const makeProjectAgentService = Effect.gen(function* () {
         .pipe(Effect.mapError(toServiceError("Failed to load document head.")));
       const currentRevision = Option.isSome(head) ? head.value.revision : 0;
       if (Option.isSome(head) && head.value.contentHash === hashDocumentContent(input.content)) {
+        if (input.ensureMirror) {
+          const mirror = yield* readProjectDocumentMirror({
+            stateDir: serverConfig.stateDir,
+            projectId: input.projectId,
+            logicalPath,
+          }).pipe(Effect.mapError(toServiceError("Failed to read worker report mirror.")));
+          if (mirror === null || hashDocumentContent(mirror) !== head.value.contentHash)
+            yield* writeProjectDocumentMirror({
+              stateDir: serverConfig.stateDir,
+              projectId: input.projectId,
+              logicalPath,
+              content: input.content,
+            }).pipe(Effect.mapError(toServiceError("Failed to materialize worker report.")));
+        }
         return;
       }
       const now = isoNow();
@@ -1587,6 +1841,7 @@ export const makeProjectAgentService = Effect.gen(function* () {
           blockers: [],
           recentOutcomes: [],
           workers: [],
+          hubWorkItems: [],
           coordinatorStatus: "unconfigured",
         };
       }
@@ -1618,6 +1873,11 @@ export const makeProjectAgentService = Effect.gen(function* () {
       const workers = yield* repository
         .listManagedWorkers(projectId)
         .pipe(Effect.mapError(toServiceError("Failed to load managed workers.")));
+      const hubWorkItems = Option.isSome(hubWorkRepository)
+        ? (yield* hubWorkRepository.value
+            .list(projectId)
+            .pipe(Effect.mapError(toServiceError("Failed to load hub work.")))).map(hubWorkItem)
+        : [];
       const blockers = tasks
         .filter((task) => task.status === "blocked")
         .map((task) => ({
@@ -1656,6 +1916,7 @@ export const makeProjectAgentService = Effect.gen(function* () {
         blockers,
         recentOutcomes: activity,
         workers,
+        hubWorkItems,
         coordinatorStatus: coordinatorStatusFromGoal(
           true,
           goalValue?.status ?? null,
@@ -1685,6 +1946,128 @@ export const makeProjectAgentService = Effect.gen(function* () {
         createdAt: isoNow(),
       })
       .pipe(Effect.mapError(toServiceError("Failed to persist request receipt.")));
+
+  // Replay only the already-admitted completion; never mutate a newer attempt.
+  const finishNonGitDelivery = (event: ProjectInboxEvent, config: ProjectAgentConfig) =>
+    Effect.gen(function* () {
+      if (
+        event.eventType !== "worker.completed" ||
+        !event.sourceEventId.startsWith("worker-non-git-completed:")
+      )
+        return;
+      const doneId = `${event.sourceEventId}:delivered`;
+      if (
+        Option.isSome(
+          yield* repository.getReceipt({ projectId: event.projectId, requestId: doneId }),
+        )
+      )
+        return;
+      const pending = yield* repository.getReceipt({
+        projectId: event.projectId,
+        requestId: event.sourceEventId,
+      });
+      if (Option.isNone(pending)) return;
+      const delivery = yield* Effect.try({
+        try: () => decodeNonGitDelivery(pending.value.resultJson),
+        catch: toServiceError("Failed to decode worker completion receipt."),
+      });
+      const current = yield* repository.findManagedWorkerByThread(event.sourceThreadId);
+      if (Option.isNone(current)) {
+        yield* storeReceipt(doneId, event.projectId, "worker-completion-delivered", {
+          deleted: true,
+        });
+        return; // A deleted worker is never resurrected.
+      }
+      const worker = {
+        ...current.value,
+        ...delivery.worker,
+        settleOutcome: "completed" as const,
+        settledAt: delivery.completedAt,
+      };
+      const reportPath = workerInboxReportPath(event.sourceThreadId);
+      const head = yield* repository.readDocumentRevision({
+        projectId: event.projectId,
+        logicalPath: reportPath,
+      });
+      // A delayed A replay may fill its own history, but cannot replace B's report.
+      const newerReport =
+        Option.isSome(head) &&
+        head.value.contentHash !== hashDocumentContent(delivery.report) &&
+        ((current.value.activeTurnCommandId !== delivery.worker.activeTurnCommandId &&
+          head.value.createdAt >= pending.value.createdAt) ||
+          (head.value.sources.some(
+            (source) =>
+              source.threadId === event.sourceThreadId &&
+              source.turnId !== undefined &&
+              source.turnId !== delivery.turnId,
+          ) &&
+            head.value.createdAt > delivery.completedAt));
+      if (!newerReport)
+        yield* upsertSystemDocument({
+          projectId: event.projectId,
+          logicalPath: reportPath,
+          content: delivery.report,
+          authorThreadId: event.sourceThreadId,
+          sources: [{ threadId: event.sourceThreadId, turnId: delivery.turnId, path: reportPath }],
+          ensureMirror: true,
+        });
+      yield* recordWorkerMonitorEvent({
+        worker,
+        settledWorker: worker,
+        replayDelivery: true,
+        eventType: "worker.completed",
+        sourceEventId: event.sourceEventId,
+        createdAt: delivery.completedAt,
+        coordinatorThreadId: config.coordinatorThreadId,
+        taskId: delivery.worker.taskId,
+        lastKnownPr: delivery.prUrl ? { url: delivery.prUrl } : null,
+        suppressRows: config.pausedAt !== null || config.archivedAt !== null,
+      });
+      // Seal the existing activity/evidence atomically: retrying external effects
+      // cannot duplicate their random ids or add another document revision.
+      yield* sql
+        .withTransaction(
+          Effect.gen(function* () {
+            if (
+              Option.isSome(
+                yield* repository.getReceipt({ projectId: event.projectId, requestId: doneId }),
+              )
+            )
+              return;
+            yield* appendActivity({
+              projectId: event.projectId,
+              kind: "document-written",
+              actorKind: "system",
+              actorThreadId: event.sourceThreadId,
+              goalId: delivery.goalId,
+              taskId: delivery.worker.taskId,
+              source: { path: reportPath, threadId: event.sourceThreadId, turnId: delivery.turnId },
+              summary: `Worker ${delivery.worker.title} reported: completed.`,
+              createdAt: delivery.completedAt,
+            });
+            if (delivery.worker.taskId !== null)
+              yield* repository.saveEvidence({
+                id: branded.evidence(),
+                projectId: event.projectId,
+                taskId: delivery.worker.taskId,
+                attemptId: null,
+                kind: "message",
+                classification: "reported",
+                authorKind: "system",
+                authorThreadId: event.sourceThreadId,
+                sourceThreadId: event.sourceThreadId,
+                sourceMessageId: null,
+                sourceTurnId: delivery.turnId,
+                summary: delivery.report.slice(0, 4_000).trim() || "Worker settlement report.",
+                createdAt: delivery.completedAt,
+              });
+            yield* storeReceipt(doneId, event.projectId, "worker-completion-delivered", {
+              turnId: delivery.turnId,
+            });
+          }),
+        )
+        .pipe(Effect.mapError(toServiceError("Failed to finish worker completion delivery.")));
+    }).pipe(Effect.mapError(toServiceError("Failed to deliver worker completion.")));
 
   interface WakeReceiptResult {
     readonly runId?: string;
@@ -2386,6 +2769,50 @@ export const makeProjectAgentService = Effect.gen(function* () {
     });
 
   const impl: ProjectAgentServiceShape = {
+    notifyWorkItemChanged: (input) =>
+      Effect.gen(function* () {
+        if (Option.isNone(hubWorkRepository)) return;
+        const record = yield* hubWorkRepository.value
+          .get(input.workItemId)
+          .pipe(Effect.mapError(toServiceError("Failed to load hub work update.")));
+        if (record && record.projectId === input.projectId) {
+          yield* publish({
+            type: "work-item-upserted",
+            projectId: input.projectId,
+            workItem: hubWorkItem(record),
+          });
+          const scopeItems = yield* hubWorkRepository.value
+            .list(record.projectId)
+            .pipe(Effect.mapError(toServiceError("Failed to load hub batch update.")));
+          const workerId =
+            record.workerThreadId ??
+            scopeItems.find(
+              (item) => item.scopeKey === record.scopeKey && item.workerThreadId !== null,
+            )?.workerThreadId;
+          if (workerId) {
+            const worker = yield* repository
+              .findManagedWorkerByThread(workerId)
+              .pipe(Effect.mapError(toServiceError("Failed to load hub batch worker.")));
+            const config = yield* repository
+              .getConfig(record.projectId)
+              .pipe(Effect.mapError(toServiceError("Failed to load hub batch coordinator.")));
+            if (
+              Option.isSome(worker) &&
+              Option.isSome(config) &&
+              worker.value.batchId.startsWith("hub-work-batch:")
+            )
+              yield* postWorkerBatchRollup({
+                worker: worker.value,
+                coordinatorThreadId: config.value.coordinatorThreadId,
+                suppressRows:
+                  !config.value.enabled ||
+                  config.value.pausedAt !== null ||
+                  config.value.archivedAt !== null,
+                createdAt: record.updatedAt,
+              });
+          }
+        }
+      }),
     getOverview: (input, principal) =>
       requireProjectAccess(principal, input.projectId).pipe(
         Effect.andThen(buildOverview(input.projectId, principal)),
@@ -2424,6 +2851,9 @@ export const makeProjectAgentService = Effect.gen(function* () {
               ) {
                 continue;
               }
+              const managedWorkers = yield* repository
+                .listManagedWorkers(row.projectId)
+                .pipe(Effect.mapError(toServiceError("Failed to load hub attention.")));
               visible.push({
                 projectId: row.projectId,
                 configured: true,
@@ -2440,6 +2870,9 @@ export const makeProjectAgentService = Effect.gen(function* () {
                 pausedAt: row.pausedAt,
                 archivedAt: row.archivedAt,
                 memberThreadIds: [...new Set([row.coordinatorThreadId, ...row.memberThreadIds])],
+                needsYouThreadIds: managedWorkers
+                  .filter((worker) => worker.needsYou)
+                  .map((worker) => worker.threadId),
                 linkedProjectIds: row.linkedProjectIds,
                 hasGoal:
                   row.goalStatus !== null || (row.goal !== null && row.goal.trim().length > 0),
@@ -2575,7 +3008,11 @@ export const makeProjectAgentService = Effect.gen(function* () {
               : existingConfig?.workerRouting
                 ? { workerRouting: existingConfig.workerRouting }
                 : {}),
-            limits: input.limits ?? existingConfig?.limits ?? { ...DEFAULT_PROJECT_AGENT_LIMITS },
+            limits: input.limits ??
+              existingConfig?.limits ?? {
+                ...DEFAULT_PROJECT_AGENT_LIMITS,
+                maxConcurrentWorkers: NEW_HUB_MAX_CONCURRENT_WORKERS,
+              },
             captureEnabled: input.captureEnabled ?? existingConfig?.captureEnabled ?? true,
             enabled: true,
             automationId,
@@ -4625,12 +5062,18 @@ export const makeProjectAgentService = Effect.gen(function* () {
     formatContextPacketForTurn: (threadId) =>
       Effect.gen(function* () {
         const principal = yield* impl.resolvePrincipalForThread(threadId);
-        const isCoordinatorLike = principal.kind === "coordinator" || principal.kind === "worker";
-        // Every thread in a group gets the group's instructions and memory;
-        // unmanaged threads outside groups get nothing.
-        if (!isCoordinatorLike && principal.kind !== "group-member") {
+        // Every thread in a hub gets the group's instructions and memory;
+        // unmanaged threads outside hubs get nothing. The role also decides
+        // which sections the packet may carry.
+        if (
+          principal.kind !== "coordinator" &&
+          principal.kind !== "worker" &&
+          principal.kind !== "group-member"
+        ) {
           return "";
         }
+        const role: HubContextPacketRole = principal.kind;
+        const isCoordinator = role === "coordinator";
         const config = yield* repository
           .getConfig(principal.projectId)
           .pipe(Effect.catch(() => Effect.succeed(Option.none())));
@@ -4643,16 +5086,24 @@ export const makeProjectAgentService = Effect.gen(function* () {
           }
         }
         const packet = yield* impl.buildContextPacket(principal.projectId, threadId);
-        const playbook = yield* repository
-          .readDocumentRevision({
-            projectId: principal.projectId,
-            logicalPath: PROJECT_BOT_PLAYBOOK_PATH,
-          })
-          .pipe(Effect.catch(() => Effect.succeed(Option.none())));
+        const workItem =
+          principal.kind === "worker" && Option.isSome(hubWorkRepository)
+            ? yield* hubWorkRepository.value
+                .findByWorker(threadId)
+                .pipe(Effect.catch(() => Effect.succeed(null)))
+            : null;
+        const playbook = isCoordinator
+          ? yield* repository
+              .readDocumentRevision({
+                projectId: principal.projectId,
+                logicalPath: PROJECT_BOT_PLAYBOOK_PATH,
+              })
+              .pipe(Effect.catch(() => Effect.succeed(Option.none())))
+          : Option.none();
         const coordinatorThreadId = Option.isSome(config) ? config.value.coordinatorThreadId : null;
         // Batched worker context: one read for thread shells and one for all
         // report docs instead of two lookups per worker per turn.
-        const assigned = isCoordinatorLike
+        const assigned = isCoordinator
           ? yield* assignedWorkerThreadIds(principal.projectId).pipe(
               Effect.catch(() => Effect.succeed(new Set<ThreadId>())),
             )
@@ -4745,38 +5196,58 @@ export const makeProjectAgentService = Effect.gen(function* () {
         // instructions and the memory index lead; rebuildable state (worker
         // reports, memory files, decisions, tasks) trails and truncates first.
         const budget = truncateToContextBudget([
-          { label: "Instructions", text: packet.instructions },
-          { label: "Hub memory index", text: memoryIndexText },
-          ...(isCoordinatorLike
+          {
+            label: sectionLabel("Instructions (user-owned)", "user-instructions"),
+            text: packet.instructions,
+          },
+          { label: sectionLabel("Hub memory index", "hub-records"), text: memoryIndexText },
+          ...(workItem && workItem.projectId === principal.projectId
             ? [
                 {
-                  label: "Playbook",
+                  label: sectionLabel("Assigned Hub task", "server-state"),
+                  text: `Work item: ${workItem.id}\nTask: ${workItem.title}\nProgress revision: ${workItem.progress?.revision ?? 0}\nReport your own checklist with synara_hub_update_progress using this workItemId and expectedRevision. Read the current revision with synara_hub_list_work before updating after a conflict. Checklist completion does not finish the task or release its worker slot.`,
+                },
+              ]
+            : []),
+          // Coordinator-only: the playbook (custom or system-authored) and the
+          // watch/roster sections below never reach a worker or member packet.
+          ...(isCoordinator
+            ? [
+                {
+                  label: sectionLabel(
+                    "Playbook",
+                    Option.isSome(playbook) && playbook.value.authorKind === "user"
+                      ? "user-instructions"
+                      : "host-policy",
+                  ),
                   text: Option.isSome(playbook) ? playbook.value.content : PROJECT_BOT_PLAYBOOK,
                 },
               ]
             : []),
-          ...(groupGoal ? [{ label: "Objective", text: groupGoal }] : []),
+          ...(groupGoal
+            ? [{ label: sectionLabel("Objective", "user-instructions"), text: groupGoal }]
+            : []),
           // An active goal restating the group objective is shown once, as
           // Objective — not under both labels.
           ...(groupGoal.length > 0 && activeGoalObjective === groupGoal
             ? []
             : [
                 {
-                  label: "Goal",
+                  label: sectionLabel("Goal", "server-state"),
                   text:
                     packet.goal?.objective ?? "None. Only create a goal if the user asked for one.",
                 },
               ]),
-          ...(principal.kind === "coordinator"
+          ...(isCoordinator
             ? []
             : [
                 {
-                  label: "Hub tools",
+                  label: sectionLabel("Hub tools", "host-policy"),
                   text: "Save shared hub memory with synara_project_remember; deliver files to the hub Library with synara_project_library_add — sources must be inside your own workspace.",
                 },
               ]),
           {
-            label: "Linked repositories",
+            label: sectionLabel("Linked repositories", "server-state"),
             text: yield* Effect.gen(function* () {
               const linkedIds = Option.isSome(config) ? (config.value.linkedProjectIds ?? []) : [];
               if (linkedIds.length === 0) return "None linked yet.";
@@ -4790,25 +5261,24 @@ export const makeProjectAgentService = Effect.gen(function* () {
           // The group's default for new threads is the configured worker
           // routing; a thread may still override it per instruction.
           {
-            label: "Thread model default",
+            label: sectionLabel("Thread model default", "server-state"),
             text:
               Option.isSome(config) && config.value.workerRouting?.modelSelection !== undefined
                 ? `${config.value.workerRouting.modelSelection.provider} ${config.value.workerRouting.modelSelection.model}`
                 : "Provider default.",
           },
-          { label: "Library root", text: groupLibraryRoot },
-          ...(isCoordinatorLike ? [{ label: "Watch", text: PROJECT_BOT_WATCH_RULES }] : []),
-          ...(isCoordinatorLike
+          { label: sectionLabel("Library root", "server-state"), text: groupLibraryRoot },
+          ...(isCoordinator
+            ? [{ label: sectionLabel("Watch", "host-policy"), text: PROJECT_BOT_WATCH_RULES }]
+            : []),
+          ...(isCoordinator
             ? [
                 {
-                  label: "Workers",
-                  text:
-                    workerLines.length > 0
-                      ? `${workerLines.join("\n")}\nIf a worker is error/interrupted/stopped, redelegate or choose an alternate. Do not wait.`
-                      : "No workers yet.",
+                  label: sectionLabel("Workers", "server-state"),
+                  text: workerLines.length > 0 ? workerLines.join("\n") : "No workers yet.",
                 },
                 {
-                  label: "Worker reports",
+                  label: sectionLabel("Worker reports", "agent-report"),
                   text:
                     workerReports.length > 0
                       ? workerReports.join("\n\n")
@@ -4816,18 +5286,19 @@ export const makeProjectAgentService = Effect.gen(function* () {
                 },
               ]
             : []),
-          ...(memoryEnabled ? [{ label: "Memory", text: memorySections.join("\n\n") }] : []),
-          { label: "Decisions", text: packet.relevantDecisions },
+          ...(memoryEnabled
+            ? [{ label: sectionLabel("Memory", "hub-records"), text: memorySections.join("\n\n") }]
+            : []),
+          { label: sectionLabel("Decisions", "hub-records"), text: packet.relevantDecisions },
           {
-            label: "Tasks",
+            label: sectionLabel("Tasks", "server-state"),
             text: packet.tasks.map((task) => `- ${task.status} ${task.title}`).join("\n"),
           },
         ]);
         return [
-          "Hub context packet (authoritative durable state; additional documents via synara_project_read_document):",
-          principal.kind === "coordinator"
-            ? "This thread opened with a welcome message from you; the user may be replying to it."
-            : "You are a member thread of this hub, not its coordinator — the coordinator's welcome lives on the coordinator's own thread.",
+          "Hub context packet (server state, user-owned instructions and contextual documents; additional documents via synara_project_read_document):",
+          hubContextPacketRoleIntro(role),
+          HUB_CONTEXT_PACKET_PROVENANCE_LEGEND,
           budget.packet,
           packet.historicalCoverage === "partial"
             ? "Historical coverage is partial; remaining threads are not yet summarized."
@@ -5111,12 +5582,16 @@ export const makeProjectAgentService = Effect.gen(function* () {
             continue;
           }
           if (!config.enabled) continue;
-          const cursor = yield* repository
-            .getCursor(config.projectId)
-            .pipe(Effect.mapError(toServiceError("Failed to load wake cursor.")));
-          if (cursor.coordinatorBusy || cursor.frozenFromInboxId) {
-            yield* impl.processPendingWakes(config.projectId);
-          }
+          // A crash can leave a fresh inbox event before any wake range was
+          // frozen. The existing receipt/cursor path also resumes that idle gap.
+          yield* impl.processPendingWakes(config.projectId).pipe(
+            Effect.catch((error) =>
+              Effect.logWarning("failed to recover Hub wake", {
+                projectId: config.projectId,
+                error: String(error),
+              }),
+            ),
+          );
         }
       }),
 
@@ -5314,10 +5789,25 @@ export const makeProjectAgentService = Effect.gen(function* () {
         // treats it as an interruption (never `completed`): no false
         // "finished" row, and the recovery counter is not reset by the
         // ladder's own interrupt.
-        const eventType =
-          input.eventType === "thread.turn-diff-completed" &&
-          input.checkpointStatus !== undefined &&
-          input.checkpointStatus !== "ready"
+        const nonGitTurn =
+          (input.eventType === "thread.session-set" || input.eventType === "worker.completed") &&
+          (Option.isSome(worker) || Option.isSome(task)) &&
+          Option.isSome(shell)
+            ? yield* completedNonGitTurn(shell.value)
+            : null;
+        if (
+          input.eventType === "worker.completed" &&
+          (!nonGitTurn || nonGitTurn.turnId !== input.turnId)
+        )
+          return;
+        const sourceEventId = nonGitTurn
+          ? `worker-non-git-completed:${input.threadId}:${nonGitTurn.turnId}`
+          : input.sourceEventId;
+        const eventType = nonGitTurn
+          ? "worker.completed"
+          : input.eventType === "thread.turn-diff-completed" &&
+              input.checkpointStatus !== undefined &&
+              input.checkpointStatus !== "ready"
             ? "worker.interrupted"
             : input.eventType;
         if (Option.isSome(configByCoordinator)) {
@@ -5377,18 +5867,140 @@ export const makeProjectAgentService = Effect.gen(function* () {
         // Paused/archived groups still record state (inbox event, worker row,
         // settlement report) — only the coordinator-thread rows suppress.
         const suppressRows = config.value.pausedAt != null || config.value.archivedAt != null;
-        const inserted = yield* repository
-          .insertInboxEvent({
-            id: branded.inbox(),
-            projectId,
-            sourceThreadId: input.threadId,
-            sourceEventId: input.sourceEventId,
-            eventType,
-            taskId: Option.isSome(task) ? task.value.id : null,
-            eligibleWake,
-            createdAt: input.createdAt,
-          })
+        const inboxEvent = {
+          id: branded.inbox(),
+          projectId,
+          sourceThreadId: input.threadId,
+          sourceEventId,
+          eventType,
+          taskId: Option.isSome(task) ? task.value.id : null,
+          eligibleWake,
+          createdAt: input.createdAt,
+        };
+        let delivery: typeof NonGitDelivery.Type | undefined;
+        if (nonGitTurn && Option.isSome(worker)) {
+          const newest = yield* projectionMessages
+            .getNewestIdByThreadTurnRole({
+              threadId: input.threadId,
+              turnId: nonGitTurn.turnId,
+              role: "assistant",
+            })
+            .pipe(Effect.mapError(toServiceError("Failed to read completed worker reply.")));
+          const message = Option.isSome(newest)
+            ? yield* projectionMessages
+                .getByThreadAndMessageId({ threadId: input.threadId, messageId: newest.value })
+                .pipe(Effect.mapError(toServiceError("Failed to read completed worker reply.")))
+            : Option.none();
+          delivery = {
+            turnId: nonGitTurn.turnId,
+            completedAt: nonGitTurn.completedAt!,
+            goalId: Option.isSome(task) ? task.value.goalId : null,
+            prUrl: Option.isSome(shell) ? (shell.value.lastKnownPr?.url ?? null) : null,
+            report: formatWorkerSettlementReport({
+              title: worker.value.title,
+              threadId: input.threadId,
+              eventType: "worker.completed",
+              status: "ready",
+              lastError: null,
+              lastAssistantText: Option.isSome(message) ? message.value.text.slice(0, 4_000) : null,
+            }),
+            worker: {
+              threadId: worker.value.threadId,
+              projectId,
+              batchId: worker.value.batchId,
+              title: worker.value.title,
+              taskId: Option.isSome(task) ? task.value.id : worker.value.taskId,
+              resultSummary: worker.value.resultSummary?.slice(0, 8_000) ?? null,
+              activeTurnCommandId: worker.value.activeTurnCommandId,
+            },
+          };
+        }
+        const insert = repository
+          .insertInboxEvent(inboxEvent)
           .pipe(Effect.mapError(toServiceError("Failed to record project inbox event.")));
+        const admitted =
+          nonGitTurn && Option.isSome(worker)
+            ? yield* withProjectLock(
+                projectId,
+                sql
+                  .withTransaction(
+                    Effect.gen(function* () {
+                      // The engine writes pending starts/turns in the same SQLite database.
+                      // Claim before any report or wake; a queued or newer attempt wins.
+                      const current = yield* snapshotQuery.getThreadShellById(input.threadId);
+                      const pending = yield* projectionTurns.getPendingTurnStartByThreadId({
+                        threadId: input.threadId,
+                      });
+                      const freshWorker = yield* repository.findManagedWorkerByThread(
+                        input.threadId,
+                      );
+                      if (
+                        Option.isNone(current) ||
+                        Option.isSome(pending) ||
+                        Option.isNone(freshWorker) ||
+                        current.value.latestTurn?.turnId !== nonGitTurn.turnId ||
+                        current.value.latestTurn.state !== "completed" ||
+                        current.value.session?.status !== "ready" ||
+                        current.value.session.activeTurnId !== null ||
+                        freshWorker.value.activeTurnCommandId !== worker.value.activeTurnCommandId
+                      )
+                        return null;
+                      const cursor = yield* repository.getCursor(projectId);
+                      const frozen = cursor.frozenToInboxId
+                        ? yield* repository.getInboxEvent({
+                            projectId,
+                            inboxId: cursor.frozenToInboxId,
+                          })
+                        : Option.none();
+                      const observedAt = new Date().toISOString();
+                      // Inbox order is a logical admission clock; it must not
+                      // jump behind an acknowledged or frozen wake after clock rollback.
+                      const orderedAt = new Date(
+                        Math.max(
+                          Date.parse(observedAt),
+                          cursor.processedThroughCreatedAt
+                            ? Date.parse(cursor.processedThroughCreatedAt) + 1
+                            : 0,
+                          Option.isSome(frozen) ? Date.parse(frozen.value.createdAt) + 1 : 0,
+                        ),
+                      ).toISOString();
+                      const inserted = yield* repository.insertInboxEvent({
+                        ...inboxEvent,
+                        createdAt: orderedAt,
+                      });
+                      if (!inserted.inserted) return inserted;
+                      const saved = yield* persistWorkerSettlement({
+                        worker: freshWorker.value,
+                        outcome: "completed",
+                        taskId: Option.isSome(task) ? task.value.id : null,
+                        createdAt: nonGitTurn.completedAt!,
+                        updatedAt: observedAt,
+                        expectedTurnCommandId: freshWorker.value.activeTurnCommandId,
+                      });
+                      if (!saved)
+                        return yield* Effect.fail(
+                          fail("Completed worker attempt changed before settlement."),
+                        );
+                      yield* storeReceipt(
+                        sourceEventId,
+                        projectId,
+                        "worker-completion-pending",
+                        delivery,
+                      );
+                      return inserted;
+                    }),
+                  )
+                  .pipe(Effect.mapError(toServiceError("Failed to claim completed worker turn."))),
+              )
+            : yield* insert;
+        if (!admitted) return;
+        const inserted = admitted;
+        if (nonGitTurn && Option.isSome(worker)) {
+          // The wake owner replays delivery before acknowledging its inbox row.
+          yield* impl.processPendingWakes(projectId);
+          yield* impl.scheduleDigest(projectId);
+          return;
+        }
         const shouldReport = managedWorker && shouldMaterializeWorkerSettlementReport(eventType);
         let reportRewritten = false;
         if (shouldReport) {
@@ -5480,8 +6092,9 @@ export const makeProjectAgentService = Effect.gen(function* () {
           yield* recordWorkerMonitorEvent({
             worker: worker.value,
             eventType,
-            sourceEventId: input.sourceEventId,
-            createdAt: input.createdAt,
+            sourceEventId,
+            ...(nonGitTurn ? { expectedTurnCommandId: worker.value.activeTurnCommandId } : {}),
+            createdAt: nonGitTurn?.completedAt ?? input.createdAt,
             coordinatorThreadId: config.value.coordinatorThreadId,
             taskId: Option.isSome(task) ? task.value.id : null,
             lastKnownPr: Option.isSome(shell) ? (shell.value.lastKnownPr ?? null) : null,
@@ -5502,12 +6115,76 @@ export const makeProjectAgentService = Effect.gen(function* () {
         projectId,
         Effect.gen(function* () {
           const config = yield* requireConfig(projectId);
+          let cursor = yield* repository
+            .getCursor(projectId)
+            .pipe(Effect.mapError(toServiceError("Failed to load project event cursor.")));
+          // Pages the inbox until a wake-eligible row appears or the tail is
+          // exhausted. Every consumed row advances the keyset cursor, so a
+          // page of non-wake rows can no longer hide later worker alerts
+          // behind the 50-row read window.
+          let eligible: ReadonlyArray<ProjectInboxEvent> = [];
+          let deliveryBlocked = false;
+          let scanAfterId = cursor.processedThroughInboxId;
+          let scanAfterCreatedAt = cursor.processedThroughCreatedAt;
+          for (;;) {
+            const pending = yield* repository
+              .listInboxAfter({
+                projectId,
+                afterCreatedAt: scanAfterCreatedAt,
+                afterId: scanAfterId,
+                limit: 50,
+              })
+              .pipe(Effect.mapError(toServiceError("Failed to load project inbox.")));
+            if (pending.length === 0) break;
+            const readyPrefix: ProjectInboxEvent[] = [];
+            for (const event of pending) {
+              const delivered = yield* finishNonGitDelivery(event, config).pipe(
+                Effect.as(true),
+                // Keep the durable hole pending and materialize other ready
+                // completions without clearing an unrelated frozen continuation.
+                Effect.catch((error) =>
+                  Effect.logWarning("failed to deliver Hub worker completion", {
+                    projectId,
+                    inboxId: event.id,
+                    error: String(error),
+                  }).pipe(Effect.as(false)),
+                ),
+              );
+              if (!delivered) deliveryBlocked = true;
+              if (!deliveryBlocked) readyPrefix.push(event);
+            }
+            const found = readyPrefix.filter((event) => event.eligibleWake);
+            if (found.length > 0) {
+              eligible = found;
+              break;
+            }
+            const last = readyPrefix.at(-1);
+            if (last) {
+              scanAfterId = last.id;
+              scanAfterCreatedAt = last.createdAt;
+            }
+            if (deliveryBlocked) break;
+          }
+          // A frozen range can only be acknowledged if its entire prefix is
+          // ready. Later failed deliveries do not own or release that range.
+          if (
+            deliveryBlocked &&
+            cursor.frozenToInboxId !== null &&
+            !eligible.some((event) => event.id === cursor.frozenToInboxId)
+          )
+            return;
           // Paused/archived groups refuse coordinator wakes. The inbox rows
           // stay recorded, so resume/unarchive re-drives the backlog.
           if (config.pausedAt !== null || config.archivedAt !== null) return;
           const goal = yield* repository
             .getActiveGoal(projectId)
             .pipe(Effect.mapError(toServiceError("Failed to load goal for wake.")));
+          if (
+            Option.isSome(goal) &&
+            goal.value.status === "paused" &&
+            goal.value.continuationCount >= goal.value.limits.maxAutomaticContinuationsPerGoal
+          )
+            return;
           const activeGoal =
             Option.isSome(goal) && goal.value.status === "active" ? goal.value : null;
           if (
@@ -5539,9 +6216,6 @@ export const makeProjectAgentService = Effect.gen(function* () {
             });
             return;
           }
-          let cursor = yield* repository
-            .getCursor(projectId)
-            .pipe(Effect.mapError(toServiceError("Failed to load project event cursor.")));
           if (
             cursor.coordinatorBusy &&
             cursor.frozenFromInboxId !== null &&
@@ -5641,34 +6315,12 @@ export const makeProjectAgentService = Effect.gen(function* () {
             yield* clearWakeCursor(projectId, cursor);
             cursor = { ...cursor, coordinatorBusy: false, coordinatorBusySince: null };
           }
-          // Pages the inbox until a wake-eligible row appears or the tail is
-          // exhausted. Every consumed row advances the keyset cursor, so a
-          // page of non-wake rows can no longer hide later worker alerts
-          // behind the 50-row read window.
-          let eligible: ReadonlyArray<ProjectInboxEvent> = [];
-          let scanAfterId = cursor.processedThroughInboxId;
-          let scanAfterCreatedAt = cursor.processedThroughCreatedAt;
-          for (;;) {
-            const pending = yield* repository
-              .listInboxAfter({
-                projectId,
-                afterCreatedAt: scanAfterCreatedAt,
-                afterId: scanAfterId,
-                limit: 50,
-              })
-              .pipe(Effect.mapError(toServiceError("Failed to load project inbox.")));
-            if (pending.length === 0) break;
-            const found = pending.filter((event) => event.eligibleWake);
-            if (found.length > 0) {
-              eligible = found;
-              break;
-            }
-            const last = pending[pending.length - 1]!;
+          if (scanAfterId !== cursor.processedThroughInboxId) {
             yield* repository
               .saveCursor({
                 projectId,
-                processedThroughInboxId: last.id,
-                processedThroughCreatedAt: last.createdAt,
+                processedThroughInboxId: scanAfterId,
+                processedThroughCreatedAt: scanAfterCreatedAt,
                 frozenFromInboxId: null,
                 frozenToInboxId: null,
                 coordinatorBusy: false,
@@ -5676,8 +6328,6 @@ export const makeProjectAgentService = Effect.gen(function* () {
                 updatedAt: isoNow(),
               })
               .pipe(Effect.mapError(toServiceError("Failed to advance project event cursor.")));
-            scanAfterId = last.id;
-            scanAfterCreatedAt = last.createdAt;
           }
           if (eligible.length === 0) return;
           const coordinator = yield* snapshotQuery
@@ -5794,6 +6444,14 @@ export const makeProjectAgentService = Effect.gen(function* () {
               );
         for (const config of configs) {
           if (!config.enabled) continue;
+          yield* impl.processPendingWakes(config.projectId).pipe(
+            Effect.catch((error) =>
+              Effect.logWarning("failed to recover Hub completion", {
+                projectId: config.projectId,
+                error: String(error),
+              }),
+            ),
+          );
           if (config.pausedAt !== null || config.archivedAt !== null) continue;
           // Only tracked workers are checked. Ordinary group chats stay
           // indexed for context but a healthy idle/finished one must never
@@ -5813,7 +6471,15 @@ export const makeProjectAgentService = Effect.gen(function* () {
               .pipe(Effect.catch(() => Effect.succeed(Option.none())));
             const worker = workerByThread.get(threadId);
             if (worker !== undefined) {
-              yield* inspectManagedWorkerHealth({ worker, shell, liveWorkerThreadIds });
+              yield* inspectManagedWorkerHealth({ worker, shell, liveWorkerThreadIds }).pipe(
+                Effect.catch((error) =>
+                  Effect.logWarning("failed to inspect Hub worker", {
+                    projectId: config.projectId,
+                    threadId: worker.threadId,
+                    error: String(error),
+                  }),
+                ),
+              );
               continue;
             }
             if (Option.isNone(shell)) {
@@ -6216,6 +6882,11 @@ export const makeProjectAgentService = Effect.gen(function* () {
 
     onProjectDeleted: (projectId) =>
       Effect.gen(function* () {
+        if (Option.isSome(hubWorkRepository)) {
+          yield* hubWorkRepository.value
+            .deleteProject(projectId)
+            .pipe(Effect.mapError(toServiceError("Failed to delete hub work.")));
+        }
         const config = yield* repository
           .getConfig(projectId)
           .pipe(Effect.mapError(toServiceError("Failed to load coordinator for deletion.")));
@@ -6265,6 +6936,7 @@ export const makeProjectAgentService = Effect.gen(function* () {
               return event.activity.projectId === input.projectId;
             if (event.type === "digest-upserted") return event.digest.projectId === input.projectId;
             if (event.type === "thread-index-upserted") return event.projectId === input.projectId;
+            if (event.type === "work-item-upserted") return event.projectId === input.projectId;
             return event.head.projectId === input.projectId;
           };
           const liveQueue = yield* Queue.bounded<ProjectAgentStreamEvent, Cause.Done>(64);
@@ -6411,12 +7083,20 @@ export const makeProjectAgentService = Effect.gen(function* () {
   return impl satisfies ProjectAgentServiceShape;
 });
 
-// Stable (Groups off) gets the inert face; Beta and every other host get the service.
+// A disabled feature gets the inert face; Stable and Beta currently get the service.
 export const ProjectAgentServiceLive = Layer.effect(
   ProjectAgentService,
   makeProjectAgentService.pipe(
     Effect.map((service) =>
       isServerGroupsEnabled() ? service : gateProjectAgentServiceForStable(service),
+    ),
+  ),
+).pipe(
+  Layer.provide(
+    Layer.mergeAll(
+      ProjectionTurnRepositoryLive,
+      ProjectionThreadMessageRepositoryLive,
+      ProviderSessionDirectoryLive.pipe(Layer.provide(ProviderSessionRuntimeRepositoryLive)),
     ),
   ),
 );

@@ -1,6 +1,5 @@
-import { GitHubIcon } from "~/lib/icons";
+import { GitHubIcon, FolderIcon } from "~/lib/icons";
 
-import { FolderClosed } from "./FolderClosed";
 import { SegmentedPicker } from "./SegmentedPicker";
 
 export type ProjectSource = "local" | "github";
@@ -27,7 +26,7 @@ export function ProjectSourceSegmentedPicker(props: {
         {
           value: "local",
           label: "Folder",
-          icon: <FolderClosed className="size-3.5" aria-hidden="true" />,
+          icon: <FolderIcon className="size-3.5" aria-hidden="true" />,
         },
         {
           value: "github",

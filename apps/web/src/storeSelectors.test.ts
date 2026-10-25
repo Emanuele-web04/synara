@@ -8,11 +8,11 @@ import {
   createAllThreadsSelector,
   createAllThreadsMessagelessSelector,
   createComposerThreadMentionSourcesSelector,
+  createLastActivityTimestampSelector,
   createProjectLastActivityAtSelector,
   createSidebarDisplayThreadsSelector,
   createSidechatSummariesForGitHubItemSelector,
   createSidechatSummariesForSourceSelector,
-  createSidebarTreeThreadsSelector,
   createThreadExistsSelector,
   createThreadGitActionsMetadataSelector,
   createThreadProjectIdSelector,
@@ -273,12 +273,38 @@ describe("sidebar thread visibility", () => {
     expect(isSidebarThreadVisible(sidechatSummary, { hideAutomationRunThreads: true })).toBe(false);
   });
 
-  it("filters run threads out of the display and tree selectors", () => {
+  it("filters run threads out of the display selector", () => {
     const selectDisplay = createSidebarDisplayThreadsSelector({ hideAutomationRunThreads: true });
-    const selectTree = createSidebarTreeThreadsSelector({ hideAutomationRunThreads: true });
 
     expect(selectDisplay(state).map((thread) => thread.id)).toEqual([threadIdB, threadIdC]);
-    expect(selectTree(state).map((thread) => thread.id)).toEqual([threadIdB, threadIdC]);
+  });
+
+  it("keeps child chats out of navigation candidates as well as rendered rows", () => {
+    const child = { ...summaryA, parentThreadId: threadIdB } as SidebarThreadSummary;
+    expect(isSidebarThreadVisible(child)).toBe(false);
+    expect(isSidebarThreadVisible(child, { includeSnoozed: true })).toBe(false);
+  });
+
+  it("keeps subagent threads out of the sidebar, even pinned or snoozed-included", () => {
+    const parentThreadId = "thread-parent" as ThreadId;
+    const parent = { ...summaryA, id: parentThreadId } as SidebarThreadSummary;
+    const child = {
+      ...summaryA,
+      id: "thread-child" as ThreadId,
+      parentThreadId,
+      isPinned: true,
+    } as SidebarThreadSummary;
+    const subagentState = makeState({
+      threadIds: [parent.id, child.id],
+      sidebarThreadSummaryById: { [parent.id]: parent, [child.id]: child },
+    });
+
+    for (const select of [
+      createSidebarDisplayThreadsSelector(),
+      createSidebarDisplayThreadsSelector({ includeSnoozed: true }),
+    ]) {
+      expect(select(subagentState).map((thread) => thread.id)).toEqual([parentThreadId]);
+    }
   });
 
   it("keeps run threads in the selectors when the option is unset", () => {
@@ -565,6 +591,32 @@ describe("createProjectLastActivityAtSelector", () => {
     );
 
     expect(after).toBe(before);
+  });
+});
+
+describe("createLastActivityTimestampSelector", () => {
+  const stamped = "2026-03-09T11:00:00.000Z";
+
+  it("maps only shells that carry a durable stamp (sparse map, C1)", () => {
+    const selectTimestamps = createLastActivityTimestampSelector();
+    const state = makeState({
+      threadIds: [threadIdA, threadIdB],
+      threadShellById: {
+        // Shell A has a durable stamp; shell B is present but stale/pruned.
+        [threadIdA]: { ...shellA, updatedAt: stamped },
+        [threadIdB]: { ...shellB },
+      },
+    });
+    const result = selectTimestamps(state);
+    expect(Object.keys(result)).toEqual([threadIdA]);
+    expect(result[threadIdA]).toBe(Date.parse(stamped));
+    // Absent shells must not be conflated with an explicit null.
+    expect(threadIdB in result).toBe(false);
+    expect(
+      selectTimestamps(
+        makeState({ threadIds: [threadIdA], threadShellById: { [threadIdA]: { ...shellA } } }),
+      ),
+    ).toEqual({});
   });
 });
 

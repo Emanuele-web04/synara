@@ -1,7 +1,13 @@
-import type { ModelSelection } from "@synara/contracts";
+import { DEFAULT_PROJECT_AGENT_LIMITS, type ModelSelection } from "@synara/contracts";
 
 import { Input } from "~/components/ui/input";
-import { SettingsCard, SettingsSectionShell } from "~/components/settings/SettingsPanelPrimitives";
+import {
+  SettingsCard,
+  SettingsRow,
+  SettingsSectionShell,
+} from "~/components/settings/SettingsPanelPrimitives";
+import { SettingsSelectControl } from "~/components/settings/SettingControls";
+import { SelectItem } from "~/components/ui/select";
 import { dialogFieldLabelClassName } from "~/components/ui/dialog";
 import { cn } from "~/lib/utils";
 
@@ -122,6 +128,37 @@ export function GroupGeneralSection(props: {
               onChange={(event) => onChange({ goal: event.target.value })}
             />
           </div>
+        </SettingsCard>
+      </SettingsSectionShell>
+
+      <SettingsSectionShell title="Execution">
+        <SettingsCard>
+          <SettingsRow
+            title="Parallel threads"
+            description="Additional work waits in the queue until a slot is available."
+            control={
+              <SettingsSelectControl
+                value={String(draft.maxConcurrentWorkers)}
+                valueContent={String(
+                  Math.min(
+                    draft.maxConcurrentWorkers,
+                    DEFAULT_PROJECT_AGENT_LIMITS.maxConcurrentWorkers,
+                  ),
+                )}
+                ariaLabel="Parallel threads"
+                onValueChange={(value) => onChange({ maxConcurrentWorkers: Number(value) })}
+              >
+                {Array.from(
+                  { length: DEFAULT_PROJECT_AGENT_LIMITS.maxConcurrentWorkers },
+                  (_, index) => (
+                    <SelectItem key={index + 1} value={String(index + 1)}>
+                      {index + 1}
+                    </SelectItem>
+                  ),
+                )}
+              </SettingsSelectControl>
+            }
+          />
         </SettingsCard>
       </SettingsSectionShell>
 

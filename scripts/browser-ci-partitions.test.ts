@@ -47,12 +47,15 @@ describe("browser CI partitions", () => {
           "approval already answered",
           "queued composer request",
           "a newly added case",
-          "[geometry:linux] a quarantined case",
-          "[geometry:linux] restores streaming follow",
-          "[geometry:linux] creates a project",
         ]) {
-          const selected = owners.filter(({ pattern }) => pattern?.test(name));
-          expect(selected.length, name).toBe(stable[0]!.pattern!.test(name) ? 1 : 0);
+          // Expected membership must not come from the config being checked.
+          for (const [title, expected] of [
+            [name, 1],
+            [`[geometry:linux] ${name}`, 0],
+          ] as const) {
+            const selected = owners.filter(({ pattern }) => pattern?.test(title));
+            expect(selected.length, title).toBe(expected);
+          }
         }
       } else {
         expect(owners.map(({ project }) => project)).toEqual(["components (chromium)"]);

@@ -9,7 +9,7 @@ import {
   Undo2Icon,
   XIcon,
 } from "~/lib/icons";
-import type { CodeEditHistoryState } from "~/components/codeEditor/pierreEdit";
+import type { CodeEditHistoryState } from "~/components/codeEditor/codeEditHistory";
 import { cn } from "~/lib/utils";
 import {
   AlertDialog,
@@ -200,6 +200,33 @@ export function WorkspaceFileEditorDiscardDialog(props: WorkspaceFileEditorDisca
   );
 }
 
+interface WorkspaceFileEditorNoticeBarProps {
+  message: string;
+  /** Trailing controls (Reload/Overwrite, Dismiss). */
+  actions?: ReactNode;
+  /** `alert` for save failures the user must resolve; `status` for advisory notices. */
+  role?: "alert" | "status";
+}
+
+/** The editor's full-width notice strip under the header: one line, an icon, trailing actions. */
+export function WorkspaceFileEditorNoticeBar(props: WorkspaceFileEditorNoticeBarProps) {
+  return (
+    <div
+      role={props.role ?? "alert"}
+      className="flex shrink-0 items-center gap-2 border-b border-border bg-[var(--color-background-elevated-secondary)] px-3 py-1.5"
+    >
+      <TriangleAlertIcon
+        aria-hidden="true"
+        className="size-3.5 shrink-0 text-[var(--color-warning)]"
+      />
+      <p className="min-w-0 flex-1 truncate text-ui-sm text-foreground/85" title={props.message}>
+        {props.message}
+      </p>
+      {props.actions}
+    </div>
+  );
+}
+
 interface WorkspaceFileEditorConflictBarProps {
   message: string;
   conflict: boolean;
@@ -209,34 +236,32 @@ interface WorkspaceFileEditorConflictBarProps {
 
 export function WorkspaceFileEditorConflictBar(props: WorkspaceFileEditorConflictBarProps) {
   return (
-    <div className="flex shrink-0 items-center gap-2 border-b border-border bg-[var(--color-background-elevated-secondary)] px-3 py-1.5">
-      <TriangleAlertIcon
-        aria-hidden="true"
-        className="size-3.5 shrink-0 text-[var(--color-warning)]"
-      />
-      <p className="min-w-0 flex-1 truncate text-ui-sm text-foreground/85" title={props.message}>
-        {props.message}
-      </p>
-      <Button
-        type="button"
-        size="xs"
-        variant="chrome-outline"
-        className="!h-6 shrink-0 rounded-md text-ui-sm"
-        onClick={props.onReload}
-      >
-        Reload from disk
-      </Button>
-      {props.conflict ? (
-        <Button
-          type="button"
-          size="xs"
-          variant="chrome-outline"
-          className="!h-6 shrink-0 rounded-md text-ui-sm"
-          onClick={props.onOverwrite}
-        >
-          Overwrite
-        </Button>
-      ) : null}
-    </div>
+    <WorkspaceFileEditorNoticeBar
+      message={props.message}
+      actions={
+        <>
+          <Button
+            type="button"
+            size="xs"
+            variant="chrome-outline"
+            className="!h-6 shrink-0 rounded-md text-ui-sm"
+            onClick={props.onReload}
+          >
+            Reload from disk
+          </Button>
+          {props.conflict ? (
+            <Button
+              type="button"
+              size="xs"
+              variant="chrome-outline"
+              className="!h-6 shrink-0 rounded-md text-ui-sm"
+              onClick={props.onOverwrite}
+            >
+              Overwrite
+            </Button>
+          ) : null}
+        </>
+      }
+    />
   );
 }

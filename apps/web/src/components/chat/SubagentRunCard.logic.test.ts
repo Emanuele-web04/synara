@@ -1,0 +1,1145 @@
+// FILE: SubagentRunCard.logic.test.ts
+// Purpose: Locks how a turn's subagents fold into one transcript card and how
+// the card derives rows, counts, states, durations, nested rows, and labels.
+// Layer: Web chat transcript tests
+
+import { ThreadId, TurnId, type MessageId } from "@synara/contracts";
+import { describe, expect, it } from "vitest";
+
+import type { WorkLogEntry, WorkLogSubagent } from "../../session-logic";
+import { makeActivity, makeThread } from "../../storeTestFixtures";
+import { enrichSubagentWorkEntries } from "../ChatView.logic";
+import {
+  deriveSubagentRunCard,
+  describeSubagentRunHeader,
+  describeSubagentRunRow,
+  EMPTY_SUBAGENT_RUN_SCAN,
+  findLatestSubagentThreadRun,
+  firstLinePreview,
+  foldSubagentRunWorkEntries,
+  NO_RUNNING_AGENTS,
+  scanSubagentRunCards,
+  summarizeRunningAgents,
+  type SubagentRunThread,
+} from "./SubagentRunCard.logic";
+import {
+  deriveSubagentTaskEnds,
+  deriveWorkLogEntries,
+  NO_RUNNING_SUBAGENT_TASKS,
+  type RunningSubagentTasks,
+} from "../../session-logic";
+
+const PARENT = ThreadId.makeUnsafe("parent");
+const launchedAtIso = "2026-10-10T00:00:00.000Z";
+
+function entry(
+  overrides: Partial<Omit<WorkLogEntry, "turnId">> & { id: string; turnId?: string | null },
+): WorkLogEntry {
+  const { turnId, ...rest } = overrides;
+  return {
+    createdAt: "2026-10-10T00:00:00.000Z",
+    label: "Tool",
+    tone: "tool",
+    turnId:
+      turnId === undefined
+        ? TurnId.makeUnsafe("turn-1")
+        : turnId
+          ? TurnId.makeUnsafe(turnId)
+          : null,
+    ...rest,
+  };
+}
+
+function spawn(id: string, createdAt: string, subagents: WorkLogSubagent[], turnId = "turn-1") {
+  return entry({
+    id,
+    createdAt,
+    turnId,
+    label: "Subagent task",
+    itemType: "collab_agent_tool_call",
+    subagentAction: { tool: "spawnAgent", status: "completed", summaryText: "Spawning 1 agent" },
+    subagents,
+  });
+}
+
+function childThread(id: string, overrides: Partial<SubagentRunThread> = {}): SubagentRunThread {
+  return {
+    id: ThreadId.makeUnsafe(id),
+    title: "Child",
+    createdAt: "2026-10-10T00:00:01.000Z",
+    error: null,
+    session: null,
+    latestTurn: null,
+    messages: [],
+    activities: [],
+    modelSelection: { provider: "claudeAgent", model: "claude-haiku-5-5" },
+    parentThreadId: PARENT,
+    sourceThreadId: PARENT,
+    subagentAgentId: null,
+    subagentNickname: null,
+    subagentRole: "general-purpose",
+    ...overrides,
+  };
+}
+
+function completedTurn(startedAt: string, completedAt: string, state = "completed" as const) {
+  return {
+    turnId: TurnId.makeUnsafe(`turn-${completedAt}`),
+    state,
+    requestedAt: startedAt,
+    startedAt,
+    completedAt,
+    assistantMessageId: null,
+  };
+}
+
+function assistantMessage(text: string) {
+  return {
+    id: `m-${text.length}` as MessageId,
+    role: "assistant" as const,
+    text,
+    createdAt: "2026-10-10T00:00:09.000Z",
+    streaming: false,
+  };
+}
+
+describe("foldSubagentRunWorkEntries", () => {
+  it("anchors a resumed subagent in its new launching turn and keeps late progress in the original card", () => {
+    const folded = foldSubagentRunWorkEntries([
+      spawn("first", launchedAtIso, [{ threadId: "a", rawStatus: "completed" }]),
+      spawn(
+        "resume",
+        "2026-10-10T00:01:00.000Z",
+        [{ threadId: "a", rawStatus: "running" }],
+        "turn-2",
+      ),
+      entry({
+        id: "late-progress",
+        tone: "info",
+        turnId: "turn-1",
+        detail: "Read README.md",
+        subagentProgress: { toolUseId: "a", title: "Read", outcome: "completed" },
+      }),
+    ]);
+    expect(folded.map((item) => item.id)).toEqual(["subagent-run:first", "subagent-run:resume"]);
+    expect(folded[0]!.subagents?.[0]?.rawStatus).toBe("completed");
+    expect(folded[0]!.subagentRun?.members[0]?.latestStep).toBe("Read README.md");
+    expect(folded[1]!.subagentRun?.members[0]?.latestStep).toBeNull();
+  });
+
+  it("keeps a same-turn resume live while later wait and input calls update its own invocation", () => {
+    const first = spawn("first", launchedAtIso, [{ threadId: "a", rawStatus: "running" }]);
+    const wait = (id: string, createdAt: string) =>
+      entry({
+        id,
+        createdAt,
+        itemType: "collab_agent_tool_call",
+        subagentAction: { tool: "wait", status: "completed", summaryText: "Waited" },
+        subagents: [{ threadId: "a", rawStatus: "completed" }],
+      });
+    const resumedAt = "2026-10-10T00:01:00.000Z";
+    const resume = {
+      ...spawn("resume", resumedAt, [{ threadId: "a", rawStatus: "running" }]),
+      subagentAction: { tool: "resumeAgent", status: "completed", summaryText: "Resumed" },
+    };
+    const input = {
+      ...spawn("input", "2026-10-10T00:01:01.000Z", [
+        { threadId: "a", providerThreadId: "provider-a", rawStatus: "running" },
+      ]),
+      subagentAction: { tool: "sendInput", status: "completed", summaryText: "Updated" },
+    };
+    const events = [
+      first,
+      wait("first-ended", "2026-10-10T00:00:08.000Z"),
+      resume,
+      input,
+      entry({
+        id: "late-first-progress",
+        createdAt: "2026-10-10T00:00:04.000Z",
+        detail: "First action",
+        subagentProgress: { toolUseId: "a", title: "First", outcome: "completed" },
+      }),
+      entry({
+        id: "resume-progress",
+        createdAt: "2026-10-10T00:01:02.000Z",
+        detail: "Resumed action",
+        subagentProgress: { toolUseId: "provider-a", title: "Resumed" },
+      }),
+    ];
+    const folded = foldSubagentRunWorkEntries(events);
+    expect(folded.map((item) => item.id)).toEqual(["subagent-run:first", "subagent-run:resume"]);
+    expect(folded[0]!.subagentRun?.members[0]?.nextLaunchedAt).toBe(resumedAt);
+    expect(folded[1]!.subagentRun?.members[0]?.launchedAt).toBe(resumedAt);
+    expect(folded.map((item) => item.subagentRun?.members[0]?.latestStep)).toEqual([
+      "First action",
+      "Resumed action",
+    ]);
+    const taskEndByToolUseId = new Map([
+      ["a", { outcome: "completed" as const, endedAt: "2026-10-10T00:00:08.000Z" }],
+    ]);
+    expect(
+      scanSubagentRunCards({
+        entries: folded,
+        threads: [],
+        parentThreadId: PARENT,
+        liveTurnId: TurnId.makeUnsafe("turn-1"),
+        taskEndByToolUseId,
+      }).latestRunningCard,
+    ).toEqual({ entryId: "subagent-run:resume", runningCount: 1 });
+
+    const settled = foldSubagentRunWorkEntries([
+      ...events,
+      wait("resume-ended", "2026-10-10T00:01:03.000Z"),
+    ]);
+    expect(settled.map((item) => item.subagentRun?.members[0]?.settledAt)).toEqual([
+      "2026-10-10T00:00:08.000Z",
+      "2026-10-10T00:01:03.000Z",
+    ]);
+  });
+
+  it("keeps launch positions and applies progress to its owning invocation", () => {
+    const entries = [
+      entry({ id: "read", label: "Read calc.py" }),
+      spawn("spawn-a", "2026-10-10T00:00:01.000Z", [
+        { threadId: "toolu_a", providerThreadId: "toolu_a", nickname: "Count lines" },
+      ]),
+      spawn("spawn-b", "2026-10-10T00:00:02.000Z", [
+        { threadId: "toolu_b", providerThreadId: "toolu_b", nickname: "Read README" },
+      ]),
+      entry({
+        id: "progress-a",
+        tone: "info",
+        detail: "Running Wait 8 seconds then count lines",
+        subagentProgress: { toolUseId: "toolu_a", title: "Count lines", outcome: "completed" },
+      }),
+      entry({ id: "after", label: "Ran ls" }),
+    ];
+
+    const folded = foldSubagentRunWorkEntries(entries);
+
+    expect(folded.map((item) => item.id)).toEqual([
+      "read",
+      "subagent-run:spawn-a",
+      "subagent-run:spawn-b",
+      "after",
+    ]);
+    const card = folded[1]!;
+    expect(card.tone).toBe("info");
+    expect(card.subagents?.map((subagent) => subagent.threadId)).toEqual(["toolu_a"]);
+    expect(folded[2]!.subagents?.map((subagent) => subagent.threadId)).toEqual(["toolu_b"]);
+    expect(folded.flatMap((entry) => entry.subagentRun?.members ?? [])).toEqual([
+      {
+        key: "toolu_a",
+        launchedAt: "2026-10-10T00:00:01.000Z",
+        latestStep: "Running Wait 8 seconds then count lines",
+        outcome: "completed",
+        failure: null,
+        settledAt: null,
+      },
+      {
+        key: "toolu_b",
+        launchedAt: "2026-10-10T00:00:02.000Z",
+        latestStep: null,
+        outcome: null,
+        failure: null,
+        settledAt: null,
+      },
+    ]);
+  });
+
+  it("keeps one card per turn and lets later state-only calls update known rows", () => {
+    const folded = foldSubagentRunWorkEntries([
+      spawn("spawn-1", "2026-10-10T00:00:01.000Z", [{ threadId: "agent-1", rawStatus: "running" }]),
+      spawn("spawn-2", "2026-10-10T00:01:00.000Z", [{ threadId: "agent-2" }], "turn-2"),
+      entry({
+        id: "wait",
+        turnId: "turn-2",
+        itemType: "collab_agent_tool_call",
+        subagentAction: { tool: "wait", status: "completed", summaryText: "Waited" },
+        subagents: [
+          { threadId: "agent-1", rawStatus: "completed" },
+          { threadId: "unknown-agent", rawStatus: "completed" },
+        ],
+      }),
+    ]);
+
+    expect(folded.map((item) => item.id)).toEqual(["subagent-run:spawn-1", "subagent-run:spawn-2"]);
+    expect(folded[0]!.subagents).toEqual([{ threadId: "agent-1", rawStatus: "completed" }]);
+    expect(folded[1]!.subagents?.map((subagent) => subagent.threadId)).toEqual(["agent-2"]);
+  });
+
+  it("does not read a Codex spawn call's completion as the subagent finishing", () => {
+    const launch = spawn("spawn-codex", "2026-10-10T00:00:00.000Z", [
+      { threadId: "codex-a", providerThreadId: "codex-a", nickname: "calc_wc" },
+    ]);
+    const settled = entry({
+      id: "settled",
+      createdAt: "2026-10-10T00:00:09.000Z",
+      itemType: "collab_agent_tool_call",
+      subagentAction: { tool: "subAgentSettled", status: "completed", summaryText: "Settled" },
+      subagents: [{ threadId: "codex-a", rawStatus: "completed" }],
+    });
+    // Codex children have no session and their turn never closes.
+    const child = childThread("subagent:parent:codex-a", {
+      latestTurn: { ...completedTurn(launchedAtIso, "x"), state: "running", completedAt: null },
+    });
+    const runCard = (entries: WorkLogEntry[], launchTurnLive = true) => {
+      const folded = foldSubagentRunWorkEntries(entries)[0]!;
+      return deriveSubagentRunCard({
+        subagents: folded.subagents ?? [],
+        run: folded.subagentRun!,
+        threads: [child],
+        parentThreadId: PARENT,
+        launchTurnLive,
+      });
+    };
+
+    expect(runCard([launch]).rows[0]!.phase).toBe("running");
+    // With no settle report, the end of the launching turn is the last word.
+    expect(runCard([launch], false).rows[0]!.phase).toBe("done");
+    const done = runCard([launch, settled]).rows[0]!;
+    expect(done.phase).toBe("done");
+    expect(done.endedAtMs! - done.startedAtMs!).toBe(9_000);
+  });
+
+  it("keeps a failed launch's error as the row's cause", () => {
+    const folded = foldSubagentRunWorkEntries([
+      entry({
+        id: "spawn-failed",
+        itemType: "collab_agent_tool_call",
+        detail: "Agent type 'tester' not found",
+        subagentAction: { tool: "spawnAgent", status: "failed", summaryText: "Spawning 1 agent" },
+        subagents: [{ threadId: "toolu_x", nickname: "Run the tests" }],
+      }),
+    ]);
+    expect(folded[0]!.subagentRun?.members[0]?.failure).toBe("Agent type 'tester' not found");
+    const model = deriveSubagentRunCard({
+      subagents: folded[0]!.subagents ?? [],
+      run: folded[0]!.subagentRun!,
+      threads: [],
+      parentThreadId: PARENT,
+    });
+    expect(model.rows[0]!.phase).toBe("failed");
+    expect(model.rows[0]!.outcomeText).toBe("Agent type 'tester' not found");
+  });
+
+  it("returns the same array when nothing is routed to subagents", () => {
+    const entries = [entry({ id: "a" }), entry({ id: "b" })];
+    expect(foldSubagentRunWorkEntries(entries)).toBe(entries);
+  });
+});
+
+describe("deriveSubagentRunCard", () => {
+  it.each([
+    { outcome: "stopped", confirmed: true, phase: "running" },
+    { outcome: "stopped", confirmed: false, phase: "stopped" },
+    { outcome: "completed", confirmed: true, phase: "done" },
+    { outcome: "failed", confirmed: true, phase: "failed" },
+  ] as const)(
+    "reconciles a same-ID $outcome task only with native running confirmation=$confirmed",
+    ({ outcome, confirmed, phase }) => {
+      const startedAt = "2026-10-10T00:01:00.000Z";
+      const originalEnd = makeActivity({
+        id: "prior-end",
+        kind: "task.completed",
+        createdAt: "2026-10-10T00:00:08.000Z",
+        payload: { taskId: "same-id", toolUseId: "same-id", status: "completed" },
+      });
+      const history = [
+        originalEnd,
+        makeActivity({
+          id: "current-launch",
+          turnId: "turn-1",
+          kind: "task.started",
+          createdAt: startedAt,
+          payload: { taskId: "same-id", toolUseId: "same-id" },
+        }),
+        makeActivity({
+          id: "local-stop",
+          turnId: "turn-1",
+          kind: "task.completed",
+          createdAt: "2026-10-10T00:01:05.000Z",
+          payload: { taskId: "same-id", toolUseId: "same-id", status: outcome },
+        }),
+        makeActivity({
+          id: "native-replay",
+          turnId: "turn-1",
+          kind: "task.updated",
+          createdAt: "2026-10-10T00:01:06.000Z",
+          payload: {
+            taskId: "same-id",
+            toolUseId: "same-id",
+            status: "running",
+            reconcilesStop: confirmed,
+          },
+        }),
+      ];
+      const collab = (id: string, createdAt: string, rawStatus: string) =>
+        makeActivity({
+          id,
+          createdAt,
+          turnId: "turn-1",
+          kind: rawStatus === "stopped" ? "tool.completed" : "tool.updated",
+          payload: {
+            itemType: "collab_agent_tool_call",
+            status: rawStatus === "stopped" ? "failed" : "inProgress",
+            data: {
+              toolCallId: "same-id",
+              tool: "task",
+              receiverThreadIds: ["same-id"],
+              agentsStates: { "same-id": { status: rawStatus, agentId: "same-id" } },
+            },
+          },
+        });
+      const completeHistory = [
+        ...history.slice(0, 2),
+        collab("launch", startedAt, "running"),
+        history[2]!,
+        collab("local-collab-stop", "2026-10-10T00:01:05.000Z", "stopped"),
+        history[3]!,
+        collab("native-collab-replay", "2026-10-10T00:01:06.001Z", "running"),
+      ];
+      const thread = makeThread({
+        id: ThreadId.makeUnsafe(`subagent:${PARENT}:same-id`),
+        parentThreadId: PARENT,
+        subagentAgentId: "same-id",
+        latestTurn: {
+          ...completedTurn(startedAt, "2026-10-10T00:01:05.000Z"),
+          state: "interrupted",
+        },
+      });
+      const derive = (activities = completeHistory, child = thread) => {
+        const work = foldSubagentRunWorkEntries(
+          enrichSubagentWorkEntries(
+            deriveWorkLogEntries(activities, undefined),
+            [child],
+            PARENT,
+            activities,
+          ),
+        ).find((entry) => entry.subagentRun)!;
+        return deriveSubagentRunCard({
+          subagents: work.subagents!,
+          run: work.subagentRun!,
+          threads: [child],
+          parentThreadId: PARENT,
+          launchTurnLive: false,
+          taskEndByToolUseId: deriveSubagentTaskEnds(activities),
+        });
+      };
+      expect(derive().rows[0]?.phase).toBe(phase);
+      if (phase === "running") {
+        // A linked child with its own runtime retains its actual terminal state.
+        expect(
+          derive(completeHistory, {
+            ...thread,
+            id: ThreadId.makeUnsafe("independent-child"),
+            session: {
+              provider: "devin",
+              status: "ready",
+              orchestrationStatus: "interrupted",
+              createdAt: startedAt,
+              updatedAt: "2026-10-10T00:01:05.000Z",
+            },
+          }).rows[0]?.phase,
+        ).toBe("stopped");
+        for (const mismatch of [
+          { taskId: "other-agent" },
+          { toolUseId: "other-tool" },
+          { turnId: TurnId.makeUnsafe("other-turn") },
+        ]) {
+          const mismatched = completeHistory.map((activity) =>
+            activity.id === "native-replay"
+              ? {
+                  ...activity,
+                  ...(mismatch.turnId ? { turnId: mismatch.turnId } : {}),
+                  payload: {
+                    taskId: "same-id",
+                    toolUseId: "same-id",
+                    status: "running",
+                    reconcilesStop: true,
+                    ...mismatch,
+                  },
+                }
+              : activity,
+          );
+          expect(derive(mismatched).rows[0]?.phase).toBe("stopped");
+        }
+        // A reused agent/tool in a later invocation cannot inherit confirmation.
+        const nextStart = makeActivity({
+          id: "next-launch",
+          kind: "task.started",
+          turnId: "turn-2",
+          createdAt: "2026-10-10T00:01:07.000Z",
+          payload: { taskId: "same-id", toolUseId: "same-id" },
+        });
+        expect(derive([...completeHistory, nextStart]).rows[0]?.phase).toBe("stopped");
+        expect(
+          derive([
+            ...completeHistory,
+            nextStart,
+            makeActivity({
+              id: "late-old-replay",
+              createdAt: "2026-10-10T00:01:07.500Z",
+              kind: "task.updated",
+              turnId: "turn-1",
+              payload: history[3]!.payload,
+            }),
+          ]).rows[0]?.phase,
+        ).toBe("stopped");
+        // A later terminal task update revokes the earlier replay authority.
+        expect(
+          derive([
+            ...completeHistory,
+            makeActivity({
+              id: "native-task-stopped",
+              kind: "task.completed",
+              turnId: "turn-1",
+              createdAt: "2026-10-10T00:01:08.000Z",
+              payload: { taskId: "same-id", status: "stopped" },
+            }),
+          ]).rows[0]?.phase,
+        ).toBe("stopped");
+        expect(deriveSubagentTaskEnds(history).get("same-id")).toMatchObject({
+          outcome: "completed",
+          endedAt: originalEnd.createdAt,
+        });
+        const completedAt = "2026-10-10T00:01:20.000Z";
+        const settled = deriveSubagentTaskEnds([
+          ...history,
+          makeActivity({
+            id: "native-completion",
+            kind: "task.completed",
+            createdAt: completedAt,
+            payload: { taskId: "same-id", status: "completed" },
+          }),
+        ]);
+        expect(settled.get("same-id")).toMatchObject({
+          outcome: "completed",
+          endedAt: completedAt,
+          previous: { outcome: "completed", endedAt: originalEnd.createdAt },
+        });
+      }
+    },
+  );
+  const launchedAt = "2026-10-10T00:00:00.000Z";
+
+  it("keeps a reused child's answer, action and descendants in their original invocation", () => {
+    const resumedAt = "2026-10-10T00:01:00.000Z";
+    const endedAt = "2026-10-10T00:00:08.000Z";
+    const folded = foldSubagentRunWorkEntries([
+      spawn("first", launchedAt, [{ threadId: "a", rawStatus: "completed" }]),
+      spawn("resume", resumedAt, [{ threadId: "a", rawStatus: "completed" }], "turn-2"),
+    ]);
+    const child = childThread("subagent:parent:a", {
+      latestTurn: completedTurn(resumedAt, "2026-10-10T00:01:03.000Z"),
+      messages: [
+        { ...assistantMessage("First result"), createdAt: endedAt },
+        { ...assistantMessage("Second result"), createdAt: "2026-10-10T00:01:03.000Z" },
+      ],
+      activities: [
+        makeActivity({
+          id: "first-command",
+          turnId: "child-first-turn",
+          createdAt: "2026-10-10T00:00:02.000Z",
+          kind: "item.completed",
+          payload: {
+            itemType: "command_execution",
+            data: { toolCallId: "first-tool", command: "cat first.txt" },
+          },
+        }),
+        makeActivity({
+          id: "second-command",
+          turnId: "child-resumed-turn",
+          createdAt: "2026-10-10T00:01:02.000Z",
+          kind: "item.completed",
+          payload: {
+            itemType: "command_execution",
+            data: { toolCallId: "second-tool", command: "cat second.txt" },
+          },
+        }),
+      ],
+    });
+    const laterDescendant = childThread("subagent:parent:later", {
+      createdAt: "2026-10-10T00:01:01.000Z",
+      sourceThreadId: child.id,
+      session: { status: "running" } as SubagentRunThread["session"],
+    });
+    const taskEndByToolUseId = new Map([
+      [
+        "a",
+        {
+          outcome: "completed" as const,
+          endedAt: "2026-10-10T00:01:03.000Z",
+          previous: { outcome: "completed" as const, endedAt },
+        },
+      ],
+    ]);
+    const cards = folded.map((work) =>
+      deriveSubagentRunCard({
+        subagents: work.subagents ?? [],
+        run: work.subagentRun!,
+        threads: [child, laterDescendant],
+        parentThreadId: PARENT,
+        launchTurnLive: false,
+        taskEndByToolUseId,
+      }),
+    );
+    expect(cards.map((model) => model.rows[0]!.outcomeText)).toEqual([
+      "First result",
+      "Second result",
+    ]);
+    expect(cards.map((model) => model.rows[0]!.action?.command)).toEqual([
+      "cat first.txt",
+      "cat second.txt",
+    ]);
+    expect(cards.map((model) => model.nestedCount)).toEqual([0, 1]);
+    expect(cards[0]!.isLive).toBe(false);
+  });
+
+  it("omits a historical preview when only a later invocation's evidence is loaded", () => {
+    const folded = foldSubagentRunWorkEntries([
+      spawn("first", launchedAt, [{ threadId: "a", rawStatus: "failed" }]),
+      spawn("resume", "2026-10-10T00:01:00.000Z", [{ threadId: "a" }], "turn-2"),
+    ]);
+    const child = childThread("subagent:parent:a", {
+      error: "Later failure",
+      latestTurn: completedTurn(
+        "2026-10-10T00:01:00.000Z",
+        "2026-10-10T00:01:03.000Z",
+        "error" as never,
+      ),
+      messages: [{ ...assistantMessage("Later answer"), createdAt: "2026-10-10T00:01:03.000Z" }],
+    });
+    const model = deriveSubagentRunCard({
+      subagents: folded[0]!.subagents ?? [],
+      run: folded[0]!.subagentRun!,
+      threads: [child],
+      parentThreadId: PARENT,
+      launchTurnLive: false,
+    });
+    expect(model.rows[0]!.outcomeText).toBeNull();
+    expect(model.rows[0]!.endedAtMs).toBeNull();
+  });
+
+  it("uses the completion of the matching invocation instead of a later resume", () => {
+    const folded = foldSubagentRunWorkEntries([
+      spawn("first", launchedAt, [{ threadId: "a" }]),
+      spawn("resume", "2026-10-10T00:01:00.000Z", [{ threadId: "a" }], "turn-2"),
+    ]);
+    const taskEndByToolUseId = new Map([
+      [
+        "a",
+        {
+          outcome: "failed" as const,
+          endedAt: "2026-10-10T00:01:03.000Z",
+          previous: { outcome: "completed" as const, endedAt: "2026-10-10T00:00:08.000Z" },
+        },
+      ],
+    ]);
+    const cards = folded.map((work) =>
+      deriveSubagentRunCard({
+        subagents: work.subagents ?? [],
+        run: work.subagentRun!,
+        threads: [],
+        parentThreadId: PARENT,
+        launchTurnLive: false,
+        taskEndByToolUseId,
+      }),
+    );
+    expect(cards.map((model) => model.rows[0]!.phase)).toEqual(["done", "failed"]);
+    expect(cards.map((model) => model.rows[0]!.endedAtMs! - model.rows[0]!.startedAtMs!)).toEqual([
+      8000, 3000,
+    ]);
+  });
+
+  function card(
+    subagents: WorkLogSubagent[],
+    threads: SubagentRunThread[],
+    members: Array<{
+      key: string;
+      latestStep?: string;
+      outcome?: "completed" | "failed" | "stopped";
+      failure?: string;
+    }>,
+  ) {
+    return deriveSubagentRunCard({
+      subagents,
+      run: {
+        members: members.map((member) => ({
+          key: member.key,
+          launchedAt,
+          latestStep: member.latestStep ?? null,
+          outcome: member.outcome ?? null,
+          failure: member.failure ?? null,
+          settledAt: null,
+        })),
+      },
+      threads,
+      parentThreadId: PARENT,
+    });
+  }
+
+  it("derives running and done rows with durations, steps, and result previews", () => {
+    const model = card(
+      [
+        { threadId: "a", nickname: "Read README.md", statusLabel: "Running", isActive: true },
+        { threadId: "b", nickname: "Count lines", statusLabel: "Completed" },
+      ],
+      [
+        childThread("subagent:parent:a"),
+        childThread("subagent:parent:b", {
+          latestTurn: completedTurn(launchedAt, "2026-10-10T00:00:08.000Z"),
+          messages: [assistantMessage("## Result\n`calc.py` has 5 lines.\nMore detail")],
+        }),
+      ],
+      [{ key: "a", latestStep: "Running cat README.md" }, { key: "b" }],
+    );
+
+    expect(model.isLive).toBe(true);
+    expect(model.counts).toEqual({ running: 1, done: 1, failed: 0, stopped: 0, interrupted: 0 });
+    const [running, done] = model.rows;
+    expect(running!.phase).toBe("running");
+    expect(running!.threadId).toBe("subagent:parent:a");
+    expect(running!.action).toEqual({ command: null, label: "cat README.md" });
+    expect(done!.phase).toBe("done");
+    expect(done!.outcomeText).toBe("Result");
+    expect(done!.endedAtMs! - done!.startedAtMs!).toBe(8_000);
+
+    const nowMs = Date.parse(launchedAt) + 12_000;
+    expect(describeSubagentRunHeader(model, nowMs)).toEqual({
+      title: "2 subagents",
+      nestedLabel: null,
+      segments: [{ text: "1 running", tone: "running" }],
+      durationLabel: "12s",
+    });
+    expect(describeSubagentRunRow(running!, { nowMs, allStopped: false })).toMatchObject({
+      word: "Running",
+      durationLabel: "12s",
+      detail: { kind: "action", action: { label: "cat README.md" } },
+    });
+    expect(describeSubagentRunRow(done!, { nowMs, allStopped: false })).toMatchObject({
+      word: "Done",
+      durationLabel: "8s",
+      detail: { kind: "outcome", text: "Result" },
+    });
+  });
+
+  it("reads stopped and failed outcomes and colors only the failed count", () => {
+    const model = card(
+      [
+        { threadId: "a", nickname: "Done one", statusLabel: "Completed" },
+        { threadId: "b", nickname: "Tests", statusLabel: "Failed" },
+        { threadId: "c", nickname: "Slow", statusLabel: "Completed" },
+      ],
+      [
+        childThread("subagent:parent:a", {
+          latestTurn: completedTurn(launchedAt, "2026-10-10T00:00:08.000Z"),
+        }),
+        childThread("subagent:parent:b", {
+          error: "`pytest` is not installed (exit 127)",
+          latestTurn: completedTurn(launchedAt, "2026-10-10T00:00:03.000Z", "error" as never),
+        }),
+        childThread("subagent:parent:c", {
+          latestTurn: completedTurn(launchedAt, "2026-10-10T00:00:21.000Z", "interrupted" as never),
+        }),
+      ],
+      [
+        { key: "a" },
+        { key: "b" },
+        { key: "c", latestStep: "Running sleep 60", outcome: "stopped" },
+      ],
+    );
+
+    expect(model.isLive).toBe(false);
+    expect(model.counts).toEqual({ running: 0, done: 1, failed: 1, stopped: 1, interrupted: 0 });
+    expect(model.allStopped).toBe(false);
+    expect(model.rows[1]!.outcomeText).toBe("`pytest` is not installed (exit 127)");
+    expect(model.rows[2]!.phase).toBe("stopped");
+    expect(describeSubagentRunRow(model.rows[2]!, { nowMs: 0, allStopped: false })).toMatchObject({
+      word: "Stopped",
+      durationLabel: "21s",
+      detail: { kind: "was-running", action: { label: "sleep 60" } },
+    });
+    expect(describeSubagentRunHeader(model, 0)).toEqual({
+      title: "3 subagents",
+      nestedLabel: null,
+      segments: [
+        { text: "1 done", tone: null },
+        { text: "1 failed", tone: "failed" },
+        { text: "1 stopped", tone: null },
+      ],
+      durationLabel: "21s",
+    });
+  });
+
+  it("does not attribute a stopped outcome to the user without evidence", () => {
+    const model = card(
+      [
+        { threadId: "a", rawStatus: "stopped" },
+        { threadId: "b", rawStatus: "stopped" },
+      ],
+      [],
+      [{ key: "a" }, { key: "b" }],
+    );
+    expect(model.allStopped).toBe(true);
+    expect(describeSubagentRunHeader(model, 0).segments).toEqual([{ text: "stopped", tone: null }]);
+    expect(describeSubagentRunRow(model.rows[0]!, { nowMs: 0, allStopped: true }).word).toBe(
+      "Stopped",
+    );
+  });
+
+  it("keeps a provider interruption distinct from a stopped subagent", () => {
+    const model = card([{ threadId: "a", rawStatus: "interrupted" }], [], [{ key: "a" }]);
+    expect(model.rows[0]!.phase).toBe("interrupted");
+    expect(describeSubagentRunRow(model.rows[0]!, { nowMs: 0, allStopped: false }).word).toBe(
+      "Interrupted",
+    );
+    expect(describeSubagentRunHeader(model, 0).segments).toEqual([
+      { text: "1 interrupted", tone: null },
+    ]);
+  });
+
+  it("nests subagents under the subagent that launched them", () => {
+    const outerId = "subagent:parent:outer";
+    const model = card(
+      [
+        { threadId: "outer", nickname: "Survey calc.py", statusLabel: "Running", isActive: true },
+        { threadId: "readme", nickname: "Read README.md", statusLabel: "Completed" },
+      ],
+      [
+        childThread(outerId, { session: { status: "running" } as SubagentRunThread["session"] }),
+        childThread("subagent:parent:readme", {
+          latestTurn: completedTurn(launchedAt, "2026-10-10T00:00:06.000Z"),
+        }),
+        childThread("subagent:parent:inner", {
+          title: "Count lines in calc.py [general-purpose]",
+          subagentNickname: "Count lines in calc.py",
+          sourceThreadId: ThreadId.makeUnsafe(outerId),
+          session: { status: "running" } as SubagentRunThread["session"],
+        }),
+      ],
+      [{ key: "outer" }, { key: "readme" }],
+    );
+
+    expect(model.rows).toHaveLength(2);
+    expect(model.nestedCount).toBe(1);
+    expect(model.counts.running).toBe(2);
+    const outer = model.rows[0]!;
+    expect(outer.phase).toBe("waiting");
+    expect(outer.nested.map((row) => row.item.primaryLabel)).toEqual(["Count lines in calc.py"]);
+    expect(outer.nested[0]!.item.providerThreadId).toBe("inner");
+    expect(describeSubagentRunRow(outer, { nowMs: 0, allStopped: false }).word).toBe(
+      "Waiting for its subagent",
+    );
+    expect(describeSubagentRunHeader(model, Date.parse(launchedAt)).nestedLabel).toBe("+1 nested");
+  });
+});
+
+describe("scanSubagentRunCards", () => {
+  it("points at the newest card that still has a subagent at work", () => {
+    const folded = foldSubagentRunWorkEntries([
+      spawn("old", "2026-10-10T00:00:00.000Z", [{ threadId: "x", isActive: true }], "turn-1"),
+      spawn(
+        "new",
+        "2026-10-10T00:01:00.000Z",
+        [{ threadId: "y", rawStatus: "completed" }],
+        "turn-2",
+      ),
+    ]);
+    const scan = scanSubagentRunCards({
+      entries: folded,
+      threads: [],
+      parentThreadId: PARENT,
+      liveTurnId: null,
+    });
+    expect(scan.latestRunningCard).toEqual({ entryId: "subagent-run:old", runningCount: 1 });
+    expect([...scan.liveProviderThreadIds]).toEqual(["x"]);
+    expect([...scan.coveredProviderThreadIds].toSorted()).toEqual(["x", "y"]);
+    expect(scan.liveThreadIds.size).toBe(0);
+    expect(
+      scanSubagentRunCards({
+        entries: [entry({ id: "plain" })],
+        threads: [],
+        parentThreadId: PARENT,
+        liveTurnId: null,
+      }),
+    ).toBe(EMPTY_SUBAGENT_RUN_SCAN);
+  });
+
+  it("keeps background agents of a settled turn running until their task ends", () => {
+    // The report: the turn completed while two background agents kept working.
+    const folded = foldSubagentRunWorkEntries([
+      spawn(
+        "launch",
+        "2026-10-10T00:00:00.000Z",
+        [
+          { threadId: "bg-a", background: true },
+          { threadId: "bg-b", background: true },
+        ],
+        "turn-1",
+      ),
+      spawn(
+        "later",
+        "2026-10-10T00:02:00.000Z",
+        [{ threadId: "fg", rawStatus: "completed" }],
+        "turn-2",
+      ),
+    ]);
+    const input = { entries: folded, threads: [], parentThreadId: PARENT, liveTurnId: null };
+    const scan = scanSubagentRunCards(input);
+    expect([...scan.liveProviderThreadIds].toSorted()).toEqual(["bg-a", "bg-b"]);
+    expect(scan.latestRunningCard).toEqual({ entryId: "subagent-run:launch", runningCount: 2 });
+
+    const ended = scanSubagentRunCards({
+      ...input,
+      taskEndByToolUseId: new Map([
+        ["bg-a", { outcome: "completed" as const, endedAt: "2026-10-10T00:03:00.000Z" }],
+      ]),
+    });
+    expect([...ended.liveProviderThreadIds]).toEqual(["bg-b"]);
+  });
+
+  it("counts an agent resumed by a later card once", () => {
+    const folded = foldSubagentRunWorkEntries([
+      spawn("first", "2026-10-10T00:00:00.000Z", [{ threadId: "a", isActive: true }], "turn-1"),
+      spawn("again", "2026-10-10T00:01:00.000Z", [{ threadId: "a", isActive: true }], "turn-2"),
+    ]);
+    const scan = scanSubagentRunCards({
+      entries: folded,
+      threads: [],
+      parentThreadId: PARENT,
+      liveTurnId: null,
+    });
+    expect(scan.liveProviderThreadIds.size).toBe(1);
+  });
+
+  it("settles every live row once the runtime has ended", () => {
+    const folded = foldSubagentRunWorkEntries([
+      spawn(
+        "launch",
+        launchedAtIso,
+        [
+          { threadId: "bg", background: true },
+          { threadId: "active", isActive: true },
+          { threadId: "done", rawStatus: "completed" },
+        ],
+        "turn-1",
+      ),
+    ]);
+    const input = {
+      entries: folded,
+      threads: [],
+      parentThreadId: PARENT,
+      liveTurnId: TurnId.makeUnsafe("turn-1"),
+    };
+    expect(scanSubagentRunCards(input).liveProviderThreadIds.size).toBe(2);
+    const retired = scanSubagentRunCards({ ...input, runtimeRetired: true });
+    expect(retired.liveProviderThreadIds.size).toBe(0);
+    expect(retired.latestRunningCard).toBeNull();
+    const card = deriveSubagentRunCard({
+      subagents: folded[0]!.subagents ?? [],
+      run: folded[0]!.subagentRun!,
+      threads: [],
+      parentThreadId: PARENT,
+      runtimeRetired: true,
+    });
+    expect(card.rows.map((row) => row.phase)).toEqual(["stopped", "stopped", "done"]);
+  });
+});
+
+describe("summarizeRunningAgents", () => {
+  const tasks = (
+    running: Array<
+      Omit<RunningSubagentTasks["running"][number], "resumed"> & { resumed?: boolean }
+    >,
+    trackedKeys: string[] = [],
+  ): RunningSubagentTasks => ({
+    running: running.map((task) => ({ resumed: false, ...task })),
+    trackedKeys: new Set([...trackedKeys, ...running.map((task) => task.toolUseId ?? task.taskId)]),
+  });
+
+  it("adds tasks and child threads that no card shows, once each", () => {
+    const folded = foldSubagentRunWorkEntries([
+      spawn("launch", launchedAtIso, [{ threadId: "toolu_card", background: true }]),
+    ]);
+    const scan = scanSubagentRunCards({
+      entries: folded,
+      threads: [],
+      parentThreadId: PARENT,
+      liveTurnId: null,
+    });
+    const summary = summarizeRunningAgents({
+      scan,
+      tasks: tasks([
+        // Claude reports its card's agent as a task too: counted once.
+        { taskId: "task-card", toolUseId: "toolu_card" },
+        { taskId: "droid-call", toolUseId: null },
+      ]),
+      runningChildThreadIds: [
+        ThreadId.makeUnsafe(`subagent:${PARENT}:toolu_card`),
+        ThreadId.makeUnsafe(`subagent:${PARENT}:antigravity-conv`),
+      ],
+      rootThreadId: PARENT,
+      entries: folded,
+      liveTurnId: null,
+    });
+    expect(summary).toEqual({ count: 3, targetEntryId: "subagent-run:launch" });
+  });
+
+  it("counts an agent resumed after its card settled, and points at that card", () => {
+    const folded = foldSubagentRunWorkEntries([
+      spawn("launch", launchedAtIso, [{ threadId: "toolu_agent", rawStatus: "completed" }]),
+    ]);
+    const scan = scanSubagentRunCards({
+      entries: folded,
+      threads: [],
+      parentThreadId: PARENT,
+      liveTurnId: null,
+    });
+    expect(scan.liveProviderThreadIds.size).toBe(0);
+    const childThreadId = ThreadId.makeUnsafe(`subagent:${PARENT}:toolu_agent`);
+    const summarize = (resumed: boolean) =>
+      summarizeRunningAgents({
+        scan,
+        tasks: tasks([{ taskId: "task-agent", toolUseId: "toolu_agent", resumed }]),
+        runningChildThreadIds: [childThreadId],
+        rootThreadId: PARENT,
+        entries: folded,
+        liveTurnId: null,
+      });
+    expect(summarize(true)).toEqual({ count: 1, targetEntryId: "subagent-run:launch" });
+    // Until its end arrives, a task the settled card already shows is not added.
+    expect(summarize(false)).toBe(NO_RUNNING_AGENTS);
+  });
+
+  it("counts an in-flight agent call of the live turn that has no card", () => {
+    const call = (status: string) =>
+      entry({
+        id: "opencode-task",
+        turnId: "turn-1",
+        itemType: "collab_agent_tool_call",
+        toolCallId: "call-task",
+        subagentAction: { tool: "task", status, summaryText: "Spawning 1 agent" },
+      });
+    const summarize = (status: string, liveTurnId: string | null, trackedKeys: string[] = []) =>
+      summarizeRunningAgents({
+        scan: EMPTY_SUBAGENT_RUN_SCAN,
+        tasks: tasks([], trackedKeys),
+        runningChildThreadIds: [],
+        rootThreadId: PARENT,
+        entries: [call(status)],
+        liveTurnId: liveTurnId ? TurnId.makeUnsafe(liveTurnId) : null,
+      });
+    expect(summarize("inProgress", "turn-1")).toEqual({ count: 1, targetEntryId: "opencode-task" });
+    expect(summarize("completed", "turn-1")).toBe(NO_RUNNING_AGENTS);
+    expect(summarize("inProgress", null)).toBe(NO_RUNNING_AGENTS);
+    // Droid/Omp report the same call as a task keyed by it.
+    expect(summarize("inProgress", "turn-1", ["call-task"])).toBe(NO_RUNNING_AGENTS);
+  });
+
+  it("ignores a child thread an agent task already accounts for", () => {
+    const summary = summarizeRunningAgents({
+      scan: EMPTY_SUBAGENT_RUN_SCAN,
+      tasks: tasks([], ["opencode-call"]),
+      runningChildThreadIds: [ThreadId.makeUnsafe(`subagent:${PARENT}:opencode-call`)],
+      rootThreadId: PARENT,
+      entries: [],
+      liveTurnId: null,
+    });
+    expect(summary).toBe(NO_RUNNING_AGENTS);
+  });
+
+  it("points at the row of an agent without a card, or nowhere", () => {
+    const backgroundRow = entry({
+      id: "bg-row",
+      backgroundTask: {
+        taskId: "opencode-task",
+        taskType: "subagent",
+        description: null,
+        command: null,
+        status: "running",
+        startedAt: launchedAtIso,
+        completedAt: null,
+        exitCode: null,
+      },
+    });
+    const toolRow = entry({ id: "tool-row", toolCallId: "droid-call" });
+    expect(
+      summarizeRunningAgents({
+        scan: EMPTY_SUBAGENT_RUN_SCAN,
+        tasks: tasks([{ taskId: "opencode-task", toolUseId: "toolu_oc" }]),
+        runningChildThreadIds: [],
+        rootThreadId: PARENT,
+        entries: [backgroundRow, toolRow],
+        liveTurnId: null,
+      }),
+    ).toEqual({ count: 1, targetEntryId: "bg-row" });
+    expect(
+      summarizeRunningAgents({
+        scan: EMPTY_SUBAGENT_RUN_SCAN,
+        tasks: tasks([{ taskId: "droid-call", toolUseId: null }]),
+        runningChildThreadIds: [],
+        rootThreadId: PARENT,
+        entries: [backgroundRow, toolRow],
+        liveTurnId: null,
+      }),
+    ).toEqual({ count: 1, targetEntryId: "tool-row" });
+    expect(
+      summarizeRunningAgents({
+        scan: EMPTY_SUBAGENT_RUN_SCAN,
+        tasks: NO_RUNNING_SUBAGENT_TASKS,
+        runningChildThreadIds: [ThreadId.makeUnsafe(`subagent:${PARENT}:conv`)],
+        rootThreadId: PARENT,
+        entries: [backgroundRow, toolRow],
+        liveTurnId: null,
+      }),
+    ).toEqual({ count: 1, targetEntryId: null });
+  });
+});
+
+describe("findLatestSubagentThreadRun", () => {
+  it("gives a sessionless Codex child the status and duration reported by its parent", () => {
+    const entries = foldSubagentRunWorkEntries([
+      spawn("launch", launchedAtIso, [{ threadId: "a" }]),
+      entry({
+        id: "settled",
+        createdAt: "2026-10-10T00:00:08.000Z",
+        itemType: "collab_agent_tool_call",
+        subagentAction: { tool: "subAgentSettled", status: "completed", summaryText: "Settled" },
+        subagents: [{ threadId: "a", rawStatus: "completed" }],
+      }),
+    ]);
+    const threadId = ThreadId.makeUnsafe("subagent:parent:a");
+    const row = findLatestSubagentThreadRun({
+      entries,
+      threads: [childThread(threadId)],
+      parentThreadId: PARENT,
+      liveTurnId: null,
+      childThreadId: threadId,
+    });
+    expect(row?.phase).toBe("done");
+    expect(row!.endedAtMs! - row!.startedAtMs!).toBe(8000);
+  });
+});
+
+describe("firstLinePreview", () => {
+  it("keeps the first meaningful line, without markdown markers", () => {
+    expect(firstLinePreview("\n\n- **calc.py** has 5 lines\nsecond")).toBe("calc.py has 5 lines");
+    expect(firstLinePreview("```\ncode\n```")).toBe("code");
+    expect(firstLinePreview("   ")).toBeNull();
+  });
+});
+
+it("retains each launch position so narration can separate distinct children", () => {
+  const first = spawn("first", launchedAtIso, [{ threadId: "a", rawStatus: "running" }]);
+  const second = spawn("second", "2026-10-10T00:00:05.000Z", [
+    { threadId: "b", rawStatus: "running" },
+  ]);
+  const folded = foldSubagentRunWorkEntries([first, second]);
+  expect(
+    folded.map((row) => [row.id, row.createdAt, row.subagents?.map((child) => child.threadId)]),
+  ).toEqual([
+    ["subagent-run:first", launchedAtIso, ["a"]],
+    ["subagent-run:second", second.createdAt, ["b"]],
+  ]);
+});

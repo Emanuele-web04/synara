@@ -40,36 +40,25 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
   });
 
   describe("resolveOffset", () => {
-    it.effect("uses explicit SYNARA_PORT_OFFSET when provided", () =>
-      Effect.sync(() => {
-        const result = resolveOffset({ portOffset: 12, devInstance: undefined });
-        assert.deepStrictEqual(result, {
-          offset: 12,
-          source: "SYNARA_PORT_OFFSET=12",
-        });
-      }),
-    );
+    it("uses explicit SYNARA_PORT_OFFSET when provided", () => {
+      assert.deepStrictEqual(resolveOffset({ portOffset: 12, devInstance: undefined }), {
+        offset: 12,
+        source: "SYNARA_PORT_OFFSET=12",
+      });
+    });
 
-    it.effect("hashes non-numeric instance values", () =>
-      Effect.sync(() => {
-        const result = resolveOffset({ portOffset: undefined, devInstance: "feature-branch" });
-        assert.ok(result.offset >= 1);
-        assert.ok(result.offset <= 3000);
-      }),
-    );
+    it("hashes non-numeric instance values", () => {
+      const result = resolveOffset({ portOffset: undefined, devInstance: "feature-branch" });
+      assert.ok(result.offset >= 1);
+      assert.ok(result.offset <= 3000);
+    });
 
-    it.effect("throws for negative port offset", () =>
-      Effect.gen(function* () {
-        const error = yield* Effect.flip(
-          Effect.try({
-            try: () => resolveOffset({ portOffset: -1, devInstance: undefined }),
-            catch: (cause) => String(cause),
-          }),
-        );
-
-        assert.ok(error.includes("Invalid SYNARA_PORT_OFFSET"));
-      }),
-    );
+    it("throws for negative port offset", () => {
+      assert.throws(
+        () => resolveOffset({ portOffset: -1, devInstance: undefined }),
+        /Invalid SYNARA_PORT_OFFSET/,
+      );
+    });
   });
 
   describe("boolean precedence", () => {
@@ -131,21 +120,26 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
   });
 
   describe("createDevRunnerEnv", () => {
+    const defaults: Parameters<typeof createDevRunnerEnv>[0] = {
+      mode: "dev",
+      baseEnv: {},
+      serverOffset: 0,
+      webOffset: 0,
+      synaraHome: undefined,
+      authToken: undefined,
+      noBrowser: undefined,
+      autoBootstrapProjectFromCwd: undefined,
+      logWebSocketEvents: undefined,
+      host: undefined,
+      port: undefined,
+      devUrl: undefined,
+    };
+
     it.effect("marks an inherited terminal PATH as already hydrated", () =>
       Effect.gen(function* () {
         const env = yield* createDevRunnerEnv({
-          mode: "dev",
+          ...defaults,
           baseEnv: { PATH: "/opt/homebrew/bin:/usr/bin" },
-          serverOffset: 0,
-          webOffset: 0,
-          synaraHome: undefined,
-          authToken: undefined,
-          noBrowser: undefined,
-          autoBootstrapProjectFromCwd: undefined,
-          logWebSocketEvents: undefined,
-          host: undefined,
-          port: undefined,
-          devUrl: undefined,
         });
 
         assert.equal(env.SYNARA_PATH_HYDRATED, "1");
@@ -156,18 +150,7 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
     it.effect("defaults SYNARA_HOME to ~/.synara when not provided", () =>
       Effect.gen(function* () {
         const env = yield* createDevRunnerEnv({
-          mode: "dev",
-          baseEnv: {},
-          serverOffset: 0,
-          webOffset: 0,
-          synaraHome: undefined,
-          authToken: undefined,
-          noBrowser: undefined,
-          autoBootstrapProjectFromCwd: undefined,
-          logWebSocketEvents: undefined,
-          host: undefined,
-          port: undefined,
-          devUrl: undefined,
+          ...defaults,
         });
 
         assert.equal(env.SYNARA_HOME, resolve(homedir(), ".synara"));
@@ -179,18 +162,8 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
     it.effect("defaults watched desktop development to ~/.synara-dev", () =>
       Effect.gen(function* () {
         const env = yield* createDevRunnerEnv({
+          ...defaults,
           mode: "dev:desktop",
-          baseEnv: {},
-          serverOffset: 0,
-          webOffset: 0,
-          synaraHome: undefined,
-          authToken: undefined,
-          noBrowser: undefined,
-          autoBootstrapProjectFromCwd: undefined,
-          logWebSocketEvents: undefined,
-          host: undefined,
-          port: undefined,
-          devUrl: undefined,
         });
 
         assert.equal(env.SYNARA_HOME, resolve(homedir(), ".synara-dev"));
@@ -200,18 +173,9 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
     it.effect("keeps watched Canary desktop data separate from development", () =>
       Effect.gen(function* () {
         const env = yield* createDevRunnerEnv({
+          ...defaults,
           mode: "dev:desktop",
           baseEnv: { SYNARA_DESKTOP_FLAVOR: "canary" },
-          serverOffset: 0,
-          webOffset: 0,
-          synaraHome: undefined,
-          authToken: undefined,
-          noBrowser: undefined,
-          autoBootstrapProjectFromCwd: undefined,
-          logWebSocketEvents: undefined,
-          host: undefined,
-          port: undefined,
-          devUrl: undefined,
         });
 
         assert.equal(env.SYNARA_HOME, resolve(homedir(), ".synara-canary"));
@@ -221,18 +185,8 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
     it.effect("normalizes bracketed IPv6 hosts for listen and client URL syntax", () =>
       Effect.gen(function* () {
         const env = yield* createDevRunnerEnv({
-          mode: "dev",
-          baseEnv: {},
-          serverOffset: 0,
-          webOffset: 0,
-          synaraHome: undefined,
-          authToken: undefined,
-          noBrowser: undefined,
-          autoBootstrapProjectFromCwd: undefined,
-          logWebSocketEvents: undefined,
+          ...defaults,
           host: "[::1]",
-          port: undefined,
-          devUrl: undefined,
         });
 
         assert.equal(env.SYNARA_HOST, "::1");
@@ -243,10 +197,8 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
     it.effect("supports explicit typed overrides", () =>
       Effect.gen(function* () {
         const env = yield* createDevRunnerEnv({
+          ...defaults,
           mode: "dev:server",
-          baseEnv: {},
-          serverOffset: 0,
-          webOffset: 0,
           synaraHome: "/tmp/custom-synara",
           authToken: "secret",
           noBrowser: true,
@@ -271,20 +223,10 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
     it.effect("does not force websocket logging on in dev mode when unset", () =>
       Effect.gen(function* () {
         const env = yield* createDevRunnerEnv({
-          mode: "dev",
+          ...defaults,
           baseEnv: {
             SYNARA_LOG_WS_EVENTS: "keep-me-out",
           },
-          serverOffset: 0,
-          webOffset: 0,
-          synaraHome: undefined,
-          authToken: undefined,
-          noBrowser: undefined,
-          autoBootstrapProjectFromCwd: undefined,
-          logWebSocketEvents: undefined,
-          host: undefined,
-          port: undefined,
-          devUrl: undefined,
         });
 
         assert.equal(env.SYNARA_MODE, "web");

@@ -56,8 +56,8 @@ function GitHubInboxRouteView() {
           <RouteSurfaceHeader
             divider={false}
             className="app-top-bar shrink-0"
-            // Rail keeps the shell band; Classic only needs the visible toggle's height.
-            rowClassName="h-auto [[data-sidebar-layout=rail]_&]:h-[var(--app-top-strip-height)]"
+            // Keeps the shell band's height even though the strip holds only the toggle.
+            rowClassName="h-[var(--app-top-strip-height)]"
           />
           <GitHubInbox
             search={search}

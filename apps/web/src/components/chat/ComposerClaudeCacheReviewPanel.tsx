@@ -1,11 +1,17 @@
 import type { PendingClaudeCacheReview } from "@synara/contracts";
-import { useRef, useState } from "react";
+import { assessClaudeCache } from "@synara/shared/claudeCache";
+import { useEffect, useRef, useState } from "react";
+import { DiagnosticReportAction } from "../DiagnosticReportAction";
+import { diagnosticIssueReason, reportHandledIssue } from "~/lib/rendererErrorDiagnostics";
 import { formatContextWindowTokens } from "~/lib/contextWindow";
 import { cn } from "~/lib/utils";
+import { formatCacheDuration } from "./ClaudeCacheDetails";
 import { ComposerChoiceRow } from "./ComposerChoiceRow";
 import { COMPOSER_INPUT_SURFACE_CLASS_NAME } from "./composerPickerStyles";
 
-export type ClaudeCacheReviewDecision = "continue" | "compact" | "cancel";
+// "never" continues like "continue" and turns the review off, as Claude Code's
+// "Don't ask me again" does.
+export type ClaudeCacheReviewDecision = "continue" | "compact" | "cancel" | "never";
 
 // An accepted choice is already visible in the transcript (compaction progress
 // or the resumed turn), so the panel only returns if the review fails.
@@ -29,16 +35,41 @@ export function ComposerClaudeCacheReviewPanel({
 }) {
   const submittedReviewRef = useRef<PendingClaudeCacheReview | null>(null);
   const [submittedReview, setSubmittedReview] = useState<PendingClaudeCacheReview | null>(null);
+  const reportGenerationRef = useRef(0);
   const [dispatchError, setDispatchError] = useState<string | null>(null);
+  const [diagnostic, setDiagnostic] = useState<{ reviewId: string; id: string } | null>(null);
+  useEffect(() => {
+    if (review.status !== "failed" && review.status !== "uncertain") return;
+    let disposed = false;
+    const generation = reportGenerationRef.current;
+    void reportHandledIssue({
+      code: review.status === "failed" ? "claude.cache.failed" : "claude.cache.uncertain",
+      reason: diagnosticIssueReason(review.error),
+    }).then((id) => {
+      if (!disposed && id && reportGenerationRef.current === generation)
+        setDiagnostic({ reviewId: review.reviewId, id });
+    });
+    return () => {
+      disposed = true;
+    };
+  }, [review.reviewId, review.status, review.error]);
   const actionable = review.status === "pending" || review.status === "failed";
   const disabled = !actionable || submittedReview === review;
   const contextTokens = review.assessment.contextTokens;
+  // Idle time when the message was held, so the wording stays stable.
+  const idleSeconds = assessClaudeCache(
+    review.assessment,
+    Date.parse(review.createdAt),
+  ).idleSeconds;
+  // Claude Code's resume prompt wording, so both apps ask the same way.
   const title =
     review.status === "uncertain"
       ? "Request status is uncertain"
       : isCompactionRequest
         ? "Compaction will read the expired context"
-        : "Claude's prompt cache likely expired";
+        : idleSeconds !== undefined && contextTokens !== undefined
+          ? `This session is ${formatCacheDuration(idleSeconds)} old and ${formatContextWindowTokens(contextTokens)} tokens.`
+          : "Claude's prompt cache likely expired";
 
   const respondOnce = (decision: ClaudeCacheReviewDecision) => {
     if (disabled || submittedReviewRef.current === review) return;
@@ -46,6 +77,9 @@ export function ComposerClaudeCacheReviewPanel({
     submittedReviewRef.current = review;
     setSubmittedReview(review);
     setDispatchError(null);
+    setDiagnostic(null);
+    const generation = ++reportGenerationRef.current;
+    const startedAt = performance.now();
     void onRespond(review, decision).catch((error: unknown) => {
       if (submittedReviewRef.current !== review) return;
       submittedReviewRef.current = null;
@@ -53,6 +87,14 @@ export function ComposerClaudeCacheReviewPanel({
       setDispatchError(
         error instanceof Error ? error.message : "Could not submit this choice. Try again.",
       );
+      void reportHandledIssue({
+        code: "claude.cache.request-failed",
+        reason: diagnosticIssueReason(error),
+        durationMs: performance.now() - startedAt,
+      }).then((id) => {
+        if (id && reportGenerationRef.current === generation)
+          setDiagnostic({ reviewId: review.reviewId, id });
+      });
     });
   };
 
@@ -68,46 +110,60 @@ export function ComposerClaudeCacheReviewPanel({
       <p className="mt-1.5 text-ui leading-relaxed text-muted-foreground">
         {review.status === "uncertain"
           ? "Claude may have accepted the request. Sending is paused until its status can be confirmed."
-          : `Your message is saved and on hold. Continuing may reprocess ${contextTokens === undefined ? "the conversation's context" : `about ${formatContextWindowTokens(contextTokens)} tokens`}.`}
+          : isCompactionRequest
+            ? `Your message is saved and on hold. Continuing may reprocess ${contextTokens === undefined ? "the conversation's context" : `about ${formatContextWindowTokens(contextTokens)} tokens`}.`
+            : "Resuming the full session will consume a substantial portion of your usage limits. We recommend resuming from a summary. Your message is saved until you choose."}
       </p>
-      {actionable ? (
-        <p className="mt-1.5 text-ui leading-relaxed text-muted-foreground">
-          Compacting also processes the full history once. Later requests use its summary.
-        </p>
-      ) : null}
       {review.error || dispatchError ? (
         <p role="alert" className="mt-2 text-ui leading-relaxed text-destructive">
           {dispatchError ?? review.error}
         </p>
       ) : null}
+      {diagnostic?.reviewId === review.reviewId &&
+      (dispatchError || review.status === "failed" || review.status === "uncertain") ? (
+        <DiagnosticReportAction key={diagnostic.id} id={diagnostic.id} />
+      ) : null}
       <div className="mt-2.5 space-y-0.5">
-        <ComposerChoiceRow
-          shortcut={null}
-          label={isCompactionRequest ? "Compact this conversation" : "Continue with full context"}
-          description={
-            isCompactionRequest
-              ? "Process the existing history and save its summary"
-              : "Send the saved message with the existing history"
-          }
-          disabled={disabled}
-          onSelect={() => respondOnce("continue")}
-        />
-        {!isCompactionRequest ? (
+        {isCompactionRequest ? (
           <ComposerChoiceRow
             shortcut={null}
-            label="Compact, then send"
-            description={
-              compactDisabledReason ??
-              "Summarize this conversation before sending the saved message"
-            }
-            disabled={disabled || compactDisabledReason !== null}
-            onSelect={() => respondOnce("compact")}
+            label="Compact this conversation"
+            description="Process the existing history and save its summary"
+            disabled={disabled}
+            onSelect={() => respondOnce("continue")}
           />
-        ) : null}
+        ) : (
+          <>
+            <ComposerChoiceRow
+              shortcut={null}
+              label="Resume from summary (recommended)"
+              tone="primary"
+              description={
+                compactDisabledReason ?? "Summarize this session, then send your message"
+              }
+              disabled={disabled || compactDisabledReason !== null}
+              onSelect={() => respondOnce("compact")}
+            />
+            <ComposerChoiceRow
+              shortcut={null}
+              label="Resume full session as-is"
+              description="Send your message with the full history"
+              disabled={disabled}
+              onSelect={() => respondOnce("continue")}
+            />
+            <ComposerChoiceRow
+              shortcut={null}
+              label="Don't ask me again"
+              description="Resume as-is now and stop asking. Turn it back on in Settings → Providers"
+              disabled={disabled}
+              onSelect={() => respondOnce("never")}
+            />
+          </>
+        )}
         <ComposerChoiceRow
           shortcut={null}
           label="Cancel this send"
-          description="Keep this conversation without sending the held message"
+          description="Keep your message without sending it"
           disabled={disabled}
           onSelect={() => respondOnce("cancel")}
         />

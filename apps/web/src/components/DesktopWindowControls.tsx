@@ -8,6 +8,7 @@ import { Maximize2, Minimize2, MinusIcon, XIcon } from "~/lib/icons";
 import { cn, getNavigatorPlatform, isWindowsPlatform } from "~/lib/utils";
 
 import { CHAT_SURFACE_HEADER_HEIGHT_CLASS } from "./chat/chatHeaderControls";
+import { toastManager } from "./ui/toast";
 
 const DEFAULT_WINDOW_STATE: DesktopWindowState = {
   isMaximized: false,
@@ -33,6 +34,14 @@ const CAPTION_BUTTON_CLASS =
 
 // Windows close-button accent: red fill on hover with a white glyph.
 const CLOSE_BUTTON_CLASS = "hover:bg-[#c42b1c] hover:text-white active:bg-[#b9281b]";
+
+function reportWindowControlError(title: string, error: unknown): void {
+  toastManager.add({
+    type: "error",
+    title,
+    description: error instanceof Error ? error.message : "Please try again.",
+  });
+}
 
 function CaptionGlyph({ glyph }: { glyph: string }) {
   return (
@@ -65,9 +74,14 @@ export function DesktopWindowControls({ className }: { className?: string }) {
     if (!controls) return;
     let cancelled = false;
 
-    void controls.getState().then((state) => {
-      if (!cancelled) setWindowState(state);
-    });
+    void controls
+      .getState()
+      .then((state) => {
+        if (!cancelled) setWindowState(state);
+      })
+      .catch((error: unknown) => {
+        if (!cancelled) reportWindowControlError("Could not read window state", error);
+      });
     const unsubscribe = controls.onState(setWindowState);
 
     return () => {
@@ -96,7 +110,9 @@ export function DesktopWindowControls({ className }: { className?: string }) {
         title="Minimize"
         className={CAPTION_BUTTON_CLASS}
         onClick={() => {
-          void controls.minimize();
+          void controls.minimize().catch((error: unknown) => {
+            reportWindowControlError("Could not minimize window", error);
+          });
         }}
       >
         {useWindowsGlyphs ? (
@@ -113,7 +129,12 @@ export function DesktopWindowControls({ className }: { className?: string }) {
         title={isMaximized ? "Restore" : "Maximize"}
         className={CAPTION_BUTTON_CLASS}
         onClick={() => {
-          void controls.toggleMaximize().then(setWindowState);
+          void controls
+            .toggleMaximize()
+            .then(setWindowState)
+            .catch((error: unknown) => {
+              reportWindowControlError("Could not resize window", error);
+            });
         }}
       >
         {useWindowsGlyphs ? (
@@ -130,7 +151,9 @@ export function DesktopWindowControls({ className }: { className?: string }) {
         title="Close"
         className={cn(CAPTION_BUTTON_CLASS, CLOSE_BUTTON_CLASS)}
         onClick={() => {
-          void controls.close();
+          void controls.close().catch((error: unknown) => {
+            reportWindowControlError("Could not close window", error);
+          });
         }}
       >
         {useWindowsGlyphs ? (

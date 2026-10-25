@@ -35,7 +35,10 @@ import {
   SYNARA_STABLE_WINDOWS_INSTALLER_GUID,
   type BetaImportResult,
 } from "@synara/shared/betaChannel";
-import { SYNARA_DESKTOP_SMOKE_USER_DATA_ENV } from "@synara/shared/desktopIdentity";
+import {
+  SYNARA_DESKTOP_SMOKE_USER_DATA_ENV,
+  synaraDesktopIdentity,
+} from "@synara/shared/desktopIdentity";
 import type {
   DesktopBetaActionError,
   DesktopBetaActionResult,
@@ -51,7 +54,7 @@ export const BETA_WINDOWS_UNINSTALL_GUID = SYNARA_BETA_WINDOWS_INSTALLER_GUID;
 const BETA_MAC_APP_NAME = "Synara Beta.app";
 const BETA_MAC_EXECUTABLE_NAME = "Synara Beta";
 const BETA_WINDOWS_EXE_NAME = "Synara Beta.exe";
-const BETA_LINUX_DESKTOP_FILE = "synara-beta.desktop";
+const BETA_LINUX_DESKTOP_FILE = `${synaraDesktopIdentity("beta").userDataDirectoryName}.desktop`;
 const STABLE_MAC_APP_NAME = "Synara.app";
 const STABLE_MAC_EXECUTABLE_NAME = "Synara";
 const STABLE_WINDOWS_EXE_NAME = "Synara.exe";

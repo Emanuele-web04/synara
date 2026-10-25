@@ -78,6 +78,7 @@ export interface ProviderSteerSubagentPayload {
 export interface ProviderTurnDispatchOptions {
   readonly claudeCompactionCancellation?: Deferred.Deferred<void>;
 }
+
 export type ProviderConversationRollbackMode = "native" | "restart-session";
 
 export interface ProviderAdapterCapabilities {
@@ -94,6 +95,12 @@ export interface ProviderAdapterCapabilities {
   readonly supportsPluginDiscovery?: boolean;
   readonly supportsRuntimeModelList?: boolean;
   readonly supportsTurnSteering?: boolean;
+  /**
+   * True when `forkThread` honors `throughTurnId`. Other adapters never see a
+   * cutoff: ProviderService skips their native fork so the fork is rebuilt
+   * from its imported transcript instead of carrying later source turns.
+   */
+  readonly supportsForkThroughTurn?: boolean;
   /** True when `turn.diff.updated.payload.unifiedDiff` contains a parseable live patch. */
   readonly supportsLiveTurnDiffPatch?: boolean;
 }
@@ -117,6 +124,10 @@ export interface ProviderThreadSnapshot {
    * model the source session actually used.
    */
   readonly lastUsedModel?: { readonly model: string; readonly thinkingLevel?: string };
+}
+
+export interface ProviderThreadHistoryPage extends ProviderThreadSnapshot {
+  readonly nextCursor: string | null;
 }
 
 export interface ProviderGeneratedImageHomePathsInput {
@@ -239,6 +250,22 @@ export interface ProviderAdapterShape<TError> {
    */
   readonly stopSession: (threadId: ThreadId) => Effect.Effect<void, TError>;
 
+  /**
+   * Renew retired tool authority after all native background work has settled.
+   * True keeps the current session/generation; false requires full replacement.
+   * The adapter must keep admission fenced until renewal is proven complete.
+   */
+  readonly renewAgentGatewayCredential?: (threadId: ThreadId) => Effect.Effect<boolean, TError>;
+
+  /**
+   * Whether the live session's tool credential was retired by a terminal turn
+   * and has not yet been replaced. The adapter that retired the bearer is the
+   * authoritative source for this state; routing consults it so recovery does
+   * not depend solely on the persisted rotation marker, which can be lost
+   * when the carrying terminal event is rejected.
+   */
+  readonly agentGatewayCredentialRetired?: (threadId: ThreadId) => Effect.Effect<boolean, TError>;
+
   /** Validate and retire before generation rotation; the returned start retains per-attempt preflight. */
   readonly prepareSessionReplacement?: (input: ProviderSessionStartInput) => Effect.Effect<
     | {
@@ -267,6 +294,13 @@ export interface ProviderAdapterShape<TError> {
   readonly hasSession: (threadId: ThreadId) => Effect.Effect<boolean>;
 
   /**
+   * Check whether a context still needs cleanup, including a stopped context
+   * retained after teardown failed. Cleanup callers fall back to hasSession
+   * when omitted. Routing must continue to use hasSession.
+   */
+  readonly hasRetainedSession?: (threadId: ThreadId) => Effect.Effect<boolean>;
+
+  /**
    * Read a provider thread snapshot.
    */
   readonly readThread: (threadId: ThreadId) => Effect.Effect<ProviderThreadSnapshot, TError>;
@@ -280,6 +314,15 @@ export interface ProviderAdapterShape<TError> {
     readonly providerInstanceId?: ProviderInstanceId;
     readonly providerOptions?: ProviderStartOptions;
   }) => Effect.Effect<ProviderThreadSnapshot, TError>;
+
+  /** Display history only; never used to reconstruct native model context. */
+  readonly readExternalThreadPage?: (input: {
+    readonly externalThreadId: string;
+    readonly cursor?: string;
+    readonly cwd?: string;
+    readonly providerOptions?: ProviderStartOptions;
+    readonly providerInstanceId?: ProviderInstanceId;
+  }) => Effect.Effect<ProviderThreadHistoryPage, TError>;
 
   /**
    * Roll back a provider thread by N turns.
@@ -329,6 +372,15 @@ export interface ProviderAdapterShape<TError> {
    * Canonical runtime event stream emitted by this adapter.
    */
   readonly streamEvents: Stream.Stream<ProviderRuntimeEvent>;
+
+  /**
+   * Opt-in delivery guarantee for pre-journal assistant text batching. The
+   * adapter mints fresh local canonical IDs and drains an owned destructive
+   * queue: resubscription/reconnection never redelivers a consumed canonical ID.
+   * The pump owns retries of the exact accepted envelope. Providers with native
+   * replay IDs or replaying streams must omit this and retain original events.
+   */
+  readonly runtimeEventDelivery?: "fresh-ids-once";
 
   /**
    * Read provider-specific composer capabilities.

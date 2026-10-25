@@ -817,6 +817,7 @@ const installFrozenStageDependencies = Effect.fn("installFrozenStageDependencies
   repoRoot: string,
   stageAppDir: string,
   platform: typeof BuildPlatform.Type,
+  arch: typeof BuildArch.Type,
   verbose: boolean,
 ) {
   const path = yield* Path.Path;
@@ -854,11 +855,14 @@ const installFrozenStageDependencies = Effect.fn("installFrozenStageDependencies
       })`bun install --omit=dev --ignore-scripts --linker hoisted`,
     );
   } else {
+    // Optional per-CPU packages (Claude SDK, esbuild, msgpackr) must match the
+    // target, not the host: release CI builds the Intel app on Apple Silicon.
+    const cpu = arch === "universal" ? "*" : arch;
     yield* runCommand(
       ChildProcess.make({
         cwd: stageAppDir,
         ...commandOutputOptions(verbose),
-      })`bun install --frozen-lockfile --ignore-scripts --linker hoisted`,
+      })`bun install --frozen-lockfile --ignore-scripts --linker hoisted --cpu=${cpu}`,
     );
   }
 
@@ -866,13 +870,14 @@ const installFrozenStageDependencies = Effect.fn("installFrozenStageDependencies
     // node-pty's npm package does not ship Linux prebuilds. Keep the frozen
     // install's blanket lifecycle-script block, then rebuild only node-pty so
     // npm supplies node-gyp to its install script and compiles the native
-    // binding required by the packaged terminal.
+    // binding required by the packaged terminal. Set an explicit package prefix
+    // so npm does not parse the workspace's Bun-specific scoped overrides.
     yield* Effect.log("[desktop-artifact] Building staged Linux node-pty binding...");
     yield* runCommand(
       ChildProcess.make({
         cwd: stageAppDir,
         ...commandOutputOptions(verbose),
-      })`npm rebuild node-pty --foreground-scripts`,
+      })`npm rebuild node-pty --foreground-scripts --prefix ${path.join(stageAppDir, "node_modules", "node-pty")}`,
     );
   }
 
@@ -1342,7 +1347,13 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
 
   yield* timedBuildStage(
     "production-dependencies",
-    installFrozenStageDependencies(repoRoot, stageAppDir, options.platform, options.verbose),
+    installFrozenStageDependencies(
+      repoRoot,
+      stageAppDir,
+      options.platform,
+      options.arch,
+      options.verbose,
+    ),
   );
 
   const stagePackageJsonString = yield* encodeJsonString(stagePackageJson);

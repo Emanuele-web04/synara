@@ -33,9 +33,10 @@ shares stable's data directory or update feed.
 2. If Windows is shipping unsigned, set the repo variable
    `SYNARA_ALLOW_UNSIGNED_WINDOWS_RELEASE` to the Stable version (for example
    `0.9.2`), then tag and publish `v0.9.2`.
-3. Set the variable to the Beta version (`0.9.3-beta.1`), then tag and publish
-   `v0.9.3-beta.1` from the same commit. With `SYNARA_AUTO_BETA=1` this tag is
-   created automatically after the Stable publish.
+3. Set the variable to the Beta version (`0.9.3-beta.1`), prepare its version
+   commit on top of the Stable commit, then tag and publish `v0.9.3-beta.1`.
+   With `SYNARA_AUTO_BETA=1` this version commit and tag are created automatically
+   after the Stable publish. Do not push Beta package versions onto `main`.
 4. More Betas (`beta.2`, `beta.3`, …) can follow from newer `main` commits at any
    time. Stable only moves when a `vX.Y.Z` tag is cut.
 
@@ -108,26 +109,49 @@ Beta releases ride the same `release.yml` workflow. The lane is selected entirel
 the tag shape: a version whose first prerelease identifier is `beta` resolves to the
 beta channel and the beta desktop flavor; every other suffix keeps today's behavior.
 
-1. Ensure `main` is green and run the build-only validation for the release candidate:
-   - `gh workflow run release.yml --ref BRANCH -f version=X.Y.Z-beta.1 -f publish_release=false`
-2. Commit the version on top of the target commit (normally current `main`),
-   and push only the tag. Release preflight
+1. Select the target `main` commit and inspect its CI results. Finalize the release
+   notes and documentation, then prepare the Beta version on top of that commit
+   in an isolated checkout. Release preflight
    (`scripts/verify-release-source-provenance.ts`) requires the four release
    `package.json` versions to equal the tag version, but beta version commits
    never land on `main`, so `main` keeps the stable version:
    - `git switch --detach upstream/main`
-   - `node scripts/update-release-package-versions.ts X.Y.Z-beta.N`, then commit
-   - `git tag vX.Y.Z-beta.N` and `git push upstream vX.Y.Z-beta.N`
-   - The base `X.Y.Z` should sit at or ahead of the latest stable version so beta
-     builds sort semantically as prereleases of the next stable.
+   - `node scripts/update-release-package-versions.ts X.Y.Z-beta.N`
+   - Use the next Stable base `X.Y.Z`, ahead of the latest published Stable, so
+     the Beta sorts after the currently installed release.
    - `N` starts at `1` and increments per beta cut on the same base version.
+2. Follow the [release checklist](docs/release.md#4-ongoing-release-checklist):
+   complete the required local checks after the version, lockfile and notes are
+   final; resolve the Beta update policy and set the exact Windows unsigned
+   exception when needed; then commit, tag and push only the tag. The tag workflow
+   supplies the final full workspace test suite and desktop build on that exact
+   Beta candidate:
+   - `git tag vX.Y.Z-beta.N` and `git push upstream vX.Y.Z-beta.N`
+   - An ordinary Beta uses this one publication run. Full build-only qualification
+     followed by a tag build is not required; use a scoped build-only stage only
+     when diagnosing a native or packaging change.
+   - Native packaging and qualification share one runner and can overlap the
+     quality/server-test gates once preflight and prepared inputs pass. GitHub
+     and npm publication depend directly on all quality/server-test gates and
+     native success; Beta still never publishes npm `latest`.
 3. The workflow publishes a GitHub **prerelease** named `Synara vX.Y.Z-beta.N` with
    beta installers, `beta-*.yml` manifests, and blockmaps. It is never marked Latest,
    never bumps package versions on `main`, and never publishes the npm `latest`
    dist-tag.
-4. To re-run publication by hand, dispatch the workflow on the existing tag
-   (`gh workflow run release.yml --ref vX.Y.Z-beta.N -f version=X.Y.Z-beta.N -f publish_release=true`).
-   Publishing from a branch ref is refused by preflight.
+4. For a failure on the same source SHA, resume the existing run with
+   `gh run rerun RUN_ID --failed` as described in
+   [release recovery](docs/release.md#resume-a-failed-release). A first successful
+   native attempt creates no checkpoint. After a failure with validated provenance,
+   the workflow rechecks integrity before retaining a candidate for 30 days; a
+   retry in that same run/SHA can restore it and skip packaging. Corruption or
+   artifact API errors fail closed; missing/expired candidates require rebuild.
+   A crash/cancellation that prevents checkpoint upload, or a notarization failure
+   before validated provenance, cannot recover from the old runner's local files.
+   Do not dispatch a duplicate publication run. A manual publication dispatch on an existing tag
+   is an alternative trigger when no tag-triggered run is being used:
+   `gh workflow run release.yml --ref vX.Y.Z-beta.N -f version=X.Y.Z-beta.N -f publish_release=true`.
+   Publishing from a branch ref is refused by preflight; a new source SHA requires
+   a newly verified candidate rather than relabeling earlier artifacts.
 5. Always cut a new beta right after each stable release. The GitHub provider
    picks the newest non-custom-channel release in the feed, so a newer stable
    tag shadows every older beta until a fresh beta prerelease out-sorts it.
@@ -284,35 +308,62 @@ To put a feature behind the list:
 
 Promote a feature to Stable by deleting its entry; every gate resolves itself.
 
-The list currently contains `omp` (Oh My Pi), `groups` (Hubs), `tasks` (Tasks),
-`inbox` (Inbox), and `audio-trail` (message trail sound), all gated off in Stable.
-The rail sidebar layout is available in
-both Stable and Beta.
+Connectors (`mcp-connectors`) are available in Stable and Beta: Settings → Connectors,
+RPCs, OAuth callbacks, proxy routes and saved connectors use the same shared policy.
+Each app reads only the `mcp-connectors` secret in its own data home.
+See [Connectors](docs/mcp-connectors.md).
 
-On Stable, Hubs are inert rather than hidden data: the server refuses the hub
-APIs, Library routes and gateway tools, stops coordinator wakes and monitoring,
-leaves saved Hub check-ins and completion evaluations unchanged and unscheduled,
-uses ordinary Synara tool approvals for former coordinator chats, and refuses
-creating a hub; the web hides the Hubs tab, route, setting, and
-thread actions, and shows any existing hub folder as an ordinary project so its
-chats stay reachable. The gate lives in
-`apps/server/src/projectAgent/groupsBetaGate.ts` and `GROUPS_ON` in
-`apps/web/src/betaFeatures.ts`.
+The native editor (`native-editor`) is available in Stable and Beta: the same Code OSS
+editing engine behind file editors, editable diffs and editable previews, TypeScript language
+service and JavaScript debugger. Both apps expose the `editor.*` RPCs and the editor commands
+in the Shortcuts sheet and Settings → Keybindings. Existing document ownership, save/conflict
+handling and large-preview fallbacks remain unchanged.
+See [Native editor intelligence](docs/editor/intelligence.md).
 
-`tasks` enables the Tasks list and delegation APIs. In Beta, Tasks takes Kanban's
-navigation slot and preserves its saved order and visibility; Stable keeps Kanban.
-A Beta client connected to a server that refuses Tasks returns to Kanban.
+HTML visuals execute only in the desktop apps (Stable and Beta), where native subframe navigation is blocked.
+HTTP-hosted clients retain native component visuals but never execute HTML. The trusted
+bootstrap removes WebRTC capabilities before page scripts and stops parsing if that boundary
+cannot be enforced. HTML messages cannot open external URLs through the host.
 
-`inbox` is the Inbox page: the server refuses its `stats.getRecap` RPC on Stable, the
-web hides its rail and sidebar entries and redirects the route, and a saved rail or
-sidebar order that mentions it is ignored there.
+The feature list is currently empty; diagnostics retain their separate Beta-only policy.
+Inline visuals are available in Stable and Beta:
+the `synara_show_visual` agent tool, its transcript rows, and the `orchestration.getInlineVisual`
+read all use the shared policy. Both native component specs and sandboxed HTML retain their
+existing rendering and interactions. Nothing is migrated; each app keeps visual documents
+under its own attachments directory, without importing Beta data into Stable.
 
-`audio-trail` is opt-in under **Settings → Chat → Message trail sound** on macOS
-desktop. It follows system audio (macOS 14.2+), the microphone, or both. The
-desktop IPC handler is authoritative and refuses Stable and other platforms;
-the web hides the selector there and leaves saved preferences inert. Only
-loudness levels are sent to the trail, and the reader stops when the visible
-trail no longer subscribes. First use can request macOS audio access.
+Hubs, Tasks, Inbox, Auto-fix CI, Oh My Pi, the rail sidebar layout, and message
+trail sound are available in both apps.
+
+Hubs became available in Stable 1.0.2. The same shared policy enables the Hub
+APIs, Library, coordinator wakes, monitoring, check-ins, completion evaluations,
+and web entry points in Stable and Beta. Existing saved Hubs in the current
+app's data home remain Hubs; this promotion does not import Beta data into
+Stable. Each app retains its own identity, data home, and update feed. Diagnostics
+remain Beta-only and are independent of this feature list.
+
+Tasks and its delegation APIs are available in Stable and Beta. Tasks takes
+Kanban's navigation slot and preserves its saved order and visibility; its
+List / Kanban switch keeps the board accessible. A client connected to an older
+server that refuses Tasks returns to Kanban.
+
+Inbox and its `stats.getRecap` RPC are available in Stable and Beta. Stable shows
+chat attention, running and finished work, review requests, and the activity recap.
+The to-do list, quick-add, delegation card, and **All tasks** link appear only where
+Tasks is available, including Stable and Beta.
+
+`pull-request-auto-fix` enables the opt-in **Auto-fix CI** action in a pull
+request's menu. The server watches checks for an enabled PR and can ask its
+linked agent chat to address failures in both Stable and Beta. It keeps the chat
+permissions and retry limits, and waits for active work, approvals, and questions.
+This does not enable automatic merging.
+
+Message trail sound is opt-in under **Settings → Chat → Message trail sound**
+on macOS desktop in both Stable and Beta. It follows system audio (macOS 14.2+),
+the microphone, or both. The desktop IPC handler refuses other platforms,
+and the web hides the selector on hosts without a supported desktop bridge.
+Only loudness levels are sent to the trail, and the reader stops when the
+visible trail no longer subscribes. First use can request macOS audio access.
 
 ## Diagnostics
 

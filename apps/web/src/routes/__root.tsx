@@ -1,5 +1,6 @@
 import { EditorDirtyRouteGuard } from "../components/EditorDirtyRouteGuard";
 import {
+  ORCHESTRATION_STREAM_OVERFLOW_CODE,
   PROVIDER_DISPLAY_NAMES,
   ThreadId,
   type OrchestrationEvent,
@@ -44,6 +45,7 @@ import { BetaWelcomeDialog } from "../components/BetaWelcomeDialog";
 import { useOnboarding } from "../onboarding/useOnboarding";
 import { ProjectImportAnnouncementDialog } from "../projectImport/ProjectImportAnnouncementDialog";
 import { useProjectImportDialogStore } from "../projectImport/projectImportDialogStore";
+import { FeatureTourDialog } from "../components/FeatureTourDialog";
 import { SafariAccessOnboarding } from "../components/SafariAccessOnboarding";
 import { QueuedComposerDrainCoordinator } from "../components/QueuedComposerDrainCoordinator";
 import { FeedbackDialog } from "../components/FeedbackDialog";
@@ -71,6 +73,7 @@ import {
   serverSettingsQueryOptions,
 } from "../lib/serverReactQuery";
 import { ensureNativeApi, readNativeApi } from "../nativeApi";
+import { registerThreadDetailSyncRetry, retryThreadDetailSync } from "../threadDetailSyncRetry";
 import {
   finalizePromotedDraftThreads,
   markPromotedDraftThreads,
@@ -87,6 +90,7 @@ import {
   onServerSettingsUpdated,
   onServerWelcome,
   onThreadStreamFailure,
+  onShellStreamFailure,
 } from "../wsNativeApi";
 import {
   addWsCompatibilityIssueListener,
@@ -94,7 +98,10 @@ import {
   readLatestWsCompatibilityIssue,
 } from "../wsTransportEvents";
 import { providerQueryKeys } from "../lib/providerReactQuery";
-import { invalidateProjectFileQueriesForCwds, projectQueryKeys } from "../lib/projectReactQuery";
+import {
+  invalidateProjectFileQueriesForCwdsAfterActivity,
+  projectQueryKeys,
+} from "../lib/projectReactQuery";
 import {
   collectActiveTerminalThreadIds,
   removeOrphanedTerminalRuntimes,
@@ -121,25 +128,41 @@ import { hasPendingTurnDispatch } from "../pendingTurnDispatch";
 import { derivePendingApprovals, derivePendingUserInputs } from "../pendingInteractionDerivation";
 import { canApplyThreadSnapshot, selectOrphanedThreadDetailIds } from "./-threadDetailOwnership";
 import {
+  bufferPreSnapshotThreadEvent,
+  createPreSnapshotThreadEventBuffer,
+  drainPreSnapshotThreadEvents,
+  shouldApplyThreadStreamSnapshot,
+  type PreSnapshotThreadEventBuffer,
+} from "./-threadDetailSnapshotOrdering";
+import {
   doesSnapshotSatisfyTerminalFence,
   isTerminalThreadSessionStatus,
 } from "./-threadTerminalFence";
 import { getThreadFromState, getThreadsFromState } from "../threadDerivation";
 import { coalesceOrchestrationUiEvents } from "../orchestrationEventCoalescing";
-import { isThreadDetailVerifiedInSync } from "../threadDetailCatchupPolicy";
+import {
+  isLiveThreadStreamDelivering,
+  isThreadDetailVerifiedInSync,
+} from "../threadDetailCatchupPolicy";
 import { useAppDensity } from "../hooks/useAppDensity";
 import { useChatWidth } from "../hooks/useChatWidth";
 import { useCommittedPathname } from "../hooks/useCommittedPathname";
 import { useDesktopAppIcon } from "../hooks/useDesktopAppIcon";
+import { useDesktopMenuShortcuts } from "../hooks/useDesktopMenuShortcuts";
 import { useAppTypography } from "../hooks/useAppTypography";
 import { usePreloadRouteChunks } from "../hooks/usePreloadRouteChunks";
 import { useSyncDesktopTopBarTrafficLightGutterZoom } from "../hooks/useDesktopTopBarGutter";
 import { useTheme } from "../hooks/useTheme";
 import { useNativeFontSmoothing } from "../hooks/useNativeFontSmoothing";
-import { invalidateGitQueries, invalidateGitQueriesForCwds } from "../lib/gitReactQuery";
+import {
+  invalidateGitQueries,
+  refreshGitQueriesForCwdsAfterActivity,
+  refreshLocalGitQueriesForCwdsAfterActivity,
+} from "../lib/gitReactQuery";
 import { shouldRepairDesktopProjectSnapshot } from "../lib/desktopProjectRecovery";
 import {
   registerEmptyRouteRestoreRefresh,
+  registerShellSnapshotRefresh,
   runEmptyRouteRestoreRefresh,
 } from "../routeRestoreRefreshCoordinator";
 import { useDiffRouteSearch } from "../hooks/useDiffRouteSearch";
@@ -182,6 +205,9 @@ import {
   getGitInvalidationThreadIdForEvent,
   getProjectFileInvalidationThreadIdForEvent,
   getStudioOutputInvalidationThreadIdForEvent,
+  getTurnDiffInvalidationThreadIdForEvent,
+  invalidateFinalizedTurnDiffQueries,
+  isLocalGitActivityInvalidationEvent,
   resolveGitInvalidationCwdForThreadId,
   shouldInvalidateGitQueriesForEvent,
   shouldInvalidateProviderQueriesForEvent,
@@ -351,9 +377,12 @@ function RootRouteView() {
           <GlobalWhatsNewSurface />
           <TaskCompletionNotifications />
           <QueuedComposerDrainCoordinator />
-          <SafariAccessOnboarding>
-            <AppSnapWelcomeDialog />
-            <BetaWelcomeDialog />
+          {/* Beta welcome must resolve the first-run gate even while Safari is queued. */}
+          <BetaWelcomeDialog />
+          <SafariAccessOnboarding startup>
+            <AppSnapWelcomeDialog>
+              <FeatureTourDialog />
+            </AppSnapWelcomeDialog>
           </SafariAccessOnboarding>
           <GlobalOnboardingDialog />
           <ProjectImportAnnouncementDialog />
@@ -480,9 +509,8 @@ function ProviderModelDiscoveryWarmer() {
   // provider that doesn't render instantly when the model picker opens. Warm it
   // at app startup — ahead of the picker opening — so the catalog is ready by
   // the time the user browses to OMP. The server caches that catalog globally
-  // (keyed by binary path + agent dir), so any warm primes it for every later
-  // query; `modelRoles` merge a per-cwd project layer, so the picker's own
-  // cwd-scoped query key then only pays for the config reads on top.
+  // (keyed by account, binary path and agent dir), and the picker shares this
+  // account-global query across projects.
   const { settings } = useAppSettings();
   const queryClient = useQueryClient();
   const ompHidden = !isBetaFeatureOn("omp") || settings.hiddenProviders.includes("omp");
@@ -801,6 +829,7 @@ function GlobalShortcutsDialog() {
   const [open, setOpen] = useState(false);
   const { focusedThreadId, activeProject } = useFocusedChatContext();
   const serverConfigQuery = useQuery(serverConfigQueryOptions());
+  useDesktopMenuShortcuts(serverConfigQuery.data?.keybindings);
   const keybindings = serverConfigQuery.data?.keybindings ?? [];
   const platform = getNavigatorPlatform();
   const activeThreadTerminalState = useTerminalStateStore((state) =>
@@ -1320,10 +1349,16 @@ function EventRouter() {
     let needsProviderInvalidation = false;
     let needsBroadGitInvalidation = false;
     let pendingGitInvalidationThreadIds = new Set<ThreadId>();
+    // Tool completions: local Git state only (no GitHub repository / pull-request reads).
+    let pendingLocalGitInvalidationThreadIds = new Set<ThreadId>();
     let pendingProjectFileInvalidationThreadIds = new Set<ThreadId>();
+    let pendingTurnDiffInvalidationThreadIds = new Set<ThreadId>();
     let pendingStudioOutputInvalidationThreadIds = new Set<ThreadId>();
     let pendingDomainEvents: OrchestrationEvent[] = [];
     const immediatelyFlushedAssistantMessageIds = new Set<string>();
+    // Set while a batched cursor-resume replay is being queued: the batch ends
+    // with one synchronous flush, so no event inside it may flush on its own.
+    let queueingThreadReplayBatch = false;
     let providerDiscoveryInvalidationFingerprint: string | null = null;
     let shellSnapshotSequence = -1;
     let shellSubscriptionGeneration = 0;
@@ -1331,7 +1366,13 @@ function EventRouter() {
     let pendingShellEvents: OrchestrationShellStreamEvent[] = [];
     const subscribedThreadIds = new Set<ThreadId>();
     const threadSnapshotSequenceById = new Map<ThreadId, number>();
-    const pendingThreadEventsById = new Map<ThreadId, OrchestrationEvent[]>();
+    const pendingThreadEventsById = new Map<
+      ThreadId,
+      PreSnapshotThreadEventBuffer<OrchestrationEvent>
+    >();
+    // Cached resume cursor each subscription started from, until a current
+    // snapshot confirms the subscription. Before that, a lower snapshot can be a server reset.
+    const threadResumeSeedSequenceById = new Map<ThreadId, number>();
     const threadSnapshotRequestInFlight = new Set<ThreadId>();
     const threadSnapshotRefreshPending = new Set<ThreadId>();
     const threadSnapshotNotFoundRetryAttempted = new Set<ThreadId>();
@@ -1398,6 +1439,9 @@ function EventRouter() {
       lastProjectionReconciledAt: number | null;
     }
     const threadCatchupBackoffById = new Map<ThreadId, ThreadCatchupBackoff>();
+    // When each subscribed thread's own live stream last applied an event; replay
+    // polls wait for a delivering stream to go quiet (threadDetailCatchupPolicy).
+    const lastLiveThreadEventAtById = new Map<ThreadId, number>();
     const resolveThreadCatchupBackoff = (threadId: ThreadId): ThreadCatchupBackoff => {
       const turnId = getThreadFromState(useStore.getState(), threadId)?.latestTurn?.turnId ?? null;
       let entry = threadCatchupBackoffById.get(threadId);
@@ -1466,10 +1510,12 @@ function EventRouter() {
       const resumeCursor = getThreadDetailResumeCursor(threadId);
       if (resumeCursor === undefined) {
         threadSnapshotSequenceById.delete(threadId);
+        threadResumeSeedSequenceById.delete(threadId);
       } else {
         threadSnapshotSequenceById.set(threadId, resumeCursor);
+        threadResumeSeedSequenceById.set(threadId, resumeCursor);
       }
-      pendingThreadEventsById.set(threadId, []);
+      pendingThreadEventsById.set(threadId, createPreSnapshotThreadEventBuffer());
       threadSnapshotRequestInFlight.delete(threadId);
       threadSnapshotRefreshPending.delete(threadId);
       threadSnapshotNotFoundRetryAttempted.delete(threadId);
@@ -1477,6 +1523,7 @@ function EventRouter() {
       threadProjectionReconcilePendingById.delete(threadId);
       clearThreadProjectionTerminalFence(threadId);
       threadCatchupBackoffById.delete(threadId);
+      lastLiveThreadEventAtById.delete(threadId);
       nextThreadSubscriptionGeneration += 1;
       threadSubscriptionGenerationById.set(threadId, nextThreadSubscriptionGeneration);
       nextThreadProjectionReconcileAtById.set(
@@ -1485,6 +1532,8 @@ function EventRouter() {
       );
     };
 
+    const threadOverflowToastId = (threadId: ThreadId) => `stream-overflow:thread:${threadId}`;
+
     // Single choke point for handing a thread detail event to the reducer.
     // The reducer silently ignores detail events for a thread the store no
     // longer holds (pruned by a shell full sync, evicted, deleted), and domain
@@ -1492,8 +1541,13 @@ function EventRouter() {
     // cursor first would vouch for events that never landed — a later cursor
     // resume would then skip them forever. When the thread is missing, drop
     // the resume bookkeeping and re-snapshot through the projection instead.
-    const applyFencedThreadEvent = (threadId: ThreadId, event: OrchestrationEvent): boolean => {
-      if (!getThreadFromState(useStore.getState(), threadId)) {
+    const applyFencedThreadEvent = (
+      threadId: ThreadId,
+      event: OrchestrationEvent,
+      source: "stream" | "replay",
+    ): boolean => {
+      const state = useStore.getState();
+      if (!getThreadFromState(state, threadId)) {
         threadSnapshotSequenceById.delete(threadId);
         pendingThreadEventsById.delete(threadId);
         clearThreadDetailResumeCursor(threadId);
@@ -1505,6 +1559,12 @@ function EventRouter() {
       threadSnapshotSequenceById.set(threadId, event.sequence);
       advanceThreadDetailResumeCursor(threadId, event.sequence);
       queueDomainEvent(event);
+      // Catch-up replay can advance a dead stream's cursor; only that stream's
+      // own delivery proves recovery and can dismiss its exhausted failure.
+      if (source === "stream" && state.threadDetailSyncById?.[threadId] === "failed") {
+        useStore.getState().clearThreadDetailSyncFailure(threadId);
+        toastManager.close(threadOverflowToastId(threadId));
+      }
       // Any applied event — live or replayed — is fresh activity: drop the
       // replay backoff so a subsequently lost event repairs at base cadence.
       const backoff = threadCatchupBackoffById.get(threadId);
@@ -1513,19 +1573,28 @@ function EventRouter() {
         backoff.nextReplayAt = 0;
         backoff.appliedEventSerial += 1;
       }
+      if (source === "stream") lastLiveThreadEventAtById.set(threadId, Date.now());
       return true;
     };
 
     const flushThreadBuffer = (threadId: ThreadId, snapshotSequence: number) => {
-      const pendingEvents = pendingThreadEventsById.get(threadId) ?? [];
+      const { events, lostEvents } = drainPreSnapshotThreadEvents(
+        pendingThreadEventsById.get(threadId),
+        threadSnapshotSequenceById.get(threadId) ?? snapshotSequence,
+      );
       pendingThreadEventsById.delete(threadId);
-      let latestThreadSequence = threadSnapshotSequenceById.get(threadId) ?? snapshotSequence;
-      for (const event of pendingEvents.toSorted((left, right) => left.sequence - right.sequence)) {
-        if (event.sequence > latestThreadSequence) {
-          latestThreadSequence = event.sequence;
-          if (!applyFencedThreadEvent(threadId, event)) {
-            return;
-          }
+      if (lostEvents) {
+        // Buffer overflow dropped events the applied snapshot does not cover.
+        // Applying the rest would leave a hole in streamed text, so keep the
+        // snapshot, buffer live events again, and resync from a fresh snapshot.
+        threadSnapshotSequenceById.delete(threadId);
+        pendingThreadEventsById.set(threadId, createPreSnapshotThreadEventBuffer());
+        void refreshThreadSnapshot(threadId);
+        return;
+      }
+      for (const event of events) {
+        if (!applyFencedThreadEvent(threadId, event, "stream")) {
+          return;
         }
       }
     };
@@ -1551,6 +1620,7 @@ function EventRouter() {
       // holds its slot gets the new thread's stream rejected at admission.
       for (const threadId of removals) {
         threadSnapshotSequenceById.delete(threadId);
+        threadResumeSeedSequenceById.delete(threadId);
         pendingThreadEventsById.delete(threadId);
         threadSnapshotRequestInFlight.delete(threadId);
         threadSnapshotRefreshPending.delete(threadId);
@@ -1562,6 +1632,7 @@ function EventRouter() {
         threadSubscriptionGenerationById.delete(threadId);
         nextThreadProjectionReconcileAtById.delete(threadId);
         threadCatchupBackoffById.delete(threadId);
+        lastLiveThreadEventAtById.delete(threadId);
         subscribedThreadIds.delete(threadId);
       }
       // A retention eviction can refresh a thread whose lease is dropping in the
@@ -1594,6 +1665,34 @@ function EventRouter() {
         .then(operation);
       return reconcileThreadSubscriptionsChain;
     };
+
+    const unregisterThreadDetailSyncRetry = registerThreadDetailSyncRetry((threadId) =>
+      enqueueThreadSubscriptionOperation(async () => {
+        if (disposed || !subscribedThreadIds.has(threadId)) return;
+        // Both retry surfaces use the owner's normal cursor/fence initialization.
+        beginThreadSubscription(threadId);
+        const generation = threadSubscriptionGenerationById.get(threadId);
+        useStore.getState().clearThreadDetailSyncFailure(threadId);
+        try {
+          await api.orchestration.subscribeThread(buildThreadSubscribeInput(threadId));
+        } catch {
+          if (
+            disposed ||
+            !subscribedThreadIds.has(threadId) ||
+            threadSubscriptionGenerationById.get(threadId) !== generation
+          )
+            return;
+          useStore.getState().markThreadDetailSyncFailed(threadId);
+          toastManager.add({
+            id: `stream-overflow:retry-failed:${threadId}`,
+            type: "error",
+            title: "Unable to resume thread updates",
+            description: "Try again when the server responds.",
+            data: { threadId },
+          });
+        }
+      }),
+    );
 
     const enqueueThreadSubscriptionReconcile = (threadIds: readonly ThreadId[]) => {
       const nextThreadIds = [...threadIds];
@@ -1733,6 +1832,13 @@ function EventRouter() {
       }, SHELL_SNAPSHOT_BOOTSTRAP_FALLBACK_DELAY_MS);
     };
 
+    const unregisterShellSnapshotRefresh = registerShellSnapshotRefresh(async (minSequence) => {
+      if (disposed) return false;
+      if (shellSnapshotSequence >= minSequence) return true;
+      const snapshot = await api.orchestration.getShellSnapshot();
+      applyAuthoritativeShellSnapshot(snapshot);
+      return !disposed && shellSnapshotSequence >= minSequence;
+    });
     const unregisterEmptyRouteRestoreRefresh = registerEmptyRouteRestoreRefresh(() =>
       runEmptyRouteRestoreRefresh({
         getShellSnapshot: () => api.orchestration.getShellSnapshot(),
@@ -1743,11 +1849,29 @@ function EventRouter() {
       }),
     );
 
+    // Counts successful socket opens so the first welcome can tell whether the
+    // mount-time bootstrap already subscribed on the connection that sent it.
+    // Requests issued while connecting land on the next open, hence `+ 1`.
+    let transportOpenCount = 0;
+    let transportOpen = false;
+    const unsubTransportOpenCount = addWsTransportStateListener(
+      (state) => {
+        if (state === "open" && !transportOpen) transportOpenCount += 1;
+        transportOpen = state === "open";
+      },
+      { replayCurrent: true },
+    );
+    const currentTransportConnection = () =>
+      transportOpen ? transportOpenCount : transportOpenCount + 1;
+    let scopedSubscriptionConnection: number | null = null;
+    let awaitingInitialWelcome = true;
+
     let scopedSubscriptionRefresh: Promise<void> | null = null;
     const ensureScopedSubscriptions = () => {
       if (scopedSubscriptionRefresh) {
         return scopedSubscriptionRefresh;
       }
+      scopedSubscriptionConnection = currentTransportConnection();
       shellSubscriptionGeneration += 1;
       const generation = shellSubscriptionGeneration;
       if (shellSnapshotFallbackTimer !== null) {
@@ -1763,6 +1887,7 @@ function EventRouter() {
           .catch(() => loadBootstrapShellSnapshotIfMissing(generation));
         await enqueueThreadSubscriptionOperation(async () => {
           threadSnapshotSequenceById.clear();
+          threadResumeSeedSequenceById.clear();
           pendingThreadEventsById.clear();
           threadSnapshotRequestInFlight.clear();
           threadSnapshotRefreshPending.clear();
@@ -1774,6 +1899,7 @@ function EventRouter() {
           threadSubscriptionGenerationById.clear();
           nextThreadProjectionReconcileAtById.clear();
           threadCatchupBackoffById.clear();
+          lastLiveThreadEventAtById.clear();
           const previousThreadIds = [...subscribedThreadIds];
           subscribedThreadIds.clear();
           // Reconnect drops every lease at once, so the reconcile below sees no
@@ -1830,11 +1956,25 @@ function EventRouter() {
       if (needsProviderInvalidation) {
         needsProviderInvalidation = false;
         pendingProjectFileInvalidationThreadIds = new Set();
+        pendingTurnDiffInvalidationThreadIds = new Set();
         void queryClient.invalidateQueries({ queryKey: providerQueryKeys.all });
         // Invalidate workspace entry queries so the @-mention file picker
         // reflects files created, deleted, or restored during this turn.
         void queryClient.invalidateQueries({ queryKey: projectQueryKeys.all });
-      } else if (pendingProjectFileInvalidationThreadIds.size > 0) {
+      } else if (pendingTurnDiffInvalidationThreadIds.size > 0) {
+        // Scoped to the finalized turns' threads; their file queries ride the
+        // file-change pass below unless every project cache was already dropped.
+        const scoped = invalidateFinalizedTurnDiffQueries(
+          queryClient,
+          useStore.getState(),
+          pendingTurnDiffInvalidationThreadIds,
+        );
+        pendingTurnDiffInvalidationThreadIds = new Set();
+        if (!scoped) {
+          pendingProjectFileInvalidationThreadIds = new Set();
+        }
+      }
+      if (pendingProjectFileInvalidationThreadIds.size > 0) {
         // Mid-turn file-change activities: refresh the editor file tree and
         // open file preview for just the affected workspaces.
         const currentState = useStore.getState();
@@ -1847,7 +1987,7 @@ function EventRouter() {
         }
         pendingProjectFileInvalidationThreadIds = new Set();
         if (fileChangeCwds.size > 0) {
-          void invalidateProjectFileQueriesForCwds(queryClient, fileChangeCwds);
+          invalidateProjectFileQueriesForCwdsAfterActivity(queryClient, fileChangeCwds);
         } else {
           void queryClient.invalidateQueries({ queryKey: projectQueryKeys.all });
         }
@@ -1864,32 +2004,61 @@ function EventRouter() {
       if (needsBroadGitInvalidation) {
         needsBroadGitInvalidation = false;
         pendingGitInvalidationThreadIds = new Set();
+        pendingLocalGitInvalidationThreadIds = new Set();
         void invalidateGitQueries(queryClient);
-      } else if (pendingGitInvalidationThreadIds.size > 0) {
+      } else if (
+        pendingGitInvalidationThreadIds.size > 0 ||
+        pendingLocalGitInvalidationThreadIds.size > 0
+      ) {
         const currentState = useStore.getState();
         const scopedCwds = new Set<string>();
+        const localCwds = new Set<string>();
         let hasUnresolvedThread = false;
-        for (const threadId of pendingGitInvalidationThreadIds) {
-          const cwd = resolveGitInvalidationCwdForThreadId(currentState, threadId);
-          if (cwd) {
-            scopedCwds.add(cwd);
-          } else {
-            hasUnresolvedThread = true;
+        for (const [threadIds, cwds] of [
+          [pendingGitInvalidationThreadIds, scopedCwds],
+          [pendingLocalGitInvalidationThreadIds, localCwds],
+        ] as const) {
+          for (const threadId of threadIds) {
+            const cwd = resolveGitInvalidationCwdForThreadId(currentState, threadId);
+            if (cwd) {
+              cwds.add(cwd);
+            } else {
+              hasUnresolvedThread = true;
+            }
           }
         }
         pendingGitInvalidationThreadIds = new Set();
-        if (hasUnresolvedThread || scopedCwds.size === 0) {
+        pendingLocalGitInvalidationThreadIds = new Set();
+        if (hasUnresolvedThread || (scopedCwds.size === 0 && localCwds.size === 0)) {
           void invalidateGitQueries(queryClient);
         } else {
-          void invalidateGitQueriesForCwds(queryClient, scopedCwds);
+          refreshGitQueriesForCwdsAfterActivity(queryClient, scopedCwds);
+          // A full refresh for the same checkout already covers its local state.
+          refreshLocalGitQueriesForCwdsAfterActivity(
+            queryClient,
+            [...localCwds].filter((cwd) => !scopedCwds.has(cwd)),
+          );
         }
       }
+    };
+
+    // Every queued event already advanced its thread cursor, so any snapshot the
+    // router accepts (at or past that cursor) contains it. Apply the queue first:
+    // flushing it on top of the snapshot would re-append streamed deltas and
+    // regress newer session state.
+    const flushQueuedDomainEventsBeforeSnapshot = () => {
+      domainEventFlushThrottler.cancel();
+      flushPendingDomainEvents();
     };
 
     const queueDomainEvent = (event: OrchestrationEvent) => {
       pendingDomainEvents.push(event);
       if (shouldInvalidateProviderQueriesForEvent(event)) {
         needsProviderInvalidation = true;
+      }
+      const turnDiffThreadId = getTurnDiffInvalidationThreadIdForEvent(event);
+      if (turnDiffThreadId) {
+        pendingTurnDiffInvalidationThreadIds.add(turnDiffThreadId);
       }
       const projectFileThreadId = getProjectFileInvalidationThreadIdForEvent(event);
       if (projectFileThreadId) {
@@ -1901,15 +2070,23 @@ function EventRouter() {
       }
       if (shouldInvalidateGitQueriesForEvent(event)) {
         const threadId = getGitInvalidationThreadIdForEvent(event);
-        if (threadId) {
+        if (threadId && isLocalGitActivityInvalidationEvent(event)) {
+          pendingLocalGitInvalidationThreadIds.add(threadId);
+        } else if (threadId) {
           pendingGitInvalidationThreadIds.add(threadId);
         } else {
           needsBroadGitInvalidation = true;
         }
       }
-      if (shouldFlushDomainEventImmediately(event, immediatelyFlushedAssistantMessageIds)) {
+      if (
+        shouldFlushDomainEventImmediately(event, immediatelyFlushedAssistantMessageIds) &&
+        !queueingThreadReplayBatch
+      ) {
         domainEventFlushThrottler.cancel();
         flushPendingDomainEvents();
+        return;
+      }
+      if (queueingThreadReplayBatch) {
         return;
       }
       domainEventFlushThrottler.maybeExecute();
@@ -1949,7 +2126,7 @@ function EventRouter() {
             if (event.sequence <= latestThreadSequence) {
               continue;
             }
-            if (!applyFencedThreadEvent(threadId, event)) {
+            if (!applyFencedThreadEvent(threadId, event, "replay")) {
               break;
             }
             appliedEventCount += 1;
@@ -2033,15 +2210,21 @@ function EventRouter() {
           Math.max(currentSequence, snapshot.snapshotSequence),
         );
         advanceThreadDetailResumeCursor(threadId, snapshot.snapshotSequence);
-        // Apply even when the cursor did not advance. The projection is
-        // authoritative and can repair a client that advanced its cursor while
-        // dropping or failing to reduce one of the corresponding live events.
-        const stateBeforeProjectionApply = useStore.getState();
         // Resolve the entry before applying: when this snapshot is what starts the next
         // turn, the resync belongs to the turn that requested it, and the new turn must
         // still get its own.
         const catchupEntryBeforeApply = resolveThreadCatchupBackoff(threadId);
-        syncServerThreadDetailHotPath(snapshot.thread, snapshot.snapshotSequence);
+        flushQueuedDomainEventsBeforeSnapshot();
+        // Apply even when the cursor did not advance. The projection is
+        // authoritative and can repair a client that advanced its cursor while
+        // dropping or failing to reduce one of the corresponding live events.
+        const stateBeforeProjectionApply = useStore.getState();
+        syncServerThreadDetailHotPath(
+          snapshot.thread,
+          snapshot.snapshotSequence,
+          snapshot.historyRevisionSequence,
+        );
+        threadResumeSeedSequenceById.delete(threadId);
         reconcilePromotedDraftFromThreadDetail(snapshot.thread);
         flushThreadBuffer(threadId, snapshot.snapshotSequence);
         projectionConfirmed = true;
@@ -2057,7 +2240,8 @@ function EventRouter() {
         if (projectionSettlesCurrentTurn || projectionRepairsTerminalFence) {
           // Mirror terminal-event invalidation when recovery came from the
           // projection rather than the live stream.
-          needsProviderInvalidation = true;
+          pendingTurnDiffInvalidationThreadIds.add(threadId);
+          pendingProjectFileInvalidationThreadIds.add(threadId);
           pendingGitInvalidationThreadIds.add(threadId);
           pendingStudioOutputInvalidationThreadIds.add(threadId);
           domainEventFlushThrottler.maybeExecute();
@@ -2118,6 +2302,7 @@ function EventRouter() {
 
     const unsubShellEvent = api.orchestration.onShellEvent((item) => {
       if (item.kind === "snapshot") {
+        toastManager.close("stream-overflow:shell");
         shellSnapshotReceivedGeneration = shellSubscriptionGeneration;
         const promotedDraftThreadIds = collectSubscribedDraftsInShell(item.snapshot.threads);
         shellSnapshotSequence = item.snapshot.snapshotSequence;
@@ -2137,6 +2322,7 @@ function EventRouter() {
         return;
       }
       shellSnapshotSequence = item.sequence;
+      toastManager.close("stream-overflow:shell");
       applyShellEvent(item);
       if (item.kind === "thread-upserted") {
         reconcilePromotedDraftsFromShellThreads([item.thread]);
@@ -2193,6 +2379,52 @@ function EventRouter() {
         void replayThreadEvents(item.thread.id, item.sequence).catch(() => undefined);
       }
     });
+    const applyThreadStreamEvent = (event: OrchestrationEvent) => {
+      const threadId = ThreadId.makeUnsafe(String(event.aggregateId));
+      const latestThreadSequence = threadSnapshotSequenceById.get(threadId);
+      if (latestThreadSequence === undefined) {
+        const pendingThreadEvents =
+          pendingThreadEventsById.get(threadId) ?? createPreSnapshotThreadEventBuffer();
+        bufferPreSnapshotThreadEvent(pendingThreadEvents, event, PENDING_THREAD_EVENT_BUFFER_LIMIT);
+        pendingThreadEventsById.set(threadId, pendingThreadEvents);
+        if (
+          event.type === "thread.session-set" &&
+          isTerminalThreadSessionStatus(event.payload.session.status)
+        ) {
+          // Arm even while buffered: the immediate reconcile below may return a
+          // premature session-set snapshot, and the fence must outlive it (#548).
+          armThreadProjectionTerminalFence(threadId, event.sequence);
+        } else if (event.type === "thread.session-set") {
+          clearThreadProjectionTerminalFence(threadId);
+        }
+        if (subscribedThreadIds.has(threadId)) {
+          void reconcileThreadProjection(threadId).catch(() => undefined);
+        }
+        return;
+      }
+      if (event.sequence <= latestThreadSequence) {
+        return;
+      }
+      if (!applyFencedThreadEvent(threadId, event, "stream")) {
+        return;
+      }
+      if (
+        event.type === "thread.session-set" &&
+        isTerminalThreadSessionStatus(event.payload.session.status)
+      ) {
+        // Arm after the generic post-event schedule so the fast first-reconcile
+        // delay is not overwritten back to the slower cadence.
+        armThreadProjectionTerminalFence(threadId, event.sequence);
+      } else {
+        if (event.type === "thread.session-set") {
+          clearThreadProjectionTerminalFence(threadId);
+        }
+        nextThreadProjectionReconcileAtById.set(
+          threadId,
+          Date.now() + THREAD_DETAIL_PROJECTION_RECONCILE_INTERVAL_MS,
+        );
+      }
+    };
     const unsubThreadEvent = api.orchestration.onThreadEvent((item) => {
       if (item.kind === "snapshot") {
         const threadId = item.snapshot.thread.id;
@@ -2206,7 +2438,24 @@ function EventRouter() {
           clearThreadDetailResumeCursor(threadId);
           return;
         }
-        syncServerThreadDetailHotPath(item.snapshot.thread, item.snapshot.snapshotSequence);
+        // A slower stream snapshot can land after a projection read or live
+        // events already moved the cursor past it. Applying it would roll the
+        // thread back and move the cursor behind consumed events.
+        if (
+          !shouldApplyThreadStreamSnapshot({
+            snapshotSequence: item.snapshot.snapshotSequence,
+            appliedSequence: threadSnapshotSequenceById.get(threadId),
+            resumeSeedSequence: threadResumeSeedSequenceById.get(threadId),
+          })
+        ) {
+          return;
+        }
+        flushQueuedDomainEventsBeforeSnapshot();
+        syncServerThreadDetailHotPath(
+          item.snapshot.thread,
+          item.snapshot.snapshotSequence,
+          item.snapshot.historyRevisionSequence,
+        );
         // The projection can discard a tombstoned snapshot (deleted thread or
         // project) instead of applying it; committing the cursor or the stream
         // fence first would leave resume bookkeeping vouching for detail that
@@ -2219,6 +2468,8 @@ function EventRouter() {
           return;
         }
         threadSnapshotSequenceById.set(threadId, item.snapshot.snapshotSequence);
+        threadResumeSeedSequenceById.delete(threadId);
+        toastManager.close(threadOverflowToastId(threadId));
         threadSnapshotNotFoundRetryAttempted.delete(threadId);
         // Snapshots replace cached detail wholesale, so overwrite the cursor
         // even when it is lower than the previous one (server-side reset).
@@ -2232,63 +2483,93 @@ function EventRouter() {
         return;
       }
 
-      const threadId = ThreadId.makeUnsafe(String(item.event.aggregateId));
-      const latestThreadSequence = threadSnapshotSequenceById.get(threadId);
-      if (latestThreadSequence === undefined) {
-        const pendingThreadEvents = pendingThreadEventsById.get(threadId) ?? [];
-        appendBounded(pendingThreadEvents, item.event, PENDING_THREAD_EVENT_BUFFER_LIMIT);
-        pendingThreadEventsById.set(threadId, pendingThreadEvents);
-        if (
-          item.event.type === "thread.session-set" &&
-          isTerminalThreadSessionStatus(item.event.payload.session.status)
-        ) {
-          // Arm even while buffered: the immediate reconcile below may return a
-          // premature session-set snapshot, and the fence must outlive it (#548).
-          armThreadProjectionTerminalFence(threadId, item.event.sequence);
-        } else if (item.event.type === "thread.session-set") {
-          clearThreadProjectionTerminalFence(threadId);
+      if (item.kind === "replay") {
+        // A cursor-resume gap delivered as one batch: queue every event through
+        // the per-event path, then commit them in a single store update so a
+        // stale cached turn does not flicker through its intermediate states.
+        queueingThreadReplayBatch = true;
+        try {
+          for (const event of item.events) {
+            applyThreadStreamEvent(event);
+          }
+        } finally {
+          queueingThreadReplayBatch = false;
         }
-        if (subscribedThreadIds.has(threadId)) {
-          void reconcileThreadProjection(threadId).catch(() => undefined);
-        }
+        domainEventFlushThrottler.cancel();
+        flushPendingDomainEvents();
         return;
       }
-      if (item.event.sequence <= latestThreadSequence) {
-        return;
-      }
-      if (!applyFencedThreadEvent(threadId, item.event)) {
-        return;
-      }
-      if (
-        item.event.type === "thread.session-set" &&
-        isTerminalThreadSessionStatus(item.event.payload.session.status)
-      ) {
-        // Arm after the generic post-event schedule so the fast first-reconcile
-        // delay is not overwritten back to the slower cadence.
-        armThreadProjectionTerminalFence(threadId, item.event.sequence);
-      } else {
-        if (item.event.type === "thread.session-set") {
-          clearThreadProjectionTerminalFence(threadId);
-        }
-        nextThreadProjectionReconcileAtById.set(
-          threadId,
-          Date.now() + THREAD_DETAIL_PROJECTION_RECONCILE_INTERVAL_MS,
-        );
-      }
+      applyThreadStreamEvent(item.event);
+    });
+    const unsubShellStreamFailure = onShellStreamFailure(() => {
+      if (disposed) return;
+      const toastId = "stream-overflow:shell";
+      toastManager.add({
+        id: toastId,
+        type: "error",
+        title: "Workspace updates paused",
+        description:
+          "The update stream could not keep up after repeated retries. Retry to resume workspace updates.",
+        timeout: 0,
+        actionProps: {
+          children: "Retry updates",
+          onClick: () => {
+            toastManager.close(toastId);
+            if (disposed) return;
+            // Reset only the shell snapshot fence. Thread subscriptions and
+            // their applied cursors stay on the existing connection.
+            shellSnapshotSequence = -1;
+            pendingShellEvents = [];
+            const generation = shellSubscriptionGeneration;
+            void api.orchestration.subscribeShell().catch(() => {
+              if (disposed || shellSubscriptionGeneration !== generation) return;
+              toastManager.add({
+                id: "stream-overflow:shell:retry-failed",
+                type: "error",
+                title: "Unable to resume workspace updates",
+                description: "Try again when the server responds.",
+              });
+            });
+          },
+        },
+      });
     });
     const unsubThreadStreamFailure = onThreadStreamFailure((failure) => {
       const threadId = ThreadId.makeUnsafe(failure.threadId);
       if (disposed || !subscribedThreadIds.has(threadId)) {
         return;
       }
-      // The stream is dead with retries and reconnects exhausted: forget its
-      // cursor so a future resubscribe requests a fresh snapshot, and surface
-      // the failure so the thread view stops posing as an empty conversation.
-      clearThreadDetailResumeCursor(threadId);
-      threadSnapshotSequenceById.delete(threadId);
+      // Overflow retries preserve the last applied cursor, including exhaustion.
+      // Other terminal faults still request a fresh snapshot on resubscribe.
+      if (failure.code !== ORCHESTRATION_STREAM_OVERFLOW_CODE) {
+        clearThreadDetailResumeCursor(threadId);
+        threadSnapshotSequenceById.delete(threadId);
+      }
       threadSnapshotRequestInFlight.delete(threadId);
       threadSnapshotRefreshPending.delete(threadId);
       useStore.getState().markThreadDetailSyncFailed(threadId);
+      if (failure.code === ORCHESTRATION_STREAM_OVERFLOW_CODE) {
+        const toastId = threadOverflowToastId(threadId);
+        const threadTitle = getThreadFromState(useStore.getState(), threadId)?.title;
+        const threadLabel = threadTitle ? `“${threadTitle}”` : "this thread";
+        toastManager.add({
+          id: toastId,
+          type: "error",
+          title: "Thread updates paused",
+          description: `The update stream for ${threadLabel} could not keep up after repeated retries. Retry to resume updates.`,
+          timeout: 0,
+          data: { threadId },
+          actionProps: {
+            children: "Retry updates",
+            onClick: () => {
+              toastManager.close(toastId);
+              if (disposed || !subscribedThreadIds.has(threadId)) return;
+              void retryThreadDetailSync(threadId).catch(() => undefined);
+            },
+          },
+        });
+      }
+
       if (
         failure.code === "THREAD_SNAPSHOT_NOT_FOUND" &&
         !threadSnapshotNotFoundRetryAttempted.has(threadId) &&
@@ -2309,7 +2590,7 @@ function EventRouter() {
         return;
       }
       threadSnapshotSequenceById.delete(threadId);
-      pendingThreadEventsById.set(threadId, []);
+      pendingThreadEventsById.set(threadId, createPreSnapshotThreadEventBuffer());
       void refreshThreadSnapshot(threadId);
     });
     const unsubTerminalEvent = api.terminal.onEvent((event) => {
@@ -2372,7 +2653,17 @@ function EventRouter() {
           studioWorkspaceRoot: payload.studioWorkspaceRoot,
           groupsWorkspaceRoot: payload.groupsWorkspaceRoot,
         });
-        await ensureScopedSubscriptions();
+        // The first welcome of the connection the mount-time bootstrap already
+        // subscribed on carries nothing new. Resubscribing would interrupt the open
+        // chat's snapshot and load it twice; later welcomes still resynchronize.
+        const coveredByBootstrap =
+          awaitingInitialWelcome && scopedSubscriptionConnection === currentTransportConnection();
+        awaitingInitialWelcome = false;
+        if (coveredByBootstrap) {
+          await scopedSubscriptionRefresh;
+        } else {
+          await ensureScopedSubscriptions();
+        }
         if (disposed) {
           return;
         }
@@ -2511,9 +2802,15 @@ function EventRouter() {
           } else if (
             // A pending dispatch is the exact lost-event failure this poll
             // repairs, so it always polls at base cadence; otherwise honor the
-            // empty-replay backoff (reset on any applied event or a new turn).
+            // empty-replay backoff (reset on any applied event or a new turn)
+            // and wait for a delivering live stream to go quiet first.
             hasPendingTurnDispatch(threadId) ||
-            now >= resolveThreadCatchupBackoff(threadId).nextReplayAt
+            (now >= resolveThreadCatchupBackoff(threadId).nextReplayAt &&
+              !isLiveThreadStreamDelivering(
+                lastLiveThreadEventAtById.get(threadId) ?? null,
+                now,
+                THREAD_DETAIL_CATCHUP_INTERVAL_MS,
+              ))
           ) {
             // A late replay result must not recreate backoff state for a thread
             // whose lease was dropped (cleanup deleted it) or re-leased (a new
@@ -2590,6 +2887,8 @@ function EventRouter() {
       needsProviderInvalidation = false;
       needsBroadGitInvalidation = false;
       pendingGitInvalidationThreadIds = new Set();
+      pendingLocalGitInvalidationThreadIds = new Set();
+      pendingTurnDiffInvalidationThreadIds = new Set();
       pendingStudioOutputInvalidationThreadIds = new Set();
       threadProjectionReconcileInFlight.clear();
       threadProjectionTerminalFencePending.clear();
@@ -2598,9 +2897,12 @@ function EventRouter() {
       threadSubscriptionGenerationById.clear();
       nextThreadProjectionReconcileAtById.clear();
       threadCatchupBackoffById.clear();
+      lastLiveThreadEventAtById.clear();
       domainEventFlushThrottler.cancel();
       reconcileThreadSubscriptionsRef.current = null;
       unregisterEmptyRouteRestoreRefresh();
+      unregisterShellSnapshotRefresh();
+      unregisterThreadDetailSyncRetry();
       void api.orchestration.unsubscribeShell().catch(() => undefined);
       // Same shape as reconnect: every lease drops at once, and a remount re-leases
       // only the visible threads. Keeping those avoids blanking the open chat, and
@@ -2617,6 +2919,7 @@ function EventRouter() {
       unsubShellEvent();
       unsubThreadEvent();
       unsubThreadStreamFailure();
+      unsubShellStreamFailure();
       unsubThreadDetailEviction();
       unsubTerminalEvent();
       unsubDevServerEvent();
@@ -2624,6 +2927,7 @@ function EventRouter() {
       unsubServerConfigUpdated();
       unsubProviderStatusesUpdated();
       unsubWsTransportState();
+      unsubTransportOpenCount();
       unsubServerSettingsUpdated();
     };
   }, [

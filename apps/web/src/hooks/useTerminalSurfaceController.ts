@@ -1,26 +1,20 @@
-// FILE: useTerminalSurfaceController.ts
-// Purpose: Terminal-store controller for the right-dock terminal pane. Owns the
-//          store selector slice, focus-request bump, and standard create/split/tab/
-//          move/activate/close handlers.
-// Layer: Web terminal UI hook
-// Note: ChatView is intentionally NOT a consumer — it adds split limits, placeholder
-//       thread cleanup, and split-view navigation, so it shares only the lower-level
-//       terminalSession helpers instead of this controller.
+// Shared lifecycle and metadata for a single terminal panel.
 
 import { type ThreadId } from "@synara/contracts";
 import { type TerminalCliKind } from "@synara/shared/terminalThreads";
 import { useState } from "react";
 
-import { useAppSettings } from "~/appSettings";
 import {
   confirmTerminalTabClose,
   resolveTerminalCloseTitle,
   shouldPromptForTerminalClose,
 } from "~/lib/terminalCloseConfirmation";
+import { dockTerminalThreadId } from "~/lib/dockTerminalScope";
 import { readNativeApi } from "~/nativeApi";
+import { selectRightDockState, useRightDockStore } from "~/rightDockStore";
 import { selectThreadTerminalState, useTerminalStateStore } from "~/terminalStateStore";
-import { randomTerminalId } from "~/components/terminal/terminalIds";
 import { disposeAndCloseTerminalSession } from "~/components/terminal/terminalSession";
+import { toastManager } from "~/components/ui/toast";
 
 type TerminalMetadata = { cliKind: TerminalCliKind | null; label: string };
 type TerminalActivity = {
@@ -29,82 +23,16 @@ type TerminalActivity = {
 };
 
 export function useTerminalSurfaceController(threadId: ThreadId) {
-  const { settings } = useAppSettings();
   const terminalState = useTerminalStateStore((state) =>
     selectThreadTerminalState(state.terminalStateByThreadId, threadId),
   );
   const openTerminalThreadPage = useTerminalStateStore((s) => s.openTerminalThreadPage);
-  const newTerminal = useTerminalStateStore((s) => s.newTerminal);
-  const newTerminalTab = useTerminalStateStore((s) => s.newTerminalTab);
-  const splitTerminalRightStore = useTerminalStateStore((s) => s.splitTerminalRight);
-  const splitTerminalDownStore = useTerminalStateStore((s) => s.splitTerminalDown);
-  const setActiveTerminalStore = useTerminalStateStore((s) => s.setActiveTerminal);
-  const closeTerminalAndEnsureReplacementStore = useTerminalStateStore(
-    (s) => s.closeTerminalAndEnsureReplacement,
-  );
   const closeExitedTerminalStore = useTerminalStateStore((s) => s.closeExitedTerminal);
-  const closeTerminalGroupStore = useTerminalStateStore((s) => s.closeTerminalGroup);
-  const setTerminalHeightStore = useTerminalStateStore((s) => s.setTerminalHeight);
-  const resizeTerminalSplitStore = useTerminalStateStore((s) => s.resizeTerminalSplit);
   const setTerminalMetadataStore = useTerminalStateStore((s) => s.setTerminalMetadata);
   const setTerminalActivityStore = useTerminalStateStore((s) => s.setTerminalActivity);
 
   const [focusRequestId, setFocusRequestId] = useState(0);
   const bumpFocusRequest = () => setFocusRequestId((value) => value + 1);
-
-  const newTerminalGroup = () => {
-    newTerminal(threadId, randomTerminalId());
-    bumpFocusRequest();
-  };
-
-  const splitRight = () => {
-    splitTerminalRightStore(threadId, randomTerminalId());
-    bumpFocusRequest();
-  };
-
-  const splitDown = () => {
-    splitTerminalDownStore(threadId, randomTerminalId());
-    bumpFocusRequest();
-  };
-
-  const createTerminalTab = (targetTerminalId: string) => {
-    newTerminalTab(threadId, targetTerminalId, randomTerminalId());
-    bumpFocusRequest();
-  };
-
-  const moveTerminalToNewGroup = (terminalId: string) => {
-    newTerminal(threadId, terminalId);
-    bumpFocusRequest();
-  };
-
-  const activateTerminal = (terminalId: string) => {
-    setActiveTerminalStore(threadId, terminalId);
-    bumpFocusRequest();
-  };
-
-  const closeTerminal = async (terminalId: string) => {
-    const api = readNativeApi();
-    const confirmed = await confirmTerminalTabClose({
-      api,
-      enabled: shouldPromptForTerminalClose({
-        confirmationEnabled: settings.confirmTerminalTabClose,
-        runningTerminalIds: terminalState.runningTerminalIds,
-        terminalAttentionStatesById: terminalState.terminalAttentionStatesById,
-        terminalId,
-      }),
-      terminalTitle: resolveTerminalCloseTitle({
-        terminalId,
-        terminalLabelsById: terminalState.terminalLabelsById,
-        terminalTitleOverridesById: terminalState.terminalTitleOverridesById,
-      }),
-    });
-    if (!confirmed) {
-      return;
-    }
-    disposeAndCloseTerminalSession({ api, threadId, terminalId });
-    closeTerminalAndEnsureReplacementStore(threadId, terminalId, randomTerminalId());
-    bumpFocusRequest();
-  };
 
   const disposeExitedTerminal = (terminalId: string) => {
     disposeAndCloseTerminalSession({
@@ -117,7 +45,7 @@ export function useTerminalSurfaceController(threadId: ThreadId) {
 
   const handleTerminalSessionExited = (terminalId: string) => {
     disposeExitedTerminal(terminalId);
-    closeTerminalAndEnsureReplacementStore(threadId, terminalId, randomTerminalId());
+    closeExitedTerminalStore(threadId, terminalId);
     bumpFocusRequest();
   };
 
@@ -127,13 +55,6 @@ export function useTerminalSurfaceController(threadId: ThreadId) {
     bumpFocusRequest();
     return disposition;
   };
-
-  const closeTerminalGroup = (groupId: string) => closeTerminalGroupStore(threadId, groupId);
-
-  const setTerminalHeight = (height: number) => setTerminalHeightStore(threadId, height);
-
-  const resizeTerminalSplit = (groupId: string, splitId: string, weights: number[]) =>
-    resizeTerminalSplitStore(threadId, groupId, splitId, weights);
 
   const setTerminalMetadata = (terminalId: string, metadata: TerminalMetadata) =>
     setTerminalMetadataStore(threadId, terminalId, metadata);
@@ -146,19 +67,84 @@ export function useTerminalSurfaceController(threadId: ThreadId) {
     focusRequestId,
     bumpFocusRequest,
     openTerminalThreadPage,
-    newTerminalGroup,
-    splitRight,
-    splitDown,
-    createTerminalTab,
-    moveTerminalToNewGroup,
-    activateTerminal,
-    closeTerminal,
     handleTerminalSessionExited,
     handleDockTerminalSessionExited,
-    closeTerminalGroup,
-    setTerminalHeight,
-    resizeTerminalSplit,
     setTerminalMetadata,
     setTerminalActivity,
   };
+}
+
+export async function closeTerminalSurface(
+  threadId: ThreadId,
+  confirmationEnabled: boolean,
+  paneId?: string,
+) {
+  const store = useTerminalStateStore.getState();
+  const terminalState = selectThreadTerminalState(store.terminalStateByThreadId, threadId);
+  const terminalId =
+    paneId && terminalState.dockTerminalIdsByPaneId
+      ? terminalState.dockTerminalIdsByPaneId[paneId]
+      : terminalState.activeTerminalId;
+  if (!terminalId) return true;
+  const api = readNativeApi();
+  const confirmed = await confirmTerminalTabClose({
+    api,
+    enabled: shouldPromptForTerminalClose({
+      confirmationEnabled,
+      runningTerminalIds: terminalState.runningTerminalIds,
+      terminalAttentionStatesById: terminalState.terminalAttentionStatesById,
+      terminalId,
+    }),
+    terminalTitle: resolveTerminalCloseTitle({
+      terminalId,
+      terminalLabelsById: terminalState.terminalLabelsById,
+      terminalTitleOverridesById: terminalState.terminalTitleOverridesById,
+    }),
+  });
+  if (!confirmed) {
+    return false;
+  }
+  await disposeAndCloseTerminalSession({ api, threadId, terminalId, requireStructuredClose: true });
+  store.closeTerminal(threadId, terminalId);
+  return true;
+}
+
+// Dock-terminal panes in the regular chat layout run their session under a synthetic
+// scope (dockTerminalThreadId) while the pane itself lives in the right dock, so the
+// host thread's terminalOpen/activeTerminalId cannot reach them. Focus tells the two
+// surfaces apart: the focused element sits inside the pane's data-dock-pane-id marker.
+export function focusedDockTerminalPaneId(hostThreadId: ThreadId): string | null {
+  const activeElement = document.activeElement;
+  const paneId =
+    activeElement instanceof Element
+      ? (activeElement.closest("[data-dock-pane-id]")?.getAttribute("data-dock-pane-id") ?? null)
+      : null;
+  if (paneId === null) return null;
+  const pane = selectRightDockState(hostThreadId)(useRightDockStore.getState()).panes.find(
+    (candidate) => candidate.id === paneId,
+  );
+  return pane?.kind === "terminal" ? paneId : null;
+}
+
+export async function closeDockTerminalPane(input: {
+  hostThreadId: ThreadId;
+  paneId: string;
+  confirmationEnabled: boolean;
+}): Promise<void> {
+  try {
+    const closed = await closeTerminalSurface(
+      dockTerminalThreadId(input.hostThreadId),
+      input.confirmationEnabled,
+      input.paneId,
+    );
+    if (closed) {
+      useRightDockStore.getState().closePane(input.hostThreadId, input.paneId);
+    }
+  } catch (error: unknown) {
+    toastManager.add({
+      type: "error",
+      title: "Unable to close terminal",
+      description: error instanceof Error ? error.message : "Please try again.",
+    });
+  }
 }

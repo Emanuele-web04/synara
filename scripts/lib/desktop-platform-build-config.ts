@@ -20,6 +20,9 @@ export const MICROPHONE_USAGE_DESCRIPTION =
   "Synara needs microphone access so you can record voice notes and transcribe them into the chat composer, and, if you turn it on, to move the chat message trail with your voice.";
 export const AUDIO_CAPTURE_USAGE_DESCRIPTION =
   "Synara reads how loud your Mac's audio is to animate the chat message trail. The audio itself is never recorded.";
+// Bundle metadata uses the product version; electron-updater compares Darwin releases.
+export const MAC_MINIMUM_SYSTEM_VERSION = "13.0";
+export const MAC_MINIMUM_DARWIN_VERSION = "22.0.0";
 export const MAC_ENTITLEMENTS_PATH = "apps/desktop/resources/entitlements.mac.plist";
 export const MAC_INHERITED_ENTITLEMENTS_PATH =
   "apps/desktop/resources/entitlements.mac.inherit.plist";
@@ -50,6 +53,7 @@ const NODE_PTY_ASAR_UNPACK_GLOBS = ["node_modules/node-pty/**"] as const;
 export interface DesktopPlatformBuildConfig {
   readonly afterSign?: string;
   readonly afterPack?: string;
+  readonly onNodeModuleFile?: string;
   readonly asarUnpack?: ReadonlyArray<string>;
   readonly dmg?: Record<string, unknown>;
   readonly extraFiles?: ReadonlyArray<Record<string, string>>;
@@ -110,13 +114,25 @@ export function createDesktopPlatformBuildConfig(
     diagnostics: preserveDependencyDiagnostics(process.env),
     linuxGlibc: typeof report?.header?.glibcVersionRuntime === "string",
   });
-  const nativePackaging = { asarUnpack: [...NODE_PTY_ASAR_UNPACK_GLOBS], files };
+  const nativePackaging = {
+    asarUnpack: [...NODE_PTY_ASAR_UNPACK_GLOBS],
+    files,
+    // TypeScript reads these declarations at runtime in the intelligence worker.
+    // electron-builder otherwise removes every dependency .d.ts file.
+    onNodeModuleFile: fileURLToPath(new URL("./desktop-runtime-files.cjs", import.meta.url)),
+  };
 
   if (input.platform === "mac") {
     const mac = {
-      target: input.target === "dmg" ? [input.target, "zip"] : [input.target],
+      // The finalizer creates the updater ZIP with ditto after notarization.
+      // Asking electron-builder for a ZIP too compresses the app twice and
+      // generates a blockmap that finalization immediately discards.
+      target: [input.target],
       icon: MAC_DMG_ICON_PATH,
       category: "public.app-category.developer-tools",
+      // The bundled Claude and Cua native executables require macOS 13.
+      // Keep the app's launch metadata consistent with its complete payload.
+      minimumSystemVersion: MAC_MINIMUM_SYSTEM_VERSION,
       hardenedRuntime: input.signed === true,
       // The mandatory afterSign hook splits Apple upload/wait timings and
       // staples the app before electron-builder creates either container.

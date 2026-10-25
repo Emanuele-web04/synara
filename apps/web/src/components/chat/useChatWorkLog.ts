@@ -1,18 +1,19 @@
-import { OrchestrationThreadActivity, ThreadId, type TurnId } from "@synara/contracts";
-import { useEffect, useMemo } from "react";
+import { OrchestrationThreadActivity, type TurnId } from "@synara/contracts";
+import { useMemo } from "react";
+import { setsEqual, useStableValue } from "../../hooks/useStableValue";
 import {
+  deriveSubagentTaskEnds,
   deriveWorkLogEntries,
-  isLatestTurnSettled,
-  omitRoutedSubagentWorkEntries,
+  isSessionRuntimeRetired,
 } from "../../session-logic";
 import { useStore } from "../../store";
-import { createThreadSelector } from "../../storeSelectors";
-import { retainThreadDetailSubscription } from "../../threadDetailSubscriptionRetention";
 import type { Thread } from "../../types";
 import { useWorkflowRunUiThreadState } from "../../workflowRunUiStore";
-import { enrichSubagentWorkEntries, resolveComposerStripWorkLogEntries } from "../ChatView.logic";
+import { enrichSubagentWorkEntries } from "../ChatView.logic";
 import { createRelevantWorkLogThreadsSelector } from "../ChatView.selectors";
 import { deriveComposerSubagentStripItems } from "./ComposerSubagentStrip.logic";
+import { findLatestSubagentThreadRun, foldSubagentRunWorkEntries } from "./SubagentRunCard.logic";
+import { useSubagentRoster, useSubagentStripSource } from "./useSubagentStripSource";
 import { deriveWorkflowRunState, type WorkflowSubagentThreadRef } from "./WorkflowRunCard.logic";
 const EMPTY_ACTIVITIES: OrchestrationThreadActivity[] = [];
 interface ChatWorkLogInput {
@@ -37,8 +38,10 @@ export function useChatWorkLog({
   // bridge for deciding which historical work can fold into visible replies.
   // Memoized on purpose: an inline Set would change identity every render and cascade
   // through the memoized work-log/timeline chain into the virtualized list, which resets
-  // in a loop on unstable data.
-  const workLogVisibleTurnIds = useMemo(() => {
+  // in a loop on unstable data. `messages` is a new array on every streamed text flush,
+  // so the Set is also kept identity-stable while its turn ids are unchanged; otherwise
+  // each flush re-derives the whole work log from every activity.
+  const derivedWorkLogVisibleTurnIds = useMemo(() => {
     const turnIds = new Set<TurnId>();
     for (const message of activeThread?.messages ?? []) {
       if (message.turnId) {
@@ -50,6 +53,10 @@ export function useChatWorkLog({
     }
     return turnIds;
   }, [activeLatestTurnId, activeThread?.messages]);
+  const workLogVisibleTurnIds = useStableValue<ReadonlySet<TurnId>>(
+    derivedWorkLogVisibleTurnIds,
+    setsEqual,
+  );
   const rawWorkLogEntries = useMemo(
     () =>
       deriveWorkLogEntries(threadActivities, activeLatestTurnId ?? undefined, {
@@ -91,201 +98,98 @@ export function useChatWorkLog({
             rawWorkLogEntries,
             relevantWorkLogThreads,
             activeThread?.id ?? null,
+            threadActivities,
           )
         : rawWorkLogEntries,
-    [activeThread?.id, hasWorkLogSubagents, rawWorkLogEntries, relevantWorkLogThreads],
+    [
+      activeThread?.id,
+      hasWorkLogSubagents,
+      rawWorkLogEntries,
+      relevantWorkLogThreads,
+      threadActivities,
+    ],
   );
-  // Subagents are presented by the composer strip (and their own threads); the
-  // transcript drops the routed fan-out rows entirely. The enriched list above is
-  // still what feeds the strip-adjacent derivations that need receiver metadata.
+  // Preserve each launch position for timeline grouping; state-only updates and
+  // progress attach to their owning invocation. The shared roster remains the
+  // source of parent/sibling retention and Environment navigation.
   const workLogEntries = useMemo(
-    () => omitRoutedSubagentWorkEntries(enrichedWorkLogEntries),
+    () => foldSubagentRunWorkEntries(enrichedWorkLogEntries),
     [enrichedWorkLogEntries],
   );
-  // The strip's liveness (running/settled) reads the child thread's own session and
-  // tail activities, so retain a detail subscription while a subagent runs; settled
-  // subagents stay on whatever the store already holds.
-  const liveSubagentThreadIdsKey = useMemo(() => {
-    if (!hasWorkLogSubagents) {
-      return "";
-    }
-    const threadIds = new Set<string>();
-    for (const entry of enrichedWorkLogEntries) {
-      for (const subagent of entry.subagents ?? []) {
-        if (subagent.isActive && subagent.resolvedThreadId) {
-          threadIds.add(subagent.resolvedThreadId);
-        }
-      }
-    }
-    return [...threadIds].toSorted().join("\n");
-  }, [enrichedWorkLogEntries, hasWorkLogSubagents]);
-  useEffect(() => {
-    if (!liveSubagentThreadIdsKey) {
-      return;
-    }
-    const releases = liveSubagentThreadIdsKey
-      .split("\n")
-      .map((threadId) => retainThreadDetailSubscription(ThreadId.makeUnsafe(threadId)));
-    return () => {
-      for (const release of releases) {
-        release();
-      }
-    };
-  }, [liveSubagentThreadIdsKey]);
-  // Native-CLI parity: while a subagent thread is open, the strip derives from the
-  // PARENT thread's activities so all sibling subagents (plus a way back to the
-  // main thread) stay visible, with the open subagent marked as viewed.
-  const stripParentThreadId = activeThread?.parentThreadId ?? null;
-  const stripParentThread = useStore(
-    useMemo(() => createThreadSelector(stripParentThreadId), [stripParentThreadId]),
-  );
-  // Deep links can land on a subagent thread before the parent has a detail
-  // subscription; retain one so the parent's activities hydrate for the strip.
-  useEffect(() => {
-    if (!stripParentThreadId) {
-      return;
-    }
-    return retainThreadDetailSubscription(stripParentThreadId);
-  }, [stripParentThreadId]);
-  const stripSourceThreadId = stripParentThread?.id ?? activeThread?.id ?? null;
-  const stripSourceActivities = stripParentThread?.activities ?? threadActivities;
-  const stripSourceLatestTurnId = stripParentThread
-    ? (stripParentThread.latestTurn?.turnId ?? null)
-    : (activeLatestTurn?.turnId ?? null);
-  const stripSourceLatestTurnState = stripParentThread
-    ? (stripParentThread.latestTurn?.state ?? null)
-    : activeLatestTurnState;
-  const stripSourceLatestTurnStartedAt = stripParentThread
-    ? (stripParentThread.latestTurn?.startedAt ?? null)
-    : activeLatestTurnStartedAt;
-  const stripSourceLatestTurnCompletedAt = stripParentThread
-    ? (stripParentThread.latestTurn?.completedAt ?? null)
-    : activeLatestTurnCompletedAt;
-  const stripVisibleTurnIds = useMemo(() => {
-    if (!stripParentThread) {
-      return workLogVisibleTurnIds;
-    }
-    const turnIds = new Set<TurnId>();
-    for (const message of stripParentThread.messages) {
-      if (message.turnId) {
-        turnIds.add(message.turnId);
-      }
-    }
-    if (stripParentThread.latestTurn?.turnId) {
-      turnIds.add(stripParentThread.latestTurn.turnId);
-    }
-    return turnIds;
-  }, [stripParentThread, workLogVisibleTurnIds]);
-  const stripLiveTurnId = stripParentThread
-    ? isLatestTurnSettled(stripParentThread.latestTurn, stripParentThread.session ?? null)
-      ? null
-      : (stripParentThread.latestTurn?.turnId ?? null)
-    : latestTurnSettled
-      ? null
-      : (activeLatestTurn?.turnId ?? null);
-  // Composer-strip source: the strip needs the routed subagent entries the
-  // transcript drops. A top-level thread has already derived that exact source
-  // above; reuse it so every live activity does not scan and normalize the full
-  // history twice. Subagent views still derive from their distinct parent source.
-  const stripRawWorkLogEntries = useMemo(
-    () =>
-      resolveComposerStripWorkLogEntries({
-        hasDistinctParentSource: stripParentThread !== undefined,
-        activeWorkLogEntries: rawWorkLogEntries,
-        deriveParentWorkLogEntries: () =>
-          deriveWorkLogEntries(stripSourceActivities, stripSourceLatestTurnId ?? undefined, {
-            visibleTurnIds: stripVisibleTurnIds,
-            activeTurnId: stripLiveTurnId,
-            activeTurnStartedAt: stripSourceLatestTurnStartedAt,
-            latestTurnState: stripSourceLatestTurnState,
-            latestTurnCompletedAt: stripSourceLatestTurnCompletedAt,
-          }),
-      }),
-    [
-      rawWorkLogEntries,
-      stripLiveTurnId,
-      stripParentThread,
-      stripSourceActivities,
-      stripSourceLatestTurnCompletedAt,
-      stripSourceLatestTurnId,
-      stripSourceLatestTurnStartedAt,
-      stripSourceLatestTurnState,
-      stripVisibleTurnIds,
-    ],
-  );
-  const hasStripWorkLogSubagents = useMemo(
-    () => stripRawWorkLogEntries.some((entry) => (entry.subagents?.length ?? 0) > 0),
-    [stripRawWorkLogEntries],
-  );
-  const stripRelevantWorkLogThreads = useStore(
-    useMemo(
-      () =>
-        createRelevantWorkLogThreadsSelector({
-          workEntries: stripRawWorkLogEntries,
-          parentThreadId: stripSourceThreadId,
-          enabled: hasStripWorkLogSubagents,
-        }),
-      [stripSourceThreadId, hasStripWorkLogSubagents, stripRawWorkLogEntries],
-    ),
-  );
-  const stripWorkLogEntries = useMemo(
-    () =>
-      hasStripWorkLogSubagents
-        ? enrichSubagentWorkEntries(
-            stripRawWorkLogEntries,
-            stripRelevantWorkLogThreads,
-            stripSourceThreadId,
-          )
-        : stripRawWorkLogEntries,
-    [
-      stripSourceThreadId,
-      hasStripWorkLogSubagents,
-      stripRawWorkLogEntries,
-      stripRelevantWorkLogThreads,
-    ],
-  );
-
-  // Task tool_use_ids the provider confirmed as backgrounded via task_updated
-  // patches (last patch wins, so re-foregrounded tasks drop back out).
-  const backgroundedSubagentToolUseIds = useMemo(() => {
-    const toolUseIds = new Set<string>();
-    for (const activity of stripSourceActivities) {
-      if (activity.kind !== "task.updated") {
-        continue;
-      }
-      const payload =
-        activity.payload && typeof activity.payload === "object"
-          ? (activity.payload as Record<string, unknown>)
-          : null;
-      const toolUseId = typeof payload?.toolUseId === "string" ? payload.toolUseId : null;
-      if (!toolUseId || typeof payload?.isBackgrounded !== "boolean") {
-        continue;
-      }
-      if (payload.isBackgrounded) {
-        toolUseIds.add(toolUseId);
-      } else {
-        toolUseIds.delete(toolUseId);
-      }
-    }
-    return toolUseIds;
-  }, [stripSourceActivities]);
+  const subagentSource = useSubagentStripSource({
+    activeThread,
+    latestTurnSettled,
+    activeRawWorkLogEntries: rawWorkLogEntries,
+  });
+  const {
+    backgroundedSubagentToolUseIds,
+    stripLiveTurnId,
+    stripSourceThreadId,
+    stripWorkLogEntries,
+    subagentParentRow,
+    viewedSubagentThreadId,
+  } = subagentSource;
   const composerSubagentStripItems = useMemo(
     () =>
       deriveComposerSubagentStripItems({
         workEntries: stripWorkLogEntries,
         liveTurnId: stripLiveTurnId,
         backgroundedProviderThreadIds: backgroundedSubagentToolUseIds,
-        viewedThreadId: stripParentThread ? (activeThread?.id ?? null) : null,
-        parentRow: stripParentThread
-          ? { threadId: stripParentThread.id, label: stripParentThread.title ?? null }
-          : null,
+        viewedThreadId: viewedSubagentThreadId,
+        parentRow: subagentParentRow,
       }),
     [
-      activeThread?.id,
       backgroundedSubagentToolUseIds,
       stripLiveTurnId,
-      stripParentThread,
       stripWorkLogEntries,
+      subagentParentRow,
+      viewedSubagentThreadId,
+    ],
+  );
+  const subagentRoster = useSubagentRoster(subagentSource);
+  // Liveness follows the root thread's runtime: a subagent view's own session says
+  // nothing about its siblings, and its nested agents retire with the root.
+  const subagentRootSessionStatus =
+    (subagentSource.stripParentThread ?? activeThread)?.session?.orchestrationStatus ?? null;
+  const subagentRuntimeRetired = isSessionRuntimeRetired(subagentRootSessionStatus);
+  const stripTaskEnds = useMemo(
+    () => deriveSubagentTaskEnds(subagentSource.stripSourceActivities),
+    [subagentSource.stripSourceActivities],
+  );
+  // A subagent view's cards list its nested agents, whose own ends land on its
+  // thread (a session stop still reports them on the root).
+  const isSubagentThreadView = Boolean(activeThread?.parentThreadId);
+  const subagentTaskEnds = useMemo(() => {
+    if (!isSubagentThreadView || threadActivities === subagentSource.stripSourceActivities) {
+      return stripTaskEnds;
+    }
+    const ownTaskEnds = deriveSubagentTaskEnds(threadActivities);
+    return ownTaskEnds.size === 0 ? stripTaskEnds : new Map([...stripTaskEnds, ...ownTaskEnds]);
+  }, [isSubagentThreadView, stripTaskEnds, subagentSource.stripSourceActivities, threadActivities]);
+  const subagentThreadRunRow = useMemo(
+    () =>
+      activeThread?.parentThreadId && activeThreadId
+        ? findLatestSubagentThreadRun({
+            entries: foldSubagentRunWorkEntries(stripWorkLogEntries),
+            threads: subagentSource.stripRelevantWorkLogThreads,
+            parentThreadId: stripSourceThreadId,
+            liveTurnId: stripLiveTurnId,
+            childThreadId: activeThreadId,
+            taskEndByToolUseId: stripTaskEnds,
+            backgroundedProviderThreadIds: backgroundedSubagentToolUseIds,
+            runtimeRetired: subagentRuntimeRetired,
+          })
+        : null,
+    [
+      activeThread?.parentThreadId,
+      activeThreadId,
+      stripWorkLogEntries,
+      subagentSource.stripRelevantWorkLogThreads,
+      stripSourceThreadId,
+      stripLiveTurnId,
+      stripTaskEnds,
+      backgroundedSubagentToolUseIds,
+      subagentRuntimeRetired,
     ],
   );
   // Links workflow agent rows to their subagent child threads (and models) when the
@@ -336,7 +240,14 @@ export function useChatWorkLog({
   );
   return {
     workLogEntries,
+    subagentRunThreads: relevantWorkLogThreads,
+    backgroundedSubagentToolUseIds,
+    subagentTaskEnds,
+    subagentRuntimeRetired,
+    subagentRootSessionStatus,
+    subagentThreadRunRow,
     composerSubagentStripItems,
+    subagentRoster,
     stripSourceThreadId,
     workflowRunState,
   };

@@ -6,6 +6,7 @@ import {
   buildTemporaryWorktreeBranchName,
   isTemporaryWorktreeBranch,
   resolveUniqueSynaraBranchName,
+  resolveAutoFeatureBranchName,
   resolveThreadBranchRegressionGuard,
 } from "./git";
 
@@ -102,5 +103,35 @@ describe("resolveUniqueSynaraBranchName", () => {
         "fix toast copy",
       ),
     ).toBe("synara/fix-toast-copy-3");
+  });
+});
+
+describe("resolveAutoFeatureBranchName", () => {
+  it("avoids an existing ancestor ref", () => {
+    expect(resolveAutoFeatureBranchName(["feature/cache"], "cache/retry")).toBe(
+      "feature/cache-2/retry",
+    );
+  });
+
+  it("avoids an existing descendant ref", () => {
+    expect(resolveAutoFeatureBranchName(["feature/cache/retry"], "cache")).toBe("feature/cache-2");
+  });
+
+  it("checks suffixed names for namespace conflicts too", () => {
+    expect(
+      resolveAutoFeatureBranchName(["feature/cache", "feature/cache-2/retry/child"], "cache/retry"),
+    ).toBe("feature/cache-3/retry");
+  });
+
+  it("can move the top-level namespace when it is a branch", () => {
+    expect(resolveAutoFeatureBranchName(["feature", "feature-2"], "cache/retry")).toBe(
+      "feature-3/cache/retry",
+    );
+  });
+
+  it("does not treat partial component matches as conflicts", () => {
+    expect(
+      resolveAutoFeatureBranchName(["feature/cached", "feature/cacheable/child"], "cache"),
+    ).toBe("feature/cache");
   });
 });

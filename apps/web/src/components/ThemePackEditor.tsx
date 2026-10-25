@@ -3,7 +3,7 @@
 // Layer: Web settings UI
 // Exports: ThemePackEditor
 
-import { DESKTOP_WINDOW_BLUR_RADIUS_MAX } from "@synara/contracts";
+import { DESKTOP_WINDOW_BLUR_RADIUS_MAX, DESKTOP_WINDOW_BLUR_RADIUS_MIN } from "@synara/contracts";
 import { type CSSProperties, useEffect, useId, useMemo, useRef, useState } from "react";
 import { HexColorPicker } from "react-colorful";
 import { Button } from "./ui/button";
@@ -28,6 +28,7 @@ import { SettingsSegmentedControl } from "./settings/SettingControls";
 import { SettingsCard, SettingsSelectPopup } from "./settings/SettingsPanelPrimitives";
 import { copyTextToClipboard } from "../hooks/useCopyToClipboard";
 import { type ChromeTheme, type ThemeMode, type ThemeVariant, useTheme } from "../hooks/useTheme";
+import { readDesktopWindowTranslucency } from "../lib/desktopWindowTranslucency";
 import { cn } from "../lib/utils";
 import {
   SETTINGS_CARD_ROW_CLASS_NAME,
@@ -39,6 +40,7 @@ import {
   CODE_THEME_OPTIONS,
   DEFAULT_THEME_STATE,
   VIBRANCY_EQUIVALENT_BLUR_RADIUS,
+  WINDOW_TRANSLUCENCY_OPACITY_MIN,
   buildThemeCssVariables,
   getAvailableCodeThemes,
   getCodeThemeSeed,
@@ -81,6 +83,7 @@ export function ThemePackEditor({
     resolvedTheme,
     theme: themeMode,
     systemUiFont,
+    desktopBlurUnavailable,
     setWindowTranslucency,
     translucency: translucencyByVariant,
     updateThemePack,
@@ -343,6 +346,7 @@ export function ThemePackEditor({
               <ThemeRow label="Opacity">
                 <ThemeSlider
                   value={translucency.opacity}
+                  min={WINDOW_TRANSLUCENCY_OPACITY_MIN}
                   max={100}
                   suffix="%"
                   onChange={(next) => setWindowTranslucency(variant, { opacity: next })}
@@ -350,13 +354,32 @@ export function ThemePackEditor({
                 />
               </ThemeRow>
               <ThemeRow label="Blur">
-                <ThemeSlider
-                  value={translucency.blur ?? VIBRANCY_EQUIVALENT_BLUR_RADIUS}
-                  {...(translucency.blur === null ? { valueLabel: "Auto" } : {})}
-                  max={DESKTOP_WINDOW_BLUR_RADIUS_MAX}
-                  onChange={(next) => setWindowTranslucency(variant, { blur: next })}
-                  ariaLabel={`${titleLabel} background blur`}
-                />
+                {readDesktopWindowTranslucency() === "compositor" ? (
+                  // Hyprland blurs the transparent window with its own `decoration:blur`
+                  // settings; there is no per-window radius for the app to set.
+                  <span className="text-ui-sm text-muted-foreground">Set by your compositor</span>
+                ) : (
+                  <>
+                    {translucency.blur !== null ? (
+                      <Button
+                        variant="outline"
+                        size="xs"
+                        onClick={() => setWindowTranslucency(variant, { blur: null })}
+                        aria-label={`${titleLabel} automatic background blur`}
+                      >
+                        {isActive && desktopBlurUnavailable ? "Unavailable, use Auto" : "Auto"}
+                      </Button>
+                    ) : null}
+                    <ThemeSlider
+                      value={translucency.blur ?? VIBRANCY_EQUIVALENT_BLUR_RADIUS}
+                      {...(translucency.blur === null ? { valueLabel: "Auto" } : {})}
+                      min={DESKTOP_WINDOW_BLUR_RADIUS_MIN}
+                      max={DESKTOP_WINDOW_BLUR_RADIUS_MAX}
+                      onChange={(next) => setWindowTranslucency(variant, { blur: next })}
+                      ariaLabel={`${titleLabel} background blur`}
+                    />
+                  </>
+                )}
               </ThemeRow>
             </div>
           </DisclosureRegion>
@@ -620,6 +643,7 @@ function FontInput({
 
 function ThemeSlider({
   value,
+  min = 0,
   max,
   suffix = "",
   valueLabel,
@@ -627,6 +651,7 @@ function ThemeSlider({
   ariaLabel,
 }: {
   value: number;
+  min?: number;
   max: number;
   suffix?: string;
   /** Shown instead of the number, e.g. while the value is still the automatic default. */
@@ -635,13 +660,13 @@ function ThemeSlider({
   ariaLabel: string;
 }) {
   const id = useId();
-  const fillPct = Math.max(0, Math.min(100, (value / max) * 100));
+  const fillPct = Math.max(0, Math.min(100, ((value - min) / (max - min)) * 100));
   return (
     <div className="flex items-center gap-3">
       <input
         id={id}
         type="range"
-        min={0}
+        min={min}
         max={max}
         step={1}
         value={value}

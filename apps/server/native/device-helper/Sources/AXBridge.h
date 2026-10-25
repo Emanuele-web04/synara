@@ -39,6 +39,14 @@ NS_ASSUME_NONNULL_BEGIN
                                                error:(NSError **)error
     NS_SWIFT_NAME(frontmostTree(maxDepth:));
 
+/// Replaces the value of the element holding keyboard focus in the frontmost
+/// application, through accessibility rather than keystrokes. This is the one
+/// text route that is independent of the guest's keyboard layout and carries
+/// any Unicode; it does not fire per-keystroke delegate callbacks.
+- (nullable NSDictionary *)setFocusedValue:(NSString *)value
+                                     error:(NSError **)error
+    NS_SWIFT_NAME(setFocusedValue(_:));
+
 @end
 
 NS_ASSUME_NONNULL_END

@@ -9,12 +9,13 @@ import { isElectron } from "~/env";
 import { DESKTOP_TOP_BAR_TRAFFIC_LIGHT_GUTTER_CLASS } from "~/hooks/useDesktopTopBarGutter";
 import { cn, isMacNavigatorPlatform } from "~/lib/utils";
 import { CHAT_SURFACE_HEADER_HEIGHT_CLASS } from "./chat/chatHeaderControls";
-import { SidebarLeadingControls } from "./SidebarHeaderNavigationControls";
+import { SidebarLeadingControlsSlot } from "./SidebarHeaderNavigationControls";
 import { useSidebar } from "./ui/sidebar";
 
 export function AppShellTopStrip() {
-  // Like the classic sidebar header: the cluster leaves with the panel, and the route
-  // header's copy (SidebarHeaderNavigationControls) takes over while it is collapsed.
+  // The cluster's box leaves with the panel, and the route header's box
+  // (SidebarHeaderNavigationControls) takes over while it is collapsed. The cluster itself
+  // is painted once over either box by SidebarLeadingControlsDock.
   const { open } = useSidebar();
   return (
     // Zero intrinsic width: the column's width comes from the rail and panel only. The
@@ -33,7 +34,7 @@ export function AppShellTopStrip() {
           isElectron && isMacNavigatorPlatform() && DESKTOP_TOP_BAR_TRAFFIC_LIGHT_GUTTER_CLASS,
         )}
       >
-        {open ? <SidebarLeadingControls /> : null}
+        {open ? <SidebarLeadingControlsSlot /> : null}
       </div>
     </header>
   );

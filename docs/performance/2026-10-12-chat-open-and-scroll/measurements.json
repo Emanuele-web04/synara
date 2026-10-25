@@ -1,0 +1,1260 @@
+{
+  "machine": "Mac mini, Apple M6, 24 GB, macOS 27.0.1, 1920x1080 at 60 Hz; headed Google Chrome (ANGLE Metal)",
+  "baseline": "52f06318f",
+  "sessions": [
+    {
+      "build": "baseline",
+      "session": 1,
+      "startupMs": 322,
+      "idleFrameMs": 16.65,
+      "steps": [
+        {
+          "step": "cold:mega",
+          "firstRowMs": 362,
+          "atBottomMs": 362,
+          "clickInteractionMs": 136,
+          "mainThreadMs": {
+            "scripting": 415,
+            "rendering": 128,
+            "painting": 25,
+            "other": 1,
+            "busy": 656,
+            "longTasks": 2,
+            "maxTask": 91,
+            "styleRecalcs500": 12
+          }
+        },
+        {
+          "step": "scroll:mega",
+          "frames": 377,
+          "frameP50Ms": 16.7,
+          "frameP95Ms": 18.7,
+          "framesOver25MsPct": 2.7,
+          "anchorJumpPx": 9513,
+          "longAnimationFrames": 0,
+          "mainThreadMs": {
+            "scripting": 459,
+            "rendering": 716,
+            "painting": 204,
+            "other": 9,
+            "busy": 1581,
+            "longTasks": 0,
+            "maxTask": 35,
+            "styleRecalcs500": 22
+          }
+        },
+        {
+          "step": "cold:handoff",
+          "firstRowMs": 214,
+          "atBottomMs": 214,
+          "clickInteractionMs": 104,
+          "mainThreadMs": {
+            "scripting": 136,
+            "rendering": 77,
+            "painting": 7,
+            "other": 1,
+            "busy": 256,
+            "longTasks": 2,
+            "maxTask": 58,
+            "styleRecalcs500": 12
+          }
+        },
+        {
+          "step": "warm:mega",
+          "firstRowMs": 129,
+          "atBottomMs": 129,
+          "clickInteractionMs": 152,
+          "mainThreadMs": {
+            "scripting": 94,
+            "rendering": 71,
+            "painting": 7,
+            "other": 1,
+            "busy": 189,
+            "longTasks": 1,
+            "maxTask": 92,
+            "styleRecalcs500": 8
+          }
+        },
+        {
+          "step": "cold:long",
+          "firstRowMs": 197,
+          "atBottomMs": 214,
+          "clickInteractionMs": 104,
+          "mainThreadMs": {
+            "scripting": 126,
+            "rendering": 91,
+            "painting": 8,
+            "other": 1,
+            "busy": 259,
+            "longTasks": 2,
+            "maxTask": 56,
+            "styleRecalcs500": 13
+          }
+        },
+        {
+          "step": "scroll:long",
+          "frames": 213,
+          "frameP50Ms": 16.7,
+          "frameP95Ms": 18.7,
+          "framesOver25MsPct": 1.4,
+          "anchorJumpPx": 3278,
+          "longAnimationFrames": 0,
+          "mainThreadMs": {
+            "scripting": 227,
+            "rendering": 366,
+            "painting": 116,
+            "other": 5,
+            "busy": 834,
+            "longTasks": 0,
+            "maxTask": 33,
+            "styleRecalcs500": 8
+          }
+        },
+        {
+          "step": "cold:hero",
+          "firstRowMs": 177,
+          "atBottomMs": 177,
+          "clickInteractionMs": 104,
+          "mainThreadMs": {
+            "scripting": 116,
+            "rendering": 88,
+            "painting": 6,
+            "other": 1,
+            "busy": 240,
+            "longTasks": 1,
+            "maxTask": 51,
+            "styleRecalcs500": 10
+          }
+        },
+        {
+          "step": "scroll:hero",
+          "frames": 286,
+          "frameP50Ms": 16.7,
+          "frameP95Ms": 18.7,
+          "framesOver25MsPct": 3.1,
+          "anchorJumpPx": 4923,
+          "longAnimationFrames": 1,
+          "mainThreadMs": {
+            "scripting": 319,
+            "rendering": 497,
+            "painting": 156,
+            "other": 6,
+            "busy": 1141,
+            "longTasks": 0,
+            "maxTask": 41,
+            "styleRecalcs500": 10
+          }
+        },
+        {
+          "step": "warm:handoff",
+          "firstRowMs": 94,
+          "atBottomMs": 94,
+          "clickInteractionMs": 120,
+          "mainThreadMs": {
+            "scripting": 80,
+            "rendering": 81,
+            "painting": 7,
+            "other": 1,
+            "busy": 193,
+            "longTasks": 1,
+            "maxTask": 65,
+            "styleRecalcs500": 9
+          }
+        },
+        {
+          "step": "cold:small",
+          "firstRowMs": 144,
+          "atBottomMs": 144,
+          "clickInteractionMs": 104,
+          "mainThreadMs": {
+            "scripting": 95,
+            "rendering": 85,
+            "painting": 6,
+            "other": 1,
+            "busy": 208,
+            "longTasks": 1,
+            "maxTask": 50,
+            "styleRecalcs500": 10
+          }
+        },
+        {
+          "step": "warm:long",
+          "firstRowMs": 113,
+          "atBottomMs": 130,
+          "clickInteractionMs": 136,
+          "mainThreadMs": {
+            "scripting": 90,
+            "rendering": 92,
+            "painting": 7,
+            "other": 1,
+            "busy": 214,
+            "longTasks": 1,
+            "maxTask": 78,
+            "styleRecalcs500": 11
+          }
+        },
+        {
+          "step": "warm:hero",
+          "firstRowMs": 110,
+          "atBottomMs": 110,
+          "clickInteractionMs": 136,
+          "mainThreadMs": {
+            "scripting": 82,
+            "rendering": 74,
+            "painting": 6,
+            "other": 1,
+            "busy": 182,
+            "longTasks": 1,
+            "maxTask": 80,
+            "styleRecalcs500": 7
+          }
+        }
+      ]
+    },
+    {
+      "build": "baseline",
+      "session": 2,
+      "startupMs": 384,
+      "idleFrameMs": 16.67,
+      "steps": [
+        {
+          "step": "cold:mega",
+          "firstRowMs": 329,
+          "atBottomMs": 329,
+          "clickInteractionMs": 136,
+          "mainThreadMs": {
+            "scripting": 462,
+            "rendering": 128,
+            "painting": 24,
+            "other": 1,
+            "busy": 699,
+            "longTasks": 3,
+            "maxTask": 90,
+            "styleRecalcs500": 12
+          }
+        },
+        {
+          "step": "scroll:mega",
+          "frames": 379,
+          "frameP50Ms": 16.7,
+          "frameP95Ms": 18.7,
+          "framesOver25MsPct": 2.4,
+          "anchorJumpPx": 9518,
+          "longAnimationFrames": 1,
+          "mainThreadMs": {
+            "scripting": 441,
+            "rendering": 725,
+            "painting": 204,
+            "other": 9,
+            "busy": 1562,
+            "longTasks": 0,
+            "maxTask": 37,
+            "styleRecalcs500": 22
+          }
+        },
+        {
+          "step": "cold:handoff",
+          "firstRowMs": 196,
+          "atBottomMs": 196,
+          "clickInteractionMs": 104,
+          "mainThreadMs": {
+            "scripting": 126,
+            "rendering": 88,
+            "painting": 8,
+            "other": 1,
+            "busy": 254,
+            "longTasks": 1,
+            "maxTask": 53,
+            "styleRecalcs500": 12
+          }
+        },
+        {
+          "step": "warm:mega",
+          "firstRowMs": 112,
+          "atBottomMs": 112,
+          "clickInteractionMs": 136,
+          "mainThreadMs": {
+            "scripting": 85,
+            "rendering": 77,
+            "painting": 6,
+            "other": 1,
+            "busy": 187,
+            "longTasks": 1,
+            "maxTask": 81,
+            "styleRecalcs500": 8
+          }
+        },
+        {
+          "step": "cold:long",
+          "firstRowMs": 179,
+          "atBottomMs": 196,
+          "clickInteractionMs": 104,
+          "mainThreadMs": {
+            "scripting": 114,
+            "rendering": 99,
+            "painting": 7,
+            "other": 1,
+            "busy": 253,
+            "longTasks": 1,
+            "maxTask": 51,
+            "styleRecalcs500": 13
+          }
+        },
+        {
+          "step": "scroll:long",
+          "frames": 215,
+          "frameP50Ms": 16.7,
+          "frameP95Ms": 18.7,
+          "framesOver25MsPct": 1.4,
+          "anchorJumpPx": 3278,
+          "longAnimationFrames": 0,
+          "mainThreadMs": {
+            "scripting": 230,
+            "rendering": 374,
+            "painting": 117,
+            "other": 5,
+            "busy": 839,
+            "longTasks": 0,
+            "maxTask": 35,
+            "styleRecalcs500": 8
+          }
+        },
+        {
+          "step": "cold:hero",
+          "firstRowMs": 177,
+          "atBottomMs": 177,
+          "clickInteractionMs": 104,
+          "mainThreadMs": {
+            "scripting": 119,
+            "rendering": 91,
+            "painting": 6,
+            "other": 1,
+            "busy": 246,
+            "longTasks": 1,
+            "maxTask": 54,
+            "styleRecalcs500": 10
+          }
+        },
+        {
+          "step": "scroll:hero",
+          "frames": 289,
+          "frameP50Ms": 16.7,
+          "frameP95Ms": 18.7,
+          "framesOver25MsPct": 3.8,
+          "anchorJumpPx": 4923,
+          "longAnimationFrames": 2,
+          "mainThreadMs": {
+            "scripting": 332,
+            "rendering": 540,
+            "painting": 156,
+            "other": 6,
+            "busy": 1196,
+            "longTasks": 0,
+            "maxTask": 40,
+            "styleRecalcs500": 11
+          }
+        },
+        {
+          "step": "warm:handoff",
+          "firstRowMs": 112,
+          "atBottomMs": 112,
+          "clickInteractionMs": 136,
+          "mainThreadMs": {
+            "scripting": 93,
+            "rendering": 82,
+            "painting": 7,
+            "other": 1,
+            "busy": 207,
+            "longTasks": 1,
+            "maxTask": 77,
+            "styleRecalcs500": 9
+          }
+        },
+        {
+          "step": "cold:small",
+          "firstRowMs": 145,
+          "atBottomMs": 145,
+          "clickInteractionMs": 104,
+          "mainThreadMs": {
+            "scripting": 92,
+            "rendering": 82,
+            "painting": 6,
+            "other": 1,
+            "busy": 200,
+            "longTasks": 0,
+            "maxTask": 49,
+            "styleRecalcs500": 10
+          }
+        },
+        {
+          "step": "warm:long",
+          "firstRowMs": 112,
+          "atBottomMs": 129,
+          "clickInteractionMs": 136,
+          "mainThreadMs": {
+            "scripting": 93,
+            "rendering": 93,
+            "painting": 7,
+            "other": 1,
+            "busy": 217,
+            "longTasks": 1,
+            "maxTask": 79,
+            "styleRecalcs500": 11
+          }
+        },
+        {
+          "step": "warm:hero",
+          "firstRowMs": 112,
+          "atBottomMs": 112,
+          "clickInteractionMs": 136,
+          "mainThreadMs": {
+            "scripting": 81,
+            "rendering": 73,
+            "painting": 6,
+            "other": 1,
+            "busy": 181,
+            "longTasks": 1,
+            "maxTask": 80,
+            "styleRecalcs500": 7
+          }
+        }
+      ]
+    },
+    {
+      "build": "baseline",
+      "session": 3,
+      "startupMs": 378,
+      "idleFrameMs": 16.67,
+      "steps": [
+        {
+          "step": "cold:mega",
+          "firstRowMs": 325,
+          "atBottomMs": 325,
+          "clickInteractionMs": 136,
+          "mainThreadMs": {
+            "scripting": 431,
+            "rendering": 113,
+            "painting": 24,
+            "other": 1,
+            "busy": 653,
+            "longTasks": 2,
+            "maxTask": 91,
+            "styleRecalcs500": 12
+          }
+        },
+        {
+          "step": "scroll:mega",
+          "frames": 374,
+          "frameP50Ms": 16.7,
+          "frameP95Ms": 18.7,
+          "framesOver25MsPct": 3.2,
+          "anchorJumpPx": 9513,
+          "longAnimationFrames": 1,
+          "mainThreadMs": {
+            "scripting": 489,
+            "rendering": 726,
+            "painting": 201,
+            "other": 9,
+            "busy": 1616,
+            "longTasks": 0,
+            "maxTask": 35,
+            "styleRecalcs500": 22
+          }
+        },
+        {
+          "step": "cold:handoff",
+          "firstRowMs": 177,
+          "atBottomMs": 177,
+          "clickInteractionMs": 96,
+          "mainThreadMs": {
+            "scripting": 124,
+            "rendering": 92,
+            "painting": 8,
+            "other": 1,
+            "busy": 255,
+            "longTasks": 1,
+            "maxTask": 53,
+            "styleRecalcs500": 12
+          }
+        },
+        {
+          "step": "warm:mega",
+          "firstRowMs": 113,
+          "atBottomMs": 113,
+          "clickInteractionMs": 136,
+          "mainThreadMs": {
+            "scripting": 88,
+            "rendering": 80,
+            "painting": 6,
+            "other": 1,
+            "busy": 193,
+            "longTasks": 1,
+            "maxTask": 84,
+            "styleRecalcs500": 8
+          }
+        },
+        {
+          "step": "cold:long",
+          "firstRowMs": 195,
+          "atBottomMs": 212,
+          "clickInteractionMs": 104,
+          "mainThreadMs": {
+            "scripting": 112,
+            "rendering": 90,
+            "painting": 7,
+            "other": 1,
+            "busy": 240,
+            "longTasks": 2,
+            "maxTask": 54,
+            "styleRecalcs500": 13
+          }
+        },
+        {
+          "step": "scroll:long",
+          "frames": 211,
+          "frameP50Ms": 16.7,
+          "frameP95Ms": 18.7,
+          "framesOver25MsPct": 1.9,
+          "anchorJumpPx": 3284,
+          "longAnimationFrames": 2,
+          "mainThreadMs": {
+            "scripting": 226,
+            "rendering": 355,
+            "painting": 115,
+            "other": 5,
+            "busy": 815,
+            "longTasks": 0,
+            "maxTask": 37,
+            "styleRecalcs500": 7
+          }
+        },
+        {
+          "step": "cold:hero",
+          "firstRowMs": 180,
+          "atBottomMs": 180,
+          "clickInteractionMs": 88,
+          "mainThreadMs": {
+            "scripting": 115,
+            "rendering": 100,
+            "painting": 7,
+            "other": 1,
+            "busy": 251,
+            "longTasks": 1,
+            "maxTask": 51,
+            "styleRecalcs500": 11
+          }
+        },
+        {
+          "step": "scroll:hero",
+          "frames": 287,
+          "frameP50Ms": 16.7,
+          "frameP95Ms": 18.7,
+          "framesOver25MsPct": 4.2,
+          "anchorJumpPx": 4923,
+          "longAnimationFrames": 1,
+          "mainThreadMs": {
+            "scripting": 315,
+            "rendering": 503,
+            "painting": 150,
+            "other": 6,
+            "busy": 1132,
+            "longTasks": 0,
+            "maxTask": 40,
+            "styleRecalcs500": 11
+          }
+        },
+        {
+          "step": "warm:handoff",
+          "firstRowMs": 111,
+          "atBottomMs": 111,
+          "clickInteractionMs": 136,
+          "mainThreadMs": {
+            "scripting": 87,
+            "rendering": 77,
+            "painting": 7,
+            "other": 1,
+            "busy": 195,
+            "longTasks": 1,
+            "maxTask": 76,
+            "styleRecalcs500": 9
+          }
+        },
+        {
+          "step": "cold:small",
+          "firstRowMs": 144,
+          "atBottomMs": 144,
+          "clickInteractionMs": 96,
+          "mainThreadMs": {
+            "scripting": 95,
+            "rendering": 86,
+            "painting": 6,
+            "other": 1,
+            "busy": 211,
+            "longTasks": 1,
+            "maxTask": 51,
+            "styleRecalcs500": 10
+          }
+        },
+        {
+          "step": "warm:long",
+          "firstRowMs": 111,
+          "atBottomMs": 129,
+          "clickInteractionMs": 120,
+          "mainThreadMs": {
+            "scripting": 83,
+            "rendering": 91,
+            "painting": 7,
+            "other": 1,
+            "busy": 205,
+            "longTasks": 1,
+            "maxTask": 66,
+            "styleRecalcs500": 11
+          }
+        },
+        {
+          "step": "warm:hero",
+          "firstRowMs": 113,
+          "atBottomMs": 113,
+          "clickInteractionMs": 136,
+          "mainThreadMs": {
+            "scripting": 78,
+            "rendering": 71,
+            "painting": 6,
+            "other": 1,
+            "busy": 172,
+            "longTasks": 1,
+            "maxTask": 78,
+            "styleRecalcs500": 7
+          }
+        }
+      ]
+    },
+    {
+      "build": "candidate",
+      "session": 1,
+      "startupMs": 324,
+      "idleFrameMs": 16.67,
+      "steps": [
+        {
+          "step": "cold:mega",
+          "firstRowMs": 311,
+          "atBottomMs": 311,
+          "clickInteractionMs": 136,
+          "mainThreadMs": {
+            "scripting": 358,
+            "rendering": 70,
+            "painting": 23,
+            "other": 1,
+            "busy": 536,
+            "longTasks": 3,
+            "maxTask": 70,
+            "styleRecalcs500": 0
+          }
+        },
+        {
+          "step": "scroll:mega",
+          "frames": 380,
+          "frameP50Ms": 16.7,
+          "frameP95Ms": 18.7,
+          "framesOver25MsPct": 3.7,
+          "anchorJumpPx": 409,
+          "longAnimationFrames": 0,
+          "mainThreadMs": {
+            "scripting": 674,
+            "rendering": 601,
+            "painting": 176,
+            "other": 8,
+            "busy": 1643,
+            "longTasks": 0,
+            "maxTask": 30,
+            "styleRecalcs500": 2
+          }
+        },
+        {
+          "step": "cold:handoff",
+          "firstRowMs": 162,
+          "atBottomMs": 162,
+          "clickInteractionMs": 104,
+          "mainThreadMs": {
+            "scripting": 103,
+            "rendering": 33,
+            "painting": 6,
+            "other": 1,
+            "busy": 168,
+            "longTasks": 0,
+            "maxTask": 48,
+            "styleRecalcs500": 0
+          }
+        },
+        {
+          "step": "warm:mega",
+          "firstRowMs": 64,
+          "atBottomMs": 64,
+          "clickInteractionMs": 104,
+          "mainThreadMs": {
+            "scripting": 85,
+            "rendering": 23,
+            "painting": 5,
+            "other": 1,
+            "busy": 132,
+            "longTasks": 1,
+            "maxTask": 50,
+            "styleRecalcs500": 0
+          }
+        },
+        {
+          "step": "cold:long",
+          "firstRowMs": 161,
+          "atBottomMs": 161,
+          "clickInteractionMs": 104,
+          "mainThreadMs": {
+            "scripting": 109,
+            "rendering": 31,
+            "painting": 6,
+            "other": 1,
+            "busy": 180,
+            "longTasks": 0,
+            "maxTask": 44,
+            "styleRecalcs500": 0
+          }
+        },
+        {
+          "step": "scroll:long",
+          "frames": 215,
+          "frameP50Ms": 16.7,
+          "frameP95Ms": 18.7,
+          "framesOver25MsPct": 2.8,
+          "anchorJumpPx": 80,
+          "longAnimationFrames": 0,
+          "mainThreadMs": {
+            "scripting": 307,
+            "rendering": 323,
+            "painting": 105,
+            "other": 5,
+            "busy": 841,
+            "longTasks": 0,
+            "maxTask": 27,
+            "styleRecalcs500": 1
+          }
+        },
+        {
+          "step": "cold:hero",
+          "firstRowMs": 147,
+          "atBottomMs": 147,
+          "clickInteractionMs": 88,
+          "mainThreadMs": {
+            "scripting": 102,
+            "rendering": 40,
+            "painting": 7,
+            "other": 1,
+            "busy": 177,
+            "longTasks": 0,
+            "maxTask": 42,
+            "styleRecalcs500": 0
+          }
+        },
+        {
+          "step": "scroll:hero",
+          "frames": 287,
+          "frameP50Ms": 16.7,
+          "frameP95Ms": 31.8,
+          "framesOver25MsPct": 5.9,
+          "anchorJumpPx": 333,
+          "longAnimationFrames": 0,
+          "mainThreadMs": {
+            "scripting": 450,
+            "rendering": 484,
+            "painting": 141,
+            "other": 6,
+            "busy": 1242,
+            "longTasks": 0,
+            "maxTask": 27,
+            "styleRecalcs500": 2
+          }
+        },
+        {
+          "step": "warm:handoff",
+          "firstRowMs": 63,
+          "atBottomMs": 63,
+          "clickInteractionMs": 104,
+          "mainThreadMs": {
+            "scripting": 65,
+            "rendering": 26,
+            "painting": 5,
+            "other": 1,
+            "busy": 116,
+            "longTasks": 1,
+            "maxTask": 50,
+            "styleRecalcs500": 0
+          }
+        },
+        {
+          "step": "cold:small",
+          "firstRowMs": 129,
+          "atBottomMs": 129,
+          "clickInteractionMs": 88,
+          "mainThreadMs": {
+            "scripting": 89,
+            "rendering": 31,
+            "painting": 6,
+            "other": 1,
+            "busy": 151,
+            "longTasks": 0,
+            "maxTask": 44,
+            "styleRecalcs500": 0
+          }
+        },
+        {
+          "step": "warm:long",
+          "firstRowMs": 77,
+          "atBottomMs": 77,
+          "clickInteractionMs": 120,
+          "mainThreadMs": {
+            "scripting": 75,
+            "rendering": 28,
+            "painting": 5,
+            "other": 1,
+            "busy": 127,
+            "longTasks": 1,
+            "maxTask": 60,
+            "styleRecalcs500": 0
+          }
+        },
+        {
+          "step": "warm:hero",
+          "firstRowMs": 63,
+          "atBottomMs": 63,
+          "clickInteractionMs": 104,
+          "mainThreadMs": {
+            "scripting": 80,
+            "rendering": 26,
+            "painting": 5,
+            "other": 1,
+            "busy": 132,
+            "longTasks": 1,
+            "maxTask": 53,
+            "styleRecalcs500": 0
+          }
+        }
+      ]
+    },
+    {
+      "build": "candidate",
+      "session": 2,
+      "startupMs": 406,
+      "idleFrameMs": 16.91,
+      "steps": [
+        {
+          "step": "cold:mega",
+          "firstRowMs": 277,
+          "atBottomMs": 277,
+          "clickInteractionMs": 136,
+          "mainThreadMs": {
+            "scripting": 394,
+            "rendering": 65,
+            "painting": 24,
+            "other": 1,
+            "busy": 570,
+            "longTasks": 3,
+            "maxTask": 72,
+            "styleRecalcs500": 0
+          }
+        },
+        {
+          "step": "scroll:mega",
+          "frames": 375,
+          "frameP50Ms": 16.7,
+          "frameP95Ms": 18.7,
+          "framesOver25MsPct": 3.7,
+          "anchorJumpPx": 409,
+          "longAnimationFrames": 0,
+          "mainThreadMs": {
+            "scripting": 676,
+            "rendering": 576,
+            "painting": 172,
+            "other": 8,
+            "busy": 1616,
+            "longTasks": 0,
+            "maxTask": 30,
+            "styleRecalcs500": 2
+          }
+        },
+        {
+          "step": "cold:handoff",
+          "firstRowMs": 147,
+          "atBottomMs": 147,
+          "clickInteractionMs": 88,
+          "mainThreadMs": {
+            "scripting": 99,
+            "rendering": 31,
+            "painting": 6,
+            "other": 1,
+            "busy": 160,
+            "longTasks": 0,
+            "maxTask": 45,
+            "styleRecalcs500": 0
+          }
+        },
+        {
+          "step": "warm:mega",
+          "firstRowMs": 63,
+          "atBottomMs": 63,
+          "clickInteractionMs": 104,
+          "mainThreadMs": {
+            "scripting": 86,
+            "rendering": 24,
+            "painting": 5,
+            "other": 1,
+            "busy": 134,
+            "longTasks": 1,
+            "maxTask": 52,
+            "styleRecalcs500": 0
+          }
+        },
+        {
+          "step": "cold:long",
+          "firstRowMs": 163,
+          "atBottomMs": 163,
+          "clickInteractionMs": 88,
+          "mainThreadMs": {
+            "scripting": 110,
+            "rendering": 30,
+            "painting": 7,
+            "other": 1,
+            "busy": 180,
+            "longTasks": 0,
+            "maxTask": 43,
+            "styleRecalcs500": 0
+          }
+        },
+        {
+          "step": "scroll:long",
+          "frames": 214,
+          "frameP50Ms": 16.7,
+          "frameP95Ms": 18.7,
+          "framesOver25MsPct": 2.3,
+          "anchorJumpPx": 80,
+          "longAnimationFrames": 0,
+          "mainThreadMs": {
+            "scripting": 304,
+            "rendering": 329,
+            "painting": 105,
+            "other": 5,
+            "busy": 845,
+            "longTasks": 0,
+            "maxTask": 27,
+            "styleRecalcs500": 1
+          }
+        },
+        {
+          "step": "cold:hero",
+          "firstRowMs": 145,
+          "atBottomMs": 145,
+          "clickInteractionMs": 88,
+          "mainThreadMs": {
+            "scripting": 105,
+            "rendering": 40,
+            "painting": 7,
+            "other": 1,
+            "busy": 180,
+            "longTasks": 0,
+            "maxTask": 46,
+            "styleRecalcs500": 0
+          }
+        },
+        {
+          "step": "scroll:hero",
+          "frames": 288,
+          "frameP50Ms": 16.7,
+          "frameP95Ms": 31.4,
+          "framesOver25MsPct": 5.9,
+          "anchorJumpPx": 333,
+          "longAnimationFrames": 0,
+          "mainThreadMs": {
+            "scripting": 429,
+            "rendering": 459,
+            "painting": 131,
+            "other": 6,
+            "busy": 1168,
+            "longTasks": 0,
+            "maxTask": 28,
+            "styleRecalcs500": 2
+          }
+        },
+        {
+          "step": "warm:handoff",
+          "firstRowMs": 46,
+          "atBottomMs": 46,
+          "clickInteractionMs": 88,
+          "mainThreadMs": {
+            "scripting": 56,
+            "rendering": 23,
+            "painting": 6,
+            "other": 0,
+            "busy": 105,
+            "longTasks": 0,
+            "maxTask": 42,
+            "styleRecalcs500": 0
+          }
+        },
+        {
+          "step": "cold:small",
+          "firstRowMs": 131,
+          "atBottomMs": 131,
+          "clickInteractionMs": 88,
+          "mainThreadMs": {
+            "scripting": 105,
+            "rendering": 31,
+            "painting": 6,
+            "other": 1,
+            "busy": 170,
+            "longTasks": 0,
+            "maxTask": 44,
+            "styleRecalcs500": 0
+          }
+        },
+        {
+          "step": "warm:long",
+          "firstRowMs": 79,
+          "atBottomMs": 79,
+          "clickInteractionMs": 120,
+          "mainThreadMs": {
+            "scripting": 75,
+            "rendering": 28,
+            "painting": 5,
+            "other": 1,
+            "busy": 125,
+            "longTasks": 1,
+            "maxTask": 59,
+            "styleRecalcs500": 0
+          }
+        },
+        {
+          "step": "warm:hero",
+          "firstRowMs": 78,
+          "atBottomMs": 78,
+          "clickInteractionMs": 120,
+          "mainThreadMs": {
+            "scripting": 71,
+            "rendering": 28,
+            "painting": 6,
+            "other": 1,
+            "busy": 124,
+            "longTasks": 1,
+            "maxTask": 54,
+            "styleRecalcs500": 0
+          }
+        }
+      ]
+    },
+    {
+      "build": "candidate",
+      "session": 3,
+      "startupMs": 370,
+      "idleFrameMs": 16.63,
+      "steps": [
+        {
+          "step": "cold:mega",
+          "firstRowMs": 279,
+          "atBottomMs": 279,
+          "clickInteractionMs": 120,
+          "mainThreadMs": {
+            "scripting": 381,
+            "rendering": 64,
+            "painting": 22,
+            "other": 1,
+            "busy": 549,
+            "longTasks": 3,
+            "maxTask": 71,
+            "styleRecalcs500": 0
+          }
+        },
+        {
+          "step": "scroll:mega",
+          "frames": 373,
+          "frameP50Ms": 16.7,
+          "frameP95Ms": 18.7,
+          "framesOver25MsPct": 3.5,
+          "anchorJumpPx": 409,
+          "longAnimationFrames": 0,
+          "mainThreadMs": {
+            "scripting": 650,
+            "rendering": 580,
+            "painting": 175,
+            "other": 8,
+            "busy": 1585,
+            "longTasks": 0,
+            "maxTask": 27,
+            "styleRecalcs500": 2
+          }
+        },
+        {
+          "step": "cold:handoff",
+          "firstRowMs": 180,
+          "atBottomMs": 180,
+          "clickInteractionMs": 88,
+          "mainThreadMs": {
+            "scripting": 119,
+            "rendering": 32,
+            "painting": 6,
+            "other": 1,
+            "busy": 191,
+            "longTasks": 0,
+            "maxTask": 45,
+            "styleRecalcs500": 0
+          }
+        },
+        {
+          "step": "warm:mega",
+          "firstRowMs": 78,
+          "atBottomMs": 78,
+          "clickInteractionMs": 120,
+          "mainThreadMs": {
+            "scripting": 75,
+            "rendering": 27,
+            "painting": 5,
+            "other": 1,
+            "busy": 124,
+            "longTasks": 1,
+            "maxTask": 57,
+            "styleRecalcs500": 0
+          }
+        },
+        {
+          "step": "cold:long",
+          "firstRowMs": 162,
+          "atBottomMs": 162,
+          "clickInteractionMs": 88,
+          "mainThreadMs": {
+            "scripting": 108,
+            "rendering": 30,
+            "painting": 6,
+            "other": 1,
+            "busy": 177,
+            "longTasks": 0,
+            "maxTask": 43,
+            "styleRecalcs500": 0
+          }
+        },
+        {
+          "step": "scroll:long",
+          "frames": 212,
+          "frameP50Ms": 16.7,
+          "frameP95Ms": 18.6,
+          "framesOver25MsPct": 1.9,
+          "anchorJumpPx": 80,
+          "longAnimationFrames": 0,
+          "mainThreadMs": {
+            "scripting": 279,
+            "rendering": 290,
+            "painting": 92,
+            "other": 4,
+            "busy": 760,
+            "longTasks": 0,
+            "maxTask": 25,
+            "styleRecalcs500": 1
+          }
+        },
+        {
+          "step": "cold:hero",
+          "firstRowMs": 147,
+          "atBottomMs": 147,
+          "clickInteractionMs": 88,
+          "mainThreadMs": {
+            "scripting": 105,
+            "rendering": 39,
+            "painting": 7,
+            "other": 1,
+            "busy": 179,
+            "longTasks": 0,
+            "maxTask": 43,
+            "styleRecalcs500": 0
+          }
+        },
+        {
+          "step": "scroll:hero",
+          "frames": 289,
+          "frameP50Ms": 16.7,
+          "frameP95Ms": 32.2,
+          "framesOver25MsPct": 6.2,
+          "anchorJumpPx": 333,
+          "longAnimationFrames": 0,
+          "mainThreadMs": {
+            "scripting": 457,
+            "rendering": 461,
+            "painting": 134,
+            "other": 6,
+            "busy": 1209,
+            "longTasks": 0,
+            "maxTask": 28,
+            "styleRecalcs500": 2
+          }
+        },
+        {
+          "step": "warm:handoff",
+          "firstRowMs": 76,
+          "atBottomMs": 76,
+          "clickInteractionMs": 120,
+          "mainThreadMs": {
+            "scripting": 82,
+            "rendering": 31,
+            "painting": 5,
+            "other": 1,
+            "busy": 140,
+            "longTasks": 1,
+            "maxTask": 57,
+            "styleRecalcs500": 0
+          }
+        },
+        {
+          "step": "cold:small",
+          "firstRowMs": 129,
+          "atBottomMs": 129,
+          "clickInteractionMs": 104,
+          "mainThreadMs": {
+            "scripting": 90,
+            "rendering": 31,
+            "painting": 6,
+            "other": 1,
+            "busy": 152,
+            "longTasks": 0,
+            "maxTask": 45,
+            "styleRecalcs500": 0
+          }
+        },
+        {
+          "step": "warm:long",
+          "firstRowMs": 79,
+          "atBottomMs": 79,
+          "clickInteractionMs": 120,
+          "mainThreadMs": {
+            "scripting": 75,
+            "rendering": 29,
+            "painting": 5,
+            "other": 1,
+            "busy": 126,
+            "longTasks": 1,
+            "maxTask": 60,
+            "styleRecalcs500": 0
+          }
+        },
+        {
+          "step": "warm:hero",
+          "firstRowMs": 77,
+          "atBottomMs": 77,
+          "clickInteractionMs": 120,
+          "mainThreadMs": {
+            "scripting": 80,
+            "rendering": 27,
+            "painting": 5,
+            "other": 1,
+            "busy": 132,
+            "longTasks": 1,
+            "maxTask": 53,
+            "styleRecalcs500": 0
+          }
+        }
+      ]
+    }
+  ]
+}

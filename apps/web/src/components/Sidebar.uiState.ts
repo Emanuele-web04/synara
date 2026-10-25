@@ -5,6 +5,7 @@
 
 import { normalizeWorkspaceRootForComparison } from "@synara/shared/threadWorkspace";
 import type { LastThreadRoute } from "../chatRouteRestore";
+import type { ActivityGroupMode, ActivityScopeSelection } from "./SidebarActivityView.logic";
 
 const SIDEBAR_UI_STATE_STORAGE_KEY = "synara:sidebar-ui:v1";
 
@@ -20,6 +21,10 @@ export type SidebarUiState = {
   lastThreadRoute: LastThreadRoute | null;
   /** Swaps the Projects surface for the flat task-feed Activity view. */
   activityViewEnabled: boolean;
+  /** Project (or merged chats) the Activity feed is scoped to; null shows every project. */
+  activityScope: ActivityScopeSelection;
+  /** Keeps Activity grouping across view remounts and reloads. */
+  activityGroupMode: ActivityGroupMode;
 };
 
 const DEFAULT_SIDEBAR_UI_STATE: SidebarUiState = {
@@ -29,6 +34,8 @@ const DEFAULT_SIDEBAR_UI_STATE: SidebarUiState = {
   dismissedThreadStatusKeyByThreadId: {},
   lastThreadRoute: null,
   activityViewEnabled: false,
+  activityScope: null,
+  activityGroupMode: "time",
 };
 
 // Persisted paging is a request, not a promise: render-time clamping trims it to the real
@@ -44,6 +51,10 @@ function sanitizeThreadListExtraPages(value: unknown): number {
     return 0;
   }
   return Math.min(Math.max(0, Math.floor(value)), MAX_PERSISTED_THREAD_LIST_EXTRA_PAGES);
+}
+
+function sanitizeActivityScope(value: unknown): ActivityScopeSelection {
+  return typeof value === "string" && value.length > 0 ? (value as ActivityScopeSelection) : null;
 }
 
 function sanitizeProjectThreadListExtraPagesByCwd(
@@ -89,6 +100,8 @@ export function readSidebarUiState(): SidebarUiState {
         splitViewId?: unknown;
       } | null;
       activityViewEnabled?: boolean;
+      activityScope?: unknown;
+      activityGroupMode?: unknown;
     };
 
     const lastThreadRoute =
@@ -137,6 +150,8 @@ export function readSidebarUiState(): SidebarUiState {
       ),
       lastThreadRoute,
       activityViewEnabled: parsed.activityViewEnabled === true,
+      activityScope: sanitizeActivityScope(parsed.activityScope),
+      activityGroupMode: parsed.activityGroupMode === "project" ? "project" : "time",
     };
   } catch {
     return DEFAULT_SIDEBAR_UI_STATE;
@@ -229,6 +244,8 @@ export function persistSidebarUiState(input: SidebarUiState): void {
             }
           : null,
         activityViewEnabled: input.activityViewEnabled,
+        activityScope: sanitizeActivityScope(input.activityScope),
+        activityGroupMode: input.activityGroupMode === "project" ? "project" : "time",
       }),
     );
   } catch {

@@ -6,13 +6,14 @@
 
 import {
   CloudSyncIcon,
+  CreatePullRequestIcon,
   GitBranchIcon,
   GitCommitIcon,
+  GitPullRequestIcon,
   type LucideIcon,
   PushIcon,
 } from "~/lib/icons";
 import type { GitGlyphName } from "./GitActionsControl.logic";
-import { GitHubIcon } from "./Icons";
 
 // Central icons render as masked spans (not <svg>), so size them explicitly here
 // rather than relying on parent `[&>svg]` selectors.
@@ -21,7 +22,8 @@ export const GIT_ACTION_ICON_CLASS = "size-3.5";
 const GIT_ACTION_GLYPH: Record<GitGlyphName, LucideIcon> = {
   commit: GitCommitIcon,
   push: PushIcon,
-  pr: GitHubIcon,
+  pr: CreatePullRequestIcon,
+  view_pr: GitPullRequestIcon,
   sync: CloudSyncIcon,
   branch: GitBranchIcon,
 };

@@ -1,8 +1,8 @@
 import { EventEmitter } from "node:events";
 
 import { ThreadId } from "@synara/contracts";
-import type { WebContents } from "electron";
-import { describe, expect, it, vi } from "vitest";
+import { nativeTheme, type WebContents } from "electron";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 const { browserSession, fromId, webContentsViewConstructor, willDownloadListener } = vi.hoisted(
   () => {
@@ -25,7 +25,7 @@ const { browserSession, fromId, webContentsViewConstructor, willDownloadListener
     };
   },
 );
-vi.mock("electron", () => ({
+vi.mock("electron", async () => ({
   app: {
     getName: () => "Synara",
     getPreferredSystemLanguages: () => ["en-US"],
@@ -34,6 +34,9 @@ vi.mock("electron", () => ({
   BrowserWindow: class {},
   clipboard: { writeImage: vi.fn(), writeText: vi.fn() },
   nativeImage: { createFromBuffer: vi.fn() },
+  nativeTheme: Object.assign(new (await import("node:events")).EventEmitter(), {
+    shouldUseDarkColors: false,
+  }),
   session: {
     fromPartition: () => browserSession,
   },
@@ -48,6 +51,8 @@ vi.mock("electron", () => ({
 import { DesktopBrowserManager } from "../browserManager";
 
 const THREAD_ID = ThreadId.makeUnsafe("thread-visible-runtime");
+
+afterEach(() => nativeTheme.removeAllListeners("updated"));
 
 class FakeWebContents extends EventEmitter {
   constructor(readonly id = 17) {
@@ -79,7 +84,327 @@ class FakeWebContents extends EventEmitter {
   getZoomFactor = () => 1;
 }
 
+describe("DesktopBrowserManager tab switching", () => {
+  // Unused queued views would otherwise leak into the next describe's tests.
+  afterEach(() => webContentsViewConstructor.mockReset());
+
+  function makeView(id: number, url = "") {
+    let currentUrl = url;
+    const contents = Object.assign(new FakeWebContents(id), {
+      getURL: () => currentUrl,
+      loadURL: vi.fn((next: string) => {
+        currentUrl = next;
+        return Promise.resolve();
+      }),
+    });
+    const view = {
+      webContents: contents,
+      setBounds: vi.fn(),
+      setVisible: vi.fn(),
+      setBorderRadius: vi.fn(),
+      setBackgroundColor: vi.fn(),
+    };
+    return { contents, view };
+  }
+
+  function makeManager() {
+    const manager = new DesktopBrowserManager();
+    const parent = { addChildView: vi.fn(), removeChildView: vi.fn() };
+    manager.setWindow({ isDestroyed: () => false, contentView: parent } as never);
+    return { manager, parent };
+  }
+
+  const bounds = { x: 0, y: 50, width: 800, height: 600 };
+
+  it("keeps three tabs live through quick and slow switches without reloading", async () => {
+    vi.useFakeTimers();
+    const pages = [1, 2, 3].map((index) => makeView(400 + index));
+    for (const page of pages) webContentsViewConstructor.mockReturnValueOnce(page.view);
+    const { manager } = makeManager();
+    try {
+      const first = manager.open({ threadId: THREAD_ID, initialUrl: "http://127.0.0.1:8801/" });
+      manager.setPanelBounds({ threadId: THREAD_ID, surface: "native", bounds });
+      const second = manager.newTab({ threadId: THREAD_ID, url: "http://127.0.0.1:8802/" });
+      const third = manager.newTab({ threadId: THREAD_ID, url: "http://127.0.0.1:8803/" });
+      await vi.advanceTimersByTimeAsync(0);
+      const tabIds = [first.activeTabId!, second.activeTabId!, third.activeTabId!];
+      const loadsAfterOpen = pages.map((page) => page.contents.loadURL.mock.calls.length);
+
+      for (const pauseMs of [50, 2_000, 30_000]) {
+        for (const tabId of [...tabIds, ...tabIds]) {
+          manager.selectTab({ threadId: THREAD_ID, tabId });
+          await vi.advanceTimersByTimeAsync(pauseMs);
+        }
+      }
+
+      for (const page of pages) expect(page.contents.close).not.toHaveBeenCalled();
+      expect(pages.map((page) => page.contents.loadURL.mock.calls.length)).toEqual(loadsAfterOpen);
+      expect(manager.getState({ threadId: THREAD_ID }).tabs.map((tab) => tab.status)).toEqual([
+        "live",
+        "live",
+        "live",
+      ]);
+    } finally {
+      manager.dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it.each([false, true])(
+    "restores tab URLs after replacing the window (closed first: %s)",
+    async (closedFirst) => {
+      const pages = [1, 2, 3, 4].map((index) => makeView(420 + index));
+      for (const page of pages) webContentsViewConstructor.mockReturnValueOnce(page.view);
+      const { manager } = makeManager();
+      try {
+        const first = manager.open({ threadId: THREAD_ID, initialUrl: "http://127.0.0.1:8801/" });
+        manager.setPanelBounds({ threadId: THREAD_ID, surface: "native", bounds });
+        const second = manager.newTab({ threadId: THREAD_ID, url: "http://127.0.0.1:8802/" });
+        await Promise.resolve();
+
+        if (closedFirst) manager.setWindow(null);
+        manager.setWindow({
+          isDestroyed: () => false,
+          contentView: { addChildView: vi.fn(), removeChildView: vi.fn() },
+        } as never);
+        await Promise.resolve();
+        expect(pages[2]!.contents.getURL()).toBe("http://127.0.0.1:8802/");
+        manager.selectTab({ threadId: THREAD_ID, tabId: first.activeTabId! });
+        await Promise.resolve();
+        expect(pages[3]!.contents.getURL()).toBe("http://127.0.0.1:8801/");
+        expect(manager.getState({ threadId: THREAD_ID }).tabs.map((tab) => tab.id)).toEqual([
+          first.activeTabId,
+          second.activeTabId,
+        ]);
+      } finally {
+        manager.dispose();
+      }
+    },
+  );
+
+  it("reveals the incoming page before hiding the outgoing one", () => {
+    const pages = [1, 2].map((index) => makeView(410 + index));
+    for (const page of pages) webContentsViewConstructor.mockReturnValueOnce(page.view);
+    const { manager } = makeManager();
+    try {
+      const first = manager.open({ threadId: THREAD_ID, initialUrl: "http://127.0.0.1:8801/" });
+      manager.setPanelBounds({ threadId: THREAD_ID, surface: "native", bounds });
+      manager.newTab({ threadId: THREAD_ID, url: "http://127.0.0.1:8802/" });
+      const [outgoing, incoming] = pages.map((page) => page.view);
+
+      manager.selectTab({ threadId: THREAD_ID, tabId: first.activeTabId! });
+
+      const shown = outgoing!.setVisible.mock.invocationCallOrder.at(-1)!;
+      const hidden = incoming!.setVisible.mock.invocationCallOrder.at(-1)!;
+      expect(outgoing!.setVisible).toHaveBeenLastCalledWith(true);
+      expect(incoming!.setVisible).toHaveBeenLastCalledWith(false);
+      expect(shown).toBeLessThan(hidden);
+      expect(outgoing!.setBounds.mock.invocationCallOrder.at(-1)!).toBeLessThan(shown);
+    } finally {
+      manager.dispose();
+    }
+  });
+
+  it("bounds live pages across threads without evicting the shown page or an active tool", async () => {
+    vi.useFakeTimers();
+    const pages = Array.from({ length: 14 }, (_, index) => makeView(450 + index));
+    for (const page of pages) webContentsViewConstructor.mockReturnValueOnce(page.view);
+    const { manager } = makeManager();
+    const inputs: Array<{ threadId: ThreadId; tabId: string }> = [];
+    try {
+      for (let index = 0; index < 13; index++) {
+        const threadId = ThreadId.makeUnsafe(`thread-live-budget-${index}`);
+        const state = manager.open({ threadId, initialUrl: `https://example.test/${index}` });
+        manager.setPanelBounds({ threadId, surface: "native", bounds });
+        const input = { threadId, tabId: state.activeTabId! };
+        inputs.push(input);
+        if (index === 0) await manager.getAutomationRuntime(input);
+        await vi.advanceTimersByTimeAsync(10);
+      }
+
+      // The oldest page has a live tool lease. The next oldest hidden page is
+      // evicted instead, leaving the shown page and eleven warm pages intact.
+      expect(pages[0]!.contents.close).not.toHaveBeenCalled();
+      expect(pages[1]!.contents.close).toHaveBeenCalledOnce();
+      expect(pages.slice(2, 13).every((page) => page.contents.close.mock.calls.length === 0)).toBe(
+        true,
+      );
+      expect(manager.getState(inputs[1]!).tabs[0]!.status).toBe("suspended");
+      expect(pages[12]!.view.setVisible).toHaveBeenLastCalledWith(true);
+
+      // Once the tool lease expires, reopening the evicted page restores its
+      // URL and evicts the now-oldest hidden page to retain the same bound.
+      await vi.advanceTimersByTimeAsync(31_001);
+      manager.setPanelBounds({ threadId: inputs[1]!.threadId, surface: "native", bounds });
+      expect(pages[13]!.contents.loadURL).toHaveBeenCalledWith("https://example.test/1");
+      expect(pages[0]!.contents.close).toHaveBeenCalledOnce();
+      expect(manager.getState(inputs[1]!).tabs[0]!.status).toBe("live");
+      expect(pages[13]!.view.setVisible).toHaveBeenLastCalledWith(true);
+    } finally {
+      manager.dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it("loads an evicted agent tab when the user reopens it without a browser tool", async () => {
+    vi.useFakeTimers();
+    const agentPage = makeView(421);
+    const restoredAgentPage = makeView(422);
+    const userPages = Array.from({ length: 6 }, (_, index) => makeView(430 + index));
+    webContentsViewConstructor.mockReturnValueOnce(agentPage.view);
+    for (const page of userPages) webContentsViewConstructor.mockReturnValueOnce(page.view);
+    webContentsViewConstructor.mockReturnValueOnce(restoredAgentPage.view);
+    const { manager } = makeManager();
+    try {
+      const prepared = manager.prepareAutomationTab({
+        threadId: THREAD_ID,
+        reuse: true,
+        url: "http://127.0.0.1:8801/agent",
+      });
+      const agentTabId = prepared.activeTabId!;
+      manager.setPanelBounds({ threadId: THREAD_ID, surface: "native", bounds });
+      await manager.getAutomationRuntime({ threadId: THREAD_ID, tabId: agentTabId });
+      // Let the tool grace expire, then push the agent tab past the warm limit.
+      await vi.advanceTimersByTimeAsync(32_000);
+      for (const [index] of userPages.entries()) {
+        manager.newTab({ threadId: THREAD_ID, url: `http://127.0.0.1:8802/${index}` });
+        await vi.advanceTimersByTimeAsync(10);
+      }
+      expect(agentPage.contents.close).toHaveBeenCalledOnce();
+
+      manager.selectTab({ threadId: THREAD_ID, tabId: agentTabId });
+
+      expect(restoredAgentPage.contents.loadURL).toHaveBeenCalledWith(
+        "http://127.0.0.1:8801/agent",
+      );
+    } finally {
+      manager.dispose();
+      vi.useRealTimers();
+    }
+  });
+});
+
 describe("DesktopBrowserManager automation runtime boundary", () => {
+  it.each([false, true])(
+    "keeps opaque native-view backdrops current through theme changes and reuse (initial dark: %s)",
+    (initialDark) => {
+      const contents = new FakeWebContents(301);
+      const view = {
+        webContents: contents,
+        setBounds: vi.fn(),
+        setVisible: vi.fn(),
+        setBorderRadius: vi.fn(),
+        setBackgroundColor: vi.fn(),
+      };
+      webContentsViewConstructor.mockReturnValueOnce(view);
+      const theme = nativeTheme as unknown as EventEmitter & { shouldUseDarkColors: boolean };
+      theme.shouldUseDarkColors = initialDark;
+      const manager = new DesktopBrowserManager();
+      manager.setWindow({
+        isDestroyed: () => false,
+        contentView: { addChildView: vi.fn(), removeChildView: vi.fn() },
+      } as never);
+      try {
+        const state = manager.open({ threadId: THREAD_ID, initialUrl: "https://example.test/" });
+        const bounds = { x: 0, y: 50, width: 900, height: 650 };
+        manager.setPanelBounds({ threadId: THREAD_ID, surface: "native", bounds });
+        expect(view.setBackgroundColor).toHaveBeenLastCalledWith(
+          initialDark ? "#181818" : "#ffffff",
+        );
+        theme.shouldUseDarkColors = !initialDark;
+        theme.emit("updated");
+        expect(view.setBackgroundColor).toHaveBeenLastCalledWith(
+          initialDark ? "#ffffff" : "#181818",
+        );
+        manager.setPanelBounds({
+          threadId: THREAD_ID,
+          surface: "native",
+          bounds: null,
+          occluded: true,
+        });
+        theme.shouldUseDarkColors = false;
+        theme.emit("updated");
+        expect(view.setBackgroundColor).toHaveBeenLastCalledWith("#ffffff");
+        manager.setPanelBounds({ threadId: THREAD_ID, surface: "native", bounds });
+        expect(
+          manager.getVisibleAutomationRuntime({ threadId: THREAD_ID, tabId: state.activeTabId! })
+            .webContents,
+        ).toBe(contents);
+        manager.dispose();
+        view.setBackgroundColor.mockClear();
+        theme.shouldUseDarkColors = true;
+        theme.emit("updated");
+        expect(view.setBackgroundColor).not.toHaveBeenCalled();
+      } finally {
+        manager.dispose();
+        theme.shouldUseDarkColors = false;
+      }
+    },
+  );
+  it.each([false, true])(
+    "captures a full-size page behind an overlay without reloading (automation-owned: %s)",
+    async (automationOwned) => {
+      const contents = new FakeWebContents(122);
+      const image = {
+        isEmpty: () => false,
+        getSize: () => ({ width: 1280, height: 800 }),
+        resize: vi.fn(),
+        toJPEG: vi.fn(() => Buffer.from("full-size page")),
+      };
+      const capturePage = vi.fn(async () => image);
+      Object.assign(contents, { capturePage });
+      const view = {
+        webContents: contents,
+        setBounds: vi.fn(),
+        setVisible: vi.fn(),
+        setBorderRadius: vi.fn(),
+        setBackgroundColor: vi.fn(),
+      };
+      webContentsViewConstructor.mockReturnValueOnce(view);
+      const manager = new DesktopBrowserManager();
+      const parent = { addChildView: vi.fn(), removeChildView: vi.fn() };
+      manager.setWindow({ isDestroyed: () => false, contentView: parent } as never);
+      try {
+        const state = manager.open({ threadId: THREAD_ID, initialUrl: "https://example.test/" });
+        const input = { threadId: THREAD_ID, tabId: state.activeTabId! };
+        const bounds = { x: 0, y: 50, width: 900, height: 650 };
+        manager.setPanelBounds({ threadId: THREAD_ID, surface: "native", bounds });
+        if (automationOwned) await manager.getAutomationRuntime(input, { restore: false });
+        const loads = contents.loadURL.mock.calls.length;
+        expect(await manager.capturePreview(input)).toBeNull();
+        manager.setPanelBounds({
+          threadId: THREAD_ID,
+          surface: "native",
+          bounds: null,
+          occluded: true,
+        });
+        if (automationOwned)
+          expect(view.setBounds).toHaveBeenLastCalledWith({ ...bounds, x: 0, y: 0 });
+        expect(await manager.capturePreview(input)).toBe(
+          `data:image/jpeg;base64,${Buffer.from("full-size page").toString("base64")}`,
+        );
+        expect(image.resize).not.toHaveBeenCalled();
+        expect(capturePage).toHaveBeenCalledWith(undefined, { stayHidden: true, stayAwake: true });
+        const pendingFrame = manager.capturePreview(input);
+        manager.setPanelBounds({ threadId: THREAD_ID, surface: "native", bounds });
+        expect(await pendingFrame).toBeNull();
+        expect(manager.getVisibleAutomationRuntime(input).webContents).toBe(contents);
+        expect(contents.loadURL).toHaveBeenCalledTimes(loads);
+        manager.setPanelBounds({
+          threadId: THREAD_ID,
+          surface: "native",
+          bounds: null,
+          occluded: true,
+        });
+        manager.hide({ threadId: THREAD_ID });
+        expect(await manager.capturePreview(input)).toBeNull();
+        if (automationOwned)
+          expect(view.setBounds).toHaveBeenLastCalledWith({ x: 0, y: 0, width: 1280, height: 800 });
+      } finally {
+        manager.dispose();
+      }
+    },
+  );
   it("parks native previews outside hit testing, captures bounded frames and restores the same page", async () => {
     const contents = new FakeWebContents(121);
     const thumbnail = { toJPEG: vi.fn(() => Buffer.from("thumbnail")) };
@@ -95,11 +420,12 @@ describe("DesktopBrowserManager automation runtime boundary", () => {
       setBounds: vi.fn(),
       setVisible: vi.fn(),
       setBorderRadius: vi.fn(),
+      setBackgroundColor: vi.fn(),
     };
     webContentsViewConstructor.mockReturnValueOnce(view);
     const manager = new DesktopBrowserManager();
     const parent = { addChildView: vi.fn(), removeChildView: vi.fn() };
-    manager.setWindow({ contentView: parent } as never);
+    manager.setWindow({ isDestroyed: () => false, contentView: parent } as never);
     try {
       const state = manager.open({ threadId: THREAD_ID, initialUrl: "https://example.test/" });
       const input = { threadId: THREAD_ID, tabId: state.activeTabId! };
@@ -135,11 +461,12 @@ describe("DesktopBrowserManager automation runtime boundary", () => {
       setBounds: vi.fn(),
       setVisible: vi.fn(),
       setBorderRadius: vi.fn(),
+      setBackgroundColor: vi.fn(),
     };
     webContentsViewConstructor.mockReturnValueOnce(view);
     const manager = new DesktopBrowserManager();
     const parent = { addChildView: vi.fn(), removeChildView: vi.fn() };
-    manager.setWindow({ contentView: parent } as never);
+    manager.setWindow({ isDestroyed: () => false, contentView: parent } as never);
     try {
       const state = manager.open({ threadId: THREAD_ID, initialUrl: "https://example.test/" });
       const input = { threadId: THREAD_ID, tabId: state.activeTabId! };
@@ -166,7 +493,7 @@ describe("DesktopBrowserManager automation runtime boundary", () => {
         occluded: true,
       });
       manager.hide({ threadId: THREAD_ID });
-      await vi.advanceTimersByTimeAsync(30_001);
+      await vi.advanceTimersByTimeAsync(5 * 60_000 + 1);
       expect(contents.close).toHaveBeenCalledOnce();
     } finally {
       manager.dispose();
@@ -188,10 +515,12 @@ describe("DesktopBrowserManager automation runtime boundary", () => {
         setBounds: vi.fn(),
         setVisible: vi.fn(),
         setBorderRadius: vi.fn(),
+        setBackgroundColor: vi.fn(),
       });
     }
     const manager = new DesktopBrowserManager();
     manager.setWindow({
+      isDestroyed: () => false,
       contentView: { addChildView: vi.fn(), removeChildView: vi.fn() },
     } as never);
     try {
@@ -249,6 +578,7 @@ describe("DesktopBrowserManager automation runtime boundary", () => {
           setBounds: vi.fn(),
           setVisible: vi.fn(),
           setBorderRadius: vi.fn(),
+          setBackgroundColor: vi.fn(),
         });
         openPopup(child, grandchild);
         const manualChildDownload = { preventDefault: vi.fn() };
@@ -273,12 +603,14 @@ describe("DesktopBrowserManager automation runtime boundary", () => {
       setBounds: vi.fn(),
       setVisible: vi.fn(),
       setBorderRadius: vi.fn(),
+      setBackgroundColor: vi.fn(),
     });
     webContentsViewConstructor
       .mockReturnValueOnce(view(source))
       .mockReturnValueOnce(view(contents));
     const manager = new DesktopBrowserManager();
     manager.setWindow({
+      isDestroyed: () => false,
       contentView: { addChildView: vi.fn(), removeChildView: vi.fn() },
     } as never);
     const state = manager.open({ threadId: THREAD_ID });
@@ -316,10 +648,12 @@ describe("DesktopBrowserManager automation runtime boundary", () => {
       setBounds: vi.fn(),
       setVisible: vi.fn(),
       setBorderRadius: vi.fn(),
+      setBackgroundColor: vi.fn(),
     };
     webContentsViewConstructor.mockReturnValueOnce(view);
     const manager = new DesktopBrowserManager();
     manager.setWindow({
+      isDestroyed: () => false,
       contentView: { addChildView: vi.fn(), removeChildView: vi.fn() },
     } as never);
     const state = manager.open({ threadId: THREAD_ID });
@@ -349,9 +683,11 @@ describe("DesktopBrowserManager automation runtime boundary", () => {
       setBounds: vi.fn(),
       setVisible: vi.fn(),
       setBorderRadius: vi.fn(),
+      setBackgroundColor: vi.fn(),
     });
     const manager = new DesktopBrowserManager();
     manager.setWindow({
+      isDestroyed: () => false,
       contentView: { addChildView: vi.fn(), removeChildView: vi.fn() },
     } as never);
     const state = manager.open({ threadId: THREAD_ID });
@@ -385,6 +721,47 @@ describe("DesktopBrowserManager automation runtime boundary", () => {
     manager.dispose();
   });
 
+  it("does not repaint a hidden panel's page at its old bounds", async () => {
+    const contents = new FakeWebContents(102);
+    Object.assign(contents, {
+      capturePage: vi.fn(async () => ({ toPNG: () => Buffer.from("page") })),
+    });
+    const view = {
+      webContents: contents,
+      setBounds: vi.fn(),
+      setVisible: vi.fn(),
+      setBorderRadius: vi.fn(),
+      setBackgroundColor: vi.fn(),
+    };
+    webContentsViewConstructor.mockReturnValueOnce(view);
+    const manager = new DesktopBrowserManager();
+    manager.setWindow({
+      isDestroyed: () => false,
+      contentView: { addChildView: vi.fn(), removeChildView: vi.fn() },
+    } as never);
+    try {
+      const state = manager.open({ threadId: THREAD_ID, initialUrl: "https://example.test/" });
+      const input = { threadId: THREAD_ID, tabId: state.activeTabId! };
+      const panelBounds = { x: 700, y: 70, width: 560, height: 650 };
+      manager.setPanelBounds({ threadId: THREAD_ID, surface: "native", bounds: panelBounds });
+      expect(view.setBounds).toHaveBeenLastCalledWith(panelBounds);
+      manager.hide({ threadId: THREAD_ID });
+      view.setBounds.mockClear();
+      view.setVisible.mockClear();
+
+      // With the panel unmounted, a prompt screenshot, a reopen and a link open
+      // all reach the hidden thread. None of them may show its page again.
+      await manager.captureScreenshot(input);
+      manager.open({ threadId: THREAD_ID });
+      manager.navigate({ ...input, url: "https://example.test/next" });
+
+      expect(view.setBounds).not.toHaveBeenCalledWith(panelBounds);
+      expect(view.setVisible).not.toHaveBeenCalledWith(true);
+    } finally {
+      manager.dispose();
+    }
+  });
+
   it("applies explicit page zoom to native and renderer guests, then resets it on hide", () => {
     const nativeWebContents = new FakeWebContents(101);
     const nativeView = {
@@ -392,11 +769,13 @@ describe("DesktopBrowserManager automation runtime boundary", () => {
       setBounds: vi.fn(),
       setVisible: vi.fn(),
       setBorderRadius: vi.fn(),
+      setBackgroundColor: vi.fn(),
     };
     webContentsViewConstructor.mockReturnValueOnce(nativeView);
 
     const nativeManager = new DesktopBrowserManager();
     nativeManager.setWindow({
+      isDestroyed: () => false,
       contentView: { addChildView: vi.fn(), removeChildView: vi.fn() },
     } as never);
     nativeManager.open({ threadId: THREAD_ID });
@@ -468,8 +847,10 @@ describe("DesktopBrowserManager automation runtime boundary", () => {
           setBounds: vi.fn(),
           setVisible: vi.fn(),
           setBorderRadius: vi.fn(),
+          setBackgroundColor: vi.fn(),
         });
         manager.setWindow({
+          isDestroyed: () => false,
           contentView: { addChildView: vi.fn(), removeChildView: vi.fn() },
         } as never);
       }
@@ -510,11 +891,13 @@ describe("DesktopBrowserManager automation runtime boundary", () => {
       setBounds: vi.fn(),
       setVisible: vi.fn(),
       setBorderRadius: vi.fn(),
+      setBackgroundColor: vi.fn(),
     };
     webContentsViewConstructor.mockReturnValueOnce(nativeView);
 
     const manager = new DesktopBrowserManager();
     const hostWindow = {
+      isDestroyed: () => false,
       webContents: Object.assign(new EventEmitter(), { id: 41, isDestroyed: () => false }),
       contentView: { addChildView: vi.fn(), removeChildView: vi.fn() },
     };
@@ -562,11 +945,13 @@ describe("DesktopBrowserManager automation runtime boundary", () => {
       setBounds: vi.fn(),
       setVisible: vi.fn(),
       setBorderRadius: vi.fn(),
+      setBackgroundColor: vi.fn(),
     };
     webContentsViewConstructor.mockReturnValueOnce(nativeView);
 
     const manager = new DesktopBrowserManager();
     const hostWindow = {
+      isDestroyed: () => false,
       webContents: Object.assign(new EventEmitter(), { id: 41, isDestroyed: () => false }),
       contentView: { addChildView: vi.fn(), removeChildView: vi.fn() },
     };
@@ -608,10 +993,12 @@ describe("DesktopBrowserManager automation runtime boundary", () => {
         setBounds: vi.fn(),
         setVisible: vi.fn(),
         setBorderRadius: vi.fn(),
+        setBackgroundColor: vi.fn(),
       };
       webContentsViewConstructor.mockReturnValueOnce(nativeView);
       const manager = new DesktopBrowserManager();
       const hostWindow = {
+        isDestroyed: () => false,
         webContents: Object.assign(new EventEmitter(), { id: 41, isDestroyed: () => false }),
         contentView: { addChildView: vi.fn(), removeChildView: vi.fn() },
       };
@@ -656,6 +1043,7 @@ describe("DesktopBrowserManager automation runtime boundary", () => {
   it("creates a native background runtime after the renderer guest detaches", async () => {
     const manager = new DesktopBrowserManager();
     const hostWindow = {
+      isDestroyed: () => false,
       webContents: Object.assign(new EventEmitter(), { id: 41, isDestroyed: () => false }),
       contentView: { addChildView: vi.fn(), removeChildView: vi.fn() },
     };
@@ -675,6 +1063,7 @@ describe("DesktopBrowserManager automation runtime boundary", () => {
     const backgroundWebContents = new FakeWebContents(214);
     webContentsViewConstructor.mockReturnValueOnce({
       webContents: backgroundWebContents,
+      setBackgroundColor: vi.fn(),
       setBounds: vi.fn(),
       setVisible: vi.fn(),
     });
@@ -690,6 +1079,7 @@ describe("DesktopBrowserManager automation runtime boundary", () => {
   it("keeps the adopted renderer guest when agent tools claim the tab", async () => {
     const manager = new DesktopBrowserManager();
     const hostWindow = {
+      isDestroyed: () => false,
       webContents: Object.assign(new EventEmitter(), { id: 41, isDestroyed: () => false }),
       contentView: { addChildView: vi.fn(), removeChildView: vi.fn() },
     };
@@ -824,6 +1214,7 @@ describe("DesktopBrowserManager automation runtime boundary", () => {
   it("routes automation only after the adopted renderer guest is the visible panel surface", () => {
     const manager = new DesktopBrowserManager();
     const hostWindow = {
+      isDestroyed: () => false,
       webContents: Object.assign(new EventEmitter(), { id: 41, isDestroyed: () => false }),
       contentView: { addChildView: vi.fn(), removeChildView: vi.fn() },
     };
@@ -1590,6 +1981,7 @@ describe("DesktopBrowserManager automation runtime boundary", () => {
         setBounds: vi.fn(),
         setVisible: vi.fn(),
         setBorderRadius: vi.fn(),
+        setBackgroundColor: vi.fn(),
       };
       webContentsViewConstructor.mockReturnValueOnce(view);
       const preferences = { contextIsolation: true, sandbox: true, nodeIntegration: false };
@@ -1736,11 +2128,12 @@ describe("DesktopBrowserManager automation runtime boundary", () => {
       setBounds,
       setVisible: vi.fn(),
       setBorderRadius: vi.fn(),
+      setBackgroundColor: vi.fn(),
     };
     webContentsViewConstructor.mockReturnValueOnce(view);
     const manager = new DesktopBrowserManager();
     const parent = { addChildView: vi.fn(), removeChildView: vi.fn() };
-    manager.setWindow({ contentView: parent } as never);
+    manager.setWindow({ isDestroyed: () => false, contentView: parent } as never);
     const blank = manager.prepareAutomationTab({ threadId: THREAD_ID, reuse: true });
     const tabId = blank.activeTabId!;
     manager.prepareAutomationNavigation({
@@ -1781,9 +2174,11 @@ describe("DesktopBrowserManager automation runtime boundary", () => {
       setBounds: vi.fn(),
       setVisible: vi.fn(),
       setBorderRadius: vi.fn(),
+      setBackgroundColor: vi.fn(),
     });
     const manager = new DesktopBrowserManager();
     manager.setWindow({
+      isDestroyed: () => false,
       contentView: { addChildView: vi.fn(), removeChildView: vi.fn() },
     } as never);
     const prepared = manager.prepareAutomationTab({ threadId: THREAD_ID, reuse: true });
@@ -1817,6 +2212,7 @@ describe("DesktopBrowserManager automation runtime boundary", () => {
       webContentsViewConstructor.mockReturnValueOnce({
         webContents: nativeWebContents,
         setBounds: vi.fn(),
+        setBackgroundColor: vi.fn(),
       });
       const manager = new DesktopBrowserManager();
       const prepared = manager.prepareAutomationTab({ threadId: THREAD_ID, reuse: true });
@@ -1852,6 +2248,7 @@ describe("DesktopBrowserManager automation runtime boundary", () => {
           setBounds: vi.fn(),
           setVisible: vi.fn(),
           setBorderRadius: vi.fn(),
+          setBackgroundColor: vi.fn(),
         });
       }
 

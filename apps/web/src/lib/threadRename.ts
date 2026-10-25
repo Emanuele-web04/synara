@@ -124,7 +124,9 @@ export async function dispatchThreadRename(input: {
         ...(input.createIfMissing.lastKnownPr !== undefined
           ? { lastKnownPr: input.createIfMissing.lastKnownPr }
           : {}),
-        createdAt: input.createIfMissing.createdAt,
+        // Renaming a draft is also a promotion. Stamp the durable thread when the
+        // create command is dispatched rather than when the draft composer opened.
+        createdAt: new Date().toISOString(),
       },
       api,
     );

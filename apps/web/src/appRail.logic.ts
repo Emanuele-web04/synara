@@ -28,14 +28,15 @@ export const RAIL_PANEL_ITEM_LABELS: Record<RailPanelItemId, string> = {
 };
 /**
  * Rail items that navigate to a route. "New thread" stays in the panel, never the rail;
- * Inbox is Beta-only (see INBOX_ON).
+ * Inbox is available in Stable and Beta (see INBOX_ON).
  */
 export type RailRouteItemId = Exclude<SidebarNavItemId, "newThread"> | "studio" | "settings";
 export type RailItemId = RailPanelItemId | RailRouteItemId;
 
 /**
- * Rail items the user orders and hides from Customize. Settings stays pinned at the bottom;
- * Studio is also reachable from the "…" menu, so it starts hidden.
+ * Rail items the user orders and hides from Customize. Settings stays pinned at the bottom.
+ * Hubs ("studio") is shown by default like the rest; see HUBS_RAIL_DEFAULT_MIGRATION_STORAGE_KEY
+ * for settings saved while it started hidden.
  */
 export const RAIL_ORDERABLE_ITEM_IDS = [
   "home",
@@ -48,7 +49,7 @@ export const RAIL_ORDERABLE_ITEM_IDS = [
   "studio",
 ] as const;
 export type RailOrderableItemId = (typeof RAIL_ORDERABLE_ITEM_IDS)[number];
-export const DEFAULT_HIDDEN_RAIL_ITEMS: readonly RailOrderableItemId[] = ["studio"];
+export const DEFAULT_HIDDEN_RAIL_ITEMS: readonly RailOrderableItemId[] = [];
 
 const RAIL_ORDERABLE_ITEM_ID_SET: ReadonlySet<string> = new Set(RAIL_ORDERABLE_ITEM_IDS);
 
@@ -74,7 +75,7 @@ export function normalizeHiddenRailItems(hidden: readonly string[]): RailOrderab
 export interface RailAvailability {
   /** Studio needs its section enabled in Settings. */
   readonly studioAvailable: boolean;
-  /** Inbox ships in Beta only. */
+  /** Whether this host offers Inbox. */
   readonly inboxAvailable: boolean;
 }
 

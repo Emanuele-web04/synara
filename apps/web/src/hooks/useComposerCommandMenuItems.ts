@@ -1,4 +1,5 @@
 import type {
+  McpConnector,
   ProjectEntry,
   ProviderAgentDescriptor,
   ProviderArtifactsState,
@@ -30,6 +31,7 @@ import {
   getProviderNativeSlashCommandSearchTerms,
   shouldHideProviderNativeCommandFromComposerMenu,
 } from "../composerSlashCommands";
+import { mcpConnectorMentionPath } from "@synara/shared/mcpConnectors";
 import { threadMentionPathForThreadId } from "@synara/shared/threadMentions";
 import { isGroupContainerKind } from "@synara/shared/projectContainers";
 
@@ -304,6 +306,8 @@ export function useComposerCommandMenuItems(input: {
     readonly projects: readonly Project[];
     readonly currentThreadId: string | null;
   };
+  /** Connected connectors this provider's sessions receive. */
+  connectors?: readonly McpConnector[];
 }): ComposerCommandItem[] {
   const {
     composerTrigger,
@@ -323,6 +327,7 @@ export function useComposerCommandMenuItems(input: {
     providerArtifacts,
     dynamicAgents,
     threadMentionSources,
+    connectors,
   } = input;
 
   if (!composerTrigger) return [];
@@ -363,6 +368,18 @@ export function useComposerCommandMenuItems(input: {
       }));
     })();
 
+    const connectorItems = rankProviderDiscoveryItems(connectors ?? [], query, (connector) => [
+      { value: connector.name },
+      { value: connector.presetId ?? "", weight: 200 },
+    ]).map((connector) => ({
+      id: `connector:${connector.connectorId}`,
+      type: "connector" as const,
+      connectorName: connector.name,
+      mention: { name: connector.name, path: mcpConnectorMentionPath(connector.serverName) },
+      label: connector.name,
+      // Host only: some servers keep an API key in the URL path.
+      description: new URL(connector.url).host,
+    }));
     const pluginItems = rankProviderDiscoveryItems(
       providerPlugins.filter(({ plugin }) => isInstalledProviderPlugin(plugin)),
       query,
@@ -400,9 +417,16 @@ export function useComposerCommandMenuItems(input: {
           query: composerTrigger.query,
         })
       : [];
-    // Keep mention suggestions ordered by primary intent: plugins and chats
-    // first, then local context, then subagent delegation targets.
-    return [...pluginItems, ...threadItems, ...localRootItems, ...pathItems, ...agentItems];
+    // Keep mention suggestions ordered by primary intent: connectors, plugins,
+    // and chats first, then local context, then subagent delegation targets.
+    return [
+      ...connectorItems,
+      ...pluginItems,
+      ...threadItems,
+      ...localRootItems,
+      ...pathItems,
+      ...agentItems,
+    ];
   }
 
   if (composerTrigger.kind === "slash-command") {

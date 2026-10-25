@@ -29,7 +29,11 @@ describe("threadDetailResumeCursors", () => {
     expect(buildThreadSubscribeInput(thread)).toEqual({ threadId: thread });
 
     setThreadDetailResumeCursor(thread, 12);
-    expect(buildThreadSubscribeInput(thread)).toEqual({ threadId: thread, afterSequence: 12 });
+    expect(buildThreadSubscribeInput(thread)).toEqual({
+      threadId: thread,
+      afterSequence: 12,
+      batchReplay: true,
+    });
   });
 
   it("advances monotonically for events but lets snapshots overwrite backwards", () => {

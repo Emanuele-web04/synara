@@ -11,24 +11,16 @@ import {
 } from "@synara/contracts";
 import { useQuery } from "@tanstack/react-query";
 import React, { useMemo, type ReactNode, useDeferredValue, useState } from "react";
-import type { IconType } from "react-icons";
-import {
-  SiCanva,
-  SiFigma,
-  SiGithub,
-  SiGmail,
-  SiGooglecalendar,
-  SiGoogledrive,
-  SiHuggingface,
-  SiLinear,
-  SiNotion,
-  SiSlack,
-  SiStripe,
-  SiVercel,
-} from "react-icons/si";
 import { PROVIDER_ICON_COMPONENT_BY_PROVIDER } from "./ProviderIcon";
+import {
+  type BrandArtwork,
+  KNOWN_BRAND_ARTWORK,
+  normalizeBrandKey,
+  readableBrandColor,
+} from "~/lib/brandIcons";
 import { useStore } from "~/store";
 import { DEFAULT_PROVIDER_ORDER } from "~/providerOrdering";
+import { useAppSettings } from "~/appSettings";
 import {
   buildPluginSearchFields,
   buildSkillSearchFields,
@@ -57,6 +49,7 @@ import {
 } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 import { InputGroup, InputGroupAddon, InputGroupInput, InputGroupText } from "./ui/input-group";
+import { CHAT_BACKGROUND_CLASS_NAME } from "./chat/composerPickerStyles";
 import { SidebarInset } from "./ui/sidebar";
 import { SidebarHeaderNavigationControls } from "./SidebarHeaderNavigationControls";
 import {
@@ -75,30 +68,12 @@ type PluginEntry = {
   plugin: ProviderPluginDescriptor;
   isFeatured: boolean;
 };
-type PluginBrandArtwork = {
-  color: string;
-  icon: IconType;
-};
 
 // ── Constants ──────────────────────────────────────────────────────────────
 
 const PROVIDER_ICON: Record<ProviderKind, React.FC<React.SVGProps<SVGSVGElement>>> = {
   ...PROVIDER_ICON_COMPONENT_BY_PROVIDER,
   codex: HammerIcon,
-};
-const KNOWN_PLUGIN_BRANDS: Record<string, PluginBrandArtwork> = {
-  canva: { icon: SiCanva, color: "#00C4CC" },
-  figma: { icon: SiFigma, color: "#F24E1E" },
-  github: { icon: SiGithub, color: "#181717" },
-  gmail: { icon: SiGmail, color: "#EA4335" },
-  googlecalendar: { icon: SiGooglecalendar, color: "#4285F4" },
-  googledrive: { icon: SiGoogledrive, color: "#0F9D58" },
-  huggingface: { icon: SiHuggingface, color: "#FF9D00" },
-  linear: { icon: SiLinear, color: "#5E6AD2" },
-  notion: { icon: SiNotion, color: "#111111" },
-  slack: { icon: SiSlack, color: "#4A154B" },
-  stripe: { icon: SiStripe, color: "#635BFF" },
-  vercel: { icon: SiVercel, color: "#111111" },
 };
 
 // ── Utilities ──────────────────────────────────────────────────────────────
@@ -116,18 +91,11 @@ function resolvePluginAccent(plugin: ProviderPluginDescriptor): string | undefin
   return plugin.interface?.brandColor?.trim() || undefined;
 }
 
-function normalizeBrandKey(value: string | undefined): string {
-  return (value ?? "")
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9]/g, "");
-}
-
 function resolvePluginLogo(plugin: ProviderPluginDescriptor): string | undefined {
   return plugin.interface?.logo?.trim() || undefined;
 }
 
-function resolvePluginBrand(plugin: ProviderPluginDescriptor): PluginBrandArtwork | undefined {
+function resolvePluginBrand(plugin: ProviderPluginDescriptor): BrandArtwork | undefined {
   const candidates = [
     plugin.interface?.composerIcon,
     plugin.interface?.displayName,
@@ -136,7 +104,7 @@ function resolvePluginBrand(plugin: ProviderPluginDescriptor): PluginBrandArtwor
 
   for (const candidate of candidates) {
     if (!candidate) continue;
-    const knownBrand = KNOWN_PLUGIN_BRANDS[candidate];
+    const knownBrand = KNOWN_BRAND_ARTWORK[candidate];
     if (knownBrand) return knownBrand;
   }
 
@@ -195,7 +163,10 @@ function PluginGlyph({ plugin }: { plugin: ProviderPluginDescriptor }) {
         className="inline-flex size-11 shrink-0 items-center justify-center rounded-[14px] border border-border/60 bg-background"
         style={accent ? { boxShadow: `0 0 0 0.5px ${accent}25` } : undefined}
       >
-        <BrandIcon className="size-5" style={{ color: brand.color }} />
+        <BrandIcon
+          className="size-5"
+          style={{ color: readableBrandColor(brand.color) ?? "var(--foreground)" }}
+        />
       </span>
     );
   }
@@ -388,6 +359,10 @@ export function PluginLibrary(props?: {
   const providerThreadId = focusedThreadId;
 
   const serverConfigQuery = useQuery(serverConfigQueryOptions());
+  const { settings } = useAppSettings();
+  const enabledProviderOrder = DEFAULT_PROVIDER_ORDER.filter(
+    (provider) => !settings.disabledProviders.includes(provider),
+  );
   const codexCapabilitiesQuery = useQuery(providerComposerCapabilitiesQueryOptions("codex"));
   const claudeCapabilitiesQuery = useQuery(providerComposerCapabilitiesQueryOptions("claudeAgent"));
   const cursorCapabilitiesQuery = useQuery(providerComposerCapabilitiesQueryOptions("cursor"));
@@ -449,20 +424,25 @@ export function PluginLibrary(props?: {
   // tabs never renders an unsupported frame, and the user's own selection
   // resurfaces if its provider becomes capable again.
   const supportsSelectedTab =
-    selectedTab === "plugins"
+    !settings.disabledProviders.includes(selectedProvider) &&
+    (selectedTab === "plugins"
       ? providerCapabilities[selectedProvider].plugins
-      : providerCapabilities[selectedProvider].skills;
+      : providerCapabilities[selectedProvider].skills);
   const providerFallbackOrder =
     selectedTab === "plugins"
-      ? DEFAULT_PROVIDER_ORDER
-      : [preferredProvider, ...DEFAULT_PROVIDER_ORDER.filter((p) => p !== preferredProvider)];
+      ? enabledProviderOrder
+      : [preferredProvider, ...enabledProviderOrder.filter((p) => p !== preferredProvider)].filter(
+          (provider) => !settings.disabledProviders.includes(provider),
+        );
   const effectiveProvider = supportsSelectedTab
     ? selectedProvider
     : (providerFallbackOrder.find((provider) =>
         selectedTab === "plugins"
           ? providerCapabilities[provider].plugins
           : providerCapabilities[provider].skills,
-      ) ?? selectedProvider);
+      ) ??
+      providerFallbackOrder[0] ??
+      selectedProvider);
 
   const discoveryCwd = embedded
     ? (props?.cwd?.trim() ?? "") || null
@@ -472,9 +452,15 @@ export function PluginLibrary(props?: {
         serverCwd: serverConfigQuery.data?.cwd ?? null,
       });
 
-  const providerLabel = PROVIDER_DISPLAY_NAMES[effectiveProvider];
-  const canListPlugins = providerCapabilities[effectiveProvider].plugins;
-  const canListSkills = providerCapabilities[effectiveProvider].skills;
+  const providerLabel = enabledProviderOrder.includes(effectiveProvider)
+    ? PROVIDER_DISPLAY_NAMES[effectiveProvider]
+    : null;
+  const canListPlugins =
+    !settings.disabledProviders.includes(effectiveProvider) &&
+    providerCapabilities[effectiveProvider].plugins;
+  const canListSkills =
+    !settings.disabledProviders.includes(effectiveProvider) &&
+    providerCapabilities[effectiveProvider].skills;
 
   const pluginsQuery = useQuery(
     providerPluginsQueryOptions({
@@ -558,7 +544,7 @@ export function PluginLibrary(props?: {
       </div>
       <div className="flex-1" />
       <div className="inline-flex rounded-full border border-border/60 bg-background/60 p-0.5">
-        {DEFAULT_PROVIDER_ORDER.map((provider) => {
+        {enabledProviderOrder.map((provider) => {
           const capabilities = providerCapabilities[provider];
           const label = PROVIDER_DISPLAY_NAMES[provider];
           return (
@@ -590,7 +576,7 @@ export function PluginLibrary(props?: {
       {!embedded ? (
         <div className="px-6 py-10 text-center">
           <h1 className="text-[28px] font-semibold text-foreground">
-            Make {providerLabel} work your way
+            {providerLabel ? `Make ${providerLabel} work your way` : "Plugins and skills"}
           </h1>
         </div>
       ) : null}
@@ -604,6 +590,7 @@ export function PluginLibrary(props?: {
             </InputGroupText>
           </InputGroupAddon>
           <InputGroupInput
+            disabled={enabledProviderOrder.length === 0}
             value={selectedTab === "plugins" ? pluginSearch : skillSearch}
             onChange={(e) => {
               if (selectedTab === "plugins") setPluginSearch(e.target.value);
@@ -647,8 +634,16 @@ export function PluginLibrary(props?: {
             {!canListPlugins ? (
               <div className="mx-auto max-w-2xl">
                 <EmptyPanel
-                  title={`Plugins unavailable for ${providerLabel}`}
-                  description="This provider does not expose plugin discovery."
+                  title={
+                    providerLabel
+                      ? `Plugins unavailable for ${providerLabel}`
+                      : "No enabled providers"
+                  }
+                  description={
+                    providerLabel
+                      ? "This provider does not expose plugin discovery."
+                      : "Enable a provider in Settings → Providers to browse plugins and skills."
+                  }
                 />
               </div>
             ) : pluginsQuery.isLoading && pluginEntries.length === 0 ? (
@@ -682,8 +677,16 @@ export function PluginLibrary(props?: {
             {!canListSkills ? (
               <div className="mx-auto max-w-2xl">
                 <EmptyPanel
-                  title={`Skills unavailable for ${providerLabel}`}
-                  description="This provider does not expose skill discovery."
+                  title={
+                    providerLabel
+                      ? `Skills unavailable for ${providerLabel}`
+                      : "No enabled providers"
+                  }
+                  description={
+                    providerLabel
+                      ? "This provider does not expose skill discovery."
+                      : "Enable a provider in Settings → Providers to browse plugins and skills."
+                  }
                 />
               </div>
             ) : skillsQuery.isLoading && discoveredSkills.length === 0 ? (
@@ -716,7 +719,10 @@ export function PluginLibrary(props?: {
       {body}
     </div>
   ) : (
-    <SidebarInset className="h-dvh min-h-0 overflow-hidden isolate">
+    <SidebarInset
+      className="h-dvh min-h-0 overflow-hidden isolate"
+      surfaceClassName={CHAT_BACKGROUND_CLASS_NAME}
+    >
       <div className="flex h-full flex-col">
         {/* ── Top nav ───────────────────────────────────────────────────── */}
         <div
@@ -726,7 +732,7 @@ export function PluginLibrary(props?: {
             desktopTopBarWindowControlsGutterClassName,
           )}
         >
-          <SidebarHeaderNavigationControls />
+          <SidebarHeaderNavigationControls collapsedGapClassName="-me-3" />
           {tabsAndProviderPicker}
         </div>
         {body}

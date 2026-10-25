@@ -128,7 +128,8 @@ describe("trustedOrigins", () => {
     ).toBe(false);
   });
 
-  it("normalizes desktop origins with trailing slashes", () => {
+  it("normalizes desktop origins and single Origin-header arrays", () => {
+    expect(normalizeCorsOrigin(["http://localhost:5173"])).toBe("http://localhost:5173");
     expect(normalizeCorsOrigin("synara://app/")).toBe("synara://app");
     expect(normalizeCorsOrigin("synara-canary://app/")).toBe("synara-canary://app");
     expect(normalizeCorsOrigin("synara-cua://app/")).toBe("synara-cua://app");
@@ -169,34 +170,23 @@ describe("trustedOrigins", () => {
   });
 
   it("rejects present but untrusted request origins for websocket-style gates", () => {
-    expect(
-      shouldRejectUntrustedRequestOrigin({
-        rawOrigin: undefined,
-        requestOrigin: "http://127.0.0.1:58090",
-        config,
-      }),
-    ).toBe(false);
-    expect(
-      shouldRejectUntrustedRequestOrigin({
-        rawOrigin: "null",
-        requestOrigin: "http://127.0.0.1:58090",
-        config,
-      }),
-    ).toBe(true);
-    expect(
-      shouldRejectUntrustedRequestOrigin({
-        rawOrigin: "https://example.test",
-        requestOrigin: "http://127.0.0.1:58090",
-        config,
-      }),
-    ).toBe(true);
-    expect(
-      shouldRejectUntrustedRequestOrigin({
-        rawOrigin: "http://localhost:5173",
-        requestOrigin: "http://127.0.0.1:58090",
-        config,
-      }),
-    ).toBe(false);
+    const duplicateOrigins = ["http://localhost:5173", "https://example.test"];
+    expect(normalizeCorsOrigin(duplicateOrigins)).toBeNull();
+    for (const [rawOrigin, rejected] of [
+      [undefined, false],
+      ["null", true],
+      ["https://example.test", true],
+      ["http://localhost:5173", false],
+      [duplicateOrigins, true],
+    ] as const) {
+      expect(
+        shouldRejectUntrustedRequestOrigin({
+          rawOrigin,
+          requestOrigin: "http://127.0.0.1:58090",
+          config,
+        }),
+      ).toBe(rejected);
+    }
     expect(
       shouldRejectUntrustedRequestOrigin({
         rawOrigin: "http://192.168.1.50:3773",

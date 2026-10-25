@@ -1,12 +1,11 @@
 {
   "name": "@synara/web",
-  "version": "0.9.2",
+  "version": "1.0.9",
   "private": true,
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "prepare": "effect-language-service patch",
     "preview": "vite preview",
     "typecheck": "node ../../node_modules/@typescript/native/bin/tsc --noEmit --tsBuildInfoFile node_modules/.cache/typescript-native.tsbuildinfo",
     "typecheck:native": "bun run typecheck",
@@ -16,6 +15,7 @@
     "test:browser:stable": "vitest run --config vitest.browser.stable.config.ts",
     "test:browser:ci": "vitest run --config vitest.browser.ci.config.ts",
     "test:browser:geometry": "vitest run --config vitest.browser.geometry.config.ts",
+    "test:editor:e2e": "playwright test --config playwright.editor.config.ts",
     "test:electron:e2e": "playwright test --config playwright.electron.config.ts",
     "test:browser:install": "playwright install --with-deps chromium",
     "measure:lcp": "node scripts/measure-lcp.mjs"
@@ -52,6 +52,7 @@
     "katex": "^0.16.45",
     "lexical": "^0.41.0",
     "micromark-util-decode-string": "2.0.1",
+    "monaco-editor": "0.57.0",
     "pdfjs-dist": "^5.4.296",
     "react": "^19.0.0",
     "react-colorful": "^5.6.1",
@@ -59,6 +60,8 @@
     "react-icons": "^5.6.0",
     "react-markdown": "^10.1.0",
     "rehype-katex": "^7.0.1",
+    "rehype-raw": "^7.0.0",
+    "rehype-sanitize": "^6.0.0",
     "remark-breaks": "^4.0.0",
     "remark-gfm": "^4.0.1",
     "remark-math": "^6.0.0",

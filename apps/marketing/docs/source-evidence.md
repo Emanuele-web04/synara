@@ -393,3 +393,39 @@ Existing external links are unchanged. UI/CI-only changes are covered by release
 notes, without unsupported battery, latency or package-size percentages. The new
 and updated guides are mirrored to Synara's marketing docs without replacing
 unrelated site-specific content.
+
+## Synara 1.0.5 Stable / 1.0.6-beta.1 audit — 2026-10-15
+
+Authority: feature head `4b2441d1040080324f458602e30fbb7f946cb1f5`, tree
+`84da13f198460c42b11fd12db7ddeeb935cd7cc8`; complete Stable range after
+`v1.0.4` and Beta range after `v1.0.2-beta.1`. Per-change source map:
+Synara `docs/releases/1.0.5-source-audit.md`.
+
+Production deploys from the separate website repository; apps/marketing is the
+Synara repository mirror. The current production guides already documented
+1.0.3/1.0.4 recovery and Computer Use. Their detail is retained, and stale
+history/cache claims in the mirror are replaced. New inline-visual and Beta
+Connectors guides have navigation and overview links and extend the existing
+navigation contract. Composer, Activity, subagent navigation, handoff, browser
+focus, Claude permission/accounting and simulator behavior were checked against
+the release source. No new external links were added.
+
+No real OAuth sign-in, installed-app upgrade, live microphone capture or
+universal provider/website compatibility is established by the docs audit.
+Unrelated dirty files in the older local website checkout remain untouched.
+
+## Synara 1.0.6 release audit — 2026-10-16
+
+Source: Stable range `v1.0.5..612aff6d8fdcdb9e849d8c8750a8683e7e2dca81` (16 commits). Provider discovery and troubleshooting updates cite their owning source files inline. Changelog highlights mirror the app entry; no Beta-only feature is promoted. Download snapshots are refreshed only after publication.
+
+## Stable 1.0.8 and Beta 1.0.9-beta.1 source audit
+
+Audited application source: `f9ba953a6a26769bf73c78c2bae673e5a09ba62f`, all 32 commits after Stable 1.0.7, plus the prior Stable changes since Beta 1.0.6-beta.1. Evidence: `docs/releases/1.0.8-source-audit.md`, `docs/editor/intelligence.md`, `docs/hubs.md`, `docs/providers.md`, `docs/core-concepts.md`, `docs/sqlite-space-reclamation.md`, shared Beta feature policy, server editor gate, provider/runtime adapters, checkpoint queries, keyboard bindings and desktop window/Safari handlers.
+
+Updated existing guides and their navigation dependencies for editor/debugger limits, live diffs, handoffs, Hubs, subagents, navigation/focus, actions, terminal reuse, Safari access, simulator ownership and conservative storage maintenance. Native editor and connectors remain Beta-only; Stable retains its editor. Publication and deployed-site verification are recorded separately after the exact release candidates pass.
+
+Publication verified: [Stable v1.0.8](https://github.com/Emanuele-web04/synara/releases/tag/v1.0.8), source `d7542782fd52a1dedf9634e1765ab62fa60e259f`, passed [workflow 39971610367](https://github.com/Emanuele-web04/synara/actions/runs/39971610367). [Beta v1.0.9-beta.1](https://github.com/Emanuele-web04/synara/releases/tag/v1.0.9-beta.1), source `143913ce19b343167072437c3871ec2ed1cd1160`, passed [workflow 39974728669](https://github.com/Emanuele-web04/synara/actions/runs/39974728669). Both exact-tag runs passed complete quality/server tests, four native packages, provenance, macOS signing/notarization and Intel startup, plus Windows Defender/startup under their exact version-scoped unsigned exceptions. Each public release has 18 assets; source and lockfile identities, public URLs and byte-identical channel aliases were verified. Stable remains Latest, Beta remains a prerelease, and the historical compatibility feed is unchanged. Download snapshots follow Stable 1.0.8. Manual installed-app upgrades, live provider/microphone behavior and browser-download reputation remain separately unqualified.
+
+## Synara Stable 1.0.9
+
+Authority: release candidate `ebd0d22b39ce3a0f7c6051dddc6090e9b85dc7c3` (tag `v1.0.9`), complete range `v1.0.8..ebd0d22b39ce3a0f7c6051dddc6090e9b85dc7c3` and `docs/releases/1.0.9-source-audit.md`. Audited Stable editor/connector promotion, conditional Stop and durable progress, visible goals, local project glyphs and worker actions, isolated OpenCode login/discovery, compressed SQLite recovery and macOS 13 updater gating. Existing guides and navigation are reused; no disconnected guide is added. Packaged startup is distinct from manual upgrades, macOS 13 runtime and live provider/connector sign-in.

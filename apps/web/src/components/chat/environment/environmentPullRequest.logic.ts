@@ -1,3 +1,4 @@
+import { normalizeGitHubPullRequestUrl } from "@synara/shared/githubRepository";
 // FILE: environmentPullRequest.logic.ts
 // Purpose: Pure display/prompt helpers for the Environment panel "Pull request" section —
 //          check-rollup summaries, review-comment display models, the repair prompts that
@@ -5,11 +6,13 @@
 //          context cards ("Repair", "Add to chat") that carry those prompts.
 // Layer: Web domain helpers (no React)
 
-import type {
-  GitPullRequestCheck,
-  GitPullRequestComment,
-  PullRequestCheck,
-  PullRequestComment,
+import {
+  PULL_REQUEST_AUTO_FIX_MAX_ATTEMPTS,
+  type GitPullRequestCheck,
+  type GitPullRequestComment,
+  type PullRequestAutoFixState,
+  type PullRequestCheck,
+  type PullRequestComment,
 } from "@synara/contracts";
 import { pluralize } from "@synara/shared/text";
 
@@ -430,6 +433,62 @@ export interface PullRequestRepairAvailability {
   total: number;
 }
 
+export interface PullRequestAutoFixDisplay {
+  checked: boolean;
+  /** Short status beside the checkbox; null while it is simply watching (or off). */
+  trailing: string | null;
+  title: string;
+}
+
+/** A chat watches each PR separately; a PR missing from the list has auto-fix off. */
+export function findPullRequestAutoFixState(
+  states: ReadonlyArray<PullRequestAutoFixState>,
+  pullRequestUrl: string | null | undefined,
+): PullRequestAutoFixState | null {
+  const url = normalizeGitHubPullRequestUrl(pullRequestUrl);
+  return url
+    ? (states.find(
+        (state) =>
+          normalizeGitHubPullRequestUrl(state.pullRequestUrl) === url ||
+          normalizeGitHubPullRequestUrl(state.requestedPullRequestUrl) === url,
+      ) ?? null)
+    : null;
+}
+
+// A paused auto-fix reads as unchecked: ticking it again is how the user resumes.
+export function describePullRequestAutoFix(
+  state: PullRequestAutoFixState | null,
+): PullRequestAutoFixDisplay {
+  if (state === null) {
+    return {
+      checked: false,
+      trailing: null,
+      title: "Start a fix turn in this chat when CI fails on this pull request",
+    };
+  }
+  switch (state.status) {
+    case "watching":
+      return { checked: true, trailing: null, title: "Watching CI on this pull request" };
+    case "fixing":
+      return {
+        checked: true,
+        trailing: "Fixing",
+        title: "A fix turn is running for the failing checks",
+      };
+    case "paused":
+      return {
+        checked: false,
+        trailing: "Paused",
+        title:
+          state.pauseReason === "dispatch-interrupted"
+            ? "The fix request was interrupted. Turn Auto-fix CI on again to resume."
+            : state.pauseReason === "no-push"
+              ? "Paused: the last fix turn did not push a commit. Turn it on again to retry."
+              : `Paused: checks still failed after ${PULL_REQUEST_AUTO_FIX_MAX_ATTEMPTS} fix attempts. Turn it on again to retry.`,
+      };
+  }
+}
+
 export function summarizePullRequestRepairs(input: {
   checks: ReadonlyArray<GitPullRequestCheck>;
   comments: ReadonlyArray<GitPullRequestComment>;
@@ -725,7 +784,10 @@ export function createGitHubItemContextDraft(
     pr: { number: item.number, url: item.url },
     title: `#${item.number} ${item.title}`,
     subtitle: `${item.itemKind === "issue" ? "Issue" : "Pull request"} in ${item.repository}`,
-    text: buildGitHubItemReferencePrompt(item, options),
+    // The PR URL is the reference; let the agent read current GitHub details as needed.
+    // Keep the title/subtitle for the card without copying the discussion into the prompt.
+    text:
+      item.itemKind === "pullRequest" ? item.url : buildGitHubItemReferencePrompt(item, options),
   });
   return item.itemKind === "issue" ? { ...draft, itemKind: "issue" } : draft;
 }

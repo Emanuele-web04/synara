@@ -5,8 +5,8 @@
  * bearer token) into every provider's native MCP configuration format so the
  * injection rules cannot drift between adapters:
  *
- * - Codex: `[mcp_servers.synara]` TOML block (streamable HTTP +
- *   `bearer_token_env_var` resolved from the per-session process env).
+ * - Codex: a shared endpoint-only TOML block plus per-thread HTTP authorization,
+ *   or the legacy `bearer_token_env_var` transport for environment-based callers.
  * - Claude Agent SDK: `mcpServers` record with an HTTP entry.
  * - ACP agents (cursor/grok/droid): `mcpServers` session entries; HTTP when
  *   the agent advertises `mcpCapabilities.http`, otherwise a stdio proxy that
@@ -33,7 +33,8 @@ function authorizationHeader(connection: AgentGatewayMcpConnection): string {
 /**
  * Codex reads MCP servers from `config.toml`; the config file is shared by all
  * sessions of one Codex home, so the token is never written into it. Instead
- * the block references an env var that Synara sets per app-server process.
+ * the block references an env var for environment-based callers, or omits it
+ * when the manager supplies authorization in per-thread protocol configuration.
  *
  * The shell_environment_policy table keeps that env var out of exec tool
  * subprocesses: codex defaults to `ignore_default_excludes = true`, so the
@@ -41,15 +42,37 @@ function authorizationHeader(connection: AgentGatewayMcpConnection): string {
  * inherit the gateway bearer token. Appended per-table, so a user-defined
  * policy table is never duplicated (their policy then governs).
  */
-export function buildCodexMcpConfigToml(endpointUrl: string): string {
+export function buildCodexMcpConfigToml(
+  endpointUrl: string,
+  credentialTransport: "environment" | "thread" = "environment",
+): string {
   return [
     `[mcp_servers.${SYNARA_MCP_SERVER_NAME}]`,
     `url = ${JSON.stringify(endpointUrl)}`,
-    `bearer_token_env_var = ${JSON.stringify(SYNARA_AGENT_GATEWAY_TOKEN_ENV)}`,
+    ...(credentialTransport === "environment"
+      ? [`bearer_token_env_var = ${JSON.stringify(SYNARA_AGENT_GATEWAY_TOKEN_ENV)}`]
+      : []),
     "",
     "[shell_environment_policy]",
     `exclude = [${JSON.stringify(SYNARA_AGENT_GATEWAY_TOKEN_ENV)}]`,
   ].join("\n");
+}
+
+/** Sent only over the owned app-server pipe, never written to the shared home. */
+export function buildCodexMcpThreadConfig(connection: AgentGatewayMcpConnection) {
+  const headers = { Authorization: authorizationHeader(connection) };
+  const mcpServers: Record<
+    string,
+    { readonly url: string; readonly http_headers: Record<string, string> }
+  > = {
+    [SYNARA_MCP_SERVER_NAME]: { url: connection.url, http_headers: headers },
+  };
+  // Connectors only exist in the per-thread config: Codex starts servers it
+  // first sees here, and the shared config.toml must stay secret-free.
+  for (const connector of connection.connectors ?? []) {
+    mcpServers[connector.name] = { url: connector.url, http_headers: headers };
+  }
+  return { mcp_servers: mcpServers };
 }
 
 export interface ClaudeMcpHttpServerConfig {
@@ -82,6 +105,22 @@ export function buildOpenCodeMcpServer(
     headers: { Authorization: authorizationHeader(connection) },
     oauth: false,
   };
+}
+
+/** Connector proxies in OpenCode's `mcp.add` shape; same scoping rules as above. */
+export function buildOpenCodeConnectorMcpServers(
+  connection: AgentGatewayMcpConnection,
+): Array<{ readonly name: string; readonly config: OpenCodeMcpRemoteServerConfig }> {
+  return (connection.connectors ?? []).map((connector) => ({
+    name: connector.name,
+    config: {
+      type: "remote",
+      url: connector.url,
+      enabled: true,
+      headers: { Authorization: authorizationHeader(connection) },
+      oauth: false,
+    },
+  }));
 }
 
 export interface AgentGatewayMcpToolDescriptor {
@@ -190,13 +229,14 @@ export function callAgentGatewayMcpTool(input: {
 export function buildClaudeMcpServers(
   connection: AgentGatewayMcpConnection,
 ): Record<string, ClaudeMcpHttpServerConfig> {
-  return {
-    [SYNARA_MCP_SERVER_NAME]: {
-      type: "http",
-      url: connection.url,
-      headers: { Authorization: authorizationHeader(connection) },
-    },
+  const headers = { Authorization: authorizationHeader(connection) };
+  const servers: Record<string, ClaudeMcpHttpServerConfig> = {
+    [SYNARA_MCP_SERVER_NAME]: { type: "http", url: connection.url, headers },
   };
+  for (const connector of connection.connectors ?? []) {
+    servers[connector.name] = { type: "http", url: connector.url, headers };
+  }
+  return servers;
 }
 
 export type AcpStdioProxySpawn = AgentGatewayStdioProxySpawn;
@@ -268,13 +308,19 @@ export function buildAcpSynaraMcpServers(input: {
 }): Array<Acp.McpServer> {
   const supportsHttp = input.initializeResult.agentCapabilities?.mcpCapabilities?.http === true;
   if (supportsHttp) {
+    const headers = [{ name: "Authorization", value: authorizationHeader(input.connection) }];
     return [
-      {
-        type: "http",
-        name: SYNARA_MCP_SERVER_NAME,
-        url: input.connection.url,
-        headers: [{ name: "Authorization", value: authorizationHeader(input.connection) }],
-      },
+      { type: "http", name: SYNARA_MCP_SERVER_NAME, url: input.connection.url, headers },
+      // Connectors need Streamable HTTP sessions, which the stdio proxy below
+      // does not carry, so stdio-only agents run without them.
+      ...(input.connection.connectors ?? []).map(
+        (connector): Acp.McpServer => ({
+          type: "http",
+          name: connector.name,
+          url: connector.url,
+          headers: [...headers],
+        }),
+      ),
     ];
   }
   return [

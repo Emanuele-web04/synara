@@ -1,8 +1,10 @@
 import "../index.css";
-import type { DesktopBridge } from "@synara/contracts";
+import type { DesktopBridge, DesktopSafariAccessInfo } from "@synara/contracts";
 import { page } from "vitest/browser";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";
+import { useAnnouncementSheetSlotStore } from "./announcementSheetSlot";
+import { useOnboardingDialogStore } from "../onboarding/onboardingDialogStore";
 import {
   SafariAccessOnboarding,
   SafariAccessSetupButton,
@@ -10,18 +12,27 @@ import {
 } from "./SafariAccessOnboarding";
 
 const originalBridge = window.desktopBridge;
+const SUPPORTED_INFO = {
+  supported: true,
+  appName: "Synara (Dev)",
+  appPath: "/Applications/Synara (Dev).app",
+} as const;
+const defaultInfo = async (): Promise<DesktopSafariAccessInfo> => SUPPORTED_INFO;
 const api = {
-  getInfo: vi.fn(async () => ({
-    supported: true as const,
-    appName: "Synara (Dev)",
-    appPath: "/Applications/Synara (Dev).app",
-  })),
+  getInfo: vi.fn(defaultInfo),
   openSettings: vi.fn(async () => true),
   revealApp: vi.fn(async () => true),
 };
 
 beforeEach(() => {
+  useAnnouncementSheetSlotStore.setState({ owner: null, handedOff: false });
+  useOnboardingDialogStore.setState({
+    startupGateSettled: true,
+    isOpen: false,
+    betaWelcomePending: false,
+  });
   vi.clearAllMocks();
+  api.getInfo.mockImplementation(defaultInfo);
   localStorage.removeItem(SAFARI_ACCESS_STORAGE_KEY);
   window.desktopBridge = { safariAccess: api } as unknown as DesktopBridge;
 });
@@ -34,7 +45,7 @@ afterEach(() => {
 function Harness() {
   return (
     <>
-      <SafariAccessOnboarding>
+      <SafariAccessOnboarding startup>
         <p>Next welcome</p>
       </SafariAccessOnboarding>
       <SafariAccessSetupButton />
@@ -43,6 +54,55 @@ function Harness() {
 }
 
 describe("Safari access onboarding", () => {
+  it("opens manual setup despite a pending startup gate and an occupied slot", async () => {
+    localStorage.setItem(SAFARI_ACCESS_STORAGE_KEY, JSON.stringify("later"));
+    useOnboardingDialogStore.setState({ startupGateSettled: false });
+    useAnnouncementSheetSlotStore.setState({ owner: "startup-surface", handedOff: false });
+    const screen = await render(<Harness />);
+    try {
+      await expect.element(page.getByText("Next welcome")).toBeVisible();
+      await page.getByRole("button", { name: "Safari import setup" }).click();
+      await expect.element(page.getByRole("dialog")).toBeVisible();
+      // Reopening setup must preserve the caller and leave startup ownership alone.
+      await expect.element(page.getByText("Next welcome")).toBeVisible();
+      expect(useAnnouncementSheetSlotStore.getState().owner).toBe("startup-surface");
+      expect(JSON.parse(localStorage.getItem(SAFARI_ACCESS_STORAGE_KEY)!)).toBe("later");
+      await page.getByRole("button", { name: "Open System Settings" }).click();
+      await expect.element(page.getByRole("status")).toHaveTextContent("quit and reopen");
+      await page.getByRole("button", { name: "Not now", exact: true }).click();
+      await expect.element(page.getByRole("dialog")).not.toBeInTheDocument();
+      expect(JSON.parse(localStorage.getItem(SAFARI_ACCESS_STORAGE_KEY)!)).toBe("later");
+      expect(useAnnouncementSheetSlotStore.getState().owner).toBe("startup-surface");
+    } finally {
+      await screen.unmount();
+    }
+  });
+  it("keeps follow-on surfaces mounted after handoff and allows a manual Safari revisit", async () => {
+    useAnnouncementSheetSlotStore.setState({ handedOff: true });
+    const screen = await render(<Harness />);
+    try {
+      await expect.element(page.getByText("Next welcome")).toBeVisible();
+      await expect.element(page.getByRole("dialog")).not.toBeInTheDocument();
+      expect(localStorage.getItem(SAFARI_ACCESS_STORAGE_KEY)).toBeNull();
+      await page.getByRole("button", { name: "Safari import setup" }).click();
+      await expect.element(page.getByRole("dialog")).toBeVisible();
+    } finally {
+      await screen.unmount();
+    }
+  });
+  it("waits for the shared slot without acknowledging the Safari intro", async () => {
+    useAnnouncementSheetSlotStore.getState().claim("onboarding");
+    const screen = await render(<Harness />);
+    try {
+      await vi.waitFor(() => expect(api.getInfo).toHaveBeenCalled());
+      await expect.element(page.getByRole("dialog")).not.toBeInTheDocument();
+      expect(localStorage.getItem(SAFARI_ACCESS_STORAGE_KEY)).toBeNull();
+      useAnnouncementSheetSlotStore.getState().release("onboarding");
+      await expect.element(page.getByRole("dialog")).toBeVisible();
+    } finally {
+      await screen.unmount();
+    }
+  });
   it("shows optional first-launch guidance and serializes other welcome dialogs", async () => {
     await render(<Harness />);
     await expect.element(page.getByRole("dialog")).toBeVisible();
@@ -56,6 +116,35 @@ describe("Safari access onboarding", () => {
     expect(api.openSettings).not.toHaveBeenCalled();
     expect(localStorage.getItem(SAFARI_ACCESS_STORAGE_KEY)).toBeNull();
   });
+
+  it("does not show startup guidance once Full Disk Access is granted", async () => {
+    api.getInfo.mockResolvedValue({ ...SUPPORTED_INFO, fullDiskAccess: "granted" });
+    await render(<Harness />);
+    await expect.element(page.getByText("Next welcome")).toBeVisible();
+    await expect.element(page.getByRole("dialog")).not.toBeInTheDocument();
+    expect(localStorage.getItem(SAFARI_ACCESS_STORAGE_KEY)).toBeNull();
+    await page.getByRole("button", { name: "Safari import setup" }).click();
+    const dialog = page.getByRole("dialog");
+    await expect.element(dialog).toHaveTextContent("Full Disk Access is on for Synara (Dev).");
+    await expect.element(dialog).toHaveTextContent("Saved logins › Import browser cookies");
+    await expect.element(dialog).not.toHaveTextContent("Quit and reopen");
+    await expect
+      .element(page.getByRole("button", { name: "Show app in Finder" }))
+      .not.toBeInTheDocument();
+  });
+
+  it.each(["denied", "unknown"] as const)(
+    "keeps the setup steps when Full Disk Access is %s",
+    async (fullDiskAccess) => {
+      api.getInfo.mockResolvedValue({ ...SUPPORTED_INFO, fullDiskAccess });
+      await render(<Harness />);
+      const dialog = page.getByRole("dialog");
+      await expect.element(dialog).toBeVisible();
+      await expect.element(dialog).toHaveTextContent("Quit and reopen Synara.");
+      await expect.element(dialog).not.toHaveTextContent("Full Disk Access is on");
+      await expect.element(page.getByRole("button", { name: "Show app in Finder" })).toBeVisible();
+    },
+  );
 
   it("persists Not now across remounts and allows revisiting", async () => {
     const mounted = await render(<Harness />);

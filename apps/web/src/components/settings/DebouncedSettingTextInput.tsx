@@ -7,6 +7,7 @@
 import { type ComponentProps, useCallback, useEffect, useRef, useState } from "react";
 
 import { Input } from "~/components/ui/input";
+import { Textarea } from "~/components/ui/textarea";
 
 type DebouncedSettingTextInputProps = Omit<
   ComponentProps<typeof Input>,
@@ -28,6 +29,59 @@ export function DebouncedSettingTextInput({
   ...inputProps
 }: DebouncedSettingTextInputProps) {
   const debounceMs = debounceMsProp ?? 200;
+  const field = useDebouncedSettingText(value, onCommit, debounceMs);
+  return (
+    <Input
+      {...inputProps}
+      value={field.draft}
+      onChange={(event) => field.change(event.target.value)}
+      onFocus={(event) => {
+        field.focus();
+        onFocus?.(event);
+      }}
+      onBlur={(event) => {
+        field.blur();
+        onBlur?.(event);
+      }}
+    />
+  );
+}
+
+export function DebouncedSettingTextarea({
+  value,
+  onCommit,
+  debounceMs = 200,
+  onBlur,
+  onFocus,
+  ...textareaProps
+}: Omit<ComponentProps<typeof Textarea>, "value" | "onChange" | "defaultValue"> & {
+  value: string;
+  onCommit: (value: string) => void;
+  debounceMs?: number;
+}) {
+  const field = useDebouncedSettingText(value, onCommit, debounceMs);
+  return (
+    <Textarea
+      {...textareaProps}
+      value={field.draft}
+      onChange={(event) => field.change(event.target.value)}
+      onFocus={(event) => {
+        field.focus();
+        onFocus?.(event);
+      }}
+      onBlur={(event) => {
+        field.blur();
+        onBlur?.(event);
+      }}
+    />
+  );
+}
+
+function useDebouncedSettingText(
+  value: string,
+  onCommit: (value: string) => void,
+  debounceMs: number,
+) {
   const [draft, setDraft] = useState(value);
   const focusedRef = useRef(false);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -78,29 +132,23 @@ export function DebouncedSettingTextInput({
     [],
   );
 
-  return (
-    <Input
-      {...inputProps}
-      value={draft}
-      onChange={(event) => {
-        const next = event.target.value;
-        setDraft(next);
-        latestDraftRef.current = next;
-        clearTimer();
-        timerRef.current = setTimeout(() => {
-          timerRef.current = null;
-          onCommitRef.current(next);
-        }, debounceMs);
-      }}
-      onFocus={(event) => {
-        focusedRef.current = true;
-        onFocus?.(event);
-      }}
-      onBlur={(event) => {
-        focusedRef.current = false;
-        flush();
-        onBlur?.(event);
-      }}
-    />
-  );
+  return {
+    draft,
+    change: (next: string) => {
+      setDraft(next);
+      latestDraftRef.current = next;
+      clearTimer();
+      timerRef.current = setTimeout(() => {
+        timerRef.current = null;
+        onCommitRef.current(next);
+      }, debounceMs);
+    },
+    focus: () => {
+      focusedRef.current = true;
+    },
+    blur: () => {
+      focusedRef.current = false;
+      flush();
+    },
+  };
 }

@@ -47,10 +47,18 @@ async function loadIconNodes(exportName) {
   return module.default;
 }
 
-function toPathEntry(exportName, [tag, attributes]) {
-  if (tag !== "path") {
+// A <circle> is drawn as the two-arc path it is equivalent to, since createHugeicon draws paths only.
+function circleToPath({ cx, cy, r, ...rest }) {
+  const [x, y, radius] = [Number(cx), Number(cy), Number(r)];
+  const d = `M${x - radius} ${y}A${radius} ${radius} 0 1 0 ${x + radius} ${y}A${radius} ${radius} 0 1 0 ${x - radius} ${y}Z`;
+  return { ...rest, d };
+}
+
+function toPathEntry(exportName, [tag, nodeAttributes]) {
+  if (tag !== "path" && tag !== "circle") {
     throw new Error(`${exportName}: <${tag}> is not supported; createHugeicon draws paths only.`);
   }
+  const attributes = tag === "circle" ? circleToPath(nodeAttributes) : nodeAttributes;
   const { d, key: _key, stroke, strokeWidth, strokeLinecap, strokeLinejoin, ...rest } = attributes;
   const unsupported = Object.keys(rest);
   if (stroke !== "currentColor" || strokeWidth !== "1.5" || unsupported.length > 0) {
@@ -58,11 +66,11 @@ function toPathEntry(exportName, [tag, attributes]) {
       `${exportName}: not a plain 1.5 stroke path (${JSON.stringify(attributes)}); pick the stroke · rounded style.`,
     );
   }
-  if ((strokeLinecap === "round") !== (strokeLinejoin === "round")) {
-    throw new Error(`${exportName}: mixed round caps and joins are not supported.`);
-  }
-  return strokeLinecap === "round"
-    ? `  { d: ${JSON.stringify(d)}, round: true },`
+  const roundCap = strokeLinecap === "round";
+  const roundJoin = strokeLinejoin === "round";
+  const flag = roundCap && roundJoin ? "round" : roundCap ? "roundCap" : "roundJoin";
+  return roundCap || roundJoin
+    ? `  { d: ${JSON.stringify(d)}, ${flag}: true },`
     : `  { d: ${JSON.stringify(d)} },`;
 }
 

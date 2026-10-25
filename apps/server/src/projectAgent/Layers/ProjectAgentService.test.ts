@@ -13,6 +13,7 @@ import {
   ProjectInboxEventId,
   ProjectTaskId,
   ThreadId,
+  type HubWorkRecord,
   type OrchestrationCommand,
   type ProviderKind,
   type ProjectAgentStreamEvent,
@@ -20,6 +21,8 @@ import {
   type ServerSettings,
 } from "@synara/contracts";
 import { MEMORY_AUTO_DOCUMENT_PATH, memoryThreadDocumentPath } from "@synara/shared/projectAgent";
+import { vi } from "vitest";
+import { PersistenceSqlError } from "../../persistence/Errors.ts";
 import { Cause, Deferred, Effect, Fiber, Layer, Option, Stream } from "effect";
 import { TestClock } from "effect/testing";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
@@ -33,10 +36,18 @@ import { AutomationService } from "../../automation/Services/AutomationService.t
 import { OrchestrationEngineService } from "../../orchestration/Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { ProjectAgentRepositoryLive } from "../../persistence/Layers/ProjectAgentRepository.ts";
+import { HubWorkRepositoryLive } from "../../persistence/Layers/HubWorkRepository.ts";
+import { HubWorkRepository } from "../../persistence/Services/HubWorkRepository.ts";
 import { SqlitePersistenceMemory } from "../../persistence/Layers/Sqlite.ts";
 import { ProjectAgentRepository } from "../../persistence/Services/ProjectAgentRepository.ts";
 import { ProjectionThreadRepository } from "../../persistence/Services/ProjectionThreads.ts";
 import { coordinatorWelcomeMessageId } from "../groupCoordinatorHost.ts";
+import {
+  HUB_CONTEXT_PACKET_PROVENANCE_LEGEND,
+  hubContextPacketRoleIntro,
+  hubContextPacketSectionLabel,
+  type HubContextPacketProvenance,
+} from "../hubContextPacket.ts";
 import {
   PROJECT_BOT_HEARTBEAT_PROMPT,
   PROJECT_BOT_PLAYBOOK,
@@ -73,6 +84,11 @@ const now = "2026-09-20T00:00:00.000Z";
 
 const groupMemberThreadId = ThreadId.makeUnsafe("thread-group-member");
 const group2MemberThreadId = ThreadId.makeUnsafe("thread-group2-member");
+
+// One packet section heading, provenance included — the shared budget
+// renderer adds the `## ` prefix.
+const sectionHeading = (label: string, provenance: HubContextPacketProvenance) =>
+  `## ${hubContextPacketSectionLabel(label, provenance)}`;
 
 const lineTargetsPath = (line: string, logicalPath: string) =>
   (line.split(" — ", 1)[0] ?? line).endsWith(`](${logicalPath})`);
@@ -460,6 +476,7 @@ function makeTestLayer(options?: {
         } as unknown as ProjectionThreadSessionRepository["Service"]),
       ),
       Layer.provideMerge(ProjectAgentRepositoryLive),
+      Layer.provideMerge(HubWorkRepositoryLive),
       Layer.provideMerge(SqlitePersistenceMemory),
       Layer.provideMerge(ServerConfig.layerTest(process.cwd(), { prefix: "pa-group-" })),
       Layer.provideMerge(NodeServices.layer),
@@ -499,6 +516,7 @@ it.effect("configures a hub and imports exactly one greeting", () => {
       { kind: "user" },
     );
     assert.equal(overview.configured, true);
+    assert.equal(overview.config?.limits.maxConcurrentWorkers, 3);
     assert.equal(overview.config?.goal, "Ship hubs");
     const imported = harness.dispatched.filter(
       (command) => command.type === "thread.messages.import",
@@ -1088,6 +1106,7 @@ it.effect("round-trips library hosting fields and rejects a relative libraryPath
     const overview = yield* service.configure(
       {
         requestId: "req-lib-ok",
+        limits: { ...limits, maxConcurrentWorkers: 8 },
         projectId: groupId,
         coordinatorModelSelection: modelSelection,
         libraryPath: customLibraryPath,
@@ -1108,6 +1127,7 @@ it.effect("round-trips library hosting fields and rejects a relative libraryPath
       },
       { kind: "user" },
     );
+    assert.equal(preserved.config?.limits.maxConcurrentWorkers, 8);
     assert.equal(preserved.config?.libraryPath, customLibraryPath);
     assert.equal(preserved.config?.libraryRemoteUrl, "https://example.com/library.git");
     assert.equal(preserved.config?.libraryPushOnChange, true);
@@ -4174,9 +4194,15 @@ it.effect("gives the coordinator thread its playbook packet on every turn", () =
     for (let turn = 0; turn < 2; turn += 1) {
       const packet = yield* service.formatContextPacketForTurn(coordinatorThreadId);
       assert.equal(packet.includes("Hub context packet"), true);
-      assert.equal(packet.includes("## Playbook\n# Hub coordinator playbook"), true);
-      assert.equal(packet.includes("## Watch"), true);
-      assert.equal(packet.includes("## Workers"), true);
+      assert.equal(packet.includes(hubContextPacketRoleIntro("coordinator")), true);
+      assert.equal(packet.includes(HUB_CONTEXT_PACKET_PROVENANCE_LEGEND), true);
+      assert.equal(
+        packet.includes(`${sectionHeading("Playbook", "host-policy")}\n# Hub coordinator playbook`),
+        true,
+      );
+      assert.equal(packet.includes(sectionHeading("Watch", "host-policy")), true);
+      assert.equal(packet.includes(sectionHeading("Workers", "server-state")), true);
+      assert.equal(packet.includes(sectionHeading("Worker reports", "agent-report")), true);
       // The member-only tools section never leaks into the coordinator packet.
       assert.equal(packet.includes("## Hub tools"), false);
     }
@@ -4184,12 +4210,12 @@ it.effect("gives the coordinator thread its playbook packet on every turn", () =
     // Member threads get the shared packet without the coordinator playbook.
     const memberPacket = yield* service.formatContextPacketForTurn(groupMemberThreadId);
     assert.equal(memberPacket.includes("Hub context packet"), true);
-    assert.equal(memberPacket.includes("## Playbook"), false);
-    assert.equal(memberPacket.includes("## Hub tools"), true);
+    assert.equal(memberPacket.includes(sectionHeading("Playbook", "host-policy")), false);
+    assert.equal(memberPacket.includes(sectionHeading("Hub tools", "host-policy")), true);
   }).pipe(Effect.provide(harness.layer));
 });
 
-it.effect("only the coordinator packet claims the welcome message", () => {
+it.effect("isolates coordinator instructions from member and worker packets", () => {
   const harness = makeTestLayer();
   return Effect.gen(function* () {
     const service = yield* ProjectAgentService;
@@ -4209,9 +4235,35 @@ it.effect("only the coordinator packet claims the welcome message", () => {
     const memberPacket = yield* service.formatContextPacketForTurn(groupMemberThreadId);
     assert.equal(memberPacket.includes("welcome message from you"), false);
     assert.equal(memberPacket.includes("member thread of this hub"), true);
+    // Manual members retain ordinary user-directed tools; only managed workers are denied.
+    yield* service.authorizeManagedGoalCreation({
+      callerThreadId: groupMemberThreadId,
+      requestedCount: 1,
+    });
+    yield* service.assertCallerMayCreateThreadInProject({
+      callerThreadId: groupMemberThreadId,
+      targetProjectId: groupId,
+    });
+    yield* service.assertCallerMayDriveManagedThread({
+      callerThreadId: groupMemberThreadId,
+      targetThreadId: foreignThreadId,
+    });
 
-    // Workers resolve through their assigned task. They carry coordinator-like
-    // sections, but the welcome line still describes them as member threads.
+    yield* service.writeDocument(
+      {
+        requestId: "custom-role-playbook",
+        projectId: groupId,
+        logicalPath: PROJECT_BOT_PLAYBOOK_PATH,
+        content: "# Custom coordinator routing\nCoordinator-only custom instructions.",
+        expectedRevision: 1,
+      },
+      { kind: "user" },
+    );
+    const customCoordinatorPacket = yield* service.formatContextPacketForTurn(coordinatorThreadId);
+    assert.include(customCoordinatorPacket, "Coordinator-only custom instructions.");
+    assert.include(customCoordinatorPacket, sectionHeading("Playbook", "user-instructions"));
+
+    // Worker identity comes from its persisted assignment, not from prompt text.
     const workerThreadId = ThreadId.makeUnsafe("thread-packet-worker");
     yield* repository.saveGoal(
       {
@@ -4251,10 +4303,82 @@ it.effect("only the coordinator packet claims the welcome message", () => {
       },
       null,
     );
+    const hubWork = yield* HubWorkRepository;
+    yield* hubWork.submit({
+      projectId: groupId,
+      requestId: "hub-work-packet-request",
+      scopeKey: "hub-work-packet-scope",
+      fingerprint: "hub-work-packet-plan",
+      records: [
+        {
+          id: "hub-work-packet",
+          projectId: groupId,
+          targetProjectId: groupId,
+          sourceThreadId: coordinatorThreadId,
+          sourceMessageId: null,
+          title: "Fix the flaky suite",
+          workerThreadId,
+          state: "working",
+          queueReason: null,
+          resultSummary: null,
+          progress: {
+            revision: 3,
+            steps: [{ id: "read", text: "Read suite", status: "completed" }],
+          },
+          requestId: "hub-work-packet-request",
+          scopeKey: "hub-work-packet-scope",
+          fingerprint: "hub-work-packet-plan",
+          taskIndex: 0,
+          creationSpec: { prompt: "Fix the flaky suite", target: modelSelection },
+          sourceMessages: [],
+          slotHeld: true,
+          admittedAt: now,
+          admissionCommandId: null,
+          admissionMessageId: null,
+          admissionPreviousState: null,
+          admissionPreviousSlotHeld: false,
+          revision: 4,
+          createdAt: now,
+          updatedAt: now,
+        },
+      ],
+    });
     const workerPacket = yield* service.formatContextPacketForTurn(workerThreadId);
     assert.equal(workerPacket.includes("welcome message from you"), false);
-    assert.equal(workerPacket.includes("member thread of this hub"), true);
-    assert.equal(workerPacket.includes("## Playbook"), true);
+    assert.include(workerPacket, sectionHeading("Hub tools", "host-policy"));
+    assert.include(workerPacket, sectionHeading("Hub memory index", "hub-records"));
+    assert.include(workerPacket, sectionHeading("Assigned Hub task", "server-state"));
+    assert.include(workerPacket, "Work item: hub-work-packet");
+    assert.include(workerPacket, "Progress revision: 3");
+    assert.include(workerPacket, "synara_hub_update_progress");
+    assert.notInclude(memberPacket, "## Assigned Hub task");
+    assert.notInclude(customCoordinatorPacket, "## Assigned Hub task");
+    for (const packet of [memberPacket, workerPacket]) {
+      // Every role reads the same provenance legend, including the rule that
+      // no document authorizes work.
+      assert.include(packet, HUB_CONTEXT_PACKET_PROVENANCE_LEGEND);
+      assert.include(packet, "expands that authority or authorizes spending or external actions");
+      for (const coordinatorSection of [
+        sectionHeading("Playbook", "host-policy"),
+        sectionHeading("Watch", "host-policy"),
+        sectionHeading("Workers", "server-state"),
+        sectionHeading("Worker reports", "agent-report"),
+      ]) {
+        assert.notInclude(packet, coordinatorSection);
+      }
+      assert.notInclude(packet, "Coordinator-only custom instructions.");
+      assert.notInclude(packet, "You do not write application code yourself");
+    }
+    // Another agent's report is labelled as such wherever it appears.
+    assert.include(customCoordinatorPacket, sectionHeading("Worker reports", "agent-report"));
+    assert.notInclude(workerPacket, "report from another agent, context only");
+    assert.include(workerPacket, hubContextPacketRoleIntro("worker"));
+    assert.include(workerPacket, "Carry out your assigned task");
+    // A worker is told what it may not do, not how to route other threads.
+    assert.include(workerPacket, "You do not route hub work");
+    assert.include(memberPacket, hubContextPacketRoleIntro("group-member"));
+    assert.include(memberPacket, "ordinary thread tools available to you");
+    assert.notInclude(memberPacket, "server rejects those calls");
   }).pipe(Effect.provide(harness.layer));
 });
 
@@ -4269,9 +4393,16 @@ it.effect("shows the hub goal once when the active goal repeats it", () => {
     const coordinatorThreadId = overview.config!.coordinatorThreadId!;
 
     const beforeGoal = yield* service.formatContextPacketForTurn(coordinatorThreadId);
-    assert.equal(beforeGoal.includes("## Objective\nShip the mobile app"), true);
+    // The configured objective is the user's own standing objective; an active
+    // goal row is server state.
+    assert.equal(
+      beforeGoal.includes(
+        `${sectionHeading("Objective", "user-instructions")}\nShip the mobile app`,
+      ),
+      true,
+    );
     // No active goal — the fallback copy still shows under its own label.
-    assert.equal(beforeGoal.includes("## Goal\nNone."), true);
+    assert.equal(beforeGoal.includes(`${sectionHeading("Goal", "server-state")}\nNone.`), true);
 
     yield* repository.saveGoal(
       {
@@ -4293,8 +4424,11 @@ it.effect("shows the hub goal once when the active goal repeats it", () => {
       null,
     );
     const packet = yield* service.formatContextPacketForTurn(coordinatorThreadId);
-    assert.equal(packet.includes("## Objective\nShip the mobile app"), true);
-    assert.equal(packet.includes("## Goal"), false);
+    assert.equal(
+      packet.includes(`${sectionHeading("Objective", "user-instructions")}\nShip the mobile app`),
+      true,
+    );
+    assert.equal(packet.includes(sectionHeading("Goal", "server-state")), false);
     assert.equal(packet.split("Ship the mobile app").length - 1, 1);
 
     // An active goal with different wording keeps its own section.
@@ -4318,8 +4452,16 @@ it.effect("shows the hub goal once when the active goal repeats it", () => {
       1,
     );
     const updated = yield* service.formatContextPacketForTurn(coordinatorThreadId);
-    assert.equal(updated.includes("## Objective\nShip the mobile app"), true);
-    assert.equal(updated.includes("## Goal\nShip the mobile app to beta testers"), true);
+    assert.equal(
+      updated.includes(`${sectionHeading("Objective", "user-instructions")}\nShip the mobile app`),
+      true,
+    );
+    assert.equal(
+      updated.includes(
+        `${sectionHeading("Goal", "server-state")}\nShip the mobile app to beta testers`,
+      ),
+      true,
+    );
   }).pipe(Effect.provide(harness.layer));
 });
 
@@ -4551,6 +4693,125 @@ it.effect("posts one roll-up when every worker in the creation batch settles", (
     );
     // Alpha done, Beta done, Gamma waiting, Gamma done.
     assert.equal(settledRows.length, 4);
+  }).pipe(Effect.provide(harness.layer));
+});
+
+it.effect("rolls up one created worker only after its unstarted Hub peers fail or cancel", () => {
+  const harness = makeTestLayer();
+  return Effect.gen(function* () {
+    const service = yield* ProjectAgentService;
+    const workRepository = yield* HubWorkRepository;
+    const overview = yield* configureTestGroup(service, "req-hub-roll-setup");
+    const coordinatorThreadId = overview.config!.coordinatorThreadId;
+    const threadA = ThreadId.makeUnsafe("thread-hub-roll-a");
+    const batchId = "hub-work-batch:original-request";
+    yield* service.recordManagedWorkerThreads({
+      requestId: "req-hub-roll-record-a",
+      batchId,
+      callerThreadId: coordinatorThreadId,
+      threadIds: [threadA],
+      titles: ["Alpha"],
+    });
+    const makeWork = (
+      id: string,
+      index: number,
+      workerThreadId: ThreadId | null,
+    ): HubWorkRecord => ({
+      id,
+      projectId: groupId,
+      targetProjectId: groupId,
+      sourceThreadId: coordinatorThreadId,
+      sourceMessageId: null,
+      title: id,
+      workerThreadId,
+      state: workerThreadId ? "working" : "queued",
+      queueReason: null,
+      resultSummary: null,
+      progress: null,
+      requestId: "original-request",
+      scopeKey: "original-scope",
+      fingerprint: "original-plan",
+      taskIndex: index,
+      creationSpec: { prompt: id, target: modelSelection },
+      sourceMessages: [],
+      slotHeld: workerThreadId !== null,
+      admittedAt: null,
+      admissionCommandId: null,
+      admissionMessageId: null,
+      admissionPreviousState: null,
+      admissionPreviousSlotHeld: false,
+      revision: 0,
+      createdAt: now,
+      updatedAt: now,
+    });
+    yield* workRepository.submit({
+      projectId: groupId,
+      requestId: "original-request",
+      scopeKey: "original-scope",
+      fingerprint: "original-plan",
+      records: [
+        makeWork("hub-roll-a", 0, threadA),
+        makeWork("hub-roll-failed", 1, null),
+        makeWork("hub-roll-cancelled", 2, null),
+      ],
+    });
+    yield* workRepository.submit({
+      projectId: groupId,
+      requestId: "unrelated-request",
+      scopeKey: "unrelated-scope",
+      fingerprint: "unrelated-plan",
+      records: [
+        {
+          ...makeWork("unrelated-queued", 0, null),
+          scopeKey: "unrelated-scope",
+          fingerprint: "unrelated-plan",
+          requestId: "unrelated-request",
+        },
+      ],
+    });
+    harness.dispatched.length = 0;
+    const rollups = () =>
+      harness.dispatched.filter(
+        (command) =>
+          command.type === "thread.activity.append" &&
+          command.activity.kind === "synara.workers.settled",
+      );
+    for (const [threadId, sourceEventId] of [[threadA, "hub-roll-a-done"]] as const)
+      yield* service.ingestSettledThreadEvent({
+        threadId,
+        sourceEventId,
+        eventType: "thread.turn-diff-completed",
+        createdAt: "2026-09-20T00:05:00.000Z",
+      });
+    assert.equal(rollups().length, 0);
+    const failed = yield* workRepository.get("hub-roll-failed");
+    yield* workRepository.save({
+      record: { ...failed!, state: "starting", revision: 1 },
+      expectedRevision: 0,
+    });
+    yield* service.notifyWorkItemChanged!({ projectId: groupId, workItemId: failed!.id });
+    assert.equal(rollups().length, 0);
+    yield* workRepository.save({
+      record: { ...failed!, state: "failed", revision: 2 },
+      expectedRevision: 1,
+    });
+    yield* service.notifyWorkItemChanged!({ projectId: groupId, workItemId: failed!.id });
+    assert.equal(rollups().length, 0);
+    const cancelled = yield* workRepository.get("hub-roll-cancelled");
+    yield* workRepository.save({
+      record: { ...cancelled!, state: "cancelled", revision: 1 },
+      expectedRevision: 0,
+    });
+    yield* service.notifyWorkItemChanged!({ projectId: groupId, workItemId: cancelled!.id });
+    assert.equal(rollups().length, 1);
+    const rollup = rollups()[0]!;
+    if (rollup.type === "thread.activity.append")
+      assert.equal(
+        rollup.activity.summary,
+        "All 1 thread finished: Alpha ✓ — no result filed\nhub-roll-failed: failed before starting.\nhub-roll-cancelled: cancelled before starting.",
+      );
+    yield* service.notifyWorkItemChanged!({ projectId: groupId, workItemId: cancelled!.id });
+    assert.equal(rollups().length, 1);
   }).pipe(Effect.provide(harness.layer));
 });
 
@@ -6137,6 +6398,101 @@ it.effect("keeps taskless and settled managed workers from delegating further th
         assert.equal(result._tag, "Failure");
         if (result._tag === "Failure") assert.equal(result.failure.code, "forbidden");
       }
+    }
+  }).pipe(Effect.provide(harness.layer));
+});
+
+// A failed Hub must not prevent independent startup recovery for the next one.
+it.effect("recovers later Hub inboxes when one startup wake fails", () => {
+  const harness = makeTestLayer();
+  return Effect.gen(function* () {
+    const service = yield* ProjectAgentService;
+    const repository = yield* ProjectAgentRepository;
+    yield* configureTestGroup(service, "first-startup-hub");
+    yield* configureTestGroup(service, "second-startup-hub", { projectId: groupId2 });
+    for (const projectId of [groupId, groupId2]) {
+      yield* repository.insertInboxEvent({
+        id: ProjectInboxEventId.makeUnsafe(`startup-${projectId}`),
+        projectId,
+        sourceThreadId: groupMemberThreadId,
+        sourceEventId: `startup-${projectId}`,
+        eventType: "worker.error",
+        taskId: null,
+        eligibleWake: true,
+        createdAt: now,
+      });
+    }
+    const cursor = repository.getCursor;
+    const fault = vi
+      .spyOn(repository, "getCursor")
+      .mockImplementation((projectId) =>
+        projectId === groupId
+          ? Effect.fail(
+              new PersistenceSqlError({ operation: "fixture", detail: "first Hub unavailable" }),
+            )
+          : cursor(projectId),
+      );
+    try {
+      yield* service.reconcilePendingWakes();
+      assert.equal(
+        (yield* repository.getCursor(groupId2)).processedThroughInboxId,
+        `startup-${groupId2}`,
+      );
+      assert.equal(harness.runNowCalls.length, 1);
+    } finally {
+      fault.mockRestore();
+    }
+  }).pipe(Effect.provide(harness.layer));
+});
+
+it.effect("does not report a settlement after both real monitor CAS writes lose", () => {
+  const harness = makeTestLayer();
+  return Effect.gen(function* () {
+    const service = yield* ProjectAgentService;
+    const repository = yield* ProjectAgentRepository;
+    const overview = yield* configureTestGroup(service, "settle-cas-retry");
+    const workerId = ThreadId.makeUnsafe("cas-racing-worker");
+    yield* service.recordManagedWorkerThreads({
+      requestId: "settle-cas-worker",
+      callerThreadId: overview.config!.coordinatorThreadId,
+      threadIds: [workerId],
+      titles: ["Racing worker"],
+    });
+    const save = repository.saveManagedWorkerMonitor;
+    let writes = 0;
+    const competing = vi.spyOn(repository, "saveManagedWorkerMonitor").mockImplementation((input) =>
+      Effect.gen(function* () {
+        const current = Option.getOrThrow(yield* repository.findManagedWorkerByThread(workerId));
+        yield* repository.upsertManagedWorker({
+          ...current,
+          updatedAt: `2026-10-18T12:00:0${++writes}.000Z`,
+        });
+        return yield* save(input);
+      }),
+    );
+    try {
+      harness.dispatched.length = 0;
+      yield* service.ingestSettledThreadEvent({
+        threadId: workerId,
+        sourceEventId: "racing-settle",
+        eventType: "thread.turn-diff-completed",
+        createdAt: now,
+      });
+      assert.equal(writes, 2);
+      assert.equal(
+        Option.getOrThrow(yield* repository.findManagedWorkerByThread(workerId)).settleOutcome,
+        null,
+      );
+      assert.equal(
+        harness.dispatched.filter(
+          (command) =>
+            command.type === "thread.activity.append" &&
+            command.activity.kind === "synara.worker.settled",
+        ).length,
+        0,
+      );
+    } finally {
+      competing.mockRestore();
     }
   }).pipe(Effect.provide(harness.layer));
 });

@@ -7,19 +7,27 @@
 import type { ProviderKind } from "@synara/contracts";
 import { useState } from "react";
 
-import { ChevronDownIcon, FastModeIcon, SettingsIcon } from "~/lib/icons";
+import type { FastModeNotice } from "~/lib/fastModeState";
+import { ChevronDownIcon, SettingsIcon } from "~/lib/icons";
+import { FastModeBadgeIcon } from "./FastModeBadgeIcon";
 import { cn } from "~/lib/utils";
 import { ProviderAccountDot } from "../ProviderAccountMark";
 import { PROVIDER_ICON_COMPONENT_BY_PROVIDER } from "../ProviderIcon";
 import { Button } from "../ui/button";
 import { MenuTrigger } from "../ui/menu";
-import { ShortcutKbd } from "../ui/shortcut-kbd";
+import { ShortcutKbd } from "../ui/kbd";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import {
   COMPOSER_MUTED_ACCENT_TEXT_CLASS_NAME,
   COMPOSER_PICKER_TRIGGER_TEXT_CLASS_NAME,
 } from "./composerPickerStyles";
 import { getProviderIconClassName } from "./ProviderModelPicker";
+
+// Effort and context window ("High", "1M") share one muted tone after the model name.
+const TRIGGER_TRAIT_LABEL_CLASS_NAME = cn(
+  "shrink-0 dark:text-muted-foreground/45",
+  COMPOSER_MUTED_ACCENT_TEXT_CLASS_NAME,
+);
 
 // Must render inside a `Menu`. `hideModelLabel` / `hideStatusLabel` are the narrow-composer
 // degradation steps: the text moves to title/sr-only so assistive tech keeps it.
@@ -34,6 +42,8 @@ export function ComposerModelMenuTrigger(props: {
   statusLabel: string | null;
   contextWindowLabel?: string | null | undefined;
   showsFastBadge: boolean;
+  /** Fast mode was requested but is not serving; the badge turns into a muted outline. */
+  fastModeNotice?: FastModeNotice | null | undefined;
   hideModelLabel?: boolean | undefined;
   hideStatusLabel?: boolean | undefined;
   disabled?: boolean | undefined;
@@ -127,9 +137,9 @@ export function ComposerModelMenuTrigger(props: {
             </span>
           )}
           {label.showsFastBadge ? (
-            <FastModeIcon
-              aria-hidden="true"
-              className={cn("size-3.5 shrink-0", COMPOSER_MUTED_ACCENT_TEXT_CLASS_NAME)}
+            <FastModeBadgeIcon
+              notice={props.fastModeNotice}
+              className="size-3.5 shrink-0 text-[var(--color-text-foreground)] opacity-100"
             />
           ) : null}
           {label.statusLabel ? (
@@ -137,24 +147,19 @@ export function ComposerModelMenuTrigger(props: {
               <>
                 <SettingsIcon
                   aria-hidden="true"
-                  className={cn("size-3.5 shrink-0", COMPOSER_MUTED_ACCENT_TEXT_CLASS_NAME)}
+                  className={cn(
+                    "size-3.5 shrink-0 dark:text-muted-foreground/45",
+                    COMPOSER_MUTED_ACCENT_TEXT_CLASS_NAME,
+                  )}
                 />
                 <span className="sr-only">{label.statusLabel}</span>
               </>
             ) : (
-              <span className={cn("shrink-0", COMPOSER_MUTED_ACCENT_TEXT_CLASS_NAME)}>
-                {label.statusLabel}
-              </span>
+              <span className={TRIGGER_TRAIT_LABEL_CLASS_NAME}>{label.statusLabel}</span>
             )
           ) : null}
           {label.contextWindowLabel ? (
-            <span
-              className={
-                props.hideStatusLabel
-                  ? "sr-only"
-                  : cn("shrink-0", COMPOSER_MUTED_ACCENT_TEXT_CLASS_NAME)
-              }
-            >
+            <span className={props.hideStatusLabel ? "sr-only" : TRIGGER_TRAIT_LABEL_CLASS_NAME}>
               {label.contextWindowLabel}
             </span>
           ) : null}
@@ -186,10 +191,7 @@ export function ComposerModelMenuTrigger(props: {
         <TooltipPopup side="top" sideOffset={6} variant="picker">
           <span className="inline-flex items-center gap-2 px-1 py-0.5">
             <span>Change model</span>
-            <ShortcutKbd
-              shortcutLabel={props.shortcutLabel}
-              className="h-4 min-w-4 px-1 text-ui-2xs text-muted-foreground"
-            />
+            <ShortcutKbd shortcutLabel={props.shortcutLabel} className="h-4 min-w-4 text-ui-2xs" />
           </span>
         </TooltipPopup>
       ) : null}

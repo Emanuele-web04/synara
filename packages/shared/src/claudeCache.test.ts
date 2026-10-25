@@ -21,7 +21,7 @@ describe("Claude cache assessment", () => {
       expect(assessClaudeCache(observation, time(ttlSeconds))).toEqual({
         state: "likely-expired",
         idleSeconds: ttlSeconds,
-        requiresConfirmation: true,
+        requiresConfirmation: false,
       });
     },
   );
@@ -39,7 +39,7 @@ describe("Claude cache assessment", () => {
     [299, "likely-warm", false],
     [300, "unknown", false],
     [3599, "unknown", false],
-    [3600, "likely-expired", true],
+    [3600, "likely-expired", false],
   ] as const)("assesses mixed cache lifetimes after %i seconds", (seconds, state, confirmation) => {
     expect(assessClaudeCache({ ...baseline, partialTtlSeconds: 300 }, time(seconds))).toEqual({
       state,
@@ -51,16 +51,33 @@ describe("Claude cache assessment", () => {
   it("keeps an authoritative native expired observation even inside an inferred TTL", () => {
     expect(
       assessClaudeCache({ ...baseline, state: "likely-expired", source: "session-start" }, time(1))
-        .requiresConfirmation,
-    ).toBe(true);
+        .state,
+    ).toBe("likely-expired");
   });
 
-  it("does not prompt for small or unknown context", () => {
+  it("asks only after Claude Code's 70-minute pause, whatever the cache state", () => {
+    const expiredEarly = { ...baseline, ttlSeconds: 300 };
+    expect(assessClaudeCache(expiredEarly, time(4_199)).requiresConfirmation).toBe(false);
+    expect(assessClaudeCache(expiredEarly, time(4_200)).requiresConfirmation).toBe(true);
+    const { ttlSeconds: _ttl, ...unknownTtl } = baseline;
+    expect(assessClaudeCache(unknownTtl, time(4_200))).toEqual({
+      state: "unknown",
+      idleSeconds: 4_200,
+      requiresConfirmation: true,
+    });
+    const { lastResponseAt: _last, ...unknownIdle } = baseline;
+    expect(assessClaudeCache(unknownIdle, time(4_200)).requiresConfirmation).toBe(false);
+  });
+
+  it("asks from 100k context tokens, like Claude Code, and never for unknown context", () => {
     expect(
-      assessClaudeCache({ ...baseline, contextTokens: 100_000 }, time(4000)).requiresConfirmation,
+      assessClaudeCache({ ...baseline, contextTokens: 99_999 }, time(4_200)).requiresConfirmation,
     ).toBe(false);
+    expect(
+      assessClaudeCache({ ...baseline, contextTokens: 100_000 }, time(4_200)).requiresConfirmation,
+    ).toBe(true);
     const { contextTokens: _context, ...unknownContext } = baseline;
-    expect(assessClaudeCache(unknownContext, time(4000)).requiresConfirmation).toBe(false);
+    expect(assessClaudeCache(unknownContext, time(4_200)).requiresConfirmation).toBe(false);
   });
 
   it("rejects clock skew and malformed ordering", () => {
@@ -85,6 +102,6 @@ describe("Claude cache assessment", () => {
         },
         time(600),
       ),
-    ).toEqual({ state: "likely-expired", idleSeconds: 0, requiresConfirmation: true });
+    ).toEqual({ state: "likely-expired", idleSeconds: 0, requiresConfirmation: false });
   });
 });

@@ -10,6 +10,17 @@ const CustomModels = Schema.Array(Schema.String.check(Schema.isMaxLength(256))).
 );
 export const DEFAULT_CODEX_ACCOUNT_ID = "default";
 
+// How long an idle side chat stays usable before the server expires it.
+export const SidechatExpiry = Schema.Literals(["1h", "24h", "never"]);
+export type SidechatExpiry = typeof SidechatExpiry.Type;
+
+export const SourceControlWritingStyle = Schema.Literals(["repository", "conventional", "custom"]);
+export type SourceControlWritingStyle = typeof SourceControlWritingStyle.Type;
+export const MAX_SOURCE_CONTROL_CUSTOM_INSTRUCTIONS_LENGTH = 4096;
+export const SourceControlCustomInstructions = Schema.String.check(
+  Schema.isMaxLength(MAX_SOURCE_CONTROL_CUSTOM_INSTRUCTIONS_LENGTH),
+);
+
 export const CodexAccountId = TrimmedString.check(Schema.isMaxLength(64));
 export type CodexAccountId = typeof CodexAccountId.Type;
 
@@ -52,6 +63,10 @@ export const ClaudeServerProviderSettings = Schema.Struct({
   // Claude Code keeps Artifact publishing (and `/design`, `/slides`) off for
   // Agent SDK sessions unless the host opts in.
   enableArtifacts: Schema.Boolean.pipe(Schema.withDecodingDefault(() => false)),
+  // Off by default: embedded (SDK) Claude Code never asks before resuming a
+  // large session after a long pause. When on, Synara asks the way Claude
+  // Code's interactive resume prompt does.
+  confirmColdCacheResume: Schema.Boolean.pipe(Schema.withDecodingDefault(() => false)),
 });
 export type ClaudeServerProviderSettings = typeof ClaudeServerProviderSettings.Type;
 
@@ -119,14 +134,29 @@ export const SkillsServerSettings = Schema.Struct({
 });
 export type SkillsServerSettings = typeof SkillsServerSettings.Type;
 
+// Keep-awake behaviour for macOS `caffeinate`. "agent" keeps the machine awake
+// only while at least one agent turn is running.
+export const KeepAwakeMode = Schema.Literals(["always", "agent", "off"]);
+export type KeepAwakeMode = typeof KeepAwakeMode.Type;
+export const DEFAULT_KEEP_AWAKE_MODE: KeepAwakeMode = "off";
+
 export const ServerSettings = Schema.Struct({
   enableAssistantStreaming: Schema.Boolean.pipe(Schema.withDecodingDefault(() => true)),
   enableProviderUpdateChecks: Schema.Boolean.pipe(Schema.withDecodingDefault(() => true)),
+  keepAwakeMode: KeepAwakeMode.pipe(Schema.withDecodingDefault(() => DEFAULT_KEEP_AWAKE_MODE)),
+  lowerProviderProcessPriority: Schema.Boolean.pipe(Schema.withDecodingDefault(() => true)),
   defaultThreadEnvMode: ThreadEnvironmentMode.pipe(Schema.withDecodingDefault(() => "local")),
   addProjectBaseDirectory: StringSetting.pipe(Schema.withDecodingDefault(() => "")),
   // The GitHub inbox reads one repository per project (the preferred remote). When true it also
   // reads the project's other GitHub remotes, such as the upstream of a fork.
   githubInboxIncludeUpstreams: Schema.Boolean.pipe(Schema.withDecodingDefault(() => false)),
+  sidechatExpiry: SidechatExpiry.pipe(Schema.withDecodingDefault(() => "1h")),
+  sourceControlWritingStyle: SourceControlWritingStyle.pipe(
+    Schema.withDecodingDefault(() => "repository"),
+  ),
+  sourceControlCustomInstructions: SourceControlCustomInstructions.pipe(
+    Schema.withDecodingDefault(() => ""),
+  ),
   textGenerationModelSelection: ModelSelection.pipe(
     Schema.withDecodingDefault(() => ({
       provider: "codex" as const,
@@ -180,9 +210,14 @@ const ProviderSettingsBasePatch = {
 export const ServerSettingsPatch = Schema.Struct({
   enableAssistantStreaming: Schema.optionalKey(Schema.Boolean),
   enableProviderUpdateChecks: Schema.optionalKey(Schema.Boolean),
+  keepAwakeMode: Schema.optionalKey(KeepAwakeMode),
+  lowerProviderProcessPriority: Schema.optionalKey(Schema.Boolean),
   defaultThreadEnvMode: Schema.optionalKey(ThreadEnvironmentMode),
   addProjectBaseDirectory: Schema.optionalKey(StringSetting),
   githubInboxIncludeUpstreams: Schema.optionalKey(Schema.Boolean),
+  sidechatExpiry: Schema.optionalKey(SidechatExpiry),
+  sourceControlWritingStyle: Schema.optionalKey(SourceControlWritingStyle),
+  sourceControlCustomInstructions: Schema.optionalKey(SourceControlCustomInstructions),
   textGenerationModelSelection: Schema.optionalKey(ModelSelectionPatch),
   providers: Schema.optionalKey(
     Schema.Struct({
@@ -200,6 +235,7 @@ export const ServerSettingsPatch = Schema.Struct({
           homePath: Schema.optionalKey(StringSetting),
           launchArgs: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(4096))),
           enableArtifacts: Schema.optionalKey(Schema.Boolean),
+          confirmColdCacheResume: Schema.optionalKey(Schema.Boolean),
         }),
       ),
       cursor: Schema.optionalKey(

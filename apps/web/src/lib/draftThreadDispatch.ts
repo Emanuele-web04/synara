@@ -17,6 +17,16 @@ import type {
   ThreadId,
   TurnId,
 } from "@synara/contracts";
+import { PROVIDER_SEND_TURN_MAX_ATTACHMENTS } from "@synara/contracts";
+import type { ComposerFileAttachment } from "../composerDraftDomain";
+import { revokeObjectPreviewUrl } from "../composerDraftAttachments";
+import { hasActiveComposerSend } from "./composerSendOwnership";
+import { clearPendingTurnDispatch, markPendingTurnDispatch } from "../pendingTurnDispatch";
+import {
+  appendPastedTextsToPrompt,
+  filterPastedTextsWithText,
+  pastedTextTitle,
+} from "./composerPastedText";
 import { buildPromptThreadTitleFallback } from "@synara/shared/chatThreads";
 import { isPendingThreadWorktree } from "@synara/shared/threadEnvironment";
 import type { ProviderInstanceOption } from "../appSettings";
@@ -37,6 +47,8 @@ import {
 } from "./browserAnnotations";
 import {
   stageUploadComposerAttachments,
+  findPendingBlobComposerAttachments,
+  hydratePendingBlobComposerAttachments,
   formatOutgoingComposerPrompt,
   resolvePromptEffortFromModelSelection,
 } from "./composerSend";
@@ -53,14 +65,14 @@ import {
 import { resolveTerminalThreadCreationState } from "./threadBootstrap";
 import { promoteThreadCreate } from "./threadCreatePromotion";
 import { isRequestOutcomeUnknown } from "./requestOutcome";
-import { newCommandId, newMessageId } from "./utils";
+import { newCommandId, newMessageId, randomUUID } from "./utils";
 
 /** Why a draft must fall back to the canonical chat composer instead of dispatching here. */
 export type DraftThreadOpenReason = "empty" | "worktree-pending";
 
 export type DraftThreadDispatchResult =
   /** The drafted prompt is on its way; runtime events report the thread's progress. */
-  | { kind: "dispatched" }
+  | { kind: "dispatched"; warning?: string | undefined; deferred?: true | undefined }
   /** This surface cannot dispatch the draft faithfully — open the chat instead. */
   | { kind: "open-thread"; reason: DraftThreadOpenReason }
   | { kind: "unavailable" }
@@ -97,6 +109,8 @@ interface DraftThreadDispatchInput {
   providerOptions?: ProviderStartOptions | undefined;
   providerInstances?: ReadonlyArray<DraftDispatchProviderInstance> | undefined;
   hooks?: DraftThreadDispatchHooks | undefined;
+  sendAsGoal?: boolean;
+  promptAsFile?: boolean;
 }
 
 export type DraftDispatchProviderInstance = Pick<ProviderInstanceOption, "instanceId" | "provider">;
@@ -144,11 +158,52 @@ export function resolveDraftThreadDispatchTarget(input: {
   };
 }
 
+export const DRAFT_PROMPT_FILE_THRESHOLD_CHARS = 1_000;
+
+/**
+ * Converts an oversized outgoing prompt into a managed file attachment. The
+ * sent message becomes a "read this file" pointer; the provider's attachment
+ * projection supplies the resolved on-disk path. Returns null below the
+ * threshold or when the attachment cap would be exceeded — in that case the
+ * text is sent inline so nothing is lost.
+ */
+function buildDraftPromptFileAttachment(input: {
+  messageId: string;
+  text: string;
+  existingAttachmentCount: number;
+}): { attachment: ComposerFileAttachment; reference: string } | null {
+  if (input.text.length <= DRAFT_PROMPT_FILE_THRESHOLD_CHARS) {
+    return null;
+  }
+  if (input.existingAttachmentCount >= PROVIDER_SEND_TURN_MAX_ATTACHMENTS) {
+    return null;
+  }
+  const name = `synara-prompt-${input.messageId}.md`;
+  const file = new File([input.text], name, { type: "text/markdown" });
+  return {
+    attachment: {
+      type: "file",
+      id: randomUUID(),
+      name,
+      mimeType: "text/markdown",
+      sizeBytes: file.size,
+      file,
+    },
+    reference: `Read this file: ${name}`,
+  };
+}
+
 // Racing callers (a double click on Start, a retry while the first send is still
 // in flight) must not queue two turns for the same thread — the server accepts
 // duplicate thread.turn.start commands while the session is still starting. Same
 // pattern as threadCreatePromotion's inFlightThreadCreateById.
 const inFlightDispatchByThreadId = new Map<ThreadId, Promise<DraftThreadDispatchResult>>();
+
+export function waitForDraftThreadDispatchToSettle(
+  threadId: ThreadId,
+): Promise<DraftThreadDispatchResult | null> {
+  return inFlightDispatchByThreadId.get(threadId)?.catch(() => null) ?? Promise.resolve(null);
+}
 
 /**
  * Promote (when needed) and dispatch a draft thread's composer prompt as a queued
@@ -163,9 +218,14 @@ export function dispatchDraftThread(
   if (existing) {
     return existing;
   }
-  const dispatchPromise = dispatchDraftThreadOnce(input).finally(() => {
-    inFlightDispatchByThreadId.delete(input.threadId);
-  });
+  if (hasActiveComposerSend(input.threadId)) {
+    return Promise.resolve({ kind: "dispatched", deferred: true });
+  }
+  const dispatchPromise = Promise.resolve()
+    .then(() => dispatchDraftThreadOnce(input))
+    .finally(() => {
+      inFlightDispatchByThreadId.delete(input.threadId);
+    });
   inFlightDispatchByThreadId.set(input.threadId, dispatchPromise);
   return dispatchPromise;
 }
@@ -187,7 +247,9 @@ async function dispatchDraftThreadOnce(
   const prompt = draftPrompt.trim();
   if (
     prompt.length === 0 &&
-    (draftComposerState === null || !composerDraftHasAttachments(draftComposerState))
+    (draftComposerState === null ||
+      (!composerDraftHasAttachments(draftComposerState) &&
+        !draftComposerState.pastedTexts.some((pasted) => pasted.text.trim().length > 0)))
   ) {
     return { kind: "open-thread", reason: "empty" };
   }
@@ -222,16 +284,36 @@ async function dispatchDraftThreadOnce(
     DEFAULT_INTERACTION_MODE;
   const skills = draftComposerState?.skills ?? [];
   const mentions = draftComposerState?.mentions ?? [];
-  const composerImages = draftComposerState?.images ?? [];
+  const liveComposerImages = draftComposerState?.images ?? [];
+  const pendingImages = findPendingBlobComposerAttachments({
+    persistedAttachments: draftComposerState?.persistedAttachments ?? [],
+    images: liveComposerImages,
+  });
+  const hydratedPendingImages = await hydratePendingBlobComposerAttachments(pendingImages);
+  // Headless hydration only needs each File for upload, never its preview.
+  // These URLs do not belong to the composer store and its cleanup cannot
+  // release them, including when dispatch is refused.
+  for (const image of hydratedPendingImages) revokeObjectPreviewUrl(image.previewUrl);
+  if (hydratedPendingImages.length !== pendingImages.length) {
+    return {
+      kind: "error",
+      message:
+        "Could not restore saved images. Open the chat to retry or remove them before sending.",
+    };
+  }
+  const composerImages = [...liveComposerImages, ...hydratedPendingImages];
+
   const composerFiles = draftComposerState?.files ?? [];
   const composerAssistantSelections = draftComposerState?.assistantSelections ?? [];
   const composerBrowserAnnotations = draftComposerState?.browserAnnotations ?? [];
   const composerFileComments = draftComposerState?.fileComments ?? [];
+  const sendablePastedTexts = filterPastedTextsWithText(draftComposerState?.pastedTexts ?? []);
   const sendableTerminalContexts = filterTerminalContextsWithText(
     draftComposerState?.terminalContexts ?? [],
   );
   const titleSeed =
     prompt ||
+    (sendablePastedTexts[0] ? pastedTextTitle(sendablePastedTexts[0].text) : "") ||
     (composerImages[0] ? `Image: ${composerImages[0].name}` : "") ||
     (composerFiles[0] ? `File: ${composerFiles[0].name}` : "") ||
     (composerAssistantSelections.length > 0 ? "Referenced assistant selection" : "") ||
@@ -248,32 +330,50 @@ async function dispatchDraftThreadOnce(
   // Browser annotations serialize outermost so display extraction can validate
   // their message-bound transport before unwrapping the remaining context blocks.
   const messageText = appendBrowserAnnotationsToPrompt(
-    appendFileCommentsToPrompt(
-      appendTerminalContextsToPrompt(
-        appendAssistantSelectionsToPrompt(draftPrompt, composerAssistantSelections),
-        sendableTerminalContexts,
+    appendPastedTextsToPrompt(
+      appendFileCommentsToPrompt(
+        appendTerminalContextsToPrompt(
+          appendAssistantSelectionsToPrompt(draftPrompt, composerAssistantSelections),
+          sendableTerminalContexts,
+        ),
+        composerFileComments,
       ),
-      composerFileComments,
+      sendablePastedTexts,
     ),
     composerBrowserAnnotations,
     messageId,
   );
-  const outgoingMessageText = formatOutgoingComposerPrompt({
+  const fullOutgoingMessageText = formatOutgoingComposerPrompt({
     provider: modelSelection.provider,
     model: modelSelection.model,
     effort: resolvePromptEffortFromModelSelection(modelSelection),
     text: messageText || (composerImages.length > 0 ? IMAGE_ONLY_BOOTSTRAP_PROMPT : ""),
   });
+  // Skill/mention filters must see the full text: after file conversion the sent
+  // text is only a pointer and no longer mentions any references.
   const mentionedSkills = filterPromptSkillReferences(
-    outgoingMessageText,
+    fullOutgoingMessageText,
     skills,
     modelSelection.provider,
   );
-  const mentionedMentions = filterPromptProviderMentionReferences(outgoingMessageText, mentions);
+  const mentionedMentions = filterPromptProviderMentionReferences(
+    fullOutgoingMessageText,
+    mentions,
+  );
+  const promptFile = input.promptAsFile
+    ? buildDraftPromptFileAttachment({
+        messageId,
+        text: fullOutgoingMessageText,
+        existingAttachmentCount:
+          composerImages.length + composerFiles.length + composerAssistantSelections.length,
+      })
+    : null;
+  const outgoingMessageText = promptFile ? promptFile.reference : fullOutgoingMessageText;
+  const filesForSend = promptFile ? [...composerFiles, promptFile.attachment] : composerFiles;
   const turnAttachmentsPromise = stageUploadComposerAttachments({
     threadId,
     images: composerImages,
-    files: composerFiles,
+    files: filesForSend,
     assistantSelections: composerAssistantSelections,
   });
   // The same instant feeds both the command timestamps and onDispatchStart: a
@@ -290,6 +390,8 @@ async function dispatchDraftThreadOnce(
     startedAtMs,
   });
 
+  let goalWarning: string | undefined;
+  markPendingTurnDispatch(threadId);
   try {
     if (thread === null) {
       // Local-only draft thread: create the durable thread first, reusing the same
@@ -321,7 +423,10 @@ async function dispatchDraftThreadOnce(
           worktreePath: creationState.worktreePath,
           workingDirectory: creationState.workingDirectory,
           lastKnownPr: creationState.lastKnownPr,
-          createdAt: draftThread?.createdAt ?? createdAt,
+          // A local draft's createdAt is the time its composer opened. The durable
+          // thread is created by this dispatch, so use the same send timestamp as
+          // the first turn instead of carrying the draft's idle time into sorting.
+          createdAt,
         },
         api,
       );
@@ -331,6 +436,7 @@ async function dispatchDraftThreadOnce(
           () => undefined,
         );
         hooks?.onDispatchAbandoned?.();
+        clearPendingTurnDispatch(threadId);
         return { kind: "unavailable" };
       }
       if (hooks?.renameChatProject && project?.kind === "chat") {
@@ -340,6 +446,29 @@ async function dispatchDraftThreadOnce(
           projectId,
           title: fallbackTitle,
         });
+      }
+    }
+
+    if (input.sendAsGoal && (prompt.length > 0 || sendablePastedTexts.length > 0)) {
+      // The objective is the full authored text — prompt plus collapsed big
+      // pastes. Oversized goals are materialized to a per-thread file
+      // server-side and persisted as a "read this file" reference, so no
+      // client-side truncation applies.
+      const goal = [prompt, ...sendablePastedTexts.map((pasted) => pasted.text)]
+        .filter((part) => part.trim().length > 0)
+        .join("\n\n");
+      try {
+        await api.orchestration.dispatchCommand({
+          type: "thread.meta.update",
+          commandId: newCommandId(),
+          threadId,
+          goal,
+          goalStartBehavior: "defer",
+        });
+      } catch (error) {
+        goalWarning = `Could not save the goal; the task was started anyway. ${
+          error instanceof Error ? error.message : "Unknown error."
+        }`;
       }
     }
 
@@ -372,6 +501,7 @@ async function dispatchDraftThreadOnce(
       () => undefined,
     );
     hooks?.onDispatchAbandoned?.();
+    if (!isRequestOutcomeUnknown(error)) clearPendingTurnDispatch(threadId);
     return {
       kind: "error",
       message: error instanceof Error ? error.message : "Could not send the drafted prompt.",
@@ -385,5 +515,6 @@ async function dispatchDraftThreadOnce(
   if (composerDraftsMatchForCleanup(currentStore.draftsByThreadId[threadId], draftComposerState)) {
     currentStore.clearComposerContent(threadId);
   }
-  return { kind: "dispatched" };
+  markPendingTurnDispatch(threadId);
+  return { kind: "dispatched", ...(goalWarning ? { warning: goalWarning } : {}) };
 }

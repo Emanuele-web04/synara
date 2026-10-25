@@ -2,8 +2,7 @@
 // Purpose: Captures, inspects, and signals owned process trees across platforms.
 // Layer: Server platform runtime
 
-import { spawnProcessSync } from "@synara/shared/processRuntime";
-import treeKill from "tree-kill";
+import { execProcessFile, spawnProcessSync } from "@synara/shared/processRuntime";
 
 import { captureWindowsProcessChildrenMap } from "./windowsProcessSnapshot";
 
@@ -52,7 +51,7 @@ export interface ProcessTreeKiller {
     readonly includeRootTree?: boolean | undefined;
     readonly onError: (
       error: Error,
-      context: { readonly pid: number; readonly source: "tree-kill" | "captured" },
+      context: { readonly pid: number; readonly source: "root-tree" | "captured" },
     ) => void;
   }): void;
 }
@@ -122,20 +121,59 @@ export function collectDescendantProcesses(
   return descendants;
 }
 
+const PROCESS_TABLE_SCAN_ARGS = ["-eo", "pid=,ppid=,lstart=,command="] as const;
+
+function processTableScanOptions() {
+  return {
+    // lstart uses locale-dependent %c; the parser expects the C locale's five tokens.
+    env: { ...process.env, LC_ALL: "C" },
+    encoding: "utf8" as const,
+    maxBuffer: PROCESS_TREE_SCAN_MAX_BUFFER_BYTES,
+    timeout: PROCESS_TREE_SCAN_TIMEOUT_MS,
+  };
+}
+
 function captureProcessChildrenMapSync(): ProcessChildrenMap | null {
   try {
-    const result = spawnProcessSync("ps", ["-eo", "pid=,ppid=,lstart=,command="], {
-      // lstart uses locale-dependent %c; the parser expects the C locale's five tokens.
-      env: { ...process.env, LC_ALL: "C" },
-      encoding: "utf8",
-      maxBuffer: PROCESS_TREE_SCAN_MAX_BUFFER_BYTES,
-      timeout: PROCESS_TREE_SCAN_TIMEOUT_MS,
-    });
+    const result = spawnProcessSync("ps", PROCESS_TABLE_SCAN_ARGS, processTableScanOptions());
     if (result.error || result.status !== 0) return null;
     return parseProcessChildrenMap(result.stdout, true);
   } catch {
     return null;
   }
+}
+
+// The same full process-table scan without blocking the event loop. Reading
+// every process takes tens of milliseconds on a busy machine, and teardown runs
+// for each provider probe, so a synchronous scan stalls unrelated RPCs.
+function captureProcessChildrenMap(): Promise<ProcessChildrenMap | null> {
+  return new Promise((resolve) => {
+    try {
+      execProcessFile("ps", PROCESS_TABLE_SCAN_ARGS, processTableScanOptions(), (error, stdout) =>
+        resolve(error ? null : parseProcessChildrenMap(stdout, true)),
+      );
+    } catch {
+      resolve(null);
+    }
+  });
+}
+
+function capturedTreeFromChildrenMap(
+  rootPid: number,
+  childrenByParentPid: ProcessChildrenMap | null,
+): CapturedProcessTree {
+  if (!childrenByParentPid) return { descendants: [], captureComplete: false };
+  // A root absent from the snapshot — neither a child of another process
+  // nor a parent key — is provably not running, and refusing to collect
+  // also closes the stale-pid kill path. Sparse maps may legitimately list
+  // a live root only as a parent key, so parentage alone counts as presence.
+  if (!childrenByParentPid.has(rootPid) && !processesByPid(childrenByParentPid).has(rootPid)) {
+    return { descendants: [], captureComplete: true };
+  }
+  return {
+    descendants: collectDescendantProcesses(rootPid, childrenByParentPid),
+    captureComplete: true,
+  };
 }
 
 function readCurrentProcesses(pids: readonly number[]): ProcessIdentityMap | null {
@@ -174,6 +212,31 @@ function signalPid(pid: number, signal: TerminalKillSignal): Error | null {
   }
 }
 
+/**
+ * Signals an owned Windows process tree with `taskkill /T /F`, which is the
+ * only tree-wide signal Windows provides, so `signal` is intentionally unused.
+ *
+ * This runs through the shared process boundary instead of a shell `exec`:
+ * a shell-wrapped `taskkill` launches a visible `cmd.exe` under a GUI parent,
+ * which flashes a console window on every teardown.
+ */
+function signalWindowsProcessTree(
+  rootPid: number,
+  _signal: TerminalKillSignal,
+  callback: (error?: Error | null) => void,
+): void {
+  try {
+    execProcessFile(
+      "taskkill",
+      ["/pid", String(rootPid), "/T", "/F"],
+      { encoding: "utf8" },
+      (error) => callback(error),
+    );
+  } catch (error) {
+    callback(error instanceof Error ? error : new Error(String(error)));
+  }
+}
+
 function capturedProcessesForSignal(
   descendants: readonly CapturedProcess[],
   signal: TerminalKillSignal,
@@ -207,7 +270,7 @@ export function createProcessTreeKiller(
     captureChildrenMap: captureProcessChildrenMapSync,
     readCurrentProcesses,
     signalPid,
-    signalTree: treeKill,
+    signalTree: signalWindowsProcessTree,
     ...dependencies,
   };
 
@@ -229,18 +292,7 @@ export function createProcessTreeKiller(
       ) {
         childrenByParentPid = deps.captureChildrenMap();
       }
-      if (!childrenByParentPid) return { descendants: [], captureComplete: false };
-      // A root absent from the snapshot — neither a child of another process
-      // nor a parent key — is provably not running, and refusing to collect
-      // also closes the stale-pid kill path. Sparse maps may legitimately list
-      // a live root only as a parent key, so parentage alone counts as presence.
-      if (!childrenByParentPid.has(rootPid) && !processesByPid(childrenByParentPid).has(rootPid)) {
-        return { descendants: [], captureComplete: true };
-      }
-      return {
-        descendants: collectDescendantProcesses(rootPid, childrenByParentPid),
-        captureComplete: true,
-      };
+      return capturedTreeFromChildrenMap(rootPid, childrenByParentPid);
     },
     inspect: (tree) => {
       if (tree.captureComplete === false) {
@@ -271,9 +323,9 @@ export function createProcessTreeKiller(
       includeRootTree = true,
       onError,
     }) => {
-      // Refuse even when a caller supplies its own tree: signalTree (tree-kill)
-      // walks the live process table itself, so an unsafe rootPid would kill
-      // far more than `tree.descendants`.
+      // Refuse even when a caller supplies its own tree: signalTree runs
+      // `taskkill /T` across the live process tree itself, so an unsafe rootPid
+      // would kill far more than `tree.descendants`.
       if (isUnsafeProcessTreeRoot(rootPid)) return;
       const capturedProcesses = capturedProcessesForSignal(
         tree.descendants,
@@ -288,14 +340,14 @@ export function createProcessTreeKiller(
       if (includeRootTree) {
         if (deps.platform === "win32") {
           deps.signalTree(rootPid, signal, (error) => {
-            if (error) onError(error, { pid: rootPid, source: "tree-kill" });
+            if (error) onError(error, { pid: rootPid, source: "root-tree" });
           });
         } else {
           // The captured descendants were already signalled above. Signal the
-          // POSIX root directly so teardown cannot leak an unhandled error from
-          // tree-kill's internal `ps`/`pgrep` subprocesses when PATH is sparse.
+          // POSIX root directly: `kill` needs no process-table walk, so teardown
+          // cannot leak an unhandled error when PATH is sparse.
           const error = deps.signalPid(rootPid, signal);
-          if (error) onError(error, { pid: rootPid, source: "tree-kill" });
+          if (error) onError(error, { pid: rootPid, source: "root-tree" });
         }
       }
     },
@@ -326,8 +378,18 @@ export async function captureProcessTree(
     return { descendants: [], captureComplete: false };
   }
   const platform = options.platform ?? process.platform;
-  const killer = options.processTreeKiller ?? defaultProcessTreeKiller;
-  if (platform !== "win32") return killer.capture(rootPid);
+  if (platform !== "win32") {
+    if (options.processTreeKiller) return options.processTreeKiller.capture(rootPid);
+    let childrenByParentPid: ProcessChildrenMap | null = null;
+    for (
+      let attempt = 0;
+      attempt < PROCESS_TREE_CAPTURE_ATTEMPTS && !childrenByParentPid;
+      attempt += 1
+    ) {
+      childrenByParentPid = await captureProcessChildrenMap();
+    }
+    return capturedTreeFromChildrenMap(rootPid, childrenByParentPid);
+  }
 
   const childrenByParentPid = await (
     options.captureWindowsChildren ?? captureWindowsProcessChildrenMap
@@ -397,7 +459,7 @@ export async function inspectProcessTree(
   };
 }
 
-/** Signal an owned tree through one platform boundary (taskkill /T on Windows via tree-kill). */
+/** Signal an owned tree through one platform boundary (`taskkill /T` on Windows). */
 export function signalProcessTree(input: {
   readonly rootPid: number;
   readonly signal: TerminalKillSignal;
@@ -406,7 +468,7 @@ export function signalProcessTree(input: {
   readonly includeRootTree?: boolean;
   readonly onError?: (
     error: Error,
-    context: { readonly pid: number; readonly source: "tree-kill" | "captured" },
+    context: { readonly pid: number; readonly source: "root-tree" | "captured" },
   ) => void;
   readonly processTreeKiller?: ProcessTreeKiller;
 }): void {

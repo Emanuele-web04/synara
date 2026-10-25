@@ -16,7 +16,10 @@ export function resolveCatalogDependencies(
       }
 
       const catalogKey = spec.slice("catalog:".length).trim();
-      const lookupKey = catalogKey.length > 0 ? catalogKey : name;
+      // Bun's scoped overrides use parent>dependency selectors. Keep the selector
+      // in the staged manifest, but resolve the catalog for its dependency.
+      const dependencyName = name.slice(name.lastIndexOf(">") + 1).trim();
+      const lookupKey = catalogKey.length > 0 ? catalogKey : dependencyName;
       const resolved = catalog[lookupKey];
 
       if (typeof resolved !== "string" || resolved.length === 0) {

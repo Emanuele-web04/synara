@@ -38,6 +38,14 @@ try {
     }
     Set-MpPreference -DisableRealtimeMonitoring $false -DisableArchiveScanning $false -DisableIOAVProtection $false -DisableBehaviorMonitoring $false -DisableScriptScanning $false
     Update-MpSignature
+    $signatureStatus = Get-MpComputerStatus
+    if (-not $signatureStatus.AntivirusSignatureLastUpdated -or $signatureStatus.AntivirusSignatureLastUpdated -lt (Get-Date).AddDays(-1)) {
+        # A configured source can successfully return older staged definitions.
+        # Retry Microsoft's direct source; the freshness gate below still applies.
+        Save-DefenderState 'default-update'
+        Write-Output 'Configured update source returned stale definitions; retrying MMPC.'
+        Update-MpSignature -UpdateSource MMPC
+    }
     for ($attempt = 0; $attempt -lt 12; $attempt++) {
         if ((Get-MpComputerStatus).RealTimeProtectionEnabled) { break }
         Start-Sleep -Seconds 5
@@ -50,8 +58,29 @@ try {
         $preferences.DisableBehaviorMonitoring -or $preferences.DisableScriptScanning) {
         throw 'Defender antivirus, real-time, archive, download, behavior or script protection is not active.'
     }
-    if (-not $status.AntivirusSignatureLastUpdated -or $status.AntivirusSignatureLastUpdated -lt (Get-Date).AddDays(-1)) {
-        throw 'Defender security intelligence is more than 24 hours old after updating.'
+    if (-not $status.AntivirusSignatureLastUpdated -or $status.DefenderSignaturesOutOfDate) {
+        throw 'Defender security intelligence is missing or reported out of date after updating.'
+    }
+    if ($status.AntivirusSignatureLastUpdated -lt (Get-Date).AddDays(-1)) {
+        # LastUpdated can predate publication even for Microsoft's latest release.
+        # An older local timestamp requires independent proof of the current version,
+        # rather than a wider age allowance. Missing or changed vendor data fails closed.
+        $definitionSource = 'https://www.microsoft.com/en-us/wdsi/defenderupdates'
+        $definitionPage = Invoke-WebRequest -Uri $definitionSource -Headers @{ 'Cache-Control' = 'no-cache' }
+        $versionMatches = [regex]::Matches($definitionPage.Content, '<li>\s*Version:\s*<span>\s*(\d+\.\d+\.\d+\.\d+)\s*</span>\s*</li>')
+        if ($versionMatches.Count -ne 1) { throw 'Microsoft latest Defender version could not be verified.' }
+        $latestVersion = $versionMatches[0].Groups[1].Value
+        @{
+            source = $definitionSource
+            checkedAt = (Get-Date).ToUniversalTime().ToString('o')
+            latestVersion = $latestVersion
+            installedVersion = $status.AntivirusSignatureVersion
+            signatureLastUpdated = $status.AntivirusSignatureLastUpdated
+        } | ConvertTo-Json | Set-Content "$evidence/latest-version.json"
+        if ($status.AntivirusSignatureVersion -ne $latestVersion) {
+            throw 'Defender definitions are older than 24 hours and do not match Microsoft latest version.'
+        }
+        Write-Output "Installed Defender definitions match Microsoft latest version ($latestVersion)."
     }
     if (@($preferences.ExclusionPath + $preferences.ExclusionExtension + $preferences.ExclusionProcess | Where-Object { $_ }).Count -gt 0) {
         throw 'Defender exclusions remain on the qualification runner.'

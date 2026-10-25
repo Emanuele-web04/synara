@@ -7,7 +7,11 @@ import type { ThreadId } from "@synara/contracts";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { toastManager } from "../components/ui/toast";
-import { describeThreadUnblockResult, unblockThreadFromClient } from "../lib/threadUnblock";
+import {
+  describeThreadUnblockResult,
+  resolveThreadUnblockTarget,
+  unblockThreadFromClient,
+} from "../lib/threadUnblock";
 import { readNativeApi } from "../nativeApi";
 
 /**
@@ -38,7 +42,7 @@ export function useThreadUnblock(input: {
 
   const unblockThread = useCallback(
     (targetThreadId?: ThreadId) => {
-      const resolvedThreadId = targetThreadId ?? threadId;
+      const resolvedThreadId = resolveThreadUnblockTarget(targetThreadId, threadId);
       if (!resolvedThreadId || inFlightThreadIdRef.current !== null) return;
       inFlightThreadIdRef.current = resolvedThreadId;
       setUnblockingThreadId(resolvedThreadId);

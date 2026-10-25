@@ -74,7 +74,7 @@ describe("readPathFromLoginShell", () => {
     expect(args?.[1]).toContain("printenv PATH || true");
     expect(args?.[1]).toContain("__SYNARA_ENV_PATH_START__");
     expect(args?.[1]).toContain("__SYNARA_ENV_PATH_END__");
-    expect(options).toEqual({ encoding: "utf8", timeout: 5000 });
+    expect(options).toEqual({ encoding: "utf8", timeout: 5000, windowsHide: true });
   });
 });
 
@@ -92,6 +92,7 @@ describe("readPathFromLaunchctl", () => {
     expect(execFile).toHaveBeenCalledWith("/bin/launchctl", ["getenv", "PATH"], {
       encoding: "utf8",
       timeout: 2000,
+      windowsHide: true,
     });
   });
 

@@ -173,6 +173,8 @@ describe("Betterwright runtime errors", () => {
       const failure = await run().catch((value: unknown) => value);
       expect(failure).toMatchObject({ browserError: { code: "BrowserEvaluationFailed" } });
       expect(JSON.stringify(failure)).not.toContain("private-password");
+      expect(mocks.connectionClose).toHaveBeenCalledWith(true);
+      expect(mocks.browserClose).toHaveBeenCalledOnce();
     },
   );
 
@@ -254,17 +256,6 @@ describe("Betterwright runtime errors", () => {
     await expect(run()).rejects.toThrow("Worker disconnected");
     expect(mocks.connectionClose).toHaveBeenCalledWith(true);
   });
-
-  it.each(["Worker exited", "Execution timed out", "Transport failed"])(
-    "cancels uncertain execution even when the worker resolves an error: %s",
-    async (error) => {
-      mocks.run.mockResolvedValue({ ok: false, error });
-      await expect(run()).rejects.toMatchObject({
-        browserError: { code: "BrowserEvaluationFailed" },
-      });
-      expect(mocks.connectionClose).toHaveBeenCalledWith(true);
-    },
-  );
 
   it("rejects and restores throttling when cancelled before the connection opens", async () => {
     const controller = new AbortController();

@@ -6,14 +6,39 @@ import {
   type ProjectId,
   ThreadId,
   TurnId,
+  type OrchestrationCheckpointSummary,
   type OrchestrationEvent,
   type OrchestrationProjectShell,
   type OrchestrationThread,
+  type OrchestrationThreadShell,
   type ProviderSession,
   type ProviderRuntimeEvent,
 } from "@synara/contracts";
-import { Cause, Deferred, Effect, Fiber, Layer, Option, Schedule, Stream } from "effect";
-import { makeDrainableWorker, startDrainableWorkerProducers } from "@synara/shared/DrainableWorker";
+import {
+  Cause,
+  Deferred,
+  Effect,
+  Fiber,
+  Layer,
+  Option,
+  Queue,
+  Schedule,
+  Semaphore,
+  ServiceMap,
+  Stream,
+} from "effect";
+import { makeKeyedDrainableWorker } from "@synara/shared/KeyedDrainableWorker";
+import * as SqlClient from "effect/unstable/sql/SqlClient";
+import {
+  CHECKPOINT_RUNTIME_CONSUMER,
+  PROVIDER_RUNTIME_INGESTION_CONSUMER,
+  ProviderRuntimeEventRepository,
+} from "../../persistence/Services/ProviderRuntimeEvents.ts";
+import { ProviderRuntimeEventRepositoryLive } from "../../persistence/Layers/ProviderRuntimeEvents.ts";
+import { OrchestrationEventStore } from "../../persistence/Services/OrchestrationEventStore.ts";
+import { OrchestrationEventStoreLive } from "../../persistence/Layers/OrchestrationEventStore.ts";
+import { OrchestrationEventDeliveryRepository } from "../../persistence/Services/OrchestrationEventDeliveries.ts";
+import { OrchestrationEventDeliveryRepositoryLive } from "../../persistence/Layers/OrchestrationEventDeliveries.ts";
 import { isProviderKind } from "@synara/shared/providerInstances";
 
 import { parseCheckpointFilesFromUnifiedDiff } from "../../checkpointing/Diffs.ts";
@@ -32,6 +57,8 @@ import { clearWorkspaceIndexCache } from "../../workspaceEntries.ts";
 import { CheckpointStore } from "../../checkpointing/Services/CheckpointStore.ts";
 import { ProjectionTurnRepository } from "../../persistence/Services/ProjectionTurns.ts";
 import { ProjectionTurnRepositoryLive } from "../../persistence/Layers/ProjectionTurns.ts";
+import { ProjectionThreadMessageRepository } from "../../persistence/Services/ProjectionThreadMessages.ts";
+import { ProjectionThreadMessageRepositoryLive } from "../../persistence/Layers/ProjectionThreadMessages.ts";
 import { ProviderService } from "../../provider/Services/ProviderService.ts";
 import { CheckpointReactor, type CheckpointReactorShape } from "../Services/CheckpointReactor.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
@@ -45,8 +72,21 @@ import {
   checkpointRevertActiveTurnDetail,
   threadHasInFlightTurn,
 } from "../commandInvariants.ts";
-import { isGitRepository } from "../../git/isRepo.ts";
+import {
+  canonicalImportPath,
+  findImportGitWorkspace,
+  importPathIdentity,
+} from "../projectImportPaths.ts";
 import { resolveProviderSessionThread } from "../providerSessionThread.ts";
+
+class PinnedCheckpointWorkspace extends ServiceMap.Service<
+  PinnedCheckpointWorkspace,
+  {
+    readonly cwd: string | undefined;
+    readonly isGitRepository: boolean;
+    readonly identity?: string | undefined;
+  }
+>()("synara/checkpoint/PinnedWorkspace") {}
 
 type ReactorInput =
   | {
@@ -59,8 +99,17 @@ type ReactorInput =
     };
 
 const CHECKPOINT_REACTOR_CAPACITY = 256;
+// Background ACKs coalesce for this window; drain still flushes synchronously.
+const CHECKPOINT_ACK_INTERVAL_MS = 50;
+// Rows the reactor ignores (text deltas, telemetry) never wake a scan directly;
+// a burst of them moves the durable cursor once per this window. drain still
+// wakes the scan itself, so its fence does not wait for this window.
+const CHECKPOINT_IRRELEVANT_SCAN_INTERVAL_MS = 1_000;
 
 const REVERT_LEASE_ACQUIRE_TIMEOUT_MS = 15_000;
+// Live git turn diffs (providers without a streamed patch) cost a full worktree
+// snapshot plus a diff, so each thread captures at most once per this window.
+const LIVE_TURN_DIFF_THROTTLE_WINDOW_MS = 3_000;
 
 function toTurnId(value: string | undefined): TurnId | null {
   return value === undefined ? null : TurnId.makeUnsafe(String(value));
@@ -106,43 +155,32 @@ const REVERT_COMPLETE_MAX_RETRIES = 3;
 const revertRescueCheckpointRef = (threadId: ThreadId): CheckpointRef =>
   checkpointRefForThreadRevertRescue(threadId, crypto.randomUUID());
 
-function resolveExistingAssistantMessageIdForTurn(
-  thread:
-    | {
-        readonly messages: ReadonlyArray<{
-          readonly id: MessageId;
-          readonly role: string;
-          readonly turnId: TurnId | null;
-        }>;
-      }
-    | undefined,
-  turnId: TurnId,
-  assistantMessageId: MessageId | undefined,
-): MessageId | undefined {
-  if (!thread || assistantMessageId === undefined) {
-    return undefined;
-  }
-  return thread.messages.some(
-    (entry) =>
-      entry.id === assistantMessageId && entry.role === "assistant" && entry.turnId === turnId,
-  )
-    ? assistantMessageId
-    : undefined;
+// The thread fields the checkpoint hot paths read. A projected shell and the
+// engine's committed command-model thread both provide them.
+type CheckpointThread = OrchestrationThreadShell | OrchestrationThread;
+
+export interface CheckpointReactorLiveOptions {
+  /** Defaults to LIVE_TURN_DIFF_THROTTLE_WINDOW_MS. */
+  readonly liveTurnDiffThrottleWindowMs?: number;
+  /** Defaults to CHECKPOINT_IRRELEVANT_SCAN_INTERVAL_MS. */
+  readonly irrelevantScanIntervalMs?: number;
 }
 
-const make = Effect.gen(function* () {
+const make = Effect.fnUntraced(function* (options?: CheckpointReactorLiveOptions) {
+  const liveTurnDiffThrottleWindowMs =
+    options?.liveTurnDiffThrottleWindowMs ?? LIVE_TURN_DIFF_THROTTLE_WINDOW_MS;
+  const irrelevantScanIntervalMs =
+    options?.irrelevantScanIntervalMs ?? CHECKPOINT_IRRELEVANT_SCAN_INTERVAL_MS;
   const orchestrationEngine = yield* OrchestrationEngineService;
   const providerService = yield* ProviderService;
   const checkpointStore = yield* CheckpointStore;
   const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
   const projectionTurnRepository = yield* ProjectionTurnRepository;
+  const projectionThreadMessageRepository = yield* ProjectionThreadMessageRepository;
   const receiptBus = yield* RuntimeReceiptBus;
   const turnCheckpointCoordinator = yield* TurnCheckpointCoordinator;
+  const sql = yield* SqlClient.SqlClient;
   const pendingMessageStartByThread = new Map<ThreadId, MessageId>();
-  // Coalesces live turn-diff recomputes: at most one queued + one in-flight per
-  // thread. The flag is cleared when the worker starts processing the job so an
-  // edit arriving during the git work re-schedules and captures the newest tree.
-  const liveDiffScheduledThreads = new Set<ThreadId>();
   // Turns that started in a workspace that was not yet a git repository. A
   // scaffolding turn (`git init`, create-next-app, ...) turns the folder into a
   // repo mid-turn, so the completion capture finds no turn-start baseline. That
@@ -164,38 +202,66 @@ const make = Effect.gen(function* () {
     return capabilities?.supportsLiveTurnDiffPatch === true;
   });
 
+  // The id when it names an assistant message of this turn on a live thread.
+  // Point reads replace the scan of the full detail's message window, so a
+  // message older than that 2000-message window is now found as well.
+  const existingAssistantMessageIdForTurn = Effect.fnUntraced(function* (input: {
+    readonly threadId: ThreadId;
+    readonly turnId: TurnId;
+    readonly assistantMessageId: MessageId | undefined;
+  }) {
+    if (input.assistantMessageId === undefined) {
+      return undefined;
+    }
+    const message = yield* projectionThreadMessageRepository.getByThreadAndMessageId({
+      threadId: input.threadId,
+      messageId: input.assistantMessageId,
+    });
+    return Option.isSome(message) &&
+      message.value.role === "assistant" &&
+      message.value.turnId === input.turnId
+      ? input.assistantMessageId
+      : undefined;
+  });
+
+  const newestAssistantMessageIdForTurn = (threadId: ThreadId, turnId: TurnId) =>
+    projectionThreadMessageRepository
+      .getNewestIdByThreadTurnRole({ threadId, turnId, role: "assistant" })
+      .pipe(Effect.map(Option.getOrUndefined));
+
   // Wait a short time for ProviderRuntimeIngestion to persist the final
-  // assistant message id when turn completion wins the subscriber race.
+  // assistant message id when turn completion wins the subscriber race. A
+  // missing (or deleted) thread resolves nothing, as with the full detail.
   const resolveAssistantMessageIdForTurn = Effect.fnUntraced(function* (input: {
     readonly threadId: ThreadId;
     readonly turnId: TurnId;
     readonly assistantMessageId: MessageId | undefined;
   }) {
-    const currentThreadOption = yield* projectionSnapshotQuery.getThreadDetailById(input.threadId);
-    const currentThread = Option.getOrUndefined(currentThreadOption);
-    const knownInputAssistantMessageId = resolveExistingAssistantMessageIdForTurn(
-      currentThread,
-      input.turnId,
-      input.assistantMessageId,
-    );
-    if (knownInputAssistantMessageId !== undefined) {
-      return knownInputAssistantMessageId;
+    if (input.assistantMessageId !== undefined) {
+      const currentThread = yield* projectionSnapshotQuery.getThreadShellById(input.threadId);
+      const knownInputAssistantMessageId = Option.isSome(currentThread)
+        ? yield* existingAssistantMessageIdForTurn(input)
+        : undefined;
+      if (knownInputAssistantMessageId !== undefined) {
+        return knownInputAssistantMessageId;
+      }
     }
 
     for (let attempt = 0; attempt < ASSISTANT_MESSAGE_ID_RETRY_ATTEMPTS; attempt += 1) {
-      const threadOption = yield* projectionSnapshotQuery.getThreadDetailById(input.threadId);
-      const thread = Option.getOrUndefined(threadOption);
+      const thread = Option.getOrUndefined(
+        yield* projectionSnapshotQuery.getThreadShellById(input.threadId),
+      );
       const candidateAssistantMessageId =
-        resolveExistingAssistantMessageIdForTurn(
-          thread,
-          input.turnId,
-          thread?.latestTurn?.turnId === input.turnId
-            ? (thread.latestTurn.assistantMessageId ?? undefined)
-            : undefined,
-        ) ??
-        thread?.messages
-          .toReversed()
-          .find((entry) => entry.role === "assistant" && entry.turnId === input.turnId)?.id;
+        thread === undefined
+          ? undefined
+          : ((yield* existingAssistantMessageIdForTurn({
+              threadId: input.threadId,
+              turnId: input.turnId,
+              assistantMessageId:
+                thread.latestTurn?.turnId === input.turnId
+                  ? (thread.latestTurn.assistantMessageId ?? undefined)
+                  : undefined,
+            })) ?? (yield* newestAssistantMessageIdForTurn(input.threadId, input.turnId)));
 
       if (candidateAssistantMessageId !== undefined) {
         return candidateAssistantMessageId;
@@ -240,23 +306,57 @@ const make = Effect.gen(function* () {
     return latestCheckpoint?.turnId ?? thread.latestTurn?.turnId ?? null;
   });
 
+  // A notice is advisory: its failure must never reach failSource and stop
+  // every workspace. Interruption still propagates.
+  const catchNoticeFailure = <A, E, R>(notice: Effect.Effect<A, E, R>) =>
+    notice.pipe(
+      Effect.catchCause((cause) =>
+        Cause.hasInterrupts(cause)
+          ? Effect.failCause(cause)
+          : Effect.logWarning(
+              "Checkpoint failure notice could not be published; durable settlement is retained",
+              { cause: Cause.pretty(cause) },
+            ),
+      ),
+    );
+  const noticeThreadExists = (threadId: ThreadId) =>
+    orchestrationEngine
+      .getReadModel()
+      .pipe(
+        Effect.map((model) =>
+          model.threads.some((thread) => thread.id === threadId && thread.deletedAt == null),
+        ),
+      );
   const appendRevertFailureActivity = Effect.fnUntraced(function* (input: {
     readonly threadId: ThreadId;
     readonly turnCount: number;
     readonly detail: string;
     readonly createdAt: string;
+    readonly commandId?: CommandId;
+    readonly resolvedTurnId?: TurnId | null;
   }) {
-    const turnId = yield* resolveRevertFailureTurnId({
-      threadId: input.threadId,
-      turnCount: input.turnCount,
-    });
+    if (!(yield* noticeThreadExists(input.threadId))) return;
+    if (input.commandId) {
+      const accepted =
+        yield* sql`SELECT 1 FROM orchestration_command_receipts WHERE command_id = ${input.commandId} AND aggregate_kind = 'thread' AND aggregate_id = ${input.threadId} AND status = 'accepted'`.pipe(
+          Effect.orDie,
+        );
+      if (accepted.length) return;
+    }
+    const turnId =
+      input.resolvedTurnId !== undefined
+        ? input.resolvedTurnId
+        : yield* resolveRevertFailureTurnId({
+            threadId: input.threadId,
+            turnCount: input.turnCount,
+          });
     yield* orchestrationEngine
       .dispatch({
         type: "thread.activity.append",
-        commandId: serverCommandId("checkpoint-revert-failure"),
+        commandId: input.commandId ?? serverCommandId("checkpoint-revert-failure"),
         threadId: input.threadId,
         activity: {
-          id: EventId.makeUnsafe(crypto.randomUUID()),
+          id: EventId.makeUnsafe(input.commandId ?? crypto.randomUUID()),
           tone: "error",
           kind: CHECKPOINT_REVERT_FAILED_ACTIVITY_KIND,
           summary: "Checkpoint revert failed",
@@ -276,31 +376,90 @@ const make = Effect.gen(function* () {
           ),
         ),
       );
-  });
+  }, catchNoticeFailure);
 
-  const appendCaptureFailureActivity = (input: {
+  const appendCheckpointIssueActivity = (input: {
     readonly threadId: ThreadId;
     readonly turnId: TurnId | null;
     readonly detail: string;
     readonly createdAt: string;
+    readonly baselineUnavailable?: true;
+    readonly commandId?: CommandId;
   }) =>
-    orchestrationEngine.dispatch({
-      type: "thread.activity.append",
-      commandId: serverCommandId("checkpoint-capture-failure"),
-      threadId: input.threadId,
-      activity: {
-        id: EventId.makeUnsafe(crypto.randomUUID()),
-        tone: "error",
-        kind: "checkpoint.capture.failed",
-        summary: "Checkpoint capture failed",
-        payload: {
-          detail: input.detail,
+    Effect.gen(function* () {
+      if (!(yield* noticeThreadExists(input.threadId))) return;
+      if (input.commandId) {
+        const accepted =
+          yield* sql`SELECT 1 FROM orchestration_command_receipts WHERE command_id = ${input.commandId} AND aggregate_kind = 'thread' AND aggregate_id = ${input.threadId} AND status = 'accepted'`.pipe(
+            Effect.orDie,
+          );
+        if (accepted.length) return;
+      }
+      let messageId: MessageId | undefined;
+      let activityId = EventId.makeUnsafe(input.commandId ?? crypto.randomUUID());
+      if (input.baselineUnavailable && input.turnId !== null) {
+        const thread = yield* getThreadDetail(input.threadId);
+        const turn = yield* projectionTurnRepository
+          .getByTurnId({ threadId: input.threadId, turnId: input.turnId })
+          .pipe(Effect.catch(() => Effect.succeed(Option.none())));
+        messageId =
+          Option.getOrNull(turn)?.pendingMessageId ??
+          thread?.messages.find(
+            (message) => message.role === "user" && message.turnId === input.turnId,
+          )?.id;
+        // Native children inherit their parent's workspace, without an independent
+        // pre-send owner. Keep actual capture failures and owned skips actionable.
+        if (thread?.parentThreadId && messageId === undefined) return;
+        if (
+          thread?.activities.some(
+            (activity) =>
+              activity.kind === "checkpoint.baseline.skipped" &&
+              (activity.turnId === input.turnId ||
+                (messageId !== undefined &&
+                  typeof activity.payload === "object" &&
+                  activity.payload !== null &&
+                  "messageId" in activity.payload &&
+                  activity.payload.messageId === messageId)),
+          )
+        )
+          return;
+        activityId = EventId.makeUnsafe(
+          `checkpoint-baseline-skipped:${
+            messageId === undefined
+              ? checkpointRefForThreadTurnStart(input.threadId, input.turnId)
+              : checkpointRefForThreadMessageStart(input.threadId, messageId)
+          }`,
+        );
+      }
+      yield* orchestrationEngine.dispatch({
+        type: "thread.activity.append",
+        commandId:
+          input.commandId ??
+          serverCommandId(
+            input.baselineUnavailable
+              ? "checkpoint-baseline-unavailable"
+              : "checkpoint-capture-failure",
+          ),
+        threadId: input.threadId,
+        activity: {
+          id: activityId,
+          tone: input.baselineUnavailable ? "info" : "error",
+          kind: input.baselineUnavailable
+            ? "checkpoint.baseline.skipped"
+            : "checkpoint.capture.failed",
+          summary: input.baselineUnavailable
+            ? "Checkpoint baseline unavailable for this turn"
+            : "Checkpoint capture failed",
+          payload: {
+            detail: input.detail,
+            ...(messageId === undefined ? {} : { messageId }),
+          },
+          turnId: input.turnId,
+          createdAt: input.createdAt,
         },
-        turnId: input.turnId,
         createdAt: input.createdAt,
-      },
-      createdAt: input.createdAt,
-    });
+      });
+    }).pipe(catchNoticeFailure);
 
   const resolveSessionRuntimeForThread = Effect.fnUntraced(function* (threadId: ThreadId) {
     const thread = yield* projectionSnapshotQuery
@@ -335,25 +494,92 @@ const make = Effect.gen(function* () {
     return Option.none();
   });
 
-  const isGitWorkspace = (cwd: string) => isGitRepository(cwd);
+  const getCommittedThread = (threadId: ThreadId) =>
+    orchestrationEngine
+      .getReadModel()
+      .pipe(
+        Effect.map((committed) =>
+          committed.threads.find((thread) => thread.id === threadId && thread.deletedAt === null),
+        ),
+      );
 
   const getThreadDetail = Effect.fnUntraced(function* (
     threadId: ThreadId,
   ): Effect.fn.Return<OrchestrationThread | undefined> {
-    return Option.getOrUndefined(
-      yield* projectionSnapshotQuery
-        .getThreadDetailById(threadId)
-        .pipe(Effect.catch(() => Effect.succeed(Option.none()))),
-    );
+    const projected = yield* projectionSnapshotQuery
+      .getThreadDetailById(threadId)
+      .pipe(Effect.orDie);
+    if (Option.isSome(projected)) return projected.value;
+    // A committed thread may precede its deferred detail projection. Retain its
+    // native checkpoint work using the engine's committed command model.
+    return yield* getCommittedThread(threadId);
+  });
+
+  // Hot-path counterpart of getThreadDetail (#1900): the shell has every thread
+  // field these paths read (workspace, session, parent, latest turn) in three
+  // point lookups instead of a full detail load. Missing and deleted threads
+  // read the same as there, and fall back to the committed command model.
+  const getThreadShell = Effect.fnUntraced(function* (
+    threadId: ThreadId,
+  ): Effect.fn.Return<CheckpointThread | undefined> {
+    const projected = yield* projectionSnapshotQuery
+      .getThreadShellById(threadId)
+      .pipe(Effect.orDie);
+    if (Option.isSome(projected)) return projected.value;
+    return yield* getCommittedThread(threadId);
+  });
+
+  // The shell plus the checkpoints the full detail carried. The checkpoint
+  // context selects the same rows (completed checkpoint turns, by turn count).
+  // The command-model fallback carries no checkpoints, as before.
+  const getThreadWithCheckpoints = Effect.fnUntraced(function* (
+    threadId: ThreadId,
+    includeLiveCheckpoints = false,
+  ): Effect.fn.Return<
+    | {
+        readonly thread: CheckpointThread;
+        readonly checkpoints: ReadonlyArray<OrchestrationCheckpointSummary>;
+        readonly projected: boolean;
+      }
+    | undefined
+  > {
+    const projected = yield* projectionSnapshotQuery
+      .getThreadShellById(threadId)
+      .pipe(Effect.orDie);
+    if (Option.isSome(projected)) {
+      const context = yield* projectionSnapshotQuery
+        .getThreadCheckpointContext(threadId, { includeLiveCheckpoints })
+        .pipe(Effect.orDie);
+      if (Option.isSome(context)) {
+        return { thread: projected.value, checkpoints: context.value.checkpoints, projected: true };
+      }
+      // The context also requires the project row, which a projection repair
+      // deletes and replays later while thread and turn rows stay. An empty list
+      // here would reuse turn count 1 and overwrite its ref, so read the
+      // checkpoints from the thread detail (no project join) on this rare path.
+      const detail = yield* projectionSnapshotQuery
+        .getThreadDetailWithoutActivitiesById(threadId)
+        .pipe(Effect.orDie);
+      if (Option.isSome(detail)) {
+        return { thread: projected.value, checkpoints: detail.value.checkpoints, projected: true };
+      }
+    }
+    const committed = yield* getCommittedThread(threadId);
+    return committed === undefined
+      ? undefined
+      : { thread: committed, checkpoints: committed.checkpoints, projected: false };
   });
 
   const getProjectShell = Effect.fnUntraced(function* (
     projectId: ProjectId,
   ): Effect.fn.Return<OrchestrationProjectShell | undefined> {
-    return Option.getOrUndefined(
-      yield* projectionSnapshotQuery
-        .getProjectShellById(projectId)
-        .pipe(Effect.catch(() => Effect.succeed(Option.none()))),
+    const projected = yield* projectionSnapshotQuery
+      .getProjectShellById(projectId)
+      .pipe(Effect.orDie);
+    if (Option.isSome(projected)) return projected.value;
+    const committed = yield* orchestrationEngine.getReadModel();
+    return committed.projects.find(
+      (project) => project.id === projectId && project.deletedAt === null,
     );
   });
 
@@ -370,9 +596,25 @@ const make = Effect.gen(function* () {
     readonly threadId: ThreadId;
     readonly thread: Pick<OrchestrationThread, "projectId" | "envMode" | "worktreePath">;
     readonly project: OrchestrationProjectShell;
+    readonly observedCwd?: { readonly source: string; readonly physical: string };
   }) {
-    const fromSession = yield* resolveSessionRuntimeForThread(input.threadId);
+    const pinned = yield* Effect.serviceOption(PinnedCheckpointWorkspace);
+    if (Option.isSome(pinned)) {
+      return pinned.value.cwd === undefined
+        ? undefined
+        : ({
+            cwd: pinned.value.cwd,
+            isGitRepository: pinned.value.isGitRepository,
+            sourceCwd: pinned.value.cwd,
+            identity: pinned.value.identity ?? importPathIdentity(pinned.value.cwd),
+          } as const);
+    }
+    const fromSession =
+      input.observedCwd === undefined
+        ? yield* resolveSessionRuntimeForThread(input.threadId)
+        : Option.none();
     const cwd =
+      input.observedCwd?.source ??
       Option.match(fromSession, {
         onNone: () => undefined,
         onSome: (runtime) => runtime.cwd,
@@ -385,7 +627,18 @@ const make = Effect.gen(function* () {
     if (!cwd) {
       return undefined;
     }
-    return { cwd, isGitRepository: isGitWorkspace(cwd) } as const;
+    const physicalCwd =
+      input.observedCwd?.physical ??
+      (yield* Effect.tryPromise(() => canonicalImportPath(cwd)).pipe(Effect.orDie));
+    const gitWorkspace = yield* Effect.tryPromise(() => findImportGitWorkspace(physicalCwd)).pipe(
+      Effect.orDie,
+    );
+    return {
+      cwd: physicalCwd,
+      isGitRepository: gitWorkspace !== null,
+      sourceCwd: cwd,
+      identity: importPathIdentity(gitWorkspace?.worktree ?? gitWorkspace?.root ?? physicalCwd),
+    } as const;
   });
 
   const resolveCheckpointCwd = Effect.fnUntraced(function* (input: {
@@ -403,18 +656,12 @@ const make = Effect.gen(function* () {
   const captureAndDispatchCheckpoint = Effect.fnUntraced(function* (input: {
     readonly threadId: ThreadId;
     readonly turnId: TurnId;
-    readonly thread: {
-      readonly messages: ReadonlyArray<{
-        readonly id: MessageId;
-        readonly role: string;
-        readonly turnId: TurnId | null;
-      }>;
-    };
     readonly cwd: string;
     readonly turnCount: number;
     readonly status: "ready" | "missing" | "error";
     readonly assistantMessageId: MessageId | undefined;
     readonly createdAt: string;
+    readonly commandId?: CommandId;
     // The workspace only became a git repository while this turn ran, so no
     // turn-start baseline could have been captured.
     readonly workspaceInitializedDuringTurn: boolean;
@@ -422,10 +669,20 @@ const make = Effect.gen(function* () {
     const fromCheckpointRef = checkpointRefForThreadTurnStart(input.threadId, input.turnId);
     const targetCheckpointRef = checkpointRefForThreadTurn(input.threadId, input.turnCount);
 
-    const fromCheckpointExists = yield* checkpointStore.hasCheckpointRef({
+    const fromCheckpointExists = yield* aliasTurnStartBaseline({
       cwd: input.cwd,
-      checkpointRef: fromCheckpointRef,
+      threadId: input.threadId,
+      turnId: input.turnId,
     });
+    if (fromCheckpointExists) {
+      yield* ensureLegacyBaselineCheckpoint({
+        threadId: input.threadId,
+        cwd: input.cwd,
+        turnCount: input.turnCount - 1,
+        createdAt: input.createdAt,
+        fromCheckpointRef,
+      });
+    }
     if (!fromCheckpointExists) {
       if (input.workspaceInitializedDuringTurn) {
         yield* Effect.logDebug(
@@ -468,7 +725,7 @@ const make = Effect.gen(function* () {
           .pipe(
             Effect.flatMap((diff) => parseCheckpointFilesFromUnifiedDiff(diff)),
             Effect.tapError((error) =>
-              appendCaptureFailureActivity({
+              appendCheckpointIssueActivity({
                 threadId: input.threadId,
                 turnId: input.turnId,
                 detail: `Checkpoint captured, but turn diff summary is unavailable: ${error.message}`,
@@ -486,26 +743,41 @@ const make = Effect.gen(function* () {
           )
       : input.workspaceInitializedDuringTurn
         ? []
-        : yield* appendCaptureFailureActivity({
+        : yield* appendCheckpointIssueActivity({
             threadId: input.threadId,
             turnId: input.turnId,
-            detail: "Checkpoint captured, but the turn start baseline is unavailable.",
+            baselineUnavailable: true,
+            detail:
+              "The initial workspace state is unavailable for this turn, so checkpoint diff and file undo are unavailable. The completed checkpoint was captured successfully.",
             createdAt: input.createdAt,
           }).pipe(Effect.as([]));
 
     const assistantMessageId = yield* resolveAssistantMessageIdForTurn({
       threadId: input.threadId,
       turnId: input.turnId,
-      assistantMessageId:
-        input.assistantMessageId ??
-        input.thread.messages
-          .toReversed()
-          .find((entry) => entry.role === "assistant" && entry.turnId === input.turnId)?.id,
+      assistantMessageId: input.assistantMessageId,
     });
+
+    const liveTurn = yield* projectionTurnRepository
+      .getByTurnId({
+        threadId: input.threadId,
+        turnId: input.turnId,
+      })
+      .pipe(
+        Effect.catch((error) =>
+          Effect.logWarning("live turn diff cleanup lookup failed", { detail: error.message }).pipe(
+            Effect.as(Option.none()),
+          ),
+        ),
+      );
+    const liveRevision =
+      Option.isSome(liveTurn) && liveTurn.value.checkpointRef?.startsWith("provider-diff:")
+        ? liveTurn.value.checkpointRef.slice("provider-diff:".length)
+        : undefined;
 
     yield* orchestrationEngine.dispatch({
       type: "thread.turn.diff.complete",
-      commandId: serverCommandId("checkpoint-turn-diff-complete"),
+      commandId: input.commandId ?? serverCommandId("checkpoint-turn-diff-complete"),
       threadId: input.threadId,
       turnId: input.turnId,
       completedAt: input.createdAt,
@@ -516,6 +788,19 @@ const make = Effect.gen(function* () {
       checkpointTurnCount: input.turnCount,
       createdAt: input.createdAt,
     });
+
+    yield* checkpointStore
+      .deleteCheckpointRefs({
+        cwd: input.cwd,
+        checkpointRefs: [
+          checkpointRefForThreadTurnLive(input.threadId, input.turnId, liveRevision),
+        ],
+      })
+      .pipe(
+        Effect.catch((error) =>
+          Effect.logWarning("live turn diff cleanup failed", { detail: error.message }),
+        ),
+      );
     yield* receiptBus.publish({
       type: "checkpoint.diff.finalized",
       threadId: input.threadId,
@@ -558,7 +843,11 @@ const make = Effect.gen(function* () {
     readonly cwd: string;
     readonly turnCount: number;
     readonly createdAt: string;
+    readonly fromCheckpointRef: CheckpointRef;
   }) {
+    // Only turn zero is a baseline. Missing completed checkpoints cannot be
+    // reconstructed from a later working tree or from a later turn's baseline.
+    if (input.turnCount !== 0) return;
     const legacyBaselineRef = checkpointRefForThreadTurn(input.threadId, input.turnCount);
     const legacyBaselineExists = yield* checkpointStore.hasCheckpointRef({
       cwd: input.cwd,
@@ -568,16 +857,49 @@ const make = Effect.gen(function* () {
       return;
     }
 
-    yield* checkpointStore.captureCheckpoint({
+    const copied = yield* checkpointStore.copyCheckpointRef({
       cwd: input.cwd,
-      checkpointRef: legacyBaselineRef,
+      fromCheckpointRef: input.fromCheckpointRef,
+      toCheckpointRef: legacyBaselineRef,
     });
+    if (!copied) return;
     yield* receiptBus.publish({
       type: "checkpoint.baseline.captured",
       threadId: input.threadId,
       checkpointTurnCount: input.turnCount,
       checkpointRef: legacyBaselineRef,
       createdAt: input.createdAt,
+    });
+  });
+
+  // Restart may resume with completion or a file-change event, without another
+  // turn.started. Recover only an already captured source ref bound to this
+  // durable turn; a missing baseline never permits a working-tree snapshot.
+  const aliasTurnStartBaseline = Effect.fnUntraced(function* (input: {
+    readonly threadId: ThreadId;
+    readonly turnId: TurnId;
+    readonly cwd: string;
+    readonly pendingMessageId?: MessageId;
+  }) {
+    const turnStartCheckpointRef = checkpointRefForThreadTurnStart(input.threadId, input.turnId);
+    if (
+      yield* checkpointStore.hasCheckpointRef({
+        cwd: input.cwd,
+        checkpointRef: turnStartCheckpointRef,
+      })
+    ) {
+      return true;
+    }
+    const persistedTurn = yield* projectionTurnRepository.getByTurnId({
+      threadId: input.threadId,
+      turnId: input.turnId,
+    });
+    const messageId = Option.getOrNull(persistedTurn)?.pendingMessageId ?? input.pendingMessageId;
+    if (messageId === undefined) return false;
+    return yield* checkpointStore.copyCheckpointRef({
+      cwd: input.cwd,
+      fromCheckpointRef: checkpointRefForThreadMessageStart(input.threadId, messageId),
+      toCheckpointRef: turnStartCheckpointRef,
     });
   });
 
@@ -590,14 +912,33 @@ const make = Effect.gen(function* () {
       return;
     }
 
-    const thread = yield* getThreadDetail(event.threadId);
-    if (!thread) {
+    const commandId = CommandId.makeUnsafe(
+      `server:checkpoint-native-complete:${encodeURIComponent(event.threadId)}:${encodeURIComponent(turnId)}`,
+    );
+    const completed = yield* sql`SELECT 1 FROM orchestration_command_receipts AS receipt
+      WHERE receipt.command_id = ${commandId} AND receipt.aggregate_kind = 'thread'
+        AND receipt.aggregate_id = ${event.threadId} AND receipt.status = 'accepted'
+        AND EXISTS (SELECT 1 FROM orchestration_events AS outcome
+          WHERE outcome.command_id = receipt.command_id AND outcome.event_type = 'thread.turn-diff-completed'
+            AND json_extract(outcome.payload_json, '$.turnId') = ${turnId})`.pipe(Effect.orDie);
+    // The receipt survives undo deleting the checkpoint projection/ref. A
+    // blocked different workspace can keep this already completed raw row
+    // below the global acknowledgement cursor until the next restart.
+    if (completed.length) return;
+    const loaded = yield* getThreadWithCheckpoints(event.threadId);
+    if (!loaded) {
       yield* Effect.logDebug("turn-completion checkpoint skipped: thread not found", {
         threadId: event.threadId,
         turnId,
       });
       return;
     }
+    const { thread, checkpoints } = loaded;
+    // The turn's newest assistant message as of this read, as the full detail's
+    // message window provided it (the command model carries no messages).
+    const newestAssistantMessageId = loaded.projected
+      ? yield* newestAssistantMessageIdForTurn(thread.id, turnId)
+      : undefined;
     const project = yield* getProjectShell(thread.projectId);
     if (!project) {
       yield* Effect.logDebug("turn-completion checkpoint skipped: project not found", {
@@ -622,7 +963,7 @@ const make = Effect.gen(function* () {
     // ProviderRuntimeIngestion may insert placeholder entries with status "missing"
     // before this reactor runs; those must not prevent real git capture.
     if (
-      thread.checkpoints.some(
+      checkpoints.some(
         (checkpoint) => checkpoint.turnId === turnId && checkpoint.status !== "missing",
       )
     ) {
@@ -648,10 +989,10 @@ const make = Effect.gen(function* () {
 
     // If a placeholder checkpoint exists for this turn, reuse its turn count
     // instead of incrementing past it.
-    const existingPlaceholder = thread.checkpoints.find(
+    const existingPlaceholder = checkpoints.find(
       (checkpoint) => checkpoint.turnId === turnId && checkpoint.status === "missing",
     );
-    const currentTurnCount = thread.checkpoints.reduce(
+    const currentTurnCount = checkpoints.reduce(
       (maxTurnCount, checkpoint) => Math.max(maxTurnCount, checkpoint.checkpointTurnCount),
       0,
     );
@@ -659,20 +1000,33 @@ const make = Effect.gen(function* () {
       ? existingPlaceholder.checkpointTurnCount
       : currentTurnCount + 1;
 
+    // The in-memory marker covers the normal turn.started path. Read the
+    // projection as well so a reactor restart between turn start and completion
+    // retains the provider-independent workspace classification.
+    const persistedTurn = yield* projectionTurnRepository.getByTurnId({
+      threadId: thread.id,
+      turnId,
+    });
+    const pendingTurnStart = Option.isNone(persistedTurn)
+      ? yield* projectionTurnRepository.getPendingTurnStartByThreadId({ threadId: thread.id })
+      : Option.none();
     const workspaceInitializedDuringTurn =
-      turnsStartedWithoutGitWorkspace.get(thread.id) === turnId;
+      turnsStartedWithoutGitWorkspace.get(thread.id) === turnId ||
+      (Option.isSome(persistedTurn) && persistedTurn.value.startedWithoutGitWorkspace === true) ||
+      (Option.isSome(pendingTurnStart) &&
+        pendingTurnStart.value.startedWithoutGitWorkspace === true);
     turnsStartedWithoutGitWorkspace.delete(thread.id);
 
     yield* captureAndDispatchCheckpoint({
       threadId: thread.id,
       turnId,
-      thread,
       cwd: checkpointCwd,
       turnCount: nextTurnCount,
       status: checkpointStatusFromRuntime(event.payload.state),
-      assistantMessageId: undefined,
+      assistantMessageId: newestAssistantMessageId,
       createdAt: event.createdAt,
       workspaceInitializedDuringTurn,
+      commandId,
     });
   });
 
@@ -693,10 +1047,11 @@ const make = Effect.gen(function* () {
       return;
     }
 
-    const thread = yield* getThreadDetail(event.threadId);
-    if (!thread) {
+    const loaded = yield* getThreadWithCheckpoints(event.threadId, true);
+    if (!loaded) {
       return;
     }
+    const { thread, checkpoints } = loaded;
     const project = yield* getProjectShell(thread.projectId);
     if (!project) {
       return;
@@ -706,10 +1061,60 @@ const make = Effect.gen(function* () {
     if (thread.session?.activeTurnId && !sameId(thread.session.activeTurnId, turnId)) {
       return;
     }
+    // Immediate and throttled completions can arrive after Stop. Preserve the
+    // last snapshot instead of attributing later checkout work to that turn.
+    if (
+      thread.session?.status === "stopped" ||
+      thread.session?.status === "interrupted" ||
+      thread.session?.status === "error"
+    ) {
+      return;
+    }
+
+    // A ready/null session can mean either settled work or ingestion lagging a
+    // new turn. Fence by this exact turn, never by an ancestor's ready status.
+    const persistedTurn = yield* projectionTurnRepository.getByTurnId({
+      threadId: thread.id,
+      turnId,
+    });
+    if (
+      Option.isSome(persistedTurn) &&
+      (persistedTurn.value.completedAt !== null ||
+        persistedTurn.value.state === "completed" ||
+        persistedTurn.value.state === "interrupted" ||
+        persistedTurn.value.state === "error")
+    )
+      return;
+    // This independent consumer can observe terminal capture failure before
+    // ingestion projects it. Reuse the indexed journal owner at capture cadence.
+    const throttle = liveTurnDiffThrottles.get(thread.id);
+    const previousFence =
+      throttle?.terminalFence?.turnId === turnId ? throttle.terminalFence : undefined;
+    if (previousFence?.settled) return;
+    const throughSequence = yield* runtimeRepository.getHighWaterSequence;
+    if (previousFence === undefined || throughSequence > previousFence.throughSequence) {
+      const terminalEvents = yield* runtimeRepository
+        .readThreadEvents({
+          threadId: thread.id,
+          turnId,
+          throughSequenceInclusive: throughSequence,
+          afterSequenceExclusive: previousFence?.throughSequence ?? 0,
+          eventTypes: ["turn.completed", "turn.aborted"],
+          limit: 1,
+        })
+        .pipe(Effect.orDie);
+      // Advance only the successfully queried bound; concurrent journal appends
+      // belong to the next probe. A terminal observation remains sticky.
+      const settled =
+        terminalEvents.length > 0 ||
+        (throttle?.terminalFence?.turnId === turnId && throttle.terminalFence.settled === true);
+      if (throttle) throttle.terminalFence = { turnId, throughSequence, settled };
+      if (settled) return;
+    }
 
     // Never override a real (non-placeholder) checkpoint already captured for
     // this turn by the terminal turn.completed path.
-    const existingForTurn = thread.checkpoints.find((checkpoint) => checkpoint.turnId === turnId);
+    const existingForTurn = checkpoints.find((checkpoint) => checkpoint.turnId === turnId);
     if (existingForTurn && existingForTurn.status !== "missing") {
       return;
     }
@@ -724,64 +1129,109 @@ const make = Effect.gen(function* () {
     }
 
     const fromCheckpointRef = checkpointRefForThreadTurnStart(thread.id, turnId);
-    const baselineExists = yield* checkpointStore.hasCheckpointRef({
+    const baselineExists = yield* aliasTurnStartBaseline({
       cwd: checkpointCwd,
-      checkpointRef: fromCheckpointRef,
+      threadId: thread.id,
+      turnId,
     });
     if (!baselineExists) {
-      // No baseline yet: the terminal capture on turn.completed still produces
-      // the authoritative diff, so skip the live preview rather than guess.
+      // No matching captured baseline: skip the live preview and let terminal
+      // capture report the unavailable diff rather than guess.
       return;
     }
-
-    const liveCheckpointRef = checkpointRefForThreadTurnLive(thread.id, turnId);
-    yield* checkpointStore.captureCheckpoint({
+    yield* ensureLegacyBaselineCheckpoint({
+      threadId: thread.id,
       cwd: checkpointCwd,
-      checkpointRef: liveCheckpointRef,
+      turnCount: checkpoints
+        .filter((checkpoint) => checkpoint.turnId !== turnId)
+        .reduce((max, checkpoint) => Math.max(max, checkpoint.checkpointTurnCount), 0),
+      createdAt: event.createdAt,
+      fromCheckpointRef,
     });
-    const diff = yield* checkpointStore
-      .diffCheckpoints({
+
+    const liveCheckpointRef = checkpointRefForThreadTurnLive(thread.id, turnId, event.eventId);
+    const previousLiveRef = existingForTurn?.checkpointRef.startsWith("provider-diff:")
+      ? checkpointRefForThreadTurnLive(
+          thread.id,
+          turnId,
+          existingForTurn.checkpointRef.slice("provider-diff:".length),
+        )
+      : null;
+    let livePublished = false;
+    yield* Effect.gen(function* () {
+      yield* checkpointStore.captureCheckpoint({
+        cwd: checkpointCwd,
+        checkpointRef: liveCheckpointRef,
+        skipIfExists: true,
+      });
+      const diff = yield* checkpointStore.diffCheckpoints({
         cwd: checkpointCwd,
         fromCheckpointRef,
         toCheckpointRef: liveCheckpointRef,
         fallbackFromToHead: false,
         ignoreWhitespace: false,
-      })
-      .pipe(Effect.catch(() => Effect.succeed("")));
-    yield* checkpointStore
-      .deleteCheckpointRefs({ cwd: checkpointCwd, checkpointRefs: [liveCheckpointRef] })
-      .pipe(Effect.catch(() => Effect.void));
+      });
+      // Keep the latest immutable snapshot available to read-only turn diff queries;
+      // the terminal capture below retires it after publishing the canonical ref.
+      const files = yield* parseCheckpointFilesFromUnifiedDiff(diff);
+      if (files.length === 0 && !existingForTurn) {
+        return;
+      }
 
-    const files = yield* parseCheckpointFilesFromUnifiedDiff(diff);
-    if (files.length === 0) {
-      return;
-    }
+      // Align the placeholder turn count with the eventual terminal capture so
+      // both resolve to the same checkpoint entry (see captureCheckpointFromTurnCompletion).
+      const maxTurnCount = checkpoints.reduce(
+        (max, checkpoint) => Math.max(max, checkpoint.checkpointTurnCount),
+        0,
+      );
+      const checkpointTurnCount = existingForTurn
+        ? existingForTurn.checkpointTurnCount
+        : maxTurnCount + 1;
 
-    // Align the placeholder turn count with the eventual terminal capture so
-    // both resolve to the same checkpoint entry (see captureCheckpointFromTurnCompletion).
-    const maxTurnCount = thread.checkpoints.reduce(
-      (max, checkpoint) => Math.max(max, checkpoint.checkpointTurnCount),
-      0,
+      yield* orchestrationEngine.dispatch({
+        type: "thread.turn.diff.complete",
+        commandId: serverCommandId("checkpoint-live-turn-diff"),
+        threadId: thread.id,
+        turnId,
+        completedAt: event.createdAt,
+        // A provider-diff ref keeps the projector treating this as a live
+        // placeholder (turn stays "running") instead of an interrupted turn.
+        checkpointRef: CheckpointRef.makeUnsafe(`provider-diff:${event.eventId}`),
+        status: "missing",
+        files,
+        assistantMessageId: undefined,
+        checkpointTurnCount,
+        createdAt: event.createdAt,
+      });
+      livePublished = true;
+      if (previousLiveRef !== null && previousLiveRef !== liveCheckpointRef) {
+        yield* checkpointStore
+          .deleteCheckpointRefs({ cwd: checkpointCwd, checkpointRefs: [previousLiveRef] })
+          .pipe(
+            Effect.catch((error) =>
+              Effect.logWarning("superseded live turn diff cleanup failed", {
+                detail: error.message,
+              }),
+            ),
+          );
+      }
+    }).pipe(
+      Effect.ensuring(
+        Effect.suspend(() =>
+          livePublished || previousLiveRef === liveCheckpointRef
+            ? Effect.void
+            : checkpointStore
+                .deleteCheckpointRefs({ cwd: checkpointCwd, checkpointRefs: [liveCheckpointRef] })
+                .pipe(
+                  Effect.catch((error) =>
+                    Effect.logWarning("unpublished live turn diff cleanup failed", {
+                      detail: error.message,
+                    }),
+                  ),
+                ),
+        ),
+      ),
     );
-    const checkpointTurnCount = existingForTurn
-      ? existingForTurn.checkpointTurnCount
-      : maxTurnCount + 1;
-
-    yield* orchestrationEngine.dispatch({
-      type: "thread.turn.diff.complete",
-      commandId: serverCommandId("checkpoint-live-turn-diff"),
-      threadId: thread.id,
-      turnId,
-      completedAt: event.createdAt,
-      // A provider-diff ref keeps the projector treating this as a live
-      // placeholder (turn stays "running") instead of an interrupted turn.
-      checkpointRef: CheckpointRef.makeUnsafe(`provider-diff:${event.eventId}`),
-      status: "missing",
-      files,
-      assistantMessageId: undefined,
-      checkpointTurnCount,
-      createdAt: event.createdAt,
-    });
   });
 
   // Captures a real git checkpoint when a placeholder checkpoint (status "missing")
@@ -811,10 +1261,11 @@ const make = Effect.gen(function* () {
       return;
     }
 
-    const thread = yield* getThreadDetail(event.threadId);
-    if (!thread) {
+    const loaded = yield* getThreadWithCheckpoints(event.threadId);
+    if (!loaded) {
       return;
     }
+    const { thread, checkpoints } = loaded;
     const project = yield* getProjectShell(thread.projectId);
     if (!project) {
       return;
@@ -857,127 +1308,75 @@ const make = Effect.gen(function* () {
         onSome: (pending) => pending.messageId,
       });
     const turnStartCheckpointRef = checkpointRefForThreadTurnStart(thread.id, turnId);
-    let hasTurnStartBaseline = false;
-    if (messageId !== undefined) {
-      const messageStartCheckpointRef = checkpointRefForThreadMessageStart(thread.id, messageId);
-      const copyMessageStartBaseline = checkpointStore.copyCheckpointRef({
-        cwd: checkpointCwd,
-        fromCheckpointRef: messageStartCheckpointRef,
-        toCheckpointRef: turnStartCheckpointRef,
-      });
-      let copied = yield* copyMessageStartBaseline;
-      if (!copied) {
-        // Startup and domain-event backup paths can still leave the message
-        // baseline missing. Capture it with first-writer-wins semantics before
-        // aliasing the provider turn-start ref.
-        yield* checkpointStore.captureCheckpoint({
-          cwd: checkpointCwd,
-          checkpointRef: messageStartCheckpointRef,
-          skipIfExists: true,
-        });
-        copied = yield* copyMessageStartBaseline;
-      }
-      hasTurnStartBaseline = copied;
-      pendingMessageStartByThread.delete(thread.id);
-      if (!copied) {
-        yield* Effect.logWarning("checkpoint turn start baseline alias missing message baseline", {
-          threadId: thread.id,
-          turnId,
-          messageId,
-        });
-      }
-    }
+    const hasTurnStartBaseline = yield* aliasTurnStartBaseline({
+      cwd: checkpointCwd,
+      threadId: thread.id,
+      turnId,
+      ...(messageId !== undefined ? { pendingMessageId: messageId } : {}),
+    });
     if (!hasTurnStartBaseline) {
-      const existingTurnStartBaseline = yield* checkpointStore.hasCheckpointRef({
-        cwd: checkpointCwd,
-        checkpointRef: turnStartCheckpointRef,
+      yield* Effect.logWarning("checkpoint turn start baseline alias missing message baseline", {
+        threadId: thread.id,
+        turnId,
+        messageId,
       });
-      if (!existingTurnStartBaseline) {
-        yield* checkpointStore.captureCheckpoint({
-          cwd: checkpointCwd,
-          checkpointRef: turnStartCheckpointRef,
-        });
-      }
     }
+    pendingMessageStartByThread.delete(thread.id);
+    // Once turn.started is observable, the provider may already have edited.
+    // Missing refs stay missing; only pre-dispatch owners may snapshot a baseline.
+    if (!hasTurnStartBaseline) return;
 
-    const currentTurnCount = thread.checkpoints.reduce(
-      (maxTurnCount, checkpoint) => Math.max(maxTurnCount, checkpoint.checkpointTurnCount),
-      0,
-    );
+    const currentTurnCount = checkpoints
+      .filter((checkpoint) => checkpoint.turnId !== turnId)
+      .reduce(
+        (maxTurnCount, checkpoint) => Math.max(maxTurnCount, checkpoint.checkpointTurnCount),
+        0,
+      );
     yield* ensureLegacyBaselineCheckpoint({
       threadId: thread.id,
       cwd: checkpointCwd,
       turnCount: currentTurnCount,
       createdAt: event.createdAt,
+      fromCheckpointRef: turnStartCheckpointRef,
     });
   });
 
-  const ensurePreTurnBaselineFromDomainTurnStart = Effect.fnUntraced(function* (
-    event: Extract<
-      OrchestrationEvent,
-      { type: "thread.turn-start-requested" | "thread.message-sent" }
-    >,
+  const rememberPendingMessageStart = (
+    event: Extract<OrchestrationEvent, { type: "thread.turn-start-requested" }>,
+  ) =>
+    Effect.sync(() => {
+      pendingMessageStartByThread.set(event.payload.threadId, event.payload.messageId);
+    });
+
+  const rememberPendingWorkspaceInitialization = Effect.fnUntraced(function* (
+    event: Extract<OrchestrationEvent, { type: "thread.turn-start-requested" }>,
   ) {
-    if (event.type === "thread.message-sent") {
-      if (
-        event.payload.role !== "user" ||
-        event.payload.streaming ||
-        event.payload.turnId !== null
-      ) {
-        return;
-      }
-    }
-
-    const threadId = event.payload.threadId;
-    const thread = yield* getThreadDetail(threadId);
-    if (!thread) {
-      return;
-    }
+    const thread = yield* getThreadShell(event.payload.threadId);
+    if (!thread) return;
     const project = yield* getProjectShell(thread.projectId);
-    if (!project) {
-      return;
-    }
-
-    const checkpointCwd = yield* resolveCheckpointCwd({
-      threadId,
+    if (!project) return;
+    const workspace = yield* resolveCheckpointWorkspace({
+      threadId: thread.id,
       thread,
       project,
     });
-    if (!checkpointCwd) {
-      return;
-    }
+    if (!workspace || workspace.isGitRepository) return;
 
-    if (event.type === "thread.turn-start-requested") {
-      pendingMessageStartByThread.set(threadId, event.payload.messageId);
-      // Backup capture for startup paths that bypass ProviderCommandReactor's
-      // pre-send hook, while the pre-send hook remains the deterministic path.
-      const messageStartCheckpointRef = checkpointRefForThreadMessageStart(
-        threadId,
-        event.payload.messageId,
-      );
-      const messageStartCheckpointExists = yield* checkpointStore.hasCheckpointRef({
-        cwd: checkpointCwd,
-        checkpointRef: messageStartCheckpointRef,
-      });
-      if (!messageStartCheckpointExists) {
-        yield* checkpointStore.captureCheckpoint({
-          cwd: checkpointCwd,
-          checkpointRef: messageStartCheckpointRef,
-          skipIfExists: true,
-        });
-      }
-    }
-
-    const currentTurnCount = thread.checkpoints.reduce(
-      (maxTurnCount, checkpoint) => Math.max(maxTurnCount, checkpoint.checkpointTurnCount),
-      0,
-    );
-    yield* ensureLegacyBaselineCheckpoint({
-      threadId,
-      cwd: checkpointCwd,
-      turnCount: currentTurnCount,
-      createdAt: event.occurredAt,
+    // The projector commits the request before publishing it. A lagging reactor
+    // may see an already-promoted turn or a newer pending request, so mark only
+    // the row owned by this message without replacing the pending slot.
+    yield* projectionTurnRepository.markStartedWithoutGitWorkspace({
+      threadId: event.payload.threadId,
+      messageId: event.payload.messageId,
     });
+    yield* Effect.logDebug(
+      "checkpoint turn start marked workspace as not yet initialized as a git repository",
+      {
+        threadId: event.payload.threadId,
+        messageId: event.payload.messageId,
+        cwd: workspace.cwd,
+      },
+    );
   });
 
   const handleRevertRequestedWithoutLease = Effect.fnUntraced(function* (
@@ -1001,21 +1400,37 @@ const make = Effect.gen(function* () {
       sessionThreadId === event.payload.threadId
         ? [event.payload.threadId]
         : [event.payload.threadId, sessionThreadId];
-    const [commandReadModel, pendingTurnStarts, providerSessions] = yield* Effect.all([
+    const [commandReadModel, pendingTurnStarts, [live, retained]] = yield* Effect.all([
       orchestrationEngine.getReadModel(),
       Effect.forEach(relevantThreadIds, (threadId) =>
         projectionTurnRepository.getPendingTurnStartByThreadId({ threadId }),
       ),
-      providerService.listSessions(),
+      // A context kept after a failed stop is out of the live listing, so
+      // routing and queued turns skip it, but its process may still be
+      // writing to this worktree. The guards below read it as well.
+      Effect.all([
+        providerService.listSessions(),
+        providerService.listRetainedSessions?.() ??
+          Effect.succeed<ReadonlyArray<ProviderSession>>([]),
+      ]),
     ]);
+    const providerSessions = [...live, ...retained];
+    // A retained context keeps whatever status its adapter reports, Pi says
+    // closed, so its turn id alone marks a turn in flight.
+    const sessionHasInFlightTurn = (session: ProviderSession | undefined) =>
+      providerSessionHasInFlightTurn(session) ||
+      (session?.activeTurnId != null && retained.includes(session));
+    // A thread can list a live session and a retained context at once, so a
+    // turn on any of its sessions counts.
+    const sessionsWithInFlightTurn = (threadId: ThreadId) =>
+      providerSessions.filter(
+        (session) => session.threadId === threadId && sessionHasInFlightTurn(session),
+      );
     const commandThread = commandReadModel.threads.find(
       (entry) => entry.id === event.payload.threadId,
     );
     const sessionCommandThread = commandReadModel.threads.find(
       (entry) => entry.id === sessionThreadId,
-    );
-    const providerSession = providerSessions.find(
-      (session) => session.threadId === sessionThreadId,
     );
     const currentThread = commandThread ?? thread;
     const hasPendingNonTerminalTurnStart = pendingTurnStarts.some(
@@ -1028,7 +1443,7 @@ const make = Effect.gen(function* () {
       threadHasInFlightTurn(currentThread) ||
       (sessionCommandThread !== undefined && threadHasInFlightTurn(sessionCommandThread)) ||
       hasPendingNonTerminalTurnStart ||
-      providerSessionHasInFlightTurn(providerSession)
+      sessionsWithInFlightTurn(sessionThreadId).length > 0
     ) {
       yield* appendRevertFailureActivity({
         threadId: event.payload.threadId,
@@ -1079,6 +1494,60 @@ const make = Effect.gen(function* () {
       return;
     }
 
+    // A thread lease protects this conversation, but other threads can still
+    // edit the same checkout. Check them while holding the workspace lease,
+    // before either Undo scope changes files or the provider conversation.
+    const checkpointWorkspaceIdentity =
+      yield* turnCheckpointCoordinator.resolveWorkspaceIdentity(checkpointCwd);
+    for (const peer of commandReadModel.threads) {
+      if (relevantThreadIds.includes(peer.id)) continue;
+      const providerThread = yield* resolveProviderSessionThread(projectionSnapshotQuery, peer.id);
+      const peerThreadId = providerThread?.id ?? peer.id;
+      const busyPeerSessions = sessionsWithInFlightTurn(peerThreadId);
+      const pendingStart = yield* projectionTurnRepository.getPendingTurnStartByThreadId({
+        threadId: peer.id,
+      });
+      const reportedTurn =
+        threadHasInFlightTurn(peer) ||
+        (Option.isSome(pendingStart) && peer.session?.status !== "error");
+      if (!reportedTurn && busyPeerSessions.length === 0) continue;
+      // A session works where it started. A busy session names its own cwd,
+      // and a turn the projection or a pending start reports names the first
+      // listed session's as well, then the thread workspace. With no live
+      // session that turn starts in the thread workspace, so a retained
+      // context listed elsewhere does not stand in for it.
+      const peerWorkspaceCwd = resolveThreadWorkspaceCwd({
+        thread: peer,
+        projects: commandReadModel.projects,
+      });
+      const reportedSession = reportedTurn
+        ? providerSessions.find((session) => session.threadId === peerThreadId)
+        : undefined;
+      const cwdSessions =
+        reportedSession === undefined || busyPeerSessions.includes(reportedSession)
+          ? busyPeerSessions
+          : [...busyPeerSessions, reportedSession];
+      const reportedTurnStartsInWorkspace =
+        reportedTurn && !live.some((session) => session.threadId === peerThreadId);
+      const peerCwds = [
+        ...cwdSessions.map((session) => session.cwd ?? peerWorkspaceCwd),
+        ...(cwdSessions.length === 0 || reportedTurnStartsInWorkspace ? [peerWorkspaceCwd] : []),
+      ];
+      const peerIdentities = yield* Effect.forEach(
+        peerCwds.filter((peerCwd): peerCwd is string => peerCwd !== undefined),
+        (peerCwd) => turnCheckpointCoordinator.resolveWorkspaceIdentity(peerCwd),
+      );
+      if (!peerIdentities.includes(checkpointWorkspaceIdentity)) continue;
+      yield* appendRevertFailureActivity({
+        threadId: event.payload.threadId,
+        turnCount: event.payload.turnCount,
+        detail:
+          "Another thread is working in this workspace. Stop its active turn before undoing changes.",
+        createdAt: now,
+      }).pipe(Effect.catch(() => Effect.void));
+      return;
+    }
+
     if (event.payload.scope === "files") {
       const isUndoableCheckpoint = (checkpoint: (typeof thread.checkpoints)[number]) =>
         checkpoint.status === "ready" &&
@@ -1108,6 +1577,37 @@ const make = Effect.gen(function* () {
           threadId: event.payload.threadId,
           turnCount: event.payload.turnCount,
           detail: "Undo newer file changes before undoing this turn.",
+          createdAt: now,
+        }).pipe(Effect.catch(() => Effect.void));
+        return;
+      }
+
+      // A later managed completion with no exact baseline can include unknown
+      // overlapping edits. Refuse before reverse-patching or rewriting its refs.
+      for (const checkpoint of thread.checkpoints) {
+        if (
+          checkpoint.checkpointTurnCount <= targetCheckpoint.checkpointTurnCount ||
+          !isManagedCheckpointRefForThread(checkpoint.checkpointRef, event.payload.threadId)
+        )
+          continue;
+        const laterStartRef =
+          checkpointRefForThreadTurnStartInManagedFamily(
+            checkpoint.checkpointRef,
+            event.payload.threadId,
+            checkpoint.turnId,
+          ) ?? checkpointRefForThreadTurnStart(event.payload.threadId, checkpoint.turnId);
+        if (
+          yield* checkpointStore.hasCheckpointRef({
+            cwd: checkpointCwd,
+            checkpointRef: laterStartRef,
+          })
+        )
+          continue;
+        yield* appendRevertFailureActivity({
+          threadId: event.payload.threadId,
+          turnCount: event.payload.turnCount,
+          detail:
+            "File Undo is unavailable because a later turn has no exact initial checkpoint. Revert the thread to this checkpoint instead.",
           createdAt: now,
         }).pipe(Effect.catch(() => Effect.void));
         return;
@@ -1499,7 +1999,9 @@ const make = Effect.gen(function* () {
         });
       }
 
-      return yield* handleRevertRequestedWithoutLease(event, sessionThreadId).pipe(
+      return yield* withPinnedWorkspaceLease(
+        handleRevertRequestedWithoutLease(event, sessionThreadId),
+      ).pipe(
         Effect.ensuring(
           Deferred.succeed(leaseReleased, undefined).pipe(
             Effect.andThen(Fiber.join(leaseFiber)),
@@ -1509,9 +2011,20 @@ const make = Effect.gen(function* () {
       );
     });
 
+  const withPinnedWorkspaceLease = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+    Effect.gen(function* () {
+      const pinned = yield* Effect.serviceOption(PinnedCheckpointWorkspace);
+      return yield* Option.isSome(pinned) && pinned.value.cwd !== undefined
+        ? pinned.value.identity !== undefined
+          ? turnCheckpointCoordinator.withWorkspaceIdentityLease(pinned.value.identity, effect)
+          : turnCheckpointCoordinator.withWorkspaceLease(pinned.value.cwd, effect)
+        : effect;
+    });
+
   const processDomainEvent = Effect.fnUntraced(function* (event: OrchestrationEvent) {
-    if (event.type === "thread.turn-start-requested" || event.type === "thread.message-sent") {
-      yield* ensurePreTurnBaselineFromDomainTurnStart(event);
+    if (event.type === "thread.turn-start-requested") {
+      yield* rememberPendingMessageStart(event);
+      yield* rememberPendingWorkspaceInitialization(event);
       return;
     }
 
@@ -1539,6 +2052,106 @@ const make = Effect.gen(function* () {
     }
   });
 
+  // Per-thread trailing throttle for live turn diffs. The first file change after
+  // a quiet window captures inline in its workspace lane; changes inside the
+  // window only replace the pending event, and one reactor-scoped fiber captures
+  // that newest event when the window closes, so a burst always ends with a
+  // capture of its last edit. turn.completed drops the pending capture (see
+  // processLane) and stays the authoritative checkpoint.
+  type LiveTurnDiffThrottle = {
+    lastCaptureAt: number;
+    terminalFence?: {
+      readonly turnId: TurnId;
+      readonly throughSequence: number;
+      readonly settled: boolean;
+    };
+    pending:
+      | {
+          readonly event: Extract<ProviderRuntimeEvent, { type: "item.completed" }>;
+          readonly workspace: Option.Option<PinnedCheckpointWorkspace["Service"]>;
+        }
+      | undefined;
+  };
+  const liveTurnDiffThrottles = new Map<ThreadId, LiveTurnDiffThrottle>();
+  const reactorScope = yield* Effect.scope;
+  const cancelLiveTurnDiff = (threadId: ThreadId, turnId: TurnId | null, sequence: number) => {
+    const throttle = liveTurnDiffThrottles.get(threadId);
+    if (!throttle || !turnId) return;
+    const owningTurn = throttle.pending?.event.turnId ?? throttle.terminalFence?.turnId;
+    if (owningTurn !== turnId) return;
+    throttle.pending = undefined;
+    throttle.terminalFence = { turnId, throughSequence: sequence, settled: true };
+  };
+  const captureTrailingLiveTurnDiff = (threadId: ThreadId, throttle: LiveTurnDiffThrottle) =>
+    Effect.suspend(() => {
+      const pending = throttle.pending;
+      // A completed turn or a newer throttle entry for the thread owns the capture now.
+      if (pending === undefined || liveTurnDiffThrottles.get(threadId) !== throttle || stopping) {
+        return Effect.void;
+      }
+      throttle.pending = undefined;
+      throttle.lastCaptureAt = Date.now();
+      const capture = withPinnedWorkspaceLease(captureLiveTurnDiff(pending.event));
+      return (
+        Option.isSome(pending.workspace)
+          ? capture.pipe(Effect.provideService(PinnedCheckpointWorkspace, pending.workspace.value))
+          : capture
+      ).pipe(
+        Effect.catchCause((cause) =>
+          Cause.hasInterruptsOnly(cause)
+            ? Effect.failCause(cause)
+            : Effect.logWarning("checkpoint reactor failed to capture a trailing live diff", {
+                threadId,
+                cause: Cause.pretty(cause),
+              }),
+        ),
+      );
+    });
+  const throttleLiveTurnDiff = Effect.fnUntraced(function* (
+    event: Extract<ProviderRuntimeEvent, { type: "item.completed" }>,
+  ) {
+    const now = Date.now();
+    const cachedThrottle = liveTurnDiffThrottles.get(event.threadId);
+    const throttle =
+      cachedThrottle?.terminalFence && cachedThrottle.terminalFence.turnId !== event.turnId
+        ? undefined
+        : cachedThrottle;
+    if (
+      throttle === undefined ||
+      (throttle.pending === undefined &&
+        now - throttle.lastCaptureAt >= liveTurnDiffThrottleWindowMs)
+    ) {
+      // Preserve the exact-turn journal watermark across quiet windows. Retain
+      // at most one per thread; ordinary capacity eviction may recheck a prefix.
+      if (throttle === undefined && liveTurnDiffThrottles.size >= CHECKPOINT_REACTOR_CAPACITY) {
+        for (const [threadId, entry] of liveTurnDiffThrottles) {
+          if (entry.pending === undefined) {
+            liveTurnDiffThrottles.delete(threadId);
+            break;
+          }
+        }
+      }
+      const current = throttle ?? { lastCaptureAt: now, pending: undefined };
+      current.lastCaptureAt = now;
+      liveTurnDiffThrottles.set(event.threadId, current);
+      yield* captureLiveTurnDiff(event);
+      return;
+    }
+    const scheduled = throttle.pending !== undefined;
+    throttle.pending = {
+      event,
+      workspace: yield* Effect.serviceOption(PinnedCheckpointWorkspace),
+    };
+    if (scheduled) return;
+    yield* Effect.sleep(
+      Math.max(0, throttle.lastCaptureAt + liveTurnDiffThrottleWindowMs - now),
+    ).pipe(
+      Effect.andThen(captureTrailingLiveTurnDiff(event.threadId, throttle)),
+      Effect.raceFirst(Deferred.await(stopped)),
+      Effect.forkIn(reactorScope),
+    );
+  });
+
   const processRuntimeEvent = Effect.fnUntraced(function* (event: ProviderRuntimeEvent) {
     if (event.type === "turn.started") {
       yield* ensurePreTurnBaselineFromTurnStart(event);
@@ -1546,10 +2159,7 @@ const make = Effect.gen(function* () {
     }
 
     if (event.type === "item.completed") {
-      // Clear the coalescing flag before the git work so edits arriving during
-      // it re-schedule and snapshot the newest tree.
-      liveDiffScheduledThreads.delete(event.threadId);
-      yield* captureLiveTurnDiff(event);
+      yield* throttleLiveTurnDiff(event);
       return;
     }
 
@@ -1557,7 +2167,7 @@ const make = Effect.gen(function* () {
       const turnId = toTurnId(event.turnId);
       yield* captureCheckpointFromTurnCompletion(event).pipe(
         Effect.catch((error) =>
-          appendCaptureFailureActivity({
+          appendCheckpointIssueActivity({
             threadId: event.threadId,
             turnId,
             detail: error.message,
@@ -1588,58 +2198,1340 @@ const make = Effect.gen(function* () {
       }),
     );
 
-  const worker = yield* makeDrainableWorker(processInputSafely, {
-    capacity: CHECKPOINT_REACTOR_CAPACITY,
+  type WorkspaceLane = {
+    readonly key: string;
+    runtimeFrom: number;
+    domainFrom: number;
+    runtimeFence: number;
+    domainFence: number;
+    continuation: boolean;
+  };
+  const eventStore = yield* OrchestrationEventStore;
+  const runtimeRepository = yield* ProviderRuntimeEventRepository;
+  const deliveries = yield* OrchestrationEventDeliveryRepository;
+  const domainConsumer = "checkpoint-reactor.domain.v1";
+  const legacyDomainConsumer = "checkpoint-reactor.domain-recovery.v1";
+  const claimOwner = `checkpoint:${crypto.randomUUID()}`;
+  const lanes = new Map<string, WorkspaceLane>();
+  // Payloads stay in their durable journals. These pulses carry no event identity.
+  const wake = yield* Queue.sliding<void>(1);
+  // Pulses for rows the reactor ignores; coalesced into one delayed wake.
+  const lazyWake = yield* Queue.sliding<void>(1);
+  const acknowledge = yield* Queue.sliding<void>(1);
+  let runtimeScanned = 0;
+  let domainScanned = 0;
+  let runtimeFence = 0;
+  let domainFence = 0;
+  let started = false;
+  let stopping = false;
+  const fatal = yield* Deferred.make<never, unknown>();
+  const stopped = yield* Deferred.make<void>();
+  let adoptionFence = 0;
+  let startupDomainFence = 0;
+  let startupRuntimeFence = 0;
+  let legacyDomainFrom = 0;
+  let runtimeAdoptionFence = 0;
+  let startupIngestionFence = 0;
+  let rescanRequested = false;
+  let rescanInProgress = false;
+  let workspaceConfigurationSequence = 0;
+  const nativeConsumer = "checkpoint-reactor.runtime-outcomes.v1";
+  type WorkspaceSelection = {
+    readonly key: string;
+    readonly cwd: string | undefined;
+    readonly isGitRepository: boolean;
+    readonly projectId: ProjectId | undefined;
+    readonly fallbackCwd: string | undefined;
+    readonly sourceCwd: string | undefined;
+    readonly classifiedAt: number;
+  };
+  const keys = new Map<string, WorkspaceSelection>();
+  const changedWorkspaceThreads = new Set<string>();
+  const changedSessionThreads = new Set<string>();
+  const runtimeRelevant = (event: ProviderRuntimeEvent) =>
+    event.type === "turn.started" ||
+    event.type === "turn.completed" ||
+    (event.type === "item.completed" && event.payload.itemType === "file_change");
+  const domainRelevant = (event: OrchestrationEvent) =>
+    (event.sequence > startupDomainFence && event.type === "thread.turn-start-requested") ||
+    event.type === "thread.checkpoint-revert-requested" ||
+    event.type === "thread.turn-diff-completed";
+  const observeWorkspaceConfiguration = (event: OrchestrationEvent) => {
+    if (event.sequence <= workspaceConfigurationSequence) return;
+    if (
+      event.type === "thread.meta-updated" &&
+      (event.payload.worktreePath !== undefined ||
+        event.payload.workingDirectory !== undefined ||
+        event.payload.envMode !== undefined)
+    ) {
+      workspaceConfigurationSequence = event.sequence;
+      if (keys.has(event.aggregateId)) changedWorkspaceThreads.add(event.aggregateId);
+    } else if (event.type === "project.meta-updated" && event.payload.workspaceRoot !== undefined) {
+      workspaceConfigurationSequence = event.sequence;
+      for (const [threadId, workspace] of keys) {
+        if (workspace.projectId === event.aggregateId) changedWorkspaceThreads.add(threadId);
+      }
+    } else if (event.type === "thread.deleted") {
+      liveTurnDiffThrottles.delete(event.payload.threadId);
+    } else if (event.type === "thread.session-set") {
+      workspaceConfigurationSequence = event.sequence;
+      if (keys.has(event.aggregateId)) changedSessionThreads.add(event.aggregateId);
+    }
+  };
+  const publishWorkspaceSelection = (
+    threadId: ThreadId,
+    selected: WorkspaceSelection,
+    expectedConfiguration: number,
+  ) => {
+    // A lookup/cut can yield while configuration observers invalidate its cwd.
+    // Keep that newer invalidation intact; the current row retains its selected
+    // identity, but a later input must resolve again. Unrelated configuration
+    // updates conservatively discard a usable cache result too.
+    if (expectedConfiguration !== workspaceConfigurationSequence) return;
+    const cached = keys.get(threadId);
+    changedWorkspaceThreads.delete(threadId);
+    changedSessionThreads.delete(threadId);
+    if (cached !== undefined && cached.key !== selected.key) {
+      rescanRequested = true;
+      Queue.offerUnsafe(wake, undefined);
+    }
+    // This lookup cache is bounded independently of workspace admission.
+    if (keys.size >= CHECKPOINT_REACTOR_CAPACITY && !keys.has(threadId)) {
+      const oldest = keys.keys().next().value!;
+      keys.delete(oldest);
+      changedWorkspaceThreads.delete(oldest);
+      changedSessionThreads.delete(oldest);
+    }
+    keys.set(threadId, selected);
+  };
+  const workspaceForThread = Effect.fnUntraced(function* (threadId: ThreadId, publish = true) {
+    const configuration = workspaceConfigurationSequence;
+    const cached = keys.get(threadId);
+    let observedCwd: { readonly source: string; readonly physical: string } | undefined;
+    // A turn may initialize Git after its start row. Recheck missing Git until
+    // discovered; each operation then keeps its captured classification/cwd.
+    if (
+      cached !== undefined &&
+      (cached.isGitRepository || Date.now() - cached.classifiedAt < 1_000) &&
+      !changedWorkspaceThreads.has(threadId)
+    ) {
+      if (!changedSessionThreads.has(threadId)) return cached;
+      const session = yield* resolveSessionRuntimeForThread(threadId);
+      const candidateCwd = Option.isSome(session) ? session.value.cwd : cached.fallbackCwd;
+      if (candidateCwd === cached.sourceCwd) {
+        if (publish) publishWorkspaceSelection(threadId, cached, configuration);
+        return cached;
+      }
+      const physicalCwd =
+        candidateCwd === undefined
+          ? undefined
+          : yield* Effect.tryPromise(() => canonicalImportPath(candidateCwd)).pipe(Effect.orDie);
+      if (candidateCwd !== undefined && physicalCwd !== undefined)
+        observedCwd = { source: candidateCwd, physical: physicalCwd };
+      if (physicalCwd === cached.cwd) {
+        const selected = { ...cached, sourceCwd: candidateCwd };
+        if (publish) publishWorkspaceSelection(threadId, selected, configuration);
+        return selected;
+      }
+    }
+    const thread = yield* getThreadShell(threadId);
+    const project = thread ? yield* getProjectShell(thread.projectId) : undefined;
+    const workspace =
+      thread && project
+        ? yield* resolveCheckpointWorkspace({
+            threadId,
+            thread,
+            project,
+            ...(observedCwd === undefined ? {} : { observedCwd }),
+          })
+        : undefined;
+    const key = workspace?.identity ?? `thread:${threadId}`;
+    const selected = {
+      key,
+      cwd: workspace?.cwd,
+      sourceCwd: workspace?.sourceCwd,
+      isGitRepository: workspace?.isGitRepository ?? false,
+      classifiedAt: Date.now(),
+      projectId: thread?.projectId,
+      fallbackCwd:
+        thread && project ? resolveThreadWorkspaceCwd({ thread, projects: [project] }) : undefined,
+    };
+    if (publish) publishWorkspaceSelection(threadId, selected, configuration);
+    return selected;
   });
-
-  const start: CheckpointReactorShape["start"] = startDrainableWorkerProducers(
-    worker,
+  const eventThread = (event: OrchestrationEvent) => ThreadId.makeUnsafe(event.aggregateId);
+  const domainEventTypes: ReadonlyArray<OrchestrationEvent["type"]> = [
+    "thread.turn-start-requested",
+    "thread.checkpoint-revert-requested",
+    "thread.turn-diff-completed",
+    "thread.meta-updated",
+    "project.meta-updated",
+    "thread.session-set",
+  ];
+  const readDomainPage = (from: number, through: number) =>
+    Stream.runCollect(
+      eventStore.readFromSequence(from, 32, through, { eventTypes: domainEventTypes }),
+    );
+  // A matching accepted receipt/outcome is immutable evidence. Settle an
+  // interrupted delivery by its observed owner/state without replaying work.
+  const settleProvenDelivery = (consumerName: string, eventSequence: number, threadId: ThreadId) =>
     Effect.gen(function* () {
-      yield* Effect.forkScoped(
-        Stream.runForEach(orchestrationEngine.streamDomainEvents, (event) => {
-          if (
-            event.type !== "thread.turn-start-requested" &&
-            event.type !== "thread.message-sent" &&
-            event.type !== "thread.checkpoint-revert-requested" &&
-            event.type !== "thread.turn-diff-completed"
-          ) {
-            return Effect.void;
-          }
-          return worker.enqueue({ source: "domain", event });
-        }),
+      const previous = yield* deliveries
+        .getDelivery({ consumerName, eventSequence })
+        .pipe(Effect.orDie);
+      if (Option.isNone(previous)) return;
+      const delivery = previous.value;
+      if (delivery.threadId !== threadId)
+        return yield* Effect.die(new Error("Checkpoint receipt does not match delivery identity"));
+      if (delivery.state === "succeeded") return;
+      const now = new Date().toISOString();
+      const completed = yield* sql`UPDATE orchestration_event_deliveries
+      SET state = 'succeeded', claim_owner = NULL, claimed_at = NULL, claim_expires_at = NULL, completed_at = ${now}, updated_at = ${now}, last_error = NULL
+      WHERE consumer_name = ${consumerName} AND event_sequence = ${eventSequence} AND thread_id = ${threadId}
+        AND state = ${delivery.state} AND claim_owner IS ${delivery.claimOwner}
+      RETURNING event_sequence`.pipe(Effect.orDie);
+      if (completed.length !== 1)
+        return yield* Effect.die(
+          new Error("Checkpoint receipt settlement lost delivery ownership"),
+        );
+    });
+  const processDurableDomain = Effect.fnUntraced(function* (event: OrchestrationEvent) {
+    if (event.type !== "thread.checkpoint-revert-requested") {
+      // An unavailable range can be rediscovered by a peer lane after its
+      // bounded settlement. Its durable marker forbids any late capture.
+      const unavailable = yield* deliveries
+        .getDelivery({ consumerName: domainConsumer, eventSequence: event.sequence })
+        .pipe(Effect.orDie);
+      if (Option.isSome(unavailable)) return;
+      yield* withPinnedWorkspaceLease(processInputSafely({ source: "domain", event }));
+      return;
+    }
+    const input = { consumerName: domainConsumer, eventSequence: event.sequence };
+    // The stable completion receipt proves an older undo already committed,
+    // including the crash window between domain commit and delivery completion.
+    const receipt = yield* sql`SELECT 1 FROM orchestration_command_receipts AS receipt
+      WHERE receipt.command_id = ${`server:checkpoint-revert-complete:${event.eventId}`}
+        AND receipt.aggregate_kind = 'thread' AND receipt.aggregate_id = ${event.payload.threadId}
+        AND receipt.status = 'accepted'
+        AND EXISTS (SELECT 1 FROM orchestration_events AS outcome
+          WHERE outcome.command_id = receipt.command_id AND outcome.event_type = 'thread.reverted'
+            AND json_extract(outcome.payload_json, '$.turnCount') = ${event.payload.turnCount})`.pipe(
+      Effect.orDie,
+    );
+    if (receipt.length)
+      return yield* settleProvenDelivery(domainConsumer, event.sequence, event.payload.threadId);
+    if (event.sequence <= adoptionFence) {
+      const failure = yield* sql`SELECT 1 FROM orchestration_events AS outcome
+        WHERE outcome.aggregate_kind = 'thread' AND outcome.stream_id = ${event.payload.threadId} AND outcome.event_type = 'thread.activity-appended'
+          AND outcome.sequence > ${event.sequence}
+          AND json_extract(outcome.payload_json, '$.activity.kind') = 'checkpoint.revert.failed'
+          AND json_extract(outcome.payload_json, '$.activity.payload.turnCount') = ${event.payload.turnCount}
+          AND NOT EXISTS (SELECT 1 FROM orchestration_events AS next
+            WHERE next.aggregate_kind = 'thread' AND next.stream_id = outcome.stream_id AND next.event_type = 'thread.checkpoint-revert-requested'
+              AND next.sequence > ${event.sequence} AND next.sequence < outcome.sequence)
+        LIMIT 1`.pipe(Effect.orDie);
+      if (failure.length) {
+        yield* settleProvenDelivery(domainConsumer, event.sequence, event.payload.threadId);
+        return;
+      }
+    }
+    const previous = yield* deliveries.getDelivery(input).pipe(Effect.orDie);
+    if (Option.isSome(previous)) {
+      const delivery = previous.value;
+      if (delivery.state === "uncertain" || delivery.state === "dead") {
+        yield* appendRevertFailureActivity({
+          threadId: event.payload.threadId,
+          turnCount: event.payload.turnCount,
+          detail: delivery.lastError ?? "Checkpoint revert outcome is uncertain.",
+          createdAt: delivery.updatedAt,
+          commandId: CommandId.makeUnsafe(`server:checkpoint-revert-outcome:${event.eventId}`),
+        });
+      }
+      if (delivery.state === "inflight" && delivery.claimOwner !== claimOwner) {
+        // Undo can mutate files before its domain completion commits. Never
+        // repeat that mutation after an ambiguous crash or cancelled lease.
+        const detail =
+          "Checkpoint revert was interrupted before its durable outcome was recorded; inspect the workspace before requesting another revert.";
+        yield* deliveries
+          .markTerminalFailure({
+            ...input,
+            expectedClaimOwner: delivery.claimOwner!,
+            state: "uncertain",
+            error: detail,
+            updatedAt: new Date().toISOString(),
+          })
+          .pipe(Effect.orDie);
+        yield* appendRevertFailureActivity({
+          threadId: event.payload.threadId,
+          turnCount: event.payload.turnCount,
+          detail,
+          createdAt: new Date().toISOString(),
+          commandId: CommandId.makeUnsafe(`server:checkpoint-revert-outcome:${event.eventId}`),
+        });
+      }
+      return;
+    }
+    const now = new Date().toISOString();
+    const claimed = yield* deliveries
+      .claim({
+        ...input,
+        threadId: event.payload.threadId,
+        claimOwner,
+        claimedAt: now,
+        claimExpiresAt: new Date(Date.now() + 60_000).toISOString(),
+      })
+      .pipe(Effect.orDie);
+    if (Option.isNone(claimed)) return;
+    if (event.sequence <= adoptionFence) {
+      const detail =
+        "A legacy checkpoint revert has no durable completion evidence; inspect the workspace before requesting another revert.";
+      yield* deliveries
+        .markTerminalFailure({
+          ...input,
+          expectedClaimOwner: claimOwner,
+          state: "uncertain",
+          error: detail,
+          updatedAt: now,
+        })
+        .pipe(Effect.orDie);
+      yield* appendRevertFailureActivity({
+        threadId: event.payload.threadId,
+        turnCount: event.payload.turnCount,
+        detail,
+        createdAt: now,
+        commandId: CommandId.makeUnsafe(`server:checkpoint-revert-outcome:${event.eventId}`),
+      });
+      return;
+    }
+    yield* processDomainEvent(event);
+    // CP ACK belongs exclusively to the settled minimum of workspace lanes.
+    // The generic delivery adapter may advance its consumer per row.
+    const completedAt = new Date().toISOString();
+    const completed = yield* sql`UPDATE orchestration_event_deliveries
+      SET state = 'succeeded', claim_owner = NULL, claimed_at = NULL,
+        claim_expires_at = NULL, completed_at = ${completedAt}, updated_at = ${completedAt}
+      WHERE consumer_name = ${domainConsumer} AND event_sequence = ${event.sequence}
+        AND state = 'inflight' AND claim_owner = ${claimOwner}
+      RETURNING event_sequence`.pipe(Effect.orDie);
+    if (completed.length !== 1)
+      return yield* Effect.die(new Error("Checkpoint revert lost durable delivery ownership"));
+  });
+  const processNativeCompletion = Effect.fnUntraced(function* (
+    sequence: number,
+    event: Extract<ProviderRuntimeEvent, { type: "turn.completed" }>,
+  ) {
+    const input = { consumerName: nativeConsumer, eventSequence: sequence };
+    const previous = yield* deliveries.getDelivery(input).pipe(Effect.orDie);
+    const commandId = `server:checkpoint-native-complete:${encodeURIComponent(event.threadId)}:${encodeURIComponent(event.turnId ?? "")}`;
+    const receipt = yield* sql`SELECT 1 FROM orchestration_command_receipts AS receipt
+      WHERE receipt.command_id = ${commandId} AND receipt.aggregate_kind = 'thread'
+        AND receipt.aggregate_id = ${event.threadId} AND receipt.status = 'accepted'
+        AND EXISTS (SELECT 1 FROM orchestration_events AS outcome
+          WHERE outcome.command_id = receipt.command_id AND outcome.event_type = 'thread.turn-diff-completed'
+            AND json_extract(outcome.payload_json, '$.turnId') = ${event.turnId ?? ""})`.pipe(
+      Effect.orDie,
+    );
+    if (receipt.length)
+      return yield* settleProvenDelivery(nativeConsumer, sequence, event.threadId);
+    if (Option.isSome(previous)) {
+      if (previous.value.state === "uncertain" || previous.value.state === "dead") {
+        yield* appendCheckpointIssueActivity({
+          threadId: event.threadId,
+          turnId: toTurnId(event.turnId),
+          detail: previous.value.lastError ?? "Native checkpoint outcome is uncertain.",
+          createdAt: previous.value.updatedAt,
+          commandId: CommandId.makeUnsafe(`server:checkpoint-native-outcome:${sequence}`),
+        });
+      }
+      if (previous.value.state !== "inflight" || previous.value.claimOwner === claimOwner) return;
+    }
+    const now = new Date().toISOString();
+    const claimed = Option.isSome(previous)
+      ? previous
+      : yield* deliveries
+          .claim({
+            ...input,
+            threadId: event.threadId,
+            claimOwner,
+            claimedAt: now,
+            claimExpiresAt: new Date(Date.now() + 60_000).toISOString(),
+          })
+          .pipe(Effect.orDie);
+    if (Option.isNone(claimed)) return;
+    const uncertain = (detail: string) =>
+      deliveries
+        .markTerminalFailure({
+          ...input,
+          expectedClaimOwner: claimed.value.claimOwner!,
+          state: "uncertain",
+          error: detail,
+          updatedAt: new Date().toISOString(),
+        })
+        .pipe(
+          Effect.orDie,
+          Effect.andThen(
+            appendCheckpointIssueActivity({
+              threadId: event.threadId,
+              turnId: toTurnId(event.turnId),
+              detail,
+              createdAt: now,
+              commandId: CommandId.makeUnsafe(`server:checkpoint-native-outcome:${sequence}`),
+            }),
+          ),
+        );
+    if (Option.isSome(previous)) {
+      yield* uncertain(
+        "Native checkpoint capture was interrupted before its durable outcome was recorded; the workspace was not recaptured during recovery.",
       );
+      return;
+    }
+    const historical = sequence <= Math.max(runtimeAdoptionFence, startupRuntimeFence);
+    if (historical) {
+      const thread = yield* getThreadDetail(event.threadId);
+      const checkpoint = thread?.checkpoints.find(
+        (checkpoint) =>
+          checkpoint.turnId === event.turnId &&
+          checkpoint.status !== "missing" &&
+          isManagedCheckpointRefForThread(checkpoint.checkpointRef, event.threadId),
+      );
+      const pinned = yield* Effect.serviceOption(PinnedCheckpointWorkspace);
+      const cwd = Option.isSome(pinned) ? pinned.value.cwd : undefined;
+      const proven =
+        checkpoint && cwd
+          ? yield* checkpointStore
+              .hasCheckpointRef({ cwd, checkpointRef: checkpoint.checkpointRef })
+              .pipe(Effect.orDie)
+          : false;
+      if (!proven) {
+        // Ingestion acceptance is not proof of a new Git snapshot. It does
+        // prove a pre-upgrade row was handled; non-Git, undone and deliberately
+        // skipped turns must not acquire a fresh error merely because this
+        // consumer is new. Only the immutable upgrade cut qualifies: a row
+        // queued after it and lost to an ordinary restart stays uncertain.
+        const interrupted = thread?.checkpoints.some(
+          (checkpoint) => checkpoint.turnId === event.turnId && checkpoint.status === "missing",
+        );
+        if (sequence > Math.min(runtimeAdoptionFence, startupIngestionFence) || interrupted) {
+          yield* uncertain(
+            "A native completion present before checkpoint startup has no immutable checkpoint outcome; the current workspace was not recaptured during recovery.",
+          );
+          return;
+        }
+        yield* Effect.logDebug(
+          "Accepted legacy native checkpoint history adopted without recapture",
+        );
+      }
+    }
+    let successful = true;
+    // An adopted legacy row may only keep its proven existing snapshot. A
+    // missing projection/ref becomes uncertain above; neither path captures
+    // today's working tree as the outcome of a previously accepted turn.
+    yield* (historical ? Effect.void : captureCheckpointFromTurnCompletion(event)).pipe(
+      Effect.catchCause((cause) => {
+        if (Cause.hasInterruptsOnly(cause)) return Effect.failCause(cause);
+        successful = false;
+        return uncertain(
+          `Native checkpoint capture did not record a complete outcome: ${Cause.pretty(cause)}`,
+        );
+      }),
+    );
+    if (successful) {
+      const completedAt = new Date().toISOString();
+      // Native sequence identities are not domain sequence identities. Complete
+      // the outcome without advancing an orchestration-domain consumer cursor.
+      const completed = yield* sql`UPDATE orchestration_event_deliveries
+        SET state = 'succeeded', claim_owner = NULL, claimed_at = NULL,
+          claim_expires_at = NULL, completed_at = ${completedAt}, updated_at = ${completedAt}
+        WHERE consumer_name = ${nativeConsumer} AND event_sequence = ${sequence}
+          AND state = 'inflight' AND claim_owner = ${claimOwner}
+        RETURNING event_sequence`.pipe(Effect.orDie);
+      if (completed.length !== 1)
+        return yield* Effect.die(new Error("Native checkpoint lost durable delivery ownership"));
+    }
+  });
+  const failSource = (cause: Cause.Cause<unknown>) =>
+    Cause.hasInterruptsOnly(cause) && stopping
+      ? Effect.void
+      : Effect.logError("checkpoint reactor stopped after source failure", {
+          cause: Cause.pretty(cause),
+        }).pipe(
+          Effect.andThen(
+            Effect.sync(() => {
+              stopping = true;
+            }),
+          ),
+          Effect.andThen(Deferred.succeed(stopped, undefined)),
+          Effect.andThen(Deferred.failCause(fatal, cause)),
+          Effect.asVoid,
+        );
+  type UnavailableWorkspace = {
+    readonly threadId: ThreadId;
+    readonly ready: Deferred.Deferred<void, unknown>;
+    replayOnRecovery: boolean;
+    readonly observedWorkspaceClock: number;
+    runtimePin: number;
+    domainPin: number;
+    runtimeFrom: number;
+    domainFrom: number;
+    runtimeThrough: number;
+    domainThrough: number;
+  };
+  const unavailableWorkspaces = new Map<string, UnavailableWorkspace>();
+  let workspaceClock = 0;
+  let evictedWorkspaceClock = 0;
+  const workspaceWorkClocks = new Map<string, number>();
+  const recordWorkspaceWork = (key: string) => {
+    if (unavailableWorkspaces.size === 0) return;
+    workspaceWorkClocks.set(key, ++workspaceClock);
+    if (workspaceWorkClocks.size > CHECKPOINT_REACTOR_CAPACITY) {
+      workspaceWorkClocks.delete(workspaceWorkClocks.keys().next().value!);
+      evictedWorkspaceClock = workspaceClock;
+    }
+  };
+  const definitiveWorkspaceFailure = (cause: Cause.Cause<unknown>) => {
+    let error = Cause.squash(cause);
+    for (let depth = 0; depth < 8 && typeof error === "object" && error !== null; depth++) {
+      if (
+        "code" in error &&
+        (error.code === "ENOENT" ||
+          error.code === "ENOTDIR" ||
+          error.code === "EACCES" ||
+          error.code === "EPERM")
+      )
+        return true;
+      error = "cause" in error ? error.cause : undefined;
+    }
+    return false;
+  };
+  const invalidateNonGitCompletion = (event: ProviderRuntimeEvent) => {
+    if (event.type === "turn.completed" && keys.get(event.threadId)?.isGitRepository === false)
+      keys.delete(event.threadId);
+  };
 
-      yield* Effect.forkScoped(
-        Stream.runForEach(providerService.streamEvents, (event) => {
-          if (event.type === "turn.started" || event.type === "turn.completed") {
-            return worker.enqueue({ source: "runtime", event });
+  // Failed identity recovery has its own bounded read-only execution budget;
+  // it cannot occupy normal workspace workers or decode 256 pages in parallel.
+  const recoverySlots = yield* Semaphore.make(2);
+  const claimUnavailableRow = (
+    source: "runtime" | "domain",
+    sequence: number,
+    threadId: ThreadId,
+  ) =>
+    Effect.gen(function* () {
+      const input = {
+        consumerName: source === "runtime" ? nativeConsumer : domainConsumer,
+        eventSequence: sequence,
+      };
+      const previous = yield* deliveries.getDelivery(input).pipe(Effect.orDie);
+      if (Option.isSome(previous) && previous.value.state !== "retry") return previous;
+      const now = new Date().toISOString();
+      return yield* deliveries
+        .claim({
+          ...input,
+          threadId,
+          claimOwner,
+          claimedAt: now,
+          claimExpiresAt: new Date(Date.now() + 60_000).toISOString(),
+        })
+        .pipe(Effect.orDie);
+    });
+  const settleUnavailableRow = (
+    source: "runtime" | "domain",
+    sequence: number,
+    event: ProviderRuntimeEvent | OrchestrationEvent,
+  ) =>
+    Effect.gen(function* () {
+      const threadId =
+        source === "runtime"
+          ? (event as ProviderRuntimeEvent).threadId
+          : eventThread(event as OrchestrationEvent);
+      if (source === "runtime" && event.type === "turn.completed") {
+        const native = event as Extract<ProviderRuntimeEvent, { type: "turn.completed" }>;
+        const receipt = yield* sql`SELECT 1 FROM orchestration_command_receipts AS receipt
+          WHERE receipt.command_id = ${`server:checkpoint-native-complete:${encodeURIComponent(threadId)}:${encodeURIComponent(native.turnId ?? "")}`}
+            AND receipt.aggregate_kind = 'thread' AND receipt.aggregate_id = ${threadId} AND receipt.status = 'accepted'
+            AND EXISTS (SELECT 1 FROM orchestration_events AS outcome WHERE outcome.command_id = receipt.command_id
+              AND outcome.event_type = 'thread.turn-diff-completed' AND json_extract(outcome.payload_json, '$.turnId') = ${native.turnId ?? ""})`.pipe(
+          Effect.orDie,
+        );
+        if (receipt.length) return yield* settleProvenDelivery(nativeConsumer, sequence, threadId);
+      }
+      if (source === "domain" && event.type === "thread.checkpoint-revert-requested") {
+        const revert = event as Extract<
+          OrchestrationEvent,
+          { type: "thread.checkpoint-revert-requested" }
+        >;
+        const receipt = yield* sql`SELECT 1 FROM orchestration_command_receipts AS receipt
+          WHERE receipt.command_id = ${`server:checkpoint-revert-complete:${revert.eventId}`}
+            AND receipt.aggregate_kind = 'thread' AND receipt.aggregate_id = ${threadId} AND receipt.status = 'accepted'
+            AND EXISTS (SELECT 1 FROM orchestration_events AS outcome WHERE outcome.command_id = receipt.command_id
+              AND outcome.event_type = 'thread.reverted' AND json_extract(outcome.payload_json, '$.turnCount') = ${revert.payload.turnCount})`.pipe(
+          Effect.orDie,
+        );
+        if (receipt.length) return yield* settleProvenDelivery(domainConsumer, sequence, threadId);
+      }
+      const input = {
+        consumerName: source === "runtime" ? nativeConsumer : domainConsumer,
+        eventSequence: sequence,
+      };
+      const claimed = yield* claimUnavailableRow(source, sequence, threadId);
+      if (Option.isNone(claimed))
+        return yield* Effect.die(
+          new Error("Unavailable checkpoint could not establish durable settlement ownership"),
+        );
+      if (claimed.value.state === "succeeded") return;
+      const detail =
+        claimed.value.claimOwner !== null && claimed.value.claimOwner !== claimOwner
+          ? "A previous checkpoint attempt has no recorded outcome. It was not replayed after workspace resolution failed; inspect the workspace before requesting another operation."
+          : (claimed.value.lastError ??
+            "Workspace identity was unavailable before checkpoint admission. This pending operation was not applied, and will not be replayed after workspace access recovers. Request a new operation after inspecting the workspace.");
+      const now = new Date().toISOString();
+      if (claimed.value.state === "inflight") {
+        const settled = yield* deliveries
+          .markTerminalFailure({
+            ...input,
+            expectedClaimOwner: claimed.value.claimOwner!,
+            state: "uncertain",
+            error: detail,
+            updatedAt: now,
+          })
+          .pipe(Effect.orDie);
+        if (!settled)
+          return yield* Effect.die(
+            new Error("Unavailable checkpoint lost durable settlement ownership"),
+          );
+      }
+      if (source === "domain" && event.type === "thread.checkpoint-revert-requested") {
+        const revert = event as Extract<
+          OrchestrationEvent,
+          { type: "thread.checkpoint-revert-requested" }
+        >;
+        const model = yield* orchestrationEngine.getReadModel();
+        const thread = model.threads.find((entry) => entry.id === threadId);
+        yield* appendRevertFailureActivity({
+          threadId,
+          turnCount: revert.payload.turnCount,
+          detail,
+          createdAt: now,
+          resolvedTurnId:
+            thread?.checkpoints.find(
+              (entry) => entry.checkpointTurnCount === revert.payload.turnCount,
+            )?.turnId ??
+            thread?.latestTurn?.turnId ??
+            null,
+          commandId: CommandId.makeUnsafe(`server:checkpoint-revert-outcome:${revert.eventId}`),
+        });
+      } else if (!(source === "domain" && event.type === "thread.turn-diff-completed")) {
+        yield* appendCheckpointIssueActivity({
+          threadId,
+          turnId: source === "runtime" ? toTurnId((event as ProviderRuntimeEvent).turnId) : null,
+          detail,
+          createdAt: now,
+          commandId: CommandId.makeUnsafe(
+            source === "runtime" && event.type === "turn.completed"
+              ? `server:checkpoint-native-outcome:${sequence}`
+              : `server:checkpoint-unavailable:${source}:${sequence}`,
+          ),
+        });
+      }
+    });
+  const recoverUnavailableWorkspace = (pending: UnavailableWorkspace) =>
+    Effect.gen(function* () {
+      // Read-only retries may discover the identity for future inputs. Peers can
+      // already have edited an alias, so none of this pending range may mutate.
+      const configuration = workspaceConfigurationSequence;
+      let recovered: WorkspaceSelection | undefined;
+      // A transient lookup failure gets a longer, still bounded retry window;
+      // only after it is exhausted does the range settle as uncertain.
+      for (let attempt = 0; !stopping && attempt < (pending.replayOnRecovery ? 6 : 3); attempt++) {
+        yield* Effect.sleep(50 * (attempt + 1));
+        const resolved = yield* workspaceForThread(pending.threadId, false).pipe(
+          Effect.timeoutOption(pending.replayOnRecovery ? 1_000 : 200),
+          Effect.exit,
+        );
+        if (resolved._tag === "Success" && Option.isSome(resolved.value)) {
+          recovered = resolved.value.value;
+          break;
+        }
+        if (resolved._tag === "Failure" && definitiveWorkspaceFailure(resolved.cause))
+          pending.replayOnRecovery = false;
+      }
+      if (stopping) return;
+      if (pending.replayOnRecovery && recovered !== undefined) {
+        // Transient latency is not proof that an operation is lost. Resume its
+        // durable range unless a peer has already touched this physical checkout
+        // while its identity was unknown (or bounded evidence was evicted).
+        const unsafeAlias =
+          (workspaceWorkClocks.get(recovered.key) ?? 0) > pending.observedWorkspaceClock ||
+          evictedWorkspaceClock > pending.observedWorkspaceClock;
+        if (!unsafeAlias) {
+          publishWorkspaceSelection(pending.threadId, recovered, configuration);
+          unavailableWorkspaces.delete(pending.threadId);
+          if (unavailableWorkspaces.size === 0) workspaceWorkClocks.clear();
+          rescanRequested = true;
+          Queue.offerUnsafe(wake, undefined);
+          return;
+        }
+      }
+      pending.replayOnRecovery = false;
+      // Admission may be behind the journals while lookup waits. Fence both
+      // durable sources once, before exposing the recovered identity, so rows
+      // committed during that wait cannot become fresh work after a peer Undo.
+      // Later admissions can extend the pending range; do not chase high-water
+      // on every settlement page or retain a continuously active thread forever.
+      const cuts = yield* sql
+        .withTransaction(
+          sql<{ runtimeSequence: number; domainSequence: number }>`SELECT
+            COALESCE((SELECT MAX(sequence) FROM provider_runtime_events), 0) AS runtimeSequence,
+            COALESCE((SELECT MAX(sequence) FROM orchestration_events), 0) AS domainSequence`,
+        )
+        .pipe(Effect.orDie);
+      if (cuts.length !== 1)
+        return yield* Effect.die(new Error("Checkpoint recovery could not establish durable cuts"));
+      pending.runtimeThrough = Math.max(pending.runtimeThrough, cuts[0]!.runtimeSequence);
+      pending.domainThrough = Math.max(pending.domainThrough, cuts[0]!.domainSequence);
+      if (recovered !== undefined)
+        publishWorkspaceSelection(pending.threadId, recovered, configuration);
+      while (!stopping) {
+        const runtimeThrough = pending.runtimeThrough;
+        const domainThrough = pending.domainThrough;
+        const runtimePage = yield* runtimeRepository
+          .readAfter({
+            sequenceExclusive: pending.runtimeFrom,
+            throughSequenceInclusive: runtimeThrough,
+            limit: 32,
+            checkpointRelevantOnly: true,
+          })
+          .pipe(Effect.orDie);
+        for (const row of runtimePage) {
+          if (row.event.threadId === pending.threadId)
+            yield* settleUnavailableRow("runtime", row.sequence, row.event);
+          pending.runtimeFrom = row.sequence;
+        }
+        if (runtimePage.length < 32) pending.runtimeFrom = runtimeThrough;
+        const domainPage = yield* readDomainPage(pending.domainFrom, domainThrough).pipe(
+          Effect.orDie,
+        );
+        for (const event of domainPage) {
+          if (event.aggregateId === pending.threadId && domainRelevant(event))
+            yield* settleUnavailableRow("domain", event.sequence, event);
+          pending.domainFrom = event.sequence;
+        }
+        if (domainPage.length < 32) pending.domainFrom = domainThrough;
+        if (
+          pending.runtimeFrom >= pending.runtimeThrough &&
+          pending.domainFrom >= pending.domainThrough
+        ) {
+          unavailableWorkspaces.delete(pending.threadId);
+          Queue.offerUnsafe(acknowledge, undefined);
+          Queue.offerUnsafe(wake, undefined);
+          return;
+        }
+        yield* Effect.yieldNow;
+      }
+    }).pipe(
+      recoverySlots.withPermits(1),
+      Effect.raceFirst(Deferred.await(stopped)),
+      Effect.catchCause(failSource),
+    );
+  const selectWorkspace = (
+    threadId: ThreadId,
+    source: "runtime" | "domain",
+    sequence: number,
+    floor: { runtimeFrom: number; domainFrom: number },
+  ) =>
+    Effect.gen(function* () {
+      let pending = unavailableWorkspaces.get(threadId);
+      let created = false;
+      if (pending === undefined) {
+        const selected = yield* workspaceForThread(threadId).pipe(
+          Effect.timeout("200 millis"),
+          Effect.exit,
+        );
+        // Resolution yields: another lane may have established a conservative
+        // unavailable range while this attempt was waiting on projection/I/O.
+        pending = unavailableWorkspaces.get(threadId);
+        if (pending === undefined && selected._tag === "Success") return selected.value;
+        if (selected._tag === "Failure" && Cause.hasInterruptsOnly(selected.cause))
+          return yield* Effect.failCause(selected.cause);
+        while (
+          pending === undefined &&
+          unavailableWorkspaces.size >= CHECKPOINT_REACTOR_CAPACITY &&
+          !stopping
+        ) {
+          yield* Effect.sleep("1 millis");
+          pending = unavailableWorkspaces.get(threadId);
+        }
+        if (stopping) return undefined;
+        if (pending === undefined) {
+          // Only cursors are retained. Claim before any peer can pass this row.
+          pending = {
+            threadId,
+            ready: Deferred.makeUnsafe<void, unknown>(),
+            replayOnRecovery:
+              selected._tag === "Failure" && !definitiveWorkspaceFailure(selected.cause),
+            observedWorkspaceClock: workspaceClock,
+            runtimePin: floor.runtimeFrom,
+            domainPin: floor.domainFrom,
+            runtimeFrom: floor.runtimeFrom,
+            domainFrom: floor.domainFrom,
+            runtimeThrough: runtimeFence,
+            domainThrough: domainFence,
+          };
+          unavailableWorkspaces.set(threadId, pending);
+          created = true;
+          yield* (
+            pending.replayOnRecovery ? Effect.void : claimUnavailableRow(source, sequence, threadId)
+          ).pipe(
+            Effect.catchCause((cause) =>
+              Deferred.failCause(pending!.ready, cause).pipe(
+                Effect.andThen(Effect.failCause(cause)),
+              ),
+            ),
+          );
+          yield* Deferred.succeed(pending.ready, undefined);
+          yield* Effect.logWarning(
+            pending.replayOnRecovery
+              ? "Checkpoint workspace lookup delayed; durable work retained for retry"
+              : "checkpoint workspace unavailable; pending operations will not be replayed",
+            { operation: "workspace resolution" },
+          );
+        }
+      }
+      if (!created) {
+        yield* Deferred.await(pending.ready);
+        if (!pending.replayOnRecovery) yield* claimUnavailableRow(source, sequence, threadId);
+        // If the old recovery finished during the claim, keep the new row
+        // pinned and schedule another bounded settlement pass.
+        const current = unavailableWorkspaces.get(threadId);
+        if (current !== undefined) pending = current;
+        else {
+          unavailableWorkspaces.set(threadId, pending);
+          created = true;
+        }
+        pending.runtimePin = Math.min(pending.runtimePin, floor.runtimeFrom);
+        pending.domainPin = Math.min(pending.domainPin, floor.domainFrom);
+        pending.runtimeFrom = Math.min(pending.runtimeFrom, floor.runtimeFrom);
+        pending.domainFrom = Math.min(pending.domainFrom, floor.domainFrom);
+      }
+      pending.runtimeThrough = Math.max(
+        pending.runtimeThrough,
+        runtimeFence,
+        source === "runtime" ? sequence : 0,
+      );
+      pending.domainThrough = Math.max(
+        pending.domainThrough,
+        domainFence,
+        source === "domain" ? sequence : 0,
+      );
+      if (created) yield* Effect.forkScoped(recoverUnavailableWorkspace(pending));
+      return undefined;
+    });
+  const processLane = (lane: WorkspaceLane) =>
+    Effect.gen(function* () {
+      lane.continuation = false;
+      let processed = 0;
+      let refreshFences = true;
+      let domainPage: ReadonlyArray<OrchestrationEvent> = [];
+      let domainIndex = 0;
+      let runtimePage: ReadonlyArray<
+        import("../../persistence/Services/ProviderRuntimeEvents.ts").PersistedProviderRuntimeEvent
+      > = [];
+      let runtimeIndex = 0;
+      // Each workspace owns the complete checkpoint/undo operation, including its
+      // existing session lease. Ready peers receive a permit after 32 source rows.
+      while (processed < 32 && !stopping) {
+        if (refreshFences) {
+          // Reading runtime first, then domain, observes every commit cut that
+          // preceded the native snapshot. Repeat after a slow Git operation.
+          lane.runtimeFence = Math.max(
+            lane.runtimeFence,
+            yield* runtimeRepository.getHighWaterSequence.pipe(Effect.orDie),
+          );
+          lane.domainFence = Math.max(
+            lane.domainFence,
+            yield* orchestrationEngine.getEventHighWaterSequence.pipe(Effect.orDie),
+          );
+          refreshFences = false;
+        }
+        if (domainIndex >= domainPage.length && lane.domainFrom < lane.domainFence) {
+          domainPage = yield* readDomainPage(lane.domainFrom, lane.domainFence).pipe(Effect.orDie);
+          domainIndex = 0;
+          if (domainPage.length === 0) lane.domainFrom = lane.domainFence;
+        }
+        const nextDomain = domainPage[domainIndex];
+        if (nextDomain) observeWorkspaceConfiguration(nextDomain);
+        const domainWorkspace =
+          nextDomain && domainRelevant(nextDomain)
+            ? yield* selectWorkspace(eventThread(nextDomain), "domain", nextDomain.sequence, lane)
+            : undefined;
+        if (nextDomain && (!domainRelevant(nextDomain) || domainWorkspace?.key !== lane.key)) {
+          lane.domainFrom = nextDomain.sequence;
+          domainIndex++;
+          processed++;
+          continue;
+        }
+        const cut = nextDomain?.metadata.checkpointRuntimeSequence;
+        const runtimeThrough =
+          cut === undefined ? lane.runtimeFence : Math.max(lane.runtimeFence, cut);
+        if (runtimeIndex >= runtimePage.length && lane.runtimeFrom < runtimeThrough) {
+          runtimePage = yield* runtimeRepository
+            .readAfter({
+              sequenceExclusive: lane.runtimeFrom,
+              throughSequenceInclusive: runtimeThrough,
+              limit: 32,
+              checkpointRelevantOnly: true,
+            })
+            .pipe(Effect.orDie);
+          runtimeIndex = 0;
+          if (runtimePage.length === 0) lane.runtimeFrom = runtimeThrough;
+        }
+        const nextRuntime = runtimePage[runtimeIndex];
+        if (
+          nextRuntime &&
+          (nextDomain === undefined || cut === undefined || nextRuntime.sequence <= cut)
+        ) {
+          const selectedWorkspace = runtimeRelevant(nextRuntime.event)
+            ? yield* selectWorkspace(
+                nextRuntime.event.threadId,
+                "runtime",
+                nextRuntime.sequence,
+                lane,
+              )
+            : undefined;
+          if (selectedWorkspace?.key === lane.key) {
+            let supersededLiveDiff = false;
+            if (nextRuntime.event.type === "item.completed") {
+              // A burst keeps only its newest file notification before native
+              // terminal completion. Edits arriving during Git remain trailing
+              // work; no per-event payload queue or per-thread pending map grows.
+              const newer = yield* sql`SELECT 1 FROM provider_runtime_events AS later
+              WHERE later.thread_id = ${nextRuntime.event.threadId}
+                AND later.sequence > ${nextRuntime.sequence} AND later.sequence <= ${runtimeThrough}
+                AND later.event_type = 'item.completed'
+                AND json_extract(later.event_json, '$.payload.itemType') = 'file_change'
+                AND NOT EXISTS (SELECT 1 FROM provider_runtime_events AS terminal
+                  WHERE terminal.thread_id = later.thread_id
+                    AND terminal.event_type = 'turn.completed'
+                    AND terminal.sequence > ${nextRuntime.sequence} AND terminal.sequence < later.sequence)
+              LIMIT 1`.pipe(Effect.orDie);
+              supersededLiveDiff =
+                newer.length > 0 || (yield* supportsLiveTurnDiffPatch(nextRuntime.event.provider));
+            }
+            if (!supersededLiveDiff) {
+              const work =
+                nextRuntime.event.type === "turn.completed"
+                  ? Effect.sync(() =>
+                      cancelLiveTurnDiff(
+                        nextRuntime.event.threadId,
+                        toTurnId(nextRuntime.event.turnId),
+                        nextRuntime.sequence,
+                      ),
+                    ).pipe(
+                      Effect.andThen(
+                        processNativeCompletion(nextRuntime.sequence, nextRuntime.event),
+                      ),
+                    )
+                  : nextRuntime.sequence <= Math.max(runtimeAdoptionFence, startupRuntimeFence)
+                    ? Effect.void
+                    : deliveries
+                        .getDelivery({
+                          consumerName: nativeConsumer,
+                          eventSequence: nextRuntime.sequence,
+                        })
+                        .pipe(
+                          Effect.orDie,
+                          Effect.flatMap((unavailable) =>
+                            Option.isSome(unavailable)
+                              ? Effect.void
+                              : processInputSafely({ source: "runtime", event: nextRuntime.event }),
+                          ),
+                        );
+              refreshFences = true;
+              yield* withPinnedWorkspaceLease(
+                Effect.sync(() => recordWorkspaceWork(lane.key)).pipe(Effect.andThen(work)),
+              ).pipe(
+                Effect.provideService(PinnedCheckpointWorkspace, {
+                  cwd: selectedWorkspace.cwd,
+                  identity: selectedWorkspace.cwd === undefined ? undefined : selectedWorkspace.key,
+                  isGitRepository: selectedWorkspace.isGitRepository,
+                }),
+              );
+            }
           }
-          if (event.type === "item.completed" && event.payload.itemType === "file_change") {
-            return Effect.gen(function* () {
-              // Coalesce first (cheap) so bursts of edits collapse to one recompute.
-              if (liveDiffScheduledThreads.has(event.threadId)) {
-                return;
-              }
-              // Skip providers that stream their own live diff (handled elsewhere).
-              if (yield* supportsLiveTurnDiffPatch(event.provider)) {
-                return;
-              }
-              liveDiffScheduledThreads.add(event.threadId);
-              yield* worker.enqueue({ source: "runtime", event });
+          lane.runtimeFrom = nextRuntime.sequence;
+          runtimeIndex++;
+        } else if (nextDomain) {
+          // Every native checkpoint row through the atomic domain commit cut has
+          // settled in this workspace before the domain mutation may run.
+          const selectedWorkspace = domainWorkspace;
+          if (selectedWorkspace?.key === lane.key) {
+            refreshFences = true;
+            recordWorkspaceWork(lane.key);
+            yield* processDurableDomain(nextDomain).pipe(
+              Effect.provideService(PinnedCheckpointWorkspace, {
+                cwd: selectedWorkspace.cwd,
+                identity: selectedWorkspace.cwd === undefined ? undefined : selectedWorkspace.key,
+                isGitRepository: selectedWorkspace.isGitRepository,
+              }),
+            );
+          }
+          lane.domainFrom = nextDomain.sequence;
+          domainIndex++;
+        } else {
+          lane.runtimeFrom = Math.max(lane.runtimeFrom, runtimeThrough);
+          lane.domainFrom = Math.max(lane.domainFrom, lane.domainFence);
+          break;
+        }
+        processed++;
+      }
+      // There may be deleted runtime rows below the fence. Empty pages, rather
+      // than arithmetic sequence adjacency, establish their settled range.
+      if (
+        !stopping &&
+        (lane.runtimeFrom < lane.runtimeFence || lane.domainFrom < lane.domainFence)
+      ) {
+        lane.continuation = true;
+      } else {
+        lanes.delete(lane.key);
+      }
+      Queue.offerUnsafe(acknowledge, undefined);
+      Queue.offerUnsafe(wake, undefined);
+    }).pipe(Effect.raceFirst(Deferred.await(stopped)), Effect.catchCause(failSource));
+  const worker = yield* makeKeyedDrainableWorker(processLane, {
+    key: (lane) => lane.key,
+    concurrency: 4,
+    capacity: CHECKPOINT_REACTOR_CAPACITY,
+    shouldContinue: (lane) => lane.continuation && !stopping,
+  });
+  const admit = Effect.fnUntraced(function* (
+    source: "runtime" | "domain",
+    sequence: number,
+    threadId: ThreadId,
+  ) {
+    const selected = yield* selectWorkspace(threadId, source, sequence, {
+      runtimeFrom: runtimeScanned,
+      domainFrom: domainScanned,
+    });
+    if (selected === undefined) return;
+    const key = selected.key;
+    const existing = lanes.get(key);
+    if (existing) {
+      existing.runtimeFence = Math.max(
+        existing.runtimeFence,
+        runtimeFence,
+        source === "runtime" ? sequence : 0,
+      );
+      existing.domainFence = Math.max(
+        existing.domainFence,
+        domainFence,
+        source === "domain" ? sequence : 0,
+      );
+      return;
+    }
+    // Admission belongs to this source reader, never the runtime observer.
+    // At capacity it suspends with only the current bounded page retained.
+    while (lanes.size >= CHECKPOINT_REACTOR_CAPACITY && !stopping) yield* Effect.sleep("1 millis");
+    if (stopping) return;
+    const lane: WorkspaceLane = {
+      key,
+      runtimeFrom: runtimeScanned,
+      domainFrom: domainScanned,
+      // Inspect both durable snapshots before executing either source. A native
+      // event must not pass a domain fence merely because its observer ran first.
+      runtimeFence: Math.max(runtimeFence, source === "runtime" ? sequence : 0),
+      domainFence: Math.max(domainFence, source === "domain" ? sequence : 0),
+      continuation: false,
+    };
+    lanes.set(key, lane);
+    if (!(yield* worker.enqueue(lane)))
+      return yield* Effect.die(new Error("Checkpoint workspace admission closed"));
+  });
+  const scan = Effect.gen(function* () {
+    if (legacyDomainFrom < adoptionFence) {
+      const events = yield* Stream.runCollect(
+        eventStore.readFromSequence(legacyDomainFrom, 32, adoptionFence, {
+          eventTypes: ["thread.checkpoint-revert-requested"],
+        }),
+      ).pipe(Effect.orDie);
+      for (const event of events) yield* processDurableDomain(event);
+      const through = events.length < 32 ? adoptionFence : events[events.length - 1]!.sequence;
+      yield* sql`UPDATE orchestration_consumer_state SET last_acked_sequence = ${through}, updated_at = ${new Date().toISOString()}
+        WHERE consumer_name = ${legacyDomainConsumer} AND last_acked_sequence = ${legacyDomainFrom}`.pipe(
+        Effect.orDie,
+      );
+      legacyDomainFrom = through;
+      if (legacyDomainFrom < adoptionFence) Queue.offerUnsafe(wake, undefined);
+    }
+    if (rescanRequested) {
+      rescanRequested = false;
+      rescanInProgress = true;
+      // Configuration changes can move pending inputs to another workspace.
+      // Re-read only unacknowledged rows; outcome claims prevent double work.
+      runtimeScanned = yield* runtimeRepository
+        .getConsumerCursor(CHECKPOINT_RUNTIME_CONSUMER)
+        .pipe(Effect.orDie);
+      const state = yield* deliveries.getConsumerState(domainConsumer).pipe(Effect.orDie);
+      domainScanned = Option.isSome(state) ? state.value.lastAckedSequence : 0;
+      rescanInProgress = false;
+    }
+    runtimeFence = Math.max(
+      runtimeFence,
+      yield* runtimeRepository.getHighWaterSequence.pipe(Effect.orDie),
+    );
+    domainFence = Math.max(
+      domainFence,
+      yield* orchestrationEngine.getEventHighWaterSequence.pipe(Effect.orDie),
+    );
+    // Alternate bounded pages so neither durable source monopolizes admission.
+    const runtimePage = yield* runtimeRepository
+      .readAfter({
+        sequenceExclusive: runtimeScanned,
+        throughSequenceInclusive: runtimeFence,
+        limit: 32,
+        checkpointRelevantOnly: true,
+      })
+      .pipe(Effect.orDie);
+    for (const row of runtimePage) {
+      if (runtimeRelevant(row.event)) yield* admit("runtime", row.sequence, row.event.threadId);
+      runtimeScanned = row.sequence;
+    }
+    if (runtimePage.length < 32) runtimeScanned = runtimeFence;
+    const domainPage = yield* readDomainPage(domainScanned, domainFence).pipe(Effect.orDie);
+    for (const event of domainPage) {
+      observeWorkspaceConfiguration(event);
+      if (domainRelevant(event)) yield* admit("domain", event.sequence, eventThread(event));
+      domainScanned = event.sequence;
+    }
+    if (domainPage.length < 32) domainScanned = domainFence;
+    Queue.offerUnsafe(acknowledge, undefined);
+    if (runtimeScanned < runtimeFence || domainScanned < domainFence)
+      Queue.offerUnsafe(wake, undefined);
+    yield* Effect.yieldNow;
+  });
+  const pumpAcknowledgements = Effect.gen(function* () {
+    if (rescanRequested || rescanInProgress) return;
+    let runtimeThrough = runtimeScanned;
+    let domainThrough = domainScanned;
+    for (const lane of lanes.values()) {
+      runtimeThrough = Math.min(runtimeThrough, lane.runtimeFrom);
+      domainThrough = Math.min(domainThrough, lane.domainFrom);
+    }
+    for (const pending of unavailableWorkspaces.values()) {
+      runtimeThrough = Math.min(runtimeThrough, pending.runtimePin);
+      domainThrough = Math.min(domainThrough, pending.domainPin);
+    }
+    yield* sql
+      .withTransaction(
+        Effect.gen(function* () {
+          const runtimeCursor = yield* runtimeRepository.getConsumerCursor(
+            CHECKPOINT_RUNTIME_CONSUMER,
+          );
+          const rows = yield* sql<{
+            sequence: number | null;
+          }>`SELECT MAX(sequence) AS sequence FROM provider_runtime_events WHERE sequence > ${runtimeCursor} AND sequence <= ${runtimeThrough}`;
+          const runtimeTarget = rows[0]?.sequence;
+          if (runtimeTarget !== undefined && runtimeTarget !== null) {
+            const advanced = yield* runtimeRepository.advanceConsumerCursorThrough({
+              consumerName: CHECKPOINT_RUNTIME_CONSUMER,
+              throughSequence: runtimeTarget,
+              updatedAt: new Date().toISOString(),
             });
+            if (!advanced)
+              return yield* Effect.die(new Error("Checkpoint runtime ACK lost its stored target"));
+            yield* sql`DELETE FROM orchestration_event_deliveries WHERE consumer_name = ${nativeConsumer} AND event_sequence <= ${runtimeTarget}`;
           }
-          return Effect.void;
+          const state = yield* deliveries.getConsumerState(domainConsumer);
+          const cursor = Option.isSome(state) ? state.value.lastAckedSequence : 0;
+          const domainRows = yield* sql<{
+            sequence: number | null;
+          }>`SELECT MAX(sequence) AS sequence FROM orchestration_events WHERE sequence > ${cursor} AND sequence <= ${domainThrough}`;
+          const target = domainRows[0]?.sequence;
+          if (target !== undefined && target !== null) {
+            yield* sql`UPDATE orchestration_consumer_state SET last_acked_sequence = ${target}, updated_at = ${new Date().toISOString()}
+          WHERE consumer_name = ${domainConsumer} AND last_acked_sequence = ${cursor}
+            AND NOT EXISTS (SELECT 1 FROM orchestration_event_deliveries WHERE consumer_name = ${domainConsumer}
+              AND event_sequence > ${cursor} AND event_sequence <= ${target} AND state IN ('inflight', 'retry'))`;
+          }
         }),
+      )
+      .pipe(Effect.orDie);
+  });
+  const drain = Effect.gen(function* () {
+    if (!started) return;
+    while (true) {
+      Queue.offerUnsafe(wake, undefined);
+      const runtimeHighWater = yield* runtimeRepository.getHighWaterSequence.pipe(Effect.orDie);
+      const domainHighWater = yield* orchestrationEngine.getEventHighWaterSequence.pipe(
+        Effect.orDie,
       );
-    }),
-  );
-
-  return {
-    start,
-    drain: worker.drain,
-  } satisfies CheckpointReactorShape;
+      yield* worker.drain;
+      if (
+        runtimeScanned >= runtimeHighWater &&
+        domainScanned >= domainHighWater &&
+        lanes.size === 0 &&
+        unavailableWorkspaces.size === 0 &&
+        legacyDomainFrom >= adoptionFence
+      ) {
+        // Persist the settled prefix before callers dispose this producer scope.
+        yield* pumpAcknowledgements;
+        const runtimeCursor = yield* runtimeRepository
+          .getConsumerCursor(CHECKPOINT_RUNTIME_CONSUMER)
+          .pipe(Effect.orDie);
+        const state = yield* deliveries.getConsumerState(domainConsumer).pipe(Effect.orDie);
+        if (
+          (runtimeCursor >= runtimeScanned || runtimeScanned === 0) &&
+          Option.isSome(state) &&
+          state.value.lastAckedSequence >= domainScanned
+        ) {
+          // Owned work can append an outcome after the heads sampled above.
+          // Do not report settled until that newly committed prefix is ACKed.
+          const finalRuntimeHead = yield* runtimeRepository.getHighWaterSequence.pipe(Effect.orDie);
+          const finalDomainHead = yield* orchestrationEngine.getEventHighWaterSequence.pipe(
+            Effect.orDie,
+          );
+          if (runtimeScanned >= finalRuntimeHead && domainScanned >= finalDomainHead) return;
+        }
+      }
+      yield* Effect.sleep("1 millis");
+    }
+  }).pipe(Effect.raceFirst(Deferred.await(fatal)), Effect.orDie);
+  const start: CheckpointReactorShape["start"] = Effect.gen(function* () {
+    if (started) return;
+    const runtimeHighWater = yield* runtimeRepository.getHighWaterSequence.pipe(Effect.orDie);
+    const highWater = yield* orchestrationEngine.getEventHighWaterSequence.pipe(Effect.orDie);
+    startupRuntimeFence = runtimeHighWater;
+    startupDomainFence = highWater;
+    const now = new Date().toISOString();
+    const runtimeAdoptionConsumer = "checkpoint-reactor.runtime-adoption.v1";
+    const domainAdoptionConsumer = "checkpoint-reactor.domain-adoption.v1";
+    yield* sql
+      .withTransaction(
+        Effect.gen(function* () {
+          const existingRuntimeConsumer =
+            yield* sql`SELECT 1 FROM provider_runtime_event_consumers WHERE consumer_name = ${CHECKPOINT_RUNTIME_CONSUMER}`;
+          const ingestionCursor = yield* runtimeRepository.getConsumerCursor(
+            PROVIDER_RUNTIME_INGESTION_CONSUMER,
+          );
+          startupIngestionFence = ingestionCursor;
+          // These immutable cuts survive restart. A missing cut is legacy or
+          // incomplete protocol evidence even when a domain consumer exists;
+          // adopt high-water conservatively. Neither ACK pump advances the cuts.
+          yield* sql`INSERT INTO orchestration_consumer_state (consumer_name, last_acked_sequence, created_at, updated_at)
+        VALUES (${runtimeAdoptionConsumer}, ${existingRuntimeConsumer.length ? 0 : Math.max(ingestionCursor, runtimeHighWater)}, ${now}, ${now}) ON CONFLICT (consumer_name) DO NOTHING`;
+          yield* sql`INSERT INTO orchestration_consumer_state (consumer_name, last_acked_sequence, created_at, updated_at)
+        VALUES (${domainAdoptionConsumer}, ${highWater}, ${now}, ${now}) ON CONFLICT (consumer_name) DO NOTHING`;
+          yield* sql`INSERT INTO provider_runtime_event_consumers (consumer_name, last_acked_sequence, created_at, updated_at)
+        VALUES (${CHECKPOINT_RUNTIME_CONSUMER}, 0, ${now}, ${now}) ON CONFLICT (consumer_name) DO NOTHING`;
+          yield* sql`INSERT INTO orchestration_consumer_state (consumer_name, last_acked_sequence, created_at, updated_at)
+        VALUES (${domainConsumer}, ${highWater}, ${now}, ${now}) ON CONFLICT (consumer_name) DO NOTHING`;
+          yield* sql`INSERT INTO orchestration_consumer_state (consumer_name, last_acked_sequence, created_at, updated_at)
+        VALUES (${legacyDomainConsumer}, 0, ${now}, ${now}) ON CONFLICT (consumer_name) DO NOTHING`;
+          yield* sql`INSERT INTO orchestration_consumer_state (consumer_name, last_acked_sequence, created_at, updated_at)
+        VALUES (${nativeConsumer}, 0, ${now}, ${now}) ON CONFLICT (consumer_name) DO NOTHING`;
+        }),
+      )
+      .pipe(Effect.orDie);
+    const runtimeAdoption = yield* deliveries
+      .getConsumerState(runtimeAdoptionConsumer)
+      .pipe(Effect.orDie);
+    const domainAdoption = yield* deliveries
+      .getConsumerState(domainAdoptionConsumer)
+      .pipe(Effect.orDie);
+    runtimeAdoptionFence = Option.isSome(runtimeAdoption)
+      ? runtimeAdoption.value.lastAckedSequence
+      : 0;
+    adoptionFence = Option.isSome(domainAdoption) ? domainAdoption.value.lastAckedSequence : 0;
+    const legacyState = yield* deliveries.getConsumerState(legacyDomainConsumer).pipe(Effect.orDie);
+    legacyDomainFrom = Option.isSome(legacyState) ? legacyState.value.lastAckedSequence : 0;
+    runtimeScanned = yield* runtimeRepository
+      .getConsumerCursor(CHECKPOINT_RUNTIME_CONSUMER)
+      .pipe(Effect.orDie);
+    const state = yield* deliveries.getConsumerState(domainConsumer).pipe(Effect.orDie);
+    domainScanned = Option.isSome(state) ? state.value.lastAckedSequence : 0;
+    workspaceConfigurationSequence = domainScanned;
+    started = true;
+    yield* Effect.forkScoped(
+      Effect.forever(
+        Queue.take(acknowledge).pipe(
+          Effect.andThen(pumpAcknowledgements),
+          // The sliding queue keeps one pending request, so a streaming burst
+          // pays at most one ACK transaction per interval.
+          Effect.andThen(Effect.sleep(CHECKPOINT_ACK_INTERVAL_MS)),
+        ),
+      ).pipe(Effect.catchCause(failSource)),
+    );
+    yield* Effect.forkScoped(
+      Effect.forever(Queue.take(wake).pipe(Effect.andThen(scan))).pipe(
+        Effect.catchCause(failSource),
+      ),
+    );
+    yield* Effect.forkScoped(
+      Effect.forever(
+        Queue.take(lazyWake).pipe(
+          Effect.andThen(Effect.sleep(irrelevantScanIntervalMs)),
+          Effect.andThen(Effect.sync(() => Queue.offerUnsafe(wake, undefined))),
+        ),
+      ).pipe(Effect.catchCause(failSource)),
+    );
+    // Register eager subscriptions before capturing the replay fence.
+    const domainEvents = yield* orchestrationEngine.subscribeDomainEvents;
+    yield* Effect.forkScoped(
+      Stream.runForEach(domainEvents, (event) =>
+        Effect.sync(() => {
+          observeWorkspaceConfiguration(event);
+          domainFence = Math.max(domainFence, event.sequence);
+          Queue.offerUnsafe(domainRelevant(event) ? wake : lazyWake, undefined);
+        }),
+      ).pipe(Effect.catchCause(failSource)),
+    );
+    const runtimeEvents = providerService.streamPersistedEvents;
+    if (runtimeEvents) {
+      yield* Effect.forkScoped(
+        Stream.runForEach(runtimeEvents, (row) =>
+          Effect.sync(() => {
+            invalidateNonGitCompletion(row.event);
+            runtimeFence = Math.max(runtimeFence, row.sequence);
+            Queue.offerUnsafe(runtimeRelevant(row.event) ? wake : lazyWake, undefined);
+          }),
+        ).pipe(Effect.catchCause(failSource)),
+      );
+    } else {
+      // Compatibility services without durable publication use the same journal.
+      yield* Effect.forkScoped(
+        Stream.runForEach(providerService.streamEvents, (event) =>
+          runtimeRelevant(event)
+            ? Effect.sync(() => invalidateNonGitCompletion(event)).pipe(
+                Effect.andThen(runtimeRepository.append(event)),
+                Effect.tap((row) =>
+                  Effect.sync(() => {
+                    runtimeFence = Math.max(runtimeFence, row.sequence);
+                    Queue.offerUnsafe(wake, undefined);
+                  }),
+                ),
+              )
+            : Effect.void,
+        ).pipe(Effect.catchCause(failSource)),
+      );
+    }
+    yield* Effect.addFinalizer(() =>
+      Effect.sync(() => {
+        stopping = true;
+      }).pipe(Effect.andThen(Deferred.succeed(stopped, undefined)), Effect.asVoid),
+    );
+    Queue.offerUnsafe(wake, undefined);
+    // Recovery proceeds in workspace lanes. Starting the observer never waits
+    // for another workspace's Git operation or its admission reservation.
+  });
+  return { start, drain } satisfies CheckpointReactorShape;
 });
 
-export const CheckpointReactorLive = Layer.effect(CheckpointReactor, make).pipe(
-  Layer.provide(ProjectionTurnRepositoryLive),
-);
+export const makeCheckpointReactorLive = (options?: CheckpointReactorLiveOptions) =>
+  Layer.effect(CheckpointReactor, make(options)).pipe(
+    Layer.provide(OrchestrationEventStoreLive),
+    Layer.provide(ProjectionTurnRepositoryLive),
+    Layer.provide(ProjectionThreadMessageRepositoryLive),
+    Layer.provide(ProviderRuntimeEventRepositoryLive),
+    Layer.provide(OrchestrationEventDeliveryRepositoryLive),
+  );
+
+export const CheckpointReactorLive = makeCheckpointReactorLive();

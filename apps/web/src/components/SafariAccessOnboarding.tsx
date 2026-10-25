@@ -4,6 +4,7 @@ import { SettingsIcon } from "~/lib/icons";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useLocalStorage } from "../hooks/useLocalStorage";
 import { Button } from "./ui/button";
+import { useAnnouncementSheetSlot, useAnnouncementSheetSlotStore } from "./announcementSheetSlot";
 import {
   Dialog,
   DialogDescription,
@@ -56,8 +57,18 @@ export function SafariAccessSetupButton() {
   );
 }
 
-/** Intro decisions are persisted, never permission claims. No protected files are probed here. */
-export function SafariAccessOnboarding({ children }: { children?: ReactNode }) {
+/**
+ * Intro decisions are persisted, never permission claims. Full Disk Access is
+ * reported per launch by the desktop process that reads Safari's cookies.
+ */
+export function SafariAccessOnboarding({
+  children,
+  startup = false,
+}: {
+  children?: ReactNode;
+  /** The root opts automatic first-launch guidance into startup arbitration. */
+  startup?: boolean;
+}) {
   const info = useSafariAccessInfo();
   const [decision, setDecision] = useLocalStorage(SAFARI_ACCESS_STORAGE_KEY, "unseen", Decision);
   const [revisit, setRevisit] = useState(false);
@@ -65,7 +76,15 @@ export function SafariAccessOnboarding({ children }: { children?: ReactNode }) {
   const [busy, setBusy] = useState(false);
   const sheetRef = useRef<HTMLDivElement>(null);
   const generation = useRef(0);
-  const open = info?.supported === true && (decision === "unseen" || revisit);
+  const granted = info?.supported === true && info.fullDiskAccess === "granted";
+  // Once access is on there is nothing left to set up, so only a deliberate
+  // revisit opens the sheet; the stored decision is left untouched.
+  const wantsOpen = info?.supported === true && ((decision === "unseen" && !granted) || revisit);
+  const { open: startupOpen } = useAnnouncementSheetSlot(startup && wantsOpen && !revisit);
+  // Local setup and deliberate Settings revisits must not depend on the root's
+  // first-run gate or wait behind an automatic announcement.
+  const open = wantsOpen && (!startup || revisit || startupOpen);
+  const handedOff = useAnnouncementSheetSlotStore((state) => state.handedOff);
 
   useEffect(() => {
     const show = () => {
@@ -109,7 +128,7 @@ export function SafariAccessOnboarding({ children }: { children?: ReactNode }) {
 
   return (
     <>
-      {info && !open ? children : null}
+      {info && (!wantsOpen || revisit || handedOff) ? children : null}
       <Dialog
         open={open}
         onOpenChange={(value) => {
@@ -133,7 +152,13 @@ export function SafariAccessOnboarding({ children }: { children?: ReactNode }) {
               </DialogDescription>
             </DialogHeader>
 
-            {info?.supported ? (
+            {info?.supported && info.fullDiskAccess === "granted" ? (
+              <p className="mx-6 mt-5 text-ui leading-relaxed text-muted-foreground">
+                Full Disk Access is on for{" "}
+                <span className="font-medium text-foreground">{info.appName}</span>. You can import
+                Safari logins from the browser's Saved logins › Import browser cookies.
+              </p>
+            ) : info?.supported ? (
               <ol className="mx-6 mt-5 space-y-3 text-ui leading-relaxed">
                 <Step n={1}>
                   Open <span className="font-medium text-foreground">System Settings</span> ›

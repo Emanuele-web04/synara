@@ -5,7 +5,10 @@
 
 import type { AssistantDeliveryMode, MessageId, ThreadId } from "@synara/contracts";
 
-import { persistModelSelectionBeforeRuntimeMode } from "../components/ChatView.logic";
+import {
+  persistModelSelectionBeforeRuntimeMode,
+  retargetQueuedTurnToThreadProvider,
+} from "../components/ChatView.logic";
 import { useComposerDraftStore, type QueuedComposerTurn } from "../composerDraftStore";
 import { readNativeApi } from "../nativeApi";
 import { clearPendingTurnDispatch, markPendingTurnDispatch } from "../pendingTurnDispatch";
@@ -31,6 +34,8 @@ import {
   filterTerminalContextsWithText,
   IMAGE_ONLY_BOOTSTRAP_PROMPT,
 } from "./terminalContext";
+import { runComposerSendOnce } from "./composerSendOwnership";
+import { waitForDraftThreadDispatchToSettle } from "./draftThreadDispatch";
 import { newCommandId, newMessageId } from "./utils";
 
 export async function dispatchQueuedComposerTurnHeadless(input: {
@@ -40,6 +45,15 @@ export async function dispatchQueuedComposerTurnHeadless(input: {
   assistantDeliveryMode: AssistantDeliveryMode;
   messageId?: MessageId;
 }): Promise<boolean> {
+  return runComposerSendOnce(input.threadId, async () => {
+    await waitForDraftThreadDispatchToSettle(input.threadId);
+    return dispatchQueuedComposerTurnOnce(input);
+  });
+}
+
+async function dispatchQueuedComposerTurnOnce(
+  input: Parameters<typeof dispatchQueuedComposerTurnHeadless>[0],
+): Promise<boolean> {
   const api = readNativeApi();
   if (!api) {
     return false;
@@ -52,7 +66,7 @@ export async function dispatchQueuedComposerTurnHeadless(input: {
 
   const createdAt = new Date().toISOString();
   const messageId = input.messageId ?? newMessageId();
-  const queuedTurn = input.queuedTurn;
+  const queuedTurn = retargetQueuedTurnToThreadProvider(input.queuedTurn, thread);
 
   if (queuedTurn.kind === "plan-follow-up") {
     const trimmed = queuedTurn.text.trim();

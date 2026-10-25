@@ -7,35 +7,58 @@
 import "../../../index.css";
 
 import {
+  DEFAULT_SERVER_SETTINGS_VIEW,
   ProjectId,
   ThreadId,
   type GitPullRequestSnapshotResult,
   type GitResolvedPullRequest,
   type GitStatusResult,
   type NativeApi,
+  type PullRequestAutoFixState,
 } from "@synara/contracts";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { page } from "vitest/browser";
 import { cleanup, render } from "vitest-browser-react";
 
 import { useComposerDraftStore } from "~/composerDraftStore";
 import { gitPullRequestSnapshotQueryOptions, gitQueryKeys } from "~/lib/gitReactQuery";
+import { pullRequestQueryKeys } from "~/lib/pullRequestReactQuery";
+import { serverQueryKeys } from "~/lib/serverReactQuery";
 import { deferred } from "~/lib/pullRequestReactQuery.testUtils";
 import { EnvironmentPullRequestSection } from "./EnvironmentPullRequestSection";
 
-const { getGitStatus, getPullRequestSnapshot, getPullRequestDetail, runPullRequestAction } =
-  vi.hoisted(() => ({
-    getGitStatus: vi.fn<NativeApi["git"]["status"]>(),
-    getPullRequestSnapshot: vi.fn<NativeApi["git"]["pullRequestSnapshot"]>(),
-    getPullRequestDetail: vi.fn<NativeApi["pullRequests"]["detail"]>(),
-    runPullRequestAction: vi.fn<NativeApi["pullRequests"]["action"]>(),
-  }));
+const {
+  getGitStatus,
+  getPullRequestSnapshot,
+  getPullRequestDetail,
+  runPullRequestAction,
+  getAutoFix,
+  setAutoFix,
+  getSettings,
+} = vi.hoisted(() => ({
+  getGitStatus: vi.fn<NativeApi["git"]["status"]>(),
+  getPullRequestSnapshot: vi.fn<NativeApi["git"]["pullRequestSnapshot"]>(),
+  getPullRequestDetail: vi.fn<NativeApi["pullRequests"]["detail"]>(),
+  getAutoFix: vi.fn<NativeApi["pullRequests"]["getAutoFix"]>(),
+  setAutoFix: vi.fn<NativeApi["pullRequests"]["setAutoFix"]>(),
+  getSettings: vi.fn<NativeApi["server"]["getSettings"]>(),
+  runPullRequestAction: vi.fn<NativeApi["pullRequests"]["action"]>(),
+}));
 
 vi.mock("~/nativeApi", () => ({
   ensureNativeApi: () => ({
     git: { status: getGitStatus, pullRequestSnapshot: getPullRequestSnapshot },
-    pullRequests: { detail: getPullRequestDetail, action: runPullRequestAction },
+    pullRequests: {
+      detail: getPullRequestDetail,
+      action: runPullRequestAction,
+      getAutoFix,
+      setAutoFix,
+    },
+    server: {
+      getSettings,
+      updateSettings: () => Promise.resolve(DEFAULT_SERVER_SETTINGS_VIEW),
+    },
   }),
 }));
 
@@ -147,6 +170,36 @@ function draftCards() {
 }
 
 describe("EnvironmentPullRequestSection", () => {
+  beforeEach(() => {
+    getAutoFix.mockResolvedValue({ states: [] });
+    getSettings.mockResolvedValue(DEFAULT_SERVER_SETTINGS_VIEW);
+  });
+  it("turns off a redirected PR through its canonical identity and clears its visible checkbox", async () => {
+    const client = createQueryClient();
+    client.setQueryData(serverQueryKeys.settings(), DEFAULT_SERVER_SETTINGS_VIEW);
+    const state: PullRequestAutoFixState = {
+      threadId,
+      pullRequestUrl: "https://github.com/new/repo/pull/321",
+      requestedPullRequestUrl: pullRequest.url,
+      status: "watching",
+      pauseReason: null,
+      attempts: 0,
+      lastHandledHeadSha: null,
+      updatedAt: "2026-10-03T10:00:00.000Z",
+    };
+    client.setQueryData(pullRequestQueryKeys.autoFix(threadId), { states: [state] });
+    setAutoFix.mockResolvedValue({ state: null });
+    await renderSection(client);
+    await page.getByText("#321 Keep PR context visible", { exact: true }).click();
+    const checkbox = page.getByTestId("pr-auto-fix-ci");
+    await expect.element(checkbox).toHaveAttribute("aria-checked", "true");
+    await checkbox.click();
+    await expect
+      .poll(() => setAutoFix.mock.calls)
+      .toEqual([[{ threadId, enabled: false, pullRequestUrl: state.pullRequestUrl }]]);
+    await expect.element(checkbox).toHaveAttribute("aria-checked", "false");
+    expect(client.getQueryData(pullRequestQueryKeys.autoFix(threadId))).toEqual({ states: [] });
+  });
   afterEach(async () => {
     await cleanup();
     for (const queryClient of queryClients) {
@@ -294,6 +347,7 @@ describe("EnvironmentPullRequestSection", () => {
         .element(page.getByText(`${stateLabel} on GitHub`, { exact: true }))
         .not.toBeInTheDocument();
       expect(queryClient.isFetching()).toBe(0);
+      expect(getSettings).not.toHaveBeenCalled();
       expect(getPullRequestSnapshot).not.toHaveBeenCalled();
 
       await prRow.click();

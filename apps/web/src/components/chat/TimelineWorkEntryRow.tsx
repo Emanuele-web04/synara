@@ -3,7 +3,7 @@
 // Layer: Web chat presentation component
 // Exports: TimelineWorkEntryRow, EditedFileRowContent, prefersCompactWorkEntryRow
 
-import type { TurnId } from "@synara/contracts";
+import type { ModelSelection, TurnId } from "@synara/contracts";
 import { PROVIDER_DESCRIPTORS } from "@synara/shared/providerMetadata";
 import {
   createElement,
@@ -19,6 +19,7 @@ import {
 
 import { basenameOfPath } from "~/file-icons";
 import type { TimestampFormat } from "../../appSettings";
+import { formatTimestamp } from "../../timestampFormat";
 import {
   ArrowUpCircleIcon,
   BackgroundTrayIcon,
@@ -30,9 +31,11 @@ import {
   ContextCompactionIcon,
   ComputerUseIcon,
   EyeIcon,
+  FileReadIcon,
   GitHubIcon,
   GlobeIcon,
   HammerIcon,
+  HandoffIcon,
   HistoryIcon,
   type LucideIcon,
   McpIcon,
@@ -46,6 +49,8 @@ import {
 import { describeLinkChip } from "~/lib/linkChips";
 import { computerToolName, describeComputerToolCall } from "~/lib/computerToolPresentation";
 import { cn } from "~/lib/utils";
+import type { FastModeNotice } from "~/lib/fastModeState";
+import { formatThreadModelSummaryLabel, resolveThreadModelSummary } from "~/lib/threadModelSummary";
 
 import { isFileChangeWorkLogEntry, type WorkLogEntry } from "../../session-logic";
 import {
@@ -56,12 +61,16 @@ import {
   isReasoningUpdateWorkEntry,
 } from "./agentActivity.logic";
 import { AutomationCreatedCard } from "./AutomationCreatedCard";
+import { BackgroundTaskRow } from "./BackgroundTaskRow";
+import { INLINE_COMMAND_CHIP_CLASS_NAME } from "./chatTypography";
+import { SubagentRunCard } from "./SubagentRunCard";
 import { ConnectedComputerSetupRequiredCard } from "./ComputerSetupRequiredCard";
 import { ComputerControlDeniedCard } from "./ComputerControlDeniedCard";
 import ChatMarkdown from "../ChatMarkdown";
 import { DiffStatLabel } from "./DiffStatLabel";
 import { type ExpandedImagePreview } from "./ExpandedImagePreview";
 import { LinkChipIcon } from "../LinkChipIcon";
+import { McpServerIcon } from "./McpServerIcon";
 import { normalizeCompactToolLabel } from "./MessagesTimeline.logic";
 import { SynaraLogo } from "../SynaraLogo";
 import { ToolCallDetailsContent } from "./ToolCallDetailsDialog";
@@ -74,7 +83,9 @@ import {
   isPrefixedToolArgumentSummary,
 } from "../../lib/toolArgumentSummary";
 import {
+  deriveCommandReadTargets,
   deriveFriendlyCommandTarget,
+  deriveLiteralCommand,
   deriveSynaraMcpToolTitle,
   extractWebFetchUrl,
   isGenericToolTitle,
@@ -84,12 +95,16 @@ import {
   sanitizeSynaraMcpToolPreview,
   type SynaraMcpToolStatus,
 } from "../../lib/toolCallLabel";
-import { formatLiveActivityMeta, useLiveActivityNow } from "../../lib/liveActivityPresentation";
+import {
+  formatLiveActivityMeta,
+  isLiveActivityInProgress,
+  useLiveActivityNow,
+} from "../../lib/liveActivityPresentation";
+import { deriveToolFailureSummary } from "../../lib/toolCallDetails";
 import { openWorkspaceFileReference, useWorkspaceFileOpener } from "../../lib/workspaceFileOpener";
+import { DISCLOSURE_CLEANUP_BUFFER_MS, DISCLOSURE_TRANSITION_MS } from "../../lib/disclosureMotion";
 import { MUTED_LABEL_TEXT_CLASS_NAME, MUTED_LABEL_TEXT_COLOR } from "~/surfaceStyles";
 
-const TRANSCRIPT_DISCLOSURE_TRANSITION_MS = 220;
-const TRANSCRIPT_DISCLOSURE_CLEANUP_BUFFER_MS = 40;
 // Rest tone is the shared quiet-label gray (same one the composer pickers use for
 // their effort/thinking labels) so a tool row and the picker below it read as one
 // muted tone; hover still lifts the whole row to full foreground.
@@ -158,6 +173,7 @@ function extractFilePathFromDetail(detail: string): string | null {
 }
 
 function workEntryPreview(workEntry: TimelineWorkEntry): string | null {
+  if (workEntry.monitorNotification) return null;
   if (isReasoningUpdateWorkEntry(workEntry)) {
     return formatAgentActivityEntryPreview(workEntry);
   }
@@ -217,19 +233,29 @@ function workEntryPreview(workEntry: TimelineWorkEntry): string | null {
 }
 
 // Provider read tools (e.g. Claude's `Read`) arrive as generic dynamic tool calls
-// without a `file-read` requestKind, so match their tool name to surface the search icon
+// without a `file-read` requestKind, so match their tool name to surface the read icon
 // instead of the generic tool/wrench fallback.
 function isFileReadToolEntry(workEntry: TimelineWorkEntry): boolean {
   const name = (workEntry.toolName ?? "").toLowerCase().replace(/[^a-z]/g, "");
   return name === "read" || name === "readfile" || name === "viewfile";
 }
 
-// Command rows reuse toolCallLabel's wrapper-aware classifier so wrapped git/gh
-// commands get the GitHub mark while ordinary commands keep the terminal icon.
+// Provider search tools (Claude's `Grep`/`Glob`) wear the magnifier like
+// search commands do.
+function isSearchToolEntry(workEntry: TimelineWorkEntry): boolean {
+  const name = (workEntry.toolName ?? "").toLowerCase().replace(/[^a-z]/g, "");
+  return name === "grep" || name === "glob";
+}
+
+// Command rows reuse toolCallLabel's wrapper-aware classifier so reads wear the
+// open book, searches the magnifier, wrapped git/gh commands the GitHub mark,
+// and ordinary commands keep the terminal icon.
 function commandWorkEntryIcon(workEntry: TimelineWorkEntry): LucideIcon {
   const command = workEntry.command ?? workEntry.rawCommand;
   switch (command ? resolveCommandVisualKind(command) : "terminal") {
-    case "inspect":
+    case "read":
+      return FileReadIcon;
+    case "search":
       return SearchIcon;
     case "git":
     case "github":
@@ -245,8 +271,24 @@ function workEntryIcon(workEntry: TimelineWorkEntry): LucideIcon {
   if (workEntry.activityKind === "user-input.requested") return CircleQuestionIcon;
   if (workEntry.activityKind === "user-input.resolved") return ArrowUpCircleIcon;
   if (workEntry.activityKind === "context-compaction") return ContextCompactionIcon;
+  if (workEntry.activityKind === "checkpoint.baseline.skipped") return CircleAlertIcon;
   // "Moved to background" notices read as a tray drop, not a warning check.
   if (workEntry.nativeEventType === "background_tasks_changed") return BackgroundTrayIcon;
+  if (workEntry.monitorNotification)
+    return workEntry.monitorNotification.outcome === "failed" ? CircleAlertIcon : EyeIcon;
+  if (workEntry.backgroundTaskCompletion) {
+    return workEntry.backgroundTaskCompletion.taskType === "local_agent"
+      ? AgentTaskIcon
+      : BackgroundTrayIcon;
+  }
+  // A subagent's progress is its live status, not a finished step: never the
+  // success check, and a warning once it failed.
+  if (workEntry.subagentProgress) {
+    return workEntry.subagentProgress.outcome === "failed" ? CircleAlertIcon : AgentTaskIcon;
+  }
+  if (workEntry.providerHandoff) {
+    return workEntry.providerHandoff.status === "failed" ? CircleAlertIcon : HandoffIcon;
+  }
   if (workEntry.providerContextLifecycle) {
     return workEntry.providerContextLifecycle.nativeHistory === "unavailable"
       ? CircleAlertIcon
@@ -254,7 +296,7 @@ function workEntryIcon(workEntry: TimelineWorkEntry): LucideIcon {
   }
 
   if (workEntry.requestKind === "command") return commandWorkEntryIcon(workEntry);
-  if (workEntry.requestKind === "file-read") return SearchIcon;
+  if (workEntry.requestKind === "file-read") return FileReadIcon;
   if (workEntry.requestKind === "file-change") return PencilIcon;
   if (workEntry.requestKind === "tool") return McpIcon;
 
@@ -267,7 +309,8 @@ function workEntryIcon(workEntry: TimelineWorkEntry): LucideIcon {
   if (workEntry.itemType === "web_search") return WebSearchIcon;
   if (workEntry.itemType === "image_generation") return ZapIcon;
   if (workEntry.itemType === "image_view") return EyeIcon;
-  if (isFileReadToolEntry(workEntry)) return SearchIcon;
+  if (isFileReadToolEntry(workEntry)) return FileReadIcon;
+  if (isSearchToolEntry(workEntry)) return SearchIcon;
 
   switch (workEntry.itemType) {
     case "mcp_tool_call":
@@ -319,6 +362,7 @@ function isGitHubMcpToolCall(workEntry: TimelineWorkEntry): boolean {
 // pairs that the label humanizer renders as "Synara: ...".
 function toolWorkEntryStatus(workEntry: TimelineWorkEntry): SynaraMcpToolStatus {
   if (workEntry.toolStatus) return workEntry.toolStatus;
+  if (workEntry.liveActivity && isLiveActivityInProgress(workEntry.liveActivity)) return "running";
   return workEntry.activityKind !== undefined && workEntry.activityKind !== "tool.completed"
     ? "running"
     : "completed";
@@ -348,11 +392,11 @@ function isSynaraToolCall(workEntry: TimelineWorkEntry): boolean {
 // compact density so every tool-call line shares one height regardless of whether
 // it carries a disclosure chevron.
 export function prefersCompactWorkEntryRow(workEntry: TimelineWorkEntry): boolean {
-  if (isCodexActivityStatusWorkEntry(workEntry)) {
+  if (isCodexActivityStatusWorkEntry(workEntry) || workEntry.monitorNotification) {
     return true;
   }
-  // Commands stay compact even when surfaced with a non-terminal icon (read-only
-  // inspections like `cat` now use the file-read search icon).
+  // Commands stay compact even when surfaced with a non-terminal icon (reads like
+  // `cat` wear the file icon, searches the magnifier).
   if (workEntry.itemType === "command_execution" || workEntry.command || workEntry.rawCommand) {
     return true;
   }
@@ -363,8 +407,9 @@ export function prefersCompactWorkEntryRow(workEntry: TimelineWorkEntry): boolea
     EntryIcon === AgentTaskIcon ||
     EntryIcon === PencilIcon ||
     EntryIcon === SkillCubeIcon ||
-    // File-read / inspect rows (e.g. `Read …`) surface the search icon and have no
-    // disclosure chevron; keep them at the same compact height as command rows.
+    // File-read and search rows (e.g. `Read …`) have no disclosure chevron; keep
+    // them at the same compact height as command rows.
+    EntryIcon === FileReadIcon ||
     EntryIcon === SearchIcon
   );
 }
@@ -389,7 +434,7 @@ function toolWorkEntryHeading(workEntry: TimelineWorkEntry): string {
   // Task progress is semantic copy, not a tool lifecycle status. Preserve the
   // trailing "completed" instead of passing it through the compact tool-label
   // normalizer, which intentionally strips lifecycle suffixes.
-  if (workEntry.activityKind === "turn.tasks.updated") {
+  if (workEntry.activityKind === "turn.tasks.updated" || workEntry.monitorNotification) {
     return capitalizePhrase(workEntry.label);
   }
   const synaraTitle = deriveSynaraMcpToolTitle({
@@ -416,15 +461,75 @@ function combineWorkEntryDisplayText(heading: string, preview: string | null): s
     : `${heading} ${preview}`;
 }
 
-// One sentence per row, live or settled: the tool's own verb plus what it acted
-// on ("Searched for foo in src"). Lifecycle state is never spelled out here —
-// the verb already carries the tense and `liveActivityMetaText` covers the rest.
-// Shared with the live tool-group line, which wears its newest call's sentence.
-function workEntryDisplayParts(workEntry: TimelineWorkEntry): {
+// Shell command rows read "Ran <command>" with the command verbatim; a plain
+// read of files says "Read <files>" instead, since that is exactly what it did.
+// A humanized guess ("Found current directory") is never shown. Approval and
+// status rows keep their own wording.
+function commandRowDisplay(
+  workEntry: TimelineWorkEntry,
+): { heading: string; object: string; literal: boolean } | null {
+  const command = workEntry.rawCommand ?? workEntry.command;
+  if (
+    (workEntry.tone !== "tool" && workEntry.toolStatus !== "failed") ||
+    !command ||
+    !(
+      workEntry.itemType === "command_execution" ||
+      workEntry.requestKind === "command" ||
+      workEntry.command
+    )
+  ) {
+    return null;
+  }
+  const running = toolWorkEntryStatus(workEntry) === "running";
+  const readTargets = deriveCommandReadTargets(command);
+  if (readTargets) {
+    return {
+      heading: running ? "Reading" : "Read",
+      object: readTargets.join(", "),
+      literal: false,
+    };
+  }
+  const literal = deriveLiteralCommand(command);
+  return literal ? { heading: running ? "Running" : "Ran", object: literal, literal: true } : null;
+}
+
+export interface WorkEntryDisplayParts {
   heading: string;
   preview: string | null;
   displayText: string;
-} {
+  // Verbatim command shown in mono after the heading, for shell command rows.
+  commandLiteral: string | null;
+}
+
+// Renders a row sentence: plain text, or the heading plus the command chip.
+export function renderWorkEntrySentence(parts: WorkEntryDisplayParts): ReactNode {
+  if (parts.commandLiteral === null) {
+    return parts.displayText;
+  }
+  return (
+    <>
+      {parts.heading}{" "}
+      <code className={INLINE_COMMAND_CHIP_CLASS_NAME} data-command-literal="true">
+        {parts.commandLiteral}
+      </code>
+    </>
+  );
+}
+
+// One sentence per row, live or settled: the tool's own verb plus what it acted
+// on ("Read calc.py", "Ran `ls`"). Lifecycle state is never spelled out here —
+// the verb already carries the tense and `liveActivityMetaText` covers the rest.
+// Shared with the live tool-group line, which wears its newest call's sentence.
+export function workEntryDisplayParts(workEntry: TimelineWorkEntry): WorkEntryDisplayParts {
+  const commandDisplay = commandRowDisplay(workEntry);
+  if (commandDisplay) {
+    return {
+      heading: commandDisplay.heading,
+      preview: commandDisplay.object,
+      displayText: `${commandDisplay.heading} ${commandDisplay.object}`,
+      commandLiteral: commandDisplay.literal ? commandDisplay.object : null,
+    };
+  }
   const webFetchUrl = extractWebFetchUrl(workEntry);
   const heading = toolWorkEntryHeading(workEntry);
   const rawPreview = workEntryPreview(workEntry);
@@ -439,14 +544,11 @@ function workEntryDisplayParts(workEntry: TimelineWorkEntry): {
       : rawPreview;
   const displayText = webFetchUrl
     ? describeLinkChip(webFetchUrl).label
-    : isReasoningUpdateWorkEntry(workEntry) && preview
+    : (isReasoningUpdateWorkEntry(workEntry) || workEntry.activityKind === "tool.summary") &&
+        preview
       ? preview
       : combineWorkEntryDisplayText(heading, preview);
-  return { heading, preview, displayText };
-}
-
-export function workEntryDisplayText(workEntry: TimelineWorkEntry): string {
-  return workEntryDisplayParts(workEntry).displayText;
+  return { heading, preview, displayText, commandLiteral: null };
 }
 
 function isFileChangeWorkEntry(workEntry: TimelineWorkEntry): boolean {
@@ -575,7 +677,8 @@ export const TimelineWorkEntryRow = memo(function TimelineWorkEntryRow(props: {
             : isMcpToolRow
               ? "mcp"
               : undefined;
-  const { heading, preview, displayText } = workEntryDisplayParts(workEntry);
+  const displayParts = workEntryDisplayParts(workEntry);
+  const { heading, preview, displayText } = displayParts;
   const showInlineAgentTaskPreview =
     workEntry.itemType === "collab_agent_tool_call" &&
     Boolean(preview) &&
@@ -591,6 +694,8 @@ export const TimelineWorkEntryRow = memo(function TimelineWorkEntryRow(props: {
     : undefined;
   const hasToolDetails = Boolean(workEntry.toolDetails);
   const providerContextLifecycle = workEntry.providerContextLifecycle;
+  const providerHandoff = workEntry.providerHandoff;
+  const monitorNotification = workEntry.monitorNotification;
   // File-read rows open the referenced file in the in-app viewer when the
   // hosting surface provides an opener (right-dock file pane / editor pane).
   const opener = useWorkspaceFileOpener();
@@ -605,11 +710,28 @@ export const TimelineWorkEntryRow = memo(function TimelineWorkEntryRow(props: {
     [workEntry],
   );
   const liveActivityNowMs = useLiveActivityNow(workEntry.liveActivity);
-  const liveActivityMetaText = workEntry.liveActivity
-    ? formatLiveActivityMeta(workEntry.liveActivity, liveActivityNowMs, {
-        subagent: workEntry.itemType === "collab_agent_tool_call",
-      })
+  // A failed call says so explicitly, with its exit code and the first line
+  // that explains it, instead of the generic lifecycle meta.
+  const failure =
+    toolWorkEntryStatus(workEntry) === "failed"
+      ? deriveToolFailureSummary(workEntry.toolDetails)
+      : null;
+  const liveActivityMetaText = failure
+    ? null
+    : workEntry.liveActivity
+      ? formatLiveActivityMeta(workEntry.liveActivity, liveActivityNowMs, {
+          subagent: workEntry.itemType === "collab_agent_tool_call",
+        })
+      : null;
+  const failureMetaText = failure
+    ? failure.exitCode !== null
+      ? `Failed · exit ${failure.exitCode}`
+      : "Failed"
     : null;
+  // Reasoning and progress narration reads as prose: it wraps instead of
+  // being cut to one line.
+  const wrapsFullText =
+    isReasoningUpdateWorkEntry(workEntry) || workEntry.activityKind === "tool.summary";
 
   // A computer-control denial renders as an actionable card (enable + retry)
   // instead of a buried tool-error line. Kept after the hooks above so the
@@ -636,6 +758,17 @@ export const TimelineWorkEntryRow = memo(function TimelineWorkEntryRow(props: {
         />
       </div>
     );
+  }
+
+  // A background task keeps one row for its whole life. Kept after the hooks
+  // above so the early return never changes hook order.
+  if (workEntry.backgroundTask) {
+    return <BackgroundTaskRow task={workEntry.backgroundTask} fontSizePx={textFontSizePx} />;
+  }
+
+  // A turn's subagents fold into one entry that renders as the subagent card.
+  if (workEntry.subagentRun) {
+    return <SubagentRunCard workEntry={workEntry} />;
   }
 
   // A created-automation row renders as its own card instead of a tool-call line.
@@ -669,6 +802,8 @@ export const TimelineWorkEntryRow = memo(function TimelineWorkEntryRow(props: {
     !canOpenAgentActivity &&
     Boolean(
       providerContextLifecycle ||
+      providerHandoff ||
+      monitorNotification ||
       workEntry.toolDetails ||
       (workEntry.liveActivity && !canOpenReadFile),
     );
@@ -766,6 +901,11 @@ export const TimelineWorkEntryRow = memo(function TimelineWorkEntryRow(props: {
                 >
                   {webFetchUrl ? (
                     <LinkChipIcon url={webFetchUrl} className={compact ? "size-3.5" : "size-4"} />
+                  ) : isMcpToolRow && LeftIcon === McpIcon && workEntry.mcpServer ? (
+                    <McpServerIcon
+                      serverName={workEntry.mcpServer}
+                      className={compact ? "size-3.5" : "size-4"}
+                    />
                   ) : (
                     renderWorkEntryIcon(LeftIcon, compact ? "size-3.5" : "size-4")
                   )}
@@ -807,7 +947,8 @@ export const TimelineWorkEntryRow = memo(function TimelineWorkEntryRow(props: {
                 ) : (
                   <p
                     className={cn(
-                      compact ? "truncate leading-5" : "truncate leading-6",
+                      wrapsFullText ? "whitespace-pre-wrap break-words" : "truncate",
+                      compact ? "leading-5" : "leading-6",
                       // Match the leading icon's tone so the row reads as one muted unit, and
                       // brighten the whole row to foreground on hover/focus instead of a fill.
                       WORK_ROW_MUTED_HOVER_TONE["tool-row"],
@@ -817,28 +958,65 @@ export const TimelineWorkEntryRow = memo(function TimelineWorkEntryRow(props: {
                     data-codex-status-row={isCodexStatusRow ? "true" : undefined}
                     style={{ fontSize: `${rowFontSizePx}px` }}
                   >
-                    <span data-work-entry-display-text="true">{displayText}</span>
+                    <span data-work-entry-display-text="true">
+                      {renderWorkEntrySentence(displayParts)}
+                    </span>
                     {liveActivityMetaText ? (
                       <span data-live-activity-meta="true"> · {liveActivityMetaText}</span>
+                    ) : null}
+                    {failureMetaText ? (
+                      <span className="text-destructive" data-tool-failure-meta="true">
+                        {" "}
+                        · {failureMetaText}
+                      </span>
                     ) : null}
                   </p>
                 )}
               </div>
             </>
           );
+          // The failure's first explanatory line sits right under the row,
+          // aligned with its text, so it reads without opening the details.
+          const failureExcerpt = failure?.excerpt ? (
+            <p
+              className={cn(
+                "truncate font-chat-code text-chat-code leading-5 text-destructive/85",
+                compact ? "pl-[1.375rem]" : "pl-7",
+              )}
+              data-tool-failure-excerpt="true"
+              title={failure.excerpt}
+            >
+              {failure.excerpt}
+            </p>
+          ) : null;
           if (canOpenToolDetails) {
             return (
               <ToolDetailsDisclosure
                 details={workEntry.toolDetails}
                 activity={workEntry.liveActivity}
                 detailContent={
-                  providerContextLifecycle ? (
+                  monitorNotification ? (
+                    <div className="space-y-1 text-ui-sm">
+                      <time
+                        className="text-ui-xs text-muted-foreground"
+                        dateTime={workEntry.createdAt}
+                      >
+                        {formatTimestamp(workEntry.createdAt, timestampFormat)}
+                      </time>
+                      <pre className="whitespace-pre-wrap break-words font-chat-code">
+                        {monitorNotification.output}
+                      </pre>
+                    </div>
+                  ) : providerContextLifecycle ? (
                     <ProviderContextLifecycleDetails info={providerContextLifecycle} />
+                  ) : providerHandoff ? (
+                    <ProviderHandoffDetails info={providerHandoff} />
                   ) : undefined
                 }
                 compact={compact}
                 timestampFormat={timestampFormat}
                 tooltip={toolRowTooltipContent(rawCommand, displayText, displayText)}
+                afterSummary={failureExcerpt}
               >
                 {rowContentChildren}
               </ToolDetailsDisclosure>
@@ -861,7 +1039,12 @@ export const TimelineWorkEntryRow = memo(function TimelineWorkEntryRow(props: {
             </AgentActivityOpenSurface>
           );
 
-          return rowContent;
+          return (
+            <>
+              {rowContent}
+              {failureExcerpt}
+            </>
+          );
         })()
       )}
     </div>
@@ -968,6 +1151,8 @@ function providerContextLifecycleReasonLabel(
   switch (reason) {
     case "conversation-rebuilt":
       return "Conversation rebuilt from a summary";
+    case "fork-from-earlier-turn":
+      return "Fork rebuilt up to the chosen turn";
     case "fresh-session":
       return "New session started";
     case "interrupt-escalation":
@@ -1026,6 +1211,69 @@ function ProviderContextLifecycleDetails(props: {
   );
 }
 
+function providerModelLabel(
+  selection: ModelSelection,
+  fastModeNotice?: FastModeNotice | null,
+): string {
+  const displayName =
+    PROVIDER_DESCRIPTORS.find((descriptor) => descriptor.kind === selection.provider)
+      ?.displayName ?? selection.provider;
+  const summary = resolveThreadModelSummary(selection);
+  const modelLabel = summary
+    ? `${formatThreadModelSummaryLabel(summary)}${summary.fastMode ? ` · ${fastModeNotice?.label ?? "Fast"}` : ""}`
+    : selection.model;
+  return `${displayName} · ${modelLabel}`;
+}
+
+export function ProviderHandoffDetails(props: {
+  info: NonNullable<TimelineWorkEntry["providerHandoff"]>;
+}) {
+  const { info } = props;
+  return (
+    <div className="space-y-3" data-provider-handoff-details="true">
+      <dl className="grid grid-cols-[max-content_minmax(0,1fr)] gap-x-3 gap-y-1.5 rounded-lg border border-border/45 bg-background/60 px-3 py-2.5 text-ui-sm">
+        <dt className="text-muted-foreground/56">From</dt>
+        <dd className="text-foreground/84">
+          {providerModelLabel(info.sourceModelSelection, info.sourceFastModeNotice)}
+        </dd>
+        <dt className="text-muted-foreground/56">To</dt>
+        <dd className="text-foreground/84">
+          {providerModelLabel(info.targetModelSelection, info.targetFastModeNotice)}
+        </dd>
+        {info.status === "failed" ? (
+          <>
+            <dt className="text-muted-foreground/56">Error</dt>
+            <dd className="text-foreground/84">
+              {info.failureDetail ?? "The session did not start."}
+            </dd>
+          </>
+        ) : (
+          <>
+            <dt className="text-muted-foreground/56">Context</dt>
+            <dd className="text-foreground/84">
+              {info.contextText ? `${info.contextText.length.toLocaleString()} characters` : "None"}
+            </dd>
+          </>
+        )}
+      </dl>
+      {info.status === "completed" && info.contextText ? (
+        <section className="space-y-2">
+          <h3 className="text-ui-sm font-medium text-muted-foreground/56">Transferred context</h3>
+          <pre
+            className="max-h-56 overflow-auto whitespace-pre-wrap break-words rounded-lg border border-border/45 bg-background/60 px-3 py-2.5 font-chat-code text-chat-code leading-relaxed text-foreground/84"
+            data-provider-handoff-context="true"
+          >
+            {info.contextText}
+          </pre>
+          <p className="text-ui-xs text-muted-foreground/56">
+            Sent ahead of your next message so the new model can continue this thread.
+          </p>
+        </section>
+      ) : null}
+    </div>
+  );
+}
+
 function ToolDetailsDisclosure(props: {
   children: ReactNode;
   compact: boolean;
@@ -1036,6 +1284,8 @@ function ToolDetailsDisclosure(props: {
   summaryClassName?: string | undefined;
   timestampFormat: TimestampFormat;
   tooltip?: ReactNode;
+  // Rendered between the summary row and its details (e.g. a failure excerpt).
+  afterSummary?: ReactNode;
 }) {
   const summaryClassName =
     props.summaryClassName ??
@@ -1080,7 +1330,7 @@ function ToolDetailsDisclosure(props: {
       cleanupTimeoutRef.current = window.setTimeout(() => {
         cleanupTimeoutRef.current = null;
         setRenderDetails(false);
-      }, TRANSCRIPT_DISCLOSURE_TRANSITION_MS + TRANSCRIPT_DISCLOSURE_CLEANUP_BUFFER_MS);
+      }, DISCLOSURE_TRANSITION_MS + DISCLOSURE_CLEANUP_BUFFER_MS);
     },
     [clearMotionTimers],
   );
@@ -1109,6 +1359,7 @@ function ToolDetailsDisclosure(props: {
   return (
     <div className="group/tool-details min-w-0">
       <ToolRowTooltip content={props.tooltip}>{summaryButton}</ToolRowTooltip>
+      {props.afterSummary}
       {renderDetails ? (
         <DisclosureRegion
           open={motionOpen}

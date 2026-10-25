@@ -4,6 +4,8 @@ import {
   MAC_WINDOW_VIBRANCY,
   createWindowMaterialApplier,
   parseDesktopWindowMaterial,
+  parseHyprlandBlurEnabled,
+  resolveDesktopWindowTranslucency,
 } from "./windowMaterial";
 
 function fakeWindow() {
@@ -15,14 +17,85 @@ function fakeWindow() {
   };
 }
 
+describe("resolveDesktopWindowTranslucency", () => {
+  const hyprland = { HYPRLAND_INSTANCE_SIGNATURE: "abc_1_2", XDG_CURRENT_DESKTOP: "Hyprland" };
+
+  it("uses vibrancy on macOS and stays opaque on Windows", () => {
+    const readHyprlandBlurEnabled = vi.fn(() => true);
+    expect(
+      resolveDesktopWindowTranslucency({ platform: "darwin", env: {}, readHyprlandBlurEnabled }),
+    ).toBe("native");
+    expect(
+      resolveDesktopWindowTranslucency({
+        platform: "win32",
+        env: hyprland,
+        readHyprlandBlurEnabled,
+      }),
+    ).toBeNull();
+    expect(readHyprlandBlurEnabled).not.toHaveBeenCalled();
+  });
+
+  it("lets Hyprland blur the window only while its blur is on", () => {
+    for (const env of [hyprland, { XDG_CURRENT_DESKTOP: "Hyprland:wlroots" }]) {
+      expect(
+        resolveDesktopWindowTranslucency({
+          platform: "linux",
+          env,
+          readHyprlandBlurEnabled: () => true,
+        }),
+      ).toBe("compositor");
+    }
+    // No readable answer means nothing proves the compositor blurs the window, and an
+    // unblurred see-through window would show the sharp desktop behind the app.
+    expect(
+      resolveDesktopWindowTranslucency({
+        platform: "linux",
+        env: hyprland,
+        readHyprlandBlurEnabled: () => null,
+      }),
+    ).toBeNull();
+    expect(
+      resolveDesktopWindowTranslucency({
+        platform: "linux",
+        env: hyprland,
+        readHyprlandBlurEnabled: () => false,
+      }),
+    ).toBeNull();
+  });
+
+  it("keeps other Linux sessions opaque without asking Hyprland", () => {
+    const readHyprlandBlurEnabled = vi.fn(() => true);
+    for (const env of [{ XDG_CURRENT_DESKTOP: "GNOME" }, { XDG_CURRENT_DESKTOP: "KDE" }, {}]) {
+      expect(
+        resolveDesktopWindowTranslucency({ platform: "linux", env, readHyprlandBlurEnabled }),
+      ).toBeNull();
+    }
+    expect(readHyprlandBlurEnabled).not.toHaveBeenCalled();
+  });
+});
+
+describe("parseHyprlandBlurEnabled", () => {
+  it("reads the bool and legacy int forms of hyprctl getoption", () => {
+    expect(parseHyprlandBlurEnabled('{"option":"decoration:blur:enabled","bool":true}')).toBe(true);
+    expect(parseHyprlandBlurEnabled('{"option":"decoration:blur:enabled","int":0}')).toBe(false);
+    expect(parseHyprlandBlurEnabled("no such option")).toBeNull();
+    expect(parseHyprlandBlurEnabled('{"option":"decoration:blur:enabled"}')).toBeNull();
+  });
+});
+
 describe("parseDesktopWindowMaterial", () => {
   it("clamps and rounds the blur radius", () => {
     expect(parseDesktopWindowMaterial({ material: "translucent", blurRadius: 999 })).toEqual({
       material: "translucent",
       blurRadius: 64,
     });
+    // An unblurred clear window is see-through, so translucent never drops below the floor.
     expect(parseDesktopWindowMaterial({ material: "translucent", blurRadius: -4.6 })).toEqual({
       material: "translucent",
+      blurRadius: 1,
+    });
+    expect(parseDesktopWindowMaterial({ material: "opaque", blurRadius: 0 })).toEqual({
+      material: "opaque",
       blurRadius: 0,
     });
   });

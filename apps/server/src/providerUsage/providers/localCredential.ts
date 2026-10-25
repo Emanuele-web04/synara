@@ -17,7 +17,9 @@ async function jsonObjectHasKeys(path: string): Promise<boolean> {
 }
 
 async function resolvePiSignedIn(ctx: ProviderUsageContext): Promise<string | null> {
-  const authPath = nodePath.join(ctx.homeDir, ".pi", "agent", "auth.json");
+  const agentDir =
+    ctx.env.PI_CODING_AGENT_DIR?.trim() || nodePath.join(ctx.homeDir, ".pi", "agent");
+  const authPath = nodePath.join(agentDir, "auth.json");
   if (await jsonObjectHasKeys(authPath)) return "file:pi";
   return null;
 }

@@ -1,11 +1,12 @@
 import { describe, expect, it } from "vitest";
 
 import { PROVIDER_DESCRIPTORS } from "@synara/shared/providerMetadata";
+import { isBetaFeatureEnabled } from "@synara/shared/betaFeatures";
 
-import { visibleProviderDescriptors } from "./betaFeatures";
+import { codeEditorEngine, visibleProviderDescriptors } from "./betaFeatures";
 
 describe("visibleProviderDescriptors", () => {
-  it("hides Beta-only providers when the feature is off", () => {
+  it("respects a disabled provider feature", () => {
     const visible = visibleProviderDescriptors((feature) => feature !== "omp");
     expect(visible.some((d) => d.kind === "omp")).toBe(false);
     expect(visible.map((d) => d.kind)).toEqual(
@@ -13,8 +14,25 @@ describe("visibleProviderDescriptors", () => {
     );
   });
 
-  it("returns every provider in order when the feature is on", () => {
-    const visible = visibleProviderDescriptors(() => true);
+  it("offers Oh My Pi and the other providers in Stable", () => {
+    const visible = visibleProviderDescriptors((feature) =>
+      isBetaFeatureEnabled(feature, "production"),
+    );
     expect(visible).toEqual(PROVIDER_DESCRIPTORS);
+  });
+});
+
+describe("codeEditorEngine", () => {
+  it("uses the native engine in Stable and all other flavors", () => {
+    for (const flavor of [
+      "production",
+      "beta",
+      "canary",
+      "cua",
+      "development",
+      "unknown",
+    ] as const) {
+      expect(codeEditorEngine((feature) => isBetaFeatureEnabled(feature, flavor))).toBe("native");
+    }
   });
 });

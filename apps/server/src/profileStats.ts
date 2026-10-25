@@ -686,7 +686,8 @@ export function userPromptEventsQuery(
 
 // Positive per-step token deltas for every provider and dispatch origin.
 // Defines `turn_model`, the Claude CTEs, and `token_delta_rows(thread_id, created_at,
-// provider, instanceId, model, dispatch_origin, tokens)`;
+// provider, instanceId, model, dispatch_origin, tokens, cache_tokens)`, where
+// cache_tokens is the part of tokens read from the prompt cache, when known;
 // callers pick origins and bucket `created_at` themselves. Deltas always need a
 // thread's full ordered history, so filter token_delta_rows by time, never the
 // scope: the first row inside a time window would otherwise count its whole
@@ -705,8 +706,9 @@ export function userPromptEventsQuery(
 // Counters are per provider: each provider's runtime keeps its own running
 // total, so deltas are taken within (thread, emitting provider). A thread that
 // goes Codex → OpenCode → Codex must not subtract OpenCode's counter from
-// Codex's. Session ids are deliberately not part of the partition: older rows
-// lack them and a resumed session keeps its running total.
+// Codex's. Native usage session ids separate independent counters; resuming
+// the same id preserves its baseline. Legacy rows without an id keep their
+// existing provider-wide series.
 // Counter scale: totalProcessedTokens is the preferred cumulative counter.
 // Some provider/model groups only emit usedTokens; keep those as separate
 // fallback series so a mixed-provider thread does not drop their tokens.
@@ -786,8 +788,20 @@ export function tokenDeltaCtes(sql: SqlClient.SqlClient, scope?: TokenStatsThrea
           END,
           'unknown'
         ) AS model,
+        CASE
+          -- Codex restores lifetime counters on native-thread resume. Older
+          -- projection rows stamped a runtime generation after its UUID;
+          -- that process identity must not start a second lifetime baseline.
+          WHEN json_extract(a.payload_json, '$.provider') = 'codex'
+            AND INSTR(json_extract(a.payload_json, '$.usageSessionId'), ':') > 0
+          THEN SUBSTR(json_extract(a.payload_json, '$.usageSessionId'), 1,
+            INSTR(json_extract(a.payload_json, '$.usageSessionId'), ':') - 1)
+          ELSE COALESCE(CAST(json_extract(a.payload_json, '$.usageSessionId') AS TEXT), '')
+        END AS usageSessionId,
         CAST(json_extract(a.payload_json, '$.totalProcessedTokens') AS INTEGER) AS tp,
         CAST(json_extract(a.payload_json, '$.usedTokens') AS INTEGER) AS ut,
+        -- The session's cached input, on the same scale as totalProcessedTokens.
+        CAST(json_extract(a.payload_json, '$.cumulativeUsage.cachedInputTokens') AS INTEGER) AS ct,
         pm.dispatch_origin AS dispatch_origin,
         a.sequence AS sequence,
         a.created_at AS created_at,
@@ -818,9 +832,10 @@ export function tokenDeltaCtes(sql: SqlClient.SqlClient, scope?: TokenStatsThrea
       SELECT * FROM token_activity WHERE provider != 'claudeAgent'
     ),
     provider_model_scale AS (
-      SELECT thread_id, provider, instanceId, model, MAX(tp IS NOT NULL) AS has_cumulative
+      SELECT thread_id, provider, instanceId, model, usageSessionId,
+        MAX(tp IS NOT NULL) AS has_cumulative
       FROM ev
-      GROUP BY thread_id, provider, instanceId, model
+      GROUP BY thread_id, provider, instanceId, model, usageSessionId
     ),
     cumulative_kept AS (
       SELECT
@@ -829,7 +844,9 @@ export function tokenDeltaCtes(sql: SqlClient.SqlClient, scope?: TokenStatsThrea
         provider,
         instanceId,
         model,
+        usageSessionId,
         tp AS tot,
+        ct AS cached_tot,
         dispatch_origin,
         sequence,
         created_at,
@@ -845,10 +862,14 @@ export function tokenDeltaCtes(sql: SqlClient.SqlClient, scope?: TokenStatsThrea
         instanceId,
         model,
         dispatch_origin,
-        CASE
-          WHEN previous_tot IS NULL OR tot < previous_tot THEN tot
-          ELSE MAX(0, tot - previous_tot)
-        END AS d
+        d,
+        -- A cache counter with no baseline in this series attributes nothing.
+        MIN(d, CASE
+          WHEN cached_tot IS NULL THEN 0
+          WHEN previous_tot IS NULL OR tot < previous_tot THEN cached_tot
+          WHEN previous_cached_tot IS NULL THEN 0
+          ELSE MAX(0, cached_tot - previous_cached_tot)
+        END) AS cache_d
       FROM (
         SELECT
           thread_id,
@@ -858,8 +879,33 @@ export function tokenDeltaCtes(sql: SqlClient.SqlClient, scope?: TokenStatsThrea
           model,
           dispatch_origin,
           tot,
-          LAG(tot) OVER (PARTITION BY thread_id, counter_provider ${deltaOrder}) AS previous_tot
-        FROM cumulative_kept
+          previous_tot,
+          cached_tot,
+          previous_cached_tot,
+          CASE
+            WHEN previous_tot IS NULL OR tot < previous_tot THEN tot
+            ELSE MAX(0, tot - previous_tot)
+          END AS d
+        FROM (
+          SELECT
+            thread_id,
+            counter_provider,
+            created_at,
+            provider,
+            instanceId,
+            model,
+            usageSessionId,
+            dispatch_origin,
+            tot,
+            cached_tot,
+            LAG(tot) OVER (
+              PARTITION BY thread_id, counter_provider, usageSessionId ${deltaOrder}
+            ) AS previous_tot,
+            LAG(cached_tot) OVER (
+              PARTITION BY thread_id, counter_provider, usageSessionId ${deltaOrder}
+            ) AS previous_cached_tot
+          FROM cumulative_kept
+        )
       )
     ),
     used_only_kept AS (
@@ -869,6 +915,7 @@ export function tokenDeltaCtes(sql: SqlClient.SqlClient, scope?: TokenStatsThrea
         ev.provider AS provider,
         ev.instanceId AS instanceId,
         ev.model AS model,
+        ev.usageSessionId AS usageSessionId,
         ev.ut AS tot,
         ev.dispatch_origin AS dispatch_origin,
         ev.sequence AS sequence,
@@ -880,6 +927,7 @@ export function tokenDeltaCtes(sql: SqlClient.SqlClient, scope?: TokenStatsThrea
        AND pms.provider = ev.provider
        AND pms.instanceId = ev.instanceId
        AND pms.model = ev.model
+       AND pms.usageSessionId = ev.usageSessionId
       WHERE ev.tp IS NULL
         AND ev.ut IS NOT NULL
         AND NOT pms.has_cumulative
@@ -891,6 +939,7 @@ export function tokenDeltaCtes(sql: SqlClient.SqlClient, scope?: TokenStatsThrea
         provider,
         instanceId,
         model,
+        usageSessionId,
         dispatch_origin,
         CASE
           WHEN previous_tot IS NULL THEN tot
@@ -906,27 +955,39 @@ export function tokenDeltaCtes(sql: SqlClient.SqlClient, scope?: TokenStatsThrea
       FROM (
         SELECT
           thread_id,
+          counter_provider,
           created_at,
           provider,
           instanceId,
           model,
+          usageSessionId,
           dispatch_origin,
           tot,
-          LAG(tot) OVER (PARTITION BY thread_id, counter_provider ${deltaOrder}) AS previous_tot,
-          LAG(provider) OVER (PARTITION BY thread_id, counter_provider ${deltaOrder})
+          LAG(tot) OVER (
+            PARTITION BY thread_id, counter_provider, usageSessionId ${deltaOrder}
+          ) AS previous_tot,
+          LAG(provider) OVER (
+            PARTITION BY thread_id, counter_provider, usageSessionId ${deltaOrder}
+          )
             AS previous_provider,
-          LAG(instanceId) OVER (PARTITION BY thread_id, counter_provider ${deltaOrder})
+          LAG(instanceId) OVER (
+            PARTITION BY thread_id, counter_provider, usageSessionId ${deltaOrder}
+          )
             AS previous_instance_id,
-          LAG(model) OVER (PARTITION BY thread_id, counter_provider ${deltaOrder})
+          LAG(model) OVER (
+            PARTITION BY thread_id, counter_provider, usageSessionId ${deltaOrder}
+          )
             AS previous_model
         FROM used_only_kept
       )
     ),
     token_delta_rows AS (
-      SELECT thread_id, created_at, provider, instanceId, model, dispatch_origin, d AS tokens
+      SELECT thread_id, created_at, provider, instanceId, model, dispatch_origin, d AS tokens,
+        cache_d AS cache_tokens
       FROM cumulative_delta
       UNION ALL
-      SELECT thread_id, created_at, provider, instanceId, model, dispatch_origin, d AS tokens
+      SELECT thread_id, created_at, provider, instanceId, model, dispatch_origin, d AS tokens,
+        0 AS cache_tokens
       FROM used_only_delta
       UNION ALL
       SELECT
@@ -936,7 +997,8 @@ export function tokenDeltaCtes(sql: SqlClient.SqlClient, scope?: TokenStatsThrea
         COALESCE(tm.instanceId, s.provider_instance_id, 'claudeAgent'),
         c.model,
         c.dispatch_origin,
-        c.tokens
+        c.tokens,
+        c.cache_tokens
       FROM claude_token_rows c
       LEFT JOIN turn_model tm
         ON tm.thread_id = c.thread_id

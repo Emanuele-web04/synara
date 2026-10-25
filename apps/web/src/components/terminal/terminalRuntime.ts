@@ -25,6 +25,7 @@ import { Terminal } from "@xterm/xterm";
 
 import { readNativeApi } from "~/nativeApi";
 import { suppressQueryResponses } from "~/lib/suppressQueryResponses";
+import { hasOpenDismissibleOverlay } from "~/lib/editableEventTarget";
 
 import { openInPreferredEditor } from "../../editorPreferences";
 import { isTerminalClearShortcut, terminalNavigationShortcutData } from "../../keybindings";
@@ -42,6 +43,8 @@ import {
   getTerminalFontFamily,
   getTerminalFontSizePx,
   getTerminalFontWeight,
+  getTerminalMinimumContrastRatio,
+  isTerminalBackgroundTranslucent,
   terminalThemeFromApp,
   writeSystemMessage,
 } from "./terminalRuntimeAppearance";
@@ -187,6 +190,9 @@ function buildOpenInput(entry: TerminalRuntimeEntry) {
     cwd: entry.cwd,
     cols: entry.terminal.cols,
     rows: entry.terminal.rows,
+    ...(entry.providerAuthInstanceId
+      ? { providerAuthInstanceId: entry.providerAuthInstanceId }
+      : {}),
     ...(entry.runtimeEnv ? { env: entry.runtimeEnv } : {}),
   };
 }
@@ -494,6 +500,7 @@ function syncTheme(entry: TerminalRuntimeEntry): void {
   const nextFontSize = getTerminalFontSizePx();
   const nextFontWeight = getTerminalFontWeight();
   const nextBoldFontWeight = getTerminalBoldFontWeight();
+  const nextMinimumContrastRatio = getTerminalMinimumContrastRatio();
   const nextFontKey = JSON.stringify({
     fontFamily: nextFontFamily,
     fontSize: nextFontSize,
@@ -508,6 +515,7 @@ function syncTheme(entry: TerminalRuntimeEntry): void {
     cursorStyle: TERMINAL_CURSOR_STYLE,
     cursorInactiveStyle: TERMINAL_INACTIVE_CURSOR_STYLE,
     cursorWidth: TERMINAL_CURSOR_WIDTH,
+    minimumContrastRatio: nextMinimumContrastRatio,
     theme: nextTheme,
   });
   const previousAppearanceKey = (entry.wrapper.dataset.themeKey ?? "") as string;
@@ -518,7 +526,9 @@ function syncTheme(entry: TerminalRuntimeEntry): void {
   entry.wrapper.dataset.themeKey = nextAppearanceKey;
   entry.wrapper.dataset.fontKey = nextFontKey;
   const terminalOptions = entry.terminal.options as SynaraTerminalOptions;
+  terminalOptions.allowTransparency = isTerminalBackgroundTranslucent(nextTheme);
   terminalOptions.theme = nextTheme;
+  terminalOptions.minimumContrastRatio = nextMinimumContrastRatio;
   terminalOptions.fontFamily = nextFontFamily;
   terminalOptions.fontSize = nextFontSize;
   terminalOptions.fontWeight = nextFontWeight;
@@ -694,6 +704,11 @@ function reconcileTerminalSnapshot(entry: TerminalRuntimeEntry): void {
   void api.terminal
     .open(buildOpenInput(entry))
     .then((snapshot) => {
+      if (entry.disposed && entry.providerAuthInstanceId) {
+        void api.terminal
+          .close({ threadId: entry.threadId, terminalId: entry.terminalId, deleteHistory: true })
+          .catch(() => undefined);
+      }
       if (
         entry.disposed ||
         !entry.opened ||
@@ -704,6 +719,16 @@ function reconcileTerminalSnapshot(entry: TerminalRuntimeEntry): void {
       }
 
       if (entry.outputEventVersion !== outputEventVersionAtRequest) {
+        return;
+      }
+      if (snapshot.status === "error" || snapshot.status === "exited") {
+        replaySnapshot(entry, snapshot, () =>
+          setRuntimeStatus(entry, snapshot.status === "error" ? "error" : "exited"),
+        );
+        if (snapshot.status === "exited" && !entry.hasHandledExit) {
+          entry.hasHandledExit = true;
+          entry.callbacks.onSessionExited();
+        }
         return;
       }
 
@@ -745,6 +770,8 @@ export function syncRuntimeConfig(
   } else {
     entry.runtimeEnv = config.runtimeEnv;
   }
+  if (config.providerAuthInstanceId === undefined) delete entry.providerAuthInstanceId;
+  else entry.providerAuthInstanceId = config.providerAuthInstanceId;
   entry.callbacks = config.callbacks;
 }
 
@@ -757,6 +784,7 @@ export function createRuntimeEntry(config: TerminalRuntimeConfig): TerminalRunti
   const imageAddon = new ImageAddon();
   const searchAddon = new SearchAddon();
   const unicode11Addon = new Unicode11Addon();
+  const theme = terminalThemeFromApp();
   const terminalOptions: SynaraTerminalOptions = {
     cursorBlink: true,
     fontSize: getTerminalFontSizePx(),
@@ -764,7 +792,8 @@ export function createRuntimeEntry(config: TerminalRuntimeConfig): TerminalRunti
     fontWeightBold: getTerminalBoldFontWeight(),
     scrollback: 5_000,
     fontFamily: getTerminalFontFamily(),
-    theme: terminalThemeFromApp(),
+    theme,
+    minimumContrastRatio: getTerminalMinimumContrastRatio(),
     allowProposedApi: true,
     customGlyphs: true,
     macOptionIsMeta: false,
@@ -772,7 +801,8 @@ export function createRuntimeEntry(config: TerminalRuntimeConfig): TerminalRunti
     cursorInactiveStyle: TERMINAL_INACTIVE_CURSOR_STYLE,
     cursorWidth: TERMINAL_CURSOR_WIDTH,
     screenReaderMode: false,
-    allowTransparency: false,
+    // Off unless the theme background is see-through: transparency costs the renderer.
+    allowTransparency: isTerminalBackgroundTranslucent(theme),
     vtExtensions: { kittyKeyboard: true },
     scrollbar: { showScrollbar: false },
   };
@@ -797,6 +827,9 @@ export function createRuntimeEntry(config: TerminalRuntimeConfig): TerminalRunti
     terminalLabel: config.terminalLabel,
     terminalCliKind: config.terminalCliKind ?? null,
     cwd: config.cwd,
+    ...(config.providerAuthInstanceId
+      ? { providerAuthInstanceId: config.providerAuthInstanceId }
+      : {}),
     callbacks: config.callbacks,
     wrapper,
     container: null,
@@ -1088,6 +1121,37 @@ export function createRuntimeEntry(config: TerminalRuntimeConfig): TerminalRunti
   return entry;
 }
 
+function scheduleAutomaticTerminalFocus(
+  entry: TerminalRuntimeEntry,
+  focusOwner = document.activeElement,
+): void {
+  // Automatic activation must not bring a background window forward. Recheck
+  // after the frame too: the user may blur the window or choose another control.
+  if (!document.hasFocus() || hasOpenDismissibleOverlay(entry.container)) return;
+  window.requestAnimationFrame(() => {
+    if (
+      entry.disposed ||
+      !entry.viewState.autoFocus ||
+      !entry.viewState.isVisible ||
+      !entry.container?.isConnected ||
+      !document.hasFocus() ||
+      hasOpenDismissibleOverlay(entry.container)
+    ) {
+      return;
+    }
+    const activeElement = document.activeElement;
+    if (
+      activeElement !== focusOwner &&
+      activeElement !== document.body &&
+      activeElement !== document.documentElement &&
+      !entry.wrapper.contains(activeElement)
+    ) {
+      return;
+    }
+    entry.terminal.focus();
+  });
+}
+
 function openTerminal(entry: TerminalRuntimeEntry): void {
   const api = readNativeApi();
   if (!api || entry.opened) return;
@@ -1098,11 +1162,29 @@ function openTerminal(entry: TerminalRuntimeEntry): void {
   setRuntimeStatus(entry, "connecting");
   const outputEventVersionAtOpen = entry.outputEventVersion;
   const openInput = buildOpenInput(entry);
+  const windowHadFocusAtOpen = document.hasFocus();
+  const focusOwnerAtOpen = document.activeElement;
 
   void api.terminal
     .open(openInput)
     .then((snapshot) => {
-      if (entry.disposed) return;
+      if (entry.disposed) {
+        if (entry.providerAuthInstanceId)
+          void api.terminal
+            .close({ threadId: entry.threadId, terminalId: entry.terminalId, deleteHistory: true })
+            .catch(() => undefined);
+        return;
+      }
+      if (snapshot.status === "error" || snapshot.status === "exited") {
+        replaySnapshot(entry, snapshot, () =>
+          setRuntimeStatus(entry, snapshot.status === "error" ? "error" : "exited"),
+        );
+        if (snapshot.status === "exited" && !entry.hasHandledExit) {
+          entry.hasHandledExit = true;
+          entry.callbacks.onSessionExited();
+        }
+        return;
+      }
       if (
         snapshotHasReplayPayload(snapshot) &&
         entry.outputEventVersion === outputEventVersionAtOpen
@@ -1135,10 +1217,8 @@ function openTerminal(entry: TerminalRuntimeEntry): void {
             });
         }, OPEN_SNAPSHOT_RECONCILE_DELAY_MS);
       }
-      if (entry.viewState.autoFocus) {
-        window.requestAnimationFrame(() => {
-          entry.terminal.focus();
-        });
+      if (entry.viewState.autoFocus && windowHadFocusAtOpen) {
+        scheduleAutomaticTerminalFocus(entry, focusOwnerAtOpen);
       }
     })
     .catch((error) => {
@@ -1189,9 +1269,7 @@ export function updateRuntimeViewState(
   }
 
   if (nextViewState.autoFocus) {
-    window.requestAnimationFrame(() => {
-      entry.terminal.focus();
-    });
+    scheduleAutomaticTerminalFocus(entry);
   }
 }
 

@@ -2,7 +2,9 @@ import { ORCHESTRATION_WS_METHODS, WS_METHODS } from "@synara/contracts";
 import { Deferred, Effect, Fiber } from "effect";
 import { describe, expect, it } from "vitest";
 
-import { classifyWsRequest, makeWsRequestAdmission } from "./wsRequestAdmission";
+import { classifyWsRequest } from "@synara/shared/wsRequestClass";
+
+import { makeWsRequestAdmission } from "./wsRequestAdmission";
 
 describe("WsRequestAdmission", () => {
   it("keeps lightweight shell reads out of the expensive lane", () => {
@@ -17,6 +19,7 @@ describe("WsRequestAdmission", () => {
       "expensive-read",
     );
     expect(classifyWsRequest(WS_METHODS.terminalAckOutput)).toBe("control");
+    expect(classifyWsRequest(WS_METHODS.serverGetRuntimeStatus)).toBe("control");
   });
 
   it("reserves independent capacity for control traffic during an expensive-read flood", async () => {

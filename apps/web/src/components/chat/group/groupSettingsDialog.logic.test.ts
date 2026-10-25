@@ -15,6 +15,7 @@ import {
   isGroupSettingsSection,
   memoryNoteDocumentPath,
   modelSelectionsEqual,
+  rebaseGroupSettingsBaseline,
   resolveGroupModelCatalogPrefetchProviders,
   resolveSaveAttemptRequestId,
   saveAttemptFingerprint,
@@ -61,6 +62,7 @@ function makeDraft(overrides: Partial<GroupSettingsDraft> = {}): GroupSettingsDr
     coordinatorModelSelection: codexSelection,
     workerModelSelection: codexSelection,
     workerEnvironment: "local",
+    maxConcurrentWorkers: 4,
     autoMemoryEnabled: true,
     libraryPath: "",
     libraryRemoteUrl: "",
@@ -97,6 +99,7 @@ describe("buildGroupSettingsDraft", () => {
     expect(draft.coordinatorModelSelection).toEqual(codexSelection);
     expect(draft.workerModelSelection).toEqual(claudeSelection);
     expect(draft.workerEnvironment).toBe("worktree");
+    expect(draft.maxConcurrentWorkers).toBe(4);
     expect(draft.autoMemoryEnabled).toBe(false);
     expect(draft.libraryPath).toBe("/tmp/lib");
     expect(draft.libraryRemoteUrl).toBe("https://example.com/lib.git");
@@ -111,6 +114,7 @@ describe("buildGroupSettingsDraft", () => {
     });
     expect(withDefault.coordinatorModelSelection).toEqual(claudeSelection);
     expect(withDefault.workerModelSelection).toEqual(claudeSelection);
+    expect(withDefault.maxConcurrentWorkers).toBe(3);
 
     const noDefault = buildGroupSettingsDraft({
       config: null,
@@ -141,6 +145,9 @@ describe("groupSettingsDirtySections", () => {
   });
 
   it("marks general for name, icon, goal, and either model selection", () => {
+    expect(groupSettingsDirtySections(makeDraft({ maxConcurrentWorkers: 2 }), baseline)).toEqual(
+      new Set(["general"]),
+    );
     expect(groupSettingsDirtySections(makeDraft({ name: "beta" }), baseline)).toEqual(
       new Set(["general"]),
     );
@@ -280,6 +287,47 @@ describe("resolveSaveAttemptRequestId", () => {
         generateRequestId: () => "req-fresh",
       }),
     ).toBe("req-fresh");
+  });
+});
+
+describe("rebaseGroupSettingsBaseline", () => {
+  it("adopts a newer revision that only changed lifecycle state or links", () => {
+    const baseline = makeBaseline({ name: "edited" });
+    const paused: ProjectAgentConfig = {
+      ...baseConfig,
+      revision: 5,
+      updatedAt: "2026-09-02T00:00:00.000Z",
+      pausedAt: "2026-09-02T00:00:00.000Z",
+      archivedAt: "2026-09-02T00:00:00.000Z",
+      pausedAutomationIds: [],
+      linkedProjectIds: [ProjectId.makeUnsafe("project-linked")],
+    };
+    expect(rebaseGroupSettingsBaseline(baseline, paused)).toEqual({
+      draft: baseline.draft,
+      config: paused,
+    });
+  });
+
+  it("keeps the baseline when a newer revision changed a setting", () => {
+    const baseline = makeBaseline();
+    const otherSave: ProjectAgentConfig = {
+      ...baseConfig,
+      revision: 5,
+      pausedAt: "2026-09-02T00:00:00.000Z",
+      coordinatorModelSelection: claudeSelection,
+    };
+    expect(rebaseGroupSettingsBaseline(baseline, otherSave)).toBe(baseline);
+  });
+
+  it("keeps the baseline when the config is not newer or is missing", () => {
+    const baseline = makeBaseline();
+    const older: ProjectAgentConfig = {
+      ...baseConfig,
+      revision: 3,
+      pausedAt: "2026-09-02T00:00:00.000Z",
+    };
+    expect(rebaseGroupSettingsBaseline(baseline, older)).toBe(baseline);
+    expect(rebaseGroupSettingsBaseline(baseline, null)).toBe(baseline);
   });
 });
 

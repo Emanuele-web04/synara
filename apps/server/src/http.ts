@@ -1,3 +1,4 @@
+import { readEventLoopStatus } from "./eventLoopMonitor";
 import * as fs from "node:fs/promises";
 import nodePath from "node:path";
 
@@ -35,6 +36,7 @@ import {
   normalizeAttachmentRelativePath,
   resolveAttachmentRelativePath,
 } from "./attachmentPaths";
+import { INLINE_VISUALS_DIRECTORY } from "./inlineVisualStore";
 import { resolveAttachmentPathById } from "./attachmentStore.ts";
 import { authErrorResponse, makeEffectAuthRequest } from "./auth/effectHttp";
 import { AuthError, ServerAuth } from "./auth/Services/ServerAuth";
@@ -335,6 +337,7 @@ export function makeHealthEffectRouteLayer(readiness: ServerReadiness) {
       return HttpServerResponse.jsonUnsafe(
         {
           status: "ok",
+          eventLoop: yield* readEventLoopStatus,
           startupReady: snapshot.startupReady,
           pushBusReady: snapshot.pushBusReady,
           keybindingsReady: snapshot.keybindingsReady,
@@ -689,19 +692,26 @@ export const projectFaviconEffectRouteLayer = HttpRouter.add(
   "GET",
   "/api/project-favicon",
   Effect.gen(function* () {
-    yield* requireAuthenticatedRequest.pipe(
-      Effect.catchTag("AuthError", (error) => Effect.fail(error)),
-    );
     const request = yield* HttpServerRequest.HttpServerRequest;
     const url = HttpServerRequest.toURL(request);
     if (!url) return HttpServerResponse.text("Bad Request", { status: 400 });
+    // Desktop image requests carry the local startup token in the URL, just
+    // like site favicons and attachment previews; remote servers require a session.
+    const config = yield* ServerConfig;
+    if (!isLegacyTokenAuthorized({ config, url })) {
+      yield* requireAuthenticatedRequest;
+    }
     const projectCwd = url.searchParams.get("cwd");
     if (!projectCwd) return HttpServerResponse.text("Missing cwd parameter", { status: 400 });
     const resolver = yield* ProjectFaviconResolver;
     const faviconPath = yield* resolver.resolvePath(projectCwd);
     if (!faviconPath) {
+      // Cached like a found logo, so each new glyph does not rescan the folder.
       if (url.searchParams.get("fallback") === "none")
-        return HttpServerResponse.empty({ status: 204 });
+        return HttpServerResponse.empty({
+          status: 204,
+          headers: { "Cache-Control": PROJECT_FAVICON_CACHE_CONTROL },
+        });
       return HttpServerResponse.text(FALLBACK_FAVICON_SVG, {
         status: 200,
         contentType: "image/svg+xml",
@@ -711,19 +721,26 @@ export const projectFaviconEffectRouteLayer = HttpRouter.add(
         },
       });
     }
-    return yield* HttpServerResponse.file(faviconPath, {
-      status: 200,
+    const fileSystem = yield* FileSystem.FileSystem;
+    const fileInfo = yield* fileSystem
+      .stat(faviconPath)
+      .pipe(Effect.catch(() => Effect.succeed(null)));
+    if (!fileInfo || fileInfo.type !== "File") {
+      return HttpServerResponse.text("Not Found", { status: 404 });
+    }
+    // Reuse local-image/attachment streaming: the desktop route stack does not
+    // supply the extra HttpPlatform service used by HttpServerResponse.file.
+    return streamedFileResponse({
+      fileSystem,
+      path: faviconPath,
+      sizeBytes: Number(fileInfo.size),
       headers: {
         "Cache-Control": PROJECT_FAVICON_CACHE_CONTROL,
-        ...(nodePath.extname(faviconPath).toLowerCase() === ".svg"
-          ? SVG_DOCUMENT_SECURITY_HEADERS
-          : {}),
+        // Repository-controlled bytes must stay inert even on direct navigation
+        // or when the file contents do not match their image extension.
+        ...SVG_DOCUMENT_SECURITY_HEADERS,
       },
-    }).pipe(
-      Effect.catch(() =>
-        Effect.succeed(HttpServerResponse.text("Internal Server Error", { status: 500 })),
-      ),
-    );
+    });
   }).pipe(Effect.catchTag("AuthError", (error) => Effect.succeed(authErrorResponse(error)))),
 );
 
@@ -824,7 +841,7 @@ const threadExportEffectRouteLayer = HttpRouter.add(
         status: 200,
         contentType: "application/zip",
         headers: {
-          "Content-Disposition": `attachment; filename="${fileName.replaceAll('"', "")}"`,
+          "Content-Disposition": attachmentContentDisposition(fileName),
           "Cache-Control": "no-store",
           ...corsHeaders,
           "Access-Control-Expose-Headers": "Content-Disposition",
@@ -856,6 +873,25 @@ export const editorIconEffectRouteLayer = HttpRouter.add(
     return toEffectHttpResponse(payload);
   }).pipe(Effect.catchTag("AuthError", (error) => Effect.succeed(authErrorResponse(error)))),
 );
+
+// Node rejects header values outside Latin-1 (ERR_INVALID_CHAR) inside the
+// platform's writeHead, which leaves the response hanging. Printable ASCII names
+// keep the quoted form. Anything else goes only in the RFC 5987 `filename*` form,
+// because browserDownload.ts reads only `filename=` and would prefer a lossy
+// ASCII fallback over the full name the web client already has.
+function attachmentContentDisposition(fileName: string): string {
+  const safeFileName = fileName.replaceAll('"', "");
+  if (/^[\x20-\x7e]*$/.test(safeFileName)) {
+    return `attachment; filename="${safeFileName}"`;
+  }
+  // encodeURIComponent throws on lone surrogates and leaves `'()*` bare, which
+  // RFC 5987 does not allow unencoded.
+  const encoded = encodeURIComponent(safeFileName.replace(/\p{Cs}/gu, "\uFFFD")).replace(
+    /['()*]/g,
+    (char) => `%${char.charCodeAt(0).toString(16).toUpperCase()}`,
+  );
+  return `attachment; filename*=UTF-8''${encoded}`;
+}
 
 // Streams a disk file as the response body instead of buffering it in memory:
 // preview files can be large (PDFs especially), and a full-file buffer per
@@ -947,7 +983,6 @@ export const localImageEffectRouteLayer = HttpRouter.add(
     // Etag.Generator/Path services and was failing with a 500 here).
     const fileSystem = yield* FileSystem.FileSystem;
     const isDownload = url.searchParams.get("download") === "1";
-    const safeFileName = previewFile.fileName.replaceAll('"', "");
     const isSvg = nodePath.extname(previewFile.path).toLowerCase() === ".svg";
     return streamedFileResponse({
       fileSystem,
@@ -964,7 +999,9 @@ export const localImageEffectRouteLayer = HttpRouter.add(
         // browser second-guess the declared content type.
         "X-Content-Type-Options": "nosniff",
         ...(isSvg ? SVG_DOCUMENT_SECURITY_HEADERS : {}),
-        ...(isDownload ? { "Content-Disposition": `attachment; filename="${safeFileName}"` } : {}),
+        ...(isDownload
+          ? { "Content-Disposition": attachmentContentDisposition(previewFile.fileName) }
+          : {}),
       },
     });
   }).pipe(Effect.catchTag("AuthError", (error) => Effect.succeed(authErrorResponse(error)))),
@@ -1312,24 +1349,32 @@ const binaryUploadEffectHandler = Effect.gen(function* () {
   return HttpServerResponse.text("Not Found", { status: 404, headers: corsHeaders });
 }).pipe(
   Effect.catch((error) =>
-    Effect.succeed(
-      error instanceof AuthError
-        ? authErrorResponse(error)
-        : HttpServerResponse.jsonUnsafe(
-            {
-              error:
-                error instanceof Error
-                  ? error.message
-                  : String((error as { readonly message?: unknown }).message ?? error),
-            },
-            {
-              status:
-                typeof (error as { readonly status?: unknown }).status === "number"
-                  ? (error as { readonly status: number }).status
-                  : 500,
-            },
-          ),
-    ),
+    Effect.gen(function* () {
+      const request = yield* HttpServerRequest.HttpServerRequest;
+      const config = yield* ServerConfig;
+      const url = HttpServerRequest.toURL(request);
+      const headers = url ? trustedMutationCorsHeaders({ request, url, config }) : null;
+      const response =
+        error instanceof AuthError
+          ? authErrorResponse(error)
+          : HttpServerResponse.jsonUnsafe(
+              {
+                error:
+                  error instanceof Error
+                    ? error.message
+                    : String((error as { readonly message?: unknown }).message ?? error),
+              },
+              {
+                status:
+                  typeof (error as { readonly status?: unknown }).status === "number"
+                    ? (error as { readonly status: number }).status
+                    : 500,
+              },
+            );
+      // Browser clients need the original error body, including authentication
+      // and provider failures. Never reflect an untrusted origin here.
+      return HttpServerResponse.setHeaders(response, headers ?? {});
+    }),
   ),
 );
 
@@ -1362,7 +1407,11 @@ export const attachmentsEffectRouteLayer = HttpRouter.add(
     }
     if (
       normalizedRelativePath.startsWith("objects/") ||
-      normalizedRelativePath.startsWith(".staging/")
+      normalizedRelativePath.startsWith(".staging/") ||
+      // Agent-authored visual HTML must never load from the app origin; clients
+      // fetch it over the authenticated socket and run it in a sandboxed frame.
+      // Case-insensitive: the attachments root may sit on a case-insensitive volume.
+      normalizedRelativePath.toLowerCase().startsWith(`${INLINE_VISUALS_DIRECTORY}/`)
     ) {
       return HttpServerResponse.text("Not Found", { status: 404 });
     }

@@ -47,6 +47,85 @@ import { DEFAULT_INTERACTION_MODE, DEFAULT_RUNTIME_MODE, type Thread } from "./t
 import { applyOrchestrationEvents } from "./storeEventReducer";
 
 describe("store projection", () => {
+  it("drops missed rollback messages while preserving live text within the same revision", () => {
+    const thread = makeReadModelThread({
+      messages: [
+        {
+          id: MessageId.makeUnsafe("rolled-back-stream"),
+          turnId: TurnId.makeUnsafe("rolled-back-turn"),
+          role: "assistant",
+          text: "This reply was removed on the server",
+          streaming: true,
+          source: "native",
+          createdAt: "2026-10-11T10:00:00.000Z",
+          updatedAt: "2026-10-11T10:00:00.000Z",
+          attachments: [],
+        },
+      ],
+    });
+    const initial = syncServerThreadDetailHotPath(makeState(makeThread()), thread, 20, 0);
+    const emptySnapshot = { ...thread, messages: [] };
+    const sameRevision = syncServerThreadDetailHotPath(initial, emptySnapshot, 20, 0);
+    expect(
+      getThreadFromState(sameRevision, thread.id)?.messages.map((message) => message.id),
+    ).toEqual([MessageId.makeUnsafe("rolled-back-stream")]);
+
+    const repaired = syncServerThreadDetailHotPath(sameRevision, emptySnapshot, 25, 24);
+    expect(getThreadFromState(repaired, thread.id)?.messages).toEqual([]);
+    const repeated = syncServerThreadDetailHotPath(repaired, emptySnapshot, 25, 24);
+    expect(getThreadFromState(repeated, thread.id)?.messages).toEqual([]);
+
+    // A restored journal can have already advanced past the old rollback's
+    // sequence while its own latest rollback revision remains lower.
+    const oldJournalLive = syncServerThreadDetailHotPath(repeated, thread, 30, 24);
+    const newerReset = syncServerThreadDetailHotPath(oldJournalLive, emptySnapshot, 100, 10);
+    expect(getThreadFromState(newerReset, thread.id)?.messages).toEqual([]);
+
+    // A server restored from backup has a lower sequence space. Its first
+    // snapshot must reset the revision baseline for subsequent rollbacks.
+    const restored = syncServerThreadDetailHotPath(repeated, thread, 3, 0);
+    expect(getThreadFromState(restored, thread.id)?.messages).toHaveLength(1);
+    const rolledBackAgain = syncServerThreadDetailHotPath(restored, emptySnapshot, 5, 4);
+    expect(getThreadFromState(rolledBackAgain, thread.id)?.messages).toEqual([]);
+  });
+
+  it("preserves a new live reply when a snapshot follows an already applied rollback", () => {
+    const thread = makeReadModelThread({});
+    const initial = syncServerThreadDetailHotPath(makeState(makeThread()), thread, 20, 0);
+    const live = applyOrchestrationEvents(initial, [
+      makeDomainEvent("thread.reverted", { threadId: thread.id, turnCount: 0 }, { sequence: 24 }),
+      makeDomainEvent(
+        "thread.message-sent",
+        {
+          threadId: thread.id,
+          messageId: MessageId.makeUnsafe("new-live-reply"),
+          turnId: TurnId.makeUnsafe("new-live-turn"),
+          role: "assistant",
+          text: "New reply after rollback",
+          streaming: true,
+          source: "native",
+          createdAt: "2026-10-11T10:05:00.000Z",
+          updatedAt: "2026-10-11T10:05:00.000Z",
+        },
+        { sequence: 26 },
+      ),
+    ]);
+    const reconciled = syncServerThreadDetailHotPath(live, thread, 25, 24);
+    expect(
+      getThreadFromState(reconciled, thread.id)?.messages.map((message) => message.text),
+    ).toEqual(["New reply after rollback"]);
+  });
+
+  it("retains project-import provenance through shell hydration, detail updates, and eviction", () => {
+    const thread = makeReadModelThread({ isProjectImport: true });
+    let state = syncServerShellSnapshot(makeState(makeThread()), makeShellSnapshot(thread));
+    expect(getThreadFromState(state, thread.id)?.isProjectImport).toBe(true);
+    state = syncServerReadModel(state, makeReadModel(thread));
+    expect(getThreadFromState(state, thread.id)?.isProjectImport).toBe(true);
+    state = evictThreadDetailFromClientState(state, thread.id);
+    expect(getThreadFromState(state, thread.id)?.isProjectImport).toBe(true);
+  });
+
   it("retains an active resend timestamp through binding updates and rollback", () => {
     const at = (minute: number) => `2026-09-17T10:0${minute}:00.000Z`;
     const messageId = MessageId.makeUnsafe("resent");
@@ -1103,6 +1182,89 @@ describe("store projection", () => {
     expect(nextThread?.latestTurn?.completedAt).toBeNull();
     expect(nextThread?.session?.orchestrationStatus).toBe("running");
     expect(nextThread?.session?.activeTurnId).toBe(turnId);
+  });
+
+  it("does not pair retained live message text with a snapshot's shorter text segments", () => {
+    const threadId = ThreadId.makeUnsafe("thread-live-segments");
+    const assistantId = MessageId.makeUnsafe("assistant-live-segments");
+    const turnId = TurnId.makeUnsafe("turn-live-segments");
+    const finalText = "Reading files. Found it. Fixed.";
+    const liveState = makeState(
+      makeThread({
+        id: threadId,
+        latestTurn: {
+          turnId,
+          state: "completed",
+          requestedAt: "2026-02-27T00:00:00.000Z",
+          startedAt: "2026-02-27T00:00:00.000Z",
+          completedAt: "2026-02-27T00:00:09.000Z",
+          assistantMessageId: assistantId,
+        },
+        messages: [
+          {
+            id: assistantId,
+            role: "assistant",
+            text: finalText,
+            turnId,
+            createdAt: "2026-02-27T00:00:01.000Z",
+            updatedAt: "2026-02-27T00:00:09.000Z",
+            completedAt: "2026-02-27T00:00:09.000Z",
+            streaming: false,
+            source: "native",
+          },
+        ],
+      }),
+    );
+
+    // A lagging snapshot still has the message mid-stream with two segments.
+    const next = syncServerThreadDetailHotPath(
+      liveState,
+      makeReadModelThread({
+        id: threadId,
+        latestTurn: {
+          turnId,
+          state: "running",
+          requestedAt: "2026-02-27T00:00:00.000Z",
+          startedAt: "2026-02-27T00:00:00.000Z",
+          completedAt: null,
+          assistantMessageId: assistantId,
+        },
+        messages: [
+          {
+            id: assistantId,
+            role: "assistant",
+            text: "Reading files. Found it.",
+            textSegments: [
+              {
+                sequence: 10,
+                startedAt: "2026-02-27T00:00:01.000Z",
+                endedAt: "2026-02-27T00:00:02.000Z",
+                text: "Reading files.",
+              },
+              {
+                sequence: 20,
+                startedAt: "2026-02-27T00:00:03.000Z",
+                endedAt: "2026-02-27T00:00:04.000Z",
+                text: " Found it.",
+              },
+            ],
+            turnId,
+            streaming: true,
+            source: "native",
+            createdAt: "2026-02-27T00:00:01.000Z",
+            updatedAt: "2026-02-27T00:00:04.000Z",
+          },
+        ],
+      }),
+    );
+
+    const message = threadsOf(next)
+      .find((thread) => thread.id === threadId)
+      ?.messages.find((entry) => entry.id === assistantId);
+    expect(message?.text).toBe(finalText);
+    expect(message?.streaming).toBe(false);
+    // Segments that cover only part of the retained text would hide its tail.
+    expect(message?.textSegments).toBeUndefined();
   });
 
   it("applies incoming dispatch origin corrections while retaining live message text", () => {

@@ -7,11 +7,79 @@ import { describe, expect, it } from "vitest";
 import {
   appendDirectoriesToPathEnv,
   buildOpenCodeServerProcessEnv,
+  commandExistsOnPath,
   directoriesContainingCommand,
   openCodeBinarySearchDirectories,
+  resolveWindowsLocalAppDataBinary,
 } from "./providerBinaryResolution.ts";
 
 const missingPath = () => false;
+
+describe("commandExistsOnPath", () => {
+  it.skipIf(process.platform === "win32")(
+    "rejects non-executable files and directories in PATH",
+    () => {
+      const home = mkdtempSync(join(tmpdir(), "synara-provider-cli-"));
+      const commandPath = join(home, "codex");
+      const options = { platform: "linux" as const, env: { PATH: home } };
+      try {
+        mkdirSync(commandPath);
+        expect(commandExistsOnPath("codex", options)).toBe(false);
+
+        rmSync(commandPath, { recursive: true });
+        writeFileSync(commandPath, "#!/bin/sh");
+        chmodSync(commandPath, 0o644);
+        expect(commandExistsOnPath("codex", options)).toBe(false);
+
+        chmodSync(commandPath, 0o755);
+        expect(commandExistsOnPath("codex", options)).toBe(true);
+      } finally {
+        rmSync(home, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it("respects an injected executable predicate over a permissive pathExists mock", () => {
+    expect(
+      commandExistsOnPath("cursor-agent", {
+        platform: "win32",
+        env: { Path: "C:\\Tools", PATHEXT: ".CMD" },
+        pathExists: () => true,
+        isExecutable: (path) => path.endsWith("cursor-agent.CMD"),
+      }),
+    ).toBe(true);
+    expect(
+      commandExistsOnPath("cursor-agent", {
+        platform: "win32",
+        env: { Path: "C:\\Tools", PATHEXT: ".CMD" },
+        pathExists: () => true,
+        isExecutable: () => false,
+      }),
+    ).toBe(false);
+  });
+});
+
+describe("resolveWindowsLocalAppDataBinary", () => {
+  it("rejects a non-executable candidate even when the path exists", () => {
+    const directory = "C:\\Users\\tester\\AppData\\Local";
+    const candidate = "C:\\Users\\tester\\AppData\\Local\\devin\\cli\\bin\\devin.exe";
+    const paths = [["devin", "cli", "bin", "devin.exe"]] as const;
+    const options = {
+      platform: "win32" as const,
+      env: { LOCALAPPDATA: directory },
+      pathExists: () => true,
+    };
+    expect(
+      resolveWindowsLocalAppDataBinary(paths, { ...options, isExecutable: () => false }),
+    ).toBeUndefined();
+    expect(
+      resolveWindowsLocalAppDataBinary(paths, {
+        ...options,
+        isExecutable: (path) => path === candidate,
+      }),
+    ).toBe(candidate);
+  });
+});
 
 describe("openCodeBinarySearchDirectories", () => {
   it.skipIf(process.platform === "win32").each([

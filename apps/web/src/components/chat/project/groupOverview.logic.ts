@@ -248,6 +248,7 @@ export interface GroupNeedsAttentionGroup {
    * that don't have the group's agent data loaded simply omit it.
    */
   readonly memberThreadIds?: ReadonlySet<ThreadId>;
+  readonly needsYouThreadIds?: ReadonlySet<ThreadId>;
 }
 
 const EMPTY_ATTENTION_SET: ReadonlySet<ProjectId> = new Set();
@@ -282,7 +283,13 @@ export function createGroupNeedsAttentionSelector(input: {
         if (next.has(group.projectId)) continue;
         const isMember =
           summary.projectId === group.projectId || group.memberThreadIds?.has(summary.id) === true;
-        if (isMember && groupThreadNeedsAttention(summary)) {
+        if (
+          isMember &&
+          groupThreadNeedsAttention({
+            ...summary,
+            needsYou: group.needsYouThreadIds?.has(summary.id) === true,
+          })
+        ) {
           next.add(group.projectId);
         }
       }

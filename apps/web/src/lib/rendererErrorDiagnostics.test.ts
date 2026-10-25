@@ -2,26 +2,34 @@ import {
   DESKTOP_RENDERER_ERROR_MESSAGE_MAX_LENGTH,
   DESKTOP_RENDERER_ERROR_STACK_MAX_LENGTH,
   type DesktopRendererError,
+  type DesktopDiagnosticBreadcrumb,
+  ORCHESTRATION_WS_METHODS,
 } from "@synara/contracts";
 import { afterEach, expect, it, vi } from "vitest";
 
-import { installRendererErrorDiagnostics } from "./rendererErrorDiagnostics";
+import {
+  installRendererErrorDiagnostics,
+  rendererRpcActivity,
+  recordRendererActivity,
+} from "./rendererErrorDiagnostics";
 
 afterEach(() => vi.unstubAllGlobals());
 
 function installTestDiagnostics() {
   const reports: DesktopRendererError[] = [];
+  const activities: DesktopDiagnosticBreadcrumb[] = [];
   const target = Object.assign(new EventTarget(), {
     desktopBridge: {
       betaDiagnostics: {
         rendererReady: () => {},
+        recordActivity: (breadcrumb: DesktopDiagnosticBreadcrumb) => activities.push(breadcrumb),
         reportError: (error: DesktopRendererError) => reports.push(error),
       },
     },
   });
   vi.stubGlobal("window", target);
   const dispose = installRendererErrorDiagnostics();
-  return { reports, target, dispose };
+  return { reports, activities, target, dispose };
 }
 
 it("does not throw a second renderer error when exception details have a throwing getter", () => {
@@ -94,3 +102,60 @@ it.each([
     }
   },
 );
+
+it("records fixed action categories without reading private RPC fields", () => {
+  const { activities, target, dispose } = installTestDiagnostics();
+  try {
+    const params = {
+      command: {
+        type: "thread.turn.start",
+        get message() {
+          throw new Error("must not read prompt");
+        },
+        threadId: "private-id",
+      },
+    };
+    const activity = rendererRpcActivity(ORCHESTRATION_WS_METHODS.dispatchCommand, params);
+    expect(activity).toBe("chat.send");
+    recordRendererActivity(activity!, "started");
+    expect(rendererRpcActivity("arbitrary private method", params)).toBeUndefined();
+    target.dispatchEvent(new Event("resize"));
+    target.dispatchEvent(new Event("resize"));
+    expect(activities).toEqual([
+      { activity: "chat.send", phase: "started" },
+      { activity: "window.resize", phase: "succeeded" },
+    ]);
+    dispose?.();
+    target.dispatchEvent(new Event("resize"));
+    expect(activities).toHaveLength(2);
+  } finally {
+    dispose?.();
+  }
+});
+
+it("does not inspect RPC arguments or attach listeners without the Beta bridge", () => {
+  const target = new EventTarget();
+  const listen = vi.spyOn(target, "addEventListener");
+  vi.stubGlobal("window", target);
+  expect(installRendererErrorDiagnostics()).toBeUndefined();
+  expect(
+    rendererRpcActivity(ORCHESTRATION_WS_METHODS.dispatchCommand, {
+      get command() {
+        throw new Error("must not inspect");
+      },
+    }),
+  ).toBeUndefined();
+  expect(listen).not.toHaveBeenCalled();
+});
+
+it("keeps handled failures harmless when diagnostics are absent or IPC rejects", async () => {
+  const { reportHandledIssue } = await import("./rendererErrorDiagnostics");
+  vi.stubGlobal("window", {});
+  await expect(reportHandledIssue({ code: "voice.record.failed" })).resolves.toBeNull();
+  vi.stubGlobal("window", {
+    desktopBridge: {
+      betaDiagnostics: { reportIssue: () => Promise.reject(new Error("IPC unavailable")) },
+    },
+  });
+  await expect(reportHandledIssue({ code: "voice.record.failed" })).resolves.toBeNull();
+});

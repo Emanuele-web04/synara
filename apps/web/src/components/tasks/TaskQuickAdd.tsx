@@ -10,9 +10,11 @@ import { type KeyboardEvent, type RefObject, useState } from "react";
 
 export function TaskQuickAdd({
   inputRef,
+  placeholder = "Add a task, or press Tab to hand it to an agent",
   onCreate,
 }: {
   inputRef: RefObject<HTMLInputElement | null>;
+  placeholder?: string;
   /** `open` asks to open the new task's card right away (Tab). */
   onCreate: (title: string, options: { open: boolean; onError: () => void }) => void;
 }) {
@@ -59,7 +61,7 @@ export function TaskQuickAdd({
       <input
         ref={inputRef}
         aria-label="New task"
-        placeholder="Add a task, or press Tab to hand it to an agent"
+        placeholder={placeholder}
         value={draftTitle}
         onChange={(event) => setDraftTitle(event.target.value)}
         onKeyDown={handleKeyDown}

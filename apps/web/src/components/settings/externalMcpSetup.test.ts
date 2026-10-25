@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  EXTERNAL_MCP_SERVER_NAME,
   buildExternalMcpClientConfiguration,
   buildExternalMcpExamplePrompt,
   buildExternalMcpSetupPrompt,
@@ -28,28 +29,31 @@ describe("external MCP guided setup", () => {
     const claude = buildExternalMcpClientConfiguration("claudeCode", stdio);
 
     expect(codex.value).toBe(
-      "codex mcp add synara --env ELECTRON_RUN_AS_NODE=1 -- /Applications/Synara.app/Contents/MacOS/Synara server.js mcp serve --integration mcp_int_example --home-dir '/tmp/Synara home'",
+      `codex mcp add ${EXTERNAL_MCP_SERVER_NAME} --env ELECTRON_RUN_AS_NODE=1 -- /Applications/Synara.app/Contents/MacOS/Synara server.js mcp serve --integration mcp_int_example --home-dir '/tmp/Synara home'`,
     );
     expect(claude.value).toBe(
-      "claude mcp add --scope user synara -e ELECTRON_RUN_AS_NODE=1 -- /Applications/Synara.app/Contents/MacOS/Synara server.js mcp serve --integration mcp_int_example --home-dir '/tmp/Synara home'",
+      `claude mcp add --scope user ${EXTERNAL_MCP_SERVER_NAME} -e ELECTRON_RUN_AS_NODE=1 -- /Applications/Synara.app/Contents/MacOS/Synara server.js mcp serve --integration mcp_int_example --home-dir '/tmp/Synara home'`,
     );
+    expect(codex.value).not.toContain("mcp add synara ");
+    expect(claude.value).not.toContain(" user synara ");
     expect(`${codex.value}${claude.value}`).not.toContain("syn_mcp_v1_");
   });
 
   it("builds standard JSON configuration for desktop and other clients", () => {
     const desktop = buildExternalMcpClientConfiguration("claudeDesktop", stdio);
     const parsed = JSON.parse(desktop.value) as {
-      mcpServers: { synara: { command: string; args: ReadonlyArray<string> } };
+      mcpServers: Record<string, { command: string; args: ReadonlyArray<string> }>;
     };
 
     expect(desktop.format).toBe("json");
-    expect(parsed.mcpServers.synara).toEqual(stdio);
+    expect(parsed.mcpServers[EXTERNAL_MCP_SERVER_NAME]).toEqual(stdio);
+    expect(parsed.mcpServers.synara).toBeUndefined();
   });
 
   it("builds terminal commands for PowerShell on Windows", () => {
     const codex = buildExternalMcpClientConfiguration("codex", stdio, "Win32");
     expect(codex.value).toBe(
-      "& 'codex' 'mcp' 'add' 'synara' '--env' 'ELECTRON_RUN_AS_NODE=1' '--' '/Applications/Synara.app/Contents/MacOS/Synara' 'server.js' 'mcp' 'serve' '--integration' 'mcp_int_example' '--home-dir' '/tmp/Synara home'",
+      `& 'codex' 'mcp' 'add' '${EXTERNAL_MCP_SERVER_NAME}' '--env' 'ELECTRON_RUN_AS_NODE=1' '--' '/Applications/Synara.app/Contents/MacOS/Synara' 'server.js' 'mcp' 'serve' '--integration' 'mcp_int_example' '--home-dir' '/tmp/Synara home'`,
     );
     expect(codex.instruction).toContain("PowerShell");
   });
@@ -72,8 +76,8 @@ describe("external MCP guided setup", () => {
     });
 
     expect(prompt).toContain("syn_pair_v1_example");
-    expect(prompt).toContain("codex mcp add synara");
-    expect(prompt).toContain("claude mcp add --scope user synara");
+    expect(prompt).toContain(`codex mcp add ${EXTERNAL_MCP_SERVER_NAME}`);
+    expect(prompt).toContain(`claude mcp add --scope user ${EXTERNAL_MCP_SERVER_NAME}`);
     expect(prompt).toContain('"mcpServers"');
     expect(prompt).toContain("synara_overview");
     expect(prompt).not.toContain("syn_mcp_v1_");

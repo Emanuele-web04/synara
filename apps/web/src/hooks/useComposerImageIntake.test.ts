@@ -77,4 +77,50 @@ describe("ComposerImageIntakeQueue", () => {
     expect(revokeObjectUrl).toHaveBeenCalledWith("blob:stale");
     URL.revokeObjectURL = originalRevokeObjectUrl;
   });
+
+  it("accepts a new image after reactivation without committing the cancelled preparation", async () => {
+    const queue = new ComposerImageIntakeQueue();
+    const images: ComposerImageAttachment[] = [];
+    let releasePreparation!: (value: { images: ComposerImageAttachment[]; error: null }) => void;
+    const staleJob = queue.enqueue({
+      files: [new File(["old"], "old.png", { type: "image/png" })],
+      existingAttachmentCount: () => images.length,
+      commitImages: (prepared) => {
+        images.push(...prepared);
+        return prepared.length;
+      },
+      onError: () => {},
+      prepareFiles: () => new Promise((resolve) => (releasePreparation = resolve)),
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+    queue.dispose();
+    queue.activate();
+    let releaseCurrentPreparation!: (value: {
+      images: ComposerImageAttachment[];
+      error: null;
+    }) => void;
+    const currentJob = queue.enqueue({
+      files: [new File(["new"], "new.png", { type: "image/png" })],
+      existingAttachmentCount: () => images.length,
+      commitImages: (prepared) => {
+        images.push(...prepared);
+        return prepared.length;
+      },
+      onError: () => {},
+      prepareFiles: () => new Promise((resolve) => (releaseCurrentPreparation = resolve)),
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    releasePreparation({ images: [preparedImage("old")], error: null });
+    await staleJob;
+    expect(images).toEqual([]);
+    expect(queue.pendingCount()).toBe(1);
+
+    releaseCurrentPreparation({ images: [preparedImage("new")], error: null });
+    await Promise.all([currentJob, queue.waitForPending()]);
+    expect(images.map((image) => image.name)).toEqual(["new.png"]);
+    expect(queue.pendingCount()).toBe(0);
+  });
 });

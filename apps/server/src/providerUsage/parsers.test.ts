@@ -38,7 +38,15 @@ describe("parseCodexUsage", () => {
     expect(limit(snapshot, "5h")?.windowDurationMins).toBe(300);
     expect(limit(snapshot, "Weekly")?.usedPercent).toBe(24);
     expect(limit(snapshot, "Weekly")?.windowDurationMins).toBe(10_080);
-    expect(usageLine(snapshot, "Credits")?.value).toContain("5.39");
+    expect(usageLine(snapshot, "Credits")?.value).toBe("5.39 remaining (≈ $0.22)");
+  });
+
+  it("shows the balance as a credit count with an estimated dollar value", () => {
+    const snapshot = parseCodexUsage({
+      json: { ...json, credits: { has_credits: true, balance: 62_500 } },
+      nowMs: NOW_MS,
+    });
+    expect(usageLine(snapshot, "Credits")?.value).toBe("62,500 remaining (≈ $2,500.00)");
   });
 
   it("prefers the response headers over the body for used percent", () => {

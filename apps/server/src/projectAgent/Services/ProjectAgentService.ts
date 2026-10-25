@@ -64,6 +64,10 @@ import type { ProjectAgentServiceError } from "../Errors.ts";
 import type { ProjectAgentPrincipal } from "../principal.ts";
 
 export interface ProjectAgentServiceShape {
+  readonly notifyWorkItemChanged?: (input: {
+    readonly projectId: ProjectId;
+    readonly workItemId: string;
+  }) => Effect.Effect<void, ProjectAgentServiceError>;
   readonly getOverview: (
     input: ProjectAgentGetOverviewInput,
     principal: ProjectAgentPrincipal,

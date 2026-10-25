@@ -2,7 +2,7 @@
 // Purpose: Time-window recap for the Inbox from Synara's local projection DB:
 // prompts, chats, turns, agent run time and token deltas per slot, plus the
 // window's top projects and models. Shares the token SQL with profileStats.ts.
-// Layer: server stats query service (SqlClient). Beta-only ("inbox").
+// Layer: server stats query service (SqlClient). Available in Stable and Beta.
 
 import {
   type ProviderKind,
@@ -66,6 +66,7 @@ interface TokenBucketRow {
   readonly projectId: string | null;
   readonly title: string | null;
   readonly tokens: number;
+  readonly cacheTokens: number;
 }
 
 interface TurnRow {
@@ -167,8 +168,9 @@ function isWithin(ms: number, range: RecapRange): boolean {
 }
 
 type Mutable<T> = { -readonly [K in keyof T]: T[K] };
-type MutableRecapSlot = Mutable<Omit<StatsRecapSlot, "tokens">> & {
+type MutableRecapSlot = Mutable<Omit<StatsRecapSlot, "tokens" | "cacheReadTokens">> & {
   tokens: Mutable<StatsRecapTokens>;
+  cacheReadTokens: number;
 };
 
 function emptySlot(range: RecapRange): MutableRecapSlot {
@@ -181,6 +183,7 @@ function emptySlot(range: RecapRange): MutableRecapSlot {
     failedTurns: 0,
     agentWorkMs: 0,
     tokens: { user: 0, automation: 0, agent: 0 },
+    cacheReadTokens: 0,
   };
 }
 
@@ -257,6 +260,7 @@ export function buildRecap(input: {
     const tokens = Math.round(num(row.tokens));
     if (!slot || tokens <= 0) continue;
     slot.tokens[recapOrigin(row.origin)] += tokens;
+    slot.cacheReadTokens += Math.min(tokens, Math.max(0, Math.round(num(row.cacheTokens))));
     if (slot !== totals) continue;
     const provider = normalizeProviderKind(row.provider);
     if (provider !== "unknown") providersWithTokens.add(provider);
@@ -388,18 +392,21 @@ export const makeRecapStatsQuery = (
             r.provider AS provider,
             r.model AS model,
             t.project_id AS project_id,
-            r.tokens AS tokens
+            r.tokens AS tokens,
+            r.cache_tokens AS cache_tokens
           FROM token_delta_rows r
           JOIN projection_threads t ON t.thread_id = r.thread_id
           WHERE r.created_at >= ${window.from} AND r.created_at < ${window.to}
           UNION ALL
+          -- The deletion archive keeps totals only, so its cache share is unknown.
           SELECT
             d.created_at,
             'user',
             COALESCE(d.provider, 'unknown'),
             COALESCE(d.model, 'unknown'),
             dt.project_id,
-            d.tokens
+            d.tokens,
+            0
           FROM profile_stats_deleted_tokens d
           LEFT JOIN profile_stats_deleted_threads dt ON dt.thread_id = d.thread_id
           WHERE d.created_at >= ${window.from}
@@ -413,7 +420,8 @@ export const makeRecapStatsQuery = (
           r.model AS model,
           p.project_id AS projectId,
           p.title AS title,
-          SUM(r.tokens) AS tokens
+          SUM(r.tokens) AS tokens,
+          SUM(r.cache_tokens) AS cacheTokens
         FROM recap_buckets b
         JOIN recap_token_rows r ON r.created_at >= b.bucket_from AND r.created_at < b.bucket_to
         LEFT JOIN projection_projects p
@@ -495,7 +503,7 @@ export const makeRecapStatsQuery = (
         if (!isInboxEnabled()) {
           return yield* Effect.fail(
             new WsRpcError({
-              message: "The Inbox is available in Synara Beta.",
+              message: "The Inbox is unavailable on this host.",
               code: "FEATURE_UNAVAILABLE",
               retryable: false,
             }),

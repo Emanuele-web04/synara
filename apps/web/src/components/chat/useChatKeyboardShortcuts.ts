@@ -12,6 +12,7 @@ import { isMacNavigatorPlatform } from "~/lib/utils";
 import { projectScriptIdFromCommand } from "~/projectScripts";
 import { isElectron } from "../../env";
 import { resolveShortcutCommand } from "../../keybindings";
+import { focusedDockTerminalPaneId } from "../../hooks/useTerminalSurfaceController";
 import { isEditableEventTarget } from "../../lib/editableEventTarget";
 import { isTerminalFocused } from "../../lib/terminalFocus";
 import type { Project } from "../../types";
@@ -26,6 +27,7 @@ import { useChatWorkLog } from "./useChatWorkLog";
 import { useComposerVoiceController } from "./useComposerVoiceController";
 import { toastManager } from "../ui/toast";
 import type { ComposerModelSelectionOptions } from "./ComposerModelPicker";
+import { MODEL_PICKER_POPUP_ATTRIBUTE } from "./ComposerModelPicker.logic";
 function eventTargetsComposer(
   event: globalThis.KeyboardEvent,
   composerForm: HTMLFormElement | null,
@@ -43,6 +45,7 @@ function canHandleComposerPickerShortcut(
   if (eventTargetsComposer(event, composerForm)) return true;
   const target = event.target;
   return (
+    (target instanceof Element && target.closest(`[${MODEL_PICKER_POPUP_ATTRIBUTE}]`) !== null) ||
     target === document.body ||
     target === document.documentElement ||
     document.activeElement === document.body ||
@@ -92,14 +95,11 @@ interface ChatKeyboardShortcutsInput {
     selectionOptions?: ComposerModelSelectionOptions,
   ) => Promise<void>;
   handleTraitsPickerOpenChange: (open: boolean) => void;
+  cycleEffort: () => boolean;
   toggleTerminalVisibility: ReturnType<
     typeof useChatTerminalController
   >["toggleTerminalVisibility"];
   setTerminalOpen: ReturnType<typeof useChatTerminalController>["setTerminalOpen"];
-  splitTerminalRight: ReturnType<typeof useChatTerminalController>["splitTerminalRight"];
-  splitTerminalLeft: ReturnType<typeof useChatTerminalController>["splitTerminalLeft"];
-  splitTerminalDown: ReturnType<typeof useChatTerminalController>["splitTerminalDown"];
-  splitTerminalUp: ReturnType<typeof useChatTerminalController>["splitTerminalUp"];
   closeTerminal: ReturnType<typeof useChatTerminalController>["closeTerminal"];
   createTerminalFromShortcut: ReturnType<
     typeof useChatTerminalController
@@ -111,6 +111,8 @@ interface ChatKeyboardShortcutsInput {
     typeof useChatTerminalController
   >["closeActiveWorkspaceView"];
   setTerminalWorkspaceTab: ReturnType<typeof useChatTerminalController>["setTerminalWorkspaceTab"];
+  onCloseActiveThreadTab: () => boolean;
+  onCloseDockTerminalPane: (paneId: string) => void;
   onToggleDiff: () => void;
   commitAndPushTriggerRef: RefObject<(() => void) | null>;
   showGitActions: boolean;
@@ -155,17 +157,16 @@ export function useChatKeyboardShortcuts({
   selectedModel,
   onProviderModelSelect,
   handleTraitsPickerOpenChange,
+  cycleEffort,
   toggleTerminalVisibility,
   setTerminalOpen,
-  splitTerminalRight,
-  splitTerminalLeft,
-  splitTerminalDown,
-  splitTerminalUp,
   closeTerminal,
   createTerminalFromShortcut,
   openNewFullWidthTerminal,
   closeActiveWorkspaceView,
   setTerminalWorkspaceTab,
+  onCloseActiveThreadTab,
+  onCloseDockTerminalPane,
   onToggleDiff,
   commitAndPushTriggerRef,
   showGitActions,
@@ -246,6 +247,10 @@ export function useChatKeyboardShortcuts({
         !isComposerApprovalState &&
         canHandleComposerPickerShortcut(event, composerFormRef.current);
       const shortcutContext = {
+        composerFocus:
+          eventTargetsComposer(event, composerFormRef.current) ||
+          (event.target instanceof Element &&
+            event.target.closest(`[${MODEL_PICKER_POPUP_ATTRIBUTE}]`) !== null),
         terminalFocus: isTerminalFocused(),
         terminalOpen: Boolean(terminalState.terminalOpen),
         terminalWorkspaceOpen,
@@ -258,6 +263,22 @@ export function useChatKeyboardShortcuts({
         context: shortcutContext,
       });
       if (!command) return;
+
+      if (command === "model.effort.next") {
+        if (
+          !shortcutContext.composerFocus ||
+          isTerminalFocused() ||
+          isVoiceRecording ||
+          isVoiceTranscribing ||
+          isComposerApprovalState ||
+          event.isComposing
+        )
+          return;
+        if (!cycleEffort()) return;
+        event.preventDefault();
+        event.stopPropagation();
+        return;
+      }
 
       if (command === "composer.focus.toggle") {
         if (isComposerApprovalState || isVoiceRecording || isVoiceTranscribing) return;
@@ -331,49 +352,17 @@ export function useChatKeyboardShortcuts({
         return;
       }
 
-      if (command === "terminal.split" || command === "terminal.splitRight") {
-        event.preventDefault();
-        event.stopPropagation();
-        if (!terminalState.terminalOpen) {
-          setTerminalOpen(true);
-        }
-        splitTerminalRight();
-        return;
-      }
-
-      if (command === "terminal.splitLeft") {
-        event.preventDefault();
-        event.stopPropagation();
-        if (!terminalState.terminalOpen) {
-          setTerminalOpen(true);
-        }
-        splitTerminalLeft();
-        return;
-      }
-
-      if (command === "terminal.splitDown") {
-        event.preventDefault();
-        event.stopPropagation();
-        if (!terminalState.terminalOpen) {
-          setTerminalOpen(true);
-        }
-        splitTerminalDown();
-        return;
-      }
-
-      if (command === "terminal.splitUp") {
-        event.preventDefault();
-        event.stopPropagation();
-        if (!terminalState.terminalOpen) {
-          setTerminalOpen(true);
-        }
-        splitTerminalUp();
-        return;
-      }
-
       if (command === "terminal.close") {
         event.preventDefault();
         event.stopPropagation();
+        // A dock-terminal pane in the regular chat layout runs under the dock's
+        // synthetic scope, so terminalOpen/activeTerminalId cannot reach it — the
+        // focused element identifies which dock pane owns the keydown.
+        const dockPaneId = focusedDockTerminalPaneId(activeThreadId);
+        if (dockPaneId !== null) {
+          void onCloseDockTerminalPane(dockPaneId);
+          return;
+        }
         if (!terminalState.terminalOpen) return;
         closeTerminal(terminalState.activeTerminalId);
         return;
@@ -413,6 +402,17 @@ export function useChatKeyboardShortcuts({
         event.stopPropagation();
         if (!terminalWorkspaceOpen) return;
         setTerminalWorkspaceTab("chat");
+        return;
+      }
+
+      // Regular chat surface (no terminal focus, no workspace): Cmd/Ctrl+W must not
+      // fall through to the window-close menu role — it closes the active thread tab.
+      // When no tab strip is mounted (tabs hidden, split view, editor rail) or the strip
+      // has no matching tab, leave the chord untouched instead of eating it.
+      if (command === "threadTab.close") {
+        if (!onCloseActiveThreadTab()) return;
+        event.preventDefault();
+        event.stopPropagation();
         return;
       }
 
@@ -507,10 +507,6 @@ export function useChatKeyboardShortcuts({
     openNewFullWidthTerminal,
     runProjectScript,
     keybindings,
-    splitTerminalDown,
-    splitTerminalLeft,
-    splitTerminalRight,
-    splitTerminalUp,
     terminalWorkspaceChatTabActive,
     terminalWorkspaceOpen,
     terminalWorkspaceTerminalTabActive,
@@ -527,12 +523,15 @@ export function useChatKeyboardShortcuts({
     hasLiveTurn,
     handleModelPickerOpenChange,
     handleTraitsPickerOpenChange,
+    cycleEffort,
     shouldRenderChatPaneContent,
     isComposerApprovalState,
     isVoiceRecording,
     isVoiceTranscribing,
     onVoiceRecordingEnter,
     setTerminalWorkspaceTab,
+    onCloseActiveThreadTab,
+    onCloseDockTerminalPane,
     surfaceMode,
     scheduleComposerFocus,
     toggleComposerFocus,

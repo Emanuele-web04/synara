@@ -315,7 +315,10 @@ function ensurePrivateProviderHome(homePath: string, platform: NodeJS.Platform):
   }
 }
 
-function providerHomeEnvironment(homePath: string, platform: NodeJS.Platform): NodeJS.ProcessEnv {
+export function providerHomeEnvironment(
+  homePath: string,
+  platform: NodeJS.Platform,
+): NodeJS.ProcessEnv {
   const pathApi = platform === "win32" ? NodePath.win32 : NodePath.posix;
   const environment: NodeJS.ProcessEnv = {
     HOME: homePath,

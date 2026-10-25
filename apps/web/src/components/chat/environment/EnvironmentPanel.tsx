@@ -8,12 +8,14 @@
 //          use floating overlay only. The card surface and content are identical either way.
 // Layer: Environment panel container
 
+import { SidePanelOverlay } from "~/components/chat/SidePanelOverlay";
 import type {
   AutomationDefinition,
   EditorId,
   MessageId,
   PinnedMessage,
   ProjectId,
+  ProjectScript,
   ProviderKind,
   ResolvedKeybindingsConfig,
   ThreadId,
@@ -24,14 +26,8 @@ import type { ReactNode } from "react";
 
 import { useAppSettings } from "~/appSettings";
 import { SETTINGS_TARGETS } from "~/settingsNavigation";
-import {
-  ENVIRONMENT_PANEL_MOTION_CLASS,
-  ENVIRONMENT_PANEL_OVERLAY_WRAPPER_CLASS_NAME as BASE_ENVIRONMENT_PANEL_OVERLAY_WRAPPER_CLASS_NAME,
-  ENVIRONMENT_PANEL_SURFACE_CLASS_NAME,
-} from "~/components/chat/composerPickerStyles";
 import BranchToolbar, { type BranchToolbarProps } from "~/components/BranchToolbar";
 import ChatMarkdown from "~/components/ChatMarkdown";
-import { FolderClosed } from "~/components/FolderClosed";
 import GitActionsControl from "~/components/GitActionsControl";
 import { DiffStat } from "~/components/ui/diff-stat";
 import { IconButton } from "~/components/ui/icon-button";
@@ -39,8 +35,7 @@ import { toastManager } from "~/components/ui/toast";
 import { isElectron } from "~/env";
 import { basenameOfPath } from "~/file-icons";
 import type { RepoDiffTotals } from "~/hooks/useRepoDiffTotals";
-import { ArrowUpRightIcon, ChangesIcon, GitHubIcon, SettingsIcon } from "~/lib/icons";
-import { cn } from "~/lib/utils";
+import { ChangesIcon, ExternalLinkIcon, GitHubIcon, SettingsIcon, FolderIcon } from "~/lib/icons";
 import { readNativeApi } from "~/nativeApi";
 import { revealFolderInShell } from "~/lib/revealFolder";
 import { deleteActiveThreadFromClient } from "~/lib/activeThreadDelete";
@@ -55,6 +50,8 @@ import { useTemporaryThreadStore } from "~/temporaryThreadStore";
 import { useRightDockStore } from "~/rightDockStore";
 
 import { EnvironmentEditorSection } from "./EnvironmentEditorSection";
+import { EnvironmentActionsSection } from "./EnvironmentActionsSection";
+import type { NewProjectScriptInput } from "../ProjectActionDialog";
 import {
   EnvironmentAutomationsSection,
   type EnvironmentAutomationPanelItem,
@@ -68,6 +65,8 @@ import {
   type EnvironmentSidechatPanelItem,
 } from "./EnvironmentSidechatsSection";
 import { EnvironmentNotesSection } from "./EnvironmentNotesSection";
+import { EnvironmentSubagentsSection } from "./EnvironmentSubagentsSection";
+import type { EnvironmentSubagentRoster } from "./EnvironmentSubagentsSection.logic";
 import { EnvironmentPinnedSection } from "./EnvironmentPinnedSection";
 import { EnvironmentProjectInstructionsSection } from "./EnvironmentProjectInstructionsSection";
 import { ENVIRONMENT_PANEL_RECAP_MARKDOWN_CLASS_NAME } from "./environmentPanelStyles";
@@ -86,11 +85,6 @@ import {
 // the chat content by this amount clears the overlay while leaving the transcript's
 // scrollbar pinned to the viewport's far right.
 export const ENVIRONMENT_DOCKED_CONTENT_INSET_PX = 312;
-
-const ENVIRONMENT_PANEL_OVERLAY_WRAPPER_CLASS_NAME = cn(
-  BASE_ENVIRONMENT_PANEL_OVERLAY_WRAPPER_CLASS_NAME,
-  "items-end gap-3 overflow-y-auto",
-);
 
 export interface EnvironmentPanelProps {
   /** Drives the slide-in/out transition; the panel stays mounted so CSS can interpolate. */
@@ -130,12 +124,17 @@ export interface EnvironmentPanelProps {
   threadAutomations: readonly EnvironmentAutomationPanelItem[];
   /** Child side chats for a host thread. Null suppresses the section in embedded side chats. */
   sidechats: readonly EnvironmentSidechatPanelItem[] | null;
+  /**
+   * Every subagent the thread (or, from a subagent thread, its parent) spawned. The panel
+   * shows a compact summary that opens the full list in the right dock. Null hides it.
+   */
+  subagentRoster?: EnvironmentSubagentRoster | null;
   /** Non-null when the diff panel cannot be opened (e.g. no repo / no changes yet). */
   diffDisabledReason?: string | null;
   /** Shared diff totals from ChatView so the mounted panel does not duplicate patch parsing. */
   diffTotals: RepoDiffTotals;
-  /** Env/branch picker config — `variant` is supplied by the panel. */
-  branchToolbar: Omit<BranchToolbarProps, "variant">;
+  /** Env/branch picker config; null for sidechats that keep their assigned workspace. */
+  branchToolbar: Omit<BranchToolbarProps, "variant"> | null;
   /** Compact idle-generated chat memory for the top of the panel. */
   recap?: {
     readonly text: string | null;
@@ -164,6 +163,21 @@ export interface EnvironmentPanelProps {
   onProjectInstructionsChange: (projectId: ProjectId, instructions: string) => void;
   /** Copy/append current project instructions into the active thread's notepad. */
   onCopyProjectInstructionsToNotes: () => void;
+  /**
+   * The active project's actions (scripts), shown in the Actions section — the one place the
+   * first action can be created now that the top bar's "Add action" slot is the New thread
+   * button. Undefined on non-project threads hides the section.
+   */
+  projectActions?: {
+    readonly scripts: readonly ProjectScript[];
+    readonly onRunScript: (script: ProjectScript) => void;
+    readonly onAddScript: (input: NewProjectScriptInput) => Promise<void> | void;
+    readonly onUpdateScript: (
+      scriptId: string,
+      input: NewProjectScriptInput,
+    ) => Promise<void> | void;
+    readonly onDeleteScript: (scriptId: string) => Promise<void> | void;
+  };
   /** Toggle the Diff panel/route (same handler the header diff toggle used). */
   onToggleDiff: () => void;
   /** Open the shared automation editor for a thread-bound automation row. */
@@ -236,6 +250,7 @@ export function EnvironmentPanel({
   diffOpen,
   threadAutomations,
   sidechats,
+  subagentRoster: subagentRosterProp,
   diffDisabledReason: diffDisabledReasonProp,
   diffTotals,
   branchToolbar,
@@ -248,6 +263,7 @@ export function EnvironmentPanel({
   canCopyProjectInstructionsToNotes,
   onProjectInstructionsChange,
   onCopyProjectInstructionsToNotes,
+  projectActions,
   onToggleDiff,
   onOpenAutomation,
   onOpenGithubRepository,
@@ -266,6 +282,7 @@ export function EnvironmentPanel({
   const groupFolderPath = groupFolderPathProp ?? null;
   const diffDisabledReason = diffDisabledReasonProp ?? null;
   const recap = recapProp ?? null;
+  const subagentRoster = subagentRosterProp ?? null;
   const onOpenEditorView = onOpenEditorViewProp ?? null;
   const navigate = useNavigate();
   const queryClient = useQueryClient();
@@ -324,13 +341,13 @@ export function EnvironmentPanel({
 
       {showGroupFolderRow && groupFolderPath ? (
         <EnvironmentRow
-          icon={<FolderClosed className={ENVIRONMENT_ROW_ICON_CLASS_NAME} aria-hidden />}
+          icon={<FolderIcon className={ENVIRONMENT_ROW_ICON_CLASS_NAME} aria-hidden />}
           label={
             <span className="truncate" title={groupFolderPath}>
               {basenameOfPath(groupFolderPath) || groupFolderPath}
             </span>
           }
-          trailing={<ArrowUpRightIcon className={ENVIRONMENT_ROW_ICON_CLASS_NAME} aria-hidden />}
+          trailing={<ExternalLinkIcon className={ENVIRONMENT_ROW_ICON_CLASS_NAME} aria-hidden />}
           onClick={() => {
             revealFolderInShell({ path: groupFolderPath, onRevealed: onClose });
           }}
@@ -350,7 +367,7 @@ export function EnvironmentPanel({
         />
       ) : null}
 
-      {isGitRepo ? <BranchToolbar {...branchToolbar} variant="panel" /> : null}
+      {isGitRepo && branchToolbar ? <BranchToolbar {...branchToolbar} variant="panel" /> : null}
 
       {showGitActions ? (
         <GitActionsControl
@@ -358,6 +375,17 @@ export function EnvironmentPanel({
           activeThreadId={activeThreadId}
           variant="panel"
           onRegisterCommitAndPushTrigger={onRegisterCommitAndPushTrigger}
+        />
+      ) : null}
+
+      {settings.showEnvironmentActions && projectActions ? (
+        <EnvironmentActionsSection
+          scripts={projectActions.scripts}
+          keybindings={keybindings}
+          onRunScript={projectActions.onRunScript}
+          onAddScript={projectActions.onAddScript}
+          onUpdateScript={projectActions.onUpdateScript}
+          onDeleteScript={projectActions.onDeleteScript}
         />
       ) : null}
 
@@ -441,6 +469,16 @@ export function EnvironmentPanel({
         />
       ) : null}
 
+      {settings.showEnvironmentSubagents && subagentRoster && activeThreadId ? (
+        <EnvironmentSubagentsSection
+          roster={subagentRoster}
+          onOpenList={() => {
+            openRightDockPane(activeThreadId, { kind: "subagents" });
+            onClose();
+          }}
+        />
+      ) : null}
+
       {/*
         Optional sections below the git block. Each renders its own leading divider only when it
         actually shows, so toggling any section via the header gear menu never leaves a doubled or
@@ -453,7 +491,7 @@ export function EnvironmentPanel({
           <EnvironmentRow
             icon={<GitHubIcon className={ENVIRONMENT_ROW_ICON_CLASS_NAME} aria-hidden />}
             label={<span className="truncate">{githubRepository.nameWithOwner}</span>}
-            trailing={<ArrowUpRightIcon className={ENVIRONMENT_ROW_ICON_CLASS_NAME} aria-hidden />}
+            trailing={<ExternalLinkIcon className={ENVIRONMENT_ROW_ICON_CLASS_NAME} aria-hidden />}
             onClick={() => {
               onOpenGithubRepository(githubRepository.url);
               onClose();
@@ -549,25 +587,14 @@ export function EnvironmentPanel({
   // split panes and when the right dock is open). Docked mode additionally insets transcript
   // content; floating overlays only without stealing flex width from the narrow chat pane.
   return (
-    <div
-      className={ENVIRONMENT_PANEL_OVERLAY_WRAPPER_CLASS_NAME}
-      data-environment-panel-variant={variant}
-      aria-hidden={!open}
-      inert={!open}
+    <SidePanelOverlay
+      open={open}
+      variant={variant}
+      className="items-end gap-3 overflow-y-auto"
+      cardClassName="max-h-full w-72"
+      trailing={railBottom}
     >
-      <div
-        className={cn(
-          ENVIRONMENT_PANEL_SURFACE_CLASS_NAME,
-          ENVIRONMENT_PANEL_MOTION_CLASS,
-          "flex max-h-full w-72 flex-col",
-          open
-            ? "pointer-events-auto translate-x-0 opacity-100"
-            : "pointer-events-none translate-x-full opacity-0",
-        )}
-      >
-        <div className="min-h-0 overflow-y-auto">{content}</div>
-      </div>
-      {railBottom}
-    </div>
+      <div className="min-h-0 overflow-y-auto">{content}</div>
+    </SidePanelOverlay>
   );
 }

@@ -2,7 +2,7 @@
 // Purpose: Shared, ref-counted subscription to the desktop's audio level
 //   (the Mac's audio output, the microphone, or both).
 // Layer: Web runtime helper (desktop bridge consumer)
-// Exports: AUDIO_LEVEL_SUBSCRIBERS, isAudioLevelAvailable
+// Exports: getAudioLevelSubscriber, isAudioLevelAvailable
 
 import type { DesktopAudioLevelSource } from "@synara/contracts";
 import { AUDIO_TRAIL_BETA_FEATURE } from "@synara/shared/betaFeatures";
@@ -10,10 +10,17 @@ import { isBetaFeatureOn } from "~/betaFeatures";
 import { isMacNavigatorPlatform } from "./utils";
 
 type LevelListener = (level: number) => void;
+type LevelSubscriber = (listener: LevelListener) => () => void;
 
-const listeners = new Map<LevelListener, DesktopAudioLevelSource>();
+/** A source plus, for the microphone, the Core Audio UID ("" = Mac default input). */
+interface AudioLevelRequest {
+  source: DesktopAudioLevelSource;
+  microphoneId: string;
+}
+
+const listeners = new Map<LevelListener, AudioLevelRequest>();
 let stopBridgeListener: (() => void) | null = null;
-let sourceOnDesktop: DesktopAudioLevelSource | null = null;
+let requestOnDesktop: AudioLevelRequest | null = null;
 let releaseTimer: ReturnType<typeof setTimeout> | null = null;
 
 // Remounts (thread switches, layout changes) drop and re-add the only listener
@@ -33,48 +40,58 @@ export function isAudioLevelAvailable(): boolean {
   );
 }
 
-// The newest subscriber's source wins; every subscriber reads the same setting.
-function wantedSource(): DesktopAudioLevelSource | null {
+// The newest subscriber's request wins; every subscriber reads the same settings.
+function wantedRequest(): AudioLevelRequest | null {
   if (document.visibilityState !== "visible") return null;
-  let source: DesktopAudioLevelSource | null = null;
-  for (const current of listeners.values()) source = current;
-  return source;
+  let request: AudioLevelRequest | null = null;
+  for (const current of listeners.values()) request = current;
+  return request;
+}
+
+function sameRequest(left: AudioLevelRequest | null, right: AudioLevelRequest | null): boolean {
+  return left?.source === right?.source && left?.microphoneId === right?.microphoneId;
 }
 
 // The desktop only reads audio while a visible window wants it, so a hidden or
 // minimized Synara releases the audio tap and microphone (and their indicators).
 function syncDesktopSubscription(): void {
   if (!window.desktopBridge?.audioLevel) return;
-  const wanted = wantedSource();
+  const wanted = wantedRequest();
   if (releaseTimer) {
     clearTimeout(releaseTimer);
     releaseTimer = null;
   }
-  if (wanted === sourceOnDesktop) return;
+  if (sameRequest(wanted, requestOnDesktop)) return;
   if (wanted) {
-    setDesktopSource(wanted);
+    setDesktopRequest(wanted);
     return;
   }
   for (const listener of listeners.keys()) listener(0);
   // Hiding the window releases at once; losing the last listener waits a beat.
-  if (document.visibilityState !== "visible") setDesktopSource(null);
-  else releaseTimer = setTimeout(() => setDesktopSource(null), RELEASE_DELAY_MS);
+  if (document.visibilityState !== "visible") setDesktopRequest(null);
+  else releaseTimer = setTimeout(() => setDesktopRequest(null), RELEASE_DELAY_MS);
 }
 
-function setDesktopSource(source: DesktopAudioLevelSource | null): void {
+function setDesktopRequest(request: AudioLevelRequest | null): void {
   releaseTimer = null;
-  sourceOnDesktop = source;
-  void window.desktopBridge?.audioLevel?.setSource(source).catch(() => {
-    sourceOnDesktop = null;
+  requestOnDesktop = request;
+  const audioLevel = window.desktopBridge?.audioLevel;
+  const pending = request
+    ? request.source === "system" || !request.microphoneId
+      ? audioLevel?.setSource(request.source)
+      : audioLevel?.setSource(request.source, request.microphoneId)
+    : audioLevel?.setSource(null);
+  void pending?.catch(() => {
+    requestOnDesktop = null;
   });
 }
 
-/** Streams levels (0..1) from `source` to `listener` until the returned function is called. */
-function subscribeAudioLevel(source: DesktopAudioLevelSource, listener: LevelListener): () => void {
+/** Streams levels (0..1) for `request` to `listener` until the returned function is called. */
+function subscribeAudioLevel(request: AudioLevelRequest, listener: LevelListener): () => void {
   const bridge = window.desktopBridge?.audioLevel;
   if (!bridge || !isAudioLevelAvailable()) return () => undefined;
 
-  listeners.set(listener, source);
+  listeners.set(listener, request);
   if (!stopBridgeListener) {
     const stopLevels = bridge.onLevel((level) => {
       for (const current of listeners.keys()) current(level);
@@ -97,15 +114,27 @@ function subscribeAudioLevel(source: DesktopAudioLevelSource, listener: LevelLis
   };
 }
 
+const subscriberCache = new Map<string, LevelSubscriber>();
+
 /**
- * One stable subscribe function per source, so a component can pass it as a
- * prop without re-subscribing (and restarting the native reader) every render.
+ * One stable subscribe function per source and microphone, so a component can
+ * pass it as a prop without re-subscribing (and restarting the native reader)
+ * every render. `microphoneId` is a Core Audio UID; "" follows the Mac default.
  */
-export const AUDIO_LEVEL_SUBSCRIBERS: Record<
-  DesktopAudioLevelSource,
-  (listener: LevelListener) => () => void
-> = {
-  system: (listener) => subscribeAudioLevel("system", listener),
-  microphone: (listener) => subscribeAudioLevel("microphone", listener),
-  both: (listener) => subscribeAudioLevel("both", listener),
-};
+export function getAudioLevelSubscriber(
+  source: DesktopAudioLevelSource,
+  microphoneId = "",
+): LevelSubscriber {
+  // The Mac's audio output ignores the microphone choice.
+  const request: AudioLevelRequest = {
+    source,
+    microphoneId: source === "system" ? "" : microphoneId,
+  };
+  const key = `${request.source}\u0000${request.microphoneId}`;
+  let subscriber = subscriberCache.get(key);
+  if (!subscriber) {
+    subscriber = (listener) => subscribeAudioLevel(request, listener);
+    subscriberCache.set(key, subscriber);
+  }
+  return subscriber;
+}

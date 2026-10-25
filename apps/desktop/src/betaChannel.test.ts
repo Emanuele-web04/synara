@@ -9,6 +9,17 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 const spawnCalls: { command: string; env: NodeJS.ProcessEnv | undefined }[] = [];
 
+// These fixtures model a clean machine; an installed system app must not
+// bypass their injected installer or launch the real application bundle.
+vi.mock("node:fs", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs")>();
+  return {
+    ...actual,
+    existsSync: (path: Parameters<typeof actual.existsSync>[0]) =>
+      String(path) === "/Applications/Synara Beta.app" ? false : actual.existsSync(path),
+  };
+});
+
 vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:child_process")>();
   return {

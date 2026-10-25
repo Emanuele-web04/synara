@@ -5,6 +5,12 @@ import type {
   ExternalMcpStdioConfiguration,
 } from "@synara/contracts";
 
+// `synara` is reserved by the Codex provider for Synara's managed, in-process
+// HTTP gateway. External clients run a separate stdio server, so they must use
+// a different entry name or Codex merges the two transports when it layers the
+// user's config over Synara's provider overlay.
+export const EXTERNAL_MCP_SERVER_NAME = "synara-external" as const;
+
 export interface ExternalMcpClientConfiguration {
   readonly format: "command" | "json";
   readonly value: string;
@@ -41,7 +47,7 @@ function jsonConfiguration(stdio: ExternalMcpStdioConfiguration): string {
   return JSON.stringify(
     {
       mcpServers: {
-        synara: {
+        [EXTERNAL_MCP_SERVER_NAME]: {
           command: stdio.command,
           args: stdio.args,
           ...(stdio.env ? { env: stdio.env } : {}),
@@ -66,7 +72,16 @@ export function buildExternalMcpClientConfiguration(
     return {
       format: "command",
       value: shellCommand(
-        ["codex", "mcp", "add", "synara", ...environment, "--", stdio.command, ...stdio.args],
+        [
+          "codex",
+          "mcp",
+          "add",
+          EXTERNAL_MCP_SERVER_NAME,
+          ...environment,
+          "--",
+          stdio.command,
+          ...stdio.args,
+        ],
         platform,
       ),
       copyLabel: "Copy Codex command",
@@ -90,7 +105,7 @@ export function buildExternalMcpClientConfiguration(
           "add",
           "--scope",
           "user",
-          "synara",
+          EXTERNAL_MCP_SERVER_NAME,
           ...environment,
           "--",
           stdio.command,
@@ -156,7 +171,7 @@ export function buildExternalMcpSetupPrompt(input: {
   }
   sections.push(
     [
-      'Step 2 — Register Synara as a stdio MCP server named "synara" in your own configuration, using whichever mechanism your app supports:',
+      `Step 2 — Register Synara as a stdio MCP server named "${EXTERNAL_MCP_SERVER_NAME}" in your own configuration, using whichever mechanism your app supports:`,
       "",
       `If you are Codex, run: ${codex.value}`,
       `If you are Claude Code, run: ${claude.value}`,

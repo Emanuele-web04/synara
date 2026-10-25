@@ -60,3 +60,56 @@ export function providerCliCommandName(input: {
     input.instanceId,
   )}`;
 }
+
+// Login entry points verified against each CLI's authentication documentation.
+// Pi-family /login is a TUI command: never pass it as a model prompt argument.
+export const PROVIDER_AUTHENTICATION = {
+  codex: {
+    args: ["login"],
+    instructions: "Complete the browser sign-in. Synara will check this account afterward.",
+  },
+  claudeAgent: {
+    args: ["auth", "login"],
+    instructions:
+      "Choose your login method and complete the browser sign-in, including any Apple or organization prompts.",
+  },
+  cursor: { args: ["login"], instructions: "Complete the Cursor browser sign-in." },
+  devin: {
+    args: ["auth", "login"],
+    instructions:
+      "Choose your Devin or Windsurf login and follow the browser or enterprise sign-in prompts.",
+  },
+  antigravity: {
+    args: [],
+    instructions:
+      "Follow Antigravity's sign-in prompts. Your browser or system credential store may ask for approval.",
+  },
+  grok: {
+    args: ["login"],
+    instructions: "Complete the Grok browser sign-in or the authorization steps shown below.",
+  },
+  droid: { args: [], instructions: "Follow Droid's startup and browser sign-in prompts." },
+  opencode: {
+    args: ["auth", "login"],
+    instructions: "Choose a model provider, then complete its OAuth or API-key setup.",
+  },
+  pi: {
+    args: [],
+    instructions:
+      "Complete any startup prompts, then choose Sign-in options to select a model provider and authenticate.",
+    interactiveCommand: "/login",
+  },
+  omp: {
+    args: [],
+    instructions:
+      "Complete any startup prompts, then choose Sign-in options to select a model provider and authenticate.",
+    interactiveCommand: "/login",
+  },
+} as const satisfies Record<
+  ProviderKind,
+  {
+    readonly args: readonly string[];
+    readonly instructions: string;
+    readonly interactiveCommand?: string;
+  }
+>;

@@ -321,6 +321,24 @@ export function planComposerEffortChange(input: {
   return { kind: "options", patch: buildProviderOptionPatch(provider, optionId, nextOption.value) };
 }
 
+// Keyboard cycling changes persisted effort only. Prompt-injected levels belong
+// to explicit prompt edits, and an existing Ultrathink prefix keeps its lock.
+export function planComposerEffortCycle(input: {
+  provider: ProviderKind;
+  selection: ComposerTraitSelection;
+  prompt: string;
+}): ComposerEffortChangePlan | null {
+  const { selection } = input;
+  if (selection.ultrathinkPromptControlled) return null;
+  const levels = selection.effortLevels.filter(
+    (level) => !selection.promptInjectedValues.includes(level.value),
+  );
+  if (levels.length < 2) return null;
+  const currentIndex = levels.findIndex((level) => level.value === selection.effort);
+  const nextLevel = levels[(currentIndex + 1) % levels.length];
+  return nextLevel ? planComposerEffortChange({ ...input, value: nextLevel.value }) : null;
+}
+
 // Index of the effort the slider thumb should rest on. While Ultrathink is
 // pinned by the prompt the resolved `effort` falls back to the default, so the
 // thumb follows the prompt-injected level instead when the ladder exposes it.

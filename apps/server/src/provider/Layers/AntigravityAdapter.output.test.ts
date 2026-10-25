@@ -38,6 +38,8 @@ const envelope = (error?: string, num_turns = 1, status = error ? "ERROR" : "SUC
 });
 async function runPrintTurn(input: {
   stdout?: string;
+  stdoutChunks?: string[];
+  stderr?: string;
   code?: number | null;
   signal?: NodeJS.Signals | null;
   hooks?: string[];
@@ -94,6 +96,8 @@ async function runPrintTurn(input: {
         ];
         yield* Effect.promise(() => fs.writeFile(eventFile, hooks.join("\n") + "\n"));
         if (input.stdout) child!.stdout!.emit("data", input.stdout);
+        for (const chunk of input.stdoutChunks ?? []) child!.stdout!.emit("data", chunk);
+        if (input.stderr) child!.stderr!.emit("data", input.stderr);
         if (input.interrupt) yield* adapter.interruptTurn(threadId);
         child!.emit("close", input.code === undefined ? 0 : input.code, input.signal ?? null);
         const events = Array.from(yield* Fiber.join(eventsFiber).pipe(Effect.timeout("3 seconds")));
@@ -140,6 +144,16 @@ describe("Antigravity structured output lifecycle", () => {
       expect(terminalPayload(events)).toMatchObject({ state: "completed" });
     },
   );
+  it("parses a complete split structured response larger than the diagnostic cap", async () => {
+    const response = "€".repeat(50_000);
+    const stdout = encode([{ event: "result", result: { status: "SUCCESS", response } }]);
+    const events = await runPrintTurn({
+      stdoutChunks: [stdout.slice(0, 61_000), stdout.slice(61_000)],
+    });
+    expect(textPayloads(events)).toEqual([{ streamKind: "assistant_text", delta: response }]);
+    expect(terminalPayload(events)).toMatchObject({ state: "completed" });
+  });
+
   it("explicit user interruption remains interrupted and suppresses late raw stdout", async () => {
     const events = await runPrintTurn({
       stdout: encode([done]),

@@ -32,6 +32,14 @@ async function renderMarkdown(text: string, cwd = "C:\\Users\\LENOVO\\synara") {
   return renderWithQueryClient(<ChatMarkdown text={text} cwd={cwd} isStreaming={false} />);
 }
 
+async function renderAutoDirectionMarkdown(text: string) {
+  const { default: ChatMarkdown } = await import("./ChatMarkdown");
+
+  return renderWithQueryClient(
+    <ChatMarkdown text={text} cwd={undefined} isStreaming={false} directionMode="auto-blocks" />,
+  );
+}
+
 async function renderUserMarkdown(text: string) {
   const { default: ChatMarkdown } = await import("./ChatMarkdown");
 
@@ -64,6 +72,28 @@ describe("streamingCodeHighlightIntervalMs", () => {
 });
 
 describe("ChatMarkdown", () => {
+  it("lets link-only Arabic and English blocks resolve independently", async () => {
+    const markup = await renderAutoDirectionMarkdown(
+      "[مرحبا بالعالم](https://example.com/rtl)\n\n[English text](https://example.com/ltr)",
+    );
+
+    expect(markup).toContain('<div class="chat-markdown');
+    expect(markup).toContain('data-direction-mode="auto-blocks"');
+    expect(markup).toContain('<p dir="auto"><a href="https://example.com/rtl"');
+    expect(markup).toContain('<p dir="auto"><a href="https://example.com/ltr"');
+    // The anchor must remain direction-neutral so its label participates in
+    // the parent paragraph's first-strong scan. A dir=auto anchor would create
+    // an isolation boundary and make link-only RTL paragraphs resolve LTR.
+    expect(markup).not.toContain('<a dir="auto"');
+  });
+
+  it("isolates technical inline content without hiding prose direction", async () => {
+    const markup = await renderAutoDirectionMarkdown("[مرحبا](https://example.com) ثم `npm test`");
+
+    expect(markup).toContain('<p dir="auto">');
+    expect(markup).toContain('<code dir="ltr">npm test</code>');
+  });
+
   it("renders GitHub alert blockquotes with a title and strips the marker", async () => {
     const markup = await renderMarkdown("> [!NOTE]\n> **Medium Risk**\n> Details");
 
@@ -72,6 +102,92 @@ describe("ChatMarkdown", () => {
     expect(markup).toContain(">Note</p>");
     expect(markup).not.toContain("[!NOTE]");
     expect(markup).toContain("<strong>Medium Risk</strong>");
+  });
+
+  it("renders <br> tags as line breaks instead of literal text", async () => {
+    const markup = await renderMarkdown(
+      "One<br>two<BR/>three\n\n| a |\n| - |\n| x<br />y |\n\nDone.\n\n<br>",
+    );
+
+    expect(markup).not.toContain("&lt;br");
+    expect(markup).toContain("One<br/>\ntwo<br/>\nthree");
+    expect(markup).toContain("x<br/>\ny");
+    expect(markup).toMatch(/<p>Done\.<\/p><\/div>$/);
+  });
+
+  it("keeps raw HTML escaped unless an authored preview opts in", async () => {
+    const escaped = await renderMarkdown("<details><summary>More</summary>text</details>");
+    expect(escaped).toContain("&lt;details&gt;");
+    expect(await renderUserMarkdown("<details>user HTML</details>")).toContain("&lt;details&gt;");
+
+    const { default: ChatMarkdown } = await import("./ChatMarkdown");
+    const rendered = renderWithQueryClient(
+      <ChatMarkdown
+        text="<details><summary>More</summary>text</details>"
+        cwd={undefined}
+        isStreaming={false}
+        parseHtml
+      />,
+    );
+    expect(rendered).toContain("<details>");
+    expect(rendered).toContain("<summary>More</summary>");
+    expect(rendered).not.toContain("&lt;details&gt;");
+  });
+
+  it("sanitizes dangerous HTML in authored previews", async () => {
+    const { default: ChatMarkdown } = await import("./ChatMarkdown");
+    const rendered = renderWithQueryClient(
+      <ChatMarkdown
+        text={
+          '<script>alert("xss")</script><a href="javascript:alert(1)" onclick="alert(2)">safe label</a><img src="data:text/html,evil" onerror="alert(3)"><iframe src="https://example.com"></iframe><form><input name="location"></form>'
+        }
+        cwd={undefined}
+        isStreaming={false}
+        parseHtml
+      />,
+    );
+    expect(rendered).not.toContain("<script");
+    expect(rendered).not.toContain('alert("xss")');
+    expect(rendered).not.toContain("javascript:");
+    expect(rendered).toContain("safe label");
+    expect(rendered).not.toContain("onclick");
+    expect(rendered).not.toContain("onerror");
+    expect(rendered).not.toContain("data:text/html");
+    expect(rendered).not.toContain("<iframe");
+    expect(rendered).not.toContain("<form");
+    expect(rendered).not.toContain('name="location"');
+  });
+
+  it("preserves Markdown features in authored HTML previews", async () => {
+    const { default: ChatMarkdown } = await import("./ChatMarkdown");
+    const text = [
+      "Euler $x^2$.",
+      "$$\n x^2 \n$$",
+      "> [!NOTE]\n> Searchable alert",
+      "[local notes](file:///tmp/notes.md)",
+      "[thread link](thread://thread-abc) and [Synara link](synara://thread/thread-def)",
+      "- [ ] Task",
+    ].join("\n\n");
+    const rendered = renderWithQueryClient(
+      <ChatMarkdown
+        text={text}
+        cwd="/tmp"
+        parseHtml
+        findQuery="Searchable"
+        onOpenThread={() => {}}
+      />,
+    );
+    expect(rendered).toContain('class="katex"');
+    expect(rendered).toContain("katex-display");
+    expect(rendered).toContain('data-github-alert="note"');
+    expect(rendered).toContain('data-chat-find-match="true"');
+    expect(rendered).toContain("/tmp/notes.md");
+    expect(rendered).toContain('title="/tmp/notes.md"');
+    expect(rendered).toContain('href="/tmp/notes.md"');
+    expect(rendered).toContain('type="checkbox"');
+    expect(rendered).not.toContain("thread://");
+    expect(rendered).not.toContain("synara://");
+    expect(rendered).toContain("<button");
   });
 
   it("leaves blockquotes with inline text after the marker as plain quotes", async () => {
@@ -576,4 +692,141 @@ it("keeps dollar filenames separate from math and rejects escaped delimiters", a
   expect(markup).not.toContain("foo.md");
   expect(markup).not.toContain("alias.md");
   expect(markup.match(/href=/g)).toHaveLength(1);
+});
+
+describe("ChatMarkdown streaming block split", () => {
+  // Each sample renders block by block while streaming (split path) and as a
+  // single parse once complete; both must produce identical markup.
+  const PARITY_CORPUS: Readonly<Record<string, string>> = {
+    prose: [
+      "# Plan",
+      "",
+      "Read `/tmp/project/src/app.ts` and [docs](https://example.com) first.",
+      "",
+      "## Steps",
+      "",
+      "Costs $5 and $10, with $x^2$ inline math.",
+      "",
+      "---",
+      "",
+      "Closing [[notes/todo]] link.",
+    ].join("\n"),
+    fences: [
+      "Intro.",
+      "",
+      "```ts",
+      "const a = 1;",
+      "",
+      "# not a heading",
+      "```",
+      "After the fence.",
+      "",
+      "~~~",
+      "raw",
+      "~~~",
+      "",
+      "## Done",
+    ].join("\n"),
+    lists: [
+      "- one",
+      "- two",
+      "",
+      "  continued",
+      "",
+      "1. Step",
+      "",
+      "   ```bash",
+      "   npm i",
+      "",
+      "   npm test",
+      "   ```",
+      "",
+      "2. Next",
+      "",
+      "## Tasks",
+      "",
+      "- [ ] open task",
+      "- [x] done task",
+      "",
+      "## End",
+    ].join("\n"),
+    tables: [
+      "## Table",
+      "",
+      "| a | b | c |",
+      "|---|---|",
+      "| 1 | 2 | 3 |",
+      "",
+      "## Next",
+      "",
+      "Text.",
+    ].join("\n"),
+    quotes: [
+      "> [!WARNING]",
+      "> Careful here.",
+      "",
+      "# Heading",
+      "",
+      "> quote",
+      ">",
+      "> # quoted heading",
+      "",
+      "***",
+      "",
+      "End.",
+    ].join("\n"),
+    math: ["Before.", "", "$$", "a = b", "", "c = d", "$$", "", "## After", "", "$$x$$"].join("\n"),
+    html: ["<details>", "", "## Inside", "", "</details>", "", "## After", ""].join("\n"),
+    htmlComment: ["## Before", "", "<!--", "", "# hidden", "", "-->", "", "## After"].join("\n"),
+    references:
+      "See [the docs][docs].\n\n## Section\n\nMore[^1].\n\n[docs]: https://example.com\n\n[^1]: A note.",
+  };
+
+  async function renderStreamingAndComplete(
+    text: string,
+    props: Partial<React.ComponentProps<typeof import("./ChatMarkdown").default>> = {},
+  ) {
+    const { default: ChatMarkdown } = await import("./ChatMarkdown");
+    const render = (isStreaming: boolean) =>
+      renderWithQueryClient(
+        <ChatMarkdown text={text} cwd="/tmp/project" isStreaming={isStreaming} {...props} />,
+      );
+    return { streaming: render(true), complete: render(false) };
+  }
+
+  it.each(Object.entries(PARITY_CORPUS))(
+    "renders %s identically while streaming and when complete",
+    async (_name, text) => {
+      const { streaming, complete } = await renderStreamingAndComplete(text);
+      expect(streaming).toBe(complete);
+      // A find query exposes every text node's source offset in the markup.
+      const found = await renderStreamingAndComplete(text, { findQuery: "e" });
+      expect(found.streaming).toBe(found.complete);
+      expect(found.streaming).toContain("data-chat-find-start");
+    },
+  );
+
+  it("splits the streaming samples into several blocks", async () => {
+    const { splitStreamingMarkdownBlocks } = await import("./chat/streamingMarkdownBlocks");
+    for (const [name, text] of Object.entries(PARITY_CORPUS)) {
+      const blockCount = splitStreamingMarkdownBlocks(text).blocks.length;
+      // Definitions and comment blocks spanning blank lines are never split.
+      if (name === "references" || name === "htmlComment") expect(blockCount, name).toBe(1);
+      else expect(blockCount, name).toBeGreaterThan(1);
+    }
+  });
+
+  it("keeps find offsets and bidi blocks aligned in later blocks", async () => {
+    const text = PARITY_CORPUS.fences! + "\n\nAn error appears here, and `/tmp/error.ts` too.";
+    const startOffset = text.lastIndexOf("error");
+    const { streaming, complete } = await renderStreamingAndComplete(text, {
+      findQuery: "error",
+      findActiveRange: { startOffset, endOffset: startOffset + "error".length },
+      directionMode: "auto-blocks",
+    });
+    expect(streaming).toBe(complete);
+    expect(streaming).toContain(`data-chat-find-start="${String(startOffset)}"`);
+    expect(streaming).toContain('data-chat-find-match="active"');
+    expect(streaming).toContain('<h2 dir="auto">');
+  });
 });

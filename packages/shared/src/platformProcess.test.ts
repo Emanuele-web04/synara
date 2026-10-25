@@ -2,9 +2,16 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { ExecutableNotFoundError, prepareProcess } from "./platformProcess";
+import {
+  ExecutableNotFoundError,
+  prepareProcess,
+  WorkingDirectoryNotFoundError,
+} from "./platformProcess";
+import * as executable from "./executable";
+import { spawnProcess } from "./processRuntime";
+import os from "node:os";
 
 let root: string;
 
@@ -13,6 +20,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.restoreAllMocks();
   rmSync(root, { recursive: true, force: true });
 });
 
@@ -26,6 +34,121 @@ function windowsEnv(pathValue = root): NodeJS.ProcessEnv {
 }
 
 describe("prepareProcess", () => {
+  it("plans the non-cwd Windows PATH shim and fails closed when only cwd matches", () => {
+    const workingDirectory = path.join(root, "working");
+    const pathDirectory = path.join(root, "bin");
+    mkdirSync(workingDirectory);
+    mkdirSync(pathDirectory);
+    writeFileSync(path.join(workingDirectory, "tool.EXE"), "local executable");
+    const shim = path.join(pathDirectory, "tool.CMD");
+    writeFileSync(shim, "@echo off\r\n");
+    const input = {
+      platform: "win32" as const,
+      cwd: workingDirectory,
+      env: windowsEnv(`${workingDirectory};${pathDirectory}`),
+      requireExecutable: true,
+    };
+    expect(prepareProcess("tool", ["--version"], input)).toMatchObject({
+      resolvedCommand: shim,
+      command: "C:\\Windows\\System32\\cmd.exe",
+      args: ["/d", "/s", "/v:off", "/c", `call "${shim}" "--version"`],
+      shell: false,
+      windowsVerbatimArguments: true,
+    });
+    expect(() =>
+      prepareProcess("tool", [], { ...input, env: windowsEnv(workingDirectory) }),
+    ).toThrow(ExecutableNotFoundError);
+  });
+
+  it.each(["linux", "darwin"] as const)(
+    "preserves lower inherited priority before exec on %s",
+    (platform) => {
+      vi.spyOn(executable, "resolveExecutable").mockReturnValue("agent");
+      vi.spyOn(os, "getPriority").mockReturnValue(15);
+      const plan = prepareProcess("agent", ["literal $arg"], { platform, lowerPriority: true });
+      expect(plan).toMatchObject({ command: "/bin/sh", resolvedCommand: "agent" });
+      expect(plan.args.slice(2)).toEqual(["synara-agent-priority", "15", "agent", "literal $arg"]);
+    },
+  );
+
+  it("logs an inherited priority read failure and still plans the launch", () => {
+    vi.spyOn(executable, "resolveExecutable").mockReturnValue("agent");
+    vi.spyOn(os, "getPriority").mockImplementation(() => {
+      throw new Error("access denied");
+    });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    expect(
+      prepareProcess("agent", [], { platform: "linux", lowerPriority: true }).args.slice(2),
+    ).toEqual(["synara-agent-priority", "5", "agent"]);
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining("inherited agent process priority"),
+      expect.any(Error),
+    );
+  });
+  it.runIf(process.platform !== "win32").each([
+    ["native", false],
+    ["native", true],
+    ["wsl", false],
+    ["wsl", true],
+  ] as const)(
+    "sets %s priority before exec and tolerates failure (reniceFails=%s)",
+    async (backend, reniceFails) => {
+      if (reniceFails)
+        writeFileSync(
+          path.join(root, "renice"),
+          "#!/bin/sh\nprintf 'raw renice diagnostic\\n' >&2\nexit 1\n",
+          { mode: 0o755 },
+        );
+      const plan = prepareProcess(
+        process.execPath,
+        [
+          "-e",
+          "console.log(JSON.stringify({ pid: process.pid, priority: require('node:os').getPriority(), args: process.argv.slice(1) }))",
+          "--",
+          "a b",
+          "quote'\"$",
+          "--flag",
+        ],
+        {
+          ...(backend === "wsl"
+            ? { platform: "win32" as const, cwd: "\\\\wsl.localhost\\Ubuntu\\home\\agent" }
+            : {}),
+          lowerPriority: true,
+        },
+      );
+      // Execute the guest-side argv locally; Windows/WSL host launch remains platform-specific.
+      const guestArgs =
+        backend === "wsl"
+          ? plan.args.slice(plan.args.indexOf("--exec") + 1)
+          : [plan.command, ...plan.args];
+      expect(guestArgs[0]).toBe("/bin/sh");
+      const child = spawnProcess(guestArgs[0]!, guestArgs.slice(1), {
+        stdio: "pipe",
+        env: { ...process.env, PATH: reniceFails ? root : process.env.PATH },
+      });
+      let stdout = "",
+        stderr = "";
+      child.stdout.on("data", (chunk) => {
+        stdout += chunk;
+      });
+      child.stderr.on("data", (chunk) => {
+        stderr += chunk;
+      });
+      await new Promise<void>((resolve, reject) => {
+        child.once("error", reject);
+        child.once("close", (code) =>
+          code === 0 ? resolve() : reject(new Error(`exit ${code}: ${stderr}`)),
+        );
+      });
+      expect(JSON.parse(stdout)).toEqual({
+        pid: child.pid,
+        priority: reniceFails ? os.getPriority() : Math.max(5, os.getPriority()),
+        args: ["a b", "quote'\"$", "--flag"],
+      });
+      if (reniceFails)
+        expect(stderr).toBe("Synara: failed to lower agent process priority; continuing\n");
+    },
+  );
   it.skipIf(process.platform === "win32")(
     "keeps the POSIX path shell-free and resolves through the supplied environment",
     () => {
@@ -212,6 +335,28 @@ describe("prepareProcess", () => {
       }),
     ).toThrow(ExecutableNotFoundError);
   });
+
+  // Spawning into a missing cwd emits ENOENT, which the Claude Agent SDK reports
+  // as "native binary not found" even though the executable resolved.
+  it.each(["win32", "linux"] as const)(
+    "names a missing or non-directory working directory before spawn on %s",
+    (platform) => {
+      writeFileSync(path.join(root, "tool.EXE"), "native");
+      writeFileSync(path.join(root, "tool"), "#!/bin/sh\n", { mode: 0o755 });
+      const file = path.join(root, "notes.txt");
+      writeFileSync(file, "");
+      for (const cwd of [path.join(root, "missing"), file]) {
+        expect(() =>
+          prepareProcess("tool", [], {
+            platform,
+            cwd,
+            env: platform === "win32" ? windowsEnv() : { PATH: root },
+            requireExecutable: true,
+          }),
+        ).toThrow(new WorkingDirectoryNotFoundError(cwd));
+      }
+    },
+  );
 
   it("preserves native Windows support while isolating WSL UNC execution", () => {
     expect(

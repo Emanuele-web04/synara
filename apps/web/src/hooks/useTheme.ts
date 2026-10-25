@@ -4,8 +4,7 @@
 // Exports: useTheme for mode, resolved variant, theme-pack import/export, and active theme metadata.
 
 import { useEffect, useSyncExternalStore } from "react";
-import { isElectron } from "../env";
-import { isMacNavigatorPlatform } from "../lib/utils";
+import { readDesktopWindowTranslucency } from "../lib/desktopWindowTranslucency";
 import {
   DEFAULT_THEME_STATE,
   type ChromeTheme,
@@ -36,6 +35,8 @@ import {
 type ThemeSnapshot = {
   state: ThemeState;
   systemDark: boolean;
+  /** The desktop refused the last custom blur and fell back to vibrancy. */
+  desktopBlurUnavailable: boolean;
 };
 
 const STORAGE_KEY = "synara:theme";
@@ -51,6 +52,7 @@ let listeners: Array<() => void> = [];
 let currentSnapshot: ThemeSnapshot | null = null;
 let lastDesktopTheme: ThemeMode | null = null;
 let lastDesktopWindowMaterial: string | null = null;
+let desktopBlurUnavailable = false;
 
 // ─── Store wiring ─────────────────────────────────────────────────────────
 
@@ -92,7 +94,7 @@ function writeStoredThemeState(state: ThemeState) {
 function computeSnapshot(): ThemeSnapshot {
   const state = readStoredThemeState();
   const systemDark = state.mode === "system" ? getSystemDark() : false;
-  return { state, systemDark };
+  return { state, systemDark, desktopBlurUnavailable };
 }
 
 function refreshSnapshot(): ThemeSnapshot {
@@ -102,6 +104,7 @@ function refreshSnapshot(): ThemeSnapshot {
   if (
     currentSnapshot &&
     currentSnapshot.systemDark === next.systemDark &&
+    currentSnapshot.desktopBlurUnavailable === next.desktopBlurUnavailable &&
     serializeThemeState(currentSnapshot.state) === serializeThemeState(next.state)
   ) {
     return currentSnapshot;
@@ -179,8 +182,7 @@ function applyThemeState(state: ThemeState, suppressTransitions = false) {
   const activeTheme = resolveThemePack(state, variant);
   const translucency = state.translucency[variant];
   const cssVariableBuild = buildThemeCssVariables(activeTheme, variant, {
-    electron: isElectron,
-    isMac: isMacNavigatorPlatform(),
+    windowTranslucency: readDesktopWindowTranslucency(),
     systemUiFont: state.systemUiFont,
     translucency,
   });
@@ -231,11 +233,14 @@ function syncDesktopTheme(theme: ThemeMode) {
   });
 }
 
-// Only the macOS desktop implements this; the material there is "translucent" only on macOS.
-// Without a chosen blur the window keeps vibrancy, which is the desktop's "opaque" backing.
+// Only the macOS desktop ("native" translucency) implements this. Without a chosen blur the
+// window keeps vibrancy, which is the desktop's "opaque" backing. A compositor-backed window
+// (Hyprland) is blurred by the compositor's own settings, so there is nothing to send.
 function syncDesktopWindowMaterial(cssMaterial: WindowMaterial, blur: number | null) {
   const setWindowMaterial =
-    typeof window === "undefined" ? undefined : window.desktopBridge?.setWindowMaterial;
+    readDesktopWindowTranslucency() === "native"
+      ? window.desktopBridge?.setWindowMaterial
+      : undefined;
   const material: WindowMaterial =
     cssMaterial === "translucent" && blur !== null ? "translucent" : "opaque";
   const blurRadius = material === "translucent" && blur !== null ? blur : 0;
@@ -245,11 +250,20 @@ function syncDesktopWindowMaterial(cssMaterial: WindowMaterial, blur: number | n
   }
 
   lastDesktopWindowMaterial = key;
-  void setWindowMaterial({ material, blurRadius }).catch(() => {
-    if (lastDesktopWindowMaterial === key) {
-      lastDesktopWindowMaterial = null;
-    }
-  });
+  void setWindowMaterial({ material, blurRadius }).then(
+    (applied) => {
+      // Vibrancy always applies; only a custom blur can be refused by the window server.
+      const unavailable = material === "translucent" && !applied;
+      if (lastDesktopWindowMaterial !== key || desktopBlurUnavailable === unavailable) return;
+      desktopBlurUnavailable = unavailable;
+      emitChange();
+    },
+    () => {
+      if (lastDesktopWindowMaterial === key) {
+        lastDesktopWindowMaterial = null;
+      }
+    },
+  );
 }
 
 // Apply immediately on module load to minimize flash before React mounts.
@@ -301,6 +315,7 @@ export function useTheme() {
   const snapshot = useSyncExternalStore(subscribe, getSnapshot, () => ({
     state: DEFAULT_THEME_STATE,
     systemDark: false,
+    desktopBlurUnavailable: false,
   }));
   const theme = snapshot.state.mode;
   const resolvedTheme = resolveThemeVariant(theme, snapshot.systemDark);
@@ -351,6 +366,7 @@ export function useTheme() {
     setSystemUiFont,
     darkTheme,
     defaultActiveTheme,
+    desktopBlurUnavailable: snapshot.desktopBlurUnavailable,
     exportThemeString,
     importThemeString,
     isDefaultActiveTheme,

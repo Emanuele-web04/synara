@@ -12,12 +12,18 @@ import {
   type ProviderInstanceId,
   type ProviderKind,
   type ServerProviderStatus,
-  type ServerSettingsView,
   type ThreadHandoffImportedMessage,
 } from "@synara/contracts";
 import { getDefaultModel } from "@synara/shared/model";
 import type { ProviderInstanceOption } from "../appSettings";
 import { type Thread } from "../types";
+import {
+  extractProviderHandoffInfo,
+  PROVIDER_HANDOFF_ACTIVITY_KIND,
+  PROVIDER_HANDOFF_BACKGROUND_TASKS_REASON,
+  PROVIDER_HANDOFF_FAILED_ACTIVITY_KIND,
+  type ProviderHandoffInfo,
+} from "../workLog";
 import { DEFAULT_PROVIDER_ORDER } from "../providerOrdering";
 import { stripEmbeddedAssistantSelections } from "./assistantSelections";
 import { extractTrailingBrowserAnnotations } from "./browserAnnotations";
@@ -46,50 +52,32 @@ function isImportableThreadMessage(
   return (message.role === "user" || message.role === "assistant") && message.streaming === false;
 }
 
+/** True when a handoff or fork of this thread would carry at least one message. */
+export function hasImportableThreadMessages(thread: Pick<Thread, "messages">): boolean {
+  return thread.messages.some(isImportableThreadMessage);
+}
+
 function isImportableThreadActivity(
   activity: Thread["activities"][number],
 ): activity is OrchestrationThreadActivity {
   return IMPORTABLE_THREAD_ACTIVITY_KINDS.has(activity.kind);
 }
 
-export function isEligibleHandoffTargetProvider(input: {
-  readonly sourceProvider: ProviderKind;
-  readonly targetProvider: ProviderKind;
-  readonly targetProviderEnabled: boolean | null | undefined;
-  readonly targetProviderStatus: ServerProviderStatus | null | undefined;
-}): boolean {
-  return (
-    input.targetProvider !== input.sourceProvider &&
-    input.targetProviderEnabled === true &&
-    input.targetProviderStatus?.provider === input.targetProvider &&
-    isProviderUsable(input.targetProviderStatus)
-  );
-}
-
-export function resolveAvailableHandoffTargetProviders(input: {
-  readonly sourceProvider: ProviderKind;
-  readonly providerSettings: ServerSettingsView["providers"] | null | undefined;
-  readonly providerStatuses: readonly ServerProviderStatus[];
-}): ReadonlyArray<ProviderKind> {
-  return DEFAULT_PROVIDER_ORDER.filter((targetProvider) =>
-    isEligibleHandoffTargetProvider({
-      sourceProvider: input.sourceProvider,
-      targetProvider,
-      targetProviderEnabled: input.providerSettings?.[targetProvider].enabled,
-      targetProviderStatus: findProviderStatus(input.providerStatuses, targetProvider),
-    }),
-  );
-}
-
 export function resolveAvailableHandoffTargets(input: {
   readonly sourceProvider: ProviderKind;
   readonly sourceProviderInstanceId?: ProviderInstanceId | null | undefined;
   readonly providerInstances: ReadonlyArray<ProviderInstanceOption>;
+  readonly providerStatuses: readonly ServerProviderStatus[];
 }): ReadonlyArray<ThreadHandoffTarget> {
   const sourceInstanceId = input.sourceProviderInstanceId ?? input.sourceProvider;
   const providerRank = new Map(DEFAULT_PROVIDER_ORDER.map((provider, index) => [provider, index]));
   return input.providerInstances
     .filter((instance) => instance.enabled)
+    .filter((instance) =>
+      isProviderUsable(
+        findProviderStatus(input.providerStatuses, instance.provider, instance.instanceId),
+      ),
+    )
     .filter(
       (instance) =>
         instance.provider !== input.sourceProvider || instance.instanceId !== sourceInstanceId,
@@ -243,6 +231,124 @@ export function canCreateThreadHandoff(input: {
     return hasNativeThreadHandoffMessages(input.thread);
   }
   return true;
+}
+
+/**
+ * Continuing in the same thread rebinds its session to another provider. A
+ * live session cannot move between accounts of one provider in place, so
+ * those targets only offer a new thread (the server enforces the same rule).
+ */
+export function canContinueThreadHandoff(input: {
+  readonly sourceProvider: ProviderKind;
+  readonly targetProvider: ProviderKind;
+}): boolean {
+  return input.targetProvider !== input.sourceProvider;
+}
+
+// Mirrors the outcome rows ProviderCommandReactor appends for a same-thread
+// handoff, keyed by the requesting command so the caller can await its result.
+export function providerHandoffOutcomeActivityIds(commandId: string): {
+  readonly completed: string;
+  readonly failed: string;
+} {
+  return {
+    completed: `provider-handoff:${commandId}`,
+    failed: `provider-handoff-failed:${commandId}`,
+  };
+}
+
+export type ProviderHandoffOutcome =
+  | { readonly status: "completed" }
+  | {
+      readonly status: "failed";
+      readonly detail: string;
+      readonly blockedByBackgroundTasks?: true;
+    }
+  | { readonly status: "pending" };
+
+/**
+ * Reads a same-thread handoff's outcome from the thread's activities. The
+ * failure row carries the target's start error; "pending" means neither row
+ * has arrived yet.
+ */
+export function resolveProviderHandoffOutcome(
+  thread: Pick<Thread, "activities"> | undefined,
+  commandId: string,
+): ProviderHandoffOutcome {
+  const ids = providerHandoffOutcomeActivityIds(commandId);
+  for (const activity of thread?.activities ?? []) {
+    if (activity.id === ids.completed) {
+      return { status: "completed" };
+    }
+    if (activity.id === ids.failed) {
+      const payload =
+        activity.payload && typeof activity.payload === "object"
+          ? (activity.payload as { detail?: unknown; reason?: unknown })
+          : null;
+      return {
+        status: "failed",
+        detail: typeof payload?.detail === "string" ? payload.detail : activity.summary,
+        ...(payload?.reason === PROVIDER_HANDOFF_BACKGROUND_TASKS_REASON
+          ? { blockedByBackgroundTasks: true as const }
+          : {}),
+      };
+    }
+  }
+  return { status: "pending" };
+}
+
+/**
+ * Thrown when the server refused a same-thread handoff because the source
+ * still runs background tasks. The composer explains it and offers to stop
+ * them, so callers skip their generic error surface.
+ */
+export class ProviderHandoffBackgroundTasksError extends Error {
+  constructor(sourceProvider: ProviderKind, targetProvider: ProviderKind) {
+    const sourceName = PROVIDER_DISPLAY_NAMES[sourceProvider] ?? sourceProvider;
+    const targetName = PROVIDER_DISPLAY_NAMES[targetProvider] ?? targetProvider;
+    super(
+      `${sourceName} still has background tasks running in this thread, so it cannot switch to ${targetName} yet.`,
+    );
+    this.name = "ProviderHandoffBackgroundTasksError";
+  }
+}
+
+export interface BlockedProviderHandoff {
+  readonly activityId: string;
+  readonly info: ProviderHandoffInfo;
+}
+
+/**
+ * The thread's latest same-thread handoff, when the source's background tasks
+ * refused it and nothing has moved the thread on since: no later handoff, no
+ * newer turn, and the thread still runs on that source provider.
+ */
+export function deriveBlockedProviderHandoff(
+  thread: Pick<Thread, "activities" | "latestTurn" | "modelSelection">,
+): BlockedProviderHandoff | null {
+  const activity = thread.activities.findLast(
+    (entry) =>
+      entry.kind === PROVIDER_HANDOFF_ACTIVITY_KIND ||
+      entry.kind === PROVIDER_HANDOFF_FAILED_ACTIVITY_KIND,
+  );
+  if (!activity || activity.kind !== PROVIDER_HANDOFF_FAILED_ACTIVITY_KIND) {
+    return null;
+  }
+  const info = extractProviderHandoffInfo(
+    activity.payload && typeof activity.payload === "object"
+      ? (activity.payload as Record<string, unknown>)
+      : null,
+    "failed",
+  );
+  if (
+    !info?.blockedByBackgroundTasks ||
+    info.sourceProvider !== thread.modelSelection.provider ||
+    (thread.latestTurn !== null &&
+      Date.parse(thread.latestTurn.requestedAt) > Date.parse(activity.createdAt))
+  ) {
+    return null;
+  }
+  return { activityId: activity.id, info };
 }
 
 export interface ThreadHandoffAvailability {

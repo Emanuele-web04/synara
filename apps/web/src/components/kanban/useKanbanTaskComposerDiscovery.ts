@@ -210,11 +210,13 @@ export function useKanbanTaskComposerDiscovery(input: UseKanbanTaskComposerDisco
     providerCommandsQuery.data?.commands ?? EMPTY_PROVIDER_NATIVE_COMMANDS;
   const providerSkills = providerSkillsQuery.data?.skills ?? EMPTY_PROVIDER_SKILLS;
   const searchableModelOptions = buildSearchableModelOptions({
-    providerOptions: providerInstances.map((instance) => ({
-      value: instance.provider,
-      label: instance.label,
-      instanceId: instance.instanceId,
-    })),
+    providerOptions: providerInstances
+      .filter((instance) => instance.enabled)
+      .map((instance) => ({
+        value: instance.provider,
+        label: instance.label,
+        instanceId: instance.instanceId,
+      })),
     modelOptionsByProvider,
     modelOptionsByProviderInstance,
     providerOrder,

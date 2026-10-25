@@ -94,6 +94,7 @@ export function makeAcpRequestOpenedEvent(input: {
   readonly provider: ProviderKind;
   readonly threadId: ThreadId;
   readonly turnId: TurnId | undefined;
+  readonly providerRefs?: ProviderRuntimeEvent["providerRefs"];
   readonly requestId: RuntimeRequestId;
   readonly permissionRequest: AcpPermissionRequest;
   readonly detail: string;
@@ -108,6 +109,7 @@ export function makeAcpRequestOpenedEvent(input: {
     provider: input.provider,
     threadId: input.threadId,
     turnId: input.turnId,
+    ...(input.providerRefs ? { providerRefs: input.providerRefs } : {}),
     requestId: input.requestId,
     payload: {
       requestType: canonicalRequestTypeFromAcpKind(input.permissionRequest.kind),
@@ -127,6 +129,7 @@ export function makeAcpRequestResolvedEvent(input: {
   readonly provider: ProviderKind;
   readonly threadId: ThreadId;
   readonly turnId: TurnId | undefined;
+  readonly providerRefs?: ProviderRuntimeEvent["providerRefs"];
   readonly requestId: RuntimeRequestId;
   readonly permissionRequest: AcpPermissionRequest;
   readonly decision: ProviderApprovalDecision;
@@ -137,6 +140,7 @@ export function makeAcpRequestResolvedEvent(input: {
     provider: input.provider,
     threadId: input.threadId,
     turnId: input.turnId,
+    ...(input.providerRefs ? { providerRefs: input.providerRefs } : {}),
     requestId: input.requestId,
     payload: {
       requestType: canonicalRequestTypeFromAcpKind(input.permissionRequest.kind),
@@ -184,6 +188,7 @@ export function makeAcpToolCallEvent(input: {
   readonly threadId: ThreadId;
   readonly turnId: TurnId | undefined;
   readonly toolCall: AcpToolCallState;
+  readonly providerRefs?: ProviderRuntimeEvent["providerRefs"];
   readonly rawPayload: unknown;
 }): ProviderRuntimeEvent {
   const runtimeStatus = runtimeItemStatusFromAcpToolStatus(input.toolCall.status);
@@ -194,6 +199,7 @@ export function makeAcpToolCallEvent(input: {
     threadId: input.threadId,
     turnId: input.turnId,
     itemId: RuntimeItemId.makeUnsafe(input.toolCall.toolCallId),
+    ...(input.providerRefs ? { providerRefs: input.providerRefs } : {}),
     payload: {
       itemType: canonicalItemTypeFromAcpToolKind(input.toolCall.kind),
       ...(runtimeStatus ? { status: runtimeStatus } : {}),
@@ -216,6 +222,7 @@ export function makeAcpAssistantItemEvent(input: {
   readonly turnId: TurnId | undefined;
   readonly itemId: string;
   readonly lifecycle: "item.started" | "item.completed";
+  readonly providerRefs?: ProviderRuntimeEvent["providerRefs"];
 }): ProviderRuntimeEvent {
   return {
     type: input.lifecycle,
@@ -224,6 +231,7 @@ export function makeAcpAssistantItemEvent(input: {
     threadId: input.threadId,
     turnId: input.turnId,
     itemId: RuntimeItemId.makeUnsafe(input.itemId),
+    ...(input.providerRefs ? { providerRefs: input.providerRefs } : {}),
     payload: {
       itemType: "assistant_message",
       status: input.lifecycle === "item.completed" ? "completed" : "inProgress",
@@ -239,6 +247,7 @@ export function makeAcpContentDeltaEvent(input: {
   readonly itemId?: string;
   readonly text: string;
   readonly streamKind?: AcpTextStreamKind;
+  readonly providerRefs?: ProviderRuntimeEvent["providerRefs"];
   readonly rawPayload: unknown;
 }): ProviderRuntimeEvent {
   return {
@@ -248,6 +257,7 @@ export function makeAcpContentDeltaEvent(input: {
     threadId: input.threadId,
     turnId: input.turnId,
     ...(input.itemId ? { itemId: RuntimeItemId.makeUnsafe(input.itemId) } : {}),
+    ...(input.providerRefs ? { providerRefs: input.providerRefs } : {}),
     payload: {
       streamKind: input.streamKind ?? "assistant_text",
       delta: input.text,
@@ -265,6 +275,7 @@ export function makeAcpTokenUsageEvent(input: {
   readonly provider: ProviderKind;
   readonly threadId: ThreadId;
   readonly turnId: TurnId | undefined;
+  readonly providerRefs?: ProviderRuntimeEvent["providerRefs"];
   readonly usage: ThreadTokenUsageSnapshot;
   readonly method?: string;
   readonly rawPayload: unknown;
@@ -275,6 +286,7 @@ export function makeAcpTokenUsageEvent(input: {
     provider: input.provider,
     threadId: input.threadId,
     turnId: input.turnId,
+    ...(input.providerRefs ? { providerRefs: input.providerRefs } : {}),
     payload: {
       usage: input.usage,
     },

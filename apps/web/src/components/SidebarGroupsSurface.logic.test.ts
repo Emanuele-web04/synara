@@ -1,4 +1,4 @@
-import { ProjectId } from "@synara/contracts";
+import { ProjectId, ThreadId } from "@synara/contracts";
 import { describe, expect, it, vi } from "vitest";
 
 import {
@@ -7,6 +7,7 @@ import {
 } from "../lib/groupCoordinatorName";
 import {
   activateThreadWhenHydrated,
+  isGroupThreadRoute,
   resolveGroupChatTargetProjectId,
   resolveGroupCoordinatorRowLabel,
   resolveGroupsListEmptyState,
@@ -15,6 +16,43 @@ import {
 const GROUP_A = ProjectId.makeUnsafe("group-a");
 const GROUP_B = ProjectId.makeUnsafe("group-b");
 const ORDINARY = ProjectId.makeUnsafe("project-ordinary");
+
+describe("isGroupThreadRoute", () => {
+  const memberId = ThreadId.makeUnsafe("repo-worker");
+  const input = {
+    threadId: memberId,
+    projectId: ORDINARY,
+    groupProjectIds: new Set([GROUP_A]),
+    summariesByProjectId: new Map([[GROUP_A, { memberThreadIds: [memberId] }]]),
+  };
+
+  it("keeps a hub member in Hubs when it runs in a linked repository", () => {
+    expect(isGroupThreadRoute(input)).toBe(true);
+  });
+
+  it("keeps container threads and unsent hub drafts in Hubs", () => {
+    expect(
+      isGroupThreadRoute({ ...input, projectId: GROUP_A, summariesByProjectId: new Map() }),
+    ).toBe(true);
+  });
+
+  it("leaves unrelated repository threads on the ordinary surface", () => {
+    expect(isGroupThreadRoute({ ...input, threadId: ThreadId.makeUnsafe("unrelated") })).toBe(
+      false,
+    );
+    expect(isGroupThreadRoute({ ...input, threadId: null, projectId: null })).toBe(false);
+  });
+
+  it("ignores member indexes for deleted, non-container, or disabled hubs", () => {
+    expect(isGroupThreadRoute({ ...input, groupProjectIds: new Set() })).toBe(false);
+    expect(
+      isGroupThreadRoute({
+        ...input,
+        summariesByProjectId: new Map([[ORDINARY, { memberThreadIds: [memberId] }]]),
+      }),
+    ).toBe(false);
+  });
+});
 
 describe("resolveGroupCoordinatorRowLabel", () => {
   it("shows the configured coordinator name", () => {

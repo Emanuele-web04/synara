@@ -7,7 +7,6 @@ import {
   resolveFilePreviewWorkspaceRoot,
   resolveRoutePanelBootstrap,
   resolveSplitPaneCloseDecision,
-  resolveSplitPaneMaximizeDecision,
   resolveToggledChatPanelPatch,
   stripEditorViewSearchParams,
 } from "./-chatThreadRoute.logic";
@@ -253,40 +252,6 @@ describe("resolveToggledChatPanelPatch", () => {
       diffTurnId: OTHER_TURN_ID,
       diffFilePath: "src/browser.tsx",
     });
-  });
-});
-
-describe("resolveSplitPaneMaximizeDecision", () => {
-  it("targets the focused thread and preserves its panel state for single-chat navigation", () => {
-    expect(
-      resolveSplitPaneMaximizeDecision({
-        splitViewId: "split-1",
-        focusedThreadId: THREAD_ID,
-        focusedPanelState: {
-          panel: "diff",
-          diffTurnId: TURN_ID,
-          diffFilePath: "src/chat.tsx",
-        },
-      }),
-    ).toEqual({
-      splitViewIdToRemove: "split-1",
-      threadId: THREAD_ID,
-      panelState: {
-        panel: "diff",
-        diffTurnId: TURN_ID,
-        diffFilePath: "src/chat.tsx",
-      },
-    });
-  });
-
-  it("does not invent a target when the focused pane is empty", () => {
-    expect(
-      resolveSplitPaneMaximizeDecision({
-        splitViewId: "split-1",
-        focusedThreadId: null,
-        focusedPanelState: null,
-      }),
-    ).toBeNull();
   });
 });
 

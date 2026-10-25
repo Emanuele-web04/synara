@@ -37,11 +37,12 @@
     "build": "turbo run build",
     "build:marketing": "turbo run build --filter=@synara/marketing",
     "build:desktop": "turbo run build --filter=@synara/desktop --filter=@synara/cli",
-    "postinstall": "effect-tsgo patch --typescript --typescript-package @typescript/native",
+    "postinstall": "node scripts/patch-workspace-typescript.ts && effect-tsgo patch --typescript --typescript-package @typescript/native",
     "typecheck": "effect-tsgo patch --typescript --typescript-package @typescript/native && turbo run typecheck",
     "typecheck:native": "bun run typecheck",
     "typecheck:legacy": "turbo run typecheck:legacy",
-    "lint": "oxlint --report-unused-disable-directives",
+    "lint": "oxlint --report-unused-disable-directives && bun run server-sync-fs:check",
+    "server-sync-fs:check": "node scripts/check-server-sync-fs.ts",
     "test": "turbo run test",
     "test:web:focused": "bun run --cwd apps/web test",
     "brand:check": "node scripts/check-brand-identity.ts",
@@ -81,6 +82,10 @@
     "vitest": "catalog:"
   },
   "overrides": {
+    "@effect/platform-node-shared>effect": "catalog:",
+    "@effect/platform-node>effect": "catalog:",
+    "@effect/sql-sqlite-bun>effect": "catalog:",
+    "@effect/vitest>effect": "catalog:",
     "axios": "^1.16.0",
     "defu": "^6.1.5",
     "fast-uri": "^3.1.2",
@@ -100,10 +105,10 @@
     "yaml": "^2.8.3"
   },
   "engines": {
-    "bun": "^1.4.2",
+    "bun": "^1.4.4",
     "node": "^24.13.1"
   },
-  "packageManager": "bun@1.4.2",
+  "packageManager": "bun@1.4.4",
   "msw": {
     "workerDirectory": [
       "apps/web/public"

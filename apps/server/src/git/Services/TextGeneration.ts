@@ -14,11 +14,21 @@ import type {
   ModelSelection,
   ProviderStartOptions,
   ServerGenerateAutomationIntentResult,
+  SourceControlWritingStyle,
 } from "@synara/contracts";
 
 import type { TextGenerationError } from "../Errors.ts";
 
+/** Server-owned writing preferences; repository examples are untrusted style references. */
+export interface SourceControlWritingPreferences {
+  readonly style: SourceControlWritingStyle;
+  readonly customInstructions: string;
+  readonly recentCommitSubjects: readonly string[];
+  readonly recentPrTitles: readonly string[];
+}
+
 export interface CommitMessageGenerationInput {
+  writingPreferences?: SourceControlWritingPreferences;
   cwd: string;
   branch: string | null;
   stagedSummary: string;
@@ -42,6 +52,7 @@ export interface CommitMessageGenerationResult {
 }
 
 export interface PrContentGenerationInput {
+  writingPreferences?: SourceControlWritingPreferences;
   cwd: string;
   baseBranch: string;
   headBranch: string;

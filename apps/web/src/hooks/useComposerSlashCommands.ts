@@ -9,6 +9,7 @@ import {
   type ProviderNativeCommandDescriptor,
   type ProviderModelOptions,
   type RuntimeMode,
+  type ThreadGoalStartBehavior,
   type ThreadId,
 } from "@synara/contracts";
 import { deriveAssociatedWorktreeMetadata } from "@synara/shared/threadWorkspace";
@@ -31,14 +32,11 @@ import {
   parseSideSlashCommandArgs,
   type ForkSlashCommandTarget,
 } from "../composerSlashCommands";
-import {
-  buildThreadHandoffImportedMessages,
-  resolveThreadHandoffModelSelection,
-} from "../lib/threadHandoff";
+import { resolveThreadHandoffModelSelection } from "../lib/threadHandoff";
 import { toastManager } from "../components/ui/toast";
 import type { ComposerCommandItem } from "../components/chat/ComposerCommandMenu";
 import { buildNextProviderOptions } from "../providerModelOptions";
-import { resolveForkThreadEnvironment } from "../lib/threadEnvironment";
+import { dispatchThreadFork } from "../lib/threadFork";
 import { type SplitViewId } from "../splitViewStore";
 import { useRightDockStore } from "../rightDockStore";
 import { registerSidechatCreator } from "../lib/sidechatCreatorRegistry";
@@ -271,7 +269,10 @@ export function useComposerSlashCommands(input: {
   );
 
   const persistThreadGoal = useCallback(
-    async (goal: string): Promise<boolean> => {
+    async (
+      goal: string,
+      options?: { readonly startBehavior?: ThreadGoalStartBehavior },
+    ): Promise<boolean> => {
       if (!isServerThread && activeThread) {
         // Draft threads have no server row yet: stage the goal locally so the
         // header shows it immediately, then the first send persists it right
@@ -292,7 +293,7 @@ export function useComposerSlashCommands(input: {
       }
 
       try {
-        await dispatchThreadGoal(activeThread.id, goal);
+        await dispatchThreadGoal(activeThread.id, goal, options);
         return true;
       } catch (error) {
         toastManager.add({
@@ -467,38 +468,15 @@ export function useComposerSlashCommands(input: {
         return true;
       }
 
-      const importedMessages = buildThreadHandoffImportedMessages(activeThread, {
-        throughMessageId: inputOptions?.throughMessageId ?? null,
-      });
-
-      const nextThreadId = newThreadId();
-      const createdAt = new Date().toISOString();
-      // Fork first, then let the normal first-send worktree bootstrap create the cwd if needed.
-      const resolvedTarget = resolveForkThreadEnvironment({
-        target: inputOptions?.target ?? "local",
-        activeRootBranch,
+      const nextThreadId = await dispatchThreadFork({
+        api,
         sourceThread: activeThread,
-      });
-
-      await api.orchestration.dispatchCommand({
-        type: "thread.fork.create",
-        commandId: newCommandId(),
-        threadId: nextThreadId,
-        sourceThreadId: activeThread.id,
-        projectId: activeProject.id,
-        title: activeThread.title,
+        target: inputOptions?.target ?? "local",
+        rootBranch: activeRootBranch,
         modelSelection: selectedModelSelection,
         runtimeMode,
         interactionMode,
-        envMode: resolvedTarget.envMode,
-        branch: resolvedTarget.branch,
-        worktreePath: resolvedTarget.worktreePath,
-        workingDirectory: activeThread.workingDirectory ?? null,
-        associatedWorktreePath: resolvedTarget.associatedWorktreePath,
-        associatedWorktreeBranch: resolvedTarget.associatedWorktreeBranch,
-        associatedWorktreeRef: resolvedTarget.associatedWorktreeRef,
-        importedMessages: [...importedMessages],
-        createdAt,
+        throughMessageId: inputOptions?.throughMessageId ?? null,
       });
       const snapshot = await api.orchestration.getShellSnapshot();
       syncServerShellSnapshot(snapshot);
@@ -936,6 +914,22 @@ export function useComposerSlashCommands(input: {
         return true;
       }
       if (slashInvocation.command === "goal") {
+        const goalAction = parseGoalSlashCommandArgs(slashInvocation.args);
+        // The server accepts the goal, visible message, and first turn together.
+        // Rejected commands leave the composer intact for retry.
+        if (
+          goalAction.action === "set" &&
+          isServerThread &&
+          !activeThread?.goal?.trim() &&
+          activeThread?.session?.activeTurnId == null &&
+          interactionMode !== "plan"
+        ) {
+          if (await persistThreadGoal(goalAction.goal, { startBehavior: "start-with-message" })) {
+            editorActions.clearComposerSlashDraft();
+            toastManager.add({ type: "success", title: "Thread goal updated" });
+          }
+          return true;
+        }
         editorActions.clearComposerSlashDraft();
         await runGoalSlashCommand(slashInvocation.args);
         return true;
@@ -1085,6 +1079,7 @@ export function useComposerSlashCommands(input: {
       return false;
     },
     [
+      activeThread,
       availableBuiltInSlashCommands,
       canExecuteSideCommand,
       checkClaudeFastSlashCommandAvailability,
@@ -1094,9 +1089,12 @@ export function useComposerSlashCommands(input: {
       editorActions,
       handleClearConversation,
       handleInteractionModeChange,
+      interactionMode,
+      isServerThread,
       openForkTargetPicker,
       openFeedbackDialog,
       openReviewTargetPicker,
+      persistThreadGoal,
       selectedProvider,
       selectedModelSelection.provider,
       sidechatTargetProviders,

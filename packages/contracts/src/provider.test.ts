@@ -17,6 +17,22 @@ describe("ProviderSessionStartInput", () => {
     expect(parsed.enableComputerControl).toBe(true);
   });
 
+  it("accepts task ids whose Devin stop outcome needs resume reconciliation", () => {
+    const parsed = decodeProviderSessionStartInput({
+      threadId: "thread-devin-resume",
+      provider: "devin",
+      pendingTaskReconciliations: [
+        { taskId: "shell-1", turnId: "old-turn", toolUseId: "tool-1" },
+        { taskId: "agent-1" },
+      ],
+      runtimeMode: "full-access",
+    });
+    expect(parsed.pendingTaskReconciliations).toEqual([
+      { taskId: "shell-1", turnId: "old-turn", toolUseId: "tool-1" },
+      { taskId: "agent-1" },
+    ]);
+  });
+
   it("rejects payloads without runtime mode", () => {
     expect(() =>
       decodeProviderSessionStartInput({

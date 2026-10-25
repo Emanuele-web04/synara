@@ -9,7 +9,7 @@ import { useEffect, useMemo, useState, type ReactNode } from "react";
 import type { ProjectId, ThreadId } from "@synara/contracts";
 
 import { createGroupProject, findLegacyStudioContainerForAdoption } from "../lib/groupProjects";
-import { FolderOpenIcon, NewThreadIcon } from "../lib/icons";
+import { NewThreadIcon, SettingsIcon } from "../lib/icons";
 import { newCommandId } from "../lib/utils";
 import { readNativeApi } from "../nativeApi";
 import { usePinnedProjectAgentsStore } from "../pinnedProjectAgentsStore";
@@ -19,9 +19,12 @@ import { cn } from "../lib/utils";
 import { useWorkspacePathsStore } from "../workspacePathsStore";
 
 import { resolveSidebarProjectRowLabel, type SidebarDerivedProjectData } from "./Sidebar.logic";
-import { ChatSortMenu } from "./Sidebar";
+import { ChatSortMenu, type ThreadSortMenuProps } from "./Sidebar";
+import { SidebarIconButton } from "./SidebarIconButton";
+import { SidebarLeadingIcon } from "./SidebarLeadingIcon";
+import { SidebarCollapsibleSection } from "./SidebarListSection";
 import { SidebarPrimaryAction } from "./SidebarPrimaryAction";
-import { SidebarRowHoverActions } from "./SidebarRowHoverActions";
+import { SidebarSectionToolbar } from "./SidebarSectionToolbar";
 import { ThreadPinToggleButton } from "./ThreadPinToggleButton";
 import {
   resolveGroupCoordinatorRowLabel,
@@ -41,6 +44,7 @@ import {
   SidebarGroup,
   SidebarMenu,
   SidebarMenuButton,
+  SidebarMenuItem,
   SidebarMenuSub,
   SidebarMenuSubButton,
   SidebarMenuSubItem,
@@ -50,11 +54,20 @@ import { RenameDialog } from "./RenameDialog";
 import { toastManager } from "./ui/toast";
 import type { Project } from "../types";
 import {
+  sidebarHoverRevealHideClassName,
+  SIDEBAR_HEADER_LEADING_ACTION_CLASS_NAME,
+  SIDEBAR_HEADER_LEADING_ACTION_REVEAL_CLASS_NAME,
   SIDEBAR_HEADER_ROW_CLASS_NAME,
   SIDEBAR_NESTED_LIST_GAP_CLASS_NAME,
+  SIDEBAR_NESTED_LIST_OFFSET_CLASS_NAME,
+  SIDEBAR_PROJECT_NAME_CLASS_NAME,
   SIDEBAR_ROW_LABEL_TEXT_CLASS_NAME,
 } from "../sidebarRowStyles";
-import type { SidebarThreadSortOrder } from "../appSettings";
+
+// The hub row's hover toolbar holds two actions (pin, settings); only the truncating
+// name yields to it, so the trailing status fades in place instead of sliding.
+const HUB_ROW_TOOLBAR_RESERVE_CLASS_NAME =
+  "group-hover/project-header:pr-[3.25rem] project-header-focus:pr-[3.25rem]";
 
 // Rename fires once per project per session; the effect re-runs on every snapshot
 // while the server has not yet echoed the new title. `inFlight` only dedupes the
@@ -75,8 +88,7 @@ export function SidebarGroupsSurface({
   projectSidebarDataById,
   threadsHydrated,
   visualActiveThreadId,
-  threadSortOrder,
-  onThreadSortOrderChange,
+  threadSortMenuProps,
   renderThreadRow,
   renderListSectionHeader,
   renderPinnedThreadsSection,
@@ -88,12 +100,10 @@ export function SidebarGroupsSurface({
   readonly projectSidebarDataById: ReadonlyMap<ProjectId, SidebarDerivedProjectData>;
   readonly threadsHydrated: boolean;
   readonly visualActiveThreadId: ThreadId | null;
-  readonly threadSortOrder: SidebarThreadSortOrder;
-  readonly onThreadSortOrderChange: (sortOrder: SidebarThreadSortOrder) => void;
+  readonly threadSortMenuProps: ThreadSortMenuProps;
   readonly renderThreadRow: (
     thread: SidebarThreadSummary,
     orderedProjectThreadIds: readonly ThreadId[],
-    depth?: number,
     topLevel?: boolean,
     projectContextLabel?: string,
   ) => ReactNode;
@@ -127,9 +137,12 @@ export function SidebarGroupsSurface({
   const attentionGroups = useMemo(() => {
     const groups = new Map<ProjectId, GroupNeedsAttentionGroup>();
     for (const project of groupProjects) {
+      const summary = summariesByProjectId.get(project.id);
       groups.set(project.id, {
         projectId: project.id,
-        coordinatorThreadId: summariesByProjectId.get(project.id)?.coordinatorThreadId ?? null,
+        coordinatorThreadId: summary?.coordinatorThreadId ?? null,
+        memberThreadIds: new Set(summary?.memberThreadIds ?? []),
+        needsYouThreadIds: new Set(summary?.needsYouThreadIds ?? []),
       });
     }
     return groups;
@@ -270,14 +283,8 @@ export function SidebarGroupsSurface({
       </SidebarGroup>
       <SidebarGroup className="px-1.5 py-1.5">
         {renderPinnedThreadsSection()}
-        {renderListSectionHeader(
-          "Hubs",
-          <ChatSortMenu
-            threadSortOrder={threadSortOrder}
-            onThreadSortOrderChange={onThreadSortOrderChange}
-          />,
-        )}
-        <SidebarMenu className="gap-1">
+        {renderListSectionHeader("Hubs", <ChatSortMenu {...threadSortMenuProps} />)}
+        <SidebarMenu className="gap-3">
           {activeGroups.length > 0 ? (
             activeGroups.map((project) => {
               const projectSidebarData = projectSidebarDataById.get(project.id);
@@ -311,121 +318,164 @@ export function SidebarGroupsSurface({
                 onOpenGroupSettings(project.id, "onboarding");
               };
               const groupThreadEntries = projectSidebarData?.visibleEntries ?? [];
-              const hasGroupThreads = groupThreadEntries.length > 0;
+              const hasGroupThreads = (projectSidebarData?.allProjectThreadCount ?? 0) > 0;
+              const groupLabel = resolveSidebarProjectRowLabel(project);
               const toggleLabel = project.expanded ? "Hide threads" : "Show threads";
               return (
-                <div key={project.id} className="group/collapsible">
-                  {/* The coordinator IS the group's row: clicking opens its chat,
-                      the chevron shows or hides the group's threads beneath it. */}
-                  <div className="group/group-header group/thread-row relative flex items-center">
-                    <button
-                      type="button"
-                      className={cn(
-                        "absolute left-1 top-1/2 z-10 flex size-4 -translate-y-1/2 items-center justify-center rounded-sm text-muted-foreground/70 hover:text-foreground",
-                        hasGroupThreads ? null : "invisible",
-                      )}
-                      aria-label={`${toggleLabel} in ${resolveSidebarProjectRowLabel(project)}`}
-                      aria-expanded={project.expanded}
-                      tabIndex={hasGroupThreads ? 0 : -1}
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        toggleProject(project.id);
-                      }}
-                    >
-                      <DisclosureChevron open={project.expanded} className="size-3 shrink-0" />
-                    </button>
-                    <SidebarMenuButton
-                      size="sm"
-                      isActive={coordinatorThreadActive}
-                      data-thread-selection-safe
-                      className={cn(
-                        SIDEBAR_HEADER_ROW_CLASS_NAME,
-                        "cursor-pointer pl-6 hover:bg-[var(--sidebar-accent)] group-hover/group-header:bg-[var(--sidebar-accent)] group-hover/group-header:text-[var(--sidebar-accent-foreground)]",
-                        coordinatorThreadActive ? "bg-[var(--sidebar-accent)]" : null,
-                        coordinatorConfigured ? "pr-7" : null,
-                      )}
-                      aria-label={
-                        coordinatorConfigured
-                          ? `Open ${coordinatorRowLabel}`
-                          : `Set up coordinator for ${resolveSidebarProjectRowLabel(project)}`
-                      }
-                      onClick={activateCoordinatorRow}
-                      onContextMenu={(event) => {
-                        event.preventDefault();
-                        onProjectContextMenu(project.id, {
-                          x: event.clientX,
-                          y: event.clientY,
-                        });
-                      }}
-                    >
-                      <CoordinatorGlyph
-                        className={cn("size-3.5 shrink-0", coordinatorAppearance.iconClassName)}
-                      />
-                      <span
+                <SidebarMenuItem key={project.id} className="rounded-md">
+                  <div className="group/collapsible">
+                    {/* The coordinator IS the hub's row, laid out like a project row: clicking
+                        opens its chat, and on hover the leading glyph gives its slot to the
+                        thread disclosure while the toolbar replaces the trailing status. */}
+                    <div className="group/project-header relative">
+                      <SidebarMenuButton
+                        size="sm"
+                        isActive={coordinatorThreadActive}
+                        data-thread-selection-safe
                         className={cn(
-                          "min-w-0 flex-1 truncate font-system-ui text-ui font-normal",
-                          SIDEBAR_ROW_LABEL_TEXT_CLASS_NAME,
+                          SIDEBAR_HEADER_ROW_CLASS_NAME,
+                          "cursor-pointer hover:bg-[var(--sidebar-accent)] group-hover/project-header:bg-[var(--sidebar-accent)] group-hover/project-header:text-[var(--sidebar-accent-foreground)]",
+                          coordinatorThreadActive ? "bg-[var(--sidebar-accent)]" : null,
                         )}
+                        aria-label={
+                          coordinatorConfigured
+                            ? `Open ${coordinatorRowLabel}`
+                            : `Set up coordinator for ${groupLabel}`
+                        }
+                        onClick={activateCoordinatorRow}
+                        onContextMenu={(event) => {
+                          event.preventDefault();
+                          onProjectContextMenu(project.id, {
+                            x: event.clientX,
+                            y: event.clientY,
+                          });
+                        }}
                       >
-                        {coordinatorConfigured
-                          ? coordinatorRowLabel
-                          : resolveSidebarProjectRowLabel(project)}
-                      </span>
-                      {coordinatorConfigured ? null : (
-                        <span className="shrink-0 text-ui-xs text-muted-foreground/70">Set up</span>
-                      )}
-                      {groupNeedsAttention.has(project.id) ? (
-                        <>
-                          <span
-                            className="mr-1 size-1.5 shrink-0 rounded-full bg-amber-500 dark:bg-amber-300/90"
-                            aria-hidden
-                            title="A thread needs you"
+                        <SidebarLeadingIcon
+                          size="sm"
+                          tone={SIDEBAR_ROW_LABEL_TEXT_CLASS_NAME}
+                          className={
+                            hasGroupThreads
+                              ? cn(
+                                  "invisible md:visible",
+                                  sidebarHoverRevealHideClassName("project-header"),
+                                )
+                              : undefined
+                          }
+                        >
+                          <CoordinatorGlyph
+                            className={cn("size-4", coordinatorAppearance.iconClassName)}
                           />
-                          <span className="sr-only">A thread needs you</span>
-                        </>
-                      ) : null}
-                    </SidebarMenuButton>
-                    {coordinatorConfigured ? (
-                      <SidebarRowHoverActions
-                        threadId={coordinatorSummary?.coordinatorThreadId ?? project.id}
+                        </SidebarLeadingIcon>
+                        <div
+                          className={cn(
+                            "flex min-w-0 flex-1 items-center gap-2 overflow-hidden transition-[padding] duration-150 ease-out",
+                            coordinatorConfigured ? HUB_ROW_TOOLBAR_RESERVE_CLASS_NAME : null,
+                          )}
+                        >
+                          <span className={SIDEBAR_PROJECT_NAME_CLASS_NAME}>
+                            {coordinatorConfigured ? coordinatorRowLabel : groupLabel}
+                          </span>
+                        </div>
+                        {coordinatorConfigured ? null : (
+                          <span className="shrink-0 text-ui-xs text-muted-foreground/70">
+                            Set up
+                          </span>
+                        )}
+                        {groupNeedsAttention.has(project.id) ? (
+                          <span
+                            className={cn(
+                              "ml-auto flex shrink-0 items-center",
+                              sidebarHoverRevealHideClassName("project-header"),
+                            )}
+                          >
+                            <span
+                              className="mr-1 size-1.5 shrink-0 rounded-full bg-amber-500 dark:bg-amber-300/90"
+                              aria-hidden
+                              title="A thread needs you"
+                            />
+                            <span className="sr-only">A thread needs you</span>
+                          </span>
+                        ) : null}
+                      </SidebarMenuButton>
+                      <button
+                        type="button"
+                        className={cn(
+                          SIDEBAR_HEADER_LEADING_ACTION_CLASS_NAME,
+                          SIDEBAR_ROW_LABEL_TEXT_CLASS_NAME,
+                          hasGroupThreads
+                            ? cn(
+                                SIDEBAR_HEADER_LEADING_ACTION_REVEAL_CLASS_NAME,
+                                "pointer-events-auto opacity-100 md:pointer-events-none md:opacity-0",
+                              )
+                            : "invisible",
+                        )}
+                        aria-label={`${toggleLabel} in ${groupLabel}`}
+                        aria-expanded={project.expanded}
+                        tabIndex={hasGroupThreads ? 0 : -1}
+                        onMouseDown={(event) => {
+                          event.preventDefault();
+                          event.stopPropagation();
+                        }}
+                        onClick={(event) => {
+                          event.preventDefault();
+                          event.stopPropagation();
+                          toggleProject(project.id);
+                        }}
                       >
-                        <div className="pointer-events-auto inline-flex items-center">
+                        <DisclosureChevron open={project.expanded} className="size-3.5 shrink-0" />
+                      </button>
+                      {coordinatorConfigured ? (
+                        <SidebarSectionToolbar placement="overlay" revealOnHover>
                           <ThreadPinToggleButton
                             pinned={coordinatorPinned}
                             presentation="inline"
                             targetLabel="coordinator"
-                            toneClassName="text-muted-foreground/42"
+                            toneClassName="text-muted-foreground/79"
                             onToggle={(event) => {
                               event.preventDefault();
                               event.stopPropagation();
                               toggleProjectAgentPinned(project.id);
                             }}
                           />
-                        </div>
-                      </SidebarRowHoverActions>
-                    ) : null}
-                  </div>
-                  <DisclosureRegion open={project.expanded} className="pt-0.5">
-                    <SidebarMenuSub
-                      className={cn(
-                        "mx-0 my-0 w-full translate-x-0 border-l-0 px-0 py-0",
-                        SIDEBAR_NESTED_LIST_GAP_CLASS_NAME,
-                      )}
+                          <SidebarIconButton
+                            icon={SettingsIcon}
+                            label={`Hub settings for ${groupLabel}`}
+                            tooltip="Hub settings"
+                            tooltipSide="top"
+                            onClick={(event) => {
+                              event.preventDefault();
+                              event.stopPropagation();
+                              onOpenGroupSettings(project.id, "edit");
+                            }}
+                          />
+                        </SidebarSectionToolbar>
+                      ) : null}
+                    </div>
+                    <DisclosureRegion
+                      open={project.expanded}
+                      className={SIDEBAR_NESTED_LIST_OFFSET_CLASS_NAME}
                     >
-                      {groupThreadEntries.map((entry) =>
-                        renderThreadRow(
-                          entry.thread,
-                          projectSidebarData?.orderedProjectThreadIds ?? [],
-                          entry.depth,
-                          false,
-                          entry.thread.projectId !== project.id
-                            ? (projectLabelById.get(entry.thread.projectId) ?? undefined)
-                            : undefined,
-                        ),
-                      )}
-                    </SidebarMenuSub>
-                  </DisclosureRegion>
-                </div>
+                      <SidebarMenuSub
+                        className={cn(
+                          "mx-0 my-0 w-full translate-x-0 border-l-0 px-0 py-0",
+                          SIDEBAR_NESTED_LIST_GAP_CLASS_NAME,
+                        )}
+                      >
+                        {groupThreadEntries.map((entry) =>
+                          renderThreadRow(
+                            entry.thread,
+                            projectSidebarData?.orderedProjectThreadIds ?? [],
+                            false,
+                            entry.thread.projectId !== project.id
+                              ? (projectLabelById.get(entry.thread.projectId) ?? undefined)
+                              : undefined,
+                          ),
+                        )}
+                      </SidebarMenuSub>
+                    </DisclosureRegion>
+                  </div>
+                </SidebarMenuItem>
               );
             })
           ) : (
@@ -435,37 +485,23 @@ export function SidebarGroupsSurface({
           )}
         </SidebarMenu>
         {archivedGroups.length > 0 ? (
-          <div className="group/archived-collapsible pt-1">
-            <SidebarMenuButton
-              size="sm"
+          <SidebarCollapsibleSection
+            label="Archived hubs"
+            open={archivedGroupsOpen}
+            onToggle={() => setArchivedGroupsOpen((open) => !open)}
+            className="pt-3"
+          >
+            <SidebarMenuSub
               className={cn(
-                SIDEBAR_HEADER_ROW_CLASS_NAME,
-                "cursor-pointer hover:bg-[var(--sidebar-accent)]",
+                "mx-0 my-0 w-full translate-x-0 border-l-0 px-0 py-0",
+                SIDEBAR_NESTED_LIST_GAP_CLASS_NAME,
               )}
-              aria-expanded={archivedGroupsOpen}
-              onClick={() => setArchivedGroupsOpen((open) => !open)}
             >
-              <DisclosureChevron
-                open={archivedGroupsOpen}
-                className="size-3 shrink-0 text-muted-foreground/70"
-              />
-              <span
-                className={cn(
-                  "min-w-0 flex-1 truncate font-system-ui text-ui font-normal text-muted-foreground",
-                  SIDEBAR_ROW_LABEL_TEXT_CLASS_NAME,
-                )}
-              >
-                Archived hubs
-              </span>
-            </SidebarMenuButton>
-            <DisclosureRegion open={archivedGroupsOpen} className="pt-0.5">
-              <SidebarMenuSub
-                className={cn(
-                  "mx-0 my-0 w-full translate-x-0 border-l-0 px-0 py-0",
-                  SIDEBAR_NESTED_LIST_GAP_CLASS_NAME,
-                )}
-              >
-                {archivedGroups.map((project) => (
+              {archivedGroups.map((project) => {
+                const ArchivedGlyph = resolveCoordinatorAppearance({
+                  coordinatorIcon: summariesByProjectId.get(project.id)?.coordinatorIcon,
+                }).Icon;
+                return (
                   <SidebarMenuSubItem
                     key={project.id}
                     className="group/archived-row relative w-full"
@@ -483,7 +519,7 @@ export function SidebarGroupsSurface({
                         });
                       }}
                     >
-                      <FolderOpenIcon className="size-3.5 shrink-0" />
+                      <ArchivedGlyph className="size-3.5 shrink-0" />
                       <span className="min-w-0 flex-1 truncate">
                         {resolveSidebarProjectRowLabel(project)}
                       </span>
@@ -504,10 +540,10 @@ export function SidebarGroupsSurface({
                       Unarchive
                     </button>
                   </SidebarMenuSubItem>
-                ))}
-              </SidebarMenuSub>
-            </DisclosureRegion>
-          </div>
+                );
+              })}
+            </SidebarMenuSub>
+          </SidebarCollapsibleSection>
         ) : null}
       </SidebarGroup>
       <RenameDialog

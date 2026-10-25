@@ -14,8 +14,7 @@ import { Button } from "~/components/ui/button";
 import { InputGroup, InputGroupAddon, InputGroupInput } from "~/components/ui/input-group";
 import { isElectron } from "~/env";
 import { useWindowFolderDrop } from "~/hooks/useWindowFolderDrop";
-import { CentralIcon } from "~/lib/central-icons";
-import { CheckIcon, FolderIcon } from "~/lib/icons";
+import { CheckIcon, FolderAddIcon, FolderIcon } from "~/lib/icons";
 import { createOrRecoverProjectFromPath } from "~/lib/projectCreation";
 import { expandProjectHomePath } from "~/lib/projectPaths";
 import { cn } from "~/lib/utils";
@@ -152,11 +151,7 @@ export function ProjectStep(props: {
               )}
               onClick={() => void browse()}
             >
-              <CentralIcon
-                name="folder-add-left"
-                className="size-[22px] text-foreground/70"
-                aria-hidden="true"
-              />
+              <FolderAddIcon className="size-[22px] text-foreground/70" aria-hidden="true" />
               {picking ? (
                 <span>Opening the folder picker…</span>
               ) : (

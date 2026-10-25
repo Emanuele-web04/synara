@@ -1,4 +1,5 @@
 import {
+  PROVIDER_DISPLAY_NAMES,
   ProviderInteractionMode,
   RuntimeMode,
   ThreadId,
@@ -10,9 +11,11 @@ import { useCallback, useEffect, useRef } from "react";
 import { newCommandId } from "~/lib/utils";
 import { readNativeApi } from "~/nativeApi";
 import { useComposerDraftStore } from "../../composerDraftStore";
-import { providerModelSupportsAutoRuntimeMode } from "../../lib/runtimeMode";
+import { providerSupportsAutoRuntimeMode } from "../../lib/runtimeMode";
 import { type Thread } from "../../types";
 import {
+  accessModeModelSelectionToPersist,
+  autoWaitsForProviderHandoff,
   createRuntimeModePersistenceQueue,
   persistModelSelectionBeforeRuntimeMode,
 } from "../ChatView.logic";
@@ -25,6 +28,7 @@ interface ChatRuntimeModesInput {
   serverThread: Thread | undefined;
   isLocalDraftThread: boolean;
   runtimeMode: RuntimeMode;
+  onRuntimeModePersisted: (mode: RuntimeMode) => void;
   interactionMode: ProviderInteractionMode;
   selectedProvider: ProviderKind;
   selectedRuntimeModel: ReturnType<typeof resolveRuntimeModelDescriptor>;
@@ -39,6 +43,7 @@ export function useChatRuntimeModes({
   serverThread,
   isLocalDraftThread,
   runtimeMode,
+  onRuntimeModePersisted,
   interactionMode,
   selectedProvider,
   selectedRuntimeModel,
@@ -84,9 +89,31 @@ export function useChatRuntimeModes({
             });
             return false;
           }
+          if (
+            nextMode === "auto" &&
+            autoWaitsForProviderHandoff({ thread: serverThread, selectedModelSelection })
+          ) {
+            // The server checks Auto against the thread's current provider, which
+            // cannot run it. The switch itself happens on Send.
+            toastManager.add({
+              type: "error",
+              title: "Could not update access mode",
+              description: `Send a message to switch to ${
+                PROVIDER_DISPLAY_NAMES[selectedModelSelection.provider]
+              } first, then choose this access mode.`,
+            });
+            return false;
+          }
+          const accessModeModelSelection =
+            nextMode === "auto"
+              ? accessModeModelSelectionToPersist({
+                  thread: serverThread,
+                  selectedModelSelection,
+                })
+              : undefined;
           const persistenceInput = {
             currentModelSelection: serverThread.modelSelection,
-            ...(nextMode === "auto" ? { nextModelSelection: selectedModelSelection } : {}),
+            ...(accessModeModelSelection ? { nextModelSelection: accessModeModelSelection } : {}),
             currentRuntimeMode: currentMode,
             nextRuntimeMode: nextMode,
             persistModelSelection: (modelSelection: ModelSelection) =>
@@ -116,7 +143,11 @@ export function useChatRuntimeModes({
             return false;
           }
         }
-        setComposerDraftRuntimeMode(threadId, nextMode);
+        if (serverThread) {
+          onRuntimeModePersisted(nextMode);
+        } else {
+          setComposerDraftRuntimeMode(threadId, nextMode);
+        }
         if (isLocalDraftThread) {
           setDraftThreadContext(threadId, { runtimeMode: nextMode });
         }
@@ -126,6 +157,7 @@ export function useChatRuntimeModes({
     },
     [
       isLocalDraftThread,
+      onRuntimeModePersisted,
       runtimeMode,
       scheduleComposerFocus,
       selectedModelSelection,
@@ -146,11 +178,12 @@ export function useChatRuntimeModes({
     if (
       activeThread &&
       runtimeMode === "auto" &&
-      !providerModelSupportsAutoRuntimeMode(
-        selectedProvider,
-        selectedRuntimeModel,
-        activeProviderStatus,
-      )
+      // Missing discovery data during startup/reconnect is not evidence that
+      // the saved mode is unsupported. Only persist a fallback on known lack
+      // of support; the server still validates Auto before starting a turn.
+      (!providerSupportsAutoRuntimeMode(selectedProvider) ||
+        activeProviderStatus?.supportsAutoRuntimeMode === false ||
+        (selectedProvider === "claudeAgent" && selectedRuntimeModel?.supportsAutoMode === false))
     ) {
       handleRuntimeModeChange("approval-required");
     }

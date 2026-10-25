@@ -13,11 +13,14 @@ import {
   type OrchestrationSession,
   type OrchestrationThreadShell,
 } from "@synara/contracts";
-import { Cause, Duration, Effect, Layer, Schedule } from "effect";
+import { Cause, Duration, Effect, Layer, Option, Schedule, Semaphore } from "effect";
 
 import { OrchestrationEngineService } from "../../orchestration/Services/OrchestrationEngine.ts";
 import { OrchestrationReactor } from "../../orchestration/Services/OrchestrationReactor.ts";
-import { ProjectionSnapshotQuery } from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
+import {
+  ProjectionSnapshotQuery,
+  type ProjectionStaleInFlightThreadCursor,
+} from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
 import {
   PROVIDER_RUNTIME_INGESTION_CONSUMER,
   ProviderRuntimeEventRepository,
@@ -26,6 +29,7 @@ import {
   bindingActiveTurnId,
   DEFAULT_RUNTIME_RECONCILIATION_STALE_AFTER_MS,
   planProviderRuntimeReconciliation,
+  RUNTIME_RECONCILIATION_MAX_STALLED_START_AGE_MS,
   type ProviderRuntimeReconciliationPlan,
 } from "../providerRuntimeReconciliation.ts";
 import {
@@ -42,8 +46,10 @@ const DEFAULT_RECONCILIATION_INTERVAL_MS = 5_000;
 const DEFAULT_RECONCILIATION_CANDIDATE_LIMIT = 256;
 
 export interface ProviderRuntimeReconcilerLiveOptions {
+  readonly now?: () => number;
   readonly intervalMs?: number;
   readonly staleAfterMs?: number;
+  readonly maxStalledStartAgeMs?: number;
   readonly candidateLimit?: number;
 }
 
@@ -77,6 +83,10 @@ const make = (options?: ProviderRuntimeReconcilerLiveOptions) =>
     const staleAfterMs = Math.max(
       1,
       Math.floor(options?.staleAfterMs ?? DEFAULT_RUNTIME_RECONCILIATION_STALE_AFTER_MS),
+    );
+    const maxStalledStartAgeMs = Math.max(
+      staleAfterMs,
+      Math.floor(options?.maxStalledStartAgeMs ?? RUNTIME_RECONCILIATION_MAX_STALLED_START_AGE_MS),
     );
     const candidateLimit = Math.max(
       1,
@@ -155,10 +165,13 @@ const make = (options?: ProviderRuntimeReconcilerLiveOptions) =>
       // Nothing left to repair: the projected session already matches the plan
       // and no turn is left running. Dispatching anyway writes two fresh events
       // on every tick for as long as the thread stays a candidate.
-      if (
-        thread.latestTurn?.state !== "running" &&
-        isSameProjectedSession(thread.session, session)
-      ) {
+      const turnNeedsRepair =
+        plan.action === "align-running-turn"
+          ? thread.latestTurn?.turnId !== plan.runtimeTurnId ||
+            thread.latestTurn.state !== "running" ||
+            thread.latestTurn.completedAt !== null
+          : thread.latestTurn?.state === "running";
+      if (!turnNeedsRepair && isSameProjectedSession(thread.session, session)) {
         return;
       }
 
@@ -219,16 +232,37 @@ const make = (options?: ProviderRuntimeReconcilerLiveOptions) =>
       }
     });
 
+    const reconciliationLock = yield* Semaphore.make(1);
+    let candidateCursor: ProjectionStaleInFlightThreadCursor | null = null;
+
     const reconcileNow = Effect.gen(function* () {
-      const nowMs = Date.now();
-      const candidateThreadIds = yield* projectionSnapshotQuery.listStaleInFlightThreadIds({
-        updatedBefore: new Date(nowMs - staleAfterMs).toISOString(),
+      const nowMs = (options?.now ?? Date.now)();
+      const updatedBefore = new Date(nowMs - staleAfterMs).toISOString();
+      let page = yield* projectionSnapshotQuery.listStaleInFlightThreadPage({
+        updatedBefore,
         limit: candidateLimit,
+        ...(candidateCursor === null ? {} : { after: candidateCursor }),
       });
+      // The stored ordering key remains usable if the previous candidate was
+      // repaired or deleted. Wrap with at most one extra query at the boundary.
+      if (page.threadIds.length === 0 && candidateCursor !== null) {
+        candidateCursor = null;
+        page = yield* projectionSnapshotQuery.listStaleInFlightThreadPage({
+          updatedBefore,
+          limit: candidateLimit,
+        });
+      }
+      candidateCursor = page.nextCursor;
+      const candidateThreadIds = page.threadIds;
       if (candidateThreadIds.length === 0) return;
       const [bindings, liveSessions, pumpHealth, runtimeJournalLagging] = yield* Effect.all(
         [
-          directory.listBindings(),
+          // The planner reads bindings only for candidate threads. Point reads
+          // keep a tick bounded by the candidate page instead of decoding every
+          // binding row ever written (stopped rows are never deleted).
+          Effect.forEach(candidateThreadIds, (threadId) => directory.getBinding(threadId), {
+            concurrency: 1,
+          }).pipe(Effect.map((found) => found.flatMap(Option.toArray))),
           providerService.listSessions(),
           providerService.getRuntimeEventPumpHealth?.() ?? Effect.succeed([]),
           runtimeEvents.hasPendingEventsForThreads({
@@ -240,7 +274,9 @@ const make = (options?: ProviderRuntimeReconcilerLiveOptions) =>
       );
       // One batched read instead of up to `candidateLimit` point reads
       // contending on the single SQLite handle every reconciliation tick.
-      const threads = yield* projectionSnapshotQuery.getThreadShellsByIds(candidateThreadIds);
+      const threads = yield* projectionSnapshotQuery.getThreadShellsByIds(candidateThreadIds, {
+        includeLatestMessageActivity: true,
+      });
       const threadById = new Map(threads.map((thread) => [thread.id, thread]));
       const bindingByThreadId = new Map(bindings.map((binding) => [binding.threadId, binding]));
       const plans = planProviderRuntimeReconciliation({
@@ -251,6 +287,7 @@ const make = (options?: ProviderRuntimeReconcilerLiveOptions) =>
         runtimeJournalLagging,
         nowMs,
         staleAfterMs,
+        maxStalledStartAgeMs,
       });
       if (plans.length === 0) return;
 
@@ -283,7 +320,7 @@ const make = (options?: ProviderRuntimeReconcilerLiveOptions) =>
         { concurrency: 1, discard: true },
       );
       yield* orchestrationReactor.reconcileSettledOpenTurns;
-    });
+    }).pipe(reconciliationLock.withPermits(1));
 
     const reconcileSafely = reconcileNow.pipe(
       Effect.catchCause((cause) =>

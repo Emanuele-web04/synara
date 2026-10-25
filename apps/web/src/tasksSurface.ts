@@ -1,8 +1,6 @@
 // FILE: tasksSurface.ts
-// Purpose: Whether Tasks takes Kanban's place: the build offers it (Beta-only "tasks")
-//          and the connected server has not refused it. A browser that reaches a Stable
-//          server reads as a Beta host from its URL, so the server's refusal is what turns
-//          Tasks back off (and Kanban back on) for the rest of the session.
+// Purpose: Tasks takes Kanban's place unless the connected server refuses it.
+//          Older servers may not offer Tasks; refusal restores Kanban for the session.
 // Layer: Web feature gate
 // Exports: TASKS_OFFERED_BY_BUILD, isTasksSurfaceEnabled, useTasksSurfaceEnabled,
 //          isTasksRefusal, noteTasksRefusal
@@ -12,7 +10,7 @@ import { create } from "zustand";
 
 import { isBetaFeatureOn } from "./betaFeatures";
 
-/** Tasks replaces Kanban where the Beta-only "tasks" feature is on; Stable keeps Kanban. */
+/** Tasks replaces Kanban in Stable and Beta, with the board accessible from its switch. */
 export const TASKS_OFFERED_BY_BUILD = isBetaFeatureOn("tasks");
 
 const useTasksRefusalStore = create<{ refused: boolean }>(() => ({ refused: false }));

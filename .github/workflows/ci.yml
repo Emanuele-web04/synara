@@ -83,20 +83,23 @@ jobs:
       - name: Verify CI contracts
         run: node --test .github/scripts/ci-contracts.test.mjs
 
-      - name: Verify Synara identity
-        run: bun run brand:check
+      # Independent checks share the installed workspace; parallel waits for all
+      # of them and fails the lane if any check fails, with separate step logs.
+      - parallel:
+          - name: Verify Synara identity
+            run: bun run brand:check
 
-      - name: Verify Windows runtime boundary
-        run: bun run windows-runtime:check
+          - name: Verify Windows runtime boundary
+            run: bun run windows-runtime:check
 
-      - name: Format
-        run: bun run fmt:check
+          - name: Format
+            run: bun run fmt:check
 
-      - name: Lint
-        run: bun run lint
+          - name: Lint
+            run: bun run lint
 
-      - name: Exercise release-only workflow steps
-        run: node scripts/release-smoke.ts
+          - name: Exercise release-only workflow steps
+            run: node scripts/release-smoke.ts
 
   static-typecheck:
     name: Static Checks (typecheck)

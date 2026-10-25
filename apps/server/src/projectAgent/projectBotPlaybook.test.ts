@@ -21,7 +21,9 @@ describe("project bot playbook", () => {
     expect(PROJECT_BOT_PLAYBOOK).toContain("expected revision");
     expect(PROJECT_BOT_PLAYBOOK).toContain("clickable link");
     expect(PROJECT_BOT_PLAYBOOK).toContain("report in this chat");
-    expect(PROJECT_BOT_PLAYBOOK).toContain("Never say you did not wait");
+    expect(PROJECT_BOT_PLAYBOOK).toContain(
+      "If the user explicitly asks for all results in this turn",
+    );
     expect(PROJECT_BOT_PLAYBOOK).toContain("inbox/<threadId>/report.md");
     expect(PROJECT_BOT_PLAYBOOK).toContain("The thread does not have to remember a tool");
   });
@@ -53,9 +55,24 @@ describe("project bot playbook", () => {
     expect(PROJECT_BOT_PLAYBOOK).toContain("goes to a thread, not to you");
   });
 
+  it("keeps queue for ordinary follow-ups and names the steer interrupt", () => {
+    expect(PROJECT_BOT_PLAYBOOK).toContain("is the default and never interrupts");
+    expect(PROJECT_BOT_PLAYBOOK).toContain("Reserve `steer` for a correction");
+    expect(PROJECT_BOT_PLAYBOOK).toContain("stopping the running turn so the follow-up runs next");
+  });
+
   it("tells heartbeat wakes to report in chat instead of asking for a goal", () => {
     expect(PROJECT_BOT_HEARTBEAT_PROMPT).toContain("reply in this chat");
     expect(PROJECT_BOT_HEARTBEAT_PROMPT).toContain("Do not ask the user to start a goal");
-    expect(PROJECT_BOT_WATCH_RULES).toContain("Do not say you will not wait");
+    for (const prompt of [
+      PROJECT_BOT_HEARTBEAT_PROMPT,
+      PROJECT_BOT_WATCH_RULES,
+      PROJECT_BOT_PLAYBOOK,
+    ]) {
+      expect(prompt).toContain(
+        "do not create replacement threads without a new explicit user request",
+      );
+      expect(prompt).toContain("health monitor owns bounded retries");
+    }
   });
 });

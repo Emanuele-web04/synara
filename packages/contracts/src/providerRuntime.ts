@@ -1,4 +1,5 @@
 import { Option, Schema } from "effect";
+import { ProviderInteractionMode } from "./orchestration";
 import { AsyncUserInputQuestions } from "./asyncUserInput";
 import {
   EventId,
@@ -398,11 +399,16 @@ const TurnCompletedPayload = Schema.Struct({
   usage: Schema.optional(Schema.Unknown),
   modelUsage: Schema.optional(UnknownRecordSchema),
   tokenAccountingVersion: Schema.optional(Schema.Literal(1)),
+  // Claude SDK result versus a synthetic UI completion without a result.
+  claudeResultObserved: Schema.optional(Schema.Boolean),
   // Per-turn main-loop usage, including observed usage when no result arrives.
   mainLoopTokens: Schema.optional(NonNegativeInt),
+  // The part of mainLoopTokens read from the prompt cache.
+  mainLoopCacheReadTokens: Schema.optional(NonNegativeInt),
   totalCostUsd: Schema.optional(Schema.Number),
   cumulativeCostUsd: Schema.optional(Schema.Number),
   errorMessage: Schema.optional(TrimmedNonEmptyStringSchema),
+  errorCode: Schema.optional(TrimmedNonEmptyStringSchema),
 });
 export type TurnCompletedPayload = typeof TurnCompletedPayload.Type;
 
@@ -568,6 +574,7 @@ const WorkflowAgentPlan = Schema.Struct({
 export type WorkflowAgentPlan = typeof WorkflowAgentPlan.Type;
 
 const TaskStartedPayload = Schema.Struct({
+  interactionMode: Schema.optional(ProviderInteractionMode),
   taskId: RuntimeTaskId,
   description: Schema.optional(TrimmedNonEmptyStringSchema),
   taskType: Schema.optional(TrimmedNonEmptyStringSchema),
@@ -596,10 +603,17 @@ const TaskProgressPayload = Schema.Struct({
   // Live per-agent snapshots for workflow tasks, polled from the run's
   // transcript directory while the workflow is running.
   workflowAgents: Schema.optional(Schema.Array(WorkflowAgentRuntimeSnapshot)),
+  // Set when the task is a provider-native subagent: the spawning tool call id
+  // (the child thread's provider thread id) and the subagent's own title, so
+  // progress is attributed to that subagent instead of the parent's reasoning.
+  toolUseId: Schema.optional(TrimmedNonEmptyStringSchema),
+  subagentTitle: Schema.optional(TrimmedNonEmptyStringSchema),
 });
 export type TaskProgressPayload = typeof TaskProgressPayload.Type;
 
 const TaskUpdatedPayload = Schema.Struct({
+  reconcilesStop: Schema.optional(Schema.Boolean),
+  interactionMode: Schema.optional(ProviderInteractionMode),
   taskId: RuntimeTaskId,
   status: Schema.optional(
     Schema.Literals(["pending", "running", "completed", "failed", "killed", "paused"]),
@@ -617,12 +631,21 @@ const TaskUpdatedPayload = Schema.Struct({
 export type TaskUpdatedPayload = typeof TaskUpdatedPayload.Type;
 
 const TaskCompletedPayload = Schema.Struct({
+  interactionMode: Schema.optional(ProviderInteractionMode),
   taskId: RuntimeTaskId,
   status: Schema.Literals(["completed", "failed", "stopped"]),
   summary: Schema.optional(TrimmedNonEmptyStringSchema),
   usage: Schema.optional(Schema.Unknown),
   workflowTaskId: Schema.optional(RuntimeTaskId),
   workflowAgents: Schema.optional(Schema.Array(WorkflowAgentSnapshot)),
+  // Spawning tool call id when the task is a provider-native subagent.
+  toolUseId: Schema.optional(TrimmedNonEmptyStringSchema),
+  // A provider terminal update can correct an adapter's earlier local stop
+  // result when the task's completion notification arrived later.
+  reconcilesStop: Schema.optional(Schema.Boolean),
+  // A local stop persisted without a provider terminal update. Resume replay
+  // may reconcile this task after a process restart.
+  awaitingProviderConfirmation: Schema.optional(Schema.Boolean),
 });
 export type TaskCompletedPayload = typeof TaskCompletedPayload.Type;
 
@@ -761,12 +784,14 @@ export type VcsStateChangedPayload = typeof VcsStateChangedPayload.Type;
 
 const RuntimeWarningPayload = Schema.Struct({
   message: TrimmedNonEmptyStringSchema,
+  willRetry: Schema.optional(Schema.Boolean),
   detail: Schema.optional(Schema.Unknown),
 });
 export type RuntimeWarningPayload = typeof RuntimeWarningPayload.Type;
 
 const RuntimeErrorPayload = Schema.Struct({
   message: TrimmedNonEmptyStringSchema,
+  errorCode: Schema.optional(TrimmedNonEmptyStringSchema),
   class: Schema.optional(RuntimeErrorClass),
   detail: Schema.optional(Schema.Unknown),
 });

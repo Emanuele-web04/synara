@@ -7,6 +7,7 @@ import { page } from "vitest/browser";
 import { afterEach, expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";
 
+import { useDockExplorerBrowseStore } from "../../dockExplorerBrowseStore";
 import {
   requestExplorerReveal,
   useExplorerRevealRequestStore,
@@ -15,7 +16,11 @@ import { resolveWorkspaceDirectoryOpenTarget } from "../../lib/workspaceFileOpen
 import { projectListDirectoriesQueryOptions } from "../../lib/projectReactQuery";
 import { DockExplorerPane } from "./DockExplorerPane";
 
-vi.mock("../WorkspaceFilePreview", () => ({ WorkspaceFilePreview: () => null }));
+vi.mock("../WorkspaceFilePreview", () => ({
+  WorkspaceFilePreview: (props: { filePath: string | null }) => (
+    <div data-testid="file-preview">{props.filePath}</div>
+  ),
+}));
 
 const threadId = ThreadId.makeUnsafe("directory-reveal-test");
 let restoreNativeApi: (() => void) | undefined;
@@ -23,6 +28,7 @@ let restoreNativeApi: (() => void) | undefined;
 afterEach(() => {
   restoreNativeApi?.();
   useExplorerRevealRequestStore.setState({ requestsByThreadId: {} });
+  useDockExplorerBrowseStore.setState({ browseStateByThreadId: {} });
 });
 
 function directory(path: string): ProjectFileSystemEntry {
@@ -33,6 +39,7 @@ async function renderExplorer(
   cwd: string,
   listDirectories: NativeApi["projects"]["listDirectories"],
   queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } }),
+  paneThreadId: ThreadId = threadId,
 ) {
   const previous = Object.getOwnPropertyDescriptor(window, "nativeApi");
   Object.defineProperty(window, "nativeApi", {
@@ -50,7 +57,7 @@ async function renderExplorer(
   };
   return render(
     <QueryClientProvider client={queryClient}>
-      <DockExplorerPane threadId={threadId} workspaceRoot={cwd} isVisible />
+      <DockExplorerPane threadId={paneThreadId} workspaceRoot={cwd} isVisible />
     </QueryClientProvider>,
   );
 }
@@ -161,4 +168,47 @@ it("refreshes an invalidated listing before resolving a Windows reveal", async (
     .element(page.getByTitle("src/new", { exact: true }))
     .toHaveAttribute("aria-expanded", "true");
   expect(listDirectories).toHaveBeenCalledWith({ cwd, relativePath: "src", includeFiles: true });
+});
+
+it("keeps the open file, expanded directories, and search query when the thread remounts", async () => {
+  const cwd = "/repo/app";
+  const listDirectories = vi
+    .fn<NativeApi["projects"]["listDirectories"]>()
+    .mockImplementation(async ({ relativePath }) => ({
+      entries:
+        relativePath === "src"
+          ? [{ path: "src/readme.md", name: "readme.md", kind: "file" }]
+          : [directory("src")],
+    }));
+  const first = await renderExplorer(cwd, listDirectories);
+  await page.getByTitle("src", { exact: true }).click();
+  await page.getByTitle("src/readme.md", { exact: true }).click();
+  await expect.element(page.getByTestId("file-preview")).toHaveTextContent("src/readme.md");
+  const search = page.getByPlaceholder("Search files");
+  await search.fill("read");
+  await expect.element(page.getByText("No matching files.")).toBeVisible();
+  await first.unmount();
+
+  // Another thread's pane mounts in between (the thread switch); its browse
+  // state starts empty and must not see thread one's file.
+  const other = await renderExplorer(
+    cwd,
+    listDirectories,
+    undefined,
+    ThreadId.makeUnsafe("other-thread"),
+  );
+  await expect
+    .element(page.getByTitle("src", { exact: true }))
+    .toHaveAttribute("aria-expanded", "false");
+  await other.unmount();
+
+  // Switching back remounts the first thread's pane with its browse state.
+  await renderExplorer(cwd, listDirectories);
+  await expect.element(page.getByTestId("file-preview")).toHaveTextContent("src/readme.md");
+  await expect.element(page.getByPlaceholder("Search files")).toHaveValue("read");
+  await page.getByPlaceholder("Search files").fill("");
+  await expect
+    .element(page.getByTitle("src", { exact: true }))
+    .toHaveAttribute("aria-expanded", "true");
+  await expect.element(page.getByTitle("src/readme.md", { exact: true })).toBeVisible();
 });

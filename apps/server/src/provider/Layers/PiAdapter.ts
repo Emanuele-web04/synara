@@ -1,3 +1,4 @@
+import { providerProcessPriorityEnabled } from "../../providerProcessPriority";
 import { refreshPiOpenCodeCatalog } from "../piOpenCodeCatalog";
 import crypto from "node:crypto";
 import path from "node:path";
@@ -94,8 +95,8 @@ import { openrouterProvider } from "@earendil-works/pi-ai/providers/openrouter";
 import {
   buildProviderProcessEnv,
   MODEL_PROVIDER_API_KEY_ENV_MAPPINGS,
-  providerIsolatedHomePath,
 } from "../providerProcessEnv.ts";
+import { makePiStoragePaths } from "../piStoragePaths.ts";
 import {
   compactProviderRuntimeEventForIngress,
   isTerminalProviderRuntimeEvent,
@@ -227,6 +228,7 @@ export interface PiBashProcessSupervisor {
 }
 
 export interface PiBashProcessSupervisorOptions {
+  readonly lowerPriority?: boolean;
   readonly getShellConfig: (shellPath?: string) => PiShellConfig;
   readonly environment?: Readonly<Record<string, string>>;
   readonly instanceId?: string;
@@ -291,6 +293,7 @@ export function makePiBashProcessSupervisor(
         commandFromStdin ? shell.args : [...shell.args, command],
         {
           cwd,
+          lowerPriority: options.lowerPriority ?? true,
           env: buildProviderChildEnvironment({
             provider: "pi",
             baseEnv: buildProviderProcessEnv({
@@ -945,7 +948,11 @@ function getSessionFile(session: PiAgentSession): string | undefined {
   return session.sessionFile ?? session.sessionManager.getSessionFile();
 }
 
-function makeSessionSnapshot(context: PiSessionContext): ProviderSession {
+// Snapshot reads are not provider activity; transitions pass their actual timestamp.
+function makeSessionSnapshot(
+  context: PiSessionContext,
+  updatedAt = context.session.updatedAt,
+): ProviderSession {
   const resumeCursor = getSessionFile(context.runtime.session);
   return {
     provider: PROVIDER,
@@ -956,7 +963,7 @@ function makeSessionSnapshot(context: PiSessionContext): ProviderSession {
     runtimeMode: context.session.runtimeMode,
     threadId: context.session.threadId,
     createdAt: context.session.createdAt,
-    updatedAt: new Date().toISOString(),
+    updatedAt,
     ...(context.session.cwd ? { cwd: context.session.cwd } : {}),
     ...(context.session.model ? { model: context.session.model } : {}),
     ...(resumeCursor ? { resumeCursor } : {}),
@@ -1237,7 +1244,7 @@ function toolTitle(toolName: string, args: unknown): string {
   if (query && (toolName === "find" || toolName === "grep")) {
     return `${toolName} ${query}`;
   }
-  return toolName;
+  return toolName.trim() || "Tool";
 }
 
 function toolLifecycleData(input: {
@@ -1413,64 +1420,6 @@ function mapMessageHistory(session: PiAgentSession): unknown[] {
     }
   }
   return items;
-}
-
-export function makePiStoragePaths(input: {
-  readonly agentDir?: string | undefined;
-  readonly environment?: Readonly<Record<string, string>> | undefined;
-  readonly instanceId?: string | undefined;
-  readonly stateDir: string;
-  readonly homeDir: string;
-  readonly sdkAgentDir: string;
-}): { readonly agentDir: string; readonly sessionDir?: string } {
-  const boundary =
-    input.environment !== undefined ||
-    (input.instanceId !== undefined && input.instanceId !== PROVIDER);
-  const selectedAbsolutePath = (value: string | undefined) => {
-    const selected = trimToUndefined(value);
-    return selected && path.isAbsolute(selected) ? selected : undefined;
-  };
-  const selectedEnvironmentValue = (name: string) =>
-    Object.entries(input.environment ?? {}).find(
-      ([candidate]) => candidate.toUpperCase() === name,
-    )?.[1];
-  const selectedHome = selectedAbsolutePath(
-    selectedEnvironmentValue("HOME") ?? selectedEnvironmentValue("USERPROFILE"),
-  );
-  const isolatedHome = providerIsolatedHomePath({
-    driver: PROVIDER,
-    instanceId: input.instanceId,
-    homeDir: input.homeDir,
-    isolationRootDir: input.stateDir,
-  });
-  const expansionHome = boundary ? (selectedHome ?? isolatedHome) : (selectedHome ?? input.homeDir);
-  const expandHome = (value: string) =>
-    value === "~" || value.startsWith("~/")
-      ? path.join(expansionHome, value.slice(value === "~" ? 1 : 2))
-      : value;
-  const rawConfiguredAgentDir = trimToUndefined(input.agentDir);
-  const configuredAgentDir = rawConfiguredAgentDir
-    ? rawConfiguredAgentDir === "~" || rawConfiguredAgentDir.startsWith("~/")
-      ? expandHome(rawConfiguredAgentDir)
-      : !boundary || path.isAbsolute(rawConfiguredAgentDir)
-        ? rawConfiguredAgentDir
-        : undefined
-    : undefined;
-  const selectedAgentDir = selectedAbsolutePath(selectedEnvironmentValue("PI_CODING_AGENT_DIR"));
-  if (!boundary && !configuredAgentDir && !selectedAgentDir) {
-    return { agentDir: input.sdkAgentDir };
-  }
-  const agentDir =
-    configuredAgentDir ??
-    selectedAgentDir ??
-    path.join(selectedHome ?? isolatedHome, ".pi", "agent");
-  const selectedSessionDir = selectedAbsolutePath(
-    selectedEnvironmentValue("PI_CODING_AGENT_SESSION_DIR"),
-  );
-  return {
-    agentDir,
-    sessionDir: expandHome(selectedSessionDir ?? path.join(agentDir, "sessions")),
-  };
 }
 
 function readPiRuntimeApiKeyOverrides(
@@ -2496,6 +2445,43 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
       );
     };
 
+    // SDK messages end independently of the prompt's retries and tool loop.
+    // Keep prompt settlement as a fallback for failures without message_end.
+    const completeMessageItems = (
+      context: PiSessionContext,
+      failed: boolean,
+      raw: ProviderRuntimeEvent["raw"],
+    ) => {
+      if (context.activeAssistantItemId) {
+        offerRuntimeEvent({
+          ...makeEventBase(context),
+          itemId: context.activeAssistantItemId,
+          type: "item.completed",
+          payload: {
+            itemType: "assistant_message",
+            status: failed ? "failed" : "completed",
+            title: "Assistant",
+          },
+          raw,
+        } satisfies ProviderRuntimeEvent);
+      }
+      if (context.activeReasoningItemId) {
+        offerRuntimeEvent({
+          ...makeEventBase(context),
+          itemId: context.activeReasoningItemId,
+          type: "item.completed",
+          payload: {
+            itemType: "reasoning",
+            status: failed ? "failed" : "completed",
+            title: "Reasoning",
+          },
+          raw,
+        } satisfies ProviderRuntimeEvent);
+      }
+      context.activeAssistantItemId = undefined;
+      context.activeReasoningItemId = undefined;
+    };
+
     const completePrompt = (
       context: PiSessionContext,
       turnId: TurnId,
@@ -2516,32 +2502,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
       const leafId = context.runtime.session.sessionManager.getLeafId();
       const turn = context.turns.find((candidate) => candidate.id === turnId);
       if (turn) turn.leafId = leafId;
-      if (context.activeAssistantItemId) {
-        offerRuntimeEvent({
-          ...makeEventBase(context),
-          itemId: context.activeAssistantItemId,
-          type: "item.completed",
-          payload: {
-            itemType: "assistant_message",
-            status: errorMessage ? "failed" : "completed",
-            title: "Assistant",
-          },
-          raw,
-        } satisfies ProviderRuntimeEvent);
-      }
-      if (context.activeReasoningItemId) {
-        offerRuntimeEvent({
-          ...makeEventBase(context),
-          itemId: context.activeReasoningItemId,
-          type: "item.completed",
-          payload: {
-            itemType: "reasoning",
-            status: errorMessage ? "failed" : "completed",
-            title: "Reasoning",
-          },
-          raw,
-        } satisfies ProviderRuntimeEvent);
-      }
+      completeMessageItems(context, Boolean(errorMessage), raw);
       if (usage) {
         offerRuntimeEvent({
           ...makeEventBase(context),
@@ -2614,7 +2575,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
       context.activeAssistantItemId = undefined;
       context.activeReasoningItemId = undefined;
       context.activeToolItems.clear();
-      context.session = makeSessionSnapshot(context);
+      context.session = makeSessionSnapshot(context, new Date().toISOString());
       offerRuntimeEvent({
         ...completionBase,
         type: "turn.completed",
@@ -2817,7 +2778,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
               });
               yield* cancelAgentGatewayTurn(context.gatewaySessionLease, context.activeTurnId);
               context.activeTurnId = undefined;
-              context.session = makeSessionSnapshot(context);
+              context.session = makeSessionSnapshot(context, new Date().toISOString());
               return yield* Effect.fail(error);
             }),
           ),
@@ -2830,7 +2791,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
         } satisfies ProviderRuntimeEvent);
         yield* cancelAgentGatewayTurn(context.gatewaySessionLease, context.activeTurnId);
         context.activeTurnId = undefined;
-        context.session = makeSessionSnapshot(context);
+        context.session = makeSessionSnapshot(context, new Date().toISOString());
       });
 
     const dispatchResult = (context: PiSessionContext, turnId: TurnId) => ({
@@ -3032,6 +2993,15 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
             },
             raw: { source: "pi.sdk.event", messageType: event.type, payload: event },
           } satisfies ProviderRuntimeEvent);
+          return;
+        case "message_end":
+          if (event.message.role === "assistant") {
+            completeMessageItems(
+              context,
+              event.message.stopReason === "error" || event.message.stopReason === "aborted",
+              { source: "pi.sdk.event", messageType: event.type, payload: event },
+            );
+          }
           return;
         case "message_update":
           handleMessageUpdate(context, event);
@@ -3349,6 +3319,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
         }
         const piSdk = yield* loadPiSdk("session/start");
         const processSupervisor = makePiBashProcessSupervisor({
+          lowerPriority: yield* providerProcessPriorityEnabled,
           getShellConfig: () => piSdk.getShellConfig(),
           ...(piEnvironment !== undefined ? { environment: piEnvironment } : {}),
           ...(providerInstanceId !== undefined ? { instanceId: providerInstanceId } : {}),
@@ -3729,7 +3700,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
           const turnId = TurnId.makeUnsafe(crypto.randomUUID());
           context.activeTurnId = turnId;
           context.turns.push({ id: turnId, items: [], toolItemIndexes: new Map() });
-          context.session = makeSessionSnapshot(context);
+          context.session = makeSessionSnapshot(context, new Date().toISOString());
           if (isPiReloadPayload(payload)) {
             yield* runPiReload(context, payload.text);
             return dispatchResult(context, turnId);
@@ -3890,10 +3861,15 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
       );
 
     const listSessions: PiAdapterShape["listSessions"] = () =>
-      Effect.sync(() => Array.from(sessions.values()).map(makeSessionSnapshot));
+      Effect.sync(() =>
+        Array.from(sessions.values()).map((context) => makeSessionSnapshot(context)),
+      );
 
     const hasSession: PiAdapterShape["hasSession"] = (threadId) =>
-      Effect.sync(() => sessions.has(threadId));
+      Effect.sync(() => {
+        const context = sessions.get(threadId);
+        return context !== undefined && !context.stopped;
+      });
 
     const snapshotThread = (context: PiSessionContext): ProviderThreadSnapshot => {
       const historyItems = mapMessageHistory(context.runtime.session);
@@ -4224,6 +4200,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
       stopSession,
       listSessions,
       hasSession,
+      hasRetainedSession: (threadId) => Effect.sync(() => sessions.has(threadId)),
       readThread,
       rollbackThread,
       compactThread,

@@ -27,8 +27,10 @@ import {
 import { appHistory } from "../../appNavigation";
 import { useComposerDraftStore } from "../../composerDraftStore";
 import { useStarredModels } from "../../hooks/useStarredModels";
+import type { ProviderModelCatalog } from "../../hooks/useProviderModelCatalog";
 import {
   buildNextProviderOptions,
+  getOmpModelSelectionIssue,
   type ProviderModelOption,
   type ProviderOptions,
 } from "../../providerModelOptions";
@@ -41,12 +43,14 @@ import { Input } from "../ui/input";
 import { Menu, MenuGroup, MenuGroupLabel } from "../ui/menu";
 import { Skeleton } from "../ui/skeleton";
 import { ComposerModelMenuTrigger } from "./ComposerModelMenuTrigger";
+import { ModelCatalogRefresh } from "./ModelCatalogRefresh";
 import {
   buildProviderTabRows,
   buildStarredModelOptionsPatch,
   buildStarredTabRows,
   type ComposerModelPickerRow as PickerRow,
   type ComposerModelPickerTab,
+  composerModelDisplayName,
   MODEL_PICKER_POPUP_ATTRIBUTE,
   MODEL_PICKER_SHORTCUT_ROW_LIMIT,
   modelPickerShortcutRowIndex,
@@ -70,6 +74,7 @@ import {
   resolveComposerTraitStatusLabel,
   showsComposerFastModeBadge,
 } from "./composerTraits";
+import type { FastModeNotice } from "~/lib/fastModeState";
 import { MENU_NAVIGATION_KEYS } from "./PickerPanelShell";
 import {
   PICKER_PANEL_GROUP_LABEL_CLASS_NAME,
@@ -78,6 +83,7 @@ import {
 } from "./pickerPanelStyles";
 import {
   AVAILABLE_PROVIDER_OPTIONS,
+  findProviderStatusForInstance,
   type ProviderModelOptionsByProviderInstance,
   type ProviderModelPickerInstance,
   resolveProviderModelLabel,
@@ -96,9 +102,16 @@ type ComposerModelPickerProps = {
   provider: ProviderKind;
   model: ModelSlug;
   lockedProvider: ProviderKind | null;
+  // Set when other providers are open for a same-thread handoff: the thread's
+  // own provider still cannot switch to a sibling account.
+  boundProviderInstance?: {
+    readonly provider: ProviderKind;
+    readonly instanceId: ProviderInstanceId;
+  } | null;
   providers?: ReadonlyArray<ServerProviderStatus>;
   modelOptionsByProvider: Record<ProviderKind, ReadonlyArray<ProviderModelOption>>;
   loadingModelProviders?: Partial<Record<ProviderKind, boolean>>;
+  onRefreshModels?: ProviderModelCatalog["refreshModels"];
   discoveryErrorsByProvider?: Partial<Record<ProviderKind, string | undefined>>;
   hiddenProviders?: ReadonlyArray<ProviderKind>;
   providerOrder?: ReadonlyArray<ProviderKind>;
@@ -110,6 +123,8 @@ type ComposerModelPickerProps = {
   hideModelLabel?: boolean;
   hideStatusLabel?: boolean;
   contextWindowLabel?: string | null;
+  // Set when the thread's provider reported that the requested fast mode is not serving.
+  fastModeNotice?: FastModeNotice | null;
   disabled?: boolean;
   // "menu" (default) lists effort as a footer row; "slider" renders the ladder as a
   // stepped slider card in the footer instead.
@@ -197,7 +212,19 @@ export function ComposerModelPicker(props: ComposerModelPickerProps) {
   const usableStarredModels = starredModels.filter((entry) => {
     if (lockedProvider !== null && entry.provider !== lockedProvider) return false;
     const instanceId = starredModelInstanceId(entry);
+    const status = findProviderStatusForInstance({
+      providers: props.providers,
+      provider: entry.provider,
+      instanceId,
+    });
+    if (status?.enabled === false) return false;
+    if (knownInstances?.some((instance) => instance.instanceId === instanceId && !instance.enabled))
+      return false;
     if (lockedProvider !== null && instanceId !== activeInstanceId) return false;
+    const bound = props.boundProviderInstance;
+    if (bound && entry.provider === bound.provider && instanceId !== bound.instanceId) {
+      return false;
+    }
     return (
       instanceId === entry.provider ||
       knownInstances === undefined ||
@@ -267,6 +294,14 @@ export function ComposerModelPicker(props: ComposerModelPickerProps) {
     modelOptionsByProviderInstance: props.modelOptionsByProviderInstance,
     selectedProviderInstanceId: props.selectedProviderInstanceId,
   });
+  const modelSelectionIssue =
+    activeProvider === "omp"
+      ? getOmpModelSelectionIssue(
+          props.model,
+          props.modelOptionsByProviderInstance?.[activeInstanceId] ??
+            props.modelOptionsByProvider.omp,
+        )
+      : null;
   const currentTraitSelection = getComposerTraitSelection(
     props.provider,
     props.model,
@@ -282,11 +317,17 @@ export function ComposerModelPicker(props: ComposerModelPickerProps) {
     hiddenProviders: props.hiddenProviders,
     providerOrder: props.providerOrder,
   }).filter((option) => lockedProvider === null || option.value === lockedProvider);
-  // The composer's own provider keeps its tab even when none of its accounts can run,
-  // so the tab can say why instead of the picker listing models that will not start.
-  const activeProviderOption = AVAILABLE_PROVIDER_OPTIONS.find(
-    (option) => option.value === activeProvider,
-  );
+  // An enabled provider awaiting setup keeps its tab; a disabled provider is
+  // managed through the recovery list in Settings instead.
+  const activeProviderStatus = findProviderStatusForInstance({
+    providers: props.providers,
+    provider: activeProvider,
+    instanceId: activeInstanceId,
+  });
+  const activeProviderOption =
+    activeProviderStatus?.enabled === false
+      ? undefined
+      : AVAILABLE_PROVIDER_OPTIONS.find((option) => option.value === activeProvider);
   const providerTabs = resolveComposerModelPickerProviderTabs({
     options:
       activeProviderOption &&
@@ -295,7 +336,12 @@ export function ComposerModelPicker(props: ComposerModelPickerProps) {
         : visibleProviderOptions,
     providers: props.providers,
     providerInstances: props.providerInstances,
-    lockedInstanceId: lockedProvider !== null ? activeInstanceId : null,
+    lockedInstanceId:
+      lockedProvider !== null
+        ? activeInstanceId
+        : (props.boundProviderInstance?.instanceId ?? null),
+    lockedInstanceProvider:
+      lockedProvider === null ? (props.boundProviderInstance?.provider ?? null) : null,
   });
   const activeProviderTab = providerTabs.find(
     (providerTab) => providerTab.instanceId === activeInstanceId,
@@ -309,20 +355,16 @@ export function ComposerModelPicker(props: ComposerModelPickerProps) {
       setTab(
         usableStarredModels.length > 0 && !activeProviderTab?.setupMessage
           ? STARRED_TAB
-          : activeInstanceId,
+          : (activeProviderTab?.instanceId ?? providerTabs[0]?.instanceId ?? STARRED_TAB),
       );
       setQuery("");
     }
   }
 
-  // The account a provider tab lists; a tab that is no longer offered falls back to the
-  // composer's own account.
+  // A tab that is no longer offered falls back to the first visible account.
   const openProviderTab = providerTabs.find((providerTab) => providerTab.instanceId === tab);
-  const tabAccount =
-    tab === STARRED_TAB
-      ? null
-      : (openProviderTab ?? { provider: activeProvider, instanceId: activeInstanceId });
-  const setupMessage = tab === STARRED_TAB ? null : (openProviderTab?.setupMessage ?? null);
+  const tabAccount = tab === STARRED_TAB ? null : (openProviderTab ?? providerTabs[0] ?? null);
+  const setupMessage = tab === STARRED_TAB ? null : (tabAccount?.setupMessage ?? null);
   const openProviderSettings = () => {
     setMenuOpen(false);
     appHistory.push("/settings?section=providers");
@@ -399,6 +441,7 @@ export function ComposerModelPicker(props: ComposerModelPickerProps) {
     }
     if (keepOpen) {
       selectionCommittedWhileOpenRef.current = true;
+      setMenuOpen(true);
       return;
     }
     selectionCommittedWhileOpenRef.current = false;
@@ -408,16 +451,6 @@ export function ComposerModelPicker(props: ComposerModelPickerProps) {
 
   const selectRow = (row: PickerRow) => {
     if (props.disabled) return;
-    // OMP role rows resolve to a concrete model + options, committed through the
-    // same patch path as a starred preset.
-    if (row.role) {
-      commitRow(
-        row,
-        row.role.model as ModelSlug,
-        row.role.thinkingLevel ? { thinkingLevel: row.role.thinkingLevel } : {},
-      );
-      return;
-    }
     const model = row.selectableModel;
     if (model === null) return;
 
@@ -505,10 +538,11 @@ export function ComposerModelPicker(props: ComposerModelPickerProps) {
         // The default account is implied; only another one is worth the room.
         accountName={activeProviderTab?.dotted ? activeProviderTab.name : null}
         accountAccentColor={activeProviderTab?.accentColor}
-        modelLabel={modelLabel}
+        modelLabel={composerModelDisplayName(activeProvider, modelLabel)}
         statusLabel={resolveComposerTraitStatusLabel(currentTraitSelection)}
         contextWindowLabel={activeProvider === "claudeAgent" ? props.contextWindowLabel : null}
         showsFastBadge={showsComposerFastModeBadge(currentTraitSelection)}
+        fastModeNotice={activeProvider === "claudeAgent" ? props.fastModeNotice : null}
         hideModelLabel={props.hideModelLabel}
         hideStatusLabel={props.hideStatusLabel}
         disabled={props.disabled}
@@ -533,7 +567,7 @@ export function ComposerModelPicker(props: ComposerModelPickerProps) {
         {/* -m-1 bleeds over the popup body padding so headers/dividers run edge to edge. */}
         <div className="-m-1 flex flex-col">
           <ComposerModelPickerTabs
-            tab={tab}
+            tab={tab === STARRED_TAB ? STARRED_TAB : (tabAccount?.instanceId ?? STARRED_TAB)}
             providerTabs={providerTabs}
             onTabChange={setTab}
             onAddProviders={lockedProvider === null ? openProviderSettings : undefined}
@@ -573,6 +607,11 @@ export function ComposerModelPicker(props: ComposerModelPickerProps) {
               COMPOSER_PICKER_MODEL_LIST_SCROLL_CLASS_NAME,
             )}
           >
+            {modelSelectionIssue ? (
+              <div role="status" className="px-2 py-1.5 text-ui leading-snug text-destructive">
+                {modelSelectionIssue}
+              </div>
+            ) : null}
             {setupMessage !== null ? (
               <div className="flex flex-col items-center gap-2 px-3 py-4 text-center">
                 {openProviderTab ? (
@@ -638,6 +677,14 @@ export function ComposerModelPicker(props: ComposerModelPickerProps) {
               </div>
             )}
           </div>
+          {isMenuOpen && tabAccount && !setupMessage && props.onRefreshModels ? (
+            <ModelCatalogRefresh
+              key={tabAccount.instanceId}
+              provider={tabAccount.provider}
+              instanceId={tabAccount.instanceId}
+              onRefresh={props.onRefreshModels}
+            />
+          ) : null}
           <ComposerModelPickerTraitRows
             provider={props.provider}
             providerInstanceId={props.selectedProviderInstanceId}
@@ -649,6 +696,7 @@ export function ComposerModelPicker(props: ComposerModelPickerProps) {
             prompt={props.prompt}
             onPromptChange={props.onPromptChange}
             effortControl={effortControl}
+            fastModeNotice={props.provider === "claudeAgent" ? props.fastModeNotice : null}
           />
         </div>
       </ComposerPickerMenuPopup>

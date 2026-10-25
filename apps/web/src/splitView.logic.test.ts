@@ -10,6 +10,7 @@ import {
   canSubdividePane,
   collectLeaves,
   isLegacySplitViewLike,
+  layoutSplitPanes,
   removeLeafByPaneId,
   removeLeafByThreadId,
   replacePaneInTree,
@@ -157,5 +158,55 @@ describe("isLegacySplitViewLike", () => {
     expect(isLegacySplitViewLike(legacy)).toBe(true);
     expect(isLegacySplitViewLike(null)).toBe(false);
     expect(isLegacySplitViewLike({})).toBe(false);
+  });
+});
+
+describe("layoutSplitPanes", () => {
+  it("resolves nested splits into boxes that tile the surface", () => {
+    const leafA = makeLeaf("leaf-a", THREAD_A);
+    const leafB = makeLeaf("leaf-b", THREAD_B);
+    const leafC = makeLeaf("leaf-c", THREAD_C);
+    const inner = makeSplit({
+      id: "inner",
+      direction: "vertical",
+      first: leafB,
+      second: leafC,
+      ratio: 0.25,
+    });
+    const root = makeSplit({
+      id: "root",
+      direction: "horizontal",
+      first: leafA,
+      second: inner,
+      ratio: 0.4,
+    });
+
+    const layout = layoutSplitPanes(root);
+
+    expect(Object.fromEntries(layout.leaves.map(({ leaf, rect }) => [leaf.id, rect]))).toEqual({
+      "leaf-a": { left: 0, top: 0, width: 0.4, height: 1 },
+      "leaf-b": { left: 0.4, top: 0, width: 0.6, height: 0.25 },
+      "leaf-c": { left: 0.4, top: 0.25, width: 0.6, height: 0.75 },
+    });
+    expect(layout.splits.map(({ node, rect }) => [node.id, rect])).toEqual([
+      ["root", { left: 0, top: 0, width: 1, height: 1 }],
+      ["inner", { left: 0.4, top: 0, width: 0.6, height: 1 }],
+    ]);
+  });
+
+  it("lists leaves in tree order so siblings follow the panes on screen", () => {
+    const leafA = makeLeaf("leaf-a", THREAD_A);
+    const leafB = makeLeaf("leaf-b", THREAD_B);
+    const leafC = makeLeaf("leaf-c", THREAD_C);
+    const root = makeSplit({
+      id: "root",
+      direction: "vertical",
+      first: makeSplit({ id: "inner", direction: "horizontal", first: leafC, second: leafA }),
+      second: leafB,
+    });
+
+    expect(layoutSplitPanes(root).leaves.map(({ leaf }) => leaf.id)).toEqual(
+      collectLeaves(root).map((leaf) => leaf.id),
+    );
   });
 });

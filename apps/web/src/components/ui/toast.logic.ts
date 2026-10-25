@@ -7,15 +7,16 @@ export type ToastCopyItem = {
   readonly text: string;
 };
 
-// Compact toasts have no actions row — anything with an action or copyable
-// content renders expanded.
+// Compact toasts have no description or actions row.
 export function shouldUseCompactToast(toast: {
+  readonly description?: unknown;
   readonly actionProps?: unknown;
   readonly data?:
     | {
         readonly compactContextual?: boolean;
         readonly copyItems?: ReadonlyArray<unknown>;
         readonly copyText?: string;
+        readonly diagnosticId?: string;
         readonly secondaryActionProps?: unknown;
       }
     | undefined;
@@ -24,7 +25,9 @@ export function shouldUseCompactToast(toast: {
     return true;
   }
   return (
+    !toast.description &&
     !toast.data?.copyText &&
+    !toast.data?.diagnosticId &&
     !toast.data?.copyItems?.length &&
     !toast.actionProps &&
     !toast.data?.secondaryActionProps

@@ -7,6 +7,8 @@ import { describe, expect, it, vi } from "vitest";
 import {
   AudioLevelMonitor,
   combineAudioLevelSources,
+  combineAudioLevelSubscriptions,
+  parseAudioInputsMessage,
   parseAudioLevelMessage,
 } from "./audioLevelMonitor";
 
@@ -68,7 +70,75 @@ describe("combineAudioLevelSources", () => {
   });
 });
 
+describe("combineAudioLevelSubscriptions", () => {
+  it("keeps the newest microphone choice and drops it for Mac audio alone", () => {
+    expect(
+      combineAudioLevelSubscriptions([
+        { source: "system", microphoneId: "BuiltInMicrophoneDevice" },
+      ]),
+    ).toEqual({ source: "system", microphoneId: null });
+    expect(
+      combineAudioLevelSubscriptions([
+        { source: "microphone", microphoneId: "old" },
+        { source: "system", microphoneId: null },
+        { source: "microphone", microphoneId: "BuiltInMicrophoneDevice" },
+      ]),
+    ).toEqual({ source: "both", microphoneId: "BuiltInMicrophoneDevice" });
+  });
+});
+
+describe("parseAudioInputsMessage", () => {
+  it("reads the helper's device list and skips malformed entries", () => {
+    const output = [
+      "noise",
+      JSON.stringify({
+        type: "audio-inputs",
+        devices: [
+          { id: "80-99:input", name: "WH-1000XM5", bluetooth: true, default: true },
+          { id: "BuiltInMicrophoneDevice", name: "MacBook Pro Microphone" },
+          { id: "", name: "empty" },
+          { name: "no id" },
+          { id: "x".repeat(513), name: "too long" },
+        ],
+      }),
+    ].join("\n");
+    expect(parseAudioInputsMessage(output)).toEqual([
+      { id: "80-99:input", name: "WH-1000XM5", bluetooth: true, default: true },
+      {
+        id: "BuiltInMicrophoneDevice",
+        name: "MacBook Pro Microphone",
+        bluetooth: false,
+        default: false,
+      },
+    ]);
+    expect(parseAudioInputsMessage("not json")).toEqual([]);
+  });
+});
+
 describe("AudioLevelMonitor", () => {
+  it("passes the chosen microphone and restarts only when it matters", () => {
+    const { monitor, helpers, spawnArgs } = makeMonitor();
+    monitor.setSubscription(1, "microphone", "BuiltInMicrophoneDevice");
+    expect(spawnArgs[0]?.[1]).toEqual([
+      "--audio-level",
+      "--source",
+      "microphone",
+      "--input-device",
+      "BuiltInMicrophoneDevice",
+    ]);
+
+    monitor.setSubscription(1, "microphone", null);
+    expect(helpers[0]!.kill).toHaveBeenCalledWith("SIGTERM");
+    expect(spawnArgs[1]?.[1]).toEqual(["--audio-level", "--source", "microphone"]);
+
+    // Mac audio alone ignores the microphone choice.
+    monitor.setSubscription(1, "system", "BuiltInMicrophoneDevice");
+    monitor.setSubscription(1, "system", "other");
+    expect(helpers).toHaveLength(3);
+    expect(spawnArgs[2]?.[1]).toEqual(["--audio-level", "--source", "system"]);
+    monitor.dispose();
+  });
+
   it("runs one helper while any subscriber is on and stops it after the last leaves", () => {
     const { monitor, helpers, spawnArgs } = makeMonitor();
 

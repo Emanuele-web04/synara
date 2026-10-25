@@ -41,11 +41,35 @@ function subagent(overrides: Partial<WorkLogSubagent> & { threadId: string }): W
   return overrides;
 }
 
-function subagentRows(rows: ComposerSubagentStripRow[]): ComposerSubagentStripItem[] {
+function subagentRows(rows: ReadonlyArray<ComposerSubagentStripRow>): ComposerSubagentStripItem[] {
   return rows.filter((row): row is ComposerSubagentStripItem => row.kind === "subagent");
 }
 
 describe("deriveComposerSubagentStripItems", () => {
+  it("returns one shared empty result whenever no row is shown", () => {
+    const empty = deriveComposerSubagentStripItems({ workEntries: [], liveTurnId: null });
+
+    expect(empty).toEqual([]);
+    expect(
+      deriveComposerSubagentStripItems({
+        workEntries: [workEntry({ id: "plain", turnId: "turn-1" })],
+        liveTurnId: TurnId.makeUnsafe("turn-1"),
+      }),
+    ).toBe(empty);
+    expect(
+      deriveComposerSubagentStripItems({
+        workEntries: [
+          workEntry({
+            id: "settled",
+            turnId: "turn-1",
+            subagents: [subagent({ threadId: "done-agent", rawStatus: "completed" })],
+          }),
+        ],
+        liveTurnId: null,
+      }),
+    ).toBe(empty);
+  });
+
   it("keeps prior running background rows alongside subagents from the live turn", () => {
     const items = deriveComposerSubagentStripItems({
       workEntries: [
@@ -489,5 +513,32 @@ describe("collectForegroundRunningSubagentStripItems", () => {
 
     const foreground = collectForegroundRunningSubagentStripItems(rows);
     expect(foreground.map((item) => item.primaryLabel)).toEqual(["Ada"]);
+  });
+});
+
+describe("composer subagent strip labels", () => {
+  function onlyRow(entrySubagent: WorkLogSubagent): ComposerSubagentStripItem | undefined {
+    return subagentRows(
+      deriveComposerSubagentStripItems({
+        workEntries: [workEntry({ id: "entry-1", turnId: "turn-1", subagents: [entrySubagent] })],
+        liveTurnId: TurnId.makeUnsafe("turn-1"),
+      }),
+    )[0];
+  }
+
+  it("shows a starting placeholder, never the raw tool id, before the description arrives", () => {
+    const row = onlyRow(
+      subagent({ threadId: "toolu_01P6abc", rawStatus: "running", isActive: true }),
+    );
+
+    expect(row?.primaryLabel).toBe("Starting subagent…");
+    expect(row?.fullLabel).not.toContain("toolu_");
+  });
+
+  it("settles an anonymous row on a neutral label once it finishes", () => {
+    const row = onlyRow(subagent({ threadId: "toolu_01P6abc", rawStatus: "completed" }));
+
+    expect(row?.primaryLabel).toBe("Subagent");
+    expect(row?.fullLabel).toBe("Subagent");
   });
 });

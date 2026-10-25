@@ -60,16 +60,38 @@ function resolveUniqueBranchName(
 ): string {
   const existingNames = new Set(existingBranchNames.map((branch) => branch.toLowerCase()));
 
-  if (!existingNames.has(resolvedBase)) {
-    return resolvedBase;
-  }
+  const conflictComponent = (name: string): number | undefined => {
+    const components = name.split("/");
+    for (let index = 0; index < components.length; index += 1) {
+      if (existingNames.has(components.slice(0, index + 1).join("/"))) {
+        return index;
+      }
+    }
+    if ([...existingNames].some((branch) => branch.startsWith(`${name}/`))) {
+      return components.length - 1;
+    }
+    return undefined;
+  };
 
+  let component = conflictComponent(resolvedBase);
+  if (component === undefined) return resolvedBase;
+
+  const components = resolvedBase.split("/");
   let suffix = 2;
-  while (existingNames.has(`${resolvedBase}-${suffix}`)) {
-    suffix += 1;
+  while (true) {
+    const candidateComponents = [...components];
+    candidateComponents[component] = `${components[component]}-${suffix}`;
+    const candidate = candidateComponents.join("/");
+    const conflict = conflictComponent(candidate);
+    if (conflict === undefined) return candidate;
+    // A suffixed candidate can encounter a shorter occupied namespace.
+    if (conflict < component) {
+      component = conflict;
+      suffix = 2;
+    } else {
+      suffix += 1;
+    }
   }
-
-  return `${resolvedBase}-${suffix}`;
 }
 
 /**

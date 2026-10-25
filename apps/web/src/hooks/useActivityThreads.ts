@@ -6,7 +6,12 @@
 
 import { useMemo } from "react";
 
-import { useCoordinatorThreadIds } from "../components/chat/project/useProjectAgentSummaries";
+import type { ProjectAgentSummary, ProjectId } from "@synara/contracts";
+
+import {
+  useCoordinatorThreadIds,
+  useProjectAgentSummariesStore,
+} from "../components/chat/project/useProjectAgentSummaries";
 import {
   excludeHiddenProjectAgentCoordinatorThreads,
   partitionSidebarThreadsByProjectIds,
@@ -26,11 +31,14 @@ interface ActivityThreads {
   /** Activity, its unread bell, and the Inbox read this list, so a badge can never point
    *  at a row the lists are hiding. */
   readonly visibleNonGroupThreads: readonly SidebarThreadSummary[];
+  /** Activity keeps snoozed rows accessible in its separate section. */
+  readonly activityNonGroupThreads: readonly SidebarThreadSummary[];
 }
 
 type ActivityThreadInputs = readonly [
   sidebarThreads: readonly SidebarThreadSummary[],
   coordinatorThreadIds: ReadonlySet<string>,
+  summariesByProjectId: ReadonlyMap<ProjectId, ProjectAgentSummary>,
   projects: AppState["projects"],
   homeDir: string | null,
   chatWorkspaceRoot: string | null,
@@ -55,6 +63,7 @@ function deriveActivityThreads(inputs: ActivityThreadInputs): ActivityThreads {
   const [
     sidebarThreads,
     coordinatorThreadIds,
+    summariesByProjectId,
     projects,
     homeDir,
     chatWorkspaceRoot,
@@ -75,6 +84,7 @@ function deriveActivityThreads(inputs: ActivityThreadInputs): ActivityThreads {
   const { nonGroupThreads, groupThreads } = partitionSidebarThreadsByProjectIds(
     displaySidebarThreads,
     groupProjectIdSet,
+    summariesByProjectId,
   );
   const result: ActivityThreads = {
     sidebarThreads,
@@ -83,6 +93,9 @@ function deriveActivityThreads(inputs: ActivityThreadInputs): ActivityThreads {
     groupThreads,
     visibleNonGroupThreads: nonGroupThreads.filter((thread) =>
       isSidebarThreadVisible(thread, { hideAutomationRunThreads }),
+    ),
+    activityNonGroupThreads: nonGroupThreads.filter((thread) =>
+      isSidebarThreadVisible(thread, { hideAutomationRunThreads, includeSnoozed: true }),
     ),
   };
   lastDerived = { inputs, result };
@@ -102,11 +115,13 @@ export function useActivityThreads({
   const groupsWorkspaceRoot = useWorkspacePathsStore((store) => store.groupsWorkspaceRoot);
   const sidebarThreads = useStore(selectSidebarThreads);
   const coordinatorThreadIds = useCoordinatorThreadIds();
+  const summariesByProjectId = useProjectAgentSummariesStore((state) => state.summariesByProjectId);
   return useMemo(
     () =>
       deriveActivityThreads([
         sidebarThreads,
         coordinatorThreadIds,
+        summariesByProjectId,
         projects,
         homeDir,
         chatWorkspaceRoot,
@@ -122,6 +137,7 @@ export function useActivityThreads({
       homeDir,
       projects,
       sidebarThreads,
+      summariesByProjectId,
       studioWorkspaceRoot,
     ],
   );

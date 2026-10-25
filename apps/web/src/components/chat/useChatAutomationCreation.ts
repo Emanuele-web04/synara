@@ -279,7 +279,9 @@ export function useChatAutomationCreation({
             associatedWorktreeBranch: activeThreadAssociatedWorktree.associatedWorktreeBranch,
             associatedWorktreeRef: activeThreadAssociatedWorktree.associatedWorktreeRef,
             lastKnownPr: activeThread.lastKnownPr ?? null,
-            createdAt: activeThread.createdAt,
+            // Promotion materializes the draft as a durable thread now; the draft's
+            // timestamp only records when its composer was opened.
+            createdAt: new Date().toISOString(),
           },
           api,
           { force: true },

@@ -1,9 +1,17 @@
+import "../../index.css";
+
 import { useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { page } from "vitest/browser";
+import { cdp, page } from "vitest/browser";
 import { render } from "vitest-browser-react";
 
-import { SidebarProvider, SidebarTrigger, useSidebar } from "./sidebar";
+import {
+  Sidebar,
+  SidebarProvider,
+  SidebarTrigger,
+  SIDEBAR_OFFCANVAS_MOTION_CLASS,
+  useSidebar,
+} from "./sidebar";
 
 function Controls({ name }: { name: string }) {
   const { state } = useSidebar();
@@ -27,6 +35,57 @@ function ControlledSidebar() {
 afterEach(() => vi.unstubAllGlobals());
 
 describe("sidebar toggles", () => {
+  it.each(["left", "right"] as const)(
+    "settles the %s panel and layout gap immediately with reduced motion",
+    async (side) => {
+      const protocol = cdp() as {
+        send(
+          method: "Emulation.setEmulatedMedia",
+          params: { features: { name: string; value: string }[] },
+        ): Promise<void>;
+      };
+      await protocol.send("Emulation.setEmulatedMedia", {
+        features: [{ name: "prefers-reduced-motion", value: "reduce" }],
+      });
+      await page.viewport(1280, 800);
+      const screen = await render(
+        <SidebarProvider defaultOpen>
+          <SidebarTrigger aria-label="Toggle motion panel" className="relative z-50" />
+          <Sidebar
+            side={side}
+            className={SIDEBAR_OFFCANVAS_MOTION_CLASS}
+            gapClassName={SIDEBAR_OFFCANVAS_MOTION_CLASS}
+          >
+            Panel content
+          </Sidebar>
+        </SidebarProvider>,
+      );
+      try {
+        const panel = screen.container.querySelector<HTMLElement>(
+          '[data-slot="sidebar-container"]',
+        )!;
+        const gap = screen.container.querySelector<HTMLElement>('[data-slot="sidebar-gap"]')!;
+        const initial = panel.getBoundingClientRect();
+        await page.getByRole("button", { name: "Toggle motion panel" }).click();
+        expect(panel.getAnimations()).toHaveLength(0);
+        expect(gap.getAnimations()).toHaveLength(0);
+        expect(panel.getBoundingClientRect().left).toBeCloseTo(
+          initial.left + (side === "left" ? -initial.width : initial.width),
+          0,
+        );
+        expect(gap.getBoundingClientRect().width).toBe(0);
+        await page.getByRole("button", { name: "Toggle motion panel" }).click();
+        expect(panel.getAnimations()).toHaveLength(0);
+        expect(gap.getAnimations()).toHaveLength(0);
+        expect(panel.getBoundingClientRect().left).toBeCloseTo(initial.left, 0);
+        expect(gap.getBoundingClientRect().width).toBeCloseTo(initial.width, 0);
+      } finally {
+        await screen.unmount();
+        await protocol.send("Emulation.setEmulatedMedia", { features: [] });
+      }
+    },
+  );
+
   it.each(["missing", "rejecting"])(
     "toggles controlled and uncontrolled sidebars when CookieStore is %s",
     async (cookieStoreState) => {

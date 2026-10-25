@@ -11,6 +11,7 @@ import {
   type GitWorktreeSetupProgressEvent,
   type ModelSelection,
   type ModelSlug,
+  type OrchestrationThreadActivity,
   type ProviderInstanceId,
   type ProviderApprovalDecision,
   type ProviderInteractionMode,
@@ -61,11 +62,14 @@ import {
 } from "../lib/subagentPresentation";
 import {
   hasLiveTurnTailWork,
+  deriveSubagentTaskEnds,
   isProviderFileEditWorkLogEntry,
   type WorkLogEntry,
 } from "../session-logic";
 import { localSubagentThreadId } from "./ChatView.selectors";
 import { buildModelSelection, type ProviderModelOption } from "../providerModelOptions";
+import { resolvePromptEffortFromModelSelection } from "../lib/composerSend";
+import { autoRuntimeModeSelectionIssue } from "@synara/shared/runtimeMode";
 
 export const LAST_INVOKED_SCRIPT_BY_PROJECT_KEY = "synara:last-invoked-script-by-project";
 export const DISMISSED_PROVIDER_HEALTH_BANNERS_KEY = "synara:dismissed-provider-health-banners";
@@ -905,6 +909,111 @@ export function threadHasProviderLockingActivity(
   );
 }
 
+type ProviderLockingThread = Pick<
+  Thread,
+  "messages" | "sidechatSourceThreadId" | "latestTurn" | "session" | "modelSelection"
+>;
+
+/**
+ * A send whose provider differs from the one an already-running thread uses.
+ * It must hand the thread off first: Hand off checks background tasks and
+ * records the switch, which a plain settings save would skip.
+ */
+export function turnNeedsProviderHandoff(input: {
+  readonly thread: ProviderLockingThread;
+  readonly modelSelection: ModelSelection;
+}): boolean {
+  return (
+    threadHasProviderLockingActivity(input.thread) &&
+    input.modelSelection.provider !== input.thread.modelSelection.provider
+  );
+}
+
+/**
+ * A message sent right after a handoff was stamped before the target started.
+ * Move it after the handoff row, even when the server clock runs ahead.
+ */
+export function createdAtAfterProviderHandoff(input: {
+  readonly activities:
+    | ReadonlyArray<{ readonly kind: string; readonly createdAt: string }>
+    | undefined;
+  readonly createdAt: string;
+}): string {
+  const handoffCreatedAt = input.activities?.findLast(
+    (activity) => activity.kind === "provider.handoff",
+  )?.createdAt;
+  return new Date(
+    Math.max(Date.now(), Date.parse(handoffCreatedAt ?? input.createdAt) + 1),
+  ).toISOString();
+}
+
+/**
+ * The model selection an access-mode change may save with it. A provider
+ * picked in the composer over a thread that already runs on another one is a
+ * pending Hand off, which only Send performs; saving it here would switch the
+ * thread's provider without one.
+ */
+export function accessModeModelSelectionToPersist(input: {
+  readonly thread: ProviderLockingThread;
+  readonly selectedModelSelection: ModelSelection;
+}): ModelSelection | undefined {
+  return turnNeedsProviderHandoff({
+    thread: input.thread,
+    modelSelection: input.selectedModelSelection,
+  })
+    ? undefined
+    : input.selectedModelSelection;
+}
+
+/**
+ * Auto picked for a pending provider switch that the thread's current model
+ * cannot run. It can only be chosen once Send has handed the thread off.
+ */
+export function autoWaitsForProviderHandoff(input: {
+  readonly thread: ProviderLockingThread;
+  readonly selectedModelSelection: ModelSelection;
+}): boolean {
+  return (
+    accessModeModelSelectionToPersist(input) === undefined &&
+    autoRuntimeModeSelectionIssue({
+      runtimeMode: "auto",
+      modelSelection: input.thread.modelSelection,
+    }) !== null
+  );
+}
+
+/**
+ * A queued turn follows the thread when its provider changed after the turn
+ * was queued (a Hand off while the queue was paused). Sending the queued
+ * provider would quietly switch the thread back.
+ */
+export function retargetQueuedTurnToThreadProvider<T extends QueuedComposerTurn>(
+  queuedTurn: T,
+  thread: ProviderLockingThread,
+): T {
+  if (!turnNeedsProviderHandoff({ thread, modelSelection: queuedTurn.modelSelection })) {
+    return queuedTurn;
+  }
+  const { providerOptionsForDispatch: _queuedProviderOptions, ...rest } = queuedTurn;
+  // Auto is provider-specific too. A model that cannot run it would make the
+  // server reject the turn on every retry, so fall back to asking for approval.
+  const runtimeMode =
+    autoRuntimeModeSelectionIssue({
+      runtimeMode: queuedTurn.runtimeMode,
+      modelSelection: thread.modelSelection,
+    }) === null
+      ? queuedTurn.runtimeMode
+      : "approval-required";
+  return {
+    ...rest,
+    modelSelection: thread.modelSelection,
+    selectedProvider: thread.modelSelection.provider,
+    selectedModel: thread.modelSelection.model,
+    selectedPromptEffort: resolvePromptEffortFromModelSelection(thread.modelSelection),
+    runtimeMode,
+  } as T;
+}
+
 export function revokeBlobPreviewUrl(previewUrl: string | undefined): void {
   if (!previewUrl || typeof URL === "undefined" || !previewUrl.startsWith("blob:")) {
     return;
@@ -1247,6 +1356,7 @@ export type WorktreeCreationFlowOutcome<Result> =
 export async function runWorktreeCreationFlow<Result extends { worktree: { path: string } }>(
   deps: WorktreeCreationFlowDeps<Result>,
 ): Promise<WorktreeCreationFlowOutcome<Result>> {
+  if (deps.resolution.action !== null) return { outcome: "resolved" };
   const unsubscribe = deps.subscribeToProgress((event) => {
     if (
       event.progressId !== deps.progressId ||
@@ -1423,14 +1533,20 @@ export function hasServerAcknowledgedLocalDispatch(input: {
 export const LOCAL_DISPATCH_TURN_TAKEOVER_TIMEOUT_MS = 60_000;
 
 /** The exact label set the transcript's working indicator can render. */
-export type WorkingLabel = "Loading" | "Thinking" | `Starting ${string}…`;
+export type WorkingLabel =
+  | "Loading"
+  | "Thinking"
+  | "Checking message delivery…"
+  | `Starting ${string}…`;
 
 export function resolveWorkingLabel(input: {
   isSendBusy: boolean;
   turnTakenOver: boolean;
   isConnecting?: boolean;
+  isSettlingTurnDispatch?: boolean;
   providerName?: string;
 }): WorkingLabel {
+  if (input.isSettlingTurnDispatch) return "Checking message delivery…";
   if (input.isSendBusy && !input.turnTakenOver) {
     return "Loading";
   }
@@ -1909,6 +2025,59 @@ export function buildExpiredTerminalContextToastCopy(
   };
 }
 
+export type BlockedComposerSendReason = "send-in-flight" | "session-starting" | "no-project";
+
+// A user send refused by a guard must say why; a silent no-op makes people send again.
+// Expected no-ops (empty prompt, held cache review, expired sidechat, voice note still
+// transcribing) keep their own UI and are not reported here.
+export function resolveBlockedComposerSendReason(input: {
+  readonly sendInFlight: boolean;
+  readonly sessionStarting: boolean;
+  /** An empty composer has nothing to send, so pressing Send again needs no notice. */
+  readonly hasComposerContent: boolean;
+}): BlockedComposerSendReason | null {
+  if (!input.hasComposerContent) return null;
+  if (input.sendInFlight) return "send-in-flight";
+  if (input.sessionStarting) return "session-starting";
+  return null;
+}
+
+export function buildBlockedComposerSendToastCopy(reason: BlockedComposerSendReason): {
+  type: "info" | "warning";
+  title: string;
+  description: string;
+} {
+  switch (reason) {
+    case "send-in-flight":
+      return {
+        type: "info",
+        title: "Still sending your last message",
+        description: "Wait for it to show in the chat before sending again.",
+      };
+    case "session-starting":
+      return {
+        type: "info",
+        title: "The session is still starting",
+        description: "Send again once it is ready. Your message stays in the composer.",
+      };
+    case "no-project":
+      return {
+        type: "warning",
+        title: "This chat has no project",
+        description: "Choose a project for this chat, then send again.",
+      };
+  }
+}
+
+// The server already holds the user message, so a later failure in the send attempt
+// must not hand the prompt back to the composer or roll back the promoted thread.
+export function hasServerReceivedSentMessage(
+  thread: Pick<Thread, "messages"> | null | undefined,
+  messageId: ChatMessage["id"],
+): boolean {
+  return thread?.messages.some((message) => message.id === messageId) ?? false;
+}
+
 export function shouldRenderTerminalWorkspace(options: {
   presentationMode: "drawer" | "workspace";
   terminalOpen: boolean;
@@ -1916,24 +2085,6 @@ export function shouldRenderTerminalWorkspace(options: {
   // The workspace shell should paint immediately; the terminal viewport gates the
   // backend attach until a valid cwd is available.
   return options.terminalOpen && options.presentationMode === "workspace";
-}
-
-export function resolveProjectScriptTerminalTarget(options: {
-  baseTerminalId: string;
-  createTerminalId: () => string;
-  hasRunningTerminal: boolean;
-  preferNewTerminal?: boolean | undefined;
-  terminalOpen: boolean;
-}): { shouldCreateNewTerminal: boolean; terminalId: string } {
-  // Project scripts require their requested cwd/env before the command write;
-  // live PTYs keep their launch context, so visible or running terminals get a new tab.
-  const shouldCreateNewTerminal =
-    Boolean(options.preferNewTerminal) || options.terminalOpen || options.hasRunningTerminal;
-
-  return {
-    shouldCreateNewTerminal,
-    terminalId: shouldCreateNewTerminal ? options.createTerminalId() : options.baseTerminalId,
-  };
 }
 
 export function shouldAutoDeleteTerminalThreadOnLastClose(options: {
@@ -2133,12 +2284,58 @@ export function enrichSubagentWorkEntries(
   workEntries: ReadonlyArray<WorkLogEntry>,
   threads: ReadonlyArray<Thread>,
   parentThreadId: ThreadIdType | null,
+  activities: ReadonlyArray<OrchestrationThreadActivity> = [],
 ): WorkLogEntry[] {
   if (workEntries.length === 0) {
     return [];
   }
 
   const threadById = new Map(threads.map((thread) => [thread.id, thread] as const));
+  const confirmedTasks = new Map<
+    string,
+    { toolUseId: string; turnId: OrchestrationThreadActivity["turnId"]; confirmed: boolean }
+  >();
+  for (const activity of activities) {
+    if (!activity.payload || typeof activity.payload !== "object") continue;
+    const payload = activity.payload as Record<string, unknown>;
+    if (typeof payload.taskId !== "string") continue;
+    if (activity.kind === "task.started") {
+      if (typeof payload.toolUseId === "string" && activity.turnId !== null) {
+        confirmedTasks.set(payload.taskId, {
+          toolUseId: payload.toolUseId,
+          turnId: activity.turnId,
+          confirmed: false,
+        });
+      } else {
+        confirmedTasks.delete(payload.taskId);
+      }
+      continue;
+    }
+    const previous = confirmedTasks.get(payload.taskId);
+    if (
+      activity.kind === "task.completed" ||
+      (activity.kind === "task.updated" && payload.status !== "running")
+    ) {
+      if (previous) previous.confirmed = false;
+    } else if (
+      activity.kind === "task.updated" &&
+      payload.reconcilesStop === true &&
+      typeof payload.toolUseId === "string" &&
+      activity.turnId !== null
+    ) {
+      if (
+        previous &&
+        (previous.toolUseId !== payload.toolUseId || previous.turnId !== activity.turnId)
+      )
+        continue;
+      confirmedTasks.set(payload.taskId, {
+        toolUseId: payload.toolUseId,
+        turnId: activity.turnId,
+        confirmed: true,
+      });
+    }
+  }
+  const taskEnds = confirmedTasks.size > 0 ? deriveSubagentTaskEnds(activities) : undefined;
 
   return workEntries.map((entry) => {
     if ((entry.subagents?.length ?? 0) === 0) {
@@ -2152,7 +2349,20 @@ export function enrichSubagentWorkEntries(
         threadById,
         threads,
       });
-      const status = deriveSubagentStatus(matchedThread);
+      const confirmation = confirmedTasks.get(subagent.providerThreadId ?? subagent.threadId);
+      const taskEnd = entry.toolCallId ? taskEnds?.get(entry.toolCallId) : undefined;
+      // Only native replay of this exact launch can outlive a synthetic child's
+      // local shutdown marker. A linked child's own runtime stays authoritative.
+      const confirmedRunning =
+        confirmation?.confirmed === true &&
+        confirmation.toolUseId === entry.toolCallId &&
+        confirmation.turnId === entry.turnId &&
+        normalizeSubagentStatusKind(subagent.rawStatus) === "running" &&
+        !(taskEnd && Date.parse(taskEnd.endedAt) >= Date.parse(entry.createdAt)) &&
+        (!matchedThread || matchedThread.id.startsWith("subagent:") || !matchedThread.session);
+      const status = confirmedRunning
+        ? { isActive: true, label: humanizeSubagentStatus("running") ?? undefined }
+        : deriveSubagentStatus(matchedThread);
       const fallbackStatusLabel = humanizeSubagentRawStatus(subagent.rawStatus);
       const terminalStatusLabel = status.isActive
         ? undefined
@@ -2171,7 +2381,13 @@ export function enrichSubagentWorkEntries(
       if (terminalStatusLabel ?? status.label ?? fallbackStatusLabel) {
         nextSubagent.statusLabel = terminalStatusLabel ?? status.label ?? fallbackStatusLabel;
       }
-      if (status.isActive || fallbackStatusLabel === "Running") {
+      if (
+        status.isActive ||
+        (fallbackStatusLabel === "Running" &&
+          status.label !== "Closed" &&
+          status.label !== "Error" &&
+          !matchedThread?.latestTurn?.completedAt)
+      ) {
         nextSubagent.isActive = true;
       }
       return nextSubagent;

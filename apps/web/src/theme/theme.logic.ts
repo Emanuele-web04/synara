@@ -3,7 +3,11 @@
 // Layer: Web appearance domain logic
 // Exports: Theme types, normalization helpers, import/export utilities, and CSS variable builders.
 
-import { DESKTOP_WINDOW_BLUR_RADIUS_MAX } from "@synara/contracts";
+import {
+  DESKTOP_WINDOW_BLUR_RADIUS_MAX,
+  DESKTOP_WINDOW_BLUR_RADIUS_MIN,
+  type DesktopWindowTranslucency,
+} from "@synara/contracts";
 import { THEME_SEED_CATALOG } from "./theme.seed.generated";
 import {
   normalizeFontFamilyCssValue,
@@ -47,16 +51,17 @@ export interface ThemePack {
  * so Codex share strings keep their format. Only applies when `opaqueWindows` is off.
  */
 export interface WindowTranslucency {
-  /** Glass fill strength, 0 (desktop fully visible) to 100 (solid tint). */
+  /** Glass fill strength, WINDOW_TRANSLUCENCY_OPACITY_MIN to 100 (solid tint). */
   opacity: number;
   /**
-   * Desktop blur radius behind the window in points, 0 to DESKTOP_WINDOW_BLUR_RADIUS_MAX.
+   * Desktop blur radius behind the window in points, DESKTOP_WINDOW_BLUR_RADIUS_MIN to
+   * DESKTOP_WINDOW_BLUR_RADIUS_MAX.
    * `null` keeps the macOS vibrancy material instead of a custom blur.
    */
   blur: number | null;
   /**
    * Limit the glass to the sidebar (and the rail layout's shell band) and keep the route
-   * content opaque. On by default; off shares one translucent fill across the whole window.
+   * content opaque. Off by default to share one translucent fill across the whole window.
    */
   sidebarOnly: boolean;
 }
@@ -222,8 +227,10 @@ const CODE_THEME_SEED_PATCH_METADATA: Partial<
     light: { contrast: true, fonts: { code: true, ui: true }, opaqueWindows: true },
   },
   synara: {
-    dark: { contrast: true },
-    light: { contrast: true },
+    // Selecting Synara explicitly applies the complete Codex-based preset, including
+    // its native fonts and translucent material, rather than retaining Linear's style.
+    dark: { contrast: true, fonts: { code: true, ui: true }, opaqueWindows: true },
+    light: { contrast: true, fonts: { code: true, ui: true }, opaqueWindows: true },
   },
 };
 
@@ -289,32 +296,49 @@ export const DEFAULT_CHROME_THEME_BY_VARIANT: Record<ThemeVariant, ChromeTheme> 
   },
 };
 
-// Opacity reproduces the sidebar tint the translucent shell has always used, and the
-// unset blur keeps the macOS vibrancy material behind it, so an untouched install looks
-// the way it did before these were adjustable.
+// Full-window glass defaults shared by light and dark themes.
 export const DEFAULT_WINDOW_TRANSLUCENCY_BY_VARIANT: Record<ThemeVariant, WindowTranslucency> = {
-  dark: { opacity: 72, blur: null, sidebarOnly: true },
-  light: { opacity: 38, blur: null, sidebarOnly: true },
+  dark: { opacity: 90, blur: 64, sidebarOnly: false },
+  light: { opacity: 90, blur: 64, sidebarOnly: false },
 };
+
+/** Thinnest glass fill: below this the window reads as see-through rather than as glass. */
+export const WINDOW_TRANSLUCENCY_OPACITY_MIN = 15;
 
 /** Where the blur slider rests while the vibrancy material is in use; roughly its frosting. */
 export const VIBRANCY_EQUIVALENT_BLUR_RADIUS = 30;
 
-// The rail layout's shell tint scales with the sidebar opacity from these defaults
+// The rail layout's shell tint scales with the sidebar opacity from its original values
 // (dark 72% -> 64%, light 38% -> 82%), so both surfaces move together.
 const RAIL_SHELL_OPACITY_RATIO_BY_VARIANT: Record<ThemeVariant, number> = {
   dark: 64 / 72,
   light: 82 / 38,
 };
 
+// Whole-window glass: raised chrome (composers, docked panels, cards, controls) is a denser
+// pane of the elevated tone over the body's coat. Its fill tracks the coat's opacity from a
+// floor, so it keeps its contrast against the window at every slider position. Light themes
+// run thinner: their elevated tone is white, and a white pane reads as solid at a fill a dark
+// pane of the same strength does not.
+const RAISED_GLASS_OPACITY_BY_VARIANT: Record<ThemeVariant, { floor: number; ratio: number }> = {
+  dark: { floor: 10, ratio: 0.5 },
+  light: { floor: 4, ratio: 0.3 },
+};
+
+// Floating overlays (menus, pickers, popovers, tooltips, toasts) share the composer's material
+// so the whole UI reads as one. Off a whole-window glass shell that is the composer's own fill
+// (`--composer-glass-opacity` in index.css) over a backdrop blur; on one it is the raised tint,
+// with the page cut out from under the overlay instead of blurred (see glassOverlayCutout.ts).
+const OVERLAY_OPACITY = 55;
+
 export const DEFAULT_THEME_STATE: ThemeState = {
   chromeThemes: {
-    dark: getCodeThemeSeed("codex", "dark"),
-    light: getCodeThemeSeed("codex", "light"),
+    dark: getCodeThemeSeed("synara", "dark"),
+    light: getCodeThemeSeed("synara", "light"),
   },
   codeThemeIds: {
-    dark: "codex",
-    light: "codex",
+    dark: "synara",
+    light: "synara",
   },
   systemUiFont: true,
   mode: "system",
@@ -399,11 +423,23 @@ export function normalizeWindowTranslucency(
   const fallback = DEFAULT_WINDOW_TRANSLUCENCY_BY_VARIANT[variant];
   const translucency = isRecord(value) ? value : {};
   return {
-    opacity: normalizeIntegerInRange(translucency.opacity, 0, 100, fallback.opacity),
+    opacity: normalizeIntegerInRange(
+      translucency.opacity,
+      WINDOW_TRANSLUCENCY_OPACITY_MIN,
+      100,
+      fallback.opacity,
+    ),
     blur:
       typeof translucency.blur === "number" && Number.isFinite(translucency.blur)
-        ? normalizeIntegerInRange(translucency.blur, 0, DESKTOP_WINDOW_BLUR_RADIUS_MAX, 0)
-        : fallback.blur,
+        ? normalizeIntegerInRange(
+            translucency.blur,
+            DESKTOP_WINDOW_BLUR_RADIUS_MIN,
+            DESKTOP_WINDOW_BLUR_RADIUS_MAX,
+            DESKTOP_WINDOW_BLUR_RADIUS_MIN,
+          )
+        : translucency.blur === null
+          ? null
+          : fallback.blur,
     sidebarOnly:
       typeof translucency.sidebarOnly === "boolean"
         ? translucency.sidebarOnly
@@ -414,7 +450,7 @@ export function normalizeWindowTranslucency(
 export function normalizeThemePack(value: unknown, variant: ThemeVariant): ThemePack {
   const pack = isRecord(value) ? value : {};
   return {
-    codeThemeId: normalizeCodeThemeId(pack.codeThemeId, variant),
+    codeThemeId: normalizeCodeThemeId(pack.codeThemeId, variant, "codex"),
     theme: normalizeChromeTheme(pack.theme, variant),
   };
 }
@@ -436,6 +472,8 @@ function hasStoredCustomUiFont(state: Record<string, unknown>): boolean {
 }
 
 export function normalizeThemeState(value: unknown): ThemeState {
+  // Missing fields in an existing store keep the old Codex defaults. Only a missing
+  // store or an explicit reset opts into the new Synara defaults.
   const state = isRecord(value) ? value : {};
   const codeThemeIds = isRecord(state.codeThemeIds) ? state.codeThemeIds : {};
   const chromeThemes = isRecord(state.chromeThemes) ? state.chromeThemes : {};
@@ -449,16 +487,20 @@ export function normalizeThemeState(value: unknown): ThemeState {
         ? normalizeChromeTheme(chromeThemes.dark, "dark")
         : isRecord(packs.dark)
           ? legacyDarkPack.theme
-          : DEFAULT_THEME_STATE.chromeThemes.dark,
+          : getCodeThemeSeed("codex", "dark"),
       light: isRecord(chromeThemes.light)
         ? normalizeChromeTheme(chromeThemes.light, "light")
         : isRecord(packs.light)
           ? legacyLightPack.theme
-          : DEFAULT_THEME_STATE.chromeThemes.light,
+          : getCodeThemeSeed("codex", "light"),
     },
     codeThemeIds: {
-      dark: normalizeCodeThemeId(codeThemeIds.dark ?? legacyDarkPack.codeThemeId, "dark"),
-      light: normalizeCodeThemeId(codeThemeIds.light ?? legacyLightPack.codeThemeId, "light"),
+      dark: normalizeCodeThemeId(codeThemeIds.dark ?? legacyDarkPack.codeThemeId, "dark", "codex"),
+      light: normalizeCodeThemeId(
+        codeThemeIds.light ?? legacyLightPack.codeThemeId,
+        "light",
+        "codex",
+      ),
     },
     mode: isThemeMode(state.mode) ? state.mode : DEFAULT_THEME_STATE.mode,
     // Preserve the UI font older theme states already rendered. New/default states use the
@@ -477,10 +519,7 @@ export function parseStoredThemeState(rawValue: string | null | undefined): Them
     return DEFAULT_THEME_STATE;
   }
   if (isThemeMode(rawValue)) {
-    return {
-      ...DEFAULT_THEME_STATE,
-      mode: rawValue,
-    };
+    return normalizeThemeState({ mode: rawValue });
   }
 
   try {
@@ -781,8 +820,8 @@ export function buildThemeCssVariables(
   pack: ThemePack,
   variant: ThemeVariant,
   options?: {
-    electron?: boolean;
-    isMac?: boolean;
+    /** How the desktop window backs glass; null or absent for an opaque window. */
+    windowTranslucency?: DesktopWindowTranslucency | null;
     systemUiFont?: boolean;
     translucency?: WindowTranslucency;
   },
@@ -790,14 +829,12 @@ export function buildThemeCssVariables(
   const resolvedTokens = buildResolvedThemeTokens(pack, variant);
   const codexVariables = resolvedTokens.codexVariables;
   const readCodexVariable = (name: string) => getRequiredVariable(codexVariables, name);
-  // The translucent shell relies on macOS window vibrancy as its backing
-  // material. Windows/Linux have no equivalent, so a translucent shell there
-  // leaves the transparent body and backdrop-filter surfaces bleeding through
-  // and (on fractional DPI) rendering blurry. Restrict translucency to macOS.
+  // The translucent shell needs something blurring the desktop behind the window: macOS
+  // vibrancy, or the Hyprland compositor. Elsewhere (Windows, other Linux sessions, the
+  // browser) the window is opaque, and a translucent shell would leave the transparent body
+  // and backdrop-filter surfaces bleeding through and (on fractional DPI) rendering blurry.
   const material: WindowMaterial =
-    options?.electron === true && options?.isMac === true && !pack.theme.opaqueWindows
-      ? "translucent"
-      : "opaque";
+    options?.windowTranslucency != null && !pack.theme.opaqueWindows ? "translucent" : "opaque";
   const warningColor = WARNING_COLOR_BY_VARIANT[variant];
   const translucency = options?.translucency ?? DEFAULT_WINDOW_TRANSLUCENCY_BY_VARIANT[variant];
   const translucentOpacity = translucency.opacity;
@@ -823,10 +860,14 @@ export function buildThemeCssVariables(
     variant === "dark"
       ? readCodexVariable("--color-background-control-opaque")
       : "color-mix(in oklab, var(--color-background-control) 90%, transparent)";
-  // Mirrors Codex Electron's [cmdk-root] dropdown shell: thin the dropdown-background
-  // token by 5% in oklab over the existing backdrop blur. Light vs dark is already
-  // handled by --color-background-control-opaque (white in light, dark control in dark).
-  const composerPickerMenuSurface = "color-mix(in oklab, var(--popover) 70%, transparent)";
+  // Floating surfaces share the composer's fill, tracking the coat on whole-window glass.
+  const raisedGlass = RAISED_GLASS_OPACITY_BY_VARIANT[variant];
+  const raisedGlassOpacity = Math.round(raisedGlass.floor + translucentOpacity * raisedGlass.ratio);
+  const raisedGlassSurface = `color-mix(in srgb, var(--popover) ${raisedGlassOpacity}%, transparent)`;
+  const overlaySurface = wholeWindowGlass
+    ? raisedGlassSurface
+    : `color-mix(in srgb, var(--popover) ${OVERLAY_OPACITY}%, transparent)`;
+  const composerPickerMenuSurface = overlaySurface;
   const composerFocusBorder = buildComposerFocusBorder(
     pack,
     variant,
@@ -856,7 +897,7 @@ export function buildThemeCssVariables(
     // `.app-content-surface` in index.css.
     "--app-content-surface": wholeWindowGlass ? "transparent" : contentSurface,
     // Rail layout shell (top strip + rail): a solid tone on opaque windows, a sheer tint
-    // over macOS vibrancy so the glass still shows through (see index.css rail rules).
+    // over the desktop blur so the glass still shows through (see index.css rail rules).
     // Light keeps a denser tint so the shell stays a light grey over bright wallpapers.
     "--app-rail-shell-opacity": wholeWindowGlass
       ? "0%"
@@ -864,21 +905,25 @@ export function buildThemeCssVariables(
         ? `${Math.min(100, Math.round(translucentOpacity * RAIL_SHELL_OPACITY_RATIO_BY_VARIANT[variant]))}%`
         : "100%",
     "--app-composer-focus-border": composerFocusBorder,
-    // Frosted blur only when the shell is translucent (macOS). On an opaque
+    // Raised-chrome fill over the body's coat when the whole window is glass. Empty elsewhere,
+    // which leaves each surface's own fill in charge (see `.app-glass-raised` in index.css).
+    "--app-glass-raised-surface": wholeWindowGlass ? raisedGlassSurface : "",
+    // Frosted blur only when the shell is translucent. On an opaque
     // shell this promotes the surface to a GPU layer that Chromium rasterizes at
     // the wrong scale on fractional DPI (Windows), so text reads blurry until a
-    // repaint. Keep it "none" off macOS.
+    // repaint. Keep it "none" on opaque windows.
     // NOTE: this gates window-vibrancy frosting only. The composer's own glass
     // (`.chat-composer-surface`, index.css) frosts page content, not the window
     // material, so — like the floating menus — it stays on across platforms.
     "--app-composer-picker-backdrop-filter": material === "translucent" ? "blur(32px)" : "none",
     "--app-composer-picker-surface": composerPickerMenuSurface,
+    "--app-overlay-surface": overlaySurface,
+    // The coat an overlay sits on once the page is cut out from under it. Whole-window glass
+    // already paints it on the body; sidebar-only glass has no body coat, so the overlay
+    // carries it itself and looks the same over the sidebar and over the content.
+    "--app-overlay-backing": translucencyScope === "sidebar" ? glassSurface : "",
     "--app-chat-code-surface": chatCodeSurface,
     "--app-user-message-background": chatCodeSurface,
-    // With whole-window glass nothing but the body's own coat sits under the sidebar, so
-    // there is nothing to frost.
-    "--app-sidebar-backdrop-filter":
-      translucencyScope === "sidebar" ? "blur(4px) saturate(130%)" : "none",
     // Settings mirrors the chat surface (opaque --color-background-surface) so every
     // settings element reads as outline-only. With an opaque page there is nothing to
     // frost, so we skip the backdrop blur (and its compositing cost) entirely.

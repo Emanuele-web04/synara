@@ -1,6 +1,6 @@
 // FILE: composerStackedPanelStyles.ts
 // Purpose: Shared layout, typography, and chrome tokens for panels stacked above the
-// composer (plan activity, queued follow-ups, live file changes).
+// composer (queued follow-ups) and the panels composer capsules open (tasks, workflow, goal).
 // Layer: Chat composer styling
 // Exports: stacked panel row/header tokens and divider class name
 
@@ -20,6 +20,9 @@ export const COMPOSER_STACKED_PANEL_CHROME_CLASS_NAME = [
 
 /** Divider between rows inside the same stacked panel. */
 export const COMPOSER_STACKED_PANEL_DIVIDER_CLASS_NAME = `border-t ${COMPOSER_STACKED_SURFACE_BORDER_CLASS_NAME}`;
+
+/** Shared spacing and typography for contextual composer notices. */
+export const COMPOSER_NOTICE_CONTENT_CLASS_NAME = "px-5 py-3 text-ui-sm leading-snug sm:px-6";
 
 /** Standard single-line row inside a stacked panel header strip. */
 export const COMPOSER_STACKED_PANEL_ROW_CLASS_NAME =

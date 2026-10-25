@@ -48,6 +48,8 @@ const api = vi.hoisted(() => {
       })),
       linkProject: vi.fn(),
       unlinkProject: vi.fn(),
+      pauseGroup: vi.fn(),
+      resumeGroup: vi.fn(),
       deleteGroup: vi.fn(async () => ({
         deletedProjectId: "project-group-1",
         libraryLeftOnDiskPath: null,
@@ -161,6 +163,8 @@ describe("GroupSettingsDialog", () => {
     await renderDialog();
 
     await page.getByLabelText("Hub goal").fill("grow the library");
+    await page.getByRole("combobox", { name: "Parallel threads" }).click();
+    await page.getByRole("option", { name: "3", exact: true }).click();
     await page.getByRole("button", { name: "Save", exact: true }).click();
 
     await vi.waitFor(() => expect(api.projectAgent.configure).toHaveBeenCalledOnce());
@@ -170,6 +174,7 @@ describe("GroupSettingsDialog", () => {
     expect(payload.expectedRevision).toBe(4);
     expect(payload.captureEnabled).toBe(true);
     expect(payload.autoMemoryEnabled).toBe(true);
+    expect(payload.limits).toMatchObject({ maxConcurrentWorkers: 3 });
     expect(payload.coordinatorModelSelection).toEqual({
       provider: "codex",
       model: "gpt-5-codex",
@@ -181,6 +186,46 @@ describe("GroupSettingsDialog", () => {
     expect(typeof payload.requestId).toBe("string");
     // Name unchanged: no rename command dispatched.
     expect(api.orchestration.dispatchCommand).not.toHaveBeenCalled();
+  });
+
+  it("shows the effective ceiling for a legacy limit while preserving the saved value until explicitly changed", async () => {
+    const existing = overview();
+    const legacy = overview({
+      config: {
+        ...existing.config!,
+        limits: { ...existing.config!.limits, maxConcurrentWorkers: 16 },
+      },
+    });
+    api.projectAgent.getOverview.mockResolvedValue(legacy);
+    api.projectAgent.configure.mockResolvedValue(legacy);
+    const screen = await renderDialog();
+    try {
+      await vi.waitFor(
+        () =>
+          expect(
+            document.querySelector('[role="combobox"][aria-label="Parallel threads"]')?.textContent,
+          ).toBe("8"),
+        { timeout: 1_000 },
+      );
+      await page.getByLabelText("Hub goal").fill("keep existing limits");
+      await page.getByRole("button", { name: "Save", exact: true }).click();
+      await vi.waitFor(() => expect(api.projectAgent.configure).toHaveBeenCalledOnce());
+      const unchanged = api.projectAgent.configure.mock.calls[0]?.[0] as {
+        limits: { maxConcurrentWorkers: number };
+      };
+      expect(unchanged.limits.maxConcurrentWorkers).toBe(16);
+
+      await page.getByRole("combobox", { name: "Parallel threads" }).click();
+      await page.getByRole("option", { name: "8", exact: true }).click();
+      await page.getByRole("button", { name: "Save", exact: true }).click();
+      await vi.waitFor(() => expect(api.projectAgent.configure).toHaveBeenCalledTimes(2));
+      const explicitlyChanged = api.projectAgent.configure.mock.calls[1]?.[0] as {
+        limits: { maxConcurrentWorkers: number };
+      };
+      expect(explicitlyChanged.limits.maxConcurrentWorkers).toBe(8);
+    } finally {
+      await screen.unmount();
+    }
   });
 
   it("clears the footer save error when the draft changes", async () => {
@@ -257,6 +302,59 @@ describe("GroupSettingsDialog", () => {
     );
     const payload = api.projectAgent.configure.mock.calls[0]?.[0] as Record<string, unknown>;
     expect(payload.coordinatorName).toBe("beta");
+  });
+
+  it("saves a rename after Pause and Resume in the same dialog", async () => {
+    await renderDialog();
+    await expect.element(page.getByLabelText("Hub name")).toBeInTheDocument();
+
+    const lifecycle = (revision: number, pausedAt: string | null) =>
+      overview({ config: { ...overview().config!, revision, pausedAt } });
+    api.projectAgent.pauseGroup.mockResolvedValue(lifecycle(5, "2026-09-02T00:00:00.000Z"));
+    api.projectAgent.getOverview.mockResolvedValue(lifecycle(5, "2026-09-02T00:00:00.000Z"));
+    await page.getByRole("button", { name: "Pause", exact: true }).click();
+    api.projectAgent.resumeGroup.mockResolvedValue(lifecycle(6, null));
+    api.projectAgent.getOverview.mockResolvedValue(lifecycle(6, null));
+    await page.getByRole("button", { name: "Resume", exact: true }).click();
+    await expect
+      .element(page.getByRole("button", { name: "Pause", exact: true }))
+      .toBeInTheDocument();
+
+    await page.getByLabelText("Hub name").fill("beta");
+    await page.getByRole("button", { name: "Save", exact: true }).click();
+
+    await vi.waitFor(() => expect(api.projectAgent.configure).toHaveBeenCalledOnce());
+    const payload = api.projectAgent.configure.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(payload.expectedRevision).toBe(6);
+  });
+
+  it("keeps the opened revision when a newer config also changed a setting", async () => {
+    await renderDialog();
+    await expect.element(page.getByLabelText("Hub name")).toBeInTheDocument();
+
+    // Another writer's save landed before this pause. Save must still report the conflict.
+    const config = overview().config!;
+    const pausedAfterOtherSave = overview({
+      config: {
+        ...config,
+        revision: 6,
+        pausedAt: "2026-09-02T00:00:00.000Z",
+        limits: { ...config.limits, maxConcurrentWorkers: 2 },
+      },
+    });
+    api.projectAgent.pauseGroup.mockResolvedValue(pausedAfterOtherSave);
+    api.projectAgent.getOverview.mockResolvedValue(pausedAfterOtherSave);
+    await page.getByRole("button", { name: "Pause", exact: true }).click();
+    await expect
+      .element(page.getByRole("button", { name: "Resume", exact: true }))
+      .toBeInTheDocument();
+
+    await page.getByLabelText("Hub name").fill("beta");
+    await page.getByRole("button", { name: "Save", exact: true }).click();
+
+    await vi.waitFor(() => expect(api.projectAgent.configure).toHaveBeenCalledOnce());
+    const payload = api.projectAgent.configure.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(payload.expectedRevision).toBe(4);
   });
 
   it("autosaves Memory instructions to instructions.md", async () => {

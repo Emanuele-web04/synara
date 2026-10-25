@@ -7,13 +7,20 @@ import {
 import { useEffect } from "react";
 import { create } from "zustand";
 
+import { subscribeToWindowReturn } from "~/hooks/useRefreshOnWindowReturn";
+import { startVisibleInterval } from "~/lib/visibleInterval";
 import { readNativeApi } from "~/nativeApi";
 import { projectAgentOverviewConfigured } from "./projectAgentOverview.logic";
 
 type ProjectAgentSummariesState = {
   summariesByProjectId: ReadonlyMap<ProjectId, ProjectAgentSummary>;
   loaded: boolean;
-  setSummaries: (summaries: readonly ProjectAgentSummary[]) => void;
+  // Only a completed list carries member lists. Stream rows land without them.
+  membersLoaded: boolean;
+  setSummaries: (
+    summaries: readonly ProjectAgentSummary[],
+    requestBaseline?: ReadonlyMap<ProjectId, ProjectAgentSummary>,
+  ) => void;
   applySummary: (summary: ProjectAgentSummary) => void;
   applyOverview: (overview: ProjectAgentOverview) => void;
   applyEvent: (event: ProjectAgentStreamEvent) => void;
@@ -36,6 +43,9 @@ function summaryFromOverview(
     archivedAt: overview.config?.archivedAt ?? null,
     // The overview has no member-index field; only listSummaries knows it.
     memberThreadIds: previous?.memberThreadIds,
+    needsYouThreadIds: overview.workers
+      ? overview.workers.filter((worker) => worker.needsYou).map((worker) => worker.threadId)
+      : previous?.needsYouThreadIds,
     linkedProjectIds: overview.linkedProjectIds,
     // The goal text the dialog writes lives on the config; the authorized goal
     // row is a separate signal — either one counts as "has a goal".
@@ -47,12 +57,46 @@ function summaryFromOverview(
 export const useProjectAgentSummariesStore = create<ProjectAgentSummariesState>((set) => ({
   summariesByProjectId: new Map(),
   loaded: false,
-  setSummaries: (summaries) =>
-    set({
-      loaded: true,
-      summariesByProjectId: new Map(
-        summaries.map((summary) => [summary.projectId, summary] as const),
-      ),
+  membersLoaded: false,
+  setSummaries: (summaries, requestBaseline) =>
+    set((current) => {
+      const next = new Map(summaries.map((summary) => [summary.projectId, summary] as const));
+      let membersLoaded = true;
+      for (const [projectId, summary] of current.summariesByProjectId) {
+        const incoming = next.get(projectId);
+        const newerRevision = incoming !== undefined && summary.revision > incoming.revision;
+        const baseline = requestBaseline?.get(projectId);
+        const changedDuringRequest = requestBaseline !== undefined && baseline !== summary;
+        const metadataChangedDuringRequest =
+          changedDuringRequest &&
+          (baseline === undefined ||
+            (Object.keys({ ...baseline, ...summary }) as (keyof ProjectAgentSummary)[]).some(
+              (key) => key !== "memberThreadIds" && baseline[key] !== summary[key],
+            ));
+        // A member-only patch must not replace fresh list status. Keep newer metadata,
+        // including a row created while the request's older snapshot was loading.
+        if (
+          newerRevision ||
+          (metadataChangedDuringRequest && (!incoming || incoming.revision <= summary.revision))
+        ) {
+          next.set(projectId, summary);
+          // A Hub created during the request has no member list yet.
+          if (!incoming) membersLoaded = false;
+        }
+        // Members merge apart from the revision, which index writes do not bump. The list
+        // wins, plus ids a live index row added while it was loading.
+        if (incoming) {
+          const baselineMembers = new Set(requestBaseline?.get(projectId)?.memberThreadIds ?? []);
+          const addedMembers = changedDuringRequest
+            ? (summary.memberThreadIds ?? []).filter((id) => !baselineMembers.has(id))
+            : [];
+          next.set(projectId, {
+            ...(next.get(projectId) ?? incoming),
+            memberThreadIds: [...new Set([...(incoming.memberThreadIds ?? []), ...addedMembers])],
+          });
+        }
+      }
+      return { loaded: true, membersLoaded, summariesByProjectId: next };
     }),
   applySummary: (summary) =>
     set((current) => {
@@ -106,6 +150,7 @@ export const useProjectAgentSummariesStore = create<ProjectAgentSummariesState>(
           pausedAt: event.config.pausedAt ?? null,
           archivedAt: event.config.archivedAt ?? null,
           memberThreadIds: previous?.memberThreadIds,
+          needsYouThreadIds: previous?.needsYouThreadIds,
           linkedProjectIds: previous?.linkedProjectIds,
           hasGoal: (event.config.goal?.trim().length ?? 0) > 0 || previous?.hasGoal === true,
           instructionsConfigured: previous?.instructionsConfigured,
@@ -147,17 +192,65 @@ export const useProjectAgentSummariesStore = create<ProjectAgentSummariesState>(
       }
       return;
     }
-    if (event.type === "task-upserted" || event.type === "thread-index-upserted") {
-      // Task assignments and index writes change member threads; a coalesced
-      // re-list picks them up. activity-appended no longer refreshes — group
-      // activity lands dozens of rows per turn and none of them change the
-      // summary row.
+    if (event.type === "thread-index-upserted") {
+      set((current) => {
+        const previous = current.summariesByProjectId.get(event.projectId);
+        if (!previous) return current;
+        // A live index row is a member now, before the re-list lands. An excluded
+        // or archived row proves nothing: a task assignment can keep the thread,
+        // so the re-list owns removals.
+        const memberThreadIds = new Set(previous.memberThreadIds ?? []);
+        const known = memberThreadIds.size;
+        for (const row of event.threads) {
+          if (!row.excluded && !row.archived) memberThreadIds.add(row.threadId);
+        }
+        if (memberThreadIds.size === known) return current;
+        const next = new Map(current.summariesByProjectId);
+        next.set(event.projectId, { ...previous, memberThreadIds: [...memberThreadIds] });
+        return { summariesByProjectId: next };
+      });
+      scheduleProjectAgentSummariesRefresh();
+      return;
+    }
+    if (event.type === "task-upserted" || event.type === "work-item-upserted") {
+      // Task assignments change member threads; a coalesced re-list picks them
+      // up. activity-appended no longer refreshes — group activity lands dozens
+      // of rows per turn and none of them change the summary row.
       scheduleProjectAgentSummariesRefresh();
     }
   },
 }));
 
 let summariesLoadPromise: Promise<void> | null = null;
+let summariesRefreshConsumers = 0;
+let stopSummariesRefresh: (() => void) | null = null;
+const SUMMARIES_POLL_INTERVAL_MS = 30_000;
+
+// Closed Hubs have no project stream subscription. One shared visible poll keeps
+// their recovery badges current without subscribing every Hub in the workspace.
+function retainSummariesRefresh(): () => void {
+  summariesRefreshConsumers += 1;
+  if (summariesRefreshConsumers === 1) {
+    const stopInterval = startVisibleInterval(() => {
+      const { loaded, summariesByProjectId } = useProjectAgentSummariesStore.getState();
+      if (!loaded || summariesByProjectId.size > 0) {
+        void loadProjectAgentSummaries();
+      }
+    }, SUMMARIES_POLL_INTERVAL_MS);
+    const stopWindowReturn = subscribeToWindowReturn(loadProjectAgentSummaries);
+    stopSummariesRefresh = () => {
+      stopInterval();
+      stopWindowReturn();
+    };
+  }
+  return () => {
+    summariesRefreshConsumers -= 1;
+    if (summariesRefreshConsumers === 0) {
+      stopSummariesRefresh?.();
+      stopSummariesRefresh = null;
+    }
+  };
+}
 
 export function coordinatorThreadIdSet(
   summaries: Iterable<ProjectAgentSummary>,
@@ -222,10 +315,12 @@ export async function loadProjectAgentSummaries(): Promise<void> {
       return;
     }
     try {
+      const requestBaseline = useProjectAgentSummariesStore.getState().summariesByProjectId;
       const result = await api.projectAgent.listSummaries({});
-      useProjectAgentSummariesStore.getState().setSummaries(result.summaries);
+      useProjectAgentSummariesStore.getState().setSummaries(result.summaries, requestBaseline);
     } catch {
-      useProjectAgentSummariesStore.getState().setSummaries([]);
+      // Preserve membership and cards through a transient failure. The shared
+      // visible poll (including an unfinished initial load) retries next period.
     }
   })().finally(() => {
     summariesLoadPromise = null;
@@ -236,13 +331,15 @@ export async function loadProjectAgentSummaries(): Promise<void> {
 export function useProjectAgentSummaries() {
   const summariesByProjectId = useProjectAgentSummariesStore((state) => state.summariesByProjectId);
   const loaded = useProjectAgentSummariesStore((state) => state.loaded);
+  const membersLoaded = useProjectAgentSummariesStore((state) => state.membersLoaded);
   const applyOverview = useProjectAgentSummariesStore((state) => state.applyOverview);
   const applyEvent = useProjectAgentSummariesStore((state) => state.applyEvent);
 
   useEffect(() => {
+    const releaseRefresh = retainSummariesRefresh();
     void loadProjectAgentSummaries();
     const api = readNativeApi();
-    if (!api?.projectAgent) return;
+    if (!api?.projectAgent) return releaseRefresh;
     const unsubscribe = api.projectAgent.onEvent((event) => {
       applyEvent(event);
     });
@@ -257,6 +354,7 @@ export function useProjectAgentSummaries() {
         }
       }) ?? (() => {});
     return () => {
+      releaseRefresh();
       unsubscribe();
       unsubscribeAutomation();
     };
@@ -265,6 +363,7 @@ export function useProjectAgentSummaries() {
   return {
     summariesByProjectId,
     loaded,
+    membersLoaded,
     applyOverview,
     refresh: loadProjectAgentSummaries,
     summaryFor: (projectId: ProjectId | null | undefined) =>

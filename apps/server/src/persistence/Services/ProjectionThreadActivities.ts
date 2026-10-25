@@ -14,7 +14,7 @@ import {
   ThreadId,
   TurnId,
 } from "@synara/contracts";
-import { Schema, ServiceMap } from "effect";
+import { Option, Schema, ServiceMap } from "effect";
 import type { Effect } from "effect";
 
 import type { ProjectionRepositoryError } from "../Errors.ts";
@@ -55,6 +55,12 @@ export interface ProjectionThreadActivityRepositoryShape {
   readonly upsert: (
     row: ProjectionThreadActivity,
   ) => Effect.Effect<void, ProjectionRepositoryError>;
+
+  /** Read one durable activity without the transcript window cap. */
+  readonly getById: (input: {
+    readonly threadId: ThreadId;
+    readonly activityId: EventId;
+  }) => Effect.Effect<Option.Option<ProjectionThreadActivity>, ProjectionRepositoryError>;
 
   /**
    * List projected thread activity rows for a thread.

@@ -120,6 +120,27 @@ describe("AsyncUserInputCard", () => {
       .not.toBeInTheDocument();
   });
 
+  it("sends the typed answer with Enter or Cmd+Enter and breaks lines with Shift+Enter", async () => {
+    const onRespond = vi.fn().mockResolvedValue(undefined);
+    const screen = await render(
+      <AsyncUserInputCard
+        messageId={messageId}
+        input={{ questions: [{ title: "First?" }, { title: "Second?" }] }}
+        onRespond={onRespond}
+      />,
+    );
+    await screen.getByRole("button", { name: "2 questions", exact: true }).click();
+    const first = screen.getByRole("textbox", { name: "Answer: First?" });
+    await first.click();
+    await userEvent.keyboard("Line one{Shift>}{Enter}{/Shift}Line two");
+    await expect.element(first).toHaveValue("Line one\nLine two");
+    await userEvent.keyboard("{Enter}");
+    const second = screen.getByRole("textbox", { name: "Answer: Second?" });
+    await second.click();
+    await userEvent.keyboard("Done{Meta>}{Enter}{/Meta}");
+    expect(onRespond).toHaveBeenCalledExactlyOnceWith(messageId, ["Line one\nLine two", "Done"]);
+  });
+
   it("keeps shortcuts local to the opened question and never submits a suggested choice", async () => {
     const onRespond = vi.fn();
     const screen = await render(
