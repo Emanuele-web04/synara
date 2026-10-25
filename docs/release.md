@@ -294,6 +294,8 @@ Mac application bundles declare `LSMinimumSystemVersion` 13.0 through electron-b
 the application manifest must not advertise Electron's lower deployment target as the
 requirement for the complete bundle. This applies to signed, unsigned and local ad-hoc
 packages, including DMG and update ZIP payloads.
+The generated and retained macOS update feeds use Darwin `22.0.0` for this minimum,
+because electron-updater compares `os.release()` rather than the macOS product version.
 
 The [read-only v1.0.1 inspection](https://github.com/Emanuele-web04/synara/actions/runs/38163962883)
 found app/Electron metadata at 12.0 and bundled Claude/Cua at 13.0 on both architectures.

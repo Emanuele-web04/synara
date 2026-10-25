@@ -20,6 +20,9 @@ export const MICROPHONE_USAGE_DESCRIPTION =
   "Synara needs microphone access so you can record voice notes and transcribe them into the chat composer, and, if you turn it on, to move the chat message trail with your voice.";
 export const AUDIO_CAPTURE_USAGE_DESCRIPTION =
   "Synara reads how loud your Mac's audio is to animate the chat message trail. The audio itself is never recorded.";
+// Bundle metadata uses the product version; electron-updater compares Darwin releases.
+export const MAC_MINIMUM_SYSTEM_VERSION = "13.0";
+export const MAC_MINIMUM_DARWIN_VERSION = "22.0.0";
 export const MAC_ENTITLEMENTS_PATH = "apps/desktop/resources/entitlements.mac.plist";
 export const MAC_INHERITED_ENTITLEMENTS_PATH =
   "apps/desktop/resources/entitlements.mac.inherit.plist";
@@ -133,7 +136,7 @@ export function createDesktopPlatformBuildConfig(
       category: "public.app-category.developer-tools",
       // The bundled Claude and Cua native executables require macOS 13.
       // Keep the app's launch metadata consistent with its complete payload.
-      minimumSystemVersion: "13.0",
+      minimumSystemVersion: MAC_MINIMUM_SYSTEM_VERSION,
       hardenedRuntime: input.signed === true,
       // The mandatory afterSign hook splits Apple upload/wait timings and
       // staples the app before electron-builder creates either container.
