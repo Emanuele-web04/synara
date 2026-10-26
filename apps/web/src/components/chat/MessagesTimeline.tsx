@@ -111,6 +111,7 @@ import { UserMessagePastedTextCard } from "./PastedTextChip";
 import { UserMessagePullRequestContextCard } from "./PullRequestContextCard";
 import {
   EditedFileRowContent,
+  isProseWorkEntry,
   prefersCompactWorkEntryRow,
   renderWorkEntryIcon,
   TimelineWorkEntryRow,
@@ -1553,23 +1554,35 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     const settledCollapseTransition = isCollapsedWorkExpanded
       ? undefined
       : settledTurnCollapseTransitions[row.message.id];
-    const renderCollapsedTurnItem = (item: CollapsedTurnItem, keyPrefix: string) =>
-      item.kind === "work" ? (
-        <TimelineWorkEntryRow
-          key={`${keyPrefix}:work:${row.message.id}:${item.id}`}
-          workEntry={item.entry}
-          chatMetaFontSizePx={appTypographyScale.chatMetaPx}
-          textFontSizePx={normalizedChatFontSizePx}
-          density={prefersCompactWorkEntryRow(item.entry) ? "compact" : "default"}
-          markdownCwd={markdownCwd}
-          onImageExpand={onImageExpand}
-          timestampFormat={timestampFormat}
-          {...(onOpenAgentActivity ? { onOpenAgentActivity } : {})}
-          {...(onOpenAutomation ? { onOpenAutomation } : {})}
-          {...(computerControlEnabled !== undefined ? { computerControlEnabled } : {})}
-          {...(onEnableComputerControl ? { onEnableComputerControl } : {})}
-        />
-      ) : (
+    const renderCollapsedTurnItem = (item: CollapsedTurnItem, keyPrefix: string) => {
+      if (item.kind === "work") {
+        const workRowKey = `${keyPrefix}:work:${row.message.id}:${item.id}`;
+        const workRow = (
+          <TimelineWorkEntryRow
+            key={workRowKey}
+            workEntry={item.entry}
+            chatMetaFontSizePx={appTypographyScale.chatMetaPx}
+            textFontSizePx={normalizedChatFontSizePx}
+            density={prefersCompactWorkEntryRow(item.entry) ? "compact" : "default"}
+            markdownCwd={markdownCwd}
+            onImageExpand={onImageExpand}
+            timestampFormat={timestampFormat}
+            {...(onOpenAgentActivity ? { onOpenAgentActivity } : {})}
+            {...(onOpenAutomation ? { onOpenAutomation } : {})}
+            {...(computerControlEnabled !== undefined ? { computerControlEnabled } : {})}
+            {...(onEnableComputerControl ? { onEnableComputerControl } : {})}
+          />
+        );
+        // Folded reasoning keeps the same muted tone as the folded narration.
+        return isProseWorkEntry(item.entry) ? (
+          <div key={workRowKey} className={MUTED_LABEL_TEXT_CLASS_NAME}>
+            {workRow}
+          </div>
+        ) : (
+          workRow
+        );
+      }
+      return (
         <div
           key={`${keyPrefix}:narration:${row.message.id}:${item.id}`}
           className={MUTED_LABEL_TEXT_CLASS_NAME}
@@ -1588,6 +1601,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
           />
         </div>
       );
+    };
     const renderCollapsedTurnChunk = (chunk: CollapsedTurnChunk, keyPrefix: string) => {
       if (chunk.kind === "item") {
         return renderCollapsedTurnItem(chunk.item, keyPrefix);
@@ -1992,19 +2006,18 @@ export const MessagesTimeline = memo(function MessagesTimeline({
               data-chat-find-document-id={row.message.id}
               data-chat-find-segment-index={row.segmentIndex}
             >
-              <div className={MUTED_LABEL_TEXT_CLASS_NAME}>
-                <InlineVisualEmbedContext.Provider value={resolveInlineVisualEmbed(row.message.id)}>
-                  <ChatMarkdown
-                    text={segmentText}
-                    cwd={markdownCwd}
-                    directionMode="auto-blocks"
-                    isStreaming={false}
-                    style={chatTypographyStyle}
-                    onImageExpand={onImageExpand}
-                    {...threadFindMarkdownProps(findHighlight, row.message.id, row.segmentIndex)}
-                  />
-                </InlineVisualEmbedContext.Provider>
-              </div>
+              {/* Interleaved slices are the assistant's own text: same tone as its reply. */}
+              <InlineVisualEmbedContext.Provider value={resolveInlineVisualEmbed(row.message.id)}>
+                <ChatMarkdown
+                  text={segmentText}
+                  cwd={markdownCwd}
+                  directionMode="auto-blocks"
+                  isStreaming={false}
+                  style={chatTypographyStyle}
+                  onImageExpand={onImageExpand}
+                  {...threadFindMarkdownProps(findHighlight, row.message.id, row.segmentIndex)}
+                />
+              </InlineVisualEmbedContext.Provider>
             </div>
           );
         })()}

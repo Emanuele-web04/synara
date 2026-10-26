@@ -329,7 +329,7 @@ describe("MessagesTimeline", () => {
     },
   );
 
-  it("shows the literal failed command, exit code and stderr even when the provider uses an error tone", async () => {
+  it("keeps a failed command on one line with its exit code, output behind the disclosure, even when the provider uses an error tone", async () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
     const markup = renderToStaticMarkup(
       <MessagesTimeline
@@ -362,7 +362,8 @@ describe("MessagesTimeline", () => {
     expect(markup).toContain('data-command-literal="true"');
     expect(markup).toContain("missing-command --check");
     expect(markup).toContain("Failed · exit 127");
-    expect(markup).toContain("missing-command: command not found");
+    expect(markup).not.toContain("missing-command: command not found");
+    expect(markup).toContain('aria-expanded="false"');
   });
   // The first test pays the full dynamic-import cost of the MessagesTimeline
   // module graph, which can exceed 10s under CI thread contention.
@@ -915,7 +916,7 @@ describe("MessagesTimeline", () => {
     expect(markup).not.toContain("```tsx");
   });
 
-  it("renders a lone reasoning update as iconless tool text", async () => {
+  it("renders a lone reasoning update as iconless transcript prose", async () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
     const activeTurnId = TurnId.makeUnsafe("turn-reasoning-lone");
     const markup = renderToStaticMarkup(
@@ -945,7 +946,8 @@ describe("MessagesTimeline", () => {
       />,
     );
 
-    expect(markup.match(/data-codex-status-row="true"/g) ?? []).toHaveLength(1);
+    expect(markup.match(/data-work-entry-prose="true"/g) ?? []).toHaveLength(1);
+    expect(markup).not.toContain('data-codex-status-row="true"');
     expect(markup).not.toContain('data-work-entry-icon="true"');
     expect(markup).toContain("Inspecting apps/web/src/store.ts");
     expect(markup).not.toContain("Reasoning trace Inspecting");
