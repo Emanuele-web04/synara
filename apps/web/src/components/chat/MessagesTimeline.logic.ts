@@ -1710,7 +1710,14 @@ function collapseSettledTurns(
     }
     // A provider can open the turn a woken response belongs to only when it
     // replies; that response started when the background task finished.
-    if (wokenAt !== null) turnStart = wokenAt;
+    if (wokenAt !== null) {
+      // Consecutive wakes share this response. Its clock starts at the first,
+      // while the latest wake below still guards against a stale turn end.
+      turnStart = wakeEntries.reduce(
+        (start, entry) => earliestTimestamp(start, entry.createdAt),
+        wokenAt,
+      );
+    }
     // A provider can reuse the launching turn id for a notification response.
     // An earlier terminal record belongs to the launch, not the resumed work.
     const responseTiming =

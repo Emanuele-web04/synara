@@ -33,7 +33,12 @@ import {
   type MessagesTimelineRow,
   type StableMessagesTimelineRowsState,
 } from "./MessagesTimeline.logic";
-import { deriveWorkLogEntries, type TimelineEntry, type WorkLogEntry } from "../../session-logic";
+import {
+  deriveTimelineEntries,
+  deriveWorkLogEntries,
+  type TimelineEntry,
+  type WorkLogEntry,
+} from "../../session-logic";
 import type { ChatMessage, TurnDiffSummary, WorktreeSetupSnapshot } from "../../types";
 
 describe("canSubmitUserMessageEdit", () => {
@@ -1385,6 +1390,80 @@ describe("deriveMessagesTimelineRows", () => {
       expect(messageRow(rows, "report")?.message.text).toBe("App ready");
     },
   );
+
+  it("times consecutive native task wakes from the first without accepting a stale turn end", () => {
+    const at = (seconds: number) => new Date(Date.UTC(2026, 0, 1, 0, 0, seconds)).toISOString();
+    const turnId = TurnId.makeUnsafe("same-turn");
+    const activity = (
+      id: string,
+      kind: string,
+      payload: OrchestrationThreadActivity["payload"],
+      seconds: number,
+    ): OrchestrationThreadActivity => ({
+      id: EventId.makeUnsafe(id),
+      kind,
+      payload,
+      turnId,
+      createdAt: at(seconds),
+      summary: id,
+      tone: "info",
+    });
+    const work = deriveWorkLogEntries(
+      [
+        activity(
+          "moved",
+          "runtime.warning",
+          {
+            nativeEventType: "background_tasks_changed",
+            data: {
+              tasks: ["a", "b"].map((id) => ({
+                task_id: id,
+                task_type: "local_bash",
+                description: `Build ${id}`,
+              })),
+            },
+          },
+          1,
+        ),
+        activity("launch-end", "turn.completed", { state: "completed" }, 5),
+        activity("done-a", "task.completed", { taskId: "a", status: "completed" }, 10),
+        activity("done-b", "task.completed", { taskId: "b", status: "completed" }, 20),
+      ],
+      undefined,
+    );
+    const messages = [
+      userEntry("request", at(0), "same-turn"),
+      assistantEntry("launch", at(4), { turnId: "same-turn", completedAt: at(5) }),
+      assistantEntry("report", at(30), { turnId: "same-turn", completedAt: at(30) }),
+    ].flatMap((entry) => (entry.kind === "message" ? [entry.message] : []));
+    const rows = deriveMessagesTimelineRows({
+      ...baseInput,
+      timelineEntries: deriveTimelineEntries(messages, [], work),
+      turnTimingByTurnId: new Map([
+        [turnId, { startedAt: at(0), completedAt: at(15), interrupted: false }],
+      ]),
+    });
+
+    // The stale end lies between the two wakes: validate against the latest
+    // wake first, then extend only the start to include both completed tasks.
+    expect(messageRow(rows, "report")?.turnHeader).toMatchObject({
+      elapsed: "20s",
+      endedAt: at(30),
+      outcome: "completed",
+      resumedBy: [
+        { description: "Build a", outcome: "finished" },
+        { description: "Build b", outcome: "finished" },
+      ],
+    });
+    expect(
+      messageRow(rows, "launch")
+        ?.collapsedTurnItems?.filter((item) => item.kind === "work" && item.entry.backgroundTask)
+        .map((item) => item.kind === "work" && item.backgroundTaskConsumed),
+    ).toEqual([true, true]);
+    expect(
+      rows.filter((row) => row.kind === "message" && row.message.role === "assistant"),
+    ).toHaveLength(2);
+  });
 
   it("invalidates the launch row when its task is consumed without moving either final answer", () => {
     const entries = outlivingTaskEntries({ streaming: true });
