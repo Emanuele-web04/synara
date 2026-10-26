@@ -111,7 +111,6 @@ import { UserMessagePastedTextCard } from "./PastedTextChip";
 import { UserMessagePullRequestContextCard } from "./PullRequestContextCard";
 import {
   EditedFileRowContent,
-  isProseWorkEntry,
   prefersCompactWorkEntryRow,
   renderWorkEntryIcon,
   TimelineWorkEntryRow,
@@ -162,7 +161,7 @@ import {
   type ParsedTerminalContextEntry,
 } from "~/lib/terminalContext";
 import { cn } from "~/lib/utils";
-import { MUTED_LABEL_TEXT_CLASS_NAME } from "~/surfaceStyles";
+import { MUTED_LABEL_TEXT_CLASS_NAME, MUTED_LABEL_TEXT_COLOR } from "~/surfaceStyles";
 import {
   DEFAULT_CHAT_FONT_SIZE_PX,
   normalizeChatFontSizePx,
@@ -1557,13 +1556,14 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     const renderCollapsedTurnItem = (item: CollapsedTurnItem, keyPrefix: string) => {
       if (item.kind === "work") {
         const workRowKey = `${keyPrefix}:work:${row.message.id}:${item.id}`;
-        const workRow = (
+        return (
           <TimelineWorkEntryRow
             key={workRowKey}
             workEntry={item.entry}
             chatMetaFontSizePx={appTypographyScale.chatMetaPx}
             textFontSizePx={normalizedChatFontSizePx}
             density={prefersCompactWorkEntryRow(item.entry) ? "compact" : "default"}
+            mutedProse
             markdownCwd={markdownCwd}
             onImageExpand={onImageExpand}
             timestampFormat={timestampFormat}
@@ -1572,14 +1572,6 @@ export const MessagesTimeline = memo(function MessagesTimeline({
             {...(computerControlEnabled !== undefined ? { computerControlEnabled } : {})}
             {...(onEnableComputerControl ? { onEnableComputerControl } : {})}
           />
-        );
-        // Folded reasoning keeps the same muted tone as the folded narration.
-        return isProseWorkEntry(item.entry) ? (
-          <div key={workRowKey} className={MUTED_LABEL_TEXT_CLASS_NAME}>
-            {workRow}
-          </div>
-        ) : (
-          workRow
         );
       }
       return (
@@ -1594,7 +1586,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
             cwd={markdownCwd}
             directionMode="auto-blocks"
             isStreaming={false}
-            style={chatTypographyStyle}
+            style={{ ...chatTypographyStyle, color: MUTED_LABEL_TEXT_COLOR }}
             onImageExpand={onImageExpand}
             knownAbsoluteFilePaths={knownAbsoluteFilePaths}
             {...threadFindMarkdownProps(findHighlight, item.message.id)}

@@ -555,19 +555,17 @@ function isFileChangeWorkEntry(workEntry: TimelineWorkEntry): boolean {
   return isFileChangeWorkLogEntry(workEntry);
 }
 
-// Reasoning traces and tool-use summaries are the agent narrating its work
-// ("I see `main` moved, so I'll rebase first"). They read as transcript text.
-export function isProseWorkEntry(workEntry: TimelineWorkEntry): boolean {
-  return isReasoningUpdateWorkEntry(workEntry) || workEntry.activityKind === "tool.summary";
+// Item-scoped reasoning and summaries keep full prose. Legacy reasoning groups
+// only carry a compact preview; their existing opener retains all original updates.
+function isProseWorkEntry(workEntry: TimelineWorkEntry): boolean {
+  return (
+    (isReasoningUpdateWorkEntry(workEntry) && Boolean(workEntry.toolCallId)) ||
+    workEntry.activityKind === "tool.summary"
+  );
 }
 
-// Item-scoped reasoning and tool summaries keep their full text in `detail`;
-// legacy reasoning compacted into one group only carries its display label.
 function proseWorkEntryText(workEntry: TimelineWorkEntry, displayText: string): string | null {
-  const source =
-    isReasoningUpdateWorkEntry(workEntry) && !workEntry.toolCallId
-      ? displayText
-      : (workEntry.detail ?? workEntry.preview ?? displayText);
+  const source = workEntry.detail ?? workEntry.preview ?? displayText;
   // Codex summaries end in an empty `<!-- -->` block separator.
   const text = source.replace(/<!--[\s\S]*?-->/gu, "").trim();
   return text.length > 0 ? text : null;
@@ -629,6 +627,7 @@ export const TimelineWorkEntryRow = memo(function TimelineWorkEntryRow(props: {
   chatMetaFontSizePx: number;
   textFontSizePx?: number;
   density?: "default" | "compact";
+  mutedProse?: boolean;
   fileDiffStatByPath?: ReadonlyMap<string, { additions: number; deletions: number }>;
   markdownCwd: string | undefined;
   onImageExpand: (preview: ExpandedImagePreview) => void;
@@ -648,6 +647,7 @@ export const TimelineWorkEntryRow = memo(function TimelineWorkEntryRow(props: {
     chatMetaFontSizePx,
     textFontSizePx: textFontSizePxProp,
     density: densityProp,
+    mutedProse,
     fileDiffStatByPath,
     markdownCwd,
     onImageExpand,
@@ -815,7 +815,10 @@ export const TimelineWorkEntryRow = memo(function TimelineWorkEntryRow(props: {
           cwd={markdownCwd}
           directionMode="auto-blocks"
           isStreaming={false}
-          style={getChatTranscriptTextStyle(textFontSizePx)}
+          style={{
+            ...getChatTranscriptTextStyle(textFontSizePx),
+            ...(mutedProse ? { color: MUTED_LABEL_TEXT_COLOR } : {}),
+          }}
           onImageExpand={onImageExpand}
         />
       </div>

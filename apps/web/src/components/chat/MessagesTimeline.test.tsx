@@ -933,6 +933,7 @@ describe("MessagesTimeline", () => {
             createdAt: "2026-03-17T19:12:28.100Z",
             entry: {
               id: "reasoning-trace",
+              toolCallId: "reasoning-item",
               createdAt: "2026-03-17T19:12:28.100Z",
               turnId: activeTurnId,
               label: "Reasoning trace",

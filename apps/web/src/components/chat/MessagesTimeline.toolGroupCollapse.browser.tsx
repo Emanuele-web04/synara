@@ -7,12 +7,15 @@
 import "../../index.css";
 
 import { MessageId, TurnId } from "@synara/contracts";
+import { useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";
 
 import { MessagesTimeline } from "./MessagesTimeline";
 import type { TimelineEntry } from "../../session-logic";
 import { deriveTimelineEntries } from "../../workLog";
+import { AgentActivityDetailView } from "./AgentActivityDetailView";
+import { deriveAgentActivityTimelineState } from "./agentActivity.logic";
 
 function assistantEntry(id: string, text: string, streaming: boolean): TimelineEntry {
   return {
@@ -292,6 +295,135 @@ describe("MessagesTimeline tool group collapse", () => {
     await expect.element(screen.getByText("Amber · Blue", { exact: true })).toBeVisible();
     expect(isVisibleOutsideClosedDisclosure("Which accent color?")).toBe(true);
     expect(isVisibleOutsideClosedDisclosure("Amber")).toBe(true);
+  });
+
+  it("keeps the original updates reachable from a compacted legacy reasoning row", async () => {
+    const state = deriveAgentActivityTimelineState([
+      {
+        id: "legacy-first",
+        createdAt: "2026-03-17T19:12:21.000Z",
+        label: "Reasoning update",
+        tone: "thinking",
+        detail: "First preview.\n\nOriginal detail from the first update.",
+      },
+      {
+        id: "legacy-last",
+        createdAt: "2026-03-17T19:12:22.000Z",
+        label: "Reasoning update",
+        tone: "thinking",
+        detail: "Latest preview.\n\nOriginal detail from the last update.",
+      },
+    ]);
+    function LegacyReasoningTimeline() {
+      const [detailId, setDetailId] = useState<string | null>(null);
+      const detail = detailId ? state.detailById.get(detailId) : undefined;
+      return detail ? (
+        <AgentActivityDetailView
+          detail={detail}
+          chatFontSizePx={14}
+          markdownCwd={undefined}
+          onBack={() => setDetailId(null)}
+          onImageExpand={() => {}}
+          timestampFormat="locale"
+        />
+      ) : (
+        <ToolGroupCollapseTimeline
+          timelineEntries={deriveTimelineEntries([], [], state.timelineWorkEntries)}
+          onOpenAgentActivity={setDetailId}
+        />
+      );
+    }
+    const screen = await render(<LegacyReasoningTimeline />, { container: createTimelineHost() });
+    try {
+      await screen.getByRole("button", { name: /2 updates/ }).click();
+      await expect
+        .element(screen.getByText("Original detail from the first update.", { exact: true }))
+        .toBeVisible();
+      await expect
+        .element(screen.getByText("Original detail from the last update.", { exact: true }).last())
+        .toBeVisible();
+    } finally {
+      await screen.unmount();
+    }
+  });
+
+  it("mutes settled reasoning, summaries and narration without muting the final answer", async () => {
+    const turnId = TurnId.makeUnsafe("prose-tone-turn");
+    const entries = deriveTimelineEntries(
+      [
+        {
+          id: MessageId.makeUnsafe("tone-request"),
+          role: "user",
+          text: "Check the boundary",
+          createdAt: "2026-03-17T19:12:20.000Z",
+          streaming: false,
+        },
+        {
+          id: MessageId.makeUnsafe("tone-narration"),
+          role: "assistant",
+          turnId,
+          text: "I am checking the boundary.",
+          createdAt: "2026-03-17T19:12:23.000Z",
+          streaming: false,
+        },
+        {
+          id: MessageId.makeUnsafe("tone-final"),
+          role: "assistant",
+          turnId,
+          text: "The boundary is verified.",
+          createdAt: "2026-03-17T19:12:26.000Z",
+          completedAt: "2026-03-17T19:12:28.000Z",
+          streaming: false,
+        },
+      ],
+      [],
+      [
+        {
+          id: "tone-reasoning",
+          turnId,
+          createdAt: "2026-03-17T19:12:21.000Z",
+          label: "Reasoning trace",
+          toolCallId: "reasoning-item",
+          tone: "tool",
+          detail: "Inspect the provider boundary.",
+        },
+        {
+          id: "tone-summary",
+          turnId,
+          createdAt: "2026-03-17T19:12:22.000Z",
+          label: "Tool summary",
+          activityKind: "tool.summary",
+          tone: "info",
+          detail: "The tools checked cancellation.",
+        },
+      ],
+    );
+    const host = createTimelineHost();
+    const screen = await render(<ToolGroupCollapseTimeline timelineEntries={entries} settled />, {
+      container: host,
+    });
+    try {
+      await expect.poll(() => findSummaryTrigger("Worked for") !== null).toBe(true);
+      findSummaryTrigger("Worked for")!.click();
+      await expect
+        .element(screen.getByText("I am checking the boundary.", { exact: true }))
+        .toBeVisible();
+      const narration = host.querySelector<HTMLElement>(
+        '[data-chat-find-narration-id="tone-narration"]',
+      )!;
+      const mutedColor = getComputedStyle(narration).color;
+      const prose = host.querySelectorAll<HTMLElement>("[data-work-entry-prose='true'] p");
+      expect(prose).toHaveLength(2);
+      for (const paragraph of [...prose, narration.querySelector("p")!]) {
+        expect(getComputedStyle(paragraph).color).toBe(mutedColor);
+      }
+      const final = [...host.querySelectorAll("p")].find(
+        (paragraph) => paragraph.textContent === "The boundary is verified.",
+      )!;
+      expect(getComputedStyle(final).color).not.toBe(mutedColor);
+    } finally {
+      await screen.unmount();
+    }
   });
 
   it.each(["reasoning", "tool summary"] as const)(
