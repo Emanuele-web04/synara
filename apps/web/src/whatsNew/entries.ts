@@ -22,6 +22,26 @@ import type { WhatsNewEntry } from "./logic";
 
 export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
   {
+    version: "1.0.6-remote.34",
+    date: "Oct 26",
+    features: [
+      {
+        id: "work-prose",
+        title: "Clearer work narration",
+        description:
+          "Reasoning and tool summaries appear as readable text. Worked for keeps earlier narration quiet and final answers clear.",
+        details:
+          "Compacted legacy reasoning still opens its original updates in the existing detail view.",
+      },
+      {
+        id: "concise-tool-details",
+        title: "Quieter tool details",
+        description:
+          "Failed tools keep a compact status row with full output in details. Running background work uses a quieter icon, and text between tool calls keeps the normal reply tone.",
+      },
+    ],
+  },
+  {
     version: "1.0.6-remote.33",
     date: "Oct 26",
     features: [

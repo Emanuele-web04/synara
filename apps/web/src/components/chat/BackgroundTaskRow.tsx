@@ -1,8 +1,8 @@
 // FILE: BackgroundTaskRow.tsx
 // Purpose: The one transcript row a background task keeps for its whole life:
-//          "`sleep 20 && echo done` · 12s [Stop]" behind a spinner, then
-//          "finished 20s" / "failed · exit 1" / "stopped" in place. Borderless
-//          and one color (the live spinner), like the transcript's tool rows.
+//          "`sleep 20 && echo done` · 12s [Stop]", then "finished 20s" /
+//          "failed · exit 1" / "stopped" in place. Borderless and muted, with
+//          the same tray glyph live or settled, like the transcript's tool rows.
 // Layer: Web chat presentation component
 // Exports: BackgroundTaskRow, BackgroundTaskStopContext
 
@@ -14,7 +14,6 @@ import { MUTED_LABEL_TEXT_CLASS_NAME } from "~/surfaceStyles";
 import type { WorkLogBackgroundTask } from "../../workLog";
 import { deriveLiteralCommand } from "../../lib/toolCallLabel";
 import { Button } from "../ui/button";
-import { LiveStatusSpinner } from "../ui/spinner";
 import { describeBackgroundTaskStatus } from "./backgroundTaskRow.logic";
 import { INLINE_COMMAND_CHIP_CLASS_NAME } from "./chatTypography";
 import { LiveElapsedTimer } from "./LiveElapsedTimer";
@@ -47,11 +46,8 @@ export function BackgroundTaskRow(props: { task: WorkLogBackgroundTask; fontSize
         )}
         aria-hidden
       >
-        {running ? (
-          <LiveStatusSpinner className="size-3.5 text-sky-600 dark:text-sky-300" />
-        ) : (
-          <BackgroundTrayIcon className="size-3.5" />
-        )}
+        {/* The ticking clock and Stop carry liveness; the glyph stays put. */}
+        <BackgroundTrayIcon className="size-3.5" />
       </span>
       <span className="min-w-0 truncate leading-5">
         {command ? (

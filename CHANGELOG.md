@@ -1,5 +1,24 @@
 # Changelog
 
+## 1.0.6-remote.34 — 2026-10-26
+
+**Readable work narration and quieter, concise tool details.**
+
+### Changed
+
+- Item-scoped reasoning and tool summaries render as Markdown in the transcript. Inside settled Worked for disclosures, prose and earlier assistant narration use the existing muted tone; final answers remain outside at normal contrast.
+- Failed tool calls keep a single status row with their full output behind the existing details control. Running background commands use the quieter tray icon, and interleaved assistant text keeps the normal reply tone.
+
+### Fixed
+
+- Compacted legacy reasoning retains its existing detail opener and all original updates instead of presenting its shortened preview as the full text.
+
+### Verification
+
+- The source UI change passed 230 focused unit tests, 15 browser component tests, formatting, lint and typecheck, plus all 24 pull-request checks and independent review.
+- Remote identity, data home, approved pairings and update feeds are preserved. No account or transcript migration and no hosted API deployment is required.
+- Publication remains gated by exact-tag quality/server suites, packaged platform checks, macOS signing/notarization, Windows Defender and source-bound artifact provenance. Windows retains the exact-version unsigned exception and may show SmartScreen.
+
 ## 1.0.6-remote.33 — 2026-10-26
 
 **Completed background work stays inside Worked for, with a consistent response clock.**
