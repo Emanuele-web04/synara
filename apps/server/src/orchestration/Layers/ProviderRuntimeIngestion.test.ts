@@ -787,6 +787,118 @@ describe("ProviderRuntimeIngestion", () => {
     expect(rows[0]?.count).toBe(1);
   });
 
+  it("replays an accepted completion without importing a file that appeared before journal acknowledgement", async () => {
+    const harness = await createHarness({ startIngestion: false, persistedStream: true });
+    const source = path.join(harness.workspaceRoot, "appeared.png");
+    const bytes = Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII=",
+      "base64",
+    );
+    const base = {
+      provider: "codex" as const,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("accepted-image-turn"),
+      itemId: asItemId("accepted-image-answer"),
+      createdAt: new Date().toISOString(),
+    };
+    const events: ReadonlyArray<ProviderRuntimeEvent> = [
+      { ...base, type: "turn.started", eventId: asEventId("accepted-image-start"), payload: {} },
+      {
+        ...base,
+        type: "content.delta",
+        eventId: asEventId("accepted-image-text"),
+        payload: { streamKind: "assistant_text", delta: "![appeared](./appeared.png)" },
+      },
+      {
+        ...base,
+        type: "item.completed",
+        eventId: asEventId("accepted-image-complete"),
+        payload: { itemType: "assistant_message", status: "completed" },
+      },
+    ];
+    for (const event of events)
+      await runtime!.runPromise(harness.runtimeEventRepository.append(event));
+    const dispatch = harness.engine.dispatch;
+    let accepted: { commandId: string; sequence: number } | undefined;
+    const lostAcknowledgement = vi
+      .spyOn(harness.engine, "dispatch")
+      .mockImplementation((command) => {
+        if (command.type !== "thread.message.assistant.complete") return dispatch(command);
+        return dispatch(command).pipe(
+          Effect.tap((result) =>
+            Effect.sync(() => {
+              expect(command.attachments).toBeUndefined();
+              accepted = { commandId: command.commandId, sequence: result.sequence };
+              fs.writeFileSync(source, bytes);
+            }),
+          ),
+          // The real Engine committed; only this runtime row's acknowledgement is lost.
+          Effect.andThen(
+            Effect.die(new Error("completion accepted before runtime acknowledgement")),
+          ),
+        );
+      });
+    try {
+      await harness.startIngestion();
+      await Effect.runPromise(Scope.close(scope!, Exit.void));
+      scope = null;
+    } finally {
+      lostAcknowledgement.mockRestore();
+    }
+    expect(accepted).toBeDefined();
+    const sql = await runtime!.runPromise(Effect.service(SqlClient.SqlClient));
+    const before = await runtime!.runPromise(sql<{ status: string; resultSequence: number }>`
+      SELECT status, result_sequence AS resultSequence FROM orchestration_command_receipts
+      WHERE command_id = ${accepted!.commandId}
+    `);
+    expect(before).toEqual([{ status: "accepted", resultSequence: accepted!.sequence }]);
+    let replayed = 0;
+    const failures: unknown[] = [];
+    const replay = vi.spyOn(harness.engine, "dispatch").mockImplementation((command) =>
+      dispatch(command).pipe(
+        Effect.tap((result) =>
+          Effect.sync(() => {
+            if (command.commandId !== accepted!.commandId) return;
+            replayed += 1;
+            expect(result.sequence).toBe(accepted!.sequence);
+            expect(
+              command.type === "thread.message.assistant.complete" && command.attachments,
+            ).toBeUndefined();
+          }),
+        ),
+        Effect.onExit((exit) =>
+          Effect.sync(() => {
+            if (exit._tag === "Failure") failures.push(exit.cause);
+          }),
+        ),
+      ),
+    );
+    try {
+      const drain = await harness.restartIngestion();
+      await drain();
+    } finally {
+      replay.mockRestore();
+    }
+    expect(replayed).toBeGreaterThan(0);
+    expect(failures).toEqual([]);
+    const ledger = await runtime!.runPromise(sql<{ count: number }>`
+      SELECT COUNT(*) AS count FROM managed_attachment_blobs WHERE owner_thread_id = 'thread-1'
+    `);
+    expect(ledger[0]?.count).toBe(0);
+    const committed = Array.from(
+      await runtime!.runPromise(Stream.runCollect(harness.engine.readEvents(0))),
+    );
+    expect(committed.filter((event) => event.commandId === accepted!.commandId)).toHaveLength(1);
+    expect(
+      await runtime!.runPromise(
+        harness.runtimeEventRepository.getConsumerCursor(PROVIDER_RUNTIME_INGESTION_CONSUMER),
+      ),
+    ).toBe(await runtime!.runPromise(harness.runtimeEventRepository.getHighWaterSequence));
+    expect((await projectedMessage(harness, "assistant:accepted-image-answer"))?.text).toBe(
+      "![appeared](./appeared.png)",
+    );
+  });
+
   it("replays a committed text batch exactly once after an uncertain append and ingestion restart", async () => {
     const harness = await createHarness({ startIngestion: false, persistedStream: true });
     const turnId = asTurnId("batch-recovery-turn");

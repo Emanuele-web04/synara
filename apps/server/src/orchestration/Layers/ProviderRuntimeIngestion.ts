@@ -99,6 +99,7 @@ import { resolveThreadWorkspaceCwd } from "../../checkpointing/Utils.ts";
 import { isGitRepository } from "../../git/isRepo.ts";
 import {
   OrchestrationCommandIdentityCollisionError,
+  OrchestrationCommandInternalError,
   OrchestrationCommandPreviouslyRejectedError,
 } from "../Errors.ts";
 import { makeRuntimeJournalPoisonGate } from "../runtimeJournalPoisonGate.ts";
@@ -1844,41 +1845,74 @@ const make = Effect.gen(function* () {
     appendedText = "",
   ) =>
     Effect.gen(function* () {
-      const stored = yield* projectionThreadMessageRepository.getByThreadAndMessageId({
-        threadId,
-        messageId,
+      // A receipt freezes the original attachment set, including no snapshots.
+      // Re-importing a newly available file would change this command's fingerprint.
+      const receipt = yield* commandReceipts.getByCommandId({
+        commandId: CommandId.makeUnsafe(commandId),
       });
-      if (Option.isNone(stored)) return { attachments: [], attachmentIds: [] };
-      const text = `${stored.value.text}${appendedText}`;
-      if (!text.includes("![")) return { attachments: [], attachmentIds: [] };
-      const shell = yield* projectionSnapshotQuery.getThreadShellById(threadId);
-      if (Option.isNone(shell)) return { attachments: [], attachmentIds: [] };
-      const project = yield* getProjectShell(shell.value);
-      if (!project) return { attachments: [], attachmentIds: [] };
-      const cwd = resolveThreadWorkspaceCwd({ thread: shell.value, projects: [project] });
-      if (!cwd) return { attachments: [], attachmentIds: [] };
-      return yield* stageAssistantImageAttachments({
-        text,
-        threadId,
-        messageId,
-        commandId,
-        cwd,
-        sourceRoots: [cwd],
-        attachmentsDir: serverConfig.attachmentsDir,
-        additionalSourceRoots: listLocalPreviewWorktreeRoots({ cwd }).pipe(
-          Effect.provideService(GitCore, gitCore),
-        ),
-        existingAttachments: stored.value.attachments ?? [],
-        repository: managedAttachmentRepository,
-      });
-    }).pipe(
-      Effect.catchCause((cause) => {
-        if (Cause.hasInterruptsOnly(cause)) return Effect.failCause(cause);
-        return Effect.logWarning("assistant image snapshots unavailable").pipe(
-          Effect.as({ attachments: [], attachmentIds: [] }),
+      if (Option.isSome(receipt) && receipt.value.status === "accepted") {
+        const sequence = receipt.value.resultSequence;
+        const committed = yield* Stream.runCollect(
+          orchestrationEngine.readEventsThrough(Math.max(0, sequence - 1), sequence, 1),
         );
-      }),
-    );
+        const event = committed[0];
+        if (
+          event?.type !== "thread.message-sent" ||
+          event.commandId !== commandId ||
+          event.payload.threadId !== threadId ||
+          event.payload.messageId !== messageId ||
+          event.payload.role !== "assistant"
+        ) {
+          return yield* new OrchestrationCommandInternalError({
+            commandId,
+            commandType: "assistant-image-finalization-replay",
+            detail: "The accepted assistant message event is unavailable.",
+          });
+        }
+        const attachments = event.payload.attachments?.filter((item) => item.type === "image");
+        return { attachments, attachmentIds: attachments?.map((item) => item.id) ?? [] };
+      }
+      return yield* Effect.gen(function* () {
+        const stored = yield* projectionThreadMessageRepository.getByThreadAndMessageId({
+          threadId,
+          messageId,
+        });
+        if (Option.isNone(stored)) return { attachments: [], attachmentIds: [] };
+        const text = `${stored.value.text}${appendedText}`;
+        if (!text.includes("![")) return { attachments: [], attachmentIds: [] };
+        const shell = yield* projectionSnapshotQuery.getThreadShellById(threadId);
+        if (Option.isNone(shell)) return { attachments: [], attachmentIds: [] };
+        const project = yield* getProjectShell(shell.value);
+        if (!project) return { attachments: [], attachmentIds: [] };
+        const cwd = resolveThreadWorkspaceCwd({ thread: shell.value, projects: [project] });
+        if (!cwd) return { attachments: [], attachmentIds: [] };
+        return yield* stageAssistantImageAttachments({
+          text,
+          threadId,
+          messageId,
+          commandId,
+          cwd,
+          sourceRoots: [cwd],
+          attachmentsDir: serverConfig.attachmentsDir,
+          additionalSourceRoots: listLocalPreviewWorktreeRoots({ cwd }).pipe(
+            Effect.provideService(GitCore, gitCore),
+          ),
+          existingAttachments: stored.value.attachments ?? [],
+          repository: managedAttachmentRepository,
+        });
+      }).pipe(
+        Effect.catchCause((cause) => {
+          if (Cause.hasInterruptsOnly(cause)) return Effect.failCause(cause);
+          return Effect.logWarning("assistant image snapshots unavailable").pipe(
+            Effect.as({ attachments: [], attachmentIds: [] }),
+          );
+        }),
+        Effect.map((prepared) => ({
+          ...prepared,
+          attachments: prepared.attachments.length ? prepared.attachments : undefined,
+        })),
+      );
+    });
 
   const completeAssistantMessage = (input: {
     event: ProviderRuntimeEvent;
@@ -1899,7 +1933,7 @@ const make = Effect.gen(function* () {
         commandId,
         threadId: input.threadId,
         messageId: input.messageId,
-        ...(prepared.attachments.length ? { attachments: prepared.attachments } : {}),
+        ...(prepared.attachments !== undefined ? { attachments: prepared.attachments } : {}),
         ...(input.asyncQuestions ? { asyncQuestions: input.asyncQuestions } : {}),
         ...(input.turnId ? { turnId: input.turnId } : {}),
         createdAt: input.createdAt,
@@ -3264,7 +3298,7 @@ const make = Effect.gen(function* () {
             threadId: thread.id,
             messageId: assistantMessageId,
             delta: assistantDelta,
-            ...(prepared?.attachments.length ? { attachments: prepared.attachments } : {}),
+            ...(prepared?.attachments !== undefined ? { attachments: prepared.attachments } : {}),
             ...(turnId ? { turnId } : {}),
             createdAt: now,
           });
