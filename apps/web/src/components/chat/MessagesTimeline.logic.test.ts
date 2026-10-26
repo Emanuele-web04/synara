@@ -1350,6 +1350,42 @@ describe("deriveMessagesTimelineRows", () => {
     },
   );
 
+  it.each(["failed", "stopped", "interrupted"] as const)(
+    "keeps a task visible when a reused-turn follow-up has stale launch timing flagged %s",
+    (outcome) => {
+      const rows = deriveMessagesTimelineRows({
+        ...baseInput,
+        timelineEntries: outlivingTaskEntries({ reuseLaunchTurn: true }),
+        turnTimingByTurnId: new Map([
+          [
+            TurnId.makeUnsafe("launch-turn"),
+            {
+              startedAt: "2026-01-01T00:00:01Z",
+              completedAt: "2026-01-01T00:00:03Z",
+              failed: outcome === "failed",
+              stoppedByUser: outcome === "stopped",
+              interrupted: outcome === "interrupted",
+            },
+          ],
+        ]),
+      });
+      const launched = messageRow(rows, "launched")!;
+      const task = launched.collapsedTurnItems?.find(
+        (item) => item.kind === "work" && item.entry.backgroundTask,
+      );
+      expect(task?.kind).toBe("work");
+      if (task?.kind !== "work") return;
+      expect(
+        isPinnedBackgroundTaskEntry(
+          task.entry,
+          launched.turnHeader?.endedAt ?? null,
+          task.backgroundTaskConsumed,
+        ),
+      ).toBe(true);
+      expect(messageRow(rows, "report")?.message.text).toBe("App ready");
+    },
+  );
+
   it("invalidates the launch row when its task is consumed without moving either final answer", () => {
     const entries = outlivingTaskEntries({ streaming: true });
     const first = computeStableMessagesTimelineRows(

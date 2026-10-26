@@ -1737,8 +1737,13 @@ function collapseSettledTurns(
 
     // Only a successful, settled response consumes its wake. Until then the
     // launching row keeps the task visible; unrelated later replies cannot do so.
+    // Reused-turn timing can retain an old end before the wake: discarding that
+    // duration must not discard an explicit failure/stop outcome as success.
     if (
       header.outcome === "completed" &&
+      !turnTiming?.failed &&
+      !turnTiming?.stoppedByUser &&
+      !turnTiming?.interrupted &&
       wokenAt !== null &&
       responseEnd &&
       Date.parse(responseEnd) >= Date.parse(wokenAt)
