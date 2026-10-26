@@ -22,6 +22,26 @@ import type { WhatsNewEntry } from "./logic";
 
 export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
   {
+    version: "1.0.6-remote.33",
+    date: "Oct 26",
+    features: [
+      {
+        id: "completed-background-work",
+        title: "Keep completed background work in Worked for",
+        description:
+          "Finished commands return to the original Worked for disclosure after their follow-up succeeds. Both final answers stay visible, and completion details remain available by expanding the disclosure.",
+        details:
+          "Running, failed, stopped and uncertain work stays visible. Matching follows the original completion identity, even when task or turn IDs are reused.",
+      },
+      {
+        id: "consistent-resumed-clock",
+        title: "Keep the same clock as a response finishes",
+        description:
+          "When several background tasks finish before one reply, the live and settled timers start from the first completion. A stale turn timestamp cannot shorten the response or make its clock jump.",
+      },
+    ],
+  },
+  {
     version: "1.0.6-remote.32",
     date: "Oct 25",
     features: [

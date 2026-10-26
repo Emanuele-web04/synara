@@ -1,5 +1,21 @@
 # Changelog
 
+## 1.0.6-remote.33 — 2026-10-26
+
+**Completed background work stays inside Worked for, with a consistent response clock.**
+
+### Fixed
+
+- A finished background command returns to its original Worked for disclosure after the resumed response succeeds. Its completion details remain available in the resumed response's disclosure, and both genuine final answers stay visible.
+- Running, failed, stopped and uncertain work stays visible. Completion matching retains the original task lifecycle instead of relying on a reused task ID or command text.
+- When several background tasks finish before one reply, the live and settled headers share the first wake's start time. A stale turn end cannot shorten the response or make the timer jump when streaming finishes.
+
+### Verification
+
+- The source change passed 340 focused transcript/work-log tests, formatting, lint and typecheck, plus all 24 pull-request checks and an independent automated review.
+- Remote identity, local data, approved pairings and update feeds are preserved. This change introduces no account or transcript migration and requires no hosted API deployment.
+- Publication remains gated by the exact-tag suites, all three packaged platform checks, macOS signing/notarization, Windows Defender and source-bound artifact provenance. Windows uses the existing exact-version unsigned exception and may show SmartScreen.
+
 ## 1.0.6-remote.32 — 2026-10-25
 
 **Recover blocked Claude conversations without replaying uncertain messages.**
