@@ -56,6 +56,8 @@ import {
 } from "../../provider/Services/ProviderService.ts";
 import { projectProviderRuntimeActivities } from "../providerRuntimeActivityProjection.ts";
 import { OrchestrationEngineLive } from "./OrchestrationEngine.ts";
+import { GitCoreLive } from "../../git/Layers/GitCore.ts";
+import { ManagedAttachmentRepository } from "../../persistence/Services/ManagedAttachments.ts";
 import { OrchestrationProjectionPipelineLive } from "./ProjectionPipeline.ts";
 import { OrchestrationProjectionSnapshotQueryLive } from "./ProjectionSnapshotQuery.ts";
 import {
@@ -397,7 +399,9 @@ describe("ProviderRuntimeIngestion", () => {
     | ProviderRuntimeIngestionService
     | ProviderRuntimeEventRepository
     | SqlClient.SqlClient
-    | ProjectionSnapshotQuery,
+    | ProjectionSnapshotQuery
+    | ManagedAttachmentRepository
+    | ServerConfig,
     unknown
   > | null = null;
   let scope: Scope.Closeable | null = null;
@@ -444,6 +448,7 @@ describe("ProviderRuntimeIngestion", () => {
       Layer.provideMerge(SqlitePersistenceMemory),
     );
     const layer = ProviderRuntimeIngestionLive.pipe(
+      Layer.provideMerge(GitCoreLive),
       Layer.provideMerge(
         options?.deviceManager
           ? Layer.succeed(DeviceService, { supported: true, manager: options.deviceManager })
@@ -568,6 +573,7 @@ describe("ProviderRuntimeIngestion", () => {
       Option.getOrUndefined(await runtime!.runPromise(snapshotQuery.getThreadDetailById(threadId)));
 
     return {
+      workspaceRoot,
       engine,
       emit: provider.emit,
       emitPersisted: provider.emitPersisted,
@@ -579,6 +585,207 @@ describe("ProviderRuntimeIngestion", () => {
       readProjectedThread,
     };
   }
+
+  it("persists inline assistant image bytes without moving text, including old events and late deltas", async () => {
+    const harness = await createHarness();
+    const source = path.join(harness.workspaceRoot, "inline image.png");
+    const ignoredCodeImage = path.join(harness.workspaceRoot, "code-only.png");
+    const outside = path.join(makeTempDir("inline-outside-"), "private.png");
+    const escaped = path.join(harness.workspaceRoot, "escape.png");
+    const bytes = Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII=",
+      "base64",
+    );
+    fs.writeFileSync(source, bytes);
+    fs.writeFileSync(ignoredCodeImage, bytes);
+    fs.writeFileSync(outside, bytes);
+    fs.symlinkSync(outside, escaped);
+    const text = `Step 1\n\n![visible](./inline%20image.png)\n\nStep 2\n\n\`![code](./code-only.png)\`\n\n\`\`\`md\n![fenced](./code-only.png)\n\`\`\`\n\n![outside](${outside})\n\n![escape](./escape.png)`;
+    const createdAt = "2020-01-01T00:00:00.000Z";
+    const turnId = asTurnId("inline-image-turn");
+    const base = {
+      provider: "codex" as const,
+      threadId: asThreadId("thread-1"),
+      turnId,
+      itemId: asItemId("inline-image-answer"),
+      createdAt,
+    };
+    harness.emit({ ...base, type: "turn.started", eventId: asEventId("inline-image-start") });
+    harness.emit({
+      ...base,
+      type: "content.delta",
+      eventId: asEventId("inline-image-text"),
+      payload: { streamKind: "assistant_text", delta: text },
+    });
+    harness.emit({
+      ...base,
+      type: "item.completed",
+      eventId: asEventId("inline-image-final"),
+      payload: { itemType: "assistant_message", status: "completed" },
+    });
+    const first = await waitForProjectedThread(harness.readProjectedThread, (thread) =>
+      thread.messages.some(
+        (message) => message.id === "assistant:inline-image-answer" && !message.streaming,
+      ),
+    );
+    const message = first.messages.find((entry) => entry.id === "assistant:inline-image-answer")!;
+    expect(message.text).toBe(text);
+    expect(message.attachments).toHaveLength(1);
+    expect(message.attachments?.[0]).toMatchObject({
+      type: "image",
+      sourcePath: "./inline image.png",
+      mimeType: "image/png",
+    });
+    const storedId = message.attachments![0]!.id;
+    fs.unlinkSync(source);
+    harness.emit({
+      ...base,
+      type: "turn.completed",
+      eventId: asEventId("inline-image-turn-final"),
+      payload: { state: "completed" },
+    });
+    await harness.drain();
+    const beforeLate = await runtime!.runPromise(harness.engine.getEventHighWaterSequence);
+    const lateSource = path.join(harness.workspaceRoot, "late image.png");
+    fs.writeFileSync(lateSource, bytes);
+    const lateDelta = "\n\nLate tail\n\n![late](./late%20image.png)";
+    harness.emit({
+      ...base,
+      type: "content.delta",
+      eventId: asEventId("inline-image-late-text"),
+      payload: { streamKind: "assistant_text", delta: lateDelta },
+    });
+    // No item/turn terminal follows: the late delta itself must settle and claim.
+    const replayed = await waitForProjectedThread(harness.readProjectedThread, (thread) =>
+      thread.messages.some(
+        (entry) => entry.id === message.id && entry.text === text + lateDelta && !entry.streaming,
+      ),
+    );
+    const lateMessage = replayed.messages.find((entry) => entry.id === message.id)!;
+    expect(lateMessage.attachments).toHaveLength(2);
+    expect(lateMessage.attachments?.[0]).toEqual(message.attachments![0]);
+    expect(lateMessage.attachments?.[1]).toMatchObject({ sourcePath: "./late image.png" });
+    fs.unlinkSync(lateSource);
+    const lateEvents = Array.from(
+      await runtime!.runPromise(Stream.runCollect(harness.engine.readEvents(beforeLate))),
+    );
+    expect(
+      lateEvents.filter(
+        (entry) =>
+          entry.type === "thread.message-sent" &&
+          entry.payload.messageId === message.id &&
+          !entry.payload.streaming,
+      ),
+    ).toHaveLength(1);
+    const repository = await runtime!.runPromise(Effect.service(ManagedAttachmentRepository));
+    const config = await runtime!.runPromise(Effect.service(ServerConfig));
+    for (const attachmentId of [storedId, lateMessage.attachments![1]!.id]) {
+      const stored = await runtime!.runPromise(repository.findClaimedById({ attachmentId }));
+      if (Option.isNone(stored)) throw new Error("Expected a claimed snapshot");
+      expect(fs.readFileSync(path.join(config.attachmentsDir, stored.value.relativePath))).toEqual(
+        bytes,
+      );
+    }
+    const sql = await runtime!.runPromise(Effect.service(SqlClient.SqlClient));
+    const rows = await runtime!.runPromise(
+      sql<{
+        count: number;
+      }>`SELECT COUNT(*) AS count FROM managed_attachment_blobs WHERE owner_thread_id = 'thread-1'`,
+    );
+    expect(rows[0]?.count).toBe(2);
+  });
+
+  it("reclaims the same staged inline image on journal replay after uncertain dispatch and source deletion", async () => {
+    const harness = await createHarness({ startIngestion: false, persistedStream: true });
+    const source = path.join(harness.workspaceRoot, "retry.png");
+    const bytes = Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII=",
+      "base64",
+    );
+    fs.writeFileSync(source, bytes);
+    const eventBase = {
+      provider: "codex" as const,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("uncertain-image-turn"),
+      itemId: asItemId("uncertain-image-answer"),
+      createdAt: new Date().toISOString(),
+    };
+    const events: ReadonlyArray<ProviderRuntimeEvent> = [
+      {
+        ...eventBase,
+        type: "turn.started" as const,
+        eventId: asEventId("uncertain-image-start"),
+        payload: {},
+      },
+      {
+        ...eventBase,
+        type: "content.delta" as const,
+        eventId: asEventId("uncertain-image-text"),
+        payload: { streamKind: "assistant_text" as const, delta: "![retry](./retry.png)" },
+      },
+      {
+        ...eventBase,
+        type: "item.completed" as const,
+        eventId: asEventId("uncertain-image-complete"),
+        payload: { itemType: "assistant_message", status: "completed" },
+      },
+    ];
+    for (const event of events)
+      await runtime!.runPromise(harness.runtimeEventRepository.append(event));
+    const dispatch = harness.engine.dispatch;
+    let interruptedCommand: { commandId: string; attachmentId: string } | undefined;
+    const failure = vi.spyOn(harness.engine, "dispatch").mockImplementation((command) => {
+      if (command.type !== "thread.message.assistant.complete") return dispatch(command);
+      if (!interruptedCommand) {
+        interruptedCommand = {
+          commandId: command.commandId,
+          attachmentId: command.attachments![0]!.id,
+        };
+        fs.unlinkSync(source);
+      }
+      // The boundary failed before a receipt existed; do not fake an accepted claim.
+      return Effect.die(new Error("transient admission acknowledgement unavailable"));
+    });
+    try {
+      await harness.startIngestion();
+      await Effect.runPromise(Scope.close(scope!, Exit.void));
+      scope = null;
+    } finally {
+      failure.mockRestore();
+    }
+    expect(interruptedCommand).toBeDefined();
+    const repository = await runtime!.runPromise(Effect.service(ManagedAttachmentRepository));
+    const sql = await runtime!.runPromise(Effect.service(SqlClient.SqlClient));
+    const staged = await runtime!.runPromise(sql<{ state: string }>`
+      SELECT state FROM managed_attachment_blobs WHERE attachment_id = ${interruptedCommand!.attachmentId}
+    `);
+    expect(staged).toEqual([{ state: "staged" }]);
+    const receipts = await runtime!.runPromise(sql<{ count: number }>`
+      SELECT COUNT(*) AS count FROM orchestration_command_receipts WHERE command_id = ${interruptedCommand!.commandId}
+    `);
+    expect(receipts[0]?.count).toBe(0);
+    const drain = await harness.restartIngestion();
+    await drain();
+    const message = (await harness.readProjectedThread())!.messages.find(
+      (entry) => entry.id === "assistant:uncertain-image-answer",
+    )!;
+    expect(message.streaming).toBe(false);
+    expect(message.attachments?.map((entry) => entry.id)).toEqual([
+      interruptedCommand!.attachmentId,
+    ]);
+    const claimed = await runtime!.runPromise(
+      repository.findClaimedForCommand({ commandId: interruptedCommand!.commandId }),
+    );
+    expect(claimed.map((entry) => entry.attachmentId)).toEqual([interruptedCommand!.attachmentId]);
+    const config = await runtime!.runPromise(Effect.service(ServerConfig));
+    expect(fs.readFileSync(path.join(config.attachmentsDir, claimed[0]!.relativePath))).toEqual(
+      bytes,
+    );
+    const rows = await runtime!.runPromise(sql<{ count: number }>`
+      SELECT COUNT(*) AS count FROM managed_attachment_blobs WHERE owner_thread_id = 'thread-1'
+    `);
+    expect(rows[0]?.count).toBe(1);
+  });
 
   it("replays a committed text batch exactly once after an uncertain append and ingestion restart", async () => {
     const harness = await createHarness({ startIngestion: false, persistedStream: true });

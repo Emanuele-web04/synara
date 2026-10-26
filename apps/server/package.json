@@ -39,6 +39,7 @@
     "@pierre/diffs": "^1.2.12",
     "@xterm/headless": "^6.0.0",
     "effect": "catalog:",
+    "mdast-util-from-markdown": "^2.0.3",
     "node-pty": "^1.1.0",
     "open": "^10.1.0",
     "smol-toml": "^1.7.0",

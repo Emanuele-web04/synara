@@ -31,6 +31,7 @@ import {
   type OrchestrationEventStoreShape,
 } from "../../persistence/Services/OrchestrationEventStore.ts";
 import { ManagedAttachmentRepository } from "../../persistence/Services/ManagedAttachments.ts";
+import { stageAssistantImageAttachments } from "../../assistantImageAttachments.ts";
 import { OrchestrationCommandReceiptRepository } from "../../persistence/Services/OrchestrationCommandReceipts.ts";
 import { materializeThreadGoalFile, pruneThreadGoalFiles } from "../threadGoalMaterialization.ts";
 import { OrchestrationEngineLive } from "./OrchestrationEngine.ts";
@@ -193,6 +194,7 @@ async function createOrchestrationSystem(pipeline?: OrchestrationProjectionPipel
     projectionPipeline,
     managedAttachmentRepository,
     stateDir: serverConfig.stateDir,
+    attachmentsDir: serverConfig.attachmentsDir,
     run: <A, E>(effect: Effect.Effect<A, E>) => runtime.runPromise(effect),
     dispose: () => runtime.dispose(),
   };
@@ -1966,6 +1968,191 @@ describe("OrchestrationEngine", () => {
     expect(claimed.map((attachment) => attachment.attachmentId)).toEqual([firstAttachmentId]);
     await system.dispose();
   });
+
+  it.each([
+    { label: "commits", abortCommit: false, lateDelta: false },
+    { label: "rolls back", abortCommit: true, lateDelta: false },
+    { label: "commits a late delta", abortCommit: false, lateDelta: true },
+    { label: "rolls back a late delta", abortCommit: true, lateDelta: true },
+  ])(
+    "$label the assistant image claim with its finalization event",
+    async ({ abortCommit, lateDelta }) => {
+      const system = await createOrchestrationSystem();
+      const createdAt = now();
+      const threadId = ThreadId.makeUnsafe("inline-image-thread");
+      const messageId = asMessageId("inline-image-answer");
+      const commandId = CommandId.makeUnsafe("inline-image-complete");
+      const workspaceRoot = path.join(system.stateDir, "image-workspace");
+      const source = path.join(workspaceRoot, "first image.png");
+      const bytes = Buffer.from(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII=",
+        "base64",
+      );
+      const text = "Step 1\n\n![first](./first%20image.png)\n\nStep 2";
+      try {
+        await fs.mkdir(workspaceRoot);
+        await fs.writeFile(source, bytes);
+        await system.run(
+          system.engine.dispatch({
+            type: "project.create",
+            commandId: CommandId.makeUnsafe("inline-image-project"),
+            projectId: asProjectId("inline-image-project"),
+            title: "Image project",
+            workspaceRoot,
+            defaultModelSelection: { provider: "codex", model: "gpt-5-codex" },
+            createdAt,
+          }),
+        );
+        await system.run(
+          system.engine.dispatch({
+            type: "thread.create",
+            commandId: CommandId.makeUnsafe("inline-image-thread-create"),
+            threadId,
+            projectId: asProjectId("inline-image-project"),
+            title: "Image thread",
+            modelSelection: { provider: "codex", model: "gpt-5-codex" },
+            interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+            runtimeMode: "approval-required",
+            branch: null,
+            worktreePath: null,
+            createdAt,
+          }),
+        );
+        await system.run(
+          system.engine.dispatch({
+            type: "thread.message.assistant.delta",
+            commandId: CommandId.makeUnsafe("inline-image-text"),
+            threadId,
+            messageId,
+            delta: text,
+            createdAt,
+          }),
+        );
+        if (lateDelta) {
+          // Snapshot deltas are permitted only after the row is already finalized.
+          await expect(
+            system.run(
+              system.engine.dispatch({
+                type: "thread.message.assistant.delta",
+                commandId: CommandId.makeUnsafe("inline-image-invalid-early-snapshot"),
+                threadId,
+                messageId,
+                attachments: [],
+                delta: "",
+                createdAt,
+              }),
+            ),
+          ).rejects.toThrow("already finalized assistant message");
+          await system.run(
+            system.engine.dispatch({
+              type: "thread.message.assistant.complete",
+              commandId: CommandId.makeUnsafe("inline-image-initial-completion"),
+              threadId,
+              messageId,
+              createdAt,
+            }),
+          );
+        }
+        const prepared = await system.run(
+          stageAssistantImageAttachments({
+            text,
+            threadId,
+            messageId,
+            commandId,
+            cwd: workspaceRoot,
+            sourceRoots: [workspaceRoot],
+            attachmentsDir: system.attachmentsDir,
+            existingAttachments: [],
+            repository: system.managedAttachmentRepository,
+          }),
+        );
+        expect(prepared.attachments).toHaveLength(1);
+        await fs.unlink(source);
+        if (abortCommit) {
+          await system.run(system.sql`
+          CREATE TEMP TRIGGER fail_inline_image_completion BEFORE INSERT ON orchestration_events
+          WHEN NEW.command_id = 'inline-image-complete'
+          BEGIN SELECT RAISE(ABORT, 'fixture refuses completion event'); END
+        `);
+        }
+        const command: OrchestrationCommand = lateDelta
+          ? {
+              type: "thread.message.assistant.delta",
+              commandId,
+              threadId,
+              messageId,
+              delta: "\nLate tail",
+              attachments: prepared.attachments,
+              createdAt,
+            }
+          : {
+              type: "thread.message.assistant.complete",
+              commandId,
+              threadId,
+              messageId,
+              attachments: prepared.attachments,
+              createdAt,
+            };
+        if (abortCommit) {
+          await expect(system.run(system.engine.dispatch(command))).rejects.toThrow();
+          const rows = await system.run(system.sql<{ state: string }>`
+          SELECT state FROM managed_attachment_blobs WHERE owner_thread_id = ${threadId}
+        `);
+          expect(rows).toEqual([{ state: "staged" }]);
+          const events = await system.run(system.sql<{ count: number }>`
+          SELECT COUNT(*) AS count FROM orchestration_events WHERE command_id = ${commandId}
+        `);
+          expect(events[0]?.count).toBe(0);
+        } else {
+          const accepted = await system.run(system.engine.dispatch(command));
+          const claimed = await system.run(
+            system.managedAttachmentRepository.findClaimedForCommand({ commandId }),
+          );
+          expect(claimed).toHaveLength(1);
+          expect(claimed[0]?.claimMessageId).toBe(messageId);
+          expect(
+            await fs.readFile(path.join(system.attachmentsDir, claimed[0]!.relativePath)),
+          ).toEqual(bytes);
+          const message = (await system.run(system.engine.getReadModel())).threads
+            .find((item) => item.id === threadId)
+            ?.messages.find((item) => item.id === messageId);
+          expect(message?.text).toBe(lateDelta ? `${text}\nLate tail` : text);
+          expect(message?.attachments?.[0]).toMatchObject({
+            type: "image",
+            sourcePath: "./first image.png",
+            mimeType: "image/png",
+          });
+          await expect(system.run(system.engine.dispatch(command))).resolves.toEqual(accepted);
+          const finalized = await system.run(system.sql<{ count: number }>`
+          SELECT COUNT(*) AS count FROM orchestration_events
+          WHERE command_id = ${commandId} AND event_type = 'thread.message-sent'
+            AND json_extract(payload_json, '$.streaming') = 0
+        `);
+          expect(finalized[0]?.count).toBe(1);
+          const reused = await system.run(
+            stageAssistantImageAttachments({
+              text,
+              threadId,
+              messageId,
+              commandId,
+              cwd: workspaceRoot,
+              sourceRoots: [workspaceRoot],
+              attachmentsDir: system.attachmentsDir,
+              existingAttachments: message?.attachments ?? [],
+              repository: system.managedAttachmentRepository,
+            }),
+          );
+          expect(reused.attachments).toEqual(message?.attachments);
+          const rows = await system.run(system.sql<{ count: number }>`
+          SELECT COUNT(*) AS count FROM managed_attachment_blobs WHERE owner_thread_id = ${threadId}
+        `);
+          expect(rows[0]?.count).toBe(1);
+        }
+      } finally {
+        await system.dispose();
+      }
+    },
+  );
 
   it("keeps dispatch responsive and replays every event when a subscriber falls behind", async () => {
     const system = await createOrchestrationSystem();

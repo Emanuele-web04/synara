@@ -584,6 +584,24 @@ Regular Markdown links remain relative to the document directory. Code, escaped
 Wiki syntax, embeds, and heading/block links are left literal; this is basic file
 navigation rather than full Obsidian support.
 
+### Images in chat replies
+
+Images stay at their original positions in the reply. When a completed reply
+references an eligible local image, the host can retain a private attachment
+snapshot with that message. This snapshot remains available after the original
+file or worktree is removed; it uses the conversation's computer and attachment
+storage, rather than uploading the image to a public service.
+
+Local references without a retained snapshot still need their original file.
+Relative paths are resolved on the conversation's host, using its workspace and
+registered Git worktrees. Recovery grants access to one canonical file, not its
+parent directory. Symlinks cannot widen the relative-reference boundary.
+
+Use **Retry** on a failed image preview after the file becomes available or the
+host reconnects. Retrying renews an expired file grant when needed. Image previews
+do not poll in the background. A missing original cannot be recovered when no
+snapshot was retained; older replies may therefore still need the original file.
+
 ### Terminal panels
 
 Each chat has one main-view terminal panel and can have multiple independent
