@@ -1444,6 +1444,24 @@ describe("deriveMessagesTimelineRows", () => {
       ]),
     });
 
+    const liveRows = deriveMessagesTimelineRows({
+      ...baseInput,
+      isWorking: true,
+      activeTurnInProgress: true,
+      activeTurnId: turnId,
+      activeTurnStartedAt: at(10),
+      timelineEntries: deriveTimelineEntries(
+        messages.map((message) =>
+          message.id === MessageId.makeUnsafe("report")
+            ? { ...message, streaming: true, completedAt: undefined }
+            : message,
+        ),
+        [],
+        work,
+      ),
+    });
+    expect(liveRows.find((row) => row.kind === "working-header")?.createdAt).toBe(at(10));
+
     // The stale end lies between the two wakes: validate against the latest
     // wake first, then extend only the start to include both completed tasks.
     expect(messageRow(rows, "report")?.turnHeader).toMatchObject({

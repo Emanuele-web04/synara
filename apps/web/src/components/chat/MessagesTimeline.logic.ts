@@ -1416,6 +1416,14 @@ function markInterruptedTurnsWithoutHeader(
   }
 }
 
+function earliestTimestamp(a: string, b: string): string {
+  const aMs = Date.parse(a);
+  const bMs = Date.parse(b);
+  if (Number.isNaN(aMs)) return b;
+  if (Number.isNaN(bMs)) return a;
+  return bMs < aMs ? b : a;
+}
+
 // The live turn starts at the request that opened it, so its header slots in
 // right after it: requests queued behind the live turn stay below its work. A
 // turn with no request of its own that a background task woke starts at that
@@ -1431,7 +1439,13 @@ function findLiveTurnHeaderInsertion(
   const completionBoundary = () => ({
     index: lastCompletionIndex + 1,
     resumedBy: collectResumedBy(rows, lastCompletionIndex),
-    resumedStartedAt: completionRow?.kind === "work" ? completionRow.createdAt : null,
+    resumedStartedAt:
+      completionRow?.kind === "work"
+        ? collectWakeEntries(rows, lastCompletionIndex).reduce(
+            (start, entry) => earliestTimestamp(start, entry.createdAt),
+            completionRow.createdAt,
+          )
+        : null,
   });
   if (activeTurnId !== null) {
     const requestIndex = rows.findLastIndex(
@@ -1536,14 +1550,6 @@ function collapseSettledTurns(
     for (const entry of entries) {
       into.push({ kind: "work", id: entry.id, entry });
     }
-  };
-
-  const earliestTimestamp = (a: string, b: string): string => {
-    const aMs = Date.parse(a);
-    const bMs = Date.parse(b);
-    if (Number.isNaN(aMs)) return b;
-    if (Number.isNaN(bMs)) return a;
-    return bMs < aMs ? b : a;
   };
 
   for (let pass = rows.length - 1; pass >= 0; pass -= 1) {
