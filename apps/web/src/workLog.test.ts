@@ -907,6 +907,76 @@ describe("deriveWorkLogEntries", () => {
       ).toEqual(["failed", "finished", "stopped"]);
     });
 
+    it("keeps the exact wake activity when task.updated settles the command before task.completed", () => {
+      const finishedAt = "2026-10-10T00:15:24.000Z";
+      const completion = taskCompleted(
+        "task-a",
+        "completed",
+        "Build finished",
+        "2026-10-10T00:15:25.000Z",
+      );
+      const entries = deriveWorkLogEntries(
+        [
+          launchCall("launch", "toolu_a", "bun run build", "2026-10-10T00:15:20.000Z"),
+          notice("moved", [["task-a", "Build"]], "2026-10-10T00:15:20.100Z"),
+          taskStarted("task-a", "toolu_a", "2026-10-10T00:15:20.200Z"),
+          turnCompleted("2026-10-10T00:15:21.000Z"),
+          makeActivity({
+            id: "native-exit",
+            createdAt: finishedAt,
+            kind: "task.updated",
+            turnId: "turn-bg",
+            payload: { taskId: "task-a", status: "completed" },
+          }),
+          completion,
+        ],
+        undefined,
+        options,
+      );
+      const task = entries.find((entry) => entry.backgroundTask)?.backgroundTask;
+      const wake = entries.find((entry) => entry.backgroundTaskCompletion);
+      expect(task).toMatchObject({
+        status: "finished",
+        completedAt: finishedAt,
+        completionActivityId: completion.id,
+      });
+      expect(wake?.id).toBe(task?.completionActivityId);
+      expect(wake?.createdAt).not.toBe(task?.completedAt);
+    });
+
+    it.each([undefined, "unknown"])(
+      "does not associate an unrecognized completion outcome (%s) with a settled task",
+      (status) => {
+        const entries = deriveWorkLogEntries(
+          [
+            launchCall("launch", "toolu_a", "bun run build", "2026-10-10T00:15:20.000Z"),
+            notice("moved", [["task-a", "Build"]], "2026-10-10T00:15:20.100Z"),
+            taskStarted("task-a", "toolu_a", "2026-10-10T00:15:20.200Z"),
+            turnCompleted("2026-10-10T00:15:21.000Z"),
+            makeActivity({
+              id: "exit",
+              createdAt: "2026-10-10T00:15:24.000Z",
+              kind: "task.updated",
+              turnId: "turn-bg",
+              payload: { taskId: "task-a", status: "completed" },
+            }),
+            makeActivity({
+              id: "unknown-completion",
+              createdAt: "2026-10-10T00:15:25.000Z",
+              kind: "task.completed",
+              turnId: "turn-bg",
+              payload: { taskId: "task-a", ...(status ? { status } : {}) },
+            }),
+          ],
+          undefined,
+          options,
+        );
+        expect(
+          entries.find((entry) => entry.backgroundTask)?.backgroundTask?.completionActivityId,
+        ).toBeUndefined();
+      },
+    );
+
     it.each([
       { status: "completed", confirmed: true, expected: "finished" },
       { status: "running", confirmed: true, expected: "running" },
@@ -972,6 +1042,14 @@ describe("deriveWorkLogEntries", () => {
             },
           },
         ]);
+        const task = entries.find((entry) => entry.backgroundTask)?.backgroundTask;
+        expect(task?.completionActivityId).toBe(
+          expected === "finished"
+            ? nativeUpdate.id
+            : expected === "running"
+              ? undefined
+              : "task-late-stopped",
+        );
       },
     );
 

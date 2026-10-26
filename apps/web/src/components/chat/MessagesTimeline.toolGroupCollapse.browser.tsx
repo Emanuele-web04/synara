@@ -74,12 +74,13 @@ const LIVE_COMMANDS = ["git status", "node scripts/tail.mjs"];
 function ToolGroupCollapseTimeline(props: {
   timelineEntries: TimelineEntry[];
   onOpenAgentActivity?: (id: string) => void;
+  settled?: boolean;
 }) {
   return (
     <MessagesTimeline
       hasMessages
       isWorking={false}
-      activeTurnInProgress
+      activeTurnInProgress={!props.settled}
       activeTurnStartedAt="2026-03-17T19:12:20.000Z"
       timelineEntries={props.timelineEntries}
       turnDiffSummaryByAssistantMessageId={new Map()}
@@ -140,6 +141,122 @@ async function expectLiveRunFoldedToNewestCall(): Promise<HTMLButtonElement> {
 describe("MessagesTimeline tool group collapse", () => {
   afterEach(() => {
     document.body.innerHTML = "";
+  });
+
+  it("folds consumed background work, preserves both answers and reveals the command on demand", async () => {
+    const startedAt = "2026-03-17T19:12:00.000Z";
+    const completedAt = "2026-03-17T19:12:21.000Z";
+    const entries = (settled: boolean): TimelineEntry[] => [
+      {
+        id: "request",
+        kind: "message",
+        createdAt: startedAt,
+        message: {
+          id: MessageId.makeUnsafe("request"),
+          role: "user",
+          text: "Build the app",
+          createdAt: startedAt,
+          streaming: false,
+        },
+      },
+      {
+        id: "launch",
+        kind: "work",
+        createdAt: startedAt,
+        entry: {
+          id: "launch",
+          createdAt: startedAt,
+          label: "Background build",
+          tone: "tool",
+          backgroundTask: {
+            taskId: "build-task",
+            taskType: "local_bash",
+            description: "Build app",
+            command: "node scripts/rebuild.mjs",
+            status: "finished",
+            startedAt,
+            completedAt,
+            completionActivityId: "wake",
+            exitCode: 0,
+          },
+        },
+      },
+      {
+        id: "launched",
+        kind: "message",
+        createdAt: "2026-03-17T19:12:04.000Z",
+        message: {
+          id: MessageId.makeUnsafe("launched"),
+          role: "assistant",
+          text: "The build is running.",
+          createdAt: "2026-03-17T19:12:04.000Z",
+          completedAt: "2026-03-17T19:12:04.000Z",
+          streaming: false,
+        },
+      },
+      {
+        id: "wake",
+        kind: "work",
+        createdAt: completedAt,
+        entry: {
+          id: "wake",
+          createdAt: completedAt,
+          label: "Background task finished: Build app",
+          tone: "info",
+          backgroundTaskCompletion: {
+            taskId: "build-task",
+            taskType: "local_bash",
+            description: "Build app",
+            outcome: "finished",
+          },
+        },
+      },
+      {
+        id: "report",
+        kind: "message",
+        createdAt: "2026-03-17T19:12:22.000Z",
+        message: {
+          id: MessageId.makeUnsafe("report"),
+          role: "assistant",
+          text: "The new app is ready.",
+          createdAt: "2026-03-17T19:12:22.000Z",
+          streaming: !settled,
+          ...(settled ? { completedAt: "2026-03-17T19:12:24.000Z" } : {}),
+        },
+      },
+    ];
+    const screen = await render(<ToolGroupCollapseTimeline timelineEntries={entries(false)} />, {
+      container: createTimelineHost(),
+    });
+    try {
+      await expect
+        .element(screen.getByText("node scripts/rebuild.mjs", { exact: true }))
+        .toBeVisible();
+      await screen.rerender(<ToolGroupCollapseTimeline timelineEntries={entries(true)} settled />);
+      await expect
+        .element(screen.getByText("The build is running.", { exact: true }))
+        .toBeVisible();
+      await expect
+        .element(screen.getByText("The new app is ready.", { exact: true }))
+        .toBeVisible();
+      await expect
+        .poll(() => isVisibleOutsideClosedDisclosure("node scripts/rebuild.mjs"))
+        .toBe(false);
+      await expect.poll(() => findSummaryTrigger("Worked for") !== null).toBe(true);
+      findSummaryTrigger("Worked for")!.click();
+      await expect
+        .element(screen.getByText("node scripts/rebuild.mjs", { exact: true }))
+        .toBeVisible();
+      findSummaryTrigger("Worked for")!.click();
+      await expect
+        .poll(() => isVisibleOutsideClosedDisclosure("node scripts/rebuild.mjs"))
+        .toBe(false);
+      await expect
+        .element(screen.getByText("The new app is ready.", { exact: true }))
+        .toBeVisible();
+    } finally {
+      await screen.unmount();
+    }
   });
 
   it("renders submitted questions and answers as separate transcript bubbles", async () => {
