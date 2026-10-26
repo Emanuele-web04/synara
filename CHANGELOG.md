@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.0.6-remote.36 — 2026-10-26
+
+**See subagent models and effort directly in the dock.**
+
+### Changed
+
+- Active and completed subagent dock rows show their existing provider model and explicitly selected effort, previously available only in the tooltip.
+- Missing model or effort values stay hidden. Existing task controls are unchanged.
+
+### Verification
+
+- Remote identity, local data, approved pairings and update feeds are preserved. This desktop update introduces no API, connector or provider runtime changes and does not update the iPhone or iPad app.
+- Publication requires exact-tag quality/server suites, all three packaged platform checks, macOS signing/notarization, Windows Defender and source-bound artifact provenance. Windows uses the exact-version unsigned exception and may show SmartScreen.
+- The app continues to declare macOS 13. The bundled cloudflared executable declares macOS 15; Remote connector operation on macOS 13–14 remains unqualified.
+
 ## 1.0.6-remote.35 — 2026-10-26
 
 **Recover conversation images and update the Cloudflare connector.**

@@ -1,7 +1,8 @@
 // FILE: SubagentsDockPane.tsx
 // Purpose: Right-dock list of every subagent the host thread spawned (opened from the
 //          Environment panel summary). "Active" rows show what each run is doing with a
-//          ticking time and stop/background on hover; "Done" rows show when they finished,
+//          model/effort, ticking time and stop/background on hover; "Done" rows retain
+//          the model/effort and show when they finished,
 //          with totals and the result in the tooltip. From a subagent thread it lists the
 //          siblings plus a row back to the parent. Selecting a row opens that thread and
 //          keeps this list beside it.
@@ -123,6 +124,7 @@ function ActiveSubagentRow({
               <span className={subagentStatusTextToneClassName(item.statusKind)}>
                 {item.statusLabel ?? "Running"}
               </span>
+              {item.modelLabel ? ` · ${item.modelLabel}` : null}
               {meta ? ` · ${meta}` : null}
             </span>
           </span>
@@ -181,16 +183,23 @@ function DoneSubagentRow({
       compact
       icon={<SubagentAvatar seed={item.key} accentColor={item.accentColor} className="size-5" />}
       label={
-        <span className="flex min-w-0 items-baseline gap-2">
-          <span className="min-w-0 truncate">{item.primaryLabel}</span>
-          {outcome ? (
-            <span
-              className={cn(
-                "shrink-0 text-ui-sm",
-                subagentStatusTextToneClassName(item.statusKind),
-              )}
-            >
-              {outcome}
+        <span className="flex min-w-0 flex-col">
+          <span className="flex min-w-0 items-baseline gap-2">
+            <span className="min-w-0 truncate">{item.primaryLabel}</span>
+            {outcome ? (
+              <span
+                className={cn(
+                  "shrink-0 text-ui-sm",
+                  subagentStatusTextToneClassName(item.statusKind),
+                )}
+              >
+                {outcome}
+              </span>
+            ) : null}
+          </span>
+          {item.modelLabel ? (
+            <span className={cn("truncate text-ui-sm", SECONDARY_TEXT_CLASS_NAME)}>
+              {item.modelLabel}
             </span>
           ) : null}
         </span>

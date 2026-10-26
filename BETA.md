@@ -6,6 +6,8 @@ shares stable's data directory or update feed.
 
 ## Synara Remote early access
 
+Remote .36 shows each subagent's existing provider model and explicitly selected effort directly in active and completed dock rows. Missing values stay hidden, and existing task controls are unchanged. This desktop update does not change the API, connector or provider runtime and does not update the iPhone or iPad app.
+
 Remote .35 retains eligible local Markdown images privately with completed replies and adds Retry for failed previews. The host resolves relative paths and registered worktrees; file grants remain confined to the requested file. An image missing before it could be retained still needs the original file restored. Universal TestFlight build 159 includes the matching image recovery and SVG retry fixes, and removes an unsupported prewarm request that could disconnect hosts. Update desktop and mobile separately.
 
 Remote .35 bundles cloudflared 2026.10.3 for the [eMudhra certificate trust fix](https://blog.cloudflare.com/emudhra-certificate-compromise/). Updating Homebrew alone does not replace the helper inside Synara Remote. The app's declared minimum remains macOS 13; the vendor connector executable declares macOS 15, as the previous bundled version also did. Connector operation on macOS 13–14 remains unqualified; do not disable TLS verification or lower the executable's metadata to work around this.
