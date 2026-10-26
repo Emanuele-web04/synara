@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -153,7 +153,7 @@ describe("packaged desktop startup verification", () => {
     },
   );
 
-  it("rejects a missing packaged peer even when the development tree provides it", () => {
+  it("requires packaged peers and the pinned connector despite development dependencies", async () => {
     const root = mkdtempSync(join(tmpdir(), "synara-runtime-deps-test-"));
     temporaryRoots.push(root);
     const app = join(root, "app.asar");
@@ -182,27 +182,40 @@ describe("packaged desktop startup verification", () => {
       NODE_PATH: developmentModules,
       NODE_OPTIONS: "--invalid-development-node-option",
     };
-    expect(() => verifyPackagedRuntimeDependencies(runtime, env, 5_000)).toThrow(
-      /Cannot find package 'zod'/,
-    );
+    await expect(async () =>
+      verifyPackagedRuntimeDependencies(runtime, env, 5_000),
+    ).rejects.toThrow(/Cannot find package 'zod'/);
 
     writeZod(join(app, "node_modules"));
-    expect(() => verifyPackagedRuntimeDependencies(runtime, env, 5_000)).not.toThrow();
+    await expect(async () =>
+      verifyPackagedRuntimeDependencies(runtime, env, 5_000),
+    ).rejects.toThrow(/Packaged Cloudflare connector is missing/);
+
+    // A real executable with the wrong identity must fail before the local listener starts.
+    const connectorDirectory = join(root, "cloudflared");
+    mkdirSync(connectorDirectory);
+    copyFileSync(
+      process.execPath,
+      join(connectorDirectory, process.platform === "win32" ? "cloudflared.exe" : "cloudflared"),
+    );
+    await expect(async () =>
+      verifyPackagedRuntimeDependencies(runtime, env, 5_000),
+    ).rejects.toThrow(/Packaged Cloudflare connector version mismatch/);
   });
 
-  it("bounds a runtime import that never finishes", () => {
+  it("bounds a runtime import that never finishes", async () => {
     const root = mkdtempSync(join(tmpdir(), "synara-runtime-timeout-test-"));
     temporaryRoots.push(root);
     const dist = join(root, "app.asar/apps/server/dist");
     mkdirSync(dist, { recursive: true });
     writeFileSync(join(dist, "runtimeDependencySmoke.mjs"), "setInterval(() => {}, 1000);");
 
-    expect(() =>
+    await expect(async () =>
       verifyPackagedRuntimeDependencies(
         { executable: process.execPath, resourcesDirectory: root },
         process.env,
         200,
       ),
-    ).toThrow(/ETIMEDOUT/);
+    ).rejects.toThrow(/ETIMEDOUT/);
   });
 });

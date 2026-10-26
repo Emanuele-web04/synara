@@ -247,6 +247,45 @@ async function verifyReleaseWorkflowSafety(): Promise<void> {
     if (!step) throw new Error(`Missing native release step ${id}.`);
     return step;
   };
+  // Both resumed packaging and Intel-only qualification import shared runtime code.
+  // Frozen, script-free dependencies must be present before either source verifier.
+  for (const [jobName, job] of Object.entries(platformDefinition.jobs)) {
+    const verificationIndex = job.steps.findIndex((step) =>
+      /node scripts\/verify-(?:release-artifact-checkpoint|packaged-desktop-startup)\.ts/.test(
+        step.run ?? "",
+      ),
+    );
+    if (verificationIndex < 0) continue;
+    const preparation = job.steps.slice(0, verificationIndex);
+    const bunIndex = preparation.findIndex((step) => step.uses?.startsWith("oven-sh/setup-bun@"));
+    const installIndex = preparation.findIndex((step) => {
+      const command =
+        step.run
+          ?.replace(/\\\r?\n/g, " ")
+          .trim()
+          .split(/\s+/) ?? [];
+      return command[0] === "bun" && command[1] === "install";
+    });
+    const install = preparation[installIndex];
+    const args =
+      install?.run
+        ?.replace(/\\\r?\n/g, " ")
+        .trim()
+        .split(/\s+/) ?? [];
+    if (
+      bunIndex < 0 ||
+      installIndex <= bunIndex ||
+      preparation[bunIndex]?.if ||
+      install?.if ||
+      preparation[bunIndex]?.with?.["bun-version-file"] !== "package.json" ||
+      !args.includes("--frozen-lockfile") ||
+      !args.includes("--ignore-scripts")
+    ) {
+      throw new Error(
+        `${jobName} source verification requires unconditional pinned Bun and frozen, script-free dependencies.`,
+      );
+    }
+  }
   const evaluates = (step: Step, context: Record<string, unknown>): boolean => {
     if (!step.if) throw new Error(`Missing conditional admission for ${step.name}.`);
     const expression = step.if.replace(/^\$\{\{\s*|\s*\}\}$/g, "");

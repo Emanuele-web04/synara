@@ -189,6 +189,7 @@
         "@xterm/headless": "^6.0.0",
         "effect": "catalog:",
         "jose": "^6.1.0",
+        "mdast-util-from-markdown": "^2.0.3",
         "node-pty": "^1.1.0",
         "open": "^10.1.0",
         "reflect-metadata": "0.2.2",

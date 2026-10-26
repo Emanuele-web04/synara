@@ -2867,6 +2867,15 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         threadId: command.threadId,
       });
       const existingMessage = thread.messages.find((message) => message.id === command.messageId);
+      if (
+        command.attachments !== undefined &&
+        (existingMessage?.role !== "assistant" || existingMessage.streaming)
+      ) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: "Late image snapshots require an already finalized assistant message.",
+        });
+      }
       const turnId = resolveStableMessageTurnId({
         existingTurnId: existingMessage?.turnId,
         incomingTurnId: command.turnId,
@@ -2884,6 +2893,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           messageId: command.messageId,
           role: "assistant",
           text: command.delta,
+          ...(command.attachments !== undefined ? { attachments: command.attachments } : {}),
           ...(command.segmentStartedAt ? { segmentStartedAt: command.segmentStartedAt } : {}),
           ...(command.segmentSequence !== undefined
             ? { segmentSequence: command.segmentSequence }
@@ -2915,6 +2925,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
             messageId: command.messageId,
             role: "assistant",
             text: `${existingMessage.text}${command.delta}`,
+            ...(command.attachments !== undefined ? { attachments: command.attachments } : {}),
             turnId,
             streaming: false,
             createdAt: command.createdAt,
@@ -2944,6 +2955,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           messageId: command.messageId,
           role: "assistant",
           text: existingMessage?.text ?? "",
+          ...(command.attachments !== undefined ? { attachments: command.attachments } : {}),
           ...(command.asyncQuestions
             ? {
                 asyncUserInput: existingMessage?.asyncUserInput ?? {

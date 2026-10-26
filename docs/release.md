@@ -306,6 +306,8 @@ plist and native payload before refreshing the cask; the old audit failure remai
 unresolved until a matching release is available. Metadata inspection and macOS 15
 startup checks do not establish runtime behavior on macOS 13.
 
+Remote .35 pins cloudflared 2026.10.3 with hashes of the downloaded assets (macOS tarballs, not extracted Mach-O files). The vendor macOS executable declares macOS 15, as the previous pin did. The app's macOS 13 declaration does not qualify the Remote connector on macOS 13–14. Inspect the bundled helper separately; after nested signing its bytes differ from the vendor binary, so retain both download provenance and the final signed artifact proof. Never lower deployment metadata or disable certificate verification to bypass an incompatible helper.
+
 Both native macOS release runners use macOS 15. Native helpers and the pinned
 Cua apple-metal bridge build with Xcode 16.4's macOS 15 SDK. A separate macOS 26
 job compiles the architecture-independent Icon Composer catalog with Xcode 26.3

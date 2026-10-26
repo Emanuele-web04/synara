@@ -3,28 +3,28 @@ import { chmod, mkdir, mkdtemp, readFile, rename, rm, writeFile } from "node:fs/
 import { join } from "node:path";
 import { spawnProcessSync } from "./processRuntime.ts";
 
-export const CLOUDFLARED_VERSION = "2026.9.3";
-/** Official GitHub release asset digests, verified 2026-09-28. */
+export const CLOUDFLARED_VERSION = "2026.10.3";
+/** Official GitHub asset digests (the downloaded TGZ on macOS), verified 2026-10-26. */
 export const CLOUDFLARED_ASSETS: Readonly<Record<string, { name: string; sha256: string }>> = {
   "darwin-arm64": {
     name: "cloudflared-darwin-arm64.tgz",
-    sha256: "587c2cfb1c230fe36c7fa7727da78be459dae028cabe8c001291999350f07095",
+    sha256: "1165d14b6f6360a3b8c283d7d1100024d6ec7cd9bc9e32519e96150645f3ec55",
   },
   "darwin-x64": {
     name: "cloudflared-darwin-amd64.tgz",
-    sha256: "d1155d0837487f261183b15c1eab6c4ebcad9dc49b94675f1524c3564cea3977",
+    sha256: "81b7b85f2376815c4f59b1aa323887b62e16ce8b67555c2e1577dc23f2a82000",
   },
   "linux-arm64": {
     name: "cloudflared-linux-arm64",
-    sha256: "aaeb2d7d0da3614634c7e03ab13487a1522c2e79165ed2929cfe23d5e95b326d",
+    sha256: "89297ebfb9e8c99c0dc013a1140601453cf3798d8306c5591651f4a3f5210be8",
   },
   "linux-x64": {
     name: "cloudflared-linux-amd64",
-    sha256: "77e26d8d900e0b8469f416239d14b5f296525fdf79fee6f511ef55609e3fbac2",
+    sha256: "053b80b0a23031a038fdbf3c073f59f82b8f1f152aa67971d7383ffafc0dbab0",
   },
   "win32-x64": {
     name: "cloudflared-windows-amd64.exe",
-    sha256: "f096265ec2fcbe9bb6e2d64268db167ced3fcbb83d894bdb9e2fcdb26f2ea7e2",
+    sha256: "76b2805253d0d6ffacb092a7acfbee99e7af6917835c0c5410e23f3ef5052da2",
   },
 };
 

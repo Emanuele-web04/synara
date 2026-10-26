@@ -673,6 +673,7 @@ describe("CheckpointReactor", () => {
         options?.providerServiceLayer ?? Layer.succeed(ProviderService, provider.service),
       ),
       Layer.provideMerge(checkpointStoreLayer),
+      Layer.provideMerge(GitCoreLive),
       Layer.provideMerge(ServerConfigLayer),
       Layer.provideMerge(ServerSettingsService.layerTest()),
       Layer.provideMerge(NodeServices.layer),

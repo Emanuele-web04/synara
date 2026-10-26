@@ -22,6 +22,34 @@ import type { WhatsNewEntry } from "./logic";
 
 export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
   {
+    version: "1.0.6-remote.35",
+    date: "Oct 26",
+    features: [
+      {
+        id: "cloudflare-security-update",
+        title: "Cloudflare security update",
+        description:
+          "The bundled connection helper is updated to cloudflared 2026.10.3 with the certificate trust fix.",
+      },
+      {
+        id: "private-image-recovery",
+        title: "Keep images with their replies",
+        description:
+          "Eligible local images are saved privately with completed replies, so moving or deleting the original later does not remove the picture from the conversation.",
+        details:
+          "Images stay in their original place in the message. Files already missing when the reply completed cannot be recovered automatically.",
+      },
+      {
+        id: "retry-conversation-images",
+        title: "Retry an image without resending",
+        description:
+          "Retry requests fresh access to a failed image. Relative paths and registered worktrees resolve against the connected computer's workspace.",
+        details:
+          "Update iPhone and iPad separately to TestFlight 159 for the matching image and connection fixes.",
+      },
+    ],
+  },
+  {
     version: "1.0.6-remote.34",
     date: "Oct 26",
     features: [

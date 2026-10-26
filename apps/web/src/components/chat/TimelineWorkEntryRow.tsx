@@ -630,6 +630,7 @@ export const TimelineWorkEntryRow = memo(function TimelineWorkEntryRow(props: {
   mutedProse?: boolean;
   fileDiffStatByPath?: ReadonlyMap<string, { additions: number; deletions: number }>;
   markdownCwd: string | undefined;
+  threadId?: string | null | undefined;
   onImageExpand: (preview: ExpandedImagePreview) => void;
   turnId?: TurnId;
   onOpenTurnDiff?: (turnId: TurnId, filePath?: string) => void;
@@ -650,6 +651,7 @@ export const TimelineWorkEntryRow = memo(function TimelineWorkEntryRow(props: {
     mutedProse,
     fileDiffStatByPath,
     markdownCwd,
+    threadId,
     onImageExpand,
     turnId,
     onOpenTurnDiff,
@@ -813,6 +815,7 @@ export const TimelineWorkEntryRow = memo(function TimelineWorkEntryRow(props: {
         <ChatMarkdown
           text={proseText}
           cwd={markdownCwd}
+          threadId={threadId}
           directionMode="auto-blocks"
           isStreaming={false}
           style={{
@@ -969,6 +972,7 @@ export const TimelineWorkEntryRow = memo(function TimelineWorkEntryRow(props: {
                     <ChatMarkdown
                       text={preview ?? ""}
                       cwd={markdownCwd}
+                      threadId={threadId}
                       isStreaming={false}
                       className="leading-relaxed"
                       style={{

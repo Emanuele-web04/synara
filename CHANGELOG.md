@@ -1,5 +1,30 @@
 # Changelog
 
+## 1.0.6-remote.35 — 2026-10-26
+
+**Recover conversation images and update the Cloudflare connector.**
+
+### Fixed
+
+- Eligible local Markdown images are retained privately with completed replies, preserving their position in the message when the original file is later moved or removed. Images that were already missing when the reply completed cannot be reconstructed.
+- Failed images have Retry, which requests fresh access without resending the conversation. Relative paths and registered worktrees resolve against the host's workspace, including paths containing literal percent characters.
+- Retried and uncertain message deliveries reuse the committed attachment set; fork and handoff mappings retain the image's canonical source path.
+- Browser pairing uses the correct fetch receiver instead of failing before the request reaches the host.
+
+### Security
+
+- Bundled cloudflared is updated to 2026.10.3 to remove trust in the affected eMudhra intermediates. All five vendor asset hashes are verified. Existing origin certificate verification and device authorization remain enforced.
+
+### Companion iPhone and iPad
+
+- TestFlight 0.1 (159) includes image recovery, refreshes an inline SVG preview after a successful retry, and removes an unsupported prewarm request that could repeatedly disconnect compatible hosts. Desktop and TestFlight update separately.
+
+### Verification
+
+- Source image recovery passed 17,881 tests, 19 focused browser cases and isolated desktop, iPhone and iPad image checks before Remote integration. The final Remote tag must also pass the full release gates and packaged platform checks; source tests alone do not qualify a signed installer.
+- Remote identity, local data, pairings and update feeds are preserved. No account migration or hosted API deployment is required. Windows uses the exact-version unsigned exception and may show SmartScreen.
+- The app continues to declare macOS 13. The bundled vendor cloudflared executable, including the previous pin, declares macOS 15; Remote connector operation on macOS 13–14 is not qualified by this release.
+
 ## 1.0.6-remote.34 — 2026-10-26
 
 **Readable work narration and quieter, concise tool details.**

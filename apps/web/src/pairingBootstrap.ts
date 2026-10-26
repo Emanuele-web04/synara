@@ -43,7 +43,7 @@ export async function bootstrapPairingSession(
   dependencies: PairingBootstrapDependencies = {
     location: window.location,
     history: window.history,
-    fetch: globalThis.fetch,
+    fetch: globalThis.fetch.bind(globalThis),
     renderFailure: renderPairingFailure,
   },
 ): Promise<PairingBootstrapResult> {

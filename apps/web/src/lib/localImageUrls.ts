@@ -6,11 +6,11 @@
 //             and @synara/shared/localPreviewFiles for the canonical route + extension allowlist.
 
 import { SUPPORTED_LOCAL_IMAGE_EXTENSION_REGEX } from "@synara/shared/localPreviewFiles";
-import { isLocalAbsolutePath, isWindowsAbsolutePath } from "@synara/shared/path";
+import { isWindowsAbsolutePath } from "@synara/shared/path";
 
 import { resolveExecutionResource } from "./wsHttpUrl";
 
-function normalizeMarkdownImagePath(src: string): string {
+export function normalizeMarkdownImagePath(src: string): string {
   const trimmed = src.trim();
   if (trimmed.startsWith("file://")) {
     try {
@@ -47,15 +47,11 @@ export function isLocalImageMarkdownSrc(src: string | undefined): src is string 
   );
 }
 
-// Grants must name the same decoded file as the preview HTTP request.
-export function localImageAbsolutePath(src: string): string | null {
-  const normalized = normalizeMarkdownImagePath(src);
-  return isLocalImageMarkdownSrc(src) && isLocalAbsolutePath(normalized) ? normalized : null;
-}
-
 export function buildLocalImageUrl(input: {
   readonly src: string;
   readonly cwd: string | undefined;
+  /** Raw canonical host path has already been decoded; never interpret percent escapes twice. */
+  readonly canonicalPath?: string | undefined;
   readonly download?: boolean;
   // Accept an explicit `undefined` (not just absent) so callers can forward an
   // optional `previewGrant: string | null | undefined` straight through under
@@ -66,7 +62,7 @@ export function buildLocalImageUrl(input: {
 }): string {
   return resolveExecutionResource({
     kind: "workspace-preview",
-    path: normalizeMarkdownImagePath(input.src),
+    path: input.canonicalPath ?? normalizeMarkdownImagePath(input.src),
     ...(input.cwd ? { cwd: input.cwd } : {}),
     ...(input.grant ? { grant: input.grant } : {}),
     ...(input.cacheKey !== undefined ? { revision: String(input.cacheKey) } : {}),

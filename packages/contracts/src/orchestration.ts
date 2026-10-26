@@ -594,6 +594,8 @@ export type ChatAttachmentId = typeof ChatAttachmentId.Type;
 
 export const ChatImageAttachment = Schema.Struct({
   type: Schema.Literal("image"),
+  // Server-owned snapshots retain the original inline Markdown reference.
+  sourcePath: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(4096))),
   id: ChatAttachmentId,
   name: TrimmedNonEmptyString.check(Schema.isMaxLength(255)),
   mimeType: TrimmedNonEmptyString.check(Schema.isMaxLength(100), Schema.isPattern(/^image\//i)),
@@ -1999,6 +2001,10 @@ const ThreadMessageAssistantDeltaCommand = Schema.Struct({
   threadId: ThreadId,
   messageId: MessageId,
   delta: Schema.String,
+  // Internal late-finalization snapshots; the decider requires an already settled assistant row.
+  attachments: Schema.optional(
+    Schema.Array(ChatImageAttachment).check(Schema.isMaxLength(PROVIDER_SEND_TURN_MAX_ATTACHMENTS)),
+  ),
   turnId: Schema.optional(TurnId),
   // Present only when this delta starts a NEW text segment: a row-making
   // provider event (tool call, warning, ...) intervened since the previous
@@ -2009,6 +2015,9 @@ const ThreadMessageAssistantDeltaCommand = Schema.Struct({
 });
 
 const ThreadMessageAssistantCompleteCommand = Schema.Struct({
+  attachments: Schema.optional(
+    Schema.Array(ChatImageAttachment).check(Schema.isMaxLength(PROVIDER_SEND_TURN_MAX_ATTACHMENTS)),
+  ),
   asyncQuestions: Schema.optional(AsyncUserInputQuestions),
   type: Schema.Literal("thread.message.assistant.complete"),
   commandId: CommandId,

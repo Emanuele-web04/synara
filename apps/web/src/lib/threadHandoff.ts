@@ -164,6 +164,10 @@ export function buildThreadHandoffImportedMessages(
                   name: attachment.name,
                   mimeType: attachment.mimeType,
                   sizeBytes: attachment.sizeBytes,
+                  // Keep the host's decoded alias with the snapshot when its source file is gone.
+                  ...(attachment.type === "image" && attachment.sourcePath !== undefined
+                    ? { sourcePath: attachment.sourcePath }
+                    : {}),
                 },
           )
         : null;

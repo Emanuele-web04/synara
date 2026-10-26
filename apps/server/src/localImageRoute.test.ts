@@ -3,7 +3,7 @@
 // into `effectServer.ts` and exercises it through a real HTTP listener.
 import http from "node:http";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
@@ -29,6 +29,12 @@ import { attachmentsEffectRouteLayer, localImageEffectRouteLayer } from "./http"
 import { createLocalPreviewGrant } from "./localImageFiles";
 import type { CodexGeneratedImageHomeCandidate } from "./codexGeneratedImages.ts";
 import { ManagedAttachmentRepositoryLive } from "./persistence/Layers/ManagedAttachments";
+import {
+  ManagedAttachmentRepository,
+  type ManagedAttachmentRepositoryShape,
+} from "./persistence/Services/ManagedAttachments";
+import { stageAssistantImageAttachments } from "./assistantImageAttachments";
+import { LOCAL_LOOPBACK_ATTACHMENT_PRINCIPAL } from "./managedAttachmentPrincipal";
 import { SqlitePersistenceMemory } from "./persistence/Layers/Sqlite";
 import type { ProviderAdapterError } from "./provider/Errors.ts";
 import type { ProviderAdapterShape } from "./provider/Services/ProviderAdapter.ts";
@@ -213,7 +219,7 @@ function makeServerSettings(getSettings: ServerSettingsShape["getSettings"]): Se
 async function withEffectServer(
   config: ServerConfigShape,
   routeLayer: typeof localImageEffectRouteLayer | typeof attachmentsEffectRouteLayer,
-  run: (origin: string) => Promise<void>,
+  run: (origin: string, managedAttachments: ManagedAttachmentRepositoryShape) => Promise<void>,
   options: {
     readonly providerRegistry?: typeof ProviderAdapterRegistry.Service;
     readonly serverSettings?: ServerSettingsShape;
@@ -221,6 +227,7 @@ async function withEffectServer(
 ): Promise<void> {
   const scope = await Effect.runPromise(Scope.make("sequential"));
   let nodeServer: http.Server | null = null;
+  let managedAttachments: ManagedAttachmentRepositoryShape | undefined;
   const servicesLayer = Layer.mergeAll(
     Layer.succeed(ServerConfig, config),
     Layer.succeed(ServerAuth, makeFakeServerAuth()),
@@ -234,9 +241,12 @@ async function withEffectServer(
     NodeHttpServer.layerHttpServices,
   );
   try {
+    // Keep the database and HTTP services alive through the callback's real requests.
+    const services = await Effect.runPromise(Layer.buildWithScope(servicesLayer, scope));
     await Effect.runPromise(
       Scope.provide(
         Effect.gen(function* () {
+          managedAttachments = yield* ManagedAttachmentRepository;
           const httpServer = yield* NodeHttpServer.make(
             () => {
               nodeServer = http.createServer();
@@ -248,7 +258,7 @@ async function withEffectServer(
             ? HttpRouter.toHttpEffect(localImageEffectRouteLayer)
             : HttpRouter.toHttpEffect(attachmentsEffectRouteLayer);
           yield* httpServer.serve(httpApp);
-        }).pipe(Effect.provide(servicesLayer)),
+        }).pipe(Effect.provideServices(services)),
         scope,
       ),
     );
@@ -257,7 +267,8 @@ async function withEffectServer(
       throw new Error("Expected effect server to expose an address");
     }
     const origin = `http://127.0.0.1:${address.port}`;
-    await run(origin);
+    if (!managedAttachments) throw new Error("Expected route attachment repository");
+    await run(origin, managedAttachments);
   } finally {
     await Effect.runPromise(Scope.close(scope, Exit.void));
   }
@@ -707,6 +718,68 @@ describe("attachmentsEffectRouteLayer", () => {
       await expect(response.arrayBuffer()).resolves.toHaveProperty("byteLength", 4);
     });
   });
+
+  it.each(["png", "svg"] as const)(
+    "serves the claimed inline %s snapshot after the original image is deleted",
+    async (extension) => {
+      const config = makeServerConfig({ authToken: "desktop-secret" });
+      const workspace = makeTempDir("inline-snapshot-http-");
+      const source = path.join(workspace, `chart.${extension}`);
+      const bytes = Buffer.from(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII=",
+        "base64",
+      );
+      const sourceBytes =
+        extension === "svg"
+          ? Buffer.from(
+              '<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script><rect width="10" height="10"/></svg>',
+            )
+          : bytes;
+      writeFileSync(source, sourceBytes);
+      await withEffectServer(config, attachmentsEffectRouteLayer, async (origin, repository) => {
+        const prepared = await Effect.runPromise(
+          stageAssistantImageAttachments({
+            text: `Before\n\n![chart](./chart.${extension})\n\nAfter`,
+            threadId: "inline-snapshot-thread",
+            messageId: "inline-snapshot-message",
+            commandId: "inline-snapshot-complete",
+            cwd: workspace,
+            sourceRoots: [workspace],
+            attachmentsDir: config.attachmentsDir,
+            existingAttachments: [],
+            repository,
+          }),
+        );
+        expect(prepared.attachments).toHaveLength(1);
+        const claim = await Effect.runPromise(
+          repository.claimForAcceptedTurn({
+            attachmentIds: prepared.attachmentIds,
+            ownerThreadId: "inline-snapshot-thread",
+            ...LOCAL_LOOPBACK_ATTACHMENT_PRINCIPAL,
+            commandId: "inline-snapshot-complete",
+            messageId: "inline-snapshot-message",
+            now: new Date().toISOString(),
+          }),
+        );
+        expect(claim.status).toBe("claimed");
+        unlinkSync(source);
+        const response = await fetch(
+          `${origin}/attachments/${prepared.attachments[0]!.id}?token=desktop-secret`,
+        );
+        expect(response.status).toBe(200);
+        expect(response.headers.get("content-type")).toContain(
+          extension === "svg" ? "image/svg+xml" : "image/png",
+        );
+        if (extension === "svg") {
+          expect(response.headers.get("content-security-policy")).toContain("sandbox");
+          expect(response.headers.get("content-security-policy")).toContain("default-src 'none'");
+          expect(response.headers.get("x-content-type-options")).toBe("nosniff");
+        }
+        expect(response.headers.get("cache-control")).toBe("private, no-store");
+        expect(Buffer.from(await response.arrayBuffer())).toEqual(sourceBytes);
+      });
+    },
+  );
 
   it("never serves inline visual HTML from the app origin", async () => {
     const config = makeServerConfig({ authToken: "desktop-secret" });

@@ -59,6 +59,12 @@ import {
   isCodexGeneratedImageArtifact,
 } from "../../codexGeneratedImages.ts";
 import { copyAndAttributeStudioGeneratedImage } from "../../studioGeneratedImages.ts";
+import { stageAssistantImageAttachments } from "../../assistantImageAttachments.ts";
+import { ServerConfig } from "../../config.ts";
+import { ManagedAttachmentRepository } from "../../persistence/Services/ManagedAttachments.ts";
+import { ManagedAttachmentRepositoryLive } from "../../persistence/Layers/ManagedAttachments.ts";
+import { GitCore } from "../../git/Services/GitCore.ts";
+import { listLocalPreviewWorktreeRoots } from "../../workspace/localPreviewWorktrees.ts";
 import { parseCheckpointFilesFromUnifiedDiff } from "../../checkpointing/Diffs.ts";
 import { ProviderService } from "../../provider/Services/ProviderService.ts";
 import { ComputerService } from "../../computer/Services/ComputerService.ts";
@@ -93,6 +99,7 @@ import { resolveThreadWorkspaceCwd } from "../../checkpointing/Utils.ts";
 import { isGitRepository } from "../../git/isRepo.ts";
 import {
   OrchestrationCommandIdentityCollisionError,
+  OrchestrationCommandInternalError,
   OrchestrationCommandPreviouslyRejectedError,
 } from "../Errors.ts";
 import { makeRuntimeJournalPoisonGate } from "../runtimeJournalPoisonGate.ts";
@@ -822,6 +829,9 @@ export function selectProviderRuntimeJournalStream(input: {
 
 const make = Effect.gen(function* () {
   const orchestrationEngine = yield* OrchestrationEngineService;
+  const serverConfig = yield* ServerConfig;
+  const managedAttachmentRepository = yield* ManagedAttachmentRepository;
+  const gitCore = yield* GitCore;
   const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
   const providerService = yield* ProviderService;
   const computerService = yield* Effect.serviceOption(ComputerService);
@@ -1827,6 +1837,109 @@ const make = Effect.gen(function* () {
       }
     });
 
+  // Snapshot only the completed message's actual workspace images; never rescan history.
+  const stageInlineMessageImages = (
+    threadId: ThreadId,
+    messageId: MessageId,
+    commandId: string,
+    appendedText = "",
+  ) =>
+    Effect.gen(function* () {
+      // A receipt freezes the original attachment set, including no snapshots.
+      // Re-importing a newly available file would change this command's fingerprint.
+      const receipt = yield* commandReceipts.getByCommandId({
+        commandId: CommandId.makeUnsafe(commandId),
+      });
+      if (Option.isSome(receipt) && receipt.value.status === "accepted") {
+        const sequence = receipt.value.resultSequence;
+        const committed = yield* Stream.runCollect(
+          orchestrationEngine.readEventsThrough(Math.max(0, sequence - 1), sequence, 1),
+        );
+        const event = committed[0];
+        if (
+          event?.type !== "thread.message-sent" ||
+          event.commandId !== commandId ||
+          event.payload.threadId !== threadId ||
+          event.payload.messageId !== messageId ||
+          event.payload.role !== "assistant"
+        ) {
+          return yield* new OrchestrationCommandInternalError({
+            commandId,
+            commandType: "assistant-image-finalization-replay",
+            detail: "The accepted assistant message event is unavailable.",
+          });
+        }
+        const attachments = event.payload.attachments?.filter((item) => item.type === "image");
+        return { attachments, attachmentIds: attachments?.map((item) => item.id) ?? [] };
+      }
+      return yield* Effect.gen(function* () {
+        const stored = yield* projectionThreadMessageRepository.getByThreadAndMessageId({
+          threadId,
+          messageId,
+        });
+        if (Option.isNone(stored)) return { attachments: [], attachmentIds: [] };
+        const text = `${stored.value.text}${appendedText}`;
+        if (!text.includes("![")) return { attachments: [], attachmentIds: [] };
+        const shell = yield* projectionSnapshotQuery.getThreadShellById(threadId);
+        if (Option.isNone(shell)) return { attachments: [], attachmentIds: [] };
+        const project = yield* getProjectShell(shell.value);
+        if (!project) return { attachments: [], attachmentIds: [] };
+        const cwd = resolveThreadWorkspaceCwd({ thread: shell.value, projects: [project] });
+        if (!cwd) return { attachments: [], attachmentIds: [] };
+        return yield* stageAssistantImageAttachments({
+          text,
+          threadId,
+          messageId,
+          commandId,
+          cwd,
+          sourceRoots: [cwd],
+          attachmentsDir: serverConfig.attachmentsDir,
+          additionalSourceRoots: listLocalPreviewWorktreeRoots({ cwd }).pipe(
+            Effect.provideService(GitCore, gitCore),
+          ),
+          existingAttachments: stored.value.attachments ?? [],
+          repository: managedAttachmentRepository,
+        });
+      }).pipe(
+        Effect.catchCause((cause) => {
+          if (Cause.hasInterruptsOnly(cause)) return Effect.failCause(cause);
+          return Effect.logWarning("assistant image snapshots unavailable").pipe(
+            Effect.as({ attachments: [], attachmentIds: [] }),
+          );
+        }),
+        Effect.map((prepared) => ({
+          ...prepared,
+          attachments: prepared.attachments.length ? prepared.attachments : undefined,
+        })),
+      );
+    });
+
+  const completeAssistantMessage = (input: {
+    event: ProviderRuntimeEvent;
+    threadId: ThreadId;
+    messageId: MessageId;
+    turnId?: TurnId;
+    createdAt: string;
+    commandTag: string;
+    asyncQuestions?: import("@synara/contracts").AsyncUserInputQuestions;
+  }) =>
+    Effect.gen(function* () {
+      const commandId = providerCommandId(input.event, input.commandTag, input.messageId);
+      const prepared = yield* stageInlineMessageImages(input.threadId, input.messageId, commandId);
+      // Dispatch failures can be retryable or uncertain. Keep staging for the same
+      // journal operation to reclaim; abandoned uploads expire through the normal TTL.
+      yield* orchestrationEngine.dispatch({
+        type: "thread.message.assistant.complete",
+        commandId,
+        threadId: input.threadId,
+        messageId: input.messageId,
+        ...(prepared.attachments !== undefined ? { attachments: prepared.attachments } : {}),
+        ...(input.asyncQuestions ? { asyncQuestions: input.asyncQuestions } : {}),
+        ...(input.turnId ? { turnId: input.turnId } : {}),
+        createdAt: input.createdAt,
+      });
+    });
+
   const finalizeAssistantMessage = (input: {
     event: ProviderRuntimeEvent;
     threadId: ThreadId;
@@ -1879,15 +1992,7 @@ const make = Effect.gen(function* () {
         return;
       }
 
-      yield* orchestrationEngine.dispatch({
-        type: "thread.message.assistant.complete",
-        commandId: providerCommandId(input.event, input.commandTag, input.messageId),
-        threadId: input.threadId,
-        messageId: input.messageId,
-        ...(input.asyncQuestions ? { asyncQuestions: input.asyncQuestions } : {}),
-        ...(input.turnId ? { turnId: input.turnId } : {}),
-        createdAt: input.createdAt,
-      });
+      yield* completeAssistantMessage(input);
       yield* clearAssistantMessageState(input.threadId, input.messageId);
     });
 
@@ -1947,11 +2052,11 @@ const make = Effect.gen(function* () {
       // and duplicate provider notifications from emitting redundant message-sent events.
       const shouldComplete = dispatchedDelta || !input.targetMessage || targetIsStreaming;
       if (shouldComplete) {
-        yield* orchestrationEngine.dispatch({
-          type: "thread.message.assistant.complete",
-          commandId: providerCommandId(input.event, "generated-image-complete", targetMessageId),
+        yield* completeAssistantMessage({
+          event: input.event,
           threadId: input.threadId,
           messageId: targetMessageId,
+          commandTag: "generated-image-complete",
           ...(input.turnId ? { turnId: input.turnId } : {}),
           createdAt: input.createdAt,
         });
@@ -3172,23 +3277,36 @@ const make = Effect.gen(function* () {
         if (lateForFinalizedTurn) {
           // Never leave a late row streaming: no terminal event for this turn
           // is coming to complete it.
-          const known = (yield* orchestrationEngine.getReadModel()).threads
-            .find((entry) => entry.id === thread.id)
-            ?.messages.find((message) => message.id === assistantMessageId);
+          const known = yield* projectionThreadMessageRepository.getByThreadAndMessageId({
+            threadId: thread.id,
+            messageId: assistantMessageId,
+          });
+          const commandId = providerCommandId(event, "assistant-delta-late", assistantMessageId);
+          const settled =
+            Option.isSome(known) && known.value.role === "assistant" && !known.value.isStreaming;
+          const prepared = settled
+            ? yield* stageInlineMessageImages(
+                thread.id,
+                assistantMessageId,
+                commandId,
+                assistantDelta,
+              )
+            : undefined;
           yield* orchestrationEngine.dispatch({
             type: "thread.message.assistant.delta",
-            commandId: providerCommandId(event, "assistant-delta-late", assistantMessageId),
+            commandId,
             threadId: thread.id,
             messageId: assistantMessageId,
             delta: assistantDelta,
+            ...(prepared?.attachments !== undefined ? { attachments: prepared.attachments } : {}),
             ...(turnId ? { turnId } : {}),
             createdAt: now,
           });
-          // The decider already re-settles a known finalized message.
-          if (!known || known.streaming) {
-            yield* orchestrationEngine.dispatch({
-              type: "thread.message.assistant.complete",
-              commandId: providerCommandId(event, "assistant-complete-late", assistantMessageId),
+          // A settled row is re-finalized by its delta, avoiding a second Ready event.
+          if (!settled) {
+            yield* completeAssistantMessage({
+              event,
+              commandTag: "assistant-complete-late",
               threadId: thread.id,
               messageId: assistantMessageId,
               ...(turnId ? { turnId } : {}),
@@ -4425,6 +4543,7 @@ export const ProviderRuntimeIngestionLive = Layer.effect(
       OrchestrationCommandReceiptRepositoryLive,
       ProjectionThreadSessionRepositoryLive,
       ProjectionThreadMessageRepositoryLive,
+      ManagedAttachmentRepositoryLive,
     ),
   ),
 );

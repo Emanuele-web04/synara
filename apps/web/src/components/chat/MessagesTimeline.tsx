@@ -1565,6 +1565,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
             density={prefersCompactWorkEntryRow(item.entry) ? "compact" : "default"}
             mutedProse
             markdownCwd={markdownCwd}
+            threadId={threadId}
             onImageExpand={onImageExpand}
             timestampFormat={timestampFormat}
             {...(onOpenAgentActivity ? { onOpenAgentActivity } : {})}
@@ -1584,6 +1585,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
           <ChatMarkdown
             text={item.message.text}
             cwd={markdownCwd}
+            threadId={threadId}
+            imageAttachments={item.message.attachments}
             directionMode="auto-blocks"
             isStreaming={false}
             style={{ ...chatTypographyStyle, color: MUTED_LABEL_TEXT_COLOR }}
@@ -1830,6 +1833,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
               textFontSizePx={normalizedChatFontSizePx}
               density={prefersCompactWorkEntryRow(workEntry) ? "compact" : "default"}
               markdownCwd={markdownCwd}
+              threadId={threadId}
               onImageExpand={onImageExpand}
               timestampFormat={timestampFormat}
               {...(onOpenAgentActivity ? { onOpenAgentActivity } : {})}
@@ -2003,6 +2007,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                 <ChatMarkdown
                   text={segmentText}
                   cwd={markdownCwd}
+                  threadId={threadId}
+                  imageAttachments={row.message.attachments}
                   directionMode="auto-blocks"
                   isStreaming={false}
                   style={chatTypographyStyle}
@@ -2468,6 +2474,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                 density="compact"
                 fileDiffStatByPath={fileDiffStatByPath}
                 markdownCwd={markdownCwd}
+                threadId={threadId}
                 onImageExpand={onImageExpand}
                 onOpenTurnDiff={onOpenTurnDiff}
                 timestampFormat={timestampFormat}
@@ -2611,6 +2618,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                         textFontSizePx={normalizedChatFontSizePx}
                         density={prefersCompactWorkEntryRow(workEntry) ? "compact" : "default"}
                         markdownCwd={markdownCwd}
+                        threadId={threadId}
                         onImageExpand={onImageExpand}
                         timestampFormat={timestampFormat}
                         {...(onOpenAgentActivity ? { onOpenAgentActivity } : {})}
@@ -2661,6 +2669,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                             : messageText
                         }
                         cwd={markdownCwd}
+                        threadId={threadId}
+                        imageAttachments={row.message.attachments}
                         directionMode="auto-blocks"
                         isStreaming={Boolean(row.message.streaming)}
                         style={chatTypographyStyle}
@@ -2702,6 +2712,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                       textFontSizePx={normalizedChatFontSizePx}
                       density="compact"
                       markdownCwd={markdownCwd}
+                      threadId={threadId}
                       onImageExpand={onImageExpand}
                       timestampFormat={timestampFormat}
                       {...(computerControlEnabled !== undefined ? { computerControlEnabled } : {})}

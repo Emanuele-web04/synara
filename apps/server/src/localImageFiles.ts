@@ -20,6 +20,7 @@ import {
   type CodexGeneratedImageHomeCandidate,
   resolveCodexGeneratedImageHomes,
 } from "./codexGeneratedImages.ts";
+import { resolveOutOfRootFileReference } from "./workspace/outOfRootFileReference.ts";
 
 export { LOCAL_IMAGE_ROUTE_PATH };
 
@@ -33,6 +34,7 @@ export interface ResolvedLocalPreviewFile {
 export interface LocalPreviewGrantResult {
   readonly grant: string;
   readonly expiresAt: string;
+  readonly canonicalPath: string;
 }
 
 const LOCAL_PREVIEW_GRANT_TTL_MS = 2 * 60 * 1000;
@@ -230,15 +232,61 @@ export async function resolveAllowedLocalPreviewFile(input: {
   return allowed ? resolved : null;
 }
 
+// A relative reference may recover inside its workspace or registered Git
+// worktrees, but cannot silently turn a parent directory into an allowlist.
 export async function createLocalPreviewGrant(input: {
   readonly requestedPath: string;
+  readonly cwd?: string;
+  readonly homeDir?: string;
+  /** Host-owned GitCore worktree-list output, never accepted from RPC clients. */
+  readonly worktreeRoots?: readonly string[];
 }): Promise<LocalPreviewGrantResult> {
   const requestedPath = input.requestedPath.trim();
-  if (!requestedPath || requestedPath.includes("\0") || !path.isAbsolute(requestedPath)) {
-    throw new Error("Only absolute local files can be granted.");
+  if (!requestedPath || requestedPath.includes("\0")) {
+    throw new Error("Invalid local preview path.");
   }
 
-  const realFilePath = await realpathOrNull(path.resolve(requestedPath));
+  let realFilePath: string | null;
+  if (path.isAbsolute(requestedPath)) {
+    // Preserve explicit absolute grants used by existing clients and file panels.
+    realFilePath = await realpathOrNull(path.resolve(requestedPath));
+  } else {
+    const realCwd =
+      input.cwd && path.isAbsolute(input.cwd) ? await realpathOrNull(input.cwd) : null;
+    if (!realCwd) {
+      throw new Error("Relative local files need an available workspace.");
+    }
+    const candidate = path.resolve(realCwd, requestedPath);
+    realFilePath = await realpathOrNull(candidate);
+    if (realFilePath !== null) {
+      let allowed = isPathInside(candidate, realCwd) && isPathInside(realFilePath, realCwd);
+      if (!allowed) {
+        const worktreeRoots = (
+          await Promise.all(
+            (input.worktreeRoots ?? []).filter((root) => path.isAbsolute(root)).map(realpathOrNull),
+          )
+        ).filter((root): root is string => root !== null);
+        // A forged .git pointer outside the registered checkout must not borrow
+        // another repository's roots. Both lexical and real targets stay confined.
+        allowed =
+          worktreeRoots.some((root) => isPathInside(realCwd, root)) &&
+          worktreeRoots.some(
+            (root) => isPathInside(candidate, root) && isPathInside(realFilePath!, root),
+          );
+      }
+      if (!allowed) {
+        throw new Error("Preview file is outside the workspace and registered worktrees.");
+      }
+    } else if (input.homeDir) {
+      // Reuse the existing bounded relocation policy only for genuinely missing
+      // safe references. That helper deliberately refuses all ../ traversal.
+      realFilePath = await resolveOutOfRootFileReference({
+        workspaceRoot: realCwd,
+        relativePath: requestedPath,
+        homeDir: input.homeDir,
+      });
+    }
+  }
   if (!realFilePath) {
     throw new Error("Preview file not found.");
   }
@@ -251,5 +299,5 @@ export async function createLocalPreviewGrant(input: {
   const grant = crypto.randomUUID();
   localPreviewGrantByToken.set(grant, { realFilePath, expiresAtMs });
   pruneExpiredPreviewGrants();
-  return { grant, expiresAt: new Date(expiresAtMs).toISOString() };
+  return { grant, expiresAt: new Date(expiresAtMs).toISOString(), canonicalPath: realFilePath };
 }

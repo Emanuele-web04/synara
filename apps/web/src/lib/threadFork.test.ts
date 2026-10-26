@@ -1,4 +1,10 @@
-import { MessageId, ProjectId, ThreadId, type NativeApi } from "@synara/contracts";
+import {
+  MessageId,
+  ProjectId,
+  ThreadId,
+  type NativeApi,
+  type ThreadHandoffImportedMessage,
+} from "@synara/contracts";
 import { describe, expect, it, vi } from "vitest";
 
 import type { Thread } from "../types";
@@ -70,9 +76,19 @@ describe("dispatchThreadFork", () => {
       {
         id: "a1",
         role: "assistant",
-        text: "ok",
+        text: "![Old snapshot](./literal%2520.png)",
         streaming: false,
         createdAt: "2026-10-09T00:00:02.000Z",
+        attachments: [
+          {
+            type: "image",
+            id: "att_v2_source_snapshot",
+            sourcePath: "./literal%20.png",
+            name: "literal%20.png",
+            mimeType: "image/png",
+            sizeBytes: 64,
+          },
+        ],
       },
       {
         id: "u2",
@@ -105,16 +121,28 @@ describe("dispatchThreadFork", () => {
     });
     return dispatchCommand.mock.calls[0]?.[0] as {
       readonly throughMessageId?: string;
-      readonly importedMessages: ReadonlyArray<{ readonly text: string }>;
+      readonly importedMessages: ReadonlyArray<ThreadHandoffImportedMessage>;
     };
   }
 
-  it("tells the server which turn the fork was taken from", async () => {
+  it("forks through the selected turn with its persisted inline image alias", async () => {
     const command = await fork("a1");
     expect(command.throughMessageId).toBe("a1");
     expect(command.importedMessages.map((message) => message.text)).toEqual([
       "Remember APPLE",
-      "ok",
+      "![Old snapshot](./literal%2520.png)",
+    ]);
+    // The original file may be gone; the new thread needs the snapshot id and
+    // already-decoded alias to render this Markdown from managed bytes.
+    expect(command.importedMessages[1]?.attachments).toEqual([
+      {
+        type: "image",
+        id: "att_v2_source_snapshot",
+        sourcePath: "./literal%20.png",
+        name: "literal%20.png",
+        mimeType: "image/png",
+        sizeBytes: 64,
+      },
     ]);
   });
 

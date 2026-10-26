@@ -4,7 +4,7 @@
 
 import { execProcessFile, spawnProcessSync } from "@synara/shared/processRuntime";
 
-import { captureWindowsProcessChildrenMap } from "./windowsProcessSnapshot";
+import { captureWindowsProcessChildrenMap } from "./windowsProcessSnapshot.ts";
 
 const PROCESS_TREE_SCAN_TIMEOUT_MS = 1_000;
 const PROCESS_TREE_CAPTURE_ATTEMPTS = 2;
