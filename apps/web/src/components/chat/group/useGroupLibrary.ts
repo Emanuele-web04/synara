@@ -277,10 +277,12 @@ export function useGroupLibrary(input: {
     if (!projectId) return false;
     const params = new URLSearchParams({ projectId, name: file.name });
     if (relativeDirectory) params.set("relativePath", relativeDirectory);
-    const url = resolveWsHttpUrl(`${LIBRARY_UPLOAD_ROUTE_PATH}?${params.toString()}`);
     setBusy(true);
     let succeeded = false;
     try {
+      const url = resolveWsHttpUrl(`${LIBRARY_UPLOAD_ROUTE_PATH}?${params.toString()}`, {
+        requireBackend: true,
+      });
       const response = await fetch(url, {
         method: "POST",
         credentials: "include",

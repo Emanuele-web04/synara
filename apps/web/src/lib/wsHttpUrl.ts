@@ -4,7 +4,10 @@ import { readExecutionContext } from "./hosts/executionContext";
 
 export function resolveExecutionResource(resource: RemoteResource): string {
   const context = readExecutionContext();
-  if (!context?.remote) return resolveWsHttpUrl(remoteResourceRoute(resource).path);
+  if (!context?.remote) {
+    const route = remoteResourceRoute(resource);
+    return resolveWsHttpUrl(route.path, { requireBackend: route.method === "POST" });
+  }
   if (!context.remoteHostId) throw new Error("Remote execution identity is unavailable");
   const reference = { environmentId: context.execution.environmentId, resource };
   if (window.desktopBridge) {
@@ -33,7 +36,10 @@ export function resolveExecutionResource(resource: RemoteResource): string {
 // relative path never reaches the server. We mirror the WS host and forward the legacy token
 // query param so authenticated GET routes (attachments, local-image, …) can authorize the
 // request without touching cookies.
-export function resolveWsHttpUrl(rawPath: string): string {
+export function resolveWsHttpUrl(
+  rawPath: string,
+  options: { readonly requireBackend?: boolean } = {},
+): string {
   if (typeof window === "undefined") return rawPath;
   if (readExecutionContext()?.remote)
     throw new Error("Remote execution resources must use a typed reference");
@@ -45,13 +51,40 @@ export function resolveWsHttpUrl(rawPath: string): string {
       : typeof envWsUrl === "string" && envWsUrl.length > 0
         ? envWsUrl
         : null;
-  if (!wsCandidate) return new URL(rawPath, window.location.origin).toString();
+  // A mutation must not POST to the packaged app document when its backend
+  // disappears. GET callers can still render while that backend reconnects;
+  // the desktop protocol refuses their API paths instead of serving the SPA.
+  const resolveFallback = (): string => {
+    if (!options.requireBackend) return new URL(rawPath, window.location.origin).toString();
+    try {
+      const absoluteUrl = new URL(rawPath);
+      if (absoluteUrl.protocol === "http:" || absoluteUrl.protocol === "https:") {
+        return absoluteUrl.toString();
+      }
+    } catch {
+      // Relative resource paths still require a real backend origin below.
+    }
+    if (!window.desktopBridge) {
+      const browserUrl = new URL(rawPath, window.location.origin);
+      if (browserUrl.protocol === "http:" || browserUrl.protocol === "https:") {
+        return browserUrl.toString();
+      }
+    }
+    throw new Error("The desktop connection is unavailable. Reconnect and try again.");
+  };
+  if (!wsCandidate) return resolveFallback();
   try {
     const wsUrl = new URL(wsCandidate);
+    if (!["ws:", "wss:", "http:", "https:"].includes(wsUrl.protocol) || !wsUrl.hostname) {
+      throw new Error("Unsupported backend URL");
+    }
     const protocol =
       wsUrl.protocol === "wss:" ? "https:" : wsUrl.protocol === "ws:" ? "http:" : wsUrl.protocol;
     const serverUrl = new URL(`${protocol}//${wsUrl.host}`);
     const httpUrl = new URL(rawPath, serverUrl);
+    if (options.requireBackend && !["http:", "https:"].includes(httpUrl.protocol)) {
+      throw new Error("Unsupported resource URL");
+    }
     const legacyToken = wsUrl.searchParams.get("token");
     const targetsServerOrigin =
       httpUrl.protocol === serverUrl.protocol && httpUrl.host === serverUrl.host;
@@ -60,7 +93,7 @@ export function resolveWsHttpUrl(rawPath: string): string {
     }
     return httpUrl.toString();
   } catch {
-    return new URL(rawPath, window.location.origin).toString();
+    return resolveFallback();
   }
 }
 

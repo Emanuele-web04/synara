@@ -871,6 +871,8 @@ export function useChatTurnSubmission({
         files: composerFilesSnapshot,
         assistantSelections: composerAssistantSelectionsSnapshot,
       });
+      // Preparation may outlast a failed upload; the original promise still drives rollback.
+      void turnAttachmentsPromise.catch(() => undefined);
       const optimisticAttachments = [
         ...composerAssistantSelectionsSnapshot,
         ...composerImagesSnapshot.map((image) => ({

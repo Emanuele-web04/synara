@@ -164,46 +164,118 @@ describe("composerSend attachment builders", () => {
     );
   });
 
-  it("uploads binary files outside RPC and returns persisted attachment ids", async () => {
-    const imageFile = new File(["png"], "screen.png", { type: "image/png" });
-    const fetchMock = vi.fn<typeof fetch>().mockResolvedValueOnce(
-      new Response(
-        JSON.stringify({
-          type: "image",
-          id: "thread-1-11111111-1111-4111-8111-111111111111",
-          name: "screen.png",
-          mimeType: "image/png",
-          sizeBytes: imageFile.size,
-        }),
-        { status: 201, headers: { "Content-Type": "application/json" } },
-      ),
-    );
-    vi.stubGlobal("fetch", fetchMock);
+  it.each([200, 201])(
+    "uploads binary files outside RPC with a valid receipt (HTTP %s)",
+    async (status) => {
+      const imageFile = new File(["png"], "screen.png", { type: "image/png" });
+      const fetchMock = vi.fn<typeof fetch>().mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            type: "image",
+            id: "thread-1-11111111-1111-4111-8111-111111111111",
+            name: "screen.png",
+            mimeType: "image/png",
+            sizeBytes: imageFile.size,
+          }),
+          { status, headers: { "Content-Type": "application/json" } },
+        ),
+      );
+      vi.stubGlobal("fetch", fetchMock);
 
-    const { attachments } = await stageUploadComposerAttachments({
-      threadId: "thread-1",
-      images: [
-        {
-          type: "image",
-          id: "draft-image",
-          name: imageFile.name,
-          mimeType: imageFile.type,
-          sizeBytes: imageFile.size,
-          previewUrl: "blob:screen.png",
-          file: imageFile,
-        },
-      ],
-      files: [],
-      assistantSelections: [],
+      const { attachments } = await stageUploadComposerAttachments({
+        threadId: "thread-1",
+        images: [
+          {
+            type: "image",
+            id: "draft-image",
+            name: imageFile.name,
+            mimeType: imageFile.type,
+            sizeBytes: imageFile.size,
+            previewUrl: "blob:screen.png",
+            file: imageFile,
+          },
+        ],
+        files: [],
+        assistantSelections: [],
+      });
+
+      expect(fetchMock).toHaveBeenCalledWith(
+        expect.stringContaining("/api/attachments/upload?"),
+        expect.objectContaining({ method: "POST", body: imageFile }),
+      );
+      expect(attachments).toEqual([
+        expect.objectContaining({ id: "thread-1-11111111-1111-4111-8111-111111111111" }),
+      ]);
+    },
+  );
+
+  it.each([
+    { kind: "HTML", body: "<!doctype html><html>app</html>", contentType: "text/html" },
+    { kind: "empty body", body: "", contentType: "application/json" },
+    { kind: "malformed JSON", body: "{", contentType: "application/json" },
+    { kind: "missing id", body: '{"type":"image"}', contentType: "application/json" },
+    { kind: "invalid id", body: '{"id":"../other-file"}', contentType: "application/json" },
+    { kind: "JSON primitive", body: '"ok"', contentType: "application/json" },
+  ])(
+    "rejects an HTTP 200 $kind response without a valid upload receipt",
+    async ({ body, contentType }) => {
+      const file = new File(["png"], "screen.png", { type: "image/png" });
+      const image = {
+        type: "image" as const,
+        id: "draft-image",
+        name: file.name,
+        mimeType: file.type,
+        sizeBytes: file.size,
+        previewUrl: "blob:screen.png",
+        file,
+      };
+      const images = [image];
+      const fetchMock = vi
+        .fn<typeof fetch>()
+        .mockResolvedValueOnce(
+          new Response(body, { status: 200, headers: { "Content-Type": contentType } }),
+        );
+      vi.stubGlobal("fetch", fetchMock);
+
+      await expect(
+        stageUploadComposerAttachments({ threadId: "thread-1", images, assistantSelections: [] }),
+      ).rejects.toThrow(
+        "Your computer returned an invalid attachment upload response. Reconnect and try again.",
+      );
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it("does not send the photo to the packaged app origin when its backend is unavailable", async () => {
+    const file = new File(["png"], "screen.png", { type: "image/png" });
+    const image = {
+      type: "image" as const,
+      id: "draft-image",
+      name: file.name,
+      mimeType: file.type,
+      sizeBytes: file.size,
+      previewUrl: "blob:screen.png",
+      file,
+    };
+    vi.stubGlobal("window", {
+      desktopBridge: { getWsUrl: () => null },
+      location: { origin: "synara-remote://app" },
     });
-
-    expect(fetchMock).toHaveBeenCalledWith(
-      expect.stringContaining("/api/attachments/upload?"),
-      expect.objectContaining({ method: "POST", body: imageFile }),
-    );
-    expect(attachments).toEqual([
-      expect.objectContaining({ id: "thread-1-11111111-1111-4111-8111-111111111111" }),
-    ]);
+    vi.stubEnv("VITE_WS_URL", "");
+    const fetchMock = vi.fn<typeof fetch>();
+    vi.stubGlobal("fetch", fetchMock);
+    try {
+      await expect(
+        stageUploadComposerAttachments({
+          threadId: "thread-1",
+          images: [image],
+          assistantSelections: [],
+        }),
+      ).rejects.toThrow("The desktop connection is unavailable. Reconnect and try again.");
+      expect(fetchMock).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
   it("cancels an earlier staged attachment when a later sequential upload fails", async () => {

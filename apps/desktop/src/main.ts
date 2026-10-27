@@ -1768,7 +1768,7 @@ function registerDesktopProtocol(): void {
   const resolveStaticRequest = createDesktopStaticProtocolResolver(staticRoot);
 
   protocol.registerFileProtocol(DESKTOP_SCHEME, (request, callback) => {
-    callback(resolveStaticRequest(request.url));
+    callback(resolveStaticRequest(request.url, request.method));
   });
 
   desktopProtocolRegistered = true;

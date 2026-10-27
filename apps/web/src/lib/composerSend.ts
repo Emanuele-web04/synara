@@ -334,11 +334,23 @@ export async function stageUploadComposerAttachments(input: {
         | ChatFileAttachment
         | { readonly error?: unknown }
         | null;
-      if (!response.ok || !payload || !("id" in payload) || !isManagedAttachmentId(payload.id)) {
+      if (
+        !response.ok ||
+        !payload ||
+        typeof payload !== "object" ||
+        !("id" in payload) ||
+        !isManagedAttachmentId(payload.id)
+      ) {
+        // HTTP success alone is not an upload receipt (a static fallback can be 200 HTML).
         const message =
-          payload && "error" in payload && typeof payload.error === "string"
+          payload &&
+          typeof payload === "object" &&
+          "error" in payload &&
+          typeof payload.error === "string"
             ? payload.error
-            : `Attachment upload failed with status ${response.status}.`;
+            : response.ok
+              ? "Your computer returned an invalid attachment upload response. Reconnect and try again."
+              : `Attachment upload failed with status ${response.status}.`;
         throw new Error(message);
       }
       managedAttachmentIds.push(payload.id);

@@ -108,6 +108,11 @@ Electron or Undici, run `apps/desktop/src/httpRuntime.test.ts` under both Node a
 Electron with `ELECTRON_RUN_AS_NODE=1`. The test performs real loopback HTTP
 requests while injecting the socket error and also checks ordinary request failures.
 
+Packaged desktop API requests must reach the HTTP backend; the static protocol
+serves only GET/HEAD navigation and assets. An attachment upload needs a valid
+JSON receipt even when HTTP reports success. Preserve drafts on upload failure
+and observe pending upload rejections while workspace preparation is awaiting RPCs.
+
 Desktop stdio MCP proxies reuse Electron's executable and must explicitly set
 `ELECTRON_RUN_AS_NODE=1` in their launch configuration. Provider child environments
 strip that inherited flag, so relying on inheritance can launch the desktop GUI
