@@ -1,5 +1,23 @@
 # Changelog
 
+## 1.0.6-remote.37 — 2026-10-27
+
+**Keep photo uploads on the selected computer's backend.**
+
+### Fixed
+
+- Attachment uploads refuse a missing desktop backend instead of falling through to the static app page and reporting an upload failure with status 200. The static app protocol no longer serves backend routes or accepts mutation requests.
+- Invalid successful upload responses show a reconnect error. Valid 200 and 201 attachment receipts remain supported; failed sends retain their text, attachments and queued retry.
+- Fast upload failures are observed immediately while workspace preparation finishes, avoiding an unhandled rejection without losing the original recoverable error.
+- Remote uploads and cancellation keep using the selected computer's typed resource route, with no fallback to the local backend.
+
+### Verification
+
+- The main fix passed 24 pull-request checks and independent review. The Remote candidate passed its complete web and desktop suites, static checks and focused server resource tests. Isolated Electron checks covered uploads, invalid responses and recovery; the selected-host bridge and HTTP upstream in that harness were fixtures, not a physical MacBook or production tunnel.
+- Native iPhone and iPad do not use the affected static fallback. No companion update, account migration or hosted API deployment is required for this fix. Remote identity, local data, approved pairings and update feeds are preserved.
+- Publication requires exact-tag quality/server suites, packaged platform checks, macOS signing/notarization, Windows Defender and source-bound artifact provenance. Windows uses the version-scoped unsigned exception and may show SmartScreen.
+- The app declares macOS 13. The bundled cloudflared executable declares macOS 15; Remote connector operation on macOS 13–14 remains unqualified.
+
 ## 1.0.6-remote.36 — 2026-10-26
 
 **See subagent models and effort directly in the dock.**
