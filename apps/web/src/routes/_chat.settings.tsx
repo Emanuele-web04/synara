@@ -70,6 +70,7 @@ import {
   KeyboardShortcutsSettingsPanel,
 } from "../components/settings/KeyboardShortcutsSettingsPanel";
 import { ProfileSettingsPanel } from "../components/settings/ProfileSettingsPanel";
+import { BillingSettingsPanel } from "../components/settings/BillingSettingsPanel";
 import { ProviderUsageSettingsPanel } from "../components/settings/ProviderUsageSettingsPanel";
 import { ExternalMcpSettingsPanel } from "../components/settings/ExternalMcpSettingsPanel";
 import { ConnectionsSettingsPanel } from "../components/settings/ConnectionsSettingsPanel";
@@ -1729,7 +1730,12 @@ function SettingsRouteView() {
       case "shortcuts":
         return <KeyboardShortcutsSettingsPanel />;
       case "profile":
-        return <ProfileSettingsPanel />;
+        return (
+          <div className="flex flex-col gap-7">
+            {import.meta.env.VITE_SYNARA_BILLING_SANDBOX === "1" ? <BillingSettingsPanel /> : null}
+            <ProfileSettingsPanel />
+          </div>
+        );
       case "skills":
         return <SkillsSettingsPanel />;
       case "usage":

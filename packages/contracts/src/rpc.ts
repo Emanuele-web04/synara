@@ -43,6 +43,11 @@ import {
 import { GrantResponse, ListDevicesResponse } from "./hostAuth";
 import { AccountUsageSummaryInput, UsageSummary } from "./accountUsage";
 import {
+  AccountBillingCheckoutRequest,
+  AccountBillingRedirect,
+  AccountBillingStatus,
+} from "./accountBilling";
+import {
   AutomationCancelRunInput,
   AutomationCancelRunResult,
   AutomationArchiveRunInput,
@@ -1755,6 +1760,22 @@ export const WsAccountStatusRpc = Rpc.make(WS_METHODS.accountStatus, {
   error: WsRpcError,
 });
 
+export const WsAccountBillingStatusRpc = Rpc.make(WS_METHODS.accountBillingStatus, {
+  payload: Schema.Struct({}),
+  success: AccountBillingStatus,
+  error: WsRpcError,
+});
+export const WsAccountBillingCheckoutRpc = Rpc.make(WS_METHODS.accountBillingCheckout, {
+  payload: AccountBillingCheckoutRequest,
+  success: AccountBillingRedirect,
+  error: WsRpcError,
+});
+export const WsAccountBillingPortalRpc = Rpc.make(WS_METHODS.accountBillingPortal, {
+  payload: Schema.Struct({}),
+  success: AccountBillingRedirect,
+  error: WsRpcError,
+});
+
 /**
  * Asks WorkOS to email the caller a 6-digit sign-in code. Deliberately
  * answers the same shape whether or not the address has an account.
@@ -2427,6 +2448,9 @@ export type WsFeatureRpc =
   | typeof WsProviderListModelsRpc
   | typeof WsProviderListAgentsRpc
   | typeof WsAccountStatusRpc
+  | typeof WsAccountBillingStatusRpc
+  | typeof WsAccountBillingCheckoutRpc
+  | typeof WsAccountBillingPortalRpc
   | typeof WsAccountSendOtpRpc
   | typeof WsAccountAuthenticateOtpRpc
   | typeof WsAccountBeginSsoRpc
@@ -2623,6 +2647,9 @@ export const WsFeatureRpcGroup: RpcGroup.RpcGroup<WsFeatureRpc> = RpcGroup.make(
   WsProviderListModelsRpc,
   WsProviderListAgentsRpc,
   WsAccountStatusRpc,
+  WsAccountBillingStatusRpc,
+  WsAccountBillingCheckoutRpc,
+  WsAccountBillingPortalRpc,
   WsAccountSendOtpRpc,
   WsAccountAuthenticateOtpRpc,
   WsAccountBeginSsoRpc,

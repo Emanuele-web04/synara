@@ -1,3 +1,5 @@
+import { AccountBillingCheckoutRequest } from "@synara/contracts";
+import { BILLING_UNAVAILABLE, BillingError, type BillingService } from "../billing/service";
 import {
   RegisterLiveActivity,
   RegisterTurnNotification,
@@ -374,6 +376,7 @@ function authTokensBody(auth_: AuthTokens): AuthTokensResponse {
 
 export function createV1Routes(deps: {
   accountDeletion?: AccountDeletionService;
+  billing?: BillingService;
   liveActivities?: LiveActivityService;
   tunnels?: TunnelCoordinator;
   apiIssuer?: string;
@@ -438,7 +441,12 @@ export function createV1Routes(deps: {
   const profileProxySecret = deps.profileProxySecret;
   const accountDeletion =
     deps.accountDeletion ??
-    createAccountDeletionService({ db, verifier, ...(avatarStorage ? { avatarStorage } : {}) });
+    createAccountDeletionService({
+      db,
+      verifier,
+      ...(deps.billing ? { billing: deps.billing } : {}),
+      ...(avatarStorage ? { avatarStorage } : {}),
+    });
   const scheduleDeferred =
     deps.scheduleDeferred ??
     ((task: () => Promise<void>, delayMs: number) => {
@@ -804,6 +812,72 @@ export function createV1Routes(deps: {
       return errorResponse(c, 502, "internal_error", "Identity provider is unavailable");
     }
   }
+
+  const billingLimiter = createRateLimiter({ limit: 20, windowMs: 60_000 });
+  const billingMutationLimiter = createRateLimiter({ limit: 5, windowMs: 60_000 });
+  v1.use("/billing/*", async (c, next) => {
+    c.header("Cache-Control", "private, no-store");
+    await next();
+  });
+  async function billingRequest(c: Context, action: (userId: string) => Promise<unknown>) {
+    const session = await requireUserSession(c);
+    if (session instanceof Response) return session;
+    const limiter = c.req.method === "GET" ? billingLimiter : billingMutationLimiter;
+    if (!limiter.tryConsume(session.userId))
+      return errorResponse(c, 429, "rate_limited", "Too many sandbox billing requests");
+    try {
+      return c.json(await action(session.userId));
+    } catch (error) {
+      if (error instanceof BillingError)
+        return errorResponse(c, error.status, "validation_failed", error.message);
+      return errorResponse(c, 503, "internal_error", "Sandbox billing is temporarily unavailable");
+    }
+  }
+  v1.get("/billing/status", (c) =>
+    billingRequest(
+      c,
+      (userId) => deps.billing?.status(userId) ?? Promise.resolve(BILLING_UNAVAILABLE),
+    ),
+  );
+  v1.post("/billing/checkout", (c) =>
+    billingRequest(c, async (userId) => {
+      if (!deps.billing) throw new BillingError(503, "Sandbox billing is not configured");
+      const body = await c.req.json().catch(() => null);
+      if (!Schema.is(AccountBillingCheckoutRequest)(body))
+        throw new BillingError(400, "Choose a monthly or yearly sandbox plan");
+      const user = await loadSessionUser(c, userId);
+      if (user instanceof Response) throw new BillingError(503, "Account details are unavailable");
+      return deps.billing.checkout(
+        userId,
+        user.email,
+        body.interval,
+        sanitizeForwardableIp(clientIp(c, trustedProxyHops)),
+      );
+    }),
+  );
+  v1.post("/billing/portal", (c) =>
+    billingRequest(c, async (userId) => {
+      if (!deps.billing) throw new BillingError(503, "Sandbox billing is not configured");
+      return deps.billing.portal(userId);
+    }),
+  );
+  // The only unauthenticated billing route authenticates Polar's raw payload signature.
+  v1.post("/billing/webhook", async (c) => {
+    if (!deps.billing)
+      return errorResponse(c, 503, "internal_error", "Sandbox billing is not configured");
+    try {
+      await deps.billing.webhook(await c.req.text(), {
+        "webhook-id": c.req.header("webhook-id") ?? "",
+        "webhook-signature": c.req.header("webhook-signature") ?? "",
+        "webhook-timestamp": c.req.header("webhook-timestamp") ?? "",
+      });
+      return c.body(null, 202);
+    } catch (error) {
+      if (error instanceof BillingError)
+        return errorResponse(c, error.status, "validation_failed", error.message);
+      return errorResponse(c, 503, "internal_error", "Sandbox billing webhook could not be saved");
+    }
+  });
 
   v1.get("/me", async (c) => {
     const session = await requireOrgSession(c);

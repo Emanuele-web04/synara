@@ -39,6 +39,7 @@ import { EndHostSessionInput } from "./hostSessions";
 import { HostsConnectInput, HostsDisconnectInput } from "./hostConnection";
 import { ConfirmSyncKeyPairingRequest, SyncKeyPairingRequest } from "./hostSecrets";
 import { AccountUsageSummaryInput } from "./accountUsage";
+import { AccountBillingCheckoutRequest } from "./accountBilling";
 import {
   AutomationCancelRunInput,
   AutomationArchiveRunInput,
@@ -423,6 +424,9 @@ export const WS_METHODS = {
 
   // Account (Synara account session brokered by the server)
   accountStatus: "account.status",
+  accountBillingStatus: "account.billingStatus",
+  accountBillingCheckout: "account.billingCheckout",
+  accountBillingPortal: "account.billingPortal",
   accountSendOtp: "account.sendOtp",
   accountAuthenticateOtp: "account.authenticateOtp",
   accountBeginSso: "account.beginSso",
@@ -747,6 +751,9 @@ const WebSocketRequestBody = Schema.Union([
 
   // Account
   tagRequestBody(WS_METHODS.accountStatus, Schema.Struct({})),
+  tagRequestBody(WS_METHODS.accountBillingStatus, Schema.Struct({})),
+  tagRequestBody(WS_METHODS.accountBillingCheckout, AccountBillingCheckoutRequest),
+  tagRequestBody(WS_METHODS.accountBillingPortal, Schema.Struct({})),
   tagRequestBody(WS_METHODS.accountSendOtp, AccountSendOtpInput),
   tagRequestBody(WS_METHODS.accountAuthenticateOtp, AccountAuthenticateOtpInput),
   tagRequestBody(WS_METHODS.accountBeginSso, AccountBeginSsoInput),

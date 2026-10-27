@@ -7,12 +7,14 @@ async function main(): Promise<void> {
   const config = loadApiConfig(process.env);
   await runMigrations(config.databaseUrl);
 
-  const { app, identity, pool, cleanup, flushLiveActivities } = await createApp(config);
+  const { app, identity, pool, cleanup, flushLiveActivities, flushBilling } =
+    await createApp(config);
 
   const server = serve({ fetch: app.fetch, port: config.port }, (info) => {
     console.log(`[api] listening on http://localhost:${info.port}`);
   });
 
+  let shuttingDown = false;
   let maintenance: Promise<void> | undefined;
   const sweep = () => {
     if (maintenance) return;
@@ -31,13 +33,25 @@ async function main(): Promise<void> {
         pushMaintenance = undefined;
       });
   };
+  // Billing outages must not hold tunnel/account housekeeping behind a slow provider.
+  let billingMaintenance: Promise<void> | undefined;
+  const billingSweep = () => {
+    if (shuttingDown || !flushBilling || billingMaintenance) return;
+    billingMaintenance = flushBilling()
+      .catch(() => console.warn("[api] Sandbox billing reconciliation pending"))
+      .finally(() => {
+        billingMaintenance = undefined;
+      });
+  };
+  const billingTimer = flushBilling ? setInterval(billingSweep, 30_000) : undefined;
+  billingTimer?.unref();
+  billingSweep();
   const pushTimer = setInterval(pushSweep, 5_000);
   pushTimer.unref();
   pushSweep();
   const cleanupTimer = setInterval(sweep, 30_000);
   cleanupTimer.unref();
   sweep();
-  let shuttingDown = false;
   async function shutdown(signal: NodeJS.Signals): Promise<void> {
     if (shuttingDown) return;
     shuttingDown = true;
@@ -47,7 +61,9 @@ async function main(): Promise<void> {
     });
     clearInterval(cleanupTimer);
     clearInterval(pushTimer);
+    if (billingTimer) clearInterval(billingTimer);
     await pushMaintenance;
+    await billingMaintenance;
     await maintenance;
     await identity.close();
     await pool.end();

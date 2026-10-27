@@ -169,6 +169,20 @@
       "when": 1792277337529,
       "tag": "0023_turn_notifications",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1793134675170,
+      "tag": "0024_polar_sandbox_billing",
+      "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1793134675375,
+      "tag": "0025_polar_checkout_id",
+      "breakpoints": true
     }
   ]
 }

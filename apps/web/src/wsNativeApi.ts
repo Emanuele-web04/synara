@@ -963,6 +963,9 @@ export function createWsNativeApi(): NativeApi {
     },
     account: {
       status: () => controller.request(WS_METHODS.accountStatus),
+      billingStatus: () => controller.request(WS_METHODS.accountBillingStatus),
+      billingCheckout: (input) => controller.request(WS_METHODS.accountBillingCheckout, input),
+      billingPortal: () => controller.request(WS_METHODS.accountBillingPortal),
       sendOtp: (input) => controller.request(WS_METHODS.accountSendOtp, input),
       // The input carries the emailed code — a credential. Pass it straight
       // through: do not wrap, retry, or log it, and do not keep it after the

@@ -90,7 +90,82 @@ export function loadApnsConfig(env: Env): ApnsConfig | undefined {
   };
 }
 
+/** Explicitly sandbox-only. No production credential or hostname can be selected. */
+export type PolarBillingConfig = {
+  environment: "sandbox";
+  accessToken: string;
+  webhookSecret: string;
+  organizationId: string;
+  monthlyProductId: string;
+  yearlyProductId: string;
+  desktopBenefitId: string;
+  checkoutSuccessUrl: string;
+  portalReturnUrl: string;
+};
+
+export function loadPolarBillingConfig(env: Env): PolarBillingConfig | undefined {
+  if (env.POLAR_BILLING_ENABLED === undefined || env.POLAR_BILLING_ENABLED === "false")
+    return undefined;
+  if (env.POLAR_BILLING_ENABLED !== "true")
+    throw new ApiConfigError("POLAR_BILLING_ENABLED must be true or false");
+  if (env.POLAR_ENVIRONMENT !== "sandbox")
+    throw new ApiConfigError("Only POLAR_ENVIRONMENT=sandbox is supported");
+  const names = [
+    "POLAR_ACCESS_TOKEN",
+    "POLAR_WEBHOOK_SECRET",
+    "POLAR_ORGANIZATION_ID",
+    "POLAR_MONTHLY_PRODUCT_ID",
+    "POLAR_YEARLY_PRODUCT_ID",
+    "POLAR_DESKTOP_BENEFIT_ID",
+    "POLAR_CHECKOUT_SUCCESS_URL",
+    "POLAR_PORTAL_RETURN_URL",
+  ] as const;
+  requireVars(env, names);
+  const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  for (const name of [
+    "POLAR_ORGANIZATION_ID",
+    "POLAR_MONTHLY_PRODUCT_ID",
+    "POLAR_YEARLY_PRODUCT_ID",
+    "POLAR_DESKTOP_BENEFIT_ID",
+  ] as const) {
+    if (!uuid.test(env[name]!)) throw new ApiConfigError(`${name} must be a UUID`);
+  }
+  if (env.POLAR_MONTHLY_PRODUCT_ID === env.POLAR_YEARLY_PRODUCT_ID)
+    throw new ApiConfigError("Polar monthly and yearly products must differ");
+  const safeReturnUrl = (name: "POLAR_CHECKOUT_SUCCESS_URL" | "POLAR_PORTAL_RETURN_URL") => {
+    let url: URL;
+    try {
+      url = new URL(env[name]!);
+    } catch {
+      throw new ApiConfigError(`${name} must be an absolute URL`);
+    }
+    if (
+      url.username ||
+      url.password ||
+      url.hash ||
+      (url.protocol !== "https:" &&
+        !(url.protocol === "http:" && ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname)))
+    )
+      throw new ApiConfigError(
+        `${name} must be HTTPS or HTTP loopback without credentials or fragment`,
+      );
+    return url.href;
+  };
+  return {
+    environment: "sandbox",
+    accessToken: env.POLAR_ACCESS_TOKEN!,
+    webhookSecret: env.POLAR_WEBHOOK_SECRET!,
+    organizationId: env.POLAR_ORGANIZATION_ID!,
+    monthlyProductId: env.POLAR_MONTHLY_PRODUCT_ID!,
+    yearlyProductId: env.POLAR_YEARLY_PRODUCT_ID!,
+    desktopBenefitId: env.POLAR_DESKTOP_BENEFIT_ID!,
+    checkoutSuccessUrl: safeReturnUrl("POLAR_CHECKOUT_SUCCESS_URL"),
+    portalReturnUrl: safeReturnUrl("POLAR_PORTAL_RETURN_URL"),
+  };
+}
+
 export type ApiConfigBase = {
+  polarBilling?: PolarBillingConfig;
   apns?: ApnsConfig;
   cloudflareTunnel?: CloudflareTunnelConfig;
   /** Explicit test enrollment only; this is not a paid-subscription entitlement. */
@@ -340,6 +415,7 @@ export function loadApiConfig(env: Env): ApiConfig {
   const trustedProxyHops = resolveTrustedProxyHops(env.TRUSTED_PROXY_HOPS);
   const profileProxySecret = env.PROFILE_PROXY_SECRET?.trim() || undefined;
   const avatarStorage = loadAvatarStorageConfig(env);
+  const polarBilling = loadPolarBillingConfig(env);
   const apns = loadApnsConfig(env);
   const cloudflareTunnel = loadCloudflareTunnelConfig(env);
   const remoteTestUserIds = env.REMOTE_TEST_USER_IDS?.split(",")
@@ -374,6 +450,7 @@ export function loadApiConfig(env: Env): ApiConfig {
       trustedProxyHops,
       ...(profileProxySecret ? { profileProxySecret } : {}),
       ...(avatarStorage ? { avatarStorage } : {}),
+      ...(polarBilling ? { polarBilling } : {}),
       ...(apns ? { apns } : {}),
     };
   }
@@ -403,6 +480,7 @@ export function loadApiConfig(env: Env): ApiConfig {
     trustedProxyHops,
     ...(profileProxySecret ? { profileProxySecret } : {}),
     ...(avatarStorage ? { avatarStorage } : {}),
+    ...(polarBilling ? { polarBilling } : {}),
     ...(apns ? { apns } : {}),
     workosApiKey: env.WORKOS_API_KEY as string,
     workosClientId,

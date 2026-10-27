@@ -1,5 +1,8 @@
 import type { AccountErrorBody } from "@synara/contracts";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import * as billingModule from "./billing/service";
+import { randomUUID } from "node:crypto";
+import { createIsolatedTestDatabase } from "./testing/isolatedDatabase";
 import { API_MAX_BODY_BYTES, createApp } from "./app";
 import type { ApiConfig } from "./config";
 import { runMigrations } from "./db/migrate";
@@ -33,11 +36,60 @@ describe.skipIf(!TEST_DATABASE_URL)("createApp", () => {
   it("serves v1 instance info", async () => {
     const built = await createApp(baseConfig);
     pool = built.pool;
+    expect(built.flushBilling).toBeUndefined();
 
     const res = await built.app.request("/api/v1/instance");
     expect(res.status).toBe(200);
     const body = (await res.json()) as { version: string };
     expect(body.version).toBeTruthy();
+  });
+
+  it("keeps housekeeping independent while configured sandbox billing is stalled", async () => {
+    let releaseBilling!: () => void;
+    let finishedBilling = false;
+    const stalled = new Promise<void>((resolve) => {
+      releaseBilling = resolve;
+    }).then(() => {
+      finishedBilling = true;
+    });
+    const originalCreateBilling = billingModule.createBillingService;
+    const factory = vi
+      .spyOn(billingModule, "createBillingService")
+      .mockImplementation((options) => ({
+        ...originalCreateBilling(options),
+        flush: () => stalled,
+      }));
+    let built: Awaited<ReturnType<typeof createApp>> | undefined;
+    const isolated = await createIsolatedTestDatabase(databaseUrl);
+    try {
+      built = await createApp({
+        ...baseConfig,
+        databaseUrl: isolated.url,
+        polarBilling: {
+          environment: "sandbox",
+          accessToken: "test-only",
+          webhookSecret: "test-only",
+          organizationId: randomUUID(),
+          monthlyProductId: randomUUID(),
+          yearlyProductId: randomUUID(),
+          desktopBenefitId: randomUUID(),
+          checkoutSuccessUrl: "https://example.com/return",
+          portalReturnUrl: "https://example.com/return",
+        },
+      });
+      expect(built.flushBilling).toBeTypeOf("function");
+      const inFlight = built.flushBilling!();
+      await built.cleanup();
+      expect(finishedBilling).toBe(false);
+      releaseBilling();
+      await inFlight;
+      expect(finishedBilling).toBe(true);
+    } finally {
+      releaseBilling();
+      factory.mockRestore();
+      await built?.pool.end();
+      await isolated.close();
+    }
   });
 
   it.each([

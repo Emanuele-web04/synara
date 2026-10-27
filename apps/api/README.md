@@ -29,6 +29,100 @@ nothing in this app runs unless you deploy an instance and point a server at it.
   the operator's machine under `<synara home>/account-credentials.json` at mode
   `0600`, never in the repository.
 
+## Polar desktop subscription sandbox
+
+Billing is an optional sandbox integration, not a change to existing access.
+It never authorizes hosts, revokes paired devices, deletes chat history, or
+enables purchases in the iPhone/iPad companion. Both the backend and desktop
+controls are off by default. Live payments are deliberately unsupported.
+
+1. Use a dedicated [Polar sandbox](https://sandbox.polar.sh) organization and
+   an isolated account API database. Sandbox and production credentials are
+   separate; never test with real payment details or production account data.
+   Use deliverable test aliases of a mailbox you control: Polar checks email DNS
+   even in sandbox, so reserved `example.com` fixtures are rejected.
+2. Create monthly and annual subscription products with one fixed price each,
+   recurring once per month/year. Attach the same Feature Flag benefit to
+   both. The API reads prices from Polar; clients never choose an amount,
+   product ID, customer ID or return destination.
+3. Supply the `POLAR_*` variables listed in `.env.example` through a protected
+   operator-managed file outside the repository. Set `POLAR_BILLING_ENABLED=true`
+   and `POLAR_ENVIRONMENT=sandbox`; any live environment is rejected at startup.
+   The token needs only `products:read`, `customers:read`, `subscriptions:read`,
+   `subscriptions:write`, `checkouts:read`, `checkouts:write`, and
+   `customer_sessions:write`. Renewal cancellation needs subscription write;
+   refunds, organization administration and production access are unnecessary.
+4. Register `customer.state_changed` on `POST /api/v1/billing/webhook` using
+   the sandbox webhook secret. Expose only that receiver when testing through
+   a temporary public forwarding service; do not expose the local development
+   identity provider or the rest of the account API.
+5. Enable the desktop panel with `VITE_SYNARA_BILLING_SANDBOX=1` in an isolated
+   build. Sign in there to the test account, open Settings → Profile →
+   Subscription, and use test checkout. Returning from checkout is not proof
+   of payment: refreshing reads the authoritative customer state.
+
+The verified account user ID becomes Polar's immutable external customer ID.
+No browser-supplied email or arbitrary ID can select another customer's plan.
+Status and redirect responses are private and uncached; desktop operations are
+owner-only and fenced against account changes. The account PostgreSQL database
+stores an additive billing ledger and a durable webhook inbox with default-deny
+RLS, separate from analytics and device trust. Webhooks are validated over the
+original request body and acknowledged after durable storage; duplicate or late
+events reconcile fresh Polar state instead of replaying an old entitlement.
+A separate, non-overlapping billing worker drains pending events every 30
+seconds; explicit status reads reconcile immediately. Provider outages leave
+events retryable without holding up normal host/tunnel housekeeping.
+
+Checkout creation commits a durable attempt ID and chosen product before sending
+Polar a POST. A timeout is **uncertain**, not proof that no checkout was created.
+Retries only read Polar until that attempt becomes visible; they never create a
+second checkout because time passed or a list response was empty. Known open or
+confirmed attempts resume the same session. Only a freshly verified failed or
+expired session allows a replacement; successful payments wait for account-state
+synchronization. Cached links are never accepted as proof of the current state.
+Known sessions persist the Polar checkout ID and revalidate directly by ID;
+older attempt-and-URL rows learn it during recovery. Attempts without an ID use
+at most ten newest-first pages of 100 organization/product candidates, then
+verify the exact account, attempt and product. An incomplete search never
+authorizes a new checkout, and customer email never establishes identity.
+A documented HTTP 422 schema rejection from checkout creation proves that no
+session was created: only that exact attempt is cleared, allowing a corrected
+retry. Network errors, timeouts and 5xx responses never clear an uncertain intent.
+
+For an uncertain attempt that remains unresolved, inspect its matching
+`synara_checkout_attempt_id` metadata and customer/product scope in Polar before
+operator recovery. Do not erase the local fence or force another purchase merely
+because a request timed out. If no conclusive vendor outcome is available, keep
+the attempt blocked rather than risk charging the customer twice. Returning
+from a checkout URL never grants access.
+
+Access follows granted benefits, including any configured payment-recovery
+grace period, rather than assuming every non-active subscription is revoked.
+Cancel-at-period-end preserves the remaining paid period. A refund and ending
+an ongoing subscription are separate operations in Polar; test both explicitly.
+For real sandbox renewal qualification, the public subscription update accepts a
+future `current_billing_period_end` for an existing isolated test subscription.
+Keep its account, product and price unchanged, and confirm a paid
+`subscription_cycle` order as well as the new period and reconciled access.
+A period advancing alone does not prove payment: Polar may defer creating the
+renewal order while its invoicing grace window runs. Restore cancellation after
+the test and verify the resulting state rather than assuming cleanup succeeded.
+Issue sandbox refunds from the merchant dashboard; the runtime token deliberately
+has no refund permissions. Verify refund-only and subscription termination
+separately, including their effect on the granted feature benefit and access.
+Account deletion records an access tombstone immediately and retries stopping
+sandbox renewals before deleting the external identity. A payment failure must
+never be represented as `not_host_owner` or a lost device pairing.
+
+Before live enablement, qualify real sandbox checkout for both intervals,
+renewal/payment recovery, cancellation, refunds and chargebacks; duplicate and
+late webhooks; downtime/recovery; account switching; and account erasure while
+payment work is outstanding. Review webhook monitoring, bounded maintenance
+latency, commercial terms, privacy disclosures and mobile distribution rules.
+The free companion design is not a claim of an Apple payment exemption.
+No production token, merchant onboarding, payout configuration or paid rollout
+is activated by this implementation.
+
 ## Identity: WorkOS AuthKit behind an adapter seam
 
 This service does not store users, passwords, or WorkOS sessions. WorkOS owns
@@ -468,6 +562,13 @@ TEST_DATABASE_URL=postgres://synara:synara@localhost:5432/synara_accounts_test b
 Use a disposable test database, separate from personal development and production
 state. Fixture setup can remove or replace registry rows; API and E2E suites
 sharing that test database must run sequentially.
+
+The billing suites and the billing-lifecycle case create, migrate, and drop their
+own UUID-named temporary databases so parallel files cannot erase one another's
+fixtures. Their **test-only** PostgreSQL role needs `CREATEDB`; the local Docker
+Postgres owner already has it. Use a dedicated disposable server/role for
+`TEST_DATABASE_URL`, never a production connection, and do not grant `CREATEDB`
+to the production runtime role. Vendor sandbox E2E uses another separate database.
 
 ## Account erasure
 

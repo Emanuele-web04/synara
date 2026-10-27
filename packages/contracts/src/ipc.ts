@@ -41,6 +41,11 @@ import type {
 } from "./account";
 import type { AccountUsageSummaryInput, UsageSummary } from "./accountUsage";
 import type {
+  AccountBillingCheckoutRequest,
+  AccountBillingRedirect,
+  AccountBillingStatus,
+} from "./accountBilling";
+import type {
   AuthBearerBootstrapResult,
   AuthBootstrapInput,
   AuthBootstrapResult,
@@ -1523,6 +1528,9 @@ export interface NativeApi {
      * than failing — an expired session is a state, not an error.
      */
     status: () => Promise<AccountStatus>;
+    billingStatus: () => Promise<AccountBillingStatus>;
+    billingCheckout: (input: AccountBillingCheckoutRequest) => Promise<AccountBillingRedirect>;
+    billingPortal: () => Promise<AccountBillingRedirect>;
     /**
      * Asks WorkOS to email a 6-digit sign-in code to `email`. Answers the
      * same shape whether or not the address has an account — signing up and

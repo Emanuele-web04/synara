@@ -544,3 +544,41 @@ export const liveActivityHosts = pgTable("live_activity_hosts", {
     .notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 }).enableRLS();
+
+// Commercial sandbox state never owns host/device trust or conversation data.
+export const billingAccounts = pgTable("billing_accounts", {
+  userId: text("user_id").primaryKey(),
+  customerId: text("customer_id").unique(),
+  productIds: jsonb("product_ids").$type<readonly string[]>().notNull().default([]),
+  accessGranted: boolean("access_granted").notNull().default(false),
+  subscriptionStatus: text("subscription_status"),
+  validUntil: timestamp("valid_until", { withTimezone: true }),
+  cancelAtPeriodEnd: boolean("cancel_at_period_end").notNull().default(false),
+  hasSubscription: boolean("has_subscription").notNull().default(false),
+  checkedAt: timestamp("checked_at", { withTimezone: true }),
+  checkoutId: uuid("checkout_id"),
+  checkoutAttemptId: uuid("checkout_attempt_id"),
+  checkoutProductId: text("checkout_product_id"),
+  checkoutUrl: text("checkout_url"),
+  checkoutInterval: text("checkout_interval", { enum: ["month", "year"] }),
+  checkoutExpiresAt: timestamp("checkout_expires_at", { withTimezone: true }),
+  // Permanent minimum tombstone: a later webhook cannot recreate a deleted account.
+  deletedAt: timestamp("deleted_at", { withTimezone: true }),
+}).enableRLS();
+
+// Keep only routing identifiers after signature verification, never full payment payloads.
+export const billingWebhookEvents = pgTable(
+  "billing_webhook_events",
+  {
+    eventId: text("event_id").primaryKey(),
+    userId: text("user_id").notNull(),
+    receivedAt: timestamp("received_at", { withTimezone: true }).notNull().defaultNow(),
+    nextAttemptAt: timestamp("next_attempt_at", { withTimezone: true }).notNull().defaultNow(),
+    handledAt: timestamp("handled_at", { withTimezone: true }),
+  },
+  (table) => [
+    index("billing_webhook_events_pending_idx")
+      .on(table.nextAttemptAt)
+      .where(sql`${table.handledAt} IS NULL`),
+  ],
+).enableRLS();

@@ -7,6 +7,7 @@
 // Depends on: jose, hono, @hono/node-server.
 
 import { createHash, randomUUID } from "node:crypto";
+import { once } from "node:events";
 import { serve } from "@hono/node-server";
 import { Hono } from "hono";
 import { exportJWK, generateKeyPair, SignJWT } from "jose";
@@ -628,7 +629,9 @@ export async function startFakeWorkos(options: StartFakeWorkosOptions = {}): Pro
     );
   });
 
-  const server = serve({ fetch: app.fetch, port: options.port ?? 0 });
+  // Dev identity accepts test accounts, so it must never listen outside loopback.
+  const server = serve({ fetch: app.fetch, hostname: "127.0.0.1", port: options.port ?? 0 });
+  if (!server.listening) await once(server, "listening");
   const address = server.address();
   if (!address || typeof address === "string") {
     throw new Error("fake WorkOS server failed to bind a port");

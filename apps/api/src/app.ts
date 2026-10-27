@@ -1,3 +1,5 @@
+import { createBillingService } from "./billing/service";
+import { createPolarBillingProvider } from "./billing/polar";
 import { createApnsSender } from "./liveActivities/apns";
 import { createAccountDeletionService } from "./accountDeletion";
 import { createLiveActivityService } from "./liveActivities/service";
@@ -39,13 +41,18 @@ export async function createApp(
   tunnels?: ReturnType<typeof createTunnelCoordinator>;
   cleanup: () => Promise<void>;
   flushLiveActivities: () => Promise<void>;
+  flushBilling?: () => Promise<void>;
 }> {
   const { db, pool } = createDb(config.databaseUrl);
   const identity = await createIdentityAdapters(config, db);
   const avatarStorage = config.avatarStorage
     ? createAvatarStorage(config.avatarStorage)
     : undefined;
+  const billing = config.polarBilling
+    ? createBillingService({ pool, provider: createPolarBillingProvider(config.polarBilling) })
+    : undefined;
   const accountDeletion = createAccountDeletionService({
+    ...(billing ? { billing } : {}),
     db,
     verifier: identity.verifier,
     ...(avatarStorage ? { avatarStorage } : {}),
@@ -102,6 +109,7 @@ export async function createApp(
     "/api/v1",
     createV1Routes({
       accountDeletion,
+      ...(billing ? { billing } : {}),
       ...(tunnels ? { tunnels } : {}),
       ...(liveActivities ? { liveActivities } : {}),
       ...(config.remoteTestUserIds ? { remoteTestUserIds: config.remoteTestUserIds } : {}),
@@ -170,6 +178,7 @@ export async function createApp(
     pool,
     ...(tunnels ? { tunnels } : {}),
     flushLiveActivities: () => liveActivities?.flush() ?? Promise.resolve(),
+    ...(billing ? { flushBilling: () => billing.flush() } : {}),
     cleanup: async () => {
       await accountDeletion.flush();
       await createPairingRendezvous(db, config.apiPublicUrl).cleanup();
