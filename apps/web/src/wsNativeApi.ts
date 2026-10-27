@@ -278,7 +278,9 @@ async function requestVoiceTranscriptionUpload(
     bytes[index] = decoded.charCodeAt(index);
   }
   const response = await fetch(
-    resolveWsHttpUrl(`${VOICE_TRANSCRIPTION_UPLOAD_ROUTE_PATH}?${params.toString()}`),
+    resolveWsHttpUrl(`${VOICE_TRANSCRIPTION_UPLOAD_ROUTE_PATH}?${params.toString()}`, {
+      requireBackend: true,
+    }),
     { method: "POST", credentials: "include", body: bytes },
   );
   if (response.status === 404 || response.status === 405) {

@@ -181,6 +181,8 @@ async function dispatchQueuedComposerTurnOnce(
     files: queuedTurn.files,
     assistantSelections: queuedTurn.assistantSelections,
   });
+  // Preparation may outlast a failed upload; the original promise still drives rollback.
+  void turnAttachmentsPromise.catch(() => undefined);
 
   markPendingTurnDispatch(input.threadId);
   try {

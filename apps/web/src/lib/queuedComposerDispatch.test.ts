@@ -1,8 +1,8 @@
 import { MessageId, ThreadId } from "@synara/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { QueuedComposerTurn } from "../composerDraftStore";
-import { resetComposerDraftStore } from "../composerDraftStoreTestFixtures";
+import { useComposerDraftStore, type QueuedComposerTurn } from "../composerDraftStore";
+import { makeImage, resetComposerDraftStore } from "../composerDraftStoreTestFixtures";
 import { useStore } from "../store";
 import { initialState } from "../storeState";
 import { makeState, makeThread } from "../storeTestFixtures";
@@ -148,6 +148,72 @@ describe("dispatchQueuedComposerTurnHeadless", () => {
         }),
       }),
     );
+  });
+
+  it("holds an early upload refusal until preparation settles without losing its queued retry", async () => {
+    const queuedTurn = makeQueuedChatTurn();
+    if (queuedTurn.kind !== "chat") throw new Error("Expected a queued chat");
+    queuedTurn.images = [makeImage({ id: "retry-photo", previewUrl: "blob:retry-photo" })];
+    useStore.setState(
+      makeState(
+        makeThread({
+          id: THREAD_ID,
+          modelSelection: queuedTurn.modelSelection,
+          runtimeMode: "approval-required",
+        }),
+      ),
+    );
+    useComposerDraftStore.getState().enqueueQueuedTurn(THREAD_ID, queuedTurn);
+
+    let finishPreparation: () => void = () => undefined;
+    const preparation = new Promise<undefined>((resolve) => {
+      finishPreparation = () => resolve(undefined);
+    });
+    nativeApiMocks.dispatchCommand.mockImplementationOnce(() => preparation);
+    vi.stubGlobal("window", {
+      desktopBridge: { getWsUrl: () => null },
+      location: { origin: "synara-remote://app" },
+    });
+    vi.stubEnv("VITE_WS_URL", "");
+    const fetchMock = vi.fn<typeof fetch>();
+    vi.stubGlobal("fetch", fetchMock);
+    const unhandled = vi.fn();
+    process.on("unhandledRejection", unhandled);
+    let settled = false;
+    const pending = dispatchQueuedComposerTurnHeadless({
+      threadId: THREAD_ID,
+      queuedTurn,
+      dispatchMode: "queue",
+      assistantDeliveryMode: "streaming",
+    }).finally(() => {
+      settled = true;
+    });
+    try {
+      await vi.waitFor(() => expect(nativeApiMocks.dispatchCommand).toHaveBeenCalledOnce());
+      // A real event-loop turn exposes an unobserved rejection while the RPC is held.
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      expect(unhandled).not.toHaveBeenCalled();
+      expect(settled).toBe(false);
+      expect(fetchMock).not.toHaveBeenCalled();
+
+      finishPreparation();
+      await expect(pending).resolves.toBe(false);
+      expect(nativeApiMocks.dispatchCommand).not.toHaveBeenCalledWith(
+        expect.objectContaining({ type: "thread.turn.start" }),
+      );
+      expect(useComposerDraftStore.getState().draftsByThreadId[THREAD_ID]?.queuedTurns).toEqual([
+        queuedTurn,
+      ]);
+    } finally {
+      finishPreparation();
+      try {
+        await pending;
+      } finally {
+        process.off("unhandledRejection", unhandled);
+        vi.unstubAllGlobals();
+        vi.unstubAllEnvs();
+      }
+    }
   });
 
   it("sends a queued turn on the provider the thread was handed off to", async () => {
