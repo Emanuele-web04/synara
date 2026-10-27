@@ -31,6 +31,7 @@ import { RAISED_SURFACE_CHROME_CLASS_NAME } from "../chat/composerPickerStyles";
 import { KANBAN_ATTENTION_LABELS, KANBAN_COLUMN_V2_LABELS } from "@synara/shared/kanban";
 import { KanbanStatusIcon } from "./KanbanStatusIcon";
 import { kanbanThreadCardId, refineAttentionFlagsForLivePr, type KanbanCard } from "./kanban.logic";
+import { useTranslation } from "~/i18n";
 
 /** Resolved PR badge per thread from the board root's useThreadPullRequests call. */
 export type KanbanCardPrLookup = ReadonlyMap<ThreadId, ThreadPullRequest>;
@@ -56,11 +57,13 @@ export interface KanbanCardViewProps {
  * an idle terminal is not a draft, so column status would be misleading.
  */
 function KanbanCardColumnLabel({ card }: { card: KanbanCard }) {
+  const { t } = useTranslation();
+
   if (card.isTerminal) {
     return (
       <span className="flex shrink-0 items-center gap-1 text-ui-sm leading-snug text-muted-foreground/80">
         <TerminalIcon className="size-3 shrink-0" aria-hidden />
-        Terminal
+        {t("workspace:viewportPane_terminal")}
       </span>
     );
   }
@@ -151,6 +154,8 @@ function KanbanCardViewComponent({
   isDragSource: isDragSourceProp,
   nowMs,
 }: KanbanCardViewProps) {
+  const { t, formatLocale } = useTranslation();
+
   const isOverlay = isOverlayProp ?? false;
   const isDragSource = isDragSourceProp ?? false;
   // Thread-backed draft cards keep their own title, so the unsent prompt is shown
@@ -207,7 +212,7 @@ function KanbanCardViewComponent({
           {card.title}
         </span>
         {card.thread?.isPinned ? (
-          <span title="Pinned" className="flex shrink-0 items-center pt-0.5">
+          <span title={t("common:app_pinned")} className="flex shrink-0 items-center pt-0.5">
             <PinFilledIcon className="size-3 text-muted-foreground/60" aria-hidden />
           </span>
         ) : null}
@@ -239,7 +244,7 @@ function KanbanCardViewComponent({
           </span>
         ) : null}
         {isForked ? (
-          <span title="Forked thread" className="flex shrink-0 items-center">
+          <span title={t("workspace:card_forkedThread")} className="flex shrink-0 items-center">
             <GitBranchIcon
               className="size-3 text-emerald-600 dark:text-emerald-300/90"
               aria-hidden
@@ -257,11 +262,11 @@ function KanbanCardViewComponent({
             <>
               <span className="flex shrink-0 items-center gap-1.5 text-ui-sm leading-snug text-sky-600 dark:text-sky-300/90">
                 <LoaderIcon className="size-3 shrink-0 animate-spin" aria-hidden />
-                Starting…
+                {t("common:card_starting")}
               </span>
               {activeWorkElapsed ? (
                 <span className="shrink-0 text-ui-sm leading-snug text-muted-foreground/70">
-                  Worked for {activeWorkElapsed}
+                  {t("common:workedFor")} {activeWorkElapsed}
                 </span>
               ) : null}
             </>
@@ -273,11 +278,11 @@ function KanbanCardViewComponent({
               ) : null}
               {activeWorkElapsed ? (
                 <span className="shrink-0 text-ui-sm leading-snug text-muted-foreground/70">
-                  Worked for {activeWorkElapsed}
+                  {t("common:workedFor")} {activeWorkElapsed}
                 </span>
               ) : card.timestamp ? (
                 <span className="shrink-0 text-ui-sm leading-snug text-muted-foreground/70">
-                  {formatRelativeTime(card.timestamp)}
+                  {formatRelativeTime(card.timestamp, undefined, formatLocale)}
                 </span>
               ) : null}
             </>

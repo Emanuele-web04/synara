@@ -8,6 +8,7 @@ import {
   PROVIDER_ACCENT_COLOR_SWATCHES,
 } from "~/lib/providerInstancePresentation";
 import { cn } from "~/lib/utils";
+import { useTranslation } from "~/i18n";
 
 export function ProviderAccentColorControl(props: {
   value: string | undefined;
@@ -16,6 +17,8 @@ export function ProviderAccentColorControl(props: {
   /** Names the account in each swatch's accessible label. */
   accountLabel: string;
 }) {
+  const { t } = useTranslation();
+
   const selected = normalizeProviderAccentColor(props.value);
   return (
     <div className="flex flex-wrap items-center gap-1.5">
@@ -25,7 +28,10 @@ export function ProviderAccentColorControl(props: {
           <button
             key={color}
             type="button"
-            aria-label={`Accent color ${color} for ${props.accountLabel}`}
+            aria-label={t("settings:accentColorFor", {
+              value0: color,
+              value1: props.accountLabel,
+            })}
             aria-pressed={isSelected}
             className={cn(
               "size-5 cursor-pointer rounded-full outline-none ring-offset-2 ring-offset-background transition-shadow focus-visible:ring-2 focus-visible:ring-ring/60",
@@ -43,7 +49,7 @@ export function ProviderAccentColorControl(props: {
           className="ms-1 cursor-pointer text-ui-sm text-muted-foreground hover:text-foreground"
           onClick={() => props.onChange(undefined)}
         >
-          Clear
+          {t("chat:clear")}
         </button>
       ) : null}
     </div>

@@ -463,6 +463,18 @@
     "./wsRequestClass": {
       "types": "./src/wsRequestClass.ts",
       "import": "./src/wsRequestClass.ts"
+    },
+    "./uiLocale": {
+      "types": "./src/uiLocale.ts",
+      "import": "./src/uiLocale.ts"
+    },
+    "./uiLocalizationResources": {
+      "types": "./src/uiLocalizationResources.ts",
+      "import": "./src/uiLocalizationResources.ts"
+    },
+    "./nativeLocalizationResources": {
+      "types": "./src/nativeLocalizationResources.ts",
+      "import": "./src/nativeLocalizationResources.ts"
     }
   },
   "scripts": {

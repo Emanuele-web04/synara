@@ -27,6 +27,7 @@ import {
 } from "../LocalImagePreview";
 import type { ExpandedImagePreview } from "./ExpandedImagePreview";
 import { toastManager } from "../ui/toast";
+import { useTranslation } from "~/i18n";
 
 export interface GeneratedMarkdownImageProps {
   src: string;
@@ -67,6 +68,8 @@ function GeneratedMarkdownImageContent(
     onRetry: () => void;
   },
 ) {
+  const { t } = useTranslation();
+
   const { src, alt, cwd, onImageExpand } = props;
   const queryClient = useQueryClient();
   const mounted = useRef(true);
@@ -155,7 +158,7 @@ function GeneratedMarkdownImageContent(
   const downloadImage = useLocalImageDownloadClick({
     downloadUrl,
     downloadName,
-    errorTitle: "Could not download generated image",
+    errorTitle: t("chat:generatedImage_couldNotDownload"),
     resolveDownloadUrl: () => resolveGrantedUrl(true),
   });
 
@@ -179,8 +182,8 @@ function GeneratedMarkdownImageContent(
         if (mounted.current) {
           toastManager.add({
             type: "error",
-            title: "Could not open generated image",
-            description: error instanceof Error ? error.message : "The file may be unavailable.",
+            title: t("chat:couldNotOpenGeneratedImage"),
+            description: error instanceof Error ? error.message : t("chat:theFileMayBeUnavailable"),
           });
         }
       });
@@ -215,7 +218,7 @@ function GeneratedMarkdownImageContent(
         type="button"
         className="chat-generated-image__frame"
         onClick={expandImage}
-        aria-label="Expand generated image"
+        aria-label={t("chat:generatedImage_expandImage")}
       >
         {status === "loading" || resolvingGrant ? (
           <span className="chat-generated-image__skeleton" aria-hidden="true">
@@ -226,7 +229,7 @@ function GeneratedMarkdownImageContent(
         <span className="chat-generated-image__overlay" aria-hidden="true">
           <span className="chat-generated-image__overlay-pill chat-generated-image__overlay-pill--expand">
             <Maximize2 className="size-3.5" />
-            <span>Expand</span>
+            <span>{t("chat:generatedImage_expand")}</span>
           </span>
         </span>
       </button>
@@ -236,11 +239,11 @@ function GeneratedMarkdownImageContent(
         onClick={downloadImage}
         onMouseDown={stopPropagation}
         className="chat-generated-image__overlay-pill chat-generated-image__overlay-pill--download"
-        aria-label="Download generated image"
-        title="Download"
+        aria-label={t("chat:generatedImage_downloadImage")}
+        title={t("common:image_download")}
       >
         <DownloadIcon className="size-3.5" aria-hidden="true" />
-        <span>Download</span>
+        <span>{t("common:image_download")}</span>
       </a>
     </span>
   );

@@ -1,6 +1,7 @@
 // FILE: AppRailUsage.logic.ts
 // Purpose: Pure selection rules for the provider usage rings at the bottom of the app rail.
 
+import { t } from "~/i18n";
 import type { ProviderInstanceId, ProviderKind } from "@synara/contracts";
 import type { ResolvedProviderInstance } from "@synara/shared/providerInstances";
 import { PROVIDER_USAGE_PROVIDERS, providerUsageDisplayName } from "@synara/shared/providerUsage";
@@ -22,6 +23,7 @@ export interface RailUsageAccount {
 export function getRailUsageAccounts(
   instances: ReadonlyArray<ResolvedProviderInstance>,
   disabledProviders: ReadonlyArray<ProviderKind> = [],
+  translate: typeof t = t,
 ): ReadonlyArray<RailUsageAccount> {
   return PROVIDER_USAGE_PROVIDERS.flatMap((provider) => {
     const accounts = instances.filter(
@@ -36,7 +38,7 @@ export function getRailUsageAccounts(
         !instance.isDefault || accounts.length > 1 || Boolean(instance.raw.displayName?.trim());
       const accountName =
         instance.isDefault && !instance.raw.displayName?.trim()
-          ? "Default account"
+          ? translate("settings:defaultProviderAccount")
           : instance.displayName;
       return {
         instance,

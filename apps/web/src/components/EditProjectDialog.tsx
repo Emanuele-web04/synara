@@ -20,6 +20,7 @@ import {
 } from "./ui/dialog";
 import { InputGroup, InputGroupAddon, InputGroupInput } from "./ui/input-group";
 import { Popover, PopoverPopup, PopoverTrigger } from "./ui/popover";
+import { useTranslation } from "~/i18n";
 
 export interface EditProjectValue {
   /** Empty clears the local name, so the project shows its folder name again. */
@@ -45,11 +46,13 @@ export function EditProjectDialog({
   onOpenChange,
   onSave,
 }: EditProjectDialogProps) {
+  const { t } = useTranslation();
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogPopup className="max-w-md">
         <DialogHeader>
-          <DialogTitle>Edit project</DialogTitle>
+          <DialogTitle>{t("workspace:editProject")}</DialogTitle>
         </DialogHeader>
         {/* Field state lives below DialogPopup, which unmounts its children after the close
             transition, so each open seeds a fresh draft from initialValue. */}
@@ -72,6 +75,8 @@ function EditProjectForm({
   onOpenChange,
   onSave,
 }: Omit<EditProjectDialogProps, "open">) {
+  const { t } = useTranslation();
+
   const [name, setName] = useState(initialValue.name);
   const [appearance, setAppearance] = useState(initialValue.appearance);
   const [pickerOpen, setPickerOpen] = useState(false);
@@ -119,7 +124,7 @@ function EditProjectForm({
                   render={
                     <button
                       type="button"
-                      aria-label="Choose icon"
+                      aria-label={t("workspace:scripts_chooseIcon")}
                       className="flex size-full cursor-pointer items-center justify-center rounded-s-[inherit] text-muted-foreground outline-hidden transition-colors hover:bg-foreground/5 focus-visible:bg-foreground/6 data-popup-open:bg-foreground/6"
                     />
                   }
@@ -131,7 +136,7 @@ function EditProjectForm({
               </InputGroupAddon>
               <InputGroupInput
                 id={nameInputId}
-                aria-label="Project name"
+                aria-label={t("workspace:projectName")}
                 value={name}
                 placeholder={folderName}
                 onChange={(event) => setName(event.target.value)}
@@ -158,10 +163,10 @@ function EditProjectForm({
       </DialogPanel>
       <DialogFooter>
         <Button variant="outline" size="sm" onClick={() => onOpenChange(false)}>
-          Cancel
+          {t("common:form_cancel")}
         </Button>
         <Button size="sm" onClick={save}>
-          Save
+          {t("computer:form_save")}
         </Button>
       </DialogFooter>
     </>

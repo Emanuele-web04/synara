@@ -1,3 +1,4 @@
+import { useTranslation } from "~/i18n";
 // FILE: CodeEditorPane.tsx
 // Purpose: The editable file surface: lazy engine load with a plain-text
 //          fallback, the configured save chord, and the shared props contract
@@ -17,11 +18,12 @@ import { Button } from "../ui/button";
 import { toastManager } from "../ui/toast";
 import type { CodeEditHistoryControls, CodeEditHistoryState } from "./codeEditHistory";
 import { reloadEditorAfterSave } from "./editorRecovery";
+import { loadLocalizedEditorSurface } from "./editorLocalization";
 import { useCodeEditorSaveKeyDownHandler } from "./editorSaveShortcut";
 
 export { useCodeEditorSaveKeyDownHandler };
 
-const EditorSurface = lazy(() => import("./MonacoEditorSurface"));
+const EditorSurface = lazy(loadLocalizedEditorSurface);
 export type EditorSurfaceComponent = typeof EditorSurface;
 // The alternative engine stays lazy when native editing is enabled.
 const PierreFilePane = lazy(() =>
@@ -72,6 +74,7 @@ export function EditorSurfaceBoundary(props: {
   fallback: (retry: () => void) => ReactNode;
   loading: ReactNode;
 }) {
+  const { t } = useTranslation();
   const client = useQueryClient();
   const retrying = useRef(false);
   const retry = () => {
@@ -81,8 +84,8 @@ export function EditorSurfaceBoundary(props: {
       .catch((error: unknown) => {
         toastManager.add({
           type: "error",
-          title: "Could not reload the editor",
-          description: error instanceof Error ? error.message : "Your draft is preserved.",
+          title: t("workspace:editorReloadFailed"),
+          description: error instanceof Error ? error.message : t("workspace:editorDraftPreserved"),
         });
       })
       .finally(() => {
@@ -97,21 +100,25 @@ export function EditorSurfaceBoundary(props: {
 }
 
 export function EditorSurfaceRetry(props: { message: string; onRetry: () => void }) {
+  const { t } = useTranslation();
+
   return (
     <PanelStateMessage density="compact" fill="flex" className="flex-col gap-2">
       <p>{props.message}</p>
       <Button type="button" size="sm" variant="outline" onClick={props.onRetry}>
-        Retry
+        {t("common:common_retry")}
       </Button>
     </PanelStateMessage>
   );
 }
 
 export function CodeEditorPane(props: CodeEditorPaneProps) {
+  const { t } = useTranslation();
+
   const saveKeyDownHandler = useCodeEditorSaveKeyDownHandler(props.onSave);
   const loading = (
     <PanelStateMessage density="compact" fill="flex">
-      <p>Loading editor…</p>
+      <p>{t("workspace:loadingEditor")}</p>
     </PanelStateMessage>
   );
   if (!NATIVE_EDITOR_ON) {
@@ -130,12 +137,9 @@ export function CodeEditorPane(props: CodeEditorPaneProps) {
         loading={loading}
         fallback={(retry) => (
           <>
-            <EditorSurfaceRetry
-              message="The editor could not load. Your draft is preserved; plain-text editing is available."
-              onRetry={retry}
-            />
+            <EditorSurfaceRetry message={t("workspace:editorLoadFailed")} onRetry={retry} />
             <textarea
-              aria-label={`Edit ${props.fileName}`}
+              aria-label={t("workspace:editFileNamed", { fileName: props.fileName })}
               className="min-h-0 flex-1 resize-none bg-transparent p-3 font-chat-code text-chat-code"
               value={props.value}
               onChange={(event) => props.onChange(event.currentTarget.value)}

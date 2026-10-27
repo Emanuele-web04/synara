@@ -1,3 +1,4 @@
+import { useTranslation } from "~/i18n";
 import type { ProjectReadFileResult } from "@synara/contracts";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useSyncExternalStore } from "react";
@@ -29,6 +30,7 @@ export function useWorkspaceFileEditorBuffer(
     file: ProjectReadFileResult | undefined;
   },
 ) {
+  const { t } = useTranslation();
   const { cwd, enabled, file, filePath } = input;
   const client = useQueryClient();
   const relativePath = file?.relativePath ?? filePath;
@@ -47,7 +49,8 @@ export function useWorkspaceFileEditorBuffer(
   useEffect(() => {
     if (file) session?.load(file);
   }, [file, session]);
-  const readOnlyReason = file === undefined ? null : resolveWorkspaceFileEditorReadOnlyReason(file);
+  const readOnlyReason =
+    file === undefined ? null : resolveWorkspaceFileEditorReadOnlyReason(file, t);
   const flush = useCallback(() => session?.flush() ?? Promise.resolve(true), [session]);
   const reloadFromDisk = useCallback(() => {
     void session?.reload();
@@ -75,6 +78,8 @@ export function useWorkspaceFileEditorBuffer(
 }
 
 export function useWorkspaceFileEditor(input: UseWorkspaceFileEditorInput) {
+  const { t } = useTranslation();
+
   const client = useQueryClient();
   const fileQuery = useQuery(
     projectReadFileQueryOptions({
@@ -106,7 +111,7 @@ export function useWorkspaceFileEditor(input: UseWorkspaceFileEditorInput) {
       : fileQuery.error instanceof Error
         ? fileQuery.error.message
         : fileQuery.error
-          ? "Could not read file."
+          ? t("workspace:filePreview_couldNotReadFile")
           : null,
   };
 }

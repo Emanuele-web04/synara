@@ -9,10 +9,12 @@ import type { AutomationMode, AutomationWorktreeMode } from "@synara/contracts";
 import { CentralIcon } from "~/lib/central-icons";
 import { useCommitDraft, useCommitDraftBlurHandlers } from "~/lib/automationInlineDraft";
 import { cn } from "~/lib/utils";
+import { t, useTranslation } from "~/i18n";
 
 export type SelectOption = {
   readonly value: string;
   readonly label: string;
+  readonly labelKey?: string;
   readonly disabled?: boolean | undefined;
   readonly title?: string | undefined;
 };
@@ -23,14 +25,21 @@ export const MODE_LABELS: Record<AutomationMode, string> = {
   dedicated: "Dedicated thread",
 };
 
+export const MODE_LABEL_KEYS: Record<AutomationMode, string> = {
+  standalone: "automation:mode_standalone",
+  heartbeat: "automation:mode_heartbeat",
+  dedicated: "automation:dedicatedThread",
+};
+
 export const WORKTREE_OPTIONS: readonly SelectOption[] = [
-  { value: "auto", label: "Auto" },
-  { value: "local", label: "Local" },
-  { value: "worktree", label: "Worktree" },
+  { value: "auto", label: "Auto", labelKey: "common:worktreeMode_auto" },
+  { value: "local", label: "Local", labelKey: "computer:worktreeMode_local" },
+  { value: "worktree", label: "Worktree", labelKey: "common:worktreeMode_worktree" },
 ];
 
-export function worktreeModeLabel(mode: AutomationWorktreeMode): string {
-  return WORKTREE_OPTIONS.find((option) => option.value === mode)?.label ?? mode;
+export function worktreeModeLabel(mode: AutomationWorktreeMode, translate: typeof t = t): string {
+  const labelKey = WORKTREE_OPTIONS.find((option) => option.value === mode)?.labelKey;
+  return labelKey ? translate(labelKey) : mode;
 }
 
 export function DetailGroup({
@@ -158,6 +167,8 @@ export function InlineToggle({
   readonly disabled?: boolean | undefined;
   readonly title?: string | undefined;
 }) {
+  const { t } = useTranslation();
+
   return (
     <button
       type="button"
@@ -166,7 +177,7 @@ export function InlineToggle({
       onClick={() => onChange(!value)}
       className={cn(INLINE_CONTROL_CLASS, "min-w-[3rem]")}
     >
-      {value ? "On" : "Off"}
+      {value ? t("automation:modelEffort_thinkingOn") : t("automation:traitsPicker_off")}
     </button>
   );
 }

@@ -14,6 +14,7 @@ import { ExternalLinkIcon } from "~/lib/icons";
 import { serverConfigQueryOptions } from "~/lib/serverReactQuery";
 import { cn } from "~/lib/utils";
 import { TOUR_CARDS, TOUR_SHORTCUT_COMMANDS } from "../tourContent";
+import { useTranslation } from "~/i18n";
 
 const EMPTY_KEYBINDINGS: ResolvedKeybindingsConfig = [];
 
@@ -42,13 +43,19 @@ export function TourShortcutList(props: { className?: string }) {
 }
 
 export function FeatureTourStep() {
+  const { t } = useTranslation();
+
   const [selectedId, setSelectedId] = useState<string>(TOUR_CARDS[0]?.id ?? "");
   const selectedCard = TOUR_CARDS.find((card) => card.id === selectedId) ?? TOUR_CARDS[0];
   if (!selectedCard) return null;
 
   return (
     <div className="grid min-h-0 flex-1 grid-cols-[220px_minmax(0,1fr)] gap-8">
-      <div className="flex flex-col gap-0.5" role="tablist" aria-label="Synara capabilities">
+      <div
+        className="flex flex-col gap-0.5"
+        role="tablist"
+        aria-label={t("onboarding:synaraCapabilities")}
+      >
         {TOUR_CARDS.map((card) => {
           const Icon = card.icon;
           const selected = card.id === selectedCard.id;
@@ -115,7 +122,7 @@ export function FeatureTourStep() {
           rel="noreferrer"
           className="mt-2 inline-flex items-center gap-1.5 self-start text-ui text-muted-foreground transition-colors hover:text-foreground motion-reduce:transition-none"
         >
-          Read the guide
+          {t("onboarding:readTheGuide")}
           <ExternalLinkIcon className="size-3" aria-hidden />
         </a>
       </div>

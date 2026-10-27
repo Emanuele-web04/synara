@@ -1,3 +1,4 @@
+import { useTranslation } from "~/i18n";
 // FILE: EditorDebugPanel.tsx
 // Purpose: The debugger's launch dialog and the contextual debug section under
 //          the editor (controls, call stack, variables, watches, console).
@@ -45,11 +46,11 @@ import { EditorDebugStore, useEditorDebug } from "./editorDebugStore";
 
 type Variable = NonNullable<EditorDebugActionResult["variables"]>[number];
 type DebugView = "stack" | "variables" | "watch" | "console";
-const DEBUG_VIEWS: ReadonlyArray<{ value: DebugView; label: string }> = [
-  { value: "stack", label: "Call stack" },
-  { value: "variables", label: "Variables" },
-  { value: "watch", label: "Watch" },
-  { value: "console", label: "Console" },
+const DEBUG_VIEWS: ReadonlyArray<{ value: DebugView; labelKey: string }> = [
+  { value: "stack", labelKey: "workspace:debugCallStack" },
+  { value: "variables", labelKey: "workspace:debugVariables" },
+  { value: "watch", labelKey: "workspace:debugWatch" },
+  { value: "console", labelKey: "workspace:debugConsole" },
 ];
 const CONSOLE_CLASS_NAME =
   "whitespace-pre-wrap break-words px-1 font-chat-code text-chat-code leading-relaxed text-foreground/88";
@@ -66,6 +67,8 @@ function VariableRow({
   depth?: number;
   trailing?: React.ReactNode;
 }) {
+  const { t } = useTranslation();
+
   const [children, setChildren] = useState<readonly Variable[] | null>(null);
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -119,7 +122,7 @@ function VariableRow({
               className="text-ui-sm text-muted-foreground"
               style={fileRowIndentStyle(depth + 1)}
             >
-              Loading…
+              {t("git:loading")}
             </li>
           ) : (
             children?.map((child, index) => (
@@ -150,6 +153,8 @@ export function EditorDebugLaunchDialog({
   program: string;
   onClose: () => void;
 }) {
+  const { t } = useTranslation();
+
   const state = useEditorDebug(store);
   const formId = useId();
   const [mode, setMode] = useState(request);
@@ -178,13 +183,13 @@ export function EditorDebugLaunchDialog({
       <DialogPopup className="max-w-md">
         <DialogHeader>
           <DialogTitle>
-            {mode === "launch" ? "Debug a Node.js program" : "Attach to Node.js"}
+            {mode === "launch" ? t("workspace:debugLaunchTitle") : t("workspace:debugAttachTitle")}
           </DialogTitle>
           <DialogDescription>
             {mode === "launch"
-              ? "Runs the selected file on the server machine after saving the workspace. Only start code you trust."
-              : "Connects to a Node inspector on the server's loopback interface. Stopping leaves the process running."}{" "}
-            The first use downloads Microsoft's checksum-verified JavaScript debugger.
+              ? t("workspace:debugLaunchDescription")
+              : t("workspace:debugAttachDescription")}{" "}
+            {t("workspace:debuggerFirstDownload")}
           </DialogDescription>
         </DialogHeader>
         <DialogPanel>
@@ -198,7 +203,7 @@ export function EditorDebugLaunchDialog({
                 mode === "attach" &&
                 (!Number.isInteger(inspectorPort) || inspectorPort < 1 || inspectorPort > 65_535)
               ) {
-                store.report(new Error("Enter an inspector port from 1 to 65535."));
+                store.report(new Error(t("workspace:debugInvalidPort")));
                 return;
               }
               void store
@@ -216,17 +221,17 @@ export function EditorDebugLaunchDialog({
             <SegmentedPicker
               value={mode}
               options={[
-                { value: "launch", label: "Launch" },
-                { value: "attach", label: "Attach" },
+                { value: "launch", label: t("workspace:debugLaunch") },
+                { value: "attach", label: t("workspace:debugAttach") },
               ]}
               onValueChange={setMode}
-              ariaLabel="Debug connection"
+              ariaLabel={t("workspace:debugConnection")}
               disabled={starting}
             />
             {mode === "launch" ? (
               <>
                 <div className="space-y-1.5">
-                  <Label htmlFor={`${formId}-program`}>Workspace entry point</Label>
+                  <Label htmlFor={`${formId}-program`}>{t("workspace:debugEntryPoint")}</Label>
                   <Input
                     id={`${formId}-program`}
                     value={program}
@@ -236,7 +241,7 @@ export function EditorDebugLaunchDialog({
                   />
                 </div>
                 <div className="space-y-1.5">
-                  <Label htmlFor={`${formId}-args`}>Arguments, one per line</Label>
+                  <Label htmlFor={`${formId}-args`}>{t("workspace:debugArguments")}</Label>
                   <Textarea
                     id={`${formId}-args`}
                     value={args}
@@ -251,12 +256,12 @@ export function EditorDebugLaunchDialog({
                     disabled={starting}
                     onCheckedChange={(checked) => setStopOnEntry(checked === true)}
                   />
-                  Pause at the first line
+                  {t("workspace:debugPauseFirstLine")}
                 </Label>
               </>
             ) : (
               <div className="space-y-1.5">
-                <Label htmlFor={`${formId}-port`}>Inspector port</Label>
+                <Label htmlFor={`${formId}-port`}>{t("workspace:debugInspectorPort")}</Label>
                 <Input
                   id={`${formId}-port`}
                   type="number"
@@ -278,7 +283,7 @@ export function EditorDebugLaunchDialog({
         </DialogPanel>
         <DialogFooter>
           <Button type="button" variant="outline" size="sm" onClick={close}>
-            Cancel
+            {t("common:form_cancel")}
           </Button>
           <Button
             form={formId}
@@ -286,7 +291,11 @@ export function EditorDebugLaunchDialog({
             size="sm"
             disabled={starting || (mode === "launch" && !program.trim())}
           >
-            {starting ? "Starting debugger…" : mode === "launch" ? "Save and debug" : "Attach"}
+            {starting
+              ? t("workspace:debugStarting")
+              : mode === "launch"
+                ? t("workspace:saveAndDebug")
+                : t("workspace:debugAttach")}
           </Button>
         </DialogFooter>
       </DialogPopup>
@@ -327,6 +336,8 @@ export function EditorDebugPanel({
   shortcut: (command: string) => string | undefined;
   onReveal: (frame: EditorDebugFrame) => void;
 }) {
+  const { t } = useTranslation();
+
   const state = useEditorDebug(store);
   const [view, setView] = useState<DebugView>("stack");
   const [expression, setExpression] = useState("");
@@ -339,32 +350,36 @@ export function EditorDebugPanel({
     if (ended) setView("console");
   }, [ended]);
   if (state.phase === "idle" || state.phase === "starting") return null;
-  const title = ended ? "Debug session ended" : paused ? "Paused" : "Debugging";
+  const title = ended
+    ? t("workspace:debugEnded")
+    : paused
+      ? t("automation:detail_paused")
+      : t("workspace:debugging");
   const withShortcut = (label: string, command: string) => {
     const chord = shortcut(command);
     return chord ? `${label} (${chord})` : label;
   };
   const tools = [
     {
-      label: paused ? withShortcut("Continue", "debugLaunch") : "Pause",
+      label: paused ? withShortcut(t("git:continue"), "debugLaunch") : t("workspace:detail_pause"),
       action: paused ? ("continue" as const) : ("pause" as const),
       Icon: paused ? PlayIcon : PauseIcon,
       disabled: ended,
     },
     {
-      label: withShortcut("Step over", "debugNext"),
+      label: withShortcut(t("workspace:debugStepOver"), "debugNext"),
       action: "next" as const,
       Icon: ArrowRightIcon,
       disabled: !paused,
     },
     {
-      label: withShortcut("Step into", "debugStepIn"),
+      label: withShortcut(t("workspace:debugStepInto"), "debugStepIn"),
       action: "stepIn" as const,
       Icon: ArrowDownIcon,
       disabled: !paused,
     },
     {
-      label: withShortcut("Step out", "debugStepOut"),
+      label: withShortcut(t("workspace:debugStepOut"), "debugStepOut"),
       action: "stepOut" as const,
       Icon: ArrowUpIcon,
       disabled: !paused,
@@ -374,7 +389,7 @@ export function EditorDebugPanel({
   const frameKey = `${state.connectionId}:${state.pauseVersion}:${state.frameId}`;
   return (
     <section
-      aria-label="Debug session"
+      aria-label={t("workspace:debugSession")}
       className="flex max-h-80 min-h-0 shrink-0 flex-col border-t border-border/65"
     >
       <div className="flex h-10 shrink-0 items-center gap-1 px-2">
@@ -408,8 +423,8 @@ export function EditorDebugPanel({
             <ChatHeaderIconButton
               type="button"
               tone="plain"
-              label={withShortcut("Stop debugging", "debugStop")}
-              title={withShortcut("Stop debugging", "debugStop")}
+              label={withShortcut(t("workspace:debugStop"), "debugStop")}
+              title={withShortcut(t("workspace:debugStop"), "debugStop")}
               disabled={state.busy}
               onClick={() => void store.stop()}
             >
@@ -419,8 +434,8 @@ export function EditorDebugPanel({
             <ChatHeaderIconButton
               type="button"
               tone="plain"
-              label="Close debug results"
-              title="Close debug results"
+              label={t("workspace:closeDebugResults")}
+              title={t("workspace:closeDebugResults")}
               onClick={() => store.dismiss()}
             >
               <XIcon aria-hidden="true" className="size-3.5" />
@@ -435,8 +450,8 @@ export function EditorDebugPanel({
             <ChatHeaderIconButton
               type="button"
               tone="plain"
-              label="Dismiss debugger error"
-              title="Dismiss debugger error"
+              label={t("workspace:dismissDebuggerError")}
+              title={t("workspace:dismissDebuggerError")}
               onClick={store.clearError}
             >
               <XIcon aria-hidden="true" className="size-3.5" />
@@ -453,8 +468,8 @@ export function EditorDebugPanel({
           <SegmentedPicker
             value={view}
             onValueChange={setView}
-            ariaLabel="Debug details"
-            options={DEBUG_VIEWS}
+            ariaLabel={t("workspace:debugDetails")}
+            options={DEBUG_VIEWS.map((item) => ({ value: item.value, label: t(item.labelKey) }))}
           />
         </div>
         <div
@@ -464,13 +479,13 @@ export function EditorDebugPanel({
           {view === "stack" ? (
             <>
               <TargetChips
-                label="Debug targets"
+                label={t("workspace:debugTargets")}
                 items={targets}
                 selected={state.connectionId}
                 onSelect={(id) => void store.selectTarget(id).catch(store.report)}
               />
               <TargetChips
-                label="Threads"
+                label={t("workspace:debugThreads")}
                 items={state.threads}
                 selected={state.threadId}
                 onSelect={(id) => void store.selectThread(id).catch(store.report)}
@@ -499,9 +514,7 @@ export function EditorDebugPanel({
               ) : (
                 <PanelStateMessage density="compact" fill="flex">
                   <p>
-                    {ended
-                      ? "The session has ended."
-                      : "Pause execution to inspect the call stack."}
+                    {ended ? t("workspace:debugSessionEnded") : t("workspace:debugPauseForStack")}
                   </p>
                 </PanelStateMessage>
               )}
@@ -516,7 +529,7 @@ export function EditorDebugPanel({
                     store={store}
                     variable={{
                       name: scope.name,
-                      value: scope.expensive ? "Expand to evaluate" : "",
+                      value: scope.expensive ? t("workspace:debugExpandEvaluate") : "",
                       variablesReference: scope.variablesReference,
                     }}
                   />
@@ -524,7 +537,7 @@ export function EditorDebugPanel({
               </ul>
             ) : (
               <PanelStateMessage density="compact" fill="flex">
-                <p>Pause execution to inspect variables.</p>
+                <p>{t("workspace:debugPauseForVariables")}</p>
               </PanelStateMessage>
             )
           ) : null}
@@ -544,8 +557,8 @@ export function EditorDebugPanel({
                       <ChatHeaderIconButton
                         type="button"
                         tone="plain"
-                        label={`Remove watch ${watch.expression}`}
-                        title="Remove watch"
+                        label={t("workspace:removeWatchNamed", { expression: watch.expression })}
+                        title={t("workspace:removeWatch")}
                         onClick={() => store.removeWatch(watch.expression)}
                       >
                         <XIcon aria-hidden="true" className="size-3.5" />
@@ -556,18 +569,18 @@ export function EditorDebugPanel({
               </ul>
             ) : (
               <PanelStateMessage density="compact" fill="flex">
-                <p>Watch expressions run in the selected frame each time execution pauses.</p>
+                <p>{t("workspace:watchExplanation")}</p>
               </PanelStateMessage>
             )
           ) : null}
           {view === "console" ? (
             state.output.length ? (
-              <pre className={CONSOLE_CLASS_NAME} aria-label="Debug console output">
+              <pre className={CONSOLE_CLASS_NAME} aria-label={t("workspace:debugConsoleOutput")}>
                 {state.output.join("")}
               </pre>
             ) : (
               <PanelStateMessage density="compact" fill="flex">
-                <p>Program output appears here.</p>
+                <p>{t("workspace:programOutputPlaceholder")}</p>
               </PanelStateMessage>
             )
           ) : null}
@@ -588,8 +601,16 @@ export function EditorDebugPanel({
             }}
           >
             <Input
-              aria-label={view === "watch" ? "Watch expression" : "Debug console expression"}
-              placeholder={view === "watch" ? "Watch expression" : "Evaluate an expression"}
+              aria-label={
+                view === "watch"
+                  ? t("workspace:watchExpression")
+                  : t("workspace:debugConsoleExpression")
+              }
+              placeholder={
+                view === "watch"
+                  ? t("workspace:watchExpression")
+                  : t("workspace:evaluateExpression")
+              }
               value={expression}
               onChange={(event) => setExpression(event.currentTarget.value)}
               disabled={evaluating}
@@ -600,7 +621,7 @@ export function EditorDebugPanel({
               variant="outline"
               disabled={evaluating || !expression.trim()}
             >
-              {view === "watch" ? "Add" : "Evaluate"}
+              {view === "watch" ? t("workspace:models_add") : t("workspace:evaluate")}
             </Button>
           </form>
         ) : null}

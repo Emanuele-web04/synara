@@ -20,6 +20,7 @@ import { Tooltip, TooltipPopup, TooltipTrigger } from "~/components/ui/tooltip";
 import { useIsMobile } from "~/hooks/useMediaQuery";
 import { getLocalStorageItem, setLocalStorageItem } from "~/hooks/useLocalStorage";
 import { Schema } from "effect";
+import { useTranslation } from "~/i18n";
 
 const SIDEBAR_WIDTH = "16rem";
 const SIDEBAR_WIDTH_MOBILE = "calc(100vw - var(--spacing(3)))";
@@ -253,6 +254,8 @@ function Sidebar({
   /** Desktop rail belongs to the outer shell, outside the clipped content surface. */
   rail?: React.ReactNode;
 }) {
+  const { t } = useTranslation();
+
   const side = sideProp ?? "left";
   const variant = variantProp ?? "sidebar";
   const collapsible = collapsibleProp ?? "offcanvas";
@@ -307,8 +310,8 @@ function Sidebar({
             }
           >
             <SheetHeader className="sr-only">
-              <SheetTitle>Sidebar</SheetTitle>
-              <SheetDescription>Displays the mobile sidebar.</SheetDescription>
+              <SheetTitle>{t("workspace:sidebar")}</SheetTitle>
+              <SheetDescription>{t("workspace:displaysTheMobileSidebar")}</SheetDescription>
             </SheetHeader>
             <div className={cn("flex h-full w-full flex-col", innerClassName)}>{children}</div>
           </SheetPopup>
@@ -386,6 +389,8 @@ function Sidebar({
 }
 
 function SidebarTrigger({ className, onClick, ...props }: React.ComponentProps<typeof Button>) {
+  const { t } = useTranslation();
+
   const { toggleSidebar, isMobile, open, openMobile } = useSidebar();
   // The glyph shows the sidebar's current state: a full left column while it is open, a
   // slim handle once it is collapsed.
@@ -405,7 +410,7 @@ function SidebarTrigger({ className, onClick, ...props }: React.ComponentProps<t
       {...props}
     >
       <SidebarStateIcon aria-hidden className="size-4" />
-      <span className="sr-only">Toggle Sidebar</span>
+      <span className="sr-only">{t("workspace:toggleSidebar")}</span>
     </Button>
   );
 }
@@ -446,6 +451,8 @@ function SidebarRail({
   /** `content-seam` sits on the chat column edge above the card; `sidebar-shell` stays on the sidebar container. */
   placement?: "sidebar-shell" | "content-seam";
 }) {
+  const { t } = useTranslation();
+
   const placement = placementProp ?? "sidebar-shell";
   const { open, toggleSidebar } = useSidebar();
   const sidebarInstance = React.useContext(SidebarInstanceContext);
@@ -469,8 +476,8 @@ function SidebarRail({
   } | null>(null);
   const resolvedResizable = sidebarInstance?.resizable ?? null;
   const canResize = resolvedResizable !== null && open;
-  const railLabel = canResize ? "Resize Sidebar" : "Toggle Sidebar";
-  const railTitle = canResize ? "Drag to resize sidebar" : "Toggle Sidebar";
+  const railLabel = canResize ? t("workspace:resizeSidebar") : t("workspace:toggleSidebar");
+  const railTitle = canResize ? t("workspace:dragToResizeSidebar") : t("workspace:toggleSidebar");
 
   const stopResize = React.useCallback(
     (pointerId: number) => {

@@ -34,6 +34,7 @@ import { cn } from "~/lib/utils";
 import { Button } from "../ui/button";
 import { Toggle } from "../ui/toggle";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
+import { useTranslation } from "~/i18n";
 
 /**
  * Fixed height of the top chrome bar shared by the chat header, the diff panel
@@ -680,6 +681,8 @@ export function SurfacePanelToggle({
   ariaLabel: string;
   tooltip: ReactNode;
 }) {
+  const { t } = useTranslation();
+
   return (
     <Tooltip>
       <TooltipTrigger
@@ -688,7 +691,9 @@ export function SurfacePanelToggle({
             className={SURFACE_PANEL_TOGGLE_CLASS_NAME}
             pressed={state.open}
             onPressedChange={state.onOpenChange}
-            aria-label={state.attention ? `${ariaLabel}, needs attention` : ariaLabel}
+            aria-label={
+              state.attention ? t("chat:needsAttention", { value0: ariaLabel }) : ariaLabel
+            }
             variant="default"
             size="xs"
           >

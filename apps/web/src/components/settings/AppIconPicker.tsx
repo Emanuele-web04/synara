@@ -9,6 +9,7 @@ import { desktopFlavorFromProtocol } from "@synara/shared/betaFeatures";
 import type { SynaraDesktopFlavor } from "@synara/shared/desktopIdentity";
 import { Spinner } from "~/components/ui/spinner";
 import { cn, isMacPlatform } from "~/lib/utils";
+import { useTranslation } from "~/i18n";
 
 interface AppIconOption {
   readonly label: string;
@@ -16,10 +17,10 @@ interface AppIconOption {
 }
 
 const APP_ICON_OPTIONS = {
-  default: { label: "Default icon", src: "/app-icons/default.png" },
-  icon: { label: "Icon", src: "/app-icons/icon-group-600-macos.png" },
-  dark: { label: "Dark icon", src: "/app-icons/dark.png" },
-  beta: { label: "Beta icon", src: "/app-icons/beta.png" },
+  default: { label: "settings:defaultIcon", src: "/app-icons/default.png" },
+  icon: { label: "workspace:icon", src: "/app-icons/icon-group-600-macos.png" },
+  dark: { label: "settings:darkIcon", src: "/app-icons/dark.png" },
+  beta: { label: "settings:betaIcon", src: "/app-icons/beta.png" },
 } as const satisfies Record<DesktopAppIcon, AppIconOption>;
 
 const MAC_DESKTOP_APP_ICONS = ["default", "icon", "dark"] as const;
@@ -46,11 +47,18 @@ export function AppIconPicker({
   readonly value: DesktopAppIcon;
   readonly onValueChange: (value: DesktopAppIcon) => void | Promise<void>;
 }) {
+  const { t } = useTranslation();
+
   const [pendingIcon, setPendingIcon] = useState<DesktopAppIcon | null>(null);
   const busy = pendingIcon !== null;
 
   return (
-    <div className="flex items-center gap-1" role="group" aria-label="App icon" aria-busy={busy}>
+    <div
+      className="flex items-center gap-1"
+      role="group"
+      aria-label={t("settings:appIcon")}
+      aria-busy={busy}
+    >
       {desktopAppIconsForPlatform(
         platform,
         desktopFlavorFromProtocol(
@@ -65,8 +73,8 @@ export function AppIconPicker({
           <button
             key={icon}
             type="button"
-            title={option.label}
-            aria-label={option.label}
+            title={t(option.label)}
+            aria-label={t(option.label)}
             aria-pressed={selected}
             disabled={busy}
             className={cn(
@@ -102,7 +110,7 @@ export function AppIconPicker({
             />
             {applying ? (
               <Spinner
-                aria-label="Updating app icon"
+                aria-label={t("settings:updatingAppIcon")}
                 className="absolute size-4 text-foreground motion-reduce:animate-none"
               />
             ) : null}

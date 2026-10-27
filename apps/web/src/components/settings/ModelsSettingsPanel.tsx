@@ -46,6 +46,7 @@ import {
 } from "./SettingControls";
 import { SettingsRow, SettingsSection, SettingsSelectPopup } from "./SettingsPanelPrimitives";
 import { DebouncedSettingTextarea } from "./DebouncedSettingTextInput";
+import { useTranslation } from "~/i18n";
 
 const SOURCE_CONTROL_WRITING_OPTIONS: readonly {
   value: SourceControlWritingStyle;
@@ -54,19 +55,18 @@ const SOURCE_CONTROL_WRITING_OPTIONS: readonly {
 }[] = [
   {
     value: "repository",
-    label: "Repository conventions",
-    description: "In each project, matches recent change descriptions and change request titles.",
+    label: "settings:repositoryConventions",
+    description: "settings:inEachProjectMatchesRecentChangeDescriptionsAndChange",
   },
   {
     value: "conventional",
-    label: "Conventional Commits",
-    description: "Use Conventional Commit prefixes and keep change request text concise.",
+    label: "settings:conventionalCommits",
+    description: "settings:useConventionalCommitPrefixesAndKeepChangeRequestText",
   },
   {
     value: "custom",
-    label: "Custom instructions",
-    description:
-      "Use your instructions for change descriptions and change requests in every project.",
+    label: "settings:customInstructions",
+    description: "settings:useYourInstructionsForChangeDescriptionsAndChangeRequests",
   },
 ];
 
@@ -81,16 +81,16 @@ export function validateCustomModelInput(input: {
 }): CustomModelValidationResult {
   const normalized = normalizeModelSlug(input.value, input.provider);
   if (!normalized) {
-    return { error: "Enter a model slug." };
+    return { error: "settings:modelSlugRequired" };
   }
   if (getModelOptions(input.provider).some((option) => option.slug === normalized)) {
-    return { error: "That model is already built in." };
+    return { error: "settings:modelAlreadyBuiltIn" };
   }
   if (normalized.length > MAX_CUSTOM_MODEL_LENGTH) {
-    return { error: `Model slugs must be ${MAX_CUSTOM_MODEL_LENGTH} characters or less.` };
+    return { error: "settings:modelSlugTooLong" };
   }
   if (input.savedModels.includes(normalized)) {
-    return { error: "That custom model is already saved." };
+    return { error: "settings:customModelAlreadySaved" };
   }
   return { model: normalized };
 }
@@ -106,6 +106,8 @@ export function ModelsSettingsPanel({
   resetEpoch,
   active,
 }: AppSettingsBinding & { readonly resetEpoch: number; readonly active: boolean }) {
+  const { t } = useTranslation();
+
   const serverConfigQuery = useQuery(serverConfigQueryOptions());
   const [selectedCustomModelProvider, setSelectedCustomModelProvider] =
     useState<ProviderKind>("codex");
@@ -197,7 +199,10 @@ export function ModelsSettingsPanel({
     selectedGitTextGenerationInstanceLabel &&
     selectedGitTextGenerationInstanceLabel !==
       PROVIDER_DISPLAY_NAMES[currentGitTextGenerationProvider]
-      ? `${selectedGitTextGenerationInstanceLabel} · ${selectedGitTextGenerationModelName}`
+      ? t("common:symbol9", {
+          value0: selectedGitTextGenerationInstanceLabel,
+          value1: selectedGitTextGenerationModelName,
+        })
       : selectedGitTextGenerationModelName;
   const selectedCustomModelProviderSettings =
     enabledCustomModelProviderSettings.find(
@@ -291,7 +296,7 @@ export function ModelsSettingsPanel({
       <button
         type="button"
         className="shrink-0 opacity-0 transition-opacity group-hover:opacity-100 hover:opacity-100"
-        aria-label={`Remove ${row.slug}`}
+        aria-label={t("workspace:remove", { value0: row.slug })}
         onClick={() => removeCustomModel(row.provider, row.slug)}
       >
         <XIcon className="size-3.5 text-muted-foreground hover:text-foreground" />
@@ -310,14 +315,15 @@ export function ModelsSettingsPanel({
 
   return (
     <div className="space-y-6">
-      <SettingsSection title="Generation defaults">
+      <SettingsSection title="settings:models_generationDefaults">
         <SettingsRow
-          title="Source control writing style"
-          description={writingOption.description}
+          id="setting-source-control-writing-style"
+          title="settings:sourceControlWritingStyle"
+          description={t(writingOption.description)}
           resetAction={
             isWritingStyleDirty ? (
               <SettingResetButton
-                label="source control writing style"
+                label={t("settings:sourceControlWritingStyle2")}
                 onClick={() =>
                   updateSettings({
                     sourceControlWritingStyle: defaults.sourceControlWritingStyle,
@@ -336,13 +342,13 @@ export function ModelsSettingsPanel({
                 );
                 if (option) updateSettings({ sourceControlWritingStyle: option.value });
               }}
-              ariaLabel="Source control writing style"
+              ariaLabel={t("settings:sourceControlWritingStyle")}
               triggerClassName="w-full sm:w-60"
-              valueContent={writingOption.label}
+              valueContent={t(writingOption.label)}
             >
               {SOURCE_CONTROL_WRITING_OPTIONS.map((option) => (
                 <SelectItem hideIndicator key={option.value} value={option.value}>
-                  {option.label}
+                  {t(option.label)}
                 </SelectItem>
               ))}
             </SettingsSelectControl>
@@ -352,8 +358,8 @@ export function ModelsSettingsPanel({
             <DebouncedSettingTextarea
               key={resetEpoch}
               className="mt-3 [&_textarea]:min-h-28 [&_textarea]:resize-y"
-              aria-label="Custom source control writing instructions"
-              placeholder="Keep titles concise. Use short bullet points in descriptions."
+              aria-label={t("settings:customSourceControlWritingInstructions")}
+              placeholder={t("settings:keepTitlesConciseUseShortBulletPointsInDescriptions")}
               maxLength={MAX_SOURCE_CONTROL_CUSTOM_INSTRUCTIONS_LENGTH}
               value={settings.sourceControlCustomInstructions}
               onCommit={(value) => updateSettings({ sourceControlCustomInstructions: value })}
@@ -361,12 +367,13 @@ export function ModelsSettingsPanel({
           </DisclosureRegion>
         </SettingsRow>
         <SettingsRow
-          title="Git writing model"
-          description="Used for generated commit messages, PR titles, and branch names."
+          id="setting-git-writing-model"
+          title="settings:changed_gitWritingModel"
+          description="settings:usedForGeneratedCommitMessagesPRTitlesAndBranch"
           resetAction={
             isGitTextGenerationModelDirty ? (
               <SettingResetButton
-                label="git writing model"
+                label={t("settings:gitWritingModel")}
                 onClick={() =>
                   updateSettings({
                     textGenerationProvider: defaults.textGenerationProvider,
@@ -391,7 +398,7 @@ export function ModelsSettingsPanel({
                   textGenerationModel: model,
                 });
               }}
-              ariaLabel="Git text generation model"
+              ariaLabel={t("settings:gitTextGenerationModel")}
               triggerClassName="w-full sm:w-52"
               valueContent={selectedGitTextGenerationModelLabel}
             >
@@ -405,13 +412,14 @@ export function ModelsSettingsPanel({
         />
       </SettingsSection>
 
-      <SettingsSection title="Custom models">
+      <SettingsSection title="settings:changed_customModels">
         <SettingsRow
-          title="Saved model slugs"
-          description="Add custom model slugs for supported providers."
+          id="setting-saved-model-slugs"
+          title="settings:models_savedModelSlugs"
+          description="settings:addCustomModelSlugsForSupportedProviders"
           resetAction={
             savedCustomModelRows.length > 0 ? (
-              <SettingResetButton label="custom models" onClick={resetCustomModels} />
+              <SettingResetButton label={t("settings:customModels")} onClick={resetCustomModels} />
             ) : null
           }
         >
@@ -429,7 +437,7 @@ export function ModelsSettingsPanel({
                   <SelectTrigger
                     size="sm"
                     className="w-full sm:w-40"
-                    aria-label="Custom model provider"
+                    aria-label={t("settings:customModelProvider")}
                   >
                     <SelectValue>{selectedCustomModelProviderSettings.title}</SelectValue>
                   </SelectTrigger>
@@ -473,18 +481,18 @@ export function ModelsSettingsPanel({
                   onClick={() => addCustomModel(activeCustomModelProvider)}
                 >
                   <PlusIcon className="size-3.5" />
-                  Add
+                  {t("workspace:models_add")}
                 </Button>
               </div>
             ) : (
               <p className="text-ui text-muted-foreground">
-                Enable a provider in Settings → Providers to add custom models.
+                {t("settings:enableAProviderInSettingsProvidersToAddCustom")}
               </p>
             )}
 
             {selectedCustomModelError ? (
               <p className="mt-2 text-ui leading-snug text-destructive">
-                {selectedCustomModelError}
+                {t(selectedCustomModelError, { limit: MAX_CUSTOM_MODEL_LENGTH })}
               </p>
             ) : null}
 
@@ -505,8 +513,8 @@ export function ModelsSettingsPanel({
                       onClick={() => setShowAllCustomModels((value) => !value)}
                     >
                       {showAllCustomModels
-                        ? "Show less"
-                        : `Show more (${overflowCustomModelRows.length})`}
+                        ? t("workspace:timeline_showLess")
+                        : t("settings:showMore", { value0: overflowCustomModelRows.length })}
                     </button>
                   </>
                 ) : null}

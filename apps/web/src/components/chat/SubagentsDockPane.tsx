@@ -19,7 +19,7 @@ import { IconButton } from "~/components/ui/icon-button";
 import { stripDiffSearchParams } from "~/diffRouteSearch";
 import { useNowMs } from "~/hooks/useNowMs";
 import { BackgroundTrayIcon, BackToParentIcon, StopIcon } from "~/lib/icons";
-import { formatRelativeTime } from "~/lib/relativeTime";
+import { formatRelativeTimeAgo } from "~/lib/relativeTime";
 import { subagentStatusTextToneClassName } from "~/lib/subagentPresentation";
 import { cn } from "~/lib/utils";
 import { useRightDockStore } from "~/rightDockStore";
@@ -36,6 +36,7 @@ import { PanelStateMessage } from "./PanelStateMessage";
 import { SubagentAvatar } from "./SubagentAvatar";
 import { useSubagentRunControls } from "./useSubagentRunControls";
 import { type SubagentParentRow, useThreadSubagentRoster } from "./useSubagentStripSource";
+import { useTranslation, t } from "~/i18n";
 
 // Done rows shown before "Show more"; active rows always render.
 const DONE_VISIBLE_LIMIT = 10;
@@ -45,7 +46,7 @@ const SECONDARY_TEXT_CLASS_NAME = "text-[var(--color-text-foreground-secondary)]
 function rowTooltip(item: EnvironmentSubagentRosterItem): string {
   const summary =
     item.summary && item.summary.length > SUMMARY_TOOLTIP_MAX_CHARS
-      ? `${item.summary.slice(0, SUMMARY_TOOLTIP_MAX_CHARS - 1)}…`
+      ? t("chat:symbol4", { value0: item.summary.slice(0, SUMMARY_TOOLTIP_MAX_CHARS - 1) })
       : item.summary;
   const stats = formatEnvironmentSubagentMeta(item, false);
   return [[item.fullLabel, item.modelLabel].filter(Boolean).join(" · "), stats, summary]
@@ -53,11 +54,15 @@ function rowTooltip(item: EnvironmentSubagentRosterItem): string {
     .join("\n\n");
 }
 
-function finishedAgoLabel(item: EnvironmentSubagentRosterItem, nowMs: number): string | null {
+function finishedAgoLabel(
+  item: EnvironmentSubagentRosterItem,
+  nowMs: number,
+  translate: typeof t,
+  formatLocale: string,
+): string | null {
   const at = item.settledAt;
   if (!at) return null;
-  const relative = formatRelativeTime(at, nowMs);
-  return relative === "now" ? "just now" : `${relative} ago`;
+  return formatRelativeTimeAgo(at, nowMs, formatLocale, translate);
 }
 
 function ListHeading({ label, count }: { label: string; count: number }) {
@@ -81,6 +86,8 @@ function ActiveSubagentRow({
   onBackground: (item: EnvironmentSubagentRosterItem) => void;
   onStop: (item: EnvironmentSubagentRosterItem) => void;
 }) {
+  const { t } = useTranslation();
+
   const elapsedMs = environmentSubagentElapsedMs(item, nowMs);
   const meta = formatEnvironmentSubagentMeta(item);
   const showBackground = item.isActive && !item.isBackground;
@@ -122,10 +129,10 @@ function ActiveSubagentRow({
             </span>
             <span className={cn("truncate text-ui-sm", SECONDARY_TEXT_CLASS_NAME)}>
               <span className={subagentStatusTextToneClassName(item.statusKind)}>
-                {item.statusLabel ?? "Running"}
+                {item.statusLabel ?? t("chat:runStatus_running")}
               </span>
-              {item.modelLabel ? ` · ${item.modelLabel}` : null}
-              {meta ? ` · ${meta}` : null}
+              {item.modelLabel ? t("chat:symbol6", { value0: item.modelLabel }) : null}
+              {meta ? t("chat:symbol6", { value0: meta }) : null}
             </span>
           </span>
         }
@@ -134,7 +141,10 @@ function ActiveSubagentRow({
           item.isViewed && "bg-[var(--color-background-elevated-secondary)]",
         )}
         title={rowTooltip(item)}
-        aria-label={`Open subagent ${item.fullLabel}${item.statusLabel ? ` (${item.statusLabel})` : ""}`}
+        aria-label={t("chat:openSubagent", {
+          value0: item.fullLabel,
+          value1: item.statusLabel ? ` (${item.statusLabel})` : "",
+        })}
         aria-current={item.isViewed ? "page" : undefined}
         data-testid="subagents-pane-active-row"
         onClick={() => onOpen(item.threadId)}
@@ -143,8 +153,8 @@ function ActiveSubagentRow({
         <div className="pointer-events-none invisible absolute top-0.5 right-2 flex items-center opacity-0 transition-opacity group-focus-within/subagent:pointer-events-auto group-focus-within/subagent:visible group-focus-within/subagent:opacity-100 group-hover/subagent:pointer-events-auto group-hover/subagent:visible group-hover/subagent:opacity-100">
           {showBackground ? (
             <IconButton
-              label={`Run ${item.primaryLabel} in background`}
-              tooltip="Run in background (ctrl+b)"
+              label={t("chat:runInBackground", { value0: item.primaryLabel })}
+              tooltip={t("chat:runInBackgroundCtrlB")}
               onClick={() => onBackground(item)}
             >
               <BackgroundTrayIcon className="size-3.5" />
@@ -152,8 +162,8 @@ function ActiveSubagentRow({
           ) : null}
           {showStop ? (
             <IconButton
-              label={`Stop subagent ${item.primaryLabel}`}
-              tooltip="Stop subagent"
+              label={t("chat:stopSubagent2", { value0: item.primaryLabel })}
+              tooltip={t("chat:stopSubagent")}
               onClick={() => onStop(item)}
             >
               <StopIcon className="size-3.5" />
@@ -174,10 +184,12 @@ function DoneSubagentRow({
   nowMs: number;
   onOpen: (threadId: ThreadId) => void;
 }) {
+  const { t, formatLocale } = useTranslation();
+
   // A finished run reads as done; only failures and stops name their outcome.
   const outcome =
     item.statusKind === "failed" || item.statusKind === "stopped" ? item.statusLabel : null;
-  const finishedAgo = finishedAgoLabel(item, nowMs);
+  const finishedAgo = finishedAgoLabel(item, nowMs, t, formatLocale);
   return (
     <EnvironmentRow
       compact
@@ -211,7 +223,10 @@ function DoneSubagentRow({
       }
       className={cn(item.isViewed && "bg-[var(--color-background-elevated-secondary)]")}
       title={rowTooltip(item)}
-      aria-label={`Open subagent ${item.fullLabel}${item.statusLabel ? ` (${item.statusLabel})` : ""}`}
+      aria-label={t("chat:openSubagent", {
+        value0: item.fullLabel,
+        value1: item.statusLabel ? ` (${item.statusLabel})` : "",
+      })}
       aria-current={item.isViewed ? "page" : undefined}
       data-testid="subagents-pane-done-row"
       onClick={() => onOpen(item.threadId)}
@@ -234,6 +249,8 @@ export function SubagentsList({
   onBackground: (item: EnvironmentSubagentRosterItem) => void;
   onStop: (item: EnvironmentSubagentRosterItem) => void;
 }) {
+  const { t } = useTranslation();
+
   const [showAllDone, setShowAllDone] = useState(false);
   const { active, previous } = roster;
 
@@ -248,18 +265,18 @@ export function SubagentsList({
       {parent ? (
         <EnvironmentRow
           icon={<BackToParentIcon className={ENVIRONMENT_ROW_ICON_CLASS_NAME} aria-hidden />}
-          label={<span className="truncate">{parent.label ?? "Main thread"}</span>}
-          aria-label={`Back to ${parent.label ?? "main thread"}`}
+          label={<span className="truncate">{parent.label ?? t("chat:mainThread")}</span>}
+          aria-label={t("chat:backTo", { value0: parent.label ?? t("chat:mainThread2") })}
           className="mb-2"
           onClick={() => onOpen(parent.threadId)}
         />
       ) : null}
       {active.length === 0 && previous.length === 0 ? (
-        <PanelStateMessage>No subagents in this chat yet.</PanelStateMessage>
+        <PanelStateMessage>{t("chat:noSubagentsInThisChatYet")}</PanelStateMessage>
       ) : null}
       {active.length > 0 ? (
         <>
-          <ListHeading label="Active" count={active.length} />
+          <ListHeading label={t("automation:detail_active")} count={active.length} />
           {active.map((item) => (
             <ActiveSubagentRow
               key={item.key}
@@ -274,7 +291,7 @@ export function SubagentsList({
       ) : null}
       {previous.length > 0 ? (
         <>
-          <ListHeading label="Done" count={previous.length} />
+          <ListHeading label={t("git:detail_done")} count={previous.length} />
           {visibleDone.map((item) => (
             <DoneSubagentRow key={item.key} item={item} nowMs={nowMs} onOpen={onOpen} />
           ))}
@@ -289,7 +306,9 @@ export function SubagentsList({
               icon={<DisclosureChevron open={showAllDone} className="size-5 shrink-0" />}
               label={
                 <span className={SECONDARY_TEXT_CLASS_NAME}>
-                  {hiddenDoneCount > 0 ? `Show ${hiddenDoneCount} more` : "Show less"}
+                  {hiddenDoneCount > 0
+                    ? t("chat:showMore", { value0: hiddenDoneCount })
+                    : t("workspace:timeline_showLess")}
                 </span>
               }
               aria-expanded={hiddenDoneCount === 0}

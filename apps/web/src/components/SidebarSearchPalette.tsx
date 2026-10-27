@@ -84,6 +84,7 @@ import {
   settingsSearchEntryTarget,
   settingsSectionLabel,
 } from "~/settingsSearchIndex";
+import { t, useTranslation } from "~/i18n";
 
 // Palette skin — shared with the ⌘P workspace palette so both surfaces read as one
 // menu: 44px bare input, settings-scale type, 30px squircle rows, single keycap pills.
@@ -133,12 +134,12 @@ interface SidebarSearchPaletteProps {
 // Second page of the "Import projects" command: pick which local tool to import from.
 const IMPORT_PROJECTS_SOURCES: readonly {
   id: string;
-  label: string;
+  labelKey: string;
   providers: readonly ProjectImportProvider[];
 }[] = [
-  { id: "claude-code", label: "From Claude Code", providers: ["claudeAgent"] },
-  { id: "codex", label: "From Codex", providers: ["codex"] },
-  { id: "all", label: "From Claude Code and Codex", providers: ["claudeAgent", "codex"] },
+  { id: "claude-code", labelKey: "workspace:fromClaudeCode", providers: ["claudeAgent"] },
+  { id: "codex", labelKey: "workspace:fromCodex", providers: ["codex"] },
+  { id: "all", labelKey: "workspace:fromClaudeCodeAndCodex", providers: ["claudeAgent", "codex"] },
 ];
 
 function actionHandler(
@@ -219,8 +220,8 @@ function createThemeCommandItem(
   if (mode === "system") {
     return {
       id: "theme-command:system",
-      label: "Switch to system theme",
-      description: "Match your OS appearance setting.",
+      label: t("workspace:searchPalette_themeSwitchToSystem"),
+      description: t("workspace:matchYourOSAppearanceSetting"),
       mode,
       isActive: activeMode === mode,
     };
@@ -228,8 +229,11 @@ function createThemeCommandItem(
 
   return {
     id: `theme-command:${mode}`,
-    label: `Switch to ${mode} theme`,
-    description: mode === "light" ? "Always use the light theme." : "Always use the dark theme.",
+    label: t("workspace:switchToTheme", { value0: mode }),
+    description:
+      mode === "light"
+        ? t("workspace:themeOptions_lightDescription")
+        : t("workspace:themeOptions_darkDescription"),
     mode,
     isActive: activeMode === mode,
   };
@@ -291,6 +295,8 @@ function buildThemeCommandItems(input: {
 }
 
 function CodeThemeBadge(props: { accent: string; background: string; foreground: string }) {
+  const { t } = useTranslation();
+
   return (
     <span
       aria-hidden="true"
@@ -301,7 +307,7 @@ function CodeThemeBadge(props: { accent: string; background: string; foreground:
         color: props.accent,
       }}
     >
-      Aa
+      {t("workspace:aa")}
     </span>
   );
 }
@@ -317,10 +323,12 @@ function threadMatchLabel(input: {
   messageMatchCount: number;
 }): string | null {
   if (input.matchKind === "message") {
-    return input.messageMatchCount > 1 ? `${input.messageMatchCount} chat hits` : "Chat match";
+    return input.messageMatchCount > 1
+      ? t("workspace:chatHits", { value0: input.messageMatchCount })
+      : t("workspace:chatMatch");
   }
   if (input.matchKind === "project") {
-    return "Project match";
+    return t("workspace:projectMatch");
   }
   return null;
 }
@@ -378,6 +386,8 @@ function HighlightedText(props: { text: string; query: string; className?: strin
 }
 
 export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
+  const { t } = useTranslation();
+
   const { activeTheme, resolvedTheme, setCodeThemeId, setTheme, theme } = useTheme();
   const [query, setQuery] = useState("");
   const [highlightedItemValue, setHighlightedItemValue] = useState<string | null>(null);
@@ -486,7 +496,7 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
       id: `theme-code:${resolvedTheme}:${option.id}`,
       type: "code-theme",
       label: option.label,
-      description: `Apply to the current ${resolvedTheme} theme slot.`,
+      description: t("workspace:applyToTheCurrentThemeSlot", { value0: resolvedTheme }),
       keywords: ["appearance", "theme", resolvedTheme, option.id],
       codeThemeId: option.id,
       variant: resolvedTheme,
@@ -550,17 +560,20 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
     matchedSettings.length > 0 ||
     matchedProjects.length > 0 ||
     matchedThreads.length > 0;
-  const importFieldLabel = importProvider === "codex" ? "Thread ID" : "Session ID";
+  const importFieldLabel =
+    importProvider === "codex"
+      ? t("workspace:searchPalette_threadId")
+      : t("workspace:searchPalette_sessionId");
   const importPlaceholder =
     importProvider === "claudeAgent"
-      ? "Paste a Claude session id"
+      ? t("workspace:pasteAClaudeSessionId")
       : importProvider === "cursor"
-        ? "Paste a Cursor session id"
+        ? t("workspace:pasteACursorSessionId")
         : importProvider === "droid"
-          ? "Paste a Droid session id"
+          ? t("workspace:pasteADroidSessionId")
           : importProvider === "opencode"
-            ? "Paste an OpenCode session id"
-            : "Paste a Codex thread id";
+            ? t("workspace:pasteAnOpenCodeSessionId")
+            : t("workspace:pasteACodexThreadId");
 
   const hasHighlightedFolderItem =
     highlightedItemValue !== null && highlightedItemValue.startsWith("folder:");
@@ -579,7 +592,9 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
     exactBrowseEntry === null &&
     !isBrowseFetching;
 
-  const browseSubmitLabel = willCreateMissingFolder ? "Create & Add" : "Add";
+  const browseSubmitLabel = willCreateMissingFolder
+    ? t("workspace:createAdd")
+    : t("workspace:models_add");
 
   const resolveBrowseSubmitPath = (): string => {
     if (highlightedFolderPath) {
@@ -594,17 +609,15 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
   const submitBrowsePath = async () => {
     if (isAddingProject) return;
     if (trimmedQuery.length === 0 && !highlightedFolderPath) {
-      setAddProjectError("Enter a folder path.");
+      setAddProjectError(t("workspace:searchPalette_enterFolderPath"));
       return;
     }
     if (unsupportedWindowsPath) {
-      setAddProjectError("Windows paths are not supported on this platform.");
+      setAddProjectError(t("workspace:windowsPathsAreNotSupportedOnThisPlatform"));
       return;
     }
     if (!highlightedFolderPath && isExplicitRelativeProjectPath(trimmedQuery)) {
-      setAddProjectError(
-        "Relative paths are not supported. Use an absolute path or start with ~/.",
-      );
+      setAddProjectError(t("workspace:relativePathsAreNotSupportedUseAnAbsolutePath"));
       return;
     }
     setIsAddingProject(true);
@@ -620,7 +633,9 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
         props.onOpenChange(false);
       })
       .catch((cause: unknown) => {
-        setAddProjectError(cause instanceof Error ? cause.message : "Failed to add project.");
+        setAddProjectError(
+          cause instanceof Error ? cause.message : t("workspace:searchPalette_failedToAddProject"),
+        );
       })
       .finally(() => {
         setIsAddingProject(false);
@@ -665,7 +680,11 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
         props.onOpenChange(false);
       })
       .catch((error: unknown) => {
-        setImportError(error instanceof Error ? error.message : "Failed to import thread.");
+        setImportError(
+          error instanceof Error
+            ? error.message
+            : t("workspace:searchPalette_failedToImportThread"),
+        );
       })
       .finally(() => {
         setIsImporting(false);
@@ -720,7 +739,7 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
 
   const normalizedSourceQuery = query.trim().toLowerCase();
   const importProjectsSources = IMPORT_PROJECTS_SOURCES.filter((source) =>
-    source.label.toLowerCase().includes(normalizedSourceQuery),
+    t(source.labelKey).toLowerCase().includes(normalizedSourceQuery),
   );
 
   return (
@@ -743,20 +762,22 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
                 </Button>
                 <div>
                   <p className="text-ui-lg leading-snug font-medium text-foreground">
-                    Import thread from provider
+                    {t("workspace:searchPalette_importTitle")}
                   </p>
                   <p className="mt-1 text-ui leading-snug text-muted-foreground">
-                    Create a local app thread and resume it from an existing provider id.
+                    {t("workspace:searchPalette_importDescription")}
                   </p>
                 </div>
               </div>
             </div>
             <div className="space-y-4 px-4 py-4">
               <div className="space-y-2">
-                <p className="text-ui leading-snug font-medium text-muted-foreground">Provider</p>
+                <p className="text-ui leading-snug font-medium text-muted-foreground">
+                  {t("workspace:models_customModelProvider")}
+                </p>
                 <div
                   role="radiogroup"
-                  aria-label="Provider account"
+                  aria-label={t("workspace:providerAccount")}
                   className="grid max-h-44 grid-cols-1 gap-2 overflow-y-auto overscroll-contain pe-1 sm:grid-cols-2"
                   data-testid="import-target-options"
                 >
@@ -765,7 +786,10 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
                       key={target.instanceId}
                       role="radio"
                       aria-checked={importTarget?.instanceId === target.instanceId}
-                      aria-label={`${target.label}, ${PROVIDER_DISPLAY_NAMES[target.provider]}`}
+                      aria-label={t("workspace:symbol2", {
+                        value0: target.label,
+                        value1: PROVIDER_DISPLAY_NAMES[target.provider],
+                      })}
                       className="h-auto min-h-11 w-full min-w-0 justify-start gap-2 rounded-lg px-3 py-2 text-left aria-checked:bg-muted aria-checked:hover:bg-muted/80 sm:h-auto sm:w-full"
                       variant="outline"
                       onClick={() => setImportTargetId(target.instanceId)}
@@ -782,7 +806,7 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
                 </div>
                 {props.importTargets.length === 0 ? (
                   <p className="text-ui leading-snug text-muted-foreground">
-                    No connected providers expose chat import in this build.
+                    {t("workspace:noConnectedProvidersExposeChatImportInThisBuild")}
                   </p>
                 ) : null}
               </div>
@@ -806,16 +830,16 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
                 />
                 <p className="text-ui leading-snug text-muted-foreground">
                   {importProvider === "claudeAgent"
-                    ? "Claude resumes a persisted session by session id."
+                    ? t("workspace:claudeResumesAPersistedSessionBySessionId")
                     : importProvider === "cursor"
-                      ? "Cursor resumes a persisted session by session id."
+                      ? t("workspace:cursorResumesAPersistedSessionBySessionId")
                       : importProvider === "droid"
-                        ? "Droid resumes a persisted session by session id."
+                        ? t("workspace:droidResumesAPersistedSessionBySessionId")
                         : importProvider === "opencode"
-                          ? "OpenCode resumes a persisted session by session id."
+                          ? t("workspace:openCodeResumesAPersistedSessionBySessionId")
                           : importProvider === "omp"
-                            ? "Oh My Pi resumes a persisted session by session id."
-                            : "Codex resumes a persisted thread by thread id."}
+                            ? t("workspace:ohMyPiResumesAPersistedSessionBySession")
+                            : t("workspace:codexResumesAPersistedThreadByThreadId")}
                 </p>
               </div>
               {importError ? (
@@ -831,7 +855,7 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
                     props.onOpenChange(false);
                   }}
                 >
-                  Cancel
+                  {t("common:form_cancel")}
                 </Button>
                 <Button
                   disabled={
@@ -839,7 +863,9 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
                   }
                   onClick={submitImport}
                 >
-                  {isImporting ? "Importing..." : "Import"}
+                  {isImporting
+                    ? t("workspace:searchPalette_importing")
+                    : t("workspace:theme_import")}
                 </Button>
               </div>
             </div>
@@ -850,7 +876,7 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
               <Button
                 size="icon"
                 variant="ghost"
-                aria-label="Back to commands"
+                aria-label={t("workspace:backToCommands")}
                 className="size-7 shrink-0"
                 onClick={() => {
                   setQuery("");
@@ -862,7 +888,7 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
               <AutocompletePrimitive.Input
                 autoFocus
                 className={cn(PALETTE_INPUT_CLASS, "ps-2")}
-                placeholder="Import projects from…"
+                placeholder={t("workspace:importProjectsFrom")}
                 value={query}
                 onChange={(event) => setQuery(event.currentTarget.value)}
                 onKeyDown={(event) => {
@@ -877,7 +903,7 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
               {importProjectsSources.length > 0 ? (
                 <CommandGroup>
                   <CommandGroupLabel className={PALETTE_GROUP_LABEL_CLASS}>
-                    <span>Import projects</span>
+                    <span>{t("workspace:importProjects")}</span>
                   </CommandGroupLabel>
                   {importProjectsSources.map((source) => (
                     <CommandItem
@@ -901,7 +927,7 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
                           />
                         ))}
                       </span>
-                      <span className={PALETTE_TEXT_CLASS}>{source.label}</span>
+                      <span className={PALETTE_TEXT_CLASS}>{t(source.labelKey)}</span>
                     </CommandItem>
                   ))}
                 </CommandGroup>
@@ -909,7 +935,7 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
             </CommandList>
             <CommandStatus className="p-0">
               {importProjectsSources.length === 0 ? (
-                <div className={PALETTE_STATUS_CLASS}>No matching import source.</div>
+                <div className={PALETTE_STATUS_CLASS}>{t("workspace:noMatchingImportSource")}</div>
               ) : null}
             </CommandStatus>
           </Command>
@@ -932,8 +958,8 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
                   )}
                   placeholder={
                     isBrowsing
-                      ? "Enter project path (e.g. ~/projects/my-app)"
-                      : "Search chats or run a command"
+                      ? t("workspace:enterProjectPathEGProjectsMyApp")
+                      : t("workspace:searchChatsOrRunACommand")
                   }
                   value={query}
                   onChange={(event) => setQuery(event.currentTarget.value)}
@@ -957,8 +983,11 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
                     onClick={() => void submitBrowsePath()}
                     title={
                       hasHighlightedFolderItem
-                        ? `${browseSubmitLabel} highlighted folder (${submitModifierLabel} Enter)`
-                        : `${browseSubmitLabel} (Enter)`
+                        ? t("workspace:highlightedFolderEnter", {
+                            value0: browseSubmitLabel,
+                            value1: submitModifierLabel,
+                          })
+                        : t("workspace:enter", { value0: browseSubmitLabel })
                     }
                   >
                     <span>{browseSubmitLabel}</span>
@@ -1012,7 +1041,7 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
                 {!isBrowsing && matchedThreads.length > 0 ? (
                   <CommandGroup>
                     <CommandGroupLabel className={PALETTE_GROUP_LABEL_CLASS}>
-                      <span>{query ? "Threads" : "Recent chats"}</span>
+                      <span>{query ? t("chat:views_threads") : t("workspace:recentChats")}</span>
                     </CommandGroupLabel>
                     {matchedThreads.map(({ id, matchKind, messageMatchCount, snippet, thread }) => {
                       const matchLabel = threadMatchLabel({ matchKind, messageMatchCount });
@@ -1090,7 +1119,7 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
                 {!isBrowsing && quickActions.length > 0 ? (
                   <CommandGroup>
                     <CommandGroupLabel className={PALETTE_GROUP_LABEL_CLASS}>
-                      <span>{query ? "Actions" : "Quick actions"}</span>
+                      <span>{query ? t("workspace:actions") : t("workspace:quickActions")}</span>
                     </CommandGroupLabel>
                     {quickActions.map(renderActionItem)}
                   </CommandGroup>
@@ -1099,7 +1128,7 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
                 {!isBrowsing && settingsActions.length > 0 ? (
                   <CommandGroup>
                     <CommandGroupLabel className={PALETTE_GROUP_LABEL_CLASS}>
-                      <span>Settings</span>
+                      <span>{t("workspace:toast_settings")}</span>
                     </CommandGroupLabel>
                     {settingsActions.map(renderActionItem)}
                   </CommandGroup>
@@ -1108,7 +1137,7 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
                 {matchedSettings.length > 0 ? (
                   <CommandGroup>
                     <CommandGroupLabel className={PALETTE_GROUP_LABEL_CLASS}>
-                      <span>Settings</span>
+                      <span>{t("workspace:toast_settings")}</span>
                     </CommandGroupLabel>
                     {matchedSettings.map((entry) =>
                       renderActionItem({
@@ -1129,7 +1158,7 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
                 {!isBrowsing && matchedProjects.length > 0 ? (
                   <CommandGroup>
                     <CommandGroupLabel className={PALETTE_GROUP_LABEL_CLASS}>
-                      <span>Projects</span>
+                      <span>{t("workspace:sections_projects")}</span>
                     </CommandGroupLabel>
                     {matchedProjects.map(({ id, project }) => (
                       <CommandItem
@@ -1153,13 +1182,16 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
                           />
                         </span>
                         <span className={PALETTE_TEXT_CLASS}>
-                          {project.name || "Untitled project"}
+                          {project.name || t("workspace:searchPalette_untitledProject")}
                         </span>
                         {/* Opening a project from here can switch Space, so the destination
                             is worth naming; the path is what identifies the project. */}
                         <span className={PALETTE_META_CLASS}>
                           {project.spaceName
-                            ? `${project.spaceName} · ${project.cwd}`
+                            ? t("common:symbol9", {
+                                value0: project.spaceName,
+                                value1: project.cwd,
+                              })
                             : project.cwd}
                         </span>
                       </CommandItem>
@@ -1172,7 +1204,7 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
                     {themeCommandItems.length > 0 ? (
                       <CommandGroup>
                         <CommandGroupLabel className={PALETTE_GROUP_LABEL_CLASS}>
-                          <span>Configure</span>
+                          <span>{t("workspace:searchPalette_sectionConfigure")}</span>
                         </CommandGroupLabel>
                         {themeCommandItems.map((themeCommandItem) => {
                           const ThemeIcon = THEME_MODE_ICONS[themeCommandItem.mode];
@@ -1208,7 +1240,11 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
                     {matchedCurrentThemes.length > 0 ? (
                       <CommandGroup>
                         <CommandGroupLabel className={PALETTE_GROUP_LABEL_CLASS}>
-                          <span>{resolvedTheme === "dark" ? "Dark themes" : "Light themes"}</span>
+                          <span>
+                            {resolvedTheme === "dark"
+                              ? t("workspace:searchPalette_darkThemes")
+                              : t("workspace:searchPalette_lightThemes")}
+                          </span>
                         </CommandGroupLabel>
                         {matchedCurrentThemes.map((themeItem) => {
                           const seed =
@@ -1239,8 +1275,8 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
                               <span className={PALETTE_TEXT_CLASS}>{themeItem.label}</span>
                               <span className={PALETTE_META_CLASS}>
                                 {resolvedTheme === "dark"
-                                  ? "Dark color theme"
-                                  : "Light color theme"}
+                                  ? t("workspace:searchPalette_darkColorTheme")
+                                  : t("workspace:searchPalette_lightColorTheme")}
                               </span>
                               <span
                                 className="flex size-3.5 shrink-0 items-center justify-center"
@@ -1265,18 +1301,20 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
                 {isBrowsing ? (
                   unsupportedWindowsPath ? (
                     <div className={PALETTE_STATUS_CLASS}>
-                      Windows paths are not supported on this platform.
+                      {t("workspace:windowsPathsAreNotSupportedOnThisPlatform")}
                     </div>
                   ) : (
                     <>
                       {!canBrowseUp && filteredBrowseEntries.length === 0 && !isBrowseFetching ? (
-                        <div className={PALETTE_STATUS_CLASS}>No matching folders.</div>
+                        <div className={PALETTE_STATUS_CLASS}>
+                          {t("workspace:searchPalette_noMatchingFolders")}
+                        </div>
                       ) : null}
                       {willCreateMissingFolder ? (
                         <div className="palette-row squircle mx-3 mb-2 rounded-lg border border-dashed border-[color:var(--color-border)] px-3 py-2 text-ui text-muted-foreground">
-                          Press Enter to create{" "}
-                          <span className="text-foreground">{trimmedQuery}</span> and add it as a
-                          project.
+                          {t("workspace:pressEnterToCreate")}{" "}
+                          <span className="text-foreground">{trimmedQuery}</span>{" "}
+                          {t("workspace:andAddItAsAProject")}
                         </div>
                       ) : null}
                       {addProjectError ? (
@@ -1287,21 +1325,23 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
                       <div className={cn(PALETTE_STATUS_CLASS, "flex justify-between gap-3")}>
                         <span>
                           {isAddingProject
-                            ? "Adding project..."
-                            : "Type a path, ↑↓ to navigate folders."}
+                            ? t("workspace:projectPicker_addingProject")
+                            : t("workspace:typeAPathToNavigateFolders")}
                         </span>
                         <span>
                           {hasHighlightedFolderItem
-                            ? `Enter to open · ${submitModifierLabel}+Enter to add`
+                            ? t("workspace:enterToOpenEnterToAdd", {
+                                value0: submitModifierLabel,
+                              })
                             : hasHighlightedBrowseItem
-                              ? "Enter to go up"
-                              : "Enter to add project"}
+                              ? t("workspace:searchPalette_enterToGoUp")
+                              : t("workspace:searchPalette_enterToAddProject")}
                         </span>
                       </div>
                     </>
                   )
                 ) : !hasSearchResults ? (
-                  <div className={PALETTE_STATUS_CLASS}>No results.</div>
+                  <div className={PALETTE_STATUS_CLASS}>{t("workspace:noResults")}</div>
                 ) : null}
               </CommandStatus>
             </Command>

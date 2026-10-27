@@ -5,6 +5,8 @@ import type {
   ExternalMcpStdioConfiguration,
 } from "@synara/contracts";
 
+import { t, getFormatLocale } from "~/i18n";
+
 // `synara` is reserved by the Codex provider for Synara's managed, in-process
 // HTTP gateway. External clients run a separate stdio server, so they must use
 // a different entry name or Codex merges the two transports when it layers the
@@ -183,30 +185,37 @@ export function buildExternalMcpSetupPrompt(input: {
   return sections.join("\n\n");
 }
 
-export function describeExternalMcpProjects(input: {
-  readonly projectScope?: ExternalMcpProjectScope | undefined;
-  readonly allowedProjects: ReadonlyArray<{ readonly title: string }>;
-}): string {
-  if (input.projectScope === "all") return "All projects, including future ones";
+export function describeExternalMcpProjects(
+  input: {
+    readonly projectScope?: ExternalMcpProjectScope | undefined;
+    readonly allowedProjects: ReadonlyArray<{ readonly title: string }>;
+  },
+  translate: typeof t = t,
+  formatLocale = getFormatLocale(),
+): string {
+  if (input.projectScope === "all") return translate("settings:externalAllProjects");
   const titles = input.allowedProjects.map((project) => project.title);
-  return titles.length > 0 ? titles.join(", ") : "No projects";
+  return titles.length > 0
+    ? new Intl.ListFormat(formatLocale, { style: "long", type: "unit" }).format(titles)
+    : translate("settings:externalNoProjects");
 }
 
 export function describeExternalMcpPermissions(
   capabilities: ReadonlyArray<ExternalMcpCapability>,
+  translate: typeof t = t,
 ): string {
-  const descriptions = ["Create and follow its own tasks"];
+  const descriptions = [translate("settings:externalPermission_ownTasks")];
   if (capabilities.includes("tasks:read-project")) {
-    descriptions.push("Read other tasks in selected projects");
+    descriptions.push(translate("settings:externalPermission_readProject"));
   }
   if (capabilities.includes("runtime:local")) {
-    descriptions.push("Use the shared local checkout");
+    descriptions.push(translate("settings:externalPermission_local"));
   }
   if (capabilities.includes("runtime:full-access")) {
-    descriptions.push("Run without approval prompts");
+    descriptions.push(translate("settings:externalPermission_fullAccess"));
   }
   if (capabilities.includes("computer:control")) {
-    descriptions.push("Control this Mac (per-action approval still applies)");
+    descriptions.push(translate("settings:externalPermission_computer"));
   }
   return descriptions.join(" · ");
 }

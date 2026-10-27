@@ -18,6 +18,7 @@ import {
 
 import { buildProviderOptionPatch, type ProviderOptions } from "../../providerModelOptions";
 import { getRuntimeAwareModelCapabilities } from "./runtimeModelCapabilities";
+import { t } from "~/i18n";
 
 const ULTRATHINK_PROMPT_PREFIX = "Ultrathink:\n";
 
@@ -97,6 +98,115 @@ function promptInjectedValuesForDescriptor(
   );
 }
 
+const EFFORT_LABEL_KEYS: Readonly<Record<string, string>> = {
+  none: "chat:none",
+  off: "automation:traitsPicker_off",
+  minimal: "chat:effortMinimal",
+  low: "chat:effortLow",
+  medium: "chat:effortMedium",
+  high: "chat:effortHigh",
+  xhigh: "chat:effortExtraHigh",
+  max: "chat:effortMax",
+  ultra: "chat:effortUltra",
+};
+
+const TRAIT_LABEL_KEYS: Readonly<Record<string, string>> = {
+  reasoningEffort: "chat:sessionStatus_reasoning",
+  thinkingLevel: "chat:sessionStatus_reasoning",
+  effort: "chat:sessionStatus_reasoning",
+  variant: "chat:traitsPicker_variant",
+  contextWindow: "chat:contextWindow",
+  autoCompactWindow: "chat:traitAutoCompact",
+  thinking: "chat:timeline_thinking",
+  fastMode: "chat:fastMode",
+};
+
+// These adapters construct canonical effort labels from IDs, rather than forwarding
+// arbitrary provider labels: ClaudeAdapter, CursorAcpSupport, PiAdapter,
+// OmpAcpSupport, DevinAdapter, GrokAdapter, and AntigravityAdapter.
+const GENERATED_EFFORT_LABEL_PROVIDERS = new Set<ProviderKind>([
+  "claudeAgent",
+  "cursor",
+  "pi",
+  "omp",
+  "devin",
+  "grok",
+  "antigravity",
+]);
+const SOURCE_EFFORT_LABELS: Readonly<Record<string, string>> = {
+  none: "None",
+  off: "Off",
+  minimal: "Minimal",
+  low: "Low",
+  medium: "Medium",
+  high: "High",
+  xhigh: "Extra High",
+  max: "Max",
+  ultra: "Ultra",
+};
+const SOURCE_TRAIT_LABELS: Readonly<Record<string, string>> = {
+  reasoningEffort: "Reasoning",
+  thinkingLevel: "Reasoning",
+  effort: "Reasoning",
+  variant: "Variant",
+  contextWindow: "Context Window",
+  autoCompactWindow: "Auto-compact",
+  thinking: "Thinking",
+  fastMode: "Fast Mode",
+};
+
+// Localize Synara's standard presentation, including canonical labels built by
+// its adapters. Explicit labels from other providers and custom overrides stay data.
+function presentTraitDescriptor(
+  descriptor: ProviderOptionDescriptor,
+  provider: ProviderKind,
+  runtimeModel: ProviderModelDescriptor | undefined,
+  translate: typeof t,
+): ProviderOptionDescriptor {
+  const generatedDescriptor =
+    (provider === "claudeAgent" || provider === "devin") &&
+    SOURCE_TRAIT_LABELS[descriptor.id] === descriptor.label;
+  if (runtimeModel?.optionDescriptors && !generatedDescriptor) return descriptor;
+  const labelKey = TRAIT_LABEL_KEYS[descriptor.id];
+  const label = labelKey ? translate(labelKey) : descriptor.label;
+  if (descriptor.type !== "select") return { ...descriptor, label };
+  const isContext = descriptor.id === "contextWindow" || descriptor.id === "autoCompactWindow";
+  return {
+    ...descriptor,
+    label,
+    options: descriptor.options.map((option) => {
+      if (isContext) {
+        if (descriptor.id === "contextWindow" && runtimeModel?.contextWindowOptions) return option;
+        return option.id === "auto"
+          ? { ...option, label: translate("chat:traitAutoClaudeCode") }
+          : option;
+      }
+      const discovered = runtimeModel?.supportedReasoningEfforts?.find(
+        (effort) => effort.value === option.id,
+      );
+      const explicitLabel =
+        trimOrNull(discovered?.label) ?? (runtimeModel?.optionDescriptors ? option.label : null);
+      const generatedLabel =
+        GENERATED_EFFORT_LABEL_PROVIDERS.has(provider) &&
+        (explicitLabel === SOURCE_EFFORT_LABELS[option.id] ||
+          (option.id === "max" && explicitLabel === "Maximum"));
+      const optionLabelKey =
+        explicitLabel && !generatedLabel
+          ? undefined
+          : option.id === "max" && option.label === "Maximum"
+            ? "chat:effortMaximum"
+            : EFFORT_LABEL_KEYS[option.id];
+      return {
+        ...option,
+        ...(optionLabelKey ? { label: translate(optionLabelKey) } : {}),
+        ...(option.id === "ultracode" && option.description && !discovered?.description
+          ? { description: translate("chat:effortUltracodeDescription") }
+          : {}),
+      };
+    }),
+  };
+}
+
 // Resolve the currently selected composer traits from capabilities plus draft overrides.
 export function getComposerTraitSelection(
   provider: ProviderKind,
@@ -104,13 +214,14 @@ export function getComposerTraitSelection(
   prompt: string,
   modelOptions: ProviderOptions | null | undefined,
   runtimeModel?: ProviderModelDescriptor,
+  translate: typeof t = t,
 ) {
   const caps = getRuntimeAwareModelCapabilities({ provider, model, runtimeModel });
   const descriptors = getProviderOptionDescriptors({
     provider,
     caps,
     selections: modelOptions as Record<string, unknown> | undefined,
-  });
+  }).map((descriptor) => presentTraitDescriptor(descriptor, provider, runtimeModel, translate));
   const primarySelectDescriptor = primaryTraitSelectDescriptor(descriptors);
   const contextWindowDescriptor = asSelectDescriptor(
     descriptors.find((descriptor) => descriptor.id === "autoCompactWindow") ??
@@ -193,6 +304,7 @@ export function resolveComposerTraitStatusLabel(
     ReturnType<typeof getComposerTraitSelection>,
     "effort" | "effortLevels" | "thinkingEnabled" | "ultrathinkPromptControlled"
   >,
+  translate: typeof t = t,
 ): string | null {
   if (selection.ultrathinkPromptControlled) {
     return "Ultrathink";
@@ -205,7 +317,7 @@ export function resolveComposerTraitStatusLabel(
     return effortLabel;
   }
   return selection.thinkingEnabled !== null
-    ? `Thinking ${selection.thinkingEnabled ? "On" : "Off"}`
+    ? translate(selection.thinkingEnabled ? "chat:thinkingEnabled" : "chat:thinkingDisabled")
     : null;
 }
 

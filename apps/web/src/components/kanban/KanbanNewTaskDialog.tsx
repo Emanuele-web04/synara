@@ -73,6 +73,7 @@ import {
 import { useKanbanTaskComposerMenu } from "./useKanbanTaskComposerMenu";
 import { useKanbanTaskScratchDraft } from "./useKanbanTaskScratchDraft";
 import { useKanbanTaskSubmit } from "./useKanbanTaskSubmit";
+import { useTranslation } from "~/i18n";
 
 const EMPTY_COMPOSER_FILES: ReadonlyArray<ComposerFileAttachment> = [];
 
@@ -102,6 +103,8 @@ export function KanbanNewTaskDialog({
   initialProjectId,
   initialSendAsDraft: initialSendAsDraftProp,
 }: KanbanNewTaskDialogProps) {
+  const { t } = useTranslation();
+
   const initialSendAsDraft = initialSendAsDraftProp ?? false;
   const { settings } = useAppSettings();
   const { resolvedTheme } = useTheme();
@@ -341,11 +344,11 @@ export function KanbanNewTaskDialog({
       onUnsupportedFiles: (files) => {
         toastManager.add({
           type: "warning",
-          title: "Only images can be attached to new tasks.",
+          title: t("common:onlyImagesCanBeAttachedToNewTasks"),
           description:
             files.length === 1
-              ? "That file was not added."
-              : `${files.length} files were not added.`,
+              ? t("common:thatFileWasNotAdded")
+              : t("common:filesWereNotAdded", { value0: files.length }),
         });
       },
     },
@@ -381,12 +384,11 @@ export function KanbanNewTaskDialog({
             />
             <ChevronRightIcon className="size-3.5 shrink-0 text-muted-foreground/50" aria-hidden />
             <DialogTitle className="font-system-ui truncate font-medium text-ui leading-none">
-              New task
+              {t("common:kanban_newTask")}
             </DialogTitle>
           </div>
           <DialogDescription className="sr-only">
-            Draft a prompt and place it in the board&apos;s Draft column. Drag it to In Progress to
-            send it.
+            {t("common:draftAPromptAndPlaceItInTheBoard")}
           </DialogDescription>
         </DialogHeader>
         {/* Flush, borderless composer body: same Lexical prompt editor and attachment row as chat. */}
@@ -447,7 +449,8 @@ export function KanbanNewTaskDialog({
                 role="status"
               >
                 <LoaderCircleIcon className="size-3.5 animate-spin" />
-                Optimizing {pendingImageCount === 1 ? "image" : "images"}…
+                {t("chat:optimizing")}{" "}
+                {pendingImageCount === 1 ? t("common:image") : t("chat:images")}…
               </div>
             ) : null}
             <ComposerPromptEditor
@@ -457,7 +460,7 @@ export function KanbanNewTaskDialog({
               terminalContexts={composerTerminalContexts}
               mentionReferences={composerMentions}
               disabled={voice.isVoiceTranscribing}
-              placeholder="Describe the task, @tag files/folders, paste images, or use / for skills"
+              placeholder={t("common:describeTheTaskTagFilesFoldersPasteImagesOr")}
               className={cn(
                 COMPOSER_EDITOR_MIN_HEIGHT_CLASS_NAME,
                 COMPOSER_EDITOR_TYPOGRAPHY_CLASS_NAME,
@@ -526,8 +529,8 @@ export function KanbanNewTaskDialog({
                   size="icon-sm"
                   variant="ghost"
                   className="mr-1 shrink-0 text-muted-foreground/70 hover:text-foreground"
-                  aria-label="Attach images"
-                  title="Attach images"
+                  aria-label={t("common:kanban_attachImages")}
+                  title={t("common:kanban_attachImages")}
                   onClick={() => fileInputRef.current?.click()}
                 >
                   <PaperclipIcon className="size-4" />
@@ -550,21 +553,25 @@ export function KanbanNewTaskDialog({
                   checked={sendAsDraft}
                   onCheckedChange={(checked) => setSendAsDraft(checked === true)}
                 />
-                Send as draft
+                {t("common:kanban_sendAsDraft")}
               </label>
               <label
                 className="flex cursor-pointer items-center gap-2 text-ui-xs text-muted-foreground"
-                title={sendAsDraft ? "Turn off Send as draft to send as goal." : undefined}
+                title={sendAsDraft ? t("common:turnOffSendAsDraftToSendAsGoal") : undefined}
               >
                 <Switch
                   checked={sendAsGoal && !sendAsDraft}
                   disabled={sendAsDraft}
                   onCheckedChange={(checked) => setSendAsGoal(checked === true)}
                 />
-                Send as goal
+                {t("common:sendAsGoal")}
               </label>
               <Button size="sm" onClick={handleCreateRequest} disabled={!canCreate}>
-                {isCreating ? "Creating..." : isPreparingImages ? "Optimizing..." : "Create task"}
+                {isCreating
+                  ? t("common:kanban_creating")
+                  : isPreparingImages
+                    ? t("common:optimizing")
+                    : t("common:kanban_createTask")}
               </Button>
             </div>
           </div>

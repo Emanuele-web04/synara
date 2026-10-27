@@ -52,6 +52,7 @@ import { useStore } from "../store";
 import { useProjectEnvironmentStore } from "../projectEnvironmentStore";
 import { useTemporaryThreadStore } from "../temporaryThreadStore";
 import { useTerminalStateStore } from "../terminalStateStore";
+import { useTranslation } from "~/i18n";
 
 export interface NewThreadNavigationOptions {
   /**
@@ -68,6 +69,8 @@ export interface NewThreadNavigationOptions {
 // Groups new-chat path uses. Stored/route reuse paths keep the user's
 // existing selections.
 export function useHandleNewThread() {
+  const { t } = useTranslation();
+
   const projects = useStore((store) => store.projects);
   const { settings, serverSettings } = useAppSettings();
   const providerInstances = useMemo(() => getProviderInstanceOptions(settings), [settings]);
@@ -299,7 +302,7 @@ export function useHandleNewThread() {
           commandId: newCommandId(),
           threadId,
           projectId,
-          title: "New terminal",
+          title: t("chat:workspace_newTerminalButton"),
           modelSelection: creationState.modelSelection,
           runtimeMode: creationState.runtimeMode,
           interactionMode: creationState.interactionMode,

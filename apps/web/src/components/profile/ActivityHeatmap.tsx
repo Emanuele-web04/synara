@@ -9,6 +9,7 @@ import type { ProfileHeatmapCell } from "@synara/contracts";
 import { cn } from "~/lib/utils";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "~/components/ui/tooltip";
 import { formatCompact, formatShortDate } from "./profileFormatting";
+import { useTranslation, t } from "~/i18n";
 
 // Single-hue ramp built from the theme accent (`--info`, defaults to blue-500) for the
 // in-app page (level 0 → 4). Mixes toward transparent so it sits well on light/dark.
@@ -30,21 +31,6 @@ export const CARD_HEATMAP_INTENSITY_CLASSES: readonly string[] = [
   "bg-[color-mix(in_srgb,var(--info)_45%,white)]",
   "bg-[color-mix(in_srgb,var(--info)_70%,white)]",
   "bg-[var(--info)]",
-];
-
-const MONTH_LABELS = [
-  "Jan",
-  "Feb",
-  "Mar",
-  "Apr",
-  "May",
-  "Jun",
-  "Jul",
-  "Aug",
-  "Sep",
-  "Oct",
-  "Nov",
-  "Dec",
 ];
 
 interface ActivityHeatmapProps {
@@ -75,13 +61,34 @@ interface ActivityHeatmapProps {
   readonly className?: string;
 }
 
-function heatmapTooltipText(cell: ProfileHeatmapCell, unit: string): string {
-  const date = formatShortDate(cell.day) ?? cell.day;
+function heatmapTooltipText(cell: ProfileHeatmapCell, unit: string, formatLocale: string): string {
+  const date = formatShortDate(cell.day, formatLocale) ?? cell.day;
   if (cell.count <= 0) {
-    return `No ${unit} on ${date}`;
+    return t("common:noOn", {
+      value0:
+        unit === "prompts" || unit === "tokens"
+          ? t(unit === "prompts" ? "common:profile_prompts" : "chat:tokens")
+          : unit,
+      value1: date,
+    });
   }
   const noun = cell.count === 1 && unit.endsWith("s") ? unit.slice(0, -1) : unit;
-  return `${formatCompact(cell.count)} ${noun} on ${date}`;
+  return t("common:on", {
+    value0: formatCompact(cell.count, formatLocale),
+    value1:
+      unit === "prompts" || unit === "tokens"
+        ? t(
+            unit === "prompts"
+              ? cell.count === 1
+                ? "chat:profile_prompt"
+                : "common:profile_prompts"
+              : cell.count === 1
+                ? "common:tokenSingular"
+                : "chat:tokens",
+          )
+        : noun,
+    value2: date,
+  });
 }
 
 type Slot =
@@ -108,6 +115,8 @@ export function ActivityHeatmap({
   tooltipUnit: tooltipUnitProp,
   className,
 }: ActivityHeatmapProps) {
+  const { t, formatLocale } = useTranslation();
+
   const cellSize = cellSizeProp ?? 13;
   const gap = gapProp ?? 3;
   const radius = radiusProp ?? 4;
@@ -152,7 +161,11 @@ export function ActivityHeatmap({
       return null;
     }
     previousMonth = monthIndex;
-    return MONTH_LABELS[monthIndex] ?? null;
+    return Number.isInteger(monthIndex) && monthIndex >= 0 && monthIndex <= 11
+      ? new Intl.DateTimeFormat(formatLocale, { month: "short", timeZone: "UTC" }).format(
+          new Date(Date.UTC(2026, monthIndex, 1)),
+        )
+      : null;
   });
 
   const columnCount = columns.length;
@@ -235,7 +248,10 @@ export function ActivityHeatmap({
                     key={slot.cell.day}
                     className={cellClassName}
                     style={cellStyle}
-                    title={`${slot.cell.day} · ${slot.cell.count.toLocaleString()}`}
+                    title={t("common:symbol9", {
+                      value0: slot.cell.day,
+                      value1: slot.cell.count.toLocaleString(formatLocale),
+                    })}
                   />
                 );
               }
@@ -247,7 +263,7 @@ export function ActivityHeatmap({
                     render={<div className={cellClassName} style={cellStyle} />}
                   />
                   <TooltipPopup side="top" sideOffset={6}>
-                    {heatmapTooltipText(slot.cell, tooltipUnit)}
+                    {heatmapTooltipText(slot.cell, tooltipUnit, formatLocale)}
                   </TooltipPopup>
                 </Tooltip>
               );

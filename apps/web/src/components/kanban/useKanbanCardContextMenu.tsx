@@ -48,6 +48,7 @@ import {
   type KanbanCard,
   type KanbanColumnKey,
 } from "./kanban.logic";
+import { useTranslation } from "~/i18n";
 
 interface RenameTarget {
   threadId: ThreadId;
@@ -117,6 +118,8 @@ async function setThreadPinned(threadId: ThreadId, isPinned: boolean) {
 }
 
 export function useKanbanCardContextMenu(): KanbanCardContextMenuController {
+  const { t, formatLocale } = useTranslation();
+
   const { settings } = useAppSettings();
   const queryClient = useQueryClient();
   const removeWorktreeMutation = useMutation(gitRemoveWorktreeMutationOptions({ queryClient }));
@@ -183,7 +186,11 @@ export function useKanbanCardContextMenu(): KanbanCardContextMenuController {
         [
           ...(isThreadActionCard
             ? [
-                { id: "rename", label: "Rename thread", icon: THREAD_CONTEXT_MENU_ICONS.rename },
+                {
+                  id: "rename",
+                  label: t("workspace:contextMenu_renameThread"),
+                  icon: THREAD_CONTEXT_MENU_ICONS.rename,
+                },
                 {
                   id: "toggle-pin",
                   label: pinActionLabel("thread", card.thread?.isPinned ?? false),
@@ -192,17 +199,17 @@ export function useKanbanCardContextMenu(): KanbanCardContextMenuController {
               ]
             : []),
           ...contextMenuGroup(
-            { id: "move-to", label: "Move to…" },
+            { id: "move-to", label: t("common:moveTo") },
             moves.map(({ column }) => ({
               id: `move-to-${column}`,
               label: KANBAN_COLUMN_V2_LABELS[column],
-              standaloneLabel: `Move to ${KANBAN_COLUMN_V2_LABELS[column]}`,
+              standaloneLabel: t("workspace:moveTo", { value0: KANBAN_COLUMN_V2_LABELS[column] }),
             })),
           ),
           ...contextMenuGroup(
             {
               id: "copy",
-              label: "Copy",
+              label: t("workspace:share_copy"),
               icon: THREAD_CONTEXT_MENU_ICONS.copy,
               separatorBefore: true,
             },
@@ -211,8 +218,8 @@ export function useKanbanCardContextMenu(): KanbanCardContextMenuController {
                 ? [
                     {
                       id: "copy-path",
-                      label: "Path",
-                      standaloneLabel: "Copy Path",
+                      label: t("workspace:path"),
+                      standaloneLabel: t("workspace:copyPath"),
                       icon: THREAD_CONTEXT_MENU_ICONS.copy,
                     },
                   ]
@@ -221,8 +228,8 @@ export function useKanbanCardContextMenu(): KanbanCardContextMenuController {
                 ? [
                     {
                       id: "copy-thread-id",
-                      label: "Thread ID",
-                      standaloneLabel: "Copy Thread ID",
+                      label: t("workspace:searchPalette_threadId"),
+                      standaloneLabel: t("workspace:copyThreadID"),
                       icon: THREAD_CONTEXT_MENU_ICONS.copy,
                     },
                   ]
@@ -233,19 +240,19 @@ export function useKanbanCardContextMenu(): KanbanCardContextMenuController {
             ? [
                 {
                   id: "archive",
-                  label: "Archive",
+                  label: t("workspace:detail_archive"),
                   icon: THREAD_CONTEXT_MENU_ICONS.archive,
                   separatorBefore: true,
                 },
               ]
             : []),
           ...(isDispatchableDraft
-            ? [{ id: "send-as-goal", label: "Send as goal", separatorBefore: true }]
+            ? [{ id: "send-as-goal", label: t("common:sendAsGoal"), separatorBefore: true }]
             : []),
-          ...(isSettableGoalCard ? [{ id: "set-as-goal", label: "Set as goal" }] : []),
+          ...(isSettableGoalCard ? [{ id: "set-as-goal", label: t("common:setAsGoal") }] : []),
           {
             id: "delete",
-            label: deletesOnlyDraft ? "Delete draft" : "Delete",
+            label: deletesOnlyDraft ? t("common:deleteDraft") : t("computer:detail_delete"),
             icon: THREAD_CONTEXT_MENU_ICONS.delete,
             destructive: true,
             separatorBefore: !isThreadActionCard && !isDispatchableDraft,
@@ -268,7 +275,9 @@ export function useKanbanCardContextMenu(): KanbanCardContextMenuController {
         void setThreadPinned(card.threadId, next).catch(() => {
           toastManager.add({
             type: "error",
-            title: next ? "Unable to pin thread" : "Unable to unpin thread",
+            title: next
+              ? t("common:toast_unableToPinThread")
+              : t("common:toast_unableToUnpinThread"),
           });
         });
         return;
@@ -320,19 +329,19 @@ export function useKanbanCardContextMenu(): KanbanCardContextMenuController {
           if (result.deferred) {
             toastManager.add({
               type: "info",
-              title: "Chat send in progress",
-              description: "The board stood down; the running chat send owns this turn.",
+              title: t("workspace:chatSendInProgress"),
+              description: t("workspace:theBoardStoodDownTheRunningChatSendOwns"),
             });
           } else if (result.warning) {
             toastManager.add({
               type: "warning",
-              title: "Task started",
+              title: t("common:taskStarted"),
               description: result.warning,
             });
           } else {
             toastManager.add({
               type: "success",
-              title: "Goal set",
+              title: t("common:goalSet"),
               description: card.title,
             });
           }
@@ -355,8 +364,8 @@ export function useKanbanCardContextMenu(): KanbanCardContextMenuController {
         if (goal.length === 0) {
           toastManager.add({
             type: "error",
-            title: "Could not set goal",
-            description: "The thread has no prompt or title to save as its goal.",
+            title: t("common:couldNotSetGoal"),
+            description: t("common:theThreadHasNoPromptOrTitleToSave"),
           });
           return;
         }
@@ -365,8 +374,11 @@ export function useKanbanCardContextMenu(): KanbanCardContextMenuController {
         if (goal.length > THREAD_GOAL_MAX_CHARS) {
           toastManager.add({
             type: "error",
-            title: "Could not set goal",
-            description: `The goal is ${goal.length.toLocaleString()} characters; keep it within ${THREAD_GOAL_MAX_CHARS.toLocaleString()}.`,
+            title: t("common:couldNotSetGoal"),
+            description: t("common:theGoalIsCharactersKeepItWithin", {
+              value0: goal.length.toLocaleString(formatLocale),
+              value1: THREAD_GOAL_MAX_CHARS.toLocaleString(formatLocale),
+            }),
           });
           return;
         }
@@ -380,14 +392,14 @@ export function useKanbanCardContextMenu(): KanbanCardContextMenuController {
         } catch (error) {
           toastManager.add({
             type: "error",
-            title: "Could not set goal",
-            description: error instanceof Error ? error.message : "Unknown error.",
+            title: t("common:couldNotSetGoal"),
+            description: error instanceof Error ? error.message : t("common:unknownError"),
           });
           return;
         }
         toastManager.add({
           type: "success",
-          title: "Goal set",
+          title: t("common:goalSet"),
           description: card.title,
         });
         return;
@@ -396,7 +408,7 @@ export function useKanbanCardContextMenu(): KanbanCardContextMenuController {
       if (settings.confirmThreadDelete) {
         const confirmed = await api.dialogs.confirm(
           deletesOnlyDraft
-            ? `Delete this draft? This removes its unsent prompt.`
+            ? t("common:deleteThisDraftThisRemovesItsUnsentPrompt")
             : [
                 `Delete thread "${card.title}"?`,
                 "This permanently clears conversation history for this thread.",
@@ -425,8 +437,8 @@ export function useKanbanCardContextMenu(): KanbanCardContextMenuController {
         if (outcome === "unavailable") {
           toastManager.add({
             type: "error",
-            title: "Not connected",
-            description: "Reconnect to the server before renaming.",
+            title: t("common:toast_notConnected"),
+            description: t("common:reconnectToTheServerBeforeRenaming"),
           });
           return;
         }

@@ -10,6 +10,7 @@ import {
   DialogTitle,
 } from "./ui/dialog";
 import { Input } from "./ui/input";
+import { useTranslation } from "~/i18n";
 
 interface ThreadWorktreeHandoffDialogProps {
   open: boolean;
@@ -28,6 +29,8 @@ export function ThreadWorktreeHandoffDialog({
   onOpenChange,
   onConfirm,
 }: ThreadWorktreeHandoffDialogProps) {
+  const { t } = useTranslation();
+
   const busy = busyProp ?? false;
   const worktreeInputRef = useRef<HTMLInputElement>(null);
 
@@ -61,9 +64,9 @@ export function ThreadWorktreeHandoffDialog({
     >
       <DialogPopup className="max-w-md">
         <DialogHeader>
-          <DialogTitle>Hand off to worktree</DialogTitle>
+          <DialogTitle>{t("common:worktreeHandoff_title")}</DialogTitle>
           <DialogDescription>
-            Create a detached worktree from the current branch to continue working in parallel.
+            {t("common:createADetachedWorktreeFromTheCurrentBranchTo")}
           </DialogDescription>
         </DialogHeader>
         <DialogPanel>
@@ -75,7 +78,7 @@ export function ThreadWorktreeHandoffDialog({
           >
             <label className="grid gap-1.5">
               <span className="text-ui leading-snug font-medium text-foreground">
-                Worktree name
+                {t("common:worktreeHandoff_worktreeName")}
               </span>
               <Input
                 ref={worktreeInputRef}
@@ -88,17 +91,17 @@ export function ThreadWorktreeHandoffDialog({
                     onOpenChange(false);
                   }
                 }}
-                placeholder="synara/feature-name"
+                placeholder={t("common:synaraFeatureName")}
               />
             </label>
           </form>
         </DialogPanel>
         <DialogFooter>
           <Button variant="outline" size="sm" onClick={() => onOpenChange(false)} disabled={busy}>
-            Cancel
+            {t("common:form_cancel")}
           </Button>
           <Button size="sm" onClick={handleSubmit} disabled={!canSubmit}>
-            {busy ? "Handing off..." : "Hand off"}
+            {busy ? t("common:worktreeHandoff_handingOff") : t("common:header_handOff")}
           </Button>
         </DialogFooter>
       </DialogPopup>

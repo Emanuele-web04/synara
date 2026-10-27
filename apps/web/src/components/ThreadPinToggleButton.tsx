@@ -11,6 +11,7 @@ import { PinStatusIcon, pinActionLabel } from "~/lib/pin";
 import { cn } from "~/lib/utils";
 import { IconButton } from "./ui/icon-button";
 import { SIDEBAR_TRAILING_ICON_CLASS } from "./sidebarGlyphs";
+import { useTranslation } from "~/i18n";
 
 export function ThreadPinToggleButton({
   pinned,
@@ -25,7 +26,9 @@ export function ThreadPinToggleButton({
   toneClassName?: string;
   onToggle: (event: React.MouseEvent<HTMLButtonElement> | React.MouseEvent) => void;
 }) {
-  const targetLabel = targetLabelProp ?? "thread";
+  const { t } = useTranslation();
+
+  const targetLabel = targetLabelProp ?? t("common:thread");
   const label = pinActionLabel(targetLabel, pinned);
 
   return (

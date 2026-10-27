@@ -1,3 +1,4 @@
+import { useTranslation } from "~/i18n";
 // FILE: ComposerExtrasTrigger.tsx
 // Purpose: Composer `+` trigger. The panel it toggles renders above the composer
 //   (ComposerExtrasPanel) so it shares the command-menu surface instead of a dropdown.
@@ -15,6 +16,8 @@ export function ComposerExtrasTrigger(props: {
   panelId: string;
   onToggle: () => void;
 }) {
+  const { t } = useTranslation();
+
   return (
     <Button
       size="icon-sm"
@@ -23,7 +26,7 @@ export function ComposerExtrasTrigger(props: {
         COMPOSER_ACTION_CIRCLE_CLASS_NAME,
         props.open && "bg-[var(--color-background-button-secondary-hover)]",
       )}
-      aria-label="Composer extras"
+      aria-label={t("chat:composerExtras_extras")}
       aria-expanded={props.open}
       aria-controls={props.open ? props.panelId : undefined}
       {...{ [COMPOSER_EXTRAS_TRIGGER_ATTRIBUTE]: "" }}

@@ -1,3 +1,4 @@
+import { useTranslation } from "~/i18n";
 // FILE: CodeDiffEditorPane.tsx
 // Purpose: The editable diff surface over the same native document model as
 //          the file editor, with the shared boundary and save chord.
@@ -35,10 +36,12 @@ export interface CodeDiffEditorPaneProps {
 }
 
 export function CodeDiffEditorPane(props: CodeDiffEditorPaneProps) {
+  const { t } = useTranslation();
+
   const saveKeyDownHandler = useCodeEditorSaveKeyDownHandler(props.onSave);
   const loading = (
     <PanelStateMessage density="compact" fill="flex">
-      <p>Loading diff editor…</p>
+      <p>{t("workspace:loadingDiffEditor")}</p>
     </PanelStateMessage>
   );
   if (!NATIVE_EDITOR_ON) {
@@ -57,10 +60,7 @@ export function CodeDiffEditorPane(props: CodeDiffEditorPaneProps) {
       <EditorSurfaceBoundary
         loading={loading}
         fallback={(retry) => (
-          <EditorSurfaceRetry
-            message="The diff editor could not load. Your draft is preserved."
-            onRetry={retry}
-          />
+          <EditorSurfaceRetry message={t("workspace:diffEditorLoadFailed")} onRetry={retry} />
         )}
       >
         {(Surface) => (

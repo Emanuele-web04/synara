@@ -7,6 +7,7 @@ import { memo, type ReactNode } from "react";
 
 import { SynaraLogo } from "../SynaraLogo";
 import { cn } from "~/lib/utils";
+import { useTranslation, t } from "~/i18n";
 
 export interface CrossTaskOrigin {
   readonly sourceThreadId: ThreadId;
@@ -22,7 +23,9 @@ export interface CrossTaskOrigin {
 // handed it the task and where the result goes back to.
 function crossTaskOriginText(origin: CrossTaskOrigin): string {
   const groupName = origin.coordinatorGroupName?.trim();
-  return groupName ? `Sent by the ${groupName} coordinator` : "Sent by Synara from another thread";
+  return groupName
+    ? t("chat:sentByTheCoordinator", { value0: groupName })
+    : t("chat:sentBySynaraFromAnotherThread");
 }
 
 function OriginContent({ text }: { readonly text: string }): ReactNode {
@@ -43,6 +46,8 @@ export const CrossTaskOriginLabel = memo(function CrossTaskOriginLabel({
   readonly origin: CrossTaskOrigin;
   readonly onOpenSourceThread?: (threadId: ThreadId) => void;
 }) {
+  const { t } = useTranslation();
+
   const className = cn(
     "inline-flex max-w-full items-center gap-2 self-end rounded-md py-1",
     "font-system-ui text-ui font-normal text-muted-foreground/72",
@@ -56,7 +61,9 @@ export const CrossTaskOriginLabel = memo(function CrossTaskOriginLabel({
         type="button"
         className={className}
         data-cross-task-origin="true"
-        aria-label={origin.coordinatorGroupName ? "Open coordinator" : "Open source thread"}
+        aria-label={
+          origin.coordinatorGroupName ? t("chat:openCoordinator") : t("chat:openSourceThread")
+        }
         onClick={() => onOpenSourceThread(origin.sourceThreadId)}
       >
         <OriginContent text={crossTaskOriginText(origin)} />

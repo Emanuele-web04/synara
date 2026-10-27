@@ -18,6 +18,7 @@ import {
   DraftAttachmentWarningIcon,
 } from "./DraftAttachmentWarning";
 import { FileEntryIcon } from "./FileEntryIcon";
+import { useTranslation, t } from "~/i18n";
 
 type FileAttachmentChipVariant = "pill" | "card";
 
@@ -93,7 +94,7 @@ function fileAttachmentTypeLabel(file: ChatFileAttachment): string {
     }
   }
 
-  return "FILE";
+  return t("chat:fILE");
 }
 
 function fileAttachmentDetail(file: ChatFileAttachment): string {
@@ -112,6 +113,8 @@ function FileAttachmentPillTrigger({
   className?: string | undefined;
   nonPersisted: boolean;
 }) {
+  const { t } = useTranslation();
+
   return (
     <span
       className={cn(
@@ -131,7 +134,7 @@ function FileAttachmentPillTrigger({
         <AttachmentRemoveButton
           size="sm"
           placement="center-right"
-          label={`Remove ${file.name}`}
+          label={t("workspace:remove", { value0: file.name })}
           onRemove={() => onRemove(file.id)}
         />
       ) : null}

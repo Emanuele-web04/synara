@@ -9,6 +9,7 @@
 import type { ServerProviderStatus, ThreadId, Todo, TodoUpdateInput } from "@synara/contracts";
 import { useNavigate } from "@tanstack/react-router";
 import { useRef, useState } from "react";
+import { useTranslation } from "~/i18n";
 
 import {
   getProviderStartOptions,
@@ -56,6 +57,7 @@ export function useTaskDelegation(options: {
   /** The chosen existing chat; null starts a new chat in `target`. */
   readonly existingChat: SidebarThreadSummary | null;
 }) {
+  const { t } = useTranslation();
   const {
     todo,
     onLinkChat,
@@ -94,23 +96,23 @@ export function useTaskDelegation(options: {
       // orphan live work. If nothing arrives, the task's menu can unlink it.
       toastManager.add({
         type: "warning",
-        title: "Couldn't confirm the agent started",
-        description: "The connection dropped while sending. Check the chat.",
+        title: t("common:task_startUnconfirmed"),
+        description: t("common:task_connectionDropped"),
       });
       return true;
     }
     if (result.kind === "dispatched" && result.deferred) {
       toastManager.add({
         type: "info",
-        title: "Chat send in progress",
-        description: "Wait for the current send to finish, then delegate this task again.",
+        title: t("common:task_sendInProgress"),
+        description: t("common:task_waitForSend"),
       });
       return false;
     }
     if (result.kind === "dispatched") {
       toastManager.add({
         type: "success",
-        title: `Delegated to ${agentLabel}`,
+        title: t("common:task_delegatedTo", { agent: agentLabel }),
         description: todo.title,
       });
       return true;
@@ -118,19 +120,19 @@ export function useTaskDelegation(options: {
     if (result.kind === "open-thread") {
       toastManager.add({
         type: "info",
-        title: "Finish delegating in the chat",
+        title: t("common:task_finishInChat"),
         description:
           result.reason === "worktree-pending"
-            ? "Worktree setup runs from the chat composer."
-            : "The chat has nothing to send yet.",
+            ? t("common:task_worktreeSetupInChat")
+            : t("common:task_nothingToSend"),
       });
       void navigate({ to: "/$threadId", params: { threadId } });
       return true;
     }
     toastManager.add({
       type: "error",
-      title: "Couldn't start the agent",
-      description: result.kind === "error" ? result.message : "The server is not reachable.",
+      title: t("common:task_couldNotStart"),
+      description: result.kind === "error" ? result.message : t("common:task_serverUnreachable"),
     });
     return false;
   };
@@ -153,9 +155,8 @@ export function useTaskDelegation(options: {
           // identify the winner, and must not dispatch twice or bypass its settle grace.
           toastManager.add({
             type: "warning",
-            title: "Couldn't confirm the task's chat link",
-            description:
-              "No prompt was sent. Another window may have delegated this task. Check the chat before trying again.",
+            title: t("common:task_linkUnconfirmed"),
+            description: t("common:task_checkOtherWindow"),
           });
           return false;
         }
@@ -168,12 +169,12 @@ export function useTaskDelegation(options: {
               type: "warning",
               title:
                 input.threadId === null
-                  ? "Couldn't unlink the task"
-                  : "The task's chat link changed",
+                  ? t("common:task_couldNotUnlink")
+                  : t("common:task_linkChanged"),
               description:
                 input.threadId === null
-                  ? "The task is still linked. Check its chat before using Unlink in the task menu."
-                  : "Delegation was not started. Check the task and try again.",
+                  ? t("common:task_stillLinked")
+                  : t("common:task_delegationNotStarted"),
             });
           }
           return linked;
@@ -206,8 +207,8 @@ export function useTaskDelegation(options: {
       if (!chatDraft || !composerDraftHasUnsentContent(chatDraft)) return true;
       toastManager.add({
         type: "error",
-        title: "That chat has an unsent message",
-        description: "Send or clear it first, then delegate again.",
+        title: t("common:task_unsentMessage"),
+        description: t("common:task_clearUnsentMessage"),
       });
       return false;
     };
@@ -327,7 +328,7 @@ export function useTaskDelegation(options: {
             ...(adoptsProject ? { projectId } : {}),
           });
           // A confirmed rejection drops the draft; an unknown outcome preserves it.
-          if (!linked) throw new Error("The task could not be linked to the chat.");
+          if (!linked) throw new Error(t("common:task_couldNotLink"));
         },
       });
     } catch (error) {
@@ -372,15 +373,15 @@ export function useTaskDelegation(options: {
       if (uncertainThreadRef.current !== null && isRequestOutcomeUnknown(error)) {
         toastManager.add({
           type: "warning",
-          title: "Couldn't confirm the task's chat link",
-          description: "The agent was not started. Check the chat or unlink the task to try again.",
+          title: t("common:task_linkUnconfirmed"),
+          description: t("common:task_checkChatBeforeRetry"),
         });
         return;
       }
       toastManager.add({
         type: "error",
-        title: "Couldn't delegate the task",
-        description: error instanceof Error ? error.message : "Unexpected error.",
+        title: t("common:task_couldNotDelegate"),
+        description: error instanceof Error ? error.message : t("common:task_unexpectedError"),
       });
     } finally {
       finishTaskDelegation(todo.id, uncertainThreadRef.current);

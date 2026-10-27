@@ -1,3 +1,4 @@
+import { useTranslation } from "~/i18n";
 // FILE: ComposerActiveTaskListCard.tsx
 // Purpose: Active task-list capsule above the composer ("1/3 tasks", spinning while a
 // task runs). Clicking it opens the full ActiveTaskListCard in a popover.
@@ -23,6 +24,8 @@ export function ComposerActiveTaskListCard({
   backgroundTaskCount,
   onOpenSidebar,
 }: ComposerActiveTaskListCardProps) {
+  const { t } = useTranslation();
+
   const totalCount = activeTaskList.tasks.length;
   const completedCount = activeTaskList.tasks.filter((task) => task.status === "completed").length;
   const hasInProgressTask = activeTaskList.tasks.some((task) => task.status === "inProgress");
@@ -37,10 +40,10 @@ export function ComposerActiveTaskListCard({
       }
       label={
         <span className="tabular-nums">
-          {completedCount}/{totalCount} tasks
+          {completedCount}/{totalCount} {t("common:view_tasks")}
         </span>
       }
-      title={`${completedCount} out of ${totalCount} tasks completed`}
+      title={t("chat:completedTaskProgress", { completed: completedCount, count: totalCount })}
       testId="active-task-list-capsule"
       popupTestId="active-task-list-card"
     >

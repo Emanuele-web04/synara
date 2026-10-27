@@ -206,31 +206,51 @@ const MAX_SLUG_LENGTH = 24;
  */
 export const MCP_CONNECTOR_SERVER_NAME_SUFFIX = "_connector";
 
+export type McpConnectorUrlReasonCode =
+  | "required"
+  | "too-long"
+  | "invalid"
+  | "https-required"
+  | "credentials"
+  | "public-host";
+
 export type McpConnectorUrlResult =
   | { readonly ok: true; readonly url: string }
-  | { readonly ok: false; readonly reason: string };
+  | {
+      readonly ok: false;
+      readonly reason: string;
+      readonly reasonCode?: McpConnectorUrlReasonCode;
+    };
 
 /** Accepts only public HTTPS endpoints without credentials; drops any fragment. */
 export function normalizeMcpConnectorUrl(raw: string): McpConnectorUrlResult {
   const trimmed = raw.trim();
-  if (!trimmed) return { ok: false, reason: "Enter the server URL." };
+  if (!trimmed) return { ok: false, reason: "Enter the server URL.", reasonCode: "required" };
   if (trimmed.length > MCP_CONNECTOR_MAX_URL_LENGTH) {
-    return { ok: false, reason: "The URL is too long." };
+    return { ok: false, reason: "The URL is too long.", reasonCode: "too-long" };
   }
   let parsed: URL;
   try {
     parsed = new URL(trimmed);
   } catch {
-    return { ok: false, reason: "Enter a full URL, like https://mcp.example.com/mcp." };
+    return {
+      ok: false,
+      reason: "Enter a full URL, like https://mcp.example.com/mcp.",
+      reasonCode: "invalid",
+    };
   }
   if (parsed.protocol !== "https:") {
-    return { ok: false, reason: "The URL must start with https://." };
+    return { ok: false, reason: "The URL must start with https://.", reasonCode: "https-required" };
   }
   if (parsed.username || parsed.password) {
-    return { ok: false, reason: "Remove the user name or password from the URL." };
+    return {
+      ok: false,
+      reason: "Remove the user name or password from the URL.",
+      reasonCode: "credentials",
+    };
   }
   if (!parsed.hostname.includes(".")) {
-    return { ok: false, reason: "Use the server's public address." };
+    return { ok: false, reason: "Use the server's public address.", reasonCode: "public-host" };
   }
   parsed.hash = "";
   return { ok: true, url: parsed.href };

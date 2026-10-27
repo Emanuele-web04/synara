@@ -12,6 +12,7 @@ import { forwardRef, type ComponentPropsWithoutRef, type ReactNode } from "react
 
 import { cn } from "~/lib/utils";
 import { AttachmentRemoveButton, type AttachmentRemoveButtonSize } from "./AttachmentRemoveButton";
+import { useTranslation } from "~/i18n";
 
 export type AttachmentCardSize = "sm" | "md";
 
@@ -68,6 +69,8 @@ export const AttachmentCard = forwardRef<HTMLSpanElement, AttachmentCardProps>(
     { icon, title, subtitle, size: sizeProp, onRemove, removeLabel, className, ...rest },
     ref,
   ) {
+    const { t } = useTranslation();
+
     const size = sizeProp ?? "md";
     const styles = ATTACHMENT_CARD_SIZE_STYLES[size];
     return (
@@ -100,7 +103,7 @@ export const AttachmentCard = forwardRef<HTMLSpanElement, AttachmentCardProps>(
         {onRemove ? (
           <AttachmentRemoveButton
             size={styles.remove}
-            label={removeLabel ?? "Remove attachment"}
+            label={removeLabel ?? t("chat:removeAttachment")}
             onRemove={onRemove}
           />
         ) : null}

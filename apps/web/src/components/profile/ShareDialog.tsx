@@ -20,6 +20,7 @@ import {
   type ShareTarget,
   shareIntentUrl,
 } from "./shareCardExport";
+import { useTranslation, t } from "~/i18n";
 
 const PREVIEW_WIDTH = 480;
 const CARD_EXPORT_SIZE = { width: SHARE_CARD_WIDTH, height: SHARE_CARD_HEIGHT } as const;
@@ -46,6 +47,8 @@ export function ShareDialog({
   open,
   onOpenChange,
 }: ShareDialogProps) {
+  const { t } = useTranslation();
+
   const cardRef = useRef<HTMLDivElement>(null);
   const previewRef = useRef<HTMLDivElement>(null);
   const [busy, setBusy] = useState<ShareTarget | "copy" | "save" | null>(null);
@@ -147,7 +150,7 @@ export function ShareDialog({
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogPopup className="sm:max-w-[560px]">
-        <DialogTitle className="text-center text-xl">Share your activity</DialogTitle>
+        <DialogTitle className="text-center text-xl">{t("common:shareYourActivity")}</DialogTitle>
         <div className="mt-5 flex flex-col items-center gap-7 px-2 pb-3">
           <div
             ref={previewRef}
@@ -175,8 +178,8 @@ export function ShareDialog({
 
           <div className="flex flex-wrap items-start justify-center gap-x-6 gap-y-4">
             <ShareButton
-              label="Copy"
-              ariaLabel="Copy stat card"
+              label={t("workspace:share_copy")}
+              ariaLabel={t("common:share_copyStatCard")}
               busy={busy === "copy"}
               disabled={actionsDisabled}
               onClick={() => void handleCopy()}
@@ -184,7 +187,7 @@ export function ShareDialog({
               <CopyIcon className="size-5" />
             </ShareButton>
             <ShareButton
-              label="X"
+              label={t("chat:x")}
               busy={busy === "x"}
               disabled={actionsDisabled}
               onClick={() => void handleShare("x")}
@@ -192,7 +195,7 @@ export function ShareDialog({
               <SiX className="size-5" />
             </ShareButton>
             <ShareButton
-              label="LinkedIn"
+              label={t("common:linkedIn")}
               busy={busy === "linkedin"}
               disabled={actionsDisabled}
               onClick={() => void handleShare("linkedin")}
@@ -200,7 +203,7 @@ export function ShareDialog({
               <FaLinkedinIn className="size-5" />
             </ShareButton>
             <ShareButton
-              label="Reddit"
+              label={t("common:reddit")}
               busy={busy === "reddit"}
               disabled={actionsDisabled}
               onClick={() => void handleShare("reddit")}
@@ -208,8 +211,8 @@ export function ShareDialog({
               <SiReddit className="size-5" />
             </ShareButton>
             <ShareButton
-              label="Save"
-              ariaLabel="Save stat card"
+              label={t("computer:form_save")}
+              ariaLabel={t("common:share_saveStatCard")}
               busy={busy === "save"}
               disabled={actionsDisabled}
               onClick={() => void handleSave()}
@@ -230,22 +233,22 @@ export function ShareDialog({
 function copyStatusMessage(result: CopyResult): string {
   switch (result) {
     case "copied":
-      return "Copied image to clipboard.";
+      return t("common:copiedImageToClipboard");
     case "render-failed":
-      return "Could not render the image.";
+      return t("common:couldNotRenderTheImage");
     case "clipboard-unavailable":
-      return "Image copy unavailable. Use Save instead.";
+      return t("common:imageCopyUnavailableUseSaveInstead");
   }
 }
 
 function shareStatusMessage(result: CopyResult): string {
   switch (result) {
     case "copied":
-      return "Image copied to clipboard — paste it into your post.";
+      return t("common:imageCopiedToClipboardPasteItIntoYourPost");
     case "render-failed":
-      return "Composer opened. Use Save to attach the image.";
+      return t("common:composerOpenedUseSaveToAttachTheImage");
     case "clipboard-unavailable":
-      return "Composer opened. Image copy unavailable; use Save to attach.";
+      return t("common:composerOpenedImageCopyUnavailableUseSaveToAttach");
   }
 }
 
@@ -259,13 +262,15 @@ interface ShareButtonProps {
 }
 
 function ShareButton({ label, ariaLabel, busy, disabled, onClick, children }: ShareButtonProps) {
+  const { t } = useTranslation();
+
   return (
     <div className="flex flex-col items-center gap-2">
       <button
         type="button"
         onClick={onClick}
         disabled={disabled}
-        aria-label={ariaLabel ?? `Share to ${label}`}
+        aria-label={ariaLabel ?? t("common:shareTo", { value0: label })}
         className={cn(
           "flex size-14 items-center justify-center rounded-full bg-foreground text-background transition-opacity",
           disabled ? (busy ? "opacity-70" : "opacity-35") : "hover:opacity-90",

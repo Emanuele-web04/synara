@@ -1,5 +1,7 @@
 // FILE: pairingBootstrap.ts
 // Purpose: Exchanges one-time remote pairing links before the application opens a WebSocket.
+import { setLanguagePreference, t } from "~/i18n";
+import { readLanguagePreference } from "~/i18n/locale";
 
 const PAIRING_PATH = "/pair";
 
@@ -24,18 +26,28 @@ interface PairingBootstrapDependencies {
 export type PairingBootstrapResult = "not-pairing" | "redirecting" | "failed";
 
 function renderPairingFailure(): void {
+  setLanguagePreference(readLanguagePreference());
   const root = document.getElementById("root");
   if (!root) return;
 
-  document.title = "Pairing failed · Synara";
+  document.title = t("common:pairingFailedSynara");
   root.innerHTML = `
     <main role="alert" aria-live="assertive" style="min-height:100vh;box-sizing:border-box;display:grid;place-items:center;padding:32px;background:#10110f;color:#f3f0e8;font-family:'DM Sans',sans-serif">
       <section style="width:min(100%,520px);border:1px solid #373a34;background:#171915;padding:clamp(28px,6vw,52px);box-shadow:12px 12px 0 #080907">
-        <p style="margin:0 0 22px;color:#d6ff55;font:600 12px/1.2 'Geist Mono',monospace;letter-spacing:.16em;text-transform:uppercase">Secure pairing interrupted</p>
-        <h1 tabindex="-1" style="margin:0;color:#fffdf7;font-size:clamp(32px,7vw,52px);font-weight:600;line-height:.98;letter-spacing:-.045em">This pairing link could not be used.</h1>
-        <p style="margin:24px 0 0;color:#b8bbb2;font-size:16px;line-height:1.6">The link may be incomplete, expired, or already used. Generate a new pairing link from the Synara server and try again.</p>
+        <p style="margin:0 0 22px;color:#d6ff55;font:600 12px/1.2 'Geist Mono',monospace;letter-spacing:.16em;text-transform:uppercase"></p>
+        <h1 tabindex="-1" style="margin:0;color:#fffdf7;font-size:clamp(32px,7vw,52px);font-weight:600;line-height:.98;letter-spacing:-.045em"></h1>
+        <p style="margin:24px 0 0;color:#b8bbb2;font-size:16px;line-height:1.6"></p>
       </section>
     </main>`;
+  root.querySelectorAll("section > p, section > h1")[0]!.textContent = t(
+    "common:securePairingInterrupted",
+  );
+  root.querySelectorAll("section > p, section > h1")[1]!.textContent = t(
+    "common:thisPairingLinkCouldNotBeUsed",
+  );
+  root.querySelectorAll("section > p, section > h1")[2]!.textContent = t(
+    "common:theLinkMayBeIncompleteExpiredOrAlreadyUsed",
+  );
   root.querySelector<HTMLElement>("h1")?.focus();
 }
 

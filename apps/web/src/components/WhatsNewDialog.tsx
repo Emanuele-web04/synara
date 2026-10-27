@@ -24,6 +24,7 @@ import {
   DialogPopup,
   DialogTitle,
 } from "./ui/dialog";
+import { useTranslation } from "~/i18n";
 
 type View = "current" | "changelog";
 
@@ -88,6 +89,8 @@ function WhatsNewDialogContent({
   readonly currentVersion: string;
   readonly onOpenChange: (open: boolean) => void;
 }) {
+  const { t } = useTranslation();
+
   const [view, setView] = useState<View>("current");
 
   return (
@@ -120,11 +123,11 @@ function WhatsNewDialogContent({
             className="gap-1 text-muted-foreground"
             onClick={() => setView("changelog")}
           >
-            View changelog
+            {t("common:viewChangelog")}
             <ArrowRightIcon className="size-3" />
           </Button>
           <Button size="sm" onClick={() => onOpenChange(false)}>
-            Got it
+            {t("common:whatsNew_gotIt")}
           </Button>
         </DialogFooter>
       )}
@@ -139,13 +142,16 @@ function CurrentHeader({
   readonly entry: WhatsNewEntry;
   readonly currentVersion: string;
 }) {
+  const { t } = useTranslation();
+
   return (
     <div className="flex items-center gap-3">
       <SynaraLogo aria-hidden className="size-8 shrink-0 text-foreground" />
       <div className="flex min-w-0 flex-col">
-        <DialogTitle className="text-base">What&rsquo;s new?</DialogTitle>
+        <DialogTitle className="text-base">{t("common:whatSNew")}</DialogTitle>
         <DialogDescription className="text-ui leading-snug">
-          v{currentVersion}
+          {t("common:v")}
+          {currentVersion}
           <span aria-hidden="true"> · </span>
           {entry.date}
         </DialogDescription>
@@ -155,15 +161,22 @@ function CurrentHeader({
 }
 
 function ChangelogHeader({ onBack }: { readonly onBack: () => void }) {
+  const { t } = useTranslation();
+
   return (
     <div className="flex items-center gap-3">
-      <Button size="icon-sm" variant="ghost" aria-label="Back to What's new" onClick={onBack}>
+      <Button
+        size="icon-sm"
+        variant="ghost"
+        aria-label={t("common:backToWhatSNew")}
+        onClick={onBack}
+      >
         <ArrowLeftIcon className="size-4" />
       </Button>
       <div className="flex min-w-0 flex-col">
-        <DialogTitle className="text-base">Complete changelog</DialogTitle>
+        <DialogTitle className="text-base">{t("common:whatsNew_completeChangelog")}</DialogTitle>
         <DialogDescription className="text-ui leading-snug">
-          Every curated release, newest first.
+          {t("common:everyCuratedReleaseNewestFirst")}
         </DialogDescription>
       </div>
     </div>

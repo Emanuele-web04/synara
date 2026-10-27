@@ -2,11 +2,12 @@
 // Purpose: Renders the compact file-comment count chip used in composer and user bubbles.
 // Layer: Chat attachment presentation
 
-import { pluralize } from "@synara/shared/text";
+import { pluralize } from "~/i18n/pluralize";
 
 import { formatFileCommentLabel } from "~/lib/fileComments";
 import { MessageCircleIcon } from "~/lib/icons";
 import { AttachmentSummaryChip } from "./AttachmentSummaryChip";
+import { t } from "~/i18n";
 
 // Minimal shape shared by composer drafts (FileCommentDraft) and parsed bubble
 // entries (ParsedFileCommentEntry) so one chip renders both without an id.
@@ -23,7 +24,7 @@ interface FileCommentsSummaryChipProps {
 }
 
 function commentCountLabel(count: number): string {
-  return `${count} ${pluralize(count, "comment")}`;
+  return t("chat:symbol7", { value0: count, value1: pluralize(count, "comment") });
 }
 
 export function FileCommentsSummaryChip(props: FileCommentsSummaryChipProps) {

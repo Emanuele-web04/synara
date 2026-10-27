@@ -21,9 +21,11 @@ import type {
 } from "@synara/contracts";
 import {
   COMPUTER_PERMISSION_KINDS,
-  listComputerPermissions,
   missingComputerAppSnapPermissions,
 } from "@synara/shared/computerGrants";
+
+import { t } from "~/i18n";
+import { localizedComputerPermissions } from "./computerToolPresentation";
 
 import { computerStatusNeedsSetup } from "~/components/ComputerPanel.logic";
 import { isLoopbackHostname } from "~/components/Sidebar.logic";
@@ -102,14 +104,14 @@ export interface ComputerProvisionToast {
 export function computerProvisionStartToast(
   missing: readonly ComputerPermission[] = [],
 ): ComputerProvisionToast {
-  const labels = listComputerPermissions(missing);
+  const labels = localizedComputerPermissions(missing);
   return {
     type: "info",
-    title: "Setting up computer control",
+    title: t("computer:provisionStarting"),
     description:
       labels.length > 0
-        ? `macOS may ask to allow ${labels} for Synara.`
-        : "Setting up the desktop may require installing a helper or allowing the permissions Synara needs.",
+        ? t("computer:provisionPermissionsPrompt", { permissions: labels })
+        : t("computer:provisionSetupDescription"),
   };
 }
 
@@ -118,10 +120,10 @@ export function computerProvisionResultToast(
   result: ComputerProvisionResult,
 ): ComputerProvisionToast {
   return computerProvisionOutcome(result) === "ready"
-    ? { type: "success", title: "Computer control is ready", description: result.summary }
+    ? { type: "success", title: t("computer:computerControlIsReady"), description: result.summary }
     : {
         type: "warning",
-        title: "Computer control still needs setup",
+        title: t("computer:provisionIncomplete"),
         description: result.summary,
       };
 }
@@ -129,7 +131,7 @@ export function computerProvisionResultToast(
 export function computerProvisionErrorToast(error: unknown): ComputerProvisionToast {
   return {
     type: "error",
-    title: "Couldn't set up computer control",
+    title: t("computer:provisionFailed"),
     description: provisionErrorMessage(error),
   };
 }
@@ -137,7 +139,7 @@ export function computerProvisionErrorToast(error: unknown): ComputerProvisionTo
 export function provisionErrorMessage(error: unknown): string {
   return error instanceof Error && error.message.length > 0
     ? error.message
-    : "The server gave no reason.";
+    : t("computer:provisionNoReason");
 }
 
 /**
@@ -152,15 +154,14 @@ export function computerProvisionNote(state: {
 }): string | undefined {
   if (state.isPending) {
     if (state.missing?.length) {
-      return `Checking ${listComputerPermissions(state.missing)}. Allow access in the macOS prompt or System Settings, then return to Synara.`;
+      return t("computer:provisionCheckingPermissions", {
+        permissions: localizedComputerPermissions(state.missing),
+      });
     }
-    return (
-      "Setting up the agent's desktop. This installs or builds whatever this machine still needs, " +
-      "and may ask for your password or for desktop permissions. The first run can take a few minutes."
-    );
+    return t("computer:provisionPending");
   }
   if (state.error !== undefined && state.error !== null) {
-    return `Setting up failed. ${provisionErrorMessage(state.error)}`;
+    return t("computer:provisionError", { reason: provisionErrorMessage(state.error) });
   }
   return state.result?.summary;
 }

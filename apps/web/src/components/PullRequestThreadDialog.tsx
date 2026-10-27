@@ -21,6 +21,7 @@ import {
 } from "./ui/dialog";
 import { Input } from "./ui/input";
 import { Spinner } from "./ui/spinner";
+import { useTranslation } from "~/i18n";
 
 interface PullRequestThreadDialogProps {
   open: boolean;
@@ -75,6 +76,8 @@ function PullRequestThreadDialogContent({
 }: Omit<PullRequestThreadDialogProps, "open"> & {
   onBusyChange: (busy: boolean) => void;
 }) {
+  const { t } = useTranslation();
+
   const queryClient = useQueryClient();
   const referenceInputRef = useRef<HTMLInputElement>(null);
   const [reference, setReference] = useState(initialReference ?? "");
@@ -182,37 +185,38 @@ function PullRequestThreadDialogContent({
   const validationMessage = !referenceDirty
     ? null
     : reference.trim().length === 0
-      ? "Paste a GitHub pull request URL or enter 123 / #123."
+      ? t("git:pasteAGitHubPullRequestURLOrEnter123")
       : parsedReference === null
-        ? "Use a GitHub pull request URL, 123, or #123."
+        ? t("git:useAGitHubPullRequestURL123Or123")
         : null;
   const errorMessage =
     validationMessage ??
     (resolvedPullRequest === null && resolvePullRequestQuery.isError
       ? resolvePullRequestQuery.error instanceof Error
         ? resolvePullRequestQuery.error.message
-        : "Failed to resolve pull request."
+        : t("git:prDialog_resolveFailed")
       : preparePullRequestThreadMutation.error instanceof Error
         ? preparePullRequestThreadMutation.error.message
         : preparePullRequestThreadMutation.error
-          ? "Failed to prepare pull request thread."
+          ? t("git:failedToPreparePullRequestThread")
           : null);
 
   return (
     <>
       <DialogHeader>
-        <DialogTitle>Checkout Pull Request</DialogTitle>
+        <DialogTitle>{t("common:checkoutPullRequest")}</DialogTitle>
         <DialogDescription>
-          Resolve a GitHub pull request, then create the draft thread in the main repo or in a
-          dedicated worktree.
+          {t("git:resolveAGitHubPullRequestThenCreateTheDraft")}
         </DialogDescription>
       </DialogHeader>
       <DialogPanel className="space-y-4">
         <label className="grid gap-1.5">
-          <span className="text-ui leading-snug font-medium text-foreground">Pull request</span>
+          <span className="text-ui leading-snug font-medium text-foreground">
+            {t("git:general_environmentPullRequest")}
+          </span>
           <Input
             ref={referenceInputRef}
-            placeholder="https://github.com/owner/repo/pull/42 or #42"
+            placeholder={t("git:pullRequestReferencePlaceholder")}
             value={reference}
             onChange={(event) => {
               setReferenceDirty(true);
@@ -238,7 +242,7 @@ function PullRequestThreadDialogContent({
                   {resolvedPullRequest.title}
                 </p>
                 <p className="truncate text-muted-foreground text-ui leading-snug">
-                  #{resolvedPullRequest.number} · {resolvedPullRequest.headBranch} to{" "}
+                  #{resolvedPullRequest.number} · {resolvedPullRequest.headBranch} {t("git:to")}{" "}
                   {resolvedPullRequest.baseBranch}
                 </p>
               </div>
@@ -252,7 +256,7 @@ function PullRequestThreadDialogContent({
         {isResolving ? (
           <div className="flex items-center gap-2 text-muted-foreground text-ui leading-snug">
             <Spinner className="size-3.5" />
-            Resolving pull request...
+            {t("git:prDialog_resolving")}
           </div>
         ) : null}
 
@@ -268,7 +272,7 @@ function PullRequestThreadDialogContent({
           onClick={() => onOpenChange(false)}
           disabled={preparePullRequestThreadMutation.isPending}
         >
-          Cancel
+          {t("common:form_cancel")}
         </Button>
         <Button
           type="button"
@@ -284,7 +288,9 @@ function PullRequestThreadDialogContent({
             preparePullRequestThreadMutation.isPending
           }
         >
-          {preparingMode === "local" ? "Preparing local..." : "Local"}
+          {preparingMode === "local"
+            ? t("git:prDialog_preparingLocal")
+            : t("computer:worktreeMode_local")}
         </Button>
         <Button
           type="button"
@@ -299,7 +305,9 @@ function PullRequestThreadDialogContent({
             preparePullRequestThreadMutation.isPending
           }
         >
-          {preparingMode === "worktree" ? "Preparing worktree..." : "Worktree"}
+          {preparingMode === "worktree"
+            ? t("git:timeline_preparingWorktree")
+            : t("common:worktreeMode_worktree")}
         </Button>
       </DialogFooter>
     </>

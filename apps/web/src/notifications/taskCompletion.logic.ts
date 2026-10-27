@@ -9,6 +9,7 @@ import {
   type TerminalVisualState,
 } from "@synara/shared/terminalThreads";
 import { pendingRequestInstanceKey } from "@synara/shared/threadSummary";
+import { t } from "~/i18n";
 import type { Thread, ThreadSession } from "../types";
 import {
   derivePendingApprovals,
@@ -729,15 +730,15 @@ function approvalSummary(
 ): string {
   switch (requestKind) {
     case "command":
-      return "Command approval requested.";
+      return t("common:commandApprovalRequested");
     case "file-read":
-      return "File-read approval requested.";
+      return t("common:fileReadApprovalRequested");
     case "file-change":
-      return "File-change approval requested.";
+      return t("common:fileChangeApprovalRequested");
     case "permissions":
-      return "Permission approval requested.";
+      return t("common:permissionApprovalRequested");
     case "tool":
-      return "Tool approval requested.";
+      return t("common:toolApprovalRequested");
   }
 }
 
@@ -904,11 +905,12 @@ export function buildTaskCompletionCopy(candidate: CompletedThreadCandidate): {
   body: string;
 } {
   const normalizedTitle = candidate.title.trim();
-  const threadLabel = normalizedTitle.length > 0 ? normalizedTitle : "Untitled thread";
+  const threadLabel =
+    normalizedTitle.length > 0 ? normalizedTitle : t("workspace:searchPalette_untitledThread");
 
   return {
     title: threadLabel,
-    body: candidate.assistantSummary || "Finished working.",
+    body: candidate.assistantSummary || t("common:finishedWorking"),
   };
 }
 
@@ -917,15 +919,16 @@ export function buildThreadAttentionCopy(candidate: ThreadAttentionCandidate): {
   body: string;
 } {
   const normalizedTitle = candidate.title.trim();
-  const threadLabel = normalizedTitle.length > 0 ? normalizedTitle : "Untitled thread";
+  const threadLabel =
+    normalizedTitle.length > 0 ? normalizedTitle : t("workspace:searchPalette_untitledThread");
   const summary =
     candidate.summary ??
     (candidate.kind === "approval"
       ? approvalSummary(candidate.requestKind ?? "command")
-      : "User input requested.");
+      : t("common:userInputRequested"));
 
   return {
-    title: "Input needed",
+    title: t("common:inputNeeded"),
     body: `${threadLabel}: ${summary}`,
   };
 }
@@ -934,10 +937,10 @@ export function buildTerminalCompletionCopy(candidate: CompletedTerminalCandidat
   title: string;
   body: string;
 } {
-  const terminalLabel = candidate.title.trim() || "Terminal";
+  const terminalLabel = candidate.title.trim() || t("workspace:viewportPane_terminal");
   return {
-    title: "Terminal task completed",
-    body: `${terminalLabel} finished working.`,
+    title: t("workspace:terminal_taskCompleted"),
+    body: t("common:finishedWorking2", { terminal: terminalLabel }),
   };
 }
 
@@ -945,10 +948,10 @@ export function buildTerminalAttentionCopy(candidate: TerminalAttentionCandidate
   title: string;
   body: string;
 } {
-  const terminalLabel = candidate.title.trim() || "Terminal";
+  const terminalLabel = candidate.title.trim() || t("workspace:viewportPane_terminal");
   return {
-    title: "Terminal input needed",
-    body: `${terminalLabel} needs your attention.`,
+    title: t("workspace:terminalInputNeeded"),
+    body: t("common:needsYourAttention", { terminal: terminalLabel }),
   };
 }
 

@@ -19,6 +19,7 @@ import type { PullRequestContextDraft } from "~/lib/pullRequestContext";
 import { useStore } from "~/store";
 import { useProjectEnvironmentStore } from "~/projectEnvironmentStore";
 import { useHandleNewThread } from "./useHandleNewThread";
+import { useTranslation } from "~/i18n";
 
 export type GitHubItemThreadAction = "send" | "findings" | "conflicts";
 
@@ -36,6 +37,8 @@ export function useStartGitHubItemThread(input: {
   /** The item's own project checkout, used when the target project has no known root. */
   workspaceRoot: string | null;
 }) {
+  const { t } = useTranslation();
+
   const queryClient = useQueryClient();
   const { settings } = useAppSettings();
   const { handleNewThread } = useHandleNewThread();
@@ -62,9 +65,9 @@ export function useStartGitHubItemThread(input: {
       type: "loading",
       title: pullRequestUrl
         ? mode === "worktree"
-          ? "Preparing pull request worktree…"
-          : "Checking out pull request branch…"
-        : "Opening chat…",
+          ? t("git:preparingPullRequestWorktree")
+          : t("git:checkingOutPullRequestBranch")
+        : t("git:openingChat"),
       timeout: 0,
     });
     const targetCwd =
@@ -79,7 +82,7 @@ export function useStartGitHubItemThread(input: {
         : prepareThreadMutation
             .mutateAsync({ reference: pullRequestUrl, mode, cwd: targetCwd })
             .then((prepared) => {
-              toastManager.update(toastId, { title: "Opening chat…" });
+              toastManager.update(toastId, { title: t("git:openingChat") });
               return handleNewThread(request.projectId, {
                 branch: prepared.branch,
                 worktreePath: prepared.worktreePath,
@@ -93,14 +96,15 @@ export function useStartGitHubItemThread(input: {
             .then((threadId) => ({ threadId, checkedOut: true }));
     void createThread
       .then(({ threadId, checkedOut }) => {
-        if (!threadId) throw new Error("Could not create a draft thread for this item.");
+        if (!threadId) throw new Error(t("git:couldNotCreateADraftThreadForThisItem"));
         addChatPullRequestContext(threadId, request.card({ checkedOut }));
       })
       .catch((error: unknown) => {
         toastManager.add({
           type: "error",
           title: request.errorTitle,
-          description: error instanceof Error ? error.message : "The thread could not be prepared.",
+          description:
+            error instanceof Error ? error.message : t("git:theThreadCouldNotBePrepared"),
         });
       })
       .finally(() => {

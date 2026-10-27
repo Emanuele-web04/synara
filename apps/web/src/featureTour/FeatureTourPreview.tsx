@@ -3,6 +3,7 @@ import { ProviderIcon } from "~/components/ProviderIcon";
 import { CheckIcon, GitPullRequestIcon, UsersIcon, WorkflowIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 import type { FeatureTourSlide } from "./content";
+import { useTranslation } from "~/i18n";
 
 // One quiet illustration per slide: just the piece of the app the slide is about, drawn
 // with the workspace's own glyphs and surface tokens. No live chats or provider/GitHub
@@ -44,16 +45,18 @@ function SkeletonLines() {
 }
 
 function WorkspacePreview() {
+  const { t } = useTranslation();
+
   return (
     <div className="flex flex-col gap-2">
       <div className="flex gap-1.5">
         <Chip active>
           <ProviderIcon provider="codex" className="size-3.5 shrink-0" />
-          <span className="truncate">Dashboard</span>
+          <span className="truncate">{t("onboarding:dashboard")}</span>
         </Chip>
         <Chip>
           <ProviderIcon provider="claudeAgent" className="size-3.5 shrink-0" />
-          <span className="truncate">API review</span>
+          <span className="truncate">{t("onboarding:aPIReview")}</span>
         </Chip>
       </div>
       <div className="grid grid-cols-2 gap-2">
@@ -96,30 +99,36 @@ function AccountsPreview() {
 }
 
 function ReviewPreview() {
+  const { t } = useTranslation();
+
   return (
     <div className="flex flex-col gap-2 rounded-xl border border-border bg-background p-3 text-ui-sm shadow-sm">
       <div className="flex items-center gap-2 font-medium">
         <GitPullRequestIcon className="size-4 shrink-0 text-success" />
-        <span className="truncate">Dashboard polish</span>
+        <span className="truncate">{t("onboarding:dashboardPolish")}</span>
       </div>
-      <div className="rounded bg-success/10 px-2 py-1 text-success">+ Add the empty state</div>
+      <div className="rounded bg-success/10 px-2 py-1 text-success">
+        {t("onboarding:addTheEmptyState")}
+      </div>
       <div className="rounded bg-destructive/10 px-2 py-1 text-destructive">
-        − Remove the placeholder
+        {t("onboarding:removeThePlaceholder")}
       </div>
       <div className="flex items-center gap-2 pt-1 text-muted-foreground">
         <ProviderIcon provider="claudeAgent" className="size-3.5 shrink-0" />
-        Ask an agent to review
+        {t("onboarding:askAnAgentToReview")}
       </div>
     </div>
   );
 }
 
 function HubPreview() {
+  const { t } = useTranslation();
+
   return (
     <div className="flex flex-col items-center">
       <Chip active>
         <WorkflowIcon className="size-4 shrink-0" />
-        Coordinator
+        {t("workspace:coordinator")}
       </Chip>
       <div className="h-3 w-px bg-border" />
       <div className="h-px w-1/2 bg-border" />
@@ -129,7 +138,9 @@ function HubPreview() {
             <div className="h-3 w-px bg-border" />
             <Chip>
               <ProviderIcon provider={provider} className="size-4 shrink-0" />
-              <span className="truncate">{provider === "codex" ? "Frontend" : "API"}</span>
+              <span className="truncate">
+                {provider === "codex" ? t("onboarding:frontend") : "API"}
+              </span>
             </Chip>
           </div>
         ))}

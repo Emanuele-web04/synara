@@ -23,6 +23,7 @@ import { flushWorkspaceEditors } from "~/lib/workspaceEditorSession";
 import { WorkspaceFilePreview } from "../WorkspaceFilePreview";
 import { PanelStateMessage } from "./PanelStateMessage";
 import { WorkspaceExplorerSidebar } from "./workspaceExplorer";
+import { useTranslation } from "~/i18n";
 
 // The dock lays out as a fixed horizontal row, so the shared sidebar takes a
 // full-height fixed-width column (the editor's responsive default would collapse
@@ -39,6 +40,8 @@ export const DockExplorerPane = function DockExplorerPane(props: {
   onAskWhyInChat?: ((reference: ChatFileReference) => void) | undefined;
   onCommentInChat?: ((comment: FileCommentSelection) => void) | undefined;
 }) {
+  const { t } = useTranslation();
+
   const queryClient = useQueryClient();
   // Browse state lives in the per-thread store, not component state: the pane
   // unmounts on a thread switch and remounts on return, so useState here would
@@ -135,7 +138,7 @@ export const DockExplorerPane = function DockExplorerPane(props: {
           editable
           emptyState={
             <PanelStateMessage density="compact" fill="flex">
-              <p>Select a file from the tree to view it.</p>
+              <p>{t("chat:selectAFileFromTheTreeToViewIt")}</p>
             </PanelStateMessage>
           }
           onReferenceInChat={props.onReferenceInChat}

@@ -1,3 +1,4 @@
+import { useTranslation } from "~/i18n";
 // FILE: EnvironmentActionsSection.tsx
 // Purpose: Environment panel section that lists the active project's actions (scripts).
 //          This is where the first action gets created now that the chat top bar's
@@ -40,6 +41,8 @@ export function EnvironmentActionsSection({
   onUpdateScript,
   onDeleteScript,
 }: EnvironmentActionsSectionProps) {
+  const { t } = useTranslation();
+
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingScriptId, setEditingScriptId] = useState<string | null>(null);
   const editingScript = useMemo(
@@ -71,15 +74,19 @@ export function EnvironmentActionsSection({
     <>
       <EnvironmentSectionDivider />
       {/* Keep action management out of the panel until explicitly expanded. */}
-      <EnvironmentCollapsibleSection label="Actions" defaultOpen={false}>
+      <EnvironmentCollapsibleSection label={t("workspace:actions")} defaultOpen={false}>
         <div className="flex justify-end pr-2">
-          <IconButton label="Add action" tooltip="Add action" onClick={openAddDialog}>
+          <IconButton
+            label={t("workspace:scripts_addActionTitle")}
+            tooltip={t("workspace:scripts_addActionTitle")}
+            onClick={openAddDialog}
+          >
             <PlusIcon className="size-3.5" />
           </IconButton>
         </div>
         {scripts.length === 0 ? (
           <p className="px-2 pb-1 text-ui-sm leading-snug text-[var(--color-text-foreground-secondary)]">
-            No actions yet. Add one to run it from the top bar or a keybinding.
+            {t("workspace:noProjectActions")}
           </p>
         ) : (
           scripts.map((script) => (
@@ -90,7 +97,9 @@ export function EnvironmentActionsSection({
                 trailing={
                   <>
                     {script.runOnWorktreeCreate ? (
-                      <span className="text-[var(--color-text-foreground-secondary)]">Setup</span>
+                      <span className="text-[var(--color-text-foreground-secondary)]">
+                        {t("workspace:projectActionSetup")}
+                      </span>
                     ) : null}
                     <span
                       aria-hidden
@@ -98,12 +107,12 @@ export function EnvironmentActionsSection({
                     />
                   </>
                 }
-                aria-label={`Run ${script.name}`}
+                aria-label={t("workspace:run", { value0: script.name })}
                 onClick={() => onRunScript(script)}
               />
               <IconButton
-                label={`Edit ${script.name}`}
-                tooltip="Edit action"
+                label={t("workspace:edit", { value0: script.name })}
+                tooltip={t("workspace:editProjectAction")}
                 className="absolute top-1/2 right-2 -translate-y-1/2 opacity-0 transition-opacity group-hover/action:opacity-100 focus-visible:opacity-100"
                 onClick={() => openEditDialog(script)}
               >

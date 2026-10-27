@@ -22,6 +22,7 @@ import {
 } from "../ui/alert-dialog";
 import { Button } from "../ui/button";
 import { CHAT_SURFACE_HEADER_DIVIDER_CLASS_NAME, ChatHeaderIconButton } from "./chatHeaderControls";
+import { useTranslation } from "~/i18n";
 
 export function workspaceFileEditorBreadcrumbSegments(
   workspaceRoot: string | null,
@@ -51,13 +52,15 @@ interface WorkspaceFileEditorHistoryActionsProps {
 }
 
 export function WorkspaceFileEditorHistoryActions(props: WorkspaceFileEditorHistoryActionsProps) {
+  const { t } = useTranslation();
+
   return (
     <>
       <ChatHeaderIconButton
         type="button"
         tone="plain"
-        label="Undo"
-        title="Undo"
+        label={t("workspace:toast_undo")}
+        title={t("workspace:toast_undo")}
         disabled={!props.history.canUndo}
         onClick={props.onUndo}
       >
@@ -66,8 +69,8 @@ export function WorkspaceFileEditorHistoryActions(props: WorkspaceFileEditorHist
       <ChatHeaderIconButton
         type="button"
         tone="plain"
-        label="Redo"
-        title="Redo"
+        label={t("workspace:redo")}
+        title={t("workspace:redo")}
         disabled={!props.history.canRedo}
         onClick={props.onRedo}
       >
@@ -76,8 +79,8 @@ export function WorkspaceFileEditorHistoryActions(props: WorkspaceFileEditorHist
       <ChatHeaderIconButton
         type="button"
         tone="plain"
-        label="Revert all changes"
-        title="Revert all changes"
+        label={t("workspace:revertAllChanges")}
+        title={t("workspace:revertAllChanges")}
         disabled={!props.canRevert}
         onClick={props.onRevert}
       >
@@ -100,6 +103,8 @@ interface WorkspaceFileEditorHeaderProps {
 }
 
 export function WorkspaceFileEditorHeader(props: WorkspaceFileEditorHeaderProps) {
+  const { t } = useTranslation();
+
   const { fileSegment, prefixSegments } = workspaceFileEditorBreadcrumbSegments(
     props.workspaceRoot,
     props.filePath,
@@ -112,7 +117,10 @@ export function WorkspaceFileEditorHeader(props: WorkspaceFileEditorHeaderProps)
         CHAT_SURFACE_HEADER_DIVIDER_CLASS_NAME,
       )}
     >
-      <nav aria-label="File path" className="flex min-w-0 flex-1 items-center text-ui leading-none">
+      <nav
+        aria-label={t("workspace:workspaceFilePreviewHeader_filePath")}
+        className="flex min-w-0 flex-1 items-center text-ui leading-none"
+      >
         <span className="flex min-w-0 shrink-[9999] items-center overflow-hidden">
           {prefixSegments.map((segment) => (
             <Fragment key={segment.key}>
@@ -132,8 +140,8 @@ export function WorkspaceFileEditorHeader(props: WorkspaceFileEditorHeaderProps)
         </span>
         {props.dirty ? (
           <span
-            aria-label="Unsaved changes"
-            title="Unsaved changes"
+            aria-label={t("workspace:unsavedChanges")}
+            title={t("workspace:unsavedChanges")}
             className="ml-2 size-1.5 shrink-0 rounded-full bg-[var(--color-text-accent)]"
           />
         ) : null}
@@ -142,7 +150,11 @@ export function WorkspaceFileEditorHeader(props: WorkspaceFileEditorHeaderProps)
       <span className="shrink-0 text-ui-sm text-muted-foreground/70">{props.title}</span>
 
       <span role="status" className="shrink-0 text-ui-sm text-muted-foreground">
-        {props.saving ? "Saving..." : props.dirty ? "Unsaved changes" : "Saved"}
+        {props.saving
+          ? t("common:saving2")
+          : props.dirty
+            ? t("workspace:unsavedChanges")
+            : t("workspace:saved")}
       </span>
       <div className="flex shrink-0 items-center gap-1.5">
         {props.actions}
@@ -154,13 +166,13 @@ export function WorkspaceFileEditorHeader(props: WorkspaceFileEditorHeaderProps)
           disabled={!props.canSave || props.saving}
           onClick={props.onSave}
         >
-          {props.saving ? "Saving..." : "Save"}
+          {props.saving ? t("common:saving2") : t("computer:form_save")}
         </Button>
         <ChatHeaderIconButton
           type="button"
           tone="plain"
-          label="Close editor"
-          title="Close editor"
+          label={t("workspace:closeEditor")}
+          title={t("workspace:closeEditor")}
           onClick={props.onClose}
         >
           <XIcon aria-hidden="true" className="size-3.5" />
@@ -180,6 +192,8 @@ interface WorkspaceFileEditorDiscardDialogProps {
 }
 
 export function WorkspaceFileEditorDiscardDialog(props: WorkspaceFileEditorDiscardDialogProps) {
+  const { t } = useTranslation();
+
   return (
     <AlertDialog open={props.open} onOpenChange={props.onOpenChange}>
       <AlertDialogPopup>
@@ -189,7 +203,7 @@ export function WorkspaceFileEditorDiscardDialog(props: WorkspaceFileEditorDisca
         </AlertDialogHeader>
         <AlertDialogFooter>
           <AlertDialogClose render={<Button variant="outline" size="sm" />}>
-            Cancel
+            {t("common:form_cancel")}
           </AlertDialogClose>
           <Button variant="destructive" size="sm" onClick={props.onConfirm}>
             {props.confirmLabel}
@@ -235,6 +249,8 @@ interface WorkspaceFileEditorConflictBarProps {
 }
 
 export function WorkspaceFileEditorConflictBar(props: WorkspaceFileEditorConflictBarProps) {
+  const { t } = useTranslation();
+
   return (
     <WorkspaceFileEditorNoticeBar
       message={props.message}
@@ -247,7 +263,7 @@ export function WorkspaceFileEditorConflictBar(props: WorkspaceFileEditorConflic
             className="!h-6 shrink-0 rounded-md text-ui-sm"
             onClick={props.onReload}
           >
-            Reload from disk
+            {t("workspace:reloadFromDisk")}
           </Button>
           {props.conflict ? (
             <Button
@@ -257,7 +273,7 @@ export function WorkspaceFileEditorConflictBar(props: WorkspaceFileEditorConflic
               className="!h-6 shrink-0 rounded-md text-ui-sm"
               onClick={props.onOverwrite}
             >
-              Overwrite
+              {t("common:overwrite")}
             </Button>
           ) : null}
         </>

@@ -13,6 +13,7 @@ import { SIDEBAR_ROW_FOCUS_CLASS_NAME, SIDEBAR_SECTION_LABEL_CLASS_NAME } from "
 import type { SidebarRowContextMenuPosition } from "./sidebarThreadRowGestures";
 import { DisclosureChevron } from "./ui/DisclosureChevron";
 import { DisclosureRegion } from "./ui/DisclosureRegion";
+import { useTranslation } from "~/i18n";
 
 /** A section's title where the section cannot fold (Pinned, date buckets, project blocks). */
 export function SidebarSectionLabel({
@@ -117,6 +118,8 @@ export function SidebarShowMoreRow({
   /** Padding of the buttons, where the rows above pad differently from the sidebar's own. */
   className?: string;
 }) {
+  const { t } = useTranslation();
+
   if (!canShowMore && !canShowLess) return null;
   const buttonClassName = cn(
     "h-7 cursor-pointer rounded-lg px-2.5 text-left text-ui text-muted-foreground/79 hover:text-foreground",
@@ -127,7 +130,7 @@ export function SidebarShowMoreRow({
     <div className="flex w-full items-center gap-1">
       {canShowMore ? (
         <button type="button" className={cn(buttonClassName, "flex-1")} onClick={onShowMore}>
-          Show more
+          {t("workspace:timeline_showMore")}
         </button>
       ) : null}
       {canShowLess ? (
@@ -136,7 +139,7 @@ export function SidebarShowMoreRow({
           className={cn(buttonClassName, canShowMore ? "flex-none" : "flex-1")}
           onClick={onShowLess}
         >
-          Show less
+          {t("workspace:timeline_showLess")}
         </button>
       ) : null}
     </div>

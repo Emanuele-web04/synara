@@ -11,7 +11,7 @@ import {
   providerUsageDisplayName,
   selectVisibleProviderUsageSnapshots,
 } from "@synara/shared/providerUsage";
-import { pluralize } from "@synara/shared/text";
+import { pluralize } from "~/i18n/pluralize";
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { useEffect, useMemo, useRef, type ReactNode } from "react";
@@ -29,7 +29,7 @@ import {
   deriveProviderUsageDisplayRows,
   providerUsageProgressTrackProps,
 } from "~/lib/providerUsageDisplay";
-import { deriveAccountRateLimits } from "~/lib/rateLimits";
+import { deriveAccountRateLimits, rateLimitWindowDisplayLabel } from "~/lib/rateLimits";
 import {
   serverAllProviderUsageQueryOptions,
   serverRecapQueryOptions,
@@ -84,20 +84,21 @@ import {
 } from "./inboxStories";
 import { InboxTaskList } from "./InboxTaskList";
 import { InboxTasks } from "./InboxTasks";
+import { useTranslation } from "~/i18n";
 
 // A turn finishing refreshes the recap, at most this often, so busy automations cannot
 // keep the server's recap query running back to back.
 const RECAP_REFETCH_MIN_INTERVAL_MS = 20_000;
 
-const CLOCK_TIME_FORMAT = new Intl.DateTimeFormat(undefined, {
+const CLOCK_TIME_OPTIONS = {
   hour: "2-digit",
   minute: "2-digit",
-});
-const LONG_DATE_FORMAT = new Intl.DateTimeFormat(undefined, {
+} as const;
+const LONG_DATE_OPTIONS = {
   weekday: "long",
   month: "long",
   day: "numeric",
-});
+} as const;
 
 /** The server refuses the recap (a Stable server): retrying cannot help. */
 function isRecapUnavailableError(error: unknown): boolean {
@@ -181,6 +182,8 @@ const TONE_CLASS_NAME: Record<InboxTone, string> = {
 
 /** Morning, afternoon, and evening side by side, each with its prompts and hourly bars. */
 function SlotColumns({ slots }: { slots: readonly InboxSlotSummary[] }) {
+  const { t, formatLocale } = useTranslation();
+
   const maxTokens = Math.max(1, ...slots.flatMap((slot) => slot.hours.map((hour) => hour.tokens)));
   return (
     <div className={cn("grid gap-4 @lg:gap-7", SLOT_GRID_COLUMNS[slots.length])}>
@@ -189,11 +192,13 @@ function SlotColumns({ slots }: { slots: readonly InboxSlotSummary[] }) {
           <div className="flex items-baseline justify-between gap-2 text-ui-sm text-muted-foreground">
             <span>
               {slot.label}
-              {slot.status === "now" ? <span className="text-foreground">, now</span> : null}
+              {slot.status === "now" ? (
+                <span className="text-foreground">{t("common:now")}</span>
+              ) : null}
             </span>
             <span className="tabular-nums">
               <span className={cn(slot.status === "now" && "font-medium text-foreground")}>
-                {formatNumber(slot.prompts)}
+                {formatNumber(slot.prompts, formatLocale)}
               </span>{" "}
               {pluralize(slot.prompts, "prompt")}
             </span>
@@ -247,11 +252,17 @@ function DigestCard({
   updatedAt?: string | undefined;
   projectById: ReadonlyMap<string, Project>;
 }) {
+  const { t } = useTranslation();
+
   return (
     <Tile className="flex flex-col gap-5 p-5 @lg:px-7 @lg:py-6">
       <div className="flex items-baseline justify-between gap-3 text-ui-sm text-muted-foreground">
-        <span>Your day so far</span>
-        {updatedAt ? <span className="tabular-nums opacity-80">Updated {updatedAt}</span> : null}
+        <span>{t("common:yourDaySoFar")}</span>
+        {updatedAt ? (
+          <span className="tabular-nums opacity-80">
+            {t("common:updated")} {updatedAt}
+          </span>
+        ) : null}
       </div>
       <p className="max-w-[62ch] text-ui-xl leading-relaxed text-pretty text-muted-foreground">
         {sentences.map((sentence, sentenceIndex) => (
@@ -373,6 +384,7 @@ function CompactTile({
 }
 
 function useQuotaSummaries(snapshots: readonly ServerProviderUsageSnapshot[]): InboxQuotaSummary[] {
+  const { t } = useTranslation();
   // Rate-limit activities only: this stays put while other activities stream in.
   const threads = useStore(useMemo(() => createAccountRateLimitThreadsSelector(), []));
   const accountRateLimits = useMemo(() => deriveAccountRateLimits(threads), [threads]);
@@ -384,16 +396,16 @@ function useQuotaSummaries(snapshots: readonly ServerProviderUsageSnapshot[]): I
           accountRateLimits,
           authoritativeLiveSnapshot: snapshot,
         });
-        return deriveProviderUsageDisplayRows(summary.rateLimits).map((row) => ({
+        return deriveProviderUsageDisplayRows(summary.rateLimits, t).map((row) => ({
           provider: snapshot.provider,
           name: providerUsageDisplayName(snapshot.provider),
-          window: row.label,
+          window: rateLimitWindowDisplayLabel(row.label, t),
           remainingPercent: row.remainingPercent,
           resetText: row.resetText,
           track: providerUsageProgressTrackProps(row),
         }));
       }),
-    [accountRateLimits, snapshots],
+    [accountRateLimits, snapshots, t],
   );
 }
 
@@ -427,6 +439,8 @@ function RecapDigest({
   tasks: InboxTaskCounts | undefined;
   projectById: ReadonlyMap<string, Project>;
 }) {
+  const { t, formatLocale } = useTranslation();
+
   const slots = summarizeInboxSlots(recap, day, nowMs);
   // Yesterday up to the time today's numbers were taken, so a morning is never compared
   // with a whole day and a recap that is a few minutes old is not compared with a newer one.
@@ -434,7 +448,7 @@ function RecapDigest({
   const yesterdaySoFar = previousRecap
     ? sumRecapBefore(previousRecap, day.previousDay, previousDayCutoffMs(asOfMs))
     : null;
-  const input = { recap, previousRecap, yesterdaySoFar, slots, tasks };
+  const input = { recap, previousRecap, yesterdaySoFar, slots, tasks, formatLocale };
   const sentences = buildInboxDigest(input);
   const tiles = buildInboxTiles({ ...input, quota });
   const bucketByStart = recapBucketsByStart(recap);
@@ -444,7 +458,7 @@ function RecapDigest({
       const bucket = bucketByStart.get(hour.fromMs);
       return bucket ? recapTokens(bucket) : 0;
     });
-  const updatedAt = CLOCK_TIME_FORMAT.format(asOfMs);
+  const updatedAt = new Intl.DateTimeFormat(formatLocale, CLOCK_TIME_OPTIONS).format(asOfMs);
 
   return (
     <div className="flex flex-col gap-3">
@@ -458,7 +472,7 @@ function RecapDigest({
       ) : (
         <Tile className="p-5 @lg:px-7 @lg:py-6">
           <p className="text-ui-lg text-muted-foreground">
-            Nothing ran yet today. This fills in as your agents work.
+            {t("common:nothingRanYetTodayThisFillsInAsYour")}
           </p>
         </Tile>
       )}
@@ -484,6 +498,8 @@ function RecapDigest({
 }
 
 export default function InboxView() {
+  const { t, formatLocale } = useTranslation();
+
   const navigate = useNavigate();
   const inboxAvailable = INBOX_ON;
   useEffect(() => {
@@ -607,7 +623,7 @@ export default function InboxView() {
       markThreadVisited(thread.id, resolveActivityThreadReadAt(thread));
     }
   };
-  const dateLabel = LONG_DATE_FORMAT.format(nowMs);
+  const dateLabel = new Intl.DateTimeFormat(formatLocale, LONG_DATE_OPTIONS).format(nowMs);
 
   // Today's to-dos, where the connected server offers Tasks.
   const tasksAvailable = useTasksSurfaceEnabled() && inboxAvailable;
@@ -635,18 +651,28 @@ export default function InboxView() {
   const taskDigest = buildTaskDigest(taskCounts);
   const openTaskCount = tasksAvailable ? inboxTasks.open.length : 0;
   const taskSummary =
-    openTaskCount > 0 ? ` ${openTaskCount} ${pluralize(openTaskCount, "task")} to do.` : "";
+    openTaskCount > 0
+      ? t("common:toDo2", {
+          value0: openTaskCount,
+          value1: pluralize(openTaskCount, "task"),
+        })
+      : "";
   const showsTaskColumn = hasTasks || tasksAvailable;
 
   if (!inboxAvailable) return null;
 
   const summary = !threadsHydrated
-    ? `${dateLabel}.`
+    ? t("chat:symbol3", { value0: dateLabel })
     : needsYouCount > 0
-      ? `${dateLabel}. ${needsYouCount} ${needsYouCount === 1 ? "thing needs" : "things need"} you.${taskSummary}`
+      ? t("common:you", {
+          value0: dateLabel,
+          value1: needsYouCount,
+          value2: needsYouCount === 1 ? t("common:thingNeeds") : t("common:thingsNeed"),
+          value3: taskSummary,
+        })
       : hasTasks || openTaskCount > 0
-        ? `${dateLabel}.${taskSummary}`
-        : `${dateLabel}. You’re all caught up.`;
+        ? t("common:symbol7", { value0: dateLabel, value1: taskSummary })
+        : t("common:youReAllCaughtUp", { value0: dateLabel });
 
   return (
     <RouteInsetSurface>
@@ -668,7 +694,7 @@ export default function InboxView() {
             <div className="flex flex-wrap items-end justify-between gap-3">
               <div className="flex min-w-0 flex-wrap items-baseline gap-x-3 gap-y-1">
                 <h1 className="text-2xl font-medium tracking-tight text-foreground @2xl:text-3xl">
-                  Inbox
+                  {t("workspace:inbox")}
                 </h1>
                 <p className="text-ui text-muted-foreground @2xl:text-ui-lg">
                   {GREETINGS[day.currentSlotId]}. {summary}
@@ -676,7 +702,7 @@ export default function InboxView() {
               </div>
               {unreadThreads.length > 0 ? (
                 <Button variant="outline" size="sm" className="rounded-full" onClick={markAllRead}>
-                  Mark all read
+                  {t("common:markAllRead")}
                 </Button>
               ) : null}
             </div>
@@ -740,20 +766,20 @@ export default function InboxView() {
                     {isRecapUnavailableError(recapQuery.error) ? (
                       <Tile className="p-5 @lg:px-7 @lg:py-6">
                         <span className="text-ui text-muted-foreground">
-                          The day recap needs a newer Synara server.
+                          {t("common:theDayRecapNeedsANewerSynaraServer")}
                         </span>
                       </Tile>
                     ) : (
                       <Tile className="flex items-center justify-between gap-3 p-5 @lg:px-7 @lg:py-6">
                         <span className="text-ui text-muted-foreground">
-                          The recap didn’t load.
+                          {t("common:theRecapDidnTLoad")}
                         </span>
                         <Button
                           size="xs"
                           variant="outline"
                           onClick={() => void recapQuery.refetch()}
                         >
-                          Try again
+                          {t("chat:profile_tryAgain")}
                         </Button>
                       </Tile>
                     )}

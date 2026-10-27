@@ -3,6 +3,7 @@
 // Layer: Web orchestration helper
 // Exports: unblockThreadFromClient, describeThreadUnblockResult, isProviderDeliveryReconciliationConflict, resolveThreadUnblockTarget, type ThreadUnblockResult
 
+import { t } from "~/i18n";
 import type { NativeApi, ThreadId } from "@synara/contracts";
 
 /** Code the server returns when a blocker no longer matches the requested state. */
@@ -103,22 +104,20 @@ export function describeThreadUnblockResult(result: ThreadUnblockResult): Thread
     case "unblocked":
       return {
         type: "success",
-        title: "Thread unblocked",
-        description:
-          "Messages skipped while it was blocked were retried. Resend your last message if the thread stays idle.",
+        title: t("chat:threadUnblocked"),
+        description: t("chat:threadUnblockedDescription"),
       };
     case "resolved-elsewhere":
       return {
         type: "info",
-        title: "Blocker already cleared",
-        description: "Another session settled the failure. Resend your last message to continue.",
+        title: t("chat:threadBlockerCleared"),
+        description: t("chat:threadBlockerClearedDescription"),
       };
     case "already-clear":
       return {
         type: "info",
-        title: "Thread is already unblocked",
-        description:
-          "No provider failure is holding it back. Resend your last message to continue.",
+        title: t("chat:threadAlreadyUnblocked"),
+        description: t("chat:threadAlreadyUnblockedDescription"),
       };
   }
 }

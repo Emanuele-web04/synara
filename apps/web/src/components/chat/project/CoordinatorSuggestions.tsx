@@ -8,6 +8,7 @@ import {
   type CoordinatorSuggestionChip,
   coordinatorSuggestionSection,
 } from "./coordinatorSuggestions.logic";
+import { useTranslation } from "~/i18n";
 
 export function CoordinatorSuggestions({
   chips,
@@ -18,6 +19,8 @@ export function CoordinatorSuggestions({
   composerHeightPx: number;
   onOpenSettings: (section: GroupSettingsSection) => void;
 }) {
+  const { t } = useTranslation();
+
   return (
     <div
       className={cn("shrink-0 pb-28", CHAT_COLUMN_GUTTER_CLASS_NAME)}
@@ -26,7 +29,7 @@ export function CoordinatorSuggestions({
       style={{ paddingBottom: `max(7rem, ${composerHeightPx + 8}px)` }}
     >
       <div className={cn(CHAT_COLUMN_FRAME_CLASS_NAME, "flex flex-col gap-2 px-1")}>
-        <div className="text-ui text-muted-foreground">Suggestions</div>
+        <div className="text-ui text-muted-foreground">{t("workspace:suggestions")}</div>
         <div className="flex flex-wrap gap-2">
           {chips.map((label) => (
             <button

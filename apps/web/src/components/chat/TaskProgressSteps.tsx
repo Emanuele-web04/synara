@@ -1,6 +1,7 @@
 import { CheckIcon } from "~/lib/icons";
 import { LiveStatusSpinner } from "../ui/spinner";
 import { cn } from "~/lib/utils";
+import { useTranslation } from "~/i18n";
 
 type TaskProgressStep = {
   id: string;
@@ -17,13 +18,15 @@ export function TaskProgressSteps({
   className?: string;
   textClassName?: string;
 }) {
+  const { t } = useTranslation();
+
   return (
     <ol className={cn("space-y-0", className)}>
       {steps.map((step, index) => (
         <li
           key={step.id}
           className="flex items-start gap-2 py-1"
-          aria-label={`${step.text}: ${step.status}`}
+          aria-label={t("common:symbol8", { value0: step.text, value1: step.status })}
         >
           <div
             className={cn(

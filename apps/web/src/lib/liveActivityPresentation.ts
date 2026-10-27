@@ -3,6 +3,7 @@
 // Layer: Web presentation helper
 
 import { useSyncExternalStore } from "react";
+import { t } from "~/i18n";
 
 import type { WorkLogLiveActivity } from "../workLog";
 import { formatClockDuration } from "../session-logic";
@@ -103,21 +104,21 @@ export function formatLiveActivityProgress(progress: number): string {
 export function formatLiveActivityStateLabel(state: WorkLogLiveActivity["state"]): string {
   switch (state) {
     case "starting":
-      return "Starting";
+      return t("chat:runStatus_starting");
     case "thinking":
-      return "Thinking";
+      return t("chat:timeline_thinking");
     case "running_tool":
-      return "Running tool";
+      return t("common:runningTool");
     case "waiting":
-      return "Waiting";
+      return t("common:waiting");
     case "streaming":
-      return "Streaming";
+      return t("common:streaming");
     case "completed":
-      return "Completed";
+      return t("workspace:triageOutcome_completed");
     case "failed":
-      return "Failed";
+      return t("chat:runStatus_failed");
     case "cancelled":
-      return "Cancelled";
+      return t("git:runStatus_cancelled");
   }
 }
 
@@ -154,15 +155,15 @@ export function formatLiveActivityMeta(
 
   if (isLiveActivityInProgress(activity)) {
     if (options?.subagent) {
-      parts.push("Subagent working");
+      parts.push(t("common:subagentWorking"));
     } else if (lastActivityAtMs !== null) {
       const idleMs = Math.max(0, nowMs - lastActivityAtMs);
       parts.push(
         idleMs >= NO_ACTIVITY_THRESHOLD_MS
-          ? `No activity for ${formatClockDuration(idleMs)}`
+          ? t("common:noActivityFor", { duration: formatClockDuration(idleMs) })
           : idleMs < 1_000
-            ? "Active now"
-            : `Active ${formatClockDuration(idleMs)} ago`,
+            ? t("common:activeNow")
+            : t("common:activeAgo", { duration: formatClockDuration(idleMs) }),
       );
     }
   } else {
@@ -170,7 +171,7 @@ export function formatLiveActivityMeta(
   }
 
   if (elapsed !== null) {
-    parts.push(`${elapsed} elapsed`);
+    parts.push(t("common:elapsed", { duration: elapsed }));
   }
   if (activity.progress !== undefined) {
     parts.push(formatLiveActivityProgress(activity.progress));

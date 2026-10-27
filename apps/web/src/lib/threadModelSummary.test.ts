@@ -1,7 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { setLanguagePreference } from "~/i18n";
 import type { ProviderModelDescriptor } from "@synara/contracts";
 
 import { formatThreadModelSummaryLabel, resolveThreadModelSummary } from "./threadModelSummary";
+
+afterEach(() => setLanguagePreference("system"));
 
 describe("resolveThreadModelSummary", () => {
   const runtimeModel: ProviderModelDescriptor = {
@@ -97,4 +100,23 @@ describe("formatThreadModelSummaryLabel", () => {
       }),
     ).toBe("GPT-5 Codex");
   });
+});
+
+it("updates generated effort in thread summaries after a language switch", () => {
+  const selection = {
+    provider: "codex",
+    model: "gpt-6.1-sol",
+    options: { reasoningEffort: "medium" },
+  } as const;
+  const model: ProviderModelDescriptor = {
+    slug: "gpt-6.1-sol",
+    name: "GPT-6.1 Sol",
+    supportedReasoningEfforts: [{ value: "medium" }, { value: "high" }],
+    defaultReasoningEffort: "medium",
+  };
+  setLanguagePreference("en");
+  expect(resolveThreadModelSummary(selection, model)?.statusLabel).toBe("Medium");
+  setLanguagePreference("zh-CN");
+  expect(resolveThreadModelSummary(selection, model)?.statusLabel).toBe("中");
+  expect(selection.options.reasoningEffort).toBe("medium");
 });

@@ -1,6 +1,8 @@
 // FILE: EnvironmentUsageSection.logic.ts
 // Purpose: Pure compact-summary decisions for provider rows in the Environment panel.
 
+import { t } from "~/i18n";
+import { rateLimitWindowDisplayLabel } from "~/lib/rateLimits";
 import type { ServerProviderUsageSnapshot } from "@synara/contracts";
 import type { ProviderUsageDisplayRow } from "~/lib/providerUsageDisplay";
 
@@ -13,34 +15,46 @@ export interface EnvironmentProviderUsageSummary {
 function providerUsageStatusLabel(
   snapshot: ServerProviderUsageSnapshot | undefined,
   hasUsageLines: boolean,
+  translate: typeof t,
 ): string {
   switch (snapshot?.status) {
     case "needs-auth":
-      return "Sign in";
+      return translate("chat:providerModelPicker_signIn");
     case "unsupported":
-      return "Unsupported";
+      return translate("chat:providerUsage_unsupported");
     case "error":
-      return "Unavailable";
+      return translate("chat:providerModelPicker_unavailable");
     default:
-      return hasUsageLines ? "Connected" : "No data";
+      return hasUsageLines ? translate("chat:connected") : translate("settings:usageNoData");
   }
 }
 
-export function resolveEnvironmentProviderUsageSummary(input: {
-  readonly providerName: string;
-  readonly rows: ReadonlyArray<ProviderUsageDisplayRow>;
-  /** Live batch snapshot when available; the row renders without one (local/thread fallbacks). */
-  readonly snapshot: ServerProviderUsageSnapshot | undefined;
-  readonly hasUsageLines: boolean;
-}): EnvironmentProviderUsageSummary {
-  const statusLabel = providerUsageStatusLabel(input.snapshot, input.hasUsageLines);
+export function resolveEnvironmentProviderUsageSummary(
+  input: {
+    readonly providerName: string;
+    readonly rows: ReadonlyArray<ProviderUsageDisplayRow>;
+    /** Live batch snapshot when available; the row renders without one (local/thread fallbacks). */
+    readonly snapshot: ServerProviderUsageSnapshot | undefined;
+    readonly hasUsageLines: boolean;
+  },
+  translate: typeof t = t,
+): EnvironmentProviderUsageSummary {
+  const statusLabel = providerUsageStatusLabel(input.snapshot, input.hasUsageLines, translate);
   const rowSummary = input.rows
-    .map((row) => `${row.label} ${row.remainingLabel} remaining`)
+    .map((row) =>
+      translate("settings:usageWindowRemaining", {
+        window: rateLimitWindowDisplayLabel(row.label, translate),
+        amount: row.remainingLabel,
+      }),
+    )
     .join(", ");
 
   return {
     rows: input.rows,
     statusLabel,
-    ariaLabel: `${input.providerName} usage: ${rowSummary || statusLabel}`,
+    ariaLabel: translate("settings:usageProviderSummary", {
+      provider: input.providerName,
+      summary: rowSummary || statusLabel,
+    }),
   };
 }

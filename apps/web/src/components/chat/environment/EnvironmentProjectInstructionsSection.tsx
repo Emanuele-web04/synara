@@ -11,6 +11,7 @@ import { Button } from "~/components/ui/button";
 import { CopyIcon } from "~/lib/icons";
 
 import { EnvironmentCollapsibleSection } from "./EnvironmentRow";
+import { useTranslation } from "~/i18n";
 
 const PROJECT_INSTRUCTIONS_AUTOSAVE_DEBOUNCE_MS = 500;
 
@@ -145,16 +146,24 @@ export function EnvironmentProjectInstructionsSection({
   onInstructionsChange: (projectId: ProjectId, instructions: string) => void;
   onCopyToThreadNotes: () => void;
 }) {
+  const { t } = useTranslation();
+
   const autosave = useProjectInstructionsAutosave({
     projectId,
     instructions,
     onChange: onInstructionsChange,
   });
   const hasInstructions = autosave.value.trim().length > 0;
-  const copyLabel = threadNotes.trim().length === 0 ? "Copy to notepad" : "Append to notepad";
+  const copyLabel =
+    threadNotes.trim().length === 0
+      ? t("workspace:environment_copyToNotepad")
+      : t("workspace:environment_appendToNotepad");
 
   return (
-    <EnvironmentCollapsibleSection label="Project instructions" defaultOpen={hasInstructions}>
+    <EnvironmentCollapsibleSection
+      label={t("workspace:general_projectInstructions")}
+      defaultOpen={hasInstructions}
+    >
       <div className="flex flex-col gap-2 px-2 pb-1">
         <Textarea
           unstyled
@@ -163,7 +172,7 @@ export function EnvironmentProjectInstructionsSection({
           onChange={autosave.onChange}
           onFocus={autosave.onFocus}
           onBlur={autosave.onBlur}
-          placeholder="Architecture notes, conventions, repo links"
+          placeholder={t("workspace:architectureNotesConventionsRepoLinks")}
           maxLength={THREAD_NOTES_MAX_CHARS}
           disabled={!projectId}
         />

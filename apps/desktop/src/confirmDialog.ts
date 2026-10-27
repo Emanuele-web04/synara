@@ -1,4 +1,5 @@
 import { type BrowserWindow, dialog } from "electron";
+import { t } from "./i18n";
 
 const CONFIRM_BUTTON_INDEX = 1;
 
@@ -13,7 +14,7 @@ export async function showDesktopConfirmDialog(
 
   const options = {
     type: "question" as const,
-    buttons: ["No", "Yes"],
+    buttons: [t("desktop:common_no"), t("desktop:common_yes")],
     defaultId: CONFIRM_BUTTON_INDEX,
     cancelId: 0,
     noLink: true,
@@ -28,7 +29,7 @@ export async function showDesktopConfirmDialog(
 /** Keep ordinary closes behind one confirmation, without changing app quit policy. */
 export function guardDesktopWindowClose(
   window: BrowserWindow,
-  message: string,
+  message: string | (() => string),
   shouldConfirm: () => boolean,
 ): void {
   let confirmed = false;
@@ -42,7 +43,7 @@ export function guardDesktopWindowClose(
     event.preventDefault();
     if (pending) return;
     pending = true;
-    void showDesktopConfirmDialog(message, window)
+    void showDesktopConfirmDialog(typeof message === "function" ? message() : message, window)
       .then((allowed) => {
         if (allowed && !window.isDestroyed()) {
           confirmed = true;

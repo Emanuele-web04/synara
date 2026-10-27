@@ -1,8 +1,11 @@
 import type { DesktopDiagnosticReportStatus } from "@synara/contracts";
 import { useEffect, useState } from "react";
 import { CopyTextButton } from "./ui/copyTextButton";
+import { useTranslation } from "~/i18n";
 
 export function DiagnosticReportAction({ id }: { id: string }) {
+  const { t } = useTranslation();
+
   const [report, setReport] = useState<{
     id: string;
     status: DesktopDiagnosticReportStatus;
@@ -31,13 +34,13 @@ export function DiagnosticReportAction({ id }: { id: string }) {
   }, [id]);
   return (
     <span className="inline-flex flex-wrap items-center gap-1 text-ui-xs text-muted-foreground">
-      <CopyTextButton text={id} label="diagnostic ID" />
+      <CopyTextButton text={id} label={t("common:diagnosticID")} />
       <span>
         {status === "sent"
-          ? "Report sent"
+          ? t("common:reportSent")
           : status === "queued"
-            ? "Report queued locally"
-            : "Upload not confirmed"}
+            ? t("common:reportQueuedLocally")
+            : t("common:uploadNotConfirmed")}
       </span>
     </span>
   );

@@ -4,6 +4,7 @@
 // Exports: automation intent parsers, resolver, and cadence/name formatters.
 // Depends on: AutomationSchedule contract shared with the automation API.
 
+import { getFormatLocale, t } from "~/i18n";
 import type {
   AutomationCompletionPolicy,
   AutomationMode,
@@ -417,38 +418,54 @@ function intervalUnitToSeconds(unit: string): number {
   return 86_400;
 }
 
-function intervalUnitLabel(unit: string): "s" | "m" | "h" | "d" {
+function intervalDurationLabel(amount: number, unit: string): string {
   const seconds = intervalUnitToSeconds(unit);
-  if (seconds === 1) return "s";
-  if (seconds === 60) return "m";
-  if (seconds === 3600) return "h";
-  return "d";
+  const key =
+    seconds === 1
+      ? "automation:intentSeconds"
+      : seconds === 60
+        ? "automation:intentMinutes"
+        : seconds === 3600
+          ? "automation:intentHours"
+          : "automation:intentDays";
+  return t(key, { count: amount });
 }
 
 function formatAutomationIntentCadence(schedule: AutomationSchedule): string {
   if (schedule.type === "interval") {
     const seconds = schedule.everySeconds;
-    if (seconds % 86_400 === 0) return `Every ${seconds / 86_400}d`;
-    if (seconds % 3_600 === 0) return `Every ${seconds / 3_600}h`;
-    if (seconds % 60 === 0) return `Every ${seconds / 60}m`;
-    return `Every ${seconds}s`;
+    if (seconds % 86_400 === 0)
+      return t("automation:intentEvery", {
+        duration: intervalDurationLabel(seconds / 86_400, "day"),
+      });
+    if (seconds % 3_600 === 0)
+      return t("automation:intentEvery", {
+        duration: intervalDurationLabel(seconds / 3_600, "hour"),
+      });
+    if (seconds % 60 === 0)
+      return t("automation:intentEvery", {
+        duration: intervalDurationLabel(seconds / 60, "minute"),
+      });
+    return t("automation:intentEvery", { duration: intervalDurationLabel(seconds, "second") });
   }
   if (schedule.type === "once") {
-    return `Once at ${new Date(schedule.runAt).toLocaleString()}`;
+    return t("automation:intentOnceAt", {
+      time: new Date(schedule.runAt).toLocaleString(getFormatLocale()),
+    });
   }
   if (schedule.type === "cron") {
     return `Cron ${schedule.expression}`;
   }
   if (schedule.type === "daily") {
-    return `Daily at ${schedule.timeOfDay}`;
+    return t("automation:intentDailyAt", { time: schedule.timeOfDay });
   }
   if (schedule.type === "weekdays") {
-    return `Weekdays at ${schedule.timeOfDay}`;
+    return t("automation:intentWeekdaysAt", { time: schedule.timeOfDay });
   }
   if (schedule.type === "weekly") {
-    return `Weekly at ${schedule.timeOfDay}`;
+    return t("automation:intentWeeklyAt", { time: schedule.timeOfDay });
   }
-  return "Manual";
+  return t("workspace:schedule_manual");
 }
 
 function parseIntervalSchedule(searchText: string): ParsedSchedule | null {
@@ -488,7 +505,7 @@ function parseIntervalSchedule(searchText: string): ParsedSchedule | null {
   } as const;
   return {
     schedule,
-    cadenceLabel: `Every ${amount}${intervalUnitLabel(unit)}`,
+    cadenceLabel: t("automation:intentEvery", { duration: intervalDurationLabel(amount, unit) }),
   };
 }
 
@@ -516,7 +533,7 @@ function parseOnceSchedule(searchText: string, nowIso: string): ParsedSchedule |
   const runAt = new Date(now.getTime() + delaySeconds * 1000).toISOString();
   return {
     schedule: { type: "once", runAt },
-    cadenceLabel: `In ${amount}${intervalUnitLabel(unit)}`,
+    cadenceLabel: t("automation:intentIn", { duration: intervalDurationLabel(amount, unit) }),
   };
 }
 
@@ -548,7 +565,7 @@ function parseDailySchedule(searchText: string): ParsedSchedule | null {
     return timeOfDay
       ? {
           schedule: { type: "daily", timeOfDay },
-          cadenceLabel: `Daily at ${timeOfDay}`,
+          cadenceLabel: t("automation:intentDailyAt", { time: timeOfDay }),
         }
       : null;
   }
@@ -570,7 +587,7 @@ function parseDailySchedule(searchText: string): ParsedSchedule | null {
   const timeOfDay = DEFAULT_DAILY_TIME;
   return {
     schedule: { type: "daily", timeOfDay },
-    cadenceLabel: `Daily at ${timeOfDay}`,
+    cadenceLabel: t("automation:intentDailyAt", { time: timeOfDay }),
   };
 }
 
@@ -589,7 +606,7 @@ function parseWeekdaysSchedule(searchText: string): ParsedSchedule | null {
     return timeOfDay
       ? {
           schedule: { type: "weekdays", timeOfDay },
-          cadenceLabel: `Weekdays at ${timeOfDay}`,
+          cadenceLabel: t("automation:intentWeekdaysAt", { time: timeOfDay }),
         }
       : null;
   }
@@ -611,7 +628,7 @@ function parseWeekdaysSchedule(searchText: string): ParsedSchedule | null {
   const timeOfDay = DEFAULT_DAILY_TIME;
   return {
     schedule: { type: "weekdays", timeOfDay },
-    cadenceLabel: `Weekdays at ${timeOfDay}`,
+    cadenceLabel: t("automation:intentWeekdaysAt", { time: timeOfDay }),
   };
 }
 
@@ -628,7 +645,7 @@ function parseWeeklySchedule(searchText: string): ParsedSchedule | null {
     return dayOfWeek !== undefined && timeOfDay
       ? {
           schedule: { type: "weekly", dayOfWeek, timeOfDay },
-          cadenceLabel: `Weekly at ${timeOfDay}`,
+          cadenceLabel: t("automation:intentWeeklyAt", { time: timeOfDay }),
         }
       : null;
   }
@@ -655,7 +672,7 @@ function parseWeeklySchedule(searchText: string): ParsedSchedule | null {
   const timeOfDay = DEFAULT_DAILY_TIME;
   return {
     schedule: { type: "weekly", dayOfWeek, timeOfDay },
-    cadenceLabel: `Weekly at ${timeOfDay}`,
+    cadenceLabel: t("automation:intentWeeklyAt", { time: timeOfDay }),
   };
 }
 

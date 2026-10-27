@@ -98,6 +98,7 @@ import { Menu, MenuItem, MenuSeparator, MenuTrigger } from "./ui/menu";
 import { Skeleton } from "./ui/skeleton";
 import { toastManager } from "./ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
+import { useTranslation } from "~/i18n";
 
 interface BrowserPanelProps {
   mode: DiffPanelMode;
@@ -147,7 +148,11 @@ export function BrowserAnnotationButton(props: {
   controller: BrowserAnnotationsController;
   disabled: boolean;
 }) {
-  const label = props.controller.active ? "Cancel annotation" : "Annotate page";
+  const { t } = useTranslation();
+
+  const label = props.controller.active
+    ? t("computer:cancelAnnotation")
+    : t("computer:annotatePage");
   return (
     <Tooltip>
       <TooltipTrigger
@@ -171,8 +176,8 @@ export function BrowserAnnotationButton(props: {
       </TooltipTrigger>
       <TooltipPopup side="bottom">
         {props.controller.active
-          ? "Cancel element selection (Esc)"
-          : "Select an element to annotate"}
+          ? t("computer:cancelElementSelectionEsc")
+          : t("computer:selectAnElementToAnnotate")}
       </TooltipPopup>
     </Tooltip>
   );
@@ -389,6 +394,8 @@ function isBrowserPerfLoggingEnabled(): boolean {
 
 // Keeps a restored browser pane visually occupied while the live webview hydrates.
 function BrowserRuntimePreview(props: { title: string; detail: string }) {
+  const { t } = useTranslation();
+
   return (
     <div
       className="absolute inset-0 flex items-center justify-center bg-background/35 p-6"
@@ -412,7 +419,9 @@ function BrowserRuntimePreview(props: { title: string; detail: string }) {
           </div>
         </div>
         <div className="mt-4 min-w-0 text-center">
-          <p className="text-ui leading-snug font-medium text-foreground">Restoring browser</p>
+          <p className="text-ui leading-snug font-medium text-foreground">
+            {t("computer:panel_restoringBrowser")}
+          </p>
           <p className="mt-1 truncate text-ui-sm text-muted-foreground" title={props.detail}>
             {props.title}
           </p>
@@ -423,6 +432,8 @@ function BrowserRuntimePreview(props: { title: string; detail: string }) {
 }
 
 function BrowserRuntimeError(props: { message: string; onReload: () => void }) {
+  const { t } = useTranslation();
+
   return (
     <div
       className="absolute inset-0 z-20 flex items-center justify-center bg-[#0d0d0d] px-6 text-center text-white"
@@ -430,7 +441,9 @@ function BrowserRuntimeError(props: { message: string; onReload: () => void }) {
     >
       <div className="flex max-w-xs flex-col items-center">
         <CircleAlertIcon className="size-7 text-white/35" aria-hidden="true" />
-        <p className="mt-3 text-ui-lg font-medium text-white/80">This page could not be loaded</p>
+        <p className="mt-3 text-ui-lg font-medium text-white/80">
+          {t("computer:thisPageCouldNotBeLoaded")}
+        </p>
         <p className="mt-1 text-ui leading-snug text-white/45">{props.message}</p>
         <Button
           type="button"
@@ -439,7 +452,7 @@ function BrowserRuntimeError(props: { message: string; onReload: () => void }) {
           className="mt-4"
           onClick={props.onReload}
         >
-          Reload page
+          {t("computer:reloadPage")}
         </Button>
       </div>
     </div>
@@ -462,6 +475,8 @@ function browserLocalServerUrl(server: ServerLocalServerProcess): string | null 
 // Paints a tiny browser-preview tile without fetching screenshots or adding network work.
 // The page name and address are rendered into the tile so it reads as a real preview.
 function BrowserLocalServerThumbnail({ server }: { server: ServerLocalServerProcess }) {
+  const { t } = useTranslation();
+
   const label = localServerPrimaryLabel(server);
   const port = server.ports[0];
 
@@ -479,7 +494,8 @@ function BrowserLocalServerThumbnail({ server }: { server: ServerLocalServerProc
         <span className="truncate text-[7px] font-bold leading-none text-[#2a2a2a]">{label}</span>
         {port ? (
           <span className="truncate text-[6px] font-medium leading-none text-[#9a9a9a]">
-            localhost:{port}
+            {t("computer:localhost")}
+            {port}
           </span>
         ) : null}
       </span>
@@ -501,13 +517,17 @@ function BrowserLocalServersHome({
   onRefresh: () => void;
   servers: readonly ServerLocalServerProcess[];
 }) {
+  const { t } = useTranslation();
+
   const hasServers = servers.length > 0;
 
   return (
     <div className="absolute inset-0 z-20 flex flex-col overflow-hidden bg-[#0d0d0d] text-white">
       <div className="mx-auto flex h-full w-full max-w-[52rem] flex-col px-8 py-9">
         <div className="flex shrink-0 items-center justify-between">
-          <p className="text-[15px] font-medium text-white/35">Local</p>
+          <p className="text-[15px] font-medium text-white/35">
+            {t("computer:worktreeMode_local")}
+          </p>
           <Button
             type="button"
             variant="ghost"
@@ -515,8 +535,8 @@ function BrowserLocalServersHome({
             className="size-8 text-white/35 hover:bg-white/[0.06] hover:text-white/70"
             disabled={loading}
             onClick={onRefresh}
-            aria-label="Refresh local servers"
-            title="Refresh local servers"
+            aria-label={t("computer:panel_refreshLocalServers")}
+            title={t("computer:panel_refreshLocalServers")}
           >
             <RefreshCwIcon className={cn("size-4", loading && "animate-spin")} />
           </Button>
@@ -527,14 +547,22 @@ function BrowserLocalServersHome({
             {loading ? (
               <>
                 <RefreshCwIcon className="mb-4 size-12 animate-spin text-white/20" />
-                <p className="text-base font-semibold text-white">Scanning local servers</p>
-                <p className="mt-2 text-ui leading-snug text-white/35">Checking localhost ports</p>
+                <p className="text-base font-semibold text-white">
+                  {t("computer:panel_scanningLocalServers")}
+                </p>
+                <p className="mt-2 text-ui leading-snug text-white/35">
+                  {t("computer:panel_checkingLocalhostPorts")}
+                </p>
               </>
             ) : (
               <>
                 <GlobeIcon className="mb-4 size-16 stroke-[1.5] text-white/30" />
-                <p className="text-base font-semibold text-white">No local servers</p>
-                <p className="mt-2 text-ui leading-snug text-white/35">Try another browser URL</p>
+                <p className="text-base font-semibold text-white">
+                  {t("computer:panel_noLocalServers")}
+                </p>
+                <p className="mt-2 text-ui leading-snug text-white/35">
+                  {t("computer:panel_tryAnotherBrowserUrl")}
+                </p>
               </>
             )}
           </div>
@@ -578,6 +606,8 @@ export function BrowserPanel({
   runtimeMode: runtimeModeProp,
   onRequestLive,
 }: BrowserPanelProps) {
+  const { t } = useTranslation();
+
   // Defaults belong in the body, never in the destructuring pattern: React Compiler cannot lower an
   // AssignmentPattern there and silently drops the whole component's memoization.
   const runtimeMode = runtimeModeProp ?? "live";
@@ -1559,7 +1589,9 @@ export function BrowserPanel({
         setLocalError(null);
       } catch (cause) {
         setLocalError(
-          cause instanceof Error ? cause.message : "The browser screenshot could not be prepared.",
+          cause instanceof Error
+            ? cause.message
+            : t("computer:theBrowserScreenshotCouldNotBePrepared"),
         );
       }
     });
@@ -1573,6 +1605,7 @@ export function BrowserPanel({
     ensureLiveRuntime,
     runBrowserAction,
     threadId,
+    t,
   ]);
 
   const onCopyScreenshotToClipboard = useCallback(() => {
@@ -1599,17 +1632,17 @@ export function BrowserPanel({
             anchor,
           },
           timeout: 1_200,
-          title: "Browser screenshot copied",
+          title: t("computer:panel_browserScreenshotCopied"),
         });
         return;
       }
 
       toastManager.add({
         type: "success",
-        title: "Browser screenshot copied",
+        title: t("computer:panel_browserScreenshotCopied"),
       });
     });
-  }, [activeTab, api, ensureLiveRuntime, runBrowserAction, threadId]);
+  }, [activeTab, api, ensureLiveRuntime, runBrowserAction, threadId, t]);
 
   const copyActiveTabLink = useCallback(() => {
     if (!activeTab) {
@@ -1714,11 +1747,11 @@ export function BrowserPanel({
     >
       {/* Keep the browser chrome interactive inside Electron's draggable titlebar. */}
       <div className="relative flex min-w-0 flex-1 items-center gap-2 [-webkit-app-region:no-drag]">
-        <ButtonGroup label="Navigation">
+        <ButtonGroup label={t("computer:navigation")}>
           <IconButton
             variant="ghost"
             size="icon-sm"
-            label="Go back"
+            label={t("computer:panel_goBack")}
             disabled={!activeTab?.canGoBack}
             onClick={() => {
               if (!ensureLiveRuntime()) return;
@@ -1737,7 +1770,7 @@ export function BrowserPanel({
           <IconButton
             variant="ghost"
             size="icon-sm"
-            label="Go forward"
+            label={t("computer:panel_goForward")}
             disabled={!activeTab?.canGoForward}
             onClick={() => {
               if (!ensureLiveRuntime()) return;
@@ -1757,7 +1790,7 @@ export function BrowserPanel({
           <IconButton
             variant="ghost"
             size="icon-sm"
-            label="Reload"
+            label={t("computer:panel_reload")}
             disabled={!activeTab}
             onClick={() => {
               if (!ensureLiveRuntime()) return;
@@ -1778,7 +1811,7 @@ export function BrowserPanel({
             )}
           </IconButton>
         </ButtonGroup>
-        <ButtonGroup label="Page tools">
+        <ButtonGroup label={t("computer:pageTools")}>
           <BrowserAnnotationButton
             controller={annotationController}
             disabled={
@@ -1834,7 +1867,7 @@ export function BrowserPanel({
                 setAddressSuggestionsSuppressed(false);
               }
             }}
-            placeholder="Search or enter a URL"
+            placeholder={t("computer:panel_searchOrEnterUrl")}
             className={cn(
               "min-w-0 [-webkit-app-region:no-drag]",
               BROWSER_CHROME_CONTROL_CLASS_NAME,
@@ -1877,7 +1910,7 @@ export function BrowserPanel({
         ) : null}
       </div>
       <div className="flex shrink-0 items-center gap-1.5 [-webkit-app-region:no-drag]">
-        <ButtonGroup label="Page actions">
+        <ButtonGroup label={t("computer:pageActions")}>
           <BrowserVaultButton
             destination={
               activeTab
@@ -1895,9 +1928,9 @@ export function BrowserPanel({
             ref={copyScreenshotButtonRef}
             variant="ghost"
             size="icon-sm"
-            label="Copy screenshot"
+            label={t("computer:panel_copyScreenshot")}
             disabled={!activeTab}
-            title="Copy screenshot"
+            title={t("computer:panel_copyScreenshot")}
             onClick={onCopyScreenshotToClipboard}
           >
             <Camera01Icon className="size-3.5" />
@@ -1905,15 +1938,15 @@ export function BrowserPanel({
           <IconButton
             variant="ghost"
             size="icon-sm"
-            label="Copy link"
+            label={t("computer:panel_copyLink")}
             disabled={!activeTab}
-            title="Copy link"
+            title={t("computer:panel_copyLink")}
             onClick={copyActiveTabLink}
           >
             <LinkIcon className="size-3.5" />
           </IconButton>
         </ButtonGroup>
-        <ButtonGroup label="Browser menu">
+        <ButtonGroup label={t("computer:browserMenu")}>
           <Menu
             modal={false}
             open={browserActionsMenuOpen}
@@ -1921,7 +1954,11 @@ export function BrowserPanel({
           >
             <MenuTrigger
               render={
-                <IconButton variant="ghost" size="icon-sm" label="Browser actions">
+                <IconButton
+                  variant="ghost"
+                  size="icon-sm"
+                  label={t("computer:panel_browserActions")}
+                >
                   <MoreHorizontalIcon className="size-3.5" />
                 </IconButton>
               }
@@ -1933,7 +1970,7 @@ export function BrowserPanel({
             >
               <MenuItem className={BROWSER_ACTION_MENU_ITEM_CLASS_NAME} onClick={onCreateTab}>
                 <BrowserActionMenuIcon icon={PlusIcon} />
-                <span>New tab</span>
+                <span>{t("computer:panel_newTab")}</span>
               </MenuItem>
               <MenuItem
                 className={BROWSER_ACTION_MENU_ITEM_CLASS_NAME}
@@ -1941,7 +1978,7 @@ export function BrowserPanel({
                 onClick={onCaptureScreenshot}
               >
                 <BrowserActionMenuIcon icon={Camera01Icon} />
-                <span>Capture screenshot</span>
+                <span>{t("computer:panel_captureScreenshot")}</span>
               </MenuItem>
               <MenuItem
                 className={BROWSER_ACTION_MENU_ITEM_CLASS_NAME}
@@ -1953,12 +1990,12 @@ export function BrowserPanel({
                 }}
               >
                 <BrowserActionMenuIcon icon={ExternalLinkIcon} />
-                <span>Open externally</span>
+                <span>{t("computer:panel_openExternally")}</span>
               </MenuItem>
               <MenuSeparator />
               <MenuItem className={BROWSER_ACTION_MENU_ITEM_CLASS_NAME} onClick={onClosePanel}>
                 <BrowserActionMenuIcon icon={XIcon} />
-                <span>Close browser panel</span>
+                <span>{t("computer:panel_closeBrowserPanel")}</span>
               </MenuItem>
             </ComposerPickerMenuPopup>
           </Menu>
@@ -1971,7 +2008,7 @@ export function BrowserPanel({
     return (
       <div className="contents" data-browser-panel="true">
         <DiffPanelShell mode={mode} header={isFloatingMode ? null : header}>
-          <DiffPanelLoadingState label="Browser is unavailable." />
+          <DiffPanelLoadingState label={t("computer:panel_browserUnavailable")} />
         </DiffPanelShell>
       </div>
     );
@@ -1995,12 +2032,12 @@ export function BrowserPanel({
           <div className="relative min-h-0 flex-1 bg-transparent">
             {!isLiveRuntime ? (
               <BrowserRuntimePreview
-                title={activeTab?.title || "Browser is sleeping"}
+                title={activeTab?.title || t("computer:panel_browserIsSleeping")}
                 detail={activeTab?.lastCommittedUrl ?? activeTab?.url ?? "Restoring cached browser"}
               />
             ) : !workspaceReady ? (
               <div className="absolute inset-0 z-10">
-                <DiffPanelLoadingState label="Starting browser..." />
+                <DiffPanelLoadingState label={t("computer:panel_startingBrowser")} />
               </div>
             ) : null}
             {isLiveRuntime ? (
@@ -2025,7 +2062,7 @@ export function BrowserPanel({
             previewFrame?.tabId === activeTabId ? (
               <img
                 src={previewFrame.src}
-                alt="Browser preview"
+                alt={t("computer:browserPreview")}
                 draggable={false}
                 className="pointer-events-none absolute inset-0 h-full w-full select-none object-contain"
               />

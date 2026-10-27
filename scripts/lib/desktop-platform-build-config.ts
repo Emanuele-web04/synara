@@ -216,6 +216,8 @@ export function createDesktopPlatformBuildConfig(
           from: MAC_ICON_ASSETS_CAR_STAGE_PATH,
           to: MAC_ICON_ASSETS_CAR_BUNDLE_PATH,
         },
+        // macOS reads permission explanations from the bundle's language folders.
+        { from: "apps/desktop/resources/localizations", to: "Resources" },
       ],
       mac,
     };

@@ -8,6 +8,7 @@
 import { InlineVisualSpec } from "@synara/contracts";
 import { Schema } from "effect";
 import { useCallback, useState } from "react";
+import { getFormatLocale } from "~/i18n";
 
 const decodeSpec = Schema.decodeUnknownOption(Schema.fromJsonString(InlineVisualSpec));
 
@@ -18,11 +19,19 @@ export function decodeInlineVisualSpec(source: string): InlineVisualSpec | null 
 }
 
 const formatters = new Map<string, Intl.NumberFormat>();
-function numberFormat(minimumFractionDigits: number, maximumFractionDigits: number) {
-  const key = `${minimumFractionDigits}:${maximumFractionDigits}`;
+function numberFormat(
+  minimumFractionDigits: number,
+  maximumFractionDigits: number,
+  locale: string | undefined,
+) {
+  const resolvedLocale = locale ?? new Intl.NumberFormat().resolvedOptions().locale;
+  const key = `${resolvedLocale}:${minimumFractionDigits}:${maximumFractionDigits}`;
   let format = formatters.get(key);
   if (format === undefined) {
-    format = new Intl.NumberFormat(undefined, { minimumFractionDigits, maximumFractionDigits });
+    format = new Intl.NumberFormat(resolvedLocale, {
+      minimumFractionDigits,
+      maximumFractionDigits,
+    });
     formatters.set(key, format);
   }
   return format;
@@ -39,12 +48,13 @@ export function formatVisualNumber(
     readonly prefix?: string | undefined;
     readonly unit?: string | undefined;
   } = {},
+  locale = getFormatLocale(),
 ): string {
   if (!Number.isFinite(value)) return "—";
   const maximum = options.decimals ?? (Number.isInteger(value) ? 0 : Math.abs(value) < 1 ? 4 : 2);
   const minimum = options.decimals ?? 0;
   const sign = value < 0 ? "-" : "";
-  const digits = numberFormat(minimum, maximum).format(Math.abs(value));
+  const digits = numberFormat(minimum, maximum, locale).format(Math.abs(value));
   const unit = options.unit ? (options.unit === "%" ? "%" : ` ${options.unit}`) : "";
   return `${sign}${options.prefix ?? ""}${digits}${unit}`;
 }
@@ -80,6 +90,7 @@ export type TableSort = { readonly column: number; readonly direction: "asc" | "
 export function sortTableRows(
   rows: ReadonlyArray<ReadonlyArray<TableCell>>,
   sort: TableSort,
+  locale = getFormatLocale(),
 ): ReadonlyArray<{ readonly index: number; readonly cells: ReadonlyArray<TableCell> }> {
   const indexed = rows.map((cells, index) => ({ index, cells }));
   if (sort === null) return indexed;
@@ -91,7 +102,7 @@ export function sortTableRows(
     const order =
       typeof a === "number" && typeof b === "number"
         ? a - b
-        : String(a).localeCompare(String(b), undefined, { numeric: true });
+        : String(a).localeCompare(String(b), locale, { numeric: true });
     return order === 0 ? left.index - right.index : order * direction;
   });
 }

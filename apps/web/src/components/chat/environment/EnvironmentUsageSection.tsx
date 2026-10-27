@@ -32,6 +32,7 @@ import {
   EnvironmentRowBody,
   EnvironmentRowChevron,
 } from "./EnvironmentRow";
+import { useTranslation } from "~/i18n";
 
 function EnvironmentUsageAccountRow({
   instance,
@@ -42,17 +43,21 @@ function EnvironmentUsageAccountRow({
   snapshot: ServerProviderUsageSnapshot;
   label: string;
 }) {
+  const { t } = useTranslation();
   const provider = instance.driver;
   const model = useProviderUsageMenuModel(provider, {
     instanceId: instance.instanceId,
     providerSnapshot: snapshot,
   });
-  const summary = resolveEnvironmentProviderUsageSummary({
-    providerName: label,
-    rows: model.rows,
-    snapshot,
-    hasUsageLines: model.usageLines.length > 0,
-  });
+  const summary = resolveEnvironmentProviderUsageSummary(
+    {
+      providerName: label,
+      rows: model.rows,
+      snapshot,
+      hasUsageLines: model.usageLines.length > 0,
+    },
+    t,
+  );
 
   return (
     <ProviderUsageMenuPopup provider={provider} model={model} align="start" showUsageLines={true}>
@@ -104,6 +109,8 @@ function EnvironmentUsageAccountRow({
 }
 
 export function EnvironmentUsageSection({ provider }: { provider: ProviderKind }) {
+  const { t } = useTranslation();
+
   const usageQuery = useQuery(serverAllProviderUsageQueryOptions());
   const settingsQuery = useQuery(serverSettingsQueryOptions());
   const providerInstances = deriveProviderInstances(
@@ -140,7 +147,9 @@ export function EnvironmentUsageSection({ provider }: { provider: ProviderKind }
       {
         instance,
         snapshot,
-        label: showAccountName ? `${providerName} · ${accountName}` : providerName,
+        label: showAccountName
+          ? t("common:symbol9", { value0: providerName, value1: accountName })
+          : providerName,
       },
     ];
   });
@@ -148,7 +157,7 @@ export function EnvironmentUsageSection({ provider }: { provider: ProviderKind }
   if (accounts.length === 0) return null;
 
   return (
-    <EnvironmentLabeledSection label="Usage">
+    <EnvironmentLabeledSection label={t("chat:general_usage")}>
       {accounts.map(({ instance, snapshot, label }) => (
         <EnvironmentUsageAccountRow
           key={instance.instanceId}

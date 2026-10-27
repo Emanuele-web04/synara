@@ -19,6 +19,7 @@ import {
   WorkspaceFileEditorHeader,
   WorkspaceFileEditorHistoryActions,
 } from "./WorkspaceFileEditorChrome";
+import { useTranslation } from "~/i18n";
 
 export interface WorkspaceFileDiffEditorPaneProps {
   workspaceRoot: string | null;
@@ -34,6 +35,8 @@ export interface WorkspaceFileDiffEditorPaneProps {
 }
 
 export function WorkspaceFileDiffEditorPane(props: WorkspaceFileDiffEditorPaneProps) {
+  const { t } = useTranslation();
+
   const [renderSideBySide, setRenderSideBySide] = useState(true);
   const historyControlsRef = useRef<CodeEditHistoryControls | null>(null);
   const paneRef = useRef<HTMLDivElement | null>(null);
@@ -71,8 +74,8 @@ export function WorkspaceFileDiffEditorPane(props: WorkspaceFileDiffEditorPanePr
         filePath={props.filePath}
         title={
           originalQuery.data?.resolvedRev
-            ? `vs ${originalQuery.data.resolvedRev.slice(0, 7)}`
-            : "Diff"
+            ? t("workspace:vs", { value0: originalQuery.data.resolvedRev.slice(0, 7) })
+            : t("workspace:toolCallDetails_diffSection")
         }
         dirty={session.dirty}
         saving={session.state.saving}
@@ -91,8 +94,16 @@ export function WorkspaceFileDiffEditorPane(props: WorkspaceFileDiffEditorPanePr
             <ChatHeaderIconButton
               type="button"
               tone="plain"
-              label={renderSideBySide ? "Switch to inline diff" : "Switch to side-by-side diff"}
-              title={renderSideBySide ? "Switch to inline diff" : "Switch to side-by-side diff"}
+              label={
+                renderSideBySide
+                  ? t("workspace:switchToInlineDiff")
+                  : t("workspace:switchToSideBySideDiff")
+              }
+              title={
+                renderSideBySide
+                  ? t("workspace:switchToInlineDiff")
+                  : t("workspace:switchToSideBySideDiff")
+              }
               onClick={() => setRenderSideBySide((previous) => !previous)}
             >
               {renderSideBySide ? (
@@ -113,7 +124,7 @@ export function WorkspaceFileDiffEditorPane(props: WorkspaceFileDiffEditorPanePr
         />
       ) : originalTruncated ? (
         <div className="shrink-0 border-b border-border bg-[var(--color-background-elevated-secondary)] px-3 py-1.5 text-ui-sm text-muted-foreground">
-          The base revision of this file is too large to load in full, so this diff is read-only.
+          {t("workspace:theBaseRevisionOfThisFileIsTooLarge")}
         </div>
       ) : null}
       {(session.loadError ?? originalError) ? (
@@ -128,7 +139,7 @@ export function WorkspaceFileDiffEditorPane(props: WorkspaceFileDiffEditorPanePr
         </PanelStateMessage>
       ) : session.loading || originalQuery.isLoading || !session.canEdit ? (
         <PanelStateMessage density="compact" fill="flex">
-          <p>Loading diff...</p>
+          <p>{t("workspace:loadingDiff")}</p>
         </PanelStateMessage>
       ) : (
         <CodeDiffEditorPane
@@ -149,14 +160,16 @@ export function WorkspaceFileDiffEditorPane(props: WorkspaceFileDiffEditorPanePr
       )}
       <WorkspaceFileEditorDiscardDialog
         open={session.pendingDiscard !== null}
-        title="Discard unsaved changes?"
+        title={t("workspace:discardUnsavedChanges")}
         description={
           session.pendingDiscard === "reload"
-            ? "Reloading replaces the editor contents with what is currently on disk."
-            : "Closing the diff editor drops the changes you have not saved yet."
+            ? t("workspace:reloadingReplacesTheEditorContentsWithWhatIsCurrently")
+            : t("workspace:closingTheDiffEditorDropsTheChangesYouHave")
         }
         confirmLabel={
-          session.pendingDiscard === "reload" ? "Reload and discard" : "Discard changes"
+          session.pendingDiscard === "reload"
+            ? t("workspace:reloadAndDiscard")
+            : t("workspace:discardChanges")
         }
         onOpenChange={(open) => {
           if (!open) {

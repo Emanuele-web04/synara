@@ -2,19 +2,30 @@ import "../../index.css";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { ThreadId, type NativeApi } from "@synara/contracts";
 import { page } from "vitest/browser";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { cleanup, render } from "vitest-browser-react";
+import { setLanguagePreference } from "../../i18n";
+import { APP_SETTINGS_STORAGE_KEY } from "../../appSettingsStorage";
 import { useDockExplorerBrowseStore } from "../../dockExplorerBrowseStore";
 import { DockExplorerPane } from "./DockExplorerPane";
 import { monaco } from "../codeEditor/editorRuntime";
 
 let restore: (() => void) | undefined;
+let previousSettings: string | null;
+beforeEach(() => {
+  previousSettings = localStorage.getItem(APP_SETTINGS_STORAGE_KEY);
+  localStorage.setItem(APP_SETTINGS_STORAGE_KEY, '{"language":"en"}');
+  setLanguagePreference("en");
+});
 afterEach(async () => {
   await cleanup();
   restore?.();
   useDockExplorerBrowseStore.setState({ browseStateByThreadId: {} });
+  if (previousSettings === null) localStorage.removeItem(APP_SETTINGS_STORAGE_KEY);
+  else localStorage.setItem(APP_SETTINGS_STORAGE_KEY, previousSettings);
+  setLanguagePreference("system");
 });
-async function mount() {
+async function mount(editorLabel = "Edit a.ts") {
   // The lightweight editor accepts native textarea input; persistence is the
   // same shared session used by the intelligent file and diff editors.
   const writeFile = vi.fn().mockResolvedValue({ relativePath: "a.ts", version: "sha256:saved" });
@@ -61,23 +72,44 @@ async function mount() {
     </QueryClientProvider>,
   );
   await page.getByTitle("a.ts", { exact: true }).click();
-  const editor = page.getByRole("textbox", { name: "Edit a.ts" });
+  const editor = page.getByRole("textbox", { name: editorLabel });
   await expect.element(editor).toBeVisible();
   return { editor, writeFile };
 }
 
-it("autosaves without a keyboard shortcut", async () => {
-  const { editor, writeFile } = await mount();
-  await editor.fill("changed without Cmd+S");
-  await expect.poll(() => writeFile.mock.calls.length).toBe(1);
-  expect(writeFile).toHaveBeenCalledWith(
-    expect.objectContaining({
-      contents: "changed without Cmd+S",
-      expectedVersion: "sha256:initial",
-    }),
-  );
-  await expect.element(page.getByText("Saved", { exact: true })).toBeVisible();
-});
+it.each([
+  ["en", "Edit a.ts", "Saved", "Save"],
+  ["zh-CN", "编辑a.ts", "已保存", "保存"],
+] as const)(
+  "autosaves with localized status in %s without a keyboard shortcut",
+  async (locale, editorLabel, savedLabel, saveLabel) => {
+    localStorage.setItem(APP_SETTINGS_STORAGE_KEY, JSON.stringify({ language: locale }));
+    setLanguagePreference(locale);
+    const { editor, writeFile } = await mount(editorLabel);
+    let finish!: (value: { relativePath: string; version: string }) => void;
+    writeFile.mockReturnValueOnce(
+      new Promise((resolve) => {
+        finish = resolve;
+      }),
+    );
+    await editor.fill("changed without Cmd+S");
+    await expect.poll(() => writeFile.mock.calls.length).toBe(1);
+    expect(writeFile).toHaveBeenCalledWith(
+      expect.objectContaining({
+        contents: "changed without Cmd+S",
+        expectedVersion: "sha256:initial",
+      }),
+    );
+    try {
+      await expect
+        .element(page.getByRole("button", { name: saveLabel, exact: true }))
+        .toBeDisabled();
+    } finally {
+      finish({ relativePath: "a.ts", version: "sha256:saved" });
+    }
+    await expect.element(page.getByText(savedLabel, { exact: true })).toBeVisible();
+  },
+);
 
 it("waits for the last edits before switching files", async () => {
   const { editor, writeFile } = await mount();

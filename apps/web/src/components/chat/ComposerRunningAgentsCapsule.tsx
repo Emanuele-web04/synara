@@ -1,3 +1,4 @@
+import { useTranslation } from "~/i18n";
 // FILE: ComposerRunningAgentsCapsule.tsx
 // Purpose: Compact "N agents running" capsule above the composer while any of the
 // thread's subagents is still at work, during the turn and after it settles. A
@@ -18,13 +19,15 @@ interface ComposerRunningAgentsCapsuleProps {
 }
 
 export function ComposerRunningAgentsCapsule({ count, onShow }: ComposerRunningAgentsCapsuleProps) {
+  const { t } = useTranslation();
+
   return (
     <ComposerCapsule
       icon={<BotIcon className={COMPOSER_STACKED_PANEL_ICON_CLASS_NAME} />}
       onClick={onShow}
       testId="running-agents-capsule"
     >
-      {count} {pluralize(count, "agent")} running
+      {count} {pluralize(count, "agent")} {t("chat:running")}
     </ComposerCapsule>
   );
 }

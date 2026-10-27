@@ -20,6 +20,7 @@ import {
 } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
+import { useTranslation } from "~/i18n";
 
 export type DeviceRailAction = "home" | "screenshot" | "record" | "rotate" | "shutdown" | "detach";
 
@@ -75,6 +76,15 @@ export const DEVICE_RAIL_GROUPS: readonly DeviceRailGroup[] = [
  */
 export const DEVICE_RAIL_HEIGHT_CLASS = "h-[2.75rem] shrink-0";
 
+const DEVICE_RAIL_LABEL_KEYS: Record<DeviceRailAction, string> = {
+  home: "common:home",
+  rotate: "computer:rotateView",
+  screenshot: "computer:saveScreenshot",
+  record: "computer:recordVideo",
+  shutdown: "computer:shutDownSimulator",
+  detach: "computer:detachSimulator",
+};
+
 export function DeviceControlRail(props: {
   disabled: boolean;
   recording: boolean;
@@ -82,6 +92,8 @@ export function DeviceControlRail(props: {
   landscape: boolean;
   onAction: (action: DeviceRailAction) => void;
 }) {
+  const { t } = useTranslation();
+
   return (
     <div className={cn("flex items-center justify-center gap-1", DEVICE_RAIL_HEIGHT_CLASS)}>
       {DEVICE_RAIL_GROUPS.map((group, groupIndex) => (
@@ -92,7 +104,9 @@ export function DeviceControlRail(props: {
           {group.items.map((item) => {
             const isRecordStop = item.id === "record" && props.recording;
             const Icon = isRecordStop ? DeviceRecordStopIcon : item.Icon;
-            const label = isRecordStop ? "Stop recording" : item.label;
+            const label = isRecordStop
+              ? t("computer:stopRecording")
+              : t(DEVICE_RAIL_LABEL_KEYS[item.id]);
             const pressed =
               item.id === "record"
                 ? props.recording
@@ -130,7 +144,9 @@ export function DeviceControlRail(props: {
                   }
                 />
                 <TooltipPopup side="top" sideOffset={6}>
-                  {item.shortcut ? `${label}  ${item.shortcut}` : label}
+                  {item.shortcut
+                    ? t("computer:symbol3", { value0: label, value1: item.shortcut })
+                    : label}
                 </TooltipPopup>
               </Tooltip>
             );

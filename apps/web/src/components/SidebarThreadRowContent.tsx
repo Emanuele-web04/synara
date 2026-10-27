@@ -5,7 +5,7 @@
 import type { ReactNode } from "react";
 
 import { isGenericChatThreadTitle } from "@synara/shared/chatThreads";
-import { pluralize } from "@synara/shared/text";
+import { pluralize } from "~/i18n/pluralize";
 
 import { useThreadHasPendingDraft } from "../composerDraftStore";
 import { resolveThreadHandoffBadgeLabel } from "../lib/threadHandoff";
@@ -17,12 +17,19 @@ import { ProviderIcon } from "./ProviderIcon";
 import { SidebarGlyph } from "./sidebarGlyphs";
 import { SidebarDraftGlyph } from "./SidebarStatusTrailingGlyph";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
+import { t, useTranslation } from "~/i18n";
 
 export interface SidebarThreadTerminalStatus {
   label: "Terminal input needed" | "Terminal task completed" | "Terminal process running";
   colorClass: string;
   pulse: boolean;
 }
+
+const TERMINAL_STATUS_LABEL_KEYS: Record<SidebarThreadTerminalStatus["label"], string> = {
+  "Terminal input needed": "workspace:terminalInputNeeded",
+  "Terminal task completed": "workspace:terminal_taskCompleted",
+  "Terminal process running": "workspace:terminal_processRunning",
+};
 
 function ProviderAvatarWithTerminal({
   thread,
@@ -33,14 +40,21 @@ function ProviderAvatarWithTerminal({
   terminalStatus: SidebarThreadTerminalStatus | null;
   terminalCount: number;
 }) {
+  const { t } = useTranslation();
+
   const provider = thread.session?.provider ?? thread.modelSelection.provider;
   const handoffSourceProvider = thread.handoff?.sourceProvider ?? null;
   const handoffTooltip = resolveThreadHandoffBadgeLabel(thread);
   const showBadge = terminalCount > 1 || terminalStatus !== null;
   const badgeTooltip =
     terminalCount > 1
-      ? `${terminalCount} ${pluralize(terminalCount, "terminal")} open`
-      : (terminalStatus?.label ?? "Terminal open");
+      ? t("workspace:open3", {
+          value0: terminalCount,
+          value1: pluralize(terminalCount, "terminal"),
+        })
+      : terminalStatus
+        ? t(TERMINAL_STATUS_LABEL_KEYS[terminalStatus.label])
+        : t("workspace:status_terminalOpen");
   const badgeColorClass = terminalStatus?.colorClass ?? "text-muted-foreground/55";
 
   const hasHandoff = Boolean(handoffSourceProvider);
@@ -154,10 +168,10 @@ export function SidebarThreadRowContent({
         {hasPendingDraft ? <SidebarDraftGlyph /> : null}
         {pendingStatusColorClass ? (
           <span
-            aria-label="Pending approval"
+            aria-label={t("workspace:pendingApproval")}
             className={cn("shrink-0 text-ui-xs font-medium", pendingStatusColorClass)}
           >
-            Pending
+            {t("workspace:pending")}
           </span>
         ) : null}
         {variant === "pinned" ? suffix : null}

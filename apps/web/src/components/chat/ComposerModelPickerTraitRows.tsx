@@ -29,6 +29,7 @@ import {
 } from "./composerTraits";
 import { defaultAgentForProvider, getAgentOptions, getSelectedAgentValue } from "./TraitsPicker";
 import { useComposerTraitCommit } from "./useComposerTraitCommit";
+import { useTranslation } from "~/i18n";
 
 // Footer row "<Trait> ……… <value> ›" opening a radio submenu. Picking a value closes
 // only the submenu, so the user can compose model + traits and then star the result.
@@ -42,6 +43,8 @@ function TraitRow(props: {
   disabled?: boolean;
   onValueChange: (value: string) => void;
 }) {
+  const { t } = useTranslation();
+
   const [open, setOpen] = useState(false);
   return (
     <MenuSub open={open} onOpenChange={setOpen}>
@@ -64,7 +67,7 @@ function TraitRow(props: {
           {props.options.map((option) => (
             <MenuRadioItem key={option.value} value={option.value} onClick={() => setOpen(false)}>
               {option.label}
-              {option.isDefault ? " (default)" : ""}
+              {option.isDefault ? t("chat:traitsPicker_defaultSuffix") : ""}
             </MenuRadioItem>
           ))}
         </MenuRadioGroup>
@@ -88,6 +91,8 @@ export function ComposerModelPickerTraitRows(props: {
   effortControl: ComposerEffortControl;
   fastModeNotice?: FastModeNotice | null | undefined;
 }) {
+  const { t } = useTranslation();
+
   const { provider, threadId, model, modelOptions, prompt } = props;
   const selection = getComposerTraitSelection(
     provider,
@@ -95,6 +100,7 @@ export function ComposerModelPickerTraitRows(props: {
     prompt,
     modelOptions,
     props.runtimeModel,
+    t,
   );
   const commitTrait = useComposerTraitCommit({
     threadId,
@@ -118,12 +124,16 @@ export function ComposerModelPickerTraitRows(props: {
     rows.push(
       <TraitRow
         key="thinking"
-        label="Thinking"
+        label={t("chat:timeline_thinking")}
         value={selection.thinkingEnabled ? "on" : "off"}
-        valueLabel={selection.thinkingEnabled ? "On" : "Off"}
+        valueLabel={
+          selection.thinkingEnabled
+            ? t("automation:modelEffort_thinkingOn")
+            : t("automation:traitsPicker_off")
+        }
         options={[
-          { value: "on", label: "On", isDefault: true },
-          { value: "off", label: "Off" },
+          { value: "on", label: t("automation:modelEffort_thinkingOn"), isDefault: true },
+          { value: "off", label: t("automation:traitsPicker_off") },
         ]}
         onValueChange={(value) => commitTrait({ thinking: value === "on" })}
       />,
@@ -133,7 +143,7 @@ export function ComposerModelPickerTraitRows(props: {
     rows.push(
       <TraitRow
         key="context"
-        label={selection.contextWindowDescriptor?.label ?? "Context"}
+        label={selection.contextWindowDescriptor?.label ?? t("chat:traitsPicker_context")}
         value={contextWindowValue}
         valueLabel={
           selection.contextWindowOptions.find((option) => option.value === contextWindowValue)
@@ -152,9 +162,11 @@ export function ComposerModelPickerTraitRows(props: {
     rows.push(
       <TraitRow
         key="effort"
-        label={provider === "opencode" ? "Variant" : "Effort"}
+        label={
+          provider === "opencode" ? t("chat:traitsPicker_variant") : t("chat:traitsPicker_effort")
+        }
         value={selection.effort ?? ""}
-        valueLabel={resolveComposerTraitStatusLabel(selection) ?? ""}
+        valueLabel={resolveComposerTraitStatusLabel(selection, t) ?? ""}
         // Ultrathink is pinned by the prompt; the ladder is read-only until it is removed.
         disabled={selection.ultrathinkPromptControlled}
         options={selection.effortLevels.map((option) => ({
@@ -178,12 +190,16 @@ export function ComposerModelPickerTraitRows(props: {
     rows.push(
       <TraitRow
         key="speed"
-        label="Speed"
+        label={t("chat:traitsPicker_speed")}
         value={selection.fastModeEnabled ? "on" : "off"}
-        valueLabel={selection.fastModeEnabled ? (fastModeNotice?.label ?? "Fast") : "Standard"}
+        valueLabel={
+          selection.fastModeEnabled
+            ? (fastModeNotice?.label ?? t("chat:traitsPicker_fast"))
+            : t("chat:standard")
+        }
         options={[
-          { value: "off", label: "Standard", isDefault: true },
-          { value: "on", label: "Fast" },
+          { value: "off", label: t("chat:standard"), isDefault: true },
+          { value: "on", label: t("chat:traitsPicker_fast") },
         ]}
         onValueChange={(value) => commitTrait({ fastMode: value === "on" })}
       />,
@@ -193,7 +209,7 @@ export function ComposerModelPickerTraitRows(props: {
     rows.push(
       <TraitRow
         key="agent"
-        label="Agent"
+        label={t("chat:traitsPicker_agent")}
         value={selectedAgent}
         valueLabel={
           agentOptions.find((agent) => agent.name === selectedAgent)?.displayName ?? selectedAgent

@@ -10,6 +10,7 @@ import type { WorkLogSynaraThreadCreation } from "../../session-logic";
 import { ProviderIcon } from "../ProviderIcon";
 import { SynaraLogo } from "../SynaraLogo";
 import { Button } from "../ui/button";
+import { useTranslation } from "~/i18n";
 
 function threadMeta(thread: WorkLogSynaraThreadCreation["threads"][number]): string {
   const model = formatModelDisplayName(thread.model) ?? thread.model;
@@ -24,11 +25,18 @@ export const SynaraThreadCreationCard = memo(function SynaraThreadCreationCard({
   readonly creation: WorkLogSynaraThreadCreation;
   readonly onOpenThread?: (threadId: string) => void;
 }) {
+  const { t } = useTranslation();
+
   const singleThread = creation.threads.length === 1 ? creation.threads[0] : undefined;
-  const title = singleThread ? "Thread created" : `${creation.createdCount} threads created`;
+  const title = singleThread
+    ? t("chat:threadCreated")
+    : t("chat:threadsCreated", { value0: creation.createdCount });
   const summary = singleThread
     ? singleThread.title
-    : `${creation.createdCount}/${creation.requestedCount} requested threads created`;
+    : t("chat:requestedThreadsCreated", {
+        value0: creation.createdCount,
+        value1: creation.requestedCount,
+      });
 
   return (
     <div
@@ -59,7 +67,7 @@ export const SynaraThreadCreationCard = memo(function SynaraThreadCreationCard({
             className="shrink-0"
             onClick={() => onOpenThread(singleThread.threadId)}
           >
-            Open thread
+            {t("workspace:timeline_openThread")}
           </Button>
         ) : null}
       </div>
@@ -88,7 +96,7 @@ export const SynaraThreadCreationCard = memo(function SynaraThreadCreationCard({
                   className="shrink-0"
                   onClick={() => onOpenThread(thread.threadId)}
                 >
-                  Open
+                  {t("onboarding:notification_open")}
                 </Button>
               ) : null}
             </div>

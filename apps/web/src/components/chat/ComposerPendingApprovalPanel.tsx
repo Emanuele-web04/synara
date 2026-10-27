@@ -14,6 +14,7 @@ import { type PendingApproval } from "../../session-logic";
 import { cn } from "~/lib/utils";
 import { ComposerChoiceRow, type ComposerChoiceTone } from "./ComposerChoiceRow";
 import { COMPOSER_INPUT_SURFACE_CLASS_NAME } from "./composerPickerStyles";
+import { useTranslation } from "~/i18n";
 
 interface ComposerPendingApprovalPanelProps {
   approval: PendingApproval;
@@ -37,8 +38,8 @@ type ParsedApproval = {
 
 type ApprovalAction = {
   decision: ProviderApprovalDecision;
-  label: string;
-  description: string;
+  labelKey: string;
+  descriptionKey: string;
   tone: ComposerChoiceTone;
 };
 
@@ -46,26 +47,26 @@ type ApprovalAction = {
 const APPROVAL_ACTIONS: ReadonlyArray<ApprovalAction> = [
   {
     decision: "accept",
-    label: "Approve once",
-    description: "Allow just this request",
+    labelKey: "chat:approvalActions_approveOnce",
+    descriptionKey: "chat:approvalActions_approveOnceDesc",
     tone: "primary",
   },
   {
     decision: "acceptForSession",
-    label: "Always allow this session",
-    description: "Don't ask again this session",
+    labelKey: "chat:approvalActions_alwaysAllow",
+    descriptionKey: "chat:approvalActions_alwaysAllowDesc",
     tone: "neutral",
   },
   {
     decision: "decline",
-    label: "Decline",
-    description: "Reject and let the agent continue",
+    labelKey: "chat:approvalActions_decline",
+    descriptionKey: "chat:approvalActions_declineDesc",
     tone: "destructive",
   },
   {
     decision: "cancel",
-    label: "Cancel turn",
-    description: "Stop the current turn",
+    labelKey: "chat:approvalActions_cancelTurn",
+    descriptionKey: "chat:approvalActions_cancelTurnDesc",
     tone: "neutral",
   },
 ];
@@ -79,79 +80,77 @@ const WITHOUT_SESSION_APPROVAL = APPROVAL_ACTIONS.filter(
 // actions never covers taking the user's screen.
 const COMPUTER_SCOPES: Record<
   NonNullable<PendingApproval["approvalScope"]>,
-  { readonly prompt: string; readonly actions: ReadonlyArray<ApprovalAction> }
+  { readonly promptKey: string; readonly actions: ReadonlyArray<ApprovalAction> }
 > = {
   "computer-task": {
-    prompt: "Allow Computer for this task?",
+    promptKey: "chat:allowComputerForThisTask2",
     actions: WITHOUT_SESSION_APPROVAL.map((action) =>
       action.decision === "accept"
         ? {
             ...action,
-            label: "Allow Computer for this task",
-            description:
-              "Continue routine desktop actions until this response ends. Stop cancels access. Clipboard reads still ask separately.",
+            labelKey: "chat:allowComputerForThisTask",
+            descriptionKey: "chat:continueRoutineDesktopActionsUntilThisResponseEndsStop",
           }
         : action.decision === "decline"
-          ? { ...action, description: "Stop desktop for this turn, agent continues without tools" }
+          ? { ...action, descriptionKey: "chat:stopDesktopForThisTurnAgentContinuesWithoutTools" }
           : {
               ...action,
-              label: "Cancel this request",
-              description: "Deny this request; use Stop to end the agent turn.",
+              labelKey: "chat:cancelThisRequest",
+              descriptionKey: "chat:denyThisRequestUseStopToEndTheAgent",
             },
     ),
   },
   "computer-foreground": {
-    prompt: "Show this on your screen?",
+    promptKey: "chat:showThisOnYourScreen",
     actions: WITHOUT_SESSION_APPROVAL.map((action) =>
       action.decision === "accept"
         ? {
             ...action,
-            label: "Show on screen for this task",
-            description: "Computer may bring windows to the front until this response ends.",
+            labelKey: "chat:showOnScreenForThisTask",
+            descriptionKey: "chat:computerMayBringWindowsToTheFrontUntilThis",
           }
         : action.decision === "decline"
           ? {
               ...action,
-              label: "Keep it in the background",
-              description: "No window is raised; the agent continues in the background",
+              labelKey: "chat:keepItInTheBackground",
+              descriptionKey: "chat:noWindowIsRaisedTheAgentContinuesInThe",
             }
           : {
               ...action,
-              label: "Cancel this request",
-              description: "Use Stop to end the agent turn.",
+              labelKey: "chat:cancelThisRequest",
+              descriptionKey: "chat:useStopToEndTheAgentTurn",
             },
     ),
   },
   "device-task": {
-    prompt: "Allow Device for this task?",
+    promptKey: "chat:allowDeviceForThisTask2",
     actions: WITHOUT_SESSION_APPROVAL.map((action) =>
       action.decision === "accept"
         ? {
             ...action,
-            label: "Allow Device for this task",
-            description:
-              "Continue routine device actions until this response ends. Stop cancels access.",
+            labelKey: "chat:allowDeviceForThisTask",
+            descriptionKey: "chat:continueRoutineDeviceActionsUntilThisResponseEndsStop",
           }
         : action.decision === "decline"
           ? {
               ...action,
-              description: "Stop device control for this turn, agent continues without tools",
+              descriptionKey: "chat:stopDeviceControlForThisTurnAgentContinuesWithout",
             }
           : {
               ...action,
-              label: "Cancel this request",
-              description: "Use Stop to end the agent turn.",
+              labelKey: "chat:cancelThisRequest",
+              descriptionKey: "chat:useStopToEndTheAgentTurn",
             },
     ),
   },
 };
 
 const KIND_PROMPT: Record<PendingApproval["requestKind"], string> = {
-  command: "Approve this command?",
-  "file-read": "Approve reading this file?",
-  "file-change": "Approve this file change?",
-  permissions: "Grant these permissions?",
-  tool: "Approve this tool call?",
+  command: "chat:approvalActions_promptCommand",
+  "file-read": "chat:approvalActions_promptFileRead",
+  "file-change": "chat:approvalActions_promptFileChange",
+  permissions: "chat:grantThesePermissions",
+  tool: "chat:approveThisToolCall",
 };
 
 export const ComposerPendingApprovalPanel = function ComposerPendingApprovalPanel({
@@ -160,6 +159,7 @@ export const ComposerPendingApprovalPanel = function ComposerPendingApprovalPane
   isResponding,
   onRespond,
 }: ComposerPendingApprovalPanelProps) {
+  const { t } = useTranslation();
   const parsed = parseApprovalDetail(approval.detail);
   const requestId = approval.requestId;
   const requestKey = pendingRequestInstanceKey(requestId, approval.lifecycleGeneration);
@@ -217,7 +217,7 @@ export const ComposerPendingApprovalPanel = function ComposerPendingApprovalPane
     >
       <div className="flex items-start justify-between gap-3">
         <p className="min-w-0 text-ui-lg font-medium leading-snug text-foreground/90">
-          {computerScope?.prompt ?? KIND_PROMPT[approval.requestKind]}
+          {t(computerScope?.promptKey ?? KIND_PROMPT[approval.requestKind])}
           {!computerScope && (approval.toolName ?? parsed.tool) ? (
             <span className="ml-1.5 text-ui-sm font-normal text-muted-foreground/50">
               {approval.toolName ?? parsed.tool}
@@ -241,8 +241,8 @@ export const ComposerPendingApprovalPanel = function ComposerPendingApprovalPane
           <ComposerChoiceRow
             key={action.decision}
             shortcut={index + 1}
-            label={action.label}
-            description={action.description}
+            label={t(action.labelKey)}
+            description={t(action.descriptionKey)}
             tone={action.tone}
             disabled={isResponding}
             onSelect={() => respondOnce(action)}
@@ -264,6 +264,8 @@ function ApprovalDetail({
   toolName?: string;
   toolParamsDisplay?: PendingApproval["toolParamsDisplay"];
 }) {
+  const { t } = useTranslation();
+
   if (permissionProfile) {
     return (
       <div className="mt-2">
@@ -274,7 +276,7 @@ function ApprovalDetail({
         ) : null}
         <pre
           className="max-h-36 overflow-auto whitespace-pre-wrap break-words rounded-md bg-[var(--color-background-elevated-secondary)] px-2.5 py-2 font-mono text-ui-sm leading-relaxed text-foreground/85"
-          title="Requested permission profile"
+          title={t("chat:requestedPermissionProfile")}
         >
           <code>{JSON.stringify(permissionProfile, null, 2)}</code>
         </pre>
@@ -311,7 +313,11 @@ function ApprovalDetail({
       <div className="mt-2">
         <p
           className="truncate text-ui-lg font-medium leading-tight text-foreground/85"
-          title={parsed.fileDir ? `${parsed.fileDir}/${parsed.fileName}` : parsed.fileName}
+          title={
+            parsed.fileDir
+              ? t("chat:symbol8", { value0: parsed.fileDir, value1: parsed.fileName })
+              : parsed.fileName
+          }
         >
           {parsed.fileName}
         </p>
@@ -339,7 +345,11 @@ function ApprovalDetail({
     );
   }
 
-  return <p className="mt-2 text-ui text-muted-foreground/65">Review the request to continue.</p>;
+  return (
+    <p className="mt-2 text-ui text-muted-foreground/65">
+      {t("chat:approvalActions_reviewRequest")}
+    </p>
+  );
 }
 
 function formatToolParameterValue(value: unknown): string {

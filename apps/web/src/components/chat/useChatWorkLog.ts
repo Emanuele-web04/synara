@@ -1,3 +1,4 @@
+import { useTranslation } from "~/i18n";
 import { OrchestrationThreadActivity, type TurnId } from "@synara/contracts";
 import { useMemo } from "react";
 import { setsEqual, useStableValue } from "../../hooks/useStableValue";
@@ -27,6 +28,8 @@ export function useChatWorkLog({
   latestTurnSettled,
   latestTurnLive,
 }: ChatWorkLogInput) {
+  const { t } = useTranslation();
+
   const activeThreadId = activeThread?.id ?? null;
   const activeLatestTurn = activeThread?.latestTurn ?? null;
   const activeLatestTurnId = activeLatestTurn?.turnId ?? null;
@@ -65,6 +68,7 @@ export function useChatWorkLog({
         activeTurnStartedAt: activeLatestTurnStartedAt,
         latestTurnState: activeLatestTurnState,
         latestTurnCompletedAt: activeLatestTurnCompletedAt,
+        translate: t,
       }),
     [
       activeLatestTurnCompletedAt,
@@ -74,6 +78,7 @@ export function useChatWorkLog({
       latestTurnLive,
       threadActivities,
       workLogVisibleTurnIds,
+      t,
     ],
   );
   const hasWorkLogSubagents = useMemo(

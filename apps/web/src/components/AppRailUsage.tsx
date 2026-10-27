@@ -1,3 +1,4 @@
+import { rateLimitWindowDisplayLabel } from "~/lib/rateLimits";
 // FILE: AppRailUsage.tsx
 // Purpose: Provider usage rings at the bottom of the app rail, above Help: the provider glyph inside a
 //          remaining-quota ring, a hover card with every limit, click opens Settings → Usage.
@@ -37,6 +38,7 @@ import {
 } from "./sidebarHoverCardStyles";
 import { PreviewCard, PreviewCardPopup, PreviewCardTrigger } from "./ui/preview-card";
 import { StatusChip } from "./ui/status-chip";
+import { useTranslation } from "~/i18n";
 
 // Every ring uses the same scale, so its colour alone says how much is left.
 const RING_TONE_CLASS_NAME: Record<RailUsageRingTone, { stroke: string; dot: string }> = {
@@ -64,6 +66,8 @@ function AppRailUsageRing({
   window: RailUsageWindow;
   onOpenUsageSettings: () => void;
 }) {
+  const { t } = useTranslation();
+
   const { instance, label } = account;
   const provider = instance.driver;
   const model = useProviderUsageMenuModel(provider, {
@@ -79,12 +83,15 @@ function AppRailUsageRing({
     return null;
   }
 
-  const summary = resolveEnvironmentProviderUsageSummary({
-    providerName: label,
-    rows: model.rows,
-    snapshot,
-    hasUsageLines: model.usageLines.length > 0,
-  });
+  const summary = resolveEnvironmentProviderUsageSummary(
+    {
+      providerName: label,
+      rows: model.rows,
+      snapshot,
+      hasUsageLines: model.usageLines.length > 0,
+    },
+    t,
+  );
   const rings = selectRailUsageRows(model.rows, model.primaryRow, window).map((row) => ({
     row,
     tone: RING_TONE_CLASS_NAME[railUsageRingTone(row.remainingPercent)],
@@ -99,7 +106,7 @@ function AppRailUsageRing({
         render={
           <button
             type="button"
-            aria-label={`${summary.ariaLabel}. Open usage settings`}
+            aria-label={t("common:openUsageSettings", { value0: summary.ariaLabel })}
             className={cn(
               appRailButtonClassName(false),
               "relative flex shrink-0 items-center justify-center",
@@ -180,7 +187,8 @@ function AppRailUsageRing({
             <div className="flex items-center gap-3 text-muted-foreground">
               {rings.map(({ row, tone }, index) => (
                 <StatusChip key={row.id} dotClassName={tone.dot}>
-                  {row.label} · {index === 0 ? "outer" : "inner"}
+                  {rateLimitWindowDisplayLabel(row.label, t)} ·{" "}
+                  {index === 0 ? t("common:outer") : t("common:inner")}
                 </StatusChip>
               ))}
             </div>
@@ -204,6 +212,7 @@ function AppRailUsageRing({
 
 /** Sits above Help: a ring per selected account, with the windows chosen in Settings → Usage. */
 export function AppRailUsage({ onOpenUsageSettings }: { onOpenUsageSettings: () => void }) {
+  const { t } = useTranslation();
   const { settings } = useAppSettings();
   const settingsQuery = useQuery(serverSettingsQueryOptions());
   const accounts = resolveRailUsageAccounts(
@@ -211,6 +220,7 @@ export function AppRailUsage({ onOpenUsageSettings }: { onOpenUsageSettings: () 
     getRailUsageAccounts(
       deriveProviderInstances(settingsQuery.data ?? DEFAULT_SERVER_SETTINGS_VIEW),
       settings.disabledProviders,
+      t,
     ),
   );
   const usageQuery = useQuery(serverAllProviderUsageQueryOptions({ enabled: accounts.length > 0 }));

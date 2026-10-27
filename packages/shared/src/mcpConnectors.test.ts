@@ -55,13 +55,18 @@ describe("normalizeMcpConnectorUrl", () => {
   });
 
   it.each([
-    ["", "Enter the server URL."],
-    ["mcp.example.com", "Enter a full URL, like https://mcp.example.com/mcp."],
-    ["http://mcp.example.com/mcp", "The URL must start with https://."],
-    ["https://user:pass@mcp.example.com/mcp", "Remove the user name or password from the URL."],
-    ["https://localhost/mcp", "Use the server's public address."],
-  ])("rejects %j", (raw, reason) => {
-    expect(normalizeMcpConnectorUrl(raw)).toEqual({ ok: false, reason });
+    ["", "Enter the server URL.", "required"],
+    ["https://mcp.example.com/" + "x".repeat(2048), "The URL is too long.", "too-long"],
+    ["mcp.example.com", "Enter a full URL, like https://mcp.example.com/mcp.", "invalid"],
+    ["http://mcp.example.com/mcp", "The URL must start with https://.", "https-required"],
+    [
+      "https://user:pass@mcp.example.com/mcp",
+      "Remove the user name or password from the URL.",
+      "credentials",
+    ],
+    ["https://localhost/mcp", "Use the server's public address.", "public-host"],
+  ])("rejects %j", (raw, reason, reasonCode) => {
+    expect(normalizeMcpConnectorUrl(raw)).toEqual({ ok: false, reason, reasonCode });
   });
 });
 

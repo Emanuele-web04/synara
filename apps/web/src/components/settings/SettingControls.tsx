@@ -5,6 +5,7 @@
 //          useSettingsRestoreSignal
 
 import { type ReactNode, useEffect, useEffectEvent, useRef } from "react";
+import { useTranslation } from "~/i18n";
 import { cn } from "~/lib/utils";
 import { Button } from "~/components/ui/button";
 import { Select, SelectTrigger, SelectValue } from "~/components/ui/select";
@@ -26,6 +27,7 @@ export function useSettingsRestoreSignal(epoch: number, onRestore: () => void): 
 }
 
 export function SettingResetButton({ label, onClick }: { label: string; onClick: () => void }) {
+  const { t } = useTranslation();
   return (
     <Tooltip>
       <TooltipTrigger
@@ -33,7 +35,7 @@ export function SettingResetButton({ label, onClick }: { label: string; onClick:
           <Button
             size="icon-xs"
             variant="ghost"
-            aria-label={`Reset ${label} to default`}
+            aria-label={t("settings:resetToDefault", { setting: label })}
             className="size-5 rounded-lg p-0 text-muted-foreground hover:text-foreground"
             onClick={(event) => {
               event.stopPropagation();
@@ -44,7 +46,7 @@ export function SettingResetButton({ label, onClick }: { label: string; onClick:
           </Button>
         }
       />
-      <TooltipPopup side="top">Reset to default</TooltipPopup>
+      <TooltipPopup side="top">{t("common:theme_resetToDefault")}</TooltipPopup>
     </Tooltip>
   );
 }
@@ -105,6 +107,7 @@ export function SettingsSegmentedControl<T extends string>({
   options: readonly SettingsSegmentedOption<T>[];
   ariaLabel: string;
 }) {
+  const { t } = useTranslation();
   const radioItemProps = useRadioGroupKeyboardNav({
     values: options.map((option) => option.value),
     value,
@@ -133,7 +136,7 @@ export function SettingsSegmentedControl<T extends string>({
             onClick={() => onValueChange(option.value)}
             {...radioItemProps(option.value)}
           >
-            {option.label}
+            {t(option.label)}
           </Button>
         );
       })}

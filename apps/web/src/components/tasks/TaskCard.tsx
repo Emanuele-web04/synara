@@ -25,10 +25,12 @@ import {
   type SavedTaskText,
   type TaskRowModel,
   unlinkChatInput,
+  taskStatusPresentation,
   withSavedTaskText,
 } from "./tasks.logic";
 import { useTaskCanUnlink } from "./taskDelegationState";
 import { useOpenChat } from "./useOpenChat";
+import { useTranslation } from "~/i18n";
 
 export function TaskCard({
   row,
@@ -54,6 +56,8 @@ export function TaskCard({
   autoFocusNotes?: boolean;
   className?: string;
 }) {
+  const { t } = useTranslation();
+
   const { todo, status, thread } = row;
   const openChat = useOpenChat(todo.threadId);
   const canUnlink = useTaskCanUnlink(todo, status.kind, now);
@@ -73,7 +77,7 @@ export function TaskCard({
 
   return (
     <section
-      aria-label="Task details"
+      aria-label={t("common:taskDetails")}
       className={cn(
         `${GLASS_RAISED_SURFACE_CLASS_NAME} flex flex-col gap-3.5 overflow-y-auto rounded-3xl bg-popover p-4`,
         RAISED_SURFACE_CHROME_CLASS_NAME,
@@ -96,7 +100,7 @@ export function TaskCard({
         autoFocusNotes={autoFocusNotes}
         trailing={
           <IconButton
-            label="Close"
+            label={t("common:app_close")}
             size="icon-xs"
             variant="ghost"
             className="-mr-1 shrink-0 text-muted-foreground"
@@ -118,9 +122,11 @@ export function TaskCard({
       {/* Done first: a finished delegated to-do still has its chat, and needs the way back. */}
       {status.kind === "done" ? (
         <TaskActionRow>
-          {thread ? <TaskPillButton onClick={openChat}>Open chat</TaskPillButton> : null}
+          {thread ? (
+            <TaskPillButton onClick={openChat}>{t("common:openChat")}</TaskPillButton>
+          ) : null}
           <TaskPillButton onClick={() => onUpdate({ id: todo.id, completed: false })}>
-            Mark as not done
+            {t("common:markAsNotDone")}
           </TaskPillButton>
         </TaskActionRow>
       ) : thread ? (
@@ -136,13 +142,15 @@ export function TaskCard({
         // Linked, but the chat has not reached this window yet: no second Start meanwhile.
         <>
           <TaskWell>
-            <span className="shimmer text-ui-sm">{status.detail ?? "Starting the agent…"}</span>
+            <span className="shimmer text-ui-sm">
+              {taskStatusPresentation(status, t).detail ?? t("common:startingTheAgent")}
+            </span>
           </TaskWell>
           <TaskActionRow>
-            <TaskPillButton onClick={openChat}>Open chat</TaskPillButton>
+            <TaskPillButton onClick={openChat}>{t("common:openChat")}</TaskPillButton>
             {canUnlink ? (
               <TaskPillButton onClick={() => onUpdate(unlinkChatInput(todo))}>
-                Unlink
+                {t("common:unlink")}
               </TaskPillButton>
             ) : null}
           </TaskActionRow>
@@ -152,11 +160,11 @@ export function TaskCard({
           {status.chatMissing ? (
             <TaskWell className="flex-row items-center justify-between gap-3">
               <span className="text-ui-sm text-muted-foreground">
-                The chat this task was handed to no longer exists.
+                {t("common:theChatThisTaskWasHandedToNoLonger")}
               </span>
               {canUnlink ? (
                 <TaskPillButton onClick={() => onUpdate(unlinkChatInput(todo))}>
-                  Unlink
+                  {t("common:unlink")}
                 </TaskPillButton>
               ) : null}
             </TaskWell>

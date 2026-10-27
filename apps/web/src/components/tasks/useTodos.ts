@@ -12,6 +12,7 @@ import type {
   TodoListResult,
   TodoUpdateInput,
 } from "@synara/contracts";
+import { useTranslation } from "~/i18n";
 import { applyTodoPatch } from "@synara/shared/todo";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo } from "react";
@@ -183,6 +184,7 @@ function showMutationError(title: string) {
 }
 
 export function useTodoMutations() {
+  const { t } = useTranslation();
   const queryClient = useQueryClient();
   const setList = (update: (todos: readonly Todo[]) => Todo[]) =>
     queryClient.setQueryData<TodoListResult>(todoQueryKey, (prev) => ({
@@ -232,7 +234,7 @@ export function useTodoMutations() {
     onError: (error, input) => {
       failedCreateIds.add(input.id);
       setList((todos) => todos.filter((todo) => todo.id !== input.id));
-      showMutationError("Couldn't add the task")(error);
+      showMutationError(t("common:task_couldNotAdd"))(error);
     },
     onSettled: (_todo, _error, input) => {
       endPendingCreate(input.id);
@@ -276,7 +278,7 @@ export function useTodoMutations() {
           ),
         );
       }
-      showMutationError("Couldn't update the task")(error);
+      showMutationError(t("common:task_couldNotUpdate"))(error);
     },
     onSettled: (_todo, _error, input) => {
       endPendingUpdate(input);
@@ -320,7 +322,7 @@ export function useTodoMutations() {
       if (previous && !failedCreateIds.has(id)) {
         setList((todos) => upsertTodo(todos, previous));
       }
-      showMutationError("Couldn't delete the task")(error);
+      showMutationError(t("common:task_couldNotDelete"))(error);
     },
     onSettled: reconcileList,
   });

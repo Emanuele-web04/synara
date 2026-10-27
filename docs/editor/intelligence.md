@@ -14,6 +14,12 @@ Editor shortcuts are ordinary Synara keybindings (`editor.commands`, `editor.ren
 
 In the editor view the Files, Diff and Search panes are rail items: the editor workspace publishes them to the fixed app rail while it is mounted (`editorRailStore.ts`), so there is no second activity bar next to the rail.
 
+## Interface language
+
+The editor uses Monaco's bundled Simplified Chinese or Spanish language pack when it first opens; English uses Monaco's original messages. The pack loads before the editor modules, and neither the editor nor its language pack is loaded just by opening Settings or a chat.
+
+Synara's interface, editor commands and debugger controls change language immediately. Monaco's own controls, such as Find and Replace, keep the language selected when the editor first loaded because the engine caches labels during module registration. After a language change, Settings → General → Language offers **Save and reload** for those controls. This uses the existing editor save guard: it waits for file buffers to save and refuses to reload if a write fails or an unsaved buffer remains. Changing language alone never reloads the page or replaces editor models.
+
 ## Ownership and safety
 
 `WorkspaceEditorSession` remains the authoritative dirty buffer, conflict handler and sole disk writer. Monaco shares that session's text across file/diff surfaces; changing view or theme does not create another undo history. Explicit reload/discard resets the model history; ordinary edits do not. The existing native autosave, encoding/BOM, line-ending, optimistic disk-version and navigation-flush rules still apply.

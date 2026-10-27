@@ -145,6 +145,7 @@ function recordBrowserActivity(activity: DesktopDiagnosticActivity): void {
 contextBridge.exposeInMainWorld("desktopBridge", {
   ...(betaDiagnosticsBridge ? { betaDiagnostics: betaDiagnosticsBridge } : {}),
   getWsUrl: getDesktopWsUrl,
+  getSystemLanguages: () => ipcRenderer.sendSync(IPC.getSystemLanguages),
   // Absolute path for OS-dropped File objects (folders with spaces/parens, etc.).
   getPathForFile: (file: File) => {
     try {
@@ -158,6 +159,7 @@ contextBridge.exposeInMainWorld("desktopBridge", {
   saveFile: (input) => ipcRenderer.invoke(IPC.saveFile, input),
   confirm: (message) => ipcRenderer.invoke(IPC.confirm, message),
   setTheme: (theme) => ipcRenderer.invoke(IPC.setTheme, theme),
+  setLanguagePreference: (preference) => ipcRenderer.invoke(IPC.setLanguagePreference, preference),
   setWindowMaterial: (input) => ipcRenderer.invoke(IPC.setWindowMaterial, input),
   ...(windowTranslucency ? { windowTranslucency } : {}),
   getAppIcon: () => ipcRenderer.invoke(IPC.getAppIcon),

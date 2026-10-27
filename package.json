@@ -69,7 +69,10 @@
     "canary:stop": "node scripts/canary.ts stop",
     "canary:status": "node scripts/canary.ts status",
     "canary:rollback": "node scripts/canary.ts rollback",
-    "clean": "rm -rf node_modules apps/*/node_modules packages/*/node_modules scripts/node_modules apps/*/dist apps/*/dist-electron packages/*/dist .turbo apps/*/.turbo packages/*/.turbo"
+    "clean": "rm -rf node_modules apps/*/node_modules packages/*/node_modules scripts/node_modules apps/*/dist apps/*/dist-electron packages/*/dist .turbo apps/*/.turbo packages/*/.turbo",
+    "i18n:check": "bun scripts/i18n.ts check",
+    "i18n:extract": "bun scripts/i18n.ts extract",
+    "i18n:coverage": "bun scripts/i18n.ts coverage"
   },
   "devDependencies": {
     "@effect/tsgo": "0.41.0",

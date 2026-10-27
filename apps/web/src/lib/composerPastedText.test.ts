@@ -1,12 +1,16 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { setLanguagePreference, t, getFormatLocale } from "~/i18n";
 
 import {
   appendPastedTextsToPrompt,
   createPastedTextDraft,
   extractTrailingPastedTexts,
+  formatPastedTextCountLabel,
   pastedTextTitle,
   shouldCollapsePastedText,
 } from "./composerPastedText";
+
+afterEach(() => setLanguagePreference("system"));
 
 function makeDraft(id: string, text: string) {
   return createPastedTextDraft({ id, createdAt: "2026-06-15T00:00:00.000Z", text });
@@ -83,3 +87,25 @@ describe("appendPastedTextsToPrompt / extractTrailingPastedTexts", () => {
     expect(extracted.pastedTexts.map((entry) => entry.text)).toEqual([pastedText]);
   });
 });
+
+it.each([
+  ["en", "25 lines", "10,000 chars"],
+  ["zh-CN", "25 行", "10,000 个字符"],
+  ["es", "25 líneas", "10.000 caracteres"],
+] as const)(
+  "formats pasted-text UI counts in %s without changing pasted content",
+  (locale, lineLabel, characterLabel) => {
+    setLanguagePreference(locale);
+    expect(
+      formatPastedTextCountLabel({ lineCount: 25, charCount: 10000 }, t, getFormatLocale()),
+    ).toBe(lineLabel);
+    expect(
+      formatPastedTextCountLabel({ lineCount: 1, charCount: 10000 }, t, getFormatLocale()),
+    ).toBe(characterLabel);
+    const draft = makeDraft("localized", "workspace:today");
+    expect(pastedTextTitle(draft.text, t("chat:pastedText"))).toBe("workspace:today");
+    expect(
+      extractTrailingPastedTexts(appendPastedTextsToPrompt("", [draft])).pastedTexts[0]?.text,
+    ).toBe("workspace:today");
+  },
+);

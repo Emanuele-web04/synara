@@ -87,18 +87,22 @@ export function filterPastedTextsWithText<T extends { text: string }>(
   return pastedTexts.filter((pasted) => hasPastedText(pasted));
 }
 
-export function formatPastedTextCountLabel(metrics: {
-  lineCount: number;
-  charCount: number;
-}): string {
-  if (metrics.lineCount > 1) {
-    return `${metrics.lineCount.toLocaleString()} lines`;
-  }
-  return `${metrics.charCount.toLocaleString()} chars`;
+export function formatPastedTextCountLabel(
+  metrics: { lineCount: number; charCount: number },
+  translate: (key: string, values?: Record<string, unknown>) => string,
+  formatLocale: string,
+): string {
+  const isMultiline = metrics.lineCount > 1;
+  const count = isMultiline ? metrics.lineCount : metrics.charCount;
+  return translate(isMultiline ? "chat:pastedTextLines" : "chat:pastedTextCharacters", {
+    count,
+    formattedCount: count.toLocaleString(formatLocale),
+  });
 }
 
-// First non-empty line, trimmed; used as the card's title preview.
-export function pastedTextTitle(text: string): string {
+// First non-empty line, trimmed. The default is source metadata used by persisted
+// chat titles and prompt parsing; UI cards pass a localized fallback explicitly.
+export function pastedTextTitle(text: string, fallback = "Pasted text"): string {
   const normalized = normalizePastedTextContent(text);
   for (const line of normalized.split("\n")) {
     const trimmed = line.trim();
@@ -106,7 +110,7 @@ export function pastedTextTitle(text: string): string {
       return trimmed.length > 140 ? `${trimmed.slice(0, 137)}...` : trimmed;
     }
   }
-  return "Pasted text";
+  return fallback;
 }
 
 // --- Send-time serialization (cards -> trailing block)

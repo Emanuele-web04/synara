@@ -22,6 +22,7 @@ import { cn } from "~/lib/utils";
 import { SendToAgentMenuItems, type GitHubItemSendTarget } from "./GitHubItemAgentActions";
 import { copyPullRequestLink } from "./PullRequestConfirmActionDialog";
 import { PR_STATE_PRESENTATION_ICONS } from "./pullRequestStatePresentation";
+import { useTranslation } from "~/i18n";
 
 const MergeIcon = PR_STATE_PRESENTATION_ICONS["merged-simple"];
 const OpenIcon = PR_STATE_PRESENTATION_ICONS["pull-request"];
@@ -91,11 +92,13 @@ export function PullRequestPrimaryButton({
   /** On the words only, so a narrow host can keep just the glyph (e.g. `sr-only` there). */
   labelClassName?: string;
 }) {
+  const { t } = useTranslation();
+
   if (action.kind === "ready") {
     return (
       <Button size={size} className={className} disabled={disabled} onClick={onReady}>
         <OpenIcon />
-        <span className={labelClassName}>Ready for review</span>
+        <span className={labelClassName}>{t("git:readyForReview")}</span>
       </Button>
     );
   }
@@ -103,14 +106,14 @@ export function PullRequestPrimaryButton({
   const label = merging ? (
     <>
       <LoaderIcon className="size-3.5 animate-spin" />
-      <span className={labelClassName}>{stacked ? "Merging stack…" : "Merging…"}</span>
+      <span className={labelClassName}>{stacked ? t("git:mergingStack") : t("git:merging")}</span>
     </>
   ) : (
     <>
       <MergeIcon />
       {stacked ? (
         <>
-          <span className={labelClassName}>Merge stack</span>
+          <span className={labelClassName}>{t("git:mergeStack")}</span>
           <span
             className={cn(
               "rounded-full px-1.5 text-ui-xs tabular-nums",
@@ -121,7 +124,7 @@ export function PullRequestPrimaryButton({
           </span>
         </>
       ) : (
-        <span className={labelClassName}>Merge</span>
+        <span className={labelClassName}>{t("git:merge")}</span>
       )}
     </>
   );
@@ -164,6 +167,8 @@ export function PullRequestDraftStateItems({
   disabled: boolean;
   onChange: (next: "draft" | "ready") => void;
 }) {
+  const { t } = useTranslation();
+
   return (
     <MenuRadioGroup
       value={isDraft ? "draft" : "ready"}
@@ -175,11 +180,11 @@ export function PullRequestDraftStateItems({
     >
       <MenuRadioItem value="draft" disabled={disabled}>
         <DraftIcon className={MENU_ICON_CLASS_NAME} />
-        <span>Draft</span>
+        <span>{t("git:column_draft")}</span>
       </MenuRadioItem>
       <MenuRadioItem value="ready" disabled={disabled}>
         <OpenIcon className={MENU_ICON_CLASS_NAME} />
-        <span>Ready for review</span>
+        <span>{t("git:readyForReview")}</span>
       </MenuRadioItem>
     </MenuRadioGroup>
   );
@@ -231,6 +236,8 @@ export function PullRequestActionMenuItems({
   onClose: () => void;
   onReopen: () => void;
 }) {
+  const { t } = useTranslation();
+
   const open = detail.state === "open";
   return (
     <>
@@ -266,7 +273,7 @@ export function PullRequestActionMenuItems({
         <>
           <MenuItem onClick={() => copyPullRequestLink(detail.url)}>
             <LinkIcon className={MENU_ICON_CLASS_NAME} />
-            <span>Copy link</span>
+            <span>{t("computer:panel_copyLink")}</span>
           </MenuItem>
           <SendToAgentMenuItems
             sendTargets={sendTargets}
@@ -277,14 +284,16 @@ export function PullRequestActionMenuItems({
           {onAsk ? (
             <MenuItem onClick={onAsk} disabled={askPending}>
               <ChatBubbleIcon className={MENU_ICON_CLASS_NAME} />
-              <span>Ask in a side chat</span>
+              <span>{t("git:askInASideChat")}</span>
             </MenuItem>
           ) : null}
         </>
       ) : null}
       <MenuItem onClick={onFixFindings} disabled={preparingThread !== null}>
         <HammerIcon className={MENU_ICON_CLASS_NAME} />
-        <span>{preparingThread === "findings" ? "Preparing findings…" : "Fix findings"}</span>
+        <span>
+          {preparingThread === "findings" ? t("git:preparingFindings") : t("git:fixFindings")}
+        </span>
       </MenuItem>
       {/* Beside Fix findings: the same kind of hand-off, offered only while there is a conflict
           to resolve, which is also when Merge is blocked. */}
@@ -292,7 +301,9 @@ export function PullRequestActionMenuItems({
         <MenuItem onClick={onResolveConflicts} disabled={preparingThread !== null}>
           <ConflictIcon className={MENU_ICON_CLASS_NAME} />
           <span>
-            {preparingThread === "conflicts" ? "Preparing conflicts…" : "Resolve conflicts"}
+            {preparingThread === "conflicts"
+              ? t("git:preparingConflicts")
+              : t("git:resolveConflicts")}
           </span>
         </MenuItem>
       ) : null}
@@ -300,12 +311,12 @@ export function PullRequestActionMenuItems({
       {open ? (
         <MenuItem variant="destructive" disabled={actionPending} onClick={onClose}>
           <ClosedIcon className={MENU_ICON_CLASS_NAME} />
-          <span>Close pull request</span>
+          <span>{t("git:closePullRequest")}</span>
         </MenuItem>
       ) : detail.state === "closed" ? (
         <MenuItem disabled={actionPending} onClick={onReopen}>
           <OpenIcon className={MENU_ICON_CLASS_NAME} />
-          <span>Reopen pull request</span>
+          <span>{t("git:reopenPullRequest")}</span>
         </MenuItem>
       ) : null}
     </>

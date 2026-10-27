@@ -4,11 +4,13 @@
 // Depends on: automationDraft warning helpers.
 
 import { describe, expect, it } from "vitest";
+import { setLanguagePreference } from "~/i18n";
 
 import {
   acknowledgedWarningIdsForAutomaticChatAutomation,
   acknowledgedRiskIdsForDraft,
   automationApprovalGaps,
+  automationDraftWarningPresentation,
   buildAutomationDraftWarnings,
   hasBlockingAutomationDraftWarnings,
 } from "./automationDraft";
@@ -49,6 +51,19 @@ describe("automation draft warnings", () => {
     ]);
     expect(warnings[0]?.detail).toContain("provider mentions");
     expect(hasBlockingAutomationDraftWarnings(warnings, new Set())).toBe(true);
+    const warning = warnings[0]!;
+    try {
+      setLanguagePreference("zh-CN");
+      const display = automationDraftWarningPresentation(warning);
+      expect(display.title).toBe("输入框中的上下文不会保存");
+      expect(display.requiresAcknowledgement).toBe(true);
+      expect(warning.title).toBe("Composer context is not persisted");
+      expect(hasBlockingAutomationDraftWarnings(warnings, new Set())).toBe(true);
+      setLanguagePreference("en");
+      expect(automationDraftWarningPresentation(warning).title).toBe(warning.title);
+    } finally {
+      setLanguagePreference("en");
+    }
   });
 
   it("auto-acknowledges bounded thread fast loops without hiding standalone risks", () => {

@@ -1,3 +1,4 @@
+import { useTranslation } from "~/i18n";
 // FILE: EditorActionPicker.tsx
 // Purpose: Synara's command picker for editor commands, navigation results,
 //          problems and workspace symbols.
@@ -36,6 +37,7 @@ export function EditorActionPicker(props: {
   onClose: () => void;
   onChoose: (row: EditorActionRow) => void;
 }) {
+  const { t } = useTranslation();
   return (
     <CommandDialog
       open={props.open}
@@ -53,8 +55,8 @@ export function EditorActionPicker(props: {
           />
           <CommandStatus>
             {props.busy
-              ? "Searching…"
-              : (props.message ?? (props.rows.length ? null : "No matching results."))}
+              ? t("workspace:editorSearching")
+              : (props.message ?? (props.rows.length ? null : t("workspace:editorNoResults")))}
           </CommandStatus>
           <CommandList className="max-h-80 overflow-auto">
             {props.rows.map((row, index) => (

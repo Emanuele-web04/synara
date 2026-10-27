@@ -4,6 +4,7 @@
 // Layer: Web orchestration helper
 // Exports: dispatchKanbanDraftCard, dispatchKanbanDraftThread, KanbanDraftDispatchResult
 
+import { t } from "~/i18n";
 import type {
   AssistantDeliveryMode,
   ProjectId,
@@ -39,20 +40,20 @@ export function kanbanDispatchFailureToast(
   if (result.kind === "open-thread") {
     return {
       type: "info",
-      title: "Finish this draft in the chat",
+      title: t("workspace:finishDraftInChat"),
       description:
         result.reason === "empty"
-          ? "Nothing to send yet. Write the prompt in the composer."
+          ? t("workspace:draftEmpty")
           : result.reason === "worktree-pending"
-            ? "Open the chat to create the worktree with the normal send flow."
-            : "Open the chat to continue this task.",
+            ? t("workspace:draftWorktreePending")
+            : t("workspace:draftContinueChat"),
     };
   }
   if (result.kind === "unavailable") {
     return {
       type: "error",
-      title: "Not connected",
-      description: "Reconnect to the server before sending drafts.",
+      title: t("common:toast_notConnected"),
+      description: t("workspace:draftReconnect"),
     };
   }
   return { type: "error", title: errorTitle, description: result.message };

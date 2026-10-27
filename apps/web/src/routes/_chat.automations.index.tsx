@@ -11,6 +11,7 @@ import { cn } from "~/lib/utils";
 import { useStore } from "~/store";
 import { useAutomations } from "./-automations.shared";
 import { AutomationCreateDialog } from "./-automations.list";
+import { useTranslation } from "~/i18n";
 
 export const Route = createFileRoute("/_chat/automations/")({
   component: AutomationsRouteView,
@@ -19,6 +20,8 @@ export const Route = createFileRoute("/_chat/automations/")({
 // The Automations panel lists every automation, so this page is the "pick one or create
 // one" landing instead of a second copy of the list.
 function AutomationsRouteView() {
+  const { t } = useTranslation();
+
   const navigate = useNavigate();
   const projects = useStore((state) => state.projects);
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -44,8 +47,8 @@ function AutomationsRouteView() {
               type="button"
               size="icon-sm"
               variant="ghost"
-              aria-label="Refresh"
-              title="Refresh"
+              aria-label={t("chat:list_refreshAriaLabel")}
+              title={t("chat:list_refreshAriaLabel")}
               onClick={() => void refetch()}
             >
               <CentralIcon name="arrow-rotate-clockwise" className="size-4" />
@@ -55,9 +58,11 @@ function AutomationsRouteView() {
 
         <main className="flex min-h-0 flex-1 flex-col items-center justify-center gap-1 px-6 pb-16 text-center">
           <ClockIcon className="mb-3 size-8 text-muted-foreground" />
-          <p className="text-ui-lg font-medium text-foreground">Automations</p>
+          <p className="text-ui-lg font-medium text-foreground">
+            {t("automation:detail_breadcrumb")}
+          </p>
           <p className="max-w-xs text-ui leading-snug text-muted-foreground">
-            Pick an automation in the panel to see its runs, or schedule a new one.
+            {t("automation:pickAnAutomationInThePanelToSeeIts")}
           </p>
           <Button
             type="button"
@@ -66,7 +71,7 @@ function AutomationsRouteView() {
             onClick={openCreateDialog}
             disabled={projects.length === 0}
           >
-            New automation
+            {t("automation:list_newAutomation")}
           </Button>
         </main>
       </div>

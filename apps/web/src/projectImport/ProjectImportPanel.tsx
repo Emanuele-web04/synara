@@ -21,6 +21,7 @@ import {
   type ProjectImportQueueItem,
 } from "./logic";
 import { ProjectImportProjectCard } from "./ProjectImportProjectCard";
+import { useTranslation } from "~/i18n";
 
 const ACTION_BUTTON = "h-8 rounded-lg px-3 font-normal text-ui sm:text-ui";
 
@@ -38,6 +39,8 @@ export function ProjectImportPanel(props: {
     created: boolean,
   ) => void;
 }) {
+  const { t } = useTranslation();
+
   const [providers, setProviders] = useState<readonly ProjectImportProvider[]>(
     props.initialProviders ?? IMPORT_PROVIDERS,
   );
@@ -111,7 +114,9 @@ export function ProjectImportPanel(props: {
       setProgress(null);
     } catch (caught) {
       if (mountedRef.current)
-        setError(caught instanceof Error ? caught.message : "Could not find local projects.");
+        setError(
+          caught instanceof Error ? caught.message : t("workspace:couldNotFindLocalProjects"),
+        );
     } finally {
       if (mountedRef.current) setScanning(false);
     }
@@ -157,7 +162,7 @@ export function ProjectImportPanel(props: {
       }
     } catch (caught) {
       if (mountedRef.current)
-        setError(caught instanceof Error ? caught.message : "Could not start the import.");
+        setError(caught instanceof Error ? caught.message : t("workspace:couldNotStartTheImport"));
     } finally {
       if (mountedRef.current) setRunning(false);
     }
@@ -216,12 +221,15 @@ export function ProjectImportPanel(props: {
           onClick={() => void scan()}
         >
           {scanning ? <LoaderCircleIcon className="size-3.5 animate-spin" aria-hidden /> : null}
-          {scanning ? "Finding projects…" : catalog ? "Scan again" : "Find projects"}
+          {scanning
+            ? t("workspace:findingProjects")
+            : catalog
+              ? t("workspace:scanAgain")
+              : t("workspace:findProjects")}
         </Button>
       </div>
       <p className={cn("leading-relaxed text-muted-foreground", "text-ui-sm")}>
-        Projects keep their existing folders, and conversations are copied into Synara. Nothing in
-        your current projects changes.
+        {t("workspace:projectsKeepTheirExistingFoldersAndConversationsAreCopied")}
       </p>
       {error ? (
         <p role="alert" className={cn("text-destructive", "text-ui-sm")}>
@@ -236,7 +244,8 @@ export function ProjectImportPanel(props: {
             className={cn("text-destructive", "text-ui-sm")}
           >
             {IMPORT_PROVIDER_LABELS[source.provider]}
-            {source.accountLabel ? ` (${source.accountLabel})` : ""}: {source.error}
+            {source.accountLabel ? t("chat:symbol5", { value0: source.accountLabel }) : ""}:{" "}
+            {source.error}
           </p>
         ) : null,
       )}
@@ -244,8 +253,8 @@ export function ProjectImportPanel(props: {
         <>
           <div className="flex flex-wrap items-center gap-3">
             <Input
-              aria-label="Search imported projects"
-              placeholder="Search projects or folders…"
+              aria-label={t("workspace:searchImportedProjects")}
+              placeholder={t("workspace:searchProjectsOrFolders")}
               value={search}
               onChange={(event) => setSearch(event.target.value)}
               className="h-8 min-w-40 flex-1 rounded-lg text-ui sm:text-ui"
@@ -256,7 +265,7 @@ export function ProjectImportPanel(props: {
                 disabled={busy || scanning}
                 onCheckedChange={setIncludeArchived}
               />
-              Include archived
+              {t("workspace:includeArchived")}
             </label>
             <Button
               variant="outline"
@@ -265,14 +274,14 @@ export function ProjectImportPanel(props: {
               disabled={busy || scanning || selectableKeys.length === 0}
               onClick={() => select(selectableKeys, !allSelected)}
             >
-              {allSelected ? "Remove all" : "Select all"}
+              {allSelected ? t("workspace:removeAll") : t("workspace:selectAll")}
             </Button>
           </div>
           <div className="-mr-2 min-h-0 flex-1 overflow-y-auto pr-2">
             {visibleProjects.length > 0 ? (
               <div
                 className="divide-y divide-foreground/8 overflow-hidden rounded-xl border border-foreground/10"
-                aria-label="Projects available to import"
+                aria-label={t("workspace:projectsAvailableToImport")}
               >
                 {visibleProjects.map((project) => (
                   <ProjectImportProjectCard
@@ -294,16 +303,19 @@ export function ProjectImportPanel(props: {
             ) : (
               <p className="py-6 text-center text-muted-foreground">
                 {catalog.projects.length
-                  ? "No projects match your search."
-                  : "No local projects found for these providers."}
+                  ? t("workspace:noProjectsMatchYourSearch")
+                  : t("workspace:noLocalProjectsFoundForTheseProviders")}
               </p>
             )}
           </div>
           <p className={cn("shrink-0 leading-relaxed text-muted-foreground/80", "text-ui-sm")}>
             {queue.length > 0 && !running
-              ? `${queue.filter((item) => item.input.threadKey !== null).length} conversations across ${projectCount} project${projectCount === 1 ? "" : "s"} selected. `
+              ? t("workspace:selectedConversationsProjects", {
+                  conversations: queue.filter((item) => item.input.threadKey !== null).length,
+                  projects: projectCount,
+                })
               : null}
-            History shows text messages; tool details and attachments may be missing.
+            {t("workspace:historyShowsTextMessagesToolDetailsAndAttachmentsMay")}
           </p>
         </>
       ) : null}
@@ -315,8 +327,11 @@ export function ProjectImportPanel(props: {
                 <LoaderCircleIcon className="size-3.5 animate-spin" aria-hidden />
                 <span>
                   {stopRequested
-                    ? "Stopping after this conversation…"
-                    : `Importing ${progress.current} of ${progress.total}`}
+                    ? t("workspace:stoppingAfterThisConversation")
+                    : t("workspace:importingOf", {
+                        value0: progress.current,
+                        value1: progress.total,
+                      })}
                 </span>
               </div>
               <p className={cn("mt-0.5 truncate text-muted-foreground", "text-ui-sm")}>
@@ -326,9 +341,9 @@ export function ProjectImportPanel(props: {
           ) : (
             <p className="flex items-center gap-2">
               <CheckIcon className="size-3.5 text-success" aria-hidden />
-              {completedKeys.size} imported or already present
+              {completedKeys.size} {t("workspace:importedOrAlreadyPresent")}
               {stopRequested
-                ? ". Import stopped; remaining selections are ready to continue."
+                ? t("workspace:importStoppedRemainingSelectionsAreReadyToContinue")
                 : "."}
             </p>
           )}
@@ -336,7 +351,7 @@ export function ProjectImportPanel(props: {
       ) : null}
       {failures.length > 0 ? (
         <ul
-          aria-label="Import failures"
+          aria-label={t("workspace:importFailures")}
           className={cn("space-y-1.5 text-destructive", "text-ui-sm")}
         >
           {failures.map(([key, failure]) => (
@@ -359,7 +374,7 @@ export function ProjectImportPanel(props: {
                 setStopRequested(true);
               }}
             >
-              Stop after current
+              {t("workspace:stopAfterCurrent")}
             </Button>
           ) : (
             <>
@@ -371,7 +386,8 @@ export function ProjectImportPanel(props: {
                   disabled={busy || scanning}
                   onClick={() => void run(retryQueue)}
                 >
-                  Retry failed ({retryQueue.length})
+                  {t("workspace:retryFailed")}
+                  {retryQueue.length})
                 </Button>
               ) : null}
               <Button
@@ -380,7 +396,7 @@ export function ProjectImportPanel(props: {
                 disabled={busy || scanning || queue.length === 0}
                 onClick={() => void run(queue)}
               >
-                {progress ? "Import remaining" : "Import selected"}
+                {progress ? t("workspace:importRemaining") : t("workspace:importSelected")}
               </Button>
             </>
           )}

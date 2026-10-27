@@ -1,5 +1,6 @@
 import type { QueryClient } from "@tanstack/react-query";
 import { flushWorkspaceEditors, hasUnsavedWorkspaceEditors } from "~/lib/workspaceEditorSession";
+import { t } from "~/i18n";
 
 /** Failed native module imports are cached for the lifetime of the document.
  * A fresh document retries the whole graph, including failed dependencies.
@@ -9,9 +10,7 @@ export async function reloadEditorAfterSave(
   reload: () => void = () => window.location.reload(),
 ) {
   if (!(await flushWorkspaceEditors(client)) || hasUnsavedWorkspaceEditors(client)) {
-    throw new Error(
-      "Your draft is preserved. Resolve unsaved-file errors before retrying the editor.",
-    );
+    throw new Error(t("workspace:editorReloadDraftError"));
   }
   reload();
 }

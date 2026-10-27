@@ -16,6 +16,7 @@ import { ProviderIcon } from "../ProviderIcon";
 import { DisclosureRegion } from "../ui/DisclosureRegion";
 import { FastModeBadgeIcon } from "./FastModeBadgeIcon";
 import { ProviderHandoffDetails } from "./TimelineWorkEntryRow";
+import { useTranslation } from "~/i18n";
 
 // Same reading order as the composer's model trigger and the thread hover card:
 // provider glyph, model name, fast-mode bolt, then the effort label.
@@ -24,7 +25,8 @@ function HandoffEndpoint(props: {
   readonly fastModeNotice?: FastModeNotice | null | undefined;
   readonly className?: string;
 }) {
-  const summary = resolveThreadModelSummary(props.selection);
+  const { t } = useTranslation();
+  const summary = resolveThreadModelSummary(props.selection, undefined, t);
   return (
     <span className={cn("inline-flex min-w-0 items-center gap-1.5", props.className)}>
       <ProviderIcon provider={props.selection.provider} className="size-3.5 shrink-0" />
@@ -44,6 +46,8 @@ export const ProviderHandoffDivider = memo(function ProviderHandoffDivider({
 }: {
   readonly info: ProviderHandoffInfo;
 }) {
+  const { t } = useTranslation();
+
   const [open, setOpen] = useState(false);
   const failed = info.status === "failed";
 
@@ -65,7 +69,9 @@ export const ProviderHandoffDivider = memo(function ProviderHandoffDivider({
           ) : (
             <HandoffIcon className="size-3.5 shrink-0" aria-hidden />
           )}
-          <span className="shrink-0">{failed ? "Handoff failed" : "Context handoff"}</span>
+          <span className="shrink-0">
+            {failed ? t("chat:handoffFailed") : t("chat:contextHandoff")}
+          </span>
           <HandoffEndpoint
             selection={info.sourceModelSelection}
             fastModeNotice={info.sourceFastModeNotice}

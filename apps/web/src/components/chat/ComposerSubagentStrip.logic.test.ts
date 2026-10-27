@@ -6,6 +6,7 @@
 
 import { EventId, ThreadId, TurnId, type OrchestrationThreadActivity } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
+import { setLanguagePreference } from "~/i18n";
 
 import {
   deriveWorkLogEntries,
@@ -46,6 +47,52 @@ function subagentRows(rows: ReadonlyArray<ComposerSubagentStripRow>): ComposerSu
 }
 
 describe("deriveComposerSubagentStripItems", () => {
+  it("localizes canonical status while preserving subagent names, models, and unknown status text", () => {
+    const entry = workEntry({
+      id: "localized",
+      turnId: "turn-1",
+      subagents: [
+        subagent({
+          threadId: "a",
+          nickname: "Settings",
+          role: "reviewer",
+          model: "Custom Model",
+          rawStatus: "running",
+        }),
+        subagent({
+          threadId: "b",
+          nickname: "Archive",
+          statusLabel: "Waiting for Settings",
+          isActive: false,
+        }),
+      ],
+    });
+    try {
+      setLanguagePreference("zh-CN");
+      const rows = deriveComposerSubagentStripItems({
+        workEntries: [entry],
+        liveTurnId: TurnId.makeUnsafe("turn-1"),
+        parentRow: { threadId: ThreadId.makeUnsafe("parent"), label: null },
+      });
+      expect(rows[0]).toMatchObject({ kind: "parent", label: "主对话" });
+      expect(rows[1]).toMatchObject({
+        primaryLabel: "Settings",
+        fullLabel: "Settings [reviewer]",
+        modelLabel: "Custom Model",
+        statusLabel: "运行中",
+        statusKind: "running",
+        isActive: true,
+      });
+      expect(rows[2]).toMatchObject({
+        primaryLabel: "Archive",
+        statusLabel: "Waiting for Settings",
+        isActive: false,
+      });
+      expect(entry.subagents?.[0]?.rawStatus).toBe("running");
+    } finally {
+      setLanguagePreference("en");
+    }
+  });
   it("returns one shared empty result whenever no row is shown", () => {
     const empty = deriveComposerSubagentStripItems({ workEntries: [], liveTurnId: null });
 

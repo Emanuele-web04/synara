@@ -6,6 +6,7 @@ import { cn } from "~/lib/utils";
 import { Button } from "./ui/button";
 import { dialogFieldLabelClassName } from "./ui/dialog";
 import { InputGroup, InputGroupAddon, InputGroupInput } from "./ui/input-group";
+import { useTranslation } from "~/i18n";
 
 export const PROJECT_DIALOG_FIELD_CONTROL_CLASS_NAME = "h-9 rounded-lg border-foreground/12";
 
@@ -29,22 +30,24 @@ export function CreateGitHubProjectFields(props: {
   readonly onBrowse: () => void;
   readonly onSubmitKeyDown: (event: KeyboardEvent<HTMLInputElement>) => void;
 }) {
+  const { t } = useTranslation();
+
   return (
     <div className="space-y-3">
       <div className="rounded-xl border border-foreground/10 bg-foreground/[0.025] px-3.5 py-3">
-        <p className="text-ui font-medium text-foreground">What you need</p>
+        <p className="text-ui font-medium text-foreground">{t("git:whatYouNeed")}</p>
         <ol className="mt-2.5 space-y-2">
-          <GitHubRequirement index={1} title="Repository">
-            Paste an <span className="font-medium text-foreground">owner/repository</span> name or
-            its GitHub URL.
+          <GitHubRequirement index={1} title={t("git:general_repository")}>
+            {t("git:pasteARepositoryNameOrItsGitHubURLName")}{" "}
+            <span className="font-medium text-foreground">owner/repository</span>
           </GitHubRequirement>
-          <GitHubRequirement index={2} title="Destination">
-            Choose the parent folder where Synara should create the checkout.
+          <GitHubRequirement index={2} title={t("git:destination")}>
+            {t("git:chooseTheParentFolderWhereSynaraShouldCreateThe")}
           </GitHubRequirement>
-          <GitHubRequirement index={3} title="Private access">
-            Public repositories work immediately. For private repositories, run{" "}
-            <code className="font-mono text-foreground">gh auth login</code> or configure Git
-            credentials.
+          <GitHubRequirement index={3} title={t("git:privateAccess")}>
+            {t("git:publicRepositoriesWorkImmediatelyForPrivateRepositoriesRun")}{" "}
+            <code className="font-mono text-foreground">gh auth login</code>{" "}
+            {t("git:orConfigureGitCredentials")}
           </GitHubRequirement>
         </ol>
       </div>
@@ -54,7 +57,7 @@ export function CreateGitHubProjectFields(props: {
           htmlFor={props.repositoryInputId}
           className={cn("block", dialogFieldLabelClassName, "text-ui text-foreground")}
         >
-          Repository
+          {t("git:general_repository")}
         </label>
         <InputGroup className={PROJECT_DIALOG_FIELD_CONTROL_CLASS_NAME}>
           <InputGroupAddon className="w-10 self-stretch border-e border-foreground/12 ps-0">
@@ -65,7 +68,7 @@ export function CreateGitHubProjectFields(props: {
             value={props.repositoryInput}
             aria-invalid={props.formError ? true : undefined}
             {...(props.formError ? { "aria-describedby": props.errorId } : {})}
-            placeholder="owner/repository or GitHub URL"
+            placeholder={t("git:ownerRepositoryOrGitHubURL")}
             spellCheck={false}
             autoCorrect="off"
             autoCapitalize="off"
@@ -80,7 +83,7 @@ export function CreateGitHubProjectFields(props: {
           htmlFor={props.destinationParentInputId}
           className={cn("block", dialogFieldLabelClassName, "text-ui text-foreground")}
         >
-          Clone into
+          {t("git:cloneInto")}
         </label>
         <div className="flex items-center gap-2">
           <InputGroup className={cn(PROJECT_DIALOG_FIELD_CONTROL_CLASS_NAME, "min-w-0 flex-1")}>
@@ -90,7 +93,7 @@ export function CreateGitHubProjectFields(props: {
             <InputGroupInput
               id={props.destinationParentInputId}
               value={props.destinationParent}
-              placeholder="/parent/folder"
+              placeholder={t("git:parentFolder")}
               spellCheck={false}
               autoCorrect="off"
               autoCapitalize="off"
@@ -106,7 +109,7 @@ export function CreateGitHubProjectFields(props: {
               disabled={props.isPickingFolder || props.submitting}
               onClick={props.onBrowse}
             >
-              Browse
+              {t("git:addProject_browse")}
             </Button>
           ) : null}
         </div>
@@ -117,13 +120,13 @@ export function CreateGitHubProjectFields(props: {
           htmlFor={props.directoryNameInputId}
           className={cn("block", dialogFieldLabelClassName, "text-ui text-foreground")}
         >
-          Folder name
+          {t("git:folderName")}
         </label>
         <InputGroup className={PROJECT_DIALOG_FIELD_CONTROL_CLASS_NAME}>
           <InputGroupInput
             id={props.directoryNameInputId}
             value={props.directoryName}
-            placeholder="repository"
+            placeholder={t("settings:repository")}
             spellCheck={false}
             autoCorrect="off"
             autoCapitalize="off"
@@ -133,7 +136,7 @@ export function CreateGitHubProjectFields(props: {
         </InputGroup>
         {props.finalClonePath ? (
           <p className="truncate text-ui-xs text-muted-foreground/70">
-            Final location: {props.finalClonePath}
+            {t("git:finalLocation")} {props.finalClonePath}
           </p>
         ) : null}
       </div>

@@ -1,3 +1,4 @@
+import { useTranslation } from "~/i18n";
 import type { ThreadId } from "@synara/contracts";
 import { useComposerDraftStore } from "../../composerDraftStore";
 import {
@@ -17,6 +18,8 @@ export function ComposerExpiredUserInputNotice({
   draft: PendingUserInputRecoveryDraft;
   onRestore: (prompt: string) => void;
 }) {
+  const { t } = useTranslation();
+
   const dismiss = () => {
     const store = useComposerDraftStore.getState();
     const drafts = store.draftsByThreadId[threadId]?.pendingUserInputDrafts ?? {};
@@ -36,7 +39,7 @@ export function ComposerExpiredUserInputNotice({
   };
   return (
     <ComposerActionNotice
-      message="These questions have expired. Restore your answers to review and send as a new message."
+      message={t("chat:theseQuestionsHaveExpiredRestoreYourAnswersToReview")}
       actions={[
         { label: "Restore answers", onClick: restore },
         { label: "Dismiss", onClick: dismiss },

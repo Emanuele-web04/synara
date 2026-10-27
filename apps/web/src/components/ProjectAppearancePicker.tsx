@@ -9,7 +9,7 @@ import { useId, useMemo, useState, type KeyboardEvent, type RefObject } from "re
 import { CentralIcon } from "~/lib/central-icons";
 import {
   DEFAULT_PROJECT_ICON,
-  PROJECT_COLOR_LABELS,
+  PROJECT_COLOR_LABEL_KEYS,
   PROJECT_COLORS,
   PROJECT_ICON_OPTIONS,
   firstEmoji,
@@ -24,6 +24,7 @@ import { FolderIcon } from "~/lib/icons";
 import { ProjectEmojiGlyph } from "./ProjectSidebarIcon";
 import { Input } from "./ui/input";
 import { toggleVariants } from "./ui/toggle";
+import { useTranslation } from "~/i18n";
 
 const PICKER_TABS = ["emoji", "icons"] as const;
 type PickerTab = (typeof PICKER_TABS)[number];
@@ -59,6 +60,8 @@ export function ProjectAppearancePicker({
   /** Called after an emoji is chosen: there is nothing else to pick on that tab. */
   onEmojiPicked: () => void;
 }) {
+  const { t } = useTranslation();
+
   const [tab, setTab] = useState<PickerTab>(value?.kind === "emoji" ? "emoji" : "icons");
   const [query, setQuery] = useState("");
   // The palette tints the icon grid as a preview. It only lands on the project once an icon
@@ -76,9 +79,15 @@ export function ProjectAppearancePicker({
   const icons = useMemo(
     () =>
       PROJECT_ICON_OPTIONS.filter((option) =>
-        matchesQuery(trimmedQuery, option.label, option.keywords),
+        matchesQuery(
+          trimmedQuery,
+          t(option.labelKey),
+          t(option.keywordsKey),
+          option.label,
+          option.keywords,
+        ),
       ),
-    [trimmedQuery],
+    [trimmedQuery, t],
   );
   const emoji = useMemo(() => {
     const matches = PROJECT_EMOJI_OPTIONS.filter(
@@ -132,7 +141,7 @@ export function ProjectAppearancePicker({
     <div className="flex w-full flex-col gap-3">
       <div
         role="tablist"
-        aria-label="Project icon type"
+        aria-label={t("workspace:projectIconType")}
         onKeyDown={handleTabKeyDown}
         className="flex gap-1"
       >
@@ -159,7 +168,7 @@ export function ProjectAppearancePicker({
                 !active && "text-muted-foreground hover:text-foreground",
               )}
             >
-              {option === "emoji" ? "Emoji" : "Icons"}
+              {option === "emoji" ? t("workspace:emoji") : t("workspace:icons")}
             </button>
           );
         })}
@@ -176,14 +185,14 @@ export function ProjectAppearancePicker({
           type="search"
           value={query}
           onChange={(event) => setQuery(event.target.value)}
-          placeholder={tab === "emoji" ? "Search emoji" : "Search icons"}
-          aria-label={tab === "emoji" ? "Search emoji" : "Search icons"}
+          placeholder={tab === "emoji" ? t("workspace:searchEmoji") : t("workspace:searchIcons")}
+          aria-label={tab === "emoji" ? t("workspace:searchEmoji") : t("workspace:searchIcons")}
         />
 
         {tab === "icons" ? (
           <div
             role="radiogroup"
-            aria-label="Color"
+            aria-label={t("workspace:color")}
             onKeyDown={(event) => handleRadioGridKeyDown(event, "[data-project-color]")}
             className="grid grid-cols-8 gap-1"
           >
@@ -196,7 +205,9 @@ export function ProjectAppearancePicker({
                   role="radio"
                   data-project-color
                   aria-checked={selected}
-                  aria-label={option ? PROJECT_COLOR_LABELS[option] : "Default color"}
+                  aria-label={
+                    option ? t(PROJECT_COLOR_LABEL_KEYS[option]) : t("workspace:defaultColor")
+                  }
                   tabIndex={selected ? 0 : -1}
                   onClick={() => pickColor(option)}
                   className={cn(
@@ -223,7 +234,7 @@ export function ProjectAppearancePicker({
             icons.length > 0 ? (
               <div
                 role="radiogroup"
-                aria-label="Icon"
+                aria-label={t("workspace:icon")}
                 onKeyDown={(event) =>
                   handleRadioGridKeyDown(event, "[data-project-icon]", { columns: GRID_COLUMNS })
                 }
@@ -238,8 +249,8 @@ export function ProjectAppearancePicker({
                       role="radio"
                       data-project-icon
                       aria-checked={selected}
-                      aria-label={option.label}
-                      title={option.label}
+                      aria-label={t(option.labelKey)}
+                      title={t(option.labelKey)}
                       // Roving tabindex: the grid is one tab stop, entered at the selection.
                       tabIndex={selected || (!selectedIconListed && index === 0) ? 0 : -1}
                       onClick={() => onChange({ kind: "icon", icon: option.name, color })}
@@ -260,13 +271,14 @@ export function ProjectAppearancePicker({
               </div>
             ) : (
               <p className="py-6 text-center text-ui-sm text-muted-foreground">
-                No icons match “{trimmedQuery}”.
+                {t("workspace:noIconsMatch")}
+                {trimmedQuery}”.
               </p>
             )
           ) : emoji.length > 0 ? (
             <div
               role="radiogroup"
-              aria-label="Emoji"
+              aria-label={t("workspace:emoji")}
               onKeyDown={(event) =>
                 // Arrows only move focus here: choosing an emoji closes the picker, so it
                 // waits for Enter, Space, or a click.
@@ -301,7 +313,7 @@ export function ProjectAppearancePicker({
             </div>
           ) : (
             <p className="py-6 text-center text-ui-sm text-muted-foreground">
-              No emoji match. Paste any emoji to use it.
+              {t("workspace:noEmojiMatchPasteAnyEmojiToUseIt")}
             </p>
           )}
         </div>
