@@ -17,6 +17,10 @@ import { HttpRouter } from "effect/unstable/http";
 import { describe, expect, it, vi } from "vitest";
 
 import { AuthError, ServerAuth, type ServerAuthShape } from "./auth/Services/ServerAuth";
+import {
+  RemoteSessionRegistry,
+  RemoteSessionRegistryService,
+} from "./remoteSessions/sessionRegistry";
 import { ProjectId } from "@synara/contracts";
 import {
   SessionCredentialService,
@@ -127,6 +131,7 @@ async function withAuthEffectServer(
     | typeof authEffectRouteLayer
     | typeof binaryUploadEffectRouteLayer = authEffectRouteLayer,
   overrides?: {
+    readonly remoteSessions?: RemoteSessionRegistry;
     readonly providerAdapterRegistry?: ProviderAdapterRegistryShape;
     readonly serverSettingsLayer?: Layer.Layer<ServerSettingsService, unknown>;
     readonly projectAgentRepository?: ProjectAgentRepositoryShape;
@@ -141,6 +146,10 @@ async function withAuthEffectServer(
         Layer.mergeAll(
           Layer.succeed(ServerConfig, config),
           Layer.succeed(ServerAuth, serverAuth),
+          Layer.succeed(
+            RemoteSessionRegistryService,
+            overrides?.remoteSessions ?? new RemoteSessionRegistry(),
+          ),
           Layer.succeed(SessionCredentialService, makeSessionCredentialService()),
           Layer.succeed(
             ProviderAdapterRegistry,
@@ -229,6 +238,44 @@ function mutationRequest(input: {
 }
 
 describe("authEffectRouteLayer", () => {
+  it.each([false, true])(
+    "preserves positive local upload-token precedence only when paid policy is enabled: %s",
+    async (enforced) => {
+      const remoteSessions = new RemoteSessionRegistry();
+      remoteSessions.setRemoteBillingEnforced(enforced);
+      const authenticateHttpRequest = vi.fn(() =>
+        Effect.fail(new AuthError({ message: "Remote authorization unavailable.", status: 503 })),
+      );
+      const config = {
+        host: "127.0.0.1",
+        authToken: "private-startup-token",
+        publicUrl: undefined,
+      } as ServerConfigShape;
+      await withAuthEffectServer(
+        config,
+        { ...makeServerAuth({ count: 0 }), authenticateHttpRequest },
+        async (serverOrigin) => {
+          const response = await fetch(
+            `${serverOrigin}${ATTACHMENT_UPLOAD_ROUTE_PATH}?token=private-startup-token`,
+            {
+              method: "POST",
+              headers: { Authorization: "Bearer stale-renderer-session" },
+            },
+          );
+          expect(response.status).toBe(enforced ? 400 : 503);
+          expect(await response.json()).toEqual({
+            error: enforced
+              ? "Attachment upload metadata is invalid."
+              : "Remote authorization unavailable.",
+          });
+          expect(authenticateHttpRequest).toHaveBeenCalledTimes(enforced ? 0 : 1);
+        },
+        binaryUploadEffectRouteLayer,
+        { remoteSessions },
+      );
+    },
+  );
+
   it("rejects declared and chunked oversized bootstrap JSON before auth exchange", async () => {
     const sideEffects = { count: 0 };
     const config = { host: "127.0.0.1", publicUrl: undefined } as ServerConfigShape;

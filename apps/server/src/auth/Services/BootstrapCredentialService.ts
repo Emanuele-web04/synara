@@ -1,6 +1,7 @@
 import type { AuthPairingLink, ServerAuthBootstrapMethod } from "@synara/contracts";
 import { Data, DateTime, Duration, ServiceMap } from "effect";
 import type { Effect, Stream } from "effect";
+import type { AuthAccessOrigin } from "./SessionCredentialService";
 
 export type BootstrapCredentialRole = "owner" | "client";
 
@@ -8,6 +9,7 @@ export interface BootstrapGrant {
   readonly method: ServerAuthBootstrapMethod;
   readonly role: BootstrapCredentialRole;
   readonly subject: string;
+  readonly accessOrigin?: AuthAccessOrigin | null;
   readonly label?: string;
   readonly expiresAt: DateTime.DateTime;
 }
@@ -41,6 +43,7 @@ export interface BootstrapCredentialServiceShape {
     readonly role?: BootstrapCredentialRole;
     readonly subject?: string;
     readonly label?: string;
+    readonly accessOrigin?: AuthAccessOrigin | null;
   }) => Effect.Effect<IssuedBootstrapCredential, BootstrapCredentialError>;
   readonly listActive: () => Effect.Effect<
     ReadonlyArray<AuthPairingLink>,

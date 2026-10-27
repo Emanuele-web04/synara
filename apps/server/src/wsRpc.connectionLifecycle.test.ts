@@ -61,6 +61,10 @@ import { makeCursorSafeSnapshotLiveStream } from "./wsSnapshotLiveStream";
 import { ComputerEventInterests } from "./computer/computerEventInterests";
 import { hostConnectionRouteLayer } from "./hostConnections/httpRoute";
 import {
+  RemoteSessionRegistry,
+  RemoteSessionRegistryService,
+} from "./remoteSessions/sessionRegistry";
+import {
   HostConnectionRegistry,
   HostConnectionRegistryService,
   REMOTE_ATTACHMENT_QUERY,
@@ -91,6 +95,7 @@ const PingRpcGroup = RpcGroup.make(
 interface RunningTestServer {
   readonly origin: string;
   readonly sessions: SessionCredentialServiceShape;
+  readonly remoteSessions: RemoteSessionRegistry;
   readonly logout: (sessionId: AuthSessionId) => Promise<boolean>;
   readonly transportFinalizers: { count: number };
   readonly observedRpc: { decoderCalls: number; handlerCalls: number };
@@ -150,7 +155,11 @@ function waitForCloseInfo(
   });
 }
 
-function waitForRpcExit(socket: WebSocket, requestId: string, timeoutMs = 2_000): Promise<void> {
+function waitForRpcExit(
+  socket: WebSocket,
+  requestId: string,
+  timeoutMs = 2_000,
+): Promise<Record<string, unknown>> {
   return new Promise((resolve, reject) => {
     const timeout = setTimeout(() => {
       socket.off("message", onMessage);
@@ -161,7 +170,7 @@ function waitForRpcExit(socket: WebSocket, requestId: string, timeoutMs = 2_000)
       if (frame._tag !== "Exit" || String(frame.requestId) !== requestId) return;
       clearTimeout(timeout);
       socket.off("message", onMessage);
-      resolve();
+      resolve(frame);
     };
     socket.on("message", onMessage);
   });
@@ -258,6 +267,7 @@ async function startTestServer(
               subject: session.subject,
               method: session.method,
               role: session.role,
+              accessOrigin: session.accessOrigin ?? null,
               ...(session.expiresAt ? { expiresAt: session.expiresAt } : {}),
             })),
             Effect.mapError(
@@ -452,6 +462,7 @@ async function startTestServer(
     remoteRegistry ? Layer.merge(localRoutes, hostConnectionRouteLayer) : localRoutes
   ).pipe(Layer.provide(Layer.succeed(WsConnectionSessions, connectionSessions)));
   const scope = await Effect.runPromise(Scope.make("sequential"));
+  const remoteSessions = new RemoteSessionRegistry();
   const context = await Effect.runPromise(
     Layer.buildWithScope(
       Layer.mergeAll(
@@ -459,6 +470,7 @@ async function startTestServer(
         sessionsLayer,
         serverAuthLayer,
         NodeServices.layer,
+        Layer.succeed(RemoteSessionRegistryService, remoteSessions),
         Layer.succeed(
           HostConnectionRegistryService,
           remoteRegistry ?? new HostConnectionRegistry(),
@@ -492,6 +504,7 @@ async function startTestServer(
   return {
     origin: `ws://127.0.0.1:${address.port}`,
     sessions: started.sessions,
+    remoteSessions,
     logout: (sessionId) => Effect.runPromise(started.serverAuth.logoutSession(sessionId)),
     transportFinalizers,
     observedRpc,
@@ -1111,6 +1124,119 @@ describe("websocket permessage-deflate negotiation", () => {
 });
 
 describe("websocketRpcRouteLayer connection lifecycle", () => {
+  it("serves marked remote legacy sessions while billing enforcement is off", async () => {
+    const server = await startTestServer();
+    try {
+      const issued = await Effect.runPromise(
+        server.sessions.issue({ role: "owner", accessOrigin: "remote" }),
+      );
+      const { socket } = await connectExistingSession(server, issued.sessionId);
+      const exit = waitForRpcExit(socket, "801");
+      socket.send(makeRpcFrame(256, "801"));
+      expect(await exit).toMatchObject({ exit: { _tag: "Success", value: "ok" } });
+
+      server.remoteSessions.closeAll("Remote authorization unavailable");
+      const afterPause = waitForRpcExit(socket, "802");
+      socket.send(makeRpcFrame(256, "802"));
+      expect(await afterPause).toMatchObject({ exit: { _tag: "Success", value: "ok" } });
+      expect(server.remoteSessions.list()).toEqual([]);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("rejects remote and unknown sessions without a fresh enforced lease while positively local sessions work", async () => {
+    const server = await startTestServer();
+    server.remoteSessions.setRemoteBillingEnforced(true);
+    let requestId = 810;
+    try {
+      for (const lease of ["missing", "expired"] as const) {
+        const release =
+          lease === "expired"
+            ? server.remoteSessions.registerAdmissionGuard({ available: () => false })
+            : undefined;
+        try {
+          for (const role of ["owner", "client"] as const) {
+            for (const accessOrigin of ["remote", null] as const) {
+              const remote = await Effect.runPromise(server.sessions.issue({ role, accessOrigin }));
+              await expect(connectExistingSession(server, remote.sessionId)).rejects.toMatchObject({
+                statusCode: 503,
+              });
+            }
+          }
+          for (const accessOrigin of ["local"] as const) {
+            const local = await Effect.runPromise(
+              server.sessions.issue({ role: "owner", accessOrigin }),
+            );
+            const { socket } = await connectExistingSession(server, local.sessionId);
+            const id = String(requestId++);
+            const exit = waitForRpcExit(socket, id);
+            socket.send(makeRpcFrame(256, id));
+            expect(await exit).toMatchObject({ exit: { _tag: "Success", value: "ok" } });
+            const closed = waitForClose(socket);
+            socket.close();
+            await closed;
+          }
+        } finally {
+          release?.();
+        }
+      }
+      expect(server.observedRpc.handlerCalls).toBe(2);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it.each(["remote", null] as const)(
+    "closes a live %s socket on lease loss and reuses its durable credential after recovery",
+    async (accessOrigin) => {
+      const server = await startTestServer();
+      server.remoteSessions.setRemoteBillingEnforced(true);
+      let available = true;
+      const release = server.remoteSessions.registerAdmissionGuard({ available: () => available });
+      try {
+        const remote = await Effect.runPromise(
+          server.sessions.issue({ role: "owner", accessOrigin }),
+        );
+        const connected = await connectExistingSession(server, remote.sessionId);
+        const exit = waitForRpcExit(connected.socket, "821");
+        connected.socket.send(makeRpcFrame(256, "821"));
+        expect(await exit).toMatchObject({ exit: { _tag: "Success", value: "ok" } });
+        const survivors: WebSocket[] = [];
+        for (const accessOrigin of ["local"] as const) {
+          const issued = await Effect.runPromise(
+            server.sessions.issue({ role: "owner", accessOrigin }),
+          );
+          survivors.push((await connectExistingSession(server, issued.sessionId)).socket);
+        }
+
+        const closed = waitForClose(connected.socket);
+        available = false;
+        server.remoteSessions.closeAll("Remote authorization unavailable");
+        await closed;
+        expect(connected.socket.readyState).toBe(WebSocket.CLOSED);
+        expect((await Effect.runPromise(server.sessions.verify(remote.token))).accessOrigin).toBe(
+          accessOrigin,
+        );
+        await expect(connectExistingSession(server, remote.sessionId)).rejects.toMatchObject({
+          statusCode: 503,
+        });
+        for (const socket of survivors) await expect(ping(socket)).resolves.toBeUndefined();
+
+        available = true;
+        const recovered = await connectExistingSession(server, remote.sessionId);
+        const recoveredExit = waitForRpcExit(recovered.socket, "822");
+        recovered.socket.send(makeRpcFrame(256, "822"));
+        expect(await recoveredExit).toMatchObject({ exit: { _tag: "Success", value: "ok" } });
+        expect(server.remoteSessions.list()).toEqual([]);
+        expect(server.remoteSessions.size).toBe(0);
+      } finally {
+        release();
+        await server.close();
+      }
+    },
+  );
+
   it("admits updater status only for an authenticated owner or approved remote RPC lease", async () => {
     const server = await startTestServer();
     const release: Array<() => void> = [];

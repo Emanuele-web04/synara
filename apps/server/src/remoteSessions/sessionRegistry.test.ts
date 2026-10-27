@@ -18,6 +18,54 @@ const authorization = (overrides: Partial<HostAuthorizationSnapshot> = {}) => ({
 });
 
 describe("RemoteSessionRegistry", () => {
+  it("leaves legacy connections available and running while billing enforcement is off", () => {
+    const registry = new RemoteSessionRegistry();
+    const close = vi.fn();
+    expect(registry.canAdmitRemoteSession()).toBe(true);
+    const release = registry.registerLegacyConnection(close);
+    expect(release).toBeTypeOf("function");
+    registry.registerAdmissionGuard({ available: () => false });
+    registry.closeAll("Remote authorization unavailable");
+    expect(close).not.toHaveBeenCalled();
+    expect(registry.canAdmitRemoteSession()).toBe(true);
+    expect(registry.list()).toEqual([]);
+    expect(registry.size).toBe(0);
+    release?.();
+  });
+
+  it("keeps enforced legacy admission closed across lease loss and guard replacement", () => {
+    const registry = new RemoteSessionRegistry();
+    registry.setRemoteBillingEnforced(true);
+    const close = vi.fn();
+    expect(registry.canAdmitRemoteSession()).toBe(false);
+    expect(registry.registerLegacyConnection(close)).toBeUndefined();
+
+    const releaseOldGuard = registry.registerAdmissionGuard({ available: () => true });
+    expect(registry.registerLegacyConnection(close)).toBeTypeOf("function");
+    let available = true;
+    const releaseGuard = registry.registerAdmissionGuard({ available: () => available });
+    releaseOldGuard();
+    expect(registry.canAdmitRemoteSession()).toBe(true);
+    expect(close).not.toHaveBeenCalled();
+
+    available = false;
+    expect(registry.canAdmitRemoteSession()).toBe(false);
+    expect(registry.registerLegacyConnection(vi.fn())).toBeUndefined();
+    registry.closeAll("Remote authorization unavailable");
+    expect(close).toHaveBeenCalledOnce();
+    releaseGuard();
+    expect(registry.canAdmitRemoteSession()).toBe(false);
+
+    const releaseRecoveredGuard = registry.registerAdmissionGuard({ available: () => true });
+    const recoveredClose = vi.fn();
+    expect(registry.registerLegacyConnection(recoveredClose)).toBeTypeOf("function");
+    releaseRecoveredGuard();
+    expect(recoveredClose).toHaveBeenCalledOnce();
+    expect(registry.canAdmitRemoteSession()).toBe(false);
+    expect(registry.list()).toEqual([]);
+    expect(registry.size).toBe(0);
+  });
+
   it("kills revoked devices and non-owner sessions while owner sessions survive discoverability-off", async () => {
     const registry = new RemoteSessionRegistry();
     const ownerClose = vi.fn();

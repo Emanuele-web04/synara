@@ -96,6 +96,13 @@ export interface StoredAccountFile {
   readonly hostId?: string;
   readonly hostOwnerUserId?: string;
   readonly hostKeyGeneration?: number;
+  /** Last authenticated commercial policy, never a cached paid-access grant. */
+  readonly remoteBillingPolicy?: {
+    readonly apiIssuer: string;
+    readonly hostId: string;
+    readonly ownerUserId: string;
+    readonly enforced: boolean;
+  };
   /**
    * Owner answers to the discoverability consent prompt, keyed by host id.
    * This is machine-local for now; a future slice may move it to the account
@@ -166,6 +173,26 @@ export async function readAccountFile(baseDir: string): Promise<StoredAccountFil
       Number(record.hostKeyGeneration) >= 0;
     const hasRegisteredDevice =
       typeof record.deviceId === "string" && typeof record.deviceJkt === "string";
+    const hint = record.remoteBillingPolicy;
+    const remoteBillingPolicy =
+      hasLinkedHost &&
+      typeof hint === "object" &&
+      hint !== null &&
+      "apiIssuer" in hint &&
+      hint.apiIssuer === accountApiIssuer(record.accountUrl) &&
+      "hostId" in hint &&
+      hint.hostId === record.hostId &&
+      "ownerUserId" in hint &&
+      hint.ownerUserId === record.hostOwnerUserId &&
+      "enforced" in hint &&
+      typeof hint.enforced === "boolean"
+        ? {
+            apiIssuer: hint.apiIssuer as string,
+            hostId: hint.hostId as string,
+            ownerUserId: hint.ownerUserId as string,
+            enforced: hint.enforced,
+          }
+        : undefined;
     const discoverabilityAcknowledgedByHostId =
       typeof record.discoverabilityAcknowledgedByHostId === "object" &&
       record.discoverabilityAcknowledgedByHostId !== null
@@ -191,6 +218,7 @@ export async function readAccountFile(baseDir: string): Promise<StoredAccountFil
       ...(hasRegisteredDevice
         ? { deviceId: record.deviceId as string, deviceJkt: record.deviceJkt as string }
         : {}),
+      ...(remoteBillingPolicy ? { remoteBillingPolicy } : {}),
       ...(hasLinkedHost
         ? {
             hostId: record.hostId as string,
@@ -526,6 +554,36 @@ function withoutSession(credentials: StoredAccountFile): StoredAccountFile {
  */
 export function withLockedAccountFile<A>(baseDir: string, fn: () => Promise<A>): Promise<A> {
   return withCredentialFileLock(accountCredentialsPath(baseDir), fn);
+}
+
+/** Merge only a policy response for the still-current host; never replace session tokens. */
+export async function recordRemoteBillingPolicy(
+  baseDir: string,
+  expected: { readonly accountUrl: string; readonly hostId: string; readonly ownerUserId: string },
+  enforced: boolean,
+): Promise<boolean> {
+  return withLockedAccountFile(baseDir, async () => {
+    const current = await readAccountFile(baseDir);
+    const apiIssuer = accountApiIssuer(expected.accountUrl);
+    if (
+      !current ||
+      accountApiIssuer(current.accountUrl) !== apiIssuer ||
+      current.hostId !== expected.hostId ||
+      current.hostOwnerUserId !== expected.ownerUserId
+    )
+      return false;
+    if (current.remoteBillingPolicy?.enforced === enforced) return true;
+    await writeAccountCredentials(baseDir, {
+      ...current,
+      remoteBillingPolicy: {
+        apiIssuer,
+        hostId: expected.hostId,
+        ownerUserId: expected.ownerUserId,
+        enforced,
+      },
+    });
+    return true;
+  });
 }
 
 /** Every host-link key writer shares the credential lock with the final CAS. */

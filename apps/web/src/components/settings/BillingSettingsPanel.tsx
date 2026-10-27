@@ -1,4 +1,4 @@
-// Sandbox subscription controls reuse the profile Settings surface. No feature gate lives here.
+// Subscription controls reuse profile Settings and the server-selected billing environment.
 import type { AccountBillingStatus, AccountStatus } from "@synara/contracts";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
@@ -6,7 +6,7 @@ import { useAccount } from "~/hooks/useAccount";
 import { accountBillingQueryOptions } from "~/lib/accountReactQuery";
 import {
   formatBillingPrice,
-  isPolarSandboxUrl,
+  isPolarBillingUrl,
   runAccountBillingOperation,
 } from "~/lib/accountBilling";
 import { accountStatusScope } from "~/lib/hosts/controlQueryScope";
@@ -36,9 +36,10 @@ function BillingAccountPanel({ status, scope }: { status: AccountStatus | null; 
   }, []);
   const signedIn = status?.state === "signed-in";
   const billing = query.data;
+  const sandbox = billing?.environment === "sandbox";
 
   const openBilling = async (interval?: "month" | "year") => {
-    if (pending || !signedIn) return;
+    if (pending || !signedIn || !billing?.available) return;
     setPending(true);
     setMessage(null);
     try {
@@ -46,14 +47,28 @@ function BillingAccountPanel({ status, scope }: { status: AccountStatus | null; 
         interval ? account.billingCheckout({ interval }) : account.billingPortal(),
       );
       if (!mounted.current) return;
-      if (redirect.environment !== "sandbox" || !isPolarSandboxUrl(redirect.url)) {
-        throw new Error("The test billing link could not be verified.");
+      if (
+        redirect.environment !== billing.environment ||
+        !isPolarBillingUrl(redirect.url, billing.environment)
+      ) {
+        throw new Error("The billing link could not be verified.");
       }
       await ensureNativeApi().shell.openExternal(redirect.url);
-      if (mounted.current)
-        setMessage("Test billing opened in your browser. Refresh after finishing.");
+      if (mounted.current) {
+        setMessage(
+          sandbox
+            ? "Test billing opened in your browser. Refresh after finishing."
+            : "Billing opened in your browser. Refresh after finishing.",
+        );
+      }
     } catch {
-      if (mounted.current) setMessage("Could not open test billing. Try again.");
+      if (mounted.current) {
+        setMessage(
+          sandbox
+            ? "Could not open test billing. Try again."
+            : "Could not open billing. Try again.",
+        );
+      }
     } finally {
       if (mounted.current) {
         setPending(false);
@@ -65,12 +80,17 @@ function BillingAccountPanel({ status, scope }: { status: AccountStatus | null; 
   };
 
   return (
-    <SettingsSectionShell title="Subscription" action={<Badge variant="outline">Sandbox</Badge>}>
+    <SettingsSectionShell
+      title="Subscription"
+      action={
+        billing ? <Badge variant="outline">{sandbox ? "Sandbox" : "Production"}</Badge> : undefined
+      }
+    >
       <SettingsCard>
         {!signedIn ? (
           <SettingsListRow
-            title="Test a desktop subscription"
-            description="Sign in to use the Polar sandbox. No real payments are taken."
+            title="Synara Pro"
+            description="Local desktop use stays free. Pro enables remote access."
             actions={
               <Button
                 variant="outline"
@@ -85,12 +105,12 @@ function BillingAccountPanel({ status, scope }: { status: AccountStatus | null; 
         ) : query.isPending ? (
           <SettingsListRow
             title="Loading subscription…"
-            description="Checking this account’s sandbox subscription."
+            description="Checking this account’s subscription."
           />
         ) : query.isError ? (
           <SettingsListRow
             title="Subscription unavailable"
-            description="Couldn’t check test billing. Your current app access is unchanged."
+            description="Couldn’t check billing. Your current app access is unchanged."
             actions={
               <Button variant="outline" size="sm" onClick={() => void query.refetch()}>
                 Try again
@@ -99,15 +119,13 @@ function BillingAccountPanel({ status, scope }: { status: AccountStatus | null; 
           />
         ) : !billing?.available ? (
           <SettingsListRow
-            title="Test billing is not configured"
+            title={sandbox ? "Test billing is not configured" : "Billing is not configured"}
             description="Your current app access is unchanged. iPhone and iPad remain free companions."
           />
         ) : (
           <>
             <SettingsListRow
-              title={
-                billing.access === "granted" ? "Test subscription access" : "Desktop subscription"
-              }
+              title={sandbox ? "Test Synara Pro" : "Synara Pro"}
               description={subscriptionDescription(billing)}
               actions={
                 <Button
@@ -133,7 +151,7 @@ function BillingAccountPanel({ status, scope }: { status: AccountStatus | null; 
                         disabled={pending}
                         onClick={() => void openBilling(plan.interval)}
                       >
-                        Test checkout
+                        {sandbox ? "Test checkout" : "Checkout"}
                       </Button>
                     }
                   />
@@ -141,8 +159,12 @@ function BillingAccountPanel({ status, scope }: { status: AccountStatus | null; 
               : null}
             {billing.canManage ? (
               <SettingsListRow
-                title="Manage test subscription"
-                description="Update or cancel in Polar’s sandbox customer portal."
+                title={sandbox ? "Manage test subscription" : "Manage subscription"}
+                description={
+                  sandbox
+                    ? "Update or cancel in Polar’s sandbox customer portal."
+                    : "Update or cancel in Polar’s customer portal."
+                }
                 actions={
                   <Button
                     variant="outline"
@@ -160,8 +182,9 @@ function BillingAccountPanel({ status, scope }: { status: AccountStatus | null; 
       </SettingsCard>
       {billing?.available ? (
         <p className="text-ui-sm text-muted-foreground">
-          Sandbox only. No real payments. iPhone and iPad remain free companions; test subscriptions
-          do not change your app access.
+          {sandbox
+            ? "Sandbox only. No real payments. iPhone and iPad remain free companions; test subscriptions do not change your app access."
+            : "Payments are processed by Polar. iPhone and iPad remain free companions."}
         </p>
       ) : null}
       {message ? (
@@ -174,10 +197,16 @@ function BillingAccountPanel({ status, scope }: { status: AccountStatus | null; 
 }
 
 function subscriptionDescription(status: AccountBillingStatus): string {
+  const sandbox = status.environment === "sandbox";
   if (status.cancelAtPeriodEnd && status.validUntil) {
-    return `Ends ${new Date(status.validUntil).toLocaleDateString()}. No real payments are taken.`;
+    return `Ends ${new Date(status.validUntil).toLocaleDateString()}. Local desktop use stays free. Pro enables remote access.${sandbox ? " No real payments are taken." : ""}`;
   }
-  return status.access === "granted"
-    ? "Access confirmed in Polar sandbox. Your current app access is unchanged."
-    : "Try monthly or annual billing with test payment details. No real payments are taken.";
+  if (status.access === "granted") {
+    return sandbox
+      ? "Access confirmed in Polar sandbox. Local desktop use stays free. Pro enables remote access."
+      : "Local desktop use stays free. Pro enables remote access.";
+  }
+  return sandbox
+    ? "Local desktop use stays free. Pro enables remote access. Try monthly or annual test billing. No real payments are taken."
+    : "Local desktop use stays free. Pro enables remote access.";
 }

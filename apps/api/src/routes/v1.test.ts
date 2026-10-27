@@ -3329,6 +3329,7 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
       authMode: "workos",
       clientId: workos.clientId,
       workosApiUrl: workos.origin,
+      remoteBillingEnforced: false,
     });
   });
 

@@ -4,6 +4,7 @@ import { installCloudflared, CLOUDFLARED_VERSION } from "@synara/shared/cloudfla
 import { startCloudflareIngress } from "./cloudflare/ingress";
 import { startCloudflareConnector } from "./cloudflare/connector";
 import { startRemoteAuthorization } from "./cloudflare/authorization";
+import { recordRemoteBillingPolicyHint } from "./remoteBillingPolicy";
 import { accountStateDirectory } from "./accountAuth";
 import { createRemoteResourceGateway } from "./remoteTransport/resourceGateway";
 import { requireRemoteConnections } from "./remoteFeaturePolicy";
@@ -13,7 +14,7 @@ import type { AuthControlPlaneShape } from "./auth/Services/AuthControlPlane";
 import type { RemoteDeviceTrustRepositoryShape } from "./persistence/Services/RemoteDeviceTrust";
 import { acceptRemotePairing } from "./remotePairing/gateway";
 
-import { createAccountClient } from "@synara/shared/account";
+import { AccountApiError, createAccountClient } from "@synara/shared/account";
 import WebSocket, { WebSocketServer } from "ws";
 import {
   loadRemoteTlsIdentity,
@@ -31,6 +32,7 @@ import {
   accountApiIssuer,
   readAccountFile,
   refreshHostRegistration,
+  recordRemoteBillingPolicy,
   resolveEnvironmentId,
 } from "./accountAuth";
 import type { SessionCredentialServiceShape } from "./auth/Services/SessionCredentialService";
@@ -79,6 +81,69 @@ export async function startHostConnectivity(
   const identity = await readHostIdentity(options.config.hostIdentityPath);
   if (!identity) return async () => {};
   const environmentId = await resolveEnvironmentId(options.config.baseDir, options.config.devUrl);
+  const client = createAccountClient({ baseUrl: credentials.accountUrl });
+  const hostProof = () =>
+    mintHostProof({
+      identity,
+      apiIssuer: accountApiIssuer(credentials.accountUrl),
+      environmentId,
+      hostId: credentials.hostId!,
+      keyGeneration: credentials.hostKeyGeneration!,
+    });
+  const rememberBillingPolicy = async (enforced: boolean) => {
+    const saved = await recordRemoteBillingPolicy(
+      accountStateDirectory(options.config.baseDir, options.config.devUrl),
+      {
+        accountUrl: credentials.accountUrl,
+        hostId: credentials.hostId!,
+        ownerUserId: credentials.hostOwnerUserId!,
+      },
+      enforced,
+    );
+    if (!saved) throw new Error("The linked host changed during remote authorization");
+    // Fence older public OFF replies as soon as this still-current host proves paid policy.
+    if (enforced) {
+      options.remoteSessions.setRemoteBillingEnforced(true);
+      if (!options.remoteSessions.canAdmitRemoteSession())
+        options.remoteSessions.closeAll("Remote billing policy requires authorization");
+    }
+    await recordRemoteBillingPolicyHint(
+      accountStateDirectory(options.config.baseDir, options.config.devUrl),
+      credentials.accountUrl,
+      enforced,
+    );
+    if (!enforced) options.remoteSessions.setRemoteBillingEnforced(false);
+  };
+  const readAuthorization = async (signal?: AbortSignal) => {
+    try {
+      const authorization = await client.getHostAuthorization(
+        await hostProof(),
+        credentials.hostId!,
+        signal,
+      );
+      if (typeof authorization.remoteBillingEnforced === "boolean")
+        await rememberBillingPolicy(authorization.remoteBillingEnforced);
+      else if (options.remoteSessions.remoteBillingEnforced)
+        throw new Error("The account service did not confirm the commercial policy");
+      return authorization;
+    } catch (error) {
+      if (
+        error instanceof AccountApiError &&
+        ((error.status === 403 && error.code === "subscription_required") ||
+          (error.status === 503 && error.code === "billing_unavailable"))
+      )
+        await rememberBillingPolicy(true);
+      throw error;
+    }
+  };
+  // Learn policy before TLS/connector setup can fail. This is not an admission lease.
+  try {
+    await readAuthorization();
+  } catch (error) {
+    if (options.remoteSessions.remoteBillingEnforced)
+      options.remoteSessions.closeAll("Remote authorization unavailable");
+    throw error;
+  }
   // Startup cannot silently replace a missing root. Only local pairing initializes it.
   const tlsIdentity = await loadRemoteTlsIdentity(
     remoteTlsIdentityPath(options.config.secretsDir),
@@ -102,21 +167,8 @@ export async function startHostConnectivity(
     if (!trusted) throw new Error("Device approval is missing or revoked on this host");
     return trusted.generation;
   };
-  const client = createAccountClient({ baseUrl: credentials.accountUrl });
-  const hostProof = () =>
-    mintHostProof({
-      identity,
-      apiIssuer: accountApiIssuer(credentials.accountUrl),
-      environmentId,
-      hostId: credentials.hostId!,
-      keyGeneration: credentials.hostKeyGeneration!,
-    });
   const refreshAuthorization = async () => {
-    const authorization = await client.getHostAuthorization(
-      await hostProof(),
-      credentials.hostId!,
-      controller.signal,
-    );
+    const authorization = await readAuthorization(controller.signal);
     for (const jkt of authorization.revokedDeviceJkts) {
       options.remoteSessions.closeDevice(jkt);
       await Effect.runPromise(
@@ -186,6 +238,13 @@ export async function startHostConnectivity(
   });
   const controller = new AbortController();
   const stops: Array<() => void | Promise<void>> = [];
+  let paidAdmissionAvailable = () => false;
+  stops.push(
+    remoteSessions.registerAdmissionGuard({
+      authority: accountApiIssuer(credentials.accountUrl),
+      available: () => paidAdmissionAvailable(),
+    }),
+  );
   let finishSetup!: () => void;
   const setupDone = new Promise<void>((resolve) => {
     finishSetup = resolve;
@@ -315,7 +374,10 @@ export async function startHostConnectivity(
       },
       log: (message) => console.warn(`[synara] ${message}`),
     });
-    admissionAvailable = authorizationPoll.available;
+    paidAdmissionAvailable = authorizationPoll.paidAvailable;
+    admissionAvailable = () =>
+      authorizationPoll.available() &&
+      (!remoteSessions.remoteBillingEnforced || remoteSessions.canAdmitRemoteSession());
     stops.push(() => authorizationPoll.done);
     let connectorReady = false;
     const ingress = await startCloudflareIngress(

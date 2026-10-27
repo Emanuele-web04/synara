@@ -331,6 +331,7 @@ export const makeSessionCredentialService = Effect.gen(function* () {
       yield* authSessions.create({
         sessionId,
         subject: claims.sub,
+        accessOrigin: input?.accessOrigin ?? null,
         role: claims.role,
         method: claims.method,
         client: {
@@ -403,6 +404,7 @@ export const makeSessionCredentialService = Effect.gen(function* () {
         expiresAt: DateTime.makeUnsafe(claims.exp),
         subject: claims.sub,
         role: claims.role,
+        accessOrigin: row.value.accessOrigin,
       } satisfies VerifiedSession;
     }).pipe(
       Effect.mapError((cause) =>
@@ -542,6 +544,7 @@ export const makeSessionCredentialService = Effect.gen(function* () {
             expiresAt: row.value.expiresAt,
             subject: row.value.subject,
             role: row.value.role,
+            accessOrigin: row.value.accessOrigin,
           } satisfies VerifiedSession;
         }),
       );

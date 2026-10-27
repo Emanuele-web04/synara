@@ -1,6 +1,8 @@
 import { Schema } from "effect";
 
-/** Sandbox billing is separate from account ownership and device authorization. */
+/** Billing is separate from account ownership and device authorization. */
+export const AccountBillingEnvironment = Schema.Literals(["sandbox", "production"]);
+export type AccountBillingEnvironment = typeof AccountBillingEnvironment.Type;
 export const AccountBillingInterval = Schema.Literals(["month", "year"]);
 export type AccountBillingInterval = typeof AccountBillingInterval.Type;
 export const AccountBillingCheckoutRequest = Schema.Struct({
@@ -15,7 +17,7 @@ export const AccountBillingPlan = Schema.Struct({
 });
 export const AccountBillingStatus = Schema.Struct({
   provider: Schema.Literal("polar"),
-  environment: Schema.Literal("sandbox"),
+  environment: AccountBillingEnvironment,
   available: Schema.Boolean,
   access: Schema.Literals(["none", "granted"]),
   subscriptionStatus: Schema.NullOr(Schema.String),
@@ -29,6 +31,6 @@ export const AccountBillingStatus = Schema.Struct({
 export type AccountBillingStatus = typeof AccountBillingStatus.Type;
 export const AccountBillingRedirect = Schema.Struct({
   url: Schema.String,
-  environment: Schema.Literal("sandbox"),
+  environment: AccountBillingEnvironment,
 });
 export type AccountBillingRedirect = typeof AccountBillingRedirect.Type;

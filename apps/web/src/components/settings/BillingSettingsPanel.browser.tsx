@@ -74,7 +74,7 @@ beforeEach(() => {
   fixture.open.mockResolvedValue(true);
 });
 
-describe("sandbox subscription settings", () => {
+describe("subscription settings", () => {
   it("offers sign in without fetching billing while signed out", async () => {
     fixture.status = { state: "signed-out" };
     await render(panel(new QueryClient()));
@@ -100,6 +100,7 @@ describe("sandbox subscription settings", () => {
       plans: [{ interval: "year", amountMinor: 12345, currency: "USD" }],
     });
     await render(panel(new QueryClient()));
+    await expect.element(page.getByText("Test Synara Pro", { exact: true })).toBeVisible();
     await expect.element(page.getByText("$123.45 / year")).toBeVisible();
     await page.getByRole("button", { name: "Test checkout" }).click();
     await expect.poll(() => fixture.open.mock.calls.length).toBe(1);
@@ -131,20 +132,67 @@ describe("sandbox subscription settings", () => {
     expect(fixture.open).not.toHaveBeenCalled();
   });
 
-  it("refuses a live checkout even if the response labels it sandbox", async () => {
+  it("renders production billing and opens its customer portal without sandbox claims", async () => {
     fixture.billing.mockResolvedValue({
       ...disabled,
+      environment: "production",
       available: true,
-      canCheckout: true,
-      plans: [{ interval: "month", amountMinor: 1000, currency: "USD" }],
+      access: "granted",
+      canManage: true,
     });
-    fixture.checkout.mockResolvedValue({
-      environment: "sandbox",
-      url: "https://polar.sh/checkout/live",
+    fixture.portal.mockResolvedValue({
+      environment: "production",
+      url: "https://polar.sh/purchases/subscriptions",
     });
     await render(panel(new QueryClient()));
-    await page.getByRole("button", { name: "Test checkout" }).click();
-    await expect.element(page.getByText("Could not open test billing. Try again.")).toBeVisible();
-    expect(fixture.open).not.toHaveBeenCalled();
+    await expect.element(page.getByText("Production", { exact: true })).toBeVisible();
+    await expect.element(page.getByText("Synara Pro", { exact: true })).toBeVisible();
+    await expect
+      .element(
+        page.getByText("Local desktop use stays free. Pro enables remote access.", { exact: true }),
+      )
+      .toBeVisible();
+    await expect.element(page.getByText("Manage subscription", { exact: true })).toBeVisible();
+    await expect.element(page.getByText("Sandbox", { exact: true })).not.toBeInTheDocument();
+    await page.getByRole("button", { name: "Manage", exact: true }).click();
+    await expect.poll(() => fixture.open.mock.calls.length).toBe(1);
+    expect(fixture.portal).toHaveBeenCalledOnce();
+    expect(fixture.open).toHaveBeenCalledWith("https://polar.sh/purchases/subscriptions");
   });
+
+  it.each([
+    ["sandbox", "sandbox", "https://polar.sh/checkout/live"],
+    ["sandbox", "production", "https://sandbox.polar.sh/checkout/test"],
+    ["production", "sandbox", "https://polar.sh/checkout/live"],
+    ["production", "production", "https://sandbox.polar.sh/checkout/test"],
+  ] as const)(
+    "refuses %s billing when a %s redirect points to %s",
+    async (environment, redirectEnvironment, url) => {
+      fixture.billing.mockResolvedValue({
+        ...disabled,
+        environment,
+        available: true,
+        canCheckout: true,
+        plans: [{ interval: "month", amountMinor: 1000, currency: "USD" }],
+      });
+      fixture.checkout.mockResolvedValue({ environment: redirectEnvironment, url });
+      await render(panel(new QueryClient()));
+      await page
+        .getByRole("button", {
+          name: environment === "sandbox" ? "Test checkout" : "Checkout",
+          exact: true,
+        })
+        .click();
+      await expect
+        .element(
+          page.getByText(
+            environment === "sandbox"
+              ? "Could not open test billing. Try again."
+              : "Could not open billing. Try again.",
+          ),
+        )
+        .toBeVisible();
+      expect(fixture.open).not.toHaveBeenCalled();
+    },
+  );
 });

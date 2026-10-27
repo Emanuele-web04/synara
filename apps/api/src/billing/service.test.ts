@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import pg from "pg";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createBillingService } from "./service";
+import { decideRemoteBillingAccess } from "./accessPolicy";
 import {
   BillingCheckoutNotCreatedError,
   type BillingProvider,
@@ -25,17 +26,20 @@ describe.skipIf(!url)("sandbox billing durable PostgreSQL ledger", () => {
     ({ db, pool: deletionPool } = createDb(isolated.url));
   });
   beforeEach(async () => {
-    await pool.query("TRUNCATE billing_webhook_events,billing_accounts,account_deletions");
+    await pool.query(
+      "TRUNCATE billing_environment,billing_webhook_events,billing_accounts,account_deletions",
+    );
   });
   afterAll(async () => {
     await pool?.end();
     await deletionPool?.end();
     await isolated?.close();
   });
-  function fixture() {
+  function fixture(environment: BillingProvider["environment"] = "sandbox") {
     const states = new Map<string, BillingSnapshot>();
     const checkouts = new Map<string, BillingCheckout>();
     const provider: BillingProvider = {
+      environment,
       plans: vi.fn(async () => [
         { interval: "month" as const, amountMinor: 1200, currency: "EUR" },
       ]),
@@ -46,7 +50,7 @@ describe.skipIf(!url)("sandbox billing durable PostgreSQL ledger", () => {
       checkout: vi.fn(async (userId, _email, interval, attemptId) => {
         const checkout: BillingCheckout = {
           checkoutId: randomUUID(),
-          url: `https://sandbox.polar.sh/checkout/${userId}/${attemptId}`,
+          url: `https://${environment === "sandbox" ? "sandbox.polar.sh" : "polar.sh"}/checkout/${userId}/${attemptId}`,
           productId: `test-${interval}`,
           expiresAt: new Date(Date.now() + 60_000).toISOString(),
           status: "open",
@@ -54,7 +58,10 @@ describe.skipIf(!url)("sandbox billing durable PostgreSQL ledger", () => {
         checkouts.set(attemptId, checkout);
         return checkout;
       }),
-      portal: vi.fn(async (userId) => `https://sandbox.polar.sh/portal/${userId}`),
+      portal: vi.fn(
+        async (userId) =>
+          `https://${environment === "sandbox" ? "sandbox.polar.sh" : "polar.sh"}/portal/${userId}`,
+      ),
       cancelRenewals: vi.fn(async () => {}),
       verify: vi.fn(async (body) => JSON.parse(body)),
     };
@@ -66,13 +73,159 @@ describe.skipIf(!url)("sandbox billing durable PostgreSQL ledger", () => {
         settledCheckoutAttempts: [],
         accessGranted: true,
         subscriptionStatus: "active",
-        validUntil: "2027-01-01T00:00:00Z",
+        validUntil: new Date(Date.now() + 86_400_000).toISOString(),
         cancelAtPeriodEnd: false,
         hasSubscription: true,
         ...overrides,
       });
     return { service, provider, states, paid, checkouts };
   }
+  it("atomically claims one billing environment before any provider call", async () => {
+    const sandbox = fixture(),
+      production = fixture("production");
+    const results = await Promise.allSettled([
+      sandbox.service.initialize(),
+      production.service.initialize(),
+    ]);
+    expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+    const rejected = results.find((result) => result.status === "rejected");
+    expect(rejected).toMatchObject({ reason: { status: 503 } });
+    const environment = results[0]!.status === "fulfilled" ? "sandbox" : "production";
+    expect((await pool.query("SELECT id,environment FROM billing_environment")).rows).toEqual([
+      { id: 1, environment },
+    ]);
+    expect(sandbox.provider.plans).not.toHaveBeenCalled();
+    expect(production.provider.plans).not.toHaveBeenCalled();
+  });
+  it("refuses a different environment for every entry point without touching a provider", async () => {
+    await fixture().service.initialize();
+    const { service, provider } = fixture("production");
+    const userId = randomUUID();
+    for (const invoke of [
+      () => service.initialize(),
+      () => service.status(userId),
+      () => service.access(userId),
+      () => service.checkout(userId, "a@example.com", "month"),
+      () => service.portal(userId),
+      () => service.webhook("{}", {}),
+      () => service.flush(),
+      () => service.cleanupDeletedAccount(userId),
+    ])
+      await expect(invoke()).rejects.toMatchObject({ status: 503 });
+    for (const method of [
+      provider.plans,
+      provider.state,
+      provider.preflightCheckout,
+      provider.recoverCheckout,
+      provider.checkout,
+      provider.portal,
+      provider.cancelRenewals,
+      provider.verify,
+    ])
+      expect(method).not.toHaveBeenCalled();
+    expect((await pool.query("SELECT count(*) FROM billing_accounts")).rows[0].count).toBe("0");
+    expect((await pool.query("SELECT count(*) FROM billing_webhook_events")).rows[0].count).toBe(
+      "0",
+    );
+  });
+  it("never promotes pre-existing sandbox billing rows to production", async () => {
+    await pool.query("INSERT INTO billing_accounts(user_id) VALUES($1)", [randomUUID()]);
+    const { service, provider } = fixture("production");
+    await expect(service.initialize()).rejects.toMatchObject({ status: 503 });
+    expect((await pool.query("SELECT environment FROM billing_environment")).rows).toEqual([
+      { environment: "sandbox" },
+    ]);
+    expect(provider.plans).not.toHaveBeenCalled();
+    expect(provider.state).not.toHaveBeenCalled();
+  });
+  it("labels status and redirects with the initialized provider environment", async () => {
+    const { service, paid } = fixture("production");
+    const userId = randomUUID();
+    paid(userId);
+    expect(await service.status(userId)).toMatchObject({
+      environment: "production",
+      access: "granted",
+    });
+    expect(await service.portal(userId)).toEqual({
+      environment: "production",
+      url: `https://polar.sh/portal/${userId}`,
+    });
+    expect(await service.checkout(randomUUID(), "b@example.com", "month")).toMatchObject({
+      environment: "production",
+    });
+  });
+  it("bounds authorization caching without plans, stale fallback or extending its checked time", async () => {
+    const { service, provider, paid, states } = fixture();
+    const userId = randomUUID();
+    paid(userId);
+    const original = await service.access(userId);
+    expect(original).toMatchObject({ access: "granted", available: true });
+    expect(await service.access(userId)).toEqual(original);
+    expect(provider.state).toHaveBeenCalledTimes(1);
+    await pool.query(
+      "UPDATE billing_accounts SET checked_at=now()-interval '31 seconds' WHERE user_id=$1",
+      [userId],
+    );
+    vi.mocked(provider.state).mockRejectedValueOnce(new Error("provider offline"));
+    await expect(service.access(userId)).rejects.toThrow("provider offline");
+    expect(
+      (await pool.query("SELECT access_granted FROM billing_accounts WHERE user_id=$1", [userId]))
+        .rows[0].access_granted,
+    ).toBe(true);
+    states.delete(userId);
+    expect(await service.access(userId)).toMatchObject({ access: "none" });
+    expect(provider.state).toHaveBeenCalledTimes(3);
+    expect(provider.plans).not.toHaveBeenCalled();
+  });
+  it("reconciles a future ledger timestamp using the API clock even when PostgreSQL is ahead", async () => {
+    const { service, provider, paid } = fixture();
+    const userId = randomUUID();
+    paid(userId);
+    await service.access(userId);
+    await pool.query(
+      "UPDATE billing_accounts SET checked_at=now()+interval '1 minute' WHERE user_id=$1",
+      [userId],
+    );
+    const apiNow = Date.now() - 120_000;
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(apiNow);
+    try {
+      const refreshed = await service.access(userId);
+      expect(provider.state).toHaveBeenCalledTimes(2);
+      expect(refreshed.checkedAt).toBe(new Date(apiNow).toISOString());
+      expect(decideRemoteBillingAccess({ enforcementEnabled: true, status: refreshed })).toEqual({
+        allowed: true,
+        reason: "allowed",
+      });
+      expect(
+        (
+          await pool.query("SELECT checked_at FROM billing_accounts WHERE user_id=$1", [userId])
+        ).rows[0].checked_at.toISOString(),
+      ).toBe(refreshed.checkedAt);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+  it("refreshes a recent authorization when a webhook is pending or its validity expired", async () => {
+    const { service, provider, paid, states } = fixture();
+    const userId = randomUUID();
+    paid(userId);
+    await service.access(userId);
+    await pool.query(
+      "UPDATE billing_accounts SET valid_until=now()-interval '1 second' WHERE user_id=$1",
+      [userId],
+    );
+    expect(await service.access(userId)).toMatchObject({ access: "granted" });
+    expect(provider.state).toHaveBeenCalledTimes(2);
+    states.delete(userId);
+    await service.webhook(JSON.stringify({ eventId: randomUUID(), userId }), {});
+    expect(await service.access(userId)).toMatchObject({ access: "none" });
+    expect(provider.state).toHaveBeenCalledTimes(3);
+    expect(
+      (await pool.query("SELECT handled_at FROM billing_webhook_events")).rows[0].handled_at,
+    ).toBeNull();
+    expect(provider.plans).not.toHaveBeenCalled();
+  });
   it("isolates accounts, serializes duplicate checkout and survives a service restart", async () => {
     const { service, provider, paid } = fixture();
     const a = randomUUID(),
@@ -356,6 +509,13 @@ describe.skipIf(!url)("sandbox billing durable PostgreSQL ledger", () => {
     expect(provider.state).toHaveBeenCalledTimes(1);
     await service.flush();
     expect(provider.state).toHaveBeenCalledTimes(1);
+    const restarted = createBillingService({ pool, provider });
+    await restarted.webhook(body, {});
+    await restarted.flush();
+    expect(provider.state).toHaveBeenCalledTimes(1);
+    expect((await pool.query("SELECT count(*) FROM billing_webhook_events")).rows[0].count).toBe(
+      "1",
+    );
   });
   it("keeps an event arriving during reconciliation pending regardless of clock skew", async () => {
     const { service, provider, paid, states } = fixture();
@@ -417,7 +577,7 @@ describe.skipIf(!url)("sandbox billing durable PostgreSQL ledger", () => {
       await pool.query("DELETE FROM hosts WHERE id=$1", [hostId]);
     }
   });
-  it("does not erase a known grant on provider failure and retains failed deliveries", async () => {
+  it("retains a known grant through outage and durably retries deliveries after restart", async () => {
     const { service, provider, paid } = fixture();
     const userId = randomUUID();
     paid(userId);
@@ -433,6 +593,23 @@ describe.skipIf(!url)("sandbox billing durable PostgreSQL ledger", () => {
     expect(
       (await pool.query("SELECT handled_at FROM billing_webhook_events")).rows[0].handled_at,
     ).toBeNull();
+    const pending = (await pool.query("SELECT next_attempt_at FROM billing_webhook_events"))
+      .rows[0];
+    expect(pending.next_attempt_at.getTime()).toBeGreaterThan(Date.now());
+    const restarted = createBillingService({ pool, provider });
+    const failedReads = vi.mocked(provider.state).mock.calls.length;
+    await restarted.flush();
+    expect(provider.state).toHaveBeenCalledTimes(failedReads);
+    vi.mocked(provider.state).mockResolvedValue(null);
+    await pool.query("UPDATE billing_webhook_events SET next_attempt_at=now()-interval '1 second'");
+    await restarted.flush();
+    expect(
+      (await pool.query("SELECT handled_at FROM billing_webhook_events")).rows[0].handled_at,
+    ).toEqual(expect.any(Date));
+    expect(
+      (await pool.query("SELECT access_granted FROM billing_accounts WHERE user_id=$1", [userId]))
+        .rows[0].access_granted,
+    ).toBe(false);
   });
   it("does not acknowledge invalid signatures or failed durable writes", async () => {
     const { service, provider } = fixture();
@@ -472,7 +649,31 @@ describe.skipIf(!url)("sandbox billing durable PostgreSQL ledger", () => {
       "UPDATE account_deletions SET next_attempt_at=now()-interval '1 second' WHERE user_id=$1",
       [userId],
     );
+    vi.mocked(provider.cancelRenewals).mockRejectedValueOnce(new Error("provider offline"));
     await deletion.flush();
+    expect(deleteUser).not.toHaveBeenCalled();
+    expect(
+      (
+        await pool.query(
+          "SELECT customer_id,deleted_at,access_granted FROM billing_accounts WHERE user_id=$1",
+          [userId],
+        )
+      ).rows[0],
+    ).toMatchObject({
+      customer_id: states.get(userId)!.customerId,
+      deleted_at: expect.any(Date),
+      access_granted: false,
+    });
+    await pool.query(
+      "UPDATE account_deletions SET next_attempt_at=now()-interval '1 second' WHERE user_id=$1",
+      [userId],
+    );
+    const restartedDeletion = createAccountDeletionService({
+      db,
+      billing: createBillingService({ pool, provider }),
+      verifier: { deleteUser } as unknown as AccountIdentityVerifier,
+    });
+    await restartedDeletion.flush();
     expect(deleteUser).toHaveBeenCalledWith(userId);
     expect(vi.mocked(provider.cancelRenewals).mock.invocationCallOrder[0]).toBeLessThan(
       deleteUser.mock.invocationCallOrder[0]!,
@@ -488,6 +689,104 @@ describe.skipIf(!url)("sandbox billing durable PostgreSQL ledger", () => {
         )
       ).rows[0],
     ).toMatchObject({ access_granted: false, customer_id: null });
+  });
+  it("keeps erasure fenced while its committed checkout POST or purchase is still uncertain", async () => {
+    const { service, provider, checkouts, paid } = fixture();
+    const userId = randomUUID();
+    let attemptId = "";
+    let release!: (checkout: BillingCheckout) => void;
+    let started!: () => void;
+    const posting = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    vi.mocked(provider.checkout).mockImplementationOnce(
+      async (_user, _email, _interval, attempt) => {
+        attemptId = attempt;
+        started();
+        return new Promise<BillingCheckout>((resolve) => {
+          release = resolve;
+        });
+      },
+    );
+    const request = service.checkout(userId, "a@example.com", "month");
+    await posting;
+    const deleteUser = vi.fn(async () => {});
+    const deletion = createAccountDeletionService({
+      db,
+      billing: service,
+      verifier: { deleteUser } as unknown as AccountIdentityVerifier,
+    });
+    await deletion.request(userId);
+    async function tryErasure() {
+      await pool.query(
+        "UPDATE account_deletions SET next_attempt_at=now()-interval '1 second' WHERE user_id=$1",
+        [userId],
+      );
+      await deletion.flush();
+    }
+    await tryErasure();
+    expect(deleteUser).not.toHaveBeenCalled();
+    expect(provider.cancelRenewals).not.toHaveBeenCalled();
+    expect(
+      (
+        await pool.query("SELECT checkout_attempt_id FROM billing_accounts WHERE user_id=$1", [
+          userId,
+        ])
+      ).rows[0].checkout_attempt_id,
+    ).toBe(attemptId);
+    const checkout: BillingCheckout = {
+      checkoutId: randomUUID(),
+      url: "https://sandbox.polar.sh/checkout/late",
+      expiresAt: new Date(Date.now() + 60_000).toISOString(),
+      productId: "test-month",
+      status: "open",
+    };
+    checkouts.set(attemptId, checkout);
+    release(checkout);
+    await expect(request).rejects.toMatchObject({ status: 409 });
+    await tryErasure();
+    expect(deleteUser).not.toHaveBeenCalled();
+    checkouts.set(attemptId, { ...checkout, status: "succeeded" });
+    paid(userId, { settledCheckoutAttempts: [{ attemptId, productId: "test-year" }] });
+    await tryErasure();
+    expect(deleteUser).not.toHaveBeenCalled();
+    paid(userId, { settledCheckoutAttempts: [{ attemptId, productId: "test-month" }] });
+    await tryErasure();
+    expect(provider.cancelRenewals).toHaveBeenCalledWith(userId, ["test-month"]);
+    expect(deleteUser).toHaveBeenCalledWith(userId);
+    expect(
+      (
+        await pool.query(
+          "SELECT checkout_attempt_id,deleted_at,access_granted FROM billing_accounts WHERE user_id=$1",
+          [userId],
+        )
+      ).rows[0],
+    ).toMatchObject({
+      checkout_attempt_id: null,
+      deleted_at: expect.any(Date),
+      access_granted: false,
+    });
+  });
+  it("finishes billing erasure once its earlier unpaid checkout is positively expired", async () => {
+    const { service, provider, checkouts } = fixture();
+    const userId = randomUUID();
+    await service.checkout(userId, "a@example.com", "month");
+    const attemptId = [...checkouts.keys()][0]!;
+    checkouts.set(attemptId, { ...checkouts.get(attemptId)!, status: "expired" });
+    await pool.query(
+      "UPDATE billing_accounts SET deleted_at=now(),access_granted=false WHERE user_id=$1",
+      [userId],
+    );
+    await service.cleanupDeletedAccount(userId);
+    expect(provider.cancelRenewals).toHaveBeenCalledWith(userId, ["test-month"]);
+    expect(
+      (
+        await pool.query(
+          "SELECT checkout_attempt_id,checkout_url,deleted_at FROM billing_accounts WHERE user_id=$1",
+          [userId],
+        )
+      ).rows[0],
+    ).toEqual({ checkout_attempt_id: null, checkout_url: null, deleted_at: expect.any(Date) });
   });
   it("maps signed customer deletion through stored customer ID and ignores unrelated Polar customers", async () => {
     const { service, provider, paid, states } = fixture();

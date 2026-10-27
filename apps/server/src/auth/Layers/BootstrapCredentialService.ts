@@ -108,6 +108,7 @@ export const makeBootstrapCredentialService = Effect.gen(function* () {
         method: "one-time-token",
         role,
         subject,
+        accessOrigin: input?.accessOrigin ?? null,
         label: label ?? null,
         createdAt: now,
         expiresAt,
@@ -176,6 +177,7 @@ export const makeBootstrapCredentialService = Effect.gen(function* () {
           method: seeded.method,
           role: seeded.role,
           subject: seeded.subject,
+          accessOrigin: seeded.accessOrigin ?? null,
           ...(seeded.label ? { label: seeded.label } : {}),
           expiresAt: seeded.expiresAt,
         } satisfies BootstrapGrant;
@@ -193,6 +195,7 @@ export const makeBootstrapCredentialService = Effect.gen(function* () {
           method: consumed.value.method,
           role: consumed.value.role,
           subject: consumed.value.subject,
+          accessOrigin: consumed.value.accessOrigin,
           ...(consumed.value.label ? { label: consumed.value.label } : {}),
           expiresAt: consumed.value.expiresAt,
         } satisfies BootstrapGrant;

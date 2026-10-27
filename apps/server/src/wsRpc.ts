@@ -112,14 +112,19 @@ import {
 } from "./projectAgent/libraryGit";
 import { ProjectAgentRepository } from "./persistence/Services/ProjectAgentRepository";
 import { authErrorResponse, makeEffectAuthRequest } from "./auth/effectHttp";
+import { isTrustedLocalServerToken, runWithRemoteAdmission } from "./auth/remoteAccess";
 import {
   ServerAuth,
-  type AuthError,
+  AuthError,
   type AuthRequest,
   type AuthenticatedSession,
   type ServerAuthShape,
 } from "./auth/Services/ServerAuth";
-import { SessionCredentialService } from "./auth/Services/SessionCredentialService";
+import {
+  SessionCapacityError,
+  SessionCredentialError,
+  SessionCredentialService,
+} from "./auth/Services/SessionCredentialService";
 import { CheckpointDiffQuery } from "./checkpointing/Services/CheckpointDiffQuery";
 import { resolveThreadWorkspaceCwd } from "./checkpointing/Utils";
 import { ServerConfig, type ServerConfigShape } from "./config";
@@ -253,7 +258,10 @@ import {
 } from "./wsConnectionSessions";
 import { makeAccountRpcHandlers } from "./wsAccountRpc";
 import { makeHostsRpcHandlers } from "./wsHostsRpc";
-import { RemoteSessionRegistryService } from "./remoteSessions/sessionRegistry";
+import {
+  RemoteSessionRegistryService,
+  type RemoteSessionRegistry,
+} from "./remoteSessions/sessionRegistry";
 import { HostConnectionRegistryService } from "./hostConnections/registry";
 import { makeHostConnectionsPort } from "./hostConnections/port";
 import { isOwnerRole, requireOwnerRole } from "./wsOwnerOnly";
@@ -3649,7 +3657,14 @@ export function authenticateRpcWebSocketUpgrade(input: {
   readonly legacyToken: string | null;
   readonly request: AuthRequest;
   readonly serverAuth: Pick<ServerAuthShape, "authenticateWebSocketUpgrade">;
+  readonly remoteSessions: RemoteSessionRegistry;
 }): Effect.Effect<AuthenticatedSession | null, AuthError> {
+  // The local desktop retains its private-token authority even with a stale browser cookie.
+  if (
+    input.remoteSessions.remoteBillingEnforced &&
+    isTrustedLocalServerToken(input.config, input.legacyToken)
+  )
+    return Effect.succeed(null);
   // An explicit client ticket must retain its client role even on an otherwise
   // accountless loopback server. Never promote an authenticated remote bridge.
   if (
@@ -3662,10 +3677,11 @@ export function authenticateRpcWebSocketUpgrade(input: {
     return input.serverAuth.authenticateWebSocketUpgrade(input.request);
   }
   if (
-    !requiresWebSocketAuthentication(input.config) ||
-    (isLoopbackHost(input.config.host) &&
-      !input.config.publicUrl &&
-      input.legacyToken === input.config.authToken)
+    !input.remoteSessions.remoteBillingEnforced &&
+    (!requiresWebSocketAuthentication(input.config) ||
+      (isLoopbackHost(input.config.host) &&
+        !input.config.publicUrl &&
+        input.legacyToken === input.config.authToken))
   ) {
     return Effect.succeed(null);
   }
@@ -3683,6 +3699,7 @@ export function authorizeDeviceFrameWebSocketUpgrade(input: {
   readonly legacyToken: string | null;
   readonly request: AuthRequest;
   readonly serverAuth: Pick<ServerAuthShape, "authenticateWebSocketUpgrade">;
+  readonly remoteSessions: RemoteSessionRegistry;
 }): Effect.Effect<boolean> {
   return authenticateRpcWebSocketUpgrade(input).pipe(
     Effect.as(true),
@@ -3738,6 +3755,7 @@ export function makeWebsocketRpcRouteLayer<R>(
           const config = yield* ServerConfig;
           const serverAuth = yield* ServerAuth;
           const sessions = yield* SessionCredentialService;
+          const remoteSessions = yield* RemoteSessionRegistryService;
           const url = trustedWebSocketRequestUrl(request, config);
           if (!url) {
             return HttpServerResponse.text("Forbidden", { status: 403 });
@@ -3755,6 +3773,7 @@ export function makeWebsocketRpcRouteLayer<R>(
             legacyToken,
             request: makeEffectAuthRequest(request),
             serverAuth,
+            remoteSessions,
           });
 
           if (!authenticatedSession) {
@@ -3764,17 +3783,28 @@ export function makeWebsocketRpcRouteLayer<R>(
             });
           }
 
-          return yield* sessions.runAuthenticatedConnection(
+          const attachmentPrincipal = attachmentPrincipalForSession(authenticatedSession.sessionId);
+          const connection = sessions.runAuthenticatedConnection(
             authenticatedSession.sessionId,
             runWithConnectionSession(request, {
               role: authenticatedSession.role,
-              attachmentPrincipal: attachmentPrincipalForSession(authenticatedSession.sessionId),
+              attachmentPrincipal,
               desktopUpdateAuthority: desktopUpdateAuthorityForSession(
                 authenticatedSession.sessionId,
                 authenticatedSession.role,
               ),
             }),
           );
+          if (authenticatedSession.accessOrigin === "local") return yield* connection;
+          if (!remoteSessions.canAdmitRemoteSession())
+            return yield* new AuthError({
+              message: "Remote authorization unavailable.",
+              status: 503,
+            });
+          // Modern device bridges already register their outer socket with this registry.
+          return yield* attachmentPrincipal.ownerId.startsWith("remote-device:")
+            ? connection
+            : runWithRemoteAdmission(remoteSessions, authenticatedSession, connection);
         }).pipe(
           Effect.catchTags({
             AuthError: (error) => Effect.succeed(authErrorResponse(error)),
@@ -3890,36 +3920,61 @@ export const makeWebsocketNegotiationRouteLayer = () =>
  * the same rules as the RPC upgrade: trusted origin, then whatever
  * authentication the config requires.
  */
-const deviceFrameRouteLayer = makeDeviceFrameRouteLayer({
-  authorizeUpgrade: (request) =>
-    Effect.gen(function* () {
-      const config = yield* ServerConfig;
-      const serverAuth = yield* ServerAuth;
-      const url = trustedWebSocketRequestUrl(request, config);
-      if (url === null) return false;
-      return yield* authorizeDeviceFrameWebSocketUpgrade({
-        config,
-        legacyToken: url.searchParams.get("token"),
-        request: makeEffectAuthRequest(request),
-        serverAuth,
-      });
-    }),
+const authorizeFrameOrigin = (request: HttpServerRequest.HttpServerRequest) =>
+  Effect.gen(function* () {
+    return trustedWebSocketRequestUrl(request, yield* ServerConfig) !== null;
+  });
+
+/** Frames authenticate once, then retain the same lease boundary as the RPC stream. */
+const runAuthorizedFrameConnection = <E, R>(
+  request: HttpServerRequest.HttpServerRequest,
+  connection: Effect.Effect<HttpServerResponse.HttpServerResponse, E, R>,
+) =>
+  Effect.gen(function* () {
+    const config = yield* ServerConfig;
+    const serverAuth = yield* ServerAuth;
+    const remoteSessions = yield* RemoteSessionRegistryService;
+    const sessions = yield* SessionCredentialService;
+    const url = trustedWebSocketRequestUrl(request, config);
+    if (url === null) return HttpServerResponse.text("Forbidden", { status: 403 });
+    const authenticated = yield* authenticateRpcWebSocketUpgrade({
+      config,
+      legacyToken: url.searchParams.get("token"),
+      request: makeEffectAuthRequest(request),
+      serverAuth,
+      remoteSessions,
+    });
+    return yield* authenticated
+      ? runWithRemoteAdmission(
+          remoteSessions,
+          authenticated,
+          sessions.runAuthenticatedConnection(authenticated.sessionId, connection),
+        )
+      : connection;
+  }).pipe(
+    Effect.catch((error) =>
+      error instanceof AuthError
+        ? Effect.succeed(authErrorResponse(error))
+        : error instanceof SessionCapacityError
+          ? Effect.succeed(HttpServerResponse.text(error.message, { status: 429 }))
+          : error instanceof SessionCredentialError
+            ? Effect.succeed(HttpServerResponse.text(error.message, { status: 401 }))
+            : Effect.fail(error),
+    ),
+  );
+
+const deviceFrameRouteLayer = makeDeviceFrameRouteLayer<
+  ServerConfig | ServerAuth | RemoteSessionRegistryService | SessionCredentialService
+>({
+  authorizeUpgrade: authorizeFrameOrigin,
+  runAuthorizedConnection: runAuthorizedFrameConnection,
 });
 
-const computerFrameRouteLayer = makeComputerFrameRouteLayer({
-  authorizeUpgrade: (request) =>
-    Effect.gen(function* () {
-      const config = yield* ServerConfig;
-      const serverAuth = yield* ServerAuth;
-      const url = trustedWebSocketRequestUrl(request, config);
-      if (url === null) return false;
-      return yield* authorizeComputerFrameWebSocketUpgrade({
-        config,
-        legacyToken: url.searchParams.get("token"),
-        request: makeEffectAuthRequest(request),
-        serverAuth,
-      });
-    }),
+const computerFrameRouteLayer = makeComputerFrameRouteLayer<
+  ServerConfig | ServerAuth | RemoteSessionRegistryService | SessionCredentialService
+>({
+  authorizeUpgrade: authorizeFrameOrigin,
+  runAuthorizedConnection: runAuthorizedFrameConnection,
 });
 
 export const websocketRpcRouteLayer = Layer.mergeAll(

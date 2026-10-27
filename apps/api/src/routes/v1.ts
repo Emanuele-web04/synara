@@ -1,4 +1,5 @@
 import { AccountBillingCheckoutRequest } from "@synara/contracts";
+import { decideRemoteBillingAccess } from "../billing/accessPolicy";
 import { BILLING_UNAVAILABLE, BillingError, type BillingService } from "../billing/service";
 import {
   RegisterLiveActivity,
@@ -382,6 +383,7 @@ export function createV1Routes(deps: {
   apiIssuer?: string;
   remoteTestUserIds?: readonly string[];
   remoteBetaAccessEnabled?: boolean;
+  remoteBillingEnforced?: boolean;
   verifier: AccountIdentityVerifier;
   grants: EnvironmentGrantIssuer;
   signing: ApiSigningService;
@@ -454,8 +456,39 @@ export function createV1Routes(deps: {
     });
   const v1 = new Hono();
   // Enrollment is separate from authentication, host ownership and pairing consent.
-  const hasRemoteAccess = (userId: string): boolean =>
-    deps.remoteBetaAccessEnabled === true || deps.remoteTestUserIds?.includes(userId) === true;
+  async function requireRemoteAccess(c: Context, userId: string): Promise<Response | null> {
+    if (deps.remoteBillingEnforced === true) {
+      let status: Awaited<ReturnType<BillingService["access"]>> | undefined;
+      try {
+        status = await deps.billing?.access(userId);
+      } catch {
+        // An outage pauses remote access; it never changes host or device ownership.
+      }
+      const decision = decideRemoteBillingAccess({ enforcementEnabled: true, status });
+      if (decision.allowed) return null;
+      return decision.reason === "subscription_required"
+        ? errorResponse(
+            c,
+            403,
+            "subscription_required",
+            "Remote access requires an active Pro subscription",
+          )
+        : errorResponse(
+            c,
+            503,
+            "billing_unavailable",
+            "Remote access verification is temporarily unavailable",
+          );
+    }
+    if (deps.remoteBetaAccessEnabled === true || deps.remoteTestUserIds?.includes(userId) === true)
+      return null;
+    return errorResponse(
+      c,
+      403,
+      "not_host_owner",
+      "Remote test access is not enabled for this account",
+    );
+  }
 
   /**
    * Deletes a replaced avatar object AFTER the profiles app's response cache
@@ -824,13 +857,13 @@ export function createV1Routes(deps: {
     if (session instanceof Response) return session;
     const limiter = c.req.method === "GET" ? billingLimiter : billingMutationLimiter;
     if (!limiter.tryConsume(session.userId))
-      return errorResponse(c, 429, "rate_limited", "Too many sandbox billing requests");
+      return errorResponse(c, 429, "rate_limited", "Too many billing requests");
     try {
       return c.json(await action(session.userId));
     } catch (error) {
       if (error instanceof BillingError)
         return errorResponse(c, error.status, "validation_failed", error.message);
-      return errorResponse(c, 503, "internal_error", "Sandbox billing is temporarily unavailable");
+      return errorResponse(c, 503, "internal_error", "Billing is temporarily unavailable");
     }
   }
   v1.get("/billing/status", (c) =>
@@ -841,10 +874,10 @@ export function createV1Routes(deps: {
   );
   v1.post("/billing/checkout", (c) =>
     billingRequest(c, async (userId) => {
-      if (!deps.billing) throw new BillingError(503, "Sandbox billing is not configured");
+      if (!deps.billing) throw new BillingError(503, "Billing is not configured");
       const body = await c.req.json().catch(() => null);
       if (!Schema.is(AccountBillingCheckoutRequest)(body))
-        throw new BillingError(400, "Choose a monthly or yearly sandbox plan");
+        throw new BillingError(400, "Choose a monthly or yearly plan");
       const user = await loadSessionUser(c, userId);
       if (user instanceof Response) throw new BillingError(503, "Account details are unavailable");
       return deps.billing.checkout(
@@ -857,14 +890,13 @@ export function createV1Routes(deps: {
   );
   v1.post("/billing/portal", (c) =>
     billingRequest(c, async (userId) => {
-      if (!deps.billing) throw new BillingError(503, "Sandbox billing is not configured");
+      if (!deps.billing) throw new BillingError(503, "Billing is not configured");
       return deps.billing.portal(userId);
     }),
   );
   // The only unauthenticated billing route authenticates Polar's raw payload signature.
   v1.post("/billing/webhook", async (c) => {
-    if (!deps.billing)
-      return errorResponse(c, 503, "internal_error", "Sandbox billing is not configured");
+    if (!deps.billing) return errorResponse(c, 503, "internal_error", "Billing is not configured");
     try {
       await deps.billing.webhook(await c.req.text(), {
         "webhook-id": c.req.header("webhook-id") ?? "",
@@ -875,7 +907,7 @@ export function createV1Routes(deps: {
     } catch (error) {
       if (error instanceof BillingError)
         return errorResponse(c, error.status, "validation_failed", error.message);
-      return errorResponse(c, 503, "internal_error", "Sandbox billing webhook could not be saved");
+      return errorResponse(c, 503, "internal_error", "Billing webhook could not be saved");
     }
   });
 
@@ -1804,6 +1836,10 @@ export function createV1Routes(deps: {
     const deviceSession = await getDeviceSession(c);
     if (!deviceSession || deviceSession.userId !== session.userId)
       return errorResponse(c, 401, "unauthorized", "Session changed");
+    if (deps.remoteBillingEnforced === true) {
+      const denied = await requireRemoteAccess(c, session.userId);
+      if (denied) return denied;
+    }
     if (!liveActivityLimiter.tryConsume(session.userId))
       return errorResponse(c, 429, "rate_limited", "Too many activity updates");
     const body = await c.req.json().catch(() => null);
@@ -1834,6 +1870,10 @@ export function createV1Routes(deps: {
     const deviceSession = await getDeviceSession(c);
     if (!deviceSession || deviceSession.userId !== session.userId)
       return errorResponse(c, 401, "unauthorized", "Session changed");
+    if (deps.remoteBillingEnforced === true) {
+      const denied = await requireRemoteAccess(c, session.userId);
+      if (denied) return denied;
+    }
     if (!liveActivityLimiter.tryConsume(session.userId))
       return errorResponse(c, 429, "rate_limited", "Too many push updates");
     const body = await c.req.json().catch(() => null);
@@ -1879,6 +1919,10 @@ export function createV1Routes(deps: {
         async (host) => host,
       );
       await requireRemoteHostMembership(host);
+      if (deps.remoteBillingEnforced === true) {
+        const denied = await requireRemoteAccess(c, host.ownerUserId);
+        if (denied) return denied;
+      }
       return c.json({ turns: await deps.liveActivities.watches(host) });
     } catch (error) {
       return hostDomainError(c, error);
@@ -1899,6 +1943,10 @@ export function createV1Routes(deps: {
       if (!liveActivityLimiter.tryConsume(`host:${host.id}`))
         return errorResponse(c, 429, "rate_limited", "Too many snapshots");
       await requireRemoteHostMembership(host);
+      if (deps.remoteBillingEnforced === true) {
+        const denied = await requireRemoteAccess(c, host.ownerUserId);
+        if (denied) return denied;
+      }
       await deps.liveActivities.publish(host, body);
       return c.json({ ok: true });
     } catch (error) {
@@ -1918,13 +1966,8 @@ export function createV1Routes(deps: {
         c.req.param("id"),
         async (host) => host,
       );
-      if (!hasRemoteAccess(host.ownerUserId))
-        return errorResponse(
-          c,
-          403,
-          "not_host_owner",
-          "Remote test access is not enabled for this account",
-        );
+      const accessDenied = await requireRemoteAccess(c, host.ownerUserId);
+      if (accessDenied) return accessDenied;
       if (!(await rendezvous.consumeBudget(`publish:${host.id}`, 5)))
         return errorResponse(c, 429, "rate_limited", "Wait before creating another pairing code");
       await requireRemoteHostMembership(host);
@@ -1954,13 +1997,8 @@ export function createV1Routes(deps: {
       return errorResponse(c, 429, "rate_limited", "Too many pairing attempts; wait a minute");
     const session = await requireOrgSession(c, { freshMembership: true });
     if (session instanceof Response) return session;
-    if (!hasRemoteAccess(session.userId))
-      return errorResponse(
-        c,
-        403,
-        "not_host_owner",
-        "Remote test access is not enabled for this account",
-      );
+    const accessDenied = await requireRemoteAccess(c, session.userId);
+    if (accessDenied) return accessDenied;
     if (!(await rendezvous.consumeBudget(`redeem-user:${session.userId}`, 5)))
       return errorResponse(c, 429, "rate_limited", "Too many pairing attempts; wait a minute");
     const input = await c.req.json().catch(() => null);
@@ -1988,13 +2026,8 @@ export function createV1Routes(deps: {
         c.req.param("id"),
         async (host) => host,
       );
-      if (!hasRemoteAccess(host.ownerUserId))
-        return errorResponse(
-          c,
-          403,
-          "not_host_owner",
-          "Remote test access is not enabled for this account",
-        );
+      const accessDenied = await requireRemoteAccess(c, host.ownerUserId);
+      if (accessDenied) return accessDenied;
       if (!(await rendezvous.consumeBudget(`tunnel:${host.id}`, 10)))
         return errorResponse(c, 429, "rate_limited", "Wait before retrying remote setup");
       await requireRemoteHostMembership(host);
@@ -2102,13 +2135,6 @@ export function createV1Routes(deps: {
         c.req.param("id"),
         async (authenticated) => authenticated,
       );
-      if (!hasRemoteAccess(host.ownerUserId))
-        return errorResponse(
-          c,
-          403,
-          "not_host_owner",
-          "Remote test access is not enabled for this account",
-        );
       let organizations: OrganizationRef[];
       try {
         organizations = await grants.listUserOrganizations(host.ownerUserId, {
@@ -2196,6 +2222,7 @@ export function createV1Routes(deps: {
         if (revokedDeviceJkts.length >= REVOKED_DEVICE_SNAPSHOT_LIMIT) break;
       }
       const body: HostAuthorizationSnapshot = {
+        remoteBillingEnforced: deps.remoteBillingEnforced === true,
         revokedDeviceJkts,
         pendingRevocationDeviceJkts: pendingDeliveries
           .map((entry) => entry.jkt)
@@ -2205,6 +2232,11 @@ export function createV1Routes(deps: {
         orgId: host.ownerOrgId,
         ownerInOrg: organizations.some((organization) => organization.orgId === host.ownerOrgId),
       };
+      // Ownership loss must stay observable even while commercial access is unavailable.
+      if (body.ownerInOrg) {
+        const accessDenied = await requireRemoteAccess(c, host.ownerUserId);
+        if (accessDenied) return accessDenied;
+      }
       return c.json(body);
     } catch (error) {
       return hostDomainError(c, error);
@@ -2223,13 +2255,8 @@ export function createV1Routes(deps: {
     }
     const session = await requireOrgSession(c, { freshMembership: true });
     if (session instanceof Response) return session;
-    if (!hasRemoteAccess(session.userId))
-      return errorResponse(
-        c,
-        403,
-        "not_host_owner",
-        "Remote test access is not enabled for this account",
-      );
+    const accessDenied = await requireRemoteAccess(c, session.userId);
+    if (accessDenied) return accessDenied;
     if (!grantRateLimiter.tryConsume(`user:${session.userId}`)) {
       return errorResponse(c, 429, "rate_limited", "Too many grant requests — slow down");
     }
@@ -3020,9 +3047,11 @@ export function createV1Routes(deps: {
   });
 
   v1.get("/instance", (c) => {
+    c.header("Cache-Control", "no-store");
     const body: InstanceInfo = {
       version: API_VERSION,
       ...verifier.describeInstanceAuth(),
+      remoteBillingEnforced: deps.remoteBillingEnforced === true,
     };
     return c.json(body);
   });

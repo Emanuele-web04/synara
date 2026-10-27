@@ -32,11 +32,20 @@ export function formatBillingPrice(plan: AccountBillingStatus["plans"][number]):
   return formatter.format(plan.amountMinor / 10 ** digits);
 }
 
-/** The sandbox must never send a user to a live checkout or a caller-chosen host. */
-export function isPolarSandboxUrl(value: string): boolean {
+/** Billing redirects must stay on the vendor origin for the current environment. */
+export function isPolarBillingUrl(
+  value: string,
+  environment: AccountBillingStatus["environment"],
+): boolean {
   try {
     const url = new URL(value);
-    return url.origin === "https://sandbox.polar.sh" && !url.username && !url.password;
+    const origin =
+      environment === "sandbox"
+        ? "https://sandbox.polar.sh"
+        : environment === "production"
+          ? "https://polar.sh"
+          : null;
+    return url.origin === origin && !url.username && !url.password;
   } catch {
     return false;
   }

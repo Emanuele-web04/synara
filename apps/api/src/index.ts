@@ -38,7 +38,7 @@ async function main(): Promise<void> {
   const billingSweep = () => {
     if (shuttingDown || !flushBilling || billingMaintenance) return;
     billingMaintenance = flushBilling()
-      .catch(() => console.warn("[api] Sandbox billing reconciliation pending"))
+      .catch(() => console.warn("[api] Billing reconciliation pending"))
       .finally(() => {
         billingMaintenance = undefined;
       });

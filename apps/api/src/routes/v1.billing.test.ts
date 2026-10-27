@@ -43,7 +43,9 @@ describe.skipIf(!url)("authenticated sandbox billing API", () => {
     };
   });
   beforeEach(() =>
-    database.pool.query("TRUNCATE billing_accounts,billing_webhook_events,account_deletions"),
+    database.pool.query(
+      "TRUNCATE billing_environment,billing_accounts,billing_webhook_events,account_deletions",
+    ),
   );
   afterAll(async () => {
     await workos?.close();
@@ -58,8 +60,9 @@ describe.skipIf(!url)("authenticated sandbox billing API", () => {
       headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
     };
   }
-  function fixture() {
+  function fixture(environment: BillingProvider["environment"] = "sandbox") {
     const provider: BillingProvider = {
+      environment,
       plans: vi.fn(async () => [
         { interval: "month" as const, amountMinor: 1500, currency: "EUR" },
       ]),
@@ -80,7 +83,7 @@ describe.skipIf(!url)("authenticated sandbox billing API", () => {
     };
     const billing = createBillingService({ pool: database.pool, provider });
     const app = new Hono().route("/api/v1", createV1Routes({ ...deps, billing }));
-    return { app, provider };
+    return { app, provider, billing };
   }
   it("requires a verified session even when disabled, and labels disabled sandbox status", async () => {
     const app = new Hono().route("/api/v1", createV1Routes(deps));
@@ -150,6 +153,25 @@ describe.skipIf(!url)("authenticated sandbox billing API", () => {
     const response = await app.request("/api/v1/billing/status", { headers });
     expect(response.status).toBe(503);
     expect(await response.text()).not.toContain("secret-upstream-token");
+  });
+  it("refuses a mixed billing environment before purchases or webhook acknowledgement", async () => {
+    await fixture().billing.initialize();
+    const { app, provider } = fixture("production");
+    const { headers } = await login();
+    const checkout = await app.request("/api/v1/billing/checkout", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ interval: "month" }),
+    });
+    expect(checkout.status).toBe(503);
+    const webhook = await app.request("/api/v1/billing/webhook", { method: "POST", body: "{}" });
+    expect(webhook.status).toBe(503);
+    expect(provider.plans).not.toHaveBeenCalled();
+    expect(provider.checkout).not.toHaveBeenCalled();
+    expect(provider.verify).not.toHaveBeenCalled();
+    expect(
+      (await database.pool.query("SELECT count(*) FROM billing_webhook_events")).rows[0].count,
+    ).toBe("0");
   });
   it("keeps webhook auth independent of user bearer tokens and only acknowledges durable acceptance", async () => {
     const { app, provider } = fixture();

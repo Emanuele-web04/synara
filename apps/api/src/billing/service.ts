@@ -1,5 +1,6 @@
-// Durable sandbox ledger. Payment state never changes device/host ownership or trust.
+// Durable billing ledger. Payment state never changes device/host ownership or trust.
 import type {
+  AccountBillingEnvironment,
   AccountBillingInterval,
   AccountBillingStatus,
   AccountBillingRedirect,
@@ -49,10 +50,14 @@ type Row = {
   deleted_at: Date | null;
 };
 
-function serialize(row: Row, plans: AccountBillingStatus["plans"]): AccountBillingStatus {
+function serialize(
+  row: Row,
+  plans: AccountBillingStatus["plans"],
+  environment: AccountBillingEnvironment,
+): AccountBillingStatus {
   return {
     provider: "polar",
-    environment: "sandbox",
+    environment,
     available: true,
     access: row.access_granted ? "granted" : "none",
     subscriptionStatus: row.subscription_status,
@@ -67,10 +72,36 @@ function serialize(row: Row, plans: AccountBillingStatus["plans"]): AccountBilli
 
 export function createBillingService(options: { pool: pg.Pool; provider: BillingProvider }) {
   const { pool, provider } = options;
+  let initialization: Promise<void> | undefined;
+  function initialize(): Promise<void> {
+    if (!initialization) {
+      initialization = (async () => {
+        // Pre-existing commercial rows were created before production was supported.
+        // The singleton claim is atomic even when two environments start together.
+        await pool.query(
+          `INSERT INTO billing_environment(id,environment)
+          SELECT 1,CASE WHEN EXISTS(SELECT 1 FROM billing_accounts)
+            OR EXISTS(SELECT 1 FROM billing_webhook_events) THEN 'sandbox' ELSE $1 END
+          ON CONFLICT(id) DO NOTHING`,
+          [provider.environment],
+        );
+        const { rows } = await pool.query<{ environment: AccountBillingEnvironment }>(
+          "SELECT environment FROM billing_environment WHERE id=1",
+        );
+        if (rows[0]?.environment !== provider.environment)
+          throw new BillingError(503, "Billing is unavailable for this configuration");
+      })().catch((error) => {
+        initialization = undefined;
+        throw error;
+      });
+    }
+    return initialization;
+  }
   async function withAccount<T>(
     userId: string,
     action: (client: pg.PoolClient, row: Row) => Promise<T>,
   ) {
+    await initialize();
     const client = await pool.connect();
     try {
       await client.query("BEGIN");
@@ -105,10 +136,12 @@ export function createBillingService(options: { pool: pg.Pool; provider: Billing
       userId,
       existing.rows[0]!.product_ids,
     );
+    // The lease evaluator and its successful check use the same API clock.
+    const checkedAt = new Date();
     const { rows } = await client.query<Row>(
       `UPDATE billing_accounts SET customer_id=$2,
       access_granted=$3, subscription_status=$4, valid_until=$5, cancel_at_period_end=$6,
-      has_subscription=$7, checked_at=now(), product_ids=$8::jsonb,
+      has_subscription=$7, checked_at=$10, product_ids=$8::jsonb,
       checkout_id=CASE WHEN $9 THEN NULL ELSE checkout_id END,
       checkout_attempt_id=CASE WHEN $9 THEN NULL ELSE checkout_attempt_id END,
       checkout_product_id=CASE WHEN $9 THEN NULL ELSE checkout_product_id END,
@@ -132,6 +165,7 @@ export function createBillingService(options: { pool: pg.Pool; provider: Billing
             attempt.attemptId === existing.rows[0]!.checkout_attempt_id &&
             attempt.productId === existing.rows[0]!.checkout_product_id,
         ) ?? false,
+        checkedAt,
       ],
     );
     if (!rows[0]) throw new BillingError(409, "This account is being deleted");
@@ -141,11 +175,40 @@ export function createBillingService(options: { pool: pg.Pool; provider: Billing
     if (row.deleted_at) throw new BillingError(409, "This account is being deleted");
   }
   return {
+    initialize,
     async status(userId: string): Promise<AccountBillingStatus> {
+      await initialize();
       const plans = await provider.plans();
       return withAccount(userId, async (client, row) => {
         assertAvailable(row);
-        return serialize(await reconcile(client, userId), plans);
+        return serialize(await reconcile(client, userId), plans, provider.environment);
+      });
+    },
+    async access(
+      userId: string,
+    ): Promise<Pick<AccountBillingStatus, "available" | "access" | "checkedAt" | "validUntil">> {
+      return withAccount(userId, async (client, row) => {
+        assertAvailable(row);
+        const now = Date.now();
+        const age = row.checked_at ? now - row.checked_at.getTime() : Infinity;
+        let current = row;
+        let reusable =
+          age >= 0 && age <= 30_000 && (!row.valid_until || row.valid_until.getTime() > now);
+        if (reusable) {
+          const pending = await client.query(
+            "SELECT 1 FROM billing_webhook_events WHERE user_id=$1 AND handled_at IS NULL LIMIT 1",
+            [userId],
+          );
+          reusable = pending.rows.length === 0;
+        }
+        // A failed refresh cannot extend an old authorization lease.
+        if (!reusable) current = await reconcile(client, userId);
+        return {
+          available: true,
+          access: current.access_granted ? "granted" : "none",
+          checkedAt: current.checked_at?.toISOString() ?? null,
+          validUntil: current.valid_until?.toISOString() ?? null,
+        };
       });
     },
     async checkout(
@@ -154,18 +217,16 @@ export function createBillingService(options: { pool: pg.Pool; provider: Billing
       interval: AccountBillingInterval,
       ip?: string,
     ): Promise<AccountBillingRedirect> {
+      await initialize();
       await provider.plans();
       const prepared = await withAccount(userId, async (client, row) => {
         assertAvailable(row);
         const current = await reconcile(client, userId);
         if (current.has_subscription || current.access_granted)
-          throw new BillingError(409, "Manage your existing sandbox subscription instead");
+          throw new BillingError(409, "Manage your existing subscription instead");
         if (current.checkout_attempt_id) {
           if (!current.checkout_interval || !current.checkout_product_id)
-            throw new BillingError(
-              409,
-              "A sandbox checkout for another plan is still being verified",
-            );
+            throw new BillingError(409, "A checkout for another plan is still being verified");
           const found = await provider.recoverCheckout(
             userId,
             current.checkout_attempt_id,
@@ -175,21 +236,18 @@ export function createBillingService(options: { pool: pg.Pool; provider: Billing
           if (!found)
             throw new BillingError(
               409,
-              "Your earlier sandbox checkout is still being verified. Try again later; do not start another purchase",
+              "Your earlier checkout is still being verified. Try again later; do not start another purchase",
             );
           if (found.status === "succeeded")
             throw new BillingError(
               409,
-              "Your sandbox payment is being synchronized. Refresh the subscription status",
+              "Your payment is being synchronized. Refresh the subscription status",
             );
           if (found.status === "open" || found.status === "confirmed") {
             if (current.checkout_interval !== interval)
-              throw new BillingError(
-                409,
-                "A sandbox checkout for another plan is still being verified",
-              );
+              throw new BillingError(409, "A checkout for another plan is still being verified");
             if (found.status === "open" && new Date(found.expiresAt) <= new Date())
-              throw new BillingError(409, "Your earlier sandbox checkout is still being verified");
+              throw new BillingError(409, "Your earlier checkout is still being verified");
             await client.query(
               "UPDATE billing_accounts SET checkout_id=$2,checkout_url=$3,checkout_expires_at=$4 WHERE user_id=$1 AND checkout_attempt_id=$5",
               [userId, found.checkoutId, found.url, found.expiresAt, current.checkout_attempt_id],
@@ -198,11 +256,11 @@ export function createBillingService(options: { pool: pg.Pool; provider: Billing
           }
           // Only a fresh, known terminal vendor state authorizes a new POST.
           if (found.status !== "failed" && found.status !== "expired")
-            throw new BillingError(409, "Your earlier sandbox checkout is still being verified");
+            throw new BillingError(409, "Your earlier checkout is still being verified");
         } else if (current.checkout_url) {
           throw new BillingError(
             409,
-            "An earlier sandbox checkout requires verification before another purchase",
+            "An earlier checkout requires verification before another purchase",
           );
         }
         // Failed read-only preparation must not leave an uncertain POST fence.
@@ -221,7 +279,8 @@ export function createBillingService(options: { pool: pg.Pool; provider: Billing
         );
         return { kind: "new" as const, attemptId };
       });
-      if (prepared.kind === "existing") return { url: prepared.url, environment: "sandbox" };
+      if (prepared.kind === "existing")
+        return { url: prepared.url, environment: provider.environment };
       // The fence above is already committed. Timeout or a failed local write
       // cannot roll it back and authorize a duplicate vendor POST on retry.
       let checkout: BillingCheckout;
@@ -239,18 +298,18 @@ export function createBillingService(options: { pool: pg.Pool; provider: Billing
         });
         throw new BillingError(
           400,
-          "The sandbox checkout could not validate your account details. Check your account information before trying again",
+          "The checkout could not validate your account details. Check your account information before trying again",
         );
       }
       return withAccount(userId, async (client, row) => {
         assertAvailable(row);
         if (row.checkout_attempt_id !== prepared.attemptId)
-          throw new BillingError(409, "Sandbox billing changed. Refresh the subscription status");
+          throw new BillingError(409, "Billing changed. Refresh the subscription status");
         await client.query(
           "UPDATE billing_accounts SET checkout_url=$2,checkout_expires_at=$3,checkout_id=$5 WHERE user_id=$1 AND checkout_attempt_id=$4",
           [userId, checkout.url, checkout.expiresAt, prepared.attemptId, checkout.checkoutId],
         );
-        return { url: checkout.url, environment: "sandbox" };
+        return { url: checkout.url, environment: provider.environment };
       });
     },
     async portal(userId: string): Promise<AccountBillingRedirect> {
@@ -258,11 +317,12 @@ export function createBillingService(options: { pool: pg.Pool; provider: Billing
         assertAvailable(row);
         const current = await reconcile(client, userId);
         if (!current.customer_id)
-          throw new BillingError(409, "No sandbox billing customer exists for this account");
-        return { url: await provider.portal(userId), environment: "sandbox" };
+          throw new BillingError(409, "No billing customer exists for this account");
+        return { url: await provider.portal(userId), environment: provider.environment };
       });
     },
     async webhook(body: string, headers: Record<string, string>) {
+      await initialize();
       let event: Awaited<ReturnType<BillingProvider["verify"]>>;
       try {
         event = await provider.verify(body, headers);
@@ -286,6 +346,7 @@ export function createBillingService(options: { pool: pg.Pool; provider: Billing
       );
     },
     async flush() {
+      await initialize();
       const { rows } = await pool.query<{ user_id: string }>(
         "SELECT DISTINCT user_id FROM billing_webhook_events WHERE handled_at IS NULL AND next_attempt_at <= now() LIMIT 10",
       );
@@ -309,7 +370,7 @@ export function createBillingService(options: { pool: pg.Pool; provider: Billing
             "UPDATE billing_webhook_events SET next_attempt_at=now()+interval '1 minute' WHERE user_id=$1 AND handled_at IS NULL",
             [userId],
           );
-          console.warn("[api] Sandbox billing reconciliation remains queued");
+          console.warn("[api] Billing reconciliation remains queued");
         }
       }
       await pool.query(
@@ -319,6 +380,38 @@ export function createBillingService(options: { pool: pg.Pool; provider: Billing
     async cleanupDeletedAccount(userId: string) {
       await withAccount(userId, async (client, row) => {
         if (!row.deleted_at) throw new BillingError(409, "Account erasure was not requested");
+        if (row.checkout_attempt_id) {
+          if (!row.checkout_product_id)
+            throw new BillingError(
+              409,
+              "An earlier checkout is awaiting verification before erasure",
+            );
+          const checkout = await provider.recoverCheckout(
+            userId,
+            row.checkout_attempt_id,
+            row.checkout_product_id,
+            row.checkout_id ?? undefined,
+          );
+          if (checkout?.status !== "failed" && checkout?.status !== "expired") {
+            const state = await provider.state(userId, row.product_ids);
+            if (
+              !state?.settledCheckoutAttempts.some(
+                (attempt) =>
+                  attempt.attemptId === row.checkout_attempt_id &&
+                  attempt.productId === row.checkout_product_id,
+              )
+            )
+              throw new BillingError(
+                409,
+                "An earlier checkout is awaiting verification before erasure",
+              );
+          }
+        } else if (row.checkout_url) {
+          throw new BillingError(
+            409,
+            "An earlier checkout is awaiting verification before erasure",
+          );
+        }
         await provider.cancelRenewals(userId, row.product_ids);
         await client.query(
           "UPDATE billing_accounts SET customer_id=NULL, access_granted=false, subscription_status=NULL, valid_until=NULL, cancel_at_period_end=false, has_subscription=false, checked_at=NULL,checkout_id=NULL,checkout_url=NULL,checkout_interval=NULL,checkout_expires_at=NULL,checkout_attempt_id=NULL,checkout_product_id=NULL WHERE user_id=$1",

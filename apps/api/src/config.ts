@@ -1,3 +1,4 @@
+import type { AccountBillingEnvironment } from "@synara/contracts";
 import { resolveTrustedProxyHops } from "./clientIp";
 import { createPrivateKey, randomBytes } from "node:crypto";
 import { parseWorkosIdentityMap, type WorkosIdentityMap } from "./identity/workosIdentityMap";
@@ -90,9 +91,18 @@ export function loadApnsConfig(env: Env): ApnsConfig | undefined {
   };
 }
 
-/** Explicitly sandbox-only. No production credential or hostname can be selected. */
+/** Billing remains off by default; live execution needs a separate explicit opt-in. */
 export type PolarBillingConfig = {
-  environment: "sandbox";
+  environment: AccountBillingEnvironment;
+  productionPaymentsEnabled?: boolean;
+  /** Exact operator-owned HTTPS return origins; required in production. */
+  returnOrigins?: readonly string[];
+  expectedCatalog?: {
+    currency: string;
+    monthlyAmountMinor: number;
+    yearlyAmountMinor: number;
+    taxBehavior: "exclusive";
+  };
   accessToken: string;
   webhookSecret: string;
   organizationId: string;
@@ -103,13 +113,107 @@ export type PolarBillingConfig = {
   portalReturnUrl: string;
 };
 
+function polarReturnOrigins(values: readonly string[]): string[] {
+  return [
+    ...new Set(
+      values.map((value) => {
+        let url: URL;
+        try {
+          url = new URL(value);
+        } catch {
+          throw new ApiConfigError("POLAR_RETURN_ORIGINS must contain exact HTTPS origins");
+        }
+        if (
+          url.protocol !== "https:" ||
+          url.username ||
+          url.password ||
+          url.port ||
+          url.pathname !== "/" ||
+          url.search ||
+          url.hash
+        )
+          throw new ApiConfigError(
+            "POLAR_RETURN_ORIGINS must contain exact HTTPS origins without credentials, non-default ports, paths, queries or fragments",
+          );
+        return url.origin;
+      }),
+    ),
+  ];
+}
+
+function polarReturnUrl(
+  value: string,
+  name: string,
+  config: Pick<PolarBillingConfig, "environment" | "returnOrigins">,
+): string {
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new ApiConfigError(`${name} must be an absolute URL`);
+  }
+  const sandboxLoopback =
+    config.environment === "sandbox" &&
+    url.protocol === "http:" &&
+    ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname);
+  if (url.username || url.password || url.hash || (url.protocol !== "https:" && !sandboxLoopback))
+    throw new ApiConfigError(
+      `${name} must be HTTPS or sandbox HTTP loopback without credentials or fragment`,
+    );
+  if (
+    config.environment === "production" &&
+    !polarReturnOrigins(config.returnOrigins ?? []).includes(url.origin)
+  )
+    throw new ApiConfigError(`${name} must use an exact origin from POLAR_RETURN_ORIGINS`);
+  return url.href;
+}
+
+/** Rechecked by the provider factory so hand-built configs cannot activate live billing. */
+export function assertPolarBillingConfig(config: PolarBillingConfig): void {
+  if (config.environment !== "sandbox" && config.environment !== "production")
+    throw new ApiConfigError("POLAR_ENVIRONMENT must be sandbox or production");
+  if (config.environment === "production" && config.productionPaymentsEnabled !== true)
+    throw new ApiConfigError(
+      "Production Polar billing requires POLAR_PRODUCTION_PAYMENTS_ENABLED=true",
+    );
+  if (
+    config.environment === "production" &&
+    polarReturnOrigins(config.returnOrigins ?? []).length === 0
+  )
+    throw new ApiConfigError("Production Polar billing requires POLAR_RETURN_ORIGINS");
+  const catalog = config.expectedCatalog;
+  if (config.environment === "production" && !catalog)
+    throw new ApiConfigError(
+      "Production Polar billing requires the POLAR_EXPECTED_* catalog settings",
+    );
+  if (
+    catalog &&
+    (!/^[A-Z]{3}$/.test(catalog.currency) ||
+      !Number.isSafeInteger(catalog.monthlyAmountMinor) ||
+      catalog.monthlyAmountMinor <= 0 ||
+      !Number.isSafeInteger(catalog.yearlyAmountMinor) ||
+      catalog.yearlyAmountMinor <= 0 ||
+      catalog.taxBehavior !== "exclusive")
+  )
+    throw new ApiConfigError("Invalid POLAR_EXPECTED_* catalog settings");
+  polarReturnUrl(config.checkoutSuccessUrl, "POLAR_CHECKOUT_SUCCESS_URL", config);
+  polarReturnUrl(config.portalReturnUrl, "POLAR_PORTAL_RETURN_URL", config);
+}
+
 export function loadPolarBillingConfig(env: Env): PolarBillingConfig | undefined {
   if (env.POLAR_BILLING_ENABLED === undefined || env.POLAR_BILLING_ENABLED === "false")
     return undefined;
   if (env.POLAR_BILLING_ENABLED !== "true")
     throw new ApiConfigError("POLAR_BILLING_ENABLED must be true or false");
-  if (env.POLAR_ENVIRONMENT !== "sandbox")
-    throw new ApiConfigError("Only POLAR_ENVIRONMENT=sandbox is supported");
+  if (env.POLAR_ENVIRONMENT !== "sandbox" && env.POLAR_ENVIRONMENT !== "production")
+    throw new ApiConfigError("POLAR_ENVIRONMENT must be sandbox or production");
+  const liveEnabled = env.POLAR_PRODUCTION_PAYMENTS_ENABLED;
+  if (liveEnabled !== undefined && liveEnabled !== "true" && liveEnabled !== "false")
+    throw new ApiConfigError("POLAR_PRODUCTION_PAYMENTS_ENABLED must be true or false");
+  if (env.POLAR_ENVIRONMENT === "production" && liveEnabled !== "true")
+    throw new ApiConfigError(
+      "Production Polar billing requires POLAR_PRODUCTION_PAYMENTS_ENABLED=true",
+    );
   const names = [
     "POLAR_ACCESS_TOKEN",
     "POLAR_WEBHOOK_SECRET",
@@ -132,40 +236,70 @@ export function loadPolarBillingConfig(env: Env): PolarBillingConfig | undefined
   }
   if (env.POLAR_MONTHLY_PRODUCT_ID === env.POLAR_YEARLY_PRODUCT_ID)
     throw new ApiConfigError("Polar monthly and yearly products must differ");
-  const safeReturnUrl = (name: "POLAR_CHECKOUT_SUCCESS_URL" | "POLAR_PORTAL_RETURN_URL") => {
-    let url: URL;
-    try {
-      url = new URL(env[name]!);
-    } catch {
-      throw new ApiConfigError(`${name} must be an absolute URL`);
-    }
-    if (
-      url.username ||
-      url.password ||
-      url.hash ||
-      (url.protocol !== "https:" &&
-        !(url.protocol === "http:" && ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname)))
-    )
-      throw new ApiConfigError(
-        `${name} must be HTTPS or HTTP loopback without credentials or fragment`,
-      );
-    return url.href;
+  const catalogNames = [
+    "POLAR_EXPECTED_CURRENCY",
+    "POLAR_EXPECTED_MONTHLY_AMOUNT_MINOR",
+    "POLAR_EXPECTED_YEARLY_AMOUNT_MINOR",
+    "POLAR_EXPECTED_TAX_BEHAVIOR",
+  ] as const;
+  const hasCatalog = catalogNames.some((name) => env[name] !== undefined);
+  if (hasCatalog || env.POLAR_ENVIRONMENT === "production") requireVars(env, catalogNames);
+  const amountMinor = (
+    name: "POLAR_EXPECTED_MONTHLY_AMOUNT_MINOR" | "POLAR_EXPECTED_YEARLY_AMOUNT_MINOR",
+  ) => {
+    const value = env[name]!;
+    const amount = Number(value);
+    if (!/^[1-9][0-9]*$/.test(value) || !Number.isSafeInteger(amount))
+      throw new ApiConfigError(`${name} must be a positive integer in minor currency units`);
+    return amount;
   };
-  return {
-    environment: "sandbox",
+  const config: PolarBillingConfig = {
+    environment: env.POLAR_ENVIRONMENT,
+    ...(liveEnabled === "true" ? { productionPaymentsEnabled: true } : {}),
+    ...(env.POLAR_RETURN_ORIGINS !== undefined
+      ? {
+          returnOrigins: polarReturnOrigins(
+            env.POLAR_RETURN_ORIGINS.split(",")
+              .map((origin) => origin.trim())
+              .filter(Boolean),
+          ),
+        }
+      : {}),
+    ...(hasCatalog
+      ? {
+          expectedCatalog: {
+            currency: env.POLAR_EXPECTED_CURRENCY!,
+            monthlyAmountMinor: amountMinor("POLAR_EXPECTED_MONTHLY_AMOUNT_MINOR"),
+            yearlyAmountMinor: amountMinor("POLAR_EXPECTED_YEARLY_AMOUNT_MINOR"),
+            taxBehavior: env.POLAR_EXPECTED_TAX_BEHAVIOR as "exclusive",
+          },
+        }
+      : {}),
     accessToken: env.POLAR_ACCESS_TOKEN!,
     webhookSecret: env.POLAR_WEBHOOK_SECRET!,
     organizationId: env.POLAR_ORGANIZATION_ID!,
     monthlyProductId: env.POLAR_MONTHLY_PRODUCT_ID!,
     yearlyProductId: env.POLAR_YEARLY_PRODUCT_ID!,
     desktopBenefitId: env.POLAR_DESKTOP_BENEFIT_ID!,
-    checkoutSuccessUrl: safeReturnUrl("POLAR_CHECKOUT_SUCCESS_URL"),
-    portalReturnUrl: safeReturnUrl("POLAR_PORTAL_RETURN_URL"),
+    checkoutSuccessUrl: env.POLAR_CHECKOUT_SUCCESS_URL!,
+    portalReturnUrl: env.POLAR_PORTAL_RETURN_URL!,
+  };
+  assertPolarBillingConfig(config);
+  return {
+    ...config,
+    checkoutSuccessUrl: polarReturnUrl(
+      config.checkoutSuccessUrl,
+      "POLAR_CHECKOUT_SUCCESS_URL",
+      config,
+    ),
+    portalReturnUrl: polarReturnUrl(config.portalReturnUrl, "POLAR_PORTAL_RETURN_URL", config),
   };
 }
 
 export type ApiConfigBase = {
   polarBilling?: PolarBillingConfig;
+  /** Paid Remote access is opt-in and takes precedence over open-beta enrollment. */
+  remoteBillingEnforced?: boolean;
   apns?: ApnsConfig;
   cloudflareTunnel?: CloudflareTunnelConfig;
   /** Explicit test enrollment only; this is not a paid-subscription entitlement. */
@@ -416,6 +550,12 @@ export function loadApiConfig(env: Env): ApiConfig {
   const profileProxySecret = env.PROFILE_PROXY_SECRET?.trim() || undefined;
   const avatarStorage = loadAvatarStorageConfig(env);
   const polarBilling = loadPolarBillingConfig(env);
+  const remoteBilling = env.POLAR_REMOTE_ACCESS_ENFORCED;
+  if (remoteBilling !== undefined && remoteBilling !== "true" && remoteBilling !== "false")
+    throw new ApiConfigError("POLAR_REMOTE_ACCESS_ENFORCED must be true or false");
+  const remoteBillingEnforced = remoteBilling === "true";
+  if (remoteBillingEnforced && !polarBilling)
+    throw new ApiConfigError("POLAR_REMOTE_ACCESS_ENFORCED requires configured Polar billing");
   const apns = loadApnsConfig(env);
   const cloudflareTunnel = loadCloudflareTunnelConfig(env);
   const remoteTestUserIds = env.REMOTE_TEST_USER_IDS?.split(",")
@@ -432,7 +572,8 @@ export function loadApiConfig(env: Env): ApiConfig {
     requireVars(env, REQUIRED_DEV_VARS);
     const configuredSigningKey = signingSeed(env, "API_SIGNING_KEY");
     const apiSigningKeyPrevious = signingSeed(env, "API_SIGNING_KEY_PREVIOUS");
-    const apiSigningKey = configuredSigningKey ?? randomBytes(32).toString("base64url");
+    const apiSigningKey =
+      configuredSigningKey ?? Buffer.from(randomBytes(32)).toString("base64url");
     if (!configuredSigningKey) {
       console.warn("[api] API_SIGNING_KEY is unset in dev mode; using an ephemeral signing key");
     }
@@ -441,6 +582,7 @@ export function loadApiConfig(env: Env): ApiConfig {
       ...(cloudflareTunnel ? { cloudflareTunnel } : {}),
       ...(remoteTestUserIds ? { remoteTestUserIds } : {}),
       remoteBetaAccessEnabled,
+      remoteBillingEnforced,
       databaseUrl: env.DATABASE_URL as string,
       baseUrl: env.ACCOUNT_BASE_URL as string,
       apiPublicUrl: (env.API_PUBLIC_URL as string).replace(/\/+$/, ""),
@@ -471,6 +613,7 @@ export function loadApiConfig(env: Env): ApiConfig {
     ...(cloudflareTunnel ? { cloudflareTunnel } : {}),
     ...(remoteTestUserIds ? { remoteTestUserIds } : {}),
     remoteBetaAccessEnabled,
+    remoteBillingEnforced,
     databaseUrl: env.DATABASE_URL as string,
     baseUrl: env.ACCOUNT_BASE_URL as string,
     apiPublicUrl: (env.API_PUBLIC_URL as string).replace(/\/+$/, ""),

@@ -1,8 +1,18 @@
+import http from "node:http";
+import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { Effect, Layer } from "effect";
+import { HttpRouter } from "effect/unstable/http";
 import { describe, expect, it } from "vitest";
 
-import { ServerConfig } from "../../config";
+import { ServerConfig, type ServerConfigShape } from "../../config";
+import {
+  RemoteSessionRegistry,
+  RemoteSessionRegistryService,
+} from "../../remoteSessions/sessionRegistry";
+import { SessionCredentialService } from "../Services/SessionCredentialService";
+import { authEffectRouteLayer, projectFaviconEffectRouteLayer } from "../../http";
+import { ProjectFaviconResolver } from "../../project/Services/ProjectFaviconResolver";
 import { SqlitePersistenceMemory } from "../../persistence/Layers/Sqlite";
 import { AuthControlPlaneLive } from "./AuthControlPlane";
 import { BootstrapCredentialServiceLive } from "./BootstrapCredentialService";
@@ -21,20 +31,29 @@ const authControlPlaneLayer = AuthControlPlaneLive.pipe(
   Layer.provide(BootstrapCredentialServiceLive),
   Layer.provide(sessionCredentialLayer),
 );
-const testLayer = ServerAuthLive.pipe(
-  Layer.provide(ServerAuthPolicyLive),
-  Layer.provide(BootstrapCredentialServiceLive),
-  Layer.provide(sessionCredentialLayer),
-  Layer.provide(authControlPlaneLayer),
-  Layer.provide(SqlitePersistenceMemory),
-  Layer.provide(ServerSecretStoreLive),
-  Layer.provide(
-    ServerConfig.layerTest(process.cwd(), {
-      prefix: "synara-auth-server-test-",
-    }),
-  ),
-  Layer.provide(NodeServices.layer),
-);
+const makeTestLayer = (
+  remoteSessions: RemoteSessionRegistry,
+  config: Partial<ServerConfigShape> = {},
+) =>
+  ServerAuthLive.pipe(
+    Layer.provide(ServerAuthPolicyLive),
+    Layer.provide(BootstrapCredentialServiceLive),
+    Layer.provideMerge(sessionCredentialLayer),
+    Layer.provide(authControlPlaneLayer),
+    Layer.provideMerge(Layer.succeed(RemoteSessionRegistryService, remoteSessions)),
+    Layer.provide(SqlitePersistenceMemory),
+    Layer.provide(ServerSecretStoreLive),
+    Layer.provideMerge(
+      ServerConfig.layerTest(
+        process.cwd(),
+        {
+          prefix: "synara-auth-server-test-",
+        },
+        config,
+      ),
+    ),
+    Layer.provide(NodeServices.layer),
+  );
 
 const requestMetadata = {
   deviceType: "desktop" as const,
@@ -43,19 +62,275 @@ const requestMetadata = {
   ipAddress: "192.168.1.23",
 };
 
-function makeCookieRequest(sessionToken: string): AuthRequest {
+function makeCookieRequest(sessionToken: string, cookieName = "synara_session"): AuthRequest {
   return {
     headers: {},
     cookies: {
-      synara_session: sessionToken,
+      [cookieName]: sessionToken,
     },
   };
 }
 
-const runServerAuthTest = (effect: Effect.Effect<void, AuthError, ServerAuth>) =>
-  effect.pipe(Effect.provide(testLayer), Effect.scoped, Effect.runPromise);
+const runServerAuthTest = <E>(
+  effect: Effect.Effect<
+    void,
+    E,
+    ServerAuth | SessionCredentialService | RemoteSessionRegistryService | ServerConfig
+  >,
+  options: { remoteSessions?: RemoteSessionRegistry; config?: Partial<ServerConfigShape> } = {},
+) =>
+  effect.pipe(
+    Effect.provide(
+      makeTestLayer(options.remoteSessions ?? new RemoteSessionRegistry(), options.config),
+    ),
+    Effect.scoped,
+    Effect.runPromise,
+  );
 
 describe("ServerAuthLive", () => {
+  it.each(["remote", null] as const)(
+    "gates verified %s credentials across HTTP and websocket admission",
+    async (accessOrigin) => {
+      const remoteSessions = new RemoteSessionRegistry();
+      remoteSessions.setRemoteBillingEnforced(true);
+      let admitted = false;
+      remoteSessions.registerAdmissionGuard({ available: () => admitted });
+      await runServerAuthTest(
+        Effect.gen(function* () {
+          const serverAuth = yield* ServerAuth;
+          const sessions = yield* SessionCredentialService;
+          const identity = {
+            role: "owner" as const,
+            subject: "owner-bootstrap",
+            accessOrigin,
+            client: { ...requestMetadata, ipAddress: "127.0.0.1" },
+          };
+          const cookie = yield* sessions.issue({ ...identity, method: "browser-session-cookie" });
+          const bearer = yield* sessions.issue({ ...identity, method: "bearer-session-token" });
+          const bearerRequest = {
+            headers: { authorization: `Bearer ${bearer.token}` },
+            cookies: {},
+          };
+          const ticket = yield* sessions.issueWebSocketToken(cookie.sessionId);
+          for (const authentication of [
+            serverAuth.authenticateHttpRequest(makeCookieRequest(cookie.token)),
+            serverAuth.authenticateHttpRequest(bearerRequest),
+            serverAuth.authenticateWebSocketUpgrade(bearerRequest),
+            serverAuth.authenticateWebSocketUpgrade({
+              headers: {},
+              cookies: {},
+              url: new URL(`ws://127.0.0.1/?wsToken=${ticket.token}`),
+            }),
+          ]) {
+            expect((yield* authentication.pipe(Effect.flip, Effect.orDie)).status).toBe(503);
+          }
+          expect(
+            (yield* serverAuth
+              .authenticateHttpRequest({
+                headers: { authorization: "Bearer invalid" },
+                cookies: {},
+              })
+              .pipe(Effect.flip, Effect.orDie)).status,
+          ).toBe(401);
+
+          admitted = true;
+          expect(
+            (yield* serverAuth.authenticateHttpRequest(makeCookieRequest(cookie.token))).sessionId,
+          ).toBe(cookie.sessionId);
+          expect((yield* serverAuth.authenticateHttpRequest(bearerRequest)).sessionId).toBe(
+            bearer.sessionId,
+          );
+          expect((yield* serverAuth.authenticateWebSocketUpgrade(bearerRequest)).accessOrigin).toBe(
+            accessOrigin,
+          );
+          const freshTicket = yield* sessions.issueWebSocketToken(cookie.sessionId);
+          expect(
+            (yield* serverAuth.authenticateWebSocketUpgrade({
+              headers: {},
+              cookies: {},
+              url: new URL(`ws://127.0.0.1/?wsToken=${freshTicket.token}`),
+            })).sessionId,
+          ).toBe(cookie.sessionId);
+
+          admitted = false;
+          expect(
+            (yield* serverAuth
+              .authenticateHttpRequest(bearerRequest)
+              .pipe(Effect.flip, Effect.orDie)).status,
+          ).toBe(503);
+          remoteSessions.setRemoteBillingEnforced(false);
+          expect((yield* serverAuth.authenticateHttpRequest(bearerRequest)).sessionId).toBe(
+            bearer.sessionId,
+          );
+        }),
+        { remoteSessions },
+      );
+    },
+  );
+
+  it("mints positive local cookie and bearer sessions only from the private desktop startup secret", async () => {
+    const remoteSessions = new RemoteSessionRegistry();
+    remoteSessions.setRemoteBillingEnforced(true);
+    await runServerAuthTest(
+      Effect.gen(function* () {
+        const serverAuth = yield* ServerAuth;
+        const sessions = yield* SessionCredentialService;
+        const cookie = yield* serverAuth.exchangeBootstrapCredential(
+          "private-desktop-startup-secret",
+          requestMetadata,
+        );
+        const bearer = yield* serverAuth.exchangeBootstrapCredentialForBearerSession(
+          "private-desktop-startup-secret",
+          requestMetadata,
+        );
+        const cookieSession = yield* serverAuth.authenticateHttpRequest(
+          makeCookieRequest(cookie.sessionToken, sessions.cookieName),
+        );
+        expect(cookieSession.accessOrigin).toBe("local");
+        expect(cookieSession.subject).toBe("desktop-bootstrap");
+        const bearerRequest = {
+          headers: { authorization: `Bearer ${bearer.sessionToken}` },
+          cookies: {},
+        };
+        expect((yield* serverAuth.authenticateHttpRequest(bearerRequest)).accessOrigin).toBe(
+          "local",
+        );
+        expect((yield* serverAuth.authenticateWebSocketUpgrade(bearerRequest)).accessOrigin).toBe(
+          "local",
+        );
+        const ticket = yield* serverAuth.issueWebSocketToken(cookieSession);
+        expect(
+          (yield* serverAuth.authenticateWebSocketUpgrade({
+            headers: {},
+            cookies: {},
+            url: new URL(`ws://127.0.0.1/?wsToken=${ticket.token}`),
+          })).accessOrigin,
+        ).toBe("local");
+
+        const pairing = yield* serverAuth.issuePairingCredential({ role: "owner" });
+        const paired = yield* serverAuth.exchangeBootstrapCredentialForBearerSession(
+          pairing.credential,
+          { ...requestMetadata, ipAddress: "127.0.0.1" },
+        );
+        expect((yield* sessions.verify(paired.sessionToken)).accessOrigin).toBe("remote");
+        expect(
+          (yield* serverAuth
+            .authenticateHttpRequest({
+              headers: { authorization: `Bearer ${paired.sessionToken}` },
+              cookies: {},
+            })
+            .pipe(Effect.flip, Effect.orDie)).status,
+        ).toBe(503);
+      }),
+      {
+        remoteSessions,
+        config: { mode: "desktop", host: "127.0.0.1", authToken: "private-desktop-startup-secret" },
+      },
+    );
+  });
+
+  it("preserves real HTTP identity while paid lease changes gate resources and local bootstrap stays free", async () => {
+    const remoteSessions = new RemoteSessionRegistry();
+    remoteSessions.setRemoteBillingEnforced(true);
+    let leaseExpiresAt = 0;
+    remoteSessions.registerAdmissionGuard({ available: () => Date.now() < leaseExpiresAt });
+    await runServerAuthTest(
+      Effect.gen(function* () {
+        const serverAuth = yield* ServerAuth;
+        const sessions = yield* SessionCredentialService;
+        const config = yield* ServerConfig;
+        const unknown = yield* sessions.issue({
+          method: "bearer-session-token",
+          role: "owner",
+          accessOrigin: null,
+        });
+        const local = yield* serverAuth.exchangeBootstrapCredentialForBearerSession(
+          "private-desktop-startup-secret",
+          requestMetadata,
+        );
+        const server = yield* NodeHttpServer.make(() => http.createServer(), {
+          port: 0,
+          host: "127.0.0.1",
+        });
+        const app = yield* HttpRouter.toHttpEffect(
+          Layer.mergeAll(authEffectRouteLayer, projectFaviconEffectRouteLayer),
+        );
+        yield* server.serve(app);
+        if (server.address._tag !== "TcpAddress")
+          throw new Error("Expected a loopback HTTP listener");
+        const url = `http://127.0.0.1:${server.address.port}/api/project-favicon?cwd=${encodeURIComponent(config.cwd)}`;
+        const getResource = (token: string, target = url) =>
+          Effect.promise(async () => {
+            const response = await fetch(target, { headers: { authorization: `Bearer ${token}` } });
+            return {
+              status: response.status,
+              contentType: response.headers.get("content-type"),
+              body: await response.text(),
+            };
+          });
+        const sessionUrl = new URL("/api/auth/session", url).href;
+        const identity = yield* getResource(unknown.token, sessionUrl);
+        expect(identity.status).toBe(200);
+        expect(JSON.parse(identity.body)).toMatchObject({ authenticated: true, role: "owner" });
+        expect(JSON.parse((yield* getResource("invalid", sessionUrl)).body)).toMatchObject({
+          authenticated: false,
+        });
+        expect((yield* getResource(unknown.token)).status).toBe(503);
+        leaseExpiresAt = Date.now() + 60_000;
+        const admitted = yield* getResource(unknown.token);
+        expect(admitted.status).toBe(200);
+        expect(admitted.contentType).toContain("image/svg+xml");
+        leaseExpiresAt = Date.now() - 1;
+        expect((yield* getResource(unknown.token)).status).toBe(503);
+        expect(JSON.parse((yield* getResource(unknown.token, sessionUrl)).body)).toMatchObject({
+          authenticated: true,
+        });
+        expect((yield* getResource(local.sessionToken)).status).toBe(200);
+      }).pipe(
+        Effect.provideService(ProjectFaviconResolver, { resolvePath: () => Effect.succeed(null) }),
+        Effect.provide(NodeHttpServer.layerHttpServices),
+        Effect.scoped,
+      ),
+      {
+        remoteSessions,
+        config: { mode: "desktop", host: "127.0.0.1", authToken: "private-desktop-startup-secret" },
+      },
+    );
+  });
+
+  it.each([
+    { mode: "web" as const, host: "127.0.0.1" },
+    { mode: "desktop" as const, host: "0.0.0.0" },
+    {
+      mode: "desktop" as const,
+      host: "127.0.0.1",
+      publicUrl: new URL("https://remote.example.test"),
+    },
+  ])(
+    "does not turn the startup token into local bootstrap authority for $mode at $host",
+    async (config) => {
+      await runServerAuthTest(
+        Effect.gen(function* () {
+          const serverAuth = yield* ServerAuth;
+          for (const exchange of [
+            serverAuth
+              .exchangeBootstrapCredential("private-desktop-startup-secret", requestMetadata)
+              .pipe(Effect.asVoid),
+            serverAuth
+              .exchangeBootstrapCredentialForBearerSession(
+                "private-desktop-startup-secret",
+                requestMetadata,
+              )
+              .pipe(Effect.asVoid),
+          ]) {
+            expect((yield* exchange.pipe(Effect.flip, Effect.orDie)).status).toBe(401);
+          }
+        }),
+        { config: { ...config, authToken: "private-desktop-startup-secret" } },
+      );
+    },
+  );
+
   it("maps invalid bootstrap credential failures to 401", () => {
     const error = toBootstrapExchangeAuthError(
       new BootstrapCredentialError({
@@ -97,6 +372,7 @@ describe("ServerAuthLive", () => {
 
         expect(verified.sessionId.length).toBeGreaterThan(0);
         expect(verified.role).toBe("client");
+        expect(verified.accessOrigin).toBe("remote");
         expect(verified.subject).toBe("one-time-token");
       }),
     );
@@ -126,6 +402,7 @@ describe("ServerAuthLive", () => {
 
         expect(verified.role).toBe("owner");
         expect(verified.subject).toBe("owner-bootstrap");
+        expect(verified.accessOrigin).toBe("remote");
       }),
     );
   });
@@ -279,6 +556,7 @@ describe("ServerAuthLive", () => {
     await runServerAuthTest(
       Effect.gen(function* () {
         const serverAuth = yield* ServerAuth;
+        const remoteSessions = yield* RemoteSessionRegistryService;
         const pairing = yield* serverAuth.issuePairingCredential({ role: "client" });
         const token = pairing.credential;
         const exchanged = yield* serverAuth.exchangeBootstrapCredential(token, requestMetadata);
@@ -295,6 +573,7 @@ describe("ServerAuthLive", () => {
             url: new URL(`http://127.0.0.1/ws?wsToken=${encodeURIComponent(ticket.token)}`),
           },
           serverAuth,
+          remoteSessions,
         });
         expect(authenticated?.role).toBe("client");
         expect(authenticated?.sessionId).toBe(client.sessionId);
@@ -306,6 +585,7 @@ describe("ServerAuthLive", () => {
     await runServerAuthTest(
       Effect.gen(function* () {
         const serverAuth = yield* ServerAuth;
+        const remoteSessions = yield* RemoteSessionRegistryService;
         const config = {
           host: "0.0.0.0",
           authToken: "remote-startup-secret",
@@ -321,6 +601,7 @@ describe("ServerAuthLive", () => {
             url: new URL("ws://192.168.1.50:3773/ws?token=remote-startup-secret"),
           },
           serverAuth,
+          remoteSessions,
         }).pipe(Effect.flip, Effect.orDie);
         expect(legacyError.status).toBe(401);
 
@@ -339,6 +620,7 @@ describe("ServerAuthLive", () => {
             url: new URL("ws://192.168.1.50:3773/ws?token=remote-startup-secret"),
           },
           serverAuth,
+          remoteSessions,
         });
 
         expect(upgraded?.role).toBe("owner");

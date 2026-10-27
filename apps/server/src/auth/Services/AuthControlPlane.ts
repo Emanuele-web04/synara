@@ -8,7 +8,7 @@ import type {
   RemoteTrustScope,
 } from "@synara/contracts";
 import { Data, DateTime, Duration, Effect, ServiceMap } from "effect";
-import type { SessionRole } from "./SessionCredentialService";
+import type { AuthAccessOrigin, SessionRole } from "./SessionCredentialService";
 
 export const DEFAULT_SESSION_SUBJECT = "cli-issued-session";
 
@@ -79,6 +79,7 @@ export interface AuthControlPlaneShape {
     readonly label?: string;
     readonly role?: SessionRole;
     readonly subject?: string;
+    readonly accessOrigin?: AuthAccessOrigin | null;
   }) => Effect.Effect<IssuedPairingLink, AuthControlPlaneError>;
   readonly listPairingLinks: (input?: {
     readonly role?: SessionRole;

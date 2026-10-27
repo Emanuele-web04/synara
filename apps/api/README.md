@@ -3,13 +3,16 @@
 The Synara account service: WorkOS AuthKit for identity, plus account/host
 routes under `/api/v1`.
 
-It is a **self-hosting-first, opt-in** component. Synara works fully without it;
-nothing in this app runs unless you deploy an instance and point a server at it.
+It is a **self-hosting-first, opt-in** component. Local desktop use works without
+it; account features and managed Remote use need a configured deployment. The
+account API itself runs only where an operator starts or deploys it.
 
 ## Off by default, and no secrets in this repo
 
-- **No instance runs unless you start one.** No telemetry endpoint is baked
-  into the code, and nothing contacts an account service on its own.
+- **No account API instance runs unless an operator starts one.** Execution
+  hosts with Remote available, or with strict remote-policy checking enabled,
+  perform bounded public deployment-policy reads described below. Those reads
+  establish authorization policy; they do not sign in a user or send diagnostics.
 - **With `IDENTITY_PROVIDER=workos` (the default), `WORKOS_API_KEY` and
   `WORKOS_CLIENT_ID` are required**; the dev provider needs neither and refuses
   to coexist with a real key.
@@ -18,60 +21,194 @@ nothing in this app runs unless you deploy an instance and point a server at it.
   `synara auth --account-url`) names one. Unset, `synara status` prints
   "account features are not configured" and the CLI never opens a socket to
   anything. Sign-in itself is app-only.
-- **The in-app flow defaults to the hosted service.** Signing in from the app's
-  UI is an explicit opt-in by the person clicking the button, so it falls back
-  to `DEFAULT_ACCOUNT_URL` (`packages/shared/src/account.ts`) when the variable
-  is unset. Nothing happens until that button is pressed. Point it elsewhere
-  with the same `SYNARA_ACCOUNT_URL`.
+- **Identity login starts when the person chooses to sign in.** The app can
+  fall back to the hosted account service in `packages/shared/src/account.ts`;
+  set `SYNARA_ACCOUNT_URL` explicitly for an operator-managed deployment. Public
+  Remote policy checks can precede login and remain independent of that login.
 - **No credentials are committed.** Every secret is read from the environment at
   boot (see `src/config.ts`). `apps/api/.env` is gitignored; `.env.example`
   carries names and comments only, never values. Host and device tokens live on
   the operator's machine under `<synara home>/account-credentials.json` at mode
   `0600`, never in the repository.
 
-## Polar desktop subscription sandbox
+## Polar / Synara Pro Remote subscriptions
 
-Billing is an optional sandbox integration, not a change to existing access.
-It never authorizes hosts, revokes paired devices, deletes chat history, or
-enables purchases in the iPhone/iPad companion. Both the backend and desktop
-controls are off by default. Live payments are deliberately unsupported.
+Billing supports isolated sandbox and production environments and is **off by
+default**. Production payments require a separate explicit interlock. This code
+change does not activate production billing or paid remote-access enforcement.
+The sandbox campaign configured for qualification is recorded below.
 
-1. Use a dedicated [Polar sandbox](https://sandbox.polar.sh) organization and
-   an isolated account API database. Sandbox and production credentials are
-   separate; never test with real payment details or production account data.
-   Use deliverable test aliases of a mailbox you control: Polar checks email DNS
-   even in sandbox, so reserved `example.com` fixtures are rejected.
+| Product decision  | Configuration                                                                                                               |
+| ----------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| Local use         | Free; local coding, local chats and local workspace access do not require Pro.                                              |
+| Synara Pro        | All Remote functionality requires Pro; local desktop use stays free, with ownership and device approval checked separately. |
+| Monthly           | USD 7.99, recurring monthly (`799` minor units).                                                                            |
+| Annual            | USD 84.99, recurring annually (`8499` minor units).                                                                         |
+| Tax               | Exclusive: applicable tax is added at checkout.                                                                             |
+| Introductory code | 50% off the first monthly payment only; no annual discount or permanent reduced renewal price.                              |
+
+The iPhone/iPad app remains a free companion, with no in-app purchase flow here.
+A subscription never authorizes a host or device by itself, revokes a pairing,
+or deletes chat history. `POLAR_REMOTE_ACCESS_ENFORCED` is a separate, strict
+boolean and defaults to `false`; enabling it requires configured billing and
+applies the paid-access check to remote operations. Keep it off during this
+preparation. Billing refusals must remain distinct from ownership refusals such
+as `not_host_owner`. With paid enforcement off, the existing beta/test-user
+rollout controls remote admission. With it on, the commercial gate takes
+precedence: neither beta access nor a test-user allowlist bypasses the paid
+check. Ownership, organization membership and device approval still apply.
+
+### Execution-host policy and manual paid rollout
+
+Pro covers all official Remote ingress, including managed tunnels, LAN/Tailscale,
+SSH forwarding, HTTP/file access, WebSocket sessions and remote UI frames. A
+local-network address, a browser cookie, a legacy pairing or an untagged session
+is not an exemption. Free local desktop admission requires positive local proof:
+the current private startup capability on a loopback-bound desktop process with
+no public URL. Keep that capability private; an IP address or owner role alone
+does not establish a local session. Account access, computer lists, saved history,
+billing management, export and revocation/cleanup remain available without Pro.
+
+The execution host reads the account API's public `GET /api/v1/instance` policy
+with `no-store`, independently of login. Its persistent hint is scoped to that
+exact account authority and survives logout and host unlink. A policy for a
+different authority cannot clear a known paid policy. Policy discovery never
+proves that the current user has paid; a fresh authenticated authorization lease
+must establish that separately.
+
+| Setting                                 | Runs on               | Default and rollout use                                                                                                                                                                            |
+| --------------------------------------- | --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `SYNARA_ACCOUNT_URL`                    | Remote execution host | Set explicitly to the canonical account API origin for the actual Remote deployment. Match the intended account/host authority; do not copy a trial URL or infer it from a generic UI fallback.    |
+| `SYNARA_REMOTE_BILLING_POLICY_REQUIRED` | Remote execution host | `false` during current preparation. Set to `true` only as part of the approved manual paid rollout. It requires fresh policy proof before admitting unverified Remote sessions, even before login. |
+| `POLAR_REMOTE_ACCESS_ENFORCED`          | Account API           | `false` now. The future paid rollout sets it to `true` with configured billing; beta/test enrollment cannot override it.                                                                           |
+| `POLAR_PRODUCTION_PAYMENTS_ENABLED`     | Account API           | `false` now. Production billing separately requires explicit `true`, production credentials, expected catalog and approved return origins.                                                         |
+
+With strict host policy enabled, an unknown policy or first-read outage holds
+Remote closed while positive local desktop use remains available. A verified
+OFF policy lasts at most 60 seconds; an outage, an older response without the
+field, clock rollback, logout or unlink cannot refresh it. Once ON is known,
+logout/unlink is not an escape from enforcement. Only a previously verified
+positive paid lease can retain its bounded outage grace. An OFF/unknown lease
+is paused immediately on an unverified paid cutover, and an explicit
+`subscription_required` response pauses Remote without revoking device trust.
+
+Before a manual paid rollout, verify the exact build against the chosen account
+API authority: known ON survives actual logout, unlink and restart; a held old
+OFF reply cannot undo newer authenticated ON evidence; OFF/unknown-to-paid
+cutover cannot reuse a free lease; expired paid leases pause Remote and fresh
+paid proof restores the same credential. Check LAN/SSH, bearer/cookie/ticket,
+HTTP/files, WebSocket/frame paths, and that positive local desktop use and
+account/export/cleanup stay available. Keep all enforcement flags off until this
+rollout is deliberately approved. This documentation changes no runtime setting.
+
+### Configure an isolated environment
+
+1. Use separate Polar organizations, credentials, webhook secrets and account
+   PostgreSQL databases for sandbox and production. Use the
+   [Polar sandbox](https://sandbox.polar.sh) for qualification, test payment
+   details and deliverable aliases of a mailbox you control; Polar rejects
+   reserved `example.com` fixtures. Never connect sandbox tests to a production
+   account database.
 2. Create monthly and annual subscription products with one fixed price each,
-   recurring once per month/year. Attach the same Feature Flag benefit to
-   both. The API reads prices from Polar; clients never choose an amount,
-   product ID, customer ID or return destination.
-3. Supply the `POLAR_*` variables listed in `.env.example` through a protected
+   recurring once per month/year. Attach the same Feature Flag benefit to both.
+   Configure each price explicitly as tax-exclusive rather than inheriting
+   location-based tax behavior, and do not configure a trial for these paid
+   products. Polar's [tax behavior documentation](https://polar.sh/docs/features/tax-inclusive-pricing)
+   describes the difference. The API reads catalog prices; clients never choose
+   an amount, product, customer or return destination.
+3. Supply the `POLAR_*` variables in `.env.example` through a protected
    operator-managed file outside the repository. Set `POLAR_BILLING_ENABLED=true`
-   and `POLAR_ENVIRONMENT=sandbox`; any live environment is rejected at startup.
-   The token needs only `products:read`, `customers:read`, `subscriptions:read`,
-   `subscriptions:write`, `checkouts:read`, `checkouts:write`, and
-   `customer_sessions:write`. Renewal cancellation needs subscription write;
-   refunds, organization administration and production access are unnecessary.
-4. Register `customer.state_changed` on `POST /api/v1/billing/webhook` using
-   the sandbox webhook secret. Expose only that receiver when testing through
-   a temporary public forwarding service; do not expose the local development
-   identity provider or the rest of the account API.
-5. Enable the desktop panel with `VITE_SYNARA_BILLING_SANDBOX=1` in an isolated
-   build. Sign in there to the test account, open Settings → Profile →
-   Subscription, and use test checkout. Returning from checkout is not proof
-   of payment: refreshing reads the authoritative customer state.
+   and choose `POLAR_ENVIRONMENT=sandbox` or `production` explicitly. Production
+   additionally requires `POLAR_PRODUCTION_PAYMENTS_ENABLED=true` and all four
+   expected-catalog values: `POLAR_EXPECTED_CURRENCY=USD`,
+   `POLAR_EXPECTED_MONTHLY_AMOUNT_MINOR=799`,
+   `POLAR_EXPECTED_YEARLY_AMOUNT_MINOR=8499` and
+   `POLAR_EXPECTED_TAX_BEHAVIOR=exclusive`. The same complete expected-catalog
+   set is optional in sandbox. Catalog validation rejects mismatches; updating
+   a dashboard price is not permission to charge another amount.
+4. Production requires a nonempty `POLAR_RETURN_ORIGINS` comma-separated list
+   of exact operator-controlled HTTPS origins. Entries contain no credentials,
+   non-default ports, paths, query strings or fragments. Both
+   `POLAR_CHECKOUT_SUCCESS_URL` and `POLAR_PORTAL_RETURN_URL` must use an origin
+   from that list. Sandbox additionally permits HTTP loopback return URLs on
+   `localhost`, `127.0.0.1` or `[::1]`, including isolated development ports.
+   Return URLs cannot contain credentials or fragments. The API and desktop
+   reject cross-environment vendor redirects: sandbox uses
+   `https://sandbox.polar.sh`, production uses `https://polar.sh`.
+5. The runtime token needs only `products:read`, `customers:read`,
+   `subscriptions:read`, `subscriptions:write`, `checkouts:read`,
+   `checkouts:write` and `customer_sessions:write`. Renewal cancellation needs
+   subscription write. Campaign administration and refunds stay outside the
+   runtime token; do not add discount/refund write scopes to it.
+6. Enable the desktop panel separately with `VITE_SYNARA_BILLING_ENABLED=1`.
+   The legacy `VITE_SYNARA_BILLING_SANDBOX=1` flag is retained as an alias for
+   panel visibility only. Neither build flag selects the billing environment
+   or enables backend billing. Sign in to the intended account and open
+   Settings → Profile → Subscription. Returning from checkout is not proof of
+   payment; refreshing reads authoritative customer state.
+
+The additive `billing_environment` singleton binds the database to one provider
+environment. Existing billing-account or webhook rows are stamped as sandbox;
+an empty database atomically claims its first configured environment. Startup
+initialization rejects a mismatch before vendor operations. Use a separate
+production database; never clear or edit the stamp, commercial rows or checkout
+fences to repurpose sandbox state. Back up the database and protected operator
+configuration together, and preserve that pairing across restarts and restores.
+
+### Monthly introductory campaign
+
+The sandbox campaign `SYNARABETA50QA` was configured and exercised with a new
+sandbox customer: 50%, Once, restricted to `Synara Desktop — Sandbox Monthly`,
+with one redemption per customer. The first discounted payment succeeded with
+`399` USD minor units before tax, `88` tax and `487` total (USD 3.99 + 0.88 = 4.87),
+and the shared feature benefit was granted. The annual checkout rejected this
+campaign code. The checkout displayed the following full monthly price, but an
+actual post-discount renewal has **not** yet been tested. No production campaign
+is activated. Create any production counterpart separately; IDs and redemption
+history do not transfer between environments.
+
+| Polar campaign field             | Required value                                                                                        |
+| -------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| Type                             | Percentage (`percentage`).                                                                            |
+| Percentage                       | 50% (`basis_points: 5000`).                                                                           |
+| Duration                         | Once (`once`), not repeating or forever.                                                              |
+| Products                         | Only that environment's monthly product ID; never the annual product or an unrestricted product list. |
+| Code                             | `SYNARABETA50QA` in sandbox only; select a separate production campaign deliberately.                 |
+| Maximum redemptions per customer | `1`.                                                                                                  |
+
+Polar supports one-time recurring discounts and product restrictions; see
+[discounts](https://polar.sh/docs/features/discounts) and the
+[discount API](https://polar.sh/docs/api-reference/discounts/update). Monthly
+checkout allows the customer to enter a code on Polar's hosted page; annual
+checkout disallows codes. The [checkout API](https://polar.sh/docs/api-reference/checkouts/create-session)
+provides `allow_discount_codes`; Synara does not accept client-selected discount
+IDs or override the amount. No additional promo-code field is needed in Settings.
+
+`once` limits the discount to one invoice. The per-customer redemption limit
+limits repeat use, but does not establish an absolute lifetime-first-purchase
+rule: Polar documents that a full refund frees that customer's redemption slot.
+Do not promise stronger eligibility than has been implemented and qualified.
+The first sandbox charge above verifies the observed rounding and itemized tax
+for that checkout. Still qualify the actual full-price following renewal,
+repeat-customer eligibility and invalid/expired-code refusals; a displayed
+renewal price is not a paid renewal. Do not generalize the first-charge evidence
+to those remaining cases.
+
+### Durable checkout and access state
 
 The verified account user ID becomes Polar's immutable external customer ID.
 No browser-supplied email or arbitrary ID can select another customer's plan.
 Status and redirect responses are private and uncached; desktop operations are
 owner-only and fenced against account changes. The account PostgreSQL database
-stores an additive billing ledger and a durable webhook inbox with default-deny
+stores an additive billing ledger and durable webhook inbox with default-deny
 RLS, separate from analytics and device trust. Webhooks are validated over the
 original request body and acknowledged after durable storage; duplicate or late
 events reconcile fresh Polar state instead of replaying an old entitlement.
 A separate, non-overlapping billing worker drains pending events every 30
 seconds; explicit status reads reconcile immediately. Provider outages leave
-events retryable without holding up normal host/tunnel housekeeping.
+events retryable without holding up normal host/tunnel housekeeping. Remote
+access checks use a bounded 30-second cache, bypass pending webhook work and
+expired access leases, and do not convert provider failures into stale grants.
 
 Checkout creation commits a durable attempt ID and chosen product before sending
 Polar a POST. A timeout is **uncertain**, not proof that no checkout was created.
@@ -98,30 +235,86 @@ from a checkout URL never grants access.
 
 Access follows granted benefits, including any configured payment-recovery
 grace period, rather than assuming every non-active subscription is revoked.
-Cancel-at-period-end preserves the remaining paid period. A refund and ending
-an ongoing subscription are separate operations in Polar; test both explicitly.
-For real sandbox renewal qualification, the public subscription update accepts a
-future `current_billing_period_end` for an existing isolated test subscription.
-Keep its account, product and price unchanged, and confirm a paid
-`subscription_cycle` order as well as the new period and reconciled access.
-A period advancing alone does not prove payment: Polar may defer creating the
-renewal order while its invoicing grace window runs. Restore cancellation after
-the test and verify the resulting state rather than assuming cleanup succeeded.
-Issue sandbox refunds from the merchant dashboard; the runtime token deliberately
-has no refund permissions. Verify refund-only and subscription termination
-separately, including their effect on the granted feature benefit and access.
+Cancel-at-period-end preserves the remaining paid period. Refund and subscription
+termination are separate operations; verify both and their effects on benefits.
 Account deletion records an access tombstone immediately and retries stopping
-sandbox renewals before deleting the external identity. A payment failure must
-never be represented as `not_host_owner` or a lost device pairing.
+renewals before deleting the external identity. An uncertain started purchase
+also remains fenced during erasure until its outcome can be reconciled; an
+empty provider search is insufficient proof that payment cannot still complete.
 
-Before live enablement, qualify real sandbox checkout for both intervals,
-renewal/payment recovery, cancellation, refunds and chargebacks; duplicate and
-late webhooks; downtime/recovery; account switching; and account erasure while
-payment work is outstanding. Review webhook monitoring, bounded maintenance
-latency, commercial terms, privacy disclosures and mobile distribution rules.
-The free companion design is not a claim of an Apple payment exemption.
-No production token, merchant onboarding, payout configuration or paid rollout
-is activated by this implementation.
+### Receiver, monitoring and restart runbook
+
+- Deploy `POST /api/v1/billing/webhook` on a stable HTTPS receiver under an
+  operator-controlled hostname. No particular Synara domain is required. Register
+  `customer.state_changed` in Polar using the Raw delivery format and the matching
+  environment's signing secret. Use the final destination URL without redirects;
+  preserve the original request body and signature headers through the proxy.
+  [Polar webhook setup](https://polar.sh/docs/integrate/webhooks/endpoints)
+  describes endpoint registration. A temporary development forwarder is suitable
+  for an isolated test, not a substitute for the persistent receiver. Expose only
+  that receiver when forwarding locally, never the dev identity provider.
+- Run the account API as a supervised process against its persistent database.
+  `bun run --cwd apps/api start` runs migrations before serving and starts the
+  billing worker immediately. Configure the supervisor to restart after failure
+  and preserve the same environment, organization, database and secret file.
+  Graceful shutdown waits for in-flight billing maintenance. After restart,
+  verify API readiness, pending-inbox progress and a fresh test-account status;
+  do not declare recovery solely because the process exists.
+- Cloudflare Container deployments forward Polar settings through an explicit
+  allowlist. The Worker keeps only a private hash of the effective runtime
+  configuration; a changed or unknown warm process must stop gracefully and
+  become ready with the new configuration before requests are forwarded.
+  Handover/startup failures return retryable 503 without exposing bindings.
+  Verify the intended Worker, container image and loaded policy together;
+  deployment success alone is not proof that the paid rollout is active.
+- Monitor receiver availability and latency, signature refusals, Polar delivery
+  failures, worker reconciliation warnings and the count/age of inbox rows with
+  `handled_at IS NULL`. Alert on sustained failures or a growing/aged queue;
+  the 30-second interval is not a guaranteed maximum reconciliation latency.
+  Log event IDs and bounded operational outcomes, never tokens, checkout links,
+  raw payment bodies, customer emails or account content.
+- Use Polar's delivery dashboard to investigate and retry failed deliveries.
+  [Polar delivery guidance](https://polar.sh/docs/integrate/webhooks/delivery)
+  documents retries, request timeouts and automatic endpoint disabling after
+  repeated failures. Repair reachability/signature configuration before manually
+  re-enabling a disabled endpoint. Let the durable inbox and fresh provider state
+  handle duplicates; do not mark pending rows handled or clear purchase fences
+  as an operational shortcut.
+- For a database restore, restore the matching environment's protected config,
+  keep customer traffic disabled until migrations and the environment stamp pass,
+  then reconcile pending deliveries and affected accounts before reopening it.
+  A deliberate maintenance pause must have an operator decision for remote-access
+  availability; silently bypassing the paid gate is not a recovery mechanism.
+
+### Sandbox qualification and production launch state
+
+| Case                                | Required evidence before launch                                                                                                                                                                          |
+| ----------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Monthly and annual purchase         | Paid sandbox order, correct USD catalog price, tax-exclusive itemization, shared feature benefit and reconciled account access.                                                                          |
+| Introductory monthly code           | First sandbox charge `399 + 88 = 487`, benefit grant and annual-code rejection verified. Actual full-price renewal after the discount and remaining eligibility cases still need qualification.          |
+| Renewal and payment recovery        | Paid `subscription_cycle` order plus advanced period and reconciled access; test the configured grace behavior. A period advancing alone does not prove payment.                                         |
+| Cancellation, refund and chargeback | Remaining paid access for period-end cancellation; separately verify refund-only and subscription termination, benefit changes and eventual remote denial.                                               |
+| Webhook delivery                    | Real signed automatic event reaches the stable receiver; duplicate, delayed and out-of-order events converge; invalid signatures are refused.                                                            |
+| Restart and provider downtime       | Persisted uncertain checkout resumes without another POST; inbox survives restart and drains after recovery; stale permission is not granted on provider failure.                                        |
+| Identity and erasure                | Account switching never opens another account's billing; deletion during an uncertain checkout cannot leave a renewable purchase behind.                                                                 |
+| Product boundary                    | All official Remote ingress requires Pro at paid rollout; positive local desktop use, account/history/export/cleanup remain free. Verify persistent authority policy, logout/unlink and old-OFF cutover. |
+
+For sandbox renewal qualification, Polar's public subscription update accepts a
+future `current_billing_period_end` for an existing isolated test subscription.
+Keep its account, product and price unchanged, then require the paid renewal
+order as well as the new period. Polar may defer invoicing while its grace
+window runs. Restore cancellation afterward and verify the resulting state.
+Issue refunds from the sandbox merchant dashboard; the runtime token has no
+refund permissions. Record failed or pending cases instead of treating local
+unit tests or historic sandbox receipts as production qualification.
+
+Production activation remains pending the deployed receiver and monitoring,
+merchant onboarding, qualification of the chosen products/campaign, and approved
+commercial terms, refund/cancellation policy, support contact and privacy
+disclosures. Remote enforcement remains off during preparation. The free
+companion design is not a claim of an Apple payment exemption. This change
+does not provision production credentials, payouts, a real payment or a paid
+rollout.
 
 ## Identity: WorkOS AuthKit behind an adapter seam
 

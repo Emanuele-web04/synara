@@ -66,6 +66,7 @@ export function createLiveActivityService(options: {
   send: (delivery: ActivityDelivery) => Promise<ApnsResult>;
   sendNotification?: (delivery: NotificationDelivery) => Promise<ApnsResult>;
   isMember: (userId: string, orgId: string) => Promise<boolean>;
+  isRemoteAccessAllowed?: (userId: string) => Promise<boolean>;
 }) {
   const { pool } = options;
   async function transaction<T>(run: (db: pg.PoolClient) => Promise<T>) {
@@ -344,6 +345,25 @@ export function createLiveActivityService(options: {
       }
       const now = Math.floor(Date.now() / 1000);
       const expired = activity.expires_at.getTime() <= Date.now();
+      // Billing pauses delivery without revoking a device or extending its watch.
+      // Ownership and key-generation checks above still retire revoked access.
+      if (options.isRemoteAccessAllowed) {
+        let allowed = false;
+        try {
+          allowed = await options.isRemoteAccessAllowed(activity.user_id);
+        } catch {
+          // Commercial outages must not send with a stale entitlement.
+        }
+        if (!allowed) {
+          if (expired) await stop();
+          else
+            await db.query(
+              "UPDATE live_activities SET next_attempt_at=now()+interval '30 seconds' WHERE id=$1",
+              [id],
+            );
+          return;
+        }
+      }
       if (activity.delivery_kind === "notification") {
         // Missing/offline reports are never invented completions. Keep the
         // one-shot watch durable while the phone is suspended, up to its TTL.

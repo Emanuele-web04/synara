@@ -1,12 +1,16 @@
 // Polar protocol stays here; callers receive only account-scoped commercial facts.
 import { createPolar, errors, webhooks, type models } from "@polar-sh/sdk/2026-10";
-import type { AccountBillingInterval, AccountBillingStatus } from "@synara/contracts";
-import type { PolarBillingConfig } from "../config";
+import type {
+  AccountBillingEnvironment,
+  AccountBillingInterval,
+  AccountBillingStatus,
+} from "@synara/contracts";
+import { assertPolarBillingConfig, type PolarBillingConfig } from "../config";
 
 // Only a documented checkout-request validation refusal proves no session was created.
 export class BillingCheckoutNotCreatedError extends Error {
   constructor() {
-    super("Polar rejected the sandbox checkout details before creation");
+    super("Polar rejected the checkout details before creation");
     this.name = "BillingCheckoutNotCreatedError";
   }
 }
@@ -29,6 +33,7 @@ export type BillingCheckout = {
   status: "open" | "expired" | "confirmed" | "succeeded" | "failed";
 };
 export type BillingProvider = {
+  readonly environment: AccountBillingEnvironment;
   plans(): Promise<AccountBillingStatus["plans"]>;
   state(userId: string, knownProductIds?: readonly string[]): Promise<BillingSnapshot | null>;
   productId(interval: AccountBillingInterval): string;
@@ -54,17 +59,20 @@ export type BillingProvider = {
   ): Promise<{ eventId: string; userId?: string; customerId?: string } | null>;
 };
 
-const safeUrl = (value: string) => {
+const safeUrl = (value: string, environment: AccountBillingEnvironment) => {
   const url = new URL(value);
-  if (url.origin !== "https://sandbox.polar.sh" || url.username || url.password)
-    throw new Error("Unexpected Polar sandbox URL");
+  const expectedOrigin =
+    environment === "sandbox" ? "https://sandbox.polar.sh" : "https://polar.sh";
+  if (url.origin !== expectedOrigin || url.username || url.password)
+    throw new Error("Unexpected Polar billing URL");
   return url.href;
 };
 
 export function createPolarBillingProvider(config: PolarBillingConfig): BillingProvider {
+  assertPolarBillingConfig(config);
   const polar = createPolar({
     accessToken: config.accessToken,
-    environment: "sandbox",
+    environment: config.environment,
     organizationId: config.organizationId,
     timeout: 10,
   });
@@ -153,7 +161,7 @@ export function createPolarBillingProvider(config: PolarBillingConfig): BillingP
       throw new Error("Unknown Polar checkout state");
     return {
       checkoutId: checkout.id,
-      url: safeUrl(checkout.url),
+      url: safeUrl(checkout.url, config.environment),
       expiresAt: checkout.expires_at,
       productId: expectedProductId,
       status: checkout.status,
@@ -161,6 +169,7 @@ export function createPolarBillingProvider(config: PolarBillingConfig): BillingP
   }
   const currentStates = new Set(["active", "trialing", "past_due", "incomplete", "paused"]);
   return {
+    environment: config.environment,
     async plans() {
       return Promise.all(
         (["month", "year"] as const).map(async (interval) => {
@@ -176,7 +185,7 @@ export function createPolarBillingProvider(config: PolarBillingConfig): BillingP
                 benefit.id === config.desktopBenefitId && benefit.type === "feature_flag",
             )
           )
-            throw new Error("Polar sandbox catalog is not configured for this plan");
+            throw new Error("Polar catalog is not configured for this plan");
           const prices = product.prices.filter((price) => !price.is_archived);
           const price = prices[0];
           if (
@@ -187,7 +196,23 @@ export function createPolarBillingProvider(config: PolarBillingConfig): BillingP
             price.price_amount <= 0 ||
             !/^[a-z]{3}$/.test(price.price_currency)
           )
-            throw new Error("Polar sandbox plan requires one fixed catalog price");
+            throw new Error("Polar plan requires one fixed catalog price");
+          if (
+            config.environment === "production" &&
+            (product.trial_interval !== null || product.trial_interval_count !== null)
+          )
+            throw new Error("Production Polar catalog must not configure a trial");
+          const expected = config.expectedCatalog;
+          if (
+            expected &&
+            (price.price_currency.toUpperCase() !== expected.currency ||
+              price.price_amount !==
+                (interval === "month" ? expected.monthlyAmountMinor : expected.yearlyAmountMinor) ||
+              price.tax_behavior !== expected.taxBehavior)
+          )
+            throw new Error(
+              "Polar catalog does not match the expected price, currency or tax behavior",
+            );
           return {
             interval,
             amountMinor: price.price_amount,
@@ -257,7 +282,7 @@ export function createPolarBillingProvider(config: PolarBillingConfig): BillingP
           item.external_customer_id === userId &&
           (item.status === "open" || item.status === "confirmed"),
       );
-      if (pending) throw new Error("An earlier Polar sandbox checkout still requires verification");
+      if (pending) throw new Error("An earlier Polar checkout still requires verification");
       if (!candidates.complete) throw new Error("Polar checkout preflight scan is incomplete");
     },
     async checkout(userId, email, interval, attemptId, ip) {
@@ -271,7 +296,7 @@ export function createPolarBillingProvider(config: PolarBillingConfig): BillingP
           ...(ip ? { customer_ip_address: ip } : {}),
           success_url: config.checkoutSuccessUrl,
           return_url: config.portalReturnUrl,
-          allow_discount_codes: false,
+          allow_discount_codes: interval === "month",
         });
       } catch (error) {
         if (error instanceof errors.HTTPValidationError && error.statusCode === 422)
@@ -285,7 +310,7 @@ export function createPolarBillingProvider(config: PolarBillingConfig): BillingP
         external_customer_id: userId,
         return_url: config.portalReturnUrl,
       });
-      return safeUrl(session.customer_portal_url);
+      return safeUrl(session.customer_portal_url, config.environment);
     },
     async cancelRenewals(userId, knownProductIds) {
       const customer = await customerState(userId);

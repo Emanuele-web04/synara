@@ -40,6 +40,7 @@ export function startRemoteAuthorization(options: {
   let permanentlyDenied = false;
   let expired = true;
   let admitted = false;
+  let lastLeaseWasPaid = false;
   let lastFailure: string | undefined;
   let denial: { reason: string; since: number; count: number } | undefined;
   const available = () => !options.signal.aborted && !permanentlyDenied && now() < validUntil;
@@ -95,6 +96,7 @@ export function startRemoteAuthorization(options: {
             lastFailure = undefined;
             denial = undefined;
             validUntil = now() + REMOTE_AUTHORIZATION_LEASE_MS;
+            lastLeaseWasPaid = snapshot.remoteBillingEnforced === true;
             expired = false;
           }
         } catch (error) {
@@ -106,10 +108,25 @@ export function startRemoteAuthorization(options: {
             error.status === 403 &&
             error.code === "not_host_owner" &&
             error.message === "Remote test access is not enabled for this account";
-          if (enrollmentUnavailable) {
+          const subscriptionRequired =
+            error instanceof AccountApiError &&
+            error.status === 403 &&
+            error.code === "subscription_required";
+          const unverifiedPaidCutover =
+            error instanceof AccountApiError &&
+            error.status === 503 &&
+            error.code === "billing_unavailable" &&
+            !lastLeaseWasPaid;
+          if (enrollmentUnavailable || subscriptionRequired || unverifiedPaidCutover) {
             // Only an authenticated, linked host gets this far.
             denial = undefined;
-            failed("remote access is not enabled for this account");
+            failed(
+              subscriptionRequired
+                ? "the host owner's remote subscription is required"
+                : unverifiedPaidCutover
+                  ? "a paid remote authorization has not been confirmed"
+                  : "remote access is not enabled for this account",
+            );
             validUntil = 0;
             expired = true;
             await options.unavailable(false);
@@ -137,5 +154,5 @@ export function startRemoteAuthorization(options: {
     validUntil = 0;
     void options.unavailable(false).catch(() => {});
   });
-  return { available, done };
+  return { available, paidAvailable: () => lastLeaseWasPaid && available(), done };
 }

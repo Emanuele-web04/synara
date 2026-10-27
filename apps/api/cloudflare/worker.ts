@@ -1,10 +1,35 @@
 import { Container } from "@cloudflare/containers";
-import { timingSafeEqual } from "node:crypto";
+import { createHash, timingSafeEqual } from "node:crypto";
 import { isIP } from "node:net";
+
+// Only these billing bindings cross from Worker storage into the API process.
+// Their values are never returned by the public Worker or written to logs.
+const POLAR_BINDINGS = [
+  "POLAR_BILLING_ENABLED",
+  "POLAR_ENVIRONMENT",
+  "POLAR_PRODUCTION_PAYMENTS_ENABLED",
+  "POLAR_REMOTE_ACCESS_ENFORCED",
+  "POLAR_RETURN_ORIGINS",
+  "POLAR_ACCESS_TOKEN",
+  "POLAR_WEBHOOK_SECRET",
+  "POLAR_ORGANIZATION_ID",
+  "POLAR_MONTHLY_PRODUCT_ID",
+  "POLAR_YEARLY_PRODUCT_ID",
+  "POLAR_DESKTOP_BENEFIT_ID",
+  "POLAR_CHECKOUT_SUCCESS_URL",
+  "POLAR_PORTAL_RETURN_URL",
+  "POLAR_EXPECTED_CURRENCY",
+  "POLAR_EXPECTED_MONTHLY_AMOUNT_MINOR",
+  "POLAR_EXPECTED_YEARLY_AMOUNT_MINOR",
+  "POLAR_EXPECTED_TAX_BEHAVIOR",
+] as const;
+const RUNTIME_CONFIG_KEY = "account-api-runtime-config-sha256";
+const RUNTIME_STOP_TIMEOUT_MS = 15_000;
 
 // Optional API features use the same secret names as the existing Bun service.
 type OptionalSecrets = Partial<
   Record<
+    | (typeof POLAR_BINDINGS)[number]
     | "API_SIGNING_KEY_PREVIOUS"
     | "WORKOS_IDENTITY_MAP"
     | "PROFILE_PROXY_SECRET"
@@ -51,6 +76,13 @@ export class AccountApi extends Container<Cloudflare.Env & OptionalSecrets> {
     ACCOUNT_BASE_URL: this.env.ACCOUNT_BASE_URL,
     API_PUBLIC_URL: this.env.API_PUBLIC_URL,
     API_SIGNING_KEY: this.env.API_SIGNING_KEY,
+    POLAR_BILLING_ENABLED: this.env.POLAR_BILLING_ENABLED ?? "false",
+    POLAR_PRODUCTION_PAYMENTS_ENABLED: this.env.POLAR_PRODUCTION_PAYMENTS_ENABLED ?? "false",
+    POLAR_REMOTE_ACCESS_ENFORCED: this.env.POLAR_REMOTE_ACCESS_ENFORCED ?? "false",
+    ...Object.fromEntries(
+      // Empty configured values must reach the API's strict parser, not become defaults.
+      POLAR_BINDINGS.flatMap((key) => (this.env[key] !== undefined ? [[key, this.env[key]]] : [])),
+    ),
     ...Object.fromEntries(
       (
         [
@@ -91,6 +123,75 @@ export class AccountApi extends Container<Cloudflare.Env & OptionalSecrets> {
         }
       : {}),
   };
+
+  private runtimeConfiguration: Promise<void> | undefined;
+
+  private ensureRuntimeConfiguration(): Promise<void> {
+    if (!this.runtimeConfiguration) {
+      this.runtimeConfiguration = (async () => {
+        const fingerprint = createHash("sha256")
+          .update(
+            JSON.stringify(
+              Object.entries(this.envVars).sort(([left], [right]) =>
+                left < right ? -1 : left > right ? 1 : 0,
+              ),
+            ),
+          )
+          .digest("hex");
+        const previous = await this.ctx.storage.get<string>(RUNTIME_CONFIG_KEY);
+        if (previous === fingerprint) return;
+
+        // A warm container keeps its old process environment across Worker updates.
+        // Never forward admission to that process while its billing policy is unknown.
+        const container = this.ctx.container;
+        if (container?.running) {
+          let timeout: ReturnType<typeof setTimeout> | undefined;
+          try {
+            await Promise.race([
+              (async () => {
+                const stopped = container.monitor().catch(() => {});
+                await this.stop("SIGTERM");
+                await stopped;
+                if (container.running) throw new Error("API runtime configuration is not ready");
+              })(),
+              new Promise<never>((_, reject) => {
+                timeout = setTimeout(
+                  () => reject(new Error("API runtime configuration is not ready")),
+                  RUNTIME_STOP_TIMEOUT_MS,
+                );
+              }),
+            ]);
+          } finally {
+            clearTimeout(timeout);
+          }
+        }
+        // The existing SDK bounds startup and port readiness; persist only a ready process.
+        await this.startAndWaitForPorts();
+        await this.ctx.storage.put(RUNTIME_CONFIG_KEY, fingerprint);
+      })().catch((error) => {
+        this.runtimeConfiguration = undefined;
+        throw error;
+      });
+    }
+    return this.runtimeConfiguration;
+  }
+
+  override async fetch(request: Request): Promise<Response> {
+    await this.ensureRuntimeConfiguration();
+    // A matching stored config does not prove a process survived sleep or a crash.
+    // Use the SDK's throwing readiness path before its fetch can expose startup errors.
+    if (!this.ctx.container?.running) {
+      try {
+        await this.startAndWaitForPorts();
+      } catch (error) {
+        // Do not reuse a historical readiness claim after a failed restart.
+        this.runtimeConfiguration = undefined;
+        await this.ctx.storage.delete(RUNTIME_CONFIG_KEY);
+        throw error;
+      }
+    }
+    return super.fetch(request);
+  }
 }
 
 export default {
@@ -113,9 +214,19 @@ export default {
     if (ip && isIP(ip)) headers.set("x-forwarded-for", ip);
     try {
       // One instance preserves the API's existing process-local rate limits.
-      return await env.ACCOUNT_API.getByName("account-api").fetch(
+      const response = await env.ACCOUNT_API.getByName("account-api").fetch(
         new Request(request, { headers }),
       );
+      // The SDK can return raw transport/startup errors instead of throwing.
+      // Preserve application JSON errors, streams and WebSocket upgrades verbatim.
+      const contentType = response.headers
+        .get("content-type")
+        ?.split(";", 1)[0]
+        ?.trim()
+        .toLowerCase();
+      if ((response.status === 500 || response.status === 429) && contentType === "text/plain")
+        throw new Error("Account container transport is unavailable");
+      return response;
     } catch {
       // Startup failures can contain connection details; never log raw errors.
       console.error("[account-api] Container unavailable");

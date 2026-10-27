@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { accountStatusScope } from "./hosts/controlQueryScope";
 import {
   formatBillingPrice,
-  isPolarSandboxUrl,
+  isPolarBillingUrl,
   runAccountBillingOperation,
 } from "./accountBilling";
 
@@ -23,7 +23,7 @@ function signedIn(userId: string): AccountStatus {
   };
 }
 
-describe("sandbox account billing", () => {
+describe("account billing", () => {
   it("rejects a departed account before creating a checkout", async () => {
     account.status.mockResolvedValue(signedIn("user_b"));
     const checkout = vi.fn();
@@ -61,18 +61,26 @@ describe("sandbox account billing", () => {
     ).rejects.toThrow();
   });
 
-  it("accepts sandbox HTTPS only, including no credential or lookalike hosts", () => {
-    expect(isPolarSandboxUrl("https://sandbox.polar.sh/checkout/test")).toBe(true);
-    for (const url of [
-      "https://polar.sh/checkout/test",
-      "https://sandbox.polar.sh.evil.test/checkout",
-      "https://user@sandbox.polar.sh/test",
-      "http://sandbox.polar.sh/test",
-      "javascript:alert(1)",
-    ]) {
-      expect(isPolarSandboxUrl(url)).toBe(false);
-    }
-  });
+  it.each([
+    ["sandbox", "https://sandbox.polar.sh", "https://polar.sh"],
+    ["production", "https://polar.sh", "https://sandbox.polar.sh"],
+  ] as const)(
+    "accepts only the exact HTTPS vendor origin for %s",
+    (environment, origin, otherOrigin) => {
+      expect(isPolarBillingUrl(`${origin}/checkout/session`, environment)).toBe(true);
+      for (const url of [
+        `${otherOrigin}/checkout/session`,
+        `${origin}.evil.test/checkout`,
+        origin.replace("https://", "https://user:password@"),
+        `${origin}:444/checkout`,
+        origin.replace("https://", "http://"),
+        "javascript:alert(1)",
+        "not a URL",
+      ]) {
+        expect(isPolarBillingUrl(url, environment), url).toBe(false);
+      }
+    },
+  );
 
   it("uses currency minor units instead of assuming all currencies have cents", () => {
     expect(formatBillingPrice({ interval: "month", amountMinor: 1250, currency: "USD" })).toContain(

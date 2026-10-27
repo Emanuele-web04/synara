@@ -40,8 +40,10 @@ describe.skipIf(!TEST_DATABASE_URL)("createApp", () => {
 
     const res = await built.app.request("/api/v1/instance");
     expect(res.status).toBe(200);
-    const body = (await res.json()) as { version: string };
+    const body = (await res.json()) as { version: string; remoteBillingEnforced?: boolean };
     expect(body.version).toBeTruthy();
+    expect(body.remoteBillingEnforced).toBe(false);
+    expect(res.headers.get("cache-control")).toBe("no-store");
   });
 
   it("keeps housekeeping independent while configured sandbox billing is stalled", async () => {

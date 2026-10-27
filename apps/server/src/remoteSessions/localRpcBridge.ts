@@ -118,6 +118,7 @@ export async function bridgeRemoteSocketToLocalRpc(
         subject: peer.userId,
         method: "bearer-session-token",
         role: "client",
+        accessOrigin: "remote",
         client: { label: "Synara remote device", deviceType: "unknown" },
       }),
     );

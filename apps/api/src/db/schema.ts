@@ -10,6 +10,7 @@ import {
   bigint,
   bigserial,
   boolean,
+  check,
   index,
   integer,
   jsonb,
@@ -545,7 +546,20 @@ export const liveActivityHosts = pgTable("live_activity_hosts", {
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 }).enableRLS();
 
-// Commercial sandbox state never owns host/device trust or conversation data.
+// A database cannot share provider identifiers between test and real billing.
+export const billingEnvironment = pgTable(
+  "billing_environment",
+  {
+    id: integer("id").primaryKey().default(1),
+    environment: text("environment", { enum: ["sandbox", "production"] }).notNull(),
+  },
+  (table) => [
+    check("billing_environment_singleton", sql`${table.id} = 1`),
+    check("billing_environment_mode", sql`${table.environment} IN ('sandbox', 'production')`),
+  ],
+).enableRLS();
+
+// Commercial state never owns host/device trust or conversation data.
 export const billingAccounts = pgTable("billing_accounts", {
   userId: text("user_id").primaryKey(),
   customerId: text("customer_id").unique(),

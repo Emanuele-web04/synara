@@ -15,6 +15,12 @@ const config: PolarBillingConfig = {
   checkoutSuccessUrl: "https://example.com/billing/return",
   portalReturnUrl: "https://example.com/settings",
 };
+const expectedCatalog = {
+  currency: "USD",
+  monthlyAmountMinor: 799,
+  yearlyAmountMinor: 8499,
+  taxBehavior: "exclusive" as const,
+};
 const userId = "user_verified_session",
   customerId = randomUUID();
 afterEach(() => vi.unstubAllGlobals());
@@ -34,6 +40,14 @@ function signed(body: string, timestamp = Math.floor(Date.now() / 1000)) {
 function upstream(
   options: {
     status?: string;
+    environment?: "sandbox" | "production";
+    priceAmount?: number;
+    priceCurrency?: string;
+    taxBehavior?: string | null;
+    trialInterval?: string | null;
+    trialIntervalCount?: number | null;
+    checkoutUrl?: string;
+    portalUrl?: string;
     granted?: boolean;
     externalId?: string;
     pending?: unknown[];
@@ -51,7 +65,11 @@ function upstream(
   const requests: { path: string; body: unknown }[] = [];
   const fake = vi.fn(async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
     const url = new URL(String(input));
-    expect(url.origin).toBe("https://sandbox-api.polar.sh");
+    expect(url.origin).toBe(
+      options.environment === "production"
+        ? "https://api.polar.sh"
+        : "https://sandbox-api.polar.sh",
+    );
     requests.push({ path: url.pathname, body: init?.body ? JSON.parse(String(init.body)) : null });
     let result: unknown;
     if (url.pathname === "/v1/checkouts/" && init?.method === "POST" && options.checkoutErrorStatus)
@@ -111,14 +129,29 @@ function upstream(
         is_recurring: true,
         recurring_interval: id === config.monthlyProductId ? "month" : "year",
         recurring_interval_count: 1,
+        trial_interval: options.trialInterval ?? null,
+        trial_interval_count: options.trialIntervalCount ?? null,
         benefits: [{ id: config.desktopBenefitId, type: "feature_flag" }],
         prices: [
           {
             id: "price_fixed",
             amount_type: "fixed",
             is_archived: false,
-            price_amount: 1500,
-            price_currency: "eur",
+            price_amount:
+              options.priceAmount ??
+              (options.environment === "production"
+                ? id === config.monthlyProductId
+                  ? 799
+                  : 8499
+                : 1500),
+            price_currency:
+              options.priceCurrency ?? (options.environment === "production" ? "usd" : "eur"),
+            tax_behavior:
+              options.taxBehavior === undefined
+                ? options.environment === "production"
+                  ? "exclusive"
+                  : "location"
+                : options.taxBehavior,
           },
         ],
       };
@@ -152,11 +185,21 @@ function upstream(
         products: JSON.parse(String(init.body)).products.map((id: string) => ({ id })),
         product_id: JSON.parse(String(init.body)).products[0],
         status: "open",
-        url: "https://sandbox.polar.sh/checkout/test",
+        url:
+          options.checkoutUrl ??
+          (options.environment === "production"
+            ? "https://polar.sh/checkout/test"
+            : "https://sandbox.polar.sh/checkout/test"),
         expires_at: new Date(Date.now() + 3_600_000).toISOString(),
       };
     else if (url.pathname === "/v1/customer-sessions/")
-      result = { customer_portal_url: "https://sandbox.polar.sh/test/portal" };
+      result = {
+        customer_portal_url:
+          options.portalUrl ??
+          (options.environment === "production"
+            ? "https://polar.sh/test/portal"
+            : "https://sandbox.polar.sh/test/portal"),
+      };
     else if (url.pathname === "/v1/subscriptions/sub_owned") result = {};
     else throw new Error(`Unexpected fake endpoint ${url.pathname}`);
     return Response.json(result);
@@ -165,7 +208,106 @@ function upstream(
   return { requests, fake };
 }
 
-describe("Polar sandbox protocol boundary", () => {
+describe("Polar protocol boundary", () => {
+  it("refuses production execution before SDK requests without an explicit live interlock", () => {
+    const { fake } = upstream();
+    for (const productionPaymentsEnabled of [undefined, false]) {
+      expect(() =>
+        createPolarBillingProvider({
+          ...config,
+          environment: "production",
+          ...(productionPaymentsEnabled === undefined ? {} : { productionPaymentsEnabled }),
+        }),
+      ).toThrow("POLAR_PRODUCTION_PAYMENTS_ENABLED=true");
+    }
+    expect(fake).not.toHaveBeenCalled();
+  });
+
+  it.each(["sandbox", "production"] as const)(
+    "binds %s checkout and portal to their exact vendor origin",
+    async (environment) => {
+      const providerConfig: PolarBillingConfig = {
+        ...config,
+        environment,
+        ...(environment === "production"
+          ? {
+              productionPaymentsEnabled: true,
+              returnOrigins: ["https://example.com"],
+              expectedCatalog,
+            }
+          : {}),
+      };
+      const allowedOrigin =
+        environment === "sandbox" ? "https://sandbox.polar.sh" : "https://polar.sh";
+      upstream({ environment });
+      const provider = createPolarBillingProvider(providerConfig);
+      expect(provider.environment).toBe(environment);
+      expect(
+        (await provider.checkout(userId, "verified@example.com", "month", randomUUID())).url,
+      ).toBe(`${allowedOrigin}/checkout/test`);
+      expect(await provider.portal(userId)).toBe(`${allowedOrigin}/test/portal`);
+      for (const otherOrigin of [
+        environment === "sandbox" ? "https://polar.sh" : "https://sandbox.polar.sh",
+        `${allowedOrigin}:444`,
+        `${allowedOrigin}.example.com`,
+      ]) {
+        upstream({
+          environment,
+          checkoutUrl: `${otherOrigin}/checkout/test`,
+          portalUrl: `${otherOrigin}/portal`,
+        });
+        await expect(
+          provider.checkout(userId, "verified@example.com", "month", randomUUID()),
+        ).rejects.toThrow("Unexpected Polar billing URL");
+        await expect(provider.portal(userId)).rejects.toThrow("Unexpected Polar billing URL");
+      }
+    },
+  );
+  it("validates fresh production catalog prices, USD and explicit tax-exclusive behavior", async () => {
+    const provider = createPolarBillingProvider({
+      ...config,
+      environment: "production",
+      productionPaymentsEnabled: true,
+      returnOrigins: ["https://example.com"],
+      expectedCatalog,
+    });
+    upstream({ environment: "production" });
+    expect(await provider.plans()).toEqual([
+      { interval: "month", amountMinor: 799, currency: "USD" },
+      { interval: "year", amountMinor: 8499, currency: "USD" },
+    ]);
+    for (const mismatch of [
+      { priceAmount: 800 },
+      { priceCurrency: "eur" },
+      { taxBehavior: "inclusive" },
+      { taxBehavior: "location" },
+      { taxBehavior: null },
+    ]) {
+      upstream({ environment: "production", ...mismatch });
+      await expect(provider.plans()).rejects.toThrow("expected price, currency or tax behavior");
+    }
+  });
+  it("refuses a merchant-configured production trial", async () => {
+    upstream({ environment: "production", trialInterval: "day", trialIntervalCount: 30 });
+    const provider = createPolarBillingProvider({
+      ...config,
+      environment: "production",
+      productionPaymentsEnabled: true,
+      returnOrigins: ["https://example.com"],
+      expectedCatalog,
+    });
+    await expect(provider.plans()).rejects.toThrow("must not configure a trial");
+  });
+  it("allows customer-entered discount codes on monthly checkout only", async () => {
+    const { requests } = upstream();
+    const provider = createPolarBillingProvider(config);
+    await provider.checkout(userId, "verified@example.com", "month", randomUUID());
+    await provider.checkout(userId, "verified@example.com", "year", randomUUID());
+    expect(requests.filter((item) => item.body).map((item) => item.body)).toEqual([
+      expect.objectContaining({ products: [config.monthlyProductId], allow_discount_codes: true }),
+      expect.objectContaining({ products: [config.yearlyProductId], allow_discount_codes: false }),
+    ]);
+  });
   it("verifies raw body signature and timestamp before accepting account scope", async () => {
     const provider = createPolarBillingProvider(config);
     const body = JSON.stringify({
@@ -418,15 +560,15 @@ describe("Polar sandbox protocol boundary", () => {
   });
 });
 
-describe("sandbox billing operator configuration", () => {
-  it("stays disabled by default and refuses production, partial configuration and unsafe return URLs", () => {
+describe("billing operator configuration", () => {
+  it("stays disabled by default and refuses unapproved live execution, partial config and unsafe returns", () => {
     expect(loadPolarBillingConfig({})).toBeUndefined();
     expect(
       loadPolarBillingConfig({ POLAR_BILLING_ENABLED: "false", POLAR_ENVIRONMENT: "production" }),
     ).toBeUndefined();
     expect(() =>
       loadPolarBillingConfig({ POLAR_BILLING_ENABLED: "true", POLAR_ENVIRONMENT: "production" }),
-    ).toThrow("sandbox");
+    ).toThrow("POLAR_PRODUCTION_PAYMENTS_ENABLED=true");
     expect(() =>
       loadPolarBillingConfig({ POLAR_BILLING_ENABLED: "true", POLAR_ENVIRONMENT: "sandbox" }),
     ).toThrow("Missing required");
@@ -452,5 +594,90 @@ describe("sandbox billing operator configuration", () => {
     expect(() =>
       loadPolarBillingConfig({ ...env, POLAR_PORTAL_RETURN_URL: "http://outside.example.com/" }),
     ).toThrow("HTTPS");
+  });
+  it("requires a valid explicit production return-origin allowlist and a second live opt-in", () => {
+    const production = {
+      POLAR_BILLING_ENABLED: "true",
+      POLAR_ENVIRONMENT: "production",
+      POLAR_PRODUCTION_PAYMENTS_ENABLED: "true",
+      POLAR_ACCESS_TOKEN: config.accessToken,
+      POLAR_WEBHOOK_SECRET: config.webhookSecret,
+      POLAR_ORGANIZATION_ID: config.organizationId,
+      POLAR_MONTHLY_PRODUCT_ID: config.monthlyProductId,
+      POLAR_YEARLY_PRODUCT_ID: config.yearlyProductId,
+      POLAR_DESKTOP_BENEFIT_ID: config.desktopBenefitId,
+      POLAR_CHECKOUT_SUCCESS_URL: config.checkoutSuccessUrl,
+      POLAR_PORTAL_RETURN_URL: config.portalReturnUrl,
+      POLAR_RETURN_ORIGINS: "https://example.com:443/, https://account.example.com",
+      POLAR_EXPECTED_CURRENCY: "USD",
+      POLAR_EXPECTED_MONTHLY_AMOUNT_MINOR: "799",
+      POLAR_EXPECTED_YEARLY_AMOUNT_MINOR: "8499",
+      POLAR_EXPECTED_TAX_BEHAVIOR: "exclusive",
+    };
+    expect(loadPolarBillingConfig(production)).toMatchObject({
+      environment: "production",
+      productionPaymentsEnabled: true,
+      returnOrigins: ["https://example.com", "https://account.example.com"],
+    });
+    for (const liveFlag of [undefined, "false", "1"]) {
+      expect(() =>
+        loadPolarBillingConfig({ ...production, POLAR_PRODUCTION_PAYMENTS_ENABLED: liveFlag }),
+      ).toThrow("POLAR_PRODUCTION_PAYMENTS_ENABLED");
+    }
+    for (const origin of [
+      undefined,
+      "",
+      "http://localhost:8788",
+      "https://example.com:444",
+      "https://example.com/settings",
+      "https://user:pass@example.com",
+      "https://example.com?query=1",
+      "https://example.com#fragment",
+    ]) {
+      expect(() => loadPolarBillingConfig({ ...production, POLAR_RETURN_ORIGINS: origin })).toThrow(
+        "POLAR_RETURN_ORIGINS",
+      );
+    }
+    for (const returnUrl of [
+      "http://localhost:8788/",
+      "https://example.com:444/",
+      "https://example.com.other/",
+      "https://outside.example.com/",
+    ]) {
+      expect(() =>
+        loadPolarBillingConfig({ ...production, POLAR_PORTAL_RETURN_URL: returnUrl }),
+      ).toThrow();
+    }
+    for (const mismatch of [
+      { POLAR_EXPECTED_CURRENCY: "usd" },
+      { POLAR_EXPECTED_MONTHLY_AMOUNT_MINOR: "7.99" },
+      { POLAR_EXPECTED_YEARLY_AMOUNT_MINOR: "9007199254740992" },
+      { POLAR_EXPECTED_TAX_BEHAVIOR: "location" },
+      { POLAR_EXPECTED_CURRENCY: undefined },
+    ]) {
+      expect(() => loadPolarBillingConfig({ ...production, ...mismatch })).toThrow(
+        /POLAR_EXPECTED_/,
+      );
+    }
+    const { fake } = upstream();
+    expect(() =>
+      createPolarBillingProvider({
+        ...config,
+        environment: "production",
+        productionPaymentsEnabled: true,
+        returnOrigins: ["https://other.example.com"],
+        expectedCatalog,
+      }),
+    ).toThrow("POLAR_RETURN_ORIGINS");
+    expect(fake).not.toHaveBeenCalled();
+    expect(
+      loadPolarBillingConfig({
+        ...production,
+        POLAR_ENVIRONMENT: "sandbox",
+        POLAR_PRODUCTION_PAYMENTS_ENABLED: undefined,
+        POLAR_RETURN_ORIGINS: undefined,
+        POLAR_PORTAL_RETURN_URL: "http://127.0.0.1:8788/",
+      })?.portalReturnUrl,
+    ).toBe("http://127.0.0.1:8788/");
   });
 });
