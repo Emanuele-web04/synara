@@ -745,6 +745,10 @@ const ProjectAdditionalFoldersField = Schema.optional(ProjectAdditionalFolders).
   Schema.withDecodingDefault(() => []),
 );
 
+/** Opt-in automatic title-refresh policy mode (#1041). Null on thread/project means inherit. */
+export const ThreadTitleRefreshMode = Schema.Literals(["off", "suggested", "automatic"]);
+export type ThreadTitleRefreshMode = typeof ThreadTitleRefreshMode.Type;
+
 export const OrchestrationProject = Schema.Struct({
   id: ProjectId,
   kind: Schema.optional(ProjectKind).pipe(Schema.withDecodingDefault(() => "project")),
@@ -753,6 +757,9 @@ export const OrchestrationProject = Schema.Struct({
   defaultModelSelection: Schema.NullOr(ModelSelection),
   scripts: Schema.Array(ProjectScript),
   isPinned: Schema.optional(Schema.Boolean).pipe(Schema.withDecodingDefault(() => false)),
+  titleRefreshMode: Schema.optional(Schema.NullOr(ThreadTitleRefreshMode)).pipe(
+    Schema.withDecodingDefault(() => null),
+  ),
   spaceId: Schema.optional(Schema.NullOr(SpaceId)).pipe(Schema.withDecodingDefault(() => null)),
   additionalFolders: ProjectAdditionalFoldersField,
   createdAt: IsoDateTime,
@@ -769,6 +776,9 @@ export const OrchestrationProjectShell = Schema.Struct({
   defaultModelSelection: Schema.NullOr(ModelSelection),
   scripts: Schema.Array(ProjectScript),
   isPinned: Schema.optional(Schema.Boolean).pipe(Schema.withDecodingDefault(() => false)),
+  titleRefreshMode: Schema.optional(Schema.NullOr(ThreadTitleRefreshMode)).pipe(
+    Schema.withDecodingDefault(() => null),
+  ),
   spaceId: Schema.optional(Schema.NullOr(SpaceId)).pipe(Schema.withDecodingDefault(() => null)),
   additionalFolders: ProjectAdditionalFoldersField,
   createdAt: IsoDateTime,
@@ -1105,6 +1115,13 @@ export const OrchestrationThread = Schema.Struct({
     Schema.withDecodingDefault(() => false),
   ),
   isPinned: Schema.optional(Schema.Boolean).pipe(Schema.withDecodingDefault(() => false)),
+  manualTitlePinned: Schema.optional(Schema.Boolean).pipe(Schema.withDecodingDefault(() => false)),
+  titleRefreshMode: Schema.optional(Schema.NullOr(ThreadTitleRefreshMode)).pipe(
+    Schema.withDecodingDefault(() => null),
+  ),
+  pendingSuggestedTitle: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)).pipe(
+    Schema.withDecodingDefault(() => null),
+  ),
   parentThreadId: Schema.optional(Schema.NullOr(ThreadId)).pipe(
     Schema.withDecodingDefault(() => null),
   ),
@@ -1212,6 +1229,13 @@ export const OrchestrationThreadShell = Schema.Struct({
     Schema.withDecodingDefault(() => false),
   ),
   isPinned: Schema.optional(Schema.Boolean).pipe(Schema.withDecodingDefault(() => false)),
+  manualTitlePinned: Schema.optional(Schema.Boolean).pipe(Schema.withDecodingDefault(() => false)),
+  titleRefreshMode: Schema.optional(Schema.NullOr(ThreadTitleRefreshMode)).pipe(
+    Schema.withDecodingDefault(() => null),
+  ),
+  pendingSuggestedTitle: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)).pipe(
+    Schema.withDecodingDefault(() => null),
+  ),
   parentThreadId: Schema.optional(Schema.NullOr(ThreadId)).pipe(
     Schema.withDecodingDefault(() => null),
   ),
@@ -1429,6 +1453,7 @@ const ProjectMetaUpdateCommand = Schema.Struct({
   defaultModelSelection: Schema.optional(Schema.NullOr(ModelSelection)),
   scripts: Schema.optional(Schema.Array(ProjectScript)),
   isPinned: Schema.optional(Schema.Boolean),
+  titleRefreshMode: Schema.optional(Schema.NullOr(ThreadTitleRefreshMode)),
   spaceId: Schema.optional(Schema.NullOr(SpaceId)),
 });
 
@@ -1588,6 +1613,9 @@ const ThreadMetaUpdateCommand = Schema.Struct({
   associatedWorktreeRef: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   createBranchFlowCompleted: Schema.optional(Schema.Boolean),
   isPinned: Schema.optional(Schema.Boolean),
+  manualTitlePinned: Schema.optional(Schema.Boolean),
+  titleRefreshMode: Schema.optional(Schema.NullOr(ThreadTitleRefreshMode)),
+  pendingSuggestedTitle: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   // Desired settled state; the decider stamps the authoritative settledAt timestamp.
   isSettled: Schema.optional(Schema.Boolean),
   snoozedUntil: Schema.optional(Schema.NullOr(IsoDateTime)),
@@ -2231,6 +2259,7 @@ export const ProjectMetaUpdatedPayload = Schema.Struct({
   defaultModelSelection: Schema.optional(Schema.NullOr(ModelSelection)),
   scripts: Schema.optional(Schema.Array(ProjectScript)),
   isPinned: Schema.optional(Schema.Boolean),
+  titleRefreshMode: Schema.optional(Schema.NullOr(ThreadTitleRefreshMode)),
   spaceId: Schema.optional(Schema.NullOr(SpaceId)),
   updatedAt: IsoDateTime,
 });
@@ -2355,6 +2384,9 @@ export const ThreadMetaUpdatedPayload = Schema.Struct({
   associatedWorktreeRef: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   createBranchFlowCompleted: Schema.optional(Schema.Boolean),
   isPinned: Schema.optional(Schema.Boolean),
+  manualTitlePinned: Schema.optional(Schema.Boolean),
+  titleRefreshMode: Schema.optional(Schema.NullOr(ThreadTitleRefreshMode)),
+  pendingSuggestedTitle: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   settledAt: Schema.optional(Schema.NullOr(IsoDateTime)),
   snoozedUntil: Schema.optional(Schema.NullOr(IsoDateTime)),
   snoozeReminderAt: Schema.optional(Schema.NullOr(IsoDateTime)),
@@ -3150,16 +3182,23 @@ export type OrchestrationImportThreadResult = typeof OrchestrationImportThreadRe
 
 export const OrchestrationRegenerateThreadTitleInput = Schema.Struct({
   threadId: ThreadId,
+  /** Explicit user request vs background automatic trigger. Defaults to explicit. */
+  triggeredBy: Schema.optional(Schema.Literals(["explicit", "automatic"])).pipe(
+    Schema.withDecodingDefault(() => "explicit" as const),
+  ),
 });
 export type OrchestrationRegenerateThreadTitleInput =
   typeof OrchestrationRegenerateThreadTitleInput.Type;
 
 export const OrchestrationRegenerateThreadTitleResult = Schema.Union([
   Schema.Struct({
-    status: Schema.Literals(["renamed", "unchanged"]),
+    status: Schema.Literals(["renamed", "unchanged", "suggested"]),
     title: TrimmedNonEmptyString,
   }),
-  Schema.Struct({ status: Schema.Literals(["no-context", "stale"]), title: Schema.Null }),
+  Schema.Struct({
+    status: Schema.Literals(["no-context", "stale", "pinned"]),
+    title: Schema.Null,
+  }),
 ]);
 export type OrchestrationRegenerateThreadTitleResult =
   typeof OrchestrationRegenerateThreadTitleResult.Type;

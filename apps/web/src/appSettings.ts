@@ -26,6 +26,7 @@ import {
   SidechatExpiry,
   SourceControlWritingStyle,
   SourceControlCustomInstructions,
+  ThreadTitleRefreshMode,
   type ProviderStartOptions,
   type ServerSettingsView,
   type ServerSettingsPatch,
@@ -608,6 +609,9 @@ export const AppSettingsSchema = Schema.Struct({
     withDefaults(() => "repository" as const),
   ),
   sourceControlCustomInstructions: SourceControlCustomInstructions.pipe(withDefaults(() => "")),
+  // Server-backed global default for opt-in automatic title refresh (#1041).
+  // Off until the user opts in; per-project/per-thread overrides win.
+  titleRefreshMode: ThreadTitleRefreshMode.pipe(withDefaults(() => "off" as const)),
   uiFontFamily: Schema.String.check(Schema.isMaxLength(256)).pipe(withDefaults(() => "")),
   defaultProvider: PersistedProviderKind.pipe(withDefaults(() => "codex" as const)),
   // Local-only UI preference: providers explicitly hidden from the composer picker.
@@ -1611,6 +1615,7 @@ export function serverSettingsToAppSettings(settings: ServerSettingsView): Parti
     sourceControlWritingStyle: settings.sourceControlWritingStyle,
     sourceControlCustomInstructions: settings.sourceControlCustomInstructions,
     onboardingCompletedAt: settings.onboardingCompletedAt ?? null,
+    titleRefreshMode: settings.titleRefresh.mode,
   };
 }
 
@@ -1748,6 +1753,9 @@ export function appSettingsPatchToServerSettingsPatch(
   }
   if (patch.sourceControlCustomInstructions !== undefined) {
     serverPatch.sourceControlCustomInstructions = patch.sourceControlCustomInstructions;
+  }
+  if (hasOwn(patch, "titleRefreshMode") && patch.titleRefreshMode !== undefined) {
+    serverPatch.titleRefresh = { mode: patch.titleRefreshMode };
   }
   if (
     hasOwn(patch, "textGenerationModel") ||
