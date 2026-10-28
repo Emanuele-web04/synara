@@ -1,0 +1,14 @@
+{
+  "schema": 1,
+  "bundleIdentifier": "com.emanueledipietro.SynaraIOS",
+  "releases": [
+    {
+      "channel": "testFlight",
+      "version": "0.1",
+      "build": "164",
+      "minimumOSVersion": "18.6",
+      "publishedAt": "2026-10-28T01:19:22.591711Z",
+      "expiresAt": "2027-01-25T00:00:00Z"
+    }
+  ]
+}
