@@ -7,7 +7,7 @@
 //        markdown variant (`GeneratedMarkdownImage`) composes the same hook and
 //        error card with its own inline frame/overlay rendering.
 
-import { type ComponentProps, type MouseEvent, useEffect, useRef, useState } from "react";
+import { type ComponentProps, type MouseEvent, useLayoutEffect, useRef, useState } from "react";
 
 import { useExecutionImageSource } from "~/hooks/useExecutionImageSource";
 
@@ -82,9 +82,10 @@ export function useLocalImagePreview(input: {
     error: imageError,
     intrinsicProps,
     onLoad: onImageLoad,
-  } = useExecutionImageSource(previewUrl);
+    onError: onImageError,
+  } = useExecutionImageSource(previewUrl, true, JSON.stringify([src, cwd, input.resourceUrl]));
   const errorNotifiedFor = useRef<string | null>(null);
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (imageError) {
       if (errorNotifiedFor.current !== previewUrl) {
         errorNotifiedFor.current = previewUrl;
@@ -130,7 +131,8 @@ export function useLocalImagePreview(input: {
       settleLoad("ready");
       input.onPreviewReady?.();
     },
-    onError: () => {
+    onError: (event) => {
+      if (!onImageError(event)) return;
       settleLoad("error");
       input.onPreviewError?.();
     },

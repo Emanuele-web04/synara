@@ -3,6 +3,17 @@ import { type SyntheticEvent, useEffect, useState } from "react";
 
 import { fetchExecutionImageResourceUrl, isDesktopFrameResourceUrl } from "~/lib/wsHttpUrl";
 
+function isCurrentImageEvent(
+  event: SyntheticEvent<HTMLImageElement>,
+  source: string | undefined,
+): boolean {
+  return (
+    typeof source === "string" &&
+    source.length > 0 &&
+    event.currentTarget.getAttribute("src") === source
+  );
+}
+
 /** Preview endpoints can stream workspace files, so bound bytes before making a blob URL. */
 export async function readExecutionImageBlob(
   response: Response,
@@ -52,12 +63,16 @@ export async function readExecutionImageBlob(
 }
 
 /** Remote desktop frames receive only image bytes; the controller retains the native broker. */
-export function useExecutionImageSource(source: string | undefined, lazy = true) {
+export function useExecutionImageSource(
+  source: string | undefined,
+  lazy = true,
+  layoutIdentity = source,
+) {
   const proxied = isDesktopFrameResourceUrl(source);
   const [element, setElement] = useState<HTMLImageElement | null>(null);
   const [visibility, setVisibility] = useState({ source, visible: false, visit: 0 });
   const [dimensions, setDimensions] = useState<{
-    source: string | undefined;
+    layoutIdentity: string | undefined;
     width: number;
     height: number;
   } | null>(null);
@@ -117,7 +132,8 @@ export function useExecutionImageSource(source: string | undefined, lazy = true)
   }, [proxied, source, visible, visit]);
 
   const current = loaded.source === source && loaded.visit === visit ? loaded : null;
-  const intrinsicSize = dimensions?.source === source ? dimensions : null;
+  const eventSource = proxied ? (visible ? current?.url : undefined) : source;
+  const intrinsicSize = dimensions?.layoutIdentity === layoutIdentity ? dimensions : null;
   // An img without src loses its intrinsic ratio in Chromium. This empty vector keeps
   // layout stable without retaining the decoded photograph or an object URL offscreen.
   const placeholder = intrinsicSize
@@ -139,22 +155,19 @@ export function useExecutionImageSource(source: string | undefined, lazy = true)
         }
       : {},
     onLoad: (event: SyntheticEvent<HTMLImageElement>) => {
-      if (
-        proxied &&
-        (!visible || !current?.url || event.currentTarget.getAttribute("src") !== current.url)
-      )
-        return false;
+      if (!isCurrentImageEvent(event, eventSource)) return false;
       const { naturalWidth: width, naturalHeight: height } = event.currentTarget;
       if (proxied && width > 0 && height > 0)
         setDimensions((current) =>
           current !== null &&
-          current.source === source &&
+          current.layoutIdentity === layoutIdentity &&
           current.width === width &&
           current.height === height
             ? current
-            : { source, width, height },
+            : { layoutIdentity, width, height },
         );
       return true;
     },
+    onError: (event: SyntheticEvent<HTMLImageElement>) => isCurrentImageEvent(event, eventSource),
   };
 }

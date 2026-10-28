@@ -3734,6 +3734,7 @@ const UserImageAttachmentThumbnail = memo(function UserImageAttachmentThumbnail(
     src: imageSrc,
     error: imageError,
     onLoad: onImageLoad,
+    onError: onImageError,
   } = useExecutionImageSource(props.image.previewUrl);
   return (
     <button
@@ -3756,7 +3757,9 @@ const UserImageAttachmentThumbnail = memo(function UserImageAttachmentThumbnail(
           onLoad={(event) => {
             if (onImageLoad(event)) props.onTimelineImageLoad();
           }}
-          onError={props.onTimelineImageLoad}
+          onError={(event) => {
+            if (onImageError(event)) props.onTimelineImageLoad();
+          }}
         />
       ) : (
         <div className="flex size-full items-center justify-center">

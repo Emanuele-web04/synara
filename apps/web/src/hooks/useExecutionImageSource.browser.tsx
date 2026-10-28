@@ -1,13 +1,32 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { act } from "react";
 import { render } from "vitest-browser-react";
 
+import { useLocalImagePreview } from "~/components/LocalImagePreview";
 import { fetchExecutionImageResourceUrl } from "~/lib/wsHttpUrl";
 import { useExecutionImageSource } from "./useExecutionImageSource";
 
-vi.mock("~/lib/wsHttpUrl", () => ({
+vi.mock("~/lib/wsHttpUrl", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("~/lib/wsHttpUrl")>()),
   isDesktopFrameResourceUrl: (source: string | undefined) => source?.startsWith("/owned/") === true,
   fetchExecutionImageResourceUrl: vi.fn(),
 }));
+
+function LocalPreview({ source, onError }: { source: string; onError: () => void }) {
+  const { status, imgProps } = useLocalImagePreview({
+    src: source,
+    cwd: undefined,
+    resourceUrl: source,
+    onPreviewError: onError,
+  });
+  return status === "error" ? (
+    <div role="alert">Image failed</div>
+  ) : (
+    <div data-status={status}>
+      <img {...imgProps} alt="Local owned image" />
+    </div>
+  );
+}
 
 const canvas = new OffscreenCanvas(8, 6);
 canvas.getContext("2d")!.fillRect(0, 0, 8, 6);
@@ -98,6 +117,58 @@ it("aborts an unmounted preview without creating an object URL from late bytes",
   expect(signal?.aborted).toBe(true);
   resolve(response());
   await vi.waitFor(() => expect(create).not.toHaveBeenCalled());
+});
+
+it("ignores an old DOM error while the replacement preview is still fetching", async () => {
+  let resolve!: (response: Response) => void;
+  vi.mocked(fetchExecutionImageResourceUrl)
+    .mockResolvedValueOnce(response())
+    .mockReturnValueOnce(
+      new Promise((done) => {
+        resolve = done;
+      }),
+    );
+  const onError = vi.fn();
+  const screen = await render(<LocalPreview source="/owned/old" onError={onError} />);
+  try {
+    await vi.waitFor(() =>
+      expect(document.querySelector("[data-status]")?.getAttribute("data-status")).toBe("ready"),
+    );
+    await screen.rerender(<LocalPreview source="/owned/new" onError={onError} />);
+    await vi.waitFor(() => expect(fetchExecutionImageResourceUrl).toHaveBeenCalledTimes(2));
+    const image = document.querySelector("img")!;
+    expect(image.getAttribute("src")).toBeNull();
+    await act(async () => {
+      image.dispatchEvent(new Event("error"));
+    });
+    expect(onError).not.toHaveBeenCalled();
+    expect(document.querySelector('[role="alert"]')).toBeNull();
+    expect(document.querySelector("[data-status]")?.getAttribute("data-status")).toBe("loading");
+    resolve(response());
+    await vi.waitFor(() => {
+      expect(document.querySelector("[data-status]")?.getAttribute("data-status")).toBe("ready");
+      expect(document.querySelector("img")?.naturalWidth).toBe(8);
+    });
+    expect(onError).not.toHaveBeenCalled();
+  } finally {
+    await screen.unmount();
+  }
+});
+
+it("still reports a decoding error from the current image", async () => {
+  vi.mocked(fetchExecutionImageResourceUrl).mockResolvedValueOnce(
+    new Response("not image bytes", { headers: { "Content-Type": "image/png" } }),
+  );
+  const onError = vi.fn();
+  const screen = await render(<LocalPreview source="/owned/corrupt" onError={onError} />);
+  try {
+    await vi.waitFor(() =>
+      expect(document.querySelector('[role="alert"]')?.textContent).toBe("Image failed"),
+    );
+    expect(onError).toHaveBeenCalledOnce();
+  } finally {
+    await screen.unmount();
+  }
 });
 
 it("releases visited offscreen bytes while keeping row geometry and onscreen images stable", async () => {

@@ -246,6 +246,113 @@ it.each(["expired", "host-restarted"] as const)(
   },
 );
 
+it("keeps a renewing portrait in place without painting an error card or a short placeholder", async () => {
+  configureDesktopResourceFixture();
+  const portraitCanvas = new OffscreenCanvas(256, 1024);
+  portraitCanvas.getContext("2d")!.fillRect(0, 0, 256, 1024);
+  const portrait = new Uint8Array(
+    await (await portraitCanvas.convertToBlob({ type: "image/png" })).arrayBuffer(),
+  );
+  const realNow = Date.now.bind(Date);
+  let elapsed = 0;
+  const clock = vi.spyOn(Date, "now").mockImplementation(() => realNow() + elapsed);
+  let releaseRenewal!: () => void;
+  let releasePreview!: () => void;
+  const renewalPending = new Promise<void>((resolve) => {
+    releaseRenewal = resolve;
+  });
+  const previewPending = new Promise<void>((resolve) => {
+    releasePreview = resolve;
+  });
+  const expiry = new Map<string, number>();
+  const originalGrant = createLocalFilePreviewGrant.getMockImplementation()!;
+  let grantCalls = 0;
+  let firstGrant = "";
+  let freshPreviewRequested = false;
+  createLocalFilePreviewGrant.mockImplementation(async (input) => {
+    if (++grantCalls === 2) await renewalPending;
+    const grant = await originalGrant(input);
+    if (!firstGrant) firstGrant = grant.grant;
+    expiry.set(grant.grant, Date.parse(grant.expiresAt));
+    return grant;
+  });
+  worker.use(
+    http.get("*/api/local-image", async ({ request }) => {
+      const url = new URL(request.url);
+      requests.push(url);
+      const grant = url.searchParams.get("grant") ?? "";
+      if (grants.get(grant) !== desktopPath || (expiry.get(grant) ?? 0) <= Date.now())
+        return new HttpResponse(null, { status: 404 });
+      if (grant !== firstGrant) {
+        freshPreviewRequested = true;
+        await previewPending;
+      }
+      return new HttpResponse(portrait.slice(), { headers: { "Content-Type": "image/png" } });
+    }),
+  );
+  const screen = await render(scrollableImage());
+  let frame = 0;
+  const samples: Array<{ error: boolean; height: number }> = [];
+  const sample = () => {
+    samples.push({
+      error: document.querySelector(".local-image-error") !== null,
+      height: document.querySelector(".chat-generated-image")?.getBoundingClientRect().height ?? 0,
+    });
+    frame = requestAnimationFrame(sample);
+  };
+  const twoFrames = () =>
+    new Promise<void>((resolve) => {
+      requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+    });
+  try {
+    await vi.waitFor(() =>
+      expect(
+        document.querySelector<HTMLImageElement>(".chat-generated-image__img")?.naturalWidth,
+      ).toBe(256),
+    );
+    const initialHeight = document
+      .querySelector(".chat-generated-image")!
+      .getBoundingClientRect().height;
+    expect(initialHeight).toBeGreaterThan(200);
+    const scroll = document.querySelector<HTMLDivElement>("[data-preview-scroll]")!;
+    scroll.scrollTop = 700;
+    await vi.waitFor(() =>
+      expect(document.querySelector<HTMLImageElement>(".chat-generated-image__img")!.src).toMatch(
+        /^data:image\/svg\+xml,/,
+      ),
+    );
+    elapsed = 121_000;
+    frame = requestAnimationFrame(sample);
+    scroll.scrollTop = 0;
+    await vi.waitFor(() => expect(createLocalFilePreviewGrant).toHaveBeenCalledTimes(2));
+    await twoFrames();
+    expect(samples.length).toBeGreaterThan(0);
+    expect(samples.every((entry) => !entry.error && entry.height >= initialHeight - 1)).toBe(true);
+    releaseRenewal();
+    await vi.waitFor(() => expect(freshPreviewRequested).toBe(true));
+    await twoFrames();
+    expect(samples.every((entry) => !entry.error && entry.height >= initialHeight - 1)).toBe(true);
+    releasePreview();
+    await vi.waitFor(() => {
+      const img = document.querySelector<HTMLImageElement>(".chat-generated-image__img")!;
+      expect(img.src).toMatch(/^blob:/);
+      expect(img.naturalWidth).toBe(256);
+      expect(document.querySelector(".chat-generated-image")?.getAttribute("data-status")).toBe(
+        "ready",
+      );
+    });
+    await twoFrames();
+    expect(samples.every((entry) => !entry.error && entry.height >= initialHeight - 1)).toBe(true);
+  } finally {
+    cancelAnimationFrame(frame);
+    releaseRenewal();
+    releasePreview();
+    await screen.unmount();
+    clock.mockRestore();
+    createLocalFilePreviewGrant.mockImplementation(originalGrant);
+  }
+});
+
 it("stops automatic grant recovery when the fresh preview is also denied", async () => {
   configureDesktopResourceFixture();
   let denied = false;
