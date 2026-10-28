@@ -3,11 +3,23 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { EnvironmentId, type RemoteResource } from "@synara/contracts";
 
 import { readExecutionContext, type WindowExecutionContext } from "./hosts/executionContext";
-import { resolveExecutionResource, resolveWsHttpUrl, toAttachmentPreviewUrl } from "./wsHttpUrl";
+import { readWorkspaceFrame } from "./hosts/workspaceFrame";
+import {
+  captureExecutionResourceRequester,
+  fetchExecutionImageResourceUrl,
+  fetchExecutionResourceUrl,
+  resolveExecutionResource,
+  resolveWsHttpUrl,
+  toAttachmentPreviewUrl,
+} from "./wsHttpUrl";
 
 vi.mock("./hosts/executionContext", () => ({ readExecutionContext: vi.fn() }));
+vi.mock("./hosts/workspaceFrame", () => ({ readWorkspaceFrame: vi.fn() }));
 
-beforeEach(() => vi.mocked(readExecutionContext).mockReset());
+beforeEach(() => {
+  vi.mocked(readExecutionContext).mockReset();
+  vi.mocked(readWorkspaceFrame).mockReset();
+});
 
 describe("resolveWsHttpUrl", () => {
   beforeEach(() => {
@@ -110,6 +122,16 @@ describe("typed execution resource routing", () => {
     name: "screen.png",
     mimeType: "image/png",
   };
+  const inDesktopFrame = (requestResource = vi.fn(async () => new Response("image"))) => {
+    vi.mocked(readExecutionContext).mockReturnValue(remoteContext);
+    vi.stubGlobal("window", { location: { origin: "synara-remote://app" } });
+    const frame = {
+      host: { hostId: "host-mini", executionScope: remoteContext.remote },
+      controller: { desktop: true, requestResource },
+    } as unknown as NonNullable<ReturnType<typeof readWorkspaceFrame>>;
+    vi.mocked(readWorkspaceFrame).mockReturnValue(frame);
+    return { frame, requestResource };
+  };
 
   beforeEach(() => vi.stubEnv("VITE_WS_URL", ""));
   afterEach(() => {
@@ -185,5 +207,121 @@ describe("typed execution resource routing", () => {
       environmentId: execution.environmentId,
       resource: upload,
     });
+  });
+
+  it("captures the parent requester without exposing a child desktop bridge or switching owners", async () => {
+    const { requestResource } = inDesktopFrame();
+    const captured = captureExecutionResourceRequester();
+    const otherOwner = vi.fn();
+    inDesktopFrame(otherOwner);
+    const body = new File(["fixture"], "screen.png", { type: "image/png" });
+    await captured(upload, { body });
+    await captured({ kind: "attachment-cancel" }, { body: "{}" });
+    expect(requestResource).toHaveBeenNthCalledWith(1, upload, { body });
+    expect(requestResource).toHaveBeenNthCalledWith(
+      2,
+      { kind: "attachment-cancel" },
+      { body: "{}" },
+    );
+    expect(otherOwner).not.toHaveBeenCalled();
+  });
+
+  it("fetches a logical image URL through the captured owner rather than the iframe origin", async () => {
+    const { requestResource } = inDesktopFrame();
+    const source = toAttachmentPreviewUrl("/attachments/owned_photo");
+    await fetchExecutionImageResourceUrl(source);
+    expect(requestResource).toHaveBeenCalledWith(
+      { kind: "attachment", attachmentId: "owned_photo" },
+      {},
+    );
+  });
+
+  it.each(["host", "environment", "origin", "extra-query", "mutation", "non-image"])(
+    "rejects a logical image reference with invalid %s before the parent capability runs",
+    async (invalid) => {
+      const { requestResource } = inDesktopFrame();
+      const source = new URL(toAttachmentPreviewUrl("/attachments/owned_photo"));
+      if (invalid === "host") source.pathname = "/api/remote/resource/another-host";
+      if (invalid === "origin") source.host = "another-app";
+      if (invalid === "extra-query") source.searchParams.set("token", "not-a-capability");
+      if (["environment", "mutation", "non-image"].includes(invalid)) {
+        source.searchParams.set(
+          "reference",
+          JSON.stringify({
+            environmentId:
+              invalid === "environment" ? "another-environment" : execution.environmentId,
+            resource:
+              invalid === "mutation"
+                ? upload
+                : invalid === "non-image"
+                  ? { kind: "thread-export", threadId: "thread" }
+                  : { kind: "attachment", attachmentId: "owned_photo" },
+          }),
+        );
+      }
+      await expect(fetchExecutionImageResourceUrl(source.toString())).rejects.toThrow();
+      expect(requestResource).not.toHaveBeenCalled();
+    },
+  );
+
+  it("keeps typed GET downloads available while rejecting mutation URLs", async () => {
+    const { requestResource } = inDesktopFrame();
+    const source = resolveExecutionResource({
+      kind: "workspace-preview",
+      path: "/fixture/report.txt",
+      download: true,
+    });
+    await fetchExecutionResourceUrl(source);
+    expect(requestResource).toHaveBeenCalledWith(
+      { kind: "workspace-preview", path: "/fixture/report.txt", download: true },
+      {},
+    );
+    await expect(fetchExecutionResourceUrl(resolveExecutionResource(upload))).rejects.toThrow(
+      "not a preview",
+    );
+    expect(requestResource).toHaveBeenCalledOnce();
+  });
+
+  it("does not fall back to iframe HTTP when a desktop parent lacks the resource capability", async () => {
+    const { frame } = inDesktopFrame();
+    Reflect.deleteProperty(frame.controller, "requestResource");
+    await expect(
+      captureExecutionResourceRequester()(upload, { body: new Blob(["image"]) }),
+    ).rejects.toThrow("updated desktop workspace");
+  });
+
+  it.each(["host", "environment", "account"])(
+    "refuses an old child's POST after its frame binding changes %s",
+    async (changed) => {
+      const { frame, requestResource } = inDesktopFrame();
+      vi.mocked(readWorkspaceFrame).mockReturnValue({
+        ...frame,
+        host: {
+          ...frame.host,
+          hostId: changed === "host" ? "new-host" : frame.host.hostId,
+          executionScope: {
+            ...remoteContext.remote!,
+            environmentId:
+              changed === "environment"
+                ? EnvironmentId.makeUnsafe("new-env")
+                : execution.environmentId,
+            userId: changed === "account" ? "new-user" : remoteContext.remote!.userId,
+          },
+        },
+      });
+      await expect(
+        captureExecutionResourceRequester()(upload, { body: new Blob(["image"]) }),
+      ).rejects.toThrow("ownership changed");
+      expect(requestResource).not.toHaveBeenCalled();
+    },
+  );
+
+  it("refuses an orphan remote child's POST without trying a local URL", async () => {
+    inDesktopFrame();
+    vi.mocked(readWorkspaceFrame).mockReturnValue(undefined);
+    vi.stubGlobal("window", { parent: {}, location: { origin: "synara-remote://app" } });
+    await expect(
+      captureExecutionResourceRequester()(upload, { body: new Blob(["image"]) }),
+    ).rejects.toThrow("ownership changed");
   });
 });

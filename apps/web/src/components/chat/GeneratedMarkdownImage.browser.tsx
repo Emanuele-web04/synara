@@ -1,6 +1,7 @@
 import "../../index.css";
 
-import type { NativeApi } from "@synara/contracts";
+import { EnvironmentId, type NativeApi } from "@synara/contracts";
+import { remoteResourceRoute } from "@synara/shared/remoteResources";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { HttpResponse, http } from "msw";
 import { setupWorker } from "msw/browser";
@@ -10,7 +11,19 @@ import { render } from "vitest-browser-react";
 import ChatMarkdown from "../ChatMarkdown";
 import { downloadUrlAsBlob } from "~/lib/browserDownload";
 import { projectLocalPreviewGrantQueryOptions } from "~/lib/projectReactQuery";
+import { readExecutionContext } from "~/lib/hosts/executionContext";
+import { readWorkspaceFrame } from "~/lib/hosts/workspaceFrame";
+import type { WorkspaceResourceRequester } from "~/lib/hosts/workspaceResources";
 import { GeneratedMarkdownImage } from "./GeneratedMarkdownImage";
+
+vi.mock("~/lib/hosts/executionContext", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("~/lib/hosts/executionContext")>()),
+  readExecutionContext: vi.fn(),
+}));
+vi.mock("~/lib/hosts/workspaceFrame", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("~/lib/hosts/workspaceFrame")>()),
+  readWorkspaceFrame: vi.fn(),
+}));
 
 vi.mock("~/lib/browserDownload", () => ({
   downloadUrlAsBlob: vi.fn(async ({ url }: { url: string }) => {
@@ -54,6 +67,8 @@ beforeAll(async () => {
 });
 afterAll(() => worker.stop());
 beforeEach(() => {
+  vi.mocked(readExecutionContext).mockReset();
+  vi.mocked(readWorkspaceFrame).mockReset();
   client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   previousNativeApi = Object.getOwnPropertyDescriptor(window, "nativeApi");
   Object.defineProperty(window, "nativeApi", {
@@ -81,6 +96,54 @@ function image(src: string, onImageExpand = vi.fn()) {
         onImageExpand={onImageExpand}
       />
     </QueryClientProvider>
+  );
+}
+
+// Keep the real viewport/image hook; only the parent capability and remote HTTP receiver are fixtures.
+function configureDesktopResourceFixture() {
+  const scope = {
+    environmentId: EnvironmentId.makeUnsafe("preview-host"),
+    accountAuthority: "https://account.example",
+    userId: "preview-user",
+    organizationId: "preview-org",
+    channel: "beta" as const,
+  };
+  const environment = {
+    environmentId: scope.environmentId,
+    label: "Preview host",
+    platform: { os: "darwin" as const, arch: "arm64" as const },
+    serverVersion: "fixture",
+    capabilities: { repositoryIdentity: true },
+  };
+  vi.mocked(readExecutionContext).mockReturnValue({
+    controller: environment,
+    execution: environment,
+    remoteHostId: "preview-computer",
+    remote: scope,
+  });
+  vi.mocked(readWorkspaceFrame).mockReturnValue({
+    host: { hostId: "preview-computer", executionScope: scope },
+    controller: {
+      desktop: true,
+      requestResource: ((resource, request) => {
+        const route = remoteResourceRoute(resource);
+        if (route.method !== "GET") throw new Error("Only preview GETs belong to this fixture");
+        return fetch(new URL(route.path, window.location.origin), {
+          cache: "no-store",
+          ...(request?.signal ? { signal: request.signal } : {}),
+        });
+      }) satisfies WorkspaceResourceRequester,
+    },
+    // This mock supplies only the resource boundary; no unrelated controller API is invoked.
+  } as unknown as NonNullable<ReturnType<typeof readWorkspaceFrame>>);
+}
+
+function scrollableImage() {
+  return (
+    <div data-preview-scroll style={{ height: 220, width: 400, overflow: "auto" }}>
+      {image(desktopPath)}
+      <div style={{ height: 1200 }} />
+    </div>
   );
 }
 
@@ -120,6 +183,210 @@ it("does not poll or reload a loaded image when another consumer renews its gran
     expect(document.querySelector<HTMLImageElement>(".chat-generated-image__img")!.src).toBe(src);
   } finally {
     vi.useRealTimers();
+  }
+});
+
+it.each(["expired", "host-restarted"] as const)(
+  "renews a loaded desktop preview on viewport reacquisition after its grant is %s",
+  async (reason) => {
+    configureDesktopResourceFixture();
+    const realNow = Date.now.bind(Date);
+    let elapsed = 0;
+    const clock = vi.spyOn(Date, "now").mockImplementation(() => realNow() + elapsed);
+    const expiry = new Map<string, number>();
+    const originalGrant = createLocalFilePreviewGrant.getMockImplementation()!;
+    createLocalFilePreviewGrant.mockImplementation(async (input) => {
+      const grant = await originalGrant(input);
+      expiry.set(grant.grant, Date.parse(grant.expiresAt));
+      return grant;
+    });
+    worker.use(
+      http.get("*/api/local-image", ({ request }) => {
+        const url = new URL(request.url);
+        requests.push(url);
+        const grant = url.searchParams.get("grant") ?? "";
+        const authorized =
+          grants.get(grant) === desktopPath && (expiry.get(grant) ?? 0) > Date.now();
+        return authorized
+          ? new HttpResponse(png.slice(), { headers: { "Content-Type": "image/png" } })
+          : new HttpResponse(null, { status: 404 });
+      }),
+    );
+    const screen = await render(scrollableImage());
+    try {
+      await expectReady();
+      const firstSrc = document.querySelector<HTMLImageElement>(".chat-generated-image__img")!.src;
+      expect(firstSrc).toMatch(/^blob:/);
+      const scroll = document.querySelector<HTMLDivElement>("[data-preview-scroll]")!;
+      scroll.scrollTop = 700;
+      await vi.waitFor(() =>
+        expect(document.querySelector<HTMLImageElement>(".chat-generated-image__img")!.src).toMatch(
+          /^data:image\/svg\+xml,/,
+        ),
+      );
+      // Exercise actual elapsed expiry; a restart also invalidates an otherwise unexpired token.
+      if (reason === "expired") elapsed = 121_000;
+      else grants.clear();
+      scroll.scrollTop = 0;
+      await vi.waitFor(() => expect(createLocalFilePreviewGrant).toHaveBeenCalledTimes(2));
+      await vi.waitFor(() => {
+        const img = document.querySelector<HTMLImageElement>(".chat-generated-image__img")!;
+        expect(img.src).toMatch(/^blob:/);
+        expect(img.src).not.toBe(firstSrc);
+        expect(img.naturalWidth).toBe(1024);
+      });
+      await expectReady();
+      expect(requests.filter((url) => url.searchParams.get("grant"))).toHaveLength(3);
+      expect(document.querySelector(".local-image-error")).toBeNull();
+    } finally {
+      await screen.unmount();
+      clock.mockRestore();
+      createLocalFilePreviewGrant.mockImplementation(originalGrant);
+    }
+  },
+);
+
+it("keeps a renewing portrait in place without painting an error card or a short placeholder", async () => {
+  configureDesktopResourceFixture();
+  const portraitCanvas = new OffscreenCanvas(256, 1024);
+  portraitCanvas.getContext("2d")!.fillRect(0, 0, 256, 1024);
+  const portrait = new Uint8Array(
+    await (await portraitCanvas.convertToBlob({ type: "image/png" })).arrayBuffer(),
+  );
+  const realNow = Date.now.bind(Date);
+  let elapsed = 0;
+  const clock = vi.spyOn(Date, "now").mockImplementation(() => realNow() + elapsed);
+  let releaseRenewal!: () => void;
+  let releasePreview!: () => void;
+  const renewalPending = new Promise<void>((resolve) => {
+    releaseRenewal = resolve;
+  });
+  const previewPending = new Promise<void>((resolve) => {
+    releasePreview = resolve;
+  });
+  const expiry = new Map<string, number>();
+  const originalGrant = createLocalFilePreviewGrant.getMockImplementation()!;
+  let grantCalls = 0;
+  let firstGrant = "";
+  let freshPreviewRequested = false;
+  createLocalFilePreviewGrant.mockImplementation(async (input) => {
+    if (++grantCalls === 2) await renewalPending;
+    const grant = await originalGrant(input);
+    if (!firstGrant) firstGrant = grant.grant;
+    expiry.set(grant.grant, Date.parse(grant.expiresAt));
+    return grant;
+  });
+  worker.use(
+    http.get("*/api/local-image", async ({ request }) => {
+      const url = new URL(request.url);
+      requests.push(url);
+      const grant = url.searchParams.get("grant") ?? "";
+      if (grants.get(grant) !== desktopPath || (expiry.get(grant) ?? 0) <= Date.now())
+        return new HttpResponse(null, { status: 404 });
+      if (grant !== firstGrant) {
+        freshPreviewRequested = true;
+        await previewPending;
+      }
+      return new HttpResponse(portrait.slice(), { headers: { "Content-Type": "image/png" } });
+    }),
+  );
+  const screen = await render(scrollableImage());
+  let frame = 0;
+  const samples: Array<{ error: boolean; height: number }> = [];
+  const sample = () => {
+    samples.push({
+      error: document.querySelector(".local-image-error") !== null,
+      height: document.querySelector(".chat-generated-image")?.getBoundingClientRect().height ?? 0,
+    });
+    frame = requestAnimationFrame(sample);
+  };
+  const twoFrames = () =>
+    new Promise<void>((resolve) => {
+      requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+    });
+  try {
+    await vi.waitFor(() =>
+      expect(
+        document.querySelector<HTMLImageElement>(".chat-generated-image__img")?.naturalWidth,
+      ).toBe(256),
+    );
+    const initialHeight = document
+      .querySelector(".chat-generated-image")!
+      .getBoundingClientRect().height;
+    expect(initialHeight).toBeGreaterThan(200);
+    const scroll = document.querySelector<HTMLDivElement>("[data-preview-scroll]")!;
+    scroll.scrollTop = 700;
+    await vi.waitFor(() =>
+      expect(document.querySelector<HTMLImageElement>(".chat-generated-image__img")!.src).toMatch(
+        /^data:image\/svg\+xml,/,
+      ),
+    );
+    elapsed = 121_000;
+    frame = requestAnimationFrame(sample);
+    scroll.scrollTop = 0;
+    await vi.waitFor(() => expect(createLocalFilePreviewGrant).toHaveBeenCalledTimes(2));
+    await twoFrames();
+    expect(samples.length).toBeGreaterThan(0);
+    expect(samples.every((entry) => !entry.error && entry.height >= initialHeight - 1)).toBe(true);
+    releaseRenewal();
+    await vi.waitFor(() => expect(freshPreviewRequested).toBe(true));
+    await twoFrames();
+    expect(samples.every((entry) => !entry.error && entry.height >= initialHeight - 1)).toBe(true);
+    releasePreview();
+    await vi.waitFor(() => {
+      const img = document.querySelector<HTMLImageElement>(".chat-generated-image__img")!;
+      expect(img.src).toMatch(/^blob:/);
+      expect(img.naturalWidth).toBe(256);
+      expect(document.querySelector(".chat-generated-image")?.getAttribute("data-status")).toBe(
+        "ready",
+      );
+    });
+    await twoFrames();
+    expect(samples.every((entry) => !entry.error && entry.height >= initialHeight - 1)).toBe(true);
+  } finally {
+    cancelAnimationFrame(frame);
+    releaseRenewal();
+    releasePreview();
+    await screen.unmount();
+    clock.mockRestore();
+    createLocalFilePreviewGrant.mockImplementation(originalGrant);
+  }
+});
+
+it("stops automatic grant recovery when the fresh preview is also denied", async () => {
+  configureDesktopResourceFixture();
+  let denied = false;
+  worker.use(
+    http.get("*/api/local-image", ({ request }) => {
+      const url = new URL(request.url);
+      requests.push(url);
+      const grant = url.searchParams.get("grant") ?? "";
+      return !denied && grants.get(grant) === desktopPath
+        ? new HttpResponse(png.slice(), { headers: { "Content-Type": "image/png" } })
+        : new HttpResponse(null, { status: 404 });
+    }),
+  );
+  const screen = await render(scrollableImage());
+  try {
+    await expectReady();
+    const scroll = document.querySelector<HTMLDivElement>("[data-preview-scroll]")!;
+    scroll.scrollTop = 700;
+    await vi.waitFor(() =>
+      expect(document.querySelector<HTMLImageElement>(".chat-generated-image__img")!.src).toMatch(
+        /^data:image\/svg\+xml,/,
+      ),
+    );
+    denied = true;
+    scroll.scrollTop = 0;
+    await expect.element(screen.getByText("Couldn’t open this image")).toBeVisible();
+    await vi.waitFor(() => expect(client.isFetching()).toBe(0));
+    expect(createLocalFilePreviewGrant).toHaveBeenCalledTimes(2);
+    expect(requests.filter((url) => url.searchParams.get("grant"))).toHaveLength(3);
+    await screen.rerender(scrollableImage());
+    expect(createLocalFilePreviewGrant).toHaveBeenCalledTimes(2);
+    await expect.element(screen.getByRole("button", { name: "Retry image preview" })).toBeVisible();
+  } finally {
+    await screen.unmount();
   }
 });
 

@@ -87,6 +87,8 @@ function GeneratedMarkdownImageContent(
   const sourcePath = resourceUrl ? null : normalizeMarkdownImagePath(src);
   const [needsGrant, setNeedsGrant] = useState(false);
   const [previewGrant, setPreviewGrant] = useState<ProjectCreateLocalFilePreviewGrantResult>();
+  const [renewingGrant, setRenewingGrant] = useState(false);
+  const canRenewLoadedPreview = useRef(false);
   const grantOptions = projectLocalPreviewGrantQueryOptions({
     path: sourcePath,
     cwd,
@@ -129,15 +131,38 @@ function GeneratedMarkdownImageContent(
       resourceUrl,
       cacheKey: props.cacheKey,
       previewGrant: previewGrant?.grant,
-      // Relative worktree references and absolute captures use the same bounded per-file recovery.
+      onPreviewReady: () => {
+        canRenewLoadedPreview.current = true;
+      },
+      // A released offscreen preview can outlive its grant or the host's grant store.
+      // Renew once after actual success; a newly issued but unreadable grant needs Retry.
       onPreviewError: () => {
-        if (sourcePath !== null) setNeedsGrant(true);
+        if (sourcePath === null) return;
+        setNeedsGrant(true);
+        if (!previewGrant || !canRenewLoadedPreview.current) return;
+        canRenewLoadedPreview.current = false;
+        setRenewingGrant(true);
+        // Keep the frozen URL until fresh bytes are authorized. Clearing it first could
+        // restore cached grant data or issue another ungranted workspace request.
+        void queryClient
+          .fetchQuery({ ...grantOptions, retry: retryGrant })
+          .then((grant) => {
+            if (mounted.current && isLocalPreviewGrantUsable(grant)) setPreviewGrant(grant);
+          })
+          .catch(() => {
+            // The failed preview retains its error card and explicit Retry action.
+          })
+          .finally(() => {
+            if (mounted.current) setRenewingGrant(false);
+          });
       },
     });
   const resolvingGrant =
-    needsGrant &&
-    !previewGrant &&
-    (grantQuery.isFetching || (grantQuery.isSuccess && isLocalPreviewGrantUsable(grantQuery.data)));
+    renewingGrant ||
+    (needsGrant &&
+      !previewGrant &&
+      (grantQuery.isFetching ||
+        (grantQuery.isSuccess && isLocalPreviewGrantUsable(grantQuery.data))));
   const resolveGrantedUrl = async (download: boolean) => {
     if (resourceUrl || !needsGrant || sourcePath === null)
       return download ? downloadUrl : previewUrl;
