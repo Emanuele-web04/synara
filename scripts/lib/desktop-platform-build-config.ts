@@ -10,6 +10,7 @@ import {
   SYNARA_STABLE_WINDOWS_INSTALLER_GUID,
 } from "@synara/shared/betaChannel";
 import type { SynaraPackagedDesktopFlavor } from "@synara/shared/desktopIdentity";
+import { availableUiLocales } from "@synara/shared/uiLocale";
 
 import {
   createDesktopBundleFilePatterns,
@@ -217,7 +218,13 @@ export function createDesktopPlatformBuildConfig(
           to: MAC_ICON_ASSETS_CAR_BUNDLE_PATH,
         },
         // macOS reads permission explanations from the bundle's language folders.
-        { from: "apps/desktop/resources/localizations", to: "Resources" },
+        ...availableUiLocales(input.flavor ?? "production").map((locale) => {
+          const directory = `${locale === "zh-CN" ? "zh-Hans" : locale}.lproj`;
+          return {
+            from: `apps/desktop/resources/localizations/${directory}`,
+            to: `Resources/${directory}`,
+          };
+        }),
       ],
       mac,
     };

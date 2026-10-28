@@ -5,6 +5,8 @@ import {
   type UiLanguagePreference,
   type UiLocale,
 } from "@synara/contracts";
+import { CHINESE_UI_BETA_FEATURE, isBetaFeatureEnabled } from "./betaFeatures";
+import type { SynaraDesktopFlavor } from "./desktopIdentity";
 
 export { UI_LOCALES, UI_LOCALE_REGISTRY, UI_LANGUAGE_PREFERENCES };
 export type { UiLanguagePreference, UiLocale };
@@ -25,6 +27,25 @@ export function normalizeLanguagePreference(value: unknown): UiLanguagePreferenc
     : "system";
 }
 
+function isUiLocaleAvailable(locale: UiLocale, flavor: SynaraDesktopFlavor | "unknown"): boolean {
+  return locale !== "zh-CN" || isBetaFeatureEnabled(CHINESE_UI_BETA_FEATURE, flavor);
+}
+
+/** Entry points and runtime resolution share the same host policy; catalogs remain additive. */
+export function availableUiLocales(
+  flavor: SynaraDesktopFlavor | "unknown" = "unknown",
+): UiLocale[] {
+  return UI_LOCALES.filter((locale) => isUiLocaleAvailable(locale, flavor));
+}
+
+/** A disabled preference remains stored but follows supported System languages while inert. */
+export function resolveUiLanguagePreference(
+  preference: UiLanguagePreference,
+  flavor: SynaraDesktopFlavor | "unknown" = "unknown",
+): UiLanguagePreference {
+  return preference === "system" || isUiLocaleAvailable(preference, flavor) ? preference : "system";
+}
+
 const registeredLocales = UI_LOCALES.map((id) => ({
   id,
   locale: new Intl.Locale(id),
@@ -35,15 +56,18 @@ const registeredLocales = UI_LOCALES.map((id) => ({
 export function resolveUiLocale(
   preference: UiLanguagePreference,
   languages: readonly string[],
+  flavor: SynaraDesktopFlavor | "unknown" = "unknown",
 ): UiLocale {
-  if (preference !== "system") return preference;
+  const selected = resolveUiLanguagePreference(preference, flavor);
+  if (selected !== "system") return selected;
+  const available = registeredLocales.filter((entry) => isUiLocaleAvailable(entry.id, flavor));
   for (const candidate of languages) {
     try {
       const locale = new Intl.Locale(candidate);
-      const exact = registeredLocales.find((entry) => entry.locale.baseName === locale.baseName);
+      const exact = available.find((entry) => entry.locale.baseName === locale.baseName);
       if (exact) return exact.id;
       const script = locale.maximize().script;
-      const alias = registeredLocales.find(
+      const alias = available.find(
         (entry) =>
           entry.locale.maximize().script === script &&
           (entry.aliases.includes(locale.baseName) || entry.aliases.includes(locale.language)),

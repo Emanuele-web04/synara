@@ -17,6 +17,29 @@ afterEach(() =>
 );
 
 describe("native language preference", () => {
+  it("rejects new Chinese IPC writes on Stable without replacing persisted state, allowing Beta", () => {
+    const dir = FS.mkdtempSync(Path.join(OS.tmpdir(), "synara-language-flavor-"));
+    temporaryDirectories.push(dir);
+    const path = Path.join(dir, "desktop-language.json");
+    const stored = '{"version":1,"language":"zh-CN"}\n';
+    FS.writeFileSync(path, stored);
+    const applied: string[] = [];
+    const input = {
+      flavor: "production" as const,
+      preferencePath: path,
+      isTrustedSender: true,
+      onPreference: (value: string) => applied.push(value),
+    };
+    expect(applyDesktopLanguagePreference("zh-CN", input)).toBe(false);
+    expect(FS.readFileSync(path, "utf8")).toBe(stored);
+    expect(applied).toEqual([]);
+    expect(applyDesktopLanguagePreference("es", input)).toBe(true);
+    expect(readDesktopLanguagePreference(path)).toBe("es");
+    expect(applyDesktopLanguagePreference("zh-CN", { ...input, flavor: "beta" })).toBe(true);
+    expect(readDesktopLanguagePreference(path)).toBe("zh-CN");
+    expect(applied).toEqual(["es", "zh-CN"]);
+  });
+
   it("rejects untrusted IPC senders and malformed payloads before writing or changing the runtime", () => {
     const dir = FS.mkdtempSync(Path.join(OS.tmpdir(), "synara-language-ipc-"));
     temporaryDirectories.push(dir);
@@ -24,6 +47,7 @@ describe("native language preference", () => {
     const applied: string[] = [];
     const input = {
       preferencePath: path,
+      flavor: "production" as const,
       isTrustedSender: true,
       onPreference: (value: string) => applied.push(value),
     };

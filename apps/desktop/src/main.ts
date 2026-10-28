@@ -463,10 +463,13 @@ const userDataPath = resolveUserDataPath();
 app.setPath("userData", userDataPath);
 // Match the renderer storage profile, including isolated source-build profiles.
 const DESKTOP_LANGUAGE_PREFERENCE_PATH = Path.join(userDataPath, "desktop-language.json");
-initializeDesktopI18n(readDesktopLanguagePreference(DESKTOP_LANGUAGE_PREFERENCE_PATH), () =>
-  app.isReady()
-    ? app.getPreferredSystemLanguages()
-    : [new Intl.DateTimeFormat().resolvedOptions().locale],
+initializeDesktopI18n(
+  readDesktopLanguagePreference(DESKTOP_LANGUAGE_PREFERENCE_PATH),
+  () =>
+    app.isReady()
+      ? app.getPreferredSystemLanguages()
+      : [new Intl.DateTimeFormat().resolvedOptions().locale],
+  desktopFlavor,
 );
 
 // Beta-only diagnostics: constructed solely when the baked build flavor is
@@ -5255,6 +5258,7 @@ function registerIpcHandlers(): void {
   ipcMain.removeHandler(IPC.setLanguagePreference);
   ipcMain.handle(IPC.setLanguagePreference, (event, rawPreference: unknown) => {
     applyDesktopLanguagePreference(rawPreference, {
+      flavor: desktopFlavor,
       isTrustedSender:
         event.sender === mainWindow?.webContents && event.senderFrame === event.sender.mainFrame,
       preferencePath: DESKTOP_LANGUAGE_PREFERENCE_PATH,

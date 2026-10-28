@@ -18,9 +18,10 @@ import { createFileRoute, useSearch } from "@tanstack/react-router";
 import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "~/i18n";
 import {
-  LANGUAGE_PREFERENCES,
+  AVAILABLE_LANGUAGE_PREFERENCES,
   UI_LOCALES,
   UI_LOCALE_REGISTRY,
+  resolveLanguagePreference,
   type LanguagePreference,
 } from "~/i18n/locale";
 import { useLocalStorage } from "../hooks/useLocalStorage";
@@ -373,6 +374,7 @@ function SettingsRouteView() {
   } = useTheme();
   const { settings, defaults, updateSettings, updateSettingsAndWait, resetSettings } =
     useAppSettings();
+  const languagePreference = resolveLanguagePreference(settings.language);
   const keepAwake = useKeepAwakeState();
   const desktopTopBarTrafficLightGutterClassName = useDesktopTopBarTrafficLightGutterClassName();
   const [releaseHistoryOpen, setReleaseHistoryOpen] = useState(false);
@@ -482,9 +484,7 @@ function SettingsRouteView() {
     ...(settings.language !== defaults.language ? ["common:general_languageAria"] : []),
     ...(theme !== "system" ? ["onboarding:changed_theme"] : []),
     ...(!isDefaultActiveTheme
-      ? [
-          `${resolvedTheme === "dark" ? "settings:theme_darkTheme" : "settings:theme_lightTheme"} theme pack`,
-        ]
+      ? [resolvedTheme === "dark" ? "settings:darkThemePack" : "settings:lightThemePack"]
       : []),
     ...(settings.defaultProvider !== defaults.defaultProvider
       ? ["settings:changed_defaultProvider"]
@@ -727,17 +727,17 @@ function SettingsRouteView() {
           }
           control={
             <SettingsSelectControl
-              value={settings.language}
+              value={languagePreference}
               onValueChange={(language) => {
-                if (LANGUAGE_PREFERENCES.includes(language as LanguagePreference)) {
+                if (AVAILABLE_LANGUAGE_PREFERENCES.includes(language as LanguagePreference)) {
                   updateSettings({ language: language as LanguagePreference });
                 }
               }}
               ariaLabel={t("common:general_languageAria")}
               valueContent={
-                settings.language === "system"
+                languagePreference === "system"
                   ? t("common:themeOptions_system")
-                  : UI_LOCALE_REGISTRY[settings.language].nativeName
+                  : UI_LOCALE_REGISTRY[languagePreference].nativeName
               }
             >
               <SelectItem value="system">{t("common:themeOptions_system")}</SelectItem>

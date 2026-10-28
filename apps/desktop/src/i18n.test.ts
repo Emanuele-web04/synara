@@ -9,6 +9,21 @@ import {
 afterEach(() => initializeDesktopI18n("system", () => "en-US"));
 
 describe("native interface language", () => {
+  it("blocks restored, requested and System Chinese in Stable while Beta can activate it", () => {
+    initializeDesktopI18n("zh-CN", () => ["zh-CN", "es-MX"], "production");
+    expect(t("desktop:settings")).toBe("Ajustes...");
+    setDesktopLanguagePreference("system");
+    expect(t("desktop:settings")).toBe("Ajustes...");
+    setDesktopLanguagePreference("en");
+    expect(t("desktop:settings")).toBe("Settings...");
+    setDesktopLanguagePreference("zh-CN");
+    expect(t("desktop:settings")).toBe("Ajustes...");
+    setDesktopLanguagePreference("es");
+    expect(t("desktop:settings")).toBe("Ajustes...");
+    initializeDesktopI18n("zh-CN", () => "en-US", "beta");
+    expect(t("desktop:settings")).toBe("设置…");
+  });
+
   it("does not interpret literal app data or renderer namespaces as native translation keys", () => {
     initializeDesktopI18n("zh-CN", () => ["en-US"]);
     for (const value of [

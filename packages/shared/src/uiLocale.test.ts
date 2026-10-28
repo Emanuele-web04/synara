@@ -3,6 +3,15 @@ import { describe, expect, it } from "vitest";
 import { normalizeLanguagePreference, resolveUiLocale } from "./uiLocale";
 
 describe("interface locale resolution", () => {
+  it("keeps Chinese inert on Stable while preserving supported System order and explicit languages", () => {
+    expect(resolveUiLocale("zh-CN", ["zh-CN", "es-MX", "en-US"], "production")).toBe("es");
+    expect(resolveUiLocale("system", ["zh-CN"], "production")).toBe("en");
+    expect(resolveUiLocale("en", ["zh-CN", "es"], "production")).toBe("en");
+    expect(resolveUiLocale("es", ["zh-CN", "en"], "production")).toBe("es");
+    expect(resolveUiLocale("zh-CN", ["en-US"], "beta")).toBe("zh-CN");
+    expect(resolveUiLocale("system", ["zh-CN"], "beta")).toBe("zh-CN");
+  });
+
   it.each(["zh", "zh-CN", "zh-SG", "zh-Hans", "zh-Hans-CN", "zh-Hans-TW", "ZH-hans-sg"])(
     "resolves Simplified Chinese browser preference %s",
     (language) => {

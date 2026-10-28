@@ -51,7 +51,10 @@ export const MCP_CONNECTORS_BETA_FEATURE = "mcp-connectors";
  */
 export const NATIVE_EDITOR_BETA_FEATURE = "native-editor";
 
-export const BETA_ONLY_FEATURES: readonly BetaOnlyFeature[] = [];
+/** Simplified Chinese interface, native menus and app-authored permission explanations. */
+export const CHINESE_UI_BETA_FEATURE = "chinese-ui";
+
+export const BETA_ONLY_FEATURES: readonly BetaOnlyFeature[] = [CHINESE_UI_BETA_FEATURE];
 
 /**
  * Whether a Beta-only feature is on for this host. Only the Stable

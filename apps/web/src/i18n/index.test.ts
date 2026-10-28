@@ -2,11 +2,77 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { getFormatLocale, initializeI18n, i18n, setLanguagePreference, t } from "./index";
 import { APP_SETTINGS_STORAGE_KEY } from "../appSettingsStorage";
+import { Schema } from "effect";
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
   setLanguagePreference("system");
 });
+
+it.each([
+  ["synara:", "en", ["en", "es"]],
+  ["synara-beta:", "zh-CN", ["en", "zh-CN", "es"]],
+] as const)(
+  "enforces the hosting desktop locale gate at bootstrap and later changes (%s)",
+  async (protocol, expected, choices) => {
+    vi.stubEnv("DEV", false);
+    const events = new EventTarget();
+    const setNativePreference = vi.fn(async () => {});
+    Object.assign(events, {
+      location: { protocol },
+      desktopBridge: { setLanguagePreference: setNativePreference },
+    });
+    vi.stubGlobal("window", events);
+    const stored = {
+      language: "zh-CN",
+      chatFontSizePx: 18,
+      timestampFormat: "24-hour",
+      defaultProvider: "claudeAgent",
+      customClaudeModels: ["my-model-id"],
+    };
+    const raw = JSON.stringify(stored);
+    const getItem = vi.fn(() => raw);
+    vi.stubGlobal("localStorage", { getItem });
+    vi.stubGlobal("navigator", { languages: ["zh-CN", "en-US"] });
+    vi.stubGlobal("document", { documentElement: { lang: "", dir: "" } });
+    vi.resetModules();
+    const runtime = await import("./index");
+    const picker = await import("./locale");
+    const { AppSettingsSchema } = await import("../appSettings");
+    const decoded = Schema.decodeUnknownSync(AppSettingsSchema)(JSON.parse(raw));
+    const dispose = runtime.initializeI18n();
+    try {
+      expect(runtime.getFormatLocale()).toBe(expected);
+      expect(setNativePreference).toHaveBeenLastCalledWith(
+        protocol === "synara:" ? "system" : "zh-CN",
+      );
+      expect(picker.UI_LOCALES).toEqual(choices);
+      expect(decoded).toMatchObject(stored);
+      expect(picker.resolveLanguagePreference(decoded.language)).toBe(
+        protocol === "synara:" ? "system" : "zh-CN",
+      );
+      expect(picker.AVAILABLE_LANGUAGE_PREFERENCES).toEqual(["system", ...choices]);
+      runtime.setLanguagePreference("zh-CN");
+      expect(runtime.getFormatLocale()).toBe(expected);
+      expect(localStorage.getItem(APP_SETTINGS_STORAGE_KEY)).toBe(raw);
+      vi.stubGlobal("navigator", { languages: ["zh-CN", "es-MX"] });
+      events.dispatchEvent(new Event("languagechange"));
+      expect(runtime.getFormatLocale()).toBe(protocol === "synara:" ? "es" : "zh-CN");
+      expect(setNativePreference).toHaveBeenLastCalledWith(
+        protocol === "synara:" ? "system" : "zh-CN",
+      );
+      if (protocol === "synara:") expect(setNativePreference).not.toHaveBeenCalledWith("zh-CN");
+      runtime.setLanguagePreference("en");
+      expect(runtime.t("workspace:toast_settings")).toBe("Settings");
+      runtime.setLanguagePreference("es");
+      expect(runtime.t("workspace:toast_settings")).toBe("Ajustes");
+    } finally {
+      dispose();
+      vi.resetModules();
+    }
+  },
+);
 
 describe("bundled translations", () => {
   it("mirrors stored and changed preferences to a compatible native bridge", () => {

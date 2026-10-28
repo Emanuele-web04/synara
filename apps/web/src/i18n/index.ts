@@ -7,10 +7,12 @@ import {
   type LanguagePreference,
   type SupportedLocale,
   readLanguagePreference,
+  resolveLanguagePreference,
   resolveLocale,
+  UI_LOCALES,
 } from "./locale";
 import { uiLocalizationResources } from "@synara/shared/uiLocalizationResources";
-import { UI_LOCALES, UI_LOCALE_REGISTRY, isUiMessageKey } from "@synara/shared/uiLocale";
+import { UI_LOCALE_REGISTRY, isUiMessageKey } from "@synara/shared/uiLocale";
 
 function browserLanguages(): readonly string[] {
   try {
@@ -44,13 +46,14 @@ function syncDesktopLanguage(force = false): void {
   const bridge = window.desktopBridge;
   const setter = bridge?.setLanguagePreference;
   if (typeof setter !== "function") return;
+  const nativePreference = resolveLanguagePreference(preference);
   if (
     !force &&
     synchronizedDesktopPreference?.setter === setter &&
-    synchronizedDesktopPreference.preference === preference
+    synchronizedDesktopPreference.preference === nativePreference
   )
     return;
-  const pending = { setter, preference };
+  const pending = { setter, preference: nativePreference };
   synchronizedDesktopPreference = pending;
   const synchronize = async () => {
     try {
@@ -65,7 +68,10 @@ function syncDesktopLanguage(force = false): void {
 
 export const i18n = createInstance();
 void i18n.use(initReactI18next).init({
-  lng: resolveLocale(preference, preference === "system" ? browserLanguages() : []),
+  lng: resolveLocale(
+    preference,
+    resolveLanguagePreference(preference) === "system" ? browserLanguages() : [],
+  ),
   fallbackLng: "en",
   supportedLngs: [...UI_LOCALES],
   resources: uiLocalizationResources,
@@ -116,7 +122,10 @@ function updateDocumentLanguage(locale: SupportedLocale): void {
 
 /** Changes only the runtime; the existing app-settings hook owns persistence. */
 export function setLanguagePreference(next: LanguagePreference): void {
-  const locale = resolveLocale(next, next === "system" ? browserLanguages() : []);
+  const locale = resolveLocale(
+    next,
+    resolveLanguagePreference(next) === "system" ? browserLanguages() : [],
+  );
   if (preference !== next || i18n.language !== locale) {
     preference = next;
     void i18n.changeLanguage(locale);
@@ -132,7 +141,7 @@ export function initializeI18n(): () => void {
 
   const syncPreference = () => setLanguagePreference(storedPreference());
   const onLanguageChange = () => {
-    if (preference !== "system") return;
+    if (resolveLanguagePreference(preference) !== "system") return;
     // Refresh native candidates once: preload values would otherwise stay frozen at launch.
     const locale = resolveLocale(preference, browserLanguages());
     void i18n.changeLanguage(locale);

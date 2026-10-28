@@ -70,6 +70,8 @@ import { extractTrailingBrowserAnnotations } from "../lib/browserAnnotations";
 import { isMacNavigatorPlatform } from "../lib/utils";
 import { STARRED_MODELS_STORAGE_KEY } from "../lib/starredModels";
 import { readNativeApi } from "../nativeApi";
+import { setLanguagePreference } from "~/i18n";
+import { DEFAULT_THEME_STATE, getCodeThemeSeed } from "~/theme/theme.logic";
 import { emitWsTransportState } from "../wsTransportEvents";
 import { dispatchKanbanDraftThread } from "../lib/kanbanDispatch";
 import {
@@ -12964,6 +12966,68 @@ describe("ChatView transcript geometry (full app)", () => {
           .element(page.getByRole("combobox", { name: "main", exact: true }))
           .not.toBeInTheDocument();
       } finally {
+        await mounted.cleanup();
+      }
+    },
+  );
+
+  it.each([
+    { language: "en", variant: "dark", reset: "Restore defaults", label: "Dark theme pack" },
+    {
+      language: "es",
+      variant: "light",
+      reset: "Restaurar valores predeterminados",
+      label: "Paquete de tema claro",
+    },
+    { language: "zh-CN", variant: "dark", reset: "恢复默认设置", label: "深色主题包" },
+  ] as const)(
+    "names the customized theme pack in the localized reset confirmation ($language)",
+    async ({ language, variant, reset, label }) => {
+      const previousTheme = localStorage.getItem("synara:theme");
+      localStorage.setItem(
+        "synara:theme",
+        JSON.stringify({
+          ...DEFAULT_THEME_STATE,
+          mode: variant,
+          codeThemeIds: { ...DEFAULT_THEME_STATE.codeThemeIds, [variant]: "codex" },
+          chromeThemes: {
+            ...DEFAULT_THEME_STATE.chromeThemes,
+            [variant]: getCodeThemeSeed("codex", variant),
+          },
+        }),
+      );
+      const mounted = await mountChatView({
+        viewport: DEFAULT_VIEWPORT,
+        snapshot: addThreadToSnapshot(createDraftOnlySnapshot(), THREAD_ID),
+      });
+      // The theme store subscribes while mounted; notify it after attaching the real app.
+      window.dispatchEvent(new StorageEvent("storage", { key: "synara:theme" }));
+      const previousNativeApi = window.nativeApi;
+      const api = readNativeApi()!;
+      const confirm = vi.fn(async () => false);
+      Object.defineProperty(window, "nativeApi", {
+        configurable: true,
+        value: { ...api, dialogs: { ...api.dialogs, confirm } },
+      });
+      try {
+        await expect
+          .poll(() => document.documentElement.getAttribute("data-theme-variant"))
+          .toBe(variant);
+        await mounted.router.navigate({ to: "/settings", search: { section: "appearance" } });
+        setLanguagePreference(language);
+        await page.getByRole("button", { name: reset, exact: true }).click();
+        await expect.poll(() => confirm.mock.calls.length).toBe(1);
+        expect(confirm).toHaveBeenCalledWith(expect.stringContaining(label));
+        expect(confirm).not.toHaveBeenCalledWith(expect.stringContaining("settings:"));
+      } finally {
+        setLanguagePreference("en");
+        Object.defineProperty(window, "nativeApi", {
+          configurable: true,
+          value: previousNativeApi,
+        });
+        if (previousTheme === null) localStorage.removeItem("synara:theme");
+        else localStorage.setItem("synara:theme", previousTheme);
+        window.dispatchEvent(new StorageEvent("storage", { key: "synara:theme" }));
         await mounted.cleanup();
       }
     },

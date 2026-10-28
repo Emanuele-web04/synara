@@ -1,6 +1,16 @@
 # Interface languages
 
-Synara supports English, Simplified Chinese (`zh-CN`), and Spanish. Choose **Settings → General → Language**. **System** follows the browser's preferred languages on the web and Electron's preferred operating-system languages on desktop. An explicit choice overrides the system preference.
+Synara supports English and Spanish in Stable; Simplified Chinese (`zh-CN`) is a Beta-only feature. Choose **Settings → General → Language**. **System** follows the browser's preferred languages on the web and Electron's preferred operating-system languages on desktop. An explicit available choice overrides the system preference.
+
+The shared `chinese-ui` feature policy hides Chinese in Stable and excludes it from explicit,
+restored and automatic language resolution. A saved Chinese preference remains intact but
+acts as System: try supported operating-system languages in order, then English. The raw
+settings schema still accepts the preference so unrelated settings survive restoration.
+The renderer mirrors the effective preference to native menus; this derived mirror may say
+System while the raw renderer setting still retains Chinese for a future non-Stable host.
+Native startup uses the baked desktop flavor, and trusted language IPC refuses a new Chinese
+write in Stable before changing either the preference file or menus. The UI language is a
+client/native preference, not a server-owned RPC; the server shares the same host feature gate.
 
 The resolver tries candidates in preference order. Simplified Chinese includes `zh`, `zh-CN`, `zh-SG`, and `zh-Hans` variants. Traditional Chinese (`zh-TW`, `zh-HK`, `zh-MO`, or explicit `zh-Hant`) is not silently treated as Simplified Chinese: resolution continues to the next supported candidate, then falls back to English. Malformed preferences safely fall back to System; malformed platform candidates are skipped.
 
@@ -16,7 +26,7 @@ Settings retain their existing local storage ownership. A language change update
 
 The embedded editor loads Monaco's bundled locale before its engine is first imported. Some engine registrations cache translated labels at module evaluation. After changing language with an already loaded editor, Settings offers a reload action using the existing save-before-reload guard. It never forces a reload or discards unsaved edits. Synara's own editor controls update immediately.
 
-macOS permission dialogs select their language through macOS, independently of Synara's interface setting. Packaged apps and source launchers include English, Simplified Chinese, and Spanish app-authored permission explanations. System-owned menu items, dialog titles, and buttons remain controlled by macOS.
+macOS permission dialogs select their language through macOS, independently of Synara's interface setting. Stable bundles include English and Spanish app-authored permission explanations; non-Stable bundles and development source launchers also include Simplified Chinese. System-owned menu items, dialog titles, and buttons remain controlled by macOS and can use the OS language even when Synara does not offer it.
 
 ## Adding or changing copy
 

@@ -3,8 +3,10 @@ import type { DesktopLanguagePreference } from "@synara/contracts";
 import { nativeLocalizationResources } from "@synara/shared/nativeLocalizationResources";
 import { UI_LOCALES, resolveUiLocale, isUiMessageKey } from "@synara/shared/uiLocale";
 import type { UiLocale } from "@synara/contracts";
+import type { SynaraDesktopFlavor } from "@synara/shared/desktopIdentity";
 
 let preference: DesktopLanguagePreference = "system";
+let desktopFlavor: SynaraDesktopFlavor | "unknown" = "unknown";
 let systemLocale: () => string | readonly string[] = () => ["en"];
 const instance = createInstance();
 void instance.init({
@@ -23,16 +25,22 @@ void instance.init({
 function currentLocale(): UiLocale {
   try {
     const candidates = systemLocale();
-    return resolveUiLocale(preference, typeof candidates === "string" ? [candidates] : candidates);
+    return resolveUiLocale(
+      preference,
+      typeof candidates === "string" ? [candidates] : candidates,
+      desktopFlavor,
+    );
   } catch {
-    return resolveUiLocale(preference, []);
+    return resolveUiLocale(preference, [], desktopFlavor);
   }
 }
 
 export function initializeDesktopI18n(
   initial: DesktopLanguagePreference,
   getSystemLocale: () => string | readonly string[],
+  flavor: SynaraDesktopFlavor | "unknown" = "unknown",
 ): void {
+  desktopFlavor = flavor;
   systemLocale = getSystemLocale;
   setDesktopLanguagePreference(initial);
 }

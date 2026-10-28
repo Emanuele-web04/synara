@@ -4,6 +4,8 @@ import * as Path from "node:path";
 import { randomUUID } from "node:crypto";
 import { DesktopLanguagePreference } from "@synara/contracts";
 import { Schema } from "effect";
+import type { SynaraDesktopFlavor } from "@synara/shared/desktopIdentity";
+import { resolveUiLanguagePreference } from "@synara/shared/uiLocale";
 
 export const isDesktopLanguagePreference = Schema.is(DesktopLanguagePreference);
 
@@ -12,11 +14,17 @@ export function applyDesktopLanguagePreference(
   raw: unknown,
   input: {
     readonly isTrustedSender: boolean;
+    readonly flavor: SynaraDesktopFlavor | "unknown";
     readonly preferencePath: string;
     readonly onPreference: (preference: DesktopLanguagePreference) => void;
   },
 ): boolean {
-  if (!input.isTrustedSender || !isDesktopLanguagePreference(raw)) return false;
+  if (
+    !input.isTrustedSender ||
+    !isDesktopLanguagePreference(raw) ||
+    resolveUiLanguagePreference(raw, input.flavor) !== raw
+  )
+    return false;
   writeDesktopLanguagePreference(input.preferencePath, raw);
   input.onPreference(raw);
   return true;
