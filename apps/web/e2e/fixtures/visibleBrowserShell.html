@@ -53,6 +53,13 @@
     <script>
       const { ipcRenderer } = require("electron");
       const host = document.getElementById("browser-host");
+      const floatingHandoff =
+        process.env.SYNARA_E2E_FLOATING_HANDOFF === "1"
+          ? require(
+              process.env.SYNARA_E2E_FLOATING_HANDOFF_RENDERER,
+            ).createFloatingBrowserHandoffFixture(process.env.SYNARA_E2E_THREAD_ID)
+          : null;
+      window.__synaraFloatingHandoffE2E = floatingHandoff;
       let latestState = null;
       let mountedTabId = null;
       let webview = null;
@@ -69,13 +76,27 @@
         }
       });
 
+      const queueAttachRetry = () => {
+        if (attachRetryTimer !== null) return;
+        attachRetryTimer = setTimeout(() => {
+          attachRetryTimer = null;
+          void attachMountedWebview();
+        }, 25);
+      };
+
       const attachMountedWebview = async () => {
         const tabId = mountedTabId;
         const currentWebview = webview;
         const webContentsId = currentWebview?.getWebContentsId?.();
         if (!tabId || !webContentsId || currentWebview !== webview) return;
         const attachKey = `${tabId}:${webContentsId}`;
-        if (attachedWebviewKey === attachKey || attachInFlight) return;
+        if (attachedWebviewKey === attachKey) return;
+        // A tab can switch while adoption of the previous guest is in flight.
+        // Retry after the lease clears so the new logical tab is not stranded.
+        if (attachInFlight) {
+          queueAttachRetry();
+          return;
+        }
         attachInFlight = true;
         // Mirror BrowserPanel's renderer lease: mark the physical binding
         // before main can synchronously push a newer metadata snapshot.
@@ -84,15 +105,20 @@
           Number(document.documentElement.dataset.attachAttempts || "0") + 1,
         );
         try {
-          await ipcRenderer.invoke("synara-e2e:attach-webview", { tabId, webContentsId });
+          const attached = await ipcRenderer.invoke("synara-e2e:attach-webview", {
+            tabId,
+            webContentsId,
+          });
+          // attachWebview may return the canonical native tab instead of
+          // adopting this guest while an agent still owns its WebContents.
+          // The shell must not advertise renderer attachment in that case.
+          const boundTab = attached?.tabs?.find((tab) => tab.id === tabId);
+          if (attached?.activeTabId !== tabId || boundTab?.runtimeSurface !== "renderer") {
+            throw new Error("The browser tab is still owned by its native runtime.");
+          }
         } catch {
           if (attachedWebviewKey === attachKey) attachedWebviewKey = null;
-          if (attachRetryTimer === null) {
-            attachRetryTimer = setTimeout(() => {
-              attachRetryTimer = null;
-              void attachMountedWebview();
-            }, 25);
-          }
+          queueAttachRetry();
           return;
         } finally {
           attachInFlight = false;
@@ -136,7 +162,8 @@
           webview.addEventListener("did-navigate", (event) => {
             document.documentElement.dataset.pooledWebviewUrl = event.url;
           });
-          host.append(webview);
+          if (floatingHandoff) floatingHandoff.mount(webview, tabId);
+          else host.append(webview);
         }
         webview.style.visibility = "visible";
         webview.style.pointerEvents = "auto";
