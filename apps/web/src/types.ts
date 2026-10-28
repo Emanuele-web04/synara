@@ -73,6 +73,8 @@ export interface ChatAssistantSelectionAttachment {
   id: string;
   assistantMessageId: string;
   text: string;
+  /** User's note about the quote; travels only in the prompt block, not the server attachment. */
+  comment?: string;
 }
 
 export type ChatAttachment =
