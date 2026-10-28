@@ -149,6 +149,87 @@ it.each(["browser", "terminal"] as const)(
   },
 );
 
+// Saved sizes must still leave room for the host's real composer after a window change.
+it("restores a saved width only while the narrower shell can fit its composer", async () => {
+  await page.viewport(1200, 800);
+  const { canComposerHandlePanelWidth } = await import("../../lib/panelResize");
+  const { createDefaultRightDockState, openPaneInState } =
+    await import("../../rightDockStore.logic");
+  const state = openPaneInState(createDefaultRightDockState(), {
+    paneId: "terminal",
+    kind: "terminal",
+  });
+  const storageKey = "test_right_dock_width:narrow_shell";
+  localStorage.setItem(storageKey, "800");
+  function Harness() {
+    return (
+      <div style={{ display: "flex", width: "100vw", height: 600 }}>
+        <div data-testid="chat" style={{ flex: 1, minWidth: 0 }}>
+          <form
+            data-chat-composer-form="true"
+            data-chat-pane-scope="single"
+            style={{ width: "100%" }}
+          >
+            <div data-chat-composer-footer="true" style={{ display: "flex", gap: 16 }}>
+              <span>Composer controls</span>
+              <span data-chat-composer-actions="right" style={{ width: 80, flexShrink: 0 }}>
+                Send
+              </span>
+            </div>
+          </form>
+        </div>
+        <RightDock
+          state={state}
+          minWidth={300}
+          defaultWidth="600px"
+          widthStorageKey={storageKey}
+          shouldAcceptWidth={({ nextWidth, wrapper }) => {
+            const previous = wrapper.style.getPropertyValue("--sidebar-width");
+            return canComposerHandlePanelWidth({
+              nextWidth,
+              applyWidth: (value) => wrapper.style.setProperty("--sidebar-width", `${value}px`),
+              resetWidth: () => wrapper.style.setProperty("--sidebar-width", previous),
+            });
+          }}
+          addMenuKinds={[]}
+          onClosePane={() => {}}
+          onCollapse={() => {}}
+          onOpenChange={() => {}}
+          onAddPane={() => {}}
+          renderPane={() => <div>Terminal content</div>}
+        />
+      </div>
+    );
+  }
+  let screen = await renderDock(<Harness />);
+  const measure = () =>
+    Math.round(
+      screen.container
+        .querySelector<HTMLElement>("[data-slot='sidebar-container']")!
+        .getBoundingClientRect().width,
+    );
+  try {
+    await expect.poll(measure).toBe(800);
+    await page.viewport(800, 800);
+    await expect.poll(measure).toBe(400);
+    expect(localStorage.getItem(storageKey)).toBe("800");
+    await screen.getByRole("button", { name: "Maximize panel", exact: true }).click();
+    await expect.poll(measure).toBe(800);
+    await screen.getByRole("button", { name: "Restore panel", exact: true }).click();
+    await expect.poll(measure).toBe(400);
+    await page.viewport(1200, 800);
+    await expect.poll(measure).toBe(800);
+    await screen.unmount();
+    await page.viewport(800, 800);
+    screen = await renderDock(<Harness />);
+    await expect.poll(measure).toBe(400);
+    expect(localStorage.getItem(storageKey)).toBe("800");
+  } finally {
+    await screen.unmount();
+    localStorage.removeItem(storageKey);
+  }
+});
+
 it("keeps the resize rail reachable from the chat side in the rail layout", async () => {
   await page.viewport(1280, 800);
   const { createDefaultRightDockState, openPaneInState } =

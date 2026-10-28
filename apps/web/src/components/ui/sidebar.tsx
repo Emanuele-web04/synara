@@ -433,6 +433,21 @@ function clampSidebarWidth(width: number, options: SidebarResolvedResizableOptio
   return Math.max(options.minWidth, Math.min(width, options.maxWidth));
 }
 
+// Measure proposed widths without the layout gap's open/close animation masking overflow.
+// The host probe resets its proposed width before returning; settle that reset before restoring motion.
+function probeSidebarWidth(wrapper: HTMLElement, probe: () => boolean): boolean {
+  const gap = wrapper.querySelector<HTMLElement>("[data-slot='sidebar-gap']");
+  if (!gap) return probe();
+  const previousDuration = gap.style.transitionDuration;
+  gap.style.transitionDuration = "0ms";
+  try {
+    return probe();
+  } finally {
+    gap.getBoundingClientRect();
+    gap.style.transitionDuration = previousDuration;
+  }
+}
+
 function SidebarRail({
   placement: placementProp,
   className,
@@ -652,9 +667,33 @@ function SidebarRail({
     const storedWidth = getLocalStorageItem(resolvedResizable.storageKey, Schema.Finite);
     if (storedWidth === null) return;
     const clampedWidth = clampSidebarWidth(storedWidth, resolvedResizable);
+    const sidebarRoot =
+      rail.closest<HTMLElement>("[data-slot='sidebar']") ??
+      wrapper.querySelector<HTMLElement>("[data-slot='sidebar']");
+    if (!sidebarRoot) return;
+    const currentWidth =
+      sidebarRoot
+        .querySelector<HTMLElement>("[data-slot='sidebar-container']")
+        ?.getBoundingClientRect().width ?? clampedWidth;
+    // Restoring a persisted resize obeys the same host bounds as dragging it.
+    if (
+      !probeSidebarWidth(
+        wrapper,
+        () =>
+          resolvedResizable.shouldAcceptWidth?.({
+            currentWidth,
+            nextWidth: clampedWidth,
+            rail,
+            side,
+            sidebarRoot,
+            wrapper,
+          }) ?? true,
+      )
+    )
+      return;
     wrapper.style.setProperty("--sidebar-width", `${clampedWidth}px`);
     resolvedResizable.onResize?.(clampedWidth);
-  }, [resolvedResizable]);
+  }, [resolvedResizable, side]);
 
   React.useEffect(() => {
     return () => {
@@ -1089,6 +1128,7 @@ function SidebarMenuSubButton({
 }
 
 export {
+  probeSidebarWidth,
   Sidebar,
   SidebarContent,
   SidebarFooter,
