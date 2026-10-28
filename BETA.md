@@ -6,6 +6,8 @@ shares stable's data directory or update feed.
 
 ## Synara Remote early access
 
+Remote .38 brings Pin, Archive and Done/Undo to connected-computer rows in Activity, Priority and the sidebar. Hover or keyboard focus replaces the remote marker with the same controls used locally; Undo stays visible in the controlling window and targets the original computer. This desktop-only change preserves pairings and does not require an API or iPhone/iPad update.
+
 Remote .36 shows each subagent's existing provider model and explicitly selected effort directly in active and completed dock rows. Missing values stay hidden, and existing task controls are unchanged. This desktop update does not change the API, connector or provider runtime and does not update the iPhone or iPad app.
 
 Remote .35 retains eligible local Markdown images privately with completed replies and adds Retry for failed previews. The host resolves relative paths and registered worktrees; file grants remain confined to the requested file. An image missing before it could be retained still needs the original file restored. Universal TestFlight build 159 includes the matching image recovery and SVG retry fixes, and removes an unsupported prewarm request that could disconnect hosts. Update desktop and mobile separately.

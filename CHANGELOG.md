@@ -1,5 +1,23 @@
 # Changelog
 
+## 1.0.6-remote.38 — 2026-10-28
+
+**Manage remote chats directly from their rows.**
+
+### Fixed
+
+- Connected-computer chats show Pin, Archive and Done on hover or keyboard focus, matching local chats in Activity, Priority and the sidebar. The remote marker yields to the controls, and trailing icons use the same size.
+- Done shows a visible Undo action in the controlling window, including when the row moves into Done. Undo restores the original computer's chat and reopens it only when that exact chat was active.
+- Pin, Done, Return now and Archive retain the owning computer's original chat ID, optimistic updates and existing confirmation flow. Disconnected or replaced sessions cannot redirect an action to another computer.
+- Remote row browser checks restore their viewport so later tests retain their original window dimensions.
+
+### Verification
+
+- Source checks cover owner isolation, colliding chat IDs, Done/Undo, disconnected sessions, hover/focus and icon geometry. Format, lint, typecheck and focused unit/browser suites passed; the original CI failures and retry outcomes remain recorded separately.
+- Publication requires exact-tag quality/server suites, packaged platform checks, macOS signing/notarization, Windows Defender and source-bound artifact provenance. Windows uses the version-scoped unsigned exception and may show SmartScreen.
+- No companion update, account migration, hosted API deployment or payment change is required. Remote identity, local data, approved pairings and update feeds are preserved.
+- The app declares macOS 13. The bundled cloudflared executable declares macOS 15; Remote connector operation on macOS 13–14 remains unqualified.
+
 ## 1.0.6-remote.37 — 2026-10-27
 
 **Keep photo uploads on the selected computer's backend.**

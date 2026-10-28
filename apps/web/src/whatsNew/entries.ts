@@ -22,6 +22,24 @@ import type { WhatsNewEntry } from "./logic";
 
 export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
   {
+    version: "1.0.6-remote.38",
+    date: "Oct 28",
+    features: [
+      {
+        id: "remote-thread-quick-actions",
+        title: "Manage chats on any computer",
+        description:
+          "Pin, archive or mark a connected computer's chat done directly from its row. Hover or focus reveals the same controls as local chats, with consistent icon sizes.",
+      },
+      {
+        id: "remote-done-undo",
+        title: "Undo remote Done",
+        description:
+          "Marked a remote chat done by accident? Undo stays visible in the controlling window and restores the chat on its original computer.",
+      },
+    ],
+  },
+  {
     version: "1.0.6-remote.35",
     date: "Oct 26",
     features: [
