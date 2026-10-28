@@ -1142,8 +1142,8 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
                     {matchedSettings.map((entry) =>
                       renderActionItem({
                         id: `setting:${entry.id}`,
-                        label: entry.title,
-                        description: entry.keywords,
+                        label: t(entry.title),
+                        description: t(entry.keywords),
                         metaLabel: settingsSectionLabel(entry.section),
                         icon: SettingsIcon,
                         run: () => {

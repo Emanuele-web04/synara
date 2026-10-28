@@ -33,10 +33,10 @@ export function AppSnapPermissionGuide(props: {
       variant="outline"
       onClick={props.onOpenSettings}
     >
-      {t("settings:openSettings", { value0: GUIDE_PANE_LABELS[props.pane] })}
+      {t("settings:openSettings", { value0: t(GUIDE_PANE_LABELS[props.pane]) })}
     </Button>,
-    `If this copy of ${app} is already listed, turn it on. Otherwise, drag the app from the floating guide into the list, or use + to choose this installed copy, then turn it on.`,
-    "Complete any macOS authentication. If macOS asks you to quit and reopen, do so before checking again.",
+    t("settings:permissionGuideEnableInstalledApp", { app }),
+    t("settings:permissionGuideCompleteAuthentication"),
   ];
 
   return (

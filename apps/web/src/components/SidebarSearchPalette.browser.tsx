@@ -9,6 +9,7 @@ import { render } from "vitest-browser-react";
 import { SidebarSearchPalette, type SidebarSearchPaletteMode } from "./SidebarSearchPalette";
 import type { SidebarSearchThread } from "./SidebarSearchPalette.logic";
 import type { ThreadImportTarget } from "../lib/threadImport";
+import { setLanguagePreference } from "~/i18n";
 
 const searchThreads = vi.hoisted(() => vi.fn());
 vi.mock("~/nativeApi", async (importOriginal) => ({
@@ -64,15 +65,28 @@ async function renderPalette(
   return { onOpenThread, onOpenSettings, onOpenChange };
 }
 
-it("searches settings and opens the matching section and row", async () => {
-  const { onOpenSettings, onOpenChange } = await renderPalette();
-  await page.getByPlaceholder("Search chats or run a command").fill("base font size");
-  const result = page.getByRole("option", { name: /Base font size/ });
-  await expect.element(result).toHaveTextContent("Appearance");
-  await userEvent.keyboard("{Enter}");
-  expect(onOpenSettings).toHaveBeenCalledWith("appearance", { target: "setting-base-font-size" });
-  expect(onOpenChange).toHaveBeenCalledWith(false);
-});
+it.each([
+  { language: "en", query: "base font size", title: "Base font size", section: "Appearance" },
+  { language: "zh-CN", query: "base font size", title: "基础字号", section: "外观" },
+] as const)(
+  "searches settings and opens the matching section and row ($language)",
+  async ({ language, query, title, section }) => {
+    setLanguagePreference(language);
+    try {
+      const { onOpenSettings, onOpenChange } = await renderPalette();
+      await page.getByRole("combobox").fill(query);
+      const result = page.getByRole("option", { name: new RegExp(title) });
+      await expect.element(result).toHaveTextContent(section);
+      await userEvent.keyboard("{Enter}");
+      expect(onOpenSettings).toHaveBeenCalledWith("appearance", {
+        target: "setting-base-font-size",
+      });
+      expect(onOpenChange).toHaveBeenCalledWith(false);
+    } finally {
+      setLanguagePreference("en");
+    }
+  },
+);
 
 it("opens panel-only settings without inventing an anchor", async () => {
   const { onOpenSettings } = await renderPalette();

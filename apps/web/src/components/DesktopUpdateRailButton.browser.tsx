@@ -63,7 +63,7 @@ function item(id: Parameters<typeof railItemGlyphs>[0]): AppRailItem {
   return {
     id,
     glyphs: railItemGlyphs(id),
-    label: id === "settings" ? "Settings" : id,
+    label: id === "settings" ? "Settings" : id === "home" ? "Home" : id,
     badge: null,
     active: false,
     onSelect: vi.fn(),
@@ -265,7 +265,7 @@ describe("desktop update rail control", () => {
         expect(help.bottom).toBeLessThanOrEqual(update.top);
         expect(update.bottom).toBeLessThanOrEqual(settingsButton.getBoundingClientRect().top);
         await userEvent.keyboard("{Shift>}{Tab}{/Shift}");
-        const home = page.getByRole("button", { name: "home", exact: true }).element();
+        const home = page.getByRole("button", { name: "Home", exact: true }).element();
         home.focus();
         expect(home.getBoundingClientRect().top).toBeGreaterThanOrEqual(
           rail.getBoundingClientRect().top,

@@ -14,7 +14,7 @@
 
 import type { ComputerPermission, ComputerWindow } from "@synara/contracts";
 import { getFormatLocale, t } from "~/i18n";
-import { sortComputerPermissions } from "@synara/shared/computerGrants";
+import { listComputerPermissions, sortComputerPermissions } from "@synara/shared/computerGrants";
 
 /** Localized OS permission names in the canonical order, with duplicate grants removed. */
 export function localizedComputerPermissions(
@@ -22,6 +22,8 @@ export function localizedComputerPermissions(
   translate: typeof t = t,
   locale = getFormatLocale(),
 ): string {
+  // Keep the established English wording; other locales own their list punctuation.
+  if (locale === "en") return listComputerPermissions(permissions);
   const keys: Record<ComputerPermission, string> = {
     accessibility: "settings:accessibility",
     screenRecording: "settings:screenRecording",

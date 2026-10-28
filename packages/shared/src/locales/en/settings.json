@@ -1176,5 +1176,7 @@
   "disableProvider": "Disable {{provider}}",
   "archivedRelativeTime": "Archived {{time}}",
   "sidebarUsageAccountLimit_one": "Sidebar · up to {{count}} account",
-  "sidebarUsageAccountLimit_other": "Sidebar · up to {{count}} accounts"
+  "sidebarUsageAccountLimit_other": "Sidebar · up to {{count}} accounts",
+  "permissionGuideEnableInstalledApp": "If this copy of {{app}} is already listed, turn it on. Otherwise, drag the app from the floating guide into the list, or use + to choose this installed copy, then turn it on.",
+  "permissionGuideCompleteAuthentication": "Complete any macOS authentication. If macOS asks you to quit and reopen, do so before checking again."
 }
