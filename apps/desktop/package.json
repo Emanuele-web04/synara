@@ -1,6 +1,6 @@
 {
   "name": "@synara/desktop",
-  "version": "1.0.6-remote.38",
+  "version": "1.0.6-remote.39",
   "private": true,
   "main": "dist-electron/main.js",
   "scripts": {

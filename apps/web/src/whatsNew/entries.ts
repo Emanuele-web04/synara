@@ -22,6 +22,24 @@ import type { WhatsNewEntry } from "./logic";
 
 export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
   {
+    version: "1.0.6-remote.39",
+    date: "Oct 28",
+    features: [
+      {
+        id: "remote-photo-transfers",
+        title: "Send photos to another computer",
+        description:
+          "Photos and files now reach the computer that owns your remote chat. Switching computers keeps each upload and cancellation on its original destination.",
+      },
+      {
+        id: "remote-image-previews",
+        title: "Reliable remote image previews",
+        description:
+          "Open, download and retry remote images. Previews recover expired access without shifting the conversation, and fullscreen failures keep a clear way to retry.",
+      },
+    ],
+  },
+  {
     version: "1.0.6-remote.38",
     date: "Oct 28",
     features: [
