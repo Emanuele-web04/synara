@@ -3674,9 +3674,8 @@ export default function ChatView({
     [composerHighlightedItemId, composerMenuItems, composerMenuOpen],
   );
   useEffect(() => {
-    // `composerMenuItems` is a new array on every render, so depending on it directly
-    // would run this effect on every commit. The resolved id is a primitive, so the
-    // effect only fires when the highlight actually changes.
+    // Menu arrays can change without changing the highlight. Depend on the resolved
+    // primitive so these commits do not schedule redundant state updates.
     if (resolvedComposerHighlightedItemId !== composerHighlightedItemId) {
       setComposerHighlightedItemId(resolvedComposerHighlightedItemId);
     }

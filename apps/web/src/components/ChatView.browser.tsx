@@ -170,6 +170,7 @@ interface TestFixture {
   welcome: WsWelcomePayload;
   gitBranchByCwd: Record<string, string>;
   projectAgentOverviews: Record<string, unknown>;
+  projectAgentSummariesPending?: boolean;
 }
 
 let fixture: TestFixture;
@@ -758,6 +759,47 @@ function withStudioProject(snapshot: OrchestrationReadModel): OrchestrationReadM
         deletedAt: null,
       },
     ],
+  };
+}
+
+// Shared configured-coordinator fixture for recovery and hub composer tests.
+function createCoordinatorOverview(
+  projectId: ProjectId,
+  coordinatorThreadId: ThreadId,
+): ProjectAgentOverview {
+  return {
+    projectId,
+    configured: true,
+    config: {
+      projectId,
+      coordinatorThreadId,
+      coordinatorName: "Studio lead",
+      coordinatorModelSelection: { provider: "codex", model: "gpt-5" },
+      workerRouting: {
+        modelSelection: { provider: "claudeAgent", model: "claude-opus-4-5" },
+        providerOptions: { claudeAgent: { enableArtifacts: true } },
+      },
+      limits: {
+        maxConcurrentWorkers: 8,
+        maxNewWorkersPerTurn: 8,
+        maxWorkerCreationsPerGoal: 40,
+        maxAutomaticContinuationsPerGoal: 20,
+        maxRepairRoundsPerTask: 2,
+      },
+      captureEnabled: true,
+      enabled: true,
+      automationId: null,
+      revision: 1,
+      createdAt: NOW_ISO,
+      updatedAt: NOW_ISO,
+      disabledAt: null,
+    },
+    linkedProjectIds: [],
+    goal: null,
+    digest: null,
+    blockers: [],
+    recentOutcomes: [],
+    coordinatorStatus: "idle",
   };
 }
 
@@ -1564,6 +1606,10 @@ const worker = setupWorker(
             providers: fixture.providerStatusesSnapshot,
           });
         }
+        return;
+      }
+      // A slow initial discovery request stays pending without emitting updates or retries.
+      if (method === WS_METHODS.projectAgentListSummaries && fixture.projectAgentSummariesPending) {
         return;
       }
       if (
@@ -2432,111 +2478,149 @@ describe("ChatView transcript geometry (full app)", () => {
     document.body.innerHTML = "";
   });
 
-  it("keeps persistent turn failure visible after reopening and admits one manual continuation", async () => {
-    const base = createSnapshotForTargetUser({
-      targetMessageId: MessageId.makeUnsafe("failure-user"),
-      targetText: "Review the requested pull requests",
-    });
-    const turnId = TurnId.makeUnsafe("failed-turn");
-    const cause = "Selected model is at capacity. Please try a different model.";
-    const snapshot: OrchestrationReadModel = {
-      ...base,
-      threads: [
-        {
-          ...base.threads[0]!,
-          messages: [
-            createUserMessage({
-              id: MessageId.makeUnsafe("failure-user"),
-              text: "Review the requested pull requests",
-              offsetSeconds: 0,
-            }),
-            {
-              ...createAssistantMessage({
-                id: MessageId.makeUnsafe("progress"),
-                text: "I am checking the pull requests and their conflicts.",
-                offsetSeconds: 3,
-              }),
-              turnId,
-            },
-          ],
-          latestTurn: {
-            turnId,
-            state: "error",
-            requestedAt: NOW_ISO,
-            startedAt: NOW_ISO,
-            completedAt: isoAt(10),
-            assistantMessageId: null,
-          },
-          activities: [
-            {
-              id: EventId.makeUnsafe("fatal-error"),
-              turnId,
-              createdAt: isoAt(10),
-              sequence: 1,
-              kind: "runtime.error",
-              tone: "error",
-              summary: "Provider runtime error",
-              payload: { message: cause, class: "provider_error" },
-            },
-            {
-              id: EventId.makeUnsafe("failed-completed"),
-              turnId,
-              createdAt: isoAt(10),
-              sequence: 2,
-              kind: "turn.completed",
-              tone: "error",
-              summary: "Turn failed",
-              payload: { state: "failed", errorMessage: cause },
-            },
-          ],
-        },
-      ],
-    };
-    const first = await mountChatView({ viewport: DEFAULT_VIEWPORT, snapshot });
-    await expect.element(page.getByText("Task interrupted", { exact: true })).toBeVisible();
-    await first.cleanup();
-    const reopened = await mountChatView({ viewport: DEFAULT_VIEWPORT, snapshot });
-    let releaseSend!: () => void;
-    const barrier = new Promise<void>((resolve) => {
-      releaseSend = resolve;
-    });
-    const restoreApi = installDeterministicSendNativeApi({ beforeTurnStart: () => barrier });
-    try {
-      await expect.element(page.getByText("Task interrupted", { exact: true })).toBeVisible();
-      expect(document.querySelectorAll("[data-turn-failure]")).toHaveLength(1);
-      await page.getByRole("button", { name: "Change model", exact: true }).click();
-      await expect.element(page.getByLabelText("Search models", { exact: true })).toBeVisible();
-      page
-        .getByLabelText("Search models", { exact: true })
-        .element()
-        .dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
-      await page.getByRole("button", { name: "Continue task", exact: true }).click();
-      // Exercise a second click before the first dispatch settles.
-      (
-        page
-          .getByRole("button", { name: "Continue task", exact: true })
-          .element() as HTMLButtonElement
-      ).click();
-      await vi.waitFor(() => {
-        const starts = wsRequests.filter(
-          (request) =>
-            request._tag === ORCHESTRATION_WS_METHODS.dispatchCommand &&
-            "command" in request &&
-            (request.command as { type?: string }).type === "thread.turn.start",
-        );
-        expect(starts).toHaveLength(1);
-        expect(starts[0]?.command).toMatchObject({
-          threadId: THREAD_ID,
-          message: { text: expect.stringContaining("avoid repeating") },
-        });
+  it.each(["project", "hub discovery pending"] as const)(
+    "keeps persistent turn failure visible after reopening and admits one manual continuation (%s)",
+    async (surface) => {
+      const previousSummaries = useProjectAgentSummariesStore.getState();
+      onTestFinished(() => useProjectAgentSummariesStore.setState(previousSummaries));
+      const originalConsoleError = console.error;
+      // Stop a passive-effect loop at React's own diagnostic instead of hanging the browser.
+      const consoleError = vi.spyOn(console, "error").mockImplementation((message, ...args) => {
+        if (String(message).includes("Maximum update depth exceeded")) {
+          throw new Error(String(message));
+        }
+        originalConsoleError(message, ...args);
       });
-      expect(document.querySelectorAll("[data-turn-failure]")).toHaveLength(1);
-    } finally {
-      releaseSend();
-      restoreApi();
-      await reopened.cleanup();
-    }
-  });
+      onTestFinished(() => consoleError.mockRestore());
+      const base = createSnapshotForTargetUser({
+        targetMessageId: MessageId.makeUnsafe("history-user"),
+        targetText: "Review the requested pull requests",
+      });
+      const turnId = TurnId.makeUnsafe("failed-turn");
+      const cause = "Selected model is at capacity. Please try a different model.";
+      const snapshot: OrchestrationReadModel = {
+        ...(surface === "hub discovery pending" ? withStudioProject(base) : base),
+        threads: [
+          {
+            ...base.threads[0]!,
+            projectId: surface === "hub discovery pending" ? STUDIO_PROJECT_ID : PROJECT_ID,
+            messages: [
+              ...(surface === "hub discovery pending" ? base.threads[0]!.messages : []),
+              createUserMessage({
+                id: MessageId.makeUnsafe("failure-user"),
+                text: "Review the requested pull requests",
+                offsetSeconds: 140,
+              }),
+              {
+                ...createAssistantMessage({
+                  id: MessageId.makeUnsafe("progress"),
+                  text: "I am checking the pull requests and their conflicts.",
+                  offsetSeconds: 143,
+                }),
+                turnId,
+              },
+            ],
+            latestTurn: {
+              turnId,
+              state: "error",
+              requestedAt: isoAt(140),
+              startedAt: isoAt(140),
+              completedAt: isoAt(150),
+              assistantMessageId: null,
+            },
+            activities: [
+              {
+                id: EventId.makeUnsafe("fatal-error"),
+                turnId,
+                createdAt: isoAt(150),
+                sequence: 1,
+                kind: "runtime.error",
+                tone: "error",
+                summary: "Provider runtime error",
+                payload: { message: cause, class: "provider_error" },
+              },
+              {
+                id: EventId.makeUnsafe("failed-completed"),
+                turnId,
+                createdAt: isoAt(150),
+                sequence: 2,
+                kind: "turn.completed",
+                tone: "error",
+                summary: "Turn failed",
+                payload: { state: "failed", errorMessage: cause },
+              },
+            ],
+          },
+        ],
+      };
+      const configureFixture = (nextFixture: TestFixture) => {
+        if (surface !== "hub discovery pending") return;
+        nextFixture.welcome = {
+          ...nextFixture.welcome,
+          studioWorkspaceRoot: "/Users/tester/Documents/Synara/Studio",
+        };
+        const overview = createCoordinatorOverview(STUDIO_PROJECT_ID, THREAD_ID);
+        nextFixture.projectAgentOverviews[STUDIO_PROJECT_ID] = overview;
+        nextFixture.projectAgentSummariesPending = true;
+      };
+      const first = await mountChatView({ viewport: DEFAULT_VIEWPORT, snapshot, configureFixture });
+      await expect.element(page.getByText("Task interrupted", { exact: true })).toBeVisible();
+      await first.cleanup();
+      const reopened = await mountChatView({
+        viewport: DEFAULT_VIEWPORT,
+        snapshot,
+        configureFixture,
+      });
+      let releaseSend!: () => void;
+      const barrier = new Promise<void>((resolve) => {
+        releaseSend = resolve;
+      });
+      const restoreApi = installDeterministicSendNativeApi({ beforeTurnStart: () => barrier });
+      try {
+        await expect.element(page.getByText("Task interrupted", { exact: true })).toBeVisible();
+        expect(document.querySelectorAll("[data-turn-failure]")).toHaveLength(1);
+        if (surface === "hub discovery pending") {
+          expect(
+            wsRequests.some((request) => request._tag === WS_METHODS.projectAgentListSummaries),
+          ).toBe(true);
+          expect(
+            useProjectAgentSummariesStore.getState().summariesByProjectId.get(STUDIO_PROJECT_ID),
+          ).toBeUndefined();
+        }
+        await page.getByRole("button", { name: "Change model", exact: true }).click();
+        await expect.element(page.getByLabelText("Search models", { exact: true })).toBeVisible();
+        page
+          .getByLabelText("Search models", { exact: true })
+          .element()
+          .dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+        await page.getByRole("button", { name: "Continue task", exact: true }).click();
+        // Exercise a second click before the first dispatch settles.
+        (
+          page
+            .getByRole("button", { name: "Continue task", exact: true })
+            .element() as HTMLButtonElement
+        ).click();
+        await vi.waitFor(() => {
+          const starts = wsRequests.filter(
+            (request) =>
+              request._tag === ORCHESTRATION_WS_METHODS.dispatchCommand &&
+              "command" in request &&
+              (request.command as { type?: string }).type === "thread.turn.start",
+          );
+          expect(starts).toHaveLength(1);
+          expect(starts[0]?.command).toMatchObject({
+            threadId: THREAD_ID,
+            message: { text: expect.stringContaining("avoid repeating") },
+          });
+        });
+        expect(document.querySelectorAll("[data-turn-failure]")).toHaveLength(1);
+      } finally {
+        releaseSend();
+        restoreApi();
+        await reopened.cleanup();
+      }
+    },
+  );
 
   it.each([
     { activityViewEnabled: false, customShortcut: false },
@@ -11413,40 +11497,10 @@ describe("ChatView transcript geometry (full app)", () => {
           ...nextFixture.welcome,
           studioWorkspaceRoot: "/Users/tester/Documents/Synara/Studio",
         };
-        nextFixture.projectAgentOverviews[STUDIO_PROJECT_ID] = {
-          projectId: STUDIO_PROJECT_ID,
-          configured: true,
-          config: {
-            projectId: STUDIO_PROJECT_ID,
-            coordinatorThreadId: THREAD_ID,
-            coordinatorName: "Studio lead",
-            coordinatorModelSelection: { provider: "codex", model: "gpt-5" },
-            workerRouting: {
-              modelSelection: { provider: "claudeAgent", model: "claude-opus-4-5" },
-              providerOptions: { claudeAgent: { enableArtifacts: true } },
-            },
-            limits: {
-              maxConcurrentWorkers: 8,
-              maxNewWorkersPerTurn: 8,
-              maxWorkerCreationsPerGoal: 40,
-              maxAutomaticContinuationsPerGoal: 20,
-              maxRepairRoundsPerTask: 2,
-            },
-            captureEnabled: true,
-            enabled: true,
-            automationId: null,
-            revision: 1,
-            createdAt: NOW_ISO,
-            updatedAt: NOW_ISO,
-            disabledAt: null,
-          },
-          linkedProjectIds: [],
-          goal: null,
-          digest: null,
-          blockers: [],
-          recentOutcomes: [],
-          coordinatorStatus: "idle",
-        };
+        nextFixture.projectAgentOverviews[STUDIO_PROJECT_ID] = createCoordinatorOverview(
+          STUDIO_PROJECT_ID,
+          THREAD_ID,
+        );
       },
     });
     try {
@@ -11545,40 +11599,10 @@ describe("ChatView transcript geometry (full app)", () => {
           chatWorkspaceRoot: "/Users/tester/Documents/Synara",
           studioWorkspaceRoot: "/Users/tester/Documents/Synara/Studio",
         };
-        nextFixture.projectAgentOverviews[STUDIO_PROJECT_ID] = {
-          projectId: STUDIO_PROJECT_ID,
-          configured: true,
-          config: {
-            projectId: STUDIO_PROJECT_ID,
-            coordinatorThreadId: "thread-studio-coordinator" as ThreadId,
-            coordinatorName: "Studio lead",
-            coordinatorModelSelection: { provider: "codex", model: "gpt-5" },
-            workerRouting: {
-              modelSelection: { provider: "claudeAgent", model: "claude-opus-4-5" },
-              providerOptions: { claudeAgent: { enableArtifacts: true } },
-            },
-            limits: {
-              maxConcurrentWorkers: 8,
-              maxNewWorkersPerTurn: 8,
-              maxWorkerCreationsPerGoal: 40,
-              maxAutomaticContinuationsPerGoal: 20,
-              maxRepairRoundsPerTask: 2,
-            },
-            captureEnabled: true,
-            enabled: true,
-            automationId: null,
-            revision: 1,
-            createdAt: NOW_ISO,
-            updatedAt: NOW_ISO,
-            disabledAt: null,
-          },
-          linkedProjectIds: [],
-          goal: null,
-          digest: null,
-          blockers: [],
-          recentOutcomes: [],
-          coordinatorStatus: "idle",
-        };
+        nextFixture.projectAgentOverviews[STUDIO_PROJECT_ID] = createCoordinatorOverview(
+          STUDIO_PROJECT_ID,
+          ThreadId.makeUnsafe("thread-studio-coordinator"),
+        );
       },
     });
 
