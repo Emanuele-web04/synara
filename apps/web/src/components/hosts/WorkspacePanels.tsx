@@ -39,6 +39,7 @@ import { createOrRecoverProjectFromPath } from "../../lib/projectCreation";
 import { readExecutionContext } from "../../lib/hosts/executionContext";
 import { useHandleNewThread } from "../../hooks/useHandleNewThread";
 import { useSidebarThreadActions } from "../../hooks/useSidebarThreadActions";
+import { resolveActivityThreadReadAt } from "../SidebarActivityView.logic";
 import { useDiffRouteSearch } from "../../hooks/useDiffRouteSearch";
 import {
   createSidebarThreadSummariesSelector,
@@ -479,6 +480,19 @@ export function WorkspaceFrameNavigation() {
           });
         },
         setThreadPinned: threadActionsRef.current.setThreadPinned,
+        setThreadSettled: async (threadId, isSettled) => {
+          const store = useStore.getState();
+          const thread = store.sidebarThreadSummaryById[threadId];
+          if (!thread || thread.archivedAt) throw new Error("This chat is no longer available.");
+          if (isSettled) store.markThreadVisited(threadId, resolveActivityThreadReadAt(thread));
+          return threadActionsRef.current.setThreadSettled(threadId, isSettled);
+        },
+        returnSnoozedThread: async (threadId) => {
+          const thread = useStore.getState().sidebarThreadSummaryById[threadId];
+          if (!thread || thread.archivedAt) throw new Error("This chat is no longer available.");
+          const confirmed = await threadActionsRef.current.setThreadSnoozedUntil(threadId, null);
+          if (!confirmed) throw new Error("Could not return this chat from snoozed. Try again.");
+        },
         archiveThread: threadActionsRef.current.confirmAndArchiveThread,
         renameProject: (projectId, name) =>
           useStore.getState().renameProjectLocally(projectId, name.trim() || null),
@@ -538,6 +552,9 @@ export function WorkspaceFrameNavigation() {
         renameThread: (threadId, title) => threadExists(threadId).renameThread(threadId, title),
         setThreadPinned: (threadId, isPinned) =>
           threadExists(threadId).setThreadPinned(threadId, isPinned),
+        setThreadSettled: (threadId, isSettled) =>
+          threadExists(threadId).setThreadSettled(threadId, isSettled),
+        returnSnoozedThread: (threadId) => threadExists(threadId).returnSnoozedThread(threadId),
         archiveThread: (threadId) => threadExists(threadId).archiveThread(threadId, available),
         renameProject: (projectId, name) => projectExists(projectId).renameProject(projectId, name),
         setProjectPinned: (projectId, isPinned) =>
@@ -615,6 +632,9 @@ export function WorkspaceFrameNavigation() {
       .map((thread) => ({
         ...thread,
         isPinned: threadActions.pinnedThreadIdSet.has(thread.id),
+        ...(threadActions.settledOverrideByThreadId.has(thread.id)
+          ? { settledOverride: threadActions.settledOverrideByThreadId.get(thread.id)! }
+          : {}),
         terminalEntryPoint: terminalStates[thread.id]?.entryPoint === "terminal",
         status: resolveThreadStatusPill({
           thread,
@@ -662,6 +682,7 @@ export function WorkspaceFrameNavigation() {
     state,
     terminalStates,
     threadActions.pinnedThreadIdSet,
+    threadActions.settledOverrideByThreadId,
   ]);
   return null;
 }

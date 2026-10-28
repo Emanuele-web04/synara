@@ -26,6 +26,8 @@ export interface WorkspaceSummary {
   readonly threads: readonly (SidebarThreadSummary & {
     readonly status: ThreadStatusPill | null;
     readonly terminalEntryPoint?: boolean;
+    /** Ephemeral Done/Undo state from this thread's owning runtime. */
+    readonly settledOverride?: boolean;
   })[];
   readonly automations?: readonly {
     readonly id: string;
@@ -71,6 +73,8 @@ export type WorkspaceChatCreationCommand =
 export interface WorkspaceSidebarActions {
   renameThread(threadId: ThreadId, title: string): Promise<void>;
   setThreadPinned(threadId: ThreadId, isPinned: boolean): Promise<void>;
+  setThreadSettled(threadId: ThreadId, isSettled: boolean): Promise<boolean>;
+  returnSnoozedThread(threadId: ThreadId): Promise<void>;
   archiveThread(threadId: ThreadId, isAvailable?: () => boolean): Promise<void>;
   renameProject(projectId: ProjectId, name: string): Promise<void> | void;
   setProjectPinned(projectId: ProjectId, isPinned: boolean): Promise<void>;

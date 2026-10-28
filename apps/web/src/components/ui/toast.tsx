@@ -63,6 +63,8 @@ type ThreadToastData = {
   };
 };
 
+export type ThreadUndoToastDetails = NonNullable<ThreadToastData["archiveUndo"]>;
+
 const toastManager = Toast.createToastManager<ThreadToastData>();
 const anchoredToastManager = Toast.createToastManager<ThreadToastData>();
 type ToastId = ReturnType<typeof toastManager.add>;

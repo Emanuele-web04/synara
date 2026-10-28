@@ -206,6 +206,7 @@ export function mergeSidebarChats(input: {
 export function workspaceActivityRows(sessions: readonly WorkspaceSession[]) {
   const projectById = new Map<ProjectId, Project>();
   const remoteById = new Map<ThreadId, WorkspaceThreadEntry>();
+  const settledOverrideByThreadId = new Map<ThreadId, boolean>();
   const threads: SidebarThreadSummary[] = [];
   for (const session of sessions) {
     const environmentId = session.host.executionScope.environmentId;
@@ -234,6 +235,9 @@ export function workspaceActivityRows(sessions: readonly WorkspaceSession[]) {
       if (thread.archivedAt || !projectIds.has(thread.projectId)) continue;
       const id = threadKey(thread.id);
       remoteById.set(id, { key: id, thread, session });
+      if (typeof thread.settledOverride === "boolean") {
+        settledOverrideByThreadId.set(id, thread.settledOverride);
+      }
       threads.push({
         ...thread,
         id,
@@ -242,5 +246,5 @@ export function workspaceActivityRows(sessions: readonly WorkspaceSession[]) {
       });
     }
   }
-  return { threads, projectById, remoteById };
+  return { threads, projectById, remoteById, settledOverrideByThreadId };
 }

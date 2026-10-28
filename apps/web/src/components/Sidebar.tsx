@@ -4849,6 +4849,13 @@ export default function Sidebar() {
     () => workspaceActivityRows(workspaceSessions),
     [workspaceSessions],
   );
+  const activitySettledOverrideByThreadId = useMemo(
+    () =>
+      workspaceActivity.settledOverrideByThreadId.size === 0
+        ? settledOverrideByThreadId
+        : new Map([...settledOverrideByThreadId, ...workspaceActivity.settledOverrideByThreadId]),
+    [settledOverrideByThreadId, workspaceActivity],
+  );
   const activityPinnedThreadIdSet = useMemo(
     () =>
       new Set([
@@ -7920,7 +7927,7 @@ export default function Sidebar() {
                         activeThreadId={activityActiveThreadId}
                         pinnedThreadIdSet={activityPinnedThreadIdSet}
                         visualActiveThreadId={activityVisualActiveThreadId}
-                        settledOverrideByThreadId={settledOverrideByThreadId}
+                        settledOverrideByThreadId={activitySettledOverrideByThreadId}
                         threadsHydrated={threadsHydrated}
                         scopeSelection={activityScope}
                         onScopeSelectionChange={setActivityScope}

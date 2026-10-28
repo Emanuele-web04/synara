@@ -55,6 +55,9 @@ decoration pauses while its chat is hidden.
   filed in any Space count. If none remains, New thread reopens an unsent draft.
   Actions on other threads keep the current chat open.
   Both Archive and Done offer an **Undo** toast; undoing an action on the open thread returns to it.
+  Connected-computer rows expose **Pin**, **Archive**, and **Done/Undo** on hover or keyboard focus,
+  including in Priority. The controls replace the remote badge while visible and always act on
+  that chat’s owning computer; disconnected rows cannot make changes.
 - **Code review** — pull requests and issues from the GitHub repositories of your projects, with a
   detail pane and three actions on every item (see [Code review](#code-review))
 - **Tasks** (Stable and Beta) — a to-do list for anything you need to do, with or without
