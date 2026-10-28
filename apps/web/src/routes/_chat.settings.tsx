@@ -1440,7 +1440,7 @@ function SettingsRouteView() {
       <SettingsSection title="Conversation">
         <SettingsRow
           title="Follow-up behavior"
-          description="Choose whether messages sent during an active turn wait in the queue or steer the current run. Ctrl/Cmd+Enter uses the opposite behavior for one message."
+          description="Choose whether messages sent during an active turn wait in the queue or steer the current run. For a new message, Ctrl/Cmd+Enter uses the opposite behavior once. With an empty composer and queued messages, it always steers the first queued message."
           resetAction={
             settings.followUpBehavior !== defaults.followUpBehavior ? (
               <SettingResetButton
