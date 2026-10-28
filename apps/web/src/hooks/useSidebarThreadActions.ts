@@ -1142,6 +1142,7 @@ export function useSidebarThreadActions(input: {
     pinnedThreadIdSet,
     setThreadPinned,
     toggleThreadPinned,
+    setThreadSettled,
     setThreadSettledWithToast,
     setThreadSnoozedUntil,
     snoozeThread,

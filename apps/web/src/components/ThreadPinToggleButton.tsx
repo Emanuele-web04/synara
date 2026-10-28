@@ -17,12 +17,14 @@ export function ThreadPinToggleButton({
   presentation,
   targetLabel: targetLabelProp,
   toneClassName,
+  disabled,
   onToggle,
 }: {
   pinned: boolean;
   presentation: "overlay" | "inline" | "leading";
   targetLabel?: string;
   toneClassName?: string;
+  disabled?: boolean;
   onToggle: (event: React.MouseEvent<HTMLButtonElement> | React.MouseEvent) => void;
 }) {
   const targetLabel = targetLabelProp ?? "thread";
@@ -31,6 +33,7 @@ export function ThreadPinToggleButton({
   return (
     <IconButton
       label={label}
+      disabled={disabled}
       aria-pressed={pinned}
       title={label}
       size="icon-xs"
