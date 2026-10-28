@@ -19,6 +19,7 @@ import { TCC_SERVICE_NAMES } from "@synara/shared/computerGrants";
 import { resolveSynaraDesktopFlavor, synaraDesktopIdentity } from "@synara/shared/desktopIdentity";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { desktopIconAssetPaths } from "../../../scripts/lib/brand-assets.ts";
 import { createSourceDesktopEnvironment } from "./source-desktop-launch.mjs";
 
 const desktopFlavor = resolveSynaraDesktopFlavor({
@@ -30,8 +31,8 @@ const desktopIdentity = synaraDesktopIdentity(desktopFlavor);
 const APP_DISPLAY_NAME = desktopIdentity.displayName;
 const APP_BUNDLE_ID = desktopIdentity.bundleId;
 const LAUNCHER_VERSION = 7;
-// Kept in sync with BRAND_ASSET_PATHS.productionMacIconComposer and the macOS
-// icon constants in scripts/lib/desktop-platform-build-config.ts. The packaged
+// Kept in sync with the macOS icon constants in
+// scripts/lib/desktop-platform-build-config.ts. The packaged
 // build compiles the same asset; this launcher does it for dev and Canary,
 // which run from a renamed Electron bundle instead of a packaged app.
 const ICON_COMPOSER_ASSET_NAME = "Synara";
@@ -326,7 +327,11 @@ export function buildMacLauncher(
   const targetAppBundlePath = join(runtimeDir, `${APP_DISPLAY_NAME}.app`);
   const targetBinaryPath = join(targetAppBundlePath, "Contents", "MacOS", "Electron");
   const iconPath = join(desktopDirectory, "resources", "icon.icns");
-  const iconComposerPath = resolve(desktopDirectory, "../../assets/prod/Synara.icon");
+  const iconComposerPath = resolve(
+    desktopDirectory,
+    "../..",
+    desktopIconAssetPaths(desktopFlavor === "beta" ? "beta" : "production").macIconComposer,
+  );
   const hasIconComposerSource = existsSync(iconComposerPath);
   const metadataPath = join(runtimeDir, "metadata.json");
   const desktopPackage = JSON.parse(readFileSync(join(desktopDirectory, "package.json"), "utf8"));
@@ -340,6 +345,9 @@ export function buildMacLauncher(
     iconMtimeMs: statSync(iconPath).mtimeMs,
     bootstrapHash: createHash("sha256").update(readFileSync(bootstrapPath)).digest("hex"),
     appVersion: desktopPackage.version,
+    // Record the selected catalog so old launchers and flavor changes rebuild
+    // even when the Beta and Stable assets have matching modification times.
+    iconComposerPath,
     // Layered artwork lives in several files, so track the newest of them.
     iconComposerMtimeMs: hasIconComposerSource ? latestMtimeMs(iconComposerPath) : null,
   };
