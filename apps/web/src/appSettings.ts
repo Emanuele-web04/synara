@@ -451,7 +451,7 @@ export const AppSettingsSchema = Schema.Struct({
   // Server-backed: how long an idle side chat stays usable before it expires.
   sidechatExpiry: SidechatExpiry.pipe(withDefaults(() => "1h" as const satisfies SidechatExpiry)),
   // Local-only UI preferences for hiding sidebar surfaces a user doesn't want.
-  // `showChatsSection` controls the standalone "Chats" list in the sidebar footer
+  // `showChatsSection` controls the standalone "Chats" list and its pinned selector
   // (rootless chats not tied to a project). `showGroupsSection` controls the
   // optional Groups tab in the section switcher.
   showChatsSection: Schema.Boolean.pipe(withDefaults(() => true)),
