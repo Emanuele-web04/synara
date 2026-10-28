@@ -20,11 +20,13 @@ import type { WorkspaceSession } from "../lib/hosts/workspaceSessions";
 import { workspaceActivityRows, type WorkspaceThreadEntry } from "../lib/hosts/workspaceSidebar";
 import { WorkspaceThreadRow } from "./hosts/WorkspaceProjects";
 import { SidebarProvider } from "./ui/sidebar";
+import { toastManager } from "./ui/toast";
 
 const remoteFixture = vi.hoisted(() => ({
   available: new Map<WorkspaceSession, WorkspaceNavigation>(),
   sessions: [] as WorkspaceSession[],
   open: vi.fn(),
+  href: "/",
 }));
 vi.mock("../lib/hosts/workspaceSessions", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../lib/hosts/workspaceSessions")>()),
@@ -39,7 +41,7 @@ vi.mock("../lib/hosts/workspaceCommands", async (importOriginal) => ({
 vi.mock("@tanstack/react-router", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@tanstack/react-router")>()),
   useLocation: ({ select }: { select: (location: { href: string }) => unknown }) =>
-    select({ href: "/" }),
+    select({ href: remoteFixture.href }),
 }));
 
 const projectFavicon = `data:image/svg+xml,${encodeURIComponent(
@@ -212,12 +214,13 @@ function activityLayout(): string[] {
 function makeRemoteEntry(
   environmentId: string,
   overrides: Partial<WorkspaceThreadEntry["thread"]> = {},
+  children: readonly WorkspaceThreadEntry["thread"][] = [],
 ) {
   const actions = {
     renameThread: vi.fn(async () => {}),
     setThreadPinned: vi.fn(async () => {}),
     archiveThread: vi.fn(async () => {}),
-    setThreadSettled: vi.fn(async () => {}),
+    setThreadSettled: vi.fn(async (_threadId: ThreadId, _settled: boolean) => true),
     returnSnoozedThread: vi.fn(async () => {}),
     renameProject: vi.fn(),
     setProjectPinned: vi.fn(async () => {}),
@@ -264,7 +267,7 @@ function makeRemoteEntry(
       state: "open",
       path: "/previous-chat",
       projects: [{ ...makeProject(PROJECT_A, "Project A"), section: "projects" }],
-      threads: [thread],
+      threads: [thread, ...children],
     },
   };
   remoteFixture.available.set(session, navigation);
@@ -312,6 +315,7 @@ describe("SidebarActivityView", () => {
     remoteFixture.available.clear();
     remoteFixture.sessions = [];
     remoteFixture.open.mockClear();
+    remoteFixture.href = "/";
     document.body.innerHTML = "";
   });
 
@@ -538,6 +542,117 @@ describe("SidebarActivityView", () => {
     );
     await mounted.unmount();
   });
+
+  it.each(["active", "another-host", "child-active"] as const)(
+    "keeps controller Done undo after its remote row unmounts (route: %s)",
+    async (route) => {
+      const childId = ThreadId.makeUnsafe("remote-child");
+      const owner = makeRemoteEntry("mini", {}, [
+        {
+          ...makeThread(72, {
+            id: childId,
+            parentThreadId: ThreadId.makeUnsafe("same-remote-thread"),
+          }),
+          status: null,
+        },
+      ]);
+      const other = makeRemoteEntry("book");
+      const environment = route === "another-host" ? "book" : "mini";
+      const path = route === "child-active" ? `/${childId}` : `/${owner.entry.thread.id}`;
+      remoteFixture.href = `/remote?${new URLSearchParams({ environment, path })}`;
+      const input = remoteActivityInput([owner.session, other.session]);
+      const addToast = vi.spyOn(toastManager, "add");
+      const mounted = await render(renderActivity(input));
+      const row = page.getByTestId(`activity-thread-${input.threads[0]!.id}`).element();
+      row.focus();
+      actionButton(row.parentElement!, "Done").click();
+      await vi.waitFor(() =>
+        expect(addToast).toHaveBeenCalledWith(
+          expect.objectContaining({
+            timeout: 0,
+            data: expect.objectContaining({
+              allowCrossThreadVisibility: true,
+              dismissAfterVisibleMs: 8_000,
+              archiveUndo: expect.objectContaining({ message: "Marked as done" }),
+            }),
+          }),
+        ),
+      );
+      const undo = addToast.mock.calls[0]![0].data!.archiveUndo!.onUndo;
+      await mounted.unmount();
+      await expect(Promise.resolve(undo())).resolves.toBe(true);
+      expect(owner.actions.setThreadSettled).toHaveBeenNthCalledWith(
+        1,
+        owner.entry.thread.id,
+        true,
+      );
+      expect(owner.actions.setThreadSettled).toHaveBeenNthCalledWith(
+        2,
+        owner.entry.thread.id,
+        false,
+      );
+      expect(other.actions.setThreadSettled).not.toHaveBeenCalled();
+      if (route === "active")
+        expect(remoteFixture.open).toHaveBeenCalledExactlyOnceWith(
+          owner.session,
+          `/${owner.entry.thread.id}`,
+        );
+      else expect(remoteFixture.open).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["offline", "frame-replaced"] as const)(
+    "keeps Done undo unsuccessful without targeting another owner (%s)",
+    async (state) => {
+      const owner = makeRemoteEntry("mini");
+      const other = makeRemoteEntry("book");
+      const input = remoteActivityInput([owner.session]);
+      const addToast = vi.spyOn(toastManager, "add");
+      const mounted = await render(renderActivity(input));
+      const row = page.getByTestId(`activity-thread-${input.threads[0]!.id}`).element();
+      row.focus();
+      actionButton(row.parentElement!, "Done").click();
+      await vi.waitFor(() => expect(addToast).toHaveBeenCalled());
+      const undo = addToast.mock.calls[0]![0].data!.archiveUndo!.onUndo;
+      await mounted.unmount();
+      remoteFixture.available.delete(owner.session);
+      const replacement = state === "frame-replaced" ? makeRemoteEntry("mini") : null;
+      await expect(Promise.resolve(undo())).resolves.toBe(false);
+      expect(owner.actions.setThreadSettled).toHaveBeenCalledExactlyOnceWith(
+        owner.entry.thread.id,
+        true,
+      );
+      expect(other.actions.setThreadSettled).not.toHaveBeenCalled();
+      if (replacement) expect(replacement.actions.setThreadSettled).not.toHaveBeenCalled();
+      expect(remoteFixture.open).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["unconfirmed", "stale-frame"] as const)(
+    "does not offer Undo for a stale or unconfirmed remote Done (%s)",
+    async (state) => {
+      const owner = makeRemoteEntry("mini");
+      let confirm!: (confirmed: boolean) => void;
+      owner.actions.setThreadSettled.mockImplementationOnce(
+        () =>
+          new Promise<boolean>((resolve) => {
+            confirm = resolve;
+          }),
+      );
+      const input = remoteActivityInput([owner.session]);
+      const addToast = vi.spyOn(toastManager, "add");
+      const mounted = await render(renderActivity(input));
+      const row = page.getByTestId(`activity-thread-${input.threads[0]!.id}`).element();
+      row.focus();
+      actionButton(row.parentElement!, "Done").click();
+      expect(addToast).not.toHaveBeenCalled();
+      if (state === "stale-frame") remoteFixture.available.delete(owner.session);
+      confirm(state === "stale-frame");
+      await new Promise<void>((resolve) => globalThis.setTimeout(resolve, 0));
+      expect(addToast).not.toHaveBeenCalled();
+      await mounted.unmount();
+    },
+  );
 
   it("returns a remote snoozed chat through its owner without marking a local chat Done", async () => {
     const owner = makeRemoteEntry("mini", { snoozedUntil: "2026-08-02T13:00:00.000Z" });

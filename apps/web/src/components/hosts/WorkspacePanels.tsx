@@ -485,7 +485,7 @@ export function WorkspaceFrameNavigation() {
           const thread = store.sidebarThreadSummaryById[threadId];
           if (!thread || thread.archivedAt) throw new Error("This chat is no longer available.");
           if (isSettled) store.markThreadVisited(threadId, resolveActivityThreadReadAt(thread));
-          await threadActionsRef.current.setThreadSettled(threadId, isSettled);
+          return threadActionsRef.current.setThreadSettled(threadId, isSettled);
         },
         returnSnoozedThread: async (threadId) => {
           const thread = useStore.getState().sidebarThreadSummaryById[threadId];

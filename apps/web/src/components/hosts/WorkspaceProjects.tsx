@@ -83,7 +83,8 @@ import {
   SIDEBAR_THREAD_ROW_BASE_CLASS_NAME,
   sidebarHoverRevealHideClassName,
 } from "../../sidebarRowStyles";
-import { cn } from "../../lib/utils";
+import { cn, randomUUID } from "../../lib/utils";
+import { showUndoToast } from "../../lib/threadUndoToast";
 
 type SortableProjectHandleProps = Pick<
   ReturnType<typeof useSortable>,
@@ -139,15 +140,15 @@ function WorkspaceRowMenu({
   );
 }
 
-async function runWorkspaceSidebarAction(
+async function runWorkspaceSidebarAction<T>(
   session: WorkspaceSession,
-  action: (actions: WorkspaceSidebarActions) => Promise<void> | void,
-): Promise<void> {
+  action: (actions: WorkspaceSidebarActions) => Promise<T> | T,
+): Promise<T> {
   try {
     const actions = readAvailableWorkspaceNavigation(session)?.sidebar;
     if (!actions)
       throw new Error("This computer is no longer available. Reconnect before making changes.");
-    await action(actions);
+    return await action(actions);
   } catch (error) {
     toastManager.add({
       type: "error",
@@ -177,7 +178,12 @@ function WorkspaceProjectIcon({
   return <Folder className="size-4" style={style} />;
 }
 
-function selectedThreadPath(href: string, session: WorkspaceSession, threadId: string): boolean {
+function selectedThreadPath(
+  href: string,
+  session: WorkspaceSession,
+  threadId: string,
+  exact = false,
+): boolean {
   const [pathname, search = ""] = href.split("?");
   if (pathname !== "/remote") return false;
   const params = new URLSearchParams(search);
@@ -188,6 +194,7 @@ function selectedThreadPath(href: string, session: WorkspaceSession, threadId: s
     path.length <= 1
   )
     return false;
+  if (exact) return path === `/${threadId}`;
   return (
     resolveSidebarRootThreadId(
       ThreadId.makeUnsafe(path.slice(1)),
@@ -207,6 +214,7 @@ export function WorkspaceThreadActions({
     quickActions: ReactNode;
   }) => ReactNode;
 }) {
+  const href = useLocation({ select: (location) => location.href });
   const { session, thread } = entry;
   const [menu, setMenu] = useState<WorkspaceMenuState | null>(null);
   const [renameSession, setRenameSession] = useState<WorkspaceSession | null>(null);
@@ -249,6 +257,35 @@ export function WorkspaceThreadActions({
       return actions.archiveThread(thread.id);
     }).catch(() => undefined);
   };
+  const toggleSettledInWorkspace = () => {
+    const owner = session;
+    const threadId = thread.id;
+    const nextSettled = !isSettled;
+    const returnToThreadOnUndo = selectedThreadPath(href, owner, threadId, true);
+    void runWorkspaceSidebarAction(owner, (actions) =>
+      actions.setThreadSettled(threadId, nextSettled),
+    )
+      .then((confirmed) => {
+        if (!confirmed || !nextSettled || !readAvailableWorkspaceNavigation(owner)?.sidebar) return;
+        // This controller owns the visible toast even if Done removes the row or closes its frame route.
+        showUndoToast(
+          `done-undo:${owner.host.executionScope.environmentId}:${threadId}:${randomUUID()}`,
+          {
+            message: "Marked as done",
+            onUndo: () =>
+              runWorkspaceSidebarAction(owner, (actions) =>
+                actions.setThreadSettled(threadId, false),
+              )
+                .then((restored) => {
+                  if (restored && returnToThreadOnUndo) openWorkspacePath(owner, `/${threadId}`);
+                  return restored;
+                })
+                .catch(() => false),
+          },
+        );
+      })
+      .catch(() => undefined);
+  };
   const quickActions = (
     <ThreadRowQuickActions
       threadId={thread.id}
@@ -262,13 +299,11 @@ export function WorkspaceThreadActions({
         runQuickAction((actions) => actions.setThreadPinned(thread.id, thread.isPinned !== true))
       }
       onArchive={() => archiveInWorkspace(session)}
-      onDone={() =>
-        runQuickAction((actions) =>
-          thread.snoozedUntil != null
-            ? actions.returnSnoozedThread(thread.id)
-            : actions.setThreadSettled(thread.id, !isSettled),
-        )
-      }
+      onDone={() => {
+        if (thread.snoozedUntil != null)
+          runQuickAction((actions) => actions.returnSnoozedThread(thread.id));
+        else void toggleSettledInWorkspace();
+      }}
     />
   );
   return (

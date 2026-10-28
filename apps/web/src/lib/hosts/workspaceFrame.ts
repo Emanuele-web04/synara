@@ -73,7 +73,7 @@ export type WorkspaceChatCreationCommand =
 export interface WorkspaceSidebarActions {
   renameThread(threadId: ThreadId, title: string): Promise<void>;
   setThreadPinned(threadId: ThreadId, isPinned: boolean): Promise<void>;
-  setThreadSettled(threadId: ThreadId, isSettled: boolean): Promise<void>;
+  setThreadSettled(threadId: ThreadId, isSettled: boolean): Promise<boolean>;
   returnSnoozedThread(threadId: ThreadId): Promise<void>;
   archiveThread(threadId: ThreadId, isAvailable?: () => boolean): Promise<void>;
   renameProject(projectId: ProjectId, name: string): Promise<void> | void;
