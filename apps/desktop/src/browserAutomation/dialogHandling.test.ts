@@ -40,6 +40,63 @@ const makeRuntime = (debuggerInstance = new FakeDebugger()): BrowserAutomationVi
 };
 
 describe("browser JavaScript dialog handling", () => {
+  it.each(["prompt", "confirm"])(
+    "leaves a manual %s alone after a command completes and handles later automation",
+    async (type) => {
+      const debuggerInstance = new FakeDebugger();
+      const runtime = makeRuntime(debuggerInstance);
+      await withDialogHandling(runtime, async () => "completed");
+      debuggerInstance.commands.length = 0;
+
+      debuggerInstance.emit("message", {}, "Page.javascriptDialogOpening", {
+        type,
+        message: "Manual sign-in",
+      });
+      expect(debuggerInstance.commands).toEqual([]);
+
+      const result = await withDialogHandling(runtime, async () => {
+        debuggerInstance.emit("message", {}, "Page.javascriptDialogOpening", {
+          type,
+          message: "Automation dialog",
+        });
+        return "completed";
+      });
+      expect(result.dialogs).toEqual([
+        expect.objectContaining({ kind: type, action: "dismissed" }),
+      ]);
+      expect(debuggerInstance.commands).toContainEqual({
+        method: "Page.handleJavaScriptDialog",
+        params: { accept: false },
+      });
+    },
+  );
+
+  it.each(["failure", "cancellation"])(
+    "leaves manual dialogs alone after command %s",
+    async (outcome) => {
+      const debuggerInstance = new FakeDebugger();
+      const runtime = makeRuntime(debuggerInstance);
+      const controller = new AbortController();
+      await expect(
+        withDialogHandling(
+          runtime,
+          async () => {
+            if (outcome === "cancellation") controller.abort(new Error("stopped"));
+            throw new Error("stopped");
+          },
+          controller.signal,
+        ),
+      ).rejects.toThrow("stopped");
+      debuggerInstance.commands.length = 0;
+
+      debuggerInstance.emit("message", {}, "Page.javascriptDialogOpening", {
+        type: "confirm",
+        message: "Manual sign-in",
+      });
+      expect(debuggerInstance.commands).toEqual([]);
+    },
+  );
+
   it("unblocks a command through the debugger event path and applies the safe policy", async () => {
     const debuggerInstance = new FakeDebugger();
     const runtime = makeRuntime(debuggerInstance);

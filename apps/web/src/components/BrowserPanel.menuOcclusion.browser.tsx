@@ -2,6 +2,7 @@ import "../index.css";
 
 import {
   ThreadId,
+  type BrowserPasskeyPrompt,
   type BrowserSetPanelBoundsInput,
   type ThreadBrowserState,
 } from "@synara/contracts";
@@ -13,6 +14,7 @@ import { render } from "vitest-browser-react";
 
 import { useBrowserStateStore } from "../browserStateStore";
 import { BrowserPanel } from "./BrowserPanel";
+import { BrowserPasskeyDialog } from "./BrowserPasskeyDialog";
 import { RightDock } from "./chat/RightDock";
 import {
   Menu,
@@ -26,6 +28,12 @@ import {
 
 const api = vi.hoisted(() => ({
   browser: {
+    passkeys: {
+      snapshot: vi.fn<() => Promise<BrowserPasskeyPrompt | null>>(async () => null),
+      start: vi.fn(async () => {}),
+      cancel: vi.fn(async () => {}),
+      onChanged: vi.fn<(_listener: () => void) => () => void>(() => () => {}),
+    },
     open: vi.fn<() => Promise<ThreadBrowserState>>(),
     hide: vi.fn(async () => {}),
     setPanelBounds: vi.fn<(input: BrowserSetPanelBoundsInput) => Promise<void>>(async () => {}),
@@ -157,6 +165,7 @@ function FloatingFixture({ showMenu = true }: { showMenu?: boolean }) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  api.browser.passkeys.snapshot.mockResolvedValue(null);
   api.browser.open.mockResolvedValue(state);
   api.browser.navigate.mockResolvedValue(state);
   api.browser.capturePreview.mockResolvedValue(previewSrc);
@@ -171,6 +180,44 @@ afterEach(() => {
 });
 
 describe("native browser menu occlusion", () => {
+  it("hides the native guest for a phone-passkey dialog and restores the same tab", async () => {
+    await page.viewport(1280, 900);
+    let changed: () => void = vi.fn();
+    api.browser.passkeys.onChanged.mockImplementation((listener) => {
+      changed = listener;
+      return () => {};
+    });
+    const mounted = await render(
+      <QueryClientProvider client={new QueryClient()}>
+        <div style={{ width: 640, height: 600 }}>
+          <BrowserPanel mode="sidebar" threadId={threadId} onClosePanel={() => {}} />
+        </div>
+        <BrowserPasskeyDialog />
+      </QueryClientProvider>,
+    );
+    await vi.waitFor(() => expect(lastBounds()?.width).toBeGreaterThan(0));
+    const original = lastBounds();
+    api.browser.passkeys.snapshot.mockResolvedValue({
+      id: "passkey-fixture",
+      origin: "https://example.test",
+      rpId: "example.test",
+      phase: "confirm",
+      svg: null,
+    });
+    changed();
+    await vi.waitFor(() => {
+      expect(lastBounds()).toBeNull();
+      expect(api.browser.setPanelBounds.mock.lastCall?.[0].occluded).toBe(true);
+    });
+    await page.getByRole("button", { name: "Continue", exact: true }).click();
+    expect(api.browser.passkeys.start).toHaveBeenCalledWith("passkey-fixture");
+    api.browser.passkeys.snapshot.mockResolvedValue(null);
+    changed();
+    await vi.waitFor(() => expect(lastBounds()).toEqual(original));
+    expect(api.browser.detachWebview).not.toHaveBeenCalled();
+    expect(api.browser.hide).not.toHaveBeenCalled();
+    await mounted.unmount();
+  });
   it("restores the same docked native tab after address suggestions close", async () => {
     await page.viewport(1280, 900);
     const mounted = await render(

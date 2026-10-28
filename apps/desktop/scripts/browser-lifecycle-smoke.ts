@@ -12,6 +12,7 @@ import { synaraHostTarget } from "../src/browserAutomation/betterwrightHostTarge
 import { BrowserVaultCapture } from "../src/browserAutomation/browserVaultCapture";
 import type { BrowserVault } from "../src/browserAutomation/browserVault";
 import type { BrowserAutomationVisibleRuntime } from "../src/browserManager";
+import { withDialogHandling } from "../src/browserAutomation/dialogHandling";
 
 // Synthetic, loopback-only fixtures. No personal profiles, credentials, or
 // external sites are used. This runs in Electron, not a mocked Session.
@@ -79,6 +80,26 @@ async function checkCookieImportMetadata(contents: WebContents) {
   } finally {
     await hostTarget.revokeAll(false);
     await browser.close();
+  }
+}
+
+async function checkManualConfirmation(contents: WebContents) {
+  const runtime = {
+    webContents: contents,
+  } as unknown as BrowserAutomationVisibleRuntime;
+  await withDialogHandling(runtime, async () => "completed");
+  const opened = Promise.withResolvers<void>();
+  const onMessage = (_event: unknown, method: string) => {
+    if (method === "Page.javascriptDialogOpening") opened.resolve();
+  };
+  contents.debugger.on("message", onMessage);
+  try {
+    const result = contents.executeJavaScript('window.confirm("Synthetic manual confirmation")');
+    await opened.promise;
+    await contents.debugger.sendCommand("Page.handleJavaScriptDialog", { accept: true });
+    assert.equal(await result, true);
+  } finally {
+    contents.debugger.removeListener("message", onMessage);
   }
 }
 
@@ -259,6 +280,7 @@ async function smoke() {
     );
     await checkCookieImportMetadata(contents);
     assert.equal(await session.resolveProxy(allowedUrl), baselineProxy);
+    await checkManualConfirmation(contents);
 
     // Install the real upstream capture sensor into a live Electron isolated
     // world, then verify its script, scoped binding, and disposal.
@@ -291,7 +313,7 @@ async function smoke() {
     }
     assert.equal(contents.debugger.listenerCount("message"), listeners);
     console.log(
-      "PASS: real worker setup, session requests, redirects, WebSockets, service workers, shared tabs, queued concurrent runs, connection draining, worker rotation, proxy restoration, cookie import metadata, and capture sensor.",
+      "PASS: real worker setup, session requests, redirects, WebSockets, service workers, shared tabs, queued concurrent runs, connection draining, worker rotation, proxy restoration, cookie import metadata, manual confirmation after automation, and capture sensor.",
     );
   } finally {
     await siblingTarget.revokeAll(true);

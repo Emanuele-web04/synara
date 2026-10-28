@@ -14,6 +14,7 @@ import {
 } from "@synara/contracts";
 import { defaultTerminalTitleForCliKind } from "@synara/shared/terminalThreads";
 import { BrowserVaultDialog } from "~/components/BrowserVault";
+import { BrowserPasskeyDialog } from "~/components/BrowserPasskeyDialog";
 import { isThreadDetailEventFor } from "@synara/shared/threadDetailEvents";
 import {
   Outlet,
@@ -373,6 +374,7 @@ function RootRouteView() {
           <ProviderModelDiscoveryWarmer />
           <GlobalShortcutsDialog />
           <BrowserVaultDialog />
+          <BrowserPasskeyDialog />
           <GlobalFeedbackDialog />
           <GlobalWhatsNewSurface />
           <TaskCompletionNotifications />

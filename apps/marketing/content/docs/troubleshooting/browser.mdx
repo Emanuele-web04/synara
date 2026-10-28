@@ -96,6 +96,18 @@ Stop browser automation when the result reports that human action is required.
 4. Resume only after the user confirms completion.
 5. Take a new snapshot because the original page state may have changed.
 
+## Sign-in prompts and phone passkeys
+
+Complete interactive sign-in manually while browser automation is stopped. Automation dismisses JavaScript prompts and confirmations during a tool command; after the command finishes, it leaves manual dialogs alone.
+
+The macOS and Linux desktop browser can use an existing phone passkey through QR pairing. Select the website's passkey sign-in action, check the origin in **Sign in with your phone**, and choose **Continue**. Scan the QR with your phone's camera and approve sign-in on the phone. Bluetooth must be enabled, the phone must be nearby, and both devices need internet access.
+
+Synara pauses browser automation during pairing. Cancel, navigation, tab closure, app shutdown, or the request deadline stops the native helper and rejects the pending website request. Only the requesting page receives the assertion; Synara does not store the passkey. Windows keeps its native OS authentication path.
+
+GitHub may report **partial passkey support** because its support check asks whether a local platform authenticator is available. A phone passkey uses hybrid transport instead, so this warning alone does not mean phone sign-in failed. Synara does not falsify local-authenticator support to hide it.
+
+This bridge handles explicit, top-level sign-in requests for existing phone passkeys. It does not provide passkey enrollment, autofill/conditional mediation, cross-origin iframe requests, or extension outputs such as PRF. Those features retain the runtime's native behavior or remain unavailable. If a phone cannot connect, review the Bluetooth permission and use the site's alternative sign-in method. Importing a browser session remains an [optional alternative](/docs/features/browser-sessions#import-an-existing-browser-session), not an in-app passkey operation.
+
 ## Navigation succeeded but the page is not ready
 
 Wait for a bounded condition rather than a fixed long sleep when possible.

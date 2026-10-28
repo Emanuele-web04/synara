@@ -24,6 +24,7 @@ import {
 import {
   createDesktopPlatformBuildConfig,
   MAC_APPSNAP_HELPER_STAGE_PATH,
+  PASSKEY_HELPER_STAGE_PATH,
   MAC_DEVICE_HELPER_RESOURCE_PATH,
   MAC_ICON_ASSET_NAME,
   MAC_ICON_COMPOSER_DEPLOYMENT_TARGET,
@@ -990,15 +991,15 @@ const assertPlatformBuildResources = Effect.fn("assertPlatformBuildResources")(f
   }
 });
 
-// Builds one of the macOS native pieces (AppSnap helper, window-material addon) into the
-// stage tree, where the mac build config's extraFiles picks it up.
-const stageMacNativeBuild = Effect.fn("stageMacNativeBuild")(function* (
+// Builds a native helper or addon into the stage tree for platform packaging.
+const stageNativeBuild = Effect.fn("stageNativeBuild")(function* (
   label: string,
   buildScriptName: string,
   stagePath: string,
   stageAppDir: string,
   arch: typeof BuildArch.Type,
   verbose: boolean,
+  flavor?: SynaraPackagedDesktopFlavor,
 ) {
   const path = yield* Path.Path;
   const fs = yield* FileSystem.FileSystem;
@@ -1010,6 +1011,7 @@ const stageMacNativeBuild = Effect.fn("stageMacNativeBuild")(function* (
   yield* runCommand(
     ChildProcess.make({
       cwd: stageAppDir,
+      ...(flavor ? { env: { ...process.env, SYNARA_PASSKEY_HELPER_FLAVOR: flavor } } : {}),
       ...commandOutputOptions(verbose),
     })`node ${buildScript} --arch ${arch} --release --output ${outputPath}`,
   );
@@ -1282,7 +1284,7 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   if (options.platform === "mac") {
     yield* timedBuildStage(
       "appsnap-helper",
-      stageMacNativeBuild(
+      stageNativeBuild(
         "AppSnap helper",
         "build-appsnap-helper.mjs",
         MAC_APPSNAP_HELPER_STAGE_PATH,
@@ -1293,13 +1295,28 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
     );
     yield* timedBuildStage(
       "window-material-addon",
-      stageMacNativeBuild(
+      stageNativeBuild(
         "window-material addon",
         "build-window-material-addon.mjs",
         MAC_WINDOW_MATERIAL_ADDON_STAGE_PATH,
         stageAppDir,
         options.arch,
         options.verbose,
+      ),
+    );
+  }
+
+  if (options.platform !== "win") {
+    yield* timedBuildStage(
+      "phone-passkey-helper",
+      stageNativeBuild(
+        "phone passkey helper",
+        "build-passkey-helper.mjs",
+        PASSKEY_HELPER_STAGE_PATH,
+        stageAppDir,
+        options.arch,
+        options.verbose,
+        options.flavor,
       ),
     );
   }

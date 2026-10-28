@@ -290,6 +290,7 @@ import { createCookieSessionBackend } from "./browserAutomation/electronCookieSe
 import { BrowserVault } from "./browserAutomation/browserVault";
 import { BrowserVaultCapture } from "./browserAutomation/browserVaultCapture";
 import { registerBrowserVaultIpc } from "./browserVaultIpc";
+import { BrowserPasskeys, registerBrowserPasskeyIpc } from "./browserPasskeys";
 import { registerSafariAccessIpc } from "./safariAccessIpc";
 import { showInFileManager } from "./showInFileManager";
 import { BrowserCookieImport } from "./browserAutomation/browserCookieImport";
@@ -608,8 +609,22 @@ const browserOsKeyStore = {
 const browserVault = new BrowserVault(Path.join(BASE_DIR, "browser-vault"), browserOsKeyStore);
 let browserSessionRestore: BrowserSessionRestore | undefined;
 const browserVaultCapture = new BrowserVaultCapture(browserVault);
+const browserPasskeys = new BrowserPasskeys(
+  app.isPackaged
+    ? Path.join(process.resourcesPath, "passkeys", "synara-passkey-helper")
+    : Path.resolve(__dirname, "..", ".electron-runtime", "passkeys", "synara-passkey-helper"),
+  () => mainWindow?.webContents.send(IPC.browser.passkeys.changed),
+  () => browserManager.beginHumanBrowserOperation(),
+);
 const browserManager = new DesktopBrowserManager({
-  onRuntimeReady: (runtime) => browserVaultCapture.register(runtime),
+  onRuntimeReady: (runtime) => {
+    const releaseCapture = browserVaultCapture.register(runtime);
+    const releasePasskeys = browserPasskeys.register(runtime);
+    return () => {
+      releaseCapture();
+      releasePasskeys();
+    };
+  },
   onHumanControl: (threadId) => browserVaultCapture.noteHumanActivity(threadId),
   annotationPreloadPath: annotationGuestPreload,
   beforeInputEvent: (event, input) => {
@@ -4906,6 +4921,7 @@ async function shutdownDesktopRuntime(reason: string): Promise<void> {
       cancelBackendReadinessWait();
       appSnapManager?.dispose();
       appSnapManager = null;
+      await browserPasskeys.dispose();
       await shutdownBrowserServices({
         revokeHost: () => disposeBrowserHostPipeServerForShutdown(reason),
         closePages: () => browserManager.dispose(),
@@ -5610,6 +5626,7 @@ function registerIpcHandlers(): void {
   registerDesktopVoiceTranscriptionHandler();
   startBrowserPerformanceLogging();
   registerBrowserIpcHandlers(ipcMain, browserManager);
+  registerBrowserPasskeyIpc(ipcMain, browserManager, browserPasskeys);
   registerBrowserVaultIpc(
     ipcMain,
     browserManager,

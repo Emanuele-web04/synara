@@ -23,6 +23,7 @@
         "effect": "catalog:",
         "electron": "43.4.1",
         "electron-updater": "^6.6.2",
+        "tldts": "7.4.9",
         "undici": "8.10.2",
         "ws": "^8.21.0",
       },
