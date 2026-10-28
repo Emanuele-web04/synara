@@ -1035,5 +1035,20 @@
   "reviewFilesChanged": "文件已更改 · 查看更改",
   "reviewFilesChangedCount_one": "{{count}} 个文件已更改 · 查看更改",
   "reviewFilesChangedCount_other": "{{count}} 个文件已更改 · 查看更改",
-  "emptyLandingProjectHeading": "我们应该在 <project/> 中做什么？"
+  "emptyLandingProjectHeading": "我们应该在 <project/> 中做什么？",
+  "turnResumedTaskFinished": "“{{description}}”已完成",
+  "turnResumedTaskFailed": "“{{description}}”失败",
+  "turnResumedTaskStopped": "“{{description}}”已停止",
+  "turnResumedTaskUpdated": "“{{description}}”已更新",
+  "turnResumedTasksFinished": "{{count}} 个后台任务已完成",
+  "turnResumedTasksFailed": "{{count}} 个后台任务失败",
+  "turnResumedTasksStopped": "{{count}} 个后台任务已停止",
+  "turnResumedTasksUpdated": "{{count}} 个后台任务已更新",
+  "turnResumedTasksEnded": "{{count}} 个后台任务已结束",
+  "turnStoppedByYouAfter": "你在 {{elapsed}} 后停止了任务",
+  "turnStoppedByYou": "你已停止任务",
+  "turnInterruptedAfter": "{{elapsed}} 后中断",
+  "turnResumedAfter": "已恢复：{{task}} · {{elapsed}}",
+  "turnResumed": "已恢复：{{task}}",
+  "turnWorkedFor": "已工作 {{elapsed}}"
 }

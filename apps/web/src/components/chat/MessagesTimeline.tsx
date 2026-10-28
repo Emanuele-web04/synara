@@ -3078,7 +3078,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
             data-stopped-turn={row.turnEndMarker.outcome === "stopped" ? "true" : undefined}
             data-interrupted-turn={row.turnEndMarker.outcome === "interrupted" ? "true" : undefined}
           >
-            {formatTurnHeaderLabel({ ...row.turnEndMarker, resumedBy: null })}
+            {formatTurnHeaderLabel({ ...row.turnEndMarker, resumedBy: null }, t)}
           </div>
         )}
 

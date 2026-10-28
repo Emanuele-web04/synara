@@ -1035,5 +1035,20 @@
   "reviewFilesChanged": "Files changed · Review changes",
   "reviewFilesChangedCount_one": "{{count}} file changed · Review changes",
   "reviewFilesChangedCount_other": "{{count}} files changed · Review changes",
-  "emptyLandingProjectHeading": "What should we do in <project/>?"
+  "emptyLandingProjectHeading": "What should we do in <project/>?",
+  "turnResumedTaskFinished": "“{{description}}” finished",
+  "turnResumedTaskFailed": "“{{description}}” failed",
+  "turnResumedTaskStopped": "“{{description}}” stopped",
+  "turnResumedTaskUpdated": "“{{description}}” updated",
+  "turnResumedTasksFinished": "{{count}} background tasks finished",
+  "turnResumedTasksFailed": "{{count}} background tasks failed",
+  "turnResumedTasksStopped": "{{count}} background tasks stopped",
+  "turnResumedTasksUpdated": "{{count}} background tasks updated",
+  "turnResumedTasksEnded": "{{count}} background tasks ended",
+  "turnStoppedByYouAfter": "Stopped by you after {{elapsed}}",
+  "turnStoppedByYou": "Stopped by you",
+  "turnInterruptedAfter": "Interrupted after {{elapsed}}",
+  "turnResumedAfter": "Resumed: {{task}} · {{elapsed}}",
+  "turnResumed": "Resumed: {{task}}",
+  "turnWorkedFor": "Worked for {{elapsed}}"
 }

@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { flushSync } from "react-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { renderHook } from "vitest-browser-react";
+import { render, renderHook } from "vitest-browser-react";
 
 import { AppSettingsSchema } from "~/appSettings";
 import { APP_SETTINGS_STORAGE_KEY } from "~/appSettingsStorage";
@@ -11,6 +11,8 @@ import { formatShortDate } from "~/components/profile/profileFormatting";
 import { formatVisualNumber } from "~/components/chat/inlineVisualBlocks.logic";
 import { workEntryDisplayParts } from "~/components/chat/TimelineWorkEntryRow";
 import type { WorkLogEntry } from "~/session-logic";
+import { TurnHeaderLine } from "~/components/chat/TurnHeaderLine";
+import type { TurnHeader } from "~/components/chat/MessagesTimeline.logic";
 
 let previousSettings: string | null;
 
@@ -27,6 +29,48 @@ afterEach(() => {
 });
 
 describe("reactive interface language", () => {
+  it("updates mounted settled and resumed headers without replacing their timing or provider text", async () => {
+    const resumedBy = [{ description: "settings:accessibility", outcome: "finished" }] as const;
+    const header: TurnHeader = {
+      elapsed: "20s",
+      endedAt: "2026-01-01T00:00:20Z",
+      outcome: "completed",
+      reason: null,
+      resumedBy,
+    };
+    const screen = await render(
+      <>
+        <TurnHeaderLine kind="settled" fontSize="inherit" header={header} />
+        <TurnHeaderLine
+          kind="live"
+          fontSize="inherit"
+          startedAt="2026-01-01T00:00:00Z"
+          nowLabel="5s"
+          resumedBy={resumedBy}
+        />
+      </>,
+    );
+    const settled = () =>
+      screen.container.querySelector('[data-turn-header="completed"]')?.textContent;
+    const live = () => screen.container.querySelector('[data-turn-header="live"]')?.textContent;
+    try {
+      expect(settled()).toBe("Resumed: “settings:accessibility” finished · 20s");
+      expect(live()).toBe("Resumed: “settings:accessibility” finished · 5s");
+      setLanguagePreference("zh-CN");
+      await vi.waitFor(() =>
+        expect(settled()).toBe("已恢复：“settings:accessibility”已完成 · 20s"),
+      );
+      expect(live()).toBe("已恢复：“settings:accessibility”已完成 · 5s");
+      setLanguagePreference("en");
+      await vi.waitFor(() =>
+        expect(settled()).toBe("Resumed: “settings:accessibility” finished · 20s"),
+      );
+      expect(live()).toBe("Resumed: “settings:accessibility” finished · 5s");
+    } finally {
+      await screen.unmount();
+    }
+  });
+
   it("updates an unchanged command row while preserving its literal command", async () => {
     const entry: WorkLogEntry = {
       id: "command-language-test",

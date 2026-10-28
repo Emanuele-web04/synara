@@ -1,5 +1,5 @@
 // FILE: MessagesTimeline.logic.ts
-// Purpose: Owns the pure row-derivation helpers used by the transcript hot path.
+// Purpose: Owns row derivation and localized labels used by the transcript hot path.
 // Layer: Web chat presentation helpers
 // Exports: row derivation, structural sharing, copy/timer helpers
 
@@ -11,6 +11,7 @@ import {
   type TurnId,
 } from "@synara/contracts";
 import { readInlineVisualEmbedIds } from "@synara/shared/inlineVisual";
+import { t } from "~/i18n";
 import { type TimelineEntry, type WorkLogEntry, formatElapsed } from "../../session-logic";
 import { isCodexRuntimeWarningType, type WorkLogUserInputExchangeItem } from "../../workLog";
 import { normalizeCompactToolLabel as normalizeCompactToolLabelValue } from "../../lib/toolCallLabel";
@@ -509,16 +510,39 @@ export function isPinnedBackgroundTaskEntry(
   return completedMs > endedMs;
 }
 
-// "“Run delayed echo” finished", or a count when several tasks woke the turn.
-export function formatTurnResumedBy(resumedBy: ReadonlyArray<TurnResumedBy>): string {
+const TURN_RESUMED_TASK_MESSAGES = {
+  finished: "chat:turnResumedTaskFinished",
+  failed: "chat:turnResumedTaskFailed",
+  stopped: "chat:turnResumedTaskStopped",
+  updated: "chat:turnResumedTaskUpdated",
+} as const;
+
+const TURN_RESUMED_TASKS_MESSAGES = {
+  finished: "chat:turnResumedTasksFinished",
+  failed: "chat:turnResumedTasksFailed",
+  stopped: "chat:turnResumedTasksStopped",
+  updated: "chat:turnResumedTasksUpdated",
+} as const;
+
+// React callers pass their hook translator so the compiler observes locale changes.
+// Whole messages keep outcome grammar localizable without translating provider descriptions.
+export function formatTurnResumedBy(
+  resumedBy: ReadonlyArray<TurnResumedBy>,
+  translate: typeof t = t,
+): string {
   if (resumedBy.length === 1) {
-    const [only] = resumedBy;
-    return `“${only!.description ?? "Background task"}” ${only!.outcome}`;
+    const only = resumedBy[0]!;
+    return translate(TURN_RESUMED_TASK_MESSAGES[only.outcome], {
+      description: only.description ?? translate("chat:backgroundTask"),
+    });
   }
   const outcomes = new Set(resumedBy.map((item) => item.outcome));
-  return outcomes.size === 1
-    ? `${resumedBy.length} background tasks ${resumedBy[0]!.outcome}`
-    : `${resumedBy.length} background tasks ended`;
+  return translate(
+    outcomes.size === 1
+      ? TURN_RESUMED_TASKS_MESSAGES[resumedBy[0]!.outcome]
+      : "chat:turnResumedTasksEnded",
+    { count: resumedBy.length },
+  );
 }
 
 // The text of a settled turn header, without the clock time or icon:
@@ -526,20 +550,29 @@ export function formatTurnResumedBy(resumedBy: ReadonlyArray<TurnResumedBy>): st
 // limit reached", "Resumed: “Run delayed echo” finished · 3s".
 export function formatTurnHeaderLabel(
   header: Pick<TurnHeader, "elapsed" | "outcome" | "reason" | "resumedBy">,
+  translate: typeof t = t,
 ): string {
   switch (header.outcome) {
     case "stopped":
-      return header.elapsed ? `Stopped by you after ${header.elapsed}` : "Stopped by you";
+      return header.elapsed
+        ? translate("chat:turnStoppedByYouAfter", { elapsed: header.elapsed })
+        : translate("chat:turnStoppedByYou");
     case "interrupted": {
-      const base = header.elapsed ? `Interrupted after ${header.elapsed}` : "Interrupted";
+      const base = header.elapsed
+        ? translate("chat:turnInterruptedAfter", { elapsed: header.elapsed })
+        : translate("chat:runStatus_interrupted");
       return header.reason ? `${base} · ${header.reason}` : base;
     }
     case "completed":
       if (header.resumedBy && header.resumedBy.length > 0) {
-        const resumed = `Resumed: ${formatTurnResumedBy(header.resumedBy)}`;
-        return header.elapsed ? `${resumed} · ${header.elapsed}` : resumed;
+        const task = formatTurnResumedBy(header.resumedBy, translate);
+        return header.elapsed
+          ? translate("chat:turnResumedAfter", { task, elapsed: header.elapsed })
+          : translate("chat:turnResumed", { task });
       }
-      return header.elapsed ? `Worked for ${header.elapsed}` : "Details";
+      return header.elapsed
+        ? translate("chat:turnWorkedFor", { elapsed: header.elapsed })
+        : translate("common:detail_details");
   }
 }
 

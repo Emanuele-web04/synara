@@ -1035,5 +1035,20 @@
   "reviewFilesChanged": "Archivos modificados · Revisar cambios",
   "reviewFilesChangedCount_one": "{{count}} archivo modificado · Revisar cambios",
   "reviewFilesChangedCount_other": "{{count}} archivos modificados · Revisar cambios",
-  "emptyLandingProjectHeading": "¿Qué hacemos en <project/>?"
+  "emptyLandingProjectHeading": "¿Qué hacemos en <project/>?",
+  "turnResumedTaskFinished": "“{{description}}” ha finalizado",
+  "turnResumedTaskFailed": "“{{description}}” ha fallado",
+  "turnResumedTaskStopped": "“{{description}}” se ha detenido",
+  "turnResumedTaskUpdated": "“{{description}}” se ha actualizado",
+  "turnResumedTasksFinished": "Han finalizado {{count}} tareas en segundo plano",
+  "turnResumedTasksFailed": "Han fallado {{count}} tareas en segundo plano",
+  "turnResumedTasksStopped": "Se han detenido {{count}} tareas en segundo plano",
+  "turnResumedTasksUpdated": "Se han actualizado {{count}} tareas en segundo plano",
+  "turnResumedTasksEnded": "Han terminado {{count}} tareas en segundo plano",
+  "turnStoppedByYouAfter": "Detenido por ti tras {{elapsed}}",
+  "turnStoppedByYou": "Detenido por ti",
+  "turnInterruptedAfter": "Interrumpido tras {{elapsed}}",
+  "turnResumedAfter": "Reanudado: {{task}} · {{elapsed}}",
+  "turnResumed": "Reanudado: {{task}}",
+  "turnWorkedFor": "Trabajó durante {{elapsed}}"
 }

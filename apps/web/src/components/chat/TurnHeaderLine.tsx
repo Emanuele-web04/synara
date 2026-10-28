@@ -45,7 +45,7 @@ export function TurnHeaderLine(
           style={{ fontSize: props.fontSize }}
         >
           {resumedBy
-            ? t("chat:resumed", { value0: formatTurnResumedBy(resumedBy) })
+            ? t("chat:resumed", { value0: formatTurnResumedBy(resumedBy, t) })
             : t("chat:workingFor")}
           <span className="tabular-nums">
             {props.nowLabel ?? <LiveElapsedTimer startedAt={props.startedAt} />}
@@ -59,7 +59,7 @@ export function TurnHeaderLine(
   const { header, disclosure } = props;
   const content = (
     <span className="inline-flex min-w-0 items-center gap-1">
-      <span>{formatTurnHeaderLabel(header)}</span>
+      <span>{formatTurnHeaderLabel(header, t)}</span>
       {disclosure ? (
         <DisclosureChevron open={disclosure.open} className="text-muted-foreground/70" />
       ) : null}
