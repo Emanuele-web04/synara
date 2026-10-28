@@ -25,6 +25,8 @@ import {
 import { readItemTableValues } from "../sqlite";
 import type { ProviderUsageContext, ProviderUsageFetcher } from "../types";
 
+import { isCursorSafeStorageValue, unsealCursorSafeStorageValue } from "./cursorSafeStorage";
+
 const SOURCE = "cursor-dashboard";
 const USAGE_URL = "https://api2.cursor.sh/aiserver.v1.DashboardService/GetCurrentPeriodUsage";
 const CREDITS_URL = "https://api2.cursor.sh/aiserver.v1.DashboardService/GetCreditGrantsBalance";
@@ -56,10 +58,23 @@ async function resolveCursorAuth(ctx: ProviderUsageContext): Promise<CursorAuth 
   for (const dbPath of cursorStateDbPaths(ctx)) {
     const values = await readItemTableValues({ dbPath, keys: [ACCESS_TOKEN_KEY, PLAN_KEY] });
     const accessToken = asString(values[ACCESS_TOKEN_KEY]);
-    if (accessToken) {
-      const plan = asString(values[PLAN_KEY]);
-      return { accessToken, ...(plan ? { plan } : {}) };
+    if (!accessToken) {
+      continue;
     }
+    const plan = asString(values[PLAN_KEY]);
+    if (isCursorSafeStorageValue(accessToken)) {
+      // Cursor >= 3.27 can seal the token with Electron safeStorage. The sealed text is
+      // not a credential — never send it as Bearer. Unseal when supported; otherwise fall
+      // through to the keychain entry / needs-auth instead of shadowing them.
+      const unsealed = ctx.isolateCredentials
+        ? null
+        : await unsealCursorSafeStorageValue(ctx, accessToken);
+      if (unsealed) {
+        return { accessToken: unsealed, ...(plan ? { plan } : {}) };
+      }
+      continue;
+    }
+    return { accessToken, ...(plan ? { plan } : {}) };
   }
 
   if (ctx.isolateCredentials) {
