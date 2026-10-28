@@ -1343,6 +1343,9 @@ describe("SidebarActivityView", () => {
         .element(page.getByRole("menuitem", { name: "Clear read from Priority" }))
         .toHaveAttribute("aria-disabled", "true");
       await userEvent.keyboard("{Escape}");
+      await vi.waitFor(() => {
+        expect(document.querySelector('[role="menu"]')).toBeNull();
+      });
       // Nothing read yet, so Priority's header offers no eraser.
       expect(
         page.getByRole("button", { name: "Clear read from Priority" }).elements(),
@@ -1377,7 +1380,16 @@ describe("SidebarActivityView", () => {
       });
 
       if (reset === "eraser") {
-        await page.getByRole("button", { name: "Clear read from Priority" }).click();
+        const eraser = page.getByRole("button", { name: "Clear read from Priority" });
+        // Escape restores focus to Options; leave its hoverable tooltip before
+        // moving to the neighboring eraser instead of clicking through that popup.
+        await userEvent.hover(document.body);
+        await userEvent.tab();
+        await expect.element(eraser).toHaveFocus();
+        await expect
+          .element(page.getByText("Activity options", { exact: true }))
+          .not.toBeInTheDocument();
+        await eraser.click();
       } else if (reset === "clear read") {
         await page.getByRole("button", { name: "Activity options" }).click();
         await page.getByRole("menuitem", { name: "Clear read from Priority" }).click();
