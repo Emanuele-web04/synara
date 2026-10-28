@@ -1,16 +1,11 @@
 // FILE: providerUsage/providers/cursorSafeStorage.ts
-// Purpose: Cursor >= 3.27 seals `cursorAuth/accessToken` with Electron safeStorage when
-// `cursor.storage.authTokenEncryptionAtRest` is on: the ItemTable cell becomes
-// "cursor-safe-storage:v1:" + standard base64 of a Chromium os_crypt blob ("v10" on macOS,
-// "v11" on Linux). Detects the seal, reads the "Cursor Safe Storage" login-keychain key
-// through a bounded /usr/bin/security child (same shape as droidSecureStorage), and
-// decrypts macOS v10 blobs (PBKDF2-HMAC-SHA1 salt "saltysalt" x1003 -> AES-128-CBC, IV =
-// 16 space bytes). Unsupported platforms or versions resolve to null so the sealed text
-// is never sent as a Bearer token.
+// Purpose: Recognize Cursor's safeStorage envelopes and unseal macOS v10 tokens with a
+// bounded keychain read through the shared process runtime. Unsupported cells stay inert.
 
-import { execFile } from "node:child_process";
 import { createDecipheriv, pbkdf2Sync } from "node:crypto";
 import nodePath from "node:path";
+
+import { execProcessFile } from "@synara/shared/processRuntime";
 
 import type { ProviderUsageContext } from "../types";
 
@@ -40,7 +35,7 @@ export function isCursorSafeStorageValue(value: string): boolean {
  * Read the "Cursor Safe Storage" generic-password key from the macOS login keychain.
  * Bounded like readDroidSecureKey: fixed executable, clean environment, no shell.
  */
-export function readCursorSafeStorageKey(
+function readCursorSafeStorageKey(
   ctx: Pick<ProviderUsageContext, "platform" | "homeDir" | "env">,
 ): Promise<string | null> {
   if (ctx.platform !== "darwin") {
@@ -48,8 +43,8 @@ export function readCursorSafeStorageKey(
   }
   const executable = "/usr/bin/security";
   const args = ["find-generic-password", "-s", "Cursor Safe Storage", "-a", "Cursor", "-w"];
-  return new Promise((resolve) => {
-    const child = execFile(
+  return new Promise<string | null>((resolve) => {
+    const child = execProcessFile(
       executable,
       args,
       {
@@ -59,7 +54,7 @@ export function readCursorSafeStorageKey(
         timeout: 3_000,
         killSignal: "SIGKILL",
         maxBuffer: 4_096,
-        windowsHide: true,
+        platform: ctx.platform,
       },
       (error, stdout) => {
         // Never propagate child errors: they can contain stdout/stderr and therefore the key.
@@ -67,20 +62,18 @@ export function readCursorSafeStorageKey(
       },
     );
     child.stdin?.end();
-  });
+  }).catch(() => null);
 }
 
-/**
- * Decrypt a `cursor-safe-storage:v1:` cell with the login-keychain safe-storage password.
- * Returns the plaintext token, or null for unsupported versions/platforms, malformed
- * envelopes, wrong keys, and implausible plaintext — callers must not send the sealed
- * text upstream in any of those cases.
- */
-export function decryptCursorSafeStorageToken(stored: string, password: string): string | null {
+// Validate the supported envelope before requesting OS consent or allocating its payload.
+function cursorSafeStorageCiphertext(stored: string): Buffer | null {
   if (!stored.startsWith(SEALED_V1_PREFIX)) {
     return null;
   }
   const encoded = stored.slice(SEALED_V1_PREFIX.length);
+  if (encoded.length > Math.ceil((MAX_TOKEN_LENGTH + 16 + 3) / 3) * 4) {
+    return null;
+  }
   let blob: Buffer;
   try {
     blob = Buffer.from(encoded, "base64");
@@ -98,6 +91,11 @@ export function decryptCursorSafeStorageToken(stored: string, password: string):
   ) {
     return null;
   }
+  return ciphertext;
+}
+
+// Chromium's macOS v10 scheme: PBKDF2-HMAC-SHA1, then AES-128-CBC with a space-filled IV.
+function decryptCursorSafeStorageToken(ciphertext: Buffer, password: string): string | null {
   const key = pbkdf2Sync(password, OS_CRYPT_SALT, OS_CRYPT_ITERATIONS, 16, "sha1");
   try {
     const decipher = createDecipheriv("aes-128-cbc", key, OS_CRYPT_IV);
@@ -123,9 +121,13 @@ export async function unsealCursorSafeStorageValue(
   if (ctx.platform !== "darwin" || ctx.isolateCredentials) {
     return null;
   }
+  const ciphertext = cursorSafeStorageCiphertext(stored);
+  if (!ciphertext) {
+    return null;
+  }
   const password = await readCursorSafeStorageKey(ctx);
   if (!password) {
     return null;
   }
-  return decryptCursorSafeStorageToken(stored, password);
+  return decryptCursorSafeStorageToken(ciphertext, password);
 }

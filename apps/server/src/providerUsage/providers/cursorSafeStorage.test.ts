@@ -8,12 +8,7 @@ import { createCipheriv, pbkdf2Sync } from "node:crypto";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import {
-  decryptCursorSafeStorageToken,
-  isCursorSafeStorageValue,
-  readCursorSafeStorageKey,
-  unsealCursorSafeStorageValue,
-} from "./cursorSafeStorage";
+import { isCursorSafeStorageValue, unsealCursorSafeStorageValue } from "./cursorSafeStorage";
 
 vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof childProcess>();
@@ -87,45 +82,12 @@ describe("isCursorSafeStorageValue", () => {
   });
 });
 
-describe("decryptCursorSafeStorageToken", () => {
-  it("round-trips a v10 sealed JWT", () => {
+describe("unsealCursorSafeStorageValue", () => {
+  it("reads the key through a bounded process and unseals a v10 JWT", async () => {
+    const fake = fakeCli('process.stdout.write("fixture-password\\n")');
     expect(
-      decryptCursorSafeStorageToken(sealToken(FIXTURE_JWT, "fixture-password"), "fixture-password"),
+      await unsealCursorSafeStorageValue(ctx, sealToken(FIXTURE_JWT, "fixture-password")),
     ).toBe(FIXTURE_JWT);
-  });
-  it("rejects the wrong safe-storage password", () => {
-    expect(
-      decryptCursorSafeStorageToken(sealToken(FIXTURE_JWT, "fixture-password"), "other-password"),
-    ).toBeNull();
-  });
-  it.each([
-    ["a different envelope version", `cursor-safe-storage:v2:${"AAAA"}`, "fixture-password"],
-    ["a missing envelope", FIXTURE_JWT, "fixture-password"],
-    ["malformed base64", "cursor-safe-storage:v1:!!!", "fixture-password"],
-    ["an empty payload", "cursor-safe-storage:v1:", "fixture-password"],
-    [
-      "a non-v10 blob inside the envelope",
-      `cursor-safe-storage:v1:${Buffer.concat([Buffer.from("v11"), Buffer.alloc(32, 7)]).toString("base64")}`,
-      "fixture-password",
-    ],
-    [
-      "a truncated ciphertext",
-      `cursor-safe-storage:v1:${Buffer.concat([Buffer.from("v10"), Buffer.alloc(8, 1)]).toString("base64")}`,
-      "fixture-password",
-    ],
-  ])("rejects %s", (_label, stored, password) => {
-    expect(decryptCursorSafeStorageToken(stored, password)).toBeNull();
-  });
-  it("rejects decrypted plaintext that is not token-shaped", () => {
-    const sealed = sealToken(Buffer.from("plain\x00text\x01binary", "latin1"), "fixture-password");
-    expect(decryptCursorSafeStorageToken(sealed, "fixture-password")).toBeNull();
-  });
-});
-
-describe("readCursorSafeStorageKey", () => {
-  it("reads the Cursor Safe Storage key without inheriting loader or auth environment", async () => {
-    const fake = fakeCli('process.stdout.write("fixture-key\\n")');
-    expect(await readCursorSafeStorageKey(ctx)).toBe("fixture-key");
     expect(fake.spy).toHaveBeenCalledWith(
       "/usr/bin/security",
       ["find-generic-password", "-s", "Cursor Safe Storage", "-a", "Cursor", "-w"],
@@ -133,35 +95,60 @@ describe("readCursorSafeStorageKey", () => {
         timeout: 3000,
         killSignal: "SIGKILL",
         maxBuffer: 4096,
+        shell: false,
         env: { HOME: "/fixture-home", PATH: "/usr/bin:/bin" },
       }),
       expect.any(Function),
     );
   });
+
+  it.each([
+    ["an unknown envelope version", "cursor-safe-storage:v2:AAAA"],
+    ["a missing envelope", FIXTURE_JWT],
+    ["malformed base64", "cursor-safe-storage:v1:!!!"],
+    ["an empty payload", "cursor-safe-storage:v1:"],
+    ["a v11 blob", "cursor-safe-storage:v1:djExAAAAAAAAAAAAAAAAAAAAAA=="],
+    ["truncated ciphertext", "cursor-safe-storage:v1:djEwAQ=="],
+    ["excessive ciphertext", `cursor-safe-storage:v1:${"A".repeat(20_000)}`],
+    ["a raw binary cell", "v10�\u0001ciphertext"],
+  ])("rejects %s before touching the keychain", async (_label, stored) => {
+    fakeCli('process.stdout.write("fixture-password")');
+    expect(await unsealCursorSafeStorageValue(ctx, stored)).toBeNull();
+    expect(childProcess.execFile).not.toHaveBeenCalled();
+  });
+
+  it("rejects the wrong safe-storage password", async () => {
+    fakeCli('process.stdout.write("other-password")');
+    expect(
+      await unsealCursorSafeStorageValue(ctx, sealToken(FIXTURE_JWT, "fixture-password")),
+    ).toBeNull();
+  });
+
+  it("rejects decrypted plaintext that is not token-shaped", async () => {
+    fakeCli('process.stdout.write("fixture-password")');
+    const sealed = sealToken(Buffer.from("plain\x00text\x01binary", "latin1"), "fixture-password");
+    expect(await unsealCursorSafeStorageValue(ctx, sealed)).toBeNull();
+  });
+
   it.each([
     'process.stdout.write("secret"); process.stderr.write("secret"); process.exitCode = 1',
     'process.stdout.write("s".repeat(8192))',
-  ])("discards errors and excessive output without exposing secrets", async (script) => {
+  ])("discards child errors and excessive output without exposing secrets", async (script) => {
     fakeCli(script);
-    expect(await readCursorSafeStorageKey(ctx)).toBeNull();
+    expect(
+      await unsealCursorSafeStorageValue(ctx, sealToken(FIXTURE_JWT, "fixture-password")),
+    ).toBeNull();
   });
-  it.each(["linux", "win32"] as const)("does not touch the keychain on %s", async (platform) => {
-    fakeCli('process.stdout.write("fixture-key")');
-    expect(await readCursorSafeStorageKey({ ...ctx, platform })).toBeNull();
-    expect(childProcess.execFile).not.toHaveBeenCalled();
-  });
-});
 
-describe("unsealCursorSafeStorageValue", () => {
-  it("unseals a v1 cell end-to-end on macOS", async () => {
-    fakeCli('process.stdout.write("fixture-password")');
-    const sealed = sealToken(FIXTURE_JWT, "fixture-password");
-    expect(await unsealCursorSafeStorageValue(ctx, sealed)).toBe(FIXTURE_JWT);
+  it("resolves null when the process boundary throws", async () => {
+    vi.mocked(childProcess.execFile).mockImplementation(() => {
+      throw new Error("fixture failure");
+    });
+    expect(
+      await unsealCursorSafeStorageValue(ctx, sealToken(FIXTURE_JWT, "fixture-password")),
+    ).toBeNull();
   });
-  it("resolves null when the keychain read fails", async () => {
-    fakeCli("process.exitCode = 1");
-    expect(await unsealCursorSafeStorageValue(ctx, sealToken(FIXTURE_JWT, "p"))).toBeNull();
-  });
+
   it("never touches the keychain for an isolated account", async () => {
     fakeCli('process.stdout.write("fixture-password")');
     expect(
@@ -172,12 +159,13 @@ describe("unsealCursorSafeStorageValue", () => {
     ).toBeNull();
     expect(childProcess.execFile).not.toHaveBeenCalled();
   });
-  it("never touches the keychain off macOS", async () => {
+
+  it.each(["linux", "win32"] as const)("never touches the keychain on %s", async (platform) => {
     fakeCli('process.stdout.write("fixture-password")');
     expect(
       await unsealCursorSafeStorageValue(
-        { ...ctx, platform: "linux" },
-        "cursor-safe-storage:v1:AAAA",
+        { ...ctx, platform },
+        sealToken(FIXTURE_JWT, "fixture-password"),
       ),
     ).toBeNull();
     expect(childProcess.execFile).not.toHaveBeenCalled();

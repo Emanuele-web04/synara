@@ -54,7 +54,8 @@ export function cursorStateDbPaths(
   return [nodePath.join(configHome, ...segments)];
 }
 
-async function resolveCursorAuth(ctx: ProviderUsageContext): Promise<CursorAuth | null> {
+// Cache identity comes from the stored cell, without prompting for its decryption key.
+async function readCursorStoredAuth(ctx: ProviderUsageContext): Promise<CursorAuth | null> {
   for (const dbPath of cursorStateDbPaths(ctx)) {
     const values = await readItemTableValues({ dbPath, keys: [ACCESS_TOKEN_KEY, PLAN_KEY] });
     const accessToken = asString(values[ACCESS_TOKEN_KEY]);
@@ -62,21 +63,13 @@ async function resolveCursorAuth(ctx: ProviderUsageContext): Promise<CursorAuth 
       continue;
     }
     const plan = asString(values[PLAN_KEY]);
-    if (isCursorSafeStorageValue(accessToken)) {
-      // Cursor >= 3.27 can seal the token with Electron safeStorage. The sealed text is
-      // not a credential — never send it as Bearer. Unseal when supported; otherwise fall
-      // through to the keychain entry / needs-auth instead of shadowing them.
-      const unsealed = ctx.isolateCredentials
-        ? null
-        : await unsealCursorSafeStorageValue(ctx, accessToken);
-      if (unsealed) {
-        return { accessToken: unsealed, ...(plan ? { plan } : {}) };
-      }
-      continue;
-    }
     return { accessToken, ...(plan ? { plan } : {}) };
   }
+  return readCursorKeychainAuth(ctx);
+}
 
+// A sealed or absent cell must not shadow the legacy credential; isolated accounts never use it.
+async function readCursorKeychainAuth(ctx: ProviderUsageContext): Promise<CursorAuth | null> {
   if (ctx.isolateCredentials) {
     return null;
   }
@@ -166,10 +159,15 @@ export function parseCursorUsage(input: {
 export const cursorUsageFetcher: ProviderUsageFetcher = {
   provider: "cursor",
   async cacheKey(ctx) {
-    return cursorAuthCacheKey(ctx, await resolveCursorAuth(ctx));
+    return cursorAuthCacheKey(ctx, await readCursorStoredAuth(ctx));
   },
   async fetch(ctx) {
-    const auth = await resolveCursorAuth(ctx);
+    let auth = await readCursorStoredAuth(ctx);
+    if (auth && isCursorSafeStorageValue(auth.accessToken)) {
+      // Only the coalesced fetch may access safeStorage; cached polls never prompt.
+      const unsealed = await unsealCursorSafeStorageValue(ctx, auth.accessToken);
+      auth = unsealed ? { ...auth, accessToken: unsealed } : await readCursorKeychainAuth(ctx);
+    }
     if (!auth) {
       return needsAuthSnapshot("cursor", ctx.nowMs, SOURCE);
     }
