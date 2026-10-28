@@ -7,6 +7,7 @@ import {
   CommandId,
   type OrchestrationReadModel,
   type OrchestrationShellSnapshot,
+  type ThreadAutoArchive,
   type ThreadId,
 } from "@synara/contracts";
 import { automationContinuationThreadId } from "@synara/shared/automationMode";
@@ -23,16 +24,30 @@ import {
   type AutomationRepositoryShape,
 } from "./persistence/Services/AutomationRepository";
 import { ServerLifecycleEvents } from "./serverLifecycleEvents";
+import { ServerSettingsService } from "./serverSettings";
 
 // Stable prefix for retention commands. Older versions used it for reversible
 // soft-deletes; current versions archive threads so users can restore them.
 export const THREAD_RETENTION_COMMAND_ID_PREFIX = "thread-retention:";
 
-export const THREAD_RETENTION_UNUSED_MS = 7 * 24 * 60 * 60 * 1000;
+const DAY_MS = 24 * 60 * 60 * 1000;
+export const THREAD_RETENTION_UNUSED_MS = 7 * DAY_MS;
 export const THREAD_RETENTION_INITIAL_SWEEP_DELAY_MS = 5 * 60 * 1000;
-export const THREAD_RETENTION_SWEEP_INTERVAL_MS = 24 * 60 * 60 * 1000;
+export const THREAD_RETENTION_SWEEP_INTERVAL_MS = DAY_MS;
 const THREAD_RETENTION_BATCH_SIZE = 25;
 const THREAD_RETENTION_BATCH_PAUSE_MS = 50;
+
+const THREAD_AUTO_ARCHIVE_MS: Record<ThreadAutoArchive, number | null> = {
+  "7d": THREAD_RETENTION_UNUSED_MS,
+  "14d": 14 * DAY_MS,
+  "30d": 30 * DAY_MS,
+  never: null,
+};
+
+/** Idle window for a `threadAutoArchive` setting; `null` means threads are never archived. */
+export function threadAutoArchiveMs(setting: ThreadAutoArchive): number | null {
+  return THREAD_AUTO_ARCHIVE_MS[setting];
+}
 
 type RetentionThread =
   | OrchestrationReadModel["threads"][number]
@@ -177,8 +192,9 @@ export function getRetentionArchiveRootIds(
   readModel: Pick<OrchestrationReadModel, "threads"> | Pick<OrchestrationShellSnapshot, "threads">,
   nowMs = Date.now(),
   protectedThreadIds: ReadonlySet<ThreadId> = new Set(),
+  unusedMs = THREAD_RETENTION_UNUSED_MS,
 ): ThreadId[] {
-  const cutoffMs = nowMs - THREAD_RETENTION_UNUSED_MS;
+  const cutoffMs = nowMs - unusedMs;
   const activeThreads = new Map<ThreadId, RetentionThread>();
 
   for (const thread of readModel.threads) {
@@ -228,10 +244,18 @@ export const runThreadRetentionSweep = Effect.fn("runThreadRetentionSweep")(func
   projectionSnapshotQuery: ProjectionSnapshotQueryShape,
   automationRepository: AutomationRepositoryShape,
   pruneArchivedManagedWorktrees: Effect.Effect<void, unknown>,
+  unusedMs: number | null,
 ) {
-  const shellSnapshot = yield* projectionSnapshotQuery.getShellSnapshot();
-  const protectedThreadIds = yield* listRetentionProtectedThreadIds(automationRepository);
-  const archiveRootIds = getRetentionArchiveRootIds(shellSnapshot, Date.now(), protectedThreadIds);
+  // With auto-archive off, only the archived-worktree pruning below still runs.
+  const archiveRootIds =
+    unusedMs === null
+      ? []
+      : getRetentionArchiveRootIds(
+          yield* projectionSnapshotQuery.getShellSnapshot(),
+          Date.now(),
+          yield* listRetentionProtectedThreadIds(automationRepository),
+          unusedMs,
+        );
   const totalCandidateCount = archiveRootIds.length;
   let archivedCount = 0;
 
@@ -311,33 +335,39 @@ export const startThreadRetentionJob = Effect.fn("startThreadRetentionJob")(func
   const automationRepository = yield* AutomationRepository;
   const config = yield* ServerConfig;
   const git = yield* GitCore;
+  const serverSettings = yield* ServerSettingsService;
   const pruneArchivedManagedWorktrees = pruneProjectedArchivedManagedWorktrees({
     homeDir: config.homeDir,
     worktreesDir: config.worktreesDir,
     snapshotQuery: projectionSnapshotQuery,
     git,
   }).pipe(Effect.asVoid);
+  // Read the setting on every sweep so a change applies without a restart. If it
+  // cannot be read, archive nothing rather than guess the user's choice.
+  const sweep = serverSettings.getSettings.pipe(
+    Effect.map((settings) => threadAutoArchiveMs(settings.threadAutoArchive)),
+    Effect.catch((error) =>
+      Effect.logWarning("failed to read thread auto-archive setting", {
+        error: String(error),
+      }).pipe(Effect.as(null)),
+    ),
+    Effect.flatMap((unusedMs) =>
+      runThreadRetentionSweep(
+        orchestrationEngine,
+        projectionSnapshotQuery,
+        automationRepository,
+        pruneArchivedManagedWorktrees,
+        unusedMs,
+      ),
+    ),
+  );
   // Give startup/projection bootstrap a short settling window, then run one
   // archive pass promptly so desktop installs do not need to stay open for 24 hours.
   yield* Effect.gen(function* () {
     yield* Effect.sleep(THREAD_RETENTION_INITIAL_SWEEP_DELAY_MS);
-    yield* runThreadRetentionSweep(
-      orchestrationEngine,
-      projectionSnapshotQuery,
-      automationRepository,
-      pruneArchivedManagedWorktrees,
-    );
+    yield* sweep;
     yield* Effect.forever(
-      Effect.sleep(THREAD_RETENTION_SWEEP_INTERVAL_MS).pipe(
-        Effect.flatMap(() =>
-          runThreadRetentionSweep(
-            orchestrationEngine,
-            projectionSnapshotQuery,
-            automationRepository,
-            pruneArchivedManagedWorktrees,
-          ),
-        ),
-      ),
+      Effect.sleep(THREAD_RETENTION_SWEEP_INTERVAL_MS).pipe(Effect.flatMap(() => sweep)),
       { disableYield: true },
     );
   }).pipe(Effect.forkScoped);

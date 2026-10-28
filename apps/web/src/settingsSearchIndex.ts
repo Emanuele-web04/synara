@@ -400,6 +400,13 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
       "Expire a side chat after it sits idle for this long. sidechat inactivity timeout 1 hour 24 hours never disable",
   },
   {
+    id: "behavior:thread-auto-archive",
+    section: "behavior",
+    title: "Archive idle threads",
+    keywords:
+      "Automatically archive inactive threads after 7 14 30 days or never. auto-archive retention disable off",
+  },
+  {
     id: "behavior:follow-up-behavior",
     section: "behavior",
     title: "Follow-up behavior",
@@ -551,6 +558,14 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
   },
 
   // ── Providers ─────────────────────────────────────────────────────────────────
+  {
+    id: "providers:claude-cache-confirmation",
+    section: "providers",
+    title: "Ask before resuming a long idle session",
+    keywords:
+      "Claude expired prompt cache resume confirmation large context hold review don't ask again don't ask me again disable off",
+    target: null,
+  },
   {
     id: "providers:cpu-priority",
     section: "providers",

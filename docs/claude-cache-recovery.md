@@ -49,6 +49,11 @@ compaction turn identity. The review appears in full, detail, and shell snapshot
 | Don't ask me again                | Resume as-is, then turn off the review in Settings → Providers → Claude.                          |
 | Cancel this send                  | Clear the pending send while retaining the conversation message.                                  |
 
+The preference change for **Don't ask me again** starts only after the saved choice is accepted.
+If that settings write fails, Synara keeps the accepted choice locked and reports that the cache
+preference was not saved, including if the review panel has already unmounted. The current send
+is not retried; future confirmations may still appear until the provider preference is saved.
+
 Once a choice is accepted, the review panel hides and progress moves to the transcript: the Claude
 adapter publishes a "Compacting context" row when native compaction starts (explicit `/compact` or a
 native `compacting` status), resolves it at the compact boundary, and marks it failed if the turn ends
