@@ -605,6 +605,18 @@ Regular Markdown links remain relative to the document directory. Code, escaped
 Wiki syntax, embeds, and heading/block links are left literal; this is basic file
 navigation rather than full Obsidian support.
 
+### Sending files to a connected computer
+
+A photo or file is uploaded to the computer that owns the conversation before
+its message is sent. The message references that managed upload; a path on the
+controlling device is not a path on the destination computer. Changing the
+selected computer does not retarget an upload or its cancellation.
+
+Desktop remote workspaces use the controlling window for authenticated file
+transfers. Workspace frames receive only the requested resource bytes, without
+native credentials or a broader filesystem grant. Image previews load near the
+viewport and release their temporary bytes after scrolling away.
+
 ### Images in chat replies
 
 Images stay at their original positions in the reply. When a completed reply

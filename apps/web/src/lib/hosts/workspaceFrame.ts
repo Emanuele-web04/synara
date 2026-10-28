@@ -12,6 +12,7 @@ import type {
 import type { ShortcutMatchContext } from "../../keybindings";
 import type { WorkspaceSession } from "./workspaceSessions";
 import type { ActiveHost } from "./activeHost";
+import type { WorkspaceResourceRequester } from "./workspaceResources";
 import type { ThreadStatusPill } from "../../components/Sidebar.logic";
 import type { Project, SidebarThreadSummary } from "../../types";
 import type { SidebarContextProps } from "../../components/ui/sidebar";
@@ -89,6 +90,8 @@ export interface WorkspaceFrameBinding {
   readonly host: ActiveHost;
   readonly controller: {
     readonly desktop?: boolean;
+    /** Typed transfers execute in the captured controller; no native API reaches the child. */
+    readonly requestResource?: WorkspaceResourceRequester;
     readonly presentation?: {
       /** Display-only window backing; never grants controller-native operations. */
       readWindowTranslucency?(): DesktopWindowTranslucency | null;

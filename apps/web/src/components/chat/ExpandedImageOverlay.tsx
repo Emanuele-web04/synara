@@ -6,6 +6,7 @@
 import { useLayoutEffect } from "react";
 
 import { Button } from "~/components/ui/button";
+import { useExecutionImageSource } from "~/hooks/useExecutionImageSource";
 import { ChevronLeftIcon, ChevronRightIcon, XIcon } from "~/lib/icons";
 import { notifyNativeSurfaceOcclusionChange } from "~/lib/nativeSurfaceOcclusion";
 import type { ExpandedImagePreview } from "./ExpandedImagePreview";
@@ -22,6 +23,7 @@ export function ExpandedImageOverlay({
   onNavigate,
 }: ExpandedImageOverlayProps) {
   const expandedImageItem = expandedImage ? expandedImage.images[expandedImage.index] : null;
+  const { ref: imageRef, src: imageSrc } = useExecutionImageSource(expandedImageItem?.src, false);
   const open = expandedImageItem !== null;
 
   useLayoutEffect(() => {
@@ -74,7 +76,8 @@ export function ExpandedImageOverlay({
           <XIcon />
         </Button>
         <img
-          src={expandedImageItem.src}
+          ref={imageRef}
+          src={imageSrc}
           alt={expandedImageItem.name}
           className="max-h-[86vh] max-w-[92vw] select-none rounded-lg border border-[color:var(--color-border)] bg-[var(--color-background-elevated-primary-opaque)] object-contain shadow-2xl"
           draggable={false}

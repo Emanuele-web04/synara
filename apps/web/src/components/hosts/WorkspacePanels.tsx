@@ -30,13 +30,20 @@ import {
   threadJumpIndexFromCommand,
 } from "../../keybindings";
 import { useLocation, useParams } from "@tanstack/react-router";
-import { MAX_PINNED_PROJECTS, ProjectId, ThreadId, type AutomationRun } from "@synara/contracts";
+import {
+  EnvironmentId,
+  MAX_PINNED_PROJECTS,
+  ProjectId,
+  ThreadId,
+  type AutomationRun,
+} from "@synara/contracts";
 import { appHistory } from "../../appNavigation";
 import { useHandleNewChat } from "../../hooks/useHandleNewChat";
 import { useAppSettings } from "../../appSettings";
 import { ensureNativeApi } from "../../nativeApi";
 import { createOrRecoverProjectFromPath } from "../../lib/projectCreation";
 import { readExecutionContext } from "../../lib/hosts/executionContext";
+import { createWorkspaceResourceRequester } from "../../lib/hosts/workspaceResources";
 import { useHandleNewThread } from "../../hooks/useHandleNewThread";
 import { useSidebarThreadActions } from "../../hooks/useSidebarThreadActions";
 import { resolveActivityThreadReadAt } from "../SidebarActivityView.logic";
@@ -148,17 +155,37 @@ function WorkspacePanel({
     for (const listener of sidebarListeners.current) listener();
   }, [sidebar]);
   const frameRef = useRef<WorkspaceFrameElement | null>(null);
+  const resourceLifetime = useRef<AbortController | null>(null);
   const bind = useCallback(
     (frame: WorkspaceFrameElement | null) => {
+      resourceLifetime.current?.abort();
+      resourceLifetime.current = null;
       const previous = frameRef.current;
       if (previous) delete previous.synaraWorkspace;
       frameRef.current = frame;
       if (!frame) return;
+      const lifetime = new AbortController();
+      resourceLifetime.current = lifetime;
       // Same-origin application code only. No repository HTML is ever loaded in this frame.
       frame.synaraWorkspace = {
         host,
         controller: {
           desktop: isElectron,
+          ...(isElectron
+            ? {
+                requestResource: createWorkspaceResourceRequester({
+                  environmentId: EnvironmentId.makeUnsafe(host.executionScope.environmentId),
+                  isAvailable: () =>
+                    frameRef.current === frame &&
+                    readWorkspaceSessions().some((entry) => entry.host === host),
+                  subscribe: subscribeWorkspaceSessions,
+                  resourceUrl: (reference) =>
+                    window.desktopBridge?.remoteResourceUrl?.(host.hostId, reference) ?? null,
+                  fetch: window.fetch.bind(window),
+                  signal: lifetime.signal,
+                }),
+              }
+            : {}),
           presentation: {
             readWindowTranslucency: readDesktopWindowTranslucency,
             readZoomFactor: readDesktopZoomFactor,

@@ -1,6 +1,134 @@
 import type { RemoteResource } from "@synara/contracts";
-import { remoteResourceRoute, REMOTE_RESOURCE_LOCAL_PREFIX } from "@synara/shared/remoteResources";
-import { readExecutionContext } from "./hosts/executionContext";
+import {
+  decodeRemoteResourceReference,
+  remoteResourceRoute,
+  REMOTE_RESOURCE_LOCAL_PREFIX,
+} from "@synara/shared/remoteResources";
+import { readExecutionContext, type WindowExecutionContext } from "./hosts/executionContext";
+import { readWorkspaceFrame, type WorkspaceFrameBinding } from "./hosts/workspaceFrame";
+import {
+  workspaceResourceRequestInit,
+  type WorkspaceResourceRequest,
+  type WorkspaceResourceRequester,
+} from "./hosts/workspaceResources";
+
+function ownsExecutionResources(
+  context: WindowExecutionContext | undefined,
+  frame: WorkspaceFrameBinding | undefined,
+): boolean {
+  const scope = frame?.host.executionScope;
+  return Boolean(
+    context?.remote &&
+    frame &&
+    scope &&
+    frame.host.hostId === context.remoteHostId &&
+    scope.environmentId === context.execution.environmentId &&
+    scope.accountAuthority === context.remote.accountAuthority &&
+    scope.userId === context.remote.userId &&
+    scope.organizationId === context.remote.organizationId &&
+    scope.channel === context.remote.channel,
+  );
+}
+
+/** Capture once before preparing files; cancellation must use the same owning frame. */
+export function captureExecutionResourceRequester(): WorkspaceResourceRequester {
+  const frame = readWorkspaceFrame();
+  const context = readExecutionContext();
+  if (context?.remote && frame?.controller.desktop) {
+    if (!ownsExecutionResources(context, frame))
+      return () => Promise.reject(new Error("Remote resource ownership changed."));
+    const request = frame.controller.requestResource;
+    return (
+      request ??
+      (() => Promise.reject(new Error("Remote resources require an updated desktop workspace.")))
+    );
+  }
+  if (
+    context?.remote &&
+    !frame &&
+    typeof window !== "undefined" &&
+    window.parent &&
+    window.parent !== window
+  )
+    return () => Promise.reject(new Error("Remote resource ownership changed."));
+  return (resource, request) =>
+    fetch(resolveExecutionResource(resource), workspaceResourceRequestInit(resource, request));
+}
+
+export function fetchExecutionResource(
+  resource: RemoteResource,
+  request?: WorkspaceResourceRequest,
+): Promise<Response> {
+  return captureExecutionResourceRequester()(resource, request);
+}
+
+export function isDesktopFrameResourceUrl(rawUrl: string | undefined): boolean {
+  if (!rawUrl || !readExecutionContext()?.remote || !readWorkspaceFrame()?.controller.desktop)
+    return false;
+  try {
+    return new URL(rawUrl, window.location.origin).pathname.startsWith(
+      REMOTE_RESOURCE_LOCAL_PREFIX,
+    );
+  } catch {
+    return false;
+  }
+}
+
+/** A logical resource URL is data, not an iframe navigation or a caller-selected host. */
+function resourceFromDesktopFrameUrl(rawUrl: string): RemoteResource {
+  const context = readExecutionContext();
+  const frame = readWorkspaceFrame();
+  if (!context?.remoteHostId || !ownsExecutionResources(context, frame))
+    throw new Error("Remote resource ownership changed.");
+  const url = new URL(rawUrl, window.location.origin);
+  const expected = new URL(
+    `${REMOTE_RESOURCE_LOCAL_PREFIX}${encodeURIComponent(context.remoteHostId)}`,
+    window.location.origin,
+  );
+  if (
+    url.protocol !== expected.protocol ||
+    url.host !== expected.host ||
+    url.pathname !== expected.pathname ||
+    url.username ||
+    url.password ||
+    url.hash ||
+    [...url.searchParams.keys()].length !== 1 ||
+    url.searchParams.getAll("reference").length !== 1
+  )
+    throw new Error("Invalid remote resource reference.");
+  const reference = decodeRemoteResourceReference(url.searchParams.get("reference")!);
+  if (reference.environmentId !== context.execution.environmentId)
+    throw new Error("Remote resource ownership changed.");
+  if (remoteResourceRoute(reference.resource).method !== "GET")
+    throw new Error("This resource URL is not a preview or download.");
+  return reference.resource;
+}
+
+export async function fetchExecutionResourceUrl(
+  rawUrl: string,
+  request: Pick<WorkspaceResourceRequest, "signal"> = {},
+): Promise<Response> {
+  if (isDesktopFrameResourceUrl(rawUrl)) {
+    const resource = resourceFromDesktopFrameUrl(rawUrl);
+    const requestResource = captureExecutionResourceRequester();
+    return requestResource(resource, request);
+  }
+  return fetch(rawUrl, request.signal ? { signal: request.signal } : undefined);
+}
+
+export async function fetchExecutionImageResourceUrl(
+  rawUrl: string,
+  request: Pick<WorkspaceResourceRequest, "signal"> = {},
+): Promise<Response> {
+  if (isDesktopFrameResourceUrl(rawUrl)) {
+    const resource = resourceFromDesktopFrameUrl(rawUrl);
+    if (resource.kind !== "attachment" && resource.kind !== "workspace-preview")
+      throw new Error("This resource is not a conversation image.");
+    const requestResource = captureExecutionResourceRequester();
+    return requestResource(resource, request);
+  }
+  return fetch(rawUrl, request.signal ? { signal: request.signal } : undefined);
+}
 
 export function resolveExecutionResource(resource: RemoteResource): string {
   const context = readExecutionContext();

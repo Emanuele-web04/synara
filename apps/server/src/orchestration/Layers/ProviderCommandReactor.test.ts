@@ -6,12 +6,18 @@
 import * as betaOperationalIssue from "../../betaOperationalIssue";
 import { planRestartTurnReconciliation } from "../startupTurnReconciliation.ts";
 import fs from "node:fs";
+import http from "node:http";
+import { createHash } from "node:crypto";
+import { fileURLToPath } from "node:url";
+import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
+import { HttpRouter } from "effect/unstable/http";
 import { execFileSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 
 import type {
   ClaudeCacheObservation,
+  ChatImageAttachment,
   ModelSelection,
   OrchestrationCommand,
   OrchestrationEvent,
@@ -168,6 +174,17 @@ import { ProviderCommandReactor } from "../Services/ProviderCommandReactor.ts";
 import { HubOutputReactor, type HubOutputReactorShape } from "../Services/HubOutputReactor.ts";
 import { attachmentRelativePath } from "../../attachmentStore.ts";
 import { resolveProviderAttachmentPath } from "../../provider/providerAttachmentPaths.ts";
+import { loadProviderPromptImageBlocks } from "../../provider/promptAttachments.ts";
+import { binaryUploadEffectRouteLayer, attachmentsEffectRouteLayer } from "../../http.ts";
+import { AuthCoreLive, AuthControlPlaneLive } from "../../auth/Layers/AuthControlPlane.ts";
+import { ServerAuthLive } from "../../auth/Layers/ServerAuth.ts";
+import { ServerAuthPolicyLive } from "../../auth/Layers/ServerAuthPolicy.ts";
+import { SessionCredentialService } from "../../auth/Services/SessionCredentialService.ts";
+import {
+  attachmentPrincipalForSession,
+  bindRemoteAttachmentSession,
+} from "../../managedAttachmentPrincipal.ts";
+import { ProviderAdapterRegistry } from "../../provider/Services/ProviderAdapterRegistry.ts";
 import { PROVIDER_DEBUG_MODE_PROMPT_PREFIX } from "../../provider/debugMode.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import {
@@ -318,6 +335,7 @@ function createRetainingRestartProviderServiceLayer(options?: {
   readonly liveTurns?: boolean;
   readonly failStart?: () => boolean;
   readonly interruptFailure?: boolean;
+  readonly onSendTurn?: (input: Parameters<ProviderServiceShape["sendTurn"]>[0]) => void;
 }) {
   const unsupported = () => Effect.die(new Error("Unsupported adapter call in test"));
   const adapterFor = <P extends ProviderKind>(
@@ -383,6 +401,7 @@ function createRetainingRestartProviderServiceLayer(options?: {
         ),
       sendTurn: (input) =>
         Effect.sync(() => {
+          options?.onSendTurn?.(input);
           const turnId = asTurnId(`${provider}-turn`);
           const session = sessions.get(input.threadId);
           if (session && options?.liveTurns)
@@ -1185,6 +1204,7 @@ describe("ProviderCommandReactor", () => {
 
     return {
       engine,
+      runtime,
       realProviderService: await runtime.runPromise(Effect.service(ProviderService)),
       providerRuntimeRepository: Option.getOrUndefined(
         await runtime.runPromise(Effect.serviceOption(ProviderSessionRuntimeRepository)),
@@ -12211,6 +12231,208 @@ describe("ProviderCommandReactor", () => {
       mentions: [mention],
     });
   });
+
+  it.each(["thread-1", "ios:11111111-1111-4111-8111-111111111111:thread"])(
+    "delivers HTTP-uploaded photos through their owning host and provider for %s",
+    async (rawThreadId) => {
+      const photo = fs.readFileSync(
+        fileURLToPath(new URL("../../__fixtures__/tiny-remote-photo.jpg", import.meta.url)),
+      );
+      const digest = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex");
+      const threadId = ThreadId.makeUnsafe(rawThreadId);
+      let firstHostAttachment: ChatImageAttachment | undefined;
+      for (const host of ["mini", "book"]) {
+        const received: Parameters<ProviderServiceShape["sendTurn"]>[0][] = [];
+        const harness = await createHarness({
+          providerServiceLayer: createRetainingRestartProviderServiceLayer({
+            failFirstTeardown: false,
+            onSendTurn: (input) => received.push(input),
+          }),
+        });
+        const serverScope = await Effect.runPromise(Scope.make("sequential"));
+        scopes.add(serverScope);
+        const controlPlane = AuthControlPlaneLive.pipe(Layer.provide(AuthCoreLive));
+        const auth = ServerAuthLive.pipe(
+          Layer.provide(ServerAuthPolicyLive),
+          Layer.provide(controlPlane),
+          Layer.provide(AuthCoreLive),
+        );
+        const authServices = await harness.runtime.runPromise(
+          Layer.buildWithScope(Layer.mergeAll(auth, AuthCoreLive), serverScope),
+        );
+        const sessions = ServiceMap.get(authServices, SessionCredentialService);
+        const leases = await Promise.all(
+          ["upload", "rpc", "other"].map((label) =>
+            Effect.runPromise(
+              sessions.issue({ role: "client", client: { label, deviceType: "mobile" } }),
+            ),
+          ),
+        );
+        const [uploadLease, rpcLease, otherLease] = leases;
+        const unbind = leases.map((lease, index) =>
+          bindRemoteAttachmentSession(lease!.sessionId, {
+            environmentId: host,
+            rootFingerprint: `fixture-root-${host}`,
+            userId: "fixture-owner",
+            deviceJkt: index === 2 ? "another-device" : "phone-or-desktop-device",
+            trustGeneration: 1,
+          }),
+        );
+        try {
+          const origin = await harness.runtime.runPromise(
+            Scope.provide(
+              Effect.gen(function* () {
+                const server = yield* NodeHttpServer.make(() => http.createServer(), {
+                  port: 0,
+                  host: "127.0.0.1",
+                });
+                const handler = yield* HttpRouter.toHttpEffect(
+                  Layer.mergeAll(binaryUploadEffectRouteLayer, attachmentsEffectRouteLayer),
+                );
+                yield* server.serve(handler);
+                if (server.address._tag !== "TcpAddress") throw new Error("Expected TCP server");
+                return `http://127.0.0.1:${server.address.port}`;
+              }).pipe(
+                Effect.provideServices(authServices),
+                Effect.provideService(ProviderAdapterRegistry, {
+                  getByProvider: () => Effect.die("Voice is not used in the photo fixture"),
+                  listProviders: () => Effect.succeed([]),
+                }),
+              ),
+              serverScope,
+            ),
+          );
+          const rpcPrincipal = attachmentPrincipalForSession(rpcLease!.sessionId);
+          expect(attachmentPrincipalForSession(uploadLease!.sessionId)).toEqual(rpcPrincipal);
+          if (rawThreadId !== "thread-1") {
+            await Effect.runPromise(
+              harness.engine.dispatch({
+                type: "thread.create",
+                commandId: CommandId.makeUnsafe(`cmd-photo-create-${host}`),
+                threadId,
+                projectId: asProjectId("project-1"),
+                title: "Phone photo fixture",
+                modelSelection: { provider: "codex", model: "gpt-5" },
+                interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+                runtimeMode: "approval-required",
+                branch: null,
+                worktreePath: null,
+                createdAt: new Date().toISOString(),
+              }),
+            );
+          }
+          const upload = async () => {
+            const query = new URLSearchParams({
+              type: "image",
+              threadId,
+              name: "phone-photo.jpg",
+              mimeType: "image/jpeg",
+            });
+            const response = await fetch(`${origin}/api/attachments/upload?${query}`, {
+              method: "POST",
+              headers: {
+                authorization: `Bearer ${uploadLease!.token}`,
+                "content-type": "image/jpeg",
+              },
+              body: photo,
+            });
+            const payload = await response.json();
+            expect(response.status, JSON.stringify(payload)).toBe(201);
+            expect(payload).toMatchObject({
+              type: "image",
+              mimeType: "image/jpeg",
+              sizeBytes: photo.length,
+            });
+            return payload as ChatImageAttachment;
+          };
+          const dispatch = (
+            attachment: ChatImageAttachment,
+            suffix: string,
+            principal = rpcPrincipal,
+          ) =>
+            Effect.runPromise(
+              harness.engine.dispatch(
+                {
+                  type: "thread.turn.start",
+                  commandId: CommandId.makeUnsafe(`cmd-photo-${host}-${suffix}`),
+                  threadId,
+                  message: {
+                    messageId: asMessageId(`message-photo-${host}-${suffix}`),
+                    role: "user",
+                    text: "Inspect this photo",
+                    attachments: [attachment],
+                  },
+                  runtimeMode: "approval-required",
+                  interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+                  createdAt: new Date().toISOString(),
+                },
+                { attachmentPrincipal: principal },
+              ),
+            );
+          const cancel = (attachment: ChatImageAttachment, token: string) =>
+            fetch(`${origin}/api/attachments/cancel`, {
+              method: "POST",
+              headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+              body: JSON.stringify({ attachmentId: attachment.id }),
+            });
+          if (firstHostAttachment) {
+            await expect(dispatch(firstHostAttachment, "wrong-host")).rejects.toThrow(
+              "unavailable",
+            );
+            expect(received).toHaveLength(0);
+          }
+          const cancelled = await upload();
+          expect((await cancel(cancelled, otherLease!.token)).status).toBe(404);
+          expect((await cancel(cancelled, uploadLease!.token)).status).toBe(200);
+          await expect(dispatch(cancelled, "cancelled")).rejects.toThrow("unavailable");
+          const attachment = await upload();
+          await expect(
+            dispatch(
+              attachment,
+              "wrong-owner",
+              attachmentPrincipalForSession(otherLease!.sessionId),
+            ),
+          ).rejects.toThrow("unavailable");
+          expect(received).toHaveLength(0);
+          await dispatch(attachment, "accepted");
+          await waitFor(() => received.length === 1);
+          const sent = received[0]!.attachments?.[0];
+          expect(sent).toMatchObject(attachment);
+          const storagePath =
+            sent &&
+            resolveProviderAttachmentPath({
+              attachmentsDir: path.join(harness.stateDir, "attachments"),
+              attachment: sent,
+            });
+          expect(storagePath).toContain(`${path.sep}objects${path.sep}`);
+          expect(digest(fs.readFileSync(storagePath!))).toBe(digest(photo));
+          const blocks = await Effect.runPromise(
+            loadProviderPromptImageBlocks({
+              attachments: received[0]!.attachments,
+              attachmentsDir: path.join(harness.stateDir, "attachments"),
+              provider: "codex",
+              method: "turn/start",
+              readFile: (file) => Effect.tryPromise(() => fs.promises.readFile(file)),
+            }),
+          );
+          expect(blocks).toEqual([
+            { type: "image", mimeType: "image/jpeg", data: photo.toString("base64") },
+          ]);
+          const preview = await fetch(`${origin}/attachments/${attachment.id}`, {
+            headers: { authorization: `Bearer ${rpcLease!.token}` },
+          });
+          expect(preview.status).toBe(200);
+          expect(digest(new Uint8Array(await preview.arrayBuffer()))).toBe(digest(photo));
+          expect((await cancel(attachment, uploadLease!.token)).status).toBe(409);
+          firstHostAttachment = attachment;
+        } finally {
+          unbind.forEach((release) => release());
+          await Effect.runPromise(Scope.close(serverScope, Exit.void));
+        }
+      }
+    },
+    20_000,
+  );
 
   it("dispatches managed attachments from their repository object paths", async () => {
     const harness = await createHarness();

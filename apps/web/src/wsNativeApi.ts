@@ -85,7 +85,7 @@ import {
   type WsThreadStreamFailure,
 } from "./wsTransport";
 import { emitWsCompatibilityIssue, emitWsTransportState } from "./wsTransportEvents";
-import { resolveExecutionResource } from "./lib/wsHttpUrl";
+import { fetchExecutionResource } from "./lib/wsHttpUrl";
 import type { HostsApi } from "./lib/hosts/api";
 
 export type { WsThreadStreamFailure } from "./wsTransport";
@@ -286,8 +286,8 @@ async function requestVoiceTranscriptionUpload(
   for (let index = 0; index < decoded.length; index += 1) {
     bytes[index] = decoded.charCodeAt(index);
   }
-  const response = await fetch(
-    resolveExecutionResource({
+  const response = await fetchExecutionResource(
+    {
       kind: "voice-upload",
       provider: input.provider,
       cwd: input.cwd,
@@ -296,11 +296,8 @@ async function requestVoiceTranscriptionUpload(
       durationMs: input.durationMs,
       ...(input.threadId ? { threadId: input.threadId } : {}),
       ...(input.providerInstanceId ? { providerInstanceId: input.providerInstanceId } : {}),
-    }),
+    },
     {
-      method: "POST",
-      credentials: "include",
-      headers: { "Content-Type": input.mimeType },
       body: bytes,
     },
   );
