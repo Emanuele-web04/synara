@@ -1,3 +1,4 @@
+import threadTitleRefreshSchema from "./136_ThreadTitleRefresh.ts";
 import {
   CommandId,
   CorrelationId,
@@ -87,6 +88,7 @@ it.layer(Layer.fresh(testLayer))("099_InvalidateProjectionThreadsCursor", (it) =
         yield* projectSourceFoldersSchema;
         yield* projectionTurnsWorkspaceInitializationSchema;
         yield* forkSourceMessageSchema;
+        yield* threadTitleRefreshSchema;
 
         const threadId = ThreadId.makeUnsafe("thread-099");
         const projectId = ProjectId.makeUnsafe("project-099");

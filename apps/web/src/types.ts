@@ -35,6 +35,7 @@ import type {
   RuntimeMode,
   ThreadCreationSource,
   ThreadEnvironmentMode,
+  ThreadTitleRefreshMode,
 } from "@synara/contracts";
 import type { ProjectAppearance } from "./lib/projectAppearance";
 
@@ -175,6 +176,7 @@ export interface Project {
   defaultModelSelection: ModelSelection | null;
   expanded: boolean;
   isPinned?: boolean;
+  titleRefreshMode?: ThreadTitleRefreshMode | null;
   /** Missing on renderer state written before Spaces; normalized snapshots always set it. */
   spaceId?: SpaceId | null;
   createdAt?: string | undefined;
@@ -235,6 +237,9 @@ export interface Thread extends ThreadWorkspaceState {
   snoozeReminderAt?: string | null;
   updatedAt?: string | undefined;
   isPinned?: boolean;
+  manualTitlePinned?: boolean;
+  titleRefreshMode?: ThreadTitleRefreshMode | null;
+  pendingSuggestedTitle?: string | null;
   pinnedMessages?: PinnedMessage[];
   notes?: string;
   goal?: string;
@@ -291,6 +296,9 @@ export interface ThreadShell extends ThreadWorkspaceState {
   snoozeReminderAt?: string | null;
   updatedAt?: string | undefined;
   isPinned?: boolean;
+  manualTitlePinned?: boolean;
+  titleRefreshMode?: ThreadTitleRefreshMode | null;
+  pendingSuggestedTitle?: string | null;
   // Per-thread workspace annotations carried through the normalized projection so
   // `getThreadFromState` reconstructs them (the shell is the source of truth for a Thread).
   // These do not arrive on the sidebar shell snapshot, so the snapshot path preserves them
@@ -354,6 +362,8 @@ export interface SidebarThreadSummary {
   snoozeReminderAt?: string | null;
   updatedAt?: string | undefined;
   isPinned?: boolean;
+  manualTitlePinned?: boolean;
+  titleRefreshMode?: ThreadTitleRefreshMode | null;
   latestTurn: OrchestrationLatestTurn | null;
   lastVisitedAt?: string | undefined;
   parentThreadId?: ThreadId | null;

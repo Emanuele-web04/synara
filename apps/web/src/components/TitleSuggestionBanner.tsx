@@ -1,0 +1,87 @@
+// FILE: TitleSuggestionBanner.tsx
+// Purpose: Preview card for suggested-mode title candidates (#1041) with
+//          one-click accept/dismiss. Rendered above the composer.
+// Layer: Chat UI (slot owns native-API dispatch; banner stays dumb)
+
+import type { ThreadId } from "@synara/contracts";
+
+import {
+  acceptThreadTitleSuggestion,
+  dismissThreadTitleSuggestion,
+} from "../lib/threadTitleRefresh";
+import { Button } from "./ui/button";
+import { cn } from "~/lib/utils";
+import { toastManager } from "./ui/toast";
+import { COMPOSER_INPUT_SURFACE_CLASS_NAME } from "./chat/composerPickerStyles";
+
+export function TitleSuggestionBanner({
+  candidate,
+  onAccept,
+  onDismiss,
+}: {
+  candidate: string;
+  onAccept: () => void;
+  onDismiss: () => void;
+}) {
+  return (
+    <div
+      className={cn(
+        COMPOSER_INPUT_SURFACE_CLASS_NAME,
+        "flex w-full min-w-0 items-center gap-3 px-4 py-3",
+      )}
+      data-testid="title-suggestion-banner"
+      role="status"
+    >
+      <div className="min-w-0 flex-1">
+        <p className="text-ui leading-5 font-medium text-foreground/95">Suggested title</p>
+        <p className="mt-0.5 truncate text-ui-sm leading-5 text-muted-foreground" title={candidate}>
+          {candidate}
+        </p>
+      </div>
+      <div className="flex shrink-0 items-center gap-2">
+        <Button size="sm" variant="ghost" onClick={onDismiss}>
+          Dismiss
+        </Button>
+        <Button size="sm" onClick={onAccept}>
+          Use title
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+export function TitleSuggestionSlot({
+  threadId,
+  candidate,
+}: {
+  threadId: ThreadId;
+  candidate: string;
+}) {
+  return (
+    <TitleSuggestionBanner
+      candidate={candidate}
+      onAccept={() => {
+        void acceptThreadTitleSuggestion({ threadId, title: candidate })
+          .then((ok) => {
+            if (ok) toastManager.add({ type: "success", title: "Thread renamed" });
+          })
+          .catch((error) => {
+            toastManager.add({
+              type: "error",
+              title: "Could not apply suggestion",
+              description: error instanceof Error ? error.message : "Unknown error",
+            });
+          });
+      }}
+      onDismiss={() => {
+        void dismissThreadTitleSuggestion(threadId).catch((error) => {
+          toastManager.add({
+            type: "error",
+            title: "Could not dismiss suggestion",
+            description: error instanceof Error ? error.message : "Unknown error",
+          });
+        });
+      }}
+    />
+  );
+}
