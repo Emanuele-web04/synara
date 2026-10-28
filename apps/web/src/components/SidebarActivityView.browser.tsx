@@ -430,7 +430,7 @@ describe("SidebarActivityView", () => {
   it.each(["activity", "classic", "pinned"] as const)(
     "matches remote glyph/action sizes and hides the resting marker on hover and focus (%s)",
     async (surface) => {
-      await page.viewport(1000, 700);
+      const previousViewport = { width: window.innerWidth, height: window.innerHeight };
       const owner = makeRemoteEntry("mini");
       const input = remoteActivityInput([owner.session]);
       const mounted = await render(
@@ -446,49 +446,54 @@ describe("SidebarActivityView", () => {
           )}
         </div>,
       );
-      const main = page.getByRole("button", {
-        name: new RegExp(`Activity thread 71, Computer mini`),
-      });
-      const button = main.element();
-      const wrapper = button.parentElement!;
-      const marker = wrapper.querySelector<HTMLElement>('[data-slot="remote-thread-marker"]');
-      if (surface !== "classic") {
-        expect(marker).not.toBeNull();
-        const glyph = marker!.querySelector("svg, [data-slot=central-icon]")!;
-        expect(glyph.getBoundingClientRect().width).toBe(15);
-        expect(glyph.getBoundingClientRect().height).toBe(15);
+      try {
+        await page.viewport(1000, 700);
+        const main = page.getByRole("button", {
+          name: new RegExp(`Activity thread 71, Computer mini`),
+        });
+        const button = main.element();
+        const wrapper = button.parentElement!;
+        const marker = wrapper.querySelector<HTMLElement>('[data-slot="remote-thread-marker"]');
+        if (surface !== "classic") {
+          expect(marker).not.toBeNull();
+          const glyph = marker!.querySelector("svg, [data-slot=central-icon]")!;
+          expect(glyph.getBoundingClientRect().width).toBe(15);
+          expect(glyph.getBoundingClientRect().height).toBe(15);
+        }
+        await main.hover();
+        if (marker) await vi.waitFor(() => expect(getComputedStyle(marker).opacity).toBe("0"));
+        const quickButtons = ["Pin thread", "Archive thread", "Done"].map((label) =>
+          actionButton(wrapper, label),
+        );
+        for (const action of quickButtons) {
+          const glyph = action.querySelector("svg, [data-slot=central-icon]")!;
+          expect(glyph.getBoundingClientRect().width).toBe(15);
+          expect(glyph.getBoundingClientRect().height).toBe(15);
+          expect(action.getBoundingClientRect().width).toBe(20);
+        }
+        const title =
+          wrapper.querySelector('[data-testid^="thread-title-"]') ??
+          button.querySelector("span.min-w-0.flex-1");
+        await vi.waitFor(() =>
+          expect(title!.getBoundingClientRect().right).toBeLessThanOrEqual(
+            quickButtons[0]!.getBoundingClientRect().left,
+          ),
+        );
+        await userEvent.hover(document.body);
+        button.focus();
+        if (marker) await vi.waitFor(() => expect(getComputedStyle(marker).opacity).toBe("0"));
+        expect(
+          quickButtons.every((action) => getComputedStyle(action).visibility !== "hidden"),
+        ).toBe(true);
+        button.dispatchEvent(
+          new KeyboardEvent("keydown", { key: "F10", shiftKey: true, bubbles: true }),
+        );
+        await expect.element(page.getByRole("menuitem", { name: "Rename chat" })).toBeVisible();
+        await userEvent.keyboard("{Escape}");
+      } finally {
+        await mounted.unmount();
+        await page.viewport(previousViewport.width, previousViewport.height);
       }
-      await main.hover();
-      if (marker) await vi.waitFor(() => expect(getComputedStyle(marker).opacity).toBe("0"));
-      const quickButtons = ["Pin thread", "Archive thread", "Done"].map((label) =>
-        actionButton(wrapper, label),
-      );
-      for (const action of quickButtons) {
-        const glyph = action.querySelector("svg, [data-slot=central-icon]")!;
-        expect(glyph.getBoundingClientRect().width).toBe(15);
-        expect(glyph.getBoundingClientRect().height).toBe(15);
-        expect(action.getBoundingClientRect().width).toBe(20);
-      }
-      const title =
-        wrapper.querySelector('[data-testid^="thread-title-"]') ??
-        button.querySelector("span.min-w-0.flex-1");
-      await vi.waitFor(() =>
-        expect(title!.getBoundingClientRect().right).toBeLessThanOrEqual(
-          quickButtons[0]!.getBoundingClientRect().left,
-        ),
-      );
-      await userEvent.hover(document.body);
-      button.focus();
-      if (marker) await vi.waitFor(() => expect(getComputedStyle(marker).opacity).toBe("0"));
-      expect(quickButtons.every((action) => getComputedStyle(action).visibility !== "hidden")).toBe(
-        true,
-      );
-      button.dispatchEvent(
-        new KeyboardEvent("keydown", { key: "F10", shiftKey: true, bubbles: true }),
-      );
-      await expect.element(page.getByRole("menuitem", { name: "Rename chat" })).toBeVisible();
-      await userEvent.keyboard("{Escape}");
-      await mounted.unmount();
     },
   );
 
