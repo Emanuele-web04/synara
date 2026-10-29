@@ -4,12 +4,14 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { PassThrough } from "node:stream";
+import { PassThrough, Writable } from "node:stream";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { ThreadId } from "@synara/contracts";
+import { resolveWindowsPowerShellExecutable } from "@synara/shared/platformEnvironment";
+import * as platformProcess from "@synara/shared/platformProcess";
 import { Deferred, Effect, Exit, Fiber, Layer, Stream } from "effect";
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import * as processTeardown from "../supervisedProcessTeardown";
 
@@ -44,6 +46,7 @@ import {
   readCompleteAntigravityLines,
   resolveAntigravityCliModelLabel,
   runAntigravityHelperProcess,
+  superviseAntigravityTurnProcess,
 } from "./AntigravityAdapter";
 
 function runCaptureCommand(command: string, input: string, env: NodeJS.ProcessEnv) {
@@ -61,6 +64,929 @@ function runCaptureCommand(command: string, input: string, env: NodeJS.ProcessEn
 async function completeProcessTeardown() {
   return { escalated: false, signalErrors: [] };
 }
+
+const closeProcessDuringTeardown: NonNullable<
+  AntigravityAdapterDependencies["teardownProcessTree"]
+> = async (child) => {
+  // Every caller provides a test-owned ChildProcess event emitter.
+  (child as ChildProcess).emit("close", null, "SIGTERM");
+  return completeProcessTeardown();
+};
+
+const deferred = <T>() => Promise.withResolvers<T>();
+
+describe("Antigravity process lifecycle ownership", () => {
+  const childProcess = (pid: number | null = 1234) => {
+    const child = new EventEmitter() as ChildProcess;
+    const stdout = new PassThrough();
+    const stderr = new PassThrough();
+    Object.assign(child, {
+      pid: pid ?? undefined,
+      stdout,
+      stderr,
+      exitCode: null,
+      signalCode: null,
+      kill: () => true,
+    });
+    return {
+      child: child as ReturnType<NonNullable<AntigravityAdapterDependencies["spawnProcess"]>>,
+      stdout,
+      stderr,
+      close(code: number | null, signal: NodeJS.Signals | null = null) {
+        Object.assign(child, { exitCode: code, signalCode: signal });
+        child.emit("exit", code, signal);
+        child.emit("close", code, signal);
+      },
+    };
+  };
+  const expectPending = async (operation: Promise<unknown>) => {
+    let settled = false;
+    void operation.then(
+      () => {
+        settled = true;
+      },
+      () => {
+        settled = true;
+      },
+    );
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(settled).toBe(false);
+  };
+
+  it.each(["close", "spawn error"])("removes helper listeners after %s", async (terminal) => {
+    const fake = childProcess();
+    const result = runAntigravityHelperProcess(
+      "fake-agi",
+      [],
+      {},
+      {
+        spawnProcess: () => fake.child,
+      },
+    );
+    const cause = new Error("helper failed to spawn");
+    const assertion =
+      terminal === "close"
+        ? expect(result).resolves.toEqual({ stdout: "out", stderr: "err", code: 0 })
+        : expect(result).rejects.toBe(cause);
+    fake.stdout.write("out");
+    fake.stderr.write("err");
+    if (terminal === "close") fake.close(0);
+    else fake.child.emit("error", cause);
+    await assertion;
+    expect(fake.stdout.listenerCount("data")).toBe(0);
+    expect(fake.stderr.listenerCount("data")).toBe(0);
+    expect(fake.child.listenerCount("error")).toBe(0);
+    expect(fake.child.listenerCount("close")).toBe(0);
+  });
+
+  it("keeps helper timeout ownership when spawn error and close race teardown", async () => {
+    const fake = childProcess();
+    const teardown = deferred<processTeardown.SupervisedProcessTeardownResult>();
+    const called = deferred<void>();
+    const failure = new Error("helper teardown failed");
+    const result = runAntigravityHelperProcess(
+      "fake-agi",
+      [],
+      { timeoutMs: 1 },
+      {
+        spawnProcess: () => fake.child,
+        teardownProcessTree: () => {
+          called.resolve();
+          return teardown.promise;
+        },
+      },
+    );
+    const assertion = expect(result).rejects.toThrow("helper teardown failed");
+    await called.promise;
+    fake.child.emit("error", new Error("spawn error during timeout"));
+    fake.close(null, "SIGTERM");
+    await expectPending(result);
+    teardown.reject(failure);
+    await assertion;
+    expect(fake.stdout.listenerCount("data")).toBe(0);
+    expect(fake.stderr.listenerCount("data")).toBe(0);
+    expect(fake.child.listenerCount("error")).toBe(0);
+    expect(fake.child.listenerCount("close")).toBe(0);
+  });
+
+  it("waits for close and full finalization after teardown proves exit", async () => {
+    const fake = childProcess();
+    const cleanup = deferred<void>();
+    const teardownProcessTree = vi.fn(completeProcessTeardown);
+    const onFinalize = vi.fn(() => cleanup.promise);
+    const detachOutput = vi.fn();
+    const lifecycle = superviseAntigravityTurnProcess(fake.child, {
+      teardownProcessTree,
+      onFinalize,
+      detachOutput,
+    });
+    const stop = lifecycle.teardownAndFinalize();
+    await vi.waitFor(() => expect(teardownProcessTree).toHaveBeenCalledOnce());
+    await expectPending(stop);
+    expect(onFinalize).not.toHaveBeenCalled();
+    fake.close(null, "SIGTERM");
+    await vi.waitFor(() => expect(onFinalize).toHaveBeenCalledOnce());
+    await expectPending(stop);
+    const racingStop = lifecycle.teardownAndFinalize();
+    cleanup.resolve();
+    await Promise.all([stop, racingStop, lifecycle.finalization]);
+    expect(teardownProcessTree).toHaveBeenCalledOnce();
+    expect(detachOutput).toHaveBeenCalledOnce();
+    expect(fake.child.listenerCount("error")).toBe(0);
+    expect(fake.child.listenerCount("close")).toBe(0);
+  });
+
+  it.each(["resolve", "reject", "signal error"])(
+    "keeps spawn error behind requested teardown and preserves failure precedence (%s)",
+    async (result) => {
+      const fake = childProcess(null);
+      const teardown = deferred<processTeardown.SupervisedProcessTeardownResult>();
+      const teardownProcessTree = vi.fn(() => teardown.promise);
+      const onFinalize = vi.fn(async (_terminal: unknown) => undefined);
+      const spawnError = new Error("spawn failed");
+      const teardownError = new Error("tree cleanup failed");
+      const lifecycle = superviseAntigravityTurnProcess(fake.child, {
+        teardownProcessTree,
+        onFinalize,
+        detachOutput: () => undefined,
+      });
+      const stop = lifecycle.teardownAndFinalize();
+      const assertion =
+        result === "resolve"
+          ? expect(stop).rejects.toBe(spawnError)
+          : expect(stop).rejects.toThrow(
+              result === "reject" ? "tree cleanup failed" : "teardown was unproven",
+            );
+      await vi.waitFor(() => expect(teardownProcessTree).toHaveBeenCalledOnce());
+      fake.child.emit("error", spawnError);
+      fake.close(-1);
+      await expectPending(stop);
+      expect(onFinalize).not.toHaveBeenCalled();
+      if (result === "reject") teardown.reject(teardownError);
+      else
+        teardown.resolve({
+          escalated: false,
+          signalErrors: result === "signal error" ? [teardownError] : [],
+        });
+      await assertion;
+      expect(onFinalize).toHaveBeenCalledOnce();
+      expect(onFinalize.mock.calls[0]?.[0]).toMatchObject({ spawnError });
+      if (result === "reject")
+        expect(onFinalize.mock.calls[0]?.[0]).toMatchObject({ teardownError });
+      expect(teardownProcessTree).toHaveBeenCalledOnce();
+      expect(fake.child.listenerCount("error")).toBe(0);
+      expect(fake.child.listenerCount("close")).toBe(0);
+    },
+  );
+
+  it("joins finalization already in progress without starting another teardown", async () => {
+    const fake = childProcess();
+    const cleanup = deferred<void>();
+    const teardownProcessTree = vi.fn(completeProcessTeardown);
+    const lifecycle = superviseAntigravityTurnProcess(fake.child, {
+      teardownProcessTree,
+      onFinalize: () => cleanup.promise,
+      detachOutput: () => undefined,
+    });
+    fake.close(0);
+    const lateStop = lifecycle.teardownAndFinalize();
+    await expectPending(lateStop);
+    expect(teardownProcessTree).not.toHaveBeenCalled();
+    cleanup.resolve();
+    await lateStop;
+  });
+
+  it("keeps a clean close pending until prompt delivery is proven", async () => {
+    const fake = childProcess();
+    const input = deferred<void>();
+    const teardownProcessTree = vi.fn(completeProcessTeardown);
+    const onFinalize = vi.fn(async () => undefined);
+    const lifecycle = superviseAntigravityTurnProcess(fake.child, {
+      inputDelivery: input.promise,
+      teardownProcessTree,
+      onFinalize,
+      detachOutput: () => undefined,
+    });
+    fake.close(0);
+    await expectPending(lifecycle.finalization);
+    expect(onFinalize).not.toHaveBeenCalled();
+    input.resolve();
+    await lifecycle.finalization;
+    expect(teardownProcessTree).not.toHaveBeenCalled();
+    expect(onFinalize).toHaveBeenCalledExactlyOnceWith({ code: 0, signal: null });
+  });
+
+  it.each(["resolve", "reject"])(
+    "awaits owned teardown after stdin failure and preserves error precedence (%s)",
+    async (outcome) => {
+      const fake = childProcess();
+      const input = deferred<void>();
+      const teardown = deferred<processTeardown.SupervisedProcessTeardownResult>();
+      const teardownProcessTree = vi.fn(() => teardown.promise);
+      const onFinalize = vi.fn(async (_terminal: unknown) => undefined);
+      const inputError = new Error("stdin EPIPE");
+      const teardownError = new Error("stdin failure cleanup unproven");
+      const lifecycle = superviseAntigravityTurnProcess(fake.child, {
+        inputDelivery: input.promise,
+        teardownProcessTree,
+        onFinalize,
+        detachOutput: () => undefined,
+      });
+      const assertion = expect(lifecycle.finalization).rejects.toBe(
+        outcome === "resolve" ? inputError : teardownError,
+      );
+      input.reject(inputError);
+      await vi.waitFor(() => expect(teardownProcessTree).toHaveBeenCalledOnce());
+      const racingStop = lifecycle.teardownAndFinalize();
+      void racingStop.catch(() => undefined);
+      fake.close(0);
+      await expectPending(lifecycle.finalization);
+      expect(onFinalize).not.toHaveBeenCalled();
+      if (outcome === "resolve") teardown.resolve({ escalated: false, signalErrors: [] });
+      else teardown.reject(teardownError);
+      await assertion;
+      await expect(racingStop).rejects.toBe(outcome === "resolve" ? inputError : teardownError);
+      expect(teardownProcessTree).toHaveBeenCalledOnce();
+      expect(onFinalize).toHaveBeenCalledExactlyOnceWith({
+        code: 0,
+        signal: null,
+        inputError,
+        ...(outcome === "reject" ? { teardownError } : {}),
+      });
+    },
+  );
+
+  it("keeps a spawn failure authoritative when stdin also closes without a child", async () => {
+    const fake = childProcess(null);
+    const input = deferred<void>();
+    const spawnError = new Error("spawn ENOENT");
+    const inputError = new Error("stdin closed before delivery");
+    const teardownProcessTree = vi.fn(completeProcessTeardown);
+    const onFinalize = vi.fn(async (_terminal: unknown) => undefined);
+    const lifecycle = superviseAntigravityTurnProcess(fake.child, {
+      inputDelivery: input.promise,
+      teardownProcessTree,
+      onFinalize,
+      detachOutput: () => undefined,
+    });
+    const assertion = expect(lifecycle.finalization).rejects.toBe(spawnError);
+    input.reject(inputError);
+    fake.child.emit("error", spawnError);
+    fake.close(-1);
+    await assertion;
+    expect(teardownProcessTree).not.toHaveBeenCalled();
+    expect(onFinalize).toHaveBeenCalledExactlyOnceWith({
+      code: null,
+      signal: null,
+      spawnError,
+      inputError,
+    });
+  });
+
+  it("cancels unfinished stdin when teardown cannot prove exit", async () => {
+    const fake = childProcess();
+    const input = deferred<void>();
+    const teardownError = new Error("owned process did not exit");
+    const inputError = new Error("stdin delivery canceled");
+    const cancelInput = vi.fn(() => input.reject(inputError));
+    const onFinalize = vi.fn(async (_terminal: unknown) => undefined);
+    const lifecycle = superviseAntigravityTurnProcess(fake.child, {
+      inputDelivery: input.promise,
+      cancelInput,
+      teardownProcessTree: async () => {
+        throw teardownError;
+      },
+      onFinalize,
+      detachOutput: () => undefined,
+    });
+    await expect(lifecycle.teardownAndFinalize()).rejects.toBe(teardownError);
+    expect(cancelInput).toHaveBeenCalledOnce();
+    expect(onFinalize).toHaveBeenCalledExactlyOnceWith({
+      code: null,
+      signal: null,
+      inputError,
+      teardownError,
+    });
+  });
+
+  it("retains host context after stdin delivery fails and suppresses an undelivered reply", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "synara-antigravity-stdin-"));
+    const inputError = new Error("owned prompt stdin EPIPE");
+    const prompts: string[] = [];
+    let rejectFirstWrite: ((error: Error) => void) | undefined;
+    let childCount = 0;
+    const teardownProcessTree = vi.fn(closeProcessDuringTeardown);
+    const spawnProcess: NonNullable<AntigravityAdapterDependencies["spawnProcess"]> = (
+      _command,
+      args,
+      options,
+    ) => {
+      const promptIndex = args.indexOf("-p");
+      if (promptIndex >= 0 && args[promptIndex + 1]!.includes("\n")) {
+        throw new platformProcess.ProcessArgumentValidationError("argument", promptIndex + 1);
+      }
+      const fake = childProcess(12_000 + ++childCount);
+      const first = childCount === 1;
+      const complete = () => {
+        fake.stdout.end("accepted\n");
+        fake.stderr.end();
+        fake.close(0);
+      };
+      if (promptIndex < 0) {
+        expect(options.stdio).toEqual(["pipe", "pipe", "pipe"]);
+        expect(args.slice(-2)).toEqual(["--input-format", "stream-json"]);
+        const stdin = new Writable({
+          write(chunk, _encoding, callback) {
+            const event = JSON.parse(String(chunk));
+            expect(event.event).toBe("user");
+            prompts.push(event.message.content);
+            if (first) rejectFirstWrite = callback;
+            else callback();
+          },
+        });
+        stdin.once("finish", () => setTimeout(complete, 0));
+        Object.assign(fake.child, { stdin });
+      } else {
+        expect(options.stdio).toEqual(["ignore", "pipe", "pipe"]);
+        prompts.push(args[promptIndex + 1]!);
+        setTimeout(complete, 0);
+      }
+      queueMicrotask(() => fake.child.emit("spawn"));
+      if (first) fake.stdout.write("undelivered fallback reply");
+      return fake.child;
+    };
+    try {
+      await Effect.runPromise(
+        Effect.gen(function* () {
+          const adapter = yield* AntigravityAdapter;
+          const threadId = ThreadId.makeUnsafe("antigravity-stdin-retry");
+          const terminalStates: unknown[] = [];
+          const content: string[] = [];
+          const errors: string[] = [];
+          yield* adapter.streamEvents.pipe(
+            Stream.runForEach((event) =>
+              Effect.sync(() => {
+                if (event.type === "turn.completed") terminalStates.push(event.payload);
+                if (event.type === "content.delta") content.push(event.payload.delta);
+                if (event.type === "runtime.error") errors.push(event.payload.message);
+              }),
+            ),
+            Effect.forkScoped,
+          );
+          yield* adapter.startSession({
+            provider: "antigravity",
+            threadId,
+            runtimeMode: "full-access",
+            cwd: root,
+            providerOptions: { antigravity: { binaryPath: "/fixture/agy" } },
+          });
+          const waitForStatus = (status: "ready" | "error") =>
+            Effect.gen(function* () {
+              for (let attempt = 0; attempt < 100; attempt++) {
+                if ((yield* adapter.listSessions())[0]?.status === status) return;
+                yield* Effect.sleep(10);
+              }
+              throw new Error(`stdin fixture did not reach ${status}`);
+            });
+          yield* adapter.sendTurn({ threadId, input: "first", attachments: [] });
+          expect(rejectFirstWrite).toBeTypeOf("function");
+          rejectFirstWrite!(inputError);
+          yield* waitForStatus("error");
+          expect(terminalStates).toEqual([
+            { state: "failed", stopReason: "error", errorMessage: inputError.message },
+          ]);
+          expect(errors).toContain(inputError.message);
+          expect(content).toEqual([]);
+          expect(teardownProcessTree).toHaveBeenCalledOnce();
+          yield* adapter.sendTurn({ threadId, input: "retry\nsecond line", attachments: [] });
+          yield* waitForStatus("ready");
+          yield* adapter.sendTurn({ threadId, input: "next turn", attachments: [] });
+          yield* waitForStatus("ready");
+          expect(prompts).toHaveLength(3);
+          expect(prompts[0]).toContain("<synara_host_context>");
+          expect(prompts[1]).toContain("<synara_host_context>");
+          expect(prompts[1]!.endsWith("\n\nretry\nsecond line")).toBe(true);
+          expect(prompts[2]).toBe("next turn");
+          expect(terminalStates).toHaveLength(3);
+          yield* adapter.stopSession(threadId);
+        }).pipe(
+          Effect.scoped,
+          Effect.provide(
+            makeAntigravityAdapterLive({
+              ensurePlugin: async () => undefined,
+              spawnProcess,
+              teardownProcessTree,
+            }).pipe(
+              Layer.provideMerge(ServerConfig.layerTest(root, { prefix: "stdin-retry-" })),
+              Layer.provideMerge(NodeServices.layer),
+            ),
+          ),
+        ),
+      );
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("reports abnormal-exit teardown failures before finalization completes", async () => {
+    const fake = childProcess();
+    const teardownError = new Error("descendant exit unproven");
+    const onFinalize = vi.fn(async () => undefined);
+    const lifecycle = superviseAntigravityTurnProcess(fake.child, {
+      teardownProcessTree: async () => {
+        throw teardownError;
+      },
+      onFinalize,
+      detachOutput: () => undefined,
+    });
+    const assertion = expect(lifecycle.finalization).rejects.toBe(teardownError);
+    fake.close(2);
+    await assertion;
+    expect(onFinalize).toHaveBeenCalledWith({ code: 2, signal: null, teardownError });
+  });
+
+  it.each([undefined, null, false, 0, ""])(
+    "preserves a falsy teardown rejection (%s)",
+    async (teardownError) => {
+      const fake = childProcess();
+      const onFinalize = vi.fn(async () => undefined);
+      const lifecycle = superviseAntigravityTurnProcess(fake.child, {
+        teardownProcessTree: async () => {
+          throw teardownError;
+        },
+        onFinalize,
+        detachOutput: () => undefined,
+      });
+      const assertion = expect(lifecycle.finalization).rejects.toBe(teardownError);
+      fake.close(2);
+      await assertion;
+      expect(onFinalize).toHaveBeenCalledWith({ code: 2, signal: null, teardownError });
+    },
+  );
+
+  it("finalizes an asynchronous spawn failure without inventing a process tree", async () => {
+    const fake = childProcess(null);
+    const teardownProcessTree = vi.fn(completeProcessTeardown);
+    const onFinalize = vi.fn(async () => undefined);
+    const lifecycle = superviseAntigravityTurnProcess(fake.child, {
+      teardownProcessTree,
+      onFinalize,
+      detachOutput: () => undefined,
+    });
+    const spawnError = new Error("spawn ENOENT");
+    const assertion = expect(lifecycle.finalization).rejects.toBe(spawnError);
+    fake.child.emit("error", spawnError);
+    fake.close(-1);
+    await assertion;
+    expect(teardownProcessTree).not.toHaveBeenCalled();
+    expect(onFinalize).toHaveBeenCalledOnce();
+    expect(onFinalize).toHaveBeenCalledWith({ code: null, signal: null, spawnError });
+  });
+
+  it.each(["teardown", "spawn", "finalizer"] as const)(
+    "retains %s failure precedence when terminal reporting also rejects",
+    async (failure) => {
+      const fake = childProcess(failure === "spawn" ? null : 1234);
+      const teardownError = new Error("unproven descendant exit");
+      const spawnError = new Error("spawn failed");
+      const finalizerError = new Error("terminal reporting failed");
+      const lifecycle = superviseAntigravityTurnProcess(fake.child, {
+        teardownProcessTree: async () => {
+          throw teardownError;
+        },
+        detachOutput: () => undefined,
+        onFinalize: async () => {
+          throw finalizerError;
+        },
+      });
+      const expected =
+        failure === "teardown" ? teardownError : failure === "spawn" ? spawnError : finalizerError;
+      const assertion = expect(lifecycle.finalization).rejects.toBe(expected);
+      if (failure === "spawn") fake.child.emit("error", spawnError);
+      else fake.close(failure === "teardown" ? 2 : 0);
+      await assertion;
+      await expect(lifecycle.teardownAndFinalize()).rejects.toBe(expected);
+    },
+  );
+
+  it("reports an unexpected natural-exit finalizer failure and retains it for a late stop", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "synara-antigravity-finalizer-"));
+    const fake = childProcess();
+    const releaseError = new Error("test-owned lease revocation failed");
+    const revokeSessionToken = vi.fn(() => {
+      throw releaseError;
+    });
+    const credentials: AgentGatewayCredentialsShape = {
+      mcpEndpointUrl: "http://127.0.0.1:3773/mcp",
+      setListeningPort: () => undefined,
+      issueSessionToken: () => "test-session",
+      verifySessionToken: () => null,
+      verifySession: () => null,
+      issueStdioBootstrapToken: () => "test-bootstrap",
+      exchangeStdioBootstrapToken: () => null,
+      bindWriteAuthority: () => null,
+      verifyWriteAuthority: () => false,
+      registerInFlightRequest: () => () => undefined,
+      cancelInFlightRequests: () => ({ count: 0, settled: Promise.resolve() }),
+      cancelSessionTurnRequests: () => Promise.resolve(),
+      retireSessionTurn: () => Promise.resolve(),
+      revokeSessionToken,
+      connectionForThread: () => ({
+        url: "http://127.0.0.1:3773/mcp",
+        bearerToken: "test-session",
+      }),
+      stdioProxy: { command: process.execPath, args: ["proxy.mjs"] },
+    };
+    try {
+      await Effect.runPromise(
+        Effect.gen(function* () {
+          const adapter = yield* AntigravityAdapter;
+          const threadId = ThreadId.makeUnsafe("thread-finalizer-failure");
+          const terminal = yield* Deferred.make<void>();
+          const completions: unknown[] = [];
+          const errors: string[] = [];
+          yield* adapter.streamEvents.pipe(
+            Stream.runForEach((event) => {
+              if (event.type === "runtime.error") errors.push(event.payload.message);
+              if (event.type === "turn.completed") {
+                completions.push(event.payload);
+                return Deferred.succeed(terminal, undefined);
+              }
+              return Effect.void;
+            }),
+            Effect.forkScoped,
+          );
+          yield* adapter.startSession({
+            provider: "antigravity",
+            threadId,
+            runtimeMode: "full-access",
+            cwd: root,
+            providerOptions: { antigravity: { binaryPath: "/fake/agy" } },
+          });
+          yield* adapter.sendTurn({ threadId, input: "hello", attachments: [] });
+          fake.close(0);
+          yield* Deferred.await(terminal).pipe(Effect.timeout("2 seconds"));
+          expect(completions).toEqual([
+            {
+              state: "failed",
+              stopReason: "error",
+              errorMessage: releaseError.message,
+            },
+          ]);
+          expect(errors).toContain(releaseError.message);
+          expect((yield* adapter.listSessions())[0]).toMatchObject({ status: "error" });
+          const stopped = yield* adapter.stopSession(threadId).pipe(Effect.exit);
+          expect(Exit.isFailure(stopped)).toBe(true);
+          if (Exit.isFailure(stopped))
+            expect(stopped.cause).toMatchObject({
+              reasons: [
+                { error: { _tag: "ProviderAdapterRequestError", detail: releaseError.message } },
+              ],
+            });
+          expect(revokeSessionToken).toHaveBeenCalledOnce();
+          expect(fake.child.listenerCount("close")).toBe(0);
+          expect(fake.stdout.listenerCount("data")).toBe(0);
+        }).pipe(
+          Effect.scoped,
+          Effect.provide(
+            makeAntigravityAdapterLive({
+              ensurePlugin: async () => undefined,
+              spawnProcess: () => fake.child,
+            }).pipe(
+              Layer.provide(Layer.succeed(AgentGatewayCredentials, credentials)),
+              Layer.provideMerge(
+                ServerConfig.layerTest(root, { prefix: "antigravity-finalizer-test-" }),
+              ),
+              Layer.provideMerge(NodeServices.layer),
+            ),
+          ),
+        ),
+      );
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it.each(["interrupt", "stop", "restart"])(
+    "keeps adapter %s pending until the closing turn finishes its hook drain",
+    async (action) => {
+      const root = await fs.mkdtemp(path.join(os.tmpdir(), "synara-antigravity-lifecycle-"));
+      const fake = childProcess();
+      const hookStarted = deferred<void>();
+      const hook = deferred<{ lines: string[]; nextOffset: number }>();
+      const teardownStarted = deferred<void>();
+      const teardown = deferred<processTeardown.SupervisedProcessTeardownResult>();
+      const teardownProcessTree = vi.fn(() => {
+        teardownStarted.resolve();
+        return teardown.promise;
+      });
+      try {
+        await Effect.runPromise(
+          Effect.gen(function* () {
+            const adapter = yield* AntigravityAdapter;
+            const threadId = ThreadId.makeUnsafe(`thread-lifecycle-${action}`);
+            const start = {
+              provider: "antigravity" as const,
+              threadId,
+              runtimeMode: "full-access" as const,
+              cwd: root,
+              providerOptions: { antigravity: { binaryPath: "/fake/agy" } },
+            };
+            yield* adapter.startSession(start);
+            yield* adapter.sendTurn({ threadId, input: "hello", attachments: [] });
+            yield* Effect.promise(async () => {
+              await hookStarted.promise;
+              const operation = Effect.runPromise(
+                action === "interrupt"
+                  ? adapter.interruptTurn(threadId)
+                  : action === "stop"
+                    ? adapter.stopSession(threadId)
+                    : adapter.startSession(start),
+              );
+              let settled = false;
+              void operation.then(
+                () => {
+                  settled = true;
+                },
+                () => {
+                  settled = true;
+                },
+              );
+              await teardownStarted.promise;
+              fake.close(null, "SIGTERM");
+              teardown.resolve({ escalated: false, signalErrors: [] });
+              // Let the complete Effect continuation run. Its return must still
+              // belong to the close handler that is waiting for the owned read.
+              await new Promise((resolve) => setTimeout(resolve, 20));
+              try {
+                expect(settled).toBe(false);
+              } finally {
+                hook.resolve({ lines: [], nextOffset: 0 });
+              }
+              await operation;
+              expect(teardownProcessTree).toHaveBeenCalledOnce();
+              expect(fake.stdout.listenerCount("data")).toBe(0);
+              expect(fake.stderr.listenerCount("data")).toBe(0);
+              expect(fake.child.listenerCount("error")).toBe(0);
+              expect(fake.child.listenerCount("close")).toBe(0);
+            });
+            const sessions = yield* adapter.listSessions();
+            if (action === "stop") expect(sessions).toHaveLength(0);
+            else expect(sessions[0]).toMatchObject({ status: "ready" });
+            yield* adapter.stopSession(threadId);
+          }).pipe(
+            Effect.provide(
+              makeAntigravityAdapterLive({
+                ensurePlugin: async () => undefined,
+                spawnProcess: () => fake.child,
+                teardownProcessTree,
+                readCompleteLines: () => {
+                  hookStarted.resolve();
+                  return hook.promise;
+                },
+              }).pipe(
+                Layer.provideMerge(
+                  ServerConfig.layerTest(root, { prefix: "antigravity-lifecycle-test-" }),
+                ),
+                Layer.provideMerge(NodeServices.layer),
+              ),
+            ),
+          ),
+        );
+      } finally {
+        hook.resolve({ lines: [], nextOffset: 0 });
+        teardown.resolve({ escalated: false, signalErrors: [] });
+        await fs.rm(root, { recursive: true, force: true });
+      }
+    },
+  );
+});
+
+describe.runIf(process.platform === "win32")("Antigravity Windows process boundary", () => {
+  let root: string;
+  let nativePath: string;
+  let batchPath: string;
+  let markerPath: string;
+
+  beforeAll(async () => {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), "synara agi città 汉字 "));
+    nativePath = path.join(root, "fixture.exe");
+    batchPath = path.join(root, "fixture.cmd");
+    markerPath = path.join(root, "launched");
+    const sourcePath = path.join(root, "fixture.cs");
+    const compilePath = path.join(root, "compile.ps1");
+    await fs.writeFile(
+      sourcePath,
+      `using System;
+using System.IO;
+using System.Text;
+public static class Fixture {
+  public static void Main(string[] args) {
+    Console.InputEncoding = new UTF8Encoding(false);
+    Console.OutputEncoding = new UTF8Encoding(false);
+    File.WriteAllText(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "launched"), "yes");
+    File.WriteAllLines(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "argv"), Array.ConvertAll(args, arg => Convert.ToBase64String(Encoding.UTF8.GetBytes(arg))));
+    int promptIndex = Array.IndexOf(args, "-p");
+    int inputIndex = Array.IndexOf(args, "--input-format");
+    if (promptIndex >= 0 || inputIndex >= 0) {
+      if (inputIndex >= 0 && (promptIndex >= 0 || args[inputIndex + 1] != "stream-json")) Environment.Exit(3);
+      string input = inputIndex >= 0 ? Console.In.ReadToEnd() : args[promptIndex + 1];
+      string prompt = Convert.ToBase64String(Encoding.UTF8.GetBytes(input));
+      Console.WriteLine("{\\"event\\":\\"result\\",\\"result\\":{\\"status\\":\\"SUCCESS\\",\\"response\\":\\"" + prompt + "\\"}}");
+    } else {
+      foreach (string arg in args) Console.WriteLine(Convert.ToBase64String(Encoding.UTF8.GetBytes(arg)));
+    }
+  }
+}
+`,
+    );
+    await fs.writeFile(
+      compilePath,
+      'param([string]$Source, [string]$Output)\n$ErrorActionPreference = "Stop"\nAdd-Type -Path $Source -OutputAssembly $Output -OutputType ConsoleApplication\n',
+    );
+    const compile = await runAntigravityHelperProcess(
+      resolveWindowsPowerShellExecutable(process.env),
+      [
+        "-NoProfile",
+        "-NonInteractive",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        compilePath,
+        sourcePath,
+        nativePath,
+      ],
+      { cwd: root, timeoutMs: 30_000 },
+    );
+    expect(compile.code, compile.stderr).toBe(0);
+    expect(fsSync.existsSync(nativePath)).toBe(true);
+    // Keep the shim source ASCII; cmd expands its Unicode directory itself,
+    // independently of the runner's active code page.
+    await fs.writeFile(batchPath, '@echo off\r\n"%~dp0fixture.exe" %*\r\n');
+  });
+
+  afterAll(async () => {
+    if (root) await fs.rm(root, { recursive: true, force: true });
+  });
+
+  it.each(["native", "batch"])(
+    "launches a real %s helper through a spaced Unicode path",
+    async (kind) => {
+      const args = ["two words", "città 汉字"];
+      if (kind === "native") args.push("literal&value", "line one\nline two", "<>&|^%");
+      const result = await runAntigravityHelperProcess(
+        kind === "native" ? nativePath : batchPath,
+        args,
+        { cwd: root },
+      );
+      expect(result.code, result.stderr).toBe(0);
+      expect(
+        result.stdout
+          .trim()
+          .split(/\r?\n/)
+          .map((line) => Buffer.from(line, "base64").toString("utf8")),
+      ).toEqual(args);
+    },
+  );
+
+  it.each([
+    ["native", "\n"],
+    ["batch", "\n"],
+    ["batch", "\r\n"],
+  ] as const)(
+    "keeps %s turn prompts literal through host context and %j line breaks",
+    async (kind, newline) => {
+      const prompt = `città 汉字 & literal <content>${newline}second line %PATH% | ^ ! "quoted"`;
+      await Effect.runPromise(
+        Effect.gen(function* () {
+          const adapter = yield* AntigravityAdapter;
+          const threadId = ThreadId.makeUnsafe(`windows-${kind}-antigravity`);
+          yield* adapter.startSession({
+            provider: "antigravity",
+            threadId,
+            runtimeMode: "full-access",
+            cwd: root,
+            providerOptions: {
+              antigravity: { binaryPath: kind === "native" ? nativePath : batchPath },
+            },
+          });
+          const eventsFiber = yield* adapter.streamEvents.pipe(
+            Stream.takeUntil((event) => event.type === "turn.completed"),
+            Stream.runCollect,
+            Effect.forkChild,
+          );
+          yield* adapter.sendTurn({ threadId, input: prompt, attachments: [] });
+          const events = Array.from(
+            yield* Fiber.join(eventsFiber).pipe(Effect.timeout("10 seconds")),
+          );
+          const encoded = events
+            .filter((event) => event.type === "content.delta")
+            .map((event) => event.payload.delta)
+            .join("");
+          const transport = Buffer.from(encoded, "base64").toString("utf8");
+          const received = kind === "batch" ? JSON.parse(transport).message.content : transport;
+          if (kind === "batch") {
+            expect(transport.endsWith("\n")).toBe(true);
+            expect(transport.trim().split("\n")).toHaveLength(1);
+            expect(JSON.parse(transport)).toEqual({
+              event: "user",
+              message: { content: received },
+            });
+          }
+          expect(received).toContain("<synara_host_context>");
+          expect(received.endsWith(`\n\n${prompt}`)).toBe(true);
+          const argv = (yield* Effect.promise(() => fs.readFile(path.join(root, "argv"), "utf8")))
+            .trim()
+            .split(/\r?\n/)
+            .map((line) => Buffer.from(line, "base64").toString("utf8"));
+          if (kind === "batch") {
+            expect(argv).toContain("--input-format");
+            expect(argv).not.toContain("-p");
+            expect(argv).not.toContain(received);
+          } else {
+            expect(argv[argv.indexOf("-p") + 1]).toBe(received);
+            expect(argv).not.toContain("--input-format");
+          }
+          expect(events.find((event) => event.type === "turn.completed")?.payload).toMatchObject({
+            state: "completed",
+          });
+          yield* adapter.stopSession(threadId);
+        }).pipe(
+          Effect.provide(
+            makeAntigravityAdapterLive({ ensurePlugin: async () => undefined }).pipe(
+              Layer.provideMerge(ServerConfig.layerTest(root, { prefix: "native-boundary-" })),
+              Layer.provideMerge(NodeServices.layer),
+            ),
+          ),
+        ),
+      );
+    },
+  );
+
+  it.each(["argument", "command"] as const)(
+    "refuses an unsafe batch %s before execution without stripping host context",
+    async (kind) => {
+      await fs.rm(markerPath, { force: true });
+      const unsafeCommand = path.join(root, "bad%PATH%.cmd");
+      await fs.copyFile(batchPath, unsafeCommand);
+      await Effect.runPromise(
+        Effect.gen(function* () {
+          const adapter = yield* AntigravityAdapter;
+          const threadId = ThreadId.makeUnsafe("windows-batch-antigravity");
+          yield* adapter.startSession({
+            provider: "antigravity",
+            threadId,
+            runtimeMode: "full-access",
+            cwd: root,
+            providerOptions: {
+              antigravity: { binaryPath: kind === "command" ? unsafeCommand : batchPath },
+            },
+          });
+          const startedTurns: unknown[] = [];
+          yield* adapter.streamEvents.pipe(
+            Stream.runForEach((event) =>
+              Effect.sync(() => {
+                if (event.type === "turn.started") startedTurns.push(event);
+              }),
+            ),
+            Effect.forkScoped,
+          );
+          const failure = yield* adapter
+            .sendTurn({
+              threadId,
+              input: "hello",
+              attachments: [],
+              ...(kind === "argument"
+                ? { modelSelection: { provider: "antigravity" as const, model: "unsafe&model" } }
+                : {}),
+            })
+            .pipe(Effect.flip);
+          expect(failure).toMatchObject({
+            _tag: "ProviderAdapterRequestError",
+            method: "turn/start",
+            detail: `Cannot safely execute Windows batch ${kind} containing cmd.exe control characters.`,
+          });
+          expect(fsSync.existsSync(markerPath)).toBe(false);
+          expect((yield* adapter.listSessions())[0]).toMatchObject({ status: "ready" });
+          expect((yield* adapter.listSessions())[0]?.activeTurnId).toBeUndefined();
+          expect((yield* adapter.readThread(threadId)).turns).toEqual([]);
+          yield* Effect.yieldNow;
+          expect(startedTurns).toEqual([]);
+          yield* adapter.stopSession(threadId);
+        }).pipe(
+          Effect.scoped,
+          Effect.provide(
+            makeAntigravityAdapterLive({ ensurePlugin: async () => undefined }).pipe(
+              Layer.provideMerge(ServerConfig.layerTest(root, { prefix: "batch-boundary-" })),
+              Layer.provideMerge(NodeServices.layer),
+            ),
+          ),
+        ),
+      );
+    },
+  );
+});
 
 describe("Antigravity CLI model translation", () => {
   it("collapses CLI model/effort labels into base models with effort ladders", () => {
@@ -1389,6 +2315,7 @@ describe("Antigravity CLI integration helpers", () => {
             makeAntigravityAdapterLive({
               ensurePlugin: async () => undefined,
               spawnProcess,
+              teardownProcessTree: completeProcessTeardown,
             }).pipe(
               Layer.provideMerge(
                 ServerConfig.layerTest(root, { prefix: "antigravity-child-failure-" }),
@@ -1621,6 +2548,15 @@ describe("Antigravity CLI integration helpers", () => {
               enableComputerControl: true,
               providerOptions: { antigravity: { binaryPath: "/fake/agy" } },
             });
+            const startedTurns: unknown[] = [];
+            yield* adapter.streamEvents.pipe(
+              Stream.runForEach((event) =>
+                Effect.sync(() => {
+                  if (event.type === "turn.started") startedTurns.push(event);
+                }),
+              ),
+              Effect.forkScoped,
+            );
             const waitUntilSettled = (status: "ready" | "error" = "ready") =>
               Effect.gen(function* () {
                 for (let attempt = 0; attempt < 100; attempt += 1) {
@@ -1637,6 +2573,13 @@ describe("Antigravity CLI integration helpers", () => {
               .pipe(Effect.exit);
             expect(Exit.isFailure(firstAttempt)).toBe(failure !== "asynchronous spawn");
             if (failure === "asynchronous spawn") yield* waitUntilSettled("error");
+            else {
+              expect((yield* adapter.listSessions())[0]).toMatchObject({ status: "ready" });
+              expect((yield* adapter.listSessions())[0]?.activeTurnId).toBeUndefined();
+              expect((yield* adapter.readThread(threadId)).turns).toEqual([]);
+              yield* Effect.yieldNow;
+              expect(startedTurns).toEqual([]);
+            }
             expect(deliveredPrompts).toEqual([]);
             expect(revokedTokens).toEqual(["turn-session-1"]);
 
@@ -1653,6 +2596,7 @@ describe("Antigravity CLI integration helpers", () => {
             yield* adapter.stopSession(threadId);
             expect(revokedTokens).toEqual(["turn-session-1", "turn-session-2", "turn-session-3"]);
           }).pipe(
+            Effect.scoped,
             Effect.provide(
               makeAntigravityAdapterLive({
                 ensurePlugin: async () => undefined,
@@ -1875,6 +2819,7 @@ describe("Antigravity turn settle on cancel (#465)", () => {
               makeAntigravityAdapterLive({
                 ensurePlugin: async () => undefined,
                 spawnProcess: makeSpawnProcess(children),
+                teardownProcessTree: completeProcessTeardown,
               }).pipe(
                 Layer.provideMerge(
                   ServerConfig.layerTest(root, { prefix: "antigravity-json-usage-" }),
@@ -2048,7 +2993,26 @@ describe("Antigravity turn settle on cancel (#465)", () => {
           expect(
             events.filter((event) => event.type === "content.delta").map((event) => event.payload),
           ).toEqual([{ streamKind: "assistant_text", delta: "Finished" }]);
-          yield* adapter.stopSession(threadId);
+          if (scenario.teardownFailure || scenario.teardownSignalError) {
+            // Consume the terminal event and let its file cleanup finish before
+            // asking again: a late stop must retain the same teardown failure.
+            const runDir = path.dirname(
+              (children[0] as ChildProcess & { eventFile: string }).eventFile,
+            );
+            yield* Effect.promise(() =>
+              vi.waitFor(() => expect(fsSync.existsSync(runDir)).toBe(false)),
+            );
+            const failure = yield* adapter.stopSession(threadId).pipe(Effect.flip);
+            expect(failure).toMatchObject({
+              _tag: "ProviderAdapterRequestError",
+              method: "session/stop",
+              detail: scenario.teardownFailure
+                ? "helper exit unproven"
+                : "Antigravity process teardown was unproven.",
+            });
+          } else {
+            yield* adapter.stopSession(threadId);
+          }
         }).pipe(
           Effect.provide(
             makeAntigravityAdapterLive({
@@ -2199,6 +3163,7 @@ describe("Antigravity turn settle on cancel (#465)", () => {
             makeAntigravityAdapterLive({
               ensurePlugin: async () => undefined,
               spawnProcess,
+              teardownProcessTree: closeProcessDuringTeardown,
             }).pipe(
               Layer.provideMerge(
                 ServerConfig.layerTest(root, { prefix: "antigravity-stop-button-" }),
@@ -3704,7 +4669,7 @@ describe("Antigravity background task helpers (#752)", () => {
       ),
   );
 
-  it("ignores the old stop hook after a transcript read outlives its turn", async () => {
+  it("drains the old stop hook before an interrupted turn can be replaced", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "synara-audit1170-stale-stop-"));
     const transcriptFile = path.join(root, "transcript.jsonl");
     await fs.writeFile(transcriptFile, "");
@@ -3766,10 +4731,21 @@ describe("Antigravity background task helpers (#752)", () => {
             `pre-invocation\t${JSON.stringify({ transcriptPath: transcriptFile })}\nstop\t{"stepIdx":10}\n`,
           );
           yield* Effect.promise(() => readStarted).pipe(Effect.timeout("2 seconds"));
-          yield* adapter.interruptTurn(threadId);
+          let interruptReturned = false;
+          const interrupt = yield* adapter.interruptTurn(threadId).pipe(
+            Effect.tap(() =>
+              Effect.sync(() => {
+                interruptReturned = true;
+              }),
+            ),
+            Effect.forkChild,
+          );
+          yield* Effect.promise(() => vi.waitFor(() => expect(teardowns).toEqual([0])));
+          expect(interruptReturned).toBe(false);
           expect(teardowns).toEqual([0]);
-          yield* adapter.sendTurn({ threadId, input: "second", attachments: [] });
           release();
+          yield* Fiber.join(interrupt).pipe(Effect.timeout("2 seconds"));
+          yield* adapter.sendTurn({ threadId, input: "second", attachments: [] });
           yield* Effect.sleep("200 millis");
           expect(teardowns).toEqual([0]);
           yield* adapter.stopSession(threadId);
@@ -3782,7 +4758,7 @@ describe("Antigravity background task helpers (#752)", () => {
               readCompleteLines,
               teardownProcessTree: async (child) => {
                 teardowns.push(children.findIndex((candidate) => candidate === child));
-                return completeProcessTeardown();
+                return closeProcessDuringTeardown(child);
               },
             }).pipe(
               Layer.provideMerge(ServerConfig.layerTest(root, { prefix: "audit-stale-stop-" })),
@@ -3926,7 +4902,7 @@ describe("Antigravity background task helpers (#752)", () => {
     }
   });
 
-  it("ignores a hook poll that resumes after session replacement", async () => {
+  it("ignores a hook poll while session replacement waits for its drain", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "synara-antigravity-stale-poll-"));
     const transcriptFile = path.join(root, "transcript.jsonl");
     await fs.writeFile(transcriptFile, "");
@@ -3947,6 +4923,7 @@ describe("Antigravity background task helpers (#752)", () => {
     const replacementPollObserved = new Promise<void>((resolve) => {
       resolveReplacementPoll = resolve;
     });
+    const teardownStarted = deferred<void>();
     const spawnProcess = ((
       _command: string,
       _args: readonly string[],
@@ -4010,8 +4987,19 @@ describe("Antigravity background task helpers (#752)", () => {
           );
           yield* Effect.promise(() => hookReadStarted).pipe(Effect.timeout("2 seconds"));
 
-          yield* adapter.startSession(sessionInput);
+          let replacementReturned = false;
+          const replacement = yield* adapter.startSession(sessionInput).pipe(
+            Effect.tap(() =>
+              Effect.sync(() => {
+                replacementReturned = true;
+              }),
+            ),
+            Effect.forkChild,
+          );
+          yield* Effect.promise(() => teardownStarted.promise).pipe(Effect.timeout("2 seconds"));
+          expect(replacementReturned).toBe(false);
           releaseHookRead();
+          yield* Fiber.join(replacement).pipe(Effect.timeout("2 seconds"));
           yield* adapter.sendTurn({ threadId, input: "replacement turn", attachments: [] });
           replacementEventFile = eventFile;
           yield* Effect.promise(() => replacementPollObserved).pipe(Effect.timeout("2 seconds"));
@@ -4025,7 +5013,10 @@ describe("Antigravity background task helpers (#752)", () => {
               ensurePlugin: async () => undefined,
               readCompleteLines,
               spawnProcess,
-              teardownProcessTree: completeProcessTeardown,
+              teardownProcessTree: async (child) => {
+                teardownStarted.resolve();
+                return closeProcessDuringTeardown(child);
+              },
             }).pipe(
               Layer.provideMerge(ServerConfig.layerTest(root, { prefix: "stale-poll-" })),
               Layer.provideMerge(NodeServices.layer),
@@ -4034,6 +5025,7 @@ describe("Antigravity background task helpers (#752)", () => {
         ),
       );
     } finally {
+      releaseHookRead();
       await fs.rm(root, { recursive: true, force: true });
     }
   });
@@ -4071,6 +5063,7 @@ describe("Antigravity background task helpers (#752)", () => {
           const bufferedTaskCompleted = yield* Deferred.make<void>();
           const secondTurnCompleted = yield* Deferred.make<void>();
           const exitTaskStarted = yield* Deferred.make<void>();
+          let secondTurnId: string | undefined;
           const taskEventsFiber = yield* adapter.streamEvents.pipe(
             Stream.tap((event) =>
               Effect.all(
@@ -4088,7 +5081,7 @@ describe("Antigravity background task helpers (#752)", () => {
                   event.type === "task.completed" && event.payload.taskId === "task-buffered"
                     ? Deferred.succeed(bufferedTaskCompleted, undefined)
                     : Effect.void,
-                  event.type === "turn.completed"
+                  event.type === "turn.completed" && event.turnId === secondTurnId
                     ? Deferred.succeed(secondTurnCompleted, undefined)
                     : Effect.void,
                   event.type === "task.started" && event.payload.taskId === "task-exit"
@@ -4132,7 +5125,12 @@ describe("Antigravity background task helpers (#752)", () => {
           yield* Deferred.await(firstTaskStarted).pipe(Effect.timeout("2 seconds"));
           yield* adapter.startSession(sessionInput);
 
-          yield* adapter.sendTurn({ threadId, input: "run more tests", attachments: [] });
+          const secondTurn = yield* adapter.sendTurn({
+            threadId,
+            input: "run more tests",
+            attachments: [],
+          });
+          secondTurnId = secondTurn.turnId;
           yield* Effect.promise(() =>
             fs.appendFile(
               eventFile!,
@@ -4218,7 +5216,7 @@ describe("Antigravity background task helpers (#752)", () => {
             makeAntigravityAdapterLive({
               ensurePlugin: async () => undefined,
               spawnProcess,
-              teardownProcessTree: completeProcessTeardown,
+              teardownProcessTree: closeProcessDuringTeardown,
             }).pipe(
               Layer.provideMerge(
                 ServerConfig.layerTest(root, { prefix: "antigravity-background-restart-" }),
