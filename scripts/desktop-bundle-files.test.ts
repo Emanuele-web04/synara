@@ -25,6 +25,7 @@ describe("desktop bundle file selection", () => {
     ]) {
       expect(excluded(path, patterns), path).toBe(true);
     }
+    expect(excluded("node_modules/node-pty/src/terminal.ts", patterns)).toBe(true);
     for (const path of [
       "node_modules/effect/dist/Effect.js",
       "node_modules/effect/package.json",
@@ -51,6 +52,7 @@ describe("desktop bundle file selection", () => {
         const patterns = createDesktopBundleFilePatterns("linux", { diagnostics });
         expect(excluded("node_modules/effect/dist/Effect.js.map", patterns)).toBe(false);
         expect(excluded("node_modules/effect/src/Effect.ts", patterns)).toBe(false);
+        expect(excluded("node_modules/node-pty/src/terminal.ts", patterns)).toBe(false);
       }
     }
     expect(preserveDependencyDiagnostics({})).toBe(false);
