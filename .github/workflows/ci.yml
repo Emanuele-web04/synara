@@ -81,7 +81,7 @@ jobs:
           scope: "static"
 
       - name: Verify CI contracts
-        run: node --test .github/scripts/ci-contracts.test.mjs
+        run: node --test .github/scripts/ci-contracts.test.mjs .github/scripts/pr-labels.test.mjs
 
       # Independent checks share the installed workspace; parallel waits for all
       # of them and fails the lane if any check fails, with separate step logs.

@@ -42,6 +42,7 @@ jobs:
               { name: "area:settings", color: "8250df", description: "Settings, preferences, and keybindings." },
               { name: "area:app-shell", color: "8250df", description: "Desktop app, windows, install, updates, and layout." },
               { name: "area:remote", color: "8250df", description: "Remote access, cloud, and mobile companion." },
+              { name: "area:ci", color: "8250df", description: "Builds, packaging, and continuous integration workflows." },
               // provider:*
               { name: "provider:codex", color: "bf8700", description: "Specific to the Codex provider." },
               { name: "provider:claude", color: "bf8700", description: "Specific to the Claude provider." },
@@ -51,6 +52,13 @@ jobs:
               { name: "provider:gemini", color: "bf8700", description: "Specific to the Gemini provider." },
               { name: "provider:antigravity", color: "bf8700", description: "Specific to the Antigravity provider." },
               { name: "provider:omp", color: "bf8700", description: "Specific to the Oh My Pi provider." },
+              { name: "provider:grok", color: "bf8700", description: "Specific to the Grok Build provider." },
+              { name: "provider:droid", color: "bf8700", description: "Specific to the Factory Droid provider." },
+              { name: "provider:devin", color: "bf8700", description: "Specific to the Devin CLI provider." },
+              // Topics assigned during triage, not inferred from file paths.
+              { name: "regression", color: "d1242f", description: "Previously working behavior broken or degraded by a change." },
+              { name: "performance", color: "fbca04", description: "Startup time, responsiveness, CPU, memory, and I/O efficiency." },
+              { name: "accessibility", color: "008672", description: "Keyboard navigation, focus, contrast, and screen-reader support." },
               // os:*
               { name: "os:macos", color: "6e7781", description: "Only affects macOS." },
               { name: "os:windows", color: "6e7781", description: "Only affects Windows." },
