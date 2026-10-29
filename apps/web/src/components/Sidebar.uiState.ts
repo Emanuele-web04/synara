@@ -15,6 +15,8 @@ const sameTabWriteListeners = new Set<() => void>();
 
 export type SidebarUiState = {
   chatSectionExpanded: boolean;
+  /** The Archived section folds like Chats; kept here so it survives reloads. */
+  archivedSectionExpanded: boolean;
   chatThreadListExtraPages: number;
   projectThreadListExtraPagesByCwd: Record<string, number>;
   dismissedThreadStatusKeyByThreadId: Record<string, string>;
@@ -29,6 +31,7 @@ export type SidebarUiState = {
 
 const DEFAULT_SIDEBAR_UI_STATE: SidebarUiState = {
   chatSectionExpanded: false,
+  archivedSectionExpanded: false,
   chatThreadListExtraPages: 0,
   projectThreadListExtraPagesByCwd: {},
   dismissedThreadStatusKeyByThreadId: {},
@@ -89,6 +92,7 @@ export function readSidebarUiState(): SidebarUiState {
 
     const parsed = JSON.parse(raw) as {
       chatSectionExpanded?: boolean;
+      archivedSectionExpanded?: boolean;
       chatThreadListExtraPages?: number;
       projectThreadListExtraPagesByCwd?: Record<string, unknown>;
       /** Legacy (pre-paging) all-or-nothing "Show more" flags, migrated to one extra page. */
@@ -134,6 +138,7 @@ export function readSidebarUiState(): SidebarUiState {
 
     return {
       chatSectionExpanded: parsed.chatSectionExpanded === true,
+      archivedSectionExpanded: parsed.archivedSectionExpanded === true,
       chatThreadListExtraPages:
         parsed.chatThreadListExtraPages === undefined && parsed.chatThreadListExpanded === true
           ? 1
@@ -226,6 +231,7 @@ export function persistSidebarUiState(input: SidebarUiState): void {
       SIDEBAR_UI_STATE_STORAGE_KEY,
       JSON.stringify({
         chatSectionExpanded: input.chatSectionExpanded,
+        archivedSectionExpanded: input.archivedSectionExpanded,
         chatThreadListExtraPages: sanitizeThreadListExtraPages(input.chatThreadListExtraPages),
         projectThreadListExtraPagesByCwd: sanitizeProjectThreadListExtraPagesByCwd(
           input.projectThreadListExtraPagesByCwd,
