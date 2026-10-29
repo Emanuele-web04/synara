@@ -14766,7 +14766,7 @@ describe("ChatView transcript geometry (full app)", () => {
     }
   });
 
-  it.each(["saved"] as const)(
+  it.each(["saved", "cached"] as const)(
     "switches horizontal tabs without blanking the header or composer (%s)",
     async (targetKind) => {
       onTestFinished(skipReactDevOwnerStacks());
@@ -14800,7 +14800,20 @@ describe("ChatView transcript geometry (full app)", () => {
         snapshot,
         onRender: (_id, _phase, duration) => commits.push(duration),
       });
+      let releaseCachedSnapshot: (() => void) | undefined;
+      let cachedReadOnlyFrames = 0;
       try {
+        if (targetKind === "cached") {
+          // Keep the cached draft visible while the next tab waits for its
+          // authoritative detail; the editor must remain read-only meanwhile.
+          await writeThreadDetailCache(
+            { origin: location.origin, serverInstanceId: "browser-test-server" },
+            {
+              snapshotSequence: snapshot.snapshotSequence,
+              thread: snapshot.threads.find((thread) => thread.id === OTHER_THREAD_ID)!,
+            },
+          );
+        }
         useComposerDraftStore.getState().setPrompt(THREAD_ID, "Draft in first tab");
         useComposerDraftStore.getState().setPrompt(OTHER_THREAD_ID, "Draft in second tab");
         useOpenThreadTabsStore.setState({ threadIds: [THREAD_ID, OTHER_THREAD_ID] });
@@ -14830,6 +14843,11 @@ describe("ChatView transcript geometry (full app)", () => {
           const startedAt = performance.now();
           let missingHeaderFrames = 0;
           let missingComposerFrames = 0;
+          if (targetKind === "cached" && index === 0) {
+            threadDetailSnapshotBarrier = new Promise<void>((resolve) => {
+              releaseCachedSnapshot = resolve;
+            });
+          }
           tabButtons[toSecond ? 1 : 0]!.click();
           let ready = false;
           let domReadyMs: number | null = null;
@@ -14842,7 +14860,30 @@ describe("ChatView transcript geometry (full app)", () => {
               '[data-chat-composer-form="true"] [contenteditable="true"]',
             );
             if (!activeTab) missingHeaderFrames += 1;
-            if (!editor) missingComposerFrames += 1;
+            // Read-only cached detail is still visible composer chrome. Keep
+            // editability in the readiness check below, separate from blanking.
+            const displayedEditor = document.querySelector<HTMLElement>(
+              '[data-chat-composer-form="true"] [data-testid="composer-editor"]',
+            );
+            const editorBounds = displayedEditor?.getBoundingClientRect();
+            if (
+              !displayedEditor ||
+              !displayedEditor.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true }) ||
+              !editorBounds?.width ||
+              !editorBounds.height
+            ) {
+              missingComposerFrames += 1;
+            }
+            if (
+              releaseCachedSnapshot &&
+              displayedEditor?.getAttribute("contenteditable") === "false" &&
+              useStore.getState().threadDetailSyncById?.[targetId] === "cached"
+            ) {
+              cachedReadOnlyFrames += 1;
+              releaseCachedSnapshot();
+              releaseCachedSnapshot = undefined;
+              threadDetailSnapshotBarrier = null;
+            }
             if (
               mounted.router.state.location.pathname === `/${targetId}` &&
               activeTab &&
@@ -14884,6 +14925,7 @@ describe("ChatView transcript geometry (full app)", () => {
         expect(samples.every((sample) => sample.missingHeaderFrames === 0)).toBe(true);
         expect(samples.every((sample) => sample.missingComposerFrames === 0)).toBe(true);
         expect(samples.every((sample) => sample.tabWrites === 0)).toBe(true);
+        if (targetKind === "cached") expect(cachedReadOnlyFrames).toBeGreaterThan(0);
         expect(useComposerDraftStore.getState().draftsByThreadId[THREAD_ID]?.prompt).toBe(
           "Draft in first tab",
         );
@@ -14920,6 +14962,8 @@ describe("ChatView transcript geometry (full app)", () => {
           "Draft in second tab",
         );
       } finally {
+        releaseCachedSnapshot?.();
+        threadDetailSnapshotBarrier = null;
         await mounted.cleanup();
         useOpenThreadTabsStore.setState({ threadIds: [] });
       }
