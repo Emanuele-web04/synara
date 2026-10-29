@@ -3013,6 +3013,36 @@ describe("sendTurn", () => {
     );
   });
 
+  it.each(
+    (["default", "plan"] as const).flatMap((interactionMode) =>
+      ["low", "medium", "high", "xhigh", "max", "ultra"].map((effort) => ({
+        interactionMode,
+        effort,
+      })),
+    ),
+  )("preserves explicit $effort in $interactionMode turns", async ({ interactionMode, effort }) => {
+    const { manager, context, sendRequest } = createSendTurnHarness();
+
+    await manager.sendTurn({
+      threadId: asThreadId("thread_1"),
+      input: "Check the selected effort",
+      interactionMode,
+      effort,
+    });
+
+    expect(sendRequest).toHaveBeenCalledWith(
+      context,
+      "turn/start",
+      expect.objectContaining({
+        effort,
+        collaborationMode: expect.objectContaining({
+          mode: interactionMode,
+          settings: expect.objectContaining({ reasoning_effort: effort }),
+        }),
+      }),
+    );
+  });
+
   it("maps Debug to native default collaboration while preserving full-access overrides", async () => {
     const { manager, context, sendRequest } = createSendTurnHarness();
 
@@ -3038,7 +3068,7 @@ describe("sendTurn", () => {
         mode: "default",
         settings: {
           model: "gpt-5.3-codex",
-          reasoning_effort: "medium",
+          reasoning_effort: null,
           developer_instructions: CODEX_DEFAULT_MODE_DEVELOPER_INSTRUCTIONS,
         },
       },
@@ -3071,7 +3101,7 @@ describe("sendTurn", () => {
         mode: "plan",
         settings: {
           model: "gpt-5.2-codex",
-          reasoning_effort: "medium",
+          reasoning_effort: null,
           developer_instructions: CODEX_PLAN_MODE_DEVELOPER_INSTRUCTIONS,
         },
       },

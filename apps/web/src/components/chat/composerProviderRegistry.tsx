@@ -56,18 +56,15 @@ export function getComposerProviderState(input: ComposerProviderStateInput): Com
     case "codex": {
       const providerOptions = modelOptions?.codex;
       rawEffort = trimOrNull(providerOptions?.reasoningEffort);
-      const defaultReasoningEffort = getDefaultEffort(caps);
       const reasoningEffortSupport = classifyCodexReasoningEffortSupport({
         model,
         effort: rawEffort,
         ...(runtimeModel ? { runtimeModel } : {}),
       });
+      // An explicit selection must survive dispatch even when it matches the
+      // discovered default: collaboration mode can otherwise override it.
       const reasoningEffort =
-        rawEffort &&
-        reasoningEffortSupport !== "unsupported" &&
-        rawEffort !== defaultReasoningEffort
-          ? rawEffort
-          : undefined;
+        rawEffort && reasoningEffortSupport !== "unsupported" ? rawEffort : undefined;
       const fastModeEnabled = caps.supportsFastMode && providerOptions?.fastMode === true;
       const nextOptions = {
         ...(reasoningEffort ? { reasoningEffort } : {}),

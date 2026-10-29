@@ -457,6 +457,27 @@ describe("getComposerProviderState", () => {
     });
   });
 
+  it.each(["low", "medium", "high", "xhigh", "max", "ultra"])(
+    "dispatches explicitly selected Codex %s even when discovery marks it as default",
+    (reasoningEffort) => {
+      const state = getComposerProviderState({
+        provider: "codex",
+        model: "gpt-6.1-sol",
+        runtimeModel: {
+          slug: "gpt-6.1-sol",
+          name: "GPT-6.1 Sol",
+          supportedReasoningEfforts: [{ value: reasoningEffort }],
+          defaultReasoningEffort: reasoningEffort,
+        },
+        prompt: "",
+        modelOptions: { codex: { reasoningEffort } },
+      });
+
+      expect(state.promptEffort).toBe(reasoningEffort);
+      expect(state.modelOptionsForDispatch).toEqual({ reasoningEffort });
+    },
+  );
+
   it("preserves codex fast mode when it is the only active option", () => {
     const state = getComposerProviderState({
       provider: "codex",
@@ -522,7 +543,7 @@ describe("getComposerProviderState", () => {
     expect(state).toEqual({
       provider: "codex",
       promptEffort: "high",
-      modelOptionsForDispatch: { fastMode: false },
+      modelOptionsForDispatch: { reasoningEffort: "high", fastMode: false },
     });
   });
 
