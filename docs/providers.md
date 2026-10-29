@@ -22,6 +22,13 @@ consistent workspace.
 Provider availability can differ between the current stable release and development builds. Use the
 provider settings in your installed Synara version as the authoritative list for that build.
 
+## Codex reasoning effort
+
+Explicitly selected reasoning levels are sent unchanged, including levels that match the runtime's
+reported default. Synara passes the same effort to the turn and its Default/Plan collaboration mode.
+When no effort is selected, collaboration mode passes null so Codex resolves the default instead of
+Synara forcing Medium.
+
 ## What Synara manages
 
 Synara provides the shared operating surface around each provider:

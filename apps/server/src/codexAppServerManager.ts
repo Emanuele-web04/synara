@@ -953,7 +953,7 @@ export function buildCodexCollaborationMode(input: {
       mode: "default" | "plan";
       settings: {
         model: string;
-        reasoning_effort: string;
+        reasoning_effort: string | null;
         developer_instructions: string;
       };
     }
@@ -971,7 +971,8 @@ export function buildCodexCollaborationMode(input: {
     mode: nativeMode,
     settings: {
       model,
-      reasoning_effort: input.effort ?? "medium",
+      // Let Codex resolve the default when no effort was selected.
+      reasoning_effort: input.effort ?? null,
       developer_instructions:
         input.enableComputerControl === true
           ? instructions.replace(
@@ -1792,7 +1793,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         mode: "default" | "plan";
         settings: {
           model: string;
-          reasoning_effort: string;
+          reasoning_effort: string | null;
           developer_instructions: string;
         };
       };
