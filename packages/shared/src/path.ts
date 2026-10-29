@@ -1,8 +1,3 @@
-// FILE: path.ts
-// Purpose: Shared path classification and workspace-relative conversion helpers.
-// Layer: Cross-package utility
-// Exports: absolute-path predicates plus safe workspace relative path helpers
-
 export function isWindowsDrivePath(value: string): boolean {
   return /^[a-zA-Z]:[/\\]/.test(value);
 }

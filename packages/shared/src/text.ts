@@ -1,9 +1,3 @@
-// FILE: text.ts
-// Purpose: Small, dependency-free text helpers shared across server and web so
-// repeated string semantics (count pluralization, etc.) live in one place.
-// Layer: Shared runtime utility
-// Exports: normalizeLineEndings, pluralize, nonEmptyTrimmed, splitsSurrogatePair, stripTerminalControlSequences, unicodeSafeEndOffset
-
 // Workspace text buffers use LF; retain the separate on-disk format metadata
 // when this representation is used for editing or comparison.
 export function normalizeLineEndings(contents: string): string {
