@@ -169,6 +169,11 @@ export interface GitSnapshotWorktreeInput {
   readonly outputPath: string;
 }
 
+export interface GitReclaimGeneratedFilesResult {
+  readonly removedPaths: ReadonlyArray<string>;
+  readonly protectedPaths: ReadonlyArray<string>;
+}
+
 export interface GitFetchPullRequestBranchInput {
   cwd: string;
   prNumber: number;
@@ -374,6 +379,11 @@ export interface GitCoreShape {
   readonly snapshotWorktree: (
     input: GitSnapshotWorktreeInput,
   ) => Effect.Effect<void, GitCommandError>;
+
+  /** Remove ignored paths that neither `.worktreeinclude` nor `.worktreelink` claims. Never follows a link. */
+  readonly reclaimGeneratedFiles: (input: {
+    readonly cwd: string;
+  }) => Effect.Effect<GitReclaimGeneratedFilesResult, GitCommandError>;
 
   /**
    * Create a detached worktree from a branch or ref. `onPhase` fires as each
