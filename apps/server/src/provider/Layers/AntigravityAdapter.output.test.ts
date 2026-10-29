@@ -45,11 +45,16 @@ async function runPrintTurn(input: {
   hooks?: string[];
   transcript?: unknown[];
   stop?: boolean;
+  waitForStopTeardown?: boolean;
   interrupt?: boolean;
 }) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "synara-antigravity-output-"));
   let child: ChildProcess;
   let eventFile: string;
+  let resolveTeardownStarted!: () => void;
+  const teardownStarted = new Promise<void>((resolve) => {
+    resolveTeardownStarted = resolve;
+  });
   const transcriptFile = path.join(root, "transcript.jsonl");
   const spawnProcess = ((
     _cmd: string,
@@ -99,6 +104,8 @@ async function runPrintTurn(input: {
         for (const chunk of input.stdoutChunks ?? []) child!.stdout!.emit("data", chunk);
         if (input.stderr) child!.stderr!.emit("data", input.stderr);
         if (input.interrupt) yield* adapter.interruptTurn(threadId);
+        if (input.waitForStopTeardown)
+          yield* Effect.promise(() => teardownStarted).pipe(Effect.timeout("3 seconds"));
         child!.emit("close", input.code === undefined ? 0 : input.code, input.signal ?? null);
         const events = Array.from(yield* Fiber.join(eventsFiber).pipe(Effect.timeout("3 seconds")));
         yield* adapter.stopSession(threadId);
@@ -108,7 +115,10 @@ async function runPrintTurn(input: {
           makeAntigravityAdapterLive({
             ensurePlugin: async () => undefined,
             spawnProcess,
-            teardownProcessTree: async () => ({ escalated: false, signalErrors: [] }),
+            teardownProcessTree: async () => {
+              resolveTeardownStarted();
+              return { escalated: false, signalErrors: [] };
+            },
           }).pipe(
             Layer.provideMerge(ServerConfig.layerTest(root, { prefix: "antigravity-output-" })),
             Layer.provideMerge(NodeServices.layer),
@@ -194,12 +204,29 @@ describe("Antigravity structured output lifecycle", () => {
     const events = await runPrintTurn({
       stdout: encode([done, checkpoint]),
       stop: true,
+      waitForStopTeardown: true,
       code: null,
       signal: "SIGKILL",
     });
     expect(textPayloads(events)).toEqual([{ streamKind: "assistant_text", delta: "Finished" }]);
     expect(terminalPayload(events)).toMatchObject({ state: "completed" });
   });
+  it.each([
+    { code: 1, signal: null, state: "failed" },
+    { code: null, signal: "SIGKILL" as const, state: "interrupted" },
+  ])(
+    "preserves $state without a result or owned stop teardown",
+    async ({ code, signal, state }) => {
+      const events = await runPrintTurn({
+        stdout: encode([done, checkpoint]),
+        stop: true,
+        code,
+        signal,
+      });
+      expect(textPayloads(events)).toEqual([{ streamKind: "assistant_text", delta: "Finished" }]);
+      expect(terminalPayload(events)).toMatchObject({ state });
+    },
+  );
   it("keeps a missing-result process failure failed and preserves only response text", async () => {
     const events = await runPrintTurn({ stdout: encode([done]), code: 1 });
     expect(textPayloads(events)).toEqual([{ streamKind: "assistant_text", delta: "Finished" }]);
