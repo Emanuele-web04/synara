@@ -2909,12 +2909,16 @@ export class ComputerManager {
       const measured = (route: string) =>
         this.scrollGearing.has(windowKey(route)) ||
         this.scrollGearingFile.get(durableKey(route)) !== undefined;
-      const plan = (route: string, requested: number) =>
-        this.scrollGearing.plan(
+      const plan = (route: string, requested: number) => {
+        const planned = this.scrollGearing.plan(
           windowKey(route),
           requested,
           this.scrollGearingFile.get(durableKey(route)),
         );
+        return this.backend.exactTargetBackgroundInput
+          ? Math.sign(planned) * Math.min(Math.abs(planned), 6_000)
+          : planned;
+      };
 
       let injectedX = 0;
       let injectedY = 0;
@@ -3330,6 +3334,33 @@ export class ComputerManager {
     });
   }
 
+  async typeTextWithKeyboard(
+    threadId: string | undefined,
+    text: string,
+    windowId: string,
+  ): Promise<ComputerActionResult> {
+    if (desktopDeliveryMode() !== "foreground") {
+      throw new CuaActionError(
+        "Keyboard text entry requires approved foreground delivery; no input was sent.",
+        "not-dispatched",
+        COMPUTER_FOREGROUND_NOT_REQUESTED_CODE,
+      );
+    }
+    const type = this.backend.typeTextWithKeyboard?.bind(this.backend);
+    if (!type) {
+      throw new CuaActionError(
+        "This backend cannot explicitly select keyboard text entry.",
+        "not-dispatched",
+        "unsupported_operation",
+      );
+    }
+    // Keyboard events share process/global focus, not an exact-element lane.
+    return this.withDesktopControl(threadId, async () => {
+      const result = await this.runKeyboardDispatch(threadId, windowId, () => type(text, windowId));
+      return this.actionResult(threadId, "computer_type_text", undefined, result, windowId);
+    });
+  }
+
   async typeTextAt(
     threadId: string | undefined,
     text: string,
@@ -3473,7 +3504,10 @@ export class ComputerManager {
    * where computer_type_text would and nowhere else.
    *
    * Native preservation retains every representation without returning it to
-   * the model. Restoration must not overwrite a newer human clipboard write.
+   * the model. The text-only fallback refuses unreadable or non-text contents
+   * before writing; text read/compare/write is not an atomic OS transaction.
+   * `clipboardRestored` reports whether the previous contents went back.
+   * Restoration must not overwrite a newer human clipboard write.
    */
   async paste(
     threadId: string | undefined,
@@ -3487,21 +3521,25 @@ export class ComputerManager {
       const prepare = this.backend.prepareClipboardPaste?.bind(this.backend);
       let restore: () => Promise<boolean>;
       if (prepare) {
+        assertDesktopOperationActive();
         restore = await timedComputerLeg("dispatch", () => prepare(payload));
       } else {
         const read = this.backend.readClipboard?.bind(this.backend);
         const write = this.backend.writeClipboard?.bind(this.backend);
         if (!read || !write || !("text" in payload)) throw clipboardUnsupportedError();
-        const previous = await timedComputerLeg("dispatch", () =>
-          read().catch(() => {
-            throw new ComputerBackendError(
-              "Cannot preserve the current clipboard; no paste was sent. Use direct text input.",
-            );
-          }),
-        );
+        const previous = await timedComputerLeg("dispatch", () => read().catch(() => undefined));
+        if (previous === undefined)
+          throw new CuaActionError(
+            "The existing clipboard cannot be preserved as text. Use type_text or an upload control; the clipboard was not changed.",
+            "not-dispatched",
+            "clipboard_preservation_unavailable",
+          );
+        assertDesktopOperationActive();
         await timedComputerLeg("dispatch", () => write(payload.text));
         restore = async () => {
-          if ((await read()) !== payload.text) return false;
+          // Text comparison cannot detect a same-value competing clipboard write.
+          const current = await read().catch(() => undefined);
+          if (current !== payload.text) return false;
           await write(previous);
           return true;
         };

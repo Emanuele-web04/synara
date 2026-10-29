@@ -314,6 +314,8 @@ export const BrowserUploadOutput = closedStruct({
       byteLength: boundedInt(0, 2_147_483_647),
     }),
   ).check(Schema.isMinLength(1), Schema.isMaxLength(32)),
+  // Older hosts omit this; file metadata alone is not selection evidence.
+  selectionVerified: Schema.optional(Schema.Literal(true)),
   ...optionalDialogFields,
 });
 export const BrowserPressOutput = closedStruct({

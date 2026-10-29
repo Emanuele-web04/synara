@@ -326,3 +326,9 @@ describe("ComputerManager audit seam", () => {
     expect(JSON.parse(lines[0]!).effect).toBe("verified");
   });
 });
+
+it("records expected readiness values as sizes, never their contents", () => {
+  expect(summarizeComputerAuditArgs({ value_equals: "private-value" })).toEqual({
+    value_equals: { chars: 13 },
+  });
+});
