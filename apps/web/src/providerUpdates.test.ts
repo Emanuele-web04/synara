@@ -71,6 +71,7 @@ function serverSettings(overrides: Partial<ServerSettings["providers"]> = {}): S
         ...provider,
         binaryPath: "codex",
         homePath: "",
+        launchArgs: "",
         selectedAccountId: "default",
         accounts: [],
       },

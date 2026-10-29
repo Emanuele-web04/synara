@@ -232,6 +232,15 @@ describe("server-backed provider enablement", () => {
     expect(patch.providers).toBeUndefined();
   });
 
+  it("maps Codex launch args into the server provider patch", () => {
+    const patch = appSettingsPatchToServerSettingsPatch({
+      codexLaunchArgs: '-c model_provider="apitoken"',
+    });
+    expect(patch.providers?.codex).toEqual({
+      launchArgs: '-c model_provider="apitoken"',
+    });
+  });
+
   it("invalidates discovery for initial and changed streamed provider settings", () => {
     const disabledOpenCode = {
       ...DEFAULT_SERVER_SETTINGS_VIEW,
@@ -716,6 +725,7 @@ describe("getProviderStartOptions", () => {
         claudeBinaryPath: "/usr/local/bin/claude",
         codexBinaryPath: "",
         codexHomePath: "/Users/you/.codex",
+        codexLaunchArgs: "",
         codexAccounts: [],
         selectedCodexAccountId: "default",
         cursorApiEndpoint: "http://localhost:3000",
@@ -761,6 +771,7 @@ describe("getProviderStartOptions", () => {
         claudeBinaryPath: "",
         codexBinaryPath: "",
         codexHomePath: "",
+        codexLaunchArgs: "",
         codexAccounts: [],
         selectedCodexAccountId: "default",
         cursorApiEndpoint: "",
@@ -780,6 +791,36 @@ describe("getProviderStartOptions", () => {
     ).toBeUndefined();
   });
 
+  it("includes Codex launch args without requiring a custom binary", () => {
+    expect(
+      getProviderStartOptions({
+        claudeBinaryPath: "",
+        codexBinaryPath: "",
+        codexHomePath: "",
+        codexAccounts: [],
+        selectedCodexAccountId: "default",
+        codexLaunchArgs: '-c model_provider="apitoken"',
+        cursorApiEndpoint: "",
+        cursorBinaryPath: "",
+        antigravityBinaryPath: "",
+        grokBinaryPath: "",
+        droidBinaryPath: "",
+        openCodeBinaryPath: "",
+        openCodeExperimentalWebSockets: false,
+        openCodeServerUrl: "",
+        ompAgentDir: "",
+        ompBinaryPath: "",
+        piAgentDir: "",
+        piBinaryPath: "",
+        devinBinaryPath: "",
+      }),
+    ).toEqual({
+      codex: {
+        launchArgs: '-c model_provider="apitoken"',
+      },
+    });
+  });
+
   it("resolves the selected Codex account into provider start options", () => {
     expect(
       getProviderStartOptions({
@@ -795,6 +836,7 @@ describe("getProviderStartOptions", () => {
           },
         ],
         selectedCodexAccountId: "work",
+        codexLaunchArgs: "",
         cursorApiEndpoint: "",
         cursorBinaryPath: "",
         antigravityBinaryPath: "",
@@ -2160,4 +2202,16 @@ describe("keepAwakeMode mapping", () => {
       appSettingsPatchToServerSettingsPatch({ enableAssistantStreaming: true }),
     ).not.toHaveProperty("keepAwakeMode");
   });
+});
+
+it("keeps escaped trailing spaces in Codex launch options", () => {
+  const launchArgs = "--value trailing\\ ";
+  expect(
+    getProviderStartOptions({ ...AppSettingsSchema.makeUnsafe({}), codexLaunchArgs: launchArgs })
+      ?.codex?.launchArgs,
+  ).toBe(launchArgs);
+  expect(
+    appSettingsPatchToServerSettingsPatch({ codexLaunchArgs: launchArgs }).providers?.codex
+      ?.launchArgs,
+  ).toBe(launchArgs);
 });

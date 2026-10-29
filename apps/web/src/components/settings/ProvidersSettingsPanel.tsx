@@ -142,6 +142,7 @@ type ProviderInstallTextKey =
   | "claudeHomePath"
   | "codexBinaryPath"
   | "codexHomePath"
+  | "codexLaunchArgs"
   | "cursorBinaryPath"
   | "cursorApiEndpoint"
   | "devinBinaryPath"
@@ -235,6 +236,19 @@ const PROVIDER_INSTALL_SETTINGS: readonly ProviderInstallSettings[] = [
         label: "settings:providers_codexHomePath",
         placeholder: "settings:cODEXHOME",
         description: "settings:providers_codexHomeDescription",
+      },
+      {
+        kind: "text",
+        settingsKey: "codexLaunchArgs",
+        label: "Codex launch args",
+        placeholder: '-c model_provider="apitoken"',
+        description: (
+          <>
+            Extra CLI flags used for sessions on every Codex account, inserted before{" "}
+            <code>app-server</code>. Tokens after an unquoted <code>--</code> are appended after{" "}
+            <code>app-server</code>. Example: <code>-c model_provider=&quot;apitoken&quot;</code>.
+          </>
+        ),
       },
     ],
   },
@@ -949,8 +963,9 @@ function providerInstanceConfigKey(field: ProviderInstallField): string | null {
       return "serverPassword";
     case "openCodeExperimentalWebSockets":
       return "experimentalWebSockets";
-    // Every Claude account's sessions read Artifacts from the Claude provider setting,
-    // never from an account's config, so the switch lives on the default account only.
+    // Launch arguments and these Claude options are provider-wide settings,
+    // not account executable paths or account-specific config fields.
+    case "codexLaunchArgs":
     case "claudeEnableArtifacts":
     case "claudeConfirmColdCacheResume":
       return null;

@@ -396,6 +396,7 @@ export const AppSettingsSchema = Schema.Struct({
   ),
   codexBinaryPath: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
   codexHomePath: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
+  codexLaunchArgs: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
   codexAccounts: Schema.Array(CodexAccountConfig).pipe(withDefaults(() => [])),
   selectedCodexAccountId: Schema.String.check(Schema.isMaxLength(64)).pipe(
     withDefaults(() => DEFAULT_CODEX_ACCOUNT_ID),
@@ -1581,6 +1582,7 @@ export function serverSettingsToAppSettings(settings: ServerSettingsView): Parti
     claudeHomePath: settings.providers.claudeAgent.homePath,
     codexBinaryPath: settings.providers.codex.binaryPath,
     codexHomePath: settings.providers.codex.homePath,
+    codexLaunchArgs: settings.providers.codex.launchArgs,
     codexAccounts: settings.providers.codex.accounts,
     selectedCodexAccountId: settings.providers.codex.selectedAccountId,
     cursorApiEndpoint: settings.providers.cursor.apiEndpoint,
@@ -1782,6 +1784,7 @@ export function appSettingsPatchToServerSettingsPatch(
   if (
     hasOwn(patch, "codexBinaryPath") ||
     hasOwn(patch, "codexHomePath") ||
+    hasOwn(patch, "codexLaunchArgs") ||
     hasOwn(patch, "codexAccounts") ||
     hasOwn(patch, "selectedCodexAccountId") ||
     hasOwn(patch, "customCodexModels")
@@ -1793,6 +1796,7 @@ export function appSettingsPatchToServerSettingsPatch(
     providers.codex = {
       ...(hasOwn(patch, "codexBinaryPath") ? { binaryPath: patch.codexBinaryPath ?? "" } : {}),
       ...(hasOwn(patch, "codexHomePath") ? { homePath: patch.codexHomePath ?? "" } : {}),
+      ...(hasOwn(patch, "codexLaunchArgs") ? { launchArgs: patch.codexLaunchArgs ?? "" } : {}),
       ...(codexAccounts !== undefined ? { accounts: codexAccounts } : {}),
       ...(selectedCodexAccountId && isValidCodexAccountId(selectedCodexAccountId)
         ? { selectedAccountId: selectedCodexAccountId }
@@ -1959,6 +1963,7 @@ export function buildInitialServerSettingsMigrationPatch(
     "claudeHomePath",
     "codexBinaryPath",
     "codexHomePath",
+    "codexLaunchArgs",
     "selectedCodexAccountId",
     "cursorApiEndpoint",
     "cursorBinaryPath",
@@ -2428,7 +2433,7 @@ export function getProviderStartOptions(
     | "ompAgentDir"
     | "ompBinaryPath"
   > &
-    Partial<Pick<AppSettings, "claudeHomePath" | "providerInstances">>,
+    Partial<Pick<AppSettings, "claudeHomePath" | "codexLaunchArgs" | "providerInstances">>,
   instanceId?: ProviderInstanceId | null | undefined,
 ): ProviderStartOptions | undefined {
   const claudeBinaryPath = normalizeProviderBinaryPathOverride(
@@ -2448,6 +2453,7 @@ export function getProviderStartOptions(
     settings.openCodeBinaryPath,
   );
   const piBinaryPath = normalizeProviderBinaryPathOverride("pi", settings.piBinaryPath);
+  const codexLaunchArgs = settings.codexLaunchArgs ?? "";
   const ompBinaryPath = normalizeProviderBinaryPathOverride("omp", settings.ompBinaryPath);
   const codexLaunch = resolveCodexLaunchSettingsForInstance(settings, instanceId);
   const hasOpenCodeStartOptions = Boolean(
@@ -2458,13 +2464,15 @@ export function getProviderStartOptions(
     codexLaunch.homePath ||
     codexLaunch.shadowHomePath ||
     codexLaunch.accountId ||
-    codexLaunch.hasAdditionalAccounts
+    codexLaunch.hasAdditionalAccounts ||
+    codexLaunchArgs.trim()
       ? {
           codex: {
             ...(codexLaunch.binaryPath ? { binaryPath: codexLaunch.binaryPath } : {}),
             ...(codexLaunch.homePath ? { homePath: codexLaunch.homePath } : {}),
             ...(codexLaunch.shadowHomePath ? { shadowHomePath: codexLaunch.shadowHomePath } : {}),
             ...(codexLaunch.accountId ? { accountId: codexLaunch.accountId } : {}),
+            ...(codexLaunchArgs.trim() ? { launchArgs: codexLaunchArgs } : {}),
           },
         }
       : {}),

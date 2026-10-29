@@ -914,3 +914,28 @@ describe("providerDisabledSettingsMessage", () => {
     );
   });
 });
+
+it("defaults and durably reloads raw Codex launch args", async () => {
+  expect(Schema.decodeSync(ServerSettingsSchema)({}).providers.codex.launchArgs).toBe("");
+  const launchArgs = "--value trailing\\ ";
+  const result = await runWithSettings(
+    Effect.gen(function* () {
+      const service = yield* ServerSettingsService;
+      const config = yield* ServerConfig;
+      yield* service.start;
+      yield* service.updateSettings({ providers: { codex: { launchArgs } } });
+      return yield* Effect.gen(function* () {
+        const restarted = yield* ServerSettingsService;
+        yield* restarted.start;
+        return yield* restarted.getSettings;
+      }).pipe(
+        Effect.provide(
+          ServerSettingsLive.pipe(
+            Layer.provide(Layer.merge(NodeServices.layer, Layer.succeed(ServerConfig, config))),
+          ),
+        ),
+      );
+    }),
+  );
+  expect(result.providers.codex.launchArgs).toBe(launchArgs);
+});
