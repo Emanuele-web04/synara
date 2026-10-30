@@ -4,8 +4,78 @@
 // Layer: Shared text processing — used by the beta desktop diagnostics client
 // and re-run by the ingest worker as defense in depth.
 
-import { DesktopDiagnosticIssue, DESKTOP_RENDERER_ERROR_STACK_MAX_LENGTH } from "@synara/contracts";
+import {
+  DesktopDiagnosticIssue,
+  DesktopUpdateFailureReason,
+  DESKTOP_RENDERER_ERROR_STACK_MAX_LENGTH,
+} from "@synara/contracts";
 import { Schema } from "effect";
+
+/** Accepts only fixed updater failure categories at queue and ingest boundaries. */
+export function sanitizeDesktopUpdateFailureReason(
+  reason: unknown,
+): DesktopUpdateFailureReason | undefined {
+  return Schema.is(DesktopUpdateFailureReason)(reason) ? reason : undefined;
+}
+
+/** Recognizes bounded updater-generated messages locally; never returns any input text. */
+export function classifyDesktopUpdateFailure(message: unknown): DesktopUpdateFailureReason {
+  if (typeof message !== "string") return "unknown";
+  const text = message.slice(0, 1024);
+  // Exhausted resumable retries retain the request error inside this fixed wrapper.
+  const requestError =
+    /^Update download stalled and could not resume \(request-error: (net::ERR_[A-Z_]{1,64}); \d{1,20}\/(?:\d{1,20}|\?) bytes after \d{1,9} attempts\)\.$/.exec(
+      text,
+    )?.[1] ?? text;
+  if (
+    text === "Timed out while checking for updates. Try again." ||
+    text === "Request timed out" ||
+    /^Request timed out after \d{1,9}ms of inactivity\.$/.test(text) ||
+    /^Download stalled after \d{1,9} seconds without progress\. Try again\.$/.test(text) ||
+    /^net::ERR_(?:TIMED_OUT|CONNECTION_TIMED_OUT)$/.test(requestError) ||
+    /^Update download stalled and could not resume \(idle-timeout; \d{1,20}\/(?:\d{1,20}|\?) bytes after \d{1,9} attempts\)\.$/.test(
+      text,
+    )
+  )
+    return "timeout";
+  if (text === "cancelled" || text === "net::ERR_ABORTED") return "cancelled";
+  if (
+    /^net::ERR_(?:INTERNET_DISCONNECTED|NAME_NOT_RESOLVED|NETWORK_CHANGED|CONNECTION_(?:CLOSED|RESET|REFUSED|ABORTED)|ADDRESS_UNREACHABLE|PROXY_CONNECTION_FAILED|TUNNEL_CONNECTION_FAILED|CERT_(?:AUTHORITY_INVALID|DATE_INVALID|COMMON_NAME_INVALID))$/.test(
+      requestError,
+    )
+  )
+    return "network";
+  // builder-util-runtime HttpError adds a status line followed by JSON detail or Headers.
+  if (
+    /^4\d{2} [^\r\n]+\n(?:"|Headers:)/.test(text) ||
+    /^Cannot download update: HTTP 4\d{2}\.$/.test(text)
+  )
+    return "http-client";
+  if (
+    /^5\d{2} [^\r\n]+\n(?:"|Headers:)/.test(text) ||
+    /^Cannot download update: HTTP 5\d{2}\.$/.test(text)
+  )
+    return "http-server";
+  if (
+    /^Cannot (?:find|parse update info from) (?:remote|beta|synara|latest)(?:-mac|-linux)?\.yml in the latest release artifacts \(/.test(
+      text,
+    )
+  )
+    return "manifest";
+  if (
+    text === "No published versions on GitHub" ||
+    text.startsWith("Cannot parse releases feed: ") ||
+    text.startsWith("Unable to find latest version on GitHub (")
+  )
+    return "release-feed";
+  if (
+    /^(?:sha256 |sha512 )?checksum mismatch(?:[ ,:(]|$)/.test(text) ||
+    text.startsWith("The downloaded update could not be verified: ") ||
+    text === "The update download did not produce a verified update. Try again."
+  )
+    return "verification";
+  return "unknown";
+}
 
 const REMOTE_ERROR_TYPE =
   /^(?:Error|TypeError|RangeError|ReferenceError|SyntaxError|URIError|EvalError|AggregateError)\b/;

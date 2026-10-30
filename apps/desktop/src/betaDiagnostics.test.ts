@@ -1158,6 +1158,43 @@ describe("Remote keeps free text on the device", () => {
     expect(issueEvent.payload.message).toBe("Handled issue: git.push.failed (timeout)");
   });
 
+  it("keeps a fixed updater reason while stripping the failure message", () => {
+    const root = makeRoot();
+    const diagnostics = remote(root);
+    const initial = createInitialDesktopUpdateState(
+      "1.0.6-remote.39",
+      { hostArch: "arm64", appArch: "arm64", runningUnderArm64Translation: false },
+      "remote",
+    );
+    const checking = reduceDesktopUpdateStateOnCheckStart(initial, new Date().toISOString());
+    diagnostics.trackUpdateStateChange(
+      checking,
+      reduceDesktopUpdateStateOnCheckFailure(
+        checking,
+        "Cannot find remote-mac.yml in the latest release artifacts (https://private/customer?token=secret)",
+        new Date().toISOString(),
+      ),
+    );
+    diagnostics.track("update.error", {
+      kind: "update",
+      outcome: "error",
+      // @ts-expect-error Untrusted categories must be rejected before queueing.
+      reason: "private-customer",
+      message: "private customer message",
+    });
+    diagnostics.track("update.check", { kind: "update", outcome: "ok", reason: "timeout" });
+    const events = queued(root);
+    expect(events[0].payload).toEqual({
+      kind: "update",
+      outcome: "error",
+      errorContext: "check",
+      reason: "manifest",
+    });
+    expect(events[1].payload.reason).toBeUndefined();
+    expect(events[2].payload.reason).toBeUndefined();
+    expect(JSON.stringify(events)).not.toMatch(/private|customer|secret|message|stack|logTail/);
+  });
+
   it("collects no context while sharing is off and skips snapshots reaching into that time", () => {
     const root = makeRoot();
     let sharing = false;

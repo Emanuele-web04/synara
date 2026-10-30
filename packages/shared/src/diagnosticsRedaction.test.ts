@@ -3,7 +3,76 @@
 
 import { describe, expect, it } from "vitest";
 
-import { redactDiagnosticText } from "./diagnosticsRedaction";
+import {
+  classifyDesktopUpdateFailure,
+  redactDiagnosticText,
+  sanitizeDesktopUpdateFailureReason,
+} from "./diagnosticsRedaction";
+
+describe("updater failure reasons", () => {
+  it.each([
+    ["Timed out while checking for updates. Try again.", "timeout"],
+    ["Request timed out after 15000ms of inactivity.", "timeout"],
+    ["Download stalled after 60 seconds without progress. Try again.", "timeout"],
+    ["net::ERR_CONNECTION_TIMED_OUT", "timeout"],
+    [
+      "Update download stalled and could not resume (idle-timeout; 10/100 bytes after 7 attempts).",
+      "timeout",
+    ],
+    [
+      "Update download stalled and could not resume (request-error: net::ERR_INTERNET_DISCONNECTED; 0/? bytes after 7 attempts).",
+      "network",
+    ],
+    [
+      "Update download stalled and could not resume (request-error: net::ERR_CONNECTION_TIMED_OUT; 10/100 bytes after 7 attempts).",
+      "timeout",
+    ],
+    ["net::ERR_INTERNET_DISCONNECTED", "network"],
+    ["net::ERR_CERT_AUTHORITY_INVALID", "network"],
+    ['403 Forbidden\n"private request detail"\nHeaders: {}', "http-client"],
+    ["502 Bad Gateway\nHeaders: {}", "http-server"],
+    ["Cannot download update: HTTP 403.", "http-client"],
+    [
+      "Cannot find remote-mac.yml in the latest release artifacts (https://private/feed)",
+      "manifest",
+    ],
+    [
+      "Cannot parse update info from remote.yml in the latest release artifacts (private)",
+      "manifest",
+    ],
+    ["No published versions on GitHub", "release-feed"],
+    ["Cannot parse releases feed: private XML", "release-feed"],
+    ["sha512 checksum mismatch (expected private, got private).", "verification"],
+    ["The downloaded update could not be verified: private path", "verification"],
+    ["cancelled", "cancelled"],
+    ["net::ERR_ABORTED", "cancelled"],
+  ])("classifies known updater message %s without returning its contents", (message, reason) => {
+    expect(classifyDesktopUpdateFailure(message)).toBe(reason);
+    expect(sanitizeDesktopUpdateFailureReason(reason)).toBe(reason);
+  });
+
+  it.each([
+    undefined,
+    null,
+    "",
+    "customer requested a timeout at /private/project",
+    "customer text: net::ERR_INTERNET_DISCONNECTED",
+    "502 customer note without an HTTP error envelope",
+    "net::ERR_CUSTOMER_SECRET",
+    "Update download stalled and could not resume (request-error: net::ERR_CUSTOMER_SECRET; 0/? bytes after 7 attempts).",
+    "Update download stalled and could not resume (request-error: customer text net::ERR_INTERNET_DISCONNECTED; 0/? bytes after 7 attempts).",
+    "Update download stalled and could not resume (request-error: net::ERR_INTERNET_DISCONNECTED; private/total bytes after 7 attempts).",
+    "network",
+  ])("keeps unrecognized input %s unknown", (message) => {
+    expect(classifyDesktopUpdateFailure(message)).toBe("unknown");
+  });
+
+  it("rejects arbitrary category text", () => {
+    expect(sanitizeDesktopUpdateFailureReason("customer-secret")).toBeUndefined();
+    expect(sanitizeDesktopUpdateFailureReason({ reason: "timeout" })).toBeUndefined();
+    expect(sanitizeDesktopUpdateFailureReason("unknown")).toBe("unknown");
+  });
+});
 
 const OPTS = { homeDir: "/Users/kartik", maxLength: 16 * 1024 };
 const redact = (text: string) => redactDiagnosticText(text, OPTS);
