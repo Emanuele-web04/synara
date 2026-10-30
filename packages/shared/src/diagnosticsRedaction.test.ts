@@ -33,6 +33,10 @@ describe("updater failure reasons", () => {
       "cancelled",
     ],
     [
+      "Update download stalled and could not resume (request-abort; 0/? bytes after 7 attempts).",
+      "network",
+    ],
+    [
       "Update download stalled and could not resume (response-error; 0/? bytes after 7 attempts).",
       "network",
     ],
@@ -112,6 +116,7 @@ describe("updater failure reasons", () => {
     "The downloaded update could not be reverified for customer-secret",
     "Cannot find remote-linux-private.yml in the latest release artifacts (private)",
     "Update download stalled and could not resume (http-customer-secret; 0/? bytes after 7 attempts).",
+    "Update download stalled and could not resume (request-abort: customer-secret; 0/? bytes after 7 attempts).",
     "New version customer-secret is not signed by the application owner: private",
     "The downloaded update changed during private customer preparation.",
     "Update download stalled and could not resume (request-error: net::ERR_CUSTOMER_SECRET; 0/? bytes after 7 attempts).",

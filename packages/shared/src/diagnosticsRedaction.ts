@@ -24,7 +24,7 @@ export function classifyDesktopUpdateFailure(message: unknown): DesktopUpdateFai
   const text = message.slice(0, 1024);
   // Recognize only the downloader's fixed transport reasons and bounded counters.
   const stalledReason =
-    /^Update download stalled and could not resume \((idle-timeout|http-[45]\d{2}|request-error: net::ERR_[A-Z_]{1,64}|response-error|response-aborted|premature-end); \d{1,20}\/(?:\d{1,20}|\?) bytes after \d{1,9} attempts\)\.$/.exec(
+    /^Update download stalled and could not resume \((idle-timeout|http-[45]\d{2}|request-error: net::ERR_[A-Z_]{1,64}|response-error|response-aborted|premature-end|request-abort); \d{1,20}\/(?:\d{1,20}|\?) bytes after \d{1,9} attempts\)\.$/.exec(
       text,
     )?.[1];
   const requestError = stalledReason?.startsWith("request-error: ")
@@ -45,7 +45,7 @@ export function classifyDesktopUpdateFailure(message: unknown): DesktopUpdateFai
     /^net::ERR_(?:INTERNET_DISCONNECTED|NAME_NOT_RESOLVED|NETWORK_CHANGED|CONNECTION_(?:CLOSED|RESET|REFUSED|ABORTED)|ADDRESS_UNREACHABLE|PROXY_CONNECTION_FAILED|TUNNEL_CONNECTION_FAILED|CERT_(?:AUTHORITY_INVALID|DATE_INVALID|COMMON_NAME_INVALID))$/.test(
       requestError,
     ) ||
-    /^(?:response-error|response-aborted|premature-end)$/.test(stalledReason ?? "")
+    /^(?:response-error|response-aborted|premature-end|request-abort)$/.test(stalledReason ?? "")
   )
     return "network";
   // builder-util-runtime HttpError adds a status line followed by JSON detail or Headers.
