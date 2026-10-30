@@ -156,3 +156,19 @@ describe("shortcutFromKeyboardEvent", () => {
     expect(shortcut && keybindingValueFromShortcut(shortcut)).toBe("mod+alt+esc");
   });
 });
+
+it("captures Option+Space even when macOS reports a non-breaking space", () => {
+  expect(
+    keybindingFromKeyboardEvent(
+      {
+        key: "\u00a0",
+        code: "Space",
+        altKey: true,
+        ctrlKey: false,
+        metaKey: false,
+        shiftKey: false,
+      },
+      "MacIntel",
+    ),
+  ).toBe("alt+space");
+});
