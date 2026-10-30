@@ -49,133 +49,139 @@ export async function bootstrapExecutionContext(): Promise<void> {
     );
   const lifetime = new AbortController();
   bootstrapLifetime = lifetime;
-  let execution: WsTransport | undefined;
-  let recoveryVersion = 0;
-  let resumeBootstrap: (() => void) | undefined;
-  unregisterConnectionRecovery = readWorkspaceFrame()?.registerConnectionRecovery?.({
-    resume: (options) => {
-      if (lifetime.signal.aborted) return;
-      recoveryVersion++;
-      resumeBootstrap?.();
-      execution?.resumeRemoteConnection(options);
-    },
-    dispose: () => void disposeConnectionClients(),
-  });
+  try {
+    let execution: WsTransport | undefined;
+    let recoveryVersion = 0;
+    let resumeBootstrap: (() => void) | undefined;
+    unregisterConnectionRecovery = readWorkspaceFrame()?.registerConnectionRecovery?.({
+      resume: (options) => {
+        if (lifetime.signal.aborted) return;
+        recoveryVersion++;
+        resumeBootstrap?.();
+        execution?.resumeRemoteConnection(options);
+      },
+      dispose: () => {
+        if (bootstrapLifetime === lifetime) void disposeConnectionClients();
+      },
+    });
 
-  let connection: HostConnection;
-  for (;;) {
-    const attemptedRecoveryVersion = recoveryVersion;
-    try {
-      connection = await current.controller.request<HostConnection>(
-        WS_METHODS.hostsConnect,
-        { hostId: selected.hostId },
-        { timeoutMs: 60_000, signal: lifetime.signal },
-      );
-      break;
-    } catch (error) {
-      lifetime.signal.throwIfAborted();
-      if (attemptedRecoveryVersion !== recoveryVersion) continue;
-      // RPC errors can contain provider text. Only authoritative controller state
-      // may park this frame while its existing retry controls recover the same host.
-      let response: ListHostConnectionsResponse;
+    let connection: HostConnection;
+    for (;;) {
+      const attemptedRecoveryVersion = recoveryVersion;
       try {
-        response = await current.controller.request<ListHostConnectionsResponse>(
-          WS_METHODS.hostsListConnections,
+        connection = await current.controller.request<HostConnection>(
+          WS_METHODS.hostsConnect,
+          { hostId: selected.hostId },
+          { timeoutMs: 60_000, signal: lifetime.signal },
+        );
+        break;
+      } catch (error) {
+        lifetime.signal.throwIfAborted();
+        if (attemptedRecoveryVersion !== recoveryVersion) continue;
+        // RPC errors can contain provider text. Only authoritative controller state
+        // may park this frame while its existing retry controls recover the same host.
+        let response: ListHostConnectionsResponse;
+        try {
+          response = await current.controller.request<ListHostConnectionsResponse>(
+            WS_METHODS.hostsListConnections,
+            undefined,
+            { signal: lifetime.signal },
+          );
+        } catch {
+          lifetime.signal.throwIfAborted();
+          throw error;
+        }
+        lifetime.signal.throwIfAborted();
+        if (attemptedRecoveryVersion !== recoveryVersion) continue;
+        const desired = response.desiredHosts?.find(
+          (host) =>
+            host.hostId === selected.hostId && host.environmentId === selectedScope.environmentId,
+        );
+        const connected = response.connections.find(
+          (host) =>
+            host.hostId === selected.hostId &&
+            JSON.stringify(host.executionScope) === JSON.stringify(selectedScope),
+        );
+        if (
+          !Schema.is(RemoteConnectionUnavailable)({
+            code: "REMOTE_CONNECTION_REQUIRES_ATTENTION",
+            state: desired?.state ?? connected?.state,
+          })
+        )
+          throw error;
+        let account: AccountStatus;
+        try {
+          account = await current.controller.request<AccountStatus>(
+            WS_METHODS.accountStatus,
+            undefined,
+            { signal: lifetime.signal },
+          );
+        } catch {
+          lifetime.signal.throwIfAborted();
+          throw error;
+        }
+        lifetime.signal.throwIfAborted();
+        if (
+          account.state !== "signed-in" ||
+          account.me.id !== selectedScope.userId ||
+          account.me.organization.id !== selectedScope.organizationId ||
+          account.accountAuthority !== selectedScope.accountAuthority
+        )
+          throw error;
+        if (attemptedRecoveryVersion !== recoveryVersion) continue;
+        await new Promise<void>((resolve, reject) => {
+          const aborted = () => {
+            resumeBootstrap = undefined;
+            reject(lifetime.signal.reason);
+          };
+          lifetime.signal.addEventListener("abort", aborted, { once: true });
+          resumeBootstrap = () => {
+            lifetime.signal.removeEventListener("abort", aborted);
+            resumeBootstrap = undefined;
+            resolve();
+          };
+        });
+      }
+    }
+    lifetime.signal.throwIfAborted();
+    const scope = connection.executionScope;
+    if (!scope || JSON.stringify(scope) !== JSON.stringify(selectedScope))
+      throw new Error("The selected host or account changed. Return locally and select it again.");
+    const url = new URL(rawSocketUrl(null));
+    url.pathname = `${connection.wsPath}/ws`;
+    execution = new WsTransport(url.toString(), {
+      onGenerationChanged: () => generationChanged?.(),
+    });
+    clients = { controller: current.controller, execution };
+    // The descriptor comes through the authenticated real-host stream, not the directory.
+    // Wait outside each RPC's normal deadline only for an explicit terminal-state recovery.
+    let remote: ExecutionEnvironmentDescriptor;
+    for (;;) {
+      try {
+        remote = await execution.request<ExecutionEnvironmentDescriptor>(
+          WS_METHODS.serverGetEnvironment,
           undefined,
           { signal: lifetime.signal },
         );
-      } catch {
-        lifetime.signal.throwIfAborted();
-        throw error;
+        break;
+      } catch (error) {
+        if (!(await execution.waitForRemoteConnectionRecovery(error))) throw error;
       }
-      lifetime.signal.throwIfAborted();
-      if (attemptedRecoveryVersion !== recoveryVersion) continue;
-      const desired = response.desiredHosts?.find(
-        (host) =>
-          host.hostId === selected.hostId && host.environmentId === selectedScope.environmentId,
-      );
-      const connected = response.connections.find(
-        (host) =>
-          host.hostId === selected.hostId &&
-          JSON.stringify(host.executionScope) === JSON.stringify(selectedScope),
-      );
-      if (
-        !Schema.is(RemoteConnectionUnavailable)({
-          code: "REMOTE_CONNECTION_REQUIRES_ATTENTION",
-          state: desired?.state ?? connected?.state,
-        })
-      )
-        throw error;
-      let account: AccountStatus;
-      try {
-        account = await current.controller.request<AccountStatus>(
-          WS_METHODS.accountStatus,
-          undefined,
-          { signal: lifetime.signal },
-        );
-      } catch {
-        lifetime.signal.throwIfAborted();
-        throw error;
-      }
-      lifetime.signal.throwIfAborted();
-      if (
-        account.state !== "signed-in" ||
-        account.me.id !== selectedScope.userId ||
-        account.me.organization.id !== selectedScope.organizationId ||
-        account.accountAuthority !== selectedScope.accountAuthority
-      )
-        throw error;
-      if (attemptedRecoveryVersion !== recoveryVersion) continue;
-      await new Promise<void>((resolve, reject) => {
-        const aborted = () => {
-          resumeBootstrap = undefined;
-          reject(lifetime.signal.reason);
-        };
-        lifetime.signal.addEventListener("abort", aborted, { once: true });
-        resumeBootstrap = () => {
-          lifetime.signal.removeEventListener("abort", aborted);
-          resumeBootstrap = undefined;
-          resolve();
-        };
-      });
     }
+    lifetime.signal.throwIfAborted();
+    if (remote.environmentId !== scope.environmentId)
+      throw new Error("The host reported a different execution identity");
+    initializeExecutionContext({
+      controller: local,
+      execution: remote,
+      remote: scope,
+      remoteHostId: selected.hostId,
+    });
+  } catch (error) {
+    // A retired bootstrap may reject after a newer owner has already started.
+    if (bootstrapLifetime === lifetime) await disposeConnectionClients();
+    throw error;
   }
-  lifetime.signal.throwIfAborted();
-  const scope = connection.executionScope;
-  if (!scope || JSON.stringify(scope) !== JSON.stringify(selectedScope))
-    throw new Error("The selected host or account changed. Return locally and select it again.");
-  const url = new URL(rawSocketUrl(null));
-  url.pathname = `${connection.wsPath}/ws`;
-  execution = new WsTransport(url.toString(), {
-    onGenerationChanged: () => generationChanged?.(),
-  });
-  clients = { controller: current.controller, execution };
-  // The descriptor comes through the authenticated real-host stream, not the directory.
-  // Wait outside each RPC's normal deadline only for an explicit terminal-state recovery.
-  let remote: ExecutionEnvironmentDescriptor;
-  for (;;) {
-    try {
-      remote = await execution.request<ExecutionEnvironmentDescriptor>(
-        WS_METHODS.serverGetEnvironment,
-        undefined,
-        { signal: lifetime.signal },
-      );
-      break;
-    } catch (error) {
-      if (!(await execution.waitForRemoteConnectionRecovery(error))) throw error;
-    }
-  }
-  lifetime.signal.throwIfAborted();
-  if (remote.environmentId !== scope.environmentId) {
-    await execution.dispose();
-    throw new Error("The host reported a different execution identity");
-  }
-  initializeExecutionContext({
-    controller: local,
-    execution: remote,
-    remote: scope,
-    remoteHostId: selected.hostId,
-  });
 }
 export async function disposeConnectionClients(): Promise<void> {
   const current = clients;

@@ -274,9 +274,79 @@ describe("initial remote relationship recovery", () => {
         expect.any(Object),
       ),
     );
+    const retired = recovery!;
     recovery!.resume();
     await rejected;
     expect(mocks.instances).toHaveLength(1);
+    expect(unregister).toHaveBeenCalledOnce();
+    expect(mocks.dispose).toHaveBeenCalledOnce();
     expect((await import("./executionContext")).readExecutionContext()).toBeUndefined();
+    const requestCount = mocks.request.mock.calls.length;
+    retired.resume();
+    expect(mocks.request).toHaveBeenCalledTimes(requestCount);
+    mocks.request.mockImplementation(async (url, method) =>
+      method === WS_METHODS.hostsConnect ? selected : respondToBootstrapRead(url, method),
+    );
+    await api.bootstrapExecutionContext();
+    expect(mocks.instances).toHaveLength(3);
+    retired.dispose();
+    expect(mocks.dispose).toHaveBeenCalledOnce();
+    expect(
+      (await import("./executionContext")).readExecutionContext()?.execution.environmentId,
+    ).toBe("mini");
+  });
+
+  it("retires both transports and recovery after a fatal execution descriptor read", async () => {
+    const failure = new Error("environment read failed");
+    mocks.request.mockImplementation(async (url, method) => {
+      if (method === WS_METHODS.hostsConnect) return selected;
+      if (url && method === WS_METHODS.serverGetEnvironment) throw failure;
+      return respondToBootstrapRead(url, method);
+    });
+    const api = await bootstrap();
+    await expect(api.bootstrapExecutionContext()).rejects.toBe(failure);
+    expect(mocks.instances).toHaveLength(2);
+    expect(unregister).toHaveBeenCalledOnce();
+    expect(mocks.dispose).toHaveBeenCalledTimes(2);
+    const reads = mocks.request.mock.calls.filter(
+      ([, method]) => method === WS_METHODS.serverGetEnvironment,
+    );
+    expect(reads.at(-1)?.[3]).toMatchObject({ signal: expect.objectContaining({ aborted: true }) });
+    recovery!.resume();
+    expect(mocks.resume).not.toHaveBeenCalled();
+    expect((await import("./executionContext")).readExecutionContext()).toBeUndefined();
+  });
+
+  it("cannot dispose a newer bootstrap when an older cancelled request finally rejects", async () => {
+    let rejectFirst!: (error: Error) => void;
+    let attempts = 0;
+    mocks.request.mockImplementation(async (url, method) => {
+      if (method === WS_METHODS.hostsConnect) {
+        if (++attempts === 1)
+          return new Promise((_, reject) => {
+            rejectFirst = reject;
+          });
+        return selected;
+      }
+      return respondToBootstrapRead(url, method);
+    });
+    const api = await bootstrap();
+    const first = api.bootstrapExecutionContext();
+    const rejected = expect(first).rejects.toThrow("Transport disposed");
+    await vi.waitFor(() => expect(attempts).toBe(1));
+    const retired = recovery!;
+    await api.disposeConnectionClients();
+    await api.bootstrapExecutionContext();
+    rejectFirst(new Error("late retired refusal"));
+    await rejected;
+    retired.dispose();
+    retired.resume();
+    expect(mocks.instances).toHaveLength(3);
+    expect(unregister).toHaveBeenCalledOnce();
+    expect(mocks.dispose).toHaveBeenCalledOnce();
+    expect(mocks.resume).not.toHaveBeenCalled();
+    expect(
+      (await import("./executionContext")).readExecutionContext()?.execution.environmentId,
+    ).toBe("mini");
   });
 });
