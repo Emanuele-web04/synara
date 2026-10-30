@@ -20,6 +20,7 @@ import {
   WS_NEGOTIATE_HTTP_PATH,
   WS_COMPATIBILITY_QUERY,
   WsCompatibilityError,
+  RemoteConnectionUnavailable,
 } from "@synara/contracts";
 import { Effect, Layer, Schema } from "effect";
 import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
@@ -243,9 +244,17 @@ export const hostConnectionRouteLayer = Layer.effectDiscard(
           Effect.map((result) => HttpServerResponse.jsonUnsafe(result, { status: 200, headers })),
           Effect.catch((failure) => {
             const error = failure.cause;
+            if (Schema.is(WsCompatibilityError)(error)) {
+              return Effect.succeed(HttpServerResponse.jsonUnsafe(error, { status: 426, headers }));
+            }
+            // Terminal relationship state is safe metadata; provider/account error text is not.
+            const unavailable = {
+              code: "REMOTE_CONNECTION_REQUIRES_ATTENTION",
+              state: registry.status(hostId).state,
+            };
             return Effect.succeed(
-              Schema.is(WsCompatibilityError)(error)
-                ? HttpServerResponse.jsonUnsafe(error, { status: 426, headers })
+              Schema.is(RemoteConnectionUnavailable)(unavailable)
+                ? HttpServerResponse.jsonUnsafe(unavailable, { status: 409, headers })
                 : HttpServerResponse.text("Remote host unavailable", { status: 503, headers }),
             );
           }),

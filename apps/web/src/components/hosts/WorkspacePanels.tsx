@@ -69,6 +69,7 @@ import {
   readWorkspaceFrame,
   workspaceRoute,
   type WorkspaceFrameElement,
+  type WorkspaceConnectionRecovery,
   type WorkspaceNavigation,
   type WorkspaceSidebarActions,
 } from "../../lib/hosts/workspaceFrame";
@@ -155,9 +156,12 @@ function WorkspacePanel({
     for (const listener of sidebarListeners.current) listener();
   }, [sidebar]);
   const frameRef = useRef<WorkspaceFrameElement | null>(null);
+  const connectionRecovery = useRef<WorkspaceConnectionRecovery | null>(null);
   const resourceLifetime = useRef<AbortController | null>(null);
   const bind = useCallback(
     (frame: WorkspaceFrameElement | null) => {
+      connectionRecovery.current?.dispose();
+      connectionRecovery.current = null;
       resourceLifetime.current?.abort();
       resourceLifetime.current = null;
       const previous = frameRef.current;
@@ -169,6 +173,26 @@ function WorkspacePanel({
       // Same-origin application code only. No repository HTML is ever loaded in this frame.
       frame.synaraWorkspace = {
         host,
+        registerConnectionRecovery: (recovery) => {
+          const ownsFrame = () =>
+            frameRef.current === frame &&
+            readWorkspaceSessions().some((entry) => entry.host === host);
+          if (!ownsFrame()) {
+            recovery.dispose();
+            return () => {};
+          }
+          connectionRecovery.current = recovery;
+          updateWorkspaceSession(environmentId, {
+            resumeConnection: (options) => {
+              if (ownsFrame() && connectionRecovery.current === recovery) recovery.resume(options);
+            },
+          });
+          return () => {
+            if (connectionRecovery.current !== recovery) return;
+            connectionRecovery.current = null;
+            if (ownsFrame()) updateWorkspaceSession(environmentId, { resumeConnection: undefined });
+          };
+        },
         controller: {
           desktop: isElectron,
           ...(isElectron

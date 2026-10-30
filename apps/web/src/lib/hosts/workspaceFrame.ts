@@ -86,8 +86,14 @@ export interface WorkspaceSidebarKeyboardEvent extends KeyboardEvent {
   readonly workspaceShortcutContext?: ShortcutMatchContext;
 }
 
+export interface WorkspaceConnectionRecovery {
+  resume(options?: { readonly automatic?: boolean }): void;
+  dispose(): void;
+}
+
 export interface WorkspaceFrameBinding {
   readonly host: ActiveHost;
+  registerConnectionRecovery?(recovery: WorkspaceConnectionRecovery): () => void;
   readonly controller: {
     readonly desktop?: boolean;
     /** Typed transfers execute in the captured controller; no native API reaches the child. */
