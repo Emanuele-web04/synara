@@ -13,9 +13,9 @@ which is on by default: turning it off stops new events and deletes the unsent
 diagnostics queue. Remote never starts Electron's crash dump uploader, so raw process
 memory is not sent, and it sends no free text: an error keeps only its type and stack
 locations (`TypeError at main:10:5`), never function names, file names or its message; a crash keeps its
-process type and reason without the log tail; an update failure keeps its step without
-the message. Handled issues keep their fixed code and reason. While sharing is off,
-no activity breadcrumbs or memory samples are kept, and after it is turned back on, a
+process type and reason without the log tail; an update failure keeps its step and a
+fixed failure reason without the message. Handled issues keep their fixed code and
+reason. While sharing is off, no activity breadcrumbs or memory samples are kept, and after it is turned back on, a
 usage snapshot is relayed only once its 24-hour window starts after that moment.
 The diagnostics module is constructed only
 when the packaged build's `synaraDesktopFlavor` field equals `"beta"` or `"remote"` — a field baked
@@ -35,7 +35,7 @@ the same allowlist server-side.
 | `app.start`, `app.exit`                                                                     | `kind: "lifecycle"`; `app.start` also carries `osVersion` (major.minor) and `locale` (language only, e.g. `en`)                                                                                                                        |
 | `app.renderer-crash`, `app.child-process-crash`                                             | `kind: "crash"`, `processType` (Electron enum like `renderer`/`gpu`/`backend`), `reason`, `logTail` (redacted last ~200 lines/16 KiB of the relevant log)                                                                              |
 | `app.error`                                                                                 | `kind: "error"`, `source` (`main`/`renderer`), `message` (redacted, 1 KiB), `stack` (redacted, 8 KiB), `fingerprint` (hash of the redacted text)                                                                                       |
-| `update.check`, `update.available`, `update.downloaded`, `update.installed`, `update.error` | `kind: "update"`, `outcome` (`ok`/`error`), `durationMs`, `errorContext` (`check`/`download`/`install`), `targetVersion` (strict semver); `update.error` also carries `message` (redacted, 1 KiB)                                      |
+| `update.check`, `update.available`, `update.downloaded`, `update.installed`, `update.error` | `kind: "update"`, `outcome` (`ok`/`error`), `durationMs`, `errorContext` (`check`/`download`/`install`), `targetVersion` (strict semver); `update.error` also carries a fixed `reason`, and Beta carries `message` (redacted, 1 KiB)   |
 | `usage.daily`                                                                               | `kind: "usage"`, `providers` (provider name + `threads`/`turns`/`turnsFailed` counts for the last 24h; `turnsFailed` counts turns that ended in `error` — cancelled turns are not failures), `projects`, `activeThreads` — counts only |
 | `beta.installed`, `beta.left`                                                               | `kind: "beta"`, `outcome` (`imported`/`import-failed`/`fresh`, or `trash`/`keep`)                                                                                                                                                      |
 
@@ -133,7 +133,13 @@ but is not a proof of causation and cannot reconstruct older reports.
 
 `update.check` records the start of a check, not a successful result. Its
 `outcome: "ok"` means the attempt started. Failures emit `update.error` with the
-check/download/install context and a redacted updater message.
+check/download/install context and a fixed `reason`: `timeout`, `network`,
+`http-client`, `http-server`, `manifest`, `release-feed`, `verification`,
+`cancelled`, or `unknown`. Classification recognizes known updater message shapes
+on the device; unrecognized failures remain `unknown`. The ingest worker validates
+this allowlist before storing the reason. Beta also sends a redacted updater
+message; Remote sends no updater message. Older events have no failure reason and
+cannot be classified retroactively.
 Download and install failures emit this event even when the UI keeps the
 `available` or `downloaded` status so the user can retry. Repeated broadcasts of
 the same failure do not emit another event; a new failed attempt does.

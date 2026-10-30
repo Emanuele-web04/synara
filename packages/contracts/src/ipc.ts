@@ -979,6 +979,20 @@ export const DesktopDiagnosticBreadcrumb = Schema.Struct({
 });
 export type DesktopDiagnosticBreadcrumb = typeof DesktopDiagnosticBreadcrumb.Type;
 
+/** Updater failure categories shared by the local queue and diagnostics ingest. */
+export const DesktopUpdateFailureReason = Schema.Literals([
+  "timeout",
+  "network",
+  "http-client",
+  "http-server",
+  "manifest",
+  "release-feed",
+  "verification",
+  "cancelled",
+  "unknown",
+]);
+export type DesktopUpdateFailureReason = typeof DesktopUpdateFailureReason.Type;
+
 /** Handled failures carry fixed categories, never exception text or operation arguments. */
 export const DesktopDiagnosticIssue = Schema.Struct({
   code: Schema.Literals([

@@ -1,9 +1,16 @@
-import { readdirSync, readFileSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import worker, { signSession } from "./worker.ts";
+import { BetaDiagnostics } from "../desktop/src/betaDiagnostics.ts";
+import {
+  createInitialDesktopUpdateState,
+  reduceDesktopUpdateStateOnCheckFailure,
+  reduceDesktopUpdateStateOnCheckStart,
+} from "../desktop/src/updateMachine.ts";
 
 class SQLiteD1Statement {
   constructor(database, sql, values = []) {
@@ -59,7 +66,7 @@ class SQLiteD1 {
   }
 }
 
-describe("product event route and D1 storage", () => {
+describe("analytics ingest and D1 storage", () => {
   let db;
   let env;
   let now;
@@ -434,6 +441,90 @@ describe("product event route and D1 storage", () => {
       env,
     );
     expect((await filters.json()).flavors).toEqual(["beta", "remote"]);
+  });
+
+  it("preserves Remote updater reasons from the desktop queue through ingest into D1 aggregates", async () => {
+    const root = mkdtempSync(join(tmpdir(), "synara-updater-reasons-"));
+    try {
+      const events = [];
+      for (const [platform, messages] of [
+        ["darwin", ["Request timed out", "Request timed out", "net::ERR_INTERNET_DISCONNECTED"]],
+        [
+          "win32",
+          [
+            "Cannot find remote.yml in the latest release artifacts (https://private/customer?token=secret)",
+            "customer-secret failure",
+          ],
+        ],
+      ]) {
+        const homeDir = join(root, platform);
+        const diagnostics = new BetaDiagnostics({
+          homeDir,
+          appVersion: "1.0.6-remote.39",
+          platform,
+          arch: "x64",
+          env: {},
+          flavor: "remote",
+        });
+        const initial = createInitialDesktopUpdateState(
+          "1.0.6-remote.39",
+          { hostArch: "x64", appArch: "x64", runningUnderArm64Translation: false },
+          "remote",
+        );
+        for (const message of messages) {
+          const checking = reduceDesktopUpdateStateOnCheckStart(
+            initial,
+            new Date(now).toISOString(),
+          );
+          diagnostics.trackUpdateStateChange(
+            checking,
+            reduceDesktopUpdateStateOnCheckFailure(checking, message, new Date(now).toISOString()),
+          );
+        }
+        events.push(
+          ...readFileSync(join(homeDir, "diagnostics/events.jsonl"), "utf8")
+            .trim()
+            .split("\n")
+            .map((line) => JSON.parse(line)),
+        );
+      }
+      expect(events).toHaveLength(5);
+      expect(events.every((event) => !("message" in event.payload))).toBe(true);
+      expect(JSON.stringify(events)).not.toMatch(/private|customer|secret/);
+      const response = await worker.fetch(
+        new Request("https://worker.invalid/v1/events", {
+          method: "POST",
+          headers: { "content-type": "application/x-ndjson" },
+          body: events.map((event) => JSON.stringify(event)).join("\n"),
+        }),
+        env,
+      );
+      expect(await response.json()).toEqual({ accepted: 5, received: 5 });
+      expect(
+        db.database
+          .prepare(`
+        SELECT platform, error_context AS context, reason, COUNT(*) AS n
+        FROM events WHERE flavor = 'remote' AND event = 'update.error'
+        GROUP BY platform, error_context, reason ORDER BY platform, reason
+      `)
+          .all(),
+      ).toEqual([
+        { platform: "darwin", context: "check", reason: "network", n: 1 },
+        { platform: "darwin", context: "check", reason: "timeout", n: 2 },
+        { platform: "win32", context: "check", reason: "manifest", n: 1 },
+        { platform: "win32", context: "check", reason: "unknown", n: 1 },
+      ]);
+      expect(
+        db.database
+          .prepare(`
+        SELECT COUNT(*) AS n FROM events
+        WHERE message IS NOT NULL OR stack IS NOT NULL OR log_tail IS NOT NULL
+      `)
+          .get(),
+      ).toEqual({ n: 0 });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it("stores the daily turn breakdown and reports it per lane", async () => {

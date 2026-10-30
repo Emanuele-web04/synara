@@ -68,6 +68,42 @@ describe("normalizeEvent", () => {
     expect(JSON.stringify(row)).not.toContain("alice");
   });
 
+  it.each([
+    ["update.error", "error", "timeout", "timeout"],
+    ["update.error", "error", "unknown", "unknown"],
+    ["update.error", "error", "customer-secret", ""],
+    ["update.error", "ok", "timeout", ""],
+    ["update.check", "error", "timeout", ""],
+    ["update.error", "error", undefined, ""],
+  ])("bounds update reasons for %s/%s/%s", (event, outcome, reason, expected) => {
+    const row = normalizeEvent({
+      ...baseEvent,
+      flavor: "remote",
+      event,
+      payload: {
+        kind: "update",
+        outcome,
+        reason,
+        errorContext: "check",
+        message: "customer-secret",
+        stack: "customer-secret",
+        logTail: "customer-secret",
+      },
+    });
+    expect(row).toMatchObject({ reason: expected, message: null, stack: null, logTail: null });
+    expect(JSON.stringify(row)).not.toContain("customer-secret");
+  });
+
+  it.each(["crash", "error"])("rejects a mismatched update.error/%s reason", (kind) => {
+    const row = normalizeEvent({
+      ...baseEvent,
+      flavor: "remote",
+      event: "update.error",
+      payload: { kind, outcome: "error", reason: "customer-secret" },
+    });
+    expect(row!.reason).toBe("");
+  });
+
   it("accepts crash events with a redacted logTail", () => {
     const row = normalizeEvent({
       ...baseEvent,
