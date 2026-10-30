@@ -120,6 +120,8 @@ Source evidence: feature head `4b2441d`; `apps/web/src/components/SidebarActivit
 
 In Stable 1.0.2 and Beta, **Settings → General → Thread tabs** controls whether the desktop single-pane chat header shows all open chats or only the current title. It is on by default. When shown, tabs keep readable widths and offer an overflow menu; split panes, mobile and the editor rail keep their existing header behavior.
 
+The **+** in the tab strip starts a thread in the current project, or in the most recently used project in the current space when viewing a chat. If no project is available, it opens project creation.
+
 Source evidence: `apps/web/src/appSettings.ts`, `apps/web/src/routes/_chat.settings.tsx` and `apps/web/src/components/ChatView.tsx` in the 1.0.2 release source.
 
 ## Navigation and focus in 1.0.8

@@ -11028,6 +11028,60 @@ describe("ChatView transcript geometry (full app)", () => {
     }
   });
 
+  it("opens a thread in the latest project from the Home tab strip", async () => {
+    useLatestProjectStore.setState({ latestProjectId: PROJECT_ID });
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: withActiveHomeChatThread(
+        createSnapshotForTargetUser({
+          targetMessageId: "msg-home-tab-new-thread" as MessageId,
+          targetText: "Home conversation",
+        }),
+      ),
+    });
+
+    try {
+      await page.getByRole("button", { name: "New thread in this workspace" }).click();
+      const path = await waitForURL(
+        mounted.router,
+        (value) => UUID_ROUTE_RE.test(value),
+        "The tab strip should open a draft in the latest project.",
+      );
+      expect(
+        useComposerDraftStore.getState().getDraftThread(path.slice(1) as ThreadId)?.projectId,
+      ).toBe(PROJECT_ID);
+      await expect
+        .element(page.getByRole("button", { name: "New thread in this workspace" }))
+        .toBeVisible();
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("opens project creation from the Home tab strip when no project is available", async () => {
+    const snapshot = withActiveHomeChatThread(
+      createSnapshotForTargetUser({
+        targetMessageId: "msg-home-tab-no-project" as MessageId,
+        targetText: "Home conversation",
+      }),
+    );
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: {
+        ...snapshot,
+        projects: snapshot.projects.filter((project) => project.kind !== "project"),
+      },
+    });
+    try {
+      await page.getByRole("button", { name: "New thread in this workspace" }).click();
+      await expect
+        .element(page.getByRole("heading", { name: "Create project" }))
+        .toBeInTheDocument();
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
   it("keeps the project environment when global New thread creates a draft from Home", async () => {
     useLatestProjectStore.setState({ latestProjectId: PROJECT_ID });
     useProjectEnvironmentStore.setState({ envModeByProjectId: { [PROJECT_ID]: "worktree" } });
