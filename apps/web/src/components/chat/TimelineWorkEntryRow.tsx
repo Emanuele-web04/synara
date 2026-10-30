@@ -995,10 +995,10 @@ export const TimelineWorkEntryRow = memo(function TimelineWorkEntryRow(props: {
                       cwd={markdownCwd}
                       threadId={threadId}
                       isStreaming={false}
+                      tone="process"
                       className="leading-relaxed"
                       style={{
-                        color: MUTED_LABEL_TEXT_COLOR,
-                        fontSize: `${Math.max(11, rowFontSizePx - 1)}px`,
+                        fontSize: `${rowFontSizePx}px`,
                         lineHeight: compact ? "18px" : "19px",
                       }}
                       onImageExpand={onImageExpand}
