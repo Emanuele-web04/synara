@@ -5,6 +5,7 @@ import { createServer, type Server, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createInterface, type Interface } from "node:readline";
+import { ByteAccumulator } from "@synara/shared/byteAccumulator";
 import {
   cuaComputerTaskKey,
   type CuaComputerTask,
@@ -271,23 +272,41 @@ export class ComputerFrameTap implements ComputerFrameTapHost {
     }
     state.connection = socket;
     socket.on("error", () => undefined);
-    let pending: Buffer<ArrayBufferLike> = Buffer.alloc(0);
+    const pending = new ByteAccumulator();
     socket.on("data", (chunk: Buffer) => {
-      pending = pending.length > 0 ? Buffer.concat([pending, chunk]) : chunk;
+      if (pending.byteLength === 0) {
+        // Preserve the complete-frame zero-copy path; buffer only an unfinished tail.
+        let offset = 0;
+        while (chunk.length - offset >= 4) {
+          const length = chunk.readUInt32LE(offset);
+          if (length === 0 || length > FRAME_TAP_MAX_FRAME_BYTES) {
+            this.kill(state, new Error("Computer frame tap sent a malformed frame."));
+            return;
+          }
+          if (chunk.length - offset < 4 + length) break;
+          this.deliver(state, chunk.subarray(offset + 4, offset + 4 + length));
+          offset += 4 + length;
+        }
+        if (offset < chunk.length) pending.appendOwned(chunk.subarray(offset));
+        return;
+      }
+      // Node socket buffers remain stable. Join a fragmented frame only when complete.
+      pending.appendOwned(chunk);
       for (;;) {
-        if (pending.length < 4) return;
+        if (pending.byteLength < 4) return;
         const length = pending.readUInt32LE(0);
         if (length === 0 || length > FRAME_TAP_MAX_FRAME_BYTES) {
+          pending.clear();
           this.kill(state, new Error("Computer frame tap sent a malformed frame."));
           return;
         }
-        if (pending.length < 4 + length) return;
-        const jpeg = pending.subarray(4, 4 + length);
-        pending = pending.subarray(4 + length);
-        this.deliver(state, jpeg);
+        if (pending.byteLength < 4 + length) return;
+        pending.skip(4);
+        this.deliver(state, pending.take(length));
       }
     });
     socket.once("close", () => {
+      pending.clear();
       if (state.connection === socket) state.connection = undefined;
     });
   }
