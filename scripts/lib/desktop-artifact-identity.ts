@@ -21,6 +21,12 @@ export function createDesktopArtifactIdentity(input: {
       name: `synara-desktop${suffix}`,
       productName: identity.displayName,
       synaraDesktopFlavor: input.flavor,
+      // Debian packaging cannot infer these from the isolated staging tree.
+      homepage: "https://github.com/Emanuele-web04/synara",
+      author: {
+        name: "Emanuele Di Pietro",
+        email: "127427797+Emanuele-web04@users.noreply.github.com",
+      },
     },
     buildConfig: {
       appId: identity.bundleId,

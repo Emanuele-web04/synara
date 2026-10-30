@@ -166,4 +166,37 @@ describePosix("POSIX desktop backend shutdown integration", () => {
       await FsPromises.rm(directory, { recursive: true, force: true });
     }
   }, 15_000);
+
+  it("preserves TERM grace when the parent event loop delays both signal timers", async () => {
+    const directory = await FsPromises.mkdtemp(Path.join(OS.tmpdir(), "synara-posix-delayed-"));
+    const readyPath = Path.join(directory, "ready.json");
+    const signalPath = Path.join(directory, "signals.log");
+    const shutdownToken = Crypto.randomBytes(32).toString("hex");
+    const child = launchFixture({ mode: "stubborn", shutdownToken, readyPath, signalPath });
+
+    try {
+      const state = await readFixtureState(readyPath);
+      const startedAt = performance.now();
+      const shutdown = stopPosixBackendAndWait({
+        child: child as BackendShutdownProcess,
+        backendHttpUrl: `http://127.0.0.1:${state.port}`,
+        shutdownToken,
+        terminateDelayMs: 100,
+        forceKillDelayMs: 250,
+        timeoutMs: 1_000,
+      });
+      // Only the parent's loop is blocked. The real fixture already installed
+      // its TERM handler and remains able to record a delivered signal.
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 300);
+      await expect(shutdown).resolves.toBeUndefined();
+
+      expect(performance.now() - startedAt).toBeLessThan(1_000);
+      expect(child.exitCode).toBeNull();
+      expect(child.signalCode).toBe("SIGKILL");
+      expect(await FsPromises.readFile(signalPath, "utf8")).toBe("SIGTERM\n");
+    } finally {
+      await disposeFixture(child, null);
+      await FsPromises.rm(directory, { recursive: true, force: true });
+    }
+  }, 15_000);
 });
