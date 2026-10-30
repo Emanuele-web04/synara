@@ -58,6 +58,7 @@ import {
   threadStreamInputsEqual,
   projectFileChangeStreamKey,
   WsTransport,
+  RemoteConnectionUnavailableError,
   WsTransportRequestInterruptedError,
   type WsThreadStreamFailure,
 } from "./wsTransport";
@@ -3666,4 +3667,288 @@ it("does not poll server runtime status on an open socket that advertises it", a
     await transport.dispose();
     vi.useRealTimers();
   }
+});
+
+describe("terminal remote recovery", () => {
+  const remoteUrl = "ws://localhost:3020/ws/remote/host/ws";
+  const unavailable = (state: "revoked" | "needs-sign-in" | "incompatible" | "stopped") =>
+    jsonResponse(409, { code: "REMOTE_CONNECTION_REQUIRES_ATTENTION", state });
+  const ready = () =>
+    jsonResponse(200, { ...NEGOTIATION_RESULT, remoteAttachmentId: "fresh-attachment" });
+
+  it.each(["revoked", "needs-sign-in", "incompatible", "stopped"] as const)(
+    "pauses %s without replaying failed work when the controller resumes the same transport",
+    async (state) => {
+      vi.useFakeTimers();
+      bindWindowTimersToCurrentGlobals();
+      const fetch = vi.fn().mockResolvedValue(unavailable(state));
+      const track = vi.fn();
+      Object.assign(window, { desktopBridge: { productAnalytics: { track } } });
+      vi.stubGlobal("fetch", fetch);
+      const transport = new WsTransport(remoteUrl);
+      try {
+        await vi.waitFor(() => expect(transport.getState()).toBe("closed"));
+        await vi.advanceTimersByTimeAsync(60_000);
+        expect(fetch).toHaveBeenCalledTimes(1);
+        expect(track).toHaveBeenCalledWith(
+          expect.objectContaining({
+            event: "connection.connect",
+            outcome: "failed",
+            reason:
+              state === "incompatible"
+                ? "incompatible"
+                : state === "stopped"
+                  ? "not_accepting"
+                  : "pairing_required",
+          }),
+        );
+        expect(sockets).toHaveLength(0);
+        const failure = await transport
+          .request(WS_METHODS.terminalClose, { threadId: "expired", terminalId: "terminal-1" })
+          .catch((error) => error);
+        expect(failure).toBeInstanceOf(RemoteConnectionUnavailableError);
+        expect(failure).toMatchObject({ state });
+        const recovery = transport.waitForRemoteConnectionRecovery(failure);
+        fetch.mockResolvedValue(ready());
+        transport.resumeRemoteConnection();
+        await expect(recovery).resolves.toBe(true);
+        await vi.waitFor(() => expect(sockets).toHaveLength(1));
+        sockets[0]!.serveVoidRpc();
+        await vi.waitFor(() => expect(transport.getState()).toBe("open"));
+        expect(fetch).toHaveBeenCalledTimes(2);
+        expect(
+          sockets[0]!.sent.some((frame) => String(frame).includes(WS_METHODS.terminalClose)),
+        ).toBe(false);
+      } finally {
+        await transport.dispose();
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it("requires manual recovery for a renderer protocol refusal even when the controller remains healthy", async () => {
+    vi.useFakeTimers();
+    bindWindowTimersToCurrentGlobals();
+    const refusal = new WsCompatibilityError({
+      message: "Update this client.",
+      code: "WS_PROTOCOL_INCOMPATIBLE",
+      retryable: false,
+      action: "update-client",
+      serverBuild: "fixture",
+      protocolEpoch: WS_PROTOCOL_EPOCH,
+      minRevision: WS_PROTOCOL_MIN_REVISION,
+      maxRevision: WS_PROTOCOL_MAX_REVISION,
+    });
+    const fetch = vi.fn().mockResolvedValue(jsonResponse(426, JSON.parse(JSON.stringify(refusal))));
+    vi.stubGlobal("fetch", fetch);
+    const transport = new WsTransport(remoteUrl);
+    try {
+      await vi.waitFor(() => expect(transport.getState()).toBe("incompatible"));
+      for (let poll = 0; poll < 12; poll++) {
+        transport.resumeRemoteConnection({ automatic: true });
+        await vi.advanceTimersByTimeAsync(5_000);
+      }
+      expect(fetch).toHaveBeenCalledTimes(1);
+      expect(transport.getState()).toBe("incompatible");
+      fetch.mockResolvedValue(ready());
+      transport.resumeRemoteConnection();
+      await vi.waitFor(() => expect(sockets).toHaveLength(1));
+      sockets[0]!.serveVoidRpc();
+      await vi.waitFor(() => expect(transport.getState()).toBe("open"));
+      expect(fetch).toHaveBeenCalledTimes(2);
+    } finally {
+      await transport.dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it("cancels a parked bootstrap reader on disposal and cannot revive the removed owner", async () => {
+    const fetch = vi.fn().mockResolvedValue(unavailable("revoked"));
+    vi.stubGlobal("fetch", fetch);
+    const transport = new WsTransport(remoteUrl);
+    await vi.waitFor(() => expect(transport.getState()).toBe("closed"));
+    const failure = await transport
+      .request(WS_METHODS.serverGetEnvironment)
+      .catch((error) => error);
+    const recovery = transport.waitForRemoteConnectionRecovery(failure);
+    const verdict = expect(recovery).rejects.toThrow("Transport disposed");
+    await transport.dispose();
+    await verdict;
+    transport.resumeRemoteConnection();
+    expect(transport.getState()).toBe("disposed");
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("starts a fresh recovery after a terminal reconnect is still settling", async () => {
+    vi.useFakeTimers();
+    bindWindowTimersToCurrentGlobals();
+    const fetch = vi.fn().mockResolvedValue(ready());
+    vi.stubGlobal("fetch", fetch);
+    const transport = new WsTransport(remoteUrl);
+    try {
+      await vi.waitFor(() => expect(sockets).toHaveLength(1));
+      sockets[0]!.serveVoidRpc();
+      await vi.waitFor(() => expect(transport.getState()).toBe("open"));
+      let resumed = false;
+      transport.onStateChange((state) => {
+        if (state !== "closed" || resumed) return;
+        resumed = true;
+        fetch.mockResolvedValue(ready());
+        transport.resumeRemoteConnection();
+      });
+      fetch.mockResolvedValue(unavailable("needs-sign-in"));
+      sockets[0]!.close(1006, "lost connection");
+      await vi.waitFor(() => expect(sockets).toHaveLength(2), { timeout: 5_000 });
+      sockets[1]!.serveVoidRpc();
+      await vi.waitFor(() => expect(transport.getState()).toBe("open"));
+      expect(resumed).toBe(true);
+      expect(fetch).toHaveBeenCalledTimes(3);
+    } finally {
+      await transport.dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not park a late refusal after the controller already verified recovery", async () => {
+    let refuse!: (response: Response) => void;
+    const fetch = vi
+      .fn()
+      .mockImplementationOnce(() => new Promise<Response>((resolve) => (refuse = resolve)))
+      .mockResolvedValue(ready());
+    vi.stubGlobal("fetch", fetch);
+    const transport = new WsTransport(remoteUrl);
+    try {
+      transport.resumeRemoteConnection();
+      refuse(unavailable("revoked"));
+      await vi.waitFor(() => expect(sockets).toHaveLength(1), { timeout: 5_000 });
+      sockets[0]!.serveVoidRpc();
+      await vi.waitFor(() => expect(transport.getState()).toBe("open"));
+      expect(fetch).toHaveBeenCalledTimes(2);
+    } finally {
+      await transport.dispose();
+    }
+  });
+
+  it("preserves the normal environment-read deadline on a connected but silent host", async () => {
+    vi.useFakeTimers();
+    bindWindowTimersToCurrentGlobals();
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(ready()));
+    const transport = new WsTransport(remoteUrl);
+    try {
+      await vi.waitFor(() => expect(sockets).toHaveLength(1));
+      sockets[0]!.serveVoidRpc();
+      await vi.waitFor(() => expect(transport.getState()).toBe("open"));
+      sockets[0]!.onSend = null;
+      let settled = false;
+      const pending = transport.request(WS_METHODS.serverGetEnvironment).catch((error) => {
+        settled = true;
+        return error;
+      });
+      await vi.advanceTimersByTimeAsync(59_999);
+      expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      const failure = await pending;
+      expect(failure).toMatchObject({ code: "WS_REQUEST_TIMEOUT" });
+      await expect(transport.waitForRemoteConnectionRecovery(failure)).resolves.toBe(false);
+      expect(transport.getState()).toBe("open");
+    } finally {
+      await transport.dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it("releases an invalid terminal body and keeps it retryable", async () => {
+    const cancel = vi.fn(async () => undefined);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ...jsonResponse(409, {
+          code: "REMOTE_CONNECTION_REQUIRES_ATTENTION",
+          state: "arbitrary-server-message",
+          message: "private text must not become guidance",
+        }),
+        body: { cancel },
+      }),
+    );
+    await expect(negotiateOverHttp(remoteUrl)).resolves.toBeNull();
+    expect(cancel).toHaveBeenCalledOnce();
+  });
+
+  it("retains unknown turn delivery when terminal admission prevents acknowledgement settlement", async () => {
+    const fetch = vi.fn().mockResolvedValue(
+      jsonResponse(200, {
+        ...NEGOTIATION_RESULT,
+        capabilities: [...NEGOTIATION_RESULT.capabilities, WS_TURN_DISPATCH_SETTLEMENT_CAPABILITY],
+        remoteAttachmentId: "first-attachment",
+      }),
+    );
+    vi.stubGlobal("fetch", fetch);
+    const transport = new WsTransport(remoteUrl);
+    const command = {
+      type: "thread.turn.start",
+      commandId: CommandId.makeUnsafe("terminal-lost-ack-command"),
+      threadId: ThreadId.makeUnsafe("terminal-lost-ack-thread"),
+      message: {
+        messageId: MessageId.makeUnsafe("terminal-lost-ack-message"),
+        role: "user",
+        text: "hello",
+        attachments: [],
+      },
+      runtimeMode: "full-access",
+      interactionMode: "default",
+      createdAt: "2026-10-04T12:00:00.000Z",
+    } satisfies ClientOrchestrationCommand;
+    try {
+      await waitForSockets(1);
+      const socket = sockets[0]!;
+      socket.onSend = (data) => {
+        const frame = JSON.parse(data);
+        if (frame._tag === "Ping") socket.receive(JSON.stringify({ _tag: "Pong" }));
+        if (frame._tag !== "Request") return;
+        if (frame.tag === ORCHESTRATION_WS_METHODS.dispatchCommand) {
+          fetch.mockResolvedValue(unavailable("revoked"));
+          queueMicrotask(() => socket.close(1006, "lost acknowledgement"));
+        } else {
+          socket.receive(
+            JSON.stringify({
+              _tag: "Exit",
+              requestId: frame.id,
+              exit: { _tag: "Success", value: null },
+            }),
+          );
+        }
+      };
+      socket.open();
+      const send = transport.request(ORCHESTRATION_WS_METHODS.dispatchCommand, { command });
+      await expect(send).rejects.toMatchObject({
+        _tag: "WsTransportRequestInterruptedError",
+        code: "WS_TURN_SETTLEMENT_UNAVAILABLE",
+        delivery: "unknown",
+      });
+      expect(sockets).toHaveLength(1);
+      expect(
+        socket.sent.filter((frame) =>
+          String(frame).includes(ORCHESTRATION_WS_METHODS.dispatchCommand),
+        ),
+      ).toHaveLength(1);
+    } finally {
+      await transport.dispose();
+    }
+  });
+
+  it("keeps retrying older controllers' generic offline responses", async () => {
+    vi.useFakeTimers();
+    bindWindowTimersToCurrentGlobals();
+    const fetch = vi.fn().mockResolvedValue(jsonResponse(503, null));
+    vi.stubGlobal("fetch", fetch);
+    const transport = new WsTransport(remoteUrl);
+    try {
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(fetch).toHaveBeenCalledTimes(15);
+      expect(sockets).toHaveLength(0);
+    } finally {
+      await transport.dispose();
+      vi.useRealTimers();
+    }
+  });
 });

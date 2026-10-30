@@ -224,3 +224,7 @@ Verification includes colliding IDs, lost authority/account generations, refusal
 unpaired callers and Stable, private-stream cleanup, JSON wire round trips, and a
 built two-server fixture that uses a real provider-scoped MCP credential. The provider
 process in that fixture is deterministic; it is not a live model or physical-Mac test.
+
+## Terminal renderer recovery
+
+The local `/ws/remote/:hostId` negotiation route carries allowlisted terminal relationship states to the renderer. Those refusals pause automatic negotiation until an explicit controller connect or a matching healthy controller relationship resumes the same frame. A genuine HTTP 426 protocol refusal requires verified manual retry; healthy controller polling cannot repair or resume an incompatible renderer. Bootstrap waits between bounded reads without replacing the workspace, while ordinary RPC deadlines and unknown-delivery ownership remain unchanged.

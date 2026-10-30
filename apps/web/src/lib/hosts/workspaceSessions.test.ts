@@ -113,6 +113,55 @@ describe("connected workspace recovery", () => {
   });
 });
 
+describe("workspace connection recovery", () => {
+  it("resumes the same workspace only after verified connect or matching healthy controller state", async () => {
+    const api = await registry();
+    const initial = api.addWorkspaceSession(host("one"));
+    const resumeConnection = vi.fn();
+    const summary = { state: "closed" as const, path: "/same-thread", projects: [], threads: [] };
+    api.updateWorkspaceSession("one", { resumeConnection, summary });
+    const existing = api.readWorkspaceSessions()[0]!;
+    expect(api.addWorkspaceSession(host("one"))).toBe(existing);
+    expect(resumeConnection).toHaveBeenCalledOnce();
+    api.restoreConnectedWorkspaces(connections("one"), signedIn);
+    expect(resumeConnection).toHaveBeenCalledTimes(2);
+    expect(api.readWorkspaceSessions()[0]?.host).toBe(initial.host);
+    expect(api.readWorkspaceSessions()[0]?.summary).toBe(summary);
+    const foreign = connections("one");
+    api.restoreConnectedWorkspaces(
+      {
+        ...foreign,
+        connections: foreign.connections.map((connection) =>
+          Object.assign(connection, {
+            executionScope: { ...connection.executionScope!, userId: "bob" },
+          }),
+        ),
+      },
+      signedIn,
+    );
+    for (const state of ["revoked", "needs-sign-in", "incompatible", "reconnecting"] as const) {
+      const response = connections("one");
+      api.restoreConnectedWorkspaces(
+        {
+          ...response,
+          connections: response.connections.map((connection) =>
+            Object.assign(connection, { state }),
+          ),
+        },
+        signedIn,
+      );
+    }
+    expect(() => api.addWorkspaceSession({ ...host("one"), hostId: "another-host" })).toThrow(
+      /identity changed/,
+    );
+    expect(resumeConnection).toHaveBeenCalledTimes(2);
+    api.reconcileWorkspaceAccount({ state: "signed-out" } as AccountStatus);
+    api.restoreConnectedWorkspaces(connections("one"), { state: "signed-out" } as AccountStatus);
+    expect(resumeConnection).toHaveBeenCalledTimes(2);
+    expect(api.readWorkspaceSessions()).toHaveLength(0);
+  });
+});
+
 describe("workspace ownership", () => {
   it.each(["offline", "removed", "frame replaced", "host replaced"])(
     "rejects captured sidebar actions after the owner is %s",

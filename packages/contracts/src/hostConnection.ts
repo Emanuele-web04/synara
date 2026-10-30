@@ -44,6 +44,13 @@ export const HostConnectionState = Schema.Literals([
 ]);
 export type HostConnectionState = typeof HostConnectionState.Type;
 
+/** Local remote negotiation may resume only after the controller recovers this relationship. */
+export const RemoteConnectionUnavailable = Schema.Struct({
+  code: Schema.Literal("REMOTE_CONNECTION_REQUIRES_ATTENTION"),
+  state: Schema.Literals(["needs-sign-in", "revoked", "incompatible", "stopped"]),
+});
+export type RemoteConnectionUnavailable = typeof RemoteConnectionUnavailable.Type;
+
 export const RemoteExecutionScope = Schema.Struct({
   environmentId: TrimmedNonEmptyString,
   accountAuthority: TrimmedNonEmptyString,

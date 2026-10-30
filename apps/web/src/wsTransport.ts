@@ -36,6 +36,7 @@ import {
   COMPUTER_WS_CHANNELS,
   COMPUTER_WS_METHODS,
   WsBootstrapNegotiateResult,
+  RemoteConnectionUnavailable,
   WsBootstrapRpcGroup,
   WsDeviceRpcGroup,
   WsComputerRpcGroup,
@@ -406,6 +407,14 @@ export function makeNegotiateHttpUrl(explicitUrl: string | null): string {
   return url.toString();
 }
 
+/** Only allowlisted controller state crosses the remote negotiation boundary. */
+export class RemoteConnectionUnavailableError extends Error {
+  constructor(readonly state: typeof RemoteConnectionUnavailable.Type.state) {
+    super("Remote host negotiation unavailable");
+    this.name = "RemoteConnectionUnavailableError";
+  }
+}
+
 /** Bounded so a stalled negotiate falls back to bootstrap instead of hanging. */
 const NEGOTIATE_HTTP_TIMEOUT_MS = 5_000;
 
@@ -440,6 +449,15 @@ export async function negotiateOverHttp(
     const issue = Schema.decodeUnknownOption(WsCompatibilityError)(body);
     if (Option.isSome(issue)) throw issue.value;
     throw new Error("WebSocket negotiation was refused with an unreadable 426 response.");
+  }
+  if (remote && response.status === 409) {
+    const body: unknown = await response.json().catch(() => null);
+    const unavailable = Schema.decodeUnknownOption(RemoteConnectionUnavailable)(body);
+    if (Option.isSome(unavailable)) {
+      throw new RemoteConnectionUnavailableError(unavailable.value.state);
+    }
+    void response.body?.cancel().catch(() => undefined);
+    return null;
   }
   if (!response.ok) {
     // The legacy bootstrap can recover from this status without waiting for an
@@ -666,6 +684,10 @@ export function isTerminalCompatibilityFailure(error: unknown): boolean {
       typeof error.code === "string" &&
       TERMINAL_COMPATIBILITY_ERROR_CODES.has(error.code))
   );
+}
+
+function isTerminalConnectionFailure(error: unknown): boolean {
+  return error instanceof RemoteConnectionUnavailableError || isTerminalCompatibilityFailure(error);
 }
 
 /**
@@ -1014,6 +1036,12 @@ export class WsTransport {
   private clientPromise: Promise<RpcClientInstance>;
   private reconnectPromise: Promise<RpcClientInstance> | null = null;
   private reconnectFailures = 0;
+  private remoteRecoveryVersion = 0;
+  private remoteConnectionPause: {
+    readonly error: unknown;
+    readonly resumed: Promise<void>;
+    readonly resume: () => void;
+  } | null = null;
   private readonly streamCleanups = new Map<string, () => void>();
   private readonly streamSettled = new Map<string, Promise<void>>();
   private readonly streamCapacityRetries = new Map<string, number>();
@@ -1062,9 +1090,9 @@ export class WsTransport {
     this.protocolOpenTimeoutMs = options?.protocolOpenTimeoutMs;
     this.clientPromise = this.createSession().clientPromise;
     void this.clientPromise.catch((error) => {
-      if (this.disposed || isTerminalCompatibilityFailure(error)) return;
+      if (this.disposed || isTerminalConnectionFailure(error)) return;
       void this.reconnect().catch((reconnectError) => {
-        if (!this.disposed && !isTerminalCompatibilityFailure(reconnectError)) {
+        if (!this.disposed && !isTerminalConnectionFailure(reconnectError)) {
           console.warn("WebSocket reconnect loop stopped unexpectedly", reconnectError);
         }
       });
@@ -1373,9 +1401,21 @@ export class WsTransport {
           { signal },
         );
       } catch (error) {
+        if (isTerminalConnectionFailure(error)) {
+          // Refusing a fresh connection cannot settle a command already written
+          // to the previous one. Keep its draft/attachment reconciliation owner.
+          throw new WsTransportRequestInterruptedError({
+            message:
+              "Message delivery could not be checked. Reconnect and check the conversation before sending again.",
+            code: "WS_TURN_SETTLEMENT_UNAVAILABLE",
+            method: ORCHESTRATION_WS_METHODS.settleTurnDispatch,
+            retryable: false,
+            delivery: "unknown",
+            cause: error,
+          });
+        }
         if (
           signal.aborted ||
-          isTerminalCompatibilityFailure(error) ||
           (error instanceof WsTransportRequestInterruptedError &&
             error.code === "WS_TURN_SETTLEMENT_UNAVAILABLE")
         )
@@ -1651,6 +1691,7 @@ export class WsTransport {
 
   private createSession() {
     const sessionVersion = ++this.sessionVersion;
+    const remoteRecoveryVersion = this.remoteRecoveryVersion;
     const analyticsEvent = sessionVersion === 1 ? "connection.connect" : "connection.reconnect";
     const startedAt = performance.now();
     // Reconnects reuse the cached negotiation while the server generation is
@@ -1705,13 +1746,39 @@ export class WsTransport {
       return client;
     })().catch((error) => {
       if (!this.disposed && this.sessionVersion === sessionVersion) {
+        // A verified controller retry may finish before an older HTTP refusal
+        // arrives. That stale refusal must not park the recovered workspace.
+        if (
+          this.analyticsMode === "remote" &&
+          isTerminalConnectionFailure(error) &&
+          remoteRecoveryVersion !== this.remoteRecoveryVersion
+        ) {
+          error = new Error("Remote host negotiation unavailable");
+        }
         const compatibilityError = getTerminalCompatibilityError(error);
+        const terminalState =
+          error instanceof RemoteConnectionUnavailableError ? error.state : null;
+        if (this.analyticsMode === "remote" && isTerminalConnectionFailure(error)) {
+          let resume!: () => void;
+          const resumed = new Promise<void>((resolve) => {
+            resume = resolve;
+          });
+          this.remoteConnectionPause = { error, resumed, resume };
+          this.clearRecoveryEscalationTimer();
+        }
         trackProductAnalytics({
           event: analyticsEvent,
           outcome: "failed",
           mode: this.analyticsMode,
           durationMs: Math.round(performance.now() - startedAt),
-          reason: compatibilityError ? "incompatible" : "unreachable",
+          reason:
+            compatibilityError || terminalState === "incompatible"
+              ? "incompatible"
+              : terminalState === "stopped"
+                ? "not_accepting"
+                : terminalState !== null
+                  ? "pairing_required"
+                  : "unreachable",
         });
         this.setCompatibility(null);
         if (compatibilityError) {
@@ -1726,7 +1793,41 @@ export class WsTransport {
     return { clientPromise, featureSession };
   }
 
+  /** Resume only after the controller verifies this same host relationship. */
+  resumeRemoteConnection(options?: { readonly automatic?: boolean }): void {
+    if (this.disposed || this.analyticsMode !== "remote" || this.isRecoveryTripped()) return;
+    const pause = this.remoteConnectionPause;
+    // Controller liveness cannot repair this renderer's protocol. In particular,
+    // a 426 before remote prepare can leave an older relationship marked healthy.
+    if (options?.automatic && (!pause || getTerminalCompatibilityError(pause.error))) return;
+    this.remoteRecoveryVersion += 1;
+    if (!pause) return;
+    const resume = () => {
+      if (this.disposed || this.remoteConnectionPause !== pause || this.isRecoveryTripped()) return;
+      this.remoteConnectionPause = null;
+      this.reconnectFailures = 0;
+      this.setCompatibilityIssue(null);
+      // A terminal candidate can still be disposing. Start its successor before
+      // releasing bootstrap readers; failed unary work is never replayed.
+      void this.reconnect().catch(() => undefined);
+      pause.resume();
+    };
+    if (this.reconnectPromise) void this.reconnectPromise.then(resume, resume);
+    else resume();
+  }
+
+  /** Bootstrap waits between bounded reads, retaining this frame and its owners. */
+  async waitForRemoteConnectionRecovery(error: unknown): Promise<boolean> {
+    if (this.analyticsMode !== "remote" || !isTerminalConnectionFailure(error)) return false;
+    if (this.disposed) throw new Error("Transport disposed");
+    const pause = this.remoteConnectionPause;
+    if (pause) await awaitWithAbort(pause.resumed, this.lifetime.signal);
+    if (this.disposed) throw new Error("Transport disposed");
+    return true;
+  }
+
   private async getClient(): Promise<RpcClientInstance> {
+    if (this.remoteConnectionPause) throw this.remoteConnectionPause.error;
     if (this.isRecoveryTripped()) throw this.trippedRecoveryError();
     // Once recovery starts, the last fulfilled client belongs to a runtime
     // that reconnect() has detached. New work must join the shared recovery
@@ -1737,7 +1838,7 @@ export class WsTransport {
     } catch (error) {
       if (this.disposed) throw new Error("Transport disposed");
       if (this.isRecoveryTripped()) throw this.trippedRecoveryError();
-      if (isTerminalCompatibilityFailure(error)) throw error;
+      if (isTerminalConnectionFailure(error)) throw error;
       return this.reconnect();
     }
   }
@@ -1879,7 +1980,7 @@ export class WsTransport {
         if (
           this.disposed ||
           this.recovery.phase === "tripped" ||
-          isTerminalCompatibilityFailure(error)
+          isTerminalConnectionFailure(error)
         ) {
           return;
         }
@@ -1966,6 +2067,7 @@ export class WsTransport {
 
   private reconnect(): Promise<RpcClientInstance> {
     if (this.disposed) return Promise.reject(new Error("Transport disposed"));
+    if (this.remoteConnectionPause) return Promise.reject(this.remoteConnectionPause.error);
     if (this.isRecoveryTripped()) return Promise.reject(this.trippedRecoveryError());
     if (this.reconnectPromise) return this.reconnectPromise;
 
@@ -2177,7 +2279,7 @@ export class WsTransport {
         if (failedResources) await this.closeRuntime(failedResources);
         if (this.disposed) throw new Error("Transport disposed");
         if (this.isRecoveryTripped()) throw this.trippedRecoveryError();
-        if (isTerminalCompatibilityFailure(error)) throw error;
+        if (isTerminalConnectionFailure(error)) throw error;
         // The backend may still be starting. Continue with bounded backoff;
         // the transport lifetime aborts this loop immediately on disposal.
       }
@@ -2342,7 +2444,7 @@ export class WsTransport {
           !this.isRecoveryTripped() &&
           this.sessionVersion === requestedSessionVersion &&
           this.listeners.has(channel) &&
-          !isTerminalCompatibilityFailure(error)
+          !isTerminalConnectionFailure(error)
         ) {
           console.warn("WebSocket RPC channel failed to start", error);
           window.setTimeout(() => this.startChannelStream(channel), 500);
