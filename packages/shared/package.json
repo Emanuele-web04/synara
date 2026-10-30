@@ -424,6 +424,10 @@
       "types": "./src/computerGrants.ts",
       "import": "./src/computerGrants.ts"
     },
+    "./byteAccumulator": {
+      "types": "./src/byteAccumulator.ts",
+      "import": "./src/byteAccumulator.ts"
+    },
     "./lengthPrefixedRecords": {
       "types": "./src/lengthPrefixedRecords.ts",
       "import": "./src/lengthPrefixedRecords.ts"

@@ -84,6 +84,16 @@ const makeRepository = Effect.gen(function* () {
           ),
         );
 
+  const readEventSequencePage: OrchestrationEventDeliveryRepositoryShape["readEventSequencePage"] =
+    (input) =>
+      sql<{ readonly sequence: number }>`
+      SELECT sequence FROM orchestration_events
+      WHERE sequence > ${input.sequenceExclusive} AND sequence <= ${input.throughSequenceInclusive}
+      ORDER BY sequence ASC LIMIT ${input.limit}
+    `.pipe(
+        Effect.mapError(toPersistenceSqlError("OrchestrationEventDelivery.readEventSequencePage")),
+      );
+
   const getDelivery: OrchestrationEventDeliveryRepositoryShape["getDelivery"] = (input) =>
     getDeliveryRow(input.consumerName, input.eventSequence).pipe(
       Effect.map((rows) => Option.fromNullishOr(rows[0])),
@@ -409,6 +419,7 @@ const makeRepository = Effect.gen(function* () {
 
   return {
     getConsumerState,
+    readEventSequencePage,
     recordThreadProcessedSequence,
     getDelivery,
     claim,

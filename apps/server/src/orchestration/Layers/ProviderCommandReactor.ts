@@ -8520,7 +8520,9 @@ const make = Effect.gen(function* () {
       if (Option.isSome(state)) cursor = Math.max(cursor, state.value.lastAckedSequence);
     });
 
-    const advanceCursor = Effect.fnUntraced(function* (event: OrchestrationEvent) {
+    const advanceCursor = Effect.fnUntraced(function* (
+      event: Pick<OrchestrationEvent, "sequence">,
+    ) {
       const advanced = yield* deliveryRepository.advanceCursor({
         consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
         eventSequence: event.sequence,
@@ -8581,25 +8583,24 @@ const make = Effect.gen(function* () {
               through = Math.min(through, lane.firstUnsettledSequence - 1);
             }
             if (through <= cursor) return false;
-            let processed = 0;
-            yield* Stream.runForEach(
-              orchestrationEngine.readEventsThrough(cursor, through, 32),
-              (next) =>
-                Effect.gen(function* () {
-                  processed += 1;
-                  if (yield* advanceCursor(next)) return;
-                  yield* refreshCursor;
-                  if (cursor >= next.sequence) return;
-                  return yield* Effect.die(
-                    new Error(
-                      `Provider command cursor could not advance through event ${next.sequence}`,
-                    ),
-                  );
-                }),
-            );
+            const rows = yield* deliveryRepository.readEventSequencePage({
+              sequenceExclusive: cursor,
+              throughSequenceInclusive: through,
+              limit: 32,
+            });
+            for (const next of rows) {
+              if (yield* advanceCursor(next)) continue;
+              yield* refreshCursor;
+              if (cursor >= next.sequence) continue;
+              return yield* Effect.die(
+                new Error(
+                  `Provider command cursor could not advance through event ${next.sequence}`,
+                ),
+              );
+            }
             // Count stored rows, not sequence numbers: deleted events can leave
             // gaps, and an empty eligible range must not spin forever.
-            return processed === 32;
+            return rows.length === 32;
           }),
         );
         if (!fullChunk) return;
@@ -10205,10 +10206,26 @@ const make = Effect.gen(function* () {
     // compactions/goals; cross-thread execution remains bounded during replay.
     // A failed lane must fail startup rather than leave a healthy-looking
     // reactor whose durable source has already stopped.
-    yield* Stream.runForEach(
-      orchestrationEngine.readEventsThrough(cursor, replayThrough),
-      admitOrderedEvent,
-    ).pipe(
+    yield* Effect.gen(function* () {
+      // Read independently of ACK: an unfinished lane can hold the durable cursor back.
+      let replayCursor = cursor;
+      while (replayCursor < replayThrough) {
+        let count = 0;
+        let lastReadSequence = replayCursor;
+        yield* Stream.runForEach(
+          orchestrationEngine.readEventsThrough(replayCursor, replayThrough, 64),
+          (event) =>
+            Effect.gen(function* () {
+              yield* admitOrderedEvent(event);
+              count += 1;
+              lastReadSequence = event.sequence;
+            }),
+        );
+        replayCursor = lastReadSequence;
+        if (count < 64) break;
+        yield* Effect.yieldNow;
+      }
+    }).pipe(
       Effect.andThen(intentWorker.drain),
       Effect.andThen(drainAcknowledgements),
       Effect.raceFirst(failOnSourceError),

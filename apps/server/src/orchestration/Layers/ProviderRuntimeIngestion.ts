@@ -627,6 +627,19 @@ function asObject(value: unknown): Record<string, unknown> | undefined {
   return isJsonObject(value) ? value : undefined;
 }
 
+function stableActivityState(activity: {
+  readonly createdAt: string;
+  readonly sequence?: number | undefined;
+  readonly payload: unknown;
+}) {
+  const status = asObject(activity.payload)?.status;
+  return {
+    createdAt: activity.createdAt,
+    sequence: activity.sequence,
+    terminalStatus: status === "failed" || status === "completed" ? status : undefined,
+  };
+}
+
 /**
  * Resolves persisted image tool records to their durable display paths. Studio
  * copies add a source -> workspace-path marker; non-Studio images keep the
@@ -1085,7 +1098,10 @@ const make = Effect.gen(function* () {
   });
   // Keep row identity after the text buffer is consumed. On a cache miss the
   // durable activity restores ordering and terminal state across recovery.
-  const stableActivityById = yield* Cache.make<string, OrchestrationThreadActivity | undefined>({
+  const stableActivityById = yield* Cache.make<
+    string,
+    ReturnType<typeof stableActivityState> | undefined
+  >({
     capacity: BUFFERED_REASONING_SUMMARY_BY_KEY_CACHE_CAPACITY,
     timeToLive: BUFFERED_REASONING_SUMMARY_BY_KEY_TTL,
     lookup: () => Effect.succeed(undefined),
@@ -1202,27 +1218,14 @@ const make = Effect.gen(function* () {
               activityId: activity.id,
             }),
           );
-      const previous: OrchestrationThreadActivity | undefined =
-        cached ??
-        (durable
-          ? {
-              id: durable.activityId,
-              createdAt: durable.createdAt,
-              tone: durable.tone,
-              kind: durable.kind,
-              summary: durable.summary,
-              payload: durable.payload as OrchestrationThreadActivity["payload"],
-              turnId: durable.turnId,
-              ...(durable.sequence !== undefined ? { sequence: durable.sequence } : {}),
-            }
-          : undefined);
+      const previous = cached ?? (durable ? stableActivityState(durable) : undefined);
       if (previous) {
         yield* Cache.set(stableActivityById, activity.id, previous);
         // Interruption/failure is final; a delayed delta must not reopen a
         // completed block either. Completed snapshots may refine its detail.
         if (
-          asObject(previous.payload)?.status === "failed" ||
-          (asObject(previous.payload)?.status === "completed" &&
+          previous.terminalStatus === "failed" ||
+          (previous.terminalStatus === "completed" &&
             asObject(activity.payload)?.status !== "completed")
         )
           return;
@@ -1250,7 +1253,7 @@ const make = Effect.gen(function* () {
       createdAt: activity.createdAt,
     });
     if (hasStableActivity) {
-      yield* Cache.set(stableActivityById, activity.id, activity);
+      yield* Cache.set(stableActivityById, activity.id, stableActivityState(activity));
     }
     if (key && fingerprint) {
       yield* Cache.set(latestActivityUpdateFingerprintByKey, key, fingerprint);

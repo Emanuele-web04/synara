@@ -47,6 +47,23 @@ describe("ByteAccumulator", () => {
     expect(bytes(accumulator.take(2))).toEqual([9, 9]);
   });
 
+  it("takes stable owned buffers without copying and keeps returned views valid", () => {
+    const accumulator = new ByteAccumulator();
+    const source = Buffer.from([1, 2, 3]);
+    accumulator.appendOwned(Buffer.alloc(0));
+    accumulator.appendOwned(source);
+    const prefix = accumulator.take(2);
+    expect(prefix.buffer).toBe(source.buffer);
+    expect(prefix.byteOffset).toBe(source.byteOffset);
+
+    accumulator.appendOwned(Buffer.from([4, 5]));
+    expect(bytes(accumulator.take(3))).toEqual([3, 4, 5]);
+    accumulator.appendOwned(Buffer.from([6]));
+    accumulator.clear();
+    expect(accumulator.byteLength).toBe(0);
+    expect(bytes(prefix)).toEqual([1, 2]);
+  });
+
   it("rejects reads past the buffered bytes", () => {
     const accumulator = new ByteAccumulator();
     accumulator.append(Uint8Array.of(1, 2, 3));

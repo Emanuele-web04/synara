@@ -4760,6 +4760,45 @@ describe("ProviderRuntimeIngestion", () => {
     });
   });
 
+  it("retains changed completed reasoning across small and large duplicate fingerprints", async () => {
+    const harness = await createHarness({ startIngestion: false });
+    const details = ["First", "x".repeat(2_000), "Last"];
+    const firstAt = "2026-10-03T10:02:00.000Z";
+    let firstSequence: number | undefined;
+    await harness.startIngestion();
+    for (const [index, detail] of details.flatMap((detail) => [detail, detail]).entries()) {
+      const row = await Effect.runPromise(
+        harness.runtimeEventRepository.append({
+          type: "item.completed",
+          provider: "claudeAgent",
+          eventId: asEventId(`sized-reasoning-${index}`),
+          threadId: asThreadId("thread-1"),
+          turnId: asTurnId("sized-turn"),
+          itemId: asItemId("sized-thought"),
+          createdAt: index === 0 ? firstAt : "2026-10-03T10:02:01.000Z",
+          payload: { itemType: "reasoning", status: "completed", detail },
+        }),
+      );
+      firstSequence ??= row.sequence;
+      await harness.drain();
+    }
+    const updates = Array.from(
+      await Effect.runPromise(Stream.runCollect(harness.engine.readEvents(0))),
+    ).flatMap((event) =>
+      event.type === "thread.activity-appended" &&
+      event.payload.activity.id === "provider-reasoning:thread-1:sized-thought"
+        ? [event.payload.activity]
+        : [],
+    );
+    expect(updates).toHaveLength(3);
+    for (const [index, activity] of updates.entries())
+      expect(activity).toMatchObject({
+        createdAt: firstAt,
+        sequence: firstSequence,
+        payload: { status: "completed", detail: details[index] },
+      });
+  });
+
   it.each([0, 2_001])(
     "preserves durable failed Claude reasoning with %s newer rows when ingestion receives a late completion",
     async (newerRows) => {
