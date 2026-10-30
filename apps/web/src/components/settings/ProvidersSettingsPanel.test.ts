@@ -11,6 +11,11 @@ import {
 const defaults = AppSettingsSchema.makeUnsafe({});
 
 describe("isProviderInstallSettingsDirty", () => {
+  it("detects a changed Cline executable", () => {
+    expect(
+      isProviderInstallSettingsDirty({ ...defaults, clineBinaryPath: "/opt/cline" }, defaults),
+    ).toBe(true);
+  });
   it("uses configured flags instead of unreadable password values", () => {
     expect(
       isProviderInstallSettingsDirty({ ...defaults, openCodeServerPassword: "secret" }, defaults),
@@ -34,6 +39,7 @@ describe("createProviderInstallResetPatch", () => {
     expect(Object.keys(patch).sort()).toEqual(
       [
         "antigravityBinaryPath",
+        "clineBinaryPath",
         "claudeBinaryPath",
         "claudeConfirmColdCacheResume",
         "claudeEnableArtifacts",

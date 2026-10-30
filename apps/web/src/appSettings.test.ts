@@ -411,6 +411,7 @@ describe("resolveAppModelSelection", () => {
           claudeAgent: [],
           cursor: [],
           devin: [],
+          cline: [],
           antigravity: [],
           grok: [],
           droid: [],
@@ -432,6 +433,7 @@ describe("resolveAppModelSelection", () => {
           claudeAgent: [],
           cursor: [],
           devin: [],
+          cline: [],
           antigravity: [],
           grok: [],
           droid: [],
@@ -729,6 +731,7 @@ describe("getProviderStartOptions", () => {
         piAgentDir: "",
         piBinaryPath: "",
         devinBinaryPath: "/usr/local/bin/devin",
+        clineBinaryPath: "",
         ompBinaryPath: "",
         ompAgentDir: "",
       }),
@@ -774,6 +777,7 @@ describe("getProviderStartOptions", () => {
         piAgentDir: "",
         piBinaryPath: "",
         devinBinaryPath: "",
+        clineBinaryPath: "",
         ompBinaryPath: "",
         ompAgentDir: "",
       }),
@@ -806,6 +810,7 @@ describe("getProviderStartOptions", () => {
         openCodeServerUrl: "",
         piAgentDir: "",
         piBinaryPath: "",
+        clineBinaryPath: "",
         ompBinaryPath: "",
         ompAgentDir: "",
       }),
@@ -845,6 +850,7 @@ describe("getProviderStartOptions", () => {
           openCodeServerUrl: "",
           piAgentDir: "",
           piBinaryPath: "",
+          clineBinaryPath: "",
           ompBinaryPath: "",
           ompAgentDir: "",
         },
@@ -884,6 +890,7 @@ describe("getProviderStartOptions", () => {
           openCodeServerUrl: "",
           piAgentDir: "",
           piBinaryPath: "",
+          clineBinaryPath: "",
           ompBinaryPath: "",
           ompAgentDir: "",
         },
@@ -919,6 +926,7 @@ describe("getProviderStartOptions", () => {
           openCodeServerUrl: "",
           piAgentDir: "",
           piBinaryPath: "",
+          clineBinaryPath: "",
           ompBinaryPath: "",
           ompAgentDir: "",
           providerInstances: {
@@ -969,6 +977,7 @@ describe("getProviderStartOptions", () => {
         openCodeServerUrl: "",
         piAgentDir: "",
         piBinaryPath: "",
+        clineBinaryPath: "",
         ompBinaryPath: "",
         ompAgentDir: "",
         providerInstances: {
@@ -1004,6 +1013,7 @@ describe("getProviderStartOptions", () => {
         openCodeServerUrl: "",
         piAgentDir: "",
         piBinaryPath: "",
+        clineBinaryPath: "",
         ompBinaryPath: "",
         ompAgentDir: "",
         providerInstances: {
@@ -1046,6 +1056,7 @@ describe("getProviderStartOptions", () => {
         openCodeServerUrl: "",
         piAgentDir: "",
         piBinaryPath: "",
+        clineBinaryPath: "",
         ompBinaryPath: "",
         ompAgentDir: "",
       }),
@@ -1096,6 +1107,7 @@ describe("getProviderStartOptions", () => {
         openCodeServerUrl: "",
         piAgentDir: "",
         piBinaryPath: "pi",
+        clineBinaryPath: "",
         ompBinaryPath: "",
         ompAgentDir: "",
       }),
@@ -1487,6 +1499,7 @@ describe("provider instance configuration", () => {
           openCodeExperimentalWebSockets: false,
           openCodeServerUrl: "",
           piBinaryPath: "",
+          clineBinaryPath: "",
           ompBinaryPath: "",
           ompAgentDir: "",
           piAgentDir: "",
@@ -1581,6 +1594,7 @@ describe("provider-indexed custom model settings", () => {
     customAntigravityModels: ["Gemini 3.5 Flash (Experimental)"],
     customGrokModels: ["grok/custom-fast"],
     customDroidModels: ["claude-opus-4-8-custom"],
+    customClineModels: [],
     customDevinModels: ["devin/custom-model"],
     customOpenCodeModels: ["openrouter/gpt-oss-120b"],
     customPiModels: ["anthropic/custom-pi"],
@@ -1766,6 +1780,7 @@ describe("provider-indexed custom model settings", () => {
       devin: ["devin/custom-model"],
       opencode: ["openrouter/gpt-oss-120b"],
       pi: ["anthropic/custom-pi"],
+      cline: [],
       omp: [],
     });
   });
@@ -2159,5 +2174,18 @@ describe("keepAwakeMode mapping", () => {
     expect(
       appSettingsPatchToServerSettingsPatch({ enableAssistantStreaming: true }),
     ).not.toHaveProperty("keepAwakeMode");
+  });
+});
+
+describe("Cline settings", () => {
+  it("preserves the Cline binary and custom models", () => {
+    const settings = normalizeStoredAppSettings(
+      AppSettingsSchema.makeUnsafe({
+        clineBinaryPath: "/opt/cline",
+        customClineModels: [" upstream/model ", "upstream/model"],
+      }),
+    );
+    expect(settings.clineBinaryPath).toBe("/opt/cline");
+    expect(settings.customClineModels).toEqual(["upstream/model"]);
   });
 });

@@ -109,6 +109,7 @@ describe("OMP role-era persisted selections", () => {
     claudeAgent: [],
     cursor: [],
     devin: [],
+    cline: [],
     antigravity: [],
     grok: [],
     droid: [],
@@ -598,6 +599,7 @@ describe("composerDraftStore modelSelection", () => {
         opencode: [],
         pi: [],
         devin: [],
+        cline: [],
         omp: [],
       },
       availableModelOptionsByProvider: {
@@ -641,6 +643,7 @@ describe("composerDraftStore modelSelection", () => {
         opencode: [],
         pi: [],
         devin: [],
+        cline: [],
         omp: [],
       },
     });
@@ -668,6 +671,7 @@ describe("composerDraftStore modelSelection", () => {
         opencode: [],
         pi: [],
         devin: [],
+        cline: [],
         omp: [],
       },
       availableModelOptionsByProvider: {
@@ -702,6 +706,7 @@ describe("composerDraftStore modelSelection", () => {
         opencode: [],
         pi: [],
         devin: [],
+        cline: [],
         omp: [],
       },
       availableModelOptionsByProvider: {
@@ -736,6 +741,7 @@ describe("composerDraftStore modelSelection", () => {
         opencode: [],
         pi: [],
         devin: [],
+        cline: [],
         omp: [],
       },
       availableModelOptionsByProvider: {

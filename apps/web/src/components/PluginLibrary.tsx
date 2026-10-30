@@ -378,6 +378,7 @@ export function PluginLibrary(props?: {
   const droidCapabilitiesQuery = useQuery(providerComposerCapabilitiesQueryOptions("droid"));
   const openCodeCapabilitiesQuery = useQuery(providerComposerCapabilitiesQueryOptions("opencode"));
   const piCapabilitiesQuery = useQuery(providerComposerCapabilitiesQueryOptions("pi"));
+  const clineCapabilitiesQuery = useQuery(providerComposerCapabilitiesQueryOptions("cline"));
   const devinCapabilitiesQuery = useQuery(providerComposerCapabilitiesQueryOptions("devin"));
   const ompCapabilitiesQuery = useQuery(providerComposerCapabilitiesQueryOptions("omp"));
 
@@ -393,6 +394,10 @@ export function PluginLibrary(props?: {
     cursor: {
       plugins: supportsPluginDiscovery(cursorCapabilitiesQuery.data),
       skills: supportsSkillDiscovery(cursorCapabilitiesQuery.data),
+    },
+    cline: {
+      plugins: supportsPluginDiscovery(clineCapabilitiesQuery.data),
+      skills: supportsSkillDiscovery(clineCapabilitiesQuery.data),
     },
     devin: {
       plugins: supportsPluginDiscovery(devinCapabilitiesQuery.data),

@@ -402,6 +402,7 @@ function redactProviderOptionsForPersistence(value: unknown): unknown {
     ...(value.claudeAgent ? { claudeAgent: redactRuntimeEnvironment(value.claudeAgent) } : {}),
     ...(value.cursor ? { cursor: redactRuntimeEnvironment(value.cursor) } : {}),
     ...(value.devin ? { devin: redactRuntimeEnvironment(value.devin) } : {}),
+    ...(value.cline ? { cline: redactRuntimeEnvironment(value.cline) } : {}),
     ...(value.antigravity ? { antigravity: redactRuntimeEnvironment(value.antigravity) } : {}),
     ...(value.grok ? { grok: redactRuntimeEnvironment(value.grok) } : {}),
     ...(value.droid ? { droid: redactRuntimeEnvironment(value.droid) } : {}),

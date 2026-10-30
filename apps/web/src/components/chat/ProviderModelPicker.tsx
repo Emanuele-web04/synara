@@ -614,6 +614,7 @@ export const ProviderModelMenuItems = function ProviderModelMenuItems(
       (provider === "opencode" ||
         provider === "cursor" ||
         provider === "devin" ||
+        provider === "cline" ||
         provider === "pi" ||
         provider === "omp") &&
       providerOptions.length >= SEARCHABLE_MODEL_PICKER_THRESHOLD;

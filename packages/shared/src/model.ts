@@ -39,6 +39,7 @@ const MODEL_SLUG_SET_BY_PROVIDER: Record<ProviderKind, ReadonlySet<ModelSlug>> =
   pi: new Set<ModelSlug>(),
   // Devin's built-in list is intentionally empty; its CLI supplies the live catalog.
   devin: new Set<ModelSlug>(),
+  cline: new Set<ModelSlug>(),
   omp: new Set<ModelSlug>(),
 };
 
@@ -834,7 +835,7 @@ export function resolveModelSlug(
     provider === "claudeAgent" && normalizedModel
       ? (stripClaudeContextWindowSuffix(normalizedModel) as ModelSlug)
       : normalizedModel;
-  if (provider === "devin" || provider === "pi" || provider === "omp") {
+  if (provider === "devin" || provider === "pi" || provider === "omp" || provider === "cline") {
     return normalized;
   }
   if (!normalized) {

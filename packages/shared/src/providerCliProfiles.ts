@@ -9,6 +9,7 @@ export const PROVIDER_CLI_COMMAND_BY_KIND = {
   claudeAgent: "claude",
   cursor: "cursor-agent",
   devin: "devin",
+  cline: "cline",
   antigravity: "agy",
   grok: "grok",
   droid: "droid",
@@ -74,6 +75,10 @@ export const PROVIDER_AUTHENTICATION = {
       "Choose your login method and complete the browser sign-in, including any Apple or organization prompts.",
   },
   cursor: { args: ["login"], instructions: "Complete the Cursor browser sign-in." },
+  cline: {
+    args: ["auth"],
+    instructions: "Complete Cline authentication for the upstream provider you use.",
+  },
   devin: {
     args: ["auth", "login"],
     instructions:
