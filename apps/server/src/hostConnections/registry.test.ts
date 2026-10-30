@@ -1,13 +1,19 @@
 import { EventEmitter, once } from "node:events";
+import { EnvironmentId, WsCompatibilityError, type RemoteExecutionScope } from "@synara/contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import WebSocket, { WebSocketServer } from "ws";
 import { controllerProtocol, type DialedSession } from "./dialer";
 import { HostConnectionRegistry } from "./registry";
+import { makeHostConnectionsPort } from "./port";
+import { superviseHostConnections } from "./supervisor";
+import { RemoteHostTrustError } from "./failure";
+import { SessionExpiredError } from "../accountAuth";
 import { forwardBoundedRelayResponses, MAX_RELAY_RESPONSE_BYTES } from "../relaySocket";
 
 const cleanups: Array<() => void> = [];
 afterEach(() => {
   for (const cleanup of cleanups.splice(0).reverse()) cleanup();
+  vi.useRealTimers();
 });
 
 /** A native socket boundary whose write completion can be held, failed or cancelled. */
@@ -234,6 +240,136 @@ async function fixture(
 }
 
 describe("renderer remote streams", () => {
+  it("keeps a healthy renderer through another dial failure without bypassing changed account scope", async () => {
+    const f = await fixture();
+    f.registry.remove("host");
+    let scope: RemoteExecutionScope = {
+      accountAuthority: "https://account.test",
+      userId: "owner",
+      organizationId: "personal",
+      environmentId: "remote-environment",
+      channel: "beta",
+    };
+    const failure = new Error("Additional renderer temporarily unavailable");
+    const dial = vi.fn(f.dial).mockImplementationOnce(f.dial).mockRejectedValue(failure);
+    f.registry.setConnector("host", "Mini", dial, scope);
+    const first = await f.registry.prepare("host", controllerProtocol);
+    const renderer = await f.attach(first.remoteAttachmentId!);
+    vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
+    await expect(f.registry.prepare("host", controllerProtocol)).rejects.toBe(failure);
+    expect(f.registry.status("host").state).toBe("connected");
+    const retryAt = Date.parse(f.registry.status("host").nextRetryAt!);
+    expect(retryAt).toBeGreaterThan(Date.now());
+    await expect(f.registry.prepare("host", controllerProtocol)).rejects.toThrow("retry deadline");
+    expect(dial).toHaveBeenCalledTimes(2);
+
+    const dialIdentity = vi.fn(async (): Promise<never> => {
+      throw new Error("Replacement dial stopped by fixture");
+    });
+    const port = makeHostConnectionsPort({
+      registry: f.registry,
+      accountSession: {
+        listHosts: async () => ({
+          hosts: [
+            {
+              id: "host",
+              name: "Mini",
+              environmentId: EnvironmentId.makeUnsafe("remote-environment"),
+              platform: "darwin",
+              kind: "local",
+              endpoints: [],
+              ownerUserId: "owner",
+              discoverable: false,
+              linked: true,
+              keyGeneration: 1,
+              mine: true,
+              createdAt: "2026-10-30T00:00:00Z",
+              lastSeenAt: "2026-10-30T00:00:00Z",
+            },
+          ],
+        }),
+        dialIdentity,
+        requestGrant: async () => {
+          throw new Error("Unexpected grant request");
+        },
+      },
+      readTrust: async () => ({
+        environmentId: "remote-environment",
+        rootCertificate: "fixture",
+        rootFingerprint: "fixture",
+        executionScope: scope,
+      }),
+      setDesired: async () => {},
+      listPaired: async () => [],
+      listDesired: async () => [
+        { hostId: "host", environmentId: "remote-environment", label: "Mini" },
+      ],
+    });
+    const connect = vi.spyOn(port, "connect");
+    const stop = superviseHostConnections(port, f.registry);
+    cleanups.push(stop);
+    await vi.advanceTimersByTimeAsync(4_000);
+    expect(connect).not.toHaveBeenCalled();
+    expect(await port.connect({ hostId: "host" })).toBe(f.registry.get("host"));
+    expect(dialIdentity).not.toHaveBeenCalled();
+    const echo = once(renderer, "message");
+    renderer.send("healthy renderer survives");
+    expect((await echo)[0].toString()).toBe("healthy renderer survives");
+    expect(f.counts()).toEqual({ hostOpens: 1, hostCloses: 0, externalCloseEvents: 0 });
+
+    // An OPEN socket never overrides fresh controller verification of its owner.
+    scope = { ...scope, organizationId: "changed-organization" };
+    const closed = once(renderer, "close");
+    await expect(port.connect({ hostId: "host" })).rejects.toThrow("Replacement dial stopped");
+    expect((await closed)[0]).toBe(1000);
+    expect(dialIdentity).toHaveBeenCalledOnce();
+  });
+
+  it("does not treat an unused prepared stream as a healthy renderer after another dial fails", async () => {
+    const f = await fixture();
+    f.registry.remove("host");
+    const failure = new Error("Remote temporarily unavailable");
+    const dial = vi.fn(f.dial).mockImplementationOnce(f.dial).mockRejectedValue(failure);
+    f.registry.setConnector("host", "Mini", dial);
+    await f.registry.prepare("host", controllerProtocol);
+    await expect(f.registry.prepare("host", controllerProtocol)).rejects.toBe(failure);
+    expect(f.registry.status("host").state).toBe("reconnecting");
+  });
+
+  it.each([
+    [new RemoteHostTrustError("Remote trust changed"), "revoked"],
+    [new SessionExpiredError(), "needs-sign-in"],
+    [
+      new WsCompatibilityError({
+        message: "Host protocol changed",
+        code: "WS_PROTOCOL_INCOMPATIBLE",
+        retryable: false,
+        action: "update-client",
+        serverBuild: "host-build",
+        protocolEpoch: 1,
+        minRevision: 1,
+        maxRevision: 1,
+      }),
+      "incompatible",
+    ],
+  ] as const)(
+    "keeps terminal %s admission fenced despite an existing renderer",
+    async (failure, state) => {
+      const f = await fixture();
+      f.registry.remove("host");
+      const dial = vi.fn(f.dial).mockImplementationOnce(f.dial).mockRejectedValue(failure);
+      f.registry.setConnector("host", "Mini", dial);
+      const first = await f.registry.prepare("host", controllerProtocol);
+      await f.attach(first.remoteAttachmentId!);
+      await expect(f.registry.prepare("host", controllerProtocol)).rejects.toBe(failure);
+      expect(f.registry.status("host")).toEqual({ state });
+      await expect(f.registry.prepare("host", controllerProtocol)).rejects.toThrow(
+        "requires attention",
+      );
+      expect(dial).toHaveBeenCalledTimes(2);
+    },
+  );
+
   it("prepares a fresh stream before renewal and consumes it exactly once after reconnect", async () => {
     const f = await fixture(45.15);
     const first = await f.registry.prepare("host", controllerProtocol);
