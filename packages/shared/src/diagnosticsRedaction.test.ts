@@ -13,6 +13,7 @@ describe("updater failure reasons", () => {
   it.each([
     ["Timed out while checking for updates. Try again.", "timeout"],
     ["Request timed out after 15000ms of inactivity.", "timeout"],
+    ["The update couldn’t be installed automatically.", "timeout"],
     ["Download stalled after 60 seconds without progress. Try again.", "timeout"],
     ["net::ERR_CONNECTION_TIMED_OUT", "timeout"],
     [
@@ -27,10 +28,40 @@ describe("updater failure reasons", () => {
       "Update download stalled and could not resume (request-error: net::ERR_CONNECTION_TIMED_OUT; 10/100 bytes after 7 attempts).",
       "timeout",
     ],
+    [
+      "Update download stalled and could not resume (request-error: net::ERR_ABORTED; 0/? bytes after 7 attempts).",
+      "cancelled",
+    ],
+    [
+      "Update download stalled and could not resume (response-error; 0/? bytes after 7 attempts).",
+      "network",
+    ],
+    [
+      "Update download stalled and could not resume (response-aborted; 10/100 bytes after 7 attempts).",
+      "network",
+    ],
+    [
+      "Update download stalled and could not resume (premature-end; 10/100 bytes after 7 attempts).",
+      "network",
+    ],
+    [
+      "Update download stalled and could not resume (http-429; 0/? bytes after 7 attempts).",
+      "http-client",
+    ],
+    [
+      "Update download stalled and could not resume (http-503; 0/? bytes after 7 attempts).",
+      "http-server",
+    ],
     ["net::ERR_INTERNET_DISCONNECTED", "network"],
     ["net::ERR_CERT_AUTHORITY_INVALID", "network"],
     ['403 Forbidden\n"private request detail"\nHeaders: {}', "http-client"],
     ["502 Bad Gateway\nHeaders: {}", "http-server"],
+    // Captured from the installed runtime's createHttpError with an object description.
+    ['403 Forbidden\n{\n  "message": "synthetic object detail"\n}\nHeaders: {}', "http-client"],
+    [
+      '503 Service Unavailable\n{\n  "message": "synthetic object detail"\n}\nHeaders: {}',
+      "http-server",
+    ],
     ["Cannot download update: HTTP 403.", "http-client"],
     [
       "Cannot find remote-mac.yml in the latest release artifacts (https://private/feed)",
@@ -40,10 +71,28 @@ describe("updater failure reasons", () => {
       "Cannot parse update info from remote.yml in the latest release artifacts (private)",
       "manifest",
     ],
+    [
+      "Cannot find remote-linux-arm64.yml in the latest release artifacts (https://private/feed)",
+      "manifest",
+    ],
+    [
+      "Cannot parse update info from remote-linux-arm64.yml in the latest release artifacts (private)",
+      "manifest",
+    ],
     ["No published versions on GitHub", "release-feed"],
     ["Cannot parse releases feed: private XML", "release-feed"],
     ["sha512 checksum mismatch (expected private, got private).", "verification"],
     ["The downloaded update could not be verified: private path", "verification"],
+    ["Update download size mismatch (1024 != 2048 bytes).", "verification"],
+    ["The downloaded update could not be reverified. Download it again.", "verification"],
+    [
+      "The downloaded update changed during install preparation. Download it again.",
+      "verification",
+    ],
+    [
+      "New version 1.0.6-remote.40 is not signed by the application owner: synthetic signature detail",
+      "verification",
+    ],
     ["cancelled", "cancelled"],
     ["net::ERR_ABORTED", "cancelled"],
   ])("classifies known updater message %s without returning its contents", (message, reason) => {
@@ -59,6 +108,12 @@ describe("updater failure reasons", () => {
     "customer text: net::ERR_INTERNET_DISCONNECTED",
     "502 customer note without an HTTP error envelope",
     "net::ERR_CUSTOMER_SECRET",
+    "Update download size mismatch (private != data bytes).",
+    "The downloaded update could not be reverified for customer-secret",
+    "Cannot find remote-linux-private.yml in the latest release artifacts (private)",
+    "Update download stalled and could not resume (http-customer-secret; 0/? bytes after 7 attempts).",
+    "New version customer-secret is not signed by the application owner: private",
+    "The downloaded update changed during private customer preparation.",
     "Update download stalled and could not resume (request-error: net::ERR_CUSTOMER_SECRET; 0/? bytes after 7 attempts).",
     "Update download stalled and could not resume (request-error: customer text net::ERR_INTERNET_DISCONNECTED; 0/? bytes after 7 attempts).",
     "Update download stalled and could not resume (request-error: net::ERR_INTERNET_DISCONNECTED; private/total bytes after 7 attempts).",
