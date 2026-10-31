@@ -633,6 +633,14 @@ const decideCommand = Effect.fn("decideOrchestrationCommand")(function* ({
   switch (command.type) {
     case "thread.usage-limit.admit": {
       const thread = yield* requireThread({ readModel, command, threadId: command.threadId });
+      if (
+        command.recoveryId !== undefined &&
+        (thread.usageLimitRecovery?.id !== command.recoveryId ||
+          thread.usageLimitRecovery.state !== "resuming" ||
+          thread.usageLimitRecovery.policyEpoch !== command.policyEpoch)
+      ) {
+        return usageLimitMetadataEvent(command, {});
+      }
       const current = thread.usageLimitRecoverySource?.admissionSequence;
       return usageLimitMetadataEvent(
         command,
@@ -735,6 +743,7 @@ const decideCommand = Effect.fn("decideOrchestrationCommand")(function* ({
         matches
           ? {
               usageLimitRecovery: null,
+              usageLimitRecoverySource: null,
               usageLimitRecoveryCancelledAt: nowIso(),
               usageLimitRecoveryCancelledTurnId:
                 thread.session?.activeTurnId ?? thread.latestTurn?.turnId ?? null,
@@ -3518,6 +3527,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommandW
         return usageLimitMetadataEvent(command, {});
       const cancel = usageLimitMetadataEvent(command, {
         usageLimitRecovery: null,
+        usageLimitRecoverySource: null,
         usageLimitRecoveryCancelledAt: nowIso(),
         usageLimitRecoveryCancelledTurnId: recovery.resumedTurnId ?? recovery.turnId,
         ...(thread.goal?.trim() && thread.goalPausedAt == null ? { goalPausedAt: nowIso() } : {}),

@@ -2113,6 +2113,7 @@ const ThreadSidechatExpireCommand = Schema.Struct({
 });
 
 const ThreadUsageLimitAdmitCommand = Schema.Struct({
+  recoveryId: Schema.optional(TrimmedNonEmptyString),
   type: Schema.Literal("thread.usage-limit.admit"),
   commandId: CommandId,
   threadId: ThreadId,

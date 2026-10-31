@@ -3395,16 +3395,37 @@ const make = Effect.gen(function* () {
     let usageLimitAdmissionSequence: number | undefined;
     if ((input.dispatchMode ?? "queue") !== "steer" && thread.parentThreadId == null) {
       const settings = yield* serverSettings.getSettings;
+      if (
+        input.usageLimitRecovery &&
+        (!settings.autoResumeAfterUsageLimits ||
+          settings.usageLimitRecoveryEpoch !== input.usageLimitRecovery.policyEpoch)
+      )
+        return;
       if (settings.autoResumeAfterUsageLimits) {
         const admission = yield* orchestrationEngine.dispatch({
           type: "thread.usage-limit.admit",
+          ...(input.usageLimitRecovery ? { recoveryId: input.usageLimitRecovery.id } : {}),
           commandId: serverCommandId("usage-limit-send-admission"),
           threadId: input.threadId,
           admissionSequence: input.completionEventSequence ?? input.sourceEventSequence,
-          policyEpoch: settings.usageLimitRecoveryEpoch,
+          policyEpoch: input.usageLimitRecovery?.policyEpoch ?? settings.usageLimitRecoveryEpoch,
           createdAt: new Date().toISOString(),
         });
         usageLimitAdmissionSequence = admission.sequence;
+        if (input.usageLimitRecovery) {
+          const admitted = yield* resolveThreadShell(input.threadId);
+          const admissionSettings = yield* serverSettings.getSettings;
+          if (
+            !admissionSettings.autoResumeAfterUsageLimits ||
+            admissionSettings.usageLimitRecoveryEpoch !== input.usageLimitRecovery.policyEpoch ||
+            admitted?.usageLimitRecovery?.id !== input.usageLimitRecovery.id ||
+            admitted.usageLimitRecovery.state !== "resuming" ||
+            admitted.usageLimitRecoverySource?.bindingKey !== "admission" ||
+            admitted.usageLimitRecoverySource.admissionSequence !==
+              (input.completionEventSequence ?? input.sourceEventSequence)
+          )
+            return;
+        }
       }
     }
     const projectContextPacket = yield* (

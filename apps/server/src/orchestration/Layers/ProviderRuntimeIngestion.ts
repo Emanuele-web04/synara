@@ -3134,6 +3134,7 @@ const make = Effect.gen(function* () {
             ) {
               yield* orchestrationEngine.dispatch({
                 type: "thread.usage-limit.source",
+                expectedBindingKey: frozenSource.bindingKey,
                 commandId: providerCommandId(event, "usage-limit-source-pending", thread.id),
                 threadId: thread.id,
                 source: {
