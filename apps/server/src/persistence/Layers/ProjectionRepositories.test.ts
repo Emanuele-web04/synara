@@ -32,6 +32,66 @@ const projectionRepositoriesLayer = it.layer(
 
 projectionRepositoriesLayer("Projection repositories", (it) => {
   it.effect(
+    "preserves durable recovery fences through legacy upserts and clears the wait explicitly",
+    () =>
+      Effect.gen(function* () {
+        const threads = yield* ProjectionThreadRepository;
+        const sql = yield* SqlClient.SqlClient;
+        const threadId = ThreadId.makeUnsafe("recovery-upsert-thread");
+        const now = "2026-10-31T10:00:00.000Z";
+        yield* sql`INSERT INTO projection_threads
+        (thread_id,project_id,title,model_selection_json,created_at,updated_at)
+        VALUES (${threadId},'recovery-upsert-project','Waiting','{"provider":"codex","model":"gpt-5"}',${now},${now})`;
+        const original = Option.getOrThrow(yield* threads.getById({ threadId }));
+        const recovery = {
+          id: "quota-episode",
+          turnId: TurnId.makeUnsafe("limited-turn"),
+          resetAt: "2026-10-31T11:00:00.000Z",
+          autoResume: true as const,
+          provider: "codex",
+          providerInstanceId: "codex",
+          model: "gpt-5",
+          bindingKey: "opaque-account",
+          policyEpoch: 0,
+        };
+        const source = { turnId: recovery.turnId, bindingKey: recovery.bindingKey, policyEpoch: 0 };
+        yield* threads.upsert({
+          ...original,
+          usageLimitRecovery: recovery,
+          usageLimitRecoverySource: source,
+          usageLimitRecoveryCancelledAt: now,
+          usageLimitRecoveryCancelledTurnId: TurnId.makeUnsafe("older-turn"),
+          usageLimitRecoveryLastResetAt: recovery.resetAt,
+        });
+        const {
+          usageLimitRecovery: _wait,
+          usageLimitRecoverySource: _source,
+          usageLimitRecoveryCancelledAt: _at,
+          usageLimitRecoveryCancelledTurnId: _turn,
+          usageLimitRecoveryLastResetAt: _reset,
+          ...legacy
+        } = original;
+        yield* threads.upsert({ ...legacy, title: "Renamed by older client" });
+        const restored = Option.getOrThrow(yield* threads.getById({ threadId }));
+        assert.deepStrictEqual(restored.usageLimitRecovery, recovery);
+        assert.deepStrictEqual(restored.usageLimitRecoverySource, source);
+        assert.strictEqual(restored.usageLimitRecoveryCancelledAt, now);
+        assert.strictEqual(restored.usageLimitRecoveryCancelledTurnId, "older-turn");
+        assert.strictEqual(restored.usageLimitRecoveryLastResetAt, recovery.resetAt);
+        assert.deepStrictEqual(
+          (yield* threads.listByProjectId({ projectId: original.projectId }))[0]
+            ?.usageLimitRecovery,
+          recovery,
+        );
+        yield* threads.upsert({ ...legacy, usageLimitRecovery: null });
+        const cancelled = Option.getOrThrow(yield* threads.getById({ threadId }));
+        assert.isNull(cancelled.usageLimitRecovery);
+        assert.strictEqual(cancelled.usageLimitRecoveryCancelledAt, now);
+        assert.strictEqual(cancelled.usageLimitRecoveryCancelledTurnId, "older-turn");
+      }),
+  );
+
+  it.effect(
     "keeps workspace classification on the owning turn without resurrecting pending starts",
     () =>
       Effect.gen(function* () {

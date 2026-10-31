@@ -32,8 +32,18 @@ export const LiveActivityHostSnapshot = Schema.Struct({
         "ready",
         "failed",
         "stopped",
+        "usageLimit",
+        "resuming",
       ]),
-      startedAt: Schema.Number.check(Schema.isFinite(), Schema.isGreaterThanOrEqualTo(0)),
+      // Waiting has no running clock. Epoch seconds are converted only at the APNs boundary.
+      startedAt: Schema.optional(
+        Schema.Number.check(Schema.isFinite(), Schema.isGreaterThanOrEqualTo(0)),
+      ),
+      usageLimitResetAt: Schema.optional(
+        Schema.Number.check(Schema.isFinite(), Schema.isGreaterThanOrEqualTo(0)),
+      ),
+      // The original subscription remains exact; this is its recorded recovery descendant only.
+      effectiveTurnId: Schema.optional(Id),
     }),
   ).check(Schema.isMaxLength(256)),
 });

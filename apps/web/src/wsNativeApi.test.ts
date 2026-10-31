@@ -406,6 +406,8 @@ describe("wsNativeApi", () => {
 
     const payload = {
       settings: {
+        autoResumeAfterUsageLimits: false,
+        usageLimitRecoveryEpoch: 0,
         enableAssistantStreaming: true,
         enableProviderUpdateChecks: true,
         keepAwakeMode: "off",

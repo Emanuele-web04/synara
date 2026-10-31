@@ -169,6 +169,7 @@ import { ServerConfig } from "../../config.ts";
 import { diagnosticIssueReason } from "@synara/shared/diagnosticIssue";
 import { reportBetaOperationalIssue } from "../../betaOperationalIssue.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
+import { providerUsageRecoveryBindingKey } from "../../providerUsage/index.ts";
 import {
   mergeProviderStartOptions,
   isProviderKind,
@@ -820,6 +821,7 @@ function canContinueGoalPursuit(
     thread.interactionMode !== "plan" &&
     Boolean(activeThreadGoal(thread)?.trim()) &&
     thread.goalPausedAt == null &&
+    thread.usageLimitRecovery == null &&
     (thread.goalStartedAt ?? null) === goalStartedAt
   );
 }
@@ -3376,6 +3378,7 @@ const make = Effect.gen(function* () {
     readonly interactionMode?: ProviderInteractionMode;
     readonly dispatchMode?: "queue" | "steer";
     readonly turnKind?: "user" | "goal-continuation";
+    readonly usageLimitRecovery?: NonNullable<OrchestrationThreadShell["usageLimitRecovery"]>;
     readonly createdAt: string;
     readonly cacheReviewSource?: Extract<
       ProviderIntentEvent,
@@ -3705,7 +3708,9 @@ const make = Effect.gen(function* () {
           yield* appendProviderFailureActivity({
             threadId: input.threadId,
             kind: "provider.turn.start.failed",
-            summary: "Goal paused for Claude cache review",
+            summary: thread.goal?.trim()
+              ? "Goal paused for Claude cache review"
+              : "Task paused for Claude cache review",
             detail:
               "Claude's large context is likely no longer cached. Send a message to review continuing.",
             turnId: null,
@@ -4081,6 +4086,33 @@ const make = Effect.gen(function* () {
               input.claudeCompactionCancellation,
             );
             yield* requireClaudeCompactionPreparationActive(input.claudeCompactionCancellation);
+          }
+          if (input.usageLimitRecovery) {
+            const current = (yield* orchestrationEngine.getReadModel()).threads.find(
+              (entry) => entry.id === input.threadId,
+            );
+            const settings = yield* serverSettings.getSettings.pipe(
+              Effect.mapError(
+                () =>
+                  new ProviderAdapterValidationError({
+                    provider: selectedProvider,
+                    operation: "thread.turn.start",
+                    issue: "Recovery settings could not be verified before delivery.",
+                  }),
+              ),
+            );
+            if (
+              current?.usageLimitRecovery?.id !== input.usageLimitRecovery.id ||
+              current.usageLimitRecovery.state !== "resuming" ||
+              !settings.autoResumeAfterUsageLimits ||
+              settings.usageLimitRecoveryEpoch !== input.usageLimitRecovery.policyEpoch
+            ) {
+              return yield* new ProviderAdapterValidationError({
+                provider: selectedProvider,
+                operation: "thread.turn.start",
+                issue: "The automatic continuation was cancelled before delivery.",
+              });
+            }
           }
           const turnInput = {
             ...providerTurnInput,
@@ -5975,7 +6007,12 @@ const make = Effect.gen(function* () {
   // Promote the next queued message only after the active provider turn settles.
   const drainQueuedTurnsForThread = Effect.fnUntraced(function* (threadId: ThreadId) {
     const sessionThreadId = (yield* resolveProviderSessionThread(threadId))?.id ?? threadId;
-    if ((yield* resolveThreadShell(sessionThreadId))?.claudeCacheReview) return;
+    const sessionOwner = yield* resolveThreadShell(sessionThreadId);
+    if (
+      sessionOwner?.claudeCacheReview ||
+      (sessionOwner?.usageLimitRecovery && sessionOwner.usageLimitRecovery.state !== "resuming")
+    )
+      return;
     if (
       deferredClaudeCompactionQueueDrains.has(sessionThreadId) ||
       drainingQueuedTurns.has(threadId) ||
@@ -6248,12 +6285,234 @@ const make = Effect.gen(function* () {
     });
   });
 
+  const processUsageLimitContinuation = Effect.fnUntraced(function* (
+    event: Extract<ProviderIntentEvent, { type: "thread.goal-continuation-requested" }>,
+  ) {
+    const recovery = event.payload.usageLimitRecovery;
+    if (!recovery) return;
+    const thread = yield* resolveThreadShell(event.payload.threadId);
+    if (
+      !thread ||
+      thread.usageLimitRecovery?.id !== recovery.id ||
+      thread.usageLimitRecovery.state !== "resuming"
+    )
+      return;
+    const cancel = () =>
+      orchestrationEngine.dispatch({
+        type: "thread.usage-limit.cancel",
+        commandId: serverCommandId("usage-limit-cancel"),
+        threadId: thread.id,
+        recoveryId: recovery.id,
+        createdAt: new Date().toISOString(),
+      });
+    const workingDirectory = yield* resolveProjectedThreadWorkspaceCwd(thread);
+    const identityProject = yield* resolveThreadWorkspaceProject(thread);
+    const binding = yield* providerUsageRecoveryBindingKey({
+      provider: recovery.provider,
+      instanceId: recovery.providerInstanceId,
+      ...(workingDirectory ? { workingDirectory } : {}),
+      ...(identityProject?.workspaceRoot ? { projectRoot: identityProject.workspaceRoot } : {}),
+    }).pipe(
+      Effect.provideService(ServerConfig, serverConfig),
+      Effect.provideService(ServerSettingsService, serverSettings),
+      Effect.timeoutOption("8 seconds"),
+      Effect.map(Option.getOrNull),
+      Effect.catch(() => Effect.succeed(null)),
+    );
+    const settings = yield* serverSettings.getSettings;
+    if (
+      !settings.autoResumeAfterUsageLimits ||
+      settings.usageLimitRecoveryEpoch !== recovery.policyEpoch ||
+      binding !== recovery.bindingKey ||
+      thread.archivedAt != null ||
+      thread.settledAt != null ||
+      thread.modelSelection.provider !== recovery.provider ||
+      (thread.modelSelection.instanceId ?? thread.modelSelection.provider) !==
+        recovery.providerInstanceId ||
+      thread.modelSelection.model !== recovery.model ||
+      thread.interactionMode === "plan"
+    ) {
+      yield* cancel();
+      return;
+    }
+    const pending = yield* pendingInteractions.getPendingCountsByThreadId({ threadId: thread.id });
+    if (
+      pending.pendingApprovalCount > 0 ||
+      pending.pendingUserInputCount > 0 ||
+      thread.claudeCacheReview != null ||
+      (yield* hasLiveProviderTurn(thread.id))
+    ) {
+      yield* orchestrationEngine.dispatch({
+        type: "thread.usage-limit.defer",
+        commandId: serverCommandId("usage-limit-defer"),
+        threadId: thread.id,
+        recoveryId: recovery.id,
+        createdAt: new Date().toISOString(),
+      });
+      return;
+    }
+    // A due quota wait releases already accepted user work first. It must not
+    // manufacture another prompt ahead of that durable queue.
+    yield* drainQueuedTurnsForSession(thread.id);
+    if (yield* hasPendingQueuedTurnForSession(thread.id)) {
+      yield* orchestrationEngine.dispatch({
+        type: "thread.usage-limit.finish",
+        commandId: serverCommandId("usage-limit-user-queue"),
+        threadId: thread.id,
+        recoveryId: recovery.id,
+        turnId: recovery.turnId,
+        createdAt: new Date().toISOString(),
+      });
+      return;
+    }
+    const latest = (yield* orchestrationEngine.getReadModel()).threads.find(
+      (entry) => entry.id === thread.id,
+    );
+    if (latest?.usageLimitRecovery?.id !== recovery.id) return;
+    // Persist the pending start before native acceptance: an ACK can precede
+    // turn.started, and boot must still recognize that accepted recovery as orphaned.
+    const startSession = deriveTurnStartSession({
+      threadId: thread.id,
+      currentSession: thread.session,
+      providerName: recovery.provider as ProviderKind,
+      providerInstanceId: recovery.providerInstanceId,
+      requestedRuntimeMode: thread.runtimeMode,
+      requestedAt: event.payload.createdAt,
+    });
+    const settleOwnedStarting = (status: "error" | "interrupted", detail: string | null) =>
+      Effect.gen(function* () {
+        if (!startSession) return;
+        const current = yield* resolveThreadShell(thread.id);
+        if (
+          current?.session?.status !== "starting" ||
+          current.session.updatedAt !== startSession.updatedAt
+        )
+          return;
+        yield* setThreadSession({
+          threadId: thread.id,
+          expectedSession: { status: "starting", updatedAt: startSession.updatedAt },
+          session: {
+            ...current.session,
+            status,
+            activeTurnId: null,
+            lastError: detail,
+            updatedAt: new Date().toISOString(),
+          },
+          createdAt: new Date().toISOString(),
+        });
+      });
+    if (startSession)
+      yield* setThreadSession({
+        threadId: thread.id,
+        session: startSession,
+        createdAt: event.payload.createdAt,
+      });
+    const admitted = (yield* orchestrationEngine.getReadModel()).threads.find(
+      (entry) => entry.id === thread.id,
+    );
+    if (admitted?.usageLimitRecovery?.id !== recovery.id) {
+      if (startSession && thread.session)
+        yield* setThreadSession({
+          threadId: thread.id,
+          expectedSession: { status: startSession.status, updatedAt: startSession.updatedAt },
+          session: { ...thread.session, updatedAt: new Date().toISOString() },
+          createdAt: new Date().toISOString(),
+        }).pipe(Effect.ignore);
+      return;
+    }
+    const started = yield* dispatchTurnForThread({
+      threadId: thread.id,
+      sourceEventSequence: event.sequence,
+      messageId: MessageId.makeUnsafe(`usage-limit:${recovery.id}`),
+      messageText:
+        "Continue the remaining task after the provider usage limit. Check the conversation and current workspace state, verify whether pending operations already completed before repeating them, and preserve pending approvals and user decisions.",
+      runtimeMode: thread.runtimeMode,
+      interactionMode: thread.interactionMode,
+      dispatchMode: "queue",
+      turnKind: "goal-continuation",
+      usageLimitRecovery: recovery,
+      createdAt: event.payload.createdAt,
+    }).pipe(
+      Effect.catchCause((cause) =>
+        Effect.gen(function* () {
+          if (
+            !Cause.hasInterruptsOnly(cause) &&
+            classifyProviderAttemptOutcome(Exit.failCause(cause))._tag !== "safe_retry"
+          ) {
+            // Clearing the schedule does not reconcile or retry an ambiguous send.
+            // The delivery journal still quarantines uncertainty for manual review.
+            yield* settleOwnedStarting("error", Cause.pretty(cause));
+            yield* cancel();
+          }
+          return yield* Effect.failCause(cause);
+        }),
+      ),
+    );
+    if (!started) {
+      yield* settleOwnedStarting("interrupted", null);
+      yield* cancel();
+      return;
+    }
+    const cancelAcceptedTurn = Effect.gen(function* () {
+      yield* orchestrationEngine.dispatch({
+        type: "thread.usage-limit.cancel-turn",
+        commandId: serverCommandId("usage-limit-cancel-accepted"),
+        threadId: thread.id,
+        recoveryId: recovery.id,
+        sourceTurnId: recovery.turnId,
+        turnId: started.turnId,
+        createdAt: new Date().toISOString(),
+      });
+      yield* interruptProviderTurn({
+        controlRequestId: turnStartKeyForEvent(event),
+        preserveQueuedWork: true,
+        threadId: thread.id,
+        turnId: started.turnId,
+        createdAt: new Date().toISOString(),
+      });
+      const remainingRuntime = (yield* providerService.listSessions()).find(
+        (session) => session.threadId === thread.id,
+      );
+      if (!hasLiveProviderWork(remainingRuntime)) yield* settleOwnedStarting("interrupted", null);
+    });
+    const after = (yield* orchestrationEngine.getReadModel()).threads.find(
+      (entry) => entry.id === thread.id,
+    );
+    const currentSettings = yield* serverSettings.getSettings;
+    if (
+      after?.usageLimitRecovery?.id !== recovery.id ||
+      !currentSettings.autoResumeAfterUsageLimits ||
+      currentSettings.usageLimitRecoveryEpoch !== recovery.policyEpoch
+    ) {
+      yield* cancelAcceptedTurn;
+    } else {
+      yield* orchestrationEngine.dispatch({
+        type: "thread.usage-limit.started",
+        commandId: serverCommandId("usage-limit-started"),
+        threadId: thread.id,
+        recoveryId: recovery.id,
+        turnId: started.turnId,
+        createdAt: new Date().toISOString(),
+      });
+      // Stop can commit while the acceptance marker is waiting for serialized
+      // admission. Once bound, later Stops carry the exact accepted native ID.
+      const recorded = (yield* orchestrationEngine.getReadModel()).threads.find(
+        (entry) => entry.id === thread.id,
+      );
+      if (recorded?.usageLimitRecovery?.id !== recovery.id) yield* cancelAcceptedTurn;
+    }
+  });
+
   const processGoalContinuationRequested = (
     event: Extract<ProviderIntentEvent, { type: "thread.goal-continuation-requested" }>,
   ) =>
     withProviderSessionLease(
       event.payload.threadId,
       Effect.gen(function* () {
+        if (event.payload.usageLimitRecovery) {
+          yield* processUsageLimitContinuation(event);
+          return;
+        }
         // A soft-deleted thread reads as missing.
         const thread = yield* resolveThreadShell(event.payload.threadId);
         if (
@@ -6422,6 +6681,40 @@ const make = Effect.gen(function* () {
       } else {
         pendingQueuedDispatchBySessionThread.delete(sessionThreadId);
       }
+    }
+    if (
+      event.type === "turn.completed" &&
+      event.payload.state === "failed" &&
+      event.payload.usageLimit?.resetAt
+    ) {
+      const settings = yield* serverSettings.getSettings;
+      const current = (yield* orchestrationEngine.getReadModel()).threads.find(
+        (entry) => entry.id === event.threadId,
+      );
+      const source = current?.usageLimitRecoverySource;
+      const resetMs = Date.parse(event.payload.usageLimit.resetAt);
+      if (
+        settings.autoResumeAfterUsageLimits &&
+        source != null &&
+        source.turnId === event.turnId &&
+        source.policyEpoch === settings.usageLimitRecoveryEpoch &&
+        resetMs > Date.now() &&
+        current?.archivedAt == null &&
+        current?.settledAt == null &&
+        current?.parentThreadId == null &&
+        current?.goalPausedAt == null &&
+        current?.interactionMode !== "plan" &&
+        current?.usageLimitRecoveryCancelledTurnId !== event.turnId &&
+        !(
+          current?.usageLimitRecoveryCancelledTurnId == null &&
+          current?.usageLimitRecoveryCancelledAt != null &&
+          current.latestTurn != null &&
+          current.latestTurn.requestedAt <= current.usageLimitRecoveryCancelledAt
+        ) &&
+        (current?.usageLimitRecoveryLastResetAt == null ||
+          resetMs > Date.parse(current.usageLimitRecoveryLastResetAt))
+      )
+        return;
     }
     // Child subagent threads queue under their own id but share the parent's
     // provider session, and terminal runtime events carry the session-owning
@@ -8054,6 +8347,16 @@ const make = Effect.gen(function* () {
     detail: string,
   ) {
     const createdAt = new Date().toISOString();
+    if (event.payload.usageLimitRecovery) {
+      yield* orchestrationEngine.dispatch({
+        type: "thread.usage-limit.cancel",
+        commandId: serverCommandId("usage-limit-timeout"),
+        threadId: event.payload.threadId,
+        recoveryId: event.payload.usageLimitRecovery.id,
+        createdAt,
+      });
+    }
+
     const thread = yield* resolveThreadShell(event.payload.threadId);
     if (thread?.session?.status === "starting" && thread.session.activeTurnId === null) {
       yield* setThreadSessionError({
@@ -8114,6 +8417,15 @@ const make = Effect.gen(function* () {
               }
             }
           }
+          if (
+            thread &&
+            event.payload.session.status === "error" &&
+            thread.usageLimitRecovery == null &&
+            (yield* serverSettings.getSettings).autoResumeAfterUsageLimits &&
+            !(yield* hasLiveProviderTurn(thread.id))
+          ) {
+            yield* drainQueuedTurnsForSession(thread.id);
+          }
           return;
         }
         case "thread.created":
@@ -8163,7 +8475,8 @@ const make = Effect.gen(function* () {
             thread &&
             !isExpiredSidechat(thread) &&
             event.payload.goalStartBehavior !== "defer" &&
-            startsOrResumesGoal
+            startsOrResumesGoal &&
+            event.payload.usageLimitRecovery === undefined
           ) {
             yield* orchestrationEngine.dispatch({
               type: "thread.goal.continue",

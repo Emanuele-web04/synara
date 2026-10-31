@@ -113,6 +113,10 @@ function toThreadShell(thread: Thread): ThreadShell {
     lastKnownPr: thread.lastKnownPr ?? null,
     handoff: thread.handoff ?? null,
     ...(thread.isProjectImport ? { isProjectImport: true } : {}),
+    usageLimitRecovery: thread.usageLimitRecovery ?? null,
+    ...(thread.usageLimitRecoverySequence !== undefined
+      ? { usageLimitRecoverySequence: thread.usageLimitRecoverySequence }
+      : {}),
     claudeCacheReview: thread.claudeCacheReview ?? null,
     ...(thread.snoozeSequence !== undefined ? { snoozeSequence: thread.snoozeSequence } : {}),
     ...(thread.claudeCacheReviewSequence !== undefined

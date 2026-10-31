@@ -1,5 +1,5 @@
 import { Schema } from "effect";
-import { IsoDateTime, TrimmedString } from "./baseSchemas";
+import { IsoDateTime, NonNegativeInt, TrimmedString } from "./baseSchemas";
 import { DEFAULT_GIT_TEXT_GENERATION_MODEL } from "./model";
 import { ModelSelection, ProviderKind, RuntimeMode, ThreadEnvironmentMode } from "./orchestration";
 import { ProviderInstanceConfigMap, ProviderInstanceId } from "./providerInstance";
@@ -157,6 +157,9 @@ export const NewThreadDefaults = Schema.Struct({
 export type NewThreadDefaults = typeof NewThreadDefaults.Type;
 
 export const ServerSettings = Schema.Struct({
+  autoResumeAfterUsageLimits: Schema.Boolean.pipe(Schema.withDecodingDefault(() => false)),
+  // Server-owned epoch: disabling invalidates pending waits across a rapid re-enable/restart.
+  usageLimitRecoveryEpoch: NonNegativeInt.pipe(Schema.withDecodingDefault(() => 0)),
   enableAssistantStreaming: Schema.Boolean.pipe(Schema.withDecodingDefault(() => true)),
   enableProviderUpdateChecks: Schema.Boolean.pipe(Schema.withDecodingDefault(() => true)),
   keepAwakeMode: KeepAwakeMode.pipe(Schema.withDecodingDefault(() => DEFAULT_KEEP_AWAKE_MODE)),
@@ -225,6 +228,7 @@ const ProviderSettingsBasePatch = {
 };
 
 export const ServerSettingsPatch = Schema.Struct({
+  autoResumeAfterUsageLimits: Schema.optionalKey(Schema.Boolean),
   enableAssistantStreaming: Schema.optionalKey(Schema.Boolean),
   enableProviderUpdateChecks: Schema.optionalKey(Schema.Boolean),
   keepAwakeMode: Schema.optionalKey(KeepAwakeMode),
