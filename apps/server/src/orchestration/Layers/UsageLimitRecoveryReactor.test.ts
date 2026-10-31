@@ -92,6 +92,7 @@ const fixture = (
     const commands: OrchestrationCommand[] = [];
     let snapshotReads = 0;
     let blocked = false;
+    let deferImmediately = false;
     let failStream = false;
     let deliveryBlocked = false;
     let deliveryReadFailed = false;
@@ -137,6 +138,16 @@ const fixture = (
               detail: "Pending user decision still owns the task.",
             }),
           );
+        }
+        const current = model.threads[0]?.usageLimitRecovery;
+        if (
+          command.type === "thread.usage-limit.resume" &&
+          deferImmediately &&
+          current?.id === command.recoveryId
+        ) {
+          yield* updateRecovery({ ...current, state: "resuming" });
+          yield* updateRecovery({ ...current, state: "waiting" });
+          return { sequence: model.snapshotSequence };
         }
         if (
           (command.type === "thread.usage-limit.resume" ||
@@ -187,6 +198,9 @@ const fixture = (
       },
       setBlocked: (value: boolean) => {
         blocked = value;
+      },
+      setDeferImmediately: (value: boolean) => {
+        deferImmediately = value;
       },
       failStream: () => {
         failStream = true;
@@ -256,6 +270,39 @@ it.effect("rechecks wall time after suspension and retries temporary admission b
       yield* drain;
       assert.strictEqual(state.commands.length, 2);
       assert.notStrictEqual(state.commands[0]?.commandId, state.commands[1]?.commandId);
+      assert.isNull(state.read().usageLimitRecovery);
+    }).pipe(Effect.provide(state.layer), Effect.scoped);
+  }),
+);
+
+it.effect("a deferred episode waits five seconds despite immediate metadata wakeups", () =>
+  Effect.gen(function* () {
+    const wait = recovery(new Date(Date.now() - 1_000).toISOString());
+    const state = yield* fixture(thread(wait));
+    state.setDeferImmediately(true);
+    yield* Effect.gen(function* () {
+      yield* (yield* UsageLimitRecoveryReactor).start();
+      yield* drain;
+      assert.strictEqual(state.commands.length, 1);
+      assert.strictEqual(state.read().usageLimitRecovery?.state, "waiting");
+      yield* TestClock.adjust("4999 millis");
+      yield* state.updateRecovery({ ...wait, state: "waiting" });
+      yield* drain;
+      assert.strictEqual(state.commands.length, 1);
+      yield* TestClock.adjust("1 millis");
+      yield* drain;
+      assert.strictEqual(state.commands.length, 2);
+      assert.notStrictEqual(state.commands[0]?.commandId, state.commands[1]?.commandId);
+      state.setDeferImmediately(false);
+      yield* state.updateRecovery({ ...wait, id: "replacement-episode" });
+      yield* drain;
+      assert.strictEqual(state.commands.length, 3);
+      assert.strictEqual(
+        state.commands[2]?.type === "thread.usage-limit.resume"
+          ? state.commands[2].recoveryId
+          : undefined,
+        "replacement-episode",
+      );
       assert.isNull(state.read().usageLimitRecovery);
     }).pipe(Effect.provide(state.layer), Effect.scoped);
   }),

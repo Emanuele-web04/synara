@@ -3392,6 +3392,7 @@ const make = Effect.gen(function* () {
     if (!thread) {
       return;
     }
+    const executingIntentSequence = input.completionEventSequence ?? input.sourceEventSequence;
     let usageLimitAdmissionSequence: number | undefined;
     if ((input.dispatchMode ?? "queue") !== "steer" && thread.parentThreadId == null) {
       const settings = yield* serverSettings.getSettings;
@@ -3402,16 +3403,16 @@ const make = Effect.gen(function* () {
       )
         return;
       if (settings.autoResumeAfterUsageLimits) {
-        const admission = yield* orchestrationEngine.dispatch({
+        yield* orchestrationEngine.dispatch({
           type: "thread.usage-limit.admit",
           ...(input.usageLimitRecovery ? { recoveryId: input.usageLimitRecovery.id } : {}),
           commandId: serverCommandId("usage-limit-send-admission"),
           threadId: input.threadId,
-          admissionSequence: input.completionEventSequence ?? input.sourceEventSequence,
+          admissionSequence: executingIntentSequence,
           policyEpoch: input.usageLimitRecovery?.policyEpoch ?? settings.usageLimitRecoveryEpoch,
           createdAt: new Date().toISOString(),
         });
-        usageLimitAdmissionSequence = admission.sequence;
+        usageLimitAdmissionSequence = executingIntentSequence;
         if (input.usageLimitRecovery) {
           const admitted = yield* resolveThreadShell(input.threadId);
           const admissionSettings = yield* serverSettings.getSettings;
@@ -3421,8 +3422,7 @@ const make = Effect.gen(function* () {
             admitted?.usageLimitRecovery?.id !== input.usageLimitRecovery.id ||
             admitted.usageLimitRecovery.state !== "resuming" ||
             admitted.usageLimitRecoverySource?.bindingKey !== "admission" ||
-            admitted.usageLimitRecoverySource.admissionSequence !==
-              (input.completionEventSequence ?? input.sourceEventSequence)
+            admitted.usageLimitRecoverySource.admissionSequence !== executingIntentSequence
           )
             return;
         }
@@ -6360,7 +6360,7 @@ const make = Effect.gen(function* () {
       });
     const workingDirectory = yield* resolveProjectedThreadWorkspaceCwd(thread);
     const identityProject = yield* resolveThreadWorkspaceProject(thread);
-    const binding = yield* providerUsageRecoveryBindingKey({
+    const bindingResult = yield* providerUsageRecoveryBindingKey({
       provider: recovery.provider,
       instanceId: recovery.providerInstanceId,
       ...(workingDirectory ? { workingDirectory } : {}),
@@ -6369,14 +6369,13 @@ const make = Effect.gen(function* () {
       Effect.provideService(ServerConfig, serverConfig),
       Effect.provideService(ServerSettingsService, serverSettings),
       Effect.timeoutOption("8 seconds"),
-      Effect.map(Option.getOrNull),
-      Effect.catch(() => Effect.succeed(null)),
+      Effect.catch(() => Effect.succeed(Option.none())),
     );
     const settings = yield* serverSettings.getSettings;
     if (
       !settings.autoResumeAfterUsageLimits ||
       settings.usageLimitRecoveryEpoch !== recovery.policyEpoch ||
-      binding !== recovery.bindingKey ||
+      (Option.isSome(bindingResult) && bindingResult.value !== recovery.bindingKey) ||
       thread.archivedAt != null ||
       thread.settledAt != null ||
       thread.modelSelection.provider !== recovery.provider ||
@@ -6386,6 +6385,18 @@ const make = Effect.gen(function* () {
       thread.interactionMode === "plan"
     ) {
       yield* cancel();
+      return;
+    }
+    if (Option.isNone(bindingResult)) {
+      // A bounded read failure cannot revoke an already verified account binding.
+      // Defer by episode id so Stop or a newer wait cannot be resurrected here.
+      yield* orchestrationEngine.dispatch({
+        type: "thread.usage-limit.defer",
+        commandId: serverCommandId("usage-limit-binding-retry"),
+        threadId: thread.id,
+        recoveryId: recovery.id,
+        createdAt: new Date().toISOString(),
+      });
       return;
     }
     const pending = yield* pendingInteractions.getPendingCountsByThreadId({ threadId: thread.id });

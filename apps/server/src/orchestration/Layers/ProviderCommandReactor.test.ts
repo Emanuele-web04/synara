@@ -35,6 +35,7 @@ import {
   PROVIDER_SEND_TURN_MAX_INPUT_CHARS,
   ProjectId,
   RuntimeItemId,
+  ServerSettingsError,
   ThreadId,
   TurnId,
 } from "@synara/contracts";
@@ -1705,6 +1706,101 @@ describe("ProviderCommandReactor", () => {
       expect(harness.sendTurn).toHaveBeenCalledTimes(1);
     });
 
+    it("a Stop after the human intent but before admission interrupts its late accepted native turn", async () => {
+      vi.spyOn(providerUsageRecovery, "providerUsageRecoveryBindingKey").mockImplementation(() =>
+        Effect.succeed(bindingKey),
+      );
+      const harness = await createHarness({
+        ingestRuntimeEvents: true,
+        serverSettings: { autoResumeAfterUsageLimits: true },
+      });
+      await seedCompletedHumanTurn(harness);
+      const dispatch = harness.engine.dispatch;
+      let stopSequence: number | undefined;
+      let executingSequence: number | undefined;
+      harness.interceptEngineDispatch((command) => {
+        if (command.type !== "thread.usage-limit.admit" || stopSequence !== undefined)
+          return undefined;
+        executingSequence = command.admissionSequence;
+        return Effect.gen(function* () {
+          const stopped = yield* dispatch({
+            type: "thread.turn.interrupt",
+            commandId: CommandId.makeUnsafe("human-stop-before-source-admit"),
+            threadId,
+            requestedBy: "user",
+            createdAt: new Date().toISOString(),
+          });
+          stopSequence = stopped.sequence;
+          // The Stop is durable before the later source-admission event.
+          return yield* dispatch(command);
+        });
+      });
+      let releaseSend!: (value: { threadId: ThreadId; turnId: TurnId }) => void;
+      const gate = new Promise<{ threadId: ThreadId; turnId: TurnId }>((resolve) => {
+        releaseSend = resolve;
+      });
+      harness.sendTurn.mockImplementationOnce(() => Effect.promise(() => gate));
+      await dispatchHarnessUserTurn(harness, {
+        messageId: "human-stop-before-admission",
+        text: "Perform the requested work",
+        createdAt: new Date().toISOString(),
+      });
+      await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+      expect(stopSequence).toBeGreaterThan(executingSequence!);
+      expect((await readHarnessThread(harness))?.usageLimitRecoverySource?.admissionSequence).toBe(
+        executingSequence,
+      );
+      const actual = asTurnId("human-late-accepted-after-pre-admission-stop");
+      harness.setRuntimeSessionTurnState({
+        threadId,
+        status: "running",
+        runtimeMode: "approval-required",
+        activeTurnId: actual,
+      });
+      releaseSend({ threadId, turnId: actual });
+      const acceptedControlId = "command:cmd-human-stop-before-admission";
+      await waitFor(() =>
+        harness.interruptTurn.mock.calls.some(
+          ([input]) => input.controlRequestId === acceptedControlId,
+        ),
+      );
+      await harness.drain();
+      expect(
+        harness.interruptTurn.mock.calls.find(
+          ([input]) => input.controlRequestId === acceptedControlId,
+        )?.[0],
+      ).toMatchObject({ threadId, turnId: actual });
+      const base = {
+        provider: "codex" as const,
+        providerInstanceId: "codex",
+        threadId,
+        turnId: actual,
+        createdAt: new Date().toISOString(),
+        providerRefs: {},
+      };
+      await harness.emitRuntimeEvent({
+        ...base,
+        type: "turn.started",
+        eventId: asEventId("pre-admit-stop-late-native-start"),
+        payload: {},
+      });
+      await waitFor(async () => (await readHarnessThread(harness))?.latestTurn?.turnId === actual);
+      harness.setRuntimeSessionTurnState({ threadId, status: "ready" });
+      await harness.emitRuntimeEvent({
+        ...base,
+        type: "turn.completed",
+        eventId: asEventId("pre-admit-stop-late-native-limit"),
+        payload: {
+          state: "failed",
+          errorMessage: "Usage limit reached",
+          usageLimit: { resetAt: new Date(Date.now() + 60_000).toISOString() },
+        },
+      });
+      await waitFor(async () => (await readHarnessThread(harness))?.latestTurn?.state === "error");
+      expect((await readHarnessThread(harness))?.usageLimitRecovery ?? null).toBeNull();
+      expect(harness.sendTurn).toHaveBeenCalledTimes(1);
+    });
+
     it("ignores an old targeted Stop while a newer human send awaits its ACK", async () => {
       vi.spyOn(providerUsageRecovery, "providerUsageRecoveryBindingKey").mockImplementation(() =>
         Effect.succeed(bindingKey),
@@ -2128,7 +2224,7 @@ describe("ProviderCommandReactor", () => {
       expect((await readHarnessThread(harness))?.usageLimitRecoveryCancelledTurnId).toBe(actual);
     });
 
-    it.each(["disabled setting", "changed provider binding"] as const)(
+    it.each(["disabled setting", "changed provider binding", "unknown provider binding"] as const)(
       "%s cancels before provider execution",
       async (reason) => {
         const identity = vi
@@ -2142,13 +2238,107 @@ describe("ProviderCommandReactor", () => {
           await Effect.runPromise(
             harness.serverSettings.updateSettings({ autoResumeAfterUsageLimits: false }),
           );
-        else identity.mockImplementation(() => Effect.succeed("replacement-provider-account"));
+        else
+          identity.mockImplementation(() =>
+            Effect.succeed(
+              reason === "unknown provider binding" ? null : "replacement-provider-account",
+            ),
+          );
         await requestResume(harness, wait.id);
         await waitFor(async () => (await readHarnessThread(harness))?.usageLimitRecovery == null);
         await harness.drain();
         expect(harness.sendTurn).not.toHaveBeenCalled();
       },
     );
+
+    it.each([false, true])(
+      "a bounded account read timeout preserves the verified episode unless Stop won (cancel=%s)",
+      async (cancelWhileReading) => {
+        const identity = vi
+          .spyOn(providerUsageRecovery, "providerUsageRecoveryBindingKey")
+          .mockImplementationOnce(() => Effect.never)
+          .mockImplementation(() => Effect.succeed(bindingKey));
+        const harness = await createHarness({
+          serverSettings: { autoResumeAfterUsageLimits: true },
+        });
+        const wait = await seedLimitWait(harness);
+        await requestResume(harness, wait.id);
+        await waitFor(() => identity.mock.calls.length === 1);
+        expect((await readHarnessThread(harness))?.usageLimitRecovery).toMatchObject({
+          id: wait.id,
+          state: "resuming",
+        });
+        if (cancelWhileReading)
+          await Effect.runPromise(
+            harness.engine.dispatch({
+              type: "thread.turn.interrupt",
+              commandId: CommandId.makeUnsafe("stop-during-binding-timeout"),
+              threadId,
+              usageLimitRecoveryId: wait.id,
+              requestedBy: "user",
+              createdAt: new Date().toISOString(),
+            }),
+          );
+        await harness.drain();
+        expect(harness.sendTurn).not.toHaveBeenCalled();
+        expect(harness.startSession).not.toHaveBeenCalled();
+        const afterRead = await readHarnessThread(harness);
+        if (cancelWhileReading) {
+          expect(afterRead?.usageLimitRecovery ?? null).toBeNull();
+          expect(afterRead?.usageLimitRecoverySource ?? null).toBeNull();
+          return;
+        }
+        expect(afterRead?.usageLimitRecovery).toMatchObject({
+          id: wait.id,
+          state: "waiting",
+          bindingKey,
+        });
+        expect(afterRead?.usageLimitRecovery?.resumedTurnId).toBeUndefined();
+        expect(afterRead?.usageLimitRecoverySource?.bindingKey).toBe(bindingKey);
+        await requestResume(harness, wait.id);
+        await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+        await harness.drain();
+        expect(identity).toHaveBeenCalledTimes(2);
+        expect(harness.sendTurn).toHaveBeenCalledTimes(1);
+        expect((await readHarnessThread(harness))?.usageLimitRecovery).toMatchObject({
+          id: wait.id,
+          state: "resuming",
+          resumedTurnId: "turn-1",
+        });
+      },
+      15_000,
+    );
+
+    it("defers a surfaced account-read failure without losing the verified binding", async () => {
+      vi.spyOn(providerUsageRecovery, "providerUsageRecoveryBindingKey").mockImplementationOnce(
+        () =>
+          Effect.fail(
+            new ServerSettingsError({
+              settingsPath: "test-settings.json",
+              detail: "The settings read is temporarily unavailable.",
+            }),
+          ),
+      );
+      const harness = await createHarness({
+        serverSettings: { autoResumeAfterUsageLimits: true },
+      });
+      const wait = await seedLimitWait(harness);
+      await requestResume(harness, wait.id);
+      await waitFor(
+        async () => (await readHarnessThread(harness))?.usageLimitRecovery?.state === "waiting",
+      );
+      await harness.drain();
+      expect((await readHarnessThread(harness))?.usageLimitRecovery).toMatchObject({
+        id: wait.id,
+        state: "waiting",
+        bindingKey,
+      });
+      expect(harness.sendTurn).not.toHaveBeenCalled();
+      expect(harness.startSession).not.toHaveBeenCalled();
+      expect(
+        await Effect.runPromise(harness.reactor.listBlockingDeliveries({ threadId, limit: 1 })),
+      ).toEqual([]);
+    });
 
     it("clears an ordinary-task wait when Claude cold-cache preflight holds the continuation", async () => {
       vi.spyOn(providerUsageRecovery, "providerUsageRecoveryBindingKey").mockImplementation(() =>

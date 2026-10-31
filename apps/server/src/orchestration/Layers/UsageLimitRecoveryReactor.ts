@@ -8,7 +8,7 @@ import {
   type OrchestrationThreadShell,
   type ThreadId,
 } from "@synara/contracts";
-import { Cause, Duration, Effect, Layer, Option, Queue, Schedule, Stream } from "effect";
+import { Cause, Clock, Duration, Effect, Layer, Option, Queue, Schedule, Stream } from "effect";
 
 import { ProviderCommandReactor } from "../Services/ProviderCommandReactor.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
@@ -43,6 +43,7 @@ export const makeUsageLimitRecoveryReactorLive = () =>
       const runSession = Effect.scoped(
         Effect.gen(function* () {
           const recoveries = new Map<ThreadId, Recovery>();
+          const retryNotBefore = new Map<string, number>();
           const cancellations = new Map<string, { threadId: ThreadId; recovery: Recovery }>();
           const wakeups = yield* Queue.sliding<void>(1);
           // Attach both streams before reading state; settings toggles and new waits
@@ -61,10 +62,10 @@ export const makeUsageLimitRecoveryReactorLive = () =>
             }
           }
 
-          const cancellationKey = (threadId: ThreadId, recoveryId: string) =>
+          const recoveryKey = (threadId: ThreadId, recoveryId: string) =>
             JSON.stringify([threadId, recoveryId]);
           const cancelRecovery = (threadId: ThreadId, recovery: Recovery) =>
-            cancellations.set(cancellationKey(threadId, recovery.id), { threadId, recovery });
+            cancellations.set(recoveryKey(threadId, recovery.id), { threadId, recovery });
           const consumeEvents = events.pipe(
             Stream.filter((event) => event.sequence > snapshot.snapshotSequence),
             Stream.filter(changesRecovery),
@@ -73,8 +74,14 @@ export const makeUsageLimitRecoveryReactorLive = () =>
                 event.type === "thread.meta-updated" &&
                 event.payload.usageLimitRecovery != null
               ) {
+                const previous = recoveries.get(event.payload.threadId);
+                if (previous && previous.id !== event.payload.usageLimitRecovery.id)
+                  retryNotBefore.delete(recoveryKey(event.payload.threadId, previous.id));
                 recoveries.set(event.payload.threadId, event.payload.usageLimitRecovery);
               } else if ("threadId" in event.payload) {
+                const previous = recoveries.get(event.payload.threadId);
+                if (previous)
+                  retryNotBefore.delete(recoveryKey(event.payload.threadId, previous.id));
                 recoveries.delete(event.payload.threadId);
               }
               return Queue.offer(wakeups, undefined).pipe(Effect.asVoid);
@@ -135,6 +142,7 @@ export const makeUsageLimitRecoveryReactorLive = () =>
                 );
               if (cancelled) {
                 cancellations.delete(id);
+                retryNotBefore.delete(id);
                 if (recoveries.get(threadId)?.id === recovery.id) recoveries.delete(threadId);
               } else {
                 delayMs = Math.min(delayMs, RETRY_INTERVAL_MS);
@@ -143,7 +151,7 @@ export const makeUsageLimitRecoveryReactorLive = () =>
             if (!settings.autoResumeAfterUsageLimits) return delayMs;
             for (const [threadId, recovery] of Array.from(recoveries)) {
               if (
-                cancellations.has(cancellationKey(threadId, recovery.id)) ||
+                cancellations.has(recoveryKey(threadId, recovery.id)) ||
                 recovery.state === "resuming"
               ) {
                 continue;
@@ -152,6 +160,12 @@ export const makeUsageLimitRecoveryReactorLive = () =>
               if (!Number.isFinite(dueInMs)) continue;
               if (dueInMs > 0) {
                 delayMs = Math.min(delayMs, dueInMs);
+                continue;
+              }
+              const key = recoveryKey(threadId, recovery.id);
+              const retryInMs = (retryNotBefore.get(key) ?? 0) - (yield* Clock.currentTimeMillis);
+              if (retryInMs > 0) {
+                delayMs = Math.min(delayMs, retryInMs);
                 continue;
               }
               if (Option.isSome(providerCommands)) {
@@ -166,6 +180,8 @@ export const makeUsageLimitRecoveryReactorLive = () =>
                   continue;
                 }
               }
+              // Record before dispatch: an immediate defer event may wake this loop.
+              retryNotBefore.set(key, (yield* Clock.currentTimeMillis) + RETRY_INTERVAL_MS);
               yield* engine
                 .dispatch({
                   type: "thread.usage-limit.resume",
