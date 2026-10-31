@@ -60,7 +60,7 @@ async function dispatchQueuedComposerTurnOnce(
   }
 
   const thread = getThreadFromState(useStore.getState(), input.threadId);
-  if (!thread || thread.claudeCacheReview != null) {
+  if (!thread || thread.claudeCacheReview != null || thread.usageLimitRecovery != null) {
     return false;
   }
 
@@ -193,6 +193,11 @@ async function dispatchQueuedComposerTurnOnce(
       createdAt,
     });
     const stagedTurnAttachments = await turnAttachmentsPromise;
+    if (getThreadFromState(useStore.getState(), input.threadId)?.usageLimitRecovery) {
+      await stagedTurnAttachments.cleanup();
+      clearPendingTurnDispatch(input.threadId);
+      return false;
+    }
     await stagedTurnAttachments.runWithDispatch((turnAttachments) =>
       api.orchestration
         .dispatchCommand({

@@ -20,7 +20,12 @@ import {
   toLegacyProvider,
   type ThreadActivityAccumulator,
 } from "./storeNormalization";
-import { makeActivity, makeReadModelThread, makeThread } from "./storeTestFixtures";
+import {
+  makeActivity,
+  makeReadModelThread,
+  makeThread,
+  makeUsageLimitRecovery,
+} from "./storeTestFixtures";
 import type { Thread } from "./types";
 import { deriveActiveTaskListState, deriveOutstandingBackgroundTaskIds } from "./session-logic";
 import { derivePendingUserInputs } from "./pendingInteractionDerivation";
@@ -710,5 +715,41 @@ describe("session approval mode", () => {
     const updated = normalizeThreadSession({ ...session, runtimeMode: "full-access" }, normalized);
     expect(updated?.runtimeMode).toBe("full-access");
     expect(updated).not.toBe(normalized);
+  });
+});
+
+describe("host usage-limit recovery hydration", () => {
+  it("hydrates and clears waits through detail and shell without needless identity changes", () => {
+    const recovery = makeUsageLimitRecovery();
+    const incoming = makeReadModelThread({ usageLimitRecovery: recovery });
+    const initial = normalizeThreadFromReadModel(incoming, undefined, 10);
+    const replay = normalizeThreadFromReadModel(structuredClone(incoming), initial, 10);
+    expect(replay).toBe(initial);
+    expect(replay.usageLimitRecovery).toBe(initial.usageLimitRecovery);
+    const shell = normalizeThreadShellSnapshot(incoming, initial, 10).shell;
+    expect(shell.usageLimitRecovery).toBe(initial.usageLimitRecovery);
+    expect(threadShellsEqual(shell, { ...shell, usageLimitRecovery: null })).toBe(false);
+    const cleared = normalizeThreadFromReadModel(
+      { ...incoming, usageLimitRecovery: null },
+      initial,
+      11,
+    );
+    expect(cleared.usageLimitRecovery).toBeNull();
+    expect(
+      normalizeThreadShellSnapshot({ ...incoming, usageLimitRecovery: null }, initial, 11).shell
+        .usageLimitRecovery,
+    ).toBeNull();
+  });
+
+  it("does not resurrect a cancelled wait from stale detail or sidebar snapshots", () => {
+    const recovery = makeUsageLimitRecovery();
+    const previous = makeThread({ usageLimitRecovery: null, usageLimitRecoverySequence: 15 });
+    const stale = makeReadModelThread({ usageLimitRecovery: recovery });
+    expect(
+      mergeReadModelThreadDetailWithLiveHotPath(stale, previous, 14).usageLimitRecovery,
+    ).toBeNull();
+    expect(normalizeThreadFromReadModel(stale, previous, 14).usageLimitRecovery).toBeNull();
+    expect(normalizeThreadShellSnapshot(stale, previous, 14).shell.usageLimitRecovery).toBeNull();
+    expect(normalizeThreadFromReadModel(stale, previous, 16).usageLimitRecovery).toEqual(recovery);
   });
 });

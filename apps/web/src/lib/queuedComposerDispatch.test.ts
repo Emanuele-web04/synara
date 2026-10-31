@@ -5,7 +5,7 @@ import { useComposerDraftStore, type QueuedComposerTurn } from "../composerDraft
 import { makeImage, resetComposerDraftStore } from "../composerDraftStoreTestFixtures";
 import { useStore } from "../store";
 import { initialState } from "../storeState";
-import { makeState, makeThread } from "../storeTestFixtures";
+import { makeState, makeThread, makeUsageLimitRecovery } from "../storeTestFixtures";
 import { dispatchQueuedComposerTurnHeadless } from "./queuedComposerDispatch";
 import * as composerSend from "./composerSend";
 
@@ -274,6 +274,69 @@ describe("dispatchQueuedComposerTurnHeadless", () => {
           attachments: [],
         }),
       }),
+    );
+  });
+
+  it.each(["chat", "plan-follow-up"] as const)(
+    "holds %s before uploads or settings changes while the host owns a recovery",
+    async (kind) => {
+      const stageUpload = vi.spyOn(composerSend, "stageUploadComposerAttachments");
+      useStore.setState(makeState(makeThread({ usageLimitRecovery: makeUsageLimitRecovery() })));
+      expect(
+        await dispatchQueuedComposerTurnHeadless({
+          threadId: THREAD_ID,
+          queuedTurn: kind === "chat" ? makeQueuedChatTurn() : makeQueuedPlanFollowUp(),
+          dispatchMode: "queue",
+          assistantDeliveryMode: "streaming",
+        }),
+      ).toBe(false);
+      expect(stageUpload).not.toHaveBeenCalled();
+      expect(nativeApiMocks.dispatchCommand).not.toHaveBeenCalled();
+    },
+  );
+
+  it("keeps the queued message and cleans staged attachments if a wait arrives during upload", async () => {
+    type Staged = Awaited<ReturnType<typeof composerSend.stageUploadComposerAttachments>>;
+    let finishStaging: ((value: Staged) => void) | undefined;
+    const upload = new Promise<Staged>((resolve) => {
+      finishStaging = resolve;
+    });
+    const stageUpload = vi
+      .spyOn(composerSend, "stageUploadComposerAttachments")
+      .mockReturnValue(upload);
+    const queuedTurn = makeQueuedChatTurn();
+    useStore.setState(makeState(makeThread({ modelSelection: queuedTurn.modelSelection })));
+    const result = dispatchQueuedComposerTurnHeadless({
+      threadId: THREAD_ID,
+      queuedTurn,
+      dispatchMode: "queue",
+      assistantDeliveryMode: "streaming",
+    });
+    await vi.waitFor(() => expect(stageUpload).toHaveBeenCalledOnce());
+    useStore.setState(
+      makeState(
+        makeThread({
+          modelSelection: queuedTurn.modelSelection,
+          usageLimitRecovery: makeUsageLimitRecovery(),
+        }),
+      ),
+    );
+    const cleanup = vi.fn(async () => undefined);
+    const runWithDispatch = vi.fn();
+    finishStaging?.({
+      attachments: [],
+      cleanup,
+      commit: vi.fn(),
+      runWithDispatch: async (dispatch) => {
+        runWithDispatch();
+        return dispatch([]);
+      },
+    });
+    expect(await result).toBe(false);
+    expect(cleanup).toHaveBeenCalledOnce();
+    expect(runWithDispatch).not.toHaveBeenCalled();
+    expect(nativeApiMocks.dispatchCommand).not.toHaveBeenCalledWith(
+      expect.objectContaining({ type: "thread.turn.start" }),
     );
   });
 

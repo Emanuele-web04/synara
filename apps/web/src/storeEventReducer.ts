@@ -1072,6 +1072,10 @@ function applyOrchestrationEvent(
               event.payload.isPinned === (thread.isPinned ?? false)) &&
             (event.payload.settledAt === undefined ||
               (event.payload.settledAt ?? null) === (thread.settledAt ?? null)) &&
+            (event.payload.usageLimitRecovery === undefined ||
+              event.sequence < (thread.usageLimitRecoverySequence ?? 0) ||
+              (deepEqualJson(event.payload.usageLimitRecovery, thread.usageLimitRecovery ?? null) &&
+                thread.usageLimitRecoverySequence === event.sequence)) &&
             (event.payload.snoozedUntil === undefined ||
               (event.payload.snoozedUntil ?? null) === (thread.snoozedUntil ?? null)) &&
             (event.payload.snoozeReminderAt === undefined ||
@@ -1121,6 +1125,18 @@ function applyOrchestrationEvent(
             ...(event.payload.isPinned !== undefined ? { isPinned: event.payload.isPinned } : {}),
             ...(event.payload.settledAt !== undefined
               ? { settledAt: event.payload.settledAt }
+              : {}),
+            ...(event.payload.usageLimitRecovery !== undefined &&
+            event.sequence >= (thread.usageLimitRecoverySequence ?? 0)
+              ? {
+                  usageLimitRecovery: deepEqualJson(
+                    event.payload.usageLimitRecovery,
+                    thread.usageLimitRecovery ?? null,
+                  )
+                    ? (thread.usageLimitRecovery ?? null)
+                    : event.payload.usageLimitRecovery,
+                  usageLimitRecoverySequence: event.sequence,
+                }
               : {}),
             ...(event.payload.snoozedUntil !== undefined
               ? { snoozedUntil: event.payload.snoozedUntil }

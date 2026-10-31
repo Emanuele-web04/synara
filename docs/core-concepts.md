@@ -279,6 +279,10 @@ the server rather than queued here, and the server still sends it after a Stop.
 Turn off **Settings → General → Move sent messages to top** to keep new messages at the bottom
 of the conversation and follow replies as they stream.
 
+**Settings → Providers → Resume after usage limits** is off by default. When enabled, a supported provider's definitive failed turn with a known future reset can schedule a server-owned continuation in the same task. The failed turn remains in the transcript. The task shows its reset time, and **Stop** cancels that recovery episode. The owning computer must be running; desktop, web, and iOS clients can disconnect. A restarted host restores pending waits. It cannot wake a sleeping or powered-off computer.
+
+The continuation checks the saved conversation and workspace before repeating operations. Already accepted user messages take priority. Manual sends, Stop, pause, archive/delete, goal changes, model/account/route changes, or disabling the setting cancel the pending recovery; re-enabling does not restore cancelled waits. Unknown resets, an uncertain delivery, and providers still performing their own retry remain under existing manual or native recovery controls. Unsent composer drafts stay on their client.
+
 For work that should continue across several turns, set a deliberate
 [thread goal](https://www.trysynara.com/docs/features/thread-goals). A goal can continue after a
 clean turn, but queued user work, approvals, questions, interruptions, failures, and pause rules

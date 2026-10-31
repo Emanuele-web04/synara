@@ -61,6 +61,8 @@ import {
 import { copyAndAttributeStudioGeneratedImage } from "../../studioGeneratedImages.ts";
 import { stageAssistantImageAttachments } from "../../assistantImageAttachments.ts";
 import { ServerConfig } from "../../config.ts";
+import { ServerSettingsService } from "../../serverSettings.ts";
+import { providerUsageRecoveryBindingKey } from "../../providerUsage/index.ts";
 import { ManagedAttachmentRepository } from "../../persistence/Services/ManagedAttachments.ts";
 import { ManagedAttachmentRepositoryLive } from "../../persistence/Layers/ManagedAttachments.ts";
 import { GitCore } from "../../git/Services/GitCore.ts";
@@ -836,6 +838,8 @@ const make = Effect.gen(function* () {
   const providerService = yield* ProviderService;
   const computerService = yield* Effect.serviceOption(ComputerService);
   const deviceService = yield* Effect.serviceOption(DeviceService);
+  const recoverySettings = yield* Effect.serviceOption(ServerSettingsService);
+  const recoveryLiveAfter = new Date().toISOString();
   const projectionTurnRepository = yield* ProjectionTurnRepository;
   const projectionThreadActivityRepository = yield* ProjectionThreadActivityRepository;
   const projectionThreadSessionRepository = yield* ProjectionThreadSessionRepository;
@@ -3050,8 +3054,46 @@ const make = Effect.gen(function* () {
             );
           }
 
+          let terminalRecovery: import("@synara/contracts").UsageLimitRecovery | undefined;
+          if (
+            event.type === "turn.completed" &&
+            event.payload.state === "failed" &&
+            event.payload.usageLimit?.resetAt &&
+            eventTurnId &&
+            Option.isSome(recoverySettings)
+          ) {
+            const settings = yield* recoverySettings.value.getSettings;
+            const current = (yield* orchestrationEngine.getReadModel()).threads.find(
+              (entry) => entry.id === thread.id,
+            );
+            const source = current?.usageLimitRecoverySource;
+            if (
+              settings.autoResumeAfterUsageLimits &&
+              source?.turnId === eventTurnId &&
+              source.policyEpoch === settings.usageLimitRecoveryEpoch &&
+              source.bindingKey !== "pending"
+            ) {
+              terminalRecovery = {
+                id: `usage-limit:${event.eventId}`,
+                turnId: eventTurnId,
+                resetAt: event.payload.usageLimit.resetAt,
+                autoResume: true,
+                provider: event.provider,
+                providerInstanceId:
+                  event.providerInstanceId ??
+                  thread.session?.providerInstanceId ??
+                  readModelSelectionProviderInstanceId(thread.modelSelection) ??
+                  event.provider,
+                model: current?.modelSelection.model ?? thread.modelSelection.model,
+                bindingKey: source.bindingKey,
+                policyEpoch: source.policyEpoch,
+              };
+            }
+          }
+
           yield* orchestrationEngine.dispatch({
             type: "thread.session.set",
+            ...(terminalRecovery ? { usageLimitRecovery: terminalRecovery } : {}),
             commandId: providerCommandId(event, "thread-session-set", thread.id),
             threadId: thread.id,
             session: {
@@ -3069,6 +3111,99 @@ const make = Effect.gen(function* () {
             },
             createdAt: now,
           });
+
+          // Freeze the source identity before observing any later refusal; replay can
+          // recover an existing freeze, but cannot arm historical failures from usage UI data.
+          if (event.type === "turn.started" && eventTurnId && Option.isSome(recoverySettings)) {
+            const settings = yield* recoverySettings.value.getSettings;
+            const frozenSource = (yield* orchestrationEngine.getReadModel()).threads.find(
+              (entry) => entry.id === thread.id,
+            )?.usageLimitRecoverySource;
+            if (
+              settings.autoResumeAfterUsageLimits &&
+              event.createdAt >= recoveryLiveAfter &&
+              frozenSource?.turnId !== eventTurnId
+            ) {
+              yield* orchestrationEngine.dispatch({
+                type: "thread.usage-limit.source",
+                commandId: providerCommandId(event, "usage-limit-source-pending", thread.id),
+                threadId: thread.id,
+                source: {
+                  turnId: eventTurnId,
+                  bindingKey: "pending",
+                  policyEpoch: settings.usageLimitRecoveryEpoch,
+                },
+                createdAt: now,
+              });
+              const instanceId =
+                event.providerInstanceId ??
+                thread.session?.providerInstanceId ??
+                readModelSelectionProviderInstanceId(thread.modelSelection) ??
+                event.provider;
+              const identityProject = yield* getProjectShell(thread);
+              const workingDirectory = identityProject
+                ? resolveThreadWorkspaceCwd({ thread, projects: [identityProject] })
+                : undefined;
+              const bindingKey = yield* providerUsageRecoveryBindingKey({
+                provider: event.provider,
+                instanceId,
+                ...(workingDirectory ? { workingDirectory } : {}),
+                ...(identityProject?.workspaceRoot
+                  ? { projectRoot: identityProject.workspaceRoot }
+                  : {}),
+              }).pipe(
+                Effect.provideService(ServerSettingsService, recoverySettings.value),
+                Effect.provideService(ServerConfig, serverConfig),
+                Effect.timeoutOption("8 seconds"),
+                Effect.map((result) => Option.getOrNull(result)),
+                Effect.catch(() => Effect.succeed(null)),
+              );
+              if (bindingKey)
+                yield* orchestrationEngine.dispatch({
+                  type: "thread.usage-limit.source",
+                  commandId: providerCommandId(event, "usage-limit-source", thread.id),
+                  expectedBindingKey: "pending",
+                  threadId: thread.id,
+                  source: {
+                    turnId: eventTurnId,
+                    bindingKey,
+                    policyEpoch: settings.usageLimitRecoveryEpoch,
+                  },
+                  createdAt: now,
+                });
+            }
+            const current = (yield* orchestrationEngine.getReadModel()).threads.find(
+              (entry) => entry.id === thread.id,
+            );
+            if (current?.usageLimitRecovery?.state === "resuming")
+              yield* orchestrationEngine.dispatch({
+                type: "thread.usage-limit.started",
+                commandId: providerCommandId(event, "usage-limit-started", thread.id),
+                threadId: thread.id,
+                recoveryId: current.usageLimitRecovery.id,
+                turnId: eventTurnId,
+                createdAt: now,
+              });
+          }
+          if (isTerminalTurnEvent && eventTurnId) {
+            const before = (yield* orchestrationEngine.getReadModel()).threads.find(
+              (entry) => entry.id === thread.id,
+            );
+            const priorRecovery = before?.usageLimitRecovery;
+            if (
+              priorRecovery?.state === "resuming" &&
+              priorRecovery.resumedTurnId === eventTurnId
+            ) {
+              yield* orchestrationEngine.dispatch({
+                type: "thread.usage-limit.finish",
+                commandId: providerCommandId(event, "usage-limit-finish", thread.id),
+                threadId: thread.id,
+                recoveryId: priorRecovery.id,
+                turnId: eventTurnId,
+                createdAt: now,
+              });
+            }
+          }
 
           // Recovery still settles the old turn and drains queued work, but
           // its technical cancellation must not pause an autonomous goal.

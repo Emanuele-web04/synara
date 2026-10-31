@@ -1050,5 +1050,9 @@
   "turnInterruptedAfter": "Interrumpido tras {{elapsed}}",
   "turnResumedAfter": "Reanudado: {{task}} · {{elapsed}}",
   "turnResumed": "Reanudado: {{task}}",
-  "turnWorkedFor": "Trabajó durante {{elapsed}}"
+  "turnWorkedFor": "Trabajó durante {{elapsed}}",
+  "usageLimitResumeAt": "Límite de uso · se reanuda a las {{time}}",
+  "usageLimitAwaitingHost": "Cuota restablecida · esperando al ordenador",
+  "cancelUsageLimitResume": "Cancelar reanudación automática",
+  "usageLimitResuming": "Continuando en tu ordenador…"
 }

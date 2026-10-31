@@ -3,6 +3,7 @@
 // Exports: Minimal normalized-state and orchestration payload fixtures.
 
 import {
+  ProviderInstanceId,
   EventId,
   ProjectId,
   ThreadId,
@@ -292,5 +293,23 @@ export function makeFakeWindow(storage: Map<string, string>): {
       setItem,
     },
     addEventListener: vi.fn(),
+  };
+}
+
+/** A host-owned retry episode with no real provider/account data. */
+export function makeUsageLimitRecovery(
+  overrides: Partial<NonNullable<Thread["usageLimitRecovery"]>> = {},
+): NonNullable<Thread["usageLimitRecovery"]> {
+  return {
+    id: "usage-limit-episode-1",
+    turnId: TurnId.makeUnsafe("limited-turn"),
+    resetAt: "2026-11-01T12:00:00.000Z",
+    autoResume: true,
+    provider: "codex",
+    providerInstanceId: ProviderInstanceId.makeUnsafe("codex"),
+    model: "gpt-5.3-codex",
+    bindingKey: "test-binding",
+    policyEpoch: 1,
+    ...overrides,
   };
 }
