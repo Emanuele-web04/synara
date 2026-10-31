@@ -84,6 +84,22 @@ import {
   threadResumePreconditionViolation,
 } from "./commandInvariants.ts";
 
+/** A targeted Stop must not inherit ownership from a newer admitted send. */
+function isDifferentUsageLimitStopTarget(
+  thread: OrchestrationThread,
+  turnId: TurnId | undefined,
+): boolean {
+  if (turnId === undefined || thread.session?.activeTurnId === turnId) return false;
+  const recovery = thread.usageLimitRecovery;
+  if (recovery != null) {
+    return recovery.state === "resuming"
+      ? turnId !== recovery.resumedTurnId
+      : turnId !== recovery.turnId;
+  }
+  const source = thread.usageLimitRecoverySource;
+  return source?.admissionSequence !== undefined && turnId !== source.turnId;
+}
+
 const nowIso = () => new Date().toISOString();
 // Commands from the web client always carry an explicit assistantDeliveryMode;
 // this default only covers legacy/omitted fields. Streaming is the safe fallback:
@@ -615,6 +631,31 @@ const decideCommand = Effect.fn("decideOrchestrationCommand")(function* ({
   OrchestrationCommandInvariantError
 > {
   switch (command.type) {
+    case "thread.usage-limit.admit": {
+      const thread = yield* requireThread({ readModel, command, threadId: command.threadId });
+      if (
+        command.recoveryId !== undefined &&
+        (thread.usageLimitRecovery?.id !== command.recoveryId ||
+          thread.usageLimitRecovery.state !== "resuming" ||
+          thread.usageLimitRecovery.policyEpoch !== command.policyEpoch)
+      ) {
+        return usageLimitMetadataEvent(command, {});
+      }
+      const current = thread.usageLimitRecoverySource?.admissionSequence;
+      return usageLimitMetadataEvent(
+        command,
+        current !== undefined && current > command.admissionSequence
+          ? {}
+          : {
+              usageLimitRecoverySource: {
+                turnId: TurnId.makeUnsafe(`pending:${command.admissionSequence}`),
+                bindingKey: "admission",
+                admissionSequence: command.admissionSequence,
+                policyEpoch: command.policyEpoch,
+              },
+            },
+      );
+    }
     case "thread.usage-limit.source": {
       const thread = yield* requireThread({ readModel, command, threadId: command.threadId });
       return usageLimitMetadataEvent(
@@ -702,6 +743,7 @@ const decideCommand = Effect.fn("decideOrchestrationCommand")(function* ({
         matches
           ? {
               usageLimitRecovery: null,
+              usageLimitRecoverySource: null,
               usageLimitRecoveryCancelledAt: nowIso(),
               usageLimitRecoveryCancelledTurnId:
                 thread.session?.activeTurnId ?? thread.latestTurn?.turnId ?? null,
@@ -2631,7 +2673,11 @@ const decideCommand = Effect.fn("decideOrchestrationCommand")(function* ({
           createdAt: command.createdAt,
         },
       };
-      if ((thread.goal ?? "").trim().length === 0 || thread.goalPausedAt != null) {
+      if (
+        (thread.goal ?? "").trim().length === 0 ||
+        thread.goalPausedAt != null ||
+        isDifferentUsageLimitStopTarget(thread, command.turnId)
+      ) {
         return interruptEvent;
       }
 
@@ -3481,6 +3527,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommandW
         return usageLimitMetadataEvent(command, {});
       const cancel = usageLimitMetadataEvent(command, {
         usageLimitRecovery: null,
+        usageLimitRecoverySource: null,
         usageLimitRecoveryCancelledAt: nowIso(),
         usageLimitRecoveryCancelledTurnId: recovery.resumedTurnId ?? recovery.turnId,
         ...(thread.goal?.trim() && thread.goalPausedAt == null ? { goalPausedAt: nowIso() } : {}),
@@ -3493,6 +3540,12 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommandW
       return [cancel, ...(Array.isArray(stop) ? stop : [stop])];
     }
     const events = yield* decideCommand(input);
+    if (
+      command.type === "thread.turn.interrupt" &&
+      thread &&
+      isDifferentUsageLimitStopTarget(thread, command.turnId)
+    )
+      return events;
     if (
       command.type === "thread.session.set" &&
       command.session.status === "error" &&
@@ -3591,7 +3644,11 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommandW
       command.type !== "thread.session.stop"
     )
       return events;
-    const sourceTurnId = thread.session?.activeTurnId ?? thread.latestTurn?.turnId ?? null;
+    const sourceTurnId =
+      (command.type === "thread.turn.interrupt" ? command.turnId : undefined) ??
+      thread.session?.activeTurnId ??
+      thread.latestTurn?.turnId ??
+      null;
     if (
       command.type === "thread.turn.start" &&
       sourceTurnId === null &&

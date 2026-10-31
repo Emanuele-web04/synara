@@ -606,6 +606,36 @@ describe("ProviderRuntimeIngestion", () => {
       createdAt = new Date().toISOString(),
     ) {
       const turnId = asTurnId(`limit-${suffix}-turn`);
+      if (
+        (await Effect.runPromise(harness.serverSettings.getSettings)).autoResumeAfterUsageLimits
+      ) {
+        const requested = await Effect.runPromise(
+          harness.engine.dispatch({
+            type: "thread.turn.start",
+            commandId: CommandId.makeUnsafe(`limit-${suffix}-requested`),
+            threadId,
+            message: {
+              messageId: asMessageId(`limit-${suffix}-message`),
+              role: "user",
+              text: "Run the test task",
+              attachments: [],
+            },
+            runtimeMode: "approval-required",
+            interactionMode: "default",
+            createdAt,
+          }),
+        );
+        await Effect.runPromise(
+          harness.engine.dispatch({
+            type: "thread.usage-limit.admit",
+            commandId: CommandId.makeUnsafe(`limit-${suffix}-admission`),
+            threadId,
+            admissionSequence: requested.sequence,
+            policyEpoch: 0,
+            createdAt,
+          }),
+        );
+      }
       harness.emit({
         type: "turn.started",
         eventId: asEventId(`limit-${suffix}-start`),
@@ -656,7 +686,12 @@ describe("ProviderRuntimeIngestion", () => {
       );
       const turnId = await startLimitTurn(harness, "live-goal");
       const live = await harness.readProjectedThread();
-      expect(live?.usageLimitRecoverySource).toEqual({ turnId, bindingKey, policyEpoch: 0 });
+      expect(live?.usageLimitRecoverySource).toMatchObject({
+        turnId,
+        bindingKey,
+        policyEpoch: 0,
+        admissionSequence: expect.any(Number),
+      });
       expect(identity).toHaveBeenCalledTimes(1);
       const dispatch = harness.engine.dispatch;
       let acceptedTerminal: OrchestrationCommand | undefined;
@@ -751,7 +786,9 @@ describe("ProviderRuntimeIngestion", () => {
       harness.emit(refusal(turnId, "historical"));
       await waitForThread(harness.engine, (thread) => thread.session?.status === "error");
       await harness.drain();
-      expect((await harness.readProjectedThread())?.usageLimitRecoverySource).toBeNull();
+      expect((await harness.readProjectedThread())?.usageLimitRecoverySource?.bindingKey).toBe(
+        "admission",
+      );
       expect((await harness.readProjectedThread())?.usageLimitRecovery).toBeNull();
       expect(identity).not.toHaveBeenCalled();
     });

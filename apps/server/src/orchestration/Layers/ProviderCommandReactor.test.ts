@@ -41,6 +41,7 @@ import {
   PROVIDER_SEND_TURN_MAX_INPUT_CHARS,
   ProjectId,
   RuntimeItemId,
+  ServerSettingsError,
   ThreadId,
   TurnId,
 } from "@synara/contracts";
@@ -1545,6 +1546,439 @@ describe("ProviderCommandReactor", () => {
         }),
       );
 
+    async function seedCompletedHumanTurn(harness: Awaited<ReturnType<typeof createHarness>>) {
+      const previousTurnId = asTurnId("human-previous-completed-turn");
+      const createdAt = new Date(Date.now() - 2_000).toISOString();
+      for (const status of ["running", "ready"] as const) {
+        await Effect.runPromise(
+          harness.engine.dispatch({
+            type: "thread.session.set",
+            commandId: CommandId.makeUnsafe(`human-previous-${status}`),
+            threadId,
+            session: {
+              threadId,
+              status,
+              providerName: "codex",
+              providerInstanceId: "codex",
+              runtimeMode: "approval-required",
+              activeTurnId: status === "running" ? previousTurnId : null,
+              lastError: null,
+              updatedAt: createdAt,
+            },
+            createdAt,
+          }),
+        );
+      }
+      harness.setRuntimeSessionTurnState({
+        threadId,
+        status: "ready",
+        runtimeMode: "approval-required",
+      });
+      await harness.drain();
+      expect((await readHarnessThread(harness))?.latestTurn).toMatchObject({
+        turnId: previousTurnId,
+        state: "completed",
+      });
+      return previousTurnId;
+    }
+
+    it.each([
+      { previousTurn: false, cancellation: "Stop" },
+      { previousTurn: true, cancellation: "Stop" },
+      { previousTurn: true, cancellation: "setting disabled and re-enabled" },
+    ])(
+      "a human send refused before its ACK cannot arm after $cancellation (previousTurn=$previousTurn)",
+      async ({ previousTurn, cancellation }) => {
+        const identity = vi
+          .spyOn(providerUsageRecovery, "providerUsageRecoveryBindingKey")
+          .mockImplementation(() => Effect.succeed(bindingKey));
+        const harness = await createHarness({
+          ingestRuntimeEvents: true,
+          serverSettings: { autoResumeAfterUsageLimits: true },
+        });
+        const previousTurnId = previousTurn ? await seedCompletedHumanTurn(harness) : undefined;
+        let releaseSend!: (value: { threadId: ThreadId; turnId: TurnId }) => void;
+        const sendGate = new Promise<{ threadId: ThreadId; turnId: TurnId }>((resolve) => {
+          releaseSend = resolve;
+        });
+        harness.sendTurn.mockImplementationOnce(() => Effect.promise(() => sendGate));
+        await dispatchHarnessUserTurn(harness, {
+          messageId: "human-stopped-awaiting-ack",
+          text: "Perform the requested work",
+          createdAt: new Date().toISOString(),
+        });
+        await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+        const starting = await readHarnessThread(harness);
+        expect(starting?.session?.activeTurnId).toBeNull();
+        expect(starting?.latestTurn?.turnId).toBe(previousTurnId);
+        expect(starting?.usageLimitRecoverySource).toMatchObject({
+          bindingKey: "admission",
+          admissionSequence: expect.any(Number),
+        });
+        if (cancellation === "Stop") {
+          await Effect.runPromise(
+            harness.engine.dispatch({
+              type: "thread.turn.interrupt",
+              commandId: CommandId.makeUnsafe("human-stop-before-ack"),
+              threadId,
+              requestedBy: "user",
+              createdAt: new Date().toISOString(),
+            }),
+          );
+        } else {
+          await Effect.runPromise(
+            harness.serverSettings.updateSettings({ autoResumeAfterUsageLimits: false }),
+          );
+          await Effect.runPromise(
+            harness.serverSettings.updateSettings({ autoResumeAfterUsageLimits: true }),
+          );
+        }
+        const actual = asTurnId("human-late-start-before-ack");
+        harness.setRuntimeSessionTurnState({
+          threadId,
+          status: "running",
+          runtimeMode: "approval-required",
+          activeTurnId: actual,
+        });
+        const base = {
+          provider: "codex" as const,
+          providerInstanceId: "codex",
+          threadId,
+          turnId: actual,
+          createdAt: new Date().toISOString(),
+          providerRefs: {},
+        };
+        await harness.emitRuntimeEvent({
+          ...base,
+          type: "turn.started",
+          eventId: asEventId("human-late-started"),
+          payload: {},
+        });
+        await waitFor(
+          async () => (await readHarnessThread(harness))?.latestTurn?.turnId === actual,
+        );
+        harness.setRuntimeSessionTurnState({ threadId, status: "ready" });
+        await harness.emitRuntimeEvent({
+          ...base,
+          type: "turn.completed",
+          eventId: asEventId("human-late-refused"),
+          payload: {
+            state: "failed",
+            errorMessage: "Usage limit reached",
+            usageLimit: { resetAt: new Date(Date.now() + 60_000).toISOString() },
+          },
+        });
+        await waitFor(
+          async () => (await readHarnessThread(harness))?.latestTurn?.state === "error",
+        );
+        expect((await readHarnessThread(harness))?.usageLimitRecovery ?? null).toBeNull();
+        expect(identity).not.toHaveBeenCalled();
+        releaseSend({ threadId, turnId: actual });
+        await harness.drain();
+        if (cancellation === "Stop") {
+          expect((await readHarnessThread(harness))?.usageLimitRecoveryCancelledTurnId).toBe(
+            actual,
+          );
+        }
+        expect((await readHarnessThread(harness))?.usageLimitRecovery ?? null).toBeNull();
+        expect(harness.sendTurn).toHaveBeenCalledTimes(1);
+      },
+    );
+
+    it("stops the actual human turn accepted after an untargeted Stop", async () => {
+      const harness = await createHarness({ serverSettings: { autoResumeAfterUsageLimits: true } });
+      await seedCompletedHumanTurn(harness);
+      let releaseSend!: (value: { threadId: ThreadId; turnId: TurnId }) => void;
+      const sendGate = new Promise<{ threadId: ThreadId; turnId: TurnId }>((resolve) => {
+        releaseSend = resolve;
+      });
+      harness.sendTurn.mockImplementationOnce(() => Effect.promise(() => sendGate));
+      await dispatchHarnessUserTurn(harness, {
+        messageId: "human-stop-late-accepted",
+        text: "Perform the requested work",
+        createdAt: new Date().toISOString(),
+      });
+      await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.turn.interrupt",
+          commandId: CommandId.makeUnsafe("human-stop-before-accept"),
+          threadId,
+          requestedBy: "user",
+          createdAt: new Date().toISOString(),
+        }),
+      );
+      const actual = asTurnId("human-accepted-after-stop");
+      harness.setRuntimeSessionTurnState({
+        threadId,
+        status: "running",
+        runtimeMode: "approval-required",
+        activeTurnId: actual,
+      });
+      releaseSend({ threadId, turnId: actual });
+      await waitFor(
+        async () =>
+          (await readHarnessThread(harness))?.usageLimitRecoveryCancelledTurnId === actual,
+      );
+      await harness.drain();
+      expect(harness.interruptTurn.mock.calls[0]?.[0]).toMatchObject({ threadId, turnId: actual });
+      expect((await readHarnessThread(harness))?.usageLimitRecoveryCancelledTurnId).toBe(actual);
+      expect(harness.sendTurn).toHaveBeenCalledTimes(1);
+    });
+
+    it("a Stop after the human intent but before admission interrupts its late accepted native turn", async () => {
+      vi.spyOn(providerUsageRecovery, "providerUsageRecoveryBindingKey").mockImplementation(() =>
+        Effect.succeed(bindingKey),
+      );
+      const harness = await createHarness({
+        ingestRuntimeEvents: true,
+        serverSettings: { autoResumeAfterUsageLimits: true },
+      });
+      await seedCompletedHumanTurn(harness);
+      const dispatch = harness.engine.dispatch;
+      let stopSequence: number | undefined;
+      let executingSequence: number | undefined;
+      harness.interceptEngineDispatch((command) => {
+        if (command.type !== "thread.usage-limit.admit" || stopSequence !== undefined)
+          return undefined;
+        executingSequence = command.admissionSequence;
+        return Effect.gen(function* () {
+          const stopped = yield* dispatch({
+            type: "thread.turn.interrupt",
+            commandId: CommandId.makeUnsafe("human-stop-before-source-admit"),
+            threadId,
+            requestedBy: "user",
+            createdAt: new Date().toISOString(),
+          });
+          stopSequence = stopped.sequence;
+          // The Stop is durable before the later source-admission event.
+          return yield* dispatch(command);
+        });
+      });
+      let releaseSend!: (value: { threadId: ThreadId; turnId: TurnId }) => void;
+      const gate = new Promise<{ threadId: ThreadId; turnId: TurnId }>((resolve) => {
+        releaseSend = resolve;
+      });
+      harness.sendTurn.mockImplementationOnce(() => Effect.promise(() => gate));
+      await dispatchHarnessUserTurn(harness, {
+        messageId: "human-stop-before-admission",
+        text: "Perform the requested work",
+        createdAt: new Date().toISOString(),
+      });
+      await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+      expect(stopSequence).toBeGreaterThan(executingSequence!);
+      expect((await readHarnessThread(harness))?.usageLimitRecoverySource?.admissionSequence).toBe(
+        executingSequence,
+      );
+      const actual = asTurnId("human-late-accepted-after-pre-admission-stop");
+      harness.setRuntimeSessionTurnState({
+        threadId,
+        status: "running",
+        runtimeMode: "approval-required",
+        activeTurnId: actual,
+      });
+      releaseSend({ threadId, turnId: actual });
+      const acceptedControlId = "command:cmd-human-stop-before-admission";
+      await waitFor(() =>
+        harness.interruptTurn.mock.calls.some(
+          ([input]) => input.controlRequestId === acceptedControlId,
+        ),
+      );
+      await harness.drain();
+      expect(
+        harness.interruptTurn.mock.calls.find(
+          ([input]) => input.controlRequestId === acceptedControlId,
+        )?.[0],
+      ).toMatchObject({ threadId, turnId: actual });
+      const base = {
+        provider: "codex" as const,
+        providerInstanceId: "codex",
+        threadId,
+        turnId: actual,
+        createdAt: new Date().toISOString(),
+        providerRefs: {},
+      };
+      await harness.emitRuntimeEvent({
+        ...base,
+        type: "turn.started",
+        eventId: asEventId("pre-admit-stop-late-native-start"),
+        payload: {},
+      });
+      await waitFor(async () => (await readHarnessThread(harness))?.latestTurn?.turnId === actual);
+      harness.setRuntimeSessionTurnState({ threadId, status: "ready" });
+      await harness.emitRuntimeEvent({
+        ...base,
+        type: "turn.completed",
+        eventId: asEventId("pre-admit-stop-late-native-limit"),
+        payload: {
+          state: "failed",
+          errorMessage: "Usage limit reached",
+          usageLimit: { resetAt: new Date(Date.now() + 60_000).toISOString() },
+        },
+      });
+      await waitFor(async () => (await readHarnessThread(harness))?.latestTurn?.state === "error");
+      expect((await readHarnessThread(harness))?.usageLimitRecovery ?? null).toBeNull();
+      expect(harness.sendTurn).toHaveBeenCalledTimes(1);
+    });
+
+    it("ignores an old targeted Stop while a newer human send awaits its ACK", async () => {
+      vi.spyOn(providerUsageRecovery, "providerUsageRecoveryBindingKey").mockImplementation(() =>
+        Effect.succeed(bindingKey),
+      );
+      const harness = await createHarness({
+        ingestRuntimeEvents: true,
+        serverSettings: { autoResumeAfterUsageLimits: true },
+      });
+      const previousTurnId = await seedCompletedHumanTurn(harness);
+      let releaseSend!: (value: { threadId: ThreadId; turnId: TurnId }) => void;
+      const sendGate = new Promise<{ threadId: ThreadId; turnId: TurnId }>((resolve) => {
+        releaseSend = resolve;
+      });
+      harness.sendTurn.mockImplementationOnce(() => Effect.promise(() => sendGate));
+      await dispatchHarnessUserTurn(harness, {
+        messageId: "human-stale-target",
+        text: "Perform the new request",
+        createdAt: new Date().toISOString(),
+      });
+      await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.turn.interrupt",
+          commandId: CommandId.makeUnsafe("human-old-target-stop"),
+          threadId,
+          turnId: previousTurnId,
+          requestedBy: "user",
+          createdAt: new Date().toISOString(),
+        }),
+      );
+      const actual = asTurnId("human-new-turn-after-stale-stop");
+      harness.setRuntimeSessionTurnState({
+        threadId,
+        status: "running",
+        runtimeMode: "approval-required",
+        activeTurnId: actual,
+      });
+      releaseSend({ threadId, turnId: actual });
+      await harness.drain();
+      expect(harness.interruptTurn).not.toHaveBeenCalled();
+      const base = {
+        provider: "codex" as const,
+        providerInstanceId: "codex",
+        threadId,
+        turnId: actual,
+        createdAt: new Date().toISOString(),
+        providerRefs: {},
+      };
+      await harness.emitRuntimeEvent({
+        ...base,
+        type: "turn.started",
+        eventId: asEventId("human-new-turn-started"),
+        payload: {},
+      });
+      await waitFor(
+        async () =>
+          (await readHarnessThread(harness))?.usageLimitRecoverySource?.bindingKey === bindingKey,
+      );
+      harness.setRuntimeSessionTurnState({ threadId, status: "ready" });
+      await harness.emitRuntimeEvent({
+        ...base,
+        type: "turn.completed",
+        eventId: asEventId("human-new-turn-refused"),
+        payload: {
+          state: "failed",
+          errorMessage: "Usage limit reached",
+          usageLimit: { resetAt: new Date(Date.now() + 60_000).toISOString() },
+        },
+      });
+      await waitFor(async () => (await readHarnessThread(harness))?.usageLimitRecovery != null);
+      expect((await readHarnessThread(harness))?.usageLimitRecovery).toMatchObject({
+        turnId: actual,
+      });
+      expect(harness.interruptTurn).not.toHaveBeenCalled();
+      expect(harness.sendTurn).toHaveBeenCalledTimes(1);
+    });
+
+    it("manually resumes a quota-paused goal after clearing its wait", async () => {
+      vi.spyOn(providerUsageRecovery, "providerUsageRecoveryBindingKey").mockImplementation(() =>
+        Effect.succeed(bindingKey),
+      );
+      const harness = await createHarness({
+        ingestRuntimeEvents: true,
+        serverSettings: { autoResumeAfterUsageLimits: true },
+      });
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.meta.update",
+          commandId: CommandId.makeUnsafe("quota-goal-deferred"),
+          threadId,
+          goal: "Finish the complete requested objective",
+          goalStartBehavior: "defer",
+        }),
+      );
+      await seedLimitWait(harness);
+      expect((await readHarnessThread(harness))?.goalPausedAt).not.toBeNull();
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.meta.update",
+          commandId: CommandId.makeUnsafe("quota-goal-manual-resume"),
+          threadId,
+          goalPaused: false,
+        }),
+      );
+      await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+      await harness.drain();
+      expect((await readHarnessThread(harness))?.usageLimitRecovery).toBeNull();
+      expect((await readHarnessThread(harness))?.goalPausedAt).toBeNull();
+      expect(harness.sendTurn.mock.calls[0]?.[0].input).toContain(
+        "Continue working toward the active thread goal",
+      );
+      expect((await readHarnessThread(harness))?.usageLimitRecoverySource).toMatchObject({
+        bindingKey: "admission",
+        admissionSequence: expect.any(Number),
+      });
+      const actual = asTurnId("turn-1");
+      harness.setRuntimeSessionTurnState({
+        threadId,
+        status: "running",
+        runtimeMode: "approval-required",
+        activeTurnId: actual,
+      });
+      const base = {
+        provider: "codex" as const,
+        providerInstanceId: "codex",
+        threadId,
+        turnId: actual,
+        createdAt: new Date().toISOString(),
+        providerRefs: {},
+      };
+      await harness.emitRuntimeEvent({
+        ...base,
+        type: "turn.started",
+        eventId: asEventId("manual-goal-resume-native-started"),
+        payload: {},
+      });
+      await waitFor(
+        async () =>
+          (await readHarnessThread(harness))?.usageLimitRecoverySource?.bindingKey === bindingKey,
+      );
+      harness.setRuntimeSessionTurnState({ threadId, status: "ready" });
+      await harness.emitRuntimeEvent({
+        ...base,
+        type: "turn.completed",
+        eventId: asEventId("manual-goal-resume-native-refused"),
+        payload: {
+          state: "failed",
+          errorMessage: "Usage limit reached again",
+          usageLimit: { resetAt: new Date(Date.now() + 60_000).toISOString() },
+        },
+      });
+      await waitFor(
+        async () => (await readHarnessThread(harness))?.usageLimitRecovery?.turnId === actual,
+      );
+      expect((await readHarnessThread(harness))?.goalPausedAt).not.toBeNull();
+      expect(harness.sendTurn).toHaveBeenCalledTimes(1);
+    });
+
     it("sends one guarded continuation and records its actual accepted turn", async () => {
       vi.spyOn(providerUsageRecovery, "providerUsageRecoveryBindingKey").mockImplementation(() =>
         Effect.succeed(bindingKey),
@@ -1623,6 +2057,152 @@ describe("ProviderCommandReactor", () => {
       );
     });
 
+    it.each(["scoped Stop", "setting OFF/ON"] as const)(
+      "%s before quota send admission prevents startup and source resurrection",
+      async (cancellation) => {
+        vi.spyOn(providerUsageRecovery, "providerUsageRecoveryBindingKey").mockImplementation(() =>
+          Effect.succeed(bindingKey),
+        );
+        const harness = await createHarness({
+          serverSettings: { autoResumeAfterUsageLimits: true },
+        });
+        const wait = await seedLimitWait(harness);
+        const dispatch = harness.engine.dispatch;
+        let cancelled = false;
+        harness.interceptEngineDispatch((command) => {
+          if (
+            command.type !== "thread.usage-limit.admit" ||
+            command.recoveryId !== wait.id ||
+            cancelled
+          )
+            return undefined;
+          cancelled = true;
+          return Effect.gen(function* () {
+            if (cancellation === "scoped Stop") {
+              yield* dispatch({
+                type: "thread.turn.interrupt",
+                commandId: CommandId.makeUnsafe("scoped-stop-before-admit"),
+                threadId,
+                usageLimitRecoveryId: wait.id,
+                requestedBy: "user",
+                createdAt: new Date().toISOString(),
+              });
+            } else {
+              yield* harness.serverSettings
+                .updateSettings({ autoResumeAfterUsageLimits: false })
+                .pipe(Effect.orDie);
+              yield* harness.serverSettings
+                .updateSettings({ autoResumeAfterUsageLimits: true })
+                .pipe(Effect.orDie);
+            }
+            return yield* dispatch(command);
+          });
+        });
+        await requestResume(harness, wait.id);
+        await waitFor(() => cancelled);
+        await harness.drain();
+        expect(harness.sendTurn).not.toHaveBeenCalled();
+        expect(harness.startSession).not.toHaveBeenCalled();
+        expect((await readHarnessThread(harness))?.usageLimitRecovery ?? null).toBeNull();
+        expect((await readHarnessThread(harness))?.usageLimitRecoverySource ?? null).toBeNull();
+        expect((await readHarnessThread(harness))?.session?.status).not.toBe("starting");
+      },
+    );
+
+    it.each(["before native start", "before source commit"] as const)(
+      "a scoped Stop %s prevents a continuation refusal before ACK from rearming",
+      async (cancelAt) => {
+        vi.spyOn(providerUsageRecovery, "providerUsageRecoveryBindingKey").mockImplementation(() =>
+          Effect.succeed(bindingKey),
+        );
+        const harness = await createHarness({
+          ingestRuntimeEvents: true,
+          serverSettings: { autoResumeAfterUsageLimits: true },
+        });
+        const wait = await seedLimitWait(harness);
+        let releaseSend!: (value: { threadId: ThreadId; turnId: TurnId }) => void;
+        const gate = new Promise<{ threadId: ThreadId; turnId: TurnId }>((resolve) => {
+          releaseSend = resolve;
+        });
+        harness.sendTurn.mockImplementationOnce(() => Effect.promise(() => gate));
+        await requestResume(harness, wait.id);
+        await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+        const stop = {
+          type: "thread.turn.interrupt",
+          commandId: CommandId.makeUnsafe("scoped-stop-before-native-ack"),
+          threadId,
+          usageLimitRecoveryId: wait.id,
+          requestedBy: "user",
+          createdAt: new Date().toISOString(),
+        } satisfies OrchestrationCommand;
+        if (cancelAt === "before native start") {
+          await Effect.runPromise(harness.engine.dispatch(stop));
+        } else {
+          const dispatch = harness.engine.dispatch;
+          let cancelled = false;
+          harness.interceptEngineDispatch((command) => {
+            if (
+              command.type !== "thread.usage-limit.source" ||
+              command.source.bindingKey !== "pending" ||
+              cancelled
+            )
+              return undefined;
+            cancelled = true;
+            return Effect.gen(function* () {
+              yield* dispatch(stop);
+              return yield* dispatch(command);
+            });
+          });
+        }
+        const actual = asTurnId("scoped-stopped-refusal-before-ack");
+        try {
+          harness.setRuntimeSessionTurnState({
+            threadId,
+            status: "running",
+            runtimeMode: "approval-required",
+            activeTurnId: actual,
+          });
+          const base = {
+            provider: "codex" as const,
+            providerInstanceId: "codex",
+            threadId,
+            turnId: actual,
+            createdAt: new Date().toISOString(),
+            providerRefs: {},
+          };
+          await harness.emitRuntimeEvent({
+            ...base,
+            type: "turn.started",
+            eventId: asEventId("scoped-late-start"),
+            payload: {},
+          });
+          await waitFor(
+            async () => (await readHarnessThread(harness))?.latestTurn?.turnId === actual,
+          );
+          harness.setRuntimeSessionTurnState({ threadId, status: "ready" });
+          await harness.emitRuntimeEvent({
+            ...base,
+            type: "turn.completed",
+            eventId: asEventId("scoped-late-limit"),
+            payload: {
+              state: "failed",
+              errorMessage: "Usage limit reached",
+              usageLimit: { resetAt: new Date(Date.now() + 60_000).toISOString() },
+            },
+          });
+          await waitFor(
+            async () => (await readHarnessThread(harness))?.latestTurn?.state === "error",
+          );
+          expect((await readHarnessThread(harness))?.usageLimitRecovery ?? null).toBeNull();
+        } finally {
+          releaseSend({ threadId, turnId: actual });
+        }
+        await harness.drain();
+        expect((await readHarnessThread(harness))?.usageLimitRecovery ?? null).toBeNull();
+        expect(harness.sendTurn).toHaveBeenCalledTimes(1);
+      },
+    );
+
     it("interrupts a native turn when Stop wins admission of its accepted-turn marker", async () => {
       vi.spyOn(providerUsageRecovery, "providerUsageRecoveryBindingKey").mockImplementation(() =>
         Effect.succeed(bindingKey),
@@ -1664,7 +2244,7 @@ describe("ProviderCommandReactor", () => {
       expect((await readHarnessThread(harness))?.usageLimitRecoveryCancelledTurnId).toBe(actual);
     });
 
-    it.each(["disabled setting", "changed provider binding"] as const)(
+    it.each(["disabled setting", "changed provider binding", "unknown provider binding"] as const)(
       "%s cancels before provider execution",
       async (reason) => {
         const identity = vi
@@ -1678,13 +2258,107 @@ describe("ProviderCommandReactor", () => {
           await Effect.runPromise(
             harness.serverSettings.updateSettings({ autoResumeAfterUsageLimits: false }),
           );
-        else identity.mockImplementation(() => Effect.succeed("replacement-provider-account"));
+        else
+          identity.mockImplementation(() =>
+            Effect.succeed(
+              reason === "unknown provider binding" ? null : "replacement-provider-account",
+            ),
+          );
         await requestResume(harness, wait.id);
         await waitFor(async () => (await readHarnessThread(harness))?.usageLimitRecovery == null);
         await harness.drain();
         expect(harness.sendTurn).not.toHaveBeenCalled();
       },
     );
+
+    it.each([false, true])(
+      "a bounded account read timeout preserves the verified episode unless Stop won (cancel=%s)",
+      async (cancelWhileReading) => {
+        const identity = vi
+          .spyOn(providerUsageRecovery, "providerUsageRecoveryBindingKey")
+          .mockImplementationOnce(() => Effect.never)
+          .mockImplementation(() => Effect.succeed(bindingKey));
+        const harness = await createHarness({
+          serverSettings: { autoResumeAfterUsageLimits: true },
+        });
+        const wait = await seedLimitWait(harness);
+        await requestResume(harness, wait.id);
+        await waitFor(() => identity.mock.calls.length === 1);
+        expect((await readHarnessThread(harness))?.usageLimitRecovery).toMatchObject({
+          id: wait.id,
+          state: "resuming",
+        });
+        if (cancelWhileReading)
+          await Effect.runPromise(
+            harness.engine.dispatch({
+              type: "thread.turn.interrupt",
+              commandId: CommandId.makeUnsafe("stop-during-binding-timeout"),
+              threadId,
+              usageLimitRecoveryId: wait.id,
+              requestedBy: "user",
+              createdAt: new Date().toISOString(),
+            }),
+          );
+        await harness.drain();
+        expect(harness.sendTurn).not.toHaveBeenCalled();
+        expect(harness.startSession).not.toHaveBeenCalled();
+        const afterRead = await readHarnessThread(harness);
+        if (cancelWhileReading) {
+          expect(afterRead?.usageLimitRecovery ?? null).toBeNull();
+          expect(afterRead?.usageLimitRecoverySource ?? null).toBeNull();
+          return;
+        }
+        expect(afterRead?.usageLimitRecovery).toMatchObject({
+          id: wait.id,
+          state: "waiting",
+          bindingKey,
+        });
+        expect(afterRead?.usageLimitRecovery?.resumedTurnId).toBeUndefined();
+        expect(afterRead?.usageLimitRecoverySource?.bindingKey).toBe(bindingKey);
+        await requestResume(harness, wait.id);
+        await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+        await harness.drain();
+        expect(identity).toHaveBeenCalledTimes(2);
+        expect(harness.sendTurn).toHaveBeenCalledTimes(1);
+        expect((await readHarnessThread(harness))?.usageLimitRecovery).toMatchObject({
+          id: wait.id,
+          state: "resuming",
+          resumedTurnId: "turn-1",
+        });
+      },
+      15_000,
+    );
+
+    it("defers a surfaced account-read failure without losing the verified binding", async () => {
+      vi.spyOn(providerUsageRecovery, "providerUsageRecoveryBindingKey").mockImplementationOnce(
+        () =>
+          Effect.fail(
+            new ServerSettingsError({
+              settingsPath: "test-settings.json",
+              detail: "The settings read is temporarily unavailable.",
+            }),
+          ),
+      );
+      const harness = await createHarness({
+        serverSettings: { autoResumeAfterUsageLimits: true },
+      });
+      const wait = await seedLimitWait(harness);
+      await requestResume(harness, wait.id);
+      await waitFor(
+        async () => (await readHarnessThread(harness))?.usageLimitRecovery?.state === "waiting",
+      );
+      await harness.drain();
+      expect((await readHarnessThread(harness))?.usageLimitRecovery).toMatchObject({
+        id: wait.id,
+        state: "waiting",
+        bindingKey,
+      });
+      expect(harness.sendTurn).not.toHaveBeenCalled();
+      expect(harness.startSession).not.toHaveBeenCalled();
+      expect(
+        await Effect.runPromise(harness.reactor.listBlockingDeliveries({ threadId, limit: 1 })),
+      ).toEqual([]);
+    });
 
     it("clears an ordinary-task wait when Claude cold-cache preflight holds the continuation", async () => {
       vi.spyOn(providerUsageRecovery, "providerUsageRecoveryBindingKey").mockImplementation(() =>
@@ -1975,59 +2649,116 @@ describe("ProviderCommandReactor", () => {
       expect((await readHarnessThread(harness))?.latestTurn?.state).toBe("error");
     });
 
-    it("holds the raw terminal queue drain until its typed limit wait is committed", async () => {
-      vi.spyOn(providerUsageRecovery, "providerUsageRecoveryBindingKey").mockImplementation(() =>
-        Effect.succeed(bindingKey),
-      );
-      const harness = await createHarness({
-        ingestRuntimeEvents: true,
-        serverSettings: { autoResumeAfterUsageLimits: true },
-      });
-      await seedLimitSource(harness, "Do not send before reset");
-      let releaseSchedule!: () => void;
-      let scheduleEntered = false;
-      const scheduleGate = new Promise<void>((resolve) => {
-        releaseSchedule = resolve;
-      });
-      harness.interceptEngineDispatch((command) => {
-        if (
-          command.type !== "thread.session.set" ||
-          command.usageLimitRecovery === undefined ||
-          scheduleEntered
-        )
-          return undefined;
-        scheduleEntered = true;
-        return Effect.promise(() => scheduleGate).pipe(
-          Effect.flatMap(() => harness.engine.dispatch(command)),
+    it.each([
+      { pendingIdentity: false, outcome: "armed" },
+      { pendingIdentity: true, outcome: "armed" },
+      { pendingIdentity: true, outcome: "disabled" },
+      { pendingIdentity: true, outcome: "unknown account" },
+    ])(
+      "holds raw quota drain until canonical terminal commit (pendingIdentity=$pendingIdentity, outcome=$outcome)",
+      async ({ pendingIdentity, outcome }) => {
+        vi.spyOn(providerUsageRecovery, "providerUsageRecoveryBindingKey").mockImplementation(() =>
+          Effect.succeed(outcome === "unknown account" ? null : bindingKey),
         );
-      });
-      harness.setRuntimeSessionTurnState({ threadId, status: "ready" });
-      await harness.emitRuntimeEvent({
-        type: "turn.completed",
-        eventId: asEventId("usage-limit-raw-terminal"),
-        provider: "codex",
-        providerInstanceId: "codex",
-        threadId,
-        turnId: limitedTurnId,
-        createdAt: new Date().toISOString(),
-        providerRefs: {},
-        payload: {
-          state: "failed",
-          errorMessage: "Usage limit reached",
-          usageLimit: { resetAt: new Date(Date.now() + 60_000).toISOString() },
-        },
-      });
-      await waitFor(() => scheduleEntered);
-      expect(harness.sendTurn).not.toHaveBeenCalled();
-      const queued = await Effect.runPromise(
-        harness.queuedTurnPromotionRepository.listPendingThreadIds,
-      );
-      expect(queued).toContain(threadId);
-      releaseSchedule();
-      await waitFor(async () => (await readHarnessThread(harness))?.usageLimitRecovery != null);
-      await harness.drain();
-      expect(harness.sendTurn).not.toHaveBeenCalled();
-    });
+        const harness = await createHarness({
+          ingestRuntimeEvents: true,
+          serverSettings: { autoResumeAfterUsageLimits: true },
+        });
+        await seedLimitSource(harness, "Do not send before reset");
+        if (pendingIdentity) {
+          await Effect.runPromise(
+            harness.engine.dispatch({
+              type: "thread.usage-limit.admit",
+              commandId: CommandId.makeUnsafe("raw-limit-pending-admission"),
+              threadId,
+              admissionSequence: (await Effect.runPromise(harness.engine.getReadModel()))
+                .snapshotSequence,
+              policyEpoch: 0,
+              createdAt: new Date().toISOString(),
+            }),
+          );
+        }
+        let releaseSchedule!: () => void;
+        let scheduleEntered = false;
+        const scheduleGate = new Promise<void>((resolve) => {
+          releaseSchedule = resolve;
+        });
+        harness.interceptEngineDispatch((command) => {
+          const isHeld = pendingIdentity
+            ? command.type === "thread.usage-limit.source" &&
+              command.source.bindingKey === "pending"
+            : command.type === "thread.session.set" && command.usageLimitRecovery !== undefined;
+          if (!isHeld || scheduleEntered) return undefined;
+          scheduleEntered = true;
+          return Effect.promise(() => scheduleGate).pipe(
+            Effect.flatMap(() => harness.engine.dispatch(command)),
+          );
+        });
+        if (pendingIdentity) {
+          await harness.emitRuntimeEvent({
+            type: "turn.started",
+            eventId: asEventId("raw-limit-pending-start"),
+            provider: "codex",
+            providerInstanceId: "codex",
+            threadId,
+            turnId: limitedTurnId,
+            createdAt: new Date().toISOString(),
+            providerRefs: {},
+            payload: {},
+          });
+          await waitFor(() => scheduleEntered);
+          expect((await readHarnessThread(harness))?.usageLimitRecoverySource?.bindingKey).toBe(
+            "admission",
+          );
+        }
+        if (outcome === "disabled") {
+          await Effect.runPromise(
+            harness.serverSettings.updateSettings({ autoResumeAfterUsageLimits: false }),
+          );
+        }
+        harness.setRuntimeSessionTurnState({ threadId, status: "ready" });
+        const terminal = {
+          type: "turn.completed",
+          eventId: asEventId("usage-limit-raw-terminal"),
+          provider: "codex",
+          providerInstanceId: "codex",
+          threadId,
+          turnId: limitedTurnId,
+          createdAt: new Date().toISOString(),
+          providerRefs: {},
+          payload: {
+            state: "failed",
+            errorMessage: "Usage limit reached",
+            usageLimit: { resetAt: new Date(Date.now() + 60_000).toISOString() },
+          },
+        } satisfies ProviderRuntimeEvent;
+        await harness.emitRuntimeEvent(terminal);
+        await waitFor(() => scheduleEntered);
+        await harness.drain();
+        expect(harness.sendTurn).not.toHaveBeenCalled();
+        const queued = await Effect.runPromise(
+          harness.queuedTurnPromotionRepository.listPendingThreadIds,
+        );
+        expect(queued).toContain(threadId);
+        releaseSchedule();
+        if (outcome === "armed") {
+          await waitFor(async () => (await readHarnessThread(harness))?.usageLimitRecovery != null);
+          // A delayed/repeated raw notification can also arrive after the same
+          // canonical terminal and wait have already committed.
+          await harness.emitRuntimeEvent(terminal);
+          await harness.drain();
+          expect(harness.sendTurn).not.toHaveBeenCalled();
+          expect(
+            await Effect.runPromise(harness.queuedTurnPromotionRepository.listPendingThreadIds),
+          ).toContain(threadId);
+        } else {
+          await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+          await harness.drain();
+          expect((await readHarnessThread(harness))?.usageLimitRecovery ?? null).toBeNull();
+          expect(harness.sendTurn.mock.calls[0]?.[0].input).toBe("Do not send before reset");
+        }
+      },
+    );
   });
 
   it("includes passive completion context only on a human send and preserves the visible user message", async () => {
