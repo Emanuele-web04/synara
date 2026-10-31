@@ -326,6 +326,53 @@ describe("usage-limit recovery command ownership", () => {
     expect(subsequent.thread.usageLimitRecovery?.id).toBe("later-limit");
   });
 
+  it.each([false, true])(
+    "targeted Stop preserves ownership while native identity is pending (matching=%s)",
+    async (matching) => {
+      const actual = TurnId.makeUnsafe("active-before-source-freeze");
+      const source = {
+        turnId: TurnId.makeUnsafe("pending:1"),
+        bindingKey: "admission",
+        admissionSequence: 1,
+        policyEpoch: 0,
+      };
+      const stopped = await apply(
+        readModel({
+          usageLimitRecoverySource: source,
+          goal: "Finish the active objective",
+          goalStartedAt: START,
+          goalPausedAt: null,
+          session: {
+            threadId: THREAD_ID,
+            status: "running",
+            providerName: "codex",
+            providerInstanceId: "codex",
+            runtimeMode: "full-access",
+            activeTurnId: actual,
+            lastError: null,
+            updatedAt: NOW,
+          },
+        }),
+        {
+          type: "thread.turn.interrupt",
+          commandId: CommandId.makeUnsafe("targeted-pending-source-stop"),
+          threadId: THREAD_ID,
+          turnId: matching ? actual : TURN_ID,
+          requestedBy: "user",
+          createdAt: NOW,
+        },
+      );
+      expect(stopped.thread.usageLimitRecoverySource).toEqual(source);
+      expect(stopped.thread.goalPausedAt).toBe(matching ? NOW : null);
+      expect(stopped.thread.usageLimitRecoveryCancelledTurnId ?? null).toBe(
+        matching ? actual : null,
+      );
+      expect(
+        stopped.events.filter((event) => event.type === "thread.turn-interrupt-requested"),
+      ).toHaveLength(1);
+    },
+  );
+
   it("a Stop during startup leaves a tombstone before any provider turn id exists", async () => {
     const stopped = await apply(readModel({ latestTurn: null, session: null }), {
       type: "thread.session.stop",

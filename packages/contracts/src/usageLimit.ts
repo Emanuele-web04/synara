@@ -27,6 +27,8 @@ export const UsageLimitRecovery = Schema.Struct({
 export type UsageLimitRecovery = typeof UsageLimitRecovery.Type;
 
 export const UsageLimitRecoverySource = Schema.Struct({
+  // Executing provider intent, retained before the native turn id exists.
+  admissionSequence: Schema.optional(NonNegativeInt),
   turnId: TurnId,
   bindingKey: TrimmedNonEmptyString,
   policyEpoch: NonNegativeInt,

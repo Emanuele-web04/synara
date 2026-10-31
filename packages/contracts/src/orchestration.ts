@@ -2112,6 +2112,14 @@ const ThreadSidechatExpireCommand = Schema.Struct({
   expiredAt: IsoDateTime,
 });
 
+const ThreadUsageLimitAdmitCommand = Schema.Struct({
+  type: Schema.Literal("thread.usage-limit.admit"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  admissionSequence: NonNegativeInt,
+  policyEpoch: NonNegativeInt,
+  createdAt: IsoDateTime,
+});
 const ThreadUsageLimitSourceCommand = Schema.Struct({
   expectedBindingKey: Schema.optional(Schema.String),
   type: Schema.Literal("thread.usage-limit.source"),
@@ -2176,6 +2184,7 @@ const ThreadUsageLimitCancelCommand = Schema.Struct({
 });
 
 const InternalOrchestrationCommand = Schema.Union([
+  ThreadUsageLimitAdmitCommand,
   ThreadUsageLimitSourceCommand,
   ThreadUsageLimitScheduleCommand,
   ThreadUsageLimitDeferCommand,

@@ -3122,7 +3122,15 @@ const make = Effect.gen(function* () {
             if (
               settings.autoResumeAfterUsageLimits &&
               event.createdAt >= recoveryLiveAfter &&
-              frozenSource?.turnId !== eventTurnId
+              frozenSource?.turnId !== eventTurnId &&
+              frozenSource?.admissionSequence !== undefined &&
+              frozenSource.policyEpoch === settings.usageLimitRecoveryEpoch &&
+              orchestrationEngine.hasThreadStopAfter !== undefined &&
+              !(yield* orchestrationEngine.hasThreadStopAfter(
+                thread.id,
+                frozenSource.admissionSequence,
+                eventTurnId,
+              ))
             ) {
               yield* orchestrationEngine.dispatch({
                 type: "thread.usage-limit.source",
@@ -3130,6 +3138,7 @@ const make = Effect.gen(function* () {
                 threadId: thread.id,
                 source: {
                   turnId: eventTurnId,
+                  admissionSequence: frozenSource.admissionSequence,
                   bindingKey: "pending",
                   policyEpoch: settings.usageLimitRecoveryEpoch,
                 },
@@ -3166,6 +3175,7 @@ const make = Effect.gen(function* () {
                   threadId: thread.id,
                   source: {
                     turnId: eventTurnId,
+                    admissionSequence: frozenSource.admissionSequence,
                     bindingKey,
                     policyEpoch: settings.usageLimitRecoveryEpoch,
                   },

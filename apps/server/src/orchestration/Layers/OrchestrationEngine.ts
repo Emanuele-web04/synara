@@ -2099,6 +2099,8 @@ const makeOrchestrationEngine = Effect.gen(function* () {
     readThreadEvents,
     readThreadEventsThrough,
     getEventHighWaterSequence,
+    hasThreadStopAfter: (threadId, sequenceExclusive, turnId) =>
+      eventStore.hasThreadStopAfter(threadId, sequenceExclusive, turnId),
     getThreadTitleHighWaterSequence,
     subscribeDomainEvents,
     dispatch,

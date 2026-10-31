@@ -3392,6 +3392,21 @@ const make = Effect.gen(function* () {
     if (!thread) {
       return;
     }
+    let usageLimitAdmissionSequence: number | undefined;
+    if ((input.dispatchMode ?? "queue") !== "steer" && thread.parentThreadId == null) {
+      const settings = yield* serverSettings.getSettings;
+      if (settings.autoResumeAfterUsageLimits) {
+        const admission = yield* orchestrationEngine.dispatch({
+          type: "thread.usage-limit.admit",
+          commandId: serverCommandId("usage-limit-send-admission"),
+          threadId: input.threadId,
+          admissionSequence: input.completionEventSequence ?? input.sourceEventSequence,
+          policyEpoch: settings.usageLimitRecoveryEpoch,
+          createdAt: new Date().toISOString(),
+        });
+        usageLimitAdmissionSequence = admission.sequence;
+      }
+    }
     const projectContextPacket = yield* (
       Option.isSome(projectAgentService)
         ? projectAgentService.value.formatContextPacketForTurn(input.threadId)
@@ -4562,7 +4577,12 @@ const make = Effect.gen(function* () {
         sidechatContextBootstrapThreadIds.delete(input.threadId);
       }
     }
-    return startedTurn;
+    return startedTurn === undefined
+      ? undefined
+      : {
+          ...startedTurn,
+          ...(usageLimitAdmissionSequence !== undefined ? { usageLimitAdmissionSequence } : {}),
+        };
   });
 
   const renameTemporaryWorktreeBranch = Effect.fnUntraced(function* (input: {
@@ -5360,6 +5380,32 @@ const make = Effect.gen(function* () {
         ),
         Effect.ensuring(Effect.sync(() => editResendTurnStartKeys.delete(editResendKey))),
       );
+      if (
+        startedTurn?.usageLimitAdmissionSequence !== undefined &&
+        orchestrationEngine.hasThreadStopAfter &&
+        (yield* orchestrationEngine.hasThreadStopAfter(
+          event.payload.threadId,
+          startedTurn.usageLimitAdmissionSequence,
+          startedTurn.turnId,
+        ))
+      ) {
+        yield* orchestrationEngine.dispatch({
+          type: "thread.usage-limit.cancel-turn",
+          commandId: serverCommandId("usage-limit-cancel-normal-accepted"),
+          threadId: event.payload.threadId,
+          recoveryId: `normal:${event.sequence}`,
+          sourceTurnId: thread.latestTurn?.turnId ?? startedTurn.turnId,
+          turnId: startedTurn.turnId,
+          createdAt: new Date().toISOString(),
+        });
+        yield* interruptProviderTurn({
+          controlRequestId: turnStartKeyForEvent(event),
+          preserveQueuedWork: true,
+          threadId: event.payload.threadId,
+          turnId: startedTurn.turnId,
+          createdAt: new Date().toISOString(),
+        });
+      }
       if (
         startedTurn &&
         event.payload.initialGoalStartedAt !== undefined &&
@@ -6671,34 +6717,22 @@ const make = Effect.gen(function* () {
     if (
       event.type === "turn.completed" &&
       event.payload.state === "failed" &&
-      event.payload.usageLimit?.resetAt
+      event.payload.usageLimit !== undefined
     ) {
-      const settings = yield* serverSettings.getSettings;
       const current = (yield* orchestrationEngine.getReadModel()).threads.find(
         (entry) => entry.id === event.threadId,
       );
-      const source = current?.usageLimitRecoverySource;
-      const resetMs = Date.parse(event.payload.usageLimit.resetAt);
+      // Raw provider subscribers run independently of canonical ingestion. An
+      // opted-in admission can still have a pending native id or account read;
+      // only the committed terminal projection decides whether a wait is armed.
       if (
-        settings.autoResumeAfterUsageLimits &&
-        source != null &&
-        source.turnId === event.turnId &&
-        source.policyEpoch === settings.usageLimitRecoveryEpoch &&
-        resetMs > Date.now() &&
-        current?.archivedAt == null &&
-        current?.settledAt == null &&
-        current?.parentThreadId == null &&
-        current?.goalPausedAt == null &&
-        current?.interactionMode !== "plan" &&
-        current?.usageLimitRecoveryCancelledTurnId !== event.turnId &&
+        current?.usageLimitRecoverySource != null &&
         !(
-          current?.usageLimitRecoveryCancelledTurnId == null &&
-          current?.usageLimitRecoveryCancelledAt != null &&
-          current.latestTurn != null &&
-          current.latestTurn.requestedAt <= current.usageLimitRecoveryCancelledAt
-        ) &&
-        (current?.usageLimitRecoveryLastResetAt == null ||
-          resetMs > Date.parse(current.usageLimitRecoveryLastResetAt))
+          current.latestTurn?.turnId === event.turnId &&
+          current.latestTurn?.state === "error" &&
+          current.session?.status === "error" &&
+          current.session.activeTurnId === null
+        )
       )
         return;
     }
@@ -6796,6 +6830,20 @@ const make = Effect.gen(function* () {
     if (!thread) {
       return;
     }
+    const observedRuntime = yield* readRuntimeStopTarget(input);
+    if (
+      input.turnId !== undefined &&
+      thread.usageLimitRecoverySource?.admissionSequence !== undefined
+    ) {
+      const source = thread.usageLimitRecoverySource;
+      const admittedTurnId =
+        observedRuntime.session?.activeTurnId ??
+        thread.usageLimitRecovery?.resumedTurnId ??
+        (source.bindingKey === "admission" ? undefined : source.turnId);
+      // Before native acceptance a targeted Stop cannot borrow the new send's
+      // ownership. Its journal fence is checked again against the accepted id.
+      if (admittedTurnId !== input.turnId) return;
+    }
 
     // P1 activation stickiness: Stop is an explicit off. A crowded inbox of
     // queued and steered turns must not resurrect computer control after the
@@ -6822,7 +6870,6 @@ const make = Effect.gen(function* () {
       );
     }
 
-    const observedRuntime = yield* readRuntimeStopTarget(input);
     const replayReceipt =
       observedRuntime.stopControlReceipt?.controlRequestId === input.controlRequestId
         ? observedRuntime.stopControlReceipt
@@ -8407,7 +8454,8 @@ const make = Effect.gen(function* () {
             thread &&
             event.payload.session.status === "error" &&
             thread.usageLimitRecovery == null &&
-            (yield* serverSettings.getSettings).autoResumeAfterUsageLimits &&
+            (thread.usageLimitRecoverySource != null ||
+              (yield* serverSettings.getSettings).autoResumeAfterUsageLimits) &&
             !(yield* hasLiveProviderTurn(thread.id))
           ) {
             yield* drainQueuedTurnsForSession(thread.id);
@@ -8462,7 +8510,7 @@ const make = Effect.gen(function* () {
             !isExpiredSidechat(thread) &&
             event.payload.goalStartBehavior !== "defer" &&
             startsOrResumesGoal &&
-            event.payload.usageLimitRecovery === undefined
+            event.payload.usageLimitRecovery == null
           ) {
             yield* orchestrationEngine.dispatch({
               type: "thread.goal.continue",

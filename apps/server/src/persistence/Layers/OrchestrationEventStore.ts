@@ -10,6 +10,7 @@ import {
   ProjectId,
   SpaceId,
   ThreadId,
+  TurnId,
   type ServerSettings,
 } from "@synara/contracts";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
@@ -93,6 +94,11 @@ const ReadThreadEventsRequestSchema = Schema.Struct({
   eventTypes: Schema.Array(Schema.String),
 });
 const ThreadHighWaterRequestSchema = Schema.Struct({ threadId: Schema.String });
+const ThreadStopAfterRequestSchema = Schema.Struct({
+  threadId: ThreadId,
+  sequenceExclusive: NonNegativeInt,
+  turnId: Schema.NullOr(TurnId),
+});
 const HighWaterSequenceRowSchema = Schema.Struct({
   highWaterSequence: NonNegativeInt,
 });
@@ -543,6 +549,30 @@ const makeEventStore = Effect.gen(function* () {
       `,
   });
 
+  const readThreadStopAfter = SqlSchema.findOne({
+    Request: ThreadStopAfterRequestSchema,
+    Result: Schema.Struct({ hasStop: Schema.Literals([0, 1]) }),
+    execute: ({ threadId, sequenceExclusive, turnId }) => sql`
+      SELECT EXISTS (
+        SELECT 1 FROM orchestration_events
+        WHERE aggregate_kind = 'thread'
+          AND stream_id = ${threadId}
+          AND sequence > ${sequenceExclusive}
+          AND (
+            event_type = 'thread.session-stop-requested'
+            OR (
+              event_type = 'thread.turn-interrupt-requested'
+              AND (
+                ${turnId} IS NULL
+                OR json_extract(payload_json, '$.turnId') IS NULL
+                OR json_extract(payload_json, '$.turnId') = ${turnId}
+              )
+            )
+          )
+      ) AS "hasStop"
+    `,
+  });
+
   const readThreadTitleHighWaterSequenceRow = SqlSchema.findOne({
     Request: ThreadHighWaterRequestSchema,
     Result: HighWaterSequenceRowSchema,
@@ -768,6 +798,21 @@ const makeEventStore = Effect.gen(function* () {
       Effect.map((row) => row.highWaterSequence),
     );
 
+  const hasThreadStopAfter: OrchestrationEventStoreShape["hasThreadStopAfter"] = (
+    threadId,
+    sequenceExclusive,
+    turnId,
+  ) =>
+    readThreadStopAfter({ threadId, sequenceExclusive, turnId: turnId ?? null }).pipe(
+      Effect.mapError(
+        toPersistenceSqlOrDecodeError(
+          "OrchestrationEventStore.hasThreadStopAfter:query",
+          "OrchestrationEventStore.hasThreadStopAfter:decodeRow",
+        ),
+      ),
+      Effect.map((row) => row.hasStop === 1),
+    );
+
   const getThreadTitleHighWaterSequence: OrchestrationEventStoreShape["getThreadTitleHighWaterSequence"] =
     (threadId) =>
       readThreadTitleHighWaterSequenceRow({ threadId }).pipe(
@@ -811,6 +856,7 @@ const makeEventStore = Effect.gen(function* () {
     append,
     getHighWaterSequence,
     getThreadHighWaterSequence,
+    hasThreadStopAfter,
     getThreadTitleHighWaterSequence,
     readThreadEvents,
     readThreadEventsFromSequence,
