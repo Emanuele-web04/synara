@@ -24,6 +24,7 @@ import { ProviderRuntimeIngestionLive } from "./orchestration/Layers/ProviderRun
 import { RuntimeReceiptBusLive } from "./orchestration/Layers/RuntimeReceiptBus";
 import { SidechatExpiryReactorLive } from "./orchestration/Layers/SidechatExpiryReactor";
 import { ThreadSnoozeReactorLive } from "./orchestration/Layers/ThreadSnoozeReactor";
+import { UsageLimitRecoveryReactorLive } from "./orchestration/Layers/UsageLimitRecoveryReactor";
 import { ThreadDeletionReactorLive } from "./orchestration/Layers/ThreadDeletionReactor";
 import { TurnCheckpointCoordinatorLive } from "./orchestration/Layers/TurnCheckpointCoordinator";
 import { OrchestrationLayerLive } from "./orchestration/runtimeLayer";
@@ -121,6 +122,7 @@ export function makeServerRuntimeServicesLayer(
   );
   const runtimeIngestionLayer = ProviderRuntimeIngestionLive.pipe(
     Layer.provideMerge(runtimeServicesLayer),
+    Layer.provideMerge(serverSettingsLayer),
     Layer.provideMerge(GitCoreLive),
     // Share the gateway/deletion manager; a sibling layer cannot satisfy optional services.
     Layer.provideMerge(DeviceServiceLive),
@@ -172,6 +174,11 @@ export function makeServerRuntimeServicesLayer(
   );
   const threadSnoozeReactorLayer = ThreadSnoozeReactorLive.pipe(
     Layer.provideMerge(OrchestrationLayerLive),
+  );
+  const usageLimitRecoveryReactorLayer = UsageLimitRecoveryReactorLive.pipe(
+    Layer.provideMerge(providerCommandReactorLayer),
+    Layer.provideMerge(OrchestrationLayerLive),
+    Layer.provideMerge(serverSettingsLayer),
   );
   const profileStatsArchiveLayer = ProfileStatsArchiveLive.pipe(
     Layer.provideMerge(checkpointStoreLayer),
@@ -326,6 +333,7 @@ export function makeServerRuntimeServicesLayer(
     providerCommandReactorLayer,
     sidechatExpiryReactorLayer,
     threadSnoozeReactorLayer,
+    usageLimitRecoveryReactorLayer,
     threadGitMetadataReactorLayer,
     threadDeletionReactorLayer,
     devServerManagerLayer,

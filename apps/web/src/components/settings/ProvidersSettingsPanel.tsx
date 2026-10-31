@@ -135,6 +135,7 @@ import {
   useSettingsRestoreSignal,
 } from "./SettingControls";
 import { SettingsListRow, SettingsRow, SettingsSection } from "./SettingsPanelPrimitives";
+import { UsageLimitRecoverySetting } from "./UsageLimitRecoverySetting";
 import { t, useTranslation } from "~/i18n";
 
 type ProviderInstallTextKey =
@@ -2450,6 +2451,7 @@ export function ProvidersSettingsPanel({
       </SettingsSection>
 
       <SettingsSection title="settings:performance">
+        <UsageLimitRecoverySetting />
         <SettingsRow
           id="setting-keep-synara-responsive"
           title="settings:keepSynaraResponsive"

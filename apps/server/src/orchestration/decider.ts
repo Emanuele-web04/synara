@@ -20,6 +20,7 @@ import {
   SPACES_MAX_COUNT,
   THREAD_GOAL_ACHIEVEMENTS_MAX_COUNT,
   TurnId,
+  CommandId,
 } from "@synara/contracts";
 import {
   deriveAssociatedWorktreeMetadata,
@@ -41,6 +42,7 @@ import { Effect } from "effect";
 import { computerActivationMetadata } from "../computer/computerActivation.ts";
 
 import { OrchestrationCommandInvariantError } from "./Errors.ts";
+import { projectEvent } from "./projector.ts";
 import { withProjectRelocationEvents } from "./projectRelocation.ts";
 import { buildForkThreadTitle } from "./forkThreadTitle.ts";
 import { hasNativeHandoffMessages } from "./handoff.ts";
@@ -599,7 +601,7 @@ function deriveConversationRollbackTarget(
   };
 }
 
-export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand")(function* ({
+const decideCommand = Effect.fn("decideOrchestrationCommand")(function* ({
   command,
   readModel,
   workspacePaths,
@@ -613,6 +615,235 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
   OrchestrationCommandInvariantError
 > {
   switch (command.type) {
+    case "thread.usage-limit.source": {
+      const thread = yield* requireThread({ readModel, command, threadId: command.threadId });
+      return usageLimitMetadataEvent(
+        command,
+        thread.session?.activeTurnId === command.source.turnId &&
+          (command.expectedBindingKey === undefined ||
+            thread.usageLimitRecoverySource?.bindingKey === command.expectedBindingKey)
+          ? { usageLimitRecoverySource: command.source }
+          : {},
+      );
+    }
+    case "thread.usage-limit.defer": {
+      const thread = yield* requireThread({ readModel, command, threadId: command.threadId });
+      const recovery = thread.usageLimitRecovery;
+      const pausedAt = (thread.goal ?? "").trim() ? nowIso() : undefined;
+      return usageLimitMetadataEvent(
+        command,
+        recovery?.id === command.recoveryId &&
+          recovery.state === "resuming" &&
+          recovery.resumedTurnId === undefined
+          ? {
+              usageLimitRecovery: {
+                ...recovery,
+                state: "waiting",
+                ...(pausedAt
+                  ? { goalStartedAt: thread.goalStartedAt ?? null, goalPausedAt: pausedAt }
+                  : {}),
+              },
+              ...(pausedAt ? { goalPausedAt: pausedAt } : {}),
+            }
+          : {},
+      );
+    }
+    case "thread.usage-limit.started":
+    case "thread.usage-limit.finish": {
+      const thread = yield* requireThread({ readModel, command, threadId: command.threadId });
+      const recovery = thread.usageLimitRecovery;
+      if (
+        !recovery ||
+        recovery.id !== command.recoveryId ||
+        recovery.state !== "resuming" ||
+        (recovery.resumedTurnId !== undefined && recovery.resumedTurnId !== command.turnId)
+      )
+        return usageLimitMetadataEvent(command, {});
+      return usageLimitMetadataEvent(command, {
+        usageLimitRecovery:
+          command.type === "thread.usage-limit.finish"
+            ? null
+            : { ...recovery, resumedTurnId: command.turnId },
+      });
+    }
+    case "thread.usage-limit.cancel-turn": {
+      const thread = yield* requireThread({ readModel, command, threadId: command.threadId });
+      if (
+        thread.latestTurn?.turnId !== command.sourceTurnId &&
+        thread.latestTurn?.turnId !== command.turnId &&
+        thread.session?.activeTurnId !== command.turnId
+      )
+        return usageLimitMetadataEvent(command, {});
+      const recovery = thread.usageLimitRecovery;
+      return usageLimitMetadataEvent(command, {
+        usageLimitRecoveryCancelledAt: nowIso(),
+        usageLimitRecoveryCancelledTurnId: command.turnId,
+        ...(recovery &&
+        (recovery.id === command.recoveryId ||
+          recovery.turnId === command.turnId ||
+          recovery.resumedTurnId === command.turnId)
+          ? {
+              usageLimitRecovery: null,
+              ...(recovery.goalPausedAt !== undefined &&
+              thread.goalPausedAt == null &&
+              thread.goal?.trim()
+                ? { goalPausedAt: nowIso() }
+                : {}),
+            }
+          : {}),
+      });
+    }
+    case "thread.usage-limit.cancel": {
+      const thread = yield* requireThread({ readModel, command, threadId: command.threadId });
+      const matches =
+        command.recoveryId === undefined || thread.usageLimitRecovery?.id === command.recoveryId;
+      return usageLimitMetadataEvent(
+        command,
+        matches
+          ? {
+              usageLimitRecovery: null,
+              usageLimitRecoveryCancelledAt: nowIso(),
+              usageLimitRecoveryCancelledTurnId:
+                thread.session?.activeTurnId ?? thread.latestTurn?.turnId ?? null,
+              ...(thread.usageLimitRecovery?.goalPausedAt !== undefined &&
+              thread.goalPausedAt == null &&
+              thread.goal?.trim()
+                ? { goalPausedAt: nowIso() }
+                : {}),
+            }
+          : {},
+      );
+    }
+    case "thread.usage-limit.schedule": {
+      const thread = yield* requireThread({ readModel, command, threadId: command.threadId });
+      const recovery = command.recovery;
+      const latest = thread.latestTurn;
+      const resetMs = Date.parse(recovery.resetAt);
+      const cancelled =
+        thread.usageLimitRecoveryCancelledTurnId === recovery.turnId ||
+        (thread.usageLimitRecoveryCancelledTurnId == null &&
+          thread.usageLimitRecoveryCancelledAt != null &&
+          latest != null &&
+          latest.requestedAt <= thread.usageLimitRecoveryCancelledAt);
+      const source = thread.usageLimitRecoverySource;
+      if (
+        !source ||
+        source.bindingKey === "pending" ||
+        source.turnId !== recovery.turnId ||
+        source.bindingKey !== recovery.bindingKey ||
+        source.policyEpoch !== recovery.policyEpoch ||
+        !latest ||
+        latest.turnId !== recovery.turnId ||
+        latest.state !== "error" ||
+        cancelled ||
+        thread.archivedAt != null ||
+        thread.settledAt != null ||
+        thread.parentThreadId != null ||
+        thread.interactionMode === "plan" ||
+        isExpiredSidechat(thread) ||
+        thread.claudeCacheReview != null ||
+        !Number.isFinite(resetMs) ||
+        resetMs <= Date.parse(command.createdAt) ||
+        (thread.usageLimitRecoveryLastResetAt != null &&
+          resetMs <= Date.parse(thread.usageLimitRecoveryLastResetAt)) ||
+        thread.modelSelection.provider !== recovery.provider ||
+        (thread.modelSelection.instanceId ?? thread.modelSelection.provider) !==
+          recovery.providerInstanceId ||
+        thread.modelSelection.model !== recovery.model ||
+        ((thread.goal ?? "").trim() && thread.goalPausedAt != null)
+      ) {
+        return usageLimitMetadataEvent(command, {});
+      }
+      const pausedAt = (thread.goal ?? "").trim() ? nowIso() : undefined;
+      return usageLimitMetadataEvent(command, {
+        usageLimitRecovery: {
+          ...recovery,
+          state: "waiting",
+          ...(pausedAt
+            ? { goalStartedAt: thread.goalStartedAt ?? null, goalPausedAt: pausedAt }
+            : {}),
+        },
+        ...(pausedAt ? { goalPausedAt: pausedAt } : {}),
+      });
+    }
+    case "thread.usage-limit.resume": {
+      const thread = yield* requireThread({ readModel, command, threadId: command.threadId });
+      const recovery = thread.usageLimitRecovery;
+      if (!recovery || recovery.id !== command.recoveryId || recovery.state === "resuming")
+        return usageLimitMetadataEvent(command, {});
+      if (
+        recovery.policyEpoch !== command.policyEpoch ||
+        thread.archivedAt != null ||
+        thread.settledAt != null ||
+        thread.parentThreadId != null ||
+        isExpiredSidechat(thread) ||
+        thread.latestTurn?.turnId !== recovery.turnId ||
+        thread.latestTurn.state !== "error" ||
+        thread.modelSelection.provider !== recovery.provider ||
+        (thread.modelSelection.instanceId ?? thread.modelSelection.provider) !==
+          recovery.providerInstanceId ||
+        thread.modelSelection.model !== recovery.model ||
+        (recovery.goalPausedAt !== undefined &&
+          (thread.goalPausedAt !== recovery.goalPausedAt ||
+            (thread.goalStartedAt ?? null) !== recovery.goalStartedAt))
+      ) {
+        return usageLimitMetadataEvent(command, { usageLimitRecovery: null });
+      }
+      if (
+        Date.parse(recovery.resetAt) > Date.now() ||
+        threadHasInFlightTurn(thread) ||
+        thread.hasPendingApprovals ||
+        thread.hasPendingUserInput ||
+        thread.claudeCacheReview != null ||
+        threadHasCheckpointRevertInProgress(thread) ||
+        thread.interactionMode === "plan" ||
+        (thread.snoozedUntil != null && Date.parse(thread.snoozedUntil) > Date.now())
+      ) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: "Usage-limit recovery is not ready.",
+        });
+      }
+      const goalPatch =
+        recovery.goalPausedAt !== undefined
+          ? resolveThreadGoalPatch(
+              {
+                type: "thread.meta.update",
+                commandId: command.commandId,
+                threadId: thread.id,
+                goalPaused: false,
+              },
+              thread,
+              nowIso(),
+            )
+          : {};
+      const nextRecovery = { ...recovery, state: "resuming" as const };
+      return [
+        usageLimitMetadataEvent(command, {
+          usageLimitRecovery: nextRecovery,
+          usageLimitRecoveryLastResetAt: recovery.resetAt,
+          ...goalPatch,
+        }),
+        {
+          ...withEventBase({
+            aggregateKind: "thread",
+            aggregateId: thread.id,
+            occurredAt: command.createdAt,
+            commandId: command.commandId,
+          }),
+          type: "thread.goal-continuation-requested",
+          payload: {
+            threadId: thread.id,
+            goalStartedAt: goalPatch.goalStartedAt ?? thread.goalStartedAt ?? null,
+            trigger: "turn-completed",
+            sourceTurnId: recovery.turnId,
+            usageLimitRecovery: nextRecovery,
+            createdAt: command.createdAt,
+          },
+        },
+      ];
+    }
+
     case "space.create": {
       yield* requireSpaceAbsent({ readModel, command, spaceId: command.spaceId });
       if (command.spaceId === RESERVED_VOID_SPACE_ID) {
@@ -3193,3 +3424,234 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
     }
   }
 });
+
+/** Metadata-only accepted no-ops preserve command receipts without touching a replacement run. */
+function usageLimitMetadataEvent(
+  command: {
+    readonly commandId: CommandId;
+    readonly threadId: import("@synara/contracts").ThreadId;
+  },
+  patch: Partial<Extract<OrchestrationEvent, { type: "thread.meta-updated" }>["payload"]>,
+): Omit<Extract<OrchestrationEvent, { type: "thread.meta-updated" }>, "sequence"> {
+  const occurredAt = nowIso();
+  return {
+    ...withEventBase({
+      aggregateKind: "thread",
+      aggregateId: command.threadId,
+      occurredAt,
+      commandId: command.commandId,
+    }),
+    type: "thread.meta-updated",
+    payload: { threadId: command.threadId, updatedAt: occurredAt, ...patch },
+  };
+}
+
+export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommandWithRecovery")(
+  function* (input: Parameters<typeof decideCommand>[0]) {
+    const { command, readModel } = input;
+    // Streaming deltas and ordinary lifecycle updates keep the existing hot path.
+    const handlesRecovery =
+      command.type === "thread.meta.update" ||
+      command.type === "thread.turn.start" ||
+      command.type === "thread.turn.interrupt" ||
+      command.type === "thread.session.stop" ||
+      command.type === "thread.archive" ||
+      command.type === "thread.delete" ||
+      command.type === "thread.conversation.rollback" ||
+      command.type === "thread.message.edit-and-resend" ||
+      command.type === "thread.runtime-mode.set" ||
+      command.type === "thread.interaction-mode.set" ||
+      (command.type === "thread.session.set" &&
+        (command.usageLimitRecovery !== undefined ||
+          command.session.status === "interrupted" ||
+          command.session.status === "stopped" ||
+          command.session.status === "error"));
+    if (!handlesRecovery) return yield* decideCommand(input);
+    const thread =
+      "threadId" in command
+        ? readModel.threads.find((entry) => entry.id === command.threadId)
+        : undefined;
+    if (
+      command.type === "thread.turn.interrupt" &&
+      command.usageLimitRecoveryId !== undefined &&
+      thread
+    ) {
+      const recovery = thread.usageLimitRecovery;
+      if (recovery?.id !== command.usageLimitRecoveryId)
+        return usageLimitMetadataEvent(command, {});
+      const cancel = usageLimitMetadataEvent(command, {
+        usageLimitRecovery: null,
+        usageLimitRecoveryCancelledAt: nowIso(),
+        usageLimitRecoveryCancelledTurnId: recovery.resumedTurnId ?? recovery.turnId,
+        ...(thread.goal?.trim() && thread.goalPausedAt == null ? { goalPausedAt: nowIso() } : {}),
+      });
+      if (recovery.state !== "resuming" || recovery.resumedTurnId === undefined) return cancel;
+      const stop = yield* decideCommand({
+        ...input,
+        command: { ...command, turnId: recovery.resumedTurnId },
+      });
+      return [cancel, ...(Array.isArray(stop) ? stop : [stop])];
+    }
+    const events = yield* decideCommand(input);
+    if (
+      command.type === "thread.session.set" &&
+      command.session.status === "error" &&
+      command.usageLimitRecovery
+    ) {
+      // Failure and its wait commit together: observers cannot mistake an armed
+      // quota recovery for a final task failure between two separate commands.
+      const sessionEvents = Array.isArray(events) ? events : [events];
+      let settled = readModel;
+      for (const event of sessionEvents)
+        settled = yield* projectEvent(settled, {
+          ...event,
+          sequence: settled.snapshotSequence + 1,
+        }).pipe(
+          Effect.mapError(
+            () =>
+              new OrchestrationCommandInvariantError({
+                commandType: command.type,
+                detail: "Could not settle usage-limit source turn.",
+              }),
+          ),
+        );
+      const scheduled = yield* decideCommand({
+        ...input,
+        readModel: settled,
+        command: {
+          type: "thread.usage-limit.schedule",
+          commandId: command.commandId,
+          threadId: command.threadId,
+          recovery: command.usageLimitRecovery,
+          createdAt: command.createdAt,
+        },
+      });
+      return [...sessionEvents, ...(Array.isArray(scheduled) ? scheduled : [scheduled])];
+    }
+    if (
+      command.type === "thread.session.set" &&
+      thread?.usageLimitRecovery?.state === "resuming" &&
+      (command.session.status === "interrupted" ||
+        command.session.status === "stopped" ||
+        command.session.status === "error")
+    ) {
+      const recovery = thread.usageLimitRecovery;
+      if (
+        recovery.resumedTurnId === undefined ||
+        thread.session?.activeTurnId === recovery.resumedTurnId ||
+        thread.latestTurn?.turnId === recovery.resumedTurnId ||
+        (thread.session?.status === "starting" &&
+          thread.session.activeTurnId == null &&
+          thread.latestTurn?.turnId === recovery.turnId)
+      ) {
+        const cancelled = yield* decideCommand({
+          ...input,
+          command: {
+            type: "thread.usage-limit.cancel",
+            commandId: command.commandId,
+            threadId: thread.id,
+            recoveryId: recovery.id,
+            createdAt: command.createdAt,
+          },
+        });
+        return [
+          ...(Array.isArray(events) ? events : [events]),
+          ...(Array.isArray(cancelled) ? cancelled : [cancelled]),
+        ];
+      }
+    }
+    if (!thread || !("threadId" in command)) return events;
+    const metadataChange =
+      command.type === "thread.meta.update" &&
+      (command.modelSelection !== undefined ||
+        command.goal !== undefined ||
+        command.goalPaused !== undefined ||
+        command.goalAchieved === true ||
+        command.isSettled === true ||
+        command.worktreePath !== undefined ||
+        command.workingDirectory !== undefined ||
+        command.parentThreadId !== undefined);
+    const cancel =
+      metadataChange ||
+      command.type === "thread.turn.interrupt" ||
+      command.type === "thread.session.stop" ||
+      command.type === "thread.archive" ||
+      command.type === "thread.delete" ||
+      command.type === "thread.conversation.rollback" ||
+      command.type === "thread.message.edit-and-resend" ||
+      command.type === "thread.runtime-mode.set" ||
+      command.type === "thread.interaction-mode.set" ||
+      (command.type === "thread.turn.start" &&
+        (thread.usageLimitRecovery != null || !threadHasInFlightTurn(thread)));
+    if (!cancel) return events;
+    if (
+      thread.usageLimitRecovery == null &&
+      thread.usageLimitRecoverySource == null &&
+      command.type !== "thread.turn.interrupt" &&
+      command.type !== "thread.session.stop"
+    )
+      return events;
+    const sourceTurnId = thread.session?.activeTurnId ?? thread.latestTurn?.turnId ?? null;
+    if (
+      command.type === "thread.turn.start" &&
+      sourceTurnId === null &&
+      thread.usageLimitRecovery == null &&
+      thread.usageLimitRecoverySource == null
+    )
+      return events;
+    const cancelEvent = usageLimitMetadataEvent(command, {
+      usageLimitRecovery: null,
+      ...(command.type === "thread.turn.start" || metadataChange
+        ? { usageLimitRecoverySource: null }
+        : {}),
+      usageLimitRecoveryCancelledTurnId: sourceTurnId,
+      usageLimitRecoveryCancelledAt:
+        sourceTurnId === null && command.type === "thread.turn.start" ? null : nowIso(),
+    });
+    const original = Array.isArray(events) ? events : [events];
+    const metadataIndex = original.findIndex(
+      (event) =>
+        event.type === "thread.meta-updated" && event.payload.threadId === command.threadId,
+    );
+    if (metadataIndex >= 0 && cancelEvent.type === "thread.meta-updated") {
+      const merged = original.map((event, index) =>
+        index === metadataIndex && event.type === "thread.meta-updated"
+          ? {
+              ...event,
+              payload: {
+                ...event.payload,
+                ...cancelEvent.payload,
+                updatedAt: event.payload.updatedAt,
+              },
+            }
+          : event,
+      );
+      return Array.isArray(events) ? merged : merged[0]!;
+    }
+    if (
+      (command.type === "thread.turn.interrupt" || command.type === "thread.session.stop") &&
+      thread.usageLimitRecovery == null &&
+      cancelEvent.type === "thread.meta-updated"
+    ) {
+      const fenced = original.map((event) =>
+        event.type === "thread.turn-interrupt-requested" ||
+        event.type === "thread.session-stop-requested"
+          ? {
+              ...event,
+              payload: {
+                ...event.payload,
+                usageLimitRecoveryCancelledAt: cancelEvent.payload.usageLimitRecoveryCancelledAt,
+                usageLimitRecoveryCancelledTurnId:
+                  cancelEvent.payload.usageLimitRecoveryCancelledTurnId,
+              },
+            }
+          : event,
+      );
+      return Array.isArray(events) ? fenced : fenced[0]!;
+    }
+    // Every event is committed before publication, including the cancellation fence.
+    return command.type === "thread.turn.interrupt"
+      ? [...original, cancelEvent]
+      : [cancelEvent, ...original];
+  },
+);

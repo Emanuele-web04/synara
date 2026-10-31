@@ -1050,5 +1050,9 @@
   "turnInterruptedAfter": "Interrupted after {{elapsed}}",
   "turnResumedAfter": "Resumed: {{task}} · {{elapsed}}",
   "turnResumed": "Resumed: {{task}}",
-  "turnWorkedFor": "Worked for {{elapsed}}"
+  "turnWorkedFor": "Worked for {{elapsed}}",
+  "usageLimitResumeAt": "Usage limit · resumes at {{time}}",
+  "usageLimitAwaitingHost": "Usage reset reached · waiting for computer",
+  "cancelUsageLimitResume": "Cancel auto-resume",
+  "usageLimitResuming": "Continuing on your computer…"
 }

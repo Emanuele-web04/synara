@@ -1178,5 +1178,8 @@
   "sidebarUsageAccountLimit_one": "Barra lateral · hasta {{count}} cuenta",
   "sidebarUsageAccountLimit_other": "Barra lateral · hasta {{count}} cuentas",
   "permissionGuideEnableInstalledApp": "Si esta copia de {{app}} ya aparece en la lista, actívala. De lo contrario, arrastra la app desde la guía flotante a la lista o usa + para elegir esta copia instalada y después actívala.",
-  "permissionGuideCompleteAuthentication": "Completa cualquier autenticación de macOS. Si macOS te pide salir y volver a abrir la app, hazlo antes de comprobar de nuevo."
+  "permissionGuideCompleteAuthentication": "Completa cualquier autenticación de macOS. Si macOS te pide salir y volver a abrir la app, hazlo antes de comprobar de nuevo.",
+  "resumeAfterUsageLimits": "Reanudar tras los límites de uso",
+  "resumeAfterUsageLimitsDescription": "Continúa automáticamente las tareas que alcancen un límite cuando el proveedor indique que se restablece la cuota. Se aplica a este ordenador, incluso con los demás dispositivos cerrados. Desactivarlo cancela las reanudaciones pendientes.",
+  "couldNotUpdateUsageLimitRecovery": "No se pudo actualizar la reanudación automática"
 }

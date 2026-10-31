@@ -369,6 +369,7 @@ function threadDrainSignal(state: AppState, threadId: ThreadId): string {
     pendingUserInputCount,
     thread.claudeCacheReview?.reviewId ?? "",
     thread.claudeCacheReview?.status ?? "",
+    thread.usageLimitRecovery?.id ?? "",
   ].join("|");
 }
 
@@ -436,6 +437,7 @@ function readQueuedComposerAutoDispatchGates(threadId: ThreadId): QueuedComposer
     isQueuePaused:
       deriveQueuedComposerPause({
         latestTurn: thread?.latestTurn,
+        usageLimitRecovery: thread?.usageLimitRecovery,
         activities: thread?.activities ?? [],
         threadError: thread?.error,
         queuedTurnCount: draft?.queuedTurns.length ?? 0,
@@ -635,7 +637,10 @@ function runQueuedComposerDrainPass(): void {
           useComposerDraftStore.getState().removeQueuedTurn(threadId, nextQueuedTurn.id);
           return;
         }
-        if (getThreadFromState(useStore.getState(), threadId)?.claudeCacheReview == null) {
+        if (
+          getThreadFromState(useStore.getState(), threadId)?.claudeCacheReview == null &&
+          getThreadFromState(useStore.getState(), threadId)?.usageLimitRecovery == null
+        ) {
           recordQueuedComposerAutoDispatchFailure(threadId, nextQueuedTurn.id);
         }
       },

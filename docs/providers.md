@@ -22,6 +22,12 @@ consistent workspace.
 Provider availability can differ between the current stable release and development builds. Use the
 provider settings in your installed Synara version as the authoritative list for that build.
 
+## Usage-limit recovery
+
+**Settings → Providers → Resume after usage limits** enables automatic continuation and defaults to off. Codex and Claude can supply provider-classified terminal quota refusal and a future reset deadline. Synara waits for every blocking window it can verify; missing, stale, unrelated-account or ambiguous reset information leaves recovery manual. Usage panels and percentage warnings alone never schedule work. Other adapters remain manual until they expose equivalent terminal evidence. Native provider retries keep ownership of their active turn. Claude automatic recovery requires a verified native OAuth account profile on macOS or Linux. Windows policy scope, environment-token/API-key/helper authentication, federation profiles, and unreadable or unsupported native settings remain manual. Codex requires its native account ID; rotating tokens alone never establish durable identity.
+
+Recovery runs on the execution host, persists across its restart, and sends a guarded continuation rather than replaying the failed prompt or an in-flight tool call. It keeps the selected provider account and model. Account/route changes invalidate the saved binding; unreadable identities remain manual. Stop and disabling the preference cancel pending waits, including a Stop that arrives before the terminal refusal. A repeated refusal with the same or an earlier reset cannot create a tight retry loop. The original failed turn stays failed, and uncertain provider delivery remains blocked for reconciliation.
+
 ## What Synara manages
 
 Synara provides the shared operating surface around each provider:
