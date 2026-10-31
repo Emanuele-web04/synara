@@ -1,5 +1,23 @@
 # Changelog
 
+## 1.0.6-remote.40 — 2026-10-31
+
+**Remote connection recovery and update diagnostics.**
+
+### Fixed
+
+- A transient failure preparing an additional renderer attachment preserves already connected renderer streams, while subsequent dials keep the retry cooldown.
+- Local remote negotiation returns a typed terminal refusal instead of flattening sign-in, revocation, incompatibility and stopped states into generic unavailability. Verified recovery resumes the retained workspace; protocol incompatibility requires an explicit reconnect.
+- Failed application commands are not replayed automatically. Fatal workspace bootstrap releases its owned callbacks and transports; late cleanup cannot dispose a replacement bootstrap.
+- Desktop update diagnostics preserve a validated failure category. Remote still omits raw error messages and stack traces from these events.
+
+### Compatibility and verification
+
+- Accounts, local data, pairings, protocol revisions and payment behavior are unchanged. These desktop-controller fixes do not require an iOS/iPadOS build.
+- Deploy the diagnostics Worker receiving allowlist separately. No new D1 migration or account API deployment is required.
+- Combined source checks passed 19,372 tests (298 skipped), formatting, lint and 12 package typechecks. Exact-tag quality/server tests, packaged startup, signing/notarization, Windows Defender and provenance remain publication gates.
+- Windows retains the exact-version unsigned exception and may show SmartScreen. Mac artifacts target Apple Silicon. The app declares macOS 13, but the bundled tunnel helper requires macOS 15; connector operation on macOS 13–14 remains unqualified.
+
 ## 1.0.6-remote.39 — 2026-10-28
 
 **Send photos reliably between connected computers.**
