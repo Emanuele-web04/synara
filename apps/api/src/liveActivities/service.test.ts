@@ -557,4 +557,180 @@ describe.skipIf(!databaseUrl)("Live Activity durable delivery", () => {
     await f.live.flush();
     expect(f.sent).toHaveLength(count);
   });
+
+  it("keeps killed-phone watches through quota waits and delivers the recorded resumed completion", async () => {
+    const f = await fixture();
+    await f.live.registerNotification(f.owner, f.notification);
+    await f.live.register(f.owner, { ...f.request, activityId: randomUUID() });
+    const source = f.notification.source;
+    await f.publish(1, 1, "ready");
+    await f.live.publish(f.hosts[0]!, {
+      sequence: 1,
+      turns: [
+        {
+          threadId: source.threadId,
+          turnId: source.turnId,
+          state: "usageLimit",
+          usageLimitResetAt: 1790003600,
+        },
+      ],
+    });
+    await f.live.flush();
+    expect(f.notifications).toHaveLength(0);
+    expect(f.sent.at(-1)).toMatchObject({
+      event: "update",
+      contentState: {
+        runningConversations: [
+          { id: source.displayId, state: "Usage limit", usageLimitResetAt: 811696400 },
+        ],
+        failedConversations: [],
+      },
+    });
+    const waitingContent = f.sent.at(-1)?.contentState as {
+      runningConversations: Array<Record<string, unknown>>;
+    };
+    expect(waitingContent.runningConversations[0]).not.toHaveProperty("runningStartedAt");
+    await f.live.publish(f.hosts[0]!, {
+      sequence: 2,
+      turns: [
+        {
+          threadId: source.threadId,
+          turnId: source.turnId,
+          state: "resuming",
+        },
+      ],
+    });
+    await f.live.flush();
+    expect(f.notifications).toHaveLength(0);
+    expect(f.sent.at(-1)).toMatchObject({
+      contentState: { runningConversations: [{ state: "Resuming on computer" }] },
+    });
+    await f.live.publish(f.hosts[0]!, {
+      sequence: 3,
+      turns: [
+        {
+          threadId: source.threadId,
+          turnId: source.turnId,
+          effectiveTurnId: "recorded-resumed-turn",
+          state: "ready",
+          startedAt: 1790000000,
+        },
+      ],
+    });
+    await f.live.flush();
+    expect(f.notifications).toHaveLength(1);
+    expect(f.notifications[0]).toMatchObject({
+      threadId: source.displayId,
+      turnId: "recorded-resumed-turn",
+      result: "completed",
+    });
+    expect(f.sent.at(-1)).toMatchObject({
+      event: "end",
+      contentState: { runningConversations: [], failedConversations: [] },
+    });
+  });
+
+  it("deduplicates original and foreground resumed-turn subscriptions durably", async () => {
+    const f = await fixture();
+    const source = f.notification.source;
+    const resumed = { ...source, turnId: "recorded-resumed-turn" };
+    await f.live.registerNotification(f.owner, f.notification);
+    await f.live.registerNotification(f.owner, {
+      ...f.notification,
+      notificationId: randomUUID(),
+      source: resumed,
+    });
+    await f.live.publish(f.hosts[0]!, {
+      sequence: 1,
+      turns: [
+        {
+          threadId: source.threadId,
+          turnId: source.turnId,
+          effectiveTurnId: resumed.turnId,
+          state: "ready",
+          startedAt: 1790000000,
+        },
+        {
+          threadId: resumed.threadId,
+          turnId: resumed.turnId,
+          state: "ready",
+          startedAt: 1790000000,
+        },
+      ],
+    });
+    await Promise.all([f.live.flush(), f.service().flush()]);
+    expect(f.notifications).toHaveLength(1);
+    expect(f.notifications[0]?.turnId).toBe(resumed.turnId);
+    await f.service().flush();
+    expect(f.notifications).toHaveLength(1);
+    const ended = await pool.query(
+      "SELECT count(*) FROM live_activities WHERE delivery_kind='notification' AND ended AND request->>'token'='' ",
+    );
+    expect(Number(ended.rows[0].count)).toBe(2);
+  });
+
+  it("retires a cancelled quota episode without replaying its failed source", async () => {
+    const f = await fixture();
+    const source = f.notification.source;
+    await f.live.registerNotification(f.owner, f.notification);
+    await f.live.publish(f.hosts[0]!, {
+      sequence: 1,
+      turns: [
+        {
+          threadId: source.threadId,
+          turnId: source.turnId,
+          state: "usageLimit",
+          usageLimitResetAt: 1790003600,
+        },
+      ],
+    });
+    await f.live.flush();
+    expect(f.notifications).toHaveLength(0);
+    await f.live.publish(f.hosts[0]!, {
+      sequence: 2,
+      turns: [{ threadId: source.threadId, turnId: source.turnId, state: "stopped" }],
+    });
+    await f.live.flush();
+    expect(f.notifications).toHaveLength(0);
+    const row = await pool.query(
+      "SELECT ended,request->>'token' AS token FROM live_activities WHERE id=$1",
+      [f.notification.notificationId],
+    );
+    expect(row.rows[0]).toEqual({ ended: true, token: "" });
+  });
+
+  it.each(["host", "thread"] as const)(
+    "keeps resumed completion dedup inside its %s boundary",
+    async (boundary) => {
+      const f = await fixture();
+      const source = f.notification.source;
+      const secondSource =
+        boundary === "host"
+          ? f.request.sources[1]!
+          : { ...source, threadId: randomUUID(), turnId: randomUUID(), displayId: randomUUID() };
+      await f.live.registerNotification(f.owner, f.notification);
+      await f.live.registerNotification(f.owner, {
+        ...f.notification,
+        notificationId: randomUUID(),
+        source: secondSource,
+      });
+      const resumedTurnId = `provider-reused-turn-id-${boundary}`;
+      const outcome = (item: typeof source) => ({
+        threadId: item.threadId,
+        turnId: item.turnId,
+        effectiveTurnId: resumedTurnId,
+        state: "ready" as const,
+        startedAt: 1790000000,
+      });
+      await f.live.publish(f.hosts[0]!, {
+        sequence: 1,
+        turns: boundary === "host" ? [outcome(source)] : [outcome(source), outcome(secondSource)],
+      });
+      if (boundary === "host")
+        await f.live.publish(f.hosts[1]!, { sequence: 1, turns: [outcome(secondSource)] });
+      await Promise.all([f.live.flush(), f.service().flush()]);
+      expect(f.notifications).toHaveLength(2);
+      expect(f.notifications.every((item) => item.turnId === resumedTurnId)).toBe(true);
+    },
+  );
 });

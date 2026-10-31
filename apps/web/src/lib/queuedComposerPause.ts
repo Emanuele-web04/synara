@@ -64,8 +64,13 @@ export function deriveQueuedComposerPause(input: {
   queuedTurnCount: number;
   stoppedTurnId: string | null | undefined;
   resumedTurnId: string | null | undefined;
+  usageLimitRecovery?: Thread["usageLimitRecovery"];
 }): QueuedComposerPause | null {
   const { latestTurn } = input;
+  // A local Resume acknowledgement cannot override a host-owned scheduled wait.
+  if (input.queuedTurnCount > 0 && input.usageLimitRecovery && latestTurn?.state !== "running") {
+    return { reason: "usage-limit", turnId: input.usageLimitRecovery.turnId };
+  }
   // A live turn already holds the queue; the notice appears once it settles.
   if (input.queuedTurnCount === 0 || !latestTurn || latestTurn.state === "running") {
     return null;

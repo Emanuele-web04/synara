@@ -8,6 +8,7 @@ import type {
 } from "@synara/contracts";
 import { HostAuthDomainError, type HostRecord } from "../identity/interfaces";
 import type { ActivityDelivery, NotificationDelivery, ApnsResult } from "./apns";
+import { liveActivityContent } from "./presentation";
 
 type Owner = { userId: string; orgId: string; sessionId: string };
 type ActivityRow = {
@@ -21,6 +22,7 @@ type ActivityRow = {
   request: RegisterLiveActivity & {
     hostGenerations?: Record<string, number>;
     sourcesRegisteredAt?: Record<string, number>;
+    deliveredSource?: Pick<LiveActivitySource, "hostId" | "threadId" | "turnId">;
   };
   created_at: Date;
   expires_at: Date;
@@ -37,24 +39,6 @@ const key = (source: { threadId: string; turnId: string }) =>
 const sourceIdentity = ({ hostId, threadId, turnId }: LiveActivitySource) =>
   JSON.stringify([hostId, threadId, turnId]);
 const swiftEpoch = 978307200;
-
-// ActivityKit decodes the existing Swift ContentState verbatim. Its
-// display-state strings differ from the host protocol's state vocabulary.
-function widgetConversation<
-  T extends { state: LiveActivityHostSnapshot["turns"][number]["state"] },
->(item: T) {
-  return {
-    ...item,
-    state: {
-      running: "Running",
-      needsApproval: "Approval needed",
-      needsInput: "Reply needed",
-      ready: "Ready",
-      failed: "Failed",
-      stopped: "Out of date",
-    }[item.state],
-  };
-}
 
 /** Durable, coalescing outbox: each activity owns the newest desired snapshot.
  * APNs is at-least-once. A row lock serializes sends, revision fences registration,
@@ -119,7 +103,18 @@ export function createLiveActivityService(options: {
       );
       if (hosts.rowCount !== hostIds.length) fail("Activity computers must belong to this account");
       const boundRequest = {
-        ...request,
+        // Copy only the public registration; delivery tombstones are server-owned.
+        activityId: request.activityId,
+        deviceJkt: request.deviceJkt,
+        revision: request.revision,
+        token: request.token,
+        environment: request.environment,
+        sources: request.sources.map(({ hostId, threadId, turnId, displayId }) => ({
+          hostId,
+          threadId,
+          turnId,
+          displayId,
+        })),
         hostGenerations: Object.fromEntries(
           hosts.rows.map((host) => [host.id, host.key_generation]),
         ),
@@ -364,14 +359,56 @@ export function createLiveActivityService(options: {
           );
           return;
         }
+        const deliveredSource = {
+          hostId: source.hostId,
+          threadId: source.threadId,
+          turnId: turn.effectiveTurnId ?? source.turnId,
+        };
+        // The original suspended-phone watch and a newer foreground registration
+        // can both own this completion. Serialize their one-shot delivery together.
+        await db.query("SELECT pg_advisory_xact_lock(hashtext($1))", [
+          JSON.stringify([
+            "turn-notification",
+            activity.user_id,
+            activity.org_id,
+            activity.session_id,
+            activity.device_id,
+            activity.request.environment,
+            deliveredSource,
+          ]),
+        ]);
+        const delivered = await db.query(
+          `SELECT id FROM live_activities
+          WHERE delivery_kind='notification' AND device_id=$1 AND user_id=$2 AND org_id=$3
+            AND session_id=$4 AND request->'deliveredSource'=$5::jsonb
+            AND request->>'environment'=$6 LIMIT 1`,
+          [
+            activity.device_id,
+            activity.user_id,
+            activity.org_id,
+            activity.session_id,
+            JSON.stringify(deliveredSource),
+            activity.request.environment,
+          ],
+        );
+        if (delivered.rowCount) {
+          await stop();
+          return;
+        }
         const result = await options.sendNotification?.({
           environment: activity.request.environment,
           token: activity.request.token,
           notificationId: id,
           threadId: source.displayId,
-          turnId: source.turnId,
+          turnId: deliveredSource.turnId,
           result: turn.state === "ready" ? "completed" : "failed",
         });
+        if (result === "delivered") {
+          await db.query(
+            "UPDATE live_activities SET request=jsonb_set(request,'{deliveredSource}',$2::jsonb) WHERE id=$1",
+            [id, JSON.stringify(deliveredSource)],
+          );
+        }
         if (
           result === "delivered" ||
           result === "invalid-token" ||
@@ -403,35 +440,17 @@ export function createLiveActivityService(options: {
           : (turn?.state ?? (awaitingFirstReport ? "running" : "stopped"));
         return {
           id: source.displayId,
-          title: "Synara task",
-          detail: "Synara",
           state,
-          ...(turn ? { runningStartedAt: Math.max(0, turn.startedAt - swiftEpoch) } : {}),
+          ...(turn?.startedAt !== undefined ? { startedAt: turn.startedAt } : {}),
+          ...(turn?.usageLimitResetAt !== undefined
+            ? { usageLimitResetAt: turn.usageLimitResetAt }
+            : {}),
         };
       });
-      const running = conversations.filter((item) =>
-        ["running", "needsApproval", "needsInput"].includes(item.state),
-      );
-      const content = {
-        runningConversations: running.slice(0, 3).map(widgetConversation),
-        completedConversations: conversations
-          .filter((item) => item.state === "ready")
-          .slice(0, Math.max(0, 3 - running.length))
-          .map(widgetConversation),
-        failedConversations: conversations
-          .filter((item) => item.state === "failed")
-          .slice(
-            0,
-            Math.max(
-              0,
-              3 - running.length - conversations.filter((item) => item.state === "ready").length,
-            ),
-          )
-          .map(widgetConversation),
-      };
+      const { ongoing, content } = liveActivityContent(conversations);
       const fingerprint = JSON.stringify(content);
       if (
-        running.length &&
+        ongoing &&
         fingerprint === activity.last_payload &&
         now - Number(activity.last_timestamp) < 30
       ) {
@@ -442,7 +461,7 @@ export function createLiveActivityService(options: {
         return;
       }
       const timestamp = Math.max(now, Number(activity.last_timestamp) + 1);
-      const event = running.length ? "update" : "end";
+      const event = ongoing ? "update" : "end";
       const result = await options.send({
         environment: activity.request.environment,
         token: activity.request.token,

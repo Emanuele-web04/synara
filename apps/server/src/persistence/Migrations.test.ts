@@ -694,6 +694,7 @@ managedAttachmentsLegacyLayer("managed attachment migration after private migrat
         [138, "RemoteDeviceTrust"],
         [139, "RemoteConnectionPreferences"],
         [140, "RemoteAccessControls"],
+        [141, "ProjectionThreadsUsageLimitRecovery"],
       ]);
 
       const tracker = yield* trackerRows(sql);
@@ -786,6 +787,7 @@ managedAttachmentsLegacyLayer("managed attachment migration after private migrat
           { migration_id: 138, name: "RemoteDeviceTrust" },
           { migration_id: 139, name: "RemoteConnectionPreferences" },
           { migration_id: 140, name: "RemoteAccessControls" },
+          { migration_id: 141, name: "ProjectionThreadsUsageLimitRecovery" },
         ],
       );
       const groupConfigColumns = yield* sql<{ readonly name: string }>`
@@ -958,6 +960,7 @@ agentGatewayRetentionLegacyLayer(
           [138, "RemoteDeviceTrust"],
           [139, "RemoteConnectionPreferences"],
           [140, "RemoteAccessControls"],
+          [141, "ProjectionThreadsUsageLimitRecovery"],
         ]);
 
         const columns = yield* sql<{ readonly name: string }>`
@@ -1093,6 +1096,7 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
         [138, "RemoteDeviceTrust"],
         [139, "RemoteConnectionPreferences"],
         [140, "RemoteAccessControls"],
+        [141, "ProjectionThreadsUsageLimitRecovery"],
       ]);
 
       const tracker = yield* trackerRows(sql);
@@ -1169,6 +1173,7 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
           [138, "RemoteDeviceTrust"],
           [139, "RemoteConnectionPreferences"],
           [140, "RemoteAccessControls"],
+          [141, "ProjectionThreadsUsageLimitRecovery"],
         ],
       );
 
@@ -1299,6 +1304,7 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
         [138, "RemoteDeviceTrust"],
         [139, "RemoteConnectionPreferences"],
         [140, "RemoteAccessControls"],
+        [141, "ProjectionThreadsUsageLimitRecovery"],
       ]);
 
       const tracker = yield* trackerRows(sql);
@@ -1371,6 +1377,7 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
           [138, "RemoteDeviceTrust"],
           [139, "RemoteConnectionPreferences"],
           [140, "RemoteAccessControls"],
+          [141, "ProjectionThreadsUsageLimitRecovery"],
         ],
       );
       const preservedSpaces = yield* sql<{ readonly spaceId: string }>`

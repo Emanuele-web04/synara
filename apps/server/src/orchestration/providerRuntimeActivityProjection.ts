@@ -1479,7 +1479,12 @@ export function projectProviderRuntimeActivities(
       if (!rawRateLimits || typeof rawRateLimits !== "object") {
         return [];
       }
-      const rl = rawRateLimits as Record<string, unknown>;
+      const envelope = rawRateLimits as Record<string, unknown>;
+      const nested = envelope.rate_limit_info;
+      const rl =
+        nested !== null && typeof nested === "object" && !Array.isArray(nested)
+          ? (nested as Record<string, unknown>)
+          : envelope;
       if (Object.keys(rl).length === 0) {
         return [];
       }

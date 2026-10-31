@@ -163,7 +163,7 @@ function isThreadEligibleForRetention(
   if (protectedThreadIds.has(thread.id)) return false;
   if (thread.isPinned === true) return false;
   // Archiving clears a pending snooze, so its reminder would never fire.
-  if ((thread.snoozedUntil ?? null) !== null) return false;
+  if ((thread.snoozedUntil ?? null) !== null || thread.usageLimitRecovery != null) return false;
   if (isThreadBusy(thread)) return false;
   const lastActivityMs = getThreadLastActivityMs(thread);
   return lastActivityMs !== null && lastActivityMs <= cutoffMs;
