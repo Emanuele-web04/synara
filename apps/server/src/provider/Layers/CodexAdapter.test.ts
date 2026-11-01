@@ -2157,6 +2157,133 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
     }),
   );
 
+  it.effect("attaches same-turn Codex quota deadlines only after native retries terminate", () =>
+    Effect.gen(function* () {
+      const adapter = yield* CodexAdapter;
+      const createdAt = new Date().toISOString();
+      const reset = Math.floor(Date.now() / 1_000) + 3_600;
+      const weeklyReset = reset + 604_800;
+      lifecycleManager.sessionSnapshots = [
+        {
+          provider: "codex",
+          providerInstanceId: "codex_work",
+          status: "running",
+          runtimeMode: "full-access",
+          threadId: asThreadId("thread-1"),
+          createdAt,
+          updatedAt: createdAt,
+        },
+      ];
+      const emit = (id: string, method: string, payload: unknown) =>
+        lifecycleManager.emit("event", {
+          id: asEventId(id),
+          kind: "notification",
+          provider: "codex",
+          threadId: asThreadId("thread-1"),
+          turnId: asTurnId("quota-turn"),
+          createdAt,
+          method,
+          payload,
+        } satisfies ProviderEvent);
+      try {
+        const collected = yield* adapter.streamEvents.pipe(
+          Stream.take(6),
+          Stream.runCollect,
+          Effect.forkChild,
+        );
+        emit("quota-start", "turn/started", { turn: { id: "quota-turn", status: "inProgress" } });
+        emit("quota-window", "account/rateLimits/updated", {
+          rateLimits: {
+            limitId: "codex",
+            primary: { usedPercent: 100, resetsAt: reset },
+            secondary: { usedPercent: 100, resetsAt: weeklyReset },
+          },
+        });
+        emit("quota-partial-window", "account/rateLimits/updated", {
+          rateLimits: { limitId: "codex", primary: { usedPercent: 100, resetsAt: reset } },
+        });
+        emit("quota-retry", "error", {
+          error: { message: "Retrying", codexErrorInfo: "rateLimitExceeded" },
+          willRetry: true,
+        });
+        emit("quota-declined", "error", {
+          error: { message: "Usage limit reached", codexErrorInfo: "rateLimitExceeded" },
+          willRetry: false,
+        });
+        emit("quota-failed", "turn/completed", {
+          turn: {
+            id: "quota-turn",
+            status: "failed",
+            error: {
+              message: "Usage limit reached",
+              codexErrorInfo: { responseTooManyFailedAttempts: { httpStatusCode: 429 } },
+            },
+          },
+        });
+        const events = yield* Fiber.join(collected);
+        assert.equal(events[3]?.type, "runtime.warning");
+        assert.equal(events[4]?.type, "runtime.warning");
+        assert.ok(events.every((event) => event.type !== "runtime.error"));
+        assert.ok(events.slice(0, 5).every((event) => !("usageLimit" in event.payload)));
+        const completion = events[5];
+        assert.equal(completion?.type, "turn.completed");
+        if (completion?.type === "turn.completed") {
+          assert.equal(completion.payload.errorCode, "responseTooManyFailedAttempts");
+          assert.deepEqual(completion.payload.usageLimit, {
+            resetAt: new Date(weeklyReset * 1_000).toISOString(),
+          });
+        }
+        // A later turn cannot borrow the prior model/account scope's reset.
+        const unknown = yield* adapter.streamEvents.pipe(
+          Stream.take(2),
+          Stream.runCollect,
+          Effect.forkChild,
+        );
+        emit("quota-next-start", "turn/started", {
+          turn: { id: "quota-turn", status: "inProgress" },
+        });
+        emit("quota-next-failed", "turn/completed", {
+          turn: {
+            id: "quota-turn",
+            status: "failed",
+            error: { message: "Usage limit reached", codexErrorInfo: "usageLimitExceeded" },
+          },
+        });
+        const next = (yield* Fiber.join(unknown))[1];
+        assert.equal(next?.type, "turn.completed");
+        if (next?.type === "turn.completed")
+          assert.deepEqual(next.payload.usageLimit, { resetAt: null });
+        const switched = yield* adapter.streamEvents.pipe(
+          Stream.take(3),
+          Stream.runCollect,
+          Effect.forkChild,
+        );
+        emit("quota-old-account-start", "turn/started", {
+          turn: { id: "quota-turn", status: "inProgress" },
+        });
+        emit("quota-old-account-window", "account/rateLimits/updated", {
+          rateLimits: { limitId: "codex", primary: { usedPercent: 100, resetsAt: reset } },
+        });
+        lifecycleManager.sessionSnapshots = [
+          { ...lifecycleManager.sessionSnapshots[0]!, providerInstanceId: "codex_other" },
+        ];
+        emit("quota-new-account-failed", "turn/completed", {
+          turn: {
+            id: "quota-turn",
+            status: "failed",
+            error: { message: "Usage limit reached", codexErrorInfo: "usageLimitExceeded" },
+          },
+        });
+        const switchedCompletion = (yield* Fiber.join(switched))[2];
+        assert.equal(switchedCompletion?.providerInstanceId, "codex_other");
+        if (switchedCompletion?.type === "turn.completed")
+          assert.deepEqual(switchedCompletion.payload.usageLimit, { resetAt: null });
+      } finally {
+        lifecycleManager.sessionSnapshots = [];
+      }
+    }),
+  );
+
   it.effect("maps non-fatal Codex error notifications to runtime.warning", () =>
     Effect.gen(function* () {
       const adapter = yield* CodexAdapter;

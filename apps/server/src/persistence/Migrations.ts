@@ -162,6 +162,8 @@ import Migration0132 from "./Migrations/132_ExternalMcpTurnCapacityRecovery.ts";
 import Migration0133 from "./Migrations/133_ProjectionTurnsWorkspaceInitialization.ts";
 import Migration0134 from "./Migrations/134_ProjectionThreadsForkSourceMessage.ts";
 import Migration0135 from "./Migrations/135_ProjectionMessageTurnActivityIndex.ts";
+// Slots 136–140 are already released in the Remote lineage; new common migrations follow them.
+import Migration0141 from "./Migrations/141_ProjectionThreadsUsageLimitRecovery.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -318,6 +320,7 @@ export const migrationEntries = [
   [138, "RemoteDeviceTrust", Migration0138],
   [139, "RemoteConnectionPreferences", Migration0139],
   [140, "RemoteAccessControls", Migration0140],
+  [141, "ProjectionThreadsUsageLimitRecovery", Migration0141],
 ] as const;
 
 export const makeMigrationLoader = (throughId?: number) =>

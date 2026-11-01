@@ -515,9 +515,13 @@ function normalizeSettings(
   const preservedPatch = enforceProviderEnvironmentSensitivity(
     preserveRedactedProviderInstanceEnvironment(current, patch),
   );
-  return Schema.decodeUnknownEffect(ServerSettings)(
-    applyServerSettingsPatch(current, preservedPatch),
-  ).pipe(
+  const next = applyServerSettingsPatch(current, preservedPatch);
+  return Schema.decodeUnknownEffect(ServerSettings)({
+    ...next,
+    usageLimitRecoveryEpoch:
+      current.usageLimitRecoveryEpoch +
+      (current.autoResumeAfterUsageLimits && !next.autoResumeAfterUsageLimits ? 1 : 0),
+  }).pipe(
     Effect.mapError(
       (cause) =>
         new ServerSettingsError({

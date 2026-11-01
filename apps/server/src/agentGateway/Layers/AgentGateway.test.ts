@@ -669,6 +669,7 @@ function makeHarnessLayer(
         ),
       ),
     getThreadTitleHighWaterSequence: () => Effect.succeed(0),
+    hasThreadStopAfter: () => Effect.succeed(false),
     readThreadEvents: (input: {
       threadId: string;
       throughSequenceInclusive: number;

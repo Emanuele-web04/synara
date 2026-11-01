@@ -32,6 +32,7 @@ import {
   type QueuedComposerAutoDispatchGates,
 } from "./queuedComposerDrain";
 import { deriveQueuedComposerPause } from "./queuedComposerPause";
+import { makeUsageLimitRecovery } from "../storeTestFixtures";
 
 const THREAD_ID = ThreadId.makeUnsafe("thread-1");
 const LIVE_TURN_ID = TurnId.makeUnsafe("turn-live");
@@ -178,6 +179,24 @@ describe("shouldAutoDispatchQueuedComposerTurn", () => {
 });
 
 describe("deriveQueuedComposerPause", () => {
+  it.each(["waiting", "resuming"] as const)(
+    "keeps local drafts held during host %s even after Resume",
+    (state) => {
+      const recovery = makeUsageLimitRecovery({ state, resetAt: "2026-01-01T00:00:00.000Z" });
+      expect(
+        deriveQueuedComposerPause({
+          latestTurn: null,
+          activities: [],
+          threadError: null,
+          queuedTurnCount: 1,
+          stoppedTurnId: null,
+          resumedTurnId: recovery.turnId,
+          usageLimitRecovery: recovery,
+        }),
+      ).toEqual({ reason: "usage-limit", turnId: recovery.turnId });
+    },
+  );
+
   const base = {
     activities: [],
     threadError: null,

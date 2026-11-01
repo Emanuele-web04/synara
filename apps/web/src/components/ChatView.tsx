@@ -319,6 +319,7 @@ import { ComposerExpiredUserInputNotice } from "./chat/ComposerExpiredUserInputN
 import { ComposerExtrasPanel } from "./chat/ComposerExtrasPanel";
 import { ComposerExtrasTrigger } from "./chat/ComposerExtrasTrigger";
 import { ComposerGoalHeader } from "./chat/ComposerGoalHeader";
+import { ComposerUsageLimitRecovery } from "./chat/ComposerUsageLimitRecovery";
 import { ComposerInputBanners } from "./chat/ComposerInputBanners";
 import { ComposerTransportNotice } from "./chat/ComposerTransportNotice";
 import { ComposerLiveChangesHeader } from "./chat/ComposerLiveChangesHeader";
@@ -3887,6 +3888,9 @@ export default function ChatView({
       .dispatchCommand({
         type: "thread.turn.interrupt",
         requestedBy: "user",
+        ...(activeThread.usageLimitRecovery && phase !== "running"
+          ? { usageLimitRecoveryId: activeThread.usageLimitRecovery.id }
+          : {}),
         commandId: newCommandId(),
         threadId: activeThread.id,
         createdAt: new Date().toISOString(),
@@ -3895,7 +3899,7 @@ export default function ChatView({
         releaseQueueHold();
         throw error;
       });
-  }, [activeThread]);
+  }, [activeThread, phase]);
 
   // A rejected interrupt (orchestration dispatch timeout, dead runtime) leaves the
   // UI spinning with no explanation, so the stop affordances report it.
@@ -6259,6 +6263,12 @@ export default function ChatView({
                 the stacked rail fused onto the input. */}
             <ComposerCapsuleRow>
               <ComposerTransportNotice />
+              {activeThread?.usageLimitRecovery && phase !== "running" ? (
+                <ComposerUsageLimitRecovery
+                  recovery={activeThread.usageLimitRecovery}
+                  onCancel={onInterruptFromStopControl}
+                />
+              ) : null}
               {showComposerLiveChangesHeader ? (
                 <ComposerLiveChangesHeader
                   fileCount={activeTurnLiveDiffState.fileCount}
@@ -6345,6 +6355,7 @@ export default function ChatView({
               onEdit={onEditQueuedComposerTurn}
               pause={queuePause}
               onResume={onResumeQueuedComposerTurns}
+              resumeDisabled={activeThread?.usageLimitRecovery != null}
               onEditPaused={onEditPausedQueuedComposerTurn}
               cwd={threadWorkspaceCwd ?? undefined}
             />
@@ -6681,6 +6692,8 @@ export default function ChatView({
                   submission={{
                     phase,
                     recoveryStopAvailable: isProviderDeliveryBlockDetail(activeThread?.error),
+                    usageLimitStopAvailable:
+                      activeThread?.usageLimitRecovery != null && phase !== "running",
                     busy: isSendBusy,
                     connecting: isConnecting,
                     expired: isSidechatExpired,

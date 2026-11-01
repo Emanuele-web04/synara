@@ -1,5 +1,10 @@
 import { providerProcessPriorityEnabled } from "../../providerProcessPriority";
 import { claudeTurnResultUsage, type ClaudeResultUsageBaseline } from "../claudeResultUsage.ts";
+import {
+  claudeUsageLimitWindows,
+  usageLimitResetAt,
+  type UsageLimitWindows,
+} from "../usageLimit.ts";
 import { restoreClaudeImportedCopyDates } from "../claudeImportedCopyDates.ts";
 /**
  * ClaudeAdapterLive - Scoped live implementation for the Claude Agent provider adapter.
@@ -287,6 +292,7 @@ interface ClaudeTurnState {
   readonly assistantTextBlockOrder: Array<AssistantTextBlockState>;
   readonly capturedProposedPlanKeys: Set<string>;
   readonly sawFileChange: boolean;
+  usageLimitWindows?: UsageLimitWindows;
   readonly assistantError?: {
     readonly code: SDKAssistantMessageError;
     readonly message: string;
@@ -2993,6 +2999,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
       context: ClaudeSessionContext,
       message: string,
       cause?: unknown,
+      errorCode?: string,
     ): Effect.Effect<void> =>
       Effect.gen(function* () {
         if (cause !== undefined) {
@@ -3010,6 +3017,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           payload: {
             message,
             class: "provider_error",
+            ...(errorCode ? { errorCode } : {}),
             ...(cause !== undefined ? { detail: cause } : {}),
           },
           providerRefs: nativeProviderRefs(context),
@@ -3952,6 +3960,17 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             ...(result?.usage ? { usage: result.usage } : {}),
             ...(turnResultUsage ? { modelUsage: turnResultUsage.modelUsage } : {}),
             claudeResultObserved: result !== undefined,
+            ...(turnState.assistantError ? { errorCode: turnState.assistantError.code } : {}),
+            ...(status === "failed" && turnState.assistantError?.code === "rate_limit"
+              ? {
+                  usageLimit: {
+                    resetAt: usageLimitResetAt(
+                      turnState.usageLimitWindows,
+                      Date.parse(stamp.createdAt),
+                    ),
+                  },
+                }
+              : {}),
             tokenAccountingVersion: 1,
             mainLoopTokens,
             mainLoopCacheReadTokens,
@@ -5013,6 +5032,16 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             },
           };
         }
+        if (message.error === "rate_limit" && context.turnState && "api_error_params" in message) {
+          // The SDK can throttle unchanged rate_limit_event frames; a typed refusal
+          // still carries its current structured limit info on the assistant error.
+          const windows = claudeUsageLimitWindows(
+            context.turnState.usageLimitWindows,
+            message.api_error_params,
+            Date.now(),
+          );
+          if (windows !== undefined) context.turnState.usageLimitWindows = windows;
+        }
         const content = message.message?.content;
         if (Array.isArray(content)) {
           for (const block of content) {
@@ -5241,7 +5270,20 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         }
 
         if (status === "failed") {
-          yield* emitRuntimeError(context, errorMessage ?? "Claude turn failed.");
+          // The terminal failure carries quota evidence atomically with recovery admission.
+          // A preliminary session failure would let completion push outrun that decision.
+          if (assistantError?.code === "rate_limit") {
+            yield* emitRuntimeWarning(context, errorMessage ?? "Claude turn failed.", {
+              errorCode: assistantError.code,
+            });
+          } else {
+            yield* emitRuntimeError(
+              context,
+              errorMessage ?? "Claude turn failed.",
+              undefined,
+              assistantError?.code,
+            );
+          }
         }
 
         // Retry in case the CLI had not yet written the notification at turn start.
@@ -6238,6 +6280,15 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         }
 
         if (message.type === "rate_limit_event") {
+          if (context.turnState) {
+            const windows = claudeUsageLimitWindows(
+              context.turnState.usageLimitWindows,
+              message,
+              Date.parse(stamp.createdAt),
+            );
+            if (windows === undefined) delete context.turnState.usageLimitWindows;
+            else context.turnState.usageLimitWindows = windows;
+          }
           yield* offerRuntimeEvent(context, {
             ...base,
             type: "account.rate-limits.updated",
