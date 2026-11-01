@@ -13,7 +13,11 @@ $failures = @()
 $cases = @(
     @{ name = 'cloud-enabled clean scan'; fault = ''; error = $null; scans = 1 },
     @{ name = 'transient default update failure recovers'; fault = 'update-transient'; error = $null; scans = 1; updateSource = 'default'; updateFailures = 2 },
-    @{ name = 'persistent default update failure blocks scan'; fault = 'update-persistent'; error = 'remote procedure call failed'; scans = 0; updateSource = 'default'; updateFailures = 3 },
+    @{ name = 'exhausted default updates recover through direct MMPC'; fault = 'update-fallback'; error = $null; scans = 1; updateSource = 'default'; updateFailures = 3; expectedMmpcCalls = 1 },
+    @{ name = 'both update sources fail despite fresh reported status'; fault = 'update-both-fail'; error = 'remote procedure call failed'; scans = 0; updateSource = 'default'; updateFailures = 3; mmpcFailures = 3; expectedMmpcCalls = 3 },
+    @{ name = 'both update sources fail with stale reported status'; fault = 'update-both-stale'; error = 'remote procedure call failed'; scans = 0; updateSource = 'default'; updateFailures = 3; mmpcFailures = 3; expectedMmpcCalls = 3; stale = $true },
+    @{ name = 'successful direct fallback still rejects stale definitions'; fault = 'update-fallback-stale'; error = 'do not match Microsoft latest version'; scans = 0; updateSource = 'default'; updateFailures = 3; expectedMmpcCalls = 1; stale = $true },
+    @{ name = 'successful direct fallback still rejects out-of-date status'; fault = 'update-fallback-outdated'; error = 'reported out of date'; scans = 0; updateSource = 'default'; updateFailures = 3; expectedMmpcCalls = 1; outOfDate = $true },
     @{ name = 'transient MMPC update failure recovers'; fault = 'mmpc-transient'; error = $null; scans = 1; updateSource = 'MMPC'; updateFailures = 2 },
     @{ name = 'persistent MMPC update failure blocks scan'; fault = 'mmpc-persistent'; error = 'remote procedure call failed'; scans = 0; updateSource = 'MMPC'; updateFailures = 3 },
     @{ name = 'cloud policy remains disabled'; fault = 'maps-disabled'; error = 'cloud protection'; scans = 0 },
@@ -79,9 +83,10 @@ throw 'Unexpected scanner command.'
                     $state.preferences
                 }
                 function Get-MpComputerStatus {
-                    $updated = if ($case.updateSource -eq 'MMPC' -and -not $state.mmpcUpdated) { (Get-Date).AddDays(-2) } else { Get-Date }
-                    [pscustomobject]@{ AntivirusEnabled = $true; RealTimeProtectionEnabled = $true; AntivirusSignatureLastUpdated = $updated; DefenderSignaturesOutOfDate = $false }
+                    $updated = if ($case.stale -or ($case.updateSource -eq 'MMPC' -and -not $state.mmpcUpdated)) { (Get-Date).AddDays(-2) } else { Get-Date }
+                    [pscustomobject]@{ AntivirusEnabled = $true; RealTimeProtectionEnabled = $true; AntivirusSignatureLastUpdated = $updated; AntivirusSignatureVersion = '1.0.0.0'; DefenderSignaturesOutOfDate = [bool]$case.outOfDate }
                 }
+                function Invoke-WebRequest { [pscustomobject]@{ Content = '<li>Version: <span>2.0.0.0</span></li>' } }
                 function Get-MpThreatDetection {}
                 function Update-MpSignature {
                     [CmdletBinding()]
@@ -89,7 +94,7 @@ throw 'Unexpected scanner command.'
                     $source = if ($UpdateSource) { $UpdateSource } else { 'default' }
                     $state.updateCalls.Add($source)
                     $attempt = @($state.updateCalls | Where-Object { $_ -eq $source }).Count
-                    if ($source -eq $case.updateSource -and $attempt -le $case.updateFailures) { throw 'The remote procedure call failed.' }
+                    if (($source -eq $case.updateSource -and $attempt -le $case.updateFailures) -or ($source -eq 'MMPC' -and $attempt -le $case.mmpcFailures)) { throw 'The remote procedure call failed.' }
                     if ($source -eq 'MMPC') { $state.mmpcUpdated = $true }
                 }
                 function Start-Sleep {}
@@ -133,6 +138,15 @@ throw 'Unexpected scanner command.'
                     if ($errors.Count -ne $case.updateFailures) { throw 'Every failed update attempt must retain its error.' }
                     foreach ($file in $errors) {
                         if ((Get-Content -LiteralPath $file.FullName -Raw) -notlike '*remote procedure call failed*') { throw 'Original update error was not retained.' }
+                    }
+                }
+                if ($case.ContainsKey('expectedMmpcCalls')) {
+                    if (@($state.updateCalls | Where-Object { $_ -eq 'MMPC' }).Count -ne $case.expectedMmpcCalls) { throw 'Unexpected direct MMPC fallback attempt count.' }
+                    if (($state.updateCalls[0..2] -join ',') -ne 'default,default,default') { throw 'Direct fallback must follow all three default attempts.' }
+                    $errors = @(Get-ChildItem "$evidence/update-MMPC-attempt-*-error.txt")
+                    if ($errors.Count -ne [int]$case.mmpcFailures) { throw 'Every failed direct fallback must retain its error.' }
+                    foreach ($file in $errors) {
+                        if ((Get-Content -LiteralPath $file.FullName -Raw) -notlike '*remote procedure call failed*') { throw 'Original direct fallback error was not retained.' }
                     }
                 }
                 if (-not $case.error) {
