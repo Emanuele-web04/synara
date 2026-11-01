@@ -1,4 +1,4 @@
-name: Recheck official 1.0.9 installer with Defender
+name: Compare native Chrome download before and after Defender update
 
 on:
   push:
@@ -10,131 +10,256 @@ permissions:
   contents: read
 
 jobs:
-  scan:
+  # Insert this single job under jobs: on the ephemeral diagnostic workflow only.
+  # Copy chrome-defender-probe.mjs to scripts/chrome-defender-probe.mjs.
+  # Do not place this after another job's guard on the same self-hosted machine.
+  # Phase 1 is diagnostic, NOT release qualification; it must precede every
+  # explicit signature update and every download/scan of the official installer.
+  chrome_download_diagnostic:
     runs-on: windows-2022
-    timeout-minutes: 20
+    timeout-minutes: 25
+    permissions:
+      contents: read
     steps:
-      - uses: actions/checkout@v6
-        with:
-          persist-credentials: false
-      - name: Stage the exact published installer without execution
-        shell: pwsh
-        run: |
-          New-Item -ItemType Directory -Path samples,defender-rescan-evidence
-          Invoke-WebRequest 'https://github.com/Emanuele-web04/synara/releases/download/v1.0.9/Synara-1.0.9-x64.exe' -OutFile 'samples/Synara-1.0.9-x64.exe'
-          $hash = (Get-FileHash 'samples/Synara-1.0.9-x64.exe' -Algorithm SHA256).Hash
-          if ($hash -ne 'd8a0d6bd3bbc6e9128cbf40d0b63262b3a516221c25e017452bc6b4c94ebabc5') { throw 'Official installer hash mismatch.' }
-          Get-AuthenticodeSignature 'samples/Synara-1.0.9-x64.exe' | ConvertTo-Json -Depth 6 | Set-Content defender-rescan-evidence/signature.json
-      - name: Test cloud qualification failure behavior
-        shell: pwsh
-        run: ./scripts/verify-windows-defender.test.ps1
-      - name: Run the repaired cloud qualification guard
-        shell: pwsh
-        run: ./scripts/verify-windows-defender.ps1 -AssetsDirectory samples -EvidenceDirectory defender-rescan-evidence/guard
-      - name: Retain scanner evidence on success or failure
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: defender-1.0.9-cloud-connectivity
-          path: defender-rescan-evidence/
-          retention-days: 14
-          if-no-files-found: error
-
-      # Ephemeral additions for the existing Windows Server 2022 diagnostic job.
-      # Insert AFTER the cloud/preferences/connectivity qualification guard succeeds.
-      # Copy browser-defender-probe.mjs to scripts/browser-defender-probe.mjs on the
-      # disposable diagnostic branch. No dependency or script belongs on product main.
-      # Use a fresh cloud-enabled job/VM for the strongest comparison: scanning the same
-      # hash first may warm Microsoft's reputation verdict (record the prior scan).
-      - name: Select Node for native Edge diagnostics
-        uses: actions/setup-node@v6
-        with:
-          node-version: "24"
-      - name: Prepare pinned browser client outside the checkout
+      - name: Capture initial hosted-image definitions and prepare observation helpers
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
           if ($env:GITHUB_ACTIONS -ne 'true' -or $env:RUNNER_ENVIRONMENT -ne 'github-hosted') { throw 'Disposable hosted runner required.' }
-          $tools = Join-Path $env:RUNNER_TEMP 'synara-edge-probe-client'
-          New-Item -ItemType Directory -Path $tools -Force | Out-Null
-          Copy-Item scripts/browser-defender-probe.mjs (Join-Path $tools 'browser-defender-probe.mjs')
-          npm install --prefix $tools --ignore-scripts --no-audit --no-fund --package-lock=false --save-exact playwright-core@1.62.1
-          if ($LASTEXITCODE -ne 0) { throw 'Pinned Playwright client install failed.' }
-      - name: Observe native Edge download with security defaults intact
-        timeout-minutes: 8
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $evidence = New-Item -ItemType Directory -Path browser-defender-evidence -Force
-          $started = Get-Date
-          $nodeExit = 1
-          function Save-ProbeDefenderState($name) {
-            Get-MpComputerStatus | Select-Object * -ExcludeProperty CimClass,CimInstanceProperties,CimSystemProperties |
-              ConvertTo-Json -Depth 8 | Set-Content "$evidence/$name-status.json"
-            Get-MpPreference | Select-Object * -ExcludeProperty CimClass,CimInstanceProperties,CimSystemProperties |
-              ConvertTo-Json -Depth 8 | Set-Content "$evidence/$name-preferences.json"
-            ConvertTo-Json -InputObject @(Get-MpThreatDetection) -Depth 10 | Set-Content "$evidence/$name-detections.json"
+          $root = New-Item -ItemType Directory -Path (Join-Path $env:RUNNER_TEMP 'synara-chrome-defender-evidence') -Force
+          $status = Get-MpComputerStatus
+          $status | Select-Object * -ExcludeProperty CimClass,CimInstanceProperties,CimSystemProperties |
+            ConvertTo-Json -Depth 8 | Set-Content "$root/runner-initial-status.json"
+          Get-MpPreference | Select-Object * -ExcludeProperty CimClass,CimInstanceProperties,CimSystemProperties |
+            ConvertTo-Json -Depth 8 | Set-Content "$root/runner-initial-preferences.json"
+          $os = Get-CimInstance Win32_OperatingSystem
+          $os | Select-Object Caption,Version,BuildNumber,OSArchitecture |
+            ConvertTo-Json | Set-Content "$root/operating-system.json"
+          @{ capturedAt = (Get-Date).ToUniversalTime().ToString('o'); imageOS = $env:ImageOS; imageVersion = $env:ImageVersion;
+             initialSignatureVersion = $status.AntivirusSignatureVersion; diagnosticOnly = $true;
+             limits = @('First observed runner definitions, not reconstructed historical user definitions.',
+               'Automatic definition changes are observed, never blocked or downgraded.',
+               'Sequential downloads and cloud verdicts can affect caching.',
+               'Windows Server 2022 does not reproduce a Windows 11 consumer machine.') } |
+            ConvertTo-Json -Depth 5 | Set-Content "$root/diagnostic-context.json"
+          if ($os.Caption -notmatch 'Windows Server 2022') { throw 'Expected Windows Server 2022.' }
+          @'
+          function Get-ProbeEvidenceRoot {
+            Join-Path $env:RUNNER_TEMP 'synara-chrome-defender-evidence'
           }
-          try {
-            $os = Get-CimInstance Win32_OperatingSystem
-            $os | Select-Object Caption,Version,BuildNumber,OSArchitecture |
-              ConvertTo-Json | Set-Content "$evidence/operating-system.json"
-            if ($os.Caption -notmatch 'Windows Server 2022') { throw 'Expected Windows Server 2022; do not label another OS as the requested probe.' }
-            Save-ProbeDefenderState before
+          function Save-ProbeDefenderState($directory, $name) {
+            Get-MpComputerStatus | Select-Object * -ExcludeProperty CimClass,CimInstanceProperties,CimSystemProperties |
+              ConvertTo-Json -Depth 8 | Set-Content "$directory/$name-status.json"
+            Get-MpPreference | Select-Object * -ExcludeProperty CimClass,CimInstanceProperties,CimSystemProperties |
+              ConvertTo-Json -Depth 8 | Set-Content "$directory/$name-preferences.json"
+            ConvertTo-Json -InputObject @(Get-MpThreatDetection) -Depth 10 | Set-Content "$directory/$name-detections.json"
+          }
+          function Assert-ProbeProtection {
             $status = Get-MpComputerStatus
             $prefs = Get-MpPreference
             if (-not $status.AntivirusEnabled -or -not $status.RealTimeProtectionEnabled -or
-                $prefs.DisableIOAVProtection -or $prefs.DisableRealtimeMonitoring -or
+                $prefs.DisableRealtimeMonitoring -or $prefs.DisableIOAVProtection -or
+                $prefs.DisableArchiveScanning -or $prefs.DisableBehaviorMonitoring -or $prefs.DisableScriptScanning -or
                 $prefs.MAPSReporting -ne 2 -or $prefs.SubmitSamplesConsent -ne 1 -or $prefs.DisableBlockAtFirstSeen) {
-              throw 'Run the cloud-enabled qualification/connectivity guard before this browser probe.'
+              throw 'Required antivirus/download/cloud protection is not active.'
             }
-            $policyRoots = @('HKLM:\SOFTWARE\Policies\Microsoft\Edge', 'HKCU:\SOFTWARE\Policies\Microsoft\Edge')
-            $policyEvidence = @()
-            foreach ($key in $policyRoots) {
+            if (@($prefs.ExclusionPath + $prefs.ExclusionExtension + $prefs.ExclusionProcess | Where-Object { $_ }).Count -gt 0) {
+              throw 'Defender exclusions remain.'
+            }
+          }
+          function Assert-ProbeMaps($directory) {
+            $platform = Get-ChildItem "$env:ProgramData/Microsoft/Windows Defender/Platform" -Directory |
+              Sort-Object Name -Descending | Select-Object -First 1
+            $scanner = if ($platform) { Join-Path $platform.FullName 'MpCmdRun.exe' } else { "$env:ProgramFiles/Windows Defender/MpCmdRun.exe" }
+            $connection = @(& $scanner -ValidateMapsConnection 2>&1)
+            $exitCode = $LASTEXITCODE
+            $connection | Set-Content "$directory/maps-connection.txt"
+            $exitCode | Set-Content "$directory/maps-connection-exit.txt"
+            if ($exitCode -ne 0) { throw 'MAPS connectivity could not be validated; no protected-download claim.' }
+          }
+          function Assert-ChromePolicies($directory) {
+            $policies = @()
+            foreach ($key in @('HKLM:\SOFTWARE\Policies\Google\Chrome', 'HKCU:\SOFTWARE\Policies\Google\Chrome')) {
               if (Test-Path $key) {
-                $properties = Get-ItemProperty $key
-                $policyEvidence += @{ key = $key; properties = $properties }
-                $policyEvidence += @(Get-ChildItem $key -Recurse | ForEach-Object {
+                $policies += @{ key = $key; properties = Get-ItemProperty $key }
+                $policies += @(Get-ChildItem $key -Recurse | ForEach-Object {
                   @{ key = $_.Name; properties = Get-ItemProperty $_.PSPath }
                 })
               }
             }
-            ConvertTo-Json -InputObject $policyEvidence -Depth 12 | Set-Content "$evidence/edge-policy-registry.json"
-            foreach ($entry in $policyEvidence) {
+            ConvertTo-Json -InputObject $policies -Depth 12 | Set-Content "$directory/chrome-policy-registry.json"
+            foreach ($entry in $policies) {
               $p = $entry.properties
-              if (($null -ne $p.SmartScreenEnabled -and $p.SmartScreenEnabled -eq 0) -or
-                  ($null -ne $p.SmartScreenForTrustedDownloadsEnabled -and $p.SmartScreenForTrustedDownloadsEnabled -eq 0)) {
-                throw 'Existing Edge policy disables relevant protection; no meaningful protected-download verdict is possible.'
+              if (($null -ne $p.SafeBrowsingEnabled -and $p.SafeBrowsingEnabled -eq 0) -or
+                  ($null -ne $p.SafeBrowsingProtectionLevel -and $p.SafeBrowsingProtectionLevel -eq 0)) {
+                throw 'Existing Chrome policy disables Safe Browsing.'
               }
-              if ($entry.key -match 'SmartScreenAllowListDomains|ExemptDomainFileTypePairsFromFileTypeDownloadWarnings|ExemptFileTypeDownloadWarnings') {
-                throw 'An existing download/SmartScreen exception needs review before this probe.'
+              if ($entry.key -match 'SafeBrowsingAllowlistDomains|SafeBrowsingWhitelistDomains|ExemptDomainFileTypePairsFromFileTypeDownloadWarnings' -or
+                  @($p.PSObject.Properties.Name | Where-Object { $_ -match 'SafeBrowsingAllowlistDomains|SafeBrowsingWhitelistDomains|ExemptDomainFileTypePairsFromFileTypeDownloadWarnings' }).Count -gt 0) {
+                throw 'Existing Safe Browsing/download exceptions need review.'
               }
             }
-            $script = Join-Path $env:RUNNER_TEMP 'synara-edge-probe-client/browser-defender-probe.mjs'
-            node $script $evidence.FullName
-            $nodeExit = $LASTEXITCODE
-          } finally {
-            # Collect even when Edge refuses the download or the probe errors.
-            Save-ProbeDefenderState after
-            $eventReadErrors = @()
+          }
+          function Save-ProbeEvents($directory, $started) {
+            $readErrors = @()
             $events = @(Get-WinEvent -FilterHashtable @{
               LogName = 'Microsoft-Windows-Windows Defender/Operational'; StartTime = $started
-            } -ErrorAction SilentlyContinue -ErrorVariable eventReadErrors)
-            $failures = @($eventReadErrors | Where-Object { $_.FullyQualifiedErrorId -notlike 'NoMatchingEventsFound*' })
+            } -ErrorAction SilentlyContinue -ErrorVariable readErrors)
+            $failures = @($readErrors | Where-Object { $_.FullyQualifiedErrorId -notlike 'NoMatchingEventsFound*' })
             @{ startedAt = $started.ToUniversalTime().ToString('o'); completedAt = (Get-Date).ToUniversalTime().ToString('o');
                collectionSucceeded = $failures.Count -eq 0; errors = @($failures | ForEach-Object { $_.ToString() });
                events = @($events | Select-Object TimeCreated,Id,LevelDisplayName,Message) } |
-              ConvertTo-Json -Depth 12 | Set-Content "$evidence/defender-events.json"
+              ConvertTo-Json -Depth 12 | Set-Content "$directory/defender-events.json"
           }
-          if ($nodeExit -ne 0) { throw "Browser diagnostic failed with exit $nodeExit; inspect preserved evidence." }
-      - name: Retain browser and Defender observations
+          function Invoke-NativeChromeObservation($phase, [bool]$requireInitialVersion) {
+            $root = Get-ProbeEvidenceRoot
+            $directory = New-Item -ItemType Directory -Path (Join-Path $root $phase) -Force
+            $initial = Get-Content "$root/runner-initial-status.json" -Raw | ConvertFrom-Json
+            $started = Get-Date
+            $before = $null
+            $nodeExit = $null
+            try {
+              Save-ProbeDefenderState $directory before
+              Assert-ProbeProtection
+              Assert-ProbeMaps $directory
+              Assert-ChromePolicies $directory
+              $before = Get-MpComputerStatus
+              if ($requireInitialVersion -and $before.AntivirusSignatureVersion -ne $initial.AntivirusSignatureVersion) {
+                throw 'Definitions changed automatically before observation; initial-definition phase is unavailable. No downgrade attempted.'
+              }
+              $env:PROBE_PHASE = $phase
+              $env:PROBE_EXPECTED_SIGNATURE_VERSION = $before.AntivirusSignatureVersion
+              $script = Join-Path $env:RUNNER_TEMP 'synara-chrome-probe-client/chrome-defender-probe.mjs'
+              node $script $directory.FullName
+              $nodeExit = $LASTEXITCODE
+              if ($nodeExit -ne 0) { throw "Native Chrome probe failed with exit $nodeExit." }
+            } catch {
+              $_ | Out-String | Set-Content "$directory/observation-error.txt"
+              throw
+            } finally {
+              try { Save-ProbeDefenderState $directory after } catch {
+                $_ | Out-String | Set-Content "$directory/after-state-collection-error.txt"
+              }
+              $after = Get-MpComputerStatus
+              @{ phase = $phase; diagnosticOnly = $true; startedAt = $started.ToUniversalTime().ToString('o');
+                 initialSignatureVersion = $initial.AntivirusSignatureVersion; beforeSignatureVersion = $before.AntivirusSignatureVersion;
+                 afterSignatureVersion = $after.AntivirusSignatureVersion; nodeExit = $nodeExit;
+                 initialVersionMaintained = ($null -ne $before -and $before.AntivirusSignatureVersion -eq $initial.AntivirusSignatureVersion -and $after.AntivirusSignatureVersion -eq $initial.AntivirusSignatureVersion);
+                 versionStableDuringObservation = ($null -ne $before -and $before.AntivirusSignatureVersion -eq $after.AntivirusSignatureVersion);
+                 realTimeProtectionEnabledAfter = $after.RealTimeProtectionEnabled } |
+                ConvertTo-Json -Depth 6 | Set-Content "$directory/signature-comparison.json"
+              Save-ProbeEvents $directory $started
+            }
+            if ($requireInitialVersion -and $after.AntivirusSignatureVersion -ne $initial.AntivirusSignatureVersion) {
+              throw 'Definitions changed during the download; the initial-definition comparison is inconclusive.'
+            }
+            Assert-ProbeProtection
+          }
+          '@ | Set-Content (Join-Path $env:RUNNER_TEMP 'synara-chrome-observation-helpers.ps1')
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+      - name: Prepare pinned automation client; use installed Chrome
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $tools = New-Item -ItemType Directory -Path (Join-Path $env:RUNNER_TEMP 'synara-chrome-probe-client') -Force
+          Copy-Item scripts/chrome-defender-probe.mjs (Join-Path $tools 'chrome-defender-probe.mjs')
+          npm install --prefix $tools --ignore-scripts --no-audit --no-fund --package-lock=false --save-exact playwright-core@1.62.1
+          if ($LASTEXITCODE -ne 0) { throw 'Pinned automation client install failed.' }
+      - name: Enable protections without updating or downgrading definitions
+        id: protection
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          . (Join-Path $env:RUNNER_TEMP 'synara-chrome-observation-helpers.ps1')
+          $root = Get-ProbeEvidenceRoot
+          Save-ProbeDefenderState $root before-enable
+          $prefs = Get-MpPreference
+          foreach ($kind in @('ExclusionPath','ExclusionExtension','ExclusionProcess')) {
+            $values = @($prefs.$kind | Where-Object { $_ })
+            if ($values.Count -gt 0) { $arguments = @{ $kind = $values }; Remove-MpPreference @arguments }
+          }
+          Set-MpPreference -DisableRealtimeMonitoring $false -DisableArchiveScanning $false -DisableIOAVProtection $false -DisableBehaviorMonitoring $false -DisableScriptScanning $false
+          Set-MpPreference -MAPSReporting Advanced -SubmitSamplesConsent SendSafeSamples -DisableBlockAtFirstSeen $false
+          for ($attempt = 0; $attempt -lt 12; $attempt++) {
+            if ((Get-MpComputerStatus).RealTimeProtectionEnabled) { break }
+            Start-Sleep -Seconds 5
+          }
+          Save-ProbeDefenderState $root after-enable
+          Assert-ProbeProtection
+          # Intentionally no signature update, downgrade, update-policy change or installer staging here.
+      - name: Observe Chrome with the initial hosted-image definitions
+        id: initial
+        continue-on-error: true
+        timeout-minutes: 8
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          . (Join-Path $env:RUNNER_TEMP 'synara-chrome-observation-helpers.ps1')
+          Invoke-NativeChromeObservation initial-definitions $true
+      - name: Qualify official installer with the unchanged production guard
+        id: latest_guard
+        if: ${{ !cancelled() && steps.protection.outcome == 'success' }}
+        continue-on-error: true
+        timeout-minutes: 10
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          . (Join-Path $env:RUNNER_TEMP 'synara-chrome-observation-helpers.ps1')
+          $root = Get-ProbeEvidenceRoot
+          $assets = New-Item -ItemType Directory -Path (Join-Path $env:RUNNER_TEMP 'synara-chrome-guard-assets') -Force
+          $file = Join-Path $assets 'Synara-1.0.9-x64.exe'
+          $url = 'https://github.com/Emanuele-web04/synara/releases/download/v1.0.9/Synara-1.0.9-x64.exe'
+          Save-ProbeDefenderState $root before-latest-guard-staging
+          try {
+            Invoke-WebRequest $url -OutFile $file
+            $hash = (Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash
+          } catch {
+            # This fallback is AFTER phase 1. Initial AV may remove the file before
+            # the guard can hash its inputs. Refresh normally, never disable AV or restore quarantine.
+            $_ | Out-String | Set-Content "$root/latest-guard-initial-staging-error.txt"
+            Update-MpSignature
+            Save-ProbeDefenderState $root after-latest-staging-update
+            Invoke-WebRequest $url -OutFile $file
+            $hash = (Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash
+          }
+          if ($hash -ne 'd8a0d6bd3bbc6e9128cbf40d0b63262b3a516221c25e017452bc6b4c94ebabc5') { throw 'Official installer hash mismatch.' }
+          Get-AuthenticodeSignature $file | ConvertTo-Json -Depth 6 | Set-Content "$root/installer-signature.json"
+          $guard = Resolve-Path scripts/verify-windows-defender.ps1
+          Get-FileHash -LiteralPath $guard -Algorithm SHA256 | ConvertTo-Json | Set-Content "$root/production-guard-sha256.json"
+          & $guard -AssetsDirectory $assets.FullName -EvidenceDirectory (Join-Path $root 'latest-production-guard')
+      - name: Observe fresh Chrome profile with qualified latest definitions
+        id: latest
+        if: ${{ !cancelled() && steps.latest_guard.outcome == 'success' }}
+        continue-on-error: true
+        timeout-minutes: 8
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          . (Join-Path $env:RUNNER_TEMP 'synara-chrome-observation-helpers.ps1')
+          Invoke-NativeChromeObservation latest-definitions $false
+      - name: Record both phase outcomes without conflating diagnostics with qualification
+        if: always()
+        shell: pwsh
+        env:
+          INITIAL_OUTCOME: ${{ steps.initial.outcome }}
+          GUARD_OUTCOME: ${{ steps.latest_guard.outcome }}
+          LATEST_OUTCOME: ${{ steps.latest.outcome }}
+        run: |
+          $root = New-Item -ItemType Directory -Path (Join-Path $env:RUNNER_TEMP 'synara-chrome-defender-evidence') -Force
+          @{ initialObservation = $env:INITIAL_OUTCOME; productionGuard = $env:GUARD_OUTCOME;
+             latestObservation = $env:LATEST_OUTCOME; diagnosticOnly = $true } |
+            ConvertTo-Json | Set-Content "$root/job-outcomes.json"
+          Write-Output 'Read screenshots/live download data, pre-close hashes, history and Defender events together. This diagnostic job passing is not a clean download verdict.'
+      - name: Retain diagnostic evidence, excluding profiles and installer bytes
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: defender-1.0.9-native-edge-windows-2022
-          path: browser-defender-evidence/
+          name: defender-1.0.9-native-chrome-initial-vs-latest-windows-2022
+          path: ${{ runner.temp }}/synara-chrome-defender-evidence/
           retention-days: 14
           if-no-files-found: error
-      # Do not upload RUNNER_TEMP, the profile, or installer. Result JSON contains only
-      # observations; matching SHA is not a safe verdict. Correlate downloads UI/history
-      # with Defender events, policy/security controls, and the preceding guard evidence.
