@@ -14,6 +14,7 @@ $cases = @(
     @{ name = 'cloud-enabled clean scan'; fault = ''; error = $null; scans = 1 },
     @{ name = 'transient default update failure recovers'; fault = 'update-transient'; error = $null; scans = 1; updateSource = 'default'; updateFailures = 2 },
     @{ name = 'exhausted default updates recover through direct MMPC'; fault = 'update-fallback'; error = $null; scans = 1; updateSource = 'default'; updateFailures = 3; expectedMmpcCalls = 1 },
+    @{ name = 'direct fallback recovers while status RPC is unavailable'; fault = 'update-rpc-transition'; error = $null; scans = 1; updateSource = 'default'; updateFailures = 3; expectedMmpcCalls = 1 },
     @{ name = 'both update sources fail despite fresh reported status'; fault = 'update-both-fail'; error = 'remote procedure call failed'; scans = 0; updateSource = 'default'; updateFailures = 3; mmpcFailures = 3; expectedMmpcCalls = 3 },
     @{ name = 'both update sources fail with stale reported status'; fault = 'update-both-stale'; error = 'remote procedure call failed'; scans = 0; updateSource = 'default'; updateFailures = 3; mmpcFailures = 3; expectedMmpcCalls = 3; stale = $true },
     @{ name = 'successful direct fallback still rejects stale definitions'; fault = 'update-fallback-stale'; error = 'do not match Microsoft latest version'; scans = 0; updateSource = 'default'; updateFailures = 3; expectedMmpcCalls = 1; stale = $true },
@@ -79,10 +80,12 @@ throw 'Unexpected scanner command.'
                     }
                 }
                 function Get-MpPreference {
+                    if ($state.fault -eq 'update-rpc-transition' -and $state.updateCalls.Count -ge 3 -and -not $state.mmpcUpdated) { throw 'Operation failed with the following error: 0x800106ba' }
                     if ($state.fault -eq 'missing-preference') { return $state.preferences | Select-Object * -ExcludeProperty DisableBlockAtFirstSeen }
                     $state.preferences
                 }
                 function Get-MpComputerStatus {
+                    if ($state.fault -eq 'update-rpc-transition' -and $state.updateCalls.Count -ge 3 -and -not $state.mmpcUpdated) { throw 'Operation failed with the following error: 0x800106ba' }
                     $updated = if ($case.stale -or ($case.updateSource -eq 'MMPC' -and -not $state.mmpcUpdated)) { (Get-Date).AddDays(-2) } else { Get-Date }
                     [pscustomobject]@{ AntivirusEnabled = $true; RealTimeProtectionEnabled = $true; AntivirusSignatureLastUpdated = $updated; AntivirusSignatureVersion = '1.0.0.0'; DefenderSignaturesOutOfDate = [bool]$case.outOfDate }
                 }
@@ -149,6 +152,7 @@ throw 'Unexpected scanner command.'
                         if ((Get-Content -LiteralPath $file.FullName -Raw) -notlike '*remote procedure call failed*') { throw 'Original direct fallback error was not retained.' }
                     }
                 }
+                if ($case.updateSource -eq 'MMPC' -and -not (Test-Path "$evidence/default-update-preferences.json")) { throw 'A successful but stale default update must retain its intermediate state.' }
                 if (-not $case.error) {
                     if (($state.calls -join ',') -ne 'maps,scan') { throw 'Clean qualification must validate MAPS before scanning.' }
                     $ready = Get-Content "$evidence/ready-preferences.json" -Raw | ConvertFrom-Json
