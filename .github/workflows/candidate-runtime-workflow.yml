@@ -101,7 +101,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "Checkpoint verification failed: $LASTEXITCODE" }
           Copy-Item release-publish/artifact-win-x64.provenance.json $evidence
 
-      - name: Run all 14 Defender guard contract controls
+      - name: Run all 18 Defender guard contract controls
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
@@ -109,7 +109,7 @@ jobs:
             -GuardPath scripts/verify-windows-defender.ps1 `
             *>&1 | Tee-Object -FilePath (Join-Path $env:RUNNER_TEMP 'candidate-runtime-evidence/guard-contracts.log')
           $contracts = Get-Content -Raw (Join-Path $env:RUNNER_TEMP 'candidate-runtime-evidence/guard-contracts.log')
-          if ($contracts -notmatch '14 Defender guard contract tests passed') { throw 'Expected all 14 guard controls to pass.' }
+          if ($contracts -notmatch '18 Defender guard contract tests passed') { throw 'Expected all 18 guard controls to pass.' }
 
       - name: Scan the actual installer with Microsoft Defender
         id: defender
