@@ -58,12 +58,16 @@ try {
     }
     Set-MpPreference -DisableRealtimeMonitoring $false -DisableArchiveScanning $false -DisableIOAVProtection $false -DisableBehaviorMonitoring $false -DisableScriptScanning $false
     Set-MpPreference -MAPSReporting Advanced -SubmitSamplesConsent SendSafeSamples -DisableBlockAtFirstSeen $false
-    $defaultUpdated = Update-DefenderSignatures -AllowFallback
-    $signatureStatus = Get-MpComputerStatus
-    if (-not $defaultUpdated -or -not $signatureStatus.AntivirusSignatureLastUpdated -or $signatureStatus.AntivirusSignatureLastUpdated -lt (Get-Date).AddDays(-1)) {
+    $needsDirectUpdate = -not (Update-DefenderSignatures -AllowFallback)
+    if (-not $needsDirectUpdate) {
+        $signatureStatus = Get-MpComputerStatus
+        $needsDirectUpdate = -not $signatureStatus.AntivirusSignatureLastUpdated -or $signatureStatus.AntivirusSignatureLastUpdated -lt (Get-Date).AddDays(-1)
+        if ($needsDirectUpdate) { Save-DefenderState 'default-update' }
+    }
+    if ($needsDirectUpdate) {
         # Exhausted default updates and older staged definitions both need a
-        # successful direct update. Reported freshness alone cannot qualify it.
-        Save-DefenderState 'default-update'
+        # successful direct update. After failure, go directly to MMPC: status
+        # RPCs can remain unavailable during the same platform transition.
         Write-Output 'Configured update source failed or returned stale definitions; retrying MMPC.'
         Update-DefenderSignatures 'MMPC' | Out-Null
     }
