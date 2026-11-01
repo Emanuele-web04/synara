@@ -12,6 +12,10 @@ foreach ($name in @('GITHUB_ACTIONS', 'RUNNER_ENVIRONMENT', 'ProgramData')) {
 $failures = @()
 $cases = @(
     @{ name = 'cloud-enabled clean scan'; fault = ''; error = $null; scans = 1 },
+    @{ name = 'transient default update failure recovers'; fault = 'update-transient'; error = $null; scans = 1; updateSource = 'default'; updateFailures = 2 },
+    @{ name = 'persistent default update failure blocks scan'; fault = 'update-persistent'; error = 'remote procedure call failed'; scans = 0; updateSource = 'default'; updateFailures = 3 },
+    @{ name = 'transient MMPC update failure recovers'; fault = 'mmpc-transient'; error = $null; scans = 1; updateSource = 'MMPC'; updateFailures = 2 },
+    @{ name = 'persistent MMPC update failure blocks scan'; fault = 'mmpc-persistent'; error = 'remote procedure call failed'; scans = 0; updateSource = 'MMPC'; updateFailures = 3 },
     @{ name = 'cloud policy remains disabled'; fault = 'maps-disabled'; error = 'cloud protection'; scans = 0 },
     @{ name = 'sample submission remains blocked'; fault = 'samples-disabled'; error = 'cloud protection'; scans = 0 },
     @{ name = 'block at first sight remains disabled'; fault = 'first-sight-disabled'; error = 'cloud protection'; scans = 0 },
@@ -61,6 +65,8 @@ throw 'Unexpected scanner command.'
                 $state = @{
                     fault = $case.fault
                     calls = [System.Collections.Generic.List[string]]::new()
+                    updateCalls = [System.Collections.Generic.List[string]]::new()
+                    mmpcUpdated = $false
                     preferences = [pscustomobject]@{
                         MAPSReporting = 0; SubmitSamplesConsent = 2; DisableBlockAtFirstSeen = $true
                         DisableArchiveScanning = $true; DisableIOAVProtection = $true
@@ -73,10 +79,19 @@ throw 'Unexpected scanner command.'
                     $state.preferences
                 }
                 function Get-MpComputerStatus {
-                    [pscustomobject]@{ AntivirusEnabled = $true; RealTimeProtectionEnabled = $true; AntivirusSignatureLastUpdated = Get-Date; DefenderSignaturesOutOfDate = $false }
+                    $updated = if ($case.updateSource -eq 'MMPC' -and -not $state.mmpcUpdated) { (Get-Date).AddDays(-2) } else { Get-Date }
+                    [pscustomobject]@{ AntivirusEnabled = $true; RealTimeProtectionEnabled = $true; AntivirusSignatureLastUpdated = $updated; DefenderSignaturesOutOfDate = $false }
                 }
                 function Get-MpThreatDetection {}
-                function Update-MpSignature {}
+                function Update-MpSignature {
+                    [CmdletBinding()]
+                    param([string]$UpdateSource)
+                    $source = if ($UpdateSource) { $UpdateSource } else { 'default' }
+                    $state.updateCalls.Add($source)
+                    $attempt = @($state.updateCalls | Where-Object { $_ -eq $source }).Count
+                    if ($source -eq $case.updateSource -and $attempt -le $case.updateFailures) { throw 'The remote procedure call failed.' }
+                    if ($source -eq 'MMPC') { $state.mmpcUpdated = $true }
+                }
                 function Start-Sleep {}
                 function Get-WinEvent {
                     [pscustomobject]@{ Id = $(if ($state.fault -eq 'detection') { 1116 } else { 5007 }); Message = 'fixture'; TimeCreated = Get-Date }
@@ -112,6 +127,14 @@ throw 'Unexpected scanner command.'
                     if (-not $caught -or $caught -notlike "*$($case.error)*") { throw "Expected '$($case.error)', got '$caught'." }
                 } elseif ($caught) { throw $caught }
                 if (@($state.calls | Where-Object { $_ -eq 'scan' }).Count -ne $case.scans) { throw 'Unexpected scan count.' }
+                if ($case.updateSource) {
+                    if (@($state.updateCalls | Where-Object { $_ -eq $case.updateSource }).Count -ne 3) { throw 'Signature updates must recover or fail within three attempts.' }
+                    $errors = @(Get-ChildItem "$evidence/update-$($case.updateSource)-attempt-*-error.txt")
+                    if ($errors.Count -ne $case.updateFailures) { throw 'Every failed update attempt must retain its error.' }
+                    foreach ($file in $errors) {
+                        if ((Get-Content -LiteralPath $file.FullName -Raw) -notlike '*remote procedure call failed*') { throw 'Original update error was not retained.' }
+                    }
+                }
                 if (-not $case.error) {
                     if (($state.calls -join ',') -ne 'maps,scan') { throw 'Clean qualification must validate MAPS before scanning.' }
                     $ready = Get-Content "$evidence/ready-preferences.json" -Raw | ConvertFrom-Json
