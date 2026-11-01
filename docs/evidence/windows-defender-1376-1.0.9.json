@@ -76,10 +76,64 @@
       "after-detections.json"
     ]
   },
+  "chromeObservation": {
+    "run": "https://github.com/Emanuele-web04/synara/actions/runs/41335794530",
+    "artifact": "defender-1.0.9-native-chrome-initial-vs-latest-windows-2022",
+    "phase": "initial-definitions",
+    "startedAt": "2026-11-01T18:17:37.622Z",
+    "operatingSystem": "Windows Server 2022 build 20348.5761",
+    "chromeVersion": "156.0.8078.48",
+    "safeBrowsing": "Standard protection, verified in chrome-security.png.",
+    "configuredChromePolicies": {
+      "DefaultBrowserSettingEnabled": false
+    },
+    "engine": "1.1.26100.4",
+    "definitions": "1.463.76.0",
+    "definitionsStableDuringObservation": true,
+    "mapsExitCode": 0,
+    "downloadHistory": {
+      "state": 1,
+      "dangerType": 0,
+      "interruptReason": 0,
+      "opened": 0
+    },
+    "finalDisposition": "matching-file-retained",
+    "finalInstallerBytes": 260335126,
+    "browserDownloadedSha256": "d8a0d6bd3bbc6e9128cbf40d0b63262b3a516221c25e017452bc6b4c94ebabc5",
+    "matchingHashBeforeAndAfterClose": true,
+    "internetZoneId": 3,
+    "protectionBypassed": false,
+    "executionAttempted": false,
+    "defenderEventCollectionSucceeded": true,
+    "defenderDetectionOrRemediationEvents": 0,
+    "subsequentGuardQualification": {
+      "outcome": "failure",
+      "error": "Update-MpSignature: The remote procedure call failed.",
+      "laterBrowserPhase": "skipped",
+      "guardSha256": "9c9b9f4991f52d8337b9012907fb141a1a0e753974c00ce4fca6f45f591eae2f",
+      "guardVersion": "Before bounded retry commit 25349a3431e47278892e7b6867afe8d0af4a210f; hash matches CRLF script.",
+      "scanResults": []
+    },
+    "evidence": [
+      "initial-definitions/browser-result.json",
+      "initial-definitions/download-files-before-close.json",
+      "initial-definitions/downloads-before-close.png",
+      "initial-definitions/chrome-security.png",
+      "initial-definitions/chrome-policy-registry.json",
+      "initial-definitions/signature-comparison.json",
+      "initial-definitions/maps-connection-exit.txt",
+      "initial-definitions/defender-events.json",
+      "initial-definitions/after-detections.json",
+      "job-outcomes.json",
+      "production-guard-sha256.json",
+      "latest-production-guard/results.json"
+    ]
+  },
   "limits": [
     "The completed native scan and MAPS validation do not prove per-installer cloud classification or SmartScreen acceptance.",
-    "The browser temporary file was not hash-qualified; no final hash or quarantine conclusion follows from its disappearance after browser closure.",
+    "The Edge temporary file was not hash-qualified; no final hash or quarantine conclusion follows from its disappearance after browser closure.",
     "The observed Edge reputation warning differs from the third-party screenshot's Virus detected message and does not resolve that download block; its browser, Windows version and antivirus product remain unknown.",
-    "This evidence qualifies official 1.0.9 bytes under the recorded conditions, not a future integrated build or signed release."
+    "This evidence qualifies official 1.0.9 bytes under the recorded conditions, not a future integrated build or signed release.",
+    "Chrome completed the initial download without reproducing Virus detected. The subsequent pre-retry guard RPC failure and skipped later phase leave the planned definition-version comparison incomplete."
   ]
 }
