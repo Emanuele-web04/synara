@@ -12292,7 +12292,10 @@ describe("ProviderCommandReactor", () => {
   });
 
   it("refuses an old accepted native-review image without starting a provider or blocking later sends", async () => {
-    const harness = await createHarness({ startReactor: false });
+    const harness = await createHarness({
+      startReactor: false,
+      gitWritingModelSelection: { provider: "codex", model: "gpt-5-codex" },
+    });
     const threadId = ThreadId.makeUnsafe("thread-1");
     const commandId = CommandId.makeUnsafe("legacy-review-image-command");
     const messageId = asMessageId("legacy-review-image-message");
@@ -12303,6 +12306,20 @@ describe("ProviderCommandReactor", () => {
       mimeType: "image/png",
       sizeBytes: 4,
     };
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.meta.update",
+        commandId: CommandId.makeUnsafe("legacy-review-worktree"),
+        threadId,
+        title: "New thread",
+        envMode: "worktree",
+        branch: "synara/deadbeef",
+        worktreePath: "/tmp/provider-project/.worktrees/deadbeef",
+        associatedWorktreePath: "/tmp/provider-project/.worktrees/deadbeef",
+        associatedWorktreeBranch: "synara/deadbeef",
+        associatedWorktreeRef: "synara/deadbeef",
+      }),
+    );
     const attachmentPath = await harness.stageAttachment(image);
     const accepted = await Effect.runPromise(
       harness.engine.dispatch({
@@ -12329,9 +12346,20 @@ describe("ProviderCommandReactor", () => {
     expect(harness.startReview).not.toHaveBeenCalled();
     expect(harness.sendTurn).not.toHaveBeenCalled();
     expect(harness.startSession).not.toHaveBeenCalled();
+    expect(harness.generateThreadTitle).not.toHaveBeenCalled();
+    expect(harness.generateBranchName).not.toHaveBeenCalled();
     const thread = await readHarnessThread(harness);
     expect(thread?.session?.status).toBe("error");
+    expect(thread?.session?.activeTurnId).toBeNull();
+    expect(thread?.latestTurn).toBeNull();
     expect(thread?.session?.lastError).toContain("Native code reviews do not support attachments");
+    expect(
+      thread?.activities.find((activity) => activity.kind === "provider.turn.start.failed"),
+    ).toMatchObject({
+      payload: {
+        detail: expect.stringContaining("Native code reviews do not support attachments"),
+      },
+    });
     expect(thread?.messages.find((message) => message.id === messageId)?.attachments).toEqual([
       image,
     ]);
@@ -12343,6 +12371,14 @@ describe("ProviderCommandReactor", () => {
       }),
     );
     expect(Option.getOrThrow(delivery).state).toBe("succeeded");
+    expect(Option.getOrThrow(delivery).attemptCount).toBe(1);
+    const blocker = await Effect.runPromise(
+      harness.deliveryRepository.firstBlockingDeliveryForThread({
+        consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
+        threadId,
+      }),
+    );
+    expect(Option.isNone(blocker)).toBe(true);
     await dispatchHarnessUserTurn(harness, {
       messageId: "after-rejected-review",
       text: "Continue normally",
