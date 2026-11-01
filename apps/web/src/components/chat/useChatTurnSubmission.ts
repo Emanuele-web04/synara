@@ -325,8 +325,9 @@ export function useChatTurnSubmission({
       }
       if (!queuedTurn) {
         sendPreflightInFlightRef.current = true;
-        await waitForPendingComposerImages();
+        const imagesReady = await waitForPendingComposerImages();
         sendPreflightInFlightRef.current = false;
+        if (!imagesReady) return false;
       }
       if (
         !activePendingProgress &&
