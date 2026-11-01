@@ -364,6 +364,20 @@ jobs:
             --version "${{ inputs.version }}" \
             --executable-name "${{ inputs.desktop_flavor == 'beta' && 'synara-beta' || 'synara' }}"
 
+      - name: Verify packaged Pi and offline compaction on Windows
+        if: inputs.platform == 'win'
+        shell: pwsh
+        run: ./scripts/run-pi-windows-probe.ps1 -ProbePath scripts/pi-windows-probe.cjs -EvidenceDirectory "${{ runner.temp }}/packaged-pi-evidence"
+
+      - name: Preserve packaged Pi and compaction evidence
+        if: ${{ always() && inputs.platform == 'win' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: packaged-pi-compaction-${{ inputs.arch }}
+          path: ${{ runner.temp }}/packaged-pi-evidence/
+          retention-days: 14
+          if-no-files-found: warn
+
       - name: Upload qualified artifacts
         uses: actions/upload-artifact@v7
         with:
