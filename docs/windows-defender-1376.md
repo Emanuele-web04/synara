@@ -112,10 +112,41 @@ blocked**; Codemode ran its actual worker and QuickJS WASM; Photon used its actu
 worker without recorded errors; the MCP child completed initialization/list/call
 and exited. The isolated compaction CLI reduced **16805888 → 16384 bytes** with
 integrity and cleanup checks. These are offline packaged-runtime checks, not live
-provider success. The [candidate evidence index](evidence/windows-defender-1376-candidate-runtime.json)
-keeps every attempt and its scope separate. At this checkpoint, live fallback
-recovery and the [new integrated candidate build](https://github.com/Emanuele-web04/synara/actions/runs/41337355328)
-remain unverified; the earlier candidate's success does not qualify the new build's bytes.
+provider success.
+
+The [new combined build](https://github.com/Emanuele-web04/synara/actions/runs/41337355328)
+completed packaging, quality checks, and all three server shards. Its preceding
+guard failed after three default-source update errors, so it preserved a verified
+checkpoint rather than qualifying the installer. This new unpublished candidate
+is **258698471 bytes**, SHA-256
+`be7ceb4a1b128bafafb72f08368a34583d34d9dac49d5b833d95faa05168bc25`, from source
+`9dffe5f0581b4b27874763995b46e493334ab577`. It is distinct from both the older
+`51167f…b55ca` candidate and the official `d8a0d6…abc5` release.
+
+The [Windows Server 2025 qualification](https://github.com/Emanuele-web04/synara/actions/runs/41340891133)
+then exercised the final guard on those exact new bytes and **recovered from real
+update failures**. The default source failed three times (one RPC error, then two
+definition-update errors); MMPC failed once and succeeded on its second attempt.
+All four errors survived in evidence. The platform advanced from `4.18.26090.9`
+to `4.18.26100.4` while definitions remained `1.463.76.0`. The 19 mocked contracts,
+MAPS validation, clean scan with unchanged hash, packaged startup, and the same
+offline Pi worker/MCP/compaction checks all passed. This establishes live fallback
+recovery on that Server 2025 runner and candidate; the earlier healthy run alone
+did not establish it.
+
+The [matching Windows Server 2022 run](https://github.com/Emanuele-web04/synara/actions/runs/41341037041)
+also passed on the same `be7ceb…bc25` bytes: all 19 contracts, MAPS, clean scan,
+unchanged installer hash, packaged startup, and the offline Pi/MCP/compaction
+checks. Its default update completed without errors, so it did not exercise the
+fallback. Platform `4.18.26090.9` remained unchanged; the engine advanced from
+`1.1.26090.9` to `1.1.26100.4` and definitions from `1.461.211.0` to `1.463.76.0`.
+Cloud settings remained `2 / 1 / false` and the detection inventory was empty.
+Thus the Server 2022 production runner is qualified independently, while the
+Server 2025 run supplies the observed live recovery. The [candidate evidence index](evidence/windows-defender-1376-candidate-runtime.json)
+keeps every artifact, operating-system scope, and historical failure separate.
+The candidate source predates later main changes, which were checked separately
+in local integration; neither this diagnostic qualification nor those checks are
+a published release or a reproduction of the third-party download block.
 
 No current Defender antivirus detection was reproduced. The observed Edge reputation
 warning differs from the third-party screenshot's **`Virus detected`** message.
