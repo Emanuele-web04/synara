@@ -135,5 +135,6 @@
     "The observed Edge reputation warning differs from the third-party screenshot's Virus detected message and does not resolve that download block; its browser, Windows version and antivirus product remain unknown.",
     "This evidence qualifies official 1.0.9 bytes under the recorded conditions, not a future integrated build or signed release.",
     "Chrome completed the initial download without reproducing Virus detected. The subsequent pre-retry guard RPC failure and skipped later phase leave the planned definition-version comparison incomplete."
-  ]
+  ],
+  "separateCandidateEvidence": "windows-defender-1376-candidate-runtime.json"
 }

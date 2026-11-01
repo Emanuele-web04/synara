@@ -1,0 +1,85 @@
+{
+  "collectedAt": "2026-11-01",
+  "scope": "Earlier unpublished build-only candidate, distinct from the official 1.0.9 release and the new integrated build.",
+  "candidate": {
+    "name": "Synara-1.0.9-x64.exe",
+    "bytes": 258686811,
+    "sha256": "51167f9f9e2aea0227581fc80a99bcccbefa86e90be3a0ef992474cb002b55ca",
+    "sourceCommit": "df70c58bd713b2f67f8d5394f787782d6b13c6f6",
+    "publication": false,
+    "signing": "unsigned-build-only",
+    "buildRun": "https://github.com/Emanuele-web04/synara/actions/runs/41334567230",
+    "checkpointArtifactId": 13094893766
+  },
+  "successfulQualification": {
+    "run": "https://github.com/Emanuele-web04/synara/actions/runs/41336992485",
+    "artifact": "pinned-candidate-runtime-evidence-41336992485-1",
+    "engine": "1.1.26100.4",
+    "definitionsBefore": "1.463.33.0",
+    "definitionsAfter": "1.463.76.0",
+    "mapsExitCode": 0,
+    "scanExitCode": 0,
+    "expectedHashSurvived": true,
+    "packagedDependencySmoke": "passed",
+    "packagedStartupSmoke": "passed",
+    "mockedContractsPassedOnWindows": 14,
+    "recordedUpdateErrors": 0,
+    "liveRetryOrDirectFallbackExercised": false,
+    "evidence": [
+      "checkpoint-selection.json",
+      "artifact-win-x64.provenance.json",
+      "defender/results.json",
+      "defender/maps-connection-exit.txt",
+      "defender/before-status.json",
+      "defender/ready-status.json",
+      "guard-contracts.log",
+      "packaged-startup.log"
+    ]
+  },
+  "secondQualification": {
+    "run": "https://github.com/Emanuele-web04/synara/actions/runs/41337351655",
+    "artifact": "pinned-candidate-runtime-evidence-41337351655-1",
+    "guardVersion": "Bounded retry before direct fallback commit 2a92ea6bd.",
+    "result": "Failed before scanning; default-source attempts exhausted.",
+    "defaultUpdateErrors": [
+      "Update-MpSignature: The remote procedure call failed.",
+      "Update-MpSignature: Virus and spyware definitions update was completed with errors.",
+      "Update-MpSignature: Virus and spyware definitions update was completed with errors."
+    ],
+    "scanResults": [],
+    "mockedContractsPassedOnWindows": 14,
+    "evidence": [
+      "checkpoint-selection.json",
+      "defender/expected-installers.json",
+      "defender/results.json",
+      "defender/update-default-attempt-1-error.txt",
+      "defender/update-default-attempt-2-error.txt",
+      "defender/update-default-attempt-3-error.txt",
+      "guard-contracts.log"
+    ]
+  },
+  "currentGuard": {
+    "commit": "2a92ea6bd39389f0bc21ae151e5b7084ee2b1f78",
+    "defaultAttempts": 3,
+    "directMmpcAttempts": 3,
+    "delayBetweenAttemptsSeconds": 5,
+    "fallbackTriggers": [
+      "Default-source attempts exhausted.",
+      "Default source returned missing or older-than-24-hour definitions."
+    ],
+    "successfulUpdateCallRequired": true,
+    "existingQualificationGatesPreserved": true,
+    "localMockedContractsPassed": 18,
+    "nativeDirectFallbackQualification": "unverified at this evidence checkpoint"
+  },
+  "newIntegratedBuild": {
+    "run": "https://github.com/Emanuele-web04/synara/actions/runs/41337355328",
+    "statusAtEvidenceCheckpoint": "in progress; unverified",
+    "qualifiedInstallerSha256": null
+  },
+  "limits": [
+    "No official release asset was replaced or published.",
+    "The successful earlier candidate does not qualify the new integrated build.",
+    "Mocked fallback coverage and a successful live update without errors do not establish live recovery after exhausted default-source failures."
+  ]
+}
