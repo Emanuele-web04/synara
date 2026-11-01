@@ -1787,6 +1787,30 @@ export async function createPiModelRuntime(
   if (hasAccountBoundary) {
     isolatePiModelRuntimeFromAmbientEnvironment(runtime, runtimeEnvironment ?? {});
   }
+  // Pi 1.3 switched Kimi's native protocol. Route legacy official endpoints at
+  // request time so config reloads retain the repair without rewriting profiles.
+  const getAuth = runtime.getAuth.bind(runtime);
+  runtime.getAuth = (async (
+    providerOrModel: string | Model<Api>,
+    overrides?: Parameters<ModelRuntime["getAuth"]>[1],
+  ) => {
+    const resolution = await getAuth(providerOrModel as Model<Api>, overrides);
+    if (
+      !resolution ||
+      typeof providerOrModel === "string" ||
+      providerOrModel.provider !== "kimi-coding" ||
+      providerOrModel.api !== "openai-completions" ||
+      !/^https:\/\/api\.kimi\.com\/coding\/?$/u.test(
+        resolution.auth.baseUrl ?? providerOrModel.baseUrl,
+      )
+    )
+      return resolution;
+    return {
+      ...resolution,
+      auth: { ...resolution.auth, baseUrl: "https://api.kimi.com/coding/v1" },
+    };
+  }) as ModelRuntime["getAuth"];
+
   // Pi renamed Azure in 1.0.3. Keep saved profiles, credentials and session model IDs
   // working under their original key; models.json and extensions still compose on top.
   const azure = azureProvider();
