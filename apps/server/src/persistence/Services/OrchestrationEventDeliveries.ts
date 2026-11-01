@@ -72,6 +72,12 @@ export interface OrchestrationEventDeliveryRepositoryShape {
   readonly getConsumerState: (
     consumerName: string,
   ) => Effect.Effect<Option.Option<OrchestrationConsumerState>, PersistenceSqlError>;
+  /** Journal positions for an already-admitted prefix, without reloading its payloads. */
+  readonly readEventSequencePage: (input: {
+    readonly sequenceExclusive: number;
+    readonly throughSequenceInclusive: number;
+    readonly limit: number;
+  }) => Effect.Effect<ReadonlyArray<{ readonly sequence: number }>, PersistenceSqlError>;
   /**
    * Records already-processed quarantined work after validating its journal owner.
    * One retained row per blocked thread; a journaled thread.deleted clears it.
