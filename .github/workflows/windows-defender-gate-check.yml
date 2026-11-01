@@ -81,9 +81,9 @@ jobs:
             $policies = @()
             foreach ($key in @('HKLM:\SOFTWARE\Policies\Google\Chrome', 'HKCU:\SOFTWARE\Policies\Google\Chrome')) {
               if (Test-Path $key) {
-                $policies += @{ key = $key; properties = Get-ItemProperty $key }
+                $policies += @{ key = $key; properties = (Get-ItemProperty $key | Select-Object * -ExcludeProperty PSPath,PSParentPath,PSChildName,PSDrive,PSProvider) }
                 $policies += @(Get-ChildItem $key -Recurse | ForEach-Object {
-                  @{ key = $_.Name; properties = Get-ItemProperty $_.PSPath }
+                  @{ key = $_.Name; properties = (Get-ItemProperty $_.PSPath | Select-Object * -ExcludeProperty PSPath,PSParentPath,PSChildName,PSDrive,PSProvider) }
                 })
               }
             }
