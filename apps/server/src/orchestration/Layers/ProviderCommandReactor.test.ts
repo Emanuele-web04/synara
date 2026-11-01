@@ -6762,6 +6762,139 @@ describe("ProviderCommandReactor", () => {
     },
   );
 
+  it.each(["unknown type", "future schema", "malformed payload"] as const)(
+    "fails replay before later work or acknowledgement after an unreadable %s",
+    async (invalid) => {
+      const harness = await createHarness({ startReactor: false });
+      const createdAt = new Date().toISOString();
+      let unreadable = 0;
+      // Put the unreadable row beyond the first admission page, between valid work.
+      for (let index = 0; index < 70; index++) {
+        const result = await Effect.runPromise(
+          harness.engine.dispatch({
+            type: "thread.activity.append",
+            commandId: CommandId.makeUnsafe(`validation-${index}`),
+            threadId: ThreadId.makeUnsafe("thread-1"),
+            createdAt,
+            activity: {
+              id: asEventId(`validation-${index}`),
+              kind: "tool.progress",
+              tone: "info",
+              summary: "Progress",
+              payload: {},
+              turnId: null,
+              createdAt,
+            },
+          }),
+        );
+        unreadable = result.sequence;
+      }
+      await dispatchHarnessUserTurn(harness, {
+        messageId: "after-unreadable",
+        text: "Later work",
+        createdAt,
+      });
+      await Effect.runPromise(
+        invalid === "unknown type"
+          ? harness.sql`UPDATE orchestration_events SET event_type = 'thread.future-provider-intent' WHERE sequence = ${unreadable}`
+          : invalid === "future schema"
+            ? harness.sql`UPDATE orchestration_events SET metadata_json = '{"persistedEventSchemaVersion":999}' WHERE sequence = ${unreadable}`
+            : harness.sql`UPDATE orchestration_events SET payload_json = '{}' WHERE sequence = ${unreadable}`,
+      );
+      const rows = await Effect.runPromise(
+        harness.sql`SELECT * FROM orchestration_events ORDER BY sequence`,
+      );
+      await expect(harness.startReactor()).rejects.toThrow();
+      expect(harness.sendTurn).not.toHaveBeenCalled();
+      const state = Option.getOrThrow(
+        await Effect.runPromise(
+          harness.deliveryRepository.getConsumerState(PROVIDER_COMMAND_REACTOR_CONSUMER),
+        ),
+      );
+      expect(state.lastAckedSequence).toBeLessThan(unreadable);
+      expect(
+        await Effect.runPromise(harness.sql`SELECT * FROM orchestration_events ORDER BY sequence`),
+      ).toEqual(rows);
+    },
+  );
+
+  it("replays bounded validated pages past a blocked lane and a pruned boundary", async () => {
+    const release = Deferred.makeUnsafe<void>();
+    const entered = Deferred.makeUnsafe<void>();
+    const harness = await createHarness({
+      startReactor: false,
+      preTurnBaselineTimeout: Duration.minutes(1),
+      checkpointStore: {
+        isGitRepository: () => Effect.succeed(true),
+        captureCheckpoint: () =>
+          Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(release))),
+      },
+    });
+    const createdAt = new Date().toISOString();
+    await dispatchHarnessUserTurn(harness, {
+      messageId: "held-replay",
+      text: "Held work",
+      createdAt,
+    });
+    for (let index = 0; index < 70; index++)
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.activity.append",
+          commandId: CommandId.makeUnsafe(`page-${index}`),
+          threadId: ThreadId.makeUnsafe("thread-1"),
+          createdAt,
+          activity: {
+            id: asEventId(`page-${index}`),
+            kind: "tool.progress",
+            tone: "info",
+            summary: "Progress",
+            payload: { detail: "x".repeat(8_000) },
+            turnId: null,
+            createdAt,
+          },
+        }),
+      );
+    const through = await Effect.runPromise(harness.engine.getEventHighWaterSequence);
+    const read = harness.engine.readEventsThrough;
+    const reads = vi
+      .spyOn(harness.engine, "readEventsThrough")
+      .mockImplementation((after, high, limit) =>
+        Stream.unwrap(
+          harness.sql`DELETE FROM orchestration_events WHERE sequence = ${through}`.pipe(
+            Effect.orDie,
+            Effect.as(read(after, high, limit)),
+          ),
+        ),
+      );
+    const start = harness.startReactor();
+    try {
+      await Effect.runPromise(Deferred.await(entered).pipe(Effect.timeout("2 seconds")));
+      await waitFor(() => reads.mock.calls.filter(([, , limit]) => limit === 64).length >= 2);
+      const state = Option.getOrThrow(
+        await Effect.runPromise(
+          harness.deliveryRepository.getConsumerState(PROVIDER_COMMAND_REACTOR_CONSUMER),
+        ),
+      );
+      expect(state.lastAckedSequence).toBeLessThan(through - 70);
+      expect(reads.mock.calls[1]?.[0]).toBeGreaterThan(state.lastAckedSequence);
+    } finally {
+      await Effect.runPromise(Deferred.succeed(release, undefined));
+      await start;
+    }
+    expect(reads.mock.calls.every(([, , limit]) => limit === 64)).toBe(true);
+    const state = Option.getOrThrow(
+      await Effect.runPromise(
+        harness.deliveryRepository.getConsumerState(PROVIDER_COMMAND_REACTOR_CONSUMER),
+      ),
+    );
+    expect(state.lastAckedSequence).toBeGreaterThanOrEqual(through - 1);
+    expect(harness.sendTurn).toHaveBeenCalledTimes(1);
+    reads.mockRestore();
+    const fresh = await harness.restartReactor();
+    await fresh.start();
+    expect(harness.sendTurn).toHaveBeenCalledTimes(1);
+  });
+
   it("fails startup when a replay lane cannot read durable delivery ownership", async () => {
     const harness = await createHarness({ startReactor: false });
     vi.spyOn(harness.deliveryRepository, "getDelivery").mockImplementation(() =>
@@ -6776,20 +6909,23 @@ describe("ProviderCommandReactor", () => {
     expect(harness.sendTurn).not.toHaveBeenCalled();
   });
 
-  it("fails startup when the acknowledgement pump cannot persist its prefix", async () => {
-    const harness = await createHarness({ startReactor: false });
-    vi.spyOn(harness.deliveryRepository, "advanceCursor").mockImplementation(() =>
-      Effect.fail(
-        new PersistenceSqlError({
-          operation: "OrchestrationEventDelivery.advanceCursor",
-          detail: "injected acknowledgement persistence failure",
-        }),
-      ),
-    );
-    await expect(harness.startReactor()).rejects.toThrow(
-      "injected acknowledgement persistence failure",
-    );
-  });
+  it.each(["advanceCursor", "readEventSequencePage"] as const)(
+    "fails startup when the acknowledgement pump cannot %s",
+    async (operation) => {
+      const harness = await createHarness({ startReactor: false });
+      vi.spyOn(harness.deliveryRepository, operation).mockImplementation(() =>
+        Effect.fail(
+          new PersistenceSqlError({
+            operation: `OrchestrationEventDelivery.${operation}`,
+            detail: "injected acknowledgement persistence failure",
+          }),
+        ),
+      );
+      await expect(harness.startReactor()).rejects.toThrow(
+        "injected acknowledgement persistence failure",
+      );
+    },
+  );
 
   it("cancels blocked acknowledgement catch-up during reactor shutdown", async () => {
     const harness = await createHarness();
@@ -14398,6 +14534,7 @@ describe("ProviderCommandReactor", () => {
     );
     await harness.drain();
     const globalReads = vi.spyOn(harness.engine, "readEventsThrough");
+    const acknowledgementReads = vi.spyOn(harness.deliveryRepository, "readEventSequencePage");
     const threadReads = vi.spyOn(harness.engine, "readThreadEventsThrough");
     const release = Deferred.makeUnsafe<void>();
     harness.backgroundTask.mockImplementationOnce(() => Deferred.await(release));
@@ -14439,8 +14576,9 @@ describe("ProviderCommandReactor", () => {
       expect(harness.backgroundTask.mock.calls.map(([input]) => input.toolUseId)).toEqual(
         Array.from({ length: 41 }, (_, index) => `bounded-${index}`),
       );
-      expect(globalReads.mock.calls.length).toBeGreaterThan(0);
-      expect(globalReads.mock.calls.every(([, , limit]) => limit === 32)).toBe(true);
+      expect(globalReads).not.toHaveBeenCalled();
+      expect(acknowledgementReads.mock.calls.length).toBeGreaterThan(0);
+      expect(acknowledgementReads.mock.calls.every(([input]) => input.limit === 32)).toBe(true);
       expect(threadReads.mock.calls.some(([, , , , limit]) => limit === 32)).toBe(true);
       // A cached next head can remove the extra head-only query entirely.
       expect(threadReads.mock.calls.length).toBeLessThan(10);
@@ -14477,26 +14615,14 @@ describe("ProviderCommandReactor", () => {
         captureCheckpoint,
       },
     });
-    // Startup replay has already settled. Subsequent global range reads are
-    // acknowledgement catch-up; count actual pulls rather than the range size.
+    // Startup replay has settled; count stored acknowledgement rows, including gaps.
     const acknowledgementReadSizes: number[] = [];
-    const readEventsThrough = harness.engine.readEventsThrough;
-    vi.spyOn(harness.engine, "readEventsThrough").mockImplementation((after, through, limit) => {
-      let consumed = 0;
-      return readEventsThrough(after, through, limit).pipe(
-        Stream.rechunk(1),
-        Stream.tap(() =>
-          Effect.sync(() => {
-            consumed += 1;
-          }),
-        ),
-        Stream.ensuring(
-          Effect.sync(() => {
-            acknowledgementReadSizes.push(consumed);
-          }),
-        ),
-      );
-    });
+    const readEventSequencePage = harness.deliveryRepository.readEventSequencePage;
+    vi.spyOn(harness.deliveryRepository, "readEventSequencePage").mockImplementation((input) =>
+      readEventSequencePage(input).pipe(
+        Effect.tap((rows) => Effect.sync(() => acknowledgementReadSizes.push(rows.length))),
+      ),
+    );
     const now = new Date().toISOString();
     // An independent checkout can capture concurrently; the same physical checkout
     // intentionally shares the baseline/undo lease.
