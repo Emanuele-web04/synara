@@ -78,10 +78,10 @@ jobs:
       - name: Download the pinned intact checkpoint
         uses: actions/download-artifact@v8
         with:
-          artifact-ids: '13094893766'
+          artifact-ids: "13094893766"
           github-token: ${{ github.token }}
           repository: ${{ github.repository }}
-          run-id: '41334567230'
+          run-id: "41334567230"
           path: release-publish
 
       - name: Verify original artifact identity, hashes, inventory and signing policy
