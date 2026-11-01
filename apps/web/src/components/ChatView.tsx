@@ -233,8 +233,14 @@ import {
   type SplitViewPanePanelState,
 } from "../splitViewStore";
 import { useStore } from "../store";
+import { useCreateProjectDialogStore } from "../createProjectDialogStore";
+import { useLatestProjectStore } from "../latestProjectStore";
+import { useSpacesUiStore } from "../spacesUiStore";
+import { isOrdinarySpaceProject } from "../lib/spaces";
+import { resolveLatestProjectTargetIdWithFallback } from "../lib/projectShortcutTargets";
 import {
   createComposerThreadMentionSourcesSelector,
+  createProjectLastActivityAtSelector,
   createProjectSelector,
   createSidechatSummariesForSourceSelector,
   createThreadSelector,
@@ -5549,11 +5555,29 @@ export default function ChatView({
   const onRunProjectScriptFromHeader = useStableCallback((script: ProjectScript) => {
     void runProjectScript(script);
   });
-  // Header "New thread": mints a thread in the active workspace (same branch/worktree/env),
-  // falling back to the project when there is no server/draft thread yet.
+  // Header "New thread" preserves the current project workspace. Home falls back
+  // to the most recently used ordinary project in the active Space.
   const onNewThreadFromHeader = useStableCallback(() => {
-    const targetProjectId = activeProject?.id ?? activeThread?.projectId ?? null;
-    if (!targetProjectId) return;
+    const state = useStore.getState();
+    if (!state.threadsHydrated) return;
+    const spaceId = useSpacesUiStore.getState().activeSpaceId;
+    const projects = state.projects.filter(
+      (project) =>
+        (project.spaceId ?? null) === spaceId &&
+        isOrdinarySpaceProject(project, useWorkspacePathsStore.getState()),
+    );
+    const currentProjectId = projects.find((project) => project.id === activeProject?.id)?.id;
+    const targetProjectId =
+      currentProjectId ??
+      resolveLatestProjectTargetIdWithFallback(
+        projects,
+        useLatestProjectStore.getState().latestProjectId,
+        createProjectLastActivityAtSelector()(state),
+      );
+    if (!targetProjectId) {
+      useCreateProjectDialogStore.getState().setOpen(true);
+      return;
+    }
     // The shared New thread path reopens a pending draft before creating a chat. Keep
     // that draft's workspace instead of retargeting its unsent text to the viewed chat.
     const pendingProjectDraft = useComposerDraftStore
@@ -5561,16 +5585,18 @@ export default function ChatView({
       .getDraftThreadByProjectId(targetProjectId);
     void handleNewThread(
       targetProjectId,
-      resolveInheritedThreadContext({
-        activeThread,
-        activeDraftThread:
-          draftThread ??
-          (pendingProjectDraft &&
-          pendingProjectDraft.isTemporary !== true &&
-          !hasActiveComposerSend(pendingProjectDraft.threadId)
-            ? pendingProjectDraft
-            : null),
-      }),
+      currentProjectId
+        ? resolveInheritedThreadContext({
+            activeThread,
+            activeDraftThread:
+              draftThread ??
+              (pendingProjectDraft &&
+              pendingProjectDraft.isTemporary !== true &&
+              !hasActiveComposerSend(pendingProjectDraft.threadId)
+                ? pendingProjectDraft
+                : null),
+          })
+        : undefined,
     );
   });
   const dismissActiveThreadError = useCallback(() => {
@@ -6765,7 +6791,7 @@ export default function ChatView({
                     closeActiveTabRef={closeActiveThreadTabRef}
                     onRenameActiveThread={() => setRenameDialogOpen(true)}
                     onNewThread={
-                      activeProjectScripts !== undefined && !isCenteredEmptyLanding
+                      activeProjectScripts !== undefined || isHomeChatContainer
                         ? onNewThreadFromHeader
                         : null
                     }
