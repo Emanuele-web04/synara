@@ -159,8 +159,24 @@ async function editorVisible(page: Page, relativePath: string) {
   await expect(input).toBeAttached();
   await expect(page.locator(".monaco-editor").filter({ has: input })).toBeVisible();
 }
+// Enter through the verified execution's history owner, then keep the cold-document setup.
+// A fresh page.goto entry is unowned and restores the previous scoped route instead.
+async function openFilePreview(page: Page, relativePath: string) {
+  const target = `/${threadId}?view=editor&editorFilePath=${encodeURIComponent(relativePath)}`;
+  await page.evaluate(async (target) => {
+    const modulePath = "/src/appNavigation.ts";
+    const { appHistory } = (await import(
+      /* @vite-ignore */ modulePath
+    )) as typeof import("../src/appNavigation");
+    appHistory.replace(target);
+    appHistory.flush();
+  }, target);
+  // History blockers settle asynchronously; reload only after the owned route commits.
+  await page.waitForURL(target);
+  await page.reload();
+}
 async function beginEditing(page: Page, relativePath: string) {
-  await page.goto(`/${threadId}?view=editor&editorFilePath=${encodeURIComponent(relativePath)}`);
+  await openFilePreview(page, relativePath);
   // A startup surface (feature tour) can open over the route; role queries skip
   // the page behind a modal, so clear it before looking for the preview control.
   const editFile = page.getByRole("button", { name: "Edit file", exact: true });
@@ -401,7 +417,7 @@ test("edits a changed file as a diff with collapsed regions and symbol breadcrum
   // Land on the file preview (the settled route the other journeys use), then
   // switch the rail to the Diff pane; each changed file's header carries the
   // actions menu that opens the editable diff.
-  await page.goto(`/${threadId}?view=editor&editorFilePath=${encodeURIComponent("main.ts")}`);
+  await openFilePreview(page, "main.ts");
   const previewEdit = page.getByRole("button", { name: "Edit file", exact: true });
   for (let attempt = 0; attempt < 40; attempt++) {
     await dismissStartupSurfaces(page);
