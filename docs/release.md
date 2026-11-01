@@ -406,22 +406,46 @@ Before startup smoke and artifact upload, the Windows job scans each final
 installer with Microsoft Defender. The guard enables protection and removes
 the hosted image's exclusions inside that disposable runner, updates security
 intelligence, verifies the actual file is not excluded, and requires an explicit
-clean scan plus unchanged installer bytes. Signature updates retry at most three
-times for an interrupted RPC, or a changed Defender platform with an unhealthy
-service/engine. Each retry waits up to 120 seconds for WinDefend and a nonzero
-engine, starting the service only if it stopped on this disposable runner. Other
-update errors fail immediately. A successful update and every scan gate remain
-required. Full error records and independent final evidence captures preserve the
-original failure; incomplete evidence also blocks publication. If the configured update source returns
-definitions older than 24 hours, it retries Microsoft's direct MMPC source.
+clean scan plus unchanged installer bytes. The configured signature source gets
+at most three attempts; exhausted errors or definitions older than 24 hours
+require a successful update from Microsoft's direct MMPC source, also bounded
+to three attempts. Failed default updates reach MMPC before any intermediate
+state/readiness RPC, because the same platform transition can make reads fail.
+The existing service/engine readiness gate runs after a successful update, and
+every failed attempt is preserved. No scan may proceed on a reported fresh state
+without a successful update call. Full error records and independent final
+evidence captures preserve the original failure; incomplete evidence also blocks
+publication.
 An older local timestamp then requires the installed version to match the latest
 version fetched from Microsoft's security intelligence page; unavailable or
 ambiguous vendor data fails closed. Missing signatures or Defender's own
 out-of-date status also block the scan. Detection, remediation, stale
 intelligence, a missing file, or a scan error blocks publication. Scan evidence
-is retained as `windows-defender-x64`, including on failure. Cloud participation
-and sample-submission settings are not changed. This server scan does not replace
-Windows 11 browser-download qualification.
+is retained as `windows-defender-x64`, including on failure. Final evidence is
+captured independently so one failing status read does not mask the original
+scan/update error or suppress the remaining captures.
+
+For this disposable GitHub-hosted public-release qualification only, the guard
+also enables cloud protection (`MAPSReporting=2`), automatic safe sample submission
+(`SubmitSamplesConsent=1`), and block at first sight. Safe samples may be sent to
+Microsoft; this does not authorize changing a user's machine or submitting private
+artifacts. These preferences must remain enabled before and after scanning, and
+`MpCmdRun -ValidateMapsConnection` must succeed before scanning; its output and
+exit code are retained. Configured cloud protection alone does not prove MAPS
+connectivity. See Microsoft's [block-at-first-sight guidance](https://learn.microsoft.com/en-us/defender-endpoint/configure-block-at-first-sight-microsoft-defender-antivirus).
+
+Run `pwsh -NoProfile -NonInteractive -File scripts/verify-windows-defender.test.ps1`
+for mocked guard contracts, including cloud-policy failure, failed MAPS, bounded
+update/fallback, unready service/engine, changed bytes, detections and incomplete
+evidence. These contracts do not qualify real Defender or a particular installer.
+Changes to the guard also run `Windows Defender Prerequisites` on a disposable
+Windows runner: the real guard scans a copied, Microsoft-signed system probe that
+is never executed, retaining its hash and live service/signature/MAPS evidence.
+The public system binary is not uploaded as evidence. That probe qualifies only
+the prerequisites and cannot qualify Synara's installer or its browser reputation.
+Each final release artifact still requires its own live scan. This server scan
+does not replace Windows 11 browser-download qualification or establish that an
+antivirus download block has been fixed.
 
 Signing, provenance, and startup smoke alone do not establish Microsoft Defender
 acceptance. For a reported antivirus block, collect the exact artifact hash,
