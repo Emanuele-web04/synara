@@ -24,30 +24,30 @@ jobs:
       - name: Stage the exact published installer without execution
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Path samples,evidence
+          New-Item -ItemType Directory -Path samples,defender-rescan-evidence
           Invoke-WebRequest 'https://github.com/Emanuele-web04/synara/releases/download/v1.0.9/Synara-1.0.9-x64.exe' -OutFile 'samples/Synara-1.0.9-x64.exe'
           $hash = (Get-FileHash 'samples/Synara-1.0.9-x64.exe' -Algorithm SHA256).Hash
           if ($hash -ne 'd8a0d6bd3bbc6e9128cbf40d0b63262b3a516221c25e017452bc6b4c94ebabc5') { throw 'Official installer hash mismatch.' }
-          Get-AuthenticodeSignature 'samples/Synara-1.0.9-x64.exe' | ConvertTo-Json -Depth 6 | Set-Content evidence/signature.json
+          Get-AuthenticodeSignature 'samples/Synara-1.0.9-x64.exe' | ConvertTo-Json -Depth 6 | Set-Content defender-rescan-evidence/signature.json
       - name: Enable consumer cloud protection in the isolated public-artifact job
         if: matrix.protection == 'cloud-enabled'
         shell: pwsh
         run: |
           if ($env:GITHUB_ACTIONS -ne 'true' -or $env:RUNNER_ENVIRONMENT -ne 'github-hosted') { throw 'Disposable hosted runner required.' }
-          Get-MpPreference | Select-Object MAPSReporting,SubmitSamplesConsent,DisableBlockAtFirstSeen,CloudBlockLevel | ConvertTo-Json | Set-Content evidence/cloud-before.json
+          Get-MpPreference | Select-Object MAPSReporting,SubmitSamplesConsent,DisableBlockAtFirstSeen,CloudBlockLevel | ConvertTo-Json | Set-Content defender-rescan-evidence/cloud-before.json
           # Only a public released installer is present. No signing credentials or private data.
           Set-MpPreference -MAPSReporting Advanced -SubmitSamplesConsent SendSafeSamples -DisableBlockAtFirstSeen $false
           $preferences = Get-MpPreference
-          $preferences | Select-Object MAPSReporting,SubmitSamplesConsent,DisableBlockAtFirstSeen,CloudBlockLevel | ConvertTo-Json | Set-Content evidence/cloud-after.json
+          $preferences | Select-Object MAPSReporting,SubmitSamplesConsent,DisableBlockAtFirstSeen,CloudBlockLevel | ConvertTo-Json | Set-Content defender-rescan-evidence/cloud-after.json
           if ($preferences.MAPSReporting -ne 2 -or $preferences.SubmitSamplesConsent -ne 1 -or $preferences.DisableBlockAtFirstSeen) { throw 'Cloud protection is not enabled.' }
       - name: Run the unchanged release qualification guard
         shell: pwsh
-        run: ./scripts/verify-windows-defender.ps1 -AssetsDirectory samples -EvidenceDirectory evidence/guard
+        run: ./scripts/verify-windows-defender.ps1 -AssetsDirectory samples -EvidenceDirectory defender-rescan-evidence/guard
       - name: Retain scanner evidence on success or failure
         if: always()
         uses: actions/upload-artifact@v7
         with:
           name: defender-1.0.9-${{ matrix.protection }}
-          path: evidence/
+          path: defender-rescan-evidence/
           retention-days: 14
           if-no-files-found: error
