@@ -405,9 +405,24 @@ version fetched from Microsoft's security intelligence page; unavailable or
 ambiguous vendor data fails closed. Missing signatures or Defender's own
 out-of-date status also block the scan. Detection, remediation, stale
 intelligence, a missing file, or a scan error blocks publication. Scan evidence
-is retained as `windows-defender-x64`, including on failure. Cloud participation
-and sample-submission settings are not changed. This server scan does not replace
-Windows 11 browser-download qualification.
+is retained as `windows-defender-x64`, including on failure.
+
+For this disposable GitHub-hosted public-release qualification only, the guard
+also enables cloud protection (`MAPSReporting=2`), automatic safe sample submission
+(`SubmitSamplesConsent=1`), and block at first sight. Safe samples may be sent to
+Microsoft; this does not authorize changing a user's machine or submitting private
+artifacts. The guard verifies these preferences before and after scanning, and
+requires `MpCmdRun -ValidateMapsConnection` to succeed before scanning, preserving
+its output and exit code. Configured cloud protection alone does not prove MAPS
+connectivity. These settings and the connectivity check follow Microsoft's
+[block-at-first-sight guidance](https://learn.microsoft.com/en-us/defender-endpoint/configure-block-at-first-sight-microsoft-defender-antivirus)
+and [network validation guidance](https://learn.microsoft.com/en-us/defender-endpoint/configure-network-connections-microsoft-defender-antivirus).
+This server scan does not replace Windows 11 browser-download qualification or
+prove that the cloud classified a particular installer.
+
+Run `pwsh -NoProfile -File scripts/verify-windows-defender.test.ps1` for the guard's
+mocked behavior tests, including disabled cloud protection, failed MAPS connectivity,
+changed bytes, and detections. These tests do not qualify real Windows behavior.
 
 Signing, provenance, and startup smoke alone do not establish Microsoft Defender
 acceptance. For a reported antivirus block, collect the exact artifact hash,
