@@ -1,17 +1,34 @@
 import type { Api, Model } from "@earendil-works/pi-ai";
+import { isModelType } from "@earendil-works/pi-ai/utils/model-operations";
 import { opencodeProvider } from "@earendil-works/pi-ai/providers/opencode";
 import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { outboundHttp, decodeOutboundJson } from "@synara/shared/outboundHttp";
 
 const CATALOG_URL = "https://pi.dev/api/models/providers/opencode";
-const INVENTORY_URL = "https://opencode.ai/zen/v1/models";
+const INVENTORY_URL = "https://opencode.ai/inference/v1/models";
 const CATALOG_TTL_MS = 60_000;
 let publicCatalog: { models: Model<Api>[]; fetchedAt: number } | undefined;
-const BASE_URLS: Record<string, string> = {
-  "anthropic-messages": "https://opencode.ai/zen",
-  "google-generative-ai": "https://opencode.ai/zen/v1",
-  "openai-responses": "https://opencode.ai/zen/v1",
-  "openai-completions": "https://opencode.ai/zen/v1",
+const BASE_URLS: Record<string, readonly string[]> = {
+  "anthropic-messages": [
+    "https://opencode.ai/inference/anthropic",
+    "https://opencode.ai/inference",
+    "https://opencode.ai/zen",
+  ],
+  "google-generative-ai": [
+    "https://opencode.ai/inference/google/v1beta",
+    "https://opencode.ai/inference/v1",
+    "https://opencode.ai/zen/v1",
+  ],
+  "openai-responses": [
+    "https://opencode.ai/inference/openai/v1",
+    "https://opencode.ai/inference/v1",
+    "https://opencode.ai/zen/v1",
+  ],
+  "openai-completions": [
+    "https://opencode.ai/inference/openai/v1",
+    "https://opencode.ai/inference/v1",
+    "https://opencode.ai/zen/v1",
+  ],
 };
 
 function record(value: unknown): value is Record<string, unknown> {
@@ -30,7 +47,8 @@ function isCatalogModel(value: unknown): value is Model<Api> {
     value.provider === "opencode" &&
     typeof value.api === "string" &&
     Object.hasOwn(BASE_URLS, value.api) &&
-    value.baseUrl === BASE_URLS[value.api] &&
+    typeof value.baseUrl === "string" &&
+    BASE_URLS[value.api]!.includes(value.baseUrl) &&
     typeof value.reasoning === "boolean" &&
     Array.isArray(value.input) &&
     value.input.includes("text") &&
@@ -83,7 +101,8 @@ export async function refreshPiOpenCodeCatalog(
   const environment = options.environment ?? process.env;
   if (environment.PI_OFFLINE !== undefined || options.signal?.aborted) return;
   if (!runtime.hasConfiguredAuth("opencode")) return;
-  if (runtime.getModels("opencode").some((model) => model.baseUrl !== BASE_URLS[model.api])) return;
+  if (runtime.getModels("opencode").some((model) => !BASE_URLS[model.api]?.includes(model.baseUrl)))
+    return;
   const controller = new AbortController();
   const signal = AbortSignal.any([
     controller.signal,
@@ -128,9 +147,12 @@ export async function refreshPiOpenCodeCatalog(
     // Keep the SDK's native authentication and per-model protocol dispatch.
     // ModelRuntime composes models.json over this base; extensions load afterward.
     const resolvedModels = models;
+    const base = opencodeProvider();
+    const otherModels = base.getAllModels?.().filter((model) => !isModelType(model, "chat")) ?? [];
     runtime.registerNativeProvider({
-      ...opencodeProvider(),
+      ...base,
       getModels: () => resolvedModels,
+      getAllModels: () => [...resolvedModels, ...otherModels],
       refreshModels: async ({ publish }) => {
         await publish({
           persist: {
