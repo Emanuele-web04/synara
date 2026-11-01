@@ -17,6 +17,8 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import type { AgentToolResult, ThinkingLevel } from "@earendil-works/pi-agent-core";
 import type { Api, ImageContent, Model, TextContent } from "@earendil-works/pi-ai";
+import { azureProvider } from "@earendil-works/pi-ai/providers/azure";
+import { isModelType } from "@earendil-works/pi-ai/utils/model-operations";
 import { resetApiProviders } from "@earendil-works/pi-ai/compat";
 import {
   ApprovalRequestId,
@@ -877,7 +879,7 @@ function createProviderModelFallback(
   // Zen mixes four protocols. A missing model must not inherit an arbitrary API.
   if (
     parsed.provider === "opencode" &&
-    /^https:\/\/opencode\.ai\/zen(?:\/|$)/u.test(providerDefault.baseUrl)
+    /^https:\/\/opencode\.ai\/(?:zen|inference)(?:\/|$)/u.test(providerDefault.baseUrl)
   ) {
     return undefined;
   }
@@ -1737,7 +1739,7 @@ function isolatePiModelRuntimeFromAmbientEnvironment(
         "Amazon Bedrock is disabled for isolated Pi accounts because the SDK falls back to the ambient AWS credential chain.",
       );
     }
-    if (provider === "azure-openai-responses") {
+    if (provider === "azure" || provider === "azure-openai-responses") {
       throw new Error(
         "Azure OpenAI is disabled for isolated Pi accounts because the SDK reads process-level Azure routing.",
       );
@@ -1785,10 +1787,46 @@ export async function createPiModelRuntime(
   if (hasAccountBoundary) {
     isolatePiModelRuntimeFromAmbientEnvironment(runtime, runtimeEnvironment ?? {});
   }
+  // Pi 1.3 switched Kimi's native protocol. Route legacy official endpoints at
+  // request time so config reloads retain the repair without rewriting profiles.
+  const getAuth = runtime.getAuth.bind(runtime);
+  runtime.getAuth = (async (
+    providerOrModel: string | Model<Api>,
+    overrides?: Parameters<ModelRuntime["getAuth"]>[1],
+  ) => {
+    const resolution = await getAuth(providerOrModel as Model<Api>, overrides);
+    if (
+      !resolution ||
+      typeof providerOrModel === "string" ||
+      providerOrModel.provider !== "kimi-coding" ||
+      providerOrModel.api !== "openai-completions" ||
+      !/^https:\/\/api\.kimi\.com\/coding\/?$/u.test(
+        resolution.auth.baseUrl ?? providerOrModel.baseUrl,
+      )
+    )
+      return resolution;
+    return {
+      ...resolution,
+      auth: { ...resolution.auth, baseUrl: "https://api.kimi.com/coding/v1" },
+    };
+  }) as ModelRuntime["getAuth"];
+
+  // Pi renamed Azure in 1.0.3. Keep saved profiles, credentials and session model IDs
+  // working under their original key; models.json and extensions still compose on top.
+  const azure = azureProvider();
+  const legacyAzureModels = azure
+    .getModels()
+    .filter((model) => model.api === "azure-openai-responses")
+    .map((model) => Object.assign({}, model, { provider: "azure-openai-responses" }));
+  runtime.registerNativeProvider({
+    ...azure,
+    id: "azure-openai-responses",
+    name: "Azure OpenAI",
+    getModels: () => legacyAzureModels,
+    getAllModels: () => legacyAzureModels,
+  });
   await applyPiRuntimeApiKeysFromEnvironment(runtime, runtimeEnvironment);
-  if (hasAccountBoundary) {
-    await runtime.refresh({ allowNetwork: false });
-  }
+  await runtime.refresh({ allowNetwork: false });
   await refreshPiOpenCodeCatalog(runtime, { signal, environment: runtimeEnvironment });
   return runtime;
 }
@@ -1816,10 +1854,12 @@ export async function refreshPiOpenRouterModels(
   const base = openrouterProvider();
   const models = new Map(base.getModels().map((model) => [model.id, model]));
   for (const model of live) models.set(model.id, model);
+  const otherModels = base.getAllModels?.().filter((model) => !isModelType(model, "chat")) ?? [];
   // Native providers remain below models.json, preserving user model overrides.
   runtime.registerNativeProvider({
     ...base,
     getModels: () => [...models.values()],
+    getAllModels: () => [...models.values(), ...otherModels],
     // Reuse the SDK store so a later session keeps discovered capacities offline.
     refreshModels: async ({ publish }) => {
       await publish({

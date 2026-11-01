@@ -25,7 +25,12 @@ const fixtures = [
   name: `New ${index}`,
   provider: "opencode",
   api,
-  baseUrl: api === "anthropic-messages" ? "https://opencode.ai/zen" : "https://opencode.ai/zen/v1",
+  baseUrl:
+    api === "anthropic-messages"
+      ? "https://opencode.ai/inference/anthropic"
+      : api === "google-generative-ai"
+        ? "https://opencode.ai/inference/google/v1beta"
+        : "https://opencode.ai/inference/openai/v1",
   reasoning: index !== 3,
   input: ["text", "image"],
   contextWindow: 200000,
@@ -130,10 +135,10 @@ describe("Pi OpenCode catalog", () => {
     }
     expect(requests).toHaveLength(4);
     expect(requests.map((request) => new URL(request.url).pathname)).toEqual([
-      "/zen/v1/messages",
-      "/zen/v1/models/new-1:streamGenerateContent",
-      "/zen/v1/responses",
-      "/zen/v1/chat/completions",
+      "/inference/anthropic/v1/messages",
+      "/inference/google/v1beta/models/new-1:streamGenerateContent",
+      "/inference/openai/v1/responses",
+      "/inference/openai/v1/chat/completions",
     ]);
     for (const request of requests) {
       expect(
@@ -242,6 +247,22 @@ describe("Pi OpenCode catalog", () => {
     const request = publicFetch();
     await refreshPiOpenCodeCatalog(modelRuntime, { request });
     expect(request).not.toHaveBeenCalled();
+  });
+
+  it("accepts cached legacy Zen endpoints during the inference endpoint transition", () => {
+    const legacy = fixtures.map((model) => ({
+      ...model,
+      baseUrl:
+        model.api === "anthropic-messages"
+          ? "https://opencode.ai/zen"
+          : "https://opencode.ai/zen/v1",
+    }));
+    expect(
+      parsePiOpenCodeCatalog(
+        Object.fromEntries(legacy.map((model) => [model.id, model])),
+        inventory,
+      ),
+    ).toEqual(legacy);
   });
 
   it("drops credential-like headers from public model metadata", () => {
