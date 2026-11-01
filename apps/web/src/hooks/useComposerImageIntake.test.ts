@@ -48,6 +48,49 @@ describe("ComposerImageIntakeQueue", () => {
     expect(queue.pendingCount()).toBe(0);
   });
 
+  it.each(["rejected result", "thrown read"] as const)(
+    "does not admit a send waiting on a %s, then allows a valid intake",
+    async (failure) => {
+      const queue = new ComposerImageIntakeQueue();
+      const errors: Array<string | null> = [];
+      let finish!: () => void;
+      const prepareFiles = () =>
+        new Promise<{ images: ComposerImageAttachment[]; error: string | null }>(
+          (resolve, reject) => {
+            finish = () =>
+              failure === "thrown read"
+                ? reject(new Error("Photo could not be read"))
+                : resolve({ images: [], error: "Photo could not be prepared" });
+          },
+        );
+      const job = queue.enqueue({
+        files: [new File(["image"], "image.png", { type: "image/png" })],
+        existingAttachmentCount: () => 0,
+        commitImages: () => 0,
+        onError: (error) => errors.push(error),
+        prepareFiles,
+      });
+      const waitingSend = queue.waitForPending();
+      await Promise.resolve();
+      await Promise.resolve();
+      finish();
+      await job;
+      expect(await waitingSend).toBe(false);
+      expect(errors.at(-1)).toMatch(/Photo could not be/);
+      const valid = queue.enqueue({
+        files: [new File(["valid"], "ready.png", { type: "image/png" })],
+        existingAttachmentCount: () => 0,
+        commitImages: () => 1,
+        onError: (error) => errors.push(error),
+        prepareFiles: async () => ({ images: [preparedImage("ready")], error: null }),
+      });
+      const nextSend = queue.waitForPending();
+      await valid;
+      expect(await nextSend).toBe(true);
+      expect(errors.at(-1)).toBeNull();
+    },
+  );
+
   it("revokes prepared previews and skips commit after disposal", async () => {
     const queue = new ComposerImageIntakeQueue();
     const originalRevokeObjectUrl = URL.revokeObjectURL;
