@@ -9,7 +9,7 @@ import {
   SYNARA_DEVELOPMENT_BUNDLE_ID,
   SYNARA_PRODUCTION_BUNDLE_ID,
   type SynaraDesktopFlavor,
-} from "./desktopIdentity";
+} from "@synara/shared/desktopIdentity";
 
 /**
  * Features that ship only in non-Stable builds. Keep a feature out of Stable

@@ -1,6 +1,8 @@
 import { assert, describe, it } from "@effect/vitest";
+import { spawnSync } from "node:child_process";
 import { basename } from "node:path";
 import { createRequire } from "node:module";
+import { fileURLToPath } from "node:url";
 import { SYNARA_PACKAGED_DESKTOP_FLAVORS } from "@synara/shared/desktopIdentity";
 import { desktopIconAssetPaths } from "./lib/brand-assets.ts";
 
@@ -22,6 +24,16 @@ import {
   validateDesktopNativeBuildHost,
   WINDOWS_INSTALLER_GUID,
 } from "./lib/desktop-platform-build-config.ts";
+
+it("loads the desktop artifact CLI with native Node before packaging", () => {
+  const result = spawnSync(
+    process.execPath,
+    [fileURLToPath(new URL("./build-desktop-artifact.ts", import.meta.url)), "--help"],
+    { encoding: "utf8", env: { ...process.env, NODE_OPTIONS: "" }, timeout: 15_000 },
+  );
+  assert.equal(result.status, 0, result.stderr || result.error?.message);
+  assert.ok(result.stdout.includes("--platform"));
+});
 
 describe("createDesktopPlatformBuildConfig", () => {
   it("keeps app-authored Chinese permission descriptions out of Stable bundles", () => {
