@@ -53,8 +53,29 @@ Defender event collection succeeded with no detection/remediation events, and th
 post-attempt detection inventory was empty. The [1.0.9 evidence index](evidence/windows-defender-1376-1.0.9.json)
 records the separate scanner and browser results and their source artifacts.
 
+The first browser phase of the [native Chrome run](https://github.com/Emanuele-web04/synara/actions/runs/41335794530)
+completed the official download in Chrome `156.0.8078.48` on Windows Server 2022
+build `20348.5761`. The **260335126-byte** final file matched the official SHA-256
+before and after browser closure and retained its Internet-zone marker (`ZoneId=3`).
+Download history recorded complete, no danger or interruption, and never opened.
+The captured security controls show **Standard protection** selected; the only
+configured Chrome policy was `DefaultBrowserSettingEnabled=false`. Defender
+remained active with engine `1.1.26100.4` and definitions `1.463.76.0` unchanged,
+MAPS validation returned exit 0, and event collection found no detections or
+remediations. No protection bypass or execution was attempted. These were the
+first observed runner definitions, not reconstructed historical user definitions.
+
+The subsequent guard phase in that run failed at `Update-MpSignature` with
+`The remote procedure call failed.`; the later browser phase was skipped. Thus,
+the successful initial download does not establish a completed comparison across
+definition versions. The recorded guard hash matches the version **before** the
+bounded update retry. The retry now allows at most three attempts per source,
+preserves each error, and still requires a successful call and every existing
+qualification check; its native confirmation is separate from this Chrome result.
+
 No current Defender antivirus detection was reproduced. The observed Edge reputation
 warning differs from the third-party screenshot's **`Virus detected`** message.
+Chrome completed this download without reproducing that message either.
 This guard repair therefore remains unconfirmed as a fix for the reported 1.0.9
 block; the antivirus or browser component responsible and its cause remain unresolved.
 The sections below preserve the separate September 2026 investigation and its
