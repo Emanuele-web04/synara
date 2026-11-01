@@ -4,9 +4,9 @@ import {
   UI_LANGUAGE_PREFERENCES,
   type UiLanguagePreference,
   type UiLocale,
-} from "@synara/contracts";
-import { CHINESE_UI_BETA_FEATURE, isBetaFeatureEnabled } from "./betaFeatures";
-import type { SynaraDesktopFlavor } from "./desktopIdentity";
+} from "@synara/contracts/uiLocale";
+import { CHINESE_UI_BETA_FEATURE, isBetaFeatureEnabled } from "@synara/shared/betaFeatures";
+import type { SynaraDesktopFlavor } from "@synara/shared/desktopIdentity";
 
 export { UI_LOCALES, UI_LOCALE_REGISTRY, UI_LANGUAGE_PREFERENCES };
 export type { UiLanguagePreference, UiLocale };
