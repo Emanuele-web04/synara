@@ -1,0 +1,56 @@
+{
+  "pr": 2023,
+  "beforeCommit": "71f7c64a84a889c67065fd0547db418aaa816f08",
+  "afterCommit": "1e9ace7bec2beeded38f80432387ad29dfed7416",
+  "capture": "Real Chromium component fixtures using production React components and CSS; existing isolated WebSocket fixture data.",
+  "video": {
+    "file": "home-new-thread-and-hub.webm",
+    "durationSeconds": 13,
+    "width": 1200,
+    "height": 800,
+    "sourceTrimSeconds": [40, 53]
+  },
+  "cases": [
+    "Home tab-strip + opens a draft in the latest ordinary project.",
+    "Home tab-strip + opens Create project when no ordinary project exists.",
+    "Hub thread remains open without the ordinary-project + action."
+  ],
+  "checks": {
+    "browserCasesPassed": 3,
+    "browserCasesSkipped": 261,
+    "productSourceUnchanged": true,
+    "testInstrumentationRestored": true
+  },
+  "limits": [
+    "Fixture data, not live provider/backend qualification.",
+    "The Hub fixture displays its pre-existing coordinator-loading error; this recording asserts tab action visibility only.",
+    "Only leading compilation time and trailing cleanup were removed from the recording; no UI was recreated or composited."
+  ],
+  "files": [
+    {
+      "name": "home-create-project.png",
+      "bytes": 114991,
+      "sha256": "a6fb89b700736e23b646105390d34f01d418a5ef75a13e495ac56d4770da9ad0"
+    },
+    {
+      "name": "home-new-thread-and-hub.webm",
+      "bytes": 855299,
+      "sha256": "3502e495822603abb2e9e6975e7ad827dd030eb689d622333e7d1b671bd26ad0"
+    },
+    {
+      "name": "home-project-draft.png",
+      "bytes": 43194,
+      "sha256": "b5b663c877b382c50e1d1cef04200fb68df00f873addcd037e101dad4aafc974"
+    },
+    {
+      "name": "hub-after.png",
+      "bytes": 44018,
+      "sha256": "f9f6f65db8953a0fd855cb0d96b56cc035e105268d2d805a88695c0f5bcc80c0"
+    },
+    {
+      "name": "hub-before.png",
+      "bytes": 44052,
+      "sha256": "6c4db8948e8a9ba11a47b2a8c363beff24a2fa282722e09f805f877ad8ece37b"
+    }
+  ]
+}
