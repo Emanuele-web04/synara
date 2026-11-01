@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { OrchestrationThreadActivity } from "@synara/contracts";
 import {
   ApprovalRequestId,
@@ -21,6 +22,72 @@ import {
 const CREATED_AT = "2026-07-20T10:00:00.000Z";
 const THREAD_ID = ThreadId.makeUnsafe("thread-activity-projection");
 const TURN_ID = TurnId.makeUnsafe("turn-activity-projection");
+
+it.each([1_023, 1_024, 1_025])(
+  "bounds activity fingerprints at %i serialized code units",
+  (length) => {
+    const activity: OrchestrationThreadActivity = {
+      id: EventId.makeUnsafe("fingerprint"),
+      createdAt: CREATED_AT,
+      tone: "tool",
+      kind: "task.progress",
+      summary: "Reasoning trace",
+      payload: { detail: "" },
+      turnId: TURN_ID,
+    };
+    const serializedFields = {
+      kind: activity.kind,
+      summary: activity.summary,
+      payload: activity.payload,
+      turnId: activity.turnId,
+    };
+    const sizedActivity = {
+      ...activity,
+      payload: { detail: "é".repeat(length - JSON.stringify(serializedFields).length) },
+    };
+    const serialized = JSON.stringify({ ...serializedFields, payload: sizedActivity.payload });
+    expect(serialized.length).toBe(length);
+    expect(providerActivityUpdateFingerprint(sizedActivity)).toBe(
+      length <= 1_024 ? serialized : createHash("sha256").update(serialized).digest("hex"),
+    );
+  },
+);
+
+it("preserves fingerprint serialization, including aliases, escapes and changing payloads", () => {
+  const shared = { detail: `${"x".repeat(1_024)}\ud800\n"` };
+  const activity: OrchestrationThreadActivity = {
+    id: EventId.makeUnsafe("fingerprint"),
+    createdAt: CREATED_AT,
+    tone: "tool",
+    kind: "task.progress",
+    summary: "Reasoning trace",
+    turnId: TURN_ID,
+    payload: { first: shared, second: shared },
+  };
+  const serialized = JSON.stringify({
+    kind: activity.kind,
+    summary: activity.summary,
+    payload: { first: shared, second: "[Circular]" },
+    turnId: TURN_ID,
+  });
+  const fingerprint = providerActivityUpdateFingerprint(activity);
+  expect(fingerprint).toBe(createHash("sha256").update(serialized).digest("hex"));
+  expect(
+    providerActivityUpdateFingerprint({
+      ...activity,
+      id: EventId.makeUnsafe("another"),
+      createdAt: "2026-07-21T00:00:00.000Z",
+      sequence: 2,
+    }),
+  ).toBe(fingerprint);
+  for (const change of [
+    { kind: "tool.updated" },
+    { summary: "Changed" },
+    { turnId: null },
+    { payload: { first: shared, second: { detail: "Changed" } } },
+  ])
+    expect(providerActivityUpdateFingerprint({ ...activity, ...change })).not.toBe(fingerprint);
+});
 
 function runtimeEvent(input: Record<string, unknown> & { eventId: string }): ProviderRuntimeEvent {
   return {
