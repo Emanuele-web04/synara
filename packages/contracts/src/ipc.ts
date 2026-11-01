@@ -1,3 +1,12 @@
+import { UiLanguagePreference } from "./uiLocale";
+import type {
+  EditorDebugStartInput,
+  EditorDebugActionInput,
+  EditorDebugActionResult,
+  EditorDebugPollInput,
+  EditorDebugSnapshot,
+} from "./editorDebug";
+import type { EditorIntelligenceInput, EditorIntelligenceResult } from "./editorIntelligence";
 import { Schema } from "effect";
 import type {
   LoadProjectImportHistoryInput,
@@ -29,6 +38,14 @@ import type {
   ExternalMcpRefreshPairingInput,
   ExternalMcpRevokeIntegrationInput,
 } from "./externalMcp";
+import type {
+  McpConnector,
+  McpConnectorConnectInput,
+  McpConnectorConnectResult,
+  McpConnectorDisconnectInput,
+  McpConnectorDisconnectResult,
+  McpConnectorSetup,
+} from "./mcpConnectors";
 import type {
   AutomationCancelRunInput,
   AutomationCancelRunResult,
@@ -420,6 +437,8 @@ export type DesktopUpdateStatus =
 
 export type DesktopRuntimeArch = "arm64" | "x64" | "other";
 export type DesktopTheme = "light" | "dark" | "system";
+export const DesktopLanguagePreference = UiLanguagePreference;
+export type DesktopLanguagePreference = typeof DesktopLanguagePreference.Type;
 
 /** Largest desktop blur radius the translucent window shell accepts, in points. */
 export const DESKTOP_WINDOW_BLUR_RADIUS_MAX = 64;
@@ -434,6 +453,13 @@ export interface DesktopWindowMaterial {
   material: "opaque" | "translucent";
   blurRadius: number;
 }
+
+/**
+ * How the desktop window backs the translucent shell. `native`: macOS vibrancy with the
+ * adjustable desktop blur (`setWindowMaterial`). `compositor`: a transparent window that the
+ * Linux compositor (Hyprland) blurs with its own settings, so the radius is not ours to set.
+ */
+export type DesktopWindowTranslucency = "native" | "compositor";
 
 export interface DesktopRuntimeInfo {
   hostArch: DesktopRuntimeArch;
@@ -828,9 +854,21 @@ export interface SynaraStorageSnapshot {
   readonly entries: Readonly<Record<string, string>>;
 }
 
+/**
+ * Full Disk Access as observed by the desktop main process when the info was
+ * requested. "unknown" means there was no Safari data to prove it either way.
+ */
+export type DesktopSafariFullDiskAccess = "granted" | "denied" | "unknown";
+
 export type DesktopSafariAccessInfo =
   | { supported: false }
-  | { supported: true; appName: string; appPath: string | null };
+  | {
+      supported: true;
+      appName: string;
+      appPath: string | null;
+      /** Absent from desktop builds that predate the access probe. */
+      fullDiskAccess?: DesktopSafariFullDiskAccess;
+    };
 
 /**
  * One frame of the desktop app's native computer preview tap: a complete JPEG
@@ -951,6 +989,10 @@ export const DESKTOP_DIAGNOSTIC_ISSUE_PREFIX = "SYNARA_DIAGNOSTIC_ISSUE ";
 export type DesktopDiagnosticReportStatus = "queued" | "sent" | "unavailable";
 
 export interface DesktopBridge {
+  /** Mirrors the renderer language onto native menus and startup dialogs; absent on older builds. */
+  setLanguagePreference?: (preference: DesktopLanguagePreference) => Promise<void>;
+  /** Current OS preference order; synchronous so bootstrap copy and native menus agree. */
+  getSystemLanguages?: () => readonly string[];
   /** Present only when the desktop main process enables baked-in Beta diagnostics. */
   betaDiagnostics?: {
     rendererReady: () => void;
@@ -980,6 +1022,11 @@ export interface DesktopBridge {
   setTheme: (theme: DesktopTheme) => Promise<void>;
   /** macOS only; resolves false when the adjustable blur is unavailable. */
   setWindowMaterial?: (input: DesktopWindowMaterial) => Promise<boolean>;
+  /**
+   * Set when the desktop window was created see-through. Absent on opaque windows
+   * (Windows, Linux without a blurring compositor) and in browsers.
+   */
+  windowTranslucency?: DesktopWindowTranslucency;
   getAppIcon?: () => Promise<DesktopAppIcon>;
   setAppIcon: (icon: DesktopAppIcon) => Promise<void>;
   showContextMenu: <T extends string>(
@@ -1159,6 +1206,19 @@ export interface NativeApi {
     close: (input: TerminalCloseInput) => Promise<void>;
     onEvent: (callback: (event: TerminalEvent) => void) => () => void;
   };
+  /** Absent on older servers. Core editing remains available without language services. */
+  editor?: {
+    debugStart?: (
+      input: EditorDebugStartInput,
+      options?: { signal?: AbortSignal },
+    ) => Promise<{ sessionId: string }>;
+    debugAction?: (input: EditorDebugActionInput) => Promise<EditorDebugActionResult>;
+    debugPoll?: (input: EditorDebugPollInput) => Promise<EditorDebugSnapshot>;
+    intelligence: (
+      input: EditorIntelligenceInput,
+      options?: { signal?: AbortSignal },
+    ) => Promise<EditorIntelligenceResult>;
+  };
   projects: {
     discoverScripts: (input: ProjectDiscoverScriptsInput) => Promise<ProjectDiscoverScriptsResult>;
     listDirectories: (input: ProjectListDirectoriesInput) => Promise<ProjectListDirectoriesResult>;
@@ -1306,6 +1366,12 @@ export interface NativeApi {
     refreshExternalMcpPairing: (
       input: ExternalMcpRefreshPairingInput,
     ) => Promise<ExternalMcpCreateIntegrationResult>;
+    listMcpConnectors: () => Promise<ReadonlyArray<McpConnector>>;
+    connectMcpConnector: (input: McpConnectorConnectInput) => Promise<McpConnectorConnectResult>;
+    disconnectMcpConnector: (
+      input: McpConnectorDisconnectInput,
+    ) => Promise<McpConnectorDisconnectResult>;
+    getMcpConnectorSetup: () => Promise<McpConnectorSetup>;
     refreshProviders: () => Promise<ServerRefreshProvidersResult>;
     updateProvider: (input: ServerProviderUpdateInput) => Promise<ServerProviderUpdateResult>;
     listWorktrees: () => Promise<ServerListWorktreesResult>;

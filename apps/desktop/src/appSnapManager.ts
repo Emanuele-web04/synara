@@ -97,6 +97,12 @@ export type AppSnapHelperMessage =
       kind: "keyboard" | "pointer";
       pid?: number;
       windowId?: number;
+      /** Bounded origin metadata only; no keycode, text, coordinates or flags. */
+      eventType?: number;
+      sourcePid?: number;
+      sourceStateId?: number;
+      sourceTagged?: boolean;
+      modifierKey?: boolean;
       capturedAt?: string;
     }
   | { type: "escape-monitor-state"; armed: boolean; capturedAt?: string }
@@ -353,6 +359,10 @@ export function parseAppSnapHelperMessage(line: string): AppSnapHelperMessage | 
     };
   }
   if (value.type === "physical-input" && (value.kind === "keyboard" || value.kind === "pointer")) {
+    const eventType =
+      typeof value.eventType === "number" && [1, 3, 10, 12, 22, 25].includes(value.eventType)
+        ? value.eventType
+        : undefined;
     return {
       type: "physical-input",
       kind: value.kind,
@@ -367,6 +377,20 @@ export function parseAppSnapHelperMessage(line: string): AppSnapHelperMessage | 
       value.windowId > 0 &&
       value.windowId <= 0xffffffff
         ? { windowId: value.windowId }
+        : {}),
+      ...(eventType !== undefined ? { eventType } : {}),
+      ...(typeof value.sourcePid === "number" &&
+      Number.isSafeInteger(value.sourcePid) &&
+      value.sourcePid >= 0 &&
+      value.sourcePid <= 0x7fffffff
+        ? { sourcePid: value.sourcePid }
+        : {}),
+      ...(typeof value.sourceStateId === "number" && [-1, 0, 1].includes(value.sourceStateId)
+        ? { sourceStateId: value.sourceStateId }
+        : {}),
+      ...(typeof value.sourceTagged === "boolean" ? { sourceTagged: value.sourceTagged } : {}),
+      ...(eventType === 12 && typeof value.modifierKey === "boolean"
+        ? { modifierKey: value.modifierKey }
         : {}),
       ...(typeof value.capturedAt === "string" ? { capturedAt: value.capturedAt } : {}),
     };

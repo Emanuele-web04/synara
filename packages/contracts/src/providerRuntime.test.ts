@@ -98,4 +98,50 @@ describe("ProviderRuntimeEvent", () => {
     }
     expect(parsed.payload.detail).toBe(rawOutput);
   });
+
+  it("decodes a provider completion that reconciles a local stop", () => {
+    const parsed = decodeRuntimeEvent({
+      type: "task.completed",
+      eventId: "event-task-reconciled-stop",
+      provider: "devin",
+      sessionId: "runtime-session-5",
+      createdAt: "2026-02-28T00:00:06.000Z",
+      threadId: "thread-1",
+      turnId: "turn-1",
+      payload: {
+        taskId: "task-1",
+        status: "completed",
+        reconcilesStop: true,
+      },
+    });
+
+    expect(parsed.type).toBe("task.completed");
+    if (parsed.type !== "task.completed") {
+      throw new Error("expected task.completed");
+    }
+    expect(parsed.payload.reconcilesStop).toBe(true);
+  });
+
+  it("decodes a local stop awaiting provider confirmation", () => {
+    const parsed = decodeRuntimeEvent({
+      type: "task.completed",
+      eventId: "event-task-awaiting-confirmation",
+      provider: "devin",
+      sessionId: "runtime-session-5",
+      createdAt: "2026-02-28T00:00:07.000Z",
+      threadId: "thread-1",
+      turnId: "turn-1",
+      payload: {
+        taskId: "task-2",
+        status: "stopped",
+        awaitingProviderConfirmation: true,
+      },
+    });
+
+    expect(parsed.type).toBe("task.completed");
+    if (parsed.type !== "task.completed") {
+      throw new Error("expected task.completed");
+    }
+    expect(parsed.payload.awaitingProviderConfirmation).toBe(true);
+  });
 });

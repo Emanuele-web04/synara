@@ -24,6 +24,7 @@ import {
 import { COMPOSER_STACKED_PANEL_ICON_CLASS_NAME } from "./composerStackedPanelStyles";
 import { findPullRequestAutoFixState } from "./environment/environmentPullRequest.logic";
 import { ComposerTipRow } from "./ComposerTipRow";
+import { useTranslation } from "~/i18n";
 
 interface ComposerPullRequestAutoFixHintProps {
   threadId: ThreadId;
@@ -31,7 +32,6 @@ interface ComposerPullRequestAutoFixHintProps {
   /** The PR git status reports for the chat's checked-out branch. */
   pullRequest: { url: string; state: "open" | "closed" | "merged" } | null;
   isWorking: boolean;
-  attachedToPrevious?: boolean;
 }
 
 export function ComposerPullRequestAutoFixHint({
@@ -39,8 +39,9 @@ export function ComposerPullRequestAutoFixHint({
   isServerThread,
   pullRequest,
   isWorking,
-  attachedToPrevious,
 }: ComposerPullRequestAutoFixHintProps) {
+  const { t } = useTranslation();
+
   const queryClient = useQueryClient();
   const { settings, updateSettings } = useAppSettings();
   const dismissed = settings.dismissedPullRequestAutoFixHint;
@@ -58,7 +59,7 @@ export function ComposerPullRequestAutoFixHint({
           toastManager.add({
             type: "error",
             timeout: DEFAULT_TOAST_TIMEOUT_MS,
-            title: "Couldn't turn on Auto-fix CI",
+            title: t("git:couldnTTurnOnAutoFixCI"),
             description: error instanceof Error ? error.message : undefined,
           });
         },
@@ -87,7 +88,6 @@ export function ComposerPullRequestAutoFixHint({
       actionDisabled={mutation.isPending}
       onAction={() => turnOn(pullRequest.url)}
       onDismiss={() => updateSettings({ dismissedPullRequestAutoFixHint: true })}
-      attachedToPrevious={attachedToPrevious ?? false}
       testId="composer-pull-request-auto-fix-hint"
     />
   );

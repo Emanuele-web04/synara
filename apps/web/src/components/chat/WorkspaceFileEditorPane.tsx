@@ -1,3 +1,4 @@
+import type { ChatFileReference } from "~/lib/chatReferences";
 import { useRef, useState } from "react";
 
 import { useWorkspaceFileEditorSession } from "~/hooks/useWorkspaceFileEditorSession";
@@ -5,7 +6,7 @@ import { CodeEditorPane } from "../codeEditor/CodeEditorPane";
 import {
   INITIAL_CODE_EDIT_HISTORY_STATE,
   type CodeEditHistoryControls,
-} from "../codeEditor/pierreEdit";
+} from "../codeEditor/codeEditHistory";
 import { PanelStateMessage } from "./PanelStateMessage";
 import {
   WorkspaceFileEditorConflictBar,
@@ -13,10 +14,12 @@ import {
   WorkspaceFileEditorHeader,
   WorkspaceFileEditorHistoryActions,
 } from "./WorkspaceFileEditorChrome";
+import { useTranslation } from "~/i18n";
 
 export interface WorkspaceFileEditorPaneProps {
   workspaceRoot: string | null;
   filePath: string;
+  onReferenceInChat?: ((reference: ChatFileReference) => void) | undefined;
   resolvedTheme: "light" | "dark";
   onClose: () => void;
   onDirtyChange?: ((dirty: boolean) => void) | undefined;
@@ -24,6 +27,8 @@ export interface WorkspaceFileEditorPaneProps {
 }
 
 export function WorkspaceFileEditorPane(props: WorkspaceFileEditorPaneProps) {
+  const { t } = useTranslation();
+
   const paneRef = useRef<HTMLDivElement | null>(null);
   const session = useWorkspaceFileEditorSession({
     cwd: props.workspaceRoot,
@@ -42,7 +47,7 @@ export function WorkspaceFileEditorPane(props: WorkspaceFileEditorPaneProps) {
       <WorkspaceFileEditorHeader
         workspaceRoot={props.workspaceRoot}
         filePath={props.filePath}
-        title="Editing"
+        title={t("workspace:editing")}
         dirty={session.dirty}
         saving={session.state.saving}
         canSave={session.dirty && session.canEdit}
@@ -76,13 +81,15 @@ export function WorkspaceFileEditorPane(props: WorkspaceFileEditorPaneProps) {
         </PanelStateMessage>
       ) : session.loading || !session.canEdit ? (
         <PanelStateMessage density="compact" fill="flex">
-          <p>Loading file...</p>
+          <p>{t("workspace:filePreview_loadingFile")}</p>
         </PanelStateMessage>
       ) : (
         <CodeEditorPane
           value={session.state.value}
           valueVersion={session.state.version}
-          fileName={props.filePath}
+          fileName={session.relativePath ?? props.filePath}
+          workspaceRoot={props.workspaceRoot}
+          onReferenceInChat={props.onReferenceInChat}
           resolvedTheme={props.resolvedTheme}
           onChange={session.handleChange}
           onSave={session.save}
@@ -92,14 +99,16 @@ export function WorkspaceFileEditorPane(props: WorkspaceFileEditorPaneProps) {
       )}
       <WorkspaceFileEditorDiscardDialog
         open={session.pendingDiscard !== null}
-        title="Discard unsaved changes?"
+        title={t("workspace:discardUnsavedChanges")}
         description={
           session.pendingDiscard === "reload"
-            ? "Reloading replaces the editor contents with what is currently on disk."
-            : "Closing the editor drops the changes you have not saved yet."
+            ? t("workspace:reloadingReplacesTheEditorContentsWithWhatIsCurrently")
+            : t("workspace:closingTheEditorDropsTheChangesYouHaveNot")
         }
         confirmLabel={
-          session.pendingDiscard === "reload" ? "Reload and discard" : "Discard changes"
+          session.pendingDiscard === "reload"
+            ? t("workspace:reloadAndDiscard")
+            : t("workspace:discardChanges")
         }
         onOpenChange={(open) => {
           if (!open) {

@@ -223,7 +223,10 @@ export function makeWsDeviceHandlers(
         "Failed to swipe on device",
       ),
     [DEVICE_WS_METHODS.typeText]: (input) =>
-      attempt(() => manager.typeText(input.udid, input.text), "Failed to type on device"),
+      attempt(
+        () => manager.typeText(input.udid, input.text).then(() => undefined),
+        "Failed to type on device",
+      ),
     [DEVICE_WS_METHODS.keyEvent]: (input) =>
       attempt(
         () =>

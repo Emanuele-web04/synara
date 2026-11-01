@@ -376,6 +376,8 @@ async function dispatchDraftThreadOnce(
     files: filesForSend,
     assistantSelections: composerAssistantSelections,
   });
+  // Preparation may outlast a failed upload; the original promise still drives rollback.
+  void turnAttachmentsPromise.catch(() => undefined);
   // The same instant feeds both the command timestamps and onDispatchStart: a
   // server-side failure stamps the session with this createdAt, and Kanban's
   // failure check compares it against startedAtMs with >=.

@@ -32,11 +32,13 @@ import {
   summarizeToolRawOutput,
 } from "@synara/shared/toolOutputSummary";
 import { pluralize, stripTerminalControlSequences } from "@synara/shared/text";
+import { i18n, t } from "~/i18n";
 import { suppressCoordinatorCheckinMessages } from "@synara/shared/coordinatorCheckin";
 import { PROVIDER_DESCRIPTORS } from "@synara/shared/providerMetadata";
 import {
   deriveReadableToolTitle,
   deriveSynaraMcpToolTitle,
+  extractMcpServerName,
   isGenericToolTitle,
   normalizeCompactToolLabel,
   normalizeToolTextForComparison,
@@ -67,9 +69,12 @@ export type WorkLogRequestKind = ApprovalRequestKind;
 const CHECKPOINT_REVERT_FAILED_ACTIVITY_KIND = "checkpoint.revert.failed";
 export const PROVIDER_CONTEXT_LIFECYCLE_ACTIVITY_KIND = "provider.context.changed";
 const SESSION_CONTEXT_RECAP_PREVIEW_MAX_CHARS = 600;
+// Cached titles remain English source data for command classification.
+const sourceTranslate: typeof t = (message, values) => t(message, { ...values, lng: "en" });
 // Mirror the same-thread Hand off activities in ProviderCommandReactor.ts.
 export const PROVIDER_HANDOFF_ACTIVITY_KIND = "provider.handoff";
 export const PROVIDER_HANDOFF_FAILED_ACTIVITY_KIND = "provider.handoff.failed";
+export const PROVIDER_HANDOFF_BACKGROUND_TASKS_REASON = "background-tasks";
 
 export interface ProviderHandoffInfo {
   status: "completed" | "failed";
@@ -84,6 +89,8 @@ export interface ProviderHandoffInfo {
   contextText: string | null;
   /** Why the target could not start; only set on failure. */
   failureDetail: string | null;
+  /** The failure was the source's live background tasks, which the user may stop. */
+  blockedByBackgroundTasks?: boolean;
   /** Set when that side requested fast mode but its session was not serving it. */
   sourceFastModeNotice?: FastModeNotice | null;
   targetFastModeNotice?: FastModeNotice | null;
@@ -147,7 +154,11 @@ export interface WorkLogEntry {
   changedFiles?: ReadonlyArray<string>;
   tone: "thinking" | "tool" | "info" | "error";
   toolTitle?: string;
+  /** Localized inferred heading; source toolTitle stays unchanged. */
+  displayToolTitle?: string;
   toolName?: string;
+  /** MCP server that served the call; picks the row's icon (connector, brand). */
+  mcpServer?: string;
   toolCallId?: string;
   toolStatus?: SynaraMcpToolStatus;
   liveActivity?: WorkLogLiveActivity;
@@ -294,6 +305,9 @@ export interface WorkLogBackgroundTask {
   status: "running" | WorkLogBackgroundTaskOutcome;
   startedAt: string;
   completedAt: string | null;
+  // Exact task.completed activity that can wake a later response. A preceding
+  // task.updated can settle the row earlier without changing this identity.
+  completionActivityId?: string;
   exitCode: number | null;
 }
 
@@ -375,6 +389,11 @@ interface DerivedWorkLogEntry extends WorkLogEntry {
   runtimeWarningMessage?: string;
   suppressStandaloneCommandStart?: boolean;
   taskListHasTasks?: boolean;
+  // Presentation recipes stay source-only in the per-activity cache.
+  labelTranslation?: { message: string; values?: Record<string, unknown> } | undefined;
+  taskListProgress?: { completed: number; total: number };
+  subagentActionCount?: number;
+  toolTitlePresentation?: ((translate: typeof t) => string) | undefined;
 }
 
 export function isFileChangeWorkLogEntry(
@@ -510,8 +529,10 @@ export function deriveWorkLogEntries(
     activeTurnStartedAt?: string | null;
     latestTurnState?: OrchestrationLatestTurnState | null;
     latestTurnCompletedAt?: string | null;
+    translate?: typeof t;
   } = {},
 ): WorkLogEntry[] {
+  const translate = options.translate ?? t;
   const visibleTurnIds = options.visibleTurnIds;
   const ordered = orderedActivities(activities);
   const entries = ordered
@@ -557,18 +578,8 @@ export function deriveWorkLogEntries(
     options,
   )
     .filter((entry) => !isUninformativeCommandStartEntry(entry))
-    .map(
-      ({
-        collapseCommand: _collapseCommand,
-        collapseKey: _collapseKey,
-        runtimeWarningMessage: _runtimeWarningMessage,
-        runtimeWarningRepeatCount: _runtimeWarningRepeatCount,
-        suppressStandaloneCommandStart: _suppressStandaloneCommandStart,
-        taskListHasTasks: _taskListHasTasks,
-        ...entry
-      }) => entry,
-    );
-  const handoffFastModeNotices = deriveHandoffFastModeNotices(ordered);
+    .map((entry) => toPublicWorkLogEntry(entry, translate));
+  const handoffFastModeNotices = deriveHandoffFastModeNotices(ordered, translate);
   if (handoffFastModeNotices.size > 0) {
     for (const [index, entry] of derived.entries()) {
       const notices = handoffFastModeNotices.get(entry.id);
@@ -593,11 +604,12 @@ export function deriveWorkLogEntries(
     latestTurnId,
     visibleTurnIds,
     midTurnNotificationIds,
+    translate,
   );
   return [
-    ...withBackgroundTaskRows(withSubagentProgressOutcomes(derived, ordered), ordered),
+    ...withBackgroundTaskRows(withSubagentProgressOutcomes(derived, ordered), ordered, translate),
     ...completions,
-    ...deriveTurnFailureEntries(ordered),
+    ...deriveTurnFailureEntries(ordered, translate),
   ];
 }
 
@@ -642,9 +654,15 @@ function deriveBackgroundTaskStates(ordered: ReadonlyArray<OrchestrationThreadAc
   const tasks = new Map<string, BackgroundTaskState>();
   const noticesAnnouncingSubagents = new Set<string>();
   const seenTaskIds = new Set<string>();
+  // Sparse background updates reuse the description from their launch event.
   const started = new Map<
     string,
-    { toolUseId: string | null; taskType: string | null; startedAt: string }
+    {
+      toolUseId: string | null;
+      taskType: string | null;
+      description: string | null;
+      startedAt: string;
+    }
   >();
   const admit = (
     taskId: string,
@@ -674,7 +692,7 @@ function deriveBackgroundTaskStates(ordered: ReadonlyArray<OrchestrationThreadAc
     tasks.set(taskId, {
       taskId,
       taskType,
-      description: info.description,
+      description: info.description ?? launch?.description ?? null,
       command: null,
       status: "running",
       startedAt: launch?.startedAt ?? activity.createdAt,
@@ -710,6 +728,7 @@ function deriveBackgroundTaskStates(ordered: ReadonlyArray<OrchestrationThreadAc
       const launch = {
         toolUseId: asTrimmedString(payload?.toolUseId),
         taskType: asTrimmedString(payload?.taskType),
+        description: asTrimmedString(payload?.detail),
         startedAt: activity.createdAt,
       };
       started.set(taskId, launch);
@@ -736,9 +755,29 @@ function deriveBackgroundTaskStates(ordered: ReadonlyArray<OrchestrationThreadAc
       });
     }
     const task = tasks.get(taskId);
-    if (!task || task.status !== "running") continue;
+    const reconcilesStop = payload?.reconcilesStop === true && task?.status === "stopped";
+    const outcome = backgroundTaskOutcome(payload?.status);
+    if (task && reconcilesStop && outcome && task.status !== outcome) {
+      delete task.completionActivityId;
+    }
+    if (
+      task &&
+      activity.kind === "task.completed" &&
+      outcome &&
+      (task.status === "running" || task.status === outcome || reconcilesStop)
+    ) {
+      task.completionActivityId ??= activity.id;
+    }
+    if (!task || (task.status !== "running" && !reconcilesStop)) continue;
+    // Only explicit native replay evidence can reopen a provisional local stop.
+    if (reconcilesStop && activity.kind === "task.updated" && payload?.status === "running") {
+      task.status = "running";
+      task.completedAt = null;
+      delete task.completionActivityId;
+      task.exitCode = null;
+      continue;
+    }
     if (activity.kind === "task.updated" || activity.kind === "task.completed") {
-      const outcome = backgroundTaskOutcome(payload?.status);
       if (!outcome) continue;
       const detail = asTrimmedString(payload?.detail);
       task.status = outcome;
@@ -756,6 +795,7 @@ function deriveBackgroundTaskStates(ordered: ReadonlyArray<OrchestrationThreadAc
 function withBackgroundTaskRows<Entry extends WorkLogEntry>(
   entries: ReadonlyArray<Entry>,
   ordered: ReadonlyArray<OrchestrationThreadActivity>,
+  translate: typeof t,
 ): ReadonlyArray<WorkLogEntry> {
   if (
     !ordered.some(
@@ -795,7 +835,7 @@ function withBackgroundTaskRows<Entry extends WorkLogEntry>(
       createdAt: anchor.createdAt,
       ...(anchor.sequence !== undefined ? { sequence: anchor.sequence } : {}),
       ...(anchor.turnId ? { turnId: anchor.turnId } : {}),
-      label: "Background task",
+      label: translate("chat:backgroundTask"),
       tone: "tool",
       ...(anchor.activityKind ? { activityKind: anchor.activityKind } : {}),
       backgroundTask,
@@ -852,20 +892,46 @@ export interface SubagentTaskEnd {
 /**
  * When and how each subagent task ended, keyed by its launching tool call id,
  * from the parent's task completions. A background subagent's own thread ends
- * its first turn at launch, so this is the only reliable end it has.
+ * its first turn at launch, so this is the only reliable end it has. An end
+ * that names only its task (an older session stop) resolves through the task's
+ * start while that task is still open.
  */
 export function deriveSubagentTaskEnds(
   activities: ReadonlyArray<OrchestrationThreadActivity>,
 ): ReadonlyMap<string, SubagentTaskEnd> {
   const ends = new Map<string, SubagentTaskEnd>();
   const resumed = new Set<string>();
+  const openToolUseIdByTaskId = new Map<string, string>();
   for (const activity of activities) {
     const payload = asRecord(activity.payload);
-    const toolUseId = asTrimmedString(payload?.toolUseId);
-    if (activity.kind === "task.started" && toolUseId && ends.has(toolUseId)) {
-      resumed.add(toolUseId);
+    const taskId = asTrimmedString(payload?.taskId);
+    const ownToolUseId = asTrimmedString(payload?.toolUseId);
+    if (activity.kind === "task.started" && taskId) {
+      if (ownToolUseId) openToolUseIdByTaskId.set(taskId, ownToolUseId);
+      else openToolUseIdByTaskId.delete(taskId);
+    }
+    if (activity.kind === "task.started" && ownToolUseId && ends.has(ownToolUseId)) {
+      resumed.add(ownToolUseId);
+    }
+    if (
+      activity.kind === "task.updated" &&
+      payload?.reconcilesStop === true &&
+      payload.status === "running" &&
+      ownToolUseId
+    ) {
+      const stopped = ends.get(ownToolUseId);
+      if (stopped?.outcome === "stopped") {
+        // Explicit native replay retracts only the provisional stop, retaining
+        // earlier invocations and the correlation for its eventual completion.
+        if (stopped.previous) ends.set(ownToolUseId, stopped.previous);
+        else ends.delete(ownToolUseId);
+        resumed.add(ownToolUseId);
+        if (taskId) openToolUseIdByTaskId.set(taskId, ownToolUseId);
+      }
     }
     if (activity.kind !== "task.completed") continue;
+    const toolUseId = ownToolUseId ?? (taskId ? openToolUseIdByTaskId.get(taskId) : undefined);
+    if (taskId) openToolUseIdByTaskId.delete(taskId);
     const outcome = subagentOutcomeFromStatus(asTrimmedString(payload?.status));
     if (toolUseId && outcome) {
       const previous = resumed.has(toolUseId) ? ends.get(toolUseId) : ends.get(toolUseId)?.previous;
@@ -958,6 +1024,7 @@ function withSubagentProgressOutcomes<Entry extends WorkLogEntry>(
 // session reported: the source up to the handoff, the target from there to the next one.
 function deriveHandoffFastModeNotices(
   ordered: ReadonlyArray<OrchestrationThreadActivity>,
+  translate: typeof t,
 ): ReadonlyMap<string, Pick<ProviderHandoffInfo, "sourceFastModeNotice" | "targetFastModeNotice">> {
   const notices = new Map<
     string,
@@ -967,7 +1034,7 @@ function deriveHandoffFastModeNotices(
   let openHandoffId: string | null = null;
   for (const activity of ordered) {
     if (activity.kind === FAST_MODE_STATE_ACTIVITY_KIND) {
-      sessionNotice = fastModeNoticeFromActivity(activity);
+      sessionNotice = fastModeNoticeFromActivity(activity, translate);
       if (openHandoffId !== null) {
         notices.set(openHandoffId, {
           ...notices.get(openHandoffId),
@@ -1001,6 +1068,7 @@ function isTurnFailureActivity(activity: OrchestrationThreadActivity): boolean {
 
 function deriveTurnFailureEntries(
   activities: ReadonlyArray<OrchestrationThreadActivity>,
+  translate: typeof t,
 ): WorkLogEntry[] {
   const terminalStates = new Map<string, unknown>();
   for (const activity of activities) {
@@ -1036,8 +1104,14 @@ function deriveTurnFailureEntries(
     const overloaded =
       errorCode === "server_overloaded" || /selected model is at capacity/i.test(cause);
     const message = overloaded
-      ? "The task was interrupted because the model is at capacity. Work remains incomplete."
-      : `The task was interrupted by a provider error. Work remains incomplete. ${cause}`;
+      ? translate("chat:theTaskWasInterruptedBecauseTheModelIsAt")
+      : translate("chat:theTaskWasInterruptedByAProviderErrorWork", {
+          value0:
+            asTrimmedString(payload?.errorMessage) ??
+            asTrimmedString(payload?.message) ??
+            previous?.turnFailure?.cause ??
+            translate("chat:theProviderReportedAnError"),
+        });
     failures.set(id, {
       id,
       createdAt: previous?.createdAt ?? activity.createdAt,
@@ -1046,7 +1120,7 @@ function deriveTurnFailureEntries(
         : withProviderSequence(activity)),
       ...(activity.turnId ? { turnId: activity.turnId } : {}),
       tone: "error",
-      label: "Task interrupted",
+      label: translate("chat:taskInterrupted"),
       activityKind: activity.kind,
       turnFailure: { cause, message, ...(errorCode ? { errorCode } : {}) },
     });
@@ -1098,6 +1172,7 @@ function deriveBackgroundTaskCompletionEntries(
   latestTurnId: TurnId | undefined,
   visibleTurnIds: ReadonlySet<TurnId | string> | undefined,
   midTurnNotificationIds: ReadonlySet<string>,
+  translate: typeof t,
 ): WorkLogEntry[] {
   const backgroundTasks = new Map<
     string,
@@ -1131,7 +1206,18 @@ function deriveBackgroundTaskCompletionEntries(
     if (midTurnNotificationIds.has(activity.id)) continue;
     const { turnId: launchTurnId, ...task } = launched;
     const turnId = launchTurnId ?? activity.turnId;
-    const noun = task.taskType === "local_agent" ? "Subagent" : "Background task";
+    const outcomeKeys =
+      task.taskType === "local_agent"
+        ? {
+            finished: "common:subagentFinished",
+            failed: "common:subagentFailed",
+            stopped: "common:subagentStopped",
+          }
+        : {
+            finished: "common:backgroundTaskFinished",
+            failed: "common:backgroundTaskFailed",
+            stopped: "common:backgroundTaskStopped",
+          };
     const outcome =
       payload.status === "failed"
         ? "failed"
@@ -1144,13 +1230,22 @@ function deriveBackgroundTaskCompletionEntries(
       ...withProviderSequence(activity),
       ...(turnId ? { turnId } : {}),
       // Status first: a trailing "finished" is trimmed as a tool status word.
-      label: task.description ? `${noun} ${outcome}: ${task.description}` : `${noun} ${outcome}`,
+      label: task.description
+        ? translate("common:symbol8", {
+            value0: translate(outcomeKeys[outcome]),
+            value1: task.description,
+          })
+        : translate(outcomeKeys[outcome]),
       tone: payload.status === "failed" ? "error" : "info",
       activityKind: activity.kind,
       backgroundTaskCompletion: { taskId: payload.taskId, ...task, outcome },
     });
   }
   return completions;
+}
+
+export function isCodexRuntimeWarningType(nativeEventType: unknown): boolean {
+  return nativeEventType === "codex.guardianWarning" || nativeEventType === "codex.warning";
 }
 
 function shouldKeepActivityForWorkLog(
@@ -1186,6 +1281,14 @@ function shouldKeepActivityForWorkLog(
   ) {
     return true;
   }
+
+  // Codex Guardian and hook warnings carry no provider turn id.
+  if (
+    activity.kind === "runtime.warning" &&
+    activity.turnId === null &&
+    isCodexRuntimeWarningType(asRecord(activity.payload)?.nativeEventType)
+  )
+    return true;
 
   // Thread-level compaction progress has no provider turn id but should stay visible.
   if (activity.kind === "context-compaction" && activity.turnId === null) {
@@ -1493,7 +1596,7 @@ function asHandoffModelSelection(
   return fallback as ModelSelection;
 }
 
-function extractProviderHandoffInfo(
+export function extractProviderHandoffInfo(
   payload: Record<string, unknown> | null,
   status: ProviderHandoffInfo["status"],
 ): ProviderHandoffInfo | null {
@@ -1520,6 +1623,9 @@ function extractProviderHandoffInfo(
     }),
     contextText: asTrimmedString(payload?.contextText),
     failureDetail: asTrimmedString(payload?.detail),
+    ...(status === "failed" && payload?.reason === PROVIDER_HANDOFF_BACKGROUND_TASKS_REASON
+      ? { blockedByBackgroundTasks: true }
+      : {}),
   };
 }
 
@@ -1715,6 +1821,55 @@ function withUserInputExchanges(
   return withExchanges.filter((entry) => !answeredActivityIds.has(entry.id));
 }
 
+const publicWorkLogEntryCache = new WeakMap<
+  DerivedWorkLogEntry,
+  WeakMap<typeof t, { locale: string; entry: WorkLogEntry }>
+>();
+
+// Keep streaming entry identity stable; refresh only translated presentation when the locale changes.
+function toPublicWorkLogEntry(derived: DerivedWorkLogEntry, translate: typeof t): WorkLogEntry {
+  const locale = i18n.language;
+  const translations = publicWorkLogEntryCache.get(derived);
+  const cached = translations?.get(translate);
+  if (cached?.locale === locale) return cached.entry;
+  const {
+    collapseCommand: _collapseCommand,
+    collapseKey: _collapseKey,
+    runtimeWarningMessage: _runtimeWarningMessage,
+    runtimeWarningRepeatCount: _runtimeWarningRepeatCount,
+    suppressStandaloneCommandStart: _suppressStandaloneCommandStart,
+    taskListHasTasks: _taskListHasTasks,
+    labelTranslation,
+    taskListProgress,
+    subagentActionCount,
+    toolTitlePresentation,
+    ...entry
+  } = derived;
+  if (toolTitlePresentation) {
+    const displayTitle = toolTitlePresentation(translate);
+    if (displayTitle !== entry.toolTitle) entry.displayToolTitle = displayTitle;
+  }
+  if (labelTranslation) entry.label = translate(labelTranslation.message, labelTranslation.values);
+  else if (taskListProgress)
+    entry.label = translate("chat:taskProgress", {
+      completed: taskListProgress.completed,
+      count: taskListProgress.total,
+    });
+  if (entry.subagentAction)
+    entry.subagentAction = {
+      ...entry.subagentAction,
+      summaryText: summarizeSubagentAction(
+        entry.subagentAction.tool,
+        subagentActionCount ?? 0,
+        translate,
+      ),
+    };
+  const cache = translations ?? new WeakMap();
+  cache.set(translate, { locale, entry });
+  if (!translations) publicWorkLogEntryCache.set(derived, cache);
+  return entry;
+}
+
 const decodeInlineVisualPayload = Schema.decodeUnknownOption(InlineVisualActivityPayload);
 const derivedWorkLogEntryCache = new WeakMap<OrchestrationThreadActivity, DerivedWorkLogEntry>();
 
@@ -1740,6 +1895,7 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
   const changedFiles = extractChangedFiles(payload);
   const title = extractToolTitle(payload);
   const toolName = extractToolName(payload);
+  const mcpServer = extractMcpServerName(toolName, payload);
   const toolCallId = extractToolCallId(payload);
   const toolStatus = deriveToolLifecycleStatus(activity.kind, payload);
   const entry: DerivedWorkLogEntry = {
@@ -1751,6 +1907,7 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
     tone: activity.tone === "approval" ? "info" : activity.tone,
     activityKind: activity.kind,
     ...(toolName ? { toolName } : {}),
+    ...(mcpServer ? { mcpServer } : {}),
     ...(toolCallId ? { toolCallId } : {}),
     ...(toolStatus ? { toolStatus } : {}),
   };
@@ -1789,6 +1946,7 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
     entry.runtimeWarningMessage = runtimeWarningMessage;
     if (payload?.willRetry === true || asRecord(payload?.data)?.willRetry === true) {
       entry.label = "Provider retrying";
+      entry.labelTranslation = { message: "chat:providerRetrying" };
     }
   }
   // A Claude Monitor event wakes the agent like a finished background task, so
@@ -1808,6 +1966,15 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
       outcome,
     };
     entry.label = `Monitor${name ? ` · ${name}` : ""} ${outcome === "completed" ? "finished" : outcome}`;
+    const message =
+      outcome === "completed"
+        ? "chat:monitorFinished"
+        : outcome === "failed"
+          ? "chat:monitorFailed"
+          : outcome === "stopped"
+            ? "chat:monitorStopped"
+            : "chat:monitorUpdated";
+    entry.labelTranslation = { message, values: { value0: name ? ` · ${name}` : "" } };
     if (outcome === "failed") entry.tone = "error";
   }
   if (activity.kind === "auth.status") {
@@ -1828,6 +1995,7 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
       entry.taskListHasTasks = true;
       const completedCount = tasks.filter((task) => task.status === "completed").length;
       entry.label = `${completedCount} out of ${tasks.length} ${pluralize(tasks.length, "task")} completed`;
+      entry.taskListProgress = { completed: completedCount, total: tasks.length };
       const inProgressTask = tasks.find((task) => task.status === "inProgress");
       if (inProgressTask) {
         entry.detail = inProgressTask.task;
@@ -1877,7 +2045,9 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
   }
   const subagentAction = extractCollabAction(payload, subagents);
   if (subagentAction) {
-    entry.subagentAction = subagentAction;
+    const { count, ...action } = subagentAction;
+    entry.subagentAction = action;
+    entry.subagentActionCount = count;
   }
   if (activity.kind === "automation.created") {
     const automation = extractWorkLogAutomation(payload);
@@ -1938,35 +2108,42 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
       entry.providerHandoff = providerHandoff;
     }
   }
-  const computerToolDescription = deriveComputerToolDescription({
+  const computerToolInput = {
     activity,
     payload,
     toolName,
     title: commandActionDisplay?.title ?? title,
-  });
-  const readableTitle =
-    extractCollabActionTitle(payload) ??
-    computerToolDescription?.summary ??
-    deriveSynaraMcpToolTitle({
-      toolName,
-      title: commandActionDisplay?.title ?? title,
-      fallbackLabel: activity.summary,
-      status: toolStatus,
-    }) ??
-    deriveReadableToolTitle({
-      title: commandActionDisplay?.title ?? title,
-      fallbackLabel: activity.summary,
-      itemType,
-      requestKind,
-      command: commandPreview.command,
-      payload,
-      isRunning: activity.kind !== "tool.completed",
-    });
+  };
+  const synaraToolTitleInput = {
+    toolName,
+    title: commandActionDisplay?.title ?? title,
+    fallbackLabel: activity.summary,
+    status: toolStatus,
+  };
+  const readableToolTitleInput = {
+    title: commandActionDisplay?.title ?? title,
+    fallbackLabel: activity.summary,
+    itemType,
+    requestKind,
+    command: commandPreview.command,
+    payload,
+    isRunning: activity.kind !== "tool.completed",
+  };
+  const collabTitle = extractCollabActionTitle(payload);
+  // Resolve from the original source context rather than treating an inferred
+  // English title as a provider-supplied override when the language changes.
+  const resolveToolTitle = (translate: typeof t) =>
+    collabTitle ??
+    deriveComputerToolDescription(computerToolInput, translate)?.summary ??
+    deriveSynaraMcpToolTitle(synaraToolTitleInput, translate) ??
+    deriveReadableToolTitle(readableToolTitleInput, translate);
+  const readableTitle = resolveToolTitle(sourceTranslate);
   // Task-list rows derive their own progress heading above. The generic
   // activity summary ("Tasks updated") would otherwise become toolTitle and
   // take precedence over that progress label in TimelineWorkEntryRow.
   if (readableTitle && activity.kind !== "turn.tasks.updated") {
     entry.toolTitle = readableTitle;
+    entry.toolTitlePresentation = (translate) => resolveToolTitle(translate) ?? readableTitle;
   }
   const liveActivity = deriveWorkLogLiveActivity(activity, payload, entry);
   if (liveActivity) {
@@ -2482,6 +2659,7 @@ function mergeDerivedWorkLogEntries(
   const synaraThreadCreation = next.synaraThreadCreation ?? previous.synaraThreadCreation;
   const collapseKey = next.collapseKey ?? previous.collapseKey;
   const toolName = next.toolName ?? previous.toolName;
+  const mcpServer = next.mcpServer ?? previous.mcpServer;
   const toolCallId = next.toolCallId ?? previous.toolCallId;
   const preservePreviousTerminalState =
     previous.liveActivity !== undefined &&
@@ -2499,6 +2677,9 @@ function mergeDerivedWorkLogEntries(
   return {
     ...previous,
     ...next,
+    labelTranslation: next.labelTranslation,
+    toolTitlePresentation:
+      toolTitle === next.toolTitle ? next.toolTitlePresentation : previous.toolTitlePresentation,
     id: previous.id,
     createdAt: previous.createdAt,
     ...(previous.sequence !== undefined ? { sequence: previous.sequence } : {}),
@@ -2516,6 +2697,7 @@ function mergeDerivedWorkLogEntries(
     ...(synaraThreadCreation ? { synaraThreadCreation } : {}),
     ...(collapseKey ? { collapseKey } : {}),
     ...(toolName ? { toolName } : {}),
+    ...(mcpServer ? { mcpServer } : {}),
     ...(toolCallId ? { toolCallId } : {}),
     ...(toolStatus ? { toolStatus } : {}),
     ...(liveActivity ? { liveActivity } : {}),
@@ -2893,9 +3075,26 @@ function inferSubagentActionTool(item: Record<string, unknown> | null): string |
   return "spawnAgent";
 }
 
-function summarizeSubagentAction(tool: string, count: number): string {
+function summarizeSubagentAction(tool: string, count: number, translate?: typeof t): string {
   const normalizedTool = normalizeCollabIdentifier(tool) ?? "";
   const effectiveCount = Math.max(1, count);
+  if (translate) {
+    const messageKeys: Record<string, string> = {
+      spawnagent: "chat:subagentsSpawning",
+      wait: "chat:subagentsWaiting",
+      waitagent: "chat:subagentsWaiting",
+      closeagent: "chat:subagentsClosing",
+      resumeagent: "chat:subagentsResuming",
+      sendinput: "chat:subagentsUpdating",
+    };
+    const messageKey = messageKeys[normalizedTool];
+    return messageKey
+      ? translate(messageKey, { count: effectiveCount })
+      : effectiveCount === 1
+        ? translate("chat:agentActivity")
+        : translate("chat:agentActivity2", { value0: effectiveCount });
+  }
+  // Source wording is used by lifecycle classification, before UI localization.
   const noun = pluralize(effectiveCount, "agent");
   switch (normalizedTool) {
     case "spawnagent":
@@ -2908,7 +3107,7 @@ function summarizeSubagentAction(tool: string, count: number): string {
     case "resumeagent":
       return `Resuming ${effectiveCount} ${noun}`;
     case "sendinput":
-      return `Updating ${pluralize(effectiveCount, "agent")}`;
+      return `Updating ${noun}`;
     default:
       return effectiveCount === 1 ? "Agent activity" : `Agent activity (${effectiveCount})`;
   }
@@ -2917,7 +3116,7 @@ function summarizeSubagentAction(tool: string, count: number): string {
 function extractCollabAction(
   payload: Record<string, unknown> | null,
   subagents: ReadonlyArray<WorkLogSubagent>,
-): WorkLogSubagentAction | undefined {
+): (WorkLogSubagentAction & { count: number }) | undefined {
   const itemType = extractWorkLogItemType(payload);
   if (itemType !== "collab_agent_tool_call") {
     return undefined;
@@ -2953,6 +3152,7 @@ function extractCollabAction(
     tool: tool ?? "spawnAgent",
     status,
     summaryText: summarizeSubagentAction(tool ?? "spawnAgent", count),
+    count,
     ...(model ? { model } : {}),
     ...(prompt ? { prompt } : {}),
   };
@@ -3365,38 +3565,56 @@ function extractToolName(payload: Record<string, unknown> | null): string | null
   return null;
 }
 
-function deriveComputerToolDescription(input: {
-  activity: OrchestrationThreadActivity;
-  payload: Record<string, unknown> | null;
-  toolName: string | null;
-  title: string | null;
-}) {
+function deriveComputerToolDescription(
+  input: {
+    activity: OrchestrationThreadActivity;
+    payload: Record<string, unknown> | null;
+    toolName: string | null;
+    title: string | null;
+  },
+  translate: typeof t = sourceTranslate,
+) {
   if (input.payload?.approvalScope === "computer-foreground") {
     return {
-      summary:
+      summary: translate(
         input.activity.kind === "approval.requested"
-          ? "Asked to show Computer on screen"
+          ? "chat:askedToShowComputerOnScreen"
           : input.payload.decision === "accept"
-            ? "Computer allowed on screen"
+            ? "chat:computerAllowedOnScreen"
             : input.payload.decision === "decline"
-              ? "Computer kept in the background"
-              : "On-screen request cancelled",
+              ? "chat:computerKeptInTheBackground"
+              : "chat:onScreenRequestCancelled",
+      ),
     };
   }
   if (
     input.payload?.approvalScope === "computer-task" ||
     input.payload?.approvalScope === "device-task"
   ) {
-    const family = input.payload.approvalScope === "device-task" ? "Device" : "Computer";
+    const keys =
+      input.payload.approvalScope === "device-task"
+        ? {
+            requested: "common:deviceTaskApprovalRequested",
+            accepted: "common:deviceTaskApproved",
+            declined: "common:deviceTaskDeclined",
+            cancelled: "common:deviceTaskApprovalCancelled",
+          }
+        : {
+            requested: "common:computerTaskApprovalRequested",
+            accepted: "common:computerTaskApproved",
+            declined: "common:computerTaskDeclined",
+            cancelled: "common:computerTaskApprovalCancelled",
+          };
     return {
-      summary:
+      summary: translate(
         input.activity.kind === "approval.requested"
-          ? `${family} task approval requested`
+          ? keys.requested
           : input.payload.decision === "accept"
-            ? `${family} task approved`
+            ? keys.accepted
             : input.payload.decision === "decline"
-              ? `${family} task declined`
-              : `${family} task approval cancelled`,
+              ? keys.declined
+              : keys.cancelled,
+      ),
     };
   }
   if (!computerToolName(input.toolName)) {
@@ -3419,10 +3637,13 @@ function deriveComputerToolDescription(input: {
   ) {
     return { summary: progressTitle };
   }
-  return describeComputerToolCall({
-    toolName: input.toolName,
-    args: extractComputerToolArgs(input.payload) ?? undefined,
-  });
+  return describeComputerToolCall(
+    {
+      toolName: input.toolName,
+      args: extractComputerToolArgs(input.payload) ?? undefined,
+    },
+    translate,
+  );
 }
 
 function extractComputerToolArgs(

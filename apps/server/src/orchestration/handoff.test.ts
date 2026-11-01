@@ -8,6 +8,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   buildHandoffBootstrapText,
+  buildPriorTranscriptBootstrap,
   buildPriorTranscriptBootstrapText,
   listPriorTranscriptMessages,
 } from "./handoff.ts";
@@ -97,6 +98,22 @@ describe("buildHandoffBootstrapText", () => {
 });
 
 describe("buildPriorTranscriptBootstrapText", () => {
+  it.each([
+    { lengths: [30, 30], budget: 32_000, omitted: 0, shortened: 0 },
+    { lengths: Array.from({ length: 8 }, () => 400), budget: 32_000, omitted: 0, shortened: 2 },
+    { lengths: [3_000], budget: 32_000, omitted: 0, shortened: 1 },
+    { lengths: [1_000, 1_000], budget: 700, omitted: 1, shortened: 1 },
+    { lengths: [1_000, 1_000], budget: 50, omitted: 2, shortened: 0 },
+  ])(
+    "reports coverage for $lengths at a $budget character budget",
+    ({ lengths, budget, omitted, shortened }) => {
+      const messages = lengths.map((length, index) => message(index, "user", "x".repeat(length)));
+      const bootstrap = buildPriorTranscriptBootstrap(thread(messages), undefined, budget);
+      expect(bootstrap).toMatchObject({ omittedMessages: omitted, shortenedMessages: shortened });
+      expect(bootstrap?.text.length).toBeLessThanOrEqual(budget);
+    },
+  );
+
   it("keeps every message with a plain summary header when under budget", () => {
     const messages = Array.from({ length: 10 }, (_, index) =>
       message(index, index % 2 === 0 ? "user" : "assistant", `marker-${index} short message`),

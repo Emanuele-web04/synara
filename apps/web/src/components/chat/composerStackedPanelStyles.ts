@@ -1,6 +1,6 @@
 // FILE: composerStackedPanelStyles.ts
 // Purpose: Shared layout, typography, and chrome tokens for panels stacked above the
-// composer (plan activity, queued follow-ups, live file changes).
+// composer (queued follow-ups) and the panels composer capsules open (tasks, workflow, goal).
 // Layer: Chat composer styling
 // Exports: stacked panel row/header tokens and divider class name
 

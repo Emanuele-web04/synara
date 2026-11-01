@@ -130,6 +130,10 @@ export const DEFAULT_KEYBINDINGS: ReadonlyArray<KeybindingRule> = [
   { key: "mod+w", command: "terminal.close", when: "terminalFocus" },
   { key: "mod+shift+j", command: "terminal.workspace.newFullWidth" },
   { key: "mod+w", command: "terminal.workspace.closeActive", when: "terminalWorkspaceOpen" },
+  // With no terminal focused and no workspace open, Cmd/Ctrl+W owns the regular
+  // chat surface instead of Electron's native window-close role: it closes the
+  // active open-thread tab like a browser tab.
+  { key: "mod+w", command: "threadTab.close", when: "!terminalFocus && !terminalWorkspaceOpen" },
   // Keep workspace tabs on literal Ctrl so Cmd+1…9 remains consistent app navigation
   // on macOS even when a thread was opened directly as a full-width terminal.
   { key: "ctrl+1", command: "terminal.workspace.terminal", when: "terminalWorkspaceOpen" },
@@ -229,6 +233,8 @@ export const DEFAULT_KEYBINDINGS: ReadonlyArray<KeybindingRule> = [
   { key: "mod+alt+shift+u", command: "thread.markUnread", when: "!terminalFocus || isMac" },
   { key: "mod+shift+]", command: "chat.visible.next", when: "!terminalFocus" },
   { key: "mod+shift+[", command: "chat.visible.previous", when: "!terminalFocus" },
+  // Codex's chord for the same jump; Cmd+Option+Shift+A stays Archive.
+  { key: "mod+alt+a", command: "chat.attention.next", when: "!terminalFocus || isMac" },
   // Open thread tabs, browser-style: Cmd+Ctrl+Left/Right on macOS (Cmd+Shift+Left/Right
   // selects to the line edge in the composer, Cmd+Option+Arrow switches spaces, and
   // xterm never sees a Cmd-chord), and
@@ -241,6 +247,21 @@ export const DEFAULT_KEYBINDINGS: ReadonlyArray<KeybindingRule> = [
   { key: "ctrl+alt+p", command: "git.commitAndPush", when: "!terminalFocus && !isMac" },
   { key: "mod+o", command: "editor.openFavorite" },
   { key: "mod+s", command: "editor.file.save", when: "!terminalFocus" },
+  // In-app code editor. The editor only runs these while it has focus; the guard keeps
+  // F-keys flowing to terminal programs. Go to symbol, Go to line and Show problems ship
+  // unassigned: their usual chords (Mod+Shift+O / Mod+G / Mod+Shift+M) already add a
+  // project, toggle the terminal and open the model picker.
+  { key: "f1", command: "editor.commands", when: "!terminalFocus" },
+  { key: "f2", command: "editor.rename", when: "!terminalFocus" },
+  { key: "f12", command: "editor.goToDefinition", when: "!terminalFocus" },
+  { key: "shift+f12", command: "editor.findReferences", when: "!terminalFocus" },
+  { key: "mod+.", command: "editor.quickFix", when: "!terminalFocus" },
+  { key: "f5", command: "editor.debug.start", when: "!terminalFocus" },
+  { key: "shift+f5", command: "editor.debug.stop", when: "!terminalFocus" },
+  { key: "f9", command: "editor.debug.toggleBreakpoint", when: "!terminalFocus" },
+  { key: "f10", command: "editor.debug.stepOver", when: "!terminalFocus" },
+  { key: "f11", command: "editor.debug.stepInto", when: "!terminalFocus" },
+  { key: "shift+f11", command: "editor.debug.stepOut", when: "!terminalFocus" },
 ];
 
 /** @internal - Exported for testing */

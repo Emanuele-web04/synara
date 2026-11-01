@@ -2,8 +2,11 @@ import { EventId, MessageId, ThreadId, TurnId } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 
 import type { AppState } from "../store";
-import type { ChatMessage, Thread, ThreadShell } from "../types";
-import { createThreadLineageSelector } from "./ChatView.selectors";
+import type { ChatMessage, Thread, ThreadSession, ThreadShell } from "../types";
+import {
+  createRunningChildThreadIdsSelector,
+  createThreadLineageSelector,
+} from "./ChatView.selectors";
 
 const rootThreadId = ThreadId.makeUnsafe("thread-root");
 const childThreadId = ThreadId.makeUnsafe("thread-child");
@@ -157,5 +160,75 @@ describe("createThreadLineageSelector", () => {
     );
 
     expect(after).toBe(before);
+  });
+});
+
+describe("createRunningChildThreadIdsSelector", () => {
+  const session = (status: ThreadSession["status"]) => ({ status }) as ThreadSession;
+  const shell = (id: string, overrides: Partial<ThreadShell> = {}) =>
+    ({ id: ThreadId.makeUnsafe(id), title: id, error: null, ...overrides }) as ThreadShell;
+  const runningId = ThreadId.makeUnsafe("child-running");
+  const settledId = ThreadId.makeUnsafe("child-settled");
+  const archivedId = ThreadId.makeUnsafe("child-archived");
+  const foreignId = ThreadId.makeUnsafe("child-foreign");
+  const state = makeState({
+    threadIds: [rootThreadId, runningId, settledId, archivedId, foreignId],
+    threadShellById: {
+      [rootThreadId]: rootShell,
+      [runningId]: shell(runningId, { parentThreadId: rootThreadId }),
+      [settledId]: shell(settledId, { parentThreadId: rootThreadId }),
+      [archivedId]: shell(archivedId, {
+        parentThreadId: rootThreadId,
+        archivedAt: "2026-06-01T00:00:00.000Z",
+      }),
+      [foreignId]: shell(foreignId, { parentThreadId: unrelatedThreadId }),
+    },
+    threadSessionById: {
+      [runningId]: session("running"),
+      [settledId]: session("ready"),
+      [archivedId]: session("running"),
+      [foreignId]: session("running"),
+    },
+    threadTurnStateById: {},
+  });
+
+  it("keeps the parent's running, unarchived children with a stable identity", () => {
+    const select = createRunningChildThreadIdsSelector(rootThreadId);
+    const first = select(state);
+    expect(first).toEqual([runningId]);
+    expect(select({ ...state })).toBe(first);
+    expect(
+      select({
+        ...state,
+        threadSessionById: { ...state.threadSessionById, [settledId]: session("ready") },
+      }),
+    ).toBe(first);
+  });
+
+  it("selects only a nested launcher's children while preserving the root-wide view", () => {
+    const nestedId = ThreadId.makeUnsafe("child-nested");
+    const nestedState = {
+      ...state,
+      threadIds: [...(state.threadIds ?? []), nestedId],
+      threadShellById: {
+        ...state.threadShellById,
+        [nestedId]: shell(nestedId, { parentThreadId: rootThreadId, sourceThreadId: runningId }),
+      },
+      threadSessionById: { ...state.threadSessionById, [nestedId]: session("running") },
+    };
+    const selectNested = createRunningChildThreadIdsSelector(rootThreadId, runningId);
+    const first = selectNested(nestedState);
+    expect(first).toEqual([nestedId]);
+    expect(selectNested({ ...nestedState })).toBe(first);
+    expect(createRunningChildThreadIdsSelector(rootThreadId)(nestedState)).toEqual([
+      runningId,
+      nestedId,
+    ]);
+  });
+
+  it("selects nothing without a parent", () => {
+    const select = createRunningChildThreadIdsSelector(null);
+    expect(select(state)).toEqual([]);
+    expect(select(state)).toBe(select({ ...state }));
   });
 });

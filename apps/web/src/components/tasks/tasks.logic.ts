@@ -16,7 +16,8 @@ import {
   type TodoUpdateInput,
 } from "@synara/contracts";
 
-import { formatRelativeTime } from "~/lib/relativeTime";
+import { formatRelativeTime, formatRelativeTimeAgo } from "~/lib/relativeTime";
+import { t, getFormatLocale } from "~/i18n";
 import { canSessionAnswerPendingRequests, deriveActiveWorkStartedAt } from "../../session-logic";
 import type { SidebarThreadSummary } from "../../types";
 import { isThreadActivelyWorking } from "../Sidebar.logic";
@@ -36,6 +37,9 @@ export interface TaskStatus {
   kind: TaskStatusKind;
   /** Short state name shown in the status chip. */
   label: string;
+  /** Semantic presentation only; source status text remains stable for comparisons. */
+  labelKey?: string;
+  detailKey?: string;
   /** What the agent is doing or waiting on, when it says more than the label. */
   detail: string | null;
   /** ISO start of the running turn, for a live "4m" elapsed readout. */
@@ -50,6 +54,7 @@ export const NEEDS_ANSWER_DETAIL = "Asked you a question";
 const TODO_STATUS: TaskStatus = {
   kind: "todo",
   label: "To do",
+  labelKey: "common:toDo",
   detail: null,
   workStartedAt: null,
   chatMissing: false,
@@ -75,19 +80,37 @@ export function deriveTaskStatus(input: {
 }): TaskStatus {
   const { todo, thread } = input;
   if (todo.completedAt !== null) {
-    return { ...TODO_STATUS, kind: "done", label: "Done" };
+    return { ...TODO_STATUS, kind: "done", label: "Done", labelKey: "git:detail_done" };
   }
   if (todo.threadId === null) {
     return TODO_STATUS;
   }
   if (thread === null) {
-    if (input.hasDraftThread) return { ...TODO_STATUS, kind: "starting", label: "Starting" };
+    if (input.hasDraftThread)
+      return {
+        ...TODO_STATUS,
+        kind: "starting",
+        label: "Starting",
+        labelKey: "chat:runStatus_starting",
+      };
     if (input.threadsHydrated === false) {
-      return { ...TODO_STATUS, kind: "starting", label: "Loading", detail: "Loading the chat…" };
+      return {
+        ...TODO_STATUS,
+        kind: "starting",
+        label: "Loading",
+        labelKey: "chat:spinner_loading",
+        detail: "Loading the chat…",
+        detailKey: "common:task_loadingChat",
+      };
     }
     // Another window (or this one after a reload) may still be creating the chat.
     if (input.now && isTaskLinkSettling(todo, input.now)) {
-      return { ...TODO_STATUS, kind: "starting", label: "Starting" };
+      return {
+        ...TODO_STATUS,
+        kind: "starting",
+        label: "Starting",
+        labelKey: "chat:runStatus_starting",
+      };
     }
     return { ...TODO_STATUS, chatMissing: true };
   }
@@ -97,7 +120,12 @@ export function deriveTaskStatus(input: {
     todo.delegationBaseTurnId !== null &&
     (thread.latestTurn?.turnId ?? null) === todo.delegationBaseTurnId
   ) {
-    return { ...TODO_STATUS, kind: "starting", label: "Starting" };
+    return {
+      ...TODO_STATUS,
+      kind: "starting",
+      label: "Starting",
+      labelKey: "chat:runStatus_starting",
+    };
   }
 
   const session = thread.session;
@@ -107,18 +135,29 @@ export function deriveTaskStatus(input: {
       ...TODO_STATUS,
       kind: "needs",
       label: "Needs you",
+      labelKey: "workspace:needsYou",
       detail: NEEDS_APPROVAL_DETAIL,
+      detailKey: "common:task_waitingApproval",
     };
   }
   if (thread.hasPendingUserInput && canAnswer) {
-    return { ...TODO_STATUS, kind: "needs", label: "Needs you", detail: NEEDS_ANSWER_DETAIL };
+    return {
+      ...TODO_STATUS,
+      kind: "needs",
+      label: "Needs you",
+      labelKey: "workspace:needsYou",
+      detail: NEEDS_ANSWER_DETAIL,
+      detailKey: "common:task_askedQuestion",
+    };
   }
   if (isThreadActivelyWorking(thread)) {
     return {
       ...TODO_STATUS,
       kind: "running",
       label: "Running",
+      labelKey: "chat:runStatus_running",
       detail: "Working",
+      detailKey: "workspace:status_working",
       workStartedAt: deriveActiveWorkStartedAt(thread.latestTurn, session, null),
     };
   }
@@ -128,41 +167,85 @@ export function deriveTaskStatus(input: {
     latestTurn === null ||
     (latestTurn.state === "running" && latestTurn.startedAt === null)
   ) {
-    return { ...TODO_STATUS, kind: "starting", label: "Starting" };
+    return {
+      ...TODO_STATUS,
+      kind: "starting",
+      label: "Starting",
+      labelKey: "chat:runStatus_starting",
+    };
   }
   if (session?.status === "error" || latestTurn.state === "error") {
     return {
       ...TODO_STATUS,
       kind: "stopped",
       label: "Failed",
+      labelKey: "chat:runStatus_failed",
       detail: session?.lastError?.trim() || "The agent stopped with an error",
+      ...(session?.lastError?.trim() ? {} : { detailKey: "common:task_agentStoppedError" }),
     };
   }
   if (latestTurn.state === "interrupted") {
-    return { ...TODO_STATUS, kind: "stopped", label: "Stopped", detail: "Interrupted" };
+    return {
+      ...TODO_STATUS,
+      kind: "stopped",
+      label: "Stopped",
+      labelKey: "chat:stopped",
+      detail: "Interrupted",
+      detailKey: "chat:runStatus_interrupted",
+    };
   }
   if (thread.hasActionableProposedPlan && thread.interactionMode === "plan") {
-    return { ...TODO_STATUS, kind: "review", label: "Review", detail: "Plan ready" };
+    return {
+      ...TODO_STATUS,
+      kind: "review",
+      label: "Review",
+      labelKey: "chat:review",
+      detail: "Plan ready",
+      detailKey: "chat:planReady",
+    };
   }
-  return { ...TODO_STATUS, kind: "review", label: "Review", detail: "Finished" };
+  return {
+    ...TODO_STATUS,
+    kind: "review",
+    label: "Review",
+    labelKey: "chat:review",
+    detail: "Finished",
+    detailKey: "common:finished",
+  };
+}
+
+export function taskStatusPresentation(
+  status: TaskStatus,
+  translate: typeof t = t,
+): { label: string; detail: string | null } {
+  return {
+    label: status.labelKey ? translate(status.labelKey) : status.label,
+    detail: status.detailKey ? translate(status.detailKey) : status.detail,
+  };
 }
 
 /** What the agent is doing, for the row's agent line ("Working · 4m", "Finished 2m ago"). */
 export function formatAgentActivity(
   status: TaskStatus,
   thread: Pick<SidebarThreadSummary, "latestTurn"> | null,
+  translate: typeof t = t,
+  locale = getFormatLocale(),
+  nowMs = Date.now(),
 ): string | null {
   if (!thread) return null;
   if (status.kind === "running" && status.workStartedAt) {
-    const elapsed = formatRelativeTime(status.workStartedAt);
-    return elapsed === "now" ? "Working" : `Working · ${elapsed}`;
+    const elapsed = formatRelativeTime(status.workStartedAt, nowMs, locale);
+    return Math.max(0, nowMs - Date.parse(status.workStartedAt)) < 60_000
+      ? translate("workspace:status_working")
+      : translate("common:working2", { elapsed });
   }
   if (status.kind === "review" && thread.latestTurn?.completedAt) {
-    const ago = formatRelativeTime(thread.latestTurn.completedAt);
-    return `${status.detail ?? "Finished"} ${ago === "now" ? "just now" : `${ago} ago`}`;
+    const detail = taskStatusPresentation(status, translate).detail ?? translate("common:finished");
+    const ago = formatRelativeTimeAgo(thread.latestTurn.completedAt, nowMs, locale, translate);
+    return translate("common:symbol5", { detail, time: ago });
   }
-  if (status.kind === "starting") return "Starting…";
-  return status.detail;
+  if (status.kind === "starting") return translate("common:card_starting");
+  return taskStatusPresentation(status, translate).detail;
 }
 
 /** How a row's one quiet status word reads: muted, or tinted when it wants the user. */
@@ -178,50 +261,60 @@ export interface TaskMeta {
 /** The short word after a row's title: its due day, or what its agent is doing or needs. */
 export function describeTaskMeta(
   status: TaskStatus,
-  due: { label: string; overdue: boolean } | null,
+  due: { label: string; overdue: boolean; isToday?: boolean } | null,
+  translate: typeof t = t,
 ): TaskMeta | null {
   switch (status.kind) {
     case "starting":
-      return { text: "Starting…", tone: "muted", live: true };
+      return { text: translate("common:card_starting"), tone: "muted", live: true };
     case "running":
-      return { text: "Working…", tone: "muted", live: true };
+      return { text: translate("common:working"), tone: "muted", live: true };
     case "needs":
       return {
-        text: status.detail === NEEDS_ANSWER_DETAIL ? "Asked you a question" : "Needs your OK",
+        text: translate(
+          status.detail === NEEDS_ANSWER_DETAIL
+            ? "common:task_askedQuestion"
+            : "common:task_needsApproval",
+        ),
         tone: "attention",
         live: false,
       };
     case "review":
-      return { text: "Ready for you", tone: "review", live: false };
+      return { text: translate("common:task_readyForYou"), tone: "review", live: false };
     case "stopped":
-      return { text: status.label, tone: "failure", live: false };
+      return {
+        text: taskStatusPresentation(status, translate).label,
+        tone: "failure",
+        live: false,
+      };
     case "done":
       return null;
     case "todo":
-      if (status.chatMissing) return { text: "Chat deleted", tone: "muted", live: false };
+      if (status.chatMissing)
+        return { text: translate("common:task_chatDeleted"), tone: "muted", live: false };
       if (!due) return null;
       return {
         text: due.label,
-        tone: due.overdue ? "failure" : due.label === "Today" ? "strong" : "muted",
+        tone: due.overdue ? "failure" : due.isToday ? "strong" : "muted",
         live: false,
       };
   }
 }
 
 /** The line under the page title: what needs the user, then what's left to do. */
-export function summarizeTaskList(rows: readonly TaskRowModel[]): string {
+export function summarizeTaskList(rows: readonly TaskRowModel[], translate: typeof t = t): string {
   const attention = rows.filter((row) => isTaskNeedingAttention(row.status)).length;
   const toDo = rows.filter((row) => row.status.kind === "todo").length;
   const working = rows.filter(
     (row) => row.status.kind === "running" || row.status.kind === "starting",
   ).length;
   const parts = [
-    attention > 0 ? `${attention} ${attention === 1 ? "thing needs" : "things need"} you` : null,
-    working > 0 ? `${working} working` : null,
-    toDo > 0 ? `${toDo} to do` : null,
+    attention > 0 ? translate("common:task_attentionCount", { count: attention }) : null,
+    working > 0 ? translate("common:task_workingCount", { count: working }) : null,
+    toDo > 0 ? translate("common:task_toDoCount", { count: toDo }) : null,
   ].filter((part) => part !== null);
   if (parts.length > 0) return parts.join(" · ");
-  return rows.length > 0 ? "All done" : "Add anything you need to do";
+  return translate(rows.length > 0 ? "common:task_allDone" : "common:task_emptySummary");
 }
 
 export function folderLabel(path: string): string {
@@ -241,12 +334,12 @@ export function describeAgentLocation(
 
 // ── Priority ─────────────────────────────────────────────────────────
 
-export const TODO_PRIORITY_OPTIONS: ReadonlyArray<{ value: TodoPriority; label: string }> = [
-  { value: "urgent", label: "Urgent" },
-  { value: "high", label: "High" },
-  { value: "medium", label: "Medium" },
-  { value: "low", label: "Low" },
-  { value: "none", label: "No priority" },
+export const TODO_PRIORITY_OPTIONS: ReadonlyArray<{ value: TodoPriority; labelKey: string }> = [
+  { value: "urgent", labelKey: "common:task_priority_urgent" },
+  { value: "high", labelKey: "common:task_priority_high" },
+  { value: "medium", labelKey: "common:task_priority_medium" },
+  { value: "low", labelKey: "common:task_priority_low" },
+  { value: "none", labelKey: "common:task_priority_none" },
 ];
 
 const PRIORITY_RANK: Record<TodoPriority, number> = {
@@ -257,8 +350,9 @@ const PRIORITY_RANK: Record<TodoPriority, number> = {
   none: 0,
 };
 
-export function todoPriorityLabel(priority: TodoPriority): string {
-  return TODO_PRIORITY_OPTIONS.find((option) => option.value === priority)?.label ?? "";
+export function todoPriorityLabel(priority: TodoPriority, translate: typeof t = t): string {
+  const key = TODO_PRIORITY_OPTIONS.find((option) => option.value === priority)?.labelKey;
+  return key ? translate(key) : "";
 }
 
 // ── Grouping ─────────────────────────────────────────────────────────
@@ -291,10 +385,10 @@ export function isTaskNeedingAttention(status: TaskStatus): boolean {
   return status.kind !== "done" && SECTION_BY_STATUS[status.kind] === "needs";
 }
 
-const SECTION_LABELS: Record<TaskSectionKey, string> = {
-  needs: "Needs you",
-  running: "Running",
-  todo: "To do",
+const SECTION_LABEL_KEYS: Record<TaskSectionKey, string> = {
+  needs: "workspace:needsYou",
+  running: "chat:runStatus_running",
+  todo: "common:toDo",
 };
 
 const SECTION_ORDER: readonly TaskSectionKey[] = ["needs", "running", "todo"];
@@ -313,7 +407,10 @@ function compareOpenRows(left: TaskRowModel, right: TaskRowModel): number {
 }
 
 /** Open to-dos grouped by what they need from the user; empty sections are dropped. */
-export function buildTaskSections(rows: readonly TaskRowModel[]): {
+export function buildTaskSections(
+  rows: readonly TaskRowModel[],
+  translate: typeof t = t,
+): {
   sections: TaskSection[];
   completed: TaskRowModel[];
 } {
@@ -332,7 +429,13 @@ export function buildTaskSections(rows: readonly TaskRowModel[]): {
   const sections = SECTION_ORDER.flatMap((key) => {
     const sectionRows = bySection.get(key);
     return sectionRows && sectionRows.length > 0
-      ? [{ key, label: SECTION_LABELS[key], rows: sectionRows.toSorted(compareOpenRows) }]
+      ? [
+          {
+            key,
+            label: translate(SECTION_LABEL_KEYS[key]),
+            rows: sectionRows.toSorted(compareOpenRows),
+          },
+        ]
       : [];
   });
   completed.sort((left, right) =>
@@ -368,10 +471,10 @@ function addDays(date: Date, days: number): Date {
 
 export type DuePreset = "today" | "tomorrow" | "nextWeek";
 
-export const DUE_PRESET_OPTIONS: ReadonlyArray<{ value: DuePreset; label: string }> = [
-  { value: "today", label: "Today" },
-  { value: "tomorrow", label: "Tomorrow" },
-  { value: "nextWeek", label: "Next week" },
+export const DUE_PRESET_OPTIONS: ReadonlyArray<{ value: DuePreset; labelKey: string }> = [
+  { value: "today", labelKey: "workspace:today" },
+  { value: "tomorrow", labelKey: "workspace:tomorrow" },
+  { value: "nextWeek", labelKey: "workspace:nextWeek" },
 ];
 
 export function resolveDuePreset(preset: DuePreset, now: Date): TodoDueDate {
@@ -385,24 +488,33 @@ export function resolveDuePreset(preset: DuePreset, now: Date): TodoDueDate {
 export function formatDueLabel(
   dueDate: TodoDueDate,
   now: Date,
-): { label: string; overdue: boolean } {
+  translate: typeof t = t,
+  formatLocale = getFormatLocale(),
+): { label: string; overdue: boolean; isToday: boolean } {
   const today = parseLocalDueDate(toLocalDueDate(now));
   const due = parseLocalDueDate(dueDate);
   const dayDiff = Math.round((due.getTime() - today.getTime()) / 86_400_000);
-  if (dayDiff === 0) return { label: "Today", overdue: false };
-  if (dayDiff === 1) return { label: "Tomorrow", overdue: false };
-  if (dayDiff === -1) return { label: "Yesterday", overdue: true };
+  if (dayDiff === 0) return { label: translate("workspace:today"), overdue: false, isToday: true };
+  if (dayDiff === 1)
+    return { label: translate("workspace:tomorrow"), overdue: false, isToday: false };
+  if (dayDiff === -1)
+    return { label: translate("workspace:yesterday"), overdue: true, isToday: false };
   if (dayDiff > 1 && dayDiff < 7) {
-    return { label: due.toLocaleDateString(undefined, { weekday: "short" }), overdue: false };
+    return {
+      label: due.toLocaleDateString(formatLocale, { weekday: "short" }),
+      overdue: false,
+      isToday: false,
+    };
   }
   const sameYear = due.getFullYear() === today.getFullYear();
   return {
-    label: due.toLocaleDateString(undefined, {
+    label: due.toLocaleDateString(formatLocale, {
       month: "short",
       day: "numeric",
       ...(sameYear ? {} : { year: "numeric" }),
     }),
     overdue: dayDiff < 0,
+    isToday: false,
   };
 }
 

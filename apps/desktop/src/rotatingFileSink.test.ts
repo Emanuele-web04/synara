@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 
 import { RotatingFileSink } from "@synara/shared/logging";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 const tempRoots: string[] = [];
 
@@ -54,6 +54,48 @@ describe("RotatingFileSink", () => {
     expect(fs.existsSync(path.join(dir, "server-child.log.1"))).toBe(true);
     expect(fs.existsSync(path.join(dir, "server-child.log.2"))).toBe(true);
     expect(fs.existsSync(path.join(dir, "server-child.log.3"))).toBe(false);
+  });
+
+  it("keeps one descriptor open and reopens it across rotations", () => {
+    const dir = makeTempDir();
+    const logPath = path.join(dir, "server-child.log");
+    const openSpy = vi.spyOn(fs, "openSync");
+    const appendSpy = vi.spyOn(fs, "appendFileSync");
+    try {
+      const sink = new RotatingFileSink({
+        filePath: logPath,
+        maxBytes: 10,
+        maxFiles: 2,
+        keepFileOpen: true,
+      });
+
+      sink.write("12345");
+      sink.write("67890");
+      expect(openSpy).toHaveBeenCalledTimes(1);
+
+      sink.write("abc");
+      sink.write("def");
+      sink.write("ghijk");
+      sink.write("lmnop");
+      sink.close();
+      sink.close();
+
+      expect(appendSpy).not.toHaveBeenCalled();
+      // One open per active file: the initial one plus one after each rotation.
+      expect(openSpy).toHaveBeenCalledTimes(3);
+      expect(fs.readFileSync(logPath, "utf8")).toBe("ghijklmnop");
+      expect(fs.readFileSync(path.join(dir, "server-child.log.1"), "utf8")).toBe("abcdef");
+      expect(fs.readFileSync(path.join(dir, "server-child.log.2"), "utf8")).toBe("1234567890");
+
+      // A write after close() reopens the file; this one also rotates.
+      sink.write("x");
+      sink.close();
+      expect(fs.readFileSync(logPath, "utf8")).toBe("x");
+      expect(fs.readFileSync(path.join(dir, "server-child.log.1"), "utf8")).toBe("ghijklmnop");
+    } finally {
+      openSpy.mockRestore();
+      appendSpy.mockRestore();
+    }
   });
 
   it("prunes stale backups above maxFiles on startup", () => {

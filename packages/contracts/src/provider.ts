@@ -5,6 +5,7 @@ import {
   EventId,
   IsoDateTime,
   ProviderItemId,
+  RuntimeTaskId,
   ThreadId,
   TurnId,
 } from "./baseSchemas";
@@ -50,6 +51,15 @@ export const ProviderSession = Schema.Struct({
 });
 export type ProviderSession = typeof ProviderSession.Type;
 
+export const ProviderTaskReconciliation = Schema.Struct({
+  interactionMode: Schema.optional(ProviderInteractionMode),
+  taskId: RuntimeTaskId,
+  turnId: Schema.optional(TurnId),
+  toolUseId: Schema.optional(TrimmedNonEmptyString),
+  parentAgentId: Schema.optional(TrimmedNonEmptyString),
+});
+export type ProviderTaskReconciliation = typeof ProviderTaskReconciliation.Type;
+
 export const ProviderSessionStartInput = Schema.Struct({
   threadId: ThreadId,
   provider: Schema.optional(ProviderDriverKind),
@@ -63,6 +73,8 @@ export const ProviderSessionStartInput = Schema.Struct({
   additionalDirectories: Schema.optional(Schema.Array(TrimmedNonEmptyString)),
   modelSelection: Schema.optional(ModelSelection),
   resumeCursor: Schema.optional(Schema.Unknown),
+  /** Devin tasks Synara previously stopped and must reconcile against resume replay. */
+  pendingTaskReconciliations: Schema.optional(Schema.Array(ProviderTaskReconciliation)),
   forkSourceResumeCursor: Schema.optional(Schema.Unknown),
   approvalPolicy: Schema.optional(ProviderApprovalPolicy),
   sandboxMode: Schema.optional(ProviderSandboxMode),

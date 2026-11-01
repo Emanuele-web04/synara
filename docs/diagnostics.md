@@ -62,7 +62,7 @@ through `diagnosticsRedaction.ts` before queueing. CPU, memory, system load,
 percentiles and stacks are not attached to the stall issue. Backend warnings have
 a 30 second limit; the existing issue collector also groups identical reports
 for ten minutes and applies its shared hourly cap. Stable emits no stall issue
-markers. See [local stall monitoring](event-loop-stalls.md) for status/UI behavior
+markers. See [local stall monitoring](event-loop-stalls.md) for status behavior
 and the attribution limitations.
 
 The reason is a coarse local classification (authentication, invalid response,

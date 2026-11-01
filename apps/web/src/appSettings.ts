@@ -44,6 +44,8 @@ import {
 import type { SynaraDesktopFlavor } from "@synara/shared/desktopIdentity";
 import { codexAccountInstanceId } from "@synara/shared/providerInstances";
 import { useLocalStorage } from "./hooks/useLocalStorage";
+import { APP_SETTINGS_STORAGE_KEY } from "./appSettingsStorage";
+import { LANGUAGE_PREFERENCES, normalizeLanguagePreference } from "./i18n/locale";
 import { EnvMode } from "./components/BranchToolbar.logic";
 import { normalizeCursorModelVariantBaseId } from "./cursorModelVariants";
 import { formatProviderModelOptionName, type ProviderModelOption } from "./providerModelOptions";
@@ -78,7 +80,6 @@ import {
   normalizeChatWidthMode as normalizeChatWidthModeValue,
 } from "./lib/chatWidth";
 
-const APP_SETTINGS_STORAGE_KEY = "synara:app-settings:v1";
 const SERVER_SETTINGS_MIGRATION_STORAGE_KEY = "synara:server-settings-migrated:v1";
 
 function hasCompletedServerSettingsMigration(): boolean {
@@ -369,6 +370,16 @@ const PersistedHiddenModels = Schema.Array(
 );
 
 export const AppSettingsSchema = Schema.Struct({
+  language: Schema.Unknown.pipe(
+    Schema.decodeTo(
+      Schema.Literals(LANGUAGE_PREFERENCES),
+      SchemaTransformation.transform({
+        decode: normalizeLanguagePreference,
+        encode: (value): unknown => value,
+      }),
+    ),
+    withDefaults(() => "system" as const),
+  ),
   claudeBinaryPath: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
   claudeEnableArtifacts: Schema.Boolean.pipe(withDefaults(() => false)),
   claudeConfirmColdCacheResume: Schema.Boolean.pipe(withDefaults(() => false)),
@@ -414,6 +425,7 @@ export const AppSettingsSchema = Schema.Struct({
   // When false, the desktop chat header shows the plain thread title instead of the
   // open-thread tab strip.
   showOpenThreadTabs: Schema.Boolean.pipe(withDefaults(() => true)),
+  showAsciiBackground: Schema.Boolean.pipe(withDefaults(() => true)),
   confirmThreadDelete: Schema.Boolean.pipe(withDefaults(() => true)),
   // Opt-in: archiving a task also releases its worktree when nothing else uses it.
   archiveDeletesOrphanedWorktree: Schema.Boolean.pipe(withDefaults(() => false)),
@@ -507,6 +519,13 @@ export const AppSettingsSchema = Schema.Struct({
   showEnvironmentSubagents: Schema.Boolean.pipe(withDefaults(() => true)),
   showEnvironmentInstructions: Schema.Boolean.pipe(withDefaults(() => false)),
   showEnvironmentNotepad: Schema.Boolean.pipe(withDefaults(() => false)),
+  // Project actions (scripts) section in the Environment panel. The chat top bar runs the
+  // selected project's actions; this section is where the first one gets created and edited.
+  showEnvironmentActions: Schema.Boolean.pipe(withDefaults(() => true)),
+  // Chat top bar: which action controls sit before the divider. Hiding one keeps its
+  // command reachable elsewhere (keybinding, Environment panel, sidebar thread menu).
+  showHeaderHandoff: Schema.Boolean.pipe(withDefaults(() => true)),
+  showHeaderActions: Schema.Boolean.pipe(withDefaults(() => true)),
   followUpBehavior: FollowUpBehavior.pipe(withDefaults(() => DEFAULT_FOLLOW_UP_BEHAVIOR)),
   voiceEnterBehavior: VoiceEnterBehavior.pipe(withDefaults(() => DEFAULT_VOICE_ENTER_BEHAVIOR)),
   enableAssistantStreaming: Schema.Boolean.pipe(withDefaults(() => true)),

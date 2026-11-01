@@ -169,6 +169,7 @@ export function createShellSnapshotFromReadModel(
         associatedWorktreeBranch: thread.associatedWorktreeBranch ?? null,
         associatedWorktreeRef: thread.associatedWorktreeRef ?? null,
         parentThreadId: thread.parentThreadId ?? null,
+        sourceThreadId: thread.sourceThreadId ?? null,
         subagentAgentId: thread.subagentAgentId ?? null,
         subagentNickname: thread.subagentNickname ?? null,
         subagentRole: thread.subagentRole ?? null,

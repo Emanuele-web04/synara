@@ -20,6 +20,7 @@ import {
 import { Button } from "~/components/ui/button";
 import { toastManager } from "~/components/ui/toast";
 import { copyTextToClipboard } from "~/hooks/useCopyToClipboard";
+import { t, useTranslation } from "~/i18n";
 
 export type PullRequestConfirmAction =
   | { kind: "merge"; method: PullRequestMergeMethod }
@@ -28,13 +29,13 @@ export type PullRequestConfirmAction =
 export function copyPullRequestLink(url: string): void {
   void copyTextToClipboard(url)
     .then(() => {
-      toastManager.add({ type: "success", title: "Link copied" });
+      toastManager.add({ type: "success", title: t("git:linkCopied") });
     })
     .catch((error: unknown) => {
       toastManager.add({
         type: "error",
-        title: "Could not copy link",
-        description: error instanceof Error ? error.message : "Clipboard access failed.",
+        title: t("git:couldNotCopyLink"),
+        description: error instanceof Error ? error.message : t("git:clipboardAccessFailed"),
       });
     });
 }
@@ -44,10 +45,13 @@ function confirmTitle(
   stack: PullRequestStack | null,
   stackMergeTargetCount: number,
 ): string {
-  if (action.kind === "close") return "Close pull request?";
+  if (action.kind === "close") return t("git:closePullRequest2");
   return stack
-    ? `Merge ${stackMergeTargetCount} ${stackMergeTargetCount === 1 ? "pull request" : "pull requests"}?`
-    : "Merge pull request?";
+    ? t("git:merge2", {
+        value0: stackMergeTargetCount,
+        value1: stackMergeTargetCount === 1 ? t("chat:pullRequest") : t("git:pullRequests2"),
+      })
+    : t("git:mergePullRequest");
 }
 
 function confirmDescription(
@@ -56,15 +60,21 @@ function confirmDescription(
   baseBranch: string | null,
   stack: PullRequestStack | null,
 ): string {
-  if (action.kind === "close") return `This will close #${number} without merging it.`;
+  if (action.kind === "close") return t("git:thisWillCloseWithoutMergingIt", { value0: number });
   if (stack) {
-    return `This will atomically merge every open pull request through #${number} into ${stack.baseBranch} using ${action.method}.${
-      stack.position < stack.size
-        ? " Pull requests above it will remain open and GitHub will retarget them."
-        : ""
-    }`;
+    return t("git:thisWillAtomicallyMergeEveryOpenPullRequestThrough", {
+      value0: number,
+      value1: stack.baseBranch,
+      value2: action.method,
+      value3:
+        stack.position < stack.size ? t("git:pullRequestsAboveItWillRemainOpenAndGitHub") : "",
+    });
   }
-  return `This will merge #${number}${baseBranch ? ` into ${baseBranch}` : ""} using ${action.method}.`;
+  return t("git:thisWillMergeUsing", {
+    value0: number,
+    value1: baseBranch ? ` into ${baseBranch}` : "",
+    value2: action.method,
+  });
 }
 
 export function PullRequestConfirmActionDialog({
@@ -87,6 +97,8 @@ export function PullRequestConfirmActionDialog({
   onConfirm: (action: PullRequestConfirmAction) => void;
   onDismiss: () => void;
 }) {
+  const { t } = useTranslation();
+
   // Keep rendering the last action while the dialog animates out, so the copy does not
   // flip to another action's text once the owner resets `action` to null.
   const [shownAction, setShownAction] = useState(action);
@@ -123,7 +135,7 @@ export function PullRequestConfirmActionDialog({
             </AlertDialogHeader>
             <AlertDialogFooter>
               <AlertDialogClose render={<Button variant="outline" size="sm" />}>
-                Cancel
+                {t("common:form_cancel")}
               </AlertDialogClose>
               <Button
                 size="sm"
@@ -134,7 +146,11 @@ export function PullRequestConfirmActionDialog({
                   onConfirm(shown);
                 }}
               >
-                {shown.kind === "close" ? "Close" : stack ? "Merge stack" : "Merge"}
+                {shown.kind === "close"
+                  ? t("common:app_close")
+                  : stack
+                    ? t("git:mergeStack")
+                    : t("git:merge")}
               </Button>
             </AlertDialogFooter>
           </>

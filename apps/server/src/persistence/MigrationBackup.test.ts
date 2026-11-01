@@ -3,7 +3,8 @@ import nodeFs from "node:fs";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
+import { gunzipSync } from "node:zlib";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -26,6 +27,7 @@ import {
   inspectPendingMigrationRecovery,
   migrationBackupDirectory,
   migrationRecoveryMarkerPath,
+  pruneMigrationBackups,
   reclaimOrphanedMigrationArtifacts,
   requireNoPendingMigrationRecovery,
   restoreMarkedMigrationBackup,
@@ -35,6 +37,7 @@ import {
 import { migrationEntries, runMigrations } from "./Migrations.ts";
 import * as NodeSqliteClient from "./NodeSqliteClient.ts";
 import { makeSqlitePersistenceLive } from "./Layers/Sqlite.ts";
+import { runProcess } from "../processRunner.ts";
 
 vi.mock("node:fs/promises", async () => {
   const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
@@ -67,7 +70,15 @@ async function backupPaths(dbPath: string): Promise<Array<string>> {
     if ((cause as NodeJS.ErrnoException).code === "ENOENT") return [];
     throw cause;
   });
-  return names.filter((name) => name.endsWith(".sqlite")).map((name) => path.join(directory, name));
+  return names
+    .filter((name) => name.endsWith(".sqlite") || name.endsWith(".sqlite.gz"))
+    .map((name) => path.join(directory, name));
+}
+
+async function openBackupFixture(backupPath: string): Promise<DatabaseSync> {
+  const inspectionPath = `${backupPath}.inspection`;
+  await fs.writeFile(inspectionPath, gunzipSync(await fs.readFile(backupPath)), { flag: "wx" });
+  return new DatabaseSync(inspectionPath, { readOnly: true });
 }
 
 /** A July 2026 day, as the compact UTC date every generated artifact name carries. */
@@ -83,7 +94,80 @@ async function exhaustResumeBudget(markerPath: string): Promise<void> {
 }
 
 describe("migration backups", () => {
-  it("includes committed WAL content in the SQLite snapshot", async () => {
+  it("creates a restorable backup with Bun SQLite and reclaims only known snapshot directories", async () => {
+    const dbPath = await makeDbPath();
+    const database = new DatabaseSync(dbPath);
+    const payload = randomBytes(4 * 1024 * 1024);
+    try {
+      database.exec("CREATE TABLE bun_probe(value TEXT NOT NULL, payload BLOB NOT NULL)");
+      database.prepare("INSERT INTO bun_probe VALUES (?, ?)").run("before-migration", payload);
+    } finally {
+      database.close();
+    }
+    const directory = migrationBackupDirectory(dbPath);
+    const partial = (label: string) =>
+      path.join(directory, `.${path.basename(dbPath)}.pre-migration-${label}.sqlite.partial`);
+    const stranded = partial("stranded");
+    const unknown = partial("unknown");
+    await fs.mkdir(stranded, { recursive: true });
+    await fs.mkdir(unknown);
+    await fs.writeFile(path.join(stranded, "snapshot.sqlite"), "abandoned snapshot");
+    await fs.writeFile(path.join(unknown, "notes.txt"), "not ours");
+    const linked = partial("linked");
+    if (process.platform !== "win32") await fs.symlink(unknown, linked, "dir");
+
+    // Native Bun SQLite rejects even empty pre-created VACUUM targets, unlike Node SQLite.
+    const result = await runProcess(
+      "bun",
+      [
+        "--eval",
+        `import { Effect } from "effect";
+         import { layer } from "@effect/sql-sqlite-bun/SqliteClient";
+         import { createMigrationBackup, estimateMigrationBackupRequiredBytes } from "./src/persistence/MigrationBackup.ts";
+         const backup = await Effect.runPromise(
+           Effect.gen(function* () {
+             const requiredBytes = yield* estimateMigrationBackupRequiredBytes(${JSON.stringify(dbPath)});
+             const snapshot = yield* createMigrationBackup(${JSON.stringify(dbPath)}, { sourceVersion: "v1", targetVersion: 2 });
+             return { ...snapshot, requiredBytes };
+           }).pipe(Effect.provide(layer({ filename: ${JSON.stringify(dbPath)} })))
+         );
+         console.log(JSON.stringify(backup));`,
+      ],
+      { cwd: path.resolve(import.meta.dirname, "../.."), timeoutMs: 10_000 },
+    );
+    const { backupPath, requiredBytes } = JSON.parse(result.stdout) as {
+      backupPath: string;
+      requiredBytes: number;
+    };
+    const encoded = await fs.readFile(backupPath);
+    expect(requiredBytes).toBeGreaterThanOrEqual(
+      encoded.byteLength + gunzipSync(encoded).byteLength,
+    );
+    const backup = await openBackupFixture(backupPath);
+    try {
+      const row = backup.prepare("SELECT value, payload FROM bun_probe").get();
+      expect(row).toMatchObject({ value: "before-migration" });
+      expect(Buffer.compare(Buffer.from(row!.payload as Uint8Array), payload)).toBe(0);
+      expect(backup.prepare("PRAGMA integrity_check").get()).toMatchObject({
+        integrity_check: "ok",
+      });
+    } finally {
+      backup.close();
+    }
+    await expect(fs.stat(stranded)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(await fs.readFile(path.join(unknown, "notes.txt"), "utf8")).toBe("not ours");
+    if (process.platform !== "win32") expect((await fs.lstat(linked)).isSymbolicLink()).toBe(true);
+    expect(
+      (await fs.readdir(directory)).filter((name) => name.endsWith(".partial")).toSorted(),
+    ).toEqual(
+      [
+        path.basename(unknown),
+        ...(process.platform === "win32" ? [] : [path.basename(linked)]),
+      ].toSorted(),
+    );
+  });
+
+  it("includes committed WAL content in the compressed SQLite snapshot", async () => {
     const dbPath = await makeDbPath();
 
     await runWithDatabase(
@@ -103,8 +187,8 @@ describe("migration backups", () => {
     );
 
     const [backupPath] = await backupPaths(dbPath);
-    expect(backupPath).toBeDefined();
-    const backup = new DatabaseSync(backupPath!, { readOnly: true });
+    expect(backupPath).toMatch(/\.sqlite\.gz$/u);
+    const backup = await openBackupFixture(backupPath!);
     try {
       expect(backup.prepare("SELECT value FROM backup_probe").get()).toMatchObject({
         value: "committed-in-wal",
@@ -149,7 +233,7 @@ describe("migration backups", () => {
 
     expect(sizing.walBytes).toBeGreaterThan(sizing.mainFileBytes);
     expect(sizing.logicalBytes).toBeGreaterThan(sizing.mainFileBytes);
-    expect(sizing.requiredBytes).toBe(sizing.logicalBytes * 2);
+    expect(sizing.requiredBytes).toBeGreaterThan(sizing.logicalBytes * 2);
   });
 
   it("fails closed without mutating marked files, then restores only when explicitly requested", async () => {
@@ -189,7 +273,7 @@ describe("migration backups", () => {
     };
     expect(marker.backupPath).toContain(migrationBackupDirectory(dbPath));
     expect(marker.phase).toBe("migration-in-progress");
-    const backup = new DatabaseSync(marker.backupPath, { readOnly: true });
+    const backup = await openBackupFixture(marker.backupPath);
     try {
       expect(backup.prepare("SELECT value FROM recovery_probe").get()).toMatchObject({
         value: "before-failure",
@@ -724,7 +808,7 @@ describe("migration backups", () => {
     );
 
     const [backupPath] = await backupPaths(dbPath);
-    const backup = new DatabaseSync(backupPath!, { readOnly: true });
+    const backup = await openBackupFixture(backupPath!);
     try {
       expect(
         backup.prepare("SELECT name FROM effect_sql_migrations WHERE migration_id = 17").get(),
@@ -966,6 +1050,60 @@ describe("migration backups", () => {
       for (const backupPath of retainedBackups) {
         expect((await fs.stat(backupPath)).mode & 0o777).toBe(0o600);
       }
+    }
+  });
+
+  it("ranks plain and compressed snapshots together under one retention cap", async () => {
+    const dbPath = await makeDbPath();
+    const directory = migrationBackupDirectory(dbPath);
+    await fs.mkdir(directory, { recursive: true });
+    const names = Array.from(
+      { length: MIGRATION_BACKUP_RETENTION + 3 },
+      (_, index) =>
+        `${path.basename(dbPath)}.pre-migration-v1-to-v2-${artifactDay(index + 1)}T120000000Z-${randomUUID()}.sqlite${index % 2 ? ".gz" : ""}`,
+    );
+    await Promise.all(names.map((name) => fs.writeFile(path.join(directory, name), "snapshot")));
+
+    await Effect.runPromise(pruneMigrationBackups(dbPath));
+
+    expect((await fs.readdir(directory)).sort()).toEqual(names.slice(3).sort());
+  });
+
+  it("removes both owned partials if compressed publication fails before migration", async () => {
+    const dbPath = await makeDbPath();
+    const realRename = nodeFs.promises.rename.bind(nodeFs.promises);
+    const rename = vi.mocked(fs.rename);
+    rename.mockImplementation((source, destination) =>
+      String(source).endsWith(".sqlite.gz.partial")
+        ? Promise.reject(new Error("injected compressed publication failure"))
+        : realRename(source, destination),
+    );
+    try {
+      await expect(
+        runWithDatabase(
+          dbPath,
+          Effect.gen(function* () {
+            const sql = yield* SqlClient.SqlClient;
+            yield* sql`CREATE TABLE publication_probe(value TEXT NOT NULL)`;
+            yield* sql`INSERT INTO publication_probe VALUES ('before-migration')`;
+            yield* runWithPreMigrationBackup(dbPath, sql`DELETE FROM publication_probe`);
+          }),
+        ),
+      ).rejects.toThrow("injected compressed publication failure");
+    } finally {
+      rename.mockImplementation(realRename);
+    }
+    expect(await fs.readdir(migrationBackupDirectory(dbPath))).toEqual([]);
+    await expect(fs.stat(migrationRecoveryMarkerPath(dbPath))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    const database = new DatabaseSync(dbPath, { readOnly: true });
+    try {
+      expect(database.prepare("SELECT value FROM publication_probe").get()).toMatchObject({
+        value: "before-migration",
+      });
+    } finally {
+      database.close();
     }
   });
 

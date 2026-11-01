@@ -61,6 +61,7 @@ export const HELPER_METHODS = {
   button: "button",
   screenshot: "screenshot",
   describeUi: "describe-ui",
+  setFocusedValue: "set-focused-value",
 } as const;
 
 const REQUEST_TIMEOUT_MS = 15_000;

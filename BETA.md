@@ -308,16 +308,39 @@ To put a feature behind the list:
 
 Promote a feature to Stable by deleting its entry; every gate resolves itself.
 
-HTML visuals execute only in the Beta desktop app, where native subframe navigation is blocked.
+Connectors (`mcp-connectors`) are available in Stable and Beta: Settings → Connectors,
+RPCs, OAuth callbacks, proxy routes and saved connectors use the same shared policy.
+Each app reads only the `mcp-connectors` secret in its own data home.
+See [Connectors](docs/mcp-connectors.md).
+
+The native editor (`native-editor`) is available in Stable and Beta: the same Code OSS
+editing engine behind file editors, editable diffs and editable previews, TypeScript language
+service and JavaScript debugger. Both apps expose the `editor.*` RPCs and the editor commands
+in the Shortcuts sheet and Settings → Keybindings. Existing document ownership, save/conflict
+handling and large-preview fallbacks remain unchanged.
+See [Native editor intelligence](docs/editor/intelligence.md).
+
+HTML visuals execute only in the desktop apps (Stable and Beta), where native subframe navigation is blocked.
 HTTP-hosted clients retain native component visuals but never execute HTML. The trusted
 bootstrap removes WebRTC capabilities before page scripts and stops parsing if that boundary
 cannot be enforced. HTML messages cannot open external URLs through the host.
 
-The list currently holds `inline-visuals`: the `synara_show_visual` agent tool,
-its transcript rows, and the `orchestration.getInlineVisual` read. A Stable server
-leaves the tool out of the gateway catalog and the harness policy, refuses the
-read, and the Stable web ignores `visual.shown` activities. Nothing is migrated;
-visual pages and component specs live under the attachments folder of the Beta data home.
+Simplified Chinese (`chinese-ui`) is Beta-only. Stable keeps English and Spanish, hides Chinese
+from Language settings, and ignores saved or programmatic Chinese selections without erasing
+them in the raw renderer settings. The derived native mirror receives the effective System
+preference so its menus follow the same fallback. System detection skips Chinese and uses the
+next supported language, then English.
+The same shared locale policy gates renderer startup and native menus; the native language IPC
+refuses Chinese writes in Stable. No UI-language setting is owned by a server RPC. The server
+also reports the feature disabled for a Stable host. Stable macOS bundles omit
+app-authored Chinese permission explanations; macOS-owned dialog controls follow the OS language.
+Development, Cua, Canary and non-desktop hosts follow the existing non-Stable policy.
+Diagnostics retain their separate Beta-only policy.
+Inline visuals are available in Stable and Beta:
+the `synara_show_visual` agent tool, its transcript rows, and the `orchestration.getInlineVisual`
+read all use the shared policy. Both native component specs and sandboxed HTML retain their
+existing rendering and interactions. Nothing is migrated; each app keeps visual documents
+under its own attachments directory, without importing Beta data into Stable.
 
 Hubs, Tasks, Inbox, Auto-fix CI, Oh My Pi, the rail sidebar layout, and message
 trail sound are available in both apps.

@@ -56,15 +56,13 @@ describe("ProjectScriptsControl", () => {
     document.body.innerHTML = "";
   });
 
-  it("opens the add-action dialog from the header when no script exists yet", async () => {
+  it("renders no header control until a script exists", async () => {
     await using _ = await mountProjectScriptsControl();
 
-    await page.getByRole("button", { name: "Add action" }).click();
-
-    await expect.poll(() => document.body.textContent).toContain("Add Action");
-    expect(document.body.textContent).toContain(
-      "Actions are project-scoped commands you can run from the top bar or keybindings.",
-    );
+    // The slot is the header's New thread button now; the control itself stays empty, and
+    // creating the first action moved to the Environment panel's Actions section.
+    expect(page.getByRole("button", { name: "Add action" }).elements()).toHaveLength(0);
+    expect(page.getByRole("button", { name: "Script actions" }).elements()).toHaveLength(0);
   });
 
   it("runs the primary action and exposes setup actions in the dropdown", async () => {

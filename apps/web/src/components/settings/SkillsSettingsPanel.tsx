@@ -24,14 +24,20 @@ import {
   providerDisplayName,
   settingsSkillNameKey,
 } from "./skillsSettingsModel";
+import { useTranslation } from "~/i18n";
 
 function SkillProviderStack({ providers }: { providers: ReadonlyArray<ProviderKind> }) {
+  const { t } = useTranslation();
+
   if (providers.length === 0) {
     return null;
   }
 
   const label = providers.map(providerDisplayName).join(", ");
-  const stackLabel = `Provider ${providers.length === 1 ? "copy" : "copies"}: ${label}`;
+  const stackLabel = t("settings:provider", {
+    value0: providers.length === 1 ? t("common:copy") : t("settings:copies"),
+    value1: label,
+  });
   return (
     <span
       className="inline-flex shrink-0 items-center -space-x-1"
@@ -51,6 +57,8 @@ function SkillProviderStack({ providers }: { providers: ReadonlyArray<ProviderKi
 }
 
 export function SkillsSettingsPanel() {
+  const { t } = useTranslation();
+
   const queryClient = useQueryClient();
   const catalogQuery = useQuery(skillsCatalogQueryOptions());
   const serverSettingsQuery = useQuery(serverSettingsQueryOptions());
@@ -104,10 +112,11 @@ export function SkillsSettingsPanel() {
 
   return (
     <div className="space-y-8">
-      <SettingsSection title="Portable skills">
+      <SettingsSection title="settings:skills_portableSkills">
         <SettingsRow
-          title="Synara skills folder"
-          description="Skills placed here are available on every provider. When a provider already ships its own copy of a skill, that copy is used; otherwise Synara's copy is the fallback."
+          id="setting-synara-skills-folder"
+          title="settings:skills_synaraSkillsFolder"
+          description="settings:skillsPlacedHereAreAvailableOnEveryProviderWhen"
           status={
             synaraSkillsDir ? (
               <code className="break-all text-ui-sm text-muted-foreground">{synaraSkillsDir}</code>
@@ -116,27 +125,32 @@ export function SkillsSettingsPanel() {
           control={
             <span className="text-ui leading-snug font-medium text-muted-foreground">
               {catalogQuery.isLoading
-                ? "Scanning…"
-                : `${enabledSkills} of ${totalSkills} skill${totalSkills === 1 ? "" : "s"} enabled`}
+                ? t("settings:skills_scanning")
+                : t("settings:skillsEnabledOf", {
+                    enabled: enabledSkills,
+                    total: totalSkills,
+                  })}
             </span>
           }
         />
       </SettingsSection>
 
       {catalogQuery.isError ? (
-        <SettingsSection title="Skills">
+        <SettingsSection title="common:plugin_skillsSection">
           <SettingsRow
-            title="Skill discovery failed"
-            description="Synara could not scan the skill folders. Retry after checking that the server is running."
+            id="setting-skill-discovery-failed"
+            title="settings:skills_discoveryFailed"
+            description="settings:synaraCouldNotScanTheSkillFoldersRetryAfter"
           />
         </SettingsSection>
       ) : null}
 
       {!catalogQuery.isLoading && !catalogQuery.isError && totalSkills === 0 ? (
-        <SettingsSection title="Skills">
+        <SettingsSection title="common:plugin_skillsSection">
           <SettingsRow
-            title="No skills found"
-            description="Add a skill folder containing a SKILL.md to the Synara skills folder above, or install skills for any supported provider."
+            id="setting-no-skills-found"
+            title="common:plugin_noSkillsFound"
+            description="settings:addASkillFolderContainingASKILLMdTo"
           />
         </SettingsSection>
       ) : null}
@@ -183,7 +197,7 @@ export function SkillsSettingsPanel() {
                       onCheckedChange={(checked) =>
                         setSkillEnabled(group.primarySkill.name, Boolean(checked))
                       }
-                      aria-label={`Enable the ${group.displayName} skill`}
+                      aria-label={t("settings:enableTheSkill", { value0: group.displayName })}
                     />
                   }
                 />

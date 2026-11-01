@@ -1,13 +1,11 @@
+import { useTranslation } from "~/i18n";
 import type { ThreadId } from "@synara/contracts";
-import { cn } from "~/lib/utils";
 import { useComposerDraftStore } from "../../composerDraftStore";
 import {
   restoreUserInputDraft,
   type PendingUserInputRecoveryDraft,
 } from "../../pendingUserInputRecovery";
-import { ComposerStackedPanel } from "./ComposerStackedPanel";
-import { COMPOSER_INLINE_ACTION_PILL_CLASS_NAME } from "./composerPickerStyles";
-import { COMPOSER_NOTICE_CONTENT_CLASS_NAME } from "./composerStackedPanelStyles";
+import { ComposerActionNotice } from "./ComposerActionNotice";
 
 export function ComposerExpiredUserInputNotice({
   threadId,
@@ -20,6 +18,8 @@ export function ComposerExpiredUserInputNotice({
   draft: PendingUserInputRecoveryDraft;
   onRestore: (prompt: string) => void;
 }) {
+  const { t } = useTranslation();
+
   const dismiss = () => {
     const store = useComposerDraftStore.getState();
     const drafts = store.draftsByThreadId[threadId]?.pendingUserInputDrafts ?? {};
@@ -38,20 +38,12 @@ export function ComposerExpiredUserInputNotice({
     onRestore(prompt);
   };
   return (
-    <ComposerStackedPanel
-      detached
-      className={cn(COMPOSER_NOTICE_CONTENT_CLASS_NAME, "mb-2")}
-      role="status"
-    >
-      <p>These questions have expired. Restore your answers to review and send as a new message.</p>
-      <div className="mt-2 flex flex-wrap gap-3">
-        <button type="button" className={COMPOSER_INLINE_ACTION_PILL_CLASS_NAME} onClick={restore}>
-          Restore answers
-        </button>
-        <button type="button" className={COMPOSER_INLINE_ACTION_PILL_CLASS_NAME} onClick={dismiss}>
-          Dismiss
-        </button>
-      </div>
-    </ComposerStackedPanel>
+    <ComposerActionNotice
+      message={t("chat:theseQuestionsHaveExpiredRestoreYourAnswersToReview")}
+      actions={[
+        { label: "Restore answers", onClick: restore },
+        { label: "Dismiss", onClick: dismiss },
+      ]}
+    />
   );
 }

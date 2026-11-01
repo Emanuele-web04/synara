@@ -15,6 +15,8 @@ await import("@earendil-works/pi-coding-agent");
 await import("open");
 await import("node-pty");
 await import("@xterm/headless");
+// Connectors load the MCP SDK's OAuth client on first use.
+await import("@modelcontextprotocol/sdk/client/auth.js");
 
 const { parsePatchFiles } = await import("@pierre/diffs");
 const patches = parsePatchFiles(

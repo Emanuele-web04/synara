@@ -47,6 +47,7 @@ import {
   resolveBlockedComposerSendReason,
   resolveEnvironmentPanelPreferenceAfterFirstSend,
   resolveQueuedTurnDispatchSettings,
+  turnNeedsProviderHandoff,
   type BlockedComposerSendReason,
 } from "../ChatView.logic";
 import { toastManager } from "../ui/toast";
@@ -327,7 +328,15 @@ export function useChatTurnSubmission({
         await waitForPendingComposerImages();
         sendPreflightInFlightRef.current = false;
       }
-      if (!queuedTurn && !activePendingProgress && canSendWithProviderHandoff?.() === false) {
+      if (
+        !activePendingProgress &&
+        (!queuedTurn ||
+          turnNeedsProviderHandoff({
+            thread: activeThread,
+            modelSelection: queuedTurn.modelSelection,
+          })) &&
+        canSendWithProviderHandoff?.(queuedTurn?.modelSelection) === false
+      ) {
         return false;
       }
       if (hasPendingCacheReview()) return false;
@@ -862,6 +871,8 @@ export function useChatTurnSubmission({
         files: composerFilesSnapshot,
         assistantSelections: composerAssistantSelectionsSnapshot,
       });
+      // Preparation may outlast a failed upload; the original promise still drives rollback.
+      void turnAttachmentsPromise.catch(() => undefined);
       const optimisticAttachments = [
         ...composerAssistantSelectionsSnapshot,
         ...composerImagesSnapshot.map((image) => ({

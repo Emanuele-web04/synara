@@ -216,10 +216,9 @@ export function withOpenCodeV2Client(
   legacy.provider.list = route(
     legacy.provider.list.bind(legacy.provider),
     async (_params, options) => {
-      const [providers, models] = await Promise.all([
-        native.provider.list({ location }, requestOptions(options)),
-        native.model.list({ location }, requestOptions(options)),
-      ]);
+      // Console providers are populated during the first model lookup on a cold server.
+      const models = await native.model.list({ location }, requestOptions(options));
+      const providers = await native.provider.list({ location }, requestOptions(options));
       return result(openCodeV2Inventory(providers.data, models.data));
     },
   );

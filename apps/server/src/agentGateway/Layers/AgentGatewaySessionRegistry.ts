@@ -138,6 +138,20 @@ export function makeAgentGatewaySessionRegistry(options?: {
       sessions.delete(token);
       sessionsByKey.delete(registered.identity.sessionKey);
     },
+    listRetiredWriteAuthorities: (threadId) => {
+      const retired = [];
+      for (const registered of sessionsByKey.values()) {
+        if (registered.retiredWriteTurnId === undefined) continue;
+        if (registered.identity.threadId !== threadId) continue;
+        retired.push({
+          sessionKey: registered.identity.sessionKey,
+          provider: registered.identity.provider,
+          retiredTurnId: registered.retiredWriteTurnId,
+          issuedAt: registered.identity.issuedAt,
+        });
+      }
+      return retired;
+    },
   };
 }
 

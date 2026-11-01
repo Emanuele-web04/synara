@@ -105,7 +105,13 @@ const makeFixture = Effect.fn(function* (
   const workId = `${WORK_ID}:${scenario}`;
   const operationRepository = yield* AgentGatewayOperationRepository;
   const hubWork = yield* HubWorkRepository;
-  yield* hubWork.submit([work(workId)]);
+  yield* hubWork.submit({
+    projectId: work(workId).projectId,
+    requestId: work(workId).requestId,
+    scopeKey: work(workId).scopeKey,
+    fingerprint: work(workId).fingerprint,
+    records: [work(workId)],
+  });
   const commands: OrchestrationCommand[] = [];
   const prepareCalls: Array<{ threadId: string; messageId: string }> = [];
   let authorized = true;

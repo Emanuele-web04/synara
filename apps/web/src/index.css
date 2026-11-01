@@ -1383,24 +1383,6 @@ label:has(> select#reasoning-effort) select {
   display: none;
 }
 
-.editor-file-editor__pierre {
-  min-height: 0;
-  flex: 1;
-  overflow: auto;
-  background: transparent;
-  color: color-mix(in srgb, var(--foreground) 88%, transparent);
-  font-family: var(--font-chat-code-family);
-  font-size: var(--app-font-size-chat-code, 12px);
-  line-height: 1.65;
-}
-
-.editor-file-editor__pierre > diffs-container {
-  display: block;
-  min-height: 100%;
-  min-width: 100%;
-  width: max-content;
-}
-
 /* Line-number gutter for the read-only file preview. Rendered via CSS counters
    on the per-line spans (Shiki and the plain fallback both emit .line), so the
    numbers stay out of text selection, clipboard copies, and the selection
@@ -2924,6 +2906,14 @@ diffs-container {
   border-radius: var(--composer-radius);
 }
 
+/* Single-row composer (started threads, one-line draft): a true pill. Squircle smoothing at a
+   full radius pulls the ends toward a box, so this layout keeps round corners. */
+.chat-composer-shell[data-composer-layout="row"],
+.chat-composer-shell[data-composer-layout="row"] .chat-composer-surface {
+  --composer-radius: 9999px;
+  corner-shape: round;
+}
+
 /* macOS Electron: leading inset for sidebar toggle + route nav past native traffic lights.
    Value is driven by --desktop-top-bar-traffic-light-gutter (inverse-scaled on View zoom). */
 :root[data-runtime="electron"] .desktop-top-bar-traffic-light-gutter {
@@ -3223,16 +3213,6 @@ diffs-container {
   border-bottom-right-radius: 0;
   border-top-left-radius: calc(var(--composer-radius) - 1px);
   border-top-right-radius: calc(var(--composer-radius) - 1px);
-}
-
-/* A stacked panel marked attachedToPrevious merges into the panel above it:
-   drop its top radius so the seam reads as one continuous, inline surface
-   instead of a separate rounded card. The panel above has border-b-0, so this
-   panel's own top border becomes the full-width 1px divider between the fused
-   sections — the same hairline the queued follow-up rows use. */
-.chat-composer-stacked-top[data-composer-stacked-attached="true"] {
-  border-top-left-radius: 0;
-  border-top-right-radius: 0;
 }
 
 /* Composer glass — the same material as the floating menus/pickers

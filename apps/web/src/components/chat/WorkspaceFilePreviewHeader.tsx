@@ -38,6 +38,7 @@ import {
   calculateBreadcrumbLayout,
   type CollapsedBreadcrumbLayout,
 } from "./workspaceFilePreviewBreadcrumb";
+import { useTranslation } from "~/i18n";
 
 interface WorkspaceFilePreviewHeaderProps {
   workspaceRoot: string | null;
@@ -62,6 +63,7 @@ interface WorkspaceFilePreviewHeaderProps {
   /** Marks the currently open source buffer as different from its saved version. */
   dirty?: boolean;
   saveState?: string | undefined;
+  saving?: boolean;
   onSave?: (() => void) | undefined;
   /** Short reason the current source cannot be edited safely. */
   readOnlyReason?: string | null;
@@ -77,14 +79,14 @@ interface WorkspaceFilePreviewHeaderProps {
 const MARKDOWN_VIEW_SEGMENTS = [
   {
     rendered: false,
-    label: "Source",
-    title: "Source view — select text to reference exact lines in chat",
+    labelKey: "common:workspaceFilePreviewHeader_source",
+    titleKey: "workspace:workspaceFilePreviewHeader_sourceTitle",
     Icon: CodeIcon,
   },
   {
     rendered: true,
-    label: "Preview",
-    title: "Rendered preview — browse and toggle task lists",
+    labelKey: "workspace:settings_gitToastPreview",
+    titleKey: "workspace:workspaceFilePreviewHeader_previewTitle",
     Icon: EyeOpenIcon,
   },
 ] as const;
@@ -113,6 +115,8 @@ function CollapsingPathBreadcrumb(props: {
   filePath: string;
   dirty: boolean;
 }) {
+  const { t } = useTranslation();
+
   const { prefixSegments, fileSegment, filePath, dirty } = props;
   const navRef = useRef<HTMLElement>(null);
   const measureRef = useRef<HTMLDivElement>(null);
@@ -183,7 +187,7 @@ function CollapsingPathBreadcrumb(props: {
   return (
     <nav
       ref={navRef}
-      aria-label="File path"
+      aria-label={t("workspace:workspaceFilePreviewHeader_filePath")}
       className="relative flex min-w-0 flex-1 items-center overflow-hidden text-ui leading-none"
     >
       {/* Hidden mirror of the full breadcrumb at natural width, measured to
@@ -231,8 +235,8 @@ function CollapsingPathBreadcrumb(props: {
         <StatusDot
           className="ml-1.5 bg-foreground/75"
           role="status"
-          aria-label="Unsaved changes"
-          title="Unsaved changes"
+          aria-label={t("workspace:unsavedChanges")}
+          title={t("workspace:unsavedChanges")}
         />
       ) : null}
     </nav>
@@ -242,6 +246,8 @@ function CollapsingPathBreadcrumb(props: {
 export const WorkspaceFilePreviewHeader = function WorkspaceFilePreviewHeader(
   props: WorkspaceFilePreviewHeaderProps,
 ) {
+  const { t } = useTranslation();
+
   const { filePath, workspaceRoot } = props;
 
   // Out-of-workspace previews (e.g. a session's scratch directory under the
@@ -299,14 +305,14 @@ export const WorkspaceFilePreviewHeader = function WorkspaceFilePreviewHeader(
 
       {props.truncated ? (
         <span className="hidden shrink-0 text-ui-xs text-muted-foreground/70 @sm/header-actions:inline">
-          Shown partially
+          {t("workspace:workspaceFilePreviewHeader_shownPartially")}
         </span>
       ) : props.readOnlyReason ? (
         <span
           className="hidden max-w-32 shrink-0 truncate text-ui-xs text-muted-foreground/70 @sm/header-actions:inline"
           title={props.readOnlyReason}
         >
-          Read-only
+          {t("workspace:readOnly")}
         </span>
       ) : null}
 
@@ -320,27 +326,27 @@ export const WorkspaceFilePreviewHeader = function WorkspaceFilePreviewHeader(
           <button
             type="button"
             onClick={props.onSave}
-            disabled={!props.dirty || props.saveState === "Saving..."}
+            disabled={!props.dirty || props.saving}
             className="rounded-md px-2 py-1 text-ui-sm disabled:opacity-50"
           >
-            Save
+            {t("computer:form_save")}
           </button>
         ) : null}
         {props.isMarkdown ? (
           <div
             role="radiogroup"
-            aria-label="Markdown view"
+            aria-label={t("workspace:workspaceFilePreviewHeader_markdownView")}
             className="flex h-7 shrink-0 items-center rounded-lg bg-[var(--color-background-elevated-secondary)] p-0.5"
           >
             {MARKDOWN_VIEW_SEGMENTS.map((segment) => {
               const selected = segment.rendered === props.markdownPreviewEnabled;
               return (
                 <button
-                  key={segment.label}
+                  key={segment.labelKey}
                   type="button"
                   role="radio"
                   aria-checked={selected}
-                  title={segment.title}
+                  title={t(segment.titleKey)}
                   className={cn(
                     "flex h-6 w-7 cursor-pointer items-center justify-center rounded-md transition-colors",
                     selected
@@ -350,7 +356,7 @@ export const WorkspaceFilePreviewHeader = function WorkspaceFilePreviewHeader(
                   onClick={() => props.onMarkdownPreviewChange(segment.rendered)}
                 >
                   <segment.Icon className="size-3.5 shrink-0" />
-                  <span className="sr-only">{segment.label}</span>
+                  <span className="sr-only">{t(segment.labelKey)}</span>
                 </button>
               );
             })}
@@ -361,8 +367,8 @@ export const WorkspaceFilePreviewHeader = function WorkspaceFilePreviewHeader(
           <ChatHeaderIconButton
             type="button"
             tone="plain"
-            label="Edit file"
-            title="Edit file"
+            label={t("common:editFile")}
+            title={t("common:editFile")}
             onClick={props.onEditFile}
           >
             <PencilIcon aria-hidden="true" className="size-3.5" />
@@ -371,8 +377,8 @@ export const WorkspaceFilePreviewHeader = function WorkspaceFilePreviewHeader(
 
         {props.onReload ? (
           <ChatHeaderIconButton
-            label="Reload file from disk"
-            title="Reload file from disk"
+            label={t("common:reloadFileFromDisk")}
+            title={t("common:reloadFileFromDisk")}
             tone="plain"
             onClick={props.onReload}
           >
@@ -384,13 +390,20 @@ export const WorkspaceFilePreviewHeader = function WorkspaceFilePreviewHeader(
         ) : null}
 
         <Menu>
-          <MenuTrigger render={<ChatHeaderIconButton label="More actions" tone="plain" />}>
+          <MenuTrigger
+            render={
+              <ChatHeaderIconButton
+                label={t("workspace:workspaceFilePreviewHeader_moreActions")}
+                tone="plain"
+              />
+            }
+          >
             <EllipsisIcon aria-hidden="true" className="size-3.5" />
           </MenuTrigger>
           <ComposerPickerMenuPopup align="end" side="bottom" className="w-52 min-w-52">
             <MenuItem onClick={() => copyPathToClipboard(openInTarget)}>
               <CopyIcon className="size-3.5 shrink-0 text-muted-foreground" />
-              <span>Copy path</span>
+              <span>{t("common:diff_copyPath")}</span>
             </MenuItem>
             {canCopyContents ? (
               <MenuItem
@@ -400,14 +413,16 @@ export const WorkspaceFilePreviewHeader = function WorkspaceFilePreviewHeader(
                   })
                 }
               >
-                Copy contents
+                {t("workspace:copyContents")}
               </MenuItem>
             ) : null}
             {onReferenceInChat ? (
-              <MenuItem onClick={referenceWholeFile}>Reference in chat</MenuItem>
+              <MenuItem onClick={referenceWholeFile}>{t("common:diff_referenceInChat")}</MenuItem>
             ) : null}
             {onAskWhyInChat ? (
-              <MenuItem onClick={askWhyWholeFile}>Ask why this changed</MenuItem>
+              <MenuItem onClick={askWhyWholeFile}>
+                {t("common:workspaceFilePreviewHeader_askWhyChanged")}
+              </MenuItem>
             ) : null}
           </ComposerPickerMenuPopup>
         </Menu>

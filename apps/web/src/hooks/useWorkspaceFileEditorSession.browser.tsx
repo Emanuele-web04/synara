@@ -75,6 +75,7 @@ function Session({ onClose }: { onClose: () => void }) {
       <output data-testid="intent">{session.pendingDiscard}</output>
       <output data-testid="conflict">{String(session.state.conflict)}</output>
       <output data-testid="error">{session.state.saveError}</output>
+      <output data-testid="loadError">{session.loadError ?? ""}</output>
     </div>
   );
 }
@@ -231,3 +232,27 @@ it.each([false, true])(
     }
   },
 );
+
+it("keeps the buffer editable when a re-read is rejected on capacity", async () => {
+  const { client, view } = await mount();
+  // The transport reports a retryable capacity rejection; the read query keeps
+  // its data and refetches on its own interval, so the editor must stay up.
+  api.projects.readFile.mockRejectedValue(
+    Object.assign(new Error("WebSocket expensive-read request capacity exceeded."), {
+      code: "RPC_EXPENSIVE_READ_CAPACITY_EXCEEDED",
+      retryable: true,
+      retryAfterMs: 250,
+    }),
+  );
+  await client.refetchQueries({ queryKey: projectQueryKeys.readFile(CWD, FILE), exact: true });
+  await expect
+    .poll(() => client.getQueryState(projectQueryKeys.readFile(CWD, FILE))?.status)
+    .toBe("error");
+  await expect.element(page.getByTestId("loadError")).toHaveTextContent("");
+  await expect.element(page.getByRole("textbox", { name: "Buffer" })).toHaveValue("initial\n");
+  // A hard failure still surfaces.
+  api.projects.readFile.mockRejectedValue(new Error("File not found."));
+  await client.refetchQueries({ queryKey: projectQueryKeys.readFile(CWD, FILE), exact: true });
+  await expect.element(page.getByTestId("loadError")).toHaveTextContent("File not found.");
+  await view.unmount();
+});

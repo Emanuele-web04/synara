@@ -422,14 +422,29 @@ final class NDJSONEmitter {
         ])
     }
 
-    func emitPhysicalInput(kind: String, pid: pid_t?, windowID: CGWindowID?, capturedAt: String) {
+    func emitPhysicalInput(
+        kind: String,
+        pid: pid_t?,
+        windowID: CGWindowID?,
+        eventType: UInt32,
+        sourceProcessID: Int64,
+        sourceStateID: Int64,
+        sourceTagged: Bool,
+        modifierKey: Bool?,
+        capturedAt: String
+    ) {
         var payload: [String: Any] = [
             "type": "physical-input",
             "kind": kind,
+            "eventType": eventType,
+            "sourcePid": sourceProcessID,
+            "sourceStateId": sourceStateID,
+            "sourceTagged": sourceTagged,
             "capturedAt": capturedAt,
         ]
         if let pid { payload["pid"] = pid }
         if let windowID { payload["windowId"] = windowID }
+        if let modifierKey { payload["modifierKey"] = modifierKey }
         emit(payload)
     }
 

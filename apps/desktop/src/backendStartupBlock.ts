@@ -45,18 +45,33 @@ export type BackendStartupBlock =
 export class BackendStartupBlockDetector {
   private output = "";
   private block: BackendStartupBlock | null = null;
+  // Set once the backend reports readiness: startup blocks can no longer occur,
+  // so later output skips decoding and scanning for the rest of the session.
+  private frozen: { readonly result: BackendStartupBlock | null } | null = null;
   private readonly decoders = {
     stdout: new StringDecoder("utf8"),
     stderr: new StringDecoder("utf8"),
   };
 
   push(chunk: unknown, source: "stdout" | "stderr" = "stdout"): void {
+    if (this.frozen) return;
     const text = Buffer.isBuffer(chunk) ? this.decoders[source].write(chunk) : String(chunk);
     this.append(text);
   }
 
   end(source: "stdout" | "stderr"): void {
+    if (this.frozen) return;
     this.append(this.decoders[source].end());
+  }
+
+  /**
+   * Stops classifying output once startup has finished. The classification seen
+   * so far is kept for `read()`; the retained output window is released.
+   */
+  freeze(): void {
+    if (this.frozen) return;
+    this.frozen = { result: this.read() };
+    this.output = "";
   }
 
   private append(text: string): void {
@@ -92,6 +107,7 @@ export class BackendStartupBlockDetector {
   }
 
   read(): BackendStartupBlock | null {
+    if (this.frozen) return this.frozen.result;
     if (this.block?.kind === "migration-startup-block-invalid") return this.block;
     const divergenceChallenge = parseMigrationDivergenceConsentChallenge(this.output);
     if (divergenceChallenge) {

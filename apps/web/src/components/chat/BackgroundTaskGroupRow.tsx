@@ -6,6 +6,7 @@
 // Exports: BackgroundTaskGroupRow
 // Depends on: ToolCallGroupSummaryRow (shared disclosure line and motion)
 
+import { useTranslation } from "~/i18n";
 import type { ReactNode } from "react";
 
 import { BackgroundTrayIcon } from "~/lib/icons";
@@ -20,12 +21,13 @@ export function BackgroundTaskGroupRow(props: {
   fontSizePx: number;
   renderEntry: (entry: WorkLogEntry) => ReactNode;
 }) {
+  const { t } = useTranslation();
   const { entries, open, onToggle, fontSizePx, renderEntry } = props;
   const tasks = entries.flatMap((entry) => (entry.backgroundTask ? [entry.backgroundTask] : []));
   return (
     <div data-background-task-group="true">
       <ToolCallGroupSummaryRow
-        label={summarizeBackgroundTaskGroup(tasks)}
+        label={summarizeBackgroundTaskGroup(tasks, t)}
         icon={BackgroundTrayIcon}
         open={open}
         onToggle={onToggle}

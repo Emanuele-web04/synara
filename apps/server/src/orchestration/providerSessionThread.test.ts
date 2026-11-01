@@ -74,3 +74,31 @@ describe("resolveProviderSessionThread", () => {
     expect(getThreadShellById).toHaveBeenCalledWith(parentId);
   });
 });
+
+it("routes nested synthetic children through all sessionless ancestors", async () => {
+  const root = {
+    id: "root",
+    parentThreadId: null,
+    session: { providerName: "devin" },
+  } as unknown as OrchestrationThreadShell;
+  const outer = {
+    id: "subagent:root:outer",
+    parentThreadId: root.id,
+    session: null,
+  } as OrchestrationThreadShell;
+  const inner = {
+    id: "subagent:root:outer:inner",
+    parentThreadId: outer.id,
+    session: null,
+  } as OrchestrationThreadShell;
+  const rows = new Map([
+    [root.id, root],
+    [outer.id, outer],
+    [inner.id, inner],
+  ]);
+  const query = {
+    getThreadShellById: (id: ThreadId) => Effect.succeed(Option.fromNullishOr(rows.get(id))),
+    findSyntheticSubagentParentThread: () => Effect.succeed(Option.none()),
+  } as unknown as ProjectionSnapshotQueryShape;
+  expect(await Effect.runPromise(resolveProviderSessionThread(query, inner.id))).toBe(root);
+});

@@ -127,16 +127,25 @@ function adapterFacadeForInstance(
         ),
       );
 
-  const hasSession: ProviderAdapterShape<ProviderAdapterError>["hasSession"] = (threadId) =>
+  const hasRetainedSession: ProviderAdapterShape<ProviderAdapterError>["hasSession"] = (threadId) =>
     listSessions().pipe(
       Effect.map((sessions) => sessions.some((session) => session.threadId === threadId)),
     );
 
-  const stopSession: ProviderAdapterShape<ProviderAdapterError>["stopSession"] = (threadId) =>
-    hasSession(threadId).pipe(
-      Effect.flatMap((hasActiveSession) =>
-        hasActiveSession ? adapter.stopSession(threadId) : Effect.void,
+  // Adapters with separate cleanup ownership must also confirm liveness.
+  // Preserve membership semantics for adapters without that distinction.
+  const hasSession: ProviderAdapterShape<ProviderAdapterError>["hasSession"] = (threadId) =>
+    hasRetainedSession(threadId).pipe(
+      Effect.flatMap((retained) =>
+        retained && adapter.hasRetainedSession
+          ? adapter.hasSession(threadId)
+          : Effect.succeed(retained),
       ),
+    );
+
+  const stopSession: ProviderAdapterShape<ProviderAdapterError>["stopSession"] = (threadId) =>
+    hasRetainedSession(threadId).pipe(
+      Effect.flatMap((retained) => (retained ? adapter.stopSession(threadId) : Effect.void)),
       Effect.tap(() =>
         Effect.sync(() => {
           if (untaggedClaims.get(threadId) === instanceId) {
@@ -197,6 +206,7 @@ function adapterFacadeForInstance(
     stopSession,
     listSessions,
     hasSession,
+    ...(adapter.hasRetainedSession ? { hasRetainedSession } : {}),
     stopAll,
     ...(forkThread ? { forkThread } : {}),
     streamEvents: adapter.streamEvents.pipe(

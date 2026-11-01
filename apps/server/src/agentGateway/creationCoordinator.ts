@@ -385,7 +385,17 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
         ...(callerTurnId ? { callerTurnId } : {}),
         requestId: input.requestId,
       })}`;
-      const fingerprint = stableGatewayDigest(input, 64);
+      // Hub routing metadata belongs to admission, not standalone creation or
+      // its durable retry identity.
+      const fingerprint = stableGatewayDigest(
+        {
+          ...input,
+          threads: input.threads.map(
+            ({ taskKey: _taskKey, routingReason: _routingReason, ...spec }) => spec,
+          ),
+        },
+        64,
+      );
       const externalOperationRepository =
         context.kind === "external-client" ? externalMcpRepository : undefined;
       if (context.kind === "external-client" && externalOperationRepository === undefined) {

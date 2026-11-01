@@ -14,6 +14,7 @@ export const MAC_UPDATE_ZIP_FRAMEWORK_SYMLINK_SUFFIXES = [
 export interface MacUpdateZipMetadata {
   readonly sha512: string;
   readonly size: number;
+  readonly minimumSystemVersion?: string;
 }
 
 export interface MacUpdateManifestZipValidation {
@@ -107,6 +108,7 @@ export function updateMacUpdateManifestZipEntry(
   let topLevelPathMatches = false;
   let matchingTopLevelPathFound = false;
   let topLevelShaUpdated = false;
+  let minimumSystemVersionUpdated = false;
 
   const nextLines = lines.flatMap((line) => {
     const fileUrlMatch = line.match(/^  - url:\s*(.+)$/);
@@ -132,6 +134,11 @@ export function updateMacUpdateManifestZipEntry(
     // .zip.blockmap after repack, so the manifest must not keep advertising it.
     if (inTargetFile && line.match(/^    blockMapSize:\s*\d+$/)) {
       return [];
+    }
+
+    if (metadata.minimumSystemVersion !== undefined && /^minimumSystemVersion:/.test(line)) {
+      minimumSystemVersionUpdated = true;
+      return [`minimumSystemVersion: '${metadata.minimumSystemVersion}'`];
     }
 
     const topLevelPath = parseYamlScalarFromLine(line, "path");
@@ -160,6 +167,10 @@ export function updateMacUpdateManifestZipEntry(
     throw new Error(
       `Could not update top-level sha512 for ${zipFileName} in macOS update manifest.`,
     );
+  }
+
+  if (metadata.minimumSystemVersion !== undefined && !minimumSystemVersionUpdated) {
+    nextLines.push(`minimumSystemVersion: '${metadata.minimumSystemVersion}'`, "");
   }
 
   return nextLines.join("\n");

@@ -23,7 +23,7 @@ export interface PersistedModelCatalogEntry {
 }
 
 const PersistedModelCatalogs = Schema.Struct({
-  version: Schema.Literal(1),
+  version: Schema.Literals([1, 2]),
   entries: Schema.Array(
     Schema.Struct({
       key: Schema.String,
@@ -58,7 +58,9 @@ export const readProviderModelCatalogCache = (filePath: string) =>
     }
 
     return yield* decodePersistedModelCatalogs(trimmed).pipe(
-      Effect.map((persisted) => persisted.entries),
+      // V1 did not distinguish complete catalogs from fallbacks. Retire that
+      // disposable snapshot once; normal lookups rediscover lazily with backoff.
+      Effect.map((persisted) => (persisted.version === 2 ? persisted.entries : [])),
       Effect.matchCauseEffect({
         onFailure: (cause) =>
           Effect.logWarning("failed to parse provider model catalog cache, ignoring", {
@@ -76,5 +78,5 @@ export const writeProviderModelCatalogCache = (input: {
 }) =>
   writeFileStringAtomically({
     filePath: input.filePath,
-    contents: `${JSON.stringify({ version: 1, entries: input.entries }, null, 2)}\n`,
+    contents: `${JSON.stringify({ version: 2, entries: input.entries }, null, 2)}\n`,
   });

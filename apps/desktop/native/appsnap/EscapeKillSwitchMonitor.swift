@@ -88,13 +88,17 @@ final class EscapeKillSwitchMonitor {
             return
         }
 
+        let keyCode = CGKeyCode(event.getIntegerValueField(.keyboardEventKeycode))
+        let sourceProcessID = event.getIntegerValueField(.eventSourceUnixProcessID)
+        let sourceStateID = event.getIntegerValueField(.eventSourceStateID)
+        let sourceUserData = event.getIntegerValueField(.eventSourceUserData)
         if EscapePhysicalClassifier.isPhysicalEscape(
                   type: type,
-                  keyCode: CGKeyCode(event.getIntegerValueField(.keyboardEventKeycode)),
+                  keyCode: keyCode,
                   flags: event.flags,
-                  sourceProcessID: event.getIntegerValueField(.eventSourceUnixProcessID),
-                  sourceStateID: event.getIntegerValueField(.eventSourceStateID),
-                  sourceUserData: event.getIntegerValueField(.eventSourceUserData),
+                  sourceProcessID: sourceProcessID,
+                  sourceStateID: sourceStateID,
+                  sourceUserData: sourceUserData,
                   armed: armed
               ) {
             onEscape()
@@ -102,9 +106,9 @@ final class EscapeKillSwitchMonitor {
         }
         guard EscapePhysicalClassifier.isPhysicalInput(
             type: type,
-            sourceProcessID: event.getIntegerValueField(.eventSourceUnixProcessID),
-            sourceStateID: event.getIntegerValueField(.eventSourceStateID),
-            sourceUserData: event.getIntegerValueField(.eventSourceUserData),
+            sourceProcessID: sourceProcessID,
+            sourceStateID: sourceStateID,
+            sourceUserData: sourceUserData,
             armed: armed
         ) else { return }
         let keyboard = type == .keyDown || type == .flagsChanged
@@ -113,6 +117,13 @@ final class EscapeKillSwitchMonitor {
             kind: keyboard ? "keyboard" : "pointer",
             pid: target.pid,
             windowID: target.windowID,
+            eventType: type.rawValue,
+            sourceProcessID: sourceProcessID,
+            sourceStateID: sourceStateID,
+            sourceTagged: sourceUserData != 0,
+            // Only a category leaves the helper, never a keycode. This range
+            // covers both sides of Command/Shift/Option/Control, Caps Lock and Fn.
+            modifierKey: type == .flagsChanged ? (0x36...0x3F).contains(keyCode) : nil,
             capturedAt: appSnapTimestamp()
         )
     }

@@ -20,6 +20,7 @@ import {
 import { Button } from "./ui/button";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
 import { useHorizontalWheelScroll } from "./chat/chatHeaderControls";
+import { useTranslation } from "~/i18n";
 
 export interface BrowserTabStripProps {
   tabs: readonly BrowserTabState[];
@@ -34,6 +35,8 @@ export interface BrowserTabStripProps {
 }
 
 export function BrowserTabStrip(props: BrowserTabStripProps) {
+  const { t } = useTranslation();
+
   const { activeTabId, onCloseTab, onCreateTab, onSelectTab } = props;
   const stripRef = useRef<HTMLDivElement>(null);
   useHorizontalWheelScroll(stripRef);
@@ -92,7 +95,7 @@ export function BrowserTabStrip(props: BrowserTabStripProps) {
               <button
                 type="button"
                 className="flex min-w-0 flex-1 items-center gap-1.5 self-stretch rounded-md pl-2 pr-1 text-left outline-none focus-visible:ring-1 focus-visible:ring-ring/60 focus-visible:ring-inset"
-                title={tab.title || "Untitled"}
+                title={tab.title || t("computer:panel_untitled")}
                 onClick={() => onSelectTab(tab.id)}
               >
                 {tab.faviconUrl ? (
@@ -100,7 +103,7 @@ export function BrowserTabStrip(props: BrowserTabStripProps) {
                 ) : (
                   <GlobeIcon className="size-3 shrink-0 text-muted-foreground" />
                 )}
-                <span className="truncate">{tab.title || "Untitled"}</span>
+                <span className="truncate">{tab.title || t("computer:panel_untitled")}</span>
               </button>
               <Button
                 type="button"
@@ -113,7 +116,7 @@ export function BrowserTabStrip(props: BrowserTabStripProps) {
                 }}
               >
                 <XIcon className="size-3" />
-                <span className="sr-only">Close tab</span>
+                <span className="sr-only">{t("computer:panel_closeTab")}</span>
               </Button>
             </div>
           );
@@ -127,14 +130,14 @@ export function BrowserTabStrip(props: BrowserTabStripProps) {
               variant="ghost"
               size="icon-chip"
               className="text-muted-foreground hover:text-foreground"
-              aria-label="New tab"
+              aria-label={t("computer:panel_newTab")}
               onClick={onCreateTab}
             />
           }
         >
           <PlusIcon className="size-3.5" />
         </TooltipTrigger>
-        <TooltipPopup>New tab</TooltipPopup>
+        <TooltipPopup>{t("computer:panel_newTab")}</TooltipPopup>
       </Tooltip>
       {props.status ? (
         <div

@@ -7,11 +7,12 @@ import path from "node:path";
 import zlib from "node:zlib";
 
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
+import * as NodeServices from "@effect/platform-node/NodeServices";
 import { Effect, Exit, Layer, Scope } from "effect";
 import { HttpRouter } from "effect/unstable/http";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { ServerAuth, type ServerAuthShape } from "./auth/Services/ServerAuth";
+import { AuthError, ServerAuth, type ServerAuthShape } from "./auth/Services/ServerAuth";
 import {
   resolveDefaultChatWorkspaceRoot,
   resolveDefaultGroupsWorkspaceRoot,
@@ -32,6 +33,8 @@ import {
   ProjectFaviconResolver,
   type ProjectFaviconResolverShape,
 } from "./project/Services/ProjectFaviconResolver";
+import { makeProjectFaviconResolver } from "./project/Layers/ProjectFaviconResolver";
+import { makeBoundedNodeHttpServer } from "./nodeHttpServer";
 import {
   OrchestrationEngineService,
   type OrchestrationEngineShape,
@@ -117,6 +120,11 @@ const serverAuth = {
     }),
 } as unknown as ServerAuthShape;
 
+const unauthenticatedServerAuth = {
+  authenticateHttpRequest: () =>
+    Effect.fail(new AuthError({ message: "Unauthorized", status: 401 })),
+} as unknown as ServerAuthShape;
+
 const projectFaviconResolver: ProjectFaviconResolverShape = {
   resolvePath: () => Effect.succeed(null),
 };
@@ -145,7 +153,11 @@ type TestedRoute =
       readonly computerService?: ComputerServiceShape;
     }
   | { readonly kind: "static" }
-  | { readonly kind: "favicon" }
+  | {
+      readonly kind: "favicon";
+      readonly auth?: ServerAuthShape;
+      readonly resolver?: ProjectFaviconResolverShape;
+    }
   | { readonly kind: "editor-icon" };
 
 async function withEffectServer(
@@ -159,7 +171,9 @@ async function withEffectServer(
     await Effect.runPromise(
       Scope.provide(
         Effect.gen(function* () {
-          const httpServer = yield* NodeHttpServer.make(
+          const makeServer =
+            route.kind === "favicon" ? makeBoundedNodeHttpServer : NodeHttpServer.make;
+          const httpServer = yield* makeServer(
             () => {
               nodeServer = http.createServer();
               return nodeServer;
@@ -189,8 +203,16 @@ async function withEffectServer(
           Effect.provide(
             Layer.mergeAll(
               Layer.succeed(ServerConfig, config),
-              Layer.succeed(ServerAuth, serverAuth),
-              Layer.succeed(ProjectFaviconResolver, projectFaviconResolver),
+              Layer.succeed(
+                ServerAuth,
+                route.kind === "favicon" ? (route.auth ?? serverAuth) : serverAuth,
+              ),
+              Layer.succeed(
+                ProjectFaviconResolver,
+                route.kind === "favicon"
+                  ? (route.resolver ?? projectFaviconResolver)
+                  : projectFaviconResolver,
+              ),
               Layer.succeed(OrchestrationEngineService, healthyOrchestrationEngine),
               ...(route.kind === "emergency-stop" && route.computerService
                 ? [Layer.succeed(ComputerService, route.computerService)]
@@ -198,7 +220,9 @@ async function withEffectServer(
               ...(route.kind === "health" && route.eventLoop
                 ? [Layer.succeed(ServerEventLoopMonitor, { getSnapshot: () => route.eventLoop! })]
                 : []),
-              NodeHttpServer.layerHttpServices,
+              // Match the live desktop route stack: it supplies filesystem services,
+              // but not the extra HttpPlatform required by HttpServerResponse.file.
+              route.kind === "favicon" ? NodeServices.layer : NodeHttpServer.layerHttpServices,
             ),
           ),
         ),
@@ -741,6 +765,124 @@ describe("production Effect HTTP routes", () => {
       expect(response.status).toBe(400);
       await expect(response.text()).resolves.toBe("Missing id parameter");
     });
+  });
+
+  it("serves a project logo with the desktop startup token without a browser session", async () => {
+    const projectCwd = makeTempDir("synara-effect-favicon-");
+    const faviconPath = path.join(projectCwd, "apps", "web", "public", "favicon.svg");
+    mkdirSync(path.dirname(faviconPath), { recursive: true });
+    const logo =
+      '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><path d="M0 0h16v16H0z"/></svg>';
+    writeFileSync(faviconPath, logo);
+    const resolver = await Effect.runPromise(
+      makeProjectFaviconResolver.pipe(Effect.provide(NodeServices.layer)),
+    );
+
+    await withEffectServer(
+      makeConfig({ mode: "desktop", authToken: "desktop-secret" }),
+      { kind: "favicon", auth: unauthenticatedServerAuth, resolver },
+      async (origin) => {
+        const response = await fetch(
+          `${origin}/api/project-favicon?cwd=${encodeURIComponent(projectCwd)}&fallback=none&token=desktop-secret`,
+        );
+        expect(response.status).toBe(200);
+        expect(response.headers.get("content-type")).toContain("image/svg+xml");
+        await expect(response.text()).resolves.toBe(logo);
+
+        for (const token of ["", "wrong-secret"]) {
+          const rejected = await fetch(
+            `${origin}/api/project-favicon?cwd=/project&fallback=none&token=${token}`,
+          );
+          expect(rejected.status).toBe(401);
+        }
+      },
+    );
+  });
+
+  it.each(["html declaration", "icon symlink", "declaration symlink", "app symlink"])(
+    "does not serve unsafe project logo content: %s",
+    async (scenario) => {
+      const projectCwd = makeTempDir("synara-effect-favicon-boundary-");
+      const outsideCwd = makeTempDir("synara-effect-favicon-outside-");
+      const marker = "outside project marker";
+      if (scenario === "html declaration") {
+        writeFileSync(
+          path.join(projectCwd, "index.html"),
+          '<link rel="icon" href="/payload.html">',
+        );
+        writeFileSync(path.join(projectCwd, "payload.html"), "<!doctype html><p>inert html</p>");
+      } else if (scenario === "icon symlink") {
+        const outsideIcon = path.join(outsideCwd, "favicon.svg");
+        writeFileSync(outsideIcon, marker);
+        symlinkSync(outsideIcon, path.join(projectCwd, "favicon.svg"));
+      } else if (scenario === "declaration symlink") {
+        const outsideSource = path.join(outsideCwd, "index.html");
+        writeFileSync(outsideSource, '<link rel="icon" href="/logo.svg">');
+        writeFileSync(path.join(projectCwd, "logo.svg"), "<svg>inert logo</svg>");
+        symlinkSync(outsideSource, path.join(projectCwd, "index.html"));
+      } else {
+        mkdirSync(path.join(outsideCwd, "public"));
+        writeFileSync(path.join(outsideCwd, "public", "favicon.svg"), marker);
+        symlinkSync(outsideCwd, path.join(projectCwd, "dashboard"), "dir");
+      }
+      const resolver = await Effect.runPromise(
+        makeProjectFaviconResolver.pipe(Effect.provide(NodeServices.layer)),
+      );
+      await withEffectServer(makeConfig(), { kind: "favicon", resolver }, async (origin) => {
+        const response = await fetch(
+          `${origin}/api/project-favicon?cwd=${encodeURIComponent(projectCwd)}&fallback=none`,
+        );
+        expect(response.status).toBe(204);
+        await expect(response.text()).resolves.toBe("");
+      });
+    },
+  );
+
+  it.each(["svg", "png", "ico"])(
+    "serves only sandboxed image responses through an in-project link: %s",
+    async (extension) => {
+      const projectCwd = makeTempDir("synara-effect-favicon-image-");
+      const projectLink = path.join(makeTempDir("synara-effect-favicon-alias-"), "project");
+      symlinkSync(projectCwd, projectLink, "dir");
+      const iconPath = path.join(projectCwd, `brand.${extension}`);
+      const logo =
+        extension === "svg" ? '<svg xmlns="http://www.w3.org/2000/svg"/>' : "image bytes";
+      writeFileSync(iconPath, logo);
+      symlinkSync(iconPath, path.join(projectCwd, `favicon.${extension}`));
+      const resolver = await Effect.runPromise(
+        makeProjectFaviconResolver.pipe(Effect.provide(NodeServices.layer)),
+      );
+      await withEffectServer(makeConfig(), { kind: "favicon", resolver }, async (origin) => {
+        const response = await fetch(
+          `${origin}/api/project-favicon?cwd=${encodeURIComponent(projectLink)}&fallback=none`,
+        );
+        expect(response.status).toBe(200);
+        expect(response.headers.get("content-type")).toMatch(/^image\//);
+        expect(response.headers.get("x-content-type-options")).toBe("nosniff");
+        const policy = response.headers.get("content-security-policy");
+        expect(policy).toContain("sandbox");
+        expect(policy).toContain("default-src 'none'");
+        expect(policy).not.toContain("allow-scripts");
+        expect(policy).not.toContain("allow-same-origin");
+        await expect(response.text()).resolves.toBe(logo);
+      });
+    },
+  );
+
+  it.each([
+    { host: "0.0.0.0", allowInsecureRemote: true },
+    { publicUrl: new URL("https://synara.example.test/") },
+  ])("requires a browser session for project logos on an exposed server: %j", async (overrides) => {
+    await withEffectServer(
+      makeConfig({ authToken: "desktop-secret", ...overrides }),
+      { kind: "favicon", auth: unauthenticatedServerAuth },
+      async (origin) => {
+        const response = await fetch(
+          `${origin}/api/project-favicon?cwd=/project&token=desktop-secret`,
+        );
+        expect(response.status).toBe(401);
+      },
+    );
   });
 });
 

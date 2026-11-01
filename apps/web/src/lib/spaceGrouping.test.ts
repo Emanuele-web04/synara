@@ -1,5 +1,8 @@
 import { SpaceId } from "@synara/contracts";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { setLanguagePreference } from "~/i18n";
+
+afterEach(() => setLanguagePreference("system"));
 
 import type { Space } from "~/types";
 import {
@@ -45,26 +48,46 @@ describe("the unfiled group's presentation", () => {
     expect(spaceDisplayIcon(null, [workSpace], renamedVoid)).toBe("backpack");
   });
 
-  it("leaves stored spaces alone, and falls back for a space the snapshot lost", () => {
-    const staleSpaceId = SpaceId.makeUnsafe("space-deleted");
+  it.each([
+    ["en", "Unknown space"],
+    ["zh-CN", "未知空间"],
+  ] as const)(
+    "leaves stored spaces alone and localizes the missing-space fallback in %s",
+    (locale, unknownName) => {
+      setLanguagePreference(locale);
+      const staleSpaceId = SpaceId.makeUnsafe("space-deleted");
 
-    expect(spaceDisplayName(workSpaceId, [workSpace], renamedVoid)).toBe("Work");
-    expect(spaceDisplayIcon(workSpaceId, [workSpace], renamedVoid)).toBe("bag");
-    expect(spaceDisplayName(staleSpaceId, [workSpace], renamedVoid)).toBe("Unknown space");
-    expect(spaceDisplayIcon(staleSpaceId, [workSpace], renamedVoid)).toBe("backpack");
-  });
+      expect(spaceDisplayName(workSpaceId, [workSpace], renamedVoid)).toBe("Work");
+      expect(spaceDisplayIcon(workSpaceId, [workSpace], renamedVoid)).toBe("bag");
+      expect(spaceDisplayName(staleSpaceId, [workSpace], renamedVoid)).toBe(unknownName);
+      expect(spaceDisplayIcon(staleSpaceId, [workSpace], renamedVoid)).toBe("backpack");
+    },
+  );
 
-  it("labels the grouped unfiled bucket with it too", () => {
-    const groups = groupItemsBySpace({
-      items: [{ spaceId: null }, { spaceId: workSpaceId }],
-      spaces: [workSpace],
-      activeSpaceId: null,
-      spaceIdOf: (item) => item.spaceId,
-      voidSpace: renamedVoid,
-    });
+  it.each([
+    ["en", "Da ordinare · Active"],
+    ["zh-CN", "Da ordinare · 当前空间"],
+  ] as const)(
+    "labels the grouped unfiled bucket in %s without changing its name or identity",
+    (locale, activeLabel) => {
+      setLanguagePreference(locale);
+      const groups = groupItemsBySpace({
+        items: [{ spaceId: null }, { spaceId: workSpaceId }],
+        spaces: [workSpace],
+        activeSpaceId: null,
+        spaceIdOf: (item) => item.spaceId,
+        voidSpace: renamedVoid,
+      });
 
-    expect(groups.map((group) => group.label)).toEqual(["Da ordinare · Active", "Work"]);
-    expect(groups[0]?.icon).toBe("backpack");
-    expect(groups[0]?.key).toBe("void");
-  });
+      expect(groups.map((group) => group.label)).toEqual([activeLabel, "Work"]);
+      expect(groups.map((group) => group.name)).toEqual(["Da ordinare", "Work"]);
+      expect(groups.map((group) => group.spaceId)).toEqual([null, workSpaceId]);
+      expect(groups.flatMap((group) => group.items)).toEqual([
+        { spaceId: null },
+        { spaceId: workSpaceId },
+      ]);
+      expect(groups[0]?.icon).toBe("backpack");
+      expect(groups[0]?.key).toBe("void");
+    },
+  );
 });

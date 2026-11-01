@@ -5,6 +5,7 @@ import { LexicalErrorBoundary } from "@lexical/react/LexicalErrorBoundary";
 import { HistoryPlugin } from "@lexical/react/LexicalHistoryPlugin";
 import { OnChangePlugin } from "@lexical/react/LexicalOnChangePlugin";
 import { PlainTextPlugin } from "@lexical/react/LexicalPlainTextPlugin";
+import { useLexicalEditable } from "@lexical/react/useLexicalEditable";
 import {
   $createRangeSelection,
   $getSelection,
@@ -24,6 +25,7 @@ import {
   KEY_ENTER_COMMAND,
   KEY_TAB_COMMAND,
   COMMAND_PRIORITY_HIGH,
+  SKIP_DOM_SELECTION_TAG,
   KEY_BACKSPACE_COMMAND,
   PASTE_COMMAND,
   TextNode,
@@ -521,6 +523,8 @@ interface ComposerPromptEditorProps {
   placeholder: string;
   ariaLabel?: string | undefined;
   className?: string;
+  /** One-line field for the single-row composer: one line tall, placeholder truncated. */
+  singleLine?: boolean;
   onRemoveTerminalContext: (contextId: string) => void;
   /**
    * Invoked when a sufficiently large text paste should collapse into an attachment
@@ -942,6 +946,7 @@ function ComposerPromptEditorInner({
   placeholder,
   ariaLabel,
   className,
+  singleLine,
   onRemoveTerminalContext,
   onCollapsePastedText,
   onChange,
@@ -951,6 +956,7 @@ function ComposerPromptEditorInner({
 }: ComposerPromptEditorInnerProps) {
   const mentionReferences = mentionReferencesProp ?? [];
   const [editor] = useLexicalComposerContext();
+  const isEditable = useLexicalEditable();
   const onChangeRef = useRef(onChange);
   const initialCursor = clampCollapsedComposerCursor(value, cursor);
   const terminalContextsSignature = terminalContextSignature(terminalContexts);
@@ -979,17 +985,27 @@ function ComposerPromptEditorInner({
     if (disabled) {
       const rootElement = editor.getRootElement();
       restoreFocusOnEnableRef.current = Boolean(
-        rootElement && document.activeElement === rootElement,
+        rootElement && document.hasFocus() && document.activeElement === rootElement,
       );
       editor.setEditable(false);
       return;
     }
     editor.setEditable(true);
-    if (restoreFocusOnEnableRef.current) {
-      restoreFocusOnEnableRef.current = false;
-      editor.getRootElement()?.focus();
-    }
   }, [disabled, editor]);
+
+  useEffect(() => {
+    // ContentEditable commits its editable state separately from setEditable().
+    // Wait for that commit, and preserve any control/window chosen in the meantime.
+    if (disabled || !isEditable || !restoreFocusOnEnableRef.current) return;
+    restoreFocusOnEnableRef.current = false;
+    const rootElement = editor.getRootElement();
+    if (
+      document.hasFocus() &&
+      (document.activeElement === document.body || document.activeElement === rootElement)
+    ) {
+      rootElement?.focus();
+    }
+  }, [disabled, editor, isEditable]);
 
   useLayoutEffect(() => {
     const normalizedCursor = clampCollapsedComposerCursor(value, cursor);
@@ -1016,22 +1032,28 @@ function ComposerPromptEditorInner({
     mentionsSignatureRef.current = mentionsSignature;
 
     const rootElement = editor.getRootElement();
-    const isFocused = Boolean(rootElement && document.activeElement === rootElement);
+    const isFocused = Boolean(
+      rootElement && document.hasFocus() && document.activeElement === rootElement,
+    );
     if (previousSnapshot.value === value && !contextsChanged && !mentionsChanged && !isFocused) {
       return;
     }
 
     isApplyingControlledUpdateRef.current = true;
-    editor.update(() => {
-      const shouldRewriteEditorState =
-        previousSnapshot.value !== value || contextsChanged || mentionsChanged;
-      if (shouldRewriteEditorState) {
-        $setComposerEditorPrompt(value, terminalContexts, mentionReferences);
-      }
-      if (shouldRewriteEditorState || isFocused) {
-        $setSelectionAtComposerOffset(normalizedCursor);
-      }
-    });
+    editor.update(
+      () => {
+        const shouldRewriteEditorState =
+          previousSnapshot.value !== value || contextsChanged || mentionsChanged;
+        if (shouldRewriteEditorState) {
+          $setComposerEditorPrompt(value, terminalContexts, mentionReferences);
+        }
+        if (shouldRewriteEditorState || isFocused) {
+          $setSelectionAtComposerOffset(normalizedCursor);
+        }
+      },
+      // Keep Lexical's draft cursor current without moving the user's DOM selection.
+      isFocused ? undefined : { tag: SKIP_DOM_SELECTION_TAG },
+    );
     queueMicrotask(() => {
       isApplyingControlledUpdateRef.current = false;
     });
@@ -1080,7 +1102,10 @@ function ComposerPromptEditorInner({
   const isEditorFocused = useCallback(() => {
     const rootElement = editor.getRootElement();
     return Boolean(
-      rootElement && typeof document !== "undefined" && document.activeElement === rootElement,
+      rootElement &&
+      typeof document !== "undefined" &&
+      document.hasFocus() &&
+      document.activeElement === rootElement,
     );
   }, [editor]);
 
@@ -1207,6 +1232,7 @@ function ComposerPromptEditorInner({
                 COMPOSER_EDITOR_TYPOGRAPHY_CLASS_NAME,
                 COMPOSER_EDITOR_MIN_HEIGHT_CLASS_NAME,
                 COMPOSER_EDITOR_CONTENT_RESET_CLASS_NAME,
+                singleLine && "min-h-[1lh]",
                 className,
               )}
               data-testid="composer-editor"
@@ -1223,6 +1249,7 @@ function ComposerPromptEditorInner({
                   "pointer-events-none absolute inset-0",
                   COMPOSER_PLACEHOLDER_TEXT_CLASS_NAME,
                   COMPOSER_EDITOR_TYPOGRAPHY_CLASS_NAME,
+                  singleLine && "truncate",
                 )}
               >
                 {placeholder}
@@ -1262,6 +1289,7 @@ export const ComposerPromptEditor = forwardRef<
     placeholder,
     ariaLabel,
     className,
+    singleLine,
     onRemoveTerminalContext,
     onCollapsePastedText,
     onChange,
@@ -1308,6 +1336,7 @@ export const ComposerPromptEditor = forwardRef<
         {...(onCollapsePastedText ? { onCollapsePastedText } : {})}
         {...(onCommandKeyDown ? { onCommandKeyDown } : {})}
         {...(className ? { className } : {})}
+        {...(singleLine ? { singleLine } : {})}
       />
     </LexicalComposer>
   );

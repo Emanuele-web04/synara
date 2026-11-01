@@ -42,6 +42,7 @@ import { DockPaneHeader } from "./DockPaneHeader";
 import { FileDiffCard, FileDiffSurface } from "./FileDiffView";
 import { FileEntryIcon } from "./FileEntryIcon";
 import { PanelStateMessage } from "./PanelStateMessage";
+import { useTranslation } from "~/i18n";
 
 type GitPanelSection = "staged" | "unstaged";
 
@@ -196,6 +197,8 @@ export function GitPanel(props: {
   projectId: ProjectId | null;
   onClose?: () => void;
 }) {
+  const { t } = useTranslation();
+
   const queryClient = useQueryClient();
   const { resolvedTheme } = useTheme();
   const theme = resolvedTheme as "light" | "dark";
@@ -288,21 +291,21 @@ export function GitPanel(props: {
   const hasChanges = stagedFiles.length > 0 || unstagedFiles.length > 0;
 
   if (!cwd) {
-    return <PanelStateMessage>Source control is unavailable for this thread.</PanelStateMessage>;
+    return <PanelStateMessage>{t("git:gitPanel_unavailableForThread")}</PanelStateMessage>;
   }
 
   return (
     <div className="flex h-full min-h-0 w-full flex-col">
       <DockPaneHeader
-        title="Source control"
+        title={t("git:gitPanel_title")}
         onClose={props.onClose}
-        closeLabel="Close source control"
+        closeLabel={t("git:closeSourceControl")}
         actions={
           <IconButton
             size="icon-xs"
             variant="ghost"
-            label="Refresh changes"
-            tooltip="Refresh changes"
+            label={t("git:gitPanel_refreshLabel")}
+            tooltip={t("git:gitPanel_refreshLabel")}
             className={DOCK_HEADER_ICON_BUTTON_CLASS}
             onClick={refresh}
           >
@@ -314,8 +317,7 @@ export function GitPanel(props: {
       <div className="flex max-h-[48%] min-h-0 shrink-0 flex-col gap-2 overflow-auto px-1.5 py-2">
         {truncated ? (
           <DiffTruncationWarning>
-            Synara stopped reading source-control changes at the diff size limit. Some files or
-            changes may be missing; bulk actions only affect the files shown.
+            {t("git:synaraStoppedReadingSourceControlChangesAtTheDiff")}
           </DiffTruncationWarning>
         ) : null}
         {error ? (
@@ -324,17 +326,19 @@ export function GitPanel(props: {
           </Alert>
         ) : null}
         {!error && isLoading && !hasChanges ? (
-          <p className="px-1.5 py-1 text-ui-sm text-muted-foreground/70">Loading changes...</p>
+          <p className="px-1.5 py-1 text-ui-sm text-muted-foreground/70">
+            {t("git:gitPanel_loading")}
+          </p>
         ) : null}
         {!error && !isLoading && !hasChanges ? (
           <p className="px-1.5 py-2 text-center text-ui text-muted-foreground/70">
-            No changes in the working tree.
+            {t("git:gitPanel_noChanges")}
           </p>
         ) : null}
         {hasChanges ? (
           <>
             <GitFileSection
-              title="Staged"
+              title={t("git:gitPanel_staged")}
               emptyLabel="No staged changes."
               files={stagedFiles}
               theme={theme}
@@ -348,7 +352,7 @@ export function GitPanel(props: {
               onAction={unstage}
             />
             <GitFileSection
-              title="Changes"
+              title={t("git:panel_changes")}
               emptyLabel="No unstaged changes."
               files={unstagedFiles}
               theme={theme}
@@ -373,7 +377,9 @@ export function GitPanel(props: {
             theme={theme}
           />
         ) : (
-          <PanelStateMessage density="compact">Select a file to view its diff.</PanelStateMessage>
+          <PanelStateMessage density="compact">
+            {t("git:gitPanel_selectFileDiff")}
+          </PanelStateMessage>
         )}
       </div>
     </div>

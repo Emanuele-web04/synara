@@ -40,7 +40,7 @@ const permission = {
   source: { type: "tool", messageID: "msg_step", id: "call_shell" },
 };
 
-function fixture() {
+function fixture(options?: { coldProviders?: boolean }) {
   const calls: Array<{ path: string; method: string; body: Record<string, unknown>; url: URL }> =
     [];
   let events: ReadableStreamDefaultController<Uint8Array> | undefined;
@@ -54,6 +54,7 @@ function fixture() {
   let failRevertCommit = false;
   let pendingMcp = false;
   let mcpReads = 0;
+  let modelsLoaded = false;
   const emit = (type: string, data: unknown = {}) =>
     events!.enqueue(
       new TextEncoder().encode(
@@ -168,14 +169,18 @@ function fixture() {
       if (url.pathname === "/api/provider")
         return json({
           location: { directory },
-          data: [{ id: "local", name: "Local", activation: "enabled", package: "test" }],
+          data:
+            options?.coldProviders && !modelsLoaded
+              ? []
+              : [{ id: "local", name: "Local", activation: "enabled", package: "test" }],
         });
       if (url.pathname === "/api/command")
         return json({
           location: { directory },
           data: [{ name: "review", template: "Review $ARGUMENTS" }],
         });
-      if (url.pathname === "/api/model")
+      if (url.pathname === "/api/model") {
+        modelsLoaded = true;
         return json({
           location: { directory },
           data: [
@@ -191,6 +196,7 @@ function fixture() {
             },
           ],
         });
+      }
       if (url.pathname === "/api/event")
         return new Response(
           new ReadableStream<Uint8Array>({
@@ -259,6 +265,14 @@ function fixture() {
 }
 
 describe("OpenCode V2 client boundary", () => {
+  it("discovers Console providers populated by the first model lookup", async () => {
+    const server = fixture({ coldProviders: true });
+    const inventory = (await server.client.provider.list()).data!;
+
+    expect(inventory.connected).toEqual(["local"]);
+    expect(Object.keys(inventory.all[0]!.models)).toEqual(["model"]);
+  });
+
   it("keeps child session pagination scoped to its parent", async () => {
     const server = fixture();
     server.pagedChildren = true;

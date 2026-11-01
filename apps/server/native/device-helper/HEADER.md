@@ -43,30 +43,51 @@ On start the helper emits `{"jsonrpc":"2.0","method":"ready","params":{"protocol
 
 ### Methods
 
-| Method           | Params                                                  | Result                                                                    |
-| ---------------- | ------------------------------------------------------- | ------------------------------------------------------------------------- |
-| `ping`           | –                                                       | `{ok, pid}`                                                               |
-| `list`           | –                                                       | `{devices: [{udid, name, state, booted, runtime, deviceType}]}`           |
-| `attach`         | `udid`                                                  | display geometry + `capabilities` (below)                                 |
-| `stream.start`   | `socketPath`, `keyframeIntervalSeconds?` (2.0)          | `{pixelWidth, pixelHeight, codec, socketPath}`                            |
-| `stream.stop`    | –                                                       | `{running: false, emittedFrames, droppedBusyFrames, droppedSocketFrames}` |
-| `stream.stats`   | –                                                       | as above, plus `running: true` while streaming                            |
-| `tap`            | `x`, `y`, `holdMs?` (80)                                | `{ok}`                                                                    |
-| `touch`          | `phase` (`down`\|`move`\|`up`), `x`, `y`                | `{ok}`                                                                    |
-| `swipe` / `drag` | `startX`, `startY`, `endX`, `endY`, `durationMs?` (250) | `{ok}`                                                                    |
-| `key`            | `usage` (USB HID), `phase?` (`down`\|`up`; omit to tap) | `{ok}`                                                                    |
-| `text`           | `text`                                                  | `{ok, characters, skipped}`                                               |
-| `button`         | `name`, `phase?`                                        | `{ok}`                                                                    |
-| `screenshot`     | `path?`                                                 | `{path, bytes}` or `{base64, bytes}`                                      |
-| `describe-ui`    | `maxDepth?` (40)                                        | `{tree}`                                                                  |
+| Method              | Params                                                                                                      | Result                                                                    |
+| ------------------- | ----------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------- |
+| `ping`              | –                                                                                                           | `{ok, pid}`                                                               |
+| `list`              | –                                                                                                           | `{devices: [{udid, name, state, booted, runtime, deviceType}]}`           |
+| `attach`            | `udid`                                                                                                      | display geometry + `capabilities` (below)                                 |
+| `stream.start`      | `socketPath`, `keyframeIntervalSeconds?` (2.0)                                                              | `{pixelWidth, pixelHeight, codec, socketPath}`                            |
+| `stream.stop`       | –                                                                                                           | `{running: false, emittedFrames, droppedBusyFrames, droppedSocketFrames}` |
+| `stream.stats`      | –                                                                                                           | as above, plus `running: true` while streaming                            |
+| `tap`               | `x`, `y`, `holdMs?` (80)                                                                                    | `{ok}`                                                                    |
+| `touch`             | `phase` (`down`\|`move`\|`up`), `x`, `y`                                                                    | `{ok}`                                                                    |
+| `swipe` / `drag`    | `startX`, `startY`, `endX`, `endY`, `durationMs?` (250), `edge?` (`none`\|`top`\|`left`\|`bottom`\|`right`) | `{ok}`                                                                    |
+| `key`               | `usage` (USB HID), `phase?` (`down`\|`up`; omit to tap)                                                     | `{ok}`                                                                    |
+| `text`              | `text`                                                                                                      | `{ok, characters, skipped}`                                               |
+| `button`            | `name`, `phase?`                                                                                            | `{ok}`                                                                    |
+| `screenshot`        | `path?`                                                                                                     | `{path, bytes}` or `{base64, bytes}`                                      |
+| `describe-ui`       | `maxDepth?` (40)                                                                                            | `{tree}`                                                                  |
+| `set-focused-value` | `value`                                                                                                     | `{role}`                                                                  |
 
 All coordinates are **normalized 0..1** with the origin at the top-left.
 Out-of-range values are rejected rather than clamped, because they nearly always
 mean the caller sent pixels by mistake.
 
-`attach` reports `capabilities: {input, accessibility}` and `degraded: {hid}`. A
-simulator whose HID client fails still streams and reads: input is degraded, not
-fatal.
+`attach` reports `capabilities: {input, accessibility}`, `degraded: {hid}`, and
+`inputTransport` (`dtuhid` or `indigo`, below). A simulator whose HID client
+fails still streams and reads: input is degraded, not fatal.
+
+### Input transports
+
+From CoreSimulator 1155.4 (Xcode 27) the guest drops legacy Indigo button and
+keyboard events and delivers Indigo touches unreliably, while the host-side
+send still reports success. On those toolchains input goes to the guest's
+`dtuhidd` daemon instead (`DTUHIDTransport.m`): plain XPC dictionaries to the
+`com.apple.coredevice.feature.remote.hid.digitizer` service, reached through
+`-[SimDevice lookup:error:]` and the private `xpc_endpoint_create_mach_port_4sim`
+/ `xpc_connection_enable_sim2host_4sim` symbols. The service lookup succeeds
+even when the daemon cannot run, so the connection is only used after a
+liveness barrier is answered; it warms up at `attach` and every input waits for
+it (up to 9 s), reporting "nothing was sent" rather than acking a black hole.
+There is no fallback to Indigo on these toolchains. Earlier toolchains keep the
+Indigo path. The DTUHID wire format was learned from facebook/idb's
+MIT-licensed `FBSimulatorControl/HID` sources.
+
+`edge` tags every contact of a swipe with the screen edge it starts on, which the
+guest reads as the OS edge gesture (back, notification shade, home, Control
+Center). Only DTUHID carries it.
 
 Buttons: `home`, `lock`, `side`, `siri`, `volume-up`, `volume-down`.
 
@@ -134,9 +155,24 @@ reduced SimulatorKit dump. Each node carries `role` (AX-prefix stripped),
 `enabled` and `children`. Depth is capped (`maxDepth`, default 40) and a capped
 node is marked `truncated: true`, so a pathological hierarchy still returns.
 
+`describe-ui` nodes also carry `focused`, `selected` and `placeholder` when set.
+A node whose frame is NaN or infinite (off-screen SwiftUI content) omits `frame`
+and is marked `unframed: true`; numeric values that are not finite are sent as
+their description. Responses are validated before they are written, because
+`NSJSONSerialization` raises an Objective-C exception on NaN that used to kill
+the helper and its stream.
+
 `text` maps printable ASCII to HID usages with shift. Characters with no mapping
 (emoji, most non-ASCII) are skipped and counted in `skipped` rather than failing
-the call.
+the call. Keys resolve through the guest's hardware keyboard layout, so on a
+non-US simulator the usage for `-` types `'`. The server therefore sends text
+as keystrokes only for ASCII on a US layout, and otherwise uses
+`set-focused-value`, which sets the focused element's value through the
+accessibility translator: any Unicode, layout-independent, and still delivered
+to the app as a text change. An empty `value` intentionally clears the focused
+field. Xcode 27 may flatten the software keyboard into sibling keys and a
+`GenericElement` overlay; the server recognizes its system control identifiers
+without treating app-owned PIN pads as keyboards.
 
 ## Testing
 
@@ -144,3 +180,44 @@ the call.
 boots or reuses a simulator, streams ≥30 frames asserting keyframe and Annex B
 NAL structure, injects a tap, dumps the accessibility tree, verifies PNG magic on
 a screenshot, and shuts down only a simulator it booted itself.
+
+### Xcode 27 qualification
+
+Checked on Xcode 27.0 (27A266a), iOS 27.0 (24A434), and macOS 27.0.1
+(26A434), using a dedicated SwiftUI fixture in a private CoreSimulator device
+set. The evidence driver copied these native sources and changed only the
+device-set lookup; no existing user simulator was used. The shipped default-set
+lookup was separately verified through `--probe`.
+
+The fixture verified an HID tap by its changed counter, mixed-case typing and
+subsequent lowercase input without a held Shift, exact Unicode value replacement,
+an empty value clearing the field, and H.264 delivery with keyframes and stream
+stop. The actual server backend and manager also passed with the Seatbelt profile:
+Italian-layout `auto` input preserved `Wi-Fi Città`, the flattened system keyboard
+was summarized, and one capture produced a 390×844-point preview plus a
+1170×2532-pixel full proof. An already-aborted input was rejected before dispatch.
+
+This checks one iPhone simulator/runtime, not every keyboard, an iPad, a signed
+packaged app, or Windows. XPC interruption/release is covered by the deterministic
+transport regression below rather than by terminating the guest's input service.
+Cancellation prevents later dispatch; it cannot revoke native events already sent.
+Raw app stdout/stderr is intentionally not redirected or captured; `device_logs`
+retains bounded unified logs and crash reports.
+
+### Offline input-delivery regression
+
+The bridge bounds one input RPC to 13 seconds, with at most one further second
+reserved to release keys after partial delivery. Such errors are never safe to
+replay automatically; a wholly refused operation carries explicit zero-delivery
+evidence. A deadline refusal preserves the current transport and is returned
+without replay or re-attachment. XPC interruption clears contact state before
+reconnection.
+
+The owner-boundary test uses a stub transport without loading a simulator:
+
+```sh
+xcrun clang -fobjc-arc -fmodules -framework Foundation -framework CoreGraphics \
+  Sources/HIDBridge.m Sources/DTUHIDTransport.m Tests/InputDeliveryTests.m \
+  -o /tmp/synara-device-input-tests
+/tmp/synara-device-input-tests
+```

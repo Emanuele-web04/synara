@@ -80,9 +80,12 @@ export function useTimelineRowHeightHints(
       size,
     }: {
       itemKey: string;
-      itemData: MessagesTimelineRow;
+      itemData: MessagesTimelineRow | undefined;
       size: number;
     }) => {
+      // LegendList can measure a mounted row after it left `data`: its index map is
+      // rebuilt after render, so the report carries no row or the row now at that index.
+      if (itemData?.id !== itemKey) return;
       if (!rowWidthMeasuredRef.current) measureRowWidth();
       fontKeyRef.current = readTimelineFontKey();
       rememberTimelineRowHeight(

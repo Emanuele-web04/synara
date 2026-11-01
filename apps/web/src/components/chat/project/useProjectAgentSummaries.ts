@@ -15,6 +15,8 @@ import { projectAgentOverviewConfigured } from "./projectAgentOverview.logic";
 type ProjectAgentSummariesState = {
   summariesByProjectId: ReadonlyMap<ProjectId, ProjectAgentSummary>;
   loaded: boolean;
+  // Only a completed list carries member lists. Stream rows land without them.
+  membersLoaded: boolean;
   setSummaries: (
     summaries: readonly ProjectAgentSummary[],
     requestBaseline?: ReadonlyMap<ProjectId, ProjectAgentSummary>,
@@ -55,24 +57,46 @@ function summaryFromOverview(
 export const useProjectAgentSummariesStore = create<ProjectAgentSummariesState>((set) => ({
   summariesByProjectId: new Map(),
   loaded: false,
+  membersLoaded: false,
   setSummaries: (summaries, requestBaseline) =>
     set((current) => {
       const next = new Map(summaries.map((summary) => [summary.projectId, summary] as const));
+      let membersLoaded = true;
       for (const [projectId, summary] of current.summariesByProjectId) {
         const incoming = next.get(projectId);
         const newerRevision = incoming !== undefined && summary.revision > incoming.revision;
-        const changedDuringRequest =
-          requestBaseline !== undefined && requestBaseline.get(projectId) !== summary;
-        // A list request can finish after a stream patch. Keep that newer row,
-        // including one created while the request's older snapshot was loading.
+        const baseline = requestBaseline?.get(projectId);
+        const changedDuringRequest = requestBaseline !== undefined && baseline !== summary;
+        const metadataChangedDuringRequest =
+          changedDuringRequest &&
+          (baseline === undefined ||
+            (Object.keys({ ...baseline, ...summary }) as (keyof ProjectAgentSummary)[]).some(
+              (key) => key !== "memberThreadIds" && baseline[key] !== summary[key],
+            ));
+        // A member-only patch must not replace fresh list status. Keep newer metadata,
+        // including a row created while the request's older snapshot was loading.
         if (
           newerRevision ||
-          (changedDuringRequest && (!incoming || incoming.revision <= summary.revision))
+          (metadataChangedDuringRequest && (!incoming || incoming.revision <= summary.revision))
         ) {
           next.set(projectId, summary);
+          // A Hub created during the request has no member list yet.
+          if (!incoming) membersLoaded = false;
+        }
+        // Members merge apart from the revision, which index writes do not bump. The list
+        // wins, plus ids a live index row added while it was loading.
+        if (incoming) {
+          const baselineMembers = new Set(requestBaseline?.get(projectId)?.memberThreadIds ?? []);
+          const addedMembers = changedDuringRequest
+            ? (summary.memberThreadIds ?? []).filter((id) => !baselineMembers.has(id))
+            : [];
+          next.set(projectId, {
+            ...(next.get(projectId) ?? incoming),
+            memberThreadIds: [...new Set([...(incoming.memberThreadIds ?? []), ...addedMembers])],
+          });
         }
       }
-      return { loaded: true, summariesByProjectId: next };
+      return { loaded: true, membersLoaded, summariesByProjectId: next };
     }),
   applySummary: (summary) =>
     set((current) => {
@@ -168,15 +192,30 @@ export const useProjectAgentSummariesStore = create<ProjectAgentSummariesState>(
       }
       return;
     }
-    if (
-      event.type === "task-upserted" ||
-      event.type === "thread-index-upserted" ||
-      event.type === "work-item-upserted"
-    ) {
-      // Task assignments and index writes change member threads; a coalesced
-      // re-list picks them up. activity-appended no longer refreshes — group
-      // activity lands dozens of rows per turn and none of them change the
-      // summary row.
+    if (event.type === "thread-index-upserted") {
+      set((current) => {
+        const previous = current.summariesByProjectId.get(event.projectId);
+        if (!previous) return current;
+        // A live index row is a member now, before the re-list lands. An excluded
+        // or archived row proves nothing: a task assignment can keep the thread,
+        // so the re-list owns removals.
+        const memberThreadIds = new Set(previous.memberThreadIds ?? []);
+        const known = memberThreadIds.size;
+        for (const row of event.threads) {
+          if (!row.excluded && !row.archived) memberThreadIds.add(row.threadId);
+        }
+        if (memberThreadIds.size === known) return current;
+        const next = new Map(current.summariesByProjectId);
+        next.set(event.projectId, { ...previous, memberThreadIds: [...memberThreadIds] });
+        return { summariesByProjectId: next };
+      });
+      scheduleProjectAgentSummariesRefresh();
+      return;
+    }
+    if (event.type === "task-upserted" || event.type === "work-item-upserted") {
+      // Task assignments change member threads; a coalesced re-list picks them
+      // up. activity-appended no longer refreshes — group activity lands dozens
+      // of rows per turn and none of them change the summary row.
       scheduleProjectAgentSummariesRefresh();
     }
   },
@@ -292,6 +331,7 @@ export async function loadProjectAgentSummaries(): Promise<void> {
 export function useProjectAgentSummaries() {
   const summariesByProjectId = useProjectAgentSummariesStore((state) => state.summariesByProjectId);
   const loaded = useProjectAgentSummariesStore((state) => state.loaded);
+  const membersLoaded = useProjectAgentSummariesStore((state) => state.membersLoaded);
   const applyOverview = useProjectAgentSummariesStore((state) => state.applyOverview);
   const applyEvent = useProjectAgentSummariesStore((state) => state.applyEvent);
 
@@ -323,6 +363,7 @@ export function useProjectAgentSummaries() {
   return {
     summariesByProjectId,
     loaded,
+    membersLoaded,
     applyOverview,
     refresh: loadProjectAgentSummaries,
     summaryFor: (projectId: ProjectId | null | undefined) =>

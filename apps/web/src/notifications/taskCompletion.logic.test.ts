@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { setLanguagePreference } from "~/i18n";
 import {
   ApprovalRequestId,
   EventId,
@@ -11,6 +12,8 @@ import {
 import {
   buildInputNeededCopy,
   buildTaskCompletionCopy,
+  buildTerminalAttentionCopy,
+  buildTerminalCompletionCopy,
   collectCompletedThreadCandidates,
   collectInputNeededThreadCandidates,
   collectSnoozeReminderCandidates,
@@ -20,6 +23,79 @@ import {
   shouldShowThreadNotificationToast,
 } from "./taskCompletion.logic";
 import type { Thread } from "../types";
+
+describe("localized notification copy", () => {
+  it("localizes authored completion and attention text while preserving titles, summaries and keys", () => {
+    const completion = {
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      projectId: ProjectId.makeUnsafe("project-1"),
+      title: "Settings",
+      turnId: TurnId.makeUnsafe("turn-1"),
+      completedAt: "2026-04-05T10:00:04.000Z",
+      assistantSummary: null,
+    };
+    const attention = {
+      kind: "approval",
+      threadId: completion.threadId,
+      projectId: completion.projectId,
+      title: "Settings",
+      createdAt: completion.completedAt,
+      requestId: "request-1",
+      requestKind: "command",
+    } as const;
+    const terminal = {
+      cliKind: null,
+      terminalId: "terminal-1",
+      threadId: completion.threadId,
+      title: "Settings",
+    };
+    try {
+      setLanguagePreference("es");
+      expect(buildTaskCompletionCopy(completion)).toEqual({
+        title: "Settings",
+        body: "Ha terminado de trabajar.",
+      });
+      expect(
+        buildTaskCompletionCopy({ ...completion, title: "", assistantSummary: "Input needed" }),
+      ).toEqual({
+        title: "Conversación sin título",
+        body: "Input needed",
+      });
+      expect(buildInputNeededCopy(attention)).toEqual({
+        title: "Se necesita información",
+        body: "Settings: Se solicita aprobar un comando.",
+      });
+      expect(buildInputNeededCopy({ ...attention, summary: "Settings" }).body).toBe(
+        "Settings: Settings",
+      );
+      expect(buildInputNeededCopy({ ...attention, kind: "user-input" })).toEqual({
+        title: "Se necesita información",
+        body: "Settings: Se solicita información del usuario.",
+      });
+      expect(buildTerminalCompletionCopy(terminal)).toEqual({
+        title: "Tarea de terminal completada",
+        body: "Settings ha terminado de trabajar.",
+      });
+      expect(buildTerminalAttentionCopy(terminal)).toEqual({
+        title: "Se necesita información en el terminal",
+        body: "Settings necesita tu atención.",
+      });
+      expect(completedThreadNotificationKey(completion)).toBe("thread-1:turn-1");
+      setLanguagePreference("en");
+      expect(buildTaskCompletionCopy(completion)).toEqual({
+        title: "Settings",
+        body: "Finished working.",
+      });
+      expect(buildInputNeededCopy(attention)).toEqual({
+        title: "Input needed",
+        body: "Settings: Command approval requested.",
+      });
+      expect(completedThreadNotificationKey(completion)).toBe("thread-1:turn-1");
+    } finally {
+      setLanguagePreference("en");
+    }
+  });
+});
 
 function makeThread(overrides: Partial<Thread>): Thread {
   return {

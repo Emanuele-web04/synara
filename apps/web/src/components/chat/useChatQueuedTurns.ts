@@ -28,6 +28,7 @@ import { addWsTransportStateListener, readLatestWsTransportState } from "../../w
 import {
   resolveQueuedComposerAutoDispatchHold,
   resolveQueuedSteerGateTransition,
+  retargetQueuedTurnToThreadProvider,
   type QueuedSteerGate,
 } from "../ChatView.logic";
 import { useChatComposerDraft } from "./useChatComposerDraft";
@@ -214,10 +215,11 @@ export function useChatQueuedTurns({
   }, [setQueuedSteerGate, threadId]);
 
   const restoreQueuedTurnToComposer = useCallback(
-    (queuedTurn: QueuedComposerTurn) => {
+    (queued: QueuedComposerTurn) => {
       if (!activeThread) {
         return;
       }
+      const queuedTurn = retargetQueuedTurnToThreadProvider(queued, activeThread);
       const nextPrompt = queuedTurn.kind === "chat" ? queuedTurn.prompt : queuedTurn.text;
       const restoredImages =
         queuedTurn.kind === "chat" ? queuedTurn.images.map(cloneComposerImageAttachment) : [];
@@ -325,17 +327,16 @@ export function useChatQueuedTurns({
   );
 
   const dispatchQueuedComposerTurn = useCallback(
-    async (queuedTurn: QueuedComposerTurn, dispatchMode: "queue" | "steer"): Promise<boolean> => {
-      if (
-        hasPendingCacheReview ||
-        getThreadFromState(useStore.getState(), threadId)?.claudeCacheReview != null
-      ) {
+    async (queued: QueuedComposerTurn, dispatchMode: "queue" | "steer"): Promise<boolean> => {
+      const thread = getThreadFromState(useStore.getState(), threadId);
+      if (hasPendingCacheReview || thread?.claudeCacheReview != null) {
         return false;
       }
       const lateSendHandlers = lateComposerSendHandlersRef.current;
       if (!lateSendHandlers) {
         return false;
       }
+      const queuedTurn = thread ? retargetQueuedTurnToThreadProvider(queued, thread) : queued;
       if (queuedTurn.kind === "chat") {
         return lateSendHandlers.send(undefined, dispatchMode, queuedTurn);
       }

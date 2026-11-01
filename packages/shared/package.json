@@ -16,6 +16,10 @@
       "types": "./src/betaFeatures.ts",
       "import": "./src/betaFeatures.ts"
     },
+    "./mcpConnectors": {
+      "types": "./src/mcpConnectors.ts",
+      "import": "./src/mcpConnectors.ts"
+    },
     "./inlineVisual": {
       "types": "./src/inlineVisual.ts",
       "import": "./src/inlineVisual.ts"
@@ -288,6 +292,10 @@
       "types": "./src/path.ts",
       "import": "./src/path.ts"
     },
+    "./pathContainment": {
+      "types": "./src/pathContainment.ts",
+      "import": "./src/pathContainment.ts"
+    },
     "./text": {
       "types": "./src/text.ts",
       "import": "./src/text.ts"
@@ -451,6 +459,22 @@
     "./keybindingRules": {
       "types": "./src/keybindingRules.ts",
       "import": "./src/keybindingRules.ts"
+    },
+    "./wsRequestClass": {
+      "types": "./src/wsRequestClass.ts",
+      "import": "./src/wsRequestClass.ts"
+    },
+    "./uiLocale": {
+      "types": "./src/uiLocale.ts",
+      "import": "./src/uiLocale.ts"
+    },
+    "./uiLocalizationResources": {
+      "types": "./src/uiLocalizationResources.ts",
+      "import": "./src/uiLocalizationResources.ts"
+    },
+    "./nativeLocalizationResources": {
+      "types": "./src/nativeLocalizationResources.ts",
+      "import": "./src/nativeLocalizationResources.ts"
     }
   },
   "scripts": {

@@ -1,5 +1,5 @@
 // FILE: MessagesTimeline.logic.ts
-// Purpose: Owns the pure row-derivation helpers used by the transcript hot path.
+// Purpose: Owns row derivation and localized labels used by the transcript hot path.
 // Layer: Web chat presentation helpers
 // Exports: row derivation, structural sharing, copy/timer helpers
 
@@ -11,8 +11,9 @@ import {
   type TurnId,
 } from "@synara/contracts";
 import { readInlineVisualEmbedIds } from "@synara/shared/inlineVisual";
+import { t } from "~/i18n";
 import { type TimelineEntry, type WorkLogEntry, formatElapsed } from "../../session-logic";
-import type { WorkLogUserInputExchangeItem } from "../../workLog";
+import { isCodexRuntimeWarningType, type WorkLogUserInputExchangeItem } from "../../workLog";
 import { normalizeCompactToolLabel as normalizeCompactToolLabelValue } from "../../lib/toolCallLabel";
 import { isCodexActivityStatusWorkEntry } from "./agentActivity.logic";
 import {
@@ -56,7 +57,7 @@ export function canSubmitUserMessageEdit(input: {
 // A turn can interleave tool work and intermediate assistant narration
 // (preambles), so the collapsed panel keeps both in chronological order.
 export type CollapsedTurnItem =
-  | { kind: "work"; id: string; entry: WorkLogEntry }
+  | { kind: "work"; id: string; entry: WorkLogEntry; backgroundTaskConsumed?: true }
   | { kind: "narration"; id: string; message: ChatMessage };
 
 // A settled turn's collapsed items re-chunked for rendering: consecutive
@@ -493,28 +494,55 @@ export function deriveTurnTimingByTurnId(input: {
 // A background task still running when its turn ended stays pinned under the
 // folded turn's header: its status is the turn's lasting result. One the turn
 // started and settled itself (a dev server it stopped) folds with its work.
+// A successful later response can also consume that exact task completion.
 export function isPinnedBackgroundTaskEntry(
   entry: WorkLogEntry,
   turnEndedAt: string | null,
+  backgroundTaskConsumed = false,
 ): boolean {
   const task = entry.backgroundTask;
   if (!task) return false;
   if (task.completedAt === null || turnEndedAt === null) return true;
   const completedMs = Date.parse(task.completedAt);
   const endedMs = Date.parse(turnEndedAt);
-  return Number.isNaN(completedMs) || Number.isNaN(endedMs) || completedMs > endedMs;
+  if (Number.isNaN(completedMs) || Number.isNaN(endedMs)) return true;
+  if (backgroundTaskConsumed && task.status === "finished") return false;
+  return completedMs > endedMs;
 }
 
-// "“Run delayed echo” finished", or a count when several tasks woke the turn.
-export function formatTurnResumedBy(resumedBy: ReadonlyArray<TurnResumedBy>): string {
+const TURN_RESUMED_TASK_MESSAGES = {
+  finished: "chat:turnResumedTaskFinished",
+  failed: "chat:turnResumedTaskFailed",
+  stopped: "chat:turnResumedTaskStopped",
+  updated: "chat:turnResumedTaskUpdated",
+} as const;
+
+const TURN_RESUMED_TASKS_MESSAGES = {
+  finished: "chat:turnResumedTasksFinished",
+  failed: "chat:turnResumedTasksFailed",
+  stopped: "chat:turnResumedTasksStopped",
+  updated: "chat:turnResumedTasksUpdated",
+} as const;
+
+// React callers pass their hook translator so the compiler observes locale changes.
+// Whole messages keep outcome grammar localizable without translating provider descriptions.
+export function formatTurnResumedBy(
+  resumedBy: ReadonlyArray<TurnResumedBy>,
+  translate: typeof t = t,
+): string {
   if (resumedBy.length === 1) {
-    const [only] = resumedBy;
-    return `“${only!.description ?? "Background task"}” ${only!.outcome}`;
+    const only = resumedBy[0]!;
+    return translate(TURN_RESUMED_TASK_MESSAGES[only.outcome], {
+      description: only.description ?? translate("chat:backgroundTask"),
+    });
   }
   const outcomes = new Set(resumedBy.map((item) => item.outcome));
-  return outcomes.size === 1
-    ? `${resumedBy.length} background tasks ${resumedBy[0]!.outcome}`
-    : `${resumedBy.length} background tasks ended`;
+  return translate(
+    outcomes.size === 1
+      ? TURN_RESUMED_TASKS_MESSAGES[resumedBy[0]!.outcome]
+      : "chat:turnResumedTasksEnded",
+    { count: resumedBy.length },
+  );
 }
 
 // The text of a settled turn header, without the clock time or icon:
@@ -522,20 +550,29 @@ export function formatTurnResumedBy(resumedBy: ReadonlyArray<TurnResumedBy>): st
 // limit reached", "Resumed: “Run delayed echo” finished · 3s".
 export function formatTurnHeaderLabel(
   header: Pick<TurnHeader, "elapsed" | "outcome" | "reason" | "resumedBy">,
+  translate: typeof t = t,
 ): string {
   switch (header.outcome) {
     case "stopped":
-      return header.elapsed ? `Stopped by you after ${header.elapsed}` : "Stopped by you";
+      return header.elapsed
+        ? translate("chat:turnStoppedByYouAfter", { elapsed: header.elapsed })
+        : translate("chat:turnStoppedByYou");
     case "interrupted": {
-      const base = header.elapsed ? `Interrupted after ${header.elapsed}` : "Interrupted";
+      const base = header.elapsed
+        ? translate("chat:turnInterruptedAfter", { elapsed: header.elapsed })
+        : translate("chat:runStatus_interrupted");
       return header.reason ? `${base} · ${header.reason}` : base;
     }
     case "completed":
       if (header.resumedBy && header.resumedBy.length > 0) {
-        const resumed = `Resumed: ${formatTurnResumedBy(header.resumedBy)}`;
-        return header.elapsed ? `${resumed} · ${header.elapsed}` : resumed;
+        const task = formatTurnResumedBy(header.resumedBy, translate);
+        return header.elapsed
+          ? translate("chat:turnResumedAfter", { task, elapsed: header.elapsed })
+          : translate("chat:turnResumed", { task });
       }
-      return header.elapsed ? `Worked for ${header.elapsed}` : "Details";
+      return header.elapsed
+        ? translate("chat:turnWorkedFor", { elapsed: header.elapsed })
+        : translate("common:detail_details");
   }
 }
 
@@ -986,16 +1023,28 @@ export function deriveTerminalAssistantMessageIds(
   return terminalAssistantMessageIds;
 }
 
-// Server-posted coordinator notices and provider handoff boundaries keep their own
-// row: they are not turn work, so they never merge into or fold with a turn.
+// Thread-scoped notices and provider handoff boundaries keep their own row:
+// they are not turn work, so they never merge into or fold with a turn.
 export function isStandaloneWorkEntry(
   entry: Pick<
     WorkLogEntry,
-    "synaraWorkerNotice" | "providerHandoff" | "turnFailure" | "subagentRun"
+    | "synaraWorkerNotice"
+    | "providerHandoff"
+    | "turnFailure"
+    | "subagentRun"
+    | "activityKind"
+    | "nativeEventType"
+    | "turnId"
   >,
 ): boolean {
   return Boolean(
-    entry.synaraWorkerNotice || entry.providerHandoff || entry.turnFailure || entry.subagentRun,
+    entry.synaraWorkerNotice ||
+    entry.providerHandoff ||
+    entry.turnFailure ||
+    entry.subagentRun ||
+    (entry.activityKind === "runtime.warning" &&
+      entry.turnId == null &&
+      isCodexRuntimeWarningType(entry.nativeEventType)),
   );
 }
 
@@ -1400,6 +1449,14 @@ function markInterruptedTurnsWithoutHeader(
   }
 }
 
+function earliestTimestamp(a: string, b: string): string {
+  const aMs = Date.parse(a);
+  const bMs = Date.parse(b);
+  if (Number.isNaN(aMs)) return b;
+  if (Number.isNaN(bMs)) return a;
+  return bMs < aMs ? b : a;
+}
+
 // The live turn starts at the request that opened it, so its header slots in
 // right after it: requests queued behind the live turn stay below its work. A
 // turn with no request of its own that a background task woke starts at that
@@ -1415,7 +1472,13 @@ function findLiveTurnHeaderInsertion(
   const completionBoundary = () => ({
     index: lastCompletionIndex + 1,
     resumedBy: collectResumedBy(rows, lastCompletionIndex),
-    resumedStartedAt: completionRow?.kind === "work" ? completionRow.createdAt : null,
+    resumedStartedAt:
+      completionRow?.kind === "work"
+        ? collectWakeEntries(rows, lastCompletionIndex).reduce(
+            (start, entry) => earliestTimestamp(start, entry.createdAt),
+            completionRow.createdAt,
+          )
+        : null,
   });
   if (activeTurnId !== null) {
     const requestIndex = rows.findLastIndex(
@@ -1512,18 +1575,14 @@ function collapseSettledTurns(
     ? findTailTerminalAssistantMessageId(rows, terminalAssistantMessageIds)
     : null;
 
+  // Match the exact native completion activity, not a reused task id, label,
+  // or timestamp (task.updated can settle a row before task.completed wakes us).
+  const consumedCompletions = new Map<string, WorkLogEntry>();
+
   const collectWorkItems = (entries: ReadonlyArray<WorkLogEntry>, into: CollapsedTurnItem[]) => {
     for (const entry of entries) {
       into.push({ kind: "work", id: entry.id, entry });
     }
-  };
-
-  const earliestTimestamp = (a: string, b: string): string => {
-    const aMs = Date.parse(a);
-    const bMs = Date.parse(b);
-    if (Number.isNaN(aMs)) return b;
-    if (Number.isNaN(bMs)) return a;
-    return bMs < aMs ? b : a;
   };
 
   for (let pass = rows.length - 1; pass >= 0; pass -= 1) {
@@ -1555,6 +1614,7 @@ function collapseSettledTurns(
     let firstKeptVisual: Extract<MessagesTimelineRow, { kind: "inline-visual" }> | null = null;
     let wokenAt: string | null = null;
     let resumedBy: TurnResumedBy[] | null = null;
+    let wakeEntries: WorkLogEntry[] = [];
     for (let scan = pass - 1; scan >= 0; scan -= 1) {
       const prev = rows[scan]!;
       // The response started where a background task woke the agent; every
@@ -1562,6 +1622,7 @@ function collapseSettledTurns(
       if (isBackgroundTaskCompletionRow(prev)) {
         wokenAt = prev.kind === "work" ? prev.createdAt : null;
         resumedBy = collectResumedBy(rows, scan);
+        wakeEntries = collectWakeEntries(rows, scan);
         break;
       }
       if (prev.kind === "work") {
@@ -1688,7 +1749,14 @@ function collapseSettledTurns(
     }
     // A provider can open the turn a woken response belongs to only when it
     // replies; that response started when the background task finished.
-    if (wokenAt !== null) turnStart = wokenAt;
+    if (wokenAt !== null) {
+      // Consecutive wakes share this response. Its clock starts at the first,
+      // while the latest wake below still guards against a stale turn end.
+      turnStart = wakeEntries.reduce(
+        (start, entry) => earliestTimestamp(start, entry.createdAt),
+        wokenAt,
+      );
+    }
     // A provider can reuse the launching turn id for a notification response.
     // An earlier terminal record belongs to the launch, not the resumed work.
     const responseTiming =
@@ -1712,6 +1780,34 @@ function collapseSettledTurns(
       reason: responseTiming?.failureReason ?? null,
       resumedBy,
     };
+
+    // Only a successful, settled response consumes its wake. Until then the
+    // launching row keeps the task visible; unrelated later replies cannot do so.
+    // Reused-turn timing can retain an old end before the wake: discarding that
+    // duration must not discard an explicit failure/stop outcome as success.
+    if (
+      header.outcome === "completed" &&
+      !turnTiming?.failed &&
+      !turnTiming?.stoppedByUser &&
+      !turnTiming?.interrupted &&
+      wokenAt !== null &&
+      responseEnd &&
+      Date.parse(responseEnd) >= Date.parse(wokenAt)
+    ) {
+      const consumedWakeEntries = wakeEntries.filter((entry) => {
+        const completion = entry.backgroundTaskCompletion;
+        if (!completion || (completion.outcome ?? "finished") !== "finished") return false;
+        consumedCompletions.set(entry.id, entry);
+        return true;
+      });
+      // Keep the wake's details available in Worked without duplicating a
+      // completed notification between the two genuine final answers.
+      if (options.collapseWork) {
+        collapsedItems.unshift(
+          ...consumedWakeEntries.map((entry) => ({ kind: "work" as const, id: entry.id, entry })),
+        );
+      }
+    }
 
     if (!options.collapseWork) {
       const firstAssistant = foldIndices
@@ -1743,30 +1839,61 @@ function collapseSettledTurns(
       pass -= foldIndices.length;
     }
   }
+
+  if (consumedCompletions.size === 0) return;
+  for (const row of rows) {
+    if (row.kind !== "message" || !row.collapsedTurnItems) continue;
+    for (const item of row.collapsedTurnItems) {
+      if (item.kind !== "work") continue;
+      const task = item.entry.backgroundTask;
+      if (!task || task.status !== "finished" || task.completedAt === null) continue;
+      const wake = task.completionActivityId
+        ? consumedCompletions.get(task.completionActivityId)
+        : undefined;
+      const completion = wake?.backgroundTaskCompletion;
+      if (
+        !completion ||
+        completion.taskId !== task.taskId ||
+        (completion.taskType !== null &&
+          task.taskType !== null &&
+          completion.taskType !== task.taskType) ||
+        (wake?.turnId && item.entry.turnId && wake.turnId !== item.entry.turnId)
+      )
+        continue;
+      item.backgroundTaskConsumed = true;
+    }
+  }
 }
 
 // The background tasks whose completion rows end at `index`, oldest first.
+function collectWakeEntries(
+  rows: ReadonlyArray<MessagesTimelineRow>,
+  index: number,
+): WorkLogEntry[] {
+  const entries: WorkLogEntry[] = [];
+  for (let scan = index; scan >= 0; scan -= 1) {
+    const row = rows[scan]!;
+    if (!isBackgroundTaskCompletionRow(row) || row.kind !== "work") break;
+    entries.unshift(...row.groupedEntries.filter(wakesAgent));
+  }
+  return entries;
+}
+
 function collectResumedBy(
   rows: ReadonlyArray<MessagesTimelineRow>,
   index: number,
 ): TurnResumedBy[] | null {
-  const resumedBy: TurnResumedBy[] = [];
-  for (let scan = index; scan >= 0; scan -= 1) {
-    const row = rows[scan]!;
-    if (!isBackgroundTaskCompletionRow(row) || row.kind !== "work") break;
-    for (const entry of row.groupedEntries.toReversed()) {
-      if (!wakesAgent(entry)) continue;
-      const completion = entry.backgroundTaskCompletion;
-      const monitor = entry.monitorNotification;
-      resumedBy.unshift({
-        description: completion?.description ?? monitor?.name ?? null,
-        outcome:
-          completion?.outcome ??
-          (monitor?.outcome === "completed" ? "finished" : monitor?.outcome) ??
-          "finished",
-      });
-    }
-  }
+  const resumedBy = collectWakeEntries(rows, index).map((entry): TurnResumedBy => {
+    const completion = entry.backgroundTaskCompletion;
+    const monitor = entry.monitorNotification;
+    return {
+      description: completion?.description ?? monitor?.name ?? null,
+      outcome:
+        completion?.outcome ??
+        (monitor?.outcome === "completed" ? "finished" : monitor?.outcome) ??
+        "finished",
+    };
+  });
   return resumedBy.length > 0 ? resumedBy : null;
 }
 
@@ -2020,7 +2147,10 @@ function collapsedTurnItemsEqual(
     const other = right[index]!;
     if (item.kind !== other.kind || item.id !== other.id) return false;
     if (item.kind === "work" && other.kind === "work") {
-      return workLogEntryContentEqual(item.entry, other.entry);
+      return (
+        item.backgroundTaskConsumed === other.backgroundTaskConsumed &&
+        workLogEntryContentEqual(item.entry, other.entry)
+      );
     }
     if (item.kind === "narration" && other.kind === "narration") {
       return item.message === other.message;
@@ -2082,6 +2212,7 @@ function workLogBackgroundTasksEqual(
     a.description === b.description &&
     a.startedAt === b.startedAt &&
     a.completedAt === b.completedAt &&
+    a.completionActivityId === b.completionActivityId &&
     a.exitCode === b.exitCode
   );
 }

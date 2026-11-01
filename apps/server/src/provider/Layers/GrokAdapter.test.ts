@@ -55,6 +55,7 @@ describe("GrokAdapter runtime event scoping", () => {
     const env = buildGrokModelDiscoveryEnv(
       {
         instanceId: "grok_work",
+        isolationRootDir: mkdtempSync(join(tmpdir(), "synara-grok-discovery-")),
         environment: { GROK_CODE_XAI_API_KEY: "selected-account-b" },
       },
       {

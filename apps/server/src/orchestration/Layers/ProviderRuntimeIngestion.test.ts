@@ -3,6 +3,7 @@ import { ProjectionPendingInteractionRepository } from "../../persistence/Servic
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 import type {
   OrchestrationEvent,
@@ -55,6 +56,8 @@ import {
 } from "../../provider/Services/ProviderService.ts";
 import { projectProviderRuntimeActivities } from "../providerRuntimeActivityProjection.ts";
 import { OrchestrationEngineLive } from "./OrchestrationEngine.ts";
+import { GitCoreLive } from "../../git/Layers/GitCore.ts";
+import { ManagedAttachmentRepository } from "../../persistence/Services/ManagedAttachments.ts";
 import { OrchestrationProjectionPipelineLive } from "./ProjectionPipeline.ts";
 import { OrchestrationProjectionSnapshotQueryLive } from "./ProjectionSnapshotQuery.ts";
 import {
@@ -71,12 +74,21 @@ import { ProviderRuntimeIngestionService } from "../Services/ProviderRuntimeInge
 import { ComputerManager } from "../../computer/ComputerManager.ts";
 import { FakeComputerBackend } from "../../computer/FakeComputerBackend.ts";
 import { ComputerService } from "../../computer/Services/ComputerService.ts";
+import { DeviceManager } from "../../device/DeviceManager.ts";
+import { FakeDeviceBackend } from "../../device/FakeDeviceBackend.ts";
+import { DeviceService } from "../../device/Services/DeviceService.ts";
+import { makeAgentGatewayDeviceTools } from "../../agentGateway/deviceTools.ts";
+import type { ToolContext } from "../../agentGateway/toolRuntime.ts";
 import { ProjectionSnapshotQuery } from "../Services/ProjectionSnapshotQuery.ts";
 import { ServerConfig } from "../../config.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { runProviderRuntimeEventPump } from "../../provider/providerRuntimeEventPump.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
+import { ChildProcessSpawner } from "effect/unstable/process";
+import { AcpSessionRuntime } from "../../provider/acp/AcpSessionRuntime.ts";
+import { DevinAdapter } from "../../provider/Services/DevinAdapter.ts";
+import { makeDevinAdapterLive } from "../../provider/Layers/DevinAdapter.ts";
 
 const asProjectId = (value: string): ProjectId => ProjectId.makeUnsafe(value);
 const asItemId = (value: string): RuntimeItemId => RuntimeItemId.makeUnsafe(value);
@@ -326,6 +338,19 @@ type ProviderRuntimeTestProposedPlan = ProviderRuntimeTestThread["proposedPlans"
 type ProviderRuntimeTestActivity = ProviderRuntimeTestThread["activities"][number];
 type ProviderRuntimeTestCheckpoint = ProviderRuntimeTestThread["checkpoints"][number];
 
+function singleLineFileDiff(path: string): string {
+  return [
+    `diff --git a/${path} b/${path}`,
+    "index 1111111..2222222 100644",
+    `--- a/${path}`,
+    `+++ b/${path}`,
+    "@@ -1 +1 @@",
+    "-old",
+    "+new",
+    "",
+  ].join("\n");
+}
+
 describe("ProviderRuntimeIngestion", () => {
   it("backs off idle journal safety polls and returns to the fast recovery cadence", () => {
     let delayMs = 250;
@@ -374,7 +399,9 @@ describe("ProviderRuntimeIngestion", () => {
     | ProviderRuntimeIngestionService
     | ProviderRuntimeEventRepository
     | SqlClient.SqlClient
-    | ProjectionSnapshotQuery,
+    | ProjectionSnapshotQuery
+    | ManagedAttachmentRepository
+    | ServerConfig,
     unknown
   > | null = null;
   let scope: Scope.Closeable | null = null;
@@ -404,6 +431,7 @@ describe("ProviderRuntimeIngestion", () => {
     readonly startIngestion?: boolean;
     readonly persistedStream?: boolean;
     readonly computerManager?: ComputerManager;
+    readonly deviceManager?: DeviceManager;
   }) {
     const workspaceRoot = makeTempDir("synara-provider-project-");
     fs.mkdirSync(path.join(workspaceRoot, ".git"));
@@ -420,6 +448,12 @@ describe("ProviderRuntimeIngestion", () => {
       Layer.provideMerge(SqlitePersistenceMemory),
     );
     const layer = ProviderRuntimeIngestionLive.pipe(
+      Layer.provideMerge(GitCoreLive),
+      Layer.provideMerge(
+        options?.deviceManager
+          ? Layer.succeed(DeviceService, { supported: true, manager: options.deviceManager })
+          : Layer.empty,
+      ),
       Layer.provideMerge(
         options?.computerManager
           ? Layer.succeed(ComputerService, {
@@ -539,6 +573,7 @@ describe("ProviderRuntimeIngestion", () => {
       Option.getOrUndefined(await runtime!.runPromise(snapshotQuery.getThreadDetailById(threadId)));
 
     return {
+      workspaceRoot,
       engine,
       emit: provider.emit,
       emitPersisted: provider.emitPersisted,
@@ -550,6 +585,319 @@ describe("ProviderRuntimeIngestion", () => {
       readProjectedThread,
     };
   }
+
+  it("persists inline assistant image bytes without moving text, including old events and late deltas", async () => {
+    const harness = await createHarness();
+    const source = path.join(harness.workspaceRoot, "inline image.png");
+    const ignoredCodeImage = path.join(harness.workspaceRoot, "code-only.png");
+    const outside = path.join(makeTempDir("inline-outside-"), "private.png");
+    const escaped = path.join(harness.workspaceRoot, "escape.png");
+    const bytes = Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII=",
+      "base64",
+    );
+    fs.writeFileSync(source, bytes);
+    fs.writeFileSync(ignoredCodeImage, bytes);
+    fs.writeFileSync(outside, bytes);
+    fs.symlinkSync(outside, escaped);
+    const text = `Step 1\n\n![visible](./inline%20image.png)\n\nStep 2\n\n\`![code](./code-only.png)\`\n\n\`\`\`md\n![fenced](./code-only.png)\n\`\`\`\n\n![outside](${outside})\n\n![escape](./escape.png)`;
+    const createdAt = "2020-01-01T00:00:00.000Z";
+    const turnId = asTurnId("inline-image-turn");
+    const base = {
+      provider: "codex" as const,
+      threadId: asThreadId("thread-1"),
+      turnId,
+      itemId: asItemId("inline-image-answer"),
+      createdAt,
+    };
+    harness.emit({ ...base, type: "turn.started", eventId: asEventId("inline-image-start") });
+    harness.emit({
+      ...base,
+      type: "content.delta",
+      eventId: asEventId("inline-image-text"),
+      payload: { streamKind: "assistant_text", delta: text },
+    });
+    harness.emit({
+      ...base,
+      type: "item.completed",
+      eventId: asEventId("inline-image-final"),
+      payload: { itemType: "assistant_message", status: "completed" },
+    });
+    const first = await waitForProjectedThread(harness.readProjectedThread, (thread) =>
+      thread.messages.some(
+        (message) => message.id === "assistant:inline-image-answer" && !message.streaming,
+      ),
+    );
+    const message = first.messages.find((entry) => entry.id === "assistant:inline-image-answer")!;
+    expect(message.text).toBe(text);
+    expect(message.attachments).toHaveLength(1);
+    expect(message.attachments?.[0]).toMatchObject({
+      type: "image",
+      sourcePath: "./inline image.png",
+      mimeType: "image/png",
+    });
+    const storedId = message.attachments![0]!.id;
+    fs.unlinkSync(source);
+    harness.emit({
+      ...base,
+      type: "turn.completed",
+      eventId: asEventId("inline-image-turn-final"),
+      payload: { state: "completed" },
+    });
+    await harness.drain();
+    const beforeLate = await runtime!.runPromise(harness.engine.getEventHighWaterSequence);
+    const lateSource = path.join(harness.workspaceRoot, "late image.png");
+    fs.writeFileSync(lateSource, bytes);
+    const lateDelta = "\n\nLate tail\n\n![late](./late%20image.png)";
+    harness.emit({
+      ...base,
+      type: "content.delta",
+      eventId: asEventId("inline-image-late-text"),
+      payload: { streamKind: "assistant_text", delta: lateDelta },
+    });
+    // No item/turn terminal follows: the late delta itself must settle and claim.
+    const replayed = await waitForProjectedThread(harness.readProjectedThread, (thread) =>
+      thread.messages.some(
+        (entry) => entry.id === message.id && entry.text === text + lateDelta && !entry.streaming,
+      ),
+    );
+    const lateMessage = replayed.messages.find((entry) => entry.id === message.id)!;
+    expect(lateMessage.attachments).toHaveLength(2);
+    expect(lateMessage.attachments?.[0]).toEqual(message.attachments![0]);
+    expect(lateMessage.attachments?.[1]).toMatchObject({ sourcePath: "./late image.png" });
+    fs.unlinkSync(lateSource);
+    const lateEvents = Array.from(
+      await runtime!.runPromise(Stream.runCollect(harness.engine.readEvents(beforeLate))),
+    );
+    expect(
+      lateEvents.filter(
+        (entry) =>
+          entry.type === "thread.message-sent" &&
+          entry.payload.messageId === message.id &&
+          !entry.payload.streaming,
+      ),
+    ).toHaveLength(1);
+    const repository = await runtime!.runPromise(Effect.service(ManagedAttachmentRepository));
+    const config = await runtime!.runPromise(Effect.service(ServerConfig));
+    for (const attachmentId of [storedId, lateMessage.attachments![1]!.id]) {
+      const stored = await runtime!.runPromise(repository.findClaimedById({ attachmentId }));
+      if (Option.isNone(stored)) throw new Error("Expected a claimed snapshot");
+      expect(fs.readFileSync(path.join(config.attachmentsDir, stored.value.relativePath))).toEqual(
+        bytes,
+      );
+    }
+    const sql = await runtime!.runPromise(Effect.service(SqlClient.SqlClient));
+    const rows = await runtime!.runPromise(
+      sql<{
+        count: number;
+      }>`SELECT COUNT(*) AS count FROM managed_attachment_blobs WHERE owner_thread_id = 'thread-1'`,
+    );
+    expect(rows[0]?.count).toBe(2);
+  });
+
+  it("reclaims the same staged inline image on journal replay after uncertain dispatch and source deletion", async () => {
+    const harness = await createHarness({ startIngestion: false, persistedStream: true });
+    const source = path.join(harness.workspaceRoot, "retry.png");
+    const bytes = Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII=",
+      "base64",
+    );
+    fs.writeFileSync(source, bytes);
+    const eventBase = {
+      provider: "codex" as const,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("uncertain-image-turn"),
+      itemId: asItemId("uncertain-image-answer"),
+      createdAt: new Date().toISOString(),
+    };
+    const events: ReadonlyArray<ProviderRuntimeEvent> = [
+      {
+        ...eventBase,
+        type: "turn.started" as const,
+        eventId: asEventId("uncertain-image-start"),
+        payload: {},
+      },
+      {
+        ...eventBase,
+        type: "content.delta" as const,
+        eventId: asEventId("uncertain-image-text"),
+        payload: { streamKind: "assistant_text" as const, delta: "![retry](./retry.png)" },
+      },
+      {
+        ...eventBase,
+        type: "item.completed" as const,
+        eventId: asEventId("uncertain-image-complete"),
+        payload: { itemType: "assistant_message", status: "completed" },
+      },
+    ];
+    for (const event of events)
+      await runtime!.runPromise(harness.runtimeEventRepository.append(event));
+    const dispatch = harness.engine.dispatch;
+    let interruptedCommand: { commandId: string; attachmentId: string } | undefined;
+    const failure = vi.spyOn(harness.engine, "dispatch").mockImplementation((command) => {
+      if (command.type !== "thread.message.assistant.complete") return dispatch(command);
+      if (!interruptedCommand) {
+        interruptedCommand = {
+          commandId: command.commandId,
+          attachmentId: command.attachments![0]!.id,
+        };
+        fs.unlinkSync(source);
+      }
+      // The boundary failed before a receipt existed; do not fake an accepted claim.
+      return Effect.die(new Error("transient admission acknowledgement unavailable"));
+    });
+    try {
+      await harness.startIngestion();
+      await Effect.runPromise(Scope.close(scope!, Exit.void));
+      scope = null;
+    } finally {
+      failure.mockRestore();
+    }
+    expect(interruptedCommand).toBeDefined();
+    const repository = await runtime!.runPromise(Effect.service(ManagedAttachmentRepository));
+    const sql = await runtime!.runPromise(Effect.service(SqlClient.SqlClient));
+    const staged = await runtime!.runPromise(sql<{ state: string }>`
+      SELECT state FROM managed_attachment_blobs WHERE attachment_id = ${interruptedCommand!.attachmentId}
+    `);
+    expect(staged).toEqual([{ state: "staged" }]);
+    const receipts = await runtime!.runPromise(sql<{ count: number }>`
+      SELECT COUNT(*) AS count FROM orchestration_command_receipts WHERE command_id = ${interruptedCommand!.commandId}
+    `);
+    expect(receipts[0]?.count).toBe(0);
+    const drain = await harness.restartIngestion();
+    await drain();
+    const message = (await harness.readProjectedThread())!.messages.find(
+      (entry) => entry.id === "assistant:uncertain-image-answer",
+    )!;
+    expect(message.streaming).toBe(false);
+    expect(message.attachments?.map((entry) => entry.id)).toEqual([
+      interruptedCommand!.attachmentId,
+    ]);
+    const claimed = await runtime!.runPromise(
+      repository.findClaimedForCommand({ commandId: interruptedCommand!.commandId }),
+    );
+    expect(claimed.map((entry) => entry.attachmentId)).toEqual([interruptedCommand!.attachmentId]);
+    const config = await runtime!.runPromise(Effect.service(ServerConfig));
+    expect(fs.readFileSync(path.join(config.attachmentsDir, claimed[0]!.relativePath))).toEqual(
+      bytes,
+    );
+    const rows = await runtime!.runPromise(sql<{ count: number }>`
+      SELECT COUNT(*) AS count FROM managed_attachment_blobs WHERE owner_thread_id = 'thread-1'
+    `);
+    expect(rows[0]?.count).toBe(1);
+  });
+
+  it("replays an accepted completion without importing a file that appeared before journal acknowledgement", async () => {
+    const harness = await createHarness({ startIngestion: false, persistedStream: true });
+    const source = path.join(harness.workspaceRoot, "appeared.png");
+    const bytes = Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII=",
+      "base64",
+    );
+    const base = {
+      provider: "codex" as const,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("accepted-image-turn"),
+      itemId: asItemId("accepted-image-answer"),
+      createdAt: new Date().toISOString(),
+    };
+    const events: ReadonlyArray<ProviderRuntimeEvent> = [
+      { ...base, type: "turn.started", eventId: asEventId("accepted-image-start"), payload: {} },
+      {
+        ...base,
+        type: "content.delta",
+        eventId: asEventId("accepted-image-text"),
+        payload: { streamKind: "assistant_text", delta: "![appeared](./appeared.png)" },
+      },
+      {
+        ...base,
+        type: "item.completed",
+        eventId: asEventId("accepted-image-complete"),
+        payload: { itemType: "assistant_message", status: "completed" },
+      },
+    ];
+    for (const event of events)
+      await runtime!.runPromise(harness.runtimeEventRepository.append(event));
+    const dispatch = harness.engine.dispatch;
+    let accepted: { commandId: string; sequence: number } | undefined;
+    const lostAcknowledgement = vi
+      .spyOn(harness.engine, "dispatch")
+      .mockImplementation((command) => {
+        if (command.type !== "thread.message.assistant.complete") return dispatch(command);
+        return dispatch(command).pipe(
+          Effect.tap((result) =>
+            Effect.sync(() => {
+              expect(command.attachments).toBeUndefined();
+              accepted = { commandId: command.commandId, sequence: result.sequence };
+              fs.writeFileSync(source, bytes);
+            }),
+          ),
+          // The real Engine committed; only this runtime row's acknowledgement is lost.
+          Effect.andThen(
+            Effect.die(new Error("completion accepted before runtime acknowledgement")),
+          ),
+        );
+      });
+    try {
+      await harness.startIngestion();
+      await Effect.runPromise(Scope.close(scope!, Exit.void));
+      scope = null;
+    } finally {
+      lostAcknowledgement.mockRestore();
+    }
+    expect(accepted).toBeDefined();
+    const sql = await runtime!.runPromise(Effect.service(SqlClient.SqlClient));
+    const before = await runtime!.runPromise(sql<{ status: string; resultSequence: number }>`
+      SELECT status, result_sequence AS resultSequence FROM orchestration_command_receipts
+      WHERE command_id = ${accepted!.commandId}
+    `);
+    expect(before).toEqual([{ status: "accepted", resultSequence: accepted!.sequence }]);
+    let replayed = 0;
+    const failures: unknown[] = [];
+    const replay = vi.spyOn(harness.engine, "dispatch").mockImplementation((command) =>
+      dispatch(command).pipe(
+        Effect.tap((result) =>
+          Effect.sync(() => {
+            if (command.commandId !== accepted!.commandId) return;
+            replayed += 1;
+            expect(result.sequence).toBe(accepted!.sequence);
+            expect(
+              command.type === "thread.message.assistant.complete" && command.attachments,
+            ).toBeUndefined();
+          }),
+        ),
+        Effect.onExit((exit) =>
+          Effect.sync(() => {
+            if (exit._tag === "Failure") failures.push(exit.cause);
+          }),
+        ),
+      ),
+    );
+    try {
+      const drain = await harness.restartIngestion();
+      await drain();
+    } finally {
+      replay.mockRestore();
+    }
+    expect(replayed).toBeGreaterThan(0);
+    expect(failures).toEqual([]);
+    const ledger = await runtime!.runPromise(sql<{ count: number }>`
+      SELECT COUNT(*) AS count FROM managed_attachment_blobs WHERE owner_thread_id = 'thread-1'
+    `);
+    expect(ledger[0]?.count).toBe(0);
+    const committed = Array.from(
+      await runtime!.runPromise(Stream.runCollect(harness.engine.readEvents(0))),
+    );
+    expect(committed.filter((event) => event.commandId === accepted!.commandId)).toHaveLength(1);
+    expect(
+      await runtime!.runPromise(
+        harness.runtimeEventRepository.getConsumerCursor(PROVIDER_RUNTIME_INGESTION_CONSUMER),
+      ),
+    ).toBe(await runtime!.runPromise(harness.runtimeEventRepository.getHighWaterSequence));
+    expect((await projectedMessage(harness, "assistant:accepted-image-answer"))?.text).toBe(
+      "![appeared](./appeared.png)",
+    );
+  });
 
   it("replays a committed text batch exactly once after an uncertain append and ingestion restart", async () => {
     const harness = await createHarness({ startIngestion: false, persistedStream: true });
@@ -1121,6 +1469,90 @@ describe("ProviderRuntimeIngestion", () => {
     ).toEqual(["fingerprint-4"]);
   });
 
+  it.each(["codex", "claudeAgent"] as const)(
+    "updates one %s long-command progress row across journal pages without moving it or losing raw events",
+    async (provider) => {
+      const harness = await createHarness({ startIngestion: false });
+      const firstAt = "2026-10-06T12:00:00.000Z";
+      const rows: PersistedProviderRuntimeEvent[] = [];
+      const appendProgress = async (
+        index: number,
+        turnId = "long-command-turn",
+        lifecycleGeneration?: string,
+      ) => {
+        const row = await Effect.runPromise(
+          harness.runtimeEventRepository.append({
+            type: provider === "codex" ? "item.updated" : "tool.progress",
+            eventId: asEventId(`command-progress-${index}${lifecycleGeneration ?? ""}`),
+            provider,
+            createdAt: index === 0 ? firstAt : `2026-10-06T12:00:0${index}.000Z`,
+            threadId: asThreadId("thread-1"),
+            turnId: asTurnId(turnId),
+            ...(lifecycleGeneration ? { lifecycleGeneration } : {}),
+            ...(provider === "codex" ? { itemId: asItemId("long-command") } : {}),
+            payload:
+              provider === "codex"
+                ? {
+                    itemType: "command_execution",
+                    status: "inProgress",
+                    title: "Run tests",
+                    data: { elapsedSeconds: index },
+                  }
+                : { toolUseId: "long-command", toolName: "Bash", elapsedSeconds: index },
+          } as ProviderRuntimeEvent),
+        );
+        rows.push(row);
+        return row;
+      };
+      const first = await appendProgress(0);
+      await harness.startIngestion();
+      await harness.drain();
+      for (const index of [1, 2]) {
+        await appendProgress(index);
+        await harness.drain();
+      }
+      const activities = (await harness.readProjectedThread())!.activities.filter(
+        (entry) => entry.kind === "tool.updated",
+      );
+      expect(activities).toHaveLength(1);
+      expect(activities[0]).toMatchObject({
+        createdAt: firstAt,
+        sequence: first.sequence,
+        payload: { data: { elapsedSeconds: 2 } },
+      });
+      // A replacement runtime can reuse IDs and an identical snapshot. Neither
+      // row identity nor the dedupe fingerprint may suppress its first update.
+      await appendProgress(2, "long-command-turn", "replacement-runtime");
+      await harness.drain();
+      expect(
+        (await harness.readProjectedThread())!.activities.filter(
+          (entry) => entry.kind === "tool.updated",
+        ),
+      ).toHaveLength(2);
+      // Provider item IDs can be reused by another turn: it needs its own row.
+      await appendProgress(3, "next-command-turn");
+      await harness.drain();
+      expect(
+        (await harness.readProjectedThread())!.activities.filter(
+          (entry) => entry.kind === "tool.updated",
+        ),
+      ).toHaveLength(3);
+      const raw = await Effect.runPromise(
+        harness.runtimeEventRepository.readAfter({
+          sequenceExclusive: 0,
+          throughSequenceInclusive: rows.at(-1)!.sequence,
+          limit: 100,
+        }),
+      );
+      expect(raw.map((row) => row.event.eventId)).toEqual(rows.map((row) => row.event.eventId));
+      expect(
+        await Effect.runPromise(
+          harness.runtimeEventRepository.getConsumerCursor(PROVIDER_RUNTIME_INGESTION_CONSUMER),
+        ),
+      ).toBe(rows.at(-1)!.sequence);
+    },
+  );
+
   it("coalesces changed tool snapshots during durable replay without discarding raw journal rows", async () => {
     const harness = await createHarness({ startIngestion: false });
     const rows: PersistedProviderRuntimeEvent[] = [];
@@ -1417,6 +1849,310 @@ describe("ProviderRuntimeIngestion", () => {
       ),
     ).toBe(rows[1]!.sequence);
   });
+
+  it.each([
+    { type: "turn.completed", payload: { state: "completed" } },
+    { type: "turn.aborted", payload: { reason: "User interrupted" } },
+    { type: "session.exited", payload: { exitKind: "graceful" } },
+    { type: "session.state.changed", payload: { state: "stopped" } },
+    { type: "session.state.changed", payload: { state: "error" } },
+    { type: "runtime.error", payload: { message: "Provider stopped" } },
+  ])("shuts down an agent-booted simulator after $type $payload becomes idle", async (terminal) => {
+    const backend = new FakeDeviceBackend();
+    const manager = new DeviceManager({ backend, idleShutdownMs: 20, attachDeadlineMs: 0 });
+    try {
+      const harness = await createHarness({ deviceManager: manager });
+      const threadId = asThreadId("thread-1");
+      const turnId = asTurnId("device-turn");
+      harness.emit({
+        type: "turn.started",
+        eventId: asEventId("device-turn-started"),
+        provider: "codex",
+        threadId,
+        turnId,
+        lifecycleGeneration: "device-generation",
+        payload: {},
+        createdAt: new Date().toISOString(),
+      });
+      await harness.drain();
+      const context: ToolContext = {
+        principal: {
+          kind: "provider-session",
+          sessionKey: "device-test",
+          threadId,
+          provider: "codex",
+          turnId,
+        },
+        callerThreadId: threadId,
+        callerThreadLabel: null,
+        callerSessionKey: "device-test",
+        callerProvider: "codex",
+        callerCapabilities: new Set(["device:control"]),
+        callerTurnId: turnId,
+        assertCallerTurnActive: () => Effect.void,
+        jsonRpcRequestId: 1,
+      };
+      const boot = makeAgentGatewayDeviceTools({ manager, authorizeAction: async () => true }).find(
+        (tool) => tool.definition.name === "device_boot",
+      )!;
+      const result = await Effect.runPromise(boot.handler({ udid: "FAKE-0001" }, context));
+      expect(result.isError).not.toBe(true);
+      if (terminal.type === "session.exited" || terminal.type === "session.state.changed") {
+        const overlappingTurnId = asTurnId("device-overlapping-turn");
+        harness.emit({
+          type: "turn.started",
+          eventId: asEventId("device-overlapping-started"),
+          provider: "codex",
+          threadId,
+          turnId: overlappingTurnId,
+          lifecycleGeneration: "device-generation",
+          payload: {},
+          createdAt: new Date().toISOString(),
+        });
+        await harness.drain();
+        await manager.withAgentActivity(threadId, async () => {}, {
+          udid: "FAKE-0001",
+          turnId: overlappingTurnId,
+        });
+      }
+      await new Promise((resolve) => setTimeout(resolve, 40));
+      expect(backend.callsOfKind("shutdown")).toHaveLength(0);
+      harness.emit({
+        ...terminal,
+        eventId: asEventId("device-turn-completed"),
+        provider: "codex",
+        threadId,
+        turnId,
+        lifecycleGeneration: "device-generation",
+        createdAt: new Date().toISOString(),
+      });
+      await harness.drain();
+      await vi.waitFor(() =>
+        expect(backend.callsOfKind("shutdown")).toEqual([{ kind: "shutdown", udid: "FAKE-0001" }]),
+      );
+      expect((await manager.getThreadState(threadId)).attachedDeviceUdid).toBeNull();
+    } finally {
+      await manager.dispose();
+    }
+  });
+
+  it("releases only the exited generation's simulator turns and preserves newer work", async () => {
+    const backend = new FakeDeviceBackend();
+    const manager = new DeviceManager({ backend, idleShutdownMs: 20, attachDeadlineMs: 0 });
+    try {
+      const harness = await createHarness({ deviceManager: manager });
+      const threadId = asThreadId("thread-1");
+      for (const [turnId, generation, udid] of [
+        ["device-old-a", "old-generation", "FAKE-0001"],
+        ["device-old-b", "old-generation", "FAKE-0001"],
+        ["device-new", "new-generation", "FAKE-0002"],
+      ] as const) {
+        if (generation === "new-generation") {
+          harness.emit({
+            type: "turn.completed",
+            eventId: asEventId("device-old-a-completed"),
+            provider: "codex",
+            threadId,
+            turnId: asTurnId("device-old-a"),
+            lifecycleGeneration: "old-generation",
+            payload: { state: "completed" },
+            createdAt: new Date().toISOString(),
+          });
+          await harness.drain();
+        }
+        harness.emit({
+          type: "turn.started",
+          eventId: asEventId(`${turnId}-started`),
+          provider: "codex",
+          threadId,
+          turnId: asTurnId(turnId),
+          lifecycleGeneration: generation,
+          payload: {},
+          createdAt: new Date().toISOString(),
+        });
+        await harness.drain();
+        await manager.withAgentActivity(threadId, () => manager.boot(udid), { udid, turnId });
+      }
+      expect((await harness.readProjectedThread())?.session?.activeTurnId).toBe("device-new");
+      harness.emit({
+        type: "session.exited",
+        eventId: asEventId("device-old-session-exited"),
+        provider: "codex",
+        threadId,
+        lifecycleGeneration: "old-generation",
+        payload: { exitKind: "error" },
+        createdAt: new Date().toISOString(),
+      });
+      await harness.drain();
+      await vi.waitFor(() =>
+        expect(backend.callsOfKind("shutdown")).toEqual([{ kind: "shutdown", udid: "FAKE-0001" }]),
+      );
+      await new Promise((resolve) => setTimeout(resolve, 40));
+      expect(backend.callsOfKind("shutdown")).toHaveLength(1);
+      await manager.withAgentActivity(threadId, async () => {}, {
+        udid: "FAKE-0002",
+        turnId: "device-new-unobserved",
+      });
+      harness.emit({
+        type: "session.exited",
+        eventId: asEventId("device-new-session-exited"),
+        provider: "codex",
+        threadId,
+        lifecycleGeneration: "new-generation",
+        payload: { exitKind: "graceful" },
+        createdAt: new Date().toISOString(),
+      });
+      await harness.drain();
+      await new Promise((resolve) => setTimeout(resolve, 40));
+      expect(backend.callsOfKind("shutdown")).toHaveLength(1);
+      harness.emit({
+        type: "turn.completed",
+        eventId: asEventId("device-new-unobserved-completed"),
+        provider: "codex",
+        threadId,
+        turnId: asTurnId("device-new-unobserved"),
+        lifecycleGeneration: "new-generation",
+        payload: { state: "completed" },
+        createdAt: new Date().toISOString(),
+      });
+      await harness.drain();
+      await vi.waitFor(() =>
+        expect(backend.callsOfKind("shutdown").map((call) => call.udid)).toEqual([
+          "FAKE-0001",
+          "FAKE-0002",
+        ]),
+      );
+    } finally {
+      await manager.dispose();
+    }
+  });
+
+  it.each([
+    {
+      type: "runtime.error",
+      payload: { message: "Old turn failed" },
+      generation: "shared-generation",
+      overlapsBeforeCompletion: false,
+    },
+    {
+      type: "session.exited",
+      payload: { exitKind: "error" },
+      generation: undefined,
+      overlapsBeforeCompletion: false,
+    },
+    {
+      type: "session.exited",
+      payload: { exitKind: "error" },
+      generation: "shared-generation",
+      overlapsBeforeCompletion: true,
+    },
+    {
+      type: "session.state.changed",
+      payload: { state: "stopped" },
+      generation: undefined,
+      overlapsBeforeCompletion: true,
+    },
+    {
+      type: "session.state.changed",
+      payload: { state: "error" },
+      generation: "shared-generation",
+      overlapsBeforeCompletion: true,
+    },
+  ])(
+    "preserves newer simulator turns after delayed $type (generation $generation, overlap $overlapsBeforeCompletion)",
+    async (terminal) => {
+      const backend = new FakeDeviceBackend();
+      const manager = new DeviceManager({ backend, idleShutdownMs: 20, attachDeadlineMs: 0 });
+      try {
+        const harness = await createHarness({ deviceManager: manager });
+        const threadId = asThreadId("thread-1");
+        const generation = terminal.generation;
+        harness.emit({
+          type: "turn.started",
+          eventId: asEventId("device-earlier-started"),
+          provider: "codex",
+          threadId,
+          turnId: asTurnId("device-earlier"),
+          lifecycleGeneration: generation,
+          payload: {},
+          createdAt: new Date().toISOString(),
+        });
+        await harness.drain();
+        const completeEarlier = async () => {
+          harness.emit({
+            type: "turn.completed",
+            eventId: asEventId("device-earlier-completed"),
+            provider: "codex",
+            threadId,
+            turnId: asTurnId("device-earlier"),
+            lifecycleGeneration: generation,
+            payload: { state: "completed" },
+            createdAt: new Date().toISOString(),
+          });
+          await harness.drain();
+        };
+        if (!terminal.overlapsBeforeCompletion) await completeEarlier();
+        for (const turnId of ["device-current-a", "device-current-b"]) {
+          harness.emit({
+            type: "turn.started",
+            eventId: asEventId(`${turnId}-started`),
+            provider: "codex",
+            threadId,
+            turnId: asTurnId(turnId),
+            lifecycleGeneration: generation,
+            payload: {},
+            createdAt: new Date().toISOString(),
+          });
+          await harness.drain();
+          await manager.withAgentActivity(threadId, () => manager.boot("FAKE-0001"), {
+            udid: "FAKE-0001",
+            turnId,
+          });
+        }
+        if (terminal.overlapsBeforeCompletion) await completeEarlier();
+        expect((await harness.readProjectedThread())?.session?.activeTurnId).toBe(
+          terminal.overlapsBeforeCompletion ? null : "device-current-a",
+        );
+        harness.emit({
+          type: terminal.type,
+          payload: terminal.payload,
+          eventId: asEventId("device-earlier-delayed-error"),
+          provider: "codex",
+          threadId,
+          turnId: asTurnId("device-earlier"),
+          lifecycleGeneration: generation,
+          createdAt: new Date().toISOString(),
+        });
+        await harness.drain();
+        await new Promise((resolve) => setTimeout(resolve, 40));
+        expect(backend.callsOfKind("shutdown")).toHaveLength(0);
+        // Continuing the overlapping turn must retain its lease, not a terminal replay guard.
+        await manager.withAgentActivity(threadId, () => manager.tap("FAKE-0001", 1, 1), {
+          udid: "FAKE-0001",
+          turnId: "device-current-a",
+        });
+        await new Promise((resolve) => setTimeout(resolve, 40));
+        expect(backend.callsOfKind("shutdown")).toHaveLength(0);
+        harness.emit({
+          type: "session.exited",
+          payload: { exitKind: "graceful" },
+          eventId: asEventId("device-current-session-exited"),
+          provider: "codex",
+          threadId,
+          lifecycleGeneration: generation,
+          createdAt: new Date().toISOString(),
+        });
+        await harness.drain();
+        await vi.waitFor(() =>
+          expect(backend.callsOfKind("shutdown")).toEqual([
+            { kind: "shutdown", udid: "FAKE-0001" },
+          ]),
+        );
+      } finally {
+        await manager.dispose();
+      }
+    },
+  );
 
   it.each([
     { type: "turn.completed", payload: { state: "completed" } },
@@ -7481,7 +8217,8 @@ describe("ProviderRuntimeIngestion", () => {
     expect(Array.isArray(taskPayload?.tasks)).toBe(true);
 
     const toolUpdate = thread.activities.find(
-      (activity: ProviderRuntimeTestActivity) => activity.id === "evt-item-updated",
+      (activity: ProviderRuntimeTestActivity) =>
+        activity.kind === "tool.updated" && activity.turnId === "turn-p1",
     );
     const toolUpdatePayload =
       toolUpdate?.payload && typeof toolUpdate.payload === "object"
@@ -7586,13 +8323,61 @@ describe("ProviderRuntimeIngestion", () => {
     expect(checkpoints).toHaveLength(1);
     expect(checkpoints[0]).toMatchObject({
       checkpointTurnCount: 1,
-      checkpointRef: "provider-diff:evt-turn-diff-first",
+      checkpointRef: "provider-diff:evt-turn-diff-second",
       status: "missing",
       files: [
         { path: "file.txt", kind: "modified", additions: 2, deletions: 1 },
         { path: "src/next.ts", kind: "added", additions: 1, deletions: 0 },
       ],
     });
+  });
+
+  it("applies only the newest turn diff of a replayed page", async () => {
+    const harness = await createHarness({ startIngestion: false });
+    const rows: PersistedProviderRuntimeEvent[] = [];
+    const append = async (event: ProviderRuntimeEvent) =>
+      rows.push(await Effect.runPromise(harness.runtimeEventRepository.append(event)));
+    for (let index = 0; index < 3; index += 1) {
+      await append({
+        type: "turn.diff.updated",
+        eventId: asEventId(`diff-burst-${index}`),
+        provider: "codex",
+        createdAt: "2026-10-06T12:00:00.000Z",
+        threadId: asThreadId("thread-1"),
+        turnId: asTurnId("turn-diff-burst"),
+        payload: { unifiedDiff: singleLineFileDiff(`file-${index}.txt`) },
+      } as ProviderRuntimeEvent);
+      // The thread's other events between patches do not close the diff run.
+      await append({
+        type: "runtime.warning",
+        eventId: asEventId(`diff-burst-warning-${index}`),
+        provider: "codex",
+        createdAt: "2026-10-06T12:00:00.000Z",
+        threadId: asThreadId("thread-1"),
+        turnId: asTurnId("turn-diff-burst"),
+        payload: { message: `Between patches ${index}` },
+      } as ProviderRuntimeEvent);
+    }
+    await harness.startIngestion();
+    await harness.drain();
+    const thread = await waitForThread(harness.engine, (entry) =>
+      entry.checkpoints.some((checkpoint) => checkpoint.turnId === "turn-diff-burst"),
+    );
+    // Superseded snapshots never ran: the placeholder is keyed by the survivor.
+    expect(
+      thread.checkpoints.filter((checkpoint) => checkpoint.turnId === "turn-diff-burst"),
+    ).toMatchObject([
+      {
+        checkpointRef: "provider-diff:diff-burst-2",
+        status: "missing",
+        files: [{ path: "file-2.txt", kind: "modified", additions: 1, deletions: 1 }],
+      },
+    ]);
+    expect(
+      await Effect.runPromise(
+        harness.runtimeEventRepository.getConsumerCursor(PROVIDER_RUNTIME_INGESTION_CONSUMER),
+      ),
+    ).toBe(rows.at(-1)!.sequence);
   });
 
   it("does not parse live diff files for providers without patch capability", async () => {
@@ -8054,6 +8839,154 @@ describe("ProviderRuntimeIngestion", () => {
     ).toBe(false);
   });
 
+  it("persists one Devin launch identity across native replay and repeated local session stops", async () => {
+    const harness = await createHarness();
+    const launchTurn = asTurnId("original-devin-launch");
+    const threadId = asThreadId("thread-1");
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.activity.append",
+        commandId: CommandId.makeUnsafe("persisted-devin-launch"),
+        threadId,
+        createdAt: new Date().toISOString(),
+        activity: {
+          id: EventId.makeUnsafe("persisted-devin-launch"),
+          kind: "task.started",
+          tone: "info",
+          summary: "subagent task started",
+          payload: {
+            taskId: "live-child",
+            taskType: "subagent",
+            toolUseId: "live-child-launch",
+            interactionMode: "plan",
+            detail: "live-child",
+          },
+          turnId: launchTurn,
+          createdAt: new Date().toISOString(),
+        },
+      }),
+    );
+    const adapterLayer = makeDevinAdapterLive(
+      {},
+      {
+        makeAcpRuntime: (input) =>
+          Effect.gen(function* () {
+            const context = yield* Layer.build(
+              AcpSessionRuntime.layer({
+                ...input,
+                spawn: {
+                  command: process.execPath,
+                  args: [
+                    fileURLToPath(new URL("../../../scripts/acp-mock-agent.ts", import.meta.url)),
+                  ],
+                  env: { SYNARA_ACP_DEVIN_TASK_REPLAY: "1" },
+                },
+                authPolicy: "on-demand",
+              }).pipe(
+                Layer.provide(
+                  Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, input.childProcessSpawner),
+                ),
+              ),
+            );
+            return ServiceMap.getUnsafe(context, AcpSessionRuntime);
+          }),
+      },
+    ).pipe(
+      Layer.provideMerge(
+        ServerConfig.layerTest(process.cwd(), { prefix: "devin-ingestion-replay-" }),
+      ),
+      Layer.provideMerge(NodeServices.layer),
+    );
+    const adapterRuntime = ManagedRuntime.make(adapterLayer);
+    const consumerScope = await Effect.runPromise(Scope.make("sequential"));
+    const adapter = await adapterRuntime.runPromise(Effect.service(DevinAdapter));
+    await Effect.runPromise(
+      adapter.streamEvents.pipe(
+        Stream.runForEach((event) => Effect.sync(() => harness.emit(event))),
+        Effect.forkIn(consumerScope),
+      ),
+    );
+    const start = () =>
+      adapter.startSession({
+        provider: "devin",
+        threadId,
+        runtimeMode: "full-access",
+        resumeCursor: { schemaVersion: 1, sessionId: "mock-session-1" },
+        pendingTaskReconciliations: [
+          {
+            taskId: RuntimeTaskId.makeUnsafe("live-child"),
+            turnId: launchTurn,
+            toolUseId: "live-child-launch",
+            interactionMode: "plan",
+          },
+        ],
+      });
+    try {
+      for (const _attempt of [1, 2]) {
+        await adapterRuntime.runPromise(start());
+        const turn = await adapterRuntime.runPromise(
+          adapter.sendTurn({ threadId, input: "root", attachments: [] }),
+        );
+        await waitForThread(
+          harness.engine,
+          (thread) =>
+            thread.latestTurn?.turnId === turn.turnId && thread.latestTurn?.state === "completed",
+        );
+        await adapterRuntime.runPromise(adapter.stopSession(threadId));
+        await waitForThread(harness.engine, (thread) => {
+          const updates = thread.activities.filter(
+            (activity: ProviderRuntimeTestActivity) =>
+              activity.kind.startsWith("tool.") &&
+              JSON.stringify(activity.payload).includes('"live-child"'),
+          );
+          return JSON.stringify(updates.at(-1)?.payload).includes('"stopped"');
+        });
+      }
+      await adapterRuntime.runPromise(start());
+      const parent = await waitForThread(harness.engine, (thread) => {
+        const updates = thread.activities.filter(
+          (activity: ProviderRuntimeTestActivity) =>
+            activity.kind === "task.updated" &&
+            (activity.payload as { taskId?: string; status?: string }).taskId === "live-child" &&
+            (activity.payload as { status?: string }).status === "running",
+        );
+        return updates.length === 3;
+      });
+      await harness.drain();
+      const projected = await harness.readProjectedThread();
+      const items = projected!.activities.filter((activity) => {
+        const payload = activity.payload as { itemType?: string; data?: { agentId?: string } };
+        return (
+          payload.itemType === "collab_agent_tool_call" && payload.data?.agentId === "live-child"
+        );
+      });
+      expect(items.length).toBeGreaterThanOrEqual(5);
+      for (const item of items) {
+        expect(item.turnId).toBe(launchTurn);
+        expect(item.payload).toMatchObject({ data: { toolCallId: "live-child-launch" } });
+      }
+      expect(items.at(-1)?.payload).toMatchObject({
+        data: { agentsStates: { "live-child": { status: "running" } } },
+      });
+      const childId = asThreadId(`subagent:${threadId}:live-child`);
+      const child = await harness.readProjectedThread(childId);
+      expect(child).toMatchObject({
+        sourceThreadId: threadId,
+        sourceTurnId: launchTurn,
+        subagentAgentId: "live-child",
+      });
+      expect(
+        parent.activities.filter(
+          (activity: ProviderRuntimeTestActivity) => activity.kind === "task.started",
+        ),
+      ).toMatchObject([{ id: "persisted-devin-launch", turnId: launchTurn }]);
+    } finally {
+      await adapterRuntime.runPromise(adapter.stopSession(threadId));
+      await Effect.runPromise(Scope.close(consumerScope, Exit.void));
+      await adapterRuntime.dispose();
+    }
+  });
+
   it("preserves the parent provider instance when a subagent model is specialized", async () => {
     const harness = await createHarness();
     const now = new Date().toISOString();
@@ -8151,6 +9084,68 @@ describe("ProviderRuntimeIngestion", () => {
       model: "gpt-5.1-codex",
     });
     expect(childThread.session?.providerInstanceId).toBe("codex_work");
+  });
+
+  it("updates a native subagent child model from its resolved model without touching the parent", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.meta.update",
+        commandId: CommandId.makeUnsafe("cmd-thread-resolved-model"),
+        threadId: asThreadId("thread-1"),
+        modelSelection: {
+          provider: "claudeAgent",
+          model: "claude-opus-5-5",
+        },
+      }),
+    );
+
+    const subagentRefs = {
+      providerThreadId: "child-resolved-model",
+      providerParentThreadId: "parent-provider-1",
+    };
+    harness.emit({
+      type: "turn.started",
+      eventId: asEventId("evt-child-resolved-turn-started"),
+      provider: "claudeAgent",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-child-resolved"),
+      providerRefs: subagentRefs,
+      payload: {},
+    });
+    await waitForThread(
+      harness.engine,
+      (entry) => entry.parentThreadId === "thread-1",
+      2000,
+      asThreadId("subagent:thread-1:child-resolved-model"),
+    );
+
+    harness.emit({
+      type: "thread.metadata.updated",
+      eventId: asEventId("evt-child-resolved-model"),
+      provider: "claudeAgent",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      providerRefs: subagentRefs,
+      payload: { metadata: { model: "claude-haiku-5-5" } },
+    });
+
+    const childThread = await waitForThread(
+      harness.engine,
+      (entry) => entry.modelSelection.model === "claude-haiku-5-5",
+      2000,
+      asThreadId("subagent:thread-1:child-resolved-model"),
+    );
+    expect(childThread.modelSelection.provider).toBe("claudeAgent");
+    expect(childThread.modelSelection.instanceId).toBe(
+      (await waitForThread(harness.engine, (entry) => entry.id === "thread-1")).modelSelection
+        .instanceId,
+    );
+    const parentThread = await waitForThread(harness.engine, (entry) => entry.id === "thread-1");
+    expect(parentThread.modelSelection.model).toBe("claude-opus-5-5");
   });
 
   it("handles collab receiver and child provider refs on the same event without duplicate thread creation", async () => {

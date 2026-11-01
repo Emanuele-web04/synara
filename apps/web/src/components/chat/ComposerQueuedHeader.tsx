@@ -26,6 +26,7 @@ import {
 } from "./composerStackedPanelStyles";
 import { COMPOSER_INLINE_ACTION_PILL_CLASS_NAME } from "./composerPickerStyles";
 import { QueuedComposerActions } from "./QueuedComposerActions";
+import { useTranslation } from "~/i18n";
 
 const PAUSE_DETAIL_BY_REASON: Record<QueuedComposerPauseReason, string> = {
   stopped: "Paused after you stopped the turn",
@@ -44,6 +45,8 @@ function QueuedComposerPausedNotice({
   onResume: () => void;
   onEdit: () => void;
 }) {
+  const { t } = useTranslation();
+
   return (
     <ComposerStackedPanelRow
       role="status"
@@ -61,17 +64,17 @@ function QueuedComposerPausedNotice({
           }
         />
         <span className="min-w-0 truncate text-ui-sm text-muted-foreground">
-          <span className="font-medium text-foreground">Queue paused</span>
+          <span className="font-medium text-foreground">{t("chat:queuePaused")}</span>
           <span aria-hidden> · </span>
           {PAUSE_DETAIL_BY_REASON[pause.reason]}
         </span>
       </ComposerStackedPanelRowMain>
       <div className="flex shrink-0 items-center gap-1.5">
         <button type="button" className={PAUSE_ACTION_CLASS_NAME} onClick={onResume}>
-          Resume
+          {t("chat:detail_resume")}
         </button>
         <button type="button" className={PAUSE_ACTION_CLASS_NAME} onClick={onEdit}>
-          Edit
+          {t("git:profile_edit")}
         </button>
       </div>
     </ComposerStackedPanelRow>
@@ -121,7 +124,6 @@ interface ComposerQueuedHeaderProps {
   onEditPaused?: () => void;
   /** Workspace root used to resolve local file links/mentions inside the parsed preview. */
   cwd?: string | undefined;
-  attachedToPrevious?: boolean;
 }
 
 export const ComposerQueuedHeader = function ComposerQueuedHeader({
@@ -133,15 +135,13 @@ export const ComposerQueuedHeader = function ComposerQueuedHeader({
   onResume,
   onEditPaused,
   cwd,
-  attachedToPrevious: attachedToPreviousProp,
 }: ComposerQueuedHeaderProps) {
-  const attachedToPrevious = attachedToPreviousProp ?? false;
   if (queuedTurns.length === 0) {
     return null;
   }
 
   return (
-    <ComposerStackedPanel attachedToPrevious={attachedToPrevious} className="flex flex-col">
+    <ComposerStackedPanel className="flex flex-col">
       {pause && onResume && onEditPaused ? (
         <QueuedComposerPausedNotice pause={pause} onResume={onResume} onEdit={onEditPaused} />
       ) : null}

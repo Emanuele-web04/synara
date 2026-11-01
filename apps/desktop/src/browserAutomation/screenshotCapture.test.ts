@@ -48,7 +48,10 @@ const createRuntime = (
     return {};
   });
   const webContents = {
-    isDestroyed: () => false,
+    isDestroyed: vi.fn(() => false),
+    getType: vi.fn(() => "browserView"),
+    beginFrameSubscription: vi.fn(),
+    endFrameSubscription: vi.fn(),
     getURL: () => "https://example.test/page",
     capturePage,
     debugger: { isAttached: () => true, attach: vi.fn(), sendCommand },
@@ -60,12 +63,14 @@ const createRuntime = (
       webContents,
     } satisfies BrowserAutomationVisibleRuntime,
     sendCommand,
+    beginFrameSubscription: webContents.beginFrameSubscription,
+    endFrameSubscription: webContents.endFrameSubscription,
   };
 };
 
 describe("browser screenshot capture", () => {
   it("returns a bounded viewport PNG sidecar from the exact guest", async () => {
-    const { runtime } = createRuntime();
+    const { runtime, beginFrameSubscription, endFrameSubscription } = createRuntime();
 
     await expect(captureBrowserScreenshot(runtime, { fullPage: false })).resolves.toMatchObject({
       structuredContent: {
@@ -77,6 +82,8 @@ describe("browser screenshot capture", () => {
       },
       image: { mimeType: "image/png", width: 1_024, height: 768 },
     });
+    expect(beginFrameSubscription).not.toHaveBeenCalled();
+    expect(endFrameSubscription).not.toHaveBeenCalled();
   });
 
   it("caps full-page CSS dimensions and reports clipping", async () => {
@@ -111,8 +118,11 @@ describe("browser screenshot capture", () => {
   });
 
   it("uses CSS metrics instead of Retina device pixels for the clip", async () => {
-    const { runtime, sendCommand } = createRuntime();
+    const { runtime, sendCommand, beginFrameSubscription, endFrameSubscription } = createRuntime();
+    vi.mocked(runtime.webContents.getType).mockReturnValue("webview");
     await captureBrowserScreenshot(runtime, { fullPage: true });
+    expect(beginFrameSubscription).not.toHaveBeenCalled();
+    expect(endFrameSubscription).not.toHaveBeenCalled();
     expect(sendCommand).toHaveBeenCalledWith(
       "Page.captureScreenshot",
       expect.objectContaining({
@@ -141,4 +151,54 @@ describe("browser screenshot capture", () => {
       }),
     );
   });
+  it.each(["completed", "failed", "cancelled", "destroyed"] as const)(
+    "releases native capture frames on %s while retaining the pending-command drain",
+    async (outcome) => {
+      const { runtime, sendCommand, beginFrameSubscription, endFrameSubscription } =
+        createRuntime();
+      const controller = new AbortController();
+      let resolve!: (value: { data: string }) => void;
+      let reject!: (error: Error) => void;
+      sendCommand
+        .mockImplementationOnce(async () => ({
+          cssContentSize: { width: 1_500, height: 4_000 },
+          contentSize: { width: 1_500, height: 4_000 },
+        }))
+        .mockImplementationOnce(
+          () =>
+            new Promise<{ data: string }>((res, rej) => {
+              resolve = res;
+              reject = rej;
+            }),
+        );
+      let settled = false;
+      const capture = captureBrowserScreenshot(runtime, { fullPage: true }, controller.signal)
+        .then(
+          (value) => ({ value }),
+          (error: unknown) => ({ error }),
+        )
+        .finally(() => {
+          settled = true;
+        });
+      await vi.waitFor(() =>
+        expect(sendCommand).toHaveBeenCalledWith("Page.captureScreenshot", expect.any(Object)),
+      );
+      expect(beginFrameSubscription).toHaveBeenCalledExactlyOnceWith(true, expect.any(Function));
+      const failure = new Error(outcome);
+      if (outcome === "cancelled") {
+        controller.abort(failure);
+        expect(endFrameSubscription).toHaveBeenCalledTimes(1);
+        await new Promise((nextTurn) => setImmediate(nextTurn));
+        expect(settled).toBe(false);
+      }
+      if (outcome === "destroyed") vi.mocked(runtime.webContents.isDestroyed).mockReturnValue(true);
+      if (outcome === "failed" || outcome === "destroyed") reject(failure);
+      else resolve({ data: png(1_500, 4_000).toString("base64") });
+      const result = await capture;
+      if (outcome === "completed") expect(result).toHaveProperty("value.image.width", 1_500);
+      else expect(result).toHaveProperty("error");
+      if (outcome === "cancelled") expect(result).toEqual({ error: failure });
+      expect(endFrameSubscription).toHaveBeenCalledTimes(outcome === "destroyed" ? 0 : 1);
+    },
+  );
 });

@@ -51,6 +51,8 @@ export type ProjectScript = ContractProjectScript;
 
 export interface ChatImageAttachment {
   type: "image";
+  /** Decoded source alias supplied by the host for inline assistant images. */
+  sourcePath?: string;
   id: string;
   name: string;
   mimeType: string;

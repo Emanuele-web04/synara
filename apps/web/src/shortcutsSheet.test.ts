@@ -27,6 +27,7 @@ describe("buildShortcutSheetSections", () => {
       ["thread.archive", "Archive thread", "⌥⇧⌘A"],
       ["thread.snooze", "Snooze thread", "⌥⇧⌘S"],
       ["thread.markUnread", "Mark thread unread", "⌥⇧⌘U"],
+      ["chat.attention.next", "Next chat needing attention", "⌥⌘A"],
     ] as const) {
       expect(entries.find((entry) => entry.command === command)).toMatchObject({
         label,
@@ -158,6 +159,40 @@ describe("buildShortcutSheetSections", () => {
     ).toBe(true);
     expect(sections[1]?.title).toBe("In workspace mode");
     expect(sections[2]?.entries[0]?.shortcutLabel).toBe("⌘R");
+  });
+
+  it("groups the shipped code editor shortcuts in their own section", () => {
+    const sections = buildShortcutSheetSections({
+      keybindings: [],
+      projectScripts: [],
+      platform: "MacIntel",
+      context: { terminalFocus: false, terminalOpen: false, terminalWorkspaceOpen: false },
+    });
+
+    const editorSection = sections.find((section) => section.id === "code-editor");
+    expect(editorSection?.title).toBe("Code editor");
+    // Go to symbol, Go to line and Show problems ship unassigned, so they are not listed until bound.
+    expect(
+      editorSection?.entries.map((entry) => [entry.command, entry.label, entry.shortcutLabel]),
+    ).toEqual([
+      ["editor.commands", "Editor commands", "F1"],
+      ["editor.rename", "Rename symbol", "F2"],
+      ["editor.goToDefinition", "Go to definition", "F12"],
+      ["editor.findReferences", "Find references", "⇧F12"],
+      ["editor.quickFix", "Quick fix", "⌘."],
+      ["editor.debug.start", "Start or continue debugging", "F5"],
+      ["editor.debug.stop", "Stop debugging", "⇧F5"],
+      ["editor.debug.toggleBreakpoint", "Toggle breakpoint", "F9"],
+      ["editor.debug.stepOver", "Step over", "F10"],
+      ["editor.debug.stepInto", "Step into", "F11"],
+      ["editor.debug.stepOut", "Step out", "⇧F11"],
+    ]);
+    expect(
+      sections
+        .filter((section) => section.id !== "code-editor")
+        .flatMap((section) => section.entries)
+        .some((entry) => editorSection?.entries.some((editor) => editor.id === entry.id)),
+    ).toBe(false);
   });
 
   it("separates macOS workspace tabs from thread jumps while the workspace is open", () => {

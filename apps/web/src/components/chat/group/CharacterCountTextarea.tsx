@@ -1,4 +1,5 @@
 import type { ComponentProps } from "react";
+import { useTranslation } from "~/i18n";
 
 import { Textarea } from "~/components/ui/textarea";
 import { cn } from "~/lib/utils";
@@ -14,6 +15,7 @@ export function CharacterCountTextarea({
   readonly maxChars: number;
   readonly helper?: string;
 }) {
+  const { formatLocale } = useTranslation();
   const value = typeof props.value === "string" ? props.value : "";
   const overLimit = value.length > maxChars;
   return (
@@ -32,7 +34,7 @@ export function CharacterCountTextarea({
             overLimit ? "text-destructive" : "text-muted-foreground",
           )}
         >
-          {formatCharacterCount(value, maxChars)}
+          {formatCharacterCount(value, maxChars, formatLocale)}
         </p>
       </div>
     </div>

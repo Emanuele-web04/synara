@@ -17,7 +17,11 @@ import {
   type ProcessTreeKiller,
   type TerminalKillSignal,
 } from "./processTreeController";
-import { createWindowsTeardownProcessSnapshotObserver } from "./windowsProcessSnapshot";
+import {
+  createPreparedWindowsTeardownProcessSnapshotObserver,
+  createWindowsTeardownProcessSnapshotObserver,
+  type TeardownProcessChildrenSnapshotObserver,
+} from "./windowsProcessSnapshot";
 
 const DEFAULT_TERM_GRACE_MS = 1_500;
 const DEFAULT_FORCE_EXIT_MS = 1_500;
@@ -58,6 +62,8 @@ export interface SupervisedProcessTeardownResult {
 
 export interface SupervisedProcessTeardownDependencies {
   readonly platform: NodeJS.Platform;
+  /** Borrowed from the runtime owner, which disposes it after teardown settles. */
+  readonly windowsProcessSnapshotObserver: TeardownProcessChildrenSnapshotObserver;
   readonly processTreeKiller: ProcessTreeKiller;
   readonly captureProcessTree: (rootPid: number) => Promise<CapturedProcessTree>;
   readonly inspectProcessTree: (
@@ -67,6 +73,49 @@ export interface SupervisedProcessTeardownDependencies {
   readonly isRootRunning: (rootPid: number) => Promise<boolean>;
   readonly now: () => number;
   readonly sleep: (milliseconds: number) => Promise<void>;
+}
+
+export interface ProviderProcessTeardownPreparationOptions {
+  readonly teardownProcessTree?: typeof teardownProviderProcessTree;
+  readonly createWindowsTeardownObserver?: () => TeardownProcessChildrenSnapshotObserver;
+}
+
+/** Owns platform preparation before process spawn until its teardown settles. */
+export function prepareProviderProcessTeardown(
+  options: ProviderProcessTeardownPreparationOptions = {},
+  preparationTimeoutMs?: number,
+): {
+  readonly teardownProcessTree: typeof teardownProviderProcessTree;
+  readonly waitUntilReady?: () => Promise<boolean>;
+  readonly dispose: () => void;
+} {
+  // Injected teardown stays isolated unless its caller also supplies an
+  // observer. Production Windows runtimes retain one prepared worker; other
+  // platforms have no observer to start or dispose.
+  const windowsObserver =
+    process.platform === "win32" &&
+    (options.teardownProcessTree === undefined ||
+      options.createWindowsTeardownObserver !== undefined)
+      ? options.createWindowsTeardownObserver
+        ? options.createWindowsTeardownObserver()
+        : createPreparedWindowsTeardownProcessSnapshotObserver(
+            preparationTimeoutMs !== undefined ? { preparationTimeoutMs } : {},
+          )
+      : undefined;
+  const teardown = options.teardownProcessTree ?? teardownProviderProcessTree;
+  const waitUntilReady = windowsObserver?.waitUntilReady?.bind(windowsObserver);
+  let disposed = false;
+  return {
+    ...(waitUntilReady ? { waitUntilReady } : {}),
+    teardownProcessTree: windowsObserver
+      ? (input) => teardown(input, { windowsProcessSnapshotObserver: windowsObserver })
+      : teardown,
+    dispose: () => {
+      if (disposed) return;
+      disposed = true;
+      windowsObserver?.dispose();
+    },
+  };
 }
 
 export class ProviderProcessExitUnprovenError extends Error {
@@ -244,7 +293,8 @@ export async function teardownProviderProcessTree(
     dependencies.captureProcessTree === undefined &&
     dependencies.inspectProcessTree === undefined &&
     dependencies.processTreeKiller === undefined
-      ? createWindowsTeardownProcessSnapshotObserver()
+      ? (dependencies.windowsProcessSnapshotObserver ??
+        createWindowsTeardownProcessSnapshotObserver())
       : null;
   const captureTree =
     dependencies.captureProcessTree ??
@@ -431,6 +481,6 @@ export async function teardownProviderProcessTree(
       captureComplete: tree.captureComplete !== false,
     });
   } finally {
-    windowsObserver?.dispose();
+    if (windowsObserver !== dependencies.windowsProcessSnapshotObserver) windowsObserver?.dispose();
   }
 }

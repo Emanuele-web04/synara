@@ -16,6 +16,7 @@ import {
 import { cn } from "~/lib/utils";
 import { DiffStat } from "./DiffStatLabel";
 import { FileEntryIcon } from "./FileEntryIcon";
+import { useTranslation } from "~/i18n";
 
 function stripPatchPathPrefix(path: string): string {
   return path.startsWith("a/") || path.startsWith("b/") ? path.slice(2) : path;
@@ -27,6 +28,8 @@ export const FileDiffHeader = function FileDiffHeader(props: {
   /** Optional trailing chrome (file-actions menu, collapse chevron, etc.). */
   trailing?: ReactNode;
 }) {
+  const { t } = useTranslation();
+
   const filePath = resolveFileDiffPath(props.fileDiff);
   const { dir, name } = splitRepoRelativePath(filePath);
   const changeType = props.fileDiff.type;
@@ -46,7 +49,7 @@ export const FileDiffHeader = function FileDiffHeader(props: {
         "font-system-ui flex w-full min-w-0 items-center gap-2 px-2.5 py-1.5",
         "text-ui text-foreground",
       )}
-      title={prevPath ? `${prevPath} → ${filePath}` : filePath}
+      title={prevPath ? t("chat:symbol9", { value0: prevPath, value1: filePath }) : filePath}
     >
       <span className="inline-flex size-4 shrink-0 items-center justify-center text-muted-foreground/60">
         <FileEntryIcon

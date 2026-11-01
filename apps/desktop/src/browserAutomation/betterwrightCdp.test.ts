@@ -126,6 +126,8 @@ describe("Betterwright target boundary", () => {
     expect(drained).toBe(false);
     focused(true);
     await Promise.all([input, disposal]);
+    // Guest routing uses scoped DOM focus; native focus would only raise the window.
+    expect(f.contents.focus).not.toHaveBeenCalled();
     expect(host.executeJavaScript).toHaveBeenCalledTimes(2);
     expect(
       f.debuggerApi.sendCommand.mock.calls.some(([method]) => method.startsWith("Input.")),
@@ -133,7 +135,7 @@ describe("Betterwright target boundary", () => {
   });
 
   it.each([false, true])(
-    "serializes native focus across targets and skips revoked queued work (%s)",
+    "serializes native input across targets without taking focus and skips revoked queued work (%s)",
     async (cancelQueued) => {
       const first = fixture([], "first-backend");
       const second = fixture([], "second-backend");
@@ -155,13 +157,13 @@ describe("Betterwright target boundary", () => {
       let finish!: (value: {}) => void;
       first.debuggerApi.sendCommand.mockImplementation((method) => {
         if (method !== "Input.insertText") return Promise.resolve({});
-        expect(focusState.current).toBe(first.contents);
+        expect(focusState.current).toBe(host);
         return new Promise((resolve) => {
           finish = resolve;
         });
       });
       second.debuggerApi.sendCommand.mockImplementation(async (method) => {
-        if (method === "Input.insertText") expect(focusState.current).toBe(second.contents);
+        if (method === "Input.insertText") expect(focusState.current).toBe(host);
         return {};
       });
       const a = first.target.receive({
@@ -178,13 +180,19 @@ describe("Betterwright target boundary", () => {
         params: { text: "second" },
       });
       await Promise.resolve();
-      expect(second.contents.focus).not.toHaveBeenCalled();
-      expect(focusState.current).toBe(first.contents);
+      expect(
+        second.debuggerApi.sendCommand.mock.calls.some(([method]) => method === "Input.insertText"),
+      ).toBe(false);
       if (cancelQueued) await second.target.dispose(false);
       finish({});
       await Promise.all([a, b]);
       expect(focusState.current).toBe(host);
-      expect(second.contents.focus).toHaveBeenCalledTimes(cancelQueued ? 0 : 1);
+      expect(host.focus).not.toHaveBeenCalled();
+      expect(first.contents.focus).not.toHaveBeenCalled();
+      expect(second.contents.focus).not.toHaveBeenCalled();
+      expect(
+        second.debuggerApi.sendCommand.mock.calls.some(([method]) => method === "Input.insertText"),
+      ).toBe(!cancelQueued);
       if (cancelQueued) {
         expect(second.messages.find((message) => message.id === 2)).toHaveProperty("error");
         expect(
@@ -198,47 +206,73 @@ describe("Betterwright target boundary", () => {
     },
   );
 
-  it.each(["Input.insertText", "Input.dispatchKeyEvent"])(
-    "scopes %s to the guest and restores the host focus afterward",
-    async (method) => {
-      const f = fixture();
-      const host = {
-        isDestroyed: () => false,
-        focus: vi.fn(() => {
-          focusState.current = host as unknown as WebContents;
-        }),
-      };
-      focusState.current = host as unknown as WebContents;
-      await f.target.receive({
-        id: 1,
-        method: "Target.attachToTarget",
-        params: { targetId: f.target.targetId },
-      });
-      const sessionId = (f.messages[0]!.result as { sessionId: string }).sessionId;
-      f.debuggerApi.sendCommand.mockImplementation(async () => {
-        expect(focusState.current).toBe(f.contents);
-        return {};
-      });
-      await f.target.receive({
-        id: 2,
-        sessionId,
-        method,
-        params: { type: "keyDown", key: "a", text: "a" },
-      });
-      expect(f.contents.focus).toHaveBeenCalledOnce();
-      expect(host.focus).toHaveBeenCalledOnce();
+  // A background agent must not pull keyboard focus (or Synara's window) away
+  // from wherever the user is typing.
+  it.each([
+    ["Input.insertText", { text: "a" }],
+    ["Input.dispatchKeyEvent", { type: "keyDown", key: "a", text: "a" }],
+    ["Input.dispatchMouseEvent", { type: "mousePressed", x: 10, y: 10, button: "left" }],
+  ])("delivers %s to a native page without taking the user's focus", async (method, params) => {
+    const f = fixture();
+    const host = { isDestroyed: () => false, focus: vi.fn() };
+    focusState.current = host as unknown as WebContents;
+    await f.target.receive({
+      id: 1,
+      method: "Target.attachToTarget",
+      params: { targetId: f.target.targetId },
+    });
+    const sessionId = (f.messages[0]!.result as { sessionId: string }).sessionId;
+    f.debuggerApi.sendCommand.mockImplementation(async () => {
       expect(focusState.current).toBe(host);
-      f.debuggerApi.sendCommand.mockResolvedValue({});
-      await f.target.dispose(false);
-    },
-  );
+      return {};
+    });
+    await f.target.receive({ id: 2, sessionId, method, params });
+    expect(f.debuggerApi.sendCommand).toHaveBeenCalledWith(method, params, undefined);
+    expect(f.contents.focus).not.toHaveBeenCalled();
+    expect(host.focus).not.toHaveBeenCalled();
+    expect(focusState.current).toBe(host);
+    f.debuggerApi.sendCommand.mockResolvedValue({});
+    await f.target.dispose(false);
+  });
 
-  it.each(["user moved focus", "host destroyed", "dispatch failed"])(
-    "cleans up keyboard focus safely when %s",
-    async (outcome) => {
+  it.each([
+    "restored",
+    "user moved focus",
+    "host destroyed",
+    "dispatch failed",
+    "human revoked lease",
+  ])("restores only active command-owned input focus (%s)", async (outcome) => {
+    const f = fixture();
+    let destroyed = false;
+    const host = { isDestroyed: () => destroyed, focus: vi.fn() };
+    focusState.current = host as unknown as WebContents;
+    await f.target.receive({
+      id: 1,
+      method: "Target.attachToTarget",
+      params: { targetId: f.target.targetId },
+    });
+    const sessionId = (f.messages[0]!.result as { sessionId: string }).sessionId;
+    f.debuggerApi.sendCommand.mockImplementationOnce(async () => {
+      focusState.current = f.contents as unknown as WebContents;
+      if (outcome === "human revoked lease") void f.target.dispose(true);
+      if (outcome === "user moved focus") focusState.current = null;
+      if (outcome === "host destroyed") destroyed = true;
+      if (outcome === "dispatch failed") throw new Error("Input failed");
+      return {};
+    });
+    await f.target.receive({ id: 2, sessionId, method: "Input.insertText", params: { text: "a" } });
+    expect(f.contents.focus).not.toHaveBeenCalled();
+    expect(host.focus).toHaveBeenCalledTimes(
+      outcome === "restored" || outcome === "dispatch failed" ? 1 : 0,
+    );
+    await f.target.dispose(false);
+  });
+  it.each(["browserView", "webview"])(
+    "acknowledges %s bringToFront without activation or late focus restoration",
+    async (surface) => {
       const f = fixture();
-      let destroyed = false;
-      const host = { isDestroyed: () => destroyed, focus: vi.fn() };
+      f.contents.getType.mockReturnValue(surface);
+      const host = { isDestroyed: () => false, focus: vi.fn() };
       focusState.current = host as unknown as WebContents;
       await f.target.receive({
         id: 1,
@@ -247,18 +281,18 @@ describe("Betterwright target boundary", () => {
       });
       const sessionId = (f.messages[0]!.result as { sessionId: string }).sessionId;
       f.debuggerApi.sendCommand.mockImplementationOnce(async () => {
-        if (outcome === "user moved focus") focusState.current = null;
-        if (outcome === "host destroyed") destroyed = true;
-        if (outcome === "dispatch failed") throw new Error("Input failed");
+        // A timeout closes the lease first; a later user click cannot replace its abort reason.
+        void f.target.dispose(true);
+        focusState.current = f.contents as unknown as WebContents;
         return {};
       });
-      await f.target.receive({
-        id: 2,
-        sessionId,
-        method: "Input.insertText",
-        params: { text: "synthetic" },
-      });
-      expect(host.focus).toHaveBeenCalledTimes(outcome === "dispatch failed" ? 1 : 0);
+      await f.target.receive({ id: 2, sessionId, method: "Page.bringToFront", params: {} });
+      expect(host.focus).not.toHaveBeenCalled();
+      expect(f.contents.focus).not.toHaveBeenCalled();
+      expect(focusState.current).toBe(host);
+      expect(f.messages.at(-1)).toMatchObject({ id: 2, result: {} });
+      expect(f.debuggerApi.sendCommand).not.toHaveBeenCalled();
+      f.debuggerApi.sendCommand.mockResolvedValue({});
       await f.target.dispose(false);
     },
   );
@@ -754,4 +788,61 @@ describe("Betterwright target boundary", () => {
     });
     expect(f.debuggerApi.detach).not.toHaveBeenCalled();
   });
+
+  it.each([false, true])(
+    "queues native hover behind pending input and respects revocation (%s)",
+    async (cancelQueued) => {
+      const first = fixture([], "first-backend");
+      const second = fixture([], "second-backend");
+      for (const f of [first, second])
+        await f.target.receive({
+          id: 1,
+          method: "Target.attachToTarget",
+          params: { targetId: f.target.targetId },
+        });
+      const firstSession = (first.messages[0]!.result as { sessionId: string }).sessionId;
+      const secondSession = (second.messages[0]!.result as { sessionId: string }).sessionId;
+      const host = {
+        isDestroyed: () => false,
+        focus: vi.fn(() => {
+          focusState.current = host as unknown as WebContents;
+        }),
+      };
+      focusState.current = host as unknown as WebContents;
+      let finish!: (value: {}) => void;
+      first.debuggerApi.sendCommand.mockImplementation((method) =>
+        method === "Input.insertText"
+          ? new Promise((resolve) => {
+              finish = resolve;
+            })
+          : Promise.resolve({}),
+      );
+      const pendingInput = first.target.receive({
+        id: 2,
+        sessionId: firstSession,
+        method: "Input.insertText",
+        params: { text: "first" },
+      });
+      await vi.waitFor(() => expect(finish).toBeTypeOf("function"));
+      const hover = second.target.receive({
+        id: 2,
+        sessionId: secondSession,
+        method: "Input.dispatchMouseEvent",
+        params: { type: "mouseMoved", x: 20, y: 30 },
+      });
+      await Promise.resolve();
+      expect(second.contents.sendInputEvent).not.toHaveBeenCalled();
+      if (cancelQueued) await second.target.dispose(false);
+      finish({});
+      await Promise.all([pendingInput, hover]);
+      expect(second.contents.sendInputEvent).toHaveBeenCalledTimes(cancelQueued ? 0 : 1);
+      expect(second.contents.focus).not.toHaveBeenCalled();
+      expect(focusState.current).toBe(host);
+      const reply = second.messages.find((message) => message.id === 2);
+      if (cancelQueued) expect(reply).toHaveProperty("error");
+      else expect(reply).toHaveProperty("result");
+      await first.target.dispose(false);
+      await second.target.dispose(false);
+    },
+  );
 });

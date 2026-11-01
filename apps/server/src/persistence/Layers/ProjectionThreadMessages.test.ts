@@ -1,6 +1,6 @@
-import { MessageId, ThreadId } from "@synara/contracts";
+import { MessageId, ThreadId, TurnId } from "@synara/contracts";
 import { assert, it } from "@effect/vitest";
-import { Effect, Layer } from "effect";
+import { Effect, Layer, Option } from "effect";
 
 import { ProjectionThreadMessageRepository } from "../Services/ProjectionThreadMessages.ts";
 import { ProjectionThreadMessageRepositoryLive } from "./ProjectionThreadMessages.ts";
@@ -394,5 +394,82 @@ layer("ProjectionThreadMessageRepository", (it) => {
         assert.equal(rows.length, 1);
         assert.equal(rows[0]?.dispatchOrigin, "user");
       }),
+  );
+
+  it.effect("reads a turn's newest message id per role in causal order", () =>
+    Effect.gen(function* () {
+      const repository = yield* ProjectionThreadMessageRepository;
+      const threadId = ThreadId.makeUnsafe("thread-newest-by-turn");
+      const turnId = TurnId.makeUnsafe("turn-newest");
+      const write = (input: {
+        readonly messageId: string;
+        readonly role: "user" | "assistant";
+        readonly turnId?: TurnId | null;
+        readonly sequence?: number;
+        readonly createdAt: string;
+      }) =>
+        repository.upsert({
+          messageId: MessageId.makeUnsafe(input.messageId),
+          threadId,
+          turnId: input.turnId === undefined ? turnId : input.turnId,
+          role: input.role,
+          text: input.messageId,
+          isStreaming: false,
+          source: "native",
+          ...(input.sequence !== undefined ? { sequence: input.sequence } : {}),
+          createdAt: input.createdAt,
+          updatedAt: input.createdAt,
+        });
+
+      // Same ordering as the thread detail's message window: unsequenced rows
+      // first, then sequence, created_at and message id.
+      yield* write({
+        messageId: "user",
+        role: "user",
+        sequence: 1,
+        createdAt: "2026-10-01T00:00:00.000Z",
+      });
+      yield* write({
+        messageId: "assistant-legacy-unsequenced",
+        role: "assistant",
+        createdAt: "2026-10-01T00:00:09.000Z",
+      });
+      yield* write({
+        messageId: "assistant-sequenced-newest",
+        role: "assistant",
+        sequence: 3,
+        createdAt: "2026-10-01T00:00:01.000Z",
+      });
+      yield* write({
+        messageId: "assistant-sequenced-older",
+        role: "assistant",
+        sequence: 2,
+        createdAt: "2026-10-01T00:00:05.000Z",
+      });
+      yield* write({
+        messageId: "assistant-other-turn",
+        role: "assistant",
+        turnId: TurnId.makeUnsafe("turn-other"),
+        sequence: 4,
+        createdAt: "2026-10-01T00:00:06.000Z",
+      });
+
+      assert.deepStrictEqual(
+        yield* repository.getNewestIdByThreadTurnRole({ threadId, turnId, role: "assistant" }),
+        Option.some(MessageId.makeUnsafe("assistant-sequenced-newest")),
+      );
+      assert.deepStrictEqual(
+        yield* repository.getNewestIdByThreadTurnRole({ threadId, turnId, role: "user" }),
+        Option.some(MessageId.makeUnsafe("user")),
+      );
+      assert.deepStrictEqual(
+        yield* repository.getNewestIdByThreadTurnRole({
+          threadId,
+          turnId: TurnId.makeUnsafe("turn-missing"),
+          role: "assistant",
+        }),
+        Option.none(),
+      );
+    }),
   );
 });

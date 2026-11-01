@@ -63,6 +63,7 @@ import {
   SIDEBAR_PROJECT_NAME_CLASS_NAME,
   SIDEBAR_ROW_LABEL_TEXT_CLASS_NAME,
 } from "../sidebarRowStyles";
+import { useTranslation } from "~/i18n";
 
 // The hub row's hover toolbar holds two actions (pin, settings); only the truncating
 // name yields to it, so the trailing status fades in place instead of sliding.
@@ -104,7 +105,6 @@ export function SidebarGroupsSurface({
   readonly renderThreadRow: (
     thread: SidebarThreadSummary,
     orderedProjectThreadIds: readonly ThreadId[],
-    depth?: number,
     topLevel?: boolean,
     projectContextLabel?: string,
   ) => ReactNode;
@@ -118,6 +118,8 @@ export function SidebarGroupsSurface({
   ) => void;
   readonly onProjectContextMenu: (projectId: ProjectId, position: { x: number; y: number }) => void;
 }) {
+  const { t } = useTranslation();
+
   const homeDir = useWorkspacePathsStore((store) => store.homeDir);
   const chatWorkspaceRoot = useWorkspacePathsStore((store) => store.chatWorkspaceRoot);
   const studioWorkspaceRoot = useWorkspacePathsStore((store) => store.studioWorkspaceRoot);
@@ -211,7 +213,7 @@ export function SidebarGroupsSurface({
         type: "project.meta.update",
         commandId: newCommandId(),
         projectId: legacy.id,
-        title: "Hubs",
+        title: t("common:hubs"),
       })
       .then(() => {
         studioAdoptionDispatchedIds.add(legacy.id);
@@ -242,8 +244,8 @@ export function SidebarGroupsSurface({
     } catch (error) {
       toastManager.add({
         type: "error",
-        title: "Unable to create hub",
-        description: error instanceof Error ? error.message : "An error occurred.",
+        title: t("workspace:unableToCreateHub"),
+        description: error instanceof Error ? error.message : t("common:proposedPlan_unknownError"),
       });
       // Re-throw so the dialog stays open for a retry instead of closing silently.
       throw error;
@@ -251,8 +253,8 @@ export function SidebarGroupsSurface({
     if (!projectId) {
       toastManager.add({
         type: "error",
-        title: "Unable to create hub",
-        description: "The Hubs workspace is not ready yet — try again in a moment.",
+        title: t("workspace:unableToCreateHub"),
+        description: t("workspace:theHubsWorkspaceIsNotReadyYetTryAgain"),
       });
       throw new Error("Hub creation is not ready yet.");
     }
@@ -272,7 +274,7 @@ export function SidebarGroupsSurface({
           <SidebarPrimaryAction
             icon={NewThreadIcon}
             iconClassName="size-3.5"
-            label="New hub"
+            label={t("workspace:newHub")}
             // The /hubs route gates on the same root: without it
             // createGroupProject can only fail, so hold the action off.
             disabled={!groupsWorkspaceRoot}
@@ -321,7 +323,9 @@ export function SidebarGroupsSurface({
               const groupThreadEntries = projectSidebarData?.visibleEntries ?? [];
               const hasGroupThreads = (projectSidebarData?.allProjectThreadCount ?? 0) > 0;
               const groupLabel = resolveSidebarProjectRowLabel(project);
-              const toggleLabel = project.expanded ? "Hide threads" : "Show threads";
+              const toggleLabel = project.expanded
+                ? t("workspace:hideThreads")
+                : t("workspace:showThreads");
               return (
                 <SidebarMenuItem key={project.id} className="rounded-md">
                   <div className="group/collapsible">
@@ -340,8 +344,8 @@ export function SidebarGroupsSurface({
                         )}
                         aria-label={
                           coordinatorConfigured
-                            ? `Open ${coordinatorRowLabel}`
-                            : `Set up coordinator for ${groupLabel}`
+                            ? t("workspace:open", { value0: coordinatorRowLabel })
+                            : t("workspace:setUpCoordinatorFor", { value0: groupLabel })
                         }
                         onClick={activateCoordinatorRow}
                         onContextMenu={(event) => {
@@ -380,7 +384,7 @@ export function SidebarGroupsSurface({
                         </div>
                         {coordinatorConfigured ? null : (
                           <span className="shrink-0 text-ui-xs text-muted-foreground/70">
-                            Set up
+                            {t("computer:setUp")}
                           </span>
                         )}
                         {groupNeedsAttention.has(project.id) ? (
@@ -393,9 +397,9 @@ export function SidebarGroupsSurface({
                             <span
                               className="mr-1 size-1.5 shrink-0 rounded-full bg-amber-500 dark:bg-amber-300/90"
                               aria-hidden
-                              title="A thread needs you"
+                              title={t("workspace:aThreadNeedsYou")}
                             />
-                            <span className="sr-only">A thread needs you</span>
+                            <span className="sr-only">{t("workspace:aThreadNeedsYou")}</span>
                           </span>
                         ) : null}
                       </SidebarMenuButton>
@@ -411,7 +415,10 @@ export function SidebarGroupsSurface({
                               )
                             : "invisible",
                         )}
-                        aria-label={`${toggleLabel} in ${groupLabel}`}
+                        aria-label={t("workspace:in2", {
+                          value0: toggleLabel,
+                          value1: groupLabel,
+                        })}
                         aria-expanded={project.expanded}
                         tabIndex={hasGroupThreads ? 0 : -1}
                         onMouseDown={(event) => {
@@ -441,8 +448,8 @@ export function SidebarGroupsSurface({
                           />
                           <SidebarIconButton
                             icon={SettingsIcon}
-                            label={`Hub settings for ${groupLabel}`}
-                            tooltip="Hub settings"
+                            label={t("workspace:hubSettingsFor", { value0: groupLabel })}
+                            tooltip={t("workspace:hubSettings")}
                             tooltipSide="top"
                             onClick={(event) => {
                               event.preventDefault();
@@ -467,7 +474,6 @@ export function SidebarGroupsSurface({
                           renderThreadRow(
                             entry.thread,
                             projectSidebarData?.orderedProjectThreadIds ?? [],
-                            entry.depth,
                             false,
                             entry.thread.projectId !== project.id
                               ? (projectLabelById.get(entry.thread.projectId) ?? undefined)
@@ -482,13 +488,13 @@ export function SidebarGroupsSurface({
             })
           ) : (
             <div className="px-2 pt-4 text-center text-ui text-muted-foreground/58">
-              {emptyState === "loading" ? "Loading hubs…" : "No hubs yet"}
+              {emptyState === "loading" ? t("workspace:loadingHubs") : t("common:noHubsYet")}
             </div>
           )}
         </SidebarMenu>
         {archivedGroups.length > 0 ? (
           <SidebarCollapsibleSection
-            label="Archived hubs"
+            label={t("workspace:archivedHubs")}
             open={archivedGroupsOpen}
             onToggle={() => setArchivedGroupsOpen((open) => !open)}
             className="pt-3"
@@ -512,7 +518,9 @@ export function SidebarGroupsSurface({
                       render={<div role="button" tabIndex={0} />}
                       size="sm"
                       className={cn("text-muted-foreground", SIDEBAR_ROW_LABEL_TEXT_CLASS_NAME)}
-                      aria-label={`Archived hub ${resolveSidebarProjectRowLabel(project)}`}
+                      aria-label={t("workspace:archivedHub", {
+                        value0: resolveSidebarProjectRowLabel(project),
+                      })}
                       onContextMenu={(event) => {
                         event.preventDefault();
                         onProjectContextMenu(project.id, {
@@ -532,14 +540,16 @@ export function SidebarGroupsSurface({
                         "sidebar-icon-button absolute right-1.5 top-1/2 z-20 -translate-y-1/2 cursor-pointer rounded-sm px-1 text-ui-xs text-muted-foreground transition-opacity hover:text-foreground focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring",
                         "pointer-events-none opacity-0 md:group-hover/archived-row:pointer-events-auto md:group-hover/archived-row:opacity-100 focus-visible:pointer-events-auto focus-visible:opacity-100",
                       )}
-                      aria-label={`Unarchive ${resolveSidebarProjectRowLabel(project)}`}
+                      aria-label={t("workspace:unarchive", {
+                        value0: resolveSidebarProjectRowLabel(project),
+                      })}
                       onClick={(event) => {
                         event.preventDefault();
                         event.stopPropagation();
                         void unarchiveGroup(project.id);
                       }}
                     >
-                      Unarchive
+                      {t("workspace:detail_unarchive")}
                     </button>
                   </SidebarMenuSubItem>
                 );
@@ -550,11 +560,11 @@ export function SidebarGroupsSurface({
       </SidebarGroup>
       <RenameDialog
         open={newGroupDialogOpen}
-        title="New hub"
-        description="Create a hub container for coordinated work."
+        title={t("workspace:newHub")}
+        description={t("workspace:createAHubContainerForCoordinatedWork")}
         initialValue=""
-        placeholder="Hub name"
-        saveLabel="Create hub"
+        placeholder={t("workspace:hubName")}
+        saveLabel={t("workspace:createHub")}
         onOpenChange={setNewGroupDialogOpen}
         onSave={createGroup}
       />

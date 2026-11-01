@@ -17,8 +17,7 @@ import {
 } from "react";
 import type { EditorLeaveGuard } from "../EditorWorkspaceView";
 
-import { closeTerminalSurface } from "../../hooks/useTerminalSurfaceController";
-import { dockTerminalThreadId } from "../../lib/dockTerminalScope";
+import { closeDockTerminalPane } from "../../hooks/useTerminalSurfaceController";
 import { useAppSettings } from "../../appSettings";
 import { useComposerDraftStore } from "../../composerDraftStore";
 import type { DiffRouteSearch } from "../../diffRouteSearch";
@@ -127,6 +126,7 @@ import {
 import { isShortcutDispatchSuspended, resolveShortcutCommand } from "~/keybindings";
 import { isTerminalFocused } from "~/lib/terminalFocus";
 import { cn } from "~/lib/utils";
+import { useTranslation } from "~/i18n";
 
 const PullRequestDockPane = lazy(() => import("../pullRequest/PullRequestDockPane"));
 const EMPTY_KEYBINDINGS: ResolvedKeybindingsConfig = [];
@@ -181,8 +181,14 @@ function shouldAcceptDockWidth({
 }
 
 function RightDockPanePlaceholder(props: { kind: RightDockPaneKind }) {
-  const { label } = getRightDockPaneMeta(props.kind);
-  return <PanelStateMessage>{label} panel is coming soon.</PanelStateMessage>;
+  const { t } = useTranslation();
+
+  const { label } = getRightDockPaneMeta(props.kind, t);
+  return (
+    <PanelStateMessage>
+      {label} {t("chat:panelIsComingSoon")}
+    </PanelStateMessage>
+  );
 }
 
 export function SingleChatSurface(props: {
@@ -190,6 +196,8 @@ export function SingleChatSurface(props: {
   search: DiffRouteSearch;
   projectId: ProjectId | null;
 }) {
+  const { t } = useTranslation();
+
   const navigate = useNavigate();
   const createSplitView = useSplitViewStore((store) => store.createFromThread);
   const createSplitViewFromDrop = useSplitViewStore((store) => store.createFromDrop);
@@ -232,12 +240,15 @@ export function SingleChatSurface(props: {
     isGitRepo: hasGitRepository,
   });
   const hasDeviceSupport = useDeviceSupport();
-  const dockLauncherItems = resolveRightDockLauncherItems({
-    hasWorkspace: workspaceRoot !== null,
-    hasGitRepository,
-    hasReview: dockDiffTotals.fileCount > 0,
-    hasDeviceSupport,
-  });
+  const dockLauncherItems = resolveRightDockLauncherItems(
+    {
+      hasWorkspace: workspaceRoot !== null,
+      hasGitRepository,
+      hasReview: dockDiffTotals.fileCount > 0,
+      hasDeviceSupport,
+    },
+    t,
+  );
   const availableDockPaneKinds = dockLauncherItems.map(({ kind }) => kind);
   const projects = useStore((store) => store.projects);
   const threadsHydrated = useStore((store) => store.threadsHydrated);
@@ -452,8 +463,9 @@ export function SingleChatSurface(props: {
     });
   };
 
-  const handleSelectEditorFile = (filePath: string) =>
+  const handleSelectEditorFile = (filePath: string, beforeOpen?: () => void) =>
     guardEditorLeave(() => {
+      beforeOpen?.();
       setEditorCenterMode("file");
       setEditorEditTarget(null);
       void navigate({
@@ -480,8 +492,9 @@ export function SingleChatSurface(props: {
     });
   };
 
-  const handleEditFileInEditorView = (filePath: string) =>
+  const handleEditFileInEditorView = (filePath: string, beforeOpen?: () => void) =>
     guardEditorLeave(() => {
+      beforeOpen?.();
       setEditorEditTarget({
         filePath,
         basePath: null,
@@ -538,15 +551,17 @@ export function SingleChatSurface(props: {
       });
     });
 
-  const handleUpdateEditorDiffPanelState = (
-    patch: Partial<Pick<SplitViewPanePanelState, "panel" | "diffTurnId" | "diffFilePath">>,
-  ) => {
-    setEditorDiffPanelState((previous) => ({
-      panel: "diff",
-      diffTurnId: "diffTurnId" in patch ? (patch.diffTurnId ?? null) : previous.diffTurnId,
-      diffFilePath: "diffFilePath" in patch ? (patch.diffFilePath ?? null) : previous.diffFilePath,
-    }));
-  };
+  const handleUpdateEditorDiffPanelState = useCallback(
+    (patch: Partial<Pick<SplitViewPanePanelState, "panel" | "diffTurnId" | "diffFilePath">>) => {
+      setEditorDiffPanelState((previous) => ({
+        panel: "diff",
+        diffTurnId: "diffTurnId" in patch ? (patch.diffTurnId ?? null) : previous.diffTurnId,
+        diffFilePath:
+          "diffFilePath" in patch ? (patch.diffFilePath ?? null) : previous.diffFilePath,
+      }));
+    },
+    [],
+  );
   const handleEditorDiffFilesChange = (
     files: ReadonlyArray<FileDiffMetadata>,
     isLoading: boolean,
@@ -567,9 +582,6 @@ export function SingleChatSurface(props: {
         diffFilePath: filePath,
       }));
     });
-  const handleEditorDiffOptionsChange = (control: ReactNode | null) => {
-    setEditorDiffOptionsControl(control);
-  };
   const handleReferenceInChat = (reference: ChatFileReference) => {
     appendChatFileReference(props.threadId, reference);
   };
@@ -597,9 +609,10 @@ export function SingleChatSurface(props: {
   // Other references retain the existing dock file preview and external-editor
   // fallback behavior.
   const dockFileOpener: WorkspaceFileOpener = {
-    openFile: (path) => {
+    openFile: (path, beforeOpen) => {
       const directoryPath = resolveWorkspaceDirectoryOpenTarget(path, workspaceRoot);
       if (directoryPath !== null) {
+        beforeOpen?.();
         requestImmediateDockHydration("explorer");
         openPane(props.threadId, { kind: "explorer" });
         requestExplorerReveal(props.threadId, directoryPath);
@@ -612,6 +625,7 @@ export function SingleChatSurface(props: {
       if (!targetPath) {
         return false;
       }
+      beforeOpen?.();
       requestImmediateDockHydration("file");
       openPane(props.threadId, { kind: "file", filePath: targetPath });
       return true;
@@ -621,7 +635,7 @@ export function SingleChatSurface(props: {
   // Editor surface: the center file pane is already the file viewer, so file
   // references select into it instead of opening a dock pane.
   const editorFileOpener: WorkspaceFileOpener = {
-    openFile: (path) => {
+    openFile: (path, beforeOpen) => {
       if (!workspaceRoot) {
         return false;
       }
@@ -629,7 +643,7 @@ export function SingleChatSurface(props: {
       if (!relativePath) {
         return false;
       }
-      handleSelectEditorFile(relativePath);
+      handleSelectEditorFile(relativePath, beforeOpen);
       return true;
     },
     prefetchFile: prefetchOpenerFile,
@@ -794,8 +808,8 @@ export function SingleChatSurface(props: {
     void openEditorProject(projectId).catch((error: unknown) => {
       toastManager.add({
         type: "error",
-        title: "Unable to open project",
-        description: error instanceof Error ? error.message : "The project could not be opened.",
+        title: t("chat:unableToOpenProject"),
+        description: error instanceof Error ? error.message : t("chat:theProjectCouldNotBeOpened"),
       });
     });
   };
@@ -824,8 +838,8 @@ export function SingleChatSurface(props: {
       if (!createSidechat) {
         toastManager.add({
           type: "warning",
-          title: "Side chat is unavailable",
-          description: "Open a server-backed main thread before starting a Side chat.",
+          title: t("chat:sideChatIsUnavailable"),
+          description: t("chat:openAServerBackedMainThreadBeforeStartingA"),
         });
         return;
       }
@@ -833,9 +847,9 @@ export function SingleChatSurface(props: {
     } catch (error) {
       toastManager.add({
         type: "error",
-        title: "Could not start Side chat",
+        title: t("chat:couldNotStartSideChat"),
         description:
-          error instanceof Error ? error.message : "An error occurred while creating Side chat.",
+          error instanceof Error ? error.message : t("chat:anErrorOccurredWhileCreatingSideChat"),
       });
     }
   };
@@ -868,7 +882,9 @@ export function SingleChatSurface(props: {
     switch (pane.kind) {
       case "browser":
         return (
-          <Suspense fallback={<PanelStateMessage>Loading browser...</PanelStateMessage>}>
+          <Suspense
+            fallback={<PanelStateMessage>{t("computer:loadingBrowser")}</PanelStateMessage>}
+          >
             <LazyBrowserPanel
               mode="sidebar"
               threadId={props.threadId}
@@ -880,7 +896,7 @@ export function SingleChatSurface(props: {
         );
       case "device":
         return (
-          <Suspense fallback={<PanelStateMessage>Loading simulator...</PanelStateMessage>}>
+          <Suspense fallback={<PanelStateMessage>{t("chat:loadingSimulator")}</PanelStateMessage>}>
             <LazyDevicePanel
               mode="sidebar"
               threadId={props.threadId}
@@ -893,7 +909,9 @@ export function SingleChatSurface(props: {
         );
       case "pullRequest":
         return (
-          <Suspense fallback={<PanelStateMessage>Loading pull request...</PanelStateMessage>}>
+          <Suspense
+            fallback={<PanelStateMessage>{t("chat:loadingPullRequest")}</PanelStateMessage>}
+          >
             <PullRequestDockPane
               pane={pane}
               hostThreadId={props.threadId}
@@ -932,7 +950,9 @@ export function SingleChatSurface(props: {
         );
       case "terminal":
         if (context.runtimeMode === "preview") {
-          return <PanelStateMessage>Terminal is sleeping. Restoring shortly.</PanelStateMessage>;
+          return (
+            <PanelStateMessage>{t("chat:terminalIsSleepingRestoringShortly")}</PanelStateMessage>
+          );
         }
         // Kept mounted across tab switches; visibility toggles the xterm runtime
         // instead of detaching/reattaching it (avoids the open-lag + fit flicker).
@@ -940,7 +960,7 @@ export function SingleChatSurface(props: {
         // mounted (offcanvas is CSS-only), so without this the off-screen terminal
         // would keep WebGL + resize observers alive for nothing.
         return (
-          <Suspense fallback={<PanelStateMessage>Loading terminal...</PanelStateMessage>}>
+          <Suspense fallback={<PanelStateMessage>{t("chat:loadingTerminal")}</PanelStateMessage>}>
             <DockTerminalPane
               paneId={pane.id}
               hostThreadId={props.threadId}
@@ -952,7 +972,7 @@ export function SingleChatSurface(props: {
         );
       case "git":
         return (
-          <Suspense fallback={<PanelStateMessage>Loading Git...</PanelStateMessage>}>
+          <Suspense fallback={<PanelStateMessage>{t("chat:loadingGit")}</PanelStateMessage>}>
             <GitPanel
               hostThreadId={props.threadId}
               projectId={props.projectId}
@@ -962,7 +982,7 @@ export function SingleChatSurface(props: {
         );
       case "explorer":
         return (
-          <Suspense fallback={<PanelStateMessage>Loading explorer...</PanelStateMessage>}>
+          <Suspense fallback={<PanelStateMessage>{t("chat:loadingExplorer")}</PanelStateMessage>}>
             <DockExplorerPane
               threadId={props.threadId}
               workspaceRoot={workspaceRoot}
@@ -975,7 +995,11 @@ export function SingleChatSurface(props: {
         );
       case "file":
         return (
-          <Suspense fallback={<PanelStateMessage>Loading file...</PanelStateMessage>}>
+          <Suspense
+            fallback={
+              <PanelStateMessage>{t("workspace:filePreview_loadingFile")}</PanelStateMessage>
+            }
+          >
             <DockFilePane
               workspaceRoot={workspaceRoot}
               filePath={pane.filePath}
@@ -1114,7 +1138,7 @@ export function SingleChatSurface(props: {
                   queriesEnabled
                   hideHeader
                   onRenderableFilesChange={handleEditorDiffFilesChange}
-                  onEditorDiffOptionsChange={handleEditorDiffOptionsChange}
+                  onEditorDiffOptionsChange={setEditorDiffOptionsControl}
                   onVisibleFileChange={handleEditorDiffVisibleFileChange}
                 />
               }
@@ -1181,7 +1205,7 @@ export function SingleChatSurface(props: {
               {...(hasDeviceSupport ? { onToggleDevice: handleToggleDevice } : {})}
               onSplitSurface={handleSplitSurface}
               viewModeAction={{
-                label: "Editor view",
+                label: t("chat:environment_editorView"),
                 active: false,
                 onClick: handleOpenEditorView,
               }}
@@ -1204,6 +1228,7 @@ export function SingleChatSurface(props: {
           state={dockState}
           minWidth={SINGLE_PANEL_MIN_WIDTH}
           defaultWidth={DIFF_INLINE_DEFAULT_WIDTH}
+          widthStorageKey={`chat_right_dock_width:${props.threadId}`}
           shouldAcceptWidth={shouldAcceptDockWidth}
           addMenuKinds={availableDockPaneKinds}
           launcherItems={dockLauncherItems}
@@ -1219,21 +1244,11 @@ export function SingleChatSurface(props: {
           onSelectPane={handleSelectDockPane}
           onClosePane={(paneId) => {
             if (dockState.panes.find((pane) => pane.id === paneId)?.kind === "terminal") {
-              void closeTerminalSurface(
-                dockTerminalThreadId(props.threadId),
-                appSettings.confirmTerminalTabClose,
+              void closeDockTerminalPane({
+                hostThreadId: props.threadId,
                 paneId,
-              )
-                .then((closed) => {
-                  if (closed) closePane(props.threadId, paneId);
-                })
-                .catch((error: unknown) => {
-                  toastManager.add({
-                    type: "error",
-                    title: "Unable to close terminal",
-                    description: error instanceof Error ? error.message : "Please try again.",
-                  });
-                });
+                confirmationEnabled: appSettings.confirmTerminalTabClose,
+              });
               return;
             }
             if (dockState.panes.find((pane) => pane.id === paneId)?.kind !== "explorer") {

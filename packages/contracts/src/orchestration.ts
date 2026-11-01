@@ -594,6 +594,8 @@ export type ChatAttachmentId = typeof ChatAttachmentId.Type;
 
 export const ChatImageAttachment = Schema.Struct({
   type: Schema.Literal("image"),
+  // Server-owned snapshots retain the original inline Markdown reference.
+  sourcePath: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(4096))),
   id: ChatAttachmentId,
   name: TrimmedNonEmptyString.check(Schema.isMaxLength(255)),
   mimeType: TrimmedNonEmptyString.check(Schema.isMaxLength(100), Schema.isPattern(/^image\//i)),
@@ -966,7 +968,12 @@ export const ThreadNotes = Schema.String.check(Schema.isMaxLength(THREAD_NOTES_M
 export type ThreadNotes = typeof ThreadNotes.Type;
 export const ThreadGoal = Schema.String.check(Schema.isMaxLength(THREAD_GOAL_MAX_CHARS));
 export type ThreadGoal = typeof ThreadGoal.Type;
-export const ThreadGoalStartBehavior = Schema.Literals(["start-if-idle", "defer"]);
+// The visible start atomically records the goal message and its first turn intent.
+export const ThreadGoalStartBehavior = Schema.Literals([
+  "start-if-idle",
+  "start-with-message",
+  "defer",
+]);
 export type ThreadGoalStartBehavior = typeof ThreadGoalStartBehavior.Type;
 export const ThreadGoalContinuationTrigger = Schema.Literals([
   "goal-updated",
@@ -1604,6 +1611,9 @@ const ThreadMetaUpdateCommand = Schema.Struct({
   // Applies `modelSelection` as a same-thread provider handoff: the server starts
   // the target session now and records the handoff (or reverts) in the timeline.
   providerHandoff: Schema.optional(Schema.Boolean),
+  // With `providerHandoff`: the user agreed to stop the source runtime's
+  // background tasks. Without it, live background tasks refuse the handoff.
+  providerHandoffStopsBackgroundTasks: Schema.optional(Schema.Boolean),
 });
 
 const ThreadPinnedMessageAddCommand = Schema.Struct({
@@ -1793,6 +1803,7 @@ const ThreadDispatchQueuedTurnCommand = Schema.Struct({
   commandId: CommandId,
   threadId: ThreadId,
   messageId: MessageId,
+  initialGoalStartedAt: Schema.optional(IsoDateTime),
   modelSelection: Schema.optional(ModelSelection),
   providerOptions: Schema.optional(ProviderStartOptions),
   enableComputerControl: Schema.optional(Schema.Boolean),
@@ -1990,6 +2001,10 @@ const ThreadMessageAssistantDeltaCommand = Schema.Struct({
   threadId: ThreadId,
   messageId: MessageId,
   delta: Schema.String,
+  // Internal late-finalization snapshots; the decider requires an already settled assistant row.
+  attachments: Schema.optional(
+    Schema.Array(ChatImageAttachment).check(Schema.isMaxLength(PROVIDER_SEND_TURN_MAX_ATTACHMENTS)),
+  ),
   turnId: Schema.optional(TurnId),
   // Present only when this delta starts a NEW text segment: a row-making
   // provider event (tool call, warning, ...) intervened since the previous
@@ -2000,6 +2015,9 @@ const ThreadMessageAssistantDeltaCommand = Schema.Struct({
 });
 
 const ThreadMessageAssistantCompleteCommand = Schema.Struct({
+  attachments: Schema.optional(
+    Schema.Array(ChatImageAttachment).check(Schema.isMaxLength(PROVIDER_SEND_TURN_MAX_ATTACHMENTS)),
+  ),
   asyncQuestions: Schema.optional(AsyncUserInputQuestions),
   type: Schema.Literal("thread.message.assistant.complete"),
   commandId: CommandId,
@@ -2320,6 +2338,7 @@ export const ThreadUnarchivedPayload = Schema.Struct({
 
 export const ThreadProviderHandoff = Schema.Struct({
   sourceModelSelection: ModelSelection,
+  stopBackgroundTasks: Schema.optional(Schema.Boolean),
 });
 export type ThreadProviderHandoff = typeof ThreadProviderHandoff.Type;
 
@@ -2442,6 +2461,8 @@ export const ThreadClaudeCacheResponseRequestedPayload = Schema.Struct({
 export const ThreadTurnStartRequestedPayload = Schema.Struct({
   threadId: ThreadId,
   messageId: MessageId,
+  // Server-owned pursuit identity for the visible first goal turn, retained by queue replay.
+  initialGoalStartedAt: Schema.optional(IsoDateTime),
   modelSelection: Schema.optional(ModelSelection),
   providerOptions: Schema.optional(ProviderStartOptions),
   enableComputerControl: Schema.optional(Schema.Boolean),

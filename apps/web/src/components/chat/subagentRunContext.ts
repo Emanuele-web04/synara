@@ -60,6 +60,8 @@ export interface SubagentRunContextValue {
   backgroundedProviderThreadIds: ReadonlySet<string>;
   /** Parent-side task completions, keyed by launching tool call id. */
   taskEndByToolUseId: ReadonlyMap<string, SubagentTaskEnd>;
+  /** The root thread's provider runtime has ended, so no row can still be at work. */
+  runtimeRetired?: boolean;
   visibility: SubagentRunVisibilityStore | null;
   onOpenThread: (threadId: ThreadId) => void;
   onStop?: ((item: ComposerSubagentStripItem) => void | Promise<void>) | undefined;

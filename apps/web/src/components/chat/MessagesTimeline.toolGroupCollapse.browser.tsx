@@ -7,6 +7,7 @@
 import "../../index.css";
 
 import { MessageId, TurnId } from "@synara/contracts";
+import { useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";
 
@@ -74,12 +75,13 @@ const LIVE_COMMANDS = ["git status", "node scripts/tail.mjs"];
 function ToolGroupCollapseTimeline(props: {
   timelineEntries: TimelineEntry[];
   onOpenAgentActivity?: (id: string) => void;
+  settled?: boolean;
 }) {
   return (
     <MessagesTimeline
       hasMessages
       isWorking={false}
-      activeTurnInProgress
+      activeTurnInProgress={!props.settled}
       activeTurnStartedAt="2026-03-17T19:12:20.000Z"
       timelineEntries={props.timelineEntries}
       turnDiffSummaryByAssistantMessageId={new Map()}
@@ -142,6 +144,122 @@ describe("MessagesTimeline tool group collapse", () => {
     document.body.innerHTML = "";
   });
 
+  it("folds consumed background work, preserves both answers and reveals the command on demand", async () => {
+    const startedAt = "2026-03-17T19:12:00.000Z";
+    const completedAt = "2026-03-17T19:12:21.000Z";
+    const entries = (settled: boolean): TimelineEntry[] => [
+      {
+        id: "request",
+        kind: "message",
+        createdAt: startedAt,
+        message: {
+          id: MessageId.makeUnsafe("request"),
+          role: "user",
+          text: "Build the app",
+          createdAt: startedAt,
+          streaming: false,
+        },
+      },
+      {
+        id: "launch",
+        kind: "work",
+        createdAt: startedAt,
+        entry: {
+          id: "launch",
+          createdAt: startedAt,
+          label: "Background build",
+          tone: "tool",
+          backgroundTask: {
+            taskId: "build-task",
+            taskType: "local_bash",
+            description: "Build app",
+            command: "node scripts/rebuild.mjs",
+            status: "finished",
+            startedAt,
+            completedAt,
+            completionActivityId: "wake",
+            exitCode: 0,
+          },
+        },
+      },
+      {
+        id: "launched",
+        kind: "message",
+        createdAt: "2026-03-17T19:12:04.000Z",
+        message: {
+          id: MessageId.makeUnsafe("launched"),
+          role: "assistant",
+          text: "The build is running.",
+          createdAt: "2026-03-17T19:12:04.000Z",
+          completedAt: "2026-03-17T19:12:04.000Z",
+          streaming: false,
+        },
+      },
+      {
+        id: "wake",
+        kind: "work",
+        createdAt: completedAt,
+        entry: {
+          id: "wake",
+          createdAt: completedAt,
+          label: "Background task finished: Build app",
+          tone: "info",
+          backgroundTaskCompletion: {
+            taskId: "build-task",
+            taskType: "local_bash",
+            description: "Build app",
+            outcome: "finished",
+          },
+        },
+      },
+      {
+        id: "report",
+        kind: "message",
+        createdAt: "2026-03-17T19:12:22.000Z",
+        message: {
+          id: MessageId.makeUnsafe("report"),
+          role: "assistant",
+          text: "The new app is ready.",
+          createdAt: "2026-03-17T19:12:22.000Z",
+          streaming: !settled,
+          ...(settled ? { completedAt: "2026-03-17T19:12:24.000Z" } : {}),
+        },
+      },
+    ];
+    const screen = await render(<ToolGroupCollapseTimeline timelineEntries={entries(false)} />, {
+      container: createTimelineHost(),
+    });
+    try {
+      await expect
+        .element(screen.getByText("node scripts/rebuild.mjs", { exact: true }))
+        .toBeVisible();
+      await screen.rerender(<ToolGroupCollapseTimeline timelineEntries={entries(true)} settled />);
+      await expect
+        .element(screen.getByText("The build is running.", { exact: true }))
+        .toBeVisible();
+      await expect
+        .element(screen.getByText("The new app is ready.", { exact: true }))
+        .toBeVisible();
+      await expect
+        .poll(() => isVisibleOutsideClosedDisclosure("node scripts/rebuild.mjs"))
+        .toBe(false);
+      await expect.poll(() => findSummaryTrigger("Worked for") !== null).toBe(true);
+      findSummaryTrigger("Worked for")!.click();
+      await expect
+        .element(screen.getByText("node scripts/rebuild.mjs", { exact: true }))
+        .toBeVisible();
+      findSummaryTrigger("Worked for")!.click();
+      await expect
+        .poll(() => isVisibleOutsideClosedDisclosure("node scripts/rebuild.mjs"))
+        .toBe(false);
+      await expect
+        .element(screen.getByText("The new app is ready.", { exact: true }))
+        .toBeVisible();
+    } finally {
+      await screen.unmount();
+    }
+  });
+
   it("renders submitted questions and answers as separate transcript bubbles", async () => {
     const entries = [
       assistantEntry("before-question", "I need your preference.", false),
@@ -179,8 +297,137 @@ describe("MessagesTimeline tool group collapse", () => {
     expect(isVisibleOutsideClosedDisclosure("Amber")).toBe(true);
   });
 
+  it("keeps the original updates reachable from a compacted legacy reasoning row", async () => {
+    const state = deriveAgentActivityTimelineState([
+      {
+        id: "legacy-first",
+        createdAt: "2026-03-17T19:12:21.000Z",
+        label: "Reasoning update",
+        tone: "thinking",
+        detail: "First preview.\n\nOriginal detail from the first update.",
+      },
+      {
+        id: "legacy-last",
+        createdAt: "2026-03-17T19:12:22.000Z",
+        label: "Reasoning update",
+        tone: "thinking",
+        detail: "Latest preview.\n\nOriginal detail from the last update.",
+      },
+    ]);
+    function LegacyReasoningTimeline() {
+      const [detailId, setDetailId] = useState<string | null>(null);
+      const detail = detailId ? state.detailById.get(detailId) : undefined;
+      return detail ? (
+        <AgentActivityDetailView
+          detail={detail}
+          chatFontSizePx={14}
+          markdownCwd={undefined}
+          onBack={() => setDetailId(null)}
+          onImageExpand={() => {}}
+          timestampFormat="locale"
+        />
+      ) : (
+        <ToolGroupCollapseTimeline
+          timelineEntries={deriveTimelineEntries([], [], state.timelineWorkEntries)}
+          onOpenAgentActivity={setDetailId}
+        />
+      );
+    }
+    const screen = await render(<LegacyReasoningTimeline />, { container: createTimelineHost() });
+    try {
+      await screen.getByRole("button", { name: /2 updates/ }).click();
+      await expect
+        .element(screen.getByText("Original detail from the first update.", { exact: true }))
+        .toBeVisible();
+      await expect
+        .element(screen.getByText("Original detail from the last update.", { exact: true }).last())
+        .toBeVisible();
+    } finally {
+      await screen.unmount();
+    }
+  });
+
+  it("mutes settled reasoning, summaries and narration without muting the final answer", async () => {
+    const turnId = TurnId.makeUnsafe("prose-tone-turn");
+    const entries = deriveTimelineEntries(
+      [
+        {
+          id: MessageId.makeUnsafe("tone-request"),
+          role: "user",
+          text: "Check the boundary",
+          createdAt: "2026-03-17T19:12:20.000Z",
+          streaming: false,
+        },
+        {
+          id: MessageId.makeUnsafe("tone-narration"),
+          role: "assistant",
+          turnId,
+          text: "I am checking the boundary.",
+          createdAt: "2026-03-17T19:12:23.000Z",
+          streaming: false,
+        },
+        {
+          id: MessageId.makeUnsafe("tone-final"),
+          role: "assistant",
+          turnId,
+          text: "The boundary is verified.",
+          createdAt: "2026-03-17T19:12:26.000Z",
+          completedAt: "2026-03-17T19:12:28.000Z",
+          streaming: false,
+        },
+      ],
+      [],
+      [
+        {
+          id: "tone-reasoning",
+          turnId,
+          createdAt: "2026-03-17T19:12:21.000Z",
+          label: "Reasoning trace",
+          toolCallId: "reasoning-item",
+          tone: "tool",
+          detail: "Inspect the provider boundary.",
+        },
+        {
+          id: "tone-summary",
+          turnId,
+          createdAt: "2026-03-17T19:12:22.000Z",
+          label: "Tool summary",
+          activityKind: "tool.summary",
+          tone: "info",
+          detail: "The tools checked cancellation.",
+        },
+      ],
+    );
+    const host = createTimelineHost();
+    const screen = await render(<ToolGroupCollapseTimeline timelineEntries={entries} settled />, {
+      container: host,
+    });
+    try {
+      await expect.poll(() => findSummaryTrigger("Worked for") !== null).toBe(true);
+      findSummaryTrigger("Worked for")!.click();
+      await expect
+        .element(screen.getByText("I am checking the boundary.", { exact: true }))
+        .toBeVisible();
+      const narration = host.querySelector<HTMLElement>(
+        '[data-chat-find-narration-id="tone-narration"]',
+      )!;
+      const mutedColor = getComputedStyle(narration).color;
+      const prose = host.querySelectorAll<HTMLElement>("[data-work-entry-prose='true'] p");
+      expect(prose).toHaveLength(2);
+      for (const paragraph of [...prose, narration.querySelector("p")!]) {
+        expect(getComputedStyle(paragraph).color).toBe(mutedColor);
+      }
+      const final = [...host.querySelectorAll("p")].find(
+        (paragraph) => paragraph.textContent === "The boundary is verified.",
+      )!;
+      expect(getComputedStyle(final).color).not.toBe(mutedColor);
+    } finally {
+      await screen.unmount();
+    }
+  });
+
   it.each(["reasoning", "tool summary"] as const)(
-    "keeps %s between tool runs and reveals its complete text on click",
+    "keeps %s between tool runs as full Markdown transcript text",
     async (kind) => {
       const host = createTimelineHost();
       const onOpenAgentActivity = vi.fn();
@@ -196,7 +443,7 @@ describe("MessagesTimeline tool group collapse", () => {
           ...(kind === "reasoning"
             ? { toolCallId: "reasoning-item", toolStatus: "running" as const }
             : { activityKind: "tool.summary" }),
-          detail: "First inspect the provider boundary.\n\nThen verify cancellation.",
+          detail: "First inspect the `provider` boundary.\n\nThen verify cancellation.",
         },
       };
       const screen = await render(
@@ -214,34 +461,17 @@ describe("MessagesTimeline tool group collapse", () => {
       try {
         await expect.poll(() => findSummaryTrigger("Ran 4 commands") !== null).toBe(true);
         await expectLiveRunFoldedToNewestCall();
+        expect(isVisibleOutsideClosedDisclosure("First inspect the")).toBe(true);
         expect(isVisibleOutsideClosedDisclosure("Then verify cancellation.")).toBe(true);
-        if (kind === "reasoning") {
-          expect(document.body.textContent).not.toContain("First inspect the provider boundary.");
-        }
-        const row = [...host.querySelectorAll<HTMLButtonElement>("button")].find((button) =>
-          button.textContent?.includes("Then verify cancellation."),
-        );
-        expect(row).toBeDefined();
-        expect(row!.closest("[data-tool-group-live='true']")).toBeNull();
-        row!.click();
-        expect(onOpenAgentActivity).toHaveBeenCalledWith("reasoning-row");
-        const detail = deriveAgentActivityTimelineState([reasoning.entry]).detailById.get(
-          "reasoning-row",
-        )!;
-        await screen.rerender(
-          <AgentActivityDetailView
-            detail={detail}
-            chatFontSizePx={13}
-            markdownCwd={undefined}
-            onBack={() => {}}
-            onImageExpand={() => {}}
-            timestampFormat="locale"
-          />,
-        );
-        await expect
-          .poll(() => host.textContent?.includes("First inspect the provider boundary."))
-          .toBe(true);
-        expect(host.textContent).toContain("Then verify cancellation.");
+        const prose = host.querySelector<HTMLElement>("[data-work-entry-prose='true']");
+        expect(prose).not.toBeNull();
+        expect(prose!.querySelectorAll("p")).toHaveLength(2);
+        expect(prose!.querySelector("code")?.textContent).toBe("provider");
+        expect(prose!.textContent).not.toContain("`");
+        expect(prose!.closest("button")).toBeNull();
+        expect(prose!.closest("[data-tool-group-live='true']")).toBeNull();
+        expect(prose!.querySelector("[data-work-entry-icon='true']")).toBeNull();
+        expect(onOpenAgentActivity).not.toHaveBeenCalled();
       } finally {
         await screen.unmount();
         host.remove();

@@ -443,6 +443,13 @@ function makeHarnessLayer(
     };
     /** Serves the computer_* family in the tool catalog (denial paths only need the names). */
     readonly computerService?: Layer.Layer<ComputerService>;
+    readonly retiredWriteAuthorities?: ReadonlyArray<{
+      readonly threadId: string;
+      readonly sessionKey: string;
+      readonly provider: "codex";
+      readonly retiredTurnId: string;
+      readonly issuedAt: number;
+    }>;
   } = {},
 ) {
   const inFlightRequests = makeAgentGatewayInFlightRequestRegistry();
@@ -535,6 +542,15 @@ function makeHarnessLayer(
         ? inFlightRequests.cancelTurn(`session-for-${threadId}`, turnId).settled
         : Promise.resolve();
     },
+    listRetiredWriteAuthorities: (threadId: string) =>
+      (options.retiredWriteAuthorities ?? [])
+        .filter((authority) => authority.threadId === threadId)
+        .map((authority) => ({
+          sessionKey: authority.sessionKey,
+          provider: authority.provider,
+          retiredTurnId: authority.retiredTurnId,
+          issuedAt: authority.issuedAt,
+        })),
     revokeSessionToken: () => undefined,
     connectionForThread: (threadId: ThreadIdType) => ({
       url: "http://127.0.0.1:3773/mcp",
@@ -2112,6 +2128,43 @@ describe("AgentGateway", () => {
     }).pipe(Effect.provide(gatewayLayer));
   });
 
+  it.effect("surfaces a retired gateway write authority while a newer turn is running", () => {
+    const { gatewayLayer, makeHarness } = makeHarnessLayer(baseThreads, [], {
+      retiredWriteAuthorities: [
+        {
+          threadId: "thread-parent",
+          sessionKey: "session-for-thread-parent",
+          provider: "codex",
+          retiredTurnId: "turn-a",
+          issuedAt: 0,
+        },
+      ],
+    });
+    return Effect.gen(function* () {
+      const harness = yield* makeHarness;
+      const response = yield* harness.callTool({
+        token: "token-parent",
+        name: "synara_diagnose_thread",
+        args: { threadId: "thread-parent" },
+      });
+      assert.isFalse(isToolError(response.result), toolErrorText(response.result));
+      const findings = toolResultJson(response.result).findings as ReadonlyArray<{
+        severity: string;
+        code: string;
+        detail: string;
+      }>;
+      const finding = findings.find(
+        (entry) => entry.code === "agent_gateway_write_authority_retired",
+      );
+      assert.isDefined(finding);
+      assert.equal(finding?.severity, "error");
+      assert.include(finding?.detail, "turn-a");
+      assert.include(finding?.detail, "turn-parent-active");
+      assert.include(finding?.detail, "caller_turn_inactive");
+      assert.include(finding?.detail, "This session's gateway credential");
+    }).pipe(Effect.provide(gatewayLayer));
+  });
+
   it.effect("wires the kanban draft/update/delete helpers through the gateway", () => {
     const { gatewayLayer, makeHarness } = makeHarnessLayer(baseThreads);
     return Effect.gen(function* () {
@@ -2937,6 +2990,53 @@ describe("AgentGateway", () => {
         (payload.findings as Array<{ code: string }>).map((finding) => finding.code),
         ["provider_delivery_blocked", "THREAD_STREAM_CAPACITY_EXCEEDED"],
       );
+    }).pipe(Effect.provide(gatewayLayer));
+  });
+
+  it.effect("diagnoses an abandoned startup even without delivery blockers or incidents", () => {
+    const thread = makeThreadShell("thread-parent", {
+      latestTurn: {
+        ...baseThreads[0]!.latestTurn!,
+        state: "interrupted",
+        completedAt: NOW,
+      },
+      session: {
+        threadId: ThreadId.makeUnsafe("thread-parent"),
+        status: "starting",
+        providerName: "codex",
+        runtimeMode: "approval-required",
+        activeTurnId: null,
+        lastError: null,
+        updatedAt: NOW,
+      },
+    });
+    const { gatewayLayer, makeHarness } = makeHarnessLayer([thread]);
+    return Effect.gen(function* () {
+      const harness = yield* makeHarness;
+      const diagnose = () =>
+        harness.callTool({
+          token: "token-parent",
+          name: "synara_diagnose_thread",
+          args: { threadId: "thread-parent" },
+        });
+      const payload = toolResultJson((yield* diagnose()).result);
+      assert.deepEqual(payload.providerDeliveryBlockers, []);
+      assert.deepEqual(payload.operationalIncidents, []);
+      assert.includeMembers(
+        (payload.findings as Array<{ code: string }>).map((finding) => finding.code),
+        ["provider_lifecycle_stale"],
+      );
+
+      // The same combination is normal while a new queued turn is starting.
+      const now = new Date().toISOString();
+      harness.setThreadDetail(
+        makeThreadDetail({
+          ...thread,
+          updatedAt: now,
+          session: { ...thread.session!, updatedAt: now },
+        }),
+      );
+      assert.deepEqual(toolResultJson((yield* diagnose()).result).findings, []);
     }).pipe(Effect.provide(gatewayLayer));
   });
 
@@ -3864,7 +3964,14 @@ describe("AgentGateway", () => {
       const replay = yield* harness.callTool({
         token: "token-parent",
         name: "synara_create_threads",
-        args,
+        args: {
+          ...args,
+          threads: args.threads.map((spec) => ({
+            ...spec,
+            taskKey: "ignored-outside-hubs",
+            routingReason: "Hub-only metadata does not change this standalone request",
+          })),
+        },
       });
       assert.isFalse(isToolError(first.result), toolErrorText(first.result));
       assert.isFalse(isToolError(replay.result), toolErrorText(replay.result));

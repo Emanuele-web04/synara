@@ -18,6 +18,11 @@ import {
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 
+import {
+  MAC_MINIMUM_DARWIN_VERSION,
+  MAC_MINIMUM_SYSTEM_VERSION,
+} from "./desktop-platform-build-config.ts";
+
 import { serializeMacUpdateManifest } from "./mac-update-manifest.ts";
 import { resolveSingleMacDmgFileName } from "./mac-dmg-finalize.ts";
 
@@ -169,17 +174,24 @@ function computeSha512Base64(filePath: string): Promise<string> {
   });
 }
 
-function resolveDmgUpdateZip(stageDistDir: string, entries: ReadonlyArray<string>) {
+function readMacPackagingStage(stageDistDir: string) {
   // The retained stage owns the package identity, including recovery after a
   // failed DMG notarization or an interrupted ZIP/manifest finalization.
   // Legacy ZIP stages cannot reconstruct a missing manifest from this identity.
   const packagePath = join(dirname(stageDistDir), "package.json");
   if (!existsSync(packagePath)) return undefined;
-  const stagedPackage = JSON.parse(readFileSync(packagePath, "utf8")) as {
+  return JSON.parse(readFileSync(packagePath, "utf8")) as {
     version?: unknown;
     productName?: unknown;
-    build?: { mac?: { target?: unknown }; publish?: unknown };
+    build?: { mac?: { target?: unknown; minimumSystemVersion?: unknown }; publish?: unknown };
   };
+}
+
+function resolveDmgUpdateZip(
+  stagedPackage: ReturnType<typeof readMacPackagingStage>,
+  entries: ReadonlyArray<string>,
+) {
+  if (!stagedPackage) return undefined;
   const targets = stagedPackage.build?.mac?.target;
   if (!Array.isArray(targets) || targets.length !== 1 || targets[0] !== "dmg") return undefined;
   const version = stagedPackage.version;
@@ -225,9 +237,10 @@ export async function finalizeMacUpdateZip(
   const existingZipFileName = distEntries.some((entry) => entry.endsWith(".zip"))
     ? resolveSingleMacUpdateZipFileName(distEntries)
     : undefined;
+  const stagedPackage = readMacPackagingStage(options.stageDistDir);
   const dmgUpdateZip =
     !existingZipFileName || (options.requireUpdateManifest !== false && manifestNames.length === 0)
-      ? resolveDmgUpdateZip(options.stageDistDir, distEntries)
+      ? resolveDmgUpdateZip(stagedPackage, distEntries)
       : undefined;
   if (existingZipFileName && dmgUpdateZip && existingZipFileName !== dmgUpdateZip.zipFileName) {
     throw new Error("macOS update ZIP filename does not match its staged package identity.");
@@ -267,6 +280,10 @@ export async function finalizeMacUpdateZip(
   }
   const sha512 = await computeSha512Base64(zipPath);
 
+  const minimumDarwinVersion =
+    stagedPackage?.build?.mac?.minimumSystemVersion === MAC_MINIMUM_SYSTEM_VERSION
+      ? MAC_MINIMUM_DARWIN_VERSION
+      : undefined;
   const updatedManifestPaths: string[] = [];
   if (
     dmgUpdateZip?.hasUpdaterFeed &&
@@ -280,7 +297,11 @@ export async function finalizeMacUpdateZip(
         version: dmgUpdateZip.version,
         releaseDate: new Date().toISOString(),
         files: [{ url: zipFileName, sha512, size: zipStat.size }],
-        extras: { path: zipFileName, sha512 },
+        extras: {
+          path: zipFileName,
+          sha512,
+          ...(minimumDarwinVersion ? { minimumSystemVersion: minimumDarwinVersion } : {}),
+        },
       }),
     );
     updatedManifestPaths.push(manifestPath);
@@ -293,6 +314,7 @@ export async function finalizeMacUpdateZip(
     const nextManifest = updateMacUpdateManifestZipEntry(manifest, zipFileName, {
       sha512,
       size: zipStat.size,
+      ...(minimumDarwinVersion ? { minimumSystemVersion: minimumDarwinVersion } : {}),
     });
     writeFileSync(manifestPath, nextManifest);
     updatedManifestPaths.push(manifestPath);

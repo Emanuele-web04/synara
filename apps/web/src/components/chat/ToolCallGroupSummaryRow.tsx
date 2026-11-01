@@ -7,15 +7,17 @@
 // Depends on: DisclosureRegion/DisclosureChevron (shared disclosure motion)
 
 import { useEffect, useState, type ReactNode } from "react";
+import { useTranslation } from "../../i18n";
 
 import { DisclosureChevron } from "../ui/DisclosureChevron";
 import { DisclosureRegion } from "../ui/DisclosureRegion";
 import { DISCLOSURE_CLEANUP_BUFFER_MS, DISCLOSURE_TRANSITION_MS } from "~/lib/disclosureMotion";
 import {
   BotIcon,
-  FileIcon,
+  FileReadIcon,
   GlobeIcon,
   type LucideIcon,
+  McpIcon,
   PencilIcon,
   SearchIcon,
   TerminalIcon,
@@ -25,6 +27,7 @@ import { cn } from "~/lib/utils";
 import { MUTED_LABEL_TEXT_CLASS_NAME } from "~/surfaceStyles";
 import { extractWebFetchUrl } from "../../lib/toolCallLabel";
 import { LinkChipIcon } from "../LinkChipIcon";
+import { McpServerIcon } from "./McpServerIcon";
 import type { WorkLogEntry } from "../../session-logic";
 import { multiFileEditLabel, type ToolCallGroupSummary } from "./toolCallGroup.logic";
 import {
@@ -40,7 +43,7 @@ import {
 function summaryIcon(summary: ToolCallGroupSummary): LucideIcon {
   switch (summary.iconCategory) {
     case "read":
-      return FileIcon;
+      return FileReadIcon;
     case "search":
       return SearchIcon;
     case "command":
@@ -75,6 +78,7 @@ export function ToolCallGroupSummaryRow(
     renderChildren: () => ReactNode;
   },
 ) {
+  const { t } = useTranslation();
   const { liveEntry, open, onToggle, fontSizePx, renderChildren } = props;
   const [keepChildrenMounted, setKeepChildrenMounted] = useState(open);
 
@@ -105,7 +109,7 @@ export function ToolCallGroupSummaryRow(
     : summary
       ? summaryIcon(summary)
       : props.icon!;
-  const liveMultiFileLabel = liveEntry ? multiFileEditLabel(liveEntry) : null;
+  const liveMultiFileLabel = liveEntry ? multiFileEditLabel(liveEntry, t) : null;
 
   return (
     <div>
@@ -126,13 +130,15 @@ export function ToolCallGroupSummaryRow(
         >
           {showFavicon && iconWebFetchUrl ? (
             <LinkChipIcon url={iconWebFetchUrl} className="size-3.5" />
+          ) : Icon === McpIcon && iconEntry?.mcpServer ? (
+            <McpServerIcon serverName={iconEntry.mcpServer} className="size-3.5" />
           ) : (
             renderWorkEntryIcon(Icon, "size-3.5")
           )}
         </span>
         <span className="min-w-0 truncate" data-tool-group-live={liveEntry ? "true" : undefined}>
           {liveEntry ? (
-            (liveMultiFileLabel ?? renderWorkEntrySentence(workEntryDisplayParts(liveEntry)))
+            (liveMultiFileLabel ?? renderWorkEntrySentence(workEntryDisplayParts(liveEntry, t)))
           ) : !summary ? (
             props.label
           ) : (

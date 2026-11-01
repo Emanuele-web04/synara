@@ -12,12 +12,14 @@ import type {
 } from "@synara/contracts";
 import { StrictMode } from "react";
 import { QueryClient, QueryClientProvider, useQuery } from "@tanstack/react-query";
-import { page, userEvent, type Locator } from "vitest/browser";
+import { page, userEvent } from "vitest/browser";
 import { afterEach, expect, it, vi } from "vitest";
 import { render, cleanup } from "vitest-browser-react";
 
 import { gitWorkingTreeDiffQueryOptions } from "~/lib/gitReactQuery";
 import { WorkspaceFilePreview } from "./WorkspaceFilePreview";
+import { monaco } from "./codeEditor/editorRuntime";
+import { editorEntry } from "./codeEditor/editorModels";
 
 /** Mirrors the Source control pane: a mounted observer of the unstaged patch. */
 function UnstagedChangesObserver(props: { cwd: string }) {
@@ -45,8 +47,11 @@ function installNativeApi(api: NativeApi): () => void {
   };
 }
 
+const queryClients: QueryClient[] = [];
 function makeQueryClient() {
-  return new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  queryClients.push(client);
+  return client;
 }
 
 function loadedFile(overrides: Partial<ProjectReadFileResult> = {}): ProjectReadFileResult {
@@ -67,10 +72,27 @@ function shortcut(key: string): string {
   return `{${primaryModifier}>}${key}{/${primaryModifier}}`;
 }
 
-async function replaceEditorContents(editor: Locator, contents: string): Promise<void> {
-  await editor.click();
+async function previewEditor(fileName = FILE_PATH) {
+  const find = () =>
+    monaco.editor.getEditors().find((editor) => {
+      const uri = editor.getModel()?.uri;
+      return uri?.scheme === "synara-workspace" && uri.path === `/${fileName}`;
+    });
+  await expect.poll(find, { timeout: 10_000 }).toBeDefined();
+  const editor = find()!;
+  expect(editor.getDomNode()).not.toBeNull();
+  expect(editor.getOption(monaco.editor.EditorOption.ariaLabel)).toBe(`Edit ${fileName}`);
+  return editor;
+}
+
+const contentsOf = (editor: monaco.editor.ICodeEditor) => () => editor.getValue();
+async function replaceEditorContents(
+  editor: monaco.editor.ICodeEditor,
+  contents: string,
+): Promise<void> {
+  editor.focus();
   await userEvent.keyboard(shortcut("a"));
-  // Fill replaces DOM text without updating Pierre's document; use native input.
+  // Native keyboard input exercises the real editor and its document session.
   await userEvent.keyboard(
     contents ? contents.replace(/[{[]/g, "$&$&").replace(/\n/g, "{Enter}") : "{Backspace}",
   );
@@ -90,6 +112,14 @@ function pressKeyboardSave(element: Element): void {
 
 afterEach(async () => {
   await cleanup();
+  // Warm workspace models retain their native writer after React unmounts.
+  // Stop them before the next test installs a different nativeApi mock.
+  for (const model of monaco.editor.getModels()) {
+    const entry = editorEntry(model);
+    entry?.session?.pause();
+    entry?.dispose();
+  }
+  for (const client of queryClients.splice(0)) client.clear();
 });
 
 it("requests only the resolved preview file for gutters and refreshes it on file events", async () => {
@@ -186,8 +216,8 @@ it("refreshes mounted unstaged changes after a save and after watched file event
       </QueryClientProvider>,
     );
 
-    const editor = page.getByRole("textbox", { name: `Edit ${FILE_PATH}` });
-    await expect.element(editor).toHaveTextContent("export const value = 1;");
+    const editor = await previewEditor();
+    await expect.poll(contentsOf(editor)).toContain("export const value = 1;");
     await vi.waitFor(() => expect(unstagedCalls()).toBe(1));
     await vi.waitFor(() => expect(onFileChange).toHaveBeenCalledTimes(1));
     // Editable files never request the read-only change gutter.
@@ -196,7 +226,7 @@ it("refreshes mounted unstaged changes after a save and after watched file event
     );
 
     await replaceEditorContents(editor, "export const value = 2;\n");
-    pressKeyboardSave(editor.element());
+    pressKeyboardSave(editor.getDomNode()!);
     await vi.waitFor(() => expect(writeFile).toHaveBeenCalledTimes(1));
     await vi.waitFor(() => expect(unstagedCalls()).toBe(2));
     expect(readWorkingTreeDiff).toHaveBeenLastCalledWith({
@@ -229,13 +259,15 @@ it("keeps the buffer dirty and shows guarded write failures", async () => {
       </QueryClientProvider>,
     );
 
-    const editor = page.getByRole("textbox", { name: `Edit ${FILE_PATH}` });
+    const editor = await previewEditor();
     await replaceEditorContents(editor, "manual edit\n");
-    pressKeyboardSave(editor.element());
+    pressKeyboardSave(editor.getDomNode()!);
 
-    await expect.element(page.getByRole("alert")).toHaveTextContent(conflictMessage);
+    const conflict = page.getByText(conflictMessage, { exact: true });
+    await expect.element(conflict).toBeVisible();
+    expect(conflict.element().closest('[role="alert"]')).not.toBeNull();
     await expect.element(page.getByRole("status", { name: "Unsaved changes" })).toBeVisible();
-    await expect.element(editor).toHaveTextContent("manual edit");
+    await expect.poll(contentsOf(editor)).toContain("manual edit");
     expect(writeFile).toHaveBeenCalledTimes(1);
   } finally {
     restoreNativeApi();
@@ -271,8 +303,8 @@ it("revalidates on file events without overwriting a dirty edit buffer", async (
       </QueryClientProvider>,
     );
 
-    const editor = page.getByRole("textbox", { name: `Edit ${FILE_PATH}` });
-    await expect.element(editor).toHaveTextContent("export const value = 1;");
+    const editor = await previewEditor();
+    await expect.poll(contentsOf(editor)).toContain("export const value = 1;");
     await replaceEditorContents(editor, "manual edit\n");
     await vi.waitFor(() => expect(onFileChange).toHaveBeenCalledTimes(1));
 
@@ -283,7 +315,7 @@ it("revalidates on file events without overwriting a dirty edit buffer", async (
     });
 
     await vi.waitFor(() => expect(readFile).toHaveBeenCalledTimes(2));
-    await expect.element(editor).toHaveTextContent("manual edit");
+    await expect.poll(contentsOf(editor)).toContain("manual edit");
     await expect
       .element(page.getByText("This file changed on disk. Your unsaved edits are preserved."))
       .toBeVisible();
@@ -291,9 +323,9 @@ it("revalidates on file events without overwriting a dirty edit buffer", async (
     const reloadButton = document.querySelector<HTMLButtonElement>('[role="alert"] button');
     expect(reloadButton).not.toBeNull();
     reloadButton?.click();
-    await expect.element(editor).toHaveTextContent("external edit");
+    await expect.poll(contentsOf(editor)).toContain("external edit");
     await replaceEditorContents(editor, "after reload\n");
-    pressKeyboardSave(editor.element());
+    pressKeyboardSave(editor.getDomNode()!);
     await vi.waitFor(() =>
       expect(writeFile).toHaveBeenCalledWith({
         cwd: WORKSPACE_ROOT,
@@ -324,9 +356,8 @@ it("stops revalidation when a kept-mounted preview becomes hidden", async () => 
       </QueryClientProvider>,
     );
 
-    await expect
-      .element(page.getByRole("textbox", { name: `Edit ${FILE_PATH}` }))
-      .toHaveTextContent("export const value = 1;");
+    const editor = await previewEditor();
+    await expect.poll(contentsOf(editor)).toContain("export const value = 1;");
     await vi.waitFor(() => expect(onFileChange).toHaveBeenCalledTimes(1));
 
     await screen.rerender(
@@ -361,9 +392,8 @@ it("switches the watcher to a workspace path resolved by the file read", async (
       </QueryClientProvider>,
     );
 
-    await expect
-      .element(page.getByRole("textbox", { name: `Edit ${FILE_PATH}` }))
-      .toHaveTextContent("export const value = 1;");
+    const editor = await previewEditor(resolvedPath);
+    await expect.poll(contentsOf(editor)).toContain("export const value = 1;");
     await vi.waitFor(() =>
       expect(onFileChange).toHaveBeenLastCalledWith(
         { cwd: WORKSPACE_ROOT, relativePath: resolvedPath },
@@ -405,8 +435,8 @@ it("preserves dirty edits when reloading the changed disk version fails", async 
       </QueryClientProvider>,
     );
 
-    const editor = page.getByRole("textbox", { name: `Edit ${FILE_PATH}` });
-    await expect.element(editor).toHaveTextContent("export const value = 1;");
+    const editor = await previewEditor();
+    await expect.poll(contentsOf(editor)).toContain("export const value = 1;");
     await replaceEditorContents(editor, "manual edit\n");
     await vi.waitFor(() => expect(onFileChange).toHaveBeenCalledTimes(1));
     fileChangeSubscription.listener?.({
@@ -420,7 +450,7 @@ it("preserves dirty edits when reloading the changed disk version fails", async 
     await reloadButton.click();
 
     await vi.waitFor(() => expect(readFile).toHaveBeenCalledTimes(3));
-    await expect.element(editor).toHaveTextContent("manual edit");
+    await expect.poll(contentsOf(editor)).toContain("manual edit");
     await expect.element(page.getByText("Transient read failure")).toBeVisible();
     await expect.element(page.getByRole("status", { name: "Unsaved changes" })).toBeVisible();
   } finally {
@@ -456,9 +486,9 @@ it("keeps markdown task previews and guarded versions in sync after an editor sa
       </QueryClientProvider>,
     );
 
-    const editor = page.getByRole("textbox", { name: `Edit ${markdownPath}` });
+    const editor = await previewEditor(markdownPath);
     await replaceEditorContents(editor, "- [ ] updated task\n");
-    pressKeyboardSave(editor.element());
+    pressKeyboardSave(editor.getDomNode()!);
     await vi.waitFor(() => expect(writeFile).toHaveBeenCalledTimes(1));
     await page.getByRole("radio", { name: "Preview" }).click();
 
@@ -507,7 +537,7 @@ it("keeps rapid Markdown checkbox edits while a save is in flight", async () => 
         <WorkspaceFilePreview workspaceRoot={WORKSPACE_ROOT} filePath="README.md" editable />
       </QueryClientProvider>,
     );
-    await expect.element(page.getByRole("textbox", { name: "Edit README.md" })).toBeVisible();
+    await previewEditor("README.md");
     await page.getByRole("radio", { name: "Preview", exact: true }).click();
     const boxes = page.getByRole("checkbox");
     await boxes.nth(0).click();
@@ -551,6 +581,7 @@ it("keeps oversized and mixed-line-ending files read-only", async () => {
     );
     await vi.waitFor(() => expect(document.body.textContent).toContain("Shown partially"));
     expect(document.querySelector("textarea")).toBeNull();
+    expect(monaco.editor.getEditors()).toHaveLength(0);
 
     await screen.rerender(
       <QueryClientProvider client={queryClient}>
@@ -560,6 +591,7 @@ it("keeps oversized and mixed-line-ending files read-only", async () => {
     await vi.waitFor(() => expect(readFile).toHaveBeenCalledTimes(2));
     await vi.waitFor(() => expect(document.body.textContent).toContain("Read-only"));
     expect(document.querySelector("textarea")).toBeNull();
+    expect(monaco.editor.getEditors()).toHaveLength(0);
   } finally {
     restoreNativeApi();
   }
@@ -589,13 +621,13 @@ it("keeps a successful save when an older watcher read resolves afterwards", asy
         <WorkspaceFilePreview workspaceRoot={WORKSPACE_ROOT} filePath={FILE_PATH} editable />
       </QueryClientProvider>,
     );
-    const editor = page.getByRole("textbox", { name: `Edit ${FILE_PATH}` });
-    await expect.element(editor).toHaveTextContent("export const value = 1;");
+    const editor = await previewEditor();
+    await expect.poll(contentsOf(editor)).toContain("export const value = 1;");
     await vi.waitFor(() => expect(onFileChange).toHaveBeenCalledTimes(1));
     subscription.listener?.({ type: "changed", relativePath: FILE_PATH, mtimeMs: 1 });
     await vi.waitFor(() => expect(readFile).toHaveBeenCalledTimes(2));
     await replaceEditorContents(editor, "saved contents\n");
-    pressKeyboardSave(editor.element());
+    pressKeyboardSave(editor.getDomNode()!);
     await vi.waitFor(() => expect(writeFile).toHaveBeenCalledTimes(1));
     await vi.waitFor(() =>
       expect(document.querySelector('[aria-label="Unsaved changes"]')).toBeNull(),
@@ -603,9 +635,9 @@ it("keeps a successful save when an older watcher read resolves afterwards", asy
     completeRead(loadedFile());
     await pendingRead;
     await vi.waitFor(() => expect(queryClient.isFetching()).toBe(0));
-    await expect.element(editor).toHaveTextContent("saved contents");
+    await expect.poll(contentsOf(editor)).toContain("saved contents");
     await replaceEditorContents(editor, "next saved contents\n");
-    pressKeyboardSave(editor.element());
+    pressKeyboardSave(editor.getDomNode()!);
     await vi.waitFor(() =>
       expect(writeFile).toHaveBeenNthCalledWith(2, {
         cwd: WORKSPACE_ROOT,
@@ -639,17 +671,17 @@ it("preserves unsaved Markdown edits across Preview and Source", async () => {
         </QueryClientProvider>
       </StrictMode>,
     );
-    const editor = page.getByRole("textbox", { name: "Edit README.md" });
-    await editor.click();
+    const editor = await previewEditor("README.md");
+    editor.focus();
     await userEvent.keyboard(shortcut("a") + "unsaved");
     await expect.element(page.getByRole("status", { name: "Unsaved changes" })).toBeVisible();
-    await expect.element(editor).toHaveTextContent("unsaved");
+    await expect.poll(contentsOf(editor)).toContain("unsaved");
     await page.getByRole("radio", { name: "Preview", exact: true }).click();
-    const editorShell = document.querySelector<HTMLElement>(".editor-file-editor__pierre")!;
+    const editorShell = document.querySelector<HTMLElement>("[data-editable-file-contents]")!;
     expect(getComputedStyle(editorShell).display).toBe("none");
     expect(editorShell.getBoundingClientRect().height).toBe(0);
     await page.getByRole("radio", { name: "Source", exact: true }).click();
-    await expect.element(editor).toHaveTextContent("unsaved");
+    await expect.poll(contentsOf(editor)).toContain("unsaved");
   } finally {
     restore();
   }
@@ -667,22 +699,22 @@ it("preserves edits and focus when a save completes while typing", async () => {
         <WorkspaceFilePreview workspaceRoot={WORKSPACE_ROOT} filePath={FILE_PATH} editable />
       </QueryClientProvider>,
     );
-    const editor = page.getByRole("textbox", { name: `Edit ${FILE_PATH}` });
-    await editor.click();
+    const editor = await previewEditor();
+    editor.focus();
     await userEvent.keyboard(shortcut("a") + "first");
     await userEvent.keyboard(shortcut("s"));
     await vi.waitFor(() => expect(writeFile).toHaveBeenCalledTimes(1));
     await userEvent.keyboard("second");
-    await expect.element(editor).toHaveTextContent("firstsecond");
+    await expect.poll(contentsOf(editor)).toContain("firstsecond");
     complete({ relativePath: FILE_PATH, version: SAVED_VERSION });
     await vi.waitFor(() => expect(document.querySelector('[aria-busy="true"]')).toBeNull());
-    await expect.element(editor).toHaveTextContent("firstsecond");
-    expect(editor.element().getRootNode()).toBeInstanceOf(ShadowRoot);
-    expect((editor.element().getRootNode() as ShadowRoot).activeElement).toBe(editor.element());
+    await expect.poll(contentsOf(editor)).toContain("firstsecond");
+    expect(editor.hasTextFocus()).toBe(true);
+    expect(editor.getDomNode()!.contains(document.activeElement)).toBe(true);
     await userEvent.keyboard(shortcut("z"));
-    await expect.element(editor).not.toHaveTextContent("firstsecond");
+    await expect.poll(contentsOf(editor)).not.toContain("firstsecond");
     await userEvent.keyboard(`{${primaryModifier}>}{Shift>}z{/Shift}{/${primaryModifier}}`);
-    await expect.element(editor).toHaveTextContent("firstsecond");
+    await expect.poll(contentsOf(editor)).toContain("firstsecond");
   } finally {
     restore();
   }
@@ -698,22 +730,22 @@ it("renders numbered source lines without including the gutter in saved text", a
   try {
     await render(
       <QueryClientProvider client={makeQueryClient()}>
-        <WorkspaceFilePreview workspaceRoot={WORKSPACE_ROOT} filePath={FILE_PATH} editable />
+        <div style={{ width: 800, height: 400, display: "flex", flexDirection: "column" }}>
+          <WorkspaceFilePreview workspaceRoot={WORKSPACE_ROOT} filePath={FILE_PATH} editable />
+        </div>
       </QueryClientProvider>,
     );
-    const editor = page.getByRole("textbox", { name: `Edit ${FILE_PATH}` });
-    await expect.element(editor).toBeVisible();
-    const root = editor.element().getRootNode() as ShadowRoot;
+    const editor = await previewEditor();
+    await expect.poll(contentsOf(editor)).toBe(contents);
+    await expect.poll(() => editor.getLayoutInfo().height).toBeGreaterThan(200);
+    const root = editor.getDomNode()!;
     await vi.waitFor(() =>
       expect(
-        Array.from(
-          root.querySelectorAll("[data-line-number-content]"),
-          (number) => number.textContent,
-        ),
+        Array.from(root.querySelectorAll(".line-numbers"), (number) => number.textContent),
       ).toEqual(["1", "2", "3", "4"]),
     );
     await replaceEditorContents(editor, `${contents}four`);
-    pressKeyboardSave(editor.element());
+    pressKeyboardSave(editor.getDomNode()!);
     await vi.waitFor(() =>
       expect(writeFile).toHaveBeenCalledWith(
         expect.objectContaining({ contents: `${contents}four` }),
@@ -724,7 +756,7 @@ it("renders numbered source lines without including the gutter in saved text", a
   }
 });
 
-it("keeps Pierre line one and editor position stable when the buffer is emptied", async () => {
+it("keeps line one and editor position stable when the buffer is emptied", async () => {
   const readFile = vi.fn().mockResolvedValue(loadedFile({ contents: "" }));
   const restoreNativeApi = installNativeApi({ projects: { readFile } } as unknown as NativeApi);
   try {
@@ -733,20 +765,17 @@ it("keeps Pierre line one and editor position stable when the buffer is emptied"
         <WorkspaceFilePreview workspaceRoot={WORKSPACE_ROOT} filePath={FILE_PATH} editable />
       </QueryClientProvider>,
     );
-    const editor = page.getByRole("textbox", { name: `Edit ${FILE_PATH}` });
-    await expect.element(editor).toBeVisible();
-    const root = editor.element().getRootNode() as ShadowRoot;
-    const originalLeft = editor.element().getBoundingClientRect().left;
+    const editor = await previewEditor();
+    await expect.poll(() => editor.getDomNode()!.getBoundingClientRect().height).toBeGreaterThan(0);
+    const root = editor.getDomNode()!;
+    const originalLeft = editor.getDomNode()!.getBoundingClientRect().left;
     for (const contents of ["first character", ""]) {
       await replaceEditorContents(editor, contents);
       await vi.waitFor(() => {
         expect(
-          Array.from(
-            root.querySelectorAll("[data-line-number-content]"),
-            (number) => number.textContent,
-          ),
+          Array.from(root.querySelectorAll(".line-numbers"), (number) => number.textContent),
         ).toEqual(["1"]);
-        expect(editor.element().getBoundingClientRect().left).toBe(originalLeft);
+        expect(editor.getDomNode()!.getBoundingClientRect().left).toBe(originalLeft);
       });
     }
   } finally {
@@ -754,46 +783,64 @@ it("keeps Pierre line one and editor position stable when the buffer is emptied"
   }
 });
 
-it("keeps Pierre gutter aligned through horizontal and vertical scrolling", async () => {
+it("keeps the editor gutter aligned through horizontal and vertical scrolling", async () => {
   const contents = Array.from({ length: 100 }, (_, i) => `line${i} ${"x".repeat(300)}`).join("\n");
   const readFile = vi.fn().mockResolvedValue(loadedFile({ contents }));
   const restoreNativeApi = installNativeApi({ projects: { readFile } } as unknown as NativeApi);
   try {
     await render(
       <QueryClientProvider client={makeQueryClient()}>
-        <div style={{ width: 400, height: 320 }}>
+        <div style={{ width: 400, height: 320, display: "flex", flexDirection: "column" }}>
           <WorkspaceFilePreview workspaceRoot={WORKSPACE_ROOT} filePath={FILE_PATH} editable />
         </div>
       </QueryClientProvider>,
     );
-    const editor = page.getByRole("textbox", { name: `Edit ${FILE_PATH}` });
-    await expect.element(editor).toBeVisible();
-    const root = editor.element().getRootNode() as ShadowRoot;
-    const candidates = [
-      ...Array.from(root.querySelectorAll<HTMLElement>("pre,code,[data-content]")),
-      document.querySelector<HTMLElement>(".editor-file-editor__pierre")!,
-    ];
-    const horizontal = candidates.find(
-      (el) =>
-        el.scrollWidth > el.clientWidth &&
-        ["auto", "scroll"].includes(getComputedStyle(el).overflowX),
-    )!;
-    const vertical = candidates.find(
-      (el) =>
-        el.scrollHeight > el.clientHeight &&
-        ["auto", "scroll"].includes(getComputedStyle(el).overflowY),
-    )!;
-    expect(horizontal).toBeDefined();
-    expect(vertical).toBeDefined();
-    horizontal.scrollLeft = horizontal.scrollWidth;
-    vertical.scrollTop = vertical.scrollHeight;
-    expect(horizontal.scrollLeft).toBeGreaterThan(0);
-    expect(vertical.scrollTop).toBeGreaterThan(0);
+    const editor = await previewEditor();
+    await expect.poll(contentsOf(editor)).toBe(contents);
+    const root = editor.getDomNode()!;
+    // This fixture has no language API. Its deferred notice shrinks the editor;
+    // revealing before that resize leaves the last line below the new viewport.
+    await expect
+      .element(
+        page.getByText(
+          "This server does not provide editor intelligence. Editing and saving are still available.",
+          { exact: true },
+        ),
+      )
+      .toBeVisible();
+    await expect
+      .poll(() =>
+        Math.abs(
+          editor.getLayoutInfo().height -
+            Math.floor(root.parentElement!.getBoundingClientRect().height),
+        ),
+      )
+      .toBeLessThan(1);
+    editor.revealLineInCenter(100, monaco.editor.ScrollType.Immediate);
+    // The engine measures the widest rendered line on its next frame; scrolling
+    // before that clamps scrollLeft to the viewport width.
+    await expect
+      .poll(() => editor.getScrollWidth())
+      .toBeGreaterThan(editor.getLayoutInfo().contentWidth);
+    editor.setScrollPosition(
+      {
+        scrollLeft: editor.getScrollWidth(),
+      },
+      monaco.editor.ScrollType.Immediate,
+    );
+    expect(editor.getScrollLeft()).toBeGreaterThan(0);
+    expect(editor.getScrollTop()).toBeGreaterThan(0);
     await vi.waitFor(() => {
-      const number = root.querySelector<HTMLElement>('[data-gutter] [data-line-index="99"]')!;
-      const line = root.querySelector<HTMLElement>('[data-content] [data-line-index="99"]')!;
+      const number = [...root.querySelectorAll<HTMLElement>(".line-numbers")].find(
+        (line) => line.textContent === "100",
+      );
+      const line = [...root.querySelectorAll<HTMLElement>(".view-line")].find((line) =>
+        line.textContent?.startsWith("line99"),
+      );
+      expect(number).toBeDefined();
+      expect(line).toBeDefined();
       expect(
-        Math.abs(number.getBoundingClientRect().top - line.getBoundingClientRect().top),
+        Math.abs(number!.getBoundingClientRect().top - line!.getBoundingClientRect().top),
       ).toBeLessThan(1);
     });
   } finally {

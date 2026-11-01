@@ -15,6 +15,7 @@ import type {
   MessageId,
   PinnedMessage,
   ProjectId,
+  ProjectScript,
   ProviderKind,
   ResolvedKeybindingsConfig,
   ThreadId,
@@ -49,6 +50,8 @@ import { useTemporaryThreadStore } from "~/temporaryThreadStore";
 import { useRightDockStore } from "~/rightDockStore";
 
 import { EnvironmentEditorSection } from "./EnvironmentEditorSection";
+import { EnvironmentActionsSection } from "./EnvironmentActionsSection";
+import type { NewProjectScriptInput } from "../ProjectActionDialog";
 import {
   EnvironmentAutomationsSection,
   type EnvironmentAutomationPanelItem,
@@ -76,6 +79,7 @@ import {
   EnvironmentRow,
   EnvironmentSectionDivider,
 } from "./EnvironmentRow";
+import { useTranslation } from "~/i18n";
 
 // Horizontal space (px) the docked card reserves on the right edge of the chat area.
 // Mirrors the card footprint — w-72 (288px) plus the p-3 wrapper gutters — so insetting
@@ -160,6 +164,21 @@ export interface EnvironmentPanelProps {
   onProjectInstructionsChange: (projectId: ProjectId, instructions: string) => void;
   /** Copy/append current project instructions into the active thread's notepad. */
   onCopyProjectInstructionsToNotes: () => void;
+  /**
+   * The active project's actions (scripts), shown in the Actions section — the one place the
+   * first action can be created now that the top bar's "Add action" slot is the New thread
+   * button. Undefined on non-project threads hides the section.
+   */
+  projectActions?: {
+    readonly scripts: readonly ProjectScript[];
+    readonly onRunScript: (script: ProjectScript) => void;
+    readonly onAddScript: (input: NewProjectScriptInput) => Promise<void> | void;
+    readonly onUpdateScript: (
+      scriptId: string,
+      input: NewProjectScriptInput,
+    ) => Promise<void> | void;
+    readonly onDeleteScript: (scriptId: string) => Promise<void> | void;
+  };
   /** Toggle the Diff panel/route (same handler the header diff toggle used). */
   onToggleDiff: () => void;
   /** Open the shared automation editor for a thread-bound automation row. */
@@ -191,8 +210,10 @@ function EnvironmentRecapSection({
   recap: NonNullable<EnvironmentPanelProps["recap"]>;
   markdownCwd: string | undefined;
 }) {
+  const { t } = useTranslation();
+
   return (
-    <EnvironmentCollapsibleSection label="Recap">
+    <EnvironmentCollapsibleSection label={t("chat:recap_label")}>
       <div className="flex flex-col gap-1.5 pb-1.5">
         {recap.text ? (
           <div className="px-2">
@@ -245,6 +266,7 @@ export function EnvironmentPanel({
   canCopyProjectInstructionsToNotes,
   onProjectInstructionsChange,
   onCopyProjectInstructionsToNotes,
+  projectActions,
   onToggleDiff,
   onOpenAutomation,
   onOpenGithubRepository,
@@ -258,6 +280,8 @@ export function EnvironmentPanel({
   onRegisterCommitAndPushTrigger,
   railBottom,
 }: EnvironmentPanelProps) {
+  const { t } = useTranslation();
+
   const githubRepository = githubRepositoryProp ?? null;
   const githubRepositories = githubRepositoriesProp ?? [];
   const groupFolderPath = groupFolderPathProp ?? null;
@@ -299,15 +323,15 @@ export function EnvironmentPanel({
       ) : null}
 
       <div className="flex items-center justify-between gap-2 px-2 pb-0.5 pt-0.5">
-        <EnvironmentPanelTitle>Environment</EnvironmentPanelTitle>
+        <EnvironmentPanelTitle>{t("chat:general_environmentPanel")}</EnvironmentPanelTitle>
         {/*
           icon-xs centers the 14px gear inside a 28/24px box, insetting it ~7/5px from the
           content edge; pull it back so the glyph's right edge lines up with the rows' chevrons
           (which sit flush against the same px-2 gutter).
         */}
         <IconButton
-          label="Panel sections"
-          tooltip="Panel sections"
+          label={t("chat:panel_sections")}
+          tooltip={t("chat:panel_sections")}
           className="-mr-[7px] sm:-mr-[5px]"
           onClick={() =>
             void navigate({
@@ -338,7 +362,7 @@ export function EnvironmentPanel({
       {isGitRepo ? (
         <EnvironmentRow
           icon={<ChangesIcon className={ENVIRONMENT_ROW_ICON_CLASS_NAME} aria-hidden />}
-          label="Changes"
+          label={t("git:panel_changes")}
           trailing={hasChanges ? <DiffStat insertions={additions} deletions={deletions} /> : null}
           disabled={changesDisabled}
           onClick={() => {
@@ -359,6 +383,17 @@ export function EnvironmentPanel({
         />
       ) : null}
 
+      {settings.showEnvironmentActions && projectActions ? (
+        <EnvironmentActionsSection
+          scripts={projectActions.scripts}
+          keybindings={keybindings}
+          onRunScript={projectActions.onRunScript}
+          onAddScript={projectActions.onAddScript}
+          onUpdateScript={projectActions.onUpdateScript}
+          onDeleteScript={projectActions.onDeleteScript}
+        />
+      ) : null}
+
       <EnvironmentLocalServersSection enabled={open} />
 
       {sidechats && activeThreadId ? (
@@ -370,8 +405,8 @@ export function EnvironmentPanel({
                 if (!createSidechat) {
                   toastManager.add({
                     type: "warning",
-                    title: "Side chat is unavailable",
-                    description: "Open a server-backed main thread before starting a side chat.",
+                    title: t("chat:sideChatIsUnavailable"),
+                    description: t("chat:openAServerBackedMainThreadBeforeStartingA2"),
                   });
                   return;
                 }
@@ -380,11 +415,11 @@ export function EnvironmentPanel({
               .catch((error) => {
                 toastManager.add({
                   type: "error",
-                  title: "Could not start side chat",
+                  title: t("chat:couldNotStartSideChat2"),
                   description:
                     error instanceof Error
                       ? error.message
-                      : "An error occurred while creating the side chat.",
+                      : t("chat:anErrorOccurredWhileCreatingTheSideChat"),
                 });
               });
           }}
@@ -428,11 +463,11 @@ export function EnvironmentPanel({
             })().catch((error) => {
               toastManager.add({
                 type: "error",
-                title: "Could not delete side chat",
+                title: t("chat:couldNotDeleteSideChat"),
                 description:
                   error instanceof Error
                     ? error.message
-                    : "An error occurred while deleting the side chat.",
+                    : t("chat:anErrorOccurredWhileDeletingTheSideChat"),
               });
             });
           }}
@@ -457,7 +492,7 @@ export function EnvironmentPanel({
       {settings.showEnvironmentUsage ? <EnvironmentUsageSection provider={activeProvider} /> : null}
 
       {settings.showEnvironmentRepository && githubRepository && onOpenGithubRepository ? (
-        <EnvironmentLabeledSection label="Repository">
+        <EnvironmentLabeledSection label={t("git:general_repository")}>
           <EnvironmentRow
             icon={<GitHubIcon className={ENVIRONMENT_ROW_ICON_CLASS_NAME} aria-hidden />}
             label={<span className="truncate">{githubRepository.nameWithOwner}</span>}

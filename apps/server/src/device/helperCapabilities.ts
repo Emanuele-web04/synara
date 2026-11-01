@@ -18,6 +18,8 @@ import {
   type DeviceToolchain,
 } from "@synara/contracts";
 
+import { fitDeviceMessage } from "./DeviceBackend.ts";
+
 /** Every capability, in the order the pane should list them. */
 export const DEVICE_CAPABILITY_IDS = [
   "framebuffer",
@@ -156,7 +158,7 @@ export const availabilityFromProbe = (probe: HelperProbeResult): DeviceAvailabil
     // Frameworks that would not load at all leave no per-capability detail;
     // that is a helper failure, not a degraded one.
     if (!probe.ok && probe.error !== undefined) {
-      return { kind: "helper-unavailable", message: probe.error };
+      return { kind: "helper-unavailable", message: fitDeviceMessage(probe.error) };
     }
     return probe.capabilities.length > 0
       ? { kind: "available", capabilities: probe.capabilities, toolchain: probe.toolchain }
@@ -167,7 +169,7 @@ export const availabilityFromProbe = (probe: HelperProbeResult): DeviceAvailabil
   if (broken.length === probe.capabilities.length) {
     return {
       kind: "helper-unavailable",
-      message: probe.error ?? describeBrokenCapabilities(broken, probe.toolchain),
+      message: fitDeviceMessage(probe.error ?? describeBrokenCapabilities(broken, probe.toolchain)),
     };
   }
 

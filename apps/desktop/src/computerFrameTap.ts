@@ -54,9 +54,14 @@ function tapTargetKey(target: CuaPreviewTarget): string {
  * socket -> renderer; they never enter the driver request path or its
  * operation queue. A dead tap stays dead for its target: update() for the
  * same key never respawns it.
+ *
+ * The renderer preview is the only frame consumer, so the helper runs only
+ * while a preview is subscribed. Without a subscriber the desired target is
+ * still tracked and the helper starts as soon as a preview subscribes.
  */
 export class ComputerFrameTap implements ComputerFrameTapHost {
   private desired: CuaPreviewTarget | undefined;
+  private subscribed = false;
   private active: ActiveTap | undefined;
   private reconciling: Promise<void> | undefined;
   private failure: unknown;
@@ -79,6 +84,14 @@ export class ComputerFrameTap implements ComputerFrameTapHost {
   update(target: CuaPreviewTarget): void {
     if (this.deadTargets.has(tapTargetKey(target))) return;
     this.desired = target;
+    this.revision += 1;
+    void this.reconcile().catch(this.options.onError);
+  }
+
+  /** Starts or retires the helper for the tracked target as previews come and go. */
+  setSubscribed(subscribed: boolean): void {
+    if (this.subscribed === subscribed) return;
+    this.subscribed = subscribed;
     this.revision += 1;
     void this.reconcile().catch(this.options.onError);
   }
@@ -129,7 +142,7 @@ export class ComputerFrameTap implements ComputerFrameTapHost {
   private async run(): Promise<void> {
     for (;;) {
       const current = this.active;
-      const target = this.desired;
+      const target = this.streamTarget();
       if (current && (!target || current.exited || current.key !== tapTargetKey(target))) {
         try {
           await this.retire(current);
@@ -155,11 +168,15 @@ export class ComputerFrameTap implements ComputerFrameTapHost {
           throw error;
         }
       }
-      if (target === this.desired) {
+      if (target === this.streamTarget()) {
         this.appliedRevision = this.revision;
         return;
       }
     }
+  }
+
+  private streamTarget(): CuaPreviewTarget | undefined {
+    return this.subscribed ? this.desired : undefined;
   }
 
   private async socketDirectory(): Promise<string> {

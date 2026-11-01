@@ -13,6 +13,7 @@ import {
   unblockThreadFromClient,
 } from "../lib/threadUnblock";
 import { readNativeApi } from "../nativeApi";
+import { useTranslation } from "~/i18n";
 
 /**
  * Reconciles the blocking deliveries of `threadId` and reports the outcome.
@@ -28,6 +29,8 @@ export function useThreadUnblock(input: {
   readonly unblocking: boolean;
   readonly unblockingThreadId: ThreadId | null;
 } {
+  const { t } = useTranslation();
+
   const { threadId, onUnblocked } = input;
   const [unblockingThreadId, setUnblockingThreadId] = useState<ThreadId | null>(null);
   const inFlightThreadIdRef = useRef<ThreadId | null>(null);
@@ -49,18 +52,18 @@ export function useThreadUnblock(input: {
       void (async () => {
         try {
           const api = readNativeApi();
-          if (!api) throw new Error("Not connected to the Synara server.");
+          if (!api) throw new Error(t("common:notConnectedToTheSynaraServer"));
           const result = await unblockThreadFromClient(api.orchestration, resolvedThreadId);
           onUnblocked(resolvedThreadId);
           toastManager.add(describeThreadUnblockResult(result));
         } catch (error) {
           toastManager.add({
             type: "error",
-            title: "Could not unblock thread",
+            title: t("common:couldNotUnblockThread"),
             description:
               error instanceof Error
                 ? error.message
-                : "An unexpected error occurred while clearing the provider failure.",
+                : t("common:anUnexpectedErrorOccurredWhileClearingTheProviderFailure"),
           });
         } finally {
           inFlightThreadIdRef.current = null;
@@ -68,7 +71,7 @@ export function useThreadUnblock(input: {
         }
       })();
     },
-    [onUnblocked, threadId],
+    [onUnblocked, threadId, t],
   );
 
   return {

@@ -12,6 +12,7 @@ import type { ProviderKind, ThreadId } from "@synara/contracts";
 import { ServiceMap } from "effect";
 import type {
   AgentGatewaySessionIdentity,
+  AgentGatewayRetiredWriteAuthority,
   AgentGatewayWriteAuthority,
   AgentGatewayCapability,
 } from "./AgentGatewaySessionRegistry.ts";
@@ -26,6 +27,23 @@ export interface AgentGatewayMcpConnection {
   readonly url: string;
   /** Bearer token bound to the calling thread. */
   readonly bearerToken: string;
+  /**
+   * Connector proxies served by this gateway and authenticated with the
+   * same bearer. Absent when no connector is connected.
+   */
+  readonly connectors?: ReadonlyArray<AgentGatewayConnectorServer>;
+}
+
+/** One connected connector as a provider sees it: an MCP server name and its proxy URL. */
+export interface AgentGatewayConnectorServer {
+  readonly name: string;
+  readonly url: string;
+}
+
+/** What the connectors service publishes: server names keyed to connector ids. */
+export interface AgentGatewayConnectorRegistration {
+  readonly name: string;
+  readonly connectorId: string;
 }
 
 export interface AgentGatewayStdioProxySpawn {
@@ -77,6 +95,14 @@ export interface AgentGatewayCredentialsShape {
    * happen synchronously; the promise represents only in-flight drainage.
    */
   readonly retireSessionTurn: (token: string, turnId: string) => Promise<void>;
+  /**
+   * Live credentials for one thread whose write authority was already retired
+   * by a terminal turn. Diagnostics reads this to surface bearers that can no
+   * longer bind write authority while a newer turn is running.
+   */
+  readonly listRetiredWriteAuthorities?: (
+    threadId: string,
+  ) => ReadonlyArray<AgentGatewayRetiredWriteAuthority>;
   /** Revoke exactly one provider session credential. */
   readonly revokeSessionToken: (token: string) => void;
   /** Convenience bundle used when injecting MCP config into provider sessions. */
@@ -87,6 +113,18 @@ export interface AgentGatewayCredentialsShape {
   ) => AgentGatewayMcpConnection;
   /** Spawn spec for the stdio->HTTP proxy used by stdio-only MCP clients. */
   readonly stdioProxy: AgentGatewayStdioProxySpawn;
+  /**
+   * Replace the connectors that new provider sessions receive. Sessions keep
+   * the set they started with; the proxy refuses connectors removed since.
+   */
+  readonly setConnectorServers?: (
+    registrations: ReadonlyArray<AgentGatewayConnectorRegistration>,
+  ) => void;
+  /**
+   * Whether this live bearer was issued with the connector. A session may
+   * only call connectors it received at start (or at its latest renewal).
+   */
+  readonly canUseConnector?: (token: string, connectorId: string) => boolean;
 }
 
 export class AgentGatewayCredentials extends ServiceMap.Service<

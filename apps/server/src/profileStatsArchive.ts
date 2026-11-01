@@ -642,6 +642,7 @@ const makeProfileStatsArchive = Effect.gen(function* () {
       yield* checkpointStore.deleteCheckpointRefs({
         cwd,
         checkpointRefs: input.checkpointRefs,
+        liveThreadId: ThreadId.makeUnsafe(input.threadId),
       });
     });
   };

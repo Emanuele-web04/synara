@@ -1,3 +1,4 @@
+export * from "./editorDebug";
 export * from "./auth";
 export * from "./automation";
 export * from "./baseSchemas";
@@ -23,6 +24,7 @@ export * from "./model";
 export * from "./agentMentions";
 export * from "./agentGateway";
 export * from "./externalMcp";
+export * from "./mcpConnectors";
 export * from "./ws";
 export * from "./wsCompatibility";
 export * from "./keybindings";
@@ -37,6 +39,7 @@ export * from "./githubInbox";
 export * from "./orchestration";
 export * from "./asyncUserInput";
 export * from "./editor";
+export * from "./editorIntelligence";
 export * from "./environment";
 export * from "./project";
 export * from "./projectAgent";
@@ -54,3 +57,5 @@ export * from "./computerBrowser";
 export * from "./rpc";
 export * from "./claudeCache";
 export * from "./todo";
+
+export * from "./uiLocale";

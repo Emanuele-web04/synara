@@ -3,9 +3,24 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSyn
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, it } from "vitest";
+import { execProcessFile } from "@synara/shared/processRuntime";
+import * as NodeServices from "@effect/platform-node/NodeServices";
+import { Effect, Layer } from "effect";
+
+import { ServerConfig } from "./config";
+import { GitCoreLive } from "./git/Layers/GitCore";
+import { listLocalPreviewWorktreeRoots } from "./workspace/localPreviewWorktrees";
 
 import { resolveCodexHomeOverlayAccountSegment } from "./codexHomePaths.ts";
-import { resolveAllowedLocalPreviewFile } from "./localImageFiles.ts";
+import { createLocalPreviewGrant, resolveAllowedLocalPreviewFile } from "./localImageFiles.ts";
+
+const PreviewGitLayer = GitCoreLive.pipe(
+  Layer.provide(ServerConfig.layerTest(process.cwd(), { prefix: "synara-preview-git-" })),
+  Layer.provide(NodeServices.layer),
+);
+
+const previewWorktrees = (cwd: string) =>
+  Effect.runPromise(listLocalPreviewWorktreeRoots({ cwd }).pipe(Effect.provide(PreviewGitLayer)));
 
 const tempDirs: string[] = [];
 
@@ -305,5 +320,118 @@ describe("resolveAllowedLocalPreviewFile", () => {
     });
 
     assert.equal(result, null);
+  });
+});
+
+// Grant recovery is the policy owner: exercise real worktree registrations, not
+// a root list that would grant an unrelated sibling by construction.
+function runGit(cwd: string, args: readonly string[]): Promise<string> {
+  return new Promise((resolve, reject) => {
+    execProcessFile("git", args, { cwd, timeout: 5_000 }, (error, stdout) =>
+      error ? reject(error) : resolve(stdout),
+    );
+  });
+}
+
+async function makePreviewWorktree() {
+  const homeDir = mkdtempSync(path.join(process.cwd(), ".preview-grant-"));
+  tempDirs.push(homeDir);
+  const cwd = path.join(homeDir, "project");
+  const worktree = path.join(homeDir, "linked");
+  mkdirSync(cwd);
+  await runGit(cwd, ["init", "--quiet"]);
+  await runGit(cwd, ["config", "core.hooksPath", path.join(cwd, ".git", "hooks")]);
+  await runGit(cwd, [
+    "-c",
+    "user.name=Preview Test",
+    "-c",
+    "user.email=preview@example.invalid",
+    "-c",
+    "commit.gpgSign=false",
+    "commit",
+    "--quiet",
+    "--allow-empty",
+    "-m",
+    "fixture",
+  ]);
+  await runGit(cwd, ["worktree", "add", "--quiet", "--detach", worktree]);
+  const worktreeRoots = await previewWorktrees(cwd);
+  return { cwd, worktree, homeDir, worktreeRoots };
+}
+
+describe("createLocalPreviewGrant relative recovery", () => {
+  it("canonicalizes a registered sibling worktree and grants only the referenced file", async () => {
+    const context = await makePreviewWorktree();
+    const imagePath = path.join(context.worktree, "result.png");
+    const otherPath = path.join(context.worktree, "other.png");
+    writeFileSync(imagePath, Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+    writeFileSync(otherPath, Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+    const result = await createLocalPreviewGrant({
+      requestedPath: "../linked/result.png",
+      ...context,
+    });
+    assert.equal(result.canonicalPath, realpathSync(imagePath));
+    const preview = (requestedPath: string) =>
+      resolveAllowedLocalPreviewFile({
+        requestedPath,
+        cwd: context.cwd,
+        previewGrant: result.grant,
+        allowAbsoluteLocalPreviewFile: true,
+        codexHomePaths: [],
+      });
+    assert.equal((await preview(result.canonicalPath))?.path, realpathSync(imagePath));
+    assert.equal(await preview(otherPath), null);
+  });
+
+  it("does not turn parent paths, unrelated repositories or symlinks into workspace access", async () => {
+    const context = await makePreviewWorktree();
+    writeFileSync(path.join(context.worktree, "result.png"), "registered");
+    const unrelated = path.join(context.homeDir, "unrelated");
+    mkdirSync(unrelated);
+    await runGit(unrelated, ["init", "--quiet"]);
+    writeFileSync(path.join(unrelated, "private.png"), "private");
+    writeFileSync(path.join(context.homeDir, "private.png"), "private");
+    if (process.platform !== "win32") {
+      symlinkSync(unrelated, path.join(context.worktree, "escape"), "dir");
+      symlinkSync(path.join(unrelated, "private.png"), path.join(context.cwd, "escape.png"));
+    }
+    const refused = ["../private.png", "../unrelated/private.png"];
+    if (process.platform !== "win32") refused.push("../linked/escape/private.png", "escape.png");
+    for (const requestedPath of refused) {
+      await assert.rejects(createLocalPreviewGrant({ requestedPath, ...context }));
+    }
+    // Even a .git pointer to a real repository must not authorize an unregistered cwd.
+    const impostor = path.join(context.homeDir, "impostor");
+    mkdirSync(impostor);
+    writeFileSync(path.join(impostor, ".git"), `gitdir: ${path.join(context.cwd, ".git")}`);
+    const impostorRoots = await previewWorktrees(impostor);
+    assert.deepEqual(impostorRoots, []);
+    await assert.rejects(
+      createLocalPreviewGrant({
+        ...context,
+        cwd: impostor,
+        worktreeRoots: impostorRoots,
+        requestedPath: "../linked/result.png",
+      }),
+    );
+  });
+
+  it("keeps absolute clients and safe in-root or existing ancestor recovery compatible", async () => {
+    const homeDir = makeTempDir("synara-preview-context-");
+    const cwd = path.join(homeDir, "project", "nested");
+    const ancestorFile = path.join(homeDir, "project", "shared.png");
+    const inRoot = path.join(cwd, "inside.png");
+    mkdirSync(cwd, { recursive: true });
+    writeFileSync(ancestorFile, "ancestor");
+    writeFileSync(inRoot, "inside");
+    for (const [requestedPath, expected] of [
+      ["inside.png", inRoot],
+      ["shared.png", ancestorFile],
+      [inRoot, inRoot],
+    ] as const) {
+      const result = await createLocalPreviewGrant({ requestedPath, cwd, homeDir });
+      assert.equal(result.canonicalPath, realpathSync(expected));
+    }
+    await assert.rejects(createLocalPreviewGrant({ requestedPath: "inside.png" }));
   });
 });

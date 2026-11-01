@@ -8,10 +8,15 @@ import { Effect, Option } from "effect";
 import type { ProjectionSnapshotQueryShape } from "../orchestration/Services/ProjectionSnapshotQuery.ts";
 import type { ThreadDiagnosticsQueryShape } from "../diagnostics/Services/ThreadDiagnosticsQuery.ts";
 import {
+  projectedLifecycleAgeMs,
+  RUNTIME_RECONCILIATION_MAX_TURN_AGE_MS,
+} from "../provider/providerRuntimeReconciliation.ts";
+import {
   PROVIDER_COMMAND_REACTOR_CONSUMER,
   type OrchestrationEventDeliveryRepositoryShape,
 } from "../persistence/Services/OrchestrationEventDeliveries.ts";
 import type { OrchestrationEventStoreShape } from "../persistence/Services/OrchestrationEventStore.ts";
+import type { AgentGatewayRetiredWriteAuthority } from "./Services/AgentGatewaySessionRegistry.ts";
 import {
   PROVIDER_RUNTIME_EVENT_RETAIN_ACCEPTED,
   type ProviderRuntimeEventRepositoryShape,
@@ -50,6 +55,14 @@ export function makeThreadDiagnosticTools(input: {
   readonly requireThreadShell: (
     threadId: string,
   ) => Effect.Effect<OrchestrationThreadShell, unknown, never>;
+  /**
+   * Live gateway credentials for a thread whose write authority was retired
+   * by a terminal turn. While one of these sessions still presents its bearer
+   * during a newer running turn, every MCP write fails `caller_turn_inactive`.
+   */
+  readonly listRetiredWriteAuthorities?:
+    | ((threadId: string) => ReadonlyArray<AgentGatewayRetiredWriteAuthority>)
+    | undefined;
 }): ReadonlyArray<ToolEntry> {
   const readActivity: ToolEntry = {
     requiredCapability: "diagnostics:read",
@@ -183,6 +196,9 @@ export function makeThreadDiagnosticTools(input: {
             }),
             input.diagnostics.listOperationalDiagnostics({ threadId, limit: 50 }),
           ]);
+        const retiredWriteAuthorities = input.listRetiredWriteAuthorities?.(threadId) ?? [];
+        const runningTurnId =
+          detail.latestTurn?.state === "running" ? detail.latestTurn.turnId : null;
         const [activities, events, runtimeEvents] = yield* Effect.all([
           input.diagnostics.listActivities({
             threadId,
@@ -201,6 +217,28 @@ export function makeThreadDiagnosticTools(input: {
           }),
         ]);
         const findings = [
+          ...((detail.session?.status === "starting" || detail.session?.status === "running") &&
+          detail.session.activeTurnId === null &&
+          detail.latestTurn?.state !== "running" &&
+          projectedLifecycleAgeMs(detail, Date.now()) >= RUNTIME_RECONCILIATION_MAX_TURN_AGE_MS
+            ? [
+                {
+                  severity: "warning",
+                  code: "provider_lifecycle_stale",
+                  detail: `Session remains '${detail.session.status}' without an active provider turn beyond the recovery grace period; latest turn is '${detail.latestTurn?.state ?? "absent"}'. Check live provider ownership before recovery.`,
+                },
+              ]
+            : []),
+          ...(runningTurnId !== null
+            ? retiredWriteAuthorities.map((authority) => ({
+                severity: "error",
+                code: "agent_gateway_write_authority_retired",
+                detail:
+                  authority.sessionKey === context.callerSessionKey
+                    ? `This session's gateway credential was retired at turn ${authority.retiredTurnId} and can never acquire write authority for the running turn ${runningTurnId}; MCP writes fail with caller_turn_inactive until the provider session's credential is re-issued or restarted.`
+                    : `A live gateway credential for this thread (session ${authority.sessionKey}, provider ${authority.provider}) was retired at turn ${authority.retiredTurnId} and cannot bind write authority to the running turn ${runningTurnId}; MCP writes fail with caller_turn_inactive until the provider session's credential is re-issued or restarted.`,
+              }))
+            : []),
           ...(detail.session?.lastError
             ? [
                 {

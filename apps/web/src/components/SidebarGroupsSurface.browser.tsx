@@ -104,7 +104,7 @@ function projectData(thread: SidebarThreadSummary): SidebarDerivedProjectData {
     allProjectThreadCount: 1,
     projectThreads: [thread],
     orderedProjectThreadIds: [thread.id],
-    visibleEntries: [{ kind: "thread", rowId: thread.id, rootRowId: thread.id, thread, depth: 0 }],
+    visibleEntries: [{ kind: "thread", rowId: thread.id, thread }],
     threadListExtraPages: 0,
     canShowMoreThreads: false,
     canShowLessThreads: false,

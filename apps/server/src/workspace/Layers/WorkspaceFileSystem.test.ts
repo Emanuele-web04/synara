@@ -1,9 +1,13 @@
+// Covers confined workspace previews and version-checked saves using real files.
+// Special-file cases protect native I/O workers from uninterruptible FIFO opens.
 import * as NodeFs from "node:fs/promises";
+import { closeSync, constants, openSync } from "node:fs";
+import { execProcessFile } from "@synara/shared/processRuntime";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, expect } from "vitest";
-import { it } from "@effect/vitest";
-import { Effect, FileSystem, Layer, Path } from "effect";
+import { it, live } from "@effect/vitest";
+import { Effect, FileSystem, Layer, Option, Path } from "effect";
 
 import { createLocalPreviewGrant } from "../../localImageFiles";
 import { WorkspaceEntries } from "../Services/WorkspaceEntries";
@@ -45,6 +49,53 @@ const makeDirectorySymlink = (target: string, linkPath: string) =>
   NodeFs.symlink(target, linkPath, process.platform === "win32" ? "junction" : "dir");
 
 it.layer(TestLayer)("WorkspaceFileSystemLive", (it) => {
+  describe.skipIf(process.platform === "win32")("named pipe rejection", () => {
+    for (const operation of ["read", "guarded save"] as const) {
+      live(`rejects a ${operation} of a named pipe without waiting for a writer`, () =>
+        Effect.gen(function* () {
+          const service = yield* WorkspaceFileSystem;
+          const cwd = yield* makeTempDir;
+          const fifo = `${cwd}/pipe.txt`;
+          yield* Effect.promise(
+            () =>
+              new Promise<void>((resolve, reject) => {
+                execProcessFile("mkfifo", [fifo], { timeout: 1000 }, (error) =>
+                  error ? reject(error) : resolve(),
+                );
+              }),
+          );
+          const request: Effect.Effect<unknown, unknown> =
+            operation === "read"
+              ? service.readFile({ cwd, relativePath: "pipe.txt" })
+              : service.writeFile({
+                  cwd,
+                  relativePath: "pipe.txt",
+                  contents: "edited",
+                  expectedVersion: `sha256:${"0".repeat(64)}`,
+                  encoding: "utf8",
+                  lineEnding: "lf",
+                });
+          const result = yield* request.pipe(
+            Effect.exit,
+            Effect.timeoutOption("1 second"),
+            // Even the broken implementation must release its native open before test cleanup.
+            Effect.ensuring(
+              Effect.sync(() => {
+                const writer = openSync(fifo, constants.O_RDWR | constants.O_NONBLOCK);
+                closeSync(writer);
+              }),
+            ),
+          );
+          expect(Option.isSome(result)).toBe(true);
+          if (Option.isSome(result)) {
+            expect(result.value._tag).toBe("Failure");
+            if (result.value._tag === "Failure")
+              expect(String(result.value.cause)).toContain("Path is not a file");
+          }
+        }).pipe(Effect.provide(TestLayer)),
+      );
+    }
+  });
   describe("readFile", () => {
     it.effect("reads files relative to the workspace root", () =>
       Effect.gen(function* () {

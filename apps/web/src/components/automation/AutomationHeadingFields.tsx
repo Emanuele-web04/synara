@@ -10,6 +10,7 @@ import { useEffect, useRef, useState } from "react";
 import { automationNameError, automationPromptError } from "~/lib/automationForm";
 import { useCommitDraft, useCommitDraftBlurHandlers } from "~/lib/automationInlineDraft";
 import { cn } from "~/lib/utils";
+import { useTranslation } from "~/i18n";
 
 const HEADING_FIELD_CLASS =
   "-mx-2 w-full rounded-md bg-transparent px-2 outline-none transition-colors hover:bg-foreground/[0.03] focus-visible:bg-foreground/[0.04] disabled:hover:bg-transparent";
@@ -30,6 +31,8 @@ export function AutomationNameField({
   readonly disabled?: boolean | undefined;
   readonly title?: string | undefined;
 }) {
+  const { t } = useTranslation();
+
   const draft = useCommitDraft({
     value,
     onCommit,
@@ -42,9 +45,9 @@ export function AutomationNameField({
       value={draft.draft}
       disabled={disabled}
       title={title}
-      aria-label="Automation name"
+      aria-label={t("automation:automationName")}
       aria-invalid={draft.error !== null || undefined}
-      placeholder="Automation name"
+      placeholder={t("automation:automationName")}
       onChange={(event) => draft.setDraft(event.target.value)}
       onBlur={onBlur}
       onKeyDown={(event) => {
@@ -75,6 +78,8 @@ export function AutomationPromptField({
   readonly disabled?: boolean | undefined;
   readonly title?: string | undefined;
 }) {
+  const { t } = useTranslation();
+
   const draft = useCommitDraft({
     value,
     onCommit,
@@ -87,9 +92,9 @@ export function AutomationPromptField({
       value={draft.draft}
       disabled={disabled}
       title={title}
-      aria-label="Automation prompt"
+      aria-label={t("automation:form_promptAriaLabel")}
       aria-invalid={draft.error !== null || undefined}
-      placeholder="What should this automation do on each run?"
+      placeholder={t("automation:whatShouldThisAutomationDoOnEachRun")}
       rows={1}
       onChange={(event) => draft.setDraft(event.target.value)}
       onBlur={onBlur}
@@ -121,6 +126,8 @@ export function AutomationSaveStatus({
   readonly saving: boolean;
   readonly failed: boolean;
 }) {
+  const { t } = useTranslation();
+
   const [showSaved, setShowSaved] = useState(false);
   const wasSaving = useRef(saving);
   useEffect(() => {
@@ -133,7 +140,7 @@ export function AutomationSaveStatus({
   }, [saving, failed]);
   return (
     <p aria-live="polite" className="h-4 text-ui leading-snug text-muted-foreground/70">
-      {saving ? "Saving…" : showSaved ? "Saved" : ""}
+      {saving ? t("common:saving") : showSaved ? t("workspace:saved") : ""}
     </p>
   );
 }

@@ -13,7 +13,7 @@
  *   refusable rather than fatal: the caller is handed the shutdown candidates
  *   so the pane can prompt.
  * - Shutdown triggers: app quit (`dispose`), thread removal
- *   (`handleThreadRemoved`), and an idle timeout after the last detach.
+ *   (`handleThreadRemoved`), and an idle timeout after the last agent turn or detach.
  *
  * Everything the manager does to the device itself goes through DeviceBackend,
  * so the whole state machine is testable against `FakeDeviceBackend`.
@@ -28,6 +28,7 @@ import {
 } from "./bootOwnership.ts";
 import {
   DEVICE_SYNARA_BOOT_LIMIT,
+  DEVICE_THREAD_STATE_MAX_DEVICES,
   ThreadId,
   type DeviceAttachPhase,
   type DeviceAvailability,
@@ -40,7 +41,6 @@ import {
   type DeviceLaunchAppResult,
   type DeviceListResult,
   type DeviceOpenPaneReason,
-  type DeviceScreenshotResult,
   type DeviceStartRecordingResult,
   type DeviceStopRecordingResult,
   type DeviceUiNode,
@@ -49,22 +49,38 @@ import {
 
 import {
   DeviceBackendError,
+  fitDeviceMessage,
   type DeviceBackend,
+  type DeviceConfiguration,
   type DeviceKeyEvent,
+  type DeviceLaunchOptions,
+  type DeviceLogQuery,
+  type DeviceLogResult,
+  type DeviceScreenshotCapture,
   type DeviceSwipeGesture,
+  type DeviceTypeTextOutcome,
 } from "./DeviceBackend.ts";
+import {
+  effectiveValue,
+  findFocusedNode,
+  isSecureField,
+  uiFingerprint,
+} from "./deviceUiSnapshot.ts";
 import { DeviceFrameTransport, type DeviceFrameSink } from "./deviceFrameTransport.ts";
 import {
   DeviceUiTargetError,
+  deviceKeyboardTop,
   SCROLL_SWIPE_DURATION_MS,
+  describeTarget,
   findTarget,
+  targetPhrase,
   planScrollStep,
   visibleLabels,
   type DeviceUiTarget,
   type DeviceUiTargetMatch,
 } from "./uiTreeTargeting.ts";
 
-/** How long a Synara-booted device stays up with no thread attached. */
+/** How long an unused Synara-booted device stays up after work or viewing ends. */
 export const DEVICE_IDLE_SHUTDOWN_MS = 10 * 60 * 1000;
 
 /**
@@ -110,6 +126,71 @@ export function isTransientAttachFailure(error: unknown): boolean {
 /** Enough to cross a long Settings list; short enough to fail fast on a typo. */
 export const DEVICE_DEFAULT_MAX_SCROLLS = 8;
 
+/**
+ * Settling after input: the screen counts as settled once its accessibility
+ * fingerprint holds for `quietMs`, and the wait gives up at `timeoutMs`.
+ *
+ * The tree, not pixels: reads cost tens of milliseconds, they ignore a blinking
+ * caret, and they are what the agent acts on next. A spinner or an endless
+ * animation simply reaches the deadline, which is reported rather than hidden.
+ * The first read waits `startDelayMs` so the gesture's own effect has begun.
+ */
+export const DEVICE_SETTLE_DEFAULTS = {
+  quietMs: 300,
+  timeoutMs: 2_500,
+  pollMs: 100,
+  startDelayMs: 120,
+  /**
+   * How long an action's effect may take to start. The home gesture, a push
+   * after a network call, or a sheet can leave the old screen perfectly still
+   * for half a second first, which a bare quiet window reads as "settled,
+   * nothing changed". Waiting for the first change before settling costs
+   * nothing when the change is immediate, and this much when there is none.
+   */
+  changeGraceMs: 1_000,
+} as const;
+
+/**
+ * How long a launch may take to bring its app to the front. The first launch
+ * after an install, right after a cold boot, has been seen past four seconds;
+ * the bound only costs time when the app never comes forward at all.
+ */
+const APP_CHANGE_TIMEOUT_MS = 10_000;
+
+/** Upper bound for an explicit wait, so a typo cannot hang a turn. */
+export const DEVICE_WAIT_MAX_MS = 30_000;
+
+/** USB HID keyboard usages used for editing chords. */
+const HID_USAGE = { a: 0x04, returnKey: 0x28, deleteKey: 0x2a } as const;
+
+export interface DeviceSettleOutcome {
+  /** False when the screen was still changing at the deadline. */
+  readonly settled: boolean;
+  readonly waitedMs: number;
+  /** The last tree read, or null when accessibility never answered. */
+  readonly root: DeviceUiNode | null;
+}
+
+export interface DeviceObservation extends DeviceSettleOutcome {
+  /** Whether the screen differs from just before the action; null if unknown. */
+  readonly changed: boolean | null;
+}
+
+export type DeviceTextMethod = "auto" | "keys" | "value";
+
+export interface DeviceTextEntryOutcome {
+  /** How the text went in: keystrokes, or the field's value set directly. */
+  readonly method: "keys" | "value";
+  readonly submitted: boolean;
+}
+
+export interface DeviceWaitOutcome {
+  readonly status: "ready" | "timeout" | "ambiguous";
+  readonly waitedMs: number;
+  readonly root: DeviceUiNode | null;
+  readonly match: DeviceUiTargetMatch | null;
+}
+
 export type DeviceEventListener = (event: DeviceEvent) => void;
 
 export interface DeviceManagerOptions {
@@ -130,6 +211,10 @@ interface ThreadAttachment {
   version: number;
   attachedDeviceUdid: string | null;
   agentActiveCount: number;
+  attachmentSource: "user" | "agent";
+  /** Device use outlives an individual tool until its exact provider turn settles. */
+  readonly agentDevicesByTurn: Map<string, Set<string>>;
+  readonly endedAgentTurns: Set<string>;
   lastError: string | null;
   /** Non-null while the attachment is still coming up. */
   attachPhase: DeviceAttachPhase | null;
@@ -167,7 +252,16 @@ export class DeviceManager {
   } | null = null;
   /** Devices this manager booted, and therefore may shut down again. */
   private readonly synaraBooted = new Set<string>();
+  /**
+   * Boots still running. A device being booted can still read as shut down in
+   * a listing taken meanwhile, and reconciling against that listing released
+   * its slot and forgot that Synara owns it.
+   */
+  private readonly bootsInFlight = new Set<string>();
   private readonly idleTimers = new Map<string, NodeJS.Timeout>();
+  /** New consumers wait out an already-issued idle poweroff before dispatching. */
+  private readonly idleShutdowns = new Map<string, Promise<void>>();
+  private readonly activeDeviceActions = new Map<string, number>();
   private activeStreamUdid: string | null = null;
   private desiredStreamUdid: string | null = null;
   /** Serializes the native helper's single stream while allowing the desired device to change. */
@@ -187,6 +281,9 @@ export class DeviceManager {
     this.schedule = options.setTimeout ?? ((handler, ms) => setTimeout(handler, ms));
     this.cancel = options.clearTimeout ?? ((handle) => clearTimeout(handle));
     this.now = options.now ?? Date.now;
+    this.backend.onStreamInterrupted?.((udid, reason) =>
+      this.handleStreamInterrupted(udid, reason),
+    );
   }
 
   private async recordBootOwnership(): Promise<void> {
@@ -226,10 +323,21 @@ export class DeviceManager {
   }
 
   /** Waits without holding the process open, and shares the injected scheduler. */
-  private delay(ms: number): Promise<void> {
-    return new Promise((resolve) => {
-      const timer = this.schedule(() => resolve(), ms);
+  private delay(ms: number, signal?: AbortSignal): Promise<void> {
+    signal?.throwIfAborted();
+    return new Promise((resolve, reject) => {
+      const abort = () => {
+        this.cancel(timer);
+        signal?.removeEventListener("abort", abort);
+        reject(signal?.reason);
+      };
+      const timer = this.schedule(() => {
+        signal?.removeEventListener("abort", abort);
+        resolve();
+      }, ms);
       timer.unref?.();
+      signal?.addEventListener("abort", abort, { once: true });
+      if (signal?.aborted) abort();
     });
   }
 
@@ -280,8 +388,11 @@ export class DeviceManager {
 
   /** Devices the pane may offer as shutdown candidates when the cap is hit. */
   async synaraBootedDevices(): Promise<readonly DeviceDescriptor[]> {
-    const devices = await this.backend.listDevices({ includeShutdown: true }).catch(() => []);
-    this.reconcileSynaraBooted(devices);
+    const listed = await this.backend.listDevices({ includeShutdown: true }).catch(() => null);
+    // A failed listing says nothing about what is running; reconciling against
+    // it would drop every device Synara booted.
+    if (listed !== null) this.reconcileSynaraBooted(listed);
+    const devices = listed ?? [];
     return devices
       .filter((device) => this.synaraBooted.has(device.udid))
       .map((device) => this.describe(device));
@@ -307,7 +418,7 @@ export class DeviceManager {
         .map((device) => device.udid),
     );
     for (const udid of this.synaraBooted) {
-      if (running.has(udid)) continue;
+      if (running.has(udid) || this.bootsInFlight.has(udid)) continue;
       this.synaraBooted.delete(udid);
       this.clearIdleTimer(udid);
     }
@@ -316,10 +427,15 @@ export class DeviceManager {
   // ── Boot / shutdown ────────────────────────────────────────────────
 
   async boot(udid: string): Promise<DeviceBootResult> {
-    const devices = await this.backend.listDevices({ includeShutdown: true }).catch(() => []);
+    this.assertNotDisposed();
+    await this.waitForIdleShutdown(udid);
+    this.assertNotDisposed();
+    const listed = await this.backend.listDevices({ includeShutdown: true }).catch(() => null);
+    this.assertNotDisposed();
     // Devices that stopped without Synara doing it still held their slots, so
     // three shutdowns from a shell were enough to make every later boot refuse.
-    this.reconcileSynaraBooted(devices);
+    if (listed !== null) this.reconcileSynaraBooted(listed);
+    const devices = listed ?? [];
     const known = devices.find((device) => device.udid === udid) ?? null;
     // Viewing an already-booted device is uncapped: the cap exists to stop
     // Synara from accumulating simulators, not to limit what the user watches.
@@ -340,6 +456,7 @@ export class DeviceManager {
     // exists to stop Synara accumulating multi-gigabyte simulators would be
     // exceeded by however many requests arrived inside that window.
     this.synaraBooted.add(udid);
+    this.bootsInFlight.add(udid);
     let device: DeviceDescriptor;
     try {
       device = await this.backend.boot(udid);
@@ -348,6 +465,8 @@ export class DeviceManager {
       // after a failure would leak the slot for the process lifetime.
       this.synaraBooted.delete(udid);
       throw cause;
+    } finally {
+      this.bootsInFlight.delete(udid);
     }
     // Persisted before the caller is told the boot succeeded, so a crash in the
     // next instant still leaves a record to reclaim from.
@@ -358,9 +477,16 @@ export class DeviceManager {
     return { kind: "booted", device: { ...device, bootSource: "synara" } };
   }
 
-  async shutdown(udid: string): Promise<void> {
+  async shutdown(udid: string, onlyIfIdle = false): Promise<void> {
     await this.stopRecordingIfActive(udid).catch(() => undefined);
     await this.stopStream(udid);
+    // Stream teardown yields: a new tool, user attachment or viewer may arrive meanwhile.
+    if (onlyIfIdle && (this.disposed || this.isDeviceBusy(udid))) return;
+    const attachedTokens = onlyIfIdle
+      ? new Map(
+          [...this.threads].map(([threadId, attachment]) => [threadId, attachment.attachToken]),
+        )
+      : null;
     await this.backend.shutdown(udid);
     this.synaraBooted.delete(udid);
     await this.recordBootOwnership();
@@ -369,6 +495,8 @@ export class DeviceManager {
     // at a shut-down simulator.
     for (const [threadId, attachment] of this.threads) {
       if (attachment.attachedDeviceUdid !== udid) continue;
+      if (attachedTokens !== null && attachedTokens.get(threadId) !== attachment.attachToken)
+        continue;
       attachment.attachedDeviceUdid = null;
       attachment.attachPhase = null;
       // Stops a retry loop still waiting on this device's display: it is not
@@ -391,17 +519,26 @@ export class DeviceManager {
    * the background, pushing a phase per stage, and the pane renders the device
    * it was told to show from the first frame of the interaction.
    */
-  async attach(threadId: string, udid: string): Promise<ThreadDeviceState> {
+  async attach(
+    threadId: string,
+    udid: string,
+    source: "user" | "agent" = "user",
+  ): Promise<ThreadDeviceState> {
+    this.assertNotDisposed();
     const attachment = this.threadState(threadId);
     const previous = attachment.attachedDeviceUdid;
     // Cleared before releasing: `releaseDevice` asks whether anyone still holds
     // the device, and this thread must no longer count as a holder.
     attachment.attachedDeviceUdid = udid;
+    attachment.attachmentSource = source;
     attachment.lastError = null;
     attachment.attachPhase = "connecting";
     const token = (attachment.attachToken += 1);
     if (previous !== null && previous !== udid) await this.releaseDevice(previous, "switched");
     this.clearIdleTimer(udid);
+    await this.waitForIdleShutdown(udid);
+    this.assertNotDisposed();
+    if (attachment.attachToken !== token) return await this.snapshot(threadId);
 
     // Already streaming (another thread is watching the same device): there is
     // nothing to wait for, so the phase clears without a round trip.
@@ -432,6 +569,18 @@ export class DeviceManager {
       const attachment = this.threads.get(threadId);
       // Superseded or gone: another attach owns this thread's state now.
       if (!attachment || attachment.attachToken !== token) return;
+
+      if (this.wouldStealStream(udid)) {
+        // Nobody is watching this device yet, while another thread's viewers
+        // watch a different one on the helper's single stream. Taking it over
+        // froze their pane for an attachment nobody could see; the stream
+        // starts when this device gets a viewer instead.
+        if (attachment.attachPhase !== null) {
+          attachment.attachPhase = null;
+          await this.publish(threadId);
+        }
+        return;
+      }
 
       try {
         const started = await this.startStream(udid);
@@ -492,7 +641,8 @@ export class DeviceManager {
     const attached = this.threadState(threadId).attachedDeviceUdid;
     if (attached === udid) return;
     if (attached !== null) return;
-    await this.attach(threadId, udid);
+    await this.attach(threadId, udid, "agent");
+    this.updateIdleTimer(udid);
   }
 
   async detach(threadId: string): Promise<ThreadDeviceState> {
@@ -511,7 +661,11 @@ export class DeviceManager {
   async handleThreadRemoved(threadId: string): Promise<void> {
     if (!this.threads.has(threadId)) return;
     await this.detach(threadId);
+    const devices = new Set<string>();
+    for (const used of this.threads.get(threadId)!.agentDevicesByTurn.values())
+      for (const udid of used) devices.add(udid);
     this.threads.delete(threadId);
+    for (const device of devices) this.updateIdleTimer(device);
   }
 
   // ── Streaming ──────────────────────────────────────────────────────
@@ -521,10 +675,29 @@ export class DeviceManager {
    * started lazily and stopped when the last subscriber and attachment go away.
    */
   subscribeFrames(udid: string, sink: DeviceFrameSink): () => void {
+    if (this.disposed) return () => {};
     const unsubscribe = this.transport.subscribe(udid, sink);
-    void this.startStream(udid).catch(() => undefined);
+    this.clearIdleTimer(udid);
+    void (async () => {
+      await this.waitForIdleShutdown(udid);
+      if (this.disposed || this.transport.deviceSubscriberCount(udid) === 0) return;
+      // A thread whose attach deferred its stream (see `wouldStealStream`) gets
+      // the attach's retry loop now that someone is watching: the device may
+      // still be publishing its display.
+      const waiting = [...this.threads].find(
+        ([, attachment]) =>
+          attachment.attachedDeviceUdid === udid && this.activeStreamUdid !== udid,
+      );
+      if (waiting) {
+        const [threadId, attachment] = waiting;
+        void this.bringStreamUp(threadId, udid, attachment.attachToken);
+      } else {
+        void this.startStream(udid).catch(() => undefined);
+      }
+    })().catch(() => undefined);
     return () => {
       unsubscribe();
+      this.updateIdleTimer(udid);
       // Capture stops as soon as the last viewer goes, whether or not a thread
       // is still attached. Collapsing the pane closes the frame socket but
       // leaves the attachment, and gating this on the attachment too meant the
@@ -540,8 +713,13 @@ export class DeviceManager {
 
   // ── Control plane ──────────────────────────────────────────────────
 
-  async tap(udid: string, x: number, y: number): Promise<void> {
-    await this.backend.tap(udid, x, y);
+  async tap(
+    udid: string,
+    x: number,
+    y: number,
+    options: { readonly holdMs?: number } = {},
+  ): Promise<void> {
+    await this.withDeviceAction(udid, () => this.backend.tap(udid, x, y, options));
   }
 
   /**
@@ -554,10 +732,23 @@ export class DeviceManager {
   async tapElement(
     udid: string,
     target: DeviceUiTarget,
-    options: { readonly maxScrolls?: number | undefined } = {},
+    options: {
+      readonly maxScrolls?: number | undefined;
+      readonly holdMs?: number;
+      readonly signal?: AbortSignal;
+    } = {},
   ): Promise<DeviceUiTargetMatch> {
+    options.signal?.throwIfAborted();
     const match = await this.scrollToElement(udid, target, options);
-    await this.backend.tap(udid, match.point.x, match.point.y);
+    options.signal?.throwIfAborted();
+    await this.withDeviceAction(udid, () =>
+      this.backend.tap(
+        udid,
+        match.point.x,
+        match.point.y,
+        options.holdMs === undefined ? {} : { holdMs: options.holdMs },
+      ),
+    );
     return match;
   }
 
@@ -578,7 +769,7 @@ export class DeviceManager {
   async scrollToElement(
     udid: string,
     target: DeviceUiTarget,
-    options: { readonly maxScrolls?: number | undefined } = {},
+    options: { readonly maxScrolls?: number | undefined; readonly signal?: AbortSignal } = {},
   ): Promise<DeviceUiTargetMatch> {
     const maxScrolls = options.maxScrolls ?? DEVICE_DEFAULT_MAX_SCROLLS;
     let tree = await this.describeUi(udid);
@@ -586,15 +777,29 @@ export class DeviceManager {
     let previousPosition: string | null = null;
 
     for (let scrolls = 0; scrolls < maxScrolls; scrolls += 1) {
+      options.signal?.throwIfAborted();
       // Nothing to aim at yet: page down by a screenful to materialize more of
       // the list. Once the node exists, the planner takes over and aims at it.
       const step =
         match === null ? this.pageDownStep(tree.root) : planScrollStep(match.node, tree.root);
       if (step === null) return match as DeviceUiTargetMatch;
 
-      await this.backend.swipe(udid, step);
+      const positionBefore = match === null ? null : match.node.frame.y;
+      await this.withDeviceAction(udid, () => this.backend.swipe(udid, step));
       tree = await this.describeUi(udid);
       match = this.locate(tree.root, target);
+
+      // Fixed chrome (a navigation bar's back button, a tab bar) sits outside
+      // the safe band by design and does not scroll. Only identified chrome
+      // outside the keyboard overlay may be tapped in place.
+      if (
+        match !== null &&
+        match.onScreen &&
+        match.node.frame.y === positionBefore &&
+        this.isFixedChrome(tree.root, match.node)
+      ) {
+        return match;
+      }
 
       // A list at its end keeps rendering the same thing; swiping again would
       // burn the whole budget to no effect. Compared across the visible labels
@@ -603,8 +808,8 @@ export class DeviceManager {
       if (previousPosition !== null && position === previousPosition) {
         throw new DeviceUiTargetError(
           match === null
-            ? `No element labelled ${JSON.stringify(target.label)} appeared after scrolling to the end of the screen.`
-            : `Scrolling stopped moving ${JSON.stringify(target.label)} after ${scrolls + 1} ` +
+            ? `No element ${targetPhrase(target)} appeared after scrolling to the end of the screen.`
+            : `Scrolling stopped moving ${describeTarget(target)} after ${scrolls + 1} ` +
                 `swipe${scrolls === 0 ? "" : "s"}; the list appears to be at its end and the element is still out of reach.`,
           match === null ? visibleLabels(tree.root) : [],
           match === null,
@@ -615,7 +820,7 @@ export class DeviceManager {
 
     if (match !== null && planScrollStep(match.node, tree.root) === null) return match;
     throw new DeviceUiTargetError(
-      `Could not bring ${JSON.stringify(target.label)} into view within ${maxScrolls} swipes. ` +
+      `Could not bring ${describeTarget(target)} into view within ${maxScrolls} swipes. ` +
         `Raise maxSwipes, or scroll manually with device_swipe if it sits in a nested scroll area.`,
       match === null ? visibleLabels(tree.root) : [],
       match === null,
@@ -654,51 +859,385 @@ export class DeviceManager {
   }
 
   async swipe(udid: string, gesture: DeviceSwipeGesture): Promise<void> {
-    await this.backend.swipe(udid, gesture);
+    await this.withDeviceAction(udid, () => this.backend.swipe(udid, gesture));
   }
 
-  async typeText(udid: string, text: string): Promise<void> {
-    await this.backend.typeText(udid, text);
+  /** A stationary frame alone can also be an off-screen or keyboard-covered control. */
+  private isFixedChrome(root: DeviceUiNode, target: DeviceUiNode, chrome = false): boolean {
+    const ownsChrome =
+      chrome ||
+      /^(?:AX)?(?:NavigationBar|TabBar)$/iu.test(root.role) ||
+      /^(?:AX)?(?:NavigationBar|TabBar)$/iu.test(root.subrole ?? "");
+    if (root === target) return ownsChrome;
+    return root.children.some((child) => this.isFixedChrome(child, target, ownsChrome));
+  }
+
+  async typeText(udid: string, text: string): Promise<DeviceTypeTextOutcome> {
+    return await this.withDeviceAction(udid, () => this.backend.typeText(udid, text));
+  }
+
+  /**
+   * Put text into the focused field the way a test needs it to land: exactly.
+   *
+   * Keystrokes are the realistic path, but the guest maps each key through its
+   * own hardware layout (an Italian simulator turns "-" into "'") and only
+   * ASCII has keys at all. `auto` therefore types keys for ASCII on a US
+   * layout and otherwise sets the field's value through accessibility, which
+   * carries any Unicode. Trailing newlines become a Return press either way.
+   */
+  async enterText(
+    udid: string,
+    text: string,
+    options: {
+      readonly method?: DeviceTextMethod;
+      readonly clear?: boolean;
+      readonly submit?: boolean;
+      readonly signal?: AbortSignal;
+    } = {},
+  ): Promise<DeviceTextEntryOutcome> {
+    options.signal?.throwIfAborted();
+    const body = text.replace(/\n+$/u, "");
+    const submit = options.submit === true || body.length !== text.length;
+    const printableAscii = /^[\x20-\x7e\t\n]*$/u.test(body);
+    let method: "keys" | "value";
+    if (options.method === "keys") {
+      if (!printableAscii) {
+        throw new DeviceBackendError(
+          'method "keys" types printable ASCII only; use method "value" (or "auto") for this text.',
+        );
+      }
+      method = "keys";
+    } else if (options.method === "value") {
+      method = "value";
+    } else {
+      method =
+        printableAscii &&
+        (await this.withDeviceAction(udid, () => this.backend.usesUsKeyboardLayout(udid)).catch(
+          () => false,
+        ))
+          ? "keys"
+          : "value";
+    }
+
+    if (method === "value" && body.length > 0) {
+      const tree = await this.describeUi(udid);
+      const focused = findFocusedNode(tree.root);
+      if (focused === null) {
+        throw new DeviceUiTargetError(
+          "No element has keyboard focus, so there is nowhere to put the text. Tap the field first, then retry.",
+        );
+      }
+      if (isSecureField(focused) && options.clear !== true) {
+        throw new DeviceBackendError(
+          "Secure fields cannot be appended to through accessibility; pass clear: true to replace the whole value.",
+        );
+      } else {
+        const current = options.clear === true ? "" : (effectiveValue(focused) ?? "");
+        options.signal?.throwIfAborted();
+        await this.withDeviceAction(udid, () =>
+          this.backend.setFocusedValue(udid, `${current}${body}`),
+        );
+      }
+    }
+    if (method === "keys") {
+      options.signal?.throwIfAborted();
+      if (options.clear === true) await this.clearFocusedField(udid);
+      if (body.length > 0) {
+        const outcome = await this.withDeviceAction(udid, () =>
+          this.backend.typeText(udid, body, {
+            ...(options.signal ? { signal: options.signal } : {}),
+          }),
+        );
+        if (outcome.skipped > 0) {
+          throw new DeviceBackendError(
+            `${outcome.skipped} character(s) have no key and were not typed; retry with method "value".`,
+          );
+        }
+      }
+    } else if (body.length === 0 && options.clear === true) {
+      await this.withDeviceAction(udid, () => this.backend.setFocusedValue(udid, ""));
+    }
+    options.signal?.throwIfAborted();
+    if (submit) await this.pressKey(udid, HID_USAGE.returnKey);
+    return { method, submitted: submit };
+  }
+
+  /** Select all, then delete: the hardware-keyboard way to empty a field. */
+  private async clearFocusedField(udid: string): Promise<void> {
+    await this.pressKey(udid, HID_USAGE.a, ["command"]);
+    await this.pressKey(udid, HID_USAGE.deleteKey);
+  }
+
+  private async pressKey(
+    udid: string,
+    keyCode: number,
+    modifiers: DeviceKeyEvent["modifiers"] = [],
+  ): Promise<void> {
+    await this.withDeviceAction(udid, () =>
+      this.backend.keyEvent(udid, { keyCode, modifiers, direction: "down" }),
+    );
+    await this.withDeviceAction(udid, () =>
+      this.backend.keyEvent(udid, { keyCode, modifiers, direction: "up" }),
+    );
+  }
+
+  // ── Observation ────────────────────────────────────────────────────
+
+  /**
+   * Wait until the screen stops changing, or the deadline passes.
+   *
+   * Reads failing mid-transition (the frontmost app is swapping) count as
+   * change rather than as an error: a launch or a dismissal is exactly when
+   * the tree is briefly unreadable.
+   */
+  async waitForSettle(
+    udid: string,
+    options: {
+      readonly quietMs?: number;
+      readonly timeoutMs?: number;
+      readonly signal?: AbortSignal;
+    } = {},
+  ): Promise<DeviceSettleOutcome> {
+    const quietMs = options.quietMs ?? DEVICE_SETTLE_DEFAULTS.quietMs;
+    const timeoutMs = options.timeoutMs ?? DEVICE_SETTLE_DEFAULTS.timeoutMs;
+    const started = this.now();
+    await this.delay(Math.min(DEVICE_SETTLE_DEFAULTS.startDelayMs, timeoutMs), options.signal);
+    let root: DeviceUiNode | null = null;
+    let fingerprint: string | null = null;
+    let stableSince = this.now();
+    while (true) {
+      options.signal?.throwIfAborted();
+      const read = await this.describeUi(udid).catch(() => null);
+      const next = read === null ? null : uiFingerprint(read.root);
+      if (read !== null) root = read.root;
+      if (next === null || next !== fingerprint) {
+        fingerprint = next;
+        stableSince = this.now();
+      } else if (this.now() - stableSince >= quietMs) {
+        return { settled: true, waitedMs: this.now() - started, root };
+      }
+      if (this.now() - started >= timeoutMs) {
+        return { settled: false, waitedMs: this.now() - started, root };
+      }
+      await this.delay(DEVICE_SETTLE_DEFAULTS.pollMs, options.signal);
+    }
+  }
+
+  /**
+   * Run an action and report what it did to the screen: the settled tree and
+   * whether it differs from just before. An unchanged screen after a tap is the
+   * clearest sign the tap missed, and it costs the agent nothing to see it.
+   */
+  async observe(
+    udid: string,
+    action: () => Promise<void>,
+    options: {
+      readonly quietMs?: number;
+      readonly timeoutMs?: number;
+      /**
+       * Wait for an app to come to the front before settling: `"different"`
+       * for one other than the app in front before, `"any"` when relaunching
+       * the app already in front. A launch reports success well before its app
+       * is frontmost, and the old screen or the blank transition holding still
+       * in the meantime would read as settled.
+       */
+      readonly awaitApp?: "different" | "any";
+      readonly awaitChange?: boolean;
+      readonly signal?: AbortSignal;
+    } = {},
+  ): Promise<DeviceObservation> {
+    const beforeTree = await this.describeUi(udid).catch(() => null);
+    const before = beforeTree === null ? null : uiFingerprint(beforeTree.root);
+    options.signal?.throwIfAborted();
+    await action();
+    options.signal?.throwIfAborted();
+    const acted = this.now();
+    if (options.awaitApp !== undefined) {
+      const transitioned = await this.waitForApp(
+        udid,
+        beforeTree?.root.label,
+        before,
+        options.awaitApp,
+        options.signal,
+      );
+      if (!transitioned) {
+        return {
+          settled: false,
+          waitedMs: this.now() - acted,
+          root: (await this.describeUi(udid).catch(() => null))?.root ?? null,
+          changed: null,
+        };
+      }
+    } else if (before !== null) {
+      const changed = await this.waitForChange(
+        udid,
+        before,
+        options.signal,
+        options.awaitChange ? options.timeoutMs : undefined,
+      );
+      if (options.awaitChange && !changed) {
+        return {
+          settled: false,
+          waitedMs: this.now() - acted,
+          root: (await this.describeUi(udid).catch(() => null))?.root ?? null,
+          changed: false,
+        };
+      }
+    }
+    const settled = await this.waitForSettle(udid, options);
+    const after = settled.root === null ? null : uiFingerprint(settled.root);
+    return {
+      ...settled,
+      // From the end of the action, so a slow-starting transition counts.
+      waitedMs: this.now() - acted,
+      changed: before === null || after === null ? null : before !== after,
+    };
+  }
+
+  /** Poll until the screen differs from `baseline`, for at most the change grace. */
+  private async waitForChange(
+    udid: string,
+    baseline: string,
+    signal?: AbortSignal,
+    timeoutMs: number = DEVICE_SETTLE_DEFAULTS.changeGraceMs,
+  ): Promise<boolean> {
+    const started = this.now();
+    while (this.now() - started < timeoutMs) {
+      signal?.throwIfAborted();
+      const tree = await this.describeUi(udid).catch(() => null);
+      if (tree !== null && uiFingerprint(tree.root) !== baseline) return true;
+      await this.delay(DEVICE_SETTLE_DEFAULTS.pollMs, signal);
+    }
+    return false;
+  }
+
+  /**
+   * Poll until an app is in front (the root carries a name; SpringBoard and
+   * the launch transition do not) and, when `previous` is given, it is not
+   * that one. Bounded by `APP_CHANGE_TIMEOUT_MS`: an app that was already in
+   * front never changes, and the bound lets that fall through to a settle.
+   */
+  private async waitForApp(
+    udid: string,
+    previous: string | null | undefined,
+    baseline: string | null,
+    mode: "different" | "any",
+    signal?: AbortSignal,
+  ): Promise<boolean> {
+    const started = this.now();
+    let transitioned = baseline === null;
+    while (this.now() - started < APP_CHANGE_TIMEOUT_MS) {
+      signal?.throwIfAborted();
+      const tree = await this.describeUi(udid).catch(() => null);
+      const label = tree?.root.label?.trim();
+      if (tree === null || !label || (baseline !== null && uiFingerprint(tree.root) !== baseline))
+        transitioned = true;
+      if (label && (mode === "different" ? label !== previous?.trim() : transitioned)) return true;
+      await this.delay(DEVICE_SETTLE_DEFAULTS.pollMs, signal);
+    }
+    return false;
+  }
+
+  /**
+   * Wait for an element to appear (or, with `gone`, to disappear) without
+   * sending any input. Ambiguity proves presence, so it ends a presence wait.
+   */
+  async waitFor(
+    udid: string,
+    target: DeviceUiTarget,
+    options: { readonly gone?: boolean; readonly timeoutMs: number; readonly signal?: AbortSignal },
+  ): Promise<DeviceWaitOutcome> {
+    const started = this.now();
+    const timeoutMs = Math.min(options.timeoutMs, DEVICE_WAIT_MAX_MS);
+    let root: DeviceUiNode | null = null;
+    while (true) {
+      options.signal?.throwIfAborted();
+      const read = await this.describeUi(udid).catch(() => null);
+      if (read !== null) {
+        root = read.root;
+        let match: DeviceUiTargetMatch | null = null;
+        let ambiguous = false;
+        try {
+          const found = findTarget(read.root, target);
+          match = found.onScreen ? found : null;
+        } catch (error) {
+          if (!(error instanceof DeviceUiTargetError)) throw error;
+          ambiguous = !error.notFound;
+        }
+        const present = match !== null || ambiguous;
+        if (options.gone === true ? !present : present) {
+          return {
+            status: ambiguous && options.gone !== true ? "ambiguous" : "ready",
+            waitedMs: this.now() - started,
+            root,
+            match,
+          };
+        }
+      }
+      if (this.now() - started >= timeoutMs) {
+        return { status: "timeout", waitedMs: this.now() - started, root, match: null };
+      }
+      await this.delay(200, options.signal);
+    }
   }
 
   async keyEvent(udid: string, event: DeviceKeyEvent): Promise<void> {
-    await this.backend.keyEvent(udid, event);
+    await this.withDeviceAction(udid, () => this.backend.keyEvent(udid, event));
   }
 
   async pressButton(udid: string, button: DeviceHardwareButton): Promise<void> {
-    await this.backend.pressButton(udid, button);
+    await this.withDeviceAction(udid, () => this.backend.pressButton(udid, button));
   }
 
   async install(udid: string, appPath: string): Promise<DeviceInstallAppResult> {
-    return await this.backend.install(udid, appPath);
+    return await this.withDeviceAction(udid, () => this.backend.install(udid, appPath));
   }
 
   async launch(
     udid: string,
     bundleId: string,
     launchArguments?: readonly string[],
+    options?: DeviceLaunchOptions,
   ): Promise<DeviceLaunchAppResult> {
-    return await this.backend.launch(udid, bundleId, launchArguments);
+    return await this.withDeviceAction(udid, () =>
+      this.backend.launch(udid, bundleId, launchArguments, options),
+    );
+  }
+
+  async configure(udid: string, configuration: DeviceConfiguration): Promise<void> {
+    await this.withDeviceAction(udid, () => this.backend.configure(udid, configuration));
+  }
+
+  async readLogs(udid: string, query: DeviceLogQuery): Promise<DeviceLogResult> {
+    return await this.withDeviceAction(udid, () => this.backend.readLogs(udid, query));
   }
 
   async openUrl(udid: string, url: string): Promise<void> {
-    await this.backend.openUrl(udid, url);
+    await this.withDeviceAction(udid, () => this.backend.openUrl(udid, url));
   }
 
   async screenshot(
     udid: string,
-    options: { readonly save?: boolean; readonly maxInlineBytes?: number } = {},
-  ): Promise<DeviceScreenshotResult> {
-    return await this.backend.screenshot(udid, options);
+    options: {
+      readonly save?: boolean;
+      readonly maxInlineBytes?: number;
+      readonly resolution?: "pixels" | "points";
+      readonly proof?: boolean;
+    } = {},
+  ): Promise<DeviceScreenshotCapture> {
+    return await this.withDeviceAction(udid, () => this.backend.screenshot(udid, options));
   }
 
   async startRecording(udid: string): Promise<DeviceStartRecordingResult> {
+    this.assertNotDisposed();
     const alreadyTracked = this.recording.has(udid);
     this.recording.add(udid);
+    this.clearIdleTimer(udid);
     try {
-      return await this.backend.startRecording(udid);
+      return await this.withDeviceAction(udid, () => this.backend.startRecording(udid));
     } catch (error) {
       if (!alreadyTracked) this.recording.delete(udid);
+      this.updateIdleTimer(udid);
       throw error;
     }
   }
@@ -706,11 +1245,23 @@ export class DeviceManager {
   async stopRecording(udid: string): Promise<DeviceStopRecordingResult> {
     const result = await this.backend.stopRecording(udid);
     this.recording.delete(udid);
+    this.updateIdleTimer(udid);
     return result;
   }
 
   async describeUi(udid: string): Promise<DeviceDescribeUiResult> {
-    return await this.backend.describeUi(udid);
+    return await this.withDeviceAction(udid, () => this.backend.describeUi(udid));
+  }
+
+  /** The screen in points: helper geometry when attached, else the tree's root. */
+  async pointSize(
+    udid: string,
+  ): Promise<{ readonly width: number; readonly height: number } | null> {
+    const geometry = this.backend.geometry(udid);
+    if (geometry) return { width: geometry.pointWidth, height: geometry.pointHeight };
+    const tree = await this.describeUi(udid).catch(() => null);
+    if (tree === null || tree.root.frame.width <= 0 || tree.root.frame.height <= 0) return null;
+    return { width: tree.root.frame.width, height: tree.root.frame.height };
   }
 
   // ── Agent integration ──────────────────────────────────────────────
@@ -720,17 +1271,68 @@ export class DeviceManager {
    * device" badge for exactly as long as the action runs. Nested calls are
    * counted, so overlapping tool calls do not clear the badge early.
    */
-  async withAgentActivity<A>(threadId: string, action: () => Promise<A>): Promise<A> {
+  async withAgentActivity<A>(
+    threadId: string,
+    action: () => Promise<A>,
+    deviceUse?: { readonly udid: string; readonly turnId: string | null },
+  ): Promise<A> {
+    this.assertNotDisposed();
     const attachment = this.threadState(threadId);
+    const udid = deviceUse?.udid;
+    if (udid !== undefined) {
+      this.clearIdleTimer(udid);
+      this.activeDeviceActions.set(udid, (this.activeDeviceActions.get(udid) ?? 0) + 1);
+      const turnId = deviceUse?.turnId ?? null;
+      if (turnId !== null && !attachment.endedAgentTurns.has(turnId)) {
+        const devices = attachment.agentDevicesByTurn.get(turnId) ?? new Set<string>();
+        devices.add(udid);
+        attachment.agentDevicesByTurn.set(turnId, devices);
+      }
+    }
+    const becameActive = attachment.agentActiveCount === 0;
     attachment.agentActiveCount += 1;
-    // Only the badge changes here; the device list the pane shows does not.
-    if (attachment.agentActiveCount === 1) await this.publish(threadId, { reuseDiscovery: true });
     try {
+      if (udid !== undefined) await this.waitForIdleShutdown(udid);
+      // Capture the 0→1 edge before the wait: overlapping calls may already be counted.
+      if (becameActive && !this.disposed && this.threads.get(threadId) === attachment)
+        await this.publish(threadId, { reuseDiscovery: true });
+      this.assertNotDisposed();
       return await action();
     } finally {
       attachment.agentActiveCount = Math.max(0, attachment.agentActiveCount - 1);
-      if (attachment.agentActiveCount === 0) await this.publish(threadId, { reuseDiscovery: true });
+      if (udid !== undefined) {
+        const remaining = (this.activeDeviceActions.get(udid) ?? 1) - 1;
+        if (remaining === 0) this.activeDeviceActions.delete(udid);
+        else this.activeDeviceActions.set(udid, remaining);
+        this.updateIdleTimer(udid);
+      }
+      // Archive/disposal may finish while an admitted device call is settling.
+      if (
+        !this.disposed &&
+        this.threads.get(threadId) === attachment &&
+        attachment.agentActiveCount === 0
+      )
+        await this.publish(threadId, { reuseDiscovery: true });
     }
+  }
+
+  /** Release only the settled turn; delayed terminal events cannot evict newer work. */
+  endAgentTurn(threadId: string, turnId?: string): void {
+    const attachment = this.threads.get(threadId);
+    if (!attachment || this.disposed) return;
+    if (turnId === undefined && attachment.agentDevicesByTurn.size > 1) return;
+    const devices = new Set<string>();
+    for (const [heldTurn, used] of attachment.agentDevicesByTurn) {
+      if (turnId !== undefined && heldTurn !== turnId) continue;
+      for (const udid of used) devices.add(udid);
+      attachment.agentDevicesByTurn.delete(heldTurn);
+      attachment.endedAgentTurns.add(heldTurn);
+    }
+    if (turnId !== undefined) attachment.endedAgentTurns.add(turnId);
+    // Bound replay guards while rejecting tool completions from recently settled turns.
+    while (attachment.endedAgentTurns.size > 64)
+      attachment.endedAgentTurns.delete(attachment.endedAgentTurns.values().next().value!);
+    for (const udid of devices) this.updateIdleTimer(udid);
   }
 
   /** Auto-open the pane when an agent puts an app on a device. */
@@ -785,6 +1387,7 @@ export class DeviceManager {
     this.disposed = true;
     for (const [, timer] of this.idleTimers) this.cancel(timer);
     this.idleTimers.clear();
+    await Promise.allSettled(this.idleShutdowns.values());
     // Snapshotted: both loops mutate the set they are walking.
     const recording = Array.from(this.recording);
     const booted = Array.from(this.synaraBooted);
@@ -810,6 +1413,9 @@ export class DeviceManager {
         version: 0,
         attachedDeviceUdid: null,
         agentActiveCount: 0,
+        attachmentSource: "user",
+        agentDevicesByTurn: new Map(),
+        endedAgentTurns: new Set(),
         lastError: null,
         attachPhase: null,
         attachToken: 0,
@@ -837,6 +1443,88 @@ export class DeviceManager {
       if (attachment.attachedDeviceUdid === udid) return true;
     }
     return false;
+  }
+
+  /** Metadata-only agent attachments do not keep a simulator alive after work ends. */
+  private isDeviceBusy(udid: string): boolean {
+    if (
+      this.bootsInFlight.has(udid) ||
+      this.recording.has(udid) ||
+      this.activeDeviceActions.has(udid) ||
+      this.transport.deviceSubscriberCount(udid) > 0
+    )
+      return true;
+    for (const attachment of this.threads.values()) {
+      if (attachment.attachedDeviceUdid === udid && attachment.attachmentSource === "user")
+        return true;
+      for (const devices of attachment.agentDevicesByTurn.values())
+        if (devices.has(udid)) return true;
+    }
+    return false;
+  }
+
+  /** Reuse the existing grace period whenever the last real consumer goes away. */
+  private updateIdleTimer(udid: string): void {
+    if (this.disposed || !this.synaraBooted.has(udid)) return;
+    if (this.isDeviceBusy(udid)) {
+      this.clearIdleTimer(udid);
+      return;
+    }
+    if (this.idleTimers.has(udid)) return;
+    const timer = this.schedule(() => {
+      if (this.idleTimers.get(udid) !== timer) return;
+      this.idleTimers.delete(udid);
+      const shutdown = this.shutdownIfStillIdle(udid).finally(() => {
+        if (this.idleShutdowns.get(udid) === shutdown) this.idleShutdowns.delete(udid);
+      });
+      this.idleShutdowns.set(udid, shutdown);
+    }, this.idleShutdownMs);
+    timer.unref?.();
+    this.idleTimers.set(udid, timer);
+  }
+
+  /** Starting `udid` would end a stream someone is watching, for no viewer of its own. */
+  private wouldStealStream(udid: string): boolean {
+    const active = this.activeStreamUdid;
+    return (
+      active !== null &&
+      active !== udid &&
+      this.transport.deviceSubscriberCount(udid) === 0 &&
+      this.transport.deviceSubscriberCount(active) > 0
+    );
+  }
+
+  /**
+   * The helper died under a live stream. Its frames simply stopped, so the
+   * pane froze on the last one with nothing reporting it. The stream is
+   * rebuilt on a fresh helper while anyone still needs it, and a failure is
+   * shown on every thread watching the device.
+   */
+  private handleStreamInterrupted(udid: string, reason: string): void {
+    const recovery = this.streamTransition.then(async () => {
+      if (this.disposed || this.activeStreamUdid !== udid) return;
+      this.activeStreamUdid = null;
+      this.transport.resetDevice(udid);
+      const needed =
+        this.desiredStreamUdid === udid && this.transport.deviceSubscriberCount(udid) > 0;
+      if (!needed) {
+        if (this.desiredStreamUdid === udid) this.desiredStreamUdid = null;
+        return;
+      }
+      this.desiredStreamUdid = udid;
+      try {
+        await this.reconcileStream();
+      } catch (error) {
+        const message = `The simulator helper stopped (${reason}) and could not be restarted: ${errorMessage(error)}`;
+        for (const [threadId, attachment] of this.threads) {
+          if (attachment.attachedDeviceUdid !== udid) continue;
+          attachment.attachPhase = null;
+          attachment.lastError = message;
+          await this.publish(threadId);
+        }
+      }
+    });
+    this.streamTransition = recovery.catch(() => undefined);
   }
 
   private async startStream(udid: string): Promise<boolean> {
@@ -959,7 +1647,7 @@ export class DeviceManager {
     reason: "detached" | "switched" = "detached",
   ): Promise<void> {
     await this.stopRecordingIfActive(udid).catch(() => undefined);
-    if (this.isAttachedAnywhere(udid)) return;
+    if (this.isAttachedAnywhere(udid) || this.isDeviceBusy(udid)) return;
     if (this.transport.deviceSubscriberCount(udid) === 0) {
       await this.stopStream(udid).catch(() => undefined);
     }
@@ -971,15 +1659,7 @@ export class DeviceManager {
       await this.shutdown(udid).catch(() => undefined);
       return;
     }
-    this.clearIdleTimer(udid);
-    const timer = this.schedule(() => {
-      this.idleTimers.delete(udid);
-      void this.shutdownIfStillIdle(udid);
-    }, this.idleShutdownMs);
-    // A pending idle shutdown must not keep the process alive at exit; quit
-    // shuts these devices down anyway.
-    timer.unref?.();
-    this.idleTimers.set(udid, timer);
+    this.updateIdleTimer(udid);
   }
 
   private async stopRecordingIfActive(udid: string): Promise<void> {
@@ -990,8 +1670,59 @@ export class DeviceManager {
   private async shutdownIfStillIdle(udid: string): Promise<void> {
     if (this.disposed) return;
     // Re-checked at fire time: a thread may have re-attached during the wait.
-    if (this.isAttachedAnywhere(udid) || !this.synaraBooted.has(udid)) return;
-    await this.shutdown(udid).catch(() => undefined);
+    if (this.isDeviceBusy(udid) || !this.synaraBooted.has(udid)) return;
+    await this.shutdown(udid, true).catch(() => undefined);
+  }
+
+  /** Guard the shared native boundary, including pane RPCs that have no agent turn. */
+  private async withDeviceAction<A>(udid: string, action: () => Promise<A>): Promise<A> {
+    this.assertNotDisposed();
+    this.clearIdleTimer(udid);
+    this.activeDeviceActions.set(udid, (this.activeDeviceActions.get(udid) ?? 0) + 1);
+    try {
+      await this.waitForIdleShutdown(udid);
+      this.assertNotDisposed();
+      return await action();
+    } finally {
+      const remaining = (this.activeDeviceActions.get(udid) ?? 1) - 1;
+      if (remaining === 0) this.activeDeviceActions.delete(udid);
+      else this.activeDeviceActions.set(udid, remaining);
+      this.updateIdleTimer(udid);
+    }
+  }
+
+  private assertNotDisposed(): void {
+    if (this.disposed) throw new DeviceBackendError("Device manager is disposed.");
+  }
+
+  /** An idle poweroff already sent to simctl cannot be cancelled; renew its owned boot first. */
+  private async waitForIdleShutdown(udid: string): Promise<void> {
+    const shutdown = this.idleShutdowns.get(udid);
+    if (!shutdown) return;
+    await shutdown;
+    this.assertNotDisposed();
+    const resuming = this.idleShutdowns.get(udid);
+    if (resuming !== undefined && resuming !== shutdown) {
+      await resuming;
+      this.assertNotDisposed();
+      return;
+    }
+    if (!this.synaraBooted.has(udid) && this.isDeviceBusy(udid)) {
+      // Concurrent viewers/tools share the one restoration, including its boot-cap check.
+      const restoration = this.boot(udid)
+        .then((result) => {
+          if (result.kind !== "booted")
+            throw new DeviceBackendError(
+              "The simulator boot limit was reached while resuming device use.",
+            );
+        })
+        .finally(() => {
+          if (this.idleShutdowns.get(udid) === restoration) this.idleShutdowns.delete(udid);
+        });
+      this.idleShutdowns.set(udid, restoration);
+      await restoration;
+      this.assertNotDisposed();
+    }
   }
 
   private clearIdleTimer(udid: string): void {
@@ -1027,10 +1758,10 @@ export class DeviceManager {
       threadId: threadId as ThreadDeviceState["threadId"],
       version: attachment.version,
       attachedDeviceUdid: attachment.attachedDeviceUdid as ThreadDeviceState["attachedDeviceUdid"],
-      devices,
+      devices: fitDeviceList(devices, attachment.attachedDeviceUdid),
       agentActive: attachment.agentActiveCount > 0,
       availability,
-      lastError: attachment.lastError,
+      lastError: attachment.lastError === null ? null : fitDeviceMessage(attachment.lastError),
       attachPhase: attachment.attachPhase,
     };
   }
@@ -1060,6 +1791,21 @@ export class DeviceManager {
       }
     }
   }
+}
+
+/**
+ * Keep a thread's device list within the contract's cap. A machine with every
+ * runtime installed can have more simulators than that, and an over-long list
+ * fails the RPC encode. The attached device and booted devices are kept first.
+ */
+function fitDeviceList(
+  devices: readonly DeviceDescriptor[],
+  attachedUdid: string | null,
+): readonly DeviceDescriptor[] {
+  if (devices.length <= DEVICE_THREAD_STATE_MAX_DEVICES) return devices;
+  const rank = (device: DeviceDescriptor) =>
+    device.udid === attachedUdid ? 0 : device.state === "shutdown" ? 2 : 1;
+  return devices.toSorted((a, b) => rank(a) - rank(b)).slice(0, DEVICE_THREAD_STATE_MAX_DEVICES);
 }
 
 export function errorMessage(error: unknown): string {

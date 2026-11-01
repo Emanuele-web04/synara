@@ -60,14 +60,19 @@ export function buildCodexMcpConfigToml(
 
 /** Sent only over the owned app-server pipe, never written to the shared home. */
 export function buildCodexMcpThreadConfig(connection: AgentGatewayMcpConnection) {
-  return {
-    mcp_servers: {
-      [SYNARA_MCP_SERVER_NAME]: {
-        url: connection.url,
-        http_headers: { Authorization: authorizationHeader(connection) },
-      },
-    },
+  const headers = { Authorization: authorizationHeader(connection) };
+  const mcpServers: Record<
+    string,
+    { readonly url: string; readonly http_headers: Record<string, string> }
+  > = {
+    [SYNARA_MCP_SERVER_NAME]: { url: connection.url, http_headers: headers },
   };
+  // Connectors only exist in the per-thread config: Codex starts servers it
+  // first sees here, and the shared config.toml must stay secret-free.
+  for (const connector of connection.connectors ?? []) {
+    mcpServers[connector.name] = { url: connector.url, http_headers: headers };
+  }
+  return { mcp_servers: mcpServers };
 }
 
 export interface ClaudeMcpHttpServerConfig {
@@ -100,6 +105,22 @@ export function buildOpenCodeMcpServer(
     headers: { Authorization: authorizationHeader(connection) },
     oauth: false,
   };
+}
+
+/** Connector proxies in OpenCode's `mcp.add` shape; same scoping rules as above. */
+export function buildOpenCodeConnectorMcpServers(
+  connection: AgentGatewayMcpConnection,
+): Array<{ readonly name: string; readonly config: OpenCodeMcpRemoteServerConfig }> {
+  return (connection.connectors ?? []).map((connector) => ({
+    name: connector.name,
+    config: {
+      type: "remote",
+      url: connector.url,
+      enabled: true,
+      headers: { Authorization: authorizationHeader(connection) },
+      oauth: false,
+    },
+  }));
 }
 
 export interface AgentGatewayMcpToolDescriptor {
@@ -208,13 +229,14 @@ export function callAgentGatewayMcpTool(input: {
 export function buildClaudeMcpServers(
   connection: AgentGatewayMcpConnection,
 ): Record<string, ClaudeMcpHttpServerConfig> {
-  return {
-    [SYNARA_MCP_SERVER_NAME]: {
-      type: "http",
-      url: connection.url,
-      headers: { Authorization: authorizationHeader(connection) },
-    },
+  const headers = { Authorization: authorizationHeader(connection) };
+  const servers: Record<string, ClaudeMcpHttpServerConfig> = {
+    [SYNARA_MCP_SERVER_NAME]: { type: "http", url: connection.url, headers },
   };
+  for (const connector of connection.connectors ?? []) {
+    servers[connector.name] = { type: "http", url: connector.url, headers };
+  }
+  return servers;
 }
 
 export type AcpStdioProxySpawn = AgentGatewayStdioProxySpawn;
@@ -286,13 +308,19 @@ export function buildAcpSynaraMcpServers(input: {
 }): Array<Acp.McpServer> {
   const supportsHttp = input.initializeResult.agentCapabilities?.mcpCapabilities?.http === true;
   if (supportsHttp) {
+    const headers = [{ name: "Authorization", value: authorizationHeader(input.connection) }];
     return [
-      {
-        type: "http",
-        name: SYNARA_MCP_SERVER_NAME,
-        url: input.connection.url,
-        headers: [{ name: "Authorization", value: authorizationHeader(input.connection) }],
-      },
+      { type: "http", name: SYNARA_MCP_SERVER_NAME, url: input.connection.url, headers },
+      // Connectors need Streamable HTTP sessions, which the stdio proxy below
+      // does not carry, so stdio-only agents run without them.
+      ...(input.connection.connectors ?? []).map(
+        (connector): Acp.McpServer => ({
+          type: "http",
+          name: connector.name,
+          url: connector.url,
+          headers: [...headers],
+        }),
+      ),
     ];
   }
   return [

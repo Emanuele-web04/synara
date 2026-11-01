@@ -16,14 +16,16 @@ export function isEditableEventTarget(event: globalThis.KeyboardEvent): boolean 
   return target instanceof HTMLElement && target.isContentEditable;
 }
 
-/** Whether a visible overlay owns keyboard interaction instead of the active chat. */
-export function hasOpenDismissibleOverlay(): boolean {
+/** Whether a visible overlay owns keyboard interaction instead of the supplied surface. */
+export function hasOpenDismissibleOverlay(surface?: Element | null): boolean {
   return Array.from(
     document.querySelectorAll<HTMLElement>(
       '[role="dialog"], [role="alertdialog"], [role="menu"], [role="listbox"], [data-slot="context-menu-popup"], [data-slot="preview-card-popup"], [data-testid="composer-extras-panel"]',
     ),
   ).some(
     (element) =>
-      !element.closest('[inert], [aria-hidden="true"]') && element.getClientRects().length > 0,
+      (!surface || !element.contains(surface)) &&
+      !element.closest('[inert], [aria-hidden="true"]') &&
+      element.getClientRects().length > 0,
   );
 }

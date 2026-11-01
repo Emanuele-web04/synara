@@ -1,3 +1,4 @@
+import { useTranslation } from "~/i18n";
 import type { ThreadId } from "@synara/contracts";
 import { useMutation } from "@tanstack/react-query";
 
@@ -13,6 +14,8 @@ export interface ComputerDesktopControl {
 }
 
 export function useComputerDesktopControl(threadId: ThreadId): ComputerDesktopControl {
+  const { t } = useTranslation();
+
   const threadState = useComputerStateStore(selectThreadComputerState(threadId));
   const owner = threadState?.controlOwnerThreadId;
   // Ownership lasts for the turn, including model thinking between tool calls.
@@ -31,7 +34,7 @@ export function useComputerDesktopControl(threadId: ThreadId): ComputerDesktopCo
       if (!interrupt.isPending) interrupt.mutate(ownerThreadId);
     },
     stopError: stopError
-      ? stopError.message || "The stop request failed. Try again in a moment."
+      ? stopError.message || t("computer:theStopRequestFailedTryAgainInAMoment")
       : null,
   };
 }

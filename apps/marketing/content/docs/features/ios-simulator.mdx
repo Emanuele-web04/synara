@@ -26,7 +26,7 @@ An agent launch through Synara's device tools can request that the pane open aut
 
 ## Automatic opening and focus
 
-In Settings, turn off **Automatically open simulator** to use Simulator.app without automatically opening the mirrored pane. You can still open the pane manually. The preference persists across restarts.
+In Settings, turn off **Automatically open simulator** to use Simulator.app (DeviceHub on Xcode 27 and later) without automatically opening the mirrored pane. You can still open the pane manually. The preference persists across restarts.
 
 Background device requests stay with their owning task and do not navigate away from the task you are using. Closing the pane manually is respected. An unconsumed open request can remain pending while automatic opening is disabled and be handled when it is enabled again for the owning task.
 
@@ -55,14 +55,21 @@ The action rail can also:
 Supported provider sessions can receive app-owned device tools for:
 
 - Listing and booting simulators
-- Installing and launching apps
+- Installing and launching apps, including a clean relaunch and launch environment variables
 - Opening a URL
-- Tapping, swiping, typing, and pressing hardware buttons
-- Taking screenshots
-- Reading the accessibility tree
+- Tapping (by accessibility identifier, label, or point, with long press), swiping (including edge gestures such as back), typing, and pressing hardware buttons
+- Waiting for an element to appear or disappear, or for the screen to settle
+- Taking screenshots, scaled to device points, with an optional full-resolution proof image
+- Reading the screen as a compact list of visible elements
 - Scrolling to named interface elements
+- Reading unified app logs and crash reports
+- Setting appearance, Dynamic Type size, location, and privacy permissions
 
-Read-only inspection and input actions follow the active provider's tool policy. Input can require approval until allowed by the user, and opening a URL remains approval-gated because it can send information to another origin. Device access does not increase the task's runtime permissions.
+Every input action waits for the screen to stop changing and returns it, along with whether it changed, so the agent sees the effect of each step without a separate read. Text is typed as keystrokes for ASCII on a US keyboard layout; other text, including accented characters and emoji, is set directly on the focused field so it arrives exactly regardless of the simulator's keyboard language. The agent's result reports what the field contains afterwards.
+
+On Xcode 27 and later, input is delivered through the simulator's `dtuhidd` service, which those Xcode versions require. Those versions also replace Simulator.app with DeviceHub, so commands that launch Simulator.app (`open -a Simulator`, and older `expo run:ios`, `react-native run-ios`, or `flutter run`) fail. Agents are told to boot with the device tools, build with `xcodebuild` for the booted simulator, and then install and launch the app, which needs neither app.
+
+Input, launches, and device configuration require approval through Synara until allowed for the task, and opening a URL remains approval-gated because it can send information to another origin. Reading the screen, waiting, screenshots, and logs do not. Device access does not increase the task's runtime permissions.
 
 <Callout type="warn" title="The pane is evidence, not a build system">
   Ask the task to build the correct scheme and configuration first. A successful install or launch
@@ -76,6 +83,8 @@ Simulator screenshot results render as image previews in the chat, with expand a
 ## Ownership and cleanup
 
 Synara distinguishes simulators it booted from devices that were already running. It can reclaim Synara-owned devices after task cleanup or a crash; it does not automatically shut down a user-owned simulator simply because the pane detaches.
+
+An agent-made attachment starts the ten-minute idle countdown when the last turn using that device ends. A running device tool, a live pane viewer, a recording, or an explicit user attachment keeps it alive. A new tool or viewer cancels the countdown; its next release starts a fresh grace period. Devices booted outside Synara remain outside this automatic cleanup.
 
 Shutting down ends the simulator session. Detaching only removes the task's live attachment. Choose detach when another tool or task should keep using the booted device.
 
@@ -106,3 +115,14 @@ The frame path drops slow frames instead of blocking task RPC traffic. Wait for 
 - [ ] Accessibility evidence checked when element identity matters
 - [ ] Simulator detached or shut down according to ownership
 - [ ] Product checks run independently of the simulator interaction
+
+`device_logs` returns bounded unified logs and crash reports. Direct stdout/stderr
+capture is unavailable: redirecting a long-running app to regular files can fill
+the disk, while disposing a pipe reader can interrupt the app. Use `Logger`,
+`NSLog`, or `os_log` for output that should appear in these tools.
+Input errors after partial delivery are never replayed automatically. A launch or
+wait with `settled: false` is not evidence that the resulting screen is ready.
+
+## Idle simulator ownership in 1.0.8
+
+Synara releases agent-booted simulators after their owned work settles. Overlapping turns and renewed use retain their leases, so another active turn is not shut down by delayed cleanup. This does not authorize stopping a simulator started outside Synara's ownership.

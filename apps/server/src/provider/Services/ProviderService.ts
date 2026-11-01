@@ -70,10 +70,37 @@ export interface ProviderSessionStartOutcome {
 export interface ProviderSessionStartOutcomeOptions {
   /**
    * Persist a pending transcript bootstrap when this start cannot restore
-   * provider-native context. The caller clears it only after the provider has
-   * accepted the bootstrap turn.
+   * provider-native context, even if no native resume was attempted. A failed
+   * native resume always registers it. The caller clears it only after the
+   * provider has accepted the bootstrap turn.
    */
   readonly registerPriorTranscriptBootstrapOnFreshStart?: boolean;
+  /**
+   * The caller moves the thread to this provider on purpose (a stored provider
+   * rebind). A persisted binding owned by another provider driver gives up its
+   * native continuation, like the reset a handoff requests first, and the
+   * fresh session carries the prior transcript instead. A binding of the same
+   * driver stays protected: another home or account still cannot take it over.
+   */
+  readonly abandonOtherProviderContinuation?: boolean;
+}
+
+/** Durable identity of one Stop; its authority never transfers to a later turn. */
+export interface ProviderRuntimeStopControlReceipt {
+  readonly controlRequestId: string;
+  readonly observedLifecycleGeneration: string | null;
+  readonly turnId: TurnId | null;
+  readonly providerThreadId?: string;
+  readonly retiredLifecycleGeneration?: string;
+}
+
+/** Internal Stop observation, captured with the runtime under its lifecycle lock. */
+export interface ProviderRuntimeSessionStopTarget {
+  readonly session: ProviderSession | null;
+  readonly lifecycleGeneration: string | null;
+  /** Startup-adopted ownership that no operation in this server has touched. */
+  readonly inheritedLifecycleGeneration?: string;
+  readonly stopControlReceipt?: ProviderRuntimeStopControlReceipt;
 }
 
 export interface PersistedProviderSessionProfile {
@@ -120,6 +147,11 @@ export interface ProviderServiceShape {
   /** Mark a persisted prior-transcript bootstrap as accepted by the provider. */
   readonly completePriorTranscriptBootstrap?: (input: {
     readonly threadId: ThreadId;
+    /**
+     * Pin terminal-confirmed acceptance to its runtime. Explicit discard and
+     * immediate Codex acknowledgement do not supply a terminal generation.
+     */
+    readonly expectedLifecycleGeneration?: string;
   }) => Effect.Effect<void, ProviderServiceError>;
 
   /**
@@ -171,7 +203,11 @@ export interface ProviderServiceShape {
    * Interrupt a running provider turn.
    */
   readonly interruptTurn: (
-    input: ProviderInterruptTurnInput,
+    input: ProviderInterruptTurnInput & {
+      /** Internal conditional Stop authority; never part of the wire input. */
+      readonly expectedLifecycleGeneration?: string | null;
+      readonly controlRequestId?: string;
+    },
   ) => Effect.Effect<void, ProviderServiceError>;
 
   /**
@@ -224,7 +260,24 @@ export interface ProviderServiceShape {
     readonly threadId: ThreadId;
     /** Idle reapers must revalidate activity and live ownership under the lifecycle lock. */
     readonly onlyIfIdleSince?: string;
+    /** Internal recovery authority: refuse a new foreground turn under the lifecycle fence. */
+    readonly onlyIfNoActiveTurn?: true;
+    /** A conditional Stop must not tear down a replacement lifecycle epoch. */
+    readonly expectedLifecycleGeneration?: string | null;
+    readonly controlRequestId?: string;
   }) => Effect.Effect<void, ProviderServiceError>;
+
+  /** Observe one Stop target atomically; this is not a transport contract. */
+  readonly getRuntimeSessionStopTarget?: (input: {
+    readonly threadId: ThreadId;
+  }) => Effect.Effect<ProviderRuntimeSessionStopTarget, ProviderServiceError>;
+
+  /** Internal SQL-only recovery mutation under the existing lifecycle lease.
+   * The callback must not start/replay provider work or reacquire this lease. */
+  readonly withRuntimeSessionStopTarget?: <A, E, R>(
+    input: { readonly threadId: ThreadId },
+    use: (target: ProviderRuntimeSessionStopTarget) => Effect.Effect<A, E, R>,
+  ) => Effect.Effect<A, E | ProviderServiceError, R>;
 
   /**
    * Whether provider-native background tasks are currently keeping the
@@ -250,6 +303,14 @@ export interface ProviderServiceShape {
    * Aggregates runtime session lists from all registered adapters.
    */
   readonly listSessions: () => Effect.Effect<ReadonlyArray<ProviderSession>>;
+
+  /**
+   * List the contexts an adapter keeps after a failed stop for cleanup
+   * retries. They are not live and `listSessions` leaves them out, but their
+   * process may still be running, so safety checks such as the checkpoint
+   * revert guard read this view as well.
+   */
+  readonly listRetainedSessions?: () => Effect.Effect<ReadonlyArray<ProviderSession>>;
 
   /** Read the settings that produced a persisted native resume cursor. */
   readonly getPersistedSessionProfile: (

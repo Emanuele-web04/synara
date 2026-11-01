@@ -16,6 +16,8 @@ export const ClaudeCacheObservation = Schema.Struct({
   partialTtlSeconds: Schema.optional(PositiveInt),
   state: Schema.Literals(["likely-warm", "likely-expired", "unknown"]),
   source: Schema.Literals(["session-start", "request-usage", "local-estimate"]),
+  // Accounting identity of one owned Claude query; independent of hook delivery time.
+  processId: Schema.optional(TrimmedNonEmptyString),
   estimatedCacheWriteUsd: Schema.optional(Schema.Finite.check(Schema.isGreaterThanOrEqualTo(0))),
   lastRequest: Schema.optional(
     Schema.Struct({

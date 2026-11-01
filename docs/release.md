@@ -272,7 +272,33 @@ submitting changed bytes. Recovery checks Apple's status and retains signature,
 stapling, Gatekeeper and final update-ZIP validation. Startup smoke and release
 provenance checks must still pass before publication.
 
+Ticket stapling and validation retry only the observed Apple transport failure:
+exit 68 accompanied by `NSURLErrorDomain Code=-1005` (connection lost). The same
+command and payload are attempted at most four times, with waits of 5, 15 and
+30 seconds. This applies during app/DMG finalization and provenance validation.
+Every attempt retains its diagnostics. Exhausted retries, other validation errors,
+signals and process-launch errors still fail the job; notarization is not
+resubmitted and no signature, Gatekeeper or startup check is skipped. The bounded
+backoff follows [Apple's guidance for CloudKit network failures](https://developer.apple.com/documentation/cloudkit/ckerror/code/networkfailure).
+
 ### macOS release toolchains
+
+Mac application bundles declare `LSMinimumSystemVersion` 13.0 through electron-builder's
+`mac.minimumSystemVersion`. The bundled Claude and Cua executables require macOS 13;
+the application manifest must not advertise Electron's lower deployment target as the
+requirement for the complete bundle. This applies to signed, unsigned and local ad-hoc
+packages, including DMG and update ZIP payloads.
+The generated and retained macOS update feeds use Darwin `22.0.0` for this minimum,
+because electron-updater compares `os.release()` rather than the macOS product version.
+
+The [read-only v1.0.1 inspection](https://github.com/Emanuele-web04/synara/actions/runs/38163962883)
+found app/Electron metadata at 12.0 and bundled Claude/Cua at 13.0 on both architectures.
+The [actual Homebrew audit](https://github.com/Emanuele-web04/synara/actions/runs/38166229495)
+rejected a cask requiring 13 because the old app plist still declares 12. This source fix
+does not modify signed historical releases. Recheck a newly built and published DMG's
+plist and native payload before refreshing the cask; the old audit failure remains
+unresolved until a matching release is available. Metadata inspection and macOS 15
+startup checks do not establish runtime behavior on macOS 13.
 
 Both native macOS release runners use macOS 15. Native helpers and the pinned
 Cua apple-metal bridge build with Xcode 16.4's macOS 15 SDK. A separate macOS 26
@@ -433,6 +459,10 @@ full subject distinguished name.
    `bun run lint`, `bun run typecheck`, `bun run release:smoke`, and affected
    Vitest tests. Include `bun run windows-runtime:check`, `bun run migrations:check`
    and relevant browser/native checks when their boundaries change.
+   Migration history is checked for the family selected by matching server and
+   desktop package versions: Stable and Beta share history; Remote checks its own
+   releases because its data home and updater are isolated. Legacy shared tags
+   remain protected. An unknown or mismatched package version fails the check.
    The single tag workflow supplies the final full workspace test suite through
    `quality` plus all three `server_tests` shards, and the desktop build through
    `build_portable` and the native platform jobs. Do not require an additional

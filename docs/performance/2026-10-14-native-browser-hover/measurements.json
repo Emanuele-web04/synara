@@ -1,0 +1,34 @@
+{
+  "platform": "macOS 27.0.1 (26A434), arm64",
+  "electron": "43.4.1",
+  "baseCommit": "a62d7c733d19f5538ffc0d126d57437b3b578ff1",
+  "scope": "Two synthetic native browser pages through DesktopBrowserManager and BetterwrightCdpTarget. Hover runs disable background throttling as runBetterwright does; 2400 alternating moves with 16 ms pacing. Single before/after pair; unrelated apps remained running.",
+  "runs": {
+    "baseline": {
+      "hoverElapsedMs": 54429.919875,
+      "hostBlurEvents": 2400,
+      "hostFocusEvents": 2400,
+      "trustedMovesPerPage": [1200, 1200],
+      "typedCharactersPerPage": [100, 100],
+      "hostDraftUnchanged": true,
+      "cursorServiceRssMiB": {
+        "min": 5.921875,
+        "max": 52.75
+      },
+      "sampleCount": 49
+    },
+    "fixed": {
+      "hoverElapsedMs": 42686.375457999995,
+      "hostBlurEvents": 0,
+      "hostFocusEvents": 0,
+      "trustedMovesPerPage": [1200, 1200],
+      "typedCharactersPerPage": [100, 100],
+      "hostDraftUnchanged": true,
+      "cursorServiceRssMiB": {
+        "min": 38.9375,
+        "max": 66.546875
+      },
+      "sampleCount": 47
+    }
+  }
+}

@@ -4,7 +4,8 @@
 
 import type { ProfileTokenStats } from "@synara/contracts";
 import { renderToStaticMarkup } from "react-dom/server";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { setLanguagePreference } from "~/i18n";
 import { ProfileSettingsPanel } from "../settings/ProfileSettingsPanel";
 import { ShareCard } from "./ShareCard";
 import { baseStats, tokenStats } from "./profileTestFixtures";
@@ -39,8 +40,17 @@ function renderCard() {
 }
 
 describe("profile ranking coverage", () => {
+  afterEach(() => setLanguagePreference("system"));
   beforeEach(() => {
+    setLanguagePreference("en");
     queryState.tokenStats = tokenStats;
+  });
+
+  it("keeps decimal percentage precision with Spanish formatting", () => {
+    queryState.tokenStats = null;
+    setLanguagePreference("es");
+    const profile = renderToStaticMarkup(<ProfileSettingsPanel />);
+    expect(profile).toContain("66,7% de turnos");
   });
 
   it("qualifies the 100% provider result and names missing providers on both profile rankings", () => {

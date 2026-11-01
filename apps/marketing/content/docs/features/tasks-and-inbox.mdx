@@ -41,3 +41,7 @@ See [Hubs](/docs/features/hubs) when several workers need shared instructions, m
 In 1.0.2 Stable and Beta, supported sessions can use `synara_create_todo`, `synara_list_todos` and `synara_update_todo` to maintain the same list. Ask the agent to record a task for later, set its notes, priority, calendar due date or project, mark it complete or reopen it. Creating a to-do does not create a chat or start an agent; use **Start** to delegate it.
 
 Writes require an active caller turn and the thread's write capability. A create request uses a stable `requestId` so retrying does not add a duplicate. Listing returns at most 200 items and reports truncation; list notes are previews of up to 500 characters. Selecting a to-do by ID returns its full notes. No delete tool is exposed.
+
+## Cache reads in the activity recap
+
+In Stable 1.0.5 and Beta, the token tile splits recorded cache reads from **other** tokens when that breakdown is available. Other is not a claim that every remaining token is new: older records and other providers can lack cache telemetry. The total still includes both parts. See [Claude usage accounting](/docs/providers/claude-code#permissions-resume-and-usage-in-105) for resumed-session corrections and historical limits.

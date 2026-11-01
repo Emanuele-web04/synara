@@ -259,7 +259,10 @@
       "rmSync": 2,
       "renameSync": 2,
       "readdirSync": 1,
-      "statSync": 1
+      "statSync": 1,
+      "openSync": 2,
+      "writeSync": 1,
+      "closeSync": 1
     }
   },
   "packages/shared/src/loginShellEnvironment.ts": {
@@ -275,9 +278,9 @@
     }
   },
   "packages/shared/src/platformProcess.ts": {
-    "reason": "Shared process boundary executable checks; existing references frozen, process behavior unchanged.",
+    "reason": "Shared process boundary executable and working-directory checks; one stat each inside the synchronous pre-spawn plan.",
     "references": {
-      "statSync": 1
+      "statSync": 2
     }
   },
   "packages/shared/src/staticSnapshot.ts": {

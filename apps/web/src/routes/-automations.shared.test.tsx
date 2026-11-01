@@ -302,6 +302,19 @@ describe("automation shared route helpers", () => {
     expect(automationAttentionCount(runs)).toBe(2);
   });
 
+  it("does not count silent successful runs as needing attention", () => {
+    const silent = runWith({
+      id: runId("run-silent"),
+      result: {
+        ...baseRun.result!,
+        decision: "silent",
+        unread: false,
+      },
+    });
+    expect(isTriageRun(silent)).toBe(false);
+    expect(automationAttentionCount([silent])).toBe(0);
+  });
+
   it("does not surface a reported result before its run finishes", () => {
     const running = runWith({
       status: "running",

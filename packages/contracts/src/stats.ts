@@ -218,6 +218,9 @@ export const StatsRecapSlot = Schema.Struct({
   // Agent run time inside the slot, summed across chats that ran in parallel.
   agentWorkMs: NonNegativeInt,
   tokens: StatsRecapTokens,
+  // The part of `tokens` read from the prompt cache, for providers that report
+  // it. Absent from servers that predate the split.
+  cacheReadTokens: Schema.optional(NonNegativeInt),
 });
 export type StatsRecapSlot = typeof StatsRecapSlot.Type;
 

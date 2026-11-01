@@ -7,6 +7,7 @@ import { Deferred, Effect, Fiber, Layer, Option, Queue, Sink, Stream } from "eff
 import { ChildProcessSpawner } from "effect/unstable/process";
 import { describe, expect, it } from "vitest";
 
+import type { AcpParsedSessionEvent } from "./AcpRuntimeModel.ts";
 import { AcpSessionRuntime } from "./AcpSessionRuntime.ts";
 
 const FINAL_SESSION_ID = "session-epoch-final";
@@ -215,3 +216,67 @@ describe("AcpSessionRuntime session epoch transition", () => {
     await Effect.runPromise(program);
   }, 30_000);
 });
+
+it("separates concurrent owner streams without message IDs and completes each segment", async () => {
+  const { spawnerLayer, getAgentConnection } = makeInMemoryAgentSpawner();
+  const layer = AcpSessionRuntime.layer({
+    spawn: { command: "in-memory-acp-agent", args: [] },
+    cwd: process.cwd(),
+    clientInfo: { name: "owner-test", version: "0.0.0" },
+    authPolicy: "on-demand",
+    assistantItemScope: (meta) => (typeof meta?.owner === "string" ? meta.owner : undefined),
+    teardownProcessTree: async () => ({ escalated: false, signalErrors: [] }),
+  }).pipe(Layer.provide(spawnerLayer));
+  await Effect.runPromise(
+    Effect.gen(function* () {
+      const runtime = yield* AcpSessionRuntime;
+      yield* runtime.start();
+      const events: AcpParsedSessionEvent[] = [];
+      yield* runtime.getEvents().pipe(
+        Stream.runForEach((event) => Effect.sync(() => events.push(event))),
+        Effect.forkChild,
+      );
+      for (const [owner, text] of [
+        ["first", "One"],
+        ["second", "Two"],
+        ["first", "Three"],
+      ]) {
+        yield* Effect.promise(() =>
+          getAgentConnection().client.notify(OfficialAcp.methods.client.session.update, {
+            sessionId: FINAL_SESSION_ID,
+            update: {
+              sessionUpdate: "agent_message_chunk",
+              content: { type: "text", text },
+              _meta: { owner },
+            },
+          }),
+        );
+        yield* Effect.promise(() => flushTransport());
+      }
+      yield* Effect.promise(() =>
+        getAgentConnection().client.notify(OfficialAcp.methods.client.session.update, {
+          sessionId: FINAL_SESSION_ID,
+          update: {
+            sessionUpdate: "tool_call",
+            toolCallId: "boundary",
+            status: "completed",
+            title: "Boundary",
+            kind: "other",
+            content: [],
+          },
+        }),
+      );
+      yield* Effect.promise(() => flushTransport());
+      const deltas = events.filter((event) => event._tag === "ContentDelta");
+      const ids = deltas.map((event) => event.itemId);
+      expect(ids).toHaveLength(3);
+      expect(ids.every((id) => typeof id === "string")).toBe(true);
+      expect(new Set(ids).size).toBe(3);
+      expect(
+        events
+          .filter((event) => event._tag === "AssistantItemCompleted")
+          .map((event) => event.itemId),
+      ).toEqual(ids);
+    }).pipe(Effect.scoped, Effect.provide(layer)),
+  );
+}, 15_000);

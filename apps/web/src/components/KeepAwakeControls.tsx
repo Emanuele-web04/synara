@@ -1,19 +1,8 @@
 import type { KeepAwakeMode, ServerKeepAwakeState } from "@synara/contracts";
-import {
-  KEEP_AWAKE_MODE_OPTIONS,
-  KEEP_AWAKE_ROW_TITLE,
-  keepAwakeStatusLabel,
-} from "~/lib/keepAwake";
+import { localizedKeepAwakeModeOptions, keepAwakeStatusLabel } from "~/lib/keepAwake";
 import { SettingResetButton, SettingsSegmentedControl } from "./settings/SettingControls";
 import { SettingsRow, SettingsSection } from "./settings/SettingsPanelPrimitives";
-
-const KEEP_AWAKE_SEGMENTED_OPTIONS = KEEP_AWAKE_MODE_OPTIONS.map((option) => ({
-  value: option.value,
-  label: option.label,
-}));
-const KEEP_AWAKE_ROW_DESCRIPTION = `Uses macOS caffeinate. ${KEEP_AWAKE_MODE_OPTIONS.map(
-  (option) => `${option.label}: ${option.description}`,
-).join(" ")}`;
+import { useTranslation } from "~/i18n";
 
 export function KeepAwakeSettingsSection({
   state,
@@ -26,17 +15,20 @@ export function KeepAwakeSettingsSection({
   defaultMode: KeepAwakeMode;
   onSelectMode: (mode: KeepAwakeMode) => void;
 }) {
+  const { t } = useTranslation();
+  const options = localizedKeepAwakeModeOptions(t);
+
   if (!state?.available) return null;
   return (
-    <SettingsSection title="System">
+    <SettingsSection title={t("common:themeOptions_system")}>
       <SettingsRow
-        title={KEEP_AWAKE_ROW_TITLE}
-        description={KEEP_AWAKE_ROW_DESCRIPTION}
-        status={state.error ?? keepAwakeStatusLabel(state)}
+        title={t("settings:keepAwakeTitle")}
+        description={t("settings:keepAwakeDescription")}
+        status={state.error ?? keepAwakeStatusLabel(state, t)}
         resetAction={
           mode !== defaultMode ? (
             <SettingResetButton
-              label="keep computer awake"
+              label={t("common:keepComputerAwake2")}
               onClick={() => onSelectMode(defaultMode)}
             />
           ) : null
@@ -45,8 +37,8 @@ export function KeepAwakeSettingsSection({
           <SettingsSegmentedControl
             value={mode}
             onValueChange={onSelectMode}
-            ariaLabel={KEEP_AWAKE_ROW_TITLE}
-            options={KEEP_AWAKE_SEGMENTED_OPTIONS}
+            ariaLabel={t("settings:keepAwakeTitle")}
+            options={options}
           />
         }
       />

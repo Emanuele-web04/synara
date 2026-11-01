@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 
 import { applyOrchestrationEvents, syncServerReadModel, syncServerShellSnapshot } from "./store";
 import { mergeReadModelThreadDetailWithLiveHotPath } from "./storeNormalization";
-import { createSidebarTreeThreadsSelector, isSidebarThreadVisible } from "./storeSelectors";
+import { createSidebarDisplayThreadsSelector, isSidebarThreadVisible } from "./storeSelectors";
 import {
   makeDomainEvent,
   makeReadModel,
@@ -17,7 +17,7 @@ const deadline = "2026-10-02T10:30:00.000Z";
 const reminderAt = "2026-10-02T10:30:01.000Z";
 
 describe("durable thread snooze in the client store", () => {
-  it("hides pinned subagents with their snoozed parent", () => {
+  it("hides a snoozed parent without surfacing its pinned subagent", () => {
     const parent = makeThread({ snoozedUntil: deadline });
     const initial = syncServerReadModel(makeState(parent), {
       ...makeReadModel(makeReadModelThread({ snoozedUntil: deadline })),
@@ -30,8 +30,12 @@ describe("durable thread snooze in the client store", () => {
         }),
       ],
     });
-    expect(createSidebarTreeThreadsSelector()(initial)).toEqual([]);
-    expect(createSidebarTreeThreadsSelector({ includeSnoozed: true })(initial)).toHaveLength(2);
+    expect(createSidebarDisplayThreadsSelector()(initial)).toEqual([]);
+    expect(
+      createSidebarDisplayThreadsSelector({ includeSnoozed: true })(initial).map(
+        (thread) => thread.id,
+      ),
+    ).toEqual([parent.id]);
   });
   it.each(["detail", "shell"] as const)("preserves snooze through %s snapshots", (kind) => {
     const snapshot = makeReadModel(
@@ -44,8 +48,8 @@ describe("durable thread snooze in the client store", () => {
         : syncServerShellSnapshot(state, snapshot);
     expect(threadsOf(next)[0]?.snoozedUntil).toBe(deadline);
     expect(next.sidebarThreadSummaryById["thread-1"]?.snoozedUntil).toBe(deadline);
-    expect(createSidebarTreeThreadsSelector()(next)).toEqual([]);
-    expect(createSidebarTreeThreadsSelector({ includeSnoozed: true })(next)).toHaveLength(1);
+    expect(createSidebarDisplayThreadsSelector()(next)).toEqual([]);
+    expect(createSidebarDisplayThreadsSelector({ includeSnoozed: true })(next)).toHaveLength(1);
   });
 
   it("hides a pinned thread after scheduling and restores it when the reminder fires", () => {
@@ -89,7 +93,7 @@ describe("durable thread snooze in the client store", () => {
     expect(threadsOf(restored)[0]?.snoozedUntil).toBeNull();
     expect(threadsOf(restored)[0]?.snoozeReminderAt).toBe(reminderAt);
     expect(restored.sidebarThreadSummaryById[threadId]?.snoozeReminderAt).toBe(reminderAt);
-    expect(createSidebarTreeThreadsSelector()(restored)).toHaveLength(1);
+    expect(createSidebarDisplayThreadsSelector()(restored)).toHaveLength(1);
   });
 
   it("does not let older detail hydration erase a newer snooze", () => {

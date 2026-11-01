@@ -31,6 +31,7 @@ import {
 
 interface DeletedCheckpointRefCall {
   readonly cwd: string;
+  readonly liveThreadId?: string;
   readonly checkpointRefs: ReadonlyArray<string>;
 }
 
@@ -41,6 +42,7 @@ function recordDeletedCheckpointRefs(
 ) {
   deletedCheckpointRefCalls.push({
     cwd: input.cwd,
+    ...(input.liveThreadId === undefined ? {} : { liveThreadId: input.liveThreadId }),
     checkpointRefs: input.checkpointRefs.map((checkpointRef) => String(checkpointRef)),
   });
 }
@@ -827,6 +829,7 @@ describe("ProfileStatsArchive", () => {
         expect(deletedCheckpointRefCalls).toEqual([
           {
             cwd: "/work/archive",
+            liveThreadId: "thread-purge",
             checkpointRefs: [
               "refs/historical/checkpoints/dGhyZWFkLXB1cmdl/turn/1",
               String(
@@ -1273,6 +1276,7 @@ describe("ProfileStatsArchive", () => {
         expect(deletedCheckpointRefCalls).toEqual([
           {
             cwd: "/work/message-checkpoint",
+            liveThreadId: "thread-message-checkpoint",
             checkpointRefs: [
               String(
                 checkpointRefForThreadMessageStart(

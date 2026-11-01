@@ -104,8 +104,10 @@ import {
 } from "./provider/supervisedProcessTeardown.ts";
 import { ensureIsolatedScratchWorkspace, resolveScratchWorkspaceCwd } from "./scratchWorkspaces.ts";
 import { createLogger } from "./logger";
+import { MCP_CONNECTOR_SERVER_NAME_SUFFIX } from "@synara/shared/mcpConnectors";
 import { transcribeVoiceWithChatGptSession } from "./voiceTranscription.ts";
 import {
+  CODEX_APP_SERVER_MAX_DISCOVERY_FRAME_BYTES,
   CodexAppServerTransportError,
   CodexJsonlFramer,
   CodexJsonlWriter,
@@ -429,8 +431,25 @@ const BENIGN_ERROR_LOG_SNIPPETS = [
   "state db record_discrepancy: find_thread_path_by_id_str_in_subdir, falling_back",
 ];
 const BENIGN_PROCESS_OUTPUT_REGEXES = [/^(?:\^C)?Token usage:/i];
+// Codex's MCP client failing OAuth for a server from the user's own
+// config.toml (e.g. an expired Stripe grant). That is the user's Codex setup,
+// not this chat, so it stays out of the transcript; Synara's own server and
+// connectors never use Codex OAuth.
+const CODEX_MCP_OAUTH_LOG_REGEX = /\bcodex_rmcp_client::oauth\S*:.*?\bfor server ([A-Za-z0-9_.-]+)/;
+const loggedUserMcpOAuthServers = new Set<string>();
+
+function userConfiguredMcpOAuthServer(line: string): string | null {
+  const server = CODEX_MCP_OAUTH_LOG_REGEX.exec(line)?.[1];
+  if (!server) return null;
+  return server === SYNARA_MCP_SERVER_NAME || server.endsWith(MCP_CONNECTOR_SERVER_NAME_SUFFIX)
+    ? null
+    : server;
+}
 const RECOVERABLE_THREAD_RESUME_ERROR_SNIPPETS = [
   "not found",
+  // Codex writes a thread's rollout on its first turn, so a thread opened and
+  // restarted before any turn (e.g. right after a handoff) has nothing to resume.
+  "no rollout found",
   "missing thread",
   "no such thread",
   "unknown thread",
@@ -1071,6 +1090,17 @@ export function classifyCodexStderrLine(rawLine: string): { message: string } | 
     if (isBenignError) {
       return null;
     }
+
+    const userMcpServer = userConfiguredMcpOAuthServer(line);
+    if (userMcpServer) {
+      if (!loggedUserMcpOAuthServers.has(userMcpServer)) {
+        loggedUserMcpOAuthServers.add(userMcpServer);
+        log.warn("codex MCP OAuth failed for a server in the user's Codex config", {
+          server: userMcpServer,
+        });
+      }
+      return null;
+    }
   }
 
   return { message: normalizeCodexUserVisibleErrorMessage(line) };
@@ -1263,6 +1293,40 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
   // they settle, even after the caller's deadline rejects its session origin.
   // Stay below libuv's default four-worker pool so auth reads cannot occupy it all.
   private readonly authReadSlots = Semaphore.makeUnsafe(2);
+
+  /** Codex deep-merges MCP tables: never mix a connector with the user's server. */
+  private async gatewayThreadConfig(
+    context: CodexSessionContext,
+    connection: AgentGatewaySessionLease["connection"],
+  ): Promise<ReturnType<typeof buildCodexMcpThreadConfig>> {
+    if (!connection.connectors?.length) return buildCodexMcpThreadConfig(connection);
+    let configured: Record<string, unknown>;
+    try {
+      const response = this.readObject(
+        await this.sendRequest(context, "config/read", {
+          includeLayers: false,
+          cwd: context.session.cwd,
+        }),
+      );
+      const config = this.readObject(response, "config");
+      if (!config) throw new Error("Missing Codex configuration.");
+      configured = this.readObject(config, "mcp_servers") ?? {};
+    } catch {
+      // Do not guess a free namespace or log raw config errors containing secrets.
+      log.warn(
+        "Codex connector configuration could not be checked; connectors omitted for this session",
+      );
+      return buildCodexMcpThreadConfig({ ...connection, connectors: [] });
+    }
+    const connectors = connection.connectors.filter((connector) => {
+      if (!Object.hasOwn(configured, connector.name)) return true;
+      log.warn("Codex connector name is already configured; preserving the user's MCP server", {
+        server: connector.name,
+      });
+      return false;
+    });
+    return buildCodexMcpThreadConfig({ ...connection, connectors });
+  }
   constructor(
     services?: ServiceMap.ServiceMap<never>,
     options?: {
@@ -1503,7 +1567,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       );
       const sessionOverrides = {
         ...(gatewaySessionLease
-          ? { config: buildCodexMcpThreadConfig(gatewaySessionLease.connection) }
+          ? { config: await this.gatewayThreadConfig(context, gatewaySessionLease.connection) }
           : {}),
         model: normalizedModel ?? null,
         ...(input.serviceTier !== undefined ? { serviceTier: input.serviceTier } : {}),
@@ -2554,7 +2618,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       }
       const forkParams = {
         ...(gatewaySessionLease
-          ? { config: buildCodexMcpThreadConfig(gatewaySessionLease.connection) }
+          ? { config: await this.gatewayThreadConfig(context, gatewaySessionLease.connection) }
           : {}),
         threadId: sourceProviderThreadId,
         excludeTurns: true,
@@ -3117,7 +3181,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
           model: context.session.model ?? null,
           ...(context.serviceTier !== undefined ? { serviceTier: context.serviceTier } : {}),
           ...mapCodexRuntimeMode(context.session.runtimeMode),
-          config: buildCodexMcpThreadConfig(replacement.connection),
+          config: await this.gatewayThreadConfig(context, replacement.connection),
         }),
       );
       if (
@@ -3142,6 +3206,17 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       replacement?.release();
       context.gatewayRenewalInProgress = false;
     }
+  }
+
+  /**
+   * Whether this session's gateway bearer was retired by a terminal turn and
+   * has not yet been replaced. This is the authoritative signal for routing:
+   * the durable rotation marker rides a runtime event that ProviderService
+   * may drop, but the in-memory fence here is what actually rejects writes.
+   */
+  isAgentGatewayCredentialRetired(threadId: ThreadId): boolean {
+    const context = this.sessions.get(threadId);
+    return context !== undefined && context.gatewayCredentialRetired === true;
   }
 
   private async stopSessionContext(
@@ -3508,6 +3583,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       cwd ?? undefined,
       codexOptions,
       authFingerprint,
+      true,
     );
     this.assertDiscoveryAuthMatchesRequest(context, codexOptions, authFingerprint);
     const response = await this.sendRequest<Record<string, unknown>>(context, "plugin/list", {
@@ -3768,6 +3844,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     cwd?: string,
     codexOptions?: CodexDiscoveryOptions,
     expectedAuthFingerprint?: string,
+    dedicated = false,
   ): Promise<CodexSessionContext> {
     const normalizedThreadId = threadId?.trim();
     const normalizedCwd = cwd?.trim() || undefined;
@@ -3776,6 +3853,14 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       codexDiscoveryOptionsCacheKey(context.codexOptions) === optionsKey &&
       (expectedAuthFingerprint === undefined ||
         context.authFingerprint === expectedAuthFingerprint);
+    const selectContext = (context: CodexSessionContext) =>
+      dedicated
+        ? this.getOrCreateDiscoverySession(
+            context.session.cwd ?? process.cwd(),
+            codexOptions,
+            expectedAuthFingerprint,
+          )
+        : context;
     if (normalizedThreadId) {
       try {
         const session = this.requireSession(ThreadId.makeUnsafe(normalizedThreadId));
@@ -3784,7 +3869,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
           (!normalizedCwd || session.session.cwd === normalizedCwd) &&
           isCompatibleContext(session)
         ) {
-          return session;
+          return selectContext(session);
         }
       } catch {
         // Discovery is read-only metadata, so if the current draft thread does not
@@ -3799,7 +3884,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
           activeSession.session.cwd === normalizedCwd &&
           isCompatibleContext(activeSession)
         ) {
-          return activeSession;
+          return selectContext(activeSession);
         }
       }
       return this.getOrCreateDiscoverySession(normalizedCwd, codexOptions, expectedAuthFingerprint);
@@ -3808,7 +3893,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       (context) => this.isContextInitializedAndRoutable(context) && isCompatibleContext(context),
     );
     if (firstActive) {
-      return firstActive;
+      return selectContext(firstActive);
     }
     return this.getOrCreateDiscoverySession(process.cwd(), codexOptions, expectedAuthFingerprint);
   }
@@ -4006,7 +4091,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         sparkEnabled: true,
       },
       child,
-      stdoutFramer: new CodexJsonlFramer(),
+      stdoutFramer: new CodexJsonlFramer(CODEX_APP_SERVER_MAX_DISCOVERY_FRAME_BYTES),
       stdinWriter: new CodexJsonlWriter(child.stdin),
       pending: new Map(),
       pendingApprovals: new Map(),
@@ -5897,7 +5982,7 @@ export const __codexCliVersionGateTesting = {
   cacheTtlMs: CODEX_VERSION_CHECK_CACHE_TTL_MS,
 };
 
-function readResumeCursorThreadId(resumeCursor: unknown): string | undefined {
+export function readResumeCursorThreadId(resumeCursor: unknown): string | undefined {
   if (!resumeCursor || typeof resumeCursor !== "object" || Array.isArray(resumeCursor)) {
     return undefined;
   }

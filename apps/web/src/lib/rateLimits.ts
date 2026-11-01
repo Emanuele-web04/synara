@@ -2,6 +2,7 @@
 // Purpose: Centralizes rate-limit parsing, normalization, formatting, and row derivation
 // for provider runtime events so UI components can stay presentation-only.
 
+import { t } from "~/i18n";
 import type { OrchestrationThread } from "@synara/contracts";
 import { providerUsageLearnMoreHref } from "@synara/shared/providerUsage";
 
@@ -106,8 +107,9 @@ export function normalizeRateLimitLabel(
     .toLowerCase()
     .replace(/[_\s-]+/g, "_");
   // Named pools can share the same duration as standard limits. Keep the pool prefix so
-  // `Core 5h` and `5h` render as separate meters instead of collapsing into one row.
-  if (normalized.startsWith("core_")) {
+  // `Core 5h` (Droid) or `Claude 5h` (Antigravity) and `5h` render as separate meters
+  // instead of collapsing into one row.
+  if (normalized.startsWith("core_") || normalized.startsWith("claude_")) {
     return humanizeLabel(label);
   }
   // Claude Code calls `seven_day_overage_included` the Fable limit. It is a model
@@ -403,29 +405,29 @@ export function formatRateLimitRemainingPercent(remainingPercent: number | undef
 }
 
 /** Relative reset countdown, e.g. "Resets in 2h 16m" / "Resets in 5d 11h". */
-export function formatRateLimitResetCountdown(resetsAt: string): string {
+export function formatRateLimitResetCountdown(resetsAt: string, translate: typeof t = t): string {
   const resetMs = Date.parse(resetsAt);
   if (Number.isNaN(resetMs)) {
     return "";
   }
   const diffMs = resetMs - Date.now();
   if (diffMs <= 0) {
-    return "Resets soon";
+    return translate("settings:usageResetsSoon");
   }
   const totalMinutes = Math.floor(diffMs / 60_000);
   const days = Math.floor(totalMinutes / 1_440);
   const hours = Math.floor((totalMinutes % 1_440) / 60);
   const minutes = totalMinutes % 60;
   if (days > 0) {
-    return `Resets in ${days}d ${hours}h`;
+    return translate("settings:usageResetsDaysHours", { days, hours });
   }
   if (hours > 0) {
-    return `Resets in ${hours}h ${minutes}m`;
+    return translate("settings:usageResetsHoursMinutes", { hours, minutes });
   }
   if (minutes > 0) {
-    return `Resets in ${minutes}m`;
+    return translate("settings:usageResetsMinutes", { minutes });
   }
-  return "Resets soon";
+  return translate("settings:usageResetsSoon");
 }
 
 export function deriveRateLimitLearnMoreHref(
@@ -530,4 +532,17 @@ export function mergeProviderRateLimits(
   }
 
   return Array.from(merged.values());
+}
+
+/** Presentation only: canonical quota labels above also identify and order windows. */
+export function rateLimitWindowDisplayLabel(label: string, translate: typeof t = t): string {
+  const keys: Readonly<Record<string, string>> = {
+    "5h": "settings:usageWindowFiveHours",
+    Weekly: "settings:usageWindowWeekly",
+    Daily: "settings:usageWindowDaily",
+    Current: "settings:usageWindowCurrent",
+    "Usage credits": "settings:usageWindowCredits",
+  };
+  const key = Object.hasOwn(keys, label) ? keys[label] : undefined;
+  return key ? translate(key) : label;
 }

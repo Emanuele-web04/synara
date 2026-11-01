@@ -53,6 +53,33 @@ import {
   serverSettingsToAppSettings,
 } from "./appSettings";
 
+describe("interface language preference", () => {
+  it("defaults old settings to the system language", () => {
+    expect(Schema.decodeUnknownSync(AppSettingsSchema)({}).language).toBe("system");
+  });
+
+  it("persists supported languages locally without sending them to providers", () => {
+    for (const language of ["system", "en", "es"] as const) {
+      const settings = Schema.decodeUnknownSync(AppSettingsSchema)({ language });
+      expect(settings.language).toBe(language);
+      expect(appSettingsPatchToServerSettingsPatch({ language })).toEqual({});
+      expect(applyLocalAppSettingsPatch(settings, { language })).toMatchObject({ language });
+      expect(Schema.encodeSync(AppSettingsSchema)(settings)).toMatchObject({ language });
+    }
+  });
+
+  it("recovers unknown and malformed language values without resetting other settings", () => {
+    for (const language of ["fr", "ES", 42, null, { code: "es" }]) {
+      const settings = Schema.decodeUnknownSync(AppSettingsSchema)({
+        language,
+        chatFontSizePx: 15,
+      });
+      expect(settings.language).toBe("system");
+      expect(settings.chatFontSizePx).toBe(15);
+    }
+  });
+});
+
 describe("provider process priority settings", () => {
   it("defaults on and forwards explicit opt-out and reset to the server", () => {
     expect(Schema.decodeSync(AppSettingsSchema)({}).lowerProviderProcessPriority).toBe(true);

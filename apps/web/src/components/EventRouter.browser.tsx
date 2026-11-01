@@ -87,6 +87,7 @@ import {
 import { useWorkspacePathsStore } from "../workspacePathsStore";
 import { createWsNativeApi, resetWsNativeApiForTest } from "../wsNativeApi";
 import { registerTerminalRuntimeCleanup } from "../lib/terminalStateCleanup";
+import { requestShellSnapshotRefresh } from "../routeRestoreRefreshCoordinator";
 // Pre-transform the compiler-heavy component before the first hydration deadline.
 // This suite runs on its own CI shard, so ChatView's suite cannot warm it first.
 import "./ChatView";
@@ -990,6 +991,40 @@ describe("EventRouter scoped orchestration sync", () => {
     }
   });
 
+  it("fences a close-action membership refresh behind newer live shell events", async () => {
+    const mounted = await mountApp();
+    const api = createWsNativeApi();
+    const shell = createShellSnapshotFromReadModel(fixture.snapshot);
+    let resolveSnapshot!: (snapshot: typeof shell) => void;
+    const snapshotRequest = vi.spyOn(api.orchestration, "getShellSnapshot").mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveSnapshot = resolve;
+        }),
+    );
+    try {
+      const refresh = requestShellSnapshotRefresh(2);
+      await vi.waitFor(() => expect(snapshotRequest).toHaveBeenCalledOnce());
+      sendShellEventPush({
+        kind: "project-upserted",
+        sequence: 3,
+        project: { ...shell.projects[0]!, title: "Newer project metadata" },
+      });
+      await vi.waitFor(() =>
+        expect(useStore.getState().projects[0]?.name).toBe("Newer project metadata"),
+      );
+      resolveSnapshot({ ...shell, snapshotSequence: 2 });
+
+      await expect(refresh).resolves.toBe(true);
+      expect(useStore.getState().projects[0]?.name).toBe("Newer project metadata");
+      await expect(requestShellSnapshotRefresh(3)).resolves.toBe(true);
+      expect(snapshotRequest).toHaveBeenCalledOnce();
+    } finally {
+      snapshotRequest.mockRestore();
+      await mounted.cleanup();
+    }
+  });
+
   it("coalesces the replayed welcome with the initial subscription bootstrap", async () => {
     const mounted = await mountApp();
 
@@ -1604,6 +1639,110 @@ describe("EventRouter scoped orchestration sync", () => {
       fixture = buildFixture();
       await mounted.cleanup();
     }
+  });
+
+  describe("catch-up polling while a running thread streams", () => {
+    const streamingTurnId = TurnId.makeUnsafe("turn-live-streaming");
+
+    function useStreamingThreadFixture() {
+      fixture = {
+        ...fixture,
+        snapshot: createSnapshot({
+          latestTurn: {
+            turnId: streamingTurnId,
+            state: "running",
+            requestedAt: NOW_ISO,
+            startedAt: NOW_ISO,
+            completedAt: null,
+            assistantMessageId: null,
+          },
+          session: {
+            threadId: THREAD_ID,
+            status: "running",
+            providerName: "codex",
+            runtimeMode: "full-access",
+            activeTurnId: streamingTurnId,
+            lastError: null,
+            updatedAt: NOW_ISO,
+          },
+        }),
+      };
+    }
+
+    // Delivers one assistant message on the thread's live stream and mirrors it into the
+    // server projection, whose global sequence other threads keep moving ahead.
+    async function streamAssistantMessage(index: number) {
+      const sequence = index * 100 + 1;
+      const messageId = MessageId.makeUnsafe(`msg-live-${index}`);
+      const createdAt = new Date(Date.parse(NOW_ISO) + index * 1_000).toISOString();
+      const message = {
+        id: messageId,
+        role: "assistant" as const,
+        text: `Live chunk ${index}`,
+        turnId: streamingTurnId,
+        streaming: false,
+        source: "native" as const,
+        createdAt,
+        updatedAt: createdAt,
+      };
+      sendThreadEventPush({
+        sequence,
+        eventId: EventId.makeUnsafe(`event-live-${index}`),
+        aggregateKind: "thread",
+        aggregateId: THREAD_ID,
+        occurredAt: createdAt,
+        commandId: null,
+        causationEventId: null,
+        correlationId: null,
+        metadata: {},
+        type: "thread.message-sent",
+        payload: { threadId: THREAD_ID, messageId, ...message },
+      });
+      const [thread] = fixture.snapshot.threads;
+      fixture = {
+        ...fixture,
+        snapshot: {
+          ...fixture.snapshot,
+          snapshotSequence: sequence + 49,
+          threads: [{ ...thread!, messages: [...thread!.messages, message] }],
+        },
+      };
+      await vi.waitFor(
+        () =>
+          expect(
+            getThreadFromState(useStore.getState(), THREAD_ID)?.messages.some(
+              (entry) => entry.id === messageId,
+            ),
+          ).toBe(true),
+        { timeout: 4_000, interval: 16 },
+      );
+    }
+
+    it("skips replay polls while the live stream delivers and resumes once it goes quiet", async () => {
+      useStreamingThreadFixture();
+      vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
+      const mounted = await mountApp();
+
+      try {
+        await streamAssistantMessage(1);
+        const replaysBeforeStreaming = replayRequestCursors.length;
+        for (let index = 2; index <= 7; index += 1) {
+          await vi.advanceTimersByTimeAsync(750);
+          await streamAssistantMessage(index);
+          await vi.advanceTimersByTimeAsync(750);
+        }
+        expect(replayRequestCursors.length).toBe(replaysBeforeStreaming);
+
+        await vi.advanceTimersByTimeAsync(3_000);
+        await vi.waitFor(
+          () => expect(replayRequestCursors.length).toBeGreaterThan(replaysBeforeStreaming),
+          { timeout: 4_000 },
+        );
+      } finally {
+        fixture = buildFixture();
+        await mounted.cleanup();
+      }
+    }, 60_000);
   });
 
   it("does not poll a converged terminal thread projection", async () => {

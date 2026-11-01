@@ -107,4 +107,23 @@ describe("invokePinnedDnsLookup", () => {
       family: undefined,
     });
   });
+
+  it("offers every pinned address to Happy Eyeballs so IPv4 still works without IPv6", async () => {
+    const dualStack = [
+      { address: "2606:4700::1", family: 6 as const },
+      { address: "104.18.42.230", family: 4 as const },
+    ];
+    const all = await new Promise((resolve) => {
+      invokePinnedDnsLookup(dualStack, { all: true }, (err, address) => {
+        resolve({ err, address });
+      });
+    });
+    expect(all).toEqual({ err: null, address: dualStack });
+    const single = await new Promise((resolve) => {
+      invokePinnedDnsLookup(dualStack, {}, (err, address, family) => {
+        resolve({ err, address, family });
+      });
+    });
+    expect(single).toEqual({ err: null, address: "2606:4700::1", family: 6 });
+  });
 });

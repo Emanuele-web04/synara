@@ -5,6 +5,7 @@
 // Layer: UI primitive
 
 import type { ReactNode } from "react";
+import { useTranslation } from "~/i18n";
 import { cn } from "~/lib/utils";
 
 export function DiffStat({
@@ -19,14 +20,15 @@ export function DiffStat({
   separator?: ReactNode;
   className?: string;
 }) {
+  const { formatLocale } = useTranslation();
   return (
     <span
       className={cn("inline-flex items-center gap-1 tabular-nums", className)}
       data-slot="diff-stat"
     >
-      <span className="text-success">+{insertions.toLocaleString()}</span>
+      <span className="text-success">+{insertions.toLocaleString(formatLocale)}</span>
       {separator}
-      <span className="text-destructive">−{deletions.toLocaleString()}</span>
+      <span className="text-destructive">−{deletions.toLocaleString(formatLocale)}</span>
     </span>
   );
 }

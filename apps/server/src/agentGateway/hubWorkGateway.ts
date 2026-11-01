@@ -247,9 +247,16 @@ export function makeHubWorkGateway(dependencies: {
           return yield* Effect.fail(new ToolInputError("Target project was not found."));
         // Repository workers default to isolated worktrees; a Hub's general workspace stays local.
         const repositoryContext =
-          spec.environment === undefined && project.value.kind === "project"
+          spec.environment === "worktree" ||
+          (spec.environment === undefined && project.value.kind === "project")
             ? yield* dependencies.git.readBranchContext(project.value.workspaceRoot)
             : null;
+        if (spec.environment === "worktree" && !repositoryContext?.isRepo)
+          return yield* Effect.fail(
+            new ToolInputError(
+              "Worktree workers require a Git repository. Pass its projectId or use environment: local.",
+            ),
+          );
         const environment = spec.environment ?? (repositoryContext?.isRepo ? "worktree" : "local");
         tasks.push({
           spec: {

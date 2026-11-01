@@ -26,11 +26,21 @@ is cancelled, the task and its prompt remain available for retry. Pressing Send 
 message for the same task is still being sent shows a notice and keeps the new text in the
 composer; it is not sent twice.
 
+Empty chats show an animated ASCII background by default. Turn it off in **Settings →
+Appearance → ASCII background**. With reduced motion enabled, the field stays still; deliberate
+clicks can still trigger a ripple. The composer keeps its own surface over the pattern. The
+decoration pauses while its chat is hidden.
+
 ## The main surfaces
 
 - **Sidebar** — projects, spaces, tasks, and activity requiring attention. The rail
   is a fixed column of icon tabs for Home, Spaces, Tasks, Code review, Automations, Hubs, and
   Settings, with the thread panel beside it and the route shown as a card inset from the window.
+  The Activity view (the bell, `mod+alt+u`) leads with **Priority**: every chat waiting on an
+  answer, then unseen finished or failed work, then running chats, with no cap. Rows keep their
+  place while you work through them, and read rows stay until **Clear read from Priority** in
+  the Activity options or until the view reopens. Other chats follow under Today, Yesterday,
+  and Earlier.
   Open saved threads appear as tabs across the top of the chat. Unsent drafts stay out of
   the tab strip until they become saved threads on the first send. Saved tabs remain
   available to return to while an unsent draft is on screen, including in the editor view.
@@ -39,8 +49,11 @@ composer; it is not sent twice.
   chats stay out of message results. Every search word must match the message body;
   the server returns at most 50 hits with short excerpts. Message matching ignores ASCII letter case.
   Archiving the open thread or marking it **Done** opens the most recently used unfinished chat
-  across projects, ordered by its last human message (or creation time). If none remains, New
-  thread reopens an unsent draft. Actions on other threads keep the current chat open.
+  in the active Space, ordered by its last human message (or creation time). The **Chats** list
+  and a Hub's own folder belong to no Space, so their chats count in every Space. A Hub thread in
+  a linked repository follows that repository's Space. With **Void** selected, only projects not
+  filed in any Space count. If none remains, New thread reopens an unsent draft.
+  Actions on other threads keep the current chat open.
   Both Archive and Done offer an **Undo** toast; undoing an action on the open thread returns to it.
 - **Code review** — pull requests and issues from the GitHub repositories of your projects, with a
   detail pane and three actions on every item (see [Code review](#code-review))
@@ -117,6 +130,13 @@ thread's model picker cannot change its account in place.
 
 A project is the folder Synara works with.
 
+Wherever a project appears (sidebar rows, pinned rail shortcuts, hover cards, search, pickers, and the
+Edit project preview), its glyph is the project's local favicon when one is available, with a folder
+as the fallback. An emoji, icon, or folder color chosen in Edit project takes priority over the
+detected favicon. The folder opens and closes with its sidebar row; a pinned row, or a row showing
+any other glyph, adds a chevron for that state. Detected logos must be image files inside the project;
+links to files outside it are ignored, and logo documents cannot run scripts.
+
 The project picker shows registered projects and local folders. Creating a task worktree does not
 add another project entry. If the current draft already uses an unregistered folder, the picker keeps
 that folder visible with its path.
@@ -182,9 +202,9 @@ again. An assistant item that ends without any text does not add an empty respon
 Chat code blocks above 250,000 characters display their complete source as plain text,
 using the same highlighting limit as file previews. Find, Copy code, and soft wrap remain available.
 
-### Inline visuals (Beta)
+### Inline visuals
 
-In Synara Beta, an agent can answer with a visual inside its reply: headline numbers, a bar or
+In Synara and Synara Beta, an agent can answer with a visual inside its reply: headline numbers, a bar or
 line chart, a table, a side-by-side comparison, a checklist or step list, a note, a small
 calculator, follow-up choices, or tabs that combine them. Ask for one ("show this as a chart") and
 the agent calls the `synara_show_visual` tool, then places the visual in its answer like a
@@ -264,6 +284,12 @@ For work that should continue across several turns, set a deliberate
 [thread goal](https://www.trysynara.com/docs/features/thread-goals). A goal can continue after a
 clean turn, but queued user work, approvals, questions, interruptions, failures, and pause rules
 remain in control.
+
+Hosts advertise `orchestration.thread-goal-visible-start` when they accept
+`goalStartBehavior: "start-with-message"`. Native clients use it only for a new,
+idle goal outside Plan mode, so the visible message and first turn request are
+committed together. Older hosts keep the existing goal path; this optional capability does
+not change the required protocol revision or require re-pairing.
 
 Use a [thread fork](https://www.trysynara.com/docs/workflows/forks) when a new task should inherit
 the conversation or split from one exact turn. Use a
@@ -437,6 +463,18 @@ follow a successful commit or push, so inspect the current branch before retryin
 Synara's checkpoint and revert controls can help recover task work, but committed Git history remains
 the strongest boundary for important changes.
 
+For providers whose live changes Synara captures from Git, an individual **Turn** diff can show
+its latest completed file-tool snapshot before the turn finishes. It updates when the next snapshot
+is published, survives reconnects, preserves Ignore whitespace, and switches to the final checkpoint
+after capture succeeds, including interrupted turns with a captured exact baseline. A failed terminal
+capture retains the last preview; later events cannot recapture work for the settled turn.
+It does not read uncaptured worktree edits on demand. Codex cumulative turn patches can also appear
+before completion: Synara applies the exact journal revision to its captured turn-start baseline in
+a private Git index, preserving Ignore whitespace without reading later checkout edits. A missing
+baseline, mismatched patch, compacted payload or older event without integrity metadata remains
+unavailable until a fresh complete update or final checkpoint. **All turns** still uses completed
+checkpoints; a live preview is not proof that a turn finished.
+
 File Undo and thread revert refuse to change a workspace while another thread has an active or
 pending turn in that same Git checkout. Symlinks and nested folders share this protection;
 separate Git worktrees remain independent. Stop the active turn before retrying Undo.
@@ -505,6 +543,9 @@ scaling beyond one task.
 - `mod+\` — split the current view
 - `mod+1` through `mod+9` — open a numbered sidebar thread. Hold `mod` to show the
   default numbers in the classic and Activity views.
+- `mod+alt+a` — open the next chat that needs you: one waiting on an answer first, then
+  unseen work. Repeated presses advance through that urgency order and wrap after the last
+  actionable chat, independently of Priority's held row order.
 
 Every split chat has an **X** in its header to close it. Closing an ordinary pane keeps
 the remaining chats and preserves focus on a surviving chat. Closing a forked Side
@@ -544,6 +585,24 @@ Regular Markdown links remain relative to the document directory. Code, escaped
 Wiki syntax, embeds, and heading/block links are left literal; this is basic file
 navigation rather than full Obsidian support.
 
+### Images in chat replies
+
+Images stay at their original positions in the reply. When a completed reply
+references an eligible local image, the host can retain a private attachment
+snapshot with that message. This snapshot remains available after the original
+file or worktree is removed; it uses the conversation's computer and attachment
+storage, rather than uploading the image to a public service.
+
+Local references without a retained snapshot still need their original file.
+Relative paths are resolved on the conversation's host, using its workspace and
+registered Git worktrees. Recovery grants access to one canonical file, not its
+parent directory. Symlinks cannot widen the relative-reference boundary.
+
+Use **Retry** on a failed image preview after the file becomes available or the
+host reconnects. Retrying renews an expired file grant when needed. Image previews
+do not poll in the background. A missing original cannot be recovered when no
+snapshot was retained; older replies may therefore still need the original file.
+
 ### Terminal panels
 
 Each chat has one main-view terminal panel and can have multiple independent
@@ -552,6 +611,10 @@ with its own shell session. Switching tabs preserves their sessions; closing or
 exiting one terminal leaves the others running. Dock tabs and session identities
 are restored after reload. Terminals have no nested tabs, groups, splits, or bottom
 drawer. Opening the main-view terminal again focuses its existing session.
+The right dock remembers its resized width per chat across thread switches,
+panel tab changes, closing and reopening the dock, and reloads. When a smaller
+window cannot fit that width beside the composer, the dock temporarily uses its
+opening width and restores the saved resize when space returns.
 Project actions open a fresh session in the right dock with the requested working
 directory and environment, keeping the center chat unchanged, including in split
 chats. They replace only the selected idle dock terminal; its busy command must

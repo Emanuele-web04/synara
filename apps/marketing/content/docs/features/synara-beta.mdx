@@ -9,7 +9,7 @@ Synara Beta is a separate desktop app for trying upcoming features. It installs 
 
 On macOS, open **Settings → General → Synara Beta**. Choose **Install Synara Beta** to download and open the latest available Beta release, or **Copy my data and open** to install it if needed and then bring a snapshot of your Stable data into Beta. The download is checked before installation. If no Beta prerelease has been published yet, try again after it becomes available.
 
-On Windows and Linux, the settings card opens the public download page. Select the Beta installer for your platform when a Beta prerelease is available.
+On Windows and Linux, the settings card opens the public download page. For Beta, open the [1.0.9-beta.1 release assets](https://github.com/Emanuele-web04/synara/releases/tag/v1.0.9-beta.1) and select the Beta installer for your platform. The website’s current download snapshot follows Stable.
 
 ## Keep your work separate
 
@@ -29,9 +29,8 @@ The two apps follow separate update feeds. A Beta update cannot replace Stable, 
 
 Source evidence: Synara release head `BETA.md`, `packages/shared/src/betaFeatures.ts`, `apps/desktop/src/betaChannel.ts`, and the Beta settings controls in `apps/web/src/components/settings/DesktopSettingsPanels.tsx`.
 
-## Features that still require Beta
+## Shared feature availability
 
-- [Hubs and Library](/docs/features/hubs): a coordinator, delegated workers, shared memory, and versioned deliverables.
-  Tasks and agent delegation are available in Stable 1.0.1.
+[Connectors](/docs/features/connectors) and [native editor intelligence and JavaScript debugging](/docs/features/workspace-editor#native-editor-and-javascript-debugger) are enabled for Stable 1.0.9 and later, with the same functionality already available in Beta. Existing installed Stable builds need an update; this promotion does not import Beta credentials or data.
 
-Hubs are gated by the server as well as the interface. **Stable 1.0.0** includes Inbox, Auto-fix CI, Oh My Pi, the rail workspace and message trail sound. Beta keeps its independent update feed, data home and diagnostics policy.
+[Hubs and Library](/docs/features/hubs) are available in Stable 1.0.2 and later; [inline visuals](/docs/features/inline-visuals) are available in Stable 1.0.5 and Beta. Tasks, Inbox, Auto-fix CI, Oh My Pi, the rail workspace and message trail sound are also available in both apps. Beta keeps its independent update feed, data home and diagnostics policy. Stable never sends Beta diagnostics.

@@ -4,8 +4,12 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { render } from "vitest-browser-react";
 
 import { ComposerColumnFrame } from "./ComposerColumnFrame";
+import { ComposerMenuPanel } from "./ComposerMenuPanel";
 import { ComposerStackedPanel } from "./ComposerStackedPanel";
-import { COMPOSER_INPUT_SURFACE_CLASS_NAME } from "./composerPickerStyles";
+import {
+  COMPOSER_COMMAND_MENU_FLOATING_WRAPPER_CLASS_NAME,
+  COMPOSER_INPUT_SURFACE_CLASS_NAME,
+} from "./composerPickerStyles";
 
 const root = document.documentElement;
 let previousAttributes: Record<string, string | null>;
@@ -141,4 +145,69 @@ describe("chat composer on sidebar-only macOS glass", () => {
         .toBeCloseTo(name === "composer" ? 0.4 : 0.2, 2);
     }
   });
+});
+
+// The /, @ and + menus open over the live transcript, above the edge where it dissolves, so
+// the composer's own glass would leave the transcript readable through their rows.
+function ComposerMenuFixture() {
+  return (
+    <div data-chat-composer-slot>
+      <ComposerColumnFrame>
+        <div className={`${COMPOSER_INPUT_SURFACE_CLASS_NAME} overflow-visible`}>
+          <div className={COMPOSER_COMMAND_MENU_FLOATING_WRAPPER_CLASS_NAME}>
+            <ComposerMenuPanel
+              groups={[
+                { id: "built-in", label: "Built-in", rows: [{ id: "fork", title: "Fork" }] },
+              ]}
+              activeRowId={null}
+              onHighlightRow={() => {}}
+              onSelectRow={() => {}}
+            />
+          </div>
+          Draft input
+        </div>
+      </ComposerColumnFrame>
+    </div>
+  );
+}
+
+function menuSurface(): HTMLElement {
+  // The list scrolls inside its own viewport; the surface is the rounded panel around it.
+  const found = appRoot
+    .querySelector('[data-slot="command-list"]')
+    ?.closest<HTMLElement>(".rounded-2xl");
+  if (!found) throw new Error("Missing composer menu surface");
+  return found;
+}
+
+describe("composer command menu surface", () => {
+  it.each(
+    ["light", "dark"].flatMap((theme) =>
+      [
+        { name: "Solid", transparent: false, material: "opaque", scope: "none" },
+        {
+          name: "sidebar-only glass",
+          transparent: true,
+          material: "translucent",
+          scope: "sidebar",
+        },
+        { name: "whole-window glass", transparent: true, material: "translucent", scope: "window" },
+      ].map((mode) => ({ theme, ...mode })),
+    ),
+  )(
+    "stays opaque over the transcript on $name in $theme mode",
+    async ({ theme, transparent, material, scope }) => {
+      root.classList.toggle("dark", theme === "dark");
+      if (transparent) root.dataset.windowTransparent = "true";
+      else delete root.dataset.windowTransparent;
+      root.dataset.windowMaterial = material;
+      root.dataset.windowTranslucency = scope;
+      await render(<ComposerMenuFixture />, { container: appRoot });
+
+      const style = getComputedStyle(menuSurface());
+      expect(fillAlpha(menuSurface())).toBe(1);
+      expect(style.borderTopWidth).toBe("1px");
+      expect(style.boxShadow).not.toBe("none");
+    },
+  );
 });

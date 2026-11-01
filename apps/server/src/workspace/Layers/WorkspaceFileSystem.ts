@@ -1,3 +1,5 @@
+// Reads confined workspace text and performs version-checked atomic saves.
+// File identity and regular-file checks stay on the opened descriptor.
 import { createHash, randomUUID } from "node:crypto";
 import { constants as NodeFsConstants, type BigIntStats } from "node:fs";
 import * as NodeFs from "node:fs/promises";
@@ -24,6 +26,10 @@ import {
   resolveRealPathWithinRoot,
 } from "../realPathContainment";
 
+// A FIFO open is not cancellable: blocking here can strand Node's filesystem workers.
+// Windows keeps its existing read flags; POSIX rejects special files after a nonblocking open.
+const READ_FILE_FLAGS =
+  NodeFsConstants.O_RDONLY | (process.platform === "win32" ? 0 : NodeFsConstants.O_NONBLOCK);
 const DEFAULT_READ_FILE_MAX_BYTES = 1_000_000;
 const UTF8_BOM = Buffer.from([0xef, 0xbb, 0xbf]);
 
@@ -79,7 +85,7 @@ async function readCurrentFileVersion(
   workspaceRoot: string,
   filePath: string,
 ): Promise<{ readonly version: string; readonly stat: BigIntStats }> {
-  const handle = await NodeFs.open(filePath, "r").catch((cause: unknown) => {
+  const handle = await NodeFs.open(filePath, READ_FILE_FLAGS).catch((cause: unknown) => {
     if (isFileNotFoundError(cause)) {
       throw new WorkspaceFileDeletedError({ cwd: workspaceRoot, relativePath: filePath });
     }
@@ -87,6 +93,7 @@ async function readCurrentFileVersion(
   });
   try {
     const beforeReadStat = await handle.stat({ bigint: true });
+    if (!beforeReadStat.isFile()) throw new Error("Path is not a file.");
     const buffer = Buffer.alloc(DEFAULT_READ_FILE_MAX_BYTES + 1);
     const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
     const afterReadStat = await handle.stat({ bigint: true });
@@ -394,7 +401,7 @@ export const makeWorkspaceFileSystem = Effect.gen(function* () {
       // same file even if the path is swapped between the two calls.
       const { bytes, fileSize } = yield* Effect.tryPromise({
         try: async () => {
-          const handle = await NodeFs.open(realPath, "r");
+          const handle = await NodeFs.open(realPath, READ_FILE_FLAGS);
           try {
             const fileInfo = await handle.stat();
             if (!fileInfo.isFile()) {

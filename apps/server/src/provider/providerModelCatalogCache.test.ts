@@ -63,6 +63,19 @@ describe("providerModelCatalogCache", () => {
     expect(readBack).toEqual(entries);
   });
 
+  it("does not restore pre-provenance catalogs that could contain an unmarked fallback", async () => {
+    mkdirSync(path.dirname(filePath()), { recursive: true });
+    writeFileSync(
+      filePath(),
+      JSON.stringify({
+        version: 1,
+        entries: [{ key: "cursor-key", result: { ...CATALOG, source: "cursor.cli" }, storedAt: 1 }],
+      }),
+    );
+
+    expect(await run(readProviderModelCatalogCache(filePath()))).toEqual([]);
+  });
+
   it("creates missing parent directories on write", async () => {
     expect(existsSync(path.dirname(filePath()))).toBe(false);
     await run(writeProviderModelCatalogCache({ filePath: filePath(), entries: [] }));
@@ -80,7 +93,7 @@ describe("providerModelCatalogCache", () => {
     writeFileSync(
       filePath(),
       JSON.stringify({
-        version: 1,
+        version: 2,
         entries: [{ key: "k", result: { models: "not-an-array" }, storedAt: 1 }],
       }),
     );
@@ -111,7 +124,7 @@ describe("providerModelCatalogCache", () => {
     writeFileSync(
       filePath(),
       JSON.stringify({
-        version: 1,
+        version: 2,
         entries: [{ ...entries[0], result: { ...ompCatalog, roles } }, entries[1]],
       }),
     );
@@ -119,7 +132,7 @@ describe("providerModelCatalogCache", () => {
     const decoded = await run(readProviderModelCatalogCache(filePath()));
     expect(decoded).toEqual(entries);
     await run(writeProviderModelCatalogCache({ filePath: filePath(), entries: decoded }));
-    expect(JSON.parse(readFileSync(filePath(), "utf8"))).toEqual({ version: 1, entries });
+    expect(JSON.parse(readFileSync(filePath(), "utf8"))).toEqual({ version: 2, entries });
   });
 
   it("writes the snapshot as private-mode JSON", async () => {
@@ -130,7 +143,7 @@ describe("providerModelCatalogCache", () => {
       }),
     );
     const raw = JSON.parse(readFileSync(filePath(), "utf8"));
-    expect(raw.version).toBe(1);
+    expect(raw.version).toBe(2);
     expect(raw.entries).toHaveLength(1);
   });
 });

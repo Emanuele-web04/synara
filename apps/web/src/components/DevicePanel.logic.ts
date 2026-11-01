@@ -105,6 +105,14 @@ export function stepDeviceFrameGate(
   // Codec config re-arms the keyframe requirement: a new parameter set means the
   // decoder is reconfigured, and a decoder cannot resume mid-GOP after that.
   if (header.codecConfig) {
+    // The helper sends a config immediately before every keyframe, including
+    // its periodic ones, so an in-order config mid-stream means that keyframe
+    // is already on its way. Asking for another would make the server restart
+    // the whole helper stream every couple of seconds.
+    const announcesNextKeyframe =
+      state.phase === "streaming" &&
+      state.lastSequence !== null &&
+      forwardSequenceDistance(state.lastSequence, header.sequence) === 1;
     return {
       state: {
         phase: "awaiting-keyframe",
@@ -112,7 +120,7 @@ export function stepDeviceFrameGate(
         droppedSinceResync: 0,
       },
       action: { kind: "configure" },
-      requestKeyframe: state.phase !== "awaiting-keyframe",
+      requestKeyframe: state.phase !== "awaiting-keyframe" && !announcesNextKeyframe,
     };
   }
 

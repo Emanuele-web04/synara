@@ -9,11 +9,14 @@
  */
 import { randomUUID } from "node:crypto";
 
+import type { ProviderKind } from "@synara/contracts";
+import { providerSupportsMcpConnectors } from "@synara/shared/mcpConnectors";
 import { Effect, Layer } from "effect";
 
 import { ServerConfig } from "../../config.ts";
 import { formatHostForUrl, isWildcardHost } from "../../startupAccess.ts";
 import {
+  type AgentGatewayConnectorRegistration,
   AgentGatewayCredentials,
   type AgentGatewayCredentialsShape,
 } from "../Services/AgentGatewayCredentials.ts";
@@ -23,6 +26,11 @@ import { ensureAgentGatewayStdioProxyScript } from "../stdioProxyScript.ts";
 import { AgentGatewaySessionRegistryLive } from "./AgentGatewaySessionRegistry.ts";
 
 export const AGENT_GATEWAY_MCP_PATH = "/mcp";
+export const AGENT_GATEWAY_CONNECTORS_PATH = `${AGENT_GATEWAY_MCP_PATH}/connectors`;
+
+export function agentGatewayConnectorUrl(mcpEndpointUrl: string, connectorId: string): string {
+  return `${mcpEndpointUrl}/connectors/${encodeURIComponent(connectorId)}`;
+}
 
 interface AgentGatewayEndpoint {
   readonly url: string;
@@ -69,6 +77,38 @@ export function makeAgentGatewayStdioBootstrapRegistry(input: {
   };
 }
 
+/**
+ * Connectors published for new sessions, and the ids each bearer was issued
+ * with: a session may only reach the connectors it received.
+ */
+export function makeAgentGatewayConnectorRegistry(input: {
+  readonly sessionIsActive: (token: string) => boolean;
+}) {
+  let registrations: ReadonlyArray<AgentGatewayConnectorRegistration> = [];
+  const grants = new Map<string, ReadonlySet<string>>();
+  return {
+    set: (next: ReadonlyArray<AgentGatewayConnectorRegistration>) => {
+      registrations = [...next];
+    },
+    /** The connectors a new bearer receives; Pi, Devin, and Antigravity get none. */
+    grant: (
+      token: string,
+      provider: ProviderKind,
+    ): ReadonlyArray<AgentGatewayConnectorRegistration> => {
+      const granted = providerSupportsMcpConnectors(provider) ? registrations : [];
+      if (granted.length > 0) {
+        grants.set(token, new Set(granted.map((registration) => registration.connectorId)));
+      }
+      return granted;
+    },
+    canUse: (token: string, connectorId: string): boolean =>
+      input.sessionIsActive(token) && (grants.get(token)?.has(connectorId) ?? false),
+    revokeSession: (token: string) => {
+      grants.delete(token);
+    },
+  };
+}
+
 // Providers run as local child processes, so they must target a host the HTTP
 // server actually listens on. Wildcard binds cover loopback; an explicit host
 // (e.g. `::1` or a LAN address) does not, so reuse it verbatim.
@@ -106,6 +146,10 @@ export const makeAgentGatewayCredentials = Effect.gen(function* () {
     sessionIsActive: (token) => sessionRegistry.verify(token) !== null,
   });
 
+  const connectors = makeAgentGatewayConnectorRegistry({
+    sessionIsActive: (token) => sessionRegistry.verify(token) !== null,
+  });
+
   const issueSessionToken: AgentGatewayCredentialsShape["issueSessionToken"] = (
     threadId,
     provider,
@@ -118,6 +162,7 @@ export const makeAgentGatewayCredentials = Effect.gen(function* () {
   const revokeSessionToken = (token: string): void => {
     const session = sessionRegistry.verify(token);
     sessionRegistry.revoke(token);
+    connectors.revokeSession(token);
     stdioBootstraps.revokeSession(token);
     if (session) inFlightRequests.revokeSession(session.sessionKey);
   };
@@ -168,15 +213,26 @@ export const makeAgentGatewayCredentials = Effect.gen(function* () {
     cancelInFlightRequests: inFlightRequests.cancel,
     cancelSessionTurnRequests,
     retireSessionTurn,
+    listRetiredWriteAuthorities: sessionRegistry.listRetiredWriteAuthorities,
     revokeSessionToken,
-    connectionForThread: (threadId, provider, options) => ({
-      url: endpoint.url,
-      bearerToken: issueSessionToken(threadId, provider, options),
-    }),
+    connectionForThread: (threadId, provider, options) => {
+      const bearerToken = issueSessionToken(threadId, provider, options);
+      const granted = connectors.grant(bearerToken, provider).map((registration) => ({
+        name: registration.name,
+        url: agentGatewayConnectorUrl(endpoint.url, registration.connectorId),
+      }));
+      return {
+        url: endpoint.url,
+        bearerToken,
+        ...(granted.length > 0 ? { connectors: granted } : {}),
+      };
+    },
     stdioProxy: {
       command: process.execPath,
       args: [stdioProxyScriptPath],
     },
+    setConnectorServers: connectors.set,
+    canUseConnector: connectors.canUse,
   } satisfies AgentGatewayCredentialsShape;
 });
 

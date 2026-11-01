@@ -1,4 +1,5 @@
 import { ProjectionPendingInteractionRepositoryLive } from "./persistence/Layers/ProjectionPendingInteractions";
+import { ProviderSessionRuntimeRepositoryLive } from "./persistence/Layers/ProviderSessionRuntime";
 import http from "node:http";
 
 import type { ServerSettingsError } from "@synara/contracts";
@@ -62,6 +63,8 @@ import { recoverGitHandoffOperations } from "./gitHandoffOperations";
 import { externalMcpRouteLayer } from "./externalMcp/httpRoute";
 import { ExternalMcpGateway } from "./externalMcp/Services/ExternalMcpGateway";
 import { ExternalMcpService } from "./externalMcp/Services/ExternalMcpService";
+import { mcpConnectorsRouteLayer } from "./mcpConnectors/httpRoute";
+import { McpConnectors } from "./mcpConnectors/Services/McpConnectors";
 
 export interface ServerShape {
   readonly start: Effect.Effect<
@@ -72,6 +75,7 @@ export interface ServerShape {
     | AgentGatewayCredentials
     | ExternalMcpGateway
     | ExternalMcpService
+    | McpConnectors
     | FileSystem.FileSystem
     | Path.Path
     | Keybindings
@@ -228,6 +232,7 @@ export const createEffectServer = Effect.fn(function* (
     websocketRpcRouteLayer,
     agentGatewayRouteLayer,
     externalMcpRouteLayer,
+    mcpConnectorsRouteLayer,
   );
   const httpApp = yield* HttpRouter.toHttpEffect(routesLayer);
   yield* httpServer
@@ -285,7 +290,10 @@ export const createEffectServer = Effect.fn(function* (
         }
       }
       yield* reconcileRestartStuckTurns;
-    }).pipe(Effect.provide(ProjectionPendingInteractionRepositoryLive)),
+    }).pipe(
+      Effect.provide(ProjectionPendingInteractionRepositoryLive),
+      Effect.provide(ProviderSessionRuntimeRepositoryLive),
+    ),
     reactors: [
       automationScheduler,
       automationRunReactor,

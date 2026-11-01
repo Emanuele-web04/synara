@@ -1,7 +1,7 @@
 // FILE: threadDetailCatchupPolicy.ts
 // Purpose: Decide when a subscribed thread's periodic projection reconcile can be skipped.
 // Layer: Web subscription policy (pure)
-// Exports: ThreadDetailSyncEvidence, isThreadDetailVerifiedInSync
+// Exports: ThreadDetailSyncEvidence, isThreadDetailVerifiedInSync, isLiveThreadStreamDelivering
 // Why: The root route polls every subscribed running thread on a fixed cadence: a cheap
 //      `replayEvents` catch-up (returns the thread's events past the client cursor) and a
 //      full `getThreadDetailSnapshot` projection reconcile that re-ships and re-normalizes
@@ -36,4 +36,19 @@ export function isThreadDetailVerifiedInSync(evidence: ThreadDetailSyncEvidence)
     evidence.emptyReplayAtEventSerial !== null &&
     evidence.emptyReplayAtEventSerial === evidence.appliedEventSerial
   );
+}
+
+/**
+ * True while the thread's own detail stream delivered an event within `windowMs`. A replay
+ * only returns events past the client cursor: while the stream keeps delivering, those are
+ * already in flight on it, and an event it lost behind newer ones sits behind the cursor
+ * where no replay can reach it (only the projection reconcile repairs that). Polling resumes
+ * as soon as the stream goes quiet, which is when a lost tail becomes recoverable.
+ */
+export function isLiveThreadStreamDelivering(
+  lastLiveEventAt: number | null,
+  nowMs: number,
+  windowMs: number,
+): boolean {
+  return lastLiveEventAt !== null && nowMs - lastLiveEventAt < windowMs;
 }

@@ -1,3 +1,4 @@
+import { useTranslation } from "~/i18n";
 // FILE: useThreadHandoff.ts
 // Purpose: Hands a thread to another provider, in place or in a new thread.
 // Layer: Web hook
@@ -18,6 +19,7 @@ import {
   buildThreadHandoffImportedMessages,
   canContinueThreadHandoff,
   canCreateThreadHandoff,
+  ProviderHandoffBackgroundTasksError,
   type ProviderHandoffOutcome,
   resolveProviderHandoffOutcome,
   resolveThreadHandoffModelSelection,
@@ -64,6 +66,8 @@ function waitForProviderHandoffOutcome(
 }
 
 export function useThreadHandoff() {
+  const { t } = useTranslation();
+
   const navigate = useNavigate();
   const projects = useStore((store) => store.projects);
   const syncServerShellSnapshot = useStore((store) => store.syncServerShellSnapshot);
@@ -79,16 +83,16 @@ export function useThreadHandoff() {
   ) => {
     const api = readNativeApi();
     if (!api) {
-      throw new Error("Native API not found");
+      throw new Error(t("common:nativeAPINotFound"));
     }
 
     const project = projects.find((entry) => entry.id === thread.projectId);
     if (!project) {
-      throw new Error("Project not found for handoff thread.");
+      throw new Error(t("common:projectNotFoundForHandoffThread"));
     }
 
     if (!canCreateThreadHandoff({ thread })) {
-      throw new Error("This thread cannot be handed off yet.");
+      throw new Error(t("common:thisThreadCannotBeHandedOffYet"));
     }
     const sourceProviderInstanceId =
       thread.session?.providerInstanceId ??
@@ -99,7 +103,7 @@ export function useThreadHandoff() {
       targetProvider === thread.modelSelection.provider &&
       targetInstanceId === sourceProviderInstanceId
     ) {
-      throw new Error("This handoff target is not available for the current thread.");
+      throw new Error(t("common:thisHandoffTargetIsNotAvailableForTheCurrent"));
     }
     const targetAvailability = await resolveProviderSendAvailabilityWithRefresh({
       provider: targetProvider,
@@ -110,7 +114,7 @@ export function useThreadHandoff() {
     if (!targetAvailability.usable) {
       throw new Error(
         targetAvailability.usable
-          ? "This handoff target is not available for the current thread."
+          ? t("common:thisHandoffTargetIsNotAvailableForTheCurrent")
           : targetAvailability.unavailableReason,
       );
     }
@@ -138,11 +142,13 @@ export function useThreadHandoff() {
     // The model picked in the composer; the header menu leaves it to the
     // same default the new-thread handoff uses.
     explicitModelSelection?: ModelSelection,
+    // Set only from an explicit user choice: ends the source's background tasks.
+    options?: { readonly stopBackgroundTasks?: boolean },
   ): Promise<void> => {
     if (
       !canContinueThreadHandoff({ sourceProvider: thread.modelSelection.provider, targetProvider })
     ) {
-      throw new Error("Hand off to a new thread to switch between accounts of the same provider.");
+      throw new Error(t("common:handOffToANewThreadToSwitchBetween"));
     }
     const prepared = await prepareThreadHandoff(thread, targetProvider, targetProviderInstanceId);
     const modelSelection = explicitModelSelection ?? prepared.modelSelection;
@@ -155,14 +161,18 @@ export function useThreadHandoff() {
       threadId: thread.id,
       modelSelection,
       providerHandoff: true,
+      ...(options?.stopBackgroundTasks ? { providerHandoffStopsBackgroundTasks: true } : {}),
     });
     const outcome = await waitForProviderHandoffOutcome(thread.id, commandId);
     const targetName = PROVIDER_DISPLAY_NAMES[targetProvider] ?? targetProvider;
+    if (outcome.status === "failed" && outcome.blockedByBackgroundTasks) {
+      throw new ProviderHandoffBackgroundTasksError(thread.modelSelection.provider, targetProvider);
+    }
     if (outcome.status === "failed") {
-      throw new Error(`${targetName} could not start: ${outcome.detail}`);
+      throw new Error(t("common:couldNotStart", { value0: targetName, value1: outcome.detail }));
     }
     if (outcome.status === "pending") {
-      throw new Error(`${targetName} is still starting. Try again once it is ready.`);
+      throw new Error(t("common:isStillStartingTryAgainOnceItIsReady", { value0: targetName }));
     }
   };
 

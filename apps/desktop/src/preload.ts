@@ -6,6 +6,7 @@ import type {
   DesktopBridge,
   DesktopComputerPreviewFrame,
   DesktopDiagnosticActivity,
+  DesktopWindowTranslucency,
 } from "@synara/contracts";
 import { normalizeDesktopWsUrl, resolveDesktopWsUrlFromEnv } from "./desktopWsBridge";
 import { DESKTOP_IPC_CHANNELS } from "./ipcChannels";
@@ -15,6 +16,8 @@ import {
 } from "./runningChatsQuitGuard";
 
 const IPC = DESKTOP_IPC_CHANNELS;
+// Live computerPreview.onFrame listeners in this renderer.
+let computerPreviewListenerCount = 0;
 
 function getDesktopWsUrl(): string | null {
   try {
@@ -24,6 +27,17 @@ function getDesktopWsUrl(): string | null {
     return resolveDesktopWsUrlFromEnv(process.env);
   }
 }
+
+function getWindowTranslucency(): DesktopWindowTranslucency | undefined {
+  try {
+    const value: unknown = ipcRenderer.sendSync(IPC.windowTranslucency);
+    return value === "native" || value === "compositor" ? value : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+const windowTranslucency = getWindowTranslucency();
 
 function getBetaDiagnosticsBridge(): DesktopBridge["betaDiagnostics"] {
   try {
@@ -131,6 +145,7 @@ function recordBrowserActivity(activity: DesktopDiagnosticActivity): void {
 contextBridge.exposeInMainWorld("desktopBridge", {
   ...(betaDiagnosticsBridge ? { betaDiagnostics: betaDiagnosticsBridge } : {}),
   getWsUrl: getDesktopWsUrl,
+  getSystemLanguages: () => ipcRenderer.sendSync(IPC.getSystemLanguages),
   // Absolute path for OS-dropped File objects (folders with spaces/parens, etc.).
   getPathForFile: (file: File) => {
     try {
@@ -144,7 +159,9 @@ contextBridge.exposeInMainWorld("desktopBridge", {
   saveFile: (input) => ipcRenderer.invoke(IPC.saveFile, input),
   confirm: (message) => ipcRenderer.invoke(IPC.confirm, message),
   setTheme: (theme) => ipcRenderer.invoke(IPC.setTheme, theme),
+  setLanguagePreference: (preference) => ipcRenderer.invoke(IPC.setLanguagePreference, preference),
   setWindowMaterial: (input) => ipcRenderer.invoke(IPC.setWindowMaterial, input),
+  ...(windowTranslucency ? { windowTranslucency } : {}),
   getAppIcon: () => ipcRenderer.invoke(IPC.getAppIcon),
   setAppIcon: (icon) => ipcRenderer.invoke(IPC.setAppIcon, icon),
   showContextMenu: (items, position) => ipcRenderer.invoke(IPC.contextMenu, items, position),
@@ -191,8 +208,17 @@ contextBridge.exposeInMainWorld("desktopBridge", {
       };
 
       ipcRenderer.on(IPC.computerPreviewFrame, wrappedListener);
+      // A frame listener is the preview's demand signal: the main process runs
+      // the native capture helper only while this window has one.
+      computerPreviewListenerCount += 1;
+      if (computerPreviewListenerCount === 1) ipcRenderer.send(IPC.computerPreviewSubscribe);
+      let released = false;
       return () => {
+        if (released) return;
+        released = true;
         ipcRenderer.removeListener(IPC.computerPreviewFrame, wrappedListener);
+        computerPreviewListenerCount -= 1;
+        if (computerPreviewListenerCount === 0) ipcRenderer.send(IPC.computerPreviewUnsubscribe);
       };
     },
   },

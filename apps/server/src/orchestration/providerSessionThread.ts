@@ -18,24 +18,22 @@ export function resolveProviderSessionThread(
   threadId: ThreadId,
 ) {
   return Effect.gen(function* () {
-    const thread = Option.getOrNull(yield* projectionSnapshotQuery.getThreadShellById(threadId));
-    if (thread === null) {
-      return null;
+    let thread = Option.getOrNull(yield* projectionSnapshotQuery.getThreadShellById(threadId));
+    const visited = new Set<ThreadId>();
+    while (thread && !visited.has(thread.id)) {
+      visited.add(thread.id);
+      const synthetic = thread.id.startsWith("subagent:");
+      if (!synthetic && thread.session) return thread;
+      const parent = thread.parentThreadId
+        ? Option.getOrNull(yield* projectionSnapshotQuery.getThreadShellById(thread.parentThreadId))
+        : synthetic
+          ? Option.getOrNull(
+              yield* projectionSnapshotQuery.findSyntheticSubagentParentThread(thread.id),
+            )
+          : null;
+      if (!parent || visited.has(parent.id)) return thread;
+      thread = parent;
     }
-    if (thread.parentThreadId) {
-      return (
-        Option.getOrNull(
-          yield* projectionSnapshotQuery.getThreadShellById(thread.parentThreadId),
-        ) ?? thread
-      );
-    }
-    if (!(thread.id as string).startsWith("subagent:")) {
-      return thread;
-    }
-    return (
-      Option.getOrNull(
-        yield* projectionSnapshotQuery.findSyntheticSubagentParentThread(thread.id),
-      ) ?? thread
-    );
+    return thread;
   });
 }

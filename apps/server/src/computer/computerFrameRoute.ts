@@ -7,10 +7,13 @@ import {
 import {
   decodeFrameResyncRequest,
   makeFrameSink,
+  type FrameByteStream,
   type FrameSink,
 } from "@synara/shared/frameTransport";
 import { Effect, Layer } from "effect";
 import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
+
+import { frameSocketByteStream } from "../frameSocketByteStream.ts";
 
 import { ComputerService } from "./Services/ComputerService.ts";
 
@@ -23,6 +26,7 @@ export function decodeResyncRequest(message: string | Uint8Array): "resync" | nu
 export function makeComputerFrameSink(options: {
   readonly send: (bytes: Uint8Array) => Promise<void> | void;
   readonly isOpen: () => boolean;
+  readonly byteStream?: FrameByteStream | undefined;
 }): FrameSink {
   return makeFrameSink(options);
 }
@@ -58,12 +62,15 @@ export function makeComputerFrameRouteLayer<R = never>(options: {
             return HttpServerResponse.text("Forbidden", { status: 403 });
           }
 
+          // Read before the upgrade hands the socket to the WebSocket layer.
+          const byteStream = frameSocketByteStream(request);
           const socket = yield* request.upgrade;
           const writer = yield* socket.writer;
           let open = true;
           const sink = makeComputerFrameSink({
             send: (bytes) => Effect.runPromise(writer(bytes)).catch(() => undefined),
             isOpen: () => open,
+            byteStream,
           });
           const unsubscribe = computerService.value.manager.subscribeFrames(sink);
           yield* Effect.addFinalizer(() =>

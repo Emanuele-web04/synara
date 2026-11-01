@@ -9,6 +9,7 @@ import {
   resolveSubagentIdentityFromDirectory,
 } from "@synara/shared/subagents";
 import { formatModelDisplayName } from "@synara/shared/model";
+import { t } from "~/i18n";
 
 const SUBAGENT_ACCENT_PALETTE = [
   "#b84e44",
@@ -307,7 +308,7 @@ function resolveSubagentSiblingLabel(input: {
     siblingIdsByParent.set(parentThreadId, siblingIds);
   }
   const index = siblingIds.indexOf(input.thread.id);
-  return index >= 0 ? `${DEFAULT_SUBAGENT_LABEL} ${index + 1}` : null;
+  return index >= 0 ? t("chat:subagent3", { number: index + 1 }) : null;
 }
 
 // Stable 32-bit hash for per-subagent picks (accent color, avatar glyph).
@@ -351,11 +352,14 @@ export function resolveSubagentPresentation(input: {
   const resolvedTitle = parsedTitleNickname ? null : titleLabel;
   const identityLabel = nickname ?? resolvedTitle ?? capitalizeRoleLabel(role);
   const primaryLabel =
-    identityLabel ?? normalizeWhitespace(input.placeholderLabel) ?? DEFAULT_SUBAGENT_LABEL;
+    identityLabel ?? normalizeWhitespace(input.placeholderLabel) ?? t("chat:subagent");
   const fullLabel = role && nickname ? `${nickname} [${role}]` : primaryLabel;
 
   const accentSeed =
-    identityLabel ?? fallbackAccentSeed(normalizeWhitespace(input.fallbackId)) ?? primaryLabel;
+    identityLabel ??
+    fallbackAccentSeed(normalizeWhitespace(input.fallbackId)) ??
+    normalizeWhitespace(input.placeholderLabel) ??
+    DEFAULT_SUBAGENT_LABEL;
 
   return {
     primaryLabel,

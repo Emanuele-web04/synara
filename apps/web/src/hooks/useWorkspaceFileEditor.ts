@@ -1,7 +1,9 @@
+import { useTranslation } from "~/i18n";
 import type { ProjectReadFileResult } from "@synara/contracts";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useSyncExternalStore } from "react";
 
+import { isRpcCapacityExceededError } from "~/lib/expensiveReadRetry";
 import { projectReadFileQueryOptions, refetchFreshProjectFileQuery } from "~/lib/projectReactQuery";
 import { refreshGitAfterFileWrite } from "~/lib/gitReactQuery";
 import { useProjectFileChangeSubscription } from "./useProjectFileChangeSubscription";
@@ -28,6 +30,7 @@ export function useWorkspaceFileEditorBuffer(
     file: ProjectReadFileResult | undefined;
   },
 ) {
+  const { t } = useTranslation();
   const { cwd, enabled, file, filePath } = input;
   const client = useQueryClient();
   const relativePath = file?.relativePath ?? filePath;
@@ -46,7 +49,8 @@ export function useWorkspaceFileEditorBuffer(
   useEffect(() => {
     if (file) session?.load(file);
   }, [file, session]);
-  const readOnlyReason = file === undefined ? null : resolveWorkspaceFileEditorReadOnlyReason(file);
+  const readOnlyReason =
+    file === undefined ? null : resolveWorkspaceFileEditorReadOnlyReason(file, t);
   const flush = useCallback(() => session?.flush() ?? Promise.resolve(true), [session]);
   const reloadFromDisk = useCallback(() => {
     void session?.reload();
@@ -57,6 +61,7 @@ export function useWorkspaceFileEditorBuffer(
   const pauseAutosave = useCallback(() => session?.pause(), [session]);
   const resumeAutosave = useCallback(() => session?.resume(), [session]);
   return {
+    relativePath,
     state,
     dirty: isWorkspaceFileEditorDirty(state),
     readOnlyReason,
@@ -73,6 +78,8 @@ export function useWorkspaceFileEditorBuffer(
 }
 
 export function useWorkspaceFileEditor(input: UseWorkspaceFileEditorInput) {
+  const { t } = useTranslation();
+
   const client = useQueryClient();
   const fileQuery = useQuery(
     projectReadFileQueryOptions({
@@ -93,14 +100,18 @@ export function useWorkspaceFileEditor(input: UseWorkspaceFileEditorInput) {
     enabled: input.enabled,
     onChange: onFileChange,
   });
+  // A capacity rejection on a re-read is transient: the query keeps its data
+  // and refetches on its own interval, so the buffer stays editable.
+  const transient = fileQuery.data !== undefined && isRpcCapacityExceededError(fileQuery.error);
   return {
     ...controller,
     loading: fileQuery.isLoading,
-    loadError:
-      fileQuery.error instanceof Error
+    loadError: transient
+      ? null
+      : fileQuery.error instanceof Error
         ? fileQuery.error.message
         : fileQuery.error
-          ? "Could not read file."
+          ? t("workspace:filePreview_couldNotReadFile")
           : null,
   };
 }

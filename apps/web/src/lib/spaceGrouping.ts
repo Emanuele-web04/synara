@@ -13,6 +13,7 @@ import {
 } from "@synara/contracts";
 
 import type { Space } from "~/types";
+import { t } from "~/i18n";
 
 /**
  * Void is not a stored Space, so its name and icon are defaults here rather than a row.
@@ -79,9 +80,6 @@ export function spaceKey(spaceId: SpaceId | null): string {
   return spaceId ?? VOID_SPACE_KEY;
 }
 
-/** Shown when a project points at a Space that is not in the snapshot (mid-delete, stale route). */
-const UNKNOWN_SPACE_NAME = "Unknown space";
-
 export interface SpaceGroup<T> {
   readonly spaceId: SpaceId | null;
   readonly name: string;
@@ -98,9 +96,10 @@ export function spaceDisplayName(
   spaceId: SpaceId | null | undefined,
   spaces: ReadonlyArray<Space>,
   voidSpace: VoidSpacePresentation = DEFAULT_VOID_SPACE,
+  translate: typeof t = t,
 ): string {
   if (!spaceId) return voidSpace.name;
-  return spaces.find((space) => space.id === spaceId)?.name ?? UNKNOWN_SPACE_NAME;
+  return spaces.find((space) => space.id === spaceId)?.name ?? translate("workspace:unknownSpace");
 }
 
 export function spaceDisplayIcon(
@@ -127,14 +126,17 @@ export function orderedSpaceIdsForPicker(
 }
 
 /** Groups any project-shaped list by Space, dropping empty groups. */
-export function groupItemsBySpace<T>(input: {
-  items: ReadonlyArray<T>;
-  spaces: ReadonlyArray<Space>;
-  activeSpaceId: SpaceId | null;
-  spaceIdOf: (item: T) => SpaceId | null;
-  /** How the unfiled group presents itself; defaults to the built-in "Void". */
-  voidSpace?: VoidSpacePresentation;
-}): ReadonlyArray<SpaceGroup<T>> {
+export function groupItemsBySpace<T>(
+  input: {
+    items: ReadonlyArray<T>;
+    spaces: ReadonlyArray<Space>;
+    activeSpaceId: SpaceId | null;
+    spaceIdOf: (item: T) => SpaceId | null;
+    /** How the unfiled group presents itself; defaults to the built-in "Void". */
+    voidSpace?: VoidSpacePresentation;
+  },
+  translate: typeof t = t,
+): ReadonlyArray<SpaceGroup<T>> {
   const { activeSpaceId, items, spaceIdOf, spaces } = input;
   const voidSpace = input.voidSpace ?? DEFAULT_VOID_SPACE;
 
@@ -162,14 +164,14 @@ export function groupItemsBySpace<T>(input: {
     const groupItems = itemsBySpaceId.get(spaceId);
     if (!groupItems) return [];
     const isActive = spaceId === activeSpaceId;
-    const name = spaceDisplayName(spaceId, spaces, voidSpace);
+    const name = spaceDisplayName(spaceId, spaces, voidSpace, translate);
     return [
       {
         spaceId,
         name,
         icon: spaceDisplayIcon(spaceId, spaces, voidSpace),
         isActive,
-        label: isActive ? `${name} · Active` : name,
+        label: isActive ? translate("workspace:activeSpaceLabel", { name }) : name,
         items: groupItems,
         key: spaceKey(spaceId),
       } satisfies SpaceGroup<T>,

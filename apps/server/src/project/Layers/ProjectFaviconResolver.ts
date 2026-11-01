@@ -1,4 +1,9 @@
+// Resolves project-owned image files for the favicon route without following
+// repository declarations or symlinks outside the canonical project root.
+import { isSupportedLocalImagePath } from "@synara/shared/localPreviewFiles";
 import { Effect, FileSystem, Layer, Path } from "effect";
+
+import { isContainedPath } from "../../workspace/realPathContainment";
 
 import {
   ProjectFaviconResolver,
@@ -69,33 +74,39 @@ export const makeProjectFaviconResolver = Effect.gen(function* () {
     return [path.join(projectCwd, "public", clean), path.join(projectCwd, clean)];
   };
 
-  const isPathWithinProject = (projectCwd: string, candidatePath: string): boolean => {
-    const relative = path.relative(path.resolve(projectCwd), path.resolve(candidatePath));
-    return (
-      relative === "" ||
-      (relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative))
-    );
-  };
+  // Return canonical paths so later reads do not follow the discovered symlink.
+  const resolveContainedPath = Effect.fn(function* (projectCwd: string, candidate: string) {
+    if (!isContainedPath(projectCwd, path.resolve(candidate))) return null;
+    const canonicalPath = yield* fileSystem
+      .realPath(candidate)
+      .pipe(Effect.catch(() => Effect.succeed(null)));
+    return canonicalPath && isContainedPath(projectCwd, canonicalPath) ? canonicalPath : null;
+  });
 
   const findExistingFile = Effect.fn(function* (
     projectCwd: string,
     candidates: ReadonlyArray<string>,
   ) {
     for (const candidate of candidates) {
-      if (!isPathWithinProject(projectCwd, candidate)) {
-        continue;
-      }
+      if (!isSupportedLocalImagePath(candidate)) continue;
+      const canonicalPath = yield* resolveContainedPath(projectCwd, candidate);
+      if (!canonicalPath || !isSupportedLocalImagePath(canonicalPath)) continue;
       const stats = yield* fileSystem
-        .stat(candidate)
+        .stat(canonicalPath)
         .pipe(Effect.catch(() => Effect.succeed(null)));
       if (stats?.type === "File") {
-        return candidate;
+        return canonicalPath;
       }
     }
     return null;
   });
 
-  const resolvePath: ProjectFaviconResolverShape["resolvePath"] = Effect.fn(function* (cwd) {
+  const resolvePath: ProjectFaviconResolverShape["resolvePath"] = Effect.fn(function* (projectCwd) {
+    const cwd = yield* fileSystem
+      .realPath(projectCwd)
+      .pipe(Effect.catch(() => Effect.succeed(null)));
+    if (!cwd) return null;
+
     for (const candidate of FAVICON_CANDIDATES) {
       const existing = yield* findExistingFile(cwd, [path.join(cwd, candidate)]);
       if (existing) {
@@ -104,7 +115,8 @@ export const makeProjectFaviconResolver = Effect.gen(function* () {
     }
 
     for (const sourceFile of ICON_SOURCE_FILES) {
-      const sourcePath = path.join(cwd, sourceFile);
+      const sourcePath = yield* resolveContainedPath(cwd, path.join(cwd, sourceFile));
+      if (!sourcePath) continue;
       const source = yield* fileSystem
         .readFileString(sourcePath)
         .pipe(Effect.catch(() => Effect.succeed(null)));

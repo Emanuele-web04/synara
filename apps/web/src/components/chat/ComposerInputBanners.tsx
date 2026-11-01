@@ -2,7 +2,7 @@
 // Purpose: Picks the contextual banner that renders inside the composer surface.
 // Pending approvals and AskUserQuestion prompts render as detached cards above the composer
 // (see ComposerPendingApprovalPanel / ComposerPendingUserInputPanel), and the thread goal
-// renders as a stacked panel above the composer (see ComposerGoalHeader), not here.
+// renders as a capsule above the composer (see ComposerGoalHeader), not here.
 // Centralizes precedence and shared banner chrome so callers pass data, not layout.
 // Layer: Chat composer UI
 // Exports: ComposerInputBanners

@@ -3,7 +3,11 @@
 // Layer: Web appearance domain logic
 // Exports: Theme types, normalization helpers, import/export utilities, and CSS variable builders.
 
-import { DESKTOP_WINDOW_BLUR_RADIUS_MAX, DESKTOP_WINDOW_BLUR_RADIUS_MIN } from "@synara/contracts";
+import {
+  DESKTOP_WINDOW_BLUR_RADIUS_MAX,
+  DESKTOP_WINDOW_BLUR_RADIUS_MIN,
+  type DesktopWindowTranslucency,
+} from "@synara/contracts";
 import { THEME_SEED_CATALOG } from "./theme.seed.generated";
 import {
   normalizeFontFamilyCssValue,
@@ -816,8 +820,8 @@ export function buildThemeCssVariables(
   pack: ThemePack,
   variant: ThemeVariant,
   options?: {
-    electron?: boolean;
-    isMac?: boolean;
+    /** How the desktop window backs glass; null or absent for an opaque window. */
+    windowTranslucency?: DesktopWindowTranslucency | null;
     systemUiFont?: boolean;
     translucency?: WindowTranslucency;
   },
@@ -825,14 +829,12 @@ export function buildThemeCssVariables(
   const resolvedTokens = buildResolvedThemeTokens(pack, variant);
   const codexVariables = resolvedTokens.codexVariables;
   const readCodexVariable = (name: string) => getRequiredVariable(codexVariables, name);
-  // The translucent shell relies on macOS window vibrancy as its backing
-  // material. Windows/Linux have no equivalent, so a translucent shell there
-  // leaves the transparent body and backdrop-filter surfaces bleeding through
-  // and (on fractional DPI) rendering blurry. Restrict translucency to macOS.
+  // The translucent shell needs something blurring the desktop behind the window: macOS
+  // vibrancy, or the Hyprland compositor. Elsewhere (Windows, other Linux sessions, the
+  // browser) the window is opaque, and a translucent shell would leave the transparent body
+  // and backdrop-filter surfaces bleeding through and (on fractional DPI) rendering blurry.
   const material: WindowMaterial =
-    options?.electron === true && options?.isMac === true && !pack.theme.opaqueWindows
-      ? "translucent"
-      : "opaque";
+    options?.windowTranslucency != null && !pack.theme.opaqueWindows ? "translucent" : "opaque";
   const warningColor = WARNING_COLOR_BY_VARIANT[variant];
   const translucency = options?.translucency ?? DEFAULT_WINDOW_TRANSLUCENCY_BY_VARIANT[variant];
   const translucentOpacity = translucency.opacity;
@@ -895,7 +897,7 @@ export function buildThemeCssVariables(
     // `.app-content-surface` in index.css.
     "--app-content-surface": wholeWindowGlass ? "transparent" : contentSurface,
     // Rail layout shell (top strip + rail): a solid tone on opaque windows, a sheer tint
-    // over macOS vibrancy so the glass still shows through (see index.css rail rules).
+    // over the desktop blur so the glass still shows through (see index.css rail rules).
     // Light keeps a denser tint so the shell stays a light grey over bright wallpapers.
     "--app-rail-shell-opacity": wholeWindowGlass
       ? "0%"
@@ -906,10 +908,10 @@ export function buildThemeCssVariables(
     // Raised-chrome fill over the body's coat when the whole window is glass. Empty elsewhere,
     // which leaves each surface's own fill in charge (see `.app-glass-raised` in index.css).
     "--app-glass-raised-surface": wholeWindowGlass ? raisedGlassSurface : "",
-    // Frosted blur only when the shell is translucent (macOS). On an opaque
+    // Frosted blur only when the shell is translucent. On an opaque
     // shell this promotes the surface to a GPU layer that Chromium rasterizes at
     // the wrong scale on fractional DPI (Windows), so text reads blurry until a
-    // repaint. Keep it "none" off macOS.
+    // repaint. Keep it "none" on opaque windows.
     // NOTE: this gates window-vibrancy frosting only. The composer's own glass
     // (`.chat-composer-surface`, index.css) frosts page content, not the window
     // material, so — like the floating menus — it stays on across platforms.

@@ -37,6 +37,19 @@ export interface AgentGatewayWriteAuthority {
   readonly turnId: string;
 }
 
+/**
+ * Read-only view of a live session credential whose write authority was
+ * retired by a terminal turn. The bearer still authenticates read-only MCP
+ * traffic, but it can never bind write authority to a later turn — which is
+ * exactly the state diagnostics needs to surface.
+ */
+export interface AgentGatewayRetiredWriteAuthority {
+  readonly sessionKey: string;
+  readonly provider: ProviderKind;
+  readonly retiredTurnId: string;
+  readonly issuedAt: number;
+}
+
 export interface AgentGatewaySessionRegistryShape {
   readonly issue: (
     threadId: ThreadId,
@@ -55,6 +68,14 @@ export interface AgentGatewaySessionRegistryShape {
    */
   readonly retireWriteAuthority: (token: string, turnId: string) => boolean;
   readonly revoke: (token: string) => void;
+  /**
+   * Live sessions for one thread whose write authority was already retired.
+   * A session stays listed here until its token is revoked, so callers can
+   * distinguish "credential retired, rotation pending" from a healthy bearer.
+   */
+  readonly listRetiredWriteAuthorities: (
+    threadId: string,
+  ) => ReadonlyArray<AgentGatewayRetiredWriteAuthority>;
   readonly setComputerControlEnabled?: (threadId: string, enabled: boolean) => void;
   readonly computerControlProvisioned?: (threadId: string, provider: ProviderKind) => boolean;
 }

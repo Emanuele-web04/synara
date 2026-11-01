@@ -439,19 +439,36 @@ export const decodeFrameResyncRequest = (
   }
 };
 
+/**
+ * The byte stream under a frame socket, when the caller can see it. A WebSocket
+ * `send` returns as soon as the frame is queued on the TCP socket, so counting
+ * bytes until `send` settles measures nothing; the socket's own write queue is
+ * where a client that stopped reading actually shows up.
+ */
+export interface FrameByteStream {
+  readonly pendingBytes: () => number;
+  /** Subscribe to the stream draining its write queue; returns an unsubscribe. */
+  readonly onDrain: (listener: () => void) => () => void;
+}
+
 export const makeFrameSink = (options: {
   readonly send: (bytes: Uint8Array) => Promise<void> | void;
   readonly isOpen: () => boolean;
+  readonly byteStream?: FrameByteStream | undefined;
 }): FrameSink => {
   let inFlightBytes = 0;
   let failed = false;
   const listeners = new Set<() => void>();
+  const notify = () => {
+    for (const listener of listeners) listener();
+  };
+  let stopDrain: (() => void) | null = null;
   return {
     send: (bytes) => {
       inFlightBytes += bytes.byteLength;
       const settle = () => {
         inFlightBytes = Math.max(0, inFlightBytes - bytes.byteLength);
-        for (const listener of listeners) listener();
+        notify();
       };
       let result: Promise<void> | void;
       try {
@@ -468,12 +485,20 @@ export const makeFrameSink = (options: {
         });
       else settle();
     },
-    bufferedAmount: () => inFlightBytes,
+    bufferedAmount: () => inFlightBytes + (options.byteStream?.pendingBytes() ?? 0),
     isOpen: () => !failed && options.isOpen(),
     onWritable: (listener) => {
       listeners.add(listener);
+      // Queued frames are flushed when the socket drains, not only when a send
+      // settles: with a slow client the settle happens long before the bytes
+      // leave, and nothing else would wake the queue up.
+      stopDrain ??= options.byteStream?.onDrain(notify) ?? null;
       return () => {
         listeners.delete(listener);
+        if (listeners.size === 0) {
+          stopDrain?.();
+          stopDrain = null;
+        }
       };
     },
   };

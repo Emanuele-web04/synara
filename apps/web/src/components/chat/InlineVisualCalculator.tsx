@@ -14,6 +14,7 @@ import { Input } from "../ui/input";
 import { Slider } from "../ui/slider";
 import { formatVisualNumber, useInlineVisualState } from "./inlineVisualBlocks.logic";
 import { InlineVisualSurface } from "./InlineVisualSurface";
+import { useTranslation } from "~/i18n";
 
 type CalculatorBlock = Extract<InlineVisualBlock, { type: "calculator" }>;
 
@@ -24,6 +25,8 @@ export function InlineVisualCalculator({
   readonly block: CalculatorBlock;
   readonly stateKey: string;
 }) {
+  const { t, formatLocale } = useTranslation();
+
   const [values, setValues] = useInlineVisualState<Record<string, number>>(stateKey, () =>
     Object.fromEntries(block.inputs.map((input) => [input.id, input.value])),
   );
@@ -55,14 +58,17 @@ export function InlineVisualCalculator({
           {block.inputs.map((input) => {
             const value = values[input.id] ?? input.value;
             const bounded = input.min !== undefined && input.max !== undefined;
-            const label = `${input.label}${input.unit ? ` (${input.unit})` : ""}`;
+            const label = t("common:symbol6", {
+              value0: input.label,
+              value1: input.unit ? ` (${input.unit})` : "",
+            });
             return (
               <label key={input.id} className="flex min-w-0 flex-col gap-1.5">
                 <span className="flex items-baseline justify-between gap-3 text-chat-sm">
                   <span className="truncate text-muted-foreground">{input.label}</span>
                   {bounded ? (
                     <span className="font-medium tabular-nums">
-                      {formatVisualNumber(value, { unit: input.unit })}
+                      {formatVisualNumber(value, { unit: input.unit }, formatLocale)}
                     </span>
                   ) : null}
                 </span>
@@ -113,11 +119,15 @@ export function InlineVisualCalculator({
                   )}
                   aria-live="polite"
                 >
-                  {formatVisualNumber(result, {
-                    decimals: output.decimals,
-                    prefix: output.prefix,
-                    unit: output.unit,
-                  })}
+                  {formatVisualNumber(
+                    result,
+                    {
+                      decimals: output.decimals,
+                      prefix: output.prefix,
+                      unit: output.unit,
+                    },
+                    formatLocale,
+                  )}
                 </dd>
               </div>
             );

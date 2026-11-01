@@ -59,7 +59,7 @@ describe("makeComputerForegroundConsent", () => {
     const signal = new AbortController().signal;
     expect(
       await consent.requestForegroundConsent("computer_activate_window", {}, context(), signal),
-    ).toBe(true);
+    ).toBe("authorized");
     loadMessages.mockClear();
     expect(await consent.resolveForegroundAuthorization(context())).toEqual({
       userRequestedVisibleUse: true,
@@ -78,7 +78,7 @@ describe("makeComputerForegroundConsent", () => {
     const signal = new AbortController().signal;
     expect(
       await consent.requestForegroundConsent("computer_activate_window", {}, context(), signal),
-    ).toBe(true);
+    ).toBe("authorized");
     messages.push({
       ...userMessage("Keep the browser in the background"),
       id: "m2" as OrchestrationMessage["id"],
@@ -89,7 +89,7 @@ describe("makeComputerForegroundConsent", () => {
     });
     expect(
       await consent.requestForegroundConsent("computer_activate_window", {}, context(), signal),
-    ).toBe(false);
+    ).toBe("declined");
     expect(cards).toHaveLength(1);
   });
 
@@ -117,7 +117,7 @@ describe("makeComputerForegroundConsent", () => {
         context(),
         new AbortController().signal,
       ),
-    ).toBe(false);
+    ).toBe("declined");
     expect(await consent.resolveForegroundAuthorization(context())).toEqual({
       userRequestedVisibleUse: false,
     });
@@ -136,7 +136,7 @@ describe("makeComputerForegroundConsent", () => {
         context(),
         new AbortController().signal,
       ),
-    ).toBe(true);
+    ).toBe("authorized");
     expect(await consent.resolveForegroundAuthorization(context())).toEqual({
       userRequestedVisibleUse: true,
     });
@@ -147,14 +147,45 @@ describe("makeComputerForegroundConsent", () => {
     const signal = new AbortController().signal;
     expect(
       await consent.requestForegroundConsent("computer_activate_window", {}, context(), signal),
-    ).toBe(false);
+    ).toBe("declined");
     expect(await consent.resolveForegroundAuthorization(context())).toEqual({
       userRequestedVisibleUse: false,
     });
     expect(
       await consent.requestForegroundConsent("computer_activate_window", {}, context(null), signal),
-    ).toBe(false);
+    ).toBe("cancelled");
     expect(cards).toHaveLength(1);
+  });
+
+  it("reports a card cancelled unanswered as cancelled, not declined, so a fresh prompt may follow", async () => {
+    const gate = new ComputerApprovalGate();
+    const cards: string[] = [];
+    let answer: "accept" | "cancel" = "cancel";
+    const consent = makeComputerForegroundConsent({
+      gate,
+      loadMessages: async () => [userMessage("Open Dia")],
+      knownAppNames: () => [],
+      publish: () => async (requestId, decision) => {
+        if (decision !== undefined) return;
+        cards.push(requestId);
+        if (answer === "cancel") gate.cancelThread("thread-1");
+        else gate.respond("thread-1", requestId, answer);
+      },
+    });
+    const signal = new AbortController().signal;
+    expect(
+      await consent.requestForegroundConsent("computer_activate_window", {}, context(), signal),
+    ).toBe("cancelled");
+    // Nothing was decided, so the retry must surface a fresh card rather than
+    // treating the cancelled prompt as a user decline.
+    answer = "accept";
+    expect(
+      await consent.requestForegroundConsent("computer_activate_window", {}, context(), signal),
+    ).toBe("authorized");
+    expect(cards).toHaveLength(2);
+    expect(await consent.resolveForegroundAuthorization(context())).toEqual({
+      userRequestedVisibleUse: true,
+    });
   });
 
   it("refuses when the thread is gone", async () => {

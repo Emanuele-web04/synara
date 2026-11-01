@@ -1,3 +1,4 @@
+import { rateLimitWindowDisplayLabel } from "~/lib/rateLimits";
 // FILE: ProviderUsageLimitRows.tsx
 // Purpose: Shared provider usage limit-row renderer for Settings and compact
 // popovers. Keeps labels, progress tracks, pace details, and tones consistent.
@@ -10,6 +11,7 @@ import {
 import { StatusDot } from "~/components/ui/status-chip";
 
 import { UsageProgressTrack } from "./UsageProgressTrack";
+import { useTranslation } from "~/i18n";
 
 export type ProviderUsageLimitRowsSurface = "settings" | "popover";
 
@@ -67,15 +69,19 @@ function ProviderUsageTrack({
 }
 
 function SettingsUsageLimitRow({ row }: { row: ProviderUsageDisplayRow }) {
+  const { t } = useTranslation();
+
   const trackProps = providerUsageProgressTrackProps(row);
 
   return (
     <div className="space-y-1.5">
       <div className="flex items-center gap-1.5">
-        <span className="text-ui leading-snug font-medium text-foreground">{row.label}</span>
+        <span className="text-ui leading-snug font-medium text-foreground">
+          {rateLimitWindowDisplayLabel(row.label, t)}
+        </span>
         <StatusDot
           className={trackProps.markerClassName}
-          title={row.pace ? `Usage pace: ${row.pace.status}` : undefined}
+          title={row.pace ? t("common:usagePace", { value0: row.pace.status }) : undefined}
           aria-hidden
         />
       </div>
@@ -90,11 +96,14 @@ function SettingsUsageLimitRow({ row }: { row: ProviderUsageDisplayRow }) {
 }
 
 function PopoverUsageLimitRow({ row }: { row: ProviderUsageDisplayRow }) {
+  const { t } = useTranslation();
   return (
     <div className="space-y-1 text-chat-meta leading-tight">
       <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)] items-baseline gap-x-3">
         <div className="flex min-w-0 items-baseline gap-1.5">
-          <span className="shrink-0 text-ui-sm font-medium text-foreground">{row.label}</span>
+          <span className="shrink-0 text-ui-sm font-medium text-foreground">
+            {rateLimitWindowDisplayLabel(row.label, t)}
+          </span>
           <span className="min-w-0 truncate tabular-nums text-foreground">{row.leftText}</span>
         </div>
         <div className="min-w-0 text-right text-muted-foreground">

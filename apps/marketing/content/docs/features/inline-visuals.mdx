@@ -1,0 +1,20 @@
+---
+title: Inline visuals
+description: Read and interact with charts, tables, comparisons and small tools inside a conversation.
+---
+
+Inline visuals are available in **Stable 1.0.5 and Beta**. Ask your agent for a chart, comparison, checklist or calculator when it makes an answer easier to understand. Supported sessions publish the visual through `synara_show_visual` and place it in their reply.
+
+## Native components
+
+Charts, tables, statistics, comparisons, checklists, tabs and calculators use Synara's theme and your chosen font size. Calculators update as you change their inputs. Choice buttons send their labelled follow-up as your next message; inspect the choice before selecting it. A chart is a presentation of the agent's data, not independent verification of that data.
+
+## Custom HTML on desktop
+
+The desktop apps can also display self-contained HTML for custom diagrams and interactive views. These views run in an isolated frame: network resources, access to the host app and external navigation are blocked. HTML views cannot use the host to open external links. Browser-hosted Synara clients display native components but do not execute HTML visuals.
+
+Visual documents are retained with the chat under the current app's attachments directory. Stable and Beta keep separate data; enabling this feature does not import Beta conversations into Stable. The tool accepts up to six visuals per turn and rejects oversized documents.
+
+See [Composer & attachments](/docs/features/composer) for providing the data an agent should use, and [Synara Beta](/docs/features/synara-beta) for channel isolation.
+
+Source evidence: feature head `4b2441d1040080324f458602e30fbb7f946cb1f5`; `packages/shared/src/betaFeatures.ts`, `apps/server/src/agentGateway/inlineVisualTools.ts`, `apps/server/src/inlineVisualStore.ts`, `apps/web/src/components/chat/InlineVisualFrame.tsx` and `apps/desktop/src/subframeNavigationGuard.ts`.

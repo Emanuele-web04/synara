@@ -21,6 +21,8 @@ import { ServerConfig } from "../config.ts";
 import { OrchestrationCommandReceiptRepositoryLive } from "../persistence/Layers/OrchestrationCommandReceipts.ts";
 import { OrchestrationEventStoreLive } from "../persistence/Layers/OrchestrationEventStore.ts";
 import { ProjectionPendingInteractionRepositoryLive } from "../persistence/Layers/ProjectionPendingInteractions.ts";
+import { ProviderSessionRuntimeRepository } from "../persistence/Services/ProviderSessionRuntime.ts";
+import { ProviderSessionRuntimeRepositoryLive } from "../persistence/Layers/ProviderSessionRuntime.ts";
 import { SqlitePersistenceMemory } from "../persistence/Layers/Sqlite.ts";
 import { ProjectionPendingInteractionRepository } from "../persistence/Services/ProjectionPendingInteractions.ts";
 import { OrchestrationEngineLive } from "./Layers/OrchestrationEngine.ts";
@@ -81,6 +83,7 @@ describe("boot-time pending interaction reconciliation", () => {
       Layer.provide(OrchestrationCommandReceiptRepositoryLive),
       Layer.provideMerge(OrchestrationProjectionSnapshotQueryLive),
       Layer.provideMerge(ProjectionPendingInteractionRepositoryLive),
+      Layer.provideMerge(ProviderSessionRuntimeRepositoryLive),
       Layer.provide(ServerSettingsService.layerTest()),
       Layer.provideMerge(SqlitePersistenceMemory),
       Layer.provideMerge(ServerConfig.layerTest(process.cwd(), process.cwd())),
@@ -147,12 +150,14 @@ describe("boot-time pending interaction reconciliation", () => {
       readonly kind: string;
       readonly payload: OrchestrationThreadActivity["payload"];
       readonly sequence?: number;
+      readonly createdAt?: string;
+      readonly threadId?: ThreadId;
     }) =>
       Effect.runPromise(
         engine.dispatch({
           type: "thread.activity.append",
           commandId: CommandId.makeUnsafe(`cmd-${input.id}`),
-          threadId: THREAD_ID,
+          threadId: input.threadId ?? THREAD_ID,
           activity: {
             id: EventId.makeUnsafe(`activity-${input.id}`),
             tone: "info",
@@ -160,15 +165,15 @@ describe("boot-time pending interaction reconciliation", () => {
             summary: input.kind,
             payload: input.payload,
             turnId: null,
-            createdAt: new Date().toISOString(),
+            createdAt: input.createdAt ?? new Date().toISOString(),
             ...(input.sequence !== undefined ? { sequence: input.sequence } : {}),
           },
           createdAt: new Date().toISOString(),
         }),
       );
 
-    const readThread = async (): Promise<OrchestrationThread | undefined> =>
-      Option.getOrUndefined(await managed.runPromise(snapshotQuery.getThreadDetailById(THREAD_ID)));
+    const readThread = async (threadId = THREAD_ID): Promise<OrchestrationThread | undefined> =>
+      Option.getOrUndefined(await managed.runPromise(snapshotQuery.getThreadDetailById(threadId)));
 
     const readPendingCounts = () =>
       managed.runPromise(pendingInteractions.getPendingCountsByThreadId({ threadId: THREAD_ID }));
@@ -561,5 +566,143 @@ describe("boot-time pending interaction reconciliation", () => {
     expect(messages).toHaveLength(1);
     expect(messages[0]).toMatchObject({ streaming: false, text: "Partial answer", turnId });
     expect(thread?.session).toMatchObject({ status: "interrupted", activeTurnId: null });
+  });
+
+  it("retires nested tasks outside the read-model window when their root runtime died", async () => {
+    const harness = await createHarness();
+    const childId = ThreadId.makeUnsafe("native-child");
+    const beforeBoot = new Date(Date.now() - process.uptime() * 1000 - 60_000).toISOString();
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.create",
+        commandId: CommandId.makeUnsafe("cmd-native-child"),
+        threadId: childId,
+        parentThreadId: THREAD_ID,
+        sourceThreadId: THREAD_ID,
+        projectId: PROJECT_ID,
+        title: "Native child",
+        modelSelection: { provider: "codex", model: "gpt-5-codex" },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        branch: null,
+        worktreePath: null,
+        createdAt: beforeBoot,
+      }),
+    );
+    const runtimes = await harness.managed.runPromise(
+      Effect.service(ProviderSessionRuntimeRepository),
+    );
+    await harness.managed.runPromise(
+      runtimes.upsert({
+        threadId: THREAD_ID,
+        providerName: "codex",
+        providerInstanceId: null,
+        adapterKey: "codex",
+        runtimeMode: "approval-required",
+        status: "running",
+        lifecycleGeneration: LIFECYCLE_GENERATION,
+        lastSeenAt: beforeBoot,
+        resumeCursor: null,
+        runtimePayload: null,
+      }),
+    );
+    await harness.appendActivity({
+      id: "nested-start",
+      threadId: childId,
+      kind: "task.started",
+      payload: { taskId: "nested-task", taskType: "local_agent", toolUseId: "toolu_nested" },
+      sequence: 1,
+      createdAt: beforeBoot,
+    });
+    for (let i = 0; i < 501; i++) {
+      await harness.appendActivity({
+        id: `child-progress-${i}`,
+        threadId: childId,
+        kind: "tool.progress",
+        payload: {},
+        sequence: i + 2,
+        createdAt: beforeBoot,
+      });
+    }
+    // Exercise the real bounded projector, while thread detail retains durable task state.
+    const model = await Effect.runPromise(harness.engine.getReadModel());
+    expect(
+      model.threads
+        .find((thread) => thread.id === childId)
+        ?.activities.some((activity) => activity.kind === "task.started"),
+    ).toBe(false);
+    expect(
+      (await harness.readThread(childId))?.activities.some(
+        (activity) => activity.kind === "task.started",
+      ),
+    ).toBe(true);
+    await harness.runBootReconciliation();
+    await harness.runBootReconciliation();
+    const retired = (await harness.readThread(childId))?.activities.filter(
+      (activity) => activity.kind === "task.completed",
+    );
+    expect(retired).toHaveLength(1);
+    expect(retired?.[0]).toMatchObject({
+      payload: { taskId: "nested-task", status: "stopped", toolUseId: "toolu_nested" },
+      sequence: 503,
+    });
+  });
+
+  it("retires agent tasks a dead runtime left open, after their starts, once", async () => {
+    const harness = await createHarness();
+    const beforeBoot = new Date(Date.now() - process.uptime() * 1000 - 60_000).toISOString();
+    await harness.appendActivity({
+      id: "orphan-start",
+      kind: "task.started",
+      payload: { taskId: "task-orphan", taskType: "local_agent", toolUseId: "toolu_orphan" },
+      sequence: 7,
+      createdAt: beforeBoot,
+    });
+    // Returning to the foreground does not finish the agent.
+    await harness.appendActivity({
+      id: "orphan-foreground",
+      kind: "task.updated",
+      payload: { taskId: "task-orphan", isBackgrounded: false },
+      sequence: 8,
+      createdAt: beforeBoot,
+    });
+    await harness.appendActivity({
+      id: "done-start",
+      kind: "task.started",
+      payload: { taskId: "task-done", taskType: "local_agent", toolUseId: "toolu_done" },
+      sequence: 9,
+      createdAt: beforeBoot,
+    });
+    await harness.appendActivity({
+      id: "done-end",
+      kind: "task.completed",
+      payload: { taskId: "task-done", status: "completed", toolUseId: "toolu_done" },
+      sequence: 10,
+      createdAt: beforeBoot,
+    });
+    // Started by this process: its runtime is live.
+    await harness.appendActivity({
+      id: "live-start",
+      kind: "task.started",
+      payload: { taskId: "task-live", taskType: "local_agent", toolUseId: "toolu_live" },
+      sequence: 11,
+    });
+
+    await harness.runBootReconciliation();
+    await harness.runBootReconciliation();
+
+    const activities = (await harness.readThread())?.activities ?? [];
+    const retired = activities.filter(
+      (activity) => activity.kind === "task.completed" && activity.id !== "activity-done-end",
+    );
+    expect(retired).toHaveLength(1);
+    expect(retired[0]).toMatchObject({
+      summary: "Task stopped",
+      payload: { taskId: "task-orphan", status: "stopped", toolUseId: "toolu_orphan" },
+    });
+    // Ordering is by sequence alone: the end continues the provider sequence its
+    // start belongs to, rather than taking the unrelated orchestration counter.
+    expect(retired[0]!.sequenceSource).toBeUndefined();
+    expect(retired[0]!.sequence).toBe(12);
   });
 });

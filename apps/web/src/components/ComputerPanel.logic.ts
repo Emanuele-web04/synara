@@ -9,8 +9,12 @@ import {
   type ComputerWindow,
   type ThreadComputerState,
 } from "@synara/contracts";
-import { listComputerPermissions } from "@synara/shared/computerGrants";
-import { COMPUTER_TOOL_TITLES, computerToolName } from "../lib/computerToolPresentation";
+import { t } from "~/i18n";
+import {
+  COMPUTER_TOOL_TITLE_KEYS,
+  computerToolName,
+  localizedComputerPermissions,
+} from "../lib/computerToolPresentation";
 
 export interface ComputerFrameGateState {
   readonly lastSequence: number | null;
@@ -94,51 +98,50 @@ export function resolveComputerAvailabilityView(
   if (health?.status === "reconnecting") {
     return {
       kind: "checking",
-      title: "Reconnecting to the desktop",
-      description: health.lastFailure ? health.lastFailure.message : COMPUTER_RECONNECTING_NOTE,
+      title: t("computer:availabilityReconnecting"),
+      description: health.lastFailure ? health.lastFailure.message : t("computer:reconnectingNote"),
     };
   }
   if (!availability) {
     return {
       kind: "checking",
-      title: "Checking computer availability",
-      description: "Waiting for the desktop backend.",
+      title: t("computer:availabilityChecking"),
+      description: t("computer:availabilityWaiting"),
     };
   }
   if (availability.kind === "available") {
     if (grantsConfirmed && computerBackendIsIdle(health)) {
       return {
         kind: "ready",
-        title: "All permissions granted",
-        description: "Synara connects to the desktop the next time an agent uses it.",
+        title: t("computer:availabilityGranted"),
+        description: t("computer:availabilityConnectOnUse"),
       };
     }
     if (health && health.status !== "connected") {
       return {
         kind: "checking",
-        title: "Computer access has not been checked",
-        description: "Choose Set up to check that Synara can see and control the desktop.",
+        title: t("computer:availabilityUnchecked"),
+        description: t("computer:availabilityCheckSetup"),
       };
     }
     if (health?.captureAvailable === false) {
       return {
         kind: "blocked",
-        title: "Screen capture is unavailable",
-        description:
-          "Desktop input is connected, but Synara cannot take screenshots. Choose Set up to check access.",
+        title: t("computer:availabilityCaptureUnavailable"),
+        description: t("computer:availabilityCaptureSetup"),
       };
     }
     return {
       kind: "ready",
-      title: "Connected to the desktop",
-      description: "Synara can see and control the desktop through its computer tools.",
+      title: t("computer:availabilityConnected"),
+      description: t("computer:availabilityReady"),
     };
   }
   if (availability.kind === "unsupported-platform") {
     return {
       kind: "blocked",
-      title: "Computer control is unavailable",
-      description: `This server is running on ${availability.platform}. Computer control needs macOS, or a Wayland desktop on Linux — KWin or Hyprland, or Synara's own nested desktop.`,
+      title: t("computer:availabilityUnavailable"),
+      description: t("computer:availabilityUnsupported", { platform: availability.platform }),
     };
   }
   // A withheld grant is blocked like anything else, but it is the one blocked
@@ -147,13 +150,15 @@ export function resolveComputerAvailabilityView(
   if (availability.kind === "permission-required") {
     return {
       kind: "blocked",
-      title: `Computer control needs ${listComputerPermissions(availability.missing)}`,
+      title: t("computer:availabilityNeedsPermissions", {
+        permissions: localizedComputerPermissions(availability.missing),
+      }),
       description: availability.message,
     };
   }
   return {
     kind: "blocked",
-    title: "Computer control is unavailable",
+    title: t("computer:availabilityUnavailable"),
     description: availability.message,
   };
 }
@@ -215,7 +220,9 @@ export const COMPUTER_RECONNECTING_NOTE =
 export function computerReconnectsNote(health: ComputerHealth | undefined): string | null {
   const reconnects = health?.reconnects ?? 0;
   if (reconnects <= 0) return null;
-  return `Reconnected ${reconnects === 1 ? "once" : `${reconnects} times`} since startup.`;
+  return reconnects === 1
+    ? t("computer:reconnectsOnce")
+    : t("computer:reconnectsCount", { count: reconnects });
 }
 
 /**
@@ -230,10 +237,10 @@ export function computerCanvasLabel(input: {
   readonly visibleDesktop: boolean;
 }): string {
   const backend = input.availability?.kind === "available" ? input.availability.backend : undefined;
-  if (backend === COMPUTER_MAC_BACKEND) return "This Mac's desktop";
-  if (backend === COMPUTER_NESTED_KWIN_BACKEND) return "The agent's own desktop";
-  if (input.visibleDesktop) return "This computer's desktop";
-  return "The agent's desktop";
+  if (backend === COMPUTER_MAC_BACKEND) return t("computer:canvasThisMac");
+  if (backend === COMPUTER_NESTED_KWIN_BACKEND) return t("computer:canvasAgentOwn");
+  if (input.visibleDesktop) return t("computer:canvasThisComputer");
+  return t("computer:canvasAgent");
 }
 
 /**
@@ -255,10 +262,12 @@ export function computerActionLabel(
     .trim();
   if (!tool && fallback.length === 0) return null;
   const label = tool
-    ? COMPUTER_TOOL_TITLES[tool]
+    ? t(COMPUTER_TOOL_TITLE_KEYS[tool], { context: "computerTool" })
     : `${fallback[0]!.toUpperCase()}${fallback.slice(1)}`;
   if (action.ok) return label;
-  return action.message ? `${label} failed: ${action.message}` : `${label} failed`;
+  return action.message
+    ? t("computer:failed2", { label, message: action.message })
+    : t("computer:failed", { label });
 }
 
 export function shouldSubscribeToComputerStream(input: {
@@ -284,8 +293,8 @@ export function computerActionStatusLabel(
   const path = action?.delivery?.path;
   const delivery = path
     ? path.includes("foreground")
-      ? "Temporary foreground"
-      : "Background action"
+      ? t("computer:deliveryForeground")
+      : t("computer:deliveryBackground")
     : undefined;
   return [label, app, delivery].filter(Boolean).join(" · ");
 }

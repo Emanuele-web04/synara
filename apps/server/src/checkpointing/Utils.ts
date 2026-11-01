@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { Encoding } from "effect";
 import {
   CheckpointRef,
@@ -85,12 +86,17 @@ export function checkpointRefForThreadTurnStartInManagedFamily(
   );
 }
 
-// Throwaway ref used to snapshot the working tree mid-turn so a live diff can be
-// computed against the turn-start baseline. It is captured, diffed, and deleted
-// on every live recompute; it never becomes a durable checkpoint.
-export function checkpointRefForThreadTurnLive(threadId: ThreadId, turnId: TurnId): CheckpointRef {
+// A tool-completion revision keeps each published live preview immutable. The
+// latest ref remains until the next revision or terminal checkpoint is published.
+export function checkpointRefForThreadTurnLive(
+  threadId: ThreadId,
+  turnId: TurnId,
+  revision?: string,
+): CheckpointRef {
+  const suffix =
+    revision === undefined ? "" : `_${createHash("sha256").update(revision).digest("hex")}`;
   return CheckpointRef.makeUnsafe(
-    `${CHECKPOINT_REFS_PREFIX}/${Encoding.encodeBase64Url(threadId)}/turn-live/${Encoding.encodeBase64Url(turnId)}`,
+    `${CHECKPOINT_REFS_PREFIX}/${Encoding.encodeBase64Url(threadId)}/turn-live/${Encoding.encodeBase64Url(turnId)}${suffix}`,
   );
 }
 

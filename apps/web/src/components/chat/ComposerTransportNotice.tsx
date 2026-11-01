@@ -1,9 +1,8 @@
 import { useEffect, useState } from "react";
 
-import { StatusChip } from "~/components/ui/status-chip";
+import { StatusDot } from "~/components/ui/status-chip";
 import { subscribeComposerTransportStatus } from "~/lib/composerTransportStatus";
-import { ComposerStackedPanel } from "./ComposerStackedPanel";
-import { ComposerStackedPanelRow } from "./ComposerStackedPanelContent";
+import { ComposerCapsule } from "./ComposerCapsule";
 
 /** Transport presentation stays local; it must not become a transcript activity signal. */
 export function ComposerTransportNotice() {
@@ -12,14 +11,10 @@ export function ComposerTransportNotice() {
 
   if (message === null) return null;
 
-  // Like the other stacked notices, mount without motion and remove immediately on recovery.
+  // Like the other capsules, mount without motion and remove immediately on recovery.
   return (
-    <ComposerStackedPanel>
-      <ComposerStackedPanelRow role="status">
-        <StatusChip dotClassName="bg-amber-500" className="text-muted-foreground">
-          {message}
-        </StatusChip>
-      </ComposerStackedPanelRow>
-    </ComposerStackedPanel>
+    <ComposerCapsule role="status" icon={<StatusDot aria-hidden className="bg-amber-500" />}>
+      <span className="text-muted-foreground">{message}</span>
+    </ComposerCapsule>
   );
 }

@@ -98,6 +98,18 @@ export class OrchestrationProjectorDecodeError extends Schema.TaggedErrorClass<O
   }
 }
 
+// Recovery keeps delivery blocked while current-server ownership is unsettled.
+export class ProviderDeliveryRecoveryError extends Schema.TaggedErrorClass<ProviderDeliveryRecoveryError>()(
+  "ProviderDeliveryRecoveryError",
+  { reason: Schema.Literals(["stop-required", "stop-unconfirmed"]) },
+) {
+  override get message(): string {
+    return this.reason === "stop-required"
+      ? "Stop this run, wait for it to finish stopping, then try Unblock thread again."
+      : "The host has not confirmed that this run stopped. Retry Stop, then try Unblock thread again.";
+  }
+}
+
 export type OrchestrationDispatchError =
   | ProjectionRepositoryError
   | OrchestrationCommandAdmissionError

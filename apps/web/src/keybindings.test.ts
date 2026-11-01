@@ -10,6 +10,7 @@ import {
   formatKeybindingWhenExpression,
   formatShortcutLabel,
   isEditorFileSaveShortcut,
+  resolveEditorShortcutCommand,
   isKeyboardShortcutsHelpShortcut,
   isTerminalClearShortcut,
   resolveShortcutCommand,
@@ -71,6 +72,30 @@ describe("active thread action shortcuts", () => {
       }
     });
   }
+
+  it("resolves the next-needing-attention chord apart from Archive, even as Option+A types å", () => {
+    for (const platform of ["MacIntel", "Win32", "Linux"]) {
+      const isMac = platform === "MacIntel";
+      const press = event({
+        key: isMac ? "å" : "a",
+        code: "KeyA",
+        metaKey: isMac,
+        ctrlKey: !isMac,
+        altKey: true,
+      });
+      assert.equal(resolveShortcutCommand(press, [], { platform }), "chat.attention.next");
+      assert.equal(
+        resolveShortcutCommand({ ...press, shiftKey: true, key: isMac ? "Å" : "A" }, [], {
+          platform,
+        }),
+        "thread.archive",
+      );
+      assert.equal(
+        resolveShortcutCommand(press, [], { platform, context: { terminalFocus: true } }),
+        isMac ? "chat.attention.next" : null,
+      );
+    }
+  });
 });
 
 describe("layout-aware matching", () => {
@@ -277,6 +302,14 @@ const DEFAULT_BINDINGS = compile([
     shortcut: modShortcut("w"),
     command: "terminal.workspace.closeActive",
     whenAst: whenIdentifier("terminalWorkspaceOpen"),
+  },
+  {
+    shortcut: modShortcut("w"),
+    command: "threadTab.close",
+    whenAst: whenAnd(
+      whenNot(whenIdentifier("terminalFocus")),
+      whenNot(whenIdentifier("terminalWorkspaceOpen")),
+    ),
   },
   {
     shortcut: ctrlShortcut("1"),
@@ -791,11 +824,30 @@ describe("workspace terminal tab shortcuts", () => {
       }),
       "terminal.workspace.closeActive",
     );
-    assert.isNull(
+    // With no terminal focused and no workspace open the chord closes the active
+    // open-thread tab instead of reaching the native window-close role.
+    assert.strictEqual(
       resolveShortcutCommand(event({ key: "w", metaKey: true }), DEFAULT_BINDINGS, {
         platform: "MacIntel",
         context: { terminalWorkspaceOpen: false, terminalFocus: false },
       }),
+      "threadTab.close",
+    );
+    // ...including on Linux/Windows, where the same chord is Ctrl+W.
+    assert.strictEqual(
+      resolveShortcutCommand(event({ key: "w", ctrlKey: true }), DEFAULT_BINDINGS, {
+        platform: "Linux",
+        context: { terminalWorkspaceOpen: false, terminalFocus: false },
+      }),
+      "threadTab.close",
+    );
+    // A focused terminal still owns the chord for terminal.close.
+    assert.strictEqual(
+      resolveShortcutCommand(event({ key: "w", metaKey: true }), DEFAULT_BINDINGS, {
+        platform: "MacIntel",
+        context: { terminalWorkspaceOpen: false, terminalFocus: true },
+      }),
+      "terminal.close",
     );
   });
 
@@ -937,6 +989,67 @@ describe("chat/editor shortcuts", () => {
         context: { terminalFocus: true },
       }),
     );
+  });
+});
+
+describe("resolveEditorShortcutCommand", () => {
+  const outsideTerminal = { context: { terminalFocus: false } };
+
+  it("resolves the shipped F-keys on every platform", () => {
+    for (const platform of ["MacIntel", "Win32", "Linux"]) {
+      const options = { ...outsideTerminal, platform };
+      assert.equal(
+        resolveEditorShortcutCommand(event({ key: "F1" }), DEFAULT_BINDINGS, options),
+        "editor.commands",
+      );
+      assert.equal(
+        resolveEditorShortcutCommand(event({ key: "F12" }), DEFAULT_BINDINGS, options),
+        "editor.goToDefinition",
+      );
+      assert.equal(
+        resolveEditorShortcutCommand(
+          event({ key: "F12", shiftKey: true }),
+          DEFAULT_BINDINGS,
+          options,
+        ),
+        "editor.findReferences",
+      );
+    }
+  });
+
+  it("returns null for chords outside the editor and inside a focused terminal", () => {
+    const options = { platform: "MacIntel", ...outsideTerminal };
+    // Bound, but to a command the editor does not run from this handler.
+    assert.isNull(
+      resolveEditorShortcutCommand(event({ key: "s", metaKey: true }), DEFAULT_BINDINGS, options),
+    );
+    assert.isNull(resolveEditorShortcutCommand(event({ key: "q" }), DEFAULT_BINDINGS, options));
+    assert.isNull(
+      resolveEditorShortcutCommand(event({ key: "F5" }), DEFAULT_BINDINGS, {
+        platform: "MacIntel",
+        context: { terminalFocus: true },
+      }),
+    );
+  });
+
+  it("honors a user rebind and drops the shipped key", () => {
+    const keybindings: ResolvedKeybindingsConfig = [
+      ...DEFAULT_BINDINGS,
+      ...compile([
+        {
+          shortcut: modShortcut("r", { altKey: true, modKey: false }),
+          command: "editor.rename",
+          whenAst: whenNot(whenIdentifier("terminalFocus")),
+        },
+      ]),
+    ];
+    const options = { platform: "Linux", ...outsideTerminal };
+
+    assert.equal(
+      resolveEditorShortcutCommand(event({ key: "r", altKey: true }), keybindings, options),
+      "editor.rename",
+    );
+    assert.isNull(resolveEditorShortcutCommand(event({ key: "F2" }), keybindings, options));
   });
 });
 
