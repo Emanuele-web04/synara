@@ -15,6 +15,7 @@ $cases = @(
     @{ name = 'transient default update failure recovers'; fault = 'update-transient'; error = $null; scans = 1; updateSource = 'default'; updateFailures = 2 },
     @{ name = 'exhausted default updates recover through direct MMPC'; fault = 'update-fallback'; error = $null; scans = 1; updateSource = 'default'; updateFailures = 3; expectedMmpcCalls = 1 },
     @{ name = 'direct fallback recovers while status RPC is unavailable'; fault = 'update-rpc-transition'; error = $null; scans = 1; updateSource = 'default'; updateFailures = 3; expectedMmpcCalls = 1 },
+    @{ name = 'MMPC retry repairs a stopped service before updating'; fault = 'mmpc-service-recovery'; error = $null; scans = 1; updateSource = 'default'; updateFailures = 3; mmpcFailures = 1; expectedMmpcCalls = 2 },
     @{ name = 'both update sources fail despite fresh reported status'; fault = 'update-both-fail'; error = 'remote procedure call failed'; scans = 0; updateSource = 'default'; updateFailures = 3; mmpcFailures = 3; expectedMmpcCalls = 3 },
     @{ name = 'both update sources fail with stale reported status'; fault = 'update-both-stale'; error = 'remote procedure call failed'; scans = 0; updateSource = 'default'; updateFailures = 3; mmpcFailures = 3; expectedMmpcCalls = 3; stale = $true },
     @{ name = 'successful direct fallback still rejects stale definitions'; fault = 'update-fallback-stale'; error = 'do not match Microsoft latest version'; scans = 0; updateSource = 'default'; updateFailures = 3; expectedMmpcCalls = 1; stale = $true },
@@ -76,6 +77,8 @@ throw 'Unexpected scanner command.'
                     calls = [System.Collections.Generic.List[string]]::new()
                     updateCalls = [System.Collections.Generic.List[string]]::new()
                     mmpcUpdated = $false
+                    serviceStarted = $false
+                    serviceStarts = 0
                     preferences = [pscustomobject]@{
                         MAPSReporting = 0; SubmitSamplesConsent = 2; DisableBlockAtFirstSeen = $true
                         DisableArchiveScanning = $true; DisableIOAVProtection = $true
@@ -92,16 +95,26 @@ throw 'Unexpected scanner command.'
                     if ($state.fault -in @('after-status-failure', 'scan-and-after-status-failure') -and $state.calls.Contains('scan')) { throw 'Synthetic final status unavailable' }
                     if ($state.fault -eq 'update-rpc-transition' -and $state.updateCalls.Count -ge 3 -and -not $state.mmpcUpdated) { throw 'Operation failed with the following error: 0x800106ba' }
                     $updated = if ($case.stale -or ($case.updateSource -eq 'MMPC' -and -not $state.mmpcUpdated)) { (Get-Date).AddDays(-2) } else { Get-Date }
+                    $engineReady = $state.fault -ne 'engine-not-ready' -and ($state.fault -ne 'mmpc-service-recovery' -or $state.serviceStarted)
                     [pscustomobject]@{
                         AntivirusEnabled = $true; RealTimeProtectionEnabled = $true
                         AntivirusSignatureLastUpdated = $updated; AntivirusSignatureVersion = '1.0.0.0'
                         DefenderSignaturesOutOfDate = [bool]$case.outOfDate
-                        AMServiceEnabled = $state.fault -ne 'engine-not-ready'
-                        AMEngineVersion = $(if ($state.fault -eq 'engine-not-ready') { '0.0.0.0' } else { '1.0.0.0' })
+                        AMServiceEnabled = $engineReady
+                        AMEngineVersion = $(if ($engineReady) { '1.0.0.0' } else { '0.0.0.0' })
                     }
                 }
-                function Get-Service { [pscustomobject]@{ Status = 'Running' } }
-                function Start-Service { throw 'Unexpected service start in mocked qualification.' }
+                function Get-Service {
+                    $status = if ($state.fault -eq 'mmpc-service-recovery' -and -not $state.serviceStarted) { 'Stopped' } else { 'Running' }
+                    $service = [pscustomobject]@{ Status = $status }
+                    $service | Add-Member -MemberType ScriptMethod -Name Refresh -Value { $this.Status = 'Running' }
+                    $service
+                }
+                function Start-Service([string]$Name) {
+                    if ($state.fault -ne 'mmpc-service-recovery' -or $Name -ne 'WinDefend') { throw 'Unexpected service start in mocked qualification.' }
+                    $state.serviceStarted = $true
+                    $state.serviceStarts += 1
+                }
                 function Invoke-WebRequest { [pscustomobject]@{ Content = '<li>Version: <span>2.0.0.0</span></li>' } }
                 function Get-MpThreatDetection {}
                 function Update-MpSignature {
@@ -110,6 +123,7 @@ throw 'Unexpected scanner command.'
                     $source = if ($UpdateSource) { $UpdateSource } else { 'default' }
                     $state.updateCalls.Add($source)
                     $attempt = @($state.updateCalls | Where-Object { $_ -eq $source }).Count
+                    if ($source -eq 'MMPC' -and $state.fault -eq 'mmpc-service-recovery' -and -not $state.serviceStarted) { throw 'The remote procedure call failed.' }
                     if (($source -eq $case.updateSource -and $attempt -le $case.updateFailures) -or ($source -eq 'MMPC' -and $attempt -le $case.mmpcFailures)) { throw 'The remote procedure call failed.' }
                     if ($source -eq 'MMPC') { $state.mmpcUpdated = $true }
                 }
@@ -170,6 +184,7 @@ throw 'Unexpected scanner command.'
                         if ((Get-Content -LiteralPath $file.FullName -Raw) -notlike '*remote procedure call failed*') { throw 'Original direct fallback error was not retained.' }
                     }
                 }
+                if ($case.fault -eq 'mmpc-service-recovery' -and $state.serviceStarts -ne 1) { throw 'MMPC retry did not repair WinDefend exactly once.' }
                 if ($case.updateSource -eq 'MMPC' -and -not (Test-Path "$evidence/default-update-preferences.json")) { throw 'A successful but stale default update must retain its intermediate state.' }
                 if (-not $case.error) {
                     if (($state.calls -join ',') -ne 'maps,scan') { throw 'Clean qualification must validate MAPS before scanning.' }

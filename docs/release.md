@@ -411,8 +411,13 @@ at most three attempts; exhausted errors or definitions older than 24 hours
 require a successful update from Microsoft's direct MMPC source, also bounded
 to three attempts. Failed default updates reach MMPC before any intermediate
 state/readiness RPC, because the same platform transition can make reads fail.
-The existing service/engine readiness gate runs after a successful update, and
-every failed attempt is preserved. No scan may proceed on a reported fresh state
+Between failed MMPC attempts, bounded service/engine readiness recovery may
+restart a stopped WinDefend before retrying; this does not delay the first direct
+fallback. The readiness gate also runs after a successful update. Each call allows
+at most 120 seconds and all calls share 240 seconds of readiness time; time spent
+outside readiness checks does not consume that budget. The existing ten-minute
+qualification timeout remains a final fail-closed bound on slower vendor calls.
+Every failed attempt is preserved. No scan may proceed on a reported fresh state
 without a successful update call. Full error records and independent final
 evidence captures preserve the original failure; incomplete evidence also blocks
 publication.

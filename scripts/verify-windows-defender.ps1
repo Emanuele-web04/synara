@@ -17,6 +17,7 @@ $expected = @($installers | ForEach-Object {
 })
 ConvertTo-Json -InputObject $expected | Set-Content "$evidence/expected-installers.json"
 $errorCaptureFailures = [System.Collections.Generic.List[string]]::new()
+$readinessBudget = [Diagnostics.Stopwatch]::new()
 function Save-DefenderError($failure, $name) {
     try {
         $failure | Format-List * -Force | Out-String -Width 4096 | Set-Content "$evidence/$name-error.txt"
@@ -45,21 +46,27 @@ function Save-DefenderState($name, [switch]$BestEffort) {
 }
 function Wait-DefenderReady {
     $wait = [Diagnostics.Stopwatch]::StartNew()
-    for ($poll = 0; $poll -lt 24 -and $wait.Elapsed.TotalSeconds -lt 120; $poll++) {
-        try {
-            $service = Get-Service -Name WinDefend
-            if ($service.Status -eq 'Stopped') {
-                Start-Service -Name WinDefend
-                $service.Refresh()
-            }
-            $status = Get-MpComputerStatus
-            if ($service.Status -eq 'Running' -and $status.AMServiceEnabled -and
-                $status.AMEngineVersion -and $status.AMEngineVersion -ne '0.0.0.0') { return }
-        } catch { Save-DefenderError $_ "readiness-$poll" }
-        $remaining = 120000 - $wait.Elapsed.TotalMilliseconds
-        if ($remaining -gt 0) { Start-Sleep -Milliseconds ([Math]::Min(5000, [int]$remaining)) }
-    }
-    throw 'WinDefend and its engine did not become ready within 120 seconds.'
+    $readinessBudget.Start()
+    try {
+        # Keep each wait bounded and share a total budget across update retries.
+        # A final immediate healthy-state check remains valid without more sleep.
+        for ($poll = 0; $poll -lt 24 -and ($poll -eq 0 -or ($wait.Elapsed.TotalSeconds -lt 120 -and $readinessBudget.Elapsed.TotalSeconds -lt 240)); $poll++) {
+            try {
+                $service = Get-Service -Name WinDefend
+                if ($service.Status -eq 'Stopped') {
+                    Start-Service -Name WinDefend
+                    $service.Refresh()
+                }
+                $status = Get-MpComputerStatus
+                if ($service.Status -eq 'Running' -and $status.AMServiceEnabled -and
+                    $status.AMEngineVersion -and $status.AMEngineVersion -ne '0.0.0.0') { return }
+            } catch { Save-DefenderError $_ "readiness-$poll" }
+            $remaining = [Math]::Min(120000 - $wait.Elapsed.TotalMilliseconds, 240000 - $readinessBudget.Elapsed.TotalMilliseconds)
+            if ($remaining -gt 0) { Start-Sleep -Milliseconds ([Math]::Min(5000, [int]$remaining)) }
+        }
+        if ($readinessBudget.Elapsed.TotalSeconds -ge 240) { throw 'Defender total readiness budget of 240 seconds was exhausted.' }
+        throw 'WinDefend and its engine did not become ready within 120 seconds.'
+    } finally { $readinessBudget.Stop() }
 }
 function Update-DefenderSignatures([string]$UpdateSource, [switch]$AllowFallback) {
     $arguments = @{ ErrorAction = 'Stop' }
@@ -76,6 +83,9 @@ function Update-DefenderSignatures([string]$UpdateSource, [switch]$AllowFallback
                 throw
             }
             Write-Warning "Defender $source signature update failed on attempt $attempt; retrying in 5 seconds."
+            # Keep the first direct fallback immediate, but repair a stopped
+            # service/engine before retrying an unsuccessful MMPC update.
+            if ($UpdateSource -eq 'MMPC') { Wait-DefenderReady }
             Start-Sleep -Seconds 5
         }
     }
