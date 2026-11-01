@@ -276,6 +276,10 @@ yourself goes first, and the queue resumes once that turn completes. The pause i
 thread and survives a reload. A message already shown in the conversation was accepted by
 the server rather than queued here, and the server still sends it after a Stop.
 
+Send waits for selected images to finish preparing. If preparation fails while a send is waiting,
+the message stays unsent and its text and successfully prepared attachments remain in the composer.
+Select a readable image before retrying; a failed intake does not block later valid sends.
+
 Turn off **Settings → General → Move sent messages to top** to keep new messages at the bottom
 of the conversation and follow replies as they stream.
 
