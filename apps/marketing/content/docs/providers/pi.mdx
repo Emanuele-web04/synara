@@ -139,6 +139,8 @@ You can also update the global npm package through the package manager that inst
 
 Pi 1.0.3 renamed the Azure provider to `azure`. Synara keeps `azure-openai-responses` as a runtime alias so existing Pi credentials, `models.json` overrides, and saved model selections continue using their original key. New `azure` profiles keep their own credentials. Synara does not rewrite either profile; moving a profile to the new ID is optional and follows the [upstream migration instructions](https://github.com/earendil-works/pi/releases/tag/v1.0.3). Azure remains unavailable for isolated Pi accounts because its SDK routing can read process-level configuration.
 
+Pi 1.3 moved Kimi Code to Chat Completions. Synara routes the old official `https://api.kimi.com/coding` endpoint to `/coding/v1` when using that protocol, keeping existing credentials, model selections, and config files intact. Custom endpoints and explicit Anthropic protocol definitions keep their configured routing.
+
 ## Model catalog refresh
 
 Pi discovery uses its native OpenRouter authentication to expose models it can execute. OpenCode Zen entries are refreshed with their protocol and capability metadata, and the bundled Pi SDK recognizes GLM 5.3 Flash and GPT-6 Astra. Availability still depends on the configured provider and account.

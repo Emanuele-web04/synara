@@ -924,6 +924,134 @@ describe("getPiDiscoverableModels", () => {
     },
   );
 
+  it.each([
+    {
+      label: "legacy default profile",
+      baseUrl: "https://api.kimi.com/coding",
+      expected: "https://api.kimi.com/coding/v1/chat/completions",
+      isolated: false,
+    },
+    {
+      label: "legacy isolated profile",
+      baseUrl: "https://api.kimi.com/coding",
+      expected: "https://api.kimi.com/coding/v1/chat/completions",
+      isolated: true,
+    },
+    {
+      label: "legacy trailing slash",
+      baseUrl: "https://api.kimi.com/coding/",
+      expected: "https://api.kimi.com/coding/v1/chat/completions",
+      isolated: false,
+    },
+    {
+      label: "current endpoint",
+      baseUrl: "https://api.kimi.com/coding/v1",
+      expected: "https://api.kimi.com/coding/v1/chat/completions",
+      isolated: false,
+    },
+    {
+      label: "custom endpoint",
+      baseUrl: "https://custom.example/coding",
+      expected: "https://custom.example/coding/chat/completions",
+      isolated: false,
+    },
+    {
+      label: "explicit Anthropic protocol",
+      baseUrl: "https://api.kimi.com/coding",
+      expected: "https://api.kimi.com/coding/v1/messages",
+      isolated: false,
+      api: "anthropic-messages",
+    },
+  ])(
+    "preserves Kimi request routing for $label across refresh",
+    async ({ baseUrl, expected, isolated, ...config }) => {
+      const agentDir = mkdtempSync(path.join(tmpdir(), "synara-pi-kimi-"));
+      const authPath = path.join(agentDir, "auth.json");
+      const modelsPath = path.join(agentDir, "models.json");
+      const auth = JSON.stringify({ "kimi-coding": { type: "api_key", key: "selected-kimi-key" } });
+      const models = JSON.stringify({
+        providers: {
+          "kimi-coding": {
+            baseUrl,
+            modelOverrides: { "kimi-for-coding": { contextWindow: 8192, maxTokens: 1024 } },
+            ...("api" in config
+              ? {
+                  models: [
+                    {
+                      id: "kimi-for-coding",
+                      api: config.api,
+                      name: "Kimi",
+                      reasoning: false,
+                      input: ["text"],
+                      contextWindow: 8192,
+                      maxTokens: 1024,
+                      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                    },
+                  ],
+                }
+              : {}),
+          },
+        },
+      });
+      try {
+        writeFileSync(authPath, auth);
+        writeFileSync(modelsPath, models);
+        const runtime = await createTestPiModelRuntime(
+          agentDir,
+          { ModelRuntime },
+          undefined,
+          isolated ? {} : undefined,
+          isolated ? "pi_work" : undefined,
+        );
+        const selected = findModelInRegistry(
+          new ModelRegistry(runtime),
+          "kimi-coding/kimi-for-coding",
+        );
+        expect(selected).toMatchObject({
+          provider: "kimi-coding",
+          id: "kimi-for-coding",
+          contextWindow: 8192,
+          maxTokens: 1024,
+        });
+        const requests: Array<{ url: string; headers: Headers; body: string }> = [];
+        const fetch = (async (
+          input: Parameters<typeof globalThis.fetch>[0],
+          init: Parameters<typeof globalThis.fetch>[1],
+        ) => {
+          requests.push({
+            url: String(input),
+            headers: new Headers(init?.headers),
+            body: String(init?.body),
+          });
+          return Response.json(
+            { error: { message: "synthetic stop", type: "invalid_request_error" } },
+            { status: 400 },
+          );
+        }) as typeof globalThis.fetch;
+        const context = { messages: [{ role: "user" as const, content: "hello", timestamp: 0 }] };
+        await runtime.complete(selected!, context, { fetch, maxRetries: 0 });
+        await runtime.refresh({ allowNetwork: false });
+        await runtime.streamSimple(selected!, context, { fetch, maxRetries: 0 }).result();
+        expect(
+          requests.map((request) => {
+            const url = new URL(request.url);
+            return url.origin + url.pathname;
+          }),
+        ).toEqual([expected, expected]);
+        for (const request of requests) {
+          expect(
+            [...request.headers.values()].some((value) => value.includes("selected-kimi-key")),
+          ).toBe(true);
+          expect(JSON.parse(request.body).model).toBe("kimi-for-coding");
+        }
+        expect(readFileSync(authPath, "utf8")).toBe(auth);
+        expect(readFileSync(modelsPath, "utf8")).toBe(models);
+      } finally {
+        rmSync(agentDir, { recursive: true, force: true });
+      }
+    },
+  );
+
   it("preserves legacy Azure profiles and model selections alongside the renamed provider", async () => {
     const agentDir = mkdtempSync(path.join(tmpdir(), "synara-pi-azure-"));
     const legacyProvider = "azure-openai-responses";
