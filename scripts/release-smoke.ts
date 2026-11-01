@@ -96,11 +96,12 @@ function verifyCanonicalIdentity(): void {
   }
   const expectedBinaries = {
     synara: "dist/index.mjs",
+    "synara-compact-database": "dist/compactDatabase.mjs",
     "synara-restore-migration-backup": "dist/restoreMigrationBackup.mjs",
   };
   if (JSON.stringify(serverPackage.bin ?? {}) !== JSON.stringify(expectedBinaries)) {
     throw new Error(
-      "Expected the CLI to expose only the Synara entry point and migration recovery binary.",
+      "Expected the CLI to expose only the Synara entry point and database maintenance binaries.",
     );
   }
   if (SYNARA_PRODUCTION_BUNDLE_ID !== "com.emanueledipietro.synara") {
