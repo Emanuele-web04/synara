@@ -86,6 +86,7 @@ import {
   ProviderAdapterRequestError,
   ProviderAdapterValidationError,
   ProviderSessionDirectoryPersistenceError,
+  ProviderSessionNotFoundError,
   ProviderValidationError,
   type ProviderAdapterError,
 } from "../../provider/Errors.ts";
@@ -416,7 +417,27 @@ function createRetainingRestartProviderServiceLayer(options?: {
       streamEvents: Stream.never,
     };
   };
-  const settingsLayer = ServerSettingsService.layerTest();
+  const settingsLayer = Layer.unwrap(
+    Effect.gen(function* () {
+      const fixtureRoot = yield* Effect.acquireRelease(
+        Effect.sync(() => fs.mkdtempSync(path.join(os.tmpdir(), "synara-reactor-provider-"))),
+        (root) => Effect.sync(() => fs.rmSync(root, { recursive: true, force: true })),
+      );
+      const codexHomePath = path.join(fixtureRoot, "codex");
+      fs.mkdirSync(codexHomePath);
+      return ServerSettingsService.layerTest({
+        providerInstances: {
+          codex: {
+            driver: "codex",
+            config: { homePath: codexHomePath },
+            environment: [
+              { name: "SYNARA_HOME", value: path.join(fixtureRoot, "runtime"), sensitive: false },
+            ],
+          },
+        },
+      });
+    }),
+  );
   const registryLayer = ProviderAdapterRegistryLive.pipe(
     Layer.provide(
       Layer.mergeAll(
@@ -3075,6 +3096,40 @@ describe("ProviderCommandReactor", () => {
   ) {
     const readModel = await Effect.runPromise(harness.engine.getReadModel());
     return readModel.threads.find((thread) => thread.id === threadId);
+  }
+
+  async function startNativeChildTurn(
+    harness: Awaited<ReturnType<typeof createHarness>>,
+    providerThreadId: string,
+    provider: ProviderKind = "codex",
+  ) {
+    const threadId = ThreadId.makeUnsafe(`subagent:thread-1:${providerThreadId}`);
+    const turnId = asTurnId(`turn-${providerThreadId}`);
+    await harness.emitRuntimeEvent({
+      type: "turn.started",
+      eventId: asEventId(`evt-start-${providerThreadId}`),
+      provider,
+      createdAt: new Date().toISOString(),
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      turnId,
+      parentTurnId: asTurnId("turn-parent"),
+      providerRefs: {
+        providerThreadId,
+        providerParentThreadId: "parent-provider-thread",
+        providerTurnId: turnId,
+        parentProviderTurnId: "turn-parent",
+      },
+      payload: {},
+    });
+    await waitFor(async () => {
+      const thread = await readHarnessThread(harness, threadId);
+      return (
+        thread?.latestTurn?.state === "running" &&
+        thread.session?.status === "running" &&
+        thread.session.activeTurnId === turnId
+      );
+    });
+    return { threadId, turnId };
   }
 
   async function seedRenameConversation(
@@ -7727,7 +7782,7 @@ describe("ProviderCommandReactor", () => {
   it.each(["pending", "compacting", "uncertain", "failed"] as const)(
     "isolates an unavailable owner with a persisted %s Claude review",
     async (reviewStatus) => {
-      const harness = await createHarness({ startReactor: false });
+      const harness = await createHarness({ startReactor: false, ingestRuntimeEvents: true });
       const now = new Date().toISOString();
       const childId = ThreadId.makeUnsafe("subagent:missing-parent:compacting");
       const messageId = asMessageId("orphan-held-message");
@@ -7747,6 +7802,20 @@ describe("ProviderCommandReactor", () => {
           createdAt: now,
         }),
       );
+      // The child was started by its provider before the parent owner vanished.
+      await harness.emitRuntimeEvent({
+        type: "turn.started",
+        eventId: asEventId("orphan-compaction-child-started"),
+        provider: "claudeAgent",
+        threadId: childId,
+        turnId: asTurnId("orphan-compaction-child-turn"),
+        createdAt: now,
+        payload: {},
+      });
+      await waitFor(async () => {
+        const child = await readHarnessThread(harness, childId);
+        return child?.latestTurn?.state === "running" && child.session?.status === "running";
+      });
       const source = await Effect.runPromise(
         harness.engine.dispatch({
           type: "thread.turn.start",
@@ -7865,7 +7934,10 @@ describe("ProviderCommandReactor", () => {
   ] as const)(
     "recovers persisted %s work with a %s delivery without replaying provider mutations",
     async (mode, priorState) => {
-      const harness = await createHarness({ startReactor: false });
+      const harness = await createHarness({
+        startReactor: false,
+        ingestRuntimeEvents: priorState === "queued",
+      });
       const now = new Date().toISOString();
       const parentId = ThreadId.makeUnsafe(
         mode === "deleted-parent" || mode === "deleted-thread" ? "thread-1" : "missing-parent",
@@ -7878,7 +7950,10 @@ describe("ProviderCommandReactor", () => {
           threadId: childId,
           projectId: asProjectId("project-1"),
           title: "Persisted child",
-          modelSelection: { provider: "codex", model: "gpt-5-codex" },
+          modelSelection:
+            priorState === "queued"
+              ? { provider: "claudeAgent", model: "claude-sonnet-4-5" }
+              : { provider: "codex", model: "gpt-5-codex" },
           runtimeMode: "approval-required",
           interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
           ...(mode === "legacy-synthetic" ? {} : { parentThreadId: parentId }),
@@ -7895,7 +7970,7 @@ describe("ProviderCommandReactor", () => {
           session: {
             threadId: childId,
             status: "running",
-            providerName: "codex",
+            providerName: priorState === "queued" ? "claudeAgent" : "codex",
             runtimeMode: "approval-required",
             activeTurnId: asTurnId("orphan-turn"),
             lastError: null,
@@ -7904,6 +7979,23 @@ describe("ProviderCommandReactor", () => {
           createdAt: now,
         }),
       );
+      if (priorState === "queued") {
+        // Restore a provider-owned child turn before persisting the historical
+        // queued message; direct input to a Codex native child is unavailable.
+        await harness.emitRuntimeEvent({
+          type: "turn.started",
+          eventId: asEventId("orphan-queued-child-started"),
+          provider: "claudeAgent",
+          threadId: childId,
+          turnId: asTurnId("orphan-turn"),
+          createdAt: now,
+          payload: {},
+        });
+        await waitFor(async () => {
+          const child = await readHarnessThread(harness, childId);
+          return child?.latestTurn?.state === "running" && child.session?.status === "running";
+        });
+      }
       await Effect.runPromise(
         harness.engine.dispatch({
           type: "thread.turn.interrupt",
@@ -15547,7 +15639,10 @@ describe("ProviderCommandReactor", () => {
   });
 
   it("routes subagent-thread turn starts to the parent session as steers", async () => {
-    const harness = await createHarness();
+    const harness = await createHarness({
+      threadModelSelection: { provider: "claudeAgent", model: "claude-sonnet-4-5" },
+      ingestRuntimeEvents: true,
+    });
     const now = new Date().toISOString();
 
     await Effect.runPromise(
@@ -15566,6 +15661,8 @@ describe("ProviderCommandReactor", () => {
         createdAt: now,
       }),
     );
+
+    await startNativeChildTurn(harness, "tool-steer-1", "claudeAgent");
 
     await Effect.runPromise(
       harness.engine.dispatch({
@@ -15596,7 +15693,10 @@ describe("ProviderCommandReactor", () => {
   });
 
   it("injects the subagent thread goal into its parent-session steer", async () => {
-    const harness = await createHarness();
+    const harness = await createHarness({
+      threadModelSelection: { provider: "claudeAgent", model: "claude-sonnet-4-5" },
+      ingestRuntimeEvents: true,
+    });
     const now = new Date().toISOString();
     const subagentThreadId = ThreadId.makeUnsafe("subagent:thread-1:tool-goal-steer");
 
@@ -15624,6 +15724,7 @@ describe("ProviderCommandReactor", () => {
         goal: "Finish <all> tests",
       }),
     );
+    await startNativeChildTurn(harness, "tool-goal-steer", "claudeAgent");
     await Effect.runPromise(
       harness.engine.dispatch({
         type: "thread.turn.start",
@@ -15647,6 +15748,126 @@ describe("ProviderCommandReactor", () => {
     expect(steerInput).toContain("Finish &lt;all&gt; tests");
     expect(steerInput).toContain("</synara_goal>\n\ncontinue");
   });
+
+  it.each([
+    [
+      "adapter validation",
+      () =>
+        new ProviderAdapterValidationError({
+          provider: "claudeAgent",
+          operation: "turn/steerSubagent",
+          issue: "This subagent has finished; its message was not sent.",
+        }),
+    ],
+    [
+      "inactive provider runtime",
+      () =>
+        new ProviderValidationError({
+          operation: "ProviderService.steerSubagent",
+          issue: "The provider runtime is not active.",
+        }),
+    ],
+    ["missing provider session", () => new ProviderSessionNotFoundError({ threadId: "thread-1" })],
+  ] as const)(
+    "preserves a completed native child when its admitted steer is safely rejected by %s",
+    async (_reason, rejectSteer) => {
+      const harness = await createHarness({
+        threadModelSelection: { provider: "claudeAgent", model: "claude-sonnet-4-5" },
+        ingestRuntimeEvents: true,
+      });
+      const now = new Date().toISOString();
+      const providerThreadId = "late-child";
+      const childThreadId = ThreadId.makeUnsafe(`subagent:thread-1:${providerThreadId}`);
+      const { turnId } = await startNativeChildTurn(harness, providerThreadId, "claudeAgent");
+      const enteredSteer = Deferred.makeUnsafe<void>();
+      const releaseSteer = Deferred.makeUnsafe<void>();
+      harness.steerSubagent.mockImplementationOnce(() =>
+        Deferred.succeed(enteredSteer, undefined).pipe(
+          Effect.andThen(Deferred.await(releaseSteer)),
+          Effect.andThen(Effect.fail(rejectSteer())),
+        ),
+      );
+
+      const requested = await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.turn.start",
+          commandId: CommandId.makeUnsafe("cmd-late-child-steer"),
+          threadId: childThreadId,
+          message: {
+            messageId: asMessageId("late-child-message"),
+            role: "user",
+            text: "Follow up before you finish",
+            attachments: [],
+          },
+          dispatchMode: "steer",
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          runtimeMode: "approval-required",
+          createdAt: now,
+        }),
+      );
+      await Effect.runPromise(Deferred.await(enteredSteer));
+      await harness.emitRuntimeEvent({
+        type: "turn.completed",
+        eventId: asEventId("evt-late-child-completed"),
+        provider: "claudeAgent",
+        createdAt: new Date().toISOString(),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        turnId,
+        parentTurnId: asTurnId("turn-parent"),
+        providerRefs: {
+          providerThreadId,
+          providerParentThreadId: "parent-provider-thread",
+          providerTurnId: turnId,
+          parentProviderTurnId: "turn-parent",
+        },
+        payload: { state: "completed" },
+      });
+      await waitFor(async () => {
+        const child = await readHarnessThread(harness, childThreadId);
+        return child?.latestTurn?.state === "completed" && child.session?.status === "ready";
+      });
+      await Effect.runPromise(Deferred.succeed(releaseSteer, undefined));
+      await harness.drain();
+
+      const child = await readHarnessThread(harness, childThreadId);
+      expect(child?.latestTurn).toMatchObject({ turnId, state: "completed" });
+      expect(child?.session).toMatchObject({
+        status: "ready",
+        activeTurnId: null,
+        lastError: null,
+      });
+      expect(child?.messages).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ id: "late-child-message", role: "user" }),
+        ]),
+      );
+      expect(child?.activities).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            kind: "provider.turn.start.failed",
+            payload: expect.objectContaining({
+              messageId: "late-child-message",
+              detail: expect.stringContaining("message was not sent"),
+            }),
+          }),
+        ]),
+      );
+      const delivery = await Effect.runPromise(
+        harness.deliveryRepository.getDelivery({
+          consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
+          eventSequence: requested.sequence,
+        }),
+      );
+      expect(Option.getOrThrow(delivery).state).toBe("succeeded");
+      const blocker = await Effect.runPromise(
+        harness.deliveryRepository.firstBlockingDeliveryForThread({
+          consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
+          threadId: childThreadId,
+        }),
+      );
+      expect(Option.isNone(blocker)).toBe(true);
+    },
+  );
 
   it("appends a failure activity when a task stop is requested without an active session", async () => {
     const harness = await createHarness();
@@ -20592,6 +20813,7 @@ describe("ProviderCommandReactor", () => {
     const harness = await createHarness({
       threadModelSelection: { provider: "claudeAgent", model: "claude-fable-5-1" },
       startReactor: false,
+      ingestRuntimeEvents: scenario === "known child owner",
       listRetainedSessions: () => Effect.succeed(retained),
     });
     const threadId = ThreadId.makeUnsafe(
@@ -20615,6 +20837,7 @@ describe("ProviderCommandReactor", () => {
           createdAt: now,
         }),
       );
+      await startNativeChildTurn(harness, "recovery-child", "claudeAgent");
     }
     const stopCommandId = CommandId.makeUnsafe("recovery-proof-stop");
     const recordStop = () =>
@@ -27357,7 +27580,10 @@ describe("ProviderCommandReactor", () => {
   });
 
   it("steers attachment-only turns through an inferred synthetic subagent parent", async () => {
-    const harness = await createHarness();
+    const harness = await createHarness({
+      threadModelSelection: { provider: "claudeAgent", model: "claude-sonnet-4-5" },
+      ingestRuntimeEvents: true,
+    });
     const now = new Date().toISOString();
     const attachment = {
       type: "file" as const,
@@ -27391,7 +27617,7 @@ describe("ProviderCommandReactor", () => {
         threadId: ThreadId.makeUnsafe("subagent:thread-1:child-provider-steer"),
         projectId: asProjectId("project-1"),
         title: "Synthetic child",
-        modelSelection: { provider: "codex", model: "gpt-5-codex" },
+        modelSelection: { provider: "claudeAgent", model: "claude-sonnet-4-5" },
         interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
         runtimeMode: "approval-required",
         branch: null,
@@ -27400,6 +27626,7 @@ describe("ProviderCommandReactor", () => {
       }),
     );
     await harness.stageAttachment(attachment, "subagent:thread-1:child-provider-steer");
+    await startNativeChildTurn(harness, "child-provider-steer", "claudeAgent");
     await Effect.runPromise(
       harness.engine.dispatch({
         type: "thread.turn.start",
