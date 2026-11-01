@@ -5555,8 +5555,8 @@ export default function ChatView({
   const onRunProjectScriptFromHeader = useStableCallback((script: ProjectScript) => {
     void runProjectScript(script);
   });
-  // Header "New thread": mints a thread in the active workspace (same branch/worktree/env),
-  // falling back to the project when there is no server/draft thread yet.
+  // Header "New thread" preserves the current project workspace. Home falls back
+  // to the most recently used ordinary project in the active Space.
   const onNewThreadFromHeader = useStableCallback(() => {
     const state = useStore.getState();
     if (!state.threadsHydrated) return;
@@ -6790,7 +6790,11 @@ export default function ChatView({
                     keybindings={keybindings}
                     closeActiveTabRef={closeActiveThreadTabRef}
                     onRenameActiveThread={() => setRenameDialogOpen(true)}
-                    onNewThread={onNewThreadFromHeader}
+                    onNewThread={
+                      activeProjectScripts !== undefined || isHomeChatContainer
+                        ? onNewThreadFromHeader
+                        : null
+                    }
                   />
                 ),
               }

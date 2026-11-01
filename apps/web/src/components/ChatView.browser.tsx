@@ -11746,6 +11746,10 @@ describe("ChatView transcript geometry (full app)", () => {
         },
         { timeout: 8_000, interval: 16 },
       );
+      await expect.element(page.getByRole("navigation", { name: "Open threads" })).toBeVisible();
+      await expect
+        .element(page.getByRole("button", { name: "New thread in this workspace" }))
+        .not.toBeInTheDocument();
     } finally {
       await mounted.cleanup();
     }
