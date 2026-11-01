@@ -40,7 +40,9 @@ function QueuedComposerPausedNotice({
   pause,
   onResume,
   onEdit,
+  resumeDisabled,
 }: {
+  resumeDisabled?: boolean | undefined;
   pause: QueuedComposerPause;
   onResume: () => void;
   onEdit: () => void;
@@ -70,7 +72,12 @@ function QueuedComposerPausedNotice({
         </span>
       </ComposerStackedPanelRowMain>
       <div className="flex shrink-0 items-center gap-1.5">
-        <button type="button" className={PAUSE_ACTION_CLASS_NAME} onClick={onResume}>
+        <button
+          type="button"
+          className={PAUSE_ACTION_CLASS_NAME}
+          onClick={onResume}
+          disabled={resumeDisabled}
+        >
           {t("chat:detail_resume")}
         </button>
         <button type="button" className={PAUSE_ACTION_CLASS_NAME} onClick={onEdit}>
@@ -120,6 +127,8 @@ interface ComposerQueuedHeaderProps {
   /** Set while a stop, failure, or usage limit holds the queue. */
   pause?: QueuedComposerPause | null;
   onResume?: () => void;
+  /** The computer owns this wait; queue Resume must not bypass its reset deadline. */
+  resumeDisabled?: boolean | undefined;
   /** Takes the next queued message back into the composer. */
   onEditPaused?: () => void;
   /** Workspace root used to resolve local file links/mentions inside the parsed preview. */
@@ -134,6 +143,7 @@ export const ComposerQueuedHeader = function ComposerQueuedHeader({
   pause,
   onResume,
   onEditPaused,
+  resumeDisabled,
   cwd,
 }: ComposerQueuedHeaderProps) {
   if (queuedTurns.length === 0) {
@@ -143,7 +153,12 @@ export const ComposerQueuedHeader = function ComposerQueuedHeader({
   return (
     <ComposerStackedPanel className="flex flex-col">
       {pause && onResume && onEditPaused ? (
-        <QueuedComposerPausedNotice pause={pause} onResume={onResume} onEdit={onEditPaused} />
+        <QueuedComposerPausedNotice
+          pause={pause}
+          onResume={onResume}
+          onEdit={onEditPaused}
+          resumeDisabled={resumeDisabled}
+        />
       ) : null}
       {queuedTurns.map((queuedTurn, queuedTurnIndex) => (
         <ComposerStackedPanelRow
@@ -166,6 +181,7 @@ export const ComposerQueuedHeader = function ComposerQueuedHeader({
           <QueuedComposerActions
             queuedTurn={queuedTurn}
             onSteer={onSteer}
+            steerDisabled={resumeDisabled}
             onRemove={onRemove}
             onEdit={onEdit}
           />

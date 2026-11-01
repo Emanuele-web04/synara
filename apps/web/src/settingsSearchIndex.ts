@@ -576,6 +576,13 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
 
   // ── Providers ─────────────────────────────────────────────────────────────────
   {
+    target: "setting-resume-after-usage-limits",
+    id: "providers:usage-limit-recovery",
+    section: "providers",
+    title: "settings:resumeAfterUsageLimits",
+    keywords: "settings:resumeAfterUsageLimitsDescription",
+  },
+  {
     target: "setting-keep-synara-responsive",
     id: "providers:cpu-priority",
     section: "providers",

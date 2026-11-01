@@ -1178,5 +1178,8 @@
   "sidebarUsageAccountLimit_one": "Sidebar · up to {{count}} account",
   "sidebarUsageAccountLimit_other": "Sidebar · up to {{count}} accounts",
   "permissionGuideEnableInstalledApp": "If this copy of {{app}} is already listed, turn it on. Otherwise, drag the app from the floating guide into the list, or use + to choose this installed copy, then turn it on.",
-  "permissionGuideCompleteAuthentication": "Complete any macOS authentication. If macOS asks you to quit and reopen, do so before checking again."
+  "permissionGuideCompleteAuthentication": "Complete any macOS authentication. If macOS asks you to quit and reopen, do so before checking again.",
+  "resumeAfterUsageLimits": "Resume after usage limits",
+  "resumeAfterUsageLimitsDescription": "Automatically continue newly limited tasks when the provider reports that their allowance resets. Applies to this computer, even while your other devices are closed. Turning this off cancels pending resumes.",
+  "couldNotUpdateUsageLimitRecovery": "Could not update automatic resumption"
 }
