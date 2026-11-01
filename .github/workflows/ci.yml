@@ -339,6 +339,10 @@ jobs:
         with:
           scope: "runtime"
 
+      - name: Test Defender qualification guard contracts
+        shell: pwsh
+        run: pwsh -NoProfile -NonInteractive -File scripts/verify-windows-defender.test.ps1
+
       - name: Verify Windows terminal PTY native dependency under Bun
         run: bun scripts/node-pty-smoke.mjs
 
