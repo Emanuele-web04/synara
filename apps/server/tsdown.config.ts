@@ -25,6 +25,7 @@ export default defineConfig({
   entry: {
     index: "src/index.ts",
     restoreMigrationBackup: "src/restoreMigrationBackup.ts",
+    compactDatabase: "src/compactDatabase.ts",
     runtimeDependencySmoke: "src/runtimeDependencySmoke.ts",
     languageWorker: "src/editor/languageWorker.ts",
   },

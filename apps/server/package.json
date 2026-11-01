@@ -9,6 +9,7 @@
   },
   "bin": {
     "synara": "dist/index.mjs",
+    "synara-compact-database": "dist/compactDatabase.mjs",
     "synara-restore-migration-backup": "dist/restoreMigrationBackup.mjs"
   },
   "files": [
