@@ -93,6 +93,12 @@ so an old activity retry cannot discard a newer session's pending transcript.
 If the runtime restarts before that evidence is committed, Synara conservatively
 retains the recap for the next accepted turn, even when native resume succeeds.
 
+Native code reviews accept their review target, not prompt attachments. A review request with
+attachments is rejected before the message or attachment claim is accepted. Send those files as
+an ordinary message instead; no extra provider send is made automatically. An unsupported review
+already accepted by an older host fails before provider startup if it has not been delivered yet;
+its saved message and files remain available, and later ordinary messages are not blocked.
+
 Codex's internal `turn/moderationMetadata` notifications stay in local native event logs
 when logging is enabled and do not create conversation activity rows. Actual provider
 errors still appear. Previously stored activity rows are preserved.

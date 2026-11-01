@@ -190,6 +190,7 @@ import {
   type TranscriptBootstrap,
 } from "../handoff.ts";
 import {
+  NATIVE_REVIEW_ATTACHMENTS_UNSUPPORTED,
   OrchestrationCommandInternalError,
   OrchestrationCommandInvariantError,
   ProviderDeliveryRecoveryError,
@@ -3392,6 +3393,15 @@ const make = Effect.gen(function* () {
     if (!thread) {
       return;
     }
+    // Old hosts could already have committed an unsupported review. Refuse its
+    // unsent delivery too, preserving history without starting a text-only review.
+    if (input.reviewTarget !== undefined && (input.attachments?.length ?? 0) > 0) {
+      return yield* new ProviderAdapterValidationError({
+        provider: thread.modelSelection.provider,
+        operation: "thread.turn.start",
+        issue: NATIVE_REVIEW_ATTACHMENTS_UNSUPPORTED,
+      });
+    }
     const executingIntentSequence = input.completionEventSequence ?? input.sourceEventSequence;
     let usageLimitAdmissionSequence: number | undefined;
     if ((input.dispatchMode ?? "queue") !== "steer" && thread.parentThreadId == null) {
@@ -5219,28 +5229,32 @@ const make = Effect.gen(function* () {
         operation: "thread.turn.start",
       });
 
-      yield* maybeGenerateAndRenameWorktreeBranchForFirstTurn({
-        threadId: event.payload.threadId,
-        sourceEventSequence: event.sequence,
-        branch: thread.branch,
-        worktreePath: thread.worktreePath,
-        messageId: message.id,
-        messageText: message.text,
-        ...(message.attachments !== undefined ? { attachments: resolvedAttachments } : {}),
-      }).pipe(Effect.forkScoped);
-      yield* maybeGenerateAndRenameThreadTitleForFirstTurn({
-        threadId: event.payload.threadId,
-        sourceEventSequence: event.sequence,
-        messageId: message.id,
-        messageText: message.text,
-        ...(message.attachments !== undefined ? { attachments: resolvedAttachments } : {}),
-        ...(event.payload.modelSelection !== undefined
-          ? { modelSelection: event.payload.modelSelection }
-          : {}),
-        ...(event.payload.providerOptions !== undefined
-          ? { providerOptions: event.payload.providerOptions }
-          : {}),
-      }).pipe(Effect.forkScoped);
+      // These helpers may invoke their own provider. An unsupported old review
+      // must reach the caught refusal below without launching either generator.
+      if (event.payload.reviewTarget === undefined || resolvedAttachments.length === 0) {
+        yield* maybeGenerateAndRenameWorktreeBranchForFirstTurn({
+          threadId: event.payload.threadId,
+          sourceEventSequence: event.sequence,
+          branch: thread.branch,
+          worktreePath: thread.worktreePath,
+          messageId: message.id,
+          messageText: message.text,
+          ...(message.attachments !== undefined ? { attachments: resolvedAttachments } : {}),
+        }).pipe(Effect.forkScoped);
+        yield* maybeGenerateAndRenameThreadTitleForFirstTurn({
+          threadId: event.payload.threadId,
+          sourceEventSequence: event.sequence,
+          messageId: message.id,
+          messageText: message.text,
+          ...(message.attachments !== undefined ? { attachments: resolvedAttachments } : {}),
+          ...(event.payload.modelSelection !== undefined
+            ? { modelSelection: event.payload.modelSelection }
+            : {}),
+          ...(event.payload.providerOptions !== undefined
+            ? { providerOptions: event.payload.providerOptions }
+            : {}),
+        }).pipe(Effect.forkScoped);
+      }
       // Only a native steer against a genuinely live turn keeps steer
       // semantics; anything else that reaches direct dispatch runs as a
       // normal queued turn (with its turn-start checkpoint).

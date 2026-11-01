@@ -12183,6 +12183,104 @@ describe("ProviderCommandReactor", () => {
     expect(input?.input).toContain("Continue with the side question");
   });
 
+  it("refuses an old accepted native-review image without starting a provider or blocking later sends", async () => {
+    const harness = await createHarness({
+      startReactor: false,
+      gitWritingModelSelection: { provider: "codex", model: "gpt-5-codex" },
+    });
+    const threadId = ThreadId.makeUnsafe("thread-1");
+    const commandId = CommandId.makeUnsafe("legacy-review-image-command");
+    const messageId = asMessageId("legacy-review-image-message");
+    const image = {
+      type: "image" as const,
+      id: "att_v2_adaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      name: "legacy-review.png",
+      mimeType: "image/png",
+      sizeBytes: 4,
+    };
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.meta.update",
+        commandId: CommandId.makeUnsafe("legacy-review-worktree"),
+        threadId,
+        title: "New thread",
+        envMode: "worktree",
+        branch: "synara/deadbeef",
+        worktreePath: "/tmp/provider-project/.worktrees/deadbeef",
+        associatedWorktreePath: "/tmp/provider-project/.worktrees/deadbeef",
+        associatedWorktreeBranch: "synara/deadbeef",
+        associatedWorktreeRef: "synara/deadbeef",
+      }),
+    );
+    const attachmentPath = await harness.stageAttachment(image);
+    const accepted = await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId,
+        threadId,
+        message: {
+          messageId,
+          role: "user",
+          text: "Review using this screenshot",
+          attachments: [image],
+        },
+        runtimeMode: "approval-required",
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        createdAt: new Date().toISOString(),
+      }),
+    );
+    // Represent a durable review accepted by an older host, before the new admission guard.
+    await Effect.runPromise(harness.sql`UPDATE orchestration_events
+      SET payload_json = json_set(payload_json, '$.reviewTarget', json('{"type":"uncommittedChanges"}'))
+      WHERE command_id = ${commandId} AND event_type = 'thread.turn-start-requested'`);
+    await harness.startReactor();
+    await harness.drain();
+    expect(harness.startReview).not.toHaveBeenCalled();
+    expect(harness.sendTurn).not.toHaveBeenCalled();
+    expect(harness.startSession).not.toHaveBeenCalled();
+    expect(harness.generateThreadTitle).not.toHaveBeenCalled();
+    expect(harness.generateBranchName).not.toHaveBeenCalled();
+    const thread = await readHarnessThread(harness);
+    expect(thread?.session?.status).toBe("error");
+    expect(thread?.session?.activeTurnId).toBeNull();
+    expect(thread?.latestTurn).toBeNull();
+    expect(thread?.session?.lastError).toContain("Native code reviews do not support attachments");
+    expect(
+      thread?.activities.find((activity) => activity.kind === "provider.turn.start.failed"),
+    ).toMatchObject({
+      payload: {
+        detail: expect.stringContaining("Native code reviews do not support attachments"),
+      },
+    });
+    expect(thread?.messages.find((message) => message.id === messageId)?.attachments).toEqual([
+      image,
+    ]);
+    expect(fs.readFileSync(attachmentPath)).toEqual(Buffer.alloc(4));
+    const delivery = await Effect.runPromise(
+      harness.deliveryRepository.getDelivery({
+        consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
+        eventSequence: accepted.sequence,
+      }),
+    );
+    expect(Option.getOrThrow(delivery).state).toBe("succeeded");
+    expect(Option.getOrThrow(delivery).attemptCount).toBe(1);
+    const blocker = await Effect.runPromise(
+      harness.deliveryRepository.firstBlockingDeliveryForThread({
+        consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
+        threadId,
+      }),
+    );
+    expect(Option.isNone(blocker)).toBe(true);
+    await dispatchHarnessUserTurn(harness, {
+      messageId: "after-rejected-review",
+      text: "Continue normally",
+      createdAt: new Date().toISOString(),
+    });
+    await harness.drain();
+    expect(harness.sendTurn).toHaveBeenCalledTimes(1);
+    expect(harness.startReview).not.toHaveBeenCalled();
+  });
+
   it("preserves full transcript bootstrap when an overlong review restarts a sidechat", async () => {
     const threadId = ThreadId.makeUnsafe("thread-restarted-droid-sidechat");
     const harness = await createHarness({
