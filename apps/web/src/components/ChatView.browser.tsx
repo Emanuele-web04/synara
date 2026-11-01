@@ -16244,7 +16244,9 @@ describe("ChatView transcript geometry (full app)", () => {
       },
     });
     try {
-      await waitForComposerEditor();
+      await expect
+        .element(page.getByTestId("composer-editor"))
+        .toHaveAttribute("contenteditable", "false");
       const capsule = await waitForElement(
         () => document.querySelector<HTMLElement>('[data-testid="running-agents-capsule"]'),
         "Nested agents must remain visible while their root runtime is alive.",

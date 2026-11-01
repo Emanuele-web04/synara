@@ -1937,6 +1937,33 @@ describe("OrchestrationEngine", () => {
       runtimeMode: "approval-required" as const,
       createdAt,
     };
+    const reviewCommand = {
+      ...command,
+      commandId: CommandId.makeUnsafe("cmd-native-review-with-managed-image"),
+      reviewTarget: { type: "uncommittedChanges" as const },
+    };
+    await expect(
+      system.run(engine.dispatch(reviewCommand, { attachmentPrincipal: principal })),
+    ).rejects.toThrow("Native code reviews do not support attachments");
+    expect(
+      await system.run(repository.findClaimedForCommand({ commandId: reviewCommand.commandId })),
+    ).toEqual([]);
+    const rejectedEvents = await system.run(
+      system.sql<{ count: number }>`SELECT COUNT(*) AS count FROM orchestration_events
+        WHERE command_id = ${reviewCommand.commandId}`,
+    );
+    expect(rejectedEvents[0]?.count).toBe(0);
+    const beforeSend = (await system.run(engine.getReadModel())).threads.find(
+      (thread) => thread.id === threadId,
+    );
+    expect(beforeSend?.messages).toEqual([]);
+    const staged = await system.run(
+      system.sql<{ state: string }>`SELECT state FROM managed_attachment_blobs
+        WHERE attachment_id = ${firstAttachmentId}`,
+    );
+    expect(staged[0]?.state).toBe("staged");
+
+    // The same staged receipt remains usable when sent as an ordinary message.
     const accepted = await system.run(engine.dispatch(command, { attachmentPrincipal: principal }));
     await expect(
       system.run(engine.dispatch(command, { attachmentPrincipal: principal })),

@@ -38,6 +38,8 @@ export class ComposerImageIntakeQueue {
   readonly #listeners = new Set<() => void>();
   #generation = 0;
   #pendingCount = 0;
+  #failureCount = 0;
+  #batchFailureCount: number | null = null;
   #tail: Promise<void> = Promise.resolve();
   #disposed = false;
 
@@ -51,6 +53,7 @@ export class ComposerImageIntakeQueue {
   enqueue(job: ComposerImageIntakeJob): Promise<void> {
     if (this.#disposed || job.files.length === 0) return Promise.resolve();
     const generation = this.#generation;
+    if (this.#pendingCount === 0) this.#batchFailureCount = this.#failureCount;
     this.#setPendingCount(this.#pendingCount + job.files.length);
     const prepareFiles = job.prepareFiles ?? prepareComposerImageAttachmentsFromFiles;
     const task = this.#tail
@@ -72,10 +75,12 @@ export class ComposerImageIntakeQueue {
         const error = rejectedAtCapacity
           ? t(ATTACHMENT_LIMIT_ERROR, { value0: PROVIDER_SEND_TURN_MAX_ATTACHMENTS })
           : result.error;
-        job.onError(error);
+        if (error !== null) this.#failureCount += 1;
+        if (error !== null || this.#failureCount === this.#batchFailureCount) job.onError(error);
       })
       .catch((cause) => {
         if (this.#isStale(generation)) return;
+        this.#failureCount += 1;
         job.onError(
           cause instanceof Error ? cause.message : t("common:synaraCouldNotPrepareImage"),
         );
@@ -88,12 +93,18 @@ export class ComposerImageIntakeQueue {
     return task;
   }
 
-  async waitForPending(): Promise<void> {
+  async waitForPending(): Promise<boolean> {
+    const generation = this.#generation;
+    const failureCount = this.#batchFailureCount ?? this.#failureCount;
     while (this.#pendingCount > 0) {
       const tail = this.#tail;
       await tail.catch(() => undefined);
-      if (tail === this.#tail && this.#pendingCount === 0) return;
+      if (tail === this.#tail && this.#pendingCount === 0) break;
     }
+    if (!this.#isStale(generation) && this.#pendingCount === 0) this.#batchFailureCount = null;
+    // A failed or retired intake cannot silently turn a waiting send into text-only.
+    // Snapshotting each wait keeps later explicit sends independent of older failures.
+    return !this.#isStale(generation) && this.#failureCount === failureCount;
   }
 
   activate(): void {
@@ -104,6 +115,7 @@ export class ComposerImageIntakeQueue {
     if (this.#disposed) return;
     this.#disposed = true;
     this.#generation += 1;
+    this.#batchFailureCount = null;
     this.#tail = Promise.resolve();
     this.#setPendingCount(0);
   }
