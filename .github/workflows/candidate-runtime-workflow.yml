@@ -21,7 +21,7 @@ concurrency:
 jobs:
   qualify_existing_candidate:
     name: Existing 1.0.9 candidate — Defender and packaged runtime
-    runs-on: windows-2025
+    runs-on: windows-2022
     timeout-minutes: 25
     steps:
       - name: Checkout diagnostic verification source
