@@ -860,6 +860,72 @@ it.effect(
 );
 
 const lifecycleManager = new FakeCodexManager();
+it.effect("keeps the parent idle watchdog armed when a native child starts", () =>
+  Effect.gen(function* () {
+    const manager = new FakeCodexManager();
+    const parentThread = asThreadId("watchdog-parent");
+    const parentTurn = asTurnId("watchdog-parent-turn");
+    let now = 1_000;
+    let tick: (() => void) | undefined;
+    const originalSetInterval = globalThis.setInterval;
+    const intervalSpy = vi.spyOn(globalThis, "setInterval").mockImplementation(((
+      callback: () => void,
+      delay: number,
+    ) => {
+      if (delay === 15_000) tick = callback;
+      return originalSetInterval(callback, delay);
+    }) as typeof setInterval);
+    const clockSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
+    const activeSpy = vi
+      .spyOn(manager, "isTurnActive")
+      .mockImplementation((threadId, turnId) => threadId === parentThread && turnId === parentTurn);
+    vi.spyOn(manager, "isAwaitingHumanResponse").mockReturnValue(false);
+    const abandon = vi.spyOn(manager, "abandonTurn").mockResolvedValue(undefined);
+    try {
+      yield* Effect.gen(function* () {
+        yield* CodexAdapter;
+        manager.emit("event", {
+          id: asEventId("watchdog-parent-start"),
+          kind: "notification",
+          provider: "codex",
+          createdAt: new Date().toISOString(),
+          method: "turn/started",
+          threadId: parentThread,
+          turnId: parentTurn,
+          payload: { turn: { id: parentTurn } },
+        } satisfies ProviderEvent);
+        manager.emit("event", {
+          id: asEventId("watchdog-child-start"),
+          kind: "notification",
+          provider: "codex",
+          createdAt: new Date().toISOString(),
+          method: "turn/started",
+          threadId: parentThread,
+          turnId: asTurnId("watchdog-child-turn"),
+          providerThreadId: "native-child",
+          providerParentThreadId: "native-parent",
+          payload: { turn: { id: "watchdog-child-turn" } },
+        } satisfies ProviderEvent);
+        now += 900_001;
+        assert.ok(tick);
+        tick();
+        assert.deepStrictEqual(activeSpy.mock.calls.at(-1), [parentThread, parentTurn]);
+        assert.equal(abandon.mock.calls[0]?.[1], parentTurn);
+      }).pipe(
+        Effect.provide(
+          makeCodexAdapterLive({ manager }).pipe(
+            Layer.provideMerge(ServerConfig.layerTest(process.cwd(), process.cwd())),
+            Layer.provideMerge(providerSessionDirectoryTestLayer),
+            Layer.provideMerge(NodeServices.layer),
+          ),
+        ),
+      );
+    } finally {
+      intervalSpy.mockRestore();
+      clockSpy.mockRestore();
+    }
+  }),
+);
 const lifecycleLayer = it.layer(
   makeCodexAdapterLive({ manager: lifecycleManager }).pipe(
     Layer.provideMerge(ServerConfig.layerTest(process.cwd(), process.cwd())),
@@ -2157,7 +2223,7 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
     }),
   );
 
-  it.effect("attaches same-turn Codex quota deadlines only after native retries terminate", () =>
+  it.effect("preserves same-turn Codex quota across child lifecycle and retries", () =>
     Effect.gen(function* () {
       const adapter = yield* CodexAdapter;
       const createdAt = new Date().toISOString();
@@ -2174,7 +2240,12 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
           updatedAt: createdAt,
         },
       ];
-      const emit = (id: string, method: string, payload: unknown) =>
+      const emit = (
+        id: string,
+        method: string,
+        payload: unknown,
+        childRoute?: { turnId: TurnId; providerThreadId: string; providerParentThreadId: string },
+      ) =>
         lifecycleManager.emit("event", {
           id: asEventId(id),
           kind: "notification",
@@ -2184,10 +2255,13 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
           createdAt,
           method,
           payload,
+          ...childRoute,
         } satisfies ProviderEvent);
       try {
         const collected = yield* adapter.streamEvents.pipe(
-          Stream.take(6),
+          Stream.takeUntil(
+            (event) => event.type === "turn.completed" && event.turnId === "quota-turn",
+          ),
           Stream.runCollect,
           Effect.forkChild,
         );
@@ -2202,6 +2276,27 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
         emit("quota-partial-window", "account/rateLimits/updated", {
           rateLimits: { limitId: "codex", primary: { usedPercent: 100, resetsAt: reset } },
         });
+        const childRoute = {
+          turnId: asTurnId("quota-child-turn"),
+          providerThreadId: "quota-child",
+          providerParentThreadId: "quota-parent",
+        };
+        emit(
+          "quota-child-start",
+          "turn/started",
+          {
+            turn: { id: childRoute.turnId, status: "inProgress" },
+          },
+          childRoute,
+        );
+        emit(
+          "quota-child-complete",
+          "turn/completed",
+          {
+            turn: { id: childRoute.turnId, status: "completed" },
+          },
+          childRoute,
+        );
         emit("quota-retry", "error", {
           error: { message: "Retrying", codexErrorInfo: "rateLimitExceeded" },
           willRetry: true,
@@ -2221,11 +2316,18 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
           },
         });
         const events = yield* Fiber.join(collected);
-        assert.equal(events[3]?.type, "runtime.warning");
-        assert.equal(events[4]?.type, "runtime.warning");
+        assert.equal(events.filter((event) => event.type === "runtime.warning").length, 2);
+        assert.ok(
+          events.some(
+            (event) =>
+              event.type === "turn.completed" &&
+              event.turnId === childRoute.turnId &&
+              event.providerRefs?.providerParentThreadId === childRoute.providerParentThreadId,
+          ),
+        );
         assert.ok(events.every((event) => event.type !== "runtime.error"));
-        assert.ok(events.slice(0, 5).every((event) => !("usageLimit" in event.payload)));
-        const completion = events[5];
+        assert.ok(events.slice(0, -1).every((event) => !("usageLimit" in event.payload)));
+        const completion = events.at(-1);
         assert.equal(completion?.type, "turn.completed");
         if (completion?.type === "turn.completed") {
           assert.equal(completion.payload.errorCode, "responseTooManyFailedAttempts");
