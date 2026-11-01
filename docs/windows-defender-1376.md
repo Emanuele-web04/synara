@@ -1,6 +1,33 @@
 # Windows Defender investigation: issue #1376
 
-Evidence collected on 2026-09-30 for [issue #1376](https://github.com/Emanuele-web04/synara/issues/1376), from main `529ad049cb106c998010f5400189515008997aa4`. The original installer detection was independently reproduced on disposable GitHub-hosted Windows Server 2022 runners. This is not a confirmed malware verdict, false-positive determination, or shipped artifact fix; Windows 11 browser behavior remains unqualified.
+Initial evidence was collected on 2026-09-30 for [issue #1376](https://github.com/Emanuele-web04/synara/issues/1376), from main `529ad049cb106c998010f5400189515008997aa4`. That investigation independently reproduced the 0.9.2 installer detection on disposable GitHub-hosted Windows Server 2022 runners. The 1.0.9 recurrence below is a separate investigation; neither establishes a malware verdict or Microsoft's false-positive determination. Windows 11 browser behavior remains unqualified.
+
+## 2026-11-01: reported recurrence on 1.0.9
+
+The user reports another Defender virus block on 1.0.9. The current detection name,
+affected download bytes, and reporter's engine/definition versions are not yet
+available. The official `Synara-1.0.9-x64.exe` is **260335126 bytes**, SHA-256
+`d8a0d6bd3bbc6e9128cbf40d0b63262b3a516221c25e017452bc6b4c94ebabc5`, from tag commit
+`ebd0d22b39ce3a0f7c6051dddc6090e9b85dc7c3`.
+
+| Qualification                                                                                          | Engine / definitions          | Cloud settings (MAPS / samples / disable first sight) | Result                    |
+| ------------------------------------------------------------------------------------------------------ | ----------------------------- | ----------------------------------------------------- | ------------------------- |
+| [1.0.9 release](https://github.com/Emanuele-web04/synara/actions/runs/40203308105)                     | `1.1.26090.9` / `1.461.199.0` | `0 / 2 / true`                                        | Scan passed               |
+| [Fresh default-settings comparison](https://github.com/Emanuele-web04/synara/actions/runs/41331725970) | `1.1.26100.4` / `1.463.73.0`  | `0 / 2 / true`                                        | Same official hash passed |
+| [Fresh cloud-enabled comparison](https://github.com/Emanuele-web04/synara/actions/runs/41331725970)    | `1.1.26100.4` / `1.463.73.0`  | `2 / 1 / false`                                       | Same official hash passed |
+
+These runs expose a release qualification gap: active antivirus and real-time
+protection did not require cloud protection. The cloud-enabled comparison verified
+preferences but did not run `-ValidateMapsConnection`. The guard now also requires
+cloud protection, safe sample submission, block at first sight, and successful MAPS
+connectivity before scanning; see the [release policy](release.md#3-azure-trusted-signing-setup-windows).
+Automatic safe sample submission applies only to the disposable GitHub-hosted
+public-release runner, never the user's machine.
+
+Neither comparison reproduced the current report. This guard repair is not a
+confirmed fix for the user's 1.0.9 block; exact reporter evidence and a Windows 11
+browser-download reproduction remain necessary. The sections below preserve the
+separate September 2026 investigation and its historical results.
 
 ## Verified evidence
 
