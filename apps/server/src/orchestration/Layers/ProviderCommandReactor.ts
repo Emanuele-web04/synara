@@ -190,6 +190,7 @@ import {
   type TranscriptBootstrap,
 } from "../handoff.ts";
 import {
+  NATIVE_REVIEW_ATTACHMENTS_UNSUPPORTED,
   OrchestrationCommandInternalError,
   OrchestrationCommandInvariantError,
   ProviderDeliveryRecoveryError,
@@ -3391,6 +3392,15 @@ const make = Effect.gen(function* () {
     const thread = yield* resolveThread(input.threadId);
     if (!thread) {
       return;
+    }
+    // Old hosts could already have committed an unsupported review. Refuse its
+    // unsent delivery too, preserving history without starting a text-only review.
+    if (input.reviewTarget !== undefined && (input.attachments?.length ?? 0) > 0) {
+      return yield* new ProviderAdapterValidationError({
+        provider: thread.modelSelection.provider,
+        operation: "thread.turn.start",
+        issue: NATIVE_REVIEW_ATTACHMENTS_UNSUPPORTED,
+      });
     }
     const executingIntentSequence = input.completionEventSequence ?? input.sourceEventSequence;
     let usageLimitAdmissionSequence: number | undefined;
