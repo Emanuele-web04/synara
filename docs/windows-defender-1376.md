@@ -1,12 +1,17 @@
 # Windows Defender investigation: issue #1376
 
-Initial evidence was collected on 2026-09-30 for [issue #1376](https://github.com/Emanuele-web04/synara/issues/1376), from main `529ad049cb106c998010f5400189515008997aa4`. That investigation independently reproduced the 0.9.2 installer detection on disposable GitHub-hosted Windows Server 2022 runners. The 1.0.9 recurrence below is a separate investigation; neither establishes a malware verdict or Microsoft's false-positive determination. Windows 11 browser behavior remains unqualified.
+Initial evidence was collected on 2026-09-30 for [issue #1376](https://github.com/Emanuele-web04/synara/issues/1376), from main `529ad049cb106c998010f5400189515008997aa4`. That investigation independently reproduced the 0.9.2 installer detection on disposable GitHub-hosted Windows Server 2022 runners. The 1.0.9 recurrence below is a separate investigation; neither establishes a malware verdict or Microsoft's false-positive determination.
 
 ## 2026-11-01: reported recurrence on 1.0.9
 
-The user reports another Defender virus block on 1.0.9. The current detection name,
-affected download bytes, and reporter's engine/definition versions are not yet
-available. The official `Synara-1.0.9-x64.exe` is **260335126 bytes**, SHA-256
+The requester supplied a third-party user's screenshot showing exactly
+`Synara-1.0.9-x64.exe` and **`Virus detected`**. The affected user is not the
+requester. Browser, Windows version, antivirus product/threat name, downloaded
+hash, and engine/definition versions remain unknown; the requester cannot obtain
+these details. The private screenshot is not included in this repository. Windows
+11 is established only for the historical 0.9.2 report, not this recurrence.
+
+The official `Synara-1.0.9-x64.exe` is **260335126 bytes**, SHA-256
 `d8a0d6bd3bbc6e9128cbf40d0b63262b3a516221c25e017452bc6b4c94ebabc5`, from tag commit
 `ebd0d22b39ce3a0f7c6051dddc6090e9b85dc7c3`.
 
@@ -49,9 +54,9 @@ post-attempt detection inventory was empty. The [1.0.9 evidence index](evidence/
 records the separate scanner and browser results and their source artifacts.
 
 No current Defender antivirus detection was reproduced. The observed Edge reputation
-warning is not proof of the user's unknown exact Windows 11 message. This guard
-repair therefore remains unconfirmed as a fix for the reported 1.0.9 block; exact
-reporter evidence and a Windows 11 browser-download reproduction are still needed.
+warning differs from the third-party screenshot's **`Virus detected`** message.
+This guard repair therefore remains unconfirmed as a fix for the reported 1.0.9
+block; the antivirus or browser component responsible and its cause remain unresolved.
 The sections below preserve the separate September 2026 investigation and its
 historical results.
 
