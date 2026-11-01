@@ -6,7 +6,7 @@
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import type { ChildProcess } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -32,6 +32,18 @@ import {
   resolvePiExtensionMode,
 } from "./PiAdapter";
 import { makePiStoragePaths } from "../piStoragePaths.ts";
+
+const createTestPiModelRuntime: typeof createPiModelRuntime = (
+  agentDir,
+  sdk,
+  signal,
+  environment,
+  instanceId,
+) =>
+  createPiModelRuntime(agentDir, sdk, signal, environment, instanceId, {
+    stateDir: path.join(agentDir, "state"),
+    homeDir: agentDir,
+  });
 
 describe("makePiStoragePaths", () => {
   it("resolves modelSelection-only account identity before Pi storage setup", () => {
@@ -601,13 +613,13 @@ describe("getPiDiscoverableModels", () => {
     const agentDir = mkdtempSync(path.join(tmpdir(), "synara-pi-runtime-isolation-"));
 
     try {
-      const firstRuntime = await createPiModelRuntime(
+      const firstRuntime = await createTestPiModelRuntime(
         agentDir,
         { ModelRuntime },
         AbortSignal.abort(),
         { OPENAI_API_KEY: "instance-openai-key" },
       );
-      const secondRuntime = await createPiModelRuntime(
+      const secondRuntime = await createTestPiModelRuntime(
         agentDir,
         { ModelRuntime },
         AbortSignal.abort(),
@@ -648,14 +660,14 @@ describe("getPiDiscoverableModels", () => {
     process.env.OPENAI_API_KEY = "ambient-account-key";
 
     try {
-      const isolatedRuntime = await createPiModelRuntime(
+      const isolatedRuntime = await createTestPiModelRuntime(
         agentDir,
         { ModelRuntime },
         undefined,
         {},
         "pi_work",
       );
-      const defaultRuntime = await createPiModelRuntime(agentDir, { ModelRuntime });
+      const defaultRuntime = await createTestPiModelRuntime(agentDir, { ModelRuntime });
 
       expect(isolatedRuntime.hasConfiguredAuth("openai")).toBe(false);
       await expect(isolatedRuntime.getAuth("openai")).resolves.toBeUndefined();
@@ -701,14 +713,14 @@ describe("getPiDiscoverableModels", () => {
           },
         }),
       );
-      const selected = await createPiModelRuntime(
+      const selected = await createTestPiModelRuntime(
         agentDir,
         { ModelRuntime },
         undefined,
         { CUSTOM_KEY: "selected-account-key", CUSTOM_HEADER: "selected-account-header" },
         "pi_work",
       );
-      const empty = await createPiModelRuntime(
+      const empty = await createTestPiModelRuntime(
         agentDir,
         { ModelRuntime },
         undefined,
@@ -759,7 +771,7 @@ describe("getPiDiscoverableModels", () => {
         }),
       );
       const accountAEnvironment = { CUSTOM_KEY: "selected-account-a" };
-      const accountA = await createPiModelRuntime(
+      const accountA = await createTestPiModelRuntime(
         agentDir,
         { ModelRuntime },
         undefined,
@@ -767,7 +779,7 @@ describe("getPiDiscoverableModels", () => {
         "pi_account_a",
       );
       accountAEnvironment.CUSTOM_KEY = "mutated-after-snapshot";
-      const accountB = await createPiModelRuntime(
+      const accountB = await createTestPiModelRuntime(
         agentDir,
         { ModelRuntime },
         undefined,
@@ -789,6 +801,7 @@ describe("getPiDiscoverableModels", () => {
   it.each([
     ["amazon-bedrock", "stored-bedrock", "Amazon Bedrock"],
     ["azure-openai-responses", "stored-azure", "Azure OpenAI"],
+    ["azure", "stored-azure", "Azure OpenAI"],
     ["google-vertex", "gcp-vertex-credentials", "Vertex ADC"],
   ])("fails closed for isolated %s ambient-chain auth", async (provider, key, message) => {
     const agentDir = mkdtempSync(path.join(tmpdir(), "synara-pi-routing-isolation-"));
@@ -797,7 +810,7 @@ describe("getPiDiscoverableModels", () => {
         path.join(agentDir, "auth.json"),
         JSON.stringify({ [provider]: { type: "api_key", key } }),
       );
-      const runtime = await createPiModelRuntime(
+      const runtime = await createTestPiModelRuntime(
         agentDir,
         { ModelRuntime },
         undefined,
@@ -814,7 +827,7 @@ describe("getPiDiscoverableModels", () => {
   it("resolves Cloudflare routing only from the selected instance", async () => {
     const agentDir = mkdtempSync(path.join(tmpdir(), "synara-pi-cloudflare-isolation-"));
     try {
-      const runtime = await createPiModelRuntime(
+      const runtime = await createTestPiModelRuntime(
         agentDir,
         { ModelRuntime },
         undefined,
@@ -844,7 +857,7 @@ describe("getPiDiscoverableModels", () => {
     process.env.OPENAI_ORG_ID = "ambient-org";
     process.env.ANTHROPIC_AUTH_TOKEN = "ambient-token";
     try {
-      const runtime = await createPiModelRuntime(
+      const runtime = await createTestPiModelRuntime(
         agentDir,
         { ModelRuntime },
         undefined,
@@ -910,6 +923,330 @@ describe("getPiDiscoverableModels", () => {
       }
     },
   );
+
+  it.each([
+    {
+      label: "legacy default profile",
+      baseUrl: "https://api.kimi.com/coding",
+      expected: "https://api.kimi.com/coding/v1/chat/completions",
+      isolated: false,
+    },
+    {
+      label: "legacy isolated profile",
+      baseUrl: "https://api.kimi.com/coding",
+      expected: "https://api.kimi.com/coding/v1/chat/completions",
+      isolated: true,
+    },
+    {
+      label: "legacy trailing slash",
+      baseUrl: "https://api.kimi.com/coding/",
+      expected: "https://api.kimi.com/coding/v1/chat/completions",
+      isolated: false,
+    },
+    {
+      label: "current endpoint",
+      baseUrl: "https://api.kimi.com/coding/v1",
+      expected: "https://api.kimi.com/coding/v1/chat/completions",
+      isolated: false,
+    },
+    {
+      label: "custom endpoint",
+      baseUrl: "https://custom.example/coding",
+      expected: "https://custom.example/coding/chat/completions",
+      isolated: false,
+    },
+    {
+      label: "explicit Anthropic protocol",
+      baseUrl: "https://api.kimi.com/coding",
+      expected: "https://api.kimi.com/coding/v1/messages",
+      isolated: false,
+      api: "anthropic-messages",
+    },
+  ])(
+    "preserves Kimi request routing for $label across refresh",
+    async ({ baseUrl, expected, isolated, ...config }) => {
+      const agentDir = mkdtempSync(path.join(tmpdir(), "synara-pi-kimi-"));
+      const authPath = path.join(agentDir, "auth.json");
+      const modelsPath = path.join(agentDir, "models.json");
+      const auth = JSON.stringify({ "kimi-coding": { type: "api_key", key: "selected-kimi-key" } });
+      const models = JSON.stringify({
+        providers: {
+          "kimi-coding": {
+            baseUrl,
+            modelOverrides: { "kimi-for-coding": { contextWindow: 8192, maxTokens: 1024 } },
+            ...("api" in config
+              ? {
+                  models: [
+                    {
+                      id: "kimi-for-coding",
+                      api: config.api,
+                      name: "Kimi",
+                      reasoning: false,
+                      input: ["text"],
+                      contextWindow: 8192,
+                      maxTokens: 1024,
+                      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                    },
+                  ],
+                }
+              : {}),
+          },
+        },
+      });
+      try {
+        writeFileSync(authPath, auth);
+        writeFileSync(modelsPath, models);
+        const runtime = await createTestPiModelRuntime(
+          agentDir,
+          { ModelRuntime },
+          undefined,
+          isolated ? {} : undefined,
+          isolated ? "pi_work" : undefined,
+        );
+        const selected = findModelInRegistry(
+          new ModelRegistry(runtime),
+          "kimi-coding/kimi-for-coding",
+        );
+        expect(selected).toMatchObject({
+          provider: "kimi-coding",
+          id: "kimi-for-coding",
+          contextWindow: 8192,
+          maxTokens: 1024,
+        });
+        const requests: Array<{ url: string; headers: Headers; body: string }> = [];
+        const fetch = (async (
+          input: Parameters<typeof globalThis.fetch>[0],
+          init: Parameters<typeof globalThis.fetch>[1],
+        ) => {
+          requests.push({
+            url: String(input),
+            headers: new Headers(init?.headers),
+            body: String(init?.body),
+          });
+          return Response.json(
+            { error: { message: "synthetic stop", type: "invalid_request_error" } },
+            { status: 400 },
+          );
+        }) as typeof globalThis.fetch;
+        const context = { messages: [{ role: "user" as const, content: "hello", timestamp: 0 }] };
+        await runtime.complete(selected!, context, { fetch, maxRetries: 0 });
+        await runtime.refresh({ allowNetwork: false });
+        await runtime.streamSimple(selected!, context, { fetch, maxRetries: 0 }).result();
+        expect(
+          requests.map((request) => {
+            const url = new URL(request.url);
+            return url.origin + url.pathname;
+          }),
+        ).toEqual([expected, expected]);
+        for (const request of requests) {
+          expect(
+            [...request.headers.values()].some((value) => value.includes("selected-kimi-key")),
+          ).toBe(true);
+          expect(JSON.parse(request.body).model).toBe("kimi-for-coding");
+        }
+        expect(readFileSync(authPath, "utf8")).toBe(auth);
+        expect(readFileSync(modelsPath, "utf8")).toBe(models);
+      } finally {
+        rmSync(agentDir, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it("preserves legacy Azure profiles and model selections alongside the renamed provider", async () => {
+    const agentDir = mkdtempSync(path.join(tmpdir(), "synara-pi-azure-"));
+    const legacyProvider = "azure-openai-responses";
+    const authPath = path.join(agentDir, "auth.json");
+    const modelsPath = path.join(agentDir, "models.json");
+    const settingsPath = path.join(agentDir, "settings.json");
+    const auth = JSON.stringify({
+      [legacyProvider]: { type: "api_key", key: "legacy-azure-key" },
+      azure: { type: "api_key", key: "new-azure-key" },
+    });
+    const models = JSON.stringify({
+      providers: {
+        [legacyProvider]: {
+          baseUrl: "https://legacy-azure.openai.azure.com/openai/v1",
+          modelOverrides: { "gpt-5.4": { contextWindow: 8192, maxTokens: 1024 } },
+        },
+        azure: { baseUrl: "https://new-azure.openai.azure.com/openai/v1" },
+      },
+    });
+    const settings = JSON.stringify({ defaultProvider: legacyProvider, defaultModel: "gpt-5.4" });
+    try {
+      writeFileSync(authPath, auth);
+      writeFileSync(modelsPath, models);
+      writeFileSync(settingsPath, settings);
+      const runtime = await createTestPiModelRuntime(agentDir, { ModelRuntime });
+      const registry = new ModelRegistry(runtime);
+      const selected = findModelInRegistry(registry, `${legacyProvider}/gpt-5.4`);
+      expect(selected).toMatchObject({
+        provider: legacyProvider,
+        id: "gpt-5.4",
+        contextWindow: 8192,
+        maxTokens: 1024,
+      });
+      expect(getPiDiscoverableModels(registry)).toContainEqual(selected);
+      const requests: Array<{ url: string; headers: Headers; body: string }> = [];
+      const fetch = (async (
+        input: Parameters<typeof globalThis.fetch>[0],
+        init: Parameters<typeof globalThis.fetch>[1],
+      ) => {
+        requests.push({
+          url: String(input),
+          headers: new Headers(init?.headers),
+          body: String(init?.body),
+        });
+        return Response.json(
+          { error: { message: "synthetic stop", type: "invalid_request_error" } },
+          { status: 400 },
+        );
+      }) as typeof globalThis.fetch;
+      for (const provider of [legacyProvider, "azure"]) {
+        const model = registry.find(provider, "gpt-5.4");
+        expect(model).toBeDefined();
+        await runtime.complete(
+          model!,
+          { messages: [{ role: "user", content: "hello", timestamp: 0 }] },
+          { fetch, env: {}, maxRetries: 0 },
+        );
+      }
+      expect(requests.map((request) => new URL(request.url).hostname)).toEqual([
+        "legacy-azure.openai.azure.com",
+        "new-azure.openai.azure.com",
+      ]);
+      expect(requests.map((request) => request.headers.get("api-key"))).toEqual([
+        "legacy-azure-key",
+        "new-azure-key",
+      ]);
+      expect(requests.map((request) => JSON.parse(request.body).model)).toEqual([
+        "gpt-5.4",
+        "gpt-5.4",
+      ]);
+      const restarted = await createTestPiModelRuntime(agentDir, { ModelRuntime });
+      expect(
+        findModelInRegistry(new ModelRegistry(restarted), `${legacyProvider}/gpt-5.4`),
+      ).toEqual(selected);
+      expect(readFileSync(authPath, "utf8")).toBe(auth);
+      expect(readFileSync(modelsPath, "utf8")).toBe(models);
+      expect(readFileSync(settingsPath, "utf8")).toBe(settings);
+    } finally {
+      rmSync(agentDir, { recursive: true, force: true });
+    }
+  });
+
+  it("discovers and sends with the selected account's current ChatGPT login", async () => {
+    const agentDir = mkdtempSync(path.join(tmpdir(), "synara-pi-chatgpt-"));
+    const otherAgentDir = mkdtempSync(path.join(tmpdir(), "synara-pi-chatgpt-other-"));
+    try {
+      // Shape written by Pi's /login openai; it does not use openai-codex's store key.
+      writeFileSync(
+        path.join(agentDir, "auth.json"),
+        JSON.stringify({
+          openai: {
+            type: "oauth",
+            access: "selected-chatgpt-token",
+            refresh: "test-refresh",
+            expires: 4_102_444_800_000,
+            clientId: "test-client",
+            scopes: ["chatgpt.tokens.use.direct", "resource.invoke"],
+          },
+        }),
+      );
+      const runtime = await createTestPiModelRuntime(
+        agentDir,
+        { ModelRuntime },
+        undefined,
+        { PI_OFFLINE: "1" },
+        "pi_work",
+      );
+      const otherRuntime = await createTestPiModelRuntime(
+        otherAgentDir,
+        { ModelRuntime },
+        undefined,
+        { PI_OFFLINE: "1" },
+        "pi_personal",
+      );
+      const registry = new ModelRegistry(runtime);
+      const model = getPiDiscoverableModels(registry).find(
+        (candidate) => candidate.provider === "openai" && candidate.id === "gpt-5.4",
+      );
+      expect(model).toBeDefined();
+      if (!model) throw new Error("ChatGPT-authenticated OpenAI model was not discovered.");
+      expect(findModelInRegistry(registry, "openai/gpt-5.4")).toEqual(model);
+      expect(
+        getPiDiscoverableModels(new ModelRegistry(otherRuntime)).some(
+          (candidate) => candidate.provider === "openai",
+        ),
+      ).toBe(false);
+
+      const requests: Array<{ url: string; headers: Headers; body: string }> = [];
+      const item = { type: "message", id: "msg_test", role: "assistant", content: [] };
+      const result = await runtime.complete(
+        model,
+        {
+          messages: [{ role: "user", content: "Say hello", timestamp: 1 }],
+        },
+        {
+          maxRetries: 0,
+          fetch: (async (input: Parameters<typeof fetch>[0], init: Parameters<typeof fetch>[1]) => {
+            requests.push({
+              url: String(input),
+              headers: new Headers(init?.headers),
+              body: String(init?.body),
+            });
+            const events = [
+              { type: "response.output_item.added", output_index: 0, item },
+              {
+                type: "response.content_part.added",
+                output_index: 0,
+                content_index: 0,
+                part: { type: "output_text", text: "", annotations: [] },
+              },
+              {
+                type: "response.output_text.delta",
+                output_index: 0,
+                content_index: 0,
+                delta: "Hello",
+              },
+              {
+                type: "response.output_item.done",
+                output_index: 0,
+                item: {
+                  ...item,
+                  content: [{ type: "output_text", text: "Hello", annotations: [] }],
+                },
+              },
+              {
+                type: "response.completed",
+                response: {
+                  id: "resp_test",
+                  status: "completed",
+                  usage: { input_tokens: 3, output_tokens: 1, total_tokens: 4 },
+                },
+              },
+            ];
+            return new Response(
+              events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join(""),
+              {
+                headers: { "content-type": "text/event-stream" },
+              },
+            );
+          }) as typeof fetch,
+        },
+      );
+      expect(requests).toHaveLength(1);
+      expect(requests[0]?.url).toBe("https://api.openai.com/v1/responses");
+      expect(requests[0]?.headers.get("authorization")).toBe("Bearer selected-chatgpt-token");
+      expect(JSON.parse(requests[0]!.body)).toMatchObject({ model: "gpt-5.4", stream: true });
+      expect(result).toMatchObject({
+        stopReason: "stop",
+        content: [{ type: "text", text: "Hello" }],
+      });
+    } finally {
+      rmSync(agentDir, { recursive: true, force: true });
+      rmSync(otherAgentDir, { recursive: true, force: true });
+    }
+  });
 
   it("includes custom-provider models authenticated through auth.json semantics", async () => {
     const agentDir = mkdtempSync(path.join(tmpdir(), "synara-pi-models-"));

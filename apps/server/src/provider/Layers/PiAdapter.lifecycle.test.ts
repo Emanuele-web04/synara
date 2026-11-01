@@ -24,7 +24,7 @@ import {
 } from "../../agentGateway/Services/AgentGatewayCredentials.ts";
 import type { AgentGatewayMcpFetch } from "../../agentGateway/mcpInjection.ts";
 import { SYNARA_COMPUTER_TOOL_NAMES } from "../../agentGateway/computerToolPermission.ts";
-import { ServerConfig } from "../../config.ts";
+import { deriveServerPaths, ServerConfig } from "../../config.ts";
 import { PiAdapter, type PiAdapterShape } from "../Services/PiAdapter.ts";
 import { makePiAdapterLive } from "./PiAdapter.ts";
 
@@ -264,6 +264,59 @@ it("passes the current Pi system prompt and tools to the model stream", async ()
     await waitFor(() => expect(completions(events)).toHaveLength(1));
     expect(captured.modelSystemPrompts[0]).toBeTruthy();
     expect(captured.modelTools[0]?.some((tool) => tool.name === "read")).toBe(true);
+  });
+});
+
+it("delivers the first prepared image to the real Pi model stream without a resend", async () => {
+  responses("success");
+  const modelStream = captured.stream!;
+  const providerInputs: unknown[] = [];
+  captured.stream = (model, context, options) => {
+    providerInputs.push(context.messages.filter((message) => message.role === "user"));
+    return modelStream(model, context, options);
+  };
+  await withAdapter(async (adapter, events, cwd) => {
+    const image = Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+      "base64",
+    );
+    const { attachmentsDir } = await Effect.runPromise(
+      deriveServerPaths(path.join(cwd, "server"), undefined).pipe(
+        Effect.provide(NodeServices.layer),
+      ),
+    );
+    writeFileSync(path.join(attachmentsDir, "pi-first-image.png"), image);
+    await Effect.runPromise(
+      adapter.sendTurn({
+        threadId,
+        input: "Inspect this pixel",
+        attachments: [
+          {
+            type: "image",
+            id: "pi-first-image",
+            name: "pixel.png",
+            mimeType: "image/png",
+            sizeBytes: image.byteLength,
+          },
+        ],
+      }),
+    );
+    await waitFor(() => expect(completions(events)).toHaveLength(1));
+    expect(providerInputs).toHaveLength(1);
+    expect(providerInputs[0]).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          role: "user",
+          content: expect.arrayContaining([
+            expect.objectContaining({
+              type: "image",
+              data: image.toString("base64"),
+              mimeType: "image/png",
+            }),
+          ]),
+        }),
+      ]),
+    );
   });
 });
 
@@ -854,7 +907,7 @@ it("rejects steering into an untracked SDK run instead of orphaning a queued tur
   await withAdapter(async (adapter, events) => {
     const session = captured.sessions[0]!;
     const streamingSpy = vi.spyOn(session, "isStreaming", "get").mockReturnValue(true);
-    const steerSpy = vi.spyOn(session, "steer").mockResolvedValue(undefined);
+    const steerSpy = vi.spyOn(session, "steer").mockResolvedValue("queued");
     const promptSpy = vi.spyOn(session, "prompt");
     const outcome = await Effect.runPromise(
       adapter.steerTurn!({ threadId, input: "Fresh turn during untracked run" }).pipe(
