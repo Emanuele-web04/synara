@@ -43,11 +43,11 @@ jobs:
             const fs = require('node:fs');
             const path = require('node:path');
             const expected = {
-              run: 41334567230,
-              artifact: 13094893766,
+              run: 41337355328,
+              artifact: 13097261265,
               name: 'candidate-desktop-win-x64',
-              bytes: 258959157,
-              source: 'df70c58bd713b2f67f8d5394f787782d6b13c6f6',
+              bytes: 258971470,
+              source: '9dffe5f0581b4b27874763995b46e493334ab577',
               lock: 'bd0ba9adcfa8be60e2f3c38723be22a0fe92ddd31aa8c9943bfb2242fdf1fffe',
             };
             const [{ data: run }, { data: artifact }] = await Promise.all([
@@ -66,7 +66,7 @@ jobs:
                 bytes: artifact.size_in_bytes, expired: artifact.expired,
                 artifactRun: artifact.workflow_run?.id, digest: artifact.digest,
               },
-              scope: 'Pinned earlier candidate: packaged dependencies and offline CLI only; not qualification of latest main or a published release.',
+              scope: 'Pinned combined candidate on main 14e4ba6c: packaged dependencies, app startup and offline CLI; later main 3ea49a947 was verified separately in local integration. No published release.',
             }, null, 2));
             if (run.id !== expected.run || run.head_sha !== expected.source ||
                 artifact.id !== expected.artifact || artifact.name !== expected.name ||
@@ -78,10 +78,10 @@ jobs:
       - name: Download the pinned intact checkpoint
         uses: actions/download-artifact@v8
         with:
-          artifact-ids: "13094893766"
+          artifact-ids: "13097261265"
           github-token: ${{ github.token }}
           repository: ${{ github.repository }}
-          run-id: "41334567230"
+          run-id: "41337355328"
           path: release-publish
 
       - name: Verify original artifact identity, hashes, inventory and signing policy
@@ -94,7 +94,7 @@ jobs:
             --assets-dir release-publish `
             --platform win --arch x64 --target nsis `
             --version 1.0.9 --flavor production `
-            --source-commit df70c58bd713b2f67f8d5394f787782d6b13c6f6 `
+            --source-commit 9dffe5f0581b4b27874763995b46e493334ab577 `
             --lockfile-sha256 bd0ba9adcfa8be60e2f3c38723be22a0fe92ddd31aa8c9943bfb2242fdf1fffe `
             --publication false --allow-unsigned-windows-publication false `
             *>&1 | Tee-Object -FilePath (Join-Path $evidence 'checkpoint-verification.log')
