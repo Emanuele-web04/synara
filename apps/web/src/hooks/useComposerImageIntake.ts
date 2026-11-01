@@ -101,7 +101,7 @@ export class ComposerImageIntakeQueue {
       await tail.catch(() => undefined);
       if (tail === this.#tail && this.#pendingCount === 0) break;
     }
-    if (this.#pendingCount === 0) this.#batchFailureCount = null;
+    if (!this.#isStale(generation) && this.#pendingCount === 0) this.#batchFailureCount = null;
     // A failed or retired intake cannot silently turn a waiting send into text-only.
     // Snapshotting each wait keeps later explicit sends independent of older failures.
     return !this.#isStale(generation) && this.#failureCount === failureCount;
