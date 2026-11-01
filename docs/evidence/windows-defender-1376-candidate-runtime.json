@@ -58,8 +58,66 @@
       "guard-contracts.log"
     ]
   },
+  "thirdQualification": {
+    "run": "https://github.com/Emanuele-web04/synara/actions/runs/41338137765",
+    "artifact": "pinned-candidate-runtime-evidence-41338137765-1",
+    "result": "Failed before MMPC and scanning during the intermediate Defender state snapshot.",
+    "error": "Get-MpPreference: Operation failed with the following error: 0x800106ba",
+    "guardVersion": "Direct fallback before commit f86ed905b removed intervening state reads after exhausted default updates.",
+    "scanResults": [],
+    "stateSnapshotService": "Not running",
+    "evidence": [
+      "defender/default-update-status.json",
+      "defender/update-default-attempt-1-error.txt",
+      "defender/update-default-attempt-2-error.txt",
+      "defender/update-default-attempt-3-error.txt",
+      "defender/results.json"
+    ]
+  },
+  "fourthQualification": {
+    "run": "https://github.com/Emanuele-web04/synara/actions/runs/41338964132",
+    "artifact": "pinned-candidate-runtime-evidence-41338964132-1",
+    "result": "Final guard and packaged-runtime checks passed on the same earlier candidate.",
+    "platformBefore": "4.18.26100.4",
+    "platformAfter": "4.18.26100.4",
+    "engine": "1.1.26100.4",
+    "definitionsBefore": "1.463.33.0",
+    "definitionsAfter": "1.463.76.0",
+    "mapsExitCode": 0,
+    "scanExitCode": 0,
+    "expectedHashSurvived": true,
+    "recordedUpdateErrors": 0,
+    "liveRetryOrDirectFallbackExercised": false,
+    "mockedContractsPassedOnWindows": 19,
+    "packagedDependencySmoke": "passed",
+    "packagedStartupSmoke": "passed",
+    "offlinePackagedRuntime": {
+      "electron": "43.4.1",
+      "node": "24.18.1",
+      "piLazyApiClient": "Exact endpoint/token/model and synthetic HTTP 400 propagation; networking blocked.",
+      "codemode": "Actual worker, QuickJS WASM, host-tool round trip and worker exit.",
+      "photon": "Actual PNG decode/encode worker replied with no recorded errors.",
+      "mcp": "Stdio initialization/list/call over spaced path; child exited.",
+      "compactionCli": {
+        "beforeBytes": 16805888,
+        "afterBytes": 16384,
+        "integrityAndCleanupVerified": true
+      }
+    },
+    "evidence": [
+      "checkpoint-selection.json",
+      "artifact-win-x64.provenance.json",
+      "guard-contracts.log",
+      "defender/before-status.json",
+      "defender/after-status.json",
+      "defender/results.json",
+      "defender/maps-connection-exit.txt",
+      "packaged-startup.log",
+      "pi-and-compaction/pi-and-compaction.log"
+    ]
+  },
   "currentGuard": {
-    "commit": "2a92ea6bd39389f0bc21ae151e5b7084ee2b1f78",
+    "commit": "f86ed905b9568311ca39f5de7410f1925d8c277d",
     "defaultAttempts": 3,
     "directMmpcAttempts": 3,
     "delayBetweenAttemptsSeconds": 5,
@@ -69,8 +127,10 @@
     ],
     "successfulUpdateCallRequired": true,
     "existingQualificationGatesPreserved": true,
-    "localMockedContractsPassed": 18,
-    "nativeDirectFallbackQualification": "unverified at this evidence checkpoint"
+    "nativeDirectFallbackQualification": "not exercised by the successful run; live recovery remains unverified",
+    "mockedContractsPassedOnWindows": 19,
+    "nativeHealthyQualification": "passed in run 41338964132 on the earlier candidate",
+    "stateReadsBeforeDirectFallbackAfterFailures": false
   },
   "newIntegratedBuild": {
     "run": "https://github.com/Emanuele-web04/synara/actions/runs/41337355328",

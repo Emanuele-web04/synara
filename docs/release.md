@@ -401,6 +401,8 @@ intelligence, verifies the actual file is not excluded, and requires an explicit
 clean scan plus unchanged installer bytes. If the configured update source fails
 all three attempts or returns definitions older than 24 hours, the guard falls
 back to Microsoft's direct MMPC source.
+After exhausted default-source attempts, it reaches MMPC without an intervening
+Defender state snapshot, which can fail during the same service transition.
 Each source allows at most three update attempts, five seconds apart, to recover
 from transient service errors during platform updates. Every failed attempt is
 preserved as `update-SOURCE-attempt-N-error.txt`; a successful update call is still
@@ -427,7 +429,7 @@ This server scan does not replace Windows 11 browser-download qualification or
 prove that the cloud classified a particular installer.
 
 Run `pwsh -NoProfile -File scripts/verify-windows-defender.test.ps1` for the guard's
-18 mocked behavior tests, including disabled cloud protection, failed MAPS
+19 mocked behavior tests, including disabled cloud protection, failed MAPS
 connectivity, direct-source fallback, stale or out-of-date signatures after
 fallback, changed bytes, and detections. These tests do not qualify real Windows
 behavior.

@@ -72,8 +72,9 @@ definition versions. The recorded guard hash matches the version **before** the
 bounded update retry. The guard now allows at most three attempts per source and
 falls back to direct MMPC updates after exhausted default-source attempts or stale
 definitions. It preserves each error and still requires a successful update call
-and every existing qualification check. Eighteen local mocked contract tests pass;
-native fallback confirmation is separate from this Chrome result.
+and every existing qualification check. Nineteen mocked contract tests pass on
+Windows in the latest candidate run below; live fallback recovery remains separate
+from these contract tests and this Chrome result.
 
 The [earlier build-only candidate run](https://github.com/Emanuele-web04/synara/actions/runs/41336992485)
 passed real Defender scanning, MAPS validation, and packaged dependency/startup
@@ -89,11 +90,32 @@ A [second attempt on that same candidate](https://github.com/Emanuele-web04/syna
 used the preceding guard and failed before scanning: the first default update
 returned an RPC error, and the next two reported that definition updates completed
 with errors. All three errors were retained and `results.json` was empty. This
-motivated the direct fallback; it is not a failed installer scan. The
-[candidate evidence index](evidence/windows-defender-1376-candidate-runtime.json)
-keeps these results separate. At this checkpoint, native fallback qualification
-and the [new integrated candidate build](https://github.com/Emanuele-web04/synara/actions/runs/41337355328)
-remain unverified; the earlier candidate's success does not qualify their bytes.
+motivated the direct fallback; it is not a failed installer scan.
+
+The [third attempt](https://github.com/Emanuele-web04/synara/actions/runs/41338137765)
+still stopped before MMPC or scanning: an intermediate state snapshot failed in
+`Get-MpPreference` with `0x800106ba` while the service was unavailable. Commit
+`f86ed905b` removes that intervening read after exhausted default updates, so the
+guard can reach the mandatory direct update. Its negative control covers
+unavailable state APIs until MMPC succeeds.
+
+The [fourth attempt](https://github.com/Emanuele-web04/synara/actions/runs/41338964132)
+passed the final guard, all **19 mocked contracts**, and packaged startup on the
+same earlier `51167f…b55ca` candidate. Defender platform `4.18.26100.4` was already
+installed before qualification; definitions advanced from `1.463.33.0` to
+`1.463.76.0` with no update errors. This proves healthy live qualification, not
+recovery from a live RPC failure or execution of the direct fallback.
+
+That run also exercised the packaged runtime under Electron `43.4.1` / Node
+`24.18.1`: Pi's lazy API/client propagated a **synthetic HTTP 400 with networking
+blocked**; Codemode ran its actual worker and QuickJS WASM; Photon used its actual
+worker without recorded errors; the MCP child completed initialization/list/call
+and exited. The isolated compaction CLI reduced **16805888 → 16384 bytes** with
+integrity and cleanup checks. These are offline packaged-runtime checks, not live
+provider success. The [candidate evidence index](evidence/windows-defender-1376-candidate-runtime.json)
+keeps every attempt and its scope separate. At this checkpoint, live fallback
+recovery and the [new integrated candidate build](https://github.com/Emanuele-web04/synara/actions/runs/41337355328)
+remain unverified; the earlier candidate's success does not qualify the new build's bytes.
 
 No current Defender antivirus detection was reproduced. The observed Edge reputation
 warning differs from the third-party screenshot's **`Virus detected`** message.
