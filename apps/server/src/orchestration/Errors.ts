@@ -2,6 +2,10 @@ import { SchemaIssue, Schema } from "effect";
 
 import type { ProjectionRepositoryError } from "../persistence/Errors.ts";
 
+// Admission and replay share the same refusal for target-only native reviews.
+export const NATIVE_REVIEW_ATTACHMENTS_UNSUPPORTED =
+  "Native code reviews do not support attachments. Send the files as a normal message.";
+
 export class OrchestrationCommandInvariantError extends Schema.TaggedErrorClass<OrchestrationCommandInvariantError>()(
   "OrchestrationCommandInvariantError",
   {

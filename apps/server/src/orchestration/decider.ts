@@ -41,7 +41,10 @@ import { Effect } from "effect";
 
 import { computerActivationMetadata } from "../computer/computerActivation.ts";
 
-import { OrchestrationCommandInvariantError } from "./Errors.ts";
+import {
+  NATIVE_REVIEW_ATTACHMENTS_UNSUPPORTED,
+  OrchestrationCommandInvariantError,
+} from "./Errors.ts";
 import { projectEvent } from "./projector.ts";
 import { withProjectRelocationEvents } from "./projectRelocation.ts";
 import { buildForkThreadTitle } from "./forkThreadTitle.ts";
@@ -2211,6 +2214,14 @@ const decideCommand = Effect.fn("decideOrchestrationCommand")(function* ({
         threadId: command.threadId,
       });
       yield* validateSidechatExecutionAvailable(command, targetThread);
+      // Native reviews accept only their review target, never prompt attachments.
+      // Reject before message acceptance so callers can preserve and resend the draft.
+      if (command.reviewTarget !== undefined && command.message.attachments.length > 0) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: NATIVE_REVIEW_ATTACHMENTS_UNSUPPORTED,
+        });
+      }
       if (command.resumePrecondition !== undefined) {
         // Quit-resume continuations are only valid while the thread is exactly as
         // it was recorded; checked here so it holds inside the serialized dispatch.
