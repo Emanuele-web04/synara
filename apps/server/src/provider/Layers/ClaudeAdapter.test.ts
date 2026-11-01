@@ -16817,3 +16817,83 @@ it.effect("keeps steer admission and turn ownership atomic across cooperative yi
     }
   });
 });
+
+it.effect(
+  "retains Claude terminal rate-limit identity and turn-local nested quota evidence",
+  () => {
+    const harness = makeHarness({ cwd: os.tmpdir(), baseDir: os.tmpdir() });
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const session = yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: "claudeAgent",
+        runtimeMode: "full-access",
+      });
+      const reset = Math.floor(Date.now() / 1_000) + 3_600;
+      for (const round of [0, 1, 2]) {
+        const eventsFiber = yield* adapter.streamEvents.pipe(
+          Stream.takeUntil((event) => event.type === "turn.completed"),
+          Stream.runCollect,
+          Effect.forkChild,
+        );
+        yield* adapter.sendTurn({ threadId: session.threadId, input: "Continue", attachments: [] });
+        if (round === 0)
+          harness.query.emit({
+            type: "rate_limit_event",
+            session_id: "sdk-quota-session",
+            uuid: "00000000-0000-4000-8000-000000000001",
+            rate_limit_info: { status: "rejected", rateLimitType: "five_hour", resetsAt: reset },
+          } as SDKMessage);
+        harness.query.emit({
+          type: "assistant",
+          session_id: "sdk-quota-session",
+          uuid: `quota-assistant-${round}`,
+          parent_tool_use_id: null,
+          error: "rate_limit",
+          ...(round === 2
+            ? {
+                api_error_params: {
+                  rate_limit_info: {
+                    status: "rejected",
+                    rateLimitType: "five_hour",
+                    resetsAt: reset,
+                  },
+                },
+              }
+            : {}),
+          message: {
+            id: `quota-message-${round}`,
+            content: [],
+            usage: { input_tokens: 0, output_tokens: 0 },
+          },
+        } as unknown as SDKMessage);
+        harness.query.emit({
+          type: "result",
+          subtype: "success",
+          is_error: true,
+          result: "You've hit your limit.",
+          errors: [],
+          session_id: "sdk-quota-session",
+          uuid: `quota-result-${round}`,
+        } as unknown as SDKMessage);
+        const events = yield* Fiber.join(eventsFiber);
+        const completion = events.find((event) => event.type === "turn.completed");
+        assert.equal(completion?.type, "turn.completed");
+        if (completion?.type === "turn.completed") {
+          assert.equal(completion.payload.state, "failed");
+          assert.equal(completion.payload.errorCode, "rate_limit");
+          assert.deepEqual(completion.payload.usageLimit, {
+            resetAt: round === 1 ? null : new Date(reset * 1_000).toISOString(),
+          });
+        }
+        assert.ok(events.every((event) => event.type !== "runtime.error"));
+        assert.ok(events.some((event) => event.type === "runtime.warning"));
+        assert.ok(
+          events
+            .filter((event) => event.type !== "turn.completed")
+            .every((event) => !("usageLimit" in event.payload)),
+        );
+      }
+    }).pipe(Effect.provide(harness.layer), Effect.scoped);
+  },
+);

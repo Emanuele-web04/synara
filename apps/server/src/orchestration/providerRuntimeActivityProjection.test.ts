@@ -1610,3 +1610,37 @@ it("persists running-task stop reconciliation for resumed background work", () =
   });
   decodeActivityAppendCommand(activity);
 });
+
+it("projects the real nested Claude SDK rate-limit envelope", () => {
+  const event = runtimeEvent({
+    type: "account.rate-limits.updated",
+    eventId: "claude-nested-quota",
+    provider: "claudeAgent",
+    turnId: TURN_ID,
+    payload: {
+      rateLimits: {
+        type: "rate_limit_event",
+        uuid: "quota-event",
+        session_id: "sdk-session",
+        rate_limit_info: {
+          status: "rejected",
+          rateLimitType: "five_hour",
+          resetsAt: 1_800_000_000,
+          utilization: 1,
+        },
+      },
+    },
+  });
+  const activities = projectProviderRuntimeActivities(event);
+  expect(activities.map((activity) => activity.kind)).toEqual([
+    "account.rate-limits.updated",
+    "account.rate-limited",
+  ]);
+  expect(activities[1]?.payload).toMatchObject({
+    status: "rejected",
+    rateLimitType: "five_hour",
+    resetsAt: "2027-01-15T08:00:00.000Z",
+    utilization: 1,
+  });
+  expectSchemaValidActivities(event);
+});

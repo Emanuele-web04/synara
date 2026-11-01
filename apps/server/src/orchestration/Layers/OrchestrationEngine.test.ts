@@ -100,6 +100,7 @@ const makeThreadEventReadMethods = (
   OrchestrationEventStoreShape,
   | "getThreadHighWaterSequence"
   | "getThreadTitleHighWaterSequence"
+  | "hasThreadStopAfter"
   | "readThreadEvents"
   | "readThreadEventsFromSequence"
 > => ({
@@ -110,6 +111,21 @@ const makeThreadEventReadMethods = (
         .at(-1)?.sequence ?? 0,
     ),
   getThreadTitleHighWaterSequence: () => Effect.succeed(0),
+  hasThreadStopAfter: (threadId, sequenceExclusive, turnId) =>
+    Effect.succeed(
+      events.some(
+        (event) =>
+          event.aggregateKind === "thread" &&
+          event.aggregateId === threadId &&
+          event.sequence > sequenceExclusive &&
+          (event.type === "thread.session-stop-requested" ||
+            (event.type === "thread.turn-interrupt-requested" &&
+              (turnId === undefined ||
+                event.payload.turnId === undefined ||
+                event.payload.turnId === null ||
+                event.payload.turnId === turnId))),
+      ),
+    ),
   readThreadEvents: (input) =>
     Effect.succeed(
       events

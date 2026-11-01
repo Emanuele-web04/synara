@@ -27,6 +27,10 @@ export interface ProviderUsageContext {
   readonly codexBinaryPath?: string;
   /** Stable account route; omitted by legacy provider-only callers. */
   readonly instanceId?: ProviderInstanceId;
+  /** Recovery-only: owning task cwd used to exclude project authentication overrides. */
+  readonly workingDirectory?: string;
+  /** Authoritative source project root, including shared local settings for linked worktrees. */
+  readonly projectRoot?: string;
   /** Explicit account boundary: credential readers must not fall back to ambient accounts. */
   readonly isolateCredentials?: boolean;
   /** Selected Codex archive root; extra accounts omit archive totals rather than mix identities. */
@@ -44,6 +48,12 @@ export interface ProviderUsageFetcher {
    * request when credential identity cannot be read safely.
    */
   readonly cacheKey?: (ctx: ProviderUsageContext) => Promise<string | null>;
+  /**
+   * Native immutable account/organization identity for a durable recovery fence.
+   * Never use rotating access/refresh tokens, display labels, or usage cache keys.
+   * Null keeps automatic recovery unavailable when identity cannot be proven.
+   */
+  readonly recoveryIdentity?: (ctx: ProviderUsageContext) => Promise<string | null>;
   /** Resolve credentials and fetch live usage. Never throws. */
   fetch(ctx: ProviderUsageContext): Promise<ServerProviderUsageSnapshot>;
 }

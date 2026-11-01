@@ -1050,5 +1050,9 @@
   "turnInterruptedAfter": "{{elapsed}} 后中断",
   "turnResumedAfter": "已恢复：{{task}} · {{elapsed}}",
   "turnResumed": "已恢复：{{task}}",
-  "turnWorkedFor": "已工作 {{elapsed}}"
+  "turnWorkedFor": "已工作 {{elapsed}}",
+  "usageLimitResumeAt": "用量已达限额 · 将于 {{time}} 继续",
+  "usageLimitAwaitingHost": "已到重置时间 · 正在等待电脑",
+  "cancelUsageLimitResume": "取消自动恢复",
+  "usageLimitResuming": "正在电脑上继续…"
 }

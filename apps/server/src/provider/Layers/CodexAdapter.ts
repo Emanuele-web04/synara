@@ -83,6 +83,13 @@ import {
 import { ServerConfig } from "../../config.ts";
 import { resolveCodexServiceTier } from "../../codexServiceTier.ts";
 import { makeRuntimeTaskListItem } from "../runtimeTaskList.ts";
+import {
+  codexErrorCode,
+  codexUsageLimitWindows,
+  isCodexUsageLimitError,
+  usageLimitResetAt,
+  type UsageLimitWindows,
+} from "../usageLimit.ts";
 import { extractProposedPlanMarkdown } from "../planMode.ts";
 import { appendFileAttachmentsPromptBlock } from "../attachmentProjection.ts";
 import { synaraSkillsDir } from "../skillsCatalog.ts";
@@ -266,12 +273,6 @@ function asString(value: unknown): string | undefined {
 function asTrimmedString(value: unknown): string | undefined {
   const stringValue = asString(value)?.trim();
   return stringValue ? stringValue : undefined;
-}
-
-function codexErrorCode(value: unknown): string | undefined {
-  const error = asObject(value);
-  const code = asTrimmedString(error?.codexErrorInfo) ?? asTrimmedString(error?.codex_error_info);
-  return code === "serverOverloaded" ? "server_overloaded" : code;
 }
 
 function asArray(value: unknown): unknown[] | undefined {
@@ -1200,10 +1201,17 @@ function mapUnmappedCodexEvent(
   };
 }
 
+interface CodexUsageLimitContext {
+  activeTurnId?: string;
+  windows?: UsageLimitWindows;
+  terminalError?: { readonly turnId: string; readonly code: string; readonly usageLimit: boolean };
+}
+
 function mapToRuntimeEvents(
   event: ProviderEvent,
   canonicalThreadId: ThreadId,
   codexHome?: CodexGeneratedImageHomeContext,
+  usageLimitContext?: CodexUsageLimitContext,
 ): ReadonlyArray<ProviderRuntimeEvent> {
   const payload = asObject(event.payload);
   const turn = asObject(payload?.turn);
@@ -1454,6 +1462,13 @@ function mapToRuntimeEvents(
   }
 
   if (event.method === "turn/started") {
+    const observedTurnId = event.turnId ?? asString(turn?.id);
+    if (usageLimitContext && usageLimitContext.activeTurnId !== observedTurnId) {
+      if (observedTurnId === undefined) delete usageLimitContext.activeTurnId;
+      else usageLimitContext.activeTurnId = observedTurnId;
+      delete usageLimitContext.windows;
+      delete usageLimitContext.terminalError;
+    }
     const turnId = event.turnId;
     if (!turnId) {
       return [];
@@ -1473,7 +1488,28 @@ function mapToRuntimeEvents(
 
   if (event.method === "turn/completed") {
     const errorMessage = asString(asObject(turn?.error)?.message);
-    const errorCode = codexErrorCode(turn?.error);
+    const currentTurn =
+      event.turnId !== undefined && usageLimitContext?.activeTurnId === event.turnId;
+    const priorError = currentTurn ? usageLimitContext?.terminalError : undefined;
+    const errorCode = codexErrorCode(turn?.error) ?? priorError?.code;
+    const isUsageLimit =
+      codexErrorCode(turn?.error) !== undefined
+        ? isCodexUsageLimitError(errorCode, turn?.error)
+        : priorError?.usageLimit === true;
+    const usageLimit =
+      toTurnStatus(turn?.status) === "failed" && isUsageLimit
+        ? {
+            resetAt: usageLimitResetAt(
+              currentTurn ? usageLimitContext?.windows : undefined,
+              Date.parse(event.createdAt),
+            ),
+          }
+        : undefined;
+    if (usageLimitContext && currentTurn) {
+      delete usageLimitContext.activeTurnId;
+      delete usageLimitContext.windows;
+      delete usageLimitContext.terminalError;
+    }
     return [
       {
         ...runtimeEventBase(event, canonicalThreadId),
@@ -1488,6 +1524,7 @@ function mapToRuntimeEvents(
             : {}),
           ...(errorMessage ? { errorMessage } : {}),
           ...(errorCode ? { errorCode } : {}),
+          ...(usageLimit ? { usageLimit } : {}),
         },
       },
     ];
@@ -1882,6 +1919,17 @@ function mapToRuntimeEvents(
   }
 
   if (event.method === "account/rateLimits/updated") {
+    if (usageLimitContext?.activeTurnId) {
+      // Same-origin notifications are patches. Ignore other quota buckets and keep
+      // omitted canonical windows, including any still-exhausted weekly window.
+      const windows = codexUsageLimitWindows(
+        event.payload,
+        Date.parse(event.createdAt),
+        usageLimitContext.windows,
+      );
+      if (windows === undefined) delete usageLimitContext.windows;
+      else usageLimitContext.windows = windows;
+    }
     return [
       {
         type: "account.rate-limits.updated",
@@ -1974,7 +2022,26 @@ function mapToRuntimeEvents(
       asString(asObject(payload?.error)?.message) ?? event.message ?? "Provider runtime error";
     const willRetry = payload?.willRetry === true;
     const errorCode = codexErrorCode(payload?.error);
-    const treatAsWarning = willRetry || isNonFatalCodexErrorMessage(message);
+    const nonFatal = isNonFatalCodexErrorMessage(message);
+    const quotaFailure = isCodexUsageLimitError(errorCode, payload?.error);
+    // Only the terminal command settles quota failure and recovery together.
+    const treatAsWarning = willRetry || nonFatal || quotaFailure;
+    if (
+      usageLimitContext &&
+      !willRetry &&
+      !nonFatal &&
+      errorCode &&
+      event.turnId &&
+      (usageLimitContext.activeTurnId === undefined ||
+        usageLimitContext.activeTurnId === event.turnId)
+    ) {
+      usageLimitContext.activeTurnId = event.turnId;
+      usageLimitContext.terminalError = {
+        turnId: event.turnId,
+        code: errorCode,
+        usageLimit: quotaFailure,
+      };
+    }
     return [
       {
         type: treatAsWarning ? "runtime.warning" : "runtime.error",
@@ -2717,12 +2784,25 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
             sizeOf: (item) => item.bytes,
           },
         );
+        const usageLimitContexts = new WeakMap<object, CodexUsageLimitContext>();
         let nextDroppedWarning = 1;
         const listener = (event: ProviderEvent) => {
           const origin = manager.getSessionEventOrigin(event.threadId, event.lifecycleGeneration);
           const stampedEvent = stampEvent(event, origin.providerInstanceId);
+          let usageLimitContext = origin.validationKey
+            ? usageLimitContexts.get(origin.validationKey)
+            : undefined;
+          if (origin.validationKey && !usageLimitContext) {
+            usageLimitContext = {};
+            usageLimitContexts.set(origin.validationKey, usageLimitContext);
+          }
           const mappedRuntimeEvents = assignDerivedProviderRuntimeEventIds(
-            mapToRuntimeEvents(stampedEvent, stampedEvent.threadId, origin.codexOptions),
+            mapToRuntimeEvents(
+              stampedEvent,
+              stampedEvent.threadId,
+              origin.codexOptions,
+              usageLimitContext,
+            ),
           );
           const hasUnmappedEvent = mappedRuntimeEvents.some(
             (runtimeEvent) => runtimeEvent.type === "event.unmapped",

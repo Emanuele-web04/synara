@@ -210,6 +210,8 @@ export function threadShellsEqual(left: ThreadShell | undefined, right: ThreadSh
     (left.isProjectImport ?? false) === (right.isProjectImport ?? false) &&
     deepEqualJson(left.claudeCacheReview ?? null, right.claudeCacheReview ?? null) &&
     left.claudeCacheReviewSequence === right.claudeCacheReviewSequence &&
+    deepEqualJson(left.usageLimitRecovery ?? null, right.usageLimitRecovery ?? null) &&
+    left.usageLimitRecoverySequence === right.usageLimitRecoverySequence &&
     left.snoozeSequence === right.snoozeSequence &&
     deepEqualJson(left.pinnedMessages ?? null, right.pinnedMessages ?? null) &&
     (left.notes ?? "") === (right.notes ?? "") &&
@@ -1083,6 +1085,31 @@ function clearSettledTurnStreamingFlags(
   return changed ? nextMessages : messages;
 }
 
+// A cancellation must survive older detail hydration and sidebar snapshots alike.
+function normalizeUsageLimitRecovery(
+  incoming: Pick<ReadModelThread, "usageLimitRecovery" | "updatedAt">,
+  previous: Thread | undefined,
+  snapshotSequence?: number,
+) {
+  const candidate =
+    previous !== undefined &&
+    (snapshotSequence === undefined
+      ? incoming.updatedAt < (previous.updatedAt ?? previous.createdAt)
+      : snapshotSequence < (previous.usageLimitRecoverySequence ?? 0))
+      ? previous.usageLimitRecovery
+      : incoming.usageLimitRecovery;
+  return {
+    usageLimitRecovery:
+      previous?.usageLimitRecovery && deepEqualJson(previous.usageLimitRecovery, candidate ?? null)
+        ? previous.usageLimitRecovery
+        : (candidate ?? null),
+    usageLimitRecoverySequence:
+      snapshotSequence === undefined
+        ? previous?.usageLimitRecoverySequence
+        : Math.max(snapshotSequence, previous?.usageLimitRecoverySequence ?? 0),
+  };
+}
+
 export function mergeReadModelThreadDetailWithLiveHotPath(
   incoming: ReadModelThread,
   previousThread: Thread | undefined,
@@ -1130,6 +1157,13 @@ export function mergeReadModelThreadDetailWithLiveHotPath(
       : snapshotSequence < (previousThread.claudeCacheReviewSequence ?? 0))
       ? previousThread.claudeCacheReview
       : incoming.claudeCacheReview;
+  const usageLimitRecovery = (
+    snapshotSequence === undefined
+      ? incoming.updatedAt < (previousThread.updatedAt ?? previousThread.createdAt)
+      : snapshotSequence < (previousThread.usageLimitRecoverySequence ?? 0)
+  )
+    ? previousThread.usageLimitRecovery
+    : incoming.usageLimitRecovery;
   const preserveSnooze =
     snapshotSequence === undefined
       ? incoming.updatedAt < (previousThread.updatedAt ?? previousThread.createdAt)
@@ -1143,6 +1177,7 @@ export function mergeReadModelThreadDetailWithLiveHotPath(
     session === incoming.session &&
     latestTurn === incoming.latestTurn &&
     claudeCacheReview === incoming.claudeCacheReview &&
+    usageLimitRecovery === incoming.usageLimitRecovery &&
     snoozedUntil === incoming.snoozedUntil &&
     snoozeReminderAt === incoming.snoozeReminderAt
   ) {
@@ -1154,6 +1189,7 @@ export function mergeReadModelThreadDetailWithLiveHotPath(
     session,
     latestTurn,
     ...(claudeCacheReview !== undefined ? { claudeCacheReview } : {}),
+    ...(usageLimitRecovery !== undefined ? { usageLimitRecovery } : {}),
     ...(snoozedUntil !== undefined ? { snoozedUntil } : {}),
     ...(snoozeReminderAt !== undefined ? { snoozeReminderAt } : {}),
   };
@@ -1827,6 +1863,11 @@ export function normalizeThreadFromReadModel(
     snapshotSequence === undefined
       ? previous?.snoozeSequence
       : Math.max(snapshotSequence, previous?.snoozeSequence ?? 0);
+  const { usageLimitRecovery, usageLimitRecoverySequence } = normalizeUsageLimitRecovery(
+    incoming,
+    previous,
+    snapshotSequence,
+  );
   const incomingClaudeCacheReview =
     snapshotSequence !== undefined && snapshotSequence < (previous?.claudeCacheReviewSequence ?? 0)
       ? previous?.claudeCacheReview
@@ -1974,6 +2015,8 @@ export function normalizeThreadFromReadModel(
     (previous.isProjectImport ?? false) === (incoming.isProjectImport ?? false) &&
     (previous.claudeCacheReview ?? null) === claudeCacheReview &&
     previous.claudeCacheReviewSequence === claudeCacheReviewSequence &&
+    (previous.usageLimitRecovery ?? null) === usageLimitRecovery &&
+    previous.usageLimitRecoverySequence === usageLimitRecoverySequence &&
     previous.pinnedMessages === pinnedMessages &&
     previous.notes === notes &&
     previous.goal === goal &&
@@ -2033,6 +2076,8 @@ export function normalizeThreadFromReadModel(
     lastKnownPr,
     handoff,
     ...(incoming.isProjectImport ? { isProjectImport: true } : {}),
+    usageLimitRecovery,
+    ...(usageLimitRecoverySequence !== undefined ? { usageLimitRecoverySequence } : {}),
     claudeCacheReview,
     ...(claudeCacheReviewSequence !== undefined ? { claudeCacheReviewSequence } : {}),
     ...(pinnedMessages !== undefined ? { pinnedMessages } : {}),
@@ -2092,6 +2137,11 @@ export function normalizeThreadShellSnapshot(
     snapshotSequence === undefined
       ? previous?.snoozeSequence
       : Math.max(snapshotSequence, previous?.snoozeSequence ?? 0);
+  const { usageLimitRecovery, usageLimitRecoverySequence } = normalizeUsageLimitRecovery(
+    incoming,
+    previous,
+    snapshotSequence,
+  );
   const incomingClaudeCacheReview =
     snapshotSequence !== undefined && snapshotSequence < (previous?.claudeCacheReviewSequence ?? 0)
       ? previous?.claudeCacheReview
@@ -2180,6 +2230,8 @@ export function normalizeThreadShellSnapshot(
     lastKnownPr,
     handoff,
     ...(incoming.isProjectImport ? { isProjectImport: true } : {}),
+    usageLimitRecovery,
+    ...(usageLimitRecoverySequence !== undefined ? { usageLimitRecoverySequence } : {}),
     claudeCacheReview,
     ...(claudeCacheReviewSequence !== undefined ? { claudeCacheReviewSequence } : {}),
     // The sidebar shell snapshot/event does not carry detail-only annotations, so keep those

@@ -552,6 +552,8 @@ export function projectEvent(
               ? {
                   ...project,
                   deletedAt: payload.deletedAt,
+                  usageLimitRecovery: null,
+                  usageLimitRecoverySource: null,
                   updatedAt: payload.deletedAt,
                 }
               : project,
@@ -672,6 +674,8 @@ export function projectEvent(
           ...nextBase,
           threads: updateThread(nextBase.threads, payload.threadId, {
             deletedAt: payload.deletedAt,
+            usageLimitRecovery: null,
+            usageLimitRecoverySource: null,
             snoozedUntil: null,
             snoozeReminderAt: null,
             updatedAt: payload.deletedAt,
@@ -687,6 +691,8 @@ export function projectEvent(
             ...nextBase,
             threads: updateThread(nextBase.threads, payload.threadId, {
               archivedAt,
+              usageLimitRecovery: null,
+              usageLimitRecoverySource: null,
               snoozedUntil: null,
               snoozeReminderAt: null,
               updatedAt: payload.updatedAt ?? archivedAt,
@@ -778,6 +784,21 @@ export function projectEvent(
                 : {}),
               ...(payload.isPinned !== undefined ? { isPinned: payload.isPinned } : {}),
               ...(payload.settledAt !== undefined ? { settledAt: payload.settledAt } : {}),
+              ...(payload.usageLimitRecoverySource !== undefined
+                ? { usageLimitRecoverySource: payload.usageLimitRecoverySource }
+                : {}),
+              ...(payload.usageLimitRecovery !== undefined
+                ? { usageLimitRecovery: payload.usageLimitRecovery }
+                : {}),
+              ...(payload.usageLimitRecoveryCancelledAt !== undefined
+                ? { usageLimitRecoveryCancelledAt: payload.usageLimitRecoveryCancelledAt }
+                : {}),
+              ...(payload.usageLimitRecoveryCancelledTurnId !== undefined
+                ? { usageLimitRecoveryCancelledTurnId: payload.usageLimitRecoveryCancelledTurnId }
+                : {}),
+              ...(payload.usageLimitRecoveryLastResetAt !== undefined
+                ? { usageLimitRecoveryLastResetAt: payload.usageLimitRecoveryLastResetAt }
+                : {}),
               ...(payload.snoozedUntil !== undefined ? { snoozedUntil: payload.snoozedUntil } : {}),
               ...(payload.snoozeReminderAt !== undefined
                 ? { snoozeReminderAt: payload.snoozeReminderAt }
@@ -1464,17 +1485,33 @@ export function projectEvent(
         }),
       );
 
+    case "thread.session-stop-requested":
     case "thread.turn-interrupt-requested": {
       const thread = nextBase.threads.find((entry) => entry.id === event.payload.threadId);
       if (!thread) return Effect.succeed(nextBase);
-      const activity = deriveTurnStopActivity(event, thread.session?.activeTurnId ?? null);
+      const activity =
+        event.type === "thread.turn-interrupt-requested"
+          ? deriveTurnStopActivity(event, thread.session?.activeTurnId ?? null)
+          : null;
+      const hasFence = event.payload.usageLimitRecoveryCancelledAt !== undefined;
       return Effect.succeed(
-        activity
+        activity || hasFence
           ? {
               ...nextBase,
               threads: updateThread(nextBase.threads, thread.id, {
-                activities: upsertThreadActivity(thread.activities, activity),
-                updatedAt: event.occurredAt,
+                ...(hasFence
+                  ? {
+                      usageLimitRecoveryCancelledAt: event.payload.usageLimitRecoveryCancelledAt,
+                      usageLimitRecoveryCancelledTurnId:
+                        event.payload.usageLimitRecoveryCancelledTurnId ?? null,
+                    }
+                  : {}),
+                ...(activity
+                  ? {
+                      activities: upsertThreadActivity(thread.activities, activity),
+                      updatedAt: event.occurredAt,
+                    }
+                  : {}),
               }),
             }
           : nextBase,

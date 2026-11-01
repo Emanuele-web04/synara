@@ -37,6 +37,47 @@ const projectionSnapshotLayer = it.layer(
 );
 
 projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
+  it.effect(
+    "restores host-owned recovery and cancellation fences in both shell and detail snapshots",
+    () =>
+      Effect.gen(function* () {
+        const query = yield* ProjectionSnapshotQuery;
+        const sql = yield* SqlClient.SqlClient;
+        const now = "2026-10-31T10:00:00.000Z";
+        const recovery = {
+          id: "recovery-episode",
+          turnId: asTurnId("limited-turn"),
+          resetAt: "2026-10-31T11:00:00.000Z",
+          autoResume: true,
+          provider: "codex",
+          providerInstanceId: "codex",
+          model: "gpt-5",
+          bindingKey: "opaque-account",
+          policyEpoch: 0,
+        };
+        const source = { turnId: recovery.turnId, bindingKey: recovery.bindingKey, policyEpoch: 0 };
+        const threadId = asThreadId("waiting-thread");
+        yield* sql`INSERT INTO projection_projects
+        (project_id,title,workspace_root,scripts_json,created_at,updated_at)
+        VALUES ('wait-project','Recovery','/isolated/recovery','[]',${now},${now})`;
+        yield* sql`INSERT INTO projection_threads
+        (thread_id,project_id,title,model_selection_json,created_at,updated_at,usage_limit_recovery_json,
+          usage_limit_recovery_source_json,usage_limit_recovery_cancelled_at,usage_limit_recovery_cancelled_turn_id,usage_limit_recovery_last_reset_at)
+        VALUES (${threadId},'wait-project','Waiting','{"provider":"codex","model":"gpt-5"}',${now},${now},${JSON.stringify(recovery)},
+          ${JSON.stringify(source)},${now},'earlier-turn',${recovery.resetAt})`;
+        const detail = yield* query.getThreadDetailById(threadId);
+        const snapshot = yield* query.getSnapshot();
+        const shell = snapshot.threads.find((thread) => thread.id === threadId);
+        for (const thread of [Option.getOrThrow(detail), shell]) {
+          assert.deepStrictEqual(thread?.usageLimitRecovery, recovery);
+          assert.deepStrictEqual(thread?.usageLimitRecoverySource, source);
+          assert.strictEqual(thread?.usageLimitRecoveryCancelledAt, now);
+          assert.strictEqual(thread?.usageLimitRecoveryCancelledTurnId, "earlier-turn");
+          assert.strictEqual(thread?.usageLimitRecoveryLastResetAt, recovery.resetAt);
+        }
+      }),
+  );
+
   it.effect("retains durable task state beyond the detail activity window", () =>
     Effect.gen(function* () {
       const query = yield* ProjectionSnapshotQuery;
@@ -890,6 +931,11 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           updatedAt: "2026-02-24T00:00:03.000Z",
           archivedAt: null,
           settledAt: null,
+          usageLimitRecoverySource: null,
+          usageLimitRecovery: null,
+          usageLimitRecoveryCancelledAt: null,
+          usageLimitRecoveryCancelledTurnId: null,
+          usageLimitRecoveryLastResetAt: null,
           snoozedUntil: null,
           snoozeReminderAt: null,
           deletedAt: null,
@@ -2607,6 +2653,11 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           updatedAt: "2026-03-03T00:00:03.000Z",
           archivedAt: null,
           settledAt: null,
+          usageLimitRecoverySource: null,
+          usageLimitRecovery: null,
+          usageLimitRecoveryCancelledAt: null,
+          usageLimitRecoveryCancelledTurnId: null,
+          usageLimitRecoveryLastResetAt: null,
           snoozedUntil: null,
           snoozeReminderAt: null,
           handoff: null,

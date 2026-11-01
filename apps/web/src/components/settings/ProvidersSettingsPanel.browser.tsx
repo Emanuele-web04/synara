@@ -68,6 +68,8 @@ vi.mock("~/hooks/useProviderStatusRefresh", () => ({
 vi.mock("~/nativeApi", () => ({
   readNativeApi: () => harness.api,
   ensureNativeApi: () => harness.api,
+  readNativeApiServerCapability: () => false,
+  onNativeApiServerCapabilitiesChange: () => () => undefined,
 }));
 
 import { AppSettingsSchema, type AppSettings } from "~/appSettings";

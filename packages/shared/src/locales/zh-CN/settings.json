@@ -1178,5 +1178,8 @@
   "sidebarUsageAccountLimit_one": "侧栏 · 最多 {{count}} 个账号",
   "sidebarUsageAccountLimit_other": "侧栏 · 最多 {{count}} 个账号",
   "permissionGuideEnableInstalledApp": "如果列表中已显示当前 {{app}} 副本，请将其打开。否则，请将应用从浮动指南拖入列表，或使用 + 选择当前安装的副本，然后将其打开。",
-  "permissionGuideCompleteAuthentication": "完成任何 macOS 身份验证。如果 macOS 要求退出并重新打开，请先照做，再重新检查。"
+  "permissionGuideCompleteAuthentication": "完成任何 macOS 身份验证。如果 macOS 要求退出并重新打开，请先照做，再重新检查。",
+  "resumeAfterUsageLimits": "用量限额重置后继续",
+  "resumeAfterUsageLimitsDescription": "供应商报告额度重置时间时，自动继续新触发限额的任务。此设置适用于这台电脑，即使其他设备已关闭。关闭后会取消待恢复的任务。",
+  "couldNotUpdateUsageLimitRecovery": "无法更新自动恢复设置"
 }
