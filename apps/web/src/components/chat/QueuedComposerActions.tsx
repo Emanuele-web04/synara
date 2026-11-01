@@ -21,6 +21,7 @@ type QueuedComposerActionsProps = {
   onSteer: (queuedTurn: QueuedComposerTurn) => void;
   onRemove: (queuedTurnId: string) => void;
   onEdit: (queuedTurn: QueuedComposerTurn) => void;
+  steerDisabled?: boolean | undefined;
 };
 
 function QueuedComposerActions({
@@ -28,6 +29,7 @@ function QueuedComposerActions({
   onSteer,
   onRemove,
   onEdit,
+  steerDisabled,
 }: QueuedComposerActionsProps) {
   const { t } = useTranslation();
 
@@ -35,7 +37,14 @@ function QueuedComposerActions({
     <div className="flex shrink-0 items-center gap-0">
       <Tooltip>
         <TooltipTrigger
-          render={<Button variant="ghost" size="chip" onClick={() => void onSteer(queuedTurn)} />}
+          render={
+            <Button
+              variant="ghost"
+              size="chip"
+              disabled={steerDisabled}
+              onClick={() => void onSteer(queuedTurn)}
+            />
+          }
         >
           <SteerIcon />
           <span>{t("chat:queuedActions_steer")}</span>

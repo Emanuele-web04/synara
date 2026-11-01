@@ -164,6 +164,7 @@ export function useChatQueuedTurns({
     () =>
       deriveQueuedComposerPause({
         latestTurn: activeLatestTurn,
+        usageLimitRecovery: activeThread?.usageLimitRecovery,
         activities: activeThread?.activities ?? [],
         threadError: activeThread?.error,
         queuedTurnCount: queuedComposerTurns.length,
@@ -173,6 +174,7 @@ export function useChatQueuedTurns({
     [
       activeLatestTurn,
       activeThread?.activities,
+      activeThread?.usageLimitRecovery,
       activeThread?.error,
       queueResumedTurnId,
       queueStoppedTurnId,
@@ -329,7 +331,11 @@ export function useChatQueuedTurns({
   const dispatchQueuedComposerTurn = useCallback(
     async (queued: QueuedComposerTurn, dispatchMode: "queue" | "steer"): Promise<boolean> => {
       const thread = getThreadFromState(useStore.getState(), threadId);
-      if (hasPendingCacheReview || thread?.claudeCacheReview != null) {
+      if (
+        hasPendingCacheReview ||
+        thread?.claudeCacheReview != null ||
+        thread?.usageLimitRecovery != null
+      ) {
         return false;
       }
       const lateSendHandlers = lateComposerSendHandlersRef.current;
@@ -373,7 +379,10 @@ export function useChatQueuedTurns({
             removeQueuedComposerTurnFromDraft(threadId, queuedTurnForSend.id);
             return;
           }
-          if (getThreadFromState(useStore.getState(), threadId)?.claudeCacheReview == null) {
+          if (
+            getThreadFromState(useStore.getState(), threadId)?.claudeCacheReview == null &&
+            getThreadFromState(useStore.getState(), threadId)?.usageLimitRecovery == null
+          ) {
             recordQueuedComposerAutoDispatchFailure(threadId, queuedTurnForSend.id);
           }
           setQueuedAutoDispatchTick((tick) => tick + 1);
@@ -398,11 +407,11 @@ export function useChatQueuedTurns({
   );
 
   const onResumeQueuedComposerTurns = useCallback(() => {
-    if (!queuePause) {
+    if (!queuePause || activeThread?.usageLimitRecovery) {
       return;
     }
     useComposerDraftStore.getState().resumeQueuedTurns(threadId, queuePause.turnId);
-  }, [queuePause, threadId]);
+  }, [activeThread?.usageLimitRecovery, queuePause, threadId]);
 
   // Edit on the paused notice takes the next queued message back into the composer;
   // the rest stays paused until that message is sent and its turn ends normally.
@@ -477,7 +486,7 @@ export function useChatQueuedTurns({
   );
 
   useEffect(() => {
-    if (hasPendingCacheReview) {
+    if (hasPendingCacheReview || activeThread?.usageLimitRecovery) {
       clearQueuedComposerAutoDispatchRetry(threadId);
       return;
     }
@@ -546,7 +555,10 @@ export function useChatQueuedTurns({
           removeQueuedComposerTurnFromDraft(threadId, nextQueuedTurn.id);
           return;
         }
-        if (getThreadFromState(useStore.getState(), threadId)?.claudeCacheReview == null) {
+        if (
+          getThreadFromState(useStore.getState(), threadId)?.claudeCacheReview == null &&
+          getThreadFromState(useStore.getState(), threadId)?.usageLimitRecovery == null
+        ) {
           recordQueuedComposerAutoDispatchFailure(threadId, nextQueuedTurn.id);
         }
         setQueuedAutoDispatchTick((tick) => tick + 1);
@@ -566,6 +578,7 @@ export function useChatQueuedTurns({
     activeThread?.error,
     activeThread?.messages,
     activeThread?.session,
+    activeThread?.usageLimitRecovery,
     dispatchQueuedComposerTurn,
     hasPendingCacheReview,
     isConnecting,

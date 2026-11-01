@@ -27,6 +27,7 @@ import type { AppState } from "./storeState";
 import {
   makeThread,
   makeDomainEvent,
+  makeUsageLimitRecovery,
   makeActivity,
   makeState,
   makeProject,
@@ -2837,4 +2838,39 @@ describe("store event reducer", () => {
       initialState.messageIdsByThreadId?.[threadId],
     );
   });
+});
+
+describe("usage-limit recovery metadata", () => {
+  it.each([applyOrchestrationEvents, applyOrchestrationEventsHotPath])(
+    "keeps host wait and cancellation in shell/detail state",
+    (reduce) => {
+      const threadId = ThreadId.makeUnsafe("thread-1");
+      const recovery = makeUsageLimitRecovery();
+      const armed = reduce(makeState(makeThread({})), [
+        makeDomainEvent(
+          "thread.meta-updated",
+          {
+            threadId,
+            usageLimitRecovery: recovery,
+            updatedAt: "2026-11-01T11:00:00.000Z",
+          },
+          { sequence: 10 },
+        ),
+      ]);
+      expect(threadsOf(armed)[0]?.usageLimitRecovery).toEqual(recovery);
+      const cancelled = reduce(armed, [
+        makeDomainEvent(
+          "thread.meta-updated",
+          {
+            threadId,
+            usageLimitRecovery: null,
+            updatedAt: "2026-11-01T11:01:00.000Z",
+          },
+          { sequence: 11 },
+        ),
+      ]);
+      expect(threadsOf(cancelled)[0]?.usageLimitRecovery).toBeNull();
+      expect(cancelled.threadShellById?.[threadId]?.usageLimitRecoverySequence).toBe(11);
+    },
+  );
 });

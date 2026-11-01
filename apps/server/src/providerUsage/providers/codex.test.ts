@@ -328,3 +328,71 @@ describe("codexUsageFetcher", () => {
     expect(tokens.refresh_token).toBe("rotated-refresh-token");
   });
 });
+
+describe("codexUsageFetcher durable recovery identity", () => {
+  it("retains native account identity across access and refresh token rotation", async () => {
+    const { codexHome, authPath } = makeCodexHome({
+      tokens: {
+        account_id: "native-account-a",
+        access_token: "access-before",
+        refresh_token: "refresh-before",
+      },
+    });
+    const context = makeCtx(codexHome);
+    const first = await codexUsageFetcher.recoveryIdentity!(context);
+    writeFileSync(
+      authPath,
+      JSON.stringify({
+        tokens: {
+          account_id: "native-account-a",
+          access_token: "access-after",
+          refresh_token: "refresh-after",
+        },
+      }),
+      "utf8",
+    );
+    expect(await codexUsageFetcher.recoveryIdentity!(context)).toBe(first);
+    writeFileSync(
+      authPath,
+      JSON.stringify({
+        tokens: {
+          account_id: "native-account-b",
+          access_token: "access-after",
+          refresh_token: "refresh-after",
+        },
+      }),
+      "utf8",
+    );
+    expect(await codexUsageFetcher.recoveryIdentity!(context)).not.toBe(first);
+  });
+
+  it("requires a native account id and refuses API-key overrides instead of using tokens", async () => {
+    const { codexHome, authPath } = makeCodexHome({
+      tokens: {
+        access_token: "unidentified-access",
+        refresh_token: "unidentified-refresh",
+      },
+    });
+    const context = makeCtx(codexHome);
+    expect(await codexUsageFetcher.recoveryIdentity!(context)).toBeNull();
+    writeFileSync(
+      authPath,
+      JSON.stringify({
+        tokens: {
+          account_id: "native-account-a",
+          access_token: "access",
+          refresh_token: "refresh",
+        },
+      }),
+      "utf8",
+    );
+    expect(
+      await codexUsageFetcher.recoveryIdentity!({
+        ...context,
+        env: { ...context.env, OPENAI_API_KEY: "override-key" },
+      }),
+    ).toBeNull();
+    writeFileSync(authPath, JSON.stringify({ OPENAI_API_KEY: "file-key" }), "utf8");
+    expect(await codexUsageFetcher.recoveryIdentity!(context)).toBeNull();
+  });
+});

@@ -428,6 +428,13 @@ export const codexUsageFetcher: ProviderUsageFetcher = {
   async cacheKey(ctx) {
     return codexAuthCacheKey(ctx, await resolveCodexAuth(ctx));
   },
+  async recoveryIdentity(ctx) {
+    // API-key overrides do not identify the native ChatGPT account that refused a turn.
+    if (ctx.env.OPENAI_API_KEY?.trim() || ctx.env.CODEX_API_KEY?.trim()) return null;
+    const auth = await resolveCodexAuth(ctx);
+    const accountId = auth?.kind === "oauth" ? auth.accountId?.trim() : undefined;
+    return accountId ? `codex-account:${accountId}` : null;
+  },
   async fetch(ctx) {
     const auth = await resolveCodexAuth(ctx);
     if (!auth) {

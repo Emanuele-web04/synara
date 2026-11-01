@@ -1,4 +1,12 @@
-import { CommandId, EventId, MessageId, ProjectId, ThreadId } from "@synara/contracts";
+import {
+  CommandId,
+  EventId,
+  MessageId,
+  ProjectId,
+  ThreadId,
+  TurnId,
+  type OrchestrationEvent,
+} from "@synara/contracts";
 import { assert, it } from "@effect/vitest";
 import { Effect, Layer, Schema, Stream } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
@@ -34,6 +42,180 @@ const providerInstanceSettingsLayer = it.layer(
 );
 
 layer("OrchestrationEventStore", (it) => {
+  it.effect("finds only this thread's Stops strictly after the source admission sequence", () =>
+    Effect.gen(function* () {
+      const store = yield* OrchestrationEventStore;
+      const threadId = ThreadId.makeUnsafe("thread-stop-after-source");
+      const otherThreadId = ThreadId.makeUnsafe("thread-stop-after-other");
+      const createdAt = "2026-10-31T19:30:00.000Z";
+      const append = (
+        type:
+          | "thread.turn-interrupt-requested"
+          | "thread.session-stop-requested"
+          | "thread.unarchived",
+        owner = threadId,
+      ) =>
+        store.append({
+          type,
+          eventId: EventId.makeUnsafe(`stop-after-${owner}-${type}-${crypto.randomUUID()}`),
+          aggregateKind: "thread",
+          aggregateId: owner,
+          occurredAt: createdAt,
+          commandId: CommandId.makeUnsafe(crypto.randomUUID()),
+          causationEventId: null,
+          correlationId: null,
+          metadata: {},
+          payload:
+            type === "thread.unarchived"
+              ? { threadId: owner, updatedAt: createdAt }
+              : { threadId: owner, createdAt },
+        } as Omit<OrchestrationEvent, "sequence">);
+      assert.isFalse(yield* store.hasThreadStopAfter(threadId, 0));
+      yield* append("thread.turn-interrupt-requested");
+      const source = yield* append("thread.unarchived");
+      assert.isFalse(yield* store.hasThreadStopAfter(threadId, source.sequence));
+      yield* append("thread.session-stop-requested", otherThreadId);
+      yield* append("thread.unarchived");
+      assert.isFalse(yield* store.hasThreadStopAfter(threadId, source.sequence));
+      const interrupted = yield* append("thread.turn-interrupt-requested");
+      assert.isTrue(yield* store.hasThreadStopAfter(threadId, source.sequence));
+      assert.isFalse(yield* store.hasThreadStopAfter(threadId, interrupted.sequence));
+      const stopped = yield* append("thread.session-stop-requested");
+      assert.isTrue(yield* store.hasThreadStopAfter(threadId, interrupted.sequence));
+      assert.isFalse(yield* store.hasThreadStopAfter(threadId, stopped.sequence));
+      assert.isFalse(yield* store.hasThreadStopAfter(otherThreadId, stopped.sequence));
+      const highWater = yield* store.getHighWaterSequence();
+      yield* store.hasThreadStopAfter(threadId, source.sequence);
+      assert.equal(yield* store.getHighWaterSequence(), highWater);
+    }),
+  );
+
+  it.effect(
+    "ignores stale explicit turn targets while retaining untargeted and session Stops",
+    () =>
+      Effect.gen(function* () {
+        const store = yield* OrchestrationEventStore;
+        const sql = yield* SqlClient.SqlClient;
+        const sourceSequence = yield* store.getHighWaterSequence();
+        const staleTurnId = TurnId.makeUnsafe("stop-target-previous-turn");
+        const actualTurnId = TurnId.makeUnsafe("stop-target-actual-turn");
+        const targetedThreadId = ThreadId.makeUnsafe("stop-targeted-thread");
+        const untargetedThreadId = ThreadId.makeUnsafe("stop-untargeted-thread");
+        const nullTargetThreadId = ThreadId.makeUnsafe("stop-null-target-thread");
+        const sessionThreadId = ThreadId.makeUnsafe("stop-session-thread");
+        const createdAt = "2026-10-31T19:30:00.000Z";
+        const interrupt = (threadId: ThreadId, turnId?: TurnId) =>
+          store.append({
+            type: "thread.turn-interrupt-requested",
+            eventId: EventId.makeUnsafe(crypto.randomUUID()),
+            aggregateKind: "thread",
+            aggregateId: threadId,
+            occurredAt: createdAt,
+            commandId: CommandId.makeUnsafe(crypto.randomUUID()),
+            causationEventId: null,
+            correlationId: null,
+            metadata: {},
+            payload: { threadId, ...(turnId ? { turnId } : {}), createdAt },
+          });
+        yield* interrupt(targetedThreadId, staleTurnId);
+        assert.isFalse(
+          yield* store.hasThreadStopAfter(targetedThreadId, sourceSequence, actualTurnId),
+        );
+        assert.isTrue(
+          yield* store.hasThreadStopAfter(targetedThreadId, sourceSequence, staleTurnId),
+        );
+        assert.isTrue(yield* store.hasThreadStopAfter(targetedThreadId, sourceSequence));
+        const matching = yield* interrupt(targetedThreadId, actualTurnId);
+        assert.isTrue(
+          yield* store.hasThreadStopAfter(targetedThreadId, sourceSequence, actualTurnId),
+        );
+        assert.isFalse(
+          yield* store.hasThreadStopAfter(targetedThreadId, matching.sequence, actualTurnId),
+        );
+        yield* interrupt(untargetedThreadId);
+        assert.isTrue(
+          yield* store.hasThreadStopAfter(untargetedThreadId, sourceSequence, actualTurnId),
+        );
+        const legacyNull = yield* interrupt(nullTargetThreadId);
+        // Exercise a raw null target, then restore the replay-compatible fixture.
+        yield* sql`
+        UPDATE orchestration_events
+        SET payload_json = json_set(payload_json, '$.turnId', NULL)
+        WHERE sequence = ${legacyNull.sequence}
+      `;
+        const nullTargetMatches = yield* store
+          .hasThreadStopAfter(nullTargetThreadId, sourceSequence, actualTurnId)
+          .pipe(
+            Effect.ensuring(
+              sql`
+              UPDATE orchestration_events
+              SET payload_json = json_remove(payload_json, '$.turnId')
+              WHERE sequence = ${legacyNull.sequence}
+            `.pipe(Effect.orDie),
+            ),
+          );
+        assert.isTrue(nullTargetMatches);
+        yield* store.append({
+          type: "thread.session-stop-requested",
+          eventId: EventId.makeUnsafe(crypto.randomUUID()),
+          aggregateKind: "thread",
+          aggregateId: sessionThreadId,
+          occurredAt: createdAt,
+          commandId: CommandId.makeUnsafe(crypto.randomUUID()),
+          causationEventId: null,
+          correlationId: null,
+          metadata: {},
+          payload: { threadId: sessionThreadId, createdAt },
+        });
+        assert.isTrue(
+          yield* store.hasThreadStopAfter(sessionThreadId, sourceSequence, actualTurnId),
+        );
+      }),
+  );
+
+  it.effect("reads accepted Stops from SQLite after rebuilding the event store service", () =>
+    Effect.gen(function* () {
+      const store = yield* OrchestrationEventStore;
+      const sql = yield* SqlClient.SqlClient;
+      const threadId = ThreadId.makeUnsafe("thread-rebuilt-stop-query");
+      const createdAt = "2026-10-31T19:30:00.000Z";
+      const sourceSequence = yield* store.getHighWaterSequence();
+      const accepted = yield* store.append({
+        type: "thread.turn-interrupt-requested",
+        eventId: EventId.makeUnsafe("rebuilt-stop-accepted"),
+        aggregateKind: "thread",
+        aggregateId: threadId,
+        occurredAt: createdAt,
+        commandId: CommandId.makeUnsafe("rebuilt-stop-command"),
+        causationEventId: null,
+        correlationId: null,
+        metadata: {},
+        payload: { threadId, createdAt },
+      });
+      const rebuilt = yield* Effect.gen(function* () {
+        const fresh = yield* OrchestrationEventStore;
+        const events = yield* Stream.runCollect(
+          fresh.readThreadEventsFromSequence(threadId, sourceSequence),
+        );
+        return {
+          stopped: yield* fresh.hasThreadStopAfter(threadId, sourceSequence),
+          afterStop: yield* fresh.hasThreadStopAfter(threadId, accepted.sequence),
+          eventIds: Array.from(events).map((event) => event.eventId),
+        };
+      }).pipe(
+        Effect.provide(
+          Layer.fresh(OrchestrationEventStoreLive).pipe(
+            Layer.provide(Layer.succeed(SqlClient.SqlClient, sql)),
+          ),
+        ),
+        Effect.scoped,
+      );
+      assert.isTrue(rebuilt.stopped);
+      assert.isFalse(rebuilt.afterStop);
+      assert.deepStrictEqual(rebuilt.eventIds, [accepted.eventId]);
+    }),
+  );
+
   it.effect("strips provider passwords and environments before appending turn events", () =>
     Effect.gen(function* () {
       const eventStore = yield* OrchestrationEventStore;
