@@ -9,6 +9,7 @@ function mountFooter(input: {
   phase: SessionPhase;
   connecting: boolean;
   recoveryStopAvailable?: boolean;
+  usageLimitStopAvailable?: boolean;
   onInterrupt?: () => void;
   voiceEnabled?: boolean;
   voiceRecording?: boolean;
@@ -39,6 +40,7 @@ function mountFooter(input: {
       submission={{
         phase: input.phase,
         recoveryStopAvailable: input.recoveryStopAvailable ?? false,
+        usageLimitStopAvailable: input.usageLimitStopAvailable ?? false,
         busy: false,
         connecting: input.connecting,
         expired: false,
@@ -56,6 +58,18 @@ function mountFooter(input: {
 }
 
 describe("ChatComposerFooter stop control", () => {
+  it("offers cancellation for an idle host-owned wait without pretending a turn is running", async () => {
+    const onInterrupt = vi.fn();
+    await mountFooter({
+      phase: "ready",
+      connecting: false,
+      usageLimitStopAvailable: true,
+      onInterrupt,
+    });
+    await page.getByRole("button", { name: "Cancel auto-resume" }).click();
+    expect(onInterrupt).toHaveBeenCalledOnce();
+  });
+
   afterEach(() => {
     document.body.innerHTML = "";
   });

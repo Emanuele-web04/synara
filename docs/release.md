@@ -400,6 +400,10 @@ the hosted image's exclusions inside that disposable runner, updates security
 intelligence, verifies the actual file is not excluded, and requires an explicit
 clean scan plus unchanged installer bytes. If the configured update source returns
 definitions older than 24 hours, it retries Microsoft's direct MMPC source.
+Each source allows at most three update attempts, five seconds apart, to recover
+from transient service errors during platform updates. Every failed attempt is
+preserved as `update-SOURCE-attempt-N-error.txt`; a successful update call is still
+required, and exhausting the attempts blocks qualification before scanning.
 An older local timestamp then requires the installed version to match the latest
 version fetched from Microsoft's security intelligence page; unavailable or
 ambiguous vendor data fails closed. Missing signatures or Defender's own
