@@ -502,6 +502,7 @@
   "editQueuedFollowUp": "Editar seguimiento en cola",
   "proposedPlan_exportUnavailable": "La exportación no está disponible",
   "messageThisSubagent": "Enviar un mensaje a este subagente",
+  "subagentReadOnly": "Este subagente es de solo lectura",
   "searchingMentions": "Buscando menciones...",
   "snapshotBrowserPage": "Capturar la página del navegador",
   "timeline_steeringConversation": "Redirigiendo la conversación",

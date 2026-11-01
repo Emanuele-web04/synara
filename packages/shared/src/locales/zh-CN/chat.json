@@ -602,6 +602,7 @@
   "chooseAnotherWindow": "选择其他窗口",
   "editQueuedFollowUp": "编辑排队中的追问",
   "messageThisSubagent": "向此子智能体发送消息",
+  "subagentReadOnly": "此子智能体为只读",
   "searchingMentions": "正在搜索提及项…",
   "snapshotBrowserPage": "获取浏览器页面快照",
   "switchingToLocal": "正在切换到本地…",

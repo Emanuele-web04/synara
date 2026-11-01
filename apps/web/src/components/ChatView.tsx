@@ -1086,6 +1086,16 @@ export default function ChatView({
   // no longer matches the hand-written `foo?.bar` dep and bails the whole component out.
   const activeLatestTurnId = activeLatestTurn?.turnId ?? null;
   const activeLatestTurnState = activeLatestTurn?.state ?? null;
+  const isNativeSubagentMessagingUnavailable = Boolean(
+    activeThread &&
+    (activeThread.creationSource === "provider_native" ||
+      activeThread.id.startsWith("subagent:")) &&
+    ((activeThread.session?.provider ?? activeThread.modelSelection.provider) === "codex" ||
+      activeThread.session?.status !== "running" ||
+      activeThread.session.activeTurnId === null ||
+      activeLatestTurnState !== "running" ||
+      activeLatestTurnId !== activeThread.session.activeTurnId),
+  );
   const threadActivities = activeThread?.activities ?? EMPTY_ACTIVITIES;
   const hasLiveTurnTail = hasLiveTurnTailWork({
     latestTurn: activeLatestTurn,
@@ -1901,7 +1911,11 @@ export default function ChatView({
   );
   const isComposerApprovalState = activePendingApproval !== null;
   const isSidechatExpired = Boolean(activeThread?.sidechatExpiredAt);
-  const isComposerEditorDisabled = isConnecting || isComposerApprovalState || isSidechatExpired;
+  const isComposerEditorDisabled =
+    isConnecting ||
+    isComposerApprovalState ||
+    isSidechatExpired ||
+    isNativeSubagentMessagingUnavailable;
   const canCollapsePastedTextToDraft = shouldEnableComposerPastedTextCollapse({
     isComposerApprovalState,
     hasPendingUserInput: pendingUserInputs.length > 0,
@@ -4893,6 +4907,10 @@ export default function ChatView({
   }, [claudeSwitchKey]);
   const onSend = useCallback(
     async (...args: Parameters<typeof submitComposerTurn>) => {
+      if (isNativeSubagentMessagingUnavailable) {
+        args[0]?.preventDefault();
+        return false;
+      }
       // Keep the choice captured for this send: later picker changes belong to the
       // next message. Automatic queue drains must not acknowledge a new draft choice.
       const switchKeyForSend = claudeSwitchKey;
@@ -4902,7 +4920,7 @@ export default function ChatView({
       }
       return accepted;
     },
-    [claudeSwitchKey, submitComposerTurn],
+    [claudeSwitchKey, isNativeSubagentMessagingUnavailable, submitComposerTurn],
   );
   const showClaudeModelSwitchNote =
     claudeSwitchKey !== null &&
@@ -6642,21 +6660,23 @@ export default function ChatView({
                     ? { onCollapsePastedText: handleCollapsePastedText }
                     : {})}
                   placeholder={
-                    isComposerApprovalState
-                      ? t("chat:placeholder_resolveApproval")
-                      : activePendingProgress
-                        ? activePendingProgress.activeQuestion?.options.length === 0
-                          ? t("chat:placeholder_typeAnswer")
-                          : t("chat:placeholder_typeOwnAnswer")
-                        : showPlanFollowUpPrompt && activeProposedPlan
-                          ? t("chat:placeholder_refinePlan")
-                          : activeThread?.parentThreadId
-                            ? t("chat:messageThisSubagent")
-                            : hasLiveTurn
-                              ? t("chat:placeholder_followUp")
-                              : standaloneSidechatContext
-                                ? t("chat:askAboutItem", { item: standaloneSidechatItemNoun })
-                                : t("chat:doAnythingInSynara")
+                    isNativeSubagentMessagingUnavailable
+                      ? t("chat:subagentReadOnly")
+                      : isComposerApprovalState
+                        ? t("chat:placeholder_resolveApproval")
+                        : activePendingProgress
+                          ? activePendingProgress.activeQuestion?.options.length === 0
+                            ? t("chat:placeholder_typeAnswer")
+                            : t("chat:placeholder_typeOwnAnswer")
+                          : showPlanFollowUpPrompt && activeProposedPlan
+                            ? t("chat:placeholder_refinePlan")
+                            : activeThread?.parentThreadId
+                              ? t("chat:messageThisSubagent")
+                              : hasLiveTurn
+                                ? t("chat:placeholder_followUp")
+                                : standaloneSidechatContext
+                                  ? t("chat:askAboutItem", { item: standaloneSidechatItemNoun })
+                                  : t("chat:doAnythingInSynara")
                   }
                   disabled={isComposerEditorDisabled}
                   singleLine={composerSingleRow}
@@ -6715,7 +6735,7 @@ export default function ChatView({
                     recoveryStopAvailable: isProviderDeliveryBlockDetail(activeThread?.error),
                     busy: isSendBusy,
                     connecting: isConnecting,
-                    expired: isSidechatExpired,
+                    expired: isSidechatExpired || isNativeSubagentMessagingUnavailable,
                     hasPendingCacheReview: activeThread?.claudeCacheReview != null,
                     preparingImages: isPreparingComposerImages,
                     preparingWorktree: isPreparingWorktree,

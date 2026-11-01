@@ -7,6 +7,7 @@ import { type QueuedComposerTurn, useComposerDraftStore } from "../../composerDr
 import { cloneComposerImageAttachment } from "../../lib/composerSend";
 import {
   armQueuedComposerSteerGate,
+  canResumeClosedQueuedComposerSession,
   claimQueuedComposerAutoDispatch,
   clearQueuedComposerAutoDispatchRetry,
   clearQueuedComposerSteerGate,
@@ -23,6 +24,7 @@ import { derivePhase } from "../../session-logic";
 import { useStore } from "../../store";
 import { getThreadFromState } from "../../threadDerivation";
 import { type ChatMessage, type Thread } from "../../types";
+import { addWsTransportStateListener, readLatestWsTransportState } from "../../wsTransportEvents";
 import {
   resolveQueuedComposerAutoDispatchHold,
   resolveQueuedSteerGateTransition,
@@ -192,6 +194,9 @@ export function useChatQueuedTurns({
   // Bumped to re-evaluate auto-dispatch when only non-reactive guards (refs)
   // blocked it; nothing else re-triggers the effect once they reset.
   const [queuedAutoDispatchTick, setQueuedAutoDispatchTick] = useState(0);
+  const [transportState, setTransportState] = useState(readLatestWsTransportState);
+
+  useEffect(() => addWsTransportStateListener(setTransportState, { replayCurrent: true }), []);
 
   useEffect(() => {
     queuedComposerTurnsRef.current = queuedComposerTurns;
@@ -466,6 +471,10 @@ export function useChatQueuedTurns({
     activeLatestTurn == null;
 
   const isQueuePaused = queuePause !== null;
+  const canResumeClosedSession = canResumeClosedQueuedComposerSession(
+    activeThread,
+    queueResumedTurnId,
+  );
 
   useEffect(() => {
     if (hasPendingCacheReview) {
@@ -474,11 +483,12 @@ export function useChatQueuedTurns({
     }
     if (
       isQueuePaused ||
+      (transportState !== null && transportState !== "open") ||
       isQueuedComposerAwaitingTurnStart(threadId) ||
       resolveQueuedComposerAutoDispatchHold({
         localDispatch,
         // A mini-composer submission queues the first turn before the draft has a session.
-        phase: isLocalDraftThread || isUnstartedThread ? "ready" : phase,
+        phase: isLocalDraftThread || isUnstartedThread || canResumeClosedSession ? "ready" : phase,
         latestTurn: activeLatestTurn,
         session: activeThread?.session ?? null,
         messages: activeThread?.messages ?? EMPTY_MESSAGES,
@@ -561,6 +571,7 @@ export function useChatQueuedTurns({
     isConnecting,
     isLocalDraftThread,
     isQueuePaused,
+    canResumeClosedSession,
     isUnstartedThread,
     localDispatch,
     pendingUserInputs.length,
@@ -570,6 +581,7 @@ export function useChatQueuedTurns({
     queuedSteerGate,
     removeQueuedComposerTurnFromDraft,
     threadId,
+    transportState,
   ]);
   return {
     setQueuedSteerGate,

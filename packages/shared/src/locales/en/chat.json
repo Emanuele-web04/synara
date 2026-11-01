@@ -502,6 +502,7 @@
   "editQueuedFollowUp": "Edit queued follow-up",
   "proposedPlan_exportUnavailable": "Export is unavailable",
   "messageThisSubagent": "Message this subagent",
+  "subagentReadOnly": "This subagent is read-only",
   "searchingMentions": "Searching mentions...",
   "snapshotBrowserPage": "Snapshot browser page",
   "timeline_steeringConversation": "Steering conversation",
