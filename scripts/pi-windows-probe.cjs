@@ -5,7 +5,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
 const { tmpdir } = require("node:os");
-const { createRequire } = require("node:module");
+const { createRequire, syncBuiltinESMExports } = require("node:module");
 const { pathToFileURL } = require("node:url");
 const { spawnSync } = require("node:child_process");
 
@@ -57,6 +57,18 @@ async function main() {
   ])
     fs.mkdirSync(process.env[key], { recursive: true });
   process.chdir(temp);
+  // No live provider request is permitted, including a transport ignoring its supplied fetch.
+  const denyNetwork = () => {
+    throw new Error("Network access is forbidden in the packaged runtime probe");
+  };
+  globalThis.fetch = denyNetwork;
+  for (const module of [require("node:http"), require("node:https")]) {
+    module.request = denyNetwork;
+    module.get = denyNetwork;
+  }
+  require("node:net").Socket.prototype.connect = denyNetwork;
+  require("node:tls").connect = denyNetwork;
+  syncBuiltinESMExports();
   const report = {
     mode: localControl ? "local-control" : "packaged-windows",
     electron: process.versions.electron,
@@ -116,6 +128,35 @@ async function main() {
     assert.equal((await runtime.getAuth("openai")).auth.apiKey, "synthetic-token");
     report.checks.push("Pi 1.4.0: three packaged SDKs, offline ChatGPT discovery/auth");
 
+    const model = runtime.getModel("openai", "gpt-5.4");
+    assert(model, "Missing synthetic OpenAI test model");
+    const requests = [];
+    const completed = await runtime.complete(
+      model,
+      { messages: [{ role: "user", content: "offline smoke", timestamp: 0 }] },
+      {
+        maxRetries: 0,
+        fetch: async (input, init) => {
+          const request = new Request(input, init);
+          requests.push({ url: request.url, headers: request.headers, body: await request.json() });
+          return Response.json(
+            { error: { message: "synthetic packaged probe stop", type: "invalid_request_error" } },
+            { status: 400 },
+          );
+        },
+      },
+    );
+    assert.equal(requests.length, 1, "Expected one synthetic OpenAI request");
+    assert.equal(requests[0].url, "https://api.openai.com/v1/responses");
+    assert.equal(requests[0].headers.get("authorization"), "Bearer synthetic-token");
+    assert.equal(requests[0].body.model, "gpt-5.4");
+    assert.equal(requests[0].body.stream, true);
+    assert.equal(completed.stopReason, "error");
+    assert.match(completed.errorMessage, /synthetic packaged probe stop/);
+    report.checks.push(
+      "Packaged lazy OpenAI API/client: exact endpoint/token/model, synthetic HTTP 400 propagated; network blocked",
+    );
+
     const codemode = await import(
       pathToFileURL(packageEntry("@earendil-works/pi-codemode", piEntry)).href
     );
@@ -143,11 +184,49 @@ async function main() {
       "iVBORw0KGgoAAAANSUhEUgAAAAQAAAACCAYAAAB/qH1jAAAAEklEQVR4nGP4z8DwHxkzoAsAAA8hD/EEN8afAAAAAElFTkSuQmCC",
       "base64",
     );
-    const resized = await pi.resizeImage(png, "image/png", {
-      maxWidth: 1,
-      maxHeight: 1,
-      maxBytes: 4096,
-    });
+    // Observe the SDK's real worker without changing the worker options or hiding failures.
+    const workerThreads = require("node:worker_threads");
+    const NativeWorker = workerThreads.Worker;
+    const photonWorkers = [];
+    workerThreads.Worker = class extends NativeWorker {
+      constructor(filename, options) {
+        const observed = { path: String(filename), replied: false, error: null };
+        photonWorkers.push(observed);
+        try {
+          super(filename, options);
+        } catch (error) {
+          observed.error = String(error);
+          throw error;
+        }
+        this.on("message", (message) => {
+          if (message?.type === "pi:image-resize-response") {
+            observed.replied = Boolean(message.result);
+            if (message.error) observed.error = message.error;
+          }
+        });
+        this.on("error", (error) => {
+          observed.error = String(error);
+        });
+      }
+    };
+    syncBuiltinESMExports();
+    let resized;
+    try {
+      resized = await pi.resizeImage(png, "image/png", {
+        maxWidth: 1,
+        maxHeight: 1,
+        maxBytes: 4096,
+      });
+    } finally {
+      workerThreads.Worker = NativeWorker;
+      syncBuiltinESMExports();
+    }
+    report.photon = {
+      execution: photonWorkers.some((worker) => worker.replied) ? "worker" : "inline-fallback",
+      workers: photonWorkers,
+    };
+    // Emit even if the resize assertion fails, so an ASAR worker error is retained.
+    console.log("Photon execution evidence: " + JSON.stringify(report.photon));
     assert(resized, "Photon failed to decode/encode the image");
     assert.equal(resized.width, 1);
     assert.equal(resized.height, 1);
@@ -156,7 +235,7 @@ async function main() {
     assert.equal(resized.originalHeight, 2);
     assert(Buffer.from(resized.data, "base64").length > 0);
     report.checks.push(
-      "Photon: actual PNG decode/encode (SDK may use its documented inline fallback)",
+      `Photon: actual PNG decode/encode via ${report.photon.execution}; worker errors are recorded above`,
     );
 
     const mcpEntry = packageEntry("@earendil-works/pi-mcp", piEntry);
