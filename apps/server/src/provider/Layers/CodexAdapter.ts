@@ -2181,7 +2181,11 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
         entry.lastActivityAt = Date.now();
       }
       for (const runtimeEvent of runtimeEvents) {
-        if (runtimeEvent.type === "turn.started" && runtimeEvent.turnId) {
+        if (
+          runtimeEvent.type === "turn.started" &&
+          runtimeEvent.turnId &&
+          runtimeEvent.providerRefs?.providerParentThreadId === undefined
+        ) {
           armTurnWatchdog(threadId, runtimeEvent.turnId);
         }
       }
@@ -2789,12 +2793,16 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
         const listener = (event: ProviderEvent) => {
           const origin = manager.getSessionEventOrigin(event.threadId, event.lifecycleGeneration);
           const stampedEvent = stampEvent(event, origin.providerInstanceId);
-          let usageLimitContext = origin.validationKey
-            ? usageLimitContexts.get(origin.validationKey)
+          // Native children share the parent transport, but cannot replace its
+          // active turn or clear the quota deadline needed for parent recovery.
+          const usageLimitOwner =
+            stampedEvent.providerParentThreadId === undefined ? origin.validationKey : undefined;
+          let usageLimitContext = usageLimitOwner
+            ? usageLimitContexts.get(usageLimitOwner)
             : undefined;
-          if (origin.validationKey && !usageLimitContext) {
+          if (usageLimitOwner && !usageLimitContext) {
             usageLimitContext = {};
-            usageLimitContexts.set(origin.validationKey, usageLimitContext);
+            usageLimitContexts.set(usageLimitOwner, usageLimitContext);
           }
           const mappedRuntimeEvents = assignDerivedProviderRuntimeEventIds(
             mapToRuntimeEvents(

@@ -136,31 +136,37 @@ describe("crash recovery", () => {
           listUnsettled: () => Effect.succeed([{ threadId: threadId("durable-callback") }]),
         } as never),
         Effect.provideService(ProjectionSnapshotQuery, {
-          getThreadDetailById: (id: string) =>
+          getThreadDetailSnapshotById: (id: string) =>
             Effect.succeed(
               Option.some({
-                ...threads.find((thread) => thread.id === id),
-                messages:
-                  id === "resumed" || id === "heartbeat"
-                    ? [
-                        {
-                          id:
-                            id === "resumed" ? "quit-resume:previous:resumed" : "scheduled-message",
-                          role: "user",
-                          turnId: `${id}-turn`,
-                          dispatchOrigin: "automation",
-                        },
-                      ]
-                    : id === "unknown-prompt"
-                      ? []
-                      : [
+                snapshotSequence: 0,
+                historyRevisionSequence: 0,
+                thread: {
+                  ...threads.find((thread) => thread.id === id),
+                  messages:
+                    id === "resumed" || id === "heartbeat"
+                      ? [
                           {
-                            id: `message:${id}`,
+                            id:
+                              id === "resumed"
+                                ? "quit-resume:previous:resumed"
+                                : "scheduled-message",
                             role: "user",
                             turnId: `${id}-turn`,
-                            ...(id === "agent-turn" ? { dispatchOrigin: "agent" } : {}),
+                            dispatchOrigin: "automation",
                           },
-                        ],
+                        ]
+                      : id === "unknown-prompt"
+                        ? []
+                        : [
+                            {
+                              id: `message:${id}`,
+                              role: "user",
+                              turnId: `${id}-turn`,
+                              ...(id === "agent-turn" ? { dispatchOrigin: "agent" } : {}),
+                            },
+                          ],
+                },
               }),
             ),
         } as never),
