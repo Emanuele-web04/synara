@@ -47,6 +47,7 @@ import {
 import type { DeepPartial } from "@synara/shared/Struct";
 import { SIDECHAT_INACTIVITY_EXPIRY_MS } from "@synara/shared/sidechatExpiry";
 import {
+  Clock,
   Duration,
   Deferred,
   Effect,
@@ -2398,15 +2399,36 @@ describe("ProviderCommandReactor", () => {
 
     it("settles a hanging ordinary-task continuation as uncertain without retaining Resuming", async () => {
       vi.spyOn(providerUsageRecovery, "providerUsageRecoveryBindingKey").mockImplementation(() =>
-        Effect.succeed(bindingKey),
+        Effect.sleep("40 millis").pipe(Effect.as(bindingKey)),
       );
+      const deadline = Effect.runSync(Deferred.make<void>());
+      const liveClock = Effect.runSync(Effect.service(Clock.Clock));
+      const commandClock: Clock.Clock = {
+        currentTimeMillisUnsafe: () => liveClock.currentTimeMillisUnsafe(),
+        currentTimeMillis: liveClock.currentTimeMillis,
+        currentTimeNanosUnsafe: () => liveClock.currentTimeNanosUnsafe(),
+        currentTimeNanos: liveClock.currentTimeNanos,
+        // Establish the provider hang before expiring the actual delivery budget.
+        sleep: (duration) =>
+          Duration.toMillis(duration) === 25 ? Deferred.await(deadline) : liveClock.sleep(duration),
+      };
       const harness = await createHarness({
         serverSettings: { autoResumeAfterUsageLimits: true },
         commandEventTimeout: Duration.millis(25),
+        startReactor: false,
       });
+      if (!scope) throw new Error("Missing reactor scope");
+      await Effect.runPromise(
+        harness.reactor.start.pipe(
+          Effect.provideService(Clock.Clock, commandClock),
+          Scope.provide(scope),
+        ),
+      );
       const wait = await seedLimitWait(harness);
       harness.sendTurn.mockImplementationOnce(() => Effect.never);
       await requestResume(harness, wait.id);
+      await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+      await Effect.runPromise(Deferred.succeed(deadline, undefined));
       await waitFor(async () =>
         Option.isSome(
           await Effect.runPromise(
