@@ -5229,28 +5229,32 @@ const make = Effect.gen(function* () {
         operation: "thread.turn.start",
       });
 
-      yield* maybeGenerateAndRenameWorktreeBranchForFirstTurn({
-        threadId: event.payload.threadId,
-        sourceEventSequence: event.sequence,
-        branch: thread.branch,
-        worktreePath: thread.worktreePath,
-        messageId: message.id,
-        messageText: message.text,
-        ...(message.attachments !== undefined ? { attachments: resolvedAttachments } : {}),
-      }).pipe(Effect.forkScoped);
-      yield* maybeGenerateAndRenameThreadTitleForFirstTurn({
-        threadId: event.payload.threadId,
-        sourceEventSequence: event.sequence,
-        messageId: message.id,
-        messageText: message.text,
-        ...(message.attachments !== undefined ? { attachments: resolvedAttachments } : {}),
-        ...(event.payload.modelSelection !== undefined
-          ? { modelSelection: event.payload.modelSelection }
-          : {}),
-        ...(event.payload.providerOptions !== undefined
-          ? { providerOptions: event.payload.providerOptions }
-          : {}),
-      }).pipe(Effect.forkScoped);
+      // These helpers may invoke their own provider. An unsupported old review
+      // must reach the caught refusal below without launching either generator.
+      if (event.payload.reviewTarget === undefined || resolvedAttachments.length === 0) {
+        yield* maybeGenerateAndRenameWorktreeBranchForFirstTurn({
+          threadId: event.payload.threadId,
+          sourceEventSequence: event.sequence,
+          branch: thread.branch,
+          worktreePath: thread.worktreePath,
+          messageId: message.id,
+          messageText: message.text,
+          ...(message.attachments !== undefined ? { attachments: resolvedAttachments } : {}),
+        }).pipe(Effect.forkScoped);
+        yield* maybeGenerateAndRenameThreadTitleForFirstTurn({
+          threadId: event.payload.threadId,
+          sourceEventSequence: event.sequence,
+          messageId: message.id,
+          messageText: message.text,
+          ...(message.attachments !== undefined ? { attachments: resolvedAttachments } : {}),
+          ...(event.payload.modelSelection !== undefined
+            ? { modelSelection: event.payload.modelSelection }
+            : {}),
+          ...(event.payload.providerOptions !== undefined
+            ? { providerOptions: event.payload.providerOptions }
+            : {}),
+        }).pipe(Effect.forkScoped);
+      }
       // Only a native steer against a genuinely live turn keeps steer
       // semantics; anything else that reaches direct dispatch runs as a
       // normal queued turn (with its turn-start checkpoint).
