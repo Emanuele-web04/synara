@@ -1,0 +1,149 @@
+name: Diagnose pinned Windows candidate runtime
+
+on:
+  push:
+    branches: [codex/verify-core-windows-20261101]
+    paths:
+      - .github/workflows/candidate-runtime-workflow.yml
+      - scripts/verify-windows-defender.ps1
+      - scripts/verify-windows-defender.test.ps1
+      - scripts/pi-windows-probe.cjs
+      - scripts/run-pi-windows-probe.ps1
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: synara-pinned-windows-candidate-runtime
+  cancel-in-progress: false
+
+jobs:
+  qualify_existing_candidate:
+    name: Existing 1.0.9 candidate — Defender and packaged runtime
+    runs-on: windows-2025
+    timeout-minutes: 25
+    steps:
+      - name: Checkout diagnostic verification source
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version-file: package.json
+
+      # These checked-in verification scripts use only Node builtins and owned
+      # relative TypeScript modules. No workspace install or rebuild is needed.
+      - name: Verify pinned run and checkpoint metadata
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const fs = require('node:fs');
+            const path = require('node:path');
+            const expected = {
+              run: 41334567230,
+              artifact: 13094893766,
+              name: 'candidate-desktop-win-x64',
+              bytes: 258959157,
+              source: 'df70c58bd713b2f67f8d5394f787782d6b13c6f6',
+              lock: 'bd0ba9adcfa8be60e2f3c38723be22a0fe92ddd31aa8c9943bfb2242fdf1fffe',
+            };
+            const [{ data: run }, { data: artifact }] = await Promise.all([
+              github.rest.actions.getWorkflowRun({ ...context.repo, run_id: expected.run }),
+              github.rest.actions.getArtifact({ ...context.repo, artifact_id: expected.artifact }),
+            ]);
+            const evidence = path.join(process.env.RUNNER_TEMP, 'candidate-runtime-evidence');
+            fs.mkdirSync(evidence, { recursive: true });
+            fs.writeFileSync(path.join(evidence, 'checkpoint-selection.json'), JSON.stringify({
+              repository: `${context.repo.owner}/${context.repo.repo}`,
+              verificationCommit: context.sha,
+              expected,
+              actual: {
+                runId: run.id, runUrl: run.html_url, source: run.head_sha,
+                artifactId: artifact.id, name: artifact.name,
+                bytes: artifact.size_in_bytes, expired: artifact.expired,
+                artifactRun: artifact.workflow_run?.id, digest: artifact.digest,
+              },
+              scope: 'Pinned earlier candidate: packaged dependencies and offline CLI only; not qualification of latest main or a published release.',
+            }, null, 2));
+            if (run.id !== expected.run || run.head_sha !== expected.source ||
+                artifact.id !== expected.artifact || artifact.name !== expected.name ||
+                artifact.size_in_bytes !== expected.bytes || artifact.expired ||
+                artifact.workflow_run?.id !== expected.run) {
+              throw new Error('Pinned candidate metadata does not match the authorized checkpoint.');
+            }
+
+      - name: Download the pinned intact checkpoint
+        uses: actions/download-artifact@v8
+        with:
+          artifact-ids: '13094893766'
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: '41334567230'
+          path: release-publish
+
+      - name: Verify original artifact identity, hashes, inventory and signing policy
+        id: checkpoint
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $evidence = Join-Path $env:RUNNER_TEMP 'candidate-runtime-evidence'
+          node scripts/verify-release-artifact-checkpoint.ts `
+            --assets-dir release-publish `
+            --platform win --arch x64 --target nsis `
+            --version 1.0.9 --flavor production `
+            --source-commit df70c58bd713b2f67f8d5394f787782d6b13c6f6 `
+            --lockfile-sha256 bd0ba9adcfa8be60e2f3c38723be22a0fe92ddd31aa8c9943bfb2242fdf1fffe `
+            --publication false --allow-unsigned-windows-publication false `
+            *>&1 | Tee-Object -FilePath (Join-Path $evidence 'checkpoint-verification.log')
+          if ($LASTEXITCODE -ne 0) { throw "Checkpoint verification failed: $LASTEXITCODE" }
+          Copy-Item release-publish/artifact-win-x64.provenance.json $evidence
+
+      - name: Run all 14 Defender guard contract controls
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          ./scripts/verify-windows-defender.test.ps1 `
+            -GuardPath scripts/verify-windows-defender.ps1 `
+            *>&1 | Tee-Object -FilePath (Join-Path $env:RUNNER_TEMP 'candidate-runtime-evidence/guard-contracts.log')
+          $contracts = Get-Content -Raw (Join-Path $env:RUNNER_TEMP 'candidate-runtime-evidence/guard-contracts.log')
+          if ($contracts -notmatch '14 Defender guard contract tests passed') { throw 'Expected all 14 guard controls to pass.' }
+
+      - name: Scan the actual installer with Microsoft Defender
+        id: defender
+        timeout-minutes: 10
+        shell: pwsh
+        run: |
+          ./scripts/verify-windows-defender.ps1 `
+            -AssetsDirectory release-publish `
+            -EvidenceDirectory (Join-Path $env:RUNNER_TEMP 'candidate-runtime-evidence/defender')
+
+      - name: Run existing packaged desktop startup and dependency smoke
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          node scripts/verify-packaged-desktop-startup.ts `
+            --assets-dir release-publish --platform win --arch x64 `
+            --version 1.0.9 --executable-name synara `
+            *>&1 | Tee-Object -FilePath (Join-Path $env:RUNNER_TEMP 'candidate-runtime-evidence/packaged-startup.log')
+          if ($LASTEXITCODE -ne 0) { throw "Packaged startup failed: $LASTEXITCODE" }
+
+      - name: Exercise packaged Pi workers, WASM, MCP and offline compaction
+        timeout-minutes: 3
+        shell: pwsh
+        run: |
+          ./scripts/run-pi-windows-probe.ps1 `
+            -AssetsDirectory release-publish `
+            -ProbePath scripts/pi-windows-probe.cjs `
+            -EvidenceDirectory (Join-Path $env:RUNNER_TEMP 'candidate-runtime-evidence/pi-and-compaction')
+
+      - name: Preserve evidence from every attempted gate
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: pinned-candidate-runtime-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/candidate-runtime-evidence/
+          retention-days: 14
+          if-no-files-found: warn
