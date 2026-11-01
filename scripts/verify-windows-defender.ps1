@@ -27,7 +27,8 @@ Save-DefenderState 'before'
 $results = @()
 try {
     # Hosted images disable protection and exclude their entire working drives.
-    # Strengthen this disposable runner only; cloud/sample consent is unchanged.
+    # Strengthen this disposable public-release runner only. Safe samples may be
+    # sent to Microsoft; this script must never change a user's machine policy.
     $preferences = Get-MpPreference
     foreach ($kind in @('ExclusionPath', 'ExclusionExtension', 'ExclusionProcess')) {
         $values = @($preferences.$kind | Where-Object { $_ })
@@ -37,6 +38,7 @@ try {
         }
     }
     Set-MpPreference -DisableRealtimeMonitoring $false -DisableArchiveScanning $false -DisableIOAVProtection $false -DisableBehaviorMonitoring $false -DisableScriptScanning $false
+    Set-MpPreference -MAPSReporting Advanced -SubmitSamplesConsent SendSafeSamples -DisableBlockAtFirstSeen $false
     Update-MpSignature
     $signatureStatus = Get-MpComputerStatus
     if (-not $signatureStatus.AntivirusSignatureLastUpdated -or $signatureStatus.AntivirusSignatureLastUpdated -lt (Get-Date).AddDays(-1)) {
@@ -57,6 +59,9 @@ try {
         $preferences.DisableArchiveScanning -or $preferences.DisableIOAVProtection -or
         $preferences.DisableBehaviorMonitoring -or $preferences.DisableScriptScanning) {
         throw 'Defender antivirus, real-time, archive, download, behavior or script protection is not active.'
+    }
+    if ($preferences.MAPSReporting -ne 2 -or $preferences.SubmitSamplesConsent -ne 1 -or $preferences.DisableBlockAtFirstSeen -ne $false) {
+        throw 'Defender cloud protection, safe sample submission or block at first sight is not active.'
     }
     if (-not $status.AntivirusSignatureLastUpdated -or $status.DefenderSignaturesOutOfDate) {
         throw 'Defender security intelligence is missing or reported out of date after updating.'
@@ -88,6 +93,13 @@ try {
     $platform = Get-ChildItem "$env:ProgramData/Microsoft/Windows Defender/Platform" -Directory |
         Sort-Object Name -Descending | Select-Object -First 1
     $scanner = if ($platform) { Join-Path $platform.FullName 'MpCmdRun.exe' } else { "$env:ProgramFiles/Windows Defender/MpCmdRun.exe" }
+    $connection = @(& $scanner -ValidateMapsConnection 2>&1)
+    $connectionExit = $LASTEXITCODE
+    $connection | Tee-Object "$evidence/maps-connection.txt" | Write-Host
+    $connectionExit | Set-Content "$evidence/maps-connection-exit.txt"
+    if ($connectionExit -ne 0) {
+        throw 'Defender MAPS connection could not be validated. Inspect the preserved evidence.'
+    }
     foreach ($sample in $expected) {
         $name = Split-Path $sample.path -Leaf
         for ($attempt = 0; $attempt -lt 12; $attempt++) {
@@ -125,4 +137,8 @@ $after = Get-MpComputerStatus
 if (-not $after.AntivirusEnabled -or -not $after.RealTimeProtectionEnabled) {
     throw 'Defender protection became inactive during qualification.'
 }
-Write-Output 'Final installer bytes passed this Defender engine/definition scan. Windows 11 browser download behavior still requires separate qualification.'
+$afterPreferences = Get-MpPreference
+if ($afterPreferences.MAPSReporting -ne 2 -or $afterPreferences.SubmitSamplesConsent -ne 1 -or $afterPreferences.DisableBlockAtFirstSeen -ne $false) {
+    throw 'Defender cloud protection became inactive during qualification.'
+}
+Write-Output 'Final installer bytes passed this Defender engine/definition scan with cloud protection enabled and MAPS connectivity validated before scanning. Windows 11 browser download behavior still requires separate qualification.'

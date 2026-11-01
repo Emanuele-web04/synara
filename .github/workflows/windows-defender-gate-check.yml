@@ -13,10 +13,6 @@ jobs:
   scan:
     runs-on: windows-2022
     timeout-minutes: 20
-    strategy:
-      fail-fast: false
-      matrix:
-        protection: [release-default, cloud-enabled]
     steps:
       - uses: actions/checkout@v6
         with:
@@ -29,25 +25,116 @@ jobs:
           $hash = (Get-FileHash 'samples/Synara-1.0.9-x64.exe' -Algorithm SHA256).Hash
           if ($hash -ne 'd8a0d6bd3bbc6e9128cbf40d0b63262b3a516221c25e017452bc6b4c94ebabc5') { throw 'Official installer hash mismatch.' }
           Get-AuthenticodeSignature 'samples/Synara-1.0.9-x64.exe' | ConvertTo-Json -Depth 6 | Set-Content defender-rescan-evidence/signature.json
-      - name: Enable consumer cloud protection in the isolated public-artifact job
-        if: matrix.protection == 'cloud-enabled'
+      - name: Test cloud qualification failure behavior
         shell: pwsh
-        run: |
-          if ($env:GITHUB_ACTIONS -ne 'true' -or $env:RUNNER_ENVIRONMENT -ne 'github-hosted') { throw 'Disposable hosted runner required.' }
-          Get-MpPreference | Select-Object MAPSReporting,SubmitSamplesConsent,DisableBlockAtFirstSeen,CloudBlockLevel | ConvertTo-Json | Set-Content defender-rescan-evidence/cloud-before.json
-          # Only a public released installer is present. No signing credentials or private data.
-          Set-MpPreference -MAPSReporting Advanced -SubmitSamplesConsent SendSafeSamples -DisableBlockAtFirstSeen $false
-          $preferences = Get-MpPreference
-          $preferences | Select-Object MAPSReporting,SubmitSamplesConsent,DisableBlockAtFirstSeen,CloudBlockLevel | ConvertTo-Json | Set-Content defender-rescan-evidence/cloud-after.json
-          if ($preferences.MAPSReporting -ne 2 -or $preferences.SubmitSamplesConsent -ne 1 -or $preferences.DisableBlockAtFirstSeen) { throw 'Cloud protection is not enabled.' }
-      - name: Run the unchanged release qualification guard
+        run: ./scripts/verify-windows-defender.test.ps1
+      - name: Run the repaired cloud qualification guard
         shell: pwsh
         run: ./scripts/verify-windows-defender.ps1 -AssetsDirectory samples -EvidenceDirectory defender-rescan-evidence/guard
       - name: Retain scanner evidence on success or failure
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: defender-1.0.9-${{ matrix.protection }}
+          name: defender-1.0.9-cloud-connectivity
           path: defender-rescan-evidence/
           retention-days: 14
           if-no-files-found: error
+
+      # Ephemeral additions for the existing Windows Server 2022 diagnostic job.
+      # Insert AFTER the cloud/preferences/connectivity qualification guard succeeds.
+      # Copy browser-defender-probe.mjs to scripts/browser-defender-probe.mjs on the
+      # disposable diagnostic branch. No dependency or script belongs on product main.
+      # Use a fresh cloud-enabled job/VM for the strongest comparison: scanning the same
+      # hash first may warm Microsoft's reputation verdict (record the prior scan).
+      - name: Select Node for native Edge diagnostics
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+      - name: Prepare pinned browser client outside the checkout
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($env:GITHUB_ACTIONS -ne 'true' -or $env:RUNNER_ENVIRONMENT -ne 'github-hosted') { throw 'Disposable hosted runner required.' }
+          $tools = Join-Path $env:RUNNER_TEMP 'synara-edge-probe-client'
+          New-Item -ItemType Directory -Path $tools -Force | Out-Null
+          Copy-Item scripts/browser-defender-probe.mjs (Join-Path $tools 'browser-defender-probe.mjs')
+          npm install --prefix $tools --ignore-scripts --no-audit --no-fund --package-lock=false --save-exact playwright-core@1.62.1
+          if ($LASTEXITCODE -ne 0) { throw 'Pinned Playwright client install failed.' }
+      - name: Observe native Edge download with security defaults intact
+        timeout-minutes: 8
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $evidence = New-Item -ItemType Directory -Path browser-defender-evidence -Force
+          $started = Get-Date
+          $nodeExit = 1
+          function Save-ProbeDefenderState($name) {
+            Get-MpComputerStatus | Select-Object * -ExcludeProperty CimClass,CimInstanceProperties,CimSystemProperties |
+              ConvertTo-Json -Depth 8 | Set-Content "$evidence/$name-status.json"
+            Get-MpPreference | Select-Object * -ExcludeProperty CimClass,CimInstanceProperties,CimSystemProperties |
+              ConvertTo-Json -Depth 8 | Set-Content "$evidence/$name-preferences.json"
+            ConvertTo-Json -InputObject @(Get-MpThreatDetection) -Depth 10 | Set-Content "$evidence/$name-detections.json"
+          }
+          try {
+            $os = Get-CimInstance Win32_OperatingSystem
+            $os | Select-Object Caption,Version,BuildNumber,OSArchitecture |
+              ConvertTo-Json | Set-Content "$evidence/operating-system.json"
+            if ($os.Caption -notmatch 'Windows Server 2022') { throw 'Expected Windows Server 2022; do not label another OS as the requested probe.' }
+            Save-ProbeDefenderState before
+            $status = Get-MpComputerStatus
+            $prefs = Get-MpPreference
+            if (-not $status.AntivirusEnabled -or -not $status.RealTimeProtectionEnabled -or
+                $prefs.DisableIOAVProtection -or $prefs.DisableRealtimeMonitoring -or
+                $prefs.MAPSReporting -ne 2 -or $prefs.SubmitSamplesConsent -ne 1 -or $prefs.DisableBlockAtFirstSeen) {
+              throw 'Run the cloud-enabled qualification/connectivity guard before this browser probe.'
+            }
+            $policyRoots = @('HKLM:\SOFTWARE\Policies\Microsoft\Edge', 'HKCU:\SOFTWARE\Policies\Microsoft\Edge')
+            $policyEvidence = @()
+            foreach ($key in $policyRoots) {
+              if (Test-Path $key) {
+                $properties = Get-ItemProperty $key
+                $policyEvidence += @{ key = $key; properties = $properties }
+                $policyEvidence += @(Get-ChildItem $key -Recurse | ForEach-Object {
+                  @{ key = $_.Name; properties = Get-ItemProperty $_.PSPath }
+                })
+              }
+            }
+            ConvertTo-Json -InputObject $policyEvidence -Depth 12 | Set-Content "$evidence/edge-policy-registry.json"
+            foreach ($entry in $policyEvidence) {
+              $p = $entry.properties
+              if (($null -ne $p.SmartScreenEnabled -and $p.SmartScreenEnabled -eq 0) -or
+                  ($null -ne $p.SmartScreenForTrustedDownloadsEnabled -and $p.SmartScreenForTrustedDownloadsEnabled -eq 0)) {
+                throw 'Existing Edge policy disables relevant protection; no meaningful protected-download verdict is possible.'
+              }
+              if ($entry.key -match 'SmartScreenAllowListDomains|ExemptDomainFileTypePairsFromFileTypeDownloadWarnings|ExemptFileTypeDownloadWarnings') {
+                throw 'An existing download/SmartScreen exception needs review before this probe.'
+              }
+            }
+            $script = Join-Path $env:RUNNER_TEMP 'synara-edge-probe-client/browser-defender-probe.mjs'
+            node $script $evidence.FullName
+            $nodeExit = $LASTEXITCODE
+          } finally {
+            # Collect even when Edge refuses the download or the probe errors.
+            Save-ProbeDefenderState after
+            $eventReadErrors = @()
+            $events = @(Get-WinEvent -FilterHashtable @{
+              LogName = 'Microsoft-Windows-Windows Defender/Operational'; StartTime = $started
+            } -ErrorAction SilentlyContinue -ErrorVariable eventReadErrors)
+            $failures = @($eventReadErrors | Where-Object { $_.FullyQualifiedErrorId -notlike 'NoMatchingEventsFound*' })
+            @{ startedAt = $started.ToUniversalTime().ToString('o'); completedAt = (Get-Date).ToUniversalTime().ToString('o');
+               collectionSucceeded = $failures.Count -eq 0; errors = @($failures | ForEach-Object { $_.ToString() });
+               events = @($events | Select-Object TimeCreated,Id,LevelDisplayName,Message) } |
+              ConvertTo-Json -Depth 12 | Set-Content "$evidence/defender-events.json"
+          }
+          if ($nodeExit -ne 0) { throw "Browser diagnostic failed with exit $nodeExit; inspect preserved evidence." }
+      - name: Retain browser and Defender observations
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: defender-1.0.9-native-edge-windows-2022
+          path: browser-defender-evidence/
+          retention-days: 14
+          if-no-files-found: error
+      # Do not upload RUNNER_TEMP, the profile, or installer. Result JSON contains only
+      # observations; matching SHA is not a safe verdict. Correlate downloads UI/history
+      # with Defender events, policy/security controls, and the preceding guard evidence.
