@@ -69,9 +69,31 @@ The subsequent guard phase in that run failed at `Update-MpSignature` with
 `The remote procedure call failed.`; the later browser phase was skipped. Thus,
 the successful initial download does not establish a completed comparison across
 definition versions. The recorded guard hash matches the version **before** the
-bounded update retry. The retry now allows at most three attempts per source,
-preserves each error, and still requires a successful call and every existing
-qualification check; its native confirmation is separate from this Chrome result.
+bounded update retry. The guard now allows at most three attempts per source and
+falls back to direct MMPC updates after exhausted default-source attempts or stale
+definitions. It preserves each error and still requires a successful update call
+and every existing qualification check. Eighteen local mocked contract tests pass;
+native fallback confirmation is separate from this Chrome result.
+
+The [earlier build-only candidate run](https://github.com/Emanuele-web04/synara/actions/runs/41336992485)
+passed real Defender scanning, MAPS validation, and packaged dependency/startup
+smoke. It tested **258686811 bytes**, SHA-256
+`51167f9f9e2aea0227581fc80a99bcccbefa86e90be3a0ef992474cb002b55ca`, from source
+`df70c58bd713b2f67f8d5394f787782d6b13c6f6`; this is an unpublished candidate,
+separate from the official `d8a0d6…abc5` installer above. Definitions advanced from
+`1.463.33.0` to `1.463.76.0` without a recorded update error. The run also passed the
+then-current 14 mocked contracts, but did not exercise live RPC recovery or the
+new direct fallback.
+
+A [second attempt on that same candidate](https://github.com/Emanuele-web04/synara/actions/runs/41337351655)
+used the preceding guard and failed before scanning: the first default update
+returned an RPC error, and the next two reported that definition updates completed
+with errors. All three errors were retained and `results.json` was empty. This
+motivated the direct fallback; it is not a failed installer scan. The
+[candidate evidence index](evidence/windows-defender-1376-candidate-runtime.json)
+keeps these results separate. At this checkpoint, native fallback qualification
+and the [new integrated candidate build](https://github.com/Emanuele-web04/synara/actions/runs/41337355328)
+remain unverified; the earlier candidate's success does not qualify their bytes.
 
 No current Defender antivirus detection was reproduced. The observed Edge reputation
 warning differs from the third-party screenshot's **`Virus detected`** message.

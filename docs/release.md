@@ -398,12 +398,14 @@ Before startup smoke and artifact upload, the Windows job scans each final
 installer with Microsoft Defender. The guard enables protection and removes
 the hosted image's exclusions inside that disposable runner, updates security
 intelligence, verifies the actual file is not excluded, and requires an explicit
-clean scan plus unchanged installer bytes. If the configured update source returns
-definitions older than 24 hours, it retries Microsoft's direct MMPC source.
+clean scan plus unchanged installer bytes. If the configured update source fails
+all three attempts or returns definitions older than 24 hours, the guard falls
+back to Microsoft's direct MMPC source.
 Each source allows at most three update attempts, five seconds apart, to recover
 from transient service errors during platform updates. Every failed attempt is
 preserved as `update-SOURCE-attempt-N-error.txt`; a successful update call is still
-required, and exhausting the attempts blocks qualification before scanning.
+required. Exhausting the direct-source attempts blocks qualification before
+scanning, even if the reported signatures already appear fresh.
 An older local timestamp then requires the installed version to match the latest
 version fetched from Microsoft's security intelligence page; unavailable or
 ambiguous vendor data fails closed. Missing signatures or Defender's own
@@ -425,8 +427,10 @@ This server scan does not replace Windows 11 browser-download qualification or
 prove that the cloud classified a particular installer.
 
 Run `pwsh -NoProfile -File scripts/verify-windows-defender.test.ps1` for the guard's
-mocked behavior tests, including disabled cloud protection, failed MAPS connectivity,
-changed bytes, and detections. These tests do not qualify real Windows behavior.
+18 mocked behavior tests, including disabled cloud protection, failed MAPS
+connectivity, direct-source fallback, stale or out-of-date signatures after
+fallback, changed bytes, and detections. These tests do not qualify real Windows
+behavior.
 
 Signing, provenance, and startup smoke alone do not establish Microsoft Defender
 acceptance. For a reported antivirus block, collect the exact artifact hash,

@@ -23,17 +23,20 @@ function Save-DefenderState($name) {
         ConvertTo-Json -Depth 6 | Set-Content "$evidence/$name-preferences.json"
     ConvertTo-Json -InputObject @(Get-MpThreatDetection) -Depth 8 | Set-Content "$evidence/$name-detections.json"
 }
-function Update-DefenderSignatures([string]$source = 'default') {
+function Update-DefenderSignatures([string]$source = 'default', [switch]$AllowFallback) {
     # A platform update can interrupt the service RPC. Require a successful
     # update call within this bound; recorded state alone cannot qualify it.
     for ($attempt = 1; $attempt -le 3; $attempt++) {
         try {
-            if ($source -eq 'MMPC') { Update-MpSignature -UpdateSource MMPC -ErrorAction Stop }
-            else { Update-MpSignature -ErrorAction Stop }
-            return
+            if ($source -eq 'MMPC') { Update-MpSignature -UpdateSource MMPC -ErrorAction Stop | Out-Null }
+            else { Update-MpSignature -ErrorAction Stop | Out-Null }
+            return $true
         } catch {
             $_ | Out-String | Set-Content "$evidence/update-$source-attempt-$attempt-error.txt"
-            if ($attempt -eq 3) { throw }
+            if ($attempt -eq 3) {
+                if ($AllowFallback) { return $false }
+                throw
+            }
             Write-Warning "Defender $source signature update failed on attempt $attempt; retrying in 5 seconds."
             Start-Sleep -Seconds 5
         }
@@ -55,14 +58,14 @@ try {
     }
     Set-MpPreference -DisableRealtimeMonitoring $false -DisableArchiveScanning $false -DisableIOAVProtection $false -DisableBehaviorMonitoring $false -DisableScriptScanning $false
     Set-MpPreference -MAPSReporting Advanced -SubmitSamplesConsent SendSafeSamples -DisableBlockAtFirstSeen $false
-    Update-DefenderSignatures
+    $defaultUpdated = Update-DefenderSignatures -AllowFallback
     $signatureStatus = Get-MpComputerStatus
-    if (-not $signatureStatus.AntivirusSignatureLastUpdated -or $signatureStatus.AntivirusSignatureLastUpdated -lt (Get-Date).AddDays(-1)) {
-        # A configured source can successfully return older staged definitions.
-        # Retry Microsoft's direct source; the freshness gate below still applies.
+    if (-not $defaultUpdated -or -not $signatureStatus.AntivirusSignatureLastUpdated -or $signatureStatus.AntivirusSignatureLastUpdated -lt (Get-Date).AddDays(-1)) {
+        # Exhausted default updates and older staged definitions both need a
+        # successful direct update. Reported freshness alone cannot qualify it.
         Save-DefenderState 'default-update'
-        Write-Output 'Configured update source returned stale definitions; retrying MMPC.'
-        Update-DefenderSignatures 'MMPC'
+        Write-Output 'Configured update source failed or returned stale definitions; retrying MMPC.'
+        Update-DefenderSignatures 'MMPC' | Out-Null
     }
     for ($attempt = 0; $attempt -lt 12; $attempt++) {
         if ((Get-MpComputerStatus).RealTimeProtectionEnabled) { break }
