@@ -1568,6 +1568,39 @@ export function filterSidebarThreadsBySpace<
   });
 }
 
+/** Newest-first order that keeps rows with no usable timestamp last. */
+function compareTimestampsDescending(left: number | null, right: number | null): number {
+  if (left === right) return 0;
+  if (left === null) return 1;
+  if (right === null) return -1;
+  return right - left;
+}
+
+/**
+ * The rows the sidebar's Archived section lists: archived threads, newest archive
+ * first. Callers pass a list already narrowed to the visible, reachable threads
+ * (top-level only — a subagent archives with its parent and would be stranded),
+ * matching the inputs the Snoozed section receives.
+ */
+export function selectSidebarArchivedThreads<
+  T extends Pick<SidebarThreadSummary, "id" | "archivedAt" | "updatedAt" | "createdAt">,
+>(threads: readonly T[]): T[] {
+  return threads
+    .filter((thread) => (thread.archivedAt ?? null) !== null)
+    .toSorted((left, right) => {
+      const byArchivedAt = compareTimestampsDescending(
+        toSortableTimestamp(left.archivedAt ?? undefined),
+        toSortableTimestamp(right.archivedAt ?? undefined),
+      );
+      if (byArchivedAt !== 0) return byArchivedAt;
+      const byRecency = compareTimestampsDescending(
+        toSortableTimestamp(left.updatedAt ?? left.createdAt),
+        toSortableTimestamp(right.updatedAt ?? right.createdAt),
+      );
+      return byRecency !== 0 ? byRecency : left.id.localeCompare(right.id);
+    });
+}
+
 // A thread's projectId says where it runs; a group's member set says who it
 // belongs to. Threads the coordinator dispatches into a linked repo carry the
 // repo's projectId, so the projectId-keyed buckets alone would never surface
