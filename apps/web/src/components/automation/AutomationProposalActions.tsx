@@ -1,7 +1,7 @@
 import { AutomationId, type AutomationProposalState } from "@synara/contracts";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 
-import { Button } from "~/components/ui/button";
+import { ProposalActions } from "~/components/ui/proposal-actions";
 import { toastManager } from "~/components/ui/toast";
 import { ensureNativeApi } from "~/nativeApi";
 
@@ -35,24 +35,9 @@ export function AutomationProposalActions({
   });
 
   return (
-    <div className="flex shrink-0 items-center gap-1.5">
-      <Button
-        type="button"
-        variant="outline"
-        size="sm"
-        disabled={resolutionMutation.isPending}
-        onClick={() => resolutionMutation.mutate("dismissed")}
-      >
-        Dismiss
-      </Button>
-      <Button
-        type="button"
-        size="sm"
-        disabled={resolutionMutation.isPending}
-        onClick={() => resolutionMutation.mutate("accepted")}
-      >
-        Accept
-      </Button>
-    </div>
+    <ProposalActions
+      pending={resolutionMutation.isPending}
+      onResolve={(resolution) => resolutionMutation.mutate(resolution)}
+    />
   );
 }

@@ -260,6 +260,7 @@ export function makeServerRuntimeServicesLayer(
     Layer.provideMerge(agentGatewayCredentialsLayer),
   );
   const agentGatewayLayer = AgentGatewayLive.pipe(
+    Layer.provideMerge(mcpConnectorsLayer),
     Layer.provideMerge(ServerEnvironmentLive),
     Layer.provideMerge(HostConnectionRegistryLive),
     Layer.provideMerge(

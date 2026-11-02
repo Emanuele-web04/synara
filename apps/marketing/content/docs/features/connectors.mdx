@@ -1,25 +1,33 @@
 ---
 title: Connectors
-description: Connect remote MCP tools to supported agent sessions, with sign-in and provider-specific limits.
+description: Connect remote and local MCP tools from Settings or chat, with approval and provider-specific limits.
 ---
 
-Connectors are available in **Synara Beta 1.0.6-beta.1** and Stable 1.0.9 and later. Open **Settings → Connectors**, select a catalog entry or a custom public HTTPS MCP URL, and complete any required sign-in in your browser. This lets an agent use another service's tools. [External MCP](/docs/workflows/external-mcp) works in the other direction, allowing outside agents to call Synara.
+Connectors are available in **Synara Stable and Beta**. Open **Settings → Connectors**, select a catalog entry, enter a public HTTPS MCP URL, or choose **Add local server** for a loopback HTTP URL or a stdio command. Complete any required sign-in in your browser. This lets an agent use another service's tools. [External MCP](/docs/workflows/external-mcp) works in the other direction, allowing outside agents to call Synara.
+
+You can also ask in a chat: “add the Paper MCP at http://127.0.0.1:29979/mcp” or “add stdio MCP: ~/.paper/bin/paper mcp”. Synara shows a card before connecting or running anything. Choose **Review connection** to see the exact command, arguments, working directory and environment keys, then **Approve connector**; values stay hidden. Removing a connector also requires confirmation.
+
+Cards show the app's icon when recognized, its name and connection status. A **Custom** badge identifies connectors outside the built-in catalog. Open **Connection details** to inspect their configuration.
+
+“Import my Claude Code MCP servers” discovers user and current-project entries, plus Codex, workspace `.mcp.json` and Claude Desktop configurations. Accept only the cards you want. Imported commands are never executed during discovery. Custom HTTP-header authentication is not imported.
 
 ## Start a connected session
 
 After connecting, start a new provider session to receive the connector's tools. Existing sessions keep the set they started with. Mention a connected service in the composer to point the agent toward it; the provider still decides how to use its available tools. Third-party tool calls retain the provider's normal approval flow.
 
-| Provider                      | Availability                                          |
-| ----------------------------- | ----------------------------------------------------- |
-| Claude, Codex, OpenCode       | Remote HTTP MCP connectors are supported.             |
-| Cursor, Grok, Droid, Oh My Pi | Requires the agent to advertise ACP HTTP MCP support. |
-| Pi, Devin, Antigravity        | Connectors are unavailable.                           |
+| Provider                      | Availability                                                |
+| ----------------------------- | ----------------------------------------------------------- |
+| Claude, Codex, OpenCode       | Remote HTTP, local HTTP and stdio connectors are supported. |
+| Cursor, Grok, Droid, Oh My Pi | Uses ACP HTTP support or Synara's stdio proxy.              |
+| Pi, Devin, Antigravity        | Connectors are unavailable.                                 |
 
 Codex keeps user-configured servers: a connector with a conflicting server name is omitted. If its effective configuration cannot be checked, connectors are omitted for that session. OpenCode skips a connector that fails to start. A catalog entry does not guarantee that the service accepts your account or client registration.
 
 ## Sign-in and recovery
 
-Sign-in requires Synara to listen only on loopback, because the callback returns to this machine. Custom endpoints must use public HTTPS and cannot embed credentials. Services that require a pre-registered OAuth application may reject automatic registration.
+Sign-in requires Synara to listen only on loopback, because the callback returns to this machine. Custom endpoints use public HTTPS, or HTTP on `localhost`, `127.0.0.0/8` or `::1`, and cannot embed URL credentials. Services that require a pre-registered OAuth application may reject automatic registration.
+
+If a local app is closed, its connector remains saved as **Not running**. Unavailable connectors are omitted from new sessions. Start the app and allow the background status check to reconnect it, then start a new chat.
 
 Slack requires your own OAuth application's client ID and secret. Copy the redirect URL shown in the dialog into that application. The desktop port changes after restart, so update the registered redirect URL before reconnecting.
 
@@ -27,10 +35,10 @@ When a service rejects refreshed credentials, the connector shows **needs sign-i
 
 ## Data and channel boundaries
 
-Connector credentials stay in the server's local secret store and are not passed to provider processes or the web interface. Tool requests and their arguments are sent to the selected remote service. Review the service and the requested action before approving it.
+Connector credentials and local environment values stay in the server's local secret store. They are not returned in chat management-tool results. OAuth credentials stay in the gateway; configured environment values reach only the local MCP subprocess. Tool requests and their arguments are sent to the selected service. Review the service and the requested action before approving it.
 
 Stable and Beta use the same connector functionality, but keep their own credentials and data homes. Sign in separately in each app; Beta credentials are not copied into Stable. See [Synara Beta](/docs/features/synara-beta).
 
-Source evidence: feature head `4b2441d1040080324f458602e30fbb7f946cb1f5`; `docs/mcp-connectors.md`, `packages/shared/src/mcpConnectors.ts`, `apps/server/src/mcpConnectors/runtime.ts`, `apps/server/src/mcpConnectors/proxy.ts`, `apps/server/src/agentGateway/mcpInjection.ts` and `apps/web/src/components/settings/McpConnectorsSettingsPanel.tsx`.
+Source evidence: `docs/mcp-connectors.md`, `packages/contracts/src/mcpConnectors.ts`, `apps/server/src/mcpConnectors/runtime.ts`, `apps/server/src/agentGateway/connectorTools.ts`, `apps/server/src/agentGateway/mcpInjection.ts` and `apps/web/src/components/settings/McpConnectorsSettingsPanel.tsx`.
 
 Source evidence for 1.0.9: Synara release `ebd0d22b39ce3a0f7c6051dddc6090e9b85dc7c3`; `docs/releases/1.0.9-source-audit.md`, `docs/providers.md`, `docs/core-concepts.md`, `docs/editor/intelligence.md`, `docs/mcp-connectors.md`, `apps/server/src/persistence/MigrationBackup.ts` and `docs/release.md`.

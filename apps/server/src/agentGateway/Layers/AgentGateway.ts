@@ -108,6 +108,8 @@ import { cloneDelegatedAttachments } from "../delegatedAttachments";
 import { LOCAL_LOOPBACK_ATTACHMENT_PRINCIPAL } from "../../managedAttachmentPrincipal";
 
 import { makeAgentGatewayAutomationTools } from "../automationTools.ts";
+import { makeConnectorTools } from "../connectorTools.ts";
+import { McpConnectors } from "../../mcpConnectors/Services/McpConnectors.ts";
 import { makeAgentGatewayBrowserTools } from "../browserTools.ts";
 import { makeAgentGatewayComputerBrowserTools } from "../computerBrowserTools.ts";
 import { computerApprovalDisplayArgs } from "../computerApprovalDisplay.ts";
@@ -191,6 +193,7 @@ export const makeAgentGateway = Effect.gen(function* () {
   const snapshotQuery = yield* ProjectionSnapshotQuery;
   const orchestrationEngine = yield* OrchestrationEngineService;
   const automationService = yield* AutomationService;
+  const mcpConnectors = Option.getOrUndefined(yield* Effect.serviceOption(McpConnectors));
   const projectAgentService = yield* ProjectAgentService;
   const todoService = yield* TodoService;
   const git = yield* GitCore;
@@ -1173,6 +1176,30 @@ export const makeAgentGateway = Effect.gen(function* () {
   const browserTools = makeAgentGatewayBrowserTools(browserAutomationHost, {
     resolveWorkspaceRoot,
   });
+  const connectorTools = mcpConnectors
+    ? makeConnectorTools({
+        connectors: mcpConnectors,
+        resolveWorkspaceRoot,
+        surface: (proposal) =>
+          orchestrationEngine
+            .dispatch({
+              type: "thread.activity.append",
+              commandId: CommandId.makeUnsafe(`agent:${proposal.proposalId}:connector-proposal`),
+              threadId: ThreadId.makeUnsafe(proposal.threadId),
+              activity: {
+                id: EventId.makeUnsafe(`connector-proposal:${proposal.proposalId}`),
+                kind: "mcp.connector.proposed",
+                tone: "info",
+                summary: `${proposal.action === "add" ? "Add" : "Remove"} connector: ${proposal.connector.name}`,
+                createdAt: isoNow(),
+                turnId: null,
+                payload: { proposalId: proposal.proposalId },
+              },
+              createdAt: isoNow(),
+            })
+            .pipe(Effect.asVoid),
+      })
+    : [];
   const projectAgentTools = makeProjectAgentTools({
     projectAgent: projectAgentService,
   });
@@ -1675,6 +1702,7 @@ export const makeAgentGateway = Effect.gen(function* () {
     setThreadArchived,
     setThreadGoal,
     ...automationTools,
+    ...connectorTools,
     ...browserTools,
     ...kanbanTools,
     // Same switch as the todo.* RPCs: a build without Tasks offers agents no to-do tools.

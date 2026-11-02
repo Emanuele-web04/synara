@@ -250,7 +250,11 @@ import {
   ExternalMcpRefreshPairingInput,
   ExternalMcpRevokeIntegrationInput,
 } from "./externalMcp";
-import { McpConnectorConnectInput, McpConnectorDisconnectInput } from "./mcpConnectors";
+import {
+  McpConnectorConnectInput,
+  McpConnectorDisconnectInput,
+  McpConnectorResolveProposalInput,
+} from "./mcpConnectors";
 import {
   GitHubProjectProvisionInput,
   GitHubProjectProvisionProgressEvent,
@@ -379,6 +383,8 @@ export const WS_METHODS = {
   serverRevokeExternalMcpIntegration: "server.revokeExternalMcpIntegration",
   serverRefreshExternalMcpPairing: "server.refreshExternalMcpPairing",
   serverListMcpConnectors: "server.listMcpConnectors",
+  serverListMcpConnectorProposals: "server.listMcpConnectorProposals",
+  serverResolveMcpConnectorProposal: "server.resolveMcpConnectorProposal",
   serverConnectMcpConnector: "server.connectMcpConnector",
   serverDisconnectMcpConnector: "server.disconnectMcpConnector",
   serverGetMcpConnectorSetup: "server.getMcpConnectorSetup",
@@ -712,7 +718,13 @@ const WebSocketRequestBody = Schema.Union([
   tagRequestBody(WS_METHODS.serverRevokeExternalMcpIntegration, ExternalMcpRevokeIntegrationInput),
   tagRequestBody(WS_METHODS.serverRefreshExternalMcpPairing, ExternalMcpRefreshPairingInput),
   tagRequestBody(WS_METHODS.serverListMcpConnectors, Schema.Struct({})),
-  tagRequestBody(WS_METHODS.serverConnectMcpConnector, McpConnectorConnectInput),
+  tagRequestBody(WS_METHODS.serverListMcpConnectorProposals, Schema.Struct({})),
+  tagRequestBody(WS_METHODS.serverResolveMcpConnectorProposal, McpConnectorResolveProposalInput),
+  Schema.Union([
+    tagRequestBody(WS_METHODS.serverConnectMcpConnector, McpConnectorConnectInput.members[0]),
+    tagRequestBody(WS_METHODS.serverConnectMcpConnector, McpConnectorConnectInput.members[1]),
+    tagRequestBody(WS_METHODS.serverConnectMcpConnector, McpConnectorConnectInput.members[2]),
+  ]),
   tagRequestBody(WS_METHODS.serverDisconnectMcpConnector, McpConnectorDisconnectInput),
   tagRequestBody(WS_METHODS.serverGetMcpConnectorSetup, Schema.Struct({})),
   tagRequestBody(WS_METHODS.serverListWorktrees, Schema.Struct({})),

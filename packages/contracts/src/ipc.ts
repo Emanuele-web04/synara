@@ -68,6 +68,9 @@ import type {
   McpConnectorDisconnectInput,
   McpConnectorDisconnectResult,
   McpConnectorSetup,
+  McpConnectorProposal,
+  McpConnectorResolveProposalInput,
+  McpConnectorResolveProposalResult,
 } from "./mcpConnectors";
 import type {
   AutomationCancelRunInput,
@@ -1420,6 +1423,10 @@ export interface NativeApi {
       input: ExternalMcpRefreshPairingInput,
     ) => Promise<ExternalMcpCreateIntegrationResult>;
     listMcpConnectors: () => Promise<ReadonlyArray<McpConnector>>;
+    listMcpConnectorProposals: () => Promise<ReadonlyArray<McpConnectorProposal>>;
+    resolveMcpConnectorProposal: (
+      input: McpConnectorResolveProposalInput,
+    ) => Promise<McpConnectorResolveProposalResult>;
     connectMcpConnector: (input: McpConnectorConnectInput) => Promise<McpConnectorConnectResult>;
     disconnectMcpConnector: (
       input: McpConnectorDisconnectInput,

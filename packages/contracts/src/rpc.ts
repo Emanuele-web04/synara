@@ -139,6 +139,9 @@ import {
   McpConnectorDisconnectInput,
   McpConnectorDisconnectResult,
   McpConnectorSetup,
+  McpConnectorProposal,
+  McpConnectorResolveProposalInput,
+  McpConnectorResolveProposalResult,
 } from "./mcpConnectors";
 import {
   DEVICE_WS_METHODS,
@@ -1519,6 +1522,23 @@ export const WsServerListMcpConnectorsRpc = Rpc.make(WS_METHODS.serverListMcpCon
   error: WsRpcError,
 });
 
+export const WsServerListMcpConnectorProposalsRpc = Rpc.make(
+  WS_METHODS.serverListMcpConnectorProposals,
+  {
+    payload: Schema.Struct({}),
+    success: Schema.Array(McpConnectorProposal),
+    error: WsRpcError,
+  },
+);
+export const WsServerResolveMcpConnectorProposalRpc = Rpc.make(
+  WS_METHODS.serverResolveMcpConnectorProposal,
+  {
+    payload: McpConnectorResolveProposalInput,
+    success: McpConnectorResolveProposalResult,
+    error: WsRpcError,
+  },
+);
+
 export const WsServerConnectMcpConnectorRpc = Rpc.make(WS_METHODS.serverConnectMcpConnector, {
   payload: McpConnectorConnectInput,
   success: McpConnectorConnectResult,
@@ -2391,6 +2411,8 @@ export type WsFeatureRpc =
   | typeof WsServerRevokeExternalMcpIntegrationRpc
   | typeof WsServerRefreshExternalMcpPairingRpc
   | typeof WsServerListMcpConnectorsRpc
+  | typeof WsServerListMcpConnectorProposalsRpc
+  | typeof WsServerResolveMcpConnectorProposalRpc
   | typeof WsServerConnectMcpConnectorRpc
   | typeof WsServerDisconnectMcpConnectorRpc
   | typeof WsServerGetMcpConnectorSetupRpc
@@ -2587,6 +2609,8 @@ export const WsFeatureRpcGroup: RpcGroup.RpcGroup<WsFeatureRpc> = RpcGroup.make(
   WsServerRevokeExternalMcpIntegrationRpc,
   WsServerRefreshExternalMcpPairingRpc,
   WsServerListMcpConnectorsRpc,
+  WsServerListMcpConnectorProposalsRpc,
+  WsServerResolveMcpConnectorProposalRpc,
   WsServerConnectMcpConnectorRpc,
   WsServerDisconnectMcpConnectorRpc,
   WsServerGetMcpConnectorSetupRpc,

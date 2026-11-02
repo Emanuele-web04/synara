@@ -73,6 +73,7 @@ function isTargetConnected(
   const url = normalized.ok ? normalized.url : target.url;
   return connectors?.find(
     (connector) =>
+      connector.transport !== "stdio" &&
       connector.url === url &&
       connector.status === "connected" &&
       Date.parse(connector.updatedAt) >= sinceMs,

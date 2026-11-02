@@ -21,7 +21,7 @@ describe("connectorsForPairedClient", () => {
     const [view] = connectorsForPairedClient([
       connector("https://user:secret@mcp.example.com/sk-live-123/mcp?token=abc"),
     ]);
-    expect(view?.url).toBe("https://mcp.example.com");
+    expect(view && view.transport !== "stdio" ? view.url : null).toBe("https://mcp.example.com");
     expect(JSON.stringify(view)).not.toMatch(/secret|sk-live|token/);
     expect(view?.serverName).toBe("vercel_connector");
   });

@@ -2087,6 +2087,7 @@ function workLogEntryContentEqual(a: WorkLogEntry, b: WorkLogEntry): boolean {
     workLogSubagentsEqual(a.subagents, b.subagents) &&
     workLogSubagentRunsEqual(a.subagentRun, b.subagentRun) &&
     workLogAutomationsEqual(a.automation, b.automation) &&
+    a.connectorProposalId === b.connectorProposalId &&
     workLogSynaraThreadCreationsEqual(a.synaraThreadCreation, b.synaraThreadCreation) &&
     workLogLiveActivitiesEqual(a.liveActivity, b.liveActivity) &&
     workLogToolDetailsEqual(a.toolDetails, b.toolDetails) &&
