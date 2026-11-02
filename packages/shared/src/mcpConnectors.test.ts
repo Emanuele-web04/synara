@@ -57,11 +57,31 @@ describe("normalizeMcpConnectorUrl", () => {
   it.each([
     ["", "Enter the server URL."],
     ["mcp.example.com", "Enter a full URL, like https://mcp.example.com/mcp."],
-    ["http://mcp.example.com/mcp", "The URL must start with https://."],
+    [
+      "http://mcp.example.com/mcp",
+      "Use https:// for public servers. HTTP is allowed only for loopback hosts (localhost, 127.0.0.0/8, or ::1).",
+    ],
     ["https://user:pass@mcp.example.com/mcp", "Remove the user name or password from the URL."],
     ["https://localhost/mcp", "Use the server's public address."],
   ])("rejects %j", (raw, reason) => {
     expect(normalizeMcpConnectorUrl(raw)).toEqual({ ok: false, reason });
+  });
+
+  it.each([
+    "http://localhost:29979/mcp",
+    "http://127.0.0.1:29979/mcp",
+    "http://127.42.0.7/mcp",
+    "http://[::1]:29979/mcp",
+  ])("accepts loopback HTTP %s", (url) => {
+    expect(normalizeMcpConnectorUrl(url)).toEqual({ ok: true, url });
+  });
+  it.each([
+    "http://localhost.example.com/mcp",
+    "http://192.168.1.1/mcp",
+    "http://[::ffff:127.0.0.1]/mcp",
+    "file:///mcp",
+  ])("rejects non-loopback HTTP or non-HTTP transport %s", (url) => {
+    expect(normalizeMcpConnectorUrl(url).ok).toBe(false);
   });
 });
 

@@ -11,6 +11,8 @@ export function connectorsForPairedClient(
   connectors: readonly McpConnector[],
 ): readonly McpConnector[] {
   return connectors.flatMap((connector) => {
+    // Process paths, arguments and environment keys stay on the owning computer.
+    if (connector.transport === "stdio") return [];
     try {
       const origin = new URL(connector.url).origin;
       return origin === "null" ? [] : [{ ...connector, url: origin }];

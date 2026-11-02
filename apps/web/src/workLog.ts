@@ -170,6 +170,7 @@ export interface WorkLogEntry {
   // it as the subagent card (see SubagentRunCard.logic.ts).
   subagentRun?: WorkLogSubagentRun;
   automation?: WorkLogAutomation;
+  connectorProposalId?: string;
   synaraThreadCreation?: WorkLogSynaraThreadCreation;
   // Deterministic coordinator-monitor rows (worker settled / stuck /
   // batch roll-up) render as compact centered pills in the coordinator
@@ -1279,7 +1280,7 @@ function shouldKeepActivityForWorkLog(
 
   // Created-automation milestones are thread-scoped and carry no provider turn id;
   // keep them so the transcript card survives once the thread has turn-stamped messages.
-  if (activity.kind === "automation.created") {
+  if (activity.kind === "automation.created" || activity.kind === "mcp.connector.proposed") {
     return true;
   }
 
@@ -2006,6 +2007,10 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
     if (automation) {
       entry.automation = automation;
     }
+  }
+  if (activity.kind === "mcp.connector.proposed") {
+    const proposalId = asTrimmedString(payload?.proposalId);
+    if (proposalId) entry.connectorProposalId = proposalId;
   }
   if (activity.kind === INLINE_VISUAL_ACTIVITY_KIND && INLINE_VISUALS_ON) {
     const inlineVisual = Option.getOrUndefined(decodeInlineVisualPayload(activity.payload));
