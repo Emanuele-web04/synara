@@ -284,6 +284,48 @@ describe("remote authorization lease", () => {
       await poll.done;
     }
   });
+  it("expires a paid lease during an outage even when the wall clock moves backwards", async () => {
+    // Polls retain real promise timers; only lease expiry and monotonic time are controlled.
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "performance"] });
+    let clock = 10_000;
+    let billingAvailable = true;
+    const abort = new AbortController();
+    const unavailable = vi.fn(async () => {});
+    const refresh = vi.fn(async () => {
+      if (!billingAvailable) throw new Error("Account API temporarily unavailable");
+      return { ...snapshot, remoteBillingEnforced: true };
+    });
+    const poll = startRemoteAuthorization({
+      refresh,
+      apply: async () => {},
+      unavailable,
+      signal: abort.signal,
+      now: () => clock,
+      pollIntervalMs: 1,
+    });
+    try {
+      await vi.waitFor(() => expect(poll.paidAvailable()).toBe(true));
+      billingAvailable = false;
+      const beforeOutage = refresh.mock.calls.length;
+      await vi.waitFor(() => expect(refresh.mock.calls.length).toBeGreaterThan(beforeOutage + 1));
+      clock -= 60 * 60_000;
+      await vi.advanceTimersByTimeAsync(REMOTE_AUTHORIZATION_LEASE_MS - 1_000);
+      expect(poll.paidAvailable()).toBe(true);
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(poll.available()).toBe(false);
+      expect(poll.paidAvailable()).toBe(false);
+      // Existing sockets close on the next one-second expiry sweep.
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(unavailable).toHaveBeenCalledExactlyOnceWith(false);
+      expect(unavailable).not.toHaveBeenCalledWith(true);
+      billingAvailable = true;
+      await vi.waitFor(() => expect(poll.paidAvailable()).toBe(true));
+      expect(unavailable).not.toHaveBeenCalledWith(true);
+    } finally {
+      abort.abort();
+      await poll.done;
+    }
+  });
   it.each([false, undefined] as const)(
     "does not carry a %s billing-policy lease through an unverified paid cutover",
     async (previousPolicy) => {
