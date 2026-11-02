@@ -124,9 +124,14 @@ function verifySigning(
 export async function verifyReleaseArtifactCheckpoint(
   input: ReleaseArtifactCheckpointInput,
 ): Promise<ReleaseArtifactProvenanceManifest> {
-  const validTarget = { mac: "dmg", win: "nsis", linux: "AppImage" }[input.platform];
+  // This release alternative declares one combined AppImage/Debian build.
+  const linuxTargets = input.platform === "linux" ? input.target.split(",") : [];
+  const validTarget =
+    input.platform === "linux"
+      ? input.target === "AppImage" || input.target === "AppImage,deb"
+      : input.target === { mac: "dmg", win: "nsis" }[input.platform];
   if (
-    input.target !== validTarget ||
+    !validTarget ||
     !["arm64", "x64"].includes(input.arch) ||
     (input.platform !== "mac" && input.arch !== "x64") ||
     !["production", "beta"].includes(input.flavor) ||
@@ -155,21 +160,29 @@ export async function verifyReleaseArtifactCheckpoint(
   equal("source tag", source.tag, input.sourceTag);
   equal("lockfile", source.lockfileSha256, input.lockfileSha256.toLowerCase());
 
-  // AppImage names use the native x86_64 alias; provenance keeps the matrix arch x64.
-  const fileArch = input.platform === "linux" ? "x86_64" : input.arch;
-  const stem = `${input.flavor === "beta" ? "Synara-Beta" : "Synara"}-${input.version}-${fileArch}`;
+  const prefix = `${input.flavor === "beta" ? "Synara-Beta" : "Synara"}-${input.version}`;
+  const stem = `${prefix}-${input.arch}`;
+  // Native package naming uses amd64 for Debian and x86_64 for AppImage/RPM.
   const payloads =
     input.platform === "mac"
       ? [`${stem}.dmg`, `${stem}.zip`]
-      : [`${stem}.${input.platform === "win" ? "exe" : "AppImage"}`];
+      : input.platform === "win"
+        ? [`${stem}.exe`]
+        : linuxTargets.map(
+            (format) => `${prefix}-${format === "deb" ? "amd64" : "x86_64"}.${format}`,
+          );
   const updaterName =
     input.platform === "mac"
       ? `latest-mac${input.arch === "x64" ? "-x64" : ""}.yml`
       : `latest${input.platform === "linux" ? "-linux" : ""}.yml`;
+  const updaterNames =
+    input.platform === "linux" && !linuxTargets.includes("AppImage") ? [] : [updaterName];
+  const updaterPayloads =
+    input.platform === "linux" ? payloads.filter((name) => name.endsWith(".AppImage")) : payloads;
   const allowedNames = new Set([
     ...payloads,
-    ...payloads.map((name) => `${name}.blockmap`),
-    updaterName,
+    ...updaterPayloads.map((name) => `${name}.blockmap`),
+    ...updaterNames,
   ]);
   if (!Array.isArray(manifest.artifacts) || manifest.artifacts.length === 0) {
     throw new Error("Checkpoint artifact inventory is missing.");
@@ -187,7 +200,7 @@ export async function verifyReleaseArtifactCheckpoint(
     }
     if (
       !Number.isSafeInteger(artifact.size) ||
-      (artifact.size as number) < 0 ||
+      (artifact.size as number) <= 0 ||
       typeof artifact.sha256 !== "string" ||
       !/^[0-9a-f]{64}$/.test(artifact.sha256)
     ) {
@@ -198,7 +211,7 @@ export async function verifyReleaseArtifactCheckpoint(
     equal(`${fileName} size`, regularFile(path), artifact.size);
     equal(`${fileName} checksum`, await hashFile(path), artifact.sha256);
   }
-  for (const required of [...payloads, updaterName]) {
+  for (const required of [...payloads, ...updaterNames]) {
     if (!expectedFiles.has(required))
       throw new Error(`Checkpoint is missing required asset ${required}.`);
   }
