@@ -1,5 +1,33 @@
 # Changelog
 
+## 1.1.1-beta.1 — 2026-11-02
+
+**Spanish and Simplified Chinese, reliable task recovery and opt-in continuation after usage limits.**
+
+This Beta follows Stable 1.1.0 from the same source, with its separate version commit. Its same-channel baseline is `v1.0.9-beta.1`; the complete source range is recorded in [the source audit](docs/releases/1.1.0-source-audit.md). Native editing and MCP Connectors were already available in Beta and are not new features here.
+
+### Added
+
+- English, Spanish, Simplified Chinese and System interface preferences, with native menus and app-authored permission explanations. Stable continues to exclude Chinese. Existing editor labels can require the offered guarded reload; user content and provider output remain unchanged.
+- Default-off **Resume after usage limits** for supported Codex and Claude terminal refusals with verified identity and future reset evidence. The owning computer must be running. Stop, manual sends and account/model changes cancel waits; ambiguous limits stay manual.
+- Explicit offline `synara-compact-database` maintenance with integrity and row-count verification before replacement. All clients must be stopped and sufficient scratch space available; use the Beta database's explicit path.
+
+### Changed
+
+- Incorporates Stable 1.1.0 recovery, queue/subagent reliability, compact work rows, model/effort labels, per-thread panel width and targeted retained-state/frame-copy reductions.
+- Since the previous Beta, project glyphs can use safe local logos, the first goal in an idle saved chat starts visibly, and OpenCode sign-in/discovery uses private servers where supported.
+- Migration backups are compressed while older snapshots remain readable. Mac packages and updater feeds enforce macOS 13. Beta retains its own identity, home, diagnostics policy and update feed and never becomes Stable Latest.
+
+### Fixed
+
+- Claude Stop and steering preserve runtime/turn ownership, SDK error results fail correctly, and guarded crash continuations avoid replaying in-flight operations.
+- Photo preparation preserves drafts; private inline images and desktop uploads recover safely. Rejected native-review attachments preserve already accepted work.
+- Pi current OpenAI login and SDK compatibility, Cursor safe-storage usage, credential-lock collisions, background-work grouping, resumed timers and the new-chat action receive the same fixes as Stable 1.1.0.
+
+### Verification
+
+Local candidate checks and exact-tag CI are recorded separately. Publication requires the full quality/server suites, portable build, four native packages, macOS signing/notarization, provenance, active Windows Defender qualification and packaged startup. Beta publication follows verified Stable artifacts; pending gates are not passed gates. Manual installation/upgrades, live providers, macOS 13 runtime and browser-download reputation remain unverified.
+
 ## 1.1.0 — 2026-11-02
 
 **More reliable recovery, opt-in continuation after usage limits, Spanish interface and safer attachments.**
