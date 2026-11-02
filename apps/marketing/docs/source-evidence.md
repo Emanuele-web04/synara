@@ -429,3 +429,7 @@ Publication verified: [Stable v1.0.8](https://github.com/Emanuele-web04/synara/r
 ## Synara Stable 1.0.9
 
 Authority: release candidate `ebd0d22b39ce3a0f7c6051dddc6090e9b85dc7c3` (tag `v1.0.9`), complete range `v1.0.8..ebd0d22b39ce3a0f7c6051dddc6090e9b85dc7c3` and `docs/releases/1.0.9-source-audit.md`. Audited Stable editor/connector promotion, conditional Stop and durable progress, visible goals, local project glyphs and worker actions, isolated OpenCode login/discovery, compressed SQLite recovery and macOS 13 updater gating. Existing guides and navigation are reused; no disconnected guide is added. Packaged startup is distinct from manual upgrades, macOS 13 runtime and live provider/connector sign-in.
+
+## Stable 1.1.0 and Beta 1.1.1-beta.1
+
+Source: `d80787e3e4d8829a35a64b111e6fcbe5f51cf037`; complete Stable range after `v1.0.9` and Beta range after `v1.0.9-beta.1`. Existing customization, runtime recovery, desktop maintenance and Pi guides cover languages, verified quota recovery, crash/queue/subagent ownership, attachment handling and offline compaction. Chinese remains Beta-only; native editing and Connectors were already in Beta. Source evidence: `docs/releases/1.1.0-source-audit.md` and the owning guides cited on each page. Exact-tag CI, native qualification, publication and final download snapshots remain pending until separately verified.
