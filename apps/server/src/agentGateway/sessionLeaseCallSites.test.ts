@@ -31,6 +31,7 @@ interface LeaseSiteExpectation {
 const LEASE_SITES: readonly LeaseSiteExpectation[] = [
   { file: "AntigravityAdapter.ts", capabilityArguments: ["context.gatewayCapabilityInput"] },
   { file: "ClaudeAdapter.ts", capabilityArguments: [SESSION_START_INPUT] },
+  { file: "ClineAdapter.ts", capabilityArguments: [SESSION_START_INPUT] },
   {
     file: "CodexAdapter.ts",
     capabilityArguments: ["capabilityInput ?? AGENT_GATEWAY_NO_CAPABILITIES"],

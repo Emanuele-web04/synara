@@ -108,6 +108,7 @@ const PROVIDER_DISCOVERY_OPTION_KEYS = {
   claudeAgent: ["binaryPath", "homePath", "environment"],
   cursor: ["binaryPath", "apiEndpoint", "environment"],
   devin: ["binaryPath", "environment"],
+  cline: ["binaryPath", "environment"],
   antigravity: ["binaryPath", "environment"],
   grok: ["binaryPath", "environment"],
   droid: ["binaryPath", "environment"],

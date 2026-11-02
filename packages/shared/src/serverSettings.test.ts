@@ -51,6 +51,7 @@ describe("providerStartOptionsFromServerSettings", () => {
           ...DEFAULT_SERVER_SETTINGS.providers.devin,
           binaryPath: "",
         },
+        cline: { ...DEFAULT_SERVER_SETTINGS.providers.cline, binaryPath: "" },
         omp: {
           ...DEFAULT_SERVER_SETTINGS.providers.omp,
           binaryPath: "",
@@ -78,6 +79,7 @@ describe("providerStartOptionsFromServerSettings", () => {
     expect(providerOptions.opencode).toEqual({ experimentalWebSockets: false });
     expect(providerOptions.pi).toEqual({});
     expect(providerOptions.devin).toEqual({});
+    expect(providerOptions.cline).toEqual({});
     expect(providerOptions.omp).toEqual({});
   });
 

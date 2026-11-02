@@ -33,6 +33,31 @@ function installCli(binDir: string, name: string): void {
 }
 
 describe("deriveManagedTerminalProfiles", () => {
+  it("derives a Cline CLI profile with the selected non-sensitive environment", async () => {
+    const { binDir, homeDir, stateDir } = fixture();
+    installCli(binDir, "cline");
+    const profiles = await deriveManagedTerminalProfiles({
+      settings: {
+        ...DEFAULT_SERVER_SETTINGS,
+        providerInstances: {
+          cline_work: {
+            driver: "cline",
+            environment: [
+              { name: "CLINE_API_KEY", value: "secret", sensitive: true },
+              { name: "CLINE_CUSTOM_SETTING", value: "selected" },
+            ],
+          },
+        },
+      },
+      baseEnv: { PATH: binDir, HOME: homeDir },
+      homeDir,
+      stateDir,
+    });
+    const profile = profiles.find((candidate) => candidate.commandName === "cline-work");
+    expect(profile?.environment.CLINE_CUSTOM_SETTING).toBe("selected");
+    expect(profile?.environment.CLINE_API_KEY).toBeUndefined();
+    expect(profile?.omittedSensitiveEnvironmentNames).toContain("CLINE_API_KEY");
+  });
   it("maps Claude config paths and omits sensitive environment", async () => {
     const { binDir, homeDir, stateDir } = fixture();
     installCli(binDir, "claude");

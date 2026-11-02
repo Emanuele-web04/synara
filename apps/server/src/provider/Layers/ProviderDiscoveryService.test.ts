@@ -112,7 +112,10 @@ const runListSkills = (input: {
   const testLayer = ProviderDiscoveryServiceLive.pipe(Layer.provideMerge(baseLayer));
   const program = Effect.gen(function* () {
     const discovery = yield* ProviderDiscoveryService;
-    return yield* discovery.listSkills({ provider: input.provider, cwd });
+    return yield* discovery.listSkills({
+      provider: input.provider,
+      cwd: path.join(path.parse(root).root, path.basename(root), "repo"),
+    });
   }).pipe(Effect.provide(testLayer));
   return Effect.runPromise(
     program as unknown as Effect.Effect<ProviderListSkillsResult, never, never>,
@@ -329,6 +332,42 @@ describe("ProviderDiscoveryService provider instances", () => {
       homePath: "/work-codex",
       shadowHomePath: "/work-auth",
       accountId: "work",
+    });
+  });
+
+  it("passes the selected Cline instance environment into model discovery", async () => {
+    let captured: Record<string, unknown> | undefined;
+    await runDiscovery({
+      adapter: {
+        listModels: (input) =>
+          Effect.sync(() => {
+            captured = input as unknown as Record<string, unknown>;
+            return {
+              models: [],
+              source: "cline-acp",
+              cached: false,
+            } satisfies ProviderListModelsResult;
+          }),
+      },
+      settings: {
+        providerInstances: {
+          cline_work: {
+            driver: "cline",
+            environment: [{ name: "CLINE_API_KEY", value: "selected-instance-test-key" }],
+            config: { binaryPath: "/custom/cline" },
+          },
+        },
+      },
+      effect: Effect.gen(function* () {
+        const discovery = yield* ProviderDiscoveryService;
+        return yield* discovery.listModels({ provider: "cline", instanceId: "cline_work" });
+      }),
+    });
+    expect(captured).toMatchObject({
+      provider: "cline",
+      instanceId: "cline_work",
+      binaryPath: "/custom/cline",
+      environment: { CLINE_API_KEY: "selected-instance-test-key" },
     });
   });
 

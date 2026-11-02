@@ -100,6 +100,7 @@ const PROVIDERS_WITH_THREAD_SCOPED_SYNARA_MCP = new Set<ProviderKind>([
   "grok",
   "droid",
   "devin",
+  "cline",
   "opencode",
   "pi",
   "omp",

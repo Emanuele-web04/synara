@@ -38,6 +38,7 @@ const EMPTY_BY_PROVIDER: Record<ProviderKind, never[]> = {
   codex: [],
   cursor: [],
   devin: [],
+  cline: [],
   antigravity: [],
   grok: [],
   droid: [],
@@ -634,6 +635,37 @@ describe("ComposerModelPicker with several accounts", () => {
     }
   });
 
+  it("commits a Cline instance model without replacing its exact identifier", async () => {
+    const onProviderModelChange = vi.fn();
+    const model = "Vendor/MixedCase-Model" as ModelSlug;
+    const screen = await mountPicker({
+      providers: [readyProvider("codex"), { ...readyProvider("cline"), instanceId: "cline_work" }],
+      providerInstances: [
+        CODEX_ACCOUNTS[0]!,
+        {
+          instanceId: "cline_work",
+          provider: "cline",
+          label: "Work",
+          enabled: true,
+          isDefault: false,
+        },
+      ],
+      modelOptionsByProviderInstance: {
+        cline_work: [{ slug: model, name: "Configured Cline model" }],
+      },
+      onProviderModelChange,
+    });
+    try {
+      await page.getByRole("tab", { name: "Work", exact: true }).click();
+      await page.getByRole("menuitem", { name: /Configured Cline model/u }).click();
+      expect(onProviderModelChange).toHaveBeenCalledWith("cline", model, {
+        instanceId: "cline_work",
+      });
+    } finally {
+      await screen.unmount();
+    }
+  });
+
   it("names the composer's account on the trigger and dots it with its accent color", async () => {
     const screen = await mountPicker({
       ...multiAccount,
@@ -712,6 +744,7 @@ describe("ComposerModelPicker with several accounts", () => {
       "claudeAgent",
       "cursor",
       "devin",
+      "cline",
       "antigravity",
       "grok",
       "droid",

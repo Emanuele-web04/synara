@@ -195,7 +195,7 @@ export async function deriveManagedTerminalProfiles(input: {
         },
       );
       environment = selectedProfileEnvironment(generated, configured);
-    } else if (instance.driver !== "devin") {
+    } else if (instance.driver !== "devin" && instance.driver !== "cline") {
       const genericDriver = GENERIC_DRIVER_BY_PROVIDER[instance.driver];
       const generated = buildProviderProcessEnv({
         driver: genericDriver,

@@ -145,6 +145,7 @@ const CURSOR_PROVIDER = "cursor" as const;
 const ANTIGRAVITY_PROVIDER = "antigravity" as const;
 const GROK_PROVIDER = "grok" as const;
 const DROID_PROVIDER = "droid" as const;
+const CLINE_PROVIDER = "cline" as const;
 const DEVIN_PROVIDER = "devin" as const;
 const OPENCODE_PROVIDER = "opencode" as const;
 const PI_PROVIDER = "pi" as const;
@@ -161,6 +162,7 @@ const PROVIDERS = [
   GROK_PROVIDER,
   DROID_PROVIDER,
   DEVIN_PROVIDER,
+  CLINE_PROVIDER,
   OPENCODE_PROVIDER,
   PI_PROVIDER,
   OMP_PROVIDER,
@@ -273,6 +275,13 @@ function isOpenCodeNativeCommandPath(commandPath: string): boolean {
 export const PACKAGE_MANAGED_PROVIDER_UPDATES: Partial<
   Record<ProviderKind, PackageManagedProviderMaintenanceDefinition>
 > = {
+  cline: {
+    provider: CLINE_PROVIDER,
+    binaryName: "cline",
+    npmPackageName: "cline",
+    homebrew: null,
+    nativeUpdate: null,
+  },
   codex: {
     provider: CODEX_PROVIDER,
     binaryName: "codex",
@@ -908,6 +917,7 @@ export const makeProviderUpdateEnv = (
     case "codex":
     case "cursor":
     case "devin":
+    case "cline":
     case "antigravity":
     case "grok":
     case "droid":
@@ -2697,6 +2707,52 @@ export const makeCheckDevinProviderStatus = (
 
 export const checkDevinProviderStatus = makeCheckDevinProviderStatus();
 
+/** A version probe proves installation, never authentication. Cline restores auth on session/new. */
+export const makeCheckClineProviderStatus = (
+  binaryPath?: string,
+  environment?: Readonly<Record<string, string>>,
+  instanceId: ProviderInstanceId = CLINE_PROVIDER,
+  paths?: { readonly homeDir: string; readonly isolationRootDir: string },
+): Effect.Effect<ServerProviderStatus, never, ChildProcessSpawner.ChildProcessSpawner> =>
+  Effect.gen(function* () {
+    const checkedAt = new Date().toISOString();
+    const probe = yield* probeProviderCliVersion(
+      runProviderCommand(binaryPath?.trim() || "cline", ["--version"], {
+        env: makeProviderProbeEnv(CLINE_PROVIDER, environment, instanceId, paths),
+      }),
+      DEFAULT_TIMEOUT_MS,
+    );
+    if (probe.outcome !== "success") {
+      return {
+        provider: CLINE_PROVIDER,
+        driver: CLINE_PROVIDER,
+        instanceId,
+        checkedAt,
+        status: "error",
+        available: false,
+        authStatus: "unknown",
+        message:
+          probe.outcome === "missing"
+            ? "Cline CLI is not installed. Run `npm install -g cline`, then `cline auth`."
+            : probe.outcome === "timeout"
+              ? "Cline CLI health check timed out."
+              : "Cline CLI failed its version check. Check the binary path or reinstall Cline.",
+      } satisfies ServerProviderStatus;
+    }
+    return {
+      provider: CLINE_PROVIDER,
+      driver: CLINE_PROVIDER,
+      instanceId,
+      checkedAt,
+      status: "ready",
+      available: true,
+      authStatus: "unknown",
+      version: parseGenericCliVersion(`${probe.result.stdout}\n${probe.result.stderr}`),
+      message:
+        "Cline CLI is installed. Authenticate with `cline auth`; credentials are checked when starting a session.",
+    } satisfies ServerProviderStatus;
+  });
+
 // ── Snapshot helpers ────────────────────────────────────────────────
 
 function comparableProviderVersionAdvisory(
@@ -3491,6 +3547,14 @@ export function makeProviderHealthLive(options?: { readonly providerUpdateTimeou
                 readDevinStoredCredentials,
                 instance.environment,
               ),
+            );
+          case "cline":
+            return checkProviderInstanceWhenEnabled(
+              instance,
+              makeCheckClineProviderStatus(binaryPath, instance.environment, instance.instanceId, {
+                homeDir: serverConfig.homeDir,
+                isolationRootDir: serverConfig.stateDir,
+              }),
             );
           case "antigravity":
             return checkProviderInstanceWhenEnabled(

@@ -99,6 +99,8 @@ export function formatProviderLabel(provider: ProviderKind): string {
       return "Cursor";
     case "devin":
       return "Devin";
+    case "cline":
+      return "Cline";
     case "antigravity":
       return "Antigravity";
     case "grok":

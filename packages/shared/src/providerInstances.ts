@@ -21,6 +21,7 @@ export const BUILT_IN_PROVIDER_KINDS = [
   "claudeAgent",
   "cursor",
   "devin",
+  "cline",
   "antigravity",
   "grok",
   "droid",
@@ -113,6 +114,8 @@ function normalizeBinaryPathOverride(provider: ProviderKind, value: unknown): st
       return trimmed === "cursor-agent" ? "" : trimmed;
     case "devin":
       return trimmed === "devin" ? "" : trimmed;
+    case "cline":
+      return trimmed === "cline" ? "" : trimmed;
     case "antigravity":
       return trimmed === "agy" ? "" : trimmed;
     case "grok":
@@ -593,6 +596,10 @@ export function providerStartOptionsFromInstance(
           }
         : undefined;
     }
+    case "cline":
+      return binaryPath || environment.environment
+        ? { cline: { ...environment, ...(binaryPath ? { binaryPath } : {}) } }
+        : undefined;
     case "devin":
       return binaryPath || environment.environment
         ? { devin: { ...environment, ...(binaryPath ? { binaryPath } : {}) } }

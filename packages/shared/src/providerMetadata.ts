@@ -133,6 +133,14 @@ export const PROVIDER_DESCRIPTORS = defineProviderDescriptors([
     },
   },
   {
+    kind: "cline",
+    displayName: PROVIDER_DISPLAY_NAMES.cline,
+    available: true,
+    setupDocsHref: "https://docs.cline.bot/usage/acp",
+    supportsNativeTurnSteering: false,
+    usage: null,
+  },
+  {
     kind: "omp",
     displayName: PROVIDER_DISPLAY_NAMES.omp,
     available: true,

@@ -20,6 +20,8 @@ import {
   type DroidModelSelection,
   type DevinModelOptions,
   type DevinModelSelection,
+  type ClineModelOptions,
+  type ClineModelSelection,
   type GrokModelOptions,
   type GrokModelSelection,
   type ModelSelection,
@@ -415,6 +417,7 @@ export function buildNextProviderOptions(
   modelOptions: ProviderOptions | null | undefined,
   patch: Record<string, unknown>,
 ): ProviderOptions {
+  if (provider === "cline") return {};
   if (provider === "codex") {
     return { ...(modelOptions as CodexModelOptions | undefined), ...patch } as CodexModelOptions;
   }
@@ -524,6 +527,12 @@ export function buildModelSelection(
   metadata?: ModelSelectionBuildMetadata,
 ): PiModelSelection;
 export function buildModelSelection(
+  provider: "cline",
+  model: string,
+  options?: ClineModelOptions | null | undefined,
+  metadata?: ModelSelectionBuildMetadata,
+): ClineModelSelection;
+export function buildModelSelection(
   provider: "devin",
   model: string,
   options?: DevinModelOptions | null | undefined,
@@ -581,6 +590,8 @@ export function buildModelSelection(
         options ? { provider, model, options: options as CursorModelOptions } : { provider, model },
         metadata,
       );
+    case "cline":
+      return attachModelSelectionMetadata({ provider, model }, metadata);
     case "devin":
       return attachModelSelectionMetadata(
         options ? { provider, model, options: options as DevinModelOptions } : { provider, model },
