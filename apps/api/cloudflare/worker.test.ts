@@ -172,7 +172,7 @@ function billingBindings(environment: "sandbox" | "production") {
     POLAR_PORTAL_RETURN_URL: "https://billing.example.com/settings",
     POLAR_EXPECTED_CURRENCY: "USD",
     POLAR_EXPECTED_MONTHLY_AMOUNT_MINOR: "799",
-    POLAR_EXPECTED_YEARLY_AMOUNT_MINOR: "8499",
+    POLAR_EXPECTED_YEARLY_AMOUNT_MINOR: "7999",
     POLAR_EXPECTED_TAX_BEHAVIOR: "exclusive",
   };
 }
@@ -274,7 +274,7 @@ describe("Cloudflare account API container configuration", () => {
           expectedCatalog: {
             currency: "USD",
             monthlyAmountMinor: 799,
-            yearlyAmountMinor: 8499,
+            yearlyAmountMinor: 7999,
             taxBehavior: "exclusive",
           },
         },

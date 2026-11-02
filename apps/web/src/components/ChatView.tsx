@@ -234,8 +234,14 @@ import {
   type SplitViewPanePanelState,
 } from "../splitViewStore";
 import { useStore } from "../store";
+import { useCreateProjectDialogStore } from "../createProjectDialogStore";
+import { useLatestProjectStore } from "../latestProjectStore";
+import { useSpacesUiStore } from "../spacesUiStore";
+import { isOrdinarySpaceProject } from "../lib/spaces";
+import { resolveLatestProjectTargetIdWithFallback } from "../lib/projectShortcutTargets";
 import {
   createComposerThreadMentionSourcesSelector,
+  createProjectLastActivityAtSelector,
   createProjectSelector,
   createSidechatSummariesForSourceSelector,
   createThreadSelector,
@@ -319,6 +325,7 @@ import { ComposerExpiredUserInputNotice } from "./chat/ComposerExpiredUserInputN
 import { ComposerExtrasPanel } from "./chat/ComposerExtrasPanel";
 import { ComposerExtrasTrigger } from "./chat/ComposerExtrasTrigger";
 import { ComposerGoalHeader } from "./chat/ComposerGoalHeader";
+import { ComposerUsageLimitRecovery } from "./chat/ComposerUsageLimitRecovery";
 import { ComposerInputBanners } from "./chat/ComposerInputBanners";
 import { ComposerTransportNotice } from "./chat/ComposerTransportNotice";
 import { ComposerLiveChangesHeader } from "./chat/ComposerLiveChangesHeader";
@@ -1076,6 +1083,16 @@ export default function ChatView({
   // no longer matches the hand-written `foo?.bar` dep and bails the whole component out.
   const activeLatestTurnId = activeLatestTurn?.turnId ?? null;
   const activeLatestTurnState = activeLatestTurn?.state ?? null;
+  const isNativeSubagentMessagingUnavailable = Boolean(
+    activeThread &&
+    (activeThread.creationSource === "provider_native" ||
+      activeThread.id.startsWith("subagent:")) &&
+    ((activeThread.session?.provider ?? activeThread.modelSelection.provider) === "codex" ||
+      activeThread.session?.status !== "running" ||
+      activeThread.session.activeTurnId === null ||
+      activeLatestTurnState !== "running" ||
+      activeLatestTurnId !== activeThread.session.activeTurnId),
+  );
   const threadActivities = activeThread?.activities ?? EMPTY_ACTIVITIES;
   const hasLiveTurnTail = hasLiveTurnTailWork({
     latestTurn: activeLatestTurn,
@@ -1890,7 +1907,11 @@ export default function ChatView({
   );
   const isComposerApprovalState = activePendingApproval !== null;
   const isSidechatExpired = Boolean(activeThread?.sidechatExpiredAt);
-  const isComposerEditorDisabled = isConnecting || isComposerApprovalState || isSidechatExpired;
+  const isComposerEditorDisabled =
+    isConnecting ||
+    isComposerApprovalState ||
+    isSidechatExpired ||
+    isNativeSubagentMessagingUnavailable;
   const canCollapsePastedTextToDraft = shouldEnableComposerPastedTextCollapse({
     isComposerApprovalState,
     hasPendingUserInput: pendingUserInputs.length > 0,
@@ -3887,6 +3908,9 @@ export default function ChatView({
       .dispatchCommand({
         type: "thread.turn.interrupt",
         requestedBy: "user",
+        ...(activeThread.usageLimitRecovery && phase !== "running"
+          ? { usageLimitRecoveryId: activeThread.usageLimitRecovery.id }
+          : {}),
         commandId: newCommandId(),
         threadId: activeThread.id,
         createdAt: new Date().toISOString(),
@@ -3895,7 +3919,7 @@ export default function ChatView({
         releaseQueueHold();
         throw error;
       });
-  }, [activeThread]);
+  }, [activeThread, phase]);
 
   // A rejected interrupt (orchestration dispatch timeout, dead runtime) leaves the
   // UI spinning with no explanation, so the stop affordances report it.
@@ -4884,6 +4908,10 @@ export default function ChatView({
   }, [claudeSwitchKey]);
   const onSend = useCallback(
     async (...args: Parameters<typeof submitComposerTurn>) => {
+      if (isNativeSubagentMessagingUnavailable) {
+        args[0]?.preventDefault();
+        return false;
+      }
       // Keep the choice captured for this send: later picker changes belong to the
       // next message. Automatic queue drains must not acknowledge a new draft choice.
       const switchKeyForSend = claudeSwitchKey;
@@ -4893,7 +4921,7 @@ export default function ChatView({
       }
       return accepted;
     },
-    [claudeSwitchKey, submitComposerTurn],
+    [claudeSwitchKey, isNativeSubagentMessagingUnavailable, submitComposerTurn],
   );
   const showClaudeModelSwitchNote =
     claudeSwitchKey !== null &&
@@ -5543,11 +5571,29 @@ export default function ChatView({
   const onRunProjectScriptFromHeader = useStableCallback((script: ProjectScript) => {
     void runProjectScript(script);
   });
-  // Header "New thread": mints a thread in the active workspace (same branch/worktree/env),
-  // falling back to the project when there is no server/draft thread yet.
+  // Header "New thread" preserves the current project workspace. Home falls back
+  // to the most recently used ordinary project in the active Space.
   const onNewThreadFromHeader = useStableCallback(() => {
-    const targetProjectId = activeProject?.id ?? activeThread?.projectId ?? null;
-    if (!targetProjectId) return;
+    const state = useStore.getState();
+    if (!state.threadsHydrated) return;
+    const spaceId = useSpacesUiStore.getState().activeSpaceId;
+    const projects = state.projects.filter(
+      (project) =>
+        (project.spaceId ?? null) === spaceId &&
+        isOrdinarySpaceProject(project, useWorkspacePathsStore.getState()),
+    );
+    const currentProjectId = projects.find((project) => project.id === activeProject?.id)?.id;
+    const targetProjectId =
+      currentProjectId ??
+      resolveLatestProjectTargetIdWithFallback(
+        projects,
+        useLatestProjectStore.getState().latestProjectId,
+        createProjectLastActivityAtSelector()(state),
+      );
+    if (!targetProjectId) {
+      useCreateProjectDialogStore.getState().setOpen(true);
+      return;
+    }
     // The shared New thread path reopens a pending draft before creating a chat. Keep
     // that draft's workspace instead of retargeting its unsent text to the viewed chat.
     const pendingProjectDraft = useComposerDraftStore
@@ -5555,16 +5601,18 @@ export default function ChatView({
       .getDraftThreadByProjectId(targetProjectId);
     void handleNewThread(
       targetProjectId,
-      resolveInheritedThreadContext({
-        activeThread,
-        activeDraftThread:
-          draftThread ??
-          (pendingProjectDraft &&
-          pendingProjectDraft.isTemporary !== true &&
-          !hasActiveComposerSend(pendingProjectDraft.threadId)
-            ? pendingProjectDraft
-            : null),
-      }),
+      currentProjectId
+        ? resolveInheritedThreadContext({
+            activeThread,
+            activeDraftThread:
+              draftThread ??
+              (pendingProjectDraft &&
+              pendingProjectDraft.isTemporary !== true &&
+              !hasActiveComposerSend(pendingProjectDraft.threadId)
+                ? pendingProjectDraft
+                : null),
+          })
+        : undefined,
     );
   });
   const dismissActiveThreadError = useCallback(() => {
@@ -6259,6 +6307,12 @@ export default function ChatView({
                 the stacked rail fused onto the input. */}
             <ComposerCapsuleRow>
               <ComposerTransportNotice />
+              {activeThread?.usageLimitRecovery && phase !== "running" ? (
+                <ComposerUsageLimitRecovery
+                  recovery={activeThread.usageLimitRecovery}
+                  onCancel={onInterruptFromStopControl}
+                />
+              ) : null}
               {showComposerLiveChangesHeader ? (
                 <ComposerLiveChangesHeader
                   fileCount={activeTurnLiveDiffState.fileCount}
@@ -6345,6 +6399,7 @@ export default function ChatView({
               onEdit={onEditQueuedComposerTurn}
               pause={queuePause}
               onResume={onResumeQueuedComposerTurns}
+              resumeDisabled={activeThread?.usageLimitRecovery != null}
               onEditPaused={onEditPausedQueuedComposerTurn}
               cwd={threadWorkspaceCwd ?? undefined}
             />
@@ -6610,21 +6665,23 @@ export default function ChatView({
                     ? { onCollapsePastedText: handleCollapsePastedText }
                     : {})}
                   placeholder={
-                    isComposerApprovalState
-                      ? "Resolve this approval request to continue"
-                      : activePendingProgress
-                        ? activePendingProgress.activeQuestion?.options.length === 0
-                          ? "Type your answer to continue"
-                          : "Type your own answer, or leave this blank to use the selected option"
-                        : showPlanFollowUpPrompt && activeProposedPlan
-                          ? "Add feedback to refine the plan, or leave this blank to implement it"
-                          : activeThread?.parentThreadId
-                            ? "Message this subagent"
-                            : hasLiveTurn
-                              ? "Ask for follow-up changes"
-                              : standaloneSidechatContext
-                                ? `Ask about this ${standaloneSidechatItemNoun}`
-                                : "Do anything in Synara"
+                    isNativeSubagentMessagingUnavailable
+                      ? "This subagent is read-only"
+                      : isComposerApprovalState
+                        ? "Resolve this approval request to continue"
+                        : activePendingProgress
+                          ? activePendingProgress.activeQuestion?.options.length === 0
+                            ? "Type your answer to continue"
+                            : "Type your own answer, or leave this blank to use the selected option"
+                          : showPlanFollowUpPrompt && activeProposedPlan
+                            ? "Add feedback to refine the plan, or leave this blank to implement it"
+                            : activeThread?.parentThreadId
+                              ? "Message this subagent"
+                              : hasLiveTurn
+                                ? "Ask for follow-up changes"
+                                : standaloneSidechatContext
+                                  ? `Ask about this ${standaloneSidechatItemNoun}`
+                                  : "Do anything in Synara"
                   }
                   disabled={isComposerEditorDisabled}
                   singleLine={composerSingleRow}
@@ -6681,9 +6738,11 @@ export default function ChatView({
                   submission={{
                     phase,
                     recoveryStopAvailable: isProviderDeliveryBlockDetail(activeThread?.error),
+                    usageLimitStopAvailable:
+                      activeThread?.usageLimitRecovery != null && phase !== "running",
                     busy: isSendBusy,
                     connecting: isConnecting,
-                    expired: isSidechatExpired,
+                    expired: isSidechatExpired || isNativeSubagentMessagingUnavailable,
                     hasPendingCacheReview: activeThread?.claudeCacheReview != null,
                     preparingImages: isPreparingComposerImages,
                     preparingWorktree: isPreparingWorktree,
@@ -6759,7 +6818,7 @@ export default function ChatView({
                     closeActiveTabRef={closeActiveThreadTabRef}
                     onRenameActiveThread={() => setRenameDialogOpen(true)}
                     onNewThread={
-                      activeProjectScripts !== undefined && !isCenteredEmptyLanding
+                      activeProjectScripts !== undefined || isHomeChatContainer
                         ? onNewThreadFromHeader
                         : null
                     }

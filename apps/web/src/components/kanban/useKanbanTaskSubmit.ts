@@ -52,7 +52,7 @@ interface UseKanbanTaskSubmitInput {
   >;
   readonly providerStatuses: readonly ServerProviderStatus[];
   readonly isPreparingImages: boolean;
-  readonly waitForPendingImages: () => Promise<void>;
+  readonly waitForPendingImages: () => Promise<boolean>;
   readonly onOpenChange: (open: boolean) => void;
 }
 
@@ -107,7 +107,10 @@ export function useKanbanTaskSubmit(input: UseKanbanTaskSubmitInput) {
     }
 
     isCreatingRef.current = true;
-    await waitForPendingImages();
+    if (!(await waitForPendingImages())) {
+      isCreatingRef.current = false;
+      return;
+    }
     const truncatedPrompt = truncateKanbanTaskPreview(taskPreview);
     // The scratch draft carries the full selection (model + reasoning effort +
     // speed) set through the picker; fall back to a bare selection otherwise.

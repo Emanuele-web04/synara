@@ -7,7 +7,9 @@
 //        markdown variant (`GeneratedMarkdownImage`) composes the same hook and
 //        error card with its own inline frame/overlay rendering.
 
-import { type ImgHTMLAttributes, type MouseEvent, useState } from "react";
+import { type ComponentProps, type MouseEvent, useLayoutEffect, useRef, useState } from "react";
+
+import { useExecutionImageSource } from "~/hooks/useExecutionImageSource";
 
 import { downloadUrlAsBlob } from "~/lib/browserDownload";
 import { DownloadIcon, Loader2Icon, TriangleAlertIcon } from "~/lib/icons";
@@ -19,8 +21,17 @@ import { Button } from "./ui/button";
 export type LocalImagePreviewStatus = "loading" | "ready" | "error";
 
 type LocalImagePreviewImgProps = Pick<
-  ImgHTMLAttributes<HTMLImageElement>,
-  "src" | "loading" | "decoding" | "draggable" | "onLoad" | "onError"
+  ComponentProps<"img">,
+  | "ref"
+  | "src"
+  | "width"
+  | "height"
+  | "style"
+  | "loading"
+  | "decoding"
+  | "draggable"
+  | "onLoad"
+  | "onError"
 >;
 
 export interface LocalImagePreviewState {
@@ -65,6 +76,25 @@ export function useLocalImagePreview(input: {
       grant: previewGrant,
     });
   const fileName = localImageFileName(src);
+  const {
+    ref: imageRef,
+    src: imageSrc,
+    error: imageError,
+    intrinsicProps,
+    onLoad: onImageLoad,
+    onError: onImageError,
+  } = useExecutionImageSource(previewUrl, true, JSON.stringify([src, cwd, input.resourceUrl]));
+  const errorNotifiedFor = useRef<string | null>(null);
+  useLayoutEffect(() => {
+    if (imageError) {
+      if (errorNotifiedFor.current !== previewUrl) {
+        errorNotifiedFor.current = previewUrl;
+        input.onPreviewError?.();
+      }
+    } else {
+      errorNotifiedFor.current = null;
+    }
+  }, [imageError, input.onPreviewError, previewUrl]);
   // A generation distinguishes separate visits to the same URL. This keeps an
   // A -> B -> A transition from reviving A's old error branch (which contains
   // no <img> and therefore cannot retry), and rejects stale image events.
@@ -90,15 +120,19 @@ export function useLocalImagePreview(input: {
   };
 
   const imgProps: LocalImagePreviewImgProps = {
-    src: previewUrl,
+    ref: imageRef,
+    src: imageSrc,
+    ...intrinsicProps,
     loading: "lazy",
     decoding: "async",
     draggable: false,
-    onLoad: () => {
+    onLoad: (event) => {
+      if (!onImageLoad(event)) return;
       settleLoad("ready");
       input.onPreviewReady?.();
     },
-    onError: () => {
+    onError: (event) => {
+      if (!onImageError(event)) return;
       settleLoad("error");
       input.onPreviewError?.();
     },
@@ -109,7 +143,7 @@ export function useLocalImagePreview(input: {
     downloadUrl,
     fileName,
     downloadName: fileName || "",
-    status: load.status,
+    status: imageError ? "error" : load.status,
     imgProps,
   };
 }

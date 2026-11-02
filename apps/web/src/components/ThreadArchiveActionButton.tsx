@@ -17,10 +17,12 @@ export const THREAD_ARCHIVE_ICON = HiOutlineArchiveBox;
 export function ThreadArchiveActionButton({
   threadId,
   toneClassName,
+  disabled,
   onArchive,
 }: {
   threadId: ThreadId;
   toneClassName?: string;
+  disabled?: boolean;
   onArchive: () => void;
 }) {
   return (
@@ -28,6 +30,7 @@ export function ThreadArchiveActionButton({
       icon={THREAD_ARCHIVE_ICON}
       label="Archive thread"
       title="Archive thread"
+      disabled={disabled}
       data-testid={`thread-archive-${threadId}`}
       size="md"
       // Match the pin and the right-side meta chips (shared trailing-icon size).

@@ -15,6 +15,34 @@ import { DEFAULT_PROJECT_ICON, type ProjectAppearance } from "../lib/projectAppe
 import { resolveThreadStatusPill, type ThreadStatusPill } from "./Sidebar.logic";
 import { SidebarActivityView } from "./SidebarActivityView";
 import type { ActivityGroupMode, ActivityScopeSelection } from "./SidebarActivityView.logic";
+import type { WorkspaceNavigation, WorkspaceSidebarActions } from "../lib/hosts/workspaceFrame";
+import type { WorkspaceSession } from "../lib/hosts/workspaceSessions";
+import { workspaceActivityRows, type WorkspaceThreadEntry } from "../lib/hosts/workspaceSidebar";
+import { WorkspaceThreadRow } from "./hosts/WorkspaceProjects";
+import { SidebarProvider } from "./ui/sidebar";
+import { toastManager } from "./ui/toast";
+
+const remoteFixture = vi.hoisted(() => ({
+  available: new Map<WorkspaceSession, WorkspaceNavigation>(),
+  sessions: [] as WorkspaceSession[],
+  open: vi.fn(),
+  href: "/",
+}));
+vi.mock("../lib/hosts/workspaceSessions", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../lib/hosts/workspaceSessions")>()),
+  readAvailableWorkspaceNavigation: (session: WorkspaceSession) =>
+    remoteFixture.available.get(session),
+  readWorkspaceSessions: () => remoteFixture.sessions,
+}));
+vi.mock("../lib/hosts/workspaceCommands", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../lib/hosts/workspaceCommands")>()),
+  openWorkspacePath: remoteFixture.open,
+}));
+vi.mock("@tanstack/react-router", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@tanstack/react-router")>()),
+  useLocation: ({ select }: { select: (location: { href: string }) => unknown }) =>
+    select({ href: remoteFixture.href }),
+}));
 
 const projectFavicon = `data:image/svg+xml,${encodeURIComponent(
   '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16"><circle cx="8" cy="8" r="8" fill="red"/></svg>',
@@ -89,12 +117,19 @@ function renderActivity(input: {
   prByThreadId?: ReadonlyMap<ThreadId, OrchestrationThreadPullRequest | null>;
   externalRows?: ReadonlyMap<
     ThreadId,
-    { hostName: string; onOpen: () => void; status: ThreadStatusPill | null }
+    {
+      hostName: string;
+      onOpen: () => void;
+      status: ThreadStatusPill | null;
+      entry?: WorkspaceThreadEntry;
+    }
   >;
   onVisibleThreadIdsChange?: (threadIds: readonly ThreadId[]) => void;
   renderThreadHoverCard?: (thread: SidebarThreadSummary, anchorId: string) => ReactNode;
   onOpenThread?: (threadId: ThreadId) => void;
   onSetThreadSettled?: (threadId: ThreadId, settled: boolean) => void;
+  onToggleThreadPinned?: (threadId: ThreadId) => void;
+  onArchiveThread?: (threadId: ThreadId) => void;
   onReturnSnoozedThread?: (threadId: ThreadId) => void;
   onMarkThreadRead?: (threadId: ThreadId, completedAt?: string) => void;
   onRenameThread?: (threadId: ThreadId) => void;
@@ -140,8 +175,8 @@ function ActivityHarness(input: Parameters<typeof renderActivity>[0]) {
       onOpenThreadPullRequest={() => {}}
       onSetThreadSettled={input.onSetThreadSettled ?? (() => {})}
       onReturnSnoozedThread={input.onReturnSnoozedThread ?? (() => {})}
-      onToggleThreadPinned={() => {}}
-      onArchiveThread={() => {}}
+      onToggleThreadPinned={input.onToggleThreadPinned ?? (() => {})}
+      onArchiveThread={input.onArchiveThread ?? (() => {})}
       onMarkThreadRead={input.onMarkThreadRead ?? (() => {})}
       onRenameThread={input.onRenameThread ?? (() => {})}
       onThreadRenamePointerUp={input.onThreadRenamePointerUp ?? (() => {})}
@@ -176,12 +211,111 @@ function activityLayout(): string[] {
   );
 }
 
+function makeRemoteEntry(
+  environmentId: string,
+  overrides: Partial<WorkspaceThreadEntry["thread"]> = {},
+  children: readonly WorkspaceThreadEntry["thread"][] = [],
+) {
+  const actions = {
+    renameThread: vi.fn(async () => {}),
+    setThreadPinned: vi.fn(async () => {}),
+    archiveThread: vi.fn(async () => {}),
+    setThreadSettled: vi.fn(async (_threadId: ThreadId, _settled: boolean) => true),
+    returnSnoozedThread: vi.fn(async () => {}),
+    renameProject: vi.fn(),
+    setProjectPinned: vi.fn(async () => {}),
+  } satisfies WorkspaceSidebarActions;
+  const thread: WorkspaceThreadEntry["thread"] = {
+    ...makeThread(71, {
+      id: ThreadId.makeUnsafe("same-remote-thread"),
+      lastVisitedAt: "2026-08-02T09:00:00.000Z",
+    }),
+    status: {
+      label: "Completed",
+      colorClass: "text-emerald-600",
+      dotClass: "bg-emerald-500",
+      pulse: false,
+    },
+    ...overrides,
+  };
+  const navigation: WorkspaceNavigation = {
+    sidebar: actions,
+    navigate: vi.fn(),
+    newChat: vi.fn<WorkspaceNavigation["newChat"]>(),
+    createChat: vi.fn<WorkspaceNavigation["createChat"]>(),
+    openTerminal: vi.fn(),
+    browseFolders: vi.fn<WorkspaceNavigation["browseFolders"]>(),
+    createProject: vi.fn<WorkspaceNavigation["createProject"]>(),
+    openProject: vi.fn<WorkspaceNavigation["openProject"]>(),
+    recover: vi.fn(),
+  };
+  const session: WorkspaceSession = {
+    host: {
+      hostId: environmentId,
+      hostName: `Computer ${environmentId}`,
+      wsPath: `/ws/remote/${environmentId}`,
+      executionScope: {
+        environmentId,
+        accountAuthority: "https://account.example.test",
+        userId: "fixture-owner",
+        organizationId: "fixture-org",
+        channel: "beta",
+      },
+    },
+    navigation,
+    summary: {
+      state: "open",
+      path: "/previous-chat",
+      projects: [{ ...makeProject(PROJECT_A, "Project A"), section: "projects" }],
+      threads: [thread, ...children],
+    },
+  };
+  remoteFixture.available.set(session, navigation);
+  remoteFixture.sessions.push(session);
+  return {
+    entry: { key: environmentId, thread, session } satisfies WorkspaceThreadEntry,
+    session,
+    actions,
+  };
+}
+
+function remoteActivityInput(sessions: readonly WorkspaceSession[]) {
+  const activity = workspaceActivityRows(sessions);
+  const onOpen = vi.fn();
+  return {
+    threads: activity.threads,
+    projects: [...activity.projectById.values()],
+    externalRows: new Map(
+      [...activity.remoteById].map(([id, entry]) => [
+        id,
+        {
+          entry,
+          hostName: entry.session!.host.hostName,
+          status: entry.thread.status,
+          onOpen,
+        },
+      ]),
+    ),
+    onOpen,
+  };
+}
+
+function actionButton(row: HTMLElement, label: string): HTMLButtonElement {
+  const button = row.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`);
+  expect(button).not.toBeNull();
+  return button!;
+}
+
 describe("SidebarActivityView", () => {
   beforeEach(() => {
     vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-08-02T12:00:00.000Z"));
   });
   afterEach(() => {
     vi.restoreAllMocks();
+    remoteFixture.available.clear();
+    remoteFixture.sessions = [];
+    remoteFixture.open.mockClear();
+    remoteFixture.href = "/";
     document.body.innerHTML = "";
   });
 
@@ -244,6 +378,309 @@ describe("SidebarActivityView", () => {
     await vi.waitFor(() =>
       expect(onVisibleThreadIdsChange).toHaveBeenLastCalledWith([remote.id, local.id]),
     );
+    await mounted.unmount();
+  });
+
+  it("routes remote Priority actions to their own host even when raw thread IDs collide", async () => {
+    const first = makeRemoteEntry("mini");
+    const second = makeRemoteEntry("book");
+    const input = remoteActivityInput([first.session, second.session]);
+    const local = {
+      onSetThreadSettled: vi.fn(),
+      onMarkThreadRead: vi.fn(),
+      onToggleThreadPinned: vi.fn(),
+      onArchiveThread: vi.fn(),
+      onRenameThread: vi.fn(),
+    };
+    const mounted = await render(renderActivity({ ...input, ...local }));
+    await expect.element(page.getByText("Priority", { exact: true })).toBeVisible();
+
+    for (const [index, owner] of [first, second].entries()) {
+      const row = page.getByTestId(`activity-thread-${input.threads[index]!.id}`).element();
+      row.focus();
+      const wrapper = row.parentElement!;
+      actionButton(wrapper, "Pin thread").click();
+      actionButton(wrapper, "Archive thread").click();
+      actionButton(wrapper, "Done").click();
+      await vi.waitFor(() => {
+        expect(owner.actions.setThreadPinned).toHaveBeenCalledExactlyOnceWith(
+          owner.entry.thread.id,
+          true,
+        );
+        expect(owner.actions.archiveThread).toHaveBeenCalledExactlyOnceWith(owner.entry.thread.id);
+        expect(owner.actions.setThreadSettled).toHaveBeenCalledExactlyOnceWith(
+          owner.entry.thread.id,
+          true,
+        );
+      });
+      expect(remoteFixture.open).toHaveBeenCalledWith(owner.session, "/previous-chat");
+      for (const label of ["Pin thread", "Archive thread", "Done"]) {
+        actionButton(wrapper, label).dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
+        actionButton(wrapper, label).dispatchEvent(
+          new PointerEvent("pointerup", { bubbles: true, pointerType: "touch" }),
+        );
+      }
+      expect(document.querySelector('[role="dialog"]')).toBeNull();
+    }
+    expect(input.onOpen).not.toHaveBeenCalled();
+    for (const callback of Object.values(local)) expect(callback).not.toHaveBeenCalled();
+    await mounted.unmount();
+  });
+
+  it.each(["activity", "classic", "pinned"] as const)(
+    "matches remote glyph/action sizes and hides the resting marker on hover and focus (%s)",
+    async (surface) => {
+      const previousViewport = { width: window.innerWidth, height: window.innerHeight };
+      const owner = makeRemoteEntry("mini");
+      const input = remoteActivityInput([owner.session]);
+      const mounted = await render(
+        <div className="w-80">
+          {surface === "activity" ? (
+            renderActivity(input)
+          ) : (
+            <SidebarProvider>
+              <div className="w-80">
+                <WorkspaceThreadRow entry={owner.entry} topLevel={surface === "pinned"} />
+              </div>
+            </SidebarProvider>
+          )}
+        </div>,
+      );
+      try {
+        await page.viewport(1000, 700);
+        const main = page.getByRole("button", {
+          name: new RegExp(`Activity thread 71, Computer mini`),
+        });
+        const button = main.element();
+        const wrapper = button.parentElement!;
+        const marker = wrapper.querySelector<HTMLElement>('[data-slot="remote-thread-marker"]');
+        if (surface !== "classic") {
+          expect(marker).not.toBeNull();
+          const glyph = marker!.querySelector("svg, [data-slot=central-icon]")!;
+          expect(glyph.getBoundingClientRect().width).toBe(15);
+          expect(glyph.getBoundingClientRect().height).toBe(15);
+        }
+        await main.hover();
+        if (marker) await vi.waitFor(() => expect(getComputedStyle(marker).opacity).toBe("0"));
+        const quickButtons = ["Pin thread", "Archive thread", "Done"].map((label) =>
+          actionButton(wrapper, label),
+        );
+        for (const action of quickButtons) {
+          const glyph = action.querySelector("svg, [data-slot=central-icon]")!;
+          expect(glyph.getBoundingClientRect().width).toBe(15);
+          expect(glyph.getBoundingClientRect().height).toBe(15);
+          expect(action.getBoundingClientRect().width).toBe(20);
+        }
+        const title =
+          wrapper.querySelector('[data-testid^="thread-title-"]') ??
+          button.querySelector("span.min-w-0.flex-1");
+        await vi.waitFor(() =>
+          expect(title!.getBoundingClientRect().right).toBeLessThanOrEqual(
+            quickButtons[0]!.getBoundingClientRect().left,
+          ),
+        );
+        await userEvent.hover(document.body);
+        button.focus();
+        if (marker) await vi.waitFor(() => expect(getComputedStyle(marker).opacity).toBe("0"));
+        expect(
+          quickButtons.every((action) => getComputedStyle(action).visibility !== "hidden"),
+        ).toBe(true);
+        button.dispatchEvent(
+          new KeyboardEvent("keydown", { key: "F10", shiftKey: true, bubbles: true }),
+        );
+        await expect.element(page.getByRole("menuitem", { name: "Rename chat" })).toBeVisible();
+        await userEvent.keyboard("{Escape}");
+      } finally {
+        await mounted.unmount();
+        await page.viewport(previousViewport.width, previousViewport.height);
+      }
+    },
+  );
+
+  it("disables offline remote actions and rejects an action from a stale captured session", async () => {
+    const owner = makeRemoteEntry("offline");
+    remoteFixture.available.delete(owner.session);
+    const input = remoteActivityInput([owner.session]);
+    const mounted = await render(renderActivity(input));
+    const row = page.getByTestId(`activity-thread-${input.threads[0]!.id}`).element();
+    row.focus();
+    for (const label of ["Pin thread", "Archive thread", "Done"]) {
+      const action = actionButton(row.parentElement!, label);
+      expect(action.disabled).toBe(true);
+      action.click();
+    }
+    for (const action of Object.values(owner.actions)) expect(action).not.toHaveBeenCalled();
+    expect(input.onOpen).not.toHaveBeenCalled();
+    expect(remoteFixture.open).not.toHaveBeenCalled();
+    await mounted.unmount();
+
+    remoteFixture.available.set(owner.session, owner.session.navigation!);
+    const fresh = await render(renderActivity(input));
+    const liveRow = page.getByTestId(`activity-thread-${input.threads[0]!.id}`).element();
+    liveRow.focus();
+    remoteFixture.available.delete(owner.session);
+    for (const label of ["Pin thread", "Archive thread", "Done"])
+      actionButton(liveRow.parentElement!, label).click();
+    for (const action of Object.values(owner.actions)) expect(action).not.toHaveBeenCalled();
+    expect(remoteFixture.open).not.toHaveBeenCalled();
+    await fresh.unmount();
+  });
+
+  it("keeps a remote optimistic Done state undoable before its projection arrives", async () => {
+    const owner = makeRemoteEntry("mini", { settledOverride: true });
+    const input = remoteActivityInput([owner.session]);
+    const mounted = await render(
+      renderActivity({
+        ...input,
+        settledOverrideByThreadId: new Map([[input.threads[0]!.id, true]]),
+        pinnedThreadIdSet: new Set([input.threads[0]!.id]),
+      }),
+    );
+    const row = page.getByTestId(`activity-thread-${input.threads[0]!.id}`).element();
+    row.focus();
+    actionButton(row.parentElement!, "Undo").click();
+    await vi.waitFor(() =>
+      expect(owner.actions.setThreadSettled).toHaveBeenCalledExactlyOnceWith(
+        owner.entry.thread.id,
+        false,
+      ),
+    );
+    await mounted.unmount();
+  });
+
+  it.each(["active", "another-host", "child-active"] as const)(
+    "keeps controller Done undo after its remote row unmounts (route: %s)",
+    async (route) => {
+      const childId = ThreadId.makeUnsafe("remote-child");
+      const owner = makeRemoteEntry("mini", {}, [
+        {
+          ...makeThread(72, {
+            id: childId,
+            parentThreadId: ThreadId.makeUnsafe("same-remote-thread"),
+          }),
+          status: null,
+        },
+      ]);
+      const other = makeRemoteEntry("book");
+      const environment = route === "another-host" ? "book" : "mini";
+      const path = route === "child-active" ? `/${childId}` : `/${owner.entry.thread.id}`;
+      remoteFixture.href = `/remote?${new URLSearchParams({ environment, path })}`;
+      const input = remoteActivityInput([owner.session, other.session]);
+      const addToast = vi.spyOn(toastManager, "add");
+      const mounted = await render(renderActivity(input));
+      const row = page.getByTestId(`activity-thread-${input.threads[0]!.id}`).element();
+      row.focus();
+      actionButton(row.parentElement!, "Done").click();
+      await vi.waitFor(() =>
+        expect(addToast).toHaveBeenCalledWith(
+          expect.objectContaining({
+            timeout: 0,
+            data: expect.objectContaining({
+              allowCrossThreadVisibility: true,
+              dismissAfterVisibleMs: 8_000,
+              archiveUndo: expect.objectContaining({ message: "Marked as done" }),
+            }),
+          }),
+        ),
+      );
+      const undo = addToast.mock.calls[0]![0].data!.archiveUndo!.onUndo;
+      await mounted.unmount();
+      await expect(Promise.resolve(undo())).resolves.toBe(true);
+      expect(owner.actions.setThreadSettled).toHaveBeenNthCalledWith(
+        1,
+        owner.entry.thread.id,
+        true,
+      );
+      expect(owner.actions.setThreadSettled).toHaveBeenNthCalledWith(
+        2,
+        owner.entry.thread.id,
+        false,
+      );
+      expect(other.actions.setThreadSettled).not.toHaveBeenCalled();
+      if (route === "active")
+        expect(remoteFixture.open).toHaveBeenCalledExactlyOnceWith(
+          owner.session,
+          `/${owner.entry.thread.id}`,
+        );
+      else expect(remoteFixture.open).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["offline", "frame-replaced"] as const)(
+    "keeps Done undo unsuccessful without targeting another owner (%s)",
+    async (state) => {
+      const owner = makeRemoteEntry("mini");
+      const other = makeRemoteEntry("book");
+      const input = remoteActivityInput([owner.session]);
+      const addToast = vi.spyOn(toastManager, "add");
+      const mounted = await render(renderActivity(input));
+      const row = page.getByTestId(`activity-thread-${input.threads[0]!.id}`).element();
+      row.focus();
+      actionButton(row.parentElement!, "Done").click();
+      await vi.waitFor(() => expect(addToast).toHaveBeenCalled());
+      const undo = addToast.mock.calls[0]![0].data!.archiveUndo!.onUndo;
+      await mounted.unmount();
+      remoteFixture.available.delete(owner.session);
+      const replacement = state === "frame-replaced" ? makeRemoteEntry("mini") : null;
+      await expect(Promise.resolve(undo())).resolves.toBe(false);
+      expect(owner.actions.setThreadSettled).toHaveBeenCalledExactlyOnceWith(
+        owner.entry.thread.id,
+        true,
+      );
+      expect(other.actions.setThreadSettled).not.toHaveBeenCalled();
+      if (replacement) expect(replacement.actions.setThreadSettled).not.toHaveBeenCalled();
+      expect(remoteFixture.open).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["unconfirmed", "stale-frame"] as const)(
+    "does not offer Undo for a stale or unconfirmed remote Done (%s)",
+    async (state) => {
+      const owner = makeRemoteEntry("mini");
+      let confirm!: (confirmed: boolean) => void;
+      owner.actions.setThreadSettled.mockImplementationOnce(
+        () =>
+          new Promise<boolean>((resolve) => {
+            confirm = resolve;
+          }),
+      );
+      const input = remoteActivityInput([owner.session]);
+      const addToast = vi.spyOn(toastManager, "add");
+      const mounted = await render(renderActivity(input));
+      const row = page.getByTestId(`activity-thread-${input.threads[0]!.id}`).element();
+      row.focus();
+      actionButton(row.parentElement!, "Done").click();
+      expect(addToast).not.toHaveBeenCalled();
+      if (state === "stale-frame") remoteFixture.available.delete(owner.session);
+      confirm(state === "stale-frame");
+      await new Promise<void>((resolve) => globalThis.setTimeout(resolve, 0));
+      expect(addToast).not.toHaveBeenCalled();
+      await mounted.unmount();
+    },
+  );
+
+  it("returns a remote snoozed chat through its owner without marking a local chat Done", async () => {
+    const owner = makeRemoteEntry("mini", { snoozedUntil: "2026-08-02T13:00:00.000Z" });
+    const input = remoteActivityInput([owner.session]);
+    const onReturnSnoozedThread = vi.fn();
+    const onSetThreadSettled = vi.fn();
+    const onMarkThreadRead = vi.fn();
+    const mounted = await render(
+      renderActivity({ ...input, onReturnSnoozedThread, onSetThreadSettled, onMarkThreadRead }),
+    );
+    await page.getByRole("button", { name: "Snoozed", exact: true }).click();
+    const row = page.getByTestId(`activity-thread-${input.threads[0]!.id}`).element();
+    row.focus();
+    actionButton(row.parentElement!, "Return now").click();
+    await vi.waitFor(() =>
+      expect(owner.actions.returnSnoozedThread).toHaveBeenCalledExactlyOnceWith(
+        owner.entry.thread.id,
+      ),
+    );
+    expect(owner.actions.setThreadSettled).not.toHaveBeenCalled();
+    expect(onReturnSnoozedThread).not.toHaveBeenCalled();
+    expect(onSetThreadSettled).not.toHaveBeenCalled();
+    expect(onMarkThreadRead).not.toHaveBeenCalled();
     await mounted.unmount();
   });
 
@@ -906,6 +1343,9 @@ describe("SidebarActivityView", () => {
         .element(page.getByRole("menuitem", { name: "Clear read from Priority" }))
         .toHaveAttribute("aria-disabled", "true");
       await userEvent.keyboard("{Escape}");
+      await vi.waitFor(() => {
+        expect(document.querySelector('[role="menu"]')).toBeNull();
+      });
       // Nothing read yet, so Priority's header offers no eraser.
       expect(
         page.getByRole("button", { name: "Clear read from Priority" }).elements(),
@@ -940,7 +1380,16 @@ describe("SidebarActivityView", () => {
       });
 
       if (reset === "eraser") {
-        await page.getByRole("button", { name: "Clear read from Priority" }).click();
+        const eraser = page.getByRole("button", { name: "Clear read from Priority" });
+        // Escape restores focus to Options; leave its hoverable tooltip before
+        // moving to the neighboring eraser instead of clicking through that popup.
+        await userEvent.hover(document.body);
+        await userEvent.tab();
+        await expect.element(eraser).toHaveFocus();
+        await expect
+          .element(page.getByText("Activity options", { exact: true }))
+          .not.toBeInTheDocument();
+        await eraser.click();
       } else if (reset === "clear read") {
         await page.getByRole("button", { name: "Activity options" }).click();
         await page.getByRole("menuitem", { name: "Clear read from Priority" }).click();

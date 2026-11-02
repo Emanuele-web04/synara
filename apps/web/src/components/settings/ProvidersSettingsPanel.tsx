@@ -134,6 +134,7 @@ import {
   useSettingsRestoreSignal,
 } from "./SettingControls";
 import { SettingsListRow, SettingsRow, SettingsSection } from "./SettingsPanelPrimitives";
+import { UsageLimitRecoverySetting } from "./UsageLimitRecoverySetting";
 
 type ProviderInstallTextKey =
   | "claudeBinaryPath"
@@ -2326,6 +2327,7 @@ export function ProvidersSettingsPanel({
       </SettingsSection>
 
       <SettingsSection title="Performance">
+        <UsageLimitRecoverySetting />
         <SettingsRow
           title="Keep Synara responsive"
           description="Give agent processes and their commands a moderately lower CPU priority when the machine is busy."

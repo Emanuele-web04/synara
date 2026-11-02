@@ -4,6 +4,8 @@
 // Exports: downloadBlob, downloadUrlAsBlob
 // Depends on: DOM anchor downloads and Fetch.
 
+import { fetchExecutionResourceUrl } from "./wsHttpUrl";
+
 export function downloadBlob(blob: Blob, filename: string): void {
   const url = URL.createObjectURL(blob);
   try {
@@ -48,7 +50,7 @@ export async function downloadUrlAsBlob(input: {
   readonly url: string;
   readonly filename: string;
 }): Promise<void> {
-  const response = await fetch(input.url);
+  const response = await fetchExecutionResourceUrl(input.url);
   if (!response.ok) {
     throw await downloadResponseError(response);
   }

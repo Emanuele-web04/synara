@@ -5,16 +5,22 @@ import { randomUUID } from "node:crypto";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { Effect, Layer } from "effect";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   acquireDatabaseLifecycleLock,
+  type DatabaseLifecycleLock,
   DatabaseLifecycleLockedError,
   releaseDatabaseLifecycleLock,
   withDatabaseLifecycleLock,
 } from "./DatabaseLifecycleLock.ts";
 import { makeSqlitePersistenceLive } from "./Layers/Sqlite.ts";
 import { restoreMarkedMigrationBackup } from "./MigrationBackup.ts";
+
+vi.mock("node:fs/promises", async () => {
+  const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+  return { ...actual, rename: vi.fn(actual.rename) };
+});
 
 const tempDirectories: Array<string> = [];
 
@@ -38,6 +44,7 @@ async function writeOwnedDirectory(directoryPath: string, pid: number): Promise<
 }
 
 afterEach(async () => {
+  vi.mocked(fs.rename).mockReset();
   await Promise.all(
     tempDirectories.splice(0).map((directory) => fs.rm(directory, { recursive: true })),
   );
@@ -73,6 +80,66 @@ describe("database lifecycle lock", () => {
     expect(releasedEntries.some((entry) => entry.includes(".lifecycle-lock.released."))).toBe(
       false,
     );
+  });
+
+  it.each(["first publication", "ownerless-directory retry"] as const)(
+    "keeps a concurrent release during %s retryable",
+    async (stage) => {
+      const dbPath = await makeDbPath();
+      const lockPath = `${dbPath}.lifecycle-lock`;
+      const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+      let competitor: DatabaseLifecycleLock | undefined;
+      if (stage === "first publication") {
+        competitor = await Effect.runPromise(acquireDatabaseLifecycleLock(dbPath));
+      } else {
+        await fs.mkdir(lockPath, { mode: 0o700 });
+        await fs.writeFile(path.join(lockPath, ".DS_Store"), "Finder metadata");
+      }
+      let destinationRenames = 0;
+      let collisionCode: string | undefined;
+      const collideAt = stage === "first publication" ? 1 : 2;
+      vi.mocked(fs.rename).mockImplementation(async (source, destination) => {
+        if (destination !== lockPath || ++destinationRenames !== collideAt) {
+          return actual.rename(source, destination);
+        }
+        competitor ??= await Effect.runPromise(acquireDatabaseLifecycleLock(dbPath));
+        try {
+          await actual.rename(source, destination);
+        } catch (cause) {
+          collisionCode = (cause as NodeJS.ErrnoException).code;
+          // The actual owner releases after the OS rejects the rename, before
+          // publication can inspect the destination. No filesystem error is fabricated.
+          await Effect.runPromise(releaseDatabaseLifecycleLock(competitor));
+          competitor = undefined;
+          throw cause;
+        }
+      });
+      try {
+        await expect(
+          Effect.runPromise(acquireDatabaseLifecycleLock(dbPath)),
+        ).rejects.toBeInstanceOf(DatabaseLifecycleLockedError);
+        expect(["EEXIST", "ENOTEMPTY"]).toContain(collisionCode);
+        await expect(fs.stat(lockPath)).rejects.toMatchObject({ code: "ENOENT" });
+      } finally {
+        vi.mocked(fs.rename).mockReset();
+        if (competitor) await Effect.runPromise(releaseDatabaseLifecycleLock(competitor));
+      }
+      const next = await Effect.runPromise(acquireDatabaseLifecycleLock(dbPath));
+      await Effect.runPromise(releaseDatabaseLifecycleLock(next));
+      expect(await fs.readdir(path.dirname(dbPath))).toEqual([]);
+    },
+  );
+
+  it("propagates publication I/O failure when no competing owner exists", async () => {
+    const dbPath = await makeDbPath();
+    const failure = Object.assign(new Error("Synthetic disk I/O failure"), { code: "EIO" });
+    vi.mocked(fs.rename).mockRejectedValueOnce(failure);
+
+    const result = await Effect.runPromise(Effect.result(acquireDatabaseLifecycleLock(dbPath)));
+
+    expect(result._tag).toBe("Failure");
+    if (result._tag === "Failure") expect(result.failure).toBe(failure);
+    expect(await fs.readdir(path.dirname(dbPath))).toEqual([]);
   });
 
   it("recovers a well-formed lock owned by a dead process", async () => {

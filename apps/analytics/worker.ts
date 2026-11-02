@@ -16,6 +16,7 @@
 
 import {
   redactDiagnosticText,
+  sanitizeDesktopUpdateFailureReason,
   sanitizeRemoteDiagnosticError,
 } from "@synara/shared/diagnosticsRedaction";
 
@@ -546,7 +547,15 @@ export function normalizeEvent(raw: unknown, now = Date.now()): NormalizedEvent 
   }
   const processType =
     typeof payload.processType === "string" ? payload.processType.slice(0, 32) : "";
-  const reason = typeof payload.reason === "string" ? payload.reason.slice(0, 64) : "";
+  // Update reasons use the existing column, but accept only fixed failure categories.
+  const reason =
+    kind === "update" || raw.event.startsWith("update.")
+      ? raw.event === "update.error" && kind === "update" && outcome === "error"
+        ? (sanitizeDesktopUpdateFailureReason(payload.reason) ?? "")
+        : ""
+      : typeof payload.reason === "string"
+        ? payload.reason.slice(0, 64)
+        : "";
   const errorContext =
     payload.errorContext === "check" ||
     payload.errorContext === "download" ||

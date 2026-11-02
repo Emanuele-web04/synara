@@ -9,12 +9,17 @@ import { RemoteExecutionScope as RemoteScopeSchema } from "@synara/contracts";
 import type { ActiveHost } from "./activeHost";
 import { readExecutionContext } from "./executionContext";
 import { accountStatusScope, controlAccountScope } from "./controlQueryScope";
-import type { WorkspaceNavigation, WorkspaceSummary } from "./workspaceFrame";
+import type {
+  WorkspaceConnectionRecovery,
+  WorkspaceNavigation,
+  WorkspaceSummary,
+} from "./workspaceFrame";
 
 export interface WorkspaceSession {
   readonly host: ActiveHost & { executionScope: RemoteExecutionScope };
   readonly summary?: WorkspaceSummary;
   readonly navigation?: WorkspaceNavigation | undefined;
+  readonly resumeConnection?: WorkspaceConnectionRecovery["resume"] | undefined;
   readonly error?: string | undefined;
 }
 
@@ -100,7 +105,7 @@ export function restoreConnectedWorkspaces(
     )
       continue;
     const host = parseWorkspaceHost(connection);
-    if (!host || seen.has(host.executionScope.environmentId)) continue;
+    if (!host) continue;
     const scope = host.executionScope;
     if (
       scope.userId !== status.me.id ||
@@ -111,6 +116,17 @@ export function restoreConnectedWorkspaces(
       )
     )
       continue;
+    if (seen.has(scope.environmentId)) {
+      const existing = sessions.find((session) => session.host.hostId === host.hostId);
+      if (
+        existing &&
+        JSON.stringify(existing.host.executionScope) === JSON.stringify(scope) &&
+        (connection.state === "connected" || connection.state === "idle")
+      ) {
+        existing.resumeConnection?.({ automatic: true });
+      }
+      continue;
+    }
     seen.add(scope.environmentId);
     recovered.push({ host });
   }
@@ -131,10 +147,14 @@ export function addWorkspaceSession(value: ActiveHost): WorkspaceSession {
     (entry) => entry.host.executionScope.environmentId === host.executionScope.environmentId,
   );
   if (previous) {
-    if (JSON.stringify(previous.host.executionScope) !== JSON.stringify(host.executionScope))
+    if (
+      previous.host.hostId !== host.hostId ||
+      JSON.stringify(previous.host.executionScope) !== JSON.stringify(host.executionScope)
+    )
       throw new Error(
         "This host's account or identity changed. Disconnect it before connecting again.",
       );
+    previous.resumeConnection?.();
     return previous;
   }
   const next = { host };

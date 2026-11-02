@@ -198,15 +198,26 @@ export class HostConnectionRegistry {
       return { ...session.compatibility, remoteAttachmentId: id };
     } catch (error) {
       if (this.#desired.get(hostId) === desired && !desired.lifetime.signal.aborted) {
-        desired.state = classifyConnectionFailure(error);
-        if (desired.state !== "reconnecting")
+        const failureState = classifyConnectionFailure(error);
+        // A failed additional dial must not make the supervisor retire a healthy renderer.
+        const keepConnected =
+          failureState === "reconnecting" &&
+          desired.state === "connected" &&
+          [...this.#attachments.values()].some(
+            (entry) =>
+              entry.hostId === hostId &&
+              entry.local?.readyState === WebSocket.OPEN &&
+              entry.session.socket.readyState === WebSocket.OPEN,
+          );
+        desired.state = keepConnected ? "connected" : failureState;
+        if (failureState !== "reconnecting")
           void desired.resource?.then(
             (pool) => pool.close(),
             () => {},
           );
         desired.failures++;
         desired.retryAt =
-          desired.state === "reconnecting"
+          failureState === "reconnecting"
             ? Date.now() + Math.min(30_000, 500 * 2 ** Math.min(desired.failures, 6))
             : 0;
         const view = this.#views.get(hostId);

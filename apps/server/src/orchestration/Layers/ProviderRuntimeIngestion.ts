@@ -61,6 +61,8 @@ import {
 import { copyAndAttributeStudioGeneratedImage } from "../../studioGeneratedImages.ts";
 import { stageAssistantImageAttachments } from "../../assistantImageAttachments.ts";
 import { ServerConfig } from "../../config.ts";
+import { ServerSettingsService } from "../../serverSettings.ts";
+import { providerUsageRecoveryBindingKey } from "../../providerUsage/index.ts";
 import { ManagedAttachmentRepository } from "../../persistence/Services/ManagedAttachments.ts";
 import { ManagedAttachmentRepositoryLive } from "../../persistence/Layers/ManagedAttachments.ts";
 import { GitCore } from "../../git/Services/GitCore.ts";
@@ -627,6 +629,19 @@ function asObject(value: unknown): Record<string, unknown> | undefined {
   return isJsonObject(value) ? value : undefined;
 }
 
+function stableActivityState(activity: {
+  readonly createdAt: string;
+  readonly sequence?: number | undefined;
+  readonly payload: unknown;
+}) {
+  const status = asObject(activity.payload)?.status;
+  return {
+    createdAt: activity.createdAt,
+    sequence: activity.sequence,
+    terminalStatus: status === "failed" || status === "completed" ? status : undefined,
+  };
+}
+
 /**
  * Resolves persisted image tool records to their durable display paths. Studio
  * copies add a source -> workspace-path marker; non-Studio images keep the
@@ -836,6 +851,8 @@ const make = Effect.gen(function* () {
   const providerService = yield* ProviderService;
   const computerService = yield* Effect.serviceOption(ComputerService);
   const deviceService = yield* Effect.serviceOption(DeviceService);
+  const recoverySettings = yield* Effect.serviceOption(ServerSettingsService);
+  const recoveryLiveAfter = new Date().toISOString();
   const projectionTurnRepository = yield* ProjectionTurnRepository;
   const projectionThreadActivityRepository = yield* ProjectionThreadActivityRepository;
   const projectionThreadSessionRepository = yield* ProjectionThreadSessionRepository;
@@ -1085,7 +1102,10 @@ const make = Effect.gen(function* () {
   });
   // Keep row identity after the text buffer is consumed. On a cache miss the
   // durable activity restores ordering and terminal state across recovery.
-  const stableActivityById = yield* Cache.make<string, OrchestrationThreadActivity | undefined>({
+  const stableActivityById = yield* Cache.make<
+    string,
+    ReturnType<typeof stableActivityState> | undefined
+  >({
     capacity: BUFFERED_REASONING_SUMMARY_BY_KEY_CACHE_CAPACITY,
     timeToLive: BUFFERED_REASONING_SUMMARY_BY_KEY_TTL,
     lookup: () => Effect.succeed(undefined),
@@ -1202,27 +1222,14 @@ const make = Effect.gen(function* () {
               activityId: activity.id,
             }),
           );
-      const previous: OrchestrationThreadActivity | undefined =
-        cached ??
-        (durable
-          ? {
-              id: durable.activityId,
-              createdAt: durable.createdAt,
-              tone: durable.tone,
-              kind: durable.kind,
-              summary: durable.summary,
-              payload: durable.payload as OrchestrationThreadActivity["payload"],
-              turnId: durable.turnId,
-              ...(durable.sequence !== undefined ? { sequence: durable.sequence } : {}),
-            }
-          : undefined);
+      const previous = cached ?? (durable ? stableActivityState(durable) : undefined);
       if (previous) {
         yield* Cache.set(stableActivityById, activity.id, previous);
         // Interruption/failure is final; a delayed delta must not reopen a
         // completed block either. Completed snapshots may refine its detail.
         if (
-          asObject(previous.payload)?.status === "failed" ||
-          (asObject(previous.payload)?.status === "completed" &&
+          previous.terminalStatus === "failed" ||
+          (previous.terminalStatus === "completed" &&
             asObject(activity.payload)?.status !== "completed")
         )
           return;
@@ -1250,7 +1257,7 @@ const make = Effect.gen(function* () {
       createdAt: activity.createdAt,
     });
     if (hasStableActivity) {
-      yield* Cache.set(stableActivityById, activity.id, activity);
+      yield* Cache.set(stableActivityById, activity.id, stableActivityState(activity));
     }
     if (key && fingerprint) {
       yield* Cache.set(latestActivityUpdateFingerprintByKey, key, fingerprint);
@@ -3050,8 +3057,46 @@ const make = Effect.gen(function* () {
             );
           }
 
+          let terminalRecovery: import("@synara/contracts").UsageLimitRecovery | undefined;
+          if (
+            event.type === "turn.completed" &&
+            event.payload.state === "failed" &&
+            event.payload.usageLimit?.resetAt &&
+            eventTurnId &&
+            Option.isSome(recoverySettings)
+          ) {
+            const settings = yield* recoverySettings.value.getSettings;
+            const current = (yield* orchestrationEngine.getReadModel()).threads.find(
+              (entry) => entry.id === thread.id,
+            );
+            const source = current?.usageLimitRecoverySource;
+            if (
+              settings.autoResumeAfterUsageLimits &&
+              source?.turnId === eventTurnId &&
+              source.policyEpoch === settings.usageLimitRecoveryEpoch &&
+              source.bindingKey !== "pending"
+            ) {
+              terminalRecovery = {
+                id: `usage-limit:${event.eventId}`,
+                turnId: eventTurnId,
+                resetAt: event.payload.usageLimit.resetAt,
+                autoResume: true,
+                provider: event.provider,
+                providerInstanceId:
+                  event.providerInstanceId ??
+                  thread.session?.providerInstanceId ??
+                  readModelSelectionProviderInstanceId(thread.modelSelection) ??
+                  event.provider,
+                model: current?.modelSelection.model ?? thread.modelSelection.model,
+                bindingKey: source.bindingKey,
+                policyEpoch: source.policyEpoch,
+              };
+            }
+          }
+
           yield* orchestrationEngine.dispatch({
             type: "thread.session.set",
+            ...(terminalRecovery ? { usageLimitRecovery: terminalRecovery } : {}),
             commandId: providerCommandId(event, "thread-session-set", thread.id),
             threadId: thread.id,
             session: {
@@ -3069,6 +3114,110 @@ const make = Effect.gen(function* () {
             },
             createdAt: now,
           });
+
+          // Freeze the source identity before observing any later refusal; replay can
+          // recover an existing freeze, but cannot arm historical failures from usage UI data.
+          if (event.type === "turn.started" && eventTurnId && Option.isSome(recoverySettings)) {
+            const settings = yield* recoverySettings.value.getSettings;
+            const frozenSource = (yield* orchestrationEngine.getReadModel()).threads.find(
+              (entry) => entry.id === thread.id,
+            )?.usageLimitRecoverySource;
+            if (
+              settings.autoResumeAfterUsageLimits &&
+              event.createdAt >= recoveryLiveAfter &&
+              frozenSource?.turnId !== eventTurnId &&
+              frozenSource?.admissionSequence !== undefined &&
+              frozenSource.policyEpoch === settings.usageLimitRecoveryEpoch &&
+              orchestrationEngine.hasThreadStopAfter !== undefined &&
+              !(yield* orchestrationEngine.hasThreadStopAfter(
+                thread.id,
+                frozenSource.admissionSequence,
+                eventTurnId,
+              ))
+            ) {
+              yield* orchestrationEngine.dispatch({
+                type: "thread.usage-limit.source",
+                expectedBindingKey: frozenSource.bindingKey,
+                commandId: providerCommandId(event, "usage-limit-source-pending", thread.id),
+                threadId: thread.id,
+                source: {
+                  turnId: eventTurnId,
+                  admissionSequence: frozenSource.admissionSequence,
+                  bindingKey: "pending",
+                  policyEpoch: settings.usageLimitRecoveryEpoch,
+                },
+                createdAt: now,
+              });
+              const instanceId =
+                event.providerInstanceId ??
+                thread.session?.providerInstanceId ??
+                readModelSelectionProviderInstanceId(thread.modelSelection) ??
+                event.provider;
+              const identityProject = yield* getProjectShell(thread);
+              const workingDirectory = identityProject
+                ? resolveThreadWorkspaceCwd({ thread, projects: [identityProject] })
+                : undefined;
+              const bindingKey = yield* providerUsageRecoveryBindingKey({
+                provider: event.provider,
+                instanceId,
+                ...(workingDirectory ? { workingDirectory } : {}),
+                ...(identityProject?.workspaceRoot
+                  ? { projectRoot: identityProject.workspaceRoot }
+                  : {}),
+              }).pipe(
+                Effect.provideService(ServerSettingsService, recoverySettings.value),
+                Effect.provideService(ServerConfig, serverConfig),
+                Effect.timeoutOption("8 seconds"),
+                Effect.map((result) => Option.getOrNull(result)),
+                Effect.catch(() => Effect.succeed(null)),
+              );
+              if (bindingKey)
+                yield* orchestrationEngine.dispatch({
+                  type: "thread.usage-limit.source",
+                  commandId: providerCommandId(event, "usage-limit-source", thread.id),
+                  expectedBindingKey: "pending",
+                  threadId: thread.id,
+                  source: {
+                    turnId: eventTurnId,
+                    admissionSequence: frozenSource.admissionSequence,
+                    bindingKey,
+                    policyEpoch: settings.usageLimitRecoveryEpoch,
+                  },
+                  createdAt: now,
+                });
+            }
+            const current = (yield* orchestrationEngine.getReadModel()).threads.find(
+              (entry) => entry.id === thread.id,
+            );
+            if (current?.usageLimitRecovery?.state === "resuming")
+              yield* orchestrationEngine.dispatch({
+                type: "thread.usage-limit.started",
+                commandId: providerCommandId(event, "usage-limit-started", thread.id),
+                threadId: thread.id,
+                recoveryId: current.usageLimitRecovery.id,
+                turnId: eventTurnId,
+                createdAt: now,
+              });
+          }
+          if (isTerminalTurnEvent && eventTurnId) {
+            const before = (yield* orchestrationEngine.getReadModel()).threads.find(
+              (entry) => entry.id === thread.id,
+            );
+            const priorRecovery = before?.usageLimitRecovery;
+            if (
+              priorRecovery?.state === "resuming" &&
+              priorRecovery.resumedTurnId === eventTurnId
+            ) {
+              yield* orchestrationEngine.dispatch({
+                type: "thread.usage-limit.finish",
+                commandId: providerCommandId(event, "usage-limit-finish", thread.id),
+                threadId: thread.id,
+                recoveryId: priorRecovery.id,
+                turnId: eventTurnId,
+                createdAt: now,
+              });
+            }
+          }
 
           // Recovery still settles the old turn and drains queued work, but
           // its technical cancellation must not pause an autonomous goal.

@@ -41,6 +41,41 @@ const runWithSettings = <A, E>(
 ) => Effect.runPromise(effect.pipe(Effect.provide(testLayer)) as Effect.Effect<A, E, never>);
 
 describe("ServerSettingsService", () => {
+  it("defaults usage-limit recovery off and persists policy invalidation across restart", async () => {
+    expect(Schema.decodeSync(ServerSettingsSchema)({})).toMatchObject({
+      autoResumeAfterUsageLimits: false,
+      usageLimitRecoveryEpoch: 0,
+    });
+    const result = await runWithSettings(
+      Effect.gen(function* () {
+        const service = yield* ServerSettingsService;
+        const config = yield* ServerConfig;
+        yield* service.start;
+        yield* service.updateSettings({ autoResumeAfterUsageLimits: true });
+        yield* service.updateSettings({ autoResumeAfterUsageLimits: false });
+        yield* service.updateSettings({ autoResumeAfterUsageLimits: false });
+        yield* service.updateSettings({ autoResumeAfterUsageLimits: true });
+        // Public settings patches cannot restore an earlier server-owned epoch.
+        const spoofed = Schema.decodeUnknownSync(ServerSettingsPatchSchema)({
+          usageLimitRecoveryEpoch: 0,
+        });
+        yield* service.updateSettings(spoofed);
+        return yield* Effect.gen(function* () {
+          const restarted = yield* ServerSettingsService;
+          yield* restarted.start;
+          return yield* restarted.getSettings;
+        }).pipe(
+          Effect.provide(
+            ServerSettingsLive.pipe(
+              Layer.provide(Layer.merge(NodeServices.layer, Layer.succeed(ServerConfig, config))),
+            ),
+          ),
+        );
+      }),
+    );
+    expect(result).toMatchObject({ autoResumeAfterUsageLimits: true, usageLimitRecoveryEpoch: 1 });
+  });
+
   it("defaults keep awake to off", () => {
     expect(Schema.decodeSync(ServerSettingsSchema)({}).keepAwakeMode).toBe("off");
   });

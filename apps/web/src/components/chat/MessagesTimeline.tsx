@@ -79,6 +79,7 @@ import {
 import { pinActionLabel } from "~/lib/pin";
 import { syncAnimationsToTimelineOrigin } from "~/lib/animationTimelineSync";
 import { useStableCallback } from "~/hooks/useStableCallback";
+import { useExecutionImageSource } from "~/hooks/useExecutionImageSource";
 import { mapsEqual, setsEqual, useStableValue } from "~/hooks/useStableValue";
 import { Button } from "../ui/button";
 import { LiveStatusSpinner } from "../ui/spinner";
@@ -3728,6 +3729,13 @@ const UserImageAttachmentThumbnail = memo(function UserImageAttachmentThumbnail(
   onTimelineImageLoad: () => void;
   resolvedTheme: "light" | "dark";
 }) {
+  const {
+    ref: imageRef,
+    src: imageSrc,
+    error: imageError,
+    onLoad: onImageLoad,
+    onError: onImageError,
+  } = useExecutionImageSource(props.image.previewUrl);
   return (
     <button
       type="button"
@@ -3740,13 +3748,18 @@ const UserImageAttachmentThumbnail = memo(function UserImageAttachmentThumbnail(
         props.onImageExpand(preview);
       }}
     >
-      {props.image.previewUrl ? (
+      {props.image.previewUrl && !imageError ? (
         <img
-          src={props.image.previewUrl}
+          ref={imageRef}
+          src={imageSrc}
           alt={props.image.name}
           className="size-full object-cover"
-          onLoad={props.onTimelineImageLoad}
-          onError={props.onTimelineImageLoad}
+          onLoad={(event) => {
+            if (onImageLoad(event)) props.onTimelineImageLoad();
+          }}
+          onError={(event) => {
+            if (onImageError(event)) props.onTimelineImageLoad();
+          }}
         />
       ) : (
         <div className="flex size-full items-center justify-center">

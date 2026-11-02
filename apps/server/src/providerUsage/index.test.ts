@@ -15,12 +15,19 @@ import {
   __resetProviderUsageCacheForTests,
   collectProviderUsageSnapshots,
   listProviderUsage,
+  providerUsageRecoveryBindingKey,
 } from "./index";
 import type { ProviderUsageContext, ProviderUsageFetcher } from "./types";
 
 const fetchMock = vi.fn<(ctx: ProviderUsageContext) => Promise<ServerProviderUsageSnapshot>>();
 const cacheKeyMock = vi.fn<(ctx: ProviderUsageContext) => Promise<string>>();
+const recoveryIdentityMock = vi.fn<(ctx: ProviderUsageContext) => Promise<string | null>>();
+const resolveExecutableMock = vi.fn<(command: string) => string | null>();
 const localUsageLinesMock = vi.fn();
+
+vi.mock("@synara/shared/executable", () => ({
+  resolveExecutable: (command: string) => resolveExecutableMock(command),
+}));
 
 vi.mock("../providerUsageSnapshot", () => ({
   loadLocalProviderUsageLines: (input: unknown) => localUsageLinesMock(input),
@@ -31,6 +38,7 @@ vi.mock("./registry", () => ({
     codex: {
       provider: "codex",
       cacheKey: (ctx: ProviderUsageContext) => cacheKeyMock(ctx),
+      recoveryIdentity: (ctx: ProviderUsageContext) => recoveryIdentityMock(ctx),
       fetch: (ctx: ProviderUsageContext) => fetchMock(ctx),
     } satisfies ProviderUsageFetcher,
   },
@@ -63,6 +71,12 @@ beforeEach(() => {
   fetchMock.mockReset();
   cacheKeyMock.mockReset();
   cacheKeyMock.mockImplementation(async (ctx) => ctx.env.TEST_USAGE_ACCOUNT ?? "account-a");
+  resolveExecutableMock.mockReset();
+  resolveExecutableMock.mockImplementation((command) =>
+    command.startsWith("/") ? command : `/synthetic/bin/${command}`,
+  );
+  recoveryIdentityMock.mockReset();
+  recoveryIdentityMock.mockResolvedValue("native-account-a:org-a");
   localUsageLinesMock.mockReset();
   localUsageLinesMock.mockResolvedValue([]);
 });
@@ -443,5 +457,124 @@ describe("listProviderUsage account routing", () => {
       source: `${result.homeDir}/accounts/shadow`,
       usageLines: [{ label: "Marker", value: "shadow" }],
     });
+  });
+});
+
+describe("providerUsageRecoveryBindingKey", () => {
+  const key = () => providerUsageRecoveryBindingKey({ provider: "codex", instanceId: "codex" });
+
+  it("survives usage token rotation and unrelated server credentials changing across restart", async () => {
+    vi.stubEnv("SYNARA_AUTH_TOKEN", "server-token-before");
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const first = yield* key();
+        cacheKeyMock.mockResolvedValue("rotated-refresh-token-cache-key");
+        vi.stubEnv("SYNARA_AUTH_TOKEN", "server-token-after");
+        vi.stubEnv("SYNARA_WS_TOKEN", "new-transport-token");
+        vi.stubEnv("PATH", "/different/restart/path");
+        const second = yield* key();
+        return { first, second };
+      }).pipe(Effect.provide(usageTestLayer()), Effect.scoped),
+    );
+    expect(result.first).toBeTruthy();
+    expect(result.second).toBe(result.first);
+    expect(cacheKeyMock).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("changes when the runtime resolves the same configured command to another executable", async () => {
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const first = yield* key();
+        resolveExecutableMock.mockReturnValue("/synthetic/replacement/codex");
+        const replacement = yield* key();
+        resolveExecutableMock.mockReturnValue(null);
+        const unavailable = yield* key();
+        return { first, replacement, unavailable };
+      }).pipe(Effect.provide(usageTestLayer()), Effect.scoped),
+    );
+    expect(result.replacement).not.toBe(result.first);
+    expect(result.first).toBeTruthy();
+    expect(result.replacement).toBeTruthy();
+    expect(result.unavailable).toBeNull();
+  });
+
+  it("changes for a different immutable account or organization", async () => {
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const accountA = yield* key();
+        recoveryIdentityMock.mockResolvedValue("native-account-b:org-a");
+        const accountB = yield* key();
+        recoveryIdentityMock.mockResolvedValue("native-account-b:org-b");
+        const otherOrg = yield* key();
+        return { accountA, accountB, otherOrg };
+      }).pipe(Effect.provide(usageTestLayer()), Effect.scoped),
+    );
+    expect(new Set(Object.values(result)).size).toBe(3);
+    expect(Object.values(result).every(Boolean)).toBe(true);
+  });
+
+  it("fences provider endpoints, selected configuration and explicit environment secrets", async () => {
+    vi.stubEnv("OPENAI_BASE_URL", "https://provider-a.example.test");
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const settings = yield* ServerSettingsService;
+        const first = yield* key();
+        vi.stubEnv("OPENAI_BASE_URL", "https://provider-b.example.test");
+        const endpoint = yield* key();
+        yield* settings.updateSettings({
+          providerInstances: {
+            codex: { driver: "codex", config: { binaryPath: "/synthetic/codex-other" } },
+          },
+        });
+        const binary = yield* key();
+        yield* settings.updateSettings({
+          providerInstances: {
+            codex: {
+              driver: "codex",
+              environment: [
+                { name: "CUSTOM_ACCOUNT_ROUTE", value: "first-secret", sensitive: true },
+              ],
+            },
+          },
+        });
+        const environment = yield* key();
+        yield* settings.updateSettings({
+          providerInstances: {
+            codex: {
+              driver: "codex",
+              environment: [
+                { name: "CUSTOM_ACCOUNT_ROUTE", value: "replacement-secret", sensitive: true },
+              ],
+            },
+          },
+        });
+        const changedSecret = yield* key();
+        return [first, endpoint, binary, environment, changedSecret];
+      }).pipe(Effect.provide(usageTestLayer()), Effect.scoped),
+    );
+    expect(new Set(result).size).toBe(5);
+    expect(result.every((value) => typeof value === "string" && !value.includes("secret"))).toBe(
+      true,
+    );
+  });
+
+  it("keeps unknown or unavailable identities manual without falling back to usage cache keys", async () => {
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        recoveryIdentityMock.mockResolvedValue(null);
+        const missing = yield* key();
+        recoveryIdentityMock.mockRejectedValue(new Error("unavailable synthetic identity"));
+        const failed = yield* key();
+        const unsupported = yield* providerUsageRecoveryBindingKey({
+          provider: "claudeAgent",
+          instanceId: "claudeAgent",
+        });
+        return { missing, failed, unsupported };
+      }).pipe(Effect.provide(usageTestLayer()), Effect.scoped),
+    );
+    expect(result).toEqual({ missing: null, failed: null, unsupported: null });
+    expect(cacheKeyMock).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });

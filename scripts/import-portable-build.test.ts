@@ -29,9 +29,13 @@ it("imports a verified portable archive from a path containing a drive colon", (
     ...["main", "preload", "guestPreload", "cuaDriverHostStandalone"].map(
       (name) => `apps/desktop/dist-electron/${name}.js`,
     ),
-    ...["index", "restoreMigrationBackup", "runtimeDependencySmoke", "languageWorker"].map(
-      (name) => `apps/server/dist/${name}.mjs`,
-    ),
+    ...[
+      "index",
+      "restoreMigrationBackup",
+      "compactDatabase",
+      "runtimeDependencySmoke",
+      "languageWorker",
+    ].map((name) => `apps/server/dist/${name}.mjs`),
     "apps/server/dist/client/index.html",
     "apps/server/dist/device-helper/build.sh",
   ]) {

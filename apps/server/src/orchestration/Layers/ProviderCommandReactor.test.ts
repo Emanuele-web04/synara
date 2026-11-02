@@ -3,15 +3,23 @@
 // Layer: Orchestration integration tests
 // Depends on: ProviderCommandReactorLive with in-memory provider and persistence services.
 
+import { RemoteSessionRegistryLive } from "../../remoteSessions/sessionRegistry";
 import * as betaOperationalIssue from "../../betaOperationalIssue";
+import * as providerUsageRecovery from "../../providerUsage/index.ts";
 import { planRestartTurnReconciliation } from "../startupTurnReconciliation.ts";
 import fs from "node:fs";
+import http from "node:http";
+import { createHash } from "node:crypto";
+import { fileURLToPath } from "node:url";
+import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
+import { HttpRouter } from "effect/unstable/http";
 import { execFileSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 
 import type {
   ClaudeCacheObservation,
+  ChatImageAttachment,
   ModelSelection,
   OrchestrationCommand,
   OrchestrationEvent,
@@ -34,6 +42,7 @@ import {
   PROVIDER_SEND_TURN_MAX_INPUT_CHARS,
   ProjectId,
   RuntimeItemId,
+  ServerSettingsError,
   ThreadId,
   TurnId,
 } from "@synara/contracts";
@@ -45,6 +54,7 @@ import {
 import type { DeepPartial } from "@synara/shared/Struct";
 import { SIDECHAT_INACTIVITY_EXPIRY_MS } from "@synara/shared/sidechatExpiry";
 import {
+  Clock,
   Duration,
   Deferred,
   Effect,
@@ -83,6 +93,7 @@ import {
   ProviderAdapterRequestError,
   ProviderAdapterValidationError,
   ProviderSessionDirectoryPersistenceError,
+  ProviderSessionNotFoundError,
   ProviderValidationError,
   type ProviderAdapterError,
 } from "../../provider/Errors.ts";
@@ -168,6 +179,17 @@ import { ProviderCommandReactor } from "../Services/ProviderCommandReactor.ts";
 import { HubOutputReactor, type HubOutputReactorShape } from "../Services/HubOutputReactor.ts";
 import { attachmentRelativePath } from "../../attachmentStore.ts";
 import { resolveProviderAttachmentPath } from "../../provider/providerAttachmentPaths.ts";
+import { loadProviderPromptImageBlocks } from "../../provider/promptAttachments.ts";
+import { binaryUploadEffectRouteLayer, attachmentsEffectRouteLayer } from "../../http.ts";
+import { AuthCoreLive, AuthControlPlaneLive } from "../../auth/Layers/AuthControlPlane.ts";
+import { ServerAuthLive } from "../../auth/Layers/ServerAuth.ts";
+import { ServerAuthPolicyLive } from "../../auth/Layers/ServerAuthPolicy.ts";
+import { SessionCredentialService } from "../../auth/Services/SessionCredentialService.ts";
+import {
+  attachmentPrincipalForSession,
+  bindRemoteAttachmentSession,
+} from "../../managedAttachmentPrincipal.ts";
+import { ProviderAdapterRegistry } from "../../provider/Services/ProviderAdapterRegistry.ts";
 import { PROVIDER_DEBUG_MODE_PROMPT_PREFIX } from "../../provider/debugMode.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import {
@@ -318,6 +340,7 @@ function createRetainingRestartProviderServiceLayer(options?: {
   readonly liveTurns?: boolean;
   readonly failStart?: () => boolean;
   readonly interruptFailure?: boolean;
+  readonly onSendTurn?: (input: Parameters<ProviderServiceShape["sendTurn"]>[0]) => void;
 }) {
   const unsupported = () => Effect.die(new Error("Unsupported adapter call in test"));
   const adapterFor = <P extends ProviderKind>(
@@ -383,6 +406,7 @@ function createRetainingRestartProviderServiceLayer(options?: {
         ),
       sendTurn: (input) =>
         Effect.sync(() => {
+          options?.onSendTurn?.(input);
           const turnId = asTurnId(`${provider}-turn`);
           const session = sessions.get(input.threadId);
           if (session && options?.liveTurns)
@@ -413,7 +437,27 @@ function createRetainingRestartProviderServiceLayer(options?: {
       streamEvents: Stream.never,
     };
   };
-  const settingsLayer = ServerSettingsService.layerTest();
+  const settingsLayer = Layer.unwrap(
+    Effect.gen(function* () {
+      const fixtureRoot = yield* Effect.acquireRelease(
+        Effect.sync(() => fs.mkdtempSync(path.join(os.tmpdir(), "synara-reactor-provider-"))),
+        (root) => Effect.sync(() => fs.rmSync(root, { recursive: true, force: true })),
+      );
+      const codexHomePath = path.join(fixtureRoot, "codex");
+      fs.mkdirSync(codexHomePath);
+      return ServerSettingsService.layerTest({
+        providerInstances: {
+          codex: {
+            driver: "codex",
+            config: { homePath: codexHomePath },
+            environment: [
+              { name: "SYNARA_HOME", value: path.join(fixtureRoot, "runtime"), sensitive: false },
+            ],
+          },
+        },
+      });
+    }),
+  );
   const registryLayer = ProviderAdapterRegistryLive.pipe(
     Layer.provide(
       Layer.mergeAll(
@@ -1185,6 +1229,7 @@ describe("ProviderCommandReactor", () => {
 
     return {
       engine,
+      runtime,
       realProviderService: await runtime.runPromise(Effect.service(ProviderService)),
       providerRuntimeRepository: Option.getOrUndefined(
         await runtime.runPromise(Effect.serviceOption(ProviderSessionRuntimeRepository)),
@@ -1391,6 +1436,1374 @@ describe("ProviderCommandReactor", () => {
       interceptEngineDispatch,
     };
   }
+
+  describe("usage-limit continuation delivery", () => {
+    const threadId = ThreadId.makeUnsafe("thread-1");
+    const limitedTurnId = asTurnId("usage-limit-failed-turn");
+    const bindingKey = "mock-provider-account-binding";
+
+    async function seedLimitSource(
+      harness: Awaited<ReturnType<typeof createHarness>>,
+      queuedText?: string,
+    ) {
+      const createdAt = new Date(Date.now() - 3_000).toISOString();
+      const selection = (await readHarnessThread(harness))!.modelSelection;
+      harness.setRuntimeSessionTurnState({
+        threadId,
+        status: "running",
+        runtimeMode: "approval-required",
+        activeTurnId: limitedTurnId,
+      });
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.session.set",
+          commandId: CommandId.makeUnsafe("usage-limit-running-source"),
+          threadId,
+          session: {
+            threadId,
+            status: "running",
+            providerName: selection.provider,
+            providerInstanceId: selection.instanceId ?? selection.provider,
+            runtimeMode: "approval-required",
+            activeTurnId: limitedTurnId,
+            lastError: null,
+            updatedAt: createdAt,
+          },
+          createdAt,
+        }),
+      );
+      if (queuedText) {
+        await dispatchHarnessUserTurn(harness, {
+          messageId: "usage-limit-accepted-queue",
+          text: queuedText,
+          createdAt,
+        });
+        await harness.drain();
+      }
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.usage-limit.source",
+          commandId: CommandId.makeUnsafe("usage-limit-freeze-source"),
+          threadId,
+          source: { turnId: limitedTurnId, bindingKey, policyEpoch: 0 },
+          createdAt,
+        }),
+      );
+      expect((await readHarnessThread(harness))?.usageLimitRecoverySource).toMatchObject({
+        turnId: limitedTurnId,
+        bindingKey,
+        policyEpoch: 0,
+      });
+      return createdAt;
+    }
+
+    async function seedLimitWait(
+      harness: Awaited<ReturnType<typeof createHarness>>,
+      queuedText?: string,
+    ) {
+      const createdAt = await seedLimitSource(harness, queuedText);
+      const selection = (await readHarnessThread(harness))!.modelSelection;
+      harness.setRuntimeSessionTurnState({ threadId, status: "ready" });
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.session.set",
+          commandId: CommandId.makeUnsafe("usage-limit-failed-source"),
+          threadId,
+          session: {
+            threadId,
+            status: "error",
+            providerName: selection.provider,
+            providerInstanceId: selection.instanceId ?? selection.provider,
+            runtimeMode: "approval-required",
+            activeTurnId: null,
+            lastError: "Usage limit reached",
+            updatedAt: createdAt,
+          },
+          createdAt,
+        }),
+      );
+      const sourceBeforeSchedule = await readHarnessThread(harness);
+      expect(sourceBeforeSchedule?.latestTurn).toMatchObject({
+        turnId: limitedTurnId,
+        state: "error",
+      });
+      expect(sourceBeforeSchedule?.usageLimitRecoveryCancelledTurnId).not.toBe(limitedTurnId);
+      const wait = {
+        id: "usage-limit-delivery-episode",
+        turnId: limitedTurnId,
+        resetAt: new Date(Date.now() - 1_000).toISOString(),
+        autoResume: true as const,
+        provider: selection.provider,
+        providerInstanceId: selection.instanceId ?? selection.provider,
+        model: selection.model,
+        bindingKey,
+        policyEpoch: 0,
+      };
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.usage-limit.schedule",
+          commandId: CommandId.makeUnsafe("usage-limit-arm"),
+          threadId,
+          recovery: wait,
+          createdAt,
+        }),
+      );
+      await waitFor(
+        async () => (await readHarnessThread(harness))?.usageLimitRecovery?.id === wait.id,
+      );
+      return wait;
+    }
+
+    const requestResume = (
+      harness: Awaited<ReturnType<typeof createHarness>>,
+      recoveryId: string,
+    ) =>
+      Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.usage-limit.resume",
+          commandId: CommandId.makeUnsafe(`usage-limit-resume-${crypto.randomUUID()}`),
+          threadId,
+          recoveryId,
+          policyEpoch: 0,
+          createdAt: new Date().toISOString(),
+        }),
+      );
+
+    async function seedCompletedHumanTurn(harness: Awaited<ReturnType<typeof createHarness>>) {
+      const previousTurnId = asTurnId("human-previous-completed-turn");
+      const createdAt = new Date(Date.now() - 2_000).toISOString();
+      for (const status of ["running", "ready"] as const) {
+        await Effect.runPromise(
+          harness.engine.dispatch({
+            type: "thread.session.set",
+            commandId: CommandId.makeUnsafe(`human-previous-${status}`),
+            threadId,
+            session: {
+              threadId,
+              status,
+              providerName: "codex",
+              providerInstanceId: "codex",
+              runtimeMode: "approval-required",
+              activeTurnId: status === "running" ? previousTurnId : null,
+              lastError: null,
+              updatedAt: createdAt,
+            },
+            createdAt,
+          }),
+        );
+      }
+      harness.setRuntimeSessionTurnState({
+        threadId,
+        status: "ready",
+        runtimeMode: "approval-required",
+      });
+      await harness.drain();
+      expect((await readHarnessThread(harness))?.latestTurn).toMatchObject({
+        turnId: previousTurnId,
+        state: "completed",
+      });
+      return previousTurnId;
+    }
+
+    it.each([
+      { previousTurn: false, cancellation: "Stop" },
+      { previousTurn: true, cancellation: "Stop" },
+      { previousTurn: true, cancellation: "setting disabled and re-enabled" },
+    ])(
+      "a human send refused before its ACK cannot arm after $cancellation (previousTurn=$previousTurn)",
+      async ({ previousTurn, cancellation }) => {
+        const identity = vi
+          .spyOn(providerUsageRecovery, "providerUsageRecoveryBindingKey")
+          .mockImplementation(() => Effect.succeed(bindingKey));
+        const harness = await createHarness({
+          ingestRuntimeEvents: true,
+          serverSettings: { autoResumeAfterUsageLimits: true },
+        });
+        const previousTurnId = previousTurn ? await seedCompletedHumanTurn(harness) : undefined;
+        let releaseSend!: (value: { threadId: ThreadId; turnId: TurnId }) => void;
+        const sendGate = new Promise<{ threadId: ThreadId; turnId: TurnId }>((resolve) => {
+          releaseSend = resolve;
+        });
+        harness.sendTurn.mockImplementationOnce(() => Effect.promise(() => sendGate));
+        await dispatchHarnessUserTurn(harness, {
+          messageId: "human-stopped-awaiting-ack",
+          text: "Perform the requested work",
+          createdAt: new Date().toISOString(),
+        });
+        await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+        const starting = await readHarnessThread(harness);
+        expect(starting?.session?.activeTurnId).toBeNull();
+        expect(starting?.latestTurn?.turnId).toBe(previousTurnId);
+        expect(starting?.usageLimitRecoverySource).toMatchObject({
+          bindingKey: "admission",
+          admissionSequence: expect.any(Number),
+        });
+        if (cancellation === "Stop") {
+          await Effect.runPromise(
+            harness.engine.dispatch({
+              type: "thread.turn.interrupt",
+              commandId: CommandId.makeUnsafe("human-stop-before-ack"),
+              threadId,
+              requestedBy: "user",
+              createdAt: new Date().toISOString(),
+            }),
+          );
+        } else {
+          await Effect.runPromise(
+            harness.serverSettings.updateSettings({ autoResumeAfterUsageLimits: false }),
+          );
+          await Effect.runPromise(
+            harness.serverSettings.updateSettings({ autoResumeAfterUsageLimits: true }),
+          );
+        }
+        const actual = asTurnId("human-late-start-before-ack");
+        harness.setRuntimeSessionTurnState({
+          threadId,
+          status: "running",
+          runtimeMode: "approval-required",
+          activeTurnId: actual,
+        });
+        const base = {
+          provider: "codex" as const,
+          providerInstanceId: "codex",
+          threadId,
+          turnId: actual,
+          createdAt: new Date().toISOString(),
+          providerRefs: {},
+        };
+        await harness.emitRuntimeEvent({
+          ...base,
+          type: "turn.started",
+          eventId: asEventId("human-late-started"),
+          payload: {},
+        });
+        await waitFor(
+          async () => (await readHarnessThread(harness))?.latestTurn?.turnId === actual,
+        );
+        harness.setRuntimeSessionTurnState({ threadId, status: "ready" });
+        await harness.emitRuntimeEvent({
+          ...base,
+          type: "turn.completed",
+          eventId: asEventId("human-late-refused"),
+          payload: {
+            state: "failed",
+            errorMessage: "Usage limit reached",
+            usageLimit: { resetAt: new Date(Date.now() + 60_000).toISOString() },
+          },
+        });
+        await waitFor(
+          async () => (await readHarnessThread(harness))?.latestTurn?.state === "error",
+        );
+        expect((await readHarnessThread(harness))?.usageLimitRecovery ?? null).toBeNull();
+        expect(identity).not.toHaveBeenCalled();
+        releaseSend({ threadId, turnId: actual });
+        await harness.drain();
+        if (cancellation === "Stop") {
+          expect((await readHarnessThread(harness))?.usageLimitRecoveryCancelledTurnId).toBe(
+            actual,
+          );
+        }
+        expect((await readHarnessThread(harness))?.usageLimitRecovery ?? null).toBeNull();
+        expect(harness.sendTurn).toHaveBeenCalledTimes(1);
+      },
+    );
+
+    it("stops the actual human turn accepted after an untargeted Stop", async () => {
+      const harness = await createHarness({ serverSettings: { autoResumeAfterUsageLimits: true } });
+      await seedCompletedHumanTurn(harness);
+      let releaseSend!: (value: { threadId: ThreadId; turnId: TurnId }) => void;
+      const sendGate = new Promise<{ threadId: ThreadId; turnId: TurnId }>((resolve) => {
+        releaseSend = resolve;
+      });
+      harness.sendTurn.mockImplementationOnce(() => Effect.promise(() => sendGate));
+      await dispatchHarnessUserTurn(harness, {
+        messageId: "human-stop-late-accepted",
+        text: "Perform the requested work",
+        createdAt: new Date().toISOString(),
+      });
+      await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.turn.interrupt",
+          commandId: CommandId.makeUnsafe("human-stop-before-accept"),
+          threadId,
+          requestedBy: "user",
+          createdAt: new Date().toISOString(),
+        }),
+      );
+      const actual = asTurnId("human-accepted-after-stop");
+      harness.setRuntimeSessionTurnState({
+        threadId,
+        status: "running",
+        runtimeMode: "approval-required",
+        activeTurnId: actual,
+      });
+      releaseSend({ threadId, turnId: actual });
+      await waitFor(
+        async () =>
+          (await readHarnessThread(harness))?.usageLimitRecoveryCancelledTurnId === actual,
+      );
+      await harness.drain();
+      expect(harness.interruptTurn.mock.calls[0]?.[0]).toMatchObject({ threadId, turnId: actual });
+      expect((await readHarnessThread(harness))?.usageLimitRecoveryCancelledTurnId).toBe(actual);
+      expect(harness.sendTurn).toHaveBeenCalledTimes(1);
+    });
+
+    it("a Stop after the human intent but before admission interrupts its late accepted native turn", async () => {
+      vi.spyOn(providerUsageRecovery, "providerUsageRecoveryBindingKey").mockImplementation(() =>
+        Effect.succeed(bindingKey),
+      );
+      const harness = await createHarness({
+        ingestRuntimeEvents: true,
+        serverSettings: { autoResumeAfterUsageLimits: true },
+      });
+      await seedCompletedHumanTurn(harness);
+      const dispatch = harness.engine.dispatch;
+      let stopSequence: number | undefined;
+      let executingSequence: number | undefined;
+      harness.interceptEngineDispatch((command) => {
+        if (command.type !== "thread.usage-limit.admit" || stopSequence !== undefined)
+          return undefined;
+        executingSequence = command.admissionSequence;
+        return Effect.gen(function* () {
+          const stopped = yield* dispatch({
+            type: "thread.turn.interrupt",
+            commandId: CommandId.makeUnsafe("human-stop-before-source-admit"),
+            threadId,
+            requestedBy: "user",
+            createdAt: new Date().toISOString(),
+          });
+          stopSequence = stopped.sequence;
+          // The Stop is durable before the later source-admission event.
+          return yield* dispatch(command);
+        });
+      });
+      let releaseSend!: (value: { threadId: ThreadId; turnId: TurnId }) => void;
+      const gate = new Promise<{ threadId: ThreadId; turnId: TurnId }>((resolve) => {
+        releaseSend = resolve;
+      });
+      harness.sendTurn.mockImplementationOnce(() => Effect.promise(() => gate));
+      await dispatchHarnessUserTurn(harness, {
+        messageId: "human-stop-before-admission",
+        text: "Perform the requested work",
+        createdAt: new Date().toISOString(),
+      });
+      await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+      expect(stopSequence).toBeGreaterThan(executingSequence!);
+      expect((await readHarnessThread(harness))?.usageLimitRecoverySource?.admissionSequence).toBe(
+        executingSequence,
+      );
+      const actual = asTurnId("human-late-accepted-after-pre-admission-stop");
+      harness.setRuntimeSessionTurnState({
+        threadId,
+        status: "running",
+        runtimeMode: "approval-required",
+        activeTurnId: actual,
+      });
+      releaseSend({ threadId, turnId: actual });
+      const acceptedControlId = "command:cmd-human-stop-before-admission";
+      await waitFor(() =>
+        harness.interruptTurn.mock.calls.some(
+          ([input]) => input.controlRequestId === acceptedControlId,
+        ),
+      );
+      await harness.drain();
+      expect(
+        harness.interruptTurn.mock.calls.find(
+          ([input]) => input.controlRequestId === acceptedControlId,
+        )?.[0],
+      ).toMatchObject({ threadId, turnId: actual });
+      const base = {
+        provider: "codex" as const,
+        providerInstanceId: "codex",
+        threadId,
+        turnId: actual,
+        createdAt: new Date().toISOString(),
+        providerRefs: {},
+      };
+      await harness.emitRuntimeEvent({
+        ...base,
+        type: "turn.started",
+        eventId: asEventId("pre-admit-stop-late-native-start"),
+        payload: {},
+      });
+      await waitFor(async () => (await readHarnessThread(harness))?.latestTurn?.turnId === actual);
+      harness.setRuntimeSessionTurnState({ threadId, status: "ready" });
+      await harness.emitRuntimeEvent({
+        ...base,
+        type: "turn.completed",
+        eventId: asEventId("pre-admit-stop-late-native-limit"),
+        payload: {
+          state: "failed",
+          errorMessage: "Usage limit reached",
+          usageLimit: { resetAt: new Date(Date.now() + 60_000).toISOString() },
+        },
+      });
+      await waitFor(async () => (await readHarnessThread(harness))?.latestTurn?.state === "error");
+      expect((await readHarnessThread(harness))?.usageLimitRecovery ?? null).toBeNull();
+      expect(harness.sendTurn).toHaveBeenCalledTimes(1);
+    });
+
+    it("ignores an old targeted Stop while a newer human send awaits its ACK", async () => {
+      vi.spyOn(providerUsageRecovery, "providerUsageRecoveryBindingKey").mockImplementation(() =>
+        Effect.succeed(bindingKey),
+      );
+      const harness = await createHarness({
+        ingestRuntimeEvents: true,
+        serverSettings: { autoResumeAfterUsageLimits: true },
+      });
+      const previousTurnId = await seedCompletedHumanTurn(harness);
+      let releaseSend!: (value: { threadId: ThreadId; turnId: TurnId }) => void;
+      const sendGate = new Promise<{ threadId: ThreadId; turnId: TurnId }>((resolve) => {
+        releaseSend = resolve;
+      });
+      harness.sendTurn.mockImplementationOnce(() => Effect.promise(() => sendGate));
+      await dispatchHarnessUserTurn(harness, {
+        messageId: "human-stale-target",
+        text: "Perform the new request",
+        createdAt: new Date().toISOString(),
+      });
+      await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.turn.interrupt",
+          commandId: CommandId.makeUnsafe("human-old-target-stop"),
+          threadId,
+          turnId: previousTurnId,
+          requestedBy: "user",
+          createdAt: new Date().toISOString(),
+        }),
+      );
+      const actual = asTurnId("human-new-turn-after-stale-stop");
+      harness.setRuntimeSessionTurnState({
+        threadId,
+        status: "running",
+        runtimeMode: "approval-required",
+        activeTurnId: actual,
+      });
+      releaseSend({ threadId, turnId: actual });
+      await harness.drain();
+      expect(harness.interruptTurn).not.toHaveBeenCalled();
+      const base = {
+        provider: "codex" as const,
+        providerInstanceId: "codex",
+        threadId,
+        turnId: actual,
+        createdAt: new Date().toISOString(),
+        providerRefs: {},
+      };
+      await harness.emitRuntimeEvent({
+        ...base,
+        type: "turn.started",
+        eventId: asEventId("human-new-turn-started"),
+        payload: {},
+      });
+      await waitFor(
+        async () =>
+          (await readHarnessThread(harness))?.usageLimitRecoverySource?.bindingKey === bindingKey,
+      );
+      harness.setRuntimeSessionTurnState({ threadId, status: "ready" });
+      await harness.emitRuntimeEvent({
+        ...base,
+        type: "turn.completed",
+        eventId: asEventId("human-new-turn-refused"),
+        payload: {
+          state: "failed",
+          errorMessage: "Usage limit reached",
+          usageLimit: { resetAt: new Date(Date.now() + 60_000).toISOString() },
+        },
+      });
+      await waitFor(async () => (await readHarnessThread(harness))?.usageLimitRecovery != null);
+      expect((await readHarnessThread(harness))?.usageLimitRecovery).toMatchObject({
+        turnId: actual,
+      });
+      expect(harness.interruptTurn).not.toHaveBeenCalled();
+      expect(harness.sendTurn).toHaveBeenCalledTimes(1);
+    });
+
+    it("manually resumes a quota-paused goal after clearing its wait", async () => {
+      vi.spyOn(providerUsageRecovery, "providerUsageRecoveryBindingKey").mockImplementation(() =>
+        Effect.succeed(bindingKey),
+      );
+      const harness = await createHarness({
+        ingestRuntimeEvents: true,
+        serverSettings: { autoResumeAfterUsageLimits: true },
+      });
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.meta.update",
+          commandId: CommandId.makeUnsafe("quota-goal-deferred"),
+          threadId,
+          goal: "Finish the complete requested objective",
+          goalStartBehavior: "defer",
+        }),
+      );
+      await seedLimitWait(harness);
+      expect((await readHarnessThread(harness))?.goalPausedAt).not.toBeNull();
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.meta.update",
+          commandId: CommandId.makeUnsafe("quota-goal-manual-resume"),
+          threadId,
+          goalPaused: false,
+        }),
+      );
+      await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+      await harness.drain();
+      expect((await readHarnessThread(harness))?.usageLimitRecovery).toBeNull();
+      expect((await readHarnessThread(harness))?.goalPausedAt).toBeNull();
+      expect(harness.sendTurn.mock.calls[0]?.[0].input).toContain(
+        "Continue working toward the active thread goal",
+      );
+      expect((await readHarnessThread(harness))?.usageLimitRecoverySource).toMatchObject({
+        bindingKey: "admission",
+        admissionSequence: expect.any(Number),
+      });
+      const actual = asTurnId("turn-1");
+      harness.setRuntimeSessionTurnState({
+        threadId,
+        status: "running",
+        runtimeMode: "approval-required",
+        activeTurnId: actual,
+      });
+      const base = {
+        provider: "codex" as const,
+        providerInstanceId: "codex",
+        threadId,
+        turnId: actual,
+        createdAt: new Date().toISOString(),
+        providerRefs: {},
+      };
+      await harness.emitRuntimeEvent({
+        ...base,
+        type: "turn.started",
+        eventId: asEventId("manual-goal-resume-native-started"),
+        payload: {},
+      });
+      await waitFor(
+        async () =>
+          (await readHarnessThread(harness))?.usageLimitRecoverySource?.bindingKey === bindingKey,
+      );
+      harness.setRuntimeSessionTurnState({ threadId, status: "ready" });
+      await harness.emitRuntimeEvent({
+        ...base,
+        type: "turn.completed",
+        eventId: asEventId("manual-goal-resume-native-refused"),
+        payload: {
+          state: "failed",
+          errorMessage: "Usage limit reached again",
+          usageLimit: { resetAt: new Date(Date.now() + 60_000).toISOString() },
+        },
+      });
+      await waitFor(
+        async () => (await readHarnessThread(harness))?.usageLimitRecovery?.turnId === actual,
+      );
+      expect((await readHarnessThread(harness))?.goalPausedAt).not.toBeNull();
+      expect(harness.sendTurn).toHaveBeenCalledTimes(1);
+    });
+
+    it("sends one guarded continuation and records its actual accepted turn", async () => {
+      vi.spyOn(providerUsageRecovery, "providerUsageRecoveryBindingKey").mockImplementation(() =>
+        Effect.succeed(bindingKey),
+      );
+      const harness = await createHarness({ serverSettings: { autoResumeAfterUsageLimits: true } });
+      const wait = await seedLimitWait(harness);
+      await requestResume(harness, wait.id);
+      await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+      await harness.drain();
+      expect(harness.sendTurn.mock.calls[0]?.[0].input).toContain(
+        "verify whether pending operations already completed before repeating them",
+      );
+      expect((await readHarnessThread(harness))?.usageLimitRecovery).toMatchObject({
+        id: wait.id,
+        state: "resuming",
+        resumedTurnId: "turn-1",
+      });
+      await requestResume(harness, wait.id);
+      await harness.drain();
+      expect(harness.sendTurn).toHaveBeenCalledTimes(1);
+    });
+
+    it("releases accepted queued work before creating a continuation prompt", async () => {
+      vi.spyOn(providerUsageRecovery, "providerUsageRecoveryBindingKey").mockImplementation(() =>
+        Effect.succeed(bindingKey),
+      );
+      const harness = await createHarness({ serverSettings: { autoResumeAfterUsageLimits: true } });
+      const wait = await seedLimitWait(harness, "Accepted queued work has priority");
+      await requestResume(harness, wait.id);
+      await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+      await harness.drain();
+      expect(harness.sendTurn.mock.calls[0]?.[0].input).toBe("Accepted queued work has priority");
+      expect(harness.sendTurn).toHaveBeenCalledTimes(1);
+      expect((await readHarnessThread(harness))?.usageLimitRecovery).toBeNull();
+    });
+
+    it("a cancelled wait interrupts only the continuation turn accepted after cancellation", async () => {
+      vi.spyOn(providerUsageRecovery, "providerUsageRecoveryBindingKey").mockImplementation(() =>
+        Effect.succeed(bindingKey),
+      );
+      const harness = await createHarness({ serverSettings: { autoResumeAfterUsageLimits: true } });
+      const wait = await seedLimitWait(harness);
+      let releaseSend!: (value: { threadId: ThreadId; turnId: TurnId }) => void;
+      const sendGate = new Promise<{ threadId: ThreadId; turnId: TurnId }>((resolve) => {
+        releaseSend = resolve;
+      });
+      harness.sendTurn.mockImplementationOnce(() => Effect.promise(() => sendGate));
+      await requestResume(harness, wait.id);
+      await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.turn.interrupt",
+          commandId: CommandId.makeUnsafe("usage-limit-stop-awaiting-send"),
+          threadId,
+          usageLimitRecoveryId: wait.id,
+          requestedBy: "user",
+          createdAt: new Date().toISOString(),
+        }),
+      );
+      const acceptedTurnId = asTurnId("usage-limit-accepted-after-stop");
+      harness.setRuntimeSessionTurnState({
+        threadId,
+        status: "running",
+        runtimeMode: "approval-required",
+        activeTurnId: acceptedTurnId,
+      });
+      releaseSend({ threadId, turnId: acceptedTurnId });
+      await waitFor(() => harness.interruptTurn.mock.calls.length === 1);
+      expect(harness.interruptTurn.mock.calls[0]?.[0]).toMatchObject({
+        threadId,
+        turnId: acceptedTurnId,
+      });
+      expect((await readHarnessThread(harness))?.usageLimitRecovery).toBeNull();
+      expect((await readHarnessThread(harness))?.usageLimitRecoveryCancelledTurnId).toBe(
+        acceptedTurnId,
+      );
+    });
+
+    it.each(["scoped Stop", "setting OFF/ON"] as const)(
+      "%s before quota send admission prevents startup and source resurrection",
+      async (cancellation) => {
+        vi.spyOn(providerUsageRecovery, "providerUsageRecoveryBindingKey").mockImplementation(() =>
+          Effect.succeed(bindingKey),
+        );
+        const harness = await createHarness({
+          serverSettings: { autoResumeAfterUsageLimits: true },
+        });
+        const wait = await seedLimitWait(harness);
+        const dispatch = harness.engine.dispatch;
+        let cancelled = false;
+        harness.interceptEngineDispatch((command) => {
+          if (
+            command.type !== "thread.usage-limit.admit" ||
+            command.recoveryId !== wait.id ||
+            cancelled
+          )
+            return undefined;
+          cancelled = true;
+          return Effect.gen(function* () {
+            if (cancellation === "scoped Stop") {
+              yield* dispatch({
+                type: "thread.turn.interrupt",
+                commandId: CommandId.makeUnsafe("scoped-stop-before-admit"),
+                threadId,
+                usageLimitRecoveryId: wait.id,
+                requestedBy: "user",
+                createdAt: new Date().toISOString(),
+              });
+            } else {
+              yield* harness.serverSettings
+                .updateSettings({ autoResumeAfterUsageLimits: false })
+                .pipe(Effect.orDie);
+              yield* harness.serverSettings
+                .updateSettings({ autoResumeAfterUsageLimits: true })
+                .pipe(Effect.orDie);
+            }
+            return yield* dispatch(command);
+          });
+        });
+        await requestResume(harness, wait.id);
+        await waitFor(() => cancelled);
+        await harness.drain();
+        expect(harness.sendTurn).not.toHaveBeenCalled();
+        expect(harness.startSession).not.toHaveBeenCalled();
+        expect((await readHarnessThread(harness))?.usageLimitRecovery ?? null).toBeNull();
+        expect((await readHarnessThread(harness))?.usageLimitRecoverySource ?? null).toBeNull();
+        expect((await readHarnessThread(harness))?.session?.status).not.toBe("starting");
+      },
+    );
+
+    it.each(["before native start", "before source commit"] as const)(
+      "a scoped Stop %s prevents a continuation refusal before ACK from rearming",
+      async (cancelAt) => {
+        vi.spyOn(providerUsageRecovery, "providerUsageRecoveryBindingKey").mockImplementation(() =>
+          Effect.succeed(bindingKey),
+        );
+        const harness = await createHarness({
+          ingestRuntimeEvents: true,
+          serverSettings: { autoResumeAfterUsageLimits: true },
+        });
+        const wait = await seedLimitWait(harness);
+        let releaseSend!: (value: { threadId: ThreadId; turnId: TurnId }) => void;
+        const gate = new Promise<{ threadId: ThreadId; turnId: TurnId }>((resolve) => {
+          releaseSend = resolve;
+        });
+        harness.sendTurn.mockImplementationOnce(() => Effect.promise(() => gate));
+        await requestResume(harness, wait.id);
+        await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+        const stop = {
+          type: "thread.turn.interrupt",
+          commandId: CommandId.makeUnsafe("scoped-stop-before-native-ack"),
+          threadId,
+          usageLimitRecoveryId: wait.id,
+          requestedBy: "user",
+          createdAt: new Date().toISOString(),
+        } satisfies OrchestrationCommand;
+        if (cancelAt === "before native start") {
+          await Effect.runPromise(harness.engine.dispatch(stop));
+        } else {
+          const dispatch = harness.engine.dispatch;
+          let cancelled = false;
+          harness.interceptEngineDispatch((command) => {
+            if (
+              command.type !== "thread.usage-limit.source" ||
+              command.source.bindingKey !== "pending" ||
+              cancelled
+            )
+              return undefined;
+            cancelled = true;
+            return Effect.gen(function* () {
+              yield* dispatch(stop);
+              return yield* dispatch(command);
+            });
+          });
+        }
+        const actual = asTurnId("scoped-stopped-refusal-before-ack");
+        try {
+          harness.setRuntimeSessionTurnState({
+            threadId,
+            status: "running",
+            runtimeMode: "approval-required",
+            activeTurnId: actual,
+          });
+          const base = {
+            provider: "codex" as const,
+            providerInstanceId: "codex",
+            threadId,
+            turnId: actual,
+            createdAt: new Date().toISOString(),
+            providerRefs: {},
+          };
+          await harness.emitRuntimeEvent({
+            ...base,
+            type: "turn.started",
+            eventId: asEventId("scoped-late-start"),
+            payload: {},
+          });
+          await waitFor(
+            async () => (await readHarnessThread(harness))?.latestTurn?.turnId === actual,
+          );
+          harness.setRuntimeSessionTurnState({ threadId, status: "ready" });
+          await harness.emitRuntimeEvent({
+            ...base,
+            type: "turn.completed",
+            eventId: asEventId("scoped-late-limit"),
+            payload: {
+              state: "failed",
+              errorMessage: "Usage limit reached",
+              usageLimit: { resetAt: new Date(Date.now() + 60_000).toISOString() },
+            },
+          });
+          await waitFor(
+            async () => (await readHarnessThread(harness))?.latestTurn?.state === "error",
+          );
+          expect((await readHarnessThread(harness))?.usageLimitRecovery ?? null).toBeNull();
+        } finally {
+          releaseSend({ threadId, turnId: actual });
+        }
+        await harness.drain();
+        expect((await readHarnessThread(harness))?.usageLimitRecovery ?? null).toBeNull();
+        expect(harness.sendTurn).toHaveBeenCalledTimes(1);
+      },
+    );
+
+    it("interrupts a native turn when Stop wins admission of its accepted-turn marker", async () => {
+      vi.spyOn(providerUsageRecovery, "providerUsageRecoveryBindingKey").mockImplementation(() =>
+        Effect.succeed(bindingKey),
+      );
+      const harness = await createHarness({ serverSettings: { autoResumeAfterUsageLimits: true } });
+      const wait = await seedLimitWait(harness);
+      const actual = asTurnId("usage-limit-acceptance-marker-race");
+      harness.sendTurn.mockImplementationOnce(() => {
+        harness.setRuntimeSessionTurnState({
+          threadId,
+          status: "running",
+          runtimeMode: "approval-required",
+          activeTurnId: actual,
+        });
+        return Effect.succeed({ threadId, turnId: actual });
+      });
+      const dispatch = harness.engine.dispatch;
+      let stopped = false;
+      harness.interceptEngineDispatch((command) => {
+        if (command.type !== "thread.usage-limit.started" || stopped) return undefined;
+        stopped = true;
+        return Effect.gen(function* () {
+          yield* dispatch({
+            type: "thread.turn.interrupt",
+            commandId: CommandId.makeUnsafe("stop-before-accepted-marker"),
+            threadId,
+            usageLimitRecoveryId: wait.id,
+            requestedBy: "user",
+            createdAt: new Date().toISOString(),
+          });
+          return yield* dispatch(command);
+        });
+      });
+      await requestResume(harness, wait.id);
+      await waitFor(() => harness.interruptTurn.mock.calls.length === 1);
+      await harness.drain();
+      expect(harness.interruptTurn.mock.calls[0]?.[0]).toMatchObject({ threadId, turnId: actual });
+      expect((await readHarnessThread(harness))?.usageLimitRecovery).toBeNull();
+      expect((await readHarnessThread(harness))?.usageLimitRecoveryCancelledTurnId).toBe(actual);
+    });
+
+    it.each(["disabled setting", "changed provider binding", "unknown provider binding"] as const)(
+      "%s cancels before provider execution",
+      async (reason) => {
+        const identity = vi
+          .spyOn(providerUsageRecovery, "providerUsageRecoveryBindingKey")
+          .mockImplementation(() => Effect.succeed(bindingKey));
+        const harness = await createHarness({
+          serverSettings: { autoResumeAfterUsageLimits: true },
+        });
+        const wait = await seedLimitWait(harness);
+        if (reason === "disabled setting")
+          await Effect.runPromise(
+            harness.serverSettings.updateSettings({ autoResumeAfterUsageLimits: false }),
+          );
+        else
+          identity.mockImplementation(() =>
+            Effect.succeed(
+              reason === "unknown provider binding" ? null : "replacement-provider-account",
+            ),
+          );
+        await requestResume(harness, wait.id);
+        await waitFor(async () => (await readHarnessThread(harness))?.usageLimitRecovery == null);
+        await harness.drain();
+        expect(harness.sendTurn).not.toHaveBeenCalled();
+      },
+    );
+
+    it.each([false, true])(
+      "a bounded account read timeout preserves the verified episode unless Stop won (cancel=%s)",
+      async (cancelWhileReading) => {
+        const identity = vi
+          .spyOn(providerUsageRecovery, "providerUsageRecoveryBindingKey")
+          .mockImplementationOnce(() => Effect.never)
+          .mockImplementation(() => Effect.succeed(bindingKey));
+        const harness = await createHarness({
+          serverSettings: { autoResumeAfterUsageLimits: true },
+        });
+        const wait = await seedLimitWait(harness);
+        await requestResume(harness, wait.id);
+        await waitFor(() => identity.mock.calls.length === 1);
+        expect((await readHarnessThread(harness))?.usageLimitRecovery).toMatchObject({
+          id: wait.id,
+          state: "resuming",
+        });
+        if (cancelWhileReading)
+          await Effect.runPromise(
+            harness.engine.dispatch({
+              type: "thread.turn.interrupt",
+              commandId: CommandId.makeUnsafe("stop-during-binding-timeout"),
+              threadId,
+              usageLimitRecoveryId: wait.id,
+              requestedBy: "user",
+              createdAt: new Date().toISOString(),
+            }),
+          );
+        await harness.drain();
+        expect(harness.sendTurn).not.toHaveBeenCalled();
+        expect(harness.startSession).not.toHaveBeenCalled();
+        const afterRead = await readHarnessThread(harness);
+        if (cancelWhileReading) {
+          expect(afterRead?.usageLimitRecovery ?? null).toBeNull();
+          expect(afterRead?.usageLimitRecoverySource ?? null).toBeNull();
+          return;
+        }
+        expect(afterRead?.usageLimitRecovery).toMatchObject({
+          id: wait.id,
+          state: "waiting",
+          bindingKey,
+        });
+        expect(afterRead?.usageLimitRecovery?.resumedTurnId).toBeUndefined();
+        expect(afterRead?.usageLimitRecoverySource?.bindingKey).toBe(bindingKey);
+        await requestResume(harness, wait.id);
+        await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+        await harness.drain();
+        expect(identity).toHaveBeenCalledTimes(2);
+        expect(harness.sendTurn).toHaveBeenCalledTimes(1);
+        expect((await readHarnessThread(harness))?.usageLimitRecovery).toMatchObject({
+          id: wait.id,
+          state: "resuming",
+          resumedTurnId: "turn-1",
+        });
+      },
+      15_000,
+    );
+
+    it("defers a surfaced account-read failure without losing the verified binding", async () => {
+      vi.spyOn(providerUsageRecovery, "providerUsageRecoveryBindingKey").mockImplementationOnce(
+        () =>
+          Effect.fail(
+            new ServerSettingsError({
+              settingsPath: "test-settings.json",
+              detail: "The settings read is temporarily unavailable.",
+            }),
+          ),
+      );
+      const harness = await createHarness({
+        serverSettings: { autoResumeAfterUsageLimits: true },
+      });
+      const wait = await seedLimitWait(harness);
+      await requestResume(harness, wait.id);
+      await waitFor(
+        async () => (await readHarnessThread(harness))?.usageLimitRecovery?.state === "waiting",
+      );
+      await harness.drain();
+      expect((await readHarnessThread(harness))?.usageLimitRecovery).toMatchObject({
+        id: wait.id,
+        state: "waiting",
+        bindingKey,
+      });
+      expect(harness.sendTurn).not.toHaveBeenCalled();
+      expect(harness.startSession).not.toHaveBeenCalled();
+      expect(
+        await Effect.runPromise(harness.reactor.listBlockingDeliveries({ threadId, limit: 1 })),
+      ).toEqual([]);
+    });
+
+    it("clears an ordinary-task wait when Claude cold-cache preflight holds the continuation", async () => {
+      vi.spyOn(providerUsageRecovery, "providerUsageRecoveryBindingKey").mockImplementation(() =>
+        Effect.succeed(bindingKey),
+      );
+      const observation: ClaudeCacheObservation = {
+        nativeSessionId: "usage-limit-cold-session",
+        lifecycleGeneration: "generation-cold",
+        model: "claude-opus-4-6",
+        observedAt: new Date().toISOString(),
+        contextTokens: 120_000,
+        lastResponseAt: new Date(Date.now() - 2 * 60 * 60 * 1_000).toISOString(),
+        ttlSeconds: 3_600,
+        state: "likely-expired",
+        source: "request-usage",
+      };
+      const getClaudeCacheObservation = vi.fn(() => Effect.succeed(observation));
+      const harness = await createHarness({
+        threadModelSelection: { provider: "claudeAgent", model: "claude-opus-4-6" },
+        getClaudeCacheObservation,
+        serverSettings: { autoResumeAfterUsageLimits: true },
+      });
+      const wait = await seedLimitWait(harness);
+      await requestResume(harness, wait.id);
+      await waitFor(async () => (await readHarnessThread(harness))?.usageLimitRecovery == null);
+      await harness.drain();
+      expect(getClaudeCacheObservation).toHaveBeenCalled();
+      expect(harness.sendTurn).not.toHaveBeenCalled();
+      expect((await readHarnessThread(harness))?.goal?.trim() ?? "").toBe("");
+      expect((await readHarnessThread(harness))?.session?.status).toBe("ready");
+    });
+
+    it("clears Resuming when provider startup is definitively rejected", async () => {
+      vi.spyOn(providerUsageRecovery, "providerUsageRecoveryBindingKey").mockImplementation(() =>
+        Effect.succeed(bindingKey),
+      );
+      const harness = await createHarness({ serverSettings: { autoResumeAfterUsageLimits: true } });
+      const wait = await seedLimitWait(harness);
+      await Effect.runPromise(harness.stopRuntimeSession({ threadId }));
+      harness.startSession.mockImplementationOnce(() =>
+        Effect.fail(
+          new ProviderAdapterValidationError({
+            provider: "codex",
+            operation: "startSession",
+            issue: "Mock startup rejected before provider acceptance.",
+          }),
+        ),
+      );
+      await requestResume(harness, wait.id);
+      await waitFor(async () => (await readHarnessThread(harness))?.usageLimitRecovery == null);
+      await harness.drain();
+      expect(harness.startSession).toHaveBeenCalledTimes(1);
+      expect(harness.sendTurn).not.toHaveBeenCalled();
+      expect((await readHarnessThread(harness))?.usageLimitRecovery).toBeNull();
+      expect((await readHarnessThread(harness))?.session?.status).toBe("error");
+    });
+
+    it("settles a hanging ordinary-task continuation as uncertain without retaining Resuming", async () => {
+      vi.spyOn(providerUsageRecovery, "providerUsageRecoveryBindingKey").mockImplementation(() =>
+        Effect.sleep("40 millis").pipe(Effect.as(bindingKey)),
+      );
+      const deadline = Effect.runSync(Deferred.make<void>());
+      const liveClock = Effect.runSync(Effect.service(Clock.Clock));
+      const commandClock: Clock.Clock = {
+        currentTimeMillisUnsafe: () => liveClock.currentTimeMillisUnsafe(),
+        currentTimeMillis: liveClock.currentTimeMillis,
+        currentTimeNanosUnsafe: () => liveClock.currentTimeNanosUnsafe(),
+        currentTimeNanos: liveClock.currentTimeNanos,
+        // Establish the provider hang before expiring the actual delivery budget.
+        sleep: (duration) =>
+          Duration.toMillis(duration) === 25 ? Deferred.await(deadline) : liveClock.sleep(duration),
+      };
+      const harness = await createHarness({
+        serverSettings: { autoResumeAfterUsageLimits: true },
+        commandEventTimeout: Duration.millis(25),
+        startReactor: false,
+      });
+      if (!scope) throw new Error("Missing reactor scope");
+      await Effect.runPromise(
+        harness.reactor.start.pipe(
+          Effect.provideService(Clock.Clock, commandClock),
+          Scope.provide(scope),
+        ),
+      );
+      const wait = await seedLimitWait(harness);
+      harness.sendTurn.mockImplementationOnce(() => Effect.never);
+      await requestResume(harness, wait.id);
+      await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+      await Effect.runPromise(Deferred.succeed(deadline, undefined));
+      await waitFor(async () =>
+        Option.isSome(
+          await Effect.runPromise(
+            harness.deliveryRepository.firstBlockingDeliveryForThread({
+              consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
+              threadId,
+            }),
+          ),
+        ),
+      );
+      expect((await readHarnessThread(harness))?.usageLimitRecovery).toBeNull();
+      expect(harness.sendTurn).toHaveBeenCalledTimes(1);
+      const fresh = await harness.restartReactor();
+      await fresh.start();
+      await Effect.runPromise(fresh.reactor.drain);
+      expect(harness.sendTurn).toHaveBeenCalledTimes(1);
+      expect(
+        Option.getOrThrow(
+          await Effect.runPromise(
+            harness.deliveryRepository.firstBlockingDeliveryForThread({
+              consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
+              threadId,
+            }),
+          ),
+        ).state,
+      ).toBe("uncertain");
+    });
+
+    it("reconciles an accepted recovery even when the native turn.started notification never arrived", async () => {
+      vi.spyOn(providerUsageRecovery, "providerUsageRecoveryBindingKey").mockImplementation(() =>
+        Effect.succeed(bindingKey),
+      );
+      const harness = await createHarness({ serverSettings: { autoResumeAfterUsageLimits: true } });
+      const wait = await seedLimitWait(harness);
+      await requestResume(harness, wait.id);
+      await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+      await harness.drain();
+      const persisted = await readHarnessThread(harness);
+      if (!persisted) throw new Error("Missing accepted recovery");
+      expect(persisted.session?.status).toBe("starting");
+      expect(persisted.latestTurn?.turnId).toBe(limitedTurnId);
+      expect(persisted.usageLimitRecovery).toMatchObject({
+        state: "resuming",
+        resumedTurnId: "turn-1",
+      });
+      const commands = planRestartTurnReconciliation({
+        threads: [persisted],
+        now: new Date(Date.now() + 1_000).toISOString(),
+      });
+      expect(commands.some((command) => command.type === "thread.session.set")).toBe(true);
+      for (const command of commands) await Effect.runPromise(harness.engine.dispatch(command));
+      expect((await readHarnessThread(harness))?.usageLimitRecovery).toBeNull();
+      expect((await readHarnessThread(harness))?.session?.status).toBe("interrupted");
+      const fresh = await harness.restartReactor();
+      await fresh.start();
+      await Effect.runPromise(fresh.reactor.drain);
+      expect(harness.sendTurn).toHaveBeenCalledTimes(1);
+    });
+
+    it("preserves a due but unclaimed recovery intent for its first safe delivery after restart", async () => {
+      vi.spyOn(providerUsageRecovery, "providerUsageRecoveryBindingKey").mockImplementation(() =>
+        Effect.succeed(bindingKey),
+      );
+      const harness = await createHarness({
+        startReactor: false,
+        serverSettings: { autoResumeAfterUsageLimits: true },
+      });
+      const wait = await seedLimitWait(harness);
+      await requestResume(harness, wait.id);
+      const persisted = await readHarnessThread(harness);
+      if (!persisted) throw new Error("Missing unclaimed recovery");
+      expect(
+        planRestartTurnReconciliation({ threads: [persisted], now: new Date().toISOString() }),
+      ).toEqual([]);
+      expect(harness.sendTurn).not.toHaveBeenCalled();
+      const fresh = await harness.restartReactor();
+      await fresh.start();
+      await Effect.runPromise(fresh.reactor.drain);
+      expect(harness.sendTurn).toHaveBeenCalledTimes(1);
+    });
+
+    it("clears an accepted recovery when boot reconciles its persisted orphan turn", async () => {
+      vi.spyOn(providerUsageRecovery, "providerUsageRecoveryBindingKey").mockImplementation(() =>
+        Effect.succeed(bindingKey),
+      );
+      const harness = await createHarness({ serverSettings: { autoResumeAfterUsageLimits: true } });
+      const wait = await seedLimitWait(harness);
+      await requestResume(harness, wait.id);
+      await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+      await harness.drain();
+      const accepted = await readHarnessThread(harness);
+      const resumedTurnId = accepted?.usageLimitRecovery?.resumedTurnId;
+      if (!accepted?.session || !resumedTurnId)
+        throw new Error("Expected accepted recovery ownership");
+      const now = new Date().toISOString();
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.session.set",
+          commandId: CommandId.makeUnsafe("usage-limit-native-start-before-crash"),
+          threadId,
+          session: {
+            ...accepted.session,
+            status: "running",
+            activeTurnId: resumedTurnId,
+            updatedAt: now,
+          },
+          createdAt: now,
+        }),
+      );
+      const persisted = await readHarnessThread(harness);
+      if (!persisted) throw new Error("Missing persisted recovery");
+      expect(persisted.usageLimitRecovery).toMatchObject({ state: "resuming", resumedTurnId });
+      const cleanup = planRestartTurnReconciliation({
+        threads: [persisted],
+        now: new Date(Date.now() + 1_000).toISOString(),
+      });
+      for (const command of cleanup) await Effect.runPromise(harness.engine.dispatch(command));
+      const reconciled = await readHarnessThread(harness);
+      expect(reconciled?.session?.status).toBe("interrupted");
+      expect(reconciled?.usageLimitRecovery).toBeNull();
+      const fresh = await harness.restartReactor();
+      await fresh.start();
+      await Effect.runPromise(fresh.reactor.drain);
+      expect(harness.sendTurn).toHaveBeenCalledTimes(1);
+    });
+
+    it("never replays an uncertain continuation delivery after reactor restart", async () => {
+      vi.spyOn(providerUsageRecovery, "providerUsageRecoveryBindingKey").mockImplementation(() =>
+        Effect.succeed(bindingKey),
+      );
+      const harness = await createHarness({ serverSettings: { autoResumeAfterUsageLimits: true } });
+      const wait = await seedLimitWait(harness);
+      harness.sendTurn.mockImplementationOnce(() =>
+        Effect.fail(
+          new ProviderAdapterRequestError({
+            provider: "codex",
+            method: "turn/start",
+            detail: "Connection closed after the provider may have accepted the prompt.",
+          }),
+        ),
+      );
+      await requestResume(harness, wait.id);
+      await waitFor(async () =>
+        Option.isSome(
+          await Effect.runPromise(
+            harness.deliveryRepository.firstBlockingDeliveryForThread({
+              consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
+              threadId,
+            }),
+          ),
+        ),
+      );
+      expect(harness.sendTurn).toHaveBeenCalledTimes(1);
+      const fresh = await harness.restartReactor();
+      await fresh.start();
+      await Effect.runPromise(fresh.reactor.drain);
+      expect(harness.sendTurn).toHaveBeenCalledTimes(1);
+      const blocker = Option.getOrThrow(
+        await Effect.runPromise(
+          harness.deliveryRepository.firstBlockingDeliveryForThread({
+            consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
+            threadId,
+          }),
+        ),
+      );
+      expect(blocker.state).toBe("uncertain");
+      expect((await readHarnessThread(harness))?.usageLimitRecovery).toBeNull();
+    });
+
+    it("settles a resumed native refusal without replaying its prompt or rearming the same reset", async () => {
+      vi.spyOn(providerUsageRecovery, "providerUsageRecoveryBindingKey").mockImplementation(() =>
+        Effect.succeed(bindingKey),
+      );
+      const harness = await createHarness({
+        ingestRuntimeEvents: true,
+        serverSettings: { autoResumeAfterUsageLimits: true },
+      });
+      const wait = await seedLimitWait(harness);
+      await requestResume(harness, wait.id);
+      await waitFor(
+        async () =>
+          (await readHarnessThread(harness))?.usageLimitRecovery?.resumedTurnId === "turn-1",
+      );
+      const resumedTurnId = asTurnId("turn-1");
+      const eventBase = {
+        provider: "codex" as const,
+        providerInstanceId: "codex",
+        threadId,
+        turnId: resumedTurnId,
+        createdAt: new Date().toISOString(),
+        providerRefs: {},
+      };
+      await harness.emitRuntimeEvent({
+        ...eventBase,
+        type: "turn.started",
+        eventId: asEventId("usage-limit-resumed-started"),
+        payload: {},
+      });
+      await waitFor(
+        async () =>
+          (await readHarnessThread(harness))?.usageLimitRecoverySource?.turnId === resumedTurnId,
+      );
+      harness.setRuntimeSessionTurnState({ threadId, status: "ready" });
+      await harness.emitRuntimeEvent({
+        ...eventBase,
+        type: "turn.completed",
+        eventId: asEventId("usage-limit-resumed-refused"),
+        payload: {
+          state: "failed",
+          errorMessage: "Still limited at the same advertised reset",
+          usageLimit: { resetAt: wait.resetAt },
+        },
+      });
+      await waitFor(async () => (await readHarnessThread(harness))?.usageLimitRecovery == null);
+      const fresh = await harness.restartReactor();
+      await fresh.start();
+      await Effect.runPromise(fresh.reactor.drain);
+      expect(harness.sendTurn).toHaveBeenCalledTimes(1);
+      expect((await readHarnessThread(harness))?.usageLimitRecovery).toBeNull();
+      expect((await readHarnessThread(harness))?.latestTurn?.state).toBe("error");
+    });
+
+    it.each([
+      { pendingIdentity: false, outcome: "armed" },
+      { pendingIdentity: true, outcome: "armed" },
+      { pendingIdentity: true, outcome: "disabled" },
+      { pendingIdentity: true, outcome: "unknown account" },
+    ])(
+      "holds raw quota drain until canonical terminal commit (pendingIdentity=$pendingIdentity, outcome=$outcome)",
+      async ({ pendingIdentity, outcome }) => {
+        vi.spyOn(providerUsageRecovery, "providerUsageRecoveryBindingKey").mockImplementation(() =>
+          Effect.succeed(outcome === "unknown account" ? null : bindingKey),
+        );
+        const harness = await createHarness({
+          ingestRuntimeEvents: true,
+          serverSettings: { autoResumeAfterUsageLimits: true },
+        });
+        await seedLimitSource(harness, "Do not send before reset");
+        if (pendingIdentity) {
+          await Effect.runPromise(
+            harness.engine.dispatch({
+              type: "thread.usage-limit.admit",
+              commandId: CommandId.makeUnsafe("raw-limit-pending-admission"),
+              threadId,
+              admissionSequence: (await Effect.runPromise(harness.engine.getReadModel()))
+                .snapshotSequence,
+              policyEpoch: 0,
+              createdAt: new Date().toISOString(),
+            }),
+          );
+        }
+        let releaseSchedule!: () => void;
+        let scheduleEntered = false;
+        const scheduleGate = new Promise<void>((resolve) => {
+          releaseSchedule = resolve;
+        });
+        harness.interceptEngineDispatch((command) => {
+          const isHeld = pendingIdentity
+            ? command.type === "thread.usage-limit.source" &&
+              command.source.bindingKey === "pending"
+            : command.type === "thread.session.set" && command.usageLimitRecovery !== undefined;
+          if (!isHeld || scheduleEntered) return undefined;
+          scheduleEntered = true;
+          return Effect.promise(() => scheduleGate).pipe(
+            Effect.flatMap(() => harness.engine.dispatch(command)),
+          );
+        });
+        if (pendingIdentity) {
+          await harness.emitRuntimeEvent({
+            type: "turn.started",
+            eventId: asEventId("raw-limit-pending-start"),
+            provider: "codex",
+            providerInstanceId: "codex",
+            threadId,
+            turnId: limitedTurnId,
+            createdAt: new Date().toISOString(),
+            providerRefs: {},
+            payload: {},
+          });
+          await waitFor(() => scheduleEntered);
+          expect((await readHarnessThread(harness))?.usageLimitRecoverySource?.bindingKey).toBe(
+            "admission",
+          );
+        }
+        if (outcome === "disabled") {
+          await Effect.runPromise(
+            harness.serverSettings.updateSettings({ autoResumeAfterUsageLimits: false }),
+          );
+        }
+        harness.setRuntimeSessionTurnState({ threadId, status: "ready" });
+        const terminal = {
+          type: "turn.completed",
+          eventId: asEventId("usage-limit-raw-terminal"),
+          provider: "codex",
+          providerInstanceId: "codex",
+          threadId,
+          turnId: limitedTurnId,
+          createdAt: new Date().toISOString(),
+          providerRefs: {},
+          payload: {
+            state: "failed",
+            errorMessage: "Usage limit reached",
+            usageLimit: { resetAt: new Date(Date.now() + 60_000).toISOString() },
+          },
+        } satisfies ProviderRuntimeEvent;
+        await harness.emitRuntimeEvent(terminal);
+        await waitFor(() => scheduleEntered);
+        await harness.drain();
+        expect(harness.sendTurn).not.toHaveBeenCalled();
+        const queued = await Effect.runPromise(
+          harness.queuedTurnPromotionRepository.listPendingThreadIds,
+        );
+        expect(queued).toContain(threadId);
+        releaseSchedule();
+        if (outcome === "armed") {
+          await waitFor(async () => (await readHarnessThread(harness))?.usageLimitRecovery != null);
+          // A delayed/repeated raw notification can also arrive after the same
+          // canonical terminal and wait have already committed.
+          await harness.emitRuntimeEvent(terminal);
+          await harness.drain();
+          expect(harness.sendTurn).not.toHaveBeenCalled();
+          expect(
+            await Effect.runPromise(harness.queuedTurnPromotionRepository.listPendingThreadIds),
+          ).toContain(threadId);
+        } else {
+          await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+          await harness.drain();
+          expect((await readHarnessThread(harness))?.usageLimitRecovery ?? null).toBeNull();
+          expect(harness.sendTurn.mock.calls[0]?.[0].input).toBe("Do not send before reset");
+        }
+      },
+    );
+  });
 
   it("includes passive completion context only on a human send and preserves the visible user message", async () => {
     const harness = await createHarness();
@@ -1704,6 +3117,40 @@ describe("ProviderCommandReactor", () => {
   ) {
     const readModel = await Effect.runPromise(harness.engine.getReadModel());
     return readModel.threads.find((thread) => thread.id === threadId);
+  }
+
+  async function startNativeChildTurn(
+    harness: Awaited<ReturnType<typeof createHarness>>,
+    providerThreadId: string,
+    provider: ProviderKind = "codex",
+  ) {
+    const threadId = ThreadId.makeUnsafe(`subagent:thread-1:${providerThreadId}`);
+    const turnId = asTurnId(`turn-${providerThreadId}`);
+    await harness.emitRuntimeEvent({
+      type: "turn.started",
+      eventId: asEventId(`evt-start-${providerThreadId}`),
+      provider,
+      createdAt: new Date().toISOString(),
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      turnId,
+      parentTurnId: asTurnId("turn-parent"),
+      providerRefs: {
+        providerThreadId,
+        providerParentThreadId: "parent-provider-thread",
+        providerTurnId: turnId,
+        parentProviderTurnId: "turn-parent",
+      },
+      payload: {},
+    });
+    await waitFor(async () => {
+      const thread = await readHarnessThread(harness, threadId);
+      return (
+        thread?.latestTurn?.state === "running" &&
+        thread.session?.status === "running" &&
+        thread.session.activeTurnId === turnId
+      );
+    });
+    return { threadId, turnId };
   }
 
   async function seedRenameConversation(
@@ -6420,7 +7867,7 @@ describe("ProviderCommandReactor", () => {
   it.each(["pending", "compacting", "uncertain", "failed"] as const)(
     "isolates an unavailable owner with a persisted %s Claude review",
     async (reviewStatus) => {
-      const harness = await createHarness({ startReactor: false });
+      const harness = await createHarness({ startReactor: false, ingestRuntimeEvents: true });
       const now = new Date().toISOString();
       const childId = ThreadId.makeUnsafe("subagent:missing-parent:compacting");
       const messageId = asMessageId("orphan-held-message");
@@ -6440,6 +7887,20 @@ describe("ProviderCommandReactor", () => {
           createdAt: now,
         }),
       );
+      // The child was started by its provider before the parent owner vanished.
+      await harness.emitRuntimeEvent({
+        type: "turn.started",
+        eventId: asEventId("orphan-compaction-child-started"),
+        provider: "claudeAgent",
+        threadId: childId,
+        turnId: asTurnId("orphan-compaction-child-turn"),
+        createdAt: now,
+        payload: {},
+      });
+      await waitFor(async () => {
+        const child = await readHarnessThread(harness, childId);
+        return child?.latestTurn?.state === "running" && child.session?.status === "running";
+      });
       const source = await Effect.runPromise(
         harness.engine.dispatch({
           type: "thread.turn.start",
@@ -6558,7 +8019,10 @@ describe("ProviderCommandReactor", () => {
   ] as const)(
     "recovers persisted %s work with a %s delivery without replaying provider mutations",
     async (mode, priorState) => {
-      const harness = await createHarness({ startReactor: false });
+      const harness = await createHarness({
+        startReactor: false,
+        ingestRuntimeEvents: priorState === "queued",
+      });
       const now = new Date().toISOString();
       const parentId = ThreadId.makeUnsafe(
         mode === "deleted-parent" || mode === "deleted-thread" ? "thread-1" : "missing-parent",
@@ -6571,7 +8035,10 @@ describe("ProviderCommandReactor", () => {
           threadId: childId,
           projectId: asProjectId("project-1"),
           title: "Persisted child",
-          modelSelection: { provider: "codex", model: "gpt-5-codex" },
+          modelSelection:
+            priorState === "queued"
+              ? { provider: "claudeAgent", model: "claude-sonnet-4-5" }
+              : { provider: "codex", model: "gpt-5-codex" },
           runtimeMode: "approval-required",
           interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
           ...(mode === "legacy-synthetic" ? {} : { parentThreadId: parentId }),
@@ -6588,7 +8055,7 @@ describe("ProviderCommandReactor", () => {
           session: {
             threadId: childId,
             status: "running",
-            providerName: "codex",
+            providerName: priorState === "queued" ? "claudeAgent" : "codex",
             runtimeMode: "approval-required",
             activeTurnId: asTurnId("orphan-turn"),
             lastError: null,
@@ -6597,6 +8064,23 @@ describe("ProviderCommandReactor", () => {
           createdAt: now,
         }),
       );
+      if (priorState === "queued") {
+        // Restore a provider-owned child turn before persisting the historical
+        // queued message; direct input to a Codex native child is unavailable.
+        await harness.emitRuntimeEvent({
+          type: "turn.started",
+          eventId: asEventId("orphan-queued-child-started"),
+          provider: "claudeAgent",
+          threadId: childId,
+          turnId: asTurnId("orphan-turn"),
+          createdAt: now,
+          payload: {},
+        });
+        await waitFor(async () => {
+          const child = await readHarnessThread(harness, childId);
+          return child?.latestTurn?.state === "running" && child.session?.status === "running";
+        });
+      }
       await Effect.runPromise(
         harness.engine.dispatch({
           type: "thread.turn.interrupt",
@@ -6826,6 +8310,139 @@ describe("ProviderCommandReactor", () => {
     },
   );
 
+  it.each(["unknown type", "future schema", "malformed payload"] as const)(
+    "fails replay before later work or acknowledgement after an unreadable %s",
+    async (invalid) => {
+      const harness = await createHarness({ startReactor: false });
+      const createdAt = new Date().toISOString();
+      let unreadable = 0;
+      // Put the unreadable row beyond the first admission page, between valid work.
+      for (let index = 0; index < 70; index++) {
+        const result = await Effect.runPromise(
+          harness.engine.dispatch({
+            type: "thread.activity.append",
+            commandId: CommandId.makeUnsafe(`validation-${index}`),
+            threadId: ThreadId.makeUnsafe("thread-1"),
+            createdAt,
+            activity: {
+              id: asEventId(`validation-${index}`),
+              kind: "tool.progress",
+              tone: "info",
+              summary: "Progress",
+              payload: {},
+              turnId: null,
+              createdAt,
+            },
+          }),
+        );
+        unreadable = result.sequence;
+      }
+      await dispatchHarnessUserTurn(harness, {
+        messageId: "after-unreadable",
+        text: "Later work",
+        createdAt,
+      });
+      await Effect.runPromise(
+        invalid === "unknown type"
+          ? harness.sql`UPDATE orchestration_events SET event_type = 'thread.future-provider-intent' WHERE sequence = ${unreadable}`
+          : invalid === "future schema"
+            ? harness.sql`UPDATE orchestration_events SET metadata_json = '{"persistedEventSchemaVersion":999}' WHERE sequence = ${unreadable}`
+            : harness.sql`UPDATE orchestration_events SET payload_json = '{}' WHERE sequence = ${unreadable}`,
+      );
+      const rows = await Effect.runPromise(
+        harness.sql`SELECT * FROM orchestration_events ORDER BY sequence`,
+      );
+      await expect(harness.startReactor()).rejects.toThrow();
+      expect(harness.sendTurn).not.toHaveBeenCalled();
+      const state = Option.getOrThrow(
+        await Effect.runPromise(
+          harness.deliveryRepository.getConsumerState(PROVIDER_COMMAND_REACTOR_CONSUMER),
+        ),
+      );
+      expect(state.lastAckedSequence).toBeLessThan(unreadable);
+      expect(
+        await Effect.runPromise(harness.sql`SELECT * FROM orchestration_events ORDER BY sequence`),
+      ).toEqual(rows);
+    },
+  );
+
+  it("replays bounded validated pages past a blocked lane and a pruned boundary", async () => {
+    const release = Deferred.makeUnsafe<void>();
+    const entered = Deferred.makeUnsafe<void>();
+    const harness = await createHarness({
+      startReactor: false,
+      preTurnBaselineTimeout: Duration.minutes(1),
+      checkpointStore: {
+        isGitRepository: () => Effect.succeed(true),
+        captureCheckpoint: () =>
+          Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(release))),
+      },
+    });
+    const createdAt = new Date().toISOString();
+    await dispatchHarnessUserTurn(harness, {
+      messageId: "held-replay",
+      text: "Held work",
+      createdAt,
+    });
+    for (let index = 0; index < 70; index++)
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.activity.append",
+          commandId: CommandId.makeUnsafe(`page-${index}`),
+          threadId: ThreadId.makeUnsafe("thread-1"),
+          createdAt,
+          activity: {
+            id: asEventId(`page-${index}`),
+            kind: "tool.progress",
+            tone: "info",
+            summary: "Progress",
+            payload: { detail: "x".repeat(8_000) },
+            turnId: null,
+            createdAt,
+          },
+        }),
+      );
+    const through = await Effect.runPromise(harness.engine.getEventHighWaterSequence);
+    const read = harness.engine.readEventsThrough;
+    const reads = vi
+      .spyOn(harness.engine, "readEventsThrough")
+      .mockImplementation((after, high, limit) =>
+        Stream.unwrap(
+          harness.sql`DELETE FROM orchestration_events WHERE sequence = ${through}`.pipe(
+            Effect.orDie,
+            Effect.as(read(after, high, limit)),
+          ),
+        ),
+      );
+    const start = harness.startReactor();
+    try {
+      await Effect.runPromise(Deferred.await(entered).pipe(Effect.timeout("2 seconds")));
+      await waitFor(() => reads.mock.calls.filter(([, , limit]) => limit === 64).length >= 2);
+      const state = Option.getOrThrow(
+        await Effect.runPromise(
+          harness.deliveryRepository.getConsumerState(PROVIDER_COMMAND_REACTOR_CONSUMER),
+        ),
+      );
+      expect(state.lastAckedSequence).toBeLessThan(through - 70);
+      expect(reads.mock.calls[1]?.[0]).toBeGreaterThan(state.lastAckedSequence);
+    } finally {
+      await Effect.runPromise(Deferred.succeed(release, undefined));
+      await start;
+    }
+    expect(reads.mock.calls.every(([, , limit]) => limit === 64)).toBe(true);
+    const state = Option.getOrThrow(
+      await Effect.runPromise(
+        harness.deliveryRepository.getConsumerState(PROVIDER_COMMAND_REACTOR_CONSUMER),
+      ),
+    );
+    expect(state.lastAckedSequence).toBeGreaterThanOrEqual(through - 1);
+    expect(harness.sendTurn).toHaveBeenCalledTimes(1);
+    reads.mockRestore();
+    const fresh = await harness.restartReactor();
+    await fresh.start();
+    expect(harness.sendTurn).toHaveBeenCalledTimes(1);
+  });
+
   it("fails startup when a replay lane cannot read durable delivery ownership", async () => {
     const harness = await createHarness({ startReactor: false });
     vi.spyOn(harness.deliveryRepository, "getDelivery").mockImplementation(() =>
@@ -6840,20 +8457,23 @@ describe("ProviderCommandReactor", () => {
     expect(harness.sendTurn).not.toHaveBeenCalled();
   });
 
-  it("fails startup when the acknowledgement pump cannot persist its prefix", async () => {
-    const harness = await createHarness({ startReactor: false });
-    vi.spyOn(harness.deliveryRepository, "advanceCursor").mockImplementation(() =>
-      Effect.fail(
-        new PersistenceSqlError({
-          operation: "OrchestrationEventDelivery.advanceCursor",
-          detail: "injected acknowledgement persistence failure",
-        }),
-      ),
-    );
-    await expect(harness.startReactor()).rejects.toThrow(
-      "injected acknowledgement persistence failure",
-    );
-  });
+  it.each(["advanceCursor", "readEventSequencePage"] as const)(
+    "fails startup when the acknowledgement pump cannot %s",
+    async (operation) => {
+      const harness = await createHarness({ startReactor: false });
+      vi.spyOn(harness.deliveryRepository, operation).mockImplementation(() =>
+        Effect.fail(
+          new PersistenceSqlError({
+            operation: `OrchestrationEventDelivery.${operation}`,
+            detail: "injected acknowledgement persistence failure",
+          }),
+        ),
+      );
+      await expect(harness.startReactor()).rejects.toThrow(
+        "injected acknowledgement persistence failure",
+      );
+    },
+  );
 
   it("cancels blocked acknowledgement catch-up during reactor shutdown", async () => {
     const harness = await createHarness();
@@ -10900,6 +12520,104 @@ describe("ProviderCommandReactor", () => {
     expect(input?.input).toContain("Continue with the side question");
   });
 
+  it("refuses an old accepted native-review image without starting a provider or blocking later sends", async () => {
+    const harness = await createHarness({
+      startReactor: false,
+      gitWritingModelSelection: { provider: "codex", model: "gpt-5-codex" },
+    });
+    const threadId = ThreadId.makeUnsafe("thread-1");
+    const commandId = CommandId.makeUnsafe("legacy-review-image-command");
+    const messageId = asMessageId("legacy-review-image-message");
+    const image = {
+      type: "image" as const,
+      id: "att_v2_adaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      name: "legacy-review.png",
+      mimeType: "image/png",
+      sizeBytes: 4,
+    };
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.meta.update",
+        commandId: CommandId.makeUnsafe("legacy-review-worktree"),
+        threadId,
+        title: "New thread",
+        envMode: "worktree",
+        branch: "synara/deadbeef",
+        worktreePath: "/tmp/provider-project/.worktrees/deadbeef",
+        associatedWorktreePath: "/tmp/provider-project/.worktrees/deadbeef",
+        associatedWorktreeBranch: "synara/deadbeef",
+        associatedWorktreeRef: "synara/deadbeef",
+      }),
+    );
+    const attachmentPath = await harness.stageAttachment(image);
+    const accepted = await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId,
+        threadId,
+        message: {
+          messageId,
+          role: "user",
+          text: "Review using this screenshot",
+          attachments: [image],
+        },
+        runtimeMode: "approval-required",
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        createdAt: new Date().toISOString(),
+      }),
+    );
+    // Represent a durable review accepted by an older host, before the new admission guard.
+    await Effect.runPromise(harness.sql`UPDATE orchestration_events
+      SET payload_json = json_set(payload_json, '$.reviewTarget', json('{"type":"uncommittedChanges"}'))
+      WHERE command_id = ${commandId} AND event_type = 'thread.turn-start-requested'`);
+    await harness.startReactor();
+    await harness.drain();
+    expect(harness.startReview).not.toHaveBeenCalled();
+    expect(harness.sendTurn).not.toHaveBeenCalled();
+    expect(harness.startSession).not.toHaveBeenCalled();
+    expect(harness.generateThreadTitle).not.toHaveBeenCalled();
+    expect(harness.generateBranchName).not.toHaveBeenCalled();
+    const thread = await readHarnessThread(harness);
+    expect(thread?.session?.status).toBe("error");
+    expect(thread?.session?.activeTurnId).toBeNull();
+    expect(thread?.latestTurn).toBeNull();
+    expect(thread?.session?.lastError).toContain("Native code reviews do not support attachments");
+    expect(
+      thread?.activities.find((activity) => activity.kind === "provider.turn.start.failed"),
+    ).toMatchObject({
+      payload: {
+        detail: expect.stringContaining("Native code reviews do not support attachments"),
+      },
+    });
+    expect(thread?.messages.find((message) => message.id === messageId)?.attachments).toEqual([
+      image,
+    ]);
+    expect(fs.readFileSync(attachmentPath)).toEqual(Buffer.alloc(4));
+    const delivery = await Effect.runPromise(
+      harness.deliveryRepository.getDelivery({
+        consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
+        eventSequence: accepted.sequence,
+      }),
+    );
+    expect(Option.getOrThrow(delivery).state).toBe("succeeded");
+    expect(Option.getOrThrow(delivery).attemptCount).toBe(1);
+    const blocker = await Effect.runPromise(
+      harness.deliveryRepository.firstBlockingDeliveryForThread({
+        consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
+        threadId,
+      }),
+    );
+    expect(Option.isNone(blocker)).toBe(true);
+    await dispatchHarnessUserTurn(harness, {
+      messageId: "after-rejected-review",
+      text: "Continue normally",
+      createdAt: new Date().toISOString(),
+    });
+    await harness.drain();
+    expect(harness.sendTurn).toHaveBeenCalledTimes(1);
+    expect(harness.startReview).not.toHaveBeenCalled();
+  });
+
   it("preserves full transcript bootstrap when an overlong review restarts a sidechat", async () => {
     const threadId = ThreadId.makeUnsafe("thread-restarted-droid-sidechat");
     const harness = await createHarness({
@@ -12211,6 +13929,211 @@ describe("ProviderCommandReactor", () => {
       mentions: [mention],
     });
   });
+
+  it.each(["thread-1", "ios:11111111-1111-4111-8111-111111111111:thread"])(
+    "delivers HTTP-uploaded photos through their owning host and provider for %s",
+    async (rawThreadId) => {
+      const photo = fs.readFileSync(
+        fileURLToPath(new URL("../../__fixtures__/tiny-remote-photo.jpg", import.meta.url)),
+      );
+      const digest = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex");
+      const threadId = ThreadId.makeUnsafe(rawThreadId);
+      let firstHostAttachment: ChatImageAttachment | undefined;
+      for (const host of ["mini", "book"]) {
+        const received: Parameters<ProviderServiceShape["sendTurn"]>[0][] = [];
+        const harness = await createHarness({
+          providerServiceLayer: createRetainingRestartProviderServiceLayer({
+            failFirstTeardown: false,
+            onSendTurn: (input) => received.push(input),
+          }),
+        });
+        const serverScope = await Effect.runPromise(Scope.make("sequential"));
+        scopes.add(serverScope);
+        const controlPlane = AuthControlPlaneLive.pipe(Layer.provide(AuthCoreLive));
+        const auth = ServerAuthLive.pipe(
+          Layer.provide(ServerAuthPolicyLive),
+          Layer.provide(controlPlane),
+          Layer.provide(AuthCoreLive),
+        );
+        const authServices = await harness.runtime.runPromise(
+          Layer.buildWithScope(
+            Layer.mergeAll(auth, AuthCoreLive).pipe(Layer.provideMerge(RemoteSessionRegistryLive)),
+            serverScope,
+          ),
+        );
+        const sessions = ServiceMap.get(authServices, SessionCredentialService);
+        const leases = await Promise.all(
+          ["upload", "rpc", "other"].map((label) =>
+            Effect.runPromise(
+              sessions.issue({ role: "client", client: { label, deviceType: "mobile" } }),
+            ),
+          ),
+        );
+        const [uploadLease, rpcLease, otherLease] = leases;
+        const unbind = leases.map((lease, index) =>
+          bindRemoteAttachmentSession(lease!.sessionId, {
+            environmentId: host,
+            rootFingerprint: `fixture-root-${host}`,
+            userId: "fixture-owner",
+            deviceJkt: index === 2 ? "another-device" : "phone-or-desktop-device",
+            trustGeneration: 1,
+          }),
+        );
+        try {
+          const origin = await harness.runtime.runPromise(
+            Scope.provide(
+              Effect.gen(function* () {
+                const server = yield* NodeHttpServer.make(() => http.createServer(), {
+                  port: 0,
+                  host: "127.0.0.1",
+                });
+                const handler = yield* HttpRouter.toHttpEffect(
+                  Layer.mergeAll(binaryUploadEffectRouteLayer, attachmentsEffectRouteLayer),
+                );
+                yield* server.serve(handler);
+                if (server.address._tag !== "TcpAddress") throw new Error("Expected TCP server");
+                return `http://127.0.0.1:${server.address.port}`;
+              }).pipe(
+                Effect.provideServices(authServices),
+                Effect.provideService(ProviderAdapterRegistry, {
+                  getByProvider: () => Effect.die("Voice is not used in the photo fixture"),
+                  listProviders: () => Effect.succeed([]),
+                }),
+              ),
+              serverScope,
+            ),
+          );
+          const rpcPrincipal = attachmentPrincipalForSession(rpcLease!.sessionId);
+          expect(attachmentPrincipalForSession(uploadLease!.sessionId)).toEqual(rpcPrincipal);
+          if (rawThreadId !== "thread-1") {
+            await Effect.runPromise(
+              harness.engine.dispatch({
+                type: "thread.create",
+                commandId: CommandId.makeUnsafe(`cmd-photo-create-${host}`),
+                threadId,
+                projectId: asProjectId("project-1"),
+                title: "Phone photo fixture",
+                modelSelection: { provider: "codex", model: "gpt-5" },
+                interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+                runtimeMode: "approval-required",
+                branch: null,
+                worktreePath: null,
+                createdAt: new Date().toISOString(),
+              }),
+            );
+          }
+          const upload = async () => {
+            const query = new URLSearchParams({
+              type: "image",
+              threadId,
+              name: "phone-photo.jpg",
+              mimeType: "image/jpeg",
+            });
+            const response = await fetch(`${origin}/api/attachments/upload?${query}`, {
+              method: "POST",
+              headers: {
+                authorization: `Bearer ${uploadLease!.token}`,
+                "content-type": "image/jpeg",
+              },
+              body: photo,
+            });
+            const payload = await response.json();
+            expect(response.status, JSON.stringify(payload)).toBe(201);
+            expect(payload).toMatchObject({
+              type: "image",
+              mimeType: "image/jpeg",
+              sizeBytes: photo.length,
+            });
+            return payload as ChatImageAttachment;
+          };
+          const dispatch = (
+            attachment: ChatImageAttachment,
+            suffix: string,
+            principal = rpcPrincipal,
+          ) =>
+            Effect.runPromise(
+              harness.engine.dispatch(
+                {
+                  type: "thread.turn.start",
+                  commandId: CommandId.makeUnsafe(`cmd-photo-${host}-${suffix}`),
+                  threadId,
+                  message: {
+                    messageId: asMessageId(`message-photo-${host}-${suffix}`),
+                    role: "user",
+                    text: "Inspect this photo",
+                    attachments: [attachment],
+                  },
+                  runtimeMode: "approval-required",
+                  interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+                  createdAt: new Date().toISOString(),
+                },
+                { attachmentPrincipal: principal },
+              ),
+            );
+          const cancel = (attachment: ChatImageAttachment, token: string) =>
+            fetch(`${origin}/api/attachments/cancel`, {
+              method: "POST",
+              headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+              body: JSON.stringify({ attachmentId: attachment.id }),
+            });
+          if (firstHostAttachment) {
+            await expect(dispatch(firstHostAttachment, "wrong-host")).rejects.toThrow(
+              "unavailable",
+            );
+            expect(received).toHaveLength(0);
+          }
+          const cancelled = await upload();
+          expect((await cancel(cancelled, otherLease!.token)).status).toBe(404);
+          expect((await cancel(cancelled, uploadLease!.token)).status).toBe(200);
+          await expect(dispatch(cancelled, "cancelled")).rejects.toThrow("unavailable");
+          const attachment = await upload();
+          await expect(
+            dispatch(
+              attachment,
+              "wrong-owner",
+              attachmentPrincipalForSession(otherLease!.sessionId),
+            ),
+          ).rejects.toThrow("unavailable");
+          expect(received).toHaveLength(0);
+          await dispatch(attachment, "accepted");
+          await waitFor(() => received.length === 1);
+          const sent = received[0]!.attachments?.[0];
+          expect(sent).toMatchObject(attachment);
+          const storagePath =
+            sent &&
+            resolveProviderAttachmentPath({
+              attachmentsDir: path.join(harness.stateDir, "attachments"),
+              attachment: sent,
+            });
+          expect(storagePath).toContain(`${path.sep}objects${path.sep}`);
+          expect(digest(fs.readFileSync(storagePath!))).toBe(digest(photo));
+          const blocks = await Effect.runPromise(
+            loadProviderPromptImageBlocks({
+              attachments: received[0]!.attachments,
+              attachmentsDir: path.join(harness.stateDir, "attachments"),
+              provider: "codex",
+              method: "turn/start",
+              readFile: (file) => Effect.tryPromise(() => fs.promises.readFile(file)),
+            }),
+          );
+          expect(blocks).toEqual([
+            { type: "image", mimeType: "image/jpeg", data: photo.toString("base64") },
+          ]);
+          const preview = await fetch(`${origin}/attachments/${attachment.id}`, {
+            headers: { authorization: `Bearer ${rpcLease!.token}` },
+          });
+          expect(preview.status).toBe(200);
+          expect(digest(new Uint8Array(await preview.arrayBuffer()))).toBe(digest(photo));
+          expect((await cancel(attachment, uploadLease!.token)).status).toBe(409);
+          firstHostAttachment = attachment;
+        } finally {
+          unbind.forEach((release) => release());
+          await Effect.runPromise(Scope.close(serverScope, Exit.void));
+        }
+      }
+    },
+    20_000,
+  );
 
   it("dispatches managed attachments from their repository object paths", async () => {
     const harness = await createHarness();
@@ -14008,7 +15931,10 @@ describe("ProviderCommandReactor", () => {
   });
 
   it("routes subagent-thread turn starts to the parent session as steers", async () => {
-    const harness = await createHarness();
+    const harness = await createHarness({
+      threadModelSelection: { provider: "claudeAgent", model: "claude-sonnet-4-5" },
+      ingestRuntimeEvents: true,
+    });
     const now = new Date().toISOString();
 
     await Effect.runPromise(
@@ -14027,6 +15953,8 @@ describe("ProviderCommandReactor", () => {
         createdAt: now,
       }),
     );
+
+    await startNativeChildTurn(harness, "tool-steer-1", "claudeAgent");
 
     await Effect.runPromise(
       harness.engine.dispatch({
@@ -14057,7 +15985,10 @@ describe("ProviderCommandReactor", () => {
   });
 
   it("injects the subagent thread goal into its parent-session steer", async () => {
-    const harness = await createHarness();
+    const harness = await createHarness({
+      threadModelSelection: { provider: "claudeAgent", model: "claude-sonnet-4-5" },
+      ingestRuntimeEvents: true,
+    });
     const now = new Date().toISOString();
     const subagentThreadId = ThreadId.makeUnsafe("subagent:thread-1:tool-goal-steer");
 
@@ -14085,6 +16016,7 @@ describe("ProviderCommandReactor", () => {
         goal: "Finish <all> tests",
       }),
     );
+    await startNativeChildTurn(harness, "tool-goal-steer", "claudeAgent");
     await Effect.runPromise(
       harness.engine.dispatch({
         type: "thread.turn.start",
@@ -14108,6 +16040,126 @@ describe("ProviderCommandReactor", () => {
     expect(steerInput).toContain("Finish &lt;all&gt; tests");
     expect(steerInput).toContain("</synara_goal>\n\ncontinue");
   });
+
+  it.each([
+    [
+      "adapter validation",
+      () =>
+        new ProviderAdapterValidationError({
+          provider: "claudeAgent",
+          operation: "turn/steerSubagent",
+          issue: "This subagent has finished; its message was not sent.",
+        }),
+    ],
+    [
+      "inactive provider runtime",
+      () =>
+        new ProviderValidationError({
+          operation: "ProviderService.steerSubagent",
+          issue: "The provider runtime is not active.",
+        }),
+    ],
+    ["missing provider session", () => new ProviderSessionNotFoundError({ threadId: "thread-1" })],
+  ] as const)(
+    "preserves a completed native child when its admitted steer is safely rejected by %s",
+    async (_reason, rejectSteer) => {
+      const harness = await createHarness({
+        threadModelSelection: { provider: "claudeAgent", model: "claude-sonnet-4-5" },
+        ingestRuntimeEvents: true,
+      });
+      const now = new Date().toISOString();
+      const providerThreadId = "late-child";
+      const childThreadId = ThreadId.makeUnsafe(`subagent:thread-1:${providerThreadId}`);
+      const { turnId } = await startNativeChildTurn(harness, providerThreadId, "claudeAgent");
+      const enteredSteer = Deferred.makeUnsafe<void>();
+      const releaseSteer = Deferred.makeUnsafe<void>();
+      harness.steerSubagent.mockImplementationOnce(() =>
+        Deferred.succeed(enteredSteer, undefined).pipe(
+          Effect.andThen(Deferred.await(releaseSteer)),
+          Effect.andThen(Effect.fail(rejectSteer())),
+        ),
+      );
+
+      const requested = await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.turn.start",
+          commandId: CommandId.makeUnsafe("cmd-late-child-steer"),
+          threadId: childThreadId,
+          message: {
+            messageId: asMessageId("late-child-message"),
+            role: "user",
+            text: "Follow up before you finish",
+            attachments: [],
+          },
+          dispatchMode: "steer",
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          runtimeMode: "approval-required",
+          createdAt: now,
+        }),
+      );
+      await Effect.runPromise(Deferred.await(enteredSteer));
+      await harness.emitRuntimeEvent({
+        type: "turn.completed",
+        eventId: asEventId("evt-late-child-completed"),
+        provider: "claudeAgent",
+        createdAt: new Date().toISOString(),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        turnId,
+        parentTurnId: asTurnId("turn-parent"),
+        providerRefs: {
+          providerThreadId,
+          providerParentThreadId: "parent-provider-thread",
+          providerTurnId: turnId,
+          parentProviderTurnId: "turn-parent",
+        },
+        payload: { state: "completed" },
+      });
+      await waitFor(async () => {
+        const child = await readHarnessThread(harness, childThreadId);
+        return child?.latestTurn?.state === "completed" && child.session?.status === "ready";
+      });
+      await Effect.runPromise(Deferred.succeed(releaseSteer, undefined));
+      await harness.drain();
+
+      const child = await readHarnessThread(harness, childThreadId);
+      expect(child?.latestTurn).toMatchObject({ turnId, state: "completed" });
+      expect(child?.session).toMatchObject({
+        status: "ready",
+        activeTurnId: null,
+        lastError: null,
+      });
+      expect(child?.messages).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ id: "late-child-message", role: "user" }),
+        ]),
+      );
+      expect(child?.activities).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            kind: "provider.turn.start.failed",
+            payload: expect.objectContaining({
+              messageId: "late-child-message",
+              detail: expect.stringContaining("message was not sent"),
+            }),
+          }),
+        ]),
+      );
+      const delivery = await Effect.runPromise(
+        harness.deliveryRepository.getDelivery({
+          consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
+          eventSequence: requested.sequence,
+        }),
+      );
+      expect(Option.getOrThrow(delivery).state).toBe("succeeded");
+      const blocker = await Effect.runPromise(
+        harness.deliveryRepository.firstBlockingDeliveryForThread({
+          consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
+          threadId: childThreadId,
+        }),
+      );
+      expect(Option.isNone(blocker)).toBe(true);
+    },
+  );
 
   it("appends a failure activity when a task stop is requested without an active session", async () => {
     const harness = await createHarness();
@@ -14464,6 +16516,7 @@ describe("ProviderCommandReactor", () => {
     );
     await harness.drain();
     const globalReads = vi.spyOn(harness.engine, "readEventsThrough");
+    const acknowledgementReads = vi.spyOn(harness.deliveryRepository, "readEventSequencePage");
     const threadReads = vi.spyOn(harness.engine, "readThreadEventsThrough");
     const release = Deferred.makeUnsafe<void>();
     harness.backgroundTask.mockImplementationOnce(() => Deferred.await(release));
@@ -14505,8 +16558,9 @@ describe("ProviderCommandReactor", () => {
       expect(harness.backgroundTask.mock.calls.map(([input]) => input.toolUseId)).toEqual(
         Array.from({ length: 41 }, (_, index) => `bounded-${index}`),
       );
-      expect(globalReads.mock.calls.length).toBeGreaterThan(0);
-      expect(globalReads.mock.calls.every(([, , limit]) => limit === 32)).toBe(true);
+      expect(globalReads).not.toHaveBeenCalled();
+      expect(acknowledgementReads.mock.calls.length).toBeGreaterThan(0);
+      expect(acknowledgementReads.mock.calls.every(([input]) => input.limit === 32)).toBe(true);
       expect(threadReads.mock.calls.some(([, , , , limit]) => limit === 32)).toBe(true);
       // A cached next head can remove the extra head-only query entirely.
       expect(threadReads.mock.calls.length).toBeLessThan(10);
@@ -14543,26 +16597,14 @@ describe("ProviderCommandReactor", () => {
         captureCheckpoint,
       },
     });
-    // Startup replay has already settled. Subsequent global range reads are
-    // acknowledgement catch-up; count actual pulls rather than the range size.
+    // Startup replay has settled; count stored acknowledgement rows, including gaps.
     const acknowledgementReadSizes: number[] = [];
-    const readEventsThrough = harness.engine.readEventsThrough;
-    vi.spyOn(harness.engine, "readEventsThrough").mockImplementation((after, through, limit) => {
-      let consumed = 0;
-      return readEventsThrough(after, through, limit).pipe(
-        Stream.rechunk(1),
-        Stream.tap(() =>
-          Effect.sync(() => {
-            consumed += 1;
-          }),
-        ),
-        Stream.ensuring(
-          Effect.sync(() => {
-            acknowledgementReadSizes.push(consumed);
-          }),
-        ),
-      );
-    });
+    const readEventSequencePage = harness.deliveryRepository.readEventSequencePage;
+    vi.spyOn(harness.deliveryRepository, "readEventSequencePage").mockImplementation((input) =>
+      readEventSequencePage(input).pipe(
+        Effect.tap((rows) => Effect.sync(() => acknowledgementReadSizes.push(rows.length))),
+      ),
+    );
     const now = new Date().toISOString();
     // An independent checkout can capture concurrently; the same physical checkout
     // intentionally shares the baseline/undo lease.
@@ -19198,6 +21240,7 @@ describe("ProviderCommandReactor", () => {
     const harness = await createHarness({
       threadModelSelection: { provider: "claudeAgent", model: "claude-fable-5-1" },
       startReactor: false,
+      ingestRuntimeEvents: scenario === "known child owner",
       listRetainedSessions: () => Effect.succeed(retained),
     });
     const threadId = ThreadId.makeUnsafe(
@@ -19221,6 +21264,7 @@ describe("ProviderCommandReactor", () => {
           createdAt: now,
         }),
       );
+      await startNativeChildTurn(harness, "recovery-child", "claudeAgent");
     }
     const stopCommandId = CommandId.makeUnsafe("recovery-proof-stop");
     const recordStop = () =>
@@ -25982,7 +28026,10 @@ describe("ProviderCommandReactor", () => {
   });
 
   it("steers attachment-only turns through an inferred synthetic subagent parent", async () => {
-    const harness = await createHarness();
+    const harness = await createHarness({
+      threadModelSelection: { provider: "claudeAgent", model: "claude-sonnet-4-5" },
+      ingestRuntimeEvents: true,
+    });
     const now = new Date().toISOString();
     const attachment = {
       type: "file" as const,
@@ -26016,7 +28063,7 @@ describe("ProviderCommandReactor", () => {
         threadId: ThreadId.makeUnsafe("subagent:thread-1:child-provider-steer"),
         projectId: asProjectId("project-1"),
         title: "Synthetic child",
-        modelSelection: { provider: "codex", model: "gpt-5-codex" },
+        modelSelection: { provider: "claudeAgent", model: "claude-sonnet-4-5" },
         interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
         runtimeMode: "approval-required",
         branch: null,
@@ -26025,6 +28072,7 @@ describe("ProviderCommandReactor", () => {
       }),
     );
     await harness.stageAttachment(attachment, "subagent:thread-1:child-provider-steer");
+    await startNativeChildTurn(harness, "child-provider-steer", "claudeAgent");
     await Effect.runPromise(
       harness.engine.dispatch({
         type: "thread.turn.start",

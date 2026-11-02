@@ -55,6 +55,9 @@ decoration pauses while its chat is hidden.
   filed in any Space count. If none remains, New thread reopens an unsent draft.
   Actions on other threads keep the current chat open.
   Both Archive and Done offer an **Undo** toast; undoing an action on the open thread returns to it.
+  Connected-computer rows expose **Pin**, **Archive**, and **Done/Undo** on hover or keyboard focus,
+  including in Priority. The controls replace the remote badge while visible and always act on
+  that chat’s owning computer; disconnected rows cannot make changes.
 - **Code review** — pull requests and issues from the GitHub repositories of your projects, with a
   detail pane and three actions on every item (see [Code review](#code-review))
 - **Tasks** (Stable and Beta) — a to-do list for anything you need to do, with or without
@@ -289,13 +292,22 @@ not offer a generic Retry because an error message alone cannot prove that resen
 Messages queued above the composer while a turn runs are sent one by one after it completes.
 If you press Stop, or the turn fails or hits a usage limit, the queue pauses instead: it
 stays visible with **Queue paused** and the reason. **Resume** sends the queue in order;
+if the provider session stopped, it starts the session again once the server connection is open.
 **Edit** moves the next queued message back into the composer. Sending a new message
 yourself goes first, and the queue resumes once that turn completes. The pause is per
 thread and survives a reload. A message already shown in the conversation was accepted by
 the server rather than queued here, and the server still sends it after a Stop.
 
+Send waits for selected images to finish preparing. If preparation fails while a send is waiting,
+the message stays unsent and its text and successfully prepared attachments remain in the composer.
+Select a readable image before retrying; a failed intake does not block later valid sends.
+
 Turn off **Settings → General → Move sent messages to top** to keep new messages at the bottom
 of the conversation and follow replies as they stream.
+
+**Settings → Providers → Resume after usage limits** is off by default. When enabled, a supported provider's definitive failed turn with a known future reset can schedule a server-owned continuation in the same task. The failed turn remains in the transcript. The task shows its reset time, and **Stop** cancels that recovery episode. The owning computer must be running; desktop, web, and iOS clients can disconnect. A restarted host restores pending waits. It cannot wake a sleeping or powered-off computer. A Stop issued while a send is still being accepted also prevents that send from scheduling a recovery later.
+
+The continuation checks the saved conversation and workspace before repeating operations. Already accepted user messages take priority. Manual sends, Stop, pause, archive/delete, goal changes, model/account/route changes, or disabling the setting cancel the pending recovery; re-enabling does not restore cancelled waits. Unknown resets, an uncertain delivery, and providers still performing their own retry remain under existing manual or native recovery controls. Unsent composer drafts stay on their client.
 
 For work that should continue across several turns, set a deliberate
 [thread goal](https://www.trysynara.com/docs/features/thread-goals). A goal can continue after a
@@ -601,6 +613,18 @@ uses an alias. Include the extension for other files, such as `[[guide.pdf]]`.
 Regular Markdown links remain relative to the document directory. Code, escaped
 Wiki syntax, embeds, and heading/block links are left literal; this is basic file
 navigation rather than full Obsidian support.
+
+### Sending files to a connected computer
+
+A photo or file is uploaded to the computer that owns the conversation before
+its message is sent. The message references that managed upload; a path on the
+controlling device is not a path on the destination computer. Changing the
+selected computer does not retarget an upload or its cancellation.
+
+Desktop remote workspaces use the controlling window for authenticated file
+transfers. Workspace frames receive only the requested resource bytes, without
+native credentials or a broader filesystem grant. Image previews load near the
+viewport and release their temporary bytes after scrolling away.
 
 ### Images in chat replies
 

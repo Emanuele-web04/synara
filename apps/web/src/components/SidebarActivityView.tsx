@@ -21,14 +21,12 @@ import { resolveThreadEnvironmentMode } from "@synara/shared/threadEnvironment";
 
 import {
   AddPlusIcon,
-  CircleCheckIcon,
   ClearReadIcon,
   ClockIcon,
   GitBranchIcon,
   GlobeIcon,
   NewThreadIcon,
   SortIcon,
-  Undo2Icon,
   WorktreeIcon,
   FolderIcon,
 } from "~/lib/icons";
@@ -97,8 +95,7 @@ import {
 } from "./SidebarListSection";
 import { SidebarSectionToolbar } from "./SidebarSectionToolbar";
 import { SidebarDraftGlyph, SidebarStatusTrailingGlyph } from "./SidebarStatusTrailingGlyph";
-import { ThreadArchiveActionButton } from "./ThreadArchiveActionButton";
-import { ThreadPinToggleButton } from "./ThreadPinToggleButton";
+import { ThreadRowQuickActions } from "./ThreadRowQuickActions";
 import { ShortcutKbd } from "./ui/kbd";
 import { DisclosureChevron } from "./ui/DisclosureChevron";
 import {
@@ -122,12 +119,6 @@ interface ExternalActivityRow {
   onOpen: () => void;
   status: ThreadStatusPill | null;
   entry?: WorkspaceThreadEntry;
-}
-
-/** Keeps a row action (pin, archive, done) from also opening the thread. */
-function stopRowActivation(event: MouseEvent) {
-  event.preventDefault();
-  event.stopPropagation();
 }
 
 export function ActivityThreadRow({
@@ -240,11 +231,9 @@ export function ActivityThreadRow({
             // Room for the status glyph only when there is one, so a remote row's globe
             // otherwise sits at the edge.
             trailingStatus && !threadJumpLabel && "pr-4",
-            // Yield the title row to the hover actions: pin + archive + done here, the
-            // single menu button on a remote row (in the status glyph's place).
-            !external &&
+            // Local and connected remote rows yield the same space to their three actions.
+            (!external || external.entry) &&
               "group-hover/activity-row:pr-[4.25rem] group-focus-within/activity-row:pr-[4.25rem]",
-            external?.entry && "group-hover/activity-row:pr-4 group-focus-within/activity-row:pr-4",
           )}
         >
           <ProviderIcon
@@ -263,7 +252,18 @@ export function ActivityThreadRow({
             {thread.title}
           </span>
           {external ? (
-            <GlobeIcon className="size-3 shrink-0 text-sky-600 dark:text-sky-400" aria-hidden />
+            <span
+              data-slot="remote-thread-marker"
+              className={cn(
+                "inline-flex shrink-0",
+                external.entry && sidebarHoverRevealHideClassName("activity-row"),
+              )}
+            >
+              <GlobeIcon
+                className={cn(SIDEBAR_TRAILING_ICON_CLASS, "text-sky-600 dark:text-sky-400")}
+                aria-hidden
+              />
+            </span>
           ) : null}
           {thread.snoozedUntil != null ? (
             <ClockIcon
@@ -339,37 +339,16 @@ export function ActivityThreadRow({
         </span>
       ) : null}
       {!external ? (
-        <span
-          className="absolute top-2 right-1 inline-flex items-center gap-1 opacity-0 transition-opacity group-hover/activity-row:opacity-100 group-focus-within/activity-row:opacity-100"
-          // Double-clicking an action button toggles it twice; it must not also open
-          // the row's rename dialog. Pointer-up is the touch/pen double-tap signal,
-          // so keep action taps out of that detector too.
-          onDoubleClick={stopRowActivation}
-          onPointerUp={(event) => event.stopPropagation()}
-        >
-          <ThreadPinToggleButton
-            pinned={isPinned}
-            presentation="inline"
-            toneClassName={actionToneClassName}
-            onToggle={(event) => {
-              stopRowActivation(event);
-              onTogglePinned();
-            }}
-          />
-          <ThreadArchiveActionButton
+        <span className="absolute top-2 right-1 inline-flex opacity-0 transition-opacity group-hover/activity-row:opacity-100 group-focus-within/activity-row:opacity-100">
+          <ThreadRowQuickActions
             threadId={thread.id}
+            isPinned={isPinned}
+            isSettled={isSettled}
+            isSnoozed={thread.snoozedUntil != null}
             toneClassName={actionToneClassName}
+            onTogglePinned={onTogglePinned}
             onArchive={onArchive}
-          />
-          <SidebarIconButton
-            icon={thread.snoozedUntil != null || isSettled ? Undo2Icon : CircleCheckIcon}
-            label={thread.snoozedUntil != null ? "Return now" : isSettled ? "Undo" : "Done"}
-            title={thread.snoozedUntil != null ? "Return now" : isSettled ? "Undo" : "Done"}
-            iconClassName={SIDEBAR_TRAILING_ICON_CLASS}
-            className={cn("hover:text-foreground/89", actionToneClassName)}
-            onMouseDown={stopRowActivation}
-            onClick={(event) => {
-              stopRowActivation(event);
+            onDone={() => {
               if (thread.snoozedUntil != null) onReturnSnoozed();
               else onSetSettled(!isSettled);
             }}
@@ -400,12 +379,12 @@ export function ActivityThreadRow({
   if (external?.entry) {
     return (
       <WorkspaceThreadActions entry={external.entry}>
-        {({ rowEvents, menuButton }) =>
+        {({ rowEvents, quickActions }) =>
           withHoverCard(
             <>
               {rowContent}
               <span className="absolute top-2 right-1 inline-flex opacity-0 transition-opacity group-hover/activity-row:opacity-100 group-focus-within/activity-row:opacity-100">
-                {menuButton}
+                {quickActions}
               </span>
             </>,
             rowEvents,

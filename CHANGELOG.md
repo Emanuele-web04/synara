@@ -1,5 +1,64 @@
 # Changelog
 
+## 1.0.6-remote.40 — 2026-10-31
+
+**Remote connection recovery and update diagnostics.**
+
+### Fixed
+
+- A transient failure preparing an additional renderer attachment preserves already connected renderer streams, while subsequent dials keep the retry cooldown.
+- Local remote negotiation returns a typed terminal refusal instead of flattening sign-in, revocation, incompatibility and stopped states into generic unavailability. Verified recovery resumes the retained workspace; protocol incompatibility requires an explicit reconnect.
+- Failed application commands are not replayed automatically. Fatal workspace bootstrap releases its owned callbacks and transports; late cleanup cannot dispose a replacement bootstrap.
+- Desktop update diagnostics preserve a validated failure category. Remote still omits raw error messages and stack traces from these events.
+
+### Compatibility and verification
+
+- Accounts, local data, pairings, protocol revisions and payment behavior are unchanged. These desktop-controller fixes do not require an iOS/iPadOS build.
+- Deploy the diagnostics Worker receiving allowlist separately. No new D1 migration or account API deployment is required.
+- Combined source checks passed 19,372 tests (298 skipped), formatting, lint and 12 package typechecks. Exact-tag quality/server tests, packaged startup, signing/notarization, Windows Defender and provenance remain publication gates.
+- Windows retains the exact-version unsigned exception and may show SmartScreen. Mac artifacts target Apple Silicon. The app declares macOS 13, but the bundled tunnel helper requires macOS 15; connector operation on macOS 13–14 remains unqualified.
+
+## 1.0.6-remote.39 — 2026-10-28
+
+**Send photos reliably between connected computers.**
+
+### Fixed
+
+- Photos and files sent from a remote desktop workspace now upload to the computer that owns the conversation. Uploads and cancellation keep their original destination when you switch computers.
+- Remote image thumbnails, generated image previews, full-screen viewing and downloads use the same authenticated parent-window transfer path. Existing device approval and main-frame restrictions remain enforced.
+- Offscreen image previews release temporary memory while preserving message geometry; opening the full-screen viewer keeps its own image lifetime.
+- Previously loaded previews renew a rejected file grant once without layout flashes. Stale image errors cannot block a newly loading preview; persistent fullscreen failures retain Download and Retry.
+
+##### Updating
+
+Update Synara Remote on your controlling computer to **1.0.6-remote.39**. Existing accounts, local data and pairings are preserved. No hosted API migration or payment change.
+
+Windows uses the existing version-scoped unsigned release exception and may show SmartScreen. The app declares macOS 13; the bundled vendor tunnel helper requires macOS 15, so connector use on macOS 13–14 remains unqualified.
+
+### Verification
+
+- All 24 final PR checks passed with no open review findings. Local checks passed 5,931 web tests (3 skipped), 34 focused image browser cases, 49 compiler checks and 624 affected server tests.
+- Actual Electron preload/broker/helpers were exercised with a synthetic target; authenticated HTTP/SQLite/provider delivery was verified separately. Shipping Swift transport passed TLS, mint/DPoP and exact JPEG readback. Physical paired-device UI and vendor vision are not claimed by these isolated tests.
+- Exact-tag quality/server suites, packaged startup, macOS signing/notarization, Windows Defender and provenance remain publication gates. No API deployment, migration, companion release or payment change is required.
+
+## 1.0.6-remote.38 — 2026-10-28
+
+**Manage remote chats directly from their rows.**
+
+### Fixed
+
+- Connected-computer chats show Pin, Archive and Done on hover or keyboard focus, matching local chats in Activity, Priority and the sidebar. The remote marker yields to the controls, and trailing icons use the same size.
+- Done shows a visible Undo action in the controlling window, including when the row moves into Done. Undo restores the original computer's chat and reopens it only when that exact chat was active.
+- Pin, Done, Return now and Archive retain the owning computer's original chat ID, optimistic updates and existing confirmation flow. Disconnected or replaced sessions cannot redirect an action to another computer.
+- Remote row browser checks restore their viewport so later tests retain their original window dimensions.
+
+### Verification
+
+- Source checks cover owner isolation, colliding chat IDs, Done/Undo, disconnected sessions, hover/focus and icon geometry. Format, lint, typecheck and focused unit/browser suites passed; the original CI failures and retry outcomes remain recorded separately.
+- Publication requires exact-tag quality/server suites, packaged platform checks, macOS signing/notarization, Windows Defender and source-bound artifact provenance. Windows uses the version-scoped unsigned exception and may show SmartScreen.
+- No companion update, account migration, hosted API deployment or payment change is required. Remote identity, local data, approved pairings and update feeds are preserved.
+- The app declares macOS 13. The bundled cloudflared executable declares macOS 15; Remote connector operation on macOS 13–14 remains unqualified.
+
 ## 1.0.6-remote.37 — 2026-10-27
 
 **Keep photo uploads on the selected computer's backend.**

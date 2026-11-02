@@ -12,6 +12,7 @@ import type {
 import type { ShortcutMatchContext } from "../../keybindings";
 import type { WorkspaceSession } from "./workspaceSessions";
 import type { ActiveHost } from "./activeHost";
+import type { WorkspaceResourceRequester } from "./workspaceResources";
 import type { ThreadStatusPill } from "../../components/Sidebar.logic";
 import type { Project, SidebarThreadSummary } from "../../types";
 import type { SidebarContextProps } from "../../components/ui/sidebar";
@@ -26,6 +27,8 @@ export interface WorkspaceSummary {
   readonly threads: readonly (SidebarThreadSummary & {
     readonly status: ThreadStatusPill | null;
     readonly terminalEntryPoint?: boolean;
+    /** Ephemeral Done/Undo state from this thread's owning runtime. */
+    readonly settledOverride?: boolean;
   })[];
   readonly automations?: readonly {
     readonly id: string;
@@ -71,6 +74,8 @@ export type WorkspaceChatCreationCommand =
 export interface WorkspaceSidebarActions {
   renameThread(threadId: ThreadId, title: string): Promise<void>;
   setThreadPinned(threadId: ThreadId, isPinned: boolean): Promise<void>;
+  setThreadSettled(threadId: ThreadId, isSettled: boolean): Promise<boolean>;
+  returnSnoozedThread(threadId: ThreadId): Promise<void>;
   archiveThread(threadId: ThreadId, isAvailable?: () => boolean): Promise<void>;
   renameProject(projectId: ProjectId, name: string): Promise<void> | void;
   setProjectPinned(projectId: ProjectId, isPinned: boolean): Promise<void>;
@@ -81,10 +86,18 @@ export interface WorkspaceSidebarKeyboardEvent extends KeyboardEvent {
   readonly workspaceShortcutContext?: ShortcutMatchContext;
 }
 
+export interface WorkspaceConnectionRecovery {
+  resume(options?: { readonly automatic?: boolean }): void;
+  dispose(): void;
+}
+
 export interface WorkspaceFrameBinding {
   readonly host: ActiveHost;
+  registerConnectionRecovery?(recovery: WorkspaceConnectionRecovery): () => void;
   readonly controller: {
     readonly desktop?: boolean;
+    /** Typed transfers execute in the captured controller; no native API reaches the child. */
+    readonly requestResource?: WorkspaceResourceRequester;
     readonly presentation?: {
       /** Display-only window backing; never grants controller-native operations. */
       readWindowTranslucency?(): DesktopWindowTranslucency | null;

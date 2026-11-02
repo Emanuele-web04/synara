@@ -40,6 +40,7 @@ import {
   DESKTOP_RENDERER_ERROR_STACK_MAX_LENGTH,
   type DesktopRendererError,
   type DesktopUpdateState,
+  type DesktopUpdateFailureReason,
   DesktopDiagnosticBreadcrumb,
   DesktopDiagnosticIssue,
   type DesktopDiagnosticReportStatus,
@@ -47,7 +48,9 @@ import {
   ProviderKind,
 } from "@synara/contracts";
 import {
+  classifyDesktopUpdateFailure,
   redactDiagnosticText,
+  sanitizeDesktopUpdateFailureReason,
   sanitizeRemoteDiagnosticError,
 } from "@synara/shared/diagnosticsRedaction";
 import { Schema } from "effect";
@@ -163,6 +166,7 @@ export type BetaDiagnosticsPayload =
       readonly durationMs?: number;
       readonly targetVersion?: string;
       readonly errorContext?: "check" | "download" | "install";
+      readonly reason?: DesktopUpdateFailureReason;
       /** Redacted updater failure detail; accepted only for update.error. */
       readonly message?: string;
     }
@@ -221,7 +225,7 @@ const sanitizeLocale = (value: unknown): string | undefined => {
 
 /**
  * Remote shares no free text: errors keep fixed categories and numeric locations, a crash
- * its process and reason without the log tail, an update failure its step only.
+ * its process and reason without the log tail, an update failure its step and fixed reason.
  */
 function withoutFreeText(payload: BetaDiagnosticsPayload): BetaDiagnosticsPayload {
   if (payload.kind === "error") {
@@ -341,6 +345,7 @@ export function sanitizeBetaDiagnosticsPayload(
     };
   }
   if (payload.kind === "update") {
+    const reason = sanitizeDesktopUpdateFailureReason(payload.reason);
     return {
       kind: "update",
       outcome: payload.outcome === "error" ? "error" : "ok",
@@ -354,6 +359,7 @@ export function sanitizeBetaDiagnosticsPayload(
       payload.errorContext === "install"
         ? { errorContext: payload.errorContext }
         : {}),
+      ...(event === "update.error" && payload.outcome === "error" && reason ? { reason } : {}),
       ...(event === "update.error" &&
       payload.outcome === "error" &&
       typeof payload.message === "string" &&
@@ -789,6 +795,7 @@ export class BetaDiagnostics {
           kind: "update",
           outcome: "error",
           ...(next.errorContext ? { errorContext: next.errorContext } : {}),
+          reason: classifyDesktopUpdateFailure(next.message),
           ...(next.message ? { message: next.message } : {}),
         });
       return;

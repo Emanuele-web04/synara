@@ -22,6 +22,14 @@ consistent workspace.
 Provider availability can differ between the current stable release and development builds. Use the
 provider settings in your installed Synara version as the authoritative list for that build.
 
+## Usage-limit recovery
+
+**Settings → Providers → Resume after usage limits** enables automatic continuation and defaults to off. Codex and Claude can supply provider-classified terminal quota refusal and a future reset deadline. Synara waits for every blocking window it can verify; missing, stale, unrelated-account or ambiguous reset information leaves recovery manual. Usage panels and percentage warnings alone never schedule work. Other adapters remain manual until they expose equivalent terminal evidence. Native provider retries keep ownership of their active turn. Claude automatic recovery requires a verified native OAuth account profile on macOS or Linux. Windows policy scope, environment-token/API-key/helper authentication, federation profiles, and unreadable or unsupported native settings remain manual. Codex requires its native account ID; rotating tokens alone never establish durable identity.
+
+Recovery runs on the execution host, persists across its restart, and sends a guarded continuation rather than replaying the failed prompt or an in-flight tool call. It keeps the selected provider account and model. Account/route changes invalidate the saved binding; unreadable identities remain manual. A timed-out recheck of an already verified account retains its wait for another attempt; a confirmed missing or changed identity cancels it. An identity that was never verified is not adopted later. Stop and disabling the preference cancel pending waits, including a Stop that arrives before the terminal refusal. A repeated refusal with the same or an earlier reset cannot create a tight retry loop. The original failed turn stays failed, and uncertain provider delivery remains blocked for reconciliation.
+
+For Synara Remote, deploy the updated account API before rolling out updated execution hosts or iOS clients. Host execution can resume while the phone is closed. Live Activity registrations expire after 4 hours and completion notification watches after 24 hours; push updates are not guaranteed after those registrations expire. Registration expiry does not stop host execution.
+
 ## What Synara manages
 
 Synara provides the shared operating surface around each provider:
@@ -86,6 +94,12 @@ evidence can retire only the provider session generation that accepted the recap
 so an old activity retry cannot discard a newer session's pending transcript.
 If the runtime restarts before that evidence is committed, Synara conservatively
 retains the recap for the next accepted turn, even when native resume succeeds.
+
+Native code reviews accept their review target, not prompt attachments. A review request with
+attachments is rejected before the message or attachment claim is accepted. Send those files as
+an ordinary message instead; no extra provider send is made automatically. An unsupported review
+already accepted by an older host fails before provider startup if it has not been delivered yet;
+its saved message and files remain available, and later ordinary messages are not blocked.
 
 Codex's internal `turn/moderationMetadata` notifications stay in local native event logs
 when logging is enabled and do not create conversation activity rows. Actual provider
@@ -405,6 +419,12 @@ Children are named after their description, nickname or brief, never after a pro
 Codex multi-agent v2 encrypts spawn briefs, so its children are named after their task name and
 open without a brief. Synara shows up to 20 provider-native subagents per turn and notes on the
 parent thread when more ran.
+
+You can message a running Claude native child from its own composer. Codex native children are
+read-only: Codex multi-agent v2 requires its parent agent to deliver child messages and rejects
+direct app-server input. Finished native children are also read-only. These sends are rejected
+before adding a user message, preserving the completed outcome. Ordinary delegated task
+conversations keep their independent messaging behavior.
 
 The parent transcript groups adjacent child launches from the same turn in a compact card at
 their launch position; assistant narration separates groups. Cards start collapsed and preserve

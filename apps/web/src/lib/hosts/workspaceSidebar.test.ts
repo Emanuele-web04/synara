@@ -205,6 +205,40 @@ describe("unified workspace sidebar", () => {
     ]);
     expect(result.canShowMore).toBe(false);
   });
+  it("keeps optimistic Done and Undo scoped to their owner without changing authoritative timestamps", () => {
+    const baseThread = thread("2026-09-29T00:00:00Z");
+    const completedAt = "2026-09-29T01:00:00Z";
+    const first: WorkspaceSession = {
+      ...session("mini"),
+      summary: {
+        ...session("mini").summary!,
+        threads: [{ ...baseThread, settledAt: null, settledOverride: true }],
+      },
+    };
+    const second: WorkspaceSession = {
+      ...session("other"),
+      summary: {
+        ...session("other").summary!,
+        threads: [{ ...baseThread, settledAt: completedAt, settledOverride: false }],
+      },
+    };
+    const activity = workspaceActivityRows([first, second]);
+    const [done, undone] = activity.threads;
+    expect(activity.settledOverrideByThreadId).toEqual(
+      new Map([
+        [done!.id, true],
+        [undone!.id, false],
+      ]),
+    );
+    expect(activity.settledOverrideByThreadId.has(baseThread.id)).toBe(false);
+    expect(done!.settledAt).toBeNull();
+    expect(undone!.settledAt).toBe(completedAt);
+    expect(activity.remoteById.get(done!.id)?.session).toBe(first);
+    expect(activity.remoteById.get(undone!.id)?.session).toBe(second);
+    expect(
+      workspaceActivityRows([session("mini"), session("other")]).settledOverrideByThreadId.size,
+    ).toBe(0);
+  });
   it("qualifies Activity rows and parent references while preserving original routing identity", () => {
     let first = session("mini");
     first = {

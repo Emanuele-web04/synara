@@ -3,9 +3,11 @@
 // Layer: Chat and composer UI component
 // Exports: ExpandedImageOverlay
 
-import { useLayoutEffect } from "react";
+import { useLayoutEffect, useState } from "react";
 
+import { LocalImageErrorCard, useLocalImageDownloadClick } from "~/components/LocalImagePreview";
 import { Button } from "~/components/ui/button";
+import { useExecutionImageSource } from "~/hooks/useExecutionImageSource";
 import { ChevronLeftIcon, ChevronRightIcon, XIcon } from "~/lib/icons";
 import { notifyNativeSurfaceOcclusionChange } from "~/lib/nativeSurfaceOcclusion";
 import type { ExpandedImagePreview } from "./ExpandedImagePreview";
@@ -16,12 +18,57 @@ interface ExpandedImageOverlayProps {
   readonly onNavigate: (direction: -1 | 1) => void;
 }
 
+/** Retry remounts only this image, preserving the overlay and its navigation. */
+function ExpandedImageContent({
+  source,
+  name,
+  onRetry,
+}: {
+  source: string;
+  name: string;
+  onRetry: () => void;
+}) {
+  const {
+    ref: imageRef,
+    src: imageSrc,
+    error: imageError,
+    onError: onImageError,
+  } = useExecutionImageSource(source, false);
+  const [decodeFailed, setDecodeFailed] = useState(false);
+  const onDownloadClick = useLocalImageDownloadClick({ downloadUrl: source, downloadName: name });
+
+  if (imageError || decodeFailed) {
+    return (
+      <LocalImageErrorCard
+        downloadUrl={source}
+        downloadName={name}
+        onDownloadClick={onDownloadClick}
+        onRetry={onRetry}
+      />
+    );
+  }
+
+  return (
+    <img
+      ref={imageRef}
+      src={imageSrc}
+      alt={name}
+      className="max-h-[86vh] max-w-[92vw] select-none rounded-lg border border-[color:var(--color-border)] bg-[var(--color-background-elevated-primary-opaque)] object-contain shadow-2xl"
+      draggable={false}
+      onError={(event) => {
+        if (onImageError(event)) setDecodeFailed(true);
+      }}
+    />
+  );
+}
+
 export function ExpandedImageOverlay({
   expandedImage,
   onClose,
   onNavigate,
 }: ExpandedImageOverlayProps) {
   const expandedImageItem = expandedImage ? expandedImage.images[expandedImage.index] : null;
+  const [retryRevision, setRetryRevision] = useState(0);
   const open = expandedImageItem !== null;
 
   useLayoutEffect(() => {
@@ -73,11 +120,11 @@ export function ExpandedImageOverlay({
         >
           <XIcon />
         </Button>
-        <img
-          src={expandedImageItem.src}
-          alt={expandedImageItem.name}
-          className="max-h-[86vh] max-w-[92vw] select-none rounded-lg border border-[color:var(--color-border)] bg-[var(--color-background-elevated-primary-opaque)] object-contain shadow-2xl"
-          draggable={false}
+        <ExpandedImageContent
+          key={`${expandedImageItem.src}:${retryRevision}`}
+          source={expandedImageItem.src}
+          name={expandedImageItem.name}
+          onRetry={() => setRetryRevision((revision) => revision + 1)}
         />
         <p className="mt-2 max-w-[92vw] truncate text-center text-ui leading-snug text-muted-foreground/80">
           {expandedImageItem.name}

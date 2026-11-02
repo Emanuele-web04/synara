@@ -4,8 +4,89 @@
 // Layer: Shared text processing — used by the beta desktop diagnostics client
 // and re-run by the ingest worker as defense in depth.
 
-import { DesktopDiagnosticIssue, DESKTOP_RENDERER_ERROR_STACK_MAX_LENGTH } from "@synara/contracts";
+import {
+  DesktopDiagnosticIssue,
+  DesktopUpdateFailureReason,
+  DESKTOP_RENDERER_ERROR_STACK_MAX_LENGTH,
+} from "@synara/contracts";
 import { Schema } from "effect";
+
+/** Accepts only fixed updater failure categories at queue and ingest boundaries. */
+export function sanitizeDesktopUpdateFailureReason(
+  reason: unknown,
+): DesktopUpdateFailureReason | undefined {
+  return Schema.is(DesktopUpdateFailureReason)(reason) ? reason : undefined;
+}
+
+/** Recognizes bounded updater-generated messages locally; never returns any input text. */
+export function classifyDesktopUpdateFailure(message: unknown): DesktopUpdateFailureReason {
+  if (typeof message !== "string") return "unknown";
+  const text = message.slice(0, 1024);
+  // Recognize only the downloader's fixed transport reasons and bounded counters.
+  const stalledReason =
+    /^Update download stalled and could not resume \((idle-timeout|http-[45]\d{2}|request-error: net::ERR_[A-Z_]{1,64}|response-error|response-aborted|premature-end|request-abort); \d{1,20}\/(?:\d{1,20}|\?) bytes after \d{1,9} attempts\)\.$/.exec(
+      text,
+    )?.[1];
+  const requestError = stalledReason?.startsWith("request-error: ")
+    ? stalledReason.slice("request-error: ".length)
+    : text;
+  if (
+    text === "Timed out while checking for updates. Try again." ||
+    text === "Request timed out" ||
+    text === "The update couldn’t be installed automatically." ||
+    /^Request timed out after \d{1,9}ms of inactivity\.$/.test(text) ||
+    /^Download stalled after \d{1,9} seconds without progress\. Try again\.$/.test(text) ||
+    /^net::ERR_(?:TIMED_OUT|CONNECTION_TIMED_OUT)$/.test(requestError) ||
+    stalledReason === "idle-timeout"
+  )
+    return "timeout";
+  if (text === "cancelled" || requestError === "net::ERR_ABORTED") return "cancelled";
+  if (
+    /^net::ERR_(?:INTERNET_DISCONNECTED|NAME_NOT_RESOLVED|NETWORK_CHANGED|CONNECTION_(?:CLOSED|RESET|REFUSED|ABORTED)|ADDRESS_UNREACHABLE|PROXY_CONNECTION_FAILED|TUNNEL_CONNECTION_FAILED|CERT_(?:AUTHORITY_INVALID|DATE_INVALID|COMMON_NAME_INVALID))$/.test(
+      requestError,
+    ) ||
+    /^(?:response-error|response-aborted|premature-end|request-abort)$/.test(stalledReason ?? "")
+  )
+    return "network";
+  // builder-util-runtime HttpError adds a status line followed by JSON detail or Headers.
+  if (
+    /^4\d{2} [^\r\n]+\n(?:"|\{|Headers:)/.test(text) ||
+    /^Cannot download update: HTTP 4\d{2}\.$/.test(text) ||
+    /^http-4\d{2}$/.test(stalledReason ?? "")
+  )
+    return "http-client";
+  if (
+    /^5\d{2} [^\r\n]+\n(?:"|\{|Headers:)/.test(text) ||
+    /^Cannot download update: HTTP 5\d{2}\.$/.test(text) ||
+    /^http-5\d{2}$/.test(stalledReason ?? "")
+  )
+    return "http-server";
+  if (
+    /^Cannot (?:find|parse update info from) (?:remote|beta|synara|latest)(?:-mac|-linux(?:-arm64)?)?\.yml in the latest release artifacts \(/.test(
+      text,
+    )
+  )
+    return "manifest";
+  if (
+    text === "No published versions on GitHub" ||
+    text.startsWith("Cannot parse releases feed: ") ||
+    text.startsWith("Unable to find latest version on GitHub (")
+  )
+    return "release-feed";
+  if (
+    /^(?:sha256 |sha512 )?checksum mismatch(?:[ ,:(]|$)/.test(text) ||
+    text.startsWith("The downloaded update could not be verified: ") ||
+    /^Update download size mismatch \(\d{1,20} != \d{1,20} bytes\)\.$/.test(text) ||
+    text === "The downloaded update could not be reverified. Download it again." ||
+    text === "The downloaded update changed during install preparation. Download it again." ||
+    /^New version \d{1,8}\.\d{1,8}\.\d{1,8}(?:-[0-9A-Za-z.-]{1,64})? is not signed by the application owner: /.test(
+      text,
+    ) ||
+    text === "The update download did not produce a verified update. Try again."
+  )
+    return "verification";
+  return "unknown";
+}
 
 const REMOTE_ERROR_TYPE =
   /^(?:Error|TypeError|RangeError|ReferenceError|SyntaxError|URIError|EvalError|AggregateError)\b/;

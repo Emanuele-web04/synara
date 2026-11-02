@@ -4,7 +4,7 @@ import { DateTime, Duration, Effect, Exit, Layer, Option } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import AuthAccessManagementMigration from "../Migrations/034_AuthAccessManagement";
-import AuthAccessOriginMigration from "../Migrations/141_AuthAccessOrigin";
+import AuthAccessOriginMigration from "../Migrations/142_AuthAccessOrigin";
 import * as NodeSqliteClient from "../NodeSqliteClient";
 import { AuthPairingLinkRepository } from "../Services/AuthPairingLinks";
 import { AuthSessionRepository } from "../Services/AuthSessions";

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import {
   ApprovalRequestId,
   EventId,
@@ -26,6 +27,7 @@ const MAX_ACTIVITY_DATA_STRING_CHARS = 2_000;
 const MAX_REASONING_DETAIL_CHARS = 8_000;
 const MAX_ACTIVITY_DATA_ARRAY_ITEMS = 24;
 const MAX_ACTIVITY_DATA_OBJECT_KEYS = 64;
+const MAX_INLINE_ACTIVITY_FINGERPRINT_CHARS = 1_024;
 const ACTIVITY_DATA_TRUNCATION_MARKER = "__synaraTruncated";
 
 type ActivityPayload = OrchestrationThreadActivity["payload"];
@@ -1479,7 +1481,12 @@ export function projectProviderRuntimeActivities(
       if (!rawRateLimits || typeof rawRateLimits !== "object") {
         return [];
       }
-      const rl = rawRateLimits as Record<string, unknown>;
+      const envelope = rawRateLimits as Record<string, unknown>;
+      const nested = envelope.rate_limit_info;
+      const rl =
+        nested !== null && typeof nested === "object" && !Array.isArray(nested)
+          ? (nested as Record<string, unknown>)
+          : envelope;
       if (Object.keys(rl).length === 0) {
         return [];
       }
@@ -1639,12 +1646,16 @@ export function providerActivityUpdateDedupeKey(
 }
 
 export function providerActivityUpdateFingerprint(activity: OrchestrationThreadActivity): string {
-  return stringifyJsonLike({
+  const serialized = stringifyJsonLike({
     kind: activity.kind,
     summary: activity.summary,
     payload: activity.payload,
     turnId: activity.turnId,
   });
+  // Inline object JSON and hex digests cannot alias; large payloads stay out of the cache.
+  return serialized.length <= MAX_INLINE_ACTIVITY_FINGERPRINT_CHARS
+    ? serialized
+    : createHash("sha256").update(serialized).digest("hex");
 }
 
 function compareActivityPayloadEntries(

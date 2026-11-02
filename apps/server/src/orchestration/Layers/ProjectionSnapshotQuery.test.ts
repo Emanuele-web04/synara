@@ -20,6 +20,9 @@ import { SqlitePersistenceMemory } from "../../persistence/Layers/Sqlite.ts";
 import { ORCHESTRATION_PROJECTOR_NAMES } from "./ProjectionPipeline.ts";
 import { OrchestrationProjectionSnapshotQueryLive } from "./ProjectionSnapshotQuery.ts";
 import { ProjectionSnapshotQuery } from "../Services/ProjectionSnapshotQuery.ts";
+import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
+import { ProjectionPendingInteractionRepository } from "../../persistence/Services/ProjectionPendingInteractions.ts";
+import { captureCrashResumeRecord } from "../quitResume.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 
 const asProjectId = (value: string): ProjectId => ProjectId.makeUnsafe(value);
@@ -37,6 +40,104 @@ const projectionSnapshotLayer = it.layer(
 );
 
 projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
+  it.effect("captures a running first human turn whose stored request has no turn id", () =>
+    Effect.gen(function* () {
+      const query = yield* ProjectionSnapshotQuery;
+      const sql = yield* SqlClient.SqlClient;
+      const now = "2026-10-13T10:00:00.000Z";
+      yield* sql`INSERT INTO projection_projects
+        (project_id, title, workspace_root, scripts_json, created_at, updated_at)
+        VALUES ('crash-project', 'Crash recovery', '/tmp/crash-recovery', '[]', ${now}, ${now})`;
+
+      for (const [id, origin] of [
+        ["human", "user"],
+        ["agent", "agent"],
+        ["scheduled", "automation"],
+      ] as const) {
+        const thread = asThreadId(`crash-${id}`);
+        const turn = asTurnId(`crash-${id}-turn`);
+        const request = asMessageId(`crash-${id}-request`);
+        yield* sql`INSERT INTO projection_threads
+          (thread_id, project_id, title, model_selection_json, latest_turn_id,
+           created_at, updated_at)
+          VALUES (${thread}, 'crash-project', ${id},
+            '{"provider":"codex","model":"gpt-5"}', ${turn}, ${now}, ${now})`;
+        yield* sql`INSERT INTO projection_thread_messages
+          (message_id, thread_id, turn_id, role, text, dispatch_origin,
+           is_streaming, source, sequence, created_at, updated_at)
+          VALUES (${request}, ${thread}, NULL, 'user', 'Continue', ${origin},
+            0, 'native', 1, ${now}, ${now})`;
+        yield* sql`INSERT INTO projection_turns
+          (thread_id, turn_id, pending_message_id, state, requested_at,
+           started_at, checkpoint_turn_count, checkpoint_status, checkpoint_files_json)
+          VALUES (${thread}, ${turn}, ${request}, 'running', ${now},
+            ${now}, 0, 'missing', '[]')`;
+        yield* sql`INSERT INTO projection_thread_sessions
+          (thread_id, status, provider_name, runtime_mode, active_turn_id, updated_at)
+          VALUES (${thread}, 'running', 'codex', 'full-access', ${turn}, ${now})`;
+      }
+
+      const stored = Option.getOrThrow(yield* query.getThreadDetailById(asThreadId("crash-human")));
+      assert.equal(stored.messages[0]?.turnId, null);
+      const readModel = yield* query.getSnapshot();
+      const captured = yield* captureCrashResumeRecord.pipe(
+        Effect.provideService(OrchestrationEngineService, {
+          getReadModel: () => Effect.succeed(readModel),
+        } as never),
+        Effect.provideService(ProjectionPendingInteractionRepository, {
+          listUnsettled: () => Effect.succeed([]),
+        } as never),
+      );
+
+      assert.equal(captured.kind, "record");
+      if (captured.kind !== "record") return;
+      assert.deepEqual(captured.record.threads, [
+        { threadId: asThreadId("crash-human"), turnId: asTurnId("crash-human-turn") },
+      ]);
+    }),
+  );
+
+  it.effect(
+    "restores host-owned recovery and cancellation fences in both shell and detail snapshots",
+    () =>
+      Effect.gen(function* () {
+        const query = yield* ProjectionSnapshotQuery;
+        const sql = yield* SqlClient.SqlClient;
+        const now = "2026-10-31T10:00:00.000Z";
+        const recovery = {
+          id: "recovery-episode",
+          turnId: asTurnId("limited-turn"),
+          resetAt: "2026-10-31T11:00:00.000Z",
+          autoResume: true,
+          provider: "codex",
+          providerInstanceId: "codex",
+          model: "gpt-5",
+          bindingKey: "opaque-account",
+          policyEpoch: 0,
+        };
+        const source = { turnId: recovery.turnId, bindingKey: recovery.bindingKey, policyEpoch: 0 };
+        const threadId = asThreadId("waiting-thread");
+        yield* sql`INSERT INTO projection_projects
+        (project_id,title,workspace_root,scripts_json,created_at,updated_at)
+        VALUES ('wait-project','Recovery','/isolated/recovery','[]',${now},${now})`;
+        yield* sql`INSERT INTO projection_threads
+        (thread_id,project_id,title,model_selection_json,created_at,updated_at,usage_limit_recovery_json,
+          usage_limit_recovery_source_json,usage_limit_recovery_cancelled_at,usage_limit_recovery_cancelled_turn_id,usage_limit_recovery_last_reset_at)
+        VALUES (${threadId},'wait-project','Waiting','{"provider":"codex","model":"gpt-5"}',${now},${now},${JSON.stringify(recovery)},
+          ${JSON.stringify(source)},${now},'earlier-turn',${recovery.resetAt})`;
+        const detail = yield* query.getThreadDetailById(threadId);
+        const snapshot = yield* query.getSnapshot();
+        const shell = snapshot.threads.find((thread) => thread.id === threadId);
+        for (const thread of [Option.getOrThrow(detail), shell]) {
+          assert.deepStrictEqual(thread?.usageLimitRecovery, recovery);
+          assert.deepStrictEqual(thread?.usageLimitRecoverySource, source);
+          assert.strictEqual(thread?.usageLimitRecoveryCancelledAt, now);
+          assert.strictEqual(thread?.usageLimitRecoveryCancelledTurnId, "earlier-turn");
+          assert.strictEqual(thread?.usageLimitRecoveryLastResetAt, recovery.resetAt);
+        }
+      }),
+  );
+
   it.effect("retains durable task state beyond the detail activity window", () =>
     Effect.gen(function* () {
       const query = yield* ProjectionSnapshotQuery;
@@ -890,6 +991,11 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           updatedAt: "2026-02-24T00:00:03.000Z",
           archivedAt: null,
           settledAt: null,
+          usageLimitRecoverySource: null,
+          usageLimitRecovery: null,
+          usageLimitRecoveryCancelledAt: null,
+          usageLimitRecoveryCancelledTurnId: null,
+          usageLimitRecoveryLastResetAt: null,
           snoozedUntil: null,
           snoozeReminderAt: null,
           deletedAt: null,
@@ -2607,6 +2713,11 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           updatedAt: "2026-03-03T00:00:03.000Z",
           archivedAt: null,
           settledAt: null,
+          usageLimitRecoverySource: null,
+          usageLimitRecovery: null,
+          usageLimitRecoveryCancelledAt: null,
+          usageLimitRecoveryCancelledTurnId: null,
+          usageLimitRecoveryLastResetAt: null,
           snoozedUntil: null,
           snoozeReminderAt: null,
           handoff: null,

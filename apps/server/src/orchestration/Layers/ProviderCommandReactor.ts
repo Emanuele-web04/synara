@@ -169,6 +169,7 @@ import { ServerConfig } from "../../config.ts";
 import { diagnosticIssueReason } from "@synara/shared/diagnosticIssue";
 import { reportBetaOperationalIssue } from "../../betaOperationalIssue.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
+import { providerUsageRecoveryBindingKey } from "../../providerUsage/index.ts";
 import {
   mergeProviderStartOptions,
   isProviderKind,
@@ -189,6 +190,7 @@ import {
   type TranscriptBootstrap,
 } from "../handoff.ts";
 import {
+  NATIVE_REVIEW_ATTACHMENTS_UNSUPPORTED,
   OrchestrationCommandInternalError,
   OrchestrationCommandInvariantError,
   ProviderDeliveryRecoveryError,
@@ -820,6 +822,7 @@ function canContinueGoalPursuit(
     thread.interactionMode !== "plan" &&
     Boolean(activeThreadGoal(thread)?.trim()) &&
     thread.goalPausedAt == null &&
+    thread.usageLimitRecovery == null &&
     (thread.goalStartedAt ?? null) === goalStartedAt
   );
 }
@@ -1720,6 +1723,7 @@ const make = Effect.gen(function* () {
     readonly turnId: TurnId | null;
     readonly createdAt: string;
     readonly requestId?: string;
+    readonly messageId?: MessageId;
     readonly lifecycleGeneration?: string;
     readonly responseCommandId?: CommandId;
     readonly settlementStatus?: "retryable" | "uncertain";
@@ -1735,6 +1739,7 @@ const make = Effect.gen(function* () {
         summary: input.summary,
         payload: {
           detail: sanitizeUserFacingErrorMessage(input.detail, input.summary),
+          ...(input.messageId ? { messageId: input.messageId } : {}),
           ...(input.requestId ? { requestId: input.requestId } : {}),
           ...(input.lifecycleGeneration ? { lifecycleGeneration: input.lifecycleGeneration } : {}),
           ...(input.responseCommandId ? { responseCommandId: input.responseCommandId } : {}),
@@ -3376,6 +3381,7 @@ const make = Effect.gen(function* () {
     readonly interactionMode?: ProviderInteractionMode;
     readonly dispatchMode?: "queue" | "steer";
     readonly turnKind?: "user" | "goal-continuation";
+    readonly usageLimitRecovery?: NonNullable<OrchestrationThreadShell["usageLimitRecovery"]>;
     readonly createdAt: string;
     readonly cacheReviewSource?: Extract<
       ProviderIntentEvent,
@@ -3388,6 +3394,51 @@ const make = Effect.gen(function* () {
     const thread = yield* resolveThread(input.threadId);
     if (!thread) {
       return;
+    }
+    // Old hosts could already have committed an unsupported review. Refuse its
+    // unsent delivery too, preserving history without starting a text-only review.
+    if (input.reviewTarget !== undefined && (input.attachments?.length ?? 0) > 0) {
+      return yield* new ProviderAdapterValidationError({
+        provider: thread.modelSelection.provider,
+        operation: "thread.turn.start",
+        issue: NATIVE_REVIEW_ATTACHMENTS_UNSUPPORTED,
+      });
+    }
+    const executingIntentSequence = input.completionEventSequence ?? input.sourceEventSequence;
+    let usageLimitAdmissionSequence: number | undefined;
+    if ((input.dispatchMode ?? "queue") !== "steer" && thread.parentThreadId == null) {
+      const settings = yield* serverSettings.getSettings;
+      if (
+        input.usageLimitRecovery &&
+        (!settings.autoResumeAfterUsageLimits ||
+          settings.usageLimitRecoveryEpoch !== input.usageLimitRecovery.policyEpoch)
+      )
+        return;
+      if (settings.autoResumeAfterUsageLimits) {
+        yield* orchestrationEngine.dispatch({
+          type: "thread.usage-limit.admit",
+          ...(input.usageLimitRecovery ? { recoveryId: input.usageLimitRecovery.id } : {}),
+          commandId: serverCommandId("usage-limit-send-admission"),
+          threadId: input.threadId,
+          admissionSequence: executingIntentSequence,
+          policyEpoch: input.usageLimitRecovery?.policyEpoch ?? settings.usageLimitRecoveryEpoch,
+          createdAt: new Date().toISOString(),
+        });
+        usageLimitAdmissionSequence = executingIntentSequence;
+        if (input.usageLimitRecovery) {
+          const admitted = yield* resolveThreadShell(input.threadId);
+          const admissionSettings = yield* serverSettings.getSettings;
+          if (
+            !admissionSettings.autoResumeAfterUsageLimits ||
+            admissionSettings.usageLimitRecoveryEpoch !== input.usageLimitRecovery.policyEpoch ||
+            admitted?.usageLimitRecovery?.id !== input.usageLimitRecovery.id ||
+            admitted.usageLimitRecovery.state !== "resuming" ||
+            admitted.usageLimitRecoverySource?.bindingKey !== "admission" ||
+            admitted.usageLimitRecoverySource.admissionSequence !== executingIntentSequence
+          )
+            return;
+        }
+      }
     }
     const projectContextPacket = yield* (
       Option.isSome(projectAgentService)
@@ -3705,7 +3756,9 @@ const make = Effect.gen(function* () {
           yield* appendProviderFailureActivity({
             threadId: input.threadId,
             kind: "provider.turn.start.failed",
-            summary: "Goal paused for Claude cache review",
+            summary: thread.goal?.trim()
+              ? "Goal paused for Claude cache review"
+              : "Task paused for Claude cache review",
             detail:
               "Claude's large context is likely no longer cached. Send a message to review continuing.",
             turnId: null,
@@ -4081,6 +4134,33 @@ const make = Effect.gen(function* () {
               input.claudeCompactionCancellation,
             );
             yield* requireClaudeCompactionPreparationActive(input.claudeCompactionCancellation);
+          }
+          if (input.usageLimitRecovery) {
+            const current = (yield* orchestrationEngine.getReadModel()).threads.find(
+              (entry) => entry.id === input.threadId,
+            );
+            const settings = yield* serverSettings.getSettings.pipe(
+              Effect.mapError(
+                () =>
+                  new ProviderAdapterValidationError({
+                    provider: selectedProvider,
+                    operation: "thread.turn.start",
+                    issue: "Recovery settings could not be verified before delivery.",
+                  }),
+              ),
+            );
+            if (
+              current?.usageLimitRecovery?.id !== input.usageLimitRecovery.id ||
+              current.usageLimitRecovery.state !== "resuming" ||
+              !settings.autoResumeAfterUsageLimits ||
+              settings.usageLimitRecoveryEpoch !== input.usageLimitRecovery.policyEpoch
+            ) {
+              return yield* new ProviderAdapterValidationError({
+                provider: selectedProvider,
+                operation: "thread.turn.start",
+                issue: "The automatic continuation was cancelled before delivery.",
+              });
+            }
           }
           const turnInput = {
             ...providerTurnInput,
@@ -4544,7 +4624,12 @@ const make = Effect.gen(function* () {
         sidechatContextBootstrapThreadIds.delete(input.threadId);
       }
     }
-    return startedTurn;
+    return startedTurn === undefined
+      ? undefined
+      : {
+          ...startedTurn,
+          ...(usageLimitAdmissionSequence !== undefined ? { usageLimitAdmissionSequence } : {}),
+        };
   });
 
   const renameTemporaryWorktreeBranch = Effect.fnUntraced(function* (input: {
@@ -5160,28 +5245,32 @@ const make = Effect.gen(function* () {
         operation: "thread.turn.start",
       });
 
-      yield* maybeGenerateAndRenameWorktreeBranchForFirstTurn({
-        threadId: event.payload.threadId,
-        sourceEventSequence: event.sequence,
-        branch: thread.branch,
-        worktreePath: thread.worktreePath,
-        messageId: message.id,
-        messageText: message.text,
-        ...(message.attachments !== undefined ? { attachments: resolvedAttachments } : {}),
-      }).pipe(Effect.forkScoped);
-      yield* maybeGenerateAndRenameThreadTitleForFirstTurn({
-        threadId: event.payload.threadId,
-        sourceEventSequence: event.sequence,
-        messageId: message.id,
-        messageText: message.text,
-        ...(message.attachments !== undefined ? { attachments: resolvedAttachments } : {}),
-        ...(event.payload.modelSelection !== undefined
-          ? { modelSelection: event.payload.modelSelection }
-          : {}),
-        ...(event.payload.providerOptions !== undefined
-          ? { providerOptions: event.payload.providerOptions }
-          : {}),
-      }).pipe(Effect.forkScoped);
+      // These helpers may invoke their own provider. An unsupported old review
+      // must reach the caught refusal below without launching either generator.
+      if (event.payload.reviewTarget === undefined || resolvedAttachments.length === 0) {
+        yield* maybeGenerateAndRenameWorktreeBranchForFirstTurn({
+          threadId: event.payload.threadId,
+          sourceEventSequence: event.sequence,
+          branch: thread.branch,
+          worktreePath: thread.worktreePath,
+          messageId: message.id,
+          messageText: message.text,
+          ...(message.attachments !== undefined ? { attachments: resolvedAttachments } : {}),
+        }).pipe(Effect.forkScoped);
+        yield* maybeGenerateAndRenameThreadTitleForFirstTurn({
+          threadId: event.payload.threadId,
+          sourceEventSequence: event.sequence,
+          messageId: message.id,
+          messageText: message.text,
+          ...(message.attachments !== undefined ? { attachments: resolvedAttachments } : {}),
+          ...(event.payload.modelSelection !== undefined
+            ? { modelSelection: event.payload.modelSelection }
+            : {}),
+          ...(event.payload.providerOptions !== undefined
+            ? { providerOptions: event.payload.providerOptions }
+            : {}),
+        }).pipe(Effect.forkScoped);
+      }
       // Only a native steer against a genuinely live turn keeps steer
       // semantics; anything else that reaches direct dispatch runs as a
       // normal queued turn (with its turn-start checkpoint).
@@ -5235,6 +5324,10 @@ const make = Effect.gen(function* () {
                   failure instanceof ProviderAdapterValidationError &&
                   failure.operation === "startClaudeCompaction.cancelled";
                 const detail = Cause.pretty(cause);
+                const rejectedNativeSubagentSteer =
+                  (thread.creationSource === "provider_native" ||
+                    thread.id.startsWith("subagent:")) &&
+                  classifyProviderAttemptOutcome(Exit.failCause(cause))._tag === "rejected";
                 if (event.payload.initialGoalStartedAt !== undefined) {
                   yield* pauseActiveThreadGoal({
                     threadId: event.payload.threadId,
@@ -5246,10 +5339,21 @@ const make = Effect.gen(function* () {
                     threadId: event.payload.threadId,
                     kind: "provider.turn.start.failed",
                     summary: "Provider turn start failed",
-                    detail,
+                    detail: rejectedNativeSubagentSteer
+                      ? `Your message was not sent to the subagent. ${failure instanceof Error ? failure.message : detail}`
+                      : detail,
+                    ...(rejectedNativeSubagentSteer ? { messageId: message.id } : {}),
                     turnId: null,
                     createdAt: event.payload.createdAt,
                   });
+                // A rejected attempt proves the child steer never reached the
+                // provider. The child may have completed after command admission;
+                // keep that terminal session and turn outcome intact.
+                if (rejectedNativeSubagentSteer) {
+                  if (isPendingQueuedDispatch) yield* clearPendingQueuedDispatch;
+                  yield* drainQueuedTurnsForSession(event.payload.threadId);
+                  return yield* Effect.failCause(cause);
+                }
                 // This request never entered the prompt queue. Its original
                 // turn already settled or was replaced; preserve that newer state.
                 if (
@@ -5342,6 +5446,32 @@ const make = Effect.gen(function* () {
         ),
         Effect.ensuring(Effect.sync(() => editResendTurnStartKeys.delete(editResendKey))),
       );
+      if (
+        startedTurn?.usageLimitAdmissionSequence !== undefined &&
+        orchestrationEngine.hasThreadStopAfter &&
+        (yield* orchestrationEngine.hasThreadStopAfter(
+          event.payload.threadId,
+          startedTurn.usageLimitAdmissionSequence,
+          startedTurn.turnId,
+        ))
+      ) {
+        yield* orchestrationEngine.dispatch({
+          type: "thread.usage-limit.cancel-turn",
+          commandId: serverCommandId("usage-limit-cancel-normal-accepted"),
+          threadId: event.payload.threadId,
+          recoveryId: `normal:${event.sequence}`,
+          sourceTurnId: thread.latestTurn?.turnId ?? startedTurn.turnId,
+          turnId: startedTurn.turnId,
+          createdAt: new Date().toISOString(),
+        });
+        yield* interruptProviderTurn({
+          controlRequestId: turnStartKeyForEvent(event),
+          preserveQueuedWork: true,
+          threadId: event.payload.threadId,
+          turnId: startedTurn.turnId,
+          createdAt: new Date().toISOString(),
+        });
+      }
       if (
         startedTurn &&
         event.payload.initialGoalStartedAt !== undefined &&
@@ -5975,7 +6105,12 @@ const make = Effect.gen(function* () {
   // Promote the next queued message only after the active provider turn settles.
   const drainQueuedTurnsForThread = Effect.fnUntraced(function* (threadId: ThreadId) {
     const sessionThreadId = (yield* resolveProviderSessionThread(threadId))?.id ?? threadId;
-    if ((yield* resolveThreadShell(sessionThreadId))?.claudeCacheReview) return;
+    const sessionOwner = yield* resolveThreadShell(sessionThreadId);
+    if (
+      sessionOwner?.claudeCacheReview ||
+      (sessionOwner?.usageLimitRecovery && sessionOwner.usageLimitRecovery.state !== "resuming")
+    )
+      return;
     if (
       deferredClaudeCompactionQueueDrains.has(sessionThreadId) ||
       drainingQueuedTurns.has(threadId) ||
@@ -6248,12 +6383,245 @@ const make = Effect.gen(function* () {
     });
   });
 
+  const processUsageLimitContinuation = Effect.fnUntraced(function* (
+    event: Extract<ProviderIntentEvent, { type: "thread.goal-continuation-requested" }>,
+  ) {
+    const recovery = event.payload.usageLimitRecovery;
+    if (!recovery) return;
+    const thread = yield* resolveThreadShell(event.payload.threadId);
+    if (
+      !thread ||
+      thread.usageLimitRecovery?.id !== recovery.id ||
+      thread.usageLimitRecovery.state !== "resuming"
+    )
+      return;
+    const cancel = () =>
+      orchestrationEngine.dispatch({
+        type: "thread.usage-limit.cancel",
+        commandId: serverCommandId("usage-limit-cancel"),
+        threadId: thread.id,
+        recoveryId: recovery.id,
+        createdAt: new Date().toISOString(),
+      });
+    const workingDirectory = yield* resolveProjectedThreadWorkspaceCwd(thread);
+    const identityProject = yield* resolveThreadWorkspaceProject(thread);
+    const bindingResult = yield* providerUsageRecoveryBindingKey({
+      provider: recovery.provider,
+      instanceId: recovery.providerInstanceId,
+      ...(workingDirectory ? { workingDirectory } : {}),
+      ...(identityProject?.workspaceRoot ? { projectRoot: identityProject.workspaceRoot } : {}),
+    }).pipe(
+      Effect.provideService(ServerConfig, serverConfig),
+      Effect.provideService(ServerSettingsService, serverSettings),
+      Effect.timeoutOption("8 seconds"),
+      Effect.catch(() => Effect.succeed(Option.none())),
+    );
+    const settings = yield* serverSettings.getSettings;
+    if (
+      !settings.autoResumeAfterUsageLimits ||
+      settings.usageLimitRecoveryEpoch !== recovery.policyEpoch ||
+      (Option.isSome(bindingResult) && bindingResult.value !== recovery.bindingKey) ||
+      thread.archivedAt != null ||
+      thread.settledAt != null ||
+      thread.modelSelection.provider !== recovery.provider ||
+      (thread.modelSelection.instanceId ?? thread.modelSelection.provider) !==
+        recovery.providerInstanceId ||
+      thread.modelSelection.model !== recovery.model ||
+      thread.interactionMode === "plan"
+    ) {
+      yield* cancel();
+      return;
+    }
+    if (Option.isNone(bindingResult)) {
+      // A bounded read failure cannot revoke an already verified account binding.
+      // Defer by episode id so Stop or a newer wait cannot be resurrected here.
+      yield* orchestrationEngine.dispatch({
+        type: "thread.usage-limit.defer",
+        commandId: serverCommandId("usage-limit-binding-retry"),
+        threadId: thread.id,
+        recoveryId: recovery.id,
+        createdAt: new Date().toISOString(),
+      });
+      return;
+    }
+    const pending = yield* pendingInteractions.getPendingCountsByThreadId({ threadId: thread.id });
+    if (
+      pending.pendingApprovalCount > 0 ||
+      pending.pendingUserInputCount > 0 ||
+      thread.claudeCacheReview != null ||
+      (yield* hasLiveProviderTurn(thread.id))
+    ) {
+      yield* orchestrationEngine.dispatch({
+        type: "thread.usage-limit.defer",
+        commandId: serverCommandId("usage-limit-defer"),
+        threadId: thread.id,
+        recoveryId: recovery.id,
+        createdAt: new Date().toISOString(),
+      });
+      return;
+    }
+    // A due quota wait releases already accepted user work first. It must not
+    // manufacture another prompt ahead of that durable queue.
+    yield* drainQueuedTurnsForSession(thread.id);
+    if (yield* hasPendingQueuedTurnForSession(thread.id)) {
+      yield* orchestrationEngine.dispatch({
+        type: "thread.usage-limit.finish",
+        commandId: serverCommandId("usage-limit-user-queue"),
+        threadId: thread.id,
+        recoveryId: recovery.id,
+        turnId: recovery.turnId,
+        createdAt: new Date().toISOString(),
+      });
+      return;
+    }
+    const latest = (yield* orchestrationEngine.getReadModel()).threads.find(
+      (entry) => entry.id === thread.id,
+    );
+    if (latest?.usageLimitRecovery?.id !== recovery.id) return;
+    // Persist the pending start before native acceptance: an ACK can precede
+    // turn.started, and boot must still recognize that accepted recovery as orphaned.
+    const startSession = deriveTurnStartSession({
+      threadId: thread.id,
+      currentSession: thread.session,
+      providerName: recovery.provider as ProviderKind,
+      providerInstanceId: recovery.providerInstanceId,
+      requestedRuntimeMode: thread.runtimeMode,
+      requestedAt: event.payload.createdAt,
+    });
+    const settleOwnedStarting = (status: "error" | "interrupted", detail: string | null) =>
+      Effect.gen(function* () {
+        if (!startSession) return;
+        const current = yield* resolveThreadShell(thread.id);
+        if (
+          current?.session?.status !== "starting" ||
+          current.session.updatedAt !== startSession.updatedAt
+        )
+          return;
+        yield* setThreadSession({
+          threadId: thread.id,
+          expectedSession: { status: "starting", updatedAt: startSession.updatedAt },
+          session: {
+            ...current.session,
+            status,
+            activeTurnId: null,
+            lastError: detail,
+            updatedAt: new Date().toISOString(),
+          },
+          createdAt: new Date().toISOString(),
+        });
+      });
+    if (startSession)
+      yield* setThreadSession({
+        threadId: thread.id,
+        session: startSession,
+        createdAt: event.payload.createdAt,
+      });
+    const admitted = (yield* orchestrationEngine.getReadModel()).threads.find(
+      (entry) => entry.id === thread.id,
+    );
+    if (admitted?.usageLimitRecovery?.id !== recovery.id) {
+      if (startSession && thread.session)
+        yield* setThreadSession({
+          threadId: thread.id,
+          expectedSession: { status: startSession.status, updatedAt: startSession.updatedAt },
+          session: { ...thread.session, updatedAt: new Date().toISOString() },
+          createdAt: new Date().toISOString(),
+        }).pipe(Effect.ignore);
+      return;
+    }
+    const started = yield* dispatchTurnForThread({
+      threadId: thread.id,
+      sourceEventSequence: event.sequence,
+      messageId: MessageId.makeUnsafe(`usage-limit:${recovery.id}`),
+      messageText:
+        "Continue the remaining task after the provider usage limit. Check the conversation and current workspace state, verify whether pending operations already completed before repeating them, and preserve pending approvals and user decisions.",
+      runtimeMode: thread.runtimeMode,
+      interactionMode: thread.interactionMode,
+      dispatchMode: "queue",
+      turnKind: "goal-continuation",
+      usageLimitRecovery: recovery,
+      createdAt: event.payload.createdAt,
+    }).pipe(
+      Effect.catchCause((cause) =>
+        Effect.gen(function* () {
+          if (
+            !Cause.hasInterruptsOnly(cause) &&
+            classifyProviderAttemptOutcome(Exit.failCause(cause))._tag !== "safe_retry"
+          ) {
+            // Clearing the schedule does not reconcile or retry an ambiguous send.
+            // The delivery journal still quarantines uncertainty for manual review.
+            yield* settleOwnedStarting("error", Cause.pretty(cause));
+            yield* cancel();
+          }
+          return yield* Effect.failCause(cause);
+        }),
+      ),
+    );
+    if (!started) {
+      yield* settleOwnedStarting("interrupted", null);
+      yield* cancel();
+      return;
+    }
+    const cancelAcceptedTurn = Effect.gen(function* () {
+      yield* orchestrationEngine.dispatch({
+        type: "thread.usage-limit.cancel-turn",
+        commandId: serverCommandId("usage-limit-cancel-accepted"),
+        threadId: thread.id,
+        recoveryId: recovery.id,
+        sourceTurnId: recovery.turnId,
+        turnId: started.turnId,
+        createdAt: new Date().toISOString(),
+      });
+      yield* interruptProviderTurn({
+        controlRequestId: turnStartKeyForEvent(event),
+        preserveQueuedWork: true,
+        threadId: thread.id,
+        turnId: started.turnId,
+        createdAt: new Date().toISOString(),
+      });
+      const remainingRuntime = (yield* providerService.listSessions()).find(
+        (session) => session.threadId === thread.id,
+      );
+      if (!hasLiveProviderWork(remainingRuntime)) yield* settleOwnedStarting("interrupted", null);
+    });
+    const after = (yield* orchestrationEngine.getReadModel()).threads.find(
+      (entry) => entry.id === thread.id,
+    );
+    const currentSettings = yield* serverSettings.getSettings;
+    if (
+      after?.usageLimitRecovery?.id !== recovery.id ||
+      !currentSettings.autoResumeAfterUsageLimits ||
+      currentSettings.usageLimitRecoveryEpoch !== recovery.policyEpoch
+    ) {
+      yield* cancelAcceptedTurn;
+    } else {
+      yield* orchestrationEngine.dispatch({
+        type: "thread.usage-limit.started",
+        commandId: serverCommandId("usage-limit-started"),
+        threadId: thread.id,
+        recoveryId: recovery.id,
+        turnId: started.turnId,
+        createdAt: new Date().toISOString(),
+      });
+      // Stop can commit while the acceptance marker is waiting for serialized
+      // admission. Once bound, later Stops carry the exact accepted native ID.
+      const recorded = (yield* orchestrationEngine.getReadModel()).threads.find(
+        (entry) => entry.id === thread.id,
+      );
+      if (recorded?.usageLimitRecovery?.id !== recovery.id) yield* cancelAcceptedTurn;
+    }
+  });
+
   const processGoalContinuationRequested = (
     event: Extract<ProviderIntentEvent, { type: "thread.goal-continuation-requested" }>,
   ) =>
     withProviderSessionLease(
       event.payload.threadId,
       Effect.gen(function* () {
+        if (event.payload.usageLimitRecovery) {
+          yield* processUsageLimitContinuation(event);
+          return;
+        }
         // A soft-deleted thread reads as missing.
         const thread = yield* resolveThreadShell(event.payload.threadId);
         if (
@@ -6423,6 +6791,28 @@ const make = Effect.gen(function* () {
         pendingQueuedDispatchBySessionThread.delete(sessionThreadId);
       }
     }
+    if (
+      event.type === "turn.completed" &&
+      event.payload.state === "failed" &&
+      event.payload.usageLimit !== undefined
+    ) {
+      const current = (yield* orchestrationEngine.getReadModel()).threads.find(
+        (entry) => entry.id === event.threadId,
+      );
+      // Raw provider subscribers run independently of canonical ingestion. An
+      // opted-in admission can still have a pending native id or account read;
+      // only the committed terminal projection decides whether a wait is armed.
+      if (
+        current?.usageLimitRecoverySource != null &&
+        !(
+          current.latestTurn?.turnId === event.turnId &&
+          current.latestTurn?.state === "error" &&
+          current.session?.status === "error" &&
+          current.session.activeTurnId === null
+        )
+      )
+        return;
+    }
     // Child subagent threads queue under their own id but share the parent's
     // provider session, and terminal runtime events carry the session-owning
     // thread id — drain every queue bound to this session.
@@ -6517,6 +6907,20 @@ const make = Effect.gen(function* () {
     if (!thread) {
       return;
     }
+    const observedRuntime = yield* readRuntimeStopTarget(input);
+    if (
+      input.turnId !== undefined &&
+      thread.usageLimitRecoverySource?.admissionSequence !== undefined
+    ) {
+      const source = thread.usageLimitRecoverySource;
+      const admittedTurnId =
+        observedRuntime.session?.activeTurnId ??
+        thread.usageLimitRecovery?.resumedTurnId ??
+        (source.bindingKey === "admission" ? undefined : source.turnId);
+      // Before native acceptance a targeted Stop cannot borrow the new send's
+      // ownership. Its journal fence is checked again against the accepted id.
+      if (admittedTurnId !== input.turnId) return;
+    }
 
     // P1 activation stickiness: Stop is an explicit off. A crowded inbox of
     // queued and steered turns must not resurrect computer control after the
@@ -6543,7 +6947,6 @@ const make = Effect.gen(function* () {
       );
     }
 
-    const observedRuntime = yield* readRuntimeStopTarget(input);
     const replayReceipt =
       observedRuntime.stopControlReceipt?.controlRequestId === input.controlRequestId
         ? observedRuntime.stopControlReceipt
@@ -8054,6 +8457,16 @@ const make = Effect.gen(function* () {
     detail: string,
   ) {
     const createdAt = new Date().toISOString();
+    if (event.payload.usageLimitRecovery) {
+      yield* orchestrationEngine.dispatch({
+        type: "thread.usage-limit.cancel",
+        commandId: serverCommandId("usage-limit-timeout"),
+        threadId: event.payload.threadId,
+        recoveryId: event.payload.usageLimitRecovery.id,
+        createdAt,
+      });
+    }
+
     const thread = yield* resolveThreadShell(event.payload.threadId);
     if (thread?.session?.status === "starting" && thread.session.activeTurnId === null) {
       yield* setThreadSessionError({
@@ -8114,6 +8527,16 @@ const make = Effect.gen(function* () {
               }
             }
           }
+          if (
+            thread &&
+            event.payload.session.status === "error" &&
+            thread.usageLimitRecovery == null &&
+            (thread.usageLimitRecoverySource != null ||
+              (yield* serverSettings.getSettings).autoResumeAfterUsageLimits) &&
+            !(yield* hasLiveProviderTurn(thread.id))
+          ) {
+            yield* drainQueuedTurnsForSession(thread.id);
+          }
           return;
         }
         case "thread.created":
@@ -8163,7 +8586,8 @@ const make = Effect.gen(function* () {
             thread &&
             !isExpiredSidechat(thread) &&
             event.payload.goalStartBehavior !== "defer" &&
-            startsOrResumesGoal
+            startsOrResumesGoal &&
+            event.payload.usageLimitRecovery == null
           ) {
             yield* orchestrationEngine.dispatch({
               type: "thread.goal.continue",
@@ -8509,7 +8933,9 @@ const make = Effect.gen(function* () {
       if (Option.isSome(state)) cursor = Math.max(cursor, state.value.lastAckedSequence);
     });
 
-    const advanceCursor = Effect.fnUntraced(function* (event: OrchestrationEvent) {
+    const advanceCursor = Effect.fnUntraced(function* (
+      event: Pick<OrchestrationEvent, "sequence">,
+    ) {
       const advanced = yield* deliveryRepository.advanceCursor({
         consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
         eventSequence: event.sequence,
@@ -8570,25 +8996,24 @@ const make = Effect.gen(function* () {
               through = Math.min(through, lane.firstUnsettledSequence - 1);
             }
             if (through <= cursor) return false;
-            let processed = 0;
-            yield* Stream.runForEach(
-              orchestrationEngine.readEventsThrough(cursor, through, 32),
-              (next) =>
-                Effect.gen(function* () {
-                  processed += 1;
-                  if (yield* advanceCursor(next)) return;
-                  yield* refreshCursor;
-                  if (cursor >= next.sequence) return;
-                  return yield* Effect.die(
-                    new Error(
-                      `Provider command cursor could not advance through event ${next.sequence}`,
-                    ),
-                  );
-                }),
-            );
+            const rows = yield* deliveryRepository.readEventSequencePage({
+              sequenceExclusive: cursor,
+              throughSequenceInclusive: through,
+              limit: 32,
+            });
+            for (const next of rows) {
+              if (yield* advanceCursor(next)) continue;
+              yield* refreshCursor;
+              if (cursor >= next.sequence) continue;
+              return yield* Effect.die(
+                new Error(
+                  `Provider command cursor could not advance through event ${next.sequence}`,
+                ),
+              );
+            }
             // Count stored rows, not sequence numbers: deleted events can leave
             // gaps, and an empty eligible range must not spin forever.
-            return processed === 32;
+            return rows.length === 32;
           }),
         );
         if (!fullChunk) return;
@@ -10194,10 +10619,26 @@ const make = Effect.gen(function* () {
     // compactions/goals; cross-thread execution remains bounded during replay.
     // A failed lane must fail startup rather than leave a healthy-looking
     // reactor whose durable source has already stopped.
-    yield* Stream.runForEach(
-      orchestrationEngine.readEventsThrough(cursor, replayThrough),
-      admitOrderedEvent,
-    ).pipe(
+    yield* Effect.gen(function* () {
+      // Read independently of ACK: an unfinished lane can hold the durable cursor back.
+      let replayCursor = cursor;
+      while (replayCursor < replayThrough) {
+        let count = 0;
+        let lastReadSequence = replayCursor;
+        yield* Stream.runForEach(
+          orchestrationEngine.readEventsThrough(replayCursor, replayThrough, 64),
+          (event) =>
+            Effect.gen(function* () {
+              yield* admitOrderedEvent(event);
+              count += 1;
+              lastReadSequence = event.sequence;
+            }),
+        );
+        replayCursor = lastReadSequence;
+        if (count < 64) break;
+        yield* Effect.yieldNow;
+      }
+    }).pipe(
       Effect.andThen(intentWorker.drain),
       Effect.andThen(drainAcknowledgements),
       Effect.raceFirst(failOnSourceError),

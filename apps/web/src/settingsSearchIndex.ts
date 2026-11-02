@@ -558,6 +558,13 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
 
   // ── Providers ─────────────────────────────────────────────────────────────────
   {
+    id: "providers:usage-limit-recovery",
+    section: "providers",
+    title: "Resume after usage limits",
+    keywords:
+      "Automatically continue newly limited tasks when the provider reports that their allowance resets. Applies to this computer, even while your other devices are closed. Turning this off cancels pending resumes.",
+  },
+  {
     id: "providers:cpu-priority",
     section: "providers",
     title: "Keep Synara responsive",

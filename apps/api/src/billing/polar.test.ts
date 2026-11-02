@@ -18,7 +18,7 @@ const config: PolarBillingConfig = {
 const expectedCatalog = {
   currency: "USD",
   monthlyAmountMinor: 799,
-  yearlyAmountMinor: 8499,
+  yearlyAmountMinor: 7999,
   taxBehavior: "exclusive" as const,
 };
 const userId = "user_verified_session",
@@ -142,7 +142,7 @@ function upstream(
               (options.environment === "production"
                 ? id === config.monthlyProductId
                   ? 799
-                  : 8499
+                  : 7999
                 : 1500),
             price_currency:
               options.priceCurrency ?? (options.environment === "production" ? "usd" : "eur"),
@@ -274,7 +274,7 @@ describe("Polar protocol boundary", () => {
     upstream({ environment: "production" });
     expect(await provider.plans()).toEqual([
       { interval: "month", amountMinor: 799, currency: "USD" },
-      { interval: "year", amountMinor: 8499, currency: "USD" },
+      { interval: "year", amountMinor: 7999, currency: "USD" },
     ]);
     for (const mismatch of [
       { priceAmount: 800 },
@@ -611,7 +611,7 @@ describe("billing operator configuration", () => {
       POLAR_RETURN_ORIGINS: "https://example.com:443/, https://account.example.com",
       POLAR_EXPECTED_CURRENCY: "USD",
       POLAR_EXPECTED_MONTHLY_AMOUNT_MINOR: "799",
-      POLAR_EXPECTED_YEARLY_AMOUNT_MINOR: "8499",
+      POLAR_EXPECTED_YEARLY_AMOUNT_MINOR: "7999",
       POLAR_EXPECTED_TAX_BEHAVIOR: "exclusive",
     };
     expect(loadPolarBillingConfig(production)).toMatchObject({

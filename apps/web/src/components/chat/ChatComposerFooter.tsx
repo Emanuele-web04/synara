@@ -46,6 +46,8 @@ interface ChatComposerFooterProps {
     phase: SessionPhase;
     /** An idle quarantined runtime can still need an explicit Stop before recovery. */
     recoveryStopAvailable?: boolean;
+    /** An armed host-owned wait can be cancelled without a running provider turn. */
+    usageLimitStopAvailable?: boolean;
     busy: boolean;
     connecting: boolean;
     expired: boolean;
@@ -199,7 +201,8 @@ export function ChatComposerFooter({
           </Button>
         ) : submission.phase === "running" ||
           submission.connecting ||
-          submission.recoveryStopAvailable ? (
+          submission.recoveryStopAvailable ||
+          submission.usageLimitStopAvailable ? (
           <>
             {/* Dictating a follow-up is allowed mid-turn: the transcript lands in the
                 composer and sending it follows the queue/steer behavior. */}
@@ -228,11 +231,15 @@ export function ChatComposerFooter({
                 size="icon-xs"
                 className={COMPOSER_ACTION_CIRCLE_CLASS_NAME}
                 onClick={submission.onInterrupt}
-                aria-label="Stop generation"
+                aria-label={
+                  submission.usageLimitStopAvailable ? "Cancel auto-resume" : "Stop generation"
+                }
                 title={
-                  submission.recoveryStopAvailable
-                    ? "Stop the provider runtime before unblocking this thread."
-                    : "Stop the current response. On Mac, press Ctrl+C to interrupt."
+                  submission.usageLimitStopAvailable
+                    ? "Cancel auto-resume"
+                    : submission.recoveryStopAvailable
+                      ? "Stop the provider runtime before unblocking this thread."
+                      : "Stop the current response. On Mac, press Ctrl+C to interrupt."
                 }
               >
                 <span aria-hidden="true" className="block size-2 rounded-[1px] bg-current" />

@@ -9,7 +9,7 @@
  *
  * @module OrchestrationEventStore
  */
-import { OrchestrationEvent } from "@synara/contracts";
+import { OrchestrationEvent, type ThreadId, type TurnId } from "@synara/contracts";
 import { ServiceMap } from "effect";
 import type { Effect, Stream } from "effect";
 
@@ -44,6 +44,13 @@ export interface OrchestrationEventStoreShape {
   readonly getThreadHighWaterSequence: (
     threadId: string,
   ) => Effect.Effect<number, OrchestrationEventStoreError>;
+
+  /** Check for a durable Stop after admission, respecting an optional actual turn target. */
+  readonly hasThreadStopAfter: (
+    threadId: ThreadId,
+    sequenceExclusive: number,
+    turnId?: TurnId,
+  ) => Effect.Effect<boolean, OrchestrationEventStoreError>;
 
   /** Capture the latest durable event sequence that assigned this thread's title. */
   readonly getThreadTitleHighWaterSequence: (

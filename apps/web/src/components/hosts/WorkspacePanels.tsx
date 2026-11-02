@@ -30,15 +30,23 @@ import {
   threadJumpIndexFromCommand,
 } from "../../keybindings";
 import { useLocation, useParams } from "@tanstack/react-router";
-import { MAX_PINNED_PROJECTS, ProjectId, ThreadId, type AutomationRun } from "@synara/contracts";
+import {
+  EnvironmentId,
+  MAX_PINNED_PROJECTS,
+  ProjectId,
+  ThreadId,
+  type AutomationRun,
+} from "@synara/contracts";
 import { appHistory } from "../../appNavigation";
 import { useHandleNewChat } from "../../hooks/useHandleNewChat";
 import { useAppSettings } from "../../appSettings";
 import { ensureNativeApi } from "../../nativeApi";
 import { createOrRecoverProjectFromPath } from "../../lib/projectCreation";
 import { readExecutionContext } from "../../lib/hosts/executionContext";
+import { createWorkspaceResourceRequester } from "../../lib/hosts/workspaceResources";
 import { useHandleNewThread } from "../../hooks/useHandleNewThread";
 import { useSidebarThreadActions } from "../../hooks/useSidebarThreadActions";
+import { resolveActivityThreadReadAt } from "../SidebarActivityView.logic";
 import { useDiffRouteSearch } from "../../hooks/useDiffRouteSearch";
 import {
   createSidebarThreadSummariesSelector,
@@ -61,6 +69,7 @@ import {
   readWorkspaceFrame,
   workspaceRoute,
   type WorkspaceFrameElement,
+  type WorkspaceConnectionRecovery,
   type WorkspaceNavigation,
   type WorkspaceSidebarActions,
 } from "../../lib/hosts/workspaceFrame";
@@ -147,17 +156,60 @@ function WorkspacePanel({
     for (const listener of sidebarListeners.current) listener();
   }, [sidebar]);
   const frameRef = useRef<WorkspaceFrameElement | null>(null);
+  const connectionRecovery = useRef<WorkspaceConnectionRecovery | null>(null);
+  const resourceLifetime = useRef<AbortController | null>(null);
   const bind = useCallback(
     (frame: WorkspaceFrameElement | null) => {
+      connectionRecovery.current?.dispose();
+      connectionRecovery.current = null;
+      resourceLifetime.current?.abort();
+      resourceLifetime.current = null;
       const previous = frameRef.current;
       if (previous) delete previous.synaraWorkspace;
       frameRef.current = frame;
       if (!frame) return;
+      const lifetime = new AbortController();
+      resourceLifetime.current = lifetime;
       // Same-origin application code only. No repository HTML is ever loaded in this frame.
       frame.synaraWorkspace = {
         host,
+        registerConnectionRecovery: (recovery) => {
+          const ownsFrame = () =>
+            frameRef.current === frame &&
+            readWorkspaceSessions().some((entry) => entry.host === host);
+          if (!ownsFrame()) {
+            recovery.dispose();
+            return () => {};
+          }
+          connectionRecovery.current = recovery;
+          updateWorkspaceSession(environmentId, {
+            resumeConnection: (options) => {
+              if (ownsFrame() && connectionRecovery.current === recovery) recovery.resume(options);
+            },
+          });
+          return () => {
+            if (connectionRecovery.current !== recovery) return;
+            connectionRecovery.current = null;
+            if (ownsFrame()) updateWorkspaceSession(environmentId, { resumeConnection: undefined });
+          };
+        },
         controller: {
           desktop: isElectron,
+          ...(isElectron
+            ? {
+                requestResource: createWorkspaceResourceRequester({
+                  environmentId: EnvironmentId.makeUnsafe(host.executionScope.environmentId),
+                  isAvailable: () =>
+                    frameRef.current === frame &&
+                    readWorkspaceSessions().some((entry) => entry.host === host),
+                  subscribe: subscribeWorkspaceSessions,
+                  resourceUrl: (reference) =>
+                    window.desktopBridge?.remoteResourceUrl?.(host.hostId, reference) ?? null,
+                  fetch: window.fetch.bind(window),
+                  signal: lifetime.signal,
+                }),
+              }
+            : {}),
           presentation: {
             readWindowTranslucency: readDesktopWindowTranslucency,
             readZoomFactor: readDesktopZoomFactor,
@@ -479,6 +531,19 @@ export function WorkspaceFrameNavigation() {
           });
         },
         setThreadPinned: threadActionsRef.current.setThreadPinned,
+        setThreadSettled: async (threadId, isSettled) => {
+          const store = useStore.getState();
+          const thread = store.sidebarThreadSummaryById[threadId];
+          if (!thread || thread.archivedAt) throw new Error("This chat is no longer available.");
+          if (isSettled) store.markThreadVisited(threadId, resolveActivityThreadReadAt(thread));
+          return threadActionsRef.current.setThreadSettled(threadId, isSettled);
+        },
+        returnSnoozedThread: async (threadId) => {
+          const thread = useStore.getState().sidebarThreadSummaryById[threadId];
+          if (!thread || thread.archivedAt) throw new Error("This chat is no longer available.");
+          const confirmed = await threadActionsRef.current.setThreadSnoozedUntil(threadId, null);
+          if (!confirmed) throw new Error("Could not return this chat from snoozed. Try again.");
+        },
         archiveThread: threadActionsRef.current.confirmAndArchiveThread,
         renameProject: (projectId, name) =>
           useStore.getState().renameProjectLocally(projectId, name.trim() || null),
@@ -538,6 +603,9 @@ export function WorkspaceFrameNavigation() {
         renameThread: (threadId, title) => threadExists(threadId).renameThread(threadId, title),
         setThreadPinned: (threadId, isPinned) =>
           threadExists(threadId).setThreadPinned(threadId, isPinned),
+        setThreadSettled: (threadId, isSettled) =>
+          threadExists(threadId).setThreadSettled(threadId, isSettled),
+        returnSnoozedThread: (threadId) => threadExists(threadId).returnSnoozedThread(threadId),
         archiveThread: (threadId) => threadExists(threadId).archiveThread(threadId, available),
         renameProject: (projectId, name) => projectExists(projectId).renameProject(projectId, name),
         setProjectPinned: (projectId, isPinned) =>
@@ -615,6 +683,9 @@ export function WorkspaceFrameNavigation() {
       .map((thread) => ({
         ...thread,
         isPinned: threadActions.pinnedThreadIdSet.has(thread.id),
+        ...(threadActions.settledOverrideByThreadId.has(thread.id)
+          ? { settledOverride: threadActions.settledOverrideByThreadId.get(thread.id)! }
+          : {}),
         terminalEntryPoint: terminalStates[thread.id]?.entryPoint === "terminal",
         status: resolveThreadStatusPill({
           thread,
@@ -662,6 +733,7 @@ export function WorkspaceFrameNavigation() {
     state,
     terminalStates,
     threadActions.pinnedThreadIdSet,
+    threadActions.settledOverrideByThreadId,
   ]);
   return null;
 }

@@ -1,4 +1,10 @@
-import { useMemo, useState, type CSSProperties, type ReactNode } from "react";
+import {
+  useMemo,
+  useState,
+  type CSSProperties,
+  type KeyboardEventHandler,
+  type ReactNode,
+} from "react";
 import { useLocation } from "@tanstack/react-router";
 import type { useSortable } from "@dnd-kit/sortable";
 import { ThreadId } from "@synara/contracts";
@@ -40,6 +46,9 @@ import { SidebarSectionToolbar } from "../SidebarSectionToolbar";
 import { SidebarStatusTrailingGlyph } from "../SidebarStatusTrailingGlyph";
 import { SidebarThreadRowContent } from "../SidebarThreadRowContent";
 import { SidebarRowHoverActions } from "../SidebarRowHoverActions";
+import { ThreadRowQuickActions } from "../ThreadRowQuickActions";
+import { SIDEBAR_TRAILING_ICON_CLASS } from "../sidebarGlyphs";
+import { isThreadSettledForActivity } from "../SidebarActivityView.logic";
 import {
   createSidebarThreadRowGestures,
   type SidebarThreadRowGestureProps,
@@ -74,7 +83,8 @@ import {
   SIDEBAR_THREAD_ROW_BASE_CLASS_NAME,
   sidebarHoverRevealHideClassName,
 } from "../../sidebarRowStyles";
-import { cn } from "../../lib/utils";
+import { cn, randomUUID } from "../../lib/utils";
+import { showUndoToast } from "../../lib/threadUndoToast";
 
 type SortableProjectHandleProps = Pick<
   ReturnType<typeof useSortable>,
@@ -130,15 +140,15 @@ function WorkspaceRowMenu({
   );
 }
 
-async function runWorkspaceSidebarAction(
+async function runWorkspaceSidebarAction<T>(
   session: WorkspaceSession,
-  action: (actions: WorkspaceSidebarActions) => Promise<void> | void,
-): Promise<void> {
+  action: (actions: WorkspaceSidebarActions) => Promise<T> | T,
+): Promise<T> {
   try {
     const actions = readAvailableWorkspaceNavigation(session)?.sidebar;
     if (!actions)
       throw new Error("This computer is no longer available. Reconnect before making changes.");
-    await action(actions);
+    return await action(actions);
   } catch (error) {
     toastManager.add({
       type: "error",
@@ -168,7 +178,12 @@ function WorkspaceProjectIcon({
   return <Folder className="size-4" style={style} />;
 }
 
-function selectedThreadPath(href: string, session: WorkspaceSession, threadId: string): boolean {
+function selectedThreadPath(
+  href: string,
+  session: WorkspaceSession,
+  threadId: string,
+  exact = false,
+): boolean {
   const [pathname, search = ""] = href.split("?");
   if (pathname !== "/remote") return false;
   const params = new URLSearchParams(search);
@@ -179,6 +194,7 @@ function selectedThreadPath(href: string, session: WorkspaceSession, threadId: s
     path.length <= 1
   )
     return false;
+  if (exact) return path === `/${threadId}`;
   return (
     resolveSidebarRootThreadId(
       ThreadId.makeUnsafe(path.slice(1)),
@@ -187,17 +203,18 @@ function selectedThreadPath(href: string, session: WorkspaceSession, threadId: s
   );
 }
 
-/** Shared remote gestures, menu and rename dialog for classic and Activity rows. */
+/** Mutations stay with the captured host; classic and Activity rows share its controls. */
 export function WorkspaceThreadActions({
   entry,
   children,
 }: {
   entry: WorkspaceThreadEntry;
   children: (controls: {
-    rowEvents: SidebarThreadRowGestureProps;
-    menuButton: ReactNode;
+    rowEvents: SidebarThreadRowGestureProps & { onKeyDown: KeyboardEventHandler<HTMLElement> };
+    quickActions: ReactNode;
   }) => ReactNode;
 }) {
+  const href = useLocation({ select: (location) => location.href });
   const { session, thread } = entry;
   const [menu, setMenu] = useState<WorkspaceMenuState | null>(null);
   const [renameSession, setRenameSession] = useState<WorkspaceSession | null>(null);
@@ -208,32 +225,90 @@ export function WorkspaceThreadActions({
   const runAction = (action: (actions: WorkspaceSidebarActions) => Promise<void> | void) => {
     void runWorkspaceSidebarAction(actionSession, action).catch(() => undefined);
   };
-  const rowEvents = createSidebarThreadRowGestures({
-    threadId: thread.id,
-    onRename: () => {
-      if (online) setRenameSession(session);
-    },
-    onRenamePointerUp: () => undefined,
-    onContextMenu: (_threadId, position) => openMenu(position),
-  });
-  const menuButton = (
-    <SidebarIconButton
-      icon={EllipsisIcon}
-      label={`Chat actions for ${thread.title} on ${session.host.hostName}`}
+  const rowEvents = {
+    ...createSidebarThreadRowGestures({
+      threadId: thread.id,
+      onRename: () => {
+        if (online) setRenameSession(session);
+      },
+      onRenamePointerUp: () => undefined,
+      onContextMenu: (_threadId, position) => openMenu(position),
+    }),
+    onKeyDown: ((event) => {
+      if (event.key !== "ContextMenu" && !(event.shiftKey && event.key === "F10")) return;
+      event.preventDefault();
+      event.stopPropagation();
+      const rect = event.currentTarget.getBoundingClientRect();
+      openMenu({ x: rect.left, y: rect.bottom });
+    }) satisfies KeyboardEventHandler<HTMLElement>,
+  };
+  const isSettled = thread.settledOverride ?? isThreadSettledForActivity(thread);
+  const runQuickAction = (action: (actions: WorkspaceSidebarActions) => Promise<void> | void) => {
+    void runWorkspaceSidebarAction(session, action).catch(() => undefined);
+  };
+  const archiveInWorkspace = (owner: WorkspaceSession) => {
+    if (thread.parentThreadId) return;
+    void runWorkspaceSidebarAction(owner, (actions) => {
+      // Keep the owning frame visible if its existing archive flow asks for confirmation.
+      const currentPath =
+        readWorkspaceSessions().find((current) => current.host === owner.host)?.summary?.path ??
+        "/";
+      openWorkspacePath(owner, currentPath);
+      return actions.archiveThread(thread.id);
+    }).catch(() => undefined);
+  };
+  const toggleSettledInWorkspace = () => {
+    const owner = session;
+    const threadId = thread.id;
+    const nextSettled = !isSettled;
+    const returnToThreadOnUndo = selectedThreadPath(href, owner, threadId, true);
+    void runWorkspaceSidebarAction(owner, (actions) =>
+      actions.setThreadSettled(threadId, nextSettled),
+    )
+      .then((confirmed) => {
+        if (!confirmed || !nextSettled || !readAvailableWorkspaceNavigation(owner)?.sidebar) return;
+        // This controller owns the visible toast even if Done removes the row or closes its frame route.
+        showUndoToast(
+          `done-undo:${owner.host.executionScope.environmentId}:${threadId}:${randomUUID()}`,
+          {
+            message: "Marked as done",
+            onUndo: () =>
+              runWorkspaceSidebarAction(owner, (actions) =>
+                actions.setThreadSettled(threadId, false),
+              )
+                .then((restored) => {
+                  if (restored && returnToThreadOnUndo) openWorkspacePath(owner, `/${threadId}`);
+                  return restored;
+                })
+                .catch(() => false),
+          },
+        );
+      })
+      .catch(() => undefined);
+  };
+  const quickActions = (
+    <ThreadRowQuickActions
+      threadId={thread.id}
+      isPinned={thread.isPinned === true}
+      isSettled={isSettled}
+      isSnoozed={thread.snoozedUntil != null}
       disabled={!online}
-      className="pointer-events-auto"
-      onDoubleClick={(event) => event.stopPropagation()}
-      onClick={(event) => {
-        event.preventDefault();
-        event.stopPropagation();
-        const rect = event.currentTarget.getBoundingClientRect();
-        openMenu({ x: rect.left, y: rect.bottom });
+      archiveDisabled={Boolean(thread.parentThreadId)}
+      toneClassName="text-muted-foreground/42"
+      onTogglePinned={() =>
+        runQuickAction((actions) => actions.setThreadPinned(thread.id, thread.isPinned !== true))
+      }
+      onArchive={() => archiveInWorkspace(session)}
+      onDone={() => {
+        if (thread.snoozedUntil != null)
+          runQuickAction((actions) => actions.returnSnoozedThread(thread.id));
+        else void toggleSettledInWorkspace();
       }}
     />
   );
   return (
     <>
-      {children({ rowEvents, menuButton })}
+      {children({ rowEvents, quickActions })}
       <WorkspaceRowMenu
         menu={menu}
         onClose={() => setMenu(null)}
@@ -255,15 +330,7 @@ export function WorkspaceThreadActions({
                   label: "Archive",
                   icon: ArchiveIcon,
                   separator: true,
-                  onClick: () => {
-                    const currentPath =
-                      readWorkspaceSessions().find((current) => current.host === actionSession.host)
-                        ?.summary?.path ?? "/";
-                    openWorkspacePath(actionSession, currentPath);
-                    runAction((actions: WorkspaceSidebarActions) =>
-                      actions.archiveThread(thread.id),
-                    );
-                  },
+                  onClick: () => archiveInWorkspace(actionSession),
                 },
               ]
             : []),
@@ -317,12 +384,19 @@ export function WorkspaceThreadRow({
       suffix={
         <>
           {topLevel ? (
-            <>
-              <GlobeIcon className="size-3 shrink-0 text-sky-600 dark:text-sky-400" aria-hidden />
-              <span className="max-w-[40%] shrink-0 truncate text-ui-xs text-muted-foreground">
-                {hostName}
-              </span>
-            </>
+            <span
+              data-slot="remote-thread-marker"
+              className={cn(
+                "inline-flex min-w-0 max-w-[40%] shrink-0 items-center gap-1.5",
+                sidebarHoverRevealHideClassName("thread-row"),
+              )}
+            >
+              <GlobeIcon
+                className={cn(SIDEBAR_TRAILING_ICON_CLASS, "text-sky-600 dark:text-sky-400")}
+                aria-hidden
+              />
+              <span className="truncate text-ui-xs text-muted-foreground">{hostName}</span>
+            </span>
           ) : null}
           <span className={sidebarHoverRevealHideClassName("thread-row")}>
             {threadJumpLabel ? (
@@ -340,7 +414,7 @@ export function WorkspaceThreadRow({
   const hoverAnchorId = `remote:${entry.key}`;
   return (
     <WorkspaceThreadActions entry={entry}>
-      {({ rowEvents, menuButton }) => {
+      {({ rowEvents, quickActions }) => {
         const row = (
           <>
             {topLevel ? (
@@ -350,7 +424,7 @@ export function WorkspaceThreadRow({
                 aria-label={label}
                 className={cn(
                   SIDEBAR_HEADER_ROW_CLASS_NAME,
-                  "gap-1.5 pr-7",
+                  "gap-1.5 pr-7 group-hover/thread-row:pr-[5rem] group-focus-within/thread-row:pr-[5rem]",
                   active ? SIDEBAR_ROW_ACTIVE_CLASS_NAME : SIDEBAR_ROW_HOVER_CLASS_NAME,
                 )}
                 onClick={open}
@@ -363,14 +437,17 @@ export function WorkspaceThreadRow({
                 size="sm"
                 isActive={active}
                 aria-label={label}
-                className={cn(SIDEBAR_THREAD_ROW_BASE_CLASS_NAME, "pr-7")}
+                className={cn(
+                  SIDEBAR_THREAD_ROW_BASE_CLASS_NAME,
+                  "pr-7 group-hover/thread-row:pr-[5rem] group-focus-within/thread-row:pr-[5rem]",
+                )}
                 onClick={open}
               >
                 {content}
               </SidebarMenuSubButton>
             )}
             <SidebarRowHoverActions threadId={entry.key}>
-              <span className="mr-1.5">{menuButton}</span>
+              <span className="mr-1.5">{quickActions}</span>
             </SidebarRowHoverActions>
           </>
         );

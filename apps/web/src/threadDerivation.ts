@@ -32,18 +32,16 @@ const EMPTY_PROPOSED_PLAN_IDS_BY_THREAD: Record<ThreadId, string[]> = {};
 const EMPTY_TURN_DIFF_IDS_BY_THREAD: Record<ThreadId, TurnId[]> = {};
 
 const collectedByIdsCache = new WeakMap<readonly string[], WeakMap<object, readonly unknown[]>>();
-const threadCache = new WeakMap<
-  ThreadShell,
-  {
-    session: ThreadSession | null;
-    turnState: ThreadTurnState | undefined;
-    messages: Thread["messages"];
-    activities: Thread["activities"];
-    proposedPlans: Thread["proposedPlans"];
-    turnDiffSummaries: Thread["turnDiffSummaries"];
-    thread: Thread;
-  }
->();
+type CachedThread = {
+  session: ThreadSession | null;
+  turnState: ThreadTurnState | undefined;
+  messages: Thread["messages"];
+  activities: Thread["activities"];
+  proposedPlans: Thread["proposedPlans"];
+  turnDiffSummaries: Thread["turnDiffSummaries"];
+  thread: Thread;
+};
+const threadCache = new WeakMap<ThreadShell, WeakMap<object, CachedThread>>();
 
 export function collectByIds<TKey extends string, TValue>(
   ids: readonly TKey[] | undefined,
@@ -60,9 +58,10 @@ export function collectByIds<TKey extends string, TValue>(
     return cached as TValue[];
   }
 
-  const nextValues = ids.flatMap((id) => {
+  const nextValues: TValue[] = [];
+  ids.forEach((id) => {
     const value = byId[id];
-    return value ? [value] : [];
+    if (value) nextValues.push(value);
   });
   const nextCachedByRecord = cachedByRecord ?? new WeakMap<object, readonly unknown[]>();
   nextCachedByRecord.set(byId, nextValues);
@@ -119,7 +118,18 @@ export function getThreadFromState(state: AppState, threadId: ThreadId): Thread 
   const activities = selectThreadActivities(state, threadId);
   const proposedPlans = selectThreadProposedPlans(state, threadId);
   const turnDiffSummaries = selectThreadTurnDiffSummaries(state, threadId);
-  const cached = threadCache.get(shell);
+  // Shells outlive detail eviction. Empty slices must still reuse the shell's identity.
+  const owner = messages.length
+    ? messages
+    : activities.length
+      ? activities
+      : proposedPlans.length
+        ? proposedPlans
+        : turnDiffSummaries.length
+          ? turnDiffSummaries
+          : shell;
+  const cachedByOwner = threadCache.get(shell);
+  const cached = cachedByOwner?.get(owner);
 
   if (
     cached &&
@@ -147,7 +157,9 @@ export function getThreadFromState(state: AppState, threadId: ThreadId): Thread 
     turnDiffSummaries,
   };
 
-  threadCache.set(shell, {
+  // Keep only the current owner: retaining an old array must not retain its entire Thread.
+  const nextCache = cached && cachedByOwner ? cachedByOwner : new WeakMap<object, CachedThread>();
+  nextCache.set(owner, {
     session,
     turnState,
     messages,
@@ -156,6 +168,7 @@ export function getThreadFromState(state: AppState, threadId: ThreadId): Thread 
     turnDiffSummaries,
     thread,
   });
+  if (!cached) threadCache.set(shell, nextCache);
 
   return thread;
 }

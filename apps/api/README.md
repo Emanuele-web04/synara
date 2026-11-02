@@ -43,7 +43,7 @@ The sandbox campaign configured for qualification is recorded below.
 | Local use         | Free; local coding, local chats and local workspace access do not require Pro.                                              |
 | Synara Pro        | All Remote functionality requires Pro; local desktop use stays free, with ownership and device approval checked separately. |
 | Monthly           | USD 7.99, recurring monthly (`799` minor units).                                                                            |
-| Annual            | USD 84.99, recurring annually (`8499` minor units).                                                                         |
+| Annual            | USD 79.99, recurring annually (`7999` minor units).                                                                         |
 | Tax               | Exclusive: applicable tax is added at checkout.                                                                             |
 | Introductory code | 50% off the first monthly payment only; no annual discount or permanent reduced renewal price.                              |
 
@@ -122,7 +122,7 @@ rollout is deliberately approved. This documentation changes no runtime setting.
    additionally requires `POLAR_PRODUCTION_PAYMENTS_ENABLED=true` and all four
    expected-catalog values: `POLAR_EXPECTED_CURRENCY=USD`,
    `POLAR_EXPECTED_MONTHLY_AMOUNT_MINOR=799`,
-   `POLAR_EXPECTED_YEARLY_AMOUNT_MINOR=8499` and
+   `POLAR_EXPECTED_YEARLY_AMOUNT_MINOR=7999` and
    `POLAR_EXPECTED_TAX_BEHAVIOR=exclusive`. The same complete expected-catalog
    set is optional in sandbox. Catalog validation rejects mismatches; updating
    a dashboard price is not permission to charge another amount.
