@@ -1,7 +1,15 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useId, useState } from "react";
+import { DisclosureChevron } from "~/components/ui/DisclosureChevron";
+import { DisclosureRegion } from "~/components/ui/DisclosureRegion";
 import { ProposalActions } from "~/components/ui/proposal-actions";
 import { MCP_CONNECTORS_QUERY_KEY } from "~/lib/mcpConnectorsReactQuery";
 import { ensureNativeApi } from "~/nativeApi";
+import {
+  MCP_CONNECTOR_CARD_CLASS_NAME,
+  McpConnectorCardHeader,
+  McpConnectorDetails,
+} from "./McpConnectorCard";
 
 export const MCP_CONNECTOR_PROPOSALS_QUERY_KEY = ["server", "mcpConnectorProposals"] as const;
 export function mcpConnectorProposalsQueryOptions() {
@@ -14,6 +22,8 @@ export function mcpConnectorProposalsQueryOptions() {
 }
 
 export function McpConnectorProposalCard({ proposalId }: { proposalId: string }) {
+  const [reviewingId, setReviewingId] = useState<string | null>(null);
+  const detailsId = useId();
   const client = useQueryClient();
   const query = useQuery(mcpConnectorProposalsQueryOptions());
   const proposal = query.data?.find((entry) => entry.proposalId === proposalId);
@@ -38,61 +48,83 @@ export function McpConnectorProposalCard({ proposalId }: { proposalId: string })
       </p>
     );
   const connector = proposal.connector;
+  const pending = proposal.state === "pending";
+  const reviewOpen = pending && reviewingId === proposalId;
   return (
-    <div className="space-y-3 rounded-xl border border-[color:var(--color-border-light)] bg-[var(--color-background-elevated-primary)] p-3 text-ui">
-      <p className="font-medium">
-        {proposal.action === "add" ? "Add" : "Remove"} {connector.name}?
-      </p>
-      {proposal.source ? (
-        <p className="text-ui-sm text-muted-foreground">Found in {proposal.source}</p>
+    <section
+      className={`${MCP_CONNECTOR_CARD_CLASS_NAME} w-full max-w-xl`}
+      aria-label={`${connector.name} connector proposal`}
+    >
+      <McpConnectorCardHeader connector={connector} />
+      {pending ? (
+        <p className="mt-4 text-ui-sm text-muted-foreground">
+          {proposal.action === "remove"
+            ? `Remove ${connector.name} from Synara and stop access from its chats.`
+            : `Connect ${connector.name} to use its tools in new chats.`}
+        </p>
       ) : null}
-      {connector.transport === "stdio" ? (
-        <dl className="space-y-1 break-all text-ui-sm">
-          <dt>Command</dt>
-          <dd>
-            <code>{connector.command}</code>
-          </dd>
-          <dt>Arguments (exact array)</dt>
-          <dd>
-            <code>{JSON.stringify(connector.args)}</code>
-          </dd>
-          <dt>Working directory</dt>
-          <dd>{connector.cwd ?? "Home directory"}</dd>
-          <dt>Environment keys (values hidden)</dt>
-          <dd>{connector.envKeys.join(", ") || "None"}</dd>
-        </dl>
+      {reviewOpen ? (
+        <button
+          type="button"
+          aria-expanded={reviewOpen}
+          aria-controls={detailsId}
+          onClick={() => setReviewingId(null)}
+          className="mt-4 flex items-center gap-1 rounded text-ui-sm text-muted-foreground hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring"
+        >
+          Connection details
+          <DisclosureChevron open={reviewOpen} className="size-3.5" />
+        </button>
+      ) : null}
+      <DisclosureRegion open={reviewOpen}>
+        <div id={detailsId} className="space-y-4 pt-4">
+          {proposal.source ? (
+            <p className="text-ui-sm text-muted-foreground [overflow-wrap:anywhere]">
+              Found in {proposal.source}
+            </p>
+          ) : null}
+          <McpConnectorDetails connector={connector} />
+          {proposal.action === "add" ? (
+            <p className="text-ui-sm text-muted-foreground">
+              {connector.transport === "stdio"
+                ? "Approval runs this command on this computer. Its tools become available in new chats."
+                : "Approval connects to this URL and opens OAuth sign-in if required. Its tools become available in new chats."}
+            </p>
+          ) : null}
+        </div>
+      </DisclosureRegion>
+      {pending ? (
+        <div className="mt-4 flex justify-end">
+          <ProposalActions
+            pending={mutation.isPending}
+            acceptLabel={
+              reviewOpen
+                ? proposal.action === "remove"
+                  ? "Remove connector"
+                  : "Approve connector"
+                : "Review connection"
+            }
+            onResolve={(resolution) => {
+              if (resolution === "accepted" && !reviewOpen) setReviewingId(proposalId);
+              else mutation.mutate(resolution);
+            }}
+          />
+        </div>
       ) : (
-        <p className="break-all text-ui-sm">{connector.url}</p>
-      )}
-      <p className="text-ui-sm text-muted-foreground">
-        {proposal.action === "remove"
-          ? "Removes this connector from Synara and stops access from its chats."
-          : connector.transport === "stdio"
-            ? "Approval runs this command on this computer. Its tools become available in new chats."
-            : "Approval connects to this URL and opens OAuth sign-in if required. Its tools become available in new chats."}
-      </p>
-      {proposal.state === "pending" ? (
-        <ProposalActions
-          pending={mutation.isPending}
-          acceptLabel={proposal.action === "remove" ? "Remove connector" : "Approve connector"}
-          onResolve={(resolution) => mutation.mutate(resolution)}
-        />
-      ) : (
-        <p className="text-ui-sm text-muted-foreground">
+        <p className="mt-4 text-ui-sm text-muted-foreground">
           {proposal.state === "accepted"
             ? proposal.action === "remove"
               ? "Connector removed"
-              : "Approved · available in new threads after connection"
+              : "Approved · available in new chats after connection"
             : "Dismissed"}
         </p>
       )}
       {mutation.isError ? (
-        <p role="alert" className="text-ui-sm text-destructive">
+        <p role="alert" className="mt-3 text-ui-sm text-destructive">
           {mutation.error instanceof Error
             ? mutation.error.message
             : "Could not apply this proposal."}
         </p>
       ) : null}
-    </div>
+    </section>
   );
 }

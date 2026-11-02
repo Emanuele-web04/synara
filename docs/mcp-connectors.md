@@ -88,10 +88,16 @@ and refuses redirects out of the selected origin. Public plain HTTP remains reje
   Environment values are imported literally; provider-specific variable interpolation is not applied.
 
 Only the owning computer's authenticated UI can resolve a proposal. MCP tools cannot approve
-one, even in full-access sessions. Cards show the exact expanded command, argument array,
-working directory and environment keys; values stay hidden. Pending proposals and connector
+one, even in full-access sessions. Choose **Review connection** to see the exact expanded
+command, argument array, working directory and environment keys before **Approve connector**
+becomes available; values stay hidden. Pending proposals and connector
 environment values are stored only in the existing secret-store document. Approval of an HTTP
 connector opens its OAuth authorization URL in the browser if sign-in is required.
+
+Saved connectors show their app icon when recognized (including Paper's official app artwork),
+name and connection status. A **Custom** badge identifies connectors outside the built-in catalog.
+**Connection details** expands the configuration and supported providers without putting command
+paths on the main card. Remote custom servers retain the existing site-favicon fallback.
 
 ## Local servers
 

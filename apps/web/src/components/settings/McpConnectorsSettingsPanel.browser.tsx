@@ -109,6 +109,24 @@ it("shows an exact stdio approval card and applies it only after the user approv
     </QueryClientProvider>,
   );
   try {
+    const review = screen.getByRole("button", { name: "Review connection", exact: true });
+    await expect.element(review).toBeVisible();
+    await expect
+      .element(screen.getByRole("button", { name: "Approve connector", exact: true }))
+      .not.toBeInTheDocument();
+    await expect.element(screen.getByText("Custom", { exact: true })).toBeVisible();
+    const card = screen.getByRole("region", { name: "Paper connector proposal", exact: true });
+    await expect
+      .poll(() => {
+        const image = card.element().querySelector("img");
+        return image?.complete && image.naturalWidth > 0;
+      })
+      .toBe(true);
+    await review.element().scrollIntoView();
+    await card.screenshot({
+      path: "__screenshots__/mcp-connectors-proposal.png",
+    });
+    await review.click();
     await expect
       .element(screen.getByText("/Users/example/.paper/bin/paper", { exact: true }))
       .toBeVisible();
@@ -119,27 +137,72 @@ it("shows an exact stdio approval card and applies it only after the user approv
     await expect.element(screen.getByText("PAPER_TOKEN", { exact: true })).toBeVisible();
     expect(api.resolveMcpConnectorProposal).not.toHaveBeenCalled();
     expect(api.connectMcpConnector).not.toHaveBeenCalled();
+    // Closing review must also remove the action that can execute the command.
+    await screen.getByRole("button", { name: "Connection details", exact: true }).click();
+    await expect
+      .element(screen.getByRole("button", { name: "Approve connector", exact: true }))
+      .not.toBeInTheDocument();
+    expect(api.resolveMcpConnectorProposal).not.toHaveBeenCalled();
+    await review.click();
+    await Promise.all(
+      card
+        .element()
+        .getAnimations({ subtree: true })
+        .map((animation) => animation.finished),
+    );
     await screen
       .getByRole("button", { name: "Approve connector", exact: true })
       .element()
       .scrollIntoView();
-    await page.screenshot({ path: "__screenshots__/mcp-connectors-approval.png" });
+    await card.screenshot({
+      path: "__screenshots__/mcp-connectors-approval.png",
+    });
     await screen.getByRole("button", { name: "Approve connector", exact: true }).click();
     await expect
       .poll(() => api.resolveMcpConnectorProposal.mock.calls.at(-1)?.[0])
       .toEqual({ proposalId: "paper-proposal", resolution: "accepted" });
     await expect.element(screen.getByText("Not running", { exact: true })).toBeVisible();
+    const details = screen.getByRole("button", { name: "Connection details", exact: true });
+    await expect.element(details).toHaveAttribute("aria-expanded", "false");
+    screen
+      .getByRole("button", { name: "Add local server", exact: true })
+      .element()
+      .scrollIntoView();
+    await page.screenshot({
+      path: "__screenshots__/mcp-connectors-local-saved.png",
+    });
+    await screen
+      .getByRole("region", { name: "Paper connector", exact: true })
+      .screenshot({ path: "__screenshots__/mcp-connectors-card.png" });
+    await details.click();
+    await expect.element(details).toHaveAttribute("aria-expanded", "true");
+    await expect
+      .element(screen.getByText("/Users/example/.paper/bin/paper", { exact: true }))
+      .toBeVisible();
     await expect
       .element(
         screen.getByText("Used by Claude, Codex, OpenCode, Cursor, Grok, Droid and Oh My Pi"),
       )
       .toBeVisible();
-    screen
-      .getByRole("button", { name: "Add local server", exact: true })
-      .element()
-      .scrollIntoView();
-    await page.screenshot({ path: "__screenshots__/mcp-connectors-local-saved.png" });
+    await details.click();
+    await Promise.all(
+      screen
+        .getByRole("region", { name: "Paper connector", exact: true })
+        .element()
+        .getAnimations({ subtree: true })
+        .map((animation) => animation.finished),
+    );
+    document.documentElement.classList.add("dark");
+    await page.viewport(390, 844);
+    await page.screenshot({
+      path: "__screenshots__/mcp-connectors-local-dark-mobile.png",
+    });
+    const savedCard = screen
+      .getByRole("region", { name: "Paper connector", exact: true })
+      .element();
+    expect(savedCard.scrollWidth).toBeLessThanOrEqual(savedCard.clientWidth);
   } finally {
+    document.documentElement.classList.remove("dark");
     await screen.unmount();
     client.clear();
     api.listMcpConnectorProposals.mockResolvedValue([]);

@@ -25,6 +25,8 @@ import {
 
 import { ComposerPickerMenuPopup } from "~/components/chat/ComposerPickerMenuPopup";
 import { Button } from "~/components/ui/button";
+import { DisclosureChevron } from "~/components/ui/DisclosureChevron";
+import { DisclosureRegion } from "~/components/ui/DisclosureRegion";
 import {
   Dialog,
   DialogDescription,
@@ -45,6 +47,11 @@ import { ensureNativeApi } from "~/nativeApi";
 
 import { McpConnectorConnectDialog, type McpConnectorTarget } from "./McpConnectorConnectDialog";
 import { McpConnectorGlyph } from "./McpConnectorGlyph";
+import {
+  MCP_CONNECTOR_CARD_CLASS_NAME,
+  McpConnectorCardHeader,
+  McpConnectorDetails,
+} from "./McpConnectorCard";
 import { McpLocalConnectorDialog } from "./McpLocalConnectorDialog";
 import {
   McpConnectorProposalCard,
@@ -105,11 +112,15 @@ function matchesSearch(query: string, ...fields: ReadonlyArray<string>): boolean
   return query.length === 0 || fields.some((field) => field.toLowerCase().includes(query));
 }
 
-function ConnectorShelf(props: { title: string; children: ReactNode }) {
+function ConnectorShelf(props: { title: string; children: ReactNode; cards?: boolean }) {
   return (
     <section className="space-y-1">
       <h2 className="px-3 text-ui-lg font-medium text-foreground">{props.title}</h2>
-      <div className="grid grid-cols-1 gap-x-2 sm:grid-cols-2">{props.children}</div>
+      <div
+        className={`grid grid-cols-1 sm:grid-cols-2 ${props.cards ? "items-start gap-3" : "gap-x-2"}`}
+      >
+        {props.children}
+      </div>
     </section>
   );
 }
@@ -153,67 +164,78 @@ function ConnectedRow(props: {
   onDisconnect: () => void;
 }) {
   const { connector } = props;
+  const [detailsOpen, setDetailsOpen] = useState(false);
+  const detailsId = useId();
   const needsAuth = connector.status === "needs-auth";
   return (
-    <div className={CONNECTOR_ROW_CLASS_NAME}>
-      <McpConnectorGlyph
-        name={connector.name}
-        url={connector.transport === "stdio" ? undefined : connector.url}
-      />
-      <ConnectorRowText
-        title={connector.name}
-        description={
-          <span className="block space-y-1">
-            {needsAuth ? (
-              <span className="text-destructive">Sign-in expired. Reconnect to keep using it.</span>
-            ) : (
-              (connectorPreset(connector)?.description ?? connectorHost(connector))
+    <section className={MCP_CONNECTOR_CARD_CLASS_NAME} aria-label={`${connector.name} connector`}>
+      <McpConnectorCardHeader
+        connector={connector}
+        subtitle={connectorPreset(connector)?.description}
+      >
+        <Menu>
+          <MenuTrigger
+            render={
+              <IconButton
+                variant="ghost"
+                size="icon-sm"
+                shape="capsule"
+                label={`${connector.name} actions`}
+                disabled={props.disconnecting}
+              >
+                <EllipsisIcon className="size-4" />
+              </IconButton>
+            }
+          />
+          <ComposerPickerMenuPopup
+            align="end"
+            side="bottom"
+            sideOffset={6}
+            className="w-44 min-w-44"
+          >
+            {needsAuth || connector.transport === "stdio" ? null : (
+              <MenuItem onClick={props.onReconnect}>Reconnect</MenuItem>
             )}
-            <span className="block text-ui-xs">
-              {connector.transport ?? "remote-http"} ·{" "}
-              <span className="rounded bg-muted px-1.5 py-0.5">
-                {needsAuth
-                  ? "Needs sign-in"
-                  : connector.status === "unreachable"
-                    ? "Not running"
-                    : "Connected"}
-              </span>
-            </span>
-            <span className="block whitespace-normal text-ui-xs">
-              Used by Claude, Codex, OpenCode, Cursor, Grok, Droid and Oh My Pi
-            </span>
-          </span>
-        }
-      />
-      {needsAuth ? (
-        <Button size="xs" variant="outline" onClick={props.onReconnect}>
-          Reconnect
-        </Button>
-      ) : null}
-      <Menu>
-        <MenuTrigger
-          render={
-            <IconButton
-              variant="ghost"
-              size="icon-sm"
-              shape="capsule"
-              label={`${connector.name} actions`}
-              disabled={props.disconnecting}
-            >
-              <EllipsisIcon className="size-4" />
-            </IconButton>
-          }
-        />
-        <ComposerPickerMenuPopup align="end" side="bottom" sideOffset={6} className="w-44 min-w-44">
-          {needsAuth || connector.transport === "stdio" ? null : (
-            <MenuItem onClick={props.onReconnect}>Reconnect</MenuItem>
-          )}
-          <MenuItem variant="destructive" onClick={props.onDisconnect}>
-            Disconnect
-          </MenuItem>
-        </ComposerPickerMenuPopup>
-      </Menu>
-    </div>
+            <MenuItem variant="destructive" onClick={props.onDisconnect}>
+              Disconnect
+            </MenuItem>
+          </ComposerPickerMenuPopup>
+        </Menu>
+      </McpConnectorCardHeader>
+      <div className="mt-4 flex flex-wrap items-center justify-between gap-2 border-t border-border/40 pt-3">
+        <span className="flex items-center gap-1.5 text-ui-sm text-muted-foreground">
+          <span
+            aria-hidden="true"
+            className={`size-1.5 shrink-0 rounded-full ${needsAuth ? "bg-destructive" : connector.status === "unreachable" ? "bg-muted-foreground" : "bg-success"}`}
+          />
+          {needsAuth
+            ? "Needs sign-in"
+            : connector.status === "unreachable"
+              ? "Not running"
+              : "Connected"}
+        </span>
+        {needsAuth ? (
+          <Button size="xs" variant="outline" onClick={props.onReconnect}>
+            Reconnect
+          </Button>
+        ) : null}
+        <button
+          type="button"
+          aria-expanded={detailsOpen}
+          aria-controls={detailsId}
+          onClick={() => setDetailsOpen((open) => !open)}
+          className="flex items-center gap-1 rounded text-ui-sm text-muted-foreground hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring"
+        >
+          Connection details
+          <DisclosureChevron open={detailsOpen} className="size-3.5" />
+        </button>
+      </div>
+      <DisclosureRegion open={detailsOpen}>
+        <div id={detailsId} className="pt-4">
+          <McpConnectorDetails connector={connector} />
+        </div>
+      </DisclosureRegion>
+    </section>
   );
 }
 
@@ -414,7 +436,7 @@ export function McpConnectorsSettingsPanel(props: { active: boolean }) {
       ) : null}
 
       {visibleConnectors.length > 0 ? (
-        <ConnectorShelf title="Your connectors">
+        <ConnectorShelf title="Your connectors" cards>
           {visibleConnectors.map((connector) => (
             <ConnectedRow
               key={connector.connectorId}
