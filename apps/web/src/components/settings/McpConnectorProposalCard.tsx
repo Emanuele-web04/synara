@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useId, useState } from "react";
+import { Button } from "~/components/ui/button";
 import { DisclosureChevron } from "~/components/ui/DisclosureChevron";
 import { DisclosureRegion } from "~/components/ui/DisclosureRegion";
 import { ProposalActions } from "~/components/ui/proposal-actions";
@@ -64,16 +65,18 @@ export function McpConnectorProposalCard({ proposalId }: { proposalId: string })
         </p>
       ) : null}
       {reviewOpen ? (
-        <button
+        <Button
           type="button"
+          variant="ghost"
+          size="chip"
           aria-expanded={reviewOpen}
           aria-controls={detailsId}
           onClick={() => setReviewingId(null)}
-          className="mt-4 flex items-center gap-1 rounded text-ui-sm text-muted-foreground hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring"
+          className="mt-4"
         >
           Connection details
           <DisclosureChevron open={reviewOpen} className="size-3.5" />
-        </button>
+        </Button>
       ) : null}
       <DisclosureRegion open={reviewOpen}>
         <div id={detailsId} className="space-y-4 pt-4">

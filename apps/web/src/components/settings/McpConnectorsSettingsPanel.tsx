@@ -219,16 +219,17 @@ function ConnectedRow(props: {
             Reconnect
           </Button>
         ) : null}
-        <button
+        <Button
           type="button"
+          variant="ghost"
+          size="chip"
           aria-expanded={detailsOpen}
           aria-controls={detailsId}
           onClick={() => setDetailsOpen((open) => !open)}
-          className="flex items-center gap-1 rounded text-ui-sm text-muted-foreground hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring"
         >
           Connection details
           <DisclosureChevron open={detailsOpen} className="size-3.5" />
-        </button>
+        </Button>
       </div>
       <DisclosureRegion open={detailsOpen}>
         <div id={detailsId} className="pt-4">
