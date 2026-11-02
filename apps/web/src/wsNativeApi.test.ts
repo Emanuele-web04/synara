@@ -320,6 +320,7 @@ describe("wsNativeApi", () => {
             enabled: true,
             binaryPath: "codex",
             homePath: "",
+            launchArgs: "",
             selectedAccountId: "default",
             accounts: [],
             customModels: [],

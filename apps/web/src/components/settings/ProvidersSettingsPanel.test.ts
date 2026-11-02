@@ -11,6 +11,16 @@ import {
 const defaults = AppSettingsSchema.makeUnsafe({});
 
 describe("isProviderInstallSettingsDirty", () => {
+  it("detects changed Codex launch args", () => {
+    expect(isProviderInstallSettingsDirty(defaults, defaults)).toBe(false);
+    expect(
+      isProviderInstallSettingsDirty(
+        { ...defaults, codexLaunchArgs: '-c model_provider="apitoken"' },
+        defaults,
+      ),
+    ).toBe(true);
+  });
+
   it("uses configured flags instead of unreadable password values", () => {
     expect(
       isProviderInstallSettingsDirty({ ...defaults, openCodeServerPassword: "secret" }, defaults),
@@ -41,6 +51,7 @@ describe("createProviderInstallResetPatch", () => {
         "codexAccounts",
         "codexBinaryPath",
         "codexHomePath",
+        "codexLaunchArgs",
         "cursorApiEndpoint",
         "cursorBinaryPath",
         "devinBinaryPath",
@@ -85,4 +96,14 @@ describe("providerInstanceLaunchConfigFor", () => {
       }),
     ).toEqual({ binaryPath: "/opt/homebrew/bin/claude" });
   });
+});
+
+it("does not inherit provider-wide Codex launch args as an account executable", () => {
+  expect(
+    providerInstanceLaunchConfigFor("codex", {
+      ...defaults,
+      codexBinaryPath: "/custom/codex",
+      codexLaunchArgs: '-c model_provider="apitoken"',
+    }),
+  ).toEqual({ binaryPath: "/custom/codex" });
 });

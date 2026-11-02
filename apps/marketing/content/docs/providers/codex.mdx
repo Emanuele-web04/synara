@@ -114,6 +114,10 @@ Codex keeps its own configuration, normally under `~/.codex/config.toml` or `$CO
 
 Changing the Codex model provider, authentication environment, sandbox rules, or approval settings can change what Synara sees. Keep provider configuration in Codex rather than duplicating secrets in Synara.
 
+To pass extra flags when Synara starts `codex app-server`, set **Codex launch args** in provider settings. Those tokens are inserted before `app-server`. An unquoted `--` sends the remaining tokens after `app-server`. Flags must be supported by your installed Codex CLI. For example, `-c model_provider="apitoken"` supplies a configuration override. Synara does not translate unsupported CLI flags.
+
+The setting applies to both session launch paths on every Codex account. Health probes and discovery commands keep their existing arguments. Parsing preserves quoted values and escaped whitespace without running a shell or expanding environment variables. Synara appends its managed continuation-home and credential-store options after the custom arguments.
+
 ## Updating
 
 Update through the installation method you used:
