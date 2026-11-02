@@ -16,6 +16,7 @@
     "test": "vitest run --passWithNoTests",
     "smoke-test": "node scripts/smoke-test.mjs",
     "smoke:browser-lifecycle": "bun build scripts/browser-lifecycle-smoke.ts --target=node --external=electron --external=betterwright --external=betterwright/* --external=ws --external=effect --outfile=.smoke/browser-lifecycle.mjs && electron .smoke/browser-lifecycle.mjs",
+    "smoke:clear-site-data": "bun build scripts/clear-site-data-smoke.ts --target=node --external=electron --external=betterwright --external=betterwright/* --external=ws --external=effect --external=effect/* --external=@effect/* --outfile=.smoke/clear-site-data.mjs && electron .smoke/clear-site-data.mjs",
     "smoke:browser-viewport": "bun build scripts/browser-viewport-smoke.ts --target=node --external=electron --external=betterwright --outfile=.smoke/browser-viewport.mjs && electron .smoke/browser-viewport.mjs"
   },
   "dependencies": {

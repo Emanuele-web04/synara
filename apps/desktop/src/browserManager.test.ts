@@ -9,6 +9,7 @@ const { browserSession, rendererWebContentsById, rendererWebContentsFromId } = v
   return {
     browserSession: {
       setUserAgent: vi.fn(),
+      clearData: vi.fn(async () => {}),
       webRequest: { onBeforeSendHeaders: vi.fn(), onHeadersReceived: vi.fn() },
       protocol: { handle: vi.fn(), unhandle: vi.fn() },
     },
@@ -37,7 +38,7 @@ vi.mock("electron", async () => ({
   WebContentsView: class {},
 }));
 
-import { DesktopBrowserManager } from "./browserManager";
+import { DesktopBrowserManager, resolveClearableSiteOrigins } from "./browserManager";
 
 interface WindowOpenDetails {
   url: string;
@@ -664,5 +665,64 @@ describe("DesktopBrowserManager repeated workflow characterization", () => {
       });
       expect(manager.getAutomationHumanControlEpoch(THREAD_ID)).toBe(initialEpoch);
     }
+  });
+});
+
+describe("DesktopBrowserManager browsing data", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("only treats web pages as having site data", () => {
+    expect(resolveClearableSiteOrigins("https://app.example.com/a?b=1")).toEqual([
+      "https://app.example.com",
+    ]);
+    expect(resolveClearableSiteOrigins("http://127.0.0.1:5173/")).toEqual([
+      "http://127.0.0.1:5173",
+    ]);
+    expect(resolveClearableSiteOrigins("about:blank")).toEqual([]);
+    expect(resolveClearableSiteOrigins("file:///tmp/a.html")).toEqual([]);
+    expect(resolveClearableSiteOrigins(null)).toEqual([]);
+  });
+
+  it("clears data scoped to the tab's origin", async () => {
+    const manager = new DesktopBrowserManager();
+    manager.open({ threadId: THREAD_ID });
+    const state = manager.newTab({
+      threadId: THREAD_ID,
+      url: "https://app.example.com/inbox",
+      activate: false,
+    });
+    const tabId = state.tabs.at(-1)?.id;
+    expect(tabId).toBeDefined();
+    if (!tabId) return;
+
+    await manager.clearSiteData({ threadId: THREAD_ID, tabId });
+
+    expect(browserSession.clearData).toHaveBeenCalledExactlyOnceWith({
+      origins: ["https://app.example.com"],
+    });
+  });
+
+  it("refuses to clear site data for a blank tab", async () => {
+    const manager = new DesktopBrowserManager();
+    const state = manager.open({ threadId: THREAD_ID });
+    const tabId = state.activeTabId;
+    expect(tabId).not.toBeNull();
+    if (!tabId) return;
+
+    await expect(manager.clearSiteData({ threadId: THREAD_ID, tabId })).rejects.toThrow(
+      /no site data/i,
+    );
+    expect(browserSession.clearData).not.toHaveBeenCalled();
+  });
+
+  it("clears the whole browser session", async () => {
+    const manager = new DesktopBrowserManager();
+    manager.open({ threadId: THREAD_ID });
+
+    await manager.clearAllData({ threadId: THREAD_ID });
+
+    expect(browserSession.clearData).toHaveBeenCalledExactlyOnceWith();
   });
 });
