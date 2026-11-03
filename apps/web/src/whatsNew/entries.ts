@@ -22,6 +22,80 @@ import type { WhatsNewEntry } from "./logic";
 
 export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
   {
+    version: "1.0.6-remote.43",
+    date: "Nov 3",
+    features: [
+      {
+        id: "remote-mcp-proposal-visibility",
+        title: "Connector approvals stay visible",
+        description: "Review MCP connector proposals in chat even when Worked for is collapsed.",
+      },
+    ],
+  },
+  {
+    version: "1.0.6-remote.42",
+    date: "Nov 3",
+    features: [
+      {
+        id: "remote-local-mcp",
+        title: "Connect local MCP servers",
+        description:
+          "Add an HTTP server on this computer or a local command from Settings → Connectors.",
+        details: "Start a new chat after setup to give the agent access to the connector's tools.",
+      },
+      {
+        id: "remote-mcp-proposals",
+        title: "Review connector changes from chat",
+        description:
+          "Ask in chat to add, remove or import connectors, then review the proposal on the computer running the chat.",
+        details:
+          "You can inspect the exact command, arguments and working directory before approval. Environment values stay hidden.",
+      },
+    ],
+  },
+  {
+    version: "1.0.6-remote.41",
+    date: "Nov 1",
+    features: [
+      {
+        id: "remote-photo-send-guard",
+        title: "Keep photos with your message",
+        description:
+          "If desktop photo preparation fails, the message stays unsent and your draft and ready images remain available. You can select another photo and try again.",
+        details:
+          "Reviews that cannot accept attachments reject them before starting. Update iPhone and iPad separately to TestFlight 166 for the matching photo-picker guard.",
+      },
+      {
+        id: "remote-usage-limit-resume",
+        title: "Resume after usage limits",
+        description:
+          "Opt in from Settings → Providers on each computer. Eligible tasks wait for the provider's verified reset, then continue on the same account and model.",
+        details:
+          "Off by default. The computer must stay running; saved waits survive its restart. Stop or turning the setting off cancels the pending continuation. Unknown reset times remain manual.",
+      },
+      {
+        id: "remote-recovery-and-child-ownership",
+        title: "Recover work without mixing sessions",
+        description:
+          "Crash recovery retains the first message, and paused queues wait for a usable connection before resuming. Background agents stay linked to their parent chat.",
+        details:
+          "Unsupported or finished provider-child input is read-only. Active Claude child steering and independent app-owned child chats remain available.",
+      },
+      {
+        id: "remote-bounded-processing",
+        title: "Less repeated work during reconnects",
+        description:
+          "Long sessions retain less temporary activity data, and reconnecting processes updates in smaller batches. Pi support moves to SDK 1.4.0.",
+      },
+      {
+        id: "remote-home-new-chat-context",
+        title: "New Chat keeps your project context",
+        description:
+          "From Home, New Chat uses the latest ordinary project in the current Space, or opens project creation. Hub and Group chats hide the shortcut instead of sending you elsewhere.",
+      },
+    ],
+  },
+  {
     version: "1.0.6-remote.39",
     date: "Oct 28",
     features: [
