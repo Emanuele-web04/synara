@@ -1,5 +1,59 @@
 # Changelog
 
+## 1.0.6-remote.42 — 2026-11-03
+
+**Connect local MCP servers from Settings or a chat.**
+
+### Added
+
+- Add an HTTP server running on loopback or a local stdio command from **Settings → Connectors → Add local server**.
+- Ask in chat to add, remove or import MCP connectors from supported Claude and Codex configurations. Review the proposal on the computer that runs the chat. Command arguments and the working directory are visible before approval; environment values stay hidden.
+- Connector cards show the app icon when recognized, the connection status and expandable configuration details. An unavailable local server stays saved and is skipped when a new provider session starts.
+
+### Compatibility and verification
+
+- Start a new chat after approving a connector. Existing sessions keep their original connector set. Approval and local command execution belong to the owning computer.
+- Local MCP connectors run in the desktop app's server. This release requires no new hosted account API or companion build.
+- Windows installers use the version-specific unsigned release policy and may show SmartScreen. macOS packages target Apple Silicon. The bundled Remote tunnel helper requires macOS 15.
+
+## 1.0.6-remote.41 — 2026-11-01
+
+**Keep photos with their messages, recover paused work, and keep remote processing bounded.**
+
+### Fixed
+
+- If desktop attachment preparation fails, sending stops instead of delivering a text-only message. The draft and successfully prepared images stay available, and a later valid photo can be selected normally.
+- Provider-native reviews reject unsupported attachments before starting, instead of silently dropping them. Older saved review requests settle cleanly rather than leaving later messages blocked or starting a hidden helper task.
+- Crash recovery retains a first human message whose turn has not yet been linked. Resuming a paused queue waits for the transport and quota-recovery gate, then dispatches accepted work once.
+- Unsupported Codex native-child input and messages to finished provider children are rejected before being recorded. Those unavailable child composers are read-only; active Claude child steering and independent app-owned child conversations remain available. Child events retain their parent's session, active turn and quota-reset deadline.
+- Home's New Chat action uses the latest ordinary project in the active Space, or opens the existing project-creation flow. Hub and Group threads hide the shortcut rather than opening an unrelated project's chat.
+- Concurrent credential refresh remains retryable if a competing process releases its lock immediately after a collision. Unrelated filesystem I/O failures still surface as errors.
+
+### Added
+
+- Enable **Settings → Providers → Resume after usage limits** on each computer. The setting is off by default and only applies to new, eligible usage-limit failures.
+- The owning computer saves the wait and sends a guarded continuation after a verified reset, retaining the original failed turn. Waiting survives a host restart; the computer must remain running.
+- Stop, disabling the setting, and changes to the task, provider account or route cancel the pending continuation. Already accepted user messages retain priority; ambiguous deliveries and providers still retrying remain under their existing recovery controls.
+- An explicit offline database-maintenance helper accepts only an existing absolute database path. Run it manually with Node or Electron-as-Node while the database is closed; Bun is rejected before inspecting or locking the target. It does not run on startup, select a channel home, or operate on user databases automatically. Remote does not publish an npm CLI.
+
+### Runtime
+
+- Startup replay and ACK scans use bounded pages. Activity caches avoid retaining large serialized updates or evicted detail, and fragmented desktop frames are assembled once. Ordering, validation and transaction barriers remain enforced.
+- Pi's SDK is updated to 1.4.0, retaining saved profiles, provider/model choices, isolated account routing, native sessions and the Remote runtime patches. Packaging checks exercise the installed OpenAI compatibility path without making a live inference request.
+
+### Companion iPhone and iPad
+
+- TestFlight **0.1 (166)** waits for selected photos to finish loading before enabling Send. Update the mobile app separately; a desktop update does not install the phone-side guard.
+
+### Compatibility and verification
+
+- Automatic continuation requires a known future reset and verified native account identity. Supported Codex and native Claude macOS/Linux routes can qualify; unknown resets, unsupported authentication scopes, Claude Windows and other adapters remain manual.
+- Deploy the matching account API before updated hosts and the iPhone/iPad companion. Existing accounts, data, approved pairings and Remote update identity are preserved. This release introduces additive SQLite migration 141; payment behavior is unchanged.
+- Five realistic first-upload cases passed native Swift TLS/DPoP transport, actual SQLite claims and readback; ten Claude/Codex native-payload cases retained matching image bytes, MIME and SHA-256. These checks did not call a live vendor model or establish model perception.
+- Recovery source checks cover durable waiting, restart, cancellation/admission races and queue ordering. Live exhausted-provider waits and live APNs delivery have not been qualified. Bounded-processing checks are not measurements of app-wide memory, battery life or latency. Exact-tag quality/server tests and packaged platform qualification remain publication gates.
+- Offline compaction preserves the source when active ownership, pending recovery or verification prevents installation. Nearly-full-disk behavior and Windows sudden-power-loss directory durability remain known limitations; no automatic database compaction is enabled.
+- Windows retains the exact-version unsigned exception and may show SmartScreen. Mac artifacts target Apple Silicon. The app declares macOS 13, but the bundled tunnel helper requires macOS 15; connector operation on macOS 13–14 remains unqualified.
+
 ## 1.0.6-remote.40 — 2026-10-31
 
 **Remote connection recovery and update diagnostics.**
