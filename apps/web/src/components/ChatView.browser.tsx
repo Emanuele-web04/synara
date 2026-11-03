@@ -16593,7 +16593,7 @@ describe("ChatView transcript geometry (full app)", () => {
     }
   });
 
-  it("pins the pending MCP proposal to its chat composer until dismissed", async () => {
+  it("keeps the MCP proposal in the transcript recap after its final answer", async () => {
     const base = createSnapshotWithInlineToolOverflow({ active: false });
     const createdAt = isoAt(1_107);
     const proposal: McpConnectorProposal = {
@@ -16632,7 +16632,7 @@ describe("ChatView transcript geometry (full app)", () => {
                     tone: "info",
                     summary: "Add connector: Paper",
                     createdAt,
-                    turnId: thread.latestTurn?.turnId ?? null,
+                    turnId: null,
                     payload: { proposalId: proposal.proposalId },
                   },
                 ],
@@ -16654,10 +16654,19 @@ describe("ChatView transcript geometry (full app)", () => {
     });
     try {
       const card = page.getByRole("region", { name: "Paper connector proposal", exact: true });
-      const composer = "[data-chat-composer-form='true']";
-      const assertPinned = async () => {
+      const answer = page.getByText("Wrapped up the inline tool review.", { exact: true });
+      const assertRecapPlacement = async () => {
         await expect.element(card).toBeVisible();
-        expect(card.element().closest(composer)).not.toBeNull();
+        await expect.element(answer).toBeVisible();
+        const cardElement = card.element();
+        const answerElement = answer.element();
+        const answerRow = answerElement.closest("[data-timeline-row-kind='message']");
+        expect(answerRow?.getAttribute("data-message-id")).toBe("msg-assistant-inline-tools");
+        expect(cardElement.closest("[data-timeline-row-kind='message']")).toBe(answerRow);
+        expect(
+          answerElement.compareDocumentPosition(cardElement) & Node.DOCUMENT_POSITION_FOLLOWING,
+        ).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+        expect(cardElement.closest("[data-chat-composer-form='true']")).toBeNull();
         expect(
           page.getByRole("region", { name: "Other connector connector proposal" }).query(),
         ).toBeNull();
@@ -16666,21 +16675,21 @@ describe("ChatView transcript geometry (full app)", () => {
       await vi.waitFor(() =>
         expect(findInlineToolsTurnDisclosure()?.getAttribute("aria-expanded")).toBe("false"),
       );
-      await assertPinned();
+      await assertRecapPlacement();
       expect(document.body.textContent).not.toContain("Used 6 tools");
 
       findInlineToolsTurnDisclosure()!.click();
       await vi.waitFor(() => expect(document.body.textContent).toContain("Used 6 tools"));
-      await assertPinned();
+      await assertRecapPlacement();
       findInlineToolsTurnDisclosure()!.click();
       await vi.waitFor(() =>
         expect(findInlineToolsTurnDisclosure()?.getAttribute("aria-expanded")).toBe("false"),
       );
-      await assertPinned();
+      await assertRecapPlacement();
 
       await card.getByRole("button", { name: "Dismiss", exact: true }).click();
       await expect.element(card.getByText("Dismissed", { exact: true })).toBeVisible();
-      expect(card.element().closest(composer)).toBeNull();
+      await assertRecapPlacement();
     } finally {
       await mounted.cleanup();
     }
