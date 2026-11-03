@@ -160,6 +160,7 @@ import {
 import { formatShortcutLabel, shortcutLabelForCommand } from "../keybindings";
 import { isHomeChatContainerProject } from "../lib/chatProjects";
 import { isGroupContainerProject } from "../lib/groupProjects";
+import { readExecutionContext } from "../lib/hosts/executionContext";
 import { appendComposerPromptText } from "../lib/chatReferences";
 import { createPastedTextDraft } from "../lib/composerPastedText";
 import {
@@ -339,6 +340,10 @@ import {
 } from "./chat/ComposerModelPicker";
 import { ProviderInstancePicker } from "./chat/ProviderInstancePicker";
 import { ComposerPendingApprovalPanel } from "./chat/ComposerPendingApprovalPanel";
+import {
+  McpConnectorProposalCard,
+  mcpConnectorProposalsQueryOptions,
+} from "./settings/McpConnectorProposalCard";
 import { HubPendingApprovals } from "./chat/group/HubPendingApprovals";
 import { ComposerRunningAgentsCapsule } from "./chat/ComposerRunningAgentsCapsule";
 import {
@@ -2126,22 +2131,45 @@ export default function ChatView({
     blockedProviderHandoff && blockedProviderHandoff.activityId !== dismissedBlockedHandoffId
       ? blockedProviderHandoff
       : null;
+  const mcpProposalQueryEnabled =
+    MCP_CONNECTORS_ON && isServerThread && !readExecutionContext()?.remote;
+  const mcpProposalsQuery = useQuery({
+    ...mcpConnectorProposalsQueryOptions(),
+    enabled: mcpProposalQueryEnabled,
+    refetchInterval:
+      mcpProposalQueryEnabled && workLogEntries.some((entry) => entry.connectorProposalId)
+        ? 5_000
+        : false,
+  });
+  const pendingMcpProposals = useMemo(
+    () =>
+      mcpProposalQueryEnabled
+        ? (mcpProposalsQuery.data?.filter(
+            (proposal) => proposal.threadId === activeThreadId && proposal.state === "pending",
+          ) ?? [])
+        : [],
+    [activeThreadId, mcpProposalQueryEnabled, mcpProposalsQuery.data],
+  );
+  const timelineWorkEntries = useMemo(() => {
+    const entries = agentActivityTimelineState.timelineWorkEntries;
+    if (pendingMcpProposals.length === 0) return entries;
+    const pinnedIds = new Set(pendingMcpProposals.map((proposal) => proposal.proposalId));
+    return entries.filter(
+      (entry) => !entry.connectorProposalId || !pinnedIds.has(entry.connectorProposalId),
+    );
+  }, [agentActivityTimelineState.timelineWorkEntries, pendingMcpProposals]);
+
   const timelineEntries = useMemo(
     () =>
       deriveTimelineEntries(
         timelineMessages,
         activeThread?.proposedPlans ?? [],
-        agentActivityTimelineState.timelineWorkEntries,
+        timelineWorkEntries,
         // Coordinator check-in turns run in the background and never appear
         // in this transcript — their outcomes live in the group activity log.
         { suppressCoordinatorCheckins: isCoordinatorConversation },
       ),
-    [
-      activeThread?.proposedPlans,
-      agentActivityTimelineState.timelineWorkEntries,
-      isCoordinatorConversation,
-      timelineMessages,
-    ],
+    [activeThread?.proposedPlans, isCoordinatorConversation, timelineMessages, timelineWorkEntries],
   );
   const enteringUserMessageIds = useMemo<ReadonlySet<MessageId>>(
     () => new Set(optimisticUserMessages.map((message) => message.id)),
@@ -6484,6 +6512,16 @@ export default function ChatView({
                   scheduleComposerFocus();
                 }}
               />
+            ) : null}
+            {pendingMcpProposals.length > 0 ? (
+              <div className="max-h-[40dvh] space-y-2 overflow-y-auto overscroll-contain pb-2">
+                {pendingMcpProposals.map((proposal) => (
+                  <McpConnectorProposalCard
+                    key={proposal.proposalId}
+                    proposalId={proposal.proposalId}
+                  />
+                ))}
+              </div>
             ) : null}
             {emptyLandingControls}
           </div>

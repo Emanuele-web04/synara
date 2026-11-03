@@ -18,6 +18,7 @@ import {
   EventId,
   type ExecutionEnvironmentDescriptor,
   MessageId,
+  type McpConnectorProposal,
   DEVICE_WS_METHODS,
   COMPUTER_WS_METHODS,
   ORCHESTRATION_WS_METHODS,
@@ -185,6 +186,7 @@ interface TestFixture {
   welcome: WsWelcomePayload;
   gitBranchByCwd: Record<string, string>;
   projectAgentOverviews: Record<string, unknown>;
+  connectorProposals: McpConnectorProposal[];
 }
 
 let fixture: TestFixture;
@@ -565,6 +567,7 @@ function buildFixture(snapshot: OrchestrationReadModel): TestFixture {
     providerStatusesSnapshot: null,
     gitBranchByCwd: {},
     projectAgentOverviews: {},
+    connectorProposals: [],
     welcome: {
       cwd: "/repo/project",
       projectName: "Project",
@@ -1281,6 +1284,20 @@ function resolveWsRpc(body: WsRequestEnvelope["body"]): unknown {
       ),
     };
     return fixture.serverSettings;
+  }
+  if (tag === WS_METHODS.serverListMcpConnectorProposals) {
+    return fixture.connectorProposals;
+  }
+  if (tag === WS_METHODS.serverResolveMcpConnectorProposal) {
+    const proposal = fixture.connectorProposals.find(
+      (candidate) => candidate.proposalId === body.proposalId,
+    );
+    if (!proposal || body.resolution !== "dismissed") return null;
+    const dismissed = { ...proposal, state: "dismissed" as const };
+    fixture.connectorProposals = fixture.connectorProposals.map((candidate) =>
+      candidate === proposal ? dismissed : candidate,
+    );
+    return { proposal: dismissed, authorizationUrl: null };
   }
   if (tag === WS_METHODS.serverGetConfig) {
     return fixture.serverConfig;
@@ -16571,6 +16588,99 @@ describe("ChatView transcript geometry (full app)", () => {
         },
         { timeout: 8_000, interval: 16 },
       );
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("pins the pending MCP proposal to its chat composer until dismissed", async () => {
+    const base = createSnapshotWithInlineToolOverflow({ active: false });
+    const createdAt = isoAt(1_107);
+    const proposal: McpConnectorProposal = {
+      proposalId: "paper-proposal",
+      threadId: THREAD_ID,
+      action: "add",
+      state: "pending",
+      connector: {
+        connectorId: "pending-paper",
+        presetId: null,
+        name: "Paper",
+        transport: "stdio",
+        command: "/opt/example/paper",
+        args: ["mcp"],
+        envKeys: [],
+        serverName: "paper_connector",
+        authKind: "none",
+        status: "unreachable",
+        createdAt,
+        updatedAt: createdAt,
+      },
+    };
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: {
+        ...base,
+        threads: base.threads.map((thread) =>
+          thread.id === THREAD_ID
+            ? {
+                ...thread,
+                activities: [
+                  ...thread.activities,
+                  {
+                    id: EventId.makeUnsafe("paper-proposed"),
+                    kind: "mcp.connector.proposed",
+                    tone: "info",
+                    summary: "Add connector: Paper",
+                    createdAt,
+                    turnId: thread.latestTurn?.turnId ?? null,
+                    payload: { proposalId: proposal.proposalId },
+                  },
+                ],
+              }
+            : thread,
+        ),
+      },
+      configureFixture: (fixture) => {
+        fixture.connectorProposals = [
+          proposal,
+          {
+            ...proposal,
+            proposalId: "other-proposal",
+            threadId: OTHER_THREAD_ID,
+            connector: { ...proposal.connector, name: "Other connector" },
+          },
+        ];
+      },
+    });
+    try {
+      const card = page.getByRole("region", { name: "Paper connector proposal", exact: true });
+      const composer = "[data-chat-composer-form='true']";
+      const assertPinned = async () => {
+        await expect.element(card).toBeVisible();
+        expect(card.element().closest(composer)).not.toBeNull();
+        expect(
+          page.getByRole("region", { name: "Other connector connector proposal" }).query(),
+        ).toBeNull();
+      };
+
+      await vi.waitFor(() =>
+        expect(findInlineToolsTurnDisclosure()?.getAttribute("aria-expanded")).toBe("false"),
+      );
+      await assertPinned();
+      expect(document.body.textContent).not.toContain("Used 6 tools");
+
+      findInlineToolsTurnDisclosure()!.click();
+      await vi.waitFor(() => expect(document.body.textContent).toContain("Used 6 tools"));
+      await assertPinned();
+      findInlineToolsTurnDisclosure()!.click();
+      await vi.waitFor(() =>
+        expect(findInlineToolsTurnDisclosure()?.getAttribute("aria-expanded")).toBe("false"),
+      );
+      await assertPinned();
+
+      await card.getByRole("button", { name: "Dismiss", exact: true }).click();
+      await expect.element(card.getByText("Dismissed", { exact: true })).toBeVisible();
+      expect(card.element().closest(composer)).toBeNull();
     } finally {
       await mounted.cleanup();
     }
