@@ -990,11 +990,12 @@ export function deriveTerminalAssistantMessageIds(
   return terminalAssistantMessageIds;
 }
 
-// Thread-scoped notices and provider handoff boundaries keep their own row:
-// they are not turn work, so they never merge into or fold with a turn.
+// Notices, handoff boundaries, and connector proposals stay visible in their
+// own rows when a turn's work is grouped or folded.
 export function isStandaloneWorkEntry(
   entry: Pick<
     WorkLogEntry,
+    | "connectorProposalId"
     | "synaraWorkerNotice"
     | "providerHandoff"
     | "turnFailure"
@@ -1005,6 +1006,7 @@ export function isStandaloneWorkEntry(
   >,
 ): boolean {
   return Boolean(
+    entry.connectorProposalId ||
     entry.synaraWorkerNotice ||
     entry.providerHandoff ||
     entry.turnFailure ||
@@ -1593,9 +1595,7 @@ function collapseSettledTurns(
         break;
       }
       if (prev.kind === "work") {
-        // Coordinator monitor rows are server-posted system pills, not turn
-        // work — folding them into a collapsed turn would hide them on
-        // conversation-only surfaces.
+        // Standalone rows stay visible without stopping the fold of nearby work.
         if (prev.groupedEntries.some(isStandaloneWorkEntry)) continue;
         foldIndices.push(scan);
         continue;
