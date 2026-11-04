@@ -6,6 +6,7 @@ import { DisclosureChevron } from "~/components/ui/DisclosureChevron";
 import { DisclosureRegion } from "~/components/ui/DisclosureRegion";
 import { Button } from "~/components/ui/button";
 import { SettingsCard, SettingsRow, SettingsSectionShell } from "./SettingsPanelPrimitives";
+import { useTranslation } from "~/i18n";
 
 const STORAGE_KEY = "synara:computer-getting-started:v1";
 
@@ -15,6 +16,8 @@ export function ComputerGettingStarted({
 }: {
   readonly appSnapAvailable: boolean;
 }) {
+  const { t } = useTranslation();
+
   const [acknowledged, setAcknowledged] = useLocalStorage(STORAGE_KEY, false, Schema.Boolean);
   const [requestedOpen, setRequestedOpen] = useState(false);
   const open = !acknowledged || requestedOpen;
@@ -25,7 +28,7 @@ export function ComputerGettingStarted({
 
   return (
     <SettingsSectionShell
-      title="Getting started"
+      title="settings:gettingStarted"
       action={
         <Button
           size="xs"
@@ -34,33 +37,36 @@ export function ComputerGettingStarted({
           onClick={() => (open ? dismiss() : setRequestedOpen(true))}
         >
           <DisclosureChevron open={open} />
-          {open ? "Hide guide" : "Show guide"}
+          {open ? t("settings:hideGuide") : t("settings:showGuide")}
         </Button>
       }
     >
       <DisclosureRegion open={open}>
         <SettingsCard>
           <SettingsRow
-            title="Ask for a task"
-            description="Type /computer-use followed by your task, for example: “/computer-use open Calculator and calculate 123 × 45.” This enables Computer for that request only. The default setting below can enable it on every turn."
+            id="setting-ask-for-a-task"
+            title="settings:askForATask"
+            description="settings:typeComputerUseFollowedByYourTaskForExample"
           />
           <SettingsRow
-            title="Approve the task"
-            description="If asked, approve Computer for the task. Use the permission guide when desktop access is missing. Synara may still ask before consequential actions."
+            id="setting-approve-the-task"
+            title="settings:approveTheTask"
+            description="settings:ifAskedApproveComputerForTheTaskUseThe"
           />
           <SettingsRow
-            title="Follow and stop"
-            description="Watch the preview while the agent works. Use Stop in the chat to interrupt the task. Closing the preview only hides it."
+            id="setting-follow-and-stop"
+            title="settings:followAndStop"
+            description="settings:watchThePreviewWhileTheAgentWorksUseStop"
           />
         </SettingsCard>
         {appSnapAvailable ? (
           <p className="mt-3 px-2 text-ui-sm text-muted-foreground">
-            AppSnap is separate: it attaches a window image without giving the agent control.
+            {t("settings:appSnapIsSeparateItAttachesAWindowImageWithout")}
           </p>
         ) : null}
         {!acknowledged ? (
           <Button className="mt-3" size="sm" variant="outline" onClick={dismiss}>
-            Got it
+            {t("common:whatsNew_gotIt")}
           </Button>
         ) : null}
       </DisclosureRegion>

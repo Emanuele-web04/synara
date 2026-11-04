@@ -17,11 +17,14 @@ import {
   seriesColor,
   toneTextClassName,
 } from "./InlineVisualSurface";
+import { useTranslation } from "~/i18n";
 
 type BarChartBlock = Extract<InlineVisualBlock, { type: "bar-chart" }>;
 type LineChartBlock = Extract<InlineVisualBlock, { type: "line-chart" }>;
 
 export function InlineVisualBarChart({ block }: { readonly block: BarChartBlock }) {
+  const { t, formatLocale } = useTranslation();
+
   const items =
     block.sort === "value" ? block.items.toSorted((a, b) => b.value - a.value) : block.items;
   const compared = items.some((item) => item.baseline !== undefined);
@@ -46,11 +49,11 @@ export function InlineVisualBarChart({ block }: { readonly block: BarChartBlock 
           <span className="flex items-center gap-3 text-chat-sm text-muted-foreground">
             <span className="flex items-center gap-1.5">
               <span aria-hidden className="h-1.5 w-3 rounded-full bg-[var(--chart-muted)]" />
-              {block.baselineLabel ?? "Before"}
+              {block.baselineLabel ?? t("chat:toolCallDetails_before")}
             </span>
             <span className="flex items-center gap-1.5">
               <span aria-hidden className="h-2 w-3 rounded-full bg-[var(--chart-accent)]" />
-              {block.valueLabel ?? "After"}
+              {block.valueLabel ?? t("chat:toolCallDetails_after")}
             </span>
           </span>
         ) : null
@@ -120,7 +123,7 @@ export function InlineVisualBarChart({ block }: { readonly block: BarChartBlock 
                     better={block.better}
                   />
                 ) : (
-                  formatVisualNumber(item.value, { unit: block.unit })
+                  formatVisualNumber(item.value, { unit: block.unit }, formatLocale)
                 )}
               </span>
             </div>
@@ -143,6 +146,8 @@ function BarChange({
   readonly unit: string | undefined;
   readonly better: BarChartBlock["better"];
 }) {
+  const { formatLocale } = useTranslation();
+
   const change = baseline === 0 ? null : ((value - baseline) / Math.abs(baseline)) * 100;
   const improved =
     change === null || change === 0 || better === undefined
@@ -153,8 +158,10 @@ function BarChange({
   return (
     <span className="flex flex-col items-end leading-tight">
       <span>
-        <span className="font-normal text-muted-foreground">{formatVisualNumber(baseline)} → </span>
-        {formatVisualNumber(value, { unit })}
+        <span className="font-normal text-muted-foreground">
+          {formatVisualNumber(baseline, {}, formatLocale)} →{" "}
+        </span>
+        {formatVisualNumber(value, { unit }, formatLocale)}
       </span>
       {change !== null ? (
         <span
@@ -166,7 +173,11 @@ function BarChange({
           )}
         >
           {change > 0 ? "+" : ""}
-          {formatVisualNumber(change, { decimals: Math.abs(change) < 10 ? 1 : 0, unit: "%" })}
+          {formatVisualNumber(
+            change,
+            { decimals: Math.abs(change) < 10 ? 1 : 0, unit: "%" },
+            formatLocale,
+          )}
         </span>
       ) : null}
     </span>
@@ -178,6 +189,8 @@ const PLOT_TOP = 8;
 const PLOT_BOTTOM = 24;
 
 export function InlineVisualLineChart({ block }: { readonly block: LineChartBlock }) {
+  const { formatLocale } = useTranslation();
+
   const containerRef = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState(0);
   const [hover, setHover] = useState<number | null>(null);
@@ -199,7 +212,7 @@ export function InlineVisualLineChart({ block }: { readonly block: LineChartBloc
   const ticks = niceAxisTicks(Math.min(...values), Math.max(...values));
   const low = ticks[0]!;
   const high = ticks[ticks.length - 1]!;
-  const tickLabels = ticks.map((tick) => formatVisualNumber(tick));
+  const tickLabels = ticks.map((tick) => formatVisualNumber(tick, {}, formatLocale));
   // Room for the widest tick label; approximate, the font is the chat font.
   const plotLeft = Math.max(...tickLabels.map((label) => label.length)) * 7 + 10;
   const plotRight = 8;
@@ -344,7 +357,11 @@ export function InlineVisualLineChart({ block }: { readonly block: LineChartBloc
                   {block.series.length > 1 ? series.name : null}
                 </span>
                 <span className="font-medium tabular-nums">
-                  {formatVisualNumber(series.values[hover] ?? Number.NaN, { unit: block.unit })}
+                  {formatVisualNumber(
+                    series.values[hover] ?? Number.NaN,
+                    { unit: block.unit },
+                    formatLocale,
+                  )}
                 </span>
               </div>
             ))}

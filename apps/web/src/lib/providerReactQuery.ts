@@ -3,6 +3,7 @@
 // Layer: Web data fetching helpers
 // Depends on: native API bridge, orchestration contracts, and React Query.
 
+import { t } from "~/i18n";
 import {
   OrchestrationGetFullThreadDiffInput,
   OrchestrationGetTurnDiffInput,
@@ -85,12 +86,12 @@ function asCheckpointErrorMessage(error: unknown): string {
 function normalizeCheckpointErrorMessage(error: unknown): string {
   const message = asCheckpointErrorMessage(error).trim();
   if (message.length === 0) {
-    return "Failed to load checkpoint diff.";
+    return t("git:checkpointDiffLoadFailed");
   }
 
   const lower = message.toLowerCase();
   if (lower.includes("not a git repository")) {
-    return "Turn diffs are unavailable because this project is not a git repository.";
+    return t("common:turnDiffsAreUnavailableBecauseThisProjectIsNot");
   }
 
   if (
@@ -135,8 +136,8 @@ export function resolveCheckpointDiffQueryDisplayState(input: {
         : normalizeCheckpointErrorMessage(input.error),
     refreshStatus: capacityDelayed
       ? input.isFetching
-        ? "Refreshing diff..."
-        : "Diff refresh delayed."
+        ? t("git:diffRefreshing")
+        : t("git:diffRefreshDelayed")
       : null,
   };
 }
@@ -149,7 +150,7 @@ export function checkpointDiffQueryOptions(input: CheckpointDiffQueryInput) {
     queryFn: async () => {
       const api = ensureNativeApi();
       if (!input.threadId || decodedRequest._tag === "None") {
-        throw new Error("Checkpoint diff is unavailable.");
+        throw new Error(t("git:checkpointDiffUnavailable"));
       }
       try {
         if (decodedRequest.value.kind === "fullThreadDiff") {

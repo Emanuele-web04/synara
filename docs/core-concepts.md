@@ -271,13 +271,22 @@ not offer a generic Retry because an error message alone cannot prove that resen
 Messages queued above the composer while a turn runs are sent one by one after it completes.
 If you press Stop, or the turn fails or hits a usage limit, the queue pauses instead: it
 stays visible with **Queue paused** and the reason. **Resume** sends the queue in order;
+if the provider session stopped, it starts the session again once the server connection is open.
 **Edit** moves the next queued message back into the composer. Sending a new message
 yourself goes first, and the queue resumes once that turn completes. The pause is per
 thread and survives a reload. A message already shown in the conversation was accepted by
 the server rather than queued here, and the server still sends it after a Stop.
 
+Send waits for selected images to finish preparing. If preparation fails while a send is waiting,
+the message stays unsent and its text and successfully prepared attachments remain in the composer.
+Select a readable image before retrying; a failed intake does not block later valid sends.
+
 Turn off **Settings → General → Move sent messages to top** to keep new messages at the bottom
 of the conversation and follow replies as they stream.
+
+**Settings → Providers → Resume after usage limits** is off by default. When enabled, a supported provider's definitive failed turn with a known future reset can schedule a server-owned continuation in the same task. The failed turn remains in the transcript. The task shows its reset time, and **Stop** cancels that recovery episode. The owning computer must be running; desktop, web, and iOS clients can disconnect. A restarted host restores pending waits. It cannot wake a sleeping or powered-off computer. A Stop issued while a send is still being accepted also prevents that send from scheduling a recovery later.
+
+The continuation checks the saved conversation and workspace before repeating operations. Already accepted user messages take priority. Manual sends, Stop, pause, archive/delete, goal changes, model/account/route changes, or disabling the setting cancel the pending recovery; re-enabling does not restore cancelled waits. Unknown resets, an uncertain delivery, and providers still performing their own retry remain under existing manual or native recovery controls. Unsent composer drafts stay on their client.
 
 For work that should continue across several turns, set a deliberate
 [thread goal](https://www.trysynara.com/docs/features/thread-goals). A goal can continue after a
@@ -584,6 +593,24 @@ Regular Markdown links remain relative to the document directory. Code, escaped
 Wiki syntax, embeds, and heading/block links are left literal; this is basic file
 navigation rather than full Obsidian support.
 
+### Images in chat replies
+
+Images stay at their original positions in the reply. When a completed reply
+references an eligible local image, the host can retain a private attachment
+snapshot with that message. This snapshot remains available after the original
+file or worktree is removed; it uses the conversation's computer and attachment
+storage, rather than uploading the image to a public service.
+
+Local references without a retained snapshot still need their original file.
+Relative paths are resolved on the conversation's host, using its workspace and
+registered Git worktrees. Recovery grants access to one canonical file, not its
+parent directory. Symlinks cannot widen the relative-reference boundary.
+
+Use **Retry** on a failed image preview after the file becomes available or the
+host reconnects. Retrying renews an expired file grant when needed. Image previews
+do not poll in the background. A missing original cannot be recovered when no
+snapshot was retained; older replies may therefore still need the original file.
+
 ### Terminal panels
 
 Each chat has one main-view terminal panel and can have multiple independent
@@ -592,6 +619,10 @@ with its own shell session. Switching tabs preserves their sessions; closing or
 exiting one terminal leaves the others running. Dock tabs and session identities
 are restored after reload. Terminals have no nested tabs, groups, splits, or bottom
 drawer. Opening the main-view terminal again focuses its existing session.
+The right dock remembers its resized width per chat across thread switches,
+panel tab changes, closing and reopening the dock, and reloads. When a smaller
+window cannot fit that width beside the composer, the dock temporarily uses its
+opening width and restores the saved resize when space returns.
 Project actions open a fresh session in the right dock with the requested working
 directory and environment, keeping the center chat unchanged, including in split
 chats. They replace only the selected idle dock terminal; its busy command must

@@ -9,6 +9,7 @@ import type * as React from "react";
 
 import { Button } from "~/components/ui/button";
 import { Popover, PopoverDescription, PopoverPopup, PopoverTitle } from "~/components/ui/popover";
+import { useTranslation } from "~/i18n";
 
 export function AutomationRiskConfirmPopover({
   open,
@@ -32,6 +33,8 @@ export function AutomationRiskConfirmPopover({
   /** Optional extra content between the copy and the actions (e.g. a thread picker). */
   readonly children?: React.ReactNode;
 }) {
+  const { t } = useTranslation();
+
   return (
     <Popover open={open} onOpenChange={onOpenChange}>
       <PopoverPopup anchor={anchor} side="bottom" align="end" className="w-72">
@@ -43,7 +46,7 @@ export function AutomationRiskConfirmPopover({
           {children}
           <div className="flex justify-end gap-2">
             <Button type="button" size="sm" variant="ghost" onClick={() => onOpenChange(false)}>
-              Cancel
+              {t("common:form_cancel")}
             </Button>
             <Button type="button" size="sm" disabled={confirmDisabled} onClick={onConfirm}>
               {confirmLabel}

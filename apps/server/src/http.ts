@@ -1473,6 +1473,9 @@ export const attachmentsEffectRouteLayer = HttpRouter.add(
       headers: {
         "Cache-Control": "private, no-store",
         Pragma: "no-cache",
+        ...(nodePath.extname(filePath).toLowerCase() === ".svg"
+          ? SVG_DOCUMENT_SECURITY_HEADERS
+          : {}),
       },
     });
   }).pipe(Effect.catchTag("AuthError", (error) => Effect.succeed(authErrorResponse(error)))),

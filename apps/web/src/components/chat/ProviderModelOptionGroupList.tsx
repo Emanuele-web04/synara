@@ -23,6 +23,7 @@ import {
   COMPOSER_PICKER_MODEL_ROW_LABEL_INDENT_CLASS_NAME,
 } from "./composerPickerStyles";
 import { ModelStarButton } from "./ModelStarButton";
+import { useTranslation } from "~/i18n";
 
 type FavoriteModelProvider = "cursor" | "opencode" | "pi";
 
@@ -58,6 +59,8 @@ function ProviderModelRadioItem(
     onAfterSelection?: () => void;
   }>,
 ) {
+  const { t } = useTranslation();
+
   const {
     provider,
     modelOption,
@@ -92,8 +95,8 @@ function ProviderModelRadioItem(
             starred={isFavorite}
             label={
               isFavorite
-                ? `Remove ${accessibleModelName} from favourites`
-                : `Add ${accessibleModelName} to favourites`
+                ? t("chat:removeFromFavourites", { value0: accessibleModelName })
+                : t("chat:addToFavourites", { value0: accessibleModelName })
             }
             onToggle={() => onToggleFavorite(favoriteProvider, instanceId, modelOption.slug)}
           />

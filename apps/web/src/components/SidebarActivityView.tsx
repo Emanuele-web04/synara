@@ -106,6 +106,7 @@ import {
   MenuTrigger,
 } from "./ui/menu";
 import { Tooltip, TooltipTrigger } from "./ui/tooltip";
+import { useTranslation } from "~/i18n";
 
 const ACTIVITY_LIST_BASE_LIMIT = 20;
 const ACTIVITY_LIST_PAGE_SIZE = 20;
@@ -163,6 +164,8 @@ export function ActivityThreadRow({
   renderHoverCard: (anchorId: string) => ReactNode;
   rowRef?: Ref<HTMLButtonElement>;
 }) {
+  const { t } = useTranslation();
+
   const provider = thread.session?.provider ?? thread.modelSelection.provider;
   const branch = resolveThreadDisplayBranch(thread);
   const isWorktree =
@@ -253,7 +256,7 @@ export function ActivityThreadRow({
             {thread.snoozedUntil != null ? (
               <ClockIcon
                 className={sidebarGlyphClass("meta", "shrink-0 text-info")}
-                aria-label="Scheduled"
+                aria-label={t("workspace:detail_scheduled")}
               />
             ) : null}
             {hasPendingDraft ? <SidebarDraftGlyph /> : null}
@@ -287,7 +290,7 @@ export function ActivityThreadRow({
               <span className="inline-flex size-5 shrink-0 items-center justify-center">
                 <WorktreeIcon
                   className={sidebarGlyphClass("meta", "text-muted-foreground/70")}
-                  aria-label="Worktree"
+                  aria-label={t("common:worktreeMode_worktree")}
                 />
               </span>
             ) : null}
@@ -348,8 +351,20 @@ export function ActivityThreadRow({
           />
           <SidebarIconButton
             icon={thread.snoozedUntil != null || isSettled ? Undo2Icon : CircleCheckIcon}
-            label={thread.snoozedUntil != null ? "Return now" : isSettled ? "Undo" : "Done"}
-            title={thread.snoozedUntil != null ? "Return now" : isSettled ? "Undo" : "Done"}
+            label={
+              thread.snoozedUntil != null
+                ? t("workspace:returnNow")
+                : isSettled
+                  ? t("workspace:toast_undo")
+                  : t("git:detail_done")
+            }
+            title={
+              thread.snoozedUntil != null
+                ? t("workspace:returnNow")
+                : isSettled
+                  ? t("workspace:toast_undo")
+                  : t("git:detail_done")
+            }
             iconClassName={SIDEBAR_TRAILING_ICON_CLASS}
             className={cn("hover:text-foreground/89", actionToneClassName)}
             onMouseDown={stopRowActivation}
@@ -376,6 +391,8 @@ export function SidebarSnoozedThreadsSection({
   renderThreadRow: (thread: SidebarThreadSummary) => ReactNode;
   onVisibleThreadIdsChange?: (threadIds: readonly ThreadId[]) => void;
 }) {
+  const { t } = useTranslation();
+
   const [open, setOpen] = useState(false);
   const [extraPages, setExtraPages] = useState(0);
   const paging = resolveSidebarThreadListPaging({
@@ -403,7 +420,7 @@ export function SidebarSnoozedThreadsSection({
   if (threads.length === 0) return null;
   return (
     <SidebarCollapsibleSection
-      label="Snoozed"
+      label={t("workspace:snoozed")}
       open={open}
       onToggle={() => setOpen((current) => !current)}
     >
@@ -433,10 +450,12 @@ function ActivityScopeMenu({
   scopeSelection: ActivityScopeSelection;
   onChangeScopeSelection: (selection: ActivityScopeSelection) => void;
 }) {
+  const { t } = useTranslation();
+
   const [menuOpen, setMenuOpen] = useState(false);
   const scopeLabel =
     scopeSelection === null
-      ? "All activity"
+      ? t("workspace:allActivity")
       : scopeSelection === "chats"
         ? "Synara"
         : resolveThreadProjectLabel(projectById.get(scopeSelection));
@@ -447,7 +466,7 @@ function ActivityScopeMenu({
         render={
           <button
             type="button"
-            aria-label="Filter activity by project"
+            aria-label={t("workspace:filterActivityByProject")}
             className={cn(
               "flex h-full min-w-0 flex-1 cursor-pointer items-center gap-1 rounded-md text-left",
               SIDEBAR_ROW_FOCUS_CLASS_NAME,
@@ -469,7 +488,7 @@ function ActivityScopeMenu({
       <ComposerPickerMenuPopup align="start" side="bottom" className="min-w-44">
         <MenuGroup>
           <div className="px-2 py-1 sm:text-ui leading-snug font-medium text-muted-foreground">
-            Activity scope
+            {t("workspace:activityScope")}
           </div>
           <MenuRadioGroup
             value={scopeSelection ?? "all"}
@@ -480,7 +499,7 @@ function ActivityScopeMenu({
             }}
           >
             <MenuRadioItem value="all" className="min-h-7 py-1 sm:text-ui leading-snug">
-              All activity
+              {t("workspace:allActivity")}
             </MenuRadioItem>
             {options.map((option) => (
               <MenuRadioItem
@@ -524,29 +543,31 @@ function ActivityFilterMenu({
   clearReadPriorityDisabled: boolean;
   onClearReadPriority: () => void;
 }) {
+  const { t } = useTranslation();
+
   return (
     <Menu>
       <SidebarIconButton
         icon={SortIcon}
-        label="Activity options"
-        tooltip="Activity options"
+        label={t("workspace:activityOptions")}
+        tooltip={t("workspace:activityOptions")}
         tooltipSide="bottom"
         render={<MenuTrigger />}
       />
       <ComposerPickerMenuPopup align="end" side="bottom" className="min-w-44">
         <MenuGroup>
           <div className="px-2 py-1 sm:text-ui leading-snug font-medium text-muted-foreground">
-            Group by
+            {t("workspace:groupBy")}
           </div>
           <MenuRadioGroup
             value={groupMode}
             onValueChange={(value) => onChangeGroupMode(value as ActivityGroupMode)}
           >
             <MenuRadioItem value="time" className="min-h-7 py-1 sm:text-ui leading-snug">
-              Time
+              {t("workspace:schedule_time")}
             </MenuRadioItem>
             <MenuRadioItem value="project" className="min-h-7 py-1 sm:text-ui leading-snug">
-              Project
+              {t("chat:detail_project")}
             </MenuRadioItem>
           </MenuRadioGroup>
         </MenuGroup>
@@ -556,14 +577,14 @@ function ActivityFilterMenu({
           disabled={markAllReadDisabled}
           onClick={onMarkAllRead}
         >
-          Mark all as read
+          {t("workspace:markAllAsRead")}
         </MenuItem>
         <MenuItem
           className="min-h-7 py-1 sm:text-ui leading-snug"
           disabled={clearReadPriorityDisabled}
           onClick={onClearReadPriority}
         >
-          Clear read from Priority
+          {t("workspace:clearReadPriority")}
         </MenuItem>
       </ComposerPickerMenuPopup>
     </Menu>
@@ -646,6 +667,8 @@ export function SidebarActivityView({
   /** Same "Add project" action the Projects section header runs. */
   onAddProject: () => void;
 }) {
+  const { t } = useTranslation();
+
   const [pinnedOpen, setPinnedOpen] = useState(true);
   const [earlierOpen, setEarlierOpen] = useState(false);
   const [earlierExtraPages, setEarlierExtraPages] = useState(0);
@@ -990,16 +1013,16 @@ export function SidebarActivityView({
     model.pinned.length === 0;
   const emptyLabel =
     activeScope === null
-      ? "No activity yet"
+      ? t("workspace:noActivityYet")
       : activeScope === "chats"
-        ? "No activity in Synara chats"
-        : "No activity for this project";
+        ? t("workspace:noActivityInSynaraChats")
+        : t("workspace:noActivityForThisProject");
 
   return (
     <div className="flex flex-col gap-3">
       {scopedPinnedThreads.length > 0 ? (
         <SidebarCollapsibleSection
-          label="Pinned"
+          label={t("common:app_pinned")}
           open={pinnedOpen}
           onToggle={() => setPinnedOpen((open) => !open)}
           revealedChildren={pinnedRows.revealed.map(renderActiveRow)}
@@ -1026,15 +1049,15 @@ export function SidebarActivityView({
         <SidebarSectionToolbar revealOnHover className="mr-0">
           <SidebarIconButton
             icon={NewThreadIcon}
-            label="Start new chat in last used project"
-            tooltip="New chat"
+            label={t("workspace:startNewChatInLastUsedProject")}
+            tooltip={t("workspace:sections_newChat")}
             tooltipSide="bottom"
             onClick={onCreateChat}
           />
           <SidebarIconButton
             icon={AddPlusIcon}
-            label="Add project"
-            tooltip="Add project"
+            label={t("workspace:sections_addProject")}
+            tooltip={t("workspace:sections_addProject")}
             tooltipSide="bottom"
             onClick={onAddProject}
           />
@@ -1051,7 +1074,7 @@ export function SidebarActivityView({
 
       {isEmpty ? (
         <div className="px-2 pt-4 text-center text-ui text-muted-foreground/58">
-          {threadsHydrated ? emptyLabel : "Loading activity..."}
+          {threadsHydrated ? emptyLabel : t("workspace:loadingActivity")}
         </div>
       ) : groupMode === "project" ? (
         pagedProjectGroups.map(({ group, paging, threads: visibleThreads }) => (
@@ -1098,25 +1121,25 @@ export function SidebarActivityView({
         <>
           {priorityThreads.length > 0 ? (
             <div>
-              <SidebarSectionLabel label="Priority" />
+              <SidebarSectionLabel label={t("workspace:priority")} />
               <div className="flex flex-col gap-0.5">{priorityThreads.map(renderActiveRow)}</div>
             </div>
           ) : null}
           {draftThreads.length > 0 ? (
             <div>
-              <SidebarSectionLabel label="Drafts" />
+              <SidebarSectionLabel label={t("workspace:drafts")} />
               <div className="flex flex-col gap-0.5">{draftThreads.map(renderActiveRow)}</div>
             </div>
           ) : null}
           {dateBuckets.today.length > 0 ? (
             <div>
-              <SidebarSectionLabel label="Today" />
+              <SidebarSectionLabel label={t("workspace:today")} />
               <div className="flex flex-col gap-0.5">{dateBuckets.today.map(renderActiveRow)}</div>
             </div>
           ) : null}
           {dateBuckets.yesterday.length > 0 ? (
             <div>
-              <SidebarSectionLabel label="Yesterday" />
+              <SidebarSectionLabel label={t("workspace:yesterday")} />
               <div className="flex flex-col gap-0.5">
                 {dateBuckets.yesterday.map(renderActiveRow)}
               </div>
@@ -1124,7 +1147,7 @@ export function SidebarActivityView({
           ) : null}
           {dateBuckets.earlier.length > 0 ? (
             <SidebarCollapsibleSection
-              label="Earlier"
+              label={t("workspace:earlier")}
               open={earlierOpen}
               onToggle={() => setEarlierOpen((open) => !open)}
               revealedChildren={earlierRows.revealed.map(renderActiveRow)}
@@ -1145,7 +1168,7 @@ export function SidebarActivityView({
 
       {model.settled.length > 0 ? (
         <SidebarCollapsibleSection
-          label="Done"
+          label={t("git:detail_done")}
           open={settledOpen}
           onToggle={() => setSettledOpen((open) => !open)}
           revealedChildren={settledRows.revealed.map((thread) => renderRow(thread, true))}

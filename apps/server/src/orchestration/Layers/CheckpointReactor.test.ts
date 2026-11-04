@@ -673,6 +673,7 @@ describe("CheckpointReactor", () => {
         options?.providerServiceLayer ?? Layer.succeed(ProviderService, provider.service),
       ),
       Layer.provideMerge(checkpointStoreLayer),
+      Layer.provideMerge(GitCoreLive),
       Layer.provideMerge(ServerConfigLayer),
       Layer.provideMerge(ServerSettingsService.layerTest()),
       Layer.provideMerge(NodeServices.layer),
@@ -4336,17 +4337,30 @@ describe("CheckpointReactor", () => {
             createdAt,
           }),
         );
-      await Effect.runPromise(
-        harness.sourceEngine.dispatch({
-          type: "thread.turn.start",
-          commandId: CommandId.makeUnsafe(`dedup-request-${kind}`),
+      if (kind === "root") {
+        await Effect.runPromise(
+          harness.sourceEngine.dispatch({
+            type: "thread.turn.start",
+            commandId: CommandId.makeUnsafe(`dedup-request-${kind}`),
+            threadId,
+            message: { messageId, role: "user", text: "Start", attachments: [] },
+            interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+            runtimeMode: "approval-required",
+            createdAt,
+          }),
+        );
+      } else {
+        // Native child turns originate in the provider; they do not accept a
+        // user turn-start command before the provider lifecycle is running.
+        harness.provider.emit({
+          type: "turn.started",
+          eventId: EventId.makeUnsafe("dedup-child-started"),
+          provider: "codex",
           threadId,
-          message: { messageId, role: "user", text: "Start", attachments: [] },
-          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-          runtimeMode: "approval-required",
+          turnId,
           createdAt,
-        }),
-      );
+        });
+      }
       await Effect.runPromise(
         harness.sourceEngine.dispatch({
           type: "thread.session.set",

@@ -59,6 +59,14 @@ import {
   isCodexGeneratedImageArtifact,
 } from "../../codexGeneratedImages.ts";
 import { copyAndAttributeStudioGeneratedImage } from "../../studioGeneratedImages.ts";
+import { stageAssistantImageAttachments } from "../../assistantImageAttachments.ts";
+import { ServerConfig } from "../../config.ts";
+import { ServerSettingsService } from "../../serverSettings.ts";
+import { providerUsageRecoveryBindingKey } from "../../providerUsage/index.ts";
+import { ManagedAttachmentRepository } from "../../persistence/Services/ManagedAttachments.ts";
+import { ManagedAttachmentRepositoryLive } from "../../persistence/Layers/ManagedAttachments.ts";
+import { GitCore } from "../../git/Services/GitCore.ts";
+import { listLocalPreviewWorktreeRoots } from "../../workspace/localPreviewWorktrees.ts";
 import { parseCheckpointFilesFromUnifiedDiff } from "../../checkpointing/Diffs.ts";
 import { ProviderService } from "../../provider/Services/ProviderService.ts";
 import { ComputerService } from "../../computer/Services/ComputerService.ts";
@@ -93,6 +101,7 @@ import { resolveThreadWorkspaceCwd } from "../../checkpointing/Utils.ts";
 import { isGitRepository } from "../../git/isRepo.ts";
 import {
   OrchestrationCommandIdentityCollisionError,
+  OrchestrationCommandInternalError,
   OrchestrationCommandPreviouslyRejectedError,
 } from "../Errors.ts";
 import { makeRuntimeJournalPoisonGate } from "../runtimeJournalPoisonGate.ts";
@@ -620,6 +629,19 @@ function asObject(value: unknown): Record<string, unknown> | undefined {
   return isJsonObject(value) ? value : undefined;
 }
 
+function stableActivityState(activity: {
+  readonly createdAt: string;
+  readonly sequence?: number | undefined;
+  readonly payload: unknown;
+}) {
+  const status = asObject(activity.payload)?.status;
+  return {
+    createdAt: activity.createdAt,
+    sequence: activity.sequence,
+    terminalStatus: status === "failed" || status === "completed" ? status : undefined,
+  };
+}
+
 /**
  * Resolves persisted image tool records to their durable display paths. Studio
  * copies add a source -> workspace-path marker; non-Studio images keep the
@@ -822,10 +844,15 @@ export function selectProviderRuntimeJournalStream(input: {
 
 const make = Effect.gen(function* () {
   const orchestrationEngine = yield* OrchestrationEngineService;
+  const serverConfig = yield* ServerConfig;
+  const managedAttachmentRepository = yield* ManagedAttachmentRepository;
+  const gitCore = yield* GitCore;
   const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
   const providerService = yield* ProviderService;
   const computerService = yield* Effect.serviceOption(ComputerService);
   const deviceService = yield* Effect.serviceOption(DeviceService);
+  const recoverySettings = yield* Effect.serviceOption(ServerSettingsService);
+  const recoveryLiveAfter = new Date().toISOString();
   const projectionTurnRepository = yield* ProjectionTurnRepository;
   const projectionThreadActivityRepository = yield* ProjectionThreadActivityRepository;
   const projectionThreadSessionRepository = yield* ProjectionThreadSessionRepository;
@@ -1075,7 +1102,10 @@ const make = Effect.gen(function* () {
   });
   // Keep row identity after the text buffer is consumed. On a cache miss the
   // durable activity restores ordering and terminal state across recovery.
-  const stableActivityById = yield* Cache.make<string, OrchestrationThreadActivity | undefined>({
+  const stableActivityById = yield* Cache.make<
+    string,
+    ReturnType<typeof stableActivityState> | undefined
+  >({
     capacity: BUFFERED_REASONING_SUMMARY_BY_KEY_CACHE_CAPACITY,
     timeToLive: BUFFERED_REASONING_SUMMARY_BY_KEY_TTL,
     lookup: () => Effect.succeed(undefined),
@@ -1192,27 +1222,14 @@ const make = Effect.gen(function* () {
               activityId: activity.id,
             }),
           );
-      const previous: OrchestrationThreadActivity | undefined =
-        cached ??
-        (durable
-          ? {
-              id: durable.activityId,
-              createdAt: durable.createdAt,
-              tone: durable.tone,
-              kind: durable.kind,
-              summary: durable.summary,
-              payload: durable.payload as OrchestrationThreadActivity["payload"],
-              turnId: durable.turnId,
-              ...(durable.sequence !== undefined ? { sequence: durable.sequence } : {}),
-            }
-          : undefined);
+      const previous = cached ?? (durable ? stableActivityState(durable) : undefined);
       if (previous) {
         yield* Cache.set(stableActivityById, activity.id, previous);
         // Interruption/failure is final; a delayed delta must not reopen a
         // completed block either. Completed snapshots may refine its detail.
         if (
-          asObject(previous.payload)?.status === "failed" ||
-          (asObject(previous.payload)?.status === "completed" &&
+          previous.terminalStatus === "failed" ||
+          (previous.terminalStatus === "completed" &&
             asObject(activity.payload)?.status !== "completed")
         )
           return;
@@ -1240,7 +1257,7 @@ const make = Effect.gen(function* () {
       createdAt: activity.createdAt,
     });
     if (hasStableActivity) {
-      yield* Cache.set(stableActivityById, activity.id, activity);
+      yield* Cache.set(stableActivityById, activity.id, stableActivityState(activity));
     }
     if (key && fingerprint) {
       yield* Cache.set(latestActivityUpdateFingerprintByKey, key, fingerprint);
@@ -1827,6 +1844,109 @@ const make = Effect.gen(function* () {
       }
     });
 
+  // Snapshot only the completed message's actual workspace images; never rescan history.
+  const stageInlineMessageImages = (
+    threadId: ThreadId,
+    messageId: MessageId,
+    commandId: string,
+    appendedText = "",
+  ) =>
+    Effect.gen(function* () {
+      // A receipt freezes the original attachment set, including no snapshots.
+      // Re-importing a newly available file would change this command's fingerprint.
+      const receipt = yield* commandReceipts.getByCommandId({
+        commandId: CommandId.makeUnsafe(commandId),
+      });
+      if (Option.isSome(receipt) && receipt.value.status === "accepted") {
+        const sequence = receipt.value.resultSequence;
+        const committed = yield* Stream.runCollect(
+          orchestrationEngine.readEventsThrough(Math.max(0, sequence - 1), sequence, 1),
+        );
+        const event = committed[0];
+        if (
+          event?.type !== "thread.message-sent" ||
+          event.commandId !== commandId ||
+          event.payload.threadId !== threadId ||
+          event.payload.messageId !== messageId ||
+          event.payload.role !== "assistant"
+        ) {
+          return yield* new OrchestrationCommandInternalError({
+            commandId,
+            commandType: "assistant-image-finalization-replay",
+            detail: "The accepted assistant message event is unavailable.",
+          });
+        }
+        const attachments = event.payload.attachments?.filter((item) => item.type === "image");
+        return { attachments, attachmentIds: attachments?.map((item) => item.id) ?? [] };
+      }
+      return yield* Effect.gen(function* () {
+        const stored = yield* projectionThreadMessageRepository.getByThreadAndMessageId({
+          threadId,
+          messageId,
+        });
+        if (Option.isNone(stored)) return { attachments: [], attachmentIds: [] };
+        const text = `${stored.value.text}${appendedText}`;
+        if (!text.includes("![")) return { attachments: [], attachmentIds: [] };
+        const shell = yield* projectionSnapshotQuery.getThreadShellById(threadId);
+        if (Option.isNone(shell)) return { attachments: [], attachmentIds: [] };
+        const project = yield* getProjectShell(shell.value);
+        if (!project) return { attachments: [], attachmentIds: [] };
+        const cwd = resolveThreadWorkspaceCwd({ thread: shell.value, projects: [project] });
+        if (!cwd) return { attachments: [], attachmentIds: [] };
+        return yield* stageAssistantImageAttachments({
+          text,
+          threadId,
+          messageId,
+          commandId,
+          cwd,
+          sourceRoots: [cwd],
+          attachmentsDir: serverConfig.attachmentsDir,
+          additionalSourceRoots: listLocalPreviewWorktreeRoots({ cwd }).pipe(
+            Effect.provideService(GitCore, gitCore),
+          ),
+          existingAttachments: stored.value.attachments ?? [],
+          repository: managedAttachmentRepository,
+        });
+      }).pipe(
+        Effect.catchCause((cause) => {
+          if (Cause.hasInterruptsOnly(cause)) return Effect.failCause(cause);
+          return Effect.logWarning("assistant image snapshots unavailable").pipe(
+            Effect.as({ attachments: [], attachmentIds: [] }),
+          );
+        }),
+        Effect.map((prepared) => ({
+          ...prepared,
+          attachments: prepared.attachments.length ? prepared.attachments : undefined,
+        })),
+      );
+    });
+
+  const completeAssistantMessage = (input: {
+    event: ProviderRuntimeEvent;
+    threadId: ThreadId;
+    messageId: MessageId;
+    turnId?: TurnId;
+    createdAt: string;
+    commandTag: string;
+    asyncQuestions?: import("@synara/contracts").AsyncUserInputQuestions;
+  }) =>
+    Effect.gen(function* () {
+      const commandId = providerCommandId(input.event, input.commandTag, input.messageId);
+      const prepared = yield* stageInlineMessageImages(input.threadId, input.messageId, commandId);
+      // Dispatch failures can be retryable or uncertain. Keep staging for the same
+      // journal operation to reclaim; abandoned uploads expire through the normal TTL.
+      yield* orchestrationEngine.dispatch({
+        type: "thread.message.assistant.complete",
+        commandId,
+        threadId: input.threadId,
+        messageId: input.messageId,
+        ...(prepared.attachments !== undefined ? { attachments: prepared.attachments } : {}),
+        ...(input.asyncQuestions ? { asyncQuestions: input.asyncQuestions } : {}),
+        ...(input.turnId ? { turnId: input.turnId } : {}),
+        createdAt: input.createdAt,
+      });
+    });
+
   const finalizeAssistantMessage = (input: {
     event: ProviderRuntimeEvent;
     threadId: ThreadId;
@@ -1879,15 +1999,7 @@ const make = Effect.gen(function* () {
         return;
       }
 
-      yield* orchestrationEngine.dispatch({
-        type: "thread.message.assistant.complete",
-        commandId: providerCommandId(input.event, input.commandTag, input.messageId),
-        threadId: input.threadId,
-        messageId: input.messageId,
-        ...(input.asyncQuestions ? { asyncQuestions: input.asyncQuestions } : {}),
-        ...(input.turnId ? { turnId: input.turnId } : {}),
-        createdAt: input.createdAt,
-      });
+      yield* completeAssistantMessage(input);
       yield* clearAssistantMessageState(input.threadId, input.messageId);
     });
 
@@ -1947,11 +2059,11 @@ const make = Effect.gen(function* () {
       // and duplicate provider notifications from emitting redundant message-sent events.
       const shouldComplete = dispatchedDelta || !input.targetMessage || targetIsStreaming;
       if (shouldComplete) {
-        yield* orchestrationEngine.dispatch({
-          type: "thread.message.assistant.complete",
-          commandId: providerCommandId(input.event, "generated-image-complete", targetMessageId),
+        yield* completeAssistantMessage({
+          event: input.event,
           threadId: input.threadId,
           messageId: targetMessageId,
+          commandTag: "generated-image-complete",
           ...(input.turnId ? { turnId: input.turnId } : {}),
           createdAt: input.createdAt,
         });
@@ -2945,8 +3057,46 @@ const make = Effect.gen(function* () {
             );
           }
 
+          let terminalRecovery: import("@synara/contracts").UsageLimitRecovery | undefined;
+          if (
+            event.type === "turn.completed" &&
+            event.payload.state === "failed" &&
+            event.payload.usageLimit?.resetAt &&
+            eventTurnId &&
+            Option.isSome(recoverySettings)
+          ) {
+            const settings = yield* recoverySettings.value.getSettings;
+            const current = (yield* orchestrationEngine.getReadModel()).threads.find(
+              (entry) => entry.id === thread.id,
+            );
+            const source = current?.usageLimitRecoverySource;
+            if (
+              settings.autoResumeAfterUsageLimits &&
+              source?.turnId === eventTurnId &&
+              source.policyEpoch === settings.usageLimitRecoveryEpoch &&
+              source.bindingKey !== "pending"
+            ) {
+              terminalRecovery = {
+                id: `usage-limit:${event.eventId}`,
+                turnId: eventTurnId,
+                resetAt: event.payload.usageLimit.resetAt,
+                autoResume: true,
+                provider: event.provider,
+                providerInstanceId:
+                  event.providerInstanceId ??
+                  thread.session?.providerInstanceId ??
+                  readModelSelectionProviderInstanceId(thread.modelSelection) ??
+                  event.provider,
+                model: current?.modelSelection.model ?? thread.modelSelection.model,
+                bindingKey: source.bindingKey,
+                policyEpoch: source.policyEpoch,
+              };
+            }
+          }
+
           yield* orchestrationEngine.dispatch({
             type: "thread.session.set",
+            ...(terminalRecovery ? { usageLimitRecovery: terminalRecovery } : {}),
             commandId: providerCommandId(event, "thread-session-set", thread.id),
             threadId: thread.id,
             session: {
@@ -2964,6 +3114,110 @@ const make = Effect.gen(function* () {
             },
             createdAt: now,
           });
+
+          // Freeze the source identity before observing any later refusal; replay can
+          // recover an existing freeze, but cannot arm historical failures from usage UI data.
+          if (event.type === "turn.started" && eventTurnId && Option.isSome(recoverySettings)) {
+            const settings = yield* recoverySettings.value.getSettings;
+            const frozenSource = (yield* orchestrationEngine.getReadModel()).threads.find(
+              (entry) => entry.id === thread.id,
+            )?.usageLimitRecoverySource;
+            if (
+              settings.autoResumeAfterUsageLimits &&
+              event.createdAt >= recoveryLiveAfter &&
+              frozenSource?.turnId !== eventTurnId &&
+              frozenSource?.admissionSequence !== undefined &&
+              frozenSource.policyEpoch === settings.usageLimitRecoveryEpoch &&
+              orchestrationEngine.hasThreadStopAfter !== undefined &&
+              !(yield* orchestrationEngine.hasThreadStopAfter(
+                thread.id,
+                frozenSource.admissionSequence,
+                eventTurnId,
+              ))
+            ) {
+              yield* orchestrationEngine.dispatch({
+                type: "thread.usage-limit.source",
+                expectedBindingKey: frozenSource.bindingKey,
+                commandId: providerCommandId(event, "usage-limit-source-pending", thread.id),
+                threadId: thread.id,
+                source: {
+                  turnId: eventTurnId,
+                  admissionSequence: frozenSource.admissionSequence,
+                  bindingKey: "pending",
+                  policyEpoch: settings.usageLimitRecoveryEpoch,
+                },
+                createdAt: now,
+              });
+              const instanceId =
+                event.providerInstanceId ??
+                thread.session?.providerInstanceId ??
+                readModelSelectionProviderInstanceId(thread.modelSelection) ??
+                event.provider;
+              const identityProject = yield* getProjectShell(thread);
+              const workingDirectory = identityProject
+                ? resolveThreadWorkspaceCwd({ thread, projects: [identityProject] })
+                : undefined;
+              const bindingKey = yield* providerUsageRecoveryBindingKey({
+                provider: event.provider,
+                instanceId,
+                ...(workingDirectory ? { workingDirectory } : {}),
+                ...(identityProject?.workspaceRoot
+                  ? { projectRoot: identityProject.workspaceRoot }
+                  : {}),
+              }).pipe(
+                Effect.provideService(ServerSettingsService, recoverySettings.value),
+                Effect.provideService(ServerConfig, serverConfig),
+                Effect.timeoutOption("8 seconds"),
+                Effect.map((result) => Option.getOrNull(result)),
+                Effect.catch(() => Effect.succeed(null)),
+              );
+              if (bindingKey)
+                yield* orchestrationEngine.dispatch({
+                  type: "thread.usage-limit.source",
+                  commandId: providerCommandId(event, "usage-limit-source", thread.id),
+                  expectedBindingKey: "pending",
+                  threadId: thread.id,
+                  source: {
+                    turnId: eventTurnId,
+                    admissionSequence: frozenSource.admissionSequence,
+                    bindingKey,
+                    policyEpoch: settings.usageLimitRecoveryEpoch,
+                  },
+                  createdAt: now,
+                });
+            }
+            const current = (yield* orchestrationEngine.getReadModel()).threads.find(
+              (entry) => entry.id === thread.id,
+            );
+            if (current?.usageLimitRecovery?.state === "resuming")
+              yield* orchestrationEngine.dispatch({
+                type: "thread.usage-limit.started",
+                commandId: providerCommandId(event, "usage-limit-started", thread.id),
+                threadId: thread.id,
+                recoveryId: current.usageLimitRecovery.id,
+                turnId: eventTurnId,
+                createdAt: now,
+              });
+          }
+          if (isTerminalTurnEvent && eventTurnId) {
+            const before = (yield* orchestrationEngine.getReadModel()).threads.find(
+              (entry) => entry.id === thread.id,
+            );
+            const priorRecovery = before?.usageLimitRecovery;
+            if (
+              priorRecovery?.state === "resuming" &&
+              priorRecovery.resumedTurnId === eventTurnId
+            ) {
+              yield* orchestrationEngine.dispatch({
+                type: "thread.usage-limit.finish",
+                commandId: providerCommandId(event, "usage-limit-finish", thread.id),
+                threadId: thread.id,
+                recoveryId: priorRecovery.id,
+                turnId: eventTurnId,
+                createdAt: now,
+              });
+            }
+          }
 
           // Recovery still settles the old turn and drains queued work, but
           // its technical cancellation must not pause an autonomous goal.
@@ -3172,23 +3426,36 @@ const make = Effect.gen(function* () {
         if (lateForFinalizedTurn) {
           // Never leave a late row streaming: no terminal event for this turn
           // is coming to complete it.
-          const known = (yield* orchestrationEngine.getReadModel()).threads
-            .find((entry) => entry.id === thread.id)
-            ?.messages.find((message) => message.id === assistantMessageId);
+          const known = yield* projectionThreadMessageRepository.getByThreadAndMessageId({
+            threadId: thread.id,
+            messageId: assistantMessageId,
+          });
+          const commandId = providerCommandId(event, "assistant-delta-late", assistantMessageId);
+          const settled =
+            Option.isSome(known) && known.value.role === "assistant" && !known.value.isStreaming;
+          const prepared = settled
+            ? yield* stageInlineMessageImages(
+                thread.id,
+                assistantMessageId,
+                commandId,
+                assistantDelta,
+              )
+            : undefined;
           yield* orchestrationEngine.dispatch({
             type: "thread.message.assistant.delta",
-            commandId: providerCommandId(event, "assistant-delta-late", assistantMessageId),
+            commandId,
             threadId: thread.id,
             messageId: assistantMessageId,
             delta: assistantDelta,
+            ...(prepared?.attachments !== undefined ? { attachments: prepared.attachments } : {}),
             ...(turnId ? { turnId } : {}),
             createdAt: now,
           });
-          // The decider already re-settles a known finalized message.
-          if (!known || known.streaming) {
-            yield* orchestrationEngine.dispatch({
-              type: "thread.message.assistant.complete",
-              commandId: providerCommandId(event, "assistant-complete-late", assistantMessageId),
+          // A settled row is re-finalized by its delta, avoiding a second Ready event.
+          if (!settled) {
+            yield* completeAssistantMessage({
+              event,
+              commandTag: "assistant-complete-late",
               threadId: thread.id,
               messageId: assistantMessageId,
               ...(turnId ? { turnId } : {}),
@@ -4425,6 +4692,7 @@ export const ProviderRuntimeIngestionLive = Layer.effect(
       OrchestrationCommandReceiptRepositoryLive,
       ProjectionThreadSessionRepositoryLive,
       ProjectionThreadMessageRepositoryLive,
+      ManagedAttachmentRepositoryLive,
     ),
   ),
 );

@@ -52,3 +52,13 @@ Projects use detected local favicon images across sidebar rows, pinned shortcuts
 The empty-chat ASCII field stays continuous beneath the composer's own surface. Its existing Appearance setting and reduced-motion behavior remain available.
 
 Source evidence for 1.0.9: Synara release `ebd0d22b39ce3a0f7c6051dddc6090e9b85dc7c3`; `docs/releases/1.0.9-source-audit.md`, `docs/providers.md`, `docs/core-concepts.md`, `docs/editor/intelligence.md`, `docs/mcp-connectors.md`, `apps/server/src/persistence/MigrationBackup.ts` and `docs/release.md`.
+
+## Interface languages in 1.1.0
+
+Choose **Settings → General → Language**: English, Spanish or System. System follows supported browser or desktop operating-system preferences, falling back to English. Synara Beta also offers Simplified Chinese; Stable ignores a saved Chinese preference without erasing it. Traditional Chinese is not silently mapped to Simplified Chinese.
+
+Changing language updates application labels and native menus while preserving drafts, code and provider output. If the editor engine has already loaded, use the offered reload action to update its cached labels; unsaved-edit protection remains in effect. macOS controls the language of system permission dialogs independently.
+
+Each chat also remembers its right-panel width. See [runtime recovery](/docs/troubleshooting/tasks-and-runtime#resume-after-usage-limits-in-110) for the new optional provider continuation setting.
+
+Source evidence for 1.1.0: application source `d80787e3e4d8829a35a64b111e6fcbe5f51cf037`; `docs/releases/1.1.0-source-audit.md`, `docs/core-concepts.md`, `docs/providers.md`, `docs/internationalization.md` and `docs/sqlite-space-reclamation.md`.

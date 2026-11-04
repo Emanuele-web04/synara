@@ -54,18 +54,21 @@ import { DisclosureRegion } from "~/components/ui/DisclosureRegion";
 import { Switch } from "~/components/ui/switch";
 import { toastManager } from "~/components/ui/toast";
 import { serverConfigQueryOptions } from "~/lib/serverReactQuery";
+import { useTranslation, t } from "~/i18n";
 
 function appSnapStatusText(state: DesktopAppSnapState | null): string {
-  if (!state) return "Available in the Synara desktop app";
-  if (!state.supported) return state.message ?? "Available on macOS only";
+  if (!state) return t("settings:availableInTheSynaraDesktopApp");
+  if (!state.supported) return state.message ?? t("settings:availableOnMacOSOnly");
   if (state.status === "ready") {
     const shortcut = state.shortcut;
-    const label = shortcut ? appSnapShortcutLabels(shortcut).join(" + ") : "the shortcut";
-    return `Listening — press ${label} to snap`;
+    const label = shortcut
+      ? appSnapShortcutLabels(shortcut).join(" + ")
+      : t("settings:theShortcut");
+    return t("settings:listeningPressToSnap", { value0: label });
   }
-  if (state.status === "disabled") return "Off";
-  if (state.status === "starting") return "Starting the capture listener…";
-  return state.message ?? "Permission setup required";
+  if (state.status === "disabled") return t("automation:traitsPicker_off");
+  if (state.status === "starting") return t("settings:startingTheCaptureListener");
+  return state.message ?? t("settings:permissionSetupRequired");
 }
 
 const EMPTY_KEYBINDINGS: ResolvedKeybindingsConfig = [];
@@ -76,6 +79,8 @@ export function NotificationsSettingsPanel({
   updateSettings,
   active,
 }: AppSettingsBinding & { readonly active: boolean }) {
+  const { t } = useTranslation();
+
   const [browserNotificationPermission, setBrowserNotificationPermission] = useState(
     readBrowserNotificationPermissionState(),
   );
@@ -109,23 +114,25 @@ export function NotificationsSettingsPanel({
     updateSettings({ enableSystemTaskCompletionNotifications: false });
     toastManager.add({
       type: permission === "denied" ? "warning" : "error",
-      title: "Desktop notifications unavailable",
+      title: t("settings:desktopNotificationsUnavailable"),
       description: buildNotificationSettingsSupportText(permission),
     });
   }
 
   async function sendTestNotification() {
-    const title = "Activity notification";
+    const title = t("settings:activityNotification");
     const body = "Notification test for chats and terminal agents.";
 
     if (window.desktopBridge) {
       const shown = await window.desktopBridge.notifications.show({ title, body, silent: false });
       toastManager.add({
         type: shown ? "success" : "warning",
-        title: shown ? "Test notification sent" : "Notifications unavailable",
+        title: shown
+          ? t("settings:testNotificationSent")
+          : t("settings:notifications_notificationsUnavailable"),
         description: shown
-          ? "Your operating system should show the notification."
-          : "Desktop notifications are not supported on this device.",
+          ? t("settings:yourOperatingSystemShouldShowTheNotification")
+          : t("settings:desktopNotificationsAreNotSupportedOnThisDevice"),
       });
       return;
     }
@@ -135,7 +142,7 @@ export function NotificationsSettingsPanel({
     if (permission !== "granted") {
       toastManager.add({
         type: permission === "denied" ? "warning" : "error",
-        title: "Desktop notifications unavailable",
+        title: t("settings:desktopNotificationsUnavailable"),
         description: buildNotificationSettingsSupportText(permission),
       });
       return;
@@ -147,8 +154,8 @@ export function NotificationsSettingsPanel({
     });
     toastManager.add({
       type: "success",
-      title: "Test notification sent",
-      description: "Your browser should show the notification.",
+      title: t("settings:testNotificationSent"),
+      description: t("settings:yourBrowserShouldShowTheNotification"),
     });
   }
 
@@ -156,14 +163,15 @@ export function NotificationsSettingsPanel({
 
   return (
     <div className="space-y-6">
-      <SettingsSection title="Activity alerts">
+      <SettingsSection title="settings:notifications_activityAlerts">
         <SettingsRow
-          title="Activity toasts"
-          description="Show an in-app toast when a chat or managed terminal agent finishes or needs input."
+          id="setting-activity-toasts"
+          title="settings:changed_activityToasts"
+          description="settings:showAnInAppToastWhenAChatOr"
           resetAction={
             settings.enableTaskCompletionToasts !== defaults.enableTaskCompletionToasts ? (
               <SettingResetButton
-                label="activity toasts"
+                label={t("settings:activityToasts")}
                 onClick={() =>
                   updateSettings({
                     enableTaskCompletionToasts: defaults.enableTaskCompletionToasts,
@@ -178,20 +186,21 @@ export function NotificationsSettingsPanel({
               onCheckedChange={(checked) =>
                 updateSettings({ enableTaskCompletionToasts: Boolean(checked) })
               }
-              aria-label="Activity toast notifications"
+              aria-label={t("settings:activityToastNotifications")}
             />
           }
         />
 
         <SettingsRow
-          title="Desktop notifications"
-          description="Show an OS notification when a chat or managed terminal agent finishes or needs input while the app is in the background."
+          id="setting-desktop-notifications"
+          title="settings:changed_desktopNotifications"
+          description="settings:showAnOSNotificationWhenAChatOrManaged"
           status={buildNotificationSettingsSupportText(browserNotificationPermission)}
           resetAction={
             settings.enableSystemTaskCompletionNotifications !==
             defaults.enableSystemTaskCompletionNotifications ? (
               <SettingResetButton
-                label="desktop notifications"
+                label={t("settings:desktopNotifications")}
                 onClick={() =>
                   updateSettings({
                     enableSystemTaskCompletionNotifications:
@@ -204,26 +213,27 @@ export function NotificationsSettingsPanel({
           control={
             <div className="flex w-full items-center gap-2 sm:w-auto sm:justify-end">
               <Button size="xs" variant="outline" onClick={() => void sendTestNotification()}>
-                Test
+                {t("workspace:test")}
               </Button>
               <Switch
                 checked={settings.enableSystemTaskCompletionNotifications}
                 onCheckedChange={(checked) => {
                   void setSystemNotificationsEnabled(Boolean(checked));
                 }}
-                aria-label="Desktop activity notifications"
+                aria-label={t("settings:desktopActivityNotifications")}
               />
             </div>
           }
         />
 
         <SettingsRow
-          title="Wait for subagents"
-          description="Alert once the agent and all of its background subagents have finished. Turn this off to be alerted each time the agent or one of its subagents stops."
+          id="setting-wait-for-subagents"
+          title="settings:waitForSubagents"
+          description="settings:alertOnceTheAgentAndAllOfItsBackground"
           resetAction={
             settings.notifyAfterSubagentsFinish !== defaults.notifyAfterSubagentsFinish ? (
               <SettingResetButton
-                label="wait for subagents"
+                label={t("settings:waitForSubagents2")}
                 onClick={() =>
                   updateSettings({
                     notifyAfterSubagentsFinish: defaults.notifyAfterSubagentsFinish,
@@ -238,7 +248,7 @@ export function NotificationsSettingsPanel({
               onCheckedChange={(checked) =>
                 updateSettings({ notifyAfterSubagentsFinish: Boolean(checked) })
               }
-              aria-label="Wait for subagents before alerting"
+              aria-label={t("settings:waitForSubagentsBeforeAlerting")}
             />
           }
         />
@@ -253,6 +263,8 @@ export function AppSnapSettingsPanel({
   updateSettings,
   active,
 }: AppSettingsBinding & { readonly active: boolean }) {
+  const { t } = useTranslation();
+
   const [appSnapState, setAppSnapState] = useState<DesktopAppSnapState | null>(null);
   const [openGuidePane, setOpenGuidePane] = useState<DesktopAppSnapSettingsPane | null>(null);
   const appSnapRequestGuardRef = useRef(createLatestAppSnapRequestGuard());
@@ -297,8 +309,8 @@ export function AppSnapSettingsPanel({
     if (!bridge) {
       toastManager.add({
         type: "warning",
-        title: "AppSnap unavailable",
-        description: "AppSnap requires the Synara desktop app on macOS.",
+        title: t("settings:appSnapUnavailable"),
+        description: t("settings:appSnapRequiresTheSynaraDesktopAppOnMacOS"),
       });
       return;
     }
@@ -323,8 +335,8 @@ export function AppSnapSettingsPanel({
       } else if (nextEnabled && state.status === "error") {
         toastManager.add({
           type: "warning",
-          title: "Finish AppSnap setup",
-          description: state.message ?? "Allow the required macOS permissions, then try again.",
+          title: t("settings:finishAppSnapSetup"),
+          description: state.message ?? t("settings:allowTheRequiredMacOSPermissionsThenTryAgain"),
         });
       }
     } catch (error) {
@@ -332,8 +344,9 @@ export function AppSnapSettingsPanel({
       updateSettings({ enableAppSnap: false });
       toastManager.add({
         type: "error",
-        title: "AppSnap setup failed",
-        description: error instanceof Error ? error.message : "Could not configure AppSnap.",
+        title: t("settings:appSnapSetupFailed"),
+        description:
+          error instanceof Error ? error.message : t("settings:couldNotConfigureAppSnap"),
       });
     }
   }
@@ -351,32 +364,31 @@ export function AppSnapSettingsPanel({
         </span>
         <div className="min-w-0 space-y-1">
           <p className={SETTINGS_CARD_ROW_TITLE_CLASS_NAME}>
-            Take an AppSnap to show your agent another app's window
+            {t("settings:takeAnAppSnapToShowYourAgentAnotherApp")}
           </p>
           <p className={SETTINGS_CARD_ROW_DESCRIPTION_CLASS_NAME}>
-            Press your two-key shortcut while any app is frontmost. Synara captures that window as
-            an image, brings itself forward, and attaches the snap to a task composer — the capture
-            stays on this device until you send the message.
+            {t("settings:pressYourTwoKeyShortcutWhileAnyAppIs")}
           </p>
           {!supported ? (
             <p className={cn(SETTINGS_CARD_ROW_DESCRIPTION_CLASS_NAME, "pt-0.5")}>
               {appSnapState
-                ? (appSnapState.message ?? "AppSnap is available only in the macOS desktop app.")
-                : "AppSnap requires the Synara desktop app on macOS."}
+                ? (appSnapState.message ?? t("settings:appSnapIsAvailableOnlyInTheMacOSDesktopApp"))
+                : t("settings:appSnapRequiresTheSynaraDesktopAppOnMacOS")}
             </p>
           ) : null}
         </div>
       </SettingsCard>
 
-      <SettingsSection title="Capture">
+      <SettingsSection title="settings:capture">
         <SettingsRow
-          title="Enable AppSnap"
-          description="Run the capture listener in the background while Synara is open."
+          id="setting-enable-appsnap"
+          title="settings:enableAppSnap"
+          description="settings:runTheCaptureListenerInTheBackgroundWhileSynara"
           status={appSnapStatusText(appSnapState)}
           resetAction={
             settings.enableAppSnap !== defaults.enableAppSnap ? (
               <SettingResetButton
-                label="AppSnap"
+                label={t("settings:appSnap")}
                 onClick={() => void setAppSnapEnabled(defaults.enableAppSnap)}
               />
             ) : null
@@ -386,14 +398,15 @@ export function AppSnapSettingsPanel({
               checked={enabled}
               disabled={!supported}
               onCheckedChange={(checked) => void setAppSnapEnabled(Boolean(checked))}
-              aria-label="Enable AppSnap"
+              aria-label={t("settings:enableAppSnap")}
             />
           }
         />
 
         <SettingsRow
-          title="Shortcut"
-          description="Choose exactly two keys: one modifier and one other key. Synara checks its own bindings and asks macOS whether another app already owns the shortcut before saving it."
+          id="setting-shortcut"
+          title="settings:shortcut"
+          description="settings:chooseExactlyTwoKeysOneModifierAndOneOther"
           control={
             <AppSnapShortcutControl
               key={
@@ -414,22 +427,24 @@ export function AppSnapSettingsPanel({
         />
 
         <SettingsRow
-          title="Destination"
-          description="Snaps join the task you interacted with in the last minute, and consecutive snaps stay together. Otherwise Synara opens a fresh task with the capture attached."
+          id="setting-destination"
+          title="git:destination"
+          description="settings:snapsJoinTheTaskYouInteractedWithInThe2"
           control={
             <span className="text-ui leading-snug font-medium text-muted-foreground">
-              Automatic
+              {t("settings:automatic")}
             </span>
           }
         />
 
         <SettingsRow
-          title="Capture sound"
-          description="Play a short shutter cue when a window is captured."
+          id="setting-capture-sound"
+          title="settings:captureSound"
+          description="settings:playAShortShutterCueWhenAWindowIs"
           resetAction={
             settings.appSnapPlaySound !== defaults.appSnapPlaySound ? (
               <SettingResetButton
-                label="capture sound"
+                label={t("settings:captureSound2")}
                 onClick={() => updateSettings({ appSnapPlaySound: defaults.appSnapPlaySound })}
               />
             ) : null
@@ -437,14 +452,14 @@ export function AppSnapSettingsPanel({
           control={
             <div className="flex w-full items-center gap-2 sm:w-auto sm:justify-end">
               <Button size="xs" variant="outline" onClick={() => void playAppSnapCaptureSound()}>
-                Preview
+                {t("workspace:settings_gitToastPreview")}
               </Button>
               <Switch
                 checked={settings.appSnapPlaySound}
                 onCheckedChange={(checked) =>
                   updateSettings({ appSnapPlaySound: Boolean(checked) })
                 }
-                aria-label="Play a sound when an AppSnap is captured"
+                aria-label={t("settings:playASoundWhenAnAppSnapIsCaptured")}
               />
             </div>
           }
@@ -480,6 +495,8 @@ function LeaveBetaDialog({
   readonly onOpenChange: (open: boolean) => void;
   readonly onLeave: (moveToTrash: boolean) => Promise<DesktopBetaActionResult>;
 }) {
+  const { t } = useTranslation();
+
   const [moveToTrash, setMoveToTrash] = useState(true);
   const [pending, setPending] = useState(false);
   const trashCheckboxId = useId();
@@ -496,8 +513,8 @@ function LeaveBetaDialog({
       if (!result.ok) {
         toastManager.add({
           type: "warning",
-          title: "Could not switch back to Synara",
-          description: result.message ?? "Open Synara from your Applications folder.",
+          title: t("settings:couldNotSwitchBackToSynara"),
+          description: result.message ?? t("settings:openSynaraFromYourApplicationsFolder"),
         });
         onOpenChange(false);
       }
@@ -510,14 +527,12 @@ function LeaveBetaDialog({
     <AlertDialog open={open} onOpenChange={(next) => !pending && onOpenChange(next)}>
       <AlertDialogPopup>
         <AlertDialogHeader>
-          <AlertDialogTitle>Switch back to Synara?</AlertDialogTitle>
+          <AlertDialogTitle>{t("settings:switchBackToSynara2")}</AlertDialogTitle>
           <AlertDialogDescription>
-            Synara opens with the chats and settings it had before you tried Beta. Beta closes, and
-            any chats still running in Beta stop.
+            {t("settings:synaraOpensWithTheChatsAndSettingsItHad")}
           </AlertDialogDescription>
           <AlertDialogDescription>
-            Anything you did in Beta stays in Beta. It can't be moved into Synara, because Beta can
-            include features Synara doesn't have yet.
+            {t("settings:anythingYouDidInBetaStaysInBetaIt")}
           </AlertDialogDescription>
           {canMoveToTrash ? (
             <label
@@ -532,9 +547,9 @@ function LeaveBetaDialog({
                 onCheckedChange={(checked) => setMoveToTrash(checked === true)}
               />
               <span className="space-y-0.5">
-                <span className="block">Move Synara Beta to the Trash</span>
+                <span className="block">{t("settings:moveSynaraBetaToTheTrash")}</span>
                 <span className="block text-ui-sm text-muted-foreground">
-                  Your Beta data is kept, so you can pick up where you left off if you come back.
+                  {t("settings:yourBetaDataIsKeptSoYouCanPick")}
                 </span>
               </span>
             </label>
@@ -542,10 +557,10 @@ function LeaveBetaDialog({
         </AlertDialogHeader>
         <AlertDialogFooter>
           <AlertDialogClose disabled={pending} render={<Button variant="outline" size="sm" />}>
-            Stay on Beta
+            {t("settings:stayOnBeta")}
           </AlertDialogClose>
           <Button size="sm" disabled={pending} onClick={() => void leave()}>
-            {pending ? "Switching…" : "Switch to Synara"}
+            {pending ? t("settings:switching") : t("settings:switchToSynara")}
           </Button>
         </AlertDialogFooter>
       </AlertDialogPopup>
@@ -569,6 +584,8 @@ function BetaChannelMark() {
  * (plus diagnostics disclosure) on beta.
  */
 export function BetaChannelSettingsPanel({ active }: { readonly active: boolean }) {
+  const { t, formatLocale } = useTranslation();
+
   const betaBridge = isElectron ? window.desktopBridge?.beta : undefined;
   const betaStateQuery = useQuery({
     queryKey: ["desktop-beta-channel-state"],
@@ -595,16 +612,15 @@ export function BetaChannelSettingsPanel({ active }: { readonly active: boolean 
       if (!result.ok) {
         toastManager.add({
           type: "warning",
-          title: "Could not start the beta handoff",
-          description: result.message ?? "Try again from Settings → General.",
+          title: t("settings:couldNotStartTheBetaHandoff"),
+          description: result.message ?? t("settings:tryAgainFromSettingsGeneral"),
         });
         return;
       }
       toastManager.add({
         type: "success",
-        title: "Opening Synara Beta",
-        description:
-          "Beta is copying your projects, settings, and provider sign-ins from stable on first launch.",
+        title: t("settings:openingSynaraBeta"),
+        description: t("settings:betaIsCopyingYourProjectsSettingsAndProviderSign"),
       });
       refresh();
     } finally {
@@ -619,8 +635,8 @@ export function BetaChannelSettingsPanel({ active }: { readonly active: boolean 
       if (!result.ok) {
         toastManager.add({
           type: "warning",
-          title: "Could not open Synara Beta",
-          description: result.message ?? "The beta install was not found.",
+          title: t("settings:couldNotOpenSynaraBeta"),
+          description: result.message ?? t("settings:theBetaInstallWasNotFound"),
         });
       }
       refresh();
@@ -636,8 +652,8 @@ export function BetaChannelSettingsPanel({ active }: { readonly active: boolean 
       if (!result.ok) {
         toastManager.add({
           type: "warning",
-          title: "Could not install Synara Beta",
-          description: result.message ?? "Try again from Settings → General.",
+          title: t("settings:couldNotInstallSynaraBeta"),
+          description: result.message ?? t("settings:tryAgainFromSettingsGeneral"),
         });
       }
       refresh();
@@ -663,10 +679,9 @@ export function BetaChannelSettingsPanel({ active }: { readonly active: boolean 
       <SettingsCard divided={false} className="flex items-start gap-3 px-4 py-3.5">
         <BetaChannelMark />
         <div className="min-w-0 flex-1 space-y-1">
-          <p className={SETTINGS_CARD_ROW_TITLE_CLASS_NAME}>You're on Synara Beta</p>
+          <p className={SETTINGS_CARD_ROW_TITLE_CLASS_NAME}>{t("settings:youReOnSynaraBeta")}</p>
           <p className={SETTINGS_CARD_ROW_DESCRIPTION_CLASS_NAME}>
-            To help us fix problems, Beta shares crash reports, app errors, and anonymous usage
-            counts. Crash reports may include private information.
+            {t("settings:toHelpUsFixProblemsBetaSharesCrashReports")}
           </p>
           <button
             type="button"
@@ -675,48 +690,44 @@ export function BetaChannelSettingsPanel({ active }: { readonly active: boolean 
             onClick={() => setSharesDisclosureOpen((open) => !open)}
           >
             <DisclosureChevron open={sharesDisclosureOpen} />
-            What Beta shares
+            {t("settings:whatBetaShares")}
           </button>
           <DisclosureRegion open={sharesDisclosureOpen}>
             <div className="space-y-2 pt-1.5">
               <div>
-                <p className="m-0 text-ui-sm font-medium text-foreground">Shared</p>
+                <p className="m-0 text-ui-sm font-medium text-foreground">{t("settings:shared")}</p>
                 <ul className="m-0 list-disc space-y-0.5 pl-4 pt-0.5 text-ui-sm text-muted-foreground">
-                  <li>A random ID for this install, not linked to you</li>
-                  <li>When Beta opens, closes, installs, or is removed</li>
-                  <li>Crashes and errors; error details are filtered</li>
-                  <li>App version, OS version, and language</li>
-                  <li>
-                    Which providers you use, and how many projects, chats, and turns (just counts)
-                  </li>
-                  <li>Whether updates install correctly</li>
+                  <li>{t("settings:aRandomIDForThisInstallNotLinkedTo")}</li>
+                  <li>{t("settings:whenBetaOpensClosesInstallsOrIsRemoved")}</li>
+                  <li>{t("settings:crashesAndErrorsErrorDetailsAreFiltered")}</li>
+                  <li>{t("settings:appVersionOSVersionAndLanguage")}</li>
+                  <li>{t("settings:whichProvidersYouUseAndHowManyProjectsChats")}</li>
+                  <li>{t("settings:whetherUpdatesInstallCorrectly")}</li>
                 </ul>
               </div>
               <div>
                 <p className="m-0 text-ui-sm font-medium text-foreground">
-                  Not included in usage counts
+                  {t("settings:notIncludedInUsageCounts")}
                 </p>
                 <ul className="m-0 list-disc space-y-0.5 pl-4 pt-0.5 text-ui-sm text-muted-foreground">
-                  <li>Your chats, prompts, or agent replies</li>
-                  <li>Your code, files, or project names</li>
-                  <li>Keys, passwords, or account details</li>
+                  <li>{t("settings:yourChatsPromptsOrAgentReplies")}</li>
+                  <li>{t("settings:yourCodeFilesOrProjectNames")}</li>
+                  <li>{t("settings:keysPasswordsOrAccountDetails")}</li>
                 </ul>
               </div>
               <p className="m-0 text-ui-xs text-muted-foreground">
-                Error details are filtered, but may still include private information. Crash dumps
-                include app memory that can't be filtered. Reports and dumps are kept with no expiry
-                date.
+                {t("settings:errorDetailsAreFilteredButMayStillIncludePrivate")}
               </p>
             </div>
           </DisclosureRegion>
           <div className="flex flex-wrap items-center gap-2 pt-1.5">
             {state.stableInstalled ? (
               <Button size="xs" variant="outline" onClick={() => setLeaveDialogOpen(true)}>
-                Switch back to Synara
+                {t("settings:switchBackToSynara")}
               </Button>
             ) : (
               <Button size="xs" variant="outline" onClick={() => void openStableDownloadPage()}>
-                Get Synara
+                {t("settings:getSynara")}
               </Button>
             )}
           </div>
@@ -741,42 +752,49 @@ export function BetaChannelSettingsPanel({ active }: { readonly active: boolean 
           <div className="flex items-center gap-2">
             <p className={SETTINGS_CARD_ROW_TITLE_CLASS_NAME}>Synara Beta</p>
             <span className="inline-flex items-center rounded-full bg-[var(--beta-pill)] px-1.5 py-0.5 text-ui-xs font-semibold leading-none text-[var(--beta-pill-ink)]">
-              Beta
+              {t("workspace:beta")}
             </span>
             {state.installed && state.version ? (
-              <span className="text-ui-xs text-muted-foreground">v{state.version} installed</span>
+              <span className="text-ui-xs text-muted-foreground">
+                {t("common:v")}
+                {state.version} {t("settings:installed2")}
+              </span>
             ) : state.installed ? (
-              <span className="text-ui-xs text-muted-foreground">Installed</span>
+              <span className="text-ui-xs text-muted-foreground">{t("settings:installed")}</span>
             ) : null}
           </div>
           <p className={SETTINGS_CARD_ROW_DESCRIPTION_CLASS_NAME}>
             {state.installed
-              ? "Beta runs next to Synara with its own data, so nothing here changes. Copy your data to bring over projects, settings, and provider sign-ins. Beta shares crash reports and anonymous usage stats."
-              : "Try new features before everyone else. Synara Beta is a separate app with its own data, and this app stays exactly as it is. Beta shares crash reports and anonymous usage stats to help us improve it."}
+              ? t("settings:betaRunsNextToSynaraWithItsOwnData")
+              : t("settings:tryNewFeaturesBeforeEveryoneElseSynaraBetaIs")}
           </p>
           {state.lastImportAt ? (
             <p className="text-ui-xs text-muted-foreground">
-              Last copied your data {new Date(state.lastImportAt).toLocaleString()}.
+              {t("settings:lastCopiedYourData", {
+                date: new Date(state.lastImportAt).toLocaleString(formatLocale),
+              })}
             </p>
           ) : null}
           {state.lastImportError ? (
             <p className="text-ui-xs text-destructive">
-              Last import failed: {state.lastImportError}
+              {t("settings:lastImportFailed")} {state.lastImportError}
             </p>
           ) : null}
           {state.install?.phase === "error" ? (
             <p className="text-ui-xs text-destructive">
-              Install failed: {state.install.message ?? "unknown error"}
+              {t("settings:installFailed")} {state.install.message ?? t("settings:unknownError")}
             </p>
           ) : state.install ? (
             <p className="text-ui-xs text-muted-foreground">
               {state.install.phase === "downloading"
-                ? `Downloading Synara Beta${state.install.percent !== null ? ` — ${state.install.percent}%` : "…"}`
+                ? t("settings:downloadingSynaraBeta", {
+                    value0: state.install.percent !== null ? ` — ${state.install.percent}%` : "…",
+                  })
                 : state.install.phase === "verifying"
-                  ? "Verifying the download…"
+                  ? t("settings:verifyingTheDownload")
                   : state.install.phase === "installing"
-                    ? "Installing Synara Beta…"
-                    : "Opening Synara Beta…"}
+                    ? t("settings:installingSynaraBeta")
+                    : t("settings:openingSynaraBeta2")}
             </p>
           ) : null}
           <div className="flex flex-wrap items-center gap-2 pt-1.5">
@@ -788,7 +806,9 @@ export function BetaChannelSettingsPanel({ active }: { readonly active: boolean 
                     disabled={actionPending !== null}
                     onClick={() => void installBeta()}
                   >
-                    {actionPending === "install" ? "Installing…" : "Install Synara Beta"}
+                    {actionPending === "install"
+                      ? t("settings:installing")
+                      : t("settings:installSynaraBeta")}
                   </Button>
                   <Button
                     size="xs"
@@ -796,7 +816,9 @@ export function BetaChannelSettingsPanel({ active }: { readonly active: boolean 
                     disabled={actionPending !== null}
                     onClick={() => setCopyDialogOpen(true)}
                   >
-                    {actionPending === "copy" ? "Installing…" : "Copy my data and open"}
+                    {actionPending === "copy"
+                      ? t("settings:installing")
+                      : t("settings:copyMyDataAndOpen")}
                   </Button>
                   <Button
                     size="xs"
@@ -804,12 +826,12 @@ export function BetaChannelSettingsPanel({ active }: { readonly active: boolean 
                     disabled={actionPending !== null}
                     onClick={() => void openDownloadPage()}
                   >
-                    Download page
+                    {t("settings:downloadPage")}
                   </Button>
                 </>
               ) : (
                 <Button size="xs" onClick={() => void openDownloadPage()}>
-                  Get Synara Beta
+                  {t("settings:getSynaraBeta")}
                 </Button>
               )
             ) : (
@@ -818,18 +840,14 @@ export function BetaChannelSettingsPanel({ active }: { readonly active: boolean 
                   size="xs"
                   variant="outline"
                   disabled={actionPending !== null || state.running}
-                  title={
-                    state.running
-                      ? "Quit Synara Beta first so it can pick up the import on its next launch."
-                      : undefined
-                  }
+                  title={state.running ? t("settings:quitSynaraBetaFirstSoItCanPickUp") : undefined}
                   onClick={() => setCopyDialogOpen(true)}
                 >
                   {actionPending === "copy"
-                    ? "Copying…"
+                    ? t("settings:copying")
                     : state.lastImportAt
-                      ? "Re-copy my data and open"
-                      : "Copy my data and open"}
+                      ? t("settings:reCopyMyDataAndOpen")
+                      : t("settings:copyMyDataAndOpen")}
                 </Button>
                 <Button
                   size="xs"
@@ -837,7 +855,7 @@ export function BetaChannelSettingsPanel({ active }: { readonly active: boolean 
                   disabled={actionPending !== null}
                   onClick={() => void launchBeta()}
                 >
-                  {actionPending === "open" ? "Opening…" : "Open Beta"}
+                  {actionPending === "open" ? t("settings:opening") : t("settings:openBeta")}
                 </Button>
               </>
             )}
@@ -847,16 +865,14 @@ export function BetaChannelSettingsPanel({ active }: { readonly active: boolean 
       <AlertDialog open={copyDialogOpen} onOpenChange={setCopyDialogOpen}>
         <AlertDialogPopup>
           <AlertDialogHeader>
-            <AlertDialogTitle>Replace Synara Beta data?</AlertDialogTitle>
+            <AlertDialogTitle>{t("settings:replaceSynaraBetaData")}</AlertDialogTitle>
             <AlertDialogDescription>
-              Copying from Synara replaces Beta chats and projects. Chats and projects created only
-              in Beta will be lost. Matching settings and provider sign-ins are overwritten, but
-              Beta-only sign-ins may remain. Your data in Synara will not change.
+              {t("settings:copyingFromSynaraReplacesBetaChatsAndProjectsChats")}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogClose render={<Button variant="outline" size="sm" />}>
-              Keep Beta data
+              {t("settings:keepBetaData")}
             </AlertDialogClose>
             <Button
               size="sm"
@@ -866,7 +882,7 @@ export function BetaChannelSettingsPanel({ active }: { readonly active: boolean 
                 void copyDataAndLaunch();
               }}
             >
-              Replace Beta data and open
+              {t("settings:replaceBetaDataAndOpen")}
             </Button>
           </AlertDialogFooter>
         </AlertDialogPopup>

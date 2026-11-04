@@ -5,6 +5,7 @@
 // Layer: Chat transcript UI
 
 import { ComputerActionCard } from "./ComputerActionCard";
+import { useTranslation } from "~/i18n";
 
 export function ComputerControlDeniedCard({
   computerControlEnabled,
@@ -19,19 +20,23 @@ export function ComputerControlDeniedCard({
   readonly metaFontSizePx?: number;
   readonly onEnable?: () => void;
 }) {
+  const { t } = useTranslation();
+
   const enabled = computerControlEnabled === true;
   return (
     <ComputerActionCard
       tone={enabled ? "success" : "warning"}
-      title={enabled ? "Computer control is on for this chat" : "Computer control is off"}
+      title={
+        enabled ? t("computer:computerControlIsOnForThisChat") : t("computer:computerControlIsOff")
+      }
       textFontSizePx={textFontSizePx}
       metaFontSizePx={metaFontSizePx}
-      action={onEnable && !enabled ? { label: "Enable", onClick: onEnable } : undefined}
+      action={onEnable && !enabled ? { label: t("computer:enable"), onClick: onEnable } : undefined}
     >
       <p>
         {enabled
-          ? "Queued desktop turns stay cancelled — send a fresh message to continue."
-          : "Turn it on in Settings to let the agent use the desktop."}
+          ? t("computer:queuedDesktopTurnsStayCancelledSendAFreshMessage")
+          : t("computer:turnItOnInSettingsToLetTheAgent")}
       </p>
     </ComputerActionCard>
   );

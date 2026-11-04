@@ -98,6 +98,13 @@ export interface OrchestrationEngineShape {
     limit?: number,
   ) => Stream.Stream<OrchestrationEvent, OrchestrationEventStoreError, never>;
 
+  /** Durable Stop evidence for an executing send whose native id may not exist yet. */
+  readonly hasThreadStopAfter?: (
+    threadId: import("@synara/contracts").ThreadId,
+    sequenceExclusive: number,
+    turnId?: import("@synara/contracts").TurnId,
+  ) => Effect.Effect<boolean, OrchestrationEventStoreError>;
+
   /** Capture the durable orchestration event-log high-water sequence. */
   readonly getEventHighWaterSequence: Effect.Effect<number, OrchestrationEventStoreError>;
 

@@ -1,6 +1,8 @@
 import { assert, describe, it } from "@effect/vitest";
+import { spawnSync } from "node:child_process";
 import { basename } from "node:path";
 import { createRequire } from "node:module";
+import { fileURLToPath } from "node:url";
 import { SYNARA_PACKAGED_DESKTOP_FLAVORS } from "@synara/shared/desktopIdentity";
 import { desktopIconAssetPaths } from "./lib/brand-assets.ts";
 
@@ -23,7 +25,27 @@ import {
   WINDOWS_INSTALLER_GUID,
 } from "./lib/desktop-platform-build-config.ts";
 
+it("loads the desktop artifact CLI with native Node before packaging", () => {
+  const result = spawnSync(
+    process.execPath,
+    [fileURLToPath(new URL("./build-desktop-artifact.ts", import.meta.url)), "--help"],
+    { encoding: "utf8", env: { ...process.env, NODE_OPTIONS: "" }, timeout: 15_000 },
+  );
+  assert.equal(result.status, 0, result.stderr || result.error?.message);
+  assert.ok(result.stdout.includes("--platform"));
+});
+
 describe("createDesktopPlatformBuildConfig", () => {
+  it("keeps app-authored Chinese permission descriptions out of Stable bundles", () => {
+    for (const flavor of SYNARA_PACKAGED_DESKTOP_FLAVORS) {
+      const config = createDesktopPlatformBuildConfig({ platform: "mac", target: "dir", flavor });
+      const folders = config.extraFiles?.map((entry) => entry.to);
+      assert.ok(folders?.includes("Resources/en.lproj"));
+      assert.ok(folders?.includes("Resources/es.lproj"));
+      assert.equal(folders?.includes("Resources/zh-Hans.lproj"), flavor !== "production");
+    }
+  });
+
   it("retains TypeScript runtime libraries on every desktop platform", () => {
     const require = createRequire(import.meta.url);
     for (const platform of ["mac", "linux", "win"] as const) {
@@ -125,6 +147,8 @@ describe("createDesktopPlatformBuildConfig", () => {
         from: MAC_ICON_ASSETS_CAR_STAGE_PATH,
         to: MAC_ICON_ASSETS_CAR_BUNDLE_PATH,
       },
+      { from: "apps/desktop/resources/localizations/en.lproj", to: "Resources/en.lproj" },
+      { from: "apps/desktop/resources/localizations/es.lproj", to: "Resources/es.lproj" },
     ]);
     assert.equal(MAC_ICON_ASSETS_CAR_STAGE_PATH, "apps/desktop/resources/Assets.car");
     assert.equal(MAC_ICON_ASSETS_CAR_BUNDLE_PATH, "Resources/Assets.car");

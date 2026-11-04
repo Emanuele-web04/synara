@@ -1,3 +1,4 @@
+import { useTranslation } from "~/i18n";
 // FILE: ComposerTipRow.tsx
 // Purpose: One-line tip capsule above the composer: icon, message, optional action pill,
 // and dismiss. Mounts and unmounts like its sibling capsules (live changes, goal) rather
@@ -33,6 +34,8 @@ export function ComposerTipRow({
   actionDisabled,
   testId,
 }: ComposerTipRowProps) {
+  const { t } = useTranslation();
+
   return (
     <ComposerCapsule
       icon={icon}
@@ -53,7 +56,7 @@ export function ComposerTipRow({
             variant="ghost"
             size="icon-chip"
             className="size-5 rounded-full sm:size-5"
-            label="Dismiss tip"
+            label={t("chat:dismissTip")}
             onClick={onDismiss}
           >
             <XIcon />

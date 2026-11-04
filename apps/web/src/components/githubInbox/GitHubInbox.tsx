@@ -95,6 +95,7 @@ import {
   type GitHubInboxSearchPatch,
   type GitHubInboxSelection,
 } from "./githubInbox.logic";
+import { useTranslation, t, getFormatLocale } from "~/i18n";
 
 // Without the route's Ask dock the list is a slim column and the detail takes the rest; with it
 // open the page is three even columns (list, detail, chat). When the window is too small for
@@ -128,11 +129,15 @@ function rateLimitedWarningText(
   error: GitHubInboxListError,
   timestampFormat: TimestampFormat,
 ): string {
-  const resetTime = error.retryAt ? formatShortTimestamp(error.retryAt, timestampFormat) : null;
+  const resetTime = error.retryAt
+    ? formatShortTimestamp(error.retryAt, timestampFormat, getFormatLocale())
+    : null;
   const refresh = resetTime ? `Refreshing resumes at ${resetTime}.` : "Refreshing resumes soon.";
   return error.showingCachedData
-    ? `GitHub rate limit reached. Showing the last loaded items. ${refresh}`
-    : `GitHub rate limit reached. Some repositories could not be loaded. ${refresh}`;
+    ? t("git:gitHubRateLimitReachedShowingTheLastLoadedItems", { value0: refresh })
+    : t("git:gitHubRateLimitReachedSomeRepositoriesCouldNotBe", {
+        value0: refresh,
+      });
 }
 
 /**
@@ -148,6 +153,8 @@ function ListColumnResizeHandle({
   columnRef: RefObject<HTMLElement | null>;
   onResize: (width: number, percent: number) => void;
 }) {
+  const { t } = useTranslation();
+
   const resizeTo = (width: number) => {
     const containerWidth = columnRef.current?.parentElement?.clientWidth;
     if (!containerWidth) return;
@@ -192,7 +199,7 @@ function ListColumnResizeHandle({
     <div
       role="separator"
       aria-orientation="vertical"
-      aria-label="Resize code review list"
+      aria-label={t("git:resizeCodeReviewList")}
       aria-valuenow={percent}
       aria-valuemin={0}
       aria-valuemax={100}
@@ -206,9 +213,11 @@ function ListColumnResizeHandle({
 }
 
 function ListSkeleton() {
+  const { t } = useTranslation();
+
   // Mirrors the loaded list's row height and spacing so the switch doesn't jump.
   return (
-    <div className="space-y-0.5" aria-busy="true" aria-label="Loading code review">
+    <div className="space-y-0.5" aria-busy="true" aria-label={t("git:loadingCodeReview")}>
       {Array.from({ length: 7 }, (_, index) => (
         <Skeleton key={index} className="h-[4.75rem] w-full rounded-lg" />
       ))}
@@ -217,13 +226,15 @@ function ListSkeleton() {
 }
 
 function DetailEmptyState() {
+  const { t } = useTranslation();
+
   // Quiet and centered; not a card.
   return (
     <div className="flex h-full flex-col items-center justify-center gap-1.5 px-6 text-center">
       <GitPullRequestIcon aria-hidden className="mb-2 size-6 text-muted-foreground/60" />
-      <p className="m-0 text-ui-lg text-foreground">Select a pull request or issue</p>
+      <p className="m-0 text-ui-lg text-foreground">{t("git:selectAPullRequestOrIssue")}</p>
       <p className="m-0 text-ui-sm text-muted-foreground">
-        Choose one from the sidebar to review it
+        {t("git:chooseOneFromTheSidebarToReviewIt")}
       </p>
     </div>
   );
@@ -296,6 +307,8 @@ export function GitHubInbox({
   /** Whether the route's Ask dock is open; the column fractions reset when it changes. */
   dockOpen?: boolean;
 }) {
+  const { t } = useTranslation();
+
   const { settings, updateSettings } = useAppSettings();
   const dockOpen = dockOpenProp ?? false;
   const isMobile = useIsMobile();
@@ -416,8 +429,8 @@ export function GitHubInbox({
         onError: (error) =>
           toastManager.add({
             type: "error",
-            title: "Could not update pin",
-            description: error instanceof Error ? error.message : "The pin could not be saved.",
+            title: t("git:couldNotUpdatePin"),
+            description: error instanceof Error ? error.message : t("git:thePinCouldNotBeSaved"),
           }),
       });
     }
@@ -435,9 +448,9 @@ export function GitHubInbox({
         onError: (error) =>
           toastManager.add({
             type: "error",
-            title: "Could not refresh code review",
+            title: t("git:couldNotRefreshCodeReview"),
             description:
-              error instanceof Error ? error.message : "Code review could not be refreshed.",
+              error instanceof Error ? error.message : t("git:codeReviewCouldNotBeRefreshed"),
           }),
       },
     );
@@ -507,7 +520,7 @@ export function GitHubInbox({
       {showList ? (
         <section
           ref={columnRef}
-          aria-label="Code review list"
+          aria-label={t("git:codeReviewList")}
           className={cn(
             "relative flex min-h-0 flex-col",
             isMobile ? "min-w-0 flex-1" : "min-w-[16rem] max-w-[calc(100%-18rem)] shrink-0",
@@ -567,25 +580,25 @@ export function GitHubInbox({
                   <EmptyHeader>
                     <EmptyTitle>
                       {repositoryProjects.length === 0
-                        ? "No projects yet"
+                        ? t("common:emptyStates_noProjects")
                         : reviewRequestsOnlyOpen
-                          ? "Review requests only apply to open pull requests"
-                          : `No ${noun} found`}
+                          ? t("git:reviewRequestsOnlyApplyToOpenPullRequests")
+                          : t("git:noFound", { value0: noun })}
                     </EmptyTitle>
                     <EmptyDescription>
                       {repositoryProjects.length === 0
-                        ? "Code review lists pull requests and issues from the GitHub repositories of your projects."
+                        ? t("git:codeReviewListsPullRequestsAndIssuesFromThe")
                         : reviewRequestsOnlyOpen
-                          ? "Select Open to see pull requests awaiting your review."
+                          ? t("git:selectOpenToSeePullRequestsAwaitingYourReview")
                           : activeFilterCount > 0
-                            ? "Try another filter, or clear them."
-                            : "Nothing here in the repositories of your projects."}
+                            ? t("git:tryAnotherFilterOrClearThem")
+                            : t("git:nothingHereInTheRepositoriesOfYourProjects")}
                     </EmptyDescription>
                   </EmptyHeader>
                   {activeFilterCount > 0 ? (
                     <EmptyContent>
                       <Button variant="outline" size="sm" onClick={clearFilters}>
-                        Clear filters
+                        {t("git:clearFilters")}
                       </Button>
                     </EmptyContent>
                   ) : null}
@@ -608,13 +621,17 @@ export function GitHubInbox({
               {truncatedRepositoryCount > 0 ? (
                 <p className={cn(PR_FINE_TEXT_CLASS_NAME, "text-muted-foreground")}>
                   {filters.state === "merged"
-                    ? "Showing merged pull requests from the 50"
-                    : "Showing the 50"}{" "}
-                  {settings.githubInboxSort === "created" ? "newest" : "most recently updated"}{" "}
-                  {filters.state === "merged" ? "closed pull requests" : noun} per repository.{" "}
-                  {truncatedRepositoryCount}{" "}
-                  {truncatedRepositoryCount === 1 ? "repository has" : "repositories have"} more on
-                  GitHub.
+                    ? t("git:showingMergedPullRequestsFromThe50")
+                    : t("git:showingThe50")}{" "}
+                  {settings.githubInboxSort === "created"
+                    ? t("git:newest2")
+                    : t("git:mostRecentlyUpdated")}{" "}
+                  {filters.state === "merged" ? t("git:closedPullRequests") : noun}{" "}
+                  {t("git:perRepository")} {truncatedRepositoryCount}{" "}
+                  {truncatedRepositoryCount === 1
+                    ? t("git:repositoryHas")
+                    : t("git:repositoriesHave")}{" "}
+                  {t("git:moreOnGitHub")}
                 </p>
               ) : null}
               {rateLimitedError ? (
@@ -624,14 +641,14 @@ export function GitHubInbox({
               ) : null}
               {unavailableErrorCount > 0 ? (
                 <PullRequestWarningNote shape="callout">
-                  {unavailableErrorCount} project{" "}
-                  {unavailableErrorCount === 1 ? "repository was" : "repositories were"}{" "}
-                  unavailable. Healthy repositories are still shown.
+                  {t("git:projectRepositoriesUnavailableHealthyRepositoriesAreStillShown", {
+                    count: unavailableErrorCount,
+                  })}
                 </PullRequestWarningNote>
               ) : null}
               {backgroundError ? (
                 <PullRequestWarningNote shape="callout" role="status">
-                  The latest background refresh failed. Showing the last loaded items.
+                  {t("git:theLatestBackgroundRefreshFailedShowingTheLastLoaded")}
                 </PullRequestWarningNote>
               ) : null}
             </div>
@@ -647,7 +664,7 @@ export function GitHubInbox({
       ) : null}
       {showDetail ? (
         <section
-          aria-label="Item details"
+          aria-label={t("git:itemDetails")}
           // The detail's own parts pad for the chat dock; the page gives them more room.
           className={cn("flex min-h-0 min-w-0 flex-1 flex-col", !isMobile && "px-3 pt-2")}
         >

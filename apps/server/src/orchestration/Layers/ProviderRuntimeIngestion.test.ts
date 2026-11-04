@@ -1,3 +1,4 @@
+import * as providerUsageRecovery from "../../providerUsage/index.ts";
 import { ProjectionPendingInteractionRepositoryLive } from "../../persistence/Layers/ProjectionPendingInteractions.ts";
 import { ProjectionPendingInteractionRepository } from "../../persistence/Services/ProjectionPendingInteractions.ts";
 import fs from "node:fs";
@@ -6,6 +7,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import type {
+  OrchestrationCommand,
   OrchestrationEvent,
   OrchestrationReadModel,
   OrchestrationThread,
@@ -56,6 +58,8 @@ import {
 } from "../../provider/Services/ProviderService.ts";
 import { projectProviderRuntimeActivities } from "../providerRuntimeActivityProjection.ts";
 import { OrchestrationEngineLive } from "./OrchestrationEngine.ts";
+import { GitCoreLive } from "../../git/Layers/GitCore.ts";
+import { ManagedAttachmentRepository } from "../../persistence/Services/ManagedAttachments.ts";
 import { OrchestrationProjectionPipelineLive } from "./ProjectionPipeline.ts";
 import { OrchestrationProjectionSnapshotQueryLive } from "./ProjectionSnapshotQuery.ts";
 import {
@@ -397,7 +401,9 @@ describe("ProviderRuntimeIngestion", () => {
     | ProviderRuntimeIngestionService
     | ProviderRuntimeEventRepository
     | SqlClient.SqlClient
-    | ProjectionSnapshotQuery,
+    | ProjectionSnapshotQuery
+    | ManagedAttachmentRepository
+    | ServerConfig,
     unknown
   > | null = null;
   let scope: Scope.Closeable | null = null;
@@ -421,10 +427,12 @@ describe("ProviderRuntimeIngestion", () => {
     for (const dir of tempDirs.splice(0)) {
       fs.rmSync(dir, { recursive: true, force: true });
     }
+    vi.restoreAllMocks();
   });
 
   async function createHarness(options?: {
     readonly startIngestion?: boolean;
+    readonly autoResumeAfterUsageLimits?: boolean;
     readonly persistedStream?: boolean;
     readonly computerManager?: ComputerManager;
     readonly deviceManager?: DeviceManager;
@@ -444,6 +452,7 @@ describe("ProviderRuntimeIngestion", () => {
       Layer.provideMerge(SqlitePersistenceMemory),
     );
     const layer = ProviderRuntimeIngestionLive.pipe(
+      Layer.provideMerge(GitCoreLive),
       Layer.provideMerge(
         options?.deviceManager
           ? Layer.succeed(DeviceService, { supported: true, manager: options.deviceManager })
@@ -464,13 +473,18 @@ describe("ProviderRuntimeIngestion", () => {
       Layer.provideMerge(runtimeEventRepositoryLayer),
       Layer.provideMerge(Layer.succeed(ProviderService, provider.service)),
       Layer.provideMerge(ServerConfig.layerTest(process.cwd(), process.cwd())),
-      Layer.provideMerge(ServerSettingsService.layerTest()),
+      Layer.provideMerge(
+        ServerSettingsService.layerTest({
+          autoResumeAfterUsageLimits: options?.autoResumeAfterUsageLimits ?? false,
+        }),
+      ),
       Layer.provideMerge(NodeServices.layer),
     );
     const managed = ManagedRuntime.make(layer);
     runtime = managed;
     const engine = await runtime.runPromise(Effect.service(OrchestrationEngineService));
     const ingestion = await runtime.runPromise(Effect.service(ProviderRuntimeIngestionService));
+    const serverSettings = await managed.runPromise(Effect.service(ServerSettingsService));
     const runtimeEventRepository = await runtime.runPromise(
       Effect.service(ProviderRuntimeEventRepository),
     );
@@ -568,6 +582,7 @@ describe("ProviderRuntimeIngestion", () => {
       Option.getOrUndefined(await runtime!.runPromise(snapshotQuery.getThreadDetailById(threadId)));
 
     return {
+      workspaceRoot,
       engine,
       emit: provider.emit,
       emitPersisted: provider.emitPersisted,
@@ -576,9 +591,568 @@ describe("ProviderRuntimeIngestion", () => {
       startIngestion,
       restartIngestion,
       runtimeEventRepository,
+      serverSettings,
       readProjectedThread,
     };
   }
+
+  describe("usage-limit recovery ingestion", () => {
+    const bindingKey = "mock-ingestion-account-binding";
+    const threadId = asThreadId("thread-1");
+
+    async function startLimitTurn(
+      harness: Awaited<ReturnType<typeof createHarness>>,
+      suffix: string,
+      createdAt = new Date().toISOString(),
+    ) {
+      const turnId = asTurnId(`limit-${suffix}-turn`);
+      if (
+        (await Effect.runPromise(harness.serverSettings.getSettings)).autoResumeAfterUsageLimits
+      ) {
+        const requested = await Effect.runPromise(
+          harness.engine.dispatch({
+            type: "thread.turn.start",
+            commandId: CommandId.makeUnsafe(`limit-${suffix}-requested`),
+            threadId,
+            message: {
+              messageId: asMessageId(`limit-${suffix}-message`),
+              role: "user",
+              text: "Run the test task",
+              attachments: [],
+            },
+            runtimeMode: "approval-required",
+            interactionMode: "default",
+            createdAt,
+          }),
+        );
+        await Effect.runPromise(
+          harness.engine.dispatch({
+            type: "thread.usage-limit.admit",
+            commandId: CommandId.makeUnsafe(`limit-${suffix}-admission`),
+            threadId,
+            admissionSequence: requested.sequence,
+            policyEpoch: 0,
+            createdAt,
+          }),
+        );
+      }
+      harness.emit({
+        type: "turn.started",
+        eventId: asEventId(`limit-${suffix}-start`),
+        provider: "codex",
+        providerInstanceId: "codex",
+        threadId,
+        turnId,
+        createdAt,
+        payload: {},
+        providerRefs: {},
+      });
+      await waitForThread(harness.engine, (thread) => thread.session?.activeTurnId === turnId);
+      await harness.drain();
+      return turnId;
+    }
+
+    function refusal(turnId: TurnId, suffix: string) {
+      return {
+        type: "turn.completed",
+        eventId: asEventId(`limit-${suffix}-failed`),
+        provider: "codex",
+        providerInstanceId: "codex",
+        threadId,
+        turnId,
+        createdAt: new Date().toISOString(),
+        providerRefs: {},
+        payload: {
+          state: "failed",
+          errorMessage: "Provider usage limit reached",
+          usageLimit: { resetAt: new Date(Date.now() + 60_000).toISOString() },
+        },
+      } as const;
+    }
+
+    it("freezes a live source and atomically persists its terminal wait with goal-pause ownership", async () => {
+      const identity = vi
+        .spyOn(providerUsageRecovery, "providerUsageRecoveryBindingKey")
+        .mockImplementation(() => Effect.succeed(bindingKey));
+      const harness = await createHarness({ autoResumeAfterUsageLimits: true });
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.meta.update",
+          commandId: CommandId.makeUnsafe("limit-ingestion-goal"),
+          threadId,
+          goal: "Finish every requirement",
+          goalStartBehavior: "defer",
+        }),
+      );
+      const turnId = await startLimitTurn(harness, "live-goal");
+      const live = await harness.readProjectedThread();
+      expect(live?.usageLimitRecoverySource).toMatchObject({
+        turnId,
+        bindingKey,
+        policyEpoch: 0,
+        admissionSequence: expect.any(Number),
+      });
+      expect(identity).toHaveBeenCalledTimes(1);
+      const dispatch = harness.engine.dispatch;
+      let acceptedTerminal: OrchestrationCommand | undefined;
+      const target = harness.engine as { dispatch: OrchestrationEngineShape["dispatch"] };
+      target.dispatch = (command, context) => {
+        if (command.type === "thread.session.set" && command.usageLimitRecovery)
+          acceptedTerminal = command;
+        return dispatch(command, context);
+      };
+      const failed = refusal(turnId, "live-goal");
+      harness.emit(failed);
+      await waitForThread(
+        harness.engine,
+        (thread) => thread.usageLimitRecovery != null && thread.session?.status === "error",
+      );
+      await harness.drain();
+      const settled = (await harness.readProjectedThread())!;
+      expect(settled.latestTurn).toMatchObject({ turnId, state: "error" });
+      expect(settled.usageLimitRecovery).toMatchObject({
+        id: `usage-limit:${failed.eventId}`,
+        turnId,
+        resetAt: failed.payload.usageLimit.resetAt,
+        provider: "codex",
+        providerInstanceId: "codex",
+        bindingKey,
+        policyEpoch: 0,
+        state: "waiting",
+        goalStartedAt: live?.goalStartedAt,
+        goalPausedAt: settled.goalPausedAt,
+      });
+      expect(settled.goalPausedAt).toBeTruthy();
+      const events = Array.from(
+        await Effect.runPromise(Stream.runCollect(harness.engine.readEvents(0))),
+      );
+      const waitEvent = events.find(
+        (event) =>
+          event.type === "thread.meta-updated" &&
+          event.payload.usageLimitRecovery?.id === settled.usageLimitRecovery?.id,
+      )!;
+      expect(
+        events.some(
+          (event) =>
+            event.type === "thread.session-set" &&
+            event.commandId === waitEvent.commandId &&
+            event.payload.session.status === "error",
+        ),
+      ).toBe(true);
+      expect(
+        events.filter((event) => event.type === "thread.goal-continuation-requested"),
+      ).toHaveLength(0);
+      const beforeRetry = await Effect.runPromise(harness.engine.getEventHighWaterSequence);
+      expect(acceptedTerminal).toBeDefined();
+      await Effect.runPromise(harness.engine.dispatch(acceptedTerminal!));
+      expect(await Effect.runPromise(harness.engine.getEventHighWaterSequence)).toBe(beforeRetry);
+      harness.emit(failed);
+      await harness.drain();
+      const afterDuplicate = Array.from(
+        await Effect.runPromise(Stream.runCollect(harness.engine.readEvents(0))),
+      );
+      expect(
+        afterDuplicate.filter(
+          (event) =>
+            event.type === "thread.meta-updated" &&
+            event.payload.usageLimitRecovery?.id === settled.usageLimitRecovery?.id,
+        ),
+      ).toHaveLength(1);
+    });
+
+    it("enabling after a turn began does not retroactively grant it auto-resume", async () => {
+      const identity = vi
+        .spyOn(providerUsageRecovery, "providerUsageRecoveryBindingKey")
+        .mockImplementation(() => Effect.succeed(bindingKey));
+      const harness = await createHarness();
+      const turnId = await startLimitTurn(harness, "initially-off");
+      expect((await harness.readProjectedThread())?.usageLimitRecoverySource).toBeNull();
+      expect(identity).not.toHaveBeenCalled();
+      await Effect.runPromise(
+        harness.serverSettings.updateSettings({ autoResumeAfterUsageLimits: true }),
+      );
+      harness.emit(refusal(turnId, "initially-off"));
+      await waitForThread(harness.engine, (thread) => thread.session?.status === "error");
+      await harness.drain();
+      expect((await harness.readProjectedThread())?.usageLimitRecovery).toBeNull();
+    });
+
+    it("historical turn-start replay cannot freshly arm an abandoned failure", async () => {
+      const identity = vi
+        .spyOn(providerUsageRecovery, "providerUsageRecoveryBindingKey")
+        .mockImplementation(() => Effect.succeed(bindingKey));
+      const harness = await createHarness({ autoResumeAfterUsageLimits: true });
+      const turnId = await startLimitTurn(harness, "historical", "2020-01-01T00:00:00.000Z");
+      harness.emit(refusal(turnId, "historical"));
+      await waitForThread(harness.engine, (thread) => thread.session?.status === "error");
+      await harness.drain();
+      expect((await harness.readProjectedThread())?.usageLimitRecoverySource?.bindingKey).toBe(
+        "admission",
+      );
+      expect((await harness.readProjectedThread())?.usageLimitRecovery).toBeNull();
+      expect(identity).not.toHaveBeenCalled();
+    });
+
+    it("an explicit Stop before the late refusal prevents scheduling its frozen source", async () => {
+      vi.spyOn(providerUsageRecovery, "providerUsageRecoveryBindingKey").mockImplementation(() =>
+        Effect.succeed(bindingKey),
+      );
+      const harness = await createHarness({ autoResumeAfterUsageLimits: true });
+      const turnId = await startLimitTurn(harness, "stopped");
+      expect((await harness.readProjectedThread())?.usageLimitRecoverySource?.turnId).toBe(turnId);
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.turn.interrupt",
+          commandId: CommandId.makeUnsafe("limit-stop-before-refusal"),
+          threadId,
+          turnId,
+          requestedBy: "user",
+          createdAt: new Date().toISOString(),
+        }),
+      );
+      harness.emit(refusal(turnId, "stopped"));
+      await waitForThread(harness.engine, (thread) => thread.session?.status === "error");
+      await harness.drain();
+      const settled = await harness.readProjectedThread();
+      expect(settled?.usageLimitRecovery).toBeNull();
+      expect(settled?.usageLimitRecoveryCancelledTurnId).toBe(turnId);
+    });
+
+    it("a disable/re-enable policy epoch invalidates a previously frozen source", async () => {
+      vi.spyOn(providerUsageRecovery, "providerUsageRecoveryBindingKey").mockImplementation(() =>
+        Effect.succeed(bindingKey),
+      );
+      const harness = await createHarness({ autoResumeAfterUsageLimits: true });
+      const turnId = await startLimitTurn(harness, "old-policy");
+      await Effect.runPromise(
+        harness.serverSettings.updateSettings({ autoResumeAfterUsageLimits: false }),
+      );
+      await Effect.runPromise(
+        harness.serverSettings.updateSettings({ autoResumeAfterUsageLimits: true }),
+      );
+      harness.emit(refusal(turnId, "old-policy"));
+      await waitForThread(harness.engine, (thread) => thread.session?.status === "error");
+      await harness.drain();
+      expect((await harness.readProjectedThread())?.usageLimitRecovery).toBeNull();
+      expect((await harness.readProjectedThread())?.usageLimitRecoverySource?.policyEpoch).toBe(0);
+      expect(
+        (await Effect.runPromise(harness.serverSettings.getSettings)).usageLimitRecoveryEpoch,
+      ).toBe(1);
+    });
+  });
+
+  it("persists inline assistant image bytes without moving text, including old events and late deltas", async () => {
+    const harness = await createHarness();
+    const source = path.join(harness.workspaceRoot, "inline image.png");
+    const ignoredCodeImage = path.join(harness.workspaceRoot, "code-only.png");
+    const outside = path.join(makeTempDir("inline-outside-"), "private.png");
+    const escaped = path.join(harness.workspaceRoot, "escape.png");
+    const bytes = Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII=",
+      "base64",
+    );
+    fs.writeFileSync(source, bytes);
+    fs.writeFileSync(ignoredCodeImage, bytes);
+    fs.writeFileSync(outside, bytes);
+    fs.symlinkSync(outside, escaped);
+    const text = `Step 1\n\n![visible](./inline%20image.png)\n\nStep 2\n\n\`![code](./code-only.png)\`\n\n\`\`\`md\n![fenced](./code-only.png)\n\`\`\`\n\n![outside](${outside})\n\n![escape](./escape.png)`;
+    const createdAt = "2020-01-01T00:00:00.000Z";
+    const turnId = asTurnId("inline-image-turn");
+    const base = {
+      provider: "codex" as const,
+      threadId: asThreadId("thread-1"),
+      turnId,
+      itemId: asItemId("inline-image-answer"),
+      createdAt,
+    };
+    harness.emit({ ...base, type: "turn.started", eventId: asEventId("inline-image-start") });
+    harness.emit({
+      ...base,
+      type: "content.delta",
+      eventId: asEventId("inline-image-text"),
+      payload: { streamKind: "assistant_text", delta: text },
+    });
+    harness.emit({
+      ...base,
+      type: "item.completed",
+      eventId: asEventId("inline-image-final"),
+      payload: { itemType: "assistant_message", status: "completed" },
+    });
+    const first = await waitForProjectedThread(harness.readProjectedThread, (thread) =>
+      thread.messages.some(
+        (message) => message.id === "assistant:inline-image-answer" && !message.streaming,
+      ),
+    );
+    const message = first.messages.find((entry) => entry.id === "assistant:inline-image-answer")!;
+    expect(message.text).toBe(text);
+    expect(message.attachments).toHaveLength(1);
+    expect(message.attachments?.[0]).toMatchObject({
+      type: "image",
+      sourcePath: "./inline image.png",
+      mimeType: "image/png",
+    });
+    const storedId = message.attachments![0]!.id;
+    fs.unlinkSync(source);
+    harness.emit({
+      ...base,
+      type: "turn.completed",
+      eventId: asEventId("inline-image-turn-final"),
+      payload: { state: "completed" },
+    });
+    await harness.drain();
+    const beforeLate = await runtime!.runPromise(harness.engine.getEventHighWaterSequence);
+    const lateSource = path.join(harness.workspaceRoot, "late image.png");
+    fs.writeFileSync(lateSource, bytes);
+    const lateDelta = "\n\nLate tail\n\n![late](./late%20image.png)";
+    harness.emit({
+      ...base,
+      type: "content.delta",
+      eventId: asEventId("inline-image-late-text"),
+      payload: { streamKind: "assistant_text", delta: lateDelta },
+    });
+    // No item/turn terminal follows: the late delta itself must settle and claim.
+    const replayed = await waitForProjectedThread(harness.readProjectedThread, (thread) =>
+      thread.messages.some(
+        (entry) => entry.id === message.id && entry.text === text + lateDelta && !entry.streaming,
+      ),
+    );
+    const lateMessage = replayed.messages.find((entry) => entry.id === message.id)!;
+    expect(lateMessage.attachments).toHaveLength(2);
+    expect(lateMessage.attachments?.[0]).toEqual(message.attachments![0]);
+    expect(lateMessage.attachments?.[1]).toMatchObject({ sourcePath: "./late image.png" });
+    fs.unlinkSync(lateSource);
+    const lateEvents = Array.from(
+      await runtime!.runPromise(Stream.runCollect(harness.engine.readEvents(beforeLate))),
+    );
+    expect(
+      lateEvents.filter(
+        (entry) =>
+          entry.type === "thread.message-sent" &&
+          entry.payload.messageId === message.id &&
+          !entry.payload.streaming,
+      ),
+    ).toHaveLength(1);
+    const repository = await runtime!.runPromise(Effect.service(ManagedAttachmentRepository));
+    const config = await runtime!.runPromise(Effect.service(ServerConfig));
+    for (const attachmentId of [storedId, lateMessage.attachments![1]!.id]) {
+      const stored = await runtime!.runPromise(repository.findClaimedById({ attachmentId }));
+      if (Option.isNone(stored)) throw new Error("Expected a claimed snapshot");
+      expect(fs.readFileSync(path.join(config.attachmentsDir, stored.value.relativePath))).toEqual(
+        bytes,
+      );
+    }
+    const sql = await runtime!.runPromise(Effect.service(SqlClient.SqlClient));
+    const rows = await runtime!.runPromise(
+      sql<{
+        count: number;
+      }>`SELECT COUNT(*) AS count FROM managed_attachment_blobs WHERE owner_thread_id = 'thread-1'`,
+    );
+    expect(rows[0]?.count).toBe(2);
+  });
+
+  it("reclaims the same staged inline image on journal replay after uncertain dispatch and source deletion", async () => {
+    const harness = await createHarness({ startIngestion: false, persistedStream: true });
+    const source = path.join(harness.workspaceRoot, "retry.png");
+    const bytes = Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII=",
+      "base64",
+    );
+    fs.writeFileSync(source, bytes);
+    const eventBase = {
+      provider: "codex" as const,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("uncertain-image-turn"),
+      itemId: asItemId("uncertain-image-answer"),
+      createdAt: new Date().toISOString(),
+    };
+    const events: ReadonlyArray<ProviderRuntimeEvent> = [
+      {
+        ...eventBase,
+        type: "turn.started" as const,
+        eventId: asEventId("uncertain-image-start"),
+        payload: {},
+      },
+      {
+        ...eventBase,
+        type: "content.delta" as const,
+        eventId: asEventId("uncertain-image-text"),
+        payload: { streamKind: "assistant_text" as const, delta: "![retry](./retry.png)" },
+      },
+      {
+        ...eventBase,
+        type: "item.completed" as const,
+        eventId: asEventId("uncertain-image-complete"),
+        payload: { itemType: "assistant_message", status: "completed" },
+      },
+    ];
+    for (const event of events)
+      await runtime!.runPromise(harness.runtimeEventRepository.append(event));
+    const dispatch = harness.engine.dispatch;
+    let interruptedCommand: { commandId: string; attachmentId: string } | undefined;
+    const failure = vi.spyOn(harness.engine, "dispatch").mockImplementation((command) => {
+      if (command.type !== "thread.message.assistant.complete") return dispatch(command);
+      if (!interruptedCommand) {
+        interruptedCommand = {
+          commandId: command.commandId,
+          attachmentId: command.attachments![0]!.id,
+        };
+        fs.unlinkSync(source);
+      }
+      // The boundary failed before a receipt existed; do not fake an accepted claim.
+      return Effect.die(new Error("transient admission acknowledgement unavailable"));
+    });
+    try {
+      await harness.startIngestion();
+      await Effect.runPromise(Scope.close(scope!, Exit.void));
+      scope = null;
+    } finally {
+      failure.mockRestore();
+    }
+    expect(interruptedCommand).toBeDefined();
+    const repository = await runtime!.runPromise(Effect.service(ManagedAttachmentRepository));
+    const sql = await runtime!.runPromise(Effect.service(SqlClient.SqlClient));
+    const staged = await runtime!.runPromise(sql<{ state: string }>`
+      SELECT state FROM managed_attachment_blobs WHERE attachment_id = ${interruptedCommand!.attachmentId}
+    `);
+    expect(staged).toEqual([{ state: "staged" }]);
+    const receipts = await runtime!.runPromise(sql<{ count: number }>`
+      SELECT COUNT(*) AS count FROM orchestration_command_receipts WHERE command_id = ${interruptedCommand!.commandId}
+    `);
+    expect(receipts[0]?.count).toBe(0);
+    const drain = await harness.restartIngestion();
+    await drain();
+    const message = (await harness.readProjectedThread())!.messages.find(
+      (entry) => entry.id === "assistant:uncertain-image-answer",
+    )!;
+    expect(message.streaming).toBe(false);
+    expect(message.attachments?.map((entry) => entry.id)).toEqual([
+      interruptedCommand!.attachmentId,
+    ]);
+    const claimed = await runtime!.runPromise(
+      repository.findClaimedForCommand({ commandId: interruptedCommand!.commandId }),
+    );
+    expect(claimed.map((entry) => entry.attachmentId)).toEqual([interruptedCommand!.attachmentId]);
+    const config = await runtime!.runPromise(Effect.service(ServerConfig));
+    expect(fs.readFileSync(path.join(config.attachmentsDir, claimed[0]!.relativePath))).toEqual(
+      bytes,
+    );
+    const rows = await runtime!.runPromise(sql<{ count: number }>`
+      SELECT COUNT(*) AS count FROM managed_attachment_blobs WHERE owner_thread_id = 'thread-1'
+    `);
+    expect(rows[0]?.count).toBe(1);
+  });
+
+  it("replays an accepted completion without importing a file that appeared before journal acknowledgement", async () => {
+    const harness = await createHarness({ startIngestion: false, persistedStream: true });
+    const source = path.join(harness.workspaceRoot, "appeared.png");
+    const bytes = Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII=",
+      "base64",
+    );
+    const base = {
+      provider: "codex" as const,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("accepted-image-turn"),
+      itemId: asItemId("accepted-image-answer"),
+      createdAt: new Date().toISOString(),
+    };
+    const events: ReadonlyArray<ProviderRuntimeEvent> = [
+      { ...base, type: "turn.started", eventId: asEventId("accepted-image-start"), payload: {} },
+      {
+        ...base,
+        type: "content.delta",
+        eventId: asEventId("accepted-image-text"),
+        payload: { streamKind: "assistant_text", delta: "![appeared](./appeared.png)" },
+      },
+      {
+        ...base,
+        type: "item.completed",
+        eventId: asEventId("accepted-image-complete"),
+        payload: { itemType: "assistant_message", status: "completed" },
+      },
+    ];
+    for (const event of events)
+      await runtime!.runPromise(harness.runtimeEventRepository.append(event));
+    const dispatch = harness.engine.dispatch;
+    let accepted: { commandId: string; sequence: number } | undefined;
+    const lostAcknowledgement = vi
+      .spyOn(harness.engine, "dispatch")
+      .mockImplementation((command) => {
+        if (command.type !== "thread.message.assistant.complete") return dispatch(command);
+        return dispatch(command).pipe(
+          Effect.tap((result) =>
+            Effect.sync(() => {
+              expect(command.attachments).toBeUndefined();
+              accepted = { commandId: command.commandId, sequence: result.sequence };
+              fs.writeFileSync(source, bytes);
+            }),
+          ),
+          // The real Engine committed; only this runtime row's acknowledgement is lost.
+          Effect.andThen(
+            Effect.die(new Error("completion accepted before runtime acknowledgement")),
+          ),
+        );
+      });
+    try {
+      await harness.startIngestion();
+      await Effect.runPromise(Scope.close(scope!, Exit.void));
+      scope = null;
+    } finally {
+      lostAcknowledgement.mockRestore();
+    }
+    expect(accepted).toBeDefined();
+    const sql = await runtime!.runPromise(Effect.service(SqlClient.SqlClient));
+    const before = await runtime!.runPromise(sql<{ status: string; resultSequence: number }>`
+      SELECT status, result_sequence AS resultSequence FROM orchestration_command_receipts
+      WHERE command_id = ${accepted!.commandId}
+    `);
+    expect(before).toEqual([{ status: "accepted", resultSequence: accepted!.sequence }]);
+    let replayed = 0;
+    const failures: unknown[] = [];
+    const replay = vi.spyOn(harness.engine, "dispatch").mockImplementation((command) =>
+      dispatch(command).pipe(
+        Effect.tap((result) =>
+          Effect.sync(() => {
+            if (command.commandId !== accepted!.commandId) return;
+            replayed += 1;
+            expect(result.sequence).toBe(accepted!.sequence);
+            expect(
+              command.type === "thread.message.assistant.complete" && command.attachments,
+            ).toBeUndefined();
+          }),
+        ),
+        Effect.onExit((exit) =>
+          Effect.sync(() => {
+            if (exit._tag === "Failure") failures.push(exit.cause);
+          }),
+        ),
+      ),
+    );
+    try {
+      const drain = await harness.restartIngestion();
+      await drain();
+    } finally {
+      replay.mockRestore();
+    }
+    expect(replayed).toBeGreaterThan(0);
+    expect(failures).toEqual([]);
+    const ledger = await runtime!.runPromise(sql<{ count: number }>`
+      SELECT COUNT(*) AS count FROM managed_attachment_blobs WHERE owner_thread_id = 'thread-1'
+    `);
+    expect(ledger[0]?.count).toBe(0);
+    const committed = Array.from(
+      await runtime!.runPromise(Stream.runCollect(harness.engine.readEvents(0))),
+    );
+    expect(committed.filter((event) => event.commandId === accepted!.commandId)).toHaveLength(1);
+    expect(
+      await runtime!.runPromise(
+        harness.runtimeEventRepository.getConsumerCursor(PROVIDER_RUNTIME_INGESTION_CONSUMER),
+      ),
+    ).toBe(await runtime!.runPromise(harness.runtimeEventRepository.getHighWaterSequence));
+    expect((await projectedMessage(harness, "assistant:accepted-image-answer"))?.text).toBe(
+      "![appeared](./appeared.png)",
+    );
+  });
 
   it("replays a committed text batch exactly once after an uncertain append and ingestion restart", async () => {
     const harness = await createHarness({ startIngestion: false, persistedStream: true });
@@ -4439,6 +5013,45 @@ describe("ProviderRuntimeIngestion", () => {
           terminal.status === "completed" ? "Late completion" : "Checking the remaining cases.",
       },
     });
+  });
+
+  it("retains changed completed reasoning across small and large duplicate fingerprints", async () => {
+    const harness = await createHarness({ startIngestion: false });
+    const details = ["First", "x".repeat(2_000), "Last"];
+    const firstAt = "2026-10-03T10:02:00.000Z";
+    let firstSequence: number | undefined;
+    await harness.startIngestion();
+    for (const [index, detail] of details.flatMap((detail) => [detail, detail]).entries()) {
+      const row = await Effect.runPromise(
+        harness.runtimeEventRepository.append({
+          type: "item.completed",
+          provider: "claudeAgent",
+          eventId: asEventId(`sized-reasoning-${index}`),
+          threadId: asThreadId("thread-1"),
+          turnId: asTurnId("sized-turn"),
+          itemId: asItemId("sized-thought"),
+          createdAt: index === 0 ? firstAt : "2026-10-03T10:02:01.000Z",
+          payload: { itemType: "reasoning", status: "completed", detail },
+        }),
+      );
+      firstSequence ??= row.sequence;
+      await harness.drain();
+    }
+    const updates = Array.from(
+      await Effect.runPromise(Stream.runCollect(harness.engine.readEvents(0))),
+    ).flatMap((event) =>
+      event.type === "thread.activity-appended" &&
+      event.payload.activity.id === "provider-reasoning:thread-1:sized-thought"
+        ? [event.payload.activity]
+        : [],
+    );
+    expect(updates).toHaveLength(3);
+    for (const [index, activity] of updates.entries())
+      expect(activity).toMatchObject({
+        createdAt: firstAt,
+        sequence: firstSequence,
+        payload: { status: "completed", detail: details[index] },
+      });
   });
 
   it.each([0, 2_001])(

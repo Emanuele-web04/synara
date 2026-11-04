@@ -1,3 +1,4 @@
+import { MixedScheduler, MaxOpsBeforeYield } from "effect/Scheduler";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -24,10 +25,12 @@ import {
 import { assert, describe, it } from "@effect/vitest";
 import { assessClaudeCache } from "@synara/shared/claudeCache";
 import {
+  Cause,
   Deferred,
   Effect,
   Exit,
   Fiber,
+  FileSystem,
   Layer,
   Option,
   Queue,
@@ -488,6 +491,7 @@ function makeHarness(config?: {
 }
 
 function makeMultiQueryHarness(config?: {
+  readonly baseDir?: string;
   readonly failCreateAt?: number;
   readonly gatewayCredentials?: AgentGatewayCredentialsShape;
   readonly onCreate?: (options: ClaudeQueryOptions) => void;
@@ -509,7 +513,12 @@ function makeMultiQueryHarness(config?: {
       return query;
     },
   }).pipe(
-    Layer.provideMerge(ServerConfig.layerTest("/tmp/claude-adapter-test", "/tmp")),
+    Layer.provideMerge(
+      ServerConfig.layerTest(
+        config?.baseDir ?? "/tmp/claude-adapter-test",
+        config?.baseDir ?? "/tmp",
+      ),
+    ),
     Layer.provideMerge(NodeServices.layer),
   );
   if (config?.gatewayCredentials) {
@@ -1814,6 +1823,168 @@ describe("ClaudeAdapterLive", () => {
       Effect.provide(harness.layer),
     );
   });
+
+  it.effect.each([
+    { transition: "completed", preparation: "permissions", outcome: "resolve" },
+    { transition: "stopped", preparation: "permissions", outcome: "resolve" },
+    { transition: "replacement", preparation: "permissions", outcome: "resolve" },
+    { transition: "next-turn", preparation: "permissions", outcome: "resolve" },
+    { transition: "completed", preparation: "attachment", outcome: "resolve" },
+    { transition: "replacement", preparation: "permissions", outcome: "reject" },
+    { transition: "next-turn", preparation: "attachment", outcome: "reject" },
+  ] as const)(
+    "rejects a prepared steer after its original turn is $transition during $preparation without queueing its text ($outcome)",
+    ({ transition, preparation, outcome }) => {
+      const baseDir = mkdtempSync(path.join(os.tmpdir(), "claude-stale-steer-"));
+      const harness = makeMultiQueryHarness({ baseDir });
+      let releaseControl!: () => void;
+      const controlReply = new Promise<void>((resolve) => {
+        releaseControl = resolve;
+      });
+      const offered = vi.spyOn(Queue, "offer");
+      const restore = [() => offered.mockRestore()];
+      return Effect.gen(function* () {
+        const adapter = yield* ClaudeAdapter;
+        const session = yield* adapter.startSession({
+          threadId: THREAD_ID,
+          runtimeMode: "full-access",
+        });
+        const first = yield* adapter.sendTurn({
+          threadId: session.threadId,
+          input: "Original work",
+        });
+        const query = harness.queries[0]!;
+        const controlEntered = yield* Deferred.make<void>();
+        const attachment = {
+          type: "image" as const,
+          id: "stale-steer-image-12345678-1234-1234-1234-123456789abc",
+          name: "synthetic.png",
+          mimeType: "image/png",
+          sizeBytes: 4,
+        };
+        if (preparation === "permissions") {
+          vi.spyOn(query, "setPermissionMode").mockImplementationOnce(async (mode) => {
+            query.setPermissionModeCalls.push(mode);
+            Effect.runSync(Deferred.succeed(controlEntered, undefined));
+            await controlReply;
+            if (outcome === "reject") throw new Error("Synthetic delayed control rejection");
+          });
+        } else {
+          const fileSystem = yield* FileSystem.FileSystem;
+          const originalRead = fileSystem.readFile;
+          const { attachmentsDir } = yield* ServerConfig;
+          const attachmentPath = path.join(attachmentsDir, attachmentRelativePath(attachment));
+          const read = vi
+            .spyOn(fileSystem, "readFile")
+            .mockImplementation((filePath) =>
+              filePath === attachmentPath
+                ? Deferred.succeed(controlEntered, undefined).pipe(
+                    Effect.andThen(Effect.promise(() => controlReply)),
+                    Effect.andThen(
+                      outcome === "reject"
+                        ? originalRead(path.join(baseDir, "missing-after-turn"))
+                        : Effect.succeed(Uint8Array.of(1, 2, 3, 4)),
+                    ),
+                  )
+                : originalRead(filePath),
+            );
+          restore.push(() => read.mockRestore());
+        }
+        const steerText = "Late redirect";
+        const steering = yield* adapter
+          .steerTurn({
+            threadId: session.threadId,
+            input: steerText,
+            interactionMode: "plan",
+            ...(preparation === "attachment" ? { attachments: [attachment] } : {}),
+          })
+          .pipe(Effect.exit, Effect.forkChild);
+        const preparing = yield* Deferred.await(controlEntered).pipe(
+          Effect.as("entered"),
+          Effect.raceFirst(Fiber.await(steering).pipe(Effect.as("finished"))),
+        );
+        if (preparing === "finished") {
+          const finished = yield* Fiber.join(steering);
+          if (Exit.isFailure(finished)) return yield* Effect.failCause(finished.cause);
+        }
+        assert.equal(preparing, "entered", "The controlled preparation must be suspended");
+        if (transition === "completed" || transition === "next-turn") {
+          const terminal = yield* adapter.streamEvents.pipe(
+            Stream.filter(
+              (event) => event.type === "turn.completed" && event.turnId === first.turnId,
+            ),
+            Stream.take(1),
+            Stream.runDrain,
+            Effect.forkChild,
+          );
+          emitSuccessResult(query, "synthetic-stale-steer", "synthetic-terminal", {});
+          yield* Fiber.join(terminal);
+        } else {
+          yield* adapter.stopSession(session.threadId);
+        }
+        let replacementTurn: TurnId | undefined;
+        if (transition === "replacement" || transition === "next-turn") {
+          if (transition === "replacement") {
+            yield* adapter.startSession({ threadId: session.threadId, runtimeMode: "full-access" });
+          }
+          replacementTurn = (yield* adapter.sendTurn({
+            threadId: session.threadId,
+            input: "New owner",
+          })).turnId;
+        }
+        releaseControl();
+        const result = yield* Fiber.join(steering);
+        assert.isTrue(
+          Exit.isFailure(result),
+          "A stale preparation must be rejected, never re-admitted",
+        );
+        if (Exit.isFailure(result)) {
+          const error = Option.getOrUndefined(Cause.findErrorOption(result.cause));
+          assert.instanceOf(error, ProviderAdapterValidationError);
+          assert.equal((error as ProviderAdapterValidationError).operation, "turn/steer.stale");
+        }
+        const latePrompts = offered.mock.calls.filter(([, item]) => {
+          const entry = item as { type?: string; message?: SDKUserMessage };
+          const content = entry.message?.message.content;
+          return (
+            entry.type === "message" &&
+            Array.isArray(content) &&
+            content.some(
+              (block) =>
+                typeof block === "object" && block.type === "text" && block.text === steerText,
+            )
+          );
+        });
+        assert.equal(latePrompts.length, 0);
+        const current = (yield* adapter.listSessions()).find(
+          (entry) => entry.threadId === session.threadId,
+        );
+        if (transition === "completed") {
+          assert.equal(current?.status, "ready");
+          assert.equal(current?.activeTurnId, undefined);
+        } else if (transition === "stopped") {
+          assert.equal(current, undefined);
+        } else {
+          assert.equal(current?.activeTurnId, replacementTurn);
+          if (transition === "replacement") {
+            assert.equal(harness.queries[1]?.setPermissionModeCalls.length, 0);
+          } else {
+            assert.equal(harness.queries.length, 1);
+          }
+        }
+      }).pipe(
+        Effect.ensuring(Effect.sync(releaseControl)),
+        Effect.provideService(Random.Random, makeDeterministicRandomService()),
+        Effect.provide(harness.layer),
+        Effect.ensuring(
+          Effect.sync(() => {
+            restore.forEach((cleanup) => cleanup());
+            rmSync(baseDir, { recursive: true, force: true });
+          }),
+        ),
+      );
+    },
+  );
 
   it.effect("dispatches a steer as a normal turn when no turn is live", () => {
     const harness = makeHarness();
@@ -3645,58 +3816,80 @@ describe("ClaudeAdapterLive", () => {
     );
   });
 
-  it.effect("projects vcs_state_changed system messages as vcs.state.changed events", () => {
-    const harness = makeHarness();
-    return Effect.gen(function* () {
-      const adapter = yield* ClaudeAdapter;
-      const eventsFiber = yield* adapter.streamEvents.pipe(
-        Stream.filter(
-          (event) => event.type === "vcs.state.changed" || event.type === "runtime.warning",
-        ),
-        Stream.take(2),
-        Stream.runCollect,
-        Effect.forkChild,
-      );
-      yield* adapter.startSession({
-        threadId: THREAD_ID,
-        provider: "claudeAgent",
-        runtimeMode: "full-access",
-      });
-
-      harness.query.emit({
-        type: "system",
-        subtype: "vcs_state_changed",
-        kind: "commit",
-        cwd: "/repo/worktree",
-        session_id: "sdk-session-vcs",
-        uuid: "vcs-1",
-      } as unknown as SDKMessage);
-      // Sentinel unknown subtype closes the collection window; the VCS event
-      // arriving first proves it did not surface as an unhandled warning.
-      harness.query.emit({
-        type: "system",
-        subtype: "totally_unknown_subtype",
-        session_id: "sdk-session-vcs",
-        uuid: "vcs-sentinel",
-      } as unknown as SDKMessage);
-
-      const events = Array.from(yield* Fiber.join(eventsFiber));
-      assert.equal(events[0]?.type, "vcs.state.changed");
-      if (events[0]?.type === "vcs.state.changed") {
-        assert.deepEqual(events[0].payload, { kind: "commit", cwd: "/repo/worktree" });
-      }
-      assert.equal(events[1]?.type, "runtime.warning");
-      if (events[1]?.type === "runtime.warning") {
-        assert.equal(
-          events[1].payload.message,
-          "Unhandled Claude system message subtype 'totally_unknown_subtype'.",
+  it.effect.each([
+    {
+      subtype: "vcs_state_changed",
+      payload: { kind: "commit", cwd: "/repo/worktree" },
+      expectedPayload: { kind: "commit", cwd: "/repo/worktree" },
+    },
+    {
+      subtype: "code_change_published",
+      payload: {
+        provider: "github",
+        url: "https://untrusted.invalid/other/repository/pull/7",
+        repo: "other/repository",
+        identifier: "7",
+        cwd: "/untrusted/workspace",
+      },
+      expectedPayload: { kind: "code_change_published" },
+    },
+  ] as const)(
+    "projects $subtype as one VCS invalidation without a tool or warning",
+    ({ subtype, payload, expectedPayload }) => {
+      const harness = makeHarness();
+      return Effect.gen(function* () {
+        const adapter = yield* ClaudeAdapter;
+        const eventsFiber = yield* adapter.streamEvents.pipe(
+          Stream.filter(
+            (event) =>
+              event.type === "vcs.state.changed" ||
+              event.type === "runtime.warning" ||
+              event.type.startsWith("item."),
+          ),
+          Stream.take(2),
+          Stream.runCollect,
+          Effect.forkChild,
         );
-      }
-    }).pipe(
-      Effect.provideService(Random.Random, makeDeterministicRandomService()),
-      Effect.provide(harness.layer),
-    );
-  });
+        yield* adapter.startSession({
+          threadId: THREAD_ID,
+          provider: "claudeAgent",
+          runtimeMode: "full-access",
+        });
+
+        harness.query.emit({
+          type: "system",
+          subtype,
+          ...payload,
+          session_id: "sdk-session-vcs",
+          uuid: "vcs-1",
+        } as unknown as SDKMessage);
+        // Sentinel unknown subtype closes the collection window; the VCS event
+        // arriving first proves it did not surface as an unhandled warning.
+        harness.query.emit({
+          type: "system",
+          subtype: "totally_unknown_subtype",
+          session_id: "sdk-session-vcs",
+          uuid: "vcs-sentinel",
+        } as unknown as SDKMessage);
+
+        const events = Array.from(yield* Fiber.join(eventsFiber));
+        assert.equal(events[0]?.type, "vcs.state.changed");
+        if (events[0]?.type === "vcs.state.changed") {
+          assert.deepEqual(events[0].payload, expectedPayload);
+        }
+        assert.equal(events[1]?.type, "runtime.warning");
+        if (events[1]?.type === "runtime.warning") {
+          assert.equal(
+            events[1].payload.message,
+            "Unhandled Claude system message subtype 'totally_unknown_subtype'.",
+          );
+        }
+      }).pipe(
+        Effect.provideService(Random.Random, makeDeterministicRandomService()),
+        Effect.provide(harness.layer),
+      );
+    },
+  );
 
   it.effect("still announces a task backgrounded via task_updated before the snapshot", () => {
     const harness = makeHarness();
@@ -5609,7 +5802,11 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
         .pipe(Effect.result);
       assert.equal(result._tag, "Failure");
       if (result._tag === "Failure") {
-        assert.instanceOf(result.failure, ProviderAdapterRequestError);
+        assert.instanceOf(result.failure, ProviderAdapterValidationError);
+        if (result.failure instanceof ProviderAdapterValidationError) {
+          assert.equal(result.failure.operation, "turn/steerSubagent");
+          assert.match(result.failure.issue, /already finished/);
+        }
       }
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
@@ -5675,6 +5872,85 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
       Effect.provide(harness.layer),
     );
   });
+
+  // A success envelope can still carry an error; assistant.error is optional in the SDK contract.
+  it.effect.each([
+    { label: "plain success", isError: false, assistantError: undefined, expected: "completed" },
+    {
+      label: "structured assistant error",
+      isError: true,
+      assistantError: "invalid_request",
+      expected: "failed",
+    },
+    {
+      label: "error flag without assistant error",
+      isError: true,
+      assistantError: undefined,
+      expected: "failed",
+    },
+  ] as const)(
+    "vendor result is_error boundary: $label",
+    ({ isError, assistantError, expected }) => {
+      const harness = makeHarness();
+      return Effect.gen(function* () {
+        const adapter = yield* ClaudeAdapter;
+        const eventsFiber = yield* adapter.streamEvents.pipe(
+          Stream.takeUntil((event) => event.type === "turn.completed"),
+          Stream.runCollect,
+          Effect.forkChild,
+        );
+        yield* adapter.startSession({
+          threadId: THREAD_ID,
+          provider: "claudeAgent",
+          runtimeMode: "full-access",
+        });
+        const turn = yield* adapter.sendTurn({
+          threadId: THREAD_ID,
+          input: "Synthetic boundary fixture",
+          attachments: [],
+        });
+        harness.query.emit({
+          type: "assistant",
+          session_id: "vendor-error-flag-session",
+          uuid: "vendor-error-flag-assistant",
+          parent_tool_use_id: null,
+          ...(assistantError !== undefined ? { error: assistantError } : {}),
+          message: {
+            id: "vendor-error-flag-message",
+            content: [{ type: "text", text: "Synthetic boundary fixture" }],
+          },
+        } as unknown as SDKMessage);
+        harness.query.emit({
+          type: "result",
+          subtype: "success",
+          is_error: isError,
+          stop_reason: "stop_sequence",
+          session_id: "vendor-error-flag-session",
+          uuid: "vendor-error-flag-result",
+          duration_ms: 0,
+          duration_api_ms: 0,
+          num_turns: 1,
+          total_cost_usd: 0,
+          usage: {},
+          result: "Synthetic boundary fixture",
+        } as unknown as SDKMessage);
+        const events = Array.from(yield* Fiber.join(eventsFiber));
+        const completed = events.find((event) => event.type === "turn.completed");
+        assert.equal(completed?.type, "turn.completed");
+        if (completed?.type === "turn.completed") {
+          assert.equal(String(completed.turnId), String(turn.turnId));
+          assert.equal(completed.payload.state, expected);
+        }
+        assert.equal(
+          events.some((event) => event.type === "runtime.error"),
+          expected === "failed",
+        );
+      }).pipe(
+        Effect.provideService(Random.Random, makeDeterministicRandomService()),
+        Effect.provide(harness.layer),
+      );
+    },
+  );
 
   for (const [error, messagePattern] of [
     ["authentication_failed", /claude auth login --claudeai/i],
@@ -16416,3 +16692,212 @@ describe("Claude subagent tracking", () => {
     );
   });
 });
+
+it.effect("keeps steer admission and turn ownership atomic across cooperative yielding", () => {
+  return Effect.gen(function* () {
+    for (const budget of [8, 9, 10, 11, 12, 13, 14, 15]) {
+      for (let pauseAfter = 1; pauseAfter <= 32; pauseAfter++) {
+        const baseDir = mkdtempSync(path.join(os.tmpdir(), "claude-steer-admission-"));
+        const harness = makeHarness({ baseDir, cwd: baseDir });
+        const outcome = yield* Effect.gen(function* () {
+          const adapter = yield* ClaudeAdapter;
+          yield* adapter.startSession({ threadId: THREAD_ID, runtimeMode: "full-access" });
+          const first = yield* adapter.sendTurn({
+            threadId: THREAD_ID,
+            input: "original",
+            attachments: [],
+          });
+          const prompts = harness.getLastCreateQueryInput()!.prompt[Symbol.asyncIterator]();
+          yield* Effect.promise(() => prompts.next());
+          const scheduled: Array<() => void> = [];
+          const scheduler = new MixedScheduler("async", (task) => {
+            scheduled.push(task);
+            return () => {
+              const index = scheduled.indexOf(task);
+              if (index >= 0) scheduled.splice(index, 1);
+            };
+          });
+          const services = yield* Effect.services<never>();
+          const steering = Effect.runForkWith(services)(
+            adapter
+              .steerTurn({ threadId: THREAD_ID, input: "redirect", attachments: [] })
+              .pipe(Effect.provideService(MaxOpsBeforeYield, budget)),
+            { scheduler },
+          );
+          let slices = 0;
+          const tick = () =>
+            Effect.gen(function* () {
+              if (scheduled.length === 0) {
+                yield* Effect.promise(() => new Promise<void>((resolve) => setImmediate(resolve)));
+              }
+              const task = scheduled.shift();
+              if (task) {
+                task();
+                slices++;
+              }
+            });
+          while (slices < pauseAfter && steering.pollUnsafe() === undefined) yield* tick();
+          const pausedBeforeTransition = steering.pollUnsafe() === undefined;
+          const terminal = yield* adapter.streamEvents.pipe(
+            Stream.filter(
+              (event) => event.type === "turn.completed" && event.turnId === first.turnId,
+            ),
+            Stream.take(1),
+            Stream.runDrain,
+            Effect.forkChild,
+          );
+          emitSuccessResult(harness.query, "scheduler-synthetic", "terminal", {});
+          yield* Fiber.join(terminal);
+          const next = yield* adapter.sendTurn({
+            threadId: THREAD_ID,
+            input: "replacement",
+            attachments: [],
+          });
+          let idleTicks = 0;
+          while (steering.pollUnsafe() === undefined && slices < 256 && idleTicks < 32) {
+            const before = slices;
+            yield* tick();
+            idleTicks = before === slices ? idleTicks + 1 : 0;
+          }
+          const result = steering.pollUnsafe();
+          if (result === undefined) {
+            steering.interruptUnsafe();
+            while (scheduled.length > 0) scheduled.shift()!();
+            return { budget, pauseAfter, slices, setupFailure: "scheduler did not drain" };
+          }
+          const messages: string[] = [];
+          for (let i = 0; i < (Exit.isSuccess(result) ? 2 : 1); i++) {
+            const message = yield* Effect.promise(() => prompts.next());
+            const block = message.value?.message.content[0];
+            messages.push(
+              typeof block === "object" && block?.type === "text" ? block.text : "other",
+            );
+          }
+          const staleAdmission =
+            Exit.isSuccess(result) &&
+            result.value.turnId === first.turnId &&
+            messages[0] === "replacement" &&
+            messages[1] === "redirect";
+          assert.equal((yield* adapter.listSessions())[0]?.activeTurnId, next.turnId);
+          if (Exit.isFailure(result)) {
+            const error = Option.getOrUndefined(Cause.findErrorOption(result.cause));
+            assert.instanceOf(error, ProviderAdapterValidationError);
+            assert.equal((error as ProviderAdapterValidationError).operation, "turn/steer.stale");
+            const remaining = yield* Effect.promise(() => prompts.next()).pipe(
+              Effect.timeoutOption("1 millis"),
+              Effect.forkChild,
+            );
+            yield* TestClock.adjust("1 millis");
+            assert.isTrue(
+              Option.isNone(yield* Fiber.join(remaining)),
+              "stale text must not be queued",
+            );
+          }
+          const row = {
+            budget,
+            pauseAfter,
+            slices,
+            pausedBeforeTransition,
+            outcome: result._tag,
+            firstTurnId: first.turnId,
+            nextTurnId: next.turnId,
+            steeredTurnId: Exit.isSuccess(result) ? result.value.turnId : undefined,
+            messages,
+            staleAdmission,
+          };
+          yield* adapter.stopSession(THREAD_ID);
+          return row;
+        }).pipe(
+          Effect.provideService(Random.Random, makeDeterministicRandomService()),
+          Effect.provide(harness.layer),
+          Effect.scoped,
+          Effect.ensuring(Effect.sync(() => rmSync(baseDir, { recursive: true, force: true }))),
+        );
+        if ("setupFailure" in outcome)
+          assert.fail(`native scheduler must make progress: ${outcome.setupFailure}`);
+        assert.isFalse(outcome.staleAdmission, JSON.stringify(outcome));
+        if (outcome.pausedBeforeTransition === false) break;
+      }
+    }
+  });
+});
+
+it.effect(
+  "retains Claude terminal rate-limit identity and turn-local nested quota evidence",
+  () => {
+    const harness = makeHarness({ cwd: os.tmpdir(), baseDir: os.tmpdir() });
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const session = yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: "claudeAgent",
+        runtimeMode: "full-access",
+      });
+      const reset = Math.floor(Date.now() / 1_000) + 3_600;
+      for (const round of [0, 1, 2]) {
+        const eventsFiber = yield* adapter.streamEvents.pipe(
+          Stream.takeUntil((event) => event.type === "turn.completed"),
+          Stream.runCollect,
+          Effect.forkChild,
+        );
+        yield* adapter.sendTurn({ threadId: session.threadId, input: "Continue", attachments: [] });
+        if (round === 0)
+          harness.query.emit({
+            type: "rate_limit_event",
+            session_id: "sdk-quota-session",
+            uuid: "00000000-0000-4000-8000-000000000001",
+            rate_limit_info: { status: "rejected", rateLimitType: "five_hour", resetsAt: reset },
+          } as SDKMessage);
+        harness.query.emit({
+          type: "assistant",
+          session_id: "sdk-quota-session",
+          uuid: `quota-assistant-${round}`,
+          parent_tool_use_id: null,
+          error: "rate_limit",
+          ...(round === 2
+            ? {
+                api_error_params: {
+                  rate_limit_info: {
+                    status: "rejected",
+                    rateLimitType: "five_hour",
+                    resetsAt: reset,
+                  },
+                },
+              }
+            : {}),
+          message: {
+            id: `quota-message-${round}`,
+            content: [],
+            usage: { input_tokens: 0, output_tokens: 0 },
+          },
+        } as unknown as SDKMessage);
+        harness.query.emit({
+          type: "result",
+          subtype: "success",
+          is_error: true,
+          result: "You've hit your limit.",
+          errors: [],
+          session_id: "sdk-quota-session",
+          uuid: `quota-result-${round}`,
+        } as unknown as SDKMessage);
+        const events = yield* Fiber.join(eventsFiber);
+        const completion = events.find((event) => event.type === "turn.completed");
+        assert.equal(completion?.type, "turn.completed");
+        if (completion?.type === "turn.completed") {
+          assert.equal(completion.payload.state, "failed");
+          assert.equal(completion.payload.errorCode, "rate_limit");
+          assert.deepEqual(completion.payload.usageLimit, {
+            resetAt: round === 1 ? null : new Date(reset * 1_000).toISOString(),
+          });
+        }
+        assert.ok(events.every((event) => event.type !== "runtime.error"));
+        assert.ok(events.some((event) => event.type === "runtime.warning"));
+        assert.ok(
+          events
+            .filter((event) => event.type !== "turn.completed")
+            .every((event) => !("usageLimit" in event.payload)),
+        );
+      }
+    }).pipe(Effect.provide(harness.layer), Effect.scoped);
+  },
+);

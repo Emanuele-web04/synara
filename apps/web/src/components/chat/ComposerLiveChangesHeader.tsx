@@ -1,11 +1,10 @@
+import { useTranslation } from "~/i18n";
 // FILE: ComposerLiveChangesHeader.tsx
 // Purpose: Live file-changes capsule above the composer while a turn is running. The
 // caller supplies turn-scoped diff totals (or a null count before they land) and the
 // Review action target; clicking the capsule opens the review.
 // Layer: Chat composer UI
 // Exports: ComposerLiveChangesHeader
-
-import { pluralize } from "@synara/shared/text";
 
 import { ChangesIcon } from "~/lib/icons";
 import { ComposerCapsule } from "./ComposerCapsule";
@@ -27,20 +26,26 @@ export function ComposerLiveChangesHeader({
   deletions,
   onReview,
 }: ComposerLiveChangesHeaderProps) {
+  const { t } = useTranslation();
+
   if (fileCount === 0) {
     return null;
   }
   const filesLabel =
-    fileCount === null ? "Files changed" : `${fileCount} ${pluralize(fileCount, "file")} changed`;
+    fileCount === null
+      ? t(onReview ? "chat:reviewFilesChanged" : "chat:filesChanged")
+      : t(onReview ? "chat:reviewFilesChangedCount" : "chat:filesChangedCount", {
+          count: fileCount,
+        });
 
   return (
     <ComposerCapsule
       icon={<ChangesIcon className={COMPOSER_STACKED_PANEL_ICON_CLASS_NAME} />}
-      title={onReview ? `${filesLabel} · Review changes` : filesLabel}
+      title={filesLabel}
       onClick={onReview}
       testId="composer-live-changes"
     >
-      Changes
+      {t("git:panel_changes")}
       {additions + deletions > 0 ? (
         <span className="ml-1.5 tabular-nums">
           <DiffStatLabel additions={additions} deletions={deletions} />

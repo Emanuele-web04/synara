@@ -1,3 +1,4 @@
+import { useTranslation } from "~/i18n";
 // FILE: ProjectScriptsControl.tsx
 // Purpose: Chat-header control for running a project's actions (scripts).
 //          Creating and editing an action lives in ProjectActionDialog, which this control
@@ -47,6 +48,8 @@ export default function ProjectScriptsControl({
   onUpdateScript,
   onDeleteScript,
 }: ProjectScriptsControlProps) {
+  const { t } = useTranslation();
+
   const preferredScriptId = preferredScriptIdProp ?? null;
   const [editingScriptId, setEditingScriptId] = useState<string | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -92,11 +95,11 @@ export default function ProjectScriptsControl({
     <>
       {primaryScript ? (
         // Icon-only, flat header controls: the action's name lives in the tooltip.
-        <ChatHeaderSplitGroup label="Project actions">
+        <ChatHeaderSplitGroup label={t("workspace:projectActions")}>
           <ChatHeaderIconButton
             tone="surface"
-            label={`Run ${primaryScript.name}`}
-            title={`Run ${primaryScript.name}`}
+            label={t("workspace:run", { value0: primaryScript.name })}
+            title={t("workspace:run", { value0: primaryScript.name })}
             className={CHAT_HEADER_SPLIT_LEADING_CLASS_NAME}
             onClick={() => onRunScript(primaryScript)}
           >
@@ -108,8 +111,8 @@ export default function ProjectScriptsControl({
               render={
                 <ChatHeaderIconButton
                   tone="surface"
-                  label="Script actions"
-                  title="Script actions"
+                  label={t("workspace:scripts_scriptActions")}
+                  title={t("workspace:scripts_scriptActions")}
                   className={CHAT_HEADER_SPLIT_TRAILING_CLASS_NAME}
                 />
               }
@@ -130,7 +133,9 @@ export default function ProjectScriptsControl({
                   >
                     <ScriptIcon icon={script.icon} className="size-4 text-muted-foreground" />
                     <span className="min-w-0 truncate">
-                      {script.runOnWorktreeCreate ? `${script.name} (setup)` : script.name}
+                      {script.runOnWorktreeCreate
+                        ? t("workspace:setup", { value0: script.name })
+                        : script.name}
                     </span>
                     <span className="flex min-w-0 items-center justify-end">
                       {shortcutLabel && (
@@ -143,7 +148,7 @@ export default function ProjectScriptsControl({
                         variant="ghost"
                         size="icon-xs"
                         className="size-6 rounded-lg opacity-50 transition-opacity sm:pointer-events-none sm:opacity-0 sm:group-hover:pointer-events-auto sm:group-hover:opacity-100 sm:group-focus-visible:pointer-events-auto sm:group-focus-visible:opacity-100"
-                        aria-label={`Edit ${script.name}`}
+                        aria-label={t("workspace:edit", { value0: script.name })}
                         onPointerDown={(event) => {
                           event.preventDefault();
                           event.stopPropagation();
@@ -162,7 +167,9 @@ export default function ProjectScriptsControl({
               })}
               <MenuItem className={actionMenuItemClassName} onClick={openAddDialog}>
                 <PlusIcon className="size-4 text-muted-foreground" />
-                <span className="col-span-2 min-w-0 truncate">Add action</span>
+                <span className="col-span-2 min-w-0 truncate">
+                  {t("workspace:scripts_addActionTitle")}
+                </span>
               </MenuItem>
             </ComposerPickerMenuPopup>
           </Menu>

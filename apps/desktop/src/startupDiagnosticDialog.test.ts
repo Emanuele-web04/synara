@@ -1,12 +1,36 @@
 import { clipboard, dialog } from "electron";
 import { afterEach, expect, it, vi } from "vitest";
 import { showDiagnosticStartupDialog } from "./startupDiagnosticDialog";
+import { initializeDesktopI18n } from "./i18n";
 
 vi.mock("electron", () => ({
   dialog: { showMessageBox: vi.fn() },
   clipboard: { writeText: vi.fn() },
 }));
-afterEach(() => vi.resetAllMocks());
+afterEach(() => {
+  vi.resetAllMocks();
+  initializeDesktopI18n("en", () => "en-US");
+});
+
+it("localizes diagnostic status and the copy button while preserving the ID and error detail", async () => {
+  initializeDesktopI18n("es", () => "en-US");
+  vi.mocked(dialog.showMessageBox).mockResolvedValue({ response: 0, checkboxChecked: false });
+  await showDiagnosticStartupDialog(
+    { message: "Raw backend message", detail: "RAW ERROR", buttons: ["Salir"] },
+    "id-123",
+    { getReportStatus: () => "queued" },
+  );
+  expect(dialog.showMessageBox).toHaveBeenCalledWith(
+    expect.objectContaining({
+      message: "Raw backend message",
+      detail: expect.stringContaining("RAW ERROR"),
+      buttons: ["Salir", "Copiar ID de diagnóstico"],
+    }),
+  );
+  expect(vi.mocked(dialog.showMessageBox).mock.calls[0]?.[0]).toMatchObject({
+    detail: expect.stringContaining("ID de diagnóstico: id-123 (en cola local)"),
+  });
+});
 
 it("copies the report without consuming retry/quit or changing the cancel choice", async () => {
   const show = vi.mocked(dialog.showMessageBox);

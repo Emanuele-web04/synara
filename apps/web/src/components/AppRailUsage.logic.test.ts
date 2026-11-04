@@ -1,6 +1,8 @@
 import { DEFAULT_SERVER_SETTINGS_VIEW } from "@synara/contracts";
 import { deriveProviderInstances } from "@synara/shared/providerInstances";
 import { describe, expect, it } from "vitest";
+import { setLanguagePreference } from "~/i18n";
+import { resolveEnvironmentProviderUsageSummary } from "./chat/environment/EnvironmentUsageSection.logic";
 
 import { deriveProviderUsageDisplayRows } from "~/lib/providerUsageDisplay";
 
@@ -114,6 +116,25 @@ describe("selectRailUsageRows", () => {
     expect(labels(rows, null, "both")).toEqual(["Weekly", "5h"]);
     expect(labels(rows, null, "fiveHour")).toEqual(["5h"]);
     expect(labels(rows, null, "weekly")).toEqual(["Weekly"]);
+  });
+
+  it("localizes quota descriptions while preserving canonical window selection", () => {
+    try {
+      setLanguagePreference("zh-CN");
+      const selected = selectRailUsageRows(rows, null, "both");
+      expect(selected.map((row) => row.label)).toEqual(["Weekly", "5h"]);
+      const summary = resolveEnvironmentProviderUsageSummary({
+        providerName: "Codex",
+        rows: selected,
+        snapshot: undefined,
+        hasUsageLines: true,
+      });
+      expect(summary.ariaLabel).toBe("Codex 用量：每周剩余 40%, 5 小时剩余 40%");
+      expect(summary.rows).toBe(selected);
+      expect(rows.map((row) => row.label)).toEqual(["5h", "Weekly"]);
+    } finally {
+      setLanguagePreference("en");
+    }
   });
 
   it("falls back to the other account window, then to the primary row", () => {

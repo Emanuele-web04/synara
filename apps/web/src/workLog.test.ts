@@ -1,5 +1,6 @@
 import { MessageId, TurnId, type OrchestrationThreadActivity } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
+import { setLanguagePreference } from "~/i18n";
 
 import {
   deriveSubagentTaskEnds,
@@ -91,6 +92,181 @@ describe("deriveSubagentTaskEnds", () => {
 });
 
 describe("deriveWorkLogEntries", () => {
+  it("keeps a rejected child message visible after the child turn completes", () => {
+    const activity = makeActivity({
+      id: "child-message-not-delivered",
+      kind: "provider.turn.start.failed",
+      tone: "error",
+      summary: "Provider turn start failed",
+      payload: { messageId: "child-message", detail: "Your message was not sent to the subagent." },
+    });
+    for (const options of [
+      { latestTurnId: TurnId.makeUnsafe("completed-child-turn") },
+      { visibleTurnIds: new Set([TurnId.makeUnsafe("completed-child-turn")]) },
+    ]) {
+      const entries = deriveWorkLogEntries(
+        [activity],
+        "latestTurnId" in options ? options.latestTurnId : undefined,
+        "visibleTurnIds" in options ? options : {},
+      );
+      expect(entries).toEqual([
+        expect.objectContaining({
+          id: activity.id,
+          tone: "error",
+          label: "Provider turn start failed",
+          detail: "Your message was not sent to the subagent.",
+        }),
+      ]);
+    }
+  });
+
+  it("localizes cached generated task and agent summaries without translating provider or user data", () => {
+    const activities = [
+      makeActivity({
+        id: "localized-tasks",
+        kind: "turn.tasks.updated",
+        summary: "Tasks updated",
+        turnId: "turn-language",
+        payload: {
+          tasks: [
+            { task: "Settings", status: "completed" },
+            { task: "Open", status: "inProgress" },
+          ],
+        },
+      }),
+      makeActivity({
+        id: "localized-agent",
+        kind: "tool.updated",
+        summary: "Spawn agent",
+        payload: {
+          itemType: "collab_agent_tool_call",
+          title: "Spawn agent",
+          data: {
+            item: {
+              tool: "spawnAgent",
+              prompt: "Settings",
+              receiverAgents: [
+                { threadId: "child-1", agentNickname: "Open" },
+                { threadId: "child-2", agentNickname: "Save" },
+              ],
+            },
+          },
+        },
+      }),
+      makeActivity({
+        id: "localized-read",
+        kind: "tool.completed",
+        summary: "Read",
+        payload: {
+          itemType: "command_execution",
+          title: "Read",
+          data: { item: { command: "cat Settings" } },
+        },
+      }),
+      makeActivity({
+        id: "localized-file-default",
+        kind: "tool.completed",
+        summary: "Tool",
+        payload: { requestKind: "file-read", title: "Tool", detail: "/repo/Settings" },
+      }),
+      makeActivity({
+        id: "localized-question",
+        sequence: 4,
+        kind: "user-input.requested",
+        summary: "Question from the provider",
+        payload: {
+          requestId: "question-language",
+          questions: [
+            {
+              id: "choice",
+              header: "Settings",
+              question: "Open",
+              options: [{ label: "Save", description: "Settings" }],
+            },
+          ],
+        },
+      }),
+      makeActivity({
+        id: "localized-answer",
+        sequence: 5,
+        kind: "user-input.resolved",
+        summary: "Answer from the provider",
+        payload: { requestId: "question-language", answers: { choice: "Save" } },
+      }),
+    ];
+    const sourceSnapshot = structuredClone(activities);
+    try {
+      setLanguagePreference("en");
+      expect(
+        deriveWorkLogEntries(activities, undefined).find((entry) => entry.id === "localized-tasks")
+          ?.label,
+      ).toBe("1 of 2 tasks");
+      expect(
+        deriveWorkLogEntries(activities, undefined).find(
+          (entry) => entry.id === "localized-file-default",
+        ),
+      ).toMatchObject({ toolTitle: "Read", detail: "/repo/Settings" });
+      setLanguagePreference("zh-CN");
+      const entries = deriveWorkLogEntries(activities, undefined);
+      const computer = makeActivity({
+        id: "localized-computer",
+        kind: "tool.completed",
+        summary: "Computer Click",
+        payload: {
+          itemType: "mcp_tool_call",
+          title: "computer_click",
+          data: {
+            item: { tool: "computer_click", arguments: { label: "Save", app: "Settings" } },
+          },
+        },
+      });
+      expect(deriveWorkLogEntries([computer], undefined)).toMatchObject([
+        {
+          toolTitle: "Click on “Save” in Settings",
+          displayToolTitle: "在 Settings 的“Save”上点击",
+        },
+      ]);
+      expect(entries.find((entry) => entry.id === "localized-tasks")).toMatchObject({
+        label: "1 / 2 项任务",
+        detail: "Open",
+      });
+      expect(entries.find((entry) => entry.id === "localized-agent")).toMatchObject({
+        toolTitle: "Spawn agent",
+        subagentAction: {
+          tool: "spawnAgent",
+          summaryText: "正在启动 2 个智能体",
+          prompt: "Settings",
+        },
+        subagents: [{ nickname: "Open" }, { nickname: "Save" }],
+      });
+      expect(entries.find((entry) => entry.id === "localized-read")).toMatchObject({
+        toolTitle: "Read",
+        command: "cat Settings",
+      });
+      expect(entries.find((entry) => entry.id === "localized-file-default")).toMatchObject({
+        toolTitle: "Read",
+        displayToolTitle: "已读取",
+        detail: "/repo/Settings",
+      });
+      expect(entries.find((entry) => entry.id === "localized-answer")?.userInputExchange).toEqual([
+        { id: "choice", header: "Settings", question: "Open", options: ["Save"], answer: "Save" },
+      ]);
+      expect(activities).toEqual(sourceSnapshot);
+      setLanguagePreference("en");
+      expect(
+        deriveWorkLogEntries(activities, undefined).find((entry) => entry.id === "localized-tasks")
+          ?.label,
+      ).toBe("1 of 2 tasks");
+      const defaultFileEntry = deriveWorkLogEntries(activities, undefined).find(
+        (entry) => entry.id === "localized-file-default",
+      );
+      expect(defaultFileEntry).toMatchObject({ toolTitle: "Read", detail: "/repo/Settings" });
+      expect(defaultFileEntry?.displayToolTitle).toBeUndefined();
+    } finally {
+      setLanguagePreference("en");
+    }
+  });
+
   it("pairs an answered question with its answers in one exchange row", () => {
     const questions = [
       {
@@ -354,6 +530,21 @@ describe("deriveWorkLogEntries", () => {
     expect(second).toEqual(first);
     second.forEach((entry, index) => expect(entry).toBe(first[index]));
     expect(first[0]).not.toHaveProperty("collapseKey");
+    try {
+      setLanguagePreference("zh-CN");
+      const localized = derive();
+      expect(localized[1]).not.toBe(first[1]);
+      expect(localized[1]).toMatchObject({
+        toolTitle: "Ran",
+        displayToolTitle: "已运行",
+        command: "bun run lint",
+      });
+      derive().forEach((entry, index) => expect(entry).toBe(localized[index]));
+      setLanguagePreference("en");
+      expect(derive()[1]?.displayToolTitle).toBeUndefined();
+    } finally {
+      setLanguagePreference("en");
+    }
   });
 
   it("omits routine approval resolutions between tool lifecycle updates", () => {
@@ -901,6 +1092,76 @@ describe("deriveWorkLogEntries", () => {
       ).toEqual(["failed", "finished", "stopped"]);
     });
 
+    it("keeps the exact wake activity when task.updated settles the command before task.completed", () => {
+      const finishedAt = "2026-10-10T00:15:24.000Z";
+      const completion = taskCompleted(
+        "task-a",
+        "completed",
+        "Build finished",
+        "2026-10-10T00:15:25.000Z",
+      );
+      const entries = deriveWorkLogEntries(
+        [
+          launchCall("launch", "toolu_a", "bun run build", "2026-10-10T00:15:20.000Z"),
+          notice("moved", [["task-a", "Build"]], "2026-10-10T00:15:20.100Z"),
+          taskStarted("task-a", "toolu_a", "2026-10-10T00:15:20.200Z"),
+          turnCompleted("2026-10-10T00:15:21.000Z"),
+          makeActivity({
+            id: "native-exit",
+            createdAt: finishedAt,
+            kind: "task.updated",
+            turnId: "turn-bg",
+            payload: { taskId: "task-a", status: "completed" },
+          }),
+          completion,
+        ],
+        undefined,
+        options,
+      );
+      const task = entries.find((entry) => entry.backgroundTask)?.backgroundTask;
+      const wake = entries.find((entry) => entry.backgroundTaskCompletion);
+      expect(task).toMatchObject({
+        status: "finished",
+        completedAt: finishedAt,
+        completionActivityId: completion.id,
+      });
+      expect(wake?.id).toBe(task?.completionActivityId);
+      expect(wake?.createdAt).not.toBe(task?.completedAt);
+    });
+
+    it.each([undefined, "unknown"])(
+      "does not associate an unrecognized completion outcome (%s) with a settled task",
+      (status) => {
+        const entries = deriveWorkLogEntries(
+          [
+            launchCall("launch", "toolu_a", "bun run build", "2026-10-10T00:15:20.000Z"),
+            notice("moved", [["task-a", "Build"]], "2026-10-10T00:15:20.100Z"),
+            taskStarted("task-a", "toolu_a", "2026-10-10T00:15:20.200Z"),
+            turnCompleted("2026-10-10T00:15:21.000Z"),
+            makeActivity({
+              id: "exit",
+              createdAt: "2026-10-10T00:15:24.000Z",
+              kind: "task.updated",
+              turnId: "turn-bg",
+              payload: { taskId: "task-a", status: "completed" },
+            }),
+            makeActivity({
+              id: "unknown-completion",
+              createdAt: "2026-10-10T00:15:25.000Z",
+              kind: "task.completed",
+              turnId: "turn-bg",
+              payload: { taskId: "task-a", ...(status ? { status } : {}) },
+            }),
+          ],
+          undefined,
+          options,
+        );
+        expect(
+          entries.find((entry) => entry.backgroundTask)?.backgroundTask?.completionActivityId,
+        ).toBeUndefined();
+      },
+    );
+
     it.each([
       { status: "completed", confirmed: true, expected: "finished" },
       { status: "running", confirmed: true, expected: "running" },
@@ -966,6 +1227,14 @@ describe("deriveWorkLogEntries", () => {
             },
           },
         ]);
+        const task = entries.find((entry) => entry.backgroundTask)?.backgroundTask;
+        expect(task?.completionActivityId).toBe(
+          expected === "finished"
+            ? nativeUpdate.id
+            : expected === "running"
+              ? undefined
+              : "task-late-stopped",
+        );
       },
     );
 
@@ -1284,7 +1553,7 @@ describe("deriveWorkLogEntries", () => {
     expect(taskListEntries[0]?.id).toBe("tasks-1");
     expect(taskListEntries[0]?.createdAt).toBe("2026-02-23T00:00:01.000Z");
     expect(taskListEntries[0]?.sequence).toBe(1);
-    expect(taskListEntries[0]?.label).toBe("2 out of 2 tasks completed");
+    expect(taskListEntries[0]?.label).toBe("2 of 2 tasks");
     expect(taskListEntries[0]?.detail).toBeUndefined();
     expect(entries.map((entry) => entry.id)).toEqual(["tasks-1", "tool-between"]);
   });
@@ -1389,7 +1658,7 @@ describe("deriveWorkLogEntries", () => {
     const entries = deriveWorkLogEntries(activities, TurnId.makeUnsafe("turn-1"));
     expect(entries).toHaveLength(1);
     expect(entries[0]?.id).toBe("tasks-progressed");
-    expect(entries[0]?.label).toBe("1 out of 2 tasks completed");
+    expect(entries[0]?.label).toBe("1 of 2 tasks");
     expect(entries[0]?.detail).toBe("Run verification");
   });
 

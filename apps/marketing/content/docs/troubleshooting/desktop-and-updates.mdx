@@ -125,3 +125,19 @@ Continue with [Diagnostics](/docs/troubleshooting/diagnostics), then prepare a f
 ## macOS requirement in 1.0.9
 
 The app bundle and updater enforce macOS 13 or later, matching the bundled native tools. On an older system, update macOS before attempting this release. See [installation requirements](/docs/getting-started/installation#macos-minimum-in-109).
+
+## Offline database compaction in 1.1.0
+
+If normal shutdown maintenance cannot reclaim a large legacy database, close every Synara process and every external SQLite client first. Run the installed CLI command with the database's absolute path:
+
+```sh
+synara-compact-database "$HOME/.synara/userdata/state.sqlite"
+```
+
+For Beta, explicitly select `$HOME/.synara-beta/userdata/state.sqlite`; custom homes require their actual path. The command never discovers another channel's database. On PowerShell, use a quoted path such as `"$env:USERPROFILE\.synara\userdata\state.sqlite"`.
+
+Compaction holds Synara's lifecycle lock, refuses pending migration recovery and verifies a private copy's integrity, row counts and identity before replacement. It preserves retained rows and migration backups. Allow about 125% of live-page space plus 64 MiB on the same volume; insufficient space requires freeing space, not deleting application history to force success.
+
+Keep all clients closed until completion. Cancellation before replacement preserves logical data, although WAL checkpointing may already have changed physical bytes. A failure after replacement explicitly reports that the compact database was installed; preserve it for inspection. Windows does not promise directory-entry durability across sudden power loss. This is maintenance, not emergency disk-recovery or universal completion-time assurance.
+
+Source evidence for 1.1.0: application source `d80787e3e4d8829a35a64b111e6fcbe5f51cf037`; `docs/releases/1.1.0-source-audit.md`, `docs/core-concepts.md`, `docs/providers.md`, `docs/internationalization.md` and `docs/sqlite-space-reclamation.md`.

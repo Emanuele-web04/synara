@@ -19,8 +19,11 @@ import {
 } from "~/components/ui/menu";
 import { ChevronDownIcon } from "~/lib/icons";
 import type { TaskDelegateChatState } from "./useTaskDelegateChat";
+import { useTranslation } from "~/i18n";
 
 export function TaskDelegateChatPicker({ chat }: { chat: TaskDelegateChatState }) {
+  const { t } = useTranslation();
+
   const { existingChat, existingChatId, setExistingChatId, recentChats, projectNameById } = chat;
 
   return (
@@ -43,7 +46,7 @@ export function TaskDelegateChatPicker({ chat }: { chat: TaskDelegateChatState }
             <span className="min-w-0 truncate">{existingChat.title}</span>
           </>
         ) : (
-          <span>New chat</span>
+          <span>{t("workspace:sections_newChat")}</span>
         )}
         <ChevronDownIcon aria-hidden className="size-3 shrink-0 opacity-60" />
       </MenuTrigger>
@@ -53,11 +56,11 @@ export function TaskDelegateChatPicker({ chat }: { chat: TaskDelegateChatState }
           onValueChange={(value) => setExistingChatId(value ? (value as ThreadId) : null)}
         >
           <MenuRadioItem value="" closeOnClick>
-            New chat
+            {t("workspace:sections_newChat")}
           </MenuRadioItem>
           {recentChats.length > 0 ? (
             <MenuGroup>
-              <MenuGroupLabel>Recent chats</MenuGroupLabel>
+              <MenuGroupLabel>{t("workspace:recentChats")}</MenuGroupLabel>
               {recentChats.map((thread) => (
                 <MenuRadioItem key={thread.id} value={thread.id} closeOnClick>
                   <span className="flex min-w-0 items-center gap-2">

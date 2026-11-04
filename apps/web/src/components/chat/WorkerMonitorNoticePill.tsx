@@ -5,6 +5,7 @@ import { readNativeApi } from "~/nativeApi";
 import { cn } from "~/lib/utils";
 import { MUTED_LABEL_TEXT_CLASS_NAME } from "~/surfaceStyles";
 import { Button } from "../ui/button";
+import { useTranslation } from "~/i18n";
 
 const OUTCOME_LABELS: Record<string, string> = {
   completed: "done",
@@ -33,6 +34,8 @@ export function WorkerMonitorNoticePill({
   notice,
   onOpenThread,
 }: WorkerMonitorNoticePillProps) {
+  const { t } = useTranslation();
+
   const [pendingAction, setPendingAction] = useState<"retry" | "stop" | null>(null);
   const [error, setError] = useState<string | null>(null);
   const needsYouThread = notice.kind === "needs-you" ? notice.threads[0] : undefined;
@@ -85,7 +88,9 @@ export function WorkerMonitorNoticePill({
                 </button>
                 {thread.outcome ? (
                   <span className={MUTED_LABEL_TEXT_CLASS_NAME}>
-                    {` (${OUTCOME_LABELS[thread.outcome] ?? thread.outcome})`}
+                    {t("chat:symbol5", {
+                      value0: OUTCOME_LABELS[thread.outcome] ?? thread.outcome,
+                    })}
                   </span>
                 ) : null}
                 {thread.pr ? (
@@ -97,7 +102,7 @@ export function WorkerMonitorNoticePill({
                       rel="noreferrer"
                       className="inline p-0 text-inherit underline decoration-foreground/30 underline-offset-2 hover:decoration-foreground/70"
                     >
-                      PR
+                      {t("chat:pR")}
                     </a>
                   </>
                 ) : null}
@@ -126,12 +131,12 @@ export function WorkerMonitorNoticePill({
                   rel="noreferrer"
                   className="inline p-0 text-inherit underline decoration-foreground/30 underline-offset-2 hover:decoration-foreground/70"
                 >
-                  PR
+                  {t("chat:pR")}
                 </a>
               ) : null}
             </span>
           ))}
-          {notice.phrase ? <span>{`${notice.phrase}.`}</span> : null}
+          {notice.phrase ? <span>{t("chat:symbol3", { value0: notice.phrase })}</span> : null}
         </>
       )}
       {needsYouThread && projectId ? (
@@ -144,7 +149,7 @@ export function WorkerMonitorNoticePill({
               disabled={pendingAction !== null}
               onClick={() => resolveWorker("retry")}
             >
-              Retry
+              {t("common:common_retry")}
             </Button>
           ) : null}
           {(notice.actions ?? []).includes("stop") ? (
@@ -155,7 +160,7 @@ export function WorkerMonitorNoticePill({
               disabled={pendingAction !== null}
               onClick={() => resolveWorker("stop")}
             >
-              Stop worker
+              {t("chat:stopWorker")}
             </Button>
           ) : null}
           {(notice.actions ?? []).includes("open") ? (
@@ -165,7 +170,7 @@ export function WorkerMonitorNoticePill({
               variant="ghost"
               onClick={() => onOpenThread?.(ThreadId.makeUnsafe(needsYouThread.threadId))}
             >
-              Open thread
+              {t("workspace:timeline_openThread")}
             </Button>
           ) : null}
         </span>

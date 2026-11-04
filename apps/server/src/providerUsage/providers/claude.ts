@@ -11,6 +11,7 @@
 // invalidate the on-disk/keychain login and force the user to re-authenticate.
 
 import { createHash } from "node:crypto";
+import { stat } from "node:fs/promises";
 import nodePath from "node:path";
 import { promisify } from "node:util";
 
@@ -165,6 +166,155 @@ async function resolveClaudeCredCandidates(ctx: ProviderUsageContext): Promise<C
     }
   }
   return candidates;
+}
+
+// Native global configuration stores immutable OAuth account and organization UUIDs.
+// Alternate auth modes cannot adopt a stale native OAuth profile for recovery.
+const CLAUDE_RECOVERY_AUTH_OVERRIDES = [
+  "ANTHROPIC_API_KEY",
+  "ANTHROPIC_AUTH_TOKEN",
+  "ANTHROPIC_BASE_URL",
+  "ANTHROPIC_UNIX_SOCKET",
+  "CLAUDE_CODE_OAUTH_TOKEN",
+  "CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR",
+  "CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR",
+  "CCR_OAUTH_TOKEN_FILE",
+  "CLAUDE_CODE_REMOTE",
+  "CLAUDE_CODE_USE_BEDROCK",
+  "CLAUDE_CODE_USE_VERTEX",
+  "CLAUDE_CODE_USE_FOUNDRY",
+  "CLAUDE_CODE_USE_ANTHROPIC_AWS",
+  "CLAUDE_CODE_USE_ANTHROPIC_GOOGLE_CLOUD",
+  "CLAUDE_CODE_USE_MANTLE",
+  "CLAUDE_CODE_USE_GATEWAY",
+  "CLAUDE_CODE_GATEWAY_TOKEN_FILE_DESCRIPTOR",
+  "CLAUDE_CODE_CUSTOM_OAUTH_URL",
+  "USE_LOCAL_OAUTH",
+  "USE_STAGING_OAUTH",
+  "CLAUDE_LOCAL_OAUTH_API_BASE",
+  "CLAUDE_BG_AUTH_SNAPSHOT_PATH",
+  "CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST",
+  "CLAUDE_CODE_HOST_CREDS_FILE",
+  "CLAUDE_CODE_HOST_AUTH_ENV_VAR",
+  "ANTHROPIC_PROFILE",
+  "ANTHROPIC_FEDERATION_RULE_ID",
+  "ANTHROPIC_ORGANIZATION_ID",
+  "CLAUDE_CODE_SETTINGS_FILE",
+  "CLAUDE_CODE_MANAGED_SETTINGS_PATH",
+  "CLAUDE_CODE_REMOTE_SETTINGS_PATH",
+] as const;
+
+async function recoveryFileExists(path: string): Promise<boolean> {
+  return stat(path).then(
+    () => true,
+    (error: NodeJS.ErrnoException) => {
+      if (error.code === "ENOENT" || error.code === "ENOTDIR") return false;
+      throw error;
+    },
+  );
+}
+
+function hasRecoveryAuthOverride(record: Record<string, unknown>): boolean {
+  if (record.apiKeyHelper != null && record.apiKeyHelper !== "") return true;
+  const environment = asRecord(record.env);
+  return (
+    environment != null &&
+    [
+      ...CLAUDE_RECOVERY_AUTH_OVERRIDES,
+      "CLAUDE_CONFIG_DIR",
+      "CLAUDE_SECURESTORAGE_CONFIG_DIR",
+    ].some((name) => environment[name] != null && environment[name] !== "")
+  );
+}
+
+async function claudeRecoveryIdentity(ctx: ProviderUsageContext): Promise<string | null> {
+  if (CLAUDE_RECOVERY_AUTH_OVERRIDES.some((name) => ctx.env[name]?.trim())) return null;
+  if (ctx.env.CLAUDE_CODE_ENTRYPOINT === "claude-desktop-3p") return null;
+  if (!ctx.workingDirectory || !nodePath.isAbsolute(ctx.workingDirectory)) return null;
+  if (ctx.projectRoot !== undefined && !nodePath.isAbsolute(ctx.projectRoot)) return null;
+  const selectedConfig = ctx.env.CLAUDE_CONFIG_DIR;
+  const secureStorage = ctx.env.CLAUDE_SECURESTORAGE_CONFIG_DIR;
+  if (
+    selectedConfig !== undefined &&
+    (!selectedConfig.trim() || !nodePath.isAbsolute(selectedConfig))
+  )
+    return null;
+  const configHome = (selectedConfig ?? nodePath.join(ctx.homeDir, ".claude")).normalize("NFC");
+  if (
+    secureStorage !== undefined &&
+    (!nodePath.isAbsolute(secureStorage) || secureStorage.normalize("NFC") !== configHome)
+  )
+    return null;
+  // Unified Anthropic profiles can select federation or non-native credentials.
+  const profileHomes = new Set([
+    nodePath.join(ctx.homeDir, ".config", "anthropic"),
+    ...(ctx.env.XDG_CONFIG_HOME ? [nodePath.join(ctx.env.XDG_CONFIG_HOME, "anthropic")] : []),
+  ]);
+  for (const path of profileHomes) if (await recoveryFileExists(path)) return null;
+  const settingsPaths = new Set([
+    nodePath.join(configHome, "settings.json"),
+    nodePath.join(configHome, "settings.local.json"),
+  ]);
+  let linkedCheckout = false;
+  let knownMainCheckout = false;
+  for (const start of new Set([
+    ctx.workingDirectory,
+    ...(ctx.projectRoot ? [ctx.projectRoot] : []),
+  ])) {
+    let directory = start;
+    for (;;) {
+      settingsPaths.add(nodePath.join(directory, ".claude", "settings.json"));
+      settingsPaths.add(nodePath.join(directory, ".claude", "settings.local.json"));
+      const gitPath = nodePath.join(directory, ".git");
+      if (await recoveryFileExists(gitPath)) {
+        const git = await stat(gitPath);
+        if (git.isDirectory()) knownMainCheckout = true;
+        else linkedCheckout = true;
+        break;
+      }
+      const parent = nodePath.dirname(directory);
+      if (parent === directory) break;
+      directory = parent;
+    }
+  }
+  // Gitdir file contents cannot grant reads outside authoritative task/project roots.
+  if (linkedCheckout && !knownMainCheckout) return null;
+  const managedSettings =
+    ctx.platform === "darwin"
+      ? "/Library/Application Support/ClaudeCode/managed-settings.json"
+      : ctx.platform === "linux"
+        ? "/etc/claude-code/managed-settings.json"
+        : null;
+  // Managed settings precedence on other platforms is not proven by this reader.
+  if (managedSettings === null) return null;
+  // Fragment policies have separate precedence; their presence is outside
+  // this local identity proof rather than permission to ignore their settings.
+  if (
+    await recoveryFileExists(nodePath.join(nodePath.dirname(managedSettings), "managed-settings.d"))
+  )
+    return null;
+  settingsPaths.add(managedSettings);
+  for (const path of settingsPaths) {
+    if (!(await recoveryFileExists(path))) continue;
+    const settings = asRecord(await readJsonFile(path));
+    if (settings === null || hasRecoveryAuthOverride(settings)) return null;
+  }
+  if ((await resolveClaudeCredCandidates(ctx)).length === 0) return null;
+  // The native legacy profile wins over .claude.json; malformed legacy state
+  // stays manual rather than falling through to a different account profile.
+  const legacyPath = nodePath.join(configHome, ".config.json");
+  const profilePath = (await recoveryFileExists(legacyPath))
+    ? legacyPath
+    : nodePath.join(selectedConfig ?? ctx.homeDir, ".claude.json");
+  const profile = asRecord(await readJsonFile(profilePath));
+  if (profile === null || hasRecoveryAuthOverride(profile)) return null;
+  const oauthAccount = asRecord(profile.oauthAccount);
+  const accountUuid = asString(oauthAccount?.accountUuid);
+  const organizationUuid = asString(oauthAccount?.organizationUuid);
+  const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
+  if (!accountUuid || !organizationUuid || !uuid.test(accountUuid) || !uuid.test(organizationUuid))
+    return null;
+  return JSON.stringify([accountUuid.toLowerCase(), organizationUuid.toLowerCase()]);
 }
 
 function sameCredSource(a: ClaudeCredSource, b: ClaudeCredSource): boolean {
@@ -393,6 +543,7 @@ export const claudeUsageFetcher: ProviderUsageFetcher = {
     }
     return claudeCredentialsCacheKey(ctx, await resolveClaudeCredCandidates(ctx));
   },
+  recoveryIdentity: claudeRecoveryIdentity,
   async fetch(ctx) {
     if (ctx.env.CLAUDE_CODE_OAUTH_TOKEN?.trim()) {
       return unsupportedSnapshot(

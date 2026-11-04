@@ -2,11 +2,12 @@
 // Purpose: Renders the compact assistant-selection count chip used in composer and user bubbles.
 // Layer: Chat attachment presentation
 
-import { pluralize } from "@synara/shared/text";
+import { pluralize } from "~/i18n/pluralize";
 
 import { MessageCircleIcon } from "~/lib/icons";
 import { type ChatAssistantSelectionAttachment } from "../../types";
 import { AttachmentSummaryChip } from "./AttachmentSummaryChip";
+import { t } from "~/i18n";
 
 interface AssistantSelectionsSummaryChipProps {
   selections: ReadonlyArray<ChatAssistantSelectionAttachment>;
@@ -14,7 +15,7 @@ interface AssistantSelectionsSummaryChipProps {
 }
 
 function selectionCountLabel(count: number): string {
-  return `${count} ${pluralize(count, "selection")}`;
+  return t("chat:symbol7", { value0: count, value1: pluralize(count, "selection") });
 }
 
 export function AssistantSelectionsSummaryChip(props: AssistantSelectionsSummaryChipProps) {

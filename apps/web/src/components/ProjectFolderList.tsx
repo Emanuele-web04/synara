@@ -12,6 +12,7 @@ import { FolderIcon, XIcon } from "~/lib/icons";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
 import { IconButton } from "./ui/icon-button";
+import { useTranslation } from "~/i18n";
 
 export function ProjectFolderList(props: {
   /** Absolute paths; the first one is the primary folder. */
@@ -23,6 +24,8 @@ export function ProjectFolderList(props: {
   /** Last row: how another folder is added (native picker or a typed path). */
   readonly addRow: ReactNode;
 }) {
+  const { t } = useTranslation();
+
   const labels = deriveProjectFolderLabels(props.folders);
   return (
     <ul
@@ -40,7 +43,7 @@ export function ProjectFolderList(props: {
           </span>
           {index === 0 ? (
             <Badge variant="outline" size="sm">
-              Primary
+              {t("common:primary")}
             </Badge>
           ) : (
             <Button
@@ -48,14 +51,14 @@ export function ProjectFolderList(props: {
               size="chip"
               className="text-muted-foreground hover:text-foreground"
               disabled={props.disabled}
-              aria-label={`Make ${labels[index]} primary`}
+              aria-label={t("workspace:makePrimary2", { value0: labels[index] })}
               onClick={() => props.onMakePrimary(index)}
             >
-              Make primary
+              {t("workspace:makePrimary")}
             </Button>
           )}
           <IconButton
-            label={`Remove ${labels[index]}`}
+            label={t("workspace:remove", { value0: labels[index] })}
             disabled={props.disabled}
             onClick={() => props.onRemove(index)}
           >

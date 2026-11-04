@@ -854,7 +854,7 @@ it("rejects steering into an untracked SDK run instead of orphaning a queued tur
   await withAdapter(async (adapter, events) => {
     const session = captured.sessions[0]!;
     const streamingSpy = vi.spyOn(session, "isStreaming", "get").mockReturnValue(true);
-    const steerSpy = vi.spyOn(session, "steer").mockResolvedValue(undefined);
+    const steerSpy = vi.spyOn(session, "steer").mockResolvedValue("queued");
     const promptSpy = vi.spyOn(session, "prompt");
     const outcome = await Effect.runPromise(
       adapter.steerTurn!({ threadId, input: "Fresh turn during untracked run" }).pipe(

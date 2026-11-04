@@ -1,7 +1,13 @@
+// FILE: composerDropPaths.test.ts
+// Purpose: Guard native file classification and editor path payload parsing.
+// Layer: Web utility regressions; desktop bridge access is isolated per test.
+
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+  hasDroppedPathReferenceTypes,
   isDroppedComposerDirectory,
+  readDroppedPathReferences,
   resolveDroppedFileAbsolutePath,
   splitDroppedComposerFiles,
   type ComposerDroppedFileItem,
@@ -23,6 +29,11 @@ function makeItem(file: File, options?: { directory?: boolean; entryUnavailable?
       : { webkitGetAsEntry: () => ({ isDirectory: options?.directory === true }) }),
   } satisfies ComposerDroppedFileItem;
 }
+
+const transfer = (data: Record<string, string>) => ({
+  types: Object.keys(data),
+  getData: (type: string) => data[type] ?? "",
+});
 
 describe("composerDropPaths", () => {
   afterEach(() => {
@@ -100,6 +111,90 @@ describe("composerDropPaths", () => {
       pathMentions: [],
       imageFiles: [],
       genericFiles: [emptyFile],
+    });
+  });
+
+  describe("editor path-reference drags", () => {
+    it("ignores path-reference drags outside the desktop app", () => {
+      vi.stubGlobal("window", {});
+
+      expect(hasDroppedPathReferenceTypes(["text/uri-list"])).toBe(false);
+      expect(
+        readDroppedPathReferences(transfer({ "text/uri-list": "file:///Users/me/a" })),
+      ).toEqual([]);
+    });
+
+    it("reads folder paths from codefiles before the uri list", () => {
+      vi.stubGlobal("window", { desktopBridge: {} });
+
+      expect(
+        readDroppedPathReferences(
+          transfer({
+            codefiles: JSON.stringify(["/Users/me/repo/.codex", "/Users/me/repo/.codex"]),
+            "text/uri-list": "file:///ignored",
+          }),
+        ),
+      ).toEqual(["/Users/me/repo/.codex"]);
+    });
+
+    it("decodes file URLs from a uri list and skips other schemes", () => {
+      vi.stubGlobal("window", { desktopBridge: {} });
+
+      expect(
+        readDroppedPathReferences(
+          transfer({
+            "text/uri-list": [
+              "# comment",
+              "file:///Users/me/My%20Repo/src",
+              "https://example.com/page",
+              "file:///C:/work/app",
+            ].join("\r\n"),
+          }),
+        ),
+      ).toEqual(["/Users/me/My Repo/src", "C:/work/app"]);
+    });
+
+    it("returns nothing for a web link drag", () => {
+      vi.stubGlobal("window", { desktopBridge: {} });
+
+      expect(
+        readDroppedPathReferences(transfer({ "text/uri-list": "https://example.com" })),
+      ).toEqual([]);
+    });
+
+    it("accepts only absolute filesystem paths from untrusted editor payloads", () => {
+      vi.stubGlobal("window", { desktopBridge: {} });
+
+      expect(
+        readDroppedPathReferences(
+          transfer({
+            codefiles: JSON.stringify([
+              "/repo/src",
+              "C:\\work\\app",
+              "\\\\server\\share\\src",
+              "relative/src",
+              "C:relative",
+              "https://example.com",
+              "/repo/invalid\0path",
+              42,
+            ]),
+          }),
+        ),
+      ).toEqual(["/repo/src", "C:\\work\\app", "\\\\server\\share\\src"]);
+    });
+
+    it("rejects malformed editor data and falls back to valid local file URLs", () => {
+      vi.stubGlobal("window", { desktopBridge: {} });
+
+      expect(
+        readDroppedPathReferences(
+          transfer({
+            codefiles: "{invalid JSON",
+            "text/uri-list":
+              "file:///repo/invalid%00path\nfile:///repo/%ZZ\nfile://server/share/src",
+          }),
+        ),
+      ).toEqual(["//server/share/src"]);
     });
   });
 });

@@ -1,3 +1,4 @@
+import { useTranslation } from "~/i18n";
 // FILE: ProjectActionDialog.tsx
 // Purpose: Add/edit dialog for one project action (script) plus its delete confirmation.
 //          Shared by the chat-header project action control and the Environment panel's
@@ -50,13 +51,13 @@ import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
 import { Switch } from "../ui/switch";
 import { Textarea } from "../ui/textarea";
 
-export const SCRIPT_ICONS: Array<{ id: ProjectScriptIcon; label: string }> = [
-  { id: "play", label: "Play" },
-  { id: "test", label: "Test" },
-  { id: "lint", label: "Lint" },
-  { id: "configure", label: "Configure" },
-  { id: "build", label: "Build" },
-  { id: "debug", label: "Debug" },
+export const SCRIPT_ICONS: Array<{ id: ProjectScriptIcon; label: string; labelKey: string }> = [
+  { id: "play", label: "Play", labelKey: "workspace:play" },
+  { id: "test", label: "Test", labelKey: "workspace:test" },
+  { id: "lint", label: "Lint", labelKey: "workspace:lint" },
+  { id: "configure", label: "Configure", labelKey: "workspace:searchPalette_sectionConfigure" },
+  { id: "build", label: "Build", labelKey: "workspace:composerControls_build" },
+  { id: "debug", label: "Debug", labelKey: "chat:debug" },
 ];
 
 export function ScriptIcon({
@@ -104,6 +105,8 @@ export function ProjectActionDialog({
   onSave,
   onDelete,
 }: ProjectActionDialogProps) {
+  const { t } = useTranslation();
+
   const isEditing = editingScript !== null;
   const formId = React.useId();
   // Both the header control and the Environment panel mount this dialog, so the field ids
@@ -166,11 +169,11 @@ export function ProjectActionDialog({
     const trimmedName = name.trim();
     const trimmedCommand = command.trim();
     if (trimmedName.length === 0) {
-      setValidationError("Name is required.");
+      setValidationError(t("workspace:nameIsRequired"));
       return;
     }
     if (trimmedCommand.length === 0) {
-      setValidationError("Command is required.");
+      setValidationError(t("workspace:commandIsRequired"));
       return;
     }
 
@@ -195,7 +198,9 @@ export function ProjectActionDialog({
       });
       onOpenChange(false);
     } catch (error) {
-      setValidationError(error instanceof Error ? error.message : "Failed to save action.");
+      setValidationError(
+        error instanceof Error ? error.message : t("workspace:failedToSaveAction"),
+      );
     }
   };
 
@@ -211,15 +216,17 @@ export function ProjectActionDialog({
       <Dialog open={open} onOpenChange={onOpenChange}>
         <DialogPopup>
           <DialogHeader>
-            <DialogTitle>{isEditing ? "Edit Action" : "Add Action"}</DialogTitle>
+            <DialogTitle>
+              {isEditing ? t("workspace:editAction") : t("workspace:addAction")}
+            </DialogTitle>
             <DialogDescription>
-              Actions are project-scoped commands you can run from the top bar or keybindings.
+              {t("common:actionsAreProjectScopedCommandsYouCanRunFrom")}
             </DialogDescription>
           </DialogHeader>
           <DialogPanel>
             <form id={formId} className="space-y-4" onSubmit={submit}>
               <div className="space-y-1.5">
-                <Label htmlFor={`${fieldIdPrefix}-script-name`}>Name</Label>
+                <Label htmlFor={`${fieldIdPrefix}-script-name`}>{t("common:scripts_name")}</Label>
                 <div className="flex items-center gap-2">
                   <Popover onOpenChange={setIconPickerOpen} open={iconPickerOpen}>
                     <PopoverTrigger
@@ -228,7 +235,7 @@ export function ProjectActionDialog({
                           type="button"
                           variant="outline"
                           className="size-9 shrink-0 hover:bg-popover active:bg-popover data-pressed:bg-popover"
-                          aria-label="Choose icon"
+                          aria-label={t("workspace:scripts_chooseIcon")}
                         />
                       }
                     >
@@ -253,7 +260,7 @@ export function ProjectActionDialog({
                               }}
                             >
                               <ScriptIcon icon={entry.id} className="size-4" />
-                              <span>{entry.label}</span>
+                              <span>{t(entry.labelKey)}</span>
                             </button>
                           );
                         })}
@@ -263,27 +270,31 @@ export function ProjectActionDialog({
                   <Input
                     id={`${fieldIdPrefix}-script-name`}
                     autoFocus
-                    placeholder="Test"
+                    placeholder={t("workspace:test")}
                     value={name}
                     onChange={(event) => setName(event.target.value)}
                   />
                 </div>
               </div>
               <div className="space-y-1.5">
-                <Label htmlFor={`${fieldIdPrefix}-script-keybinding`}>Keybinding</Label>
+                <Label htmlFor={`${fieldIdPrefix}-script-keybinding`}>
+                  {t("common:scripts_keybinding")}
+                </Label>
                 <Input
                   id={`${fieldIdPrefix}-script-keybinding`}
-                  placeholder="Press shortcut"
+                  placeholder={t("workspace:pressShortcut")}
                   value={keybinding}
                   readOnly
                   onKeyDown={captureKeybinding}
                 />
                 <p className="text-ui leading-snug text-muted-foreground">
-                  Press a shortcut. Use <code>Backspace</code> to clear.
+                  {t("common:pressAShortcutUse")} <code>Backspace</code> {t("common:toClear")}
                 </p>
               </div>
               <div className="space-y-1.5">
-                <Label htmlFor={`${fieldIdPrefix}-script-command`}>Command</Label>
+                <Label htmlFor={`${fieldIdPrefix}-script-command`}>
+                  {t("workspace:scripts_command")}
+                </Label>
                 <Textarea
                   id={`${fieldIdPrefix}-script-command`}
                   placeholder="bun test"
@@ -292,7 +303,7 @@ export function ProjectActionDialog({
                 />
               </div>
               <label className="flex items-center justify-between gap-3 rounded-md border border-border/70 px-3 py-2 text-ui leading-snug">
-                <span>Run automatically on worktree creation</span>
+                <span>{t("common:runAutomaticallyOnWorktreeCreation")}</span>
                 <Switch
                   checked={runOnWorktreeCreate}
                   onCheckedChange={(checked) => setRunOnWorktreeCreate(Boolean(checked))}
@@ -311,14 +322,14 @@ export function ProjectActionDialog({
                 className="mr-auto"
                 onClick={() => setDeleteConfirmOpen(true)}
               >
-                Delete
+                {t("computer:detail_delete")}
               </Button>
             )}
             <Button type="button" variant="outline" size="sm" onClick={() => onOpenChange(false)}>
-              Cancel
+              {t("common:form_cancel")}
             </Button>
             <Button form={formId} type="submit" size="sm">
-              {isEditing ? "Save changes" : "Save action"}
+              {isEditing ? t("workspace:scripts_saveChanges") : t("workspace:scripts_saveAction")}
             </Button>
           </DialogFooter>
         </DialogPopup>
@@ -327,15 +338,17 @@ export function ProjectActionDialog({
       <AlertDialog open={deleteConfirmOpen} onOpenChange={setDeleteConfirmOpen}>
         <AlertDialogPopup>
           <AlertDialogHeader>
-            <AlertDialogTitle>Delete action "{name}"?</AlertDialogTitle>
-            <AlertDialogDescription>This action cannot be undone.</AlertDialogDescription>
+            <AlertDialogTitle>{t("workspace:deleteProjectActionNamed", { name })}</AlertDialogTitle>
+            <AlertDialogDescription>
+              {t("chat:checkpoint_revertConfirmWarning")}
+            </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogClose render={<Button variant="outline" size="sm" />}>
-              Cancel
+              {t("common:form_cancel")}
             </AlertDialogClose>
             <Button variant="destructive" size="sm" onClick={confirmDelete}>
-              Delete action
+              {t("common:scripts_deleteActionTitle")}
             </Button>
           </AlertDialogFooter>
         </AlertDialogPopup>

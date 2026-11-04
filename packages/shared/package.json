@@ -424,6 +424,10 @@
       "types": "./src/computerGrants.ts",
       "import": "./src/computerGrants.ts"
     },
+    "./byteAccumulator": {
+      "types": "./src/byteAccumulator.ts",
+      "import": "./src/byteAccumulator.ts"
+    },
     "./lengthPrefixedRecords": {
       "types": "./src/lengthPrefixedRecords.ts",
       "import": "./src/lengthPrefixedRecords.ts"
@@ -463,6 +467,18 @@
     "./wsRequestClass": {
       "types": "./src/wsRequestClass.ts",
       "import": "./src/wsRequestClass.ts"
+    },
+    "./uiLocale": {
+      "types": "./src/uiLocale.ts",
+      "import": "./src/uiLocale.ts"
+    },
+    "./uiLocalizationResources": {
+      "types": "./src/uiLocalizationResources.ts",
+      "import": "./src/uiLocalizationResources.ts"
+    },
+    "./nativeLocalizationResources": {
+      "types": "./src/nativeLocalizationResources.ts",
+      "import": "./src/nativeLocalizationResources.ts"
     }
   },
   "scripts": {

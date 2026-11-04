@@ -29,6 +29,7 @@ function createLauncherFixture(t, { iconComposer = false } = {}) {
   const electronBinaryPath = join(source, "Contents", "MacOS", "Electron");
   const helperDirectory = join(source, "Contents", "Frameworks", "Electron Helper.app");
   const metadataPath = join(desktopDirectory, ".electron-runtime", "metadata.json");
+  const localizationsDirectory = join(desktopDirectory, "resources", "localizations");
   mkdirSync(dirname(electronBinaryPath), { recursive: true });
   mkdirSync(join(source, "Contents", "Resources"), { recursive: true });
   mkdirSync(join(helperDirectory, "Contents"), { recursive: true });
@@ -38,6 +39,9 @@ function createLauncherFixture(t, { iconComposer = false } = {}) {
   writeFileSync(join(helperDirectory, "Contents", "Info.plist"), "original helper identity");
   writeFileSync(join(desktopDirectory, "resources", "icon.icns"), "synara icon");
   writeFileSync(join(desktopDirectory, "package.json"), JSON.stringify({ version: "0.8.3" }));
+  cpSync(new URL("../resources/localizations", import.meta.url), localizationsDirectory, {
+    recursive: true,
+  });
   if (iconComposer) {
     mkdirSync(iconComposerPath, { recursive: true });
     writeFileSync(join(iconComposerPath, "icon.json"), "{}");
@@ -67,6 +71,14 @@ function createLauncherFixture(t, { iconComposer = false } = {}) {
       const applicationDirectory = join(arguments_.at(-1), "Contents", "Resources", "app");
       assert.equal(existsSync(join(applicationDirectory, "package.json")), true);
       assert.equal(existsSync(join(applicationDirectory, "main.cjs")), true);
+      for (const locale of ["en", "zh-Hans", "es"]) {
+        const relativePath = join(`${locale}.lproj`, "InfoPlist.strings");
+        assert.equal(
+          readFileSync(join(dirname(applicationDirectory), relativePath), "utf8"),
+          readFileSync(join(localizationsDirectory, relativePath), "utf8"),
+          "localized permission descriptions must be present before signing",
+        );
+      }
       if (codeSignFailure?.argument === arguments_[0]) return codeSignFailure.result;
     }
     return { status: 0, stdout: "", stderr: "" };
@@ -75,6 +87,7 @@ function createLauncherFixture(t, { iconComposer = false } = {}) {
     source,
     metadataPath,
     iconComposerPath,
+    localizationsDirectory,
     commands,
     build: () => buildMacLauncher(electronBinaryPath, { desktopDirectory, runCommand }),
     failSigning: (argument, result) => {
@@ -129,7 +142,7 @@ describe("macOS Electron launcher signature", () => {
       signingCommands.every(({ options }) => options.timeout === 60_000),
       true,
     );
-    assert.equal(JSON.parse(readFileSync(fixture.metadataPath, "utf8")).launcherVersion, 7);
+    assert.equal(JSON.parse(readFileSync(fixture.metadataPath, "utf8")).launcherVersion, 8);
     assert.equal(
       readFileSync(join(bundle, "Contents", "Resources", "icon.icns"), "utf8"),
       "synara icon",
@@ -218,9 +231,40 @@ describe("macOS Electron launcher signature", () => {
     assert.deepEqual(fixture.commands, []);
   });
 
+  it("refreshes localized permission descriptions when their source changes", (t) => {
+    const fixture = createLauncherFixture(t);
+    const executable = fixture.build();
+    const localizedPlistPath = join("zh-Hans.lproj", "InfoPlist.strings");
+    const sourcePath = join(fixture.localizationsDirectory, localizedPlistPath);
+    const updatedContents = readFileSync(sourcePath, "utf8").replace(
+      "Synara 需要访问麦克风",
+      "Synara 需要使用麦克风",
+    );
+    writeFileSync(sourcePath, updatedContents);
+    fixture.commands.length = 0;
+
+    assert.equal(fixture.build(), executable);
+    const bundle = dirname(dirname(dirname(executable)));
+    assert.equal(
+      readFileSync(join(bundle, "Contents", "Resources", localizedPlistPath), "utf8"),
+      updatedContents,
+    );
+    assert.equal(
+      fixture.commands.some(
+        ({ command, arguments_ }) =>
+          command === "/usr/bin/codesign" && arguments_[0] === "--verify",
+      ),
+      true,
+    );
+    fixture.commands.length = 0;
+    assert.equal(fixture.build(), executable);
+    assert.deepEqual(fixture.commands, []);
+  });
+
   for (const [version, reason] of [
     [2, "generated bundles were signed"],
     [6, "the audio capture usage description was added"],
+    [7, "localized permission descriptions were added"],
   ]) {
     it(`rebuilds launchers cached before ${reason}`, (t) => {
       const fixture = createLauncherFixture(t);
@@ -237,7 +281,7 @@ describe("macOS Electron launcher signature", () => {
         fixture.commands.some(({ command }) => command === "/usr/bin/codesign"),
         true,
       );
-      assert.equal(JSON.parse(readFileSync(fixture.metadataPath, "utf8")).launcherVersion, 7);
+      assert.equal(JSON.parse(readFileSync(fixture.metadataPath, "utf8")).launcherVersion, 8);
     });
   }
 

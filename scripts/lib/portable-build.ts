@@ -11,6 +11,7 @@ const required = [
   "apps/desktop/dist-electron/cuaDriverHostStandalone.js",
   "apps/server/dist/index.mjs",
   "apps/server/dist/restoreMigrationBackup.mjs",
+  "apps/server/dist/compactDatabase.mjs",
   "apps/server/dist/runtimeDependencySmoke.mjs",
   "apps/server/dist/client/index.html",
   "apps/server/dist/device-helper/build.sh",

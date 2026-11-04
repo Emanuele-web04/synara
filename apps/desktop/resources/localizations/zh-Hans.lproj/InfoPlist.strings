@@ -1,0 +1,5 @@
+"NSMicrophoneUsageDescription" = "Synara 需要访问麦克风，以便你录制语音笔记并将其转写到聊天输入框中。如果你启用了聊天消息轨迹效果，也可以用声音控制该效果。";
+"NSAudioCaptureUsageDescription" = "Synara 读取 Mac 的音频音量，以驱动聊天消息轨迹动画。音频内容本身不会被录制。";
+"NSScreenCaptureUsageDescription" = "Synara 会截取你授权用于电脑操作的窗口。";
+"NSAccessibilityUsageDescription" = "Synara 会控制你授权用于电脑操作的窗口。";
+"NSLocalNetworkUsageDescription" = "Synara 会连接它在这台 Mac 上控制的浏览器，以便智能体在后台浏览网页。";

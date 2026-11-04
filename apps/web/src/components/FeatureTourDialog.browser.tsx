@@ -27,7 +27,8 @@ vi.mock("../lib/serverReactQuery", () => ({
     staleTime: Infinity,
   }),
 }));
-vi.mock("../betaFeatures", () => ({
+vi.mock("../betaFeatures", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../betaFeatures")>()),
   isBetaFeatureOn: (feature: string) => isBetaFeatureEnabled(feature, flavor),
 }));
 vi.mock("@tanstack/react-router", () => ({

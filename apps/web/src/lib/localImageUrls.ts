@@ -9,11 +9,11 @@ import {
   LOCAL_IMAGE_ROUTE_PATH,
   SUPPORTED_LOCAL_IMAGE_EXTENSION_REGEX,
 } from "@synara/shared/localPreviewFiles";
-import { isLocalAbsolutePath, isWindowsAbsolutePath } from "@synara/shared/path";
+import { isWindowsAbsolutePath } from "@synara/shared/path";
 
 import { resolveWsHttpUrl } from "./wsHttpUrl";
 
-function normalizeMarkdownImagePath(src: string): string {
+export function normalizeMarkdownImagePath(src: string): string {
   const trimmed = src.trim();
   if (trimmed.startsWith("file://")) {
     try {
@@ -50,15 +50,11 @@ export function isLocalImageMarkdownSrc(src: string | undefined): src is string 
   );
 }
 
-// Grants must name the same decoded file as the preview HTTP request.
-export function localImageAbsolutePath(src: string): string | null {
-  const normalized = normalizeMarkdownImagePath(src);
-  return isLocalImageMarkdownSrc(src) && isLocalAbsolutePath(normalized) ? normalized : null;
-}
-
 export function buildLocalImageUrl(input: {
   readonly src: string;
   readonly cwd: string | undefined;
+  /** Raw canonical host path has already been decoded; never interpret percent escapes twice. */
+  readonly canonicalPath?: string | undefined;
   readonly download?: boolean;
   // Accept an explicit `undefined` (not just absent) so callers can forward an
   // optional `previewGrant: string | null | undefined` straight through under
@@ -67,7 +63,9 @@ export function buildLocalImageUrl(input: {
   /** Changes the preview URL so an explicit reload bypasses browser caching. */
   readonly cacheKey?: string | number | undefined;
 }): string {
-  const params = new URLSearchParams({ path: normalizeMarkdownImagePath(input.src) });
+  const params = new URLSearchParams({
+    path: input.canonicalPath ?? normalizeMarkdownImagePath(input.src),
+  });
   if (input.cwd) {
     params.set("cwd", input.cwd);
   }

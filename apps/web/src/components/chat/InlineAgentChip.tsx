@@ -12,8 +12,11 @@ import {
   resolveAgentChipColor,
 } from "../composerInlineChip";
 import { InlineChipContent } from "../InlineChip";
+import { useTranslation } from "~/i18n";
 
 export const InlineAgentChip = function InlineAgentChip(props: { alias: string; color: string }) {
+  const { t } = useTranslation();
+
   const colors = resolveAgentChipColor(props.color);
   return (
     <span
@@ -22,7 +25,7 @@ export const InlineAgentChip = function InlineAgentChip(props: { alias: string; 
     >
       <InlineChipContent
         icon={<BotIcon className={COMPOSER_INLINE_AGENT_CHIP_ICON_CLASS_NAME} />}
-        label={`@${props.alias}`}
+        label={t("chat:symbol2", { value0: props.alias })}
       />
     </span>
   );

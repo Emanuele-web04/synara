@@ -52,7 +52,7 @@ vi.mock("./ChatThreadSurfacePrimitives", () => ({
 }));
 const parent = ThreadId.makeUnsafe("parent");
 const other = ThreadId.makeUnsafe("other");
-const child = runningSubagentRosterItem("Scout");
+const child = runningSubagentRosterItem("Scout", { modelLabel: "Opus 5.5 · high" });
 beforeEach(() => {
   vi.clearAllMocks();
   state.roster = { active: [child], previous: [] };
@@ -63,8 +63,10 @@ it("expands and collapses finished rows without leaving hidden buttons reachable
   const screen = await render(
     <SubagentsList
       roster={{
-        active: [],
-        previous: Array.from({ length: 12 }, (_, i) => subagentRosterItem(`Done ${i}`)),
+        active: [child],
+        previous: Array.from({ length: 12 }, (_, i) =>
+          subagentRosterItem(`Done ${i}`, { modelLabel: i === 0 ? "GPT-5.5 · high" : undefined }),
+        ),
       }}
       parent={null}
       nowMs={0}
@@ -74,6 +76,10 @@ it("expands and collapses finished rows without leaving hidden buttons reachable
     />,
   );
   try {
+    await expect
+      .element(page.getByText("Running · Opus 5.5 · high", { exact: true }))
+      .toBeVisible();
+    await expect.element(page.getByText("GPT-5.5 · high", { exact: true })).toBeVisible();
     const extra = page.getByRole("button", { name: "Open subagent Done 11 (Completed)" });
     expect(extra.elements()).toHaveLength(0);
     await page.getByRole("button", { name: "Show 2 more" }).click();

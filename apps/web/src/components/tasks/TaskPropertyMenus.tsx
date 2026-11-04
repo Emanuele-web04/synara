@@ -12,6 +12,7 @@ import { ComposerPickerMenuPopup } from "~/components/chat/ComposerPickerMenuPop
 import { Menu, MenuItem, MenuRadioGroup, MenuRadioItem, MenuTrigger } from "~/components/ui/menu";
 import { TaskPriorityGlyph } from "./TaskGlyphs";
 import { DUE_PRESET_OPTIONS, resolveDuePreset, TODO_PRIORITY_OPTIONS } from "./tasks.logic";
+import { useTranslation } from "~/i18n";
 
 /** What every property picker takes besides its own value: the trigger it opens from. */
 interface TaskPropertyMenuProps {
@@ -54,6 +55,7 @@ export function TaskPriorityMenu({
   priority: TodoPriority;
   onChange: (priority: TodoPriority) => void;
 }) {
+  const { t } = useTranslation();
   return (
     <TaskPropertyMenu
       trigger={trigger}
@@ -66,7 +68,7 @@ export function TaskPriorityMenu({
           <MenuRadioItem key={option.value} value={option.value} closeOnClick>
             <span className="flex items-center gap-2">
               <TaskPriorityGlyph priority={option.value} />
-              {option.label}
+              {t(option.labelKey)}
             </span>
           </MenuRadioItem>
         ))}
@@ -87,12 +89,14 @@ export function TaskProjectMenu({
   projectOptions: ReadonlyArray<{ id: ProjectId; name: string }>;
   onChange: (projectId: ProjectId | null) => void;
 }) {
+  const { t } = useTranslation();
+
   return (
     <ProjectMenuPicker
       projectOptions={projectOptions}
       selectedProjectId={projectId}
       onProjectIdChange={onChange}
-      noneOption={{ label: "No project", onSelect: () => onChange(null) }}
+      noneOption={{ label: t("workspace:kanban_noProject"), onSelect: () => onChange(null) }}
       closeOnSelect
       align={align ?? "start"}
       trigger={trigger}
@@ -114,6 +118,8 @@ export function TaskDueMenu({
   now: Date;
   onChange: (dueDate: TodoDueDate | null) => void;
 }) {
+  const { t } = useTranslation();
+
   return (
     <TaskPropertyMenu
       trigger={trigger}
@@ -123,10 +129,10 @@ export function TaskDueMenu({
     >
       {DUE_PRESET_OPTIONS.map((option) => (
         <MenuItem key={option.value} onClick={() => onChange(resolveDuePreset(option.value, now))}>
-          {option.label}
+          {t(option.labelKey)}
         </MenuItem>
       ))}
-      {dueDate ? <MenuItem onClick={() => onChange(null)}>No due date</MenuItem> : null}
+      {dueDate ? <MenuItem onClick={() => onChange(null)}>{t("common:noDueDate")}</MenuItem> : null}
     </TaskPropertyMenu>
   );
 }

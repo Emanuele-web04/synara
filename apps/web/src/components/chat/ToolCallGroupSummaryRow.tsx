@@ -7,6 +7,7 @@
 // Depends on: DisclosureRegion/DisclosureChevron (shared disclosure motion)
 
 import { useEffect, useState, type ReactNode } from "react";
+import { useTranslation } from "../../i18n";
 
 import { DisclosureChevron } from "../ui/DisclosureChevron";
 import { DisclosureRegion } from "../ui/DisclosureRegion";
@@ -77,6 +78,7 @@ export function ToolCallGroupSummaryRow(
     renderChildren: () => ReactNode;
   },
 ) {
+  const { t } = useTranslation();
   const { liveEntry, open, onToggle, fontSizePx, renderChildren } = props;
   const [keepChildrenMounted, setKeepChildrenMounted] = useState(open);
 
@@ -107,7 +109,7 @@ export function ToolCallGroupSummaryRow(
     : summary
       ? summaryIcon(summary)
       : props.icon!;
-  const liveMultiFileLabel = liveEntry ? multiFileEditLabel(liveEntry) : null;
+  const liveMultiFileLabel = liveEntry ? multiFileEditLabel(liveEntry, t) : null;
 
   return (
     <div>
@@ -136,7 +138,7 @@ export function ToolCallGroupSummaryRow(
         </span>
         <span className="min-w-0 truncate" data-tool-group-live={liveEntry ? "true" : undefined}>
           {liveEntry ? (
-            (liveMultiFileLabel ?? renderWorkEntrySentence(workEntryDisplayParts(liveEntry)))
+            (liveMultiFileLabel ?? renderWorkEntrySentence(workEntryDisplayParts(liveEntry, t)))
           ) : !summary ? (
             props.label
           ) : (

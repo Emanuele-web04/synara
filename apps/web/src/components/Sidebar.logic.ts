@@ -11,7 +11,7 @@ import {
 } from "@synara/contracts";
 import { isGroupThreadRoute } from "./SidebarGroupsSurface.logic";
 import { isSidechatThread } from "@synara/shared/sidechatThread";
-import { pluralize } from "@synara/shared/text";
+import { t } from "~/i18n";
 import { collectSubagentDescendants } from "@synara/shared/threadHierarchy";
 import { resolveThreadEnvironmentMode } from "@synara/shared/threadEnvironment";
 import { isWorkspaceRootWithin, workspaceRootsEqual } from "@synara/shared/threadWorkspace";
@@ -77,39 +77,35 @@ export function isProjectsSidebarSurface(input: {
 /** Keep partial review counts visible without presenting them as exact. */
 export function resolvePullRequestReviewBadge(
   result: GitHubReviewRequestBadgeCount | undefined,
+  translate: typeof t = t,
 ): SidebarActionBadge | null {
   if (!result) return null;
   if (result.incomplete) {
     return result.count > 0
       ? {
           text: `${result.count}+`,
-          accessibleLabel: `At least ${result.count} ${pluralize(
-            result.count,
-            "pull request is",
-            "pull requests are",
-          )} waiting for your review`,
+          accessibleLabel: translate("workspace:reviewBadgeAtLeast", { count: result.count }),
         }
       : null;
   }
   return result.count > 0
     ? {
         text: String(result.count),
-        accessibleLabel: `${result.count} ${pluralize(
-          result.count,
-          "pull request is",
-          "pull requests are",
-        )} waiting for your review`,
+        accessibleLabel: translate("workspace:reviewBadge", { count: result.count }),
       }
     : null;
 }
 
 /** Sidebar badge = number of configured automations, matching the Automations "All" tab. */
-export function resolveAutomationCountBadge(count: number | undefined): SidebarActionBadge | null {
+export function resolveAutomationCountBadge(
+  count: number | undefined,
+  translate: typeof t = t,
+): SidebarActionBadge | null {
   if (count === undefined) return null;
   return count > 0
     ? {
         text: String(count),
-        accessibleLabel: `${count} ${pluralize(count, "automation")}`,
+        accessibleLabel: translate("workspace:automationBadge", { count }),
       }
     : null;
 }
@@ -424,6 +420,18 @@ export function resolveThreadStatusTrailingIndicator(input: {
   }
   return status;
 }
+
+export const THREAD_STATUS_LABEL_KEYS: Record<ThreadStatusPill["label"], string> = {
+  "Pending Approval": "workspace:pendingApproval",
+  "Awaiting Input": "workspace:awaitingInput",
+  "Plan Ready": "chat:planReady",
+  "In Background": "workspace:inBackground",
+  Reminder: "workspace:reminder",
+  Working: "workspace:status_working",
+  Connecting: "chat:composer_connecting",
+  "Preparing worktree": "workspace:composer_preparingWorktree",
+  Completed: "workspace:triageOutcome_completed",
+};
 
 const THREAD_STATUS_PRIORITY: Record<ThreadStatusPill["label"], number> = {
   "Pending Approval": 5,

@@ -15,6 +15,7 @@ import type {
 import { Effect } from "effect";
 import nodePath from "node:path";
 
+import { resolveExecutable } from "@synara/shared/executable";
 import { PROVIDER_USAGE_PROVIDERS } from "@synara/shared/providerUsage";
 import {
   deriveProviderInstances,
@@ -512,4 +513,126 @@ export const consumeCodexResetCreditEffect = Effect.fn(function* (
     catch: (cause) => cause,
   });
   return { outcome } as ServerConsumeCodexResetCreditResult;
+});
+
+// Explicit provider routing inputs exclude volatile Synara control-plane credentials.
+const RECOVERY_ENVIRONMENT_KEYS: Readonly<Partial<Record<ProviderKind, readonly string[]>>> = {
+  codex: [
+    "HOME",
+    "USERPROFILE",
+    "CODEX_HOME",
+    "XDG_CONFIG_HOME",
+    "OPENAI_BASE_URL",
+    "OPENAI_API_BASE",
+    "OPENAI_API_KEY",
+    "CODEX_API_KEY",
+    "OPENAI_ORG_ID",
+    "OPENAI_ORGANIZATION",
+    "OPENAI_PROJECT_ID",
+  ],
+  claudeAgent: [
+    "HOME",
+    "USERPROFILE",
+    "CLAUDE_CONFIG_DIR",
+    "CLAUDE_SECURESTORAGE_CONFIG_DIR",
+    "ANTHROPIC_BASE_URL",
+    "ANTHROPIC_API_KEY",
+    "ANTHROPIC_AUTH_TOKEN",
+    "CLAUDE_CODE_OAUTH_TOKEN",
+    "ANTHROPIC_CUSTOM_HEADERS",
+    "CLAUDE_CODE_USE_BEDROCK",
+    "CLAUDE_CODE_USE_VERTEX",
+    "CLAUDE_CODE_USE_FOUNDRY",
+    "AWS_PROFILE",
+    "AWS_REGION",
+    "AWS_DEFAULT_REGION",
+    "GOOGLE_CLOUD_PROJECT",
+    "CLOUD_ML_REGION",
+    "ANTHROPIC_VERTEX_PROJECT_ID",
+    "ANTHROPIC_FOUNDRY_RESOURCE",
+    "USE_LOCAL_OAUTH",
+    "USE_STAGING_OAUTH",
+    "CLAUDE_LOCAL_OAUTH_API_BASE",
+    "CLAUDE_LOCAL_OAUTH_APPS_BASE",
+    "CLAUDE_CODE_CUSTOM_OAUTH_URL",
+  ],
+};
+
+/** Resolve native account identity and explicit launch scope without fetching or refreshing quota. */
+export const providerUsageRecoveryBindingKey = Effect.fn(function* (input: {
+  readonly provider: string;
+  readonly instanceId: string;
+  readonly workingDirectory?: string;
+  readonly projectRoot?: string;
+}) {
+  const serverConfig = yield* ServerConfig;
+  const serverSettings = yield* ServerSettingsService;
+  const settings = yield* serverSettings.getSettings;
+  const instance = deriveProviderInstances(settings).find(
+    (candidate) =>
+      candidate.enabled &&
+      candidate.driver === input.provider &&
+      candidate.instanceId === input.instanceId,
+  );
+  const fetcher = instance ? PROVIDER_USAGE_FETCHERS[instance.driver] : undefined;
+  if (!instance || !fetcher?.recoveryIdentity) return null;
+  return yield* Effect.tryPromise({
+    try: async () => {
+      const context = instanceUsageContext(
+        instance,
+        {
+          ...buildContext(),
+          homeDir: serverConfig.homeDir,
+          claudeBinaryPath: settings.providers.claudeAgent.binaryPath,
+          codexBinaryPath: settings.providers.codex.binaryPath,
+        },
+        serverConfig.stateDir,
+        serverConfig.baseDir,
+      );
+      const providerContext = buildProviderContext(instance.driver, {
+        ...context,
+        ...(input.workingDirectory !== undefined
+          ? { workingDirectory: input.workingDirectory }
+          : {}),
+        ...(input.projectRoot !== undefined ? { projectRoot: input.projectRoot } : {}),
+      });
+      const identity = await fetcher.recoveryIdentity!(providerContext);
+      if (!identity) return null;
+      const binary =
+        instance.driver === "codex"
+          ? (providerContext.codexBinaryPath ?? "codex")
+          : (providerContext.claudeBinaryPath ?? "claude");
+      const resolvedBinary = resolveExecutable(binary, {
+        env: providerContext.env,
+        platform: providerContext.platform,
+        cwd: providerContext.workingDirectory ?? providerContext.homeDir,
+      });
+      if (resolvedBinary === null) return null;
+      // Explicit environment/configuration can contain secrets; retain only the final hash.
+      // File-backed OAuth token rotation is deliberately absent from this launch fence.
+      return credentialFingerprint(
+        JSON.stringify({
+          identity,
+          resolvedBinary,
+          driver: instance.driver,
+          instanceId: instance.instanceId,
+          config: instance.config,
+          environment: instance.environment,
+          homeDir: providerContext.homeDir,
+          workingDirectory: providerContext.workingDirectory,
+          projectRoot: providerContext.projectRoot,
+          codexBinaryPath: providerContext.codexBinaryPath,
+          claudeBinaryPath: providerContext.claudeBinaryPath,
+          isolateCredentials: providerContext.isolateCredentials,
+          environmentScope: Object.fromEntries(
+            (RECOVERY_ENVIRONMENT_KEYS[instance.driver] ?? []).map((name) => [
+              name,
+              providerContext.env[name] ?? null,
+            ]),
+          ),
+        }),
+      );
+    },
+    catch: () => new Error("Provider account identity is unavailable."),
+  }).pipe(Effect.catch(() => Effect.succeed(null)));
 });

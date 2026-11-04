@@ -32,6 +32,7 @@ import {
   type QueuedComposerAutoDispatchGates,
 } from "./queuedComposerDrain";
 import { deriveQueuedComposerPause } from "./queuedComposerPause";
+import { makeUsageLimitRecovery } from "../storeTestFixtures";
 
 const THREAD_ID = ThreadId.makeUnsafe("thread-1");
 const LIVE_TURN_ID = TurnId.makeUnsafe("turn-live");
@@ -145,6 +146,25 @@ describe("shouldAutoDispatchQueuedComposerTurn", () => {
     expect(shouldAutoDispatchQueuedComposerTurn({ ...OPEN_GATES, isSendBusy: true })).toBe(false);
   });
 
+  it("drains a resumed closed provider session only while the transport is available", () => {
+    expect(
+      shouldAutoDispatchQueuedComposerTurn({
+        ...OPEN_GATES,
+        phase: "disconnected",
+        canResumeClosedSession: true,
+        isTransportAvailable: true,
+      }),
+    ).toBe(true);
+    expect(
+      shouldAutoDispatchQueuedComposerTurn({
+        ...OPEN_GATES,
+        phase: "disconnected",
+        canResumeClosedSession: true,
+        isTransportAvailable: false,
+      }),
+    ).toBe(false);
+  });
+
   it("blocks drain while a steer gate, approval, or user input is outstanding", () => {
     expect(
       shouldAutoDispatchQueuedComposerTurn({
@@ -178,6 +198,24 @@ describe("shouldAutoDispatchQueuedComposerTurn", () => {
 });
 
 describe("deriveQueuedComposerPause", () => {
+  it.each(["waiting", "resuming"] as const)(
+    "keeps local drafts held during host %s even after Resume",
+    (state) => {
+      const recovery = makeUsageLimitRecovery({ state, resetAt: "2026-01-01T00:00:00.000Z" });
+      expect(
+        deriveQueuedComposerPause({
+          latestTurn: null,
+          activities: [],
+          threadError: null,
+          queuedTurnCount: 1,
+          stoppedTurnId: null,
+          resumedTurnId: recovery.turnId,
+          usageLimitRecovery: recovery,
+        }),
+      ).toEqual({ reason: "usage-limit", turnId: recovery.turnId });
+    },
+  );
+
   const base = {
     activities: [],
     threadError: null,
@@ -321,6 +359,47 @@ describe("queued composer drain watcher", () => {
     resetComposerDraftStore();
     useStore.setState(initialState);
   });
+
+  it.each([null, "waiting", "resuming"] as const)(
+    "sends a closed provider's failed queue head after Resume once host recovery %s clears",
+    async (hostRecoveryState) => {
+      resetQueuedComposerDrainForTests();
+      const closedThread = makeThread({
+        id: THREAD_ID,
+        session: makeSession("closed"),
+        latestTurn: makeLatestTurn("error"),
+        usageLimitRecovery: hostRecoveryState
+          ? makeUsageLimitRecovery({ state: hostRecoveryState, turnId: LIVE_TURN_ID })
+          : null,
+      });
+      seedThread(closedThread);
+      useComposerDraftStore
+        .getState()
+        .enqueueQueuedTurn(THREAD_ID, makeQueuedChatTurn("queued-failed"));
+      // Model a restored draft and stopped session before the background watcher starts.
+      startQueuedComposerDrainWatcher({ dispatch });
+      await flushDrain();
+      expect(dispatch).not.toHaveBeenCalled();
+
+      useComposerDraftStore.getState().resumeQueuedTurns(THREAD_ID, LIVE_TURN_ID);
+      await flushDrain();
+      if (hostRecoveryState) {
+        expect(dispatch).not.toHaveBeenCalled();
+        expect(
+          useComposerDraftStore.getState().draftsByThreadId[THREAD_ID]?.queuedTurns,
+        ).toHaveLength(1);
+        expect(getQueuedComposerAutoDispatchRetryDelay(THREAD_ID, "queued-failed")).toBeUndefined();
+        // Only the server releasing its episode lets this persisted Resume drain.
+        seedThread({ ...closedThread, usageLimitRecovery: null });
+        await flushDrain();
+      }
+      expect(dispatch).toHaveBeenCalledTimes(1);
+      expect(dispatch.mock.calls[0]?.[0].queuedTurn.id).toBe("queued-failed");
+      expect(
+        useComposerDraftStore.getState().draftsByThreadId[THREAD_ID]?.queuedTurns ?? [],
+      ).toHaveLength(0);
+    },
+  );
 
   it("holds every cache review status without consuming retries and resumes after clearance", async () => {
     vi.useFakeTimers();

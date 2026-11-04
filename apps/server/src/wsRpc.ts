@@ -161,6 +161,7 @@ import { Open, resolveAvailableEditors } from "./open";
 import {
   OrchestrationCommandInvariantError,
   OrchestrationCommandPreviouslyRejectedError,
+  ProviderDeliveryRecoveryError,
 } from "./orchestration/Errors";
 import { makeDispatchCommandNormalizer } from "./orchestration/dispatchCommandNormalization";
 import { sanitizeOrchestrationEventProviderOptions } from "./orchestration/providerOptionsSecurity";
@@ -197,6 +198,7 @@ import { isLoopbackHost } from "./startupAccess";
 import { TerminalManager } from "./terminal/Services/Manager";
 import { TerminalThreadTitleTracker } from "./terminal/terminalThreadTitleTracker";
 import { resolveOutOfRootFileReference } from "./workspace/outOfRootFileReference";
+import { listLocalPreviewWorktreeRoots } from "./workspace/localPreviewWorktrees";
 import { watchWorkspaceFile } from "./workspaceFileChanges";
 import { WorkspaceEntries } from "./workspace/Services/WorkspaceEntries";
 import {
@@ -379,6 +381,17 @@ function readDescendantProcesses(rootPid: number): Promise<ProcessTableRow[]> {
 export function toWsRpcError(cause: unknown, fallbackMessage: string) {
   if (Schema.is(WsRpcError)(cause)) {
     return cause;
+  }
+  if (cause instanceof ProviderDeliveryRecoveryError) {
+    return new WsRpcError({
+      message: cause.message,
+      code:
+        cause.reason === "stop-required"
+          ? "PROVIDER_DELIVERY_STOP_REQUIRED"
+          : "PROVIDER_DELIVERY_STOP_UNCONFIRMED",
+      retryable: false,
+      cause,
+    });
   }
   if (
     cause instanceof OrchestrationCommandInvariantError ||
@@ -1781,7 +1794,46 @@ const makeWsRpcHandlersLayer = () =>
           ),
         [WS_METHODS.projectsCreateLocalFilePreviewGrant]: (input) =>
           rpcEffect(
-            Effect.promise(() => createLocalPreviewGrant({ requestedPath: input.path })),
+            Effect.gen(function* () {
+              // Absolute requests retain their existing explicit-file semantics.
+              if (path.isAbsolute(input.path)) {
+                return yield* Effect.tryPromise(() =>
+                  createLocalPreviewGrant({ requestedPath: input.path }),
+                );
+              }
+              let workspaceCwd = input.cwd;
+              if (input.threadId !== undefined) {
+                const thread = yield* projectionReadModelQuery.getThreadShellById(input.threadId);
+                if (Option.isNone(thread)) {
+                  return yield* new WsRpcError({ message: "Preview thread was not found." });
+                }
+                const project = yield* projectionReadModelQuery.getProjectShellById(
+                  thread.value.projectId,
+                );
+                workspaceCwd = resolveThreadWorkspaceCwd({
+                  thread: thread.value,
+                  projects: Option.isSome(project) ? [project.value] : [],
+                });
+              }
+              if (!workspaceCwd) {
+                return yield* new WsRpcError({
+                  message: "Relative local files need a workspace or thread.",
+                });
+              }
+              const cwd = yield* canonicalizeProjectWorkspaceRoot(workspaceCwd);
+              const worktreeRoots = yield* listLocalPreviewWorktreeRoots({
+                cwd,
+                requestedPaths: [input.path],
+              }).pipe(Effect.provideService(GitCore, git));
+              return yield* Effect.tryPromise(() =>
+                createLocalPreviewGrant({
+                  requestedPath: input.path,
+                  cwd,
+                  homeDir: config.homeDir,
+                  worktreeRoots,
+                }),
+              );
+            }),
             "Failed to create local file preview grant",
           ),
         [WS_METHODS.editorDebugStart]: (input, { clientId }) =>

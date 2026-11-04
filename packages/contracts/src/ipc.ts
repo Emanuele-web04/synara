@@ -1,3 +1,4 @@
+import { UiLanguagePreference } from "./uiLocale";
 import type {
   EditorDebugStartInput,
   EditorDebugActionInput,
@@ -436,6 +437,8 @@ export type DesktopUpdateStatus =
 
 export type DesktopRuntimeArch = "arm64" | "x64" | "other";
 export type DesktopTheme = "light" | "dark" | "system";
+export const DesktopLanguagePreference = UiLanguagePreference;
+export type DesktopLanguagePreference = typeof DesktopLanguagePreference.Type;
 
 /** Largest desktop blur radius the translucent window shell accepts, in points. */
 export const DESKTOP_WINDOW_BLUR_RADIUS_MAX = 64;
@@ -986,6 +989,10 @@ export const DESKTOP_DIAGNOSTIC_ISSUE_PREFIX = "SYNARA_DIAGNOSTIC_ISSUE ";
 export type DesktopDiagnosticReportStatus = "queued" | "sent" | "unavailable";
 
 export interface DesktopBridge {
+  /** Mirrors the renderer language onto native menus and startup dialogs; absent on older builds. */
+  setLanguagePreference?: (preference: DesktopLanguagePreference) => Promise<void>;
+  /** Current OS preference order; synchronous so bootstrap copy and native menus agree. */
+  getSystemLanguages?: () => readonly string[];
   /** Present only when the desktop main process enables baked-in Beta diagnostics. */
   betaDiagnostics?: {
     rendererReady: () => void;

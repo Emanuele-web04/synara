@@ -29,6 +29,8 @@ import { ensureNativeApi } from "~/nativeApi";
 
 import { mcpConnectorArtwork } from "./McpConnectorGlyph";
 import { SettingsCard } from "./SettingsPanelPrimitives";
+import { Translation } from "~/i18n/Translation";
+import { useTranslation } from "~/i18n";
 
 /** Stop waiting for the browser sign-in after the server forgets the attempt. */
 const SIGN_IN_TIMEOUT_MS = 10 * 60_000;
@@ -84,6 +86,7 @@ export function McpConnectorConnectDialog(props: {
   onOpenChange: (open: boolean) => void;
   onConnected: (connector: McpConnector) => void;
 }) {
+  const { t } = useTranslation();
   const { target, onConnected } = props;
   const [error, setError] = useState<string | null>(null);
   // Set once the browser sign-in starts; the list is polled until it lands.
@@ -144,12 +147,12 @@ export function McpConnectorConnectDialog(props: {
     const timer = window.setTimeout(
       () => {
         setWaitingSince(null);
-        setError(`The sign-in to ${target.name} timed out. Try again.`);
+        setError(t("settings:connectorSignInTimeout", { name: target.name }));
       },
       Math.max(0, waitingSince + SIGN_IN_TIMEOUT_MS - Date.now()),
     );
     return () => window.clearTimeout(timer);
-  }, [listQuery.data, onConnected, target, waitingSince]);
+  }, [listQuery.data, onConnected, target, waitingSince, t]);
 
   const start = async () => {
     if (!target) return;
@@ -172,7 +175,11 @@ export function McpConnectorConnectDialog(props: {
         setAskForOwnApp(true);
         return;
       }
-      setError(cause instanceof Error ? cause.message : `Synara could not connect ${target.name}.`);
+      setError(
+        cause instanceof Error
+          ? cause.message
+          : t("settings:connectorConnectFailed", { name: target.name }),
+      );
     }
   };
 
@@ -217,23 +224,19 @@ export function McpConnectorConnectDialog(props: {
               </AppIconTile>
             </span>
 
-            <DialogTitle className="text-center text-2xl">Connect {name}</DialogTitle>
+            <DialogTitle className="text-center text-2xl">
+              {t("settings:connectorConnectTitle", { name })}
+            </DialogTitle>
 
             <SettingsCard className="w-full">
-              <ConsentSection title="You're in control">
-                Agents get only the access {name} grants Synara, and you can disconnect it anytime
-                in Settings.
+              <ConsentSection title={t("settings:connectorControlTitle")}>
+                {t("settings:connectorControlDescription", { name })}
               </ConsentSection>
-              <ConsentSection title="Connectors may introduce elevated risk">
-                {name} is run by its own provider, not Synara. Its tools can read and change data in
-                your account, and content it returns could try to steer your agent. Review tool
-                calls before you approve them.
+              <ConsentSection title={t("settings:connectorRiskTitle")}>
+                {t("settings:connectorRiskDescription", { name })}
               </ConsentSection>
-              <ConsentSection title="Data shared with this connector">
-                When an agent uses {name}, its request and the context it needs are sent to {name},
-                and the answers go to the AI provider running the chat. {name}'s terms and privacy
-                policy apply. Your sign-in stays on this computer and is never shared with AI
-                providers.
+              <ConsentSection title={t("settings:connectorDataTitle")}>
+                {t("settings:connectorDataDescription", { name })}
                 {target.docsUrl ? (
                   <>
                     {" "}
@@ -245,7 +248,7 @@ export function McpConnectorConnectDialog(props: {
                         if (url) void ensureNativeApi().shell.openExternal(url);
                       }}
                     >
-                      Learn more
+                      {t("common:learnMore")}
                     </button>
                   </>
                 ) : null}
@@ -257,30 +260,34 @@ export function McpConnectorConnectDialog(props: {
                 <div className="space-y-3 px-4 py-3.5">
                   <div>
                     <h3 className="text-ui-lg font-medium text-foreground">
-                      Use your own {name} app
+                      {t("settings:connectorOwnAppTitle", { name })}
                     </h3>
                     <p className="mt-1 text-ui leading-relaxed text-muted-foreground">
-                      {name} only signs in apps registered with it.{" "}
-                      {target.appSetupUrl ? (
-                        <button
-                          type="button"
-                          className="rounded-sm text-foreground underline decoration-muted-foreground/40 underline-offset-[3px] hover:decoration-current focus-visible:outline-2 focus-visible:outline-ring"
-                          onClick={() => {
-                            const url = target.appSetupUrl;
-                            if (url) void ensureNativeApi().shell.openExternal(url);
-                          }}
-                        >
-                          Create an app
-                        </button>
-                      ) : (
-                        "Create an app"
-                      )}
-                      , add this redirect URL to it, then paste its client ID and secret.
+                      <Translation
+                        message="settings:connectorOwnAppDescription"
+                        values={{ name }}
+                        components={{
+                          appLink: target.appSetupUrl ? (
+                            <button
+                              type="button"
+                              className="rounded-sm text-foreground underline decoration-muted-foreground/40 underline-offset-[3px] hover:decoration-current focus-visible:outline-2 focus-visible:outline-ring"
+                              onClick={() => {
+                                const url = target.appSetupUrl;
+                                if (url) void ensureNativeApi().shell.openExternal(url);
+                              }}
+                            />
+                          ) : (
+                            <span />
+                          ),
+                        }}
+                      />
                     </p>
                   </div>
                   <div className="space-y-1.5">
                     <div className="flex items-center justify-between gap-2">
-                      <span className={dialogFieldLabelClassName}>Redirect URL</span>
+                      <span className={dialogFieldLabelClassName}>
+                        {t("settings:connectorRedirectUrl")}
+                      </span>
                       {setupQuery.data ? (
                         <CopyTextButton text={setupQuery.data.redirectUrl} label="URL" />
                       ) : null}
@@ -288,11 +295,13 @@ export function McpConnectorConnectDialog(props: {
                     <Input
                       readOnly
                       value={setupQuery.data?.redirectUrl ?? ""}
-                      aria-label="Redirect URL"
+                      aria-label={t("settings:connectorRedirectUrl")}
                     />
                   </div>
                   <label className="block space-y-1.5">
-                    <span className={dialogFieldLabelClassName}>Client ID</span>
+                    <span className={dialogFieldLabelClassName}>
+                      {t("settings:connectorClientId")}
+                    </span>
                     <Input
                       value={clientId}
                       maxLength={256}
@@ -301,7 +310,9 @@ export function McpConnectorConnectDialog(props: {
                     />
                   </label>
                   <label className="block space-y-1.5">
-                    <span className={dialogFieldLabelClassName}>Client secret</span>
+                    <span className={dialogFieldLabelClassName}>
+                      {t("settings:connectorClientSecret")}
+                    </span>
                     <Input
                       type="password"
                       value={clientSecret}
@@ -334,18 +345,20 @@ export function McpConnectorConnectDialog(props: {
                 {busy ? (
                   <>
                     <Spinner />
-                    {waitingSince !== null ? `Waiting for ${name}…` : "Connecting…"}
+                    {waitingSince !== null
+                      ? t("settings:connectorWaiting", { name })
+                      : t("computer:connecting")}
                   </>
                 ) : (
                   <>
-                    Continue to {name}
+                    {t("settings:connectorContinue", { name })}
                     <ArrowUpRightIcon />
                   </>
                 )}
               </Button>
               {waitingSince !== null ? (
                 <p className="text-center text-ui-sm text-muted-foreground">
-                  Finish signing in in your browser. This updates on its own.
+                  {t("settings:connectorFinishSignIn")}
                 </p>
               ) : null}
             </div>

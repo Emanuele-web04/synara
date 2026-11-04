@@ -14,12 +14,14 @@ import { IconButton } from "../ui/icon-button";
 import { Menu, MenuItem, MenuTrigger } from "../ui/menu";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { ComposerPickerMenuPopup } from "./ComposerPickerMenuPopup";
+import { useTranslation } from "~/i18n";
 
 type QueuedComposerActionsProps = {
   queuedTurn: QueuedComposerTurn;
   onSteer: (queuedTurn: QueuedComposerTurn) => void;
   onRemove: (queuedTurnId: string) => void;
   onEdit: (queuedTurn: QueuedComposerTurn) => void;
+  steerDisabled?: boolean | undefined;
 };
 
 function QueuedComposerActions({
@@ -27,25 +29,34 @@ function QueuedComposerActions({
   onSteer,
   onRemove,
   onEdit,
+  steerDisabled,
 }: QueuedComposerActionsProps) {
+  const { t } = useTranslation();
+
   return (
     <div className="flex shrink-0 items-center gap-0">
       <Tooltip>
         <TooltipTrigger
-          render={<Button variant="ghost" size="chip" onClick={() => void onSteer(queuedTurn)} />}
+          render={
+            <Button
+              variant="ghost"
+              size="chip"
+              disabled={steerDisabled}
+              onClick={() => void onSteer(queuedTurn)}
+            />
+          }
         >
           <SteerIcon />
-          <span>Steer</span>
+          <span>{t("chat:queuedActions_steer")}</span>
         </TooltipTrigger>
         <TooltipPopup className="max-w-80 leading-tight">
-          Send this follow-up now to redirect the current work. If native steering is unavailable,
-          stop the current turn and start a new one.
+          {t("chat:sendThisFollowUpNowToRedirectTheCurrent")}
         </TooltipPopup>
       </Tooltip>
       <IconButton
         variant="ghost"
         size="icon-chip"
-        label="Delete queued follow-up"
+        label={t("chat:queuedActions_deleteQueued")}
         onClick={() => onRemove(queuedTurn.id)}
       >
         <Trash2 />
@@ -56,7 +67,7 @@ function QueuedComposerActions({
             <Button
               variant="ghost"
               size="icon-chip"
-              aria-label="Queued follow-up actions"
+              aria-label={t("chat:queuedActions_queuedActions")}
               className="[&_svg]:mx-0"
             />
           }
@@ -64,7 +75,7 @@ function QueuedComposerActions({
           <EllipsisIcon />
         </MenuTrigger>
         <ComposerPickerMenuPopup align="end" side="top" sideOffset={6}>
-          <MenuItem onClick={() => onEdit(queuedTurn)}>Edit queued follow-up</MenuItem>
+          <MenuItem onClick={() => onEdit(queuedTurn)}>{t("chat:editQueuedFollowUp")}</MenuItem>
         </ComposerPickerMenuPopup>
       </Menu>
     </div>

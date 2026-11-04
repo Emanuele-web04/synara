@@ -46,6 +46,8 @@ Do not mix unrelated fixes together.
 
 If the PR makes anything resembling a UI change, include clear before/after images.
 
+For interface copy, follow [the localization guide](docs/internationalization.md). Add stable semantic keys and translations in every shipped locale, preserve user/provider data, and run the catalog and extraction checks.
+
 If the change depends on motion, timing, transitions, or interaction details, include a short video.
 
 If we have to guess what changed, we are much less likely to review it.
@@ -107,6 +109,11 @@ fix belongs in the HTTP writer, not an uncaught-exception handler. When updating
 Electron or Undici, run `apps/desktop/src/httpRuntime.test.ts` under both Node and
 Electron with `ELECTRON_RUN_AS_NODE=1`. The test performs real loopback HTTP
 requests while injecting the socket error and also checks ordinary request failures.
+
+Packaged desktop API requests must reach the HTTP backend; the static protocol
+serves only GET/HEAD navigation and assets. An attachment upload needs a valid
+JSON receipt even when HTTP reports success. Preserve drafts on upload failure
+and observe pending upload rejections while workspace preparation is awaiting RPCs.
 
 Desktop stdio MCP proxies reuse Electron's executable and must explicitly set
 `ELECTRON_RUN_AS_NODE=1` in their launch configuration. Provider child environments

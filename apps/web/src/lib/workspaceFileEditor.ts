@@ -1,3 +1,4 @@
+import { t } from "~/i18n";
 import type { ProjectFileEncoding, ProjectFileLineEnding } from "@synara/contracts";
 
 /** On-disk format of a loaded buffer; every save re-encodes with it. */
@@ -55,18 +56,19 @@ export const INITIAL_WORKSPACE_FILE_EDITOR_STATE: WorkspaceFileEditorState = {
  */
 export function resolveWorkspaceFileEditorReadOnlyReason(
   source: WorkspaceFileEditorSource,
+  translate: typeof t = t,
 ): string | null {
   if (source.truncated) {
-    return "Large files are read-only.";
+    return translate("workspace:fileReadOnlyLarge");
   }
   if (source.symlink) {
-    return "Symbolic links are read-only; edit the file they point to instead.";
+    return translate("workspace:fileReadOnlySymlink");
   }
   if (source.lineEnding === "mixed") {
-    return "Files with mixed line endings are read-only to preserve their exact format.";
+    return translate("workspace:fileReadOnlyMixedEndings");
   }
   if (source.version === null || source.encoding === null || source.lineEnding === null) {
-    return "This file format is read-only.";
+    return translate("workspace:fileReadOnlyFormat");
   }
   return null;
 }

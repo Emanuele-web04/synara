@@ -20,6 +20,7 @@ import {
   EnvironmentLabeledSection,
   EnvironmentRowChevron,
 } from "./EnvironmentRow";
+import { useTranslation } from "~/i18n";
 
 export function EnvironmentEditorSection({
   keybindings,
@@ -33,6 +34,8 @@ export function EnvironmentEditorSection({
   /** Open the in-app editor workspace view; omitted on surfaces that can't host it. */
   onOpenEditorView?: () => void;
 }) {
+  const { t } = useTranslation();
+
   const {
     options,
     preferredEditor,
@@ -56,11 +59,11 @@ export function EnvironmentEditorSection({
   const ActiveIcon = activeOption?.Icon;
 
   return (
-    <EnvironmentLabeledSection label="Editor">
+    <EnvironmentLabeledSection label={t("chat:general_editor")}>
       {onOpenEditorView ? (
         <EnvironmentRow
           icon={<EditorViewIcon aria-hidden className={ENVIRONMENT_ROW_ICON_CLASS_NAME} />}
-          label="Editor view"
+          label={t("chat:environment_editorView")}
           onClick={onOpenEditorView}
         />
       ) : null}
@@ -76,7 +79,11 @@ export function EnvironmentEditorSection({
                   <ActiveIcon aria-hidden className={ENVIRONMENT_ROW_ICON_CLASS_NAME} />
                 ) : null
               }
-              label={activeOption ? `Open in ${activeOption.label}` : "Open in editor"}
+              label={
+                activeOption
+                  ? t("chat:openIn", { value0: activeOption.label })
+                  : t("chat:environment_openInEditorDefault")
+              }
               trailing={<EnvironmentRowChevron />}
             />
           </MenuTrigger>

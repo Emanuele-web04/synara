@@ -22,6 +22,12 @@ consistent workspace.
 Provider availability can differ between the current stable release and development builds. Use the
 provider settings in your installed Synara version as the authoritative list for that build.
 
+## Usage-limit recovery
+
+**Settings → Providers → Resume after usage limits** enables automatic continuation and defaults to off. Codex and Claude can supply provider-classified terminal quota refusal and a future reset deadline. Synara waits for every blocking window it can verify; missing, stale, unrelated-account or ambiguous reset information leaves recovery manual. Usage panels and percentage warnings alone never schedule work. Other adapters remain manual until they expose equivalent terminal evidence. Native provider retries keep ownership of their active turn. Claude automatic recovery requires a verified native OAuth account profile on macOS or Linux. Windows policy scope, environment-token/API-key/helper authentication, federation profiles, and unreadable or unsupported native settings remain manual. Codex requires its native account ID; rotating tokens alone never establish durable identity.
+
+Recovery runs on the execution host, persists across its restart, and sends a guarded continuation rather than replaying the failed prompt or an in-flight tool call. It keeps the selected provider account and model. Account/route changes invalidate the saved binding; unreadable identities remain manual. A timed-out recheck of an already verified account retains its wait for another attempt; a confirmed missing or changed identity cancels it. An identity that was never verified is not adopted later. Stop and disabling the preference cancel pending waits, including a Stop that arrives before the terminal refusal. A repeated refusal with the same or an earlier reset cannot create a tight retry loop. The original failed turn stays failed, and uncertain provider delivery remains blocked for reconciliation.
+
 ## What Synara manages
 
 Synara provides the shared operating surface around each provider:
@@ -48,6 +54,32 @@ with an error while unrelated tasks remain usable. Persisted Claude compaction r
 unavailable owner remain held for reconciliation; startup skips their provider recovery instead
 of failing or resending the held message.
 
+An uncertain delivery remains blocked after a server restart. **Unblock thread** reconciles
+that delivery; it does not stop a provider process that is still running. For a stalled Claude
+turn, use **Stop** first and wait for session retirement, then abandon the uncertain delivery
+with **Unblock thread** before explicitly sending a new message. An ambiguous Claude send
+on a root thread stays blocked while this server owns a live or unverified runtime. Stop's dispatch acknowledgement
+alone does not prove that cleanup finished. A missing native interrupt acknowledgement is not
+reported as a failed explicit root Claude Stop when that same command's receipt confirms retirement
+of the observed runtime generation. Failed or unverified cleanup remains an error.
+If a failed local startup leaves the session idle,
+or a locally owned query remains ready without an active turn, an explicit user Stop can retire
+that known generation before Unblock. The idle Stop refuses a newer turn or replacement runtime.
+Ordinary idle Stops without an uncertain root Claude send remain no-ops. After a server restart, Unblock may reconcile an
+untouched inherited delivery once the new server confirms it owns no live, retained or background
+work for that task. This restores delivery; it does not prove that every process from an older
+server exited or that its external effects were cancelled. Synara does not automatically resend
+the original ambiguous message. This guard applies to ambiguous root Claude sends; child
+threads retain their existing manual-abandon behavior without stopping the parent. Child
+recovery is not covered by the root-runtime retirement proof.
+
+A Claude steer can wait for permission-mode control or attachment preparation before entering
+the native prompt queue. If its original turn ends or the runtime is replaced during that wait,
+Synara rejects the unsent steer and preserves the newer session state. The final ownership check
+and queue admission run synchronously, so cooperative yielding cannot admit the old steer to a
+newer turn. Queued follow-ups retain their normal turn boundary and wait for any replacement turn
+to settle.
+
 Codex native resume is confirmed only when the runtime returns the requested thread ID.
 If a recoverable resume failure starts a fresh Codex thread instead, Synara treats its native
 history as unavailable and carries the stored transcript through the existing bounded recovery
@@ -60,6 +92,12 @@ evidence can retire only the provider session generation that accepted the recap
 so an old activity retry cannot discard a newer session's pending transcript.
 If the runtime restarts before that evidence is committed, Synara conservatively
 retains the recap for the next accepted turn, even when native resume succeeds.
+
+Native code reviews accept their review target, not prompt attachments. A review request with
+attachments is rejected before the message or attachment claim is accepted. Send those files as
+an ordinary message instead; no extra provider send is made automatically. An unsupported review
+already accepted by an older host fails before provider startup if it has not been delivered yet;
+its saved message and files remain available, and later ordinary messages are not blocked.
 
 Codex's internal `turn/moderationMetadata` notifications stay in local native event logs
 when logging is enabled and do not create conversation activity rows. Actual provider
@@ -376,6 +414,12 @@ Children are named after their description, nickname or brief, never after a pro
 Codex multi-agent v2 encrypts spawn briefs, so its children are named after their task name and
 open without a brief. Synara shows up to 20 provider-native subagents per turn and notes on the
 parent thread when more ran.
+
+You can message a running Claude native child from its own composer. Codex native children are
+read-only: Codex multi-agent v2 requires its parent agent to deliver child messages and rejects
+direct app-server input. Finished native children are also read-only. These sends are rejected
+before adding a user message, preserving the completed outcome. Ordinary delegated task
+conversations keep their independent messaging behavior.
 
 The parent transcript groups adjacent child launches from the same turn in a compact card at
 their launch position; assistant narration separates groups. Cards start collapsed and preserve

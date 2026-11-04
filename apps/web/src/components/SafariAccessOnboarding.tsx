@@ -13,6 +13,7 @@ import {
   DialogPopup,
   DialogTitle,
 } from "./ui/dialog";
+import { useTranslation } from "~/i18n";
 
 export const SAFARI_ACCESS_STORAGE_KEY = "synara:safari-access-onboarding:v1";
 const OPEN_EVENT = "synara:safari-access-setup";
@@ -47,12 +48,14 @@ function useSafariAccessInfo() {
 }
 
 export function SafariAccessSetupButton() {
+  const { t } = useTranslation();
+
   const info = useSafariAccessInfo();
   if (!info?.supported) return null;
   return (
     <Button size="sm" variant="outline" onClick={() => window.dispatchEvent(new Event(OPEN_EVENT))}>
       <SettingsIcon className="size-4" />
-      Safari import setup
+      {t("onboarding:safariImportSetup")}
     </Button>
   );
 }
@@ -69,6 +72,8 @@ export function SafariAccessOnboarding({
   /** The root opts automatic first-launch guidance into startup arbitration. */
   startup?: boolean;
 }) {
+  const { t } = useTranslation();
+
   const info = useSafariAccessInfo();
   const [decision, setDecision] = useLocalStorage(SAFARI_ACCESS_STORAGE_KEY, "unseen", Decision);
   const [revisit, setRevisit] = useState(false);
@@ -145,31 +150,36 @@ export function SafariAccessOnboarding({
                 draggable={false}
                 className="size-16 select-none drop-shadow-[0_6px_14px_rgba(0,0,0,0.18)]"
               />
-              <DialogTitle className="mt-1">Bring your Safari logins along?</DialogTitle>
+              <DialogTitle className="mt-1">
+                {t("onboarding:bringYourSafariLoginsAlong")}
+              </DialogTitle>
               <DialogDescription className="text-balance leading-relaxed">
-                Synara's browser can pick up sites you're already signed into in Safari, so you
-                don't have to log in twice. It's optional, and nothing is copied until you ask.
+                {t("onboarding:synaraSBrowserCanPickUpSitesYouRe")}
               </DialogDescription>
             </DialogHeader>
 
             {info?.supported && info.fullDiskAccess === "granted" ? (
               <p className="mx-6 mt-5 text-ui leading-relaxed text-muted-foreground">
-                Full Disk Access is on for{" "}
-                <span className="font-medium text-foreground">{info.appName}</span>. You can import
-                Safari logins from the browser's Saved logins › Import browser cookies.
+                {t("onboarding:safariAccessGrantedPrefix")}{" "}
+                <span className="font-medium text-foreground">{info.appName}</span>
+                {t("onboarding:safariAccessGrantedSuffix")}
               </p>
             ) : info?.supported ? (
               <ol className="mx-6 mt-5 space-y-3 text-ui leading-relaxed">
                 <Step n={1}>
-                  Open <span className="font-medium text-foreground">System Settings</span> ›
-                  Privacy &amp; Security › Full Disk Access.
+                  {t("onboarding:notification_open")}{" "}
+                  <span className="font-medium text-foreground">
+                    {t("onboarding:systemSettings")}
+                  </span>{" "}
+                  {t("onboarding:privacySecurityFullDiskAccess")}
                 </Step>
                 <Step n={2}>
-                  Switch on <span className="font-medium text-foreground">{info.appName}</span>.
+                  {t("onboarding:switchOn")}{" "}
+                  <span className="font-medium text-foreground">{info.appName}</span>.
                   {info.appPath ? (
                     <>
                       {" "}
-                      Not listed?{" "}
+                      {t("onboarding:notListed")}{" "}
                       <button
                         type="button"
                         disabled={busy}
@@ -179,19 +189,18 @@ export function SafariAccessOnboarding({
                         }}
                         className="rounded-sm underline decoration-muted-foreground/40 underline-offset-[3px] transition-colors hover:text-foreground hover:decoration-current focus-visible:outline-2 focus-visible:outline-ring disabled:opacity-60"
                       >
-                        Show app in Finder
+                        {t("onboarding:showAppInFinder")}
                       </button>{" "}
-                      and drag it in.
+                      {t("onboarding:andDragItIn")}
                     </>
                   ) : null}
                 </Step>
-                <Step n={3}>Quit and reopen Synara.</Step>
+                <Step n={3}>{t("onboarding:quitAndReopenSynara")}</Step>
               </ol>
             ) : null}
 
             <p className="mx-6 mt-5 text-ui leading-relaxed text-muted-foreground/80">
-              Full Disk Access is a broad macOS permission that reaches beyond Safari. If you'd
-              rather not, that's fine. You can find this again under Settings › General.
+              {t("onboarding:fullDiskAccessIsABroadMacOSPermissionThat")}
             </p>
 
             {status ? (
@@ -202,7 +211,7 @@ export function SafariAccessOnboarding({
 
             <DialogFooter className="mt-5 px-6 pb-6 pt-0">
               <Button variant="ghost" onClick={close}>
-                Not now
+                {t("common:notNow")}
               </Button>
               <Button
                 disabled={busy}
@@ -210,7 +219,7 @@ export function SafariAccessOnboarding({
                   void run("openSettings");
                 }}
               >
-                Open System Settings
+                {t("onboarding:openSystemSettings")}
               </Button>
             </DialogFooter>
           </div>

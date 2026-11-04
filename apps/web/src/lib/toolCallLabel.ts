@@ -5,9 +5,10 @@
 // Depends on: @synara/contracts tool lifecycle item types
 
 import type { ToolLifecycleItemType } from "@synara/contracts";
+import { t } from "~/i18n";
 import { BROWSER_TOOL_TITLES } from "@synara/shared/browserAutomationPresentation";
 import {
-  COMPUTER_TOOL_TITLES,
+  COMPUTER_TOOL_TITLE_KEYS,
   computerToolName,
   type ComputerToolName,
 } from "./computerToolPresentation";
@@ -121,11 +122,13 @@ export interface ReadableToolTitleInput {
   readonly isRunning?: boolean;
 }
 
-interface SynaraMcpToolPresentation {
+interface SynaraMcpToolSourcePresentation {
   readonly running: string;
   readonly completed: string;
   readonly failed: string;
 }
+
+type SynaraMcpToolPresentation = Readonly<Record<SynaraMcpToolStatus, string>>;
 
 // Historical messages still contain retired tools; presentation does not expose them to agents.
 const BROWSER_HISTORY_TITLES = {
@@ -153,7 +156,7 @@ const SYNARA_BROWSER_TOOL_PRESENTATIONS = Object.fromEntries(
     const title = BROWSER_HISTORY_TITLES[toolName];
     return [`synara_${toolName}`, { running: title, completed: title, failed: title }];
   }),
-) as Record<SynaraBrowserToolName, SynaraMcpToolPresentation>;
+) as Record<SynaraBrowserToolName, SynaraMcpToolSourcePresentation>;
 
 /**
  * The desktop tools, spoken. Every browser tool had a curated presentation and
@@ -269,9 +272,9 @@ const SYNARA_COMPUTER_TOOL_PRESENTATIONS = {
     "pressing Enter in the browser",
     "pressed Enter in the browser",
   ),
-} as const satisfies Record<`synara_${ComputerToolName}`, SynaraMcpToolPresentation>;
+} as const satisfies Record<`synara_${ComputerToolName}`, SynaraMcpToolSourcePresentation>;
 
-function presentComputerTool(present: string, past: string): SynaraMcpToolPresentation {
+function presentComputerTool(present: string, past: string): SynaraMcpToolSourcePresentation {
   return {
     running: `Synara is ${present}`,
     completed: `Synara ${past}`,
@@ -462,7 +465,638 @@ const SYNARA_MCP_TOOL_PRESENTATIONS = {
   },
   ...SYNARA_BROWSER_TOOL_PRESENTATIONS,
   ...SYNARA_COMPUTER_TOOL_PRESENTATIONS,
-} as const satisfies Record<string, SynaraMcpToolPresentation>;
+} as const satisfies Record<string, SynaraMcpToolSourcePresentation>;
+
+// Semantic presentation IDs are separate from the source titles used to classify historical events.
+const SYNARA_MCP_TOOL_PRESENTATION_KEYS = {
+  synara_computer_screenshot: {
+    running: "common:synaraIsTakingAScreenshot",
+    completed: "common:synaraTookAScreenshot",
+    failed: "common:synaraCouldnTFinishTakingAScreenshot",
+    cancelled: "common:synaraStoppedTakingAScreenshot",
+  },
+  synara_computer_get_state: {
+    running: "common:synaraIsReadingTheScreen",
+    completed: "common:synaraReadTheScreen",
+    failed: "common:synaraCouldnTFinishReadingTheScreen",
+    cancelled: "common:synaraStoppedReadingTheScreen",
+  },
+  synara_computer_get_screen_size: {
+    running: "common:synaraIsMeasuringTheScreen",
+    completed: "common:synaraMeasuredTheScreen",
+    failed: "common:synaraCouldnTFinishMeasuringTheScreen",
+    cancelled: "common:synaraStoppedMeasuringTheScreen",
+  },
+  synara_computer_list_windows: {
+    running: "common:synaraIsListingWindows",
+    completed: "common:synaraListedTheWindows",
+    failed: "common:synaraCouldnTFinishListingWindows",
+    cancelled: "common:synaraStoppedListingWindows",
+  },
+  synara_computer_list_apps: {
+    running: "common:synaraIsListingApps",
+    completed: "common:synaraListedTheApps",
+    failed: "common:synaraCouldnTFinishListingApps",
+    cancelled: "common:synaraStoppedListingApps",
+  },
+  synara_computer_verify_state: {
+    running: "common:synaraIsCheckingDesktopState",
+    completed: "common:synaraCheckedDesktopState",
+    failed: "common:synaraCouldnTFinishCheckingDesktopState",
+    cancelled: "common:synaraStoppedCheckingDesktopState",
+  },
+  synara_computer_zoom: {
+    running: "common:synaraIsZoomingIntoAWindow",
+    completed: "common:synaraZoomedIntoAWindow",
+    failed: "common:synaraCouldnTFinishZoomingIntoAWindow",
+    cancelled: "common:synaraStoppedZoomingIntoAWindow",
+  },
+  synara_computer_get_accessibility_tree: {
+    running: "common:synaraIsListingAppsAndWindows",
+    completed: "common:synaraListedAppsAndWindows",
+    failed: "common:synaraCouldnTFinishListingAppsAndWindows",
+    cancelled: "common:synaraStoppedListingAppsAndWindows",
+  },
+  synara_computer_get_cursor_position: {
+    running: "common:synaraIsReadingTheCursorPosition",
+    completed: "common:synaraReadTheCursorPosition",
+    failed: "common:synaraCouldnTFinishReadingTheCursorPosition",
+    cancelled: "common:synaraStoppedReadingTheCursorPosition",
+  },
+  synara_computer_help: {
+    running: "common:synaraIsReadingTheComputerPlaybook",
+    completed: "common:synaraReadTheComputerPlaybook",
+    failed: "common:synaraCouldnTFinishReadingTheComputerPlaybook",
+    cancelled: "common:synaraStoppedReadingTheComputerPlaybook",
+  },
+  synara_computer_click: {
+    running: "common:synaraIsClickingTheDesktop",
+    completed: "common:synaraClickedTheDesktop",
+    failed: "common:synaraCouldnTFinishClickingTheDesktop",
+    cancelled: "common:synaraStoppedClickingTheDesktop",
+  },
+  synara_computer_move_cursor: {
+    running: "common:synaraIsMovingTheCursor",
+    completed: "common:synaraMovedTheCursor",
+    failed: "common:synaraCouldnTFinishMovingTheCursor",
+    cancelled: "common:synaraStoppedMovingTheCursor",
+  },
+  synara_computer_drag: {
+    running: "common:synaraIsDraggingOnTheDesktop",
+    completed: "common:synaraDraggedOnTheDesktop",
+    failed: "common:synaraCouldnTFinishDraggingOnTheDesktop",
+    cancelled: "common:synaraStoppedDraggingOnTheDesktop",
+  },
+  synara_computer_scroll: {
+    running: "common:synaraIsScrollingTheDesktop",
+    completed: "common:synaraScrolledTheDesktop",
+    failed: "common:synaraCouldnTFinishScrollingTheDesktop",
+    cancelled: "common:synaraStoppedScrollingTheDesktop",
+  },
+  synara_computer_type_text: {
+    running: "common:synaraIsTypingOnTheDesktop",
+    completed: "common:synaraTypedOnTheDesktop",
+    failed: "common:synaraCouldnTFinishTypingOnTheDesktop",
+    cancelled: "common:synaraStoppedTypingOnTheDesktop",
+  },
+  synara_computer_press_key: {
+    running: "common:synaraIsPressingAKey",
+    completed: "common:synaraPressedAKey",
+    failed: "common:synaraCouldnTFinishPressingAKey",
+    cancelled: "common:synaraStoppedPressingAKey",
+  },
+  synara_computer_set_value: {
+    running: "common:synaraIsSettingAField",
+    completed: "common:synaraSetAField",
+    failed: "common:synaraCouldnTFinishSettingAField",
+    cancelled: "common:synaraStoppedSettingAField",
+  },
+  synara_computer_select_text: {
+    running: "common:synaraIsSelectingText",
+    completed: "common:synaraSelectedText",
+    failed: "common:synaraCouldnTFinishSelectingText",
+    cancelled: "common:synaraStoppedSelectingText",
+  },
+  synara_computer_perform_action: {
+    running: "common:synaraIsActivatingAControl",
+    completed: "common:synaraActivatedAControl",
+    failed: "common:synaraCouldnTFinishActivatingAControl",
+    cancelled: "common:synaraStoppedActivatingAControl",
+  },
+  synara_computer_launch_app: {
+    running: "common:synaraIsOpeningAnApp",
+    completed: "common:synaraOpenedAnApp",
+    failed: "common:synaraCouldnTFinishOpeningAnApp",
+    cancelled: "common:synaraStoppedOpeningAnApp",
+  },
+  synara_computer_activate_window: {
+    running: "common:synaraIsActivatingAWindow",
+    completed: "common:synaraActivatedAWindow",
+    failed: "common:synaraCouldnTFinishActivatingAWindow",
+    cancelled: "common:synaraStoppedActivatingAWindow",
+  },
+  synara_computer_set_window_frame: {
+    running: "common:synaraIsMovingOrResizingAWindow",
+    completed: "common:synaraMovedOrResizedAWindow",
+    failed: "common:synaraCouldnTFinishMovingOrResizingAWindow",
+    cancelled: "common:synaraStoppedMovingOrResizingAWindow",
+  },
+  synara_computer_invoke_menu: {
+    running: "common:synaraIsInvokingAMenuItem",
+    completed: "common:synaraInvokedAMenuItem",
+    failed: "common:synaraCouldnTFinishInvokingAMenuItem",
+    cancelled: "common:synaraStoppedInvokingAMenuItem",
+  },
+  synara_computer_kill_app: {
+    running: "common:synaraIsForceQuittingAnApp",
+    completed: "common:synaraForceQuitAnApp",
+    failed: "common:synaraCouldnTFinishForceQuittingAnApp",
+    cancelled: "common:synaraStoppedForceQuittingAnApp",
+  },
+  synara_computer_set_window_minimized: {
+    running: "common:synaraIsChangingAWindowSVisibility",
+    completed: "common:synaraChangedAWindowSVisibility",
+    failed: "common:synaraCouldnTFinishChangingAWindowSVisibility",
+    cancelled: "common:synaraStoppedChangingAWindowSVisibility",
+  },
+  synara_computer_set_app_visibility: {
+    running: "common:synaraIsChangingAnAppSVisibility",
+    completed: "common:synaraChangedAnAppSVisibility",
+    failed: "common:synaraCouldnTFinishChangingAnAppSVisibility",
+    cancelled: "common:synaraStoppedChangingAnAppSVisibility",
+  },
+  synara_computer_wait: {
+    running: "common:synaraIsWaitingForTheDesktop",
+    completed: "common:synaraWaitedForTheDesktop",
+    failed: "common:synaraCouldnTFinishWaitingForTheDesktop",
+    cancelled: "common:synaraStoppedWaitingForTheDesktop",
+  },
+  synara_computer_read_clipboard: {
+    running: "common:synaraIsReadingTheClipboard",
+    completed: "common:synaraReadTheClipboard",
+    failed: "common:synaraCouldnTFinishReadingTheClipboard",
+    cancelled: "common:synaraStoppedReadingTheClipboard",
+  },
+  synara_computer_write_clipboard: {
+    running: "common:synaraIsWritingToTheClipboard",
+    completed: "common:synaraWroteToTheClipboard",
+    failed: "common:synaraCouldnTFinishWritingToTheClipboard",
+    cancelled: "common:synaraStoppedWritingToTheClipboard",
+  },
+  synara_computer_paste: {
+    running: "common:synaraIsPastingText",
+    completed: "common:synaraPastedText",
+    failed: "common:synaraCouldnTFinishPastingText",
+    cancelled: "common:synaraStoppedPastingText",
+  },
+  synara_computer_run: {
+    running: "common:synaraIsRunningADesktopSequence",
+    completed: "common:synaraRanADesktopSequence",
+    failed: "common:synaraCouldnTFinishRunningADesktopSequence",
+    cancelled: "common:synaraStoppedRunningADesktopSequence",
+  },
+  synara_computer_inspect: {
+    running: "common:synaraIsInspectingTheComputer",
+    completed: "common:synaraInspectedTheComputer",
+    failed: "common:synaraCouldnTFinishInspectingTheComputer",
+    cancelled: "common:synaraStoppedInspectingTheComputer",
+  },
+  synara_computer_spaces: {
+    running: "common:synaraIsInspectingDesktopSpaces",
+    completed: "common:synaraInspectedDesktopSpaces",
+    failed: "common:synaraCouldnTFinishInspectingDesktopSpaces",
+    cancelled: "common:synaraStoppedInspectingDesktopSpaces",
+  },
+  synara_computer_browser_state: {
+    running: "common:synaraIsReadingTheBrowserPage",
+    completed: "common:synaraReadTheBrowserPage",
+    failed: "common:synaraCouldnTFinishReadingTheBrowserPage",
+    cancelled: "common:synaraStoppedReadingTheBrowserPage",
+  },
+  synara_computer_browser_prepare: {
+    running: "common:synaraIsPreparingABrowser",
+    completed: "common:synaraPreparedABrowser",
+    failed: "common:synaraCouldnTFinishPreparingABrowser",
+    cancelled: "common:synaraStoppedPreparingABrowser",
+  },
+  synara_computer_browser_navigate: {
+    running: "common:synaraIsOpeningABrowserPage",
+    completed: "common:synaraOpenedABrowserPage",
+    failed: "common:synaraCouldnTFinishOpeningABrowserPage",
+    cancelled: "common:synaraStoppedOpeningABrowserPage",
+  },
+  synara_computer_browser_click: {
+    running: "common:synaraIsClickingInTheBrowser",
+    completed: "common:synaraClickedInTheBrowser",
+    failed: "common:synaraCouldnTFinishClickingInTheBrowser",
+    cancelled: "common:synaraStoppedClickingInTheBrowser",
+  },
+  synara_computer_browser_type: {
+    running: "common:synaraIsTypingInABrowserField",
+    completed: "common:synaraTypedInABrowserField",
+    failed: "common:synaraCouldnTFinishTypingInABrowserField",
+    cancelled: "common:synaraStoppedTypingInABrowserField",
+  },
+  synara_computer_browser_dialog: {
+    running: "common:synaraIsHandlingABrowserDialog",
+    completed: "common:synaraHandledABrowserDialog",
+    failed: "common:synaraCouldnTFinishHandlingABrowserDialog",
+    cancelled: "common:synaraStoppedHandlingABrowserDialog",
+  },
+  synara_computer_browser_upload: {
+    running: "common:synaraIsAttachingFilesInTheBrowser",
+    completed: "common:synaraAttachedFilesInTheBrowser",
+    failed: "common:synaraCouldnTFinishAttachingFilesInTheBrowser",
+    cancelled: "common:synaraStoppedAttachingFilesInTheBrowser",
+  },
+  synara_computer_browser_download: {
+    running: "common:synaraIsDownloadingAFile",
+    completed: "common:synaraDownloadedAFile",
+    failed: "common:synaraCouldnTFinishDownloadingAFile",
+    cancelled: "common:synaraStoppedDownloadingAFile",
+  },
+  synara_computer_browser_pointer: {
+    running: "common:synaraIsUsingThePointerInTheBrowser",
+    completed: "common:synaraUsedThePointerInTheBrowser",
+    failed: "common:synaraCouldnTFinishUsingThePointerInThe",
+    cancelled: "common:synaraStoppedUsingThePointerInTheBrowser",
+  },
+  synara_computer_browser_press: {
+    running: "common:synaraIsPressingEnterInTheBrowser",
+    completed: "common:synaraPressedEnterInTheBrowser",
+    failed: "common:synaraCouldnTFinishPressingEnterInTheBrowser",
+    cancelled: "common:synaraStoppedPressingEnterInTheBrowser",
+  },
+  synara_context: {
+    running: "chat:synaraIsCheckingItsContext",
+    completed: "chat:synaraCheckedItsContext",
+    failed: "chat:synaraCouldnTCheckItsContext",
+    cancelled: "common:synaraStoppedCheckingItsContext",
+  },
+  synara_capabilities: {
+    running: "chat:synaraIsCheckingAvailableAgents",
+    completed: "chat:synaraCheckedAvailableAgents",
+    failed: "chat:synaraCouldnTCheckAvailableAgents",
+    cancelled: "common:synaraStoppedCheckingAvailableAgents",
+  },
+  synara_overview: {
+    running: "chat:synaraIsGatheringAnOverview",
+    completed: "chat:synaraGatheredAnOverview",
+    failed: "chat:synaraCouldnTGatherAnOverview",
+    cancelled: "common:synaraStoppedGatheringAnOverview",
+  },
+  synara_list_allowed_projects: {
+    running: "chat:synaraIsListingAllowedProjects",
+    completed: "chat:synaraListedAllowedProjects",
+    failed: "chat:synaraCouldnTListAllowedProjects",
+    cancelled: "common:synaraStoppedListingAllowedProjects",
+  },
+  synara_create_task: {
+    running: "chat:synaraIsCreatingATask",
+    completed: "chat:synaraCreatedATask",
+    failed: "chat:synaraCouldnTCreateATask",
+    cancelled: "common:synaraStoppedCreatingATask",
+  },
+  synara_wait_for_task: {
+    running: "chat:synaraIsWaitingForATask",
+    completed: "chat:synaraFinishedWaitingForATask",
+    failed: "chat:synaraCouldnTWaitForATask",
+    cancelled: "common:synaraStoppedWaitingForATask",
+  },
+  synara_read_task: {
+    running: "chat:synaraIsReadingATask",
+    completed: "chat:synaraReadATask",
+    failed: "chat:synaraCouldnTReadATask",
+    cancelled: "common:synaraStoppedReadingATask",
+  },
+  synara_list_projects: {
+    running: "chat:synaraIsListingProjects",
+    completed: "chat:synaraListedProjects",
+    failed: "chat:synaraCouldnTListProjects",
+    cancelled: "common:synaraStoppedListingProjects",
+  },
+  synara_list_threads: {
+    running: "chat:synaraIsListingThreads",
+    completed: "chat:synaraListedThreads",
+    failed: "chat:synaraCouldnTListThreads",
+    cancelled: "common:synaraStoppedListingThreads",
+  },
+  synara_read_thread: {
+    running: "chat:synaraIsReadingAThread",
+    completed: "chat:synaraReadAThread",
+    failed: "chat:synaraCouldnTReadAThread",
+    cancelled: "common:synaraStoppedReadingAThread",
+  },
+  synara_read_thread_activity: {
+    running: "chat:synaraIsReadingThreadActivity",
+    completed: "chat:synaraReadThreadActivity",
+    failed: "chat:synaraCouldnTReadThreadActivity",
+    cancelled: "common:synaraStoppedReadingThreadActivity",
+  },
+  synara_read_thread_events: {
+    running: "chat:synaraIsReadingThreadEvents",
+    completed: "chat:synaraReadThreadEvents",
+    failed: "chat:synaraCouldnTReadThreadEvents",
+    cancelled: "common:synaraStoppedReadingThreadEvents",
+  },
+  synara_read_thread_runtime_events: {
+    running: "chat:synaraIsReadingThreadRuntimeEvents",
+    completed: "chat:synaraReadThreadRuntimeEvents",
+    failed: "chat:synaraCouldnTReadThreadRuntimeEvents",
+    cancelled: "common:synaraStoppedReadingThreadRuntimeEvents",
+  },
+  synara_diagnose_thread: {
+    running: "chat:synaraIsDiagnosingAThread",
+    completed: "chat:synaraDiagnosedAThread",
+    failed: "chat:synaraCouldnTDiagnoseAThread",
+    cancelled: "common:synaraStoppedDiagnosingAThread",
+  },
+  synara_create_thread: {
+    running: "chat:synaraIsCreatingAThread",
+    completed: "chat:synaraCreatedAThread",
+    failed: "chat:synaraCouldnTCreateAThread",
+    cancelled: "common:synaraStoppedCreatingAThread",
+  },
+  synara_create_threads: {
+    running: "chat:synaraIsCreatingThreads",
+    completed: "chat:synaraCreatedThreads",
+    failed: "chat:synaraCouldnTCreateThreads",
+    cancelled: "common:synaraStoppedCreatingThreads",
+  },
+  synara_wait_for_threads: {
+    running: "chat:synaraIsWaitingForThreads",
+    completed: "chat:synaraFinishedWaitingForThreads",
+    failed: "chat:synaraCouldnTWaitForThreads",
+    cancelled: "common:synaraStoppedWaitingForThreads",
+  },
+  synara_send_message: {
+    running: "chat:synaraIsSendingAMessage",
+    completed: "chat:synaraSentAMessage",
+    failed: "chat:synaraCouldnTSendAMessage",
+    cancelled: "common:synaraStoppedSendingAMessage",
+  },
+  synara_read_kanban_board: {
+    running: "chat:synaraIsReadingTheBoard",
+    completed: "chat:synaraReadTheBoard",
+    failed: "chat:synaraCouldnTReadTheBoard",
+    cancelled: "common:synaraStoppedReadingTheBoard",
+  },
+  synara_read_kanban_card: {
+    running: "chat:synaraIsReadingABoardCard",
+    completed: "chat:synaraReadABoardCard",
+    failed: "chat:synaraCouldnTReadABoardCard",
+    cancelled: "common:synaraStoppedReadingABoardCard",
+  },
+  synara_create_kanban_task: {
+    running: "chat:synaraIsCreatingABoardTask",
+    completed: "chat:synaraCreatedABoardTask",
+    failed: "chat:synaraCouldnTCreateABoardTask",
+    cancelled: "common:synaraStoppedCreatingABoardTask",
+  },
+  synara_move_kanban_card: {
+    running: "chat:synaraIsMovingABoardCard",
+    completed: "chat:synaraMovedABoardCard",
+    failed: "chat:synaraCouldnTMoveABoardCard",
+    cancelled: "common:synaraStoppedMovingABoardCard",
+  },
+  synara_show_visual: {
+    running: "chat:synaraIsShowingAVisual",
+    completed: "chat:synaraShowedAVisual",
+    failed: "chat:synaraCouldnTShowAVisual",
+    cancelled: "common:synaraStoppedShowingAVisual",
+  },
+  synara_create_todo: {
+    running: "chat:synaraIsAddingAToDo",
+    completed: "chat:synaraAddedAToDo",
+    failed: "chat:synaraCouldnTAddAToDo",
+    cancelled: "common:synaraStoppedAddingAToDo",
+  },
+  synara_list_todos: {
+    running: "chat:synaraIsReadingYourToDos",
+    completed: "chat:synaraReadYourToDos",
+    failed: "chat:synaraCouldnTReadYourToDos",
+    cancelled: "common:synaraStoppedReadingYourToDos",
+  },
+  synara_update_todo: {
+    running: "chat:synaraIsUpdatingAToDo",
+    completed: "chat:synaraUpdatedAToDo",
+    failed: "chat:synaraCouldnTUpdateAToDo",
+    cancelled: "common:synaraStoppedUpdatingAToDo",
+  },
+  synara_interrupt_thread: {
+    running: "chat:synaraIsInterruptingAThread",
+    completed: "chat:synaraInterruptedAThread",
+    failed: "chat:synaraCouldnTInterruptAThread",
+    cancelled: "common:synaraStoppedInterruptingAThread",
+  },
+  synara_set_thread_title: {
+    running: "chat:synaraIsRenamingAThread",
+    completed: "chat:synaraRenamedAThread",
+    failed: "chat:synaraCouldnTRenameAThread",
+    cancelled: "common:synaraStoppedRenamingAThread",
+  },
+  synara_set_thread_archived: {
+    running: "chat:synaraIsUpdatingAThread",
+    completed: "chat:synaraUpdatedAThread",
+    failed: "chat:synaraCouldnTUpdateAThread",
+    cancelled: "common:synaraStoppedUpdatingAThread",
+  },
+  synara_create_automation: {
+    running: "chat:synaraIsCreatingAnAutomation",
+    completed: "chat:synaraCreatedAnAutomation",
+    failed: "chat:synaraCouldnTCreateAnAutomation",
+    cancelled: "common:synaraStoppedCreatingAnAutomation",
+  },
+  synara_list_automations: {
+    running: "chat:synaraIsListingAutomations",
+    completed: "chat:synaraListedAutomations",
+    failed: "chat:synaraCouldnTListAutomations",
+    cancelled: "common:synaraStoppedListingAutomations",
+  },
+  synara_view_automation: {
+    running: "chat:synaraIsViewingAnAutomation",
+    completed: "chat:synaraViewedAnAutomation",
+    failed: "chat:synaraCouldnTViewAnAutomation",
+    cancelled: "common:synaraStoppedViewingAnAutomation",
+  },
+  synara_update_automation: {
+    running: "chat:synaraIsUpdatingAnAutomation",
+    completed: "chat:synaraUpdatedAnAutomation",
+    failed: "chat:synaraCouldnTUpdateAnAutomation",
+    cancelled: "common:synaraStoppedUpdatingAnAutomation",
+  },
+  synara_update_automation_memory: {
+    running: "chat:synaraIsUpdatingAutomationMemory",
+    completed: "chat:synaraUpdatedAutomationMemory",
+    failed: "chat:synaraCouldnTUpdateAutomationMemory",
+    cancelled: "common:synaraStoppedUpdatingAutomationMemory",
+  },
+  synara_report_automation_result: {
+    running: "chat:synaraIsReportingAnAutomationResult",
+    completed: "chat:synaraReportedAnAutomationResult",
+    failed: "chat:synaraCouldnTReportAnAutomationResult",
+    cancelled: "common:synaraStoppedReportingAnAutomationResult",
+  },
+  synara_cancel_automation: {
+    running: "chat:synaraIsStoppingAnAutomation",
+    completed: "chat:synaraStoppedAnAutomation",
+    failed: "chat:synaraCouldnTStopAnAutomation",
+    cancelled: "common:synaraStoppedStoppingAnAutomation",
+  },
+  synara_browser_status: {
+    running: "common:checkBrowserStatus",
+    completed: "common:checkBrowserStatus",
+    failed: "common:checkBrowserStatus",
+    cancelled: "common:cancelledCheckBrowserStatus",
+  },
+  synara_browser_tabs: {
+    running: "common:listBrowserTabs",
+    completed: "common:listBrowserTabs",
+    failed: "common:listBrowserTabs",
+    cancelled: "common:cancelledListBrowserTabs",
+  },
+  synara_browser_open: {
+    running: "common:openBrowserTab",
+    completed: "common:openBrowserTab",
+    failed: "common:openBrowserTab",
+    cancelled: "common:cancelledOpenBrowserTab",
+  },
+  synara_browser_navigate: {
+    running: "common:navigateBrowserTab",
+    completed: "common:navigateBrowserTab",
+    failed: "common:navigateBrowserTab",
+    cancelled: "common:cancelledNavigateBrowserTab",
+  },
+  synara_browser_back: {
+    running: "common:goBackInBrowserHistory",
+    completed: "common:goBackInBrowserHistory",
+    failed: "common:goBackInBrowserHistory",
+    cancelled: "common:cancelledGoBackInBrowserHistory",
+  },
+  synara_browser_forward: {
+    running: "common:goForwardInBrowserHistory",
+    completed: "common:goForwardInBrowserHistory",
+    failed: "common:goForwardInBrowserHistory",
+    cancelled: "common:cancelledGoForwardInBrowserHistory",
+  },
+  synara_browser_reload: {
+    running: "common:reloadBrowserPage",
+    completed: "common:reloadBrowserPage",
+    failed: "common:reloadBrowserPage",
+    cancelled: "common:cancelledReloadBrowserPage",
+  },
+  synara_browser_resize: {
+    running: "common:resizeBrowserViewport",
+    completed: "common:resizeBrowserViewport",
+    failed: "common:resizeBrowserViewport",
+    cancelled: "common:cancelledResizeBrowserViewport",
+  },
+  synara_browser_screenshot: {
+    running: "common:captureBrowserScreenshot",
+    completed: "common:captureBrowserScreenshot",
+    failed: "common:captureBrowserScreenshot",
+    cancelled: "common:cancelledCaptureBrowserScreenshot",
+  },
+  synara_browser_logs: {
+    running: "common:readBrowserDiagnostics",
+    completed: "common:readBrowserDiagnostics",
+    failed: "common:readBrowserDiagnostics",
+    cancelled: "common:cancelledReadBrowserDiagnostics",
+  },
+  synara_browser_upload: {
+    running: "common:uploadWorkspaceFiles",
+    completed: "common:uploadWorkspaceFiles",
+    failed: "common:uploadWorkspaceFiles",
+    cancelled: "common:cancelledUploadWorkspaceFiles",
+  },
+  synara_browser_run: {
+    running: "common:runBrowserActions",
+    completed: "common:runBrowserActions",
+    failed: "common:runBrowserActions",
+    cancelled: "common:cancelledRunBrowserActions",
+  },
+  synara_browser_close: {
+    running: "common:closeBrowserTab",
+    completed: "common:closeBrowserTab",
+    failed: "common:closeBrowserTab",
+    cancelled: "common:cancelledCloseBrowserTab",
+  },
+  synara_browser_snapshot: {
+    running: "chat:snapshotBrowserPage",
+    completed: "chat:snapshotBrowserPage",
+    failed: "chat:snapshotBrowserPage",
+    cancelled: "common:cancelledSnapshotBrowserPage",
+  },
+  synara_browser_webmcp_tools: {
+    running: "chat:discoverPageWebMCPTools",
+    completed: "chat:discoverPageWebMCPTools",
+    failed: "chat:discoverPageWebMCPTools",
+    cancelled: "common:cancelledDiscoverPageWebMCPTools",
+  },
+  synara_browser_webmcp_call: {
+    running: "chat:callPageWebMCPTool",
+    completed: "chat:callPageWebMCPTool",
+    failed: "chat:callPageWebMCPTool",
+    cancelled: "common:cancelledCallPageWebMCPTool",
+  },
+  synara_browser_click: {
+    running: "chat:clickBrowserTarget",
+    completed: "chat:clickBrowserTarget",
+    failed: "chat:clickBrowserTarget",
+    cancelled: "common:cancelledClickBrowserTarget",
+  },
+  synara_browser_hover: {
+    running: "chat:hoverBrowserTarget",
+    completed: "chat:hoverBrowserTarget",
+    failed: "chat:hoverBrowserTarget",
+    cancelled: "common:cancelledHoverBrowserTarget",
+  },
+  synara_browser_drag: {
+    running: "chat:dragBetweenBrowserTargets",
+    completed: "chat:dragBetweenBrowserTargets",
+    failed: "chat:dragBetweenBrowserTargets",
+    cancelled: "common:cancelledDragBetweenBrowserTargets",
+  },
+  synara_browser_type: {
+    running: "chat:typeIntoBrowserTarget",
+    completed: "chat:typeIntoBrowserTarget",
+    failed: "chat:typeIntoBrowserTarget",
+    cancelled: "common:cancelledTypeIntoBrowserTarget",
+  },
+  synara_browser_select: {
+    running: "chat:selectBrowserOptions",
+    completed: "chat:selectBrowserOptions",
+    failed: "chat:selectBrowserOptions",
+    cancelled: "common:cancelledSelectBrowserOptions",
+  },
+  synara_browser_press: {
+    running: "chat:pressBrowserKeys",
+    completed: "chat:pressBrowserKeys",
+    failed: "chat:pressBrowserKeys",
+    cancelled: "common:cancelledPressBrowserKeys",
+  },
+  synara_browser_scroll: {
+    running: "chat:scrollBrowserPage",
+    completed: "chat:scrollBrowserPage",
+    failed: "chat:scrollBrowserPage",
+    cancelled: "common:cancelledScrollBrowserPage",
+  },
+  synara_browser_wait: {
+    running: "chat:waitForBrowserCondition",
+    completed: "chat:waitForBrowserCondition",
+    failed: "chat:waitForBrowserCondition",
+    cancelled: "common:cancelledWaitForBrowserCondition",
+  },
+  synara_browser_evaluate: {
+    running: "chat:evaluateBrowserExpression",
+    completed: "chat:evaluateBrowserExpression",
+    failed: "chat:evaluateBrowserExpression",
+    cancelled: "common:cancelledEvaluateBrowserExpression",
+  },
+} as const satisfies Record<
+  keyof typeof SYNARA_MCP_TOOL_PRESENTATIONS,
+  Record<SynaraMcpToolStatus, string>
+>;
 
 function normalizeSynaraMcpIdentifier(value: string): string {
   return value
@@ -525,21 +1159,39 @@ function resolveSynaraBrowserToolName(
   return null;
 }
 
-function fallbackSynaraMcpToolPresentation(toolName: string): SynaraMcpToolPresentation {
+function fallbackSynaraMcpToolPresentation(
+  toolName: string,
+  translate: typeof t,
+): SynaraMcpToolPresentation {
   const action =
     toolName
       .replace(/^synara_/, "")
       .replace(/_+/g, " ")
-      .trim() || "an action";
+      .trim() || translate("chat:anAction");
   return {
-    running: `Synara is handling ${action}`,
-    completed: `Synara handled ${action}`,
-    failed: `Synara couldn't handle ${action}`,
+    running: translate("chat:synaraIsHandling", { action }),
+    completed: translate("chat:synaraHandled", { action }),
+    failed: translate("chat:synaraCouldnTHandle", { action }),
+    cancelled: translate("chat:synaraStoppedHandling", { action }),
+  };
+}
+
+function localizeSynaraMcpToolPresentation(
+  toolName: keyof typeof SYNARA_MCP_TOOL_PRESENTATIONS,
+  translate: typeof t,
+): SynaraMcpToolPresentation {
+  const keys = SYNARA_MCP_TOOL_PRESENTATION_KEYS[toolName];
+  return {
+    running: translate(keys.running),
+    completed: translate(keys.completed),
+    failed: translate(keys.failed),
+    cancelled: translate(keys.cancelled),
   };
 }
 
 function resolveSynaraMcpToolPresentation(
   candidates: ReadonlyArray<string | null | undefined>,
+  translate: typeof t,
 ): SynaraMcpToolPresentation | null {
   for (const candidate of candidates) {
     if (!candidate) {
@@ -552,17 +1204,23 @@ function resolveSynaraMcpToolPresentation(
         normalizedCandidate === entry.normalizedCompleted ||
         normalizedCandidate === entry.normalizedFailed
       ) {
-        return entry.presentation;
+        return localizeSynaraMcpToolPresentation(
+          entry.toolName as keyof typeof SYNARA_MCP_TOOL_PRESENTATIONS,
+          translate,
+        );
       }
     }
     const toolName = extractSynaraMcpToolName(normalizedCandidate);
     const knownPresentation = toolName
       ? (SYNARA_MCP_TOOL_PRESENTATIONS[toolName as keyof typeof SYNARA_MCP_TOOL_PRESENTATIONS] as
-          | SynaraMcpToolPresentation
+          | SynaraMcpToolSourcePresentation
           | undefined)
       : undefined;
     if (knownPresentation) {
-      return knownPresentation;
+      return localizeSynaraMcpToolPresentation(
+        toolName as keyof typeof SYNARA_MCP_TOOL_PRESENTATIONS,
+        translate,
+      );
     }
     // Free-text summaries (e.g. reconciler activity lines) can begin with the
     // word "Synara" and normalize into a fake tool identifier; only
@@ -573,22 +1231,25 @@ function resolveSynaraMcpToolPresentation(
     if (normalizedCandidate.startsWith("synara_is_handling_")) {
       return fallbackSynaraMcpToolPresentation(
         `synara_${normalizedCandidate.slice("synara_is_handling_".length)}`,
+        translate,
       );
     }
     if (normalizedCandidate.startsWith("synara_handled_")) {
       return fallbackSynaraMcpToolPresentation(
         `synara_${normalizedCandidate.slice("synara_handled_".length)}`,
+        translate,
       );
     }
     if (normalizedCandidate.startsWith("synara_couldn_t_handle_")) {
       return fallbackSynaraMcpToolPresentation(
         `synara_${normalizedCandidate.slice("synara_couldn_t_handle_".length)}`,
+        translate,
       );
     }
     if (!toolName) {
       continue;
     }
-    return fallbackSynaraMcpToolPresentation(toolName);
+    return fallbackSynaraMcpToolPresentation(toolName, translate);
   }
   return null;
 }
@@ -609,61 +1270,61 @@ export function isSynaraBrowserToolCall(input: SynaraMcpToolTitleInput): boolean
 // Every provider exposes Synara's MCP tools differently: MCP, dynamic, and even
 // file-change rows can all represent the same gateway action. Normalize by tool
 // identity instead of provider item type so transport details never reach the UI.
-export function deriveSynaraMcpToolTitle(input: SynaraMcpToolTitleInput): string | null {
-  const presentation = resolveSynaraMcpToolPresentation([
-    input.toolName,
-    input.title,
-    input.fallbackLabel,
-  ]);
+export function deriveSynaraMcpToolTitle(
+  input: SynaraMcpToolTitleInput,
+  translate: typeof t = t,
+): string | null {
+  const presentation = resolveSynaraMcpToolPresentation(
+    [input.toolName, input.title, input.fallbackLabel],
+    translate,
+  );
   if (!presentation) {
     return null;
   }
-  switch (input.status ?? "completed") {
-    case "running":
-      return presentation.running;
-    case "completed":
-      return presentation.completed;
-    case "failed":
-      return presentation.failed;
-    case "cancelled":
-      return presentation.running.startsWith("Synara is ")
-        ? `Synara stopped ${presentation.running.slice("Synara is ".length)}`
-        : `Cancelled ${presentation.running}`;
-  }
+  return presentation[input.status ?? "completed"];
 }
 
-export function sanitizeSynaraMcpToolPreview(input: {
-  readonly preview?: string | null | undefined;
-  readonly heading: string;
-  readonly status?: SynaraMcpToolStatus | undefined;
-}): string | null {
+export function sanitizeSynaraMcpToolPreview(
+  input: {
+    readonly preview?: string | null | undefined;
+    readonly heading: string;
+    readonly status?: SynaraMcpToolStatus | undefined;
+  },
+  translate: typeof t = t,
+): string | null {
   const preview = input.preview?.trim();
   if (!preview) return null;
-  const previewTitle = deriveSynaraMcpToolTitle({ title: preview, status: input.status });
+  const previewTitle = deriveSynaraMcpToolTitle(
+    { title: preview, status: input.status },
+    translate,
+  );
   if (
     previewTitle &&
-    normalizeSynaraMcpIdentifier(previewTitle) === normalizeSynaraMcpIdentifier(input.heading)
+    normalizeToolTextForComparison(previewTitle) === normalizeToolTextForComparison(input.heading)
   ) {
     return null;
   }
   return preview;
 }
 
-export function deriveReadableToolTitle(input: ReadableToolTitleInput): string | null {
+export function deriveReadableToolTitle(
+  input: ReadableToolTitleInput,
+  translate: typeof t = t,
+): string | null {
   const normalizedTitle = normalizeCompactToolLabel(input.title ?? "");
   const normalizedFallback = normalizeCompactToolLabel(input.fallbackLabel);
   const commandLabel = input.command
-    ? deriveReadableCommandDisplay(input.command, input.isRunning).verb
+    ? deriveReadableCommandDisplay(input.command, input.isRunning, translate).verb
     : null;
   const commandLike = input.itemType === "command_execution" || input.requestKind === "command";
 
   // Derive a verbal label from requestKind when the title is generic
-  const requestKindLabel = humanizeRequestKind(input.requestKind, input.itemType);
+  const requestKindLabel = humanizeRequestKind(input.requestKind, input.itemType, translate);
 
   if (normalizedTitle.length > 0 && !isGenericToolTitle(normalizedTitle)) {
     return (input.itemType === "mcp_tool_call" || input.itemType === "dynamic_tool_call") &&
       /[_-]/.test(normalizedTitle)
-      ? (normalizeToolDescriptor(normalizedTitle) ?? normalizedTitle)
+      ? (normalizeToolDescriptor(normalizedTitle, translate) ?? normalizedTitle)
       : normalizedTitle;
   }
 
@@ -671,7 +1332,10 @@ export function deriveReadableToolTitle(input: ReadableToolTitleInput): string |
     return commandLabel;
   }
 
-  const descriptor = normalizeToolDescriptor(extractToolDescriptorFromPayload(input.payload));
+  const descriptor = normalizeToolDescriptor(
+    extractToolDescriptorFromPayload(input.payload),
+    translate,
+  );
   if (descriptor && !isGenericToolTitle(descriptor)) {
     return descriptor;
   }
@@ -707,15 +1371,17 @@ export type CommandVisualKind = "read" | "search" | "git" | "github" | "terminal
 function humanizeRequestKind(
   requestKind: ReadableToolTitleInput["requestKind"],
   itemType: ReadableToolTitleInput["itemType"],
+  translate: typeof t,
 ): string | null {
-  if (requestKind === "file-read") return "Read";
-  if (requestKind === "file-change" || itemType === "file_change") return "Edited";
-  if (requestKind === "tool") return "Tool";
+  if (requestKind === "file-read") return translate("chat:detail_read", { context: "command" });
+  if (requestKind === "file-change" || itemType === "file_change")
+    return translate("chat:timeline_edited");
+  if (requestKind === "tool") return translate("chat:tool");
   // Don't handle command types here — let humanizeCommandToolLabel produce more specific labels
-  if (itemType === "web_search") return "Searched the web";
-  if (itemType === "image_generation") return "Generated image";
-  if (itemType === "image_view") return "Viewed image";
-  if (itemType === "collab_agent_tool_call") return "Agent task";
+  if (itemType === "web_search") return translate("chat:searchedTheWeb");
+  if (itemType === "image_generation") return translate("chat:generatedImage_generatedImage");
+  if (itemType === "image_view") return translate("chat:viewedImage");
+  if (itemType === "collab_agent_tool_call") return translate("chat:agentTask");
   return null;
 }
 
@@ -743,13 +1409,13 @@ export function isGenericToolTitle(value: string): boolean {
   );
 }
 
-function normalizeToolDescriptor(value: string | null): string | null {
+function normalizeToolDescriptor(value: string | null, translate: typeof t): string | null {
   if (!value) {
     return null;
   }
   const computerTool = computerToolName(value);
   if (computerTool) {
-    return COMPUTER_TOOL_TITLES[computerTool];
+    return translate(COMPUTER_TOOL_TITLE_KEYS[computerTool], { context: "computerTool" });
   }
   const mcpIdentifier = humanizeMcpToolIdentifier(value);
   if (mcpIdentifier) {
@@ -772,10 +1438,10 @@ function normalizeToolDescriptor(value: string | null): string | null {
   }
   const lowerCollapsed = collapsed.toLowerCase();
   if (lowerCollapsed === "read") {
-    return "Read";
+    return translate("chat:detail_read", { context: "command" });
   }
   if (lowerCollapsed === "search" || lowerCollapsed === "find" || lowerCollapsed === "searched") {
-    return "Search";
+    return translate("workspace:primaryActions_search");
   }
   const readable = /[_-]/.test(value) ? humanizeMcpToken(collapsed) : collapsed;
   return readable.length > 64 ? `${readable.slice(0, 61).trimEnd()}...` : readable;
@@ -955,6 +1621,7 @@ const LIST_COMMAND_TOOLS = new Set(["ls"]);
 export function deriveReadableCommandDisplay(
   rawCommand: string,
   isRunning = false,
+  translate: typeof t = t,
 ): ReadableCommandDisplay {
   const command = stripCommandDisplayWrappers(unwrapShellCommandIfPresent(rawCommand));
   const primaryCommand = firstShellCommandSegment(command);
@@ -962,29 +1629,29 @@ export function deriveReadableCommandDisplay(
 
   if (READ_FILE_COMMAND_TOOLS.has(tool)) {
     return {
-      verb: isRunning ? "Reading" : "Read",
-      target: lastPathComponents(args, "file"),
+      verb: translate(isRunning ? "chat:reading" : "chat:detail_read", { context: "command" }),
+      target: lastPathComponents(args, translate("common:file"), translate),
       fullCommand: rawCommand,
     };
   }
   if (SEARCH_COMMAND_TOOLS.has(tool)) {
     return {
-      verb: isRunning ? "Searching" : "Searched",
-      target: searchSummary(args),
+      verb: translate(isRunning ? "chat:searching" : "chat:searched", { context: "command" }),
+      target: searchSummary(args, translate),
       fullCommand: rawCommand,
     };
   }
   if (LIST_COMMAND_TOOLS.has(tool)) {
     return {
-      verb: isRunning ? "Listing" : "Listed",
-      target: lastPathComponents(args, "directory"),
+      verb: translate(isRunning ? "chat:listing" : "chat:listed", { context: "command" }),
+      target: lastPathComponents(args, translate("workspace:directory"), translate),
       fullCommand: rawCommand,
     };
   }
   if (FIND_COMMAND_TOOLS.has(tool)) {
     return {
-      verb: isRunning ? "Finding" : "Found",
-      target: findTarget(args, "files"),
+      verb: translate(isRunning ? "chat:finding" : "chat:found", { context: "command" }),
+      target: findTarget(args, translate("chat:files"), translate),
       fullCommand: rawCommand,
     };
   }
@@ -992,31 +1659,34 @@ export function deriveReadableCommandDisplay(
   switch (tool) {
     case "mkdir":
       return {
-        verb: isRunning ? "Creating" : "Created",
-        target: lastPathComponents(args, "directory"),
+        verb: translate(isRunning ? "chat:creating" : "settings:created", { context: "command" }),
+        target: lastPathComponents(args, translate("workspace:directory"), translate),
         fullCommand: rawCommand,
       };
     case "rm":
       return {
-        verb: isRunning ? "Removing" : "Removed",
-        target: lastPathComponents(args, "file"),
+        verb: translate(isRunning ? "chat:removing" : "chat:removed", { context: "command" }),
+        target: lastPathComponents(args, translate("common:file"), translate),
         fullCommand: rawCommand,
       };
     case "cp":
     case "mv":
       return {
-        verb: isRunning
-          ? tool === "cp"
-            ? "Copying"
-            : "Moving"
-          : tool === "cp"
-            ? "Copied"
-            : "Moved",
-        target: lastPathComponents(args, "file"),
+        verb: translate(
+          isRunning
+            ? tool === "cp"
+              ? "chat:copying"
+              : "chat:moving"
+            : tool === "cp"
+              ? "chat:theme_copied"
+              : "chat:moved",
+          { context: "command" },
+        ),
+        target: lastPathComponents(args, translate("common:file"), translate),
         fullCommand: rawCommand,
       };
     case "git":
-      return humanizeGitCommand(args, rawCommand, isRunning);
+      return humanizeGitCommand(args, rawCommand, isRunning, translate);
     case "node":
     case "bun":
     case "deno":
@@ -1025,19 +1695,19 @@ export function deriveReadableCommandDisplay(
     case "ruby":
     case "perl":
       return {
-        verb: isRunning ? "Running" : "Ran",
-        target: inlineScriptTarget(tool, command, args) ?? compactInlineCommand(command),
+        verb: translate(isRunning ? "chat:runStatus_running" : "chat:ran", { context: "command" }),
+        target: inlineScriptTarget(tool, command, args, translate) ?? compactInlineCommand(command),
         fullCommand: rawCommand,
       };
     case "osascript":
       return {
-        verb: isRunning ? "Running" : "Ran",
+        verb: translate(isRunning ? "chat:runStatus_running" : "chat:ran", { context: "command" }),
         target: "AppleScript",
         fullCommand: rawCommand,
       };
     default:
       return {
-        verb: isRunning ? "Running" : "Ran",
+        verb: translate(isRunning ? "chat:runStatus_running" : "chat:ran", { context: "command" }),
         target: compactInlineCommand(command),
         fullCommand: rawCommand,
       };
@@ -1065,7 +1735,7 @@ export function deriveFriendlyCommandTarget(rawCommand: string): string {
     return "PowerShell";
   }
   if (executable === "cmd" || executable === "cmd.exe") {
-    return "Command Prompt";
+    return t("chat:commandPrompt");
   }
 
   const target = deriveReadableCommandDisplay(rawCommand).target.trim();
@@ -1228,68 +1898,71 @@ function humanizeGitCommand(
   args: string,
   rawCommand: string,
   isRunning: boolean,
+  translate: typeof t,
 ): ReadableCommandDisplay {
   const normalizedArgs = stripGitGlobalOptions(args);
   const subcommand = normalizedArgs.split(/\s+/, 1)[0]?.toLowerCase() ?? "";
   switch (subcommand) {
     case "status":
       return {
-        verb: isRunning ? "Checking" : "Checked",
+        verb: translate(isRunning ? "chat:providerModelPicker_checking" : "chat:checked", {
+          context: "command",
+        }),
         target: "git status",
         fullCommand: rawCommand,
       };
     case "diff":
       return {
-        verb: isRunning ? "Comparing" : "Compared",
-        target: "changes",
+        verb: translate(isRunning ? "chat:comparing" : "chat:compared", { context: "command" }),
+        target: translate("chat:changes"),
         fullCommand: rawCommand,
       };
     case "show":
       return {
-        verb: isRunning ? "Inspecting" : "Inspected",
+        verb: translate(isRunning ? "chat:inspecting" : "chat:inspected", { context: "command" }),
         target: "commit",
         fullCommand: rawCommand,
       };
     case "log":
       return {
-        verb: isRunning ? "Reviewing" : "Reviewed",
-        target: "git history",
+        verb: translate(isRunning ? "chat:reviewing" : "chat:reviewed", { context: "command" }),
+        target: translate("chat:gitHistory"),
         fullCommand: rawCommand,
       };
     case "add":
       return {
-        verb: isRunning ? "Staging" : "Staged",
-        target: "changes",
+        verb: translate(isRunning ? "chat:staging" : "git:gitPanel_staged", { context: "command" }),
+        target: translate("chat:changes"),
         fullCommand: rawCommand,
       };
     case "commit":
       return {
-        verb: isRunning ? "Committing" : "Committed",
-        target: "changes",
+        verb: translate(isRunning ? "chat:committing" : "chat:committed", { context: "command" }),
+        target: translate("chat:changes"),
         fullCommand: rawCommand,
       };
     case "push":
       return {
-        verb: isRunning ? "Pushing" : "Pushed",
-        target: "to remote",
+        verb: translate(isRunning ? "chat:pushing" : "workspace:pushed", { context: "command" }),
+        target: translate("chat:toRemote"),
         fullCommand: rawCommand,
       };
     case "pull":
       return {
-        verb: isRunning ? "Pulling" : "Pulled",
-        target: "from remote",
+        verb: translate(isRunning ? "chat:pulling" : "chat:pulled", { context: "command" }),
+        target: translate("chat:fromRemote"),
         fullCommand: rawCommand,
       };
     case "checkout":
     case "switch":
       return {
-        verb: isRunning ? "Switching to" : "Switched to",
-        target: checkoutTarget(args),
+        verb: translate(isRunning ? "chat:switchingTo" : "chat:switchedTo", { context: "command" }),
+        target: checkoutTarget(args, translate),
         fullCommand: rawCommand,
       };
     default:
       return {
-        verb: isRunning ? "Running" : "Ran",
+        verb: translate(isRunning ? "chat:runStatus_running" : "chat:ran", { context: "command" }),
         target: compactInlineCommand(`git ${normalizedArgs}`.trim()),
         fullCommand: rawCommand,
       };
@@ -1323,24 +1996,24 @@ function stripGitGlobalOptions(args: string): string {
   return tokens.slice(index).join(" ");
 }
 
-function checkoutTarget(args: string): string {
+function checkoutTarget(args: string, translate: typeof t): string {
   const branch = tokenizeCommandArgs(args).at(-1)?.trim();
-  return branch ? branch : "branch";
+  return branch ? branch : translate("common:branch");
 }
 
-function lastPathComponents(args: string, fallback: string): string {
+function lastPathComponents(args: string, fallback: string, translate: typeof t): string {
   const tokens = tokenizeCommandArgs(args);
   for (let index = tokens.length - 1; index >= 0; index -= 1) {
     const token = tokens[index]!.replace(/^['"]|['"]$/g, "");
     if (!token || token.startsWith("-")) {
       continue;
     }
-    return compactPath(token);
+    return compactPath(token, true, translate);
   }
   return fallback;
 }
 
-function findTarget(args: string, fallback: string): string {
+function findTarget(args: string, fallback: string, translate: typeof t): string {
   const tokens = tokenizeCommandArgs(args);
   let skipNext = false;
   for (const token of tokens) {
@@ -1360,17 +2033,17 @@ function findTarget(args: string, fallback: string): string {
       }
       continue;
     }
-    return compactPath(token);
+    return compactPath(token, true, translate);
   }
   return fallback;
 }
 
-function compactPath(path: string): string {
+function compactPath(path: string, localized = false, translate: typeof t = t): string {
   if (path === ".") {
-    return "current directory";
+    return localized ? translate("chat:currentDirectory") : "current directory";
   }
   if (path === "..") {
-    return "parent directory";
+    return localized ? translate("chat:parentDirectory") : "parent directory";
   }
   const parts = path.split(/[\\/]/).filter(Boolean);
   if (parts.length <= 2) {
@@ -1392,10 +2065,15 @@ function firstShellCommandSegment(command: string): string {
   return chain ? command.slice(0, chain.operatorStart).trim() : command;
 }
 
-function inlineScriptTarget(tool: string, command: string, args: string): string | null {
+function inlineScriptTarget(
+  tool: string,
+  command: string,
+  args: string,
+  translate: typeof t,
+): string | null {
   const normalizedTool = tool === "python3" ? "python" : tool;
   if (containsHeredoc(command) || hasInlineScriptFlag(args)) {
-    return `${normalizedTool} script`;
+    return translate("chat:script", { tool: normalizedTool });
   }
   return null;
 }
@@ -1409,27 +2087,32 @@ function hasInlineScriptFlag(args: string): boolean {
   return tokens.some((token) => token === "-e" || token === "-c" || token.startsWith("-e="));
 }
 
-function searchSummary(args: string): string {
-  const { pattern, path } = extractSearchPatternAndPath(args);
+function searchSummary(args: string, translate: typeof t): string {
+  const { pattern, path, directoryReference } = extractSearchPatternAndPath(args);
+  const displayPath = directoryReference
+    ? translate(path === "parent directory" ? "chat:parentDirectory" : "chat:currentDirectory")
+    : path;
   if (pattern && path) {
-    return `for ${pattern} in ${path}`;
+    return translate("chat:forIn", { pattern, path: displayPath });
   }
   if (pattern) {
-    return `for ${pattern}`;
+    return translate("chat:for", { pattern });
   }
   if (path) {
-    return `in ${path}`;
+    return translate("chat:in", { path: displayPath });
   }
-  return "files";
+  return translate("chat:files");
 }
 
 function extractSearchPatternAndPath(args: string): {
   pattern: string | null;
   path: string | null;
+  directoryReference: boolean;
 } {
   const tokens = tokenizeCommandArgs(args);
   let pattern: string | null = null;
   let path: string | null = null;
+  let directoryReference = false;
   let skipNext = false;
 
   for (const token of tokens) {
@@ -1455,6 +2138,7 @@ function extractSearchPatternAndPath(args: string): {
         const normalizedPath = normalizeSearchPathToken(token);
         if (normalizedPath && (!path || path === "current directory")) {
           path = normalizedPath;
+          directoryReference = token.trim() === "." || token.trim() === "..";
         }
         continue;
       }
@@ -1462,17 +2146,22 @@ function extractSearchPatternAndPath(args: string): {
       continue;
     }
     if (!path || path === "current directory") {
-      path = normalizeSearchPathToken(token) ?? path;
+      const normalizedPath = normalizeSearchPathToken(token);
+      if (normalizedPath) {
+        path = normalizedPath;
+        directoryReference = token.trim() === "." || token.trim() === "..";
+      }
       continue;
     }
   }
 
   if (pattern && path === "current directory" && looksLikeSearchPath(pattern)) {
     path = normalizeSearchPathToken(pattern);
+    directoryReference = false;
     pattern = null;
   }
 
-  return { pattern, path };
+  return { pattern, path, directoryReference };
 }
 
 function normalizeSearchPatternToken(token: string): string | null {

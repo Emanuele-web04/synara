@@ -3,6 +3,7 @@
 // Layer: Web handoff utilities
 // Exports: target-provider, title, transcript, and model-selection helpers.
 
+import { t } from "~/i18n";
 import {
   EventId,
   MessageId,
@@ -105,7 +106,9 @@ export function resolveThreadHandoffBadgeLabel(thread: Pick<Thread, "handoff">):
   if (!thread.handoff) {
     return null;
   }
-  return `Handoff from ${PROVIDER_DISPLAY_NAMES[thread.handoff.sourceProvider]}`;
+  return t("chat:handoffFromProvider", {
+    provider: PROVIDER_DISPLAY_NAMES[thread.handoff.sourceProvider],
+  });
 }
 
 // Preserve the visible source thread name when creating the destination thread.
@@ -164,6 +167,10 @@ export function buildThreadHandoffImportedMessages(
                   name: attachment.name,
                   mimeType: attachment.mimeType,
                   sizeBytes: attachment.sizeBytes,
+                  // Keep the host's decoded alias with the snapshot when its source file is gone.
+                  ...(attachment.type === "image" && attachment.sourcePath !== undefined
+                    ? { sourcePath: attachment.sourcePath }
+                    : {}),
                 },
           )
         : null;

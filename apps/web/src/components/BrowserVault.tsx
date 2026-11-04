@@ -10,6 +10,7 @@ import { DisclosureRegion } from "./ui/DisclosureRegion";
 import { Switch } from "./ui/switch";
 import { BrowserVaultMaster } from "./BrowserVaultMaster";
 import { BrowserCookieImport, type BrowserCookieDestination } from "./BrowserCookieImport";
+import { useTranslation } from "~/i18n";
 
 const OPEN_EVENT = "synara:open-browser-vault";
 
@@ -18,13 +19,15 @@ export function BrowserVaultButton({
 }: {
   destination?: BrowserCookieDestination | undefined;
 }) {
+  const { t } = useTranslation();
+
   if (!readNativeApi()?.browser.vault) return null;
   return (
     <IconButton
       variant="ghost"
       size="icon-sm"
-      label="Saved logins"
-      title="Saved logins"
+      label={t("computer:savedLogins")}
+      title={t("computer:savedLogins")}
       onClick={() =>
         window.dispatchEvent(
           new CustomEvent(OPEN_EVENT, destination ? { detail: destination } : {}),
@@ -37,6 +40,8 @@ export function BrowserVaultButton({
 }
 
 export function BrowserVaultDialog() {
+  const { t } = useTranslation();
+
   const api = readNativeApi()?.browser.vault;
   const [open, setOpen] = useState(false);
   const [snapshot, setSnapshot] = useState<BrowserVaultSnapshot>();
@@ -63,9 +68,9 @@ export function BrowserVaultDialog() {
       lastPrompt.current = id;
     } catch {
       if (mounted.current && request === revision.current)
-        setError("Saved logins could not be loaded.");
+        setError(t("computer:savedLoginsCouldNotBeLoaded"));
     }
-  }, [api]);
+  }, [api, t]);
 
   useEffect(() => {
     mounted.current = true;
@@ -95,7 +100,7 @@ export function BrowserVaultDialog() {
       await action();
       await reload();
     } catch {
-      if (mounted.current) setError("The change could not be saved. Please try again.");
+      if (mounted.current) setError(t("computer:theChangeCouldNotBeSavedPleaseTryAgain"));
     } finally {
       if (mounted.current) setBusy(false);
     }
@@ -121,7 +126,7 @@ export function BrowserVaultDialog() {
         <DialogHeader className="pb-3">
           <DialogTitle className="flex items-center gap-2 pr-8">
             <CentralIcon name="key-1" className="size-4 text-muted-foreground" />
-            Saved logins
+            {t("computer:savedLogins")}
           </DialogTitle>
         </DialogHeader>
         <DialogPanel>
@@ -140,26 +145,28 @@ export function BrowserVaultDialog() {
                   void reload();
                 }}
               >
-                Retry
+                {t("common:common_retry")}
               </Button>
             </div>
           ) : null}
           {!snapshot ? (
             <p className="py-6 text-ui leading-snug text-muted-foreground" role="status">
-              Loading saved logins...
+              {t("computer:loadingSavedLogins")}
             </p>
           ) : (
             <>
               {snapshot.protection.locked ? (
                 <div className="flex items-center justify-between gap-3 py-4 text-ui leading-snug">
-                  <span>Saved logins are locked.</span>
+                  <span>{t("computer:savedLoginsAreLocked")}</span>
                   <Button
                     size="sm"
                     onClick={() =>
                       setMaster({ kind: snapshot.protection.configured ? "unlock" : "setup" })
                     }
                   >
-                    {snapshot.protection.configured ? "Unlock" : "Set master password"}
+                    {snapshot.protection.configured
+                      ? t("computer:unlock")
+                      : t("computer:setMasterPassword")}
                   </Button>
                 </div>
               ) : null}
@@ -177,7 +184,9 @@ export function BrowserVaultDialog() {
               {snapshot.pending.map((prompt) => (
                 <section key={prompt.id} className="border-b py-4">
                   <h3 className="text-ui-lg font-medium">
-                    {prompt.mode === "update" ? "Update password?" : "Save password?"}
+                    {prompt.mode === "update"
+                      ? t("computer:updatePassword")
+                      : t("computer:savePassword")}
                   </h3>
                   <p className="mt-1 break-words text-ui leading-snug">{prompt.origin}</p>
                   <p className="break-words text-ui leading-snug text-muted-foreground">
@@ -192,7 +201,7 @@ export function BrowserVaultDialog() {
                         void act(() => api.respond({ id: prompt.id, save: false }));
                       }}
                     >
-                      Not now
+                      {t("common:notNow")}
                     </Button>
                     <Button
                       size="sm"
@@ -201,22 +210,26 @@ export function BrowserVaultDialog() {
                         void act(() => api.respond({ id: prompt.id, save: true }));
                       }}
                     >
-                      {prompt.mode === "update" ? "Update" : "Save"}
+                      {prompt.mode === "update"
+                        ? t("computer:providerUpdates_update")
+                        : t("computer:form_save")}
                     </Button>
                   </div>
                 </section>
               ))}
-              <section aria-label="Saved accounts" className="pt-3">
+              <section aria-label={t("computer:savedAccounts")} className="pt-3">
                 <div className="flex items-center justify-between pb-2 text-ui leading-snug font-medium text-muted-foreground">
-                  <h3>Logins</h3>
+                  <h3>{t("computer:logins")}</h3>
                   <span>{snapshot.logins.length}</span>
                 </div>
                 {snapshot.logins.length === 0 ? (
                   <div className="flex flex-col items-center gap-3 py-6 text-center">
                     <CentralIcon name="keyhole" className="size-7 text-muted-foreground/60" />
-                    <p className="text-ui leading-snug text-muted-foreground">No saved logins.</p>
+                    <p className="text-ui leading-snug text-muted-foreground">
+                      {t("computer:noSavedLogins")}
+                    </p>
                     <Button size="sm" variant="ghost" onClick={() => setOpen(false)}>
-                      Back to browser
+                      {t("computer:backToBrowser")}
                     </Button>
                   </div>
                 ) : (
@@ -230,26 +243,29 @@ export function BrowserVaultDialog() {
                               {login.origin}
                             </p>
                             <p className="break-words text-ui leading-snug text-muted-foreground">
-                              {login.username || "No username"}
+                              {login.username || t("computer:noUsername")}
                             </p>
                             <p className="mt-1 text-ui leading-snug text-muted-foreground">
                               {login.source === "agent"
-                                ? "Saved by an agent"
+                                ? t("computer:savedByAnAgent")
                                 : login.source === "user"
-                                  ? "Saved by you"
-                                  : "Saved login"}
+                                  ? t("computer:savedByYou")
+                                  : t("computer:savedLogin")}
                             </p>
                             {login.status !== "saved" ? (
                               <p className="mt-1 text-ui leading-snug text-muted-foreground">
-                                Unfinished signup{login.status === "expired" ? " (expired)" : ""}
+                                {t("computer:unfinishedSignup")}
+                                {login.status === "expired" ? t("computer:expired") : ""}
                               </p>
                             ) : null}
                           </div>
                           <Button
                             variant="ghost"
                             size="icon-sm"
-                            aria-label={`Reveal password for ${login.username || login.origin}`}
-                            title="Reveal password"
+                            aria-label={t("computer:revealPasswordFor", {
+                              value0: login.username || login.origin,
+                            })}
+                            title={t("computer:revealPassword")}
                             disabled={busy}
                             onClick={() =>
                               setMaster(
@@ -264,8 +280,10 @@ export function BrowserVaultDialog() {
                           <Button
                             variant="ghost"
                             size="icon-sm"
-                            aria-label={`Delete login for ${login.username || login.origin}`}
-                            title="Delete login"
+                            aria-label={t("computer:deleteLoginFor", {
+                              value0: login.username || login.origin,
+                            })}
+                            title={t("computer:deleteLogin")}
                             disabled={busy}
                             onClick={() => setDeleting(login.id)}
                           >
@@ -286,7 +304,7 @@ export function BrowserVaultDialog() {
                         </DisclosureRegion>
                         <DisclosureRegion open={deleting === login.id}>
                           <div className="flex flex-wrap items-center justify-between gap-3 pt-3 text-ui leading-snug">
-                            <span>Delete this saved login?</span>
+                            <span>{t("computer:deleteThisSavedLogin")}</span>
                             <div className="flex gap-2">
                               <Button
                                 variant="ghost"
@@ -294,7 +312,7 @@ export function BrowserVaultDialog() {
                                 disabled={busy}
                                 onClick={() => setDeleting(null)}
                               >
-                                Cancel
+                                {t("common:form_cancel")}
                               </Button>
                               <Button
                                 variant="destructive"
@@ -307,7 +325,7 @@ export function BrowserVaultDialog() {
                                   });
                                 }}
                               >
-                                Delete
+                                {t("computer:detail_delete")}
                               </Button>
                             </div>
                           </div>
@@ -319,13 +337,13 @@ export function BrowserVaultDialog() {
               </section>
               <section
                 className="mt-3 space-y-4 border-t pt-4 pb-1 text-ui leading-snug"
-                aria-label="Saving and access"
+                aria-label={t("computer:savingAndAccess")}
               >
                 <h3 className="text-ui leading-snug font-medium text-muted-foreground">
-                  Saving &amp; access
+                  {t("computer:savingAccess")}
                 </h3>
                 <div className="flex items-center justify-between gap-4">
-                  <span>Master password</span>
+                  <span>{t("computer:masterPassword")}</span>
                   <Button
                     size="sm"
                     variant="ghost"
@@ -337,25 +355,27 @@ export function BrowserVaultDialog() {
                       } else setMaster({ kind: "setup" });
                     }}
                   >
-                    {snapshot.protection.configured ? "Lock saved logins" : "Set up"}
+                    {snapshot.protection.configured
+                      ? t("computer:lockSavedLogins")
+                      : t("computer:setUp")}
                   </Button>
                 </div>
                 <label className="flex items-center justify-between gap-4">
-                  <span>Allow agents to find saved accounts</span>
+                  <span>{t("computer:allowAgentsToFindSavedAccounts")}</span>
                   <Switch
-                    aria-label="Allow agents to find saved accounts"
+                    aria-label={t("computer:allowAgentsToFindSavedAccounts")}
                     checked={snapshot.settings.agentUse}
                     disabled={busy}
                     onCheckedChange={(agentUse) => configure({ agentUse })}
                   />
                 </label>
                 <p className="text-ui leading-snug text-muted-foreground">
-                  Agent password filling and generation are unavailable.
+                  {t("computer:agentPasswordFillingAndGenerationAreUnavailable")}
                 </p>
                 <label className="flex items-center justify-between gap-4">
-                  <span>Offer to save passwords</span>
+                  <span>{t("computer:offerToSavePasswords")}</span>
                   <Switch
-                    aria-label="Offer to save passwords"
+                    aria-label={t("computer:offerToSavePasswords")}
                     checked={snapshot.settings.offerSave}
                     disabled={busy}
                     onCheckedChange={(offerSave) =>
@@ -364,9 +384,9 @@ export function BrowserVaultDialog() {
                   />
                 </label>
                 <label className="flex items-center justify-between gap-4">
-                  <span>Autosave accepted logins</span>
+                  <span>{t("computer:autosaveAcceptedLogins")}</span>
                   <Switch
-                    aria-label="Autosave accepted logins"
+                    aria-label={t("computer:autosaveAcceptedLogins")}
                     checked={snapshot.settings.autosave}
                     disabled={busy || !snapshot.settings.offerSave}
                     onCheckedChange={(autosave) => configure({ autosave })}

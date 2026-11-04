@@ -5,7 +5,7 @@ description: Install, authenticate, verify, and run the Pi coding agent through 
 
 Synara integrates the Pi coding-agent runtime and its model registry. Pi owns provider credentials, models, extensions, skills, commands, and session behavior; Synara supplies the durable task, working environment, transcript, review surfaces, Agent Gateway connection, and Git lifecycle around it.
 
-Synara runs its bundled Pi SDK for tasks. The standalone `pi --version` reports the CLI version, which can differ from the SDK in Synara. Extensions must be compatible with the SDK version shipped with Synara.
+Synara runs its bundled Pi SDK (currently 1.4.0) for tasks. The standalone `pi --version` reports the CLI version, which can differ from the SDK in Synara. Extensions must be compatible with the SDK version shipped with Synara.
 
 ## Install
 
@@ -40,6 +40,8 @@ For supported subscription providers, use:
 ```text
 /login
 ```
+
+For the current ChatGPT subscription login, use `/login openai`. Those models appear under `openai/` in Synara. The older `openai-codex` login is separate; do not rename or copy its credential into the `openai` entry.
 
 Pi can also use provider API keys from environment variables or its credential store. For example, an Anthropic key can be supplied before launch:
 
@@ -119,7 +121,9 @@ Pi extensions and packages execute with the permissions of your user account. Re
 
 ## Updating
 
-Update Pi and its unpinned packages from Pi itself:
+Update Synara to update its bundled Pi runtime, then fully quit and reopen Synara before refreshing Pi models. Updating the standalone CLI does not replace the SDK that runs Synara tasks.
+
+Update the standalone Pi CLI and its unpinned packages from Pi itself:
 
 ```bash
 pi update
@@ -131,7 +135,11 @@ To update only the CLI:
 pi update --self
 ```
 
-You can also update the global npm package through the package manager that installed it. Restart Synara after changing the runtime.
+You can also update the global npm package through the package manager that installed it.
+
+Pi 1.0.3 renamed the Azure provider to `azure`. Synara keeps `azure-openai-responses` as a runtime alias so existing Pi credentials, `models.json` overrides, and saved model selections continue using their original key. New `azure` profiles keep their own credentials. Synara does not rewrite either profile; moving a profile to the new ID is optional and follows the [upstream migration instructions](https://github.com/earendil-works/pi/releases/tag/v1.0.3). Azure remains unavailable for isolated Pi accounts because its SDK routing can read process-level configuration.
+
+Pi 1.3 moved Kimi Code to Chat Completions. Synara routes the old official `https://api.kimi.com/coding` endpoint to `/coding/v1` when using that protocol, keeping existing credentials, model selections, and config files intact. Custom endpoints and explicit Anthropic protocol definitions keep their configured routing.
 
 ## Model catalog refresh
 
@@ -153,6 +161,12 @@ Discovery shares cached results and bounds retries. The currently selected provi
 Run Pi directly and use `/login`, or configure a supported provider API key. Confirm `/model` shows at least one authenticated model before refreshing Synara.
 
 If Anthropic authentication works but Fable 5.1 is missing, refresh Pi in Synara and start a new task. Synara can repair the known Anthropic catalog entry, but it cannot grant model access that the configured account or provider rejects.
+
+### ChatGPT models appear in Pi but not in Synara
+
+Confirm Synara is updated and fully restarted: a newer `pi --version` alone does not update the bundled SDK. Refresh Pi models and look for `openai/` models after `/login openai`, or `openai-codex/` for the legacy login. Compare the same configured Pi account and agent directory in both applications; another profile’s successful login does not authenticate this account.
+
+If Pi itself reports an expired or invalid login, authenticate again in that same profile and refresh Synara. A working current login does not need to be deleted or repeated just to upgrade Synara.
 
 ### The model catalog differs between projects
 

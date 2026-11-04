@@ -2,6 +2,10 @@ import { SchemaIssue, Schema } from "effect";
 
 import type { ProjectionRepositoryError } from "../persistence/Errors.ts";
 
+// Admission and replay share the same refusal for target-only native reviews.
+export const NATIVE_REVIEW_ATTACHMENTS_UNSUPPORTED =
+  "Native code reviews do not support attachments. Send the files as a normal message.";
+
 export class OrchestrationCommandInvariantError extends Schema.TaggedErrorClass<OrchestrationCommandInvariantError>()(
   "OrchestrationCommandInvariantError",
   {
@@ -95,6 +99,18 @@ export class OrchestrationProjectorDecodeError extends Schema.TaggedErrorClass<O
 ) {
   override get message(): string {
     return `Projector decode failed for ${this.eventType}: ${this.issue}`;
+  }
+}
+
+// Recovery keeps delivery blocked while current-server ownership is unsettled.
+export class ProviderDeliveryRecoveryError extends Schema.TaggedErrorClass<ProviderDeliveryRecoveryError>()(
+  "ProviderDeliveryRecoveryError",
+  { reason: Schema.Literals(["stop-required", "stop-unconfirmed"]) },
+) {
+  override get message(): string {
+    return this.reason === "stop-required"
+      ? "Stop this run, wait for it to finish stopping, then try Unblock thread again."
+      : "The host has not confirmed that this run stopped. Retry Stop, then try Unblock thread again.";
   }
 }
 

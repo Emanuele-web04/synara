@@ -17,6 +17,44 @@ const layer = it.layer(
 );
 
 layer("OrchestrationEventDeliveryRepository", (it) => {
+  it.effect("pages stored event sequences across gaps without loading payloads or moving ACK", () =>
+    Effect.gen(function* () {
+      const repository = yield* OrchestrationEventDeliveryRepository;
+      const sql = yield* SqlClient.SqlClient;
+      const now = new Date().toISOString();
+      yield* DurableProviderCommandDeliveryMigration;
+      const rows = yield* sql<{ sequence: number }>`
+        WITH RECURSIVE events(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM events WHERE n < 4)
+        INSERT INTO orchestration_events (event_id, aggregate_kind, stream_id, stream_version,
+          event_type, occurred_at, command_id, actor_kind, payload_json, metadata_json)
+        SELECT 'sequence-page-' || n, 'thread', 'sequence-page', n, 'thread.activity-appended',
+          ${now}, 'sequence-page-' || n, 'user', 'unreadable payload', '{}' FROM events
+        RETURNING sequence`;
+      const [first, deleted, third, fourth] = rows;
+      assert.isDefined(first);
+      assert.isDefined(deleted);
+      assert.isDefined(third);
+      assert.isDefined(fourth);
+      yield* sql`DELETE FROM orchestration_events WHERE sequence = ${deleted!.sequence}`;
+      const read = (after: number, through = fourth!.sequence, limit = 2) =>
+        repository.readEventSequencePage({
+          sequenceExclusive: after,
+          throughSequenceInclusive: through,
+          limit,
+        });
+      assert.deepEqual(yield* read(first!.sequence - 1), [first, third]);
+      assert.deepEqual(yield* read(third!.sequence), [fourth]);
+      assert.deepEqual(yield* read(first!.sequence, third!.sequence), [third]);
+      assert.deepEqual(yield* read(fourth!.sequence), []);
+      assert.strictEqual(
+        Option.getOrThrow(yield* repository.getConsumerState(PROVIDER_COMMAND_REACTOR_CONSUMER))
+          .lastAckedSequence,
+        0,
+      );
+      yield* sql`DELETE FROM orchestration_events WHERE stream_id = 'sequence-page'`;
+    }),
+  );
+
   it.effect("persists a monotonic thread quarantine fence without moving the global cursor", () =>
     Effect.gen(function* () {
       const repository = yield* OrchestrationEventDeliveryRepository;

@@ -1,3 +1,4 @@
+import { t } from "~/i18n";
 // FILE: SubagentRunCard.logic.ts
 // Purpose: Folds routed subagent work into entries for its invocations, and
 // derives each transcript card's rows (identity, live state, current action,
@@ -592,6 +593,7 @@ function providerThreadIdFromChildId(childThreadId: string, rootThreadId: string
 }
 
 function nestedRowsFor(input: {
+  translate: typeof t;
   spawningThreadId: ThreadId;
   threads: ReadonlyArray<SubagentRunThread>;
   rootThreadId: ThreadId | null;
@@ -631,7 +633,7 @@ function nestedRowsFor(input: {
         accentColor: presentation.accentColor,
         role: presentation.role,
         modelLabel: formatSubagentModelLabel(thread.modelSelection.model),
-        statusLabel,
+        statusLabel: statusLabel ? input.translate(statusLabel) : undefined,
         statusKind,
         isActive: statusKind === "running",
         isViewed: false,
@@ -680,6 +682,7 @@ function taskEndForLaunch(
 }
 
 export function deriveSubagentRunCard(input: {
+  translate?: typeof t;
   subagents: ReadonlyArray<WorkLogSubagent>;
   run: WorkLogSubagentRun;
   threads: ReadonlyArray<SubagentRunThread>;
@@ -693,6 +696,7 @@ export function deriveSubagentRunCard(input: {
   /** The thread's provider runtime has ended (see isSessionRuntimeRetired). */
   runtimeRetired?: boolean;
 }): SubagentRunCardModel {
+  const translate = input.translate ?? t;
   const launchTurnLive = input.launchTurnLive ?? true;
   const runtimeRetired = input.runtimeRetired === true;
   const threadById = threadsById(input.threads);
@@ -719,7 +723,7 @@ export function deriveSubagentRunCard(input: {
       beforeMs: parseTimeMs(member?.nextLaunchedAt),
     };
     const thread = child ? threadForInvocation(child, window) : undefined;
-    const stripItem = toSubagentStripItem(key, subagent, backgrounded, null);
+    const stripItem = toSubagentStripItem(key, subagent, backgrounded, null, translate);
     // A launch that did not name a model runs on the child's own selection.
     const item =
       stripItem.modelLabel === undefined && thread
@@ -728,6 +732,7 @@ export function deriveSubagentRunCard(input: {
     if (thread) visited.add(thread.id);
     const nested = thread
       ? nestedRowsFor({
+          translate,
           spawningThreadId: thread.id,
           threads: input.threads,
           rootThreadId: input.parentThreadId,

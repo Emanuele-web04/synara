@@ -9,7 +9,7 @@ import type {
   ProjectSearchEntriesResult,
   ProjectSearchLocalEntriesResult,
 } from "@synara/contracts";
-import { PROJECT_SEARCH_CONTENT_MIN_QUERY_LENGTH } from "@synara/contracts";
+import { PROJECT_SEARCH_CONTENT_MIN_QUERY_LENGTH, ThreadId } from "@synara/contracts";
 import { isLocalAbsolutePath } from "@synara/shared/path";
 import { queryOptions, type QueryClient } from "@tanstack/react-query";
 import { ensureNativeApi } from "~/nativeApi";
@@ -26,7 +26,11 @@ export const projectQueryKeys = {
     ["projects", "list-directories", cwd, relativePath, includeFiles] as const,
   readFile: (cwd: string | null, relativePath: string | null) =>
     ["projects", "read-file", cwd, relativePath] as const,
-  localPreviewGrant: (path: string | null) => ["projects", "local-preview-grant", path] as const,
+  localPreviewGrant: (
+    path: string | null,
+    cwd: string | null = null,
+    threadId: string | null = null,
+  ) => ["projects", "local-preview-grant", path, cwd, threadId] as const,
   resolveOutOfRootFileReference: (cwd: string | null, relativePath: string | null) =>
     ["projects", "resolve-out-of-root-file-reference", cwd, relativePath] as const,
   resolveWorkspaceFileReference: (cwd: string | null, relativePath: string | null) =>
@@ -358,17 +362,27 @@ export function projectResolveOutOfRootFileReferenceQueryOptions(input: {
 
 export function projectLocalPreviewGrantQueryOptions(input: {
   path: string | null;
+  cwd?: string | null | undefined;
+  threadId?: string | null | undefined;
   enabled?: boolean;
   staleTime?: number;
 }) {
   return queryOptions<ProjectCreateLocalFilePreviewGrantResult>({
-    queryKey: projectQueryKeys.localPreviewGrant(input.path),
+    queryKey: projectQueryKeys.localPreviewGrant(
+      input.path,
+      input.cwd ?? null,
+      input.threadId ?? null,
+    ),
     queryFn: async () => {
       const api = ensureNativeApi();
       if (!input.path) {
         throw new Error("Local file preview grant is unavailable.");
       }
-      return api.projects.createLocalFilePreviewGrant({ path: input.path });
+      return api.projects.createLocalFilePreviewGrant({
+        path: input.path,
+        ...(input.cwd ? { cwd: input.cwd } : {}),
+        ...(input.threadId ? { threadId: ThreadId.makeUnsafe(input.threadId) } : {}),
+      });
     },
     enabled: (input.enabled ?? true) && input.path !== null,
     staleTime: input.staleTime ?? 60_000,

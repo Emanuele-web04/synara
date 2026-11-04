@@ -11,6 +11,7 @@ import type { ThreadId } from "@synara/contracts";
 import { cn } from "~/lib/utils";
 import { SIDEBAR_TRAILING_ICON_CLASS } from "./sidebarGlyphs";
 import { SidebarIconButton } from "./SidebarIconButton";
+import { useTranslation } from "~/i18n";
 
 export const THREAD_ARCHIVE_ICON = HiOutlineArchiveBox;
 
@@ -23,11 +24,13 @@ export function ThreadArchiveActionButton({
   toneClassName?: string;
   onArchive: () => void;
 }) {
+  const { t } = useTranslation();
+
   return (
     <SidebarIconButton
       icon={THREAD_ARCHIVE_ICON}
-      label="Archive thread"
-      title="Archive thread"
+      label={t("common:archive_archiveThread")}
+      title={t("common:archive_archiveThread")}
       data-testid={`thread-archive-${threadId}`}
       size="md"
       // Match the pin and the right-side meta chips (shared trailing-icon size).

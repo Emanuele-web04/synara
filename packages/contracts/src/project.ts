@@ -4,6 +4,7 @@ import {
   PositiveInt,
   ProcessEnvRecord,
   ProjectId,
+  ThreadId,
   TrimmedNonEmptyString,
 } from "./baseSchemas";
 
@@ -268,8 +269,12 @@ export const ProjectResolveOutOfRootFileReferenceResult = Schema.Struct({
 export type ProjectResolveOutOfRootFileReferenceResult =
   typeof ProjectResolveOutOfRootFileReferenceResult.Type;
 
+// Relative Markdown references are resolved on the host, never against the
+// client filesystem. A supplied thread owns cwd; cwd is the legacy fallback.
 export const ProjectCreateLocalFilePreviewGrantInput = Schema.Struct({
   path: TrimmedNonEmptyString.check(Schema.isMaxLength(PROJECT_READ_FILE_PATH_MAX_LENGTH)),
+  cwd: Schema.optional(TrimmedNonEmptyString),
+  threadId: Schema.optional(ThreadId),
 });
 export type ProjectCreateLocalFilePreviewGrantInput =
   typeof ProjectCreateLocalFilePreviewGrantInput.Type;
@@ -277,6 +282,8 @@ export type ProjectCreateLocalFilePreviewGrantInput =
 export const ProjectCreateLocalFilePreviewGrantResult = Schema.Struct({
   grant: TrimmedNonEmptyString,
   expiresAt: TrimmedNonEmptyString,
+  // Optional on the wire for older hosts; new hosts bind the grant to this path.
+  canonicalPath: Schema.optional(TrimmedNonEmptyString),
 });
 export type ProjectCreateLocalFilePreviewGrantResult =
   typeof ProjectCreateLocalFilePreviewGrantResult.Type;

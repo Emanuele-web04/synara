@@ -48,6 +48,7 @@ import {
 } from "./kanban.logic";
 import { useKanbanUiStore } from "../../kanbanUiStore";
 import type { KanbanCardContextMenuController } from "./useKanbanCardContextMenu";
+import { useTranslation } from "~/i18n";
 
 function resolveDropColumn(board: KanbanProjectBoard, overId: string): KanbanColumnKey | null {
   const columnDrop = parseKanbanColumnDropId(overId);
@@ -89,6 +90,8 @@ export function KanbanProjectBoardView({
   /** v2 four-column layout vs classic 3-column escape hatch. */
   viewMode: "classic" | "v2";
 }) {
+  const { t } = useTranslation();
+
   const { settings } = useAppSettings();
   const assistantDeliveryMode = resolveAssistantDeliveryMode(settings);
   const providerInstances = useMemo(() => getProviderInstanceOptions(settings), [settings]);
@@ -176,22 +179,22 @@ export function KanbanProjectBoardView({
       if (result.deferred) {
         toastManager.add({
           type: "info",
-          title: "Chat send in progress",
-          description: "The board stood down; the running chat send owns this turn.",
+          title: t("workspace:chatSendInProgress"),
+          description: t("workspace:theBoardStoodDownTheRunningChatSendOwns"),
         });
         return;
       }
       if (result.warning) {
         toastManager.add({
           type: "warning",
-          title: "Draft sent",
+          title: t("workspace:toast_draftSent"),
           description: result.warning,
         });
         return;
       }
       toastManager.add({
         type: "success",
-        title: "Draft sent",
+        title: t("workspace:toast_draftSent"),
         description: card.title,
       });
       return;
@@ -300,16 +303,16 @@ export function KanbanProjectBoardView({
     if (targetColumn === "done") {
       toastManager.add({
         type: "info",
-        title: "Done is derived automatically",
-        description: "Cards move here when their runs complete.",
+        title: t("workspace:toast_doneDerived"),
+        description: t("workspace:toast_doneDerivedDescription"),
       });
       return;
     }
     if (targetColumn === "awaitingYou") {
       toastManager.add({
         type: "info",
-        title: "Awaiting you is derived automatically",
-        description: "Cards move here when they need your approval, input, or a retry.",
+        title: t("workspace:awaitingYouIsDerivedAutomatically"),
+        description: t("workspace:cardsMoveHereWhenTheyNeedYourApprovalInput"),
       });
     }
   };
