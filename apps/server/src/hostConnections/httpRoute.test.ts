@@ -25,7 +25,10 @@ import {
   type AuthRequest,
   type ServerAuthShape,
 } from "../auth/Services/ServerAuth";
-import { SessionCredentialServiceLive } from "../auth/Layers/SessionCredentialService";
+import {
+  MAX_AUTHENTICATED_CONNECTIONS_PER_SESSION,
+  SessionCredentialServiceLive,
+} from "../auth/Layers/SessionCredentialService";
 import { ServerSecretStoreLive } from "../auth/Layers/ServerSecretStore";
 import {
   SessionCredentialService,
@@ -453,6 +456,18 @@ async function echoBridge(socket: WebSocket, message: string): Promise<string> {
 }
 
 describe("remote bridge session lifetime", () => {
+  it("refuses excess owner bridges with HTTP 429 without disrupting admitted bridges", async () => {
+    await withLiveRemoteBridge(async ({ sessions, openBridge }) => {
+      const owner = await Effect.runPromise(sessions.issue({ role: "owner" }));
+      const first = await openBridge(owner.sessionId);
+      for (let count = 1; count < MAX_AUTHENTICATED_CONNECTIONS_PER_SESSION; count++) {
+        await openBridge(owner.sessionId);
+      }
+      await expect(openBridge(owner.sessionId)).rejects.toThrow("Unexpected server response: 429");
+      await expect(echoBridge(first.local, "still-admitted")).resolves.toBe("still-admitted");
+    });
+  });
+
   it.each(["revocation", "expiry"] as const)(
     "closes both relay peers on owner session %s while preserving the trusted local bridge",
     async (ending) => {

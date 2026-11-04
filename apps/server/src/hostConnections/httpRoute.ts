@@ -26,7 +26,11 @@ import { Effect, Layer, Schema } from "effect";
 import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
 
 import { ServerAuth } from "../auth/Services/ServerAuth";
-import { SessionCredentialService } from "../auth/Services/SessionCredentialService";
+import {
+  SessionCapacityError,
+  SessionCredentialError,
+  SessionCredentialService,
+} from "../auth/Services/SessionCredentialService";
 import { makeEffectAuthRequest } from "../auth/effectHttp";
 import { ServerConfig } from "../config";
 import {
@@ -214,11 +218,12 @@ export const hostConnectionRouteLayer = Layer.effectDiscard(
             )
           : yield* bridge;
       }).pipe(
-        Effect.catchTags({
-          SessionCredentialError: (error) =>
-            Effect.succeed(HttpServerResponse.text(error.message, { status: 401 })),
-          SessionCapacityError: (error) =>
-            Effect.succeed(
+        Effect.catch((error: unknown): Effect.Effect<HttpServerResponse.HttpServerResponse> => {
+          // Native upgrades can fail with plain Error, so narrow the session failures explicitly.
+          if (error instanceof SessionCredentialError)
+            return Effect.succeed(HttpServerResponse.text(error.message, { status: 401 }));
+          if (error instanceof SessionCapacityError)
+            return Effect.succeed(
               HttpServerResponse.text(error.message, {
                 status: 429,
                 headers: {
@@ -226,9 +231,9 @@ export const hostConnectionRouteLayer = Layer.effectDiscard(
                   "Retry-After": String(error.retryAfterSeconds),
                 },
               }),
-            ),
+            );
+          return Effect.succeed(HttpServerResponse.empty());
         }),
-        Effect.catch(() => Effect.succeed(HttpServerResponse.empty())),
       ),
     );
 
