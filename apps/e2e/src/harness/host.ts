@@ -44,6 +44,7 @@ import { makeWebsocketRpcRouteLayer } from "../../../server/src/wsRpc";
 import { makeHostsRpcHandlers } from "../../../server/src/wsHostsRpc";
 import {
   makeWsConnectionSessions,
+  withoutWsConnectionSessionHeaders,
   provideWsConnectionSession,
   WsConnectionSessions,
 } from "../../../server/src/wsConnectionSessions";
@@ -186,7 +187,7 @@ export async function startRealHost(input: {
 
   const serializationLayer = Layer.succeed(
     RpcSerialization.RpcSerialization,
-    makeFrameKindEchoRpcSerialization(),
+    withoutWsConnectionSessionHeaders(makeFrameKindEchoRpcSerialization()),
   );
   const handlers = EchoRpcGroup.toLayer(
     Effect.succeed({

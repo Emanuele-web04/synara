@@ -4,6 +4,7 @@ import { once } from "node:events";
 
 import {
   EventId,
+  COMPUTER_WS_METHODS,
   ThreadId,
   WsRpcError,
   ORCHESTRATION_STREAM_OVERFLOW_CODE,
@@ -48,13 +49,22 @@ import {
   WS_CONNECTION_SESSION_HEADER,
   WsConnectionSessions,
   type WsConnectionSessionsShape,
-  provideWsConnectionSession,
+  CurrentWsSessionRole,
+  withoutWsConnectionSessionHeaders,
 } from "./wsConnectionSessions";
 import {
   authorizeRemoteDesktopUpdateSession,
   makeDesktopUpdateRpcHandlers,
 } from "./desktopUpdateRpc";
-import { bindRemoteAttachmentSession } from "./managedAttachmentPrincipal";
+import {
+  bindRemoteAttachmentSession,
+  CurrentManagedAttachmentPrincipal,
+} from "./managedAttachmentPrincipal";
+import { REMOTE_NATIVE_UNAVAILABLE } from "@synara/shared/remoteCapabilities";
+import {
+  WsRequestAdmissionMiddleware,
+  wsRequestAdmissionMiddlewareLayer,
+} from "./wsRequestAdmission";
 import { makeCurrentWsFeatureCompatibilitySearchParams } from "./wsCompatibility";
 import { bufferLiveUiStream } from "./wsStreamBackpressure";
 import { makeCursorSafeSnapshotLiveStream } from "./wsSnapshotLiveStream";
@@ -84,13 +94,29 @@ const BudgetStreamRpc = Rpc.make("test.budget-stream", {
   error: WsRpcError,
   stream: true,
 });
+const ConnectionIdentityRpc = Rpc.make("test.connection-identity", {
+  payload: Schema.Struct({}),
+  success: Schema.Struct({
+    role: Schema.Literals(["owner", "client"]),
+    ownerKind: Schema.Literals(["session", "local-loopback"]),
+    ownerId: Schema.String,
+    metadata: Schema.NullOr(Schema.String),
+  }),
+});
+// The native dispatch witness is inert; admission must stop it before dispatch.
+const NativeStateRpc = Rpc.make(COMPUTER_WS_METHODS.getState, {
+  payload: Schema.Struct({}),
+  success: Schema.String,
+});
 const PingRpcGroup = RpcGroup.make(
   PingRpc,
   SlowRpc,
   WsGitRunStackedActionRpc,
   BudgetStreamRpc,
   WsServerDesktopUpdateStatusRpc,
-);
+  ConnectionIdentityRpc,
+  NativeStateRpc,
+).middleware(WsRequestAdmissionMiddleware);
 
 interface RunningTestServer {
   readonly origin: string;
@@ -99,6 +125,7 @@ interface RunningTestServer {
   readonly logout: (sessionId: AuthSessionId) => Promise<boolean>;
   readonly transportFinalizers: { count: number };
   readonly observedRpc: { decoderCalls: number; handlerCalls: number };
+  readonly observedNativeRpc: { calls: number };
   readonly observedGitAction: { started: number; finalized: number };
   readonly releaseGitAction: () => Promise<void>;
   readonly observedBudgetStream: { finalized: number };
@@ -289,21 +316,25 @@ async function startTestServer(
 
   const transportFinalizers = { count: 0 };
   const observedRpc = { decoderCalls: 0, handlerCalls: 0 };
+  const observedNativeRpc = { calls: 0 };
   const observedSlowRpc = { started: 0, completed: 0, finalized: 0 };
-  const serializationLayer = Layer.succeed(RpcSerialization.RpcSerialization, {
-    contentType: RpcSerialization.json.contentType,
-    includesFraming: RpcSerialization.json.includesFraming,
-    makeUnsafe: () => {
-      const parser = RpcSerialization.json.makeUnsafe();
-      return {
-        decode: (data: Uint8Array | string) => {
-          observedRpc.decoderCalls += 1;
-          return parser.decode(data);
-        },
-        encode: parser.encode,
-      };
-    },
-  });
+  const serializationLayer = Layer.succeed(
+    RpcSerialization.RpcSerialization,
+    withoutWsConnectionSessionHeaders({
+      contentType: RpcSerialization.json.contentType,
+      includesFraming: RpcSerialization.json.includesFraming,
+      makeUnsafe: () => {
+        const parser = RpcSerialization.json.makeUnsafe();
+        return {
+          decode: (data: Uint8Array | string) => {
+            observedRpc.decoderCalls += 1;
+            return parser.decode(data);
+          },
+          encode: parser.encode,
+        };
+      },
+    }),
+  );
   const observedGitAction = { started: 0, finalized: 0 };
   const gitRelease = await Effect.runPromise(Deferred.make<void>());
   const observedBudgetStream = { finalized: 0 };
@@ -334,11 +365,22 @@ async function startTestServer(
         ),
       );
       return {
-        [WS_METHODS.serverDesktopUpdateStatus]: (_, context) =>
-          provideWsConnectionSession(
-            makeDesktopUpdateRpcHandlers(Effect.succeed(false)).status,
-            connectionSessions.lookup(Headers.get(context.headers, WS_CONNECTION_SESSION_HEADER)),
-          ),
+        [WS_METHODS.serverDesktopUpdateStatus]: () =>
+          makeDesktopUpdateRpcHandlers(Effect.succeed(false)).status,
+        "test.connection-identity": (_, context) =>
+          Effect.gen(function* () {
+            const principal = yield* CurrentManagedAttachmentPrincipal;
+            return {
+              role: yield* CurrentWsSessionRole,
+              ...principal,
+              metadata: Headers.get(context.headers, "x-synara-test-metadata") ?? null,
+            };
+          }),
+        [COMPUTER_WS_METHODS.getState]: () =>
+          Effect.sync(() => {
+            observedNativeRpc.calls += 1;
+            return "native-dispatch";
+          }),
         [WS_METHODS.gitRunStackedAction]: runGitAction,
         "test.budget-stream": ({
           mode,
@@ -431,7 +473,9 @@ async function startTestServer(
   const observedConnectionSessionKeys: string[] = [];
   const rpcHttpEffectSource = Effect.gen(function* () {
     const handlers = yield* Layer.buildWithScope(
-      handlerLayer.pipe(Layer.provideMerge(serializationLayer)),
+      Layer.merge(handlerLayer, wsRequestAdmissionMiddlewareLayer).pipe(
+        Layer.provideMerge(serializationLayer),
+      ),
       yield* Effect.scope,
     );
     return yield* RpcServer.toHttpEffectWebsocket(PingRpcGroup).pipe(Effect.provide(handlers));
@@ -508,6 +552,7 @@ async function startTestServer(
     logout: (sessionId) => Effect.runPromise(started.serverAuth.logoutSession(sessionId)),
     transportFinalizers,
     observedRpc,
+    observedNativeRpc,
     observedSlowRpc,
     observedGitAction,
     observedBudgetStream,
@@ -1287,17 +1332,82 @@ describe("websocketRpcRouteLayer connection lifecycle", () => {
           _tag: kind === "owner" || kind === "approved-remote" ? "Success" : "Failure",
         });
         if (kind === "owner") {
-          // Per-RPC headers can replace the upgrade key; an unknown key must fail closed.
+          // Logical metadata cannot replace the owner identity from the upgrade.
           const forged = await updaterStatus(socket, [
             [WS_CONNECTION_SESSION_HEADER, "owner:forged"],
           ]);
-          expect(forged.exit).toMatchObject({ _tag: "Failure" });
+          expect(forged.exit).toMatchObject({ _tag: "Success" });
         }
         socket.close();
         await waitForClose(socket);
       }
     } finally {
       release.forEach((dispose) => dispose());
+      await server.close();
+    }
+  });
+
+  it("keeps remote identity and native-method restrictions bound to the upgraded socket", async () => {
+    const server = await startTestServer();
+    const remote = await Effect.runPromise(server.sessions.issue({ role: "client" }));
+    const release = bindRemoteAttachmentSession(remote.sessionId, {
+      environmentId: "rpc-identity-environment",
+      rootFingerprint: "rpc-identity-root",
+      userId: "rpc-identity-owner",
+      deviceJkt: "rpc-identity-device",
+      trustGeneration: 1,
+    });
+    let nextId = 800;
+    const request = (socket: WebSocket, tag: string, headers: Array<[string, string]> = []) => {
+      const id = String(nextId++);
+      const exit = waitForRpcExit(socket, id);
+      socket.send(JSON.stringify({ _tag: "Request", id, tag, payload: {}, headers }));
+      return exit;
+    };
+    try {
+      const owner = await Effect.runPromise(server.sessions.issue({ role: "owner" }));
+      const { socket: ownerSocket } = await connectExistingSession(server, owner.sessionId);
+      const ownerKey = server.observedConnectionSessionKeys.at(-1)!;
+      const { socket } = await connectExistingSession(server, remote.sessionId);
+      const remoteKey = server.observedConnectionSessionKeys.at(-1)!;
+      const principal = server.connectionSessions.lookup(remoteKey)!.attachmentPrincipal;
+
+      // Positive controls prove both dispatch and the approved remote connection work.
+      expect((await request(ownerSocket, COMPUTER_WS_METHODS.getState)).exit).toMatchObject({
+        _tag: "Success",
+        value: "native-dispatch",
+      });
+      expect((await request(socket, "test.connection-identity")).exit).toMatchObject({
+        _tag: "Success",
+        value: { role: "client", ...principal, metadata: null },
+      });
+      for (const headers of [
+        [],
+        [[WS_CONNECTION_SESSION_HEADER, "unknown-session"]],
+        [[WS_CONNECTION_SESSION_HEADER.toUpperCase(), ownerKey]],
+        [
+          [WS_CONNECTION_SESSION_HEADER, ownerKey],
+          [WS_CONNECTION_SESSION_HEADER, "unknown-session"],
+        ],
+      ] satisfies Array<Array<[string, string]>>) {
+        const denied = await request(socket, COMPUTER_WS_METHODS.getState, headers);
+        expect(denied.exit).toMatchObject({ _tag: "Failure" });
+        expect(JSON.stringify(denied.exit)).toContain(REMOTE_NATIVE_UNAVAILABLE);
+        expect(
+          (
+            await request(socket, "test.connection-identity", [
+              ...headers,
+              ["x-synara-test-metadata", "retained"],
+            ])
+          ).exit,
+        ).toMatchObject({
+          _tag: "Success",
+          value: { role: "client", ...principal, metadata: "retained" },
+        });
+      }
+      expect(server.observedNativeRpc.calls).toBe(1);
+    } finally {
+      release();
       await server.close();
     }
   });

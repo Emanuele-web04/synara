@@ -12,10 +12,7 @@ import { parseComputerInvocation } from "@synara/shared/computerInvocation";
 import { superviseHostConnections } from "./hostConnections/supervisor";
 import { remoteConnectionsUnavailableReason } from "./remoteFeaturePolicy";
 import { accountStateDirectory } from "./accountAuth";
-import {
-  remoteMethodUnavailable,
-  REMOTE_NATIVE_UNAVAILABLE,
-} from "@synara/shared/remoteCapabilities";
+import { REMOTE_NATIVE_UNAVAILABLE } from "@synara/shared/remoteCapabilities";
 import { AuthControlPlane } from "./auth/Services/AuthControlPlane";
 import { RemoteDeviceTrustRepository } from "./persistence/Services/RemoteDeviceTrust";
 import { makeRemoteAccessManagement } from "./remotePairing/management";
@@ -76,7 +73,7 @@ import { clamp } from "effect/Number";
 import { Effect, FileSystem, Layer, Option, Path, Queue, Schema, Scope, Stream } from "effect";
 import * as Arr from "effect/Array";
 import { Headers, HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
-import { RpcMiddleware, RpcSchema, RpcSerialization, RpcServer } from "effect/unstable/rpc";
+import { RpcSerialization, RpcServer } from "effect/unstable/rpc";
 
 import { createAccountSession } from "./accountSession";
 import { AutomationService } from "./automation/Services/AutomationService";
@@ -247,10 +244,13 @@ import { OrchestrationEventStore } from "./persistence/Services/OrchestrationEve
 import { ProviderRuntimeEventRepository } from "./persistence/Services/ProviderRuntimeEvents";
 import { requireWsOwnerSession } from "./wsOwnerAuthorization";
 import { connectorsForPairedClient } from "./mcpConnectors/pairedClientView";
-import { makeWsRequestAdmission } from "./wsRequestAdmission";
+import {
+  WsRequestAdmissionMiddleware,
+  wsRequestAdmissionMiddlewareLayer,
+} from "./wsRequestAdmission";
 import { voiceUploadAdmissionGate } from "./voiceUploadAdmission";
 import {
-  provideWsConnectionSession,
+  withoutWsConnectionSessionHeaders,
   WS_CONNECTION_SESSION_HEADER,
   WsConnectionSessions,
   WsConnectionSessionsLive,
@@ -307,11 +307,6 @@ const MAX_DIAGNOSTIC_ARGS_CHARS = 500;
 const THREAD_DETAIL_SNAPSHOT_BOOTSTRAP_TIMEOUT_MS = 5_000;
 const THREAD_DETAIL_SNAPSHOT_BOOTSTRAP_POLL_MS = 100;
 
-class WsRequestAdmissionMiddleware extends RpcMiddleware.Service<WsRequestAdmissionMiddleware>()(
-  "synara/WsRequestAdmissionMiddleware",
-  { error: WsRpcError, requiredForClient: false },
-) {}
-
 // Optional device, computer, and project-agent link groups are served on the
 // same socket: one connection, one admission middleware, one exhaustive
 // handler map.
@@ -319,32 +314,6 @@ const AdmittedWsFeatureRpcGroup = WsFeatureRpcGroup.merge(WsDeviceRpcGroup)
   .merge(WsComputerRpcGroup)
   .merge(WsProjectAgentRpcGroup)
   .middleware(WsRequestAdmissionMiddleware);
-
-const wsRequestAdmissionMiddlewareLayer = Layer.effect(
-  WsRequestAdmissionMiddleware,
-  Effect.gen(function* () {
-    const admission = yield* makeWsRequestAdmission;
-    const connectionSessions = yield* WsConnectionSessions;
-    return ((effect, options) => {
-      // Handler fibers descend from the RPC server fiber (forked at layer build),
-      // not from the connection's HTTP upgrade fiber, so connection-scoped
-      // services must be re-provided here from the connection-session registry.
-      const session = connectionSessions.lookup(
-        Headers.get(options.headers, WS_CONNECTION_SESSION_HEADER),
-      );
-      if (
-        session?.attachmentPrincipal.ownerId.startsWith("remote-device:") &&
-        remoteMethodUnavailable(options.rpc._tag)
-      ) {
-        return Effect.fail(new WsRpcError({ message: REMOTE_NATIVE_UNAVAILABLE }));
-      }
-      const scoped = provideWsConnectionSession(effect, session);
-      return RpcSchema.isStreamSchema(options.rpc.successSchema)
-        ? scoped
-        : admission.guard(options.clientId, options.rpc._tag, scoped);
-    }) satisfies RpcMiddleware.RpcMiddleware<never, WsRpcError, never>;
-  }),
-);
 
 // Relative subdirectories scaffolded under a freshly created chat container workspace root.
 // The Studio layout lives in studioWorkspaceScaffold.ts alongside its instruction files.
@@ -3611,7 +3580,14 @@ const makeRpcWebSocketHttpEffect = Effect.gen(function* () {
   // Keep handler-owned jobs alive for the HTTP server lifetime. Effect.provide
   // with a Layer would close its build scope as soon as this constructor returns.
   const handlers = yield* Layer.buildWithScope(
-    makeWsRpcLayer().pipe(Layer.provideMerge(RpcSerialization.layerJson)),
+    makeWsRpcLayer().pipe(
+      Layer.provideMerge(
+        Layer.succeed(
+          RpcSerialization.RpcSerialization,
+          withoutWsConnectionSessionHeaders(RpcSerialization.json),
+        ),
+      ),
+    ),
     yield* Effect.scope,
   );
   return yield* RpcServer.toHttpEffectWebsocket(AdmittedWsFeatureRpcGroup, {
