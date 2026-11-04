@@ -587,8 +587,23 @@ export async function recordRemoteBillingPolicy(
 }
 
 /** Every host-link key writer shares the credential lock with the final CAS. */
-function generateHostIdentityForLink(baseDir: string, hostIdentityPath: string) {
-  return withLockedAccountFile(baseDir, () => generateAndPersistHostIdentity(hostIdentityPath));
+function generateHostIdentityForLink(
+  baseDir: string,
+  hostIdentityPath: string,
+  expected?: Pick<StoredAccountFile, "accountUrl" | "organizationId" | "userId">,
+) {
+  return withLockedAccountFile(baseDir, async () => {
+    const current = expected ? await readAccountFile(baseDir) : undefined;
+    if (
+      expected &&
+      (!current ||
+        current.accountUrl !== expected.accountUrl ||
+        current.organizationId !== expected.organizationId ||
+        current.userId !== expected.userId)
+    )
+      throw new WorkspaceAccessChangedError();
+    return generateAndPersistHostIdentity(hostIdentityPath);
+  });
 }
 
 /**
@@ -813,11 +828,42 @@ async function linkThisHost(
     deriveServerPaths(options.baseDir, options.devUrl),
   );
 
+  const expected = await withLockedAccountFile(
+    accountStateDirectory(options.baseDir, options.devUrl),
+    async () => {
+      const current = await readAccountCredentials(
+        accountStateDirectory(options.baseDir, options.devUrl),
+      );
+      if (!current) throw new SessionExpiredError();
+      if (!current.userId || !current.hostOwnerUserId || current.hostOwnerUserId === current.userId)
+        return current;
+      // Repair an older mismatched file before a network failure can leave it serving.
+      const {
+        hostId: _hostId,
+        hostOwnerUserId: _hostOwnerUserId,
+        hostKeyGeneration: _hostKeyGeneration,
+        remoteBillingPolicy: _remoteBillingPolicy,
+        discoverabilityAcknowledgedByHostId: _discoverabilityAcknowledgedByHostId,
+        ...session
+      } = current;
+      await writeAccountCredentials(
+        accountStateDirectory(options.baseDir, options.devUrl),
+        session,
+      );
+      await deleteHostIdentity(hostIdentityPath);
+      return session;
+    },
+  );
+
   let linked;
   let linkedPublicKeyPem: string | undefined;
   try {
     const challenge = await withFreshAccessToken(
-      { baseDir: accountStateDirectory(options.baseDir, options.devUrl), client },
+      {
+        baseDir: accountStateDirectory(options.baseDir, options.devUrl),
+        client,
+        expectedIdentity: expected,
+      },
       (accessToken) =>
         client.startHostLink(accessToken, {
           environmentId: EnvironmentId.makeUnsafe(environmentId),
@@ -831,6 +877,7 @@ async function linkThisHost(
     const identity = await generateHostIdentityForLink(
       accountStateDirectory(options.baseDir, options.devUrl),
       hostIdentityPath,
+      expected,
     );
     linkedPublicKeyPem = identity.publicKeyPem;
     const proof = await mintHostLinkProof({
@@ -857,6 +904,14 @@ async function linkThisHost(
     async () => {
       const current = await readAccountFile(accountStateDirectory(options.baseDir, options.devUrl));
       if (!current) return "missing" as const;
+      // A completed link must not restore an old owner's authority after sign-in changed.
+      if (
+        current.accountUrl !== expected.accountUrl ||
+        current.organizationId !== expected.organizationId ||
+        current.userId !== expected.userId ||
+        (current.userId !== undefined && current.userId !== linked.host.ownerUserId)
+      )
+        throw new WorkspaceAccessChangedError();
       const persistedIdentity = await readHostIdentity(hostIdentityPath);
       if (!persistedIdentity || persistedIdentity.publicKeyPem !== linkedPublicKeyPem) {
         return "superseded" as const;
@@ -934,6 +989,7 @@ export async function ensureLocalAccountHostLinked(options: AccountFlowOptions):
   if (
     existing.hostId &&
     existing.hostOwnerUserId &&
+    existing.hostOwnerUserId === existing.userId &&
     existing.hostKeyGeneration !== undefined &&
     (await readHostIdentity(hostIdentityPath))
   ) {
@@ -1001,6 +1057,7 @@ export async function runAuthLogin(options: AccountFlowOptions): Promise<void> {
   if (
     existing.hostId &&
     existing.hostOwnerUserId &&
+    existing.hostOwnerUserId === existing.userId &&
     existing.hostKeyGeneration !== undefined &&
     (await readHostIdentity(hostIdentityPath))
   ) {

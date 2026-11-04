@@ -97,12 +97,13 @@ it("persists host linking without creating remote device trust or a TLS root", a
 });
 
 it.each([
+  { name: "owner mismatch", status: 200, enforced: true, code: undefined, mismatchedOwner: true },
   { name: "enforced snapshot", status: 200, enforced: true, code: undefined },
   { name: "subscription refusal", status: 403, enforced: true, code: "subscription_required" },
   { name: "billing outage", status: 503, enforced: true, code: "billing_unavailable" },
   { name: "explicitly disabled snapshot", status: 200, enforced: false, code: undefined },
   { name: "older default-off snapshot", status: 200, enforced: undefined, code: undefined },
-])("learns $name before a missing TLS root can bypass commercial policy", async (scenario) => {
+])("handles $name before a missing TLS root can bypass admission policy", async (scenario) => {
   vi.stubEnv("SYNARA_DESKTOP_BUNDLE_ID", SYNARA_REMOTE_BUNDLE_ID);
   const baseDir = fs.mkdtempSync(path.join(os.tmpdir(), "synara-connectivity-policy-"));
   temporaryDirectories.push(baseDir);
@@ -172,6 +173,7 @@ it.each([
       workosClientId: "workos-client",
       workosApiUrl: "https://workos.example.test",
       organizationId: "org",
+      ...("mismatchedOwner" in scenario ? { userId: "another-user" } : {}),
       hostId,
       hostOwnerUserId: "owner",
       hostKeyGeneration: 1,
@@ -189,6 +191,14 @@ it.each([
         throw new Error("Connector must not start before the local TLS identity exists");
       },
     });
+    if ("mismatchedOwner" in scenario) {
+      const stop = await startup;
+      await stop();
+      expect(authenticatedRequests).toEqual([]);
+      expect((await readAccountFile(baseDir))?.remoteBillingPolicy).toBeUndefined();
+      expect(fs.existsSync(remoteTlsIdentityPath(config.secretsDir))).toBe(false);
+      return;
+    }
     if (scenario.status === 200) await expect(startup).rejects.toMatchObject({ code: "ENOENT" });
     else
       await expect(startup).rejects.toMatchObject({ status: scenario.status, code: scenario.code });

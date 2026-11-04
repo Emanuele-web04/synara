@@ -1157,6 +1157,37 @@ describe("runAuthLogin", () => {
 });
 
 describe("ensureLocalAccountHostLinked", () => {
+  it("does not restore an old owner's link when the account changes during completion", async () => {
+    const baseDir = makeBaseDir();
+    await writeAccountCredentials(baseDir, credentials());
+    const client = makeClient({
+      startHostLink: async () => ({
+        challengeId: "2f1f9dd7-56a5-45cf-b847-12e6658f3720",
+        nonce: "bm9uY2U",
+        expiresAt: new Date(Date.now() + 300_000).toISOString(),
+      }),
+      completeHostLink: async () => {
+        await writeAccountCredentials(
+          baseDir,
+          credentials({ userId: "user_2", accessToken: "access-2", refreshToken: "refresh-2" }),
+        );
+        return { host };
+      },
+    });
+    await expect(
+      ensureLocalAccountHostLinked({
+        accountUrl: "https://accounts.example.com",
+        baseDir,
+        client,
+        platform: "darwin",
+        stdout: () => {},
+      }),
+    ).rejects.toBeInstanceOf(WorkspaceAccessChangedError);
+    const stored = await readAccountFile(baseDir);
+    expect(stored).toMatchObject({ userId: "user_2", accessToken: "access-2" });
+    expect(stored?.hostId).toBeUndefined();
+  });
+
   it("keeps the stored generation matched to the persisted key when two links overlap", async () => {
     const baseDir = makeBaseDir();
     const stateDir = path.join(baseDir, "userdata");

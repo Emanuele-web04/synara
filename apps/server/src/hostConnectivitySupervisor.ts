@@ -19,7 +19,13 @@ import { accountCredentialsPath, readAccountFile, type StoredAccountFile } from 
 
 /** The fields whose change means "a different host link": restart on any of them. */
 export function hostLinkKey(file: StoredAccountFile | undefined): string | undefined {
-  if (!file?.hostId || !file.hostOwnerUserId || file.hostKeyGeneration === undefined) {
+  // A changed session owner invalidates stale host fields just like an unlink.
+  if (
+    !file?.hostId ||
+    !file.hostOwnerUserId ||
+    file.hostKeyGeneration === undefined ||
+    (file.userId !== undefined && file.userId !== file.hostOwnerUserId)
+  ) {
     return undefined;
   }
   return JSON.stringify([

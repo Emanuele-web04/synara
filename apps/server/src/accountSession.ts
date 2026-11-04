@@ -529,21 +529,15 @@ export function createAccountSession(
       chooseOrganization: selectOrganization,
     });
 
-    // A file left behind by an expired session still holds this machine's
-    // host registration; carrying it forward keeps the link intact. But a
-    // host belongs to the account and workspace that registered it, so the
-    // registration is preserved ONLY when the new session lands on the same
-    // accountUrl AND the same organization — signing in to a different
-    // account (or a different workspace on the same service) must not carry
-    // another identity's host credentials forward. Dropping them is safe:
-    // the machine simply re-registers under the new account via `synara
-    // auth`. Read and write under the credential lock so nothing
-    // interleaves.
+    // Expiry may remove the workspace, but it retains the host's owner.
+    // Recover only that owner's link; another member of the same workspace
+    // must enroll a fresh host identity instead of inheriting its authority.
     await withLockedAccountFile(credentialDir, async () => {
       const previous = await readAccountFile(credentialDir);
       const sameAccountAndWorkspace =
         previous?.accountUrl === accountUrl &&
-        (previous?.organizationId === scoped.organizationId ||
+        previous.hostOwnerUserId === scoped.userId &&
+        (previous.organizationId === scoped.organizationId ||
           (previous?.organizationId === undefined && previous?.hostId !== undefined));
       await writeAccountCredentials(credentialDir, {
         accountUrl,
@@ -566,6 +560,12 @@ export function createAccountSession(
             }
           : {}),
       });
+      if (previous && !sameAccountAndWorkspace) {
+        const { hostIdentityPath } = await Effect.runPromise(
+          deriveServerPaths(baseDir, options.devUrl).pipe(Effect.provide(EffectPath.layer)),
+        );
+        await deleteHostIdentity(hostIdentityPath);
+      }
     });
 
     // The durable checkpoint: the scoped pair is on disk, so everything after

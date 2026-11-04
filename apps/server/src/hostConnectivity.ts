@@ -70,11 +70,13 @@ export async function startHostConnectivity(
   const credentials = await readAccountFile(
     accountStateDirectory(options.config.baseDir, options.config.devUrl),
   );
+  // A legacy mixed-owner file must stay offline until account enrollment repairs it.
   if (
     !credentials?.hostId ||
     !credentials.hostOwnerUserId ||
     !credentials.organizationId ||
-    credentials.hostKeyGeneration === undefined
+    credentials.hostKeyGeneration === undefined ||
+    (credentials.userId !== undefined && credentials.userId !== credentials.hostOwnerUserId)
   ) {
     return async () => {};
   }

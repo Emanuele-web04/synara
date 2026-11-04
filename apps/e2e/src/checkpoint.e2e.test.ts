@@ -5,7 +5,7 @@ import {
 } from "../../server/src/remoteTransport/certificates";
 import { randomBytes } from "node:crypto";
 
-import { HOST_SESSION_CLOSE_REVOKED } from "@synara/contracts";
+import { EnvironmentId, HOST_SESSION_CLOSE_REVOKED } from "@synara/contracts";
 import { AccountApiError, createAccountClient } from "@synara/shared/account";
 import { generateSyncKey, openHostSecret, sealHostSecret } from "@synara/shared/hostSecrets";
 import { decodeJwt } from "jose";
@@ -19,6 +19,9 @@ import {
   writeHostSecretsSyncKey,
 } from "../../server/src/hostSecrets/syncKeyStore";
 import { REMOTE_SESSION_REVOKED_CLOSE_CODE } from "../../server/src/remoteSessions/sessionRegistry";
+import { readAccountFile, writeAccountCredentials } from "../../server/src/accountAuth";
+import { createAccountSession } from "../../server/src/accountSession";
+import { readHostIdentity } from "../../server/src/hostIdentity";
 
 const TEST_DATABASE_URL = process.env.TEST_DATABASE_URL;
 
@@ -37,6 +40,58 @@ describe.skipIf(!TEST_DATABASE_URL)("A → B → C slice checkpoint", () => {
     await expect(fixture.requestTunnel(oldProof, first.row.id)).rejects.toMatchObject({
       code: "bad_proof",
       status: 401,
+    });
+  });
+
+  it("detaches a stale host owner when the real API refuses enrollment by another workspace member", async () => {
+    await using fixture = await createE2eFixture(TEST_DATABASE_URL as string);
+    const linked = await fixture.linkHost();
+    const member = await fixture.createMember();
+    const stored = await readAccountFile(fixture.baseDir);
+    if (!stored) throw new Error("Linked owner credentials were not persisted");
+    const account = createAccountClient({ baseUrl: fixture.apiOrigin });
+    await expect(
+      account.startHostLink(member.accessToken, {
+        environmentId: EnvironmentId.makeUnsafe(linked.row.environmentId),
+        name: "Second owner's host",
+        platform: "linux",
+        kind: "local",
+      }),
+    ).rejects.toMatchObject({ status: 409, code: "environment_already_linked" });
+
+    // Reproduce a pre-fix file: B's valid session still carries A's host authority.
+    await writeAccountCredentials(fixture.baseDir, {
+      ...stored,
+      userId: member.userId,
+      organizationId: member.orgId,
+      accessToken: member.accessToken,
+      refreshToken: "unused-e2e-member-refresh",
+    });
+    const session = createAccountSession({
+      baseDir: fixture.baseDir,
+      accountUrl: fixture.apiOrigin,
+    });
+    await expect(session.status()).resolves.toMatchObject({
+      state: "signed-in",
+      me: { id: member.userId, organization: { id: member.orgId } },
+    });
+    const repaired = await readAccountFile(fixture.baseDir);
+    expect(repaired).toMatchObject({ userId: member.userId, accessToken: member.accessToken });
+    expect(repaired?.hostId).toBeUndefined();
+    expect(repaired?.hostOwnerUserId).toBeUndefined();
+    expect(
+      await readHostIdentity(
+        path.join(fixture.baseDir, "userdata", "secrets", "host-identity.json"),
+      ),
+    ).toBeUndefined();
+    expect(await account.me(member.accessToken)).toMatchObject({ id: member.userId });
+    const originalHost = (await account.listHosts(fixture.owner.accessToken)).hosts.find(
+      (host) => host.id === linked.row.id,
+    );
+    expect(originalHost).toMatchObject({
+      ownerUserId: fixture.owner.userId,
+      linked: true,
+      keyGeneration: linked.row.keyGeneration,
     });
   });
 

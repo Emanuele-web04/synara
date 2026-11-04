@@ -90,7 +90,7 @@ describe("superviseHostConnectivity", () => {
     expect(stops[0]).not.toHaveBeenCalled();
   });
 
-  it("restarts on a new key generation, ignores a token refresh, stops on unlink", async () => {
+  it("restarts on key rotation, ignores token refresh, and stops on owner mismatch or unlink", async () => {
     const dir = await tempDir();
     await writeAccountCredentials(dir, LINKED);
     const { start, stops } = harness();
@@ -108,10 +108,18 @@ describe("superviseHostConnectivity", () => {
     expect(stops[0]).toHaveBeenCalledTimes(1);
     expect(stops[1]).not.toHaveBeenCalled();
 
+    await writeAccountCredentials(dir, { ...LINKED, hostKeyGeneration: 2, userId: "user_2" });
+    await until(() => stops[1]!.mock.calls.length === 1);
+    await supervisor.reconcile();
+    expect(start).toHaveBeenCalledTimes(2);
+
+    await writeAccountCredentials(dir, { ...LINKED, hostKeyGeneration: 2 });
+    await until(() => start.mock.calls.length === 3);
+    expect(stops[2]).not.toHaveBeenCalled();
     const { hostId: _h, hostOwnerUserId: _o, hostKeyGeneration: _g, ...unlinked } = LINKED;
     await writeAccountCredentials(dir, unlinked);
-    await until(() => stops[1]!.mock.calls.length === 1);
-    expect(start).toHaveBeenCalledTimes(2);
+    await until(() => stops[2]!.mock.calls.length === 1);
+    expect(start).toHaveBeenCalledTimes(3);
   });
 
   it("does not replace an instance whose asynchronous teardown failed", async () => {

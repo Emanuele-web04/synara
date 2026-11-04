@@ -19,7 +19,8 @@ import {
 } from "./accountAuth.ts";
 import { createAccountSession } from "./accountSession.ts";
 import type { AccountBillingStatus } from "@synara/contracts";
-import { generateAndPersistHostIdentity } from "./hostIdentity";
+import { generateAndPersistHostIdentity, readHostIdentity } from "./hostIdentity";
+import { importSPKI, jwtVerify } from "jose";
 
 import { isServerBetaFeatureEnabled } from "./betaFeatureGate";
 vi.mock("./betaFeatureGate", async (importOriginal) => ({
@@ -468,23 +469,152 @@ describe("OTP sign-in", () => {
     expect(await readAccountFile(baseDir)).not.toHaveProperty("hostId");
   });
 
-  // e.g. the file an expired session left behind: same account, same
-  // workspace, so the registration still describes this machine's link.
-  it("keeps an existing host registration when the sign-in lands on the same account and workspace", async () => {
-    const baseDir = makeBaseDir();
-    await writeAccountCredentials(baseDir, {
-      accountUrl: ACCOUNT_URL,
-      workosClientId: CLIENT_ID,
-      workosApiUrl: WORKOS_API_URL,
-      organizationId: ORGANIZATION.id,
-      ...linkedHostFields,
-    });
-    const session = sessionFor(baseDir, otpClient());
+  // Expiry drops the session's workspace, but the retained owner still identifies the host.
+  it.each([ORGANIZATION.id, undefined])(
+    "keeps an existing host registration for the same owner (workspace=%s)",
+    async (organizationId) => {
+      const baseDir = makeBaseDir();
+      await writeAccountCredentials(baseDir, {
+        accountUrl: ACCOUNT_URL,
+        workosClientId: CLIENT_ID,
+        workosApiUrl: WORKOS_API_URL,
+        ...(organizationId ? { organizationId } : {}),
+        ...linkedHostFields,
+      });
+      const session = sessionFor(baseDir, otpClient());
 
-    await session.authenticateOtp(OTP_INPUT);
-    expect(await readAccountFile(baseDir)).toMatchObject({
-      ...linkedHostFields,
-    });
+      await session.authenticateOtp(OTP_INPUT);
+      expect(await readAccountFile(baseDir)).toMatchObject({
+        ...linkedHostFields,
+      });
+    },
+  );
+
+  it.each([
+    {
+      label: "another member of the same workspace",
+      organizationId: ORGANIZATION.id,
+      expired: false,
+      flow: "sign-in",
+    },
+    { label: "another workspace", organizationId: "org_2", expired: false, flow: "sign-in" },
+    {
+      label: "an expired session",
+      organizationId: ORGANIZATION.id,
+      expired: true,
+      flow: "sign-in",
+    },
+    {
+      label: "a previously mismatched persisted owner",
+      organizationId: ORGANIZATION.id,
+      expired: false,
+      flow: "status",
+    },
+  ])(
+    "detaches the old owner before enrolling after $label",
+    async ({ organizationId, expired, flow }) => {
+      vi.stubEnv("SYNARA_REMOTE_CONNECTIONS", "1");
+      const baseDir = makeBaseDir();
+      const identityPath = path.join(baseDir, "userdata", "secrets", "host-identity.json");
+      const previousIdentity = await generateAndPersistHostIdentity(identityPath);
+      await writeAccountCredentials(
+        baseDir,
+        credentials({
+          userId: flow === "status" ? "user_2" : "user_1",
+          ...linkedHostFields,
+        }),
+      );
+      if (expired) {
+        const expiredClient = makeClient({
+          me: async () => {
+            throw new AccountApiError({ code: "unauthorized", status: 401, message: "Expired" });
+          },
+          refreshAccessToken: async () => {
+            throw new AccountApiError({ code: "unauthorized", status: 400, message: "Spent" });
+          },
+        });
+        expect(await sessionFor(baseDir, expiredClient).status()).toEqual({ state: "signed-out" });
+        expect((await readAccountFile(baseDir))?.organizationId).toBeUndefined();
+      }
+      const currentUser = meResponse({
+        id: "user_2",
+        email: "grace@example.com",
+        organization: { ...ORGANIZATION, id: organizationId },
+      });
+      let linkProof: string | undefined;
+      const client = otpClient({
+        authenticateOtp: async () => ({
+          accessToken: "access-2",
+          refreshToken: "refresh-2",
+          user: { id: "user_2", email: currentUser.email },
+        }),
+        me: async () => currentUser,
+        startHostLink: async () => {
+          // The real API refuses another user's org/environment slot; local authority must still end.
+          if (organizationId === ORGANIZATION.id)
+            throw new AccountApiError({
+              code: "environment_already_linked",
+              status: 409,
+              message: "This environment belongs to another user",
+            });
+          return {
+            challengeId: "2f1f9dd7-56a5-45cf-b847-12e6658f3720",
+            nonce: "bm9uY2U",
+            expiresAt: new Date(Date.now() + 300_000).toISOString(),
+          };
+        },
+        completeHostLink: async ({ proof }) => {
+          linkProof = proof;
+          return { host: { ...linkedHost, id: "host_2", ownerUserId: "user_2", keyGeneration: 1 } };
+        },
+      });
+      const session = sessionFor(baseDir, client);
+      const result =
+        flow === "status"
+          ? await session.status()
+          : await session.authenticateOtp({ ...OTP_INPUT, email: currentUser.email });
+      expect(result).toMatchObject({ state: "signed-in", me: { id: "user_2" } });
+      const stored = await readAccountFile(baseDir);
+      expect(stored).toMatchObject({ userId: "user_2", organizationId });
+      const currentIdentity = await readHostIdentity(identityPath);
+      if (organizationId === ORGANIZATION.id) {
+        expect(stored?.hostId).toBeUndefined();
+        expect(currentIdentity).toBeUndefined();
+        expect(linkProof).toBeUndefined();
+        return;
+      }
+      expect(stored).toMatchObject({ hostId: "host_2", hostOwnerUserId: "user_2" });
+      expect(currentIdentity?.publicKeyPem).not.toBe(previousIdentity.publicKeyPem);
+      expect(linkProof).toBeDefined();
+      const { payload } = await jwtVerify(
+        linkProof!,
+        await importSPKI(currentIdentity!.publicKeyPem, "EdDSA"),
+        {
+          audience: `${ACCOUNT_URL}/api/v1`,
+        },
+      );
+      expect(payload.publicKeyJwk).toEqual(currentIdentity!.publicKeyJwk);
+    },
+  );
+
+  it("clears a mismatched host before an enrollment outage can preserve the old owner", async () => {
+    vi.stubEnv("SYNARA_REMOTE_CONNECTIONS", "1");
+    const baseDir = makeBaseDir();
+    const identityPath = path.join(baseDir, "userdata", "secrets", "host-identity.json");
+    await generateAndPersistHostIdentity(identityPath);
+    await writeAccountCredentials(baseDir, credentials({ userId: "user_2", ...linkedHostFields }));
+    const session = sessionFor(
+      baseDir,
+      makeClient({
+        me: async () => meResponse({ id: "user_2" }),
+        startHostLink: async () => {
+          throw new Error("Account service unavailable");
+        },
+      }),
+    );
+    expect(await session.status()).toMatchObject({ state: "signed-in", me: { id: "user_2" } });
+    expect((await readAccountFile(baseDir))?.hostId).toBeUndefined();
+    expect(await readHostIdentity(identityPath)).toBeUndefined();
   });
 
   // A host registration belongs to the identity that made it. Signing in as
