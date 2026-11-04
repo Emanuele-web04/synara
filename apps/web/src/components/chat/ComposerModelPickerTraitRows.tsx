@@ -144,7 +144,7 @@ export function ComposerModelPickerTraitRows(props: {
     rows.push(
       <TraitRow
         key="lead"
-        label="Lead"
+        label={t("chat:traitsPicker_lead")}
         value={pairingParts.lead}
         valueLabel={
           pairing.leads.find((option) => option.value === pairingParts.lead)?.label ??
@@ -155,7 +155,7 @@ export function ComposerModelPickerTraitRows(props: {
       />,
       <TraitRow
         key="lead-effort"
-        label="Effort"
+        label={t("chat:traitsPicker_effort")}
         value={pairingParts.effort}
         valueLabel={
           leadEfforts.find((option) => option.value === pairingParts.effort)?.label ??
@@ -169,12 +169,12 @@ export function ComposerModelPickerTraitRows(props: {
       rows.push(
         <TraitRow
           key="speed"
-          label="Speed"
+          label={t("chat:traitsPicker_speed")}
           value={pairingParts.fast ? "on" : "off"}
-          valueLabel={pairingParts.fast ? "Fast" : "Standard"}
+          valueLabel={pairingParts.fast ? t("chat:traitsPicker_fast") : t("chat:standard")}
           options={[
-            { value: "off", label: "Standard" },
-            { value: "on", label: "Fast" },
+            { value: "off", label: t("chat:standard") },
+            { value: "on", label: t("chat:traitsPicker_fast") },
           ]}
           onValueChange={(value) => commitPairing({ fast: value === "on" })}
         />,
@@ -183,7 +183,7 @@ export function ComposerModelPickerTraitRows(props: {
     rows.push(
       <TraitRow
         key="sidekick"
-        label="Sidekick"
+        label={t("chat:traitsPicker_sidekick")}
         value={pairingParts.sidekick}
         valueLabel={
           sidekickOptions.find((option) => option.value === pairingParts.sidekick)?.label ??

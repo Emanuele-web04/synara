@@ -287,7 +287,7 @@ export function getComposerTraitSelection(
       ? (pairing.variants.find((variant) => variant.uid === pinnedVariantUid)?.uid ?? null)
       : null;
   const pairingLabel = pairing
-    ? (devinPairingStatusLabel(pairing, modelOptions) ?? "Default")
+    ? (devinPairingStatusLabel(pairing, modelOptions) ?? translate("chat:traitsPicker_default"))
     : null;
 
   return {

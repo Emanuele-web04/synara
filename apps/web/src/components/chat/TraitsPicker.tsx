@@ -447,14 +447,14 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
       {pairing && pairingParts ? (
         <>
           <TraitRadioSection
-            label="Lead"
+            label={t("chat:traitsPicker_lead")}
             value={pairingParts.lead}
             options={pairing.leads.map((option) => ({ ...option }))}
             onValueChange={(value) => commitPairing({ lead: value })}
           />
           <MenuDivider />
           <TraitRadioSection
-            label="Effort"
+            label={t("chat:traitsPicker_effort")}
             value={pairingParts.effort}
             options={devinPairingLeadEfforts(pairing, pairingParts.lead).map((option) => ({
               ...option,
@@ -465,11 +465,11 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
             <>
               <MenuDivider />
               <TraitRadioSection
-                label="Speed"
+                label={t("chat:traitsPicker_speed")}
                 value={pairingParts.fast ? "on" : "off"}
                 options={[
-                  { value: "off", label: "Standard" },
-                  { value: "on", label: "Fast" },
+                  { value: "off", label: t("chat:standard") },
+                  { value: "on", label: t("chat:traitsPicker_fast") },
                 ]}
                 onValueChange={(value) => commitPairing({ fast: value === "on" })}
               />
@@ -477,7 +477,7 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
           ) : null}
           <MenuDivider />
           <TraitRadioSection
-            label="Sidekick"
+            label={t("chat:traitsPicker_sidekick")}
             value={pairingParts.sidekick}
             options={devinPairingSidekicksForLead(pairing, pairingParts.lead).map((option) => ({
               ...option,
