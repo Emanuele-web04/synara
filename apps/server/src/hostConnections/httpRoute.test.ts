@@ -1,5 +1,5 @@
 // FILE: httpRoute.test.ts
-// Purpose: Verifies remote negotiation failure contracts at the local HTTP boundary.
+// Purpose: Verifies remote negotiation admission and live bridge session ownership.
 // Layer: Host connection route integration tests
 
 import http from "node:http";
@@ -9,11 +9,12 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   AuthSessionId,
   RemoteConnectionUnavailable,
+  WS_COMPATIBILITY_QUERY,
   WS_NEGOTIATE_HTTP_PATH,
   WS_NEGOTIATE_QUERY,
   WsCompatibilityError,
 } from "@synara/contracts";
-import { Effect, Exit, Layer, Schema, Scope } from "effect";
+import { Duration, Effect, Exit, Layer, Schema, Scope } from "effect";
 import { HttpRouter } from "effect/unstable/http";
 import { describe, expect, it, vi } from "vitest";
 import { SessionExpiredError } from "../accountAuth";
@@ -24,12 +25,23 @@ import {
   type AuthRequest,
   type ServerAuthShape,
 } from "../auth/Services/ServerAuth";
+import { SessionCredentialServiceLive } from "../auth/Layers/SessionCredentialService";
+import { ServerSecretStoreLive } from "../auth/Layers/ServerSecretStore";
+import {
+  SessionCredentialService,
+  type SessionCredentialServiceShape,
+} from "../auth/Services/SessionCredentialService";
 import { ServerConfig } from "../config";
+import { SqlitePersistenceMemory } from "../persistence/Layers/Sqlite";
 import { makeBoundedNodeHttpServer } from "../nodeHttpServer";
 import { controllerProtocol } from "./dialer";
 import { RemoteHostTrustError } from "./failure";
 import { hostConnectionRouteLayer } from "./httpRoute";
-import { HostConnectionRegistry, HostConnectionRegistryService } from "./registry";
+import {
+  HostConnectionRegistry,
+  HostConnectionRegistryService,
+  REMOTE_ATTACHMENT_QUERY,
+} from "./registry";
 
 const desktopOrigin = "synara://app";
 
@@ -64,6 +76,29 @@ async function withRemoteNegotiation(
   } as unknown as ServerAuthShape;
   const scope = await Effect.runPromise(Scope.make("sequential"));
   try {
+    const context = await Effect.runPromise(
+      Layer.buildWithScope(
+        Layer.mergeAll(
+          Layer.succeed(ServerAuth, auth),
+          Layer.succeed(HostConnectionRegistryService, registry),
+          RemoteSessionRegistryLive,
+          SessionCredentialServiceLive.pipe(
+            Layer.provide(SqlitePersistenceMemory),
+            Layer.provide(ServerSecretStoreLive),
+          ),
+        ).pipe(
+          Layer.provideMerge(
+            ServerConfig.layerTest(
+              process.cwd(),
+              { prefix: "synara-remote-negotiate-" },
+              { host: "127.0.0.1" },
+            ),
+          ),
+          Layer.provideMerge(NodeServices.layer),
+        ),
+        scope,
+      ),
+    );
     const port = await Effect.runPromise(
       Scope.provide(
         Effect.gen(function* () {
@@ -74,22 +109,7 @@ async function withRemoteNegotiation(
           yield* server.serve(yield* HttpRouter.toHttpEffect(hostConnectionRouteLayer));
           if (server.address._tag !== "TcpAddress") throw new Error("Expected TCP");
           return server.address.port;
-        }).pipe(
-          Effect.provide(
-            Layer.mergeAll(
-              ServerConfig.layerTest(
-                process.cwd(),
-                { prefix: "synara-remote-negotiate-" },
-                {
-                  host: "127.0.0.1",
-                },
-              ),
-              Layer.succeed(ServerAuth, auth),
-              Layer.succeed(HostConnectionRegistryService, registry),
-              RemoteSessionRegistryLive,
-            ).pipe(Layer.provideMerge(NodeServices.layer)),
-          ),
-        ),
+        }).pipe(Effect.provide(context)),
         scope,
       ),
     );
@@ -279,4 +299,192 @@ describe("remote negotiation failures", () => {
       },
     );
   });
+});
+
+/** Uses real durable sessions and two loopback WS peers; no account or native backend is used. */
+async function withLiveRemoteBridge(
+  run: (fixture: {
+    readonly sessions: SessionCredentialServiceShape;
+    readonly openBridge: (sessionId?: AuthSessionId) => Promise<{
+      readonly local: WebSocket;
+      readonly remote: WebSocket;
+      readonly received: string[];
+    }>;
+  }) => Promise<void>,
+): Promise<void> {
+  const registry = new HostConnectionRegistry();
+  const host = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+  await once(host, "listening", { signal: AbortSignal.timeout(2_000) });
+  const hostAddress = host.address();
+  if (!hostAddress || typeof hostAddress === "string") throw new Error("Expected TCP");
+  const sockets = new Set<WebSocket>();
+  const scope = await Effect.runPromise(Scope.make("sequential"));
+  const configLayer = Layer.effect(
+    ServerConfig,
+    Effect.gen(function* () {
+      return { ...(yield* ServerConfig), authToken: "fixture-startup" };
+    }),
+  ).pipe(
+    Layer.provide(
+      ServerConfig.layerTest(
+        process.cwd(),
+        { prefix: "synara-bridge-lifetime-" },
+        {
+          host: "127.0.0.1",
+        },
+      ),
+    ),
+    Layer.provide(NodeServices.layer),
+  );
+  const sessionsLayer = SessionCredentialServiceLive.pipe(
+    Layer.provide(SqlitePersistenceMemory),
+    Layer.provide(ServerSecretStoreLive),
+    Layer.provide(configLayer),
+    Layer.provide(NodeServices.layer),
+  );
+  const authLayer = Layer.effect(
+    ServerAuth,
+    Effect.gen(function* () {
+      const sessions = yield* SessionCredentialService;
+      return {
+        authenticateWebSocketUpgrade: (request: AuthRequest) =>
+          sessions
+            .verifyWebSocketToken(request.url?.searchParams.get("wsToken") ?? "")
+            .pipe(
+              Effect.mapError(
+                (cause) => new AuthError({ message: "Unauthorized", status: 401, cause }),
+              ),
+            ),
+      } as unknown as ServerAuthShape;
+    }),
+  ).pipe(Layer.provide(sessionsLayer));
+  try {
+    // Keep the durable session database alive for the complete callback, not
+    // merely while creating the HTTP server that will consult it later.
+    const context = await Effect.runPromise(
+      Layer.buildWithScope(
+        Layer.mergeAll(
+          configLayer,
+          sessionsLayer,
+          authLayer,
+          Layer.succeed(HostConnectionRegistryService, registry),
+          RemoteSessionRegistryLive,
+          NodeServices.layer,
+        ),
+        scope,
+      ),
+    );
+    const { sessions, port } = await Effect.runPromise(
+      Scope.provide(
+        Effect.gen(function* () {
+          const sessions = yield* SessionCredentialService;
+          const server = yield* makeBoundedNodeHttpServer(() => http.createServer(), {
+            host: "127.0.0.1",
+            port: 0,
+          });
+          yield* server.serve(yield* HttpRouter.toHttpEffect(hostConnectionRouteLayer));
+          if (server.address._tag !== "TcpAddress") throw new Error("Expected TCP");
+          return { sessions, port: server.address.port };
+        }).pipe(Effect.provide(context)),
+        scope,
+      ),
+    );
+    await run({
+      sessions,
+      openBridge: async (sessionId) => {
+        const connection = once(host, "connection", { signal: AbortSignal.timeout(2_000) });
+        const outgoing = new WebSocket(`ws://127.0.0.1:${hostAddress.port}`);
+        sockets.add(outgoing);
+        await once(outgoing, "open", { signal: AbortSignal.timeout(2_000) });
+        const [remote] = (await connection) as [WebSocket];
+        const received: string[] = [];
+        remote.on("message", (data) => {
+          received.push(data.toString());
+          remote.send(data);
+        });
+        const attachmentId = registry.add({
+          hostId: "host",
+          hostName: "Fixture Mini",
+          session: {
+            socket: outgoing,
+            environmentId: "fixture-environment",
+            credential: "synthetic-server-only",
+            credentialExpiresAtSeconds: Date.now() / 1_000 + 3_600,
+            transport: "cloudflare",
+            race: { outcome: "unreachable", attempts: [] },
+            compatibility: {
+              protocolEpoch: controllerProtocol.protocolEpoch,
+              negotiatedRevision: controllerProtocol.maxRevision,
+              serverBuild: "fixture",
+              serverInstanceId: "fixture-host",
+              capabilities: [],
+            },
+          },
+        });
+        const query = new URLSearchParams({
+          [REMOTE_ATTACHMENT_QUERY]: attachmentId,
+          [WS_COMPATIBILITY_QUERY.serverInstanceId]: "fixture-host",
+        });
+        if (sessionId) {
+          const ticket = await Effect.runPromise(sessions.issueWebSocketToken(sessionId));
+          query.set("wsToken", ticket.token);
+        } else {
+          query.set("token", "fixture-startup");
+        }
+        const local = new WebSocket(`ws://127.0.0.1:${port}/ws/remote/host/ws?${query}`);
+        sockets.add(local);
+        await once(local, "open", { signal: AbortSignal.timeout(2_000) });
+        return { local, remote, received };
+      },
+    });
+  } finally {
+    registry.closeAll();
+    for (const socket of sockets) socket.terminate();
+    for (const socket of host.clients) socket.terminate();
+    await Effect.runPromise(Scope.close(scope, Exit.void));
+    await new Promise<void>((resolve) => host.close(() => resolve()));
+  }
+}
+
+async function echoBridge(socket: WebSocket, message: string): Promise<string> {
+  const reply = once(socket, "message", { signal: AbortSignal.timeout(2_000) });
+  socket.send(message);
+  return (await reply)[0].toString();
+}
+
+describe("remote bridge session lifetime", () => {
+  it.each(["revocation", "expiry"] as const)(
+    "closes both relay peers on owner session %s while preserving the trusted local bridge",
+    async (ending) => {
+      await withLiveRemoteBridge(async ({ sessions, openBridge }) => {
+        const owner = await Effect.runPromise(
+          sessions.issue({
+            role: "owner",
+            ...(ending === "expiry" ? { ttl: Duration.seconds(3) } : {}),
+          }),
+        );
+        const bridge = await openBridge(owner.sessionId);
+        const trustedLocal = await openBridge();
+        await expect(echoBridge(bridge.local, "before")).resolves.toBe("before");
+        const closed = Promise.all([
+          once(bridge.local, "close", { signal: AbortSignal.timeout(5_000) }),
+          once(bridge.remote, "close", { signal: AbortSignal.timeout(5_000) }),
+        ]);
+        if (ending === "revocation") {
+          await expect(Effect.runPromise(sessions.revoke(owner.sessionId))).resolves.toBe(true);
+        }
+        await closed;
+        expect(bridge.local.readyState).toBe(WebSocket.CLOSED);
+        expect(bridge.remote.readyState).toBe(WebSocket.CLOSED);
+        await expect(
+          new Promise<void>((resolve, reject) => {
+            bridge.local.send("after", (error) => (error ? reject(error) : resolve()));
+          }),
+        ).rejects.toThrow();
+        expect(bridge.received).toEqual(["before"]);
+        await expect(echoBridge(trustedLocal.local, "still-local")).resolves.toBe("still-local");
+        trustedLocal.local.close();
+      });
+    },
+  );
 });

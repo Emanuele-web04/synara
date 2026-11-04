@@ -26,6 +26,7 @@ import { Effect, Layer, Schema } from "effect";
 import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
 
 import { ServerAuth } from "../auth/Services/ServerAuth";
+import { SessionCredentialService } from "../auth/Services/SessionCredentialService";
 import { makeEffectAuthRequest } from "../auth/effectHttp";
 import { ServerConfig } from "../config";
 import {
@@ -172,27 +173,63 @@ export const hostConnectionRouteLayer = Layer.effectDiscard(
           return HttpServerResponse.text("No open connection to that host", { status: 404 });
         }
 
-        const socket = yield* upgradeNativeWebSocket(request.source);
-        if (
-          !registry.attach(
-            hostId,
-            url.searchParams.get(REMOTE_ATTACHMENT_QUERY) ?? "",
-            socket,
-            url.searchParams.get(WS_COMPATIBILITY_QUERY.serverInstanceId),
-          )
-        ) {
-          return HttpServerResponse.empty();
-        }
-        yield* Effect.callback<void>((resume) => {
-          socket.once("close", () => resume(Effect.void));
-          socket.on("error", () => {
-            // Receiver errors already start a protocol close (for example
-            // 1009). Do not replace that refusal with an abrupt TCP reset.
-            if (socket.readyState === socket.OPEN) socket.terminate();
-          });
-        });
-        return HttpServerResponse.empty();
-      }).pipe(Effect.catch(() => Effect.succeed(HttpServerResponse.empty()))),
+        const bridge = Effect.scoped(
+          Effect.gen(function* () {
+            // The upgrade's scoped finalizer terminates this socket on cancellation;
+            // the registry then detaches forwarding and closes the far-side stream.
+            const socket = yield* upgradeNativeWebSocket(request.source);
+            if (
+              !registry.attach(
+                hostId,
+                url.searchParams.get(REMOTE_ATTACHMENT_QUERY) ?? "",
+                socket,
+                url.searchParams.get(WS_COMPATIBILITY_QUERY.serverInstanceId),
+              )
+            ) {
+              return HttpServerResponse.empty();
+            }
+            yield* Effect.callback<void>((resume) => {
+              const closed = () => resume(Effect.void);
+              const failed = () => {
+                // Receiver errors already start a protocol close (for example
+                // 1009). Do not replace that refusal with an abrupt TCP reset.
+                if (socket.readyState === socket.OPEN) socket.terminate();
+              };
+              socket.once("close", closed);
+              socket.on("error", failed);
+              return Effect.sync(() => {
+                socket.off("close", closed);
+                socket.off("error", failed);
+              });
+            });
+            return HttpServerResponse.empty();
+          }),
+        );
+        // Match `/ws`: durable owner sessions own their live bridges too. The
+        // intentional trusted-loopback/desktop path has no session to expire.
+        return authenticated
+          ? yield* (yield* SessionCredentialService).runAuthenticatedConnection(
+              authenticated.sessionId,
+              bridge,
+            )
+          : yield* bridge;
+      }).pipe(
+        Effect.catchTags({
+          SessionCredentialError: (error) =>
+            Effect.succeed(HttpServerResponse.text(error.message, { status: 401 })),
+          SessionCapacityError: (error) =>
+            Effect.succeed(
+              HttpServerResponse.text(error.message, {
+                status: 429,
+                headers: {
+                  "Cache-Control": "no-store",
+                  "Retry-After": String(error.retryAfterSeconds),
+                },
+              }),
+            ),
+        }),
+        Effect.catch(() => Effect.succeed(HttpServerResponse.empty())),
+      ),
     );
 
     // Each negotiation reserves a fresh far-side RPC stream.
