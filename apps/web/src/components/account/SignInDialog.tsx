@@ -5,6 +5,8 @@
 // the user enters their email, receives a 6-digit code, and enters it in the
 // same dialog. Sign-in and sign-up are one path. Dismissable; a successful
 // sign-in with no profile hands off to the onboarding modal.
+// `SignInPanel` is the same flow without the dialog chrome, embedded by the
+// first-run onboarding.
 // Layer: Web account feature.
 
 import type { AccountSsoProvider, AccountStatus } from "@synara/contracts";
@@ -13,6 +15,7 @@ import { SiApple, SiGithub, SiGoogle } from "react-icons/si";
 import { Button } from "~/components/ui/button";
 import { Dialog, DialogPopup, DialogTitle } from "~/components/ui/dialog";
 import { Input } from "~/components/ui/input";
+import { InputGroup, InputGroupAddon, InputGroupInput } from "~/components/ui/input-group";
 import { Spinner } from "~/components/ui/spinner";
 import { SynaraLogo } from "@synara/profile-ui/logo";
 import { useAccount } from "~/hooks/useAccount";
@@ -41,7 +44,7 @@ export function SignInDialog({ open, onOpenChange, onSignedIn }: SignInDialogPro
       <DialogPopup className="sm:max-w-[380px]">
         {/* State lives below DialogPopup, which unmounts on close, so every
             open starts from a clean form with no reset effect. */}
-        <SignInDialogContent onOpenChange={onOpenChange} onSignedIn={onSignedIn} />
+        <SignInPanel onDismiss={() => onOpenChange(false)} onSignedIn={onSignedIn} />
       </DialogPopup>
     </Dialog>
   );
@@ -50,7 +53,28 @@ export function SignInDialog({ open, onOpenChange, onSignedIn }: SignInDialogPro
 /** The waiting state of a PKCE attempt: which one, for the cancel RPC. */
 type SsoWait = { readonly ssoId: string };
 
-function SignInDialogContent({ onOpenChange, onSignedIn }: Omit<SignInDialogProps, "open">) {
+/** `dialog` is the standalone sign-in modal; `embedded` sits inside a host surface's card. */
+type SignInPanelVariant = "dialog" | "embedded";
+
+interface SignInPanelProps {
+  /** Called with the fresh status after any successful auth. */
+  readonly onSignedIn: (status: AccountStatus) => void;
+  /** Shown as "Continue without an account" in the dialog variant. */
+  readonly onDismiss?: () => void;
+  readonly variant?: SignInPanelVariant;
+}
+
+/** The title registers with the dialog only when the panel is the dialog. */
+function SignInPanelTitle(props: { variant: SignInPanelVariant; children: React.ReactNode }) {
+  return props.variant === "dialog" ? (
+    <DialogTitle className="font-system-ui text-lg font-semibold">{props.children}</DialogTitle>
+  ) : (
+    <h3 className="text-ui-lg font-medium text-foreground">{props.children}</h3>
+  );
+}
+
+export function SignInPanel({ onSignedIn, onDismiss, variant = "dialog" }: SignInPanelProps) {
+  const embedded = variant === "embedded";
   const account = useAccount();
   const [email, setEmail] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -199,6 +223,7 @@ function SignInDialogContent({ onOpenChange, onSignedIn }: Omit<SignInDialogProp
   if (otpEmail) {
     return (
       <CodeEntryStep
+        variant={variant}
         email={otpEmail}
         submitting={account.authenticateOtp.isPending}
         resending={account.sendOtp.isPending}
@@ -225,46 +250,131 @@ function SignInDialogContent({ onOpenChange, onSignedIn }: Omit<SignInDialogProp
     );
   }
 
+  const ssoWaiting = ssoWait ? (
+    <div className="flex flex-col items-center gap-3 py-2 text-center">
+      <div className="flex items-center gap-2 text-ui text-muted-foreground">
+        <Spinner className="size-3.5" />
+        <span>Waiting for your browser…</span>
+      </div>
+      <p className="text-ui-sm text-muted-foreground">
+        Finish signing in with your provider, then return here.
+      </p>
+      <Button
+        variant="ghost"
+        size="xs"
+        className="text-muted-foreground"
+        onClick={() => {
+          ssoAbortRef.current?.abort();
+          const ssoId = ssoIdRef.current;
+          ssoIdRef.current = null;
+          if (ssoId) void cancelSso(ssoId).catch(() => {});
+          setSsoWait(null);
+        }}
+      >
+        Stop waiting
+      </Button>
+      <p className="text-ui-sm text-muted-foreground">
+        A page you already approved may still finish signing in.
+      </p>
+    </div>
+  ) : null;
+
+  const emailError = error ? (
+    <p id={emailErrorId} role="alert" className="text-ui-sm leading-snug text-destructive">
+      {error}
+    </p>
+  ) : null;
+
+  if (embedded) {
+    return (
+      <div className="flex flex-col gap-3">
+        <div className="flex items-center gap-2.5 pb-1">
+          <img src="/app-icons/dark.png" alt="" className="size-7 shrink-0" draggable={false} />
+          <SignInPanelTitle variant={variant}>Sign in to Synara</SignInPanelTitle>
+        </div>
+        {ssoWaiting ?? (
+          <>
+            {/* Each provider button carries its provider through the PKCE authorize
+                URL, so the browser lands on that provider's sign-in. */}
+            <Button
+              size="lg"
+              shape="capsule"
+              className="w-full gap-2"
+              disabled={busy}
+              onClick={() => void handleSso("apple")}
+            >
+              <SiApple className="size-3.5" />
+              Continue with Apple
+            </Button>
+            <div className="grid grid-cols-2 gap-2">
+              <Button
+                size="lg"
+                shape="capsule"
+                variant="outline"
+                className="gap-2"
+                disabled={busy}
+                onClick={() => void handleSso("google")}
+              >
+                <SiGoogle className="size-3.5" />
+                Google
+              </Button>
+              <Button
+                size="lg"
+                shape="capsule"
+                variant="outline"
+                className="gap-2"
+                disabled={busy}
+                onClick={() => void handleSso("github")}
+              >
+                <SiGithub className="size-3.5" />
+                GitHub
+              </Button>
+            </div>
+            <form
+              className="flex flex-col gap-2"
+              onSubmit={(event) => {
+                event.preventDefault();
+                void handleEmailSubmit();
+              }}
+            >
+              <InputGroup className="h-10 rounded-full ps-1.5 pe-1 sm:h-9">
+                <InputGroupInput
+                  type="email"
+                  autoComplete="email"
+                  placeholder="you@company.com"
+                  aria-label="Email"
+                  value={email}
+                  disabled={busy}
+                  aria-invalid={error !== null || undefined}
+                  aria-describedby={error !== null ? emailErrorId : undefined}
+                  onChange={(event) => setEmail(event.target.value)}
+                />
+                <InputGroupAddon align="inline-end">
+                  <Button type="submit" size="xs" shape="capsule" variant="subtle" disabled={busy}>
+                    {account.sendOtp.isPending ? <Spinner className="size-3" /> : null}
+                    Send code
+                  </Button>
+                </InputGroupAddon>
+              </InputGroup>
+              {emailError}
+            </form>
+          </>
+        )}
+      </div>
+    );
+  }
+
   return (
     <div className="flex flex-col gap-4 px-6 pt-8 pb-6">
       <div className="flex flex-col items-center gap-3 text-center">
         <SynaraLogo className="size-10" />
-        <DialogTitle className="font-system-ui text-lg font-semibold">
-          Welcome to Synara
-        </DialogTitle>
+        <SignInPanelTitle variant={variant}>Welcome to Synara</SignInPanelTitle>
         <p className="text-ui leading-snug text-muted-foreground">
           Sign in or create your account to sync your profile and workspace across devices.
         </p>
       </div>
 
-      {ssoWait ? (
-        <div className="flex flex-col items-center gap-3 py-2 text-center">
-          <div className="flex items-center gap-2 text-ui text-muted-foreground">
-            <Spinner className="size-3.5" />
-            <span>Waiting for your browser…</span>
-          </div>
-          <p className="text-ui-sm text-muted-foreground">
-            Finish signing in with your provider, then return here.
-          </p>
-          <Button
-            variant="ghost"
-            size="xs"
-            className="text-muted-foreground"
-            onClick={() => {
-              ssoAbortRef.current?.abort();
-              const ssoId = ssoIdRef.current;
-              ssoIdRef.current = null;
-              if (ssoId) void cancelSso(ssoId).catch(() => {});
-              setSsoWait(null);
-            }}
-          >
-            Stop waiting
-          </Button>
-          <p className="text-ui-sm text-muted-foreground">
-            A page you already approved may still finish signing in.
-          </p>
-        </div>
-      ) : (
+      {ssoWaiting ?? (
         <>
           {/* Per-provider buttons, honestly: each one carries its provider
               through the PKCE authorize URL, so the browser genuinely lands
@@ -323,15 +433,7 @@ function SignInDialogContent({ onOpenChange, onSignedIn }: Omit<SignInDialogProp
               aria-describedby={error !== null ? emailErrorId : undefined}
               onChange={(event) => setEmail(event.target.value)}
             />
-            {error ? (
-              <p
-                id={emailErrorId}
-                role="alert"
-                className="text-ui-sm leading-snug text-destructive"
-              >
-                {error}
-              </p>
-            ) : null}
+            {emailError}
             <Button type="submit" className="mt-1 w-full" disabled={busy}>
               {account.sendOtp.isPending ? <Spinner className="size-3.5" /> : null}
               Continue
@@ -340,18 +442,21 @@ function SignInDialogContent({ onOpenChange, onSignedIn }: Omit<SignInDialogProp
         </>
       )}
 
-      <button
-        type="button"
-        className="self-center text-ui-sm text-muted-foreground hover:text-foreground"
-        onClick={() => onOpenChange(false)}
-      >
-        Continue without an account
-      </button>
+      {onDismiss ? (
+        <button
+          type="button"
+          className="self-center text-ui-sm text-muted-foreground hover:text-foreground"
+          onClick={onDismiss}
+        >
+          Continue without an account
+        </button>
+      ) : null}
     </div>
   );
 }
 
 interface CodeEntryStepProps {
+  readonly variant: SignInPanelVariant;
   /** The address the code was sent to, shown in the subtitle. */
   readonly email: string;
   readonly submitting: boolean;
@@ -373,6 +478,7 @@ interface CodeEntryStepProps {
  * behave like the single text field they really are.
  */
 function CodeEntryStep({
+  variant,
   email,
   submitting,
   resending,
@@ -451,10 +557,10 @@ function CodeEntryStep({
   }, [resent]);
 
   return (
-    <div className="flex flex-col gap-4 px-6 pt-8 pb-6">
+    <div className={cn("flex flex-col gap-4", variant === "dialog" && "px-6 pt-8 pb-6")}>
       <div className="flex flex-col items-center gap-3 text-center">
-        <SynaraLogo className="size-10" />
-        <DialogTitle className="font-system-ui text-lg font-semibold">Check your email</DialogTitle>
+        <SynaraLogo className={variant === "dialog" ? "size-10" : "size-8"} />
+        <SignInPanelTitle variant={variant}>Check your email</SignInPanelTitle>
         <p className="text-ui leading-snug text-muted-foreground">
           {resent ? (
             "New code sent"
