@@ -25,6 +25,8 @@ import {
 
 import { ComposerPickerMenuPopup } from "~/components/chat/ComposerPickerMenuPopup";
 import { Button } from "~/components/ui/button";
+import { DisclosureChevron } from "~/components/ui/DisclosureChevron";
+import { DisclosureRegion } from "~/components/ui/DisclosureRegion";
 import {
   Dialog,
   DialogDescription,
@@ -45,6 +47,16 @@ import { ensureNativeApi } from "~/nativeApi";
 
 import { McpConnectorConnectDialog, type McpConnectorTarget } from "./McpConnectorConnectDialog";
 import { McpConnectorGlyph } from "./McpConnectorGlyph";
+import {
+  MCP_CONNECTOR_CARD_CLASS_NAME,
+  McpConnectorCardHeader,
+  McpConnectorDetails,
+} from "./McpConnectorCard";
+import { McpLocalConnectorDialog } from "./McpLocalConnectorDialog";
+import {
+  McpConnectorProposalCard,
+  mcpConnectorProposalsQueryOptions,
+} from "./McpConnectorProposalCard";
 import { SettingsEmptyState } from "./SettingsPanelPrimitives";
 
 const CATEGORY_LABELS: Record<McpConnectorCategory, string> = {
@@ -70,7 +82,9 @@ function connectorPreset(connector: McpConnector): McpConnectorPreset | undefine
 
 // Reuse saved credentials, but keep the current redirect visible: the desktop
 // callback port may have changed since the user's OAuth app was registered.
-function connectorTarget(connector: McpConnector): McpConnectorTarget {
+function connectorTarget(
+  connector: Exclude<McpConnector, { transport: "stdio" }>,
+): McpConnectorTarget {
   const preset = connectorPreset(connector);
   return preset
     ? {
@@ -90,6 +104,7 @@ function connectorTarget(connector: McpConnector): McpConnectorTarget {
 
 // Host only: some servers put an API key in the URL path.
 function connectorHost(connector: McpConnector): string {
+  if (connector.transport === "stdio") return connector.command;
   return new URL(connector.url).host;
 }
 
@@ -97,11 +112,15 @@ function matchesSearch(query: string, ...fields: ReadonlyArray<string>): boolean
   return query.length === 0 || fields.some((field) => field.toLowerCase().includes(query));
 }
 
-function ConnectorShelf(props: { title: string; children: ReactNode }) {
+function ConnectorShelf(props: { title: string; children: ReactNode; cards?: boolean }) {
   return (
     <section className="space-y-1">
       <h2 className="px-3 text-ui-lg font-medium text-foreground">{props.title}</h2>
-      <div className="grid grid-cols-1 gap-x-2 sm:grid-cols-2">{props.children}</div>
+      <div
+        className={`grid grid-cols-1 sm:grid-cols-2 ${props.cards ? "items-start gap-3" : "gap-x-2"}`}
+      >
+        {props.children}
+      </div>
     </section>
   );
 }
@@ -145,47 +164,79 @@ function ConnectedRow(props: {
   onDisconnect: () => void;
 }) {
   const { connector } = props;
+  const [detailsOpen, setDetailsOpen] = useState(false);
+  const detailsId = useId();
   const needsAuth = connector.status === "needs-auth";
   return (
-    <div className={CONNECTOR_ROW_CLASS_NAME}>
-      <McpConnectorGlyph name={connector.name} url={connector.url} />
-      <ConnectorRowText
-        title={connector.name}
-        description={
-          needsAuth ? (
-            <span className="text-destructive">Sign-in expired. Reconnect to keep using it.</span>
-          ) : (
-            (connectorPreset(connector)?.description ?? connectorHost(connector))
-          )
-        }
-      />
-      {needsAuth ? (
-        <Button size="xs" variant="outline" onClick={props.onReconnect}>
-          Reconnect
+    <section className={MCP_CONNECTOR_CARD_CLASS_NAME} aria-label={`${connector.name} connector`}>
+      <McpConnectorCardHeader
+        connector={connector}
+        subtitle={connectorPreset(connector)?.description}
+      >
+        <Menu>
+          <MenuTrigger
+            render={
+              <IconButton
+                variant="ghost"
+                size="icon-sm"
+                shape="capsule"
+                label={`${connector.name} actions`}
+                disabled={props.disconnecting}
+              >
+                <EllipsisIcon className="size-4" />
+              </IconButton>
+            }
+          />
+          <ComposerPickerMenuPopup
+            align="end"
+            side="bottom"
+            sideOffset={6}
+            className="w-44 min-w-44"
+          >
+            {needsAuth || connector.transport === "stdio" ? null : (
+              <MenuItem onClick={props.onReconnect}>Reconnect</MenuItem>
+            )}
+            <MenuItem variant="destructive" onClick={props.onDisconnect}>
+              Disconnect
+            </MenuItem>
+          </ComposerPickerMenuPopup>
+        </Menu>
+      </McpConnectorCardHeader>
+      <div className="mt-4 flex flex-wrap items-center justify-between gap-2 border-t border-border/40 pt-3">
+        <span className="flex items-center gap-1.5 text-ui-sm text-muted-foreground">
+          <span
+            aria-hidden="true"
+            className={`size-1.5 shrink-0 rounded-full ${needsAuth ? "bg-destructive" : connector.status === "unreachable" ? "bg-muted-foreground" : "bg-success"}`}
+          />
+          {needsAuth
+            ? "Needs sign-in"
+            : connector.status === "unreachable"
+              ? "Not running"
+              : "Connected"}
+        </span>
+        {needsAuth ? (
+          <Button size="xs" variant="outline" onClick={props.onReconnect}>
+            Reconnect
+          </Button>
+        ) : null}
+        <Button
+          type="button"
+          variant="ghost"
+          size="chip"
+          aria-expanded={detailsOpen}
+          aria-controls={detailsId}
+          onClick={() => setDetailsOpen((open) => !open)}
+        >
+          Connection details
+          <DisclosureChevron open={detailsOpen} className="size-3.5" />
         </Button>
-      ) : null}
-      <Menu>
-        <MenuTrigger
-          render={
-            <IconButton
-              variant="ghost"
-              size="icon-sm"
-              shape="capsule"
-              label={`${connector.name} actions`}
-              disabled={props.disconnecting}
-            >
-              <EllipsisIcon className="size-4" />
-            </IconButton>
-          }
-        />
-        <ComposerPickerMenuPopup align="end" side="bottom" sideOffset={6} className="w-44 min-w-44">
-          {needsAuth ? null : <MenuItem onClick={props.onReconnect}>Reconnect</MenuItem>}
-          <MenuItem variant="destructive" onClick={props.onDisconnect}>
-            Disconnect
-          </MenuItem>
-        </ComposerPickerMenuPopup>
-      </Menu>
-    </div>
+      </div>
+      <DisclosureRegion open={detailsOpen}>
+        <div id={detailsId} className="pt-4">
+          <McpConnectorDetails connector={connector} />
+        </div>
+      </DisclosureRegion>
+    </section>
   );
 }
 
@@ -222,7 +273,8 @@ function AddCustomConnectorDialog(props: {
         <DialogHeader>
           <DialogTitle>Add a custom connector</DialogTitle>
           <DialogDescription>
-            Any remote MCP server. Synara signs in with OAuth when the server asks for it.
+            A public HTTPS or loopback HTTP MCP server. Synara signs in with OAuth when the server
+            asks for it.
           </DialogDescription>
         </DialogHeader>
         <DialogPanel>
@@ -259,11 +311,17 @@ export function McpConnectorsSettingsPanel(props: { active: boolean }) {
   const queryClient = useQueryClient();
   const [target, setTarget] = useState<McpConnectorTarget | null>(null);
   const [addOpen, setAddOpen] = useState(false);
+  const [localOpen, setLocalOpen] = useState(false);
   const [search, setSearch] = useState("");
   const deferredSearch = useDeferredValue(search);
 
   const connectorsQuery = useQuery({
     ...mcpConnectorsQueryOptions(),
+    enabled: props.active,
+    refetchInterval: 5_000,
+  });
+  const proposalsQuery = useQuery({
+    ...mcpConnectorProposalsQueryOptions(),
     enabled: props.active,
   });
 
@@ -285,8 +343,11 @@ export function McpConnectorsSettingsPanel(props: { active: boolean }) {
       void queryClient.invalidateQueries({ queryKey: MCP_CONNECTORS_QUERY_KEY });
       toastManager.add({
         type: "success",
-        title: `${connector.name} connected`,
-        description: "New chats can use its tools.",
+        title: `${connector.name} ${connector.status === "unreachable" ? "saved" : "connected"}`,
+        description:
+          connector.status === "unreachable"
+            ? "Not running. Start the local server to use its tools."
+            : "New chats can use its tools.",
       });
     },
     [queryClient],
@@ -303,7 +364,9 @@ export function McpConnectorsSettingsPanel(props: { active: boolean }) {
 
   const query = deferredSearch.trim().toLowerCase();
   const connectors = connectorsQuery.data ?? [];
-  const connectedUrls = new Set(connectors.map((connector) => connector.url));
+  const connectedUrls = new Set(
+    connectors.flatMap((connector) => (connector.transport === "stdio" ? [] : [connector.url])),
+  );
   const visibleConnectors = connectors.filter((connector) =>
     matchesSearch(
       query,
@@ -334,7 +397,7 @@ export function McpConnectorsSettingsPanel(props: { active: boolean }) {
 
   return (
     <div className="space-y-8">
-      <div className="flex items-center gap-2">
+      <div className="flex flex-wrap items-center gap-2">
         <SearchInput
           type="search"
           nativeInput
@@ -355,6 +418,14 @@ export function McpConnectorsSettingsPanel(props: { active: boolean }) {
           <AddPlusIcon className="size-4" />
           Add custom
         </Button>
+        <Button
+          shape="capsule"
+          variant="outline"
+          className="shrink-0"
+          onClick={() => setLocalOpen(true)}
+        >
+          Add local server
+        </Button>
       </div>
 
       {connectorsQuery.isError ? (
@@ -366,13 +437,15 @@ export function McpConnectorsSettingsPanel(props: { active: boolean }) {
       ) : null}
 
       {visibleConnectors.length > 0 ? (
-        <ConnectorShelf title="Connected">
+        <ConnectorShelf title="Your connectors" cards>
           {visibleConnectors.map((connector) => (
             <ConnectedRow
               key={connector.connectorId}
               connector={connector}
               disconnecting={disconnectMutation.isPending}
-              onReconnect={() => setTarget(connectorTarget(connector))}
+              onReconnect={() => {
+                if (connector.transport !== "stdio") setTarget(connectorTarget(connector));
+              }}
               onDisconnect={() => {
                 void disconnect(connector);
               }}
@@ -393,6 +466,12 @@ export function McpConnectorsSettingsPanel(props: { active: boolean }) {
         </ConnectorShelf>
       ))}
 
+      {proposalsQuery.data
+        ?.filter((proposal) => proposal.state === "pending")
+        .map((proposal) => (
+          <McpConnectorProposalCard key={proposal.proposalId} proposalId={proposal.proposalId} />
+        ))}
+
       {query.length > 0 && visibleConnectors.length === 0 && shelves.length === 0 ? (
         <SettingsEmptyState>
           No connectors match “{deferredSearch.trim()}”. Use Add custom to connect any MCP server by
@@ -406,6 +485,15 @@ export function McpConnectorsSettingsPanel(props: { active: boolean }) {
       </p>
 
       <AddCustomConnectorDialog open={addOpen} onOpenChange={setAddOpen} onSubmit={addCustom} />
+      <McpLocalConnectorDialog
+        open={localOpen}
+        onOpenChange={setLocalOpen}
+        onUrl={(url) => {
+          setLocalOpen(false);
+          addCustom(url);
+        }}
+        onConnected={onConnected}
+      />
       <McpConnectorConnectDialog
         target={target}
         onOpenChange={(open) => {

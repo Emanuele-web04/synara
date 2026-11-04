@@ -324,7 +324,7 @@ describe("connector injection", () => {
     assert.notInclude(buildCodexMcpConfigToml(connection.url, "thread"), "connector");
   });
 
-  it("adds connectors for HTTP-capable ACP agents and omits them over stdio", () => {
+  it("adds connectors using the transport advertised by ACP agents", () => {
     const http = buildAcpSynaraMcpServers({
       connection: withConnectors,
       initializeResult: { agentCapabilities: { mcpCapabilities: { http: true } } },
@@ -341,7 +341,7 @@ describe("connector injection", () => {
     });
     assert.deepEqual(
       stdio.map((server) => server.name),
-      ["synara"],
+      ["synara", "supabase_connector"],
     );
   });
 

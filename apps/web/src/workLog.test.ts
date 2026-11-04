@@ -1861,6 +1861,26 @@ describe("deriveWorkLogEntries", () => {
     });
   });
 
+  it("keeps connector approval cards visible when later turns have messages", () => {
+    const entries = deriveWorkLogEntries(
+      [
+        makeActivity({
+          id: "connector",
+          kind: "mcp.connector.proposed",
+          tone: "info",
+          summary: "Add connector: Paper",
+          payload: { proposalId: "proposal-1" },
+        }),
+        makeActivity({ id: "newer", turnId: "turn-2", kind: "tool.started", summary: "Working" }),
+      ],
+      TurnId.makeUnsafe("turn-2"),
+      { visibleTurnIds: new Set([TurnId.makeUnsafe("turn-2")]) },
+    );
+    expect(entries.find((entry) => entry.id === "connector")?.connectorProposalId).toBe(
+      "proposal-1",
+    );
+  });
+
   it("exposes a provider-independent Synara thread creation recap", () => {
     const activities: OrchestrationThreadActivity[] = [
       makeActivity({

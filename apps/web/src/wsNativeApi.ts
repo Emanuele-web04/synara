@@ -826,6 +826,9 @@ export function createWsNativeApi(): NativeApi {
       refreshExternalMcpPairing: (input: ExternalMcpRefreshPairingInput) =>
         executionRequest(WS_METHODS.serverRefreshExternalMcpPairing, input),
       listMcpConnectors: () => executionRequest(WS_METHODS.serverListMcpConnectors),
+      listMcpConnectorProposals: () => executionRequest(WS_METHODS.serverListMcpConnectorProposals),
+      resolveMcpConnectorProposal: (input) =>
+        executionRequest(WS_METHODS.serverResolveMcpConnectorProposal, input),
       connectMcpConnector: (input: McpConnectorConnectInput) =>
         executionRequest(WS_METHODS.serverConnectMcpConnector, input),
       disconnectMcpConnector: (input: McpConnectorDisconnectInput) =>

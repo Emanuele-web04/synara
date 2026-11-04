@@ -2697,6 +2697,13 @@ const makeWsRpcHandlersLayer = () =>
             "Failed to refresh external MCP pairing",
           ),
         [WS_METHODS.serverListMcpConnectors]: () => listConnectorsForSession,
+        [WS_METHODS.serverListMcpConnectorProposals]: () =>
+          connectorRpc(mcpConnectors.listProposals(), "Failed to list connector proposals"),
+        [WS_METHODS.serverResolveMcpConnectorProposal]: (input) =>
+          connectorRpc(
+            mcpConnectors.resolveProposal(input),
+            "Failed to resolve connector proposal",
+          ),
         [WS_METHODS.serverConnectMcpConnector]: (input) =>
           connectorRpc(mcpConnectors.connect(input), "Failed to connect"),
         [WS_METHODS.serverGetMcpConnectorSetup]: () =>
