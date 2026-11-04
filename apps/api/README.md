@@ -161,11 +161,15 @@ The sandbox campaign `SYNARABETA50QA` was configured and exercised with a new
 sandbox customer: 50%, Once, restricted to `Synara Desktop — Sandbox Monthly`,
 with one redemption per customer. The first discounted payment succeeded with
 `399` USD minor units before tax, `88` tax and `487` total (USD 3.99 + 0.88 = 4.87),
-and the shared feature benefit was granted. The annual checkout rejected this
-campaign code. The checkout displayed the following full monthly price, but an
-actual post-discount renewal has **not** yet been tested. No production campaign
-is activated. Create any production counterpart separately; IDs and redemption
-history do not transfer between environments.
+and the shared feature benefit was granted. The annual checkout kept its full
+price without applying this campaign code. The official customer portal also confirmed a paid
+`subscription_cycle` order for the same customer, subscription and monthly
+product: `799` before tax, no discount, `176` tax and `975` total (USD 9.75). The
+period advanced, and the final canceled customer state had no active
+subscription or Pro benefit. Access in the app at the exact renewal-payment
+instant was not sampled. No production campaign is activated. Create any
+production counterpart separately; IDs and redemption history do not transfer
+between environments.
 
 | Polar campaign field             | Required value                                                                                        |
 | -------------------------------- | ----------------------------------------------------------------------------------------------------- |
@@ -188,11 +192,14 @@ IDs or override the amount. No additional promo-code field is needed in Settings
 limits repeat use, but does not establish an absolute lifetime-first-purchase
 rule: Polar documents that a full refund frees that customer's redemption slot.
 Do not promise stronger eligibility than has been implemented and qualified.
-The first sandbox charge above verifies the observed rounding and itemized tax
-for that checkout. Still qualify the actual full-price following renewal,
-repeat-customer eligibility and invalid/expired-code refusals; a displayed
-renewal price is not a paid renewal. Do not generalize the first-charge evidence
-to those remaining cases.
+The sandbox orders above verify the observed rounding, itemized tax and
+full-price following renewal for this subscription. Unpaid checkout tests also
+refused an unknown code and a second redemption by the same customer. Annual
+checkout kept its full price with no discount when a code was submitted; the
+public update returned success while ignoring the code. Still qualify an
+actually expired code and app access during renewal/payment recovery. A
+displayed renewal price or advancing period alone is not a paid renewal. Do not
+generalize this evidence to the remaining cases.
 
 ### Durable checkout and access state
 
@@ -288,16 +295,16 @@ empty provider search is insufficient proof that payment cannot still complete.
 
 ### Sandbox qualification and production launch state
 
-| Case                                | Required evidence before launch                                                                                                                                                                          |
-| ----------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Monthly and annual purchase         | Paid sandbox order, correct USD catalog price, tax-exclusive itemization, shared feature benefit and reconciled account access.                                                                          |
-| Introductory monthly code           | First sandbox charge `399 + 88 = 487`, benefit grant and annual-code rejection verified. Actual full-price renewal after the discount and remaining eligibility cases still need qualification.          |
-| Renewal and payment recovery        | Paid `subscription_cycle` order plus advanced period and reconciled access; test the configured grace behavior. A period advancing alone does not prove payment.                                         |
-| Cancellation, refund and chargeback | Remaining paid access for period-end cancellation; separately verify refund-only and subscription termination, benefit changes and eventual remote denial.                                               |
-| Webhook delivery                    | Real signed automatic event reaches the stable receiver; duplicate, delayed and out-of-order events converge; invalid signatures are refused.                                                            |
-| Restart and provider downtime       | Persisted uncertain checkout resumes without another POST; inbox survives restart and drains after recovery; stale permission is not granted on provider failure.                                        |
-| Identity and erasure                | Account switching never opens another account's billing; deletion during an uncertain checkout cannot leave a renewable purchase behind.                                                                 |
-| Product boundary                    | All official Remote ingress requires Pro at paid rollout; positive local desktop use, account/history/export/cleanup remain free. Verify persistent authority policy, logout/unlink and old-OFF cutover. |
+| Case                                | Required evidence before launch                                                                                                                                                                                                                                       |
+| ----------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Monthly and annual purchase         | Paid sandbox order, correct USD catalog price, tax-exclusive itemization, shared feature benefit and reconciled account access.                                                                                                                                       |
+| Introductory monthly code           | First sandbox charge `399 + 88 = 487`, benefit grant, annual discount prevention and paid full-price renewal `799 + 176 = 975` with no discount verified. Unknown-code and repeat-customer refusals verified in unpaid checkouts; an expired code remains unverified. |
+| Renewal and payment recovery        | Paid `subscription_cycle` order and advanced period verified in sandbox; app access at the renewal-payment instant and configured grace/recovery behavior remain unverified.                                                                                          |
+| Cancellation, refund and chargeback | Remaining paid access for period-end cancellation; separately verify refund-only and subscription termination, benefit changes and eventual remote denial.                                                                                                            |
+| Webhook delivery                    | Real signed automatic event reaches the stable receiver; duplicate, delayed and out-of-order events converge; invalid signatures are refused.                                                                                                                         |
+| Restart and provider downtime       | Persisted uncertain checkout resumes without another POST; inbox survives restart and drains after recovery; stale permission is not granted on provider failure.                                                                                                     |
+| Identity and erasure                | Account switching never opens another account's billing; deletion during an uncertain checkout cannot leave a renewable purchase behind.                                                                                                                              |
+| Product boundary                    | All official Remote ingress requires Pro at paid rollout; positive local desktop use, account/history/export/cleanup remain free. Verify persistent authority policy, logout/unlink and old-OFF cutover.                                                              |
 
 For sandbox renewal qualification, Polar's public subscription update accepts a
 future `current_billing_period_end` for an existing isolated test subscription.
