@@ -1,22 +1,26 @@
 import { randomUUID } from "node:crypto";
 import pg from "pg";
 import { beforeAll, beforeEach, afterAll, describe, it, expect } from "vitest";
-import { runMigrations } from "../db/migrate";
+import { createIsolatedTestDatabase } from "../testing/isolatedDatabase";
 import { createLiveActivityService } from "./service";
 import type { ActivityDelivery, NotificationDelivery, ApnsResult } from "./apns";
 import type { RegisterLiveActivity, RegisterTurnNotification } from "@synara/contracts";
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
 describe.skipIf(!databaseUrl)("Live Activity durable delivery", () => {
-  const pool = new pg.Pool({ connectionString: databaseUrl });
+  // Cleanup and flush operate on the whole outbox, so this parallel suite owns its database.
+  let isolated: Awaited<ReturnType<typeof createIsolatedTestDatabase>>;
+  let pool: pg.Pool;
   beforeAll(async () => {
-    await runMigrations(databaseUrl!);
+    isolated = await createIsolatedTestDatabase(databaseUrl!);
+    pool = new pg.Pool({ connectionString: isolated.url });
   });
   beforeEach(async () => {
     await pool.query("DELETE FROM live_activities");
   });
   afterAll(async () => {
-    await pool.end();
+    await pool?.end();
+    await isolated?.close();
   });
   async function fixture(
     environment: "sandbox" | "production" = "sandbox",
