@@ -183,7 +183,7 @@ function BillingAccountPanel({ status, scope }: { status: AccountStatus | null; 
       {billing?.available ? (
         <p className="text-ui-sm text-muted-foreground">
           {sandbox
-            ? "Sandbox only. No real payments. iPhone and iPad remain free companions; test subscriptions do not change your app access."
+            ? "Sandbox only. No real payments. iPhone and iPad remain free companions."
             : "Payments are processed by Polar. iPhone and iPad remain free companions."}
         </p>
       ) : null}
