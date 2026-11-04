@@ -51,6 +51,7 @@ export function createRemoteResourceGateway(
             ttl: Duration.millis(ttl),
             subject: userId,
             role: "client",
+            accessOrigin: "remote",
             method: "bearer-session-token",
             client: { label: "Synara remote resource", deviceType: "unknown" },
           }),

@@ -695,6 +695,7 @@ managedAttachmentsLegacyLayer("managed attachment migration after private migrat
         [139, "RemoteConnectionPreferences"],
         [140, "RemoteAccessControls"],
         [141, "ProjectionThreadsUsageLimitRecovery"],
+        [142, "AuthAccessOrigin"],
       ]);
 
       const tracker = yield* trackerRows(sql);
@@ -788,6 +789,7 @@ managedAttachmentsLegacyLayer("managed attachment migration after private migrat
           { migration_id: 139, name: "RemoteConnectionPreferences" },
           { migration_id: 140, name: "RemoteAccessControls" },
           { migration_id: 141, name: "ProjectionThreadsUsageLimitRecovery" },
+          { migration_id: 142, name: "AuthAccessOrigin" },
         ],
       );
       const groupConfigColumns = yield* sql<{ readonly name: string }>`
@@ -961,6 +963,7 @@ agentGatewayRetentionLegacyLayer(
           [139, "RemoteConnectionPreferences"],
           [140, "RemoteAccessControls"],
           [141, "ProjectionThreadsUsageLimitRecovery"],
+          [142, "AuthAccessOrigin"],
         ]);
 
         const columns = yield* sql<{ readonly name: string }>`
@@ -1097,6 +1100,7 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
         [139, "RemoteConnectionPreferences"],
         [140, "RemoteAccessControls"],
         [141, "ProjectionThreadsUsageLimitRecovery"],
+        [142, "AuthAccessOrigin"],
       ]);
 
       const tracker = yield* trackerRows(sql);
@@ -1174,6 +1178,7 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
           [139, "RemoteConnectionPreferences"],
           [140, "RemoteAccessControls"],
           [141, "ProjectionThreadsUsageLimitRecovery"],
+          [142, "AuthAccessOrigin"],
         ],
       );
 
@@ -1305,6 +1310,7 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
         [139, "RemoteConnectionPreferences"],
         [140, "RemoteAccessControls"],
         [141, "ProjectionThreadsUsageLimitRecovery"],
+        [142, "AuthAccessOrigin"],
       ]);
 
       const tracker = yield* trackerRows(sql);
@@ -1378,6 +1384,7 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
           [139, "RemoteConnectionPreferences"],
           [140, "RemoteAccessControls"],
           [141, "ProjectionThreadsUsageLimitRecovery"],
+          [142, "AuthAccessOrigin"],
         ],
       );
       const preservedSpaces = yield* sql<{ readonly spaceId: string }>`
@@ -1713,8 +1720,15 @@ layer("historical account upgrades", (it) => {
             yield* sql`SELECT environment_id, root_fingerprint, enabled, allow_connections FROM remote_access_state`,
             access.map((row) => ({ allow_connections: 1, ...row })),
           );
-          assert.deepStrictEqual(yield* sql`SELECT * FROM auth_pairing_links`, pairing);
-          assert.deepStrictEqual(yield* sql`SELECT * FROM auth_sessions`, sessions);
+          // Reprepare after ALTER: Node 24 caches the pre-migration SELECT * column metadata.
+          assert.deepStrictEqual(
+            yield* sql`SELECT * FROM auth_pairing_links AS upgraded_pairing`,
+            pairing.map((row) => Object.assign({}, row, { access_origin: null })),
+          );
+          assert.deepStrictEqual(
+            yield* sql`SELECT * FROM auth_sessions AS upgraded_sessions`,
+            sessions.map((row) => Object.assign({}, row, { access_origin: null })),
+          );
           assert.deepStrictEqual(
             yield* sql`SELECT * FROM effect_sql_migrations WHERE migration_id <= ${lineage.canonicalPrefix} ORDER BY migration_id`,
             prefix,

@@ -23,6 +23,8 @@ import { clearOrgCache } from "../identity/orgProvisioning";
 import { createApiSigningService, type ApiSigningService } from "../identity/signing";
 import { createWorkosIdentityProvider } from "../identity/workos";
 import { startFakeWorkos, type FakeWorkos } from "../testing/fakeWorkos";
+import { createBillingService } from "../billing/service";
+import type { BillingProvider, BillingSnapshot } from "../billing/polar";
 import { createV1Routes, LINK_APPROVE_RATE_LIMIT_PER_MINUTE } from "./v1";
 
 const TEST_DATABASE_URL = process.env.TEST_DATABASE_URL;
@@ -76,6 +78,10 @@ describe.skipIf(!TEST_DATABASE_URL)("Slice A host account API", () => {
   function buildApp(
     tunnels?: Parameters<typeof createV1Routes>[0]["tunnels"],
     remoteBetaAccessEnabled = false,
+    billingOptions: Pick<
+      Parameters<typeof createV1Routes>[0],
+      "billing" | "remoteBillingEnforced"
+    > = {},
   ) {
     const { db } = database;
     const { verifier, grants } = createWorkosIdentityProvider(config);
@@ -95,6 +101,7 @@ describe.skipIf(!TEST_DATABASE_URL)("Slice A host account API", () => {
         }),
         remoteTestUserIds,
         remoteBetaAccessEnabled,
+        ...billingOptions,
         apiIssuer: config.apiPublicUrl,
         ...(tunnels ? { tunnels } : {}),
         verifier,
@@ -292,6 +299,29 @@ describe.skipIf(!TEST_DATABASE_URL)("Slice A host account API", () => {
 
   beforeEach(() => clearOrgCache());
 
+  it.each([undefined, false, true])(
+    "publishes only uncached deployment policy without authentication (enforced: %s)",
+    async (enforced) => {
+      const { app } = buildApp(
+        undefined,
+        false,
+        enforced === undefined ? {} : { remoteBillingEnforced: enforced },
+      );
+      const response = await app.request("/api/v1/instance");
+      expect(response.status).toBe(200);
+      expect(response.headers.get("cache-control")).toBe("no-store");
+      const body = (await response.json()) as Record<string, unknown>;
+      expect(body).toMatchObject({ remoteBillingEnforced: enforced === true });
+      expect(Object.keys(body).toSorted()).toEqual([
+        "authMode",
+        "clientId",
+        "remoteBillingEnforced",
+        "version",
+        "workosApiUrl",
+      ]);
+    },
+  );
+
   it.each(["liveactivity", "notification"])(
     "authenticates $0 registration and host publication at the HTTP boundary",
     async (kind) => {
@@ -299,6 +329,7 @@ describe.skipIf(!TEST_DATABASE_URL)("Slice A host account API", () => {
       const owner = await signIn();
       const host = await linkHost(app, owner);
       const device = await registerDevice(app, owner);
+      remoteTestUserIds.splice(remoteTestUserIds.indexOf(owner.userId), 1);
       const source = {
         hostId: host.id,
         threadId: randomUUID(),
@@ -1295,6 +1326,425 @@ describe.skipIf(!TEST_DATABASE_URL)("Slice A host account API", () => {
   });
 
   describe("managed remote token isolation", () => {
+    describe("paid remote admission", () => {
+      function billingFixture() {
+        const states = new Map<string, BillingSnapshot>();
+        const provider: BillingProvider = {
+          environment: "sandbox",
+          plans: vi.fn(async () => [
+            { interval: "month" as const, amountMinor: 799, currency: "USD" },
+          ]),
+          state: vi.fn(async (userId) => states.get(userId) ?? null),
+          productId: () => "fixture-month",
+          preflightCheckout: vi.fn(async () => {}),
+          recoverCheckout: vi.fn(async () => null),
+          checkout: vi.fn(async () => ({
+            checkoutId: randomUUID(),
+            productId: "fixture-month",
+            status: "open" as const,
+            expiresAt: new Date(Date.now() + 60_000).toISOString(),
+            url: "https://sandbox.polar.sh/checkout/fixture",
+          })),
+          portal: vi.fn(async () => "https://sandbox.polar.sh/portal/fixture"),
+          cancelRenewals: vi.fn(async () => {}),
+          verify: vi.fn(async () => null),
+        };
+        const billing = createBillingService({ pool, provider });
+        const paid = (userId: string) =>
+          states.set(userId, {
+            customerId: randomUUID(),
+            productIds: ["fixture-month"],
+            settledCheckoutAttempts: [],
+            accessGranted: true,
+            subscriptionStatus: "active",
+            validUntil: new Date(Date.now() + 86_400_000).toISOString(),
+            cancelAtPeriodEnd: false,
+            hasSubscription: true,
+          });
+        return { billing, provider, paid };
+      }
+
+      it.each([false, true])(
+        "requires Pro despite the beta flag and tester allowlist (beta: %s)",
+        async (beta) => {
+          const { billing } = billingFixture();
+          const { app } = buildApp(undefined, beta, { billing, remoteBillingEnforced: true });
+          const owner = await signIn();
+          expect(remoteTestUserIds).toContain(owner.userId);
+          const host = await linkHost(app, owner);
+          const device = await registerDevice(app, owner);
+          const authorization = await app.request(`/api/v1/hosts/${host.id}/authorization`, {
+            headers: { authorization: `HostProof ${await hostProof(host.key, host)}` },
+          });
+          expect(authorization.status).toBe(403);
+          expect(await authorization.json()).toMatchObject({ error: "subscription_required" });
+          const grant = await app.request(`/api/v1/hosts/${host.id}/grant`, {
+            method: "POST",
+            headers: authHeaders(owner.token),
+            body: JSON.stringify({ deviceJkt: device.jkt }),
+          });
+          expect(grant.status).toBe(403);
+          expect(await grant.json()).toMatchObject({ error: "subscription_required" });
+        },
+      );
+
+      it("admits a freshly granted owner and binds the grant to its registered device", async () => {
+        const { billing, paid } = billingFixture();
+        const { app } = buildApp(undefined, false, { billing, remoteBillingEnforced: true });
+        const owner = await signIn();
+        remoteTestUserIds.splice(remoteTestUserIds.indexOf(owner.userId), 1);
+        paid(owner.userId);
+        const host = await linkHost(app, owner);
+        const device = await registerDevice(app, owner);
+        const authorization = await app.request(`/api/v1/hosts/${host.id}/authorization`, {
+          headers: { authorization: `HostProof ${await hostProof(host.key, host)}` },
+        });
+        expect(authorization.status).toBe(200);
+        expect(await authorization.json()).toMatchObject({
+          ownerInOrg: true,
+          remoteBillingEnforced: true,
+        });
+        const response = await app.request(`/api/v1/hosts/${host.id}/grant`, {
+          method: "POST",
+          headers: authHeaders(owner.token),
+          body: JSON.stringify({ deviceJkt: device.jkt }),
+        });
+        expect(response.status).toBe(200);
+        const { grant } = (await response.json()) as { grant: string };
+        const payload = await signing.verify(grant, {
+          typ: GRANT_JWT_TYP,
+          audience: "synara-relay",
+          maxAgeSeconds: GRANT_MAX_AGE_SECONDS,
+        });
+        expect(Schema.decodeUnknownSync(GrantClaims)(payload)).toMatchObject({
+          hostId: host.id,
+          sub: owner.userId,
+          cnf: { jkt: device.jkt },
+        });
+      });
+
+      it.each(
+        ["liveactivity", "notification"].flatMap((kind) =>
+          ["unpaid", "unavailable"].map((state) => ({ kind, state })),
+        ),
+      )(
+        "pauses $kind registration and host publication when billing is $state, keeping cleanup free",
+        async ({ kind, state }) => {
+          const { billing, paid } = billingFixture();
+          const { app } = buildApp(undefined, true, { billing, remoteBillingEnforced: true });
+          const owner = await signIn();
+          paid(owner.userId);
+          const host = await linkHost(app, owner);
+          const device = await registerDevice(app, owner);
+          const source = {
+            hostId: host.id,
+            threadId: randomUUID(),
+            turnId: randomUUID(),
+            displayId: randomUUID(),
+          };
+          const id = randomUUID();
+          const request = {
+            deviceJkt: device.jkt,
+            revision: 1,
+            token: randomBytes(32).toString("hex"),
+            environment: "sandbox",
+            ...(kind === "notification"
+              ? { notificationId: id, source }
+              : { activityId: id, sources: [source] }),
+          };
+          const path =
+            kind === "notification"
+              ? "/api/v1/notification-subscriptions"
+              : "/api/v1/live-activities";
+          const register = (revision: number) =>
+            app.request(path, {
+              method: "PUT",
+              headers: authHeaders(owner.token),
+              body: JSON.stringify({ ...request, revision }),
+            });
+          expect((await register(1)).status).toBe(200);
+          const before = (
+            await pool.query("SELECT request,expires_at,ended FROM live_activities WHERE id=$1", [
+              id,
+            ])
+          ).rows[0];
+          const access = vi.spyOn(billing, "access");
+          if (state === "unavailable")
+            access.mockRejectedValue(new Error("private provider details"));
+          else
+            access.mockResolvedValue({
+              available: true,
+              access: "none",
+              checkedAt: new Date().toISOString(),
+              validUntil: null,
+            });
+          const expectedStatus = state === "unavailable" ? 503 : 403;
+          const expectedError =
+            state === "unavailable" ? "billing_unavailable" : "subscription_required";
+          const rejected = await register(2);
+          expect(rejected.status).toBe(expectedStatus);
+          expect(await rejected.json()).toMatchObject({ error: expectedError });
+          const proof = await hostProof(host.key, host);
+          const hostUrl = `/api/v1/hosts/${host.id}/live-activities`;
+          const hostHeaders = {
+            authorization: `HostProof ${proof}`,
+            "content-type": "application/json",
+          };
+          const snapshot = {
+            sequence: 1,
+            turns: [
+              {
+                threadId: source.threadId,
+                turnId: source.turnId,
+                state: "ready",
+                startedAt: 1790000000,
+              },
+            ],
+          };
+          for (const method of ["GET", "PUT"]) {
+            const response = await app.request(hostUrl, {
+              method,
+              headers: hostHeaders,
+              ...(method === "PUT" ? { body: JSON.stringify(snapshot) } : {}),
+            });
+            expect(response.status).toBe(expectedStatus);
+            expect(await response.json()).toMatchObject({ error: expectedError });
+          }
+          expect(
+            (
+              await pool.query("SELECT request,expires_at,ended FROM live_activities WHERE id=$1", [
+                id,
+              ])
+            ).rows[0],
+          ).toEqual(before);
+          expect(
+            (
+              await pool.query("SELECT count(*) FROM live_activity_hosts WHERE host_id=$1", [
+                host.id,
+              ])
+            ).rows[0].count,
+          ).toBe("0");
+          access.mockResolvedValue({
+            available: true,
+            access: "granted",
+            checkedAt: new Date().toISOString(),
+            validUntil: null,
+          });
+          expect((await register(2)).status).toBe(200);
+          expect((await app.request(hostUrl, { headers: hostHeaders })).status).toBe(200);
+          expect(
+            (
+              await app.request(hostUrl, {
+                method: "PUT",
+                headers: hostHeaders,
+                body: JSON.stringify(snapshot),
+              })
+            ).status,
+          ).toBe(200);
+          access.mockRejectedValue(new Error("unavailable again"));
+          const callsBeforeCleanup = access.mock.calls.length;
+          expect(
+            (
+              await app.request(`${path}/${id}`, {
+                method: "DELETE",
+                headers: authHeaders(owner.token),
+              })
+            ).status,
+          ).toBe(200);
+          expect(access).toHaveBeenCalledTimes(callsBeforeCleanup);
+          expect(
+            (
+              await pool.query(
+                "SELECT ended,request->>'token' AS token FROM live_activities WHERE id=$1",
+                [id],
+              )
+            ).rows[0],
+          ).toEqual({ ended: true, token: "" });
+        },
+      );
+
+      it("checks host membership before commercial push admission", async () => {
+        const { billing } = billingFixture();
+        const access = vi.spyOn(billing, "access").mockRejectedValue(new Error("must not be used"));
+        const { app } = buildApp(undefined, true, { billing, remoteBillingEnforced: true });
+        const owner = await signIn();
+        const host = await linkHost(app, owner);
+        workos.removeMembership(owner.orgId, owner.userId);
+        const response = await app.request(`/api/v1/hosts/${host.id}/live-activities`, {
+          headers: { authorization: `HostProof ${await hostProof(host.key, host)}` },
+        });
+        expect(response.status).toBe(403);
+        expect(await response.json()).toMatchObject({ error: "not_host_owner" });
+        expect(access).not.toHaveBeenCalled();
+      });
+
+      it("reports commercial outages as unavailable without returning provider details", async () => {
+        const { billing } = billingFixture();
+        vi.spyOn(billing, "access").mockRejectedValue(new Error("private billing failure"));
+        const { app } = buildApp(undefined, true, { billing, remoteBillingEnforced: true });
+        const owner = await signIn();
+        const host = await linkHost(app, owner);
+        const response = await app.request(`/api/v1/hosts/${host.id}/authorization`, {
+          headers: { authorization: `HostProof ${await hostProof(host.key, host)}` },
+        });
+        expect(response.status).toBe(503);
+        const body = await response.text();
+        expect(JSON.parse(body)).toMatchObject({ error: "billing_unavailable" });
+        expect(body).not.toContain("private billing failure");
+      });
+
+      it("reports lost ownership before billing and never consults the commercial provider", async () => {
+        const { billing } = billingFixture();
+        const access = vi
+          .spyOn(billing, "access")
+          .mockRejectedValue(new Error("billing unavailable"));
+        const { app } = buildApp(undefined, true, { billing, remoteBillingEnforced: true });
+        const owner = await signIn();
+        const host = await linkHost(app, owner);
+        workos.removeMembership(owner.orgId, owner.userId);
+        const response = await app.request(`/api/v1/hosts/${host.id}/authorization`, {
+          headers: { authorization: `HostProof ${await hostProof(host.key, host)}` },
+        });
+        expect(response.status).toBe(200);
+        expect(await response.json()).toMatchObject({
+          ownerInOrg: false,
+          remoteBillingEnforced: true,
+        });
+        expect(access).not.toHaveBeenCalled();
+      });
+
+      it("preserves beta admission and skips billing entirely when enforcement is off", async () => {
+        const { billing } = billingFixture();
+        const access = vi.spyOn(billing, "access").mockRejectedValue(new Error("must not be used"));
+        const { app } = buildApp(undefined, true, { billing, remoteBillingEnforced: false });
+        const owner = await signIn();
+        remoteTestUserIds.splice(remoteTestUserIds.indexOf(owner.userId), 1);
+        const host = await linkHost(app, owner);
+        const device = await registerDevice(app, owner);
+        expect(
+          (
+            await app.request(`/api/v1/hosts/${host.id}/authorization`, {
+              headers: { authorization: `HostProof ${await hostProof(host.key, host)}` },
+            })
+          ).status,
+        ).toBe(200);
+        expect(
+          (
+            await app.request(`/api/v1/hosts/${host.id}/grant`, {
+              method: "POST",
+              headers: authHeaders(owner.token),
+              body: JSON.stringify({ deviceJkt: device.jkt }),
+            })
+          ).status,
+        ).toBe(200);
+        expect(access).not.toHaveBeenCalled();
+      });
+
+      it("keeps unpaid account setup and billing available while blocking remote pairing and tunnels", async () => {
+        const { billing } = billingFixture();
+        const provision = vi.fn(async () => ({
+          hostname: "paid.example.test",
+          tunnelId: randomUUID(),
+          connectorToken: "fixture-connector",
+        }));
+        const { app } = buildApp(
+          {
+            provision,
+            disable: async () => {},
+            cleanup: async () => {},
+            endpoints: async () => new Map(),
+          },
+          true,
+          { billing, remoteBillingEnforced: true },
+        );
+        const owner = await signIn();
+        const host = await linkHost(app, owner);
+        const device = await registerDevice(app, owner);
+        expect(
+          (await app.request("/api/v1/me", { headers: authHeaders(owner.token) })).status,
+        ).toBe(200);
+        expect(
+          (await app.request("/api/v1/hosts", { headers: authHeaders(owner.token) })).status,
+        ).toBe(200);
+        expect(
+          (await app.request("/api/v1/devices", { headers: authHeaders(owner.token) })).status,
+        ).toBe(200);
+        const status = await app.request("/api/v1/billing/status", {
+          headers: authHeaders(owner.token),
+        });
+        expect(status.status).toBe(200);
+        expect(await status.json()).toMatchObject({ access: "none", canCheckout: true });
+        const hostRequest = async (suffix: string, body: unknown) =>
+          app.request(`/api/v1/hosts/${host.id}/${suffix}`, {
+            method: "POST",
+            headers: {
+              "content-type": "application/json",
+              authorization: `HostProof ${await hostProof(host.key, host)}`,
+            },
+            body: JSON.stringify(body),
+          });
+        const bundle = {
+          v: 2,
+          environmentId: host.environmentId,
+          rootFingerprint: "a".repeat(64),
+          accountAuthority: config.apiPublicUrl,
+          userId: owner.userId,
+          organizationId: owner.orgId,
+          channel: "dev",
+          rootCertificate: "fixture root",
+          hostId: host.id,
+          label: "Unpaid host",
+          inviteId: randomUUID(),
+          secret: "s".repeat(43),
+          expiresAt: new Date(Date.now() + 590_000).toISOString(),
+        };
+        const publish = await hostRequest("pairing-codes", bundle);
+        expect(publish.status).toBe(403);
+        expect(await publish.json()).toMatchObject({ error: "subscription_required" });
+        const tunnel = await hostRequest("tunnel", { originPort: 34567 });
+        expect(tunnel.status).toBe(403);
+        expect(await tunnel.json()).toMatchObject({ error: "subscription_required" });
+        expect(provision).not.toHaveBeenCalled();
+        // An invitation issued before enforcement cannot bypass paid redemption.
+        const { app: betaApp } = buildApp(undefined, true);
+        const invitation = await betaApp.request(`/api/v1/hosts/${host.id}/pairing-codes`, {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            authorization: `HostProof ${await hostProof(host.key, host)}`,
+          },
+          body: JSON.stringify(bundle),
+        });
+        expect(invitation.status).toBe(200);
+        const { code } = (await invitation.json()) as { code: string };
+        const proof = await new SignJWT({ code })
+          .setProtectedHeader({ alg: "ES256", typ: "synara-pairing-code+jwt" })
+          .setIssuer("synara-device")
+          .setSubject(owner.userId)
+          .setAudience(config.apiPublicUrl)
+          .setIssuedAt()
+          .setExpirationTime("60s")
+          .setJti(randomUUID())
+          .sign(device.key.privateKey);
+        const redeem = await app.request("/api/v1/remote/pairing-codes/redeem", {
+          method: "POST",
+          headers: authHeaders(owner.token),
+          body: JSON.stringify({ code, deviceJkt: device.jkt, proof }),
+        });
+        expect(redeem.status).toBe(403);
+        expect(await redeem.json()).toMatchObject({ error: "subscription_required" });
+        expect(
+          (
+            await app.request("/api/v1/billing/checkout", {
+              method: "POST",
+              headers: authHeaders(owner.token),
+              body: JSON.stringify({ interval: "month" }),
+            })
+          ).status,
+        ).toBe(200);
+      });
+    });
+
     it.each([false, true])(
       "allows unlisted beta owners without relaxing account, device or membership checks (beta: %s)",
       async (beta) => {

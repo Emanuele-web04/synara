@@ -18,6 +18,7 @@ import {
   bindRemoteAttachmentSession,
 } from "../managedAttachmentPrincipal";
 import { ServerAuthLive } from "../auth/Layers/ServerAuth";
+import { RemoteSessionRegistryLive } from "../remoteSessions/sessionRegistry";
 import { AuthControlPlaneLive } from "../auth/Layers/AuthControlPlane";
 import { BootstrapCredentialServiceLive } from "../auth/Layers/BootstrapCredentialService";
 import { ServerAuthPolicyLive } from "../auth/Layers/ServerAuthPolicy";
@@ -48,6 +49,7 @@ it("streams encrypted resources with client authority, stable attachment ownersh
     Layer.provide(SessionCredentialServiceLive),
   );
   const auth = ServerAuthLive.pipe(
+    Layer.provide(RemoteSessionRegistryLive),
     Layer.provide(ServerAuthPolicyLive),
     Layer.provide(BootstrapCredentialServiceLive),
     Layer.provide(SessionCredentialServiceLive),
@@ -56,6 +58,7 @@ it("streams encrypted resources with client authority, stable attachment ownersh
   const runtime = ManagedRuntime.make(
     Layer.mergeAll(
       auth,
+      RemoteSessionRegistryLive,
       SessionCredentialServiceLive,
       Layer.succeed(HostConnectionRegistryService, registry),
     ).pipe(

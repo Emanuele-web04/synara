@@ -18,6 +18,7 @@ import { HttpRouter } from "effect/unstable/http";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { ServerAuth, type ServerAuthShape } from "./auth/Services/ServerAuth";
+import { RemoteSessionRegistryLive } from "./remoteSessions/sessionRegistry";
 import {
   resolveDefaultChatWorkspaceRoot,
   resolveDefaultGroupsWorkspaceRoot,
@@ -231,6 +232,7 @@ async function withEffectServer(
   const servicesLayer = Layer.mergeAll(
     Layer.succeed(ServerConfig, config),
     Layer.succeed(ServerAuth, makeFakeServerAuth()),
+    RemoteSessionRegistryLive,
     ...(options.providerRegistry
       ? [Layer.succeed(ProviderAdapterRegistry, options.providerRegistry)]
       : []),

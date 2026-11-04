@@ -13,6 +13,7 @@ import { HttpRouter } from "effect/unstable/http";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { AuthError, ServerAuth, type ServerAuthShape } from "./auth/Services/ServerAuth";
+import { RemoteSessionRegistryLive } from "./remoteSessions/sessionRegistry";
 import {
   resolveDefaultChatWorkspaceRoot,
   resolveDefaultGroupsWorkspaceRoot,
@@ -203,6 +204,7 @@ async function withEffectServer(
           Effect.provide(
             Layer.mergeAll(
               Layer.succeed(ServerConfig, config),
+              RemoteSessionRegistryLive,
               Layer.succeed(
                 ServerAuth,
                 route.kind === "favicon" ? (route.auth ?? serverAuth) : serverAuth,

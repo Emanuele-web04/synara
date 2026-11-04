@@ -1,4 +1,4 @@
-import { generateKeyPairSync } from "node:crypto";
+import { generateKeyPairSync, randomUUID } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import { ApiConfigError, loadApiConfig, type WorkosApiConfig } from "./config";
 
@@ -20,6 +20,48 @@ const base = {
 };
 
 describe("loadApiConfig", () => {
+  it("requires explicit configured billing for paid Remote access in both identity modes", () => {
+    expect(loadApiConfig(base).remoteBillingEnforced).toBe(false);
+    expect(
+      loadApiConfig({ ...base, POLAR_REMOTE_ACCESS_ENFORCED: "false" }).remoteBillingEnforced,
+    ).toBe(false);
+    for (const invalid of ["", "1", "yes", "TRUE"]) {
+      expect(() => loadApiConfig({ ...base, POLAR_REMOTE_ACCESS_ENFORCED: invalid })).toThrow(
+        "POLAR_REMOTE_ACCESS_ENFORCED",
+      );
+    }
+    expect(() => loadApiConfig({ ...base, POLAR_REMOTE_ACCESS_ENFORCED: "true" })).toThrow(
+      "requires configured Polar billing",
+    );
+    const billing = {
+      POLAR_REMOTE_ACCESS_ENFORCED: "true",
+      POLAR_BILLING_ENABLED: "true",
+      POLAR_ENVIRONMENT: "sandbox",
+      POLAR_ACCESS_TOKEN: "test-only-token",
+      POLAR_WEBHOOK_SECRET: "test-only-secret",
+      POLAR_ORGANIZATION_ID: randomUUID(),
+      POLAR_MONTHLY_PRODUCT_ID: randomUUID(),
+      POLAR_YEARLY_PRODUCT_ID: randomUUID(),
+      POLAR_DESKTOP_BENEFIT_ID: randomUUID(),
+      POLAR_CHECKOUT_SUCCESS_URL: "http://127.0.0.1:8788/billing/return",
+      POLAR_PORTAL_RETURN_URL: "http://127.0.0.1:8788/settings",
+      REMOTE_BETA_ACCESS_ENABLED: "true",
+    };
+    for (const identityProvider of ["workos", "dev"]) {
+      const config = loadApiConfig({
+        ...base,
+        ...billing,
+        IDENTITY_PROVIDER: identityProvider,
+        ...(identityProvider === "dev" ? { WORKOS_API_KEY: undefined } : {}),
+      });
+      expect(config).toMatchObject({
+        remoteBillingEnforced: true,
+        remoteBetaAccessEnabled: true,
+        polarBilling: { environment: "sandbox" },
+      });
+    }
+  });
+
   it("opens remote beta access only through an explicit valid deployment setting", () => {
     expect(loadWorkosConfig(base).remoteBetaAccessEnabled).not.toBe(true);
     for (const value of ["true", "false"]) {

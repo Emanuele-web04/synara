@@ -16,6 +16,7 @@
   },
   "dependencies": {
     "@hono/node-server": "^1.14.0",
+    "@polar-sh/sdk": "1.0.2",
     "@synara/contracts": "workspace:*",
     "@synara/shared": "workspace:*",
     "drizzle-orm": "^0.45.2",

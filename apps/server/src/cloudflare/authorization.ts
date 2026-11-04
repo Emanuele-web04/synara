@@ -37,12 +37,19 @@ export function startRemoteAuthorization(options: {
   const pollIntervalMs = options.pollIntervalMs ?? REMOTE_REVOCATION_POLL_MS;
   const log = options.log ?? (() => {});
   let validUntil = 0;
+  let monotonicValidUntil = 0;
   let permanentlyDenied = false;
   let expired = true;
   let admitted = false;
+  let lastLeaseWasPaid = false;
   let lastFailure: string | undefined;
   let denial: { reason: string; since: number; count: number } | undefined;
-  const available = () => !options.signal.aborted && !permanentlyDenied && now() < validUntil;
+  // Wall-clock adjustments cannot extend an authenticated lease during an outage.
+  const available = () =>
+    !options.signal.aborted &&
+    !permanentlyDenied &&
+    now() < validUntil &&
+    performance.now() < monotonicValidUntil;
   const expiry = setInterval(() => {
     if (!expired && !available()) {
       expired = true;
@@ -63,6 +70,7 @@ export function startRemoteAuthorization(options: {
       ? { ...denial, reason, count: denial.count + 1 }
       : { reason, since: at, count: 1 };
     validUntil = 0;
+    monotonicValidUntil = 0;
     expired = true;
     if (
       denial.count < REMOTE_PERMANENT_DENIAL_CONFIRMATIONS ||
@@ -95,6 +103,8 @@ export function startRemoteAuthorization(options: {
             lastFailure = undefined;
             denial = undefined;
             validUntil = now() + REMOTE_AUTHORIZATION_LEASE_MS;
+            monotonicValidUntil = performance.now() + REMOTE_AUTHORIZATION_LEASE_MS;
+            lastLeaseWasPaid = snapshot.remoteBillingEnforced === true;
             expired = false;
           }
         } catch (error) {
@@ -106,11 +116,27 @@ export function startRemoteAuthorization(options: {
             error.status === 403 &&
             error.code === "not_host_owner" &&
             error.message === "Remote test access is not enabled for this account";
-          if (enrollmentUnavailable) {
+          const subscriptionRequired =
+            error instanceof AccountApiError &&
+            error.status === 403 &&
+            error.code === "subscription_required";
+          const unverifiedPaidCutover =
+            error instanceof AccountApiError &&
+            error.status === 503 &&
+            error.code === "billing_unavailable" &&
+            !lastLeaseWasPaid;
+          if (enrollmentUnavailable || subscriptionRequired || unverifiedPaidCutover) {
             // Only an authenticated, linked host gets this far.
             denial = undefined;
-            failed("remote access is not enabled for this account");
+            failed(
+              subscriptionRequired
+                ? "the host owner's remote subscription is required"
+                : unverifiedPaidCutover
+                  ? "a paid remote authorization has not been confirmed"
+                  : "remote access is not enabled for this account",
+            );
             validUntil = 0;
+            monotonicValidUntil = 0;
             expired = true;
             await options.unavailable(false);
           } else if (
@@ -135,7 +161,8 @@ export function startRemoteAuthorization(options: {
   })();
   void done.catch(() => {
     validUntil = 0;
+    monotonicValidUntil = 0;
     void options.unavailable(false).catch(() => {});
   });
-  return { available, done };
+  return { available, paidAvailable: () => lastLeaseWasPaid && available(), done };
 }

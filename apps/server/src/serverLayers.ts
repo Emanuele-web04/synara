@@ -214,6 +214,7 @@ export function makeServerRuntimeServicesLayer(
     Layer.provide(sessionCredentialLayer),
   );
   const serverAuthLayer = ServerAuthLive.pipe(
+    Layer.provide(RemoteSessionRegistryLive),
     Layer.provide(ServerAuthPolicyLive),
     Layer.provide(BootstrapCredentialServiceLive),
     Layer.provide(sessionCredentialLayer),

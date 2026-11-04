@@ -1,4 +1,7 @@
 import {
+  AccountBillingStatus,
+  AccountBillingRedirect,
+  type AccountBillingCheckoutRequest,
   DeleteAccountResponse,
   type DeleteAccountRequest,
   RemoteTunnelResponse,
@@ -233,6 +236,12 @@ export interface AccountClient {
    */
   authenticateOtp(request: OtpAuthenticateRequest): Promise<AuthTokensResponse>;
   me(token: string): Promise<AccountMe>;
+  billingStatus(token: string): Promise<AccountBillingStatus>;
+  billingCheckout(
+    token: string,
+    input: AccountBillingCheckoutRequest,
+  ): Promise<AccountBillingRedirect>;
+  billingPortal(token: string): Promise<AccountBillingRedirect>;
   deleteAccount(token: string, input: DeleteAccountRequest): Promise<void>;
   saveInboxRecap(token: string, request: SaveInboxRecapRequest): Promise<SavedInboxRecap>;
   /** Background upsert; respects deleted days instead of restoring them. */
@@ -599,6 +608,32 @@ export function createAccountClient(options: CreateAccountClientOptions): Accoun
           body: JSON.stringify(request),
         },
         AccountMeSchema,
+      );
+    },
+
+    billingStatus(token) {
+      return requestJson(
+        "/api/v1/billing/status",
+        { method: "GET", headers: authHeaders(token) },
+        AccountBillingStatus,
+      );
+    },
+    billingCheckout(token, input) {
+      return requestJson(
+        "/api/v1/billing/checkout",
+        {
+          method: "POST",
+          headers: { ...authHeaders(token), "content-type": "application/json" },
+          body: JSON.stringify(input),
+        },
+        AccountBillingRedirect,
+      );
+    },
+    billingPortal(token) {
+      return requestJson(
+        "/api/v1/billing/portal",
+        { method: "POST", headers: authHeaders(token) },
+        AccountBillingRedirect,
       );
     },
 

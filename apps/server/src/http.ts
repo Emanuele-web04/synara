@@ -80,6 +80,8 @@ import { threadArchiveChunks, threadArchiveFileName } from "./orchestration/expo
 import type { ServerReadiness } from "./server/readiness";
 import { ServerSettingsService } from "./serverSettings";
 import { isLoopbackHost } from "./startupAccess";
+import { isTrustedLocalServerToken } from "./auth/remoteAccess";
+import { RemoteSessionRegistryService } from "./remoteSessions/sessionRegistry";
 import {
   attachmentPrincipalForSession,
   LOCAL_LOOPBACK_ATTACHMENT_PRINCIPAL,
@@ -415,13 +417,27 @@ function trustedMutationCorsHeaders(input: {
 export function isLegacyTokenAuthorized(input: {
   readonly config: ServerConfigShape;
   readonly url: URL;
+  readonly remoteBillingEnforced?: boolean;
 }): boolean {
+  if (input.remoteBillingEnforced)
+    return isTrustedLocalServerToken(input.config, input.url.searchParams.get("token"));
   if (!isLoopbackHost(input.config.host) || input.config.publicUrl) {
     return false;
   }
   const legacyToken = input.url.searchParams.get("token");
   return !input.config.authToken || legacyToken === input.config.authToken;
 }
+
+/** The live registry is mandatory: default-off compatibility is a policy, not missing DI. */
+const isLocalHttpRequest = (config: ServerConfigShape, url: URL) =>
+  Effect.gen(function* () {
+    const remoteSessions = yield* RemoteSessionRegistryService;
+    return isLegacyTokenAuthorized({
+      config,
+      url,
+      remoteBillingEnforced: remoteSessions.remoteBillingEnforced,
+    });
+  });
 
 function encodeCookie(input: {
   readonly name: string;
@@ -698,7 +714,7 @@ export const projectFaviconEffectRouteLayer = HttpRouter.add(
     // Desktop image requests carry the local startup token in the URL, just
     // like site favicons and attachment previews; remote servers require a session.
     const config = yield* ServerConfig;
-    if (!isLegacyTokenAuthorized({ config, url })) {
+    if (!(yield* isLocalHttpRequest(config, url))) {
       yield* requireAuthenticatedRequest;
     }
     const projectCwd = url.searchParams.get("cwd");
@@ -759,7 +775,7 @@ const siteFaviconEffectRouteLayer = HttpRouter.add(
     // same startup-token rule the local-image/attachments routes use so favicons
     // load in local dev without a session cookie.
     const config = yield* ServerConfig;
-    if (!isLegacyTokenAuthorized({ config, url })) {
+    if (!(yield* isLocalHttpRequest(config, url))) {
       yield* requireAuthenticatedRequest;
     }
 
@@ -805,7 +821,7 @@ const threadExportEffectRouteLayer = HttpRouter.add(
     if (!url) return HttpServerResponse.text("Bad Request", { status: 400 });
 
     const config = yield* ServerConfig;
-    if (!isLegacyTokenAuthorized({ config, url })) {
+    if (!(yield* isLocalHttpRequest(config, url))) {
       yield* requireAuthenticatedRequest;
     }
 
@@ -860,7 +876,7 @@ export const editorIconEffectRouteLayer = HttpRouter.add(
     if (!url) return HttpServerResponse.text("Bad Request", { status: 400 });
 
     const config = yield* ServerConfig;
-    if (!isLegacyTokenAuthorized({ config, url })) {
+    if (!(yield* isLocalHttpRequest(config, url))) {
       yield* requireAuthenticatedRequest;
     }
 
@@ -953,7 +969,7 @@ export const localImageEffectRouteLayer = HttpRouter.add(
     if (!url) return HttpServerResponse.text("Bad Request", { status: 400 });
 
     const config = yield* ServerConfig;
-    if (!isLegacyTokenAuthorized({ config, url })) {
+    if (!(yield* isLocalHttpRequest(config, url))) {
       yield* requireAuthenticatedRequest;
     }
 
@@ -1057,8 +1073,11 @@ const binaryUploadEffectHandler = Effect.gen(function* () {
   if (request.method !== "POST") {
     return HttpServerResponse.text("Method Not Allowed", { status: 405, headers: corsHeaders });
   }
+  const paidLocalToken =
+    (yield* RemoteSessionRegistryService).remoteBillingEnforced &&
+    isTrustedLocalServerToken(config, url.searchParams.get("token"));
   const mutationSession =
-    !request.headers.authorization && isLegacyTokenAuthorized({ config, url })
+    paidLocalToken || (!request.headers.authorization && (yield* isLocalHttpRequest(config, url)))
       ? null
       : yield* requireAuthenticatedMutationRequest;
   const attachmentPrincipal =
@@ -1429,7 +1448,7 @@ export const attachmentsEffectRouteLayer = HttpRouter.add(
     const config = yield* ServerConfig;
     // Desktop image tags cannot attach Authorization headers; preserve the same
     // startup token rule that the WebSocket route already accepts.
-    if (!isLegacyTokenAuthorized({ config, url })) {
+    if (!(yield* isLocalHttpRequest(config, url))) {
       yield* requireAuthenticatedRequest;
     }
 

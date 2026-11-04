@@ -449,7 +449,20 @@ describe.skipIf(!TEST_DATABASE_URL)("A → B → C slice checkpoint", () => {
     }
     const expiredClosed = directSession.waitForClose();
     host.dropExpiredSessions(credentialExpiration);
-    await expect(expiredClosed).resolves.toMatchObject({ code: HOST_SESSION_CLOSE_REVOKED });
+    // Expiry needs a fresh credential, not another owner approval of the device.
+    await expect(expiredClosed).resolves.toMatchObject({ code: 1012 });
     await expect(host.listSessions()).resolves.toEqual({ sessions: [] });
+
+    await using renewedSession = await client.connectWithGrant({
+      candidates: [{ kind: "lan", url: host.directUrl }],
+      environmentId: linked.row.environmentId,
+      grant: await client.requestGrant(linked.row.id),
+    });
+    await expect(
+      renewedSession.echo({ sequence: 7, payload: "same approved device reconnected" }),
+    ).resolves.toMatchObject({ payload: "same approved device reconnected" });
+    await expect(host.listSessions()).resolves.toMatchObject({
+      sessions: [{ deviceJkt, transport: "direct" }],
+    });
   });
 });

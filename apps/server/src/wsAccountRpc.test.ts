@@ -12,6 +12,9 @@ import { makeAccountRpcHandlers } from "./wsAccountRpc";
 
 const SAMPLE_INPUTS: Record<string, unknown> = {
   [WS_METHODS.accountStatus]: undefined,
+  [WS_METHODS.accountBillingStatus]: undefined,
+  [WS_METHODS.accountBillingCheckout]: { interval: "month" },
+  [WS_METHODS.accountBillingPortal]: undefined,
   [WS_METHODS.accountSendOtp]: { email: "ada@example.com" },
   [WS_METHODS.accountAuthenticateOtp]: { email: "ada@example.com", code: "654321" },
   [WS_METHODS.accountBeginSso]: { provider: "google" },
@@ -54,6 +57,27 @@ function spySession(): { session: AccountSession; calls: () => string[] } {
     };
   const session: AccountSession = {
     status: record("status", { state: "signed-out" as const }),
+    billingStatus: record("billingStatus", {
+      provider: "polar",
+      environment: "sandbox",
+      available: false,
+      access: "none",
+      subscriptionStatus: null,
+      validUntil: null,
+      cancelAtPeriodEnd: false,
+      checkedAt: null,
+      plans: [],
+      canCheckout: false,
+      canManage: false,
+    }),
+    billingCheckout: record("billingCheckout", {
+      environment: "sandbox",
+      url: "https://sandbox.polar.sh/checkout/test",
+    }),
+    billingPortal: record("billingPortal", {
+      environment: "sandbox",
+      url: "https://sandbox.polar.sh/purchases/test",
+    }),
     sendOtp: record("sendOtp", { email: "ada@example.com", expiresAt: "2026-01-01T00:00:00Z" }),
     authenticateOtp: record("authenticateOtp", { state: "signed-out" as const }),
     beginSso: record("beginSso", {

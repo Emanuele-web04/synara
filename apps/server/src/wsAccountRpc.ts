@@ -70,6 +70,23 @@ export function makeAccountRpcHandlers({ accountSession, openBrowser }: AccountR
         () => Effect.promise(() => accountSession.status()),
         "Failed to read the account session",
       ),
+    [WS_METHODS.accountBillingStatus]: () =>
+      ownerSensitiveAccountRpc(
+        () => Effect.tryPromise(() => accountSession.billingStatus()),
+        "Could not load the subscription",
+      ),
+    [WS_METHODS.accountBillingCheckout]: (
+      input: Parameters<AccountSession["billingCheckout"]>[0],
+    ) =>
+      ownerSensitiveAccountRpc(
+        () => Effect.tryPromise(() => accountSession.billingCheckout(input)),
+        "Could not open the test checkout",
+      ),
+    [WS_METHODS.accountBillingPortal]: () =>
+      ownerSensitiveAccountRpc(
+        () => Effect.tryPromise(() => accountSession.billingPortal()),
+        "Could not open subscription settings",
+      ),
     // The send carries only the address — no credential — but shares the
     // sensitive mapping so no upstream cause can ride to the wire.
     [WS_METHODS.accountSendOtp]: (input: Parameters<AccountSession["sendOtp"]>[0]) =>

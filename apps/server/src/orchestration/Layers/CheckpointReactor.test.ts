@@ -1853,9 +1853,12 @@ describe("CheckpointReactor", () => {
         );
       }
       if (workspaceLookups > 2) return originalDetail(id);
+      // Keep the lookup gated until release even if real Git I/O outlasts
+      // the reactor's bounded retry deadline.
       return Deferred.succeed(retryStarted, undefined).pipe(
         Effect.andThen(Deferred.await(releaseRetry)),
         Effect.andThen(originalDetail(id)),
+        Effect.uninterruptible,
       );
     });
     const repository = await runtime!.runPromise(Effect.service(ProviderRuntimeEventRepository));
@@ -1897,7 +1900,6 @@ describe("CheckpointReactor", () => {
       await waitForEvent(
         harness.engine,
         (event) => event.type === "thread.reverted" && event.aggregateId === peer,
-        1000,
       );
       expect(restore).toHaveBeenCalled();
       expect(fs.readFileSync(path.join(harness.cwd, "README.md"), "utf8")).toBe("v1\n");

@@ -3,6 +3,7 @@
 // Layer: Orchestration integration tests
 // Depends on: ProviderCommandReactorLive with in-memory provider and persistence services.
 
+import { RemoteSessionRegistryLive } from "../../remoteSessions/sessionRegistry";
 import * as betaOperationalIssue from "../../betaOperationalIssue";
 import * as providerUsageRecovery from "../../providerUsage/index.ts";
 import { planRestartTurnReconciliation } from "../startupTurnReconciliation.ts";
@@ -13955,7 +13956,10 @@ describe("ProviderCommandReactor", () => {
           Layer.provide(AuthCoreLive),
         );
         const authServices = await harness.runtime.runPromise(
-          Layer.buildWithScope(Layer.mergeAll(auth, AuthCoreLive), serverScope),
+          Layer.buildWithScope(
+            Layer.mergeAll(auth, AuthCoreLive).pipe(Layer.provideMerge(RemoteSessionRegistryLive)),
+            serverScope,
+          ),
         );
         const sessions = ServiceMap.get(authServices, SessionCredentialService);
         const leases = await Promise.all(

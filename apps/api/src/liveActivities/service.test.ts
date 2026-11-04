@@ -21,6 +21,7 @@ describe.skipIf(!databaseUrl)("Live Activity durable delivery", () => {
   async function fixture(
     environment: "sandbox" | "production" = "sandbox",
     deployment: "sandbox" | "both" = "sandbox",
+    enforceBilling = false,
   ) {
     const owner = { userId: randomUUID(), orgId: randomUUID(), sessionId: randomUUID() };
     const deviceId = randomUUID();
@@ -65,11 +66,20 @@ describe.skipIf(!databaseUrl)("Live Activity durable delivery", () => {
     const notifications: NotificationDelivery[] = [];
     let result: ApnsResult = "delivered";
     let member = true;
+    let remoteAccess: boolean | "unavailable" = true;
     const service = () =>
       createLiveActivityService({
         pool,
         environment: deployment,
         isMember: async () => member,
+        ...(enforceBilling
+          ? {
+              isRemoteAccessAllowed: async () => {
+                if (remoteAccess === "unavailable") throw new Error("Billing unavailable");
+                return remoteAccess;
+              },
+            }
+          : {}),
         sendNotification: async (delivery) => {
           notifications.push(delivery);
           return result;
@@ -119,6 +129,9 @@ describe.skipIf(!databaseUrl)("Live Activity durable delivery", () => {
       },
       revokeMembership: () => {
         member = false;
+      },
+      setRemoteAccess: (value: boolean | "unavailable") => {
+        remoteAccess = value;
       },
     };
   }
@@ -342,6 +355,117 @@ describe.skipIf(!databaseUrl)("Live Activity durable delivery", () => {
     expect(f.sent).toHaveLength(0);
     expect(f.notifications).toHaveLength(0);
   });
+  it.each(
+    ["liveactivity", "notification"].flatMap((kind) =>
+      [false, "unavailable" as const].map((access) => ({ kind, access })),
+    ),
+  )(
+    "pauses $kind delivery on access $access and resumes without re-pairing",
+    async ({ kind, access }) => {
+      const f = await fixture("sandbox", "sandbox", true);
+      if (kind === "notification") await f.live.registerNotification(f.owner, f.notification);
+      else await f.live.register(f.owner, f.request);
+      const registration = async () =>
+        (
+          await pool.query(
+            "SELECT request,created_at,expires_at,ended,attempts,last_timestamp FROM live_activities WHERE id=$1",
+            [f.request.activityId],
+          )
+        ).rows[0];
+      const before = await registration();
+      f.setRemoteAccess(access);
+      await f.publish(0, 1, "ready");
+      await f.service().flush();
+      expect(f.sent).toHaveLength(0);
+      expect(f.notifications).toHaveLength(0);
+      expect(await registration()).toEqual(before);
+      expect(
+        (
+          await pool.query(
+            "SELECT next_attempt_at>now() AS paused FROM live_activities WHERE id=$1",
+            [f.request.activityId],
+          )
+        ).rows[0].paused,
+      ).toBe(true);
+      expect(
+        (await pool.query("SELECT revoked_at FROM devices WHERE id=$1", [f.deviceId])).rows[0]
+          .revoked_at,
+      ).toBeNull();
+      f.setRemoteAccess(true);
+      await f.publish(0, 2, "ready");
+      await f.publish(1, 2, "ready");
+      await f.due();
+      await f.service().flush();
+      expect(kind === "notification" ? f.notifications : f.sent).toHaveLength(1);
+    },
+  );
+
+  it("does not replay a stale completion after commercial access resumes", async () => {
+    const f = await fixture("sandbox", "sandbox", true);
+    await f.live.registerNotification(f.owner, f.notification);
+    f.setRemoteAccess(false);
+    await f.publish(0, 1, "ready");
+    await f.live.flush();
+    await pool.query(
+      "UPDATE live_activity_hosts SET updated_at=now()-interval '2 minutes' WHERE host_id=$1",
+      [f.hosts[0]!.id],
+    );
+    f.setRemoteAccess(true);
+    await f.due();
+    await f.live.flush();
+    expect(f.notifications).toHaveLength(0);
+    expect(
+      (await pool.query("SELECT ended FROM live_activities WHERE id=$1", [f.request.activityId]))
+        .rows[0].ended,
+    ).toBe(false);
+    await f.publish(0, 2, "ready");
+    await f.due();
+    await f.live.flush();
+    expect(f.notifications).toHaveLength(1);
+  });
+
+  it.each(["liveactivity", "notification"])(
+    "keeps the original $0 expiry while billing is paused",
+    async (kind) => {
+      const f = await fixture("sandbox", "sandbox", true);
+      if (kind === "notification") await f.live.registerNotification(f.owner, f.notification);
+      else await f.live.register(f.owner, f.request);
+      f.setRemoteAccess(false);
+      await pool.query(
+        "UPDATE live_activities SET expires_at=now()-interval '1 second' WHERE id=$1",
+        [f.request.activityId],
+      );
+      await f.live.flush();
+      expect(f.sent).toHaveLength(0);
+      expect(f.notifications).toHaveLength(0);
+      expect(
+        (
+          await pool.query(
+            "SELECT ended,request->>'token' AS token FROM live_activities WHERE id=$1",
+            [f.request.activityId],
+          )
+        ).rows[0],
+      ).toEqual({ ended: true, token: "" });
+    },
+  );
+
+  it("retires actual ownership loss even while commercial delivery is paused", async () => {
+    const f = await fixture("sandbox", "sandbox", true);
+    await f.live.registerNotification(f.owner, f.notification);
+    f.setRemoteAccess(false);
+    f.revokeMembership();
+    await f.live.flush();
+    expect(
+      (
+        await pool.query(
+          "SELECT ended,request->>'token' AS token FROM live_activities WHERE id=$1",
+          [f.request.activityId],
+        )
+      ).rows[0],
+    ).toEqual({ ended: true, token: "" });
+    expect(f.notifications).toHaveLength(0);
+  });
+
   it.each(["ready", "failed"] as const)(
     "delivers %s exact-turn alerts once across restart without ActivityKit payloads",
     async (state) => {

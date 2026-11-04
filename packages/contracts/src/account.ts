@@ -301,6 +301,8 @@ export type ListHostsResponse = typeof ListHostsResponse.Type;
  */
 export const InstanceInfo = Schema.Struct({
   version: TrimmedNonEmptyString,
+  /** Deployment policy only; this never grants an account paid access. */
+  remoteBillingEnforced: Schema.optional(Schema.Boolean),
   authMode: Schema.Literal("workos"),
   clientId: TrimmedNonEmptyString,
   workosApiUrl: TrimmedNonEmptyString,
@@ -320,6 +322,9 @@ export const AccountErrorCode = Schema.Literals([
   "organization_required",
   "environment_already_linked",
   "not_host_owner",
+  /** Commercial remote access is separate from ownership and paired-device trust. */
+  "subscription_required",
+  "billing_unavailable",
   "host_not_linked",
   "device_revoked",
   "device_not_registered",

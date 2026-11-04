@@ -37,6 +37,7 @@ import {
 } from "../trustedOrigins";
 import { parseWsNegotiateSearchParams } from "../wsCompatibility";
 import { authenticateRpcWebSocketUpgrade } from "../wsRpc";
+import { RemoteSessionRegistryService } from "../remoteSessions/sessionRegistry";
 import {
   HOST_CONNECTION_WS_PATH_PREFIX,
   REMOTE_ATTACHMENT_QUERY,
@@ -77,7 +78,9 @@ export const hostConnectionRouteLayer = Layer.effectDiscard(
         // Match the controller's auth-optional loopback policy. Explicit credentials
         // always retain their role; public/SSH-forwarded servers still require auth.
         const session =
-          hasCredential || requiresWebSocketAuthentication(config)
+          hasCredential ||
+          requiresWebSocketAuthentication(config) ||
+          (yield* RemoteSessionRegistryService).remoteBillingEnforced
             ? yield* serverAuth.authenticateHttpRequest(authRequest)
             : null;
         if (
@@ -157,6 +160,7 @@ export const hostConnectionRouteLayer = Layer.effectDiscard(
           legacyToken: url.searchParams.get("token"),
           request: makeEffectAuthRequest(request),
           serverAuth,
+          remoteSessions: yield* RemoteSessionRegistryService,
         }).pipe(Effect.catch(() => Effect.succeed("refused" as const)));
         if (authenticated === "refused") {
           return HttpServerResponse.text("Unauthorized", { status: 401 });
@@ -220,6 +224,7 @@ export const hostConnectionRouteLayer = Layer.effectDiscard(
           legacyToken: url.searchParams.get("token"),
           request: makeEffectAuthRequest(request),
           serverAuth,
+          remoteSessions: yield* RemoteSessionRegistryService,
         }).pipe(Effect.catch(() => Effect.succeed("refused" as const)));
         if (authenticated === "refused")
           return HttpServerResponse.text("Unauthorized", { status: 401 });

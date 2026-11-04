@@ -81,6 +81,8 @@ import { syncAnimationsToTimelineOrigin } from "~/lib/animationTimelineSync";
 import { useStableCallback } from "~/hooks/useStableCallback";
 import { useExecutionImageSource } from "~/hooks/useExecutionImageSource";
 import { mapsEqual, setsEqual, useStableValue } from "~/hooks/useStableValue";
+import { MCP_CONNECTORS_ON } from "~/betaFeatures";
+import { McpConnectorProposalCard } from "../settings/McpConnectorProposalCard";
 import { Button } from "../ui/button";
 import { LiveStatusSpinner } from "../ui/spinner";
 import { composerOverlayScrollFadeVars } from "./composerOverlay";
@@ -2754,6 +2756,12 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                       ),
                     )
                   : null}
+                {MCP_CONNECTORS_ON &&
+                  row.connectorProposalIds?.map((proposalId) => (
+                    <div key={proposalId} className="mt-2">
+                      <McpConnectorProposalCard proposalId={proposalId} />
+                    </div>
+                  ))}
                 {(() => {
                   // Hold the end-of-turn changes card (Undo / Review) until the
                   // turn settles. While the turn is live the composer's own

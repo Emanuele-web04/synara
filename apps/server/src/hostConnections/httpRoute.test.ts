@@ -17,6 +17,7 @@ import { Effect, Exit, Layer, Schema, Scope } from "effect";
 import { HttpRouter } from "effect/unstable/http";
 import { describe, expect, it, vi } from "vitest";
 import { SessionExpiredError } from "../accountAuth";
+import { RemoteSessionRegistryLive } from "../remoteSessions/sessionRegistry";
 import {
   AuthError,
   ServerAuth,
@@ -85,6 +86,7 @@ async function withRemoteNegotiation(
               ),
               Layer.succeed(ServerAuth, auth),
               Layer.succeed(HostConnectionRegistryService, registry),
+              RemoteSessionRegistryLive,
             ).pipe(Layer.provideMerge(NodeServices.layer)),
           ),
         ),

@@ -36,7 +36,10 @@ import { makeBoundedNodeHttpServer } from "../../../server/src/nodeHttpServer";
 import { patchBunWebSocketCloseEventCompatibility } from "../../../server/src/bunWebSocketCompatibility";
 import { SqlitePersistenceMemory } from "../../../server/src/persistence/Layers/Sqlite";
 import { hostRemoteWebSocketRouteLayer } from "../../../server/src/remoteSessions";
-import { RemoteSessionRegistry } from "../../../server/src/remoteSessions/sessionRegistry";
+import {
+  RemoteSessionRegistry,
+  RemoteSessionRegistryService,
+} from "../../../server/src/remoteSessions/sessionRegistry";
 import { makeWebsocketRpcRouteLayer } from "../../../server/src/wsRpc";
 import { makeHostsRpcHandlers } from "../../../server/src/wsHostsRpc";
 import {
@@ -161,6 +164,7 @@ export async function startRealHost(input: {
               subject: session.subject,
               method: session.method,
               role: session.role,
+              accessOrigin: session.accessOrigin ?? null,
               ...(session.expiresAt ? { expiresAt: session.expiresAt } : {}),
             })),
             Effect.mapError(
@@ -200,6 +204,7 @@ export async function startRealHost(input: {
   ).pipe(Layer.provide(Layer.succeed(WsConnectionSessions, connectionSessions)));
 
   const scope = await Effect.runPromise(Scope.make("sequential"));
+  const remoteSessions = new RemoteSessionRegistry();
   const context = await Effect.runPromise(
     Layer.buildWithScope(
       Layer.mergeAll(
@@ -208,6 +213,7 @@ export async function startRealHost(input: {
         serverAuthLayer,
         remoteManagementLayer,
         NodeServices.layer,
+        Layer.succeed(RemoteSessionRegistryService, remoteSessions),
       ),
       scope,
     ),
@@ -260,7 +266,6 @@ export async function startRealHost(input: {
       userId: credentials.hostOwnerUserId,
       organizationId: credentials.organizationId,
     };
-    const remoteSessions = new RemoteSessionRegistry();
     stopConnectivity = await startHostConnectivity({
       config: started.config,
       listeningPort: address.port,

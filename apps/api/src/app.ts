@@ -1,3 +1,6 @@
+import { createBillingService } from "./billing/service";
+import { decideRemoteBillingAccess } from "./billing/accessPolicy";
+import { createPolarBillingProvider } from "./billing/polar";
 import { createApnsSender } from "./liveActivities/apns";
 import { createAccountDeletionService } from "./accountDeletion";
 import { createLiveActivityService } from "./liveActivities/service";
@@ -39,13 +42,26 @@ export async function createApp(
   tunnels?: ReturnType<typeof createTunnelCoordinator>;
   cleanup: () => Promise<void>;
   flushLiveActivities: () => Promise<void>;
+  flushBilling?: () => Promise<void>;
 }> {
   const { db, pool } = createDb(config.databaseUrl);
   const identity = await createIdentityAdapters(config, db);
   const avatarStorage = config.avatarStorage
     ? createAvatarStorage(config.avatarStorage)
     : undefined;
+  const billing = config.polarBilling
+    ? createBillingService({ pool, provider: createPolarBillingProvider(config.polarBilling) })
+    : undefined;
+  try {
+    // Refuse mixing sandbox and production ledgers before serving any request.
+    await billing?.initialize();
+  } catch (error) {
+    await identity.close();
+    await pool.end();
+    throw error;
+  }
   const accountDeletion = createAccountDeletionService({
+    ...(billing ? { billing } : {}),
     db,
     verifier: identity.verifier,
     ...(avatarStorage ? { avatarStorage } : {}),
@@ -70,6 +86,15 @@ export async function createApp(
             (await identity.grants.listUserOrganizations(userId, { freshMembership: true })).some(
               (org) => org.orgId === orgId,
             ),
+          ...(config.remoteBillingEnforced === true
+            ? {
+                isRemoteAccessAllowed: async (userId: string) =>
+                  decideRemoteBillingAccess({
+                    enforcementEnabled: true,
+                    status: await billing?.access(userId),
+                  }).allowed,
+              }
+            : {}),
         })
       : undefined;
   const app = new Hono();
@@ -102,10 +127,12 @@ export async function createApp(
     "/api/v1",
     createV1Routes({
       accountDeletion,
+      ...(billing ? { billing } : {}),
       ...(tunnels ? { tunnels } : {}),
       ...(liveActivities ? { liveActivities } : {}),
       ...(config.remoteTestUserIds ? { remoteTestUserIds: config.remoteTestUserIds } : {}),
       remoteBetaAccessEnabled: config.remoteBetaAccessEnabled === true,
+      remoteBillingEnforced: config.remoteBillingEnforced === true,
       verifier: identity.verifier,
       grants: identity.grants,
       signing: identity.signing,
@@ -170,6 +197,7 @@ export async function createApp(
     pool,
     ...(tunnels ? { tunnels } : {}),
     flushLiveActivities: () => liveActivities?.flush() ?? Promise.resolve(),
+    ...(billing ? { flushBilling: () => billing.flush() } : {}),
     cleanup: async () => {
       await accountDeletion.flush();
       await createPairingRendezvous(db, config.apiPublicUrl).cleanup();

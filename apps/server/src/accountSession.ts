@@ -39,6 +39,9 @@ import { randomUUID } from "node:crypto";
 import OS from "node:os";
 
 import type {
+  AccountBillingStatus,
+  AccountBillingCheckoutRequest,
+  AccountBillingRedirect,
   AccountDeleteInput,
   AccountAuthenticateOtpInput,
   AccountDevice,
@@ -175,6 +178,9 @@ export interface AccountSessionOptions {
 
 export interface AccountSession {
   status(): Promise<AccountStatus>;
+  billingStatus(): Promise<AccountBillingStatus>;
+  billingCheckout(input: AccountBillingCheckoutRequest): Promise<AccountBillingRedirect>;
+  billingPortal(): Promise<AccountBillingRedirect>;
   /** Asks the account service to email a 6-digit sign-in code. */
   sendOtp(input: AccountSendOtpInput): Promise<AccountSendOtpResult>;
   /**
@@ -358,6 +364,28 @@ export function createAccountSession(
     return withFreshAccessToken({ baseDir: credentialDir, client }, (accessToken) =>
       fn(accessToken, client),
     );
+  }
+
+  // Checkout/portal links belong to one identity. Never return an earlier
+  // account's billing result after another renderer changes the session.
+  async function withBillingSession<A>(fn: (token: string, client: AccountClient) => Promise<A>) {
+    const expected = await readAccountCredentials(credentialDir);
+    if (!expected) throw new SessionExpiredError();
+    const client = clientFor(expected.accountUrl);
+    const result = await withFreshAccessToken(
+      { baseDir: credentialDir, client, expectedIdentity: expected },
+      (token) => fn(token, client),
+    );
+    const current = await readAccountCredentials(credentialDir);
+    if (
+      !current ||
+      current.accountUrl !== expected.accountUrl ||
+      current.userId !== expected.userId ||
+      current.organizationId !== expected.organizationId
+    ) {
+      throw new WorkspaceAccessChangedError();
+    }
+    return result;
   }
 
   async function ensureShellDevice(knownUserId?: string): Promise<RegisteredAccountDeviceIdentity> {
@@ -834,6 +862,16 @@ export function createAccountSession(
     async usageSummary(input) {
       requireAccountProfileSync();
       return withSession((token, client) => client.getUsageSummary(token, input.utcOffsetMinutes));
+    },
+
+    billingStatus() {
+      return withBillingSession((token, client) => client.billingStatus(token));
+    },
+    billingCheckout(input) {
+      return withBillingSession((token, client) => client.billingCheckout(token, input));
+    },
+    billingPortal() {
+      return withBillingSession((token, client) => client.billingPortal(token));
     },
 
     listHosts() {

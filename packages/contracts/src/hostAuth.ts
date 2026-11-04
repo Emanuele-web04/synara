@@ -274,6 +274,8 @@ export const HostAuthorizationSnapshot = Schema.Struct({
   ownerUserId: TrimmedNonEmptyString,
   orgId: TrimmedNonEmptyString,
   ownerInOrg: Schema.Boolean,
+  /** Commercial policy from the authenticated account service; absent on older APIs. */
+  remoteBillingEnforced: Schema.optional(Schema.Boolean),
   /**
    * Device thumbprints revoked recently enough that a live session could
    * still be holding one (the credential TTL plus slack).

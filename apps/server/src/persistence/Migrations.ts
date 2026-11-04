@@ -1,3 +1,4 @@
+import Migration0142 from "./Migrations/142_AuthAccessOrigin.ts";
 import Migration0140 from "./Migrations/140_RemoteAccessControls.ts";
 import Migration0139 from "./Migrations/139_RemoteConnectionPreferences.ts";
 import Migration0138 from "./Migrations/138_RemoteDeviceTrust.ts";
@@ -321,6 +322,7 @@ export const migrationEntries = [
   [139, "RemoteConnectionPreferences", Migration0139],
   [140, "RemoteAccessControls", Migration0140],
   [141, "ProjectionThreadsUsageLimitRecovery", Migration0141],
+  [142, "AuthAccessOrigin", Migration0142],
 ] as const;
 
 export const makeMigrationLoader = (throughId?: number) =>

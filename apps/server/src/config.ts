@@ -106,6 +106,8 @@ export interface ServerConfigShape extends ServerDerivedPaths {
   readonly publicUrl: URL | undefined;
   readonly sshForwardPort?: number | undefined;
   readonly allowInsecureRemote: boolean;
+  // Trusted operator rollout interlock; never supplied by a client request.
+  readonly remoteBillingPolicyRequired?: boolean;
   readonly noBrowser: boolean;
   readonly authToken: string | undefined;
   readonly desktopShutdownToken?: string | undefined;
@@ -294,6 +296,7 @@ export class ServerConfig extends ServiceMap.Service<ServerConfig, ServerConfigS
           devUrl,
           publicUrl: undefined,
           allowInsecureRemote: false,
+          remoteBillingPolicyRequired: false,
           noBrowser: false,
           // Tests must never write to the real ~/.Trash — default the trash
           // target inside the scoped base dir unless overridden.

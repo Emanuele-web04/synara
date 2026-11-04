@@ -43,6 +43,27 @@ const makeBlockingConnection = Effect.gen(function* () {
 });
 
 describe("SessionCredentialServiceLive", () => {
+  it("preserves trusted access origin through bearer verification and websocket tickets", async () => {
+    await runSessionTest(
+      Effect.gen(function* () {
+        const sessions = yield* SessionCredentialService;
+        for (const accessOrigin of ["local", "remote", null] as const) {
+          const issued = yield* sessions.issue({
+            role: "owner",
+            method: "bearer-session-token",
+            accessOrigin,
+          });
+          expect((yield* sessions.verify(issued.token)).accessOrigin).toBe(accessOrigin);
+          const ticket = yield* sessions.issueWebSocketToken(issued.sessionId);
+          expect((yield* sessions.verifyWebSocketToken(ticket.token)).accessOrigin).toBe(
+            accessOrigin,
+          );
+        }
+        const unknown = yield* sessions.issue({ subject: "old-owner", role: "owner" });
+        expect((yield* sessions.verify(unknown.token)).accessOrigin).toBeNull();
+      }),
+    );
+  });
   it("issues and verifies signed browser session tokens", async () => {
     await runSessionTest(
       Effect.gen(function* () {

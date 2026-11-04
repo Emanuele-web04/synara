@@ -33,6 +33,12 @@ vi.mock("./threadRetention", async () => {
   };
 });
 
+// CLI fixtures never contact a deployment; policy has separate real HTTP integration tests.
+vi.mock("./remoteBillingPolicy", () => ({
+  startRemoteBillingPolicy: vi.fn(async () => ({ stop: async () => {}, refresh: async () => {} })),
+  recordRemoteBillingPolicyHint: vi.fn(async () => {}),
+}));
+
 import { CliConfig, makeServerStartupLogData, synaraCli, type CliConfigShape } from "./main";
 
 const start = vi.fn(() => undefined);
@@ -177,6 +183,7 @@ it.layer(testLayer)("server CLI command", (it) => {
       assert.equal(resolvedConfig?.autoBootstrapProjectFromCwd, false);
       assert.equal(resolvedConfig?.logProviderEvents, false);
       assert.equal(resolvedConfig?.logWebSocketEvents, false);
+      assert.equal(resolvedConfig?.remoteBillingPolicyRequired, false);
       assert.equal(stop.mock.calls.length, 1);
     }),
   );
@@ -378,6 +385,7 @@ it.layer(testLayer)("server CLI command", (it) => {
         VITE_DEV_SERVER_URL: "http://localhost:5173",
         SYNARA_NO_BROWSER: "true",
         SYNARA_AUTH_TOKEN: "env-token",
+        SYNARA_REMOTE_BILLING_POLICY_REQUIRED: "true",
         SYNARA_DESKTOP_SHUTDOWN_TOKEN: "shutdown-token",
         SYNARA_MIGRATION_DIVERGENCE_CONSENT: "migration-consent",
         SYNARA_SSH_FORWARD_PORT: "4777",
@@ -392,6 +400,7 @@ it.layer(testLayer)("server CLI command", (it) => {
       assert.equal(resolvedConfig?.devUrl?.toString(), "http://localhost:5173/");
       assert.equal(resolvedConfig?.noBrowser, true);
       assert.equal(resolvedConfig?.authToken, "env-token");
+      assert.equal(resolvedConfig?.remoteBillingPolicyRequired, true);
       assert.equal(resolvedConfig?.desktopShutdownToken, "shutdown-token");
       assert.equal(resolvedConfig?.migrationDivergenceConsent, "migration-consent");
       // Explicit SSH forwarding remains independent of managed Cloudflare access.

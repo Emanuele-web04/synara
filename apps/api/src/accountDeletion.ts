@@ -1,5 +1,6 @@
 // Owns durable, account-scoped cloud erasure and access fencing.
 // Provider outages retry through the existing API maintenance loop.
+import type { BillingService } from "./billing/service";
 import { and, eq, isNull, lt, or, sql } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import type { AvatarStorage } from "./avatarStorage";
@@ -11,6 +12,7 @@ export function createAccountDeletionService(options: {
   db: NodePgDatabase<typeof schema>;
   verifier: AccountIdentityVerifier;
   avatarStorage?: AvatarStorage;
+  billing?: BillingService;
 }) {
   const { db } = options;
 
@@ -27,6 +29,23 @@ export function createAccountDeletionService(options: {
   // access disappear immediately; provider and object-store cleanup can retry.
   async function request(userId: string) {
     await db.transaction(async (tx) => {
+      // Fence existing billing even when its provider is temporarily unconfigured.
+      await tx.execute(
+        sql`SELECT pg_advisory_xact_lock(hashtextextended(${`billing:${userId}`}, 0))`,
+      );
+      await tx
+        .update(schema.billingAccounts)
+        .set({ deletedAt: new Date(), accessGranted: false })
+        .where(eq(schema.billingAccounts.userId, userId));
+      if (options.billing) {
+        await tx
+          .insert(schema.billingAccounts)
+          .values({ userId, deletedAt: new Date() })
+          .onConflictDoUpdate({
+            target: schema.billingAccounts.userId,
+            set: { deletedAt: new Date(), accessGranted: false },
+          });
+      }
       await tx
         .insert(schema.accountDeletions)
         .values({
@@ -73,6 +92,15 @@ export function createAccountDeletionService(options: {
   // Revisit completed local purges for a day: requests admitted just before
   // erasure can finish late. The access tombstone remains for 30 days.
   async function erase(userId: string, requestedAt: Date) {
+    // Stop sandbox renewals before deleting identity; outages retry through this outbox.
+    const [billing] = await db
+      .select()
+      .from(schema.billingAccounts)
+      .where(eq(schema.billingAccounts.userId, userId));
+    if (billing && (billing.customerId || billing.checkoutUrl || billing.checkoutAttemptId)) {
+      if (!options.billing) throw new Error("Sandbox billing cleanup is awaiting configuration");
+      await options.billing.cleanupDeletedAccount(userId);
+    }
     const [profile] = await db
       .select({ key: schema.profiles.avatarKey })
       .from(schema.profiles)

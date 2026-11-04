@@ -14,10 +14,12 @@ import { deactivateHost } from "./hosts/activeHost";
 import type { AccountStatus, UsageSummary } from "@synara/contracts";
 import { hashKey, queryOptions, type QueryClient } from "@tanstack/react-query";
 import { ensureNativeApi } from "~/nativeApi";
+import { runAccountBillingOperation } from "./accountBilling";
 
 export const accountQueryKeys = {
   all: ["account"] as const,
   status: () => ["account", "status"] as const,
+  billing: (scope: string) => ["account", "billing", scope, controlAccountScope()] as const,
   /** Prefix of every usageSummary key, whatever the owner or UTC offset. */
   usageSummaryAll: () => ["account", "usageSummary"] as const,
   /**
@@ -29,6 +31,20 @@ export const accountQueryKeys = {
   usageSummary: (userId: string, utcOffsetMinutes: number) =>
     ["account", "usageSummary", userId, utcOffsetMinutes, controlAccountScope()] as const,
 };
+
+export function accountBillingQueryOptions(status: AccountStatus | null) {
+  const scope = accountStatusScope(status ?? { state: "signed-out" });
+  return queryOptions({
+    queryKey: accountQueryKeys.billing(scope),
+    enabled: status?.state === "signed-in",
+    queryFn: ({ signal }) =>
+      runAccountBillingOperation(scope, (account) => account.billingStatus(), signal),
+    staleTime: 0,
+    refetchOnWindowFocus: true,
+    refetchOnReconnect: true,
+    retry: false,
+  });
+}
 
 /**
  * The account session for this machine. The server refreshes tokens as part of

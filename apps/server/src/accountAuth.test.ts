@@ -22,6 +22,7 @@ import {
   ensureLocalAccountHostLinked,
   readAccountCredentials,
   readAccountFile,
+  recordRemoteBillingPolicy,
   refreshHostRegistration,
   resolveAccountUrl,
   resolveAuthLoginAccountUrl,
@@ -304,6 +305,94 @@ describe("account credential store", () => {
       hostKeyGeneration: 1,
     });
     expect(await readAccountCredentials(baseDir)).toBeUndefined();
+  });
+});
+
+describe("remote billing policy hint", () => {
+  const expected = {
+    accountUrl: "https://accounts.example.com",
+    hostId: "host_1",
+    ownerUserId: "user_1",
+  };
+
+  it("retains an authenticated policy across restart and permits an explicit rollback", async () => {
+    const baseDir = makeBaseDir();
+    await writeAccountCredentials(baseDir, credentials({ linkedHost: true }));
+    expect(await recordRemoteBillingPolicy(baseDir, expected, true)).toBe(true);
+    expect((await readAccountFile(baseDir))?.remoteBillingPolicy).toEqual({
+      apiIssuer: accountApiIssuer(expected.accountUrl),
+      hostId: expected.hostId,
+      ownerUserId: expected.ownerUserId,
+      enforced: true,
+    });
+    expect(await recordRemoteBillingPolicy(baseDir, expected, false)).toBe(true);
+    expect((await readAccountFile(baseDir))?.remoteBillingPolicy?.enforced).toBe(false);
+  });
+
+  it.each(["accountUrl", "hostId", "ownerUserId"] as const)(
+    "ignores a response for a previous %s without changing the current credentials",
+    async (field) => {
+      const baseDir = makeBaseDir();
+      await writeAccountCredentials(baseDir, credentials({ linkedHost: true }));
+      const before = await fsp.readFile(accountCredentialsPath(baseDir), "utf8");
+      expect(
+        await recordRemoteBillingPolicy(baseDir, { ...expected, [field]: "changed" }, true),
+      ).toBe(false);
+      expect(await fsp.readFile(accountCredentialsPath(baseDir), "utf8")).toBe(before);
+    },
+  );
+
+  it.each(["apiIssuer", "hostId", "ownerUserId", "enforced", "unlinked"] as const)(
+    "does not restore a stale or malformed %s hint",
+    async (field) => {
+      const baseDir = makeBaseDir();
+      const hint = {
+        apiIssuer: accountApiIssuer(expected.accountUrl),
+        hostId: expected.hostId,
+        ownerUserId: expected.ownerUserId,
+        enforced: true,
+      };
+      const stored = credentials({
+        linkedHost: field !== "unlinked",
+        remoteBillingPolicy: { ...hint, ...(field === "unlinked" ? {} : { [field]: "changed" }) },
+      });
+      await fsp.writeFile(accountCredentialsPath(baseDir), JSON.stringify(stored), "utf8");
+      expect((await readAccountFile(baseDir))?.remoteBillingPolicy).toBeUndefined();
+    },
+  );
+
+  it("merges a policy after a concurrent token rotation without restoring older tokens", async () => {
+    const baseDir = makeBaseDir();
+    await writeAccountCredentials(baseDir, credentials({ linkedHost: true }));
+    let entered!: () => void;
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const resume = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const rotation = withLockedAccountFile(baseDir, async () => {
+      entered();
+      await resume;
+      const current = await readAccountFile(baseDir);
+      if (!current) throw new Error("Missing test account");
+      await writeAccountCredentials(baseDir, {
+        ...current,
+        accessToken: "access-2",
+        refreshToken: "refresh-2",
+      });
+    });
+    await held;
+    const recording = recordRemoteBillingPolicy(baseDir, expected, true);
+    release();
+    await rotation;
+    expect(await recording).toBe(true);
+    expect(await readAccountFile(baseDir)).toMatchObject({
+      accessToken: "access-2",
+      refreshToken: "refresh-2",
+      remoteBillingPolicy: { enforced: true },
+    });
   });
 });
 

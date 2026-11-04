@@ -42,6 +42,7 @@ export const makeAuthControlPlane = Effect.gen(function* () {
       const issued = yield* bootstrapCredentials.issueOneTimeToken({
         role,
         subject,
+        accessOrigin: input?.accessOrigin ?? null,
         ...(input?.ttl ? { ttl: input.ttl } : {}),
         ...(input?.label ? { label: input.label } : {}),
       });

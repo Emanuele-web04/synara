@@ -18,6 +18,7 @@ import {
   writeAccountCredentials,
 } from "./accountAuth.ts";
 import { createAccountSession } from "./accountSession.ts";
+import type { AccountBillingStatus } from "@synara/contracts";
 import { generateAndPersistHostIdentity } from "./hostIdentity";
 
 import { isServerBetaFeatureEnabled } from "./betaFeatureGate";
@@ -48,6 +49,54 @@ const ACCOUNT_URL = "https://accounts.example.com";
 const CLIENT_ID = "client_01ABC";
 const WORKOS_API_URL = "https://api.workos.example";
 const ORGANIZATION = { id: "org_1", name: "Personal — ada@example.com" };
+
+describe("billing account scope", () => {
+  const billing: AccountBillingStatus = {
+    provider: "polar",
+    environment: "sandbox",
+    available: false,
+    access: "none",
+    subscriptionStatus: null,
+    validUntil: null,
+    cancelAtPeriodEnd: false,
+    checkedAt: null,
+    plans: [],
+    canCheckout: false,
+    canManage: false,
+  };
+
+  it("does not return a billing response after another renderer changes the account", async () => {
+    const baseDir = makeBaseDir();
+    await writeAccountCredentials(baseDir, credentials({ userId: "user_1" }));
+    const client = makeClient({
+      billingStatus: async () => {
+        await writeAccountCredentials(
+          baseDir,
+          credentials({ userId: "user_2", accessToken: "access-2", refreshToken: "refresh-2" }),
+        );
+        return billing;
+      },
+    });
+    await expect(
+      createAccountSession({ baseDir, accountUrl: ACCOUNT_URL, client }).billingStatus(),
+    ).rejects.toBeInstanceOf(WorkspaceAccessChangedError);
+    expect((await readAccountFile(baseDir))?.userId).toBe("user_2");
+  });
+
+  it("forwards only the interval and uses the stored account's credentials", async () => {
+    const baseDir = makeBaseDir();
+    await writeAccountCredentials(baseDir, credentials({ userId: "user_1" }));
+    const checkout = vi.fn(async () => ({
+      environment: "sandbox" as const,
+      url: "https://sandbox.polar.sh/checkout/test",
+    }));
+    const client = makeClient({ billingCheckout: checkout });
+    await createAccountSession({ baseDir, accountUrl: ACCOUNT_URL, client }).billingCheckout({
+      interval: "year",
+    });
+    expect(checkout).toHaveBeenCalledWith("access-1", { interval: "year" });
+  });
+});
 
 function unimplemented(name: string) {
   return () => Promise.reject(new Error(`${name} should not be called`));

@@ -1,5 +1,7 @@
 import { requestLocalRemoteAccess, saveRemoteInvitation } from "./remotePairing/cli";
-import { accountStateDirectory } from "./accountAuth";
+import { accountApiIssuer, accountStateDirectory, readAccountFile } from "./accountAuth";
+import { startRemoteBillingPolicy } from "./remoteBillingPolicy";
+import { DEFAULT_ACCOUNT_URL, resolveConfiguredAccountUrl } from "@synara/shared/account";
 import { HostConnectionRegistryService } from "./hostConnections/registry";
 import { observeControllerAccount } from "./hostConnections/accountObserver";
 import { RemoteDeviceTrustRepository } from "./persistence/Services/RemoteDeviceTrust";
@@ -223,6 +225,9 @@ const CliEnvConfig = Config.all({
   ),
   allowInsecureRemote: optionalBooleanEnvironmentConfig("SYNARA_ALLOW_INSECURE_REMOTE"),
   noBrowser: optionalBooleanEnvironmentConfig("SYNARA_NO_BROWSER"),
+  remoteBillingPolicyRequired: optionalBooleanEnvironmentConfig(
+    "SYNARA_REMOTE_BILLING_POLICY_REQUIRED",
+  ),
   authToken: Config.string("SYNARA_AUTH_TOKEN").pipe(
     Config.option,
     Config.map(Option.getOrUndefined),
@@ -416,6 +421,7 @@ const ServerConfigLive = (input: CliInput) =>
         sshForwardPort,
         allowInsecureRemote,
         noBrowser,
+        remoteBillingPolicyRequired: env.remoteBillingPolicyRequired ?? false,
         authToken,
         desktopShutdownToken,
         migrationDivergenceConsent,
@@ -481,6 +487,31 @@ const makeServerProgram = (input: CliInput) =>
     yield* cliConfig.fixPath;
 
     const config = yield* ServerConfig;
+    // Restore policy before opening HTTP; a restart never turns a known paid policy off.
+    const storedAccount = yield* Effect.promise(() =>
+      readAccountFile(accountStateDirectory(config.baseDir, config.devUrl)),
+    );
+    const billingAuthority =
+      resolveConfiguredAccountUrl({ env: process.env }) ?? DEFAULT_ACCOUNT_URL;
+    remoteSessions.setRemoteBillingEnforced(
+      storedAccount?.remoteBillingPolicy?.apiIssuer === accountApiIssuer(billingAuthority) &&
+        storedAccount.remoteBillingPolicy.enforced === true,
+    );
+    if (
+      config.remoteBillingPolicyRequired === true ||
+      !remoteConnectionsUnavailableReason(config.stateDir)
+    ) {
+      // Restore deployment policy before serving. The bounded public refresh runs asynchronously.
+      const policy = yield* Effect.promise(() =>
+        startRemoteBillingPolicy({
+          stateDir: accountStateDirectory(config.baseDir, config.devUrl),
+          accountUrl: billingAuthority,
+          required: config.remoteBillingPolicyRequired === true,
+          remoteSessions,
+        }),
+      );
+      yield* Effect.addFinalizer(() => Effect.promise(() => policy.stop()));
+    }
     yield* Effect.sync(() => startServerMemoryDiagnostics({ mode: config.mode }));
 
     if (!config.devUrl && !config.staticDir) {
