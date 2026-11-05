@@ -359,9 +359,10 @@ export function createAccountSession(
    * report or a failure to surface.
    */
   async function withSession<A>(fn: (accessToken: string, client: AccountClient) => Promise<A>) {
-    const accountUrl = await accountUrlForStoredSession();
-    const client = clientFor(accountUrl);
-    return withFreshAccessToken({ baseDir: credentialDir, client }, (accessToken) =>
+    const credentials = await readAccountCredentials(credentialDir);
+    if (!credentials) throw new SessionExpiredError();
+    const client = clientFor(credentials.accountUrl);
+    return withFreshAccessToken({ baseDir: credentialDir, client, credentials }, (accessToken) =>
       fn(accessToken, client),
     );
   }

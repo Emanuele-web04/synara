@@ -519,6 +519,8 @@ function isGrantRejected(error: unknown): boolean {
 export interface WithFreshAccessTokenOptions {
   readonly baseDir: string;
   readonly client: AccountClient;
+  /** Keep a caller-selected client and its first bearer on the same credential snapshot. */
+  readonly credentials?: AccountCredentials;
   /** Pin a background upload to the authority/user/workspace that produced its data. */
   readonly expectedIdentity?: Pick<
     StoredAccountFile,
@@ -634,7 +636,9 @@ async function clearStoredSessionIfCurrent(
 }
 
 /** What renewing the session produced: a usable token, or a dead session. */
-type SessionRenewal = { kind: "renewed"; accessToken: string } | { kind: "expired" };
+type SessionRenewal =
+  | { kind: "renewed"; accessToken: string; userId: string | undefined }
+  | { kind: "expired" };
 
 export class SessionRefreshUncertainError extends SessionExpiredError {
   constructor() {
@@ -673,10 +677,19 @@ async function renewSession(
     // Signed out (or the file vanished) while this caller was in flight:
     // there is no session left to renew.
     if (!current?.refreshToken || !current.organizationId) return { kind: "expired" };
+    // A replacement account is not a token rotation. A legacy user may only be
+    // backfilled here while the unchanged refresh token still proves its lineage.
+    if (
+      current.accountUrl !== consumed.accountUrl ||
+      current.organizationId !== consumed.organizationId ||
+      (current.userId !== consumed.userId &&
+        (consumed.userId !== undefined || current.refreshToken !== consumed.refreshToken))
+    )
+      throw new WorkspaceAccessChangedError();
     // Someone else rotated first — their stored pair is the live one.
     if (current.refreshToken !== consumed.refreshToken) {
       return current.accessToken
-        ? { kind: "renewed", accessToken: current.accessToken }
+        ? { kind: "renewed", accessToken: current.accessToken, userId: current.userId }
         : { kind: "expired" };
     }
 
@@ -699,6 +712,8 @@ async function renewSession(
       return { kind: "expired" };
     }
 
+    if (current.userId !== undefined && refreshed.user.id !== current.userId)
+      throw new WorkspaceAccessChangedError();
     await writeAccountCredentials(baseDir, {
       ...current,
       accessToken: refreshed.accessToken,
@@ -708,7 +723,7 @@ async function renewSession(
       // rewrites the same id.
       userId: refreshed.user.id,
     });
-    return { kind: "renewed", accessToken: refreshed.accessToken };
+    return { kind: "renewed", accessToken: refreshed.accessToken, userId: refreshed.user.id };
   });
 }
 
@@ -733,7 +748,7 @@ export async function withFreshAccessToken<A>(
   fn: (accessToken: string) => Promise<A>,
 ): Promise<A> {
   const { baseDir, client } = options;
-  const credentials = await readAccountCredentials(baseDir);
+  const credentials = options.credentials ?? (await readAccountCredentials(baseDir));
   if (!credentials) throw new SessionExpiredError();
   const assertIdentity = (current: StoredAccountFile) => {
     const expected = options.expectedIdentity;
@@ -768,6 +783,14 @@ export async function withFreshAccessToken<A>(
     if (renewal.kind === "expired") throw new SessionExpiredError();
     const current = await readAccountCredentials(baseDir);
     if (!current) throw new SessionExpiredError();
+    // Renewal's verified user includes the permitted legacy backfill. Host metadata
+    // may change independently; explicit background identity fences still apply below.
+    if (
+      current.accountUrl !== credentials.accountUrl ||
+      current.organizationId !== credentials.organizationId ||
+      current.userId !== renewal.userId
+    )
+      throw new WorkspaceAccessChangedError();
     assertIdentity(current);
     return await fn(renewal.accessToken);
   }

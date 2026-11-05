@@ -7,6 +7,7 @@ import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { EnvironmentId, type AccountMe, type SaveInboxRecapRequest } from "@synara/contracts";
 import {
   AccountApiError,
+  createAccountClient,
   OrganizationRequiredError,
   type AccountClient,
 } from "@synara/shared/account";
@@ -302,19 +303,33 @@ describe("status", () => {
     });
   });
 
-  it.each(["logout", "different-user", "different-authority"])(
-    "does not restore a stale signed-in status after %s",
-    async (replacement) => {
+  it.each(
+    (["logout", "different-user", "different-authority", "different-workspace"] as const).flatMap(
+      (replacement) =>
+        (["success", "unauthorized"] as const).map((outcome) => ({ replacement, outcome })),
+    ),
+  )(
+    "does not reuse a stale account request after $replacement ($outcome)",
+    async ({ replacement, outcome }) => {
       const baseDir = makeBaseDir();
       await writeAccountCredentials(baseDir, credentials({ userId: "user_1" }));
       const started = Promise.withResolvers<void>();
-      const pending = Promise.withResolvers<AccountMe>();
+      const pending = Promise.withResolvers<Response>();
+      const requests: Array<{ url: string; authorization: string | null }> = [];
+      // Observe the real client's destination and bearer; this fixture never sends a request.
       const session = sessionFor(
         baseDir,
-        makeClient({
-          me: () => {
+        createAccountClient({
+          baseUrl: ACCOUNT_URL,
+          fetch: async (input, init) => {
+            requests.push({
+              url: String(input),
+              authorization: new Headers(init?.headers).get("authorization"),
+            });
             started.resolve();
-            return pending.promise;
+            return requests.length === 1
+              ? pending.promise
+              : Response.json({ error: "unauthorized", message: "Expired" }, { status: 401 });
           },
         }),
       );
@@ -331,10 +346,20 @@ describe("status", () => {
             ...(replacement === "different-authority"
               ? { accountUrl: "https://other.example.com" }
               : {}),
+            ...(replacement === "different-workspace" ? { organizationId: "org_2" } : {}),
           }),
         );
-      pending.resolve(meResponse());
+      const replacementCredentials = await readAccountFile(baseDir);
+      pending.resolve(
+        outcome === "success"
+          ? Response.json(meResponse())
+          : Response.json({ error: "unauthorized", message: "Expired" }, { status: 401 }),
+      );
       expect(await status).toEqual({ state: "signed-out" });
+      expect(requests).toEqual([
+        { url: `${ACCOUNT_URL}/api/v1/me`, authorization: "Bearer access-1" },
+      ]);
+      expect(await readAccountFile(baseDir)).toEqual(replacementCredentials);
     },
   );
 
