@@ -45,6 +45,7 @@ export function ConnectionsAddDeviceDialog({
   onOpenChange,
   createCode,
   state,
+  loadError,
   onChanged,
   computerNoun,
 }: {
@@ -53,6 +54,7 @@ export function ConnectionsAddDeviceDialog({
   /** False when opened only to review pending requests. */
   createCode: boolean;
   state: RemoteHostState | null;
+  loadError: string | null;
   onChanged: () => Promise<void>;
   computerNoun: string;
 }) {
@@ -62,6 +64,7 @@ export function ConnectionsAddDeviceDialog({
         <AddDeviceDialogContent
           createCode={createCode}
           state={state}
+          loadError={loadError}
           onChanged={onChanged}
           onClose={() => onOpenChange(false)}
           computerNoun={computerNoun}
@@ -74,12 +77,14 @@ export function ConnectionsAddDeviceDialog({
 function AddDeviceDialogContent({
   createCode,
   state,
+  loadError,
   onChanged,
   onClose,
   computerNoun,
 }: {
   createCode: boolean;
   state: RemoteHostState | null;
+  loadError: string | null;
   onChanged: () => Promise<void>;
   onClose: () => void;
   computerNoun: string;
@@ -100,7 +105,7 @@ function AddDeviceDialogContent({
     newCode,
     approve,
     reject,
-  } = useDevicePairing({ createCode, state, onChanged });
+  } = useDevicePairing({ createCode, state, loadError, onChanged });
   const firstPending = pending[0];
 
   const hero: AddDeviceHeroVariant =

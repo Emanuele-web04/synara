@@ -32,11 +32,13 @@ export const DEVICE_PAIRING_CARD_CLASS_NAME = "rounded-[20px] border border-bord
 export function useDevicePairing({
   createCode,
   state,
+  loadError,
   onChanged,
 }: {
   /** False when opened only to review pending requests. */
   createCode: boolean;
   state: RemoteHostState | null;
+  loadError: string | null;
   onChanged: () => Promise<void>;
 }) {
   const account = useAccount();
@@ -79,8 +81,9 @@ export function useDevicePairing({
   // A live code being replaced is withdrawn first so only the one on screen
   // stays redeemable; it leaves the screen before the new one is requested, so
   // a failure cannot keep showing a dead code.
-  const newCode = () =>
-    run(async () => {
+  const newCode = () => {
+    if (state === null) return onChanged();
+    return run(async () => {
       if (invitation && remaining) {
         await callRemoteAccess({ operation: "cancel-invitation", inviteId: invitation.inviteId });
       }
@@ -88,6 +91,7 @@ export function useDevicePairing({
       const result = await callRemoteAccess({ operation: "create-code" });
       if (mounted.current && result.kind === "pairing-code") setInvitation(result);
     }, "Could not create a pairing code.");
+  };
 
   const approve = (entry: PendingDeviceApproval) =>
     run(async () => {
@@ -114,17 +118,19 @@ export function useDevicePairing({
     };
   }, []);
 
-  // Creating a code withdraws every request still waiting on this computer, so
-  // mint one per opening only once those have been approved or rejected.
+  // Creating a code withdraws pending requests. Wait for the first host state
+  // and let the owner review any waiting requests before creating a code.
+  const hostStateLoaded = state !== null;
   const noPending = pending.length === 0;
   useEffect(() => {
-    if (!createCode || !noPending || busy || initialCodeRequested.current) return;
+    if (!createCode || !hostStateLoaded || !noPending || busy || initialCodeRequested.current)
+      return;
     initialCodeRequested.current = true;
     setCodeRequested(true);
     void newCode();
     // `newCode` is recreated every render.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [createCode, noPending, busy]);
+  }, [createCode, hostStateLoaded, noPending, busy]);
 
   const qrLink =
     invitation && remaining
@@ -152,7 +158,7 @@ export function useDevicePairing({
     qrLink,
     email: account.me?.email ?? null,
     busy,
-    error,
+    error: error ?? (state === null ? loadError : null),
     codeRequested,
     newCode,
     approve,

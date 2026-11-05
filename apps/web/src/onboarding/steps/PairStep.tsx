@@ -41,8 +41,8 @@ export function PairStep(props: {
   const { t } = useTranslation();
   // The approval card is shared with Settings › Connections, which is not localized yet.
   const computerNoun = props.onMac ? "Mac" : "computer";
-  const { state, refresh } = useRemoteHostState();
-  const pairing = useDevicePairing({ createCode: true, state, onChanged: refresh });
+  const { state, loadError, refresh } = useRemoteHostState();
+  const pairing = useDevicePairing({ createCode: true, state, loadError, onChanged: refresh });
   const { view, pending, joined, invitation, remaining, used, qrLink, busy, error } = pairing;
   const joinedNames = joined.map((device) => device.label).join(", ");
 
