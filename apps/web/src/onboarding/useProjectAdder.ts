@@ -10,6 +10,7 @@ import { useEffect, useState } from "react";
 import { useAppSettings } from "~/appSettings";
 import { isElectron } from "~/env";
 import { useWindowFolderDrop } from "~/hooks/useWindowFolderDrop";
+import { useTranslation } from "~/i18n";
 import { createOrRecoverProjectFromPath } from "~/lib/projectCreation";
 import { expandProjectHomePath } from "~/lib/projectPaths";
 import { readNativeApi } from "~/nativeApi";
@@ -28,6 +29,7 @@ export function useProjectAdder(props: {
   readonly onBusyChange: (busy: boolean) => void;
 }) {
   const { settings } = useAppSettings();
+  const { t } = useTranslation();
   const homeDir = useWorkspacePathsStore((store) => store.homeDir);
   const syncServerShellSnapshot = useStore((store) => store.syncServerShellSnapshot);
   const [picking, setPicking] = useState(false);
@@ -66,7 +68,7 @@ export function useProjectAdder(props: {
       });
       return true;
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Could not add the project.");
+      setError(caught instanceof Error ? caught.message : t("onboarding:couldNotAddTheProject"));
       return false;
     } finally {
       setSubmitting(false);
@@ -84,7 +86,9 @@ export function useProjectAdder(props: {
         await addProject(picked);
       }
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Could not open the folder picker.");
+      setError(
+        caught instanceof Error ? caught.message : t("onboarding:couldNotOpenTheFolderPicker"),
+      );
     } finally {
       setPicking(false);
     }

@@ -17,6 +17,7 @@ import { Button } from "~/components/ui/button";
 import { Dialog, DialogPopup } from "~/components/ui/dialog";
 import { isElectron } from "~/env";
 import { useAccount } from "~/hooks/useAccount";
+import { useTranslation } from "~/i18n";
 import { DESKTOP_TOP_BAR_TRAFFIC_LIGHT_GUTTER_CLASS } from "~/hooks/useDesktopTopBarGutter";
 import { useProviderStatusesForLocalConfig } from "~/hooks/useProviderStatusesForLocalConfig";
 import { readExecutionContext } from "~/lib/hosts/executionContext";
@@ -52,26 +53,17 @@ import { ProvidersStep } from "./steps/ProvidersStep";
 import { type OnboardingReceiptRow, ReadyStep } from "./steps/ReadyStep";
 import { useProviderDetection } from "./useProviderDetection";
 
-const NUMBER_WORDS = [
-  "no",
-  "one",
-  "two",
-  "three",
-  "four",
-  "five",
-  "six",
-  "seven",
-  "eight",
-  "nine",
-  "ten",
-];
+type Translate = ReturnType<typeof useTranslation>["t"];
 
-function numberWord(count: number): string {
-  return NUMBER_WORDS[count] ?? String(count);
+/** Counts up to ten read as words ("seven more"); larger ones stay digits. */
+function numberWord(t: Translate, count: number, locale: string): string {
+  return count >= 1 && count <= 10
+    ? t(`onboarding:numberWord${count}`)
+    : new Intl.NumberFormat(locale).format(count);
 }
 
-function capitalize(text: string): string {
-  return text.charAt(0).toUpperCase() + text.slice(1);
+function capitalize(text: string, locale: string): string {
+  return text.charAt(0).toLocaleUpperCase(locale) + text.slice(1);
 }
 
 function OnboardingFlow(props: {
@@ -86,7 +78,8 @@ function OnboardingFlow(props: {
   const providerDetection = useProviderDetection();
   const openProjectImport = useProjectImportDialogStore((store) => store.openDialog);
   const markEngaged = useOnboardingDialogStore((store) => store.markEngaged);
-  const computerNoun = isMacNavigatorPlatform() ? "Mac" : "computer";
+  const { t, formatLocale } = useTranslation();
+  const onMac = isMacNavigatorPlatform();
   const remoteAvailable =
     readExecutionContext()?.controller.capabilities.remoteConnections === true;
 
@@ -177,26 +170,47 @@ function OnboardingFlow(props: {
         className="cursor-pointer text-ui text-foreground transition-opacity hover:opacity-70 disabled:opacity-50 motion-reduce:transition-none"
         onClick={props.onComplete}
       >
-        Skip intro
+        {t("onboarding:skipIntro")}
       </button>
     </header>
   );
 
   const providerNames = VISIBLE_PROVIDER_DESCRIPTORS.slice(0, 3).map((d) => d.displayName);
   const moreProviders = VISIBLE_PROVIDER_DESCRIPTORS.length - providerNames.length;
+  const agentList = new Intl.ListFormat(formatLocale, { type: "conjunction" }).format(
+    moreProviders > 0
+      ? [
+          ...providerNames,
+          t("onboarding:welcomeMoreAgents", {
+            count: moreProviders,
+            amount: numberWord(t, moreProviders, formatLocale),
+          }),
+        ]
+      : providerNames,
+  );
+  const readyAgents = providerSummary.connected;
 
   const screen = (() => {
     switch (step) {
       case "welcome":
         return (
           <OnboardingScreen
-            lead={`Meet ${APP_BASE_NAME},`}
-            statement="every agent in one workspace"
-            description={`${providerNames.join(", ")}${moreProviders > 0 ? ` and ${numberWord(moreProviders)} more` : ""}, side by side on your ${computerNoun}${remoteAvailable ? " and on your phone" : ""}.`}
+            lead={t("onboarding:welcomeLead", { app: APP_BASE_NAME })}
+            statement={t("onboarding:welcomeStatement")}
+            description={t(
+              onMac
+                ? remoteAvailable
+                  ? "onboarding:welcomeDescriptionMacRemote"
+                  : "onboarding:welcomeDescriptionMac"
+                : remoteAvailable
+                  ? "onboarding:welcomeDescriptionComputerRemote"
+                  : "onboarding:welcomeDescriptionComputer",
+              { agents: agentList },
+            )}
             actionsPlacement="inline"
-            primary={{ label: "Get started", onClick: goNext }}
+            primary={{ label: t("common:getStarted"), onClick: goNext }}
             secondary={{
-              label: "Import from another app",
+              label: t("onboarding:importFromAnotherApp"),
               onClick: () => {
                 // Importing creates projects; keep the first-run gate from closing the tour.
                 markEngaged();
@@ -216,17 +230,20 @@ function OnboardingFlow(props: {
         return (
           <OnboardingScreen
             number={stepNumber}
-            lead="Bring your agents."
+            lead={t("onboarding:agentsLead")}
             statement={
               providerSummary.detecting > 0
-                ? `Checking this ${computerNoun}…`
-                : providerSummary.connected > 0
-                  ? `${capitalize(numberWord(providerSummary.connected))} ${providerSummary.connected === 1 ? "is" : "are"} ready on this ${computerNoun}`
-                  : "Set up the ones you use"
+                ? t(onMac ? "onboarding:agentsCheckingMac" : "onboarding:agentsCheckingComputer")
+                : readyAgents > 0
+                  ? t(onMac ? "onboarding:agentsReadyMac" : "onboarding:agentsReadyComputer", {
+                      count: readyAgents,
+                      amount: capitalize(numberWord(t, readyAgents, formatLocale), formatLocale),
+                    })
+                  : t("onboarding:agentsSetUp")
             }
-            description="Each keeps its own login, models and limits. Turn any off, or set up the rest later from Settings."
-            secondary={{ label: "Back", onClick: goBack }}
-            primary={{ label: "Continue", onClick: goNext }}
+            description={t("onboarding:agentsDescription")}
+            secondary={{ label: t("common:app_back"), onClick: goBack }}
+            primary={{ label: t("git:continue"), onClick: goNext }}
           >
             <ProvidersStep detection={providerDetection} />
           </OnboardingScreen>
@@ -235,11 +252,11 @@ function OnboardingFlow(props: {
         return (
           <OnboardingScreen
             number={stepNumber}
-            lead="Run them all at once."
-            statement="Every task gets its own worktree"
-            description={`Review the diff, run the tests and open the PR without leaving ${APP_BASE_NAME}.`}
-            secondary={{ label: "Back", onClick: goBack }}
-            primary={{ label: "Continue", onClick: goNext }}
+            lead={t("onboarding:tasksLead")}
+            statement={t("onboarding:tasksStatement")}
+            description={t("onboarding:tasksDescription", { app: APP_BASE_NAME })}
+            secondary={{ label: t("common:app_back"), onClick: goBack }}
+            primary={{ label: t("git:continue"), onClick: goNext }}
             stageClassName="overflow-hidden"
           >
             <div className="size-full px-8 py-10">
@@ -253,16 +270,18 @@ function OnboardingFlow(props: {
         return (
           <OnboardingScreen
             number={stepNumber}
-            lead={`Your ${computerNoun}, in your pocket.`}
-            statement="Step away, keep going"
-            description={`${APP_BASE_NAME} for iPhone picks up any task and answers approvals, wherever you are.`}
-            secondary={{ label: "Back", onClick: goBack }}
-            primary={{ label: "Continue", onClick: goNext }}
+            lead={t(onMac ? "onboarding:pocketLeadMac" : "onboarding:pocketLeadComputer")}
+            statement={t("onboarding:pocketStatement")}
+            description={t("onboarding:pocketDescription", { app: APP_BASE_NAME })}
+            secondary={{ label: t("common:app_back"), onClick: goBack }}
+            primary={{ label: t("git:continue"), onClick: goNext }}
             stageClassName="overflow-hidden"
           >
             <div className="size-full px-8 pt-10">
               <FitStage {...POCKET_STAGE_SIZE} align="bottom">
-                <PocketIllustration host={`My ${computerNoun === "Mac" ? "Mac" : "PC"}`} />
+                <PocketIllustration
+                  host={t(onMac ? "onboarding:pocketHostMac" : "onboarding:pocketHostComputer")}
+                />
               </FitStage>
             </div>
           </OnboardingScreen>
@@ -272,10 +291,10 @@ function OnboardingFlow(props: {
           return (
             <OnboardingScreen
               number={stepNumber}
-              numberSuffix="optional"
-              lead="You're signed in."
-              statement="Now pick your handle"
-              description="Your profile stays private until you publish it from Edit profile."
+              numberSuffix={t("onboarding:optional")}
+              lead={t("onboarding:profileLead")}
+              statement={t("onboarding:profileStatement")}
+              description={t("onboarding:profileDescription")}
             >
               <div className="flex min-h-full items-start justify-center px-8 pt-14 pb-10">
                 <div className={cn("w-[420px] max-w-full p-6", ONBOARDING_STAGE_CARD_CLASS_NAME)}>
@@ -292,12 +311,12 @@ function OnboardingFlow(props: {
         return (
           <OnboardingScreen
             number={stepNumber}
-            numberSuffix="optional"
-            lead="Sign in to go remote."
-            statement="Only needed for your iPhone"
-            description="Everything else works without an account. You can sign in later from Settings."
-            secondary={{ label: "Back", onClick: goBack }}
-            primary={signedIn ? { label: "Continue", onClick: goNext } : undefined}
+            numberSuffix={t("onboarding:optional")}
+            lead={t("onboarding:accountLead")}
+            statement={t("onboarding:accountStatement")}
+            description={t("onboarding:accountDescription")}
+            secondary={{ label: t("common:app_back"), onClick: goBack }}
+            primary={signedIn ? { label: t("git:continue"), onClick: goNext } : undefined}
             actionsExtra={
               signedIn ? null : (
                 <Button
@@ -307,7 +326,7 @@ function OnboardingFlow(props: {
                   className="bg-background/70 px-4"
                   onClick={goNext}
                 >
-                  Not now
+                  {t("common:notNow")}
                 </Button>
               )
             }
@@ -322,13 +341,13 @@ function OnboardingFlow(props: {
                 >
                   <CircleCheckIcon className="size-5 shrink-0 text-success" aria-hidden />
                   <span className="min-w-0 truncate text-ui text-foreground">
-                    Signed in as {account.me?.email}
+                    {t("onboarding:signedInAs", { email: account.me?.email ?? "" })}
                   </span>
                 </div>
               </div>
             ) : (
               <AccountStep
-                computerNoun={computerNoun}
+                onMac={onMac}
                 onSignedIn={(status) => {
                   if (status.state !== "signed-in") return;
                   // A new account stays here for its profile; otherwise go pair the phone.
@@ -341,37 +360,34 @@ function OnboardingFlow(props: {
           </OnboardingScreen>
         );
       case "pair":
-        return (
-          <PairStep
-            number={stepNumber}
-            computerNoun={computerNoun}
-            onNext={goNext}
-            onPaired={onPaired}
-          />
-        );
+        return <PairStep number={stepNumber} onMac={onMac} onNext={goNext} onPaired={onPaired} />;
       case "ready": {
         const receipt: OnboardingReceiptRow[] = [
           {
-            label: "Agents",
+            label: t("onboarding:receiptAgents"),
             value:
               providerSummary.detecting > 0
-                ? "Checking…"
-                : providerSummary.connected > 0
-                  ? `${providerSummary.connected} ready`
-                  : "None yet",
-            done: providerSummary.connected > 0,
+                ? t("settings:checking")
+                : readyAgents > 0
+                  ? t("onboarding:receiptAgentsReady", { count: readyAgents })
+                  : t("onboarding:receiptNoneYet"),
+            done: readyAgents > 0,
           },
         ];
         if (remoteAvailable) {
           const me = account.me;
           receipt.push({
-            label: "Account",
-            value: me ? (me.profile?.handle ? `@${me.profile.handle}` : me.email) : "Not signed in",
+            label: t("onboarding:receiptAccount"),
+            value: me
+              ? me.profile?.handle
+                ? `@${me.profile.handle}`
+                : me.email
+              : t("onboarding:receiptNotSignedIn"),
             done: me !== null,
           });
           receipt.push({
-            label: "iPhone",
-            value: pairedDevice ?? "Not connected",
+            label: t("onboarding:receiptIphone"),
+            value: pairedDevice ?? t("onboarding:receiptNotConnected"),
             done: pairedDevice !== null,
           });
         }

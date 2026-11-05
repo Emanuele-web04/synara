@@ -16,6 +16,8 @@ import { Button } from "~/components/ui/button";
 import { CopyTextButton } from "~/components/ui/copyTextButton";
 import { Spinner } from "~/components/ui/spinner";
 import { useRemoteHostState } from "~/hooks/useRemoteHostState";
+import { Translation } from "~/i18n/Translation";
+import { useTranslation } from "~/i18n";
 import { CircleCheckIcon, RefreshCwIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 import { OnboardingScreen, OnboardingStatusChip } from "../OnboardingScreen";
@@ -25,17 +27,20 @@ import { ONBOARDING_STAGE_CARD_CLASS_NAME } from "../stage/stageTokens";
 const PHONE_SCALE = 0.52;
 
 const PAIR_STEPS = [
-  "Open Synara on your iPhone",
-  "Point the scanner at this code",
-  "Approve it here if asked",
+  "onboarding:pairStepOpenApp",
+  "onboarding:pairStepScan",
+  "onboarding:pairStepApprove",
 ] as const;
 
 export function PairStep(props: {
   readonly number: string;
-  readonly computerNoun: string;
+  readonly onMac: boolean;
   readonly onNext: () => void;
   readonly onPaired: (deviceName: string) => void;
 }) {
+  const { t } = useTranslation();
+  // The approval card is shared with Settings › Connections, which is not localized yet.
+  const computerNoun = props.onMac ? "Mac" : "computer";
   const { state, refresh } = useRemoteHostState();
   const pairing = useDevicePairing({ createCode: true, state, onChanged: refresh });
   const { view, pending, joined, invitation, remaining, used, qrLink, busy, error } = pairing;
@@ -48,21 +53,27 @@ export function PairStep(props: {
 
   const chip =
     view === "joined" ? (
-      <OnboardingStatusChip tone="success">{joinedNames} connected</OnboardingStatusChip>
+      <OnboardingStatusChip tone="success">
+        {t("onboarding:pairJoinedChip", { names: joinedNames })}
+      </OnboardingStatusChip>
     ) : view === "approval" ? (
-      <OnboardingStatusChip tone="live">Approve on this {props.computerNoun}</OnboardingStatusChip>
+      <OnboardingStatusChip tone="live">
+        {t(props.onMac ? "onboarding:pairApproveMac" : "onboarding:pairApproveComputer")}
+      </OnboardingStatusChip>
     ) : invitation && remaining ? (
-      <OnboardingStatusChip tone="live">Waiting for iPhone</OnboardingStatusChip>
+      <OnboardingStatusChip tone="live">{t("onboarding:pairWaiting")}</OnboardingStatusChip>
     ) : null;
 
   return (
     <OnboardingScreen
       number={props.number}
-      lead="Connect your iPhone."
-      statement="One scan and you're paired"
-      description="Follow tasks and answer approvals from your iPhone, on Wi-Fi or mobile data."
-      secondary={view === "joined" ? undefined : { label: "Later", onClick: props.onNext }}
-      primary={view === "joined" ? { label: "Continue", onClick: props.onNext } : undefined}
+      lead={t("onboarding:pairLead")}
+      statement={t("onboarding:pairStatement")}
+      description={t("onboarding:pairDescription")}
+      secondary={
+        view === "joined" ? undefined : { label: t("onboarding:pairLater"), onClick: props.onNext }
+      }
+      primary={view === "joined" ? { label: t("git:continue"), onClick: props.onNext } : undefined}
       actionsExtra={chip}
     >
       <div className="flex min-h-full items-center justify-center gap-16 px-8 py-10">
@@ -76,22 +87,20 @@ export function PairStep(props: {
               ))}
             </span>
             <span className="truncate text-ui-sm text-muted-foreground">
-              Settings › Connections › Connect a device
+              {t("onboarding:pairWindowPath")}
             </span>
           </div>
 
           {view === "approval" ? (
             <div className="flex flex-col gap-3 p-5">
               <p className="text-ui text-muted-foreground">
-                {pending.length === 1
-                  ? "A device used your pairing code. Approve it only if you recognize it and its fingerprint matches."
-                  : "Devices used your pairing codes. Approve each only if you recognize it and its fingerprint matches."}
+                {t("onboarding:pairApprovalHint", { count: pending.length })}
               </p>
               {pending.map((entry) => (
                 <PendingDeviceApprovalCard
                   key={entry.inviteId}
                   entry={entry}
-                  computerNoun={props.computerNoun}
+                  computerNoun={computerNoun}
                   busy={busy}
                   onApprove={() => void pairing.approve(entry)}
                   onReject={() => void pairing.reject(entry)}
@@ -102,10 +111,17 @@ export function PairStep(props: {
             <div className="flex flex-col items-center gap-2 px-6 py-12 text-center">
               <CircleCheckIcon className="size-8 text-success" aria-hidden />
               <p className="text-ui-lg text-foreground">
-                {joinedNames} {joined.length === 1 ? "is" : "are"} connected
+                {t("onboarding:pairJoinedTitle", { count: joined.length, names: joinedNames })}
               </p>
               <p className="text-ui text-muted-foreground">
-                {joined.length === 1 ? "It" : "They"} can now control this {props.computerNoun}.
+                {t(
+                  props.onMac
+                    ? "onboarding:pairJoinedBodyMac"
+                    : "onboarding:pairJoinedBodyComputer",
+                  {
+                    count: joined.length,
+                  },
+                )}
               </p>
             </div>
           ) : (
@@ -122,7 +138,11 @@ export function PairStep(props: {
                       {qrLink ? (
                         <PairingQrCode
                           value={qrLink}
-                          label={`Scan to connect to this ${props.computerNoun}`}
+                          label={t(
+                            props.onMac
+                              ? "onboarding:pairQrLabelMac"
+                              : "onboarding:pairQrLabelComputer",
+                          )}
                           pixelSize={172}
                         />
                       ) : (
@@ -140,19 +160,19 @@ export function PairStep(props: {
                         disabled={busy}
                         onClick={() => void pairing.newCode()}
                       >
-                        Try again
+                        {t("onboarding:pairTryAgain")}
                       </Button>
                     </div>
                   ) : (
                     <p className="flex items-center gap-2 text-ui text-muted-foreground">
                       <Spinner className="size-4" aria-hidden />
-                      Creating a code…
+                      {t("onboarding:pairCreatingCode")}
                     </p>
                   )}
                   {invitation && !remaining ? (
                     <div className="absolute inset-0 flex flex-col items-center justify-center gap-1.5 text-center">
                       <p className="text-ui font-semibold text-foreground">
-                        {used ? "This code was used" : "This code expired"}
+                        {t(used ? "onboarding:pairCodeUsed" : "onboarding:pairCodeExpired")}
                       </p>
                       <Button
                         shape="capsule"
@@ -160,26 +180,29 @@ export function PairStep(props: {
                         disabled={busy}
                         onClick={() => void pairing.newCode()}
                       >
-                        New code
+                        {t("onboarding:pairNewCode")}
                       </Button>
                     </div>
                   ) : null}
                 </div>
                 <ol className="flex min-w-0 flex-col gap-3 pt-2">
-                  {PAIR_STEPS.map((label, index) => (
-                    <li key={label} className="flex gap-3 text-ui text-foreground">
+                  {PAIR_STEPS.map((message, index) => (
+                    <li key={message} className="flex gap-3 text-ui text-foreground">
                       <span className="pt-px font-mono text-ui-sm text-muted-foreground tabular-nums">
                         {String(index + 1).padStart(2, "0")}
                       </span>
-                      {label}
+                      {t(message)}
                     </li>
                   ))}
                   {invitation && remaining ? (
                     <li className="pt-2 text-ui-sm leading-relaxed text-muted-foreground">
-                      Can’t scan? Tap Pair with Code and enter{" "}
-                      <span className="font-mono font-medium text-foreground">
-                        {invitation.code}
-                      </span>
+                      <Translation
+                        message="onboarding:pairCantScan"
+                        values={{ code: invitation.code }}
+                        components={{
+                          code: <span className="font-mono font-medium text-foreground" />,
+                        }}
+                      />
                     </li>
                   ) : null}
                 </ol>
@@ -187,17 +210,21 @@ export function PairStep(props: {
               <div className="flex h-11 items-center justify-between border-t border-foreground/8 ps-5 pe-3 text-ui-sm text-muted-foreground">
                 <span className="tabular-nums">
                   {invitation && remaining
-                    ? `Single-use · expires in ${remaining}`
-                    : "Single-use code"}
+                    ? t("onboarding:pairExpiresIn", { time: remaining })
+                    : t("onboarding:pairSingleUse")}
                 </span>
                 {invitation && remaining ? (
                   <span className="flex items-center gap-0.5">
-                    <CopyTextButton text={invitation.code} label="code" iconOnly />
+                    <CopyTextButton
+                      text={invitation.code}
+                      label={t("onboarding:pairCodeCopyLabel")}
+                      iconOnly
+                    />
                     <Button
                       size="icon-xs"
                       variant="ghost"
-                      aria-label="New code"
-                      title="New code"
+                      aria-label={t("onboarding:pairNewCode")}
+                      title={t("onboarding:pairNewCode")}
                       disabled={busy}
                       onClick={() => void pairing.newCode()}
                     >

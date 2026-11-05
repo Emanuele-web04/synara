@@ -7,7 +7,10 @@
 
 import type { ReactNode } from "react";
 
+import { APP_BASE_NAME } from "~/branding";
 import { ProviderIcon } from "~/components/ProviderIcon";
+import { useTranslation } from "~/i18n";
+import { Translation } from "~/i18n/Translation";
 import {
   BellIcon,
   ChevronLeftIcon,
@@ -82,13 +85,22 @@ function StatusBar(props: { readonly time: string }) {
   );
 }
 
-function greeting(date: Date): string {
+function useGreeting(date: Date): string {
+  const { t, formatLocale } = useTranslation();
   const hour = date.getHours();
-  const part = hour < 12 ? "morning" : hour < 18 ? "afternoon" : "evening";
-  // The copy around it is English, so the date follows iOS's English format.
-  const weekday = date.toLocaleDateString("en-GB", { weekday: "long" });
-  const day = date.toLocaleDateString("en-GB", { day: "numeric", month: "long" });
-  return `Good ${part}. ${weekday}, ${day}.`;
+  const weekday = new Intl.DateTimeFormat(formatLocale, { weekday: "long" }).format(date);
+  return t(
+    hour < 12
+      ? "onboarding:phoneGreetingMorning"
+      : hour < 18
+        ? "onboarding:phoneGreetingAfternoon"
+        : "onboarding:phoneGreetingEvening",
+    {
+      // Starts a sentence, so capitalized in languages that write weekdays in lowercase.
+      weekday: weekday.charAt(0).toLocaleUpperCase(formatLocale) + weekday.slice(1),
+      date: new Intl.DateTimeFormat(formatLocale, { day: "numeric", month: "long" }).format(date),
+    },
+  );
 }
 
 function InboxCard(props: {
@@ -131,6 +143,10 @@ function InProgressIcon() {
   );
 }
 
+const SAMPLE_AVATAR_INITIAL = "S";
+const SAMPLE_RECAP_PROJECT = "synara-web";
+const SAMPLE_RECAP_AGENT = "Claude Code";
+
 const SAMPLE_PROJECTS = [
   { name: "synara-web", count: 5 },
   { name: "api-gateway", count: 2 },
@@ -143,7 +159,8 @@ export function IosInboxScreen(props: {
   readonly needsYou?: number;
   readonly banner?: ReactNode;
 }) {
-  const now = new Date();
+  const { t } = useTranslation();
+  const greeting = useGreeting(new Date());
   const needsYou = props.needsYou ?? 0;
   return (
     <div className="relative flex size-full flex-col">
@@ -153,7 +170,7 @@ export function IosInboxScreen(props: {
       ) : null}
       <div className="flex items-center justify-between px-[18px] pt-[6px]">
         <span className="flex size-[48px] items-center justify-center rounded-full bg-[radial-gradient(circle_at_30%_25%,#ffb347,#d9622b_55%,#3b2418)] text-[20px] font-semibold">
-          S
+          {SAMPLE_AVATAR_INITIAL}
         </span>
         <span className="flex gap-[12px]">
           {[
@@ -170,42 +187,53 @@ export function IosInboxScreen(props: {
         </span>
       </div>
       <div className="flex flex-col gap-[6px] px-[20px] pt-[18px] pb-[16px]">
-        <span className="text-[34px] leading-[40px] font-bold tracking-[-0.01em]">Inbox</span>
-        <span className={cn("text-[17px]", IOS_MUTED)}>{greeting(now)}</span>
+        <span className="text-[34px] leading-[40px] font-bold tracking-[-0.01em]">
+          {t("workspace:inbox")}
+        </span>
+        <span className={cn("text-[17px]", IOS_MUTED)}>{greeting}</span>
       </div>
       <div className="grid grid-cols-2 gap-[10px] px-[16px]">
-        <InboxCard icon={<PageTextIcon className="size-[22px]" />} title="Activity" />
+        <InboxCard
+          icon={<PageTextIcon className="size-[22px]" />}
+          title={t("onboarding:phoneActivity")}
+        />
         <InboxCard
           icon={<BellIcon className="size-[22px] text-[#ff6b3d]" />}
-          title="Needs you"
+          title={t("onboarding:phoneNeedsYou")}
           count={needsYou}
           highlighted={needsYou > 0}
         />
-        <InboxCard icon={<InProgressIcon />} title="In progress" count={3} />
+        <InboxCard icon={<InProgressIcon />} title={t("onboarding:phoneInProgress")} count={3} />
         <InboxCard
           icon={<CircleCheckIcon className="size-[22px] text-[#30d158]" />}
-          title="Ready for review"
+          title={t("onboarding:phoneReadyForReview")}
           count={1}
         />
       </div>
       <div className="px-[20px] pt-[26px]">
         <div className="flex items-baseline justify-between">
-          <span className={cn("text-[17px]", IOS_MUTED)}>Today · {props.host}</span>
-          <span className={cn("text-[15px]", IOS_MUTED)}>Full recap</span>
+          <span className={cn("text-[17px]", IOS_MUTED)}>
+            {t("onboarding:phoneToday", { host: props.host })}
+          </span>
+          <span className={cn("text-[15px]", IOS_MUTED)}>{t("onboarding:phoneFullRecap")}</span>
         </div>
         <p className={cn("pt-[6px] text-[19px] leading-[28px]", IOS_MUTED)}>
-          You sent <b className="font-medium text-white">24 prompts</b> across{" "}
-          <b className="font-medium text-white">6 chats</b>. Most of it went into{" "}
-          <FolderIcon className="mb-[3px] inline size-[18px] text-white" />{" "}
-          <b className="font-medium text-white">synara-web</b>, with{" "}
-          <ProviderIcon provider="claudeAgent" className="mb-[3px] inline size-[18px]" />{" "}
-          <b className="font-medium text-white">Claude Code</b> carrying{" "}
-          <b className="font-medium text-white">72%</b> of the tokens.
+          <Translation
+            message="onboarding:phoneRecap"
+            values={{ project: SAMPLE_RECAP_PROJECT, agent: SAMPLE_RECAP_AGENT }}
+            components={{
+              strong: <b className="font-medium text-white" />,
+              folder: <FolderIcon className="mb-[3px] inline size-[18px] text-white" />,
+              provider: (
+                <ProviderIcon provider="claudeAgent" className="mb-[3px] inline size-[18px]" />
+              ),
+            }}
+          />
         </p>
       </div>
       <div className="px-[20px] pt-[24px]">
         <span className={cn("text-[17px]", IOS_MUTED)}>
-          Projects <span className="ps-[4px] text-white/35">4</span>
+          {t("workspace:sections_projects")} <span className="ps-[4px] text-white/35">4</span>
         </span>
         <ul className="pt-[8px]">
           {SAMPLE_PROJECTS.map((project, index) => (
@@ -235,7 +263,9 @@ export function IosInboxScreen(props: {
         <span className="flex size-[42px] items-center justify-center rounded-full bg-white/8">
           <PlusIcon className="size-[22px] text-white/80" />
         </span>
-        <span className="flex-1 text-[17px] text-white/50">Ask Synara anything…</span>
+        <span className="flex-1 text-[17px] text-white/50">
+          {t("onboarding:phoneAskAnything", { app: APP_BASE_NAME })}
+        </span>
         <span className="flex size-[42px] items-center justify-center rounded-full bg-white/10">
           <MicIcon className="size-[20px] text-white/80" />
         </span>
@@ -246,13 +276,14 @@ export function IosInboxScreen(props: {
 
 /** An iOS notification banner from Synara, as it lands over the Inbox. */
 export function IosNotificationBanner(props: { readonly title: string; readonly body: string }) {
+  const { t } = useTranslation();
   return (
     <div className="flex gap-[12px] rounded-[26px] border border-white/10 bg-[#2c2c2e]/90 p-[14px] shadow-[0_18px_40px_rgb(0_0_0/0.5)] backdrop-blur-xl">
       <img src="/app-icons/dark.png" alt="" className="size-[40px] shrink-0" draggable={false} />
       <span className="flex min-w-0 flex-1 flex-col text-[15px] leading-[20px]">
         <span className="flex items-baseline justify-between">
           <span className="font-semibold">{props.title}</span>
-          <span className="text-white/45">now</span>
+          <span className="text-white/45">{t("chat:relativeTime_now")}</span>
         </span>
         <span className="text-white/85">{props.body}</span>
       </span>
@@ -262,6 +293,7 @@ export function IosNotificationBanner(props: { readonly title: string; readonly 
 
 /** Synara for iOS: the pairing scanner (QRScannerView) looking at this computer's code. */
 export function IosScannerScreen(props: { readonly viewfinder: ReactNode }) {
+  const { t } = useTranslation();
   return (
     <div className="relative flex size-full flex-col bg-[radial-gradient(120%_70%_at_50%_45%,#1d1f24_0%,#0a0a0a_70%)]">
       <StatusBar time="9:41" />
@@ -275,16 +307,16 @@ export function IosScannerScreen(props: { readonly viewfinder: ReactNode }) {
           {props.viewfinder}
         </span>
         <span className="flex flex-col items-center gap-[6px] px-[32px] text-center">
-          <span className="text-[17px] font-medium">Scan the Synara QR code</span>
+          <span className="text-[17px] font-medium">{t("onboarding:phoneScanTitle")}</span>
           <span className="text-[15px] leading-[20px] text-white/70">
-            On your Mac: Synara → Settings → Connections → Connect a device
+            {t("onboarding:phoneScanHint")}
           </span>
         </span>
       </div>
       <div className="flex justify-center pb-[44px]">
         <span className="flex h-[52px] items-center gap-[8px] rounded-full bg-white/14 px-[24px] text-[17px]">
           <KeyboardIcon className="size-[18px]" />
-          Pair with Code
+          {t("onboarding:phonePairWithCode")}
         </span>
       </div>
     </div>

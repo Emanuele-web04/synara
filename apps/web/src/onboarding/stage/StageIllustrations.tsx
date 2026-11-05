@@ -8,6 +8,7 @@ import type { ProviderKind } from "@synara/contracts";
 import type { ReactNode } from "react";
 
 import { ProviderIcon } from "~/components/ProviderIcon";
+import { useTranslation } from "~/i18n";
 import { CheckIcon, CircleCheckIcon, LoaderCircleIcon, TriangleAlertIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 import {
@@ -50,45 +51,51 @@ function Positioned(props: {
   );
 }
 
+/** Sample data shown inside the illustrations: code, paths and names stay untranslated. */
+const SAMPLE_PROJECT = "synara-web";
+const SAMPLE_URL = "localhost:3000/login";
+const SAMPLE_DIFF_FILE = "src/auth/callback.ts";
+const SAMPLE_APPROVAL_COMMAND = "$ bun run db:migrate --env staging";
+const SEED_TASK_TITLE = "onboarding:stageTaskSeed";
+
 const TASKS: ReadonlyArray<{
   title: string;
   provider: ProviderKind;
   agent: string;
   branch: string;
   status: "ready" | "running" | "ask";
-  trailing: string;
+  /** Running time, for tasks still running. */
+  minutes?: number;
 }> = [
   {
-    title: "Fix auth redirect loop",
+    title: "onboarding:stageTaskFixAuth",
     provider: "claudeAgent",
     agent: "Claude Code",
     branch: "fix-auth",
     status: "ready",
-    trailing: "Ready",
   },
   {
-    title: "Add rate-limit retry",
+    title: "onboarding:stageTaskRateLimit",
     provider: "codex",
     agent: "Codex",
     branch: "rate-limit",
     status: "running",
-    trailing: "2m",
+    minutes: 2,
   },
   {
-    title: "Migrate to Postgres 17",
+    title: "onboarding:stageTaskPostgres",
     provider: "cursor",
     agent: "Cursor",
     branch: "pg17",
     status: "running",
-    trailing: "6m",
+    minutes: 6,
   },
   {
-    title: "Seed staging data",
+    title: SEED_TASK_TITLE,
     provider: "opencode",
     agent: "OpenCode",
     branch: "seed",
     status: "ask",
-    trailing: "Ask",
   },
 ];
 
@@ -103,6 +110,7 @@ const DIFF_LINES: ReadonlyArray<{ kind: "context" | "removed" | "added"; text: s
 
 /** Step "tasks": four agents in parallel worktrees, one diff, one browser check. */
 export function TasksIllustration() {
+  const { t } = useTranslation();
   return (
     <div aria-hidden className="relative size-full">
       {/* Browser check, behind the diff. */}
@@ -120,7 +128,7 @@ export function TasksIllustration() {
               ))}
             </span>
             <span className="flex-1 truncate rounded-md bg-foreground/5 px-2.5 py-1 font-mono text-ui-xs text-muted-foreground">
-              localhost:3000/login
+              {SAMPLE_URL}
             </span>
           </div>
           <div className="relative flex flex-1 flex-col items-center justify-center gap-2.5 ps-40">
@@ -133,7 +141,7 @@ export function TasksIllustration() {
               style={{ backgroundColor: ONBOARDING_LIVE_COLOR }}
             >
               <CheckIcon className="size-3" />
-              Login works
+              {t("onboarding:stageLoginWorks")}
             </span>
           </div>
         </div>
@@ -145,7 +153,9 @@ export function TasksIllustration() {
           <div className="flex items-center gap-3 px-1 pb-2">
             <WindowDots />
           </div>
-          <span className="px-2 pb-1 text-ui-sm text-muted-foreground">synara-web · 4 running</span>
+          <span className="px-2 pb-1 text-ui-sm text-muted-foreground">
+            {t("onboarding:stageProjectRunning", { project: SAMPLE_PROJECT, count: 4 })}
+          </span>
           {TASKS.map((task, index) => (
             <div
               key={task.title}
@@ -167,7 +177,7 @@ export function TasksIllustration() {
                 )}
               </span>
               <span className="flex min-w-0 flex-1 flex-col">
-                <span className="truncate text-ui text-foreground">{task.title}</span>
+                <span className="truncate text-ui text-foreground">{t(task.title)}</span>
                 <span className="flex items-center gap-1 font-mono text-ui-xs text-muted-foreground">
                   <ProviderIcon provider={task.provider} className="size-3" />
                   {task.agent} · {task.branch}
@@ -183,7 +193,11 @@ export function TasksIllustration() {
                       : "text-muted-foreground",
                 )}
               >
-                {task.trailing}
+                {task.status === "ready"
+                  ? t("onboarding:stageStatusReady")
+                  : task.status === "ask"
+                    ? t("onboarding:stageStatusAsk")
+                    : t("onboarding:stageMinutes", { count: task.minutes ?? 0 })}
               </span>
             </div>
           ))}
@@ -194,7 +208,7 @@ export function TasksIllustration() {
       <Positioned x={310} y={78} width={440}>
         <div className={cn("flex flex-col overflow-hidden", ONBOARDING_STAGE_CARD_CLASS_NAME)}>
           <div className="flex items-center justify-between border-b border-foreground/8 px-4 py-3">
-            <span className="font-mono text-ui-sm text-foreground">src/auth/callback.ts</span>
+            <span className="font-mono text-ui-sm text-foreground">{SAMPLE_DIFF_FILE}</span>
             <span className="font-mono text-ui-xs">
               <span className="text-success">+18</span> <span className="text-destructive">−7</span>
             </span>
@@ -216,9 +230,11 @@ export function TasksIllustration() {
             ))}
           </div>
           <div className="flex items-center justify-between border-t border-foreground/8 px-4 py-2.5">
-            <span className="text-ui-sm text-muted-foreground">24 tests passed</span>
+            <span className="text-ui-sm text-muted-foreground">
+              {t("onboarding:stageTestsPassed", { count: 24 })}
+            </span>
             <span className="rounded-lg bg-foreground px-3 py-1.5 text-ui-sm text-background">
-              Open PR
+              {t("onboarding:stageOpenPr")}
             </span>
           </div>
         </div>
@@ -231,33 +247,34 @@ const POCKET_PHONE_SCALE = 0.8;
 
 /** Step "pocket": the same approval on this computer and on the iPhone. */
 export function PocketIllustration(props: { readonly host: string }) {
+  const { t } = useTranslation();
   return (
     <div aria-hidden className="relative size-full">
       <Positioned x={20} y={150} width={460}>
         <div className={cn("flex flex-col", ONBOARDING_STAGE_CARD_CLASS_NAME)}>
           <div className="flex items-center gap-3 border-b border-foreground/8 px-4 py-3">
             <WindowDots />
-            <span className="text-ui text-foreground">Seed staging data</span>
+            <span className="text-ui text-foreground">{t(SEED_TASK_TITLE)}</span>
             <span className="flex items-center gap-1 font-mono text-ui-xs text-muted-foreground">
               <ProviderIcon provider="opencode" className="size-3" />
               OpenCode
             </span>
           </div>
           <div className="flex flex-col gap-3 p-4">
-            <p className="text-ui text-foreground">
-              Schema is ready. I need to run the migration against staging before seeding.
-            </p>
+            <p className="text-ui text-foreground">{t("onboarding:stageAgentMessage")}</p>
             <div className="flex flex-col gap-2.5 rounded-xl border border-warning/25 bg-warning/6 p-3.5">
-              <span className="text-ui-sm font-medium text-warning">Approval needed</span>
+              <span className="text-ui-sm font-medium text-warning">
+                {t("automation:approval_needed")}
+              </span>
               <code className="font-mono text-ui-sm text-foreground">
-                $ bun run db:migrate --env staging
+                {SAMPLE_APPROVAL_COMMAND}
               </code>
               <span className="flex gap-2">
                 <span className="rounded-lg bg-foreground px-3 py-1.5 text-ui-sm text-background">
-                  Approve
+                  {t("automation:approval_approve")}
                 </span>
                 <span className="rounded-lg border border-foreground/12 px-3 py-1.5 text-ui-sm text-foreground">
-                  Deny
+                  {t("common:deny")}
                 </span>
               </span>
             </div>
@@ -286,7 +303,7 @@ export function PocketIllustration(props: { readonly host: string }) {
           className="rounded-full border bg-background px-2.5 py-1 font-mono text-ui-xs"
           style={{ borderColor: `${ONBOARDING_LIVE_COLOR}66`, color: ONBOARDING_LIVE_COLOR }}
         >
-          remote
+          {t("onboarding:stageRemote")}
         </span>
       </Positioned>
 
@@ -306,8 +323,8 @@ export function PocketIllustration(props: { readonly host: string }) {
             needsYou={1}
             banner={
               <IosNotificationBanner
-                title="Seed staging data needs you"
-                body="OpenCode wants to run a migration. Approve?"
+                title={t("onboarding:stageBannerTitle", { task: t(SEED_TASK_TITLE) })}
+                body={t("onboarding:stageBannerBody")}
               />
             }
           />

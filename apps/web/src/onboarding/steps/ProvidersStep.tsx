@@ -22,6 +22,7 @@ import {
   normalizeProviderStatusForLocalConfig,
 } from "~/lib/providerAvailability";
 import { serverConfigQueryOptions } from "~/lib/serverReactQuery";
+import { useTranslation } from "~/i18n";
 import { cn } from "~/lib/utils";
 import { isProviderKind } from "~/providerOrdering";
 import { useWorkspacePathsStore } from "~/workspacePathsStore";
@@ -34,12 +35,12 @@ const EMPTY_STATUSES: readonly ServerProviderStatus[] = [];
 
 /** Status as a dot + word; the dot carries the colour, the copy stays muted. */
 const STATE_PRESENTATION: Record<ProviderSetupState, { label: string; dotClassName: string }> = {
-  connected: { label: "Connected", dotClassName: "bg-[#317CFF]" },
-  "needs-sign-in": { label: "Needs sign-in", dotClassName: "bg-warning" },
-  "not-installed": { label: "Not installed", dotClassName: "bg-muted-foreground/40" },
-  detecting: { label: "Detecting", dotClassName: "bg-muted-foreground/40" },
-  "check-failed": { label: "Could not check", dotClassName: "bg-warning" },
-  disabled: { label: "Disabled", dotClassName: "bg-muted-foreground/40" },
+  connected: { label: "chat:connected", dotClassName: "bg-[#317CFF]" },
+  "needs-sign-in": { label: "common:needsSignIn", dotClassName: "bg-warning" },
+  "not-installed": { label: "onboarding:notInstalled", dotClassName: "bg-muted-foreground/40" },
+  detecting: { label: "onboarding:detecting", dotClassName: "bg-muted-foreground/40" },
+  "check-failed": { label: "onboarding:couldNotCheck", dotClassName: "bg-warning" },
+  disabled: { label: "chat:disabled", dotClassName: "bg-muted-foreground/40" },
 };
 
 const CELL_ACTION_CLASS_NAME =
@@ -120,6 +121,7 @@ function useDisabledProvidersDraft(): {
 }
 
 export function ProvidersStep(props: { readonly detection: ProviderDetection }) {
+  const { t } = useTranslation();
   const { detection } = props;
   const statuses = useDetectedProviderStatuses();
   const homeDir = useWorkspacePathsStore((store) => store.homeDir);
@@ -179,16 +181,15 @@ export function ProvidersStep(props: { readonly detection: ProviderDetection }) 
     <div className="flex min-h-full flex-col">
       <div className="flex h-11 shrink-0 items-center justify-between gap-3 border-b border-foreground/8 bg-background px-8 text-ui text-muted-foreground">
         <span aria-live="polite">
-          {summary.detecting > 0 ? (
-            "Detecting agents on this machine…"
-          ) : summary.checkFailed > 0 ? (
-            "Couldn't check all agents. Try Re-detect."
-          ) : (
-            <>
-              {summary.connected} connected · {summary.needsSignIn} need sign-in ·{" "}
-              {summary.notInstalled} not installed
-            </>
-          )}
+          {summary.detecting > 0
+            ? t("onboarding:detectingAgentsOnThisMachine")
+            : summary.checkFailed > 0
+              ? t("onboarding:couldnTCheckAllAgentsTryReDetect")
+              : t("onboarding:providerSummary", {
+                  connected: summary.connected,
+                  needsSignIn: summary.needsSignIn,
+                  notInstalled: summary.notInstalled,
+                })}
         </span>
         <button
           type="button"
@@ -200,7 +201,7 @@ export function ProvidersStep(props: { readonly detection: ProviderDetection }) 
             className={cn("size-3.5", detection.detecting && "animate-spin")}
             aria-hidden
           />
-          Re-detect
+          {t("onboarding:reDetect")}
         </button>
       </div>
 
@@ -234,7 +235,9 @@ export function ProvidersStep(props: { readonly detection: ProviderDetection }) 
                 <Switch
                   id={switchId}
                   checked={enabled}
-                  aria-label={`${enabled ? "Disable" : "Enable"} ${descriptor.displayName}`}
+                  aria-label={t(enabled ? "settings:disableProvider" : "settings:enableProvider", {
+                    provider: descriptor.displayName,
+                  })}
                   onCheckedChange={(checked) => setProviderDisabled(descriptor.kind, !checked)}
                 />
               </div>
@@ -252,12 +255,12 @@ export function ProvidersStep(props: { readonly detection: ProviderDetection }) 
                   {state === "detecting" ? (
                     <>
                       <Skeleton aria-hidden className="h-2.5 w-20 rounded-full" />
-                      <span className="sr-only">{presentation.label}</span>
+                      <span className="sr-only">{t(presentation.label)}</span>
                     </>
                   ) : (
                     <>
                       <StatusDot aria-hidden className={presentation.dotClassName} />
-                      {presentation.label}
+                      {t(presentation.label)}
                     </>
                   )}
                 </span>
@@ -269,7 +272,7 @@ export function ProvidersStep(props: { readonly detection: ProviderDetection }) 
                       style={{ color: ONBOARDING_LIVE_COLOR }}
                       onClick={() => toggleConnect(descriptor.kind)}
                     >
-                      {isConnecting ? "Done" : "Sign in"}
+                      {isConnecting ? t("git:detail_done") : t("chat:providerModelPicker_signIn")}
                       <ChevronRightIcon className="size-3" aria-hidden />
                     </button>
                   ) : null}
@@ -281,7 +284,7 @@ export function ProvidersStep(props: { readonly detection: ProviderDetection }) 
                       className={CELL_ACTION_CLASS_NAME}
                       style={{ color: ONBOARDING_LIVE_COLOR }}
                     >
-                      Set up
+                      {t("computer:setUp")}
                       <ChevronRightIcon className="size-3" aria-hidden />
                     </a>
                   ) : null}
@@ -299,8 +302,10 @@ export function ProvidersStep(props: { readonly detection: ProviderDetection }) 
                 provider is detected as connected, but the terminal stays mounted. */}
             <div className="flex items-center justify-between text-ui text-muted-foreground">
               <span>
-                Signing in to {connecting.descriptor.displayName} ·{" "}
-                <code className="text-foreground/80">{connectingSignInCommand}</code>
+                {t("onboarding:signingInToProvider", {
+                  provider: connecting.descriptor.displayName,
+                })}{" "}
+                · <code className="text-foreground/80">{connectingSignInCommand}</code>
               </span>
               <button
                 type="button"
@@ -308,7 +313,7 @@ export function ProvidersStep(props: { readonly detection: ProviderDetection }) 
                 onClick={finishConnect}
               >
                 <XIcon className="size-3.5" aria-hidden />
-                Done
+                {t("git:detail_done")}
               </button>
             </div>
             <ProviderConnectTerminal

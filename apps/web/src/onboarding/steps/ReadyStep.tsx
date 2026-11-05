@@ -7,9 +7,11 @@
 import type { ProviderKind } from "@synara/contracts";
 import { useState, type FormEvent } from "react";
 
+import { APP_BASE_NAME } from "~/branding";
 import { Button } from "~/components/ui/button";
 import { InputGroup, InputGroupAddon, InputGroupInput } from "~/components/ui/input-group";
 import { isElectron } from "~/env";
+import { useTranslation } from "~/i18n";
 import { CheckIcon, FolderIcon, MinusIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 import { OnboardingScreen } from "../OnboardingScreen";
@@ -25,6 +27,7 @@ export interface OnboardingReceiptRow {
 }
 
 function Receipt(props: { readonly rows: readonly OnboardingReceiptRow[] }) {
+  const { t } = useTranslation();
   return (
     <dl
       className={cn(
@@ -35,11 +38,14 @@ function Receipt(props: { readonly rows: readonly OnboardingReceiptRow[] }) {
       {props.rows.map((row) => (
         <div key={row.label} className="flex h-10 items-center gap-3 px-4 text-ui">
           {row.done ? (
-            <CheckIcon className="size-3.5 shrink-0 text-success" aria-label="Done" />
+            <CheckIcon
+              className="size-3.5 shrink-0 text-success"
+              aria-label={t("onboarding:receiptDone")}
+            />
           ) : (
             <MinusIcon
               className="size-3.5 shrink-0 text-muted-foreground/60"
-              aria-label="Skipped"
+              aria-label={t("onboarding:receiptSkipped")}
             />
           )}
           <dt className="flex-1 text-foreground">{row.label}</dt>
@@ -62,6 +68,7 @@ export function ReadyStep(props: {
     onBusyChange: props.onBusyChange,
   });
   const [path, setPath] = useState("");
+  const { t } = useTranslation();
 
   const submitPath = (event: FormEvent) => {
     event.preventDefault();
@@ -70,24 +77,29 @@ export function ReadyStep(props: {
 
   return (
     <OnboardingScreen
-      lead="You're all set."
-      statement="Open a project to start"
-      description={
-        isElectron
-          ? "Point Synara at a folder, or drop one anywhere on this window."
-          : "Point Synara at a folder on this computer."
-      }
+      lead={t("onboarding:readyLead")}
+      statement={t("onboarding:readyStatement")}
+      description={t(
+        isElectron ? "onboarding:readyDescriptionDesktop" : "onboarding:readyDescriptionWeb",
+        { app: APP_BASE_NAME },
+      )}
       actionsPlacement="inline"
       primary={
         isElectron
           ? {
-              label: adder.picking ? "Choose a folder…" : "Open a project",
+              label: t(
+                adder.picking ? "onboarding:readyChoosingFolder" : "onboarding:readyOpenProject",
+              ),
               onClick: () => void adder.browse(),
               busy: adder.busy,
             }
           : undefined
       }
-      secondary={{ label: "Explore first", onClick: props.onExplore, disabled: adder.busy }}
+      secondary={{
+        label: t("onboarding:readyExploreFirst"),
+        onClick: props.onExplore,
+        disabled: adder.busy,
+      }}
       aside={<Receipt rows={props.receipt} />}
       footnote={
         <>
@@ -104,9 +116,11 @@ export function ReadyStep(props: {
                     adder.clearError();
                   }}
                   placeholder={
-                    adder.homeDir ? `${adder.homeDir}/code/my-repo` : "/path/to/repository"
+                    adder.homeDir
+                      ? t("onboarding:codeMyRepo", { value0: adder.homeDir })
+                      : t("onboarding:pathToRepository")
                   }
-                  aria-label="Project folder path"
+                  aria-label={t("workspace:projectFolderPath")}
                   spellCheck={false}
                   autoCorrect="off"
                   autoCapitalize="off"
@@ -120,7 +134,7 @@ export function ReadyStep(props: {
                 className="px-4"
                 disabled={adder.submitting || path.trim().length === 0}
               >
-                Add project
+                {t("workspace:sections_addProject")}
               </Button>
             </form>
           )}

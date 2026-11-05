@@ -6,6 +6,7 @@
 import type { AccountStatus } from "@synara/contracts";
 
 import { SignInPanel } from "~/components/account/SignInDialog";
+import { useTranslation } from "~/i18n";
 import { CheckIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 import { ONBOARDING_STAGE_CARD_CLASS_NAME } from "../stage/stageTokens";
@@ -44,25 +45,31 @@ function SideNote(props: {
 }
 
 export function AccountStep(props: {
-  readonly computerNoun: string;
+  readonly onMac: boolean;
   readonly onSignedIn: (status: AccountStatus) => void;
 }) {
+  const { t } = useTranslation();
   return (
     <div className="flex min-h-full items-start justify-center gap-10 px-8 pt-14 pb-10">
       <SideNote
-        title="Your account"
-        items={[`Links this ${props.computerNoun} to your iPhone`, "Your handle and profile"]}
+        title={t("onboarding:accountNoteTitle")}
+        items={[
+          t(props.onMac ? "onboarding:accountNoteLinksMac" : "onboarding:accountNoteLinksComputer"),
+          t("onboarding:accountNoteProfile"),
+        ]}
       />
       <div className={cn("w-[420px] max-w-full shrink-0 p-6", ONBOARDING_STAGE_CARD_CLASS_NAME)}>
         <SignInPanel variant="embedded" onSignedIn={props.onSignedIn} />
       </div>
       <SideNote
         inverted
-        title={`Runs on this ${props.computerNoun}`}
+        title={t(
+          props.onMac ? "onboarding:localNoteTitleMac" : "onboarding:localNoteTitleComputer",
+        )}
         items={[
-          "Your agents and their logins",
-          "Repositories and worktrees",
-          "Every command and tool call",
+          t("onboarding:localNoteAgents"),
+          t("onboarding:localNoteRepositories"),
+          t("onboarding:localNoteCommands"),
         ]}
       />
     </div>
