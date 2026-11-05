@@ -876,6 +876,21 @@ describe("gateBetaOnlyProviders", () => {
     },
   };
 
+  it("reads Kiro and its accounts as disabled in Stable", () => {
+    const settings: ServerSettings = {
+      ...DEFAULT_SERVER_SETTINGS,
+      providerInstances: {
+        kiro_work: { driver: "kiro", enabled: true, config: {} },
+      },
+    };
+    const gated = gateBetaOnlyProviders(settings, stableFeatureEnabled);
+    expect(gated.providers.kiro.enabled).toBe(false);
+    expect(gated.providerInstances.kiro_work?.enabled).toBe(false);
+    expect(gated.providers.codex.enabled).toBe(true);
+    // The persisted value survives for a later Beta session.
+    expect(settings.providers.kiro.enabled).toBe(true);
+  });
+
   it("reads a gated-off provider as disabled without touching the others", () => {
     const gated = gateBetaOnlyProviders(withOmpEnabled, ompGatedOff);
     expect(gated.providers.omp.enabled).toBe(false);
@@ -887,6 +902,11 @@ describe("gateBetaOnlyProviders", () => {
   it("preserves enabled Oh My Pi accounts in Stable", () => {
     const settings: ServerSettings = {
       ...withOmpEnabled,
+      // Kiro is Beta-only; keep it off so Stable gates nothing in this fixture.
+      providers: {
+        ...withOmpEnabled.providers,
+        kiro: { ...DEFAULT_SERVER_SETTINGS.providers.kiro, enabled: false },
+      },
       providerInstances: {
         omp_work: { driver: "omp", enabled: true, config: {} },
       },
