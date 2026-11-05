@@ -40,7 +40,9 @@ const rosterEntry = (bot: Bot, self: Bot) => ({
   you: bot.id === self.id,
 });
 
-export function makeBotTools(dependencies: { readonly bots: BotServiceShape }): ReadonlyArray<ToolEntry> {
+export function makeBotTools(dependencies: {
+  readonly bots: BotServiceShape;
+}): ReadonlyArray<ToolEntry> {
   const { bots } = dependencies;
 
   const resolveCaller = (context: Pick<ToolContext, "callerThreadId" | "callerTurnId">) =>
@@ -85,7 +87,11 @@ export function makeBotTools(dependencies: { readonly bots: BotServiceShape }): 
     },
     handler: (_args, context) =>
       run(context, (caller) =>
-        bots.roster().pipe(Effect.map((roster) => ({ bots: roster.map((bot) => rosterEntry(bot, caller.bot)) }))),
+        bots
+          .roster()
+          .pipe(
+            Effect.map((roster) => ({ bots: roster.map((bot) => rosterEntry(bot, caller.bot)) })),
+          ),
       ),
   };
 
@@ -153,7 +159,9 @@ export function makeBotTools(dependencies: { readonly bots: BotServiceShape }): 
       annotations: { title: "Read delegations", ...READ_ONLY_TOOL_ANNOTATIONS },
     },
     handler: (_args, context) =>
-      run(context, (caller) => bots.listDelegationsFor(caller).pipe(Effect.map((items) => ({ delegations: items })))),
+      run(context, (caller) =>
+        bots.listDelegationsFor(caller).pipe(Effect.map((items) => ({ delegations: items }))),
+      ),
   };
 
   const propose: ToolEntry = {
@@ -200,9 +208,13 @@ export function makeBotTools(dependencies: { readonly bots: BotServiceShape }): 
             ...(typeof args.instructions === "string" ? { instructions: args.instructions } : {}),
             scope: {
               projects: projectIds && projectIds.length > 0 ? projectIds : "all",
-              paths: Array.isArray(args.paths) ? args.paths.filter((path) => typeof path === "string") : [],
+              paths: Array.isArray(args.paths)
+                ? args.paths.filter((path) => typeof path === "string")
+                : [],
             },
-          }).pipe(Effect.mapError((error) => new ToolInputError(`Invalid bot: ${errorText(error)}`)));
+          }).pipe(
+            Effect.mapError((error) => new ToolInputError(`Invalid bot: ${errorText(error)}`)),
+          );
           const reason = readStringArg(args, "reason");
           return yield* bots.propose({ caller, draft, ...(reason ? { reason } : {}) });
         }),
@@ -229,7 +241,9 @@ export function makeBotTools(dependencies: { readonly bots: BotServiceShape }): 
       run(context, (caller) =>
         Effect.gen(function* () {
           yield* context.assertCallerTurnActive();
-          const projectId = ProjectId.makeUnsafe(readStringArg(args, "projectId", { required: true })!);
+          const projectId = ProjectId.makeUnsafe(
+            readStringArg(args, "projectId", { required: true })!,
+          );
           const result = yield* bots.suggestForCaller({ caller, projectId });
           return { cardId: result.cardId, drafts: result.drafts.map((draft) => draft.name) };
         }),
@@ -258,7 +272,10 @@ export function makeBotTools(dependencies: { readonly bots: BotServiceShape }): 
       run(context, (caller) =>
         Effect.gen(function* () {
           yield* context.assertCallerTurnActive();
-          return yield* bots.addProject({ caller, path: readStringArg(args, "path", { required: true })! });
+          return yield* bots.addProject({
+            caller,
+            path: readStringArg(args, "path", { required: true })!,
+          });
         }),
       ),
   };

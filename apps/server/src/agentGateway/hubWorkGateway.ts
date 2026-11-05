@@ -129,7 +129,9 @@ export function makeHubWorkGateway(dependencies: {
       // nonterminal saga here would also block the scanner waiting for that saga.
       if (yield* hasUnfinishedCreation(record)) return;
       const spec = record.creationSpec;
-      const botHub = dependencies.isBotProject ? yield* dependencies.isBotProject(record.projectId) : false;
+      const botHub = dependencies.isBotProject
+        ? yield* dependencies.isBotProject(record.projectId)
+        : false;
       const result = yield* dependencies.createThreads(
         {
           requestId: record.id,
@@ -236,7 +238,9 @@ export function makeHubWorkGateway(dependencies: {
           ...(spec.contextMessageIds !== undefined
             ? { contextMessageIds: spec.contextMessageIds }
             : {}),
-          ...(dependencies.delegatedSources ? { delegatedSources: dependencies.delegatedSources } : {}),
+          ...(dependencies.delegatedSources
+            ? { delegatedSources: dependencies.delegatedSources }
+            : {}),
         }),
       );
       const botHub = dependencies.isBotProject
@@ -281,7 +285,9 @@ export function makeHubWorkGateway(dependencies: {
             ...spec,
             environment,
             ...(botTaskRuntimeMode ? { runtimeMode: botTaskRuntimeMode } : {}),
-            ...(spec.runtimeMode === undefined && !botTaskRuntimeMode ? { inheritedRuntimeMode } : {}),
+            ...(spec.runtimeMode === undefined && !botTaskRuntimeMode
+              ? { inheritedRuntimeMode }
+              : {}),
             contextMessageIds: sourcesByTask[taskIndex]!.map((message) => message.messageId),
           },
         });

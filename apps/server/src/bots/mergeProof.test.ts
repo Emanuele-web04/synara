@@ -77,10 +77,14 @@ describe("evaluateMergeProof", () => {
 
   it("blocks when behind, conflicting, pending, failing, draft or without checks", () => {
     expect(evaluate({ mergeStateStatus: "BEHIND" })).toMatchObject({ ready: false, behind: true });
-    expect(evaluate({ mergeStateStatus: "DIRTY" })).toMatchObject({ ready: false, conflicts: true });
-    expect(
-      evaluate({ checks: [{ ...detail().checks[0]!, status: "pending" }] }),
-    ).toMatchObject({ ready: false, checks: "pending" });
+    expect(evaluate({ mergeStateStatus: "DIRTY" })).toMatchObject({
+      ready: false,
+      conflicts: true,
+    });
+    expect(evaluate({ checks: [{ ...detail().checks[0]!, status: "pending" }] })).toMatchObject({
+      ready: false,
+      checks: "pending",
+    });
     expect(
       evaluate({ checks: [{ ...detail().checks[0]!, status: "failure", name: "lint" }] }),
     ).toMatchObject({ ready: false, checks: "failing", failingChecks: ["lint"] });

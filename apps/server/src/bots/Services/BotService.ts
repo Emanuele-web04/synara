@@ -34,22 +34,19 @@ import type {
 } from "@synara/contracts";
 import { Effect, Schema, ServiceMap, Stream } from "effect";
 
-export class BotServiceError extends Schema.TaggedErrorClass<BotServiceError>()(
-  "BotServiceError",
-  {
-    message: Schema.String,
-    code: Schema.Literals([
-      "forbidden",
-      "invalid",
-      "not-found",
-      "conflict",
-      "limit",
-      "unavailable",
-      "storage",
-    ]),
-    cause: Schema.optional(Schema.Defect),
-  },
-) {}
+export class BotServiceError extends Schema.TaggedErrorClass<BotServiceError>()("BotServiceError", {
+  message: Schema.String,
+  code: Schema.Literals([
+    "forbidden",
+    "invalid",
+    "not-found",
+    "conflict",
+    "limit",
+    "unavailable",
+    "storage",
+  ]),
+  cause: Schema.optional(Schema.Defect),
+}) {}
 
 /** A bot chat calling a SynBot tool, resolved from its thread. */
 export interface BotCaller {
@@ -84,7 +81,9 @@ export interface BotServiceShape {
   readonly cancelDelegation: (
     input: BotsCancelDelegationInput,
   ) => Effect.Effect<BotDelegation, BotServiceError>;
-  readonly mergeProof: (input: BotsMergeProofInput) => Effect.Effect<BotMergeProof, BotServiceError>;
+  readonly mergeProof: (
+    input: BotsMergeProofInput,
+  ) => Effect.Effect<BotMergeProof, BotServiceError>;
   readonly merge: (input: BotsMergeInput) => Effect.Effect<BotsMergeResult, BotServiceError>;
   readonly updateBranch: (
     input: BotsUpdateBranchInput,
@@ -121,7 +120,10 @@ export interface BotServiceShape {
   readonly suggestForCaller: (input: {
     readonly caller: BotCaller;
     readonly projectId: ProjectId;
-  }) => Effect.Effect<{ readonly cardId: string; readonly drafts: readonly BotDraft[] }, BotServiceError>;
+  }) => Effect.Effect<
+    { readonly cardId: string; readonly drafts: readonly BotDraft[] },
+    BotServiceError
+  >;
   readonly addProject: (input: {
     readonly caller: BotCaller;
     readonly path: string;
@@ -138,7 +140,10 @@ export interface BotServiceShape {
   readonly fullControlFor: (input: {
     readonly callerThreadId: ThreadId;
     readonly targetThreadId: ThreadId;
-  }) => Effect.Effect<{ readonly botId: ProjectId; readonly botName: string } | null, BotServiceError>;
+  }) => Effect.Effect<
+    { readonly botId: ProjectId; readonly botName: string } | null,
+    BotServiceError
+  >;
   /**
    * Labels `targetThreadId` with "From <bot>" when a bot chat wrote to or stopped a chat that is
    * not its own task, so the user sees who acted there.

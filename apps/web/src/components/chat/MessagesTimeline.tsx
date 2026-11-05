@@ -92,6 +92,11 @@ import { ProviderHandoffDivider } from "./ProviderHandoffDivider";
 import { ThreadErrorBanner } from "./ThreadErrorBanner";
 import { SynaraThreadCreationCard } from "./SynaraThreadCreationCard";
 import { WorkerMonitorNoticePill } from "./WorkerMonitorNoticePill";
+import {
+  SynbotMessageFromRow,
+  SynbotNoticeRow,
+  isSynbotDelegationMessageId,
+} from "../synbot/SynbotNoticeRow";
 import { buildExpandedImagePreview, ExpandedImagePreview } from "./ExpandedImagePreview";
 import { ProposedPlanCard } from "./ProposedPlanCard";
 import { InlineVisual } from "./InlineVisual";
@@ -1975,6 +1980,30 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       {row.kind === "work" &&
         conversationOnly &&
         (() => {
+          // SynBot cards (delegations, choices, reports) read as part of the bot's chat.
+          const synbotNotices = row.groupedEntries.flatMap((workEntry) =>
+            workEntry.synbotNotice ? [{ entry: workEntry, notice: workEntry.synbotNotice }] : [],
+          );
+          if (synbotNotices.length === 0) {
+            return null;
+          }
+          return (
+            <div className="chat-message-segment flex w-full flex-col items-start gap-1.5 pl-[2px] pr-[2px]">
+              {synbotNotices.map(({ entry, notice }) => (
+                <SynbotNoticeRow
+                  key={`synbot:${entry.id}`}
+                  entryId={entry.id}
+                  notice={notice}
+                  threadId={threadId ? ThreadId.makeUnsafe(threadId) : null}
+                />
+              ))}
+            </div>
+          );
+        })()}
+
+      {row.kind === "work" &&
+        conversationOnly &&
+        (() => {
           // Server-posted coordinator monitor rows (worker settled / stuck /
           // batch roll-up) read as part of the coordinator's chat reply —
           // left-aligned body text in the message column, not centered pills
@@ -2034,6 +2063,10 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       {row.kind === "message" &&
         row.message.role === "user" &&
         (() => {
+          // A bot's delegation arrives as a long prompt; show who asked and the brief instead.
+          if (isSynbotDelegationMessageId(row.message.id)) {
+            return <SynbotMessageFromRow messageId={row.message.id} />;
+          }
           const userImages = (row.message.attachments ?? []).filter(
             (
               attachment,

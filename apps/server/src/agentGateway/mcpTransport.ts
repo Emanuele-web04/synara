@@ -159,17 +159,16 @@ export function makeAgentGatewayMcpTransport(input: {
               : Effect.succeed(true),
           );
           return jsonRpcResult(request.id, {
-            tools: advertised
-              .map(
-                (tool) =>
-                  servedDefinitionByToolName.get(tool.definition.name) ?? {
-                    ...tool.definition,
-                    inputSchema: sanitizeToolInputSchema(tool.definition.inputSchema) as Record<
-                      string,
-                      unknown
-                    >,
-                  },
-              ),
+            tools: advertised.map(
+              (tool) =>
+                servedDefinitionByToolName.get(tool.definition.name) ?? {
+                  ...tool.definition,
+                  inputSchema: sanitizeToolInputSchema(tool.definition.inputSchema) as Record<
+                    string,
+                    unknown
+                  >,
+                },
+            ),
           });
         }
         case "tools/call": {

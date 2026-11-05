@@ -65,7 +65,10 @@ describe("evaluateDelegationSettlement", () => {
       completedAt: at(200),
       assistantMessageId: "a2",
     });
-    const result = evaluate([turn({}), wake], [item({}), item({ id: "w2", delegationTurnId: "t2", updatedAt: at(100) })]);
+    const result = evaluate(
+      [turn({}), wake],
+      [item({}), item({ id: "w2", delegationTurnId: "t2", updatedAt: at(100) })],
+    );
     expect(result).toMatchObject({ state: "settled", lastAssistantMessageId: "a2" });
     expect(result.itemIds).toEqual(["w1", "w2"]);
     const unrelated = turn({ turnId: "t0", pendingMessageId: "wake-1", requestedAt: at(900) });
@@ -75,8 +78,8 @@ describe("evaluateDelegationSettlement", () => {
   it("fails when every task failed or the only turn errored", () => {
     expect(evaluate([turn({})], [item({ state: "failed" })]).outcome).toBe("failed");
     expect(evaluate([turn({ state: "error", assistantMessageId: null })]).outcome).toBe("failed");
-    expect(
-      evaluate([turn({})], [item({ state: "failed" }), item({ id: "w2" })]).outcome,
-    ).toBe("completed");
+    expect(evaluate([turn({})], [item({ state: "failed" }), item({ id: "w2" })]).outcome).toBe(
+      "completed",
+    );
   });
 });

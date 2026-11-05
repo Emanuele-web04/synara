@@ -132,7 +132,9 @@ export const BotDraft = Schema.Struct({
   name: TrimmedNonEmptyString.check(Schema.isMaxLength(BOT_NAME_MAX_LENGTH)),
   role: Schema.String.check(Schema.isMaxLength(BOT_ROLE_MAX_LENGTH)),
   mascot: Schema.optional(BotMascot),
-  instructions: Schema.optional(Schema.String.check(Schema.isMaxLength(BOT_INSTRUCTIONS_MAX_LENGTH))),
+  instructions: Schema.optional(
+    Schema.String.check(Schema.isMaxLength(BOT_INSTRUCTIONS_MAX_LENGTH)),
+  ),
   scope: BotScope,
 });
 export type BotDraft = typeof BotDraft.Type;
@@ -367,7 +369,9 @@ export const BotsCreateInput = Schema.Struct({
   name: TrimmedNonEmptyString.check(Schema.isMaxLength(BOT_NAME_MAX_LENGTH)),
   role: Schema.String.check(Schema.isMaxLength(BOT_ROLE_MAX_LENGTH)),
   mascot: BotMascot,
-  instructions: Schema.optional(Schema.String.check(Schema.isMaxLength(BOT_INSTRUCTIONS_MAX_LENGTH))),
+  instructions: Schema.optional(
+    Schema.String.check(Schema.isMaxLength(BOT_INSTRUCTIONS_MAX_LENGTH)),
+  ),
   scope: BotScope,
   modelSelection: ModelSelection,
   taskModelSelection: Schema.optional(ModelSelection),
@@ -385,7 +389,9 @@ export const BotsUpdateInput = Schema.Struct({
   name: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(BOT_NAME_MAX_LENGTH))),
   role: Schema.optional(Schema.String.check(Schema.isMaxLength(BOT_ROLE_MAX_LENGTH))),
   mascot: Schema.optional(BotMascot),
-  instructions: Schema.optional(Schema.String.check(Schema.isMaxLength(BOT_INSTRUCTIONS_MAX_LENGTH))),
+  instructions: Schema.optional(
+    Schema.String.check(Schema.isMaxLength(BOT_INSTRUCTIONS_MAX_LENGTH)),
+  ),
   scope: Schema.optional(BotScope),
   modelSelection: Schema.optional(ModelSelection),
   /** `null` clears it (tasks follow the chat's engine). */

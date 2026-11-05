@@ -38,6 +38,7 @@ import {
 import { pluralize, stripTerminalControlSequences } from "@synara/shared/text";
 import { i18n, t } from "~/i18n";
 import { suppressCoordinatorCheckinMessages } from "@synara/shared/coordinatorCheckin";
+import { BOT_REPORT_MESSAGE_PREFIX } from "@synara/contracts";
 import { PROVIDER_DESCRIPTORS } from "@synara/shared/providerMetadata";
 import {
   deriveReadableToolTitle,
@@ -65,6 +66,7 @@ import { INLINE_VISUALS_ON } from "./betaFeatures";
 
 import type { ChatMessage, ProposedPlan } from "./types";
 
+const isSynbotReportMessageId = (id: string) => id.startsWith(BOT_REPORT_MESSAGE_PREFIX);
 export type WorkLogRequestKind = ApprovalRequestKind;
 
 // Mirrors CHECKPOINT_REVERT_FAILED_ACTIVITY_KIND in
@@ -181,6 +183,9 @@ export interface WorkLogEntry {
   // batch roll-up) render as compact centered pills in the coordinator
   // conversation, each carrying a link into the reported thread.
   synaraWorkerNotice?: WorkLogSynaraWorkerNotice;
+  // SynBot (Beta) cards a bot's thread carries: delegations, choice cards, reports, and the
+  // "From <bot>" label a bot leaves in a chat it wrote to (see components/synbot/).
+  synbotNotice?: WorkLogSynbotNotice;
   // Completion notices and Monitor updates both anchor the response they woke.
   monitorNotification?: {
     taskId: string;
@@ -327,6 +332,45 @@ export interface WorkLogSubagentProgress {
   title: string | null;
   /** The subagent's final state, once it ended. */
   outcome?: "completed" | "failed" | "stopped";
+}
+
+/** A `synbot.*` activity; the payload is decoded where it renders. */
+export interface WorkLogSynbotNotice {
+  readonly kind: string;
+  readonly payload: unknown;
+  /** For `synbot.card`: the answer its `synbot.card.resolved` activity recorded. */
+  readonly resolution?: { readonly optionId: string; readonly label: string };
+}
+
+/**
+ * Folds each `synbot.card.resolved` activity into the card it answers, so a card renders
+ * answered (also after a reload) and the resolution itself takes no row.
+ */
+function foldSynbotCardResolutions<T extends { synbotNotice?: WorkLogSynbotNotice }>(
+  entries: T[],
+): T[] {
+  const resolutions = new Map<string, { optionId: string; label: string }>();
+  for (const entry of entries) {
+    const notice = entry.synbotNotice;
+    if (notice?.kind !== "synbot.card.resolved") continue;
+    const payload = asRecord(notice.payload);
+    const cardId = asTrimmedString(payload?.cardId);
+    const optionId = asTrimmedString(payload?.optionId);
+    if (cardId && optionId) {
+      resolutions.set(cardId, { optionId, label: asTrimmedString(payload?.label) ?? optionId });
+    }
+  }
+  if (resolutions.size === 0) {
+    return entries.filter((entry) => entry.synbotNotice?.kind !== "synbot.card.resolved");
+  }
+  return entries.flatMap((entry) => {
+    const notice = entry.synbotNotice;
+    if (notice?.kind === "synbot.card.resolved") return [];
+    if (notice?.kind !== "synbot.card") return [entry];
+    const cardId = asTrimmedString(asRecord(notice.payload)?.id);
+    const resolution = cardId ? resolutions.get(cardId) : undefined;
+    return [resolution ? { ...entry, synbotNotice: { ...notice, resolution } } : entry];
+  });
 }
 
 export interface WorkLogSynaraWorkerNotice {
@@ -543,7 +587,7 @@ export function deriveWorkLogEntries(
   const translate = options.translate ?? t;
   const visibleTurnIds = options.visibleTurnIds;
   const ordered = orderedActivities(activities);
-  const entries = ordered
+  const mappedEntries = ordered
     // Old hosts persisted startup diagnostics as warnings. Apply the ingestion policy on replay.
     .filter((activity) => {
       if (activity.kind !== "runtime.warning" || activity.tone === "error") return true;
@@ -578,7 +622,8 @@ export function deriveWorkLogEntries(
     // Server-side Studio output attribution is environment-panel data, not transcript work.
     .filter((activity) => activity.kind !== STUDIO_OUTPUTS_ACTIVITY_KIND)
     .filter((activity) => !isPlanBoundaryToolActivity(activity))
-    .map(toDerivedWorkLogEntry)
+    .map(toDerivedWorkLogEntry);
+  const entries = foldSynbotCardResolutions(mappedEntries)
     // A visual activity is only its row: drop it when the row cannot render
     // (feature off on Stable, or a payload that does not decode).
     .filter(
@@ -2112,6 +2157,9 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
     if (notice) {
       entry.synaraWorkerNotice = notice;
     }
+  }
+  if (activity.kind.startsWith("synbot.")) {
+    entry.synbotNotice = { kind: activity.kind, payload: activity.payload };
   }
   if (activity.kind === COMPUTER_SETUP_REQUIRED_ACTIVITY_KIND) {
     const buildSignature = asComputerBuildSignature(payload?.buildSignature);
@@ -4184,7 +4232,10 @@ export function deriveTimelineEntries(
   const checkinSuppression = options?.suppressCoordinatorCheckins
     ? suppressCoordinatorCheckinMessages(messages)
     : null;
-  const visibleMessages = checkinSuppression ? checkinSuppression.messages : messages;
+  // A SynBot report is the requester bot's wake-up message; its `synbot.report` card stands in.
+  const visibleMessages = (checkinSuppression ? checkinSuppression.messages : messages).filter(
+    (message) => !isSynbotReportMessageId(message.id),
+  );
   const checkinTurnIds = checkinSuppression?.checkinTurnIds;
   const visibleProposedPlans = checkinTurnIds
     ? proposedPlans.filter((plan) => plan.turnId == null || !checkinTurnIds.has(plan.turnId))

@@ -178,7 +178,9 @@ const STATE_WORDS: Record<BotDelegationState, string> = {
 export function renderDelegationReport(entries: readonly DelegationReportEntry[]): string {
   const lines = ["SynBot report for work you delegated:"];
   for (const entry of entries) {
-    lines.push(`- ${entry.botName} ${STATE_WORDS[entry.state]} (delegation ${entry.delegationId}).`);
+    lines.push(
+      `- ${entry.botName} ${STATE_WORDS[entry.state]} (delegation ${entry.delegationId}).`,
+    );
     if (entry.resultSummary) lines.push(`  Result: ${clip(entry.resultSummary, 1_200)}`);
     for (const task of entry.tasks) {
       lines.push(

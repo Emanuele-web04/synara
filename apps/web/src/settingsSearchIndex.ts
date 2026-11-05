@@ -4,11 +4,13 @@
 // Layer: Route/UI support
 // Exports: entry type, the index, section label lookup, and the ranking helper
 
+import { HUBS_UI_ON } from "~/betaFeatures";
 import { rankProviderDiscoveryItems } from "~/lib/providerDiscovery";
 import { i18n, t } from "~/i18n";
 import {
   isSettingsSectionAvailable,
   SETTINGS_NAV_ITEMS,
+  SETTINGS_TARGETS,
   type SettingsSectionId,
 } from "./settingsNavigation";
 
@@ -148,6 +150,8 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     section: "general",
     title: "common:hubs",
     keywords: "settings:showTheHubsTabInTheSidebarSwitcherSidebar",
+    // Where SynBot replaces the Hubs UI, the row is not rendered.
+    applies: () => HUBS_UI_ON,
   },
   {
     target: "setting-automation-runs",
@@ -638,6 +642,40 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     title: "common:plugin_skillsSection",
     keywords: "settings:everySkillFoundAcrossProvidersWithTogglesToControl",
     target: null,
+  },
+
+  // ── SynBot (Beta) ─────────────────────────────────────────────────────────────
+  {
+    target: SETTINGS_TARGETS.synbotRecap,
+    id: "synbot:recap",
+    section: "synbot",
+    title: "synbotEditor:recap",
+    keywords: "synbotEditor:recapKeywords",
+    applies: () => isSettingsSectionAvailable("synbot"),
+  },
+  {
+    target: SETTINGS_TARGETS.synbotControlChats,
+    id: "synbot:control-chats",
+    section: "synbot",
+    title: "synbotEditor:controlChats",
+    keywords: "synbotEditor:controlChatsKeywords",
+    applies: () => isSettingsSectionAvailable("synbot"),
+  },
+  {
+    target: SETTINGS_TARGETS.synbotMergeProof,
+    id: "synbot:merge-proof",
+    section: "synbot",
+    title: "synbotEditor:mergeProof",
+    keywords: "synbotEditor:mergeProofKeywords",
+    applies: () => isSettingsSectionAvailable("synbot"),
+  },
+  {
+    target: SETTINGS_TARGETS.synbotParallelTasks,
+    id: "synbot:parallel-tasks",
+    section: "synbot",
+    title: "synbotEditor:parallelTasks",
+    keywords: "synbotEditor:parallelTasksKeywords",
+    applies: () => isSettingsSectionAvailable("synbot"),
   },
 
   // ── Usage ─────────────────────────────────────────────────────────────────────

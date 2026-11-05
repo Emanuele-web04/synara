@@ -541,7 +541,9 @@ const makeWsRpcHandlersLayer = () =>
       const withBots = <A>(use: (bots: BotServiceShape) => Effect.Effect<A, unknown>) =>
         botService
           ? use(botService)
-          : Effect.fail(new BotServiceError({ message: SYNBOT_UNAVAILABLE_MESSAGE, code: "unavailable" }));
+          : Effect.fail(
+              new BotServiceError({ message: SYNBOT_UNAVAILABLE_MESSAGE, code: "unavailable" }),
+            );
       const config = yield* ServerConfig;
       const editorLanguages = new EditorLanguageService();
       const editorDebug = new EditorDebugService(config.stateDir);
@@ -3463,34 +3465,76 @@ const makeWsRpcHandlersLayer = () =>
               .streamEvents(input)
               .pipe(Stream.mapError((cause) => toWsRpcError(cause, "Project event stream failed"))),
           ),
-        [WS_METHODS.botsList]: () => rpcEffect(withBots((bots) => bots.snapshot()), "Failed to load bots"),
+        [WS_METHODS.botsList]: () =>
+          rpcEffect(
+            withBots((bots) => bots.snapshot()),
+            "Failed to load bots",
+          ),
         [WS_METHODS.botsEnsureMain]: (input) =>
-          rpcEffect(withBots((bots) => bots.ensureMain(input)), "Failed to set up SynBot"),
+          rpcEffect(
+            withBots((bots) => bots.ensureMain(input)),
+            "Failed to set up SynBot",
+          ),
         [WS_METHODS.botsCreate]: (input) =>
-          rpcEffect(withBots((bots) => bots.create(input)), "Failed to create the bot"),
+          rpcEffect(
+            withBots((bots) => bots.create(input)),
+            "Failed to create the bot",
+          ),
         [WS_METHODS.botsUpdate]: (input) =>
-          rpcEffect(withBots((bots) => bots.update(input)), "Failed to update the bot"),
+          rpcEffect(
+            withBots((bots) => bots.update(input)),
+            "Failed to update the bot",
+          ),
         [WS_METHODS.botsRemove]: (input) =>
-          rpcEffect(withBots((bots) => bots.remove(input)), "Failed to remove the bot"),
+          rpcEffect(
+            withBots((bots) => bots.remove(input)),
+            "Failed to remove the bot",
+          ),
         [WS_METHODS.botsUpdateSettings]: (input) =>
-          rpcEffect(withBots((bots) => bots.updateSettings(input)), "Failed to save SynBot settings"),
+          rpcEffect(
+            withBots((bots) => bots.updateSettings(input)),
+            "Failed to save SynBot settings",
+          ),
         [WS_METHODS.botsCardAction]: (input) =>
-          rpcEffect(withBots((bots) => bots.cardAction(input)), "Failed to answer the card"),
+          rpcEffect(
+            withBots((bots) => bots.cardAction(input)),
+            "Failed to answer the card",
+          ),
         [WS_METHODS.botsSuggest]: (input) =>
-          rpcEffect(withBots((bots) => bots.suggest(input)), "Failed to suggest bots"),
+          rpcEffect(
+            withBots((bots) => bots.suggest(input)),
+            "Failed to suggest bots",
+          ),
         [WS_METHODS.botsCancelDelegation]: (input) =>
-          rpcEffect(withBots((bots) => bots.cancelDelegation(input)), "Failed to stop the delegation"),
+          rpcEffect(
+            withBots((bots) => bots.cancelDelegation(input)),
+            "Failed to stop the delegation",
+          ),
         [WS_METHODS.botsMergeProof]: (input) =>
-          rpcEffect(withBots((bots) => bots.mergeProof(input)), "Failed to check the merge proof"),
+          rpcEffect(
+            withBots((bots) => bots.mergeProof(input)),
+            "Failed to check the merge proof",
+          ),
         // Merging is the user's decision: only the owner session may press Merge.
         [WS_METHODS.botsMerge]: (input) =>
           requireWsOwnerSession.pipe(
-            Effect.andThen(rpcEffect(withBots((bots) => bots.merge(input)), "Failed to merge")),
+            Effect.andThen(
+              rpcEffect(
+                withBots((bots) => bots.merge(input)),
+                "Failed to merge",
+              ),
+            ),
           ),
         [WS_METHODS.botsUpdateBranch]: (input) =>
-          rpcEffect(withBots((bots) => bots.updateBranch(input)), "Failed to update the branch"),
+          rpcEffect(
+            withBots((bots) => bots.updateBranch(input)),
+            "Failed to update the branch",
+          ),
         [WS_METHODS.botsStopAll]: () =>
-          rpcEffect(withBots((bots) => bots.stopAll()), "Failed to stop the bots"),
+          rpcEffect(
+            withBots((bots) => bots.stopAll()),
+            "Failed to stop the bots",
+          ),
         [WS_METHODS.subscribeBotsEvents]: (_, { clientId }) =>
           botService
             ? streamAdmission.guard(
@@ -3498,9 +3542,13 @@ const makeWsRpcHandlersLayer = () =>
                 { key: "bots.events" },
                 botService
                   .streamEvents()
-                  .pipe(Stream.mapError((cause) => toWsRpcError(cause, "SynBot event stream failed"))),
+                  .pipe(
+                    Stream.mapError((cause) => toWsRpcError(cause, "SynBot event stream failed")),
+                  ),
               )
-            : Stream.fail(toWsRpcError(new Error(SYNBOT_UNAVAILABLE_MESSAGE), SYNBOT_UNAVAILABLE_MESSAGE)),
+            : Stream.fail(
+                toWsRpcError(new Error(SYNBOT_UNAVAILABLE_MESSAGE), SYNBOT_UNAVAILABLE_MESSAGE),
+              ),
         [WS_METHODS.subscribeAutomationEvents]: (_, { clientId }) =>
           streamAdmission.guard(
             clientId,
