@@ -1,5 +1,6 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
+import { resolveConfiguredAccountUrl } from "@synara/shared/account";
 import { desktopFlavorFromBundleId, isBetaFeatureEnabled } from "@synara/shared/betaFeatures";
 
 export const REMOTE_IMPORT_SUSPENSION_FILE = "remote-suspended-after-import.json";
@@ -9,8 +10,18 @@ const REMOTE_V2_QUALIFIED = true;
 
 export function remoteConnectionsUnavailableReason(stateDir?: string): string | undefined {
   const flavor = desktopFlavorFromBundleId(process.env.SYNARA_DESKTOP_BUNDLE_ID);
-  if (!isBetaFeatureEnabled("remoteConnections", flavor))
-    return "Remote connections are unavailable in Stable.";
+  if (flavor === "production") {
+    // Stable needs both an explicit opt-in and a configured HTTPS account origin.
+    const configuredAccountUrl = resolveConfiguredAccountUrl({});
+    const accountUrl = configuredAccountUrl ? URL.parse(configuredAccountUrl) : null;
+    if (
+      process.env.SYNARA_REMOTE_CONNECTIONS !== "1" ||
+      accountUrl?.protocol !== "https:" ||
+      (configuredAccountUrl !== accountUrl.origin &&
+        configuredAccountUrl !== `${accountUrl.origin}/`)
+    )
+      return "Remote connections are unavailable in Stable.";
+  }
   if (process.versions.bun || Number(process.versions.node.split(".")[0]) !== 24)
     return "Remote connections require the Node 24 server runtime.";
   if (flavor === "unknown" && process.env.SYNARA_REMOTE_CONNECTIONS !== "1")
@@ -20,6 +31,12 @@ export function remoteConnectionsUnavailableReason(stateDir?: string): string | 
   if (!REMOTE_V2_QUALIFIED)
     return "Remote protocol v2 and owner pairing are not qualified in this build.";
   return undefined;
+}
+
+// Keep existing non-Stable reporting behavior while applying the Stable rollout policy.
+export function accountLiveActivityEnabled(stateDir?: string): boolean {
+  const flavor = desktopFlavorFromBundleId(process.env.SYNARA_DESKTOP_BUNDLE_ID);
+  return flavor !== "production" || remoteConnectionsUnavailableReason(stateDir) === undefined;
 }
 
 export function requireRemoteConnections(stateDir?: string): void {

@@ -22,6 +22,7 @@ const buildVariables = [
   "SYNARA_WEB_SOURCEMAP",
   "SYNARA_SERVER_SOURCEMAP",
   "SYNARA_DESKTOP_SOURCEMAP",
+  "SYNARA_STABLE_ACCOUNT_URL",
   "VITE_WS_URL",
 ];
 export const sha256 = (bytes: string | Buffer) => createHash("sha256").update(bytes).digest("hex");

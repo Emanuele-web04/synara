@@ -2,6 +2,9 @@
   "$schema": "https://turbo.build/schema.json",
   "extends": ["//"],
   "tasks": {
+    "build": {
+      "env": ["VITE_SYNARA_BILLING_ENABLED", "VITE_SYNARA_BILLING_SANDBOX"],
+    },
     "dev": {
       "persistent": true,
     },

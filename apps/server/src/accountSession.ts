@@ -963,7 +963,7 @@ export function createAccountSession(
       return unlinkLocalAccountHost({
         baseDir,
         devUrl: options.devUrl,
-        client: clientFor(configuredUrl),
+        ...(options.client ? { client: options.client } : {}),
       });
     },
 
@@ -1046,7 +1046,7 @@ export function createAccountSession(
       await runAuthLogout({
         baseDir,
         devUrl: options.devUrl,
-        client: clientFor(configuredUrl),
+        ...(options.client ? { client: options.client } : {}),
         stdout: () => {},
       });
       deviceRegistrationAttempt = undefined;

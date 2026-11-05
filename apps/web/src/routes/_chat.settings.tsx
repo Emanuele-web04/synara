@@ -1860,7 +1860,7 @@ function SettingsRouteView() {
       case "profile":
         return (
           <div className="flex flex-col gap-7">
-            {import.meta.env.VITE_SYNARA_BILLING_ENABLED === "1" ||
+            {(isElectron && import.meta.env.VITE_SYNARA_BILLING_ENABLED === "1") ||
             import.meta.env.VITE_SYNARA_BILLING_SANDBOX === "1" ? (
               <BillingSettingsPanel />
             ) : null}

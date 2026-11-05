@@ -4,6 +4,7 @@
   "tasks": {
     "build": {
       "dependsOn": ["^build"],
+      "env": ["SYNARA_STABLE_ACCOUNT_URL"],
       "inputs": ["$TURBO_DEFAULT$", "$TURBO_ROOT$/apps/server/src/persistence/Migrations.ts"],
       "outputs": ["dist-electron/**"],
     },

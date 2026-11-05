@@ -11,6 +11,27 @@ and [isolated setup](../../../apps/api/README.md#configure-an-isolated-environme
 The dated trial evidence below remains historical; this note adds no deployment
 or production qualification.
 
+## Stable release preparation
+
+For a build-only Synara Stable candidate, supply the intended account API's
+HTTPS origin as `SYNARA_STABLE_ACCOUNT_URL` during packaging. The signed
+desktop bundle carries that origin and opts its server into Connections on a
+normal launch. A local qualification can set `SYNARA_ACCOUNT_URL` and
+`SYNARA_REMOTE_CONNECTIONS=1` explicitly. The release workflow reads
+`SYNARA_STABLE_ACCOUNT_URL` from the same-named repository variable. Set it
+only after verifying the canonical authority, issuer continuity, WorkOS, and
+tunnel provisioning. An empty setting leaves ordinary Stable packaging gated.
+
+Use `VITE_SYNARA_BILLING_SANDBOX=1` for the sandbox renderer. The release
+workflow exposes the existing desktop Subscription panel in Stable when the
+account origin is set and `SYNARA_STABLE_BILLING_UI=1`. Checkout activation and
+paid access are separate server settings. Qualify the packaged host and
+companion against the same account authority, including a fresh QR approval
+and reconnect on iPhone and iPad. Test upgrades with an existing signed-in
+profile as well. Stored sessions keep their original issuer, so an authority
+change requires signing out of the old account and signing in again. Stable
+and the dedicated Remote app own separate local data and device identities.
+
 ## What must run
 
 | Component                       | Where it runs                                     | What the operator supplies                                                |
@@ -102,7 +123,7 @@ This does not add Quick Tunnel pairing to the app.
 7. Choose deployment enrollment before creating the first pairing code. The trial uses `REMOTE_BETA_ACCESS_ENABLED=true` to admit all authenticated beta accounts to their own computers. For a private deployment, leave it unset/`false`, copy selected WorkOS user IDs into `REMOTE_TEST_USER_IDS` and restart the API. Empty private enrollment deliberately refuses remote access. Neither mode is a subscription check; both retain account ownership, device proof and pairing approval.
 8. Use **Hosts & devices** on the Mini to create a code. Enter it on the MacBook, compare the displayed identity groups, request access, and approve the exact MacBook device fingerprint on the Mini. Press **Connect** on the MacBook. Credentials for WorkOS, PostgreSQL and Cloudflare administration stay on the API; the app receives only its own session/device/tunnel credentials.
 
-Stable deliberately refuses remote connections. For an unpackaged development server use Node 24 and `SYNARA_REMOTE_CONNECTIONS=1`; do not run that server under Bun. A packaged Beta/Canary supplies its runtime and connector. Keep the Mini powered, online and awake with Synara running for unattended access.
+Stable requires the release preparation above. For an unpackaged development server use Node 24 and `SYNARA_REMOTE_CONNECTIONS=1`. A packaged Beta/Canary supplies its runtime and connector. Keep the Mini powered, online and awake with Synara running for unattended access.
 
 ## What the first live test must prove
 
