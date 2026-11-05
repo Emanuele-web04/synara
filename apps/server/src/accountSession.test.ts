@@ -321,7 +321,7 @@ describe("status", () => {
         baseDir,
         createAccountClient({
           baseUrl: ACCOUNT_URL,
-          fetch: async (input, init) => {
+          fetch: (async (input, init) => {
             requests.push({
               url: String(input),
               authorization: new Headers(init?.headers).get("authorization"),
@@ -330,7 +330,7 @@ describe("status", () => {
             return requests.length === 1
               ? pending.promise
               : Response.json({ error: "unauthorized", message: "Expired" }, { status: 401 });
-          },
+          }) as typeof fetch,
         }),
       );
       const status = session.status();

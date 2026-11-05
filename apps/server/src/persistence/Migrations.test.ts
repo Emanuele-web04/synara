@@ -166,7 +166,7 @@ layer("reconcileMigrationLineage", (it) => {
         migrationEntries.map(([id, name]) => [id, name]),
       );
       assert.deepStrictEqual(yield* runMigrations(), []);
-    }),
+    }).pipe(Effect.provide(NodeSqliteClient.layerMemory())),
   );
 
   it.effect("leaves a healthy tracker alone", () =>

@@ -268,7 +268,7 @@ describe("RemoteConnectionGateway", () => {
         mint: async () => {
           throw new Error(message);
         },
-      } as HostMintService,
+      } as unknown as HostMintService,
       identity: {} as HostIdentity,
       environmentId: "mint-error-reason",
       keyGeneration: 1,
