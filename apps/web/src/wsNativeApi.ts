@@ -1104,7 +1104,7 @@ export function createWsNativeApi(): NativeApi {
       // Merging waits on GitHub's asynchronous merge, past the default RPC deadline.
       merge: (input) => executionRequest(WS_METHODS.botsMerge, input, { timeoutMs: 300_000 }),
       updateBranch: (input) => executionRequest(WS_METHODS.botsUpdateBranch, input),
-      stopAll: () => executionRequest(WS_METHODS.botsStopAll, {}),
+      stopAll: (input) => executionRequest(WS_METHODS.botsStopAll, input ?? {}),
       onEvent: botsEventListeners.subscribe,
     },
     automation: {

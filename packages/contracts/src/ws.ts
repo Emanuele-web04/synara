@@ -99,6 +99,7 @@ import {
   BotsMergeInput,
   BotsMergeProofInput,
   BotsRemoveInput,
+  BotsStopAllInput,
   BotsSubscribeInput,
   BotsSuggestInput,
   BotsUpdateBranchInput,
@@ -907,7 +908,7 @@ const WebSocketRequestBody = Schema.Union([
   tagRequestBody(WS_METHODS.botsMergeProof, BotsMergeProofInput),
   tagRequestBody(WS_METHODS.botsMerge, BotsMergeInput),
   tagRequestBody(WS_METHODS.botsUpdateBranch, BotsUpdateBranchInput),
-  tagRequestBody(WS_METHODS.botsStopAll, Schema.Struct({})),
+  tagRequestBody(WS_METHODS.botsStopAll, BotsStopAllInput),
   tagRequestBody(WS_METHODS.subscribeBotsEvents, BotsSubscribeInput),
 ]);
 

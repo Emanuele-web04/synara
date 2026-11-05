@@ -175,6 +175,7 @@ import type {
   BotsMergeResult,
   BotsRemoveInput,
   BotsSnapshot,
+  BotsStopAllInput,
   BotsStopAllResult,
   BotsSuggestInput,
   BotsSuggestResult,
@@ -1188,6 +1189,12 @@ export interface DesktopBridge {
    * builds that predate it; until a window reports, the menu keeps its defaults.
    */
   setMenuShortcuts?: (shortcuts: DesktopMenuShortcuts) => Promise<void>;
+  /**
+   * Items waiting on the user outside notifications (SynBot's bots that need the user, Beta
+   * only), added to the Dock badge's count of unread background notifications. Absent on
+   * builds that predate it.
+   */
+  setAttentionBadgeCount?: (count: number) => void;
   onQuitConfirmationRequest: (
     listener: (request: DesktopQuitConfirmationRequest) => void,
   ) => () => void;
@@ -1710,7 +1717,7 @@ export interface NativeApi {
     mergeProof: (input: BotsMergeProofInput) => Promise<BotMergeProof>;
     merge: (input: BotsMergeInput) => Promise<BotsMergeResult>;
     updateBranch: (input: BotsUpdateBranchInput) => Promise<BotMergeProof>;
-    stopAll: () => Promise<BotsStopAllResult>;
+    stopAll: (input?: BotsStopAllInput) => Promise<BotsStopAllResult>;
     onEvent: (callback: (event: BotStreamEvent) => void) => () => void;
   };
   automation: {

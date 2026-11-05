@@ -2077,9 +2077,11 @@ const make = Effect.gen(function* () {
 
   // ── Stop all ───────────────────────────────────────────────────────
 
-  const stopAll: BotServiceShape["stopAll"] = () =>
+  const stopAll: BotServiceShape["stopAll"] = (input) =>
     Effect.gen(function* () {
       yield* requireEnabled;
+      const only = input?.botId ?? null;
+      if (only !== null) yield* requireBot(only);
       const interruptedThreadIds: ThreadId[] = [];
       const cancelledTaskIds: string[] = [];
       const cancelledDelegationIds: string[] = [];
@@ -2087,10 +2089,13 @@ const make = Effect.gen(function* () {
         .listActiveDelegations()
         .pipe(Effect.mapError(toServiceError("Could not load delegations.")))) {
         if (record.settledAt !== null) continue;
+        // One bot stops the work handed to it; what it handed to others keeps going.
+        if (only !== null && record.toBotId !== only) continue;
         yield* cancelDelegation({ delegationId: record.id }).pipe(Effect.catch(() => Effect.void));
         cancelledDelegationIds.push(record.id);
       }
       for (const bot of yield* listBots()) {
+        if (only !== null && bot.id !== only) continue;
         const shell = yield* snapshotQuery
           .getThreadShellById(bot.threadId)
           .pipe(Effect.orElseSucceed(() => Option.none<OrchestrationThreadShell>()));

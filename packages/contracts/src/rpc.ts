@@ -90,6 +90,7 @@ import {
   BotsMergeResult,
   BotsRemoveInput,
   BotsSnapshot,
+  BotsStopAllInput,
   BotsStopAllResult,
   BotsSubscribeInput,
   BotsSuggestInput,
@@ -2864,7 +2865,7 @@ export const WsBotsUpdateBranchRpc = Rpc.make(WS_METHODS.botsUpdateBranch, {
   error: WsRpcError,
 });
 export const WsBotsStopAllRpc = Rpc.make(WS_METHODS.botsStopAll, {
-  payload: Schema.Struct({}),
+  payload: BotsStopAllInput,
   success: BotsStopAllResult,
   error: WsRpcError,
 });

@@ -375,3 +375,53 @@ it.effect("grants full control only to user-rooted bot turns while the setting i
     assert.strictEqual(notABot, null);
   }).pipe(Effect.provide(makeLayer(world)));
 });
+
+it.effect("stops one bot's turn and the work handed to it, or every bot", () => {
+  const world = makeWorld();
+  return Effect.gen(function* () {
+    yield* seed;
+    userTurn(world);
+    const bots = yield* BotService;
+    const caller = (yield* bots.resolveCaller({ threadId: MAIN.threadId, turnId: "turn-user" }))!;
+    const toFrontend = yield* bots.delegate({
+      caller,
+      targetBotId: FRONTEND.projectId,
+      brief: "Add multiply()",
+      requestId: "frontend",
+    });
+    const toQa = yield* bots.delegate({
+      caller,
+      targetBotId: QA.projectId,
+      brief: "Review the change",
+      requestId: "qa",
+    });
+    for (const fixture of [MAIN, FRONTEND]) {
+      world.shells.set(fixture.threadId, {
+        ...world.shells.get(fixture.threadId),
+        session: { activeTurnId: TurnId.makeUnsafe(`turn-${fixture.name}`) },
+      });
+    }
+    const interrupts = () =>
+      world.dispatched.flatMap((command) =>
+        command.type === "thread.turn.interrupt" ? [command.threadId] : [],
+      );
+
+    const one = yield* bots.stopAll({ botId: FRONTEND.projectId });
+    assert.deepStrictEqual(one.cancelledDelegationIds, [toFrontend.id]);
+    assert.deepStrictEqual(one.interruptedThreadIds, [FRONTEND.threadId]);
+    // SynBot's own turn and its hand-off to QA keep going.
+    assert.notInclude(interrupts(), MAIN.threadId);
+    const afterOne = yield* bots.snapshot();
+    assert.strictEqual(
+      afterOne.delegations.find((delegation) => delegation.id === toQa.id)?.state,
+      "awaiting-start",
+    );
+
+    const missing = yield* Effect.flip(bots.stopAll({ botId: ProjectId.makeUnsafe("bot-gone") }));
+    assert.strictEqual(missing.code, "not-found");
+
+    const all = yield* bots.stopAll();
+    assert.deepStrictEqual(all.cancelledDelegationIds, [toQa.id]);
+    assert.include(all.interruptedThreadIds, MAIN.threadId);
+  }).pipe(Effect.provide(makeLayer(world)));
+});

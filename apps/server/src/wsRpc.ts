@@ -3539,9 +3539,9 @@ const makeWsRpcHandlersLayer = () =>
             withBots((bots) => bots.updateBranch(input)),
             "Failed to update the branch",
           ),
-        [WS_METHODS.botsStopAll]: () =>
+        [WS_METHODS.botsStopAll]: (input) =>
           rpcEffect(
-            withBots((bots) => bots.stopAll()),
+            withBots((bots) => bots.stopAll(input)),
             "Failed to stop the bots",
           ),
         [WS_METHODS.subscribeBotsEvents]: (_, { clientId }) =>

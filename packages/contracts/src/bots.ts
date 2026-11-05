@@ -470,6 +470,10 @@ export type BotsMergeResult = typeof BotsMergeResult.Type;
 export const BotsUpdateBranchInput = Schema.Struct({ threadId: ThreadId });
 export type BotsUpdateBranchInput = typeof BotsUpdateBranchInput.Type;
 
+/** Stops every bot, or with `botId` only that bot: its turn, its tasks and the work handed to it. */
+export const BotsStopAllInput = Schema.Struct({ botId: Schema.optional(ProjectId) });
+export type BotsStopAllInput = typeof BotsStopAllInput.Type;
+
 export const BotsStopAllResult = Schema.Struct({
   interruptedThreadIds: Schema.Array(ThreadId),
   cancelledTaskIds: Schema.Array(TrimmedNonEmptyString),
