@@ -12,7 +12,9 @@ import {
 import { eq } from "drizzle-orm";
 import { Schema } from "effect";
 import { Hono } from "hono";
+import { bodyLimit } from "hono/body-limit";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { API_MAX_BODY_BYTES } from "../app";
 import { createAccountDeletionService, type AccountDeletionService } from "../accountDeletion";
 import { accountDeletions, hostSecrets } from "../db/schema";
 import type { WorkosApiConfig } from "../config";
@@ -26,7 +28,7 @@ import { createHostSecretStore } from "../identity/hostSecretStore";
 import { clearOrgCache } from "../identity/orgProvisioning";
 import { createApiSigningService, type ApiSigningService } from "../identity/signing";
 import { createWorkosIdentityProvider } from "../identity/workos";
-import type { AvatarStorage } from "../avatarStorage";
+import { AVATAR_STORAGE_TIMEOUT_MS, type AvatarStorage } from "../avatarStorage";
 import { startFakeWorkos, type FakeWorkos } from "../testing/fakeWorkos";
 import {
   AVATAR_MAX_BYTES,
@@ -291,6 +293,155 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
         await expect(verifier.getUser(owner.userId)).rejects.toMatchObject({ status: 404 });
         expect((await readIntent()).completedAt).not.toBeNull();
       } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("does not recreate a published avatar when an admitted upload finishes after erasure", async () => {
+      const owner = await signIn();
+      const { verifier } = createWorkosIdentityProvider(config);
+      const user = await verifier.getUser(owner.userId);
+      const avatar = fakeAvatarStorage();
+      const db = database.db;
+      let releaseBody!: () => void;
+      const bodyGate = new Promise<void>((resolve) => {
+        releaseBody = resolve;
+      });
+      let bodyRequested!: () => void;
+      const bodyReadStarted = new Promise<void>((resolve) => {
+        bodyRequested = resolve;
+      });
+      let releaseWrite!: () => void;
+      const writeGate = new Promise<void>((resolve) => {
+        releaseWrite = resolve;
+      });
+      let writeRequested!: () => void;
+      const writeStarted = new Promise<void>((resolve) => {
+        writeRequested = resolve;
+      });
+      let holdNextWrite = false;
+      let writeStartedAt = 0;
+      let writeKey: string | undefined;
+      const storage: AvatarStorage = {
+        ...avatar.storage,
+        async put(key, body, contentType) {
+          if (holdNextWrite) {
+            holdNextWrite = false;
+            writeKey = key;
+            writeStartedAt = Date.now();
+            writeRequested();
+            await writeGate;
+          }
+          await avatar.storage.put(key, body, contentType);
+        },
+      };
+      const deletion = createAccountDeletionService({ db, verifier, avatarStorage: storage });
+      // Keep the actual avatar transport middleware and its declared-length behavior.
+      const app = new Hono();
+      app.use(
+        "/api/v1/profile/avatar",
+        bodyLimit({ maxSize: AVATAR_MAX_BYTES + API_MAX_BODY_BYTES }),
+      );
+      app.route("/api/v1", routesFor(db, config, { accountDeletion: deletion, avatarStorage: storage }));
+      const handle = `erase-late-avatar-${randomUUID().slice(0, 8)}`;
+      expect(
+        (
+          await app.request("/api/v1/profile", {
+            method: "PUT",
+            headers: authHeaders(owner.token),
+            body: JSON.stringify({
+              handle,
+              displayName: "Test",
+              avatarColor: "#22c55e",
+              public: true,
+            }),
+          })
+        ).status,
+      ).toBe(200);
+      const bytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 1, 2, 3, 4]);
+      expect(
+        (
+          await app.request("/api/v1/profile/avatar", {
+            method: "PUT",
+            headers: { authorization: `Bearer ${owner.token}`, "content-type": "image/png" },
+            body: bytes,
+          })
+        ).status,
+      ).toBe(200);
+      const key = [...avatar.objects.keys()][0]!;
+      const published = await app.request(`/api/v1/profiles/${handle}`);
+      expect(published.status).toBe(200);
+      expect(await published.json()).toMatchObject({ avatarUrl: storage.publicUrl(key) });
+
+      let admissionChecked = false;
+      const originalIsDeleting = deletion.isDeleting;
+      const admission = vi.spyOn(deletion, "isDeleting").mockImplementation(async (userId) => {
+        const result = await originalIsDeleting(userId);
+        if (userId === owner.userId && !result) admissionChecked = true;
+        return result;
+      });
+      let pendingUpload: Promise<Response> | undefined;
+      vi.useFakeTimers({ toFake: ["Date"] });
+      try {
+        holdNextWrite = true;
+        const body = new ReadableStream<Uint8Array>(
+          {
+            async pull(controller) {
+              bodyRequested();
+              await bodyGate;
+              controller.enqueue(bytes);
+              controller.close();
+            },
+          },
+          { highWaterMark: 0 },
+        );
+        const request = new Request("http://localhost/api/v1/profile/avatar", {
+          method: "PUT",
+          headers: {
+            authorization: `Bearer ${owner.token}`,
+            "content-type": "image/png",
+            "content-length": String(bytes.byteLength),
+          },
+          body,
+          duplex: "half",
+        } as RequestInit & { duplex: "half" });
+        pendingUpload = Promise.resolve(app.request(request));
+        await bodyReadStarted;
+        // If middleware consumes the body before authentication, this ordering is refuted.
+        expect(admissionChecked).toBe(true);
+        const response = await app.request("/api/v1/me", {
+          method: "DELETE",
+          headers: authHeaders(owner.token),
+          body: JSON.stringify({ confirmation: "delete", email: user.email }),
+        });
+        expect(response.status).toBe(202);
+        const [intent] = await db
+          .select()
+          .from(accountDeletions)
+          .where(eq(accountDeletions.userId, owner.userId));
+        expect(intent).toBeDefined();
+        // A valid maintenance phase sweeps at +1, +31 and +61 seconds after the request.
+        vi.setSystemTime(intent!.nextAttemptAt.getTime() - 5_000);
+        releaseBody();
+        await writeStarted;
+        expect(writeKey).toBe(key);
+        vi.setSystemTime(intent!.nextAttemptAt.getTime() + 1_000);
+        await deletion.flush();
+        expect(avatar.objects.has(key)).toBe(false);
+        expect(
+          await db.select().from(profiles).where(eq(profiles.userId, owner.userId)),
+        ).toHaveLength(0);
+        vi.setSystemTime(intent!.nextAttemptAt.getTime() + 5_000);
+        expect(Date.now() - writeStartedAt).toBeLessThan(AVATAR_STORAGE_TIMEOUT_MS);
+        releaseWrite();
+        const finished = await pendingUpload;
+        expect(avatar.objects.has(key)).toBe(false);
+        expect(finished.status).toBe(404);
+      } finally {
+        releaseBody();
+        releaseWrite();
+        await pendingUpload?.catch(() => undefined);
+        admission.mockRestore();
         vi.useRealTimers();
       }
     });

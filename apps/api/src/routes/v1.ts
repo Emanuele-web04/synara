@@ -1355,20 +1355,38 @@ export function createV1Routes(deps: {
     // route) serialized on the lock each see the key THEIR write displaced.
     // Off a snapshot read (`existing`) both racers would see the same old
     // key and the loser's interim object would be orphaned forever.
-    const displacedKey = await db.transaction(async (tx) => {
+    const saved = await db.transaction(async (tx) => {
       const [locked] = await tx
         .select({ avatarKey: profiles.avatarKey })
         .from(profiles)
         .where(eq(profiles.userId, session.userId))
         .limit(1)
         .for("update");
+      if (!locked) return { kind: "missing" } as const;
       await tx
         .update(profiles)
         .set({ avatarSource: "uploaded", avatarKey: key, updatedAt: new Date() })
         .where(eq(profiles.userId, session.userId));
-      return locked?.avatarKey ?? null;
+      return { kind: "updated", displacedKey: locked.avatarKey } as const;
     });
 
+    // Erasure can remove the profile during PUT; an unretained object must be removed.
+    if (saved.kind === "missing") {
+      try {
+        await avatarStorage.delete(key);
+      } catch (error) {
+        console.error("[api] avatar upload cleanup failed:", error);
+        return errorResponse(c, 502, "internal_error", "Storing the avatar failed — try again");
+      }
+      return errorResponse(
+        c,
+        404,
+        "profile_not_found",
+        "Create your profile before uploading an avatar",
+      );
+    }
+
+    const { displacedKey } = saved;
     // Deferred cleanup of the replaced object, after the new state is
     // durable: a failed delete costs cents of storage, a failed upload must
     // never have cost the user their previous avatar. Deferred rather than
