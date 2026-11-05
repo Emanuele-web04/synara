@@ -1,3 +1,4 @@
+import { executionStorage } from "./lib/hosts/executionStorage";
 // FILE: repoDiffScopeStore.ts
 // Purpose: Persists the active repo diff scope shared by the diff panel and header badge.
 // Layer: Web UI state store
@@ -114,7 +115,7 @@ export const useRepoDiffScopeStore = create<RepoDiffScopeStore>()(
     }),
     {
       name: REPO_DIFF_SCOPE_STORAGE_KEY,
-      storage: createJSONStorage(() => localStorage),
+      storage: createJSONStorage(() => executionStorage),
       partialize: (state) => ({ scope: state.scope, compareRefs: state.compareRefs }),
       // Validate the persisted state on rehydrate: an unknown/legacy value would
       // otherwise flow into the diff request and the label lookup unchecked.

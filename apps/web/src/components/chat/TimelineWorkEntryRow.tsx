@@ -61,6 +61,8 @@ import {
   isReasoningUpdateWorkEntry,
 } from "./agentActivity.logic";
 import { AutomationCreatedCard } from "./AutomationCreatedCard";
+import { McpConnectorProposalCard } from "../settings/McpConnectorProposalCard";
+import { MCP_CONNECTORS_ON } from "~/betaFeatures";
 import { BackgroundTaskRow } from "./BackgroundTaskRow";
 import { getChatTranscriptTextStyle, INLINE_COMMAND_CHIP_CLASS_NAME } from "./chatTypography";
 import { SubagentRunCard } from "./SubagentRunCard";
@@ -72,7 +74,7 @@ import { type ExpandedImagePreview } from "./ExpandedImagePreview";
 import { LinkChipIcon } from "../LinkChipIcon";
 import { McpServerIcon } from "./McpServerIcon";
 import { normalizeCompactToolLabel } from "./MessagesTimeline.logic";
-import { SynaraLogo } from "../SynaraLogo";
+import { SynaraLogo } from "@synara/profile-ui/logo";
 import { ToolCallDetailsContent } from "./ToolCallDetailsDialog";
 import { DisclosureChevron } from "../ui/DisclosureChevron";
 import { DisclosureRegion } from "../ui/DisclosureRegion";
@@ -811,6 +813,11 @@ export const TimelineWorkEntryRow = memo(function TimelineWorkEntryRow(props: {
   // A created-automation row renders as its own card instead of a tool-call line.
   // Kept after the hooks above so the early return never changes hook order.
   const automation = workEntry.automation;
+  if (workEntry.connectorProposalId) {
+    return MCP_CONNECTORS_ON ? (
+      <McpConnectorProposalCard proposalId={workEntry.connectorProposalId} />
+    ) : null;
+  }
   if (automation) {
     return (
       <div className={cn(compact ? "py-0.5" : "py-1")}>

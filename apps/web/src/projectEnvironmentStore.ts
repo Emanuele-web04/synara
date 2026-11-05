@@ -1,3 +1,4 @@
+import { executionStorage } from "./lib/hosts/executionStorage";
 import type { ProjectId, ThreadEnvironmentMode } from "@synara/contracts";
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
@@ -10,7 +11,7 @@ interface ProjectEnvironmentStoreState {
   setProjectEnvMode: (projectId: ProjectId, envMode: ThreadEnvironmentMode) => void;
 }
 
-const storage = typeof localStorage !== "undefined" ? localStorage : createMemoryStorage();
+const storage = typeof localStorage !== "undefined" ? executionStorage : createMemoryStorage();
 
 export const useProjectEnvironmentStore = create<ProjectEnvironmentStoreState>()(
   persist(

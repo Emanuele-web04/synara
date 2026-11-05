@@ -1,3 +1,4 @@
+import { readExecutionContext } from "~/lib/hosts/executionContext";
 import {
   type AutomationDefinition,
   type AutomationRun,
@@ -467,6 +468,10 @@ function AutomationDetailView() {
                 disabled={!editable}
                 title={editDisabledTitle}
               />
+              <p className="text-ui-sm text-muted-foreground">
+                Run on {readExecutionContext()?.execution.label ?? "this computer"}. Keep Synara
+                running on that computer.
+              </p>
               <AutomationSaveStatus
                 saving={updateMutation.isPending}
                 failed={updateMutation.isError}

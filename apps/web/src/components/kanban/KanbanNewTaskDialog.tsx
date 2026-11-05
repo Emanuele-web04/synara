@@ -37,6 +37,7 @@ import {
   COMPOSER_EDITOR_TYPOGRAPHY_CLASS_NAME,
 } from "~/components/chat/composerPickerStyles";
 import { Button } from "~/components/ui/button";
+import { ChatComputerLabel } from "~/components/hosts/ComputerPicker";
 import {
   Dialog,
   DialogDescription,
@@ -386,6 +387,7 @@ export function KanbanNewTaskDialog({
             <DialogTitle className="font-system-ui truncate font-medium text-ui leading-none">
               {t("common:kanban_newTask")}
             </DialogTitle>
+            <ChatComputerLabel />
           </div>
           <DialogDescription className="sr-only">
             {t("common:draftAPromptAndPlaceItInTheBoard")}

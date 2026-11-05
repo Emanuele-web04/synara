@@ -15,6 +15,7 @@ $cases = @(
     @{ name = 'transient default update failure recovers'; fault = 'update-transient'; error = $null; scans = 1; updateSource = 'default'; updateFailures = 2 },
     @{ name = 'exhausted default updates recover through direct MMPC'; fault = 'update-fallback'; error = $null; scans = 1; updateSource = 'default'; updateFailures = 3; expectedMmpcCalls = 1 },
     @{ name = 'direct fallback recovers while status RPC is unavailable'; fault = 'update-rpc-transition'; error = $null; scans = 1; updateSource = 'default'; updateFailures = 3; expectedMmpcCalls = 1 },
+    @{ name = 'MMPC retry repairs a stopped service before updating'; fault = 'mmpc-service-recovery'; error = $null; scans = 1; updateSource = 'default'; updateFailures = 3; mmpcFailures = 1; expectedMmpcCalls = 2 },
     @{ name = 'both update sources fail despite fresh reported status'; fault = 'update-both-fail'; error = 'remote procedure call failed'; scans = 0; updateSource = 'default'; updateFailures = 3; mmpcFailures = 3; expectedMmpcCalls = 3 },
     @{ name = 'both update sources fail with stale reported status'; fault = 'update-both-stale'; error = 'remote procedure call failed'; scans = 0; updateSource = 'default'; updateFailures = 3; mmpcFailures = 3; expectedMmpcCalls = 3; stale = $true },
     @{ name = 'successful direct fallback still rejects stale definitions'; fault = 'update-fallback-stale'; error = 'do not match Microsoft latest version'; scans = 0; updateSource = 'default'; updateFailures = 3; expectedMmpcCalls = 1; stale = $true },
@@ -29,7 +30,11 @@ $cases = @(
     @{ name = 'cloud policy changes during scan'; fault = 'cloud-drift'; error = 'cloud protection'; scans = 1 },
     @{ name = 'detection blocks qualification'; fault = 'detection'; error = 'detection/remediation'; scans = 1 },
     @{ name = 'changed installer blocks qualification'; fault = 'changed-bytes'; error = 'did not qualify'; scans = 1 },
-    @{ name = 'excluded installer blocks qualification'; fault = 'excluded'; error = 'outside exclusions'; scans = 0 }
+    @{ name = 'excluded installer blocks qualification'; fault = 'excluded'; error = 'outside exclusions'; scans = 0 },
+    @{ name = 'failed update error capture blocks publication'; fault = 'update-error-evidence'; error = 'evidence is incomplete'; scans = 1; updateSource = 'default'; updateFailures = 2 },
+    @{ name = 'unready service engine blocks qualification'; fault = 'engine-not-ready'; error = 'did not become ready within 120 seconds'; scans = 0 },
+    @{ name = 'failed final status retains other evidence and blocks qualification'; fault = 'after-status-failure'; error = 'evidence is incomplete'; scans = 1 },
+    @{ name = 'final evidence errors do not mask a scan failure'; fault = 'scan-and-after-status-failure'; error = 'did not qualify'; scans = 1 }
 )
 try {
     New-Item -ItemType Directory -Path $root | Out-Null
@@ -53,7 +58,7 @@ if ($CheckExclusion) {
 }
 if ($Scan) {
     $state.calls.Add('scan')
-    if ($state.fault -eq 'changed-bytes') { Add-Content -LiteralPath $File -Value 'changed' }
+    if ($state.fault -in @('changed-bytes', 'scan-and-after-status-failure')) { Add-Content -LiteralPath $File -Value 'changed' }
     if ($state.fault -eq 'cloud-drift') { $state.preferences.MAPSReporting = 0 }
     'Scan finished. found no threats.'
     exit 0
@@ -72,6 +77,8 @@ throw 'Unexpected scanner command.'
                     calls = [System.Collections.Generic.List[string]]::new()
                     updateCalls = [System.Collections.Generic.List[string]]::new()
                     mmpcUpdated = $false
+                    serviceStarted = $false
+                    serviceStarts = 0
                     preferences = [pscustomobject]@{
                         MAPSReporting = 0; SubmitSamplesConsent = 2; DisableBlockAtFirstSeen = $true
                         DisableArchiveScanning = $true; DisableIOAVProtection = $true
@@ -85,9 +92,28 @@ throw 'Unexpected scanner command.'
                     $state.preferences
                 }
                 function Get-MpComputerStatus {
+                    if ($state.fault -in @('after-status-failure', 'scan-and-after-status-failure') -and $state.calls.Contains('scan')) { throw 'Synthetic final status unavailable' }
                     if ($state.fault -eq 'update-rpc-transition' -and $state.updateCalls.Count -ge 3 -and -not $state.mmpcUpdated) { throw 'Operation failed with the following error: 0x800106ba' }
                     $updated = if ($case.stale -or ($case.updateSource -eq 'MMPC' -and -not $state.mmpcUpdated)) { (Get-Date).AddDays(-2) } else { Get-Date }
-                    [pscustomobject]@{ AntivirusEnabled = $true; RealTimeProtectionEnabled = $true; AntivirusSignatureLastUpdated = $updated; AntivirusSignatureVersion = '1.0.0.0'; DefenderSignaturesOutOfDate = [bool]$case.outOfDate }
+                    $engineReady = $state.fault -ne 'engine-not-ready' -and ($state.fault -ne 'mmpc-service-recovery' -or $state.serviceStarted)
+                    [pscustomobject]@{
+                        AntivirusEnabled = $true; RealTimeProtectionEnabled = $true
+                        AntivirusSignatureLastUpdated = $updated; AntivirusSignatureVersion = '1.0.0.0'
+                        DefenderSignaturesOutOfDate = [bool]$case.outOfDate
+                        AMServiceEnabled = $engineReady
+                        AMEngineVersion = $(if ($engineReady) { '1.0.0.0' } else { '0.0.0.0' })
+                    }
+                }
+                function Get-Service {
+                    $status = if ($state.fault -eq 'mmpc-service-recovery' -and -not $state.serviceStarted) { 'Stopped' } else { 'Running' }
+                    $service = [pscustomobject]@{ Status = $status }
+                    $service | Add-Member -MemberType ScriptMethod -Name Refresh -Value { $this.Status = 'Running' }
+                    $service
+                }
+                function Start-Service([string]$Name) {
+                    if ($state.fault -ne 'mmpc-service-recovery' -or $Name -ne 'WinDefend') { throw 'Unexpected service start in mocked qualification.' }
+                    $state.serviceStarted = $true
+                    $state.serviceStarts += 1
                 }
                 function Invoke-WebRequest { [pscustomobject]@{ Content = '<li>Version: <span>2.0.0.0</span></li>' } }
                 function Get-MpThreatDetection {}
@@ -97,6 +123,7 @@ throw 'Unexpected scanner command.'
                     $source = if ($UpdateSource) { $UpdateSource } else { 'default' }
                     $state.updateCalls.Add($source)
                     $attempt = @($state.updateCalls | Where-Object { $_ -eq $source }).Count
+                    if ($source -eq 'MMPC' -and $state.fault -eq 'mmpc-service-recovery' -and -not $state.serviceStarted) { throw 'The remote procedure call failed.' }
                     if (($source -eq $case.updateSource -and $attempt -le $case.updateFailures) -or ($source -eq 'MMPC' -and $attempt -le $case.mmpcFailures)) { throw 'The remote procedure call failed.' }
                     if ($source -eq 'MMPC') { $state.mmpcUpdated = $true }
                 }
@@ -128,6 +155,10 @@ throw 'Unexpected scanner command.'
                     if ($ChildPath -eq 'MpCmdRun.exe') { return $mockScanner }
                     Microsoft.PowerShell.Management\Join-Path @PSBoundParameters
                 }
+                if ($case.fault -eq 'update-error-evidence') {
+                    # A real filesystem failure, not a mocked diagnostic command.
+                    New-Item -ItemType Directory -Path "$evidence/update-default-attempt-1-error.txt" -Force | Out-Null
+                }
                 $caught = $null
                 try { & $GuardPath -AssetsDirectory $assets -EvidenceDirectory $evidence | Out-Null }
                 catch { $caught = $_.Exception.Message }
@@ -140,6 +171,7 @@ throw 'Unexpected scanner command.'
                     $errors = @(Get-ChildItem "$evidence/update-$($case.updateSource)-attempt-*-error.txt")
                     if ($errors.Count -ne $case.updateFailures) { throw 'Every failed update attempt must retain its error.' }
                     foreach ($file in $errors) {
+                        if ($case.fault -eq 'update-error-evidence' -and $file.PSIsContainer) { continue }
                         if ((Get-Content -LiteralPath $file.FullName -Raw) -notlike '*remote procedure call failed*') { throw 'Original update error was not retained.' }
                     }
                 }
@@ -152,6 +184,7 @@ throw 'Unexpected scanner command.'
                         if ((Get-Content -LiteralPath $file.FullName -Raw) -notlike '*remote procedure call failed*') { throw 'Original direct fallback error was not retained.' }
                     }
                 }
+                if ($case.fault -eq 'mmpc-service-recovery' -and $state.serviceStarts -ne 1) { throw 'MMPC retry did not repair WinDefend exactly once.' }
                 if ($case.updateSource -eq 'MMPC' -and -not (Test-Path "$evidence/default-update-preferences.json")) { throw 'A successful but stale default update must retain its intermediate state.' }
                 if (-not $case.error) {
                     if (($state.calls -join ',') -ne 'maps,scan') { throw 'Clean qualification must validate MAPS before scanning.' }
@@ -159,6 +192,13 @@ throw 'Unexpected scanner command.'
                     if ($ready.MAPSReporting -ne 2 -or $ready.SubmitSamplesConsent -ne 1 -or $ready.DisableBlockAtFirstSeen -ne $false) { throw 'Clean qualification lacks cloud protection evidence.' }
                 }
                 if ($case.fault -eq 'maps-unreachable' -and (Get-Content "$evidence/maps-connection-exit.txt" -Raw).Trim() -ne '1') { throw 'Failed MAPS exit code was not preserved.' }
+                if ($state.fault -in @('after-status-failure', 'scan-and-after-status-failure')) {
+                    $savedError = Get-Content "$evidence/after-status-error.txt" -Raw
+                    if ($savedError -notlike '*Synthetic final status unavailable*') { throw 'Original final status failure was not preserved.' }
+                    foreach ($file in @('after-preferences.json', 'after-detections.json', 'results.json', 'events.json')) {
+                        if (-not (Test-Path "$evidence/$file")) { throw "A final status failure prevented evidence capture: $file" }
+                    }
+                }
                 if (-not (Test-Path "$evidence/after-preferences.json")) { throw 'Final Defender state was not preserved.' }
             }
             Write-Output "PASS $($case.name)"

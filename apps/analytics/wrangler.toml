@@ -1,0 +1,62 @@
+name = "synara-beta-diagnostics"
+main = "worker.ts"
+compatibility_date = "2026-09-01"
+# Pin the verified production account so Wrangler cannot bind this worker to a
+# different account's database during a later deployment.
+account_id = "56e5b3e566be2fc8ade9b7d0eadf5e35"
+
+# Events land in D1 so the dashboard can query them through a binding.
+# Create: wrangler d1 create synara-beta-diagnostics
+# Migrate: wrangler d1 migrations apply synara-beta-diagnostics
+[[d1_databases]]
+binding = "DB"
+database_name = "synara-beta-diagnostics"
+database_id = "642c0f74-6a06-4433-ac72-728bd6d0ed39"
+migrations_dir = "migrations"
+
+# Minidumps go to R2 and are kept indefinitely (no lifecycle expiry rule).
+[[r2_buckets]]
+binding = "CRASH_DUMPS"
+bucket_name = "synara-beta-crash-dumps"
+
+# Dashboard SPA built by `vite build` into ./dist. The worker runs first so
+# page requests are gated by the session cookie; it forwards to ASSETS for
+# hashed files and index.html.
+[assets]
+directory = "./dist"
+binding = "ASSETS"
+run_worker_first = true
+
+[triggers]
+# Delete only opt-in product events older than 30 days. Diagnostics remain
+# available under their existing indefinite-retention policy.
+crons = ["0 5 * * *"]
+
+# Per-IP rate limits enforced by the platform (keyed on CF-Connecting-IP in
+# worker.ts). Ingest gets headroom for queued flushes; login is strict.
+[[ratelimits]]
+name = "INGEST_RATE_LIMITER"
+namespace_id = "1001"
+simple = { limit = 120, period = 60 }
+
+[[ratelimits]]
+name = "LOGIN_RATE_LIMITER"
+namespace_id = "1002"
+simple = { limit = 10, period = 60 }
+
+# Dashboard auth: Cloudflare Access fronts the site (an app covering this
+# worker's host with an email allowlist; a second app bypasses /v1/* so beta
+# clients can still ingest). The worker verifies the Access JWT when these are
+# set:
+# [vars]
+# TEAM_DOMAIN = "https://synara.cloudflareaccess.com"
+# POLICY_AUD = "<Access app AUD tag>"
+# ALLOWED_EMAILS = "you@example.com,emanuele@example.com"
+# Legacy password auth (used only while POLICY_AUD is unset):
+#   wrangler secret put DASHBOARD_PASSWORD
+#   wrangler secret put DASHBOARD_PASSWORD_2   # optional second login
+#   wrangler secret put DASHBOARD_SESSION_KEY
+# Ingest is intentionally open (see docs/diagnostics.md). INGEST_TOKEN only
+# closes /v1/events for callers that send it; shipped beta builds do not, and
+# Electron's crash uploader cannot, so leave it unset for production.
+# Optional [vars]: MAX_DUMP_BYTES = "5242880"

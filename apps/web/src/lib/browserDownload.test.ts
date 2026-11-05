@@ -67,9 +67,14 @@ describe("browserDownload", () => {
       filename: "favicon.svg",
     });
 
-    expect(globalThis.fetch).toHaveBeenCalledWith(
-      "http://127.0.0.1:5733/api/local-image?download=1",
-    );
+    expect(globalThis.fetch).toHaveBeenCalledOnce();
+    const [url, options] = vi.mocked(globalThis.fetch).mock.calls[0]!;
+    const request = new Request(url, options);
+    expect(request.url).toBe("http://127.0.0.1:5733/api/local-image?download=1");
+    expect(request.method).toBe("GET");
+    expect(request.body).toBeNull();
+    expect([...request.headers]).toEqual([]);
+    expect(request.credentials).toBe("same-origin");
     expect(URL.createObjectURL).toHaveBeenCalledWith(expect.any(Blob));
     expect(link.href).toBe("blob:download");
     expect(link.download).toBe("favicon.svg");

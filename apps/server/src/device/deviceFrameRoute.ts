@@ -70,7 +70,7 @@ export function makeDeviceFrameSink(options: {
  * Mount `GET /ws/device-frames?udid=...`. Requests without a device, or on a
  * host with no device engine, are refused before the upgrade.
  */
-export function makeDeviceFrameRouteLayer<R = never>(options: {
+export function makeDeviceFrameRouteLayer<R = never, E = never>(options: {
   /**
    * Same admission decision as the RPC upgrade. Passed in rather than imported
    * so this module does not depend on the auth stack, and so tests can mount
@@ -79,6 +79,11 @@ export function makeDeviceFrameRouteLayer<R = never>(options: {
   readonly authorizeUpgrade: (
     request: HttpServerRequest.HttpServerRequest,
   ) => Effect.Effect<boolean, never, R>;
+  /** Owns authorization and cancellation for the complete upgraded stream. */
+  readonly runAuthorizedConnection?: <E2, R2>(
+    request: HttpServerRequest.HttpServerRequest,
+    connection: Effect.Effect<HttpServerResponse.HttpServerResponse, E2, R2>,
+  ) => Effect.Effect<HttpServerResponse.HttpServerResponse, E | E2, R | R2>;
 }) {
   return Layer.effectDiscard(
     Effect.gen(function* () {
@@ -101,38 +106,43 @@ export function makeDeviceFrameRouteLayer<R = never>(options: {
             return HttpServerResponse.text("Forbidden", { status: 403 });
           }
 
-          // Read before the upgrade hands the socket to the WebSocket layer.
-          const byteStream = frameSocketByteStream(request);
-          const socket = yield* request.upgrade;
-          const writer = yield* socket.writer;
-          let open = true;
-          const sink = makeDeviceFrameSink({
-            send: (bytes) => Effect.runPromise(writer(bytes)).catch(() => undefined),
-            isOpen: () => open,
-            byteStream,
-          });
-          const unsubscribe = deviceService.value.manager.subscribeFrames(udid, sink);
-          yield* Effect.addFinalizer(() =>
-            Effect.sync(() => {
-              open = false;
-              unsubscribe();
-            }),
-          );
-          // The only thing a client may send is a resync request, when its
-          // decoder hits a sequence gap or an error. Handled here rather than
-          // as an RPC because it is a property of this stream, and because a
-          // frozen canvas should not depend on a second socket being healthy.
-          // Anything unrecognized is ignored: a stray message must not kill a
-          // stream.
-          yield* socket.run((message) => {
-            if (decodeResyncRequest(message) === null) return;
-            Effect.runFork(
-              Effect.promise(() =>
-                deviceService.value.manager.requestKeyframe(udid).catch(() => undefined),
-              ),
+          const connection = Effect.gen(function* () {
+            // Read before the upgrade hands the socket to the WebSocket layer.
+            const byteStream = frameSocketByteStream(request);
+            const socket = yield* request.upgrade;
+            const writer = yield* socket.writer;
+            let open = true;
+            const sink = makeDeviceFrameSink({
+              send: (bytes) => Effect.runPromise(writer(bytes)).catch(() => undefined),
+              isOpen: () => open,
+              byteStream,
+            });
+            const unsubscribe = deviceService.value.manager.subscribeFrames(udid, sink);
+            yield* Effect.addFinalizer(() =>
+              Effect.sync(() => {
+                open = false;
+                unsubscribe();
+              }),
             );
+            // The only thing a client may send is a resync request, when its
+            // decoder hits a sequence gap or an error. Handled here rather than
+            // as an RPC because it is a property of this stream, and because a
+            // frozen canvas should not depend on a second socket being healthy.
+            // Anything unrecognized is ignored: a stray message must not kill a
+            // stream.
+            yield* socket.run((message) => {
+              if (decodeResyncRequest(message) === null) return;
+              Effect.runFork(
+                Effect.promise(() =>
+                  deviceService.value.manager.requestKeyframe(udid).catch(() => undefined),
+                ),
+              );
+            });
+            return HttpServerResponse.empty();
           });
-          return HttpServerResponse.empty();
+          return yield* options.runAuthorizedConnection
+            ? options.runAuthorizedConnection(request, connection)
+            : connection;
         }).pipe(
           Effect.catchCause((cause) =>
             Effect.as(

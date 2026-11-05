@@ -123,7 +123,7 @@ const TRAIT_LABEL_KEYS: Readonly<Record<string, string>> = {
 
 // These adapters construct canonical effort labels from IDs, rather than forwarding
 // arbitrary provider labels: ClaudeAdapter, CursorAcpSupport, PiAdapter,
-// OmpAcpSupport, DevinAdapter, GrokAdapter, and AntigravityAdapter.
+// OmpAcpSupport, DevinAdapter, GrokAdapter, AntigravityAdapter, and KiroAcpSupport.
 const GENERATED_EFFORT_LABEL_PROVIDERS = new Set<ProviderKind>([
   "claudeAgent",
   "cursor",
@@ -132,6 +132,7 @@ const GENERATED_EFFORT_LABEL_PROVIDERS = new Set<ProviderKind>([
   "devin",
   "grok",
   "antigravity",
+  "kiro",
 ]);
 const SOURCE_EFFORT_LABELS: Readonly<Record<string, string>> = {
   none: "None",

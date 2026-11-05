@@ -203,7 +203,7 @@ describe("ThreadGitMetadataReactor", () => {
 
   const vcsStateChangedEvent = (
     threadId: ThreadId,
-    options?: { readonly kind?: string; readonly cwd?: string; readonly eventId?: string },
+    options?: { readonly cwd?: string; readonly kind?: string; readonly eventId?: string },
   ): ProviderRuntimeEvent => ({
     type: "vcs.state.changed",
     eventId: EventId.makeUnsafe(options?.eventId ?? `vcs-${threadId}`),
@@ -480,7 +480,7 @@ describe("ThreadGitMetadataReactor", () => {
   });
 
   it.each(["commit", "code_change_published"])(
-    "refreshes worktree thread metadata mid-turn on %s",
+    "refreshes actual worktree metadata mid-turn after %s",
     async (kind) => {
       const threadId = ThreadId.makeUnsafe("vcs-worktree-thread");
       const cwd = "/repo/.worktrees/vcs";

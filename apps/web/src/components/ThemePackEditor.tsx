@@ -428,16 +428,18 @@ function ThemeRow({ label, children }: { label: string; children: React.ReactNod
 
 // ── Color pill ────────────────────────────────────────────────────────────
 
-function ColorPill({
+export function ColorPill({
   color,
   ariaLabel,
   onChange,
   onReset,
+  immediate = false,
 }: {
   color: string;
   ariaLabel: string;
   onChange: (next: string) => void;
   onReset?: (() => void) | undefined;
+  immediate?: boolean;
 }) {
   const { t } = useTranslation();
 
@@ -500,7 +502,8 @@ function ColorPill({
   const handleValidDraft = (next: string) => {
     const normalized = next.trim().toLowerCase();
     setDraftHex(normalized);
-    scheduleCommit(normalized);
+    if (immediate) commitColor(normalized);
+    else scheduleCommit(normalized);
   };
 
   const handleOpenChange = (nextOpen: boolean) => {

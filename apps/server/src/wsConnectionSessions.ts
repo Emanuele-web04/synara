@@ -6,10 +6,13 @@
 // handler fibers. This registry bridges that gap: the upgrade route registers the
 // connection's authenticated session under an unguessable key, injects the key as
 // a synthetic request header (overriding any client-supplied value), and the RPC
-// admission middleware resolves it back into handler-scoped services.
+// admission middleware resolves it back into handler-scoped services. Logical
+// request headers are filtered before the RPC transport adds this trusted key.
 import { randomUUID } from "node:crypto";
+import { CurrentDesktopUpdateAuthority } from "./desktopUpdateRpc";
 
 import { Effect, Layer, Scope, ServiceMap } from "effect";
+import { RpcSerialization } from "effect/unstable/rpc";
 
 import {
   CurrentManagedAttachmentPrincipal,
@@ -26,14 +29,55 @@ export const CurrentWsSessionRole = ServiceMap.Reference<WsSessionRole>(
 export interface WsConnectionSession {
   readonly role: WsSessionRole;
   readonly attachmentPrincipal: ManagedAttachmentPrincipal;
+  readonly desktopUpdateAuthority?: string | undefined;
 }
 
 /**
  * Synthetic header carrying the connection-session key. It is set server-side on
  * the upgrade request (never sent to clients), and Headers.set overrides any
- * value a client tried to smuggle in, so entries cannot be forged or replayed.
+ * upgrade value. withoutWsConnectionSessionHeaders also removes logical request
+ * overrides before Effect merges request and upgrade headers.
  */
 export const WS_CONNECTION_SESSION_HEADER = "x-synara-ws-connection-session";
+
+/** Preserve protocol metadata while keeping connection identity transport-owned. */
+export function withoutWsConnectionSessionHeaders(
+  serialization: RpcSerialization.RpcSerialization["Service"],
+): RpcSerialization.RpcSerialization["Service"] {
+  return {
+    ...serialization,
+    makeUnsafe: () => {
+      const parser = serialization.makeUnsafe();
+      return {
+        encode: parser.encode,
+        decode: (data) =>
+          parser.decode(data).map((message) => {
+            if (
+              !message ||
+              typeof message !== "object" ||
+              !("_tag" in message) ||
+              message._tag !== "Request" ||
+              !("headers" in message) ||
+              !Array.isArray(message.headers) ||
+              message.headers.length === 0
+            )
+              return message;
+            // Effect appends logical headers after upgrade headers; remove only
+            // our reserved key before that merge, including case variants.
+            return {
+              ...message,
+              headers: message.headers.filter(
+                (header: unknown) =>
+                  !Array.isArray(header) ||
+                  typeof header[0] !== "string" ||
+                  header[0].toLowerCase() !== WS_CONNECTION_SESSION_HEADER,
+              ),
+            };
+          }),
+      };
+    },
+  };
+}
 
 export interface WsConnectionSessionsShape {
   /** Registers the session for the lifetime of the connection scope. */
@@ -86,8 +130,8 @@ export const WsConnectionSessionsLive = Layer.effect(
 
 /**
  * Provides the connection session's identity services to an RPC handler
- * effect. With no session (no or unknown key), the effect keeps the
- * conservative defaults: role "client" and the local-loopback principal.
+ * effect. Direct local callers may keep the defaults when no session is
+ * supplied; network admission must reject missing or expired registry keys.
  */
 export function provideWsConnectionSession<A, E, R>(
   effect: Effect.Effect<A, E, R>,
@@ -97,6 +141,7 @@ export function provideWsConnectionSession<A, E, R>(
     ? effect.pipe(
         Effect.provideService(CurrentWsSessionRole, session.role),
         Effect.provideService(CurrentManagedAttachmentPrincipal, session.attachmentPrincipal),
+        Effect.provideService(CurrentDesktopUpdateAuthority, session.desktopUpdateAuthority),
       )
     : effect;
 }

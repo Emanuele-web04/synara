@@ -2752,6 +2752,47 @@ describe("deriveMessagesTimelineRows", () => {
     expect(collapsedSignature(messageRow(rows, "a2")!)).toEqual(["narration:a1", "work:w1"]);
   });
 
+  it.each([true, false])(
+    "puts MCP proposals in the answer recap with collapseFinishedTurns=%s",
+    (collapseFinishedTurns) => {
+      const createdAt = "2026-01-01T00:00:02Z";
+      const proposal: TimelineEntry = {
+        id: "entry-mcp",
+        kind: "work",
+        createdAt,
+        entry: {
+          id: "mcp",
+          createdAt,
+          label: "Connect Paper",
+          tone: "info",
+          connectorProposalId: "paper",
+        },
+      };
+      const rows = deriveMessagesTimelineRows({
+        ...baseInput,
+        collapseFinishedTurns,
+        timelineEntries: [
+          userEntry("u1", "2026-01-01T00:00:00Z"),
+          workEntry("w1", "2026-01-01T00:00:01Z", "List connectors"),
+          proposal,
+          workEntry("w2", "2026-01-01T00:00:03Z", "Read connector docs"),
+          assistantEntry("a1", "2026-01-01T00:00:04Z", {
+            turnId: "t1",
+            text: "Review the connection to continue.",
+            completedAt: "2026-01-01T00:00:05Z",
+          }),
+        ],
+      });
+
+      const answer = messageRow(rows, "a1")!;
+      expect(answer.connectorProposalIds).toEqual(["paper"]);
+      expect(rows.some((row) => row.id === proposal.id)).toBe(false);
+      expect(collapsedSignature(answer)).toEqual(
+        collapseFinishedTurns ? ["work:w1", "work:w2"] : [],
+      );
+    },
+  );
+
   it("keeps a published visual visible while the rest of its turn collapses", () => {
     const visualPayload = {
       visualId: `vis_${"1".repeat(32)}`,

@@ -134,6 +134,7 @@ describe("trustedOrigins", () => {
     expect(normalizeCorsOrigin("synara-canary://app/")).toBe("synara-canary://app");
     expect(normalizeCorsOrigin("synara-cua://app/")).toBe("synara-cua://app");
     expect(normalizeCorsOrigin("synara-beta://app/")).toBe("synara-beta://app");
+    expect(normalizeCorsOrigin("synara-remote://app/")).toBe("synara-remote://app");
   });
 
   it("trusts every packaged desktop flavor at the request gate and rejects lookalikes", () => {
@@ -142,6 +143,7 @@ describe("trustedOrigins", () => {
       "synara-beta://app",
       "synara-canary://app",
       "synara-cua://app",
+      "synara-remote://app",
     ]) {
       expect(
         shouldRejectUntrustedRequestOrigin({
@@ -158,6 +160,11 @@ describe("trustedOrigins", () => {
       "synara-betas://app",
       "synara-canary://evil.test",
       "synara-cua://evil.test",
+      "synara-remote://evil.test",
+      "synara-remote://app.evil.test",
+      "synara-remote://app:8080",
+      "synara-remote://user@app",
+      "synara-remotes://app",
     ]) {
       expect(
         shouldRejectUntrustedRequestOrigin({
@@ -238,6 +245,29 @@ describe("trustedOrigins", () => {
         publicUrl: new URL("https://synara.example.test/"),
       }),
     ).toBe(true);
+  });
+
+  it("withdraws local trust while an SSH forward is enabled", () => {
+    // sshd's forwarded socket is indistinguishable from a same-machine
+    // process, so anyone who can SSH in could `ssh -L` to the MAIN port and
+    // skip the credential the dedicated forward port requires. Enabling a
+    // forward must therefore require auth server-wide, not just on that port.
+    expect(
+      requiresWebSocketAuthentication({
+        host: "127.0.0.1",
+        authToken: undefined,
+        publicUrl: undefined,
+        sshForwardPort: 7071,
+      }),
+    ).toBe(true);
+    expect(
+      requiresWebSocketAuthentication({
+        host: "127.0.0.1",
+        authToken: undefined,
+        publicUrl: undefined,
+        sshForwardPort: undefined,
+      }),
+    ).toBe(false);
   });
 
   it("requires browser mutations to have a trusted origin or explicit bearer provenance", () => {

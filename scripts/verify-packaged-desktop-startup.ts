@@ -20,6 +20,9 @@ import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { CLOUDFLARED_VERSION } from "@synara/shared/cloudflared";
+import { spawnProcess, spawnProcessSync } from "@synara/shared/processRuntime";
+import { teardownChildProcessTree } from "../apps/server/src/platform/supervisedProcessTeardown.ts";
 import { findMacBundleArchitectureMismatches } from "./lib/mac-bundle-architecture.ts";
 
 export type PackagedDesktopPlatform = "linux" | "mac" | "win";
@@ -233,11 +236,11 @@ function prepareWindowsLaunch(assetsDirectory: string, extractionRoot: string): 
   };
 }
 
-export function verifyPackagedRuntimeDependencies(
+export async function verifyPackagedRuntimeDependencies(
   runtime: PackagedRuntime,
   isolatedEnvironment: NodeJS.ProcessEnv,
   timeoutMs: number,
-): void {
+): Promise<void> {
   const entry = join(
     runtime.resourcesDirectory,
     "app.asar",
@@ -263,6 +266,75 @@ export function verifyPackagedRuntimeDependencies(
     );
   }
   console.log("Packaged runtime dependency smoke passed from isolated state.");
+  await verifyPackagedCloudflared(runtime, isolatedEnvironment, timeoutMs);
+}
+
+// The fresh app has no account, so its ordinary startup does not exercise the connector.
+// Use the final payload's helper with no credentials or clients, then prove tree teardown.
+async function verifyPackagedCloudflared(
+  runtime: PackagedRuntime,
+  isolatedEnvironment: NodeJS.ProcessEnv,
+  timeoutMs: number,
+): Promise<void> {
+  const binary = join(
+    runtime.resourcesDirectory,
+    "cloudflared",
+    process.platform === "win32" ? "cloudflared.exe" : "cloudflared",
+  );
+  if (!existsSync(binary)) throw new Error("Packaged Cloudflare connector is missing.");
+  const directory = mkdtempSync(join(tmpdir(), "synara-connector-smoke-"));
+  // Never forward provider, account, signing or Cloudflare credentials/configuration.
+  const env = Object.fromEntries(
+    ["PATH", "SystemRoot", "TMPDIR", "TMP", "TEMP"].flatMap((name) =>
+      isolatedEnvironment[name] === undefined ? [] : [[name, isolatedEnvironment[name]]],
+    ),
+  );
+  try {
+    const version = spawnProcessSync(binary, ["--version"], {
+      cwd: directory,
+      env,
+      encoding: "utf8",
+      timeout: Math.min(timeoutMs, 10_000),
+      maxBuffer: 64 * 1024,
+    });
+    const actualVersion = version.stdout?.match(/^cloudflared version (\S+)/m)?.[1];
+    if (version.error || version.status !== 0 || actualVersion !== CLOUDFLARED_VERSION) {
+      throw new Error(
+        `Packaged Cloudflare connector version mismatch: expected ${CLOUDFLARED_VERSION}, received ${actualVersion ?? "unavailable"}.`,
+      );
+    }
+    const child = spawnProcess(
+      binary,
+      ["access", "tcp", "--hostname", "unused.invalid", "--url", "127.0.0.1:0"],
+      { cwd: directory, env, stdio: "ignore", ownProcessGroup: true },
+    );
+    let launchError: Error | null = null;
+    child.once("error", (error) => {
+      launchError = error;
+    });
+    try {
+      const exited = await waitForExit(child, 300);
+      if (launchError || exited || child.pid === undefined) {
+        throw new Error(
+          "Packaged Cloudflare connector did not stay alive for its local Access smoke.",
+        );
+      }
+    } finally {
+      await teardownChildProcessTree(child);
+    }
+    console.log(
+      JSON.stringify({
+        cloudflared: actualVersion,
+        platform: process.platform,
+        packagedHelper: true,
+        executableStarted: true,
+        teardownVerified: true,
+        liveCloudflare: false,
+      }),
+    );
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
 }
 
 function prepareLaunch(
@@ -294,10 +366,13 @@ export function createPackagedDesktopSmokeEnvironment(
     XDG_DATA_HOME: join(root, "xdg-data"),
     SYNARA_HOME: join(root, "synara-home"),
     SYNARA_BETA_HOME: join(root, "synara-beta-home"),
+    SYNARA_REMOTE_HOME: join(root, "synara-remote-home"),
     SYNARA_DISABLE_AUTO_UPDATE: "1",
     ELECTRON_ENABLE_LOGGING: "1",
   };
   delete env.SYNARA_AUTH_TOKEN;
+  // Qualify the installer's account default, not the release operator's override.
+  delete env.SYNARA_ACCOUNT_URL;
   delete env.ELECTRON_RUN_AS_NODE;
   for (const path of [
     env.HOME,
@@ -308,6 +383,7 @@ export function createPackagedDesktopSmokeEnvironment(
     env.XDG_DATA_HOME,
     env.SYNARA_HOME,
     env.SYNARA_BETA_HOME,
+    env.SYNARA_REMOTE_HOME,
   ]) {
     if (path) mkdirSync(path, { recursive: true });
   }
@@ -316,7 +392,9 @@ export function createPackagedDesktopSmokeEnvironment(
       env.HOME!,
       "Library",
       "Application Support",
-      options.executableName === "synara-beta" ? "synara-beta" : "synara",
+      options.executableName === "synara-beta" || options.executableName === "synara-remote"
+        ? options.executableName
+        : "synara",
     );
     mkdirSync(userDataPath, { recursive: true });
     // Prevent the packaged app's update-only icon repair from registering this
@@ -420,10 +498,14 @@ export async function verifyPackagedDesktopStartup(
   try {
     const launch = prepareLaunch(options, extractionRoot);
     const env = createPackagedDesktopSmokeEnvironment(join(temporaryRoot, "state"), options);
-    verifyPackagedRuntimeDependencies(launch.runtime, env, options.timeoutMs);
-    // Beta deliberately ignores SYNARA_HOME to avoid opening Stable's data.
+    await verifyPackagedRuntimeDependencies(launch.runtime, env, options.timeoutMs);
+    // Isolated release flavors never use Stable's data home.
     const appHome =
-      options.executableName === "synara-beta" ? env.SYNARA_BETA_HOME! : env.SYNARA_HOME!;
+      options.executableName === "synara-remote"
+        ? env.SYNARA_REMOTE_HOME!
+        : options.executableName === "synara-beta"
+          ? env.SYNARA_BETA_HOME!
+          : env.SYNARA_HOME!;
     logDirectory = join(appHome, "userdata", "logs");
     const logPath = join(logDirectory, "desktop-main.log");
     child = spawn(launch.command, [...launch.args], {

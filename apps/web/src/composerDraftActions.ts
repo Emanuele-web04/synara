@@ -4,6 +4,7 @@
 
 import {
   type ModelSelection,
+  type ProviderInstanceId,
   type ProviderKind,
   PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
   ProviderInteractionMode,
@@ -72,8 +73,10 @@ import {
   normalizeProviderModelOptions,
   providerInstanceModelSelectionKey,
   reconcileProviderScopedModelSelection,
+  sanitizeStickyModelSelectionMap,
   stripNonStickyModelOptions,
 } from "./composerDraftModels";
+import { notifyComposerModelSelectionCommitted } from "./composerModelSelectionCommits";
 import { isComposerAppSnapCaptureSource } from "./lib/composerImageSource";
 import {
   BROWSER_ANNOTATION_MAX_COUNT,
@@ -140,6 +143,7 @@ export const createComposerDraftStoreState =
     projectDraftThreadIdByProjectId: {},
     stickyModelSelectionByProvider: {},
     stickyActiveProvider: null,
+    stickyRuntimeMode: null,
     getDraftThreadByProjectId: (projectId, entryPoint = "chat") => {
       if (projectId.length === 0) {
         return null;
@@ -574,6 +578,114 @@ export const createComposerDraftStoreState =
         return { draftsByThreadId: nextDraftsByThreadId };
       });
     },
+    setStickyRuntimeMode: (runtimeMode) => {
+      set((state) =>
+        state.stickyRuntimeMode === runtimeMode ? state : { stickyRuntimeMode: runtimeMode },
+      );
+    },
+    applySharedNewThreadDefaults: (defaults) => {
+      const nextStickyMap = sanitizeStickyModelSelectionMap(defaults.modelSelectionByProvider);
+      set((state) => {
+        const changedKeys = [
+          ...new Set([
+            ...Object.keys(state.stickyModelSelectionByProvider),
+            ...Object.keys(nextStickyMap),
+          ]),
+        ].filter(
+          (key) =>
+            !Equal.equals(
+              state.stickyModelSelectionByProvider[key as ProviderInstanceId],
+              nextStickyMap[key as ProviderInstanceId],
+            ),
+        ) as ProviderInstanceId[];
+        const activeProviderChanged = state.stickyActiveProvider !== defaults.activeProvider;
+        const runtimeModeChanged = state.stickyRuntimeMode !== defaults.runtimeMode;
+        if (changedKeys.length === 0 && !activeProviderChanged && !runtimeModeChanged) {
+          return state;
+        }
+
+        // Only each project's new-chat draft follows: kanban and other standalone
+        // drafts were seeded on purpose and keep their own choices.
+        const draftsByThreadId = { ...state.draftsByThreadId };
+        const draftThreadsByThreadId = { ...state.draftThreadsByThreadId };
+        let draftsChanged = false;
+        let draftThreadsChanged = false;
+        for (const threadId of new Set(Object.values(state.projectDraftThreadIdByProjectId))) {
+          const draftThread = draftThreadsByThreadId[threadId];
+          if (
+            !draftThread ||
+            draftThread.entryPoint !== "chat" ||
+            draftThread.promotedTo !== undefined ||
+            hasActiveComposerSend(threadId)
+          ) {
+            continue;
+          }
+          const draft = draftsByThreadId[threadId] ?? createEmptyThreadDraft();
+          const modelSelectionByProvider = { ...draft.modelSelectionByProvider };
+          for (const key of changedKeys) {
+            const selection = nextStickyMap[key];
+            if (selection) {
+              modelSelectionByProvider[key] = selection;
+            }
+          }
+          const nextDraft: ComposerThreadDraftState = {
+            ...draft,
+            modelSelectionByProvider,
+            ...(activeProviderChanged && defaults.activeProvider !== null
+              ? { activeProvider: defaults.activeProvider }
+              : {}),
+            ...(runtimeModeChanged && defaults.runtimeMode !== null && draft.runtimeMode !== null
+              ? { runtimeMode: defaults.runtimeMode }
+              : {}),
+          };
+          if (!Equal.equals(draft, nextDraft)) {
+            draftsByThreadId[threadId] = nextDraft;
+            draftsChanged = true;
+          }
+          if (
+            runtimeModeChanged &&
+            defaults.runtimeMode !== null &&
+            draftThread.runtimeMode !== defaults.runtimeMode
+          ) {
+            draftThreadsByThreadId[threadId] = {
+              ...draftThread,
+              runtimeMode: defaults.runtimeMode,
+            };
+            draftThreadsChanged = true;
+          }
+        }
+        return {
+          stickyModelSelectionByProvider: nextStickyMap,
+          stickyActiveProvider: defaults.activeProvider,
+          stickyRuntimeMode: defaults.runtimeMode,
+          ...(draftsChanged ? { draftsByThreadId } : {}),
+          ...(draftThreadsChanged ? { draftThreadsByThreadId } : {}),
+        };
+      });
+    },
+    syncDraftWithThreadModelSelection: (threadId, modelSelection) => {
+      const key = modelSelectionStorageKey(modelSelection);
+      set((state) => {
+        const draft = state.draftsByThreadId[threadId];
+        const current = draft?.modelSelectionByProvider[key];
+        // Without a draft entry the composer already reads the thread's own selection.
+        if (!draft || current === undefined || Equal.equals(current, modelSelection)) {
+          return state;
+        }
+        return {
+          draftsByThreadId: {
+            ...state.draftsByThreadId,
+            [threadId]: {
+              ...draft,
+              modelSelectionByProvider: {
+                ...draft.modelSelectionByProvider,
+                [key]: modelSelection,
+              },
+            },
+          },
+        };
+      });
+    },
     setPendingUserInputDrafts: (threadId, drafts) => {
       set((state) => {
         const nextDraft = {
@@ -889,6 +1001,7 @@ export const createComposerDraftStoreState =
           modelSelectionStorageKey(modelSelection)
         ];
       get().setStickyModelSelection(correctedSelection ?? modelSelection);
+      notifyComposerModelSelectionCommitted(threadId);
     },
     setProviderOptionsForDispatch: (threadId, providerOptions) => {
       if (threadId.length === 0) {
@@ -1097,6 +1210,10 @@ export const createComposerDraftStoreState =
             : {}),
         };
       });
+      // Sticky writes are the user's own picks (traits, speed, slash commands).
+      if (options?.persistSticky === true) {
+        notifyComposerModelSelectionCommitted(threadId);
+      }
     },
     setRuntimeMode: (threadId, runtimeMode) => {
       if (threadId.length === 0) {

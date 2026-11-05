@@ -1,3 +1,4 @@
+// Routes source Electron launches to their flavor-owned data home without exposing secrets in argv.
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
@@ -43,13 +44,18 @@ export function createSourceDesktopEnvironment({
     requestedFlavor: environment.SYNARA_DESKTOP_FLAVOR,
   });
   const identity = synaraDesktopIdentity(flavor);
-  const configuredHome = configuredSourceDesktopHome(environment, platform, readWindowsEnvironment);
+  // Remote must never inherit Stable's data home, even in a developer shell.
+  const configuredHome =
+    flavor === "remote"
+      ? environment.SYNARA_REMOTE_HOME?.trim()
+      : configuredSourceDesktopHome(environment, platform, readWindowsEnvironment);
   const childEnvironment = {
     ...environment,
     SYNARA_DESKTOP_FLAVOR: flavor,
     SYNARA_HOME: configuredHome || join(homeDirectory, identity.defaultHomeDirectoryName),
     SYNARA_SOURCE_DESKTOP_BUILD_MARKER,
   };
+  if (flavor === "remote") childEnvironment.SYNARA_REMOTE_HOME = childEnvironment.SYNARA_HOME;
   delete childEnvironment.ELECTRON_RUN_AS_NODE;
   return childEnvironment;
 }

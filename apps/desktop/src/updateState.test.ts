@@ -1,7 +1,9 @@
+// Verifies updater version-lane admission and progress/recovery behavior.
 import { describe, expect, it } from "vitest";
 import type { DesktopUpdateState } from "@synara/contracts";
 
 import {
+  canCheckForDesktopUpdates,
   getCanRetryAfterDownloadFailure,
   getAutoUpdateDisabledReason,
   getDownloadStallTimeoutMessage,
@@ -32,6 +34,17 @@ const baseState: DesktopUpdateState = {
   flavor: "production",
   releaseUrl: null,
 };
+
+describe("update check admission", () => {
+  it.each([
+    ["downloaded", true],
+    ["available", true],
+    ["checking", false],
+    ["downloading", false],
+  ] as const)("checks while %s only when no operation owns the updater", (status, allowed) => {
+    expect(canCheckForDesktopUpdates({ ...baseState, status })).toBe(allowed);
+  });
+});
 
 describe("getDownloadStallTimeoutMessage", () => {
   it("formats the no-progress timeout in seconds", () => {
@@ -186,20 +199,30 @@ describe("isUpdateVersionNewer", () => {
 });
 
 describe("isUpdateVersionAllowedForFlavor", () => {
-  it("lets beta installs accept only beta releases", () => {
-    expect(isUpdateVersionAllowedForFlavor("0.8.4-beta.2", "beta")).toBe(true);
-    expect(isUpdateVersionAllowedForFlavor("0.8.4-beta", "beta")).toBe(true);
-    // The GitHub feed falls back to latest-mac.yml when beta-mac.yml is
-    // absent; a stable build must never be offered to a beta install.
-    expect(isUpdateVersionAllowedForFlavor("0.8.4", "beta")).toBe(false);
-    expect(isUpdateVersionAllowedForFlavor("0.9.0", "beta")).toBe(false);
-    expect(isUpdateVersionAllowedForFlavor("0.8.4-alpha.1", "beta")).toBe(false);
-    expect(isUpdateVersionAllowedForFlavor("0.8.4-betamax.1", "beta")).toBe(false);
-  });
+  it.each(["beta", "remote"] as const)(
+    "lets %s installs accept only their own releases",
+    (flavor) => {
+      expect(isUpdateVersionAllowedForFlavor(`0.8.4-${flavor}.2`, flavor)).toBe(true);
+      expect(isUpdateVersionAllowedForFlavor(`0.8.4-${flavor}`, flavor)).toBe(true);
+      expect(
+        isUpdateVersionAllowedForFlavor(
+          `0.8.4-${flavor === "remote" ? "beta" : "remote"}.1`,
+          flavor,
+        ),
+      ).toBe(false);
+      // The GitHub feed falls back to latest-mac.yml when beta-mac.yml is
+      // absent; a stable build must never be offered to a beta install.
+      expect(isUpdateVersionAllowedForFlavor("0.8.4", flavor)).toBe(false);
+      expect(isUpdateVersionAllowedForFlavor("0.9.0", flavor)).toBe(false);
+      expect(isUpdateVersionAllowedForFlavor("0.8.4-alpha.1", flavor)).toBe(false);
+      expect(isUpdateVersionAllowedForFlavor("0.8.4-betamax.1", flavor)).toBe(false);
+    },
+  );
 
   it("lets production installs accept only stable releases", () => {
     expect(isUpdateVersionAllowedForFlavor("0.8.4", "production")).toBe(true);
     expect(isUpdateVersionAllowedForFlavor("0.8.4-beta.1", "production")).toBe(false);
+    expect(isUpdateVersionAllowedForFlavor("0.8.4-remote.1", "production")).toBe(false);
     expect(isUpdateVersionAllowedForFlavor("v0.8.4-alpha.9", "production")).toBe(false);
   });
 
@@ -208,12 +231,16 @@ describe("isUpdateVersionAllowedForFlavor", () => {
     expect(isUpdateVersionAllowedForFlavor("0.8.4", "development")).toBe(true);
   });
 
-  it("fails closed on unparseable versions for beta and production", () => {
-    expect(isUpdateVersionAllowedForFlavor("nightly-build", "beta")).toBe(false);
-    expect(isUpdateVersionAllowedForFlavor("nightly-build", "production")).toBe(false);
-    // Canary keeps the pre-existing "differs means newer" passthrough.
-    expect(isUpdateVersionAllowedForFlavor("nightly-build", "canary")).toBe(true);
-  });
+  it.each(["nightly-build", "0.8.4-remote..1", "0.8.4-remote."])(
+    "fails closed on malformed version %s for packaged release lanes",
+    (version) => {
+      expect(isUpdateVersionAllowedForFlavor(version, "beta")).toBe(false);
+      expect(isUpdateVersionAllowedForFlavor(version, "remote")).toBe(false);
+      expect(isUpdateVersionAllowedForFlavor(version, "production")).toBe(false);
+      // Canary keeps the pre-existing "differs means newer" passthrough.
+      expect(isUpdateVersionAllowedForFlavor("nightly-build", "canary")).toBe(true);
+    },
+  );
 });
 
 describe("getAutoUpdateDisabledReason", () => {

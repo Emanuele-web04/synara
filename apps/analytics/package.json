@@ -1,0 +1,29 @@
+{
+  "name": "@synara/analytics",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "vite build",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "deploy": "bun run build && wrangler deploy",
+    "dev": "bun run build && wrangler dev --local"
+  },
+  "dependencies": {
+    "@synara/shared": "workspace:*",
+    "echarts": "6.1.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20260928.1",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@vitejs/plugin-react": "^6.0.0",
+    "typescript": "catalog:",
+    "vite": "^8.1.4",
+    "vitest": "catalog:",
+    "wrangler": "4.135.0"
+  }
+}

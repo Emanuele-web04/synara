@@ -1,13 +1,24 @@
 import * as Crypto from "node:crypto";
 
-import type { WsRpcError } from "@synara/contracts";
+import { WsRpcError } from "@synara/contracts";
 import {
   classifyWsRequest,
   makeWsRequestCapacityError,
   WS_REQUEST_CLASS_LIMITS,
   type WsRequestClass,
 } from "@synara/shared/wsRequestClass";
-import { Effect, Ref } from "effect";
+import { Effect, Layer, Ref } from "effect";
+import { Headers } from "effect/unstable/http";
+import { RpcMiddleware, RpcSchema } from "effect/unstable/rpc";
+import {
+  remoteMethodUnavailable,
+  REMOTE_NATIVE_UNAVAILABLE,
+} from "@synara/shared/remoteCapabilities";
+import {
+  provideWsConnectionSession,
+  WS_CONNECTION_SESSION_HEADER,
+  WsConnectionSessions,
+} from "./wsConnectionSessions";
 
 export interface WsRequestLease {
   readonly clientId: number;
@@ -111,3 +122,38 @@ export const makeWsRequestAdmission = Effect.gen(function* () {
 
   return { acquire, release, guard, snapshot } as const;
 });
+
+export class WsRequestAdmissionMiddleware extends RpcMiddleware.Service<WsRequestAdmissionMiddleware>()(
+  "synara/WsRequestAdmissionMiddleware",
+  { error: WsRpcError, requiredForClient: false },
+) {}
+
+export const wsRequestAdmissionMiddlewareLayer = Layer.effect(
+  WsRequestAdmissionMiddleware,
+  Effect.gen(function* () {
+    const admission = yield* makeWsRequestAdmission;
+    const connectionSessions = yield* WsConnectionSessions;
+    return ((effect, options) => {
+      // Handler fibers descend from the RPC server fiber (forked at layer build),
+      // not from the connection's HTTP upgrade fiber, so connection-scoped
+      // services must be re-provided here from the connection-session registry.
+      const session = connectionSessions.lookup(
+        Headers.get(options.headers, WS_CONNECTION_SESSION_HEADER),
+      );
+      // Unknown transport context must never inherit local-loopback identity.
+      if (!session) {
+        return Effect.fail(new WsRpcError({ message: "Unauthorized request." }));
+      }
+      if (
+        session.attachmentPrincipal.ownerId.startsWith("remote-device:") &&
+        remoteMethodUnavailable(options.rpc._tag)
+      ) {
+        return Effect.fail(new WsRpcError({ message: REMOTE_NATIVE_UNAVAILABLE }));
+      }
+      const scoped = provideWsConnectionSession(effect, session);
+      return RpcSchema.isStreamSchema(options.rpc.successSchema)
+        ? scoped
+        : admission.guard(options.clientId, options.rpc._tag, scoped);
+    }) satisfies RpcMiddleware.RpcMiddleware<never, WsRpcError, never>;
+  }),
+);

@@ -71,7 +71,7 @@ interface BetaChannelDeps {
   readonly homeDir: string;
   readonly betaHomeDir: string;
   /** Flavor of the running app; only "production" may initiate the handoff. */
-  readonly flavor: "production" | "beta" | "canary" | "cua";
+  readonly flavor: DesktopBetaChannelState["flavor"];
   /** Base URL serving beta-mac.yml and its files; falls back to GitHub releases. */
   readonly feedUrlOverride?: string | undefined;
   /** Install target for the macOS bundle; defaults to /Applications. */
@@ -469,19 +469,21 @@ export class DesktopBetaChannel {
   }
 
   getState(): DesktopBetaChannelState {
-    const detection = this.detect();
-    const running = isBetaServerRunning(this.deps.betaHomeDir);
-    const result = readBetaImportResult(this.deps.betaHomeDir);
+    // Remote owns a separate install and never probes Beta's app or data home.
+    const supported = this.deps.flavor !== "remote";
+    const detection = supported ? this.detect() : null;
+    const running = supported && isBetaServerRunning(this.deps.betaHomeDir);
+    const result = supported ? readBetaImportResult(this.deps.betaHomeDir) : null;
     const stableExecutable = this.deps.flavor === "beta" ? this.detectStable() : null;
     return {
-      supported: true,
+      supported,
       flavor: this.deps.flavor,
       stableInstalled: stableExecutable !== null,
       canMoveBetaToTrash: this.deps.flavor === "beta" && this.deps.canTrashOwnBundle === true,
       stableDownloadUrl: SYNARA_STABLE_RELEASES_URL,
-      installed: detection.installed,
-      version: detection.version,
-      canInstall: this.canInstall,
+      installed: detection?.installed ?? false,
+      version: detection?.version ?? null,
+      canInstall: supported && this.canInstall,
       running,
       lastImportAt: result && result.ok ? result.completedAt : null,
       lastImportError: result && !result.ok ? (result.error ?? "import failed") : null,

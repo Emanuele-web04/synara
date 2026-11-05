@@ -8,10 +8,12 @@ export function CopyTextButton({
   text,
   label,
   className,
+  iconOnly = false,
 }: {
   text: string;
   label: string;
   className?: string;
+  iconOnly?: boolean;
 }) {
   const { t } = useTranslation();
 
@@ -24,12 +26,14 @@ export function CopyTextButton({
       aria-label={title}
       title={title}
       className={className}
-      size="xs"
+      size={iconOnly ? "icon-xs" : "xs"}
       variant="ghost"
       onClick={() => copyToClipboard(text, undefined)}
     >
       {isCopied ? <CheckIcon className="size-3" /> : <CopyIcon className="size-3" />}
-      <span>{isCopied ? t("chat:theme_copied") : t("settings:copy", { value0: label })}</span>
+      {iconOnly ? null : (
+        <span>{isCopied ? t("chat:theme_copied") : t("settings:copy", { value0: label })}</span>
+      )}
     </Button>
   );
 }

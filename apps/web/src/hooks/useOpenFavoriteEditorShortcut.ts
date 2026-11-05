@@ -8,11 +8,12 @@
 // Layer: Chat editor action hook
 
 import type { EditorId, ResolvedKeybindingsConfig } from "@synara/contracts";
-import { useEffect } from "react";
+import { useEffect, useEffectEvent } from "react";
 
-import { usePreferredEditor } from "../editorPreferences";
 import { isOpenFavoriteEditorShortcut } from "../keybindings";
+import { readExecutionContext } from "../lib/hosts/executionContext";
 import { readNativeApi } from "../nativeApi";
+import { useEditorLaunchers } from "./useEditorLaunchers";
 
 export function useOpenFavoriteEditorShortcut({
   keybindings,
@@ -26,8 +27,13 @@ export function useOpenFavoriteEditorShortcut({
   /** When false the listener is not registered (e.g. temporary threads with no project). */
   enabled?: boolean;
 }): void {
-  const enabled = enabledProp ?? true;
-  const [preferredEditor] = usePreferredEditor(availableEditors);
+  const enabled = (enabledProp ?? true) && !readExecutionContext()?.remote;
+  const { preferredEditor, openInEditor } = useEditorLaunchers({
+    keybindings,
+    availableEditors,
+    openInTarget,
+  });
+  const launch = useEffectEvent(openInEditor);
 
   useEffect(() => {
     if (!enabled) return;
@@ -36,7 +42,7 @@ export function useOpenFavoriteEditorShortcut({
       const api = readNativeApi();
       if (!api || !openInTarget || !preferredEditor) return;
       e.preventDefault();
-      void api.shell.openInEditor(openInTarget, preferredEditor);
+      launch(preferredEditor);
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);

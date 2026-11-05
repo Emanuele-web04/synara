@@ -44,6 +44,8 @@ permissions:
 env:
   # Keep the portable build fingerprint identical to its producer.
   AZURE_TRUSTED_SIGNING_SUBJECT_DN: ${{ secrets.AZURE_TRUSTED_SIGNING_SUBJECT_DN }}
+  SYNARA_STABLE_ACCOUNT_URL: ${{ inputs.desktop_flavor == 'production' && vars.SYNARA_STABLE_ACCOUNT_URL || '' }}
+  VITE_SYNARA_BILLING_ENABLED: ${{ inputs.desktop_flavor == 'production' && vars.SYNARA_STABLE_ACCOUNT_URL != '' && vars.SYNARA_STABLE_BILLING_UI || '' }}
 
 jobs:
   build:
@@ -95,6 +97,16 @@ jobs:
           run-id: ${{ github.run_id }}
           path: release-publish
 
+      # Source verifiers reuse shared runtime code even when packaging is restored.
+      # Install locked dependencies without lifecycle scripts before reading a checkpoint.
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile --ignore-scripts --filter '!@synara/marketing'
+
       - name: Verify restored checkpoint identity and bytes
         id: restore_checkpoint
         if: steps.checkpoint_lookup.outputs.artifact_id != ''
@@ -124,18 +136,6 @@ jobs:
             --expected-mac-team-id "$EXPECTED_MAC_TEAM_ID" \
             --expected-windows-publisher "$EXPECTED_WINDOWS_PUBLISHER" \
             --expected-windows-subject-dn "$EXPECTED_WINDOWS_SUBJECT_DN"
-
-      - name: Setup Bun
-        if: steps.restore_checkpoint.outcome != 'success'
-        uses: oven-sh/setup-bun@v2
-        with:
-          bun-version-file: package.json
-
-      - name: Install dependencies
-        if: steps.restore_checkpoint.outcome != 'success'
-        # Preflight validates the entire workspace. Native artifacts retain all
-        # runtime/build dependencies but do not install the unrelated marketing site.
-        run: bun install --frozen-lockfile --ignore-scripts --filter '!@synara/marketing'
 
       - name: Download macOS icon catalog
         if: inputs.platform == 'mac' && steps.restore_checkpoint.outcome != 'success'
@@ -362,7 +362,7 @@ jobs:
             --platform "${{ inputs.platform }}" \
             --arch "${{ inputs.arch }}" \
             --version "${{ inputs.version }}" \
-            --executable-name "${{ inputs.desktop_flavor == 'beta' && 'synara-beta' || 'synara' }}"
+            --executable-name "${{ inputs.desktop_flavor == 'remote' && 'synara-remote' || inputs.desktop_flavor == 'beta' && 'synara-beta' || 'synara' }}"
 
       - name: Upload qualified artifacts
         uses: actions/upload-artifact@v7
@@ -438,6 +438,14 @@ jobs:
         with:
           node-version-file: package.json
 
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+
+      - name: Install verification dependencies
+        run: bun install --frozen-lockfile --ignore-scripts --filter '!@synara/marketing'
+
       - name: Download the packaged Intel app
         uses: actions/download-artifact@v8
         with:
@@ -452,4 +460,4 @@ jobs:
             --platform "${{ inputs.platform }}" \
             --arch "${{ inputs.arch }}" \
             --version "${{ inputs.version }}" \
-            --executable-name "${{ inputs.desktop_flavor == 'beta' && 'synara-beta' || 'synara' }}"
+            --executable-name "${{ inputs.desktop_flavor == 'remote' && 'synara-remote' || inputs.desktop_flavor == 'beta' && 'synara-beta' || 'synara' }}"

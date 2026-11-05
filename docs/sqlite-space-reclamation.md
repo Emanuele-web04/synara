@@ -39,21 +39,40 @@ and [VACUUM scratch-space requirement](https://www.sqlite.org/lang_vacuum.html).
 ## Explicit offline compaction
 
 When shutdown maintenance keeps deferring a large legacy database, close every
-Synara process and every other client of that database, then run the installed
-CLI maintenance command with its absolute path:
+Synara process and every other client of that database. With the CLI distribution
+installed, run its maintenance command with the absolute database path:
 
 ```sh
 synara-compact-database "$HOME/.synara/userdata/state.sqlite"
 ```
 
 For Beta, explicitly select `$HOME/.synara-beta/userdata/state.sqlite` instead.
+For Synara Remote, explicitly select `$HOME/.synara-remote/userdata/state.sqlite`.
 Custom homes and development databases require their own actual path. The command
 does not discover homes, open another channel's database, start the server, or
 change retention. On Windows, pass a quoted absolute path, for example
 `synara-compact-database "$env:USERPROFILE\.synara\userdata\state.sqlite"`
 in PowerShell. A source checkout can run the built entry with
 `node apps/server/dist/compactDatabase.mjs <absolute-database-path>` using a Node
-version supported by `apps/server/package.json`.
+version supported by `apps/server/package.json`. Bun is not supported and is
+refused before the target database is inspected or locked.
+
+A desktop installer does not add this global CLI command to `PATH`. It includes
+`apps/server/dist/compactDatabase.mjs` inside `resources/app.asar`; use the
+installation's own runtime in Node mode and the explicit database path. For the
+default macOS Synara Remote installation, after quitting the app and all other
+clients:
+
+```sh
+ELECTRON_RUN_AS_NODE=1 \
+  "/Applications/Synara Remote.app/Contents/MacOS/Synara Remote" \
+  "/Applications/Synara Remote.app/Contents/Resources/app.asar/apps/server/dist/compactDatabase.mjs" \
+  "$HOME/.synara-remote/userdata/state.sqlite"
+```
+
+Adjust both application paths for a different installation location and select
+the actual database explicitly for a custom home. This invocation does not start
+the app or discover another channel's database.
 
 The command holds the existing database lifecycle lock and refuses pending
 migration recovery, including malformed recovery markers. It asks SQLite to

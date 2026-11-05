@@ -1,6 +1,7 @@
 import { DateTime, Effect, Layer, Schema } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as SqlSchema from "effect/unstable/sql/SqlSchema";
+import { makeRemotePairingQueries } from "./AuthPairingLinksRemote";
 
 import { toPersistenceSqlOrDecodeError } from "../Errors";
 import {
@@ -32,6 +33,7 @@ const makeAuthPairingLinkRepository = Effect.gen(function* () {
         method,
         role,
         subject,
+        access_origin,
         label,
         created_at,
         expires_at,
@@ -44,6 +46,7 @@ const makeAuthPairingLinkRepository = Effect.gen(function* () {
         ${input.method},
         ${input.role},
         ${input.subject},
+        ${input.accessOrigin ?? null},
         ${input.label},
         ${toIsoDateTime(input.createdAt)},
         ${toIsoDateTime(input.expiresAt)},
@@ -60,6 +63,7 @@ const makeAuthPairingLinkRepository = Effect.gen(function* () {
       UPDATE auth_pairing_links
       SET consumed_at = ${toIsoDateTime(consumedAt)}
       WHERE credential = ${credential}
+        AND purpose = 'local-session'
         AND revoked_at IS NULL
         AND consumed_at IS NULL
         AND expires_at > ${toIsoDateTime(now)}
@@ -69,6 +73,7 @@ const makeAuthPairingLinkRepository = Effect.gen(function* () {
         method AS "method",
         role AS "role",
         subject AS "subject",
+        access_origin AS "accessOrigin",
         label AS "label",
         created_at AS "createdAt",
         expires_at AS "expiresAt",
@@ -87,13 +92,15 @@ const makeAuthPairingLinkRepository = Effect.gen(function* () {
         method AS "method",
         role AS "role",
         subject AS "subject",
+        access_origin AS "accessOrigin",
         label AS "label",
         created_at AS "createdAt",
         expires_at AS "expiresAt",
         consumed_at AS "consumedAt",
         revoked_at AS "revokedAt"
       FROM auth_pairing_links
-      WHERE revoked_at IS NULL
+      WHERE purpose = 'local-session'
+        AND revoked_at IS NULL
         AND consumed_at IS NULL
         AND expires_at > ${toIsoDateTime(now)}
       ORDER BY created_at DESC, id DESC
@@ -107,6 +114,7 @@ const makeAuthPairingLinkRepository = Effect.gen(function* () {
       UPDATE auth_pairing_links
       SET revoked_at = ${toIsoDateTime(revokedAt)}
       WHERE id = ${id}
+        AND purpose = 'local-session'
         AND revoked_at IS NULL
         AND consumed_at IS NULL
       RETURNING id AS "id"
@@ -123,6 +131,7 @@ const makeAuthPairingLinkRepository = Effect.gen(function* () {
         method AS "method",
         role AS "role",
         subject AS "subject",
+        access_origin AS "accessOrigin",
         label AS "label",
         created_at AS "createdAt",
         expires_at AS "expiresAt",
@@ -130,6 +139,7 @@ const makeAuthPairingLinkRepository = Effect.gen(function* () {
         revoked_at AS "revokedAt"
       FROM auth_pairing_links
       WHERE credential = ${credential}
+        AND purpose = 'local-session'
     `,
   });
 
@@ -186,7 +196,14 @@ const makeAuthPairingLinkRepository = Effect.gen(function* () {
       ),
     );
 
-  return { create, consumeAvailable, listActive, revoke, getByCredential };
+  return {
+    create,
+    consumeAvailable,
+    listActive,
+    revoke,
+    getByCredential,
+    remote: makeRemotePairingQueries(sql),
+  };
 });
 
 export const AuthPairingLinkRepositoryLive = Layer.effect(

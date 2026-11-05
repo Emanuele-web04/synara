@@ -20,7 +20,7 @@ if (channelIndex !== -1 && (channelOverride === undefined || channelOverride.sta
 if (channelOverride !== undefined) {
   // Without this, `--channel release-assets` silently swallows the positional
   // and emits release-assets-mac.yml etc. instead of failing.
-  const knownChannels = new Set([policyConfig.channel, "beta"]);
+  const knownChannels = new Set([policyConfig.channel, "beta", "remote"]);
   if (!knownChannels.has(channelOverride)) {
     throw new Error(
       `Unknown update channel: ${channelOverride} (expected one of: ${[...knownChannels].join(", ")}).`,

@@ -86,6 +86,7 @@ export function resetStudioAdoptionDispatchedIdsForTests(): void {
 
 export function SidebarGroupsSurface({
   groupProjects,
+  remoteProjects,
   projectSidebarDataById,
   threadsHydrated,
   visualActiveThreadId,
@@ -98,6 +99,7 @@ export function SidebarGroupsSurface({
   onProjectContextMenu,
 }: {
   readonly groupProjects: readonly Project[];
+  readonly remoteProjects?: readonly ReactNode[];
   readonly projectSidebarDataById: ReadonlyMap<ProjectId, SidebarDerivedProjectData>;
   readonly threadsHydrated: boolean;
   readonly visualActiveThreadId: ThreadId | null;
@@ -486,11 +488,12 @@ export function SidebarGroupsSurface({
                 </SidebarMenuItem>
               );
             })
-          ) : (
+          ) : !remoteProjects?.length ? (
             <div className="px-2 pt-4 text-center text-ui text-muted-foreground/58">
               {emptyState === "loading" ? t("workspace:loadingHubs") : t("common:noHubsYet")}
             </div>
-          )}
+          ) : null}
+          {remoteProjects}
         </SidebarMenu>
         {archivedGroups.length > 0 ? (
           <SidebarCollapsibleSection

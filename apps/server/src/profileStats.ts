@@ -639,7 +639,11 @@ export function turnModelSelectionCte(sql: SqlClient.SqlClient, scope?: TokenSta
         json_extract(e.payload_json, '$.modelSelection.instanceId'),
         json_extract(e.payload_json, '$.modelSelection.provider')
       )) AS instanceId,
-      MAX(json_extract(e.payload_json, '$.modelSelection.model')) AS model
+      MAX(json_extract(e.payload_json, '$.modelSelection.model')) AS model,
+      MAX(COALESCE(
+        json_extract(e.payload_json, '$.modelSelection.options.reasoningEffort'),
+        json_extract(e.payload_json, '$.modelSelection.options.effort')
+      )) AS reasoning
     FROM orchestration_events e
     JOIN projection_turns pt
       ON pt.thread_id = ${turnThreadMatch}
@@ -799,6 +803,14 @@ export function tokenDeltaCtes(sql: SqlClient.SqlClient, scope?: TokenStatsThrea
             INSTR(json_extract(a.payload_json, '$.usageSessionId'), ':') - 1)
           ELSE COALESCE(CAST(json_extract(a.payload_json, '$.usageSessionId') AS TEXT), '')
         END AS usageSessionId,
+        COALESCE(
+          tm.reasoning,
+          CASE WHEN tm.model IS NULL AND json_valid(th.model_selection_json)
+          THEN COALESCE(
+            json_extract(th.model_selection_json, '$.options.reasoningEffort'),
+            json_extract(th.model_selection_json, '$.options.effort')
+          ) END
+        ) AS reasoning,
         CAST(json_extract(a.payload_json, '$.totalProcessedTokens') AS INTEGER) AS tp,
         CAST(json_extract(a.payload_json, '$.usedTokens') AS INTEGER) AS ut,
         -- The session's cached input, on the same scale as totalProcessedTokens.
@@ -846,6 +858,7 @@ export function tokenDeltaCtes(sql: SqlClient.SqlClient, scope?: TokenStatsThrea
         instanceId,
         model,
         usageSessionId,
+        reasoning,
         tp AS tot,
         ct AS cached_tot,
         dispatch_origin,
@@ -862,6 +875,7 @@ export function tokenDeltaCtes(sql: SqlClient.SqlClient, scope?: TokenStatsThrea
         provider,
         instanceId,
         model,
+        reasoning,
         dispatch_origin,
         d,
         -- A cache counter with no baseline in this series attributes nothing.
@@ -878,6 +892,8 @@ export function tokenDeltaCtes(sql: SqlClient.SqlClient, scope?: TokenStatsThrea
           provider,
           instanceId,
           model,
+          usageSessionId,
+          reasoning,
           dispatch_origin,
           tot,
           previous_tot,
@@ -896,6 +912,7 @@ export function tokenDeltaCtes(sql: SqlClient.SqlClient, scope?: TokenStatsThrea
             instanceId,
             model,
             usageSessionId,
+            reasoning,
             dispatch_origin,
             tot,
             cached_tot,
@@ -917,6 +934,7 @@ export function tokenDeltaCtes(sql: SqlClient.SqlClient, scope?: TokenStatsThrea
         ev.instanceId AS instanceId,
         ev.model AS model,
         ev.usageSessionId AS usageSessionId,
+        ev.reasoning AS reasoning,
         ev.ut AS tot,
         ev.dispatch_origin AS dispatch_origin,
         ev.sequence AS sequence,
@@ -941,6 +959,7 @@ export function tokenDeltaCtes(sql: SqlClient.SqlClient, scope?: TokenStatsThrea
         instanceId,
         model,
         usageSessionId,
+        reasoning,
         dispatch_origin,
         CASE
           WHEN previous_tot IS NULL THEN tot
@@ -962,6 +981,7 @@ export function tokenDeltaCtes(sql: SqlClient.SqlClient, scope?: TokenStatsThrea
           instanceId,
           model,
           usageSessionId,
+          reasoning,
           dispatch_origin,
           tot,
           LAG(tot) OVER (
@@ -983,11 +1003,11 @@ export function tokenDeltaCtes(sql: SqlClient.SqlClient, scope?: TokenStatsThrea
       )
     ),
     token_delta_rows AS (
-      SELECT thread_id, created_at, provider, instanceId, model, dispatch_origin, d AS tokens,
+      SELECT thread_id, created_at, provider, instanceId, model, reasoning, dispatch_origin, d AS tokens,
         cache_d AS cache_tokens
       FROM cumulative_delta
       UNION ALL
-      SELECT thread_id, created_at, provider, instanceId, model, dispatch_origin, d AS tokens,
+      SELECT thread_id, created_at, provider, instanceId, model, reasoning, dispatch_origin, d AS tokens,
         0 AS cache_tokens
       FROM used_only_delta
       UNION ALL
@@ -997,6 +1017,7 @@ export function tokenDeltaCtes(sql: SqlClient.SqlClient, scope?: TokenStatsThrea
         'claudeAgent',
         COALESCE(tm.instanceId, s.provider_instance_id, 'claudeAgent'),
         c.model,
+        tm.reasoning,
         c.dispatch_origin,
         c.tokens,
         c.cache_tokens

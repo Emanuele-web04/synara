@@ -396,7 +396,8 @@ export function useComposerCommandMenuItems(input: {
       mention: { name: connector.name, path: mcpConnectorMentionPath(connector.serverName) },
       label: connector.name,
       // Host only: some servers keep an API key in the URL path.
-      description: new URL(connector.url).host,
+      description:
+        connector.transport === "stdio" ? connector.command : new URL(connector.url).host,
     }));
     const pluginItems = rankProviderDiscoveryItems(
       providerPlugins.filter(({ plugin }) => isInstalledProviderPlugin(plugin)),

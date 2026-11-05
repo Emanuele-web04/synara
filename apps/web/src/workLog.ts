@@ -1,4 +1,8 @@
 import {
+  classifyCodexStderr,
+  normalizeCodexUserVisibleErrorMessage,
+} from "@synara/shared/codexStderr";
+import {
   type ComputerPermission,
   type ComputerBuildSignature,
   COMPUTER_CONTROL_DENIED_ACTIVITY_KIND,
@@ -171,6 +175,7 @@ export interface WorkLogEntry {
   // it as the subagent card (see SubagentRunCard.logic.ts).
   subagentRun?: WorkLogSubagentRun;
   automation?: WorkLogAutomation;
+  connectorProposalId?: string;
   synaraThreadCreation?: WorkLogSynaraThreadCreation;
   // Deterministic coordinator-monitor rows (worker settled / stuck /
   // batch roll-up) render as compact centered pills in the coordinator
@@ -274,6 +279,9 @@ export interface WorkLogSynaraThreadCreation {
   requestedCount: number;
   createdCount: number;
   threads: ReadonlyArray<WorkLogSynaraCreatedThread>;
+  /** Paired computer that owns the threads; absent when they live on this one. */
+  environmentId?: string;
+  hostName?: string;
 }
 
 export interface WorkLogSynaraWorkerNoticeThread {
@@ -536,6 +544,20 @@ export function deriveWorkLogEntries(
   const visibleTurnIds = options.visibleTurnIds;
   const ordered = orderedActivities(activities);
   const entries = ordered
+    // Old hosts persisted startup diagnostics as warnings. Apply the ingestion policy on replay.
+    .filter((activity) => {
+      if (activity.kind !== "runtime.warning" || activity.tone === "error") return true;
+      const payload = asRecord(activity.payload);
+      if (
+        payload?.willRetry === true ||
+        asRecord(payload?.data)?.willRetry === true ||
+        payload?.nativeEventType === "monitor_event" ||
+        payload?.nativeEventType === "background_tasks_changed"
+      )
+        return true;
+      const message = asTrimmedString(payload?.message);
+      return !message || classifyCodexStderr(message)?.kind === "notice";
+    })
     .filter((activity) => !isTurnFailureActivity(activity))
     .filter((activity) => shouldKeepActivityForWorkLog(activity, latestTurnId, visibleTurnIds))
     .filter(
@@ -1297,7 +1319,7 @@ function shouldKeepActivityForWorkLog(
 
   // Created-automation milestones are thread-scoped and carry no provider turn id;
   // keep them so the transcript card survives once the thread has turn-stamped messages.
-  if (activity.kind === "automation.created") {
+  if (activity.kind === "automation.created" || activity.kind === "mcp.connector.proposed") {
     return true;
   }
 
@@ -1463,7 +1485,15 @@ function extractWorkLogSynaraThreadCreation(
     typeof payload.createdCount === "number" && Number.isInteger(payload.createdCount)
       ? payload.createdCount
       : threads.length;
-  return { operationId, requestedCount, createdCount, threads };
+  const environmentId = asTrimmedString(payload.environmentId);
+  const hostName = asTrimmedString(payload.hostName);
+  return {
+    operationId,
+    requestedCount,
+    createdCount,
+    threads,
+    ...(environmentId ? { environmentId, ...(hostName ? { hostName } : {}) } : {}),
+  };
 }
 
 function extractWorkLogSynaraWorkerNotice(
@@ -1939,11 +1969,12 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
     activity.kind === "runtime.warning" &&
     typeof payload?.message === "string" &&
     payload.message.trim().length > 0
-      ? stripTerminalControlSequences(payload.message).trim()
+      ? normalizeCodexUserVisibleErrorMessage(payload.message)
       : undefined;
   if (runtimeWarningMessage) {
     entry.detail = runtimeWarningMessage;
     entry.runtimeWarningMessage = runtimeWarningMessage;
+    if (entry.label === "Runtime warning") entry.label = runtimeWarningMessage;
     if (payload?.willRetry === true || asRecord(payload?.data)?.willRetry === true) {
       entry.label = "Provider retrying";
       entry.labelTranslation = { message: "chat:providerRetrying" };
@@ -2054,6 +2085,10 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
     if (automation) {
       entry.automation = automation;
     }
+  }
+  if (activity.kind === "mcp.connector.proposed") {
+    const proposalId = asTrimmedString(payload?.proposalId);
+    if (proposalId) entry.connectorProposalId = proposalId;
   }
   if (activity.kind === INLINE_VISUAL_ACTIVITY_KIND && INLINE_VISUALS_ON) {
     const inlineVisual = Option.getOrUndefined(decodeInlineVisualPayload(activity.payload));

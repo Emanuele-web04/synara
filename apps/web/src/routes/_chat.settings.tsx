@@ -1,4 +1,3 @@
-import { EditorLanguageReloadNotice } from "~/components/codeEditor/EditorLanguageReloadNotice";
 // FILE: _chat.settings.tsx
 // Purpose: Render the dedicated settings experience with its own section sidebar and grouped panels.
 // Layer: Route screen
@@ -54,6 +53,8 @@ import {
   useAppSettings,
 } from "../appSettings";
 import { APP_VERSION } from "../branding";
+import { EditorLanguageReloadNotice } from "~/components/codeEditor/EditorLanguageReloadNotice";
+import { ProductAnalyticsSettingsPanel } from "~/components/settings/ProductAnalyticsSettingsPanel";
 import { AdvancedSettingsPanel } from "~/components/settings/AdvancedSettingsPanel";
 import { AppIconPicker } from "~/components/settings/AppIconPicker";
 import {
@@ -78,8 +79,10 @@ import {
   KeyboardShortcutsSettingsPanel,
 } from "../components/settings/KeyboardShortcutsSettingsPanel";
 import { ProfileSettingsPanel } from "../components/settings/ProfileSettingsPanel";
+import { BillingSettingsPanel } from "../components/settings/BillingSettingsPanel";
 import { ProviderUsageSettingsPanel } from "../components/settings/ProviderUsageSettingsPanel";
 import { ExternalMcpSettingsPanel } from "../components/settings/ExternalMcpSettingsPanel";
+import { ConnectionsSettingsPanel } from "../components/settings/ConnectionsSettingsPanel";
 import { McpConnectorsSettingsPanel } from "../components/settings/McpConnectorsSettingsPanel";
 import {
   SettingResetButton,
@@ -711,6 +714,7 @@ function SettingsRouteView() {
     <div className="space-y-6">
       <SafariAccessSetupButton />
       <BetaChannelSettingsPanel active={true} />
+      <ProductAnalyticsSettingsPanel />
       <SettingsSection title="settings:general_coreDefaults">
         <SettingsRow
           id="setting-language"
@@ -1854,7 +1858,15 @@ function SettingsRouteView() {
       case "shortcuts":
         return <KeyboardShortcutsSettingsPanel />;
       case "profile":
-        return <ProfileSettingsPanel />;
+        return (
+          <div className="flex flex-col gap-7">
+            {(isElectron && import.meta.env.VITE_SYNARA_BILLING_ENABLED === "1") ||
+            import.meta.env.VITE_SYNARA_BILLING_SANDBOX === "1" ? (
+              <BillingSettingsPanel />
+            ) : null}
+            <ProfileSettingsPanel />
+          </div>
+        );
       case "skills":
         return <SkillsSettingsPanel />;
       case "usage":
@@ -1984,6 +1996,7 @@ function SettingsRouteView() {
                 />
                 <McpConnectorsSettingsPanel active={activeSection === "connectors"} />
                 <ExternalMcpSettingsPanel active={activeSection === "integrations"} />
+                <ConnectionsSettingsPanel active={activeSection === "connections"} />
                 <AdvancedSettingsPanel
                   active={activeSection === "advanced"}
                   onOpenReleaseHistory={() => setReleaseHistoryOpen(true)}

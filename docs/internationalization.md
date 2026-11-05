@@ -60,7 +60,7 @@ bun run i18n:extract --check
 bun run i18n:coverage
 ```
 
-These commands are deterministic and read-only. The catalog check verifies locale/namespace/key parity, interpolation, protected tokens, message markup, and referenced keys. Extraction detects untranslated application UI literals; its narrow exemptions document product names and technical examples. Coverage also reports unchanged translations for review. CI runs catalog and extraction checks.
+These commands are deterministic and read-only. The catalog check verifies locale/namespace/key parity, interpolation, protected tokens, message markup, and referenced keys. Extraction detects untranslated application UI literals; its narrow exemptions document product names and technical examples. Coverage also reports unchanged translations for review. CI blocks on catalog and source-key errors and reports untranslated UI literals for follow-up.
 
 Run the affected Vitest and browser suites when changing runtime behavior. Verify an explicit Chinese preference, System resolution, English fallback, live switching, reload persistence, settings search and anchors, rich messages, counts, and unchanged user/provider content. Native changes also need menu and cold-start checks with an isolated data home. A mocked dialog test does not prove a packaged app on another operating system.
 

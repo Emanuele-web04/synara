@@ -102,6 +102,9 @@ describe("classifyToolCallSummaryCategory", () => {
 
 describe("isSummarizableToolCallEntry", () => {
   it("rejects non-tool tones and rich card entries", () => {
+    expect(
+      isSummarizableToolCallEntry(workEntry({ id: "connector", connectorProposalId: "pending" })),
+    ).toBe(false);
     expect(isSummarizableToolCallEntry(workEntry({ id: "err", tone: "error" }))).toBe(false);
     expect(isSummarizableToolCallEntry(workEntry({ id: "info", tone: "info" }))).toBe(false);
     expect(

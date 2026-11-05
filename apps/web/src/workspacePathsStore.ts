@@ -1,3 +1,4 @@
+import { executionStorage } from "./lib/hosts/executionStorage";
 // FILE: workspacePathsStore.ts
 // Purpose: Cache server-reported filesystem roots needed before the welcome payload arrives.
 // Layer: Server configuration state
@@ -29,14 +30,15 @@ const LEGACY_WORKSPACE_PAGES_STORAGE_KEY = "synara:workspace-pages:v2";
 function createWorkspacePathsStorage(): StateStorage {
   return {
     getItem: (name) =>
-      localStorage.getItem(name) ?? localStorage.getItem(LEGACY_WORKSPACE_PAGES_STORAGE_KEY),
+      executionStorage.getItem(name) ??
+      executionStorage.getItem(LEGACY_WORKSPACE_PAGES_STORAGE_KEY),
     setItem: (name, value) => {
-      localStorage.setItem(name, value);
-      localStorage.removeItem(LEGACY_WORKSPACE_PAGES_STORAGE_KEY);
+      executionStorage.setItem(name, value);
+      executionStorage.removeItem(LEGACY_WORKSPACE_PAGES_STORAGE_KEY);
     },
     removeItem: (name) => {
-      localStorage.removeItem(name);
-      localStorage.removeItem(LEGACY_WORKSPACE_PAGES_STORAGE_KEY);
+      executionStorage.removeItem(name);
+      executionStorage.removeItem(LEGACY_WORKSPACE_PAGES_STORAGE_KEY);
     },
   };
 }

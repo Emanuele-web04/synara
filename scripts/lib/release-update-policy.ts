@@ -1,9 +1,8 @@
 // FILE: release-update-policy.ts
-// Purpose: Keeps the historical 0.4.x compatibility line separate while stable 0.5.x
-// releases publish through GitHub's Latest updater feed and retain the packaged app's
-// dedicated `synara` channel aliases.
+// Purpose: Resolves release identities and updater manifests while keeping
+// Stable, Beta and Remote feeds isolated from the historical compatibility line.
 
-import { constants, copyFileSync, existsSync, readFileSync } from "node:fs";
+import { constants, copyFileSync, existsSync, readFileSync, unlinkSync } from "node:fs";
 import { resolve } from "node:path";
 
 export type ReleaseLane = "bridge" | "clean";
@@ -23,7 +22,7 @@ export interface ResolvedReleaseUpdatePolicy {
   readonly lane: ReleaseLane;
   readonly bridgeTag: string;
   readonly channel: string;
-  readonly desktopFlavor: "production" | "beta";
+  readonly desktopFlavor: "production" | "beta" | "remote";
 }
 
 const VERSION_PATTERN = /^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$/;
@@ -99,10 +98,11 @@ export function resolveReleaseUpdatePolicy(
     );
   }
 
-  // `beta` is the only prerelease identifier with its own updater channel and
-  // packaged desktop flavor; every other suffix keeps the stable channel so
-  // prerelease assets stay inert to the shipped feed.
-  const betaChannel = requested.prereleaseId === "beta";
+  // Isolated prereleases resolve their package and updater channel together.
+  const prereleaseFlavor =
+    requested.prereleaseId === "beta" || requested.prereleaseId === "remote"
+      ? requested.prereleaseId
+      : undefined;
 
   return {
     version,
@@ -112,8 +112,8 @@ export function resolveReleaseUpdatePolicy(
     mirrorToStableChannel: false,
     lane: normalizedConfig.lane,
     bridgeTag: `v${normalizedConfig.bridgeVersion}`,
-    channel: betaChannel ? "beta" : normalizedConfig.channel,
-    desktopFlavor: betaChannel ? "beta" : "production",
+    channel: prereleaseFlavor ?? normalizedConfig.channel,
+    desktopFlavor: prereleaseFlavor ?? "production",
   };
 }
 
@@ -150,8 +150,22 @@ export function prepareReleaseUpdateManifests(
   channelOverride?: string,
 ): readonly string[] {
   const normalizedConfig = validateReleaseUpdatePolicyConfig(config);
+  const channel = channelOverride ?? normalizedConfig.channel;
+  if (channel === "remote") {
+    // Remote requires all supported platforms, with no Latest/Stable aliases.
+    if (normalizedConfig.lane !== "clean")
+      throw new Error("Remote releases require the clean release lane.");
+    const sourceNames = ["latest-mac.yml", "latest.yml", "latest-linux.yml"];
+    const missing = sourceNames.filter((name) => !existsSync(resolve(assetDirectory, name)));
+    if (missing.length > 0)
+      throw new Error(`Remote release is missing update manifests: ${missing.join(", ")}`);
+    const destinationNames = channelManifestNames("remote");
+    copyChannelManifests(assetDirectory, sourceNames, destinationNames);
+    for (const sourceName of sourceNames) unlinkSync(resolve(assetDirectory, sourceName));
+    return destinationNames;
+  }
   const sourceNames = ["latest-mac.yml", "latest.yml", "latest-linux.yml"] as const;
-  const destinationNames = channelManifestNames(channelOverride ?? normalizedConfig.channel);
+  const destinationNames = channelManifestNames(channel);
   if (normalizedConfig.lane === "bridge") {
     const missing = sourceNames.filter((name) => !existsSync(resolve(assetDirectory, name)));
     if (missing.length > 0) {
