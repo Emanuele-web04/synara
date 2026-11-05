@@ -831,10 +831,6 @@
   bottom: calc(100% + var(--hb-gap-sm));
   left: 0;
 }
-.hb-menu__panel--at {
-  position: fixed;
-  min-width: 160px;
-}
 .hb-menu__section {
   padding: var(--hb-gap-sm) 10px var(--hb-gap-xs);
   font-size: var(--hb-text-xs);

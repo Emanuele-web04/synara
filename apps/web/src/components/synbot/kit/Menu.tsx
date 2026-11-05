@@ -2,23 +2,19 @@
 // Purpose: HoloBot's popover menu (ported from packages/ui Menu.tsx): anchored to its trigger
 //          (the top bar's More, the composer's "+"), items in sections, a check on the chosen
 //          one. Opens on click, closes on a pick, Escape or a click outside; arrow keys move
-//          between items. ContextMenu: the same panel at the pointer on a right-click of what it
-//          wraps (a pinned tile: Unpin); it stays inside the window.
+//          between items. Right-click menus use Synara's own context menu (native on desktop).
 // Layer: SynBot kit
-// Exports: MenuEntry, Menu, ContextMenu
+// Exports: MenuEntry, Menu
 
 import {
   cloneElement,
   useEffect,
-  useLayoutEffect,
   useRef,
   useState,
   type KeyboardEvent,
-  type MouseEvent,
   type ReactElement,
   type RefObject,
 } from "react";
-import { createPortal } from "react-dom";
 
 import { Icon, type IconName } from "./Icon";
 
@@ -178,62 +174,5 @@ export function Menu({
         </div>
       ) : null}
     </span>
-  );
-}
-
-type ContextTargetProps = { onContextMenu?: (event: MouseEvent) => void };
-
-/** A menu at the pointer when `children` is right-clicked. */
-export function ContextMenu({
-  children,
-  items,
-  label,
-}: {
-  readonly children: ReactElement<ContextTargetProps>;
-  readonly items: readonly MenuEntry[];
-  readonly label: string;
-}) {
-  const [at, setAt] = useState<{ x: number; y: number } | null>(null);
-  const panel = useRef<HTMLDivElement>(null);
-  const [close] = useState(() => () => setAt(null));
-  useOpenPanel(at !== null, close, panel, panel);
-  useLayoutEffect(() => {
-    const el = panel.current;
-    if (!at || !el) return;
-    const fit = () => {
-      const margin = 12;
-      const { width, height } = el.getBoundingClientRect();
-      el.style.left = `${Math.max(margin, Math.min(at.x, window.innerWidth - width - margin))}px`;
-      el.style.top = `${Math.max(margin, Math.min(at.y, window.innerHeight - height - margin))}px`;
-    };
-    fit();
-    const observer = new ResizeObserver(fit);
-    observer.observe(el);
-    return () => observer.disconnect();
-  }, [at]);
-  return (
-    <>
-      {cloneElement(children, {
-        onContextMenu: (event: MouseEvent) => {
-          event.preventDefault();
-          setAt({ x: event.clientX, y: event.clientY });
-        },
-      })}
-      {at
-        ? createPortal(
-            <div
-              className="hb hb-menu__panel hb-menu__panel--at"
-              style={{ left: at.x, top: at.y }}
-              ref={panel}
-              role="menu"
-              aria-label={label}
-              onKeyDown={keys(panel, close)}
-            >
-              <Items items={items} close={close} />
-            </div>,
-            document.body,
-          )
-        : null}
-    </>
   );
 }

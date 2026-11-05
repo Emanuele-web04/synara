@@ -3,13 +3,14 @@
 //          PinnedTiles.tsx, ConversationRow.tsx and SidebarFoot.tsx): SynBot with its star and
 //          the pinned bots as tiles three to a row (an amber dot while one waits on the user, a
 //          blue one while it works); "My bots", a row per other bot with its face, name, time
-//          and a status line (its last word, "Waiting on you", or its work); a right-click pins
-//          or unpins; the foot has New bot and Stop all.
+//          and a status line (its last word, "Waiting on you", or its work); a right-click opens
+//          Synara's context menu (native on desktop): Open, Edit, Pin or Unpin, Stop while it
+//          works, Remove; the foot has New bot and Stop all.
 // Layer: SynBot UI (rendered by Sidebar while the SynBot route is active)
 // Exports: SynbotSidebar
 
-import type { Bot } from "@synara/contracts";
-import { useSearch } from "@tanstack/react-router";
+import type { Bot, ContextMenuItem } from "@synara/contracts";
+import { useNavigate, useSearch } from "@tanstack/react-router";
 import {
   memo,
   useLayoutEffect,
@@ -23,20 +24,20 @@ import {
 import { useAppSettings } from "~/appSettings";
 import { useNowMs } from "~/hooks/useNowMs";
 import { getFormatLocale, useTranslation } from "~/i18n";
+import { THREAD_CONTEXT_MENU_ICONS } from "~/lib/contextMenuIcons";
 import { readNativeApi } from "~/nativeApi";
 import { useStore } from "~/store";
 import { latestBotPreview, listTime } from "~/synbot/botPreview.logic";
+import { confirmAndRemoveBot, setBotPinned, stopBots } from "~/synbot/synbotActions";
 import { orderedBots, tasksForBot } from "~/synbot/synbotState.logic";
 import { useSynbotStore } from "~/synbot/synbotStore";
 
 import { SidebarPanelTitle } from "../../SidebarPanelTitle";
-import { toastManager } from "../../ui/toast";
 import { BotFace, botMood } from "../BotFace";
 import { useBotEditor } from "../editor/botEditorStore";
 import { AlertDialog } from "../kit/Dialog";
 import { CapsuleButton, Dot, type DotTone } from "../kit/controls";
 import { Icon } from "../kit/Icon";
-import { ContextMenu } from "../kit/Menu";
 import { useOpenBot } from "../synbotNav";
 import { useBotStatusLine } from "../useBotStatusLine";
 import "./shell.css";
@@ -44,25 +45,74 @@ import "./shell.css";
 /** Short times are read again this often. */
 const TIME_CHECK_MS = 60_000;
 
-function usePinMenu(bot: Bot) {
+type BotMenuAction = "open" | "edit" | "toggle-pin" | "stop" | "remove";
+
+/** A right-click on a bot (row or tile): Synara's context menu, native on desktop. */
+function useBotContextMenu() {
   const { t } = useTranslation();
-  const setPinned = (pinned: boolean) => {
-    void readNativeApi()
-      ?.bots.update({ id: bot.id, expectedRevision: bot.revision, pinned })
-      .then((next) => useSynbotStore.getState().applyEvent({ type: "bot-upserted", bot: next }))
-      .catch((error: unknown) =>
-        toastManager.add({
-          type: "error",
-          title: t("synbot:pinFailed"),
-          description: error instanceof Error ? error.message : String(error),
-        }),
-      );
+  const navigate = useNavigate();
+  const openBot = useOpenBot();
+  const openEdit = useBotEditor((store) => store.openEdit);
+  const search = useSearch({ strict: false }) as { readonly bot?: string };
+  return (bot: Bot, event: MouseEvent) => {
+    event.preventDefault();
+    event.stopPropagation();
+    const api = readNativeApi();
+    if (!api) return;
+    const main = bot.kind === "main";
+    const items: ContextMenuItem<BotMenuAction>[] = [
+      { id: "open", label: t("synbot:open") },
+      { id: "edit", label: t("synbotEditor:edit"), icon: THREAD_CONTEXT_MENU_ICONS.rename },
+      ...(main
+        ? []
+        : [
+            {
+              id: "toggle-pin" as const,
+              label: bot.pinned ? t("synbot:unpin") : t("synbot:pin"),
+              icon: THREAD_CONTEXT_MENU_ICONS.pin,
+            },
+          ]),
+      ...(bot.status === "working" || bot.status === "waiting"
+        ? [{ id: "stop" as const, label: t("synbot:stop") }]
+        : []),
+      ...(main
+        ? []
+        : [
+            {
+              id: "remove" as const,
+              label: t("synbotEditor:remove"),
+              icon: THREAD_CONTEXT_MENU_ICONS.delete,
+              destructive: true,
+              separatorBefore: true,
+            },
+          ]),
+    ];
+    void (async () => {
+      const clicked = await api.contextMenu.show(items, { x: event.clientX, y: event.clientY });
+      switch (clicked) {
+        case "open":
+          openBot(bot);
+          return;
+        case "edit":
+          openEdit(bot.id);
+          return;
+        case "toggle-pin":
+          await setBotPinned(bot, !bot.pinned);
+          return;
+        case "stop":
+          await stopBots(bot);
+          return;
+        case "remove":
+          // Its chat was open: SynBot's takes its place.
+          if ((await confirmAndRemoveBot(bot)) && search.bot === bot.id) {
+            void navigate({ to: "/synbot", search: {} });
+          }
+          return;
+        default:
+          return;
+      }
+    })();
   };
-  return [
-    bot.pinned
-      ? { id: "unpin", label: t("synbot:unpin"), onSelect: () => setPinned(false) }
-      : { id: "pin", label: t("synbot:pin"), onSelect: () => setPinned(true) },
-  ];
 }
 
 function Tile({
@@ -106,17 +156,6 @@ function Tile({
         {waiting || busy ? <Dot tone={waiting ? "attention" : "active"} small /> : null}
       </span>
     </button>
-  );
-}
-
-function PinnedTile({ bot, selected }: { readonly bot: Bot; readonly selected: boolean }) {
-  const { t } = useTranslation();
-  const items = usePinMenu(bot);
-  if (bot.kind === "main") return <Tile bot={bot} selected={selected} />;
-  return (
-    <ContextMenu label={t("synbot:botMenu", { name: bot.name })} items={items}>
-      <Tile bot={bot} selected={selected} />
-    </ContextMenu>
   );
 }
 
@@ -184,7 +223,7 @@ const BotRow = memo(function BotRow({
       state.threadShellById?.[bot.threadId]?.updatedAt ??
       null,
   );
-  const items = usePinMenu(bot);
+  const showMenu = useBotContextMenu();
   const waiting = bot.status === "waiting";
   const busy = bot.status === "working";
   const line = waiting || busy || !previewText ? statusLine(bot, tasks) : previewText;
@@ -202,17 +241,16 @@ const BotRow = memo(function BotRow({
       )
     : null;
   return (
-    <ContextMenu label={t("synbot:botMenu", { name: bot.name })} items={items}>
-      <ConversationRow
-        face={<BotFace bot={bot} size="row" mood={botMood(bot.status)} />}
-        title={bot.name}
-        time={time}
-        status={status}
-        tone={waiting ? "attention" : busy ? "active" : "muted"}
-        selected={selected}
-        onSelect={() => openBot(bot)}
-      />
-    </ContextMenu>
+    <ConversationRow
+      face={<BotFace bot={bot} size="row" mood={botMood(bot.status)} />}
+      title={bot.name}
+      time={time}
+      status={status}
+      tone={waiting ? "attention" : busy ? "active" : "muted"}
+      selected={selected}
+      onSelect={() => openBot(bot)}
+      onContextMenu={(event) => showMenu(bot, event)}
+    />
   );
 });
 
@@ -254,31 +292,14 @@ export function SynbotSidebar() {
   const activeBotId = search.bot ?? main?.id ?? null;
   const tiles = main ? [main, ...pinned] : pinned;
 
+  const showMenu = useBotContextMenu();
+
   const stopAll = () => {
-    const api = readNativeApi();
-    if (!api) return;
     setStopping(true);
-    void api.bots
-      .stopAll()
-      .then((result) =>
-        toastManager.add({
-          type: "success",
-          title: t("synbot:stopAllDone", {
-            count: result.interruptedThreadIds.length + result.cancelledTaskIds.length,
-          }),
-        }),
-      )
-      .catch((error: unknown) =>
-        toastManager.add({
-          type: "error",
-          title: t("synbot:stopAllFailed"),
-          description: error instanceof Error ? error.message : String(error),
-        }),
-      )
-      .finally(() => {
-        setStopping(false);
-        setConfirmStop(false);
-      });
+    void stopBots().finally(() => {
+      setStopping(false);
+      setConfirmStop(false);
+    });
   };
 
   return (
@@ -293,7 +314,12 @@ export function SynbotSidebar() {
           {tiles.length > 0 ? (
             <div className="tiles" role="group" aria-label={t("synbot:pinned")}>
               {tiles.map((bot) => (
-                <PinnedTile key={bot.id} bot={bot} selected={activeBotId === bot.id} />
+                <Tile
+                  key={bot.id}
+                  bot={bot}
+                  selected={activeBotId === bot.id}
+                  onContextMenu={(event) => showMenu(bot, event)}
+                />
               ))}
             </div>
           ) : null}

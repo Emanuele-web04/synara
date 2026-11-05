@@ -32,7 +32,9 @@ The SynBot page takes HoloBot's layout inside Synara's window:
 
 - **Sidebar panel.** SynBot (with its star) and pinned bots as tiles, then **My bots**: one row
   per bot with its last message and time, amber while it waits on you, blue while it works.
-  Right-click a bot to pin or unpin it. **New bot** and **Stop all** sit at the bottom.
+  Right-click a bot for **Open**, **Edit**, **Pin**/**Unpin**, **Stop** (while it works or waits)
+  and **Remove** (asks first); the desktop app shows its native menu. **New bot** and **Stop
+  all** sit at the bottom.
 - **Thread.** The selected bot's chat as a messaging thread: your words on the right (in the
   bot's color in a bot's chat), the bot's replies on the left, a date over each new stretch, and
   three dots with what the bot is doing while it answers. Work handed to another bot shows as a
@@ -40,9 +42,23 @@ The SynBot page takes HoloBot's layout inside Synara's window:
   **Message from \<bot\>** and the brief. Tasks show as one card each (state, steps, result,
   **Open**, **Stop**); **Open** shows the task's own chat on the right. Pending approvals and
   questions appear as lettered cards at the end; the letter keys answer the newest one.
-- **Composer.** The bot chat uses Synara's own composer (attachments, queue, model, stop).
+- **Composer.** The bot chat uses Synara's own composer (attachments, queue, model, stop); it
+  reads "Message \<bot\>".
 - **Name pill.** The bot's face, name and model at the top; it opens the bot's sheet. **More**
   changes the chat's engine and model, edits the bot or opens Settings → SynBot.
+
+A window closed on the SynBot page reopens there, on the same bot.
+
+### In the desktop app
+
+- **Notifications** use Synara's chat notifications and settings, named after the bot. A bot
+  notifies when its report or recap arrives (the hand-off before it stays quiet) and when it
+  starts waiting on you: a Start, an approval, a question or a task. Clicking one opens that
+  bot on the SynBot page (a task's request opens in the task pane). Answering from the
+  notification itself (Approve, Start) is not offered yet.
+- **Dock badge.** Bots waiting on you are added to the badge's unread notifications.
+- **SynBot menu.** **Open SynBot** (⌥⌘B on macOS), **New Bot…** and **Stop All Bots…** (asks
+  first).
 
 ## How work flows
 
