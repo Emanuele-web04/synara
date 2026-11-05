@@ -22,6 +22,7 @@ import type {
   BotsMergeResult,
   BotsRemoveInput,
   BotsSnapshot,
+  BotsStopAllInput,
   BotsStopAllResult,
   BotsSuggestInput,
   BotsSuggestResult,
@@ -88,7 +89,8 @@ export interface BotServiceShape {
   readonly updateBranch: (
     input: BotsUpdateBranchInput,
   ) => Effect.Effect<BotMergeProof, BotServiceError>;
-  readonly stopAll: () => Effect.Effect<BotsStopAllResult, BotServiceError>;
+  /** Stops every bot, or with `botId` only that bot (its turn, tasks and the work handed to it). */
+  readonly stopAll: (input?: BotsStopAllInput) => Effect.Effect<BotsStopAllResult, BotServiceError>;
   readonly streamEvents: () => Stream.Stream<BotStreamEvent, BotServiceError>;
 
   // ── Gateway API (bot chats) ──────────────────────────────────────
