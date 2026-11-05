@@ -264,6 +264,7 @@ export function ConnectionsThisComputer({
         }}
         createCode={dialog === "add"}
         state={state}
+        loadError={loadError}
         onChanged={refresh}
         computerNoun={computerNoun}
       />

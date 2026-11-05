@@ -2,7 +2,8 @@
 // Purpose: Required onboarding modal shown after the first sign-in — picks the
 // public @handle, display name, avatar color, and workspace name, then writes
 // the profile through account.updateProfile. Not dismissable: a signed-in user
-// without a profile has nowhere else to go.
+// without a profile has nowhere else to go. `ProfileSetupForm` is the same form
+// without the dialog, embedded by the first-run onboarding right after sign-in.
 // Layer: Web account feature.
 
 import type { AccountMe } from "@synara/contracts";
@@ -45,13 +46,17 @@ export function OnboardingDialog({ open, me, onFinished }: OnboardingDialogProps
     // backdrop presses have nothing to call, and the close X is hidden.
     <Dialog open={open}>
       <DialogPopup showCloseButton={false} className="sm:max-w-[380px]">
-        <OnboardingDialogContent me={me} onFinished={onFinished} />
+        <ProfileSetupForm me={me} onFinished={onFinished} />
       </DialogPopup>
     </Dialog>
   );
 }
 
-function OnboardingDialogContent({ me, onFinished }: Omit<OnboardingDialogProps, "open">) {
+export function ProfileSetupForm({
+  me,
+  onFinished,
+  variant = "dialog",
+}: Omit<OnboardingDialogProps, "open"> & { readonly variant?: "dialog" | "embedded" }) {
   const account = useAccount();
   const [name, setName] = useState(me.name);
   const [handle, setHandle] = useState(sanitizeHandleInput(me.name.replace(/\s+/g, "-")));
@@ -105,7 +110,7 @@ function OnboardingDialogContent({ me, onFinished }: Omit<OnboardingDialogProps,
   };
 
   return (
-    <div className="flex flex-col gap-4 px-6 pt-8 pb-6">
+    <div className={cn("flex flex-col gap-4", variant === "dialog" && "px-6 pt-8 pb-6")}>
       <div className="flex flex-col items-center gap-3 text-center">
         <ProfileAvatar
           initials={accountInitial(name)}
@@ -132,9 +137,13 @@ function OnboardingDialogContent({ me, onFinished }: Omit<OnboardingDialogProps,
             ))}
           </div>
         )}
-        <DialogTitle className="font-system-ui text-lg font-semibold">
-          Set up your profile
-        </DialogTitle>
+        {variant === "dialog" ? (
+          <DialogTitle className="font-system-ui text-lg font-semibold">
+            Set up your profile
+          </DialogTitle>
+        ) : (
+          <h3 className="text-ui-lg font-medium text-foreground">Set up your profile</h3>
+        )}
       </div>
 
       <form
