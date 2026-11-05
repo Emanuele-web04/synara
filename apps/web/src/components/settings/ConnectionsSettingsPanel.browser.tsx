@@ -6,7 +6,8 @@
 
 import "../../index.css";
 
-import type { DesktopKeepAwakeState } from "@synara/contracts";
+import type { AccountBillingStatus, AccountStatus, DesktopKeepAwakeState } from "@synara/contracts";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { StrictMode, type CSSProperties } from "react";
 import { page } from "vitest/browser";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -67,8 +68,20 @@ const fixture = vi.hoisted(() => {
             },
           ],
   });
+  const status = {
+    state: "signed-in",
+    accountAuthority: "https://account.example.test/api/v1",
+    me: {
+      id: "user-1",
+      name: "Ada Lovelace",
+      email: "ada@example.test",
+      organization: { id: "org-1", name: "Personal" },
+    },
+  } satisfies AccountStatus;
   return {
     state,
+    status,
+    billingStatus: vi.fn<() => Promise<AccountBillingStatus>>(),
     navigate: vi.fn(),
     confirm: vi.fn(async () => true),
     disconnect: vi.fn(async () => {}),
@@ -113,8 +126,8 @@ const fixture = vi.hoisted(() => {
 
 vi.mock("~/hooks/useAccount", () => ({
   useAccount: () => ({
-    me: { id: "user-1", name: "Ada Lovelace" },
-    status: { state: "signed-in", accountAuthority: "https://account.example.test/api/v1" },
+    me: fixture.status.me,
+    status: fixture.status,
   }),
 }));
 vi.mock("@tanstack/react-router", async (importOriginal) => ({
@@ -122,7 +135,10 @@ vi.mock("@tanstack/react-router", async (importOriginal) => ({
   useNavigate: () => fixture.navigate,
 }));
 vi.mock("~/nativeApi", async (importOriginal) => {
-  const api = { dialogs: { confirm: fixture.confirm } };
+  const api = {
+    account: { status: async () => fixture.status, billingStatus: fixture.billingStatus },
+    dialogs: { confirm: fixture.confirm },
+  };
   return {
     ...(await importOriginal<typeof import("~/nativeApi")>()),
     readNativeApi: () => api,
@@ -218,8 +234,9 @@ const keepAwake = {
   setRemoteAccessAllowed: vi.fn(async () => keepAwake.state),
 };
 
-async function renderPanel(strictMode = false) {
+async function renderPanel({ strictMode = false, billingEnabled = false } = {}) {
   await page.viewport(900, 1100);
+  const queryClient = new QueryClient();
   const panel = (
     <div
       className="mx-auto max-w-2xl bg-background px-6 py-8 text-foreground"
@@ -227,10 +244,14 @@ async function renderPanel(strictMode = false) {
       style={{ "--color-text-accent": "#0169cc" } as CSSProperties}
     >
       <h1 className="mb-8 text-xl font-medium tracking-tight">Connections</h1>
-      <ConnectionsSettingsPanel active />
+      <ConnectionsSettingsPanel active billingEnabled={billingEnabled} />
     </div>
   );
-  return render(strictMode ? <StrictMode>{panel}</StrictMode> : panel);
+  return render(
+    <QueryClientProvider client={queryClient}>
+      {strictMode ? <StrictMode>{panel}</StrictMode> : panel}
+    </QueryClientProvider>,
+  );
 }
 
 const CREATE_CALLS = () =>
@@ -246,6 +267,8 @@ beforeEach(() => {
   fixture.state.revoked = [];
   fixture.state.connected = false;
   fixture.request.mockClear();
+  fixture.billingStatus.mockReset();
+  fixture.navigate.mockClear();
   fixture.confirm.mockClear();
   fixture.disconnect.mockClear();
   fixture.recover.mockReset();
@@ -400,6 +423,47 @@ describe("Connections settings", () => {
     await expect.element(page.getByRole("switch", { name: "Allow connections" })).toBeChecked();
   });
 
+  it.each(["none", "granted"] as const)(
+    "offers the existing Subscription panel based on access (%s) while preserving pairing",
+    async (access) => {
+      fixture.billingStatus.mockResolvedValue({
+        provider: "polar",
+        environment: "production",
+        available: true,
+        access,
+        subscriptionStatus: access === "granted" ? "active" : null,
+        validUntil: null,
+        cancelAtPeriodEnd: false,
+        checkedAt: new Date().toISOString(),
+        canCheckout: access === "none",
+        canManage: access === "granted",
+        plans: [
+          { interval: "month", amountMinor: 999, currency: "USD" },
+          { interval: "year", amountMinor: 7999, currency: "USD" },
+        ],
+      });
+      await renderPanel({ billingEnabled: true });
+      await vi.waitFor(() => expect(fixture.billingStatus).toHaveBeenCalledOnce());
+      await expect.element(page.getByRole("button", { name: "Connect a device" })).toBeVisible();
+      if (access === "none") {
+        await expect.element(page.getByText("Synara Pro", { exact: true })).toBeVisible();
+        await page.getByRole("button", { name: "View Pro plans" }).click();
+        expect(fixture.navigate).toHaveBeenCalledWith({
+          to: "/settings",
+          search: { section: "profile" },
+        });
+        expect(CREATE_CALLS()).toHaveLength(0);
+        await expect
+          .element(page.getByRole("button", { name: "Revoke access" }).first())
+          .toBeVisible();
+      } else {
+        await expect
+          .element(page.getByRole("button", { name: "View Pro plans" }))
+          .not.toBeInTheDocument();
+      }
+    },
+  );
+
   it("revokes a trusted device after confirmation", async () => {
     await renderPanel();
     await expect.element(page.getByText("Ada's iPad")).toBeVisible();
@@ -420,8 +484,8 @@ describe("Connections settings", () => {
       releaseList = resolve;
     });
     try {
-      await renderPanel(true);
-      await page.getByRole("button", { name: "Add", exact: true }).click();
+      await renderPanel({ strictMode: true });
+      await page.getByRole("button", { name: "Connect a device", exact: true }).click();
       await expect.element(page.getByText("Creating a code…")).toBeVisible();
       expect(CREATE_CALLS()).toHaveLength(0);
     } finally {
@@ -459,13 +523,13 @@ describe("Connections settings", () => {
     expect(
       fixture.request.mock.calls.filter(([request]) => request.operation === "cancel-invitation"),
     ).toHaveLength(0);
-    await page.getByRole("button", { name: "Add", exact: true }).click();
+    await page.getByRole("button", { name: "Connect a device", exact: true }).click();
     await expect.element(page.getByText("EFGH-6789", { exact: true })).toBeVisible();
     expect(CREATE_CALLS()).toHaveLength(2);
   });
 
   it("reviews a waiting request without creating a code", async () => {
-    await renderPanel(true);
+    await renderPanel({ strictMode: true });
     await page.getByRole("button", { name: "Review", exact: true }).click();
     await expect.element(page.getByRole("heading", { name: "Approve this device?" })).toBeVisible();
     await page.getByRole("button", { name: "Reject", exact: true }).click();
@@ -483,8 +547,8 @@ describe("Connections settings", () => {
 
   it("shows the short code and this computer's fingerprint for another computer", async () => {
     fixture.state.approved = true;
-    await renderPanel(true);
-    await page.getByRole("button", { name: "Add", exact: true }).click();
+    await renderPanel({ strictMode: true });
+    await page.getByRole("button", { name: "Connect a device", exact: true }).click();
     await expect
       .element(page.getByRole("heading", { name: /Connect a device to this/ }))
       .toBeVisible();
@@ -507,8 +571,8 @@ describe("Connections settings", () => {
 
   it("withdraws the code on screen when a new one replaces it", async () => {
     fixture.state.approved = true;
-    await renderPanel(true);
-    await page.getByRole("button", { name: "Add", exact: true }).click();
+    await renderPanel({ strictMode: true });
+    await page.getByRole("button", { name: "Connect a device", exact: true }).click();
     await expect.element(page.getByText("ABCD-2345", { exact: true })).toBeVisible();
     await page.getByRole("button", { name: "New code", exact: true }).click();
     await expect.element(page.getByText("EFGH-6789", { exact: true })).toBeVisible();
@@ -525,8 +589,8 @@ describe("Connections settings", () => {
 
   it("does not keep showing a withdrawn code when its replacement fails", async () => {
     fixture.state.approved = true;
-    await renderPanel(true);
-    await page.getByRole("button", { name: "Add", exact: true }).click();
+    await renderPanel({ strictMode: true });
+    await page.getByRole("button", { name: "Connect a device", exact: true }).click();
     await expect.element(page.getByText("ABCD-2345", { exact: true })).toBeVisible();
     fixture.state.codeFailuresRemaining = 1;
     await page.getByRole("button", { name: "New code", exact: true }).click();
@@ -539,8 +603,8 @@ describe("Connections settings", () => {
   it("can retry failed code creation without closing the dialog", async () => {
     fixture.state.approved = true;
     fixture.state.codeFailuresRemaining = 1;
-    await renderPanel(true);
-    await page.getByRole("button", { name: "Add", exact: true }).click();
+    await renderPanel({ strictMode: true });
+    await page.getByRole("button", { name: "Connect a device", exact: true }).click();
     await expect.element(page.getByRole("alert")).toBeVisible();
     expect(page.getByRole("button", { name: "Try again", exact: true }).elements()).toHaveLength(1);
     await page.getByRole("button", { name: "Try again", exact: true }).click();
