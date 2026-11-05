@@ -181,6 +181,13 @@ import {
   ENVIRONMENT_CONTENT_INSET_MOTION_CLASS,
 } from "./composerPickerStyles";
 import { formatDayAwareTimestamp } from "../../timestampFormat";
+import {
+  bubbleTextColor,
+  deriveBubbleRowLayout,
+  sameBubbleRowLayout,
+  type BubbleRowLayout,
+  type TimelineBubbleStyle,
+} from "./timelineBubbles.logic";
 import { resolveUserMessageMarkdownText } from "./userMessageTerminalContexts";
 import { splitPromptIntoDisplaySegments } from "~/composer-editor-mentions";
 import {
@@ -511,6 +518,8 @@ interface MessagesTimelineProps {
   turnTimingByTurnId?: ReadonlyMap<TurnId, TurnTiming> | undefined;
   /** Coordinator/bot chats hide tool rows and keep a text conversation. */
   conversationOnly?: boolean;
+  /** SynBot bot chats: iMessage bubbles, date separators and a typing bubble (HoloBot's look). */
+  bubbles?: TimelineBubbleStyle | null | undefined;
   recoverableTurnId?: TurnId | null;
   turnRecoveryDisabled?: boolean;
   onContinueFailedTurn?: (turnId: TurnId) => Promise<boolean>;
@@ -629,6 +638,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   turnDiffSummaryByAssistantMessageId,
   turnTimingByTurnId,
   conversationOnly: conversationOnlyProp,
+  bubbles: bubblesProp,
   recoverableTurnId,
   turnRecoveryDisabled,
   onContinueFailedTurn,
@@ -927,6 +937,18 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     ],
   );
   const rows = useStableRows(rawRows);
+  const bubbles = bubblesProp ?? null;
+  // Kept identity-stable while unchanged, so a streamed reply redraws only its own row.
+  const bubbleLayout = useStableValue(
+    useMemo(() => (bubbles ? deriveBubbleRowLayout(rows) : EMPTY_BUBBLE_LAYOUT), [bubbles, rows]),
+    sameBubbleRowLayout,
+  );
+  const userBubbleTint = bubbles?.userTint ?? null;
+  // The typing bubble gives way once the reply itself streams in (iMessage's).
+  const bubbleReplyStreaming = useMemo(
+    () => (bubbles ? latestTurnReplyStreaming(rows) : false),
+    [bubbles, rows],
+  );
   const canRenderForkSourceDivider = forkSource !== null && onOpenThread !== undefined;
   const forkSourceDivider = useMemo(
     () =>
@@ -1759,24 +1781,41 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     );
   };
 
+  // Bot chats: a centered date over the first message, after an hour's silence or on a new day.
+  const renderBubbleSeparator = (row: MessagesTimelineRow) => {
+    const separatorAt = bubbles ? bubbleLayout.get(row.id)?.separatorAt : null;
+    if (!separatorAt) return null;
+    return (
+      <div
+        role="separator"
+        className="flex justify-center pt-3 pb-1.5 text-ui-xs font-medium text-muted-foreground"
+      >
+        {formatDayAwareTimestamp(separatorAt, timestampFormat)}
+      </div>
+    );
+  };
+
   const renderRowContent = (row: MessagesTimelineRow) => (
     <div
       ref={observeTimelineRow}
       className={cn(
         CHAT_COLUMN_FRAME_CLASS_NAME,
         "px-1 transition-colors duration-500",
-        row.kind === "working" ||
-          (row.kind === "message" &&
-            row.message.role === "assistant" &&
-            row.assistantTurnInProgress)
-          ? "pb-1"
-          : row.kind === "work" ||
-              row.kind === "working-header" ||
-              (row.kind === "message" && row.message.role === "assistant") ||
-              row.kind === "message-segment" ||
-              row.kind === "inline-visual"
-            ? "pb-2"
-            : "pb-4",
+        // Bot chats: a run from one side sits close; a new run starts a little lower.
+        bubbles && row.kind === "message"
+          ? cn("pb-0.5", bubbleLayout.get(row.id)?.groupStart && "pt-2")
+          : row.kind === "working" ||
+              (row.kind === "message" &&
+                row.message.role === "assistant" &&
+                row.assistantTurnInProgress)
+            ? "pb-1"
+            : row.kind === "work" ||
+                row.kind === "working-header" ||
+                (row.kind === "message" && row.message.role === "assistant") ||
+                row.kind === "message-segment" ||
+                row.kind === "inline-visual"
+              ? "pb-2"
+              : "pb-4",
         row.kind === "message" && row.message.role === "assistant" ? "group/assistant" : null,
         (row.kind === "message" || row.kind === "message-segment") &&
           row.message.id === highlightedMessageId
@@ -1793,6 +1832,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       }
     >
       {forkDividerBeforeRowId === row.id ? forkSourceDivider : null}
+      {renderBubbleSeparator(row)}
       {row.kind === "work" &&
         row.groupedEntries.map((entry) =>
           entry.turnFailure ? (
@@ -1988,7 +2028,13 @@ export const MessagesTimeline = memo(function MessagesTimeline({
             return null;
           }
           return (
-            <div className="chat-message-segment flex w-full flex-col items-start gap-1.5 pl-[2px] pr-[2px]">
+            <div
+              className={cn(
+                "chat-message-segment flex flex-col items-start gap-1.5 pl-[2px] pr-[2px]",
+                // Bot chats: cards keep the bubbles' width (HoloBot's).
+                bubbles ? "w-full max-w-[min(85%,40rem)] pt-1" : "w-full",
+              )}
+            >
               {synbotNotices.map(({ entry, notice }) => (
                 <SynbotNoticeRow
                   key={`synbot:${entry.id}`}
@@ -2017,12 +2063,19 @@ export const MessagesTimeline = memo(function MessagesTimeline({
             return null;
           }
           return (
-            <div className="chat-message-segment flex w-full flex-col items-start gap-1.5 pl-[2px] pr-[2px]">
+            <div
+              className={cn(
+                "chat-message-segment flex w-full flex-col gap-1.5 pl-[2px] pr-[2px]",
+                // Bot chats: task status reads as a quiet centered line between bubbles.
+                bubbles ? "items-center py-1" : "items-start",
+              )}
+            >
               {notices.map(({ entry, notice }) => (
                 <WorkerMonitorNoticePill
                   key={`worker-monitor:${entry.id}`}
                   entry={entry}
                   notice={notice}
+                  tone={bubbles ? "system" : "body"}
                   {...(onOpenThread ? { onOpenThread } : {})}
                 />
               ))}
@@ -2268,11 +2321,25 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                   ) : showUserText ? (
                     <div
                       className={cn(
-                        "w-max max-w-full min-w-0 self-end bg-[var(--app-user-message-background)]",
-                        USER_MESSAGE_BUBBLE_RADIUS_CLASS_NAME,
-                        userMessageBubbleBorderClass,
+                        "w-max max-w-full min-w-0 self-end",
+                        // A bot's chat: the user's words in the bot's color (HoloBot's).
+                        userBubbleTint
+                          ? "rounded-[18px]"
+                          : cn(
+                              "bg-[var(--app-user-message-background)]",
+                              USER_MESSAGE_BUBBLE_RADIUS_CLASS_NAME,
+                              userMessageBubbleBorderClass,
+                            ),
                         USER_MESSAGE_BUBBLE_SHELL_CHROME_CLASS_NAME,
                       )}
+                      style={
+                        userBubbleTint
+                          ? {
+                              backgroundColor: userBubbleTint,
+                              color: bubbleTextColor(userBubbleTint),
+                            }
+                          : undefined
+                      }
                       data-chat-find-document-id={row.message.id}
                     >
                       <UserMessageCollapsibleText
@@ -2712,6 +2779,11 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                   />
                 ) : messageText !== null ? (
                   <div
+                    className={
+                      bubbles
+                        ? "w-fit max-w-[min(85%,40rem)] min-w-0 rounded-[18px] bg-[var(--synbot-bot-bubble)] px-3.5 py-2"
+                        : undefined
+                    }
                     data-assistant-message-id={row.message.id}
                     data-chat-find-document-id={row.message.id}
                   >
@@ -3136,7 +3208,31 @@ export const MessagesTimeline = memo(function MessagesTimeline({
         />
       )}
 
-      {row.kind === "working" && (
+      {row.kind === "working" && bubbles && !bubbleReplyStreaming && (
+        // Bot chats: iMessage's typing bubble, and under it what the bot is doing.
+        <div
+          className="flex flex-col items-start gap-1 pt-2"
+          role="status"
+          aria-label={workingLabel}
+        >
+          <div
+            aria-hidden="true"
+            className="inline-flex items-center gap-1 rounded-[18px] bg-[var(--synbot-bot-bubble)] px-3.5 py-3"
+          >
+            <span className="synbot-typing-dot" />
+            <span className="synbot-typing-dot" />
+            <span className="synbot-typing-dot" />
+          </div>
+          <span
+            ref={syncAnimationsToTimelineOrigin}
+            className="shimmer-group pl-1 text-ui-xs text-muted-foreground"
+          >
+            {workingLabel}
+          </span>
+        </div>
+      )}
+
+      {row.kind === "working" && !bubbles && (
         <div
           ref={syncAnimationsToTimelineOrigin}
           className={cn(
@@ -3323,6 +3419,19 @@ type SettledTurnCollapseTimer = {
 
 // Reuse stable row references so streaming updates only force React work for
 // rows whose visible content actually changed.
+const EMPTY_BUBBLE_LAYOUT: ReadonlyMap<string, BubbleRowLayout> = new Map();
+
+/** An assistant reply of the latest turn is streaming (rows after the last user message). */
+function latestTurnReplyStreaming(rows: readonly MessagesTimelineRow[]): boolean {
+  for (let index = rows.length - 1; index >= 0; index -= 1) {
+    const row = rows[index]!;
+    if (row.kind !== "message") continue;
+    if (row.message.role === "user") return false;
+    if (row.message.role === "assistant" && row.message.streaming) return true;
+  }
+  return false;
+}
+
 function useStableRows(rows: MessagesTimelineRow[]): MessagesTimelineRow[] {
   const previousStateRef = useRef<StableMessagesTimelineRowsState>({
     byId: new Map<string, MessagesTimelineRow>(),

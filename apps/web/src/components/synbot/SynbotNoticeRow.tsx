@@ -210,9 +210,14 @@ function ChoiceCard({
 function ReportCard({ notice }: { readonly notice: BotReportNotice }) {
   const { t } = useTranslation();
   const data = useSynbotStore((store) => store.data);
-  const delegations = notice.delegationIds
-    .map((id) => delegationById(data, id))
-    .filter((delegation): delegation is BotDelegation => delegation !== null);
+  // Live delegations first; the notice's own copy covers ones that left the snapshot.
+  const delegations = notice.delegationIds.flatMap((id) => {
+    const live = delegationById(data, id);
+    if (live)
+      return [{ id, toBotId: live.toBotId, state: live.state, resultSummary: live.resultSummary }];
+    const kept = notice.entries?.find((entry) => entry.delegationId === id);
+    return kept ? [{ id, ...kept }] : [];
+  });
   return (
     <div className="flex w-full flex-col gap-1.5 rounded-xl border border-border/60 bg-card px-3 py-2 text-ui-sm">
       <span className="text-ui-xs font-medium tracking-wide text-muted-foreground uppercase">
@@ -302,14 +307,17 @@ export function SynbotMessageFromRow({ messageId }: { readonly messageId: string
     (entry) => entry.id === messageId.slice(BOT_DELEGATION_MESSAGE_PREFIX.length),
   );
   const from = delegation ? botById(data, delegation.fromBotId) : null;
+  // HoloBot's: a quiet centered "Message from <bot>" line, then the brief as that bot's bubble.
   return (
-    <div className="flex w-full flex-col gap-1 py-1 text-ui-sm">
-      <div className="flex items-center gap-1.5 text-muted-foreground">
+    <div className="flex w-full flex-col gap-1.5 pt-2">
+      <div className="flex items-center justify-center gap-1.5 text-ui-sm text-muted-foreground">
         <span>{t("synbot:messageFrom")}</span>
         <BotChip bot={from} />
       </div>
       {delegation ? (
-        <p className="whitespace-pre-wrap text-ui text-foreground">{delegation.brief}</p>
+        <div className="w-fit max-w-[min(85%,40rem)] min-w-0 rounded-[18px] bg-[var(--synbot-bot-bubble)] px-3.5 py-2">
+          <p className="whitespace-pre-wrap text-chat text-foreground">{delegation.brief}</p>
+        </div>
       ) : null}
     </div>
   );

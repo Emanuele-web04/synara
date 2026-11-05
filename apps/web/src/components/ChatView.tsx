@@ -135,7 +135,9 @@ import {
   resolveThreadMentionForThreadId,
   useComposerCommandMenuItems,
 } from "../hooks/useComposerCommandMenuItems";
-import { HUBS_UI_ON, MCP_CONNECTORS_ON } from "../betaFeatures";
+import { HUBS_UI_ON, MCP_CONNECTORS_ON, SYNBOT_ON } from "../betaFeatures";
+import { botByThreadId } from "../synbot/synbotState.logic";
+import { useSynbotStore } from "../synbot/synbotStore";
 import { mcpConnectorsQueryOptions } from "../lib/mcpConnectorsReactQuery";
 import { providerSupportsMcpConnectors } from "@synara/shared/mcpConnectors";
 import { useComposerThreadMentionDrop } from "../hooks/useComposerThreadMentionDrop";
@@ -1466,6 +1468,17 @@ export default function ChatView({
   const { coordinatorThreadIds, summariesByProjectId, summaryFor } = useProjectAgentSummaries();
   const isCoordinatorConversation = Boolean(
     activeThread && coordinatorThreadIds.has(activeThread.id),
+  );
+  // SynBot bot chats read like HoloBot's (iMessage bubbles): the user's words in the bot's
+  // color, gray in SynBot's own chat. "" marks SynBot's chat, null any other thread.
+  const botChatTint = useSynbotStore((store) => {
+    const bot = SYNBOT_ON && activeThread ? botByThreadId(store.data, activeThread.id) : null;
+    if (!bot) return null;
+    return bot.kind === "main" ? "" : bot.mascot.color;
+  });
+  const timelineBubbles = useMemo(
+    () => (botChatTint === null ? null : { userTint: botChatTint || null }),
+    [botChatTint],
   );
   const {
     hasThreadStarted,
@@ -7143,6 +7156,7 @@ export default function ChatView({
                     turnDiffSummaryByAssistantMessageId={turnDiffSummaryByAssistantMessageId}
                     turnTimingByTurnId={turnTimingByTurnId}
                     conversationOnly={isCoordinatorConversation}
+                    bubbles={timelineBubbles}
                     hubWorkItemsByMessageId={hubWorkItemsByMessageId}
                     threadError={activeThread?.error ?? null}
                     recoverableTurnId={

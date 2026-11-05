@@ -12,6 +12,7 @@ import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "~/i18n";
 import { cn } from "~/lib/utils";
 import type { SplitViewPanePanelState } from "~/splitViewStore";
+import { retainThreadDetailSubscription } from "~/threadDetailSubscriptionRetention";
 import { botById, orderedBots } from "~/synbot/synbotState.logic";
 import { ensureSynbotMain, startSynbotLiveSync, useSynbotStore } from "~/synbot/synbotStore";
 
@@ -41,8 +42,9 @@ function BotPill({ bot }: { readonly bot: Bot }) {
   const tasks = useSynbotStore((store) => store.data.tasks);
   const botTasks = tasks.filter((entry) => entry.botId === bot.id).map((entry) => entry.task);
   return (
-    <div className="pointer-events-none absolute inset-x-0 top-2 z-10 flex justify-center px-4">
-      <div className="pointer-events-auto flex max-w-full items-center gap-1 rounded-full border border-border/60 bg-background/90 py-1 pr-1 pl-1.5 shadow-sm backdrop-blur">
+    // A slim bar above the chat (not over it), so the first message is never covered.
+    <div className="flex shrink-0 justify-center px-4 pt-2 pb-1">
+      <div className="flex max-w-full items-center gap-1 rounded-full border border-border/60 bg-background py-1 pr-1 pl-1.5 shadow-sm">
         <button
           type="button"
           onClick={() => openEdit(bot.id)}
@@ -99,7 +101,7 @@ function TaskPane({
           <SynbotMergeProofCard threadId={threadId} />
         </div>
       ) : null}
-      <div className="min-h-0 flex-1">
+      <div className="flex min-h-0 flex-1 flex-col">
         <DeferredChatView
           key={threadId}
           threadId={threadId}
@@ -136,6 +138,18 @@ export default function SynbotView() {
   // A different bot closes the task opened from the previous one.
   useEffect(() => setTaskThreadId(null), [bot?.id]);
 
+  // Messages and activities stream only for subscribed threads: hold the bot's chat and the
+  // open task for as long as they are on screen.
+  const botThreadId = bot?.threadId ?? null;
+  useEffect(
+    () => (botThreadId ? retainThreadDetailSubscription(botThreadId) : undefined),
+    [botThreadId],
+  );
+  useEffect(
+    () => (taskThreadId ? retainThreadDetailSubscription(taskThreadId) : undefined),
+    [taskThreadId],
+  );
+
   const openTask = useCallback((threadId: ThreadId) => setTaskThreadId(threadId), []);
   const task = taskThreadId
     ? (data.tasks.find((entry) => entry.task.workerThreadId === taskThreadId)?.task ?? null)
@@ -150,24 +164,26 @@ export default function SynbotView() {
     content = <PanelStateMessage>{t("synbot:loading")}</PanelStateMessage>;
   } else {
     content = (
-      <div className="flex h-full min-h-0">
-        <div className={cn("relative flex min-w-0 flex-1 flex-col")}>
+      <div className="flex h-full min-h-0 w-full min-w-0 flex-1">
+        <div className={cn("flex min-w-0 flex-1 flex-col")}>
           <BotPill bot={bot} />
-          <DeferredChatView
-            key={bot.threadId}
-            threadId={bot.threadId}
-            hideHeader
-            paneScopeId={`synbot:${bot.id}`}
-            deferMount={false}
-            surfaceMode="single"
-            isFocusedPane
-            panelState={EMBEDDED_PANEL_STATE}
-            onToggleDiff={noopChatSurfaceAction}
-            onToggleBrowser={noopChatSurfaceAction}
-            onOpenBrowserUrl={noopChatSurfaceAction}
-            onOpenTurnDiff={noopChatSurfaceAction}
-            onOpenLinkedThread={openTask}
-          />
+          <div className="flex min-h-0 flex-1 flex-col">
+            <DeferredChatView
+              key={bot.threadId}
+              threadId={bot.threadId}
+              hideHeader
+              paneScopeId={`synbot:${bot.id}`}
+              deferMount={false}
+              surfaceMode="single"
+              isFocusedPane
+              panelState={EMBEDDED_PANEL_STATE}
+              onToggleDiff={noopChatSurfaceAction}
+              onToggleBrowser={noopChatSurfaceAction}
+              onOpenBrowserUrl={noopChatSurfaceAction}
+              onOpenTurnDiff={noopChatSurfaceAction}
+              onOpenLinkedThread={openTask}
+            />
+          </div>
         </div>
         {taskThreadId ? (
           <TaskPane
