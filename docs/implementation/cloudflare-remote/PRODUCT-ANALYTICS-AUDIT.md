@@ -53,7 +53,7 @@ shipping it requires the receiving migration/Worker followed by new client build
 | Web observers     | `apps/web/src/lib/productAnalytics.ts` and transport/navigation owners; fixed categories only; remote workspace frames use their controlling app's consent |
 | Native            | Local settings control and bounded sender in both existing native branches; no inherited consent from account or remote Mac                                |
 | Cloudflare        | `/v1/product-events`, separate `product_events` D1 table, authenticated `/api/product` aggregates and Product dashboard                                    |
-| Existing services | `/v1/events` accepts Beta and Remote diagnostics; `/v1/crash` remains Beta-only; account usage, public profile and private Saved Inbox are separate         |
+| Existing services | `/v1/events` accepts Beta and Remote diagnostics; `/v1/crash` remains Beta-only; account usage, public profile and private Saved Inbox are separate        |
 
 No additional analytics vendor, browser autocapture, session replay or user
 identification service. The random installation UUID is unrelated to account,

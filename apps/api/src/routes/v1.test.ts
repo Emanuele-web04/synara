@@ -283,7 +283,11 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
           await db.select().from(profiles).where(eq(profiles.userId, owner.userId)),
         ).toMatchObject([{ avatarKey: key }]);
 
-        const restored = createAccountDeletionService({ db, verifier, avatarStorage: avatar.storage });
+        const restored = createAccountDeletionService({
+          db,
+          verifier,
+          avatarStorage: avatar.storage,
+        });
         vi.setSystemTime((await readIntent()).nextAttemptAt.getTime() + 1);
         await restored.flush();
         expect(avatar.objects.has(key)).toBe(false);
@@ -342,7 +346,10 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
         "/api/v1/profile/avatar",
         bodyLimit({ maxSize: AVATAR_MAX_BYTES + API_MAX_BODY_BYTES }),
       );
-      app.route("/api/v1", routesFor(db, config, { accountDeletion: deletion, avatarStorage: storage }));
+      app.route(
+        "/api/v1",
+        routesFor(db, config, { accountDeletion: deletion, avatarStorage: storage }),
+      );
       const handle = `erase-late-avatar-${randomUUID().slice(0, 8)}`;
       expect(
         (
