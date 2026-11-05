@@ -212,6 +212,89 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
       );
     });
 
+    it("retains an uploaded avatar for erasure retry while storage is unconfigured", async () => {
+      const owner = await signIn();
+      const { verifier } = createWorkosIdentityProvider(config);
+      const user = await verifier.getUser(owner.userId);
+      const avatar = fakeAvatarStorage();
+      const { app: uploadApp, db } = buildApp({ avatarStorage: avatar.storage });
+      const handle = `erase-avatar-${randomUUID().slice(0, 8)}`;
+      const profile = await uploadApp.request("/api/v1/profile", {
+        method: "PUT",
+        headers: authHeaders(owner.token),
+        body: JSON.stringify({
+          handle,
+          displayName: "Test",
+          avatarColor: "#22c55e",
+          public: true,
+        }),
+      });
+      expect(profile.status).toBe(200);
+      const upload = await uploadApp.request("/api/v1/profile/avatar", {
+        method: "PUT",
+        headers: { authorization: `Bearer ${owner.token}`, "content-type": "image/png" },
+        body: new Uint8Array([0x89, 0x50, 0x4e, 0x47, 1, 2, 3, 4]),
+      });
+      expect(upload.status).toBe(200);
+      expect(avatar.objects.size).toBe(1);
+      const key = [...avatar.objects.keys()][0]!;
+
+      // Simulate a restart that retained the database but lost its storage configuration.
+      const unavailable = createAccountDeletionService({ db, verifier });
+      const { app } = buildApp({ accountDeletion: unavailable });
+      const response = await app.request("/api/v1/me", {
+        method: "DELETE",
+        headers: authHeaders(owner.token),
+        body: JSON.stringify({ confirmation: "delete", email: user.email }),
+      });
+      expect(response.status).toBe(202);
+      expect((await app.request(`/api/v1/profiles/${handle}`)).status).toBe(404);
+      expect((await app.request("/api/v1/me", { headers: authHeaders(owner.token) })).status).toBe(
+        401,
+      );
+      const readIntent = async () => {
+        const [intent] = await db
+          .select()
+          .from(accountDeletions)
+          .where(eq(accountDeletions.userId, owner.userId));
+        expect(intent).toBeDefined();
+        return intent!;
+      };
+      const requested = await readIntent();
+      vi.useFakeTimers({ toFake: ["Date"] });
+      try {
+        // Follow persisted retry eligibility without bypassing the one-minute delay.
+        vi.setSystemTime(requested.nextAttemptAt.getTime() + 1);
+        await unavailable.flush();
+        expect(avatar.objects.has(key)).toBe(true);
+        expect(
+          await db.select().from(profiles).where(eq(profiles.userId, owner.userId)),
+        ).toMatchObject([{ avatarKey: key, public: false }]);
+        expect(await verifier.getUser(owner.userId)).toMatchObject({ id: owner.userId });
+        expect((await readIntent()).completedAt).toBeNull();
+
+        // A missing adapter must also block the normal final sweep after a day.
+        vi.setSystemTime(requested.requestedAt.getTime() + 86_400_001);
+        await unavailable.flush();
+        expect((await readIntent()).completedAt).toBeNull();
+        expect(
+          await db.select().from(profiles).where(eq(profiles.userId, owner.userId)),
+        ).toMatchObject([{ avatarKey: key }]);
+
+        const restored = createAccountDeletionService({ db, verifier, avatarStorage: avatar.storage });
+        vi.setSystemTime((await readIntent()).nextAttemptAt.getTime() + 1);
+        await restored.flush();
+        expect(avatar.objects.has(key)).toBe(false);
+        expect(
+          await db.select().from(profiles).where(eq(profiles.userId, owner.userId)),
+        ).toHaveLength(0);
+        await expect(verifier.getUser(owner.userId)).rejects.toMatchObject({ status: 404 });
+        expect((await readIntent()).completedAt).not.toBeNull();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
     it("fences sessions, retries erasure after restart and preserves another account's cloud data", async () => {
       const owner = await signIn();
       const neighbor = await signIn();

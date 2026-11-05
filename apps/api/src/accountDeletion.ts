@@ -105,7 +105,11 @@ export function createAccountDeletionService(options: {
       .select({ key: schema.profiles.avatarKey })
       .from(schema.profiles)
       .where(eq(schema.profiles.userId, userId));
-    if (profile?.key && options.avatarStorage) await options.avatarStorage.delete(profile.key);
+    if (profile?.key) {
+      // Keep the object key retryable until configured storage confirms deletion.
+      if (!options.avatarStorage) throw new Error("Avatar cleanup is awaiting configuration");
+      await options.avatarStorage.delete(profile.key);
+    }
     const [intent] = await db
       .select()
       .from(schema.accountDeletions)
