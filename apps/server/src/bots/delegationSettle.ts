@@ -11,7 +11,7 @@ import type { HubWorkState } from "@synara/contracts";
  * After the target bot's tasks finish, its Hub wakes it once to roll them up. Waiting this long
  * after the last activity lets that wake start before the delegation is reported.
  */
-export const DELEGATION_SETTLE_GRACE_MS = 30_000;
+export const DELEGATION_SETTLE_GRACE_MS = 60_000;
 
 export interface SettleTurn {
   readonly turnId: string | null;

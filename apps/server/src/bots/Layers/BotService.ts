@@ -646,6 +646,10 @@ const make = Effect.gen(function* () {
                 : {}),
               coordinatorColor: spec.mascot.color,
               autoMemoryEnabled: true,
+              greeting:
+                spec.kind === "main"
+                  ? `I'm ${spec.name}. Ask me for anything: I answer quick questions myself, hand work to the bot that fits, and give you one short recap when it's done. Tasks run in their own worktree.`
+                  : `I'm ${spec.name}${spec.role ? `, ${spec.role}` : ""}. Ask me for anything in my area: I answer directly or start tasks in their own worktree, and report back when they finish.`,
             },
             USER,
           )
@@ -1279,6 +1283,25 @@ const make = Effect.gen(function* () {
 
   // ── Settlement and reports ─────────────────────────────────────────
 
+  const workerShell = (item: HubWorkRecord) =>
+    item.workerThreadId
+      ? snapshotQuery.getThreadShellById(item.workerThreadId).pipe(
+          Effect.map(Option.getOrNull),
+          Effect.orElseSucceed(() => null),
+        )
+      : Effect.succeed(null);
+
+  /** What a task did: its filed result, else its worker's last reply. */
+  const taskOutcome = (item: HubWorkRecord) =>
+    Effect.gen(function* () {
+      if (item.resultSummary?.trim()) return item.resultSummary.trim();
+      if (!item.workerThreadId) return null;
+      const reply = (yield* threadMessages(item.workerThreadId)).findLast(
+        (message) => message.role === "assistant" && message.text.trim().length > 0,
+      );
+      return reply ? reply.text.trim().slice(0, 1_200) : null;
+    });
+
   const reportFor = (records: readonly BotDelegationRecord[]) =>
     Effect.gen(function* () {
       const entries: DelegationReportEntry[] = [];
@@ -1288,18 +1311,14 @@ const make = Effect.gen(function* () {
         for (const taskId of record.taskIds) {
           const item = yield* hubWorkRepository.get(taskId).pipe(Effect.orElseSucceed(() => null));
           if (!item) continue;
-          const pr = item.workerThreadId
-            ? Option.getOrNull(
-                yield* snapshotQuery
-                  .getThreadShellById(item.workerThreadId)
-                  .pipe(Effect.orElseSucceed(() => Option.none<OrchestrationThreadShell>())),
-              )?.lastKnownPr
-            : null;
+          const shell = yield* workerShell(item);
           tasks.push({
             title: item.title,
-            state: item.state,
-            resultSummary: item.resultSummary,
-            prUrl: pr?.url ?? null,
+            // An idle worker finished its turn; the Hub has not marked it accepted yet.
+            state: item.state === "idle" ? "finished" : item.state,
+            resultSummary: yield* taskOutcome(item),
+            prUrl: shell?.lastKnownPr?.url ?? null,
+            branch: shell?.branch ?? null,
             threadId: item.workerThreadId,
           });
         }
@@ -1330,7 +1349,17 @@ const make = Effect.gen(function* () {
         });
       }
       const fromBot = yield* loadBot(requester.fromBotId).pipe(Effect.orElseSucceed(() => null));
-      const notice: BotReportNotice = { messageId, delegationIds: ids, createdAt: now };
+      const notice: BotReportNotice = {
+        messageId,
+        delegationIds: ids,
+        entries: records.map((record) => ({
+          delegationId: record.id,
+          toBotId: record.toBotId,
+          state: record.state,
+          resultSummary: record.resultSummary,
+        })),
+        createdAt: now,
+      };
       yield* appendActivity({
         threadId: requester.fromThreadId,
         id: `${messageId}:card`,
@@ -1423,9 +1452,16 @@ const make = Effect.gen(function* () {
         resultSummary: settled
           ? summarizeDelegationResult({
               lastReply,
-              taskSummaries: items
-                .filter((item) => taskIds.includes(item.id))
-                .map((item) => item.resultSummary ?? `${item.title}: ${item.state}`),
+              taskSummaries: yield* Effect.forEach(
+                items.filter((item) => taskIds.includes(item.id)),
+                (item) =>
+                  Effect.all([taskOutcome(item), workerShell(item)]).pipe(
+                    Effect.map(
+                      ([outcome, shell]) =>
+                        `${item.title}${shell?.branch ? ` (branch ${shell.branch})` : ""}: ${outcome ?? item.state}`,
+                    ),
+                  ),
+              ),
             })
           : record.resultSummary,
         settledAt: settled ? isoNow() : null,

@@ -285,9 +285,19 @@ export type BotDelegationNotice = typeof BotDelegationNotice.Type;
  * user-role message `messageId` (prefix `synbot:report:`) that wakes the requester; clients hide
  * that message and draw this card instead.
  */
+/** A delegation as it stood when its report was sent; kept so old cards outlive the snapshot. */
+export const BotReportEntry = Schema.Struct({
+  delegationId: TrimmedNonEmptyString,
+  toBotId: ProjectId,
+  state: BotDelegationState,
+  resultSummary: Schema.NullOr(Schema.String.check(Schema.isMaxLength(4_000))),
+});
+export type BotReportEntry = typeof BotReportEntry.Type;
+
 export const BotReportNotice = Schema.Struct({
   messageId: TrimmedNonEmptyString,
   delegationIds: Schema.Array(TrimmedNonEmptyString),
+  entries: Schema.optional(Schema.Array(BotReportEntry)),
   createdAt: IsoDateTime,
 });
 export type BotReportNotice = typeof BotReportNotice.Type;

@@ -76,8 +76,26 @@ export function resolveHubWorkSource(input: {
                 input.callerTurnId !== null,
             ),
           ];
+    // SynBot: a delegation message in this thread stands for the human messages behind it, so
+    // those messages' own ids (from another bot's thread) select them too.
+    const carriedSources = new Map<string, HubWorkSourceMessage>();
+    if (ids && input.delegatedSources && selected.some((message) => !message)) {
+      for (const message of messages) {
+        if (message.role !== "user" || isHuman(message)) continue;
+        const carried = yield* input
+          .delegatedSources(message.id)
+          .pipe(Effect.orElseSucceed(() => null));
+        for (const source of carried ?? []) carriedSources.set(source.messageId, source);
+      }
+    }
     const resolved: HubWorkSourceMessage[] = [];
-    for (const message of selected) {
+    for (const [index, message] of selected.entries()) {
+      const carried = !message && ids ? carriedSources.get(ids[index]!) : undefined;
+      if (carried) {
+        if (!resolved.some((entry) => entry.messageId === carried.messageId))
+          resolved.push(carried);
+        continue;
+      }
       if (message && isHuman(message)) {
         resolved.push({
           threadId: detail.value.id,
