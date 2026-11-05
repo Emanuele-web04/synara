@@ -13,6 +13,20 @@ import { defineConfig } from "tsdown";
 const sourcemapEnv = process.env.SYNARA_DESKTOP_SOURCEMAP?.trim().toLowerCase();
 const buildSourcemap = sourcemapEnv === "1" || sourcemapEnv === "true";
 const windowsUpdaterPublisher = process.env.AZURE_TRUSTED_SIGNING_SUBJECT_DN?.trim() ?? "";
+const configuredStableAccountUrl = process.env.SYNARA_STABLE_ACCOUNT_URL?.trim();
+const stableAccountUrl = configuredStableAccountUrl ? URL.parse(configuredStableAccountUrl) : null;
+if (
+  configuredStableAccountUrl &&
+  (!stableAccountUrl ||
+    stableAccountUrl.protocol !== "https:" ||
+    stableAccountUrl.username ||
+    stableAccountUrl.password ||
+    stableAccountUrl.pathname !== "/" ||
+    stableAccountUrl.search ||
+    stableAccountUrl.hash)
+) {
+  throw new Error("SYNARA_STABLE_ACCOUNT_URL must be an HTTPS account API origin.");
+}
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const migrationRuntimeSource = fs.readFileSync(
   path.join(repoRoot, "apps/server/src/persistence/Migrations.ts"),
@@ -39,6 +53,7 @@ export default defineConfig([
     external: ["original-fs"],
     define: {
       __SYNARA_WINDOWS_UPDATER_PUBLISHER__: JSON.stringify(windowsUpdaterPublisher),
+      __SYNARA_STABLE_ACCOUNT_URL__: JSON.stringify(stableAccountUrl?.origin ?? ""),
       __SYNARA_MIGRATION_RUNTIME_SOURCE_DIGEST__: JSON.stringify(migrationRuntimeSourceDigest),
     },
     noExternal: (id) => id.startsWith("@synara/"),

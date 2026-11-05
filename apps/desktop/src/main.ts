@@ -4307,11 +4307,18 @@ async function startCuaHost(): Promise<void> {
   }
 }
 
+declare const __SYNARA_STABLE_ACCOUNT_URL__: string;
+
 function backendEnv(): NodeJS.ProcessEnv {
   const servedStaticRoot = resolveServedStaticRoot();
   const migrationSourceDigest = embeddedDesktopMigrationRuntimeSourceDigest();
   const migrationDivergenceConsent = migrationConsentHandoff.take();
-  const accountUrl = process.env.SYNARA_ACCOUNT_URL?.trim() || desktopIdentity.defaultAccountUrl;
+  const stableAccountUrl =
+    app.isPackaged && !isSourceDesktopBuild && desktopFlavor === "production"
+      ? __SYNARA_STABLE_ACCOUNT_URL__
+      : "";
+  const accountUrl =
+    process.env.SYNARA_ACCOUNT_URL?.trim() || stableAccountUrl || desktopIdentity.defaultAccountUrl;
   const env: NodeJS.ProcessEnv = {
     ...resolveBrowserHostPipeBackendEnv(
       process.env,
@@ -4338,9 +4345,11 @@ function backendEnv(): NodeJS.ProcessEnv {
     SYNARA_HOME: BASE_DIR,
     SYNARA_AUTH_TOKEN: backendAuthToken,
     SYNARA_DESKTOP_SHUTDOWN_TOKEN: DESKTOP_BACKEND_SHUTDOWN_TOKEN,
-    // Remote must reach its account service on a normal Finder/Explorer launch;
-    // an explicit self-hosted URL still wins and saved sessions keep their issuer.
+    // Packaged launches supply their account authority without shell setup.
     ...(accountUrl ? { SYNARA_ACCOUNT_URL: accountUrl } : {}),
+    ...(stableAccountUrl && process.env.SYNARA_REMOTE_CONNECTIONS === undefined
+      ? { SYNARA_REMOTE_CONNECTIONS: "1" }
+      : {}),
     ...(app.isPackaged
       ? {
           SYNARA_CLOUDFLARED_PATH: Path.join(

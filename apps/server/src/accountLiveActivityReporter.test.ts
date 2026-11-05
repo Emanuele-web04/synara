@@ -11,7 +11,7 @@ import { writeAccountCredentials } from "./accountAuth";
 import { generateAndPersistHostIdentity } from "./hostIdentity";
 import { createAccountLiveActivityReporter } from "./accountLiveActivityReporter";
 
-vi.mock("./betaFeatureGate", () => ({ isServerBetaFeatureEnabled: () => true }));
+vi.mock("./remoteFeaturePolicy", () => ({ accountLiveActivityEnabled: () => true }));
 
 it.each([
   ["completed", null, "ready"],
