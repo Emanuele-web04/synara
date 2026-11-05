@@ -66,6 +66,7 @@ import {
   DEVICE_WS_METHODS,
   type DeviceEvent,
   type ProjectAgentStreamEvent,
+  type BotStreamEvent,
   COMPUTER_WS_CHANNELS,
   COMPUTER_WS_METHODS,
   type ComputerEvent,
@@ -75,6 +76,7 @@ import { Schema } from "effect";
 
 import { showConfirmDialogFallback } from "./confirmDialogFallback";
 import { TASKS_OFFERED_BY_BUILD } from "./tasksSurface";
+import { SYNBOT_ON } from "./betaFeatures";
 import { showContextMenuFallback } from "./contextMenuFallback";
 import { requireHttpExternalUrl } from "./lib/externalUrl";
 import { withNativeMenuIcons } from "./lib/nativeMenuIcons";
@@ -190,6 +192,7 @@ const automationEventListeners = createListenerRegistry<AutomationStreamEvent>()
 const todoEventListeners = createListenerRegistry<TodoStreamEvent>();
 const deviceEventListeners = createListenerRegistry<DeviceEvent>();
 const projectAgentEventListeners = createListenerRegistry<ProjectAgentStreamEvent>();
+const botsEventListeners = createListenerRegistry<BotStreamEvent>();
 const computerEventListeners = createListenerRegistry<ComputerEvent>();
 const orchestrationDomainEventListeners = createListenerRegistry<OrchestrationEvent>();
 const orchestrationShellEventListeners = createListenerRegistry<OrchestrationShellStreamItem>();
@@ -215,6 +218,7 @@ function clearWsNativeApiListeners(): void {
   todoEventListeners.clear();
   deviceEventListeners.clear();
   projectAgentEventListeners.clear();
+  botsEventListeners.clear();
   computerEventListeners.clear();
   orchestrationDomainEventListeners.clear();
   orchestrationShellEventListeners.clear();
@@ -570,6 +574,12 @@ export function createWsNativeApi(): NativeApi {
   transport.subscribe(WS_CHANNELS.projectAgentEvent, (message) => {
     projectAgentEventListeners.emit(message.data);
   });
+  // SynBot is Beta-only; Stable never opens its stream (the server would refuse it).
+  if (SYNBOT_ON) {
+    transport.subscribe(WS_CHANNELS.botsEvent, (message) => {
+      botsEventListeners.emit(message.data);
+    });
+  }
   transport.subscribe(ORCHESTRATION_WS_CHANNELS.shellEvent, (message) => {
     orchestrationShellEventListeners.emit(message.data);
   });
@@ -1079,6 +1089,23 @@ export function createWsNativeApi(): NativeApi {
         await transport.unsubscribeProjectAgentEvents(input.projectId);
       },
       onEvent: projectAgentEventListeners.subscribe,
+    },
+    bots: {
+      list: () => executionRequest(WS_METHODS.botsList, {}),
+      ensureMain: (input) => executionRequest(WS_METHODS.botsEnsureMain, input),
+      create: (input) => executionRequest(WS_METHODS.botsCreate, input),
+      update: (input) => executionRequest(WS_METHODS.botsUpdate, input),
+      remove: (input) => executionRequest(WS_METHODS.botsRemove, input),
+      updateSettings: (input) => executionRequest(WS_METHODS.botsUpdateSettings, input),
+      cardAction: (input) => executionRequest(WS_METHODS.botsCardAction, input),
+      suggest: (input) => executionRequest(WS_METHODS.botsSuggest, input),
+      cancelDelegation: (input) => executionRequest(WS_METHODS.botsCancelDelegation, input),
+      mergeProof: (input) => executionRequest(WS_METHODS.botsMergeProof, input),
+      // Merging waits on GitHub's asynchronous merge, past the default RPC deadline.
+      merge: (input) => executionRequest(WS_METHODS.botsMerge, input, { timeoutMs: 300_000 }),
+      updateBranch: (input) => executionRequest(WS_METHODS.botsUpdateBranch, input),
+      stopAll: () => executionRequest(WS_METHODS.botsStopAll, {}),
+      onEvent: botsEventListeners.subscribe,
     },
     automation: {
       list: (input) => executionRequest(WS_METHODS.automationList, input),

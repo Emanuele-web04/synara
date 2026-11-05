@@ -198,6 +198,11 @@ export type GatewayCreationContext =
   | {
       readonly kind: "hub-work";
       readonly inheritedRuntimeMode?: RuntimeMode | undefined;
+      /**
+       * SynBot: a bot's chat runs approval-required while its tasks edit in their own worktree
+       * with the access the user gave the bot. Only worktree tasks may exceed the chat's mode.
+       */
+      readonly allowWorktreeEscalation?: boolean | undefined;
       readonly callerThreadId: string;
       readonly workItemId: string;
       readonly batchId: string;
@@ -634,8 +639,13 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
             (context.kind === "external-client" || caller!.runtimeMode === "auto"
               ? "approval-required"
               : caller!.runtimeMode);
+          const worktreeEscalationAllowed =
+            context.kind === "hub-work" &&
+            context.allowWorktreeEscalation === true &&
+            environment === "worktree";
           if (
             context.kind !== "external-client" &&
+            !worktreeEscalationAllowed &&
             runtimeModeEscalatesPrivilege(caller!.runtimeMode, runtimeMode)
           ) {
             return yield* Effect.fail(

@@ -9,7 +9,7 @@ import type { PullRequestServiceShape } from "./Services/PullRequestService";
 
 type PullRequestOperations = Pick<
   PullRequestServiceShape,
-  "detail" | "diff" | "action" | "comment" | "setPinned"
+  "detail" | "diff" | "action" | "comment" | "setPinned" | "updateBranch"
 >;
 
 export function makePullRequestOperations(dependencies: {
@@ -244,5 +244,22 @@ export function makePullRequestOperations(dependencies: {
       };
     });
 
-  return { detail, diff, action, comment, setPinned };
+  const updateBranch: PullRequestServiceShape["updateBranch"] = (input) =>
+    Effect.gen(function* () {
+      const project = yield* dependencies.findProject(input.projectId);
+      const repository = yield* dependencies.validateProjectRepository(project, input.repository);
+      yield* dependencies.github
+        .updatePullRequestBranch({
+          cwd: project.workspaceRoot,
+          repository,
+          number: input.number,
+        })
+        .pipe(
+          Effect.ensuring(
+            dependencies.finalizeMutationCaches(repository, input.number, { wholeRepository: false }),
+          ),
+        );
+    });
+
+  return { detail, diff, action, comment, setPinned, updateBranch };
 }

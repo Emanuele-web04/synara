@@ -1,3 +1,5 @@
+import { BotService, BotServiceError, type BotServiceShape } from "./bots/Services/BotService";
+import { SYNBOT_UNAVAILABLE_MESSAGE } from "./bots/synbotGate";
 import { AgentGateway } from "./agentGateway/Services/AgentGateway";
 import {
   desktopUpdateAuthorityForSession,
@@ -44,6 +46,7 @@ import {
   WsCompatibilityError,
   WsComputerRpcGroup,
   WsDeviceRpcGroup,
+  WsBotsRpcGroup,
   WsFeatureRpcGroup,
   WsProjectAgentRpcGroup,
   WsRpcError,
@@ -313,6 +316,7 @@ const THREAD_DETAIL_SNAPSHOT_BOOTSTRAP_POLL_MS = 100;
 const AdmittedWsFeatureRpcGroup = WsFeatureRpcGroup.merge(WsDeviceRpcGroup)
   .merge(WsComputerRpcGroup)
   .merge(WsProjectAgentRpcGroup)
+  .merge(WsBotsRpcGroup)
   .middleware(WsRequestAdmissionMiddleware);
 
 // Relative subdirectories scaffolded under a freshly created chat container workspace root.
@@ -532,6 +536,12 @@ const makeWsRpcHandlersLayer = () =>
       const todoService = yield* TodoService;
       const projectAgentService = yield* ProjectAgentService;
       const projectAgentRepository = yield* ProjectAgentRepository;
+      // SynBot (Beta). Optional so hosts and tests built without it answer "unavailable".
+      const botService = Option.getOrUndefined(yield* Effect.serviceOption(BotService));
+      const withBots = <A>(use: (bots: BotServiceShape) => Effect.Effect<A, unknown>) =>
+        botService
+          ? use(botService)
+          : Effect.fail(new BotServiceError({ message: SYNBOT_UNAVAILABLE_MESSAGE, code: "unavailable" }));
       const config = yield* ServerConfig;
       const editorLanguages = new EditorLanguageService();
       const editorDebug = new EditorDebugService(config.stateDir);
@@ -3453,6 +3463,44 @@ const makeWsRpcHandlersLayer = () =>
               .streamEvents(input)
               .pipe(Stream.mapError((cause) => toWsRpcError(cause, "Project event stream failed"))),
           ),
+        [WS_METHODS.botsList]: () => rpcEffect(withBots((bots) => bots.snapshot()), "Failed to load bots"),
+        [WS_METHODS.botsEnsureMain]: (input) =>
+          rpcEffect(withBots((bots) => bots.ensureMain(input)), "Failed to set up SynBot"),
+        [WS_METHODS.botsCreate]: (input) =>
+          rpcEffect(withBots((bots) => bots.create(input)), "Failed to create the bot"),
+        [WS_METHODS.botsUpdate]: (input) =>
+          rpcEffect(withBots((bots) => bots.update(input)), "Failed to update the bot"),
+        [WS_METHODS.botsRemove]: (input) =>
+          rpcEffect(withBots((bots) => bots.remove(input)), "Failed to remove the bot"),
+        [WS_METHODS.botsUpdateSettings]: (input) =>
+          rpcEffect(withBots((bots) => bots.updateSettings(input)), "Failed to save SynBot settings"),
+        [WS_METHODS.botsCardAction]: (input) =>
+          rpcEffect(withBots((bots) => bots.cardAction(input)), "Failed to answer the card"),
+        [WS_METHODS.botsSuggest]: (input) =>
+          rpcEffect(withBots((bots) => bots.suggest(input)), "Failed to suggest bots"),
+        [WS_METHODS.botsCancelDelegation]: (input) =>
+          rpcEffect(withBots((bots) => bots.cancelDelegation(input)), "Failed to stop the delegation"),
+        [WS_METHODS.botsMergeProof]: (input) =>
+          rpcEffect(withBots((bots) => bots.mergeProof(input)), "Failed to check the merge proof"),
+        // Merging is the user's decision: only the owner session may press Merge.
+        [WS_METHODS.botsMerge]: (input) =>
+          requireWsOwnerSession.pipe(
+            Effect.andThen(rpcEffect(withBots((bots) => bots.merge(input)), "Failed to merge")),
+          ),
+        [WS_METHODS.botsUpdateBranch]: (input) =>
+          rpcEffect(withBots((bots) => bots.updateBranch(input)), "Failed to update the branch"),
+        [WS_METHODS.botsStopAll]: () =>
+          rpcEffect(withBots((bots) => bots.stopAll()), "Failed to stop the bots"),
+        [WS_METHODS.subscribeBotsEvents]: (_, { clientId }) =>
+          botService
+            ? streamAdmission.guard(
+                clientId,
+                { key: "bots.events" },
+                botService
+                  .streamEvents()
+                  .pipe(Stream.mapError((cause) => toWsRpcError(cause, "SynBot event stream failed"))),
+              )
+            : Stream.fail(toWsRpcError(new Error(SYNBOT_UNAVAILABLE_MESSAGE), SYNBOT_UNAVAILABLE_MESSAGE)),
         [WS_METHODS.subscribeAutomationEvents]: (_, { clientId }) =>
           streamAdmission.guard(
             clientId,

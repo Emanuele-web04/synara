@@ -160,6 +160,29 @@ import type {
   ProjectThreadIndexEntry,
 } from "./projectAgent";
 import type {
+  Bot,
+  BotDelegation,
+  BotMergeProof,
+  BotSettings,
+  BotStreamEvent,
+  BotsCancelDelegationInput,
+  BotsCardActionInput,
+  BotsCardActionResult,
+  BotsCreateInput,
+  BotsEnsureMainInput,
+  BotsMergeInput,
+  BotsMergeProofInput,
+  BotsMergeResult,
+  BotsRemoveInput,
+  BotsSnapshot,
+  BotsStopAllResult,
+  BotsSuggestInput,
+  BotsSuggestResult,
+  BotsUpdateBranchInput,
+  BotsUpdateInput,
+  BotsUpdateSettingsInput,
+} from "./bots";
+import type {
   GitCheckoutInput,
   GitActionProgressEvent,
   GitWorktreeSetupProgressEvent,
@@ -1672,6 +1695,23 @@ export interface NativeApi {
     subscribe: (input: { projectId: string }) => Promise<void>;
     unsubscribe: (input: { projectId: string }) => Promise<void>;
     onEvent: (callback: (event: ProjectAgentStreamEvent) => void) => () => void;
+  };
+  /** SynBot (Beta). Every call fails with "unavailable" on hosts without it. */
+  bots: {
+    list: () => Promise<BotsSnapshot>;
+    ensureMain: (input: BotsEnsureMainInput) => Promise<Bot>;
+    create: (input: BotsCreateInput) => Promise<Bot>;
+    update: (input: BotsUpdateInput) => Promise<Bot>;
+    remove: (input: BotsRemoveInput) => Promise<void>;
+    updateSettings: (input: BotsUpdateSettingsInput) => Promise<BotSettings>;
+    cardAction: (input: BotsCardActionInput) => Promise<BotsCardActionResult>;
+    suggest: (input: BotsSuggestInput) => Promise<BotsSuggestResult>;
+    cancelDelegation: (input: BotsCancelDelegationInput) => Promise<BotDelegation>;
+    mergeProof: (input: BotsMergeProofInput) => Promise<BotMergeProof>;
+    merge: (input: BotsMergeInput) => Promise<BotsMergeResult>;
+    updateBranch: (input: BotsUpdateBranchInput) => Promise<BotMergeProof>;
+    stopAll: () => Promise<BotsStopAllResult>;
+    onEvent: (callback: (event: BotStreamEvent) => void) => () => void;
   };
   automation: {
     list: (input?: AutomationListInput) => Promise<AutomationListResult>;
