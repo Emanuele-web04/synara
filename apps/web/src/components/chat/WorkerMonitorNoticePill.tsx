@@ -21,6 +21,8 @@ interface WorkerMonitorNoticePillProps {
   entry: WorkLogEntry;
   notice: WorkLogSynaraWorkerNotice;
   onOpenThread?: (threadId: ThreadId) => void;
+  /** `system`: a quiet centered status line between a bot chat's bubbles. */
+  tone?: "body" | "system";
 }
 
 /**
@@ -33,6 +35,7 @@ export function WorkerMonitorNoticePill({
   entry,
   notice,
   onOpenThread,
+  tone = "body",
 }: WorkerMonitorNoticePillProps) {
   const { t } = useTranslation();
 
@@ -64,8 +67,12 @@ export function WorkerMonitorNoticePill({
     <div
       className={cn(
         // Reads as part of the coordinator's reply: left-aligned body text,
-        // no pill, no status glyphs.
-        "flex max-w-full flex-wrap items-center gap-x-1 gap-y-1 text-chat text-foreground",
+        // no pill, no status glyphs. A bot chat's bubbles show it as a quiet
+        // centered status line instead.
+        "flex max-w-full flex-wrap items-center gap-x-1 gap-y-1",
+        tone === "system"
+          ? "justify-center text-ui-sm text-muted-foreground"
+          : "text-chat text-foreground",
       )}
       data-worker-monitor-kind={notice.kind}
     >
