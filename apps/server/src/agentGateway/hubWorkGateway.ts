@@ -11,6 +11,7 @@ import {
   TurnId,
   hubWorkItem,
   type HubWorkRecord,
+  type HubWorkSourceMessage,
   type SynaraCreateThreadsInput,
 } from "@synara/contracts";
 import { Effect, Option, Schema } from "effect";
@@ -57,6 +58,12 @@ export function makeHubWorkGateway(dependencies: {
   readonly attachments: ManagedAttachmentRepositoryShape;
   readonly serverConfig: ServerConfigShape;
   readonly createThreads: CreateThreads;
+  /** SynBot provenance for delegation and report messages (see hubWorkSource.ts). */
+  readonly delegatedSources?: (
+    messageId: string,
+  ) => Effect.Effect<readonly HubWorkSourceMessage[] | null, unknown>;
+  /** Whether a Hub is a SynBot bot, whose worktree tasks start with full access. */
+  readonly isBotProject?: (projectId: ProjectId) => Effect.Effect<boolean>;
 }) {
   const { repository, projectAgentRepository, projectAgentService, snapshotQuery } = dependencies;
   const service = makeHubWorkService({
@@ -123,6 +130,7 @@ export function makeHubWorkGateway(dependencies: {
       // nonterminal saga here would also block the scanner waiting for that saga.
       if (yield* hasUnfinishedCreation(record)) return;
       const spec = record.creationSpec;
+      const botHub = dependencies.isBotProject ? yield* dependencies.isBotProject(record.projectId) : false;
       const result = yield* dependencies.createThreads(
         {
           requestId: record.id,
@@ -142,6 +150,7 @@ export function makeHubWorkGateway(dependencies: {
         {
           kind: "hub-work",
           inheritedRuntimeMode: spec.inheritedRuntimeMode,
+          allowWorktreeEscalation: botHub,
           workItemId: record.id,
           batchId: `hub-work-batch:${stableGatewayDigest({ projectId: record.projectId, scopeKey: record.scopeKey }, 40)}`,
           callerThreadId: record.sourceThreadId,
@@ -228,8 +237,12 @@ export function makeHubWorkGateway(dependencies: {
           ...(spec.contextMessageIds !== undefined
             ? { contextMessageIds: spec.contextMessageIds }
             : {}),
+          ...(dependencies.delegatedSources ? { delegatedSources: dependencies.delegatedSources } : {}),
         }),
       );
+      const botHub = dependencies.isBotProject
+        ? yield* dependencies.isBotProject(principal.projectId)
+        : false;
       const sourceMessages = [
         ...new Map(sourcesByTask.flat().map((message) => [message.messageId, message])).values(),
       ];
@@ -259,11 +272,17 @@ export function makeHubWorkGateway(dependencies: {
             ),
           );
         const environment = spec.environment ?? (repositoryContext?.isRepo ? "worktree" : "local");
+        // A bot's worktree tasks edit with full access; its chat stays approval-required.
+        const botTaskRuntimeMode =
+          botHub && environment === "worktree" && spec.runtimeMode === undefined
+            ? ("full-access" as const)
+            : undefined;
         tasks.push({
           spec: {
             ...spec,
             environment,
-            ...(spec.runtimeMode === undefined ? { inheritedRuntimeMode } : {}),
+            ...(botTaskRuntimeMode ? { runtimeMode: botTaskRuntimeMode } : {}),
+            ...(spec.runtimeMode === undefined && !botTaskRuntimeMode ? { inheritedRuntimeMode } : {}),
             contextMessageIds: sourcesByTask[taskIndex]!.map((message) => message.messageId),
           },
         });

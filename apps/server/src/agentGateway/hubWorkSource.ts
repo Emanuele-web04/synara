@@ -24,6 +24,13 @@ export function resolveHubWorkSource(input: {
   readonly callerThreadId: string;
   readonly callerTurnId: string | null;
   readonly contextMessageIds?: readonly string[];
+  /**
+   * SynBot provenance: a delegation or report message from another bot stands for the human
+   * messages that authorized it. Returns null for ordinary messages.
+   */
+  readonly delegatedSources?: (
+    messageId: string,
+  ) => Effect.Effect<readonly HubWorkSourceMessage[] | null, unknown>;
 }) {
   return Effect.gen(function* () {
     const detail = yield* input.snapshotQuery.getThreadDetailById(
@@ -69,24 +76,36 @@ export function resolveHubWorkSource(input: {
                 input.callerTurnId !== null,
             ),
           ];
-    if (selected.some((message) => !message || !isHuman(message))) {
-      return yield* Effect.fail(
-        new ToolInputError(
-          "Select original human messages in this coordinator thread with contextMessageIds. Agent and automation messages cannot authorize new Hub work.",
-        ),
-      );
+    const resolved: HubWorkSourceMessage[] = [];
+    for (const message of selected) {
+      if (message && isHuman(message)) {
+        resolved.push({
+          threadId: detail.value.id,
+          messageId: message.id,
+          text: message.text,
+          attachments: [...(message.attachments ?? [])],
+          createdAt: message.createdAt,
+          updatedAt: message.updatedAt,
+          turnId: message.turnId,
+        });
+        continue;
+      }
+      const delegated =
+        message && input.delegatedSources
+          ? yield* input.delegatedSources(message.id).pipe(Effect.orElseSucceed(() => null))
+          : null;
+      if (!delegated || delegated.length === 0) {
+        return yield* Effect.fail(
+          new ToolInputError(
+            "Select original human messages in this coordinator thread with contextMessageIds. Agent and automation messages cannot authorize new Hub work.",
+          ),
+        );
+      }
+      for (const source of delegated) {
+        if (!resolved.some((entry) => entry.messageId === source.messageId)) resolved.push(source);
+      }
     }
-    return selected.map(
-      (message): HubWorkSourceMessage => ({
-        threadId: detail.value.id,
-        messageId: message!.id,
-        text: message!.text,
-        attachments: [...(message!.attachments ?? [])],
-        createdAt: message!.createdAt,
-        updatedAt: message!.updatedAt,
-        turnId: message!.turnId,
-      }),
-    );
+    return resolved;
   });
 }
 

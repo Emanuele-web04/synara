@@ -6,6 +6,8 @@ import common0 from "./locales/en/common.json";
 import computer0 from "./locales/en/computer.json";
 import automation0 from "./locales/en/automation.json";
 import git0 from "./locales/en/git.json";
+import synbot0 from "./locales/en/synbot.json";
+import synbotEditor0 from "./locales/en/synbotEditor.json";
 export const uiLocalizationResources = {
   en: {
     chat: chat0,
@@ -16,5 +18,7 @@ export const uiLocalizationResources = {
     computer: computer0,
     automation: automation0,
     git: git0,
+    synbot: synbot0,
+    synbotEditor: synbotEditor0,
   },
 } as const;

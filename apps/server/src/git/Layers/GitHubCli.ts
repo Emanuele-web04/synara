@@ -2513,6 +2513,22 @@ const makeGitHubCli = Effect.gen(function* () {
           },
         ),
       ),
+    updatePullRequestBranch: (input) =>
+      validateRepository(input.repository, "updatePullRequestBranch").pipe(
+        Effect.flatMap((repository) =>
+          execute({
+            cwd: input.cwd,
+            args: [
+              "pr",
+              "update-branch",
+              String(input.number),
+              "--repo",
+              repositorySelector(repository),
+            ],
+          }),
+        ),
+        Effect.asVoid,
+      ),
     commentOnPullRequest: (input) =>
       validateRepository(input.repository, "commentOnPullRequest").pipe(
         Effect.flatMap((repository) =>
@@ -2743,6 +2759,8 @@ const makeGitHubCli = Effect.gen(function* () {
       }),
     runPullRequestAction: (input) =>
       service.runPullRequestAction(input).pipe(Effect.ensuring(invalidatePullRequestLookups)),
+    updatePullRequestBranch: (input) =>
+      service.updatePullRequestBranch(input).pipe(Effect.ensuring(invalidatePullRequestLookups)),
     createPullRequest: (input) =>
       service.createPullRequest(input).pipe(Effect.ensuring(invalidatePullRequestLookups)),
   } satisfies GitHubCliShape;

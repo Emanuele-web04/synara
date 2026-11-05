@@ -378,6 +378,10 @@ export function createGitHubCliWithFakeGh(scenario: FakeGhScenario = {}): {
         ghCalls.push(`pr diff ${input.number} --repo ${input.repository}`);
         return Effect.succeed(scenario.pullRequestDiff ?? { patch: "", truncated: false });
       },
+      updatePullRequestBranch: (input) => {
+        ghCalls.push(`pr update-branch ${input.number} --repo ${input.repository}`);
+        return scenario.failWith ? Effect.fail(scenario.failWith) : Effect.void;
+      },
       runPullRequestAction: (input) => {
         ghCalls.push(
           `pr action ${input.action} ${input.number} --repo ${input.repository}${input.mergeMethod ? ` --${input.mergeMethod}` : ""}`,

@@ -6955,6 +6955,31 @@ export const makeProjectAgentService = Effect.gen(function* () {
           );
         }),
       ),
+
+    streamWorkItemEvents: () =>
+      Stream.unwrap(
+        Effect.gen(function* () {
+          const liveQueue = yield* Queue.bounded<
+            Extract<ProjectAgentStreamEvent, { readonly type: "work-item-upserted" }>,
+            Cause.Done
+          >(256);
+          // Same explicit subscription as streamEvents: Stream.fromPubSub does not deliver here.
+          const subscription = yield* PubSub.subscribe(events);
+          yield* Stream.fromSubscription(subscription).pipe(
+            Stream.filter(
+              (
+                event,
+              ): event is Extract<
+                ProjectAgentStreamEvent,
+                { readonly type: "work-item-upserted" }
+              > => event.type === "work-item-upserted",
+            ),
+            Stream.runIntoQueue(liveQueue),
+            Effect.forkScoped,
+          );
+          return Stream.fromQueue(liveQueue);
+        }),
+      ),
   };
 
   const unblockDependents = (accepted: ProjectTask) =>

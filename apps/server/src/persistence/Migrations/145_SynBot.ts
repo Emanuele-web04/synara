@@ -50,6 +50,7 @@ export default Effect.gen(function* () {
       result_summary TEXT,
       task_ids_json TEXT NOT NULL,
       reported_at TEXT,
+      report_message_id TEXT,
       created_at TEXT NOT NULL,
       started_at TEXT,
       settled_at TEXT,
@@ -63,6 +64,10 @@ export default Effect.gen(function* () {
   yield* sql`
     CREATE INDEX IF NOT EXISTS idx_bot_delegations_target
     ON bot_delegations (to_thread_id, state)
+  `;
+  yield* sql`
+    CREATE INDEX IF NOT EXISTS idx_bot_delegations_report
+    ON bot_delegations (report_message_id)
   `;
   yield* sql`
     CREATE INDEX IF NOT EXISTS idx_bot_delegations_requester
