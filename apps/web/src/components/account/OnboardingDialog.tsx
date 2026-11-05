@@ -7,6 +7,7 @@
 
 import type { AccountMe } from "@synara/contracts";
 import { useId, useState } from "react";
+import { useTranslation } from "~/i18n";
 import { Button } from "~/components/ui/button";
 import { Dialog, DialogPopup, DialogTitle } from "~/components/ui/dialog";
 import {
@@ -52,6 +53,7 @@ export function OnboardingDialog({ open, me, onFinished }: OnboardingDialogProps
 }
 
 function OnboardingDialogContent({ me, onFinished }: Omit<OnboardingDialogProps, "open">) {
+  const { t } = useTranslation();
   const account = useAccount();
   const [name, setName] = useState(me.name);
   const [handle, setHandle] = useState(sanitizeHandleInput(me.name.replace(/\s+/g, "-")));
@@ -67,7 +69,7 @@ function OnboardingDialogContent({ me, onFinished }: Omit<OnboardingDialogProps,
 
   const formatError =
     handle === takenHandle
-      ? "That handle is already taken — pick another."
+      ? t("settings:remote_account_handle_taken")
       : handleTouched
         ? handleFormatError(handle)
         : null;
@@ -91,15 +93,15 @@ function OnboardingDialogContent({ me, onFinished }: Omit<OnboardingDialogProps,
       });
       toastManager.add({
         type: "success",
-        title: "You're all set",
-        description: "Your profile is private. You can publish it from Edit profile.",
+        title: t("settings:remote_account_setup_complete"),
+        description: t("settings:remote_account_setup_private"),
       });
       onFinished();
     } catch (cause) {
       if (readAccountErrorCode(cause) === "handle_taken") {
         setTakenHandle(handle);
       } else {
-        setError(accountErrorMessage(cause, "Could not save your profile. Try again."));
+        setError(accountErrorMessage(cause, t("settings:remote_account_profile_save_failed")));
       }
     }
   };
@@ -121,7 +123,7 @@ function OnboardingDialogContent({ me, onFinished }: Omit<OnboardingDialogProps,
                 key={color}
                 type="button"
                 onClick={() => setAvatarColor(color)}
-                aria-label={`Use ${color}`}
+                aria-label={t("settings:remote_account_use_avatar_color", { color })}
                 className={cn(
                   "size-4 rounded-full transition-transform hover:scale-110",
                   avatarColor === color &&
@@ -133,7 +135,7 @@ function OnboardingDialogContent({ me, onFinished }: Omit<OnboardingDialogProps,
           </div>
         )}
         <DialogTitle className="font-system-ui text-lg font-semibold">
-          Set up your profile
+          {t("settings:remote_account_setup_profile")}
         </DialogTitle>
       </div>
 
@@ -145,24 +147,26 @@ function OnboardingDialogContent({ me, onFinished }: Omit<OnboardingDialogProps,
         }}
       >
         <label className="flex flex-col gap-1.5">
-          <span className={dialogFieldLabelClassName}>Name</span>
+          <span className={dialogFieldLabelClassName}>{t("common:scripts_name")}</span>
           <Input
             value={name}
             autoComplete="name"
-            placeholder="Your name"
+            placeholder={t("common:edit_yourName")}
             disabled={saving}
             onChange={(event) => setName(event.target.value)}
           />
         </label>
         <label className="flex flex-col gap-1.5">
-          <span className={dialogFieldLabelClassName}>Handle</span>
+          <span className={dialogFieldLabelClassName}>
+            {t("settings:remote_account_handle_label")}
+          </span>
           <InputGroup>
             <InputGroupAddon>
               <InputGroupText>@</InputGroupText>
             </InputGroupAddon>
             <InputGroupInput
               value={handle}
-              placeholder="handle"
+              placeholder={t("settings:remote_account_handle_placeholder")}
               disabled={saving}
               aria-invalid={formatError !== null || undefined}
               aria-describedby={handleHelpId}
@@ -185,15 +189,19 @@ function OnboardingDialogContent({ me, onFinished }: Omit<OnboardingDialogProps,
             </span>
           ) : (
             <span id={handleHelpId} className="text-ui-sm leading-snug text-muted-foreground">
-              Your profile link, when published: {publicProfileDisplayUrl(handle || "handle")}
+              {t("settings:remote_account_published_link", {
+                url: publicProfileDisplayUrl(handle || "handle"),
+              })}
             </span>
           )}
         </label>
         <label className="flex flex-col gap-1.5">
-          <span className={dialogFieldLabelClassName}>Workspace name</span>
+          <span className={dialogFieldLabelClassName}>
+            {t("settings:remote_account_workspace_name")}
+          </span>
           <Input
             value={workspaceName}
-            placeholder="Workspace"
+            placeholder={t("workspace:editor_workspaceLabel")}
             disabled={saving}
             onChange={(event) => setWorkspaceName(event.target.value)}
           />
@@ -208,7 +216,7 @@ function OnboardingDialogContent({ me, onFinished }: Omit<OnboardingDialogProps,
 
         <Button type="submit" className="mt-1 w-full" disabled={saving}>
           {saving ? <Spinner className="size-3.5" /> : null}
-          Finish
+          {t("settings:remote_account_finish")}
         </Button>
       </form>
     </div>

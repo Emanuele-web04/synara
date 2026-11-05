@@ -63,10 +63,11 @@ import { getFormatLocale, t, useTranslation } from "~/i18n";
 
 type StatsScope = "device" | "account";
 
+// Retain source labels for metadata while the shared control renders localized labels.
 const SCOPE_OPTIONS = [
-  { value: "account", label: "Account" },
-  { value: "device", label: "This device" },
-] as const satisfies readonly { value: StatsScope; label: string }[];
+  { value: "account", label: "Account", labelKey: "settings:remote_workspace_accountScope" },
+  { value: "device", label: "This device", labelKey: "settings:remote_workspace_deviceScope" },
+] as const satisfies readonly { value: StatsScope; label: string; labelKey: string }[];
 
 export function ProfileSettingsPanel() {
   const { t } = useTranslation();
@@ -180,15 +181,15 @@ function ProfileContent({
           <SettingsSegmentedControl
             value={scope}
             onValueChange={onScopeChange}
-            options={SCOPE_OPTIONS}
-            ariaLabel="Stats scope"
+            options={SCOPE_OPTIONS.map((option) => ({ ...option, label: t(option.labelKey) }))}
+            ariaLabel={t("settings:remote_workspace_statsScope")}
           />
         ) : null}
         <div className="flex items-center gap-2">
           {publicUrl ? (
             <Button variant="outline" size="sm" onClick={() => openExternalLink(publicUrl)}>
               <ExternalLinkIcon />
-              Open profile
+              {t("settings:remote_workspace_openProfile")}
             </Button>
           ) : null}
           <Button
@@ -209,7 +210,7 @@ function ProfileContent({
 
       {!canEdit ? (
         <p className="text-ui-sm text-muted-foreground">
-          Profile editing is unavailable on this computer. Your account photo and name are shown.
+          {t("settings:remote_workspace_profileEditingUnavailable")}
         </p>
       ) : null}
 
@@ -419,7 +420,9 @@ function AccountStatsBody({
       // flip back to This device.
       return (
         <div className="flex flex-col items-center gap-3 py-16 text-center">
-          <p className="text-ui-sm text-muted-foreground">Couldn’t load your account stats.</p>
+          <p className="text-ui-sm text-muted-foreground">
+            {t("settings:remote_workspace_accountStatsLoadFailed")}
+          </p>
           <Button variant="outline" size="sm" onClick={() => void usageQuery.refetch()}>
             {t("chat:profile_tryAgain")}
           </Button>

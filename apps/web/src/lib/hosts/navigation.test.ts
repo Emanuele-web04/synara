@@ -11,7 +11,7 @@ import {
   SETTINGS_NAV_ITEMS,
   SETTINGS_SECTION_IDS,
 } from "~/settingsNavigation";
-import { SETTINGS_SEARCH_ENTRIES } from "~/settingsSearchIndex";
+import { rankSettingsSearchEntries, SETTINGS_SEARCH_ENTRIES } from "~/settingsSearchIndex";
 
 describe("the hosts settings pane", () => {
   it("is a known settings section", () => {
@@ -38,12 +38,13 @@ describe("the hosts settings pane", () => {
   // Panels render null while inactive, so the sidebar cannot discover rows at
   // runtime — the index is the only way this pane is searchable.
   it("is searchable", () => {
-    const entries = SETTINGS_SEARCH_ENTRIES.filter((entry) => entry.section === "connections");
-
-    expect(entries.length).toBeGreaterThan(0);
-    expect(entries.map((entry) => entry.title)).toEqual(
-      expect.arrayContaining(["Control this computer", "Control other devices", "SSH"]),
-    );
+    for (const [query, id] of [
+      ["Control this computer", "connections:this-computer"],
+      ["Control other devices", "connections:other-computers"],
+      ["SSH", "connections:ssh"],
+    ] as const) {
+      expect(rankSettingsSearchEntries(query, 12).map((entry) => entry.id)).toContain(id);
+    }
   });
 
   it("keeps every search entry on a real section", () => {

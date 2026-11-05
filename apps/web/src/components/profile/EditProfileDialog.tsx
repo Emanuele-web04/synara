@@ -216,7 +216,7 @@ function EditProfileDialogContent({
           cause instanceof AvatarImageError
             ? cause.message
             : signedIn
-              ? accountErrorMessage(cause, "Could not upload that image. Try again.")
+              ? accountErrorMessage(cause, t("settings:remote_profile_upload_failed"))
               : t("common:edit_couldNotProcessImage"),
         );
       })
@@ -238,7 +238,7 @@ function EditProfileDialogContent({
         setDraftSource("sso");
       })
       .catch((cause: unknown) => {
-        setError(accountErrorMessage(cause, "Could not remove the photo. Try again."));
+        setError(accountErrorMessage(cause, t("settings:remote_profile_remove_photo_failed")));
       })
       .finally(() => {
         setProcessing(false);
@@ -247,14 +247,16 @@ function EditProfileDialogContent({
 
   const handleSave = () => {
     if (accountProfile && !/^[a-z0-9][a-z0-9-]{1,28}[a-z0-9]$/.test(draftHandle.toLowerCase())) {
-      setError("Use 3–30 letters, numbers or hyphens. Start and end with a letter or number.");
+      setError(t("settings:remote_profile_handle_format"));
       return Promise.resolve();
     }
     const links = accountProfile ? parseSocialLinkDrafts(draftLinks) : null;
     if (links && links.invalid.length > 0) {
       setInvalidLinks(links.invalid);
       setError(
-        `That ${socialLinkLabel(links.invalid[0]!)} profile doesn’t look right. Use your username or a link to your profile.`,
+        t("settings:remote_profile_social_link_invalid", {
+          platform: socialLinkLabel(links.invalid[0]!),
+        }),
       );
       return Promise.resolve();
     }
@@ -278,7 +280,7 @@ function EditProfileDialogContent({
         onOpenChange(false);
       })
       .catch((cause: unknown) => {
-        setError(accountErrorMessage(cause, "Could not save your profile. Try again."));
+        setError(accountErrorMessage(cause, t("settings:remote_account_profile_save_failed")));
       })
       .finally(() => {
         setSaving(false);
@@ -376,7 +378,7 @@ function EditProfileDialogContent({
             label={t("common:edit_username")}
             hint={
               accountProfile && draftHandle !== accountProfile.handle
-                ? "Changing your handle changes your public link. The old link stops working."
+                ? t("settings:remote_profile_handle_change_hint")
                 : undefined
             }
           >
@@ -398,23 +400,23 @@ function EditProfileDialogContent({
           {accountProfile && (
             <>
               <Field
-                label="Use theme color"
-                hint="Turn off to choose a color just for your profile."
+                label={t("settings:remote_profile_use_theme_color")}
+                hint={t("settings:remote_profile_theme_color_hint")}
               >
                 <div className="flex justify-end">
                   <Switch
                     checked={!customAccent}
                     onCheckedChange={(follow) => setCustomAccent(!follow)}
-                    aria-label="Use theme color"
+                    aria-label={t("settings:remote_profile_use_theme_color")}
                   />
                 </div>
               </Field>
               {customAccent && (
-                <Field label="Profile color">
+                <Field label={t("settings:remote_profile_color_label")}>
                   <ColorPill
                     color={draftAccent}
                     onChange={setDraftAccent}
-                    ariaLabel="Profile accent"
+                    ariaLabel={t("settings:remote_profile_accent_label")}
                     immediate
                   />
                 </Field>
@@ -423,18 +425,20 @@ function EditProfileDialogContent({
           )}
           {accountProfile && (
             <Field
-              label="Public profile"
+              label={t("settings:remote_profile_public_profile")}
               hint={
                 draftPublic
-                  ? `Anyone can see your profile at ${publicProfileDisplayUrl(draftHandle)}.`
-                  : "Only you can see your profile."
+                  ? t("settings:remote_profile_public_link_hint", {
+                      url: publicProfileDisplayUrl(draftHandle),
+                    })
+                  : t("settings:remote_profile_private_hint")
               }
             >
               <div className="flex justify-end">
                 <Switch
                   checked={draftPublic}
                   onCheckedChange={setDraftPublic}
-                  aria-label="Public profile"
+                  aria-label={t("settings:remote_profile_public_profile")}
                 />
               </div>
             </Field>
@@ -444,9 +448,11 @@ function EditProfileDialogContent({
         {accountProfile && (
           <div className="flex flex-col gap-1.5">
             <div className="flex items-baseline justify-between gap-3 px-1">
-              <span className="text-ui-sm text-muted-foreground">Links</span>
+              <span className="text-ui-sm text-muted-foreground">
+                {t("settings:remote_profile_links_label")}
+              </span>
               <span className="text-ui-xs text-muted-foreground/80">
-                Optional · shown on your public profile
+                {t("settings:remote_profile_links_hint")}
               </span>
             </div>
             <div className="divide-y divide-border/60 overflow-hidden rounded-xl border border-border/60">
@@ -480,7 +486,7 @@ function EditProfileDialogContent({
           onClick={() => void handleSave()}
           disabled={processing || saving}
         >
-          {saving ? "Saving…" : t("computer:form_save")}
+          {saving ? t("common:saving") : t("computer:form_save")}
         </Button>
       </div>
     </>
@@ -525,7 +531,7 @@ function AccountAvatarEditor({
         {hasSsoImage && (
           <AvatarChoiceButton selected={draftSource === "sso"} onClick={onSelectSso}>
             <CentralIcon name="circle-person" className="size-3.5" />
-            Provider picture
+            {t("settings:remote_profile_provider_picture")}
           </AvatarChoiceButton>
         )}
         <AvatarChoiceButton
@@ -535,14 +541,14 @@ function AccountAvatarEditor({
         >
           <CentralIcon name="add-image" className="size-3.5" />
           {processing
-            ? "Uploading…"
+            ? t("settings:remote_profile_uploading")
             : hasUpload
               ? t("common:edit_replacePhoto")
               : t("common:edit_uploadPhoto")}
         </AvatarChoiceButton>
         <AvatarChoiceButton selected={draftSource === "placeholder"} onClick={onSelectPlaceholder}>
           <CentralIcon name="letter-a-circle" className="size-3.5" />
-          Initials
+          {t("settings:remote_profile_initials")}
         </AvatarChoiceButton>
         {hasUpload && (
           <Button
@@ -567,7 +573,7 @@ function AccountAvatarEditor({
 
       {draftSource !== "placeholder" && (
         <p className="text-center text-ui-xs text-muted-foreground">
-          Colors apply to the initials avatar.
+          {t("settings:remote_profile_initials_color_hint")}
         </p>
       )}
     </div>
@@ -728,6 +734,7 @@ function SocialLinkField({
   invalid: boolean;
   onChange: (value: string) => void;
 }) {
+  const { t } = useTranslation();
   const Glyph = SOCIAL_GLYPHS[platform];
   const label = socialLinkLabel(platform);
   return (
@@ -740,11 +747,13 @@ function SocialLinkField({
         <InputGroup className={fieldControlClassName}>
           <InputGroupInput
             value={value}
-            aria-label={`${label} username`}
+            aria-label={t("settings:remote_profile_social_username", { platform: label })}
             aria-invalid={invalid || undefined}
             onChange={(event) => onChange(event.target.value)}
             placeholder={
-              platform === "linkedin" || platform === "github" ? "username" : "@username"
+              platform === "linkedin" || platform === "github"
+                ? t("common:username")
+                : t("settings:remote_profile_at_username")
             }
             autoCapitalize="none"
             autoCorrect="off"

@@ -1,3 +1,4 @@
+import { t as translate, useTranslation } from "~/i18n";
 import { useEffect, useId, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import type { FilesystemBrowseInput, FilesystemBrowseResult } from "@synara/contracts";
@@ -25,6 +26,7 @@ export function ExecutionFolderPicker({
   browse,
   onClose,
 }: PickerOptions & { onClose: (path: string | null) => void }) {
+  const { t } = useTranslation();
   const pathId = useId();
   useEffect(() => {
     notifyNativeSurfaceOcclusionChange();
@@ -49,7 +51,7 @@ export function ExecutionFolderPicker({
           setError(
             cause instanceof Error
               ? cause.message
-              : "Cannot read this folder. Check the connection and try again.",
+              : translate("computer:remote_host_read_folder_failed"),
           );
       },
     );
@@ -72,8 +74,8 @@ export function ExecutionFolderPicker({
     >
       <DialogPopup>
         <DialogHeader>
-          <DialogTitle>Choose a folder on {label}</DialogTitle>
-          <DialogDescription>Select an existing folder on this host.</DialogDescription>
+          <DialogTitle>{t("computer:remote_host_choose_folder_on", { host: label })}</DialogTitle>
+          <DialogDescription>{t("computer:remote_host_existing_folder")}</DialogDescription>
         </DialogHeader>
         <DialogPanel className="space-y-3">
           <form
@@ -85,7 +87,7 @@ export function ExecutionFolderPicker({
           >
             <div className="min-w-0 flex-1 space-y-1.5">
               <label htmlFor={pathId} className="text-ui-sm text-muted-foreground">
-                Folder path
+                {t("computer:remote_host_folder_path")}
               </label>
               <Input
                 id={pathId}
@@ -99,7 +101,7 @@ export function ExecutionFolderPicker({
               />
             </div>
             <Button type="submit" variant="outline" disabled={!path.trim()}>
-              Go
+              {t("computer:remote_host_go")}
             </Button>
           </form>
           <div className="flex items-center justify-between gap-2">
@@ -107,7 +109,10 @@ export function ExecutionFolderPicker({
               className="min-w-0 truncate text-ui-sm text-muted-foreground"
               title={listing?.parentPath}
             >
-              {listing?.parentPath ?? (error ? "Folder unavailable" : "Loading folders…")}
+              {listing?.parentPath ??
+                (error
+                  ? t("workspace:folderUnavailable")
+                  : t("workspace:projectPicker_loadingFolders"))}
             </p>
             <Button
               variant="ghost"
@@ -115,7 +120,7 @@ export function ExecutionFolderPicker({
               disabled={!listing || /^[\\/]+$|^[A-Za-z]:[\\/]?$/.test(listing.parentPath)}
               onClick={() => listing && openFolder(`${listing.parentPath}/..`)}
             >
-              Up
+              {t("computer:remote_host_up")}
             </Button>
           </div>
           {error ? (
@@ -125,7 +130,7 @@ export function ExecutionFolderPicker({
           ) : null}
           <div
             className="h-64 overflow-y-auto rounded-xl border border-border"
-            aria-label={`Folders on ${label}`}
+            aria-label={t("computer:remote_host_folders_on", { host: label })}
             aria-busy={!listing && !error}
           >
             {listing?.entries.map((entry) => (
@@ -141,20 +146,20 @@ export function ExecutionFolderPicker({
             ))}
             {listing?.entries.length === 0 ? (
               <p className="px-3 py-4 text-ui text-muted-foreground">
-                No subfolders. You can select this folder.
+                {t("computer:remote_host_no_subfolders")}
               </p>
             ) : null}
           </div>
         </DialogPanel>
         <DialogFooter>
           <Button variant="outline" onClick={() => onClose(null)}>
-            Cancel
+            {t("common:form_cancel")}
           </Button>
           <Button
             disabled={!listing || Boolean(error) || path.trim() !== listing.parentPath}
             onClick={() => listing && onClose(listing.parentPath)}
           >
-            Use folder
+            {t("computer:remote_host_use_folder")}
           </Button>
         </DialogFooter>
       </DialogPopup>

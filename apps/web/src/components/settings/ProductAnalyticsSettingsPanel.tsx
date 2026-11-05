@@ -1,3 +1,4 @@
+import { useTranslation } from "~/i18n";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { productAnalyticsBridge } from "~/lib/productAnalytics";
 import { SettingsRow, SettingsSection } from "./SettingsPanelPrimitives";
@@ -8,6 +9,7 @@ import { IS_REMOTE_DESKTOP } from "~/branding";
 const queryKey = ["desktop", "product-analytics-consent"] as const;
 
 export function ProductAnalyticsSettingsPanel() {
+  const { t } = useTranslation();
   const bridge = productAnalyticsBridge();
   const client = useQueryClient();
   const state = useQuery({
@@ -21,15 +23,17 @@ export function ProductAnalyticsSettingsPanel() {
     onSuccess: (value) => client.setQueryData(queryKey, value),
   });
   if (!bridge) return null;
-  const title = IS_REMOTE_DESKTOP ? "Share usage and diagnostics" : "Share product analytics";
+  const title = IS_REMOTE_DESKTOP
+    ? t("settings:remote_workspace_shareUsageDiagnostics")
+    : t("settings:remote_workspace_shareProductAnalytics");
   return (
-    <SettingsSection title="Privacy">
+    <SettingsSection title={t("settings:remote_workspace_privacy")}>
       <SettingsRow
         title={title}
         description={
           IS_REMOTE_DESKTOP
-            ? "Helps us fix bugs and count active users: feature use, connection and turn outcomes, errors and crashes, sent to our Cloudflare service. Never your chats, prompts, files or account details. On by default in Synara Remote; applies only to this installation."
-            : "Help improve Synara with feature counts, connection outcomes and performance sent to our Cloudflare service. No chat content, files or account details. Off by default; applies only to this installation."
+            ? t("settings:remote_workspace_remoteAnalyticsDescription")
+            : t("settings:remote_workspace_productAnalyticsDescription")
         }
         control={
           <Switch
@@ -42,14 +46,14 @@ export function ProductAnalyticsSettingsPanel() {
         status={
           state.isError ? (
             <Button variant="outline" size="sm" onClick={() => void state.refetch()}>
-              Retry loading privacy settings
+              {t("settings:remote_workspace_retryPrivacySettings")}
             </Button>
           ) : change.isError ? (
-            "Could not save your choice. Your previous setting is still shown; try again."
+            t("settings:remote_workspace_privacySaveFailed")
           ) : IS_REMOTE_DESKTOP ? (
-            "Turning this off stops collection and clears unsent events."
+            t("settings:remote_workspace_disableRemoteAnalytics")
           ) : (
-            "Turning this off clears unsent product events. Beta crash diagnostics are separate."
+            t("settings:remote_workspace_disableProductAnalytics")
           )
         }
       />

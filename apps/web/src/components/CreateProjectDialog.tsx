@@ -505,8 +505,7 @@ export function CreateProjectDialog(props: {
             githubAvailable={githubAvailable}
             {...(remote
               ? {
-                  githubUnavailableReason:
-                    "Select This computer to clone from GitHub. You can add an existing folder on a connected computer.",
+                  githubUnavailableReason: t("workspace:remote_workspace_cloneOnThisComputer"),
                 }
               : {})}
             onValueChange={(nextSource) => {
@@ -530,8 +529,8 @@ export function CreateProjectDialog(props: {
                 <InputGroupInput
                   id={nameInputId}
                   value={name}
-                  aria-label="Project name"
-                  placeholder="Project name"
+                  aria-label={t("workspace:projectName")}
+                  placeholder={t("workspace:projectName")}
                   maxLength={120}
                   disabled={submitting}
                   onChange={(event) => {
@@ -542,12 +541,12 @@ export function CreateProjectDialog(props: {
                 />
               </InputGroup>
               <div className="flex flex-wrap items-center gap-1 text-ui text-muted-foreground">
-                <span>Add a folder on</span>
+                <span>{t("workspace:remote_workspace_addFolderOn")}</span>
                 <ComputerPicker
                   computers={computers}
                   value={computerId}
                   disabled={submitting || isPickingFolder}
-                  purpose="Project computer"
+                  purpose={t("workspace:remote_workspace_projectComputer")}
                   onChange={(id) => {
                     if (id === computerId) return;
                     dialogGeneration.current += 1;
@@ -710,7 +709,7 @@ export function CreateProjectDialog(props: {
                     </button>
                     {!selectedComputer?.available ? (
                       <p role="status" className="text-ui-sm text-muted-foreground">
-                        This computer is unavailable. Reconnect or choose another computer.
+                        {t("workspace:remote_workspace_computerUnavailable")}
                       </p>
                     ) : null}
                   </div>

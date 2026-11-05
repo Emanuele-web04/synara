@@ -1,6 +1,7 @@
 // Account erasure entry point for Settings. Reuses the shared alert dialog and
 // fenced account mutation; local workspace history is never deleted here.
 import { useState } from "react";
+import { useTranslation } from "~/i18n";
 import { useAccount } from "~/hooks/useAccount";
 import { Button } from "~/components/ui/button";
 import { Input } from "~/components/ui/input";
@@ -15,6 +16,7 @@ import {
 } from "~/components/ui/alert-dialog";
 
 export function DeleteAccountControl() {
+  const { t } = useTranslation();
   const account = useAccount();
   const [open, setOpen] = useState(false);
   const [confirmation, setConfirmation] = useState("");
@@ -42,7 +44,7 @@ export function DeleteAccountControl() {
           setOpen(true);
         }}
       >
-        Delete account…
+        {t("settings:remote_account_delete_open")}
       </Button>
       <AlertDialog
         open={
@@ -55,15 +57,13 @@ export function DeleteAccountControl() {
       >
         <AlertDialogPopup>
           <AlertDialogHeader>
-            <AlertDialogTitle>Delete your Synara account?</AlertDialogTitle>
+            <AlertDialogTitle>{t("settings:remote_account_delete_title")}</AlertDialogTitle>
             <AlertDialogDescription>
-              This removes your cloud profile, synced usage, saved Inbox and managed connections.
-              Chats stored on your computers remain. Access is disabled immediately and cloud
-              erasure continues in the background. This cannot be undone.
+              {t("settings:remote_account_delete_description")}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <label className="flex flex-col gap-2 text-ui-sm">
-            Enter {me.email} to confirm
+            {t("settings:remote_account_delete_confirm", { email: me.email })}
             <Input
               type="email"
               autoComplete="off"
@@ -73,7 +73,7 @@ export function DeleteAccountControl() {
           </label>
           {error ? (
             <p role="alert" className="text-ui-sm text-destructive">
-              Could not confirm deletion. Try again; if signed out, sign in to check your account.
+              {t("settings:remote_account_delete_failed")}
             </p>
           ) : null}
           <AlertDialogFooter>
@@ -81,7 +81,7 @@ export function DeleteAccountControl() {
               render={<Button variant="outline" size="sm" />}
               disabled={account.deleteAccount.isPending}
             >
-              Cancel
+              {t("common:form_cancel")}
             </AlertDialogClose>
             <Button
               variant="destructive"
@@ -104,7 +104,9 @@ export function DeleteAccountControl() {
                   .catch(() => setError(true));
               }}
             >
-              {account.deleteAccount.isPending ? "Deleting…" : "Delete account"}
+              {account.deleteAccount.isPending
+                ? t("settings:remote_account_deleting")
+                : t("settings:remote_account_delete_action")}
             </Button>
           </AlertDialogFooter>
         </AlertDialogPopup>

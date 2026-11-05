@@ -6,6 +6,8 @@
 
 import type { CSSProperties, ReactNode } from "react";
 
+import { useTranslation } from "~/i18n";
+
 import { CheckIcon, DeviceComputerIcon, DeviceMobileIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 
@@ -42,6 +44,7 @@ export function ConnectionsAddDeviceHero({
 }
 
 function PhoneScreen({ computerNoun }: { computerNoun: string }) {
+  const { t } = useTranslation();
   return (
     <div
       className={cn(
@@ -55,10 +58,10 @@ function PhoneScreen({ computerNoun }: { computerNoun: string }) {
           <DeviceComputerIcon className="size-4.5" />
         </span>
         <p className="mt-2.5 text-center text-ui-sm leading-tight font-semibold text-foreground">
-          Connect to your {computerNoun}?
+          {t("settings:remote_connections_connect_to_your", { computer: computerNoun })}
         </p>
         <p className="mt-1 text-center text-ui-timestamp leading-snug text-muted-foreground">
-          Synara on this phone will control it.
+          {t("settings:remote_connections_phone_controls")}
         </p>
       </div>
     </div>
@@ -66,6 +69,7 @@ function PhoneScreen({ computerNoun }: { computerNoun: string }) {
 }
 
 function SettingsWindow({ computerNoun }: { computerNoun: string }) {
+  const { t } = useTranslation();
   return (
     <div
       className={cn(
@@ -80,26 +84,30 @@ function SettingsWindow({ computerNoun }: { computerNoun: string }) {
       </div>
       <div className="flex min-h-0 flex-1">
         <div className="flex w-24 flex-col gap-0.5 bg-muted/50 px-1.5 py-1 text-ui-timestamp text-muted-foreground">
-          <SidebarItem>General</SidebarItem>
-          <SidebarItem>Appearance</SidebarItem>
-          <SidebarItem active>Connections</SidebarItem>
-          <SidebarItem>Agent providers</SidebarItem>
-          <SidebarItem>Models &amp; writing</SidebarItem>
+          <SidebarItem>{t("settings:nav_general")}</SidebarItem>
+          <SidebarItem>{t("common:nav_appearance")}</SidebarItem>
+          <SidebarItem active>{t("settings:remote_connections_title")}</SidebarItem>
+          <SidebarItem>{t("settings:agentProviders")}</SidebarItem>
+          <SidebarItem>{t("settings:modelsWriting")}</SidebarItem>
         </div>
         <div className="flex min-w-0 flex-1 flex-col gap-2 px-3 py-2">
-          <span className="text-ui-xs font-semibold text-foreground">Connections</span>
+          <span className="text-ui-xs font-semibold text-foreground">
+            {t("settings:remote_connections_title")}
+          </span>
           <div className="flex gap-0.5 rounded-full bg-secondary p-0.5 text-ui-timestamp">
             <span className="flex-1 py-0.75 text-center text-muted-foreground">
-              Control this {computerNoun}
+              {t("settings:remote_connections_control_this", { computer: computerNoun })}
             </span>
             <span className="flex-1 rounded-full bg-popover py-0.75 text-center text-foreground shadow-xs">
-              Control other devices
+              {t("settings:remote_connections_control_other_devices")}
             </span>
           </div>
           <div className="flex items-center justify-between pt-1">
-            <span className="text-ui-timestamp text-muted-foreground">Computers</span>
+            <span className="text-ui-timestamp text-muted-foreground">
+              {t("settings:remote_connections_computers")}
+            </span>
             <span className="rounded-full bg-primary px-2.25 py-0.75 text-ui-timestamp font-semibold text-primary-foreground ring-2 ring-sky-500/70 ring-offset-2 ring-offset-popover dark:ring-sky-400/70">
-              Add
+              {t("workspace:models_add")}
             </span>
           </div>
           <span className="h-px bg-border" />

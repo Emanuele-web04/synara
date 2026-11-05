@@ -5,6 +5,7 @@
 // Layer: Web account feature (sidebar footer).
 
 import { useNavigate } from "@tanstack/react-router";
+import { useTranslation } from "~/i18n";
 import { toastManager } from "~/components/ui/toast";
 import {
   Menu,
@@ -42,6 +43,7 @@ export function AccountFooterControl() {
 }
 
 function SignedInFooter() {
+  const { t } = useTranslation();
   const account = useAccount();
   const navigate = useNavigate();
   const openSignIn = useAccountDialogStore((state) => state.openSignIn);
@@ -63,8 +65,8 @@ function SignedInFooter() {
     } catch (cause) {
       toastManager.add({
         type: "error",
-        title: "Could not sign out",
-        description: accountErrorMessage(cause, "Try again in a moment."),
+        title: t("settings:remote_account_sign_out_failed"),
+        description: accountErrorMessage(cause, t("chat:tryAgainInAMoment")),
       });
     }
   };
@@ -74,7 +76,7 @@ function SignedInFooter() {
       <SidebarIconButton
         render={<MenuTrigger />}
         icon={UserIcon}
-        label={`Account: ${displayName}`}
+        label={t("settings:remote_account_menu_label", { name: displayName })}
         tooltip={displayName}
         tooltipSide="right"
         className={appRailButtonClassName(false)}
@@ -107,7 +109,7 @@ function SignedInFooter() {
             onClick={() => void navigate({ to: "/settings", search: { section: "usage" } })}
           >
             <SidebarContextMenuIcon icon={UsageGaugeIcon} />
-            <span>Usage</span>
+            <span>{t("chat:general_usage")}</span>
           </MenuItem>
           {/* Three honest states: a public profile links to its live page, a
               private one routes to the visibility setting (the page would
@@ -119,7 +121,7 @@ function SignedInFooter() {
                 onClick={() => openExternalLink(publicProfileUrl(profile.handle))}
               >
                 <SidebarContextMenuIcon icon={ExternalLinkIcon} />
-                <span>View public profile</span>
+                <span>{t("settings:remote_account_view_public_profile")}</span>
               </MenuItem>
             ) : (
               <MenuItem
@@ -127,13 +129,13 @@ function SignedInFooter() {
                 onClick={() => void navigate({ to: "/settings", search: { section: "profile" } })}
               >
                 <SidebarContextMenuIcon icon={GlobeIcon} />
-                <span>Make profile public…</span>
+                <span>{t("settings:remote_account_make_profile_public")}</span>
               </MenuItem>
             )
           ) : (
             <MenuItem className={SIDEBAR_CONTEXT_MENU_ITEM_CLASS_NAME} onClick={openSignIn}>
               <SidebarContextMenuIcon icon={ExternalLinkIcon} />
-              <span>Finish setting up</span>
+              <span>{t("settings:remote_account_finish_setup")}</span>
             </MenuItem>
           )}
           {/* Hosts are an account concept (ADR 0002 — they follow the owner),
@@ -144,14 +146,14 @@ function SignedInFooter() {
             onClick={() => void navigate({ to: "/settings", search: { section: "connections" } })}
           >
             <SidebarContextMenuIcon icon={GlobeIcon} />
-            <span>Connections</span>
+            <span>{t("settings:remote_account_connections")}</span>
           </MenuItem>
           <MenuItem
             className={SIDEBAR_CONTEXT_MENU_ITEM_CLASS_NAME}
             onClick={() => void navigate({ to: "/settings" })}
           >
             <SidebarContextMenuIcon icon={SettingsIcon} />
-            <span>Settings</span>
+            <span>{t("workspace:toast_settings")}</span>
             <MenuShortcut>{settingsShortcutLabel()}</MenuShortcut>
           </MenuItem>
         </MenuGroup>
@@ -160,7 +162,7 @@ function SignedInFooter() {
           {/* Sign-out also unlinks this machine's host (ADR 0015): its key
               leaves the directory and other devices' sessions to it end. */}
           <MenuItem variant="destructive" onClick={() => void handleSignOut()}>
-            <span>Sign out</span>
+            <span>{t("settings:signOut")}</span>
           </MenuItem>
         </MenuGroup>
       </ComposerPickerMenuPopup>
@@ -169,6 +171,7 @@ function SignedInFooter() {
 }
 
 function SignedOutFooter() {
+  const { t } = useTranslation();
   const navigate = useNavigate();
   const openSignIn = useAccountDialogStore((state) => state.openSignIn);
 
@@ -178,17 +181,19 @@ function SignedOutFooter() {
         render={<MenuTrigger />}
         icon={UserIcon}
         iconClassName="size-5"
-        label="Sign in"
-        tooltip="Sign in"
+        label={t("chat:providerModelPicker_signIn")}
+        tooltip={t("chat:providerModelPicker_signIn")}
         tooltipSide="right"
         className={appRailButtonClassName(false)}
       />
       <ComposerPickerMenuPopup side="right" align="end" className="w-64 min-w-64">
         <MenuGroup>
           <div className="flex flex-col gap-0.5 px-2 py-1.5">
-            <span className="text-ui font-medium text-foreground">You&rsquo;re in local mode</span>
+            <span className="text-ui font-medium text-foreground">
+              {t("settings:remote_account_local_mode")}
+            </span>
             <span className="text-ui-sm leading-snug text-muted-foreground">
-              Sign in to sync your profile and workspace across devices.
+              {t("settings:remote_account_sign_in_sync")}
             </span>
           </div>
           <div className="px-2 pt-1 pb-1.5">
@@ -196,7 +201,7 @@ function SignedOutFooter() {
               className="w-full justify-center rounded-lg border border-transparent bg-primary text-primary-foreground data-highlighted:bg-primary/90 data-highlighted:text-primary-foreground"
               onClick={openSignIn}
             >
-              Sign in
+              {t("chat:providerModelPicker_signIn")}
             </MenuItem>
           </div>
         </MenuGroup>
@@ -207,7 +212,7 @@ function SignedOutFooter() {
             onClick={() => void navigate({ to: "/settings" })}
           >
             <SidebarContextMenuIcon icon={SettingsIcon} />
-            <span>Settings</span>
+            <span>{t("workspace:toast_settings")}</span>
             <MenuShortcut>{settingsShortcutLabel()}</MenuShortcut>
           </MenuItem>
         </MenuGroup>

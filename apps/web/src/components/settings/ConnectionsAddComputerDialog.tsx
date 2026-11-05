@@ -6,6 +6,9 @@
 
 import { useEffect, useId, useRef, useState } from "react";
 
+import { useTranslation } from "~/i18n";
+import { Translation } from "~/i18n/Translation";
+
 import {
   DEVICE_USER_CODE_GROUP_SIZE,
   DEVICE_USER_CODE_LENGTH,
@@ -57,6 +60,7 @@ function AddComputerDialogContent({
   onClose: () => void;
   onPaired: () => void;
 }) {
+  const { t } = useTranslation();
   const confirmationId = useId();
   const [code, setCode] = useState("");
   const [preview, setPreview] = useState<RemotePairingPreview | null>(null);
@@ -97,19 +101,16 @@ function AddComputerDialogContent({
       if (request.operation === "forget-host") {
         setPreview(null);
         setCompared(false);
-        setNotice("Saved pairing removed. Create a new code on the other computer to pair again.");
+        setNotice(t("settings:remote_connections_saved_pairing_removed"));
       }
       if (result.kind === "paired") {
-        setPaired(preview?.label ?? "The computer");
+        setPaired(preview?.label ?? t("settings:remote_connections_computer_fallback"));
         onPaired();
       }
     } catch (cause) {
       if (mounted.current)
         setError(
-          remoteAccessErrorMessage(
-            cause,
-            "The request did not complete. Check the other computer before retrying.",
-          ),
+          remoteAccessErrorMessage(cause, t("settings:remote_connections_request_incomplete")),
         );
     } finally {
       if (mounted.current) {
@@ -127,9 +128,9 @@ function AddComputerDialogContent({
         setPreview(null);
         setCompared(false);
         setError(null);
-        setNotice("Request cancelled here. Reject it on the other computer too.");
+        setNotice(t("settings:remote_connections_request_cancelled"));
       },
-      () => setError("Could not cancel. Reject the request on the other computer."),
+      () => setError(t("settings:remote_connections_cancel_failed")),
     );
   };
 
@@ -137,7 +138,7 @@ function AddComputerDialogContent({
     if (!preview) return;
     if (
       await ensureNativeApi().dialogs.confirm(
-        `Forget the saved identity for ${preview.label}? Active connections will close.`,
+        t("settings:remote_connections_forget_identity_confirm", { label: preview.label }),
       )
     )
       await perform({ operation: "forget-host", environmentId: preview.environmentId });
@@ -155,23 +156,23 @@ function AddComputerDialogContent({
   return (
     <DialogPopup className="max-w-md">
       <DialogHeader>
-        <DialogTitle>Add a computer</DialogTitle>
+        <DialogTitle>{t("settings:remote_connections_add_computer")}</DialogTitle>
         <DialogDescription>
-          On the other computer, open Settings → Connections and click Add. Enter the code it shows.
+          {t("settings:remote_connections_add_computer_instructions")}
         </DialogDescription>
       </DialogHeader>
       <DialogPanel className="space-y-4">
         {paired ? (
           <p role="status" className="py-4 text-center text-ui text-foreground">
-            {paired} approved this computer. You can connect to it now.
+            {t("settings:remote_connections_computer_approved", { computer: paired })}
           </p>
         ) : !preview ? (
           <ShortCodeField
-            label="Pairing code"
+            label={t("settings:remote_connections_pairing_code")}
             value={code}
             codeLength={DEVICE_USER_CODE_LENGTH}
             groupSize={DEVICE_USER_CODE_GROUP_SIZE}
-            placeholder="ABCD-2345"
+            placeholder={t("settings:remote_connections_pairing_code_placeholder")}
             disabled={busy}
             onValueChange={setCode}
             onSubmit={find}
@@ -180,8 +181,7 @@ function AddComputerDialogContent({
           <div className="space-y-3">
             <p className="text-ui font-medium">{preview.label}</p>
             <p className="text-ui-sm text-muted-foreground">
-              Check that the other computer shows this identity. Finding it by code alone does not
-              verify it.
+              {t("settings:remote_connections_verify_identity")}
             </p>
             <RootFingerprint
               value={preview.rootFingerprint}
@@ -195,13 +195,18 @@ function AddComputerDialogContent({
                 disabled={busy || waiting}
               />
               <label htmlFor={confirmationId} className="text-ui-sm">
-                The identity matches on both computers
+                {t("settings:remote_connections_identity_matches")}
               </label>
             </div>
             {deviceJkt ? (
               <p className="text-ui-sm text-muted-foreground">
-                If asked to approve, this computer appears as{" "}
-                <code className="break-all font-mono text-ui-xs text-foreground">{deviceJkt}</code>
+                <Translation
+                  message="settings:remote_connections_approval_identity"
+                  values={{ identity: deviceJkt }}
+                  components={{
+                    identity: <code className="break-all font-mono text-ui-xs text-foreground" />,
+                  }}
+                />
               </p>
             ) : null}
           </div>
@@ -220,13 +225,13 @@ function AddComputerDialogContent({
       <DialogFooter>
         {paired ? (
           <Button shape="capsule" onClick={onClose}>
-            Done
+            {t("git:detail_done")}
           </Button>
         ) : preview ? (
           <>
             {waiting ? (
               <Button shape="capsule" variant="subtle" onClick={cancelRequest}>
-                Cancel request
+                {t("settings:remote_connections_cancel_request")}
               </Button>
             ) : (
               <Button
@@ -235,7 +240,7 @@ function AddComputerDialogContent({
                 disabled={busy}
                 onClick={() => void forgetPrevious()}
               >
-                Forget previous pairing
+                {t("settings:remote_connections_forget_pairing")}
               </Button>
             )}
             <Button
@@ -250,16 +255,18 @@ function AddComputerDialogContent({
                 });
               }}
             >
-              {waiting ? "Waiting for approval…" : "Request access"}
+              {waiting
+                ? t("settings:remote_connections_waiting_approval")
+                : t("settings:remote_connections_request_access")}
             </Button>
           </>
         ) : (
           <>
             <Button shape="capsule" variant="subtle" onClick={onClose}>
-              Cancel
+              {t("common:form_cancel")}
             </Button>
             <Button shape="capsule" disabled={busy || !complete || !deviceJkt} onClick={find}>
-              Find computer
+              {t("settings:remote_connections_find_computer")}
             </Button>
           </>
         )}

@@ -1,3 +1,4 @@
+import { useTranslation } from "~/i18n";
 import { ProjectCatalogDialog } from "./ProjectCatalogDialog";
 import { readRecoverableEditorDrafts } from "~/lib/hosts/editorRecovery";
 import { readUnsavedExecutionDrafts } from "~/lib/hosts/executionSwitch";
@@ -15,36 +16,39 @@ import { toastManager } from "../ui/toast";
 
 /** Execution destination is visible independently of account and cloud state. */
 export function HostConnectionControl({ compact = false }: { compact?: boolean }) {
+  const { t } = useTranslation();
   const [catalogOpen, setCatalogOpen] = useState(false);
   const context = readExecutionContext();
   const navigate = useNavigate();
   const [state, setState] = useState<WsTransportState>("connecting");
   useEffect(() => addWsTransportStateListener(setState, { replayCurrent: true }), []);
   if (!context) return null;
-  const label = context.remote ? context.execution.label : "This computer";
+  // Exported metadata retains its source label independently of the UI language.
+  const sourceLabel = context.remote ? context.execution.label : "This computer";
+  const label = context.remote ? sourceLabel : t("computer:remote_host_this_computer");
   const channel = context.remote?.channel ?? context.controller.channel;
   const destination = channel
-    ? `${label} · ${channel === "dev" ? "Development" : `Synara ${channel[0]!.toUpperCase()}${channel.slice(1)}`}`
+    ? `${label} · ${channel === "dev" ? t("computer:remote_host_development") : `Synara ${channel[0]!.toUpperCase()}${channel.slice(1)}`}`
     : label;
   const status =
     state === "open"
-      ? "Connected"
+      ? t("chat:connected")
       : state === "connecting"
-        ? "Connecting…"
+        ? t("computer:connecting")
         : state === "incompatible"
-          ? "Update required"
-          : "Connection unavailable";
+          ? t("computer:remote_host_update_required")
+          : t("computer:remote_host_connection_unavailable");
   const back = () => {
     try {
       deactivateHost();
     } catch (error) {
       toastManager.add({
         type: "error",
-        title: "Could not preserve editor drafts",
+        title: t("computer:remote_host_preserve_drafts_failed"),
         description:
           error instanceof Error
             ? error.message
-            : "Copy your unsaved text before returning locally.",
+            : t("computer:remote_host_copy_drafts_before_return"),
       });
     }
   };
@@ -53,15 +57,15 @@ export function HostConnectionControl({ compact = false }: { compact?: boolean }
       const recovered = readRecoverableEditorDrafts();
       const current = readUnsavedExecutionDrafts();
       if (!current.length && !recovered.length) {
-        toastManager.add({ type: "info", title: "No editor drafts to recover" });
+        toastManager.add({ type: "info", title: t("computer:remote_host_no_drafts") });
         return;
       }
       const saveFile = ensureNativeApi().dialogs.saveFile;
-      if (!saveFile) throw new Error("File export is unavailable in this client.");
+      if (!saveFile) throw new Error(t("computer:remote_host_file_export_unavailable"));
       await saveFile({
         defaultFilename: "synara-editor-drafts.json",
         contents: JSON.stringify(
-          { environmentId: context.execution.environmentId, host: label, current, recovered },
+          { environmentId: context.execution.environmentId, host: sourceLabel, current, recovered },
           null,
           2,
         ),
@@ -69,8 +73,8 @@ export function HostConnectionControl({ compact = false }: { compact?: boolean }
     } catch (error) {
       toastManager.add({
         type: "error",
-        title: "Could not export drafts",
-        description: error instanceof Error ? error.message : "Try again.",
+        title: t("computer:remote_host_export_drafts_failed"),
+        description: error instanceof Error ? error.message : t("chat:tryAgain"),
       });
     }
   };
@@ -107,16 +111,20 @@ export function HostConnectionControl({ compact = false }: { compact?: boolean }
           </div>
           {context.remote ? (
             <>
-              <MenuItem onClick={back}>Back to this computer</MenuItem>
+              <MenuItem onClick={back}>{t("computer:remote_host_back_this_computer")}</MenuItem>
               <MenuSeparator />
             </>
           ) : null}
-          <MenuItem onClick={() => setCatalogOpen(true)}>Linked projects</MenuItem>
-          <MenuItem onClick={() => void exportDrafts()}>Export editor drafts</MenuItem>
+          <MenuItem onClick={() => setCatalogOpen(true)}>
+            {t("computer:remote_host_linked_projects")}
+          </MenuItem>
+          <MenuItem onClick={() => void exportDrafts()}>
+            {t("computer:remote_host_export_drafts")}
+          </MenuItem>
           <MenuItem
             onClick={() => void navigate({ to: "/settings", search: { section: "connections" } })}
           >
-            Manage connections
+            {t("computer:remote_host_manage_connections")}
           </MenuItem>
         </ComposerPickerMenuPopup>
       </Menu>

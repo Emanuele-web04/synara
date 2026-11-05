@@ -1,5 +1,9 @@
 import type { McpConnector } from "@synara/contracts";
-import { isMcpLoopbackHostname, normalizeMcpConnectorUrl } from "@synara/shared/mcpConnectors";
+import {
+  isMcpLoopbackHostname,
+  normalizeMcpConnectorUrl,
+  type McpConnectorUrlReasonCode,
+} from "@synara/shared/mcpConnectors";
 import { useMutation } from "@tanstack/react-query";
 import { useId, useState, type FormEvent } from "react";
 import { Button } from "~/components/ui/button";
@@ -13,7 +17,21 @@ import {
   DialogFooter,
 } from "~/components/ui/dialog";
 import { Input } from "~/components/ui/input";
+import { useTranslation } from "~/i18n";
 import { ensureNativeApi } from "~/nativeApi";
+
+export const MCP_CONNECTOR_URL_REASON_KEYS: Record<McpConnectorUrlReasonCode, string> = {
+  required: "settings:connectorUrlRequired",
+  "too-long": "settings:connectorUrlTooLong",
+  invalid: "settings:connectorUrlInvalid",
+  "https-required": "settings:remote_connector_httpsOrLoopbackRequired",
+  credentials: "settings:connectorUrlCredentials",
+  "public-host": "settings:connectorUrlPublicHost",
+};
+
+// Protocol examples stay exact in every interface language.
+const ARGUMENTS_EXAMPLE = '["mcp"]';
+const ENVIRONMENT_EXAMPLE = '{"API_KEY":"…"}';
 
 export function McpLocalConnectorDialog(props: {
   open: boolean;
@@ -21,6 +39,7 @@ export function McpLocalConnectorDialog(props: {
   onUrl: (url: string) => void;
   onConnected: (connector: McpConnector) => void;
 }) {
+  const { t } = useTranslation();
   const formId = useId();
   const [mode, setMode] = useState<"url" | "stdio">("url");
   const [url, setUrl] = useState("");
@@ -38,17 +57,17 @@ export function McpLocalConnectorDialog(props: {
         parsedArgs = JSON.parse(args);
         parsedEnv = env ? JSON.parse(env) : {};
       } catch {
-        throw new Error("Arguments must be a JSON array; environment must be a JSON object.");
+        throw new Error(t("settings:remote_connector_invalidJson"));
       }
       if (!Array.isArray(parsedArgs) || !parsedArgs.every((value) => typeof value === "string"))
-        throw new Error("Arguments must be an array of strings.");
+        throw new Error(t("settings:remote_connector_invalidArguments"));
       if (
         !parsedEnv ||
         typeof parsedEnv !== "object" ||
         Array.isArray(parsedEnv) ||
         !Object.values(parsedEnv).every((value) => typeof value === "string")
       )
-        throw new Error("Environment must map names to strings.");
+        throw new Error(t("settings:remote_connector_invalidEnvironment"));
       return ensureNativeApi().server.connectMcpConnector({
         name,
         command,
@@ -64,11 +83,15 @@ export function McpLocalConnectorDialog(props: {
     if (mode === "url") {
       const normalized = normalizeMcpConnectorUrl(url);
       if (!normalized.ok) {
-        setError(normalized.reason);
+        setError(
+          normalized.reasonCode
+            ? t(MCP_CONNECTOR_URL_REASON_KEYS[normalized.reasonCode])
+            : normalized.reason,
+        );
         return;
       }
       if (!isMcpLoopbackHostname(new URL(normalized.url).hostname)) {
-        setError("Use a loopback address for a local server.");
+        setError(t("settings:remote_connector_localAddressRequired"));
         return;
       }
       props.onUrl(normalized.url);
@@ -82,7 +105,9 @@ export function McpLocalConnectorDialog(props: {
         props.onOpenChange(false);
       }
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Could not add the local server.");
+      setError(
+        cause instanceof Error ? cause.message : t("settings:remote_connector_addLocalFailed"),
+      );
     }
   };
   return (
@@ -98,29 +123,28 @@ export function McpLocalConnectorDialog(props: {
     >
       <DialogPopup className="max-w-lg">
         <DialogHeader>
-          <DialogTitle>Add local server</DialogTitle>
+          <DialogTitle>{t("settings:remote_connector_addLocal")}</DialogTitle>
           <DialogDescription>
-            Connect an app on this computer by loopback URL, or approve a command to run as an MCP
-            server.
+            {t("settings:remote_connector_addLocalDescription")}
           </DialogDescription>
         </DialogHeader>
         <DialogPanel>
           <form id={formId} className="space-y-3 text-ui" onSubmit={(event) => void submit(event)}>
             <label className="block">
-              Transport
+              {t("settings:remote_connector_transport")}
               <select
-                aria-label="Local server transport"
+                aria-label={t("settings:remote_connector_localTransport")}
                 value={mode}
                 className="ml-2 rounded border bg-background p-1 text-ui"
                 onChange={(event) => setMode(event.target.value as "url" | "stdio")}
               >
-                <option value="url">Local HTTP URL</option>
-                <option value="stdio">Command (stdio)</option>
+                <option value="url">{t("settings:remote_connector_localHttpUrl")}</option>
+                <option value="stdio">{t("settings:remote_connector_stdioCommand")}</option>
               </select>
             </label>
             {mode === "url" ? (
               <Input
-                aria-label="Local MCP URL"
+                aria-label={t("settings:remote_connector_localMcpUrl")}
                 placeholder="http://127.0.0.1:29979/mcp"
                 value={url}
                 onChange={(event) => setUrl(event.target.value)}
@@ -129,7 +153,7 @@ export function McpLocalConnectorDialog(props: {
             ) : (
               <>
                 <label className="block">
-                  Name
+                  {t("common:scripts_name")}
                   <Input
                     value={name}
                     onChange={(event) => setName(event.target.value)}
@@ -138,7 +162,7 @@ export function McpLocalConnectorDialog(props: {
                   />
                 </label>
                 <label className="block">
-                  Command
+                  {t("workspace:scripts_command")}
                   <Input
                     value={command}
                     placeholder="~/.paper/bin/paper"
@@ -147,35 +171,34 @@ export function McpLocalConnectorDialog(props: {
                   />
                 </label>
                 <label className="block">
-                  Arguments (JSON array)
+                  {t("settings:remote_connector_jsonArguments")}
                   <Input
                     value={args}
-                    placeholder={'["mcp"]'}
+                    placeholder={ARGUMENTS_EXAMPLE}
                     onChange={(event) => setArgs(event.target.value)}
                     required
                   />
                 </label>
                 <label className="block">
-                  Working directory
+                  {t("settings:remote_connector_workingDirectory")}
                   <Input
                     value={cwd}
-                    placeholder="Home directory"
+                    placeholder={t("settings:remote_connector_homeDirectory")}
                     onChange={(event) => setCwd(event.target.value)}
                   />
                 </label>
                 <label className="block">
-                  Environment (JSON object, values hidden)
+                  {t("settings:remote_connector_jsonEnvironment")}
                   <Input
                     type="password"
                     autoComplete="off"
                     value={env}
-                    placeholder={'{"API_KEY":"…"}'}
+                    placeholder={ENVIRONMENT_EXAMPLE}
                     onChange={(event) => setEnv(event.target.value)}
                   />
                 </label>
                 <p className="text-ui-sm text-muted-foreground">
-                  Adding this server runs the exact command and arguments above. Environment values
-                  are saved in Synara’s secrets store.
+                  {t("settings:remote_connector_runCommandNotice")}
                 </p>
               </>
             )}
@@ -195,10 +218,10 @@ export function McpLocalConnectorDialog(props: {
               props.onOpenChange(false);
             }}
           >
-            Cancel
+            {t("common:form_cancel")}
           </Button>
           <Button type="submit" form={formId} disabled={mutation.isPending}>
-            {mode === "stdio" ? "Add and run server" : "Continue"}
+            {mode === "stdio" ? t("settings:remote_connector_addAndRun") : t("git:continue")}
           </Button>
         </DialogFooter>
       </DialogPopup>

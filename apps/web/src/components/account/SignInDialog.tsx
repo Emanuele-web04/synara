@@ -27,6 +27,8 @@ import {
   VERIFICATION_CODE_LENGTH,
 } from "~/lib/accountLogic";
 import { cn } from "~/lib/utils";
+import { useTranslation } from "~/i18n";
+import { Translation } from "~/i18n/Translation";
 
 interface SignInDialogProps {
   readonly open: boolean;
@@ -51,6 +53,7 @@ export function SignInDialog({ open, onOpenChange, onSignedIn }: SignInDialogPro
 type SsoWait = { readonly ssoId: string };
 
 function SignInDialogContent({ onOpenChange, onSignedIn }: Omit<SignInDialogProps, "open">) {
+  const { t } = useTranslation();
   const account = useAccount();
   const [email, setEmail] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -145,8 +148,8 @@ function SignInDialogContent({ onOpenChange, onSignedIn }: Omit<SignInDialogProp
       // never the runtime's own interrupt vocabulary.
       setError(
         isSignInCancellation(cause)
-          ? "Sign-in was interrupted. Try again."
-          : accountErrorMessage(cause, "Sign-in did not finish. Try again."),
+          ? t("settings:remote_account_sign_in_interrupted")
+          : accountErrorMessage(cause, t("settings:remote_account_sign_in_unfinished")),
       );
     } finally {
       if (ssoAbortRef.current === controller) ssoAbortRef.current = null;
@@ -177,7 +180,7 @@ function SignInDialogContent({ onOpenChange, onSignedIn }: Omit<SignInDialogProp
     setError(null);
     const trimmed = email.trim();
     if (trimmed.length === 0) {
-      setError("Enter your email.");
+      setError(t("settings:remote_account_email_required"));
       return;
     }
     try {
@@ -190,8 +193,8 @@ function SignInDialogContent({ onOpenChange, onSignedIn }: Omit<SignInDialogProp
       // provider may well have sent the code.
       setError(
         isSignInCancellation(cause)
-          ? "The connection restarted. Try again."
-          : accountErrorMessage(cause, "Could not send the code. Try again."),
+          ? t("settings:remote_account_connection_restarted")
+          : accountErrorMessage(cause, t("settings:remote_account_send_code_failed")),
       );
     }
   };
@@ -230,10 +233,10 @@ function SignInDialogContent({ onOpenChange, onSignedIn }: Omit<SignInDialogProp
       <div className="flex flex-col items-center gap-3 text-center">
         <SynaraLogo className="size-10" />
         <DialogTitle className="font-system-ui text-lg font-semibold">
-          Welcome to Synara
+          {t("settings:remote_account_welcome")}
         </DialogTitle>
         <p className="text-ui leading-snug text-muted-foreground">
-          Sign in or create your account to sync your profile and workspace across devices.
+          {t("settings:remote_account_sign_in_intro")}
         </p>
       </div>
 
@@ -241,10 +244,10 @@ function SignInDialogContent({ onOpenChange, onSignedIn }: Omit<SignInDialogProp
         <div className="flex flex-col items-center gap-3 py-2 text-center">
           <div className="flex items-center gap-2 text-ui text-muted-foreground">
             <Spinner className="size-3.5" />
-            <span>Waiting for your browser…</span>
+            <span>{t("settings:remote_account_waiting_browser")}</span>
           </div>
           <p className="text-ui-sm text-muted-foreground">
-            Finish signing in with your provider, then return here.
+            {t("settings:remote_account_finish_provider_sign_in")}
           </p>
           <Button
             variant="ghost"
@@ -258,10 +261,10 @@ function SignInDialogContent({ onOpenChange, onSignedIn }: Omit<SignInDialogProp
               setSsoWait(null);
             }}
           >
-            Stop waiting
+            {t("settings:remote_account_stop_waiting")}
           </Button>
           <p className="text-ui-sm text-muted-foreground">
-            A page you already approved may still finish signing in.
+            {t("settings:remote_account_approved_page_may_finish")}
           </p>
         </div>
       ) : (
@@ -278,7 +281,7 @@ function SignInDialogContent({ onOpenChange, onSignedIn }: Omit<SignInDialogProp
               onClick={() => void handleSso("google")}
             >
               <SiGoogle className="size-3.5" />
-              Continue with Google
+              {t("settings:remote_account_continue_google")}
             </Button>
             <Button
               variant="outline"
@@ -287,7 +290,7 @@ function SignInDialogContent({ onOpenChange, onSignedIn }: Omit<SignInDialogProp
               onClick={() => void handleSso("apple")}
             >
               <SiApple className="size-3.5" />
-              Continue with Apple
+              {t("settings:remote_account_continue_apple")}
             </Button>
             <Button
               variant="outline"
@@ -296,13 +299,15 @@ function SignInDialogContent({ onOpenChange, onSignedIn }: Omit<SignInDialogProp
               onClick={() => void handleSso("github")}
             >
               <SiGithub className="size-3.5" />
-              Continue with GitHub
+              {t("settings:remote_account_continue_github")}
             </Button>
           </div>
 
           <div className="flex items-center gap-3" role="separator" aria-orientation="horizontal">
             <span className="h-px flex-1 bg-border" />
-            <span className="text-ui-sm text-muted-foreground">or</span>
+            <span className="text-ui-sm text-muted-foreground">
+              {t("settings:remote_account_or")}
+            </span>
             <span className="h-px flex-1 bg-border" />
           </div>
 
@@ -316,7 +321,7 @@ function SignInDialogContent({ onOpenChange, onSignedIn }: Omit<SignInDialogProp
             <Input
               type="email"
               autoComplete="email"
-              placeholder="Email"
+              placeholder={t("settings:remote_account_email_label")}
               value={email}
               disabled={busy}
               aria-invalid={error !== null || undefined}
@@ -334,7 +339,7 @@ function SignInDialogContent({ onOpenChange, onSignedIn }: Omit<SignInDialogProp
             ) : null}
             <Button type="submit" className="mt-1 w-full" disabled={busy}>
               {account.sendOtp.isPending ? <Spinner className="size-3.5" /> : null}
-              Continue
+              {t("settings:remote_account_continue")}
             </Button>
           </form>
         </>
@@ -345,7 +350,7 @@ function SignInDialogContent({ onOpenChange, onSignedIn }: Omit<SignInDialogProp
         className="self-center text-ui-sm text-muted-foreground hover:text-foreground"
         onClick={() => onOpenChange(false)}
       >
-        Continue without an account
+        {t("settings:remote_account_continue_local")}
       </button>
     </div>
   );
@@ -380,6 +385,7 @@ function CodeEntryStep({
   onResend,
   onUseDifferentEmail,
 }: CodeEntryStepProps) {
+  const { t } = useTranslation();
   const [code, setCode] = useState("");
   const [error, setError] = useState<string | null>(null);
   // Stable id linking the input to its error text for assistive tech.
@@ -415,8 +421,8 @@ function CodeEntryStep({
       inputRef.current?.focus();
       setError(
         readAccountErrorCode(cause) === "invalid_verification_code"
-          ? "That code didn't work — try again or resend"
-          : accountErrorMessage(cause, "Could not sign you in. Try again."),
+          ? t("settings:remote_account_invalid_code")
+          : accountErrorMessage(cause, t("settings:remote_account_authenticate_failed")),
       );
     }
   };
@@ -438,7 +444,7 @@ function CodeEntryStep({
       setResendAvailableAtMs(Date.now() + RESEND_COOLDOWN_SECONDS * 1000);
       inputRef.current?.focus();
     } catch (cause) {
-      setError(accountErrorMessage(cause, "Could not resend the code. Try again in a minute."));
+      setError(accountErrorMessage(cause, t("settings:remote_account_resend_failed")));
     }
   };
 
@@ -454,14 +460,18 @@ function CodeEntryStep({
     <div className="flex flex-col gap-4 px-6 pt-8 pb-6">
       <div className="flex flex-col items-center gap-3 text-center">
         <SynaraLogo className="size-10" />
-        <DialogTitle className="font-system-ui text-lg font-semibold">Check your email</DialogTitle>
+        <DialogTitle className="font-system-ui text-lg font-semibold">
+          {t("settings:remote_account_check_email")}
+        </DialogTitle>
         <p className="text-ui leading-snug text-muted-foreground">
           {resent ? (
-            "New code sent"
+            t("settings:remote_account_new_code_sent")
           ) : (
-            <>
-              We sent a 6-digit code to <span className="text-foreground">{email}</span>
-            </>
+            <Translation
+              message="settings:remote_account_code_sent"
+              values={{ email }}
+              components={{ email: <span className="text-foreground" /> }}
+            />
           )}
         </p>
       </div>
@@ -484,7 +494,7 @@ function CodeEntryStep({
             maxLength={VERIFICATION_CODE_LENGTH}
             value={code}
             disabled={submitting}
-            aria-label="Sign-in code"
+            aria-label={t("settings:remote_account_sign_in_code")}
             aria-invalid={error !== null || undefined}
             aria-describedby={error !== null ? errorId : undefined}
             // The code field is the only thing to type into on this step.
@@ -523,21 +533,28 @@ function CodeEntryStep({
 
         <Button type="submit" className="mt-1 w-full" disabled={!complete || submitting}>
           {submitting ? <Spinner className="size-3.5" /> : null}
-          Verify
+          {t("settings:remote_account_verify")}
         </Button>
       </form>
 
       <p className="text-center text-ui-sm text-muted-foreground">
-        Didn't get it?{" "}
-        <button
-          type="button"
-          className="underline underline-offset-2 enabled:hover:text-foreground disabled:no-underline disabled:opacity-64"
-          disabled={resendDisabled}
-          onClick={() => void handleResend()}
-        >
-          Resend code
-          {cooldownSecondsLeft > 0 ? ` (${formatResendCountdown(cooldownSecondsLeft)})` : ""}
-        </button>
+        <Translation
+          message="settings:remote_account_resend_prompt"
+          values={{
+            countdown:
+              cooldownSecondsLeft > 0 ? ` (${formatResendCountdown(cooldownSecondsLeft)})` : "",
+          }}
+          components={{
+            resend: (
+              <button
+                type="button"
+                className="underline underline-offset-2 enabled:hover:text-foreground disabled:no-underline disabled:opacity-64"
+                disabled={resendDisabled}
+                onClick={() => void handleResend()}
+              />
+            ),
+          }}
+        />
       </p>
 
       <button
@@ -545,7 +562,7 @@ function CodeEntryStep({
         className="self-center text-ui-sm text-muted-foreground hover:text-foreground"
         onClick={onUseDifferentEmail}
       >
-        Use a different email
+        {t("settings:remote_account_different_email")}
       </button>
     </div>
   );

@@ -4,6 +4,7 @@
 // Layer: Route-level screen (mounted at /link).
 // Exports: DeviceLinkApproval, DeviceCodeField
 
+import { useTranslation } from "~/i18n";
 import { useCallback, useId, useState } from "react";
 
 import { SidebarHeaderNavigationControls } from "~/components/SidebarHeaderNavigationControls";
@@ -20,6 +21,9 @@ import {
 } from "~/hooks/useDesktopTopBarGutter";
 import { cn } from "~/lib/utils";
 import { SETTINGS_CARD_CLASS_NAME } from "~/settingsPanelStyles";
+
+// An example of the protocol code alphabet, not translatable prose.
+const DEVICE_CODE_EXAMPLE = "ABCD-EFGH";
 
 type ApprovalState =
   | { readonly status: "idle" }
@@ -50,13 +54,14 @@ export function DeviceCodeField({
   onSubmit: () => void;
   describedBy?: string;
 }) {
+  const { t } = useTranslation();
   return (
     <ShortCodeField
-      label="Device code"
+      label={t("computer:remote_host_device_code")}
       value={value}
       codeLength={DEVICE_USER_CODE_LENGTH}
       groupSize={4}
-      placeholder="ABCD-EFGH"
+      placeholder={DEVICE_CODE_EXAMPLE}
       disabled={disabled}
       {...(describedBy ? { describedBy } : {})}
       onValueChange={onValueChange}
@@ -66,6 +71,7 @@ export function DeviceCodeField({
 }
 
 export function DeviceLinkApproval() {
+  const { t } = useTranslation();
   const account = useAccount();
   const [code, setCode] = useState("");
   const [state, setState] = useState<ApprovalState>({ status: "idle" });
@@ -84,10 +90,10 @@ export function DeviceLinkApproval() {
     } catch (cause) {
       setState({
         status: "failed",
-        message: accountErrorMessage(cause, "That code could not be approved."),
+        message: accountErrorMessage(cause, t("computer:remote_host_approve_failed")),
       });
     }
-  }, [code]);
+  }, [code, t]);
 
   const signedIn = account.me !== null;
   const submitting = state.status === "submitting";
@@ -104,23 +110,26 @@ export function DeviceLinkApproval() {
           )}
         >
           <SidebarHeaderNavigationControls />
-          <span className="text-ui-lg font-medium text-foreground">Link a machine</span>
+          <span className="text-ui-lg font-medium text-foreground">
+            {t("computer:remote_host_link_machine")}
+          </span>
         </div>
 
         <div className="min-h-0 flex-1 overflow-y-auto px-4 py-8 sm:px-6">
           <div className="mx-auto w-full max-w-lg space-y-4">
             <div className="space-y-1">
-              <h1 className="font-display text-ui-lg text-foreground">Approve a device code</h1>
+              <h1 className="font-display text-ui-lg text-foreground">
+                {t("computer:remote_host_approve_code")}
+              </h1>
               <p className="text-ui text-muted-foreground">
-                A machine without a browser prints a short code when it asks to join your account.
-                Enter it here to link it. Codes never contain I, O, 0 or 1.
+                {t("computer:remote_host_device_code_description")}
               </p>
             </div>
 
             <div className={cn(SETTINGS_CARD_CLASS_NAME, "space-y-4 p-4")}>
               {signedIn ? null : (
                 <p className="text-ui text-muted-foreground" role="status">
-                  Sign in to approve a device code.
+                  {t("computer:remote_host_sign_in_approve")}
                 </p>
               )}
               <DeviceCodeField
@@ -138,7 +147,9 @@ export function DeviceLinkApproval() {
 
               <div className="flex items-center gap-3">
                 <Button size="sm" disabled={!canSubmit} onClick={() => void submit()}>
-                  {submitting ? "Approving..." : "Approve"}
+                  {submitting
+                    ? t("computer:remote_host_approving")
+                    : t("automation:approval_approve")}
                 </Button>
                 <span
                   id={statusId}
@@ -150,12 +161,14 @@ export function DeviceLinkApproval() {
                   )}
                 >
                   {state.status === "approved"
-                    ? "Approved. The machine will finish linking on its own."
+                    ? t("computer:remote_host_approved")
                     : state.status === "failed"
                       ? state.message
                       : isCompleteDeviceUserCode(code)
-                        ? "Ready to approve."
-                        : `Enter all ${DEVICE_USER_CODE_LENGTH} characters.`}
+                        ? t("computer:remote_host_ready_approve")
+                        : t("computer:remote_host_enter_characters", {
+                            count: DEVICE_USER_CODE_LENGTH,
+                          })}
                 </span>
               </div>
             </div>
