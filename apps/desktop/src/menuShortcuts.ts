@@ -202,6 +202,16 @@ export function shouldUseNativeZoomMenuRoles(platform: NodeJS.Platform): boolean
   return platform !== "linux";
 }
 
+/**
+ * Open SynBot's accelerator (Beta). macOS only: on Windows Ctrl+Alt is AltGr on many layouts
+ * (Hungarian AltGr+B types "{"), and Linux registers no native accelerators.
+ */
+export function resolveSynbotMenuAccelerator(
+  platform: NodeJS.Platform,
+): MenuItemConstructorOptions["accelerator"] | undefined {
+  return platform === "darwin" ? "Cmd+Alt+B" : undefined;
+}
+
 export function resolveKeyboardShortcutsMenuAccelerator(
   platform: NodeJS.Platform,
 ): MenuItemConstructorOptions["accelerator"] | undefined {

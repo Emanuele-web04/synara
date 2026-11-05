@@ -21,6 +21,7 @@ import { ComputerFrameTap } from "./computerFrameTap";
 import { ComputerShield } from "./computerShield";
 import { ProductAnalytics } from "./productAnalytics";
 import { attachProductAnalyticsIpc } from "./productAnalyticsIpc";
+import { parseAttentionBadgeCount, resolveAppBadgeCount } from "./appBadge";
 import { createDesktopNotificationRetainer } from "./notificationRetention";
 import { registerComputerDesktopLifecycle } from "./computerDesktopLifecycle";
 import { COMPUTER_PERMISSION_KINDS } from "@synara/shared/computerGrants";
@@ -260,6 +261,7 @@ import {
   resolveDesktopPhysicalZoomAction,
   resolveDesktopZoomShortcutAction,
   resolveKeyboardShortcutsMenuAccelerator,
+  resolveSynbotMenuAccelerator,
   resolveReportedMenuAccelerators,
   sameDesktopMenuAccelerators,
   shouldUseNativeZoomMenuRoles,
@@ -368,7 +370,11 @@ import {
   listAudioInputDevices,
   MAX_MICROPHONE_ID_LENGTH,
 } from "./audioLevelMonitor";
-import { AUDIO_TRAIL_BETA_FEATURE, isBetaFeatureEnabled } from "@synara/shared/betaFeatures";
+import {
+  AUDIO_TRAIL_BETA_FEATURE,
+  isBetaFeatureEnabled,
+  SYNBOT_BETA_FEATURE,
+} from "@synara/shared/betaFeatures";
 import { hardenBrowserAnnotationWebviewPreferences } from "./browserAnnotations/webviewSecurity";
 import { LOCAL_HTML_PREVIEW_SCHEME } from "./localHtmlPreviewProtocol";
 import {
@@ -663,6 +669,8 @@ let desktopLogSink: RotatingFileSink | null = null;
 let backendLogSink: RotatingFileSink | null = null;
 let restoreStdIoCapture: (() => void) | null = null;
 let unreadBackgroundNotificationCount = 0;
+// SynBot's bots waiting on the user, as the renderer reports them (Beta only).
+let attentionBadgeCount = 0;
 const desktopNotificationRetainer = createDesktopNotificationRetainer<Notification>();
 let browserPerfInterval: ReturnType<typeof setInterval> | null = null;
 const annotationGuestPreload = Path.join(__dirname, "guestPreload.js");
@@ -2110,6 +2118,30 @@ function configureApplicationMenu(): void {
         { role: "togglefullscreen" },
       ],
     },
+    // Beta: SynBot's page, a new bot and Stop all, handled by the renderer's menu actions.
+    ...(isBetaFeatureEnabled(SYNBOT_BETA_FEATURE, desktopFlavor)
+      ? [
+          {
+            label: t("desktop:synbotMenu"),
+            submenu: [
+              {
+                label: t("desktop:openSynbot"),
+                ...acceleratorProps(resolveSynbotMenuAccelerator(process.platform) ?? null),
+                click: () => dispatchMenuAction("synbot-open"),
+              },
+              { type: "separator" as const },
+              {
+                label: t("desktop:newBot"),
+                click: () => dispatchMenuAction("synbot-new-bot"),
+              },
+              {
+                label: t("desktop:stopAllBots"),
+                click: () => dispatchMenuAction("synbot-stop-all"),
+              },
+            ],
+          },
+        ]
+      : []),
     { role: "windowMenu" },
     {
       role: "help",
@@ -2323,7 +2355,7 @@ function initializeDesktopAppSnap(): void {
 
 // Keep the app badge aligned with desktop notifications that arrive off-focus.
 function syncUnreadNotificationBadge(): void {
-  app.setBadgeCount(unreadBackgroundNotificationCount);
+  app.setBadgeCount(resolveAppBadgeCount(unreadBackgroundNotificationCount, attentionBadgeCount));
 }
 
 // Count minimized, hidden, or unfocused windows as background notification targets.
@@ -5419,6 +5451,19 @@ function registerIpcHandlers(): void {
     if (!accelerators || sameDesktopMenuAccelerators(accelerators, desktopMenuAccelerators)) return;
     desktopMenuAccelerators = accelerators;
     if (app.isReady()) configureApplicationMenu();
+  });
+
+  // Beta: SynBot's bots that need the user join the Dock badge. Stable ignores the report.
+  ipcMain.removeAllListeners(IPC.setAttentionBadgeCount);
+  ipcMain.on(IPC.setAttentionBadgeCount, (event: IpcMainEvent, rawCount: unknown) => {
+    if (event.sender !== mainWindow?.webContents || event.senderFrame !== event.sender.mainFrame) {
+      return;
+    }
+    if (!isBetaFeatureEnabled(SYNBOT_BETA_FEATURE, desktopFlavor)) return;
+    const count = parseAttentionBadgeCount(rawCount);
+    if (count === attentionBadgeCount) return;
+    attentionBadgeCount = count;
+    syncUnreadNotificationBadge();
   });
 
   ipcMain.removeHandler(IPC.setTheme);
