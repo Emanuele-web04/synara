@@ -292,7 +292,16 @@ export function makeHubWorkGateway(dependencies: {
           },
         });
       }
+      // Sources the server resolved through a SynBot delegation live in the asking bot's chat.
+      const delegatedSourceMessageIds = new Set(
+        botHub
+          ? sourceMessages
+              .filter((message) => message.threadId !== context.callerThreadId)
+              .map((message) => message.messageId as string)
+          : [],
+      );
       const result = yield* service.submit({
+        ...(delegatedSourceMessageIds.size > 0 ? { delegatedSourceMessageIds } : {}),
         callerThreadId: ThreadId.makeUnsafe(context.callerThreadId),
         ...(context.callerTurnId ? { callerTurnId: TurnId.makeUnsafe(context.callerTurnId) } : {}),
         requestId: input.requestId,

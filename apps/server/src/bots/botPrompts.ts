@@ -84,8 +84,16 @@ export function renderBotContextSection(input: {
   lines.push("");
   lines.push("How you work:");
   lines.push(
-    "- Your chat is read-only. Never edit files here. Code changes happen in tasks: start them with synara_create_threads; repository tasks run in their own worktree.",
+    "- Your chat is read-only. Never edit files here. Code changes happen in tasks: start them with synara_create_threads; repository tasks run in their own worktree on their own branch. End each task brief with: commit your work on this branch when done.",
   );
+  lines.push(
+    "- A step that builds on an earlier task starts from that task's branch: pass it as baseRef to synara_create_threads, and name the branch in any brief you delegate.",
+  );
+  if (bot.kind === "main") {
+    lines.push(
+      "- You route: when the user names a bot, or a bot's role or scope fits the work, hand it to that bot with synara_bot_delegate — do not start that work as your own task. Start tasks yourself (synara_create_threads) only when no bot fits. For work in steps across bots, delegate the first step now and the next one when its report arrives.",
+    );
+  }
   lines.push(
     `- Hand work that fits another bot to it with synara_bot_delegate {botId, brief, requestId}. At most ${BOT_DELEGATIONS_PER_TURN} per turn; a chain is at most ${BOT_DELEGATION_MAX_DEPTH} bots deep and never returns to a bot already in it. Say who is on it in one line.`,
   );
@@ -139,14 +147,13 @@ export function renderDelegationMessage(input: {
     input.brief,
     "Original human messages (JSON; preserve their constraints and attachments):",
     JSON.stringify(
-      input.sourceMessages.map(({ threadId, messageId, text, attachments, createdAt }) => ({
-        threadId,
-        messageId,
+      input.sourceMessages.map(({ text, attachments, createdAt }) => ({
         text,
         attachments,
         createdAt,
       })),
     ),
+    "This message carries the user's authorization: start tasks for it with synara_create_threads and leave contextMessageIds out (or pass this message's own id).",
     `Answer directly or start tasks. When the work is done, end with a short result: Synara reports it back to ${input.fromName}.`,
   ].join("\n\n");
 }
@@ -161,6 +168,7 @@ export interface DelegationReportEntry {
     readonly state: string;
     readonly resultSummary: string | null;
     readonly prUrl: string | null;
+    readonly branch: string | null;
     readonly threadId: string | null;
   }>;
 }
@@ -184,7 +192,7 @@ export function renderDelegationReport(entries: readonly DelegationReportEntry[]
     if (entry.resultSummary) lines.push(`  Result: ${clip(entry.resultSummary, 1_200)}`);
     for (const task of entry.tasks) {
       lines.push(
-        `  Task "${task.title}": ${task.state}${task.resultSummary ? ` — ${clip(task.resultSummary, 400)}` : ""}${task.prUrl ? ` (PR ${task.prUrl})` : ""}${task.threadId ? ` [thread://${task.threadId}]` : ""}`,
+        `  Task "${task.title}": ${task.state}${task.resultSummary ? ` — ${clip(task.resultSummary, 400)}` : ""}${task.prUrl ? ` (PR ${task.prUrl})` : ""}${task.branch ? ` (branch ${task.branch})` : ""}${task.threadId ? ` [thread://${task.threadId}]` : ""}`,
       );
     }
   }
@@ -194,13 +202,16 @@ export function renderDelegationReport(entries: readonly DelegationReportEntry[]
   return lines.join("\n");
 }
 
-/** The one-line result kept on the delegation: the target's last reply, else task outcomes. */
+/**
+ * The result kept on the delegation: what its tasks did, then the target bot's last reply. Task
+ * outcomes come first because a bot's reply can predate the tasks it started.
+ */
 export function summarizeDelegationResult(input: {
   readonly lastReply: string | null;
   readonly taskSummaries: readonly string[];
 }): string | null {
   const reply = input.lastReply?.trim();
-  if (reply && reply.toUpperCase() !== "SILENT") return clip(reply, 4_000);
   const tasks = input.taskSummaries.map((summary) => summary.trim()).filter(Boolean);
-  return tasks.length > 0 ? clip(tasks.join(" · "), 4_000) : null;
+  const parts = [...tasks, ...(reply && reply.toUpperCase() !== "SILENT" ? [reply] : [])];
+  return parts.length > 0 ? clip(parts.join("\n\n"), 4_000) : null;
 }

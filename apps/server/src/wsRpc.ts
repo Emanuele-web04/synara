@@ -423,6 +423,15 @@ export function toWsRpcError(cause: unknown, fallbackMessage: string) {
       cause,
     });
   }
+  // SynBot is Beta-only: Stable and hosts without it refuse with a stable code clients switch on.
+  if (cause instanceof BotServiceError && cause.code === "unavailable") {
+    return new WsRpcError({
+      message: cause.message,
+      code: "FEATURE_UNAVAILABLE",
+      retryable: false,
+      cause,
+    });
+  }
   // Missing projector cursors make the snapshot fence underivable. Mark the
   // failure non-retryable with its own code so clients surface a diagnosable
   // fault instead of restarting the stream into the same condition forever.
@@ -3547,7 +3556,10 @@ const makeWsRpcHandlersLayer = () =>
                   ),
               )
             : Stream.fail(
-                toWsRpcError(new Error(SYNBOT_UNAVAILABLE_MESSAGE), SYNBOT_UNAVAILABLE_MESSAGE),
+                toWsRpcError(
+                  new BotServiceError({ message: SYNBOT_UNAVAILABLE_MESSAGE, code: "unavailable" }),
+                  SYNBOT_UNAVAILABLE_MESSAGE,
+                ),
               ),
         [WS_METHODS.subscribeAutomationEvents]: (_, { clientId }) =>
           streamAdmission.guard(

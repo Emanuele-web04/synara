@@ -1392,6 +1392,12 @@ function shouldKeepActivityForWorkLog(
     return true;
   }
 
+  // SynBot cards (delegations, choices, reports, control labels) are posted
+  // server-side with no turn id, like the coordinator monitor rows below.
+  if (activity.kind.startsWith("synbot.")) {
+    return true;
+  }
+
   // Coordinator monitor rows are posted server-side with no turn id; a
   // coordinator conversation is all turns, so the turn filter would hide every
   // settle/stuck/roll-up pill.
