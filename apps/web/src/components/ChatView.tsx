@@ -627,6 +627,8 @@ interface ChatViewProps {
    * and questions are answered in those rows, so the composer's own cards stand down.
    */
   renderTranscript?: (input: ChatTranscriptSlotInput) => ReactNode;
+  /** The composer's resting placeholder in place of "Do anything in Synara" (a bot's chat). */
+  composerPlaceholder?: string;
   /**
    * Enables the ambient computer preview rail for this chat: when provided,
    * a live computer session renders below the Environment card and the chat
@@ -658,6 +660,7 @@ export default function ChatView({
   onCloseThreadPane,
   onOpenLinkedThread,
   renderTranscript,
+  composerPlaceholder,
 }: ChatViewProps) {
   const { t } = useTranslation();
 
@@ -6722,7 +6725,7 @@ export default function ChatView({
                                 ? t("chat:placeholder_followUp")
                                 : standaloneSidechatContext
                                   ? t("chat:askAboutItem", { item: standaloneSidechatItemNoun })
-                                  : t("chat:doAnythingInSynara")
+                                  : (composerPlaceholder ?? t("chat:doAnythingInSynara"))
                   }
                   disabled={isComposerEditorDisabled}
                   singleLine={composerSingleRow}

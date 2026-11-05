@@ -8,12 +8,14 @@ import type { Bot, ThreadId } from "@synara/contracts";
 import { useNavigate } from "@tanstack/react-router";
 import { useCallback } from "react";
 
+import { synbotPageSearch } from "~/synbot/synbotNotifications.logic";
+
 /** Opens `bot`'s thread (SynBot's is the page without `?bot`). */
 export function useOpenBot() {
   const navigate = useNavigate();
   return useCallback(
     (bot: Pick<Bot, "id" | "kind">) =>
-      void navigate({ to: "/synbot", search: bot.kind === "main" ? {} : { bot: bot.id } }),
+      void navigate({ to: "/synbot", search: synbotPageSearch(bot) }),
     [navigate],
   );
 }

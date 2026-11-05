@@ -71,7 +71,6 @@
   "answers": "答案",
   "back": "返回",
   "backToThread": "返回机器人对话",
-  "botMenu": "{{name}} 选项",
   "chooseAll": "选择所有适用项",
   "close": "关闭",
   "done": "完成",
@@ -114,5 +113,12 @@
   "task_cancelled": "已停止",
   "thinking": "思考中",
   "unpin": "取消置顶",
-  "waitingOnYouLine": "等你处理：{{line}}"
+  "waitingOnYouLine": "等你处理：{{line}}",
+  "placeholder": "给 {{name}} 发消息",
+  "stopBotDone": "已停止 {{name}}",
+  "notifyStart": "等待你点击开始：{{brief}}",
+  "removeFailed": "无法移除 {{name}}",
+  "notifyApproval": "需要你的批准",
+  "notifyQuestion": "有问题要问你",
+  "notifyTask": "{{title}} 需要你处理"
 }

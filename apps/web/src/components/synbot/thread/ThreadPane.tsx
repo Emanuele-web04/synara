@@ -128,6 +128,7 @@ const EMBEDDED_PANEL_STATE: SplitViewPanePanelState = {
 };
 
 export function ThreadPane({ bot }: { readonly bot: Bot }) {
+  const { t } = useTranslation();
   const pane = useRef<HTMLElement>(null);
   const top = useRef<HTMLDivElement>(null);
   useBarHeights(pane, top);
@@ -165,6 +166,7 @@ export function ThreadPane({ bot }: { readonly bot: Bot }) {
           onOpenBrowserUrl={noopChatSurfaceAction}
           onOpenTurnDiff={noopChatSurfaceAction}
           renderTranscript={renderTranscript}
+          composerPlaceholder={t("synbot:placeholder", { name: bot.name })}
         />
       </div>
     </section>

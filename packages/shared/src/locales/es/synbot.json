@@ -71,7 +71,6 @@
   "answers": "Respuestas",
   "back": "Atrás",
   "backToThread": "Volver al hilo del bot",
-  "botMenu": "Opciones de {{name}}",
   "chooseAll": "Elige todas las que correspondan",
   "close": "Cerrar",
   "done": "Listo",
@@ -114,5 +113,12 @@
   "task_cancelled": "Detenida",
   "thinking": "Pensando",
   "unpin": "Desfijar",
-  "waitingOnYouLine": "Te espera: {{line}}"
+  "waitingOnYouLine": "Te espera: {{line}}",
+  "placeholder": "Mensaje para {{name}}",
+  "stopBotDone": "{{name}} se detuvo",
+  "notifyStart": "Espera tu Inicio: {{brief}}",
+  "removeFailed": "No se pudo eliminar {{name}}",
+  "notifyApproval": "Pide tu aprobación",
+  "notifyQuestion": "Tiene una pregunta para ti",
+  "notifyTask": "{{title}} te necesita"
 }

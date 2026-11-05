@@ -71,7 +71,6 @@
   "answers": "Answers",
   "back": "Back",
   "backToThread": "Back to the bot's thread",
-  "botMenu": "{{name}} options",
   "chooseAll": "Choose all that apply",
   "close": "Close",
   "done": "Done",
@@ -114,5 +113,12 @@
   "task_cancelled": "Stopped",
   "thinking": "Thinking",
   "unpin": "Unpin",
-  "waitingOnYouLine": "Waiting on you: {{line}}"
+  "waitingOnYouLine": "Waiting on you: {{line}}",
+  "placeholder": "Message {{name}}",
+  "stopBotDone": "Stopped {{name}}",
+  "notifyStart": "Waiting for your Start: {{brief}}",
+  "removeFailed": "Could not remove {{name}}",
+  "notifyApproval": "Asks for your approval",
+  "notifyQuestion": "Has a question for you",
+  "notifyTask": "{{title}} needs you"
 }

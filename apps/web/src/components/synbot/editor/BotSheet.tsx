@@ -34,6 +34,7 @@ import { isOrdinarySpaceProject } from "~/lib/spaces";
 import { readNativeApi } from "~/nativeApi";
 import { useStore } from "~/store";
 import { useOpenBot } from "~/components/synbot/synbotNav";
+import { removeBot } from "~/synbot/synbotActions";
 import { orderedBots } from "~/synbot/synbotState.logic";
 import { startSynbotLiveSync, useSynbotStore } from "~/synbot/synbotStore";
 import { useWorkspacePathsStore } from "~/workspacePathsStore";
@@ -305,12 +306,10 @@ function BotSheet({
   };
 
   const remove = async () => {
-    const api = readNativeApi();
-    if (!baseBot || !api || removing) return;
+    if (!baseBot || removing) return;
     setRemoving(true);
     try {
-      await api.bots.remove({ id: baseBot.id });
-      useSynbotStore.getState().applyEvent({ type: "bot-removed", botId: baseBot.id });
+      await removeBot(baseBot);
       setRemoving(false);
       setConfirmRemove(false);
       const synbot = orderedBots(useSynbotStore.getState().data.bots).main;
