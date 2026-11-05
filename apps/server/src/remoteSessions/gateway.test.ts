@@ -259,6 +259,35 @@ describe("RemoteConnectionGateway", () => {
     },
   );
 
+  it("bounds a non-ASCII mint error reason without changing its status or prefix", async () => {
+    const message =
+      "Sign-in failed: 身份验证服务暂时不可用，请稍后重试。如果问题仍然存在，请重新登录账户并联系管理员。";
+    const socket = new TestSocket();
+    const gateway = new RemoteConnectionGateway({
+      mintService: {
+        mint: async () => {
+          throw new Error(message);
+        },
+      } as HostMintService,
+      identity: {} as HostIdentity,
+      environmentId: "mint-error-reason",
+      keyGeneration: 1,
+      authorizeDevice: async () => {},
+      sessions: new RemoteSessionRegistry(),
+      bridgeToLocal: vi.fn(async () => {}),
+    });
+    await gateway.accept(socket);
+
+    socket.receive({ v: 1, type: "mint_request", request: "fixture-request" });
+    await vi.waitFor(() => expect(socket.closes).toHaveLength(1));
+
+    const close = socket.closes[0]!;
+    expect(close.code).toBe(4501);
+    expect(close.reason.startsWith("Sign-in failed: 身份验证")).toBe(true);
+    expect(message.startsWith(close.reason)).toBe(true);
+    expect(Buffer.byteLength(close.reason, "utf8")).toBeLessThanOrEqual(123);
+  });
+
   it("keeps a stalled authorization retryable without extending its handshake budget", async () => {
     vi.useFakeTimers();
     try {

@@ -55,6 +55,16 @@ function parseFrame(raw: RawData): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
+// Keep the existing ASCII limit below the 123-byte wire maximum without splitting Unicode.
+function boundedCloseReason(message: string): string {
+  let reason = "";
+  for (const character of message) {
+    if (Buffer.byteLength(reason + character, "utf8") > 120) break;
+    reason += character;
+  }
+  return reason;
+}
+
 export class RemoteConnectionGateway {
   readonly #dpopReplays = new JwtReplayCache();
 
@@ -209,7 +219,9 @@ export class RemoteConnectionGateway {
               : state === "mint" || state === "authorize"
                 ? REMOTE_AUTH_ERROR
                 : REMOTE_PROTOCOL_ERROR,
-            error instanceof Error ? error.message.slice(0, 120) : "remote authentication failed",
+            boundedCloseReason(
+              error instanceof Error ? error.message : "remote authentication failed",
+            ),
           );
         }
       });
