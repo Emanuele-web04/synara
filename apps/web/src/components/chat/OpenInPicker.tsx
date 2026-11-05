@@ -1,5 +1,4 @@
 import { readExecutionContext } from "~/lib/hosts/executionContext";
-import { REMOTE_NATIVE_UNAVAILABLE } from "@synara/shared/remoteCapabilities";
 // FILE: OpenInPicker.tsx
 // Purpose: Render the chat/file header "Open In" controls for the active editor target.
 // Layer: Chat header action
@@ -79,10 +78,14 @@ type OpenInPickerContentProps = OpenInPickerProps & {
 };
 
 export function OpenInPicker(props: OpenInPickerProps) {
+  const { t } = useTranslation();
   if (readExecutionContext()?.remote && !props.primaryAction)
     return (
-      <span className="text-ui-xs text-muted-foreground" title={REMOTE_NATIVE_UNAVAILABLE}>
-        External editor unavailable remotely
+      <span
+        className="text-ui-xs text-muted-foreground"
+        title={t("workspace:remote_workspace_nativeUnavailable")}
+      >
+        {t("workspace:remote_workspace_externalEditorUnavailable")}
       </span>
     );
   return <LocalOpenInPicker {...props} />;

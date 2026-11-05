@@ -10,6 +10,7 @@ import { DisclosureRegion } from "~/components/ui/DisclosureRegion";
 import { Textarea } from "~/components/ui/textarea";
 import { toastManager } from "~/components/ui/toast";
 import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
+import { useTranslation } from "~/i18n";
 import { accountErrorMessage } from "~/lib/accountLogic";
 import { ensureHostsApi } from "~/lib/hosts/api";
 import {
@@ -21,6 +22,9 @@ import {
   syncKeyPairingReducer,
 } from "~/lib/hosts/syncKeyPairing";
 import { SettingsListRow } from "./SettingsPanelPrimitives";
+
+// Pairing codes use the same protocol alphabet and grouping in every language.
+const VERIFICATION_CODE_EXAMPLE = "ABC-234";
 
 function PairingRequestField({
   value,
@@ -37,11 +41,12 @@ function PairingRequestField({
   describedBy?: string;
   onValueChange?: (value: string) => void;
 }) {
+  const { t } = useTranslation();
   const id = useId();
   return (
     <div className="space-y-2">
       <label htmlFor={id} className="block text-ui-sm font-medium text-foreground">
-        Pairing request
+        {t("settings:remote_connector_syncRequest")}
       </label>
       <Textarea
         id={id}
@@ -73,6 +78,7 @@ function VerificationCode({ children }: { children: string }) {
 }
 
 export function SyncKeyPairingPanel() {
+  const { t } = useTranslation();
   const [state, dispatch] = useReducer(syncKeyPairingReducer, SYNC_KEY_PAIRING_INITIAL_STATE);
   // Cancelling/restarting invalidates any in-flight RPC so a late response
   // cannot reopen a flow the user already left.
@@ -82,7 +88,7 @@ export function SyncKeyPairingPanel() {
     onError: (error) =>
       toastManager.add({
         type: "error",
-        title: "Could not copy pairing request",
+        title: t("settings:remote_connector_syncCopyFailed"),
         description: error.message,
       }),
   });
@@ -106,7 +112,7 @@ export function SyncKeyPairingPanel() {
       if (operationRef.current !== operation) return;
       dispatch({
         type: "new-start-failed",
-        message: accountErrorMessage(cause, "Could not start Sync-Key pairing. Try again."),
+        message: accountErrorMessage(cause, t("settings:remote_connector_syncStartFailed")),
       });
     }
   };
@@ -123,10 +129,7 @@ export function SyncKeyPairingPanel() {
       if (operationRef.current !== operation) return;
       dispatch({
         type: "receive-failed",
-        message: accountErrorMessage(
-          cause,
-          "No Sync-Key offer is ready yet. Approve this request on your other device, then try again.",
-        ),
+        message: accountErrorMessage(cause, t("settings:remote_connector_syncOfferNotReady")),
       });
     }
   };
@@ -142,7 +145,7 @@ export function SyncKeyPairingPanel() {
         message:
           cause instanceof Error
             ? cause.message
-            : "That pairing request is not valid. Copy it again from the new device.",
+            : t("settings:remote_connector_syncInvalidRequest"),
       });
       return;
     }
@@ -157,7 +160,7 @@ export function SyncKeyPairingPanel() {
       if (operationRef.current !== operation) return;
       dispatch({
         type: "offer-failed",
-        message: accountErrorMessage(cause, "Could not approve that pairing request. Try again."),
+        message: accountErrorMessage(cause, t("settings:remote_connector_syncApproveFailed")),
       });
     }
   };
@@ -182,7 +185,7 @@ export function SyncKeyPairingPanel() {
       dispatch({
         type: "confirm-failed",
         error: cause,
-        message: accountErrorMessage(cause, "Could not confirm pairing. Try again."),
+        message: accountErrorMessage(cause, t("settings:remote_connector_syncConfirmFailed")),
       });
     }
   };
@@ -194,12 +197,10 @@ export function SyncKeyPairingPanel() {
     <>
       <SettingsListRow
         align="start"
-        title="Pair two devices"
+        title={t("settings:remote_connector_syncPairDevices")}
         description={
           <span className="flex flex-col gap-1 text-muted-foreground">
-            <span>
-              The new device creates a request. A device that already has the Sync Key approves it.
-            </span>
+            <span>{t("settings:remote_connector_syncDescription")}</span>
             {state.phase === "start" && state.warning ? (
               <span role="alert" className="text-foreground">
                 {state.warning}
@@ -216,7 +217,7 @@ export function SyncKeyPairingPanel() {
           state.phase === "start" ? (
             <>
               <Button size="xs" variant="outline" onClick={() => void beginNewDevice()}>
-                Set up on this device
+                {t("settings:remote_connector_syncSetUp")}
               </Button>
               <Button
                 size="xs"
@@ -226,12 +227,12 @@ export function SyncKeyPairingPanel() {
                   dispatch({ type: "existing-started" });
                 }}
               >
-                Approve a device
+                {t("settings:remote_connector_syncApproveDevice")}
               </Button>
             </>
           ) : (
             <Button size="xs" variant="ghost" onClick={reset}>
-              Cancel
+              {t("common:form_cancel")}
             </Button>
           )
         }
@@ -243,7 +244,7 @@ export function SyncKeyPairingPanel() {
       >
         {startBusy ? (
           <p role="status" className="text-ui text-muted-foreground">
-            Creating a pairing request...
+            {t("settings:remote_connector_syncCreating")}
           </p>
         ) : null}
 
@@ -251,11 +252,10 @@ export function SyncKeyPairingPanel() {
           <div className="space-y-4">
             <div className="space-y-1">
               <h3 className="text-ui font-medium text-foreground">
-                Send this request to your other device
+                {t("settings:remote_connector_syncSendRequest")}
               </h3>
               <p className="text-ui-sm text-muted-foreground">
-                Copy and send the whole blob. It contains this device&apos;s ID and public key, not
-                your Sync Key. On the other device, choose Approve a device and paste it there.
+                {t("settings:remote_connector_syncSendDescription")}
               </p>
             </div>
             <PairingRequestField
@@ -275,10 +275,12 @@ export function SyncKeyPairingPanel() {
                 disabled={state.pending}
                 onClick={() => copyToClipboard(state.transferableRequest, undefined)}
               >
-                {isCopied ? "Copied" : "Copy request"}
+                {isCopied ? t("chat:theme_copied") : t("settings:remote_connector_syncCopy")}
               </Button>
               <Button size="xs" disabled={state.pending} onClick={() => void receiveSyncKey()}>
-                {state.pending ? "Checking..." : "I've approved it"}
+                {state.pending
+                  ? t("settings:remote_connector_syncChecking")
+                  : t("settings:remote_connector_syncApprovedRequest")}
               </Button>
             </div>
           </div>
@@ -288,10 +290,10 @@ export function SyncKeyPairingPanel() {
           <div className="space-y-4">
             <div className="space-y-1">
               <h3 className="text-ui font-medium text-foreground">
-                Paste the request from the new device
+                {t("settings:remote_connector_syncPasteRequest")}
               </h3>
               <p className="text-ui-sm text-muted-foreground">
-                Only approve a request you just created on the device you expect.
+                {t("settings:remote_connector_syncApprovalWarning")}
               </p>
             </div>
             <PairingRequestField
@@ -312,7 +314,9 @@ export function SyncKeyPairingPanel() {
               disabled={state.pending || state.transferableRequest.trim().length === 0}
               onClick={() => void offerSyncKey()}
             >
-              {state.pending ? "Approving..." : "Approve device"}
+              {state.pending
+                ? t("settings:remote_connector_syncApproving")
+                : t("settings:remote_connector_syncApprove")}
             </Button>
           </div>
         ) : null}
@@ -321,15 +325,15 @@ export function SyncKeyPairingPanel() {
           <div className="space-y-3">
             <div className="space-y-1">
               <h3 className="text-ui font-medium text-foreground">
-                Type this code on the new device
+                {t("settings:remote_connector_syncEnterCode")}
               </h3>
               <p className="text-ui-sm text-muted-foreground">
-                The new device must show the same code before it adopts the Sync Key.
+                {t("settings:remote_connector_syncEnterCodeDescription")}
               </p>
             </div>
             <VerificationCode>{state.ownVerificationCode}</VerificationCode>
             <Button size="xs" variant="outline" onClick={reset}>
-              Done
+              {t("git:detail_done")}
             </Button>
           </div>
         ) : null}
@@ -337,16 +341,20 @@ export function SyncKeyPairingPanel() {
         {state.phase === "new-confirm" ? (
           <div className="space-y-4">
             <div className="space-y-1">
-              <h3 className="text-ui font-medium text-foreground">Compare the two devices</h3>
-              <p className="text-ui-sm text-muted-foreground">This device shows:</p>
+              <h3 className="text-ui font-medium text-foreground">
+                {t("settings:remote_connector_syncCompareDevices")}
+              </h3>
+              <p className="text-ui-sm text-muted-foreground">
+                {t("settings:remote_connector_syncThisDeviceShows")}
+              </p>
               <VerificationCode>{state.ownVerificationCode}</VerificationCode>
             </div>
             <ShortCodeField
-              label="Code shown on your other device"
+              label={t("settings:remote_connector_syncOtherDeviceCode")}
               value={state.enteredVerificationCode}
               codeLength={SYNC_KEY_PAIRING_CODE_LENGTH}
               groupSize={SYNC_KEY_PAIRING_CODE_GROUP_SIZE}
-              placeholder="ABC-234"
+              placeholder={VERIFICATION_CODE_EXAMPLE}
               disabled={state.pending}
               describedBy={statusId}
               onValueChange={(value) => dispatch({ type: "verification-changed", value })}
@@ -365,7 +373,9 @@ export function SyncKeyPairingPanel() {
               }
               onClick={() => void confirmSyncKey()}
             >
-              {state.pending ? "Confirming..." : "Confirm codes"}
+              {state.pending
+                ? t("settings:remote_connector_syncConfirming")
+                : t("settings:remote_connector_syncConfirmCodes")}
             </Button>
           </div>
         ) : null}
@@ -373,10 +383,10 @@ export function SyncKeyPairingPanel() {
         {state.phase === "new-success" ? (
           <div className="space-y-3">
             <p role="status" className="text-ui-xs text-foreground">
-              Host secrets are now synced.
+              {t("settings:remote_connector_syncSuccess")}
             </p>
             <Button size="xs" variant="outline" onClick={reset}>
-              Done
+              {t("git:detail_done")}
             </Button>
           </div>
         ) : null}

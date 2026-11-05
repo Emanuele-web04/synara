@@ -6,6 +6,7 @@
 //          trustedDeviceActivityLabel, pendingApprovals, activeTrustedDevices,
 //          fingerprintGroups, countdownLabel, remoteAccessErrorMessage
 
+import { t as translate } from "~/i18n";
 import type {
   RemoteAccessRequest,
   RemoteAccessResult,
@@ -14,7 +15,7 @@ import type {
   RemoteTrustedDevice,
 } from "@synara/contracts";
 
-import { formatRelativeTime } from "~/lib/relativeTime";
+import { formatRelativeTimeAgo } from "~/lib/relativeTime";
 import { readHostsApi } from "./api";
 
 export type RemoteHostState = Extract<RemoteAccessResult, { kind: "host-state" }>;
@@ -46,14 +47,14 @@ export function remoteDeviceKind(label: string): RemoteDeviceKind {
  * hosts: absent falls back to when it was added, null means it never connected.
  */
 export function trustedDeviceActivityLabel(device: RemoteTrustedDevice): string {
-  if (device.lastConnectedAt === undefined) return `Added ${agoLabel(device.approvedAt)}`;
-  if (device.lastConnectedAt === null) return "Never connected";
-  return `Last connected ${agoLabel(device.lastConnectedAt)}`;
-}
-
-function agoLabel(iso: string): string {
-  const relative = formatRelativeTime(iso);
-  return relative === "now" ? "just now" : `${relative} ago`;
+  if (device.lastConnectedAt === undefined)
+    return translate("computer:remote_host_added", {
+      time: formatRelativeTimeAgo(device.approvedAt),
+    });
+  if (device.lastConnectedAt === null) return translate("computer:remote_host_never_connected");
+  return translate("computer:remote_host_last_connected", {
+    time: formatRelativeTimeAgo(device.lastConnectedAt),
+  });
 }
 
 export function activeTrustedDevices(

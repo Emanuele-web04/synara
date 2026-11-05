@@ -1,6 +1,7 @@
 import type { SavedInboxRecap, StatsGetRecapResult } from "@synara/contracts";
 import { useInfiniteQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useState, type ReactNode } from "react";
+import { useTranslation } from "~/i18n";
 import { useAccount } from "~/hooks/useAccount";
 import { ensureNativeApi } from "~/nativeApi";
 import { readExecutionContext } from "~/lib/hosts/executionContext";
@@ -15,14 +16,15 @@ type HistoryProps = {
 };
 
 export function InboxRecapHistory(props: HistoryProps) {
+  const { t } = useTranslation();
   const { status } = useAccount();
   const openSignIn = useAccountDialogStore((store) => store.openSignIn);
   if (status?.state !== "signed-in") {
     return (
       <div className="flex items-center justify-between gap-3 text-ui-sm text-muted-foreground">
-        <span>Sign in to automatically save private recaps across your devices.</span>
+        <span>{t("workspace:remote_inbox_sign_in_save")}</span>
         <Button variant="outline" size="sm" onClick={openSignIn}>
-          Sign in
+          {t("chat:providerModelPicker_signIn")}
         </Button>
       </div>
     );
@@ -47,14 +49,15 @@ function PrivateRecapHistory({
   expectedUserId,
   expectedOrganizationId,
 }: HistoryProps & { scope: string; expectedUserId: string; expectedOrganizationId: string }) {
+  const { t, formatLocale } = useTranslation();
   const queryClient = useQueryClient();
   // Remote frames run in the controller's timezone, not on the source host.
   // Their recap window cannot be saved under the source host's identity.
   const executionContext = readExecutionContext();
   const isRemoteExecution = Boolean(executionContext?.remoteHostId || executionContext?.remote);
   const recapSaveDescription = isRemoteExecution
-    ? "Remote recaps sync privately from their source computer when signed in. To save one immediately, open the Inbox on that computer. Saved history remains available here."
-    : "Your signed-in computer automatically saves recaps, including project names, to your private account. Save privately updates this day now. Saved history stays available when this computer is offline.";
+    ? t("workspace:remote_inbox_remote_save_description")
+    : t("workspace:remote_inbox_local_save_description");
   const [open, setOpen] = useState(false);
   const queryKey = ["account", "inboxRecaps", scope] as const;
   const history = useInfiniteQuery({
@@ -113,7 +116,7 @@ function PrivateRecapHistory({
     <Collapsible open={open} onOpenChange={setOpen} className="flex flex-col gap-3">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <CollapsibleTrigger className="text-ui font-medium">
-          Saved recaps {open ? "−" : "+"}
+          {t("workspace:remote_inbox_saved_recaps")} {open ? "−" : "+"}
         </CollapsibleTrigger>
         <Button
           variant="outline"
@@ -121,34 +124,40 @@ function PrivateRecapHistory({
           disabled={!recap || save.isPending || isRemoteExecution}
           onClick={() => save.mutate()}
         >
-          {save.isPending ? "Saving…" : "Save privately"}
+          {save.isPending ? t("common:saving") : t("workspace:remote_inbox_save_privately")}
         </Button>
       </div>
       <p className="text-ui-sm text-muted-foreground">{recapSaveDescription}</p>
       {save.isSuccess ? (
         <p role="status" className="text-ui-sm text-status-success">
-          Recap saved to your account.
+          {t("workspace:remote_inbox_saved_success")}
         </p>
       ) : null}
       {save.isError || remove.isError ? (
         <p role="alert" className="text-ui-sm text-destructive">
-          {save.error?.message ?? remove.error?.message ?? "The saved recap could not be updated."}
+          {save.error?.message ??
+            remove.error?.message ??
+            t("workspace:remote_inbox_update_failed")}
         </p>
       ) : null}
       <CollapsiblePanel className="flex flex-col gap-3">
         {history.isPending ? (
-          <p className="text-ui-sm text-muted-foreground">Loading saved recaps…</p>
+          <p className="text-ui-sm text-muted-foreground">
+            {t("workspace:remote_inbox_loading_saved")}
+          </p>
         ) : null}
         {history.isError ? (
           <div className="flex items-center justify-between gap-3 text-ui-sm">
-            <span>Saved recaps could not be loaded.</span>
+            <span>{t("workspace:remote_inbox_load_failed")}</span>
             <Button variant="outline" size="xs" onClick={() => void history.refetch()}>
-              Try again
+              {t("chat:profile_tryAgain")}
             </Button>
           </div>
         ) : null}
         {history.isSuccess && uniqueRecaps.length === 0 ? (
-          <p className="text-ui-sm text-muted-foreground">No saved recaps yet.</p>
+          <p className="text-ui-sm text-muted-foreground">
+            {t("workspace:remote_inbox_none_saved")}
+          </p>
         ) : null}
         {uniqueRecaps.map((saved) => (
           <Collapsible key={saved.id} className="rounded-2xl border border-border p-4">
@@ -156,7 +165,10 @@ function PrivateRecapHistory({
               <CollapsibleTrigger className="min-w-0 text-left text-ui">
                 {saved.day} · {saved.sourceHostName}
                 <span className="block text-ui-xs text-muted-foreground">
-                  {saved.timezone} · saved {new Date(saved.savedAt).toLocaleString()}
+                  {t("workspace:remote_inbox_saved_at", {
+                    timezone: saved.timezone,
+                    time: new Date(saved.savedAt).toLocaleString(formatLocale),
+                  })}
                 </span>
               </CollapsibleTrigger>
               <Button
@@ -165,7 +177,7 @@ function PrivateRecapHistory({
                 disabled={remove.isPending}
                 onClick={() => remove.mutate(saved.id)}
               >
-                Delete
+                {t("computer:detail_delete")}
               </Button>
             </div>
             <CollapsiblePanel className="pt-4">{renderRecap(saved)}</CollapsiblePanel>
@@ -178,7 +190,7 @@ function PrivateRecapHistory({
             disabled={history.isFetchingNextPage}
             onClick={() => void history.fetchNextPage()}
           >
-            {history.isFetchingNextPage ? "Loading…" : "Load older recaps"}
+            {history.isFetchingNextPage ? t("git:loading") : t("workspace:remote_inbox_load_older")}
           </Button>
         ) : null}
       </CollapsiblePanel>

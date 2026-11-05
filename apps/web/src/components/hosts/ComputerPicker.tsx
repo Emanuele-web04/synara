@@ -1,3 +1,4 @@
+import { useTranslation } from "~/i18n";
 import { addWsTransportStateListener, type WsTransportState } from "../../wsTransportEvents";
 import { useEffect, useState, useSyncExternalStore } from "react";
 import { appHistory } from "../../appNavigation";
@@ -23,6 +24,7 @@ export interface ComputerChoice {
 
 /** Frames read the controller's directory, while commands retain their owning runtime. */
 export function useWorkspaceComputers() {
+  const { t } = useTranslation();
   const frame = readWorkspaceFrame();
   const context = readExecutionContext();
   const sessions = useSyncExternalStore(
@@ -33,15 +35,20 @@ export function useWorkspaceComputers() {
   const local = frame?.controller.environment ?? context?.controller;
   const localId = local?.environmentId ?? "local";
   const computers: ComputerChoice[] = [
-    { id: localId, label: "This computer", detail: local?.label ?? "Local", available: true },
+    {
+      id: localId,
+      label: t("computer:remote_host_this_computer"),
+      detail: local?.label ?? t("computer:worktreeMode_local"),
+      available: true,
+    },
     ...sessions.map((session) => ({
       id: session.host.executionScope.environmentId,
       label: session.host.hostName,
       detail: session.error
-        ? "Unavailable"
+        ? t("chat:providerModelPicker_unavailable")
         : session.summary?.state === "open"
-          ? "Connected"
-          : "Reconnecting…",
+          ? t("chat:connected")
+          : t("computer:remote_host_reconnecting"),
       available: !session.error && Boolean(session.navigation) && session.summary?.state === "open",
     })),
   ];
@@ -64,7 +71,7 @@ export function ComputerPicker({
   disabled,
   onChange,
   onManage,
-  purpose = "Computer",
+  purpose: purposeProp,
 }: {
   computers: readonly ComputerChoice[];
   value: string;
@@ -73,6 +80,8 @@ export function ComputerPicker({
   onManage?: (() => void) | undefined;
   purpose?: string;
 }) {
+  const { t } = useTranslation();
+  const purpose = purposeProp ?? t("computer:remote_host_computer");
   const selected = computers.find((computer) => computer.id === value);
   if (!onManage && computers.length === 1)
     return <span className="text-ui text-foreground">{selected?.label}</span>;
@@ -82,8 +91,11 @@ export function ComputerPicker({
         render={
           <PickerTriggerButton
             icon={null}
-            label={selected?.label ?? "Computer unavailable"}
-            aria-label={`${purpose}: ${selected?.label ?? "unavailable"}`}
+            label={selected?.label ?? t("computer:remote_host_computer_unavailable")}
+            aria-label={t("computer:remote_host_picker_label", {
+              purpose,
+              computer: selected?.label ?? t("computer:remote_host_unavailable"),
+            })}
             title={selected?.detail}
             variant="ghost"
             disabled={disabled}
@@ -110,7 +122,7 @@ export function ComputerPicker({
         {onManage ? (
           <>
             <MenuSeparator />
-            <MenuItem onClick={onManage}>Connect a computer…</MenuItem>
+            <MenuItem onClick={onManage}>{t("computer:remote_host_connect_computer")}</MenuItem>
           </>
         ) : null}
       </ComposerPickerMenuPopup>
@@ -124,6 +136,7 @@ export function WorkspaceSurfaceComputerPicker({
 }: {
   path: "/tasks" | "/kanban" | "/inbox" | "/pull-requests";
 }) {
+  const { t } = useTranslation();
   const { computers, localId, currentId, navigate } = useWorkspaceComputers();
   const frame = readWorkspaceFrame();
   if (readExecutionContext()?.controller.capabilities.remoteConnections !== true) return null;
@@ -139,8 +152,8 @@ export function WorkspaceSurfaceComputerPicker({
     if (!session?.navigation || session.error || session.summary?.state !== "open") {
       toastManager.add({
         type: "error",
-        title: "Computer unavailable",
-        description: "Reconnect this computer in Connections and try again.",
+        title: t("computer:remote_host_computer_unavailable"),
+        description: t("computer:remote_host_reconnect_try_again"),
       });
       return;
     }
@@ -160,6 +173,7 @@ export function WorkspaceSurfaceComputerPicker({
 
 /** Selecting another computer opens its own draft; it never migrates the current one. */
 export function NewChatComputerPicker() {
+  const { t } = useTranslation();
   const { computers, sessions, localId, currentId, navigate } = useWorkspaceComputers();
   const { handleNewChat } = useHandleNewChat();
   const [busy, setBusy] = useState(false);
@@ -181,18 +195,18 @@ export function NewChatComputerPicker() {
         );
         const navigation = session?.navigation;
         if (!navigation || session?.summary?.state !== "open")
-          throw new Error("This computer is not connected.");
+          throw new Error(t("computer:remote_host_computer_not_connected"));
         const path = await navigation.newChat();
         const current = (frame?.controller.sessions ?? readWorkspaceSessions)();
         if (!current.some((item) => item.host === session.host && item.navigation === navigation))
-          throw new Error("The connection changed. Choose the computer again.");
+          throw new Error(t("computer:remote_host_connection_changed"));
         navigate(workspaceRoute(environmentId, path));
       }
     } catch (error) {
       toastManager.add({
         type: "error",
-        title: "Could not open chat",
-        description: error instanceof Error ? error.message : "Try again.",
+        title: t("computer:remote_host_open_chat_failed"),
+        description: error instanceof Error ? error.message : t("chat:tryAgain"),
       });
     } finally {
       setBusy(false);
@@ -203,7 +217,7 @@ export function NewChatComputerPicker() {
       computers={computers}
       value={currentId}
       disabled={busy}
-      purpose="Run on"
+      purpose={t("computer:remote_host_run_on")}
       onChange={(id) => void select(id)}
       onManage={() => navigate("/settings?section=connections")}
     />
@@ -212,6 +226,7 @@ export function NewChatComputerPicker() {
 
 /** Task ownership belongs beside its title, independently of the selected sidebar section. */
 export function ChatComputerLabel() {
+  const { t } = useTranslation();
   const context = readExecutionContext();
   const [state, setState] = useState<WsTransportState>("connecting");
   useEffect(
@@ -221,12 +236,19 @@ export function ChatComputerLabel() {
   );
   if (!context?.remote) return null;
   const status =
-    state === "open" ? "Connected" : state === "incompatible" ? "Update required" : "Reconnecting…";
+    state === "open"
+      ? t("chat:connected")
+      : state === "incompatible"
+        ? t("computer:remote_host_update_required")
+        : t("computer:remote_host_reconnecting");
   return (
     <span
       className="min-w-0 max-w-40 truncate text-ui-xs text-muted-foreground"
       title={`${context.execution.label} · ${status}`}
-      aria-label={`Computer: ${context.execution.label}. ${status}`}
+      aria-label={t("computer:remote_host_computer_status", {
+        computer: context.execution.label,
+        status,
+      })}
     >
       {context.execution.label}
       {state === "open" ? null : ` · ${status}`}

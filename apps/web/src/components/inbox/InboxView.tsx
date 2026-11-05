@@ -507,6 +507,7 @@ function RecapDigest({
 }
 
 function SavedRecapDigest({ saved }: { saved: SavedInboxRecap }) {
+  const { t } = useTranslation();
   // A saved project's raw ID belongs to its source host, not the current workspace.
   const projectById: ReadonlyMap<string, Project> = new Map();
   const hourFormat = new Intl.DateTimeFormat("en", {
@@ -544,7 +545,7 @@ function SavedRecapDigest({ saved }: { saved: SavedInboxRecap }) {
   return (
     <div className="flex flex-col gap-3">
       <DigestCard
-        title="Saved recap"
+        title={t("workspace:remote_inbox_saved_recap")}
         sentences={buildInboxDigest(input)}
         slots={slots}
         updatedAt={new Intl.DateTimeFormat(undefined, {

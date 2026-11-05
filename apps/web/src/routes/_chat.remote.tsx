@@ -1,3 +1,4 @@
+import { useTranslation } from "~/i18n";
 import { createFileRoute } from "@tanstack/react-router";
 import { useWorkspaceSessions } from "../lib/hosts/workspaceSessions";
 
@@ -10,6 +11,7 @@ export const Route = createFileRoute("/_chat/remote")({
 });
 
 function RemoteWorkspaceRoute() {
+  const { t } = useTranslation();
   const { environment } = Route.useSearch();
   const session = useWorkspaceSessions().find(
     (item) => item.host.executionScope.environmentId === environment,
@@ -23,8 +25,9 @@ function RemoteWorkspaceRoute() {
       role="status"
     >
       {session
-        ? (session.error ?? `Opening ${session.host.hostName}…`)
-        : "This computer is not connected. Open Settings → Connections to reconnect it."}
+        ? (session.error ??
+          t("workspace:remote_workspace_openingComputer", { computer: session.host.hostName }))
+        : t("workspace:remote_workspace_computerDisconnected")}
     </div>
   );
 }

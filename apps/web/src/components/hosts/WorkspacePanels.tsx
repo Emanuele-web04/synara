@@ -1,3 +1,4 @@
+import { useTranslation } from "~/i18n";
 import { prepareWorkspaceAutomation } from "../../lib/hosts/automationWorkspace";
 import {
   useAutomationList,
@@ -112,6 +113,7 @@ function WorkspacePanel({
   path: string;
   newLocalChat: () => Promise<string>;
 }) {
+  const { t } = useTranslation();
   const environmentId = session.host.executionScope.environmentId;
   const host = session.host;
   const keybindingsQuery = useQuery({
@@ -329,11 +331,11 @@ function WorkspacePanel({
     <section
       hidden={!active}
       className={active ? "absolute inset-0 z-10 flex min-h-0 flex-col" : "hidden"}
-      aria-label={`Workspace on ${host.hostName}`}
+      aria-label={t("computer:remote_host_workspace_on", { host: host.hostName })}
     >
       <iframe
         ref={bind}
-        title={`Synara workspace on ${host.hostName}`}
+        title={t("computer:remote_host_synara_workspace_on", { host: host.hostName })}
         className="min-h-0 w-full flex-1 border-0"
         allow="clipboard-read; clipboard-write"
         // The bundled app needs its own storage and scripts. This isolates state, not security principals.

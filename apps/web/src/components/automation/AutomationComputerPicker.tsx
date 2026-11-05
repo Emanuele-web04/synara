@@ -1,3 +1,4 @@
+import { useTranslation } from "~/i18n";
 import { readExecutionContext } from "~/lib/hosts/executionContext";
 import type { AutomationFormState } from "~/lib/automationForm";
 import {
@@ -18,10 +19,11 @@ export function AutomationComputerPicker({
   readonly disabled: boolean;
   readonly onMoved: () => void;
 }) {
+  const { t } = useTranslation();
   const { computers, currentId, localId, navigate } = useWorkspaceComputers();
   const context = readExecutionContext();
   if (context?.controller.capabilities.remoteConnections !== true)
-    return <span>{context?.execution.label ?? "This computer"}</span>;
+    return <span>{context?.execution.label ?? t("workspace:remote_workspace_thisComputer")}</span>;
   const select = (id: string) => {
     if (disabled || id === currentId) return;
     const frame = readWorkspaceFrame();
@@ -30,7 +32,7 @@ export function AutomationComputerPicker({
       let path: string;
       if (id === localId) {
         const prepare = frame ? frame.controller.prepareAutomation : prepareWorkspaceAutomation;
-        if (!prepare) throw new Error("Update this computer to create automations here.");
+        if (!prepare) throw new Error(t("automation:remote_workspace_updateForAutomations"));
         path = prepare(draft);
       } else {
         const session = (frame?.controller.sessions ?? readWorkspaceSessions)().find(
@@ -41,7 +43,7 @@ export function AutomationComputerPicker({
           session?.summary?.state !== "open" ||
           !session.navigation?.prepareAutomation
         )
-          throw new Error("Connect this computer before creating an automation.");
+          throw new Error(t("automation:remote_workspace_connectBeforeAutomation"));
         path = workspaceRoute(id, session.navigation.prepareAutomation(draft));
       }
       onMoved();
@@ -49,8 +51,8 @@ export function AutomationComputerPicker({
     } catch (error) {
       toastManager.add({
         type: "error",
-        title: "Could not select computer",
-        description: error instanceof Error ? error.message : "Try again.",
+        title: t("automation:remote_workspace_selectComputerFailed"),
+        description: error instanceof Error ? error.message : t("chat:tryAgain"),
       });
     }
   };
@@ -59,7 +61,7 @@ export function AutomationComputerPicker({
       computers={computers}
       value={currentId}
       disabled={disabled}
-      purpose="Run on"
+      purpose={t("workspace:remote_workspace_runOn")}
       onChange={select}
       onManage={() => navigate("/settings?section=connections")}
     />

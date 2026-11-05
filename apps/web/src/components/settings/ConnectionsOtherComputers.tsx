@@ -4,6 +4,7 @@
 // Layer: Settings UI components
 // Exports: ConnectionsOtherComputers
 
+import { useTranslation } from "~/i18n";
 import type { AccountHost } from "@synara/contracts";
 import { useCallback, useState } from "react";
 
@@ -28,6 +29,7 @@ import { SettingsCard, SettingsListRow, SettingsSectionShell } from "./SettingsP
 
 /** Rendered only when signed in with remote connections available. */
 export function ConnectionsOtherComputers() {
+  const { t } = useTranslation();
   const remote = useHosts({ enabled: true });
   const connections = useHostConnections({ enabled: true });
   const activeHost = readActiveHost();
@@ -60,7 +62,7 @@ export function ConnectionsOtherComputers() {
     [check],
   );
 
-  const fail = (title: string, cause: unknown, fallback = "Try again in a moment.") =>
+  const fail = (title: string, cause: unknown, fallback = t("chat:tryAgainInAMoment")) =>
     toastManager.add({ type: "error", title, description: accountErrorMessage(cause, fallback) });
 
   /** Open a session to the host and add its projects alongside the local workspace. */
@@ -75,9 +77,9 @@ export function ConnectionsOtherComputers() {
       });
     } catch (cause) {
       fail(
-        `Could not connect to ${host.name}`,
+        t("computer:remote_host_connect_failed", { host: host.name }),
         cause,
-        "Check that the host is online and try again.",
+        t("computer:remote_host_check_online"),
       );
     }
   };
@@ -88,9 +90,9 @@ export function ConnectionsOtherComputers() {
       removal = prepareWorkspaceSessionRemoval(hostId);
     } catch (cause) {
       fail(
-        "Could not preserve editor drafts",
+        t("computer:remote_host_preserve_drafts_failed"),
         cause,
-        "Copy or export unsaved text before disconnecting this computer.",
+        t("computer:remote_host_copy_before_disconnect"),
       );
       return;
     }
@@ -99,8 +101,8 @@ export function ConnectionsOtherComputers() {
       if (!persisted)
         toastManager.add({
           type: "warning",
-          title: "Connection closed",
-          description: "This window could not update its saved computer list.",
+          title: t("computer:remote_host_connection_closed"),
+          description: t("computer:remote_host_save_computer_list_failed"),
         });
     } catch (cause) {
       fail(failure, cause);
@@ -110,17 +112,21 @@ export function ConnectionsOtherComputers() {
   };
 
   const disconnectFromHost = (hostId: string) =>
-    closeHost(hostId, () => connections.disconnect.mutateAsync({ hostId }), "Could not disconnect");
+    closeHost(
+      hostId,
+      () => connections.disconnect.mutateAsync({ hostId }),
+      t("settings:connectorDisconnectFailed"),
+    );
 
   const forgetHost = async (host: AccountHost) => {
     const confirmed = await (readNativeApi() ?? ensureNativeApi()).dialogs.confirm(
-      `Forget the pairing with ${host.name}? Active connections close, and you need a new code from it to connect again.`,
+      t("computer:remote_host_forget_pairing_confirm", { host: host.name }),
     );
     if (!confirmed) return;
     await closeHost(
       host.id,
       () => callRemoteAccess({ operation: "forget-host", environmentId: host.environmentId }),
-      `Could not forget ${host.name}`,
+      t("computer:remote_host_forget_failed", { host: host.name }),
     );
   };
 
@@ -142,41 +148,44 @@ export function ConnectionsOtherComputers() {
   return (
     <>
       <SettingsSectionShell
-        title="Computers you can control"
+        title={t("computer:remote_host_computers_control")}
         action={
           <div className="flex items-center gap-1.5">
-            <IconButton label="Refresh" variant="ghost" onClick={refresh}>
+            <IconButton label={t("chat:list_refreshAriaLabel")} variant="ghost" onClick={refresh}>
               <RotateCcwIcon className="size-3.5" />
             </IconButton>
             <Button size="xs" shape="capsule" onClick={() => setAddOpen(true)}>
-              Add
+              {t("workspace:models_add")}
             </Button>
           </div>
         }
       >
         <SettingsCard>
           {remote.hostsQuery.isPending || connections.connectionsQuery.isPending ? (
-            <SettingsListRow title={<Muted>Loading computers…</Muted>} />
+            <SettingsListRow title={<Muted>{t("computer:remote_host_loading_computers")}</Muted>} />
           ) : hostsError ? (
             <SettingsListRow
-              title="Computers unavailable"
+              title={t("computer:remote_host_computers_unavailable")}
               description={
                 <span className="text-destructive">
                   {hostsError instanceof HostsUnsupportedError
-                    ? "This Synara server is too old to manage hosts. Update it and try again."
-                    : accountErrorMessage(hostsError, "Could not load your computers.")}
+                    ? t("computer:remote_host_server_too_old")
+                    : accountErrorMessage(
+                        hostsError,
+                        t("computer:remote_host_load_computers_failed"),
+                      )}
                 </span>
               }
             />
           ) : pairedHosts === undefined ? (
             <SettingsListRow
-              title="Update Synara on this computer"
-              description="Update and restart the app to list your paired computers."
+              title={t("computer:remote_host_update_synara")}
+              description={t("computer:remote_host_update_synara_description")}
             />
           ) : hosts.length === 0 ? (
             <SettingsListRow
-              title={<Muted>No other computers yet</Muted>}
-              description="Click Add and enter a pairing code from the other computer."
+              title={<Muted>{t("computer:remote_host_no_other_computers")}</Muted>}
+              description={t("computer:remote_host_add_pairing_description")}
             />
           ) : (
             hosts.map((host) => {
@@ -203,7 +212,9 @@ export function ConnectionsOtherComputers() {
                       .mutateAsync({ hostId: host.id, discoverable })
                       .catch((cause: unknown) =>
                         fail(
-                          discoverable ? "Could not share host" : "Could not stop sharing host",
+                          discoverable
+                            ? t("computer:remote_host_share_host_failed")
+                            : t("computer:remote_host_stop_share_failed"),
                           cause,
                         ),
                       )
@@ -220,7 +231,7 @@ export function ConnectionsOtherComputers() {
         </SettingsCard>
       </SettingsSectionShell>
 
-      <SettingsSectionShell title="This window">
+      <SettingsSectionShell title={t("computer:remote_host_this_window")}>
         <SettingsCard className="p-1">
           <HostConnectionControl />
         </SettingsCard>

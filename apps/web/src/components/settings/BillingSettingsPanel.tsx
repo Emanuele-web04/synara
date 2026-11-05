@@ -1,3 +1,4 @@
+import { t, useTranslation } from "~/i18n";
 // Subscription controls reuse profile Settings and the server-selected billing environment.
 import type { AccountBillingStatus, AccountStatus } from "@synara/contracts";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -23,9 +24,11 @@ export function BillingSettingsPanel() {
 }
 
 function BillingAccountPanel({ status, scope }: { status: AccountStatus | null; scope: string }) {
+  const { t, formatLocale } = useTranslation();
   const queryClient = useQueryClient();
   const query = useQuery(accountBillingQueryOptions(status));
   const [pending, setPending] = useState(false);
+  // Keep display state semantic so an open billing result follows language changes.
   const [message, setMessage] = useState<string | null>(null);
   const mounted = useRef(false);
   useEffect(() => {
@@ -56,17 +59,13 @@ function BillingAccountPanel({ status, scope }: { status: AccountStatus | null; 
       await ensureNativeApi().shell.openExternal(redirect.url);
       if (mounted.current) {
         setMessage(
-          sandbox
-            ? "Test billing opened in your browser. Refresh after finishing."
-            : "Billing opened in your browser. Refresh after finishing.",
+          sandbox ? "settings:remote_billing_testOpened" : "settings:remote_billing_opened",
         );
       }
     } catch {
       if (mounted.current) {
         setMessage(
-          sandbox
-            ? "Could not open test billing. Try again."
-            : "Could not open billing. Try again.",
+          sandbox ? "settings:remote_billing_testOpenFailed" : "settings:remote_billing_openFailed",
         );
       }
     } finally {
@@ -81,16 +80,22 @@ function BillingAccountPanel({ status, scope }: { status: AccountStatus | null; 
 
   return (
     <SettingsSectionShell
-      title="Subscription"
+      title={t("settings:remote_billing_subscription")}
       action={
-        billing ? <Badge variant="outline">{sandbox ? "Sandbox" : "Production"}</Badge> : undefined
+        billing ? (
+          <Badge variant="outline">
+            {sandbox
+              ? t("settings:remote_billing_sandbox")
+              : t("settings:remote_billing_production")}
+          </Badge>
+        ) : undefined
       }
     >
       <SettingsCard>
         {!signedIn ? (
           <SettingsListRow
-            title="Synara Pro"
-            description="Local desktop use stays free. Pro enables remote access."
+            title={t("settings:remote_billing_proTitle")}
+            description={t("settings:remote_billing_localFree")}
             actions={
               <Button
                 variant="outline"
@@ -98,35 +103,43 @@ function BillingAccountPanel({ status, scope }: { status: AccountStatus | null; 
                 disabled={!status}
                 onClick={() => useAccountDialogStore.getState().openSignIn()}
               >
-                Sign in
+                {t("chat:providerModelPicker_signIn")}
               </Button>
             }
           />
         ) : query.isPending ? (
           <SettingsListRow
-            title="Loading subscription…"
-            description="Checking this account’s subscription."
+            title={t("settings:remote_billing_loading")}
+            description={t("settings:remote_billing_checking")}
           />
         ) : query.isError ? (
           <SettingsListRow
-            title="Subscription unavailable"
-            description="Couldn’t check billing. Your current app access is unchanged."
+            title={t("settings:remote_billing_unavailable")}
+            description={t("settings:remote_billing_checkFailed")}
             actions={
               <Button variant="outline" size="sm" onClick={() => void query.refetch()}>
-                Try again
+                {t("chat:profile_tryAgain")}
               </Button>
             }
           />
         ) : !billing?.available ? (
           <SettingsListRow
-            title={sandbox ? "Test billing is not configured" : "Billing is not configured"}
-            description="Your current app access is unchanged. iPhone and iPad remain free companions."
+            title={
+              sandbox
+                ? t("settings:remote_billing_testNotConfigured")
+                : t("settings:remote_billing_notConfigured")
+            }
+            description={t("settings:remote_billing_accessUnchanged")}
           />
         ) : (
           <>
             <SettingsListRow
-              title={sandbox ? "Test Synara Pro" : "Synara Pro"}
-              description={subscriptionDescription(billing)}
+              title={
+                sandbox
+                  ? t("settings:remote_billing_testPro")
+                  : t("settings:remote_billing_proTitle")
+              }
+              description={subscriptionDescription(billing, t, formatLocale)}
               actions={
                 <Button
                   variant="outline"
@@ -134,7 +147,7 @@ function BillingAccountPanel({ status, scope }: { status: AccountStatus | null; 
                   disabled={query.isFetching || pending}
                   onClick={() => void query.refetch()}
                 >
-                  Refresh
+                  {t("chat:list_refreshAriaLabel")}
                 </Button>
               }
             />
@@ -142,8 +155,12 @@ function BillingAccountPanel({ status, scope }: { status: AccountStatus | null; 
               ? billing.plans.map((plan) => (
                   <SettingsListRow
                     key={plan.interval}
-                    title={plan.interval === "month" ? "Monthly" : "Annual"}
-                    description={`${formatBillingPrice(plan)} / ${plan.interval === "month" ? "month" : "year"}`}
+                    title={
+                      plan.interval === "month"
+                        ? t("settings:remote_billing_monthly")
+                        : t("settings:remote_billing_annual")
+                    }
+                    description={`${formatBillingPrice(plan)} / ${plan.interval === "month" ? t("settings:remote_billing_month") : t("settings:remote_billing_year")}`}
                     actions={
                       <Button
                         variant="outline"
@@ -151,7 +168,9 @@ function BillingAccountPanel({ status, scope }: { status: AccountStatus | null; 
                         disabled={pending}
                         onClick={() => void openBilling(plan.interval)}
                       >
-                        {sandbox ? "Test checkout" : "Checkout"}
+                        {sandbox
+                          ? t("settings:remote_billing_testCheckout")
+                          : t("settings:remote_billing_checkout")}
                       </Button>
                     }
                   />
@@ -159,11 +178,15 @@ function BillingAccountPanel({ status, scope }: { status: AccountStatus | null; 
               : null}
             {billing.canManage ? (
               <SettingsListRow
-                title={sandbox ? "Manage test subscription" : "Manage subscription"}
+                title={
+                  sandbox
+                    ? t("settings:remote_billing_manageTestSubscription")
+                    : t("settings:remote_billing_manageSubscription")
+                }
                 description={
                   sandbox
-                    ? "Update or cancel in Polar’s sandbox customer portal."
-                    : "Update or cancel in Polar’s customer portal."
+                    ? t("settings:remote_billing_testPortalDescription")
+                    : t("settings:remote_billing_portalDescription")
                 }
                 actions={
                   <Button
@@ -172,7 +195,7 @@ function BillingAccountPanel({ status, scope }: { status: AccountStatus | null; 
                     disabled={pending}
                     onClick={() => void openBilling()}
                   >
-                    Manage
+                    {t("settings:remote_billing_manage")}
                   </Button>
                 }
               />
@@ -183,30 +206,39 @@ function BillingAccountPanel({ status, scope }: { status: AccountStatus | null; 
       {billing?.available ? (
         <p className="text-ui-sm text-muted-foreground">
           {sandbox
-            ? "Sandbox only. No real payments. iPhone and iPad remain free companions."
-            : "Payments are processed by Polar. iPhone and iPad remain free companions."}
+            ? t("settings:remote_billing_sandboxNotice")
+            : t("settings:remote_billing_paymentsNotice")}
         </p>
       ) : null}
       {message ? (
         <p role="status" className="text-ui-sm text-muted-foreground">
-          {message}
+          {t(message)}
         </p>
       ) : null}
     </SettingsSectionShell>
   );
 }
 
-function subscriptionDescription(status: AccountBillingStatus): string {
+function subscriptionDescription(
+  status: AccountBillingStatus,
+  translate: typeof t,
+  formatLocale: string,
+): string {
   const sandbox = status.environment === "sandbox";
   if (status.cancelAtPeriodEnd && status.validUntil) {
-    return `Ends ${new Date(status.validUntil).toLocaleDateString()}. Local desktop use stays free. Pro enables remote access.${sandbox ? " No real payments are taken." : ""}`;
+    return translate(
+      sandbox ? "settings:remote_billing_testEnds" : "settings:remote_billing_ends",
+      {
+        date: new Date(status.validUntil).toLocaleDateString(formatLocale),
+      },
+    );
   }
   if (status.access === "granted") {
     return sandbox
-      ? "Access confirmed in Polar sandbox. Local desktop use stays free. Pro enables remote access."
-      : "Local desktop use stays free. Pro enables remote access.";
+      ? translate("settings:remote_billing_testAccessConfirmed")
+      : translate("settings:remote_billing_localFree");
   }
   return sandbox
-    ? "Local desktop use stays free. Pro enables remote access. Try monthly or annual test billing. No real payments are taken."
-    : "Local desktop use stays free. Pro enables remote access.";
+    ? translate("settings:remote_billing_testPlansDescription")
+    : translate("settings:remote_billing_localFree");
 }

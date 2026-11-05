@@ -1220,14 +1220,17 @@ export function AutomationDialog({
 
         <div className="px-5 pb-3 text-ui-sm text-muted-foreground">
           <div className="flex items-center gap-2">
-            <span>Run on</span>
+            <span>{t("workspace:remote_workspace_runOn")}</span>
             {computerPicker ?? (
-              <span>{readExecutionContext()?.execution.label ?? "This computer"}</span>
+              <span>
+                {readExecutionContext()?.execution.label ??
+                  t("workspace:remote_workspace_thisComputer")}
+              </span>
             )}
           </div>
-          <p>This computer must stay awake with Synara running. Other computers can be closed.</p>
+          <p>{t("automation:remote_workspace_keepExecutionComputerAwake")}</p>
           {projects.length === 0 ? (
-            <p>Add a project on this computer before creating an automation.</p>
+            <p>{t("automation:remote_workspace_addProjectBeforeAutomation")}</p>
           ) : null}
         </div>
 

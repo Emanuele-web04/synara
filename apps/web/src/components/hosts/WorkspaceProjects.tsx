@@ -1,3 +1,4 @@
+import { t as translate, useTranslation } from "~/i18n";
 import {
   useMemo,
   useState,
@@ -146,14 +147,13 @@ async function runWorkspaceSidebarAction<T>(
 ): Promise<T> {
   try {
     const actions = readAvailableWorkspaceNavigation(session)?.sidebar;
-    if (!actions)
-      throw new Error("This computer is no longer available. Reconnect before making changes.");
+    if (!actions) throw new Error(translate("computer:remote_host_workspace_unavailable"));
     return await action(actions);
   } catch (error) {
     toastManager.add({
       type: "error",
-      title: "Could not update workspace",
-      description: error instanceof Error ? error.message : "Try again.",
+      title: translate("computer:remote_host_workspace_update_failed"),
+      description: error instanceof Error ? error.message : translate("chat:tryAgain"),
     });
     throw error;
   }
@@ -214,6 +214,7 @@ export function WorkspaceThreadActions({
     quickActions: ReactNode;
   }) => ReactNode;
 }) {
+  const { t } = useTranslation();
   const href = useLocation({ select: (location) => location.href });
   const { session, thread } = entry;
   const [menu, setMenu] = useState<WorkspaceMenuState | null>(null);
@@ -271,7 +272,7 @@ export function WorkspaceThreadActions({
         showUndoToast(
           `done-undo:${owner.host.executionScope.environmentId}:${threadId}:${randomUUID()}`,
           {
-            message: "Marked as done",
+            message: t("workspace:markedAsDone"),
             onUndo: () =>
               runWorkspaceSidebarAction(owner, (actions) =>
                 actions.setThreadSettled(threadId, false),
@@ -314,12 +315,12 @@ export function WorkspaceThreadActions({
         onClose={() => setMenu(null)}
         items={[
           {
-            label: "Rename chat",
+            label: t("common:sidebar_renameChat"),
             icon: PencilIcon,
             onClick: () => setRenameSession(actionSession),
           },
           {
-            label: pinActionLabel("thread", thread.isPinned === true),
+            label: pinActionLabel(t("common:thread"), thread.isPinned === true),
             icon: PinIcon,
             onClick: () =>
               runAction((actions) => actions.setThreadPinned(thread.id, thread.isPinned !== true)),
@@ -327,7 +328,7 @@ export function WorkspaceThreadActions({
           ...(!thread.parentThreadId
             ? [
                 {
-                  label: "Archive",
+                  label: t("workspace:detail_archive"),
                   icon: ArchiveIcon,
                   separator: true,
                   onClick: () => archiveInWorkspace(actionSession),
@@ -505,6 +506,7 @@ export function WorkspaceProjectItem({
     entry: WorkspaceThreadEntry,
   ) => ((anchorId: string) => ReactNode) | undefined;
 }) {
+  const { t } = useTranslation();
   const manualSorting = manualSortingProp ?? false;
   const [localExtraPages, setLocalExtraPages] = useState(0);
   const extraPages = extraPagesProp ?? localExtraPages;
@@ -540,8 +542,8 @@ export function WorkspaceProjectItem({
       .catch((error: unknown) =>
         toastManager.add({
           type: "error",
-          title: "Could not create chat",
-          description: error instanceof Error ? error.message : "Try again.",
+          title: t("computer:remote_host_create_chat_failed"),
+          description: error instanceof Error ? error.message : t("chat:tryAgain"),
         }),
       );
   };
@@ -591,7 +593,7 @@ export function WorkspaceProjectItem({
             trailing={
               status ? (
                 <span
-                  aria-label={`Project status: ${status.label}`}
+                  aria-label={t("computer:remote_host_project_status", { status: status.label })}
                   title={status.label}
                   className={cn(
                     "ml-auto flex min-w-[1.625rem] shrink-0 items-center justify-end self-center",
@@ -607,7 +609,10 @@ export function WorkspaceProjectItem({
         <SidebarSectionToolbar placement="overlay" revealOnHover>
           <SidebarIconButton
             icon={EllipsisIcon}
-            label={`Project actions for ${project.name} on ${hostName}`}
+            label={t("computer:remote_host_project_actions", {
+              project: project.name,
+              host: hostName,
+            })}
             disabled={!online || !session.navigation?.sidebar}
             onClick={(event) => {
               event.preventDefault();
@@ -618,7 +623,7 @@ export function WorkspaceProjectItem({
           />
           <SidebarIconButton
             icon={NewThreadIcon}
-            label={`New chat in ${project.name} on ${hostName}`}
+            label={t("computer:remote_host_new_chat_in", { project: project.name, host: hostName })}
             disabled={!online}
             onClick={startChat}
           />
@@ -657,7 +662,7 @@ export function WorkspaceProjectItem({
                       onMouseDown={(event) => event.preventDefault()}
                       onClick={() => setExtraPages(paging.effectiveExtraPages + 1)}
                     >
-                      <span>Show more</span>
+                      <span>{t("workspace:timeline_showMore")}</span>
                     </SidebarMenuSubButton>
                   ) : null}
                   {paging.canShowLess ? (
@@ -671,7 +676,7 @@ export function WorkspaceProjectItem({
                       onMouseDown={(event) => event.preventDefault()}
                       onClick={() => setExtraPages(Math.max(0, paging.effectiveExtraPages - 1))}
                     >
-                      <span>Show less</span>
+                      <span>{t("workspace:timeline_showLess")}</span>
                     </SidebarMenuSubButton>
                   ) : null}
                 </div>
@@ -685,12 +690,12 @@ export function WorkspaceProjectItem({
         onClose={() => setMenu(null)}
         items={[
           {
-            label: "Rename project",
+            label: t("computer:remote_host_rename_project"),
             icon: PencilIcon,
             onClick: () => setRenameSession(actionSession),
           },
           {
-            label: pinActionLabel("project", project.isPinned === true),
+            label: pinActionLabel(t("common:project"), project.isPinned === true),
             icon: PinIcon,
             onClick: () => {
               void runWorkspaceSidebarAction(actionSession, (actions) =>
@@ -702,8 +707,8 @@ export function WorkspaceProjectItem({
       />
       <RenameDialog
         open={renameSession !== null}
-        title="Rename project"
-        description="Choose a recognizable name for this checkout."
+        title={t("computer:remote_host_rename_project")}
+        description={t("computer:remote_host_rename_checkout_description")}
         initialValue={project.name}
         allowEmpty
         onOpenChange={(open) => {

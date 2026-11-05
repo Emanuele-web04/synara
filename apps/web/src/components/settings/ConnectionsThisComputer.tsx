@@ -13,6 +13,8 @@ import type {
 } from "@synara/contracts";
 import { type ReactNode, useEffect, useState } from "react";
 
+import { useTranslation } from "~/i18n";
+
 import { useAccount } from "~/hooks/useAccount";
 import { reportRemoteAccessAllowed, useDesktopKeepAwake } from "~/hooks/useDesktopKeepAwake";
 import { useDevices, useHosts, useHostSessions } from "~/hooks/useHosts";
@@ -54,6 +56,7 @@ export function ConnectionsThisComputer({
   /** "Mac" on macOS, "computer" elsewhere. */
   computerNoun: string;
 }) {
+  const { t } = useTranslation();
   const { state, loadError, refresh } = useRemoteHostState();
   const keepAwake = useDesktopKeepAwake();
   const [busy, setBusy] = useState(false);
@@ -86,7 +89,9 @@ export function ConnectionsThisComputer({
     setAllowOverride(enabled);
     await perform(
       { operation: "set-allow-connections", enabled },
-      enabled ? "Could not allow connections." : "Could not turn off connections.",
+      enabled
+        ? t("settings:remote_connections_allow_failed")
+        : t("settings:remote_connections_disable_failed"),
     );
     setAllowOverride(null);
   };
@@ -94,13 +99,16 @@ export function ConnectionsThisComputer({
   const revoke = async (device: RemoteTrustedDevice) => {
     if (
       !(await confirmAction(
-        `Revoke access for ${device.label}? It will need to be added again to control this ${computerNoun}.`,
+        t("settings:remote_connections_revoke_access_confirm", {
+          label: device.label,
+          computer: computerNoun,
+        }),
       ))
     )
       return;
     await perform(
       { operation: "revoke-device", deviceJkt: device.deviceJkt },
-      "Could not revoke access.",
+      t("settings:remote_connections_revoke_access_failed"),
     );
   };
 
@@ -109,13 +117,13 @@ export function ConnectionsThisComputer({
     if (
       !local ||
       !(await confirmAction(
-        `Repair remote access on this ${computerNoun}? Every device loses access and must be added again. Your projects and chats stay here.`,
+        t("settings:remote_connections_repair_confirm", { computer: computerNoun }),
       ))
     )
       return;
     await perform(
       { operation: "reset-identity", environmentId: local.environmentId },
-      "Could not repair remote access.",
+      t("settings:remote_connections_repair_failed"),
     );
   };
 
@@ -126,29 +134,33 @@ export function ConnectionsThisComputer({
   return (
     <>
       <SettingsSectionShell
-        title={`Devices that can control this ${computerNoun}`}
+        title={t("settings:remote_connections_devices_control_this", { computer: computerNoun })}
         action={
           <div className="flex items-center gap-1.5">
-            <IconButton label="Refresh" variant="ghost" onClick={() => void refresh()}>
+            <IconButton
+              label={t("chat:list_refreshAriaLabel")}
+              variant="ghost"
+              onClick={() => void refresh()}
+            >
               <RotateCcwIcon className="size-3.5" />
             </IconButton>
             <Button size="xs" shape="capsule" onClick={() => setDialog("add")}>
-              Add
+              {t("workspace:models_add")}
             </Button>
           </div>
         }
       >
         <SettingsCard>
           <SettingsListRow
-            title="Allow connections"
+            title={t("settings:remote_connections_allow_connections")}
             description={
-              allowChecked ? undefined : "Devices below can't connect until you turn this on."
+              allowChecked ? undefined : t("settings:remote_connections_connections_disabled")
             }
             actions={
               <Switch
                 checked={allowChecked}
                 disabled={busy || state === null}
-                aria-label="Allow connections"
+                aria-label={t("settings:remote_connections_allow_connections")}
                 onCheckedChange={(next) => void setAllow(next)}
               />
             }
@@ -157,8 +169,10 @@ export function ConnectionsThisComputer({
             <SettingsListRow
               title={
                 pending.length === 1
-                  ? `${pending[0]!.pendingDevice.label} is waiting for approval`
-                  : `${pending.length} devices are waiting for approval`
+                  ? t("settings:remote_connections_device_waiting", {
+                      device: pending[0]!.pendingDevice.label,
+                    })
+                  : t("settings:remote_connections_devices_waiting", { count: pending.length })
               }
               actions={
                 <Button
@@ -167,7 +181,7 @@ export function ConnectionsThisComputer({
                   variant="subtle"
                   onClick={() => setDialog("review")}
                 >
-                  Review
+                  {t("chat:review")}
                 </Button>
               }
             />
@@ -182,14 +196,20 @@ export function ConnectionsThisComputer({
           ))}
           {state !== null && devices.length === 0 ? (
             <SettingsListRow
-              title={<span className="font-normal text-muted-foreground">No devices yet</span>}
-              description={`Add your iPhone or iPad to control this ${computerNoun} from anywhere.`}
+              title={
+                <span className="font-normal text-muted-foreground">
+                  {t("settings:remote_connections_no_devices")}
+                </span>
+              }
+              description={t("settings:remote_connections_add_phone_control", {
+                computer: computerNoun,
+              })}
             />
           ) : null}
           {state?.rootNeedsRepair ? (
             <SettingsListRow
-              title="Remote access needs repair"
-              description="Devices can't verify this computer until it is repaired."
+              title={t("settings:remote_connections_repair_needed")}
+              description={t("settings:remote_connections_repair_description")}
               actions={
                 <Button
                   size="xs"
@@ -198,7 +218,7 @@ export function ConnectionsThisComputer({
                   disabled={busy}
                   onClick={() => void repair()}
                 >
-                  Repair
+                  {t("git:repair")}
                 </Button>
               }
             />
@@ -212,24 +232,24 @@ export function ConnectionsThisComputer({
       </SettingsSectionShell>
 
       {keepAwake.state ? (
-        <SettingsSection title="Other settings">
+        <SettingsSection title={t("settings:remote_connections_other_settings")}>
           <SettingsListRow
-            title={`Keep this ${computerNoun} awake`}
+            title={t("settings:remote_connections_keep_awake", { computer: computerNoun })}
             description={
               keepAwake.state.enabled && keepAwake.state.onBattery
-                ? "Paused while on battery"
-                : "Prevent sleep when computer is plugged in and remote access is enabled"
+                ? t("settings:remote_connections_battery_paused")
+                : t("settings:remote_connections_prevent_sleep")
             }
             actions={
               <Switch
                 checked={keepAwake.state.enabled}
-                aria-label={`Keep this ${computerNoun} awake`}
+                aria-label={t("settings:remote_connections_keep_awake", { computer: computerNoun })}
                 onCheckedChange={(next) =>
                   void keepAwake.setEnabled(next).catch((cause: unknown) =>
                     toastManager.add({
                       type: "error",
-                      title: "Could not change keep awake",
-                      description: remoteAccessErrorMessage(cause, "Try again."),
+                      title: t("settings:remote_connections_keep_awake_failed"),
+                      description: remoteAccessErrorMessage(cause, t("chat:tryAgain")),
                     }),
                   )
                 }
@@ -250,7 +270,7 @@ export function ConnectionsThisComputer({
           }}
         >
           <DisclosureChevron open={advancedOpen} />
-          Advanced
+          {t("settings:nav_advanced")}
         </button>
         <DisclosureRegion open={advancedOpen}>
           {advancedSeen ? <AccountAdvanced /> : null}
@@ -273,6 +293,7 @@ export function ConnectionsThisComputer({
 
 /** The account-level view: this machine's link, signed-in devices, and live sessions. */
 function AccountAdvanced() {
+  const { t } = useTranslation();
   const account = useAccount();
   const remote = useHosts({ enabled: true });
   const devices = useDevices({ enabled: true });
@@ -285,32 +306,27 @@ function AccountAdvanced() {
     toastManager.add({
       type: "error",
       title,
-      description: accountErrorMessage(cause, "Try again in a moment."),
+      description: accountErrorMessage(cause, t("chat:tryAgainInAMoment")),
     });
 
   const unlink = async () => {
-    if (
-      !(await confirmAction(
-        "Unlink this machine?\n\nIts key is removed from your account and other devices' sessions to it end. Synara keeps working locally.",
-      ))
-    )
-      return;
+    if (!(await confirmAction(t("settings:remote_connections_unlink_confirm")))) return;
     try {
       await remote.unlinkLocalHost.mutateAsync();
       toastManager.add({
         type: "success",
-        title: "Machine unlinked",
-        description: "This machine is no longer reachable from your other devices.",
+        title: t("settings:remote_connections_machine_unlinked"),
+        description: t("settings:remote_connections_machine_unlinked_description"),
       });
     } catch (cause) {
-      fail("Could not unlink this machine", cause);
+      fail(t("settings:remote_connections_unlink_failed"), cause);
     }
   };
 
   const revokeDevice = async (device: AccountDevice) => {
     if (
       !(await confirmAction(
-        `Revoke ${device.displayName}?\n\nThis blocks new remote connections for this device key. Online hosts receive a revocation; an offline host may keep an existing session until it expires. Account sign-in sessions are managed separately.`,
+        t("settings:remote_connections_revoke_device_confirm", { device: device.displayName }),
       ))
     )
       return;
@@ -318,19 +334,18 @@ function AccountAdvanced() {
       await devices.revokeDevice.mutateAsync({ deviceId: device.id });
       toastManager.add({
         type: "success",
-        title: "Device revoked",
-        description:
-          "New connections are blocked. Offline hosts may retain existing sessions until authorization expires.",
+        title: t("settings:remote_connections_device_revoked"),
+        description: t("settings:remote_connections_device_revoked_description"),
       });
     } catch (cause) {
-      fail("Could not revoke device", cause);
+      fail(t("settings:remote_connections_revoke_device_failed"), cause);
     }
   };
 
   const signOutDevice = async (device: AccountDevice) => {
     if (
       !(await confirmAction(
-        `Sign out account sessions on ${device.displayName}? This does not revoke its locally paired device key. Existing remote sessions end when their authorization expires unless you also revoke the device.`,
+        t("settings:remote_connections_sign_out_device_confirm", { device: device.displayName }),
       ))
     )
       return;
@@ -340,21 +355,31 @@ function AccountAdvanced() {
         deviceId: device.id,
       });
       if (result?.kind !== "account-sessions-revoked")
-        throw new Error("Account session revocation is unavailable.");
+        throw new Error(t("settings:remote_connections_session_revocation_unavailable"));
       toastManager.add({
         type: result.pending ? "warning" : "success",
-        title: result.pending ? "Sign-out delivery pending" : "Account sessions signed out",
-        description: `${result.confirmed} confirmed; ${result.pending} awaiting the identity provider. ${result.pending ? "You can retry this action." : "The device key is unchanged."}`,
+        title: result.pending
+          ? t("settings:remote_connections_sign_out_pending")
+          : t("settings:remote_connections_account_sessions_signed_out"),
+        description: result.pending
+          ? t("settings:remote_connections_sign_out_results_pending", {
+              confirmed: result.confirmed,
+              pending: result.pending,
+            })
+          : t("settings:remote_connections_sign_out_results_complete", {
+              confirmed: result.confirmed,
+              pending: result.pending,
+            }),
       });
     } catch (cause) {
-      fail("Could not sign out account sessions", cause);
+      fail(t("settings:remote_connections_sign_out_sessions_failed"), cause);
     }
   };
 
   const endSession = async (session: HostSession) => {
     if (
       !(await confirmAction(
-        `End this session?\n\nUser ${session.userId} will be disconnected from this machine immediately.`,
+        t("settings:remote_connections_end_session_confirm", { user: session.userId }),
       ))
     )
       return;
@@ -362,21 +387,21 @@ function AccountAdvanced() {
       await sessions.endSession.mutateAsync({ sessionId: session.id });
       toastManager.add({
         type: "success",
-        title: "Session ended",
-        description: "The remote connection was closed.",
+        title: t("settings:remote_connections_session_ended"),
+        description: t("settings:remote_connections_session_closed"),
       });
     } catch (cause) {
-      fail("Could not end session", cause);
+      fail(t("settings:remote_connections_end_session_failed"), cause);
     }
   };
 
   return (
     <div className="pt-1">
       {remote.enrollment?.host ? (
-        <SettingsSection title="This machine on your account">
+        <SettingsSection title={t("settings:remote_connections_machine_on_account")}>
           <SettingsListRow
             title={remote.enrollment.host.name}
-            description="Signing out unlinks it automatically. Synara keeps working locally."
+            description={t("settings:remote_connections_sign_out_unlinks")}
             actions={
               <Button
                 size="xs"
@@ -385,25 +410,29 @@ function AccountAdvanced() {
                 disabled={remote.unlinkLocalHost.isPending}
                 onClick={() => void unlink()}
               >
-                {remote.unlinkLocalHost.isPending ? "Unlinking…" : "Unlink"}
+                {remote.unlinkLocalHost.isPending
+                  ? t("settings:remote_connections_unlinking")
+                  : t("common:unlink")}
               </Button>
             }
           />
           {localHost && remote.canManageHost(localHost) ? (
             <SettingsListRow
-              title="Share with your workspace"
-              description="Members of your workspace can see and use this machine."
+              title={t("settings:remote_connections_share_workspace")}
+              description={t("settings:remote_connections_share_workspace_description")}
               actions={
                 <Switch
                   checked={localHost.discoverable}
                   disabled={remote.setDiscoverable.isPending}
-                  aria-label="Share this machine with your workspace"
+                  aria-label={t("settings:remote_connections_share_workspace_aria")}
                   onCheckedChange={(discoverable) =>
                     void remote.setDiscoverable
                       .mutateAsync({ hostId: localHost.id, discoverable })
                       .catch((cause: unknown) =>
                         fail(
-                          discoverable ? "Could not share host" : "Could not stop sharing host",
+                          discoverable
+                            ? t("settings:remote_connections_share_failed")
+                            : t("settings:remote_connections_stop_sharing_failed"),
                           cause,
                         ),
                       )
@@ -415,12 +444,12 @@ function AccountAdvanced() {
         </SettingsSection>
       ) : null}
 
-      <SettingsSection title="Account devices">
+      <SettingsSection title={t("settings:remote_connections_account_devices")}>
         <QueryRows
           query={devices.devicesQuery}
-          loading="Loading devices…"
-          failure="Could not load your devices."
-          empty="No devices are registered on this account yet."
+          loading={t("settings:remote_connections_loading_devices")}
+          failure={t("settings:remote_connections_load_devices_failed")}
+          empty={t("settings:remote_connections_no_account_devices")}
           count={devices.devices.length}
         >
           {devices.devices.map((device) => (
@@ -435,12 +464,12 @@ function AccountAdvanced() {
         </QueryRows>
       </SettingsSection>
 
-      <SettingsSection title="Active sessions">
+      <SettingsSection title={t("settings:remote_connections_active_sessions")}>
         <QueryRows
           query={sessions.sessionsQuery}
-          loading="Loading sessions…"
-          failure="Could not load active sessions."
-          empty="Nobody is connected to this machine right now."
+          loading={t("settings:remote_connections_loading_sessions")}
+          failure={t("settings:remote_connections_load_sessions_failed")}
+          empty={t("settings:remote_connections_no_active_sessions")}
           count={sessions.sessions.length}
         >
           {sessions.sessions.map((session) => {
@@ -450,9 +479,11 @@ function AccountAdvanced() {
                 key={session.id}
                 session={session}
                 userLabel={
-                  account.me?.id === session.userId ? account.me.name : `User ${session.userId}`
+                  account.me?.id === session.userId
+                    ? account.me.name
+                    : t("settings:remote_connections_user_label", { user: session.userId })
                 }
-                deviceLabel={device?.displayName ?? "Unknown device"}
+                deviceLabel={device?.displayName ?? t("settings:remote_connections_unknown_device")}
                 busy={sessions.endSession.isPending}
                 onEnd={() => void endSession(session)}
               />

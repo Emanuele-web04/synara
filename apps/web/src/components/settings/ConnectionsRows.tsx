@@ -6,6 +6,7 @@
 // Exports: RemoteDeviceIcon, RootFingerprint, TrustedDeviceRow, HostRow, HostRowConnection,
 //          DeviceRow, SessionRow
 
+import { t as translate, useTranslation } from "~/i18n";
 import type {
   AccountDevice,
   AccountHost,
@@ -18,7 +19,7 @@ import { canManageHost, hostPlatformLabel } from "~/lib/hosts/api";
 import {
   reachabilityLabel,
   reachabilityToneClassName,
-  TRANSPORT_LABELS,
+  TRANSPORT_LABEL_KEYS,
   type HostReachability,
 } from "~/lib/hosts/reachability";
 import {
@@ -26,7 +27,7 @@ import {
   remoteDeviceKind,
   trustedDeviceActivityLabel,
 } from "~/lib/hosts/remoteAccess";
-import { formatRelativeTime } from "~/lib/relativeTime";
+import { formatRelativeTimeAgo } from "~/lib/relativeTime";
 import {
   DeviceComputerIcon,
   DeviceMobileIcon,
@@ -52,6 +53,7 @@ export function RemoteDeviceIcon({ label }: { label: string }) {
 
 /** Grouped identity for comparison; copies the original fingerprint without display spacing. */
 export function RootFingerprint({ value, className }: { value: string; className?: string }) {
+  const { t } = useTranslation();
   return (
     <div className={cn("flex items-center gap-2", className)}>
       <p className="grid min-w-0 flex-1 grid-cols-4 gap-x-2 gap-y-1 font-mono text-ui-xs">
@@ -59,7 +61,7 @@ export function RootFingerprint({ value, className }: { value: string; className
           <span key={group.offset}>{group.text}</span>
         ))}
       </p>
-      <CopyTextButton text={value} label="fingerprint" iconOnly />
+      <CopyTextButton text={value} label={t("computer:remote_host_fingerprint")} iconOnly />
     </div>
   );
 }
@@ -74,6 +76,7 @@ export function TrustedDeviceRow({
   busy: boolean;
   onRevoke: () => void;
 }) {
+  const { t } = useTranslation();
   return (
     <SettingsListRow
       leading={<RemoteDeviceIcon label={device.label} />}
@@ -81,7 +84,7 @@ export function TrustedDeviceRow({
       description={trustedDeviceActivityLabel(device)}
       actions={
         <Button size="xs" shape="capsule" variant="subtle" disabled={busy} onClick={onRevoke}>
-          Revoke access
+          {t("computer:remote_host_revoke_access")}
         </Button>
       }
     />
@@ -105,8 +108,13 @@ function hostStatusLabel(
   reachability: HostReachability,
 ): string | null {
   if (connection.kind === "connected")
-    return `${connection.active ? "Working on it" : "Connected"} over ${TRANSPORT_LABELS[connection.transport]}`;
-  if (!host.linked) return "Not linked yet";
+    return translate(
+      connection.active
+        ? "computer:remote_host_working_over"
+        : "computer:remote_host_connected_over",
+      { transport: translate(TRANSPORT_LABEL_KEYS[connection.transport]) },
+    );
+  if (!host.linked) return translate("computer:remote_host_not_linked");
   if (reachability.state === "unknown") return null;
   return reachabilityLabel(reachability);
 }
@@ -137,12 +145,13 @@ export function HostRow({
   onDeactivate?: () => void;
   onForget?: () => void;
 }) {
+  const { t } = useTranslation();
   const connection = connectionProp ?? { kind: "disconnected", busy: false };
   const owned = canManageHost(host);
   const status = hostStatusLabel(host, connection, reachability);
   const details = [
     hostPlatformLabel(host.platform),
-    ...(owned ? [] : ["Shared by your workspace"]),
+    ...(owned ? [] : [t("computer:remote_host_shared_workspace")]),
   ].join(" · ");
   return (
     <SettingsListRow
@@ -176,11 +185,11 @@ export function HostRow({
           {connection.kind === "connected" ? (
             connection.active ? (
               <Button size="xs" shape="capsule" variant="subtle" onClick={onDeactivate}>
-                Back to this computer
+                {t("computer:remote_host_back_this_computer")}
               </Button>
             ) : (
               <Button size="xs" shape="capsule" variant="subtle" onClick={onActivate}>
-                Open
+                {t("onboarding:notification_open")}
               </Button>
             )
           ) : (
@@ -191,7 +200,7 @@ export function HostRow({
               disabled={!host.linked || connection.busy}
               onClick={onConnect}
             >
-              {connection.busy ? "Connecting…" : "Connect"}
+              {connection.busy ? t("computer:connecting") : t("computer:remote_host_connect")}
             </Button>
           )}
           <Menu>
@@ -200,7 +209,7 @@ export function HostRow({
                 <Button
                   size="icon-xs"
                   variant="ghost"
-                  aria-label={`More actions for ${host.name}`}
+                  aria-label={t("computer:remote_host_more_actions", { host: host.name })}
                 />
               }
             >
@@ -209,12 +218,14 @@ export function HostRow({
             <ComposerPickerMenuPopup align="end" side="bottom" className="min-w-52">
               {onProbe ? (
                 <MenuItem disabled={reachability.state === "probing"} onClick={onProbe}>
-                  {reachability.state === "probing" ? "Checking…" : "Check availability"}
+                  {reachability.state === "probing"
+                    ? t("settings:checking")
+                    : t("computer:remote_host_check_availability")}
                 </MenuItem>
               ) : null}
               {connection.kind === "connected" ? (
                 <MenuItem disabled={connection.busy} onClick={onDisconnect}>
-                  Disconnect
+                  {t("settings:connectorDisconnect")}
                 </MenuItem>
               ) : null}
               {owned ? (
@@ -224,14 +235,14 @@ export function HostRow({
                   disabled={busy}
                   onCheckedChange={(checked) => onToggleDiscoverable(Boolean(checked))}
                 >
-                  Share with workspace
+                  {t("computer:remote_host_share_workspace")}
                 </MenuCheckboxItem>
               ) : null}
               {onForget ? (
                 <>
                   <MenuSeparator />
                   <MenuItem variant="destructive" onClick={onForget}>
-                    Forget pairing
+                    {t("computer:remote_host_forget_pairing")}
                   </MenuItem>
                 </>
               ) : null}
@@ -244,9 +255,8 @@ export function HostRow({
 }
 
 function usedLabel(iso: string | null): string {
-  if (!iso || Number.isNaN(Date.parse(iso))) return "Never used";
-  const relative = formatRelativeTime(iso);
-  return relative === "now" ? "Used just now" : `Used ${relative} ago`;
+  if (!iso || Number.isNaN(Date.parse(iso))) return translate("computer:remote_host_never_used");
+  return translate("computer:remote_host_used", { time: formatRelativeTimeAgo(iso) });
 }
 
 /** A device signed in to the account (Advanced). */
@@ -261,6 +271,7 @@ export function DeviceRow({
   onRevoke: () => void;
   onRevokeAccountSessions?: () => void;
 }) {
+  const { t } = useTranslation();
   const revoked = device.revokedAt !== null;
   return (
     <SettingsListRow
@@ -269,13 +280,15 @@ export function DeviceRow({
       title={device.displayName}
       description={
         <span className="flex flex-col gap-0.5">
-          <span>{revoked ? "Device key revoked" : usedLabel(device.lastUsedAt)}</span>
+          <span>
+            {revoked ? t("computer:remote_host_key_revoked") : usedLabel(device.lastUsedAt)}
+          </span>
           {device.revocationDeliveries?.map((delivery) => (
             <span key={delivery.hostId} className="text-ui-sm">
               {delivery.hostName}:{" "}
               {delivery.confirmedAt
-                ? "revocation confirmed"
-                : "delivery pending; existing sessions expire normally"}
+                ? t("computer:remote_host_revocation_confirmed")
+                : t("computer:remote_host_revocation_pending")}
             </span>
           ))}
         </span>
@@ -290,7 +303,7 @@ export function DeviceRow({
               disabled={busy}
               onClick={onRevokeAccountSessions}
             >
-              Sign out
+              {t("settings:signOut")}
             </Button>
           ) : null}
           {!revoked ? (
@@ -301,7 +314,7 @@ export function DeviceRow({
               disabled={busy}
               onClick={onRevoke}
             >
-              Revoke key
+              {t("computer:remote_host_revoke_key")}
             </Button>
           ) : null}
         </>
@@ -310,17 +323,16 @@ export function DeviceRow({
   );
 }
 
-const SESSION_TRANSPORT_LABELS: Record<HostSession["transport"], string> = {
-  cloudflare: "Cloudflare",
-  direct: "Direct",
-  relay: "Relay",
-  "ssh-forward": "SSH forward",
+const SESSION_TRANSPORT_LABEL_KEYS: Record<HostSession["transport"], string> = {
+  cloudflare: "computer:remote_host_transport_cloudflare",
+  direct: "computer:remote_host_transport_direct",
+  relay: "computer:remote_host_transport_relay_session",
+  "ssh-forward": "computer:remote_host_transport_ssh_forward",
 };
 
 function startedLabel(iso: string): string {
-  if (Number.isNaN(Date.parse(iso))) return "Started at an unknown time";
-  const relative = formatRelativeTime(iso);
-  return relative === "now" ? "Started just now" : `Started ${relative} ago`;
+  if (Number.isNaN(Date.parse(iso))) return translate("computer:remote_host_started_unknown");
+  return translate("computer:remote_host_started", { time: formatRelativeTimeAgo(iso) });
 }
 
 /** A live session another device holds to this computer (Advanced). */
@@ -337,13 +349,14 @@ export function SessionRow({
   busy: boolean;
   onEnd: () => void;
 }) {
+  const { t } = useTranslation();
   return (
     <SettingsListRow
       leading={<RemoteDeviceIcon label={deviceLabel} />}
       title={deviceLabel}
       description={
         <span>
-          {userLabel} · {SESSION_TRANSPORT_LABELS[session.transport]} ·{" "}
+          {userLabel} · {t(SESSION_TRANSPORT_LABEL_KEYS[session.transport])} ·{" "}
           <time dateTime={session.startedAt}>{startedLabel(session.startedAt)}</time>
         </span>
       }
@@ -355,7 +368,7 @@ export function SessionRow({
           disabled={busy}
           onClick={onEnd}
         >
-          End session
+          {t("computer:remote_host_end_session")}
         </Button>
       }
     />

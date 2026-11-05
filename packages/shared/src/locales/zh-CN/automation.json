@@ -197,5 +197,11 @@
   "intentOnceAt": "在 {{time}} 运行一次",
   "intentDailyAt": "每天 {{time}}",
   "intentWeekdaysAt": "工作日 {{time}}",
-  "intentWeeklyAt": "每周 {{time}}"
+  "intentWeeklyAt": "每周 {{time}}",
+  "remote_workspace_addProjectBeforeAutomation": "请先在这台电脑上添加项目，再创建自动化。",
+  "remote_workspace_connectBeforeAutomation": "请先连接这台电脑，再创建自动化。",
+  "remote_workspace_executionComputerReminder": "运行于 {{computer}}。请保持该电脑上的 Synara 持续运行。",
+  "remote_workspace_keepExecutionComputerAwake": "这台电脑必须保持唤醒，并持续运行 Synara。其他电脑可以合上。",
+  "remote_workspace_selectComputerFailed": "无法选择电脑",
+  "remote_workspace_updateForAutomations": "请更新这台电脑，以在此创建自动化。"
 }

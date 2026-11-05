@@ -3,6 +3,7 @@
 // Layer: Web remote-access feature logic.
 // Exports: attempt-based reachability labels and display tokens.
 
+import { t as translate } from "~/i18n";
 import type { TransportKind } from "@synara/shared/transportRace";
 
 /**
@@ -34,6 +35,16 @@ export const TRANSPORT_LABELS: Record<TransportKind, string> = {
   relay: "relay",
 };
 
+/** Display keys keep transport identifiers and source labels unchanged. */
+export const TRANSPORT_LABEL_KEYS: Record<TransportKind, string> = {
+  cloudflare: "computer:remote_host_transport_cloudflare",
+  loopback: "computer:remote_host_transport_loopback",
+  lan: "computer:remote_host_transport_lan",
+  tailscale: "Tailscale",
+  ssh: "SSH",
+  relay: "computer:remote_host_transport_relay",
+};
+
 /**
  * The one line the host row shows for status.
  *
@@ -45,17 +56,19 @@ export const TRANSPORT_LABELS: Record<TransportKind, string> = {
 export function reachabilityLabel(reachability: HostReachability): string {
   switch (reachability.state) {
     case "unknown":
-      return "Not checked yet";
+      return translate("computer:remote_host_not_checked");
     case "probing":
-      return "Checking…";
+      return translate("settings:checking");
     case "reachable":
-      return `Reachable over ${TRANSPORT_LABELS[reachability.transport]}`;
+      return translate("computer:remote_host_reachable_over", {
+        transport: translate(TRANSPORT_LABEL_KEYS[reachability.transport]),
+      });
     case "unreachable":
-      return "Did not answer";
+      return translate("computer:remote_host_did_not_answer");
     case "no-answer":
-      return "No response — check your network";
+      return translate("computer:remote_host_no_response");
     case "no-route":
-      return "No known address";
+      return translate("computer:remote_host_no_address");
   }
 }
 

@@ -11,7 +11,6 @@ import {
   MCP_CONNECTOR_PRESETS,
   type McpConnectorCategory,
   type McpConnectorPreset,
-  type McpConnectorUrlReasonCode,
   normalizeMcpConnectorUrl,
 } from "@synara/shared/mcpConnectors";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -54,7 +53,7 @@ import {
   McpConnectorCardHeader,
   McpConnectorDetails,
 } from "./McpConnectorCard";
-import { McpLocalConnectorDialog } from "./McpLocalConnectorDialog";
+import { MCP_CONNECTOR_URL_REASON_KEYS, McpLocalConnectorDialog } from "./McpLocalConnectorDialog";
 import {
   McpConnectorProposalCard,
   mcpConnectorProposalsQueryOptions,
@@ -93,15 +92,6 @@ function presetDescription(preset: McpConnectorPreset | undefined, translate: ty
   const key = PRESET_DESCRIPTION_KEYS[preset.id];
   return key ? translate(key) : preset.description;
 }
-
-const URL_REASON_KEYS: Record<McpConnectorUrlReasonCode, string> = {
-  required: "settings:connectorUrlRequired",
-  "too-long": "settings:connectorUrlTooLong",
-  invalid: "settings:connectorUrlInvalid",
-  "https-required": "settings:connectorUrlHttps",
-  credentials: "settings:connectorUrlCredentials",
-  "public-host": "settings:connectorUrlPublicHost",
-};
 
 function presetTarget(preset: McpConnectorPreset): McpConnectorTarget {
   return {
@@ -212,7 +202,10 @@ function ConnectedRow(props: {
   const detailsId = useId();
   const needsAuth = connector.status === "needs-auth";
   return (
-    <section className={MCP_CONNECTOR_CARD_CLASS_NAME} aria-label={`${connector.name} connector`}>
+    <section
+      className={MCP_CONNECTOR_CARD_CLASS_NAME}
+      aria-label={t("settings:remote_connector_label", { name: connector.name })}
+    >
       <McpConnectorCardHeader
         connector={connector}
         subtitle={presetDescription(connectorPreset(connector), t)}
@@ -253,9 +246,9 @@ function ConnectedRow(props: {
             className={`size-1.5 shrink-0 rounded-full ${needsAuth ? "bg-destructive" : connector.status === "unreachable" ? "bg-muted-foreground" : "bg-success"}`}
           />
           {needsAuth
-            ? "Needs sign-in"
+            ? t("common:needsSignIn")
             : connector.status === "unreachable"
-              ? "Not running"
+              ? t("settings:remote_connector_notRunning")
               : t("chat:connected")}
         </span>
         {needsAuth ? (
@@ -271,7 +264,7 @@ function ConnectedRow(props: {
           aria-controls={detailsId}
           onClick={() => setDetailsOpen((open) => !open)}
         >
-          Connection details
+          {t("settings:remote_connector_connectionDetails")}
           <DisclosureChevron open={detailsOpen} className="size-3.5" />
         </Button>
       </div>
@@ -299,10 +292,9 @@ function AddCustomConnectorDialog(props: {
     event.preventDefault();
     const normalized = normalizeMcpConnectorUrl(url);
     if (!normalized.ok) {
-      // The shared validator permits loopback HTTP; the main HTTPS-only message does not.
       setError(
-        normalized.reasonCode && normalized.reasonCode !== "https-required"
-          ? t(URL_REASON_KEYS[normalized.reasonCode])
+        normalized.reasonCode
+          ? t(MCP_CONNECTOR_URL_REASON_KEYS[normalized.reasonCode])
           : normalized.reason,
       );
       return;
@@ -323,10 +315,7 @@ function AddCustomConnectorDialog(props: {
       <DialogPopup className="max-w-md">
         <DialogHeader>
           <DialogTitle>{t("settings:addCustomConnector")}</DialogTitle>
-          <DialogDescription>
-            A public HTTPS or loopback HTTP MCP server. Synara signs in with OAuth when the server
-            asks for it.
-          </DialogDescription>
+          <DialogDescription>{t("settings:remote_connector_customDescription")}</DialogDescription>
         </DialogHeader>
         <DialogPanel>
           <form id={formId} className="space-y-1.5" onSubmit={submit} noValidate>
@@ -398,11 +387,11 @@ export function McpConnectorsSettingsPanel(props: { active: boolean }) {
         type: "success",
         title:
           connector.status === "unreachable"
-            ? `${connector.name} saved`
+            ? t("settings:remote_connector_saved", { name: connector.name })
             : t("settings:connectorConnected", { name: connector.name }),
         description:
           connector.status === "unreachable"
-            ? "Not running. Start the local server to use its tools."
+            ? t("settings:remote_connector_startLocalNotice")
             : t("settings:connectorToolsNewChats"),
       });
     },
@@ -480,7 +469,7 @@ export function McpConnectorsSettingsPanel(props: { active: boolean }) {
           className="shrink-0"
           onClick={() => setLocalOpen(true)}
         >
-          Add local server
+          {t("settings:remote_connector_addLocal")}
         </Button>
       </div>
 
@@ -493,7 +482,7 @@ export function McpConnectorsSettingsPanel(props: { active: boolean }) {
       ) : null}
 
       {visibleConnectors.length > 0 ? (
-        <ConnectorShelf title="Your connectors" cards>
+        <ConnectorShelf title={t("settings:remote_connector_yourConnectors")} cards>
           {visibleConnectors.map((connector) => (
             <ConnectedRow
               key={connector.connectorId}

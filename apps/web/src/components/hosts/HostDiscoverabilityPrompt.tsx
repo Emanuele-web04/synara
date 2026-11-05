@@ -4,6 +4,7 @@
 // Layer: Web remote-access feature (global dialog).
 // Exports: HostDiscoverabilityPrompt
 
+import { useTranslation } from "~/i18n";
 import { useCallback, useState } from "react";
 
 import {
@@ -36,13 +37,15 @@ import { shouldPromptForDiscoverability } from "~/lib/hosts/enrollment";
  * a modal that returns every launch is one people learn to click through.
  */
 export function HostDiscoverabilityPrompt() {
+  const { t } = useTranslation();
   const account = useAccount();
   const remote = useHosts({ enabled: account.me !== null });
   const [dismissed, setDismissed] = useState(false);
 
   const decision = shouldPromptForDiscoverability(remote.enrollment);
   const host = remote.enrollment?.host ?? null;
-  const organizationName = account.me?.organization.name ?? "your workspace";
+  const organizationName =
+    account.me?.organization.name ?? t("computer:remote_host_your_workspace");
 
   const answer = useCallback(
     async (discoverable: boolean) => {
@@ -52,20 +55,25 @@ export function HostDiscoverabilityPrompt() {
         setDismissed(true);
         toastManager.add({
           type: "success",
-          title: discoverable ? "Machine shared" : "Machine kept private",
+          title: discoverable
+            ? t("computer:remote_host_machine_shared")
+            : t("computer:remote_host_machine_private"),
           description: discoverable
-            ? `${host.name} is now available to everyone in ${organizationName}.`
-            : `${host.name} stays visible only to you.`,
+            ? t("computer:remote_host_machine_shared_detail", {
+                host: host.name,
+                workspace: organizationName,
+              })
+            : t("computer:remote_host_machine_private_detail", { host: host.name }),
         });
       } catch (cause) {
         toastManager.add({
           type: "error",
-          title: "Could not save that choice",
-          description: accountErrorMessage(cause, "Try again in a moment."),
+          title: t("computer:remote_host_save_choice_failed"),
+          description: accountErrorMessage(cause, t("chat:tryAgainInAMoment")),
         });
       }
     },
-    [host, organizationName, remote.setDiscoverable],
+    [host, organizationName, remote.setDiscoverable, t],
   );
 
   const open = decision.prompt && !dismissed && host !== null;
@@ -80,18 +88,22 @@ export function HostDiscoverabilityPrompt() {
     <Dialog open={open}>
       <DialogPopup showCloseButton={false} className="sm:max-w-[420px]">
         <DialogHeader>
-          <DialogTitle>Share this machine with {organizationName}?</DialogTitle>
+          <DialogTitle>
+            {t("computer:remote_host_share_machine", { workspace: organizationName })}
+          </DialogTitle>
           <DialogDescription>
-            Everyone in {organizationName} would be able to see {host.name} and open sessions on it
-            — which means running agents and code here. You can change this any time in Settings.
+            {t("computer:remote_host_share_machine_description", {
+              workspace: organizationName,
+              host: host.name,
+            })}
           </DialogDescription>
         </DialogHeader>
         <DialogFooter>
           <Button variant="outline" disabled={pending} onClick={() => void answer(false)}>
-            Keep private
+            {t("computer:remote_host_keep_private")}
           </Button>
           <Button disabled={pending} onClick={() => void answer(true)}>
-            {pending ? "Saving..." : "Share"}
+            {pending ? t("common:saving2") : t("settings:profile_share")}
           </Button>
         </DialogFooter>
       </DialogPopup>

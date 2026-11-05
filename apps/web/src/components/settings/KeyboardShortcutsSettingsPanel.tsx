@@ -134,15 +134,16 @@ function LocalKeyboardShortcutsResetButton() {
 }
 
 export function KeyboardShortcutsSettingsPanel() {
+  const { t } = useTranslation();
   const frame = readWorkspaceFrame();
   useEffect(() => {
     frame?.controller.navigate("/settings?section=shortcuts");
   }, [frame]);
   return frame ? (
     <SettingsEmptyState>
-      <p className="mb-3">App shortcuts are managed on this computer.</p>
+      <p className="mb-3">{t("settings:remote_workspace_shortcutsManagedLocally")}</p>
       <Button onClick={() => frame.controller.navigate("/settings?section=shortcuts")}>
-        Edit keybindings on this computer
+        {t("settings:remote_workspace_editLocalKeybindings")}
       </Button>
     </SettingsEmptyState>
   ) : (

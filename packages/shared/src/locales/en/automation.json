@@ -197,5 +197,11 @@
   "intentOnceAt": "Once at {{time}}",
   "intentDailyAt": "Daily at {{time}}",
   "intentWeekdaysAt": "Weekdays at {{time}}",
-  "intentWeeklyAt": "Weekly at {{time}}"
+  "intentWeeklyAt": "Weekly at {{time}}",
+  "remote_workspace_addProjectBeforeAutomation": "Add a project on this computer before creating an automation.",
+  "remote_workspace_connectBeforeAutomation": "Connect this computer before creating an automation.",
+  "remote_workspace_executionComputerReminder": "Run on {{computer}}. Keep Synara running on that computer.",
+  "remote_workspace_keepExecutionComputerAwake": "This computer must stay awake with Synara running. Other computers can be closed.",
+  "remote_workspace_selectComputerFailed": "Could not select computer",
+  "remote_workspace_updateForAutomations": "Update this computer to create automations here."
 }
