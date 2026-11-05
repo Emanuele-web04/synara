@@ -142,7 +142,6 @@ interface ChatTranscriptPaneProps {
   turnDiffSummaryByAssistantMessageId: Map<MessageId, TurnDiffSummary>;
   turnTimingByTurnId?: ComponentProps<typeof MessagesTimeline>["turnTimingByTurnId"];
   conversationOnly?: boolean;
-  bubbles?: ComponentProps<typeof MessagesTimeline>["bubbles"];
   /** Stored thread-level error, rendered in flow above the transcript. */
   threadError?: string | null;
   recoverableTurnId?: ComponentProps<typeof MessagesTimeline>["recoverableTurnId"];
@@ -245,7 +244,6 @@ export function ChatTranscriptPane({
   turnDiffSummaryByAssistantMessageId,
   turnTimingByTurnId,
   conversationOnly,
-  bubbles,
   threadError,
   recoverableTurnId,
   turnRecoveryDisabled,
@@ -444,7 +442,6 @@ export function ChatTranscriptPane({
               turnDiffSummaryByAssistantMessageId={turnDiffSummaryByAssistantMessageId}
               turnTimingByTurnId={turnTimingByTurnId}
               conversationOnly={conversationOnly === true}
-              bubbles={bubbles ?? null}
               onOpenTurnDiff={onOpenTurnDiff}
               onOpenThread={onOpenThread}
               {...(onOpenAutomation ? { onOpenAutomation } : {})}
