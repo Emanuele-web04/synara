@@ -20,6 +20,7 @@ const fixture = vi.hoisted(() => {
     rejected: false,
     codesCreated: 0,
     codeFailuresRemaining: 0,
+    listGate: null as Promise<void> | null,
     revoked: [] as string[],
     connected: false,
   };
@@ -114,6 +115,7 @@ const fixture = vi.hoisted(() => {
           state.approved = true;
           return { kind: "done" };
         case "list":
+          await state.listGate;
           return hostState();
         default:
           return { kind: "done" };
@@ -261,6 +263,7 @@ beforeEach(() => {
   fixture.state.rejected = false;
   fixture.state.codesCreated = 0;
   fixture.state.codeFailuresRemaining = 0;
+  fixture.state.listGate = null;
   fixture.state.revoked = [];
   fixture.state.connected = false;
   fixture.request.mockClear();
@@ -475,9 +478,20 @@ describe("Connections settings", () => {
     await expect.element(page.getByText("Ada's iPad")).not.toBeInTheDocument();
   });
 
-  it("holds the new code until a waiting request is approved, under StrictMode", async () => {
-    await renderPanel({ strictMode: true });
-    await page.getByRole("button", { name: "Connect a device", exact: true }).click();
+  it("waits for the host list and preserves a pending request before creating a code", async () => {
+    let releaseList!: () => void;
+    fixture.state.listGate = new Promise<void>((resolve) => {
+      releaseList = resolve;
+    });
+    try {
+      await renderPanel({ strictMode: true });
+      await page.getByRole("button", { name: "Connect a device", exact: true }).click();
+      await expect.element(page.getByText("Creating a code…")).toBeVisible();
+      expect(CREATE_CALLS()).toHaveLength(0);
+    } finally {
+      fixture.state.listGate = null;
+      releaseList();
+    }
     // Creating a code would withdraw the waiting request, so it comes first.
     await expect.element(page.getByRole("heading", { name: "Approve this device?" })).toBeVisible();
     await expect.element(page.getByText("Emanuele’s MacBook", { exact: true })).toBeVisible();
