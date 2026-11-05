@@ -433,7 +433,10 @@ function AccountStatsBody({
     <>
       <StatTileGrid
         tiles={[
-          { label: t("settings:profile_lifetimeTokens"), value: formatCompact(view.lifetimeTokens) },
+          {
+            label: t("settings:profile_lifetimeTokens"),
+            value: formatCompact(view.lifetimeTokens),
+          },
           { label: t("settings:profile_peakDay"), value: formatCompact(view.peakDayTokens) },
           { label: t("settings:profile_totalPrompts"), value: formatNumber(view.lifetimePrompts) },
           { label: t("settings:profile_currentStreak"), value: formatDays(view.currentStreakDays) },
@@ -472,9 +475,18 @@ function AccountStatsBody({
                   }`
                 : "—",
             },
-            { label: t("settings:profile_mostActiveHour"), value: formatPeakHourLabel(view.peakHour) },
-            { label: t("settings:profile_skillsExplored"), value: formatNumber(view.skillsExplored) },
-            { label: t("settings:profile_totalSkillsUsed"), value: formatNumber(view.totalSkillsUsed) },
+            {
+              label: t("settings:profile_mostActiveHour"),
+              value: formatPeakHourLabel(view.peakHour),
+            },
+            {
+              label: t("settings:profile_skillsExplored"),
+              value: formatNumber(view.skillsExplored),
+            },
+            {
+              label: t("settings:profile_totalSkillsUsed"),
+              value: formatNumber(view.totalSkillsUsed),
+            },
             { label: "Total turns", value: formatNumber(view.lifetimeTurns) },
           ]}
         />

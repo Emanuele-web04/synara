@@ -6544,8 +6544,8 @@ export default function Sidebar() {
                       aria-label={
                         collapsedProjectStatus
                           ? t("workspace:projectStatus", {
-                            value0: t(THREAD_STATUS_LABEL_KEYS[collapsedProjectStatus.label]),
-                          })
+                              value0: t(THREAD_STATUS_LABEL_KEYS[collapsedProjectStatus.label]),
+                            })
                           : undefined
                       }
                       title={

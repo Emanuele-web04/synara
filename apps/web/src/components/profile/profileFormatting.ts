@@ -17,7 +17,10 @@ export {
   toDisplayName,
 } from "@synara/profile-ui/formatting";
 
-export function formatCompact(value: number | null | undefined, locale = getFormatLocale()): string {
+export function formatCompact(
+  value: number | null | undefined,
+  locale = getFormatLocale(),
+): string {
   return compact(value, locale);
 }
 
