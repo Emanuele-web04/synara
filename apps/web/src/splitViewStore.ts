@@ -1,3 +1,4 @@
+import { executionStorage } from "./lib/hosts/executionStorage";
 // FILE: splitViewStore.ts
 // Purpose: Persists split chat surfaces as a recursive pane tree (depth-cap 2 = up to 2x2 grid).
 // Layer: UI state store
@@ -711,7 +712,7 @@ export const useSplitViewStore = create<SplitViewStore>()(
     {
       name: SPLIT_VIEW_STORAGE_KEY,
       version: SPLIT_VIEW_STORAGE_VERSION,
-      storage: createJSONStorage(() => localStorage),
+      storage: createJSONStorage(() => executionStorage),
       partialize: (state) => ({
         splitViewsById: state.splitViewsById,
         splitViewIdBySourceThreadId: state.splitViewIdBySourceThreadId,

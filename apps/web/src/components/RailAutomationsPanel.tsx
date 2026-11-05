@@ -1,3 +1,7 @@
+import { useWorkspaceComputers } from "./hosts/ComputerPicker";
+import { readAvailableWorkspaceNavigation } from "~/lib/hosts/workspaceSessions";
+import { workspaceRoute } from "~/lib/hosts/workspaceFrame";
+import { toastManager } from "./ui/toast";
 // FILE: RailAutomationsPanel.tsx
 // Purpose: The rail layout's Automations panel: title, "New automation", and every automation
 //          (active, then paused) as compact rows that open its detail page in the content area.
@@ -5,7 +9,7 @@
 // Depends on: the shared automation list pieces and create dialog (routes/-automations.list).
 
 import type { AutomationDefinition } from "@synara/contracts";
-import { useNavigate, useParams } from "@tanstack/react-router";
+import { useLocation, useNavigate, useParams } from "@tanstack/react-router";
 
 import { CentralIcon } from "~/lib/central-icons";
 import { AddPlusIcon } from "~/lib/icons";
@@ -19,7 +23,6 @@ import {
 } from "~/routes/-automations.list";
 import { automationListRowIcon, useAutomations } from "~/routes/-automations.shared";
 import { SIDEBAR_SECTION_LABEL_CLASS_NAME } from "~/sidebarRowStyles";
-import { useStore } from "~/store";
 import { SidebarPanelTitle } from "./SidebarPanelTitle";
 import { SidebarPrimaryAction } from "./SidebarPrimaryAction";
 import { SidebarGroup, SidebarMenu } from "./ui/sidebar";
@@ -39,7 +42,11 @@ export function RailAutomationsPanel({
     strict: false,
     select: (params) => (typeof params.automationId === "string" ? params.automationId : null),
   });
-  const projects = useStore((state) => state.projects);
+  const { sessions, navigate: navigateComputer, computers, localId } = useWorkspaceComputers();
+  const href = useLocation({ select: (location) => location.href });
+  const remoteAutomations = sessions.flatMap((session) =>
+    (session.summary?.automations ?? []).map((automation) => ({ session, automation })),
+  );
   const { data, isLoading, createMutation, runsByAutomationId } = useAutomations(
     (threadId) => void navigate({ to: "/$threadId", params: { threadId } }),
   );
@@ -55,7 +62,7 @@ export function RailAutomationsPanel({
       <AutomationListRow
         key={definition.id}
         density="panel"
-        active={openAutomationId === definition.id}
+        active={!href.startsWith("/remote?") && openAutomationId === definition.id}
         dimmed={!definition.enabled}
         onClick={() =>
           void navigate({
@@ -65,7 +72,12 @@ export function RailAutomationsPanel({
         }
         leading={<CentralIcon name={icon.name} className={icon.className} />}
         title={definition.name}
-        detail={automationRowSubtitle(definition, latestRun, now, formatLocale)}
+        detail={[
+          sessions.length ? computers.find((computer) => computer.id === localId)?.detail : null,
+          automationRowSubtitle(definition, latestRun, now, formatLocale),
+        ]
+          .filter(Boolean)
+          .join(" · ")}
         meta={
           hasUnreadResult(latestRun) ? (
             <span
@@ -78,15 +90,59 @@ export function RailAutomationsPanel({
     );
   };
 
-  const renderSection = (label: string, definitions: readonly AutomationDefinition[]) =>
-    definitions.length === 0 ? null : (
+  const renderSection = (
+    label: string,
+    definitions: readonly AutomationDefinition[],
+    enabled: boolean,
+  ) => {
+    const remoteRows = remoteAutomations.filter(({ automation }) => automation.enabled === enabled);
+    return definitions.length === 0 && remoteRows.length === 0 ? null : (
       <section className="flex flex-col">
         <div className={cn("flex h-7 items-center px-2", SIDEBAR_SECTION_LABEL_CLASS_NAME)}>
           {label}
         </div>
-        <div className="flex flex-col gap-0.5">{definitions.map(renderRow)}</div>
+        <div className="flex flex-col gap-0.5">
+          {definitions.map(renderRow)}
+          {remoteRows.map(({ session, automation }) => {
+            const path = workspaceRoute(
+              session.host.executionScope.environmentId,
+              `/automations/${encodeURIComponent(automation.id)}`,
+            );
+            const available = Boolean(readAvailableWorkspaceNavigation(session));
+            return (
+              <AutomationListRow
+                key={`${session.host.executionScope.environmentId}:${automation.id}`}
+                density="panel"
+                active={href === path}
+                dimmed={!automation.enabled || !available}
+                title={automation.name}
+                leading={<CentralIcon name="globe" className="size-4 text-muted-foreground" />}
+                detail={`${session.host.hostName} · ${available ? automation.detail : "Disconnected"}`}
+                meta={
+                  automation.unread ? (
+                    <span
+                      aria-label={t("automation:list_newResult")}
+                      className="block size-1.5 rounded-full bg-[var(--color-text-accent)]"
+                    />
+                  ) : undefined
+                }
+                onClick={() => {
+                  if (!readAvailableWorkspaceNavigation(session)) {
+                    toastManager.add({
+                      type: "error",
+                      title: "Reconnect this computer to manage its automations.",
+                    });
+                    return;
+                  }
+                  navigateComputer(path);
+                }}
+              />
+            );
+          })}
+        </div>
       </section>
     );
+  };
 
   return (
     <>
@@ -96,7 +152,6 @@ export function RailAutomationsPanel({
           <SidebarPrimaryAction
             icon={AddPlusIcon}
             label={t("automation:list_newAutomation")}
-            disabled={projects.length === 0}
             onClick={() => onCreateOpenChange(true)}
           />
         </SidebarMenu>
@@ -106,14 +161,14 @@ export function RailAutomationsPanel({
           <div className="px-2 pt-4 text-center text-ui text-muted-foreground/58">
             {t("automation:list_loading")}
           </div>
-        ) : data.definitions.length === 0 ? (
+        ) : data.definitions.length === 0 && remoteAutomations.length === 0 ? (
           <div className="px-2 pt-4 text-center text-ui text-muted-foreground/58">
             {t("automation:list_emptyTitle")}
           </div>
         ) : (
           <>
-            {renderSection("Active", active)}
-            {renderSection("Paused", paused)}
+            {renderSection("Active", active, true)}
+            {renderSection("Paused", paused, false)}
           </>
         )}
       </SidebarGroup>

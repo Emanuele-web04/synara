@@ -7,7 +7,8 @@ import { useEffect, useState } from "react";
 
 import type { DesktopCustomTitleBarState } from "@synara/contracts";
 
-import { isElectron } from "~/env";
+import { isDesktopPresentation } from "~/lib/hosts/workspacePresentation";
+import { readWorkspaceFrame } from "~/lib/hosts/workspaceFrame";
 import { getNavigatorPlatform, isLinuxPlatform, isWindowsPlatform } from "~/lib/utils";
 
 const DEFAULT_STATE: DesktopCustomTitleBarState = {
@@ -23,7 +24,7 @@ const DEFAULT_STATE: DesktopCustomTitleBarState = {
  * buttons appear without a one-frame flash on the common path.
  */
 export function initialDesktopCustomTitleBarActive(): boolean {
-  if (!isElectron) return false;
+  if (!isDesktopPresentation) return false;
   const platform = getNavigatorPlatform();
   return isWindowsPlatform(platform) || isLinuxPlatform(platform);
 }
@@ -39,11 +40,14 @@ export function useDesktopCustomTitleBarState(): DesktopCustomTitleBarState {
   });
 
   useEffect(() => {
-    const bridge = window.desktopBridge?.customTitleBar;
-    if (!bridge) return;
+    const presentation = readWorkspaceFrame()?.controller.presentation;
+    const nextState = presentation
+      ? presentation.readCustomTitleBarState()
+      : window.desktopBridge?.customTitleBar?.getState();
+    if (!nextState) return;
     let cancelled = false;
 
-    void bridge.getState().then((next) => {
+    void nextState.then((next) => {
       if (!cancelled) setState(next);
     });
 

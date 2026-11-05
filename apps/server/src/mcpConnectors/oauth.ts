@@ -46,6 +46,7 @@ function requestBodyText(body: RequestInit["body"]): string | undefined {
 export async function connectorOAuthFetch(
   input: string | URL,
   init?: RequestInit,
+  loopbackOrigin?: string,
 ): Promise<Response> {
   const url = new URL(input);
   const method = (init?.method ?? "GET").toUpperCase();
@@ -62,6 +63,7 @@ export async function connectorOAuthFetch(
       maxConcurrent: 4,
       maxQueued: 32,
       requirePublicAddress: true,
+      ...(loopbackOrigin === url.origin ? { allowLoopbackHttp: "ipv4-subnet" as const } : {}),
     },
     url,
     method: method as OutboundMethod,

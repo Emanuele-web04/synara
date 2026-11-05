@@ -1945,4 +1945,66 @@ layer("AutomationRepository", (it) => {
       assert.strictEqual(cancelled.finishedAt, "2026-06-16T10:01:00.000Z");
     }),
   );
+
+  it.effect("finds active work before a recovery limit even after its definition is archived", () =>
+    Effect.gen(function* () {
+      const repository = yield* AutomationRepository;
+      yield* runMigrations();
+      const automationId = AutomationId.makeUnsafe("automation-desktop-update-admission");
+      const projectId = ProjectId.makeUnsafe("project-desktop-update-admission");
+      yield* repository.createDefinition({
+        id: automationId,
+        input: createInputForProject(projectId),
+        now: "1900-01-01T00:00:00.000Z",
+      });
+      const runs = [];
+      for (const [suffix, at] of [
+        ["older-terminal", "1900-01-01T00:00:00.000Z"],
+        ["active", "1901-01-01T00:00:00.000Z"],
+        ["newer-terminal", "1902-01-01T00:00:00.000Z"],
+      ] as const) {
+        const run = yield* repository.createRun({
+          id: AutomationRunId.makeUnsafe(`run-desktop-update-${suffix}`),
+          automationId,
+          projectId,
+          threadId: null,
+          trigger: { type: "manual" },
+          scheduledFor: at,
+          permissionSnapshot,
+          now: at,
+        });
+        runs.push(run);
+        if (suffix !== "active")
+          yield* repository.markRunSucceeded({
+            id: run.id,
+            turnId: null,
+            result: null,
+            finishedAt: at,
+            accountedAt: at,
+          });
+      }
+      const activeId = runs[1]!.id;
+      yield* repository.markRunStarted({
+        id: activeId,
+        threadId: ThreadId.makeUnsafe("thread-desktop-update-active"),
+        messageId: MessageId.makeUnsafe("message-desktop-update-active"),
+        threadCreateCommandId: null,
+        turnStartCommandId: CommandId.makeUnsafe("command-desktop-update-active"),
+        startedAt: "1901-01-01T00:00:01.000Z",
+      });
+      assert.deepStrictEqual(
+        (yield* repository.listRecoverableRuns({ limit: 1 })).map((run) => run.id),
+        [activeId],
+      );
+      yield* repository.archiveDefinition({
+        id: automationId,
+        archivedAt: "1903-01-01T00:00:00.000Z",
+      });
+      assert.isEmpty((yield* repository.list({ projectId })).runs);
+      assert.deepStrictEqual(
+        (yield* repository.listRecoverableRuns({ limit: 1 })).map((run) => run.id),
+        [activeId],
+      );
+    }),
+  );
 });

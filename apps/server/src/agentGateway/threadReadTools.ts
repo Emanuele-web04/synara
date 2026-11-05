@@ -1,6 +1,7 @@
 import {
   SYNARA_GATEWAY_MAX_THREADS_PER_OPERATION,
   ThreadId,
+  ProjectId,
   TurnId,
   type OrchestrationThreadShell,
   type ProviderKind,
@@ -119,7 +120,16 @@ export function makeThreadReadTools(input: ThreadReadToolsInput): ReadonlyArray<
     definition: {
       name: "synara_capabilities",
       description: `List canonical Synara provider/model targets, exact provider option keys, examples, and gateway limits used to validate thread creation. ${AGENT_GATEWAY_TARGET_OPTIONS_DESCRIPTION}`,
-      inputSchema: { type: "object", properties: {}, additionalProperties: false },
+      inputSchema: {
+        type: "object",
+        properties: {
+          projectId: {
+            type: "string",
+            description: "Project for provider discovery; required on another computer.",
+          },
+        },
+        additionalProperties: false,
+      },
       annotations: {
         title: "Synara capabilities",
         readOnlyHint: true,
@@ -128,15 +138,18 @@ export function makeThreadReadTools(input: ThreadReadToolsInput): ReadonlyArray<
         openWorldHint: false,
       },
     },
-    handler: (_args, context) =>
+    handler: (args, context) =>
       Effect.gen(function* () {
-        const caller = yield* requireThreadShell(context.callerThreadId);
-        const project = yield* snapshotQuery.getProjectShellById(caller.projectId).pipe(
+        const projectArg = readStringArg(args, "projectId", { required: !!context.remoteCaller });
+        const projectId = projectArg
+          ? ProjectId.makeUnsafe(projectArg)
+          : (yield* requireThreadShell(context.callerThreadId)).projectId;
+        const project = yield* snapshotQuery.getProjectShellById(projectId).pipe(
           Effect.mapError((error) => new ToolInputError(errorText(error))),
           Effect.flatMap(
             Option.match({
               onNone: () =>
-                Effect.fail(new ToolInputError(`Project "${caller.projectId}" was not found.`)),
+                Effect.fail(new ToolInputError(`Project "${projectId}" was not found.`)),
               onSome: Effect.succeed,
             }),
           ),

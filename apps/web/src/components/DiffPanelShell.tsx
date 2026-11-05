@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 
-import { isElectron } from "~/env";
+import { isDesktopPresentation } from "~/lib/hosts/workspacePresentation";
 import { cn } from "~/lib/utils";
 
 import {
@@ -13,7 +13,7 @@ import { Skeleton } from "./ui/skeleton";
 export type DiffPanelMode = "inline" | "sheet" | "sidebar" | "floating";
 
 function getDiffPanelHeaderRowClassName(mode: DiffPanelMode) {
-  const shouldUseDragRegion = isElectron && mode !== "sheet" && mode !== "floating";
+  const shouldUseDragRegion = isDesktopPresentation && mode !== "sheet" && mode !== "floating";
   // Match RightDock tab strip inset (`px-1.5`) so picker triggers line up under dock tabs.
   return cn(
     "flex w-full min-w-0 items-center gap-1.5 px-1.5",
@@ -27,7 +27,8 @@ export function DiffPanelShell(props: {
   header?: ReactNode;
   children: ReactNode;
 }) {
-  const shouldUseDragRegion = isElectron && props.mode !== "sheet" && props.mode !== "floating";
+  const shouldUseDragRegion =
+    isDesktopPresentation && props.mode !== "sheet" && props.mode !== "floating";
   const hasHeader = props.header !== null && props.header !== undefined;
 
   return (

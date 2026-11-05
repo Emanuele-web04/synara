@@ -26,6 +26,7 @@ describe("thread detail events", () => {
       "thread.claude-cache-set",
       "thread.claude-cache-response-requested",
       "thread.session-stop-requested",
+      "thread.turn-interrupt-requested",
     ] as const) {
       expect(isThreadDetailEventFor({ ...detailEvent, type } as OrchestrationEvent, threadId)).toBe(
         true,

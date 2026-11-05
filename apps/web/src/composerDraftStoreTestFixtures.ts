@@ -166,6 +166,7 @@ export function resetComposerDraftStore() {
     projectDraftThreadIdByProjectId: {},
     stickyModelSelectionByProvider: {},
     stickyActiveProvider: null,
+    stickyRuntimeMode: null,
   });
 }
 

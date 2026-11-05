@@ -1,3 +1,4 @@
+import { executionStorage } from "./lib/hosts/executionStorage";
 // FILE: recentViewsStore.ts
 // Purpose: Persist the Ctrl+Tab recent primary views MRU used by the chat shell.
 // Layer: UI state store
@@ -104,7 +105,7 @@ export const useRecentViewsStore = create<RecentViewsStoreState>()(
     {
       name: RECENT_VIEWS_STORAGE_KEY,
       storage: createJSONStorage(() =>
-        typeof localStorage === "undefined" ? createMemoryStorage() : localStorage,
+        typeof localStorage === "undefined" ? createMemoryStorage() : executionStorage,
       ),
       partialize: (state) => ({
         recentViews: normalizeRecentViews(state.recentViews),

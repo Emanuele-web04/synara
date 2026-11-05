@@ -30,6 +30,8 @@ const activeRequests = new Map();
 const activeControllers = new Set();
 const inFlight = new Set();
 let outputQueue = Promise.resolve();
+let mcpSessionId;
+let mcpProtocolVersion;
 
 function writeMessage(message) {
   outputQueue = outputQueue.then(() => {
@@ -163,6 +165,8 @@ async function forwardMessage(message, controller) {
         "Content-Type": "application/json",
         Accept: "application/json, text/event-stream",
         Authorization: "Bearer " + resolvedToken,
+        ...(mcpSessionId ? { "Mcp-Session-Id": mcpSessionId } : {}),
+        ...(mcpProtocolVersion ? { "MCP-Protocol-Version": mcpProtocolVersion } : {}),
       },
       body: JSON.stringify(message),
       signal: controller.signal,
@@ -172,6 +176,13 @@ async function forwardMessage(message, controller) {
     }
     const payload = await response.json();
     const messages = Array.isArray(payload) ? payload : [payload];
+    if (message.method === "initialize") {
+      const initialized = messages.find((value) =>
+        isRecord(value) && value.id === message.id && isRecord(value.result));
+      mcpSessionId = initialized ? response.headers.get("mcp-session-id") || undefined : undefined;
+      mcpProtocolVersion = typeof initialized?.result.protocolVersion === "string"
+        ? initialized.result.protocolVersion : undefined;
+    }
     return messages.filter((value) => value && typeof value === "object");
   } catch (error) {
     if (controller.signal.aborted || !hasId) return [];
@@ -271,6 +282,17 @@ process.stdin.on("end", async () => {
   ]);
   for (const controller of activeControllers) controller.abort();
   await Promise.allSettled(Array.from(inFlight));
+  if (mcpSessionId && token) {
+    await fetch(url, {
+      method: "DELETE",
+      headers: {
+        Authorization: "Bearer " + token,
+        "Mcp-Session-Id": mcpSessionId,
+        ...(mcpProtocolVersion ? { "MCP-Protocol-Version": mcpProtocolVersion } : {}),
+      },
+      signal: AbortSignal.timeout(5000),
+    }).catch(() => undefined);
+  }
   await outputQueue.catch(() => undefined);
   process.exit(0);
 });

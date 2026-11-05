@@ -3,7 +3,7 @@
 // Layer: Web data-fetching unit tests
 
 import { type ServerConfig, type ServerProviderStatus } from "@synara/contracts";
-import { QueryClient } from "@tanstack/react-query";
+import { QueryClient, QueryObserver } from "@tanstack/react-query";
 import { describe, expect, it, vi } from "vitest";
 
 import {
@@ -14,12 +14,19 @@ import {
   refreshServerConfigAfterTransportOpen,
   serverProviderUsageSnapshotQueryOptions,
   serverQueryKeys,
+  serverRecapQueryOptions,
   sidebarLocalServersQueryOptions,
 } from "./serverReactQuery";
 
-const nativeApiMocks = vi.hoisted(() => ({ getConfig: vi.fn<() => Promise<ServerConfig>>() }));
+const nativeApiMocks = vi.hoisted(() => ({
+  getConfig: vi.fn<() => Promise<ServerConfig>>(),
+  getRecap: vi.fn(),
+}));
 vi.mock("~/nativeApi", () => ({
-  ensureNativeApi: () => ({ server: { getConfig: nativeApiMocks.getConfig } }),
+  ensureNativeApi: () => ({
+    server: { getConfig: nativeApiMocks.getConfig },
+    stats: { getRecap: nativeApiMocks.getRecap },
+  }),
 }));
 
 const READY_CODEX_STATUS = {
@@ -569,5 +576,84 @@ describe("serverProviderUsageSnapshotQueryOptions", () => {
     });
 
     expect(options.enabled).toBe(false);
+  });
+});
+
+describe("serverRecapQueryOptions", () => {
+  it.each([
+    ["unsupported host", { code: "FEATURE_UNAVAILABLE" }],
+    ["permanent host verdict", { code: "INVALID_INPUT", retryable: false }],
+    [
+      "exhausted transport capacity",
+      { code: "RPC_EXPENSIVE_READ_CAPACITY_EXCEEDED", retryable: true },
+    ],
+  ])("does not repeat a recap read after %s", async (_label, failure) => {
+    vi.useFakeTimers();
+    const queryClient = new QueryClient();
+    nativeApiMocks.getRecap.mockReset();
+    nativeApiMocks.getRecap.mockRejectedValue(failure);
+    const observer = new QueryObserver(
+      queryClient,
+      serverRecapQueryOptions({
+        from: "2026-10-18T02:00:00.000Z",
+        to: "2026-10-19T02:00:00.000Z",
+        slotBoundaries: [],
+      }),
+    );
+    const unsubscribe = observer.subscribe(() => undefined);
+    try {
+      await vi.advanceTimersByTimeAsync(8_000);
+      expect(nativeApiMocks.getRecap).toHaveBeenCalledTimes(1);
+      expect(observer.getCurrentResult().error).toBe(failure);
+    } finally {
+      unsubscribe();
+      observer.destroy();
+      queryClient.clear();
+      vi.useRealTimers();
+    }
+  });
+
+  it("recovers an observed recap after one temporary read failure without a manual retry", async () => {
+    vi.useFakeTimers();
+    const queryClient = new QueryClient();
+    const input = {
+      from: "2026-10-18T02:00:00.000Z",
+      to: "2026-10-19T02:00:00.000Z",
+      slotBoundaries: [],
+    };
+    const totals = {
+      from: input.from,
+      to: input.to,
+      prompts: 6,
+      chats: 4,
+      turns: 6,
+      failedTurns: 0,
+      agentWorkMs: 1_365_000,
+      tokens: { user: 0, automation: 0, agent: 0 },
+    };
+    const recap = {
+      generatedAt: "2026-10-18T08:39:00.000Z",
+      totals,
+      slots: [totals],
+      projects: [],
+      models: [],
+      unavailableProviders: [],
+    };
+    nativeApiMocks.getRecap.mockReset();
+    nativeApiMocks.getRecap.mockRejectedValueOnce(new Error("Temporary read failure"));
+    nativeApiMocks.getRecap.mockResolvedValue(recap);
+    const observer = new QueryObserver(queryClient, serverRecapQueryOptions(input));
+    const unsubscribe = observer.subscribe(() => undefined);
+    try {
+      await vi.advanceTimersByTimeAsync(8_000);
+      expect(nativeApiMocks.getRecap).toHaveBeenCalledTimes(2);
+      expect(observer.getCurrentResult().data).toEqual(recap);
+      expect(observer.getCurrentResult().isSuccess).toBe(true);
+    } finally {
+      unsubscribe();
+      observer.destroy();
+      queryClient.clear();
+      vi.useRealTimers();
+    }
   });
 });

@@ -87,7 +87,7 @@ afterEach(() => {
 
 const makeChannel = (
   root: string,
-  flavor: "production" | "beta" | "canary" = "production",
+  flavor: ConstructorParameters<typeof DesktopBetaChannel>[0]["flavor"] = "production",
   extra: Partial<ConstructorParameters<typeof DesktopBetaChannel>[0]> = {},
 ) =>
   new DesktopBetaChannel({
@@ -99,12 +99,47 @@ const makeChannel = (
   });
 
 describe("DesktopBetaChannel", () => {
-  it("reports unsupported actions on non-production flavors", async () => {
+  it.each(["beta", "canary", "cua", "remote"] as const)(
+    "refuses Beta launch, install, and import from %s",
+    async (flavor) => {
+      const root = makeRoot();
+      const channel = makeChannel(root, flavor);
+      expect((await channel.launch()).error).toBe("not-supported");
+      expect((await channel.install()).error).toBe("not-supported");
+      expect((await channel.importAndLaunch(root)).error).toBe("not-supported");
+      expect(channel.getState().flavor).toBe(flavor);
+    },
+  );
+
+  it("keeps Remote's Beta handoff inert even with a running Beta install and import history", async () => {
     const root = makeRoot();
-    const beta = makeChannel(root, "beta");
-    expect((await beta.launch()).ok).toBe(false);
-    expect((await beta.importAndLaunch(root)).error).toBe("not-supported");
-    expect(beta.getState().flavor).toBe("beta");
+    const betaHome = join(root, ".synara-beta");
+    mkdirSync(join(root, "Applications", "Synara Beta.app"), { recursive: true });
+    mkdirSync(join(betaHome, "userdata"), { recursive: true });
+    writeFileSync(
+      join(betaHome, "userdata", "server-runtime.json"),
+      JSON.stringify({ version: 1, pid: process.pid, port: 3773, origin: "http://127.0.0.1" }),
+    );
+    writeFileSync(
+      join(betaHome, BETA_IMPORT_RESULT_FILE_NAME),
+      JSON.stringify({ version: 1, completedAt: "2026-10-15T00:00:00.000Z", ok: true }),
+    );
+    expect(detectBetaInstall("darwin", root, {}).installed).toBe(true);
+    expect(isBetaServerRunning(betaHome)).toBe(true);
+    const channel = makeChannel(root, "remote", { platform: "darwin", canTrashOwnBundle: true });
+    expect(channel.getState()).toMatchObject({
+      supported: false,
+      installed: false,
+      version: null,
+      canInstall: false,
+      running: false,
+      lastImportAt: null,
+      lastImportError: null,
+      stableInstalled: false,
+      canMoveBetaToTrash: false,
+    });
+    expect((await channel.importAndLaunch(root)).error).toBe("not-supported");
+    expect(existsSync(join(betaHome, BETA_IMPORT_REQUEST_FILE_NAME))).toBe(false);
   });
 
   it("reports not-installed on a clean machine", () => {
@@ -439,10 +474,10 @@ describe("switching back to stable", () => {
     expect((await channel.leave()).error).toBe("not-installed");
   });
 
-  it("leave is refused outside beta", async () => {
+  it.each(["production", "remote"] as const)("leave is refused from %s", async (flavor) => {
     const root = makeRoot();
     const executable = fakeStableExecutable(root);
-    const channel = makeChannel(root, "production", {
+    const channel = makeChannel(root, flavor, {
       env: { [SYNARA_STABLE_EXECUTABLE_ENV]: executable },
     });
     expect((await channel.leave()).error).toBe("not-supported");

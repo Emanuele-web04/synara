@@ -84,8 +84,12 @@ export function assertPublicIpAddress(address: string): void {
   }
 }
 
-export function assertExactLoopbackIpAddress(address: string): void {
-  if (address !== "127.0.0.1" && address.toLowerCase() !== "::1") {
+export function assertExactLoopbackIpAddress(address: string, allowIpv4Subnet = false): void {
+  if (
+    address !== "127.0.0.1" &&
+    address.toLowerCase() !== "::1" &&
+    !(allowIpv4Subnet && Net.isIP(address) === 4 && address.startsWith("127."))
+  ) {
     throw new OutboundPolicyError(
       "private-address",
       "Outbound loopback destination resolved to a non-loopback address.",
@@ -103,13 +107,18 @@ export function isBenchmarkIpAddress(address: string): boolean {
   return Net.isIP(address) === 4 && benchmarkAddresses.check(address, "ipv4");
 }
 
-function isExactLoopbackHostname(hostname: string): boolean {
-  return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "[::1]";
+function isExactLoopbackHostname(hostname: string, allowIpv4Subnet = false): boolean {
+  return (
+    hostname === "localhost" ||
+    hostname === "127.0.0.1" ||
+    hostname === "[::1]" ||
+    (allowIpv4Subnet && Net.isIP(hostname) === 4 && hostname.startsWith("127."))
+  );
 }
 
 export function normalizeOutboundOrigin(
   value: string | URL,
-  options: { readonly allowLoopbackHttp?: boolean } = {},
+  options: { readonly allowLoopbackHttp?: boolean | "ipv4-subnet" } = {},
 ): string {
   let url: URL;
   try {
@@ -119,9 +128,9 @@ export function normalizeOutboundOrigin(
   }
   const allowedProtocol =
     url.protocol === "https:" ||
-    (options.allowLoopbackHttp === true &&
+    (Boolean(options.allowLoopbackHttp) &&
       url.protocol === "http:" &&
-      isExactLoopbackHostname(url.hostname));
+      isExactLoopbackHostname(url.hostname, options.allowLoopbackHttp === "ipv4-subnet"));
   if (!allowedProtocol || url.username || url.password) {
     throw new OutboundPolicyError(
       "invalid-url",
@@ -134,7 +143,7 @@ export function normalizeOutboundOrigin(
 export function assertOutboundUrlAllowed(input: {
   readonly url: string | URL;
   readonly allowedOrigins: ReadonlySet<string> | ReadonlyArray<string>;
-  readonly allowLoopbackHttp?: boolean;
+  readonly allowLoopbackHttp?: boolean | "ipv4-subnet";
 }): URL {
   let url: URL;
   try {
@@ -142,7 +151,7 @@ export function assertOutboundUrlAllowed(input: {
   } catch {
     throw new OutboundPolicyError("invalid-url", "Outbound destination is not a valid URL.");
   }
-  const options = input.allowLoopbackHttp === true ? { allowLoopbackHttp: true } : {};
+  const options = { allowLoopbackHttp: input.allowLoopbackHttp ?? false };
   const origin = normalizeOutboundOrigin(url, options);
   const allowedOrigins = new Set(
     Array.from(input.allowedOrigins, (allowedOrigin) =>

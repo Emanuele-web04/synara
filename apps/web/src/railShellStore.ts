@@ -1,7 +1,8 @@
+import { executionSessionStorage } from "./lib/hosts/executionStorage";
 // FILE: railShellStore.ts
 // Purpose: Per-window state for the rail layout: the active rail item, which panel the
 //          panel column shows (Home or Spaces), and the Spaces drill-in project.
-// Layer: Web UI store (sessionStorage, modeled on spacesUiStore)
+// Layer: Web UI store (executionSessionStorage, modeled on spacesUiStore)
 
 import type { ProjectId } from "@synara/contracts";
 import { create } from "zustand";
@@ -38,7 +39,7 @@ function readPersisted(): PersistedRailShellState {
   }
   try {
     const parsed = JSON.parse(
-      window.sessionStorage.getItem(STORAGE_KEY) ?? "null",
+      executionSessionStorage.getItem(STORAGE_KEY) ?? "null",
     ) as Partial<PersistedRailShellState> | null;
     const panelView = isRailPanelItemId(parsed?.panelView) ? parsed.panelView : "home";
     return {
@@ -57,7 +58,7 @@ function readPersisted(): PersistedRailShellState {
 function persist(state: PersistedRailShellState): void {
   if (typeof window === "undefined") return;
   try {
-    window.sessionStorage.setItem(
+    executionSessionStorage.setItem(
       STORAGE_KEY,
       JSON.stringify({
         activeItem: state.activeItem,

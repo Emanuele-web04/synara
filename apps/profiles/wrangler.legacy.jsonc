@@ -1,0 +1,13 @@
+// Compatibility endpoint in the previous account. Normal deployments use the destination config.
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "synara-profiles-trial",
+  "account_id": "9f9caeb268766deda99bc580c775d50c",
+  "main": "src/legacy-redirect.ts",
+  "compatibility_date": "2026-09-28",
+  "workers_dev": true,
+  "preview_urls": false,
+  "vars": {
+    "PROFILES_PUBLIC_ORIGIN": "https://synara-profiles-trial.synara-orgs.workers.dev",
+  },
+}

@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -101,40 +101,59 @@ describe("packaged desktop startup verification", () => {
     ).toThrow("--timeout-ms must be an integer between 5000 and 180000");
   });
 
-  it("isolates user state and removes inherited runtime authority", () => {
-    const root = mkdtempSync(join(tmpdir(), "synara-packaged-smoke-env-test-"));
-    temporaryRoots.push(root);
+  it.each(["synara-beta", "synara-remote"])(
+    "isolates %s user state and removes inherited runtime authority",
+    (executableName) => {
+      const root = mkdtempSync(join(tmpdir(), "synara-packaged-smoke-env-test-"));
+      temporaryRoots.push(root);
 
-    const env = createPackagedDesktopSmokeEnvironment(
-      root,
-      { platform: "linux", version: "1.2.3", executableName: "synara-beta" },
-      {
-        PATH: process.env.PATH,
-        SYNARA_AUTH_TOKEN: "must-not-leak",
-        ELECTRON_RUN_AS_NODE: "1",
-      },
-    );
+      const env = createPackagedDesktopSmokeEnvironment(
+        root,
+        { platform: "mac", version: "1.2.3", executableName },
+        {
+          PATH: process.env.PATH,
+          SYNARA_AUTH_TOKEN: "must-not-leak",
+          SYNARA_ACCOUNT_URL: "https://operator-only.example",
+          ELECTRON_RUN_AS_NODE: "1",
+        },
+      );
 
-    expect(env.SYNARA_AUTH_TOKEN).toBeUndefined();
-    expect(env.ELECTRON_RUN_AS_NODE).toBeUndefined();
-    for (const name of [
-      "HOME",
-      "USERPROFILE",
-      "APPDATA",
-      "LOCALAPPDATA",
-      "XDG_CONFIG_HOME",
-      "XDG_CACHE_HOME",
-      "XDG_DATA_HOME",
-      "SYNARA_HOME",
-      "SYNARA_BETA_HOME",
-    ] as const) {
-      expect(env[name]?.startsWith(root)).toBe(true);
-      expect(existsSync(env[name]!)).toBe(true);
-    }
-    expect(env.SYNARA_BETA_HOME).not.toBe(env.SYNARA_HOME);
-  });
+      expect(env.SYNARA_AUTH_TOKEN).toBeUndefined();
+      expect(env.SYNARA_ACCOUNT_URL).toBeUndefined();
+      expect(env.ELECTRON_RUN_AS_NODE).toBeUndefined();
+      for (const name of [
+        "HOME",
+        "USERPROFILE",
+        "APPDATA",
+        "LOCALAPPDATA",
+        "XDG_CONFIG_HOME",
+        "XDG_CACHE_HOME",
+        "XDG_DATA_HOME",
+        "SYNARA_HOME",
+        "SYNARA_BETA_HOME",
+        "SYNARA_REMOTE_HOME",
+      ] as const) {
+        expect(env[name]?.startsWith(root)).toBe(true);
+        expect(existsSync(env[name]!)).toBe(true);
+      }
+      expect(env.SYNARA_BETA_HOME).not.toBe(env.SYNARA_HOME);
+      expect(env.SYNARA_REMOTE_HOME).not.toBe(env.SYNARA_HOME);
+      expect(env.SYNARA_REMOTE_HOME).not.toBe(env.SYNARA_BETA_HOME);
+      expect(
+        existsSync(
+          join(
+            env.HOME!,
+            "Library",
+            "Application Support",
+            executableName,
+            "last-launch-version.json",
+          ),
+        ),
+      ).toBe(true);
+    },
+  );
 
-  it("rejects a missing packaged peer even when the development tree provides it", () => {
+  it("requires packaged peers and the pinned connector despite development dependencies", async () => {
     const root = mkdtempSync(join(tmpdir(), "synara-runtime-deps-test-"));
     temporaryRoots.push(root);
     const app = join(root, "app.asar");
@@ -163,27 +182,40 @@ describe("packaged desktop startup verification", () => {
       NODE_PATH: developmentModules,
       NODE_OPTIONS: "--invalid-development-node-option",
     };
-    expect(() => verifyPackagedRuntimeDependencies(runtime, env, 5_000)).toThrow(
-      /Cannot find package 'zod'/,
-    );
+    await expect(async () =>
+      verifyPackagedRuntimeDependencies(runtime, env, 5_000),
+    ).rejects.toThrow(/Cannot find package 'zod'/);
 
     writeZod(join(app, "node_modules"));
-    expect(() => verifyPackagedRuntimeDependencies(runtime, env, 5_000)).not.toThrow();
+    await expect(async () =>
+      verifyPackagedRuntimeDependencies(runtime, env, 5_000),
+    ).rejects.toThrow(/Packaged Cloudflare connector is missing/);
+
+    // A real executable with the wrong identity must fail before the local listener starts.
+    const connectorDirectory = join(root, "cloudflared");
+    mkdirSync(connectorDirectory);
+    copyFileSync(
+      process.execPath,
+      join(connectorDirectory, process.platform === "win32" ? "cloudflared.exe" : "cloudflared"),
+    );
+    await expect(async () =>
+      verifyPackagedRuntimeDependencies(runtime, env, 5_000),
+    ).rejects.toThrow(/Packaged Cloudflare connector version mismatch/);
   });
 
-  it("bounds a runtime import that never finishes", () => {
+  it("bounds a runtime import that never finishes", async () => {
     const root = mkdtempSync(join(tmpdir(), "synara-runtime-timeout-test-"));
     temporaryRoots.push(root);
     const dist = join(root, "app.asar/apps/server/dist");
     mkdirSync(dist, { recursive: true });
     writeFileSync(join(dist, "runtimeDependencySmoke.mjs"), "setInterval(() => {}, 1000);");
 
-    expect(() =>
+    await expect(async () =>
       verifyPackagedRuntimeDependencies(
         { executable: process.execPath, resourcesDirectory: root },
         process.env,
         200,
       ),
-    ).toThrow(/ETIMEDOUT/);
+    ).rejects.toThrow(/ETIMEDOUT/);
   });
 });

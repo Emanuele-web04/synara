@@ -18,6 +18,7 @@ import {
 import {
   type ComposerThreadDraftState,
   type DraftThreadState,
+  resolveNewThreadRuntimeMode,
   resolvePreferredComposerModelSelection,
   useComposerDraftStore,
 } from "../composerDraftStore";
@@ -409,6 +410,7 @@ export function useHandleNewThread() {
         entryPoint,
         options,
         defaultEnvMode,
+        defaultRuntimeMode: resolveNewThreadRuntimeMode(),
       });
       const containerDefaults = await resolveGroupContainerThreadDefaults({
         projectId,

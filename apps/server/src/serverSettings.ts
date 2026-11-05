@@ -26,7 +26,10 @@ import {
   type ResolvedProviderInstance,
   resolveModelSelectionInstanceId,
 } from "@synara/shared/providerInstances";
-import { applyServerSettingsPatch } from "@synara/shared/serverSettings";
+import {
+  applyServerSettingsPatch,
+  settingsChangedBeyondNewThreadDefaults,
+} from "@synara/shared/serverSettings";
 import {
   Cause,
   Deferred,
@@ -121,6 +124,24 @@ function migrateSettings(settings: ServerSettings, migrationVersion: number): Se
       model: DEFAULT_GIT_TEXT_GENERATION_MODEL,
     },
   };
+}
+
+/**
+ * `changes` without the ones that only touched the shared new-chat defaults,
+ * which change with every composer pick and never affect server-side work.
+ */
+export function withoutNewThreadDefaultsOnlyChanges<E, R>(
+  changes: Stream.Stream<ServerSettings, E, R>,
+  initial: ServerSettings | null = null,
+): Stream.Stream<ServerSettings, E, R> {
+  let previous = initial;
+  return changes.pipe(
+    Stream.filter((next) => {
+      const relevant = previous === null || settingsChangedBeyondNewThreadDefaults(previous, next);
+      previous = next;
+      return relevant;
+    }),
+  );
 }
 
 export function toServerSettingsView(settings: ServerSettings): ServerSettingsView {

@@ -1,7 +1,16 @@
-import { DEFAULT_SERVER_SETTINGS, ProviderSessionStartInput } from "@synara/contracts";
+import {
+  DEFAULT_SERVER_SETTINGS,
+  ProviderSessionStartInput,
+  ServerSettings,
+  ServerSettingsPatch,
+} from "@synara/contracts";
 import { Schema } from "effect";
 import { describe, expect, it } from "vitest";
-import { providerStartOptionsFromServerSettings } from "./serverSettings";
+import {
+  applyServerSettingsPatch,
+  providerStartOptionsFromServerSettings,
+  settingsChangedBeyondNewThreadDefaults,
+} from "./serverSettings";
 
 const decodeProviderSessionStartInput = Schema.decodeUnknownSync(ProviderSessionStartInput);
 
@@ -156,5 +165,96 @@ describe("providerStartOptionsFromServerSettings", () => {
       shadowHomePath: "/accounts/work",
       accountId: "work",
     });
+  });
+});
+
+describe("applyServerSettingsPatch newThreadDefaults", () => {
+  const decodeSettings = Schema.decodeUnknownSync(ServerSettings);
+  const decodePatch = Schema.decodeUnknownSync(ServerSettingsPatch);
+
+  it("defaults to no shared choice", () => {
+    expect(DEFAULT_SERVER_SETTINGS.newThreadDefaults).toEqual({
+      modelSelectionByProvider: {},
+      activeProvider: null,
+      runtimeMode: null,
+    });
+  });
+
+  it("replaces a patched provider's selection whole and keeps the others", () => {
+    const current = decodeSettings({
+      newThreadDefaults: {
+        modelSelectionByProvider: {
+          codex: {
+            provider: "codex",
+            model: "gpt-5.5",
+            options: { reasoningEffort: "high", fastMode: true },
+          },
+          claudeAgent: { provider: "claudeAgent", model: "claude-opus-4-8" },
+        },
+        activeProvider: "codex",
+        runtimeMode: "auto",
+      },
+    });
+
+    const next = decodeSettings(
+      applyServerSettingsPatch(
+        current,
+        decodePatch({
+          newThreadDefaults: {
+            modelSelectionByProvider: {
+              codex: { provider: "codex", model: "gpt-5.5", options: { reasoningEffort: "low" } },
+            },
+          },
+        }),
+      ),
+    );
+
+    expect(next.newThreadDefaults.modelSelectionByProvider.codex).toEqual({
+      provider: "codex",
+      instanceId: "codex",
+      model: "gpt-5.5",
+      options: { reasoningEffort: "low" },
+    });
+    expect(next.newThreadDefaults.modelSelectionByProvider.claudeAgent?.model).toBe(
+      "claude-opus-4-8",
+    );
+    expect(next.newThreadDefaults.activeProvider).toBe("codex");
+    expect(next.newThreadDefaults.runtimeMode).toBe("auto");
+  });
+
+  it("clears the active provider and access mode with explicit nulls", () => {
+    const current = decodeSettings({
+      newThreadDefaults: { activeProvider: "codex", runtimeMode: "approval-required" },
+    });
+
+    const next = applyServerSettingsPatch(
+      current,
+      decodePatch({ newThreadDefaults: { activeProvider: null, runtimeMode: "full-access" } }),
+    );
+
+    expect(next.newThreadDefaults.activeProvider).toBeNull();
+    expect(next.newThreadDefaults.runtimeMode).toBe("full-access");
+  });
+});
+
+describe("settingsChangedBeyondNewThreadDefaults", () => {
+  it("ignores a change to the shared new-chat defaults alone", () => {
+    const picked = {
+      ...DEFAULT_SERVER_SETTINGS,
+      newThreadDefaults: {
+        ...DEFAULT_SERVER_SETTINGS.newThreadDefaults,
+        runtimeMode: "auto" as const,
+      },
+    };
+    expect(settingsChangedBeyondNewThreadDefaults(DEFAULT_SERVER_SETTINGS, picked)).toBe(false);
+    expect(
+      settingsChangedBeyondNewThreadDefaults(DEFAULT_SERVER_SETTINGS, {
+        ...picked,
+        providers: {
+          ...picked.providers,
+          codex: { ...picked.providers.codex, binaryPath: "/opt/codex" },
+        },
+      }),
+    ).toBe(true);
   });
 });

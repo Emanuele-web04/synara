@@ -4,6 +4,8 @@
 // Exports: MCP_CONNECTOR_CATEGORIES, MCP_CONNECTOR_PRESETS, findMcpConnectorPreset,
 //   normalizeMcpConnectorUrl, defaultMcpConnectorName, mcpConnectorSlug, mcpConnectorServerName
 
+/** Synara-owned gateway identity, shared with provider diagnostics and config builders. */
+export const SYNARA_MCP_SERVER_NAME = "synara";
 /** Catalog shelves, in display order. */
 export const MCP_CONNECTOR_CATEGORIES = ["popular", "developer", "productivity"] as const;
 export type McpConnectorCategory = (typeof MCP_CONNECTOR_CATEGORIES)[number];
@@ -65,8 +67,7 @@ export const MCP_CONNECTOR_PRESETS = [
     id: "convex",
     name: "Convex",
     category: "developer",
-    // The hosted server only guides setup; deployment tools run in the local
-    // `npx convex mcp start` server, which connectors cannot reach.
+    // The hosted server only guides setup; deployment tools use a separate local connector.
     description: "Start Convex apps and get setup and scaling guidance.",
     url: "https://mcp.convex.dev/mcp",
     docsUrl: "https://docs.convex.dev/ai/overview",
@@ -222,7 +223,14 @@ export type McpConnectorUrlResult =
       readonly reasonCode?: McpConnectorUrlReasonCode;
     };
 
-/** Accepts only public HTTPS endpoints without credentials; drops any fragment. */
+/** URL.hostname is canonicalized by URL (including IPv4 shorthand and IPv6). */
+export function isMcpLoopbackHostname(hostname: string): boolean {
+  return (
+    hostname === "localhost" || hostname === "[::1]" || /^127(?:\.(?:\d{1,3})){3}$/u.test(hostname)
+  );
+}
+
+/** Public HTTPS or loopback HTTP without credentials; drops any fragment. */
 export function normalizeMcpConnectorUrl(raw: string): McpConnectorUrlResult {
   const trimmed = raw.trim();
   if (!trimmed) return { ok: false, reason: "Enter the server URL.", reasonCode: "required" };
@@ -239,8 +247,14 @@ export function normalizeMcpConnectorUrl(raw: string): McpConnectorUrlResult {
       reasonCode: "invalid",
     };
   }
-  if (parsed.protocol !== "https:") {
-    return { ok: false, reason: "The URL must start with https://.", reasonCode: "https-required" };
+  const local = parsed.protocol === "http:" && isMcpLoopbackHostname(parsed.hostname);
+  if (parsed.protocol !== "https:" && !local) {
+    return {
+      ok: false,
+      reason:
+        "Use https:// for public servers. HTTP is allowed only for loopback hosts (localhost, 127.0.0.0/8, or ::1).",
+      reasonCode: "https-required",
+    };
   }
   if (parsed.username || parsed.password) {
     return {
@@ -249,7 +263,7 @@ export function normalizeMcpConnectorUrl(raw: string): McpConnectorUrlResult {
       reasonCode: "credentials",
     };
   }
-  if (!parsed.hostname.includes(".")) {
+  if (!local && !parsed.hostname.includes(".")) {
     return { ok: false, reason: "Use the server's public address.", reasonCode: "public-host" };
   }
   parsed.hash = "";
@@ -302,11 +316,10 @@ export function serverNameFromMcpConnectorMentionPath(path: string): string | nu
 }
 
 /**
- * Providers whose sessions receive connector servers. ACP agents that only
- * speak stdio MCP skip them at session start; Pi, Devin, and Antigravity never
- * receive them.
+ * Providers whose sessions receive connector servers. ACP agents negotiate
+ * HTTP or use Synara's stdio proxy; Pi, Devin, and Antigravity receive none.
  */
-const MCP_CONNECTOR_PROVIDERS = new Set([
+export const MCP_CONNECTOR_PROVIDER_IDS = [
   "claudeAgent",
   "codex",
   "opencode",
@@ -314,7 +327,8 @@ const MCP_CONNECTOR_PROVIDERS = new Set([
   "grok",
   "droid",
   "omp",
-]);
+] as const;
+const MCP_CONNECTOR_PROVIDERS = new Set<string>(MCP_CONNECTOR_PROVIDER_IDS);
 
 export function providerSupportsMcpConnectors(provider: string): boolean {
   return MCP_CONNECTOR_PROVIDERS.has(provider);

@@ -1,6 +1,6 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { ProjectId, ThreadId, TurnId, type OrchestrationCommand } from "@synara/contracts";
-import { Duration, Effect, FileSystem, Layer, Option } from "effect";
+import { Deferred, Duration, Effect, FileSystem, Layer, Option } from "effect";
 import { describe, expect, it } from "vitest";
 
 import { ServerConfig } from "../config";
@@ -573,39 +573,48 @@ describe("quit resume record file", () => {
   });
 
   it("acknowledges the durable record without waiting for best-effort interrupts", async () => {
-    let timeout: ReturnType<typeof setTimeout> | undefined;
-    try {
-      const result = await Promise.race([
-        run(
-          Effect.gen(function* () {
-            const config = yield* ServerConfig;
-            const prepared = yield* prepareQuitResume({
-              request: {
-                threadIds: [threadId("a")],
-                continuationPrompt: PROMPT,
-              },
-              recordPath: config.quitResumeStatePath,
-              getReadModel: () => Effect.succeed({ threads: [makeRunningThread("a")] }),
-              dispatch: () => Effect.never,
-              abandonAfter: Duration.hours(1),
-            });
-            const persisted = yield* readQuitResumeRecord(config.quitResumeStatePath);
-            yield* clearQuitResumeRecord(config.quitResumeStatePath);
-            return { prepared, persisted };
-          }),
-        ),
-        new Promise<never>((_, reject) => {
-          timeout = setTimeout(
-            () => reject(new Error("prepareQuitResume waited for an interrupt")),
-            250,
-          );
-        }),
-      ]);
+    const result = await run(
+      Effect.gen(function* () {
+        const config = yield* ServerConfig;
+        const interruptStarted = yield* Deferred.make<void>();
+        const releaseInterrupt = yield* Deferred.make<void>();
+        const interruptFinished = yield* Deferred.make<void>();
+        return yield* Effect.gen(function* () {
+          const prepared = yield* prepareQuitResume({
+            request: {
+              threadIds: [threadId("a")],
+              continuationPrompt: PROMPT,
+            },
+            recordPath: config.quitResumeStatePath,
+            getReadModel: () => Effect.succeed({ threads: [makeRunningThread("a")] }),
+            dispatch: () =>
+              Deferred.succeed(interruptStarted, undefined).pipe(
+                Effect.andThen(Deferred.await(releaseInterrupt)),
+                Effect.andThen(Deferred.succeed(interruptFinished, undefined)),
+              ),
+            abandonAfter: Duration.hours(1),
+          });
+          yield* Deferred.await(interruptStarted);
+          const persisted = yield* readQuitResumeRecord(config.quitResumeStatePath);
+          // The acknowledgement and durable record must exist while dispatch is still blocked.
+          const interruptPending = !(yield* Deferred.isDone(interruptFinished));
+          yield* Deferred.succeed(releaseInterrupt, undefined);
+          yield* Deferred.await(interruptFinished);
+          yield* clearQuitResumeRecord(config.quitResumeStatePath);
+          return { prepared, persisted, interruptPending };
+        }).pipe(Effect.ensuring(Deferred.succeed(releaseInterrupt, undefined)));
+      }),
+    );
 
-      expect(result.prepared.recordedThreadIds).toEqual([threadId("a")]);
-      expect(result.persisted.kind).toBe("record");
-    } finally {
-      clearTimeout(timeout);
+    expect(result.prepared.recordedThreadIds).toEqual([threadId("a")]);
+    expect(result.persisted.kind).toBe("record");
+    if (result.persisted.kind === "record") {
+      expect(result.persisted.record.threads).toEqual([
+        { threadId: threadId("a"), turnId: turnId("a-turn") },
+      ]);
+      expect(result.persisted.record.continuationPrompt).toBe(PROMPT);
+      expect(result.persisted.record.recordedAt).toBe(result.prepared.recordedAt);
     }
+    expect(result.interruptPending).toBe(true);
   });
 });

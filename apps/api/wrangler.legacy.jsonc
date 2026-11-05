@@ -1,0 +1,51 @@
+// Compatibility endpoint in the previous account. Normal deployments use the destination config.
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "synara-account-api-trial",
+  "account_id": "9f9caeb268766deda99bc580c775d50c",
+  "main": "cloudflare/legacy-proxy.ts",
+  "compatibility_date": "2026-09-28",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": true,
+  "preview_urls": false,
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 0.1,
+  },
+  "containers": [
+    {
+      "class_name": "AccountApi",
+      "image": "registry.cloudflare.com/9f9caeb268766deda99bc580c775d50c/synara-account-api-trial@sha256:cc29bdc4ac33d31dc64b5f093d13b6a1de0f8e9fb6775d8fda5ea3fdffe079d4",
+      "instance_type": "basic",
+      "max_instances": 1,
+    },
+  ],
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "ACCOUNT_API",
+        "class_name": "AccountApi",
+      },
+    ],
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["AccountApi"],
+    },
+  ],
+  "vars": {
+    "ACCOUNT_BASE_URL": "https://synara-account-api-trial.kartik-9f9.workers.dev",
+    "API_PUBLIC_URL": "https://synara-account-api-trial.kartik-9f9.workers.dev/api/v1",
+    "MIGRATION_TARGET": "https://synara-account-api-trial.synara-orgs.workers.dev",
+  },
+  "secrets": {
+    "required": [
+      "DATABASE_URL",
+      "WORKOS_API_KEY",
+      "WORKOS_CLIENT_ID",
+      "API_SIGNING_KEY",
+      "MIGRATION_PROXY_SECRET",
+    ],
+  },
+}

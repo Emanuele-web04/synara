@@ -83,6 +83,7 @@ export function isSummarizableToolCallEntry(entry: WorkLogEntry): boolean {
     !(entry.toolCallId && isReasoningUpdateWorkEntry(entry)) &&
     !entry.synaraThreadCreation &&
     !entry.automation &&
+    !entry.connectorProposalId &&
     !entry.subagentAction &&
     !entry.backgroundTask &&
     (entry.subagents?.length ?? 0) === 0

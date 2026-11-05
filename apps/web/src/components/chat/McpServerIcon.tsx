@@ -25,7 +25,13 @@ export function McpServerIcon(props: { serverName: string; className: string }) 
     ? connectorsQuery.data?.find((entry) => entry.serverName === props.serverName)
     : undefined;
   if (connector) {
-    return <ConnectorIcon name={connector.name} url={connector.url} className={props.className} />;
+    return (
+      <ConnectorIcon
+        name={connector.name}
+        url={connector.transport === "stdio" ? undefined : connector.url}
+        className={props.className}
+      />
+    );
   }
   // Disconnected connectors and provider-configured servers keep only their name.
   const name = isConnector

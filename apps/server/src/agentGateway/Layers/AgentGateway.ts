@@ -1,3 +1,7 @@
+import { GatewayToolError } from "../toolRuntime.ts";
+import { makeRemoteAwareTools, receiveRemoteTool } from "../remoteTools";
+import { ServerEnvironment } from "../../environment/Services/ServerEnvironment";
+import { HostConnectionRegistryService } from "../../hostConnections/registry";
 import { ProjectionThreadMessageRepository } from "../../persistence/Services/ProjectionThreadMessages.ts";
 /**
  * AgentGatewayLive - Synara app-control MCP tool surface.
@@ -92,7 +96,7 @@ import {
 } from "../followUpDispatchPolicy.ts";
 import { deliverGatewayCompletions } from "../completionDelivery.ts";
 import { recoverInterruptedAgentGatewayOperations } from "../startupRecovery.ts";
-import { makeCreateThreadsHandler } from "../creationCoordinator.ts";
+import { appendThreadCreationRecap, makeCreateThreadsHandler } from "../creationCoordinator.ts";
 import { makeHubWorkGateway } from "../hubWorkGateway";
 import { OrchestrationCommandReceiptRepository } from "../../persistence/Services/OrchestrationCommandReceipts";
 import { QueuedTurnPromotionRepository } from "../../persistence/Services/QueuedTurnPromotions";
@@ -104,6 +108,8 @@ import { cloneDelegatedAttachments } from "../delegatedAttachments";
 import { LOCAL_LOOPBACK_ATTACHMENT_PRINCIPAL } from "../../managedAttachmentPrincipal";
 
 import { makeAgentGatewayAutomationTools } from "../automationTools.ts";
+import { makeConnectorTools } from "../connectorTools.ts";
+import { McpConnectors } from "../../mcpConnectors/Services/McpConnectors.ts";
 import { makeAgentGatewayBrowserTools } from "../browserTools.ts";
 import { makeAgentGatewayComputerBrowserTools } from "../computerBrowserTools.ts";
 import { computerApprovalDisplayArgs } from "../computerApprovalDisplay.ts";
@@ -180,9 +186,14 @@ function readThreadGoalArg(args: Record<string, unknown>): string {
 
 export const makeAgentGateway = Effect.gen(function* () {
   const credentials = yield* AgentGatewayCredentials;
+  const environment = Option.getOrUndefined(yield* Effect.serviceOption(ServerEnvironment));
+  const connections = Option.getOrUndefined(
+    yield* Effect.serviceOption(HostConnectionRegistryService),
+  );
   const snapshotQuery = yield* ProjectionSnapshotQuery;
   const orchestrationEngine = yield* OrchestrationEngineService;
   const automationService = yield* AutomationService;
+  const mcpConnectors = Option.getOrUndefined(yield* Effect.serviceOption(McpConnectors));
   const projectAgentService = yield* ProjectAgentService;
   const todoService = yield* TodoService;
   const git = yield* GitCore;
@@ -315,7 +326,7 @@ export const makeAgentGateway = Effect.gen(function* () {
   // otherwise an approval-required or worktree-isolated agent escalates by proxy.
   const assertCallerMayDriveThread = (
     caller: {
-      readonly id: string;
+      readonly id?: string;
       readonly runtimeMode: RuntimeMode;
       readonly envMode?: string | null | undefined;
     },
@@ -340,6 +351,7 @@ export const makeAgentGateway = Effect.gen(function* () {
           ),
         );
       }
+      if (!caller.id) return; // Remote callers have no local coordinator identity.
       yield* projectAgentService
         .assertCallerMayDriveManagedThread({
           callerThreadId: ThreadId.makeUnsafe(caller.id),
@@ -447,13 +459,15 @@ export const makeAgentGateway = Effect.gen(function* () {
     context: ToolContext,
   ) =>
     Effect.gen(function* () {
-      const hubResult = hubGateway ? yield* hubGateway.submit(input, context) : null;
+      const hubResult =
+        hubGateway && !context.remoteCaller ? yield* hubGateway.submit(input, context) : null;
       if (hubResult) return hubResult;
       return yield* runCreateThreads(input, {
         kind: "provider-session",
         callerThreadId: context.callerThreadId,
         callerTurnId: context.callerTurnId,
         assertAuthority: context.assertCallerTurnActive,
+        ...(context.remoteCaller ? { remoteCaller: context.remoteCaller } : {}),
       });
     });
   const contextMessageIdsSchema = {
@@ -689,18 +703,19 @@ export const makeAgentGateway = Effect.gen(function* () {
         if (modeArg !== "queue" && modeArg !== "steer") {
           throw new ToolInputError(`Argument "mode" must be "queue" or "steer".`);
         }
-        const caller = yield* requireThreadShell(context.callerThreadId);
+        const caller = context.remoteCaller ?? (yield* requireThreadShell(context.callerThreadId));
         const target = yield* requireThreadShell(threadId);
         yield* assertCallerMayDriveThread(caller, target);
         // Pass the requested mode through unchanged: the reactor checks live
         // provider state (authoritative, unlike this projection snapshot) and
         // already downgrades steers whose turn is not actually live.
         const dispatchMode: TurnDispatchMode = modeArg;
-        const principal = isServerGroupsEnabled()
-          ? yield* projectAgentService.resolvePrincipalForThread(caller.id)
-          : null;
+        const principal =
+          isServerGroupsEnabled() && "id" in caller
+            ? yield* projectAgentService.resolvePrincipalForThread(caller.id)
+            : null;
         const sourceMessages =
-          principal?.kind === "coordinator" && hubGateway
+          principal?.kind === "coordinator" && hubGateway && "id" in caller
             ? yield* resolveHubWorkSource({
                 snapshotQuery,
                 projectionTurns,
@@ -759,7 +774,7 @@ export const makeAgentGateway = Effect.gen(function* () {
             : [];
         yield* context.assertCallerTurnActive();
         yield* assertCallerMayDriveThread(
-          yield* requireThreadShell(context.callerThreadId),
+          context.remoteCaller ?? (yield* requireThreadShell(context.callerThreadId)),
           yield* requireThreadShell(threadId),
         );
         const followupCommandId = CommandId.makeUnsafe(`agent:${suffix}:send`);
@@ -850,12 +865,13 @@ export const makeAgentGateway = Effect.gen(function* () {
     handler: (args, context) =>
       Effect.gen(function* () {
         const threadId = readStringArg(args, "threadId", { required: true })!;
-        const caller = yield* requireThreadShell(context.callerThreadId);
+        const caller = context.remoteCaller ?? (yield* requireThreadShell(context.callerThreadId));
         const target = yield* requireThreadShell(threadId);
         // Stopping a higher-privileged thread's work is still driving it.
         yield* assertCallerMayDriveThread(caller, target);
         const activeTurnId = target.session?.activeTurnId ?? null;
         const hadActiveTurn = activeTurnId !== null || target.latestTurn?.state === "running";
+        yield* context.assertCallerTurnActive();
         const dispatched = yield* orchestrationEngine
           .dispatch({
             type: "thread.turn.interrupt",
@@ -898,9 +914,10 @@ export const makeAgentGateway = Effect.gen(function* () {
       Effect.gen(function* () {
         const threadId = readStringArg(args, "threadId", { required: true })!;
         const title = readStringArg(args, "title", { required: true })!;
-        const caller = yield* requireThreadShell(context.callerThreadId);
+        const caller = context.remoteCaller ?? (yield* requireThreadShell(context.callerThreadId));
         const target = yield* requireThreadShell(threadId);
         yield* assertCallerMayDriveThread(caller, target);
+        yield* context.assertCallerTurnActive();
         yield* orchestrationEngine
           .dispatch({
             type: "thread.meta.update",
@@ -941,7 +958,7 @@ export const makeAgentGateway = Effect.gen(function* () {
       Effect.gen(function* () {
         const threadId = readStringArg(args, "threadId") ?? context.callerThreadId;
         const reference = readStringArg(args, "reference", { required: true })!;
-        const caller = yield* requireThreadShell(context.callerThreadId);
+        const caller = context.remoteCaller ?? (yield* requireThreadShell(context.callerThreadId));
         const target = yield* requireThreadShell(threadId);
         yield* assertCallerMayDriveThread(caller, target);
 
@@ -965,6 +982,7 @@ export const makeAgentGateway = Effect.gen(function* () {
         const { pullRequest } = yield* gitManager
           .resolvePullRequest({ cwd, reference })
           .pipe(Effect.mapError((error) => new ToolInputError(errorText(error))));
+        yield* context.assertCallerTurnActive();
         yield* orchestrationEngine
           .dispatch({
             type: "thread.meta.update",
@@ -1002,9 +1020,10 @@ export const makeAgentGateway = Effect.gen(function* () {
         if (archived === undefined) {
           throw new ToolInputError(`Missing required argument "archived".`);
         }
-        const caller = yield* requireThreadShell(context.callerThreadId);
+        const caller = context.remoteCaller ?? (yield* requireThreadShell(context.callerThreadId));
         const target = yield* requireThreadShell(threadId);
         yield* assertCallerMayDriveThread(caller, target);
+        yield* context.assertCallerTurnActive();
         yield* orchestrationEngine
           .dispatch({
             type: archived ? "thread.archive" : "thread.unarchive",
@@ -1085,7 +1104,7 @@ export const makeAgentGateway = Effect.gen(function* () {
           );
         }
         const goal = achieved || blocked ? "" : readThreadGoalArg(args);
-        const caller = yield* requireThreadShell(context.callerThreadId);
+        const caller = context.remoteCaller ?? (yield* requireThreadShell(context.callerThreadId));
         const target = yield* requireThreadShell(threadId);
         yield* assertCallerMayDriveThread(caller, target);
         if ((achieved || blocked) && (target.goal ?? "").trim().length === 0) {
@@ -1095,6 +1114,7 @@ export const makeAgentGateway = Effect.gen(function* () {
             ),
           );
         }
+        yield* context.assertCallerTurnActive();
         yield* orchestrationEngine
           .dispatch({
             type: "thread.meta.update",
@@ -1156,6 +1176,30 @@ export const makeAgentGateway = Effect.gen(function* () {
   const browserTools = makeAgentGatewayBrowserTools(browserAutomationHost, {
     resolveWorkspaceRoot,
   });
+  const connectorTools = mcpConnectors
+    ? makeConnectorTools({
+        connectors: mcpConnectors,
+        resolveWorkspaceRoot,
+        surface: (proposal) =>
+          orchestrationEngine
+            .dispatch({
+              type: "thread.activity.append",
+              commandId: CommandId.makeUnsafe(`agent:${proposal.proposalId}:connector-proposal`),
+              threadId: ThreadId.makeUnsafe(proposal.threadId),
+              activity: {
+                id: EventId.makeUnsafe(`connector-proposal:${proposal.proposalId}`),
+                kind: "mcp.connector.proposed",
+                tone: "info",
+                summary: `${proposal.action === "add" ? "Add" : "Remove"} connector: ${proposal.connector.name}`,
+                createdAt: isoNow(),
+                turnId: null,
+                payload: { proposalId: proposal.proposalId },
+              },
+              createdAt: isoNow(),
+            })
+            .pipe(Effect.asVoid),
+      })
+    : [];
   const projectAgentTools = makeProjectAgentTools({
     projectAgent: projectAgentService,
   });
@@ -1658,6 +1702,7 @@ export const makeAgentGateway = Effect.gen(function* () {
     setThreadArchived,
     setThreadGoal,
     ...automationTools,
+    ...connectorTools,
     ...browserTools,
     ...kanbanTools,
     // Same switch as the todo.* RPCs: a build without Tasks offers agents no to-do tools.
@@ -1698,10 +1743,39 @@ export const makeAgentGateway = Effect.gen(function* () {
   );
 
   return {
+    ...(environment
+      ? {
+          handleRemoteTool: (call, peerOwnerId) =>
+            receiveRemoteTool({ call, peerOwnerId, environment, tools }),
+        }
+      : {}),
     handleMcpPost: makeAgentGatewayMcpTransport({
       credentials,
       snapshotQuery,
-      tools,
+      tools:
+        environment && connections
+          ? makeRemoteAwareTools({
+              tools,
+              environment,
+              connections,
+              requireThreadShell,
+              appendThreadCreationRecap: (input) =>
+                appendThreadCreationRecap(orchestrationEngine, input),
+              assertRemoteWriteAllowed: (callerThreadId) =>
+                Effect.gen(function* () {
+                  const principal = yield* projectAgentService.resolvePrincipalForThread(
+                    ThreadId.makeUnsafe(callerThreadId),
+                  );
+                  if (principal.kind === "coordinator" || principal.kind === "worker")
+                    return yield* Effect.fail(
+                      new GatewayToolError(
+                        "capability_denied",
+                        "Hub coordinators and workers cannot delegate across computers; their ownership is local to the hub.",
+                      ),
+                    );
+                }),
+            })
+          : tools,
       onCapabilityDenied: surfaceCapabilityDenial,
       // Namespace-insensitive: a session that never saw the catalog reaches
       // for prefixed spellings (synara_computer_click,

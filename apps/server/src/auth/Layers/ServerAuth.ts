@@ -8,10 +8,15 @@ import type {
 } from "@synara/contracts";
 import { DateTime, Effect, Layer } from "effect";
 
+import { ServerConfig } from "../../config";
+import { RemoteSessionRegistryService } from "../../remoteSessions/sessionRegistry";
+import { isTrustedLocalServerToken, requireRemoteSessionAdmission } from "../remoteAccess";
+
 import { AuthControlPlane } from "../Services/AuthControlPlane";
 import {
   BootstrapCredentialError,
   BootstrapCredentialService,
+  type BootstrapGrant,
 } from "../Services/BootstrapCredentialService";
 import { ServerAuthPolicy } from "../Services/ServerAuthPolicy";
 import {
@@ -65,6 +70,7 @@ function toAuthenticatedSession(session: {
   readonly subject: string;
   readonly method: AuthenticatedSession["method"];
   readonly role: AuthenticatedSession["role"];
+  readonly accessOrigin?: AuthenticatedSession["accessOrigin"];
   readonly expiresAt?: DateTime.DateTime;
 }): AuthenticatedSession {
   return {
@@ -72,6 +78,7 @@ function toAuthenticatedSession(session: {
     subject: session.subject,
     method: session.method,
     role: session.role,
+    accessOrigin: session.accessOrigin ?? null,
     ...(session.expiresAt ? { expiresAt: session.expiresAt } : {}),
   };
 }
@@ -81,9 +88,30 @@ export const makeServerAuth = Effect.gen(function* () {
   const bootstrapCredentials = yield* BootstrapCredentialService;
   const authControlPlane = yield* AuthControlPlane;
   const sessions = yield* SessionCredentialService;
+  const config = yield* ServerConfig;
+  const remoteSessions = yield* RemoteSessionRegistryService;
   const descriptor = yield* policy.getDescriptor();
 
-  const authenticateToken = (token: string): Effect.Effect<AuthenticatedSession, AuthError> =>
+  const consumeBootstrapCredential = (
+    credential: string,
+  ): Effect.Effect<
+    Pick<BootstrapGrant, "subject" | "role" | "accessOrigin" | "label">,
+    AuthError
+  > => {
+    // Only the desktop's exact private startup secret positively proves local issuance.
+    if (config.mode === "desktop" && isTrustedLocalServerToken(config, credential)) {
+      return Effect.succeed({
+        subject: "desktop-bootstrap",
+        role: "owner",
+        accessOrigin: "local",
+      });
+    }
+    return bootstrapCredentials
+      .consume(credential)
+      .pipe(Effect.mapError(toBootstrapExchangeAuthError));
+  };
+
+  const verifyToken = (token: string): Effect.Effect<AuthenticatedSession, AuthError> =>
     sessions.verify(token).pipe(
       Effect.tapError((cause: SessionCredentialError) =>
         Effect.logWarning("Rejected authenticated session credential.").pipe(
@@ -101,7 +129,7 @@ export const makeServerAuth = Effect.gen(function* () {
       ),
     );
 
-  const authenticateRequest: ServerAuthShape["authenticateHttpRequest"] = (request) => {
+  const verifyRequestIdentity: ServerAuthShape["authenticateHttpRequest"] = (request) => {
     const cookieToken = request.cookies[sessions.cookieName];
     const bearerToken = parseBearerToken(request.headers);
     if (!bearerToken && !cookieToken) {
@@ -113,15 +141,21 @@ export const makeServerAuth = Effect.gen(function* () {
       );
     }
     const credentialSource = bearerToken ? "bearer" : "cookie";
-    return authenticateToken(bearerToken ?? cookieToken!).pipe(
+    return verifyToken(bearerToken ?? cookieToken!).pipe(
       Effect.map(
         (session) => ({ ...session, credentialSource }) satisfies AuthenticatedHttpSession,
       ),
     );
   };
 
+  const authenticateRequest: ServerAuthShape["authenticateHttpRequest"] = (request) =>
+    verifyRequestIdentity(request).pipe(
+      Effect.flatMap((session) => requireRemoteSessionAdmission(remoteSessions, session)),
+    );
+
+  // Identity introspection must not turn a commercial lease refusal into sign-out.
   const getSessionState: ServerAuthShape["getSessionState"] = (request) =>
-    authenticateRequest(request).pipe(
+    verifyRequestIdentity(request).pipe(
       Effect.map(
         (session) =>
           ({
@@ -144,14 +178,14 @@ export const makeServerAuth = Effect.gen(function* () {
     credential,
     requestMetadata,
   ) =>
-    bootstrapCredentials.consume(credential).pipe(
-      Effect.mapError(toBootstrapExchangeAuthError),
+    consumeBootstrapCredential(credential).pipe(
       Effect.flatMap((grant) =>
         sessions
           .issue({
             method: "browser-session-cookie",
             subject: grant.subject,
             role: grant.role,
+            accessOrigin: grant.accessOrigin ?? null,
             client: {
               ...requestMetadata,
               ...(grant.label ? { label: grant.label } : {}),
@@ -184,14 +218,14 @@ export const makeServerAuth = Effect.gen(function* () {
 
   const exchangeBootstrapCredentialForBearerSession: ServerAuthShape["exchangeBootstrapCredentialForBearerSession"] =
     (credential, requestMetadata) =>
-      bootstrapCredentials.consume(credential).pipe(
-        Effect.mapError(toBootstrapExchangeAuthError),
+      consumeBootstrapCredential(credential).pipe(
         Effect.flatMap((grant) =>
           sessions
             .issue({
               method: "bearer-session-token",
               subject: grant.subject,
               role: grant.role,
+              accessOrigin: grant.accessOrigin ?? null,
               client: {
                 ...requestMetadata,
                 ...(grant.label ? { label: grant.label } : {}),
@@ -225,6 +259,8 @@ export const makeServerAuth = Effect.gen(function* () {
       .createPairingLink({
         role: input?.role ?? "client",
         subject: input?.role === "owner" ? "owner-bootstrap" : "one-time-token",
+        // Pairing links are remote capabilities even when they carry the owner role.
+        accessOrigin: "remote",
         ...(input?.label ? { label: input.label } : {}),
       })
       .pipe(
@@ -384,6 +420,7 @@ export const makeServerAuth = Effect.gen(function* () {
               cause,
             }),
         ),
+        Effect.flatMap((session) => requireRemoteSessionAdmission(remoteSessions, session)),
       );
     }
 

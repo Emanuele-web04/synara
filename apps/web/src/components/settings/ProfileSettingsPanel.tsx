@@ -1,23 +1,42 @@
 // FILE: ProfileSettingsPanel.tsx
 // Purpose: Local-first profile / stats dashboard rendered inside Settings → Profile. Core
 // stats render instantly from a fast SQL RPC; lifetime/peak token figures and the tokens/day
-// heatmap stream in from a second DB-backed RPC. Centered, low-chrome layout
-// with an explicit edit mode for the local name + handle.
+// heatmap stream in from a second DB-backed RPC. Signed-in users get a
+// This device / Account toggle: the Account view renders the account-wide
+// usage summary through the same sections (device-only rows hidden). Centered,
+// low-chrome layout with an explicit edit mode for the local name + handle.
 // Layer: web profile feature (settings panel body).
 
+import { DeleteAccountControl } from "../account/DeleteAccountControl";
 import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
-import { type ProfileStats, type ProfileTokenStats, type ProviderKind } from "@synara/contracts";
+import { useQuery, type UseQueryResult } from "@tanstack/react-query";
+import {
+  type ProfileStats,
+  type ProfileTokenStats,
+  type ProviderKind,
+  type UsageSummary,
+} from "@synara/contracts";
 import {
   serverProfileStatsQueryOptions,
   serverProfileTokenStatsQueryOptions,
 } from "~/lib/serverReactQuery";
+import { accountUsageSummaryQueryOptions } from "~/lib/accountReactQuery";
+import {
+  type AccountUsageView,
+  localDayKey,
+  selectAccountUsageView,
+} from "~/lib/accountUsageAdapter";
+import { useAccount } from "~/hooks/useAccount";
 import { CentralIcon } from "~/lib/central-icons";
 import { ProviderIcon } from "~/components/ProviderIcon";
 import { Button } from "~/components/ui/button";
 import { Skeleton } from "~/components/ui/skeleton";
-import { ActivityHeatmap } from "../profile/ActivityHeatmap";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "~/components/ui/tooltip";
+import { ActivityHeatmap, heatmapTooltipText } from "../profile/ActivityHeatmap";
+import { InsightRow, ModelUsageRow, StatTileGrid } from "@synara/profile-ui/sections";
 import {
+  selectAccountShareCardStats,
+  selectDeviceShareCardStats,
   selectProfileHeatmap,
   selectProfileModelUsage,
   selectProfileTopProvider,
@@ -25,26 +44,40 @@ import {
 import { ProfileUsageCoverage } from "../profile/ProfileUsageCoverage";
 import { ShareDialog } from "../profile/ShareDialog";
 import { EditProfileDialog } from "../profile/EditProfileDialog";
-import { useProfileHandle } from "../profile/useProfileHandle";
-import { useProfileName } from "../profile/useProfileName";
-import { useProfileAvatarColor } from "../profile/useProfileAvatarColor";
-import { useProfileAvatarImage } from "../profile/useProfileAvatarImage";
-import { ProfileAvatar } from "../profile/ProfileAvatar";
+import { useProfileIdentity } from "../profile/useProfileIdentity";
+import { ProfileAvatar } from "@synara/profile-ui/avatar";
 import {
   formatCompact,
   formatDays,
+  formatHourLabel,
   formatNumber,
   formatProviderLabel,
   formatProfileUsageBasis,
   toDisplayName,
 } from "../profile/profileFormatting";
-import { useTranslation, t } from "~/i18n";
+import { SettingsSegmentedControl } from "./SettingControls";
+import { profileShareUrl } from "~/lib/accountLogic";
+import { openExternalLink } from "~/lib/linkChips";
+import { ExternalLinkIcon } from "~/lib/icons";
+import { getFormatLocale, t, useTranslation } from "~/i18n";
+
+type StatsScope = "device" | "account";
+
+const SCOPE_OPTIONS = [
+  { value: "account", label: "Account" },
+  { value: "device", label: "This device" },
+] as const satisfies readonly { value: StatsScope; label: string }[];
 
 export function ProfileSettingsPanel() {
   const { t } = useTranslation();
 
   const coreQuery = useQuery(serverProfileStatsQueryOptions());
   const tokenQuery = useQuery(serverProfileTokenStatsQueryOptions());
+  const { me, profileSyncEnabled } = useAccount();
+  // Account-first for signed-in users: the synced cross-device view is the
+  // primary one; the device view is the drill-down. Signed out there is no
+  // account, so the state is moot (the render below pins "device").
+  const [scope, setScope] = useState<StatsScope>("account");
 
   if (coreQuery.isPending) {
     return <ProfileSkeleton />;
@@ -67,6 +100,10 @@ export function ProfileSettingsPanel() {
       stats={coreQuery.data}
       tokenStats={tokenQuery.data ?? null}
       tokensPending={tokenQuery.isPending}
+      userId={me?.id ?? null}
+      // Signed out: no toggle, the device view is the whole panel.
+      scope={profileSyncEnabled && me ? scope : "device"}
+      onScopeChange={profileSyncEnabled && me ? setScope : null}
     />
   );
 }
@@ -75,50 +112,111 @@ function ProfileContent({
   stats,
   tokenStats,
   tokensPending,
+  userId,
+  scope,
+  onScopeChange,
 }: {
   stats: ProfileStats;
   tokenStats: ProfileTokenStats | null;
   tokensPending: boolean;
+  userId: string | null;
+  scope: StatsScope;
+  onScopeChange: ((scope: StatsScope) => void) | null;
 }) {
-  const { t, formatLocale } = useTranslation();
+  const { t } = useTranslation();
 
   const [shareOpen, setShareOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
 
-  const defaultName = toDisplayName(stats.identity.homeDirBasename);
-  const { name, setName } = useProfileName(defaultName);
-  const { handle, setHandle } = useProfileHandle(stats.identity.defaultHandle);
-  const { color: avatarColor, setColor: setAvatarColor } = useProfileAvatarColor();
-  const { image: avatarImage, setImage: setAvatarImage } = useProfileAvatarImage();
-
-  // Tokens/day when available, prompts/day otherwise — shared with ShareCard.
-  const heatmap = selectProfileHeatmap(stats, tokenStats);
-  const topProvider = selectProfileTopProvider(stats, tokenStats);
-  const modelUsage = selectProfileModelUsage(stats, tokenStats);
-  const peakHourLabel = formatPeakHourLabel(stats.activeHours.startHour, formatLocale);
-  const mostWorkedProjectLabel = formatMostWorkedProjectLabel(
-    stats.mostWorkedProject,
-    formatLocale,
+  // Hoisted above AccountStatsBody so the share card can render the SAME
+  // scope the panel shows: with Account selected, the exported card must
+  // carry the account-wide numbers, not this device's.
+  const usageQuery = useQuery(
+    accountUsageSummaryQueryOptions({ userId, enabled: scope === "account" }),
   );
+  const accountView =
+    scope === "account" && usageQuery.data
+      ? selectAccountUsageView(usageQuery.data, localDayKey())
+      : null;
+  // Null exactly while the Account scope's data hasn't loaded — the Share
+  // button waits rather than silently exporting This-device numbers.
+  const cardStats =
+    scope === "account"
+      ? accountView
+        ? selectAccountShareCardStats(accountView)
+        : null
+      : selectDeviceShareCardStats(stats, tokenStats);
+
+  const defaultName = toDisplayName(stats.identity.homeDirBasename);
+  const {
+    name,
+    initials,
+    handle,
+    avatarColor,
+    avatarImage,
+    ssoImage,
+    accountProfile,
+    canEdit,
+    save,
+    uploadAvatarPhoto,
+    removeUploadedAvatar,
+  } = useProfileIdentity({
+    name: defaultName,
+    handle: stats.identity.defaultHandle,
+  });
+  const publicUrl = profileShareUrl(accountProfile);
 
   return (
     <div className="flex min-w-0 flex-col gap-7">
-      {/* Action row */}
-      <div className="flex items-center justify-end gap-2">
-        <Button variant="outline" size="sm" onClick={() => setShareOpen(true)}>
-          <CentralIcon name="share-os" />
-          {t("settings:profile_share")}
-        </Button>
-        <Button variant="outline" size="sm" onClick={() => setEditOpen(true)}>
-          <CentralIcon name="pencil" />
-          {t("git:profile_edit")}
-        </Button>
+      {/* Action row: scope toggle (signed in) on the left, share/edit on the right. */}
+      <div
+        className={
+          onScopeChange
+            ? "flex items-center justify-between gap-2"
+            : "flex items-center justify-end gap-2"
+        }
+      >
+        {onScopeChange ? (
+          <SettingsSegmentedControl
+            value={scope}
+            onValueChange={onScopeChange}
+            options={SCOPE_OPTIONS}
+            ariaLabel="Stats scope"
+          />
+        ) : null}
+        <div className="flex items-center gap-2">
+          {publicUrl ? (
+            <Button variant="outline" size="sm" onClick={() => openExternalLink(publicUrl)}>
+              <ExternalLinkIcon />
+              Open profile
+            </Button>
+          ) : null}
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={cardStats === null}
+            onClick={() => setShareOpen(true)}
+          >
+            <CentralIcon name="share-os" />
+            {t("settings:profile_share")}
+          </Button>
+          <Button variant="outline" size="sm" disabled={!canEdit} onClick={() => setEditOpen(true)}>
+            <CentralIcon name="pencil" />
+            {t("git:profile_edit")}
+          </Button>
+        </div>
       </div>
+
+      {!canEdit ? (
+        <p className="text-ui-sm text-muted-foreground">
+          Profile editing is unavailable on this computer. Your account photo and name are shown.
+        </p>
+      ) : null}
 
       {/* Centered identity header */}
       <header className="flex flex-col items-center gap-3 text-center">
         <ProfileAvatar
-          initials={stats.identity.initials}
+          initials={initials}
           color={avatarColor}
           image={avatarImage}
           className="size-16 shadow-sm"
@@ -136,250 +234,460 @@ function ProfileContent({
         </div>
       </header>
 
-      {/* Stat tiles */}
-      <div className="grid grid-cols-2 divide-x divide-y divide-border/50 overflow-hidden rounded-2xl border border-border/60 sm:grid-cols-3 lg:grid-cols-5 lg:divide-y-0">
-        <StatTile
-          label={t("settings:profile_lifetimeTokens")}
-          value={
-            tokensPending
-              ? null
-              : formatCompact(tokenStats?.lifetimeTotalTokens ?? null, formatLocale)
-          }
-        />
-        <StatTile
-          label={t("settings:profile_peakDay")}
-          value={
-            tokensPending ? null : formatCompact(tokenStats?.peakDayTokens ?? null, formatLocale)
-          }
-        />
-        <StatTile
-          label={t("settings:profile_totalPrompts")}
-          value={formatNumber(stats.activity.totalPromptsSent, formatLocale)}
-        />
-        <StatTile
-          label={t("settings:profile_currentStreak")}
-          value={formatDays(stats.activity.currentStreakDays, formatLocale)}
-        />
-        <StatTile
-          label={t("settings:profile_longestStreak")}
-          value={formatDays(stats.activity.longestStreakDays, formatLocale)}
-        />
-      </div>
+      {scope === "account" ? (
+        <AccountStatsBody usageQuery={usageQuery} view={accountView} />
+      ) : (
+        <DeviceStatsBody stats={stats} tokenStats={tokenStats} tokensPending={tokensPending} />
+      )}
 
-      {/* Heatmap */}
+      {cardStats && (
+        <ShareDialog
+          cardStats={cardStats}
+          initials={initials}
+          displayName={name}
+          handle={handle}
+          avatarColor={avatarColor}
+          avatarImage={avatarImage}
+          accountProfile={accountProfile}
+          open={shareOpen}
+          onOpenChange={setShareOpen}
+        />
+      )}
+
+      <DeleteAccountControl />
+      <EditProfileDialog
+        open={editOpen}
+        onOpenChange={setEditOpen}
+        initials={initials}
+        name={name}
+        handle={handle}
+        avatarColor={avatarColor}
+        avatarImage={avatarImage}
+        ssoImage={ssoImage}
+        accountProfile={accountProfile}
+        onUploadPhoto={uploadAvatarPhoto}
+        onRemoveUploadedPhoto={removeUploadedAvatar}
+        onSave={save}
+      />
+    </div>
+  );
+}
+
+// ── This device ────────────────────────────────────────────────────────
+
+function DeviceStatsBody({
+  stats,
+  tokenStats,
+  tokensPending,
+}: {
+  stats: ProfileStats;
+  tokenStats: ProfileTokenStats | null;
+  tokensPending: boolean;
+}) {
+  const { t, formatLocale } = useTranslation();
+
+  // Tokens/day when available, prompts/day otherwise — shared with ShareCard.
+  const heatmap = selectProfileHeatmap(stats, tokenStats);
+  const topProvider = selectProfileTopProvider(stats, tokenStats);
+  const modelUsage = selectProfileModelUsage(stats, tokenStats);
+
+  return (
+    <>
+      <StatTileGrid
+        tiles={[
+          {
+            label: t("settings:profile_lifetimeTokens"),
+            value: tokensPending ? null : formatCompact(tokenStats?.lifetimeTotalTokens ?? null),
+          },
+          {
+            label: t("settings:profile_peakDay"),
+            value: tokensPending ? null : formatCompact(tokenStats?.peakDayTokens ?? null),
+          },
+          {
+            label: t("settings:profile_totalPrompts"),
+            value: formatNumber(stats.activity.totalPromptsSent),
+          },
+          {
+            label: t("settings:profile_currentStreak"),
+            value: formatDays(stats.activity.currentStreakDays),
+          },
+          {
+            label: t("settings:profile_longestStreak"),
+            value: formatDays(stats.activity.longestStreakDays),
+          },
+        ]}
+      />
+
       {stats.providerModels.some((entry) => entry.provider === "claudeAgent") ||
       tokenStats?.providers.includes("claudeAgent") ? (
         <p className="text-ui leading-snug text-muted-foreground">
           {t("settings:claudeTokenTotalsUseVerifiableRecordsOlderHistoryAnd")}
         </p>
       ) : null}
-      <section className="flex min-w-0 flex-col gap-3">
-        <h3 className="text-ui-lg font-medium">{t("workspace:profile_activity")}</h3>
-        {tokensPending ? (
-          <Skeleton className="h-28 w-full rounded-lg" />
-        ) : (
-          <ActivityHeatmap
-            cells={heatmap.cells}
-            fill
-            radius={5}
-            gap={3}
-            tooltip
-            tooltipUnit={heatmap.unit}
-            showMonths
-            monthsPosition="bottom"
-          />
-        )}
-      </section>
+      <HeatmapSection pending={tokensPending} cells={heatmap.cells} unit={heatmap.unit} />
 
-      {/* Insights + plugins */}
       <div className="grid gap-x-12 gap-y-7 md:grid-cols-2">
-        <section className="flex flex-col gap-3">
-          <h3 className="text-ui-lg font-medium">{t("settings:profile_activityInsights")}</h3>
-          <dl className="flex flex-col gap-2.5">
-            <InsightRow
-              label={t("settings:profile_mostUsedProvider")}
-              value={
-                topProvider.provider
-                  ? `${formatProviderLabel(topProvider.provider)}${
-                      topProvider.percent !== null
-                        ? t("settings:of", {
-                            percent: new Intl.NumberFormat(formatLocale, {
-                              maximumFractionDigits: 1,
-                            }).format(topProvider.percent),
-                            metric: formatProfileUsageBasis(topProvider.metric, formatLocale),
-                          })
-                        : ""
-                    }`
-                  : "—"
-              }
-            />
-            <InsightRow
-              label={t("settings:profile_mostUsedReasoning")}
-              value={
-                stats.insights.topReasoning
-                  ? `${capitalize(stats.insights.topReasoning)}${
-                      stats.insights.topReasoningPercent !== null
-                        ? ` · ${stats.insights.topReasoningPercent}%`
-                        : ""
-                    }`
-                  : "—"
-              }
-            />
-            <InsightRow label={t("settings:profile_mostActiveHour")} value={peakHourLabel} />
-            <InsightRow
-              label={t("settings:profile_mostWorkedProject")}
-              value={mostWorkedProjectLabel}
-            />
-            <InsightRow
-              label={t("settings:profile_skillsExplored")}
-              value={formatNumber(stats.insights.skillsExplored, formatLocale)}
-            />
-            <InsightRow
-              label={t("settings:profile_totalSkillsUsed")}
-              value={formatNumber(stats.insights.totalSkillsUsed, formatLocale)}
-            />
-            <InsightRow
-              label={t("settings:profile_totalThreads")}
-              value={formatNumber(stats.activity.totalThreads, formatLocale)}
-            />
-          </dl>
-          <ProfileUsageCoverage unavailableProviders={topProvider.unavailableProviders} />
-        </section>
+        <InsightsSection
+          coverage={
+            <ProfileUsageCoverage unavailableProviders={topProvider.unavailableProviders} />
+          }
+          rows={[
+            {
+              label: t("settings:profile_mostUsedProvider"),
+              value: topProvider.provider
+                ? `${formatProviderLabel(topProvider.provider)}${
+                    topProvider.percent !== null
+                      ? t("settings:of", {
+                          percent: new Intl.NumberFormat(formatLocale, {
+                            maximumFractionDigits: 1,
+                          }).format(topProvider.percent),
+                          metric: formatProfileUsageBasis(topProvider.metric, formatLocale),
+                        })
+                      : ""
+                  }`
+                : "—",
+            },
+            {
+              label: t("settings:profile_mostUsedReasoning"),
+              value: stats.insights.topReasoning
+                ? `${capitalize(stats.insights.topReasoning)}${
+                    stats.insights.topReasoningPercent !== null
+                      ? ` · ${new Intl.NumberFormat(formatLocale, {
+                          maximumFractionDigits: 1,
+                        }).format(stats.insights.topReasoningPercent)}%`
+                      : ""
+                  }`
+                : "—",
+            },
+            {
+              label: t("settings:profile_mostActiveHour"),
+              value: formatPeakHourLabel(stats.activeHours.startHour),
+            },
+            {
+              label: t("settings:profile_mostWorkedProject"),
+              value: formatMostWorkedProjectLabel(stats.mostWorkedProject),
+            },
+            {
+              label: t("settings:profile_skillsExplored"),
+              value: formatNumber(stats.insights.skillsExplored),
+            },
+            {
+              label: t("settings:profile_totalSkillsUsed"),
+              value: formatNumber(stats.insights.totalSkillsUsed),
+            },
+            {
+              label: t("settings:profile_totalThreads"),
+              value: formatNumber(stats.activity.totalThreads),
+            },
+          ]}
+        />
 
-        <section className="flex flex-col gap-3">
-          <h3 className="text-ui-lg font-medium">{t("settings:profile_mostUsedPlugins")}</h3>
-          {stats.skills.length > 0 ? (
-            <ul className="flex flex-col gap-2.5">
-              {stats.skills.slice(0, 6).map((skill) => (
-                <li
-                  key={`${skill.kind}:${skill.name}`}
-                  className="flex items-center justify-between gap-3"
-                >
-                  <span className="flex min-w-0 items-center gap-2.5">
-                    <span className="flex size-5 shrink-0 items-center justify-center rounded-md bg-muted/60">
-                      <CentralIcon
-                        name={skill.kind === "agent" ? "agent" : "building-blocks"}
-                        className="size-3"
-                      />
-                    </span>
-                    <span className="truncate text-ui leading-snug">{skill.displayName}</span>
-                  </span>
-                  <span className="shrink-0 text-ui leading-snug tabular-nums text-muted-foreground">
-                    {formatNumber(skill.runCount, formatLocale)} {t("settings:profile_runs")}
-                  </span>
-                </li>
-              ))}
-            </ul>
-          ) : (
-            <p className="text-ui leading-snug text-muted-foreground">
-              {t("settings:profile_noSkillsOrAgentsUsed")}
-            </p>
-          )}
-        </section>
+        <SkillsSection
+          skills={stats.skills.map((skill) => ({
+            key: `${skill.kind}:${skill.name}`,
+            displayName: skill.displayName,
+            kind: skill.kind,
+            runCount: skill.runCount,
+          }))}
+        />
       </div>
 
-      {/* Model usage */}
-      <section className="flex flex-col gap-3">
-        <h3 className="text-ui-lg font-medium">{t("settings:profile_modelUsage")}</h3>
+      <ModelUsageSection
+        entries={modelUsage.entries}
+        basis={formatProfileUsageBasis(modelUsage.metric)}
+        unavailableProviders={modelUsage.unavailableProviders}
+      />
+    </>
+  );
+}
+
+// ── Account ────────────────────────────────────────────────────────────
+
+function AccountStatsBody({
+  usageQuery,
+  view,
+}: {
+  // Owned by ProfileContent so the share card can reuse the same answer.
+  usageQuery: UseQueryResult<UsageSummary>;
+  view: AccountUsageView | null;
+}) {
+  const { t, formatLocale } = useTranslation();
+
+  if (usageQuery.isPending || !view) {
+    if (usageQuery.isError) {
+      // Retryable error state; the scope toggle above always lets the user
+      // flip back to This device.
+      return (
+        <div className="flex flex-col items-center gap-3 py-16 text-center">
+          <p className="text-ui-sm text-muted-foreground">Couldn’t load your account stats.</p>
+          <Button variant="outline" size="sm" onClick={() => void usageQuery.refetch()}>
+            {t("chat:profile_tryAgain")}
+          </Button>
+        </div>
+      );
+    }
+    return <AccountStatsSkeleton />;
+  }
+
+  return (
+    <>
+      <StatTileGrid
+        tiles={[
+          {
+            label: t("settings:profile_lifetimeTokens"),
+            value: formatCompact(view.lifetimeTokens),
+          },
+          { label: t("settings:profile_peakDay"), value: formatCompact(view.peakDayTokens) },
+          { label: t("settings:profile_totalPrompts"), value: formatNumber(view.lifetimePrompts) },
+          { label: t("settings:profile_currentStreak"), value: formatDays(view.currentStreakDays) },
+          { label: t("settings:profile_longestStreak"), value: formatDays(view.longestStreakDays) },
+        ]}
+      />
+
+      <HeatmapSection pending={false} cells={view.heatmap.cells} unit={view.heatmap.unit} />
+
+      <div className="grid gap-x-12 gap-y-7 md:grid-cols-2">
+        {/* Most-worked project and provider quota are device-only (content/plan
+            data never syncs), so those rows don't exist on the Account view. */}
+        <InsightsSection
+          rows={[
+            {
+              label: t("settings:profile_mostUsedProvider"),
+              value: view.topProvider.provider
+                ? `${formatProviderLabel(view.topProvider.provider)}${
+                    view.topProvider.percent !== null
+                      ? ` · ${new Intl.NumberFormat(formatLocale, {
+                          maximumFractionDigits: 1,
+                        }).format(view.topProvider.percent)}%`
+                      : ""
+                  }`
+                : "—",
+            },
+            {
+              label: t("settings:profile_mostUsedReasoning"),
+              value: view.topReasoning.reasoning
+                ? `${capitalize(view.topReasoning.reasoning)}${
+                    view.topReasoning.percent !== null
+                      ? ` · ${new Intl.NumberFormat(formatLocale, {
+                          maximumFractionDigits: 1,
+                        }).format(view.topReasoning.percent)}%`
+                      : ""
+                  }`
+                : "—",
+            },
+            {
+              label: t("settings:profile_mostActiveHour"),
+              value: formatPeakHourLabel(view.peakHour),
+            },
+            {
+              label: t("settings:profile_skillsExplored"),
+              value: formatNumber(view.skillsExplored),
+            },
+            {
+              label: t("settings:profile_totalSkillsUsed"),
+              value: formatNumber(view.totalSkillsUsed),
+            },
+            { label: "Total turns", value: formatNumber(view.lifetimeTurns) },
+          ]}
+        />
+
+        <SkillsSection
+          skills={view.skills.map((skill) => ({
+            key: `${skill.kind}:${skill.name}`,
+            displayName: skill.displayName,
+            kind: skill.kind,
+            runCount: skill.runCount,
+          }))}
+        />
+      </div>
+
+      <ModelUsageSection entries={view.models} />
+    </>
+  );
+}
+
+function AccountStatsSkeleton() {
+  return (
+    <>
+      <Skeleton className="h-[72px] w-full rounded-2xl" />
+      <Skeleton className="h-28 w-full rounded-lg" />
+      <div className="grid w-full gap-7 md:grid-cols-2">
+        <Skeleton className="h-40 w-full rounded-lg" />
+        <Skeleton className="h-40 w-full rounded-lg" />
+      </div>
+    </>
+  );
+}
+
+// ── Shared sections (device + account views) ──────────────────────────
+
+function HeatmapSection({
+  pending,
+  cells,
+  unit,
+}: {
+  pending: boolean;
+  cells: Parameters<typeof ActivityHeatmap>[0]["cells"];
+  unit: "tokens" | "prompts";
+}) {
+  const { t } = useTranslation();
+
+  return (
+    <section className="flex min-w-0 flex-col gap-3">
+      <h3 className="text-ui-lg font-medium">{t("workspace:profile_activity")}</h3>
+      {pending ? (
+        <Skeleton className="h-28 w-full rounded-lg" />
+      ) : (
+        <ActivityHeatmap
+          cells={cells}
+          fill
+          radius={5}
+          gap={3}
+          renderTooltip={(cell, cellNode) => (
+            <Tooltip>
+              {/* delay={0}: heatmap tooltips open instantly on hover (no Base UI 600ms default). */}
+              <TooltipTrigger delay={0} render={cellNode} />
+              <TooltipPopup side="top" sideOffset={6}>
+                {heatmapTooltipText(cell, unit)}
+              </TooltipPopup>
+            </Tooltip>
+          )}
+          showMonths
+          monthsPosition="bottom"
+        />
+      )}
+    </section>
+  );
+}
+
+function InsightsSection({
+  rows,
+  coverage,
+}: {
+  rows: readonly { label: string; value: string }[];
+  coverage?: import("react").ReactNode;
+}) {
+  const { t } = useTranslation();
+
+  return (
+    <section className="flex flex-col gap-3">
+      <h3 className="text-ui-lg font-medium">{t("settings:profile_activityInsights")}</h3>
+      <dl className="flex flex-col gap-2.5">
+        {rows.map((row) => (
+          <InsightRow key={row.label} label={row.label} value={row.value} />
+        ))}
+      </dl>
+      {coverage}
+    </section>
+  );
+}
+
+function SkillsSection({
+  skills,
+}: {
+  skills: readonly {
+    key: string;
+    displayName: string;
+    kind: "skill" | "agent";
+    runCount: number;
+  }[];
+}) {
+  const { t } = useTranslation();
+
+  return (
+    <section className="flex flex-col gap-3">
+      <h3 className="text-ui-lg font-medium">{t("settings:profile_mostUsedPlugins")}</h3>
+      {skills.length > 0 ? (
+        <ul className="flex flex-col gap-2.5">
+          {skills.slice(0, 6).map((skill) => (
+            <li key={skill.key} className="flex items-center justify-between gap-3">
+              <span className="flex min-w-0 items-center gap-2.5">
+                <span className="flex size-5 shrink-0 items-center justify-center rounded-md bg-muted/60">
+                  <CentralIcon
+                    name={skill.kind === "agent" ? "agent" : "building-blocks"}
+                    className="size-3"
+                  />
+                </span>
+                <span className="truncate text-ui leading-snug">{skill.displayName}</span>
+              </span>
+              <span className="shrink-0 text-ui leading-snug tabular-nums text-muted-foreground">
+                {formatNumber(skill.runCount)} {t("settings:profile_runs")}
+              </span>
+            </li>
+          ))}
+        </ul>
+      ) : (
         <p className="text-ui leading-snug text-muted-foreground">
-          {t("settings:shareOf")} {formatProfileUsageBasis(modelUsage.metric, formatLocale)}.
+          {t("settings:profile_noSkillsOrAgentsUsed")}
         </p>
-        {modelUsage.entries.length > 0 ? (
-          <ul className="grid grid-cols-1 gap-x-12 gap-y-3 sm:grid-cols-2">
-            {modelUsage.entries.slice(0, 6).map((entry) => (
-              <ModelUsageRow
-                key={`${entry.instanceId}:${entry.model}`}
-                provider={entry.provider}
-                model={entry.model}
-                percent={entry.percent}
-              />
-            ))}
-          </ul>
-        ) : (
-          <p className="text-ui leading-snug text-muted-foreground">
-            {t("settings:profile_noModelActivity")}
-          </p>
-        )}
-        <ProfileUsageCoverage unavailableProviders={modelUsage.unavailableProviders} />
-      </section>
+      )}
+    </section>
+  );
+}
 
-      <ShareDialog
-        stats={stats}
-        tokenStats={tokenStats}
-        displayName={name}
-        handle={handle}
-        avatarColor={avatarColor}
-        avatarImage={avatarImage}
-        open={shareOpen}
-        onOpenChange={setShareOpen}
-      />
+function ModelUsageSection({
+  entries,
+  basis,
+  unavailableProviders = [],
+}: {
+  entries: readonly {
+    provider: ProviderKind | "unknown";
+    instanceId?: string;
+    model: string;
+    percent: number;
+  }[];
+  basis?: string;
+  unavailableProviders?: readonly ProviderKind[];
+}) {
+  const { t, formatLocale } = useTranslation();
 
-      <EditProfileDialog
-        open={editOpen}
-        onOpenChange={setEditOpen}
-        initials={stats.identity.initials}
-        name={name}
-        handle={handle}
-        avatarColor={avatarColor}
-        avatarImage={avatarImage}
-        onSave={({
-          name: nextName,
-          handle: nextHandle,
-          avatarColor: nextColor,
-          avatarImage: nextImage,
-        }) => {
-          setName(nextName);
-          setHandle(nextHandle);
-          setAvatarColor(nextColor);
-          setAvatarImage(nextImage);
-        }}
-      />
-    </div>
+  return (
+    <section className="flex flex-col gap-3">
+      <h3 className="text-ui-lg font-medium">{t("settings:profile_modelUsage")}</h3>
+      {basis ? (
+        <p className="text-ui leading-snug text-muted-foreground">
+          {t("settings:shareOf")} {basis}.
+        </p>
+      ) : null}
+      {entries.length > 0 ? (
+        <ul className="grid grid-cols-1 gap-x-12 gap-y-3 sm:grid-cols-2">
+          {entries.slice(0, 6).map((entry) => (
+            <ModelUsageRow
+              key={`${entry.instanceId ?? entry.provider}:${entry.model}`}
+              icon={
+                entry.provider !== "unknown" ? (
+                  <ProviderIcon provider={entry.provider} className="size-3.5 shrink-0" />
+                ) : (
+                  <CentralIcon name="chart-2" className="size-3.5 shrink-0 text-muted-foreground" />
+                )
+              }
+              model={entry.model}
+              percent={entry.percent}
+              stat={`${new Intl.NumberFormat(formatLocale, {
+                maximumFractionDigits: 1,
+              }).format(entry.percent)}%`}
+            />
+          ))}
+        </ul>
+      ) : (
+        <p className="text-ui leading-snug text-muted-foreground">
+          {t("settings:profile_noModelActivity")}
+        </p>
+      )}
+      <ProfileUsageCoverage unavailableProviders={unavailableProviders} />
+    </section>
   );
 }
 
 // ── Small pieces ───────────────────────────────────────────────────────
 
-function StatTile({ label, value }: { label: string; value: string | null }) {
-  return (
-    <div className="flex flex-col items-center gap-0.5 px-3 py-3">
-      {value === null ? (
-        <Skeleton className="h-4 w-12" />
-      ) : (
-        <span className="text-ui-lg leading-snug font-normal tabular-nums text-foreground">
-          {value}
-        </span>
-      )}
-      <span className="text-ui leading-snug font-normal text-muted-foreground">{label}</span>
-    </div>
-  );
-}
-
-function InsightRow({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="flex items-center justify-between gap-3">
-      <dt className="shrink-0 text-ui leading-snug text-muted-foreground">{label}</dt>
-      <dd className="truncate text-ui leading-snug font-normal tabular-nums" title={value}>
-        {value}
-      </dd>
-    </div>
-  );
-}
-
-function formatHour(hour: number, formatLocale: string): string {
-  const normalized = ((hour % 24) + 24) % 24;
-  return new Intl.DateTimeFormat(formatLocale, { hour: "numeric", timeZone: "UTC" }).format(
-    new Date(Date.UTC(2026, 0, 1, normalized)),
-  );
-}
-
-function formatPeakHourLabel(startHour: number | null, formatLocale: string): string {
-  return startHour === null ? "—" : formatHour(startHour, formatLocale);
+function formatPeakHourLabel(startHour: number | null): string {
+  return startHour === null ? "—" : formatHourLabel(startHour);
 }
 
 function formatMostWorkedProjectLabel(
   project: ProfileStats["mostWorkedProject"],
-  formatLocale: string,
+  formatLocale = getFormatLocale(),
 ): string {
   if (!project) {
     return "—";
@@ -391,41 +699,6 @@ function formatMostWorkedProjectLabel(
     value1: formatNumber(project.promptCount, formatLocale),
     value2: promptLabel,
   });
-}
-
-function ModelUsageRow({
-  provider,
-  model,
-  percent,
-}: {
-  provider: ProviderKind | "unknown";
-  model: string;
-  percent: number;
-}) {
-  const { formatLocale } = useTranslation();
-  return (
-    <li className="flex flex-col gap-1.5">
-      <div className="flex items-center justify-between gap-3 text-ui leading-snug">
-        <span className="flex min-w-0 items-center gap-2">
-          {provider !== "unknown" ? (
-            <ProviderIcon provider={provider} className="size-3.5 shrink-0" />
-          ) : (
-            <CentralIcon name="chart-2" className="size-3.5 shrink-0 text-muted-foreground" />
-          )}
-          <span className="truncate">{model}</span>
-        </span>
-        <span className="shrink-0 tabular-nums text-muted-foreground">
-          {new Intl.NumberFormat(formatLocale, { maximumFractionDigits: 1 }).format(percent)}%
-        </span>
-      </div>
-      <div className="h-1 w-full overflow-hidden rounded-full bg-muted">
-        <div
-          className="h-full rounded-full bg-[var(--info)]"
-          style={{ width: `${Math.min(100, Math.max(2, percent))}%` }}
-        />
-      </div>
-    </li>
-  );
 }
 
 function ProfileSkeleton() {

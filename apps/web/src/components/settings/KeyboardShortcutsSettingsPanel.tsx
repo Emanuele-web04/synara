@@ -9,7 +9,7 @@ import type {
   ServerConfig,
   ServerKeybindingEdit,
 } from "@synara/contracts";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { Button } from "~/components/ui/button";
@@ -30,6 +30,7 @@ import { CentralIcon } from "~/lib/central-icons";
 import { AddPlusIcon, PencilIcon, ResetIcon, TrashCanIcon } from "~/lib/icons";
 import { ensureNativeApi, readNativeApi } from "~/nativeApi";
 import { serverConfigQueryOptions, serverQueryKeys } from "~/lib/serverReactQuery";
+import { readWorkspaceFrame } from "~/lib/hosts/workspaceFrame";
 import { cn, getNavigatorPlatform } from "~/lib/utils";
 import {
   SETTINGS_CARD_ROW_CLASS_NAME,
@@ -88,6 +89,10 @@ function useShortcutEditor() {
 
 /** Header action for the Keybindings section: puts every built-in shortcut back. */
 export function KeyboardShortcutsResetButton() {
+  return readWorkspaceFrame() ? null : <LocalKeyboardShortcutsResetButton />;
+}
+
+function LocalKeyboardShortcutsResetButton() {
   const { t } = useTranslation();
 
   const { rows, isLoading, applyEdits } = useShortcutEditor();
@@ -129,6 +134,23 @@ export function KeyboardShortcutsResetButton() {
 }
 
 export function KeyboardShortcutsSettingsPanel() {
+  const frame = readWorkspaceFrame();
+  useEffect(() => {
+    frame?.controller.navigate("/settings?section=shortcuts");
+  }, [frame]);
+  return frame ? (
+    <SettingsEmptyState>
+      <p className="mb-3">App shortcuts are managed on this computer.</p>
+      <Button onClick={() => frame.controller.navigate("/settings?section=shortcuts")}>
+        Edit keybindings on this computer
+      </Button>
+    </SettingsEmptyState>
+  ) : (
+    <LocalKeyboardShortcutsSettingsPanel />
+  );
+}
+
+function LocalKeyboardShortcutsSettingsPanel() {
   const { t } = useTranslation();
 
   const { source, rows, isLoading, applyEdits } = useShortcutEditor();

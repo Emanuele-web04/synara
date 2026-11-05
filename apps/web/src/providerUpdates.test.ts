@@ -102,6 +102,7 @@ function serverSettings(overrides: Partial<ServerSettings["providers"]> = {}): S
     },
     providerInstances: {},
     skills: { disabled: [] },
+    newThreadDefaults: { modelSelectionByProvider: {}, activeProvider: null, runtimeMode: null },
   };
 }
 

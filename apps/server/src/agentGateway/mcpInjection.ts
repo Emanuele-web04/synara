@@ -15,13 +15,14 @@
  * @module agentGateway/mcpInjection
  */
 import type * as Acp from "@agentclientprotocol/sdk";
+import { SYNARA_MCP_SERVER_NAME } from "@synara/shared/mcpConnectors";
+export { SYNARA_MCP_SERVER_NAME } from "@synara/shared/mcpConnectors";
 
 import type {
   AgentGatewayMcpConnection,
   AgentGatewayStdioProxySpawn,
 } from "./Services/AgentGatewayCredentials.ts";
 
-export const SYNARA_MCP_SERVER_NAME = "synara";
 export const SYNARA_AGENT_GATEWAY_TOKEN_ENV = "SYNARA_AGENT_GATEWAY_TOKEN";
 export const SYNARA_AGENT_GATEWAY_BOOTSTRAP_TOKEN_ENV = "SYNARA_AGENT_GATEWAY_BOOTSTRAP_TOKEN";
 export const SYNARA_AGENT_GATEWAY_URL_ENV = "SYNARA_AGENT_GATEWAY_URL";
@@ -311,8 +312,6 @@ export function buildAcpSynaraMcpServers(input: {
     const headers = [{ name: "Authorization", value: authorizationHeader(input.connection) }];
     return [
       { type: "http", name: SYNARA_MCP_SERVER_NAME, url: input.connection.url, headers },
-      // Connectors need Streamable HTTP sessions, which the stdio proxy below
-      // does not carry, so stdio-only agents run without them.
       ...(input.connection.connectors ?? []).map(
         (connector): Acp.McpServer => ({
           type: "http",
@@ -335,5 +334,15 @@ export function buildAcpSynaraMcpServers(input: {
         { name: "ELECTRON_RUN_AS_NODE", value: "1" },
       ],
     },
+    ...(input.connection.connectors ?? []).map((connector) => ({
+      name: connector.name,
+      command: input.stdioProxy.command,
+      args: [...input.stdioProxy.args],
+      env: [
+        { name: SYNARA_AGENT_GATEWAY_URL_ENV, value: connector.url },
+        { name: SYNARA_AGENT_GATEWAY_TOKEN_ENV, value: input.connection.bearerToken },
+        { name: "ELECTRON_RUN_AS_NODE", value: "1" },
+      ],
+    })),
   ];
 }

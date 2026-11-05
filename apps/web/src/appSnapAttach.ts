@@ -1,3 +1,4 @@
+import { readExecutionContext } from "./lib/hosts/executionContext";
 // FILE: appSnapAttach.ts
 // Purpose: Shared completion flow for an AppSnap capture once its target thread is known.
 // Layer: Web composer domain
@@ -13,6 +14,8 @@ export async function attachAppSnapCapture(
   capture: DesktopAppSnapCapture,
   acknowledge?: () => Promise<void>,
 ): Promise<"persisted" | "unverified"> {
+  if (readExecutionContext()?.remote)
+    throw new Error("AppSnap is unavailable for remote workspaces.");
   const persistenceResult = await insertAppSnapCaptureIntoDraft(threadId, capture);
 
   const unverifiedDescription =

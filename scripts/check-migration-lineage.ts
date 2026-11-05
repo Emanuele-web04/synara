@@ -1,3 +1,4 @@
+import { ACCOUNT_MIGRATION_LINEAGES } from "../apps/server/src/persistence/AccountMigrationLineage.ts";
 // FILE: check-migration-lineage.ts
 // Purpose: Fail closed when a released migration's (id, name) tracker identity changes.
 // Layer: CI preflight
@@ -53,6 +54,9 @@ export interface MigrationLineageAllowance {
  * not supposed to reach this list — append a migration instead.
  */
 const HANDLED_RELEASED_DIVERGENCES: readonly MigrationLineageAllowance[] = [
+  ...ACCOUNT_MIGRATION_LINEAGES.flatMap(({ prefix, tail }) =>
+    tail.map((name, index) => ({ id: prefix + index + 1, name })),
+  ),
   // v0.0.15 and older recorded these two at 17/18 before the slots were reused.
   // `LAST_SHARED_LINEAGE_MIGRATION_ID` sits at 16 precisely because of them: a
   // divergence above that boundary takes the replay path, and every migration

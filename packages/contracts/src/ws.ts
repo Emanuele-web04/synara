@@ -1,13 +1,45 @@
-import { EditorDebugStartInput, EditorDebugActionInput, EditorDebugPollInput } from "./editorDebug";
+import {
+  AccountSaveInboxRecapInput,
+  ListSavedInboxRecapsInput,
+  SavedInboxRecapIdInput,
+} from "./inboxRecaps";
+import { RemoteAgentCall } from "./remoteAgentGateway";
+import { RemoteAccessInput } from "./remotePairing";
 import { Schema, Struct } from "effect";
+import { ServerDesktopUpdateInput } from "./desktopUpdate";
+import { EditorDebugStartInput, EditorDebugActionInput, EditorDebugPollInput } from "./editorDebug";
 import { EditorIntelligenceInput } from "./editorIntelligence";
 import {
   LoadProjectImportHistoryInput,
   ImportProjectInput,
   ListProjectImportsInput,
 } from "./projectImport";
-import { NonNegativeInt, ProjectId, ThreadId, TrimmedNonEmptyString } from "./baseSchemas";
+import {
+  boundedTrimmedNonEmptyString,
+  NonNegativeInt,
+  ProjectId,
+  ThreadId,
+  TrimmedNonEmptyString,
+} from "./baseSchemas";
 
+import {
+  ACCOUNT_NAME_MAX_LENGTH,
+  AccountHost,
+  AccountDeleteInput,
+  AccountAuthenticateOtpInput,
+  AccountBeginSsoInput,
+  AccountCompleteSsoInput,
+  AccountOpenVerificationUrlInput,
+  AccountSendOtpInput,
+  AccountUpdateProfileInput,
+  AccountUploadAvatarInput,
+} from "./account";
+import { LinkDeviceApproveRequest } from "./hostAuth";
+import { EndHostSessionInput } from "./hostSessions";
+import { HostsConnectInput, HostsDisconnectInput } from "./hostConnection";
+import { ConfirmSyncKeyPairingRequest, SyncKeyPairingRequest } from "./hostSecrets";
+import { AccountUsageSummaryInput } from "./accountUsage";
+import { AccountBillingCheckoutRequest } from "./accountBilling";
 import {
   AutomationCancelRunInput,
   AutomationArchiveRunInput,
@@ -201,7 +233,7 @@ import {
   ProviderListSkillsInput,
   ProviderSkillsCatalogInput,
 } from "./providerDiscovery";
-import { ProviderCompactThreadInput } from "./provider";
+import { ProviderCompactThreadInput, ProviderPrewarmThreadInput } from "./provider";
 import {
   PullRequestActionInput,
   PullRequestCommentInput,
@@ -219,15 +251,42 @@ import {
   ExternalMcpRefreshPairingInput,
   ExternalMcpRevokeIntegrationInput,
 } from "./externalMcp";
-import { McpConnectorConnectInput, McpConnectorDisconnectInput } from "./mcpConnectors";
+import {
+  McpConnectorConnectInput,
+  McpConnectorDisconnectInput,
+  McpConnectorResolveProposalInput,
+} from "./mcpConnectors";
 import {
   GitHubProjectProvisionInput,
   GitHubProjectProvisionProgressEvent,
 } from "./githubProjectProvisioning";
 
+const HostsEntityId = boundedTrimmedNonEmptyString(256);
+
+export const HostsUpdateInput = Schema.Struct({
+  hostId: HostsEntityId,
+  discoverable: Schema.optional(Schema.Boolean),
+  name: Schema.optional(boundedTrimmedNonEmptyString(ACCOUNT_NAME_MAX_LENGTH)),
+});
+export type HostsUpdateInput = typeof HostsUpdateInput.Type;
+
+export const HostsHostInput = Schema.Struct({ hostId: HostsEntityId });
+export type HostsHostInput = typeof HostsHostInput.Type;
+
+export const HostsRevokeDeviceInput = Schema.Struct({ deviceId: HostsEntityId });
+export type HostsRevokeDeviceInput = typeof HostsRevokeDeviceInput.Type;
+
+export const HostsEnrollmentResult = Schema.Struct({
+  host: Schema.NullOr(AccountHost),
+  organizationMemberCount: Schema.NullOr(NonNegativeInt),
+  discoverabilityAcknowledged: Schema.Boolean,
+});
+export type HostsEnrollmentResult = typeof HostsEnrollmentResult.Type;
+
 // ── WebSocket RPC Method Names ───────────────────────────────────────
 
 export const WS_METHODS = {
+  agentGatewayCall: "agentGateway.call",
   // Project registry methods
   projectsDiscoverScripts: "projects.discoverScripts",
   projectsListDirectories: "projects.listDirectories",
@@ -314,6 +373,8 @@ export const WS_METHODS = {
   serverGetRuntimeStatus: "server.getRuntimeStatus",
   serverGetConfig: "server.getConfig",
   serverGetEnvironment: "server.getEnvironment",
+  serverDesktopUpdateStatus: "server.desktopUpdateStatus",
+  serverDesktopUpdate: "server.desktopUpdate",
   serverGetSettings: "server.getSettings",
   serverUpdateSettings: "server.updateSettings",
   serverRefreshProviders: "server.refreshProviders",
@@ -323,6 +384,8 @@ export const WS_METHODS = {
   serverRevokeExternalMcpIntegration: "server.revokeExternalMcpIntegration",
   serverRefreshExternalMcpPairing: "server.refreshExternalMcpPairing",
   serverListMcpConnectors: "server.listMcpConnectors",
+  serverListMcpConnectorProposals: "server.listMcpConnectorProposals",
+  serverResolveMcpConnectorProposal: "server.resolveMcpConnectorProposal",
   serverConnectMcpConnector: "server.connectMcpConnector",
   serverDisconnectMcpConnector: "server.disconnectMcpConnector",
   serverGetMcpConnectorSetup: "server.getMcpConnectorSetup",
@@ -356,6 +419,7 @@ export const WS_METHODS = {
   // Provider discovery
   providerGetComposerCapabilities: "provider.getComposerCapabilities",
   providerCompactThread: "provider.compactThread",
+  providerPrewarmThread: "provider.prewarmThread",
   providerListCommands: "provider.listCommands",
   providerListSkills: "provider.listSkills",
   providerListSkillsCatalog: "provider.listSkillsCatalog",
@@ -363,6 +427,48 @@ export const WS_METHODS = {
   providerReadPlugin: "provider.readPlugin",
   providerListModels: "provider.listModels",
   providerListAgents: "provider.listAgents",
+
+  // Account (Synara account session brokered by the server)
+  accountStatus: "account.status",
+  accountBillingStatus: "account.billingStatus",
+  accountBillingCheckout: "account.billingCheckout",
+  accountBillingPortal: "account.billingPortal",
+  accountSendOtp: "account.sendOtp",
+  accountAuthenticateOtp: "account.authenticateOtp",
+  accountBeginSso: "account.beginSso",
+  accountCompleteSso: "account.completeSso",
+  accountCancelSso: "account.cancelSso",
+  accountUsageSummary: "account.usageSummary",
+  accountSaveInboxRecap: "account.saveInboxRecap",
+  accountListInboxRecaps: "account.listInboxRecaps",
+  accountDeleteInboxRecap: "account.deleteInboxRecap",
+  accountUpdateProfile: "account.updateProfile",
+  accountUploadAvatar: "account.uploadAvatar",
+  accountDeleteAvatar: "account.deleteAvatar",
+  accountDelete: "account.delete",
+  accountSignOut: "account.signOut",
+  accountOpenVerificationUrl: "account.openVerificationUrl",
+
+  // Hosts (owner-only account state brokered by the server)
+  hostsList: "hosts.list",
+  hostsUpdate: "hosts.update",
+  hostsDelete: "hosts.delete",
+  hostsListDevices: "hosts.listDevices",
+  hostsRevokeDevice: "hosts.revokeDevice",
+  hostsApproveDeviceLink: "hosts.approveDeviceLink",
+  hostsRequestGrant: "hosts.requestGrant",
+  hostsEnrollment: "hosts.enrollment",
+  hostsUnlinkLocalHost: "hosts.unlinkLocalHost",
+  hostsListSessions: "hosts.listSessions",
+  hostsEndSession: "hosts.endSession",
+  hostsBeginSyncKeyPairing: "hosts.beginSyncKeyPairing",
+  hostsOfferSyncKey: "hosts.offerSyncKey",
+  hostsReceiveSyncKey: "hosts.receiveSyncKey",
+  hostsConfirmSyncKey: "hosts.confirmSyncKey",
+  hostsRemoteAccess: "hosts.remoteAccess",
+  hostsConnect: "hosts.connect",
+  hostsDisconnect: "hosts.disconnect",
+  hostsListConnections: "hosts.listConnections",
 
   // Automation methods
   automationList: "automation.list",
@@ -605,6 +711,8 @@ const WebSocketRequestBody = Schema.Union([
   tagRequestBody(WS_METHODS.serverGetRuntimeStatus, Schema.Struct({})),
   tagRequestBody(WS_METHODS.serverGetConfig, Schema.Struct({})),
   tagRequestBody(WS_METHODS.serverGetEnvironment, Schema.Struct({})),
+  tagRequestBody(WS_METHODS.serverDesktopUpdateStatus, Schema.Struct({})),
+  tagRequestBody(WS_METHODS.serverDesktopUpdate, ServerDesktopUpdateInput),
   tagRequestBody(WS_METHODS.serverGetSettings, Schema.Struct({})),
   tagRequestBody(WS_METHODS.serverUpdateSettings, ServerUpdateSettingsInput),
   tagRequestBody(WS_METHODS.serverRefreshProviders, Schema.Struct({})),
@@ -614,7 +722,13 @@ const WebSocketRequestBody = Schema.Union([
   tagRequestBody(WS_METHODS.serverRevokeExternalMcpIntegration, ExternalMcpRevokeIntegrationInput),
   tagRequestBody(WS_METHODS.serverRefreshExternalMcpPairing, ExternalMcpRefreshPairingInput),
   tagRequestBody(WS_METHODS.serverListMcpConnectors, Schema.Struct({})),
-  tagRequestBody(WS_METHODS.serverConnectMcpConnector, McpConnectorConnectInput),
+  tagRequestBody(WS_METHODS.serverListMcpConnectorProposals, Schema.Struct({})),
+  tagRequestBody(WS_METHODS.serverResolveMcpConnectorProposal, McpConnectorResolveProposalInput),
+  Schema.Union([
+    tagRequestBody(WS_METHODS.serverConnectMcpConnector, McpConnectorConnectInput.members[0]),
+    tagRequestBody(WS_METHODS.serverConnectMcpConnector, McpConnectorConnectInput.members[1]),
+    tagRequestBody(WS_METHODS.serverConnectMcpConnector, McpConnectorConnectInput.members[2]),
+  ]),
   tagRequestBody(WS_METHODS.serverDisconnectMcpConnector, McpConnectorDisconnectInput),
   tagRequestBody(WS_METHODS.serverGetMcpConnectorSetup, Schema.Struct({})),
   tagRequestBody(WS_METHODS.serverListWorktrees, Schema.Struct({})),
@@ -638,6 +752,7 @@ const WebSocketRequestBody = Schema.Union([
   // Provider discovery
   tagRequestBody(WS_METHODS.providerGetComposerCapabilities, ProviderGetComposerCapabilitiesInput),
   tagRequestBody(WS_METHODS.providerCompactThread, ProviderCompactThreadInput),
+  tagRequestBody(WS_METHODS.providerPrewarmThread, ProviderPrewarmThreadInput),
   tagRequestBody(WS_METHODS.providerListCommands, ProviderListCommandsInput),
   tagRequestBody(WS_METHODS.providerListSkills, ProviderListSkillsInput),
   tagRequestBody(WS_METHODS.providerListSkillsCatalog, ProviderSkillsCatalogInput),
@@ -645,6 +760,50 @@ const WebSocketRequestBody = Schema.Union([
   tagRequestBody(WS_METHODS.providerReadPlugin, ProviderReadPluginInput),
   tagRequestBody(WS_METHODS.providerListModels, ProviderListModelsInput),
   tagRequestBody(WS_METHODS.providerListAgents, ProviderListAgentsInput),
+
+  // Account
+  tagRequestBody(WS_METHODS.accountStatus, Schema.Struct({})),
+  tagRequestBody(WS_METHODS.accountBillingStatus, Schema.Struct({})),
+  tagRequestBody(WS_METHODS.accountBillingCheckout, AccountBillingCheckoutRequest),
+  tagRequestBody(WS_METHODS.accountBillingPortal, Schema.Struct({})),
+  tagRequestBody(WS_METHODS.accountSendOtp, AccountSendOtpInput),
+  tagRequestBody(WS_METHODS.accountAuthenticateOtp, AccountAuthenticateOtpInput),
+  tagRequestBody(WS_METHODS.accountBeginSso, AccountBeginSsoInput),
+  tagRequestBody(WS_METHODS.accountCompleteSso, AccountCompleteSsoInput),
+  tagRequestBody(WS_METHODS.accountCancelSso, AccountCompleteSsoInput),
+  tagRequestBody(WS_METHODS.accountUsageSummary, AccountUsageSummaryInput),
+  tagRequestBody(WS_METHODS.accountSaveInboxRecap, AccountSaveInboxRecapInput),
+  tagRequestBody(WS_METHODS.accountListInboxRecaps, ListSavedInboxRecapsInput),
+  tagRequestBody(WS_METHODS.accountDeleteInboxRecap, SavedInboxRecapIdInput),
+  tagRequestBody(WS_METHODS.accountUpdateProfile, AccountUpdateProfileInput),
+  tagRequestBody(WS_METHODS.accountUploadAvatar, AccountUploadAvatarInput),
+  tagRequestBody(WS_METHODS.accountDeleteAvatar, Schema.Struct({})),
+  tagRequestBody(WS_METHODS.accountDelete, AccountDeleteInput),
+  tagRequestBody(WS_METHODS.accountSignOut, Schema.Struct({})),
+  tagRequestBody(WS_METHODS.accountOpenVerificationUrl, AccountOpenVerificationUrlInput),
+
+  tagRequestBody(WS_METHODS.agentGatewayCall, RemoteAgentCall),
+
+  // Hosts
+  tagRequestBody(WS_METHODS.hostsList, Schema.Struct({})),
+  tagRequestBody(WS_METHODS.hostsUpdate, HostsUpdateInput),
+  tagRequestBody(WS_METHODS.hostsDelete, HostsHostInput),
+  tagRequestBody(WS_METHODS.hostsListDevices, Schema.Struct({})),
+  tagRequestBody(WS_METHODS.hostsRevokeDevice, HostsRevokeDeviceInput),
+  tagRequestBody(WS_METHODS.hostsApproveDeviceLink, LinkDeviceApproveRequest),
+  tagRequestBody(WS_METHODS.hostsRequestGrant, HostsHostInput),
+  tagRequestBody(WS_METHODS.hostsEnrollment, Schema.Struct({})),
+  tagRequestBody(WS_METHODS.hostsUnlinkLocalHost, Schema.Struct({})),
+  tagRequestBody(WS_METHODS.hostsListSessions, Schema.Struct({})),
+  tagRequestBody(WS_METHODS.hostsEndSession, EndHostSessionInput),
+  tagRequestBody(WS_METHODS.hostsBeginSyncKeyPairing, Schema.Struct({})),
+  tagRequestBody(WS_METHODS.hostsOfferSyncKey, SyncKeyPairingRequest),
+  tagRequestBody(WS_METHODS.hostsReceiveSyncKey, Schema.Struct({})),
+  tagRequestBody(WS_METHODS.hostsConfirmSyncKey, ConfirmSyncKeyPairingRequest),
+  tagRequestBody(WS_METHODS.hostsRemoteAccess, RemoteAccessInput),
+  tagRequestBody(WS_METHODS.hostsConnect, HostsConnectInput),
+  tagRequestBody(WS_METHODS.hostsDisconnect, HostsDisconnectInput),
+  tagRequestBody(WS_METHODS.hostsListConnections, Schema.Struct({})),
 
   // Automation methods
   tagRequestBody(WS_METHODS.automationList, AutomationListInput),

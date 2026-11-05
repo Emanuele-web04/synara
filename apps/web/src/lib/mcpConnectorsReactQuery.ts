@@ -15,8 +15,8 @@ export function mcpConnectorsQueryOptions() {
     queryKey: MCP_CONNECTORS_QUERY_KEY,
     queryFn: () => ensureNativeApi().server.listMcpConnectors(),
     staleTime: 5_000,
-    // Remote and browser-hosted clients get a definitive refusal (connectors
-    // are managed on the loopback instance); retrying only repeats it.
+    // A refusal (connectors off, or an old host) is definitive; retrying only
+    // repeats it. Paired clients read the list with each URL cut to its origin.
     retry: false,
   });
 }

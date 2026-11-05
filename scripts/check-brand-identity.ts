@@ -53,6 +53,12 @@ interface ApprovedIdentityLine {
 }
 
 const approvedIdentityLines: readonly ApprovedIdentityLine[] = [
+  // Exact upstream/license provenance only; surrounding product copy still fails.
+  {
+    path: "docs/implementation/cloudflare-remote/UPSTREAM-COMPATIBILITY.md",
+    markdownSection: "# Upstream managed-connection compatibility",
+    line: `Read-only upstream: [upstream repository](https://github.com/pingdotgg/${retiredFirstName}/tree/d15210cd3da79f9a1a495a6309d912d76362a046), commit \`d15210cd3da79f9a1a495a6309d912d76362a046\`, 2026-09-28. Required references read: \`docs/internals/${retiredShortName}-connect.md\`, \`docs/operations/connect-setup.md\`, \`docs/user/remote-access.md\`, \`infra/relay/README.md\`. Followed \`ManagedEndpointProvider.ts\`, \`ManagedEndpointRuntime.ts\`, and shared \`relayClient.ts\`. MIT, Copyright 2026 ${retiredCompanyDisplayName} Inc. Patterns adapted; no source copied at this checkpoint.`,
+  },
   {
     path: "LICENSE",
     line: `Copyright (c) 2026 ${retiredCompanyDisplayName} Inc.`,

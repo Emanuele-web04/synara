@@ -43,7 +43,7 @@ const flavor = required("--flavor");
 if (platform !== "mac" && platform !== "win" && platform !== "linux") {
   throw new Error(`Unsupported checkpoint platform: ${platform}.`);
 }
-if (flavor !== "production" && flavor !== "beta") {
+if (flavor !== "production" && flavor !== "beta" && flavor !== "remote") {
   throw new Error(`Unsupported checkpoint flavor: ${flavor}.`);
 }
 await verifyReleaseArtifactCheckpoint({

@@ -1,4 +1,4 @@
-import type { ProviderKind } from "@synara/contracts";
+import type { ProviderKind, RemoteAgentCallerPolicy } from "@synara/contracts";
 import type { Effect } from "effect";
 
 import type { AgentGatewayTargetError } from "./targetResolver.ts";
@@ -41,6 +41,8 @@ export interface ExternalClientPrincipal {
 export type AgentGatewayPrincipal = ProviderSessionPrincipal | ExternalClientPrincipal;
 
 export interface ToolContext {
+  /** Authenticated peer delegation; never populated from MCP arguments. */
+  readonly remoteCaller?: RemoteAgentCallerPolicy;
   readonly principal: ProviderSessionPrincipal;
   readonly callerThreadId: string;
   /**
