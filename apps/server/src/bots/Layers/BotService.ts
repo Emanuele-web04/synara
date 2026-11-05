@@ -128,7 +128,10 @@ const toServiceError =
     cause instanceof BotServiceError
       ? cause
       : fail(
-          cause && typeof cause === "object" && "message" in cause && typeof cause.message === "string"
+          cause &&
+            typeof cause === "object" &&
+            "message" in cause &&
+            typeof cause.message === "string"
             ? `${message} ${cause.message}`
             : message,
           code,
@@ -136,7 +139,9 @@ const toServiceError =
         );
 
 const requireEnabled = Effect.suspend(() =>
-  isServerSynbotEnabled() ? Effect.void : Effect.fail(fail(SYNBOT_UNAVAILABLE_MESSAGE, "unavailable")),
+  isServerSynbotEnabled()
+    ? Effect.void
+    : Effect.fail(fail(SYNBOT_UNAVAILABLE_MESSAGE, "unavailable")),
 );
 
 const repositoryFromPrUrl = (url: string): string | null => {
@@ -148,6 +153,25 @@ const isHumanMessage = (message: OrchestrationMessage | undefined) =>
   message !== undefined &&
   message.role === "user" &&
   (message.dispatchOrigin === undefined || message.dispatchOrigin === "user");
+
+const toDelegation = (record: BotDelegationRecord): BotDelegation => ({
+  id: record.id,
+  requestId: record.requestId,
+  rootId: record.rootId,
+  depth: record.depth,
+  fromBotId: record.fromBotId,
+  fromThreadId: record.fromThreadId,
+  toBotId: record.toBotId,
+  toThreadId: record.toThreadId,
+  brief: record.brief,
+  state: record.state,
+  humanRooted: record.humanRooted,
+  resultSummary: record.resultSummary,
+  taskIds: record.taskIds,
+  createdAt: record.createdAt,
+  startedAt: record.startedAt,
+  settledAt: record.settledAt,
+});
 
 const make = Effect.gen(function* () {
   const repository = yield* BotRepository;
@@ -260,50 +284,38 @@ const make = Effect.gen(function* () {
               delegation.toBotId === profile.projectId && delegation.state === "awaiting-start",
           ),
         }),
-        revision: config.value.revision,
+        revision: config.value.revision + profile.revision,
         createdAt: profile.createdAt,
-        updatedAt: profile.updatedAt > config.value.updatedAt ? profile.updatedAt : config.value.updatedAt,
+        updatedAt:
+          profile.updatedAt > config.value.updatedAt ? profile.updatedAt : config.value.updatedAt,
       };
       return bot;
     });
 
   const loadBot = (projectId: ProjectId) =>
     Effect.gen(function* () {
-      const profile = yield* repository.getProfile(projectId).pipe(Effect.mapError(toServiceError("Could not load the bot.")));
+      const profile = yield* repository
+        .getProfile(projectId)
+        .pipe(Effect.mapError(toServiceError("Could not load the bot.")));
       if (!profile) return null;
       return yield* assembleBot(profile);
     });
 
   const requireBot = (projectId: ProjectId) =>
     loadBot(projectId).pipe(
-      Effect.flatMap((bot) => (bot ? Effect.succeed(bot) : Effect.fail(fail("Bot was not found.", "not-found")))),
+      Effect.flatMap((bot) =>
+        bot ? Effect.succeed(bot) : Effect.fail(fail("Bot was not found.", "not-found")),
+      ),
     );
 
   const listBots = () =>
     Effect.gen(function* () {
-      const profiles = yield* repository.listProfiles().pipe(Effect.mapError(toServiceError("Could not list bots.")));
+      const profiles = yield* repository
+        .listProfiles()
+        .pipe(Effect.mapError(toServiceError("Could not list bots.")));
       const bots = yield* Effect.forEach(profiles, assembleBot, { concurrency: 4 });
       return bots.filter((bot): bot is Bot => bot !== null);
     });
-
-  const toDelegation = (record: BotDelegationRecord): BotDelegation => ({
-    id: record.id,
-    requestId: record.requestId,
-    rootId: record.rootId,
-    depth: record.depth,
-    fromBotId: record.fromBotId,
-    fromThreadId: record.fromThreadId,
-    toBotId: record.toBotId,
-    toThreadId: record.toThreadId,
-    brief: record.brief,
-    state: record.state,
-    humanRooted: record.humanRooted,
-    resultSummary: record.resultSummary,
-    taskIds: record.taskIds,
-    createdAt: record.createdAt,
-    startedAt: record.startedAt,
-    settledAt: record.settledAt,
-  });
 
   const publishBot = (projectId: ProjectId) =>
     loadBot(projectId).pipe(
@@ -385,7 +397,8 @@ const make = Effect.gen(function* () {
       const shell = yield* snapshotQuery
         .getThreadShellById(input.threadId)
         .pipe(Effect.mapError(toServiceError("Could not load the bot thread.")));
-      if (Option.isNone(shell)) return yield* Effect.fail(fail("The bot thread no longer exists.", "not-found"));
+      if (Option.isNone(shell))
+        return yield* Effect.fail(fail("The bot thread no longer exists.", "not-found"));
       const command: OrchestrationCommand = {
         type: "thread.turn.start",
         commandId: CommandId.makeUnsafe(input.commandId),
@@ -437,9 +450,15 @@ const make = Effect.gen(function* () {
   // ── Projects and folders ───────────────────────────────────────────
 
   const shellSnapshot = () =>
-    snapshotQuery.getShellSnapshot().pipe(Effect.mapError(toServiceError("Could not load projects.")));
+    snapshotQuery
+      .getShellSnapshot()
+      .pipe(Effect.mapError(toServiceError("Could not load projects.")));
 
-  const isOrdinary = (project: { readonly title: string; readonly workspaceRoot: string; readonly kind?: string | undefined }) =>
+  const isOrdinary = (project: {
+    readonly title: string;
+    readonly workspaceRoot: string;
+    readonly kind?: string | undefined;
+  }) =>
     isOrdinaryProjectRow({
       projectTitle: project.title,
       projectWorkspaceRoot: project.workspaceRoot,
@@ -487,7 +506,11 @@ const make = Effect.gen(function* () {
         if (current.has(linkedProjectId) || linkedProjectId === projectId) continue;
         yield* projectAgent
           .linkProject(
-            { requestId: `synbot-link:${projectId}:${linkedProjectId}`, projectId, linkedProjectId },
+            {
+              requestId: `synbot-link:${projectId}:${linkedProjectId}`,
+              projectId,
+              linkedProjectId,
+            },
             USER,
           )
           .pipe(
@@ -504,7 +527,11 @@ const make = Effect.gen(function* () {
         if (wanted.has(linkedProjectId)) continue;
         yield* projectAgent
           .unlinkProject(
-            { requestId: `synbot-unlink:${projectId}:${linkedProjectId}:${Date.now()}`, projectId, linkedProjectId },
+            {
+              requestId: `synbot-unlink:${projectId}:${linkedProjectId}:${Date.now()}`,
+              projectId,
+              linkedProjectId,
+            },
             USER,
           )
           .pipe(Effect.catch(() => Effect.void));
@@ -526,8 +553,11 @@ const make = Effect.gen(function* () {
 
   const defaultModel = (kind: "strong" | "economy", near?: ModelSelection) =>
     Effect.gen(function* () {
-      const provider = (near?.provider as ProviderKind | undefined) ?? (yield* availableProviders())[0] ?? "codex";
-      const slugs = (MODEL_OPTIONS_BY_PROVIDER[provider] ?? []).map((model) => model.slug as string);
+      const provider =
+        (near?.provider as ProviderKind | undefined) ?? (yield* availableProviders())[0] ?? "codex";
+      const slugs = (MODEL_OPTIONS_BY_PROVIDER[provider] ?? []).map(
+        (model) => model.slug as string,
+      );
       const economy = kind === "economy" ? economyModelSlug(provider, slugs) : null;
       const model =
         economy ??
@@ -556,11 +586,17 @@ const make = Effect.gen(function* () {
     createLock.withPermits(1)(
       Effect.gen(function* () {
         // The request id fixes the project id, so a retried create finds the first attempt.
-        const projectId = ProjectId.makeUnsafe(`bot-${stableGatewayDigest({ requestId: spec.requestId }, 24)}`);
-        const existingProfile = yield* repository.getProfile(projectId).pipe(Effect.mapError(toServiceError("Could not load the bot.")));
+        const projectId = ProjectId.makeUnsafe(
+          `bot-${stableGatewayDigest({ requestId: spec.requestId }, 24)}`,
+        );
+        const existingProfile = yield* repository
+          .getProfile(projectId)
+          .pipe(Effect.mapError(toServiceError("Could not load the bot.")));
         if (existingProfile) return yield* requireBot(projectId);
         if (spec.kind === "main") {
-          const main = yield* repository.getMainProfile().pipe(Effect.mapError(toServiceError("Could not load SynBot.")));
+          const main = yield* repository
+            .getMainProfile()
+            .pipe(Effect.mapError(toServiceError("Could not load SynBot.")));
           if (main) return yield* requireBot(main.projectId);
         }
         const project = yield* snapshotQuery
@@ -625,6 +661,7 @@ const make = Effect.gen(function* () {
             autonomy: spec.autonomy,
             pinnedSkills: spec.pinnedSkills,
             pinned: spec.pinned,
+            revision: 0,
             createdAt: now,
             updatedAt: now,
           })
@@ -641,7 +678,9 @@ const make = Effect.gen(function* () {
       const row = yield* repository.getSettings();
       if (row.freshStartAt) return;
       const configs = yield* projectAgentRepository.listConfigs();
-      const profiles = new Set((yield* repository.listProfiles()).map((profile) => profile.projectId));
+      const profiles = new Set(
+        (yield* repository.listProfiles()).map((profile) => profile.projectId),
+      );
       for (const { projectId } of configs) {
         if (profiles.has(projectId)) continue;
         const config = yield* projectAgentRepository.getConfig(projectId);
@@ -661,7 +700,9 @@ const make = Effect.gen(function* () {
     Effect.gen(function* () {
       yield* requireEnabled;
       yield* freshStart();
-      const main = yield* repository.getMainProfile().pipe(Effect.mapError(toServiceError("Could not load SynBot.")));
+      const main = yield* repository
+        .getMainProfile()
+        .pipe(Effect.mapError(toServiceError("Could not load SynBot.")));
       if (main) {
         const bot = yield* loadBot(main.projectId);
         if (bot) return bot;
@@ -689,7 +730,8 @@ const make = Effect.gen(function* () {
         kind: "bot",
         name: input.name,
         role: input.role,
-        mascot: input.mascot.shape === "synara" ? { ...input.mascot, shape: "circle" } : input.mascot,
+        mascot:
+          input.mascot.shape === "synara" ? { ...input.mascot, shape: "circle" } : input.mascot,
         instructions: input.instructions ?? "",
         scope: input.scope,
         modelSelection: input.modelSelection,
@@ -703,16 +745,25 @@ const make = Effect.gen(function* () {
   const update: BotServiceShape["update"] = (input) =>
     Effect.gen(function* () {
       yield* requireEnabled;
-      const profile = yield* repository.getProfile(input.id).pipe(Effect.mapError(toServiceError("Could not load the bot.")));
+      const profile = yield* repository
+        .getProfile(input.id)
+        .pipe(Effect.mapError(toServiceError("Could not load the bot.")));
       if (!profile) return yield* Effect.fail(fail("Bot was not found.", "not-found"));
       const config = yield* projectAgentRepository
         .getConfig(input.id)
         .pipe(Effect.mapError(toServiceError("Could not load the bot.")));
       if (Option.isNone(config)) return yield* Effect.fail(fail("Bot was not found.", "not-found"));
-      if (input.expectedRevision !== undefined && input.expectedRevision !== config.value.revision) {
+      if (
+        input.expectedRevision !== undefined &&
+        input.expectedRevision !== config.value.revision + profile.revision
+      ) {
         return yield* Effect.fail(fail("The bot changed. Reload and retry.", "conflict"));
       }
-      if (profile.kind === "main" && input.name !== undefined && input.name !== config.value.coordinatorName) {
+      if (
+        profile.kind === "main" &&
+        input.name !== undefined &&
+        input.name !== config.value.coordinatorName
+      ) {
         return yield* Effect.fail(fail("SynBot cannot be renamed.", "forbidden"));
       }
       const mascot =
@@ -744,7 +795,8 @@ const make = Effect.gen(function* () {
               projectId: input.id,
               expectedRevision: config.value.revision,
               coordinatorName: input.name ?? config.value.coordinatorName,
-              coordinatorModelSelection: input.modelSelection ?? config.value.coordinatorModelSelection,
+              coordinatorModelSelection:
+                input.modelSelection ?? config.value.coordinatorModelSelection,
               workerRouting: {
                 ...routingRest,
                 ...(taskModel ? { modelSelection: taskModel } : {}),
@@ -787,10 +839,12 @@ const make = Effect.gen(function* () {
           autonomy: input.autonomy ?? profile.autonomy,
           pinnedSkills: input.pinnedSkills ?? profile.pinnedSkills,
           pinned: input.pinned ?? profile.pinned,
+          revision: profile.revision + 1,
           updatedAt: isoNow(),
         })
         .pipe(Effect.mapError(toServiceError("Could not save the bot.")));
-      if (input.scope !== undefined && profile.kind !== "main") yield* syncScopeLinks(input.id, scope);
+      if (input.scope !== undefined && profile.kind !== "main")
+        yield* syncScopeLinks(input.id, scope);
       yield* publishBot(input.id);
       return yield* requireBot(input.id);
     });
@@ -798,21 +852,30 @@ const make = Effect.gen(function* () {
   const remove: BotServiceShape["remove"] = (input) =>
     Effect.gen(function* () {
       yield* requireEnabled;
-      const profile = yield* repository.getProfile(input.id).pipe(Effect.mapError(toServiceError("Could not load the bot.")));
+      const profile = yield* repository
+        .getProfile(input.id)
+        .pipe(Effect.mapError(toServiceError("Could not load the bot.")));
       if (!profile) return;
-      if (profile.kind === "main") return yield* Effect.fail(fail("SynBot cannot be removed.", "forbidden"));
+      if (profile.kind === "main")
+        return yield* Effect.fail(fail("SynBot cannot be removed.", "forbidden"));
       const project = yield* snapshotQuery
         .getProjectShellById(input.id)
         .pipe(Effect.mapError(toServiceError("Could not load the bot.")));
       if (Option.isSome(project)) {
         yield* projectAgent
           .deleteGroup(
-            { requestId: `synbot-remove:${input.id}`, projectId: input.id, confirmName: project.value.title },
+            {
+              requestId: `synbot-remove:${input.id}`,
+              projectId: input.id,
+              confirmName: project.value.title,
+            },
             USER,
           )
           .pipe(Effect.mapError(toServiceError("Could not remove the bot.")));
       }
-      yield* repository.deleteProfile(input.id).pipe(Effect.mapError(toServiceError("Could not remove the bot.")));
+      yield* repository
+        .deleteProfile(input.id)
+        .pipe(Effect.mapError(toServiceError("Could not remove the bot.")));
       lastPublishedStatus.delete(input.id);
       yield* publish({ type: "bot-removed", botId: input.id });
     });
@@ -827,7 +890,9 @@ const make = Effect.gen(function* () {
         mergeProofEnabled: input.mergeProofEnabled ?? current.mergeProofEnabled,
         maxParallelTasks: input.maxParallelTasks ?? current.maxParallelTasks,
       };
-      yield* repository.putSettings(next).pipe(Effect.mapError(toServiceError("Could not save SynBot settings.")));
+      yield* repository
+        .putSettings(next)
+        .pipe(Effect.mapError(toServiceError("Could not save SynBot settings.")));
       yield* publish({ type: "settings-updated", settings: next });
       return next;
     });
@@ -929,13 +994,11 @@ const make = Effect.gen(function* () {
       }
       // A Hub wake while this bot works on a delegation keeps that delegation's provenance.
       if (message?.dispatchOrigin === "automation") {
-        const open = (
-          yield* repository
-            .listActiveDelegations()
-            .pipe(Effect.orElseSucceed(() => [] as BotDelegationRecord[]))
-        )
-          .filter((record) => record.toBotId === bot.id && record.settledAt === null)
-          .at(0);
+        const open = (yield* repository
+          .listActiveDelegations()
+          .pipe(Effect.orElseSucceed(() => [] as BotDelegationRecord[]))).find(
+          (record) => record.toBotId === bot.id && record.settledAt === null,
+        );
         if (open) {
           return {
             ...base,
@@ -1007,7 +1070,8 @@ const make = Effect.gen(function* () {
             scopeLabel,
             busy: entry.status === "working",
             // SynBot reads every bot's memory to route well; bots see each other's roles only.
-            memoryIndex: bot.kind === "main" && entry.id !== bot.id ? yield* readMemoryIndex(entry.id) : "",
+            memoryIndex:
+              bot.kind === "main" && entry.id !== bot.id ? yield* readMemoryIndex(entry.id) : "",
           };
         }),
       );
@@ -1047,8 +1111,15 @@ const make = Effect.gen(function* () {
           sourceMessages: record.sourceMessages,
         }),
       });
-      const next: BotDelegationRecord = { ...record, state: "sent", startedAt: isoNow(), updatedAt: isoNow() };
-      yield* repository.saveDelegation(next).pipe(Effect.mapError(toServiceError("Could not save the delegation.")));
+      const next: BotDelegationRecord = {
+        ...record,
+        state: "sent",
+        startedAt: isoNow(),
+        updatedAt: isoNow(),
+      };
+      yield* repository
+        .saveDelegation(next)
+        .pipe(Effect.mapError(toServiceError("Could not save the delegation.")));
       yield* publishDelegation(next);
       return next;
     });
@@ -1059,35 +1130,56 @@ const make = Effect.gen(function* () {
       const { caller } = input;
       const target = yield* requireBot(input.targetBotId);
       if (target.id === caller.bot.id) {
-        return yield* Effect.fail(fail("A bot cannot delegate to itself; start a task instead.", "invalid"));
+        return yield* Effect.fail(
+          fail("A bot cannot delegate to itself; start a task instead.", "invalid"),
+        );
       }
       if (target.status === "paused") {
         return yield* Effect.fail(fail(`${target.name} is paused.`, "invalid"));
       }
       if (caller.chain.includes(target.id)) {
         return yield* Effect.fail(
-          fail(`${target.name} is already in this delegation chain; finish the work here instead.`, "invalid"),
+          fail(
+            `${target.name} is already in this delegation chain; finish the work here instead.`,
+            "invalid",
+          ),
         );
       }
       const depth = caller.depth + 1;
       if (depth > BOT_DELEGATION_MAX_DEPTH) {
         return yield* Effect.fail(
-          fail(`Delegation chains stop at ${BOT_DELEGATION_MAX_DEPTH} bots; do this part yourself.`, "limit"),
+          fail(
+            `Delegation chains stop at ${BOT_DELEGATION_MAX_DEPTH} bots; do this part yourself.`,
+            "limit",
+          ),
         );
       }
       if (caller.sourceMessages.length === 0) {
         return yield* Effect.fail(
-          fail("No user request stands behind this turn; ask the user before delegating.", "forbidden"),
+          fail(
+            "No user request stands behind this turn; ask the user before delegating.",
+            "forbidden",
+          ),
         );
       }
       const id = `d${stableGatewayDigest(
-        { from: caller.bot.threadId, turn: caller.turnId, requestId: input.requestId, to: target.id },
+        {
+          from: caller.bot.threadId,
+          turn: caller.turnId,
+          requestId: input.requestId,
+          to: target.id,
+        },
         24,
       )}`;
-      const existing = yield* repository.getDelegation(id).pipe(Effect.mapError(toServiceError("Could not load the delegation.")));
+      const existing = yield* repository
+        .getDelegation(id)
+        .pipe(Effect.mapError(toServiceError("Could not load the delegation.")));
       if (existing) return toDelegation(existing);
       const siblings = yield* repository
-        .listDelegationsByRequesterTurn({ fromThreadId: caller.bot.threadId, fromTurnId: caller.turnId })
+        .listDelegationsByRequesterTurn({
+          fromThreadId: caller.bot.threadId,
+          fromTurnId: caller.turnId,
+        })
         .pipe(Effect.mapError(toServiceError("Could not load delegations.")));
       if (caller.turnId !== null && siblings.length >= BOT_DELEGATIONS_PER_TURN) {
         return yield* Effect.fail(
@@ -1096,7 +1188,9 @@ const make = Effect.gen(function* () {
       }
       const now = isoNow();
       const parentRoot = caller.delegationId
-        ? (yield* repository.getDelegation(caller.delegationId).pipe(Effect.orElseSucceed(() => null)))?.rootId
+        ? (yield* repository
+            .getDelegation(caller.delegationId)
+            .pipe(Effect.orElseSucceed(() => null)))?.rootId
         : undefined;
       const record: BotDelegationRecord = {
         id,
@@ -1175,7 +1269,9 @@ const make = Effect.gen(function* () {
     repository.listRecentDelegations(RECENT_DELEGATIONS).pipe(
       Effect.map((records) =>
         records
-          .filter((record) => record.fromBotId === caller.bot.id || record.toBotId === caller.bot.id)
+          .filter(
+            (record) => record.fromBotId === caller.bot.id || record.toBotId === caller.bot.id,
+          )
           .map(toDelegation),
       ),
       Effect.mapError(toServiceError("Could not load delegations.")),
@@ -1226,7 +1322,12 @@ const make = Effect.gen(function* () {
       const requester = records[0]!;
       const now = isoNow();
       for (const record of records) {
-        yield* repository.saveDelegation({ ...record, reportedAt: now, reportMessageId: messageId, updatedAt: now });
+        yield* repository.saveDelegation({
+          ...record,
+          reportedAt: now,
+          reportMessageId: messageId,
+          updatedAt: now,
+        });
       }
       const fromBot = yield* loadBot(requester.fromBotId).pipe(Effect.orElseSucceed(() => null));
       const notice: BotReportNotice = { messageId, delegationIds: ids, createdAt: now };
@@ -1234,7 +1335,10 @@ const make = Effect.gen(function* () {
         threadId: requester.fromThreadId,
         id: `${messageId}:card`,
         kind: BOT_REPORT_ACTIVITY_KIND,
-        summary: records.length === 1 ? "Delegated work finished" : `${records.length} delegations finished`,
+        summary:
+          records.length === 1
+            ? "Delegated work finished"
+            : `${records.length} delegations finished`,
         payload: notice,
       }).pipe(Effect.catch(() => Effect.void));
       // A paused or removed requester keeps the report card but is not woken.
@@ -1247,14 +1351,17 @@ const make = Effect.gen(function* () {
         text: renderDelegationReport(entries),
       }).pipe(
         Effect.catch((error) =>
-          Effect.logWarning("SynBot could not wake the requester with a report", { error: error.message }),
+          Effect.logWarning("SynBot could not wake the requester with a report", {
+            error: error.message,
+          }),
         ),
       );
     });
 
   const settleOne = (record: BotDelegationRecord, nowMs: number) =>
     Effect.gen(function* () {
-      if (record.state === "awaiting-start" || BOT_DELEGATION_TERMINAL_STATES.has(record.state)) return record;
+      if (record.state === "awaiting-start" || BOT_DELEGATION_TERMINAL_STATES.has(record.state))
+        return record;
       const shell = yield* snapshotQuery
         .getThreadShellById(record.toThreadId)
         .pipe(Effect.orElseSucceed(() => Option.none<OrchestrationThreadShell>()));
@@ -1274,7 +1381,9 @@ const make = Effect.gen(function* () {
         .pipe(Effect.orElseSucceed(() => []));
       const messages = yield* threadMessages(record.toThreadId);
       const attributable = new Set(
-        messages.filter((message) => message.dispatchOrigin === "automation").map((message) => message.id as string),
+        messages
+          .filter((message) => message.dispatchOrigin === "automation")
+          .map((message) => message.id as string),
       );
       const items = yield* listItems(record.toBotId);
       const result = evaluateDelegationSettlement({
@@ -1337,17 +1446,22 @@ const make = Effect.gen(function* () {
           const nowMs = Date.now();
           const relevant = reason.threadId
             ? active.filter(
-                (record) => record.toThreadId === reason.threadId || record.fromThreadId === reason.threadId,
+                (record) =>
+                  record.toThreadId === reason.threadId || record.fromThreadId === reason.threadId,
               )
             : active;
           const updated = new Map<string, BotDelegationRecord>();
           for (const record of relevant) {
-            const next = yield* settleOne(record, nowMs).pipe(Effect.catch(() => Effect.succeed(record)));
+            const next = yield* settleOne(record, nowMs).pipe(
+              Effect.catch(() => Effect.succeed(record)),
+            );
             updated.set(next.id, next);
           }
           const settings = yield* getSettings().pipe(Effect.orElseSucceed(() => null));
           const all = active.map((record) => updated.get(record.id) ?? record);
-          const owed = all.filter((record) => record.settledAt !== null && record.reportedAt === null);
+          const owed = all.filter(
+            (record) => record.settledAt !== null && record.reportedAt === null,
+          );
           const groups = new Map<string, BotDelegationRecord[]>();
           for (const record of owed) {
             const key = settings?.recapMode === "task" ? record.id : record.requestId;
@@ -1359,7 +1473,9 @@ const make = Effect.gen(function* () {
               const fresh = siblings.map((sibling) => updated.get(sibling.id) ?? sibling);
               const allSettled = fresh.every((sibling) => sibling.settledAt !== null);
               // One recap per request; a failure is reported at once instead of waiting.
-              const now = allSettled ? records : records.filter((record) => record.state === "failed");
+              const now = allSettled
+                ? records
+                : records.filter((record) => record.state === "failed");
               if (now.length > 0) yield* deliverReport(now);
               continue;
             }
@@ -1386,15 +1502,21 @@ const make = Effect.gen(function* () {
           .getThreadShellById(record.toThreadId)
           .pipe(Effect.orElseSucceed(() => Option.none<OrchestrationThreadShell>()));
         if (Option.isSome(shell) && shell.value.session?.activeTurnId) {
-          yield* interruptThread(record.toThreadId, "cancel-delegation").pipe(Effect.catch(() => Effect.void));
+          yield* interruptThread(record.toThreadId, "cancel-delegation").pipe(
+            Effect.catch(() => Effect.void),
+          );
         }
         for (const taskId of record.taskIds) {
           const item = yield* hubWorkRepository.get(taskId).pipe(Effect.orElseSucceed(() => null));
           if (!item) continue;
           if (item.workerThreadId && ACTIVE_ITEM_STATES.has(item.state)) {
-            yield* interruptThread(item.workerThreadId, "cancel-delegation").pipe(Effect.catch(() => Effect.void));
+            yield* interruptThread(item.workerThreadId, "cancel-delegation").pipe(
+              Effect.catch(() => Effect.void),
+            );
           } else if (QUEUED_ITEM_STATES.has(item.state)) {
-            yield* hubWork.cancel({ workItemId: item.id }, USER).pipe(Effect.catch(() => Effect.void));
+            yield* hubWork
+              .cancel({ workItemId: item.id }, USER)
+              .pipe(Effect.catch(() => Effect.void));
           }
         }
       }
@@ -1407,15 +1529,27 @@ const make = Effect.gen(function* () {
         reportedAt: now,
         updatedAt: now,
       };
-      yield* repository.saveDelegation(next).pipe(Effect.mapError(toServiceError("Could not save the delegation.")));
-      yield* resolveCardSilently(record.toThreadId, `synbot:card:start:${record.id}`, "not-now", "Not now");
+      yield* repository
+        .saveDelegation(next)
+        .pipe(Effect.mapError(toServiceError("Could not save the delegation.")));
+      yield* resolveCardSilently(
+        record.toThreadId,
+        `synbot:card:start:${record.id}`,
+        "not-now",
+        "Not now",
+      );
       yield* publishDelegation(next);
       return toDelegation(next);
     });
 
   // ── Cards ──────────────────────────────────────────────────────────
 
-  const resolveCardSilently = (threadId: ThreadId, cardId: string, optionId: string, label: string) => {
+  const resolveCardSilently = (
+    threadId: ThreadId,
+    cardId: string,
+    optionId: string,
+    label: string,
+  ) => {
     const resolution: BotCardResolution = { cardId, optionId, label, resolvedAt: isoNow() };
     return appendActivity({
       threadId,
@@ -1431,7 +1565,8 @@ const make = Effect.gen(function* () {
       const detail = yield* snapshotQuery
         .getThreadDetailById(threadId)
         .pipe(Effect.mapError(toServiceError("Could not load the thread.")));
-      if (Option.isNone(detail)) return yield* Effect.fail(fail("Thread was not found.", "not-found"));
+      if (Option.isNone(detail))
+        return yield* Effect.fail(fail("Thread was not found.", "not-found"));
       const activities = detail.value.activities;
       const resolved = activities.some(
         (activity) =>
@@ -1440,7 +1575,8 @@ const make = Effect.gen(function* () {
       );
       const activity = activities.find(
         (entry) =>
-          entry.kind === BOT_CARD_ACTIVITY_KIND && (entry.payload as { id?: unknown } | null)?.id === cardId,
+          entry.kind === BOT_CARD_ACTIVITY_KIND &&
+          (entry.payload as { id?: unknown } | null)?.id === cardId,
       );
       const card = activity ? decodeCard(activity.payload) : Option.none();
       if (Option.isNone(card)) return yield* Effect.fail(fail("Card was not found.", "not-found"));
@@ -1450,8 +1586,12 @@ const make = Effect.gen(function* () {
   const draftToBot = (draft: BotDraft, index: number, requestId: string) =>
     Effect.gen(function* () {
       const main = yield* repository.getMainProfile().pipe(Effect.orElseSucceed(() => null));
-      const mainBot = main ? yield* loadBot(main.projectId).pipe(Effect.orElseSucceed(() => null)) : null;
-      const template = BOT_TEMPLATES.find((entry) => entry.name.toLowerCase() === draft.name.toLowerCase());
+      const mainBot = main
+        ? yield* loadBot(main.projectId).pipe(Effect.orElseSucceed(() => null))
+        : null;
+      const template = BOT_TEMPLATES.find(
+        (entry) => entry.name.toLowerCase() === draft.name.toLowerCase(),
+      );
       return yield* createBot({
         requestId: `${requestId}:${index}`,
         kind: "bot",
@@ -1495,7 +1635,9 @@ const make = Effect.gen(function* () {
         }
         case "delegation-start": {
           const record = card.delegationId
-            ? yield* repository.getDelegation(card.delegationId).pipe(Effect.orElseSucceed(() => null))
+            ? yield* repository
+                .getDelegation(card.delegationId)
+                .pipe(Effect.orElseSucceed(() => null))
             : null;
           if (record && record.state === "awaiting-start") {
             if (option.id === "start") yield* dispatchDelegation(record);
@@ -1505,7 +1647,9 @@ const make = Effect.gen(function* () {
         }
         case "git-init": {
           if (option.id === "init" && card.projectPath) {
-            yield* git.initRepo({ cwd: card.projectPath }).pipe(Effect.mapError(toServiceError("Could not create the repository.")));
+            yield* git
+              .initRepo({ cwd: card.projectPath })
+              .pipe(Effect.mapError(toServiceError("Could not create the repository.")));
             // An empty first commit gives worktrees a base without adding any file (secrets stay untracked).
             yield* git
               .execute({
@@ -1530,7 +1674,8 @@ const make = Effect.gen(function* () {
       const project = yield* snapshotQuery
         .getProjectShellById(projectId)
         .pipe(Effect.mapError(toServiceError("Could not load the project.")));
-      if (Option.isNone(project)) return yield* Effect.fail(fail("Project was not found.", "not-found"));
+      if (Option.isNone(project))
+        return yield* Effect.fail(fail("Project was not found.", "not-found"));
       const root = project.value.workspaceRoot;
       const directories = (dir: string) =>
         fileSystem.readDirectory(dir).pipe(
@@ -1545,7 +1690,9 @@ const make = Effect.gen(function* () {
           Effect.orElseSucceed(() => [] as string[]),
         );
       const topFolders = yield* directories(root);
-      const appsFolders = topFolders.includes("apps") ? yield* directories(nodePath.join(root, "apps")) : [];
+      const appsFolders = topFolders.includes("apps")
+        ? yield* directories(nodePath.join(root, "apps"))
+        : [];
       const hasGitHubWorkflows = yield* fileSystem
         .exists(nodePath.join(root, ".github", "workflows"))
         .pipe(Effect.orElseSucceed(() => false));
@@ -1588,7 +1735,9 @@ const make = Effect.gen(function* () {
               label: `Create ${draft.name}`,
               tone: index === 0 ? ("primary" as const) : ("normal" as const),
             })),
-            ...(scan.drafts.length > 1 ? [{ id: "create:all", label: "Create all", tone: "normal" as const }] : []),
+            ...(scan.drafts.length > 1
+              ? [{ id: "create:all", label: "Create all", tone: "normal" as const }]
+              : []),
             { id: "dismiss", label: "Not now", tone: "dismiss" as const },
           ],
           drafts: [...scan.drafts],
@@ -1601,7 +1750,11 @@ const make = Effect.gen(function* () {
   const suggestForCaller: BotServiceShape["suggestForCaller"] = (input) =>
     Effect.gen(function* () {
       yield* requireEnabled;
-      return yield* postSuggestionCard(input.caller.bot.threadId, input.caller.bot.id, input.projectId);
+      return yield* postSuggestionCard(
+        input.caller.bot.threadId,
+        input.caller.bot.id,
+        input.projectId,
+      );
     });
 
   const propose: BotServiceShape["propose"] = (input) =>
@@ -1633,7 +1786,8 @@ const make = Effect.gen(function* () {
       const existing = yield* snapshotQuery
         .getActiveProjectByWorkspaceRoot(workspaceRoot)
         .pipe(Effect.mapError(toServiceError("Could not look up projects.")));
-      if (Option.isSome(existing)) return { status: "exists" as const, projectId: existing.value.id };
+      if (Option.isSome(existing))
+        return { status: "exists" as const, projectId: existing.value.id };
       const projectId = ProjectId.makeUnsafe(crypto.randomUUID());
       yield* orchestrationEngine
         .dispatch({
@@ -1656,20 +1810,30 @@ const make = Effect.gen(function* () {
     Effect.gen(function* () {
       yield* requireEnabled;
       const raw = input.path.trim();
-      const expanded = raw.startsWith("~") ? nodePath.join(serverConfig.homeDir, raw.slice(1)) : raw;
+      const expanded = raw.startsWith("~")
+        ? nodePath.join(serverConfig.homeDir, raw.slice(1))
+        : raw;
       if (!nodePath.isAbsolute(expanded)) {
-        return yield* Effect.fail(fail("Pass an absolute folder path (or one starting with ~).", "invalid"));
+        return yield* Effect.fail(
+          fail("Pass an absolute folder path (or one starting with ~).", "invalid"),
+        );
       }
       const workspaceRoot = nodePath.resolve(expanded);
       const info = yield* fileSystem
         .stat(workspaceRoot)
-        .pipe(Effect.mapError(() => fail(`Folder "${workspaceRoot}" does not exist.`, "not-found")));
-      if (info.type !== "Directory") return yield* Effect.fail(fail(`"${workspaceRoot}" is not a folder.`, "invalid"));
+        .pipe(
+          Effect.mapError(() => fail(`Folder "${workspaceRoot}" does not exist.`, "not-found")),
+        );
+      if (info.type !== "Directory")
+        return yield* Effect.fail(fail(`"${workspaceRoot}" is not a folder.`, "invalid"));
       const existing = yield* snapshotQuery
         .getActiveProjectByWorkspaceRoot(workspaceRoot)
         .pipe(Effect.mapError(toServiceError("Could not look up projects.")));
-      if (Option.isSome(existing)) return { status: "exists" as const, projectId: existing.value.id };
-      const context = yield* git.readBranchContext(workspaceRoot).pipe(Effect.orElseSucceed(() => null));
+      if (Option.isSome(existing))
+        return { status: "exists" as const, projectId: existing.value.id };
+      const context = yield* git
+        .readBranchContext(workspaceRoot)
+        .pipe(Effect.orElseSucceed(() => null));
       if (!context?.isRepo) {
         const cardId = `synbot:card:git-init:${stableGatewayDigest({ workspaceRoot }, 20)}`;
         yield* postCard({
@@ -1701,7 +1865,8 @@ const make = Effect.gen(function* () {
       if (Option.isNone(project) || !isOrdinary(project.value)) return;
       const profiles = yield* repository.listProfiles();
       for (const profile of profiles) {
-        if (profile.scope.projects === "all") yield* syncScopeLinks(profile.projectId, profile.scope);
+        if (profile.scope.projects === "all")
+          yield* syncScopeLinks(profile.projectId, profile.scope);
       }
       const main = profiles.find((profile) => profile.kind === "main");
       if (!main) return;
@@ -1734,7 +1899,9 @@ const make = Effect.gen(function* () {
   const noteControl: BotServiceShape["noteControl"] = (input) =>
     Effect.gen(function* () {
       if (!isServerSynbotEnabled() || input.callerThreadId === input.targetThreadId) return;
-      const config = yield* projectAgentRepository.getConfigByCoordinatorThread(input.callerThreadId);
+      const config = yield* projectAgentRepository.getConfigByCoordinatorThread(
+        input.callerThreadId,
+      );
       if (Option.isNone(config)) return;
       const profile = yield* repository.getProfile(config.value.projectId);
       if (!profile) return;
@@ -1765,7 +1932,8 @@ const make = Effect.gen(function* () {
           .pipe(Effect.mapError(toServiceError("Could not load the report.")));
         if (records.length === 0) return null;
         const sources = new Map<string, HubWorkSourceMessage>();
-        for (const record of records) for (const source of record.sourceMessages) sources.set(source.messageId, source);
+        for (const record of records)
+          for (const source of record.sourceMessages) sources.set(source.messageId, source);
         return [...sources.values()];
       }
       return null;
@@ -1783,16 +1951,20 @@ const make = Effect.gen(function* () {
     Effect.gen(function* () {
       const settings = yield* getSettings();
       if (!settings.mergeProofEnabled) {
-        return yield* Effect.fail(fail("Turn on the merge proof in Settings → SynBot first.", "forbidden"));
+        return yield* Effect.fail(
+          fail("Turn on the merge proof in Settings → SynBot first.", "forbidden"),
+        );
       }
-      if (Option.isNone(pullRequests)) return yield* Effect.fail(fail("Pull requests are unavailable.", "unavailable"));
+      if (Option.isNone(pullRequests))
+        return yield* Effect.fail(fail("Pull requests are unavailable.", "unavailable"));
       const shell = yield* snapshotQuery
         .getThreadShellById(threadId)
         .pipe(Effect.mapError(toServiceError("Could not load the task.")));
       if (Option.isNone(shell)) return yield* Effect.fail(fail("Task was not found.", "not-found"));
       const pr = shell.value.lastKnownPr;
       const repositorySlug = pr ? repositoryFromPrUrl(pr.url) : null;
-      if (!pr || !repositorySlug) return yield* Effect.fail(fail("This task has no pull request yet.", "invalid"));
+      if (!pr || !repositorySlug)
+        return yield* Effect.fail(fail("This task has no pull request yet.", "invalid"));
       return {
         service: pullRequests.value,
         input: { projectId: shell.value.projectId, repository: repositorySlug, number: pr.number },
@@ -1808,18 +1980,30 @@ const make = Effect.gen(function* () {
       const diff = yield* service
         .diff(input)
         .pipe(Effect.orElseSucceed(() => ({ patch: "", truncated: false })));
-      return { service, input, detail, proof: evaluateMergeProof({ threadId, detail, patch: diff.patch, checkedAt: isoNow() }) };
+      return {
+        service,
+        input,
+        detail,
+        proof: evaluateMergeProof({ threadId, detail, patch: diff.patch, checkedAt: isoNow() }),
+      };
     });
 
   const mergeProof: BotServiceShape["mergeProof"] = (input) =>
-    requireEnabled.pipe(Effect.andThen(computeProof(input.threadId)), Effect.map(({ proof }) => proof));
+    requireEnabled.pipe(
+      Effect.andThen(computeProof(input.threadId)),
+      Effect.map(({ proof }) => proof),
+    );
 
   const merge: BotServiceShape["merge"] = (input) =>
     Effect.gen(function* () {
       yield* requireEnabled;
       const { service, input: prInput, detail, proof } = yield* computeProof(input.threadId);
       if (!proof.ready) {
-        return { outcome: "refused" as const, message: "The proof is not green; Merge stays off.", proof };
+        return {
+          outcome: "refused" as const,
+          message: "The proof is not green; Merge stays off.",
+          proof,
+        };
       }
       if (proof.headSha !== input.headSha) {
         return {
@@ -1834,8 +2018,15 @@ const make = Effect.gen(function* () {
       const result = yield* service
         .action({ ...prInput, action: "merge", mergeMethod: method })
         .pipe(Effect.mapError(toServiceError("GitHub refused the merge.", "conflict")));
-      const after: BotMergeProof = { ...proof, state: result.mergeOutcome === "merged" ? "merged" : proof.state, ready: false };
-      return { outcome: result.mergeOutcome === "enqueued" ? ("enqueued" as const) : ("merged" as const), proof: after };
+      const after: BotMergeProof = {
+        ...proof,
+        state: result.mergeOutcome === "merged" ? "merged" : proof.state,
+        ready: false,
+      };
+      return {
+        outcome: result.mergeOutcome === "enqueued" ? ("enqueued" as const) : ("merged" as const),
+        proof: after,
+      };
     });
 
   const updateBranch: BotServiceShape["updateBranch"] = (input) =>
@@ -1856,7 +2047,9 @@ const make = Effect.gen(function* () {
       const interruptedThreadIds: ThreadId[] = [];
       const cancelledTaskIds: string[] = [];
       const cancelledDelegationIds: string[] = [];
-      for (const record of yield* repository.listActiveDelegations().pipe(Effect.mapError(toServiceError("Could not load delegations.")))) {
+      for (const record of yield* repository
+        .listActiveDelegations()
+        .pipe(Effect.mapError(toServiceError("Could not load delegations.")))) {
         if (record.settledAt !== null) continue;
         yield* cancelDelegation({ delegationId: record.id }).pipe(Effect.catch(() => Effect.void));
         cancelledDelegationIds.push(record.id);
@@ -1871,7 +2064,9 @@ const make = Effect.gen(function* () {
         }
         for (const item of yield* listItems(bot.id)) {
           if (item.workerThreadId && ACTIVE_ITEM_STATES.has(item.state)) {
-            yield* interruptThread(item.workerThreadId, "stop-all").pipe(Effect.catch(() => Effect.void));
+            yield* interruptThread(item.workerThreadId, "stop-all").pipe(
+              Effect.catch(() => Effect.void),
+            );
             interruptedThreadIds.push(item.workerThreadId);
           } else if (QUEUED_ITEM_STATES.has(item.state)) {
             yield* hubWork.cancel({ workItemId: item.id }, USER).pipe(
@@ -1893,9 +2088,15 @@ const make = Effect.gen(function* () {
         const liveQueue = yield* Queue.bounded<BotStreamEvent, Cause.Done>(256);
         // Stream.fromPubSub does not deliver under this runtime; subscribe in the stream's scope.
         const subscription = yield* PubSub.subscribe(events);
-        yield* Stream.fromSubscription(subscription).pipe(Stream.runIntoQueue(liveQueue), Effect.forkScoped);
+        yield* Stream.fromSubscription(subscription).pipe(
+          Stream.runIntoQueue(liveQueue),
+          Effect.forkScoped,
+        );
         const initial = yield* snapshot();
-        return Stream.concat(Stream.succeed({ type: "snapshot" as const, snapshot: initial }), Stream.fromQueue(liveQueue));
+        return Stream.concat(
+          Stream.succeed({ type: "snapshot" as const, snapshot: initial }),
+          Stream.fromQueue(liveQueue),
+        );
       }),
     );
 

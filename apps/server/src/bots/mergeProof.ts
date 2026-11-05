@@ -5,17 +5,24 @@
 // Layer: Pure domain logic (no I/O)
 // Exports: evaluateMergeProof, findMergeRedFlags
 
-import type { BotMergeProof, BotMergeRedFlag, PullRequestDetail, ThreadId } from "@synara/contracts";
+import type {
+  BotMergeProof,
+  BotMergeRedFlag,
+  PullRequestDetail,
+  ThreadId,
+} from "@synara/contracts";
 
 const MAX_RED_FLAGS = 24;
 
-const TEST_FILE = /(^|\/)(__tests__|tests?|spec)\/|\.(test|spec)\.[cm]?[jt]sx?$|_test\.(go|py|rs)$|Tests?\.swift$|(^|\/)test_[^/]+\.py$/i;
+const TEST_FILE =
+  /(^|\/)(__tests__|tests?|spec)\/|\.(test|spec)\.[cm]?[jt]sx?$|_test\.(go|py|rs)$|Tests?\.swift$|(^|\/)test_[^/]+\.py$/i;
 const WORKFLOW_FILE = /^\.github\/workflows\/[^/]+\.ya?ml$/i;
 const SKIP_MARKER =
   /\b(?:it|test|describe)\.(?:skip|todo)\s*\(|\bx(?:it|describe|test)\s*\(|@(?:Disabled|Ignore)\b|#\[ignore\]|pytest\.mark\.skip|\bt\.Skip\(|\bXCTSkip\b|\.skip\(\s*["'`]/;
 const ASSERTION = /\b(?:expect|assert(?:[A-Z][A-Za-z]*)?|XCTAssert[A-Za-z]*|should)\s*[.(]/;
 const FAILURE_IGNORED = /\|\|\s*true\b|continue-on-error:\s*true/;
-const TEST_STEP = /^\s*(?:-\s*)?run:\s*.*\b(test|vitest|jest|pytest|cargo test|go test|xcodebuild test|swift test|bun run test)\b/i;
+const TEST_STEP =
+  /^\s*(?:-\s*)?run:\s*.*\b(test|vitest|jest|pytest|cargo test|go test|xcodebuild test|swift test|bun run test)\b/i;
 
 interface FileDiff {
   readonly path: string;

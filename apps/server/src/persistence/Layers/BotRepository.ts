@@ -55,6 +55,7 @@ interface ProfileRow {
   readonly autonomy: string;
   readonly pinnedSkillsJson: string;
   readonly pinned: number;
+  readonly revision: number;
   readonly createdAt: string;
   readonly updatedAt: string;
 }
@@ -98,6 +99,7 @@ const decodeProfile = (row: ProfileRow) =>
       autonomy: yield* decodeAutonomy(row.autonomy),
       pinnedSkills: yield* decodeSkills(row.pinnedSkillsJson),
       pinned: row.pinned === 1,
+      revision: row.revision,
       createdAt: row.createdAt,
       updatedAt: row.updatedAt,
     } satisfies BotProfileRecord;
@@ -132,13 +134,15 @@ const decodeDelegation = (row: DelegationRow) =>
     } satisfies BotDelegationRecord;
   });
 
+const first = <A>(rows: readonly A[]) => rows[0] ?? null;
+
 export const makeBotRepository = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
 
   const profileColumns = sql`
     project_id AS "projectId", kind, role, mascot_shape AS "mascotShape",
     mascot_color AS "mascotColor", scope_json AS "scopeJson", autonomy,
-    pinned_skills_json AS "pinnedSkillsJson", pinned, created_at AS "createdAt",
+    pinned_skills_json AS "pinnedSkillsJson", pinned, revision, created_at AS "createdAt",
     updated_at AS "updatedAt"
   `;
   const delegationColumns = sql`
@@ -153,7 +157,6 @@ export const makeBotRepository = Effect.gen(function* () {
   `;
   const profiles = (rows: readonly ProfileRow[]) => Effect.forEach(rows, decodeProfile);
   const delegations = (rows: readonly DelegationRow[]) => Effect.forEach(rows, decodeDelegation);
-  const first = <A>(rows: readonly A[]) => rows[0] ?? null;
 
   const writeDelegation = (record: BotDelegationRecord, mode: "insert" | "upsert") => {
     const values = sql`(
@@ -207,18 +210,19 @@ export const makeBotRepository = Effect.gen(function* () {
       sql`
         INSERT INTO bot_profiles (
           project_id, kind, role, mascot_shape, mascot_color, scope_json, autonomy,
-          pinned_skills_json, pinned, created_at, updated_at
+          pinned_skills_json, pinned, revision, created_at, updated_at
         ) VALUES (
           ${profile.projectId}, ${profile.kind}, ${profile.role}, ${profile.mascot.shape},
           ${profile.mascot.color}, ${JSON.stringify(profile.scope)}, ${profile.autonomy},
-          ${JSON.stringify(profile.pinnedSkills)}, ${profile.pinned ? 1 : 0},
+          ${JSON.stringify(profile.pinnedSkills)}, ${profile.pinned ? 1 : 0}, ${profile.revision},
           ${profile.createdAt}, ${profile.updatedAt}
         )
         ON CONFLICT (project_id) DO UPDATE SET
           role = excluded.role, mascot_shape = excluded.mascot_shape,
           mascot_color = excluded.mascot_color, scope_json = excluded.scope_json,
           autonomy = excluded.autonomy, pinned_skills_json = excluded.pinned_skills_json,
-          pinned = excluded.pinned, updated_at = excluded.updated_at
+          pinned = excluded.pinned, revision = excluded.revision,
+          updated_at = excluded.updated_at
       `.pipe(Effect.asVoid, Effect.mapError(storageError)),
     deleteProfile: (projectId) =>
       sql`DELETE FROM bot_profiles WHERE project_id = ${projectId}`.pipe(

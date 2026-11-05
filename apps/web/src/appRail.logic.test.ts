@@ -25,6 +25,7 @@ describe("rail item order", () => {
     expect(normalizeRailItemOrder(["automations", "gone", "home", "automations"])).toEqual([
       "automations",
       "home",
+      "synbot",
       "inbox",
       "spaces",
       "kanban",
@@ -38,6 +39,7 @@ describe("rail item order", () => {
     expect(normalizeRailItemOrder(["kanban", "home", "spaces"])).toEqual([
       "kanban",
       "home",
+      "synbot",
       "inbox",
       "spaces",
       "tasks",
@@ -45,8 +47,9 @@ describe("rail item order", () => {
       "automations",
       "studio",
     ]);
-    expect(normalizeRailItemOrder(["home", "spaces", "inbox"]).slice(0, 3)).toEqual([
+    expect(normalizeRailItemOrder(["home", "spaces", "inbox"]).slice(0, 4)).toEqual([
       "home",
+      "synbot",
       "spaces",
       "inbox",
     ]);
@@ -65,6 +68,7 @@ describe("rail item order", () => {
         activeItem: "automations",
         studioAvailable: false,
         inboxAvailable: false,
+        synbotAvailable: false,
       }),
     ).toEqual(["home", "kanban", "tasks", "pullRequests", "automations"]);
     expect(
@@ -74,12 +78,13 @@ describe("rail item order", () => {
         activeItem: "home",
         studioAvailable: true,
         inboxAvailable: true,
+        synbotAvailable: false,
       }),
-    ).toEqual(order);
+    ).toEqual(order.filter((id) => id !== "synbot"));
   });
 
   it("offers Inbox and Studio in Customize only where they exist", () => {
-    const stable = { studioAvailable: false, inboxAvailable: false };
+    const stable = { studioAvailable: false, inboxAvailable: false, synbotAvailable: false };
     expect(RAIL_ORDERABLE_ITEM_IDS.filter((id) => isRailItemAvailable(id, stable))).toEqual([
       "home",
       "spaces",
@@ -88,9 +93,13 @@ describe("rail item order", () => {
       "pullRequests",
       "automations",
     ]);
-    expect(isRailItemAvailable("inbox", { studioAvailable: false, inboxAvailable: true })).toBe(
-      true,
-    );
+    expect(
+      isRailItemAvailable("inbox", {
+        studioAvailable: false,
+        inboxAvailable: true,
+        synbotAvailable: false,
+      }),
+    ).toBe(true);
   });
 });
 
@@ -225,5 +234,17 @@ describe("buildRailSpacesSections", () => {
       voidSpace: DEFAULT_VOID_SPACE,
     });
     expect(sections.map((section) => section.name)).toEqual([DEFAULT_VOID_SPACE.name]);
+  });
+});
+
+describe("SynBot rail item", () => {
+  it("replaces Hubs where SynBot ships and owns /synbot", () => {
+    const availability = { studioAvailable: true, inboxAvailable: true, synbotAvailable: true };
+    expect(isRailItemAvailable("synbot", availability)).toBe(true);
+    expect(isRailItemAvailable("studio", availability)).toBe(false);
+    expect(isRailItemAvailable("synbot", { ...availability, synbotAvailable: false })).toBe(false);
+    expect(railItemForPathname("/synbot")).toBe("synbot");
+    expect(railItemShowsPanel("synbot")).toBe(true);
+    expect(normalizeRailItemOrder(["home", "kanban"]).indexOf("synbot")).toBe(1);
   });
 });

@@ -284,7 +284,10 @@ export function filesOutsideBotScope(
  * The model a new bot starts on: its provider's economy model when the provider has one in
  * `availableSlugs`, else `null` (keep the user's choice). Never upgrades a choice silently.
  */
-export function economyModelSlug(provider: string, availableSlugs: readonly string[]): string | null {
+export function economyModelSlug(
+  provider: string,
+  availableSlugs: readonly string[],
+): string | null {
   const has = (slug: string) => availableSlugs.includes(slug);
   if (provider === "codex") {
     if (has("gpt-6-luna")) return "gpt-6-luna";

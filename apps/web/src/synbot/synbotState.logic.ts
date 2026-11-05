@@ -92,13 +92,14 @@ export function applyBotStreamEvent(data: SynbotData, event: BotStreamEvent): Sy
   }
 }
 
+const byName = (left: Bot, right: Bot) => left.name.localeCompare(right.name);
+
 /** SynBot first, then pinned bots, then the rest; each group by name. */
 export function orderedBots(bots: readonly Bot[]): {
   readonly main: Bot | null;
   readonly pinned: readonly Bot[];
   readonly others: readonly Bot[];
 } {
-  const byName = (left: Bot, right: Bot) => left.name.localeCompare(right.name);
   return {
     main: bots.find((bot) => bot.kind === "main") ?? null,
     pinned: bots.filter((bot) => bot.kind !== "main" && bot.pinned).toSorted(byName),

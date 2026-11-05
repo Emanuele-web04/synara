@@ -47,10 +47,9 @@ const make = Effect.gen(function* () {
   if (isServerSynbotEnabled()) {
     yield* bots.freshStart();
     yield* bots.evaluateDelegations({});
-    yield* bots.evaluateDelegations({}).pipe(
-      Effect.repeat(Schedule.spaced(Duration.millis(SWEEP_INTERVAL_MS))),
-      Effect.forkScoped,
-    );
+    yield* bots
+      .evaluateDelegations({})
+      .pipe(Effect.repeat(Schedule.spaced(Duration.millis(SWEEP_INTERVAL_MS))), Effect.forkScoped);
   }
 
   const worker = yield* makeDrainableWorker((event: OrchestrationEvent) =>

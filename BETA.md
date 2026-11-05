@@ -391,8 +391,14 @@ HTTP-hosted clients retain native component visuals but never execute HTML. The 
 bootstrap removes WebRTC capabilities before page scripts and stops parsing if that boundary
 cannot be enforced. HTML messages cannot open external URLs through the host.
 
+The list currently holds only `synbot` (SynBot, see [docs/synbot.md](docs/synbot.md)).
 Account profiles, saved Inbox history, MCP Connectors and the native editor are available
 in Stable and Beta. Remote connections use their separate runtime activation policy.
+
+SynBot (`synbot`) runs on the Hubs engine and replaces the Hubs UI where it ships: Beta shows
+the SynBot page instead of Hubs, and on first start pauses the Hubs that are not bots (nothing is
+deleted). Stable keeps Hubs unchanged and refuses every `bots.*` RPC and bot gateway tool. Its
+tables (migration 145) are additive.
 
 Diagnostics follow their separate [sender policy](#diagnostics).
 Inline visuals are available in Stable and Beta:

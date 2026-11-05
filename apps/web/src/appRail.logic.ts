@@ -27,7 +27,11 @@ export type RailPanelItemId = (typeof RAIL_PANEL_ITEM_IDS)[number];
  * Rail items that navigate to a route. "New thread" stays in the panel, never the rail;
  * Inbox is available in Stable and Beta (see INBOX_ON).
  */
-export type RailRouteItemId = Exclude<SidebarNavItemId, "newThread"> | "studio" | "settings";
+export type RailRouteItemId =
+  | Exclude<SidebarNavItemId, "newThread">
+  | "studio"
+  | "synbot"
+  | "settings";
 export type RailItemId = RailPanelItemId | RailRouteItemId;
 
 /**
@@ -44,6 +48,8 @@ export const RAIL_ORDERABLE_ITEM_IDS = [
   "pullRequests",
   "automations",
   "studio",
+  // SynBot (Beta): takes the Hubs slot where it ships (see RailAvailability).
+  "synbot",
 ] as const;
 export type RailOrderableItemId = (typeof RAIL_ORDERABLE_ITEM_IDS)[number];
 export const DEFAULT_HIDDEN_RAIL_ITEMS: readonly RailOrderableItemId[] = [];
@@ -62,7 +68,9 @@ export function railItemCanHide(id: RailOrderableItemId): boolean {
 export function normalizeRailItemOrder(order: readonly string[]): RailOrderableItemId[] {
   const normalized = normalizeIdOrder(order, RAIL_ORDERABLE_ITEM_IDS, isRailOrderableItemId);
   // Inbox shipped after users saved an order: it joins next to Home, as by default.
-  return placeNewIdAfter(normalized, order, "inbox", "home");
+  const withInbox = placeNewIdAfter(normalized, order, "inbox", "home");
+  // SynBot joins right after Home in orders saved before it existed.
+  return placeNewIdAfter(withInbox, order, "synbot", "home");
 }
 
 export function normalizeHiddenRailItems(hidden: readonly string[]): RailOrderableItemId[] {
@@ -74,11 +82,14 @@ export interface RailAvailability {
   readonly studioAvailable: boolean;
   /** Whether this host offers Inbox. */
   readonly inboxAvailable: boolean;
+  /** Whether this host offers SynBot (Beta). Where it does, it replaces Hubs. */
+  readonly synbotAvailable: boolean;
 }
 
 /** Whether an item exists on this host at all: the rail and its Customize list agree. */
 export function isRailItemAvailable(id: RailOrderableItemId, availability: RailAvailability) {
-  if (id === "studio") return availability.studioAvailable;
+  if (id === "studio") return availability.studioAvailable && !availability.synbotAvailable;
+  if (id === "synbot") return availability.synbotAvailable;
   if (id === "inbox") return availability.inboxAvailable;
   return true;
 }
@@ -199,6 +210,7 @@ export function railItemForPathname(pathname: string): RailRouteItemId | null {
   if (matchesRoute(pathname, "/tasks")) return "tasks";
   if (matchesRoute(pathname, "/pull-requests")) return "pullRequests";
   if (matchesRoute(pathname, "/automations")) return "automations";
+  if (matchesRoute(pathname, "/synbot")) return "synbot";
   // The rail item keeps its stored id "studio"; Hubs live at /hubs with legacy redirects.
   if (
     matchesRoute(pathname, "/hubs") ||

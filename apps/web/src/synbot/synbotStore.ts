@@ -10,7 +10,12 @@ import { create } from "zustand";
 
 import { SYNBOT_ON } from "../betaFeatures";
 import { readNativeApi } from "../nativeApi";
-import { EMPTY_SYNBOT_DATA, applyBotStreamEvent, snapshotToData, type SynbotData } from "./synbotState.logic";
+import {
+  EMPTY_SYNBOT_DATA,
+  applyBotStreamEvent,
+  snapshotToData,
+  type SynbotData,
+} from "./synbotState.logic";
 
 /** `unavailable`: the connected host has no SynBot (Stable, or an older Beta). */
 export type SynbotStatus = "idle" | "loading" | "ready" | "unavailable" | "error";

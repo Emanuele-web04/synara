@@ -144,7 +144,7 @@ import {
   resolveThreadMentionForThreadId,
   useComposerCommandMenuItems,
 } from "../hooks/useComposerCommandMenuItems";
-import { MCP_CONNECTORS_ON } from "../betaFeatures";
+import { HUBS_UI_ON, MCP_CONNECTORS_ON } from "../betaFeatures";
 import { mcpConnectorsQueryOptions } from "../lib/mcpConnectorsReactQuery";
 import { providerSupportsMcpConnectors } from "@synara/shared/mcpConnectors";
 import { useComposerThreadMentionDrop } from "../hooks/useComposerThreadMentionDrop";
@@ -632,6 +632,8 @@ interface ChatViewProps {
     onClick: () => void;
   } | null;
   onCloseThreadPane?: () => void;
+  /** Opens a thread linked from the transcript (task cards, notices) in place of navigating. */
+  onOpenLinkedThread?: (threadId: ThreadId) => void;
   /**
    * Enables the ambient computer preview rail for this chat: when provided,
    * a live computer session renders below the Environment card and the chat
@@ -661,6 +663,7 @@ export default function ChatView({
   onSplitSurface,
   viewModeAction: viewModeActionProp,
   onCloseThreadPane,
+  onOpenLinkedThread,
 }: ChatViewProps) {
   const { t } = useTranslation();
 
@@ -2132,6 +2135,7 @@ export default function ChatView({
     linkedProjectCount: activeGroupSummary?.linkedProjectIds?.length ?? 0,
   });
   const showCoordinatorSuggestions =
+    HUBS_UI_ON &&
     isGroupContainer &&
     coordinatorSuggestionChips.length > 0 &&
     shouldShowCoordinatorSuggestions({
@@ -3364,7 +3368,8 @@ export default function ChatView({
   });
   const projectPanelEnabled = resolveProjectPanelEnabled({
     environmentEnabled,
-    isGroupContainer,
+    // Where SynBot replaces the Hubs UI, a bot's chat has no Hubs panel or Library.
+    isGroupContainer: isGroupContainer && HUBS_UI_ON,
   });
   // Group chats default to the Groups panel — a newly created group's
   // coordinator chat opens with Focus/sections visible. An explicit toggle wins
@@ -5549,15 +5554,17 @@ export default function ChatView({
   }, [activeTurnLiveDiffState.turnId, onOpenTurnDiff]);
   const onNavigateToThread = useCallback(
     (nextThreadId: ThreadId) =>
-      navigate({
-        to: "/$threadId",
-        params: { threadId: nextThreadId },
-        search: (previous) =>
-          isEditorRail
-            ? { ...stripDiffSearchParams(previous), view: "editor" }
-            : stripDiffSearchParams(previous),
-      }),
-    [isEditorRail, navigate],
+      onOpenLinkedThread
+        ? Promise.resolve(onOpenLinkedThread(nextThreadId))
+        : navigate({
+            to: "/$threadId",
+            params: { threadId: nextThreadId },
+            search: (previous) =>
+              isEditorRail
+                ? { ...stripDiffSearchParams(previous), view: "editor" }
+                : stripDiffSearchParams(previous),
+          }),
+    [isEditorRail, navigate, onOpenLinkedThread],
   );
   // What the transcript's subagent cards read from this chat. Stop and
   // background go through the same per-row dispatches the keyboard uses.

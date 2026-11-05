@@ -35,6 +35,8 @@ export interface BotProfileRecord {
   readonly autonomy: BotAutonomy;
   readonly pinnedSkills: readonly BotPinnedSkill[];
   readonly pinned: boolean;
+  /** Bumped on every profile edit; a bot's revision is its Hub config's plus this. */
+  readonly revision: number;
   readonly createdAt: string;
   readonly updatedAt: string;
 }

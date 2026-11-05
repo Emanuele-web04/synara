@@ -64,6 +64,7 @@ import { ACCOUNT_BILLING_ENABLED } from "../lib/accountBillingFlag";
 import { useSettingsComputerRoute } from "../lib/hosts/settingsComputer";
 import { readWorkspaceFrame } from "../lib/hosts/workspaceFrame";
 import { ResetIcon } from "../lib/icons";
+import { SynbotSettingsPanel } from "../components/synbot/settings/SynbotSettingsPanel";
 import { cn } from "../lib/utils";
 import { isProviderKind } from "../providerOrdering";
 import {
@@ -187,6 +188,8 @@ function SettingsRouteView() {
         return <ProfileSettingsPanel />;
       case "skills":
         return <SkillsSettingsPanel />;
+      case "synbot":
+        return <SynbotSettingsPanel />;
       case "usage":
         // The plan lives with usage ("Usage and billing"), never above the profile.
         // Keyed by target so a plan deep link reopens the Billing tab.

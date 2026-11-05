@@ -256,7 +256,9 @@ export function makePullRequestOperations(dependencies: {
         })
         .pipe(
           Effect.ensuring(
-            dependencies.finalizeMutationCaches(repository, input.number, { wholeRepository: false }),
+            dependencies.finalizeMutationCaches(repository, input.number, {
+              wholeRepository: false,
+            }),
           ),
         );
     });

@@ -109,6 +109,7 @@ const RAIL_HUGEICON_GLYPHS: Record<HugeiconRailItemId, AppRailGlyphs> = {
 /** Central glyphs matching the Codex rail for the remaining fixed rail items. */
 const RAIL_ITEM_GLYPH_NAMES: Record<Exclude<RailItemId, HugeiconRailItemId>, string> = {
   kanban: "columns-3-wide",
+  synbot: "robot",
   settings: "settings-gear-4",
 };
 
@@ -172,6 +173,7 @@ export const APP_RAIL_LABEL_KEYS = {
   pullRequests: "workspace:codeReview",
   automations: "automation:detail_breadcrumb",
   studio: "common:hubs",
+  synbot: "synbot:railLabel",
   settings: "workspace:toast_settings",
   "editor:file": "workspace:toolCallDetails_filesSection",
   "editor:diff": "workspace:toolCallDetails_diffSection",
