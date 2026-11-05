@@ -264,6 +264,32 @@ export const BotCardResolution = Schema.Struct({
 });
 export type BotCardResolution = typeof BotCardResolution.Type;
 
+/**
+ * Payload of a `synbot.delegation` activity. Appended to the requester's thread ("→ Frontend is
+ * on it") and to the target bot's thread ("Message from SynBot"); live state comes from the
+ * `bots.*` stream by `delegationId`.
+ */
+export const BotDelegationNotice = Schema.Struct({
+  delegationId: TrimmedNonEmptyString,
+  fromBotId: ProjectId,
+  toBotId: ProjectId,
+  brief: TrimmedNonEmptyString.check(Schema.isMaxLength(BOT_BRIEF_MAX_LENGTH)),
+  createdAt: IsoDateTime,
+});
+export type BotDelegationNotice = typeof BotDelegationNotice.Type;
+
+/**
+ * Payload of a `synbot.report` activity in the requester's thread. The report itself is the
+ * user-role message `messageId` (prefix `synbot:report:`) that wakes the requester; clients hide
+ * that message and draw this card instead.
+ */
+export const BotReportNotice = Schema.Struct({
+  messageId: TrimmedNonEmptyString,
+  delegationIds: Schema.Array(TrimmedNonEmptyString),
+  createdAt: IsoDateTime,
+});
+export type BotReportNotice = typeof BotReportNotice.Type;
+
 /** Payload of a `synbot.control` activity: a bot wrote to or stopped this chat. */
 export const BotControlNotice = Schema.Struct({
   botId: ProjectId,
