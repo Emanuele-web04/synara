@@ -1,6 +1,6 @@
 import type { FileDiffMetadata } from "@pierre/diffs/react";
 import type { ThreadId, TurnId } from "@synara/contracts";
-import { lazy, type ReactNode, Suspense, useEffect, useState } from "react";
+import { lazy, type ComponentProps, type ReactNode, Suspense, useEffect, useState } from "react";
 
 import ChatView from "../ChatView";
 import { DiffWorkerPoolProvider } from "../DiffWorkerPoolProvider";
@@ -129,6 +129,7 @@ export function DeferredChatView(props: {
   } | null;
   onCloseThreadPane?: () => void;
   onOpenLinkedThread?: (threadId: ThreadId) => void;
+  renderTranscript?: ComponentProps<typeof ChatView>["renderTranscript"];
   onMounted?: () => void;
 }) {
   const onMounted = props.onMounted ?? noopChatSurfaceAction;
@@ -177,6 +178,7 @@ export function DeferredChatView(props: {
       {...(props.viewModeAction !== undefined ? { viewModeAction: props.viewModeAction } : {})}
       {...(props.onCloseThreadPane ? { onCloseThreadPane: props.onCloseThreadPane } : {})}
       {...(props.onOpenLinkedThread ? { onOpenLinkedThread: props.onOpenLinkedThread } : {})}
+      {...(props.renderTranscript ? { renderTranscript: props.renderTranscript } : {})}
     />
   );
 }
