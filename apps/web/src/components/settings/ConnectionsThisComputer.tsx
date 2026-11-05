@@ -50,9 +50,13 @@ function confirmAction(message: string): Promise<boolean> {
 /** Rendered only when signed in with remote connections available. */
 export function ConnectionsThisComputer({
   computerNoun,
+  onRefreshBilling,
+  onViewProPlans,
 }: {
   /** "Mac" on macOS, "computer" elsewhere. */
   computerNoun: string;
+  onRefreshBilling?: (() => void) | undefined;
+  onViewProPlans?: (() => void) | undefined;
 }) {
   const { state, loadError, refresh } = useRemoteHostState();
   const keepAwake = useDesktopKeepAwake();
@@ -129,16 +133,34 @@ export function ConnectionsThisComputer({
         title={`Devices that can control this ${computerNoun}`}
         action={
           <div className="flex items-center gap-1.5">
-            <IconButton label="Refresh" variant="ghost" onClick={() => void refresh()}>
+            <IconButton
+              label="Refresh"
+              variant="ghost"
+              onClick={() => {
+                void refresh();
+                onRefreshBilling?.();
+              }}
+            >
               <RotateCcwIcon className="size-3.5" />
             </IconButton>
             <Button size="xs" shape="capsule" onClick={() => setDialog("add")}>
-              Add
+              Connect a device
             </Button>
           </div>
         }
       >
         <SettingsCard>
+          {onViewProPlans ? (
+            <SettingsListRow
+              title="Synara Pro"
+              description={`Pro includes remote access to this ${computerNoun}. Local use stays free.`}
+              actions={
+                <Button size="xs" shape="capsule" variant="subtle" onClick={onViewProPlans}>
+                  View Pro plans
+                </Button>
+              }
+            />
+          ) : null}
           <SettingsListRow
             title="Allow connections"
             description={

@@ -47,7 +47,11 @@ The sandbox campaign configured for qualification is recorded below.
 | Tax               | Exclusive: applicable tax is added at checkout.                                                                             |
 | Introductory code | 50% off the first monthly payment only; no annual discount or permanent reduced renewal price.                              |
 
-The iPhone/iPad app remains a free companion, with no in-app purchase flow here.
+The iPhone/iPad app remains a free companion for an existing Synara account.
+On desktop, **Settings → Connections → View Pro plans** opens the existing
+Subscription panel when checkout is available and the account has no Pro access.
+The same Connections screen has **Connect a device** for pairing once the host
+allows it. Subscription purchases are managed on desktop through Polar.
 A subscription never authorizes a host or device by itself, revokes a pairing,
 or deletes chat history. `POLAR_REMOTE_ACCESS_ENFORCED` is a separate, strict
 boolean and defaults to `false`; enabling it requires configured billing and
