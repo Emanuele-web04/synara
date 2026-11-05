@@ -1,5 +1,37 @@
 # Changelog
 
+## 1.1.0 — 2026-11-02
+
+**More reliable recovery, opt-in continuation after usage limits, Spanish interface and safer attachments.**
+
+This Stable release covers the complete range after `v1.0.9` through `d80787e3e4d8829a35a64b111e6fcbe5f51cf037`. Simplified Chinese remains Beta-only. Stable and Beta retain separate identities, data homes and update feeds.
+
+### Added
+
+- English, Spanish and System interface preferences, including native menus and app-authored permission explanations. Existing editor engine labels may require the offered guarded reload; user content and provider output are not translated.
+- Default-off **Resume after usage limits** for supported Codex and Claude terminal refusals with verified account identity and future reset evidence. The execution host must be running. Stop, manual sends and account/model changes cancel pending waits; ambiguous limits stay manual.
+- Explicit offline `synara-compact-database` maintenance for legacy SQLite files. A private copy must pass integrity, row-count and identity checks before replacement. All clients must be stopped and sufficient scratch space available; retained data and migration backups are preserved.
+
+### Changed
+
+- Ordinary chats interrupted by an unexpected server shutdown receive guarded continuations from saved context. Approvals, unanswered questions, starting chats, native subagents and managed work retain their separate recovery rules.
+- Agent narration appears as prose with compact tool rows; subagent rows report model and effort. Right-dock width is remembered per thread, and editor folders can be dropped into the composer.
+- Runtime ingestion and command delivery retain less redundant state; computer frame handling reduces repeated copies. No whole-app memory, CPU or battery improvement is claimed from these scoped changes.
+- Pi updates its OpenAI login support while preserving legacy Azure profiles, Kimi endpoint compatibility and account isolation. Windows release qualification now requires active Defender cloud checks; an antivirus detection still blocks publication.
+
+### Fixed
+
+- Claude Stop and ambiguous sends retain runtime ownership fences, SDK error results fail correctly, and steers are admitted against the original turn. Recovery does not claim unverified process retirement.
+- Crash recovery, queued-message resumption and subagent lifecycle/messaging preserve accepted work and avoid duplicate continuation. Completed background work and resumed clocks display correctly.
+- Photo preparation errors preserve drafts; unsupported native-review attachments do not discard accepted work. Private inline image recovery respects ownership and replay safety, and desktop uploads use the server route.
+- New-chat creation remains reachable without tabs. Composer highlighting avoids redundant updates. Cursor usage supports safe-storage access tokens, and credential-lock publication handles owner-release collisions.
+
+### Verification
+
+The complete candidate requires brand, formatting, lint, typecheck, release smoke, relevant migration/platform checks, focused tests and marketing checks. The single exact-tag publication workflow must pass the full quality/server suites, portable build, all four native packages, macOS signing/notarization, provenance, Defender and packaged startup. Pending gates are not passed gates; actual results remain in the release checkpoint and publication notes.
+
+See [source audit](docs/releases/1.1.0-source-audit.md). Preparation changes versions and release text in existing surfaces only. Manual installation/upgrades, live provider authentication, macOS 13 runtime and Windows browser-download reputation remain separately unverified.
+
 ## 1.0.6-remote.40 — 2026-10-31
 
 **Remote connection recovery and update diagnostics.**

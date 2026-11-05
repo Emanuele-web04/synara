@@ -2,6 +2,7 @@
 // Purpose: Derive OpenUsage-style quota pace indicators from percent-used windows.
 // Used by Settings usage meters to show reserve/deficit and projected run-out timing.
 
+import { t } from "~/i18n";
 export type UsagePaceStatus = "ahead" | "on-track" | "behind";
 
 export interface UsagePaceSummary {
@@ -17,7 +18,7 @@ function clampPercent(value: number): number {
   return Math.min(100, Math.max(0, value));
 }
 
-function compactDuration(deltaMs: number): string | null {
+function compactDuration(deltaMs: number, translate: typeof t): string | null {
   if (!Number.isFinite(deltaMs) || deltaMs <= 0) {
     return null;
   }
@@ -26,15 +27,15 @@ function compactDuration(deltaMs: number): string | null {
   const hours = Math.floor((totalMinutes % 1_440) / 60);
   const minutes = totalMinutes % 60;
   if (days > 0) {
-    return `${days}d ${hours}h`;
+    return translate("settings:usageDurationDaysHours", { days, hours });
   }
   if (hours > 0) {
-    return `${hours}h ${minutes}m`;
+    return translate("settings:usageDurationHoursMinutes", { hours, minutes });
   }
   if (minutes > 0) {
-    return `${minutes}m`;
+    return translate("settings:usageDurationMinutes", { minutes });
   }
-  return "<1m";
+  return translate("settings:usageDurationUnderMinute");
 }
 
 function paceStatus(usedPercent: number, projectedUsedPercent: number): UsagePaceStatus {
@@ -50,20 +51,25 @@ function paceStatus(usedPercent: number, projectedUsedPercent: number): UsagePac
   return "behind";
 }
 
-function reserveOrDeficitText(deltaPercent: number): string | null {
+function reserveOrDeficitText(deltaPercent: number, translate: typeof t): string | null {
   const rounded = Math.round(Math.abs(deltaPercent));
   if (rounded <= 0) {
     return null;
   }
-  return deltaPercent > 0 ? `${rounded}% in deficit` : `${rounded}% in reserve`;
+  return deltaPercent > 0
+    ? translate("settings:usageDeficit", { percent: rounded })
+    : translate("settings:usageReserve", { percent: rounded });
 }
 
-export function deriveUsagePace(input: {
-  nowMs?: number | undefined;
-  remainingPercent: number;
-  resetsAt?: string | undefined;
-  windowDurationMins?: number | undefined;
-}): UsagePaceSummary | null {
+export function deriveUsagePace(
+  input: {
+    nowMs?: number | undefined;
+    remainingPercent: number;
+    resetsAt?: string | undefined;
+    windowDurationMins?: number | undefined;
+  },
+  translate: typeof t = t,
+): UsagePaceSummary | null {
   if (!input.resetsAt || input.windowDurationMins === undefined) {
     return null;
   }
@@ -88,16 +94,21 @@ export function deriveUsagePace(input: {
   const projectedUsedPercent = usedPercent === 0 ? 0 : usedPercent / elapsedFraction;
   const status = paceStatus(usedPercent, projectedUsedPercent);
   const deltaPercent = usedPercent - expectedUsedPercent;
-  const amountText = reserveOrDeficitText(deltaPercent);
+  const amountText = reserveOrDeficitText(deltaPercent, translate);
 
-  let etaText = status === "behind" ? null : "Lasts until reset";
+  let etaText = status === "behind" ? null : translate("settings:usageLastsUntilReset");
   if (status === "behind") {
     const ratePercentPerMs = projectedUsedPercent / durationMs;
     const etaMs = ratePercentPerMs > 0 ? (100 - usedPercent) / ratePercentPerMs : 0;
     const remainingMs = resetMs - nowMs;
-    const durationText = etaMs > 0 && etaMs < remainingMs ? compactDuration(etaMs) : null;
+    const durationText =
+      etaMs > 0 && etaMs < remainingMs ? compactDuration(etaMs, translate) : null;
     etaText =
-      usedPercent >= 100 ? "Limit reached" : durationText ? `Runs out in ${durationText}` : null;
+      usedPercent >= 100
+        ? translate("settings:usageLimitReached")
+        : durationText
+          ? translate("settings:usageRunsOut", { duration: durationText })
+          : null;
   }
 
   return {

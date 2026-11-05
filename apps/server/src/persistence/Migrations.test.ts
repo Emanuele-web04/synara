@@ -1,3 +1,5 @@
+// Purpose: Verify canonical and historical migration upgrades preserve durable application state.
+// Layer: SQLite persistence boundary, including released main and private Remote lineages.
 import RemoteAccessControlsMigration from "./Migrations/140_RemoteAccessControls.ts";
 import RemoteDeviceTrustMigration from "./Migrations/138_RemoteDeviceTrust.ts";
 import RemoteConnectionPreferencesMigration from "./Migrations/139_RemoteConnectionPreferences.ts";
@@ -18,6 +20,7 @@ import ProjectPullRequestPinsMigration from "./Migrations/069_ProjectPullRequest
 import PullRequestAutoFixMigration from "./Migrations/130_PullRequestAutoFix.ts";
 import ForkSourceMessageMigration from "./Migrations/134_ProjectionThreadsForkSourceMessage.ts";
 import WorkspaceInitializationMigration from "./Migrations/133_ProjectionTurnsWorkspaceInitialization.ts";
+import UsageLimitRecoveryMigration from "./Migrations/141_ProjectionThreadsUsageLimitRecovery.ts";
 import SpacesMigration from "./Migrations/079_Spaces.ts";
 
 const layer = it.layer(Layer.mergeAll(NodeSqliteClient.layerMemory()));
@@ -129,6 +132,41 @@ layer("reconcileMigrationLineage", (it) => {
         yield* ForkSourceMessageMigration;
         assert.deepStrictEqual(yield* read(), [{ title: "Keep this", cutoff: "chosen-message" }]);
       }),
+  );
+
+  it.effect("upgrades the released main tracker gap without losing usage-limit recovery", () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      yield* runMigrations({ toMigrationInclusive: 135 });
+      // Released main reserved Remote's slots 136–140 and applied the common migration at 141.
+      yield* UsageLimitRecoveryMigration;
+      yield* sql`INSERT INTO effect_sql_migrations (migration_id, name)
+        VALUES (141, 'ProjectionThreadsUsageLimitRecovery')`;
+      yield* sql`INSERT INTO projection_threads (
+        thread_id, project_id, title, created_at, updated_at, usage_limit_recovery_json,
+        usage_limit_recovery_source_json, usage_limit_recovery_cancelled_at,
+        usage_limit_recovery_cancelled_turn_id, usage_limit_recovery_last_reset_at
+      ) VALUES ('main-upgrade', 'project', 'Keep this', '2026-10-31', '2026-10-31',
+        '{"id":"recovery-sentinel"}', '{"turnId":"turn-sentinel"}',
+        'cancelled-sentinel', 'turn-sentinel', 'reset-sentinel')`;
+      const read = () => sql`SELECT title, usage_limit_recovery_json,
+        usage_limit_recovery_source_json, usage_limit_recovery_cancelled_at,
+        usage_limit_recovery_cancelled_turn_id, usage_limit_recovery_last_reset_at
+        FROM projection_threads WHERE thread_id = 'main-upgrade'`;
+      const before = yield* read();
+
+      const executed = yield* runMigrations();
+      assert.deepStrictEqual(
+        executed.map(([id]) => id),
+        [136, 137, 138, 139, 140, 141, 142],
+      );
+      assert.deepStrictEqual(yield* read(), before);
+      assert.deepStrictEqual(
+        (yield* trackerRows(sql)).map((row) => [row.migration_id, row.name]),
+        migrationEntries.map(([id, name]) => [id, name]),
+      );
+      assert.deepStrictEqual(yield* runMigrations(), []);
+    }),
   );
 
   it.effect("leaves a healthy tracker alone", () =>

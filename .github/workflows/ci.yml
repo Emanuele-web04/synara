@@ -92,6 +92,9 @@ jobs:
           - name: Verify Windows runtime boundary
             run: bun run windows-runtime:check
 
+          - name: Verify localization catalogs and UI coverage
+            run: bun run i18n:check && bun run i18n:extract --check
+
           - name: Format
             run: bun run fmt:check
 

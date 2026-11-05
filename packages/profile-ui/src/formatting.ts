@@ -6,38 +6,40 @@
 import type { ProviderGlyphKey as ProviderKind } from "./providerIcon";
 
 // Compact token/count formatting matching the reference card ("17bn", "538m", "1.2k").
-export function formatCompact(value: number | null | undefined): string {
+export function formatCompact(value: number | null | undefined, locale?: string): string {
   if (value === null || value === undefined || !Number.isFinite(value)) {
     return "—";
   }
   const abs = Math.abs(value);
   if (abs >= 1_000_000_000) {
-    return `${trimZero(value / 1_000_000_000)}bn`;
+    return `${trimZero(value / 1_000_000_000, locale)}bn`;
   }
   if (abs >= 1_000_000) {
-    return `${trimZero(value / 1_000_000)}m`;
+    return `${trimZero(value / 1_000_000, locale)}m`;
   }
   if (abs >= 1_000) {
-    return `${trimZero(value / 1_000)}k`;
+    return `${trimZero(value / 1_000, locale)}k`;
   }
   return `${Math.round(value)}`;
 }
 
-function trimZero(value: number): string {
+function trimZero(value: number, locale: string | undefined): string {
   const rounded = Math.round(value * 10) / 10;
-  return Number.isInteger(rounded) ? `${rounded}` : rounded.toFixed(1);
+  return new Intl.NumberFormat(locale, { maximumFractionDigits: 1, useGrouping: false }).format(
+    rounded,
+  );
 }
 
 // Thousands-separated integer ("4,934").
-export function formatNumber(value: number | null | undefined): string {
+export function formatNumber(value: number | null | undefined, locale?: string): string {
   if (value === null || value === undefined || !Number.isFinite(value)) {
     return "—";
   }
-  return WHOLE_NUMBER_FORMATTER.format(value);
+  return new Intl.NumberFormat(locale, { maximumFractionDigits: 0 }).format(value);
 }
 
-export function formatDays(value: number): string {
-  return `${formatNumber(value)} ${value === 1 ? "day" : "days"}`;
+export function formatDays(value: number, locale?: string): string {
+  return `${formatNumber(value, locale)} ${value === 1 ? "day" : "days"}`;
 }
 
 // Title-case a home-directory basename into a friendly display name.
@@ -66,7 +68,7 @@ export function normalizeHandle(value: string): string {
 }
 
 // Pretty short date for "peak day" tooltips ("Apr 3").
-export function formatShortDate(day: string | null): string | null {
+export function formatShortDate(day: string | null, locale?: string): string | null {
   if (!day) {
     return null;
   }
@@ -74,13 +76,22 @@ export function formatShortDate(day: string | null): string | null {
   if (!year || !month || !date) {
     return null;
   }
-  return MONTH_DAY_FORMATTER.format(new Date(Date.UTC(year, month - 1, date)));
+  return new Intl.DateTimeFormat(locale, {
+    month: "short",
+    day: "numeric",
+    timeZone: "UTC",
+  }).format(new Date(Date.UTC(year, month - 1, date)));
 }
 
 // 13 → "1 PM" — the hour label used by "Most active hour" on the profile panel,
 // the shareable card, and the public profile page.
-export function formatHourLabel(hour: number): string {
+export function formatHourLabel(hour: number, locale?: string): string {
   const normalized = ((hour % 24) + 24) % 24;
+  if (locale) {
+    return new Intl.DateTimeFormat(locale, { hour: "numeric", timeZone: "UTC" }).format(
+      new Date(Date.UTC(2026, 0, 1, normalized)),
+    );
+  }
   if (normalized === 0) return "12 AM";
   if (normalized === 12) return "12 PM";
   return normalized < 12 ? `${normalized} AM` : `${normalized - 12} PM`;
@@ -114,15 +125,6 @@ export function formatProviderLabel(provider: ProviderKind): string {
 export function formatProfileUsageBasis(metric: "tokens" | "turns"): string {
   return metric === "tokens" ? "tracked tokens" : "turns";
 }
-
-const WHOLE_NUMBER_FORMATTER = new Intl.NumberFormat(undefined, { maximumFractionDigits: 0 });
-// formatShortDate turns a day key into UTC midnight, so format in UTC or viewers
-// west of UTC see the previous day.
-const MONTH_DAY_FORMATTER = new Intl.DateTimeFormat(undefined, {
-  month: "short",
-  day: "numeric",
-  timeZone: "UTC",
-});
 
 /**
  * Up-to-two initials from a display name — "Dylan" → "DY", "Ada Lovelace" →

@@ -14,6 +14,7 @@ import {
   WorkspaceFileEditorHeader,
   WorkspaceFileEditorHistoryActions,
 } from "./WorkspaceFileEditorChrome";
+import { useTranslation } from "~/i18n";
 
 export interface WorkspaceFileEditorPaneProps {
   workspaceRoot: string | null;
@@ -26,6 +27,8 @@ export interface WorkspaceFileEditorPaneProps {
 }
 
 export function WorkspaceFileEditorPane(props: WorkspaceFileEditorPaneProps) {
+  const { t } = useTranslation();
+
   const paneRef = useRef<HTMLDivElement | null>(null);
   const session = useWorkspaceFileEditorSession({
     cwd: props.workspaceRoot,
@@ -44,7 +47,7 @@ export function WorkspaceFileEditorPane(props: WorkspaceFileEditorPaneProps) {
       <WorkspaceFileEditorHeader
         workspaceRoot={props.workspaceRoot}
         filePath={props.filePath}
-        title="Editing"
+        title={t("workspace:editing")}
         dirty={session.dirty}
         saving={session.state.saving}
         canSave={session.dirty && session.canEdit}
@@ -78,7 +81,7 @@ export function WorkspaceFileEditorPane(props: WorkspaceFileEditorPaneProps) {
         </PanelStateMessage>
       ) : session.loading || !session.canEdit ? (
         <PanelStateMessage density="compact" fill="flex">
-          <p>Loading file...</p>
+          <p>{t("workspace:filePreview_loadingFile")}</p>
         </PanelStateMessage>
       ) : (
         <CodeEditorPane
@@ -96,14 +99,16 @@ export function WorkspaceFileEditorPane(props: WorkspaceFileEditorPaneProps) {
       )}
       <WorkspaceFileEditorDiscardDialog
         open={session.pendingDiscard !== null}
-        title="Discard unsaved changes?"
+        title={t("workspace:discardUnsavedChanges")}
         description={
           session.pendingDiscard === "reload"
-            ? "Reloading replaces the editor contents with what is currently on disk."
-            : "Closing the editor drops the changes you have not saved yet."
+            ? t("workspace:reloadingReplacesTheEditorContentsWithWhatIsCurrently")
+            : t("workspace:closingTheEditorDropsTheChangesYouHaveNot")
         }
         confirmLabel={
-          session.pendingDiscard === "reload" ? "Reload and discard" : "Discard changes"
+          session.pendingDiscard === "reload"
+            ? t("workspace:reloadAndDiscard")
+            : t("workspace:discardChanges")
         }
         onOpenChange={(open) => {
           if (!open) {

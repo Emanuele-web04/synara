@@ -14,9 +14,11 @@ export function StatTile({ label, value }: { label: string; value: string | null
       {value === null ? (
         <Skeleton className="h-4 w-12" />
       ) : (
-        <span className="text-sm font-normal tabular-nums text-foreground">{value}</span>
+        <span className="text-ui-lg leading-snug font-normal tabular-nums text-foreground">
+          {value}
+        </span>
       )}
-      <span className="text-sm font-normal text-muted-foreground">{label}</span>
+      <span className="text-ui leading-snug font-normal text-muted-foreground">{label}</span>
     </div>
   );
 }
@@ -38,8 +40,8 @@ export function StatTileGrid({
 export function InsightRow({ label, value }: { label: string; value: string }) {
   return (
     <div className="flex items-center justify-between gap-3">
-      <dt className="shrink-0 text-sm text-muted-foreground">{label}</dt>
-      <dd className="truncate text-sm font-normal tabular-nums" title={value}>
+      <dt className="shrink-0 text-ui leading-snug text-muted-foreground">{label}</dt>
+      <dd className="truncate text-ui leading-snug font-normal tabular-nums" title={value}>
         {value}
       </dd>
     </div>
@@ -64,7 +66,7 @@ export function ModelUsageRow({
 }) {
   return (
     <li className="flex flex-col gap-1.5">
-      <div className="flex items-center justify-between gap-3 text-sm">
+      <div className="flex items-center justify-between gap-3 text-ui leading-snug">
         <span className="flex min-w-0 items-center gap-2">
           {icon}
           <span className="truncate">

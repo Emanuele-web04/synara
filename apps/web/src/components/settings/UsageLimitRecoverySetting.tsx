@@ -4,6 +4,7 @@
 import { WS_USAGE_LIMIT_RECOVERY_CAPABILITY } from "@synara/contracts";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRef, useState, useSyncExternalStore } from "react";
+import { useTranslation } from "~/i18n";
 import { serverQueryKeys, serverSettingsQueryOptions } from "~/lib/serverReactQuery";
 import {
   ensureNativeApi,
@@ -19,6 +20,7 @@ const readCapability = () => readNativeApiServerCapability(WS_USAGE_LIMIT_RECOVE
 const unavailable = () => false;
 
 export function UsageLimitRecoverySetting() {
+  const { t } = useTranslation();
   const supported = useSyncExternalStore(subscribe, readCapability, unavailable);
   const queryClient = useQueryClient();
   const settings = useQuery(serverSettingsQueryOptions());
@@ -39,7 +41,7 @@ export function UsageLimitRecoverySetting() {
     } catch (error) {
       toastManager.add({
         type: "error",
-        title: "Could not update automatic resumption",
+        title: t("settings:couldNotUpdateUsageLimitRecovery"),
         description: error instanceof Error ? error.message : undefined,
       });
       await queryClient
@@ -53,14 +55,15 @@ export function UsageLimitRecoverySetting() {
 
   return (
     <SettingsRow
-      title="Resume after usage limits"
-      description="Automatically continue newly limited tasks when the provider reports that their allowance resets. Applies to this computer, even while your other devices are closed. Turning this off cancels pending resumes."
+      id="setting-resume-after-usage-limits"
+      title="settings:resumeAfterUsageLimits"
+      description="settings:resumeAfterUsageLimitsDescription"
       control={
         <Switch
           checked={settings.data?.autoResumeAfterUsageLimits === true}
           disabled={!settings.data || pending}
           onCheckedChange={(checked) => void update(Boolean(checked))}
-          aria-label="Resume after usage limits"
+          aria-label={t("settings:resumeAfterUsageLimits")}
         />
       }
     />

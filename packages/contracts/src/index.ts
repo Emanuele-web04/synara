@@ -76,4 +76,7 @@ export * from "./productAnalytics";
 export * from "./liveActivities";
 
 export * from "./accountBilling";
+
+export * from "./uiLocale";
+
 export * from "./usageLimit";

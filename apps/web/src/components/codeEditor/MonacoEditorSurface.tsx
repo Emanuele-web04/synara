@@ -1,3 +1,4 @@
+import { t, useTranslation } from "~/i18n";
 // FILE: MonacoEditorSurface.tsx
 // Purpose: The editable code surface (single file or diff) over the shared
 //          native document model, with Synara's command picker, rename dialog,
@@ -136,23 +137,25 @@ function parseGotoLine(query: string, model: monaco.editor.ITextModel) {
 }
 const EMPTY_KEYBINDINGS: ResolvedKeybindingsConfig = [];
 const diffLabels = (fileName: string) => ({
-  originalAriaLabel: `Original ${fileName}`,
-  modifiedAriaLabel: `Edit ${fileName}`,
+  originalAriaLabel: t("workspace:originalFileNamed", { fileName }),
+  modifiedAriaLabel: t("workspace:editFileNamed", { fileName }),
 });
 function markerSeverityLabel(severity: monaco.MarkerSeverity) {
   switch (severity) {
     case monaco.MarkerSeverity.Error:
-      return "error";
+      return t("common:error");
     case monaco.MarkerSeverity.Warning:
-      return "warning";
+      return t("workspace:severityWarning");
     case monaco.MarkerSeverity.Info:
-      return "info";
+      return t("workspace:severityInfo");
     default:
-      return "hint";
+      return t("workspace:severityHint");
   }
 }
 
 export default function MonacoEditorSurface(props: SurfaceProps) {
+  const { t, locale } = useTranslation();
+
   const client = useQueryClient();
   const opener = useWorkspaceFileOpener();
   const { settings } = useAppSettings();
@@ -184,7 +187,7 @@ export default function MonacoEditorSurface(props: SurfaceProps) {
   const [debugLaunch, setDebugLaunch] = useState<"launch" | "attach" | null>(null);
 
   function report(error: unknown) {
-    const message = error instanceof Error ? error.message : "The editor action failed.";
+    const message = error instanceof Error ? error.message : t("workspace:editorActionFailed");
     const entry = controllerRef.current?.entry;
     // Before the engine mounts there is no entry to carry the status; show it directly.
     if (entry) setEditorServiceStatus(entry, message);
@@ -243,7 +246,7 @@ export default function MonacoEditorSurface(props: SurfaceProps) {
     const uri = editorUri(entry.client, entry.cwd, location.relativePath);
     if (!openFile(location.relativePath, () => rememberEditorLocation(uri, range))) {
       forgetEditorLocation(uri);
-      throw new Error("This surface cannot open another workspace file. Open it from Files.");
+      throw new Error(t("workspace:editorCannotOpenFile"));
     }
   }
   function results(title: string, rows: EditorActionRow[]) {
@@ -271,7 +274,7 @@ export default function MonacoEditorSurface(props: SurfaceProps) {
     switch (id) {
       case "debugLaunch":
       case "debugAttach":
-        if (!debugStore) throw new Error("Open a workspace to debug a program.");
+        if (!debugStore) throw new Error(t("workspace:debugWorkspaceRequired"));
         if (id === "debugLaunch" && debugStore.getSnapshot().phase === "paused")
           await debugStore.control("continue");
         else setDebugLaunch(id === "debugAttach" ? "attach" : "launch");
@@ -293,11 +296,15 @@ export default function MonacoEditorSurface(props: SurfaceProps) {
         return;
       case "commands":
         setQuery("");
-        setPicker({ title: "Editor commands", mode: "commands", rows: commands() });
+        setPicker({ title: t("workspace:editorCommands"), mode: "commands", rows: commands() });
         return;
       case "workspaceSymbols":
         setQuery("");
-        setPicker({ title: "Find a workspace symbol", mode: "workspaceSymbols", rows: [] });
+        setPicker({
+          title: t("workspace:workspaceSymbolSearch"),
+          mode: "workspaceSymbols",
+          rows: [],
+        });
         return;
       case "rename":
         if (readOnly || !supportsProjectIntelligence(entry)) return;
@@ -311,7 +318,7 @@ export default function MonacoEditorSurface(props: SurfaceProps) {
         const result = await requestIntelligence(entry, "documentSymbols");
         if (result)
           results(
-            "Go to symbol in file",
+            t("workspace:goToFileSymbol"),
             (result.symbols ?? []).map((symbol, index) => ({
               ...locationRows([symbol.location], symbol.name)[0]!,
               id: `symbol:${index}`,
@@ -348,7 +355,7 @@ export default function MonacoEditorSurface(props: SurfaceProps) {
       case "gotoLine":
         gotoLineOrigin.current = editor.saveViewState();
         setQuery("");
-        setPicker({ title: "Go to line", mode: "gotoLine", rows: [] });
+        setPicker({ title: t("workspace:goToLine"), mode: "gotoLine", rows: [] });
         return;
       case "problems": {
         const markers = monaco.editor
@@ -357,11 +364,14 @@ export default function MonacoEditorSurface(props: SurfaceProps) {
             (a, b) => a.startLineNumber - b.startLineNumber || a.startColumn - b.startColumn,
           );
         results(
-          "Problems in this file",
+          t("workspace:fileProblems"),
           markers.map((marker, index) => ({
             id: `problem:${index}`,
             label: marker.message,
-            detail: `${markerSeverityLabel(marker.severity)} · line ${marker.startLineNumber}`,
+            detail: t("workspace:problemLine", {
+              severity: markerSeverityLabel(marker.severity),
+              line: marker.startLineNumber,
+            }),
             run: () => {
               const range = new monaco.Range(
                 marker.startLineNumber,
@@ -424,54 +434,59 @@ export default function MonacoEditorSurface(props: SurfaceProps) {
       run: () => runCommand(id),
     });
     return [
-      action("actions.find", "Find in file"),
-      ...(editable ? [action("editor.action.startFindReplaceAction", "Replace in file")] : []),
+      action("actions.find", t("workspace:findInFile")),
+      ...(editable
+        ? [action("editor.action.startFindReplaceAction", t("workspace:replaceInFile"))]
+        : []),
       ...(intelligence
         ? [
-            action("editor.action.triggerSuggest", "Show suggestions"),
-            action("editor.action.triggerParameterHints", "Show signature help"),
-            action("editor.action.showHover", "Show documentation"),
-            action("definition", "Go to definition"),
-            action("peekDefinition", "Peek definition"),
-            action("typeDefinition", "Go to type definition"),
-            action("references", "Peek references"),
-            action("documentSymbols", "Go to symbol in file"),
-            action("workspaceSymbols", "Find a workspace symbol"),
+            action("editor.action.triggerSuggest", t("workspace:showSuggestions")),
+            action("editor.action.triggerParameterHints", t("workspace:showSignatureHelp")),
+            action("editor.action.showHover", t("workspace:showDocumentation")),
+            action("definition", t("workspace:goToDefinition")),
+            action("peekDefinition", t("workspace:peekDefinition")),
+            action("typeDefinition", t("workspace:goToTypeDefinition")),
+            action("references", t("workspace:peekReferences")),
+            action("documentSymbols", t("workspace:goToFileSymbol")),
+            action("workspaceSymbols", t("workspace:workspaceSymbolSearch")),
           ]
         : []),
-      action("gotoLine", "Go to line…"),
-      action("problems", "Show problems in file"),
-      action("nextProblem", "Go to next problem"),
-      action("previousProblem", "Go to previous problem"),
+      action("gotoLine", t("workspace:goToLinePrompt")),
+      action("problems", t("workspace:showFileProblems")),
+      action("nextProblem", t("workspace:nextProblem")),
+      action("previousProblem", t("workspace:previousProblem")),
       ...(editable
         ? [
-            action("undo", "Undo"),
-            action("redo", "Redo"),
-            action("editor.action.formatDocument", "Format document"),
+            action("undo", t("workspace:toast_undo")),
+            action("redo", t("workspace:redo")),
+            action("editor.action.formatDocument", t("workspace:formatDocument")),
             ...(intelligence
               ? [
-                  action("rename", "Rename symbol"),
-                  action("codeActions", "Quick fix…"),
-                  action("refactor", "Refactor…"),
-                  action("organizeImports", "Organize imports"),
+                  action("rename", t("workspace:renameSymbol")),
+                  action("codeActions", t("workspace:quickFix")),
+                  action("refactor", t("workspace:refactorPrompt")),
+                  action("organizeImports", t("workspace:organizeImports")),
                 ]
               : []),
           ]
         : []),
       ...(debugStore
         ? [
-            action("debugLaunch", phase === "paused" ? "Continue debugging" : "Start debugging…"),
-            action("debugAttach", "Attach to Node.js…"),
-            action("debugBreakpoint", "Toggle breakpoint"),
+            action(
+              "debugLaunch",
+              phase === "paused" ? t("workspace:continueDebugging") : t("workspace:startDebugging"),
+            ),
+            action("debugAttach", t("workspace:attachNodePrompt")),
+            action("debugBreakpoint", t("workspace:toggleBreakpoint")),
             ...(phase === "running" || phase === "paused"
-              ? [action("debugStop", "Stop debugging")]
+              ? [action("debugStop", t("workspace:debugStop"))]
               : []),
           ]
         : []),
-      action("editor.foldAll", "Fold all"),
-      action("editor.unfoldAll", "Unfold all"),
+      action("editor.foldAll", t("workspace:foldAll")),
+      action("editor.unfoldAll", t("workspace:unfoldAll")),
       ...(props.onReferenceInChat
-        ? [action("referenceInChat", "Reference selection in chat")]
+        ? [action("referenceInChat", t("workspace:referenceSelection"))]
         : []),
     ];
   }
@@ -497,32 +512,35 @@ export default function MonacoEditorSurface(props: SurfaceProps) {
           })
         : null;
     const items: ContextMenuItem<string>[] = [
-      { id: "commands", label: "Editor commands…" },
+      { id: "commands", label: t("workspace:editorCommandsPrompt") },
       ...contextMenuGroup(
-        { id: "navigate", label: "Navigate", separatorBefore: true },
+        { id: "navigate", label: t("workspace:editorNavigate"), separatorBefore: true },
         NAVIGATION_COMMANDS.flatMap(item),
       ),
       ...contextMenuGroup(
-        { id: "debug", label: "Debug" },
+        { id: "debug", label: t("chat:debug") },
         rows
           .filter((entry) => entry.id.startsWith("debug"))
           .map((entry) => ({ id: entry.id, label: entry.label })),
       ),
-      ...contextMenuGroup({ id: "refactor", label: "Refactor", separatorBefore: true }, [
-        ...item("rename"),
-        ...item("codeActions"),
-        ...item("refactor"),
-        ...item("organizeImports"),
-        ...item("editor.action.formatDocument"),
-      ]),
+      ...contextMenuGroup(
+        { id: "refactor", label: t("workspace:editorRefactor"), separatorBefore: true },
+        [
+          ...item("rename"),
+          ...item("codeActions"),
+          ...item("refactor"),
+          ...item("organizeImports"),
+          ...item("editor.action.formatDocument"),
+        ],
+      ),
       ...item("actions.find"),
       ...(row("referenceInChat")
         ? [
             {
               id: "referenceInChat",
               label: referenceLabel
-                ? `Reference ${referenceLabel} in chat`
-                : "Reference selection in chat",
+                ? t("workspace:referenceSelectionNamed", { reference: referenceLabel })
+                : t("workspace:referenceSelection"),
               separatorBefore: true,
             },
           ]
@@ -582,7 +600,7 @@ export default function MonacoEditorSurface(props: SurfaceProps) {
             ...appearance,
             model: entry.model,
             readOnly: initial.readOnly ?? false,
-            ariaLabel: `Edit ${initial.fileName}`,
+            ariaLabel: t("workspace:editFileNamed", { fileName: initial.fileName }),
           });
           active = { instance: editor, editor, entry };
         }
@@ -671,9 +689,7 @@ export default function MonacoEditorSurface(props: SurfaceProps) {
                 !openFile(resource.path.slice(1), () => rememberEditorLocation(resource, range))
               ) {
                 forgetEditorLocation(resource);
-                report(
-                  new Error("This surface cannot open another workspace file. Open it from Files."),
-                );
+                report(new Error(t("workspace:editorCannotOpenFile")));
               }
               return true;
             },
@@ -747,12 +763,14 @@ export default function MonacoEditorSurface(props: SurfaceProps) {
         controller.instance.updateOptions({
           ...options,
           // The diff editor resets its sub-editor labels on every update.
-          ...(controller.original ? diffLabels(props.fileName) : {}),
+          ...(controller.original
+            ? diffLabels(props.fileName)
+            : { ariaLabel: t("workspace:editFileNamed", { fileName: props.fileName }) }),
         });
         monaco.editor.setTheme(options.theme!);
       })
       .catch(report);
-  }, [controller, props.resolvedTheme, props.fileName, settings.chatFontSizePx]);
+  }, [controller, props.resolvedTheme, props.fileName, settings.chatFontSizePx, locale]);
 
   // Breakpoint and paused-line markers for this document.
   useEffect(() => {
@@ -1030,9 +1048,9 @@ export default function MonacoEditorSurface(props: SurfaceProps) {
     focusEditor();
   };
   const pickerMessage = running
-    ? "Running…"
+    ? t("workspace:editorRunning")
     : picker?.mode === "gotoLine" && !gotoLine
-      ? `Type a line number (1–${controller?.entry.model.getLineCount() ?? 1}) or line:column.`
+      ? t("workspace:editorGotoPrompt", { max: controller?.entry.model.getLineCount() ?? 1 })
       : null;
   const problemCount = problems.errors + problems.warnings;
   return (
@@ -1051,7 +1069,7 @@ export default function MonacoEditorSurface(props: SurfaceProps) {
               className="!h-6 shrink-0 rounded-md text-ui-sm"
               onClick={() => setServiceNotice(null)}
             >
-              Dismiss
+              {t("automation:dismiss")}
             </Button>
           }
         />
@@ -1066,13 +1084,13 @@ export default function MonacoEditorSurface(props: SurfaceProps) {
           {problems.errors > 0 ? (
             <span className="flex items-center gap-1.5">
               <StatusDot className="bg-destructive" />
-              {problems.errors} {problems.errors === 1 ? "error" : "errors"}
+              {t("workspace:errorCount", { count: problems.errors })}
             </span>
           ) : null}
           {problems.warnings > 0 ? (
             <span className="flex items-center gap-1.5">
               <StatusDot className="bg-[var(--color-warning)]" />
-              {problems.warnings} {problems.warnings === 1 ? "warning" : "warnings"}
+              {t("workspace:warningCount", { count: problems.warnings })}
             </span>
           ) : null}
           <Button
@@ -1081,7 +1099,7 @@ export default function MonacoEditorSurface(props: SurfaceProps) {
             className="ml-auto !h-5 px-1.5 text-ui-sm"
             onClick={() => run("problems")}
           >
-            Show problems
+            {t("workspace:showProblems")}
           </Button>
         </div>
       ) : null}
@@ -1121,7 +1139,7 @@ export default function MonacoEditorSurface(props: SurfaceProps) {
       ) : null}
       <EditorActionPicker
         open={picker !== null}
-        title={picker?.title ?? "Editor commands"}
+        title={picker?.title ?? t("workspace:editorCommands")}
         query={query}
         rows={rows}
         busy={picker?.mode === "workspaceSymbols" && searching}
@@ -1132,10 +1150,10 @@ export default function MonacoEditorSurface(props: SurfaceProps) {
       />
       <RenameDialog
         open={rename !== null}
-        title="Rename symbol"
-        description="Updates every reference through the workspace's language service."
+        title={t("workspace:renameSymbol")}
+        description={t("workspace:renameSymbolDescription")}
         initialValue={rename?.word ?? ""}
-        saveLabel="Rename"
+        saveLabel={t("workspace:rename")}
         onOpenChange={(open) => {
           if (open) return;
           setRename(null);
@@ -1146,18 +1164,18 @@ export default function MonacoEditorSurface(props: SurfaceProps) {
           if (!rename || !active) return;
           try {
             if (active.entry.model.getVersionId() !== rename.version)
-              throw new Error("The document changed. Run Rename again.");
+              throw new Error(t("workspace:renameDocumentChanged"));
             const result = await requestIntelligence(active.entry, "rename", {
               offset: rename.offset,
               newName,
             });
-            if (!result?.edits) throw new Error("The document changed. Run Rename again.");
+            if (!result?.edits) throw new Error(t("workspace:renameDocumentChanged"));
             await applyEditorEdits(active.entry, result.edits);
           } catch (error) {
             toastManager.add({
               type: "error",
-              title: "Rename failed",
-              description: error instanceof Error ? error.message : "The rename did not apply.",
+              title: t("workspace:renameFailed"),
+              description: error instanceof Error ? error.message : t("workspace:renameNotApplied"),
             });
             throw error;
           }

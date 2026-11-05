@@ -1,11 +1,15 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { setLanguagePreference } from "~/i18n";
 
 import {
   getComposerTraitSelection,
   planComposerEffortChange,
   planComposerEffortCycle,
   resolveComposerEffortLadderIndex,
+  resolveComposerTraitStatusLabel,
 } from "./composerTraits";
+
+afterEach(() => setLanguagePreference("system"));
 
 describe("planComposerEffortCycle", () => {
   it.each([
@@ -267,6 +271,128 @@ describe("CLI-discovered Claude effort", () => {
         prompt: "",
         value: "default",
       }),
+    ).toBeNull();
+  });
+});
+
+describe("localized composer trait presentation", () => {
+  it.each([
+    ["en", "Medium"],
+    ["zh-CN", "中"],
+  ] as const)(
+    "shows generated effort labels in %s while committing unchanged option IDs",
+    (locale, label) => {
+      setLanguagePreference(locale);
+      const selection = getComposerTraitSelection(
+        "codex",
+        "custom-model",
+        "Keep this prompt",
+        undefined,
+        {
+          slug: "custom-model",
+          name: "Custom model",
+          supportedReasoningEfforts: [{ value: "medium" }, { value: "high" }],
+          defaultReasoningEffort: "medium",
+        },
+      );
+      expect(resolveComposerTraitStatusLabel(selection)).toBe(label);
+      expect(
+        planComposerEffortChange({
+          provider: "codex",
+          selection,
+          prompt: "Keep this prompt",
+          value: "high",
+        }),
+      ).toEqual({ kind: "options", patch: { reasoningEffort: "high" } });
+    },
+  );
+
+  it("preserves explicit provider effort labels and descriptions even when they resemble UI copy", () => {
+    setLanguagePreference("zh-CN");
+    const selection = getComposerTraitSelection("codex", "custom-model", "", undefined, {
+      slug: "custom-model",
+      name: "Custom model",
+      supportedReasoningEfforts: [
+        { value: "medium", label: "Medium", description: "Provider guidance" },
+        { value: "high", label: "chat:effortHigh" },
+      ],
+      defaultReasoningEffort: "medium",
+    });
+    expect(selection.effortLevels).toEqual([
+      { value: "medium", label: "Medium", description: "Provider guidance", isDefault: true },
+      { value: "high", label: "chat:effortHigh" },
+    ]);
+    const descriptorSelection = getComposerTraitSelection("codex", "custom-model", "", undefined, {
+      slug: "custom-model",
+      name: "Custom model",
+      optionDescriptors: [
+        {
+          id: "reasoningEffort",
+          label: "Provider effort",
+          type: "select",
+          options: [
+            { id: "medium", label: "Provider medium" },
+            { id: "high", label: "Provider high" },
+          ],
+        },
+      ],
+    });
+    expect(descriptorSelection.primarySelectDescriptor?.label).toBe("Provider effort");
+    expect(resolveComposerTraitStatusLabel(descriptorSelection)).toBe("Provider medium");
+  });
+
+  it("localizes canonical labels constructed by the Claude adapter while preserving custom overrides", () => {
+    setLanguagePreference("zh-CN");
+    const selection = getComposerTraitSelection("claudeAgent", "custom-model", "", undefined, {
+      slug: "custom-model",
+      name: "Custom model",
+      optionDescriptors: [
+        {
+          id: "effort",
+          label: "Reasoning",
+          type: "select",
+          options: [
+            { id: "medium", label: "Medium", isDefault: true },
+            { id: "high", label: "Provider deep work" },
+          ],
+        },
+      ],
+      supportedReasoningEfforts: [
+        { value: "medium", label: "Medium" },
+        { value: "high", label: "Provider deep work" },
+      ],
+    });
+    expect(resolveComposerTraitStatusLabel(selection)).toBe("中");
+    expect(selection.effortLevels.find((option) => option.value === "high")?.label).toBe(
+      "Provider deep work",
+    );
+  });
+
+  it("localizes thinking and automatic context labels without changing context values or prompt modes", () => {
+    setLanguagePreference("zh-CN");
+    const thinking = getComposerTraitSelection(
+      "codex",
+      "custom-model",
+      "",
+      { thinking: false },
+      {
+        slug: "custom-model",
+        name: "Custom model",
+        supportsThinkingToggle: true,
+      },
+    );
+    expect(resolveComposerTraitStatusLabel(thinking)).toBe("思考已关闭");
+    const prompt = "Ultrathink:\nKeep this prompt";
+    const claude = getComposerTraitSelection("claudeAgent", "claude-opus-4-8", prompt, {
+      effort: "low",
+    });
+    expect(claude.contextWindowDescriptor?.label).toBe("自动压缩");
+    expect(claude.contextWindowOptions[0]).toMatchObject({
+      value: "auto",
+      label: "自动（Claude Code）",
+    });
+    expect(
+      planComposerEffortCycle({ provider: "claudeAgent", selection: claude, prompt }),
     ).toBeNull();
   });
 });

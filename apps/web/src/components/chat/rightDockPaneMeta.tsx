@@ -4,6 +4,7 @@
 // Exports: per-kind meta map, launcher items, and pane label/icon resolvers.
 
 import type { ReactNode } from "react";
+import { t } from "~/i18n";
 
 import { basenameOfPath } from "~/file-icons";
 import type { LucideIcon } from "~/lib/icons";
@@ -50,6 +51,19 @@ export const RIGHT_DOCK_PANE_META: Record<RightDockPaneKind, RightDockPaneMeta> 
   subagents: { label: "Subagents", Icon: BotIcon },
 };
 
+const RIGHT_DOCK_PANE_LABEL_KEYS: Record<RightDockPaneKind, string> = {
+  browser: "computer:browser",
+  device: "computer:iOSSimulator",
+  diff: "workspace:toolCallDetails_diffSection",
+  explorer: "chat:explorer",
+  file: "chat:file",
+  terminal: "workspace:viewportPane_terminal",
+  sidechat: "chat:sideChats",
+  git: "chat:git",
+  pullRequest: "git:general_environmentPullRequest",
+  subagents: "chat:subagents",
+};
+
 // Neutral fallback for any pane kind we no longer recognize (e.g. stale
 // persisted state). Persisted dock state is sanitized on rehydrate, so this is
 // only a defensive guard to keep a single bad pane from crashing render.
@@ -60,8 +74,12 @@ const FALLBACK_RIGHT_DOCK_PANE_META: RightDockPaneMeta = {
 
 // Always resolve pane meta through this helper instead of indexing the map
 // directly, so an unknown kind degrades gracefully rather than throwing.
-export function getRightDockPaneMeta(kind: RightDockPaneKind): RightDockPaneMeta {
-  return RIGHT_DOCK_PANE_META[kind] ?? FALLBACK_RIGHT_DOCK_PANE_META;
+export function getRightDockPaneMeta(
+  kind: RightDockPaneKind,
+  translate: typeof t = t,
+): RightDockPaneMeta {
+  const meta = RIGHT_DOCK_PANE_META[kind] ?? FALLBACK_RIGHT_DOCK_PANE_META;
+  return { ...meta, label: translate(RIGHT_DOCK_PANE_LABEL_KEYS[kind] ?? "common:panel") };
 }
 
 // Empty-dock launchers prioritize the everyday workspace tools. Review only
@@ -78,24 +96,27 @@ const RIGHT_DOCK_LAUNCHER_ORDER: readonly RightDockPaneKind[] = [
   "git",
 ];
 
-const RIGHT_DOCK_LAUNCHER_LABELS: Partial<Record<RightDockPaneKind, string>> = {
-  diff: "Review",
-  explorer: "Files",
-  sidechat: "Side chats",
-  git: "Source control",
+const RIGHT_DOCK_LAUNCHER_LABEL_KEYS: Partial<Record<RightDockPaneKind, string>> = {
+  diff: "chat:review",
+  explorer: "workspace:toolCallDetails_filesSection",
+  sidechat: "chat:sideChats",
+  git: "git:gitPanel_title",
 };
 
-export function resolveRightDockLauncherItems(input: {
-  hasWorkspace: boolean;
-  hasGitRepository: boolean;
-  hasReview: boolean;
-  /**
-   * Simulators need a macOS server with Xcode. Off macOS the entry is hidden
-   * outright rather than shown disabled: there is nothing the user could do
-   * from this machine to make it work.
-   */
-  hasDeviceSupport?: boolean;
-}): readonly RightDockLauncherItem[] {
+export function resolveRightDockLauncherItems(
+  input: {
+    hasWorkspace: boolean;
+    hasGitRepository: boolean;
+    hasReview: boolean;
+    /**
+     * Simulators need a macOS server with Xcode. Off macOS the entry is hidden
+     * outright rather than shown disabled: there is nothing the user could do
+     * from this machine to make it work.
+     */
+    hasDeviceSupport?: boolean;
+  },
+  translate: typeof t = t,
+): readonly RightDockLauncherItem[] {
   return RIGHT_DOCK_LAUNCHER_ORDER.flatMap((kind) => {
     if (kind === "diff" && !input.hasReview) {
       return [];
@@ -109,12 +130,13 @@ export function resolveRightDockLauncherItems(input: {
     if (kind === "device" && input.hasDeviceSupport !== true) {
       return [];
     }
-    const meta = getRightDockPaneMeta(kind);
+    const meta = getRightDockPaneMeta(kind, translate);
+    const launcherLabel = RIGHT_DOCK_LAUNCHER_LABEL_KEYS[kind];
     return [
       {
         kind,
         Icon: meta.Icon,
-        label: RIGHT_DOCK_LAUNCHER_LABELS[kind] ?? meta.label,
+        label: launcherLabel ? translate(launcherLabel) : meta.label,
       },
     ];
   });
@@ -125,8 +147,9 @@ export function resolveRightDockLauncherItems(input: {
 export function resolveRightDockPaneLabel(
   pane: RightDockPane,
   overrides?: Record<string, string | undefined>,
+  translate: typeof t = t,
 ): string {
-  return overrides?.[pane.id] ?? getRightDockPaneMeta(pane.kind).label;
+  return overrides?.[pane.id] ?? getRightDockPaneMeta(pane.kind, translate).label;
 }
 
 export function buildRightDockPaneLabelOverrides(

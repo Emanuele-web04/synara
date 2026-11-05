@@ -26,6 +26,7 @@ import { cn } from "~/lib/utils";
 import { Button } from "~/components/ui/button";
 import { Kbd, KbdGroup } from "~/components/ui/kbd";
 import { toastManager } from "~/components/ui/toast";
+import { useTranslation } from "~/i18n";
 
 type ShortcutCheckState =
   | { status: "idle"; availability: null }
@@ -64,6 +65,8 @@ export function AppSnapShortcutControl({
   keybindings: ResolvedKeybindingsConfig;
   onSaved: (shortcut: DesktopAppSnapShortcut, state: DesktopAppSnapState) => void;
 }) {
+  const { t } = useTranslation();
+
   const [capture, setCapture] = useState<CaptureState>(IDLE_CAPTURE);
   const [candidate, setCandidate] = useState<DesktopAppSnapShortcut>(shortcut);
   const [checkState, setCheckState] = useState<ShortcutCheckState>({
@@ -188,15 +191,15 @@ export function AppSnapShortcutControl({
     if (result.availability.available) {
       toastManager.add({
         type: "success",
-        title: "AppSnap shortcut saved",
+        title: t("settings:appSnapShortcutSaved"),
         description: enabled
-          ? "The shortcut is reserved while AppSnap is enabled."
-          : "The shortcut will be reserved when you enable AppSnap.",
+          ? t("settings:theShortcutIsReservedWhileAppSnapIsEnabled")
+          : t("settings:theShortcutWillBeReservedWhenYouEnableAppSnap"),
       });
     } else if (result.availability.reason) {
       toastManager.add({
         type: "error",
-        title: "AppSnap shortcut saved, but unavailable",
+        title: t("settings:appSnapShortcutSavedButUnavailable"),
         description: result.availability.reason,
       });
     }
@@ -224,7 +227,7 @@ export function AppSnapShortcutControl({
       <div className="flex flex-wrap items-center gap-2 sm:justify-end">
         <button
           type="button"
-          aria-label="Record AppSnap shortcut"
+          aria-label={t("settings:recordAppSnapShortcut")}
           aria-pressed={capture.capturing}
           onClick={startCapture}
           onKeyDown={captureKeyDown}
@@ -250,7 +253,7 @@ export function AppSnapShortcutControl({
               </KbdGroup>
             ) : (
               <span className="animate-pulse px-1 text-ui leading-snug font-medium text-muted-foreground">
-                Press two keys…
+                {t("settings:pressTwoKeys")}
               </span>
             )
           ) : (
@@ -263,7 +266,7 @@ export function AppSnapShortcutControl({
         </button>
         {changed ? (
           <Button size="xs" disabled={!canSave} onClick={() => void saveShortcut(candidate)}>
-            Save
+            {t("computer:form_save")}
           </Button>
         ) : candidate.kind !== "both-option-keys" ? (
           <Button
@@ -271,7 +274,7 @@ export function AppSnapShortcutControl({
             variant="ghost"
             onClick={() => void saveShortcut(DEFAULT_APP_SNAP_SHORTCUT)}
           >
-            Reset
+            {t("common:theme_reset")}
           </Button>
         ) : null}
       </div>

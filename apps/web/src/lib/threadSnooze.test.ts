@@ -1,12 +1,35 @@
 import { ThreadId } from "@synara/contracts";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { setLanguagePreference } from "~/i18n";
 import {
   getFallbackThreadIdAfterSnooze,
   hasUnseenSnoozeReturn,
   resolveThreadStatusPill,
 } from "../components/Sidebar.logic";
 import { formatSnoozeRemainingTime } from "./relativeTime";
-import { parseFutureDateTimeLocalValue, toDateTimeLocalValue } from "./threadSnooze";
+import {
+  formatSnoozeDeadline,
+  parseFutureDateTimeLocalValue,
+  toDateTimeLocalValue,
+} from "./threadSnooze";
+
+afterEach(() => setLanguagePreference("system"));
+
+it("formats snooze deadlines in the selected language instead of a module-cached locale", () => {
+  const deadline = "2026-10-02T12:28:00Z";
+  for (const language of ["en", "es"] as const) {
+    setLanguagePreference(language);
+    expect(formatSnoozeDeadline(deadline)).toBe(
+      new Intl.DateTimeFormat(language, {
+        weekday: "short",
+        month: "short",
+        day: "numeric",
+        hour: "numeric",
+        minute: "2-digit",
+      }).format(new Date(deadline)),
+    );
+  }
+});
 
 describe("snooze remaining time", () => {
   const now = Date.parse("2026-10-02T12:00:00Z");

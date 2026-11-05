@@ -4,7 +4,6 @@ import {
   normalizeRuntimeModeForProvider,
   providerModelSupportsAutoRuntimeMode,
   providerSupportsAutoRuntimeMode,
-  RUNTIME_MODE_PRESENTATION,
   runtimeModePresentation,
 } from "./runtimeMode";
 
@@ -87,17 +86,17 @@ describe("runtimeModePresentation", () => {
     expect(runtimeModePresentation("approval-required", "codex").description).toContain(
       "Read-only sandbox",
     );
-    expect(runtimeModePresentation("auto", "codex").label).toBe(
-      RUNTIME_MODE_PRESENTATION.auto.label,
-    );
+    expect(runtimeModePresentation("auto", "codex").label).toBe("Approve for me");
   });
 
   it("keeps the generic wording for other providers", () => {
-    expect(runtimeModePresentation("full-access", "cursor")).toEqual(
-      RUNTIME_MODE_PRESENTATION["full-access"],
-    );
-    expect(runtimeModePresentation("approval-required", undefined)).toEqual(
-      RUNTIME_MODE_PRESENTATION["approval-required"],
-    );
+    expect(runtimeModePresentation("full-access", "cursor")).toEqual({
+      label: "Full access",
+      description: "Unrestricted access to the internet and any file on your computer",
+    });
+    expect(runtimeModePresentation("approval-required", undefined)).toEqual({
+      label: "Ask for approval",
+      description: "Always ask to edit external files and use the internet",
+    });
   });
 });

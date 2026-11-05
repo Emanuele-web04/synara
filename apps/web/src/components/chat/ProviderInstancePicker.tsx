@@ -11,10 +11,7 @@ import {
 import { memo, useCallback, useMemo, useState } from "react";
 
 import { SettingsIcon, UserIcon } from "~/lib/icons";
-import {
-  MISSING_PROVIDER_INSTANCE_LABEL,
-  resolveProviderInstanceLabel,
-} from "~/lib/providerInstancePresentation";
+import { resolveProviderInstanceLabel } from "~/lib/providerInstancePresentation";
 import { cn } from "~/lib/utils";
 import {
   Menu,
@@ -31,6 +28,7 @@ import {
   resolveLiveProviderAvailability,
   type ProviderModelPickerInstance,
 } from "./ProviderModelPicker";
+import { useTranslation, t } from "~/i18n";
 
 export interface ProviderInstancePickerProps {
   readonly provider: ProviderKind;
@@ -46,18 +44,22 @@ export interface ProviderInstancePickerProps {
 }
 
 function pickerSectionLabel(provider: ProviderKind): string {
-  return provider === "codex" || provider === "claudeAgent" ? "Accounts" : "Profiles";
+  return provider === "codex" || provider === "claudeAgent"
+    ? t("chat:accounts")
+    : t("chat:profiles");
 }
 
 function manageLabel(provider: ProviderKind): string {
   return provider === "codex" || provider === "claudeAgent"
-    ? "Manage accounts…"
-    : "Manage profiles…";
+    ? t("chat:manageAccounts")
+    : t("chat:manageProfiles");
 }
 
 export const ProviderInstancePicker = memo(function ProviderInstancePicker(
   props: ProviderInstancePickerProps,
 ) {
+  const { t } = useTranslation();
+
   const [open, setOpen] = useState(false);
   const instances = useMemo(
     () => props.providerInstances.filter((instance) => instance.provider === props.provider),
@@ -66,8 +68,12 @@ export const ProviderInstancePicker = memo(function ProviderInstancePicker(
   const selectedInstance = instances.find(
     (instance) => instance.instanceId === props.selectedProviderInstanceId,
   );
-  const selectedLabel = resolveProviderInstanceLabel(instances, props.selectedProviderInstanceId);
-  const triggerLabel = `Account: ${selectedLabel}`;
+  const selectedLabel = resolveProviderInstanceLabel(
+    instances,
+    props.selectedProviderInstanceId,
+    t,
+  );
+  const triggerLabel = t("chat:account", { value0: selectedLabel });
 
   const handleInstanceChange = useCallback(
     (value: string) => {
@@ -106,9 +112,9 @@ export const ProviderInstancePicker = memo(function ProviderInstancePicker(
         >
           {!selectedInstance ? (
             <MenuRadioItem value={props.selectedProviderInstanceId} disabled>
-              <span className="truncate">{MISSING_PROVIDER_INSTANCE_LABEL}</span>
+              <span className="truncate">{t("settings:missingAccount")}</span>
               <span className="ms-auto text-ui-xs text-muted-foreground/80 uppercase tracking-[0.08em]">
-                Unavailable
+                {t("chat:providerModelPicker_unavailable")}
               </span>
             </MenuRadioItem>
           ) : null}
@@ -121,10 +127,10 @@ export const ProviderInstancePicker = memo(function ProviderInstancePicker(
                     instanceId: instance.instanceId,
                   }),
                 )
-              : { disabled: true, label: "Disabled" };
+              : { disabled: true, label: t("chat:disabled") };
             const lockedSibling =
               props.selectionLocked && instance.instanceId !== props.selectedProviderInstanceId;
-            const statusLabel = lockedSibling ? "New thread" : availability.label;
+            const statusLabel = lockedSibling ? t("chat:sections_newThread") : availability.label;
             return (
               <MenuRadioItem
                 key={instance.instanceId}

@@ -24,15 +24,17 @@ import { ProviderIcon } from "./ProviderIcon";
 import { resolveRuntimeModelDescriptor } from "./chat/runtimeModelCapabilities";
 import {
   PR_STATE_PRESENTATION_ICONS,
+  PR_STATE_LABEL_KEYS,
   resolvePrStatePresentation,
 } from "./pullRequest/pullRequestStatePresentation";
 import { FastModeBadgeIcon } from "./chat/FastModeBadgeIcon";
-import type { ThreadStatusPill } from "./Sidebar.logic";
+import { THREAD_STATUS_LABEL_KEYS, type ThreadStatusPill } from "./Sidebar.logic";
 import { SidebarDraftGlyph, SidebarStatusTrailingGlyph } from "./SidebarStatusTrailingGlyph";
 import {
   SIDEBAR_HOVER_CARD_CONTAINER_PADDING_CLASS_NAME,
   SIDEBAR_HOVER_CARD_ROW_CLASS_NAME,
 } from "./sidebarHoverCardStyles";
+import { useTranslation } from "~/i18n";
 
 export type ThreadHoverCardContentProps = {
   threadId: ThreadId;
@@ -86,6 +88,7 @@ function ModelRow({
   modelSelection: ModelSelection;
   catalogQueryOptions: ThreadHoverCardContentProps["modelCatalogQueryOptions"];
 }) {
+  const { t } = useTranslation();
   const catalog = useQuery({
     ...catalogQueryOptions,
     enabled: false,
@@ -99,6 +102,7 @@ function ModelRow({
       model: modelSelection.model,
       runtimeModels: catalog.data?.models,
     }),
+    t,
   );
   const fastModeNotice = useThreadFastModeNotice(
     modelSelection.provider === "claudeAgent" ? threadId : null,
@@ -138,6 +142,7 @@ export function ThreadHoverCardContent({
   status,
   hostName = null,
 }: ThreadHoverCardContentProps) {
+  const { t } = useTranslation();
   const hasMeta =
     Boolean(projectName) ||
     Boolean(sourceProjectName) ||
@@ -181,7 +186,7 @@ export function ThreadHoverCardContent({
                 </span>
               }
             >
-              {status.label}
+              {t(THREAD_STATUS_LABEL_KEYS[status.label])}
             </MetaRow>
           ) : null}
           {projectName ? (
@@ -243,6 +248,8 @@ export function ThreadHoverCardContent({
 
 // Unsent composer text, clamped so a long draft cannot stretch the card.
 function DraftPreviewRow({ threadId }: { threadId: ThreadId }) {
+  const { t } = useTranslation();
+
   const previewText = useThreadDraftPreviewText(threadId);
   if (!previewText) return null;
   return (
@@ -253,7 +260,7 @@ function DraftPreviewRow({ threadId }: { threadId: ThreadId }) {
       >
         <SidebarDraftGlyph />
       </span>
-      <span className="sr-only">Unsent draft:</span>
+      <span className="sr-only">{t("common:unsentDraft")}</span>
       <span className="line-clamp-3 min-w-0 whitespace-normal break-words leading-snug">
         {previewText}
       </span>
@@ -268,6 +275,8 @@ function PullRequestRow({
   pr: OrchestrationThreadPullRequest;
   onOpen: ThreadHoverCardContentProps["onOpenPullRequest"];
 }) {
+  const { t } = useTranslation();
+
   const presentation = resolvePrStatePresentation(pr);
   const PrIcon = PR_STATE_PRESENTATION_ICONS[presentation.iconKind];
 
@@ -276,7 +285,11 @@ function PullRequestRow({
       href={pr.url}
       target="_blank"
       rel="noopener noreferrer"
-      aria-label={`#${pr.number} ${presentation.label}: ${pr.title}`}
+      aria-label={t("workspace:symbol4", {
+        value0: pr.number,
+        value1: t(PR_STATE_LABEL_KEYS[presentation.label]),
+        value2: pr.title,
+      })}
       className={`${META_ROW_CLASS_NAME} cursor-pointer outline-hidden hover:bg-[var(--color-background-button-secondary-hover)] focus-visible:ring-1 focus-visible:ring-ring`}
       onClick={(event) => onOpen(event, pr.url)}
       onAuxClick={(event) => {

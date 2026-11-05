@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { setLanguagePreference, t } from "~/i18n";
 import {
   deriveFriendlyCommandTarget,
   deriveCommandReadTargets,
@@ -14,6 +15,95 @@ import {
   resolveCommandVisualKind,
   sanitizeSynaraMcpToolPreview,
 } from "./toolCallLabel";
+
+describe("localized tool presentation", () => {
+  it("derives English cache titles while the same UI presentations use Spanish", () => {
+    const sourceTranslate: typeof t = (message, values) => t(message, { ...values, lng: "en" });
+    const read = { fallbackLabel: "Tool", requestKind: "file-read" } as const;
+    const command = {
+      fallbackLabel: "Tool",
+      itemType: "command_execution",
+      command: "cat Settings",
+      isRunning: true,
+    } as const;
+    const computer = { fallbackLabel: "Tool", payload: { name: "computer_click" } };
+    const synara = { toolName: "synara_read_thread", status: "running" } as const;
+    try {
+      setLanguagePreference("es");
+      expect(deriveReadableToolTitle(read)).toBe("Leyó");
+      expect(deriveReadableToolTitle(read, sourceTranslate)).toBe("Read");
+      expect(deriveReadableToolTitle(command, sourceTranslate)).toBe("Reading");
+      expect(deriveReadableToolTitle(computer, sourceTranslate)).toBe("Click");
+      expect(deriveSynaraMcpToolTitle(synara, sourceTranslate)).toBe("Synara is reading a thread");
+      expect(deriveSynaraMcpToolTitle(synara)).toBe("Synara está leyendo una conversación");
+      expect(deriveReadableToolTitle(command)).toBe("Leyendo");
+      expect(deriveReadableCommandDisplay("rg Settings .", true, sourceTranslate)).toEqual({
+        verb: "Searching",
+        target: "for Settings in current directory",
+        fullCommand: "rg Settings .",
+      });
+      expect(
+        deriveSynaraMcpToolTitle(
+          { toolName: "synara_settings", status: "running" },
+          sourceTranslate,
+        ),
+      ).toBe("Synara is handling settings");
+      expect(deriveSynaraMcpToolTitle({ toolName: "synara_settings", status: "running" })).toBe(
+        "Synara está gestionando settings",
+      );
+    } finally {
+      setLanguagePreference("en");
+    }
+  });
+
+  it("translates known command verbs and preserves commands and arbitrary tool titles", () => {
+    try {
+      setLanguagePreference("zh-CN");
+      expect(deriveReadableCommandDisplay("cat Settings", true)).toEqual({
+        verb: "正在读取",
+        target: "Settings",
+        fullCommand: "cat Settings",
+      });
+      expect(deriveSynaraMcpToolTitle({ toolName: "synara_read_thread", status: "running" })).toBe(
+        "Synara 正在读取对话",
+      );
+      expect(deriveReadableToolTitle({ title: "Settings", fallbackLabel: "Tool" })).toBe(
+        "Settings",
+      );
+      expect(deriveLiteralCommand("cat Settings")).toBe("cat Settings");
+      expect(
+        sanitizeSynaraMcpToolPreview({
+          preview: "Synara is reading a thread",
+          heading: "Synara 正在读取对话",
+          status: "running",
+        }),
+      ).toBeNull();
+      expect(
+        sanitizeSynaraMcpToolPreview({
+          preview: "Synara is reading a thread",
+          heading: "Synara 正在创建对话",
+          status: "running",
+        }),
+      ).toBe("Synara is reading a thread");
+      expect(deriveReadableCommandDisplay("rg Settings ..").target).toBe(
+        "在 父目录 中查找 Settings",
+      );
+      expect(deriveReadableCommandDisplay('rg Settings "current directory"').target).toBe(
+        "在 current directory 中查找 Settings",
+      );
+      expect(deriveReadableCommandDisplay("rg Settings .").target).toBe(
+        "在 当前目录 中查找 Settings",
+      );
+      setLanguagePreference("en");
+      expect(deriveReadableCommandDisplay("cat Settings", true).verb).toBe("Reading");
+      expect(deriveSynaraMcpToolTitle({ toolName: "synara_read_thread", status: "running" })).toBe(
+        "Synara is reading a thread",
+      );
+    } finally {
+      setLanguagePreference("en");
+    }
+  });
+});
 
 describe("extractWebFetchUrl", () => {
   it("pulls the url out of a WebFetch argument summary", () => {

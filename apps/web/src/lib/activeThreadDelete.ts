@@ -3,6 +3,7 @@
 // Layer: Web orchestration helper
 // Exports: deleteActiveThreadFromClient
 
+import { t } from "~/i18n";
 import type { ThreadId } from "@synara/contracts";
 import { terminalScopeIdsForThread } from "@synara/shared/terminalThreads";
 import { collectSubagentDescendants } from "@synara/shared/threadHierarchy";
@@ -122,7 +123,7 @@ export async function deleteActiveThreadFromClient<TPrepared = undefined>(input:
     const message =
       error instanceof Error
         ? error.message
-        : (input.unknownWorktreeErrorMessage ?? "Unknown error removing worktree.");
+        : (input.unknownWorktreeErrorMessage ?? t("workspace:removeWorktreeUnknown"));
     console.error("Failed to remove orphaned worktree after thread deletion", {
       threadId: input.threadId,
       projectCwd: project.cwd,
@@ -131,8 +132,11 @@ export async function deleteActiveThreadFromClient<TPrepared = undefined>(input:
     });
     toastManager.add({
       type: "error",
-      title: "Thread deleted, but worktree removal failed",
-      description: `Could not remove ${displayWorktreePath ?? orphanedWorktreePath}. ${message}`,
+      title: t("workspace:threadDeletedWorktreeFailed"),
+      description: t("workspace:removeWorktreeFailedDescription", {
+        path: displayWorktreePath ?? orphanedWorktreePath,
+        message,
+      }),
     });
   }
 }

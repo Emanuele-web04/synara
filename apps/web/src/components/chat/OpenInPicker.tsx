@@ -30,6 +30,7 @@ import {
   CHAT_HEADER_SPLIT_LEADING_CLASS_NAME,
   CHAT_HEADER_SPLIT_TRAILING_CLASS_NAME,
 } from "./chatHeaderControls";
+import { useTranslation } from "~/i18n";
 
 const EMPTY_KEYBINDINGS: ResolvedKeybindingsConfig = [];
 const EMPTY_AVAILABLE_EDITORS: ReadonlyArray<EditorId> = [];
@@ -142,6 +143,8 @@ const COMPACT_ACTION_BUTTON_CLASS_NAME =
   "inline-flex size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-[var(--color-background-button-secondary-hover)] hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60 disabled:pointer-events-none disabled:opacity-50 data-popup-open:bg-[var(--color-background-button-secondary-hover)] data-popup-open:text-foreground";
 
 function OpenInPickerFrame(props: OpenInPickerFrameProps) {
+  const { t } = useTranslation();
+
   if (props.variant === "compact") {
     return (
       <div
@@ -156,7 +159,7 @@ function OpenInPickerFrame(props: OpenInPickerFrameProps) {
           onClick={props.primaryAction.onClick}
         >
           {props.primaryAction.icon ?? null}
-          <span className="sr-only">Open</span>
+          <span className="sr-only">{t("onboarding:notification_open")}</span>
         </button>
         <Menu {...(props.onMenuOpenChange ? { onOpenChange: props.onMenuOpenChange } : {})}>
           <MenuTrigger
@@ -192,7 +195,7 @@ function OpenInPickerFrame(props: OpenInPickerFrameProps) {
               : "sr-only @sm/header-actions:not-sr-only @sm/header-actions:ml-0.5",
           )}
         >
-          Open
+          {t("onboarding:notification_open")}
         </span>
       </ChatHeaderButton>
       <ChatHeaderSplitDivider />
@@ -215,6 +218,7 @@ function OpenInPickerFrame(props: OpenInPickerFrameProps) {
 }
 
 function EditorActionOpenInPicker(props: OpenInPickerContentProps) {
+  const { t } = useTranslation();
   const launchers = useEditorLaunchers(props);
   const PrimaryIcon = launchers.primaryOption?.Icon;
 
@@ -222,8 +226,8 @@ function EditorActionOpenInPicker(props: OpenInPickerContentProps) {
     <OpenInPickerFrame
       labelMode={props.labelMode ?? "responsive"}
       variant={props.variant ?? "split"}
-      groupLabel={props.groupLabel ?? "Open in editor"}
-      menuLabel={props.menuLabel ?? "Editor options"}
+      groupLabel={props.groupLabel ?? t("chat:environment_openInEditorDefault")}
+      menuLabel={props.menuLabel ?? t("chat:editorOptions")}
       primaryAction={{
         disabled: !launchers.preferredEditor || !props.openInTarget,
         icon: PrimaryIcon ? <PrimaryIcon aria-hidden="true" className="size-3.5" /> : null,
@@ -246,14 +250,15 @@ type PrimaryActionOpenInPickerProps = OpenInPickerContentProps & {
 };
 
 function PrimaryActionOpenInPicker({ primaryAction, ...props }: PrimaryActionOpenInPickerProps) {
+  const { t } = useTranslation();
   const [launcherMenuMounted, setLauncherMenuMounted] = useState(false);
 
   return (
     <OpenInPickerFrame
       labelMode={props.labelMode ?? "responsive"}
       variant={props.variant ?? "split"}
-      groupLabel={props.groupLabel ?? "Open in editor"}
-      menuLabel={props.menuLabel ?? "Editor options"}
+      groupLabel={props.groupLabel ?? t("chat:environment_openInEditorDefault")}
+      menuLabel={props.menuLabel ?? t("chat:editorOptions")}
       primaryAction={primaryAction}
       onMenuOpenChange={(open) => {
         if (open) setLauncherMenuMounted(true);
@@ -286,6 +291,8 @@ function OpenInPickerMenuPopup({
   additionalMenuItems: ReactNode;
   menuEditorOrder: ReadonlyArray<EditorId> | undefined;
 }) {
+  const { t } = useTranslation();
+
   const { options, preferredEditor, openFavoriteShortcutLabel, openInEditor } = launchers;
   const displayedOptions = readExecutionContext()?.remote
     ? []
@@ -300,7 +307,9 @@ function OpenInPickerMenuPopup({
 
   return (
     <ComposerPickerMenuPopup align="end" side="bottom" className="w-44 min-w-44">
-      {displayedOptions.length === 0 && <MenuItem disabled>No installed editors found</MenuItem>}
+      {displayedOptions.length === 0 && (
+        <MenuItem disabled>{t("chat:openInPicker_noEditorsFound")}</MenuItem>
+      )}
       <MenuRadioGroup value={preferredEditor ?? ""}>
         {displayedOptions.map(({ label, Icon, value }) => (
           <MenuRadioItem

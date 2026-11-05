@@ -26,6 +26,7 @@ import { SIDEBAR_SECTION_LABEL_CLASS_NAME } from "~/sidebarRowStyles";
 import { SidebarPanelTitle } from "./SidebarPanelTitle";
 import { SidebarPrimaryAction } from "./SidebarPrimaryAction";
 import { SidebarGroup, SidebarMenu } from "./ui/sidebar";
+import { useTranslation } from "~/i18n";
 
 export function RailAutomationsPanel({
   createOpen,
@@ -34,6 +35,8 @@ export function RailAutomationsPanel({
   createOpen: boolean;
   onCreateOpenChange: (open: boolean) => void;
 }) {
+  const { t, formatLocale } = useTranslation();
+
   const navigate = useNavigate();
   const openAutomationId = useParams({
     strict: false,
@@ -71,14 +74,14 @@ export function RailAutomationsPanel({
         title={definition.name}
         detail={[
           sessions.length ? computers.find((computer) => computer.id === localId)?.detail : null,
-          automationRowSubtitle(definition, latestRun, now),
+          automationRowSubtitle(definition, latestRun, now, formatLocale),
         ]
           .filter(Boolean)
           .join(" · ")}
         meta={
           hasUnreadResult(latestRun) ? (
             <span
-              aria-label="New result"
+              aria-label={t("automation:list_newResult")}
               className="block size-1.5 rounded-full bg-[var(--color-text-accent)]"
             />
           ) : undefined
@@ -118,7 +121,7 @@ export function RailAutomationsPanel({
                 meta={
                   automation.unread ? (
                     <span
-                      aria-label="New result"
+                      aria-label={t("automation:list_newResult")}
                       className="block size-1.5 rounded-full bg-[var(--color-text-accent)]"
                     />
                   ) : undefined
@@ -143,12 +146,12 @@ export function RailAutomationsPanel({
 
   return (
     <>
-      <SidebarPanelTitle title="Automations" />
+      <SidebarPanelTitle title={t("automation:detail_breadcrumb")} />
       <SidebarGroup className="px-1.5 pt-1 pb-1.5">
         <SidebarMenu className="gap-0.5">
           <SidebarPrimaryAction
             icon={AddPlusIcon}
-            label="New automation"
+            label={t("automation:list_newAutomation")}
             onClick={() => onCreateOpenChange(true)}
           />
         </SidebarMenu>
@@ -156,11 +159,11 @@ export function RailAutomationsPanel({
       <SidebarGroup className="gap-2 px-1.5 py-1.5">
         {isLoading ? (
           <div className="px-2 pt-4 text-center text-ui text-muted-foreground/58">
-            Loading automations...
+            {t("automation:list_loading")}
           </div>
         ) : data.definitions.length === 0 && remoteAutomations.length === 0 ? (
           <div className="px-2 pt-4 text-center text-ui text-muted-foreground/58">
-            No automations yet
+            {t("automation:list_emptyTitle")}
           </div>
         ) : (
           <>

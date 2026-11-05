@@ -1,4 +1,5 @@
 import { Button } from "./button";
+import { useTranslation } from "~/i18n";
 
 /** The shared accept/dismiss controls for inert proposals. */
 export function ProposalActions(props: {
@@ -6,6 +7,8 @@ export function ProposalActions(props: {
   onResolve: (resolution: "accepted" | "dismissed") => void;
   acceptLabel?: string;
 }) {
+  const { t } = useTranslation();
+
   return (
     <div className="flex shrink-0 items-center gap-1.5">
       <Button
@@ -15,7 +18,7 @@ export function ProposalActions(props: {
         disabled={props.pending}
         onClick={() => props.onResolve("dismissed")}
       >
-        Dismiss
+        {t("automation:dismiss")}
       </Button>
       <Button
         type="button"
@@ -23,7 +26,7 @@ export function ProposalActions(props: {
         disabled={props.pending}
         onClick={() => props.onResolve("accepted")}
       >
-        {props.acceptLabel ?? "Accept"}
+        {props.acceptLabel ?? t("automation:accept")}
       </Button>
     </div>
   );

@@ -12,7 +12,7 @@
 
 import type { ThreadId } from "@synara/contracts";
 import { getModelCapabilities } from "@synara/shared/model";
-import { pluralize } from "@synara/shared/text";
+import { pluralize } from "~/i18n/pluralize";
 import { useState } from "react";
 
 import { formatContextWindowTokens } from "~/lib/contextWindow";
@@ -55,6 +55,7 @@ import {
   COMPOSER_STACKED_PANEL_ICON_CLASS_NAME,
   COMPOSER_STACKED_PANEL_SCROLL_REGION_CLASS_NAME,
 } from "./composerStackedPanelStyles";
+import { t, useTranslation } from "~/i18n";
 
 interface WorkflowRunCardProps {
   workflowRun: WorkflowRunState;
@@ -70,17 +71,20 @@ function settledWorkflowPresentation(workflowRun: WorkflowRunState): {
   toneClassName: string;
 } {
   if (workflowRun.pausedByUser) {
-    return { label: "Paused", toneClassName: "text-amber-300/80" };
+    return { label: t("automation:detail_paused"), toneClassName: "text-amber-300/80" };
   }
   switch (workflowRun.status) {
     case "paused":
-      return { label: "Paused", toneClassName: "text-amber-300/80" };
+      return { label: t("automation:detail_paused"), toneClassName: "text-amber-300/80" };
     case "failed":
-      return { label: "Failed", toneClassName: "text-rose-300/85" };
+      return { label: t("chat:runStatus_failed"), toneClassName: "text-rose-300/85" };
     case "stopped":
-      return { label: "Stopped", toneClassName: "text-amber-300/80" };
+      return { label: t("chat:stopped"), toneClassName: "text-amber-300/80" };
     default:
-      return { label: "Completed", toneClassName: "text-emerald-300/75" };
+      return {
+        label: t("workspace:triageOutcome_completed"),
+        toneClassName: "text-emerald-300/75",
+      };
   }
 }
 
@@ -124,6 +128,8 @@ function WorkflowAgentDetail({
   nowMs: number;
   onOpenThread: (threadId: ThreadId) => void;
 }) {
+  const { t } = useTranslation();
+
   const [promptOpen, setPromptOpen] = useState(false);
   const contextWindowTokens = agentContextWindowTokens(agent);
   const identityLine = [
@@ -156,7 +162,7 @@ function WorkflowAgentDetail({
             className="h-5 shrink-0 px-1.5 text-ui-xs text-muted-foreground/70"
             onClick={() => onOpenThread(threadId)}
           >
-            Open thread
+            {t("workspace:timeline_openThread")}
           </Button>
         ) : null}
       </div>
@@ -173,7 +179,7 @@ function WorkflowAgentDetail({
           >
             <DisclosureChevron open={promptOpen} className="shrink-0" />
             <span className="text-ui-xs font-medium uppercase tracking-wide text-muted-foreground/45">
-              Prompt
+              {t("chat:agentActivity_promptSection")}
             </span>
           </button>
           {promptOpen ? null : (
@@ -191,7 +197,7 @@ function WorkflowAgentDetail({
       {agent.recentToolNames.length > 0 ? (
         <div className="min-w-0 truncate text-ui-sm text-muted-foreground/55">
           <span className="text-ui-xs font-medium uppercase tracking-wide text-muted-foreground/45">
-            Recent
+            {t("chat:searchPalette_sectionRecent")}
           </span>{" "}
           <span className="font-mono">{agent.recentToolNames.join(" · ")}</span>
         </div>
@@ -275,6 +281,8 @@ export function WorkflowRunCard({
   onResume,
   onDismiss,
 }: WorkflowRunCardProps) {
+  const { t } = useTranslation();
+
   // Keep elapsed-time ticks local to the card instead of rerendering ChatView.
   const nowMs = useNowMs(!workflowRun.settled);
   const { copyToClipboard, isCopied } = useCopyToClipboard();
@@ -302,11 +310,15 @@ export function WorkflowRunCard({
   const countLabel =
     totalCount > 0
       ? workflowRun.runningCount > 0
-        ? `${workflowRun.runningCount} of ${totalCount} ${pluralize(totalCount, "agent")} running`
-        : `${totalCount} ${pluralize(totalCount, "agent")}`
+        ? t("chat:ofRunning", {
+            value0: workflowRun.runningCount,
+            value1: totalCount,
+            value2: pluralize(totalCount, "agent"),
+          })
+        : t("chat:symbol7", { value0: totalCount, value1: pluralize(totalCount, "agent") })
       : workflowRun.settled
         ? null
-        : "Starting agents";
+        : t("chat:startingAgents");
   const settledPresentation = workflowRun.settled ? settledWorkflowPresentation(workflowRun) : null;
   const canResume =
     workflowRun.settled && workflowRun.runId !== null && workflowRun.scriptPath !== null;
@@ -363,8 +375,8 @@ export function WorkflowRunCard({
                   size="icon-xs"
                   className={COMPOSER_STACKED_PANEL_ICON_BUTTON_CLASS_NAME}
                   onClick={onResume}
-                  aria-label="Resume workflow"
-                  title="Resume workflow"
+                  aria-label={t("chat:resumeWorkflow")}
+                  title={t("chat:resumeWorkflow")}
                 >
                   <PlayIcon className="size-3" />
                 </Button>
@@ -375,8 +387,8 @@ export function WorkflowRunCard({
                 size="icon-xs"
                 className={COMPOSER_STACKED_PANEL_ICON_BUTTON_CLASS_NAME}
                 onClick={onDismiss}
-                aria-label="Dismiss workflow panel"
-                title="Dismiss workflow panel"
+                aria-label={t("chat:dismissWorkflowPanel")}
+                title={t("chat:dismissWorkflowPanel")}
               >
                 <XIcon className="size-3" />
               </Button>
@@ -389,8 +401,8 @@ export function WorkflowRunCard({
                 size="icon-xs"
                 className={COMPOSER_STACKED_PANEL_ICON_BUTTON_CLASS_NAME}
                 onClick={onPause}
-                aria-label="Pause workflow"
-                title="Pause workflow (resume replays completed agents from cache)"
+                aria-label={t("chat:pauseWorkflow")}
+                title={t("chat:pauseWorkflowResumeReplaysCompletedAgentsFromCache")}
               >
                 <PauseIcon className="size-3" />
               </Button>
@@ -400,8 +412,8 @@ export function WorkflowRunCard({
                 size="icon-xs"
                 className={COMPOSER_STACKED_PANEL_ICON_BUTTON_CLASS_NAME}
                 onClick={onStop}
-                aria-label="Stop workflow"
-                title="Stop workflow"
+                aria-label={t("chat:stopWorkflow")}
+                title={t("chat:stopWorkflow")}
               >
                 <StopIcon className="size-3" />
               </Button>
@@ -468,7 +480,9 @@ export function WorkflowRunCard({
                   </div>
                 ))
               ) : (
-                <div className="py-1 text-ui-sm text-muted-foreground/45">No agents yet</div>
+                <div className="py-1 text-ui-sm text-muted-foreground/45">
+                  {t("chat:noAgentsYet")}
+                </div>
               )
             ) : workflowRun.agents.length > 0 ? (
               workflowRun.agents.map((agent) => (
@@ -482,7 +496,9 @@ export function WorkflowRunCard({
                 />
               ))
             ) : (
-              <div className="py-1 text-ui-sm text-muted-foreground/45">No agents yet</div>
+              <div className="py-1 text-ui-sm text-muted-foreground/45">
+                {t("chat:noAgentsYet")}
+              </div>
             )}
           </div>
           {savedLine.length > 0 ? (
@@ -490,7 +506,9 @@ export function WorkflowRunCard({
               data-testid="workflow-saved-line"
               className="mt-0.5 flex min-w-0 items-center gap-1.5"
             >
-              <span className="shrink-0 text-ui-sm text-muted-foreground/50">Saved</span>
+              <span className="shrink-0 text-ui-sm text-muted-foreground/50">
+                {t("workspace:saved")}
+              </span>
               <span
                 className="min-w-0 flex-1 truncate text-ui-sm text-muted-foreground/45"
                 title={savedLine}
@@ -503,7 +521,7 @@ export function WorkflowRunCard({
                 size="icon-xs"
                 className={COMPOSER_STACKED_PANEL_ICON_BUTTON_CLASS_NAME}
                 onClick={() => copyToClipboard(savedLine, undefined)}
-                aria-label="Copy script path and run id"
+                aria-label={t("chat:copyScriptPathAndRunId")}
                 title={savedLine}
               >
                 {isCopied ? <CheckIcon className="size-3" /> : <CopyIcon className="size-3" />}
@@ -518,6 +536,8 @@ export function WorkflowRunCard({
 
 /** Capsule label: name plus running count (or settled state); opens the full card. */
 export function WorkflowRunCapsule(props: WorkflowRunCardProps) {
+  const { t } = useTranslation();
+
   const { workflowRun } = props;
   const settledPresentation = workflowRun.settled ? settledWorkflowPresentation(workflowRun) : null;
   const totalCount = workflowRun.agents.length;
@@ -539,7 +559,7 @@ export function WorkflowRunCapsule(props: WorkflowRunCardProps) {
             </span>
           ) : totalCount > 0 ? (
             <span className="ml-1.5 tabular-nums text-muted-foreground">
-              {workflowRun.runningCount}/{totalCount} running
+              {workflowRun.runningCount}/{totalCount} {t("chat:running")}
             </span>
           ) : null}
         </>

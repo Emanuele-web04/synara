@@ -221,3 +221,15 @@ Creation needs temporary space for the full snapshot and compressed output toget
 If startup reports migration recovery is required, stop every Synara process and use the exact `synara-restore-migration-backup` command printed for that database. The tool validates and decompresses the marked snapshot before replacing the live database. Do not invent a backup path or restore while another instance owns the database.
 
 Source evidence for 1.0.9: Synara release `ebd0d22b39ce3a0f7c6051dddc6090e9b85dc7c3`; `docs/releases/1.0.9-source-audit.md`, `docs/providers.md`, `docs/core-concepts.md`, `docs/editor/intelligence.md`, `docs/mcp-connectors.md`, `apps/server/src/persistence/MigrationBackup.ts` and `docs/release.md`.
+
+## Resume after usage limits in 1.1.0
+
+**Settings → Providers → Resume after usage limits** defaults to off. Supported Codex and Claude tasks can wait for a verified account's future reset after a definitive terminal usage-limit refusal. Percentage warnings alone do not schedule work. Unknown, stale or ambiguous limits remain manual, and native provider retries retain their active turn.
+
+The execution computer must be running; clients may disconnect. Pending waits survive a host restart but cannot wake a sleeping computer. The continuation checks saved work instead of replaying the failed prompt or tool call. Already accepted user messages have priority. Stop, a manual send, pause, archive/delete, goal changes, account/model/route changes or disabling the setting cancel the wait; re-enabling does not restore it.
+
+Claude automatic recovery requires a verified native OAuth account profile on macOS or Linux. Windows, API-key/helper authentication, federation profiles and unreadable settings remain manual. Codex requires its native account ID. An uncertain delivery still needs reconciliation.
+
+In 1.1.0, crash continuation, queued-message resumption and subagent recovery also preserve ownership more reliably. For a stalled Claude turn, Stop must establish runtime retirement; its dispatch acknowledgement alone is not cleanup proof. Unblock thread reconciles uncertain delivery and does not stop a live provider. Failed attachment preparation preserves drafts, and rejected native-review attachments do not discard work already accepted.
+
+Source evidence for 1.1.0: application source `d80787e3e4d8829a35a64b111e6fcbe5f51cf037`; `docs/releases/1.1.0-source-audit.md`, `docs/core-concepts.md`, `docs/providers.md`, `docs/internationalization.md` and `docs/sqlite-space-reclamation.md`.

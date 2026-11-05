@@ -12,6 +12,7 @@ import {
   type TurnResumedBy,
 } from "./MessagesTimeline.logic";
 import { LiveElapsedTimer } from "./LiveElapsedTimer";
+import { useTranslation } from "~/i18n";
 
 export function TurnHeaderLine(
   props: {
@@ -33,6 +34,8 @@ export function TurnHeaderLine(
       }
   ),
 ) {
+  const { t } = useTranslation();
+
   if (props.kind === "live") {
     const resumedBy = props.resumedBy && props.resumedBy.length > 0 ? props.resumedBy : null;
     return (
@@ -41,7 +44,9 @@ export function TurnHeaderLine(
           className={cn("-ml-0.5 pb-2", MUTED_LABEL_TEXT_CLASS_NAME)}
           style={{ fontSize: props.fontSize }}
         >
-          {resumedBy ? `Resumed: ${formatTurnResumedBy(resumedBy)} · ` : "Working for "}
+          {resumedBy
+            ? t("chat:resumed", { value0: formatTurnResumedBy(resumedBy, t) })
+            : t("chat:workingFor")}
           <span className="tabular-nums">
             {props.nowLabel ?? <LiveElapsedTimer startedAt={props.startedAt} />}
           </span>
@@ -54,7 +59,7 @@ export function TurnHeaderLine(
   const { header, disclosure } = props;
   const content = (
     <span className="inline-flex min-w-0 items-center gap-1">
-      <span>{formatTurnHeaderLabel(header)}</span>
+      <span>{formatTurnHeaderLabel(header, t)}</span>
       {disclosure ? (
         <DisclosureChevron open={disclosure.open} className="text-muted-foreground/70" />
       ) : null}

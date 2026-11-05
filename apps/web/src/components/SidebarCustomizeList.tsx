@@ -28,6 +28,7 @@ import { SidebarGlyph } from "./sidebarGlyphs";
 import { SidebarLeadingIcon } from "./SidebarLeadingIcon";
 import { Button } from "./ui/button";
 import { Checkbox } from "./ui/checkbox";
+import { useTranslation } from "~/i18n";
 
 export type SidebarCustomizeItem = {
   readonly id: string;
@@ -40,16 +41,18 @@ export type SidebarCustomizeItem = {
 };
 
 export function SidebarCustomizeHeader({ onDone }: { onDone: () => void }) {
+  const { t } = useTranslation();
+
   return (
     <div className="flex items-center justify-between ps-2 pe-1 pt-0.5 pb-1">
-      <span className={SIDEBAR_SECTION_LABEL_CLASS_NAME}>Customize</span>
+      <span className={SIDEBAR_SECTION_LABEL_CLASS_NAME}>{t("workspace:customize")}</span>
       <Button
         variant="ghost"
         size="sm"
         className="h-6 px-2 text-ui text-primary hover:text-primary"
         onClick={onDone}
       >
-        Done
+        {t("git:detail_done")}
       </Button>
     </div>
   );
@@ -63,6 +66,8 @@ function SidebarCustomizeRow({
   item: SidebarCustomizeItem;
   onVisibleChange: (visible: boolean) => void;
 }) {
+  const { t } = useTranslation();
+
   const { icon: Icon, iconClassName, label, visible, locked } = item;
   const {
     attributes,
@@ -92,10 +97,10 @@ function SidebarCustomizeRow({
           onCheckedChange={(checked) => onVisibleChange(Boolean(checked))}
           aria-label={
             locked
-              ? `${label} is always shown`
+              ? t("workspace:isAlwaysShown", { value0: label })
               : visible
-                ? `Hide ${label} from the sidebar`
-                : `Show ${label} in the sidebar`
+                ? t("workspace:hideFromTheSidebar", { value0: label })
+                : t("workspace:showInTheSidebar", { value0: label })
           }
         />
         <SidebarLeadingIcon size="sm" tone="text-inherit">
@@ -110,7 +115,7 @@ function SidebarCustomizeRow({
           type="button"
           ref={setActivatorNodeRef}
           className="ml-auto inline-flex size-6 shrink-0 cursor-grab touch-none items-center justify-center rounded-md text-muted-foreground transition-colors hover:text-foreground active:cursor-grabbing"
-          aria-label={`Reorder ${label}`}
+          aria-label={t("workspace:reorder", { value0: label })}
           {...attributes}
           {...listeners}
         >

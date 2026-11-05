@@ -45,6 +45,7 @@ import {
   type ComputerPreviewCardSize,
   type ComputerPreviewSession,
 } from "./ComputerPreviewPopover.logic";
+import { useTranslation } from "~/i18n";
 
 const FALLBACK_ASPECT_RATIO = "16 / 10";
 // Slot fallbacks for the first paint (and server markup), before the slot is
@@ -89,6 +90,8 @@ function ComputerPreviewPopoverCard(props: {
   readonly maxWidthPx?: number | undefined;
   readonly size?: ComputerPreviewCardSize | undefined;
 }) {
+  const { t } = useTranslation();
+
   const { threadId, session } = props;
   const caps = computerPreviewCardCaps(props.size ?? "compact");
   const cardMaxWidth = Math.min(props.maxWidthPx ?? caps.maxWidthPx, caps.maxWidthPx);
@@ -223,7 +226,7 @@ function ComputerPreviewPopoverCard(props: {
     <div
       ref={cardRef}
       role="region"
-      aria-label="Computer preview"
+      aria-label={t("computer:computerPreview")}
       aria-hidden={visuallyOpen ? undefined : true}
       inert={!visuallyOpen}
       data-computer-preview-popover={threadId}
@@ -309,6 +312,8 @@ function ComputerPreviewViewport(props: {
   readonly statusLabel: string | null;
   readonly float: ComputerPreviewFloat;
 }) {
+  const { t } = useTranslation();
+
   const { children, threadId, floating, frameDims, hasFrame, streamStatus, statusLabel, float } =
     props;
   return (
@@ -365,8 +370,8 @@ function ComputerPreviewViewport(props: {
               <button
                 type="button"
                 onClick={float.dock}
-                title="Dock the preview back into the chat rail"
-                aria-label="Dock the computer preview back into the chat rail"
+                title={t("computer:dockThePreviewBackIntoTheChatRail")}
+                aria-label={t("computer:dockTheComputerPreviewBackIntoTheChatRail")}
                 className="grid size-7 place-items-center rounded-full text-white drop-shadow-[0_1px_2px_rgb(0_0_0/0.6)] transition-colors duration-150 hover:bg-white/20 focus-visible:ring-2 focus-visible:ring-white/70 focus-visible:outline-none"
               >
                 <PanelCollapseIcon className="size-4" />
@@ -375,8 +380,8 @@ function ComputerPreviewViewport(props: {
               <button
                 type="button"
                 onClick={float.popOut}
-                title="Float the preview as a draggable window"
-                aria-label="Float the computer preview as a draggable window"
+                title={t("computer:floatThePreviewAsADraggableWindow")}
+                aria-label={t("computer:floatTheComputerPreviewAsADraggableWindow")}
                 className="grid size-7 place-items-center rounded-full text-white drop-shadow-[0_1px_2px_rgb(0_0_0/0.6)] transition-colors duration-150 hover:bg-white/20 focus-visible:ring-2 focus-visible:ring-white/70 focus-visible:outline-none"
               >
                 <PanelExpandIcon className="size-4" />
@@ -391,13 +396,15 @@ function ComputerPreviewViewport(props: {
 }
 
 function ComputerPreviewHideButton(props: { readonly threadId: ThreadId }) {
+  const { t } = useTranslation();
+
   const hidePreviewForTask = useComputerPreviewStore((store) => store.hidePreviewForTask);
   return (
     <button
       type="button"
       onClick={() => hidePreviewForTask(props.threadId)}
-      title="Hide the preview for the rest of this task"
-      aria-label="Hide the computer preview for the rest of this task"
+      title={t("computer:hideThePreviewForTheRestOfThisTask")}
+      aria-label={t("computer:hideTheComputerPreviewForTheRestOfThis")}
       className="grid size-7 place-items-center rounded-full text-white drop-shadow-[0_1px_2px_rgb(0_0_0/0.6)] transition-colors duration-150 hover:bg-white/20 focus-visible:ring-2 focus-visible:ring-white/70 focus-visible:outline-none"
     >
       <XIcon className="size-4" />
@@ -408,17 +415,19 @@ function ComputerPreviewHideButton(props: { readonly threadId: ThreadId }) {
 function ComputerPreviewStreamStatus(props: {
   status: ReturnType<typeof useComputerImageStream>["status"];
 }) {
+  const { t } = useTranslation();
+
   if (props.status.kind === "connecting") {
     return (
       <span className="text-ui-sm text-muted-foreground" role="status">
-        Connecting to the desktop…
+        {t("computer:connectingToTheDesktop")}
       </span>
     );
   }
   if (props.status.kind === "unsupported") {
     return (
       <span className="text-ui-sm text-muted-foreground">
-        This browser cannot decode desktop frames.
+        {t("computer:thisBrowserCannotDecodeDesktopFrames")}
       </span>
     );
   }
@@ -427,7 +436,7 @@ function ComputerPreviewStreamStatus(props: {
   }
   return (
     <span className="text-ui-sm text-muted-foreground">
-      Waiting for the window the agent is using…
+      {t("computer:waitingForTheWindowTheAgentIsUsing")}
     </span>
   );
 }

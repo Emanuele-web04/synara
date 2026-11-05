@@ -32,9 +32,8 @@ import { ProviderIcon } from "~/components/ProviderIcon";
 import { Button } from "~/components/ui/button";
 import { Skeleton } from "~/components/ui/skeleton";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "~/components/ui/tooltip";
-import { ActivityHeatmap, heatmapTooltipText } from "@synara/profile-ui/heatmap";
+import { ActivityHeatmap, heatmapTooltipText } from "../profile/ActivityHeatmap";
 import { InsightRow, ModelUsageRow, StatTileGrid } from "@synara/profile-ui/sections";
-import { providerLabel } from "@synara/profile-ui/provider-icon";
 import {
   selectAccountShareCardStats,
   selectDeviceShareCardStats,
@@ -55,11 +54,12 @@ import {
   formatProviderLabel,
   formatProfileUsageBasis,
   toDisplayName,
-} from "@synara/profile-ui/formatting";
+} from "../profile/profileFormatting";
 import { SettingsSegmentedControl } from "./SettingControls";
 import { profileShareUrl } from "~/lib/accountLogic";
 import { openExternalLink } from "~/lib/linkChips";
 import { ExternalLinkIcon } from "~/lib/icons";
+import { getFormatLocale, t, useTranslation } from "~/i18n";
 
 type StatsScope = "device" | "account";
 
@@ -69,6 +69,8 @@ const SCOPE_OPTIONS = [
 ] as const satisfies readonly { value: StatsScope; label: string }[];
 
 export function ProfileSettingsPanel() {
+  const { t } = useTranslation();
+
   const coreQuery = useQuery(serverProfileStatsQueryOptions());
   const tokenQuery = useQuery(serverProfileTokenStatsQueryOptions());
   const { me, profileSyncEnabled } = useAccount();
@@ -84,10 +86,10 @@ export function ProfileSettingsPanel() {
     return (
       <div className="flex flex-col items-center gap-3 py-24 text-center">
         <p className="text-ui leading-snug text-muted-foreground">
-          Couldn’t load your local stats.
+          {t("settings:couldnTLoadYourLocalStats")}
         </p>
         <Button variant="outline" size="sm" onClick={() => void coreQuery.refetch()}>
-          Try again
+          {t("chat:profile_tryAgain")}
         </Button>
       </div>
     );
@@ -121,6 +123,8 @@ function ProfileContent({
   scope: StatsScope;
   onScopeChange: ((scope: StatsScope) => void) | null;
 }) {
+  const { t } = useTranslation();
+
   const [shareOpen, setShareOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
 
@@ -194,11 +198,11 @@ function ProfileContent({
             onClick={() => setShareOpen(true)}
           >
             <CentralIcon name="share-os" />
-            Share
+            {t("settings:profile_share")}
           </Button>
           <Button variant="outline" size="sm" disabled={!canEdit} onClick={() => setEditOpen(true)}>
             <CentralIcon name="pencil" />
-            Edit
+            {t("git:profile_edit")}
           </Button>
         </div>
       </div>
@@ -280,6 +284,8 @@ function DeviceStatsBody({
   tokenStats: ProfileTokenStats | null;
   tokensPending: boolean;
 }) {
+  const { t, formatLocale } = useTranslation();
+
   // Tokens/day when available, prompts/day otherwise — shared with ShareCard.
   const heatmap = selectProfileHeatmap(stats, tokenStats);
   const topProvider = selectProfileTopProvider(stats, tokenStats);
@@ -290,24 +296,32 @@ function DeviceStatsBody({
       <StatTileGrid
         tiles={[
           {
-            label: "Lifetime tokens",
+            label: t("settings:profile_lifetimeTokens"),
             value: tokensPending ? null : formatCompact(tokenStats?.lifetimeTotalTokens ?? null),
           },
           {
-            label: "Peak day",
+            label: t("settings:profile_peakDay"),
             value: tokensPending ? null : formatCompact(tokenStats?.peakDayTokens ?? null),
           },
-          { label: "Total prompts", value: formatNumber(stats.activity.totalPromptsSent) },
-          { label: "Current streak", value: formatDays(stats.activity.currentStreakDays) },
-          { label: "Longest streak", value: formatDays(stats.activity.longestStreakDays) },
+          {
+            label: t("settings:profile_totalPrompts"),
+            value: formatNumber(stats.activity.totalPromptsSent),
+          },
+          {
+            label: t("settings:profile_currentStreak"),
+            value: formatDays(stats.activity.currentStreakDays),
+          },
+          {
+            label: t("settings:profile_longestStreak"),
+            value: formatDays(stats.activity.longestStreakDays),
+          },
         ]}
       />
 
       {stats.providerModels.some((entry) => entry.provider === "claudeAgent") ||
       tokenStats?.providers.includes("claudeAgent") ? (
         <p className="text-ui leading-snug text-muted-foreground">
-          Claude token totals use verifiable records. Older history and unfinished turns may be
-          incomplete.
+          {t("settings:claudeTokenTotalsUseVerifiableRecordsOlderHistoryAnd")}
         </p>
       ) : null}
       <HeatmapSection pending={tokensPending} cells={heatmap.cells} unit={heatmap.unit} />
@@ -319,33 +333,52 @@ function DeviceStatsBody({
           }
           rows={[
             {
-              label: "Most used provider",
+              label: t("settings:profile_mostUsedProvider"),
               value: topProvider.provider
-                ? `${providerLabel(topProvider.provider)}${
+                ? `${formatProviderLabel(topProvider.provider)}${
                     topProvider.percent !== null
-                      ? ` · ${topProvider.percent}% of ${formatProfileUsageBasis(topProvider.metric)}`
+                      ? t("settings:of", {
+                          percent: new Intl.NumberFormat(formatLocale, {
+                            maximumFractionDigits: 1,
+                          }).format(topProvider.percent),
+                          metric: formatProfileUsageBasis(topProvider.metric, formatLocale),
+                        })
                       : ""
                   }`
                 : "—",
             },
             {
-              label: "Most used reasoning",
+              label: t("settings:profile_mostUsedReasoning"),
               value: stats.insights.topReasoning
                 ? `${capitalize(stats.insights.topReasoning)}${
                     stats.insights.topReasoningPercent !== null
-                      ? ` · ${stats.insights.topReasoningPercent}%`
+                      ? ` · ${new Intl.NumberFormat(formatLocale, {
+                          maximumFractionDigits: 1,
+                        }).format(stats.insights.topReasoningPercent)}%`
                       : ""
                   }`
                 : "—",
             },
-            { label: "Most active hour", value: formatPeakHourLabel(stats.activeHours.startHour) },
             {
-              label: "Most worked project",
+              label: t("settings:profile_mostActiveHour"),
+              value: formatPeakHourLabel(stats.activeHours.startHour),
+            },
+            {
+              label: t("settings:profile_mostWorkedProject"),
               value: formatMostWorkedProjectLabel(stats.mostWorkedProject),
             },
-            { label: "Skills explored", value: formatNumber(stats.insights.skillsExplored) },
-            { label: "Total skills used", value: formatNumber(stats.insights.totalSkillsUsed) },
-            { label: "Total threads", value: formatNumber(stats.activity.totalThreads) },
+            {
+              label: t("settings:profile_skillsExplored"),
+              value: formatNumber(stats.insights.skillsExplored),
+            },
+            {
+              label: t("settings:profile_totalSkillsUsed"),
+              value: formatNumber(stats.insights.totalSkillsUsed),
+            },
+            {
+              label: t("settings:profile_totalThreads"),
+              value: formatNumber(stats.activity.totalThreads),
+            },
           ]}
         />
 
@@ -378,6 +411,8 @@ function AccountStatsBody({
   usageQuery: UseQueryResult<UsageSummary>;
   view: AccountUsageView | null;
 }) {
+  const { t, formatLocale } = useTranslation();
+
   if (usageQuery.isPending || !view) {
     if (usageQuery.isError) {
       // Retryable error state; the scope toggle above always lets the user
@@ -386,7 +421,7 @@ function AccountStatsBody({
         <div className="flex flex-col items-center gap-3 py-16 text-center">
           <p className="text-ui-sm text-muted-foreground">Couldn’t load your account stats.</p>
           <Button variant="outline" size="sm" onClick={() => void usageQuery.refetch()}>
-            Try again
+            {t("chat:profile_tryAgain")}
           </Button>
         </div>
       );
@@ -398,11 +433,11 @@ function AccountStatsBody({
     <>
       <StatTileGrid
         tiles={[
-          { label: "Lifetime tokens", value: formatCompact(view.lifetimeTokens) },
-          { label: "Peak day", value: formatCompact(view.peakDayTokens) },
-          { label: "Total prompts", value: formatNumber(view.lifetimePrompts) },
-          { label: "Current streak", value: formatDays(view.currentStreakDays) },
-          { label: "Longest streak", value: formatDays(view.longestStreakDays) },
+          { label: t("settings:profile_lifetimeTokens"), value: formatCompact(view.lifetimeTokens) },
+          { label: t("settings:profile_peakDay"), value: formatCompact(view.peakDayTokens) },
+          { label: t("settings:profile_totalPrompts"), value: formatNumber(view.lifetimePrompts) },
+          { label: t("settings:profile_currentStreak"), value: formatDays(view.currentStreakDays) },
+          { label: t("settings:profile_longestStreak"), value: formatDays(view.longestStreakDays) },
         ]}
       />
 
@@ -414,24 +449,32 @@ function AccountStatsBody({
         <InsightsSection
           rows={[
             {
-              label: "Most used provider",
+              label: t("settings:profile_mostUsedProvider"),
               value: view.topProvider.provider
-                ? `${providerLabel(view.topProvider.provider)}${
-                    view.topProvider.percent !== null ? ` · ${view.topProvider.percent}%` : ""
+                ? `${formatProviderLabel(view.topProvider.provider)}${
+                    view.topProvider.percent !== null
+                      ? ` · ${new Intl.NumberFormat(formatLocale, {
+                          maximumFractionDigits: 1,
+                        }).format(view.topProvider.percent)}%`
+                      : ""
                   }`
                 : "—",
             },
             {
-              label: "Most used reasoning",
+              label: t("settings:profile_mostUsedReasoning"),
               value: view.topReasoning.reasoning
                 ? `${capitalize(view.topReasoning.reasoning)}${
-                    view.topReasoning.percent !== null ? ` · ${view.topReasoning.percent}%` : ""
+                    view.topReasoning.percent !== null
+                      ? ` · ${new Intl.NumberFormat(formatLocale, {
+                          maximumFractionDigits: 1,
+                        }).format(view.topReasoning.percent)}%`
+                      : ""
                   }`
                 : "—",
             },
-            { label: "Most active hour", value: formatPeakHourLabel(view.peakHour) },
-            { label: "Skills explored", value: formatNumber(view.skillsExplored) },
-            { label: "Total skills used", value: formatNumber(view.totalSkillsUsed) },
+            { label: t("settings:profile_mostActiveHour"), value: formatPeakHourLabel(view.peakHour) },
+            { label: t("settings:profile_skillsExplored"), value: formatNumber(view.skillsExplored) },
+            { label: t("settings:profile_totalSkillsUsed"), value: formatNumber(view.totalSkillsUsed) },
             { label: "Total turns", value: formatNumber(view.lifetimeTurns) },
           ]}
         />
@@ -475,9 +518,11 @@ function HeatmapSection({
   cells: Parameters<typeof ActivityHeatmap>[0]["cells"];
   unit: "tokens" | "prompts";
 }) {
+  const { t } = useTranslation();
+
   return (
     <section className="flex min-w-0 flex-col gap-3">
-      <h3 className="text-ui-sm font-medium">Activity</h3>
+      <h3 className="text-ui-lg font-medium">{t("workspace:profile_activity")}</h3>
       {pending ? (
         <Skeleton className="h-28 w-full rounded-lg" />
       ) : (
@@ -510,9 +555,11 @@ function InsightsSection({
   rows: readonly { label: string; value: string }[];
   coverage?: import("react").ReactNode;
 }) {
+  const { t } = useTranslation();
+
   return (
     <section className="flex flex-col gap-3">
-      <h3 className="text-ui-sm font-medium">Activity insights</h3>
+      <h3 className="text-ui-lg font-medium">{t("settings:profile_activityInsights")}</h3>
       <dl className="flex flex-col gap-2.5">
         {rows.map((row) => (
           <InsightRow key={row.label} label={row.label} value={row.value} />
@@ -533,9 +580,11 @@ function SkillsSection({
     runCount: number;
   }[];
 }) {
+  const { t } = useTranslation();
+
   return (
     <section className="flex flex-col gap-3">
-      <h3 className="text-ui-sm font-medium">Most used plugins</h3>
+      <h3 className="text-ui-lg font-medium">{t("settings:profile_mostUsedPlugins")}</h3>
       {skills.length > 0 ? (
         <ul className="flex flex-col gap-2.5">
           {skills.slice(0, 6).map((skill) => (
@@ -547,16 +596,18 @@ function SkillsSection({
                     className="size-3"
                   />
                 </span>
-                <span className="truncate text-ui-sm">{skill.displayName}</span>
+                <span className="truncate text-ui leading-snug">{skill.displayName}</span>
               </span>
-              <span className="shrink-0 text-ui-sm tabular-nums text-muted-foreground">
-                {formatNumber(skill.runCount)} runs
+              <span className="shrink-0 text-ui leading-snug tabular-nums text-muted-foreground">
+                {formatNumber(skill.runCount)} {t("settings:profile_runs")}
               </span>
             </li>
           ))}
         </ul>
       ) : (
-        <p className="text-ui-sm text-muted-foreground">No skills or agents used yet.</p>
+        <p className="text-ui leading-snug text-muted-foreground">
+          {t("settings:profile_noSkillsOrAgentsUsed")}
+        </p>
       )}
     </section>
   );
@@ -576,11 +627,15 @@ function ModelUsageSection({
   basis?: string;
   unavailableProviders?: readonly ProviderKind[];
 }) {
+  const { t, formatLocale } = useTranslation();
+
   return (
     <section className="flex flex-col gap-3">
-      <h3 className="text-ui-sm font-medium">Model usage</h3>
+      <h3 className="text-ui-lg font-medium">{t("settings:profile_modelUsage")}</h3>
       {basis ? (
-        <p className="text-ui leading-snug text-muted-foreground">Share of {basis}.</p>
+        <p className="text-ui leading-snug text-muted-foreground">
+          {t("settings:shareOf")} {basis}.
+        </p>
       ) : null}
       {entries.length > 0 ? (
         <ul className="grid grid-cols-1 gap-x-12 gap-y-3 sm:grid-cols-2">
@@ -596,11 +651,16 @@ function ModelUsageSection({
               }
               model={entry.model}
               percent={entry.percent}
+              stat={`${new Intl.NumberFormat(formatLocale, {
+                maximumFractionDigits: 1,
+              }).format(entry.percent)}%`}
             />
           ))}
         </ul>
       ) : (
-        <p className="text-ui-sm text-muted-foreground">No model activity yet.</p>
+        <p className="text-ui leading-snug text-muted-foreground">
+          {t("settings:profile_noModelActivity")}
+        </p>
       )}
       <ProfileUsageCoverage unavailableProviders={unavailableProviders} />
     </section>
@@ -613,12 +673,20 @@ function formatPeakHourLabel(startHour: number | null): string {
   return startHour === null ? "—" : formatHourLabel(startHour);
 }
 
-function formatMostWorkedProjectLabel(project: ProfileStats["mostWorkedProject"]): string {
+function formatMostWorkedProjectLabel(
+  project: ProfileStats["mostWorkedProject"],
+  formatLocale = getFormatLocale(),
+): string {
   if (!project) {
     return "—";
   }
-  const promptLabel = project.promptCount === 1 ? "prompt" : "prompts";
-  return `${project.title} · ${formatNumber(project.promptCount)} ${promptLabel}`;
+  const promptLabel =
+    project.promptCount === 1 ? t("chat:profile_prompt") : t("common:profile_prompts");
+  return t("settings:symbol2", {
+    value0: project.title,
+    value1: formatNumber(project.promptCount, formatLocale),
+    value2: promptLabel,
+  });
 }
 
 function ProfileSkeleton() {

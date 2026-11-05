@@ -37,6 +37,7 @@ import {
   socialLinkLabel,
 } from "@synara/shared/socialLinks";
 import { parseSocialLinkDrafts, seedSocialLinkDrafts } from "./socialLinkDrafts";
+import { useTranslation } from "~/i18n";
 
 // Inputs and footer buttons share one fixed height + radius so every control in
 // the dialog reads as the same size. The visible border keeps the fields legible
@@ -143,6 +144,8 @@ function EditProfileDialogContent({
   onRemoveUploadedPhoto,
   onSave,
 }: Omit<EditProfileDialogProps, "open">) {
+  const { t } = useTranslation();
+
   const [draftName, setDraftName] = useState(name);
   const [draftHandle, setDraftHandle] = useState(handle.replace(/^@+/, ""));
   const [draftColor, setDraftColor] = useState(avatarColor);
@@ -212,7 +215,9 @@ function EditProfileDialogContent({
         setError(
           cause instanceof AvatarImageError
             ? cause.message
-            : accountErrorMessage(cause, "Could not upload that image. Try again."),
+            : signedIn
+              ? accountErrorMessage(cause, "Could not upload that image. Try again.")
+              : t("common:edit_couldNotProcessImage"),
         );
       })
       .finally(() => {
@@ -282,7 +287,7 @@ function EditProfileDialogContent({
 
   return (
     <>
-      <DialogTitle className="px-4 pt-4 text-lg">Edit profile</DialogTitle>
+      <DialogTitle className="px-4 pt-4 text-lg">{t("common:editProfile")}</DialogTitle>
 
       <div className="flex flex-col gap-4 px-4 pt-3">
         {/* Avatar */}
@@ -298,7 +303,7 @@ function EditProfileDialogContent({
             <button
               type="button"
               onClick={() => setShowEditor((value) => !value)}
-              aria-label="Edit avatar"
+              aria-label={t("common:edit_editAvatar")}
               className={cn(
                 "absolute bottom-0 end-0 flex size-7 items-center justify-center rounded-full",
                 "bg-black/45 text-white backdrop-blur-sm transition-colors hover:bg-black/60",
@@ -358,17 +363,17 @@ function EditProfileDialogContent({
 
         {/* Fields */}
         <div className="divide-y divide-border/60 overflow-hidden rounded-xl border border-border/60">
-          <Field label="Display name">
+          <Field label={t("common:edit_displayName")}>
             <InputGroup className={fieldControlClassName}>
               <InputGroupInput
                 value={draftName}
                 onChange={(event) => setDraftName(event.target.value)}
-                placeholder="Your name"
+                placeholder={t("common:edit_yourName")}
               />
             </InputGroup>
           </Field>
           <Field
-            label="Username"
+            label={t("common:edit_username")}
             hint={
               accountProfile && draftHandle !== accountProfile.handle
                 ? "Changing your handle changes your public link. The old link stops working."
@@ -386,7 +391,7 @@ function EditProfileDialogContent({
                     event.target.value.replace(/^@+/, "").replace(/\s+/g, "").toLowerCase(),
                   )
                 }
-                placeholder="username"
+                placeholder={t("common:username")}
               />
             </InputGroup>
           </Field>
@@ -466,7 +471,7 @@ function EditProfileDialogContent({
         <DialogClose
           render={<Button variant="ghost" size="default" className={dialogButtonClassName} />}
         >
-          Cancel
+          {t("common:form_cancel")}
         </DialogClose>
         <Button
           variant="default"
@@ -475,7 +480,7 @@ function EditProfileDialogContent({
           onClick={() => void handleSave()}
           disabled={processing || saving}
         >
-          {saving ? "Saving…" : "Save"}
+          {saving ? "Saving…" : t("computer:form_save")}
         </Button>
       </div>
     </>
@@ -512,6 +517,8 @@ function AccountAvatarEditor({
   onRemoveUploaded: () => void;
   onPickColor: (color: string) => void;
 }) {
+  const { t } = useTranslation();
+
   return (
     <div className="flex flex-col items-center gap-3">
       <div className="flex flex-wrap items-center justify-center gap-2">
@@ -527,7 +534,11 @@ function AccountAvatarEditor({
           onClick={onPickFile}
         >
           <CentralIcon name="add-image" className="size-3.5" />
-          {processing ? "Uploading…" : hasUpload ? "Replace photo" : "Upload photo"}
+          {processing
+            ? "Uploading…"
+            : hasUpload
+              ? t("common:edit_replacePhoto")
+              : t("common:edit_uploadPhoto")}
         </AvatarChoiceButton>
         <AvatarChoiceButton selected={draftSource === "placeholder"} onClick={onSelectPlaceholder}>
           <CentralIcon name="letter-a-circle" className="size-3.5" />
@@ -543,7 +554,7 @@ function AccountAvatarEditor({
             onClick={onRemoveUploaded}
           >
             <CentralIcon name="trash-can-simple" className="size-3.5" />
-            Remove
+            {t("workspace:edit_remove")}
           </Button>
         )}
       </div>
@@ -579,6 +590,8 @@ function LocalAvatarEditor({
   onRemoveImage: () => void;
   onPickColor: (color: string) => void;
 }) {
+  const { t } = useTranslation();
+
   return (
     <div className="flex flex-col items-center gap-3">
       <div className="flex items-center justify-center gap-2">
@@ -591,7 +604,11 @@ function LocalAvatarEditor({
           onClick={onPickFile}
         >
           <CentralIcon name="add-image" className="size-3.5" />
-          {processing ? "Processing…" : draftImage ? "Replace photo" : "Upload photo"}
+          {processing
+            ? t("common:processing")
+            : draftImage
+              ? t("common:edit_replacePhoto")
+              : t("common:edit_uploadPhoto")}
         </Button>
         {draftImage && (
           <Button
@@ -602,7 +619,7 @@ function LocalAvatarEditor({
             onClick={onRemoveImage}
           >
             <CentralIcon name="trash-can-simple" className="size-3.5" />
-            Remove
+            {t("workspace:edit_remove")}
           </Button>
         )}
       </div>
@@ -615,7 +632,7 @@ function LocalAvatarEditor({
 
       {draftImage && (
         <p className="text-center text-ui-xs text-muted-foreground">
-          Colors apply when no photo is set.
+          {t("common:colorsApplyWhenNoPhotoIsSet")}
         </p>
       )}
     </div>
@@ -657,6 +674,8 @@ function ColorSwatches({
   selectable: boolean;
   onPickColor: (color: string) => void;
 }) {
+  const { t } = useTranslation();
+
   return (
     <div className="flex items-center justify-center gap-2">
       {PROFILE_AVATAR_COLORS.map((color) => (
@@ -664,7 +683,7 @@ function ColorSwatches({
           key={color}
           type="button"
           onClick={() => onPickColor(color)}
-          aria-label={`Use ${color}`}
+          aria-label={t("common:use2", { value0: color })}
           className={cn(
             "size-5 rounded-full transition-transform hover:scale-110",
             selectable &&

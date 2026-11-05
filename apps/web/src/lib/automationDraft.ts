@@ -4,6 +4,7 @@
 // Exports: AutomationCreationDraft plus pure warning/skill helpers.
 // Depends on: automation contracts shared with the native API.
 
+import { t } from "~/i18n";
 import { DEFAULT_AUTOMATION_FAST_INTERVAL_MAX_ITERATIONS } from "@synara/contracts";
 import type {
   AutomationMode,
@@ -41,6 +42,8 @@ export interface AutomationDraftWarning {
   readonly id: AutomationDraftWarningId;
   readonly title: string;
   readonly detail: string;
+  readonly titleKey?: string;
+  readonly detailKey?: string;
   readonly requiresAcknowledgement: boolean;
 }
 
@@ -82,7 +85,9 @@ export function buildAutomationDraftWarnings(input: {
   if (input.hasEphemeralContext) {
     warnings.push({
       id: "attachments-not-persisted",
+      titleKey: "automation:warningContextTitle",
       title: "Composer context is not persisted",
+      detailKey: "automation:warningContextDetail",
       detail:
         "Attachments, provider mentions, pasted context, and terminal snippets will not be replayed on scheduled runs.",
       requiresAcknowledgement: true,
@@ -91,7 +96,9 @@ export function buildAutomationDraftWarnings(input: {
   if (input.schedule.type === "manual") {
     warnings.push({
       id: "missing-schedule",
+      titleKey: "automation:warningManualTitle",
       title: "Manual runs only",
+      detailKey: "automation:warningManualDetail",
       detail: "This automation only runs when you press Run now.",
       requiresAcknowledgement: false,
     });
@@ -99,7 +106,9 @@ export function buildAutomationDraftWarnings(input: {
   if (input.schedule.type === "interval" && input.schedule.everySeconds < 60) {
     warnings.push({
       id: "fast-recurring-interval",
+      titleKey: "automation:warningFastTitle",
       title: "Fast recurring loop",
+      detailKey: "automation:warningFastDetail",
       detail: "Intervals under one minute can create noisy unattended runs.",
       requiresAcknowledgement: true,
     });
@@ -107,7 +116,9 @@ export function buildAutomationDraftWarnings(input: {
   if (input.runtimeMode === "full-access") {
     warnings.push({
       id: "full-access",
+      titleKey: "automation:warningFullAccessTitle",
       title: "Full access",
+      detailKey: "automation:warningFullAccessDetail",
       detail: "Scheduled full-access runs can make changes without per-step approval.",
       requiresAcknowledgement: true,
     });
@@ -118,6 +129,14 @@ export function buildAutomationDraftWarnings(input: {
   ) {
     warnings.push({
       id: "local-checkout",
+      titleKey:
+        input.worktreeMode === "auto"
+          ? "automation:warningLocalFallbackTitle"
+          : "automation:warningLocalTitle",
+      detailKey:
+        input.worktreeMode === "auto"
+          ? "automation:warningLocalFallbackDetail"
+          : "automation:warningLocalDetail",
       title:
         input.worktreeMode === "auto" ? "Auto fallback may use local checkout" : "Local checkout",
       detail:
@@ -133,7 +152,9 @@ export function buildAutomationDraftWarnings(input: {
   ) {
     warnings.push({
       id: "worktree-cleanup",
+      titleKey: "automation:warningCleanupTitle",
       title: "Worktree cleanup",
+      detailKey: "automation:warningCleanupDetail",
       detail: "Generated worktrees or branches are kept after archiving until you remove them.",
       requiresAcknowledgement: false,
     });
@@ -144,7 +165,9 @@ export function buildAutomationDraftWarnings(input: {
   ) {
     warnings.push({
       id: "generated-low-confidence",
+      titleKey: "automation:warningGeneratedTitle",
       title: "Review generated fields",
+      detailKey: "automation:warningGeneratedDetail",
       detail: "Synara was not fully confident about the parsed automation fields.",
       requiresAcknowledgement: false,
     });
@@ -152,7 +175,9 @@ export function buildAutomationDraftWarnings(input: {
   if (containsAutomationSkillReference(input.prompt)) {
     warnings.push({
       id: "skill-reference",
+      titleKey: "automation:warningSkillTitle",
       title: "Skill reference kept in prompt",
+      detailKey: "automation:warningSkillDetail",
       detail:
         "Skill tokens stay as prompt text unless the selected provider can resolve them at run time.",
       requiresAcknowledgement: false,
@@ -327,4 +352,16 @@ export function acknowledgedWarningIdsForAutomaticChatAutomation(input: {
     }
   }
   return ids;
+}
+
+/** Translate when rendering so an already-open draft follows language changes. */
+export function automationDraftWarningPresentation(
+  warning: AutomationDraftWarning,
+  translate: typeof t = t,
+): AutomationDraftWarning {
+  return {
+    ...warning,
+    title: warning.titleKey ? translate(warning.titleKey) : warning.title,
+    detail: warning.detailKey ? translate(warning.detailKey) : warning.detail,
+  };
 }

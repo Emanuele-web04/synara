@@ -18,6 +18,7 @@ import { Button } from "../../ui/button";
 import { toastManager } from "../../ui/toast";
 import { ComposerPendingApprovalPanel } from "../ComposerPendingApprovalPanel";
 import { respondToThreadApproval } from "../respondToThreadApproval";
+import { useTranslation } from "~/i18n";
 
 export function HubPendingApprovals({
   threadIds,
@@ -30,6 +31,8 @@ export function HubPendingApprovals({
   coordinatorThreadId?: ThreadId;
   onOpenThread: (threadId: ThreadId) => void;
 }) {
+  const { t } = useTranslation();
+
   // Shell attention arrives even for workers never opened in this client. Only
   // retain pending workers, keeping idle Hub members out of the stream budget.
   const pendingThreadIds = useStore(
@@ -54,7 +57,10 @@ export function HubPendingApprovals({
   );
   if (pendingThreadIds.length === 0) return null;
   return (
-    <section aria-label="Thread approvals" className="mb-2 max-h-[45vh] space-y-3 overflow-y-auto">
+    <section
+      aria-label={t("workspace:threadApprovals")}
+      className="mb-2 max-h-[45vh] space-y-3 overflow-y-auto"
+    >
       {pendingThreadIds.map((id) => (
         <HubThreadApprovals key={id} threadId={id} onOpenThread={onOpenThread} />
       ))}
@@ -69,6 +75,8 @@ function HubThreadApprovals({
   threadId: ThreadId;
   onOpenThread: (id: ThreadId) => void;
 }) {
+  const { t } = useTranslation();
+
   useEffect(() => retainThreadDetailSubscription(threadId), [threadId]);
   const thread = useStore(useMemo(() => createThreadSelector(threadId), [threadId]));
   if (!thread || !canSessionAnswerPendingRequests(thread.session)) return null;
@@ -87,7 +95,7 @@ function HubThreadApprovals({
         {thread.title}
       </Button>
       {approvals.length === 0 ? (
-        <p className="text-ui-sm text-muted-foreground">Loading approval…</p>
+        <p className="text-ui-sm text-muted-foreground">{t("workspace:loadingApproval")}</p>
       ) : (
         approvals.map((approval) => (
           <HubApprovalCard
@@ -102,6 +110,8 @@ function HubThreadApprovals({
 }
 
 function HubApprovalCard({ thread, approval }: { thread: Thread; approval: PendingApproval }) {
+  const { t } = useTranslation();
+
   const [responding, setResponding] = useState(false);
   return (
     <ComposerPendingApprovalPanel
@@ -124,8 +134,9 @@ function HubApprovalCard({ thread, approval }: { thread: Thread; approval: Pendi
         } catch (error) {
           toastManager.add({
             type: "error",
-            title: "Couldn't send your answer",
-            description: error instanceof Error ? error.message : "Try again from the thread.",
+            title: t("workspace:couldnTSendYourAnswer"),
+            description:
+              error instanceof Error ? error.message : t("workspace:tryAgainFromTheThread"),
           });
           throw error;
         } finally {

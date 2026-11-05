@@ -1,6 +1,7 @@
 import { CheckIcon, CopyIcon } from "~/lib/icons";
 import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
 import { Button } from "./button";
+import { useTranslation } from "~/i18n";
 
 /** Shared by toast copy actions and inline diagnostic reports. */
 export function CopyTextButton({
@@ -14,8 +15,12 @@ export function CopyTextButton({
   className?: string;
   iconOnly?: boolean;
 }) {
+  const { t } = useTranslation();
+
   const { copyToClipboard, isCopied } = useCopyToClipboard();
-  const title = isCopied ? `Copied ${label}` : `Copy ${label}`;
+  const title = isCopied
+    ? t("common:copied", { value0: label })
+    : t("settings:copy", { value0: label });
   return (
     <Button
       aria-label={title}
@@ -26,7 +31,9 @@ export function CopyTextButton({
       onClick={() => copyToClipboard(text, undefined)}
     >
       {isCopied ? <CheckIcon className="size-3" /> : <CopyIcon className="size-3" />}
-      {iconOnly ? null : <span>{isCopied ? "Copied" : `Copy ${label}`}</span>}
+      {iconOnly ? null : (
+        <span>{isCopied ? t("chat:theme_copied") : t("settings:copy", { value0: label })}</span>
+      )}
     </Button>
   );
 }

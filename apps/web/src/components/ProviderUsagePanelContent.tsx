@@ -4,7 +4,11 @@
 // The limit rows are the point of the popover, so reset credits and usage lines
 // sit behind a "Details" toggle whose state persists in app settings.
 
-import type { ProviderKind, ServerCodexResetCredits } from "@synara/contracts";
+import {
+  PROVIDER_DISPLAY_NAMES,
+  type ProviderKind,
+  type ServerCodexResetCredits,
+} from "@synara/contracts";
 import { providerUsageLabel } from "@synara/shared/providerUsage";
 
 import { useAppSettings } from "~/appSettings";
@@ -23,6 +27,7 @@ import { ProviderUsageLineList } from "./ProviderUsageLineList";
 import { ProviderUsageResetCredits } from "./ProviderUsageResetCredits";
 import { DisclosureChevron } from "./ui/DisclosureChevron";
 import { DisclosureRegion } from "./ui/DisclosureRegion";
+import { useTranslation } from "~/i18n";
 
 export { providerUsageLabel };
 
@@ -41,8 +46,10 @@ export function ProviderUsagePanelContent(props: {
   showLearnMore?: boolean | undefined;
   className?: string | undefined;
 }) {
+  const { t } = useTranslation();
+
   const { settings, updateSettings } = useAppSettings();
-  const visibleRows = deriveProviderUsageDisplayRows(props.rateLimits);
+  const visibleRows = deriveProviderUsageDisplayRows(props.rateLimits, t);
   const learnMoreHref =
     props.learnMoreHref ??
     deriveRateLimitLearnMoreHref(props.rateLimits) ??
@@ -73,7 +80,9 @@ export function ProviderUsagePanelContent(props: {
     <div className={cn("space-y-2", props.className)}>
       {props.showTitle !== false ? (
         <div className="text-chat-meta font-medium text-muted-foreground">
-          {providerUsageLabel(props.provider)}
+          {props.provider
+            ? t("common:providerUsageTitle", { provider: PROVIDER_DISPLAY_NAMES[props.provider] })
+            : t("chat:general_usage")}
         </div>
       ) : null}
       {props.notice ? (
@@ -93,7 +102,7 @@ export function ProviderUsagePanelContent(props: {
               className="flex items-center gap-1 text-chat-meta text-muted-foreground transition-colors hover:text-foreground"
             >
               <DisclosureChevron open={detailsOpen} className="size-3" />
-              Details
+              {t("common:detail_details")}
             </button>
             <DisclosureRegion open={detailsOpen} contentClassName="space-y-2 pt-2">
               {resetCredits}
@@ -107,14 +116,14 @@ export function ProviderUsagePanelContent(props: {
           {usageLines ??
             (props.isLoading ? (
               <p className="text-chat-meta leading-relaxed text-muted-foreground">
-                Scanning local usage data for the selected provider.
+                {t("common:scanningLocalUsageDataForTheSelectedProvider")}
               </p>
             ) : (
               <p className="text-chat-meta leading-relaxed text-muted-foreground">
                 {props.emptyMessage ??
                   (props.provider
-                    ? "No local usage data was found yet for the selected provider."
-                    : "No local usage data was found yet.")}
+                    ? t("common:noLocalUsageDataWasFoundYetForThe")
+                    : t("common:noLocalUsageDataWasFoundYet"))}
               </p>
             ))}
         </>
@@ -126,7 +135,7 @@ export function ProviderUsagePanelContent(props: {
           rel="noopener noreferrer"
           className="flex items-center gap-1 pt-0.5 text-chat-meta text-muted-foreground transition-colors hover:text-foreground"
         >
-          Learn more
+          {t("common:learnMore")}
           <ExternalLinkIcon className="size-3" />
         </a>
       ) : null}

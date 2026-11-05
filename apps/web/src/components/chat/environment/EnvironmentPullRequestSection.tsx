@@ -111,6 +111,8 @@ import {
   withStableCheckKeys,
   type PullRequestChecksTone,
 } from "./environmentPullRequest.logic";
+import { useTranslation } from "~/i18n";
+
 /** Shares the menu/stack action and loads its settings only when the control is shown. */
 function PullRequestAutoFixToggle(props: {
   threadId: ThreadId;
@@ -119,6 +121,8 @@ function PullRequestAutoFixToggle(props: {
   disabled: boolean;
   number?: number;
 }) {
+  const { t } = useTranslation();
+
   const queryClient = useQueryClient();
   const { updateSettings } = useAppSettings();
   const autoFixMutation = useMutation(pullRequestSetAutoFixMutationOptions(queryClient));
@@ -134,7 +138,7 @@ function PullRequestAutoFixToggle(props: {
           toastManager.add({
             type: "error",
             timeout: DEFAULT_TOAST_TIMEOUT_MS,
-            title: "Couldn't update Auto-fix CI",
+            title: t("git:couldnTUpdateAutoFixCI"),
             description: error instanceof Error ? error.message : undefined,
           });
         },
@@ -155,7 +159,7 @@ function PullRequestAutoFixToggle(props: {
       data-testid="pr-auto-fix-ci"
       onCheckedChange={onCheckedChange}
     >
-      <MenuRowLabel icon={null} label="Auto-fix CI" trailing={display.trailing} />
+      <MenuRowLabel icon={null} label={t("git:autoFixCI")} trailing={display.trailing} />
     </MenuCheckboxItem>
   ) : (
     <span className="flex shrink-0 items-center gap-2">
@@ -163,7 +167,7 @@ function PullRequestAutoFixToggle(props: {
         <span className="text-ui-sm text-muted-foreground">{display.trailing}</span>
       ) : null}
       <Checkbox
-        aria-label={`Auto-fix CI for #${props.number}`}
+        aria-label={t("git:autoFixCIFor", { value0: props.number })}
         title={display.title}
         checked={display.checked}
         disabled={disabled}
@@ -289,6 +293,8 @@ function CommentsMenuRow({
   comment: GitPullRequestComment;
   onOpenUrl: (url: string) => void;
 }) {
+  const { formatLocale } = useTranslation();
+
   const display = describePullRequestComment(comment);
   return (
     // items-stretch overrides the menu-option default items-center for this column layout.
@@ -325,7 +331,9 @@ function CommentsMenuRow({
         ) : null}
         <span className="min-w-0 flex-1 truncate">{comment.path ?? comment.author ?? ""}</span>
         {comment.createdAt ? (
-          <span className="shrink-0 tabular-nums">{formatRelativeTime(comment.createdAt)}</span>
+          <span className="shrink-0 tabular-nums">
+            {formatRelativeTime(comment.createdAt, undefined, formatLocale)}
+          </span>
         ) : null}
       </span>
     </MenuRow>
@@ -376,6 +384,8 @@ export function EnvironmentPullRequestSection({
   onOpenUrl: (url: string) => void;
   onClose: () => void;
 }) {
+  const { t, formatLocale } = useTranslation();
+
   const showDiffColors = showDiffColorsProp ?? true;
   const openPane = useRightDockStore((store) => store.openPane);
   const queryClient = useQueryClient();
@@ -477,8 +487,8 @@ export function EnvironmentPullRequestSection({
       .catch((error: unknown) => {
         toastManager.add({
           type: "error",
-          title: "Could not open GitHub",
-          description: error instanceof Error ? error.message : "The link could not be opened.",
+          title: t("git:couldNotOpenGitHub"),
+          description: error instanceof Error ? error.message : t("git:theLinkCouldNotBeOpened"),
         });
       });
     onClose();
@@ -525,7 +535,7 @@ export function EnvironmentPullRequestSection({
           timeout: DEFAULT_TOAST_TIMEOUT_MS,
           title:
             action === "merge" && result.mergeOutcome === "enqueued"
-              ? "Pull request added to merge queue"
+              ? t("git:pullRequestAddedToMergeQueue")
               : ACTION_SUCCESS_TITLES[action],
         });
       })
@@ -533,8 +543,8 @@ export function EnvironmentPullRequestSection({
         toastManager.update(toastId, {
           type: "error",
           timeout: DEFAULT_TOAST_TIMEOUT_MS,
-          title: "Pull request action failed",
-          description: error instanceof Error ? error.message : "GitHub CLI action failed.",
+          title: t("git:pullRequestActionFailed"),
+          description: error instanceof Error ? error.message : t("git:gitHubCLIActionFailed"),
         });
       });
   };
@@ -575,15 +585,15 @@ export function EnvironmentPullRequestSection({
   const repairDisabled = loading || failed || !activeThreadId || repairs.total === 0;
   const stateLabel = settledState
     ? settledState === "merged"
-      ? "Merged"
-      : "Closed"
+      ? t("git:merged")
+      : t("chat:closed")
     : displayPr.isDraft
-      ? "Draft"
-      : "Ready for review";
+      ? t("git:column_draft")
+      : t("git:readyForReview");
   // The git snapshot has no merged/closed timestamp; the lazily fetched detail does.
   const settledAt = settledState === "merged" ? detail?.mergedAt : detail?.closedAt;
   // formatRelativeTime is the compact list form ("12h"); a sentence needs "12h ago".
-  const settledAgo = settledAt ? formatRelativeTime(settledAt) : null;
+  const settledAgo = settledAt ? formatRelativeTime(settledAt, undefined, formatLocale) : null;
   const statusTrailing =
     settledState && settledAgo
       ? `${stateLabel} ${settledAgo === "now" ? "just now" : `${settledAgo} ago`}`
@@ -599,15 +609,17 @@ export function EnvironmentPullRequestSection({
     checksToneIcon(checksSummary.tone)
   );
   const rowTitle = settledState
-    ? `${stateLabel} on GitHub`
+    ? t("git:onGitHub", { value0: stateLabel })
     : loading
-      ? "Loading checks and comments…"
+      ? t("git:loadingChecksAndComments")
       : failed
-        ? "Couldn't load PR data"
+        ? t("git:pullRequest_couldNotLoadData")
         : checksSummary.label;
 
   return (
-    <EnvironmentLabeledSection label={stackRows.length > 0 ? "Pull requests" : "Pull request"}>
+    <EnvironmentLabeledSection
+      label={stackRows.length > 0 ? t("git:pullRequests") : t("git:general_environmentPullRequest")}
+    >
       <Menu open={menuOpen} onOpenChange={setMenuOpen} keepOpenOnSubmenuInteraction>
         <MenuTrigger
           render={<button type="button" className={ENVIRONMENT_ROW_CLASS_NAME} title={rowTitle} />}
@@ -621,7 +633,12 @@ export function EnvironmentPullRequestSection({
             }
             label={
               <span className="flex min-w-0 items-center gap-1.5">
-                <span className="truncate">{`#${displayPr.number} ${displayPr.title}`}</span>
+                <span className="truncate">
+                  {t("git:symbol", {
+                    value0: displayPr.number,
+                    value1: displayPr.title,
+                  })}
+                </span>
               </span>
             }
             trailing={
@@ -649,20 +666,20 @@ export function EnvironmentPullRequestSection({
             <MenuItem className="min-w-0 flex-1" onClick={() => openPullRequest()}>
               <MenuRowLabel
                 icon={<PageTextIcon className={MENU_ICON_CLASS_NAME} aria-hidden />}
-                label="View PR"
+                label={t("git:viewPR")}
               />
             </MenuItem>
             <MenuItem
-              aria-label="Copy link"
-              title="Copy link"
+              aria-label={t("computer:panel_copyLink")}
+              title={t("computer:panel_copyLink")}
               className={MENU_INLINE_ACTION_CLASS_NAME}
               onClick={() => copyPullRequestLink(displayPr.url)}
             >
               <LinkIcon className={MENU_ICON_CLASS_NAME} aria-hidden />
             </MenuItem>
             <MenuItem
-              aria-label="Open in GitHub"
-              title="Open in GitHub"
+              aria-label={t("git:openInGitHub")}
+              title={t("git:openInGitHub")}
               className={MENU_INLINE_ACTION_CLASS_NAME}
               onClick={openInGitHub}
             >
@@ -672,7 +689,7 @@ export function EnvironmentPullRequestSection({
           <MenuItem onClick={() => openPullRequest("code")}>
             <MenuRowLabel
               icon={<DiffIcon className={MENU_ICON_CLASS_NAME} aria-hidden />}
-              label="Code changes"
+              label={t("git:codeChanges")}
               trailing={
                 diffStat ? (
                   <PullRequestDiffStat
@@ -691,7 +708,7 @@ export function EnvironmentPullRequestSection({
                 <MenuSubTrigger disabled={loading}>
                   <MenuRowLabel
                     icon={checksToneIcon(checksSummary.tone)}
-                    label="Checks"
+                    label={t("git:checks")}
                     trailing={loading ? "Loading…" : failed ? "Unavailable" : checksSummary.label}
                   />
                 </MenuSubTrigger>
@@ -700,7 +717,7 @@ export function EnvironmentPullRequestSection({
                     <MenuItem onClick={() => void snapshotQuery.refetch()}>
                       <MenuRowLabel
                         icon={<RefreshCwIcon className={MENU_ICON_CLASS_NAME} aria-hidden />}
-                        label="Retry loading checks"
+                        label={t("git:retryLoadingChecks")}
                       />
                     </MenuItem>
                   ) : checks.length === 0 ? (
@@ -725,7 +742,7 @@ export function EnvironmentPullRequestSection({
                 <MenuSubTrigger disabled={loading}>
                   <MenuRowLabel
                     icon={<ChatBubbleIcon className={MENU_ICON_CLASS_NAME} aria-hidden />}
-                    label="Comments"
+                    label={t("git:comments")}
                     trailing={
                       loading
                         ? "Loading…"
@@ -740,7 +757,7 @@ export function EnvironmentPullRequestSection({
                     <MenuItem onClick={() => void snapshotQuery.refetch()}>
                       <MenuRowLabel
                         icon={<RefreshCwIcon className={MENU_ICON_CLASS_NAME} aria-hidden />}
-                        label="Retry loading comments"
+                        label={t("git:retryLoadingComments")}
                       />
                     </MenuItem>
                   ) : commentsError ? (
@@ -781,7 +798,7 @@ export function EnvironmentPullRequestSection({
                 <MenuSubTrigger disabled={repairDisabled} data-testid="pr-repair-trigger">
                   <MenuRowLabel
                     icon={<HammerIcon className={MENU_ICON_CLASS_NAME} aria-hidden />}
-                    label="Repair"
+                    label={t("git:repair")}
                     trailing={
                       repairs.total > 0 ? (
                         <span className={cn(!repairDisabled && "text-destructive")}>
@@ -798,7 +815,7 @@ export function EnvironmentPullRequestSection({
                   >
                     <MenuRowLabel
                       icon={<ChatBubbleIcon className={MENU_ICON_CLASS_NAME} aria-hidden />}
-                      label="Comments"
+                      label={t("git:comments")}
                       trailing={repairs.comments > 0 ? repairs.comments : null}
                     />
                   </MenuItem>
@@ -808,7 +825,7 @@ export function EnvironmentPullRequestSection({
                   >
                     <MenuRowLabel
                       icon={<CircleAlertIcon className={MENU_ICON_CLASS_NAME} aria-hidden />}
-                      label="Failing checks"
+                      label={t("git:failingChecks")}
                       trailing={repairs.failingChecks > 0 ? repairs.failingChecks : null}
                     />
                   </MenuItem>
@@ -818,14 +835,14 @@ export function EnvironmentPullRequestSection({
                   >
                     <MenuRowLabel
                       icon={<GitMergeConflictIcon className={MENU_ICON_CLASS_NAME} aria-hidden />}
-                      label="Merge conflicts"
+                      label={t("git:mergeConflicts")}
                     />
                   </MenuItem>
                   <MenuSeparator />
                   <MenuItem onClick={() => attachContextCard("everything")}>
                     <MenuRowLabel
                       icon={<HammerIcon className={MENU_ICON_CLASS_NAME} aria-hidden />}
-                      label="Everything"
+                      label={t("git:everything")}
                     />
                   </MenuItem>
                 </ComposerPickerMenuSubPopup>
@@ -855,8 +872,8 @@ export function EnvironmentPullRequestSection({
                       icon={<GitMergeIcon className={MENU_ICON_CLASS_NAME} aria-hidden />}
                       label={
                         actionPending && actionMutation.variables?.action === "merge"
-                          ? "Merging…"
-                          : "Merge"
+                          ? t("git:merging")
+                          : t("git:merge")
                       }
                       trailing={mergeTrailing}
                     />
@@ -886,7 +903,7 @@ export function EnvironmentPullRequestSection({
               <MenuSubTrigger disabled={actionPending}>
                 <MenuRowLabel
                   icon={<GitPullRequestIcon className={MENU_ICON_CLASS_NAME} aria-hidden />}
-                  label="Status"
+                  label={t("chat:detail_status")}
                   trailing={statusTrailing}
                 />
               </MenuSubTrigger>
@@ -895,7 +912,7 @@ export function EnvironmentPullRequestSection({
                   <MenuItem disabled={actionPending} onClick={() => runAction("reopen")}>
                     <MenuRowLabel
                       icon={<GitPullRequestIcon className={MENU_ICON_CLASS_NAME} aria-hidden />}
-                      label="Reopen"
+                      label={t("git:reopen")}
                     />
                   </MenuItem>
                 ) : (
@@ -910,15 +927,15 @@ export function EnvironmentPullRequestSection({
                   >
                     <MenuRadioItem value="draft" disabled={actionPending}>
                       <GitPullRequestDraftIcon className={MENU_ICON_CLASS_NAME} aria-hidden />
-                      <span>Draft</span>
+                      <span>{t("git:column_draft")}</span>
                     </MenuRadioItem>
                     <MenuRadioItem value="ready" disabled={actionPending}>
                       <GitPullRequestIcon className={MENU_ICON_CLASS_NAME} aria-hidden />
-                      <span>Ready for review</span>
+                      <span>{t("git:readyForReview")}</span>
                     </MenuRadioItem>
                     <MenuRadioItem value="closed" disabled={actionPending}>
                       <GitPullRequestClosedIcon className={MENU_ICON_CLASS_NAME} aria-hidden />
-                      <span>Closed</span>
+                      <span>{t("chat:closed")}</span>
                     </MenuRadioItem>
                   </MenuRadioGroup>
                 )}
@@ -928,7 +945,7 @@ export function EnvironmentPullRequestSection({
             <MenuItem disabled>
               <MenuRowLabel
                 icon={<GitPullRequestIcon className={MENU_ICON_CLASS_NAME} aria-hidden />}
-                label="Status"
+                label={t("chat:detail_status")}
                 trailing={statusTrailing}
               />
             </MenuItem>
@@ -937,7 +954,7 @@ export function EnvironmentPullRequestSection({
             <MenuItem onClick={() => attachContextCard("reference")}>
               <MenuRowLabel
                 icon={<ChatBubblePlusIcon className={MENU_ICON_CLASS_NAME} aria-hidden />}
-                label="Add to chat"
+                label={t("git:transcriptSelection_addToChat")}
               />
             </MenuItem>
           ) : null}
@@ -950,7 +967,7 @@ export function EnvironmentPullRequestSection({
         const presentation = resolvePrStatePresentation(entry);
         const EntryIcon = PR_STATE_PRESENTATION_ICONS[presentation.iconKind];
         const entryAutoFix = findPullRequestAutoFixState(autoFixStates, entry.url);
-        const label = `#${entry.number} ${entry.title}`;
+        const label = t("git:symbol", { value0: entry.number, value1: entry.title });
         return (
           <div
             key={entry.url}

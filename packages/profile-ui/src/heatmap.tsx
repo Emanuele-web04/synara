@@ -43,21 +43,6 @@ export const CARD_HEATMAP_INTENSITY_CLASSES: readonly string[] = [
   "bg-[var(--info)]",
 ];
 
-const MONTH_LABELS = [
-  "Jan",
-  "Feb",
-  "Mar",
-  "Apr",
-  "May",
-  "Jun",
-  "Jul",
-  "Aug",
-  "Sep",
-  "Oct",
-  "Nov",
-  "Dec",
-];
-
 interface ActivityHeatmapProps {
   readonly cells: ReadonlyArray<HeatmapCell>;
   readonly cellSize?: number;
@@ -86,17 +71,19 @@ interface ActivityHeatmapProps {
    * exported card (html-to-image) and static pages.
    */
   readonly renderTooltip?: (cell: HeatmapCell, cellNode: ReactElement) => ReactNode;
+  /** Locale supplied by the embedding app; public pages keep their own default. */
+  readonly formatLocale?: string;
   readonly className?: string;
 }
 
 /** Human tooltip label for a heatmap day, e.g. "1.2k prompts on Apr 3". */
-export function heatmapTooltipText(cell: HeatmapCell, unit: string): string {
-  const date = formatShortDate(cell.day) ?? cell.day;
+export function heatmapTooltipText(cell: HeatmapCell, unit: string, formatLocale?: string): string {
+  const date = formatShortDate(cell.day, formatLocale) ?? cell.day;
   if (cell.count <= 0) {
     return `No ${unit} on ${date}`;
   }
   const noun = cell.count === 1 && unit.endsWith("s") ? unit.slice(0, -1) : unit;
-  return `${formatCompact(cell.count)} ${noun} on ${date}`;
+  return `${formatCompact(cell.count, formatLocale)} ${noun} on ${date}`;
 }
 
 type Slot =
@@ -120,6 +107,7 @@ export function ActivityHeatmap({
   fill: fillProp,
   maxCellSize,
   renderTooltip,
+  formatLocale,
   className,
 }: ActivityHeatmapProps) {
   const cellSize = cellSizeProp ?? 13;
@@ -164,7 +152,11 @@ export function ActivityHeatmap({
       return null;
     }
     previousMonth = monthIndex;
-    return MONTH_LABELS[monthIndex] ?? null;
+    return Number.isInteger(monthIndex) && monthIndex >= 0 && monthIndex <= 11
+      ? new Intl.DateTimeFormat(formatLocale, { month: "short", timeZone: "UTC" }).format(
+          new Date(Date.UTC(2026, monthIndex, 1)),
+        )
+      : null;
   });
 
   const columnCount = columns.length;
@@ -247,7 +239,7 @@ export function ActivityHeatmap({
                     key={slot.cell.day}
                     className={cellClassName}
                     style={cellStyle}
-                    title={`${slot.cell.day} · ${slot.cell.count.toLocaleString()}`}
+                    title={`${slot.cell.day} · ${slot.cell.count.toLocaleString(formatLocale)}`}
                   />
                 );
               }

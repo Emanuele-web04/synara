@@ -2524,7 +2524,8 @@ export type WsFeatureRpc =
   | typeof WsTodoDeleteRpc
   | typeof WsSubscribeTodoEventsRpc;
 
-export const WsFeatureRpcGroup: RpcGroup.RpcGroup<WsFeatureRpc> = RpcGroup.make(
+// Partition construction while the explicit union bounds the exported declaration.
+const wsOrchestrationRpcGroup = RpcGroup.make(
   WsAgentGatewayCallRpc,
   WsOrchestrationDispatchCommandRpc,
   WsOrchestrationSettleTurnDispatchRpc,
@@ -2550,6 +2551,9 @@ export const WsFeatureRpcGroup: RpcGroup.RpcGroup<WsFeatureRpc> = RpcGroup.make(
   WsOrchestrationSubscribeThreadRpc,
   WsOrchestrationUnsubscribeThreadRpc,
   WsOrchestrationSubscribeDomainEventsRpc,
+);
+
+const wsApplicationRpcGroup = RpcGroup.make(
   WsProjectsDiscoverScriptsRpc,
   WsProjectsListDirectoriesRpc,
   WsProjectsSearchEntriesRpc,
@@ -2725,6 +2729,9 @@ export const WsFeatureRpcGroup: RpcGroup.RpcGroup<WsFeatureRpc> = RpcGroup.make(
   WsTodoDeleteRpc,
   WsSubscribeTodoEventsRpc,
 );
+
+export const WsFeatureRpcGroup: RpcGroup.RpcGroup<WsFeatureRpc> =
+  wsOrchestrationRpcGroup.merge(wsApplicationRpcGroup);
 
 // Project-agent RPCs live in a satellite group: folding them into
 // WsFeatureRpcGroup pushes its inferred type past the declaration emit limit.

@@ -437,7 +437,8 @@ Microsoft; this does not authorize changing a user's machine or submitting priva
 artifacts. These preferences must remain enabled before and after scanning, and
 `MpCmdRun -ValidateMapsConnection` must succeed before scanning; its output and
 exit code are retained. Configured cloud protection alone does not prove MAPS
-connectivity. See Microsoft's [block-at-first-sight guidance](https://learn.microsoft.com/en-us/defender-endpoint/configure-block-at-first-sight-microsoft-defender-antivirus).
+connectivity. See Microsoft's [block-at-first-sight guidance](https://learn.microsoft.com/en-us/defender-endpoint/configure-block-at-first-sight-microsoft-defender-antivirus)
+and [network validation guidance](https://learn.microsoft.com/en-us/defender-endpoint/configure-network-connections-microsoft-defender-antivirus).
 
 Run `pwsh -NoProfile -NonInteractive -File scripts/verify-windows-defender.test.ps1`
 for mocked guard contracts, including cloud-policy failure, failed MAPS, bounded
@@ -449,8 +450,9 @@ is never executed, retaining its hash and live service/signature/MAPS evidence.
 The public system binary is not uploaded as evidence. That probe qualifies only
 the prerequisites and cannot qualify Synara's installer or its browser reputation.
 Each final release artifact still requires its own live scan. This server scan
-does not replace Windows 11 browser-download qualification or establish that an
-antivirus download block has been fixed.
+does not replace Windows 11 browser-download qualification, prove that the cloud
+classified a particular installer, or establish that an antivirus download block
+has been fixed.
 
 Signing, provenance, and startup smoke alone do not establish Microsoft Defender
 acceptance. For a reported antivirus block, collect the exact artifact hash,

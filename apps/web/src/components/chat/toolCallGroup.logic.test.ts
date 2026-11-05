@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vitest";
+import { i18n, setLanguagePreference } from "~/i18n";
+import { deriveReadableCommandDisplay, deriveReadableToolTitle } from "../../lib/toolCallLabel";
 import type { WorkLogEntry } from "../../session-logic";
 import {
   classifyToolCallSummaryCategory,
@@ -29,6 +31,42 @@ const claudeRead = (id: string, filePath: string) =>
   });
 
 describe("classifyToolCallSummaryCategory", () => {
+  it("classifies localized shell commands and keeps structured source verbs usable in Spanish", () => {
+    i18n.addResources("es", "translation", { Reading_command: "Leyendo" });
+    try {
+      setLanguagePreference("es");
+      const localized = deriveReadableCommandDisplay("cat Settings", true);
+      expect(localized.verb).toBe("Leyendo");
+      expect(
+        classifyToolCallSummaryCategory(
+          workEntry({
+            id: "localized-read",
+            itemType: "command_execution",
+            command: localized.fullCommand,
+            toolTitle: localized.verb,
+          }),
+        ),
+      ).toBe("read");
+      const sourceTitle = deriveReadableToolTitle({
+        title: "Read",
+        fallbackLabel: "Tool",
+        itemType: "command_execution",
+      });
+      expect(sourceTitle).toBe("Read");
+      expect(
+        classifyToolCallSummaryCategory(
+          workEntry({
+            id: "structured-read",
+            itemType: "command_execution",
+            ...(sourceTitle ? { toolTitle: sourceTitle } : {}),
+          }),
+        ),
+      ).toBe("read");
+    } finally {
+      setLanguagePreference("en");
+    }
+  });
+
   it("classifies file changes as edits", () => {
     expect(classifyToolCallSummaryCategory(edit("e1", ["a.ts"]))).toBe("edit");
     expect(

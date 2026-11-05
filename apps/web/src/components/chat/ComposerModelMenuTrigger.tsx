@@ -22,6 +22,7 @@ import {
   COMPOSER_PICKER_TRIGGER_TEXT_CLASS_NAME,
 } from "./composerPickerStyles";
 import { getProviderIconClassName } from "./ProviderModelPicker";
+import { useTranslation } from "~/i18n";
 
 // Effort and context window ("High", "1M") share one muted tone after the model name.
 const TRIGGER_TRAIT_LABEL_CLASS_NAME = cn(
@@ -54,6 +55,8 @@ export function ComposerModelMenuTrigger(props: {
   openPlaceholderLabel?: string | null | undefined;
   shortcutLabel?: string | null | undefined;
 }) {
+  const { t } = useTranslation();
+
   const freezesLabel = props.isMenuOpen && Boolean(props.openPlaceholderLabel);
   // A compact (icon-only) trigger has no room for the placeholder; it only freezes.
   const showsPlaceholder = freezesLabel && !props.hideModelLabel;
@@ -92,7 +95,7 @@ export function ComposerModelMenuTrigger(props: {
         "min-w-0 shrink-0 justify-start gap-1.5 whitespace-nowrap px-2 sm:px-2.5 [&_svg]:mx-0",
         COMPOSER_PICKER_TRIGGER_TEXT_CLASS_NAME,
       )}
-      aria-label="Change model and reasoning"
+      aria-label={t("chat:modelEffort_changeModelAndReasoning")}
       {...(hiddenTriggerTitle.length > 0 ? { title: hiddenTriggerTitle } : {})}
     />
   );
@@ -190,7 +193,7 @@ export function ComposerModelMenuTrigger(props: {
       {!props.isMenuOpen ? (
         <TooltipPopup side="top" sideOffset={6} variant="picker">
           <span className="inline-flex items-center gap-2 px-1 py-0.5">
-            <span>Change model</span>
+            <span>{t("chat:providerModelPicker_changeModel")}</span>
             <ShortcutKbd shortcutLabel={props.shortcutLabel} className="h-4 min-w-4 text-ui-2xs" />
           </span>
         </TooltipPopup>

@@ -3,17 +3,17 @@
 //   and settings, including the explicit state of a selection whose account is gone.
 // Layer: Web presentation helper
 
+import { t } from "~/i18n";
 import type { ProviderInstanceId, ProviderKind } from "@synara/contracts";
-
-export const MISSING_PROVIDER_INSTANCE_LABEL = "Missing account";
 
 export function resolveProviderInstanceLabel(
   instances: ReadonlyArray<{ readonly instanceId: ProviderInstanceId; readonly label: string }>,
   selectedInstanceId: ProviderInstanceId,
+  translate: typeof t = t,
 ): string {
   return (
     instances.find((instance) => instance.instanceId === selectedInstanceId)?.label ??
-    MISSING_PROVIDER_INSTANCE_LABEL
+    translate("settings:missingAccount")
   );
 }
 
@@ -66,11 +66,11 @@ export function validateProviderAccountId(
   existingIds: ReadonlySet<string>,
 ): string | null {
   const trimmed = accountId.trim();
-  if (trimmed.length === 0) return "Account ID is required.";
-  if (trimmed.length > ACCOUNT_ID_MAX_CHARS) return "Account ID must be 64 characters or fewer.";
+  if (trimmed.length === 0) return t("settings:accountIdRequired");
+  if (trimmed.length > ACCOUNT_ID_MAX_CHARS) return t("settings:accountIdTooLong");
   if (!ACCOUNT_ID_PATTERN.test(trimmed)) {
-    return "Account ID must start with a letter and use only letters, digits, '-', or '_'.";
+    return t("settings:accountIdInvalid");
   }
-  if (existingIds.has(trimmed)) return `An account with the ID '${trimmed}' already exists.`;
+  if (existingIds.has(trimmed)) return t("settings:accountIdExists", { id: trimmed });
   return null;
 }

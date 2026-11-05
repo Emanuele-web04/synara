@@ -25,6 +25,7 @@ import {
   DialogTitle,
 } from "./ui/dialog";
 import { SearchInput } from "./ui/search-input";
+import { useTranslation } from "~/i18n";
 
 export function SpaceProjectPickerDialog(props: {
   open: boolean;
@@ -36,6 +37,8 @@ export function SpaceProjectPickerDialog(props: {
     projectIds: ReadonlyArray<ProjectId>,
   ) => Promise<ReadonlyArray<ProjectId> | void> | ReadonlyArray<ProjectId> | void;
 }) {
+  const { t } = useTranslation();
+
   const [query, setQuery] = useState("");
   const [selectedIds, setSelectedIds] = useState<ReadonlySet<ProjectId>>(() => new Set());
   const [submitting, setSubmitting] = useState(false);
@@ -89,22 +92,25 @@ export function SpaceProjectPickerDialog(props: {
           normalizedQuery.length === 0 ||
           project.name.toLocaleLowerCase().includes(normalizedQuery) ||
           project.cwd.toLocaleLowerCase().includes(normalizedQuery) ||
-          spaceDisplayName(project.spaceId, props.spaces, voidSpace)
+          spaceDisplayName(project.spaceId, props.spaces, voidSpace, t)
             .toLocaleLowerCase()
             .includes(normalizedQuery),
       )
       .toSorted((left, right) => left.name.localeCompare(right.name));
-  }, [movableProjects, props.spaces, query, voidSpace]);
+  }, [movableProjects, props.spaces, query, voidSpace, t]);
   const candidateGroups = useMemo(
     () =>
-      groupItemsBySpace({
-        items: candidates,
-        spaces: props.spaces,
-        activeSpaceId,
-        spaceIdOf: (project) => project.spaceId ?? null,
-        voidSpace,
-      }),
-    [activeSpaceId, candidates, props.spaces, voidSpace],
+      groupItemsBySpace(
+        {
+          items: candidates,
+          spaces: props.spaces,
+          activeSpaceId,
+          spaceIdOf: (project) => project.spaceId ?? null,
+          voidSpace,
+        },
+        t,
+      ),
+    [activeSpaceId, candidates, props.spaces, voidSpace, t],
   );
 
   const submit = async () => {
@@ -123,7 +129,9 @@ export function SpaceProjectPickerDialog(props: {
       }
       props.onOpenChange(false);
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Unable to move the selected projects.");
+      setError(
+        cause instanceof Error ? cause.message : t("workspace:unableToMoveTheSelectedProjects"),
+      );
       setSubmitting(false);
     }
   };
@@ -131,26 +139,30 @@ export function SpaceProjectPickerDialog(props: {
   // Three different nothings: no projects at all, none left to move, none matching the search.
   const emptyMessage =
     props.projects.length === 0
-      ? "No projects yet."
+      ? t("workspace:noProjectsYet")
       : movableProjects.length === 0
-        ? `Every project is already in ${props.targetSpace?.name ?? "this space"}.`
-        : "No matching projects.";
+        ? t("workspace:everyProjectIsAlreadyIn", {
+            value0: props.targetSpace?.name ?? t("workspace:thisSpace"),
+          })
+        : t("workspace:noMatchingProjects2");
 
   return (
     <Dialog open={props.open} onOpenChange={props.onOpenChange}>
       <DialogPopup className="max-w-md">
         <DialogHeader>
-          <DialogTitle>Move projects to {props.targetSpace?.name ?? "space"}</DialogTitle>
+          <DialogTitle>
+            {t("workspace:moveProjectsTo")} {props.targetSpace?.name ?? t("common:space2")}
+          </DialogTitle>
           <DialogDescription>
-            Choose existing projects. Their chats and pinned state move with them.
+            {t("workspace:chooseExistingProjectsTheirChatsAndPinnedStateMove")}
           </DialogDescription>
         </DialogHeader>
         <DialogPanel className="space-y-3">
           <SearchInput
             value={query}
             onChange={(event) => setQuery(event.target.value)}
-            placeholder="Search projects"
-            aria-label="Search projects"
+            placeholder={t("workspace:projectPicker_searchProjects")}
+            aria-label={t("workspace:projectPicker_searchProjects")}
           />
           <div className="max-h-72 space-y-3 overflow-y-auto">
             {candidates.length === 0 ? (
@@ -225,14 +237,14 @@ export function SpaceProjectPickerDialog(props: {
         </DialogPanel>
         <DialogFooter>
           <Button variant="ghost" onClick={() => props.onOpenChange(false)} disabled={submitting}>
-            Cancel
+            {t("common:form_cancel")}
           </Button>
           <Button onClick={() => void submit()} disabled={selectedIds.size === 0 || submitting}>
             {submitting
-              ? "Moving…"
+              ? t("workspace:moving")
               : selectedIds.size === 0
-                ? "Move projects"
-                : `Move ${selectedIds.size} project${selectedIds.size === 1 ? "" : "s"}`}
+                ? t("workspace:moveProjects")
+                : t("workspace:moveSelectedProjects", { count: selectedIds.size })}
           </Button>
         </DialogFooter>
       </DialogPopup>

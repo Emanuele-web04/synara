@@ -11,6 +11,7 @@ import type { ThreadId } from "@synara/contracts";
 import { cn } from "~/lib/utils";
 import { SIDEBAR_TRAILING_ICON_CLASS } from "./sidebarGlyphs";
 import { SidebarIconButton } from "./SidebarIconButton";
+import { useTranslation } from "~/i18n";
 
 export const THREAD_ARCHIVE_ICON = HiOutlineArchiveBox;
 
@@ -25,11 +26,13 @@ export function ThreadArchiveActionButton({
   disabled?: boolean;
   onArchive: () => void;
 }) {
+  const { t } = useTranslation();
+
   return (
     <SidebarIconButton
       icon={THREAD_ARCHIVE_ICON}
-      label="Archive thread"
-      title="Archive thread"
+      label={t("common:archive_archiveThread")}
+      title={t("common:archive_archiveThread")}
       disabled={disabled}
       data-testid={`thread-archive-${threadId}`}
       size="md"

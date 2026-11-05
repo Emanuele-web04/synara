@@ -26,6 +26,7 @@ import {
 } from "./composerStackedPanelStyles";
 import { COMPOSER_INLINE_ACTION_PILL_CLASS_NAME } from "./composerPickerStyles";
 import { QueuedComposerActions } from "./QueuedComposerActions";
+import { useTranslation } from "~/i18n";
 
 const PAUSE_DETAIL_BY_REASON: Record<QueuedComposerPauseReason, string> = {
   stopped: "Paused after you stopped the turn",
@@ -46,6 +47,8 @@ function QueuedComposerPausedNotice({
   onResume: () => void;
   onEdit: () => void;
 }) {
+  const { t } = useTranslation();
+
   return (
     <ComposerStackedPanelRow
       role="status"
@@ -63,7 +66,7 @@ function QueuedComposerPausedNotice({
           }
         />
         <span className="min-w-0 truncate text-ui-sm text-muted-foreground">
-          <span className="font-medium text-foreground">Queue paused</span>
+          <span className="font-medium text-foreground">{t("chat:queuePaused")}</span>
           <span aria-hidden> · </span>
           {PAUSE_DETAIL_BY_REASON[pause.reason]}
         </span>
@@ -75,10 +78,10 @@ function QueuedComposerPausedNotice({
           onClick={onResume}
           disabled={resumeDisabled}
         >
-          Resume
+          {t("chat:detail_resume")}
         </button>
         <button type="button" className={PAUSE_ACTION_CLASS_NAME} onClick={onEdit}>
-          Edit
+          {t("git:profile_edit")}
         </button>
       </div>
     </ComposerStackedPanelRow>

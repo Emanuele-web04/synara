@@ -10,9 +10,11 @@ import type { MouseEvent } from "react";
 import { cn } from "~/lib/utils";
 import {
   PR_STATE_PRESENTATION_ICONS,
+  PR_STATE_LABEL_KEYS,
   resolvePrStatePresentation,
 } from "./pullRequestStatePresentation";
 import { PR_FINE_TEXT_CLASS_NAME } from "./pullRequestText";
+import { useTranslation } from "~/i18n";
 
 export function PrStateChip({
   pr,
@@ -25,11 +27,17 @@ export function PrStateChip({
    *  render it inside their row button, where nested interactive elements are invalid. */
   onOpen?: (event: MouseEvent<HTMLElement>) => void;
 }) {
+  const { t } = useTranslation();
+
   const presentation = resolvePrStatePresentation(pr);
   const PrIcon = PR_STATE_PRESENTATION_ICONS[presentation.iconKind];
   return (
     <span
-      title={`#${pr.number} ${presentation.label}: ${pr.title}`}
+      title={t("workspace:symbol4", {
+        value0: pr.number,
+        value1: t(PR_STATE_LABEL_KEYS[presentation.label]),
+        value2: pr.title,
+      })}
       onClick={onOpen}
       // Middle-click follows browser link semantics: open on GitHub.
       onAuxClick={onOpen}

@@ -29,6 +29,7 @@ import { matchesFixedShortcut } from "~/fixedShortcuts";
 import { hasOpenDismissibleOverlay } from "~/lib/editableEventTarget";
 import { TerminalSearch } from "../TerminalSearch";
 import { TerminalScrollToBottom } from "../TerminalScrollToBottom";
+import { useTranslation } from "~/i18n";
 
 function serializeRuntimeEnv(runtimeEnv: Record<string, string> | undefined): string {
   if (!runtimeEnv) return "";
@@ -72,6 +73,8 @@ function getTerminalSelectionRect(mountElement: HTMLElement): DOMRect | null {
 }
 
 function TerminalRuntimeStatusOverlay({ status }: { status: TerminalRuntimeStatus }) {
+  const { t } = useTranslation();
+
   if (status !== "error") return null;
 
   return (
@@ -84,7 +87,7 @@ function TerminalRuntimeStatusOverlay({ status }: { status: TerminalRuntimeStatu
       )}
     >
       <TriangleAlertIcon className="size-3" />
-      <span className="truncate">Error</span>
+      <span className="truncate">{t("chat:providerUsage_error")}</span>
     </div>
   );
 }

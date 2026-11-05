@@ -1,4 +1,3 @@
-import { ProfileUsageCoverage } from "./ProfileUsageCoverage";
 // FILE: ShareCard.tsx
 // Purpose: Fixed-size, theme-independent "virality" card rendered to PNG via html-to-image.
 // Uses explicit colors (not theme tokens) so the exported image looks identical in light
@@ -9,10 +8,17 @@ import { ProfileUsageCoverage } from "./ProfileUsageCoverage";
 import { forwardRef, type ReactNode } from "react";
 import { ProviderIcon } from "~/components/ProviderIcon";
 import { SynaraLogo } from "@synara/profile-ui/logo";
-import { ActivityHeatmap, CARD_HEATMAP_INTENSITY_CLASSES } from "@synara/profile-ui/heatmap";
+import { ActivityHeatmap, CARD_HEATMAP_INTENSITY_CLASSES } from "./ActivityHeatmap";
 import { ProfileAvatar } from "@synara/profile-ui/avatar";
-import { formatCompact, formatDays, formatProfileUsageBasis } from "@synara/profile-ui/formatting";
+import {
+  formatCompact,
+  formatDays,
+  formatNumber,
+  formatProfileUsageBasis,
+} from "./profileFormatting";
+import { useTranslation } from "~/i18n";
 import type { ShareCardStats } from "./profileSelectors";
+import { ProfileUsageCoverage } from "./ProfileUsageCoverage";
 
 export const SHARE_CARD_WIDTH = 860;
 export const SHARE_CARD_HEIGHT = 440;
@@ -45,26 +51,28 @@ export const ShareCard = forwardRef<HTMLDivElement, ShareCardProps>(function Sha
   { cardStats, initials, displayName, handle, avatarColor, avatarImage },
   ref,
 ) {
+  const { t, formatLocale } = useTranslation();
+
   const tiles: Tile[] = [
     {
       key: "lifetime",
       value: <span className={VALUE_CLASS}>{formatCompact(cardStats.lifetimeTokens)}</span>,
-      label: "lifetime tokens",
+      label: t("common:lifetimeTokens"),
     },
     {
       key: "peak",
       value: <span className={VALUE_CLASS}>{formatCompact(cardStats.peakDayTokens)}</span>,
-      label: "peak day",
+      label: t("common:peakDay"),
     },
     {
       key: "current",
       value: <span className={VALUE_CLASS}>{formatDays(cardStats.currentStreakDays)}</span>,
-      label: "current streak",
+      label: t("common:currentStreak"),
     },
     {
       key: "longest",
       value: <span className={VALUE_CLASS}>{formatDays(cardStats.longestStreakDays)}</span>,
-      label: "longest streak",
+      label: t("common:longestStreak"),
     },
     {
       key: "provider",
@@ -77,13 +85,19 @@ export const ShareCard = forwardRef<HTMLDivElement, ShareCardProps>(function Sha
             className="size-6 shrink-0 text-slate-700"
           />
           {cardStats.topProvider.percent !== null ? (
-            <span className={VALUE_CLASS}>{`${Math.round(cardStats.topProvider.percent)}%`}</span>
+            <span className={VALUE_CLASS}>
+              {t("common:symbol", {
+                value0: formatNumber(Math.round(cardStats.topProvider.percent), formatLocale),
+              })}
+            </span>
           ) : null}
         </span>
       ) : (
         <span className={VALUE_CLASS}>—</span>
       ),
-      label: `top provider · ${formatProfileUsageBasis(cardStats.topProvider.metric ?? "tokens")}`,
+      label: t("common:topProvider", {
+        value0: formatProfileUsageBasis(cardStats.topProvider.metric ?? "tokens", formatLocale),
+      }),
     },
   ];
 

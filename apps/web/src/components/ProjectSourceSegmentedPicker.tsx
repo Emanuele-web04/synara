@@ -1,6 +1,7 @@
 import { GitHubIcon, FolderIcon } from "~/lib/icons";
 
 import { SegmentedPicker } from "./SegmentedPicker";
+import { useTranslation } from "~/i18n";
 
 export type ProjectSource = "local" | "github";
 
@@ -16,9 +17,11 @@ export function ProjectSourceSegmentedPicker(props: {
   readonly onValueChange: (value: ProjectSource) => void;
   readonly className?: string;
 }) {
+  const { t } = useTranslation();
+
   return (
     <SegmentedPicker
-      ariaLabel="Project source"
+      ariaLabel={t("workspace:projectSource")}
       value={props.value}
       disabled={props.disabled}
       onValueChange={props.onValueChange}
@@ -26,7 +29,7 @@ export function ProjectSourceSegmentedPicker(props: {
       options={[
         {
           value: "local",
-          label: "Folder",
+          label: t("workspace:folder"),
           icon: <FolderIcon className="size-3.5" aria-hidden="true" />,
         },
         {
@@ -39,7 +42,7 @@ export function ProjectSourceSegmentedPicker(props: {
             : {
                 title:
                   props.githubUnavailableReason ??
-                  "Update the Synara server to add GitHub projects.",
+                  t("workspace:updateTheSynaraServerToAddGitHubProjects"),
               }),
         },
       ]}

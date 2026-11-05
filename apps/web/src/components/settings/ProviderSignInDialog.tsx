@@ -21,6 +21,7 @@ import {
   DialogDescription,
   DialogFooter,
 } from "../ui/dialog";
+import { useTranslation } from "~/i18n";
 
 const ignoreMetadata = () => {};
 
@@ -30,6 +31,8 @@ export default function ProviderSignInDialog(props: {
   accountLabel: string;
   onClose: () => void;
 }) {
+  const { t } = useTranslation();
+
   const [session] = useState(() => ({
     threadId: ThreadId.makeUnsafe(`provider-auth-${crypto.randomUUID()}`),
     terminalId: "sign-in",
@@ -144,9 +147,11 @@ export default function ProviderSignInDialog(props: {
     >
       <DialogPopup className="max-w-3xl" showCloseButton={false}>
         <DialogHeader>
-          <DialogTitle>Sign in to {props.accountLabel}</DialogTitle>
+          <DialogTitle>
+            {t("settings:signInTo")} {props.accountLabel}
+          </DialogTitle>
           <DialogDescription>
-            {method.instructions} This runs on the Synara server machine for the selected account.
+            {method.instructions} {t("settings:thisRunsOnTheSynaraServerMachineForThe")}
           </DialogDescription>
         </DialogHeader>
         <div className="h-[min(55vh,28rem)] min-h-48 overflow-hidden rounded-xl border border-border mx-5">
@@ -166,15 +171,17 @@ export default function ProviderSignInDialog(props: {
             />
           ) : (
             <p className="p-3 text-ui-sm">
-              {config.isError ? "Unable to connect to the Synara server." : "Connecting…"}
+              {config.isError
+                ? t("settings:unableToConnectToTheSynaraServer")
+                : t("computer:connecting")}
             </p>
           )}
         </div>
         <p className="mx-5 mt-3 text-ui-sm text-muted-foreground" role="status">
           {result ??
             (runtimeStatus === "error"
-              ? "Sign-in could not start. Check the terminal error, close this window and retry."
-              : "Follow the provider's prompts. Opening the browser does not confirm authentication.")}
+              ? t("settings:signInCouldNotStartCheckTheTerminalError")
+              : t("settings:followTheProviderSPromptsOpeningTheBrowserDoes"))}
         </p>
         <DialogFooter>
           {interactiveCommand ? (
@@ -183,7 +190,7 @@ export default function ProviderSignInDialog(props: {
               disabled={runtimeStatus !== "ready" || optionsSent || closing}
               onClick={() => void showSignInOptions()}
             >
-              Sign-in options
+              {t("settings:signInOptions")}
             </Button>
           ) : null}
           <Button
@@ -191,10 +198,14 @@ export default function ProviderSignInDialog(props: {
             disabled={closing || checking || runtimeStatus === "connecting"}
             onClick={() => void checkStatus()}
           >
-            {checking ? "Checking…" : "Check authentication"}
+            {checking ? t("settings:checking") : t("settings:checkAuthentication")}
           </Button>
           <Button disabled={closing} onClick={() => void close()}>
-            {closing ? "Closing…" : runtimeStatus === "exited" ? "Close" : "Cancel / close"}
+            {closing
+              ? t("settings:closing")
+              : runtimeStatus === "exited"
+                ? t("common:app_close")
+                : t("settings:cancelClose")}
           </Button>
         </DialogFooter>
       </DialogPopup>

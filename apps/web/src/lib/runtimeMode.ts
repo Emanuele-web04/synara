@@ -1,3 +1,4 @@
+import { t } from "~/i18n";
 import type {
   ProviderKind,
   ProviderModelDescriptor,
@@ -25,50 +26,52 @@ export function providerModelSupportsAutoRuntimeMode(
   );
 }
 
-export const RUNTIME_MODE_PRESENTATION: Record<
-  RuntimeMode,
-  { readonly label: string; readonly description: string }
-> = {
+const RUNTIME_MODE_PRESENTATION_KEYS = {
   "approval-required": {
-    label: "Ask for approval",
-    description: "Always ask to edit external files and use the internet",
+    label: "settings:runtimeAskLabel",
+    description: "settings:runtimeAsk",
   },
   auto: {
-    label: "Approve for me",
-    description: "Only ask for actions detected as potentially unsafe",
+    label: "settings:runtimeAutoLabel",
+    description: "settings:runtimeAuto",
   },
   "full-access": {
-    label: "Full access",
-    description: "Unrestricted access to the internet and any file on your computer",
+    label: "settings:runtimeFullLabel",
+    description: "settings:runtimeFull",
   },
-};
+} as const;
 
 /**
  * Where a mode maps onto a provider's own mechanism, say what that provider does. Claude and
  * Codex implement the three modes differently (Claude Code's permission modes vs Codex's
- * sandbox + approval policy); every other provider keeps the generic wording above.
+ * sandbox + approval policy); every other provider keeps the generic wording.
  */
-const PROVIDER_RUNTIME_MODE_DESCRIPTIONS: Partial<
+const PROVIDER_RUNTIME_MODE_DESCRIPTION_KEYS: Partial<
   Record<ProviderKind, Record<RuntimeMode, string>>
 > = {
   claudeAgent: {
-    "approval-required": "Claude asks before editing files, running commands, or using the web",
-    auto: "Claude Code's auto mode: a classifier approves or blocks each action and asks you when unsure",
-    "full-access": "Claude runs every action without asking, with full access to your computer",
+    "approval-required": "settings:runtimeClaudeAsk",
+    auto: "settings:runtimeClaudeAuto",
+    "full-access": "settings:runtimeClaudeFull",
   },
   codex: {
-    "approval-required": "Read-only sandbox: Codex asks before editing files or running commands",
-    auto: "Codex edits inside the project; its reviewer decides on anything that needs more access",
-    "full-access":
-      "No sandbox: Codex runs everything without asking, with full access to your computer",
+    "approval-required": "settings:runtimeCodexAsk",
+    auto: "settings:runtimeCodexAuto",
+    "full-access": "settings:runtimeCodexFull",
   },
 };
 
 export function runtimeModePresentation(
   mode: RuntimeMode,
   provider: ProviderKind | undefined,
+  translate: typeof t = t,
 ): { readonly label: string; readonly description: string } {
-  const description = provider ? PROVIDER_RUNTIME_MODE_DESCRIPTIONS[provider]?.[mode] : undefined;
-  const presentation = RUNTIME_MODE_PRESENTATION[mode];
-  return description ? { ...presentation, description } : presentation;
+  const presentation = RUNTIME_MODE_PRESENTATION_KEYS[mode];
+  const descriptionKey = provider
+    ? PROVIDER_RUNTIME_MODE_DESCRIPTION_KEYS[provider]?.[mode]
+    : undefined;
+  return {
+    label: translate(presentation.label),
+    description: translate(descriptionKey ?? presentation.description),
+  };
 }

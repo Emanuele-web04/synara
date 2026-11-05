@@ -26,6 +26,138 @@ export interface ChangelogEntry {
 
 export const CHANGELOG_ENTRIES: readonly ChangelogEntry[] = [
   {
+    version: "1.1.1-beta.1",
+    date: "Nov 2",
+    features: [
+      {
+        id: "beta-languages",
+        title: "Spanish and Simplified Chinese in Beta",
+        description:
+          "Choose English, Spanish, Simplified Chinese or System for the interface and native menus.",
+        details:
+          "User messages, code and provider output remain unchanged. Stable supports English and Spanish; an already loaded editor may need the offered guarded reload.",
+      },
+      {
+        id: "recovery",
+        title: "Keep work moving after interruptions",
+        description:
+          "Ordinary running chats can continue after an unexpected server shutdown. Queued messages and subagent work recover more reliably.",
+        details:
+          "Recovery checks saved work before repeating operations. Approvals, unanswered questions, native subagents and managed tasks keep their own recovery rules. Claude Stop reports success only after verified runtime retirement.",
+      },
+      {
+        id: "usage-limits",
+        title: "Resume after usage limits",
+        description:
+          "An optional provider setting lets supported Codex and Claude tasks continue after a verified usage-limit reset.",
+        details:
+          "Off by default. The execution computer must be running, and the same account and model must remain available. Stop, manual sends and account changes cancel the wait; unknown or ambiguous limits stay manual.",
+      },
+      {
+        id: "chat-workspace",
+        title: "Clearer chats and remembered panels",
+        description:
+          "Agent narration reads as prose, tool rows stay compact, and subagent rows show their model and effort. Each chat remembers its right-panel width.",
+        details:
+          "The new-chat action remains available without open tabs. Completed background work groups correctly, resumed timers stay accurate, and editor folders can be dragged into the composer.",
+      },
+      {
+        id: "attachments",
+        title: "Safer attachment recovery",
+        description:
+          "Failed photo preparation preserves your draft, private inline images recover safely, and desktop attachment uploads reach the correct server route.",
+        details:
+          "Unsupported native-review attachments are rejected without discarding work already accepted by the provider.",
+      },
+      {
+        id: "providers-performance",
+        title: "Provider fixes and lighter runtime state",
+        description:
+          "Pi supports current OpenAI sign-in while preserving existing SDK integrations. Cursor usage reads support safe-storage tokens. Runtime work retains less state and copies fewer computer frames.",
+        details:
+          "These are targeted reductions, not a whole-app memory or battery benchmark. Provider authentication and account isolation remain in force.",
+      },
+      {
+        id: "offline-compaction",
+        title: "Reclaim legacy database space offline",
+        description:
+          "The installed synara-compact-database command can compact a closed legacy database after verifying a private copy.",
+        details:
+          "Close every client first and supply the correct absolute database path. Scratch space is required; the command preserves retained rows and migration backups and never selects another app channel automatically.",
+      },
+      {
+        id: "beta-catchup",
+        title: "Catch up on workspace and recovery improvements",
+        description:
+          "Since the previous Beta: local project logos, visible first-goal startup, isolated OpenCode sign-in and compressed migration backups.",
+        details:
+          "Mac packages and update feeds enforce macOS 13. Native editing and MCP Connectors were already available in Beta. Beta retains its own identity, data home, diagnostics policy and update feed.",
+      },
+    ],
+  },
+  {
+    version: "1.1.0",
+    date: "Nov 2",
+    features: [
+      {
+        id: "recovery",
+        title: "Keep work moving after interruptions",
+        description:
+          "Ordinary running chats can continue after an unexpected server shutdown. Queued messages and subagent work recover more reliably.",
+        details:
+          "Recovery checks saved work before repeating operations. Approvals, unanswered questions, native subagents and managed tasks keep their own recovery rules. Claude Stop reports success only after verified runtime retirement.",
+      },
+      {
+        id: "usage-limits",
+        title: "Resume after usage limits",
+        description:
+          "An optional provider setting lets supported Codex and Claude tasks continue after a verified usage-limit reset.",
+        details:
+          "Off by default. The execution computer must be running, and the same account and model must remain available. Stop, manual sends and account changes cancel the wait; unknown or ambiguous limits stay manual.",
+      },
+      {
+        id: "languages",
+        title: "Use Synara in Spanish",
+        description:
+          "Choose English, Spanish or System in Settings → General → Language. The interface and native menus follow your preference.",
+        details:
+          "Your messages, provider output and code remain unchanged. An already loaded editor may need the offered reload to update its engine labels. Simplified Chinese is available in Synara Beta.",
+      },
+      {
+        id: "chat-workspace",
+        title: "Clearer chats and remembered panels",
+        description:
+          "Agent narration reads as prose, tool rows stay compact, and subagent rows show their model and effort. Each chat remembers its right-panel width.",
+        details:
+          "The new-chat action remains available without open tabs. Completed background work groups correctly, resumed timers stay accurate, and editor folders can be dragged into the composer.",
+      },
+      {
+        id: "attachments",
+        title: "Safer attachment recovery",
+        description:
+          "Failed photo preparation preserves your draft, private inline images recover safely, and desktop attachment uploads reach the correct server route.",
+        details:
+          "Unsupported native-review attachments are rejected without discarding work already accepted by the provider.",
+      },
+      {
+        id: "providers-performance",
+        title: "Provider fixes and lighter runtime state",
+        description:
+          "Pi supports current OpenAI sign-in while preserving existing SDK integrations. Cursor usage reads support safe-storage tokens. Runtime work retains less state and copies fewer computer frames.",
+        details:
+          "These are targeted reductions, not a whole-app memory or battery benchmark. Provider authentication and account isolation remain in force.",
+      },
+      {
+        id: "offline-compaction",
+        title: "Reclaim legacy database space offline",
+        description:
+          "The installed synara-compact-database command can compact a closed legacy database after verifying a private copy.",
+        details:
+          "Close every client first and supply the correct absolute database path. Scratch space is required; the command preserves retained rows and migration backups and never selects another app channel automatically.",
+      },
+    ],
+  },
+  {
     version: "1.0.9",
     date: "Oct 25",
     features: [

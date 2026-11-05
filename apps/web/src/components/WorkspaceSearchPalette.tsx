@@ -42,6 +42,7 @@ import {
   isWorkspaceSearchFilesystemPathQuery,
   resolveWorkspaceSearchFilesystemTarget,
 } from "./WorkspaceSearchPalette.logic";
+import { useTranslation } from "~/i18n";
 
 export type WorkspaceSearchPaletteMode = "files" | "snippets";
 
@@ -86,26 +87,26 @@ const EMPTY_SNIPPET_MATCHES: readonly ProjectContentMatch[] = [];
 const MODE_COPY: Record<
   WorkspaceSearchPaletteMode,
   {
-    groupLabel: string;
-    placeholder: string;
-    prompt: string;
-    noResults: string;
-    error: string;
+    groupLabelKey: string;
+    placeholderKey: string;
+    promptKey: string;
+    noResultsKey: string;
+    errorKey: string;
   }
 > = {
   files: {
-    groupLabel: "Files",
-    placeholder: "Search files",
-    prompt: "Type to search for files",
-    noResults: "No matching files",
-    error: "File search failed. Try again.",
+    groupLabelKey: "workspace:toolCallDetails_filesSection",
+    placeholderKey: "workspace:editor_searchFiles",
+    promptKey: "workspace:typeToSearchForFiles",
+    noResultsKey: "workspace:matchingFilesEmpty",
+    errorKey: "workspace:fileSearchFailed",
   },
   snippets: {
-    groupLabel: "Matches",
-    placeholder: "Search code",
-    prompt: `Type at least ${PROJECT_SEARCH_CONTENT_MIN_QUERY_LENGTH} characters to search code`,
-    noResults: "No matches",
-    error: "Code search failed. Try again.",
+    groupLabelKey: "workspace:searchMatches",
+    placeholderKey: "workspace:searchCode",
+    promptKey: "workspace:typeAtLeastCharactersToSearchCode",
+    noResultsKey: "workspace:providerModelPicker_noMatches",
+    errorKey: "workspace:codeSearchFailed",
   },
 };
 
@@ -286,7 +287,21 @@ export function WorkspaceSearchPalette(props: WorkspaceSearchPaletteProps) {
 }
 
 function WorkspaceSearchPaletteContent(props: WorkspaceSearchPaletteProps) {
-  const copy = MODE_COPY[props.mode];
+  const { t } = useTranslation();
+
+  const sourceCopy = MODE_COPY[props.mode];
+  const copy = {
+    groupLabel: t(sourceCopy.groupLabelKey),
+    placeholder: t(sourceCopy.placeholderKey),
+    prompt:
+      props.mode === "snippets"
+        ? t("workspace:typeAtLeastCharactersToSearchCode", {
+            value0: PROJECT_SEARCH_CONTENT_MIN_QUERY_LENGTH,
+          })
+        : t(sourceCopy.promptKey),
+    noResults: t(sourceCopy.noResultsKey),
+    error: t(sourceCopy.errorKey),
+  };
 
   const [query, setQuery] = useState("");
   const trimmedQuery = query.trim();
@@ -443,7 +458,9 @@ function WorkspaceSearchPaletteContent(props: WorkspaceSearchPaletteProps) {
       <CommandList className={LIST_CLASS}>
         {props.mode === "files" && openPathTarget ? (
           <CommandGroup>
-            <CommandGroupLabel className={GROUP_LABEL_CLASS}>Open path</CommandGroupLabel>
+            <CommandGroupLabel className={GROUP_LABEL_CLASS}>
+              {t("workspace:openPath")}
+            </CommandGroupLabel>
             <FileResultRow
               entry={openPathTarget}
               index={0}

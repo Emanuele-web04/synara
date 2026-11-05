@@ -3,6 +3,7 @@
 // Layer: Web orchestration helper
 // Exports: releaseOrphanedWorktreeAfterArchive
 
+import { t } from "~/i18n";
 import type { GitRemoveWorktreeInput, ThreadId } from "@synara/contracts";
 
 import { toastManager } from "../components/ui/toast";
@@ -53,15 +54,15 @@ export async function releaseOrphanedWorktreeAfterArchive(input: {
     });
     toastManager.add({
       type: "info",
-      title: "Worktree kept",
-      description: `${displayName} could not be removed safely. Check its task, Git status, or connection.`,
+      title: t("workspace:archiveWorktreeKept"),
+      description: t("workspace:archiveWorktreeKeptDescription", { name: displayName }),
     });
     return "kept";
   }
   toastManager.add({
     type: "success",
-    title: "Worktree removed",
-    description: `${displayName} was deleted. Its branch remains available for recovery.`,
+    title: t("workspace:archiveWorktreeRemoved"),
+    description: t("workspace:archiveWorktreeRemovedDescription", { name: displayName }),
   });
   return "removed";
 }

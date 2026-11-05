@@ -53,6 +53,7 @@ import {
 import { useWorkspacePathsStore } from "../../workspacePathsStore";
 import { useSpacesUiStore } from "../../spacesUiStore";
 import { useCreateProjectDialogStore } from "../../createProjectDialogStore";
+import { useTranslation } from "~/i18n";
 
 interface ProjectPickerProps {
   align?: "start" | "center" | "end";
@@ -167,15 +168,17 @@ export const ProjectPicker = memo(function ProjectPicker({
   resetActionLabel: resetActionLabelProp,
   searchPlaceholder: searchPlaceholderProp,
 }: ProjectPickerProps) {
+  const { t } = useTranslation();
+
   const align = alignProp ?? "start";
   const side = sideProp ?? "bottom";
   const selectionMode = selectionModeProp ?? "workspace-root";
   const showResetToHome = showResetToHomeProp ?? false;
   const selectedProjectId = selectedProjectIdProp ?? null;
   const selectedWorkspaceRoot = selectedWorkspaceRootProp ?? null;
-  const emptyTriggerLabel = emptyTriggerLabelProp ?? "Work in a project";
-  const resetActionLabel = resetActionLabelProp ?? "Don't work in a project";
-  const searchPlaceholder = searchPlaceholderProp ?? "Search projects";
+  const emptyTriggerLabel = emptyTriggerLabelProp ?? t("workspace:projectPicker_workInProject");
+  const resetActionLabel = resetActionLabelProp ?? t("workspace:projectPicker_dontWorkInProject");
+  const searchPlaceholder = searchPlaceholderProp ?? t("workspace:projectPicker_searchProjects");
   const projects = useStore((state) => state.projects);
   const spaces = useStore((state) => state.spaces);
   const activeSpaceId = useSpacesUiStore((state) => state.activeSpaceId);
@@ -196,7 +199,8 @@ export const ProjectPicker = memo(function ProjectPicker({
   const activeFolderOptions = useMemo(() => {
     const seen = new Set<string>();
     const nextOptions: ActiveFolderOption[] = [];
-    const getSpaceName = (spaceId: SpaceId | null) => spaceDisplayName(spaceId, spaces, voidSpace);
+    const getSpaceName = (spaceId: SpaceId | null) =>
+      spaceDisplayName(spaceId, spaces, voidSpace, t);
 
     for (const project of projects.filter((project) => project.kind === "project")) {
       const folderName = basenameOfPath(project.cwd) ?? project.folderName ?? project.name;
@@ -238,7 +242,15 @@ export const ProjectPicker = memo(function ProjectPicker({
     }
 
     return nextOptions;
-  }, [activeSpaceId, isProjectSelectionMode, projects, selectedWorkspaceRoot, spaces, voidSpace]);
+  }, [
+    activeSpaceId,
+    isProjectSelectionMode,
+    projects,
+    selectedWorkspaceRoot,
+    spaces,
+    voidSpace,
+    t,
+  ]);
   const activeFolderPathSet = useMemo(
     () => new Set(activeFolderOptions.map((entry) => entry.cwd)),
     [activeFolderOptions],
@@ -254,8 +266,8 @@ export const ProjectPicker = memo(function ProjectPicker({
       .filter((entry) => !activeFolderPathSet.has(entry.absolutePath));
   }, [activeFolderPathSet, directoryEntries, homeDir, isProjectSelectionMode]);
   const localFoldersGroupLabel = useMemo(
-    () => getLocalFoldersGroupLabel(homeDir, getNavigatorPlatform()),
-    [homeDir],
+    () => getLocalFoldersGroupLabel(homeDir, getNavigatorPlatform(), t),
+    [homeDir, t],
   );
 
   const normalizedQuery = deferredQuery.trim().toLowerCase();
@@ -271,14 +283,17 @@ export const ProjectPicker = memo(function ProjectPicker({
   }, [activeFolderOptions, normalizedQuery]);
   const filteredActiveFolderGroups = useMemo(
     () =>
-      groupItemsBySpace({
-        items: matchingActiveFolderOptions,
-        spaces,
-        activeSpaceId,
-        spaceIdOf: (option) => option.spaceId,
-        voidSpace,
-      }),
-    [activeSpaceId, matchingActiveFolderOptions, spaces, voidSpace],
+      groupItemsBySpace(
+        {
+          items: matchingActiveFolderOptions,
+          spaces,
+          activeSpaceId,
+          spaceIdOf: (option) => option.spaceId,
+          voidSpace,
+        },
+        t,
+      ),
+    [activeSpaceId, matchingActiveFolderOptions, spaces, voidSpace, t],
   );
   const filteredActiveFolderOptions = useMemo(
     () => filteredActiveFolderGroups.flatMap((group) => group.items),
@@ -369,7 +384,7 @@ export const ProjectPicker = memo(function ProjectPicker({
       if (cancelled) return;
       const api = readNativeApi();
       if (!api) {
-        setErrorMessage("App is still connecting. Try again in a moment.");
+        setErrorMessage(t("chat:projectPicker_connecting"));
         return;
       }
 
@@ -394,7 +409,9 @@ export const ProjectPicker = memo(function ProjectPicker({
           );
         })
         .catch((error) => {
-          setErrorMessage(error instanceof Error ? error.message : "Unable to load folders.");
+          setErrorMessage(
+            error instanceof Error ? error.message : t("chat:projectPicker_unableToLoadFolders"),
+          );
         })
         .finally(() => {
           setIsLoadingDirectories(false);
@@ -419,13 +436,21 @@ export const ProjectPicker = memo(function ProjectPicker({
             setOpen(false);
           })
           .catch((error) => {
-            setErrorMessage(error instanceof Error ? error.message : "Unable to select project.");
+            setErrorMessage(
+              error instanceof Error
+                ? error.message
+                : t("workspace:projectPicker_unableToSelectProject"),
+            );
           });
       } catch (error) {
-        setErrorMessage(error instanceof Error ? error.message : "Unable to select project.");
+        setErrorMessage(
+          error instanceof Error
+            ? error.message
+            : t("workspace:projectPicker_unableToSelectProject"),
+        );
       }
     },
-    [isProjectSelectionMode, onSelectProject, onSelectWorkspaceRoot],
+    [isProjectSelectionMode, onSelectProject, onSelectWorkspaceRoot, t],
   );
 
   const handleAddNewProject = useCallback(async () => {
@@ -438,7 +463,7 @@ export const ProjectPicker = memo(function ProjectPicker({
         openCreateProjectDialog(true);
         return;
       }
-      setErrorMessage("Choosing a folder needs the desktop app.");
+      setErrorMessage(t("workspace:choosingAFolderNeedsTheDesktopApp"));
     };
     if (
       onCreateProjectFromPath &&
@@ -450,7 +475,7 @@ export const ProjectPicker = memo(function ProjectPicker({
     }
     const api = readNativeApi();
     if (!api) {
-      setErrorMessage("App is still connecting. Try again in a moment.");
+      setErrorMessage(t("chat:projectPicker_connecting"));
       return;
     }
 
@@ -476,9 +501,13 @@ export const ProjectPicker = memo(function ProjectPicker({
       setOpen(false);
     } catch (error) {
       setIsPicking(false);
-      setErrorMessage(error instanceof Error ? error.message : "Unable to open the folder picker.");
+      setErrorMessage(
+        error instanceof Error
+          ? error.message
+          : t("workspace:projectPicker_unableToOpenFolderPicker"),
+      );
     }
-  }, [isPicking, onCreateProjectFromPath, onSelectWorkspaceRoot, openCreateProjectDialog]);
+  }, [isPicking, onCreateProjectFromPath, onSelectWorkspaceRoot, openCreateProjectDialog, t]);
 
   const handleResetToHome = useCallback(() => {
     if (resetInFlightRef.current) {
@@ -500,24 +529,33 @@ export const ProjectPicker = memo(function ProjectPicker({
         })
         .catch((error) => {
           resetInFlightRef.current = false;
-          setErrorMessage(error instanceof Error ? error.message : "Unable to update project.");
+          setErrorMessage(
+            error instanceof Error
+              ? error.message
+              : t("workspace:projectPicker_unableToUpdateProject"),
+          );
           setOpen(true);
         });
     } catch (error) {
       resetInFlightRef.current = false;
-      setErrorMessage(error instanceof Error ? error.message : "Unable to update project.");
+      setErrorMessage(
+        error instanceof Error ? error.message : t("workspace:projectPicker_unableToUpdateProject"),
+      );
       setOpen(true);
     }
-  }, [onResetToHome]);
+  }, [onResetToHome, t]);
 
   const shouldShowResetToHome = showResetToHome || isProjectSelectionMode;
   const canResetFromTrigger =
     renderTrigger === undefined && selectedFolderOption !== null && onResetToHome !== undefined;
   const addProjectLabel =
-    addActionLabel ?? (isProjectSelectionMode ? "New project" : "Add new project");
+    addActionLabel ??
+    (isProjectSelectionMode
+      ? t("workspace:projectPicker_newProject")
+      : t("workspace:projectPicker_addNewProject"));
   const loadingAddProjectLabel = isProjectSelectionMode
-    ? "Adding project..."
-    : "Opening folder picker...";
+    ? t("workspace:projectPicker_addingProject")
+    : t("workspace:projectPicker_openingFolderPicker");
 
   const renderActiveFolderOption = (folder: ActiveFolderOption, index: number) => {
     const selected = isProjectSelectionMode
@@ -697,10 +735,10 @@ export const ProjectPicker = memo(function ProjectPicker({
         >
           <ComboboxEmpty>
             {isLoadingDirectories
-              ? "Loading folders…"
+              ? t("workspace:projectPicker_loadingFolders")
               : activeFolderOptions.length === 0 && localFolderOptions.length === 0
-                ? "No folders found"
-                : "No matches"}
+                ? t("workspace:projectPicker_noFolders")
+                : t("workspace:providerModelPicker_noMatches")}
           </ComboboxEmpty>
           <ComboboxList className="max-h-64">
             {filteredActiveFolderGroups.map((group, groupIndex) => {

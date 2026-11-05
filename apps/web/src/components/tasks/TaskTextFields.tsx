@@ -8,6 +8,7 @@ import type { TodoUpdateInput } from "@synara/contracts";
 import { type KeyboardEvent, type ReactNode, useEffect, useRef, useState } from "react";
 
 import type { TaskRowModel } from "./tasks.logic";
+import { useTranslation } from "~/i18n";
 
 export function TaskTextFields({
   row,
@@ -22,6 +23,8 @@ export function TaskTextFields({
   /** Puts the cursor in the note once it mounts, for details to hand off with the task. */
   autoFocusNotes?: boolean;
 }) {
+  const { t } = useTranslation();
+
   const { todo } = row;
   const notesRef = useRef<HTMLTextAreaElement>(null);
   useEffect(() => {
@@ -84,7 +87,7 @@ export function TaskTextFields({
     <div className="flex flex-col gap-0.5">
       <div className="flex items-start gap-2">
         <textarea
-          aria-label="Task title"
+          aria-label={t("common:taskTitle")}
           rows={1}
           value={title}
           onFocus={() => focusField("title")}
@@ -97,10 +100,10 @@ export function TaskTextFields({
       </div>
       <textarea
         ref={notesRef}
-        aria-label="Notes"
+        aria-label={t("common:notes")}
         rows={1}
         value={notes}
-        placeholder="Add a note"
+        placeholder={t("common:addANote")}
         onFocus={() => focusField("notes")}
         onChange={(event) => setNotes(event.target.value)}
         onBlur={commitNotes}

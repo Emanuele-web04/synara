@@ -3,6 +3,7 @@
 
 import type { OrchestrationThread } from "@synara/contracts";
 import { useNowMs } from "~/hooks/useNowMs";
+import { useTranslation } from "~/i18n";
 import { ClockIcon } from "~/lib/icons";
 import { ComposerCapsule, COMPOSER_CAPSULE_ACTION_CLASS_NAME } from "./ComposerCapsule";
 import { COMPOSER_STACKED_PANEL_ICON_CLASS_NAME } from "./composerStackedPanelStyles";
@@ -16,19 +17,22 @@ export function ComposerUsageLimitRecovery({
   recovery,
   onCancel,
 }: ComposerUsageLimitRecoveryProps) {
+  const { t, formatLocale } = useTranslation();
   const now = useNowMs(true, 15_000);
   const resetAt = Date.parse(recovery.resetAt);
   const label =
     recovery.state === "resuming"
-      ? "Continuing on your computer…"
+      ? t("chat:usageLimitResuming")
       : Number.isFinite(resetAt) && resetAt > now
-        ? `Usage limit · resumes at ${new Intl.DateTimeFormat(undefined, {
-            month: "short",
-            day: "numeric",
-            hour: "numeric",
-            minute: "2-digit",
-          }).format(resetAt)}`
-        : "Usage reset reached · waiting for computer";
+        ? t("chat:usageLimitResumeAt", {
+            time: new Intl.DateTimeFormat(formatLocale, {
+              month: "short",
+              day: "numeric",
+              hour: "numeric",
+              minute: "2-digit",
+            }).format(resetAt),
+          })
+        : t("chat:usageLimitAwaitingHost");
 
   return (
     <ComposerCapsule
@@ -37,7 +41,7 @@ export function ComposerUsageLimitRecovery({
       testId="composer-usage-limit-recovery"
       actions={
         <button type="button" className={COMPOSER_CAPSULE_ACTION_CLASS_NAME} onClick={onCancel}>
-          Cancel auto-resume
+          {t("chat:cancelUsageLimitResume")}
         </button>
       }
     >

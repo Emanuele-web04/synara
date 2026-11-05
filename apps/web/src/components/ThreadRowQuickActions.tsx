@@ -3,6 +3,7 @@ import type { ThreadId } from "@synara/contracts";
 
 import { CircleCheckIcon, Undo2Icon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
+import { useTranslation } from "~/i18n";
 import { SidebarIconButton } from "./SidebarIconButton";
 import { SIDEBAR_TRAILING_ICON_CLASS } from "./sidebarGlyphs";
 import { ThreadArchiveActionButton } from "./ThreadArchiveActionButton";
@@ -32,11 +33,17 @@ export function ThreadRowQuickActions({
   onArchive: () => void;
   onDone: () => void;
 }) {
+  const { t } = useTranslation();
+
   const stopActivation = (event: MouseEvent) => {
     event.preventDefault();
     event.stopPropagation();
   };
-  const doneLabel = isSnoozed ? "Return now" : isSettled ? "Undo" : "Done";
+  const doneLabel = isSnoozed
+    ? t("workspace:returnNow")
+    : isSettled
+      ? t("workspace:toast_undo")
+      : t("git:detail_done");
   return (
     <span
       className="pointer-events-auto inline-flex items-center gap-1"

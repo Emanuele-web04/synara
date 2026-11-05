@@ -9,6 +9,7 @@ import {
   type DiffChangeMarker,
   type DiffChangeMarkerKind,
 } from "./DiffPanel.logic";
+import { useTranslation } from "~/i18n";
 
 const CHANGE_MARKER_COLOR_BY_KIND: Record<DiffChangeMarkerKind, string> = {
   added: "var(--success)",
@@ -27,6 +28,8 @@ export function DiffPanelChangeMarkers(props: {
   renderableFiles: ReadonlyArray<FileDiffMetadata>;
   onSelectFilePath: (filePath: string) => void;
 }) {
+  const { t } = useTranslation();
+
   const { renderableFiles, viewportRef } = props;
   const [markers, setMarkers] = useState<ReadonlyArray<DiffChangeMarker>>([]);
 
@@ -96,14 +99,17 @@ export function DiffPanelChangeMarkers(props: {
   return (
     <div
       role="group"
-      aria-label="Change markers"
+      aria-label={t("common:changeMarkers")}
       className="pointer-events-none absolute inset-y-0 right-[10px] z-10 w-[6px]"
     >
       {markers.map((marker) => (
         <button
           key={marker.path}
           type="button"
-          aria-label={`${CHANGE_MARKER_LABEL_BY_KIND[marker.kind]}: ${marker.path}`}
+          aria-label={t("common:symbol8", {
+            value0: CHANGE_MARKER_LABEL_BY_KIND[marker.kind],
+            value1: marker.path,
+          })}
           title={marker.path}
           className="pointer-events-auto absolute left-0 w-full cursor-pointer rounded-full opacity-70 transition-opacity hover:opacity-100"
           style={{
