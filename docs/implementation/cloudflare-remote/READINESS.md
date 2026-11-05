@@ -2,6 +2,15 @@
 
 This is the handoff from implementation to the first real MacBook ↔ Mac Mini test. Use the same build from `codex/cloudflare-remote-mvp` on both computers. Local qualification is recorded in [STATUS.md](STATUS.md); it does not substitute for a live Cloudflare/WorkOS test.
 
+Current source qualification: Polar billing and paid Remote admission are
+implemented, with billing and paid enforcement off by default. Current billing
+qualification remains sandbox-only; keep `POLAR_REMOTE_ACCESS_ENFORCED`,
+`POLAR_PRODUCTION_PAYMENTS_ENABLED` and `SYNARA_REMOTE_BILLING_POLICY_REQUIRED`
+`false` during preparation. See the [billing policy](../../../apps/api/README.md#execution-host-policy-and-manual-paid-rollout)
+and [isolated setup](../../../apps/api/README.md#configure-an-isolated-environment).
+The dated trial evidence below remains historical; this note adds no deployment
+or production qualification.
+
 ## What must run
 
 | Component                       | Where it runs                                     | What the operator supplies                                                |
@@ -97,7 +106,7 @@ Stable deliberately refuses remote connections. For an unpackaged development se
 
 ## What the first live test must prove
 
-- A new login and host link complete with real WorkOS, including session refresh. A user outside the test allowlist cannot provision or pair.
+- A new login and host link complete with real WorkOS, including session refresh. In private enrollment, a user outside the test allowlist cannot provision or pair; public beta enrollment admits authenticated accounts while retaining ownership and pairing checks.
 - The API creates a named tunnel and proxied DNS record without manual per-host setup. The generated HTTPS endpoint becomes reachable from a different network; unrelated app/admin paths are unavailable.
 - Code lookup alone does not grant access. Expired, cancelled and replayed codes are rejected; the approved device connects with the pinned host identity.
 - A temporary failure during pairing allows retry of the already reviewed code until expiry. Cancelling or forgetting clears the local pending state; a new code starts a new pairing.
@@ -115,4 +124,7 @@ authorization-outage and unattended qualification. The repository contains the c
 automatic allocation, code rendezvous, approval, trust persistence, reconnect
 and revocation paths.
 
-For a **customer launch**, also connect an authoritative paid entitlement source and qualify the signed distribution on supported platforms. `REMOTE_TEST_USER_IDS` must not be presented as payment enforcement. Billing integration is separate from proving the remote MVP and has not been implemented by this task.
+For a **customer launch**, the implemented Polar entitlement policy and signed
+distribution still require their separate approved rollout and qualification.
+`REMOTE_TEST_USER_IDS` is not payment enforcement. Keep production payments and
+paid Remote enforcement off during the current sandbox-only billing preparation.

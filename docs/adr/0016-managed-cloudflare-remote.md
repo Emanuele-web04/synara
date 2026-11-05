@@ -10,7 +10,19 @@ Without the relay control socket, the host polls authenticated authorization sna
 
 A cryptographically random eight-character code locates a ten-minute invitation inside the same account and organization. Atomic redemption requires a registered device proof and consumes the invitation. The code is neither a permanent credential nor an encryption key. The cloud now participates in bootstrap delivery, so the controller must compare the complete root fingerprint on the host before requesting access; the host separately approves the exact requesting device fingerprint. Durable keys and pinned trust authorize subsequent connections.
 
-WorkOS authenticates users; it does not attest a paid subscription. Until an existing commercial entitlement authority is integrated, provisioning, pairing, grants and host authorization require explicit `REMOTE_TEST_USER_IDS` membership. Stable's server gate still rejects remote. This test allowlist is not permission for a customer rollout.
+WorkOS authenticates users; it does not attest a paid subscription. The initial
+2026-09-28 enrollment decision required explicit `REMOTE_TEST_USER_IDS` membership
+for provisioning, pairing, grants and host authorization. Stable's server gate
+still rejects remote. This test allowlist is not permission for a customer rollout.
+
+Current source qualification: with paid enforcement off, public beta enrollment
+may instead admit authenticated accounts through `REMOTE_BETA_ACCESS_ENABLED=true`;
+private deployments retain the test-user allowlist. The implemented Polar policy
+takes precedence when paid enforcement is enabled, without replacing ownership,
+membership or device approval. Billing and paid Remote enforcement remain off by
+default. Current billing qualification is sandbox-only: keep production payments
+and paid enforcement off during preparation. See the [billing policy](../../apps/api/README.md#execution-host-policy-and-manual-paid-rollout).
+This note adds no deployment or production qualification.
 
 The old relay source, control protocol, ticket issuance and polling feed have been removed alongside its deployment container, Docker workflow and application configuration. Their historical regressions remain in Git history. Live host-session close codes belong to `packages/contracts/src/hostSessions.ts`; current opaque transport and backpressure regressions run against the host gateway and Cloudflare boundary fixture. API and PostgreSQL hosting are separate from the removed traffic relay.
 

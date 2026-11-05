@@ -32,10 +32,10 @@ publish the CLI. From Remote .14, distribution targets macOS Apple Silicon,
 Windows x64 and Linux x64. Windows has its own NSIS registration, and Linux
 uses `synara-remote` for its executable and window class. It uses
 the existing Synara artwork; Beta's blue artwork remains specific to Beta.
-Remote enables the existing non-Stable feature gates but does not enable Beta
-diagnostics. It starts with its own local data: no Stable/Beta import or
-Try Beta installation/removal action runs from Remote. Signing in to the same
-account preserves access to account-owned cloud data and paired computers;
+Remote enables the existing non-Stable feature gates and runs diagnostics with
+`flavor: "remote"`, without raw crash dumps. It starts with its own local data:
+no Stable/Beta import or Try Beta installation/removal action runs from Remote.
+Signing in to the same account preserves access to account-owned cloud data and paired computers;
 local conversations remain owned by their original app home.
 
 Remote .14 also supplies its hosted account API on a normal launch; no shell
@@ -52,8 +52,9 @@ and Chromium sign-in UI tests pass; the real production GitHub consent/callback
 has not been verified. Remote also
 enables the profile/usage sync path without an operator flag; an explicit
 `SYNARA_ACCOUNT_PROFILE_SYNC=0` still disables it. Stable remains blocked and
-generic/Beta builds still require their existing opt-in. Product analytics remain
-separate and off by default.
+generic/Beta builds still require their existing opt-in. Product analytics were
+separate and off by default in Remote .15; the later Remote default is described
+under [Diagnostics](#diagnostics).
 
 Remote .15 retries temporary enrollment refusals without permanently disabling the host or revoking approved devices. Opening a populated remote home no longer constructs an empty chat ID. An update cannot distinguish a previously revoked pairing from deliberate revocation: pair that device normally again if needed; never restore trust by editing the database. The Remote updater prepares downloads in the background and installs only through its normal restart action.
 
@@ -87,7 +88,8 @@ is not implemented; do not use account switching as local history isolation.
 - **Diagnostics run in Beta and Remote, never Stable.** Beta sends redacted error
   events, raw crash dumps, and anonymous usage counts to a private dashboard. Remote
   sends the same events except raw crash dumps, plus product usage, by default with a
-  Settings switch to stop both. Stable sends nothing. See [Diagnostics](#diagnostics).
+  Settings switch to stop both. Stable sends no release diagnostics; its product
+  analytics require opt-in. See [Diagnostics](#diagnostics).
 
 ### Release order
 
@@ -240,7 +242,7 @@ set to that beta version, otherwise its Windows build blocks publication.
 bun run dist:desktop:artifact -- --platform mac --target dmg --arch arm64 --flavor beta
 ```
 
-`--flavor` accepts `production` (default), `canary`, `cua`, or `beta`, and the
+`--flavor` accepts `production` (default), `canary`, `cua`, `beta`, or `remote`, and the
 `SYNARA_DESKTOP_FLAVOR` env var is equivalent. The packaged `package.json` embeds the
 resolved flavor (`synaraDesktopFlavor`), so a packaged build cannot silently lose its
 identity at runtime; on packaged builds the embedded value wins over the env var.
@@ -417,7 +419,7 @@ APIs, Library, coordinator wakes, monitoring, check-ins, completion evaluations,
 and web entry points in Stable and Beta. Existing saved Hubs in the current
 app's data home remain Hubs; this promotion does not import Beta data into
 Stable. Each app retains its own identity, data home, and update feed. Diagnostics
-remain Beta-only and are independent of this feature list.
+remain limited to Beta and Remote and are independent of this feature list.
 
 Tasks and its delegation APIs are available in Stable and Beta. Tasks takes
 Kanban's navigation slot and preserves its saved order and visibility; its
@@ -437,9 +439,11 @@ survives source removal. Deleting a recap prevents automatic re-creation; an exp
 Save can restore it. Stable refuses the saved-recap RPCs and does not upload. This
 history is separate from public profile publication and aggregate usage sync.
 
-Account profiles additionally require the server opt-in `SYNARA_ACCOUNT_PROFILE_SYNC=1`;
-it activates historical aggregate usage sync for the signed-in account. The UI reads
-the server capability, and publication remains a separate explicit choice.
+In Beta and generic builds, account profiles additionally require the server opt-in
+`SYNARA_ACCOUNT_PROFILE_SYNC=1`. Remote enables this historical aggregate usage sync
+for the signed-in account by default unless `SYNARA_ACCOUNT_PROFILE_SYNC=0` is set.
+Stable refuses it. The UI reads the server capability, and publication remains a
+separate explicit choice.
 See the [profiles trial guide](apps/profiles/README.md).
 
 `pull-request-auto-fix` enables the opt-in **Auto-fix CI** action in a pull
@@ -466,7 +470,8 @@ Synara Remote shares usage and diagnostics by default: the same diagnostic event
 without raw crash dumps, and product events such as daily activity, feature use,
 connection, pairing and turn outcomes with a fixed failure category. **Share usage
 and diagnostics** in Settings → General → Privacy turns both off and clears unsent
-events. Chats, prompts, files and account details are never sent. See
+events. Chats, prompts, files and raw account identifiers are never sent. Signed-in
+product events can include a pseudonymous account hash. See
 [diagnostics.md](docs/diagnostics.md) for exactly what is collected, what usage
 counters exclude, and how the Cloudflare ingest works.
 
