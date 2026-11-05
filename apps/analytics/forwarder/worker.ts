@@ -16,7 +16,11 @@ export default {
         headers: { "retry-after": "600" },
       });
     }
-    const target = new URL(url.pathname + url.search, env.TARGET);
+    // Assign components so a leading // stays a path on the configured origin.
+    const target = new URL(env.TARGET);
+    target.pathname = url.pathname;
+    target.search = url.search;
+    target.hash = "";
     if (!url.pathname.startsWith("/v1/")) return Response.redirect(target.toString(), 308);
     return fetch(new Request(target, request));
   },

@@ -1,3 +1,5 @@
+// Verify legacy forwarding preserves request data and keeps the configured destination origin.
+// All outbound fetches use fixtures; dashboard redirects must not fetch at all.
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import forwarder from "./worker";
@@ -35,9 +37,15 @@ describe("forwarder", () => {
     expect(await sent.text()).toBe('{"a":1}\n');
   });
 
-  it("redirects the dashboard to the target", async () => {
-    const res = await forwarder.fetch(new Request(`${OLD}/login`), { TARGET: NEW });
-    expect(res.status).toBe(308);
-    expect(res.headers.get("location")).toBe(`${NEW}/login`);
-  });
+  it.each(["/login", "//attacker.invalid/login?next=%2F"])(
+    "redirects dashboard path %s within the configured target origin",
+    async (path) => {
+      const fetchMock = vi.fn(async () => new Response("unexpected fetch"));
+      vi.stubGlobal("fetch", fetchMock);
+      const res = await forwarder.fetch(new Request(`${OLD}${path}`), { TARGET: NEW });
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(res.status).toBe(308);
+      expect(res.headers.get("location")).toBe(`${NEW}${path}`);
+    },
+  );
 });
