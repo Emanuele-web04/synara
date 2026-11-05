@@ -99,6 +99,7 @@ import { DevinAdapter } from "../../provider/Services/DevinAdapter.ts";
 import { DroidAdapter } from "../../provider/Services/DroidAdapter.ts";
 import { GrokAdapter } from "../../provider/Services/GrokAdapter.ts";
 import { OmpAdapter } from "../../provider/Services/OmpAdapter.ts";
+import { KiroAdapter } from "../../provider/Services/KiroAdapter.ts";
 import { OpenCodeAdapter } from "../../provider/Services/OpenCodeAdapter.ts";
 import { PiAdapter } from "../../provider/Services/PiAdapter.ts";
 import { ProviderAdapterRegistryLive } from "../../provider/Layers/ProviderAdapterRegistry.ts";
@@ -460,6 +461,7 @@ function createRetainingRestartProviderServiceLayer(options?: {
         Layer.succeed(DroidAdapter, adapterFor("droid")),
         Layer.succeed(OpenCodeAdapter, adapterFor("opencode")),
         Layer.succeed(OmpAdapter, adapterFor("omp")),
+        Layer.succeed(KiroAdapter, adapterFor("kiro")),
         Layer.succeed(PiAdapter, adapterFor("pi")),
         settingsLayer,
       ),

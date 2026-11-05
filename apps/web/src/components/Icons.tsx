@@ -294,6 +294,16 @@ export const PiIcon: Icon = (props) => (
   </svg>
 );
 
+// Neutral "K" monogram; no bundled Kiro brand asset is available.
+export const KiroIcon: Icon = (props) => (
+  <svg {...props} viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <path
+      fill="currentColor"
+      d="M5 4h3v6.4L14.2 4H18l-7 7.3 7.4 8.7h-3.9l-5.4-6.6L8 14.6V20H5V4Z"
+    />
+  </svg>
+);
+
 export const OmpIcon: Icon = (props) => {
   const id = useId();
   const gradientId = `${id}-omp-logo`;

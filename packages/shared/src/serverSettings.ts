@@ -133,5 +133,8 @@ export function providerStartOptionsFromServerSettings(
       ...(providers.omp.binaryPath ? { binaryPath: providers.omp.binaryPath } : {}),
       ...(providers.omp.agentDir ? { agentDir: providers.omp.agentDir } : {}),
     },
+    kiro: {
+      ...(providers.kiro.binaryPath ? { binaryPath: providers.kiro.binaryPath } : {}),
+    },
   };
 }

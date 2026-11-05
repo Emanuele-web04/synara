@@ -17,6 +17,7 @@ import {
   DroidIcon,
   GrokIcon,
   type Icon,
+  KiroIcon,
   OmpIcon,
   OpenAI,
   OpenCodeIcon,
@@ -75,6 +76,7 @@ export const PROVIDER_ICON_COMPONENT_BY_PROVIDER: Record<ProviderKind, Icon> = {
   opencode: OpenCodeProviderIcon,
   pi: PiIcon,
   omp: OmpIcon,
+  kiro: KiroIcon,
 };
 
 export function providerIconToneClassName(

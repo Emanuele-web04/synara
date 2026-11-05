@@ -72,6 +72,7 @@ function makeSettings(
     piAgentDir: "",
     ompBinaryPath: "",
     ompAgentDir: "",
+    kiroBinaryPath: "",
     ...overrides,
   };
 }
@@ -239,6 +240,27 @@ describe("providerModelsPrefetchQueryOptions", () => {
     );
   });
 
+  it("keeps the Kiro prefetch key cwd-agnostic to match the composer", () => {
+    const kiroOptions = providerModelsPrefetchQueryOptions({
+      provider: "kiro",
+      settings: makeSettings({ kiroBinaryPath: "/bin/kiro-cli" }),
+      cwd: "/tmp/project",
+    });
+    expect(kiroOptions.queryKey).toEqual(
+      providerDiscoveryQueryKeys.models(
+        "kiro",
+        "/bin/kiro-cli",
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        "kiro",
+      ),
+    );
+  });
+
   it("uses the selected instance identity and config without inheriting default-driver paths", () => {
     const settings = makeSettings({
       cursorBinaryPath: "/bin/default-cursor",
@@ -297,12 +319,15 @@ describe("prefetchModelsForNewThread", () => {
     );
     // Warm results stay fresh for 30 minutes, so repeated hovers do not re-probe.
     expect(prefetchQuery.mock.calls[0]?.[0].staleTime).toBe(30 * 60_000);
-    expect(modelKeys).toHaveLength(9);
+    expect(modelKeys).toHaveLength(10);
     expect(modelKeys).not.toContainEqual(
       providerDiscoveryQueryKeys.models("droid", null, null, null, "/tmp/project"),
     );
     expect(modelKeys).toContainEqual(
       providerDiscoveryQueryKeys.models("claudeAgent", null, null, null, null),
+    );
+    expect(modelKeys).toContainEqual(
+      providerDiscoveryQueryKeys.models("kiro", null, null, null, null),
     );
     expect(cancelQueries).toHaveBeenCalledWith({
       queryKey: providerDiscoveryQueryKeys.modelsAll,
@@ -358,13 +383,36 @@ describe("prefetchModelsForNewThread", () => {
     const modelKeys = prefetchQuery.mock.calls
       .map((call) => call[0].queryKey)
       .filter((key) => key[0] === "provider-discovery" && key[1] === "models");
-    expect(modelKeys).toHaveLength(7);
+    expect(modelKeys).toHaveLength(8);
     expect(modelKeys).not.toContainEqual(
       providerDiscoveryQueryKeys.models("cursor", null, null, null, "/tmp/project"),
     );
     expect(modelKeys).not.toContainEqual(
       providerDiscoveryQueryKeys.models("pi", null, null, null, "/tmp/project"),
     );
+  });
+
+  it("skips Kiro when the server reports it disabled (Stable Beta gate)", async () => {
+    const queryClient = new QueryClient();
+    const prefetchQuery = vi.spyOn(queryClient, "prefetchQuery").mockResolvedValue(undefined);
+
+    prefetchModelsForNewThread(queryClient, {
+      settings: makeSettings(),
+      serverSettings: {
+        ...DEFAULT_SERVER_SETTINGS,
+        providers: {
+          ...DEFAULT_SERVER_SETTINGS.providers,
+          kiro: { ...DEFAULT_SERVER_SETTINGS.providers.kiro, enabled: false },
+        },
+      },
+      projectCwd: "/tmp/project",
+    });
+
+    const providers = prefetchQuery.mock.calls
+      .map((call) => call[0].queryKey)
+      .filter((key) => key[0] === "provider-discovery")
+      .map((key) => key[2]);
+    expect(providers).not.toContain("kiro");
   });
 
   it("warms Droid only on explicit intent with Droid selected", async () => {
@@ -436,7 +484,7 @@ describe("prefetchModelsForNewThread — availability parity (#652)", () => {
     const queryClient = new QueryClient();
     const prefetchQuery = vi.spyOn(queryClient, "prefetchQuery").mockResolvedValue(undefined);
 
-    // Reconciled + confirmed-unavailable cursor → skipped (9 - 1 = 8).
+    // Reconciled + confirmed-unavailable cursor → skipped (10 - 1 = 9).
     prefetchModelsForNewThread(queryClient, {
       settings: makeSettings(),
       providerStatuses: availableStatuses(["cursor"]),
@@ -444,12 +492,12 @@ describe("prefetchModelsForNewThread — availability parity (#652)", () => {
       projectCwd: "/tmp/project",
     });
     let modelKeys = modelKeysFromCalls(prefetchQuery);
-    expect(modelKeys).toHaveLength(8);
+    expect(modelKeys).toHaveLength(9);
     expect(modelKeys).not.toContainEqual(
       providerDiscoveryQueryKeys.models("cursor", null, null, null, null),
     );
 
-    // Unreconciled → safe default: warm everything (9), even confirmed-unavailable.
+    // Unreconciled → safe default: warm everything (10), even confirmed-unavailable.
     prefetchQuery.mockClear();
     prefetchModelsForNewThread(queryClient, {
       settings: makeSettings(),
@@ -458,7 +506,7 @@ describe("prefetchModelsForNewThread — availability parity (#652)", () => {
       projectCwd: "/tmp/project",
     });
     modelKeys = modelKeysFromCalls(prefetchQuery);
-    expect(modelKeys).toHaveLength(9);
+    expect(modelKeys).toHaveLength(10);
 
     // Preferred provider unavailable → warm leads with ChatView's swap target (codex).
     prefetchQuery.mockClear();
@@ -526,8 +574,8 @@ describe("prefetchModelsForNewThread — warm-option invariants", () => {
     const client = new QueryClient({ defaultOptions: { queries: { retryDelay: 0 } } });
     prefetchModelsForNewThread(client, { settings: makeSettings(), projectCwd: "/tmp/project" });
     await vi.waitFor(() => expect(client.isFetching()).toBe(0));
-    expect(listModels).toHaveBeenCalledTimes(9);
-    expect(new Set(listModels.mock.calls.map(([input]) => input.provider)).size).toBe(9);
+    expect(listModels).toHaveBeenCalledTimes(10);
+    expect(new Set(listModels.mock.calls.map(([input]) => input.provider)).size).toBe(10);
     client.clear();
   });
 
@@ -541,8 +589,8 @@ describe("prefetchModelsForNewThread — warm-option invariants", () => {
     });
 
     const calls = prefetchQuery.mock.calls.map((call) => call[0]);
-    // 9 models + 9 capabilities + 3 agents (claudeAgent, codex, opencode).
-    expect(calls).toHaveLength(9 + 9 + 3);
+    // 10 models + 10 capabilities + 3 agents (claudeAgent, codex, opencode).
+    expect(calls).toHaveLength(10 + 10 + 3);
     for (const options of calls) {
       expect(options.gcTime).toBe(NEW_THREAD_MODEL_PREFETCH_GC_TIME_MS);
     }

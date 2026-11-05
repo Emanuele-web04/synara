@@ -40,6 +40,8 @@ const MODEL_SLUG_SET_BY_PROVIDER: Record<ProviderKind, ReadonlySet<ModelSlug>> =
   // Devin's built-in list is intentionally empty; its CLI supplies the live catalog.
   devin: new Set<ModelSlug>(),
   omp: new Set<ModelSlug>(),
+  // Kiro's CLI supplies the account's live catalog; `auto` is the offline fallback.
+  kiro: new Set(MODEL_OPTIONS_BY_PROVIDER.kiro.map((option) => option.slug)),
 };
 
 export interface SelectableModelOption {
@@ -836,6 +838,11 @@ export function resolveModelSlug(
       : normalizedModel;
   if (provider === "devin" || provider === "pi" || provider === "omp") {
     return normalized;
+  }
+  // Kiro model ids come from the account's live ACP catalog, so a discovered
+  // slug that is not in the static fallback list is still valid.
+  if (provider === "kiro") {
+    return normalized ?? DEFAULT_MODEL_BY_PROVIDER.kiro;
   }
   if (!normalized) {
     return DEFAULT_MODEL_BY_PROVIDER[provider];

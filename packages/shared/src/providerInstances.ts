@@ -27,6 +27,7 @@ export const BUILT_IN_PROVIDER_KINDS = [
   "opencode",
   "pi",
   "omp",
+  "kiro",
 ] as const satisfies ReadonlyArray<ProviderKind>;
 
 export interface ResolvedProviderInstance {
@@ -125,6 +126,8 @@ function normalizeBinaryPathOverride(provider: ProviderKind, value: unknown): st
       return trimmed === "pi" ? "" : trimmed;
     case "omp":
       return trimmed === "omp" ? "" : trimmed;
+    case "kiro":
+      return trimmed === "kiro-cli" ? "" : trimmed;
   }
 }
 
@@ -190,6 +193,7 @@ export function inferLegacyProviderKindFromInstanceId(
     return "opencode";
   if (lowerInstanceId.startsWith("pi")) return "pi";
   if (lowerInstanceId.startsWith("devin")) return "devin";
+  if (lowerInstanceId.startsWith("kiro")) return "kiro";
   return undefined;
 }
 
@@ -653,6 +657,10 @@ export function providerStartOptionsFromInstance(
           }
         : undefined;
     }
+    case "kiro":
+      return binaryPath || environment.environment
+        ? { kiro: { ...environment, ...(binaryPath ? { binaryPath } : {}) } }
+        : undefined;
   }
 }
 

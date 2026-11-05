@@ -17,6 +17,7 @@ import { makeEventNdjsonLogger } from "./Layers/EventNdjsonLogger";
 import { makeAntigravityAdapterLive } from "./Layers/AntigravityAdapter";
 import { makeDroidAdapterLive } from "./Layers/DroidAdapter";
 import { makeGrokAdapterLive } from "./Layers/GrokAdapter";
+import { makeKiroAdapterLive } from "./Layers/KiroAdapter";
 import { makeOpenCodeAdapterLive } from "./Layers/OpenCodeAdapter";
 import { makePiAdapterLive } from "./Layers/PiAdapter";
 import { makeOmpAdapterLive } from "./Layers/OmpAdapter";
@@ -85,6 +86,10 @@ export function makeServerProviderLayer(
       {},
       nativeEventLogger ? { nativeEventLogger } : undefined,
     ).pipe(Layer.provide(agentGatewayCredentialsLayer));
+    const kiroAdapterLayer = makeKiroAdapterLive(
+      {},
+      nativeEventLogger ? { nativeEventLogger } : undefined,
+    ).pipe(Layer.provide(agentGatewayCredentialsLayer));
     const piAdapterLayer = makePiAdapterLive(
       nativeEventLogger ? { nativeEventLogger } : undefined,
     ).pipe(Layer.provide(agentGatewayCredentialsLayer));
@@ -103,6 +108,7 @@ export function makeServerProviderLayer(
       Layer.provide(openCodeAdapterLayer),
       Layer.provide(piAdapterLayer),
       Layer.provide(ompAdapterLayer),
+      Layer.provide(kiroAdapterLayer),
       Layer.provideMerge(providerSessionDirectoryLayer),
       Layer.provide(Layer.succeed(ServerSettingsService, serverSettings)),
     );

@@ -46,6 +46,7 @@ export const COMPOSER_PROVIDER_KINDS = [
   "opencode",
   "pi",
   "omp",
+  "kiro",
 ] as const satisfies readonly ProviderKind[];
 
 const isProviderKind = Schema.is(ProviderKind);
@@ -313,6 +314,15 @@ export function makeModelSelection(
           ? { options: options as Extract<ModelSelection, { provider: "omp" }>["options"] }
           : {}),
       };
+    case "kiro":
+      return {
+        provider,
+        model,
+        ...(instance ? { instanceId: instance } : {}),
+        ...(options
+          ? { options: options as Extract<ModelSelection, { provider: "kiro" }>["options"] }
+          : {}),
+      };
   }
 }
 
@@ -361,6 +371,10 @@ export function normalizeProviderModelOptions(
   const ompCandidate =
     candidate?.omp && typeof candidate.omp === "object"
       ? (candidate.omp as Record<string, unknown>)
+      : null;
+  const kiroCandidate =
+    candidate?.kiro && typeof candidate.kiro === "object"
+      ? (candidate.kiro as Record<string, unknown>)
       : null;
 
   const codexReasoningEffort: CodexReasoningEffort | undefined =
@@ -489,6 +503,9 @@ export function normalizeProviderModelOptions(
         }
       : undefined;
   const omp = normalizeOmpModelOptions(ompCandidate as OmpModelOptions | null | undefined);
+  const kiroReasoningEffort = trimStringOrUndefined(kiroCandidate?.reasoningEffort);
+  const kiro =
+    kiroReasoningEffort !== undefined ? { reasoningEffort: kiroReasoningEffort } : undefined;
   if (
     !codex &&
     !claude &&
@@ -499,7 +516,8 @@ export function normalizeProviderModelOptions(
     !droid &&
     !opencode &&
     !pi &&
-    !omp
+    !omp &&
+    !kiro
   ) {
     return null;
   }
@@ -514,6 +532,7 @@ export function normalizeProviderModelOptions(
     ...(opencode ? { opencode } : {}),
     ...(pi ? { pi } : {}),
     ...(omp ? { omp } : {}),
+    ...(kiro ? { kiro } : {}),
   };
 }
 
@@ -582,7 +601,9 @@ export function normalizeModelSelection(
                       ? modelOptions?.devin
                       : provider === "omp"
                         ? modelOptions?.omp
-                        : undefined;
+                        : provider === "kiro"
+                          ? modelOptions?.kiro
+                          : undefined;
   const normalizedOptions =
     provider === "antigravity" && hasLegacyAntigravityEffort
       ? {

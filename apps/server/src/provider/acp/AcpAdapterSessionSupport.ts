@@ -11,6 +11,7 @@ import type {
   ProviderSession,
   ProviderUserInputAnswers,
   RuntimeMode,
+  ThreadTokenUsageSnapshot,
   TurnId,
 } from "@synara/contracts";
 import { Deferred, Effect, Option, Scope, Semaphore, SynchronizedRef } from "effect";
@@ -166,6 +167,43 @@ export function readAcpUsdCost(cost: Acp.Cost | null | undefined): number | unde
     return undefined;
   }
   return cost.amount >= 0 ? cost.amount : undefined;
+}
+
+const nonNegativeInteger = (value: number | null | undefined) =>
+  value !== undefined && value !== null && Number.isFinite(value) && value >= 0
+    ? Math.floor(value)
+    : undefined;
+
+/**
+ * ACP's final PromptResponse usage is a cumulative session counter. Keep it
+ * separate from live context occupancy so Profile can account for spend
+ * without counting the context window a second time.
+ */
+export function acpPromptUsageSnapshot(
+  usage: Acp.Usage | null | undefined,
+  contextUsage?: ThreadTokenUsageSnapshot,
+): ThreadTokenUsageSnapshot | undefined {
+  if (!usage || !Number.isFinite(usage.totalTokens) || usage.totalTokens < 0) {
+    return undefined;
+  }
+  const totalProcessedTokens = nonNegativeInteger(usage.totalTokens);
+  if (totalProcessedTokens === undefined) return undefined;
+  const inputTokens = nonNegativeInteger(usage.inputTokens);
+  const outputTokens = nonNegativeInteger(usage.outputTokens);
+  const reasoningOutputTokens = nonNegativeInteger(usage.thoughtTokens);
+  const cachedInputTokens = nonNegativeInteger(usage.cachedReadTokens);
+  const cacheCreationInputTokens = nonNegativeInteger(usage.cachedWriteTokens);
+  return {
+    // The ACP prompt response does not report context occupancy. The
+    // cumulative spend counter is still useful via totalProcessedTokens.
+    ...(contextUsage ?? { usedTokens: 0 }),
+    totalProcessedTokens,
+    ...(inputTokens !== undefined ? { inputTokens } : {}),
+    ...(outputTokens !== undefined ? { outputTokens } : {}),
+    ...(reasoningOutputTokens !== undefined ? { reasoningOutputTokens } : {}),
+    ...(cachedInputTokens !== undefined ? { cachedInputTokens } : {}),
+    ...(cacheCreationInputTokens !== undefined ? { cacheCreationInputTokens } : {}),
+  };
 }
 
 export function recordAcpSessionCost(
