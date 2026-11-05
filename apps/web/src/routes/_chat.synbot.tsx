@@ -1,22 +1,29 @@
 // FILE: _chat.synbot.tsx
-// Purpose: The SynBot page (Beta): the bot list in the rail panel, the selected bot's thread in
-//          the main column. `?bot=<id>` picks the bot; without it SynBot is shown.
+// Purpose: The SynBot page (Beta): HoloBot's sidebar in the rail panel, the selected bot's
+//          thread in the main column. `?bot=<id>` picks the bot (SynBot without it); `?task=` opens
+//          a task's own thread in the right pane.
 // Layer: Route
 
 import { createFileRoute, redirect } from "@tanstack/react-router";
 
 import { SYNBOT_ON } from "~/betaFeatures";
-import SynbotView from "~/components/synbot/SynbotView";
+import SynbotPage from "~/components/synbot/shell/SynbotPage";
 
 export interface SynbotSearch {
   readonly bot?: string;
+  readonly task?: string;
 }
 
+const text = (value: unknown) => (typeof value === "string" && value.length > 0 ? value : null);
+
 export const Route = createFileRoute("/_chat/synbot")({
-  validateSearch: (search: Record<string, unknown>): SynbotSearch =>
-    typeof search.bot === "string" && search.bot.length > 0 ? { bot: search.bot } : {},
+  validateSearch: (search: Record<string, unknown>): SynbotSearch => {
+    const bot = text(search.bot);
+    const task = text(search.task);
+    return { ...(bot ? { bot } : {}), ...(task ? { task } : {}) };
+  },
   beforeLoad: () => {
     if (!SYNBOT_ON) throw redirect({ to: "/", replace: true });
   },
-  component: SynbotView,
+  component: SynbotPage,
 });

@@ -357,7 +357,7 @@ import { SNOOZE_PRESETS } from "../lib/threadSnooze";
 import ReleaseHistoryDialog from "./ReleaseHistoryDialog";
 import { GROUPS_ON, HUBS_UI_ON, INBOX_ON, SYNBOT_ON, isBetaFeatureOn } from "../betaFeatures";
 import { startSynbotLiveSync, useSynbotStore } from "../synbot/synbotStore";
-import { SynbotRailPanel } from "./synbot/SynbotRailPanel";
+import { SynbotSidebar } from "./synbot/shell/SynbotSidebar";
 import { synbotNeedsYouCount } from "../synbot/synbotState.logic";
 import { WHATS_NEW_ENTRIES } from "../whatsNew/entries";
 import { sortEntriesByVersionDesc } from "../whatsNew/logic";
@@ -8383,7 +8383,7 @@ export default function Sidebar() {
                 onCreateOpenChange={setAutomationCreateOpen}
               />
             ) : showRailSynbotPanel ? (
-              <SynbotRailPanel />
+              <SynbotSidebar />
             ) : (
               <>
                 <div
