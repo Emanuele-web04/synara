@@ -2490,6 +2490,7 @@ export const makeProjectAgentService = Effect.gen(function* () {
   const importCoordinatorGreeting = (input: {
     readonly threadId: ThreadId;
     readonly userDisplayName?: string | undefined;
+    readonly greeting?: string | undefined;
   }) =>
     Effect.gen(function* () {
       const messageId = coordinatorWelcomeMessageId(input.threadId);
@@ -2513,7 +2514,7 @@ export const makeProjectAgentService = Effect.gen(function* () {
             {
               messageId,
               role: "assistant",
-              text: coordinatorWelcomeText(welcomeName),
+              text: input.greeting ?? coordinatorWelcomeText(welcomeName),
               createdAt: greetingAt,
               updatedAt: greetingAt,
             },
@@ -3182,6 +3183,7 @@ export const makeProjectAgentService = Effect.gen(function* () {
           yield* importCoordinatorGreeting({
             threadId: coordinatorThreadId,
             userDisplayName: input.userDisplayName,
+            greeting: input.greeting,
           });
           if (!saved.automationId) {
             const automation = yield* automationService
@@ -5255,7 +5257,22 @@ export const makeProjectAgentService = Effect.gen(function* () {
                 .getProjectShellsByIds(linkedIds)
                 .pipe(Effect.catch(() => Effect.succeed([])));
               if (shells.length === 0) return "None linked yet.";
-              return shells.map((shell) => `- ${shell.title} (${shell.workspaceRoot})`).join("\n");
+              const linked = shells
+                .map((shell) => `- ${shell.title} (${shell.workspaceRoot})`)
+                .join("\n");
+              // A worker in its own worktree must not edit the original checkouts listed above.
+              const ownWorktree =
+                principal.kind === "worker"
+                  ? yield* snapshotQuery.getThreadShellById(threadId).pipe(
+                      Effect.map((shell) =>
+                        Option.isSome(shell) ? shell.value.worktreePath : null,
+                      ),
+                      Effect.catch(() => Effect.succeed(null)),
+                    )
+                  : null;
+              return ownWorktree
+                ? `${linked}\nThese are the original checkouts. Your task runs in its own worktree at ${ownWorktree}: read, edit, and run commands there, never in the paths above.`
+                : linked;
             }),
           },
           // The group's default for new threads is the configured worker
@@ -5783,6 +5800,19 @@ export const makeProjectAgentService = Effect.gen(function* () {
           .getConfig(projectId)
           .pipe(Effect.mapError(toServiceError("Failed to load coordinator for event.")));
         if (Option.isNone(config) || !config.value.enabled) return;
+        // Diff updates during a turn close their checkpoint "missing" while the
+        // same turn still runs: not a settlement (and no reason to wake the
+        // coordinator). The turn's last diff says how it finished.
+        if (
+          input.eventType === "thread.turn-diff-completed" &&
+          input.checkpointStatus === "missing" &&
+          input.turnId !== undefined &&
+          Option.isSome(shell) &&
+          shell.value.latestTurn?.turnId === input.turnId &&
+          shell.value.latestTurn.state === "running"
+        ) {
+          return;
+        }
         // A diff-completed event whose checkpoint closed missing/error belongs
         // to a turn that did not finish cleanly — e.g. a turn the recovery
         // ladder itself interrupted. Reclassify it so everything downstream
