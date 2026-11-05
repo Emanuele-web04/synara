@@ -256,6 +256,10 @@
       "types": "./src/groupSlug.ts",
       "import": "./src/groupSlug.ts"
     },
+    "./bots": {
+      "types": "./src/bots.ts",
+      "import": "./src/bots.ts"
+    },
     "./projectContainers": {
       "types": "./src/projectContainers.ts",
       "import": "./src/projectContainers.ts"

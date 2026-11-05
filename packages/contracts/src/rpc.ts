@@ -76,6 +76,31 @@ import {
   TodoUpdateInput,
 } from "./todo";
 import {
+  Bot,
+  BotMergeProof,
+  BotStreamEvent,
+  BotsCancelDelegationInput,
+  BotsCardActionInput,
+  BotsCardActionResult,
+  BotsCreateInput,
+  BotsEnsureMainInput,
+  BotsListInput,
+  BotsMergeInput,
+  BotsMergeProofInput,
+  BotsMergeResult,
+  BotsRemoveInput,
+  BotsSnapshot,
+  BotsStopAllResult,
+  BotsSubscribeInput,
+  BotsSuggestInput,
+  BotsSuggestResult,
+  BotsUpdateBranchInput,
+  BotsUpdateInput,
+  BotsUpdateSettingsInput,
+  BotSettings,
+  BotDelegation,
+} from "./bots";
+import {
   ProjectAgentConfigureInput,
   ProjectAgentLinkProjectInput,
   ProjectAgentUnlinkProjectInput,
@@ -2774,4 +2799,95 @@ export const WsProjectAgentRpcGroup = RpcGroup.make(
   WsProjectAgentLibraryStatusRpc,
   WsProjectAgentResolveWorkerRpc,
   WsSubscribeProjectAgentEventsRpc,
+);
+
+// SynBot (Beta) RPCs. A satellite group like WsProjectAgentRpcGroup, for the same
+// declaration-emit reason. The server refuses them on Stable.
+export const WsBotsListRpc = Rpc.make(WS_METHODS.botsList, {
+  payload: BotsListInput,
+  success: BotsSnapshot,
+  error: WsRpcError,
+});
+export const WsBotsEnsureMainRpc = Rpc.make(WS_METHODS.botsEnsureMain, {
+  payload: BotsEnsureMainInput,
+  success: Bot,
+  error: WsRpcError,
+});
+export const WsBotsCreateRpc = Rpc.make(WS_METHODS.botsCreate, {
+  payload: BotsCreateInput,
+  success: Bot,
+  error: WsRpcError,
+});
+export const WsBotsUpdateRpc = Rpc.make(WS_METHODS.botsUpdate, {
+  payload: BotsUpdateInput,
+  success: Bot,
+  error: WsRpcError,
+});
+export const WsBotsRemoveRpc = Rpc.make(WS_METHODS.botsRemove, {
+  payload: BotsRemoveInput,
+  success: Schema.Void,
+  error: WsRpcError,
+});
+export const WsBotsUpdateSettingsRpc = Rpc.make(WS_METHODS.botsUpdateSettings, {
+  payload: BotsUpdateSettingsInput,
+  success: BotSettings,
+  error: WsRpcError,
+});
+export const WsBotsCardActionRpc = Rpc.make(WS_METHODS.botsCardAction, {
+  payload: BotsCardActionInput,
+  success: BotsCardActionResult,
+  error: WsRpcError,
+});
+export const WsBotsSuggestRpc = Rpc.make(WS_METHODS.botsSuggest, {
+  payload: BotsSuggestInput,
+  success: BotsSuggestResult,
+  error: WsRpcError,
+});
+export const WsBotsCancelDelegationRpc = Rpc.make(WS_METHODS.botsCancelDelegation, {
+  payload: BotsCancelDelegationInput,
+  success: BotDelegation,
+  error: WsRpcError,
+});
+export const WsBotsMergeProofRpc = Rpc.make(WS_METHODS.botsMergeProof, {
+  payload: BotsMergeProofInput,
+  success: BotMergeProof,
+  error: WsRpcError,
+});
+export const WsBotsMergeRpc = Rpc.make(WS_METHODS.botsMerge, {
+  payload: BotsMergeInput,
+  success: BotsMergeResult,
+  error: WsRpcError,
+});
+export const WsBotsUpdateBranchRpc = Rpc.make(WS_METHODS.botsUpdateBranch, {
+  payload: BotsUpdateBranchInput,
+  success: BotMergeProof,
+  error: WsRpcError,
+});
+export const WsBotsStopAllRpc = Rpc.make(WS_METHODS.botsStopAll, {
+  payload: Schema.Struct({}),
+  success: BotsStopAllResult,
+  error: WsRpcError,
+});
+export const WsSubscribeBotsEventsRpc = Rpc.make(WS_METHODS.subscribeBotsEvents, {
+  payload: BotsSubscribeInput,
+  success: BotStreamEvent,
+  error: WsRpcError,
+  stream: true,
+});
+
+export const WsBotsRpcGroup = RpcGroup.make(
+  WsBotsListRpc,
+  WsBotsEnsureMainRpc,
+  WsBotsCreateRpc,
+  WsBotsUpdateRpc,
+  WsBotsRemoveRpc,
+  WsBotsUpdateSettingsRpc,
+  WsBotsCardActionRpc,
+  WsBotsSuggestRpc,
+  WsBotsCancelDelegationRpc,
+  WsBotsMergeProofRpc,
+  WsBotsMergeRpc,
+  WsBotsUpdateBranchRpc,
+  WsBotsStopAllRpc,
+  WsSubscribeBotsEventsRpc,
 );

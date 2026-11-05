@@ -90,6 +90,22 @@ import {
   ProjectAgentResolveWorkerInput,
 } from "./projectAgent";
 import {
+  BotStreamEvent,
+  BotsCancelDelegationInput,
+  BotsCardActionInput,
+  BotsCreateInput,
+  BotsEnsureMainInput,
+  BotsListInput,
+  BotsMergeInput,
+  BotsMergeProofInput,
+  BotsRemoveInput,
+  BotsSubscribeInput,
+  BotsSuggestInput,
+  BotsUpdateBranchInput,
+  BotsUpdateInput,
+  BotsUpdateSettingsInput,
+} from "./bots";
+import {
   ClientOrchestrationCommand,
   OrchestrationEvent,
   OrchestrationImportThreadInput,
@@ -527,6 +543,22 @@ export const WS_METHODS = {
   projectAgentLibraryStatus: "projectAgent.library.status",
   projectAgentResolveWorker: "projectAgent.resolveWorker",
   subscribeProjectAgentEvents: "projectAgent.subscribe",
+
+  // SynBot (Beta): bots built on Hubs. See packages/contracts/src/bots.ts.
+  botsList: "bots.list",
+  botsEnsureMain: "bots.ensureMain",
+  botsCreate: "bots.create",
+  botsUpdate: "bots.update",
+  botsRemove: "bots.remove",
+  botsUpdateSettings: "bots.updateSettings",
+  botsCardAction: "bots.cardAction",
+  botsSuggest: "bots.suggest",
+  botsCancelDelegation: "bots.cancelDelegation",
+  botsMergeProof: "bots.mergeProof",
+  botsMerge: "bots.merge",
+  botsUpdateBranch: "bots.updateBranch",
+  botsStopAll: "bots.stopAll",
+  subscribeBotsEvents: "bots.subscribe",
 } as const;
 
 // ── Push Event Channels ──────────────────────────────────────────────
@@ -540,6 +572,7 @@ export const WS_CHANNELS = {
   terminalEvent: "terminal.event",
   projectDevServerEvent: "project.devServerEvent",
   projectAgentEvent: "projectAgent.event",
+  botsEvent: "bots.event",
   serverWelcome: "server.welcome",
   serverMaintenanceUpdated: "server.maintenanceUpdated",
   serverConfigUpdated: "server.configUpdated",
@@ -862,6 +895,20 @@ const WebSocketRequestBody = Schema.Union([
   tagRequestBody(WS_METHODS.projectAgentLibraryStatus, ProjectAgentLibraryStatusInput),
   tagRequestBody(WS_METHODS.projectAgentResolveWorker, ProjectAgentResolveWorkerInput),
   tagRequestBody(WS_METHODS.subscribeProjectAgentEvents, ProjectAgentSubscribeInput),
+  tagRequestBody(WS_METHODS.botsList, BotsListInput),
+  tagRequestBody(WS_METHODS.botsEnsureMain, BotsEnsureMainInput),
+  tagRequestBody(WS_METHODS.botsCreate, BotsCreateInput),
+  tagRequestBody(WS_METHODS.botsUpdate, BotsUpdateInput),
+  tagRequestBody(WS_METHODS.botsRemove, BotsRemoveInput),
+  tagRequestBody(WS_METHODS.botsUpdateSettings, BotsUpdateSettingsInput),
+  tagRequestBody(WS_METHODS.botsCardAction, BotsCardActionInput),
+  tagRequestBody(WS_METHODS.botsSuggest, BotsSuggestInput),
+  tagRequestBody(WS_METHODS.botsCancelDelegation, BotsCancelDelegationInput),
+  tagRequestBody(WS_METHODS.botsMergeProof, BotsMergeProofInput),
+  tagRequestBody(WS_METHODS.botsMerge, BotsMergeInput),
+  tagRequestBody(WS_METHODS.botsUpdateBranch, BotsUpdateBranchInput),
+  tagRequestBody(WS_METHODS.botsStopAll, Schema.Struct({})),
+  tagRequestBody(WS_METHODS.subscribeBotsEvents, BotsSubscribeInput),
 ]);
 
 export const WebSocketRequest = Schema.Struct({
@@ -906,6 +953,7 @@ export interface WsPushPayloadByChannel {
   readonly [WS_CHANNELS.automationEvent]: typeof AutomationStreamEvent.Type;
   readonly [WS_CHANNELS.todoEvent]: typeof TodoStreamEvent.Type;
   readonly [WS_CHANNELS.projectAgentEvent]: typeof ProjectAgentStreamEvent.Type;
+  readonly [WS_CHANNELS.botsEvent]: typeof BotStreamEvent.Type;
   readonly [WS_CHANNELS.gitActionProgress]: typeof GitActionProgressEvent.Type;
   readonly [WS_CHANNELS.gitWorktreeSetupProgress]: typeof GitWorktreeSetupProgressEvent.Type;
   readonly [WS_CHANNELS.projectProvisionProgress]: typeof GitHubProjectProvisionProgressEvent.Type;
@@ -962,6 +1010,7 @@ export const WsPushProjectAgentEvent = makeWsPushSchema(
   WS_CHANNELS.projectAgentEvent,
   ProjectAgentStreamEvent,
 );
+export const WsPushBotsEvent = makeWsPushSchema(WS_CHANNELS.botsEvent, BotStreamEvent);
 export const WsPushGitActionProgress = makeWsPushSchema(
   WS_CHANNELS.gitActionProgress,
   GitActionProgressEvent,
@@ -1007,6 +1056,7 @@ export const WsPushChannelSchema = Schema.Literals([
   WS_CHANNELS.automationEvent,
   WS_CHANNELS.todoEvent,
   WS_CHANNELS.projectAgentEvent,
+  WS_CHANNELS.botsEvent,
   WS_CHANNELS.terminalEvent,
   WS_CHANNELS.projectDevServerEvent,
   DEVICE_WS_CHANNELS.event,
@@ -1027,6 +1077,7 @@ export const WsPush = Schema.Union([
   WsPushAutomationEvent,
   WsPushTodoEvent,
   WsPushProjectAgentEvent,
+  WsPushBotsEvent,
   WsPushGitActionProgress,
   WsPushGitWorktreeSetupProgress,
   WsPushProjectProvisionProgress,
