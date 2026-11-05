@@ -26,6 +26,24 @@ propose one ("Save … as a bot?"); a bot exists only after you press Create.
 Every bot is built on a [Hub](hubs.md): the bot's chat is the Hub's coordinator, its tasks are the
 Hub's threads, and it has the Hub's memory and Library.
 
+## The SynBot page
+
+The SynBot page takes HoloBot's layout inside Synara's window:
+
+- **Sidebar panel.** SynBot (with its star) and pinned bots as tiles, then **My bots**: one row
+  per bot with its last message and time, amber while it waits on you, blue while it works.
+  Right-click a bot to pin or unpin it. **New bot** and **Stop all** sit at the bottom.
+- **Thread.** The selected bot's chat as a messaging thread: your words on the right (in the
+  bot's color in a bot's chat), the bot's replies on the left, a date over each new stretch, and
+  three dots with what the bot is doing while it answers. Work handed to another bot shows as a
+  card with its state, result, **Open** and **Stop**; the target bot's chat opens with
+  **Message from \<bot\>** and the brief. Tasks show as one card each (state, steps, result,
+  **Open**, **Stop**); **Open** shows the task's own chat on the right. Pending approvals and
+  questions appear as lettered cards at the end; the letter keys answer the newest one.
+- **Composer.** The bot chat uses Synara's own composer (attachments, queue, model, stop).
+- **Name pill.** The bot's face, name and model at the top; it opens the bot's sheet. **More**
+  changes the chat's engine and model, edits the bot or opens Settings → SynBot.
+
 ## How work flows
 
 1. You ask SynBot (or any bot) in its chat.

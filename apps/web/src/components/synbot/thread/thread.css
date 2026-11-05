@@ -1,0 +1,916 @@
+/* FILE: thread.css
+   Purpose: The SynBot thread pane (ported from HoloBot's thread/thread.css and message.css):
+            the floating top strip and banner, the scrolling rows (separators, bubbles, system
+            lines, "Message from", cards) and the typing row, drawn in ChatView's transcript slot
+            over which Synara's own composer floats. The rows fade out only where they run under
+            a bar. Every value is a kit token (holobot.css). No `:has()`: the pane carries
+            `data-under-top` / `data-under-bottom` itself. */
+
+.hb .thread-pane {
+  position: relative;
+  container-type: inline-size;
+  overflow: hidden;
+  background: var(--hb-bg);
+  color: var(--hb-text);
+  /* Published by ThreadPane (the bars' heights); these hold until the first measure. */
+  --thread-top: var(--hb-bar);
+  /* The composer's floating height comes from ChatView (MessageList sets it on the list). */
+  --thread-bottom: 0px;
+  --thread-inline: var(--hb-gutter);
+  /* The rows share Synara's chat column with the composer under them; bubbles and cards grow
+     with it, up to most of its width. */
+  --thread-column: min(100cqw, calc(var(--app-chat-max-width, 46rem) + 2 * var(--hb-gutter)));
+  --hb-bubble-max: calc((var(--thread-column) - 2 * var(--hb-gutter)) * 0.85);
+}
+.hb .thread-pane__top {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: var(--hb-z-strip);
+  pointer-events: none;
+}
+.hb .thread-pane__top > * {
+  pointer-events: auto;
+}
+/* The iPhone's progressive blur: while rows are under the strip they blur on the way out, most
+   at the top; two layers so the blur grows rather than steps. */
+.hb .thread-pane__top::before,
+.hb .thread-pane__top::after {
+  content: "";
+  position: absolute;
+  z-index: -1;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: calc(100% + var(--hb-fade));
+  pointer-events: none;
+  display: none;
+  -webkit-backdrop-filter: blur(calc(var(--hb-edge-blur) / 3));
+  backdrop-filter: blur(calc(var(--hb-edge-blur) / 3));
+  -webkit-mask-image: linear-gradient(to bottom, #000 40%, transparent);
+  mask-image: linear-gradient(to bottom, #000 40%, transparent);
+}
+.hb .thread-pane__top::after {
+  height: 100%;
+  -webkit-backdrop-filter: blur(var(--hb-edge-blur));
+  backdrop-filter: blur(var(--hb-edge-blur));
+  -webkit-mask-image: linear-gradient(to bottom, #000 20%, transparent);
+  mask-image: linear-gradient(to bottom, #000 20%, transparent);
+}
+.hb .thread-pane[data-under-top] > .thread-pane__top::before,
+.hb .thread-pane[data-under-top] > .thread-pane__top::after {
+  display: block;
+}
+
+/* The bot's name pill: its face, name and engine; it opens the bot's sheet. */
+.hb .thread-pill {
+  display: flex;
+  align-items: center;
+  gap: var(--hb-gap-sm);
+  min-width: 0;
+  max-width: max(120px, min(360px, calc(100cqw - 2 * (var(--hb-button) * 2 + var(--hb-gutter)))));
+  height: var(--hb-control);
+  padding: 0 var(--hb-gap) 0 5px;
+  box-sizing: border-box;
+  border: var(--hb-hairline) solid var(--hb-border-strong);
+  border-radius: var(--hb-pill);
+  background: var(--hb-card);
+  box-shadow: var(--hb-shadow-float);
+  color: inherit;
+  font: inherit;
+  font-size: var(--hb-text-md);
+  font-weight: var(--hb-weight-semibold);
+  cursor: pointer;
+}
+.hb .thread-pill:hover {
+  background: var(--hb-card-hover);
+}
+.hb .thread-pill:focus-visible {
+  outline: 2px solid var(--hb-focus);
+  outline-offset: 2px;
+}
+.hb .thread-pill__name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.hb .thread-pill__engine {
+  flex-shrink: 0;
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--hb-text-xs);
+  font-weight: var(--hb-weight-medium);
+  color: var(--hb-muted);
+}
+
+.hb .banner {
+  display: flex;
+  align-items: center;
+  gap: var(--hb-gap-sm);
+  height: var(--hb-control-sm);
+  margin: 0 var(--thread-inline) var(--hb-gap-sm);
+  padding: 0 var(--hb-gap);
+  border-radius: var(--hb-pill);
+  background: linear-gradient(var(--hb-banner-fill), var(--hb-banner-fill)), var(--hb-bg);
+  color: var(--hb-banner-text);
+  font-size: var(--hb-text-sm);
+}
+.hb .banner__text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The bot's thread is Synara's ChatView (its composer, queue and controls) under the strip. */
+.hb .thread-pane__chat {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  flex-direction: column;
+}
+/* The slot ChatView gives the rows: the transcript's place, under the floating composer. */
+.hb .thread-frame {
+  position: relative;
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  flex-direction: column;
+}
+/* The rows: the whole pane's height, kept clear of the bars by padding; faded under a bar only
+   while rows are behind it. */
+.hb .thread {
+  --fade-top: 0px;
+  --fade-bottom: 0px;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--thread-top) 0 calc(var(--thread-bottom) + 2 * var(--hb-gap));
+  scroll-padding: var(--thread-top) 0 var(--thread-bottom);
+  box-sizing: border-box;
+  -webkit-mask-image: linear-gradient(
+    to bottom,
+    transparent 0,
+    transparent calc(var(--fade-top) * 0.45),
+    #000 var(--fade-top),
+    #000 calc(100% - var(--fade-bottom)),
+    transparent calc(100% - var(--fade-bottom) * 0.35)
+  );
+  mask-image: linear-gradient(
+    to bottom,
+    transparent 0,
+    transparent calc(var(--fade-top) * 0.45),
+    #000 var(--fade-top),
+    #000 calc(100% - var(--fade-bottom)),
+    transparent calc(100% - var(--fade-bottom) * 0.35)
+  );
+}
+.hb .thread-pane[data-under-top] .thread {
+  --fade-top: calc(var(--thread-top) + var(--hb-fade));
+}
+.hb .thread-pane[data-under-bottom] .thread {
+  --fade-bottom: calc(var(--thread-bottom) + var(--hb-fade));
+}
+.hb .thread > * {
+  box-sizing: border-box;
+  width: 100%;
+  max-width: var(--thread-column);
+  margin-inline: auto;
+}
+/* Jump to the latest message: a round button just above the composer. */
+.hb .thread__latest {
+  position: absolute;
+  z-index: var(--hb-z-strip);
+  left: 50%;
+  bottom: calc(var(--thread-bottom) + var(--hb-gap-sm));
+  transform: translateX(-50%);
+  border: var(--hb-hairline) solid var(--hb-border-strong);
+  box-shadow: var(--hb-shadow-float);
+  animation: thread-latest-in 0.16s ease-out;
+}
+@keyframes thread-latest-in {
+  from {
+    opacity: 0;
+    scale: 0.85;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .hb .thread__latest {
+    animation: none;
+  }
+}
+
+.hb .first-use {
+  min-height: 100%;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--hb-gap);
+  max-width: 560px;
+  margin: auto;
+  padding: var(--hb-gutter);
+  text-align: center;
+}
+
+/* Rows */
+.hb .separator {
+  display: flex;
+  justify-content: center;
+  padding: var(--hb-gutter) 0 var(--hb-gap-sm);
+  font-size: var(--hb-text-xs);
+  font-weight: var(--hb-weight-medium);
+  color: var(--hb-muted);
+}
+.hb .system-line {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: var(--hb-gap-sm);
+  margin: 0;
+  padding: var(--hb-gap-sm) var(--hb-gutter);
+  overflow: hidden;
+  text-align: center;
+  font-size: var(--hb-text-xs);
+  font-weight: var(--hb-weight-medium);
+  color: var(--hb-muted);
+}
+.hb .system-line__text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.hb .system-line button {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--hb-soft-text);
+  font: inherit;
+  cursor: pointer;
+}
+.hb .system-line button:hover {
+  color: var(--hb-text);
+  text-decoration: underline;
+}
+/* "Message from [face] SynBot" over work another bot handed over. */
+.hb .from-line {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--hb-gap-sm);
+  width: 100%;
+  padding: var(--hb-gutter) 0 var(--hb-gap-xs);
+  border: 0;
+  background: none;
+  font: inherit;
+  font-size: var(--hb-text-sm);
+  color: var(--hb-muted);
+  cursor: pointer;
+}
+.hb .from-line:hover .from-line__name {
+  color: var(--hb-text);
+}
+.hb .from-line:focus-visible {
+  outline: 2px solid var(--hb-focus);
+  outline-offset: -2px;
+}
+.hb .from-line__name {
+  color: var(--hb-soft-text);
+  font-weight: var(--hb-weight-medium);
+}
+.hb .row {
+  display: flex;
+  /* Messages from the same side sit close; a new side starts a little further down. */
+  padding: calc(2 * var(--hb-gap-xs)) var(--thread-inline) 0;
+  font-size: var(--hb-text-chat);
+  line-height: var(--hb-line);
+}
+.hb .row--group {
+  padding-top: calc(var(--hb-gap) + var(--hb-gap-xs));
+}
+.hb .row--user {
+  justify-content: flex-end;
+}
+.hb .bubble {
+  min-width: 0;
+  max-width: var(--hb-bubble-max);
+  padding: calc(var(--hb-bubble-pad) + 2px) calc(var(--hb-gutter) - 2px);
+  border-radius: var(--hb-radius-lg);
+  overflow-wrap: anywhere;
+  user-select: text;
+  -webkit-user-select: text;
+}
+.hb .bubble--user {
+  padding: var(--hb-bubble-pad) calc(var(--hb-gutter) - 3px);
+  background: var(--hb-user-bubble);
+  color: var(--hb-on-user-bubble);
+}
+/* In a bot's thread: the bot's color, white text in both themes. */
+.hb .bubble--tinted {
+  background: var(--bubble-tint);
+  color: #ffffff;
+}
+.hb .bot {
+  display: flex;
+  flex-direction: column;
+  gap: var(--hb-gap-sm);
+  min-width: 0;
+  max-width: var(--hb-bubble-max);
+}
+.hb .bot--card {
+  width: min(var(--hb-choice), 100%);
+}
+.hb .bubble--bot {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--hb-gap-sm);
+  background: var(--hb-bot-bubble);
+}
+.hb .user-stack {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+  min-width: 0;
+  max-width: 100%;
+}
+.hb .message-images {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 4px;
+  max-width: var(--hb-bubble-max);
+}
+.hb .message-image {
+  display: block;
+  width: 132px;
+  height: 132px;
+  border: var(--hb-hairline) solid var(--hb-border);
+  border-radius: var(--hb-radius-lg);
+  background: var(--hb-card);
+  object-fit: cover;
+}
+
+/* The bubble's text: Synara's ChatMarkdown (links, thread links, file paths, code), set in
+   HoloBot's ChatText look: the bubble's own size and color, tight paragraphs, soft code. */
+.hb .bubble .chat-markdown {
+  --hb-md-code-bg: color-mix(in srgb, currentColor 8%, transparent);
+  width: auto;
+  color: inherit;
+  font-size: inherit;
+  line-height: inherit;
+}
+.hb .bubble .chat-markdown p,
+.hb .bubble .chat-markdown ul,
+.hb .bubble .chat-markdown ol,
+.hb .bubble .chat-markdown blockquote,
+.hb .bubble .chat-markdown pre,
+.hb .bubble .chat-markdown table {
+  margin: 0.6em 0;
+}
+.hb .bubble .chat-markdown > p + p {
+  margin-top: 1lh;
+}
+.hb .bubble .chat-markdown > :first-child {
+  margin-top: 0;
+}
+.hb .bubble .chat-markdown > :last-child {
+  margin-bottom: 0;
+}
+.hb .bubble .chat-markdown a {
+  color: var(--hb-tone-active-text);
+  text-decoration: underline dotted;
+  text-decoration-thickness: from-font;
+  text-underline-offset: 0.2em;
+}
+.hb .bubble--user .chat-markdown a {
+  color: inherit;
+}
+.hb .bubble--user .chat-markdown {
+  --hb-md-code-bg: color-mix(in srgb, currentColor 14%, transparent);
+}
+
+.hb .inline-code {
+  padding: 0 4px;
+  border-radius: var(--hb-radius-sm);
+  background: var(--hb-card-hover);
+  font-family: var(--hb-font-mono);
+  font-size: var(--hb-text-sm);
+}
+
+/* A card that asks (ChoiceCard, QuestionCard, ProofCard): the question is its title, the
+   answers short lettered rows or two small buttons; answered, it dims and keeps the pick. */
+.hb .choice {
+  display: flex;
+  flex-direction: column;
+  gap: var(--hb-gap-sm);
+  width: min(var(--hb-bubble-max), 100%);
+  padding: var(--hb-gap) var(--hb-gap) calc(var(--hb-gap) - var(--hb-gap-xs));
+  box-sizing: border-box;
+  border: var(--hb-hairline) solid var(--hb-border-strong);
+  border-radius: var(--hb-radius-lg);
+  background: var(--hb-bot-bubble);
+}
+.hb .choice__head {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--hb-gap-sm);
+}
+.hb .choice__title {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  font-size: var(--hb-text-chat);
+  font-weight: var(--hb-weight-semibold);
+  line-height: var(--hb-line);
+  color: var(--hb-text);
+  overflow-wrap: anywhere;
+}
+.hb .choice__body {
+  margin: 0;
+  font-size: var(--hb-text-md);
+  line-height: 1.45;
+  color: var(--hb-soft-text);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.hb .choice__close {
+  flex-shrink: 0;
+  margin: -4px -4px 0 0;
+}
+.hb .choice__hint,
+.hb .choice__note {
+  margin: 0;
+  font-size: var(--hb-text-sm);
+  color: var(--hb-muted);
+}
+.hb .choice__detail {
+  margin: 0;
+  max-height: calc(var(--hb-line) * 6);
+  overflow: auto;
+  padding: var(--hb-gap-sm) var(--hb-gap);
+  border-radius: var(--hb-radius-sm);
+  background: var(--hb-card-hover);
+  font-family: var(--hb-font-mono);
+  font-size: var(--hb-text-xs);
+  line-height: 1.5;
+  color: var(--hb-soft-text);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: text;
+  -webkit-user-select: text;
+}
+.hb .choice__rows {
+  display: flex;
+  flex-direction: column;
+  margin: 0 calc(-1 * var(--hb-gap-sm));
+}
+.hb .choice__row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: var(--hb-control);
+  padding: 2px var(--hb-gap-sm);
+  border: 0;
+  border-radius: var(--hb-radius-sm);
+  background: none;
+  color: var(--hb-text);
+  font: inherit;
+  font-size: var(--hb-text-chat);
+  text-align: left;
+  cursor: pointer;
+}
+.hb button.choice__row:hover:not(:disabled) {
+  background: var(--hb-card-hover);
+}
+.hb button.choice__row:focus-visible {
+  outline: 2px solid var(--hb-focus);
+  outline-offset: -2px;
+}
+.hb .choice__row:disabled {
+  cursor: default;
+}
+.hb .choice__row--danger {
+  color: var(--hb-danger-text);
+}
+.hb .choice__row[data-primary] .choice__label {
+  font-weight: var(--hb-weight-medium);
+}
+.hb .choice__letter {
+  display: grid;
+  flex-shrink: 0;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  box-sizing: border-box;
+  border: 1px solid var(--hb-border-strong);
+  border-radius: 6px;
+  font-size: var(--hb-text-xs);
+  font-weight: var(--hb-weight-medium);
+  color: var(--hb-soft-text);
+}
+.hb .choice__row[data-picked] .choice__letter {
+  border-color: transparent;
+  background: var(--hb-text);
+  color: var(--hb-bg);
+}
+.hb .choice__label {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.hb .choice__foot {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--hb-gap-sm);
+  padding-top: var(--hb-gap-xs);
+}
+.hb .choice__dots {
+  display: flex;
+  gap: 6px;
+  margin-right: auto;
+}
+.hb .choice__dot {
+  width: 6px;
+  height: 6px;
+  border-radius: var(--hb-pill);
+  background: var(--hb-border-strong);
+}
+.hb .choice__dot[data-on] {
+  background: var(--hb-text);
+}
+.hb .choice__aside {
+  margin: 0;
+  padding-left: var(--hb-gap-sm);
+  font-size: var(--hb-text-xs);
+  color: var(--hb-muted);
+}
+.hb .choice__part {
+  display: flex;
+  flex-direction: column;
+  gap: var(--hb-gap-xs);
+}
+.hb .choice--done {
+  gap: var(--hb-gap);
+}
+.hb .choice--done .choice__title,
+.hb .choice--done .choice__label {
+  color: var(--hb-muted);
+}
+.hb .choice--done .choice__row {
+  min-height: 26px;
+}
+.hb .choice--pair {
+  padding-bottom: var(--hb-gap);
+}
+.hb .choice__pair {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--hb-gap-sm);
+}
+.hb .choice__chosen {
+  display: flex;
+  align-items: center;
+  gap: var(--hb-gap-xs);
+  margin: 0;
+  font-size: var(--hb-text-sm);
+  color: var(--hb-muted);
+}
+
+/* The merge proof (ProofCard): the PR and what changed, the checklist, the answers. */
+.hb .proof-card__meta {
+  margin: 0;
+  font-size: var(--hb-text-sm);
+  color: var(--hb-muted);
+}
+.hb .proof-card__meta a {
+  color: inherit;
+}
+.hb .diffstat {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.hb .diffstat__add {
+  color: var(--hb-tone-good-text);
+}
+.hb .diffstat__del {
+  color: var(--hb-tone-bad-text);
+}
+.hb .checklist {
+  display: flex;
+  flex-direction: column;
+  gap: var(--hb-gap-xs);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: var(--hb-text-md);
+}
+.hb .checklist__item {
+  display: flex;
+  align-items: baseline;
+  gap: var(--hb-gap-sm);
+  min-width: 0;
+}
+.hb .checklist__mark {
+  flex-shrink: 0;
+  width: var(--hb-icon-sm);
+  text-align: center;
+  font-weight: var(--hb-weight-semibold);
+}
+.hb .checklist__text {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--hb-soft-text);
+}
+.hb .checklist__item--good .checklist__mark {
+  color: var(--hb-tone-good-text);
+}
+.hb .checklist__item--bad .checklist__mark,
+.hb .checklist__item--bad .checklist__text {
+  color: var(--hb-tone-bad-text);
+}
+.hb .checklist__item--attention .checklist__mark {
+  color: var(--hb-tone-attention-text);
+}
+.hb .checklist__item--muted .checklist__mark {
+  color: var(--hb-muted);
+}
+
+/* A task (or a delegation) in a bot's thread: one card (TaskCard). */
+.hb .task-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--hb-gap-sm);
+  width: min(var(--hb-bubble-max), 100%);
+  padding: var(--hb-gap);
+  box-sizing: border-box;
+  border: var(--hb-hairline) solid var(--hb-border-strong);
+  border-radius: var(--hb-radius-lg);
+  background: var(--hb-card);
+  font-size: var(--hb-text-chat);
+  line-height: var(--hb-line);
+}
+.hb .task-card__head {
+  display: flex;
+  align-items: center;
+  gap: var(--hb-gap-sm);
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.hb .task-card__head:focus-visible {
+  outline: 2px solid var(--hb-focus);
+  outline-offset: 2px;
+  border-radius: var(--hb-radius-sm);
+}
+.hb .task-card__title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: var(--hb-weight-semibold);
+}
+.hb .task-card__meta {
+  margin: 0;
+  font-size: var(--hb-text-xs);
+  line-height: 1.4;
+  color: var(--hb-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.hb .task-card__live {
+  display: flex;
+  align-items: center;
+  gap: var(--hb-gap-sm);
+  margin: 0;
+  font-size: var(--hb-text-md);
+  color: var(--hb-soft-text);
+}
+.hb .task-card__text {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  margin: 0;
+  overflow: hidden;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: text;
+  -webkit-user-select: text;
+}
+.hb .task-card__entries {
+  display: flex;
+  flex-direction: column;
+  gap: var(--hb-gap-sm);
+}
+.hb .task-card__entry {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.hb .task-card__entry-head {
+  display: flex;
+  align-items: center;
+  gap: var(--hb-gap-sm);
+  min-width: 0;
+}
+.hb .task-card__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--hb-gap-xs);
+  margin-left: calc(-1 * var(--hb-chip-pad));
+}
+.hb .task-card__pulse {
+  flex-shrink: 0;
+  width: var(--hb-dot-sm);
+  height: var(--hb-dot-sm);
+  border-radius: var(--hb-pill);
+  background: var(--hb-tone-active-text);
+  animation: task-card-pulse 1.4s ease-in-out infinite;
+}
+@keyframes task-card-pulse {
+  50% {
+    opacity: 0.3;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .hb .task-card__pulse {
+    animation: none;
+  }
+}
+
+/* A bot named in a chip line: its face and name; a click opens its thread. */
+.hb .mention {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--hb-text);
+  font: inherit;
+  font-weight: var(--hb-weight-semibold);
+  cursor: pointer;
+}
+.hb .mention:hover {
+  text-decoration: underline;
+  text-underline-offset: 0.2em;
+}
+.hb .mention:focus-visible {
+  outline: 2px solid var(--hb-focus);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+/* The bot answering (Typing): three dots rising in turn, and under it, small, the bot's face
+   at work and what it is doing, shimmering. */
+.hb .typing {
+  align-items: flex-start;
+}
+.hb .typing__body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--hb-gap-xs);
+  min-width: 0;
+}
+.hb .typing__bubble {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  align-self: flex-start;
+  padding: 12px 14px;
+  border-radius: var(--hb-radius-lg);
+  background: var(--hb-bot-bubble);
+}
+.hb .typing__dot {
+  width: 7px;
+  height: 7px;
+  border-radius: var(--hb-pill);
+  background: var(--hb-muted);
+  animation: typing-dot 1.2s ease-in-out infinite;
+}
+.hb .typing__dot:nth-child(2) {
+  animation-delay: 0.15s;
+}
+.hb .typing__dot:nth-child(3) {
+  animation-delay: 0.3s;
+}
+@keyframes typing-dot {
+  0%,
+  60%,
+  100% {
+    transform: translateY(0);
+    opacity: 0.45;
+  }
+  30% {
+    transform: translateY(-4px);
+    opacity: 1;
+  }
+}
+.hb .typing__step {
+  display: flex;
+  align-items: center;
+  gap: var(--hb-gap-sm);
+  margin: var(--hb-gap-xs) 0 0;
+  padding-left: var(--hb-gap-xs);
+  font-size: var(--hb-text-sm);
+}
+.hb .typing__doing {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  background: linear-gradient(
+    90deg,
+    var(--hb-muted) 0%,
+    var(--hb-muted) 40%,
+    var(--hb-text) 50%,
+    var(--hb-muted) 60%,
+    var(--hb-muted) 100%
+  );
+  background-size: 250% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: typing-shimmer 1.6s linear infinite;
+}
+@keyframes typing-shimmer {
+  from {
+    background-position: 100% 0;
+  }
+  to {
+    background-position: -150% 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .hb .typing__dot {
+    animation: none;
+    opacity: 0.7;
+  }
+  .hb .typing__doing {
+    animation: none;
+    color: var(--hb-muted);
+    background: none;
+  }
+}
+
+/* The right pane's task thread (TaskBar): back, the title, close; then state, place and PR. */
+.hb .task-pane.hb-pane--sessions {
+  /* HoloBot's 380 px pane, wider on a wide window: the worker thread is a full Synara chat. */
+  flex: 0 0 clamp(var(--hb-sessions), 40%, 44rem);
+  width: auto;
+  background: var(--hb-bg);
+}
+.hb .task-bar {
+  grid-template-columns: minmax(0, 1fr) 0 auto;
+  padding-left: var(--hb-gap);
+}
+.hb .task-bar .hb-strip__leading {
+  gap: var(--hb-gap-sm);
+}
+.hb .task-bar__info {
+  display: flex;
+  align-items: center;
+  gap: var(--hb-gap-sm);
+  min-width: 0;
+  padding: 0 var(--hb-gutter) var(--hb-gap-sm);
+  font-size: var(--hb-text-xs);
+  color: var(--hb-muted);
+}
+.hb .task-bar__meta {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.hb .task-bar__pr {
+  flex-shrink: 0;
+  color: var(--hb-tone-active-text);
+  text-decoration: none;
+}
+.hb .task-bar__pr:hover {
+  text-decoration: underline;
+}
+.hb .task-pane__proof {
+  padding: 0 var(--hb-gutter) var(--hb-gap);
+}
+.hb .task-pane__chat {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  flex-direction: column;
+}

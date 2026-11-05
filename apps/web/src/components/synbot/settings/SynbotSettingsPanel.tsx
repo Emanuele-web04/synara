@@ -1,43 +1,148 @@
 // FILE: SynbotSettingsPanel.tsx
-// Purpose: Settings → SynBot (Beta): how bots recap, whether they control chats without asking,
-//          the merge proof, and how many tasks run at once. Values come from the live SynBot
-//          store; each change is one `bots.updateSettings` call (the server owns the values).
+// Purpose: Settings → SynBot (Beta) in HoloBot's settings controls (settings/SettingsDialog.tsx,
+//          controls.tsx): the bots (face, name and role, where it works and its engine; Edit
+//          opens its sheet; New bot…), then how bots recap, whether they control chats without
+//          asking, the merge proof and how many tasks run at once, each a row with its control
+//          on the right. Values come from the live SynBot store; each change is one
+//          `bots.updateSettings` call (the server owns the values).
 // Layer: Settings UI panel
 // Exports: SynbotSettingsPanel
 
 import {
   BOT_PARALLEL_TASKS_MAX,
   BOT_PARALLEL_TASKS_MIN,
-  DEFAULT_BOT_SETTINGS,
+  type Bot,
   type BotRecapMode,
   type BotsUpdateSettingsInput,
 } from "@synara/contracts";
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 
-import { SettingResetButton, SettingsSelectControl } from "~/components/settings/SettingControls";
-import {
-  SettingsEmptyState,
-  SettingsSection,
-  SettingsRow,
-} from "~/components/settings/SettingsPanelPrimitives";
-import { SelectItem } from "~/components/ui/select";
-import { Spinner } from "~/components/ui/spinner";
-import { Switch } from "~/components/ui/switch";
-import { toastManager } from "~/components/ui/toast";
 import { useTranslation } from "~/i18n";
 import { readNativeApi } from "~/nativeApi";
 import { SETTINGS_TARGETS } from "~/settingsNavigation";
+import { useStore } from "~/store";
+import { orderedBots } from "~/synbot/synbotState.logic";
 import { startSynbotLiveSync, useSynbotStore } from "~/synbot/synbotStore";
 
-const RECAP_LABEL_KEYS: Record<BotRecapMode, string> = {
-  request: "synbotEditor:recapRequest",
-  task: "synbotEditor:recapTask",
-};
+import { toastManager } from "../../ui/toast";
+import { BotFace } from "../BotFace";
+import { BotSheetHost } from "../editor/BotSheet";
+import { useBotEditor } from "../editor/botEditorStore";
+import { CapsuleButton, Field, Segmented, Switch, Text } from "../kit/controls";
+import { engineLabel } from "../thread/useEngineMenu";
+import "../kit/holobot.css";
+import "./settings.css";
 
-const PARALLEL_TASK_OPTIONS = Array.from(
-  { length: BOT_PARALLEL_TASKS_MAX - BOT_PARALLEL_TASKS_MIN + 1 },
-  (_, index) => BOT_PARALLEL_TASKS_MIN + index,
-);
+/** A setting on one line: its name (and a hint under it) left, the control right. */
+function Row({
+  id,
+  label,
+  hint,
+  children,
+}: {
+  readonly id?: string;
+  readonly label: string;
+  readonly hint?: string;
+  readonly children: ReactNode;
+}) {
+  return (
+    <div id={id} className="settings-row">
+      <div className="settings-row__text">
+        <Text variant="small">{label}</Text>
+        {hint ? (
+          <Text variant="caption" tone="muted">
+            {hint}
+          </Text>
+        ) : null}
+      </div>
+      {children}
+    </div>
+  );
+}
+
+/** A count from min to max in a compact native select. */
+function Count({
+  label,
+  value,
+  disabled,
+  onChange,
+}: {
+  readonly label: string;
+  readonly value: number;
+  readonly disabled: boolean;
+  readonly onChange: (value: number) => void;
+}) {
+  return (
+    <span className="settings-select">
+      <select
+        aria-label={label}
+        value={value}
+        disabled={disabled}
+        onChange={(event) => onChange(Number(event.target.value))}
+      >
+        {Array.from(
+          { length: BOT_PARALLEL_TASKS_MAX - BOT_PARALLEL_TASKS_MIN + 1 },
+          (_, index) => index + BOT_PARALLEL_TASKS_MIN,
+        ).map((count) => (
+          <option key={count} value={count}>
+            {count}
+          </option>
+        ))}
+      </select>
+    </span>
+  );
+}
+
+function BotsSection() {
+  const { t } = useTranslation();
+  const bots = useSynbotStore((store) => store.data.bots);
+  const projects = useStore((store) => store.projects);
+  const openEdit = useBotEditor((store) => store.openEdit);
+  const openCreate = useBotEditor((store) => store.openCreate);
+  const { main, pinned, others } = orderedBots(bots);
+  const ordered = [...(main ? [main] : []), ...pinned, ...others];
+  const where = (bot: Bot) =>
+    bot.scope.projects === "all"
+      ? t("synbotEditor:allProjects")
+      : bot.scope.projects
+          .map(
+            (id) =>
+              projects.find((project) => project.id === id)?.name ??
+              t("synbotEditor:removedProject"),
+          )
+          .join(", ");
+  return (
+    <Field
+      className="settings__section"
+      title={t("synbotEditor:settingsBotsSection")}
+      hint={t("synbotEditor:settingsBotsHint")}
+    >
+      <ul className="settings-rows">
+        {ordered.map((bot) => (
+          <li key={bot.id} className="settings-row settings-bot">
+            <BotFace bot={bot} size="card" />
+            <span className="settings-row__text">
+              <Text variant="small" as="span">
+                {bot.role ? `${bot.name} · ${bot.role}` : bot.name}
+              </Text>
+              <Text variant="caption" tone="muted" as="span" truncate>
+                {`${where(bot)} · ${engineLabel(bot.modelSelection)}`}
+              </Text>
+            </span>
+            <CapsuleButton kind="ghost" small onClick={() => openEdit(bot.id)}>
+              {t("synbotEditor:edit")}
+            </CapsuleButton>
+          </li>
+        ))}
+      </ul>
+      <div className="settings__action">
+        <CapsuleButton kind="normal" compact onClick={() => openCreate()}>
+          {t("synbotEditor:newBotEllipsis")}
+        </CapsuleButton>
+      </div>
+    </Field>
+  );
+}
 
 export function SynbotSettingsPanel() {
   const { t } = useTranslation();
@@ -51,16 +156,22 @@ export function SynbotSettingsPanel() {
 
   if (status === "unavailable" || status === "error") {
     return (
-      <SettingsEmptyState tone={status === "error" ? "destructive" : "muted"}>
-        {status === "error" ? t("synbotEditor:settingsLoadFailed") : t("synbotEditor:unavailable")}
-      </SettingsEmptyState>
+      <div className="hb synbot-settings">
+        <Text variant="small" tone={status === "error" ? "bad" : "muted"}>
+          {status === "error"
+            ? t("synbotEditor:settingsLoadFailed")
+            : t("synbotEditor:unavailable")}
+        </Text>
+      </div>
     );
   }
   if (status !== "ready") {
     return (
-      <SettingsEmptyState>
-        <Spinner aria-label={t("synbotEditor:loading")} className="mx-auto size-4" />
-      </SettingsEmptyState>
+      <div className="hb synbot-settings">
+        <Text variant="small" tone="muted">
+          {t("synbotEditor:loading")}
+        </Text>
+      </div>
     );
   }
 
@@ -82,107 +193,72 @@ export function SynbotSettingsPanel() {
     }
   };
 
-  const reset = (label: string, patch: BotsUpdateSettingsInput) => (
-    <SettingResetButton label={label} onClick={() => void save(patch)} />
-  );
-
   return (
-    <div className="flex flex-col gap-7">
-      <SettingsSection title="synbotEditor:settingsBotsSection">
-        <SettingsRow
-          id={SETTINGS_TARGETS.synbotRecap}
-          title="synbotEditor:recap"
-          description="synbotEditor:recapDescription"
-          resetAction={
-            settings.recapMode !== DEFAULT_BOT_SETTINGS.recapMode
-              ? reset(t("synbotEditor:recap"), { recapMode: DEFAULT_BOT_SETTINGS.recapMode })
-              : null
-          }
-          control={
-            <SettingsSelectControl
-              value={settings.recapMode}
-              valueContent={t(RECAP_LABEL_KEYS[settings.recapMode])}
-              ariaLabel={t("synbotEditor:recap")}
-              triggerClassName="w-full sm:w-56"
-              disabled={saving}
-              onValueChange={(value) => void save({ recapMode: value as BotRecapMode })}
-            >
-              {(Object.keys(RECAP_LABEL_KEYS) as BotRecapMode[]).map((mode) => (
-                <SelectItem key={mode} value={mode}>
-                  {t(RECAP_LABEL_KEYS[mode])}
-                </SelectItem>
-              ))}
-            </SettingsSelectControl>
-          }
-        />
-        <SettingsRow
-          id={SETTINGS_TARGETS.synbotControlChats}
-          title="synbotEditor:controlChats"
-          description="synbotEditor:controlChatsDescription"
-          resetAction={
-            settings.controlWithoutAsking !== DEFAULT_BOT_SETTINGS.controlWithoutAsking
-              ? reset(t("synbotEditor:controlChats"), {
-                  controlWithoutAsking: DEFAULT_BOT_SETTINGS.controlWithoutAsking,
-                })
-              : null
-          }
-          control={
+    <div className="hb synbot-settings">
+      <BotsSection />
+      <Field
+        className="settings__section"
+        title={t("synbotEditor:recap")}
+        hint={t("synbotEditor:recapDescription")}
+      >
+        <div id={SETTINGS_TARGETS.synbotRecap}>
+          <Segmented<BotRecapMode>
+            label={t("synbotEditor:recap")}
+            value={settings.recapMode}
+            disabled={saving}
+            options={[
+              { value: "request", label: t("synbotEditor:recapRequest") },
+              { value: "task", label: t("synbotEditor:recapTask") },
+            ]}
+            onChange={(recapMode) => void save({ recapMode })}
+          />
+        </div>
+      </Field>
+      <Field
+        className="settings__section"
+        title={t("synbotEditor:workSection")}
+        hint={t("synbotEditor:workSectionHint")}
+      >
+        <div className="settings-rows">
+          <Row
+            id={SETTINGS_TARGETS.synbotControlChats}
+            label={t("synbotEditor:controlChats")}
+            hint={t("synbotEditor:controlChatsDescription")}
+          >
             <Switch
               checked={settings.controlWithoutAsking}
               disabled={saving}
-              aria-label={t("synbotEditor:controlChats")}
-              onCheckedChange={(checked) => void save({ controlWithoutAsking: checked })}
+              ariaLabel={t("synbotEditor:controlChats")}
+              onChange={(checked) => void save({ controlWithoutAsking: checked })}
             />
-          }
-        />
-        <SettingsRow
-          id={SETTINGS_TARGETS.synbotMergeProof}
-          title="synbotEditor:mergeProof"
-          description="synbotEditor:mergeProofDescription"
-          resetAction={
-            settings.mergeProofEnabled !== DEFAULT_BOT_SETTINGS.mergeProofEnabled
-              ? reset(t("synbotEditor:mergeProof"), {
-                  mergeProofEnabled: DEFAULT_BOT_SETTINGS.mergeProofEnabled,
-                })
-              : null
-          }
-          control={
+          </Row>
+          <Row
+            id={SETTINGS_TARGETS.synbotMergeProof}
+            label={t("synbotEditor:mergeProof")}
+            hint={t("synbotEditor:mergeProofDescription")}
+          >
             <Switch
               checked={settings.mergeProofEnabled}
               disabled={saving}
-              aria-label={t("synbotEditor:mergeProof")}
-              onCheckedChange={(checked) => void save({ mergeProofEnabled: checked })}
+              ariaLabel={t("synbotEditor:mergeProof")}
+              onChange={(checked) => void save({ mergeProofEnabled: checked })}
             />
-          }
-        />
-        <SettingsRow
-          id={SETTINGS_TARGETS.synbotParallelTasks}
-          title="synbotEditor:parallelTasks"
-          description="synbotEditor:parallelTasksDescription"
-          resetAction={
-            settings.maxParallelTasks !== DEFAULT_BOT_SETTINGS.maxParallelTasks
-              ? reset(t("synbotEditor:parallelTasks"), {
-                  maxParallelTasks: DEFAULT_BOT_SETTINGS.maxParallelTasks,
-                })
-              : null
-          }
-          control={
-            <SettingsSelectControl
-              value={String(settings.maxParallelTasks)}
-              valueContent={String(settings.maxParallelTasks)}
-              ariaLabel={t("synbotEditor:parallelTasks")}
+          </Row>
+          <Row
+            id={SETTINGS_TARGETS.synbotParallelTasks}
+            label={t("synbotEditor:parallelTasks")}
+            hint={t("synbotEditor:parallelTasksDescription")}
+          >
+            <Count
+              label={t("synbotEditor:parallelTasks")}
+              value={settings.maxParallelTasks}
               disabled={saving}
-              onValueChange={(value) => void save({ maxParallelTasks: Number(value) })}
-            >
-              {PARALLEL_TASK_OPTIONS.map((count) => (
-                <SelectItem key={count} value={String(count)}>
-                  {count}
-                </SelectItem>
-              ))}
-            </SettingsSelectControl>
-          }
-        />
-      </SettingsSection>
+              onChange={(maxParallelTasks) => void save({ maxParallelTasks })}
+            />
+          </Row>
+        </div>
+      </Field>
+      <BotSheetHost />
     </div>
   );
 }
