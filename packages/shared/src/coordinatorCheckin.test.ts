@@ -102,6 +102,17 @@ describe("suppressCoordinatorCheckinMessages", () => {
     expect(kept.map((message) => message.id)).toEqual(["a1"]);
   });
 
+  it("drops a trailing SILENT after a reply in the same check-in turn", () => {
+    const messages = [
+      user("u1", "automation"),
+      assistant("a1", "Backend finished", "turn-check-1"),
+      assistant("a2", "SILENT", "turn-check-1"),
+      assistant("a3", "SILENT", "turn-other"),
+    ];
+    const { messages: kept } = suppressCoordinatorCheckinMessages(messages);
+    expect(kept.map((message) => message.id)).toEqual(["a1", "a3"]);
+  });
+
   it("back-to-back check-ins each suppress only their own prompt", () => {
     const messages = [
       user("u1", "automation", "turn-check-1"),

@@ -74,6 +74,9 @@ export const suppressCoordinatorCheckinMessages = <T extends CoordinatorCheckinM
   messages: ReadonlyArray<T>,
 ): { readonly messages: T[]; readonly checkinTurnIds: ReadonlySet<string> } => {
   const checkinTurnIds = new Set<string>();
+  // Turns already answered by a check-in reply: a later "SILENT" in the same turn (a
+  // reply first, then the sentinel) is still a silent check-in line.
+  const answeredCheckinTurnIds = new Set<string>();
   const kept: T[] = [];
   let pendingCheckinTurnId: string | null | undefined;
   let checkinOpen = false;
@@ -101,10 +104,18 @@ export const suppressCoordinatorCheckinMessages = <T extends CoordinatorCheckinM
       if (matchesCheckinTurn) {
         checkinOpen = false;
         pendingCheckinTurnId = undefined;
+        if (message.turnId) answeredCheckinTurnIds.add(message.turnId);
         if (isSilentCoordinatorCheckinReply(message.text)) continue;
       }
       // An assistant message bound to another turn leaves the check-in pending;
       // its own reply is evaluated when it arrives.
+    } else if (
+      message.role === "assistant" &&
+      message.turnId &&
+      answeredCheckinTurnIds.has(message.turnId) &&
+      isSilentCoordinatorCheckinReply(message.text)
+    ) {
+      continue;
     }
     kept.push(message);
   }

@@ -3,6 +3,7 @@
 // Layer: Notification logic
 // Exports: lifecycle detection helpers and notification copy helpers
 
+import { isSilentCoordinatorCheckinReply } from "@synara/shared/coordinatorCheckin";
 import {
   defaultTerminalTitleForCliKind,
   type TerminalCliKind,
@@ -637,13 +638,19 @@ export function collectCompletedThreadCandidates(
       continue;
     }
 
+    const assistantSummary = summarizeLatestAssistantMessage(thread);
+    // A coordinator's background check-in that found nothing to report ("SILENT")
+    // never renders in its chat, so it must not notify either.
+    if (assistantSummary !== null && isSilentCoordinatorCheckinReply(assistantSummary)) {
+      continue;
+    }
     candidates.push({
       threadId: thread.id,
       projectId: thread.projectId,
       title: thread.title,
       turnId: latestTurn.turnId,
       completedAt,
-      assistantSummary: summarizeLatestAssistantMessage(thread),
+      assistantSummary,
     });
   }
 

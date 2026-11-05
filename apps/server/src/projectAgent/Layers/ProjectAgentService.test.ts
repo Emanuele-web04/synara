@@ -116,6 +116,7 @@ function makeTestLayer(options?: {
         lastProgressAt?: string | null;
       } | null;
       latestTurn?: {
+        turnId?: string;
         state: string;
         startedAt?: string;
         completedAt?: string | null;
@@ -6062,6 +6063,48 @@ it.effect("settles a missing diff as interrupted without resetting the recovery 
       assert.equal(settledRows[1]!.activity.summary, "✓ Stalled worker finished — no result filed");
     }
   }).pipe(Effect.provide(Layer.merge(harness.layer, TestClock.layer())));
+});
+
+// Diff updates mid-turn close their checkpoint "missing" while that turn still
+// runs: they never settle the worker as interrupted.
+it.effect("ignores a missing diff from the turn that is still running", () => {
+  const harness = makeTestLayer();
+  return Effect.gen(function* () {
+    const service = yield* ProjectAgentService;
+    const repository = yield* ProjectAgentRepository;
+    const overview = yield* configureTestGroup(service, "req-live-diff-setup");
+    const coordinatorThreadId = overview.config!.coordinatorThreadId!;
+    const workerThreadId = ThreadId.makeUnsafe("thread-live-diff-worker");
+    yield* service.recordManagedWorkerThreads({
+      requestId: "req-live-diff-record",
+      callerThreadId: coordinatorThreadId,
+      threadIds: [workerThreadId],
+      titles: ["Busy worker"],
+      prompts: ["Add divide"],
+    });
+    harness.threadShells[workerThreadId] = {
+      ...quietRunningShell("1970-01-01T00:00:00.000Z"),
+      latestTurn: { turnId: "turn-live", state: "running", startedAt: "1970-01-01T00:00:00.000Z" },
+    };
+    harness.dispatched.length = 0;
+
+    yield* service.ingestSettledThreadEvent({
+      threadId: workerThreadId,
+      sourceEventId: "diff-live-missing-1",
+      eventType: "thread.turn-diff-completed",
+      checkpointStatus: "missing",
+      turnId: "turn-live",
+      createdAt: "1970-01-01T00:01:00.000Z",
+    });
+    const worker = yield* repository.findManagedWorkerByThread(workerThreadId);
+    assert.notEqual(Option.isSome(worker) ? worker.value.settleOutcome : null, "interrupted");
+    const settled = harness.dispatched.filter(
+      (command) =>
+        command.type === "thread.activity.append" &&
+        command.activity.kind === "synara.worker.settled",
+    );
+    assert.equal(settled.length, 0);
+  }).pipe(Effect.provide(harness.layer));
 });
 
 // A provider that only echoes the recovery steer emits activity without real
