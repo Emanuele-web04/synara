@@ -44,6 +44,8 @@ permissions:
 env:
   # Keep the portable build fingerprint identical to its producer.
   AZURE_TRUSTED_SIGNING_SUBJECT_DN: ${{ secrets.AZURE_TRUSTED_SIGNING_SUBJECT_DN }}
+  SYNARA_STABLE_ACCOUNT_URL: ${{ inputs.desktop_flavor == 'production' && vars.SYNARA_STABLE_ACCOUNT_URL || '' }}
+  VITE_SYNARA_BILLING_ENABLED: ${{ inputs.desktop_flavor == 'production' && vars.SYNARA_STABLE_ACCOUNT_URL != '' && vars.SYNARA_STABLE_BILLING_UI || '' }}
 
 jobs:
   build:

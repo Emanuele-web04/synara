@@ -261,6 +261,9 @@ jobs:
   build_portable:
     name: Build portable JavaScript
     needs: preflight
+    env:
+      SYNARA_STABLE_ACCOUNT_URL: ${{ needs.preflight.outputs.desktop_flavor == 'production' && vars.SYNARA_STABLE_ACCOUNT_URL || '' }}
+      VITE_SYNARA_BILLING_ENABLED: ${{ needs.preflight.outputs.desktop_flavor == 'production' && vars.SYNARA_STABLE_ACCOUNT_URL != '' && vars.SYNARA_STABLE_BILLING_UI || '' }}
     if: needs.preflight.outputs.build_js == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -440,6 +443,9 @@ jobs:
 
       - name: Restore portable outputs
         uses: ./.github/actions/restore-portable-build
+        env:
+          SYNARA_STABLE_ACCOUNT_URL: ${{ needs.preflight.outputs.desktop_flavor == 'production' && vars.SYNARA_STABLE_ACCOUNT_URL || '' }}
+          VITE_SYNARA_BILLING_ENABLED: ${{ needs.preflight.outputs.desktop_flavor == 'production' && vars.SYNARA_STABLE_ACCOUNT_URL != '' && vars.SYNARA_STABLE_BILLING_UI || '' }}
         with:
           source-commit: ${{ needs.preflight.outputs.source_commit }}
 
@@ -477,6 +483,9 @@ jobs:
 
       - name: Restore portable outputs
         uses: ./.github/actions/restore-portable-build
+        env:
+          SYNARA_STABLE_ACCOUNT_URL: ${{ needs.preflight.outputs.desktop_flavor == 'production' && vars.SYNARA_STABLE_ACCOUNT_URL || '' }}
+          VITE_SYNARA_BILLING_ENABLED: ${{ needs.preflight.outputs.desktop_flavor == 'production' && vars.SYNARA_STABLE_ACCOUNT_URL != '' && vars.SYNARA_STABLE_BILLING_UI || '' }}
         with:
           source-commit: ${{ needs.preflight.outputs.source_commit }}
 

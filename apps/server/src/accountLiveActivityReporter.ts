@@ -8,7 +8,7 @@ import {
   resolveEnvironmentId,
 } from "./accountAuth";
 import { mintHostProof, readHostIdentity } from "./hostIdentity";
-import { isServerBetaFeatureEnabled } from "./betaFeatureGate";
+import { accountLiveActivityEnabled } from "./remoteFeaturePolicy";
 import { PROVIDER_RUNTIME_INGESTION_CONSUMER } from "./persistence/Services/ProviderRuntimeEvents";
 
 const RecoveryLink = Schema.Struct({
@@ -157,6 +157,7 @@ function readWatchedTurn(
  * APNs credentials never reach this process. */
 export function createAccountLiveActivityReporter(options: {
   baseDir: string;
+  stateDir?: string;
   devUrl?: URL;
   hostIdentityPath: string;
   sql: SqlClient.SqlClient;
@@ -165,7 +166,7 @@ export function createAccountLiveActivityReporter(options: {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const controller = new AbortController();
   async function sync() {
-    if (!isServerBetaFeatureEnabled("remoteConnections")) return 60000;
+    if (!accountLiveActivityEnabled(options.stateDir)) return 60000;
     const account = await readAccountFile(accountStateDirectory(options.baseDir, options.devUrl));
     if (!account?.hostId || account.hostKeyGeneration === undefined) return 60000;
     const identity = await readHostIdentity(options.hostIdentityPath);

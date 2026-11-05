@@ -63,7 +63,6 @@ export const NATIVE_EDITOR_BETA_FEATURE = "native-editor";
 export const CHINESE_UI_BETA_FEATURE = "chinese-ui";
 
 export const BETA_ONLY_FEATURES: readonly BetaOnlyFeature[] = [
-  "remoteConnections",
   "accountProfileSync",
   ACCOUNT_INBOX_BETA_FEATURE,
   CHINESE_UI_BETA_FEATURE,

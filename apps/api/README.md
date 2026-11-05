@@ -42,7 +42,7 @@ The sandbox campaign configured for qualification is recorded below.
 | ----------------- | --------------------------------------------------------------------------------------------------------------------------- |
 | Local use         | Free; local coding, local chats and local workspace access do not require Pro.                                              |
 | Synara Pro        | All Remote functionality requires Pro; local desktop use stays free, with ownership and device approval checked separately. |
-| Monthly           | USD 7.99, recurring monthly (`799` minor units).                                                                            |
+| Monthly           | USD 9.99, recurring monthly (`999` minor units).                                                                            |
 | Annual            | USD 79.99, recurring annually (`7999` minor units).                                                                         |
 | Tax               | Exclusive: applicable tax is added at checkout.                                                                             |
 | Introductory code | 50% off the first monthly payment only; no annual discount or permanent reduced renewal price.                              |
@@ -121,7 +121,7 @@ rollout is deliberately approved. This documentation changes no runtime setting.
    and choose `POLAR_ENVIRONMENT=sandbox` or `production` explicitly. Production
    additionally requires `POLAR_PRODUCTION_PAYMENTS_ENABLED=true` and all four
    expected-catalog values: `POLAR_EXPECTED_CURRENCY=USD`,
-   `POLAR_EXPECTED_MONTHLY_AMOUNT_MINOR=799`,
+   `POLAR_EXPECTED_MONTHLY_AMOUNT_MINOR=999`,
    `POLAR_EXPECTED_YEARLY_AMOUNT_MINOR=7999` and
    `POLAR_EXPECTED_TAX_BEHAVIOR=exclusive`. The same complete expected-catalog
    set is optional in sandbox. Catalog validation rejects mismatches; updating
@@ -297,9 +297,11 @@ empty provider search is insufficient proof that payment cannot still complete.
 
 ### Sandbox qualification and production launch state
 
+The sandbox receipts below predate the USD 9.99 monthly launch price.
+
 | Case                                | Observed sandbox evidence                                                                                                                                                                                                                                                                                                                                                                                                    | Still required before launch                                                                                                                                                                                                                                       |
 | ----------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Monthly and annual purchase         | Paid monthly and annual orders use USD 7.99/month and 79.99/year, with tax added. A fresh purchase through the desktop panel reached the configured return URL and reconciled access. Reopening an unpaid attempt reused the same checkout.                                                                                                                                                                                  | Configure and verify the production catalog and merchant account separately.                                                                                                                                                                                       |
+| Monthly and annual purchase         | Paid monthly and annual orders use USD 7.99/month and 79.99/year, with tax added. A fresh purchase through the desktop panel reached the configured return URL and reconciled access. Reopening an unpaid attempt reused the same checkout.                                                                                                                                                                                  | Repeat a fresh sandbox checkout at USD 9.99/month. Configure and verify the production catalog and merchant account separately.                                                                                                                                    |
 | Introductory monthly code           | First charge `399 + 88 = 487`, followed by a paid full-price renewal `799 + 176 = 975` without the discount. Unknown and already-used codes were refused; annual checkout retained its full price.                                                                                                                                                                                                                           | Exercise an actually expired campaign; an unknown or already-used code is a different case.                                                                                                                                                                        |
 | Renewal and payment recovery        | Real failed renewal invoices produced `past_due`, removed the benefit and denied app access. Restoring a saved test payment method paid the same invoice and restored access. Access was observed restored within 20.06 seconds in one run; this sampled upper bound is not a latency guarantee.                                                                                                                             | Verify any nonzero payment-recovery grace period chosen for production. The sandbox vendor withdrew the benefit on failure; no nonzero grace period was exercised.                                                                                                 |
 | Cancellation, refund and chargeback | Period-end cancellation retained paid access; accelerated future expiry then removed the benefit and denied remote access without creating another invoice. Earlier sandbox evidence distinguishes an annual refund, which retained the subscription benefit, from explicit revocation, which removed it.                                                                                                                    | Exercise the chosen production refund/dispute policy; a refund alone does not stop renewal. No real dispute or live payment was induced.                                                                                                                           |
@@ -326,6 +328,12 @@ window runs. Restore cancellation afterward and verify the resulting state.
 Issue refunds from the sandbox merchant dashboard; the runtime token has no
 refund permissions. Record failed or pending cases instead of treating local
 unit tests or historic sandbox receipts as production qualification.
+
+Prepare two Polar Production products with **Draft** visibility, one fixed
+USD 9.99 monthly price and one fixed USD 79.99 annual price, with taxes added
+to each. Attach the same Synara Pro benefit to both and restrict the
+introductory discount to the monthly product. Keep both products in Draft and
+the production checkout and paid-access flags off during preparation.
 
 Production activation remains pending the deployed receiver and monitoring,
 merchant onboarding, qualification of the chosen products/campaign, and approved

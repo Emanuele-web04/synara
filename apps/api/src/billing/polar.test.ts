@@ -17,7 +17,7 @@ const config: PolarBillingConfig = {
 };
 const expectedCatalog = {
   currency: "USD",
-  monthlyAmountMinor: 799,
+  monthlyAmountMinor: 999,
   yearlyAmountMinor: 7999,
   taxBehavior: "exclusive" as const,
 };
@@ -141,7 +141,7 @@ function upstream(
               options.priceAmount ??
               (options.environment === "production"
                 ? id === config.monthlyProductId
-                  ? 799
+                  ? 999
                   : 7999
                 : 1500),
             price_currency:
@@ -273,11 +273,11 @@ describe("Polar protocol boundary", () => {
     });
     upstream({ environment: "production" });
     expect(await provider.plans()).toEqual([
-      { interval: "month", amountMinor: 799, currency: "USD" },
+      { interval: "month", amountMinor: 999, currency: "USD" },
       { interval: "year", amountMinor: 7999, currency: "USD" },
     ]);
     for (const mismatch of [
-      { priceAmount: 800 },
+      { priceAmount: 799 },
       { priceCurrency: "eur" },
       { taxBehavior: "inclusive" },
       { taxBehavior: "location" },
@@ -610,7 +610,7 @@ describe("billing operator configuration", () => {
       POLAR_PORTAL_RETURN_URL: config.portalReturnUrl,
       POLAR_RETURN_ORIGINS: "https://example.com:443/, https://account.example.com",
       POLAR_EXPECTED_CURRENCY: "USD",
-      POLAR_EXPECTED_MONTHLY_AMOUNT_MINOR: "799",
+      POLAR_EXPECTED_MONTHLY_AMOUNT_MINOR: "999",
       POLAR_EXPECTED_YEARLY_AMOUNT_MINOR: "7999",
       POLAR_EXPECTED_TAX_BEHAVIOR: "exclusive",
     };
@@ -618,6 +618,7 @@ describe("billing operator configuration", () => {
       environment: "production",
       productionPaymentsEnabled: true,
       returnOrigins: ["https://example.com", "https://account.example.com"],
+      expectedCatalog,
     });
     for (const liveFlag of [undefined, "false", "1"]) {
       expect(() =>
@@ -650,7 +651,7 @@ describe("billing operator configuration", () => {
     }
     for (const mismatch of [
       { POLAR_EXPECTED_CURRENCY: "usd" },
-      { POLAR_EXPECTED_MONTHLY_AMOUNT_MINOR: "7.99" },
+      { POLAR_EXPECTED_MONTHLY_AMOUNT_MINOR: "9.99" },
       { POLAR_EXPECTED_YEARLY_AMOUNT_MINOR: "9007199254740992" },
       { POLAR_EXPECTED_TAX_BEHAVIOR: "location" },
       { POLAR_EXPECTED_CURRENCY: undefined },
