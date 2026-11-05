@@ -519,9 +519,9 @@ function isGrantRejected(error: unknown): boolean {
 export interface WithFreshAccessTokenOptions {
   readonly baseDir: string;
   readonly client: AccountClient;
-  /** Keep a caller-selected client and its first bearer on the same credential snapshot. */
+  /** Pass the snapshot used to choose client, or bind that choice with expectedIdentity below. */
   readonly credentials?: AccountCredentials;
-  /** Pin a background upload to the authority/user/workspace that produced its data. */
+  /** Pin an operation to its captured authority/user/workspace/host before sending a token. */
   readonly expectedIdentity?: Pick<
     StoredAccountFile,
     "accountUrl" | "userId" | "organizationId" | "hostId"
@@ -858,6 +858,8 @@ async function linkThisHost(
         accountStateDirectory(options.baseDir, options.devUrl),
       );
       if (!current) throw new SessionExpiredError();
+      // The passed client was selected before this locked read; never lend it another issuer's token.
+      if (current.accountUrl !== options.accountUrl) throw new WorkspaceAccessChangedError();
       if (!current.userId || !current.hostOwnerUserId || current.hostOwnerUserId === current.userId)
         return current;
       // Repair an older mismatched file before a network failure can leave it serving.
@@ -1418,15 +1420,38 @@ export async function runStatus(options: StatusOptions): Promise<void> {
   }
 
   const client = clientFor(credentials.accountUrl, options.client);
+  let sessionCredentials = credentials;
   const withToken = <A>(fn: (accessToken: string) => Promise<A>) =>
     withFreshAccessToken(
-      { baseDir: accountStateDirectory(options.baseDir, options.devUrl), client },
+      {
+        baseDir: accountStateDirectory(options.baseDir, options.devUrl),
+        client,
+        credentials: sessionCredentials,
+      },
       fn,
     );
 
   let me;
   try {
     me = await withToken((accessToken) => client.me(accessToken));
+    // Use the rotated token for the next call, allowing only the user /me just verified
+    // to backfill a legacy file. Host enrollment metadata does not change this identity.
+    const current = await readAccountCredentials(
+      accountStateDirectory(options.baseDir, options.devUrl),
+    );
+    if (!current) throw new SessionExpiredError();
+    if (
+      current.accountUrl !== credentials.accountUrl ||
+      current.organizationId !== credentials.organizationId ||
+      (current.userId !== (credentials.userId ?? me.id) &&
+        !(
+          credentials.userId === undefined &&
+          current.userId === undefined &&
+          current.refreshToken === credentials.refreshToken
+        ))
+    )
+      throw new WorkspaceAccessChangedError();
+    sessionCredentials = current;
   } catch (error) {
     if (error instanceof SessionExpiredError) {
       stdout(`${SESSION_EXPIRED_MESSAGE}\n`);

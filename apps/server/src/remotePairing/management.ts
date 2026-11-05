@@ -108,7 +108,11 @@ export function makeRemoteAccessManagement(
         .setJti(randomUUID())
         .sign(device.key);
       const bundle = await withFreshAccessToken(
-        { baseDir: accountStateDirectory(options.config.baseDir, options.config.devUrl), client },
+        {
+          baseDir: accountStateDirectory(options.config.baseDir, options.config.devUrl),
+          client,
+          expectedIdentity: account,
+        },
         (token) => client.redeemRemotePairingCode(token, { code, deviceJkt: device.jkt, proof }),
       );
       if (

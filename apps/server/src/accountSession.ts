@@ -339,16 +339,6 @@ export function createAccountSession(
     }
   }
 
-  /**
-   * The account the stored credentials were minted against, not an ambient
-   * one: pointing `SYNARA_ACCOUNT_URL` somewhere else after signing in must
-   * not leave a user holding credentials they cannot use or revoke.
-   */
-  async function accountUrlForStoredSession(): Promise<string> {
-    const stored = await readAccountFile(credentialDir);
-    return stored?.accountUrl ?? configuredUrl;
-  }
-
   function clientFor(accountUrl: string): AccountClient {
     return options.client ?? createAccountClient({ baseUrl: accountUrl });
   }
@@ -932,12 +922,14 @@ export function createAccountSession(
 
     async requestGrant(input) {
       const registration = await ensureShellDevice();
-      const accountUrl = await accountUrlForStoredSession();
-      const client = clientFor(accountUrl);
+      const credentials = await readAccountCredentials(credentialDir);
+      if (!credentials) throw new SessionExpiredError();
+      const client = clientFor(credentials.accountUrl);
       return withFreshAccessToken(
         {
           baseDir: credentialDir,
           client,
+          credentials,
           shouldRefreshAccessToken: (error) =>
             !(error instanceof AccountApiError && error.code === "device_not_registered"),
         },

@@ -55,7 +55,11 @@ export async function ensureAccountDeviceRegistration(
   const { secretsDir } = await runWithPath(deriveServerPaths(options.baseDir, options.devUrl));
   const identity = await loadOrCreateDeviceIdentity(deviceIdentityPath(secretsDir));
   const response = await withFreshAccessToken(
-    { baseDir: accountStateDirectory(options.baseDir, options.devUrl), client: options.client },
+    {
+      baseDir: accountStateDirectory(options.baseDir, options.devUrl),
+      client: options.client,
+      credentials: stored,
+    },
     async (accessToken) => {
       const proof = await signDeviceRegistration({
         key: identity.key,
