@@ -18,6 +18,7 @@ import {
   type ProjectId,
 } from "@synara/contracts";
 import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import { describeErrorMessage } from "@synara/shared/errorMessages";
 
 import { resolveSaveAttemptRequestId } from "~/components/chat/group/groupSettingsDialog.logic";
 import { useWorkspaceComputers } from "~/components/hosts/ComputerPicker";
@@ -48,12 +49,12 @@ import {
   availableBotTemplates,
   blankBotEditorForm,
   botCreateInput,
-  errorMessageOf,
   findBotTemplate,
   missingCrewTemplates,
   type BotEditorForm,
 } from "./botEditor.logic";
 import { useBotEditor, type BotEditorTarget } from "./botEditorStore";
+import { BotTemplateChip } from "./BotTemplateChip";
 import { MascotPicker } from "./MascotPicker";
 import {
   chooseAllProjects,
@@ -151,7 +152,7 @@ export function NewBotDialog({
       openBot(created);
     } catch (cause) {
       failedAttemptRef.current = { requestId, fingerprint };
-      setError(errorMessageOf(cause));
+      setError(describeErrorMessage(cause, String(cause)));
       setSaving(false);
     }
   };
@@ -334,7 +335,6 @@ function BotStep({
             placeholder={t("synbotEditor:namePlaceholder")}
             maxLength={BOT_NAME_MAX_LENGTH}
             aria-label={t("synbotEditor:name")}
-            // oxlint-disable-next-line jsx-a11y/no-autofocus -- the step's one question
             autoFocus
             onChange={(event) => onChange({ name: event.target.value })}
             onKeyDown={onKeyDown}
@@ -354,26 +354,15 @@ function BotStep({
       {templates.length > 0 || crew.length > 1 ? (
         <div className="new-bot__templates" role="group" aria-label={t("synbotEditor:orStartFrom")}>
           <span className="new-bot__templates-label">{t("synbotEditor:orStartFrom")}</span>
-          {templates.map((template) => {
-            const chosen = form.name === template.name;
-            return (
-              <CapsuleButton
-                key={template.name}
-                kind={chosen ? "normal" : "ghost"}
-                compact
-                chosen={chosen}
-                onClick={() => onChange(applyBotTemplate(form, template))}
-              >
-                <BotMascot
-                  shape={template.mascot.shape}
-                  color={template.mascot.color}
-                  size={14}
-                  still
-                />
-                {template.name}
-              </CapsuleButton>
-            );
-          })}
+          {templates.map((template) => (
+            <BotTemplateChip
+              key={template.name}
+              template={template}
+              chosen={form.name === template.name}
+              size="compact"
+              onPick={() => onChange(applyBotTemplate(form, template))}
+            />
+          ))}
           {crew.length > 1 ? (
             <CapsuleButton
               kind="ghost"
@@ -544,7 +533,6 @@ function StartStep({
         <div className="new-bot__instructions">
           <textarea
             className="bot-sheet__instructions"
-            // oxlint-disable-next-line jsx-a11y/no-autofocus -- opened by "Add instructions"
             autoFocus={instructions === "added"}
             value={form.instructions}
             maxLength={BOT_INSTRUCTIONS_MAX_LENGTH}

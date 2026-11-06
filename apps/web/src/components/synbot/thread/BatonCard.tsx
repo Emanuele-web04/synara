@@ -25,7 +25,6 @@ import { botById, delegationById } from "~/synbot/synbotState.logic";
 import { useSynbotStore } from "~/synbot/synbotStore";
 import type { WorkLogSynbotNotice } from "~/workLog";
 
-import { toastManager } from "../../ui/toast";
 import { delegationMood } from "../BotFace";
 import { CapsuleButton, type Tone } from "../kit/controls";
 import { Icon } from "../kit/Icon";
@@ -34,6 +33,7 @@ import { CardHead, FacePath, FoldToggle, ModelChip, StatusChip } from "./CardPar
 import { useLetterKeys } from "./cardKeys";
 import { InlineText } from "./ChoiceParts";
 import { useCardAnswer } from "./useCardAnswer";
+import { useStopAction } from "./useStopAction";
 
 /** The delegation's start card, answered from the baton in the receiving bot's thread. */
 export interface BatonStart {
@@ -120,7 +120,7 @@ export function BatonCard({
   const delegation = delegationById(data, delegationId);
   const from = botById(data, fromBotId ?? delegation?.fromBotId ?? null);
   const to = botById(data, toBotId ?? delegation?.toBotId ?? null);
-  const [stopping, setStopping] = useState(false);
+  const { stopping, stop: runStop } = useStopAction();
   const [unfolded, setUnfolded] = useState(false);
   const startOpen = side === "to" && start != null && !start.resolution;
   // Without the live delegation: waiting while its Start is open, the answer once given.
@@ -130,19 +130,7 @@ export function BatonCard({
   const tone: Tone = state ? delegationTone(state) : "muted";
   const statusLabel = state ? t(`synbot:delegation_${state}`) : (start?.resolution?.label ?? "");
   const result = !active && side === "from" ? (delegation?.resultSummary ?? null) : null;
-  const stop = () => {
-    setStopping(true);
-    void readNativeApi()
-      ?.bots.cancelDelegation({ delegationId })
-      .catch((error: unknown) =>
-        toastManager.add({
-          type: "error",
-          title: t("synbot:stopFailed"),
-          description: error instanceof Error ? error.message : String(error),
-        }),
-      )
-      .finally(() => setStopping(false));
-  };
+  const stop = () => runStop(() => readNativeApi()?.bots.cancelDelegation({ delegationId }));
   const other = side === "from" ? to : from;
   const title = t("synbot:batonTitle", {
     from: from?.name ?? t("synbot:removedBot"),

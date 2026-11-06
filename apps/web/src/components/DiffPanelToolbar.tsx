@@ -57,6 +57,7 @@ import {
   ButtonGroup,
   TOOLBAR_ICON_BUTTON_TONE_CLASS_NAME,
 } from "./ui/button-group";
+import { CountBadge } from "./ui/count-badge";
 import { IconButton } from "./ui/icon-button";
 import {
   Menu,
@@ -150,17 +151,6 @@ interface DiffPanelToolbarProps {
   scopePickerOpen?: boolean;
   onScopePickerOpenChange?: (open: boolean) => void;
   onClosePanel?: () => void;
-}
-
-function ScopeCountBadge(props: { count: number | undefined }) {
-  if (typeof props.count !== "number" || props.count <= 0) {
-    return null;
-  }
-  return (
-    <span className="rounded-full bg-muted px-1.5 text-ui-xs font-medium text-muted-foreground tabular-nums">
-      {props.count}
-    </span>
-  );
 }
 
 function resolveScopeMenuIcon(scope: DiffPanelRepoScopeOption | "lastTurn") {
@@ -283,7 +273,7 @@ export const DiffPanelToolbar = function DiffPanelToolbar(props: DiffPanelToolba
             label={<span className="truncate">{scopePickerLabel}</span>}
             trailing={
               <>
-                <ScopeCountBadge count={scopePickerCount} />
+                <CountBadge count={scopePickerCount} />
                 {props.activeStats ? (
                   <DiffStat
                     additions={props.activeStats.additions}
@@ -324,7 +314,7 @@ export const DiffPanelToolbar = function DiffPanelToolbar(props: DiffPanelToolba
                 <MenuRadioItem key={scope} value={scope}>
                   {resolveScopeMenuIcon(scope)}
                   <span className="min-w-0 flex-1 truncate">{REPO_DIFF_SCOPE_LABELS[scope]}</span>
-                  <ScopeCountBadge count={props.scopeFileCounts[scope]} />
+                  <CountBadge count={props.scopeFileCounts[scope]} />
                 </MenuRadioItem>
               ))}
               <MenuRadioItem value="allTurns">

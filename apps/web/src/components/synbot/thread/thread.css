@@ -642,7 +642,10 @@
 }
 
 /* A task (or a delegation) in a bot's thread: one card (TaskCard). */
-.hb .task-card {
+/* The bot-chat card frame, shared by the task card, the hand-off (baton) and the report. */
+.hb .task-card,
+.hb .baton,
+.hb .report {
   display: flex;
   flex-direction: column;
   gap: var(--hb-gap);
@@ -960,19 +963,6 @@
 /* A hand-off between two bots, "passing the baton" (BatonCard): the head, the brief, the
    engine chip, then small capsules at the foot (Not now and Start, or Stop and Open). Done,
    it folds to one line. Left-aligned with the bot's bubbles. */
-.hb .baton {
-  display: flex;
-  flex-direction: column;
-  gap: var(--hb-gap);
-  width: min(var(--hb-choice), 100%);
-  box-sizing: border-box;
-  padding: calc(var(--hb-gap) + 2px) var(--hb-gutter) var(--hb-gap);
-  border: var(--hb-hairline) solid var(--hb-border-strong);
-  border-radius: var(--hb-radius-lg);
-  background: var(--hb-card);
-  font-size: var(--hb-text-chat);
-  line-height: var(--hb-line);
-}
 .hb .baton--folded {
   flex-direction: row;
   align-items: center;
@@ -1069,18 +1059,9 @@
 
 /* The report that woke the asking bot, as a timeline (SynbotCards' ReportCard): one line per
    hand-off with the bot's face on the rail, then the outcome. */
+/* The report's frame is the shared card's, with as much room below as above. */
 .hb .report {
-  display: flex;
-  flex-direction: column;
-  gap: var(--hb-gap);
-  width: min(var(--hb-choice), 100%);
-  box-sizing: border-box;
-  padding: calc(var(--hb-gap) + 2px) var(--hb-gutter);
-  border: var(--hb-hairline) solid var(--hb-border-strong);
-  border-radius: var(--hb-radius-lg);
-  background: var(--hb-card);
-  font-size: var(--hb-text-chat);
-  line-height: var(--hb-line);
+  padding-bottom: calc(var(--hb-gap) + 2px);
 }
 .hb .timeline {
   display: flex;

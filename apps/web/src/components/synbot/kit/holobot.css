@@ -23,12 +23,12 @@
   --hb-soft-text: color-mix(in srgb, var(--foreground) 82%, var(--background));
   --hb-muted: var(--muted-foreground);
   --hb-danger-fill: color-mix(in srgb, var(--destructive) 12%, transparent);
-  --hb-danger-text: color-mix(in srgb, var(--destructive) 85%, var(--foreground));
+  --hb-danger-text: var(--hb-tone-bad-text);
   --hb-chosen-border: color-mix(in srgb, var(--foreground) 45%, transparent);
   --hb-attention: var(--warning);
   --hb-on-badge: #111111;
   --hb-banner-fill: color-mix(in srgb, var(--warning) 14%, transparent);
-  --hb-banner-text: color-mix(in srgb, var(--warning) 75%, var(--foreground));
+  --hb-banner-text: var(--hb-tone-attention-text);
   --hb-focus: var(--ring);
   --hb-app-blue: var(--project-blue);
 
@@ -55,14 +55,14 @@
   --hb-mark-sheen: 0.3;
   --hb-mark-eyes: #ffffff;
 
-  /* Liquid metal (metal/Metal.tsx): a primary button is a dark core inside a thin moving ring
-     of it, with a faint inner shadow and a subtle glow around. */
-  --hb-rim-fill: #1c1c1e;
-  --hb-on-rim: #ffffff;
-  --hb-rim-capsule: 2px;
-  --hb-rim-circle: 2px;
-  --hb-rim-glow: 0 0 10px rgb(0 0 0 / 0.08);
-  --hb-rim-inner-shadow: inset 0 1px 2px rgb(0 0 0 / 0.4);
+  /* Liquid metal (ui/metal): a primary button is a dark core inside a thin moving ring of it,
+     with a faint inner shadow and a subtle glow around. The values are the app's metal tokens. */
+  --hb-rim-fill: var(--metal-fill);
+  --hb-on-rim: var(--metal-on-fill);
+  --hb-rim-capsule: var(--metal-ring);
+  --hb-rim-circle: var(--metal-ring);
+  --hb-rim-glow: var(--metal-glow);
+  --hb-rim-inner-shadow: var(--metal-inner-shadow);
 
   /* Spacing */
   --hb-gutter: 16px;
@@ -153,7 +153,6 @@
 .dark.hb {
   --hb-card: color-mix(in srgb, var(--foreground) 6%, var(--background));
   --hb-card-hover: color-mix(in srgb, var(--foreground) 10%, var(--background));
-  --hb-sidebar-selected: color-mix(in srgb, var(--foreground) 7%, transparent);
   --hb-bot-bubble: color-mix(in srgb, var(--foreground) 7%, var(--background));
   --hb-user-bubble: color-mix(in srgb, var(--foreground) 26%, var(--background));
   --hb-on-user-bubble: var(--foreground);
@@ -165,10 +164,6 @@
   --hb-mark-fill: #f6f6f8;
   --hb-mark-sheen: 0.42;
   --hb-mark-eyes: #0b0b0d;
-  --hb-rim-fill: #151515;
-  --hb-on-rim: #f2f2f2;
-  --hb-rim-glow: 0 0 10px rgb(255 255 255 / 0.07);
-  --hb-rim-inner-shadow: inset 0 1px 3px rgb(0 0 0 / 0.55);
   --hb-shadow-dialog: 0 24px 64px rgb(0 0 0 / 0.55);
   --hb-shadow-menu: 0 12px 32px rgb(0 0 0 / 0.5);
   --hb-shadow-float: 0 4px 16px rgb(0 0 0 / 0.35);
@@ -251,21 +246,6 @@
   height: 100%;
   fill: var(--hb-mark-eyes, #ffffff);
 }
-/* A round control's metal ring (MetalRing) under its icon: the composer's Send in a bot chat
-   (ChatView's `composerSendUnderlay`) is a dark core in a ring of moving metal, like HoloBot's. */
-.hb-ring {
-  position: absolute;
-  inset: 0;
-  z-index: 0;
-  border-radius: inherit;
-}
-.hb-ring__core {
-  position: absolute;
-  inset: var(--hb-rim-circle);
-  border-radius: inherit;
-  background: var(--hb-rim-fill);
-  box-shadow: var(--hb-rim-inner-shadow);
-}
 /* Send is the composer's same 28 px circle as + and the mic: only its fill differs (the dark
    core in the metal ring), so its arrow takes their icon size and no glow spills past the
    edge. */
@@ -282,23 +262,6 @@
   width: 16px;
   height: 16px;
   transform: none;
-}
-/* The metal layer, clipped by its capsule or mask; Paper's canvas fills it (or the still
-   picture of a metal over the budget: metal/budget.ts). */
-.hb-metal {
-  position: absolute;
-  inset: 0;
-  z-index: 0;
-  border-radius: inherit;
-  overflow: hidden;
-}
-.hb-metal__canvas {
-  position: absolute;
-  inset: 0;
-}
-img.hb-metal__canvas {
-  width: 100%;
-  height: 100%;
 }
 /* A bot alive, its mood in its head and eyes (each bot keeps its own rhythm):
    - idle: breathes and blinks; now and then turns its head to glance left, then right, then
@@ -815,32 +778,6 @@ img.hb-metal__canvas {
 .hb-chip--bad {
   background: var(--hb-tone-bad-fill);
   color: var(--hb-tone-bad-text);
-}
-.hb-count {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-  min-width: var(--hb-badge);
-  height: var(--hb-badge);
-  padding: 0 calc(var(--hb-chip-pad) / 2);
-  box-sizing: border-box;
-  border-radius: var(--hb-pill);
-  background: var(--hb-attention);
-  color: var(--hb-on-badge);
-  font-size: var(--hb-text-xs);
-  font-weight: 700;
-  line-height: 1;
-}
-.hb-badged {
-  position: relative;
-  display: inline-flex;
-}
-.hb-badged .hb-count {
-  position: absolute;
-  top: -4px;
-  right: -4px;
-  pointer-events: none;
 }
 .hb-dot {
   display: inline-block;

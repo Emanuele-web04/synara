@@ -10,17 +10,16 @@
 
 import type { Bot, HubWorkItem, HubWorkProgressStep, HubWorkState } from "@synara/contracts";
 import { ProjectId, ThreadId } from "@synara/contracts";
-import { useState } from "react";
 
 import { useTranslation } from "~/i18n";
 import { readNativeApi } from "~/nativeApi";
 import { formatRelativeTimeAgo } from "~/lib/relativeTime";
 
-import { toastManager } from "../../ui/toast";
 import { BotFace, taskMood } from "../BotFace";
 import { CapsuleButton, type Tone } from "../kit/controls";
 import { Icon } from "../kit/Icon";
 import { useOpenTask } from "../synbotNav";
+import { useStopAction } from "./useStopAction";
 import { CARD_FACE, CardHead, StatusChip } from "./CardParts";
 import { InlineText } from "./ChoiceParts";
 
@@ -89,7 +88,7 @@ export function taskStateKey(state: HubWorkState): string {
 export function TaskCard({ task, bot }: { readonly task: HubWorkItem; readonly bot: Bot }) {
   const { t } = useTranslation();
   const openTask = useOpenTask();
-  const [stopping, setStopping] = useState(false);
+  const { stopping, stop: runStop } = useStopAction();
   const running = task.state === "working" || task.state === "starting";
   const steps = task.progress?.steps ?? [];
   const done = steps.filter((step) => step.status === "completed").length;
@@ -107,26 +106,17 @@ export function TaskCard({ task, bot }: { readonly task: HubWorkItem; readonly b
     .join(" · ");
   const latest = task.resultSummary ?? task.progress?.summary ?? null;
   const worker = task.workerThreadId;
-  const stop = () => {
-    const api = readNativeApi();
-    if (!api || !worker) return;
-    setStopping(true);
-    void api.projectAgent
-      .resolveWorker({
+  const stop = () =>
+    runStop(() => {
+      const api = readNativeApi();
+      if (!api || !worker) return undefined;
+      return api.projectAgent.resolveWorker({
         requestId: `synbot-task-stop:${task.id}:${task.revision}`,
         projectId: ProjectId.makeUnsafe(bot.id),
         threadId: ThreadId.makeUnsafe(worker),
         action: "stop",
-      })
-      .catch((error: unknown) =>
-        toastManager.add({
-          type: "error",
-          title: t("synbot:stopFailed"),
-          description: error instanceof Error ? error.message : String(error),
-        }),
-      )
-      .finally(() => setStopping(false));
-  };
+      });
+    });
   return (
     <article className="task-card">
       <button

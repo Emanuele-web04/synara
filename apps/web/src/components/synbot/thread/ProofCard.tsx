@@ -11,6 +11,7 @@
 
 import type { BotMergeProof, ThreadId } from "@synara/contracts";
 import { useCallback, useEffect, useState } from "react";
+import { describeErrorMessage } from "@synara/shared/errorMessages";
 
 import { useTranslation } from "~/i18n";
 import { readNativeApi } from "~/nativeApi";
@@ -26,7 +27,7 @@ type LoadState =
 
 type Check = { readonly tone: "good" | "bad" | "attention" | "muted"; readonly text: string };
 
-const messageOf = (error: unknown) => (error instanceof Error ? error.message : String(error));
+const messageOf = (error: unknown) => describeErrorMessage(error, String(error));
 
 function useChecklist(proof: BotMergeProof): readonly Check[] {
   const { t } = useTranslation();

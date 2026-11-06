@@ -16,6 +16,7 @@ import {
   type BotsUpdateSettingsInput,
 } from "@synara/contracts";
 import { useEffect, useState, type ReactNode } from "react";
+import { describeErrorMessage } from "@synara/shared/errorMessages";
 
 import { useTranslation } from "~/i18n";
 import { readNativeApi } from "~/nativeApi";
@@ -186,7 +187,7 @@ export function SynbotSettingsPanel() {
       toastManager.add({
         type: "error",
         title: t("synbotEditor:settingsSaveFailed"),
-        description: error instanceof Error ? error.message : String(error),
+        description: describeErrorMessage(error, String(error)),
       });
     } finally {
       setSaving(false);
