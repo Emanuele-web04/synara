@@ -38,3 +38,35 @@ describe("ServerProviderStatus", () => {
     expect(parsed.displayName).toBe("Claude Work");
   });
 });
+
+describe("ServerProviderStatus account identity", () => {
+  it("keeps the signed-in email and organization a status reports", () => {
+    const parsed = decodeServerProviderStatus({
+      provider: "claudeAgent",
+      driver: "claudeAgent",
+      instanceId: "claude_work",
+      status: "ready",
+      available: true,
+      authStatus: "authenticated",
+      accountEmail: "work@example.com",
+      accountOrganization: "Example Org",
+      checkedAt: "2026-01-01T00:00:00.000Z",
+    });
+
+    expect(parsed.accountEmail).toBe("work@example.com");
+    expect(parsed.accountOrganization).toBe("Example Org");
+  });
+
+  it("leaves the identity absent when a status does not report one", () => {
+    const parsed = decodeServerProviderStatus({
+      provider: "codex",
+      status: "ready",
+      available: true,
+      authStatus: "authenticated",
+      checkedAt: "2026-01-01T00:00:00.000Z",
+    });
+
+    expect("accountEmail" in parsed).toBe(false);
+    expect("accountOrganization" in parsed).toBe(false);
+  });
+});
