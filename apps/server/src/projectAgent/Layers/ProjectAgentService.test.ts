@@ -1164,6 +1164,19 @@ it.effect("applies a saved coordinator model to the live thread and heartbeat", 
     );
     const coordinatorThreadId = first.config?.coordinatorThreadId;
     assert.isNotNull(coordinatorThreadId);
+    // The hub watches a worker, so the check-in that restarts it on the new model has
+    // something to look at.
+    harness.threadShells[groupMemberThreadId] = {
+      ...harness.threadShells[groupMemberThreadId]!,
+      creationSource: "synara_mcp",
+      sourceThreadId: coordinatorThreadId!,
+    };
+    yield* service.recordManagedWorkerThreads({
+      callerThreadId: coordinatorThreadId!,
+      requestId: "req-model-worker",
+      threadIds: [groupMemberThreadId],
+      titles: ["Worker"],
+    });
     harness.dispatched.length = 0;
     harness.runNowCalls.length = 0;
     harness.automationUpdates.length = 0;
@@ -1241,7 +1254,9 @@ it.effect("does not stop the session when the coordinator model keeps the same p
       assert.fail("expected a thread.meta.update dispatch");
     }
     assert.deepEqual(metaUpdate.modelSelection, nextModel);
-    assert.deepEqual(harness.runNowCalls, ["automation-1"]);
+    // No worker threads to watch: the new model takes over at the next turn instead of
+    // an empty check-in now.
+    assert.deepEqual(harness.runNowCalls, []);
   }).pipe(Effect.provide(harness.layer));
 });
 

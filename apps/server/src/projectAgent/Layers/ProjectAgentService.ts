@@ -3245,7 +3245,16 @@ export const makeProjectAgentService = Effect.gen(function* () {
                 })
                 .pipe(Effect.catch(() => Effect.void));
             }
+            // A check-in now restarts the session on the new model at once. With no
+            // worker threads there is nothing to watch: the rebind waits for the next
+            // turn instead of spending one on an empty check-in (whose reply, when the
+            // model words it rather than answering "SILENT", would land in the chat).
+            const watchesWorkers =
+              (yield* assignedWorkerThreadIds(input.projectId).pipe(
+                Effect.catch(() => Effect.succeed(new Set<ThreadId>())),
+              )).size > 0;
             if (
+              watchesWorkers &&
               latestConfig.enabled &&
               latestConfig.pausedAt === null &&
               latestConfig.archivedAt === null &&

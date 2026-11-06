@@ -231,6 +231,10 @@ const SYNARA_GATEWAY_OWNED_TOOL_NAMES = [
   "synara_project_remember",
   "synara_project_report_result",
   "synara_project_write_document",
+  // Hub work tools (hubWorkGateway.ts): a coordinator's own queue, scoped server-side
+  "synara_hub_list_work",
+  "synara_hub_update_progress",
+  "synara_hub_cancel_work",
   // SynBot tools (botTools.ts; Beta, bot chats only)
   "synara_bots_list",
   "synara_bot_delegate",
