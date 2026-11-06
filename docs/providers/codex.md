@@ -15,6 +15,10 @@ The **Codex accounts** list has one row per account:
 - Each row shows the account's state (`Authenticated`, `Not authenticated`,
   `Unavailable`, `Disabled`, …) and a switch. A switched-off account keeps its
   settings and disappears from the model picker.
+- The editor of a signed-in account names who it is signed in as: the ChatGPT
+  email stored with the account's login. The state line carries the plan
+  (`ChatGPT Plus Subscription`), read from the same stored login when the Codex
+  CLI prints none.
 - Selecting a row opens its editor beside the list: display name and accent
   color, sign-in state, runtime paths, and environment variables. Launch
   details most accounts never touch sit behind **Advanced**.
@@ -22,7 +26,9 @@ The **Codex accounts** list has one row per account:
 In the model picker every enabled account gets its own tab. Accounts of the
 same provider share the provider icon, so the open tab spells out its
 account's name and every account beyond the default carries a dot on its icon,
-in the account's accent color when it has one. An account other than the
+in the account's accent color when it has one. Hovering a tab shows the
+account's signed-in email, and the account entries inside the picker list it
+beside the account name. An account other than the
 default is also named on the composer's model button, so you can always tell which account a
 message will use.
 
@@ -59,7 +65,7 @@ default).
    account's own environment; complete the browser prompts it opens. When the
    login exits, Synara rechecks the account (choose **Check authentication**
    if the prompts finished outside the dialog). The row turns to
-   `Authenticated`. The same login also works from a Synara terminal through
+   `Authenticated` and the editor shows the signed-in email. The same login also works from a Synara terminal through
    the account's **Terminal command** (`codex-work login` for an account with
    the ID `codex_work`), followed by **Refresh status** at the top of the
    Providers settings.
