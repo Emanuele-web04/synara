@@ -150,6 +150,9 @@ rollout is deliberately approved. This documentation changes no runtime setting.
    or enables backend billing. Sign in to the intended account and open
    Settings → Profile → Subscription. Returning from checkout is not proof of
    payment; refreshing reads authoritative customer state.
+   If Polar catalog reads fail or prices do not match, new checkout is disabled.
+   Subscription status and portal access still work when Polar can verify the
+   existing customer.
 
 The additive `billing_environment` singleton binds the database to one provider
 environment. Existing billing-account or webhook rows are stamped as sandbox;
