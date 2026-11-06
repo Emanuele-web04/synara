@@ -7,7 +7,11 @@ import type {
 } from "@synara/contracts";
 import type pg from "pg";
 import { randomUUID } from "node:crypto";
-import { BillingCheckoutNotCreatedError, type BillingCheckout } from "./polar";
+import {
+  BillingCatalogUnavailableError,
+  BillingCheckoutNotCreatedError,
+  type BillingCheckout,
+} from "./polar";
 import type { BillingProvider, BillingSnapshot } from "./polar";
 
 export class BillingError extends Error {
@@ -64,7 +68,7 @@ function serialize(
     validUntil: row.valid_until?.toISOString() ?? null,
     cancelAtPeriodEnd: row.cancel_at_period_end,
     checkedAt: row.checked_at?.toISOString() ?? null,
-    canCheckout: !row.has_subscription && !row.access_granted,
+    canCheckout: plans.length > 0 && !row.has_subscription && !row.access_granted,
     canManage: row.customer_id !== null,
     plans,
   };
@@ -178,7 +182,10 @@ export function createBillingService(options: { pool: pg.Pool; provider: Billing
     initialize,
     async status(userId: string): Promise<AccountBillingStatus> {
       await initialize();
-      const plans = await provider.plans();
+      const plans = await provider.plans().catch((error: unknown) => {
+        if (error instanceof BillingCatalogUnavailableError) return [];
+        throw error;
+      });
       return withAccount(userId, async (client, row) => {
         assertAvailable(row);
         return serialize(await reconcile(client, userId), plans, provider.environment);
