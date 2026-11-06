@@ -1,0 +1,286 @@
+{
+  "area:app-shell": [
+    {
+      "changed-files": [
+        {
+          "any-glob-to-any-file": ["apps/desktop/**"]
+        }
+      ]
+    }
+  ],
+  "area:ci": [
+    {
+      "changed-files": [
+        {
+          "any-glob-to-any-file": [
+            ".github/workflows/**",
+            ".github/actions/**",
+            ".github/scripts/**",
+            "scripts/build-desktop*",
+            "scripts/release*"
+          ]
+        }
+      ]
+    }
+  ],
+  "area:chat": [
+    {
+      "changed-files": [
+        {
+          "any-glob-to-any-file": [
+            "apps/web/src/components/chat/**",
+            "apps/server/src/orchestration/**"
+          ]
+        }
+      ]
+    }
+  ],
+  "area:providers": [
+    {
+      "changed-files": [
+        {
+          "any-glob-to-any-file": [
+            "apps/server/src/provider/**",
+            "apps/server/src/providerUsage/**",
+            "apps/web/src/components/settings/Providers*"
+          ]
+        }
+      ]
+    }
+  ],
+  "area:git": [
+    {
+      "changed-files": [
+        {
+          "any-glob-to-any-file": [
+            "apps/server/src/git/**",
+            "apps/server/src/pullRequests/**",
+            "packages/{contracts,shared}/src/git*"
+          ]
+        }
+      ]
+    }
+  ],
+  "area:browser": [
+    {
+      "changed-files": [
+        {
+          "any-glob-to-any-file": [
+            "apps/server/src/browserAutomation/**",
+            "apps/web/src/components/browser/**",
+            "packages/{contracts,shared}/src/browser*"
+          ]
+        }
+      ]
+    }
+  ],
+  "area:computer-use": [
+    {
+      "changed-files": [
+        {
+          "any-glob-to-any-file": ["apps/server/src/computer/**"]
+        }
+      ]
+    }
+  ],
+  "area:terminal": [
+    {
+      "changed-files": [
+        {
+          "any-glob-to-any-file": [
+            "apps/server/src/terminal/**",
+            "apps/web/src/components/terminal/**"
+          ]
+        }
+      ]
+    }
+  ],
+  "area:settings": [
+    {
+      "changed-files": [
+        {
+          "any-glob-to-any-file": [
+            "apps/web/src/components/settings/**",
+            "packages/contracts/src/settings*",
+            "apps/server/src/serverSettings*"
+          ]
+        }
+      ]
+    }
+  ],
+  "area:voice": [
+    {
+      "changed-files": [
+        {
+          "any-glob-to-any-file": ["apps/server/src/voice*", "packages/shared/src/chatGptVoice*"]
+        }
+      ]
+    }
+  ],
+  "area:remote": [
+    {
+      "changed-files": [
+        {
+          "any-glob-to-any-file": [
+            "apps/server/src/config.remoteAccess*",
+            "apps/server/src/effectServer.remoteAccess*"
+          ]
+        }
+      ]
+    }
+  ],
+  "provider:codex": [
+    {
+      "changed-files": [
+        {
+          "any-glob-to-any-file": [
+            "apps/server/src/provider/**/{codex,Codex}*",
+            "apps/server/src/providerUsage/providers/codex*",
+            "apps/server/src/git/Layers/CodexTextGeneration*",
+            "docs/providers/codex.md"
+          ]
+        }
+      ]
+    }
+  ],
+  "provider:claude": [
+    {
+      "changed-files": [
+        {
+          "any-glob-to-any-file": [
+            "apps/server/src/provider/**/{claude,Claude}*",
+            "apps/server/src/providerUsage/providers/claude*",
+            "apps/server/src/git/Layers/ClaudeTextGeneration*",
+            "docs/providers/claude.md"
+          ]
+        }
+      ]
+    }
+  ],
+  "provider:cursor": [
+    {
+      "changed-files": [
+        {
+          "any-glob-to-any-file": [
+            "apps/server/src/provider/**/{cursor,Cursor}*",
+            "apps/server/src/providerUsage/providers/cursor*",
+            "apps/server/src/git/Layers/CursorTextGeneration*",
+            "docs/providers/cursor.md"
+          ]
+        }
+      ]
+    }
+  ],
+  "provider:antigravity": [
+    {
+      "changed-files": [
+        {
+          "any-glob-to-any-file": [
+            "apps/server/src/provider/**/{antigravity,Antigravity}*",
+            "apps/server/src/providerUsage/providers/antigravity*",
+            "apps/server/src/git/Layers/AntigravityTextGeneration*",
+            "docs/providers/antigravity.md"
+          ]
+        }
+      ]
+    }
+  ],
+  "provider:grok": [
+    {
+      "changed-files": [
+        {
+          "any-glob-to-any-file": [
+            "apps/server/src/provider/**/{grok,Grok}*",
+            "apps/server/src/providerUsage/providers/grok*",
+            "apps/server/src/git/Layers/GrokTextGeneration*",
+            "docs/providers/grok.md"
+          ]
+        }
+      ]
+    }
+  ],
+  "provider:droid": [
+    {
+      "changed-files": [
+        {
+          "any-glob-to-any-file": [
+            "apps/server/src/provider/**/{droid,Droid}*",
+            "apps/server/src/providerUsage/providers/droid*",
+            "apps/server/src/git/Layers/DroidTextGeneration*",
+            "docs/providers/droid.md"
+          ]
+        }
+      ]
+    }
+  ],
+  "provider:devin": [
+    {
+      "changed-files": [
+        {
+          "any-glob-to-any-file": [
+            "apps/server/src/provider/**/{devin,Devin}*",
+            "apps/server/src/providerUsage/providers/devin*",
+            "apps/server/src/git/Layers/DevinTextGeneration*",
+            "docs/providers/devin.md"
+          ]
+        }
+      ]
+    }
+  ],
+  "provider:opencode": [
+    {
+      "changed-files": [
+        {
+          "any-glob-to-any-file": [
+            "apps/server/src/provider/**/{opencode,OpenCode}*",
+            "apps/server/src/providerUsage/providers/opencode*",
+            "apps/server/src/git/Layers/OpenCodeTextGeneration*",
+            "docs/providers/opencode.md"
+          ]
+        }
+      ]
+    }
+  ],
+  "provider:pi": [
+    {
+      "changed-files": [
+        {
+          "any-glob-to-any-file": [
+            "apps/server/src/provider/**/{pi,Pi}*",
+            "apps/server/src/providerUsage/providers/pi*",
+            "apps/server/src/git/Layers/PiTextGeneration*",
+            "docs/providers/pi.md"
+          ]
+        }
+      ]
+    }
+  ],
+  "provider:omp": [
+    {
+      "changed-files": [
+        {
+          "any-glob-to-any-file": [
+            "apps/server/src/provider/**/{omp,Omp}*",
+            "apps/server/src/providerUsage/providers/omp*",
+            "apps/server/src/git/Layers/OmpTextGeneration*",
+            "docs/providers/omp.md"
+          ]
+        }
+      ]
+    }
+  ],
+  "provider:gemini": [
+    {
+      "changed-files": [
+        {
+          "any-glob-to-any-file": [
+            "apps/server/src/provider/**/{gemini,Gemini}*",
+            "apps/server/src/providerUsage/providers/gemini*",
+            "apps/server/src/git/Layers/GeminiTextGeneration*",
+            "docs/providers/gemini.md"
+          ]
+        }
+      ]
+    }
+  ]
+}

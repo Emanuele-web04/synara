@@ -24,38 +24,33 @@ jobs:
         with:
           result-encoding: string
           script: |
-            const managedLabels = [
-              {
-                name: "size:XS",
-                color: "0e8a16",
-                description: "Under 50 changed lines, excluding tests, lockfiles, generated files, and assets.",
-              },
-              {
-                name: "size:S",
-                color: "5ebd3e",
-                description: "50-199 changed lines, excluding tests, lockfiles, generated files, and assets.",
-              },
-              {
-                name: "size:M",
-                color: "fbca04",
-                description: "200-599 changed lines, excluding tests, lockfiles, generated files, and assets.",
-              },
-              {
-                name: "size:L",
-                color: "fe7d37",
-                description: "600-999 changed lines, excluding tests, lockfiles, generated files, and assets.",
-              },
-              {
-                name: "size:XL",
-                color: "d93f0b",
-                description: "1,000-2,999 changed lines, excluding tests, lockfiles, generated files, and assets.",
-              },
-              {
-                name: "size:XXL",
-                color: "b60205",
-                description: "3,000+ changed lines, excluding tests, lockfiles, generated files, and assets.",
-              },
+            // Each exclusive upper bound owns both classification and its description.
+            const buckets = [
+              ["XXS", 10, "006b15"],
+              ["XS", 50, "0e8a16"],
+              ["S", 200, "5ebd3e"],
+              ["M", 600, "fbca04"],
+              ["L", 1000, "fe7d37"],
+              ["XL", 3000, "d93f0b"],
+              ["XXL", 6000, "b60205"],
+              ["3XL", 12000, "a10000"],
+              ["4XL", 25000, "850000"],
+              ["5XL", 50000, "690000"],
+              ["6XL", null, "4d0000"],
             ];
+            const format = (value) => value.toLocaleString("en-US");
+            const managedLabels = buckets.map(([size, maxExclusive, color], index) => {
+              const minimum = index === 0 ? 0 : buckets[index - 1][1];
+              const range = maxExclusive === null
+                ? `${format(minimum)}+`
+                : `${format(minimum)}-${format(maxExclusive - 1)}`;
+              return {
+                name: `size:${size}`,
+                color,
+                maxExclusive,
+                description: `${range} changed lines, excluding tests, lockfiles, generated files, and assets.`,
+              };
+            });
 
             core.setOutput("labels_json", JSON.stringify(managedLabels));
   sync-label-definitions:
@@ -163,29 +158,10 @@ jobs:
             const isSkippedFile = (filename) =>
               skippedFilePatterns.some((pattern) => pattern.test(filename));
 
-            const resolveSizeLabel = (totalChangedLines) => {
-              if (totalChangedLines < 50) {
-                return "size:XS";
-              }
-
-              if (totalChangedLines < 200) {
-                return "size:S";
-              }
-
-              if (totalChangedLines < 600) {
-                return "size:M";
-              }
-
-              if (totalChangedLines < 1000) {
-                return "size:L";
-              }
-
-              if (totalChangedLines < 3000) {
-                return "size:XL";
-              }
-
-              return "size:XXL";
-            };
+            const resolveSizeLabel = (totalChangedLines) =>
+              managedLabels.find((label) =>
+                label.maxExclusive === null || totalChangedLines < label.maxExclusive
+              ).name;
 
             const syncSize = async (prNumber) => {
               const files = await github.paginate(
@@ -200,9 +176,13 @@ jobs:
               );
 
               if (files.length >= 3000) {
-                core.warning(
-                  "The GitHub pull request files API may truncate results at 3,000 files; PR size may be undercounted.",
-                );
+                const { data: pull } = await github.rest.pulls.get({
+                  owner, repo, pull_number: prNumber,
+                });
+                if (pull.changed_files > files.length) {
+                  core.warning(`PR #${prNumber}: file list truncated; preserving existing labels instead of assigning an underestimated size.`);
+                  return;
+                }
               }
 
               let skippedChangedLines = 0;

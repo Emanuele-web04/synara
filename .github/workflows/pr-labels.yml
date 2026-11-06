@@ -1,0 +1,23 @@
+name: PR Area and Provider Labels
+
+on:
+  pull_request_target:
+    types: [opened, reopened, synchronize, ready_for_review]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: pr-path-labels-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  label:
+    runs-on: ubuntu-24.04
+    steps:
+      # Read trusted base-repository configuration via the API. Never check out PR code.
+      - uses: actions/labeler@v6
+        with:
+          configuration-path: .github/labeler.json
+          sync-labels: false
