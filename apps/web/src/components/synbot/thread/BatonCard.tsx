@@ -24,8 +24,8 @@ import { useSynbotStore } from "~/synbot/synbotStore";
 import type { WorkLogSynbotNotice } from "~/workLog";
 
 import { toastManager } from "../../ui/toast";
-import { BotFace } from "../BotFace";
-import type { Tone } from "../kit/controls";
+import { BotFace, delegationMood } from "../BotFace";
+import { CapsuleButton, type Tone } from "../kit/controls";
 import { Icon } from "../kit/Icon";
 import { useOpenBot } from "../synbotNav";
 import { useLetterKeys } from "./cardKeys";
@@ -59,7 +59,8 @@ export function delegationTone(state: BotDelegationState): Tone {
   }
 }
 
-/** Not now, then Start: the start card's answers as Synara buttons, A / B from the keyboard. */
+/** Not now, then Start: the start card's answers as capsules (Start in the liquid-metal ring),
+ * A / B from the keyboard. */
 function StartAnswers({ start }: { readonly start: BatonStart }) {
   const { pending, answered, answer } = useCardAnswer(start.card, start.threadId);
   // The primary answer (Start) goes last, on the right.
@@ -82,16 +83,16 @@ function StartAnswers({ start }: { readonly start: BatonStart }) {
   return (
     <div className="baton__answers">
       {options.map((option) => (
-        <Button
+        <CapsuleButton
           key={option.id}
-          variant={option.tone === "primary" ? "default" : "outline"}
-          size="sm"
+          kind={option.tone === "primary" ? "primary" : "card"}
+          compact
           className="baton__answer"
           disabled={pending !== null}
           onClick={() => answer(option.id, option.label)}
         >
           {option.label}
-        </Button>
+        </CapsuleButton>
       ))}
     </div>
   );
@@ -145,12 +146,12 @@ export function BatonCard({
   return (
     <article className={tone === "attention" ? "baton baton--attention" : "baton"}>
       <div className="baton__path" aria-hidden>
-        <BotFace bot={from} size={FACE} still />
+        <BotFace bot={from} size={FACE} mood="idle" />
         <svg className="baton__arrow" width="56" height="12" viewBox="0 0 56 12" fill="none">
           <path d="M2 6h46" strokeWidth="1.5" strokeDasharray="3 4" strokeLinecap="round" />
           <path d="m47 2 5 4-5 4" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
         </svg>
-        <BotFace bot={to} size={FACE} still />
+        <BotFace bot={to} size={FACE} mood={state ? delegationMood(state) : "idle"} />
       </div>
       <div className="baton__body">
         <p className="baton__title">

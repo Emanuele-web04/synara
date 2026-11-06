@@ -17,7 +17,7 @@ import { useStore } from "~/store";
 import { retainThreadDetailSubscription } from "~/threadDetailSubscriptionRetention";
 
 import { DeferredChatView, noopChatSurfaceAction } from "../../chat/ChatThreadSurfacePrimitives";
-import { BotFace } from "../BotFace";
+import { BotFace, taskMood } from "../BotFace";
 import { Chip, IconButton, Pane, Strip, Text } from "../kit/controls";
 import { useOpenTask } from "../synbotNav";
 import { ProofCard } from "./ProofCard";
@@ -62,7 +62,7 @@ export function TaskPane({
               label={t("synbot:backToThread")}
               onClick={() => openTask(null)}
             />
-            <BotFace bot={bot} size="pill" mood={task?.state === "working" ? "working" : "idle"} />
+            <BotFace bot={bot} size="pill" mood={task ? taskMood(task.state) : "idle"} />
             <Text variant="label" truncate>
               {title}
             </Text>

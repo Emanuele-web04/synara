@@ -1,8 +1,10 @@
 // FILE: ThreadPane.tsx
-// Purpose: A bot's thread on the SynBot page (HoloBot's thread/ThreadPane.tsx and TopBar.tsx):
-//          the rows scroll under a floating top strip (the name pill with the bot's face, name
-//          and engine, which opens its sheet; More with the engine and model, Edit and Settings)
-//          and Synara's own composer floats over their end: the pane is Synara's ChatView for the
+// Purpose: A bot's thread on the SynBot page (HoloBot's thread/TopBar.tsx and ThreadPane.tsx):
+//          the rows scroll under a floating top strip (on the left the name pill with the bot's
+//          face and name, which opens its sheet; on the right the chat's permission, model and
+//          context controls, which ChatView draws there instead of under the composer, then More
+//          with the bot's engine, Edit and Settings) and Synara's own composer floats over their
+//          end, its Send button in HoloBot's metal ring: the pane is Synara's ChatView for the
 //          bot's thread, with HoloBot's rows (MessageList) in its transcript's place. The strip
 //          publishes its height (--thread-top) and the composer's comes from ChatView, so the
 //          list keeps its first and last rows clear of them and fades only where it runs under
@@ -28,6 +30,7 @@ import { useBotEditor } from "../editor/botEditorStore";
 import { IconButton, Strip } from "../kit/controls";
 import { Icon } from "../kit/Icon";
 import { Menu, type MenuEntry } from "../kit/Menu";
+import { MetalRing } from "../kit/metal/Metal";
 import { MessageList } from "./MessageList";
 import type { TranscriptEdges } from "./Transcript";
 import { useBotAnswering } from "./useBotThread";
@@ -69,7 +72,16 @@ function useSaveEngine(bot: Bot) {
   );
 }
 
-function TopBar({ bot, answering }: { readonly bot: Bot; readonly answering: boolean }) {
+function TopBar({
+  bot,
+  answering,
+  controlsRef,
+}: {
+  readonly bot: Bot;
+  readonly answering: boolean;
+  /** Where ChatView draws the chat's controls. */
+  readonly controlsRef: (element: HTMLDivElement | null) => void;
+}) {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const openEdit = useBotEditor((store) => store.openEdit);
@@ -86,7 +98,8 @@ function TopBar({ bot, answering }: { readonly bot: Bot; readonly answering: boo
   ];
   return (
     <Strip
-      center={
+      className="thread-strip"
+      leading={
         <button
           type="button"
           className="thread-pill"
@@ -95,16 +108,18 @@ function TopBar({ bot, answering }: { readonly bot: Bot; readonly answering: boo
         >
           <BotFace bot={bot} size="pill" mood={answering ? "working" : botMood(bot.status)} />
           <span className="thread-pill__name">{bot.name}</span>
-          <span className="thread-pill__engine">{engine.modelName}</span>
         </button>
       }
       trailing={
-        <Menu
-          label={t("synbot:more")}
-          items={more}
-          onOpenChange={engine.setOpen}
-          trigger={<IconButton icon="more" kind="ghost" label={t("synbot:more")} />}
-        />
+        <>
+          <div className="thread-controls" ref={controlsRef} />
+          <Menu
+            label={t("synbot:more")}
+            items={more}
+            onOpenChange={engine.setOpen}
+            trigger={<IconButton icon="more" kind="ghost" label={t("synbot:more")} />}
+          />
+        </>
       }
     />
   );
@@ -118,6 +133,9 @@ function Banner({ text }: { readonly text: string }) {
     </div>
   );
 }
+
+/** The composer's Send in a bot chat: HoloBot's dark core in a ring of moving metal. */
+const SEND_RING = <MetalRing />;
 
 const EMBEDDED_PANEL_STATE: SplitViewPanePanelState = {
   panel: null,
@@ -134,6 +152,7 @@ export function ThreadPane({ bot }: { readonly bot: Bot }) {
   useBarHeights(pane, top);
   const [edges, setEdges] = useState<TranscriptEdges>({ top: false, bottom: false });
   const answering = useBotAnswering(bot.threadId);
+  const [controls, setControls] = useState<HTMLDivElement | null>(null);
   const error = useStore((state) => state.threadShellById?.[bot.threadId]?.error ?? null);
   // ChatView draws the composer (Synara's own) and hands its transcript's place to the rows.
   const renderTranscript = useCallback(
@@ -148,7 +167,7 @@ export function ThreadPane({ bot }: { readonly bot: Bot }) {
       data-under-bottom={edges.bottom || undefined}
     >
       <div className="thread-pane__top" ref={top}>
-        <TopBar bot={bot} answering={answering} />
+        <TopBar bot={bot} answering={answering} controlsRef={setControls} />
         {error ? <Banner text={error} /> : null}
       </div>
       <div className="thread-pane__chat">
@@ -167,7 +186,8 @@ export function ThreadPane({ bot }: { readonly bot: Bot }) {
           onOpenTurnDiff={noopChatSurfaceAction}
           renderTranscript={renderTranscript}
           composerPlaceholder={t("synbot:placeholder", { name: bot.name })}
-          composerStatusAbove
+          composerStatusTarget={controls}
+          composerSendUnderlay={SEND_RING}
         />
       </div>
     </section>

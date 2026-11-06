@@ -63,13 +63,37 @@
   display: block;
 }
 
-/* The bot's name pill: its face, name and engine; it opens the bot's sheet. */
+/* The top strip: the name pill on the left, the chat's controls and More on the right. */
+.hb .thread-strip {
+  grid-template-columns: minmax(0, max-content) 0 minmax(0, 1fr);
+}
+/* The chat's permission, model and context controls (ChatView draws them here): a capsule
+   floating like the name pill, as wide as its controls, clipped when the pane is narrow (the
+   controls then compact themselves). */
+.hb .thread-controls {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  max-width: 100%;
+  height: var(--hb-control);
+  padding: 0 4px;
+  box-sizing: border-box;
+  border: var(--hb-hairline) solid var(--hb-border-strong);
+  border-radius: var(--hb-pill);
+  background: var(--hb-card);
+  box-shadow: var(--hb-shadow-float);
+}
+.hb .thread-controls:empty {
+  display: none;
+}
+
+/* The bot's name pill: its face and name; it opens the bot's sheet. */
 .hb .thread-pill {
   display: flex;
   align-items: center;
   gap: var(--hb-gap-sm);
   min-width: 0;
-  max-width: max(120px, min(360px, calc(100cqw - 2 * (var(--hb-button) * 2 + var(--hb-gutter)))));
+  max-width: 240px;
   height: var(--hb-control);
   padding: 0 var(--hb-gap) 0 5px;
   box-sizing: border-box;
@@ -95,16 +119,6 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-.hb .thread-pill__engine {
-  flex-shrink: 0;
-  max-width: 140px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: var(--hb-text-xs);
-  font-weight: var(--hb-weight-medium);
-  color: var(--hb-muted);
 }
 
 .hb .banner {
