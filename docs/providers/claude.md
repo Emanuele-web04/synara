@@ -51,16 +51,14 @@ without a usable local login and for explicitly configured external auth modes.
 3. Leave **Claude config directory** blank to let Synara keep the account's
    sign-in in its own folder, or point it at a Claude config folder you already
    signed in to. Then choose **Add account**.
-4. Select the new row. While it is not signed in, the editor shows the command
-   to run, built from the account's **Terminal command** (`claude-work` for an
-   account with the ID `claude_work`):
-
-   ```sh
-   claude-work auth login
-   ```
-
-   Run it in a Synara terminal, then choose **Refresh status** at the top of
-   the Providers settings. The row turns to `Authenticated`.
+4. Select the new row and choose **Sign in**. Synara runs the Claude login in
+   the account's own environment; complete the browser prompts it opens. When
+   the login exits, Synara rechecks the account (choose **Check authentication**
+   if the prompts finished outside the dialog). The row turns to
+   `Authenticated`. The same login also works from a Synara terminal through
+   the account's **Terminal command** (`claude-work auth login` for an account
+   with the ID `claude_work`), followed by **Refresh status** at the top of the
+   Providers settings.
 
 5. Open the model picker in a new thread and pick a model from the account's
    tab.

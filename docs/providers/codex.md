@@ -55,16 +55,14 @@ default).
    be changed later. Optionally pick an accent color.
 3. Leave **CODEX_HOME path** blank to let Synara keep the account's sign-in in
    its own folder, then choose **Add account**.
-4. Select the new row. While it is not signed in, the editor shows the command
-   to run, built from the account's **Terminal command** (`codex-work` for an
-   account with the ID `codex_work`):
-
-   ```sh
-   codex-work login
-   ```
-
-   Run it in a Synara terminal, then choose **Refresh status** at the top of
-   the Providers settings. The row turns to `Authenticated`.
+4. Select the new row and choose **Sign in**. Synara runs `codex login` in the
+   account's own environment; complete the browser prompts it opens. When the
+   login exits, Synara rechecks the account (choose **Check authentication**
+   if the prompts finished outside the dialog). The row turns to
+   `Authenticated`. The same login also works from a Synara terminal through
+   the account's **Terminal command** (`codex-work login` for an account with
+   the ID `codex_work`), followed by **Refresh status** at the top of the
+   Providers settings.
 
 5. Open the model picker in a new thread and pick a model from the account's
    tab.
