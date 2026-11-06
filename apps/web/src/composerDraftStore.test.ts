@@ -390,6 +390,46 @@ describe("composerDraftStore project draft thread mapping", () => {
     expect(revokeSpy).toHaveBeenCalledWith("blob:newer");
   });
 
+  it("keeps follow-up text, attachments and queued turns through worktree promotion", () => {
+    const store = useComposerDraftStore.getState();
+    store.setProjectDraftThreadId(projectId, threadId, { envMode: "worktree" });
+    store.setPrompt(threadId, "create the worktree");
+    store.clearComposerContent(threadId, { preservePreviewUrls: true });
+
+    // The user starts another message while first-send worktree setup is pending.
+    store.setPrompt(threadId, "follow-up typed during setup");
+    store.addImage(threadId, makeImage({ id: "img-follow-up", previewUrl: "blob:follow-up" }));
+    store.enqueueQueuedTurn(threadId, makeQueuedChatTurn("queued-follow-up"));
+
+    markPromotedDraftThreads(new Set([threadId]));
+    finalizePromotedDraftThreads(new Set([threadId]));
+    finalizePromotedDraftThreads(new Set([threadId]));
+
+    const promoted = useComposerDraftStore.getState();
+    expect(promoted.getDraftThread(threadId)).toBeNull();
+    expect(promoted.getDraftThreadByProjectId(projectId)).toBeNull();
+    expect(promoted.draftsByThreadId[threadId]?.prompt).toBe("follow-up typed during setup");
+    expect(promoted.draftsByThreadId[threadId]?.images.map((image) => image.id)).toEqual([
+      "img-follow-up",
+    ]);
+    expect(promoted.draftsByThreadId[threadId]?.queuedTurns.map((turn) => turn.id)).toEqual([
+      "queued-follow-up",
+    ]);
+    expect(revokeSpy).not.toHaveBeenCalledWith("blob:follow-up");
+  });
+
+  it("cleans up composer resources when promoting to a different thread", () => {
+    const store = useComposerDraftStore.getState();
+    store.setProjectDraftThreadId(projectId, threadId);
+    store.addImage(threadId, makeImage({ id: "img-old-draft", previewUrl: "blob:old-draft" }));
+    store.markDraftThreadPromoting(threadId, otherThreadId);
+    store.finalizePromotedDraftThread(threadId);
+
+    expect(useComposerDraftStore.getState().getDraftThread(threadId)).toBeNull();
+    expect(useComposerDraftStore.getState().draftsByThreadId[threadId]).toBeUndefined();
+    expect(revokeSpy).toHaveBeenCalledWith("blob:old-draft");
+  });
+
   it.each([true, false])(
     "preserves explicit Computer choice %s when a draft becomes a server thread",
     (enabled) => {
