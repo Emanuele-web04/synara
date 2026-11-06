@@ -11,6 +11,7 @@ export type ProviderChildKind =
   | "devin"
   | "droid"
   | "grok"
+  | "kiro"
   | "opencode"
   | "pi"
   | "omp";
@@ -66,6 +67,9 @@ const PROVIDER_CREDENTIAL_GRANTS: Record<ProviderChildKind, "all" | ReadonlySet<
   devin: new Set(["DEVIN_API_KEY", "WINDSURF_API_KEY"]),
   droid: new Set(["FACTORY_API_KEY"]),
   grok: new Set(["XAI_API_KEY", "GROK_CODE_XAI_API_KEY"]),
+  // Kiro reads its own CLI login; AWS keys stay available for the AWS tooling
+  // Kiro agents commonly run on the user's behalf.
+  kiro: new Set(["AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN"]),
   // These profiles deliberately support arbitrary upstream model providers.
   acp: "all",
   codex: "all",

@@ -22,6 +22,7 @@ import { GrokAdapter, GrokAdapterShape } from "../Services/GrokAdapter.ts";
 import { OpenCodeAdapter, OpenCodeAdapterShape } from "../Services/OpenCodeAdapter.ts";
 import { PiAdapter, PiAdapterShape } from "../Services/PiAdapter.ts";
 import { OmpAdapter, OmpAdapterShape } from "../Services/OmpAdapter.ts";
+import { KiroAdapter, KiroAdapterShape } from "../Services/KiroAdapter.ts";
 import { ProviderAdapterRegistry } from "../Services/ProviderAdapterRegistry.ts";
 import { ProviderAdapterRegistryLive } from "./ProviderAdapterRegistry.ts";
 import { ProviderAdapterProcessError, ProviderUnsupportedError } from "../Errors.ts";
@@ -190,6 +191,23 @@ const fakeOmpAdapter: OmpAdapterShape = {
   streamEvents: Stream.empty,
 };
 
+const fakeKiroAdapter: KiroAdapterShape = {
+  provider: "kiro",
+  capabilities: { sessionModelSwitch: "restart-session" },
+  startSession: vi.fn(),
+  sendTurn: vi.fn(),
+  interruptTurn: vi.fn(),
+  respondToRequest: vi.fn(),
+  respondToUserInput: vi.fn(),
+  stopSession: vi.fn(),
+  listSessions: vi.fn(),
+  hasSession: vi.fn(),
+  readThread: vi.fn(),
+  rollbackThread: vi.fn(),
+  stopAll: vi.fn(),
+  streamEvents: Stream.empty,
+};
+
 const fakeAntigravityAdapter: AntigravityAdapterShape = {
   provider: "antigravity",
   capabilities: { sessionModelSwitch: "restart-session" },
@@ -222,6 +240,7 @@ const registryLayer = (codexAdapter = fakeCodexAdapter) =>
         Layer.succeed(OpenCodeAdapter, fakeOpenCodeAdapter),
         Layer.succeed(PiAdapter, fakePiAdapter),
         Layer.succeed(OmpAdapter, fakeOmpAdapter),
+        Layer.succeed(KiroAdapter, fakeKiroAdapter),
         ServerSettingsService.layerTest({
           providerInstances: {
             codex_work: {
@@ -260,6 +279,7 @@ layer("ProviderAdapterRegistryLive", (it) => {
       const opencode = yield* registry.getByProvider("opencode");
       const pi = yield* registry.getByProvider("pi");
       const omp = yield* registry.getByProvider("omp");
+      const kiro = yield* registry.getByProvider("kiro");
       assert.equal(codex, fakeCodexAdapter);
       assert.equal(claude, fakeClaudeAdapter);
       assert.equal(cursor, fakeCursorAdapter);
@@ -270,6 +290,7 @@ layer("ProviderAdapterRegistryLive", (it) => {
       assert.equal(opencode, fakeOpenCodeAdapter);
       assert.equal(pi, fakePiAdapter);
       assert.equal(omp, fakeOmpAdapter);
+      assert.equal(kiro, fakeKiroAdapter);
 
       const providers = yield* registry.listProviders();
       assert.deepEqual(providers, [
@@ -283,6 +304,7 @@ layer("ProviderAdapterRegistryLive", (it) => {
         "opencode",
         "omp",
         "pi",
+        "kiro",
       ]);
     }),
   );
@@ -572,6 +594,7 @@ for (const adapter of [
   fakeDroidAdapter,
   fakeOpenCodeAdapter,
   fakeOmpAdapter,
+  fakeKiroAdapter,
 ]) {
   it.effect(`preserves membership probes for ${adapter.provider} without a retained probe`, () =>
     Effect.gen(function* () {

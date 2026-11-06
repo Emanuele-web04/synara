@@ -417,6 +417,7 @@ describe("resolveAppModelSelection", () => {
           opencode: [],
           pi: [],
           omp: [],
+          kiro: [],
         },
         "galapagos-alpha",
       ),
@@ -438,6 +439,7 @@ describe("resolveAppModelSelection", () => {
           opencode: [],
           pi: [],
           omp: [],
+          kiro: [],
         },
         "",
       ),
@@ -669,6 +671,7 @@ describe("normalizeStoredAppSettings", () => {
       piBinaryPath: "",
       ompBinaryPath: "",
       ompAgentDir: "",
+      kiroBinaryPath: "",
     });
     expect(getCustomBinaryPathForProvider(normalized, "opencode")).toBe("");
   });
@@ -731,6 +734,7 @@ describe("getProviderStartOptions", () => {
         devinBinaryPath: "/usr/local/bin/devin",
         ompBinaryPath: "",
         ompAgentDir: "",
+        kiroBinaryPath: "",
       }),
     ).toEqual({
       claudeAgent: {
@@ -776,6 +780,7 @@ describe("getProviderStartOptions", () => {
         devinBinaryPath: "",
         ompBinaryPath: "",
         ompAgentDir: "",
+        kiroBinaryPath: "",
       }),
     ).toBeUndefined();
   });
@@ -808,6 +813,7 @@ describe("getProviderStartOptions", () => {
         piBinaryPath: "",
         ompBinaryPath: "",
         ompAgentDir: "",
+        kiroBinaryPath: "",
       }),
     ).toEqual({
       codex: {
@@ -847,6 +853,7 @@ describe("getProviderStartOptions", () => {
           piBinaryPath: "",
           ompBinaryPath: "",
           ompAgentDir: "",
+          kiroBinaryPath: "",
         },
         "codex",
       ),
@@ -886,6 +893,7 @@ describe("getProviderStartOptions", () => {
           piBinaryPath: "",
           ompBinaryPath: "",
           ompAgentDir: "",
+          kiroBinaryPath: "",
         },
         "codex_work",
       ),
@@ -921,6 +929,7 @@ describe("getProviderStartOptions", () => {
           piBinaryPath: "",
           ompBinaryPath: "",
           ompAgentDir: "",
+          kiroBinaryPath: "",
           providerInstances: {
             claude_work: {
               driver: "claudeAgent",
@@ -971,6 +980,7 @@ describe("getProviderStartOptions", () => {
         piBinaryPath: "",
         ompBinaryPath: "",
         ompAgentDir: "",
+        kiroBinaryPath: "",
         providerInstances: {
           codex_work: {
             driver: "codex",
@@ -1006,6 +1016,7 @@ describe("getProviderStartOptions", () => {
         piBinaryPath: "",
         ompBinaryPath: "",
         ompAgentDir: "",
+        kiroBinaryPath: "",
         providerInstances: {
           claudeAgent: {
             driver: "claudeAgent",
@@ -1048,6 +1059,7 @@ describe("getProviderStartOptions", () => {
         piBinaryPath: "",
         ompBinaryPath: "",
         ompAgentDir: "",
+        kiroBinaryPath: "",
       }),
     ).toEqual({
       codex: {},
@@ -1098,6 +1110,7 @@ describe("getProviderStartOptions", () => {
         piBinaryPath: "pi",
         ompBinaryPath: "",
         ompAgentDir: "",
+        kiroBinaryPath: "",
       }),
     ).toBeUndefined();
   });
@@ -1489,6 +1502,7 @@ describe("provider instance configuration", () => {
           piBinaryPath: "",
           ompBinaryPath: "",
           ompAgentDir: "",
+          kiroBinaryPath: "",
           piAgentDir: "",
           providerInstances: {
             claude_work: { driver: "claudeAgent", enabled: true, config: {} },
@@ -1585,6 +1599,7 @@ describe("provider-indexed custom model settings", () => {
     customOpenCodeModels: ["openrouter/gpt-oss-120b"],
     customPiModels: ["anthropic/custom-pi"],
     customOmpModels: [],
+    customKiroModels: [],
   } as const;
 
   it("stores default-instance custom models in the provider instance map", () => {
@@ -1767,6 +1782,7 @@ describe("provider-indexed custom model settings", () => {
       opencode: ["openrouter/gpt-oss-120b"],
       pi: ["anthropic/custom-pi"],
       omp: [],
+      kiro: [],
     });
   });
 
@@ -2121,6 +2137,7 @@ describe("AppSettingsSchema", () => {
       customOpenCodeModels: [],
       customPiModels: [],
       customOmpModels: [],
+      customKiroModels: [],
     });
   });
 

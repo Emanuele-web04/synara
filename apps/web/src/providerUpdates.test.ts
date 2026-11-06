@@ -98,6 +98,7 @@ function serverSettings(overrides: Partial<ServerSettings["providers"]> = {}): S
       },
       pi: { ...provider, binaryPath: "pi", agentDir: "" },
       omp: { ...provider, binaryPath: "omp", agentDir: "" },
+      kiro: { ...provider, binaryPath: "kiro-cli" },
       ...overrides,
     },
     providerInstances: {},

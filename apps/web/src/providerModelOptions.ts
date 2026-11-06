@@ -22,6 +22,8 @@ import {
   type DevinModelSelection,
   type GrokModelOptions,
   type GrokModelSelection,
+  type KiroModelOptions,
+  type KiroModelSelection,
   type ModelSelection,
   type OmpModelOptions,
   type OmpModelSelection,
@@ -185,7 +187,7 @@ function orderClaudeModelOptions<T extends ProviderModelOption>(
  * Folds runtime-discovered models into the static option list for a provider:
  * discovered models lead (with display names recovered from the static list when
  * possible), static built-ins fill gaps unless discovery fully owns the catalog
- * (codex/antigravity/opencode/cursor/droid/grok/devin). Codex also owns a successful
+ * (codex/antigravity/opencode/cursor/droid/grok/devin/kiro). Codex also owns a successful
  * empty catalog. User-defined custom models survive except for Droid.
  * Claude is the exception: its discovered and static built-in models are merged
  * into the curated catalog order.
@@ -305,7 +307,8 @@ export function mergeDynamicModelOptions(input: {
         input.provider === "cursor" ||
         input.provider === "droid" ||
         input.provider === "grok" ||
-        input.provider === "devin"));
+        input.provider === "devin" ||
+        input.provider === "kiro"));
   const missingStaticBuiltIns = hasAuthoritativeCatalog
     ? []
     : staticBuiltInModels.filter((model) => !dynamicNormalizedSlugs.has(model.slug));
@@ -460,6 +463,12 @@ export function buildNextProviderOptions(
       ...patch,
     } as OmpModelOptions;
   }
+  if (provider === "kiro") {
+    return {
+      ...(modelOptions as KiroModelOptions | undefined),
+      ...patch,
+    } as KiroModelOptions;
+  }
   return {
     ...(modelOptions as PiModelOptions | undefined),
     ...patch,
@@ -536,6 +545,12 @@ export function buildModelSelection(
   metadata?: ModelSelectionBuildMetadata,
 ): OmpModelSelection;
 export function buildModelSelection(
+  provider: "kiro",
+  model: string,
+  options?: KiroModelOptions | null | undefined,
+  metadata?: ModelSelectionBuildMetadata,
+): KiroModelSelection;
+export function buildModelSelection(
   provider: ProviderKind,
   model: string,
   options?: ProviderOptions | null | undefined,
@@ -611,6 +626,11 @@ export function buildModelSelection(
     case "omp":
       return attachModelSelectionMetadata(
         options ? { provider, model, options: options as OmpModelOptions } : { provider, model },
+        metadata,
+      );
+    case "kiro":
+      return attachModelSelectionMetadata(
+        options ? { provider, model, options: options as KiroModelOptions } : { provider, model },
         metadata,
       );
   }

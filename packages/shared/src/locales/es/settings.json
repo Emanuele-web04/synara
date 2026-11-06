@@ -319,6 +319,7 @@
   "createConnection": "Crear conexión",
   "desktopAbilities": "Capacidades de escritorio",
   "devinBinaryPath": "Ruta del ejecutable de Devin",
+  "kiroBinaryPath": "Ruta del ejecutable de Kiro",
   "discardThisHub": "¿Descartar este Hub?",
   "droidBinaryPath": "Ruta del binario de Droid",
   "enabledProviders": "Proveedores activados",

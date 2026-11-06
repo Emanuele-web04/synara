@@ -308,6 +308,7 @@ const GENERIC_USAGE_DRIVERS: Partial<Record<ProviderKind, ProviderProcessEnvDriv
   droid: "kilo",
   opencode: "opencode",
   pi: "pi",
+  kiro: "kiro",
 };
 
 function instanceUsageContext(

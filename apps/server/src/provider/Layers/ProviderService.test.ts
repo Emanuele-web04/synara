@@ -83,6 +83,7 @@ import { DroidAdapter } from "../Services/DroidAdapter.ts";
 import { GrokAdapter } from "../Services/GrokAdapter.ts";
 import { OpenCodeAdapter } from "../Services/OpenCodeAdapter.ts";
 import { OmpAdapter } from "../Services/OmpAdapter.ts";
+import { KiroAdapter } from "../Services/KiroAdapter.ts";
 import { PiAdapter } from "../Services/PiAdapter.ts";
 import { ProviderAdapterRegistryLive } from "./ProviderAdapterRegistry.ts";
 import { ProviderService } from "../Services/ProviderService.ts";
@@ -1878,6 +1879,7 @@ const makeRegistrySwitchLayer = (
         Layer.succeed(DroidAdapter, adapterFor("droid")),
         Layer.succeed(OpenCodeAdapter, adapterFor("opencode")),
         Layer.succeed(OmpAdapter, adapterFor("omp")),
+        Layer.succeed(KiroAdapter, adapterFor("kiro")),
         Layer.succeed(PiAdapter, adapterFor("pi")),
         settingsLayer,
       ),

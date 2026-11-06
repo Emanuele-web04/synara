@@ -46,6 +46,7 @@ export type ProviderModelPrefetchSettings = Pick<
   | "piAgentDir"
   | "ompBinaryPath"
   | "ompAgentDir"
+  | "kiroBinaryPath"
 > &
   Partial<
     Pick<
@@ -79,6 +80,8 @@ export const NEW_THREAD_MODEL_PREFETCH_PROVIDERS: ReadonlyArray<Exclude<Provider
   // One global `omp models` spawn, not per-model sessions like Droid — safe to
   // keep warm across hover/mount prefetches.
   "omp",
+  // One disposable ACP session per catalog (cached server-side), not per model.
+  "kiro",
 ];
 
 /** Warm results stay fresh for 30 minutes; the interactive staleTime is 15min. */
@@ -273,6 +276,15 @@ export function providerModelsPrefetchQueryOptions(input: {
         instanceId,
         binaryPath: optionString("binaryPath"),
         agentDir: optionString("agentDir"),
+        priority,
+      });
+    case "kiro":
+      // Kiro's server-side catalog cache is keyed by binary, not cwd, so the
+      // prefetch lands on the cwd-agnostic key the composer reads.
+      return providerModelsQueryOptions({
+        provider: "kiro",
+        instanceId,
+        binaryPath: optionString("binaryPath"),
         priority,
       });
   }

@@ -62,10 +62,14 @@ export const NATIVE_EDITOR_BETA_FEATURE = "native-editor";
 /** Simplified Chinese interface, native menus and app-authored permission explanations. */
 export const CHINESE_UI_BETA_FEATURE = "chinese-ui";
 
+/** Kiro CLI provider (Beta only until its ACP integration is verified on Stable). */
+export const KIRO_PROVIDER_BETA_FEATURE = "kiro";
+
 export const BETA_ONLY_FEATURES: readonly BetaOnlyFeature[] = [
   "accountProfileSync",
   ACCOUNT_INBOX_BETA_FEATURE,
   CHINESE_UI_BETA_FEATURE,
+  KIRO_PROVIDER_BETA_FEATURE,
 ];
 
 /**

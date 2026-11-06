@@ -488,6 +488,7 @@
   "createConnection": "创建连接",
   "desktopAbilities": "桌面能力",
   "devinBinaryPath": "Devin 可执行文件路径",
+  "kiroBinaryPath": "Kiro 可执行文件路径",
   "discardThisHub": "丢弃此中心？",
   "droidBinaryPath": "Droid 可执行文件路径",
   "enabledProviders": "已启用的提供商",

@@ -265,6 +265,11 @@ const PROVIDER_TARGET_OPTION_RULES = {
       }),
     },
   }),
+  // Kiro advertises effort per account through ACP, so only discovered values are valid.
+  kiro: defineProviderOptionConfig<"kiro">({
+    primaryOptionKey: "reasoningEffort",
+    options: { reasoningEffort: providerOptionRule("string", [], "model-discovery") },
+  }),
 } as const satisfies Record<ProviderKind, ProviderTargetOptionConfig>;
 
 function providerTargetOptionConfig(provider: ProviderKind): ProviderTargetOptionConfig {

@@ -18,6 +18,7 @@ consistent workspace.
 | [Pi](https://www.trysynara.com/docs/providers/pi)                       | Pi and the model providers configured through it               |
 | [Oh My Pi](https://www.trysynara.com/docs/providers/omp)                | Your installed Oh My Pi runtime and configured model providers |
 | [Factory Droid](https://www.trysynara.com/docs/providers/factory-droid) | Your installed and authenticated Droid runtime                 |
+| [Kiro](https://kiro.dev/docs/cli/) (Beta)                               | Your installed and signed-in Kiro CLI (`kiro-cli acp`)         |
 
 Provider availability can differ between the current stable release and development builds. Use the
 provider settings in your installed Synara version as the authoritative list for that build.
@@ -155,6 +156,15 @@ after the parent response ends. Stopping one task leaves the parent and sibling 
 A local stop remains subject to a later native completion; after restart, session replay can
 restore the original ownership and correct the recorded outcome. If native resume fails, Synara
 reports that the old task can no longer be tracked or controlled rather than claiming it completed.
+
+Kiro runs `kiro-cli acp` with the CLI's own login; sign in with `kiro-cli login` first. Models
+and effort levels come from the signed-in account, and a change applies to the next turn of the
+running session. Kiro agents appear as ACP modes: Plan turns switch to Kiro's `plan` agent when it
+is advertised and later turns return to the agent the session started with. Permission requests
+always go through Synara, so Plan turns decline mutating tools even if the agent switch fails. A
+saved session Kiro can no longer reopen starts fresh with the transcript. Usage shows the
+account's monthly Kiro credits from `kiro-cli`'s own login, read-only; when that token has expired,
+usage waits until Kiro runs again and renews it. Kiro is Beta-only.
 
 Claude's readable reasoning appears as compact progress text between tool actions while it works.
 Open a reasoning row to read its available detail. This text comes from the running provider;

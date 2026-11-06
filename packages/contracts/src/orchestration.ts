@@ -15,6 +15,7 @@ import {
   DevinModelOptions,
   DroidModelOptions,
   GrokModelOptions,
+  KiroModelOptions,
   OpenCodeModelOptions,
   OmpModelOptions,
   PiModelOptions,
@@ -95,6 +96,7 @@ export const ProviderKind = Schema.Literals([
   "pi",
   "devin",
   "omp",
+  "kiro",
 ]);
 export type ProviderKind = typeof ProviderKind.Type;
 
@@ -181,6 +183,9 @@ function inferProviderFromInstanceId(instanceId: string): ProviderKind | undefin
   }
   if (lowerInstanceId.startsWith("devin")) {
     return "devin";
+  }
+  if (lowerInstanceId.startsWith("kiro")) {
+    return "kiro";
   }
   return undefined;
 }
@@ -329,6 +334,14 @@ export const DevinModelSelection = Schema.Struct({
 });
 export type DevinModelSelection = typeof DevinModelSelection.Type;
 
+export const KiroModelSelection = Schema.Struct({
+  provider: Schema.Literal("kiro"),
+  instanceId: ProviderInstanceIdForDriver("kiro"),
+  model: TrimmedNonEmptyString,
+  options: Schema.optional(KiroModelOptions),
+});
+export type KiroModelSelection = typeof KiroModelSelection.Type;
+
 const ModelSelectionByProvider = Schema.Union([
   CodexModelSelection,
   ClaudeModelSelection,
@@ -340,6 +353,7 @@ const ModelSelectionByProvider = Schema.Union([
   OpenCodeModelSelection,
   PiModelSelection,
   OmpModelSelection,
+  KiroModelSelection,
 ]);
 
 // Keep persisted inputs loose so malformed or mixed legacy drafts reach the
@@ -458,6 +472,11 @@ export const DevinProviderStartOptions = Schema.Struct({
   environment: Schema.optional(ProcessEnvRecord),
 });
 
+export const KiroProviderStartOptions = Schema.Struct({
+  binaryPath: Schema.optional(TrimmedNonEmptyString),
+  environment: Schema.optional(ProcessEnvRecord),
+});
+
 export const ProviderStartOptions = Schema.Struct({
   codex: Schema.optional(CodexProviderStartOptions),
   claudeAgent: Schema.optional(ClaudeProviderStartOptions),
@@ -469,6 +488,7 @@ export const ProviderStartOptions = Schema.Struct({
   opencode: Schema.optional(OpenCodeProviderStartOptions),
   pi: Schema.optional(PiProviderStartOptions),
   omp: Schema.optional(OmpProviderStartOptions),
+  kiro: Schema.optional(KiroProviderStartOptions),
 });
 export type ProviderStartOptions = typeof ProviderStartOptions.Type;
 

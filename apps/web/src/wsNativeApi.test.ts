@@ -452,6 +452,7 @@ describe("wsNativeApi", () => {
           },
           pi: { enabled: true, binaryPath: "pi", agentDir: "", customModels: [] },
           omp: { enabled: true, binaryPath: "omp", agentDir: "", customModels: [] },
+          kiro: { enabled: true, binaryPath: "kiro-cli", customModels: [] },
         },
         providerInstances: {},
         skills: { disabled: [] },

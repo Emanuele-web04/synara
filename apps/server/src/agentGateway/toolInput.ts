@@ -20,6 +20,7 @@ export const PROVIDER_KINDS: ReadonlyArray<ProviderKind> = [
   "pi",
   "devin",
   "omp",
+  "kiro",
 ];
 
 export const MODEL_SELECTION_INPUT_SCHEMA = {

@@ -130,13 +130,13 @@ import {
   providerContinuationIdentity,
 } from "../continuationIdentity.ts";
 
-// Devin and Grok report a cursor they cannot reload faithfully (missing native
+// Devin, Grok and Kiro report a cursor they cannot reload faithfully (missing native
 // state, or created for other process-start model flags) as resume-state-unavailable.
 const isStaleNativeSessionLoadError = (
   provider: ProviderKind,
   error: ProviderAdapterError,
 ): error is ProviderAdapterProcessError =>
-  (provider === "devin" || provider === "grok") &&
+  (provider === "devin" || provider === "grok" || provider === "kiro") &&
   error instanceof ProviderAdapterProcessError &&
   error.reason === "resume-state-unavailable";
 
@@ -411,6 +411,7 @@ function redactProviderOptionsForPersistence(value: unknown): unknown {
       : {}),
     ...(value.pi ? { pi: redactRuntimeEnvironment(value.pi) } : {}),
     ...(value.omp ? { omp: redactRuntimeEnvironment(value.omp) } : {}),
+    ...(value.kiro ? { kiro: redactRuntimeEnvironment(value.kiro) } : {}),
   } satisfies ProviderStartOptions;
 }
 

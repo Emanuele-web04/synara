@@ -58,6 +58,17 @@ export const DROID_REASONING_EFFORT_OPTIONS = [
 // Droid exposes effort values dynamically over ACP; keep the static list only
 // as an offline fallback so newly added values survive transport and drafts.
 export type DroidReasoningEffort = string;
+// Union of the per-model effort ladders Kiro advertises (GPT models add `none`).
+// Kiro can add more, so model options keep a string and this is only a fallback.
+export const KIRO_REASONING_EFFORT_OPTIONS = [
+  "none",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+] as const;
+export type KiroReasoningEffort = string;
 export type ProviderReasoningEffort =
   | CodexReasoningEffort
   | ClaudeCodeEffort
@@ -177,6 +188,11 @@ export const DevinModelOptions = Schema.Struct({
 });
 export type DevinModelOptions = typeof DevinModelOptions.Type;
 
+export const KiroModelOptions = Schema.Struct({
+  reasoningEffort: Schema.optional(TrimmedNonEmptyString),
+});
+export type KiroModelOptions = typeof KiroModelOptions.Type;
+
 export const ProviderModelOptions = Schema.Struct({
   codex: Schema.optional(CodexModelOptions),
   claudeAgent: Schema.optional(ClaudeModelOptions),
@@ -188,6 +204,7 @@ export const ProviderModelOptions = Schema.Struct({
   opencode: Schema.optional(OpenCodeModelOptions),
   pi: Schema.optional(PiModelOptions),
   omp: Schema.optional(OmpModelOptions),
+  kiro: Schema.optional(KiroModelOptions),
 });
 export type ProviderModelOptions = typeof ProviderModelOptions.Type;
 
@@ -1169,6 +1186,16 @@ export const MODEL_OPTIONS_BY_PROVIDER = {
     },
   ],
   omp: [],
+  // Kiro selects its model at process start via `kiro-cli acp --model`, and
+  // its ACP session advertises the account's live model list. `auto` lets
+  // Kiro route each request and is the static fallback when discovery fails.
+  kiro: [
+    {
+      slug: "auto",
+      name: "Auto",
+      capabilities: EMPTY_MODEL_CAPABILITIES,
+    },
+  ],
 } as const satisfies Record<ProviderKind, readonly ModelDefinition[]>;
 export type ModelOptionsByProvider = typeof MODEL_OPTIONS_BY_PROVIDER;
 
@@ -1186,6 +1213,7 @@ export const DEFAULT_MODEL_BY_PROVIDER: Record<ProviderWithDefaultModel, ModelSl
   grok: "grok-4.6",
   droid: "claude-opus-4-8",
   opencode: "openai/gpt-5",
+  kiro: "auto",
 };
 
 // Backward compatibility for existing Codex-only call sites.
@@ -1368,6 +1396,10 @@ export const MODEL_SLUG_ALIASES_BY_PROVIDER: Record<ProviderKind, Record<string,
     fable: "claude-fable-5",
   },
   omp: {},
+  kiro: {
+    kiro: "auto",
+    auto: "auto",
+  },
 };
 
 // ── Agent mention aliases ─────────────────────────────────────────────
@@ -1411,4 +1443,5 @@ export const PROVIDER_DISPLAY_NAMES: Record<ProviderKind, string> = {
   opencode: "OpenCode",
   pi: "Pi",
   omp: "Oh My Pi",
+  kiro: "Kiro",
 };

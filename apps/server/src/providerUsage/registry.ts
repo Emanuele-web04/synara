@@ -13,6 +13,7 @@ import { droidUsageFetcher } from "./providers/droid";
 import { piUsageFetcher } from "./providers/localCredential";
 import { opencodeUsageFetcher } from "./providers/opencode";
 import { devinUsageFetcher } from "./providers/devin";
+import { kiroUsageFetcher } from "./providers/kiro";
 import type { ProviderUsageFetcher } from "./types";
 
 export const PROVIDER_USAGE_FETCHERS: Partial<Record<ProviderKind, ProviderUsageFetcher>> = {
@@ -25,4 +26,5 @@ export const PROVIDER_USAGE_FETCHERS: Partial<Record<ProviderKind, ProviderUsage
   opencode: opencodeUsageFetcher,
   pi: piUsageFetcher,
   devin: devinUsageFetcher,
+  kiro: kiroUsageFetcher,
 };

@@ -50,6 +50,7 @@ const rejectForkDuringLoadReplay = process.env.SYNARA_ACP_REJECT_FORK_DURING_LOA
 const loadReplayModeId = process.env.SYNARA_ACP_LOAD_REPLAY_MODE_ID?.trim();
 const loadReplayAvailableCommands = process.env.SYNARA_ACP_LOAD_REPLAY_AVAILABLE_COMMANDS === "1";
 const modeConfigId = process.env.SYNARA_ACP_MODE_CONFIG_ID || "mode";
+const supportsSetMode = process.env.SYNARA_ACP_SUPPORT_SET_MODE === "1";
 const mainSessionId = "mock-session-1";
 const probeSessionId = "mock-session-probe";
 let sessionId = mainSessionId;
@@ -532,6 +533,14 @@ app.onRequest(OfficialAcp.methods.agent.session.fork, () => {
     modes: modeState(),
     configOptions: configOptions(),
   };
+});
+
+app.onRequest(OfficialAcp.methods.agent.session.setMode, ({ params: request }) => {
+  if (!supportsSetMode) {
+    throw OfficialAcp.RequestError.methodNotFound("session/set_mode");
+  }
+  currentModeId = request.modeId;
+  return {};
 });
 
 app.onRequest(OfficialAcp.methods.agent.session.setConfigOption, ({ params: request }) => {

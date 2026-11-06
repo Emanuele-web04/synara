@@ -199,6 +199,16 @@ export function getComposerProviderState(input: ComposerProviderStateInput): Com
       normalizedOptions = normalizeOmpModelOptions(providerOptions);
       break;
     }
+    case "kiro": {
+      const providerOptions = modelOptions?.kiro;
+      rawEffort = trimOrNull(providerOptions?.reasoningEffort);
+      // Like Droid, Kiro's effort ladder comes only from its ACP config
+      // options; dispatch a selected, advertised level explicitly.
+      const reasoningEffort =
+        rawEffort && hasEffortLevel(caps, rawEffort) ? providerOptions?.reasoningEffort : undefined;
+      normalizedOptions = reasoningEffort ? { reasoningEffort } : undefined;
+      break;
+    }
   }
 
   const draftEffort = trimOrNull(rawEffort);
