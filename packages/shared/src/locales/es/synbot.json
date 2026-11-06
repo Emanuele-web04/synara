@@ -90,6 +90,8 @@
   "more": "Más",
   "next": "Siguiente",
   "open": "Abrir",
+  "cardFold": "Plegar",
+  "cardUnfold": "Mostrar todo",
   "openBot": "Abrir {{name}}",
   "openTask": "Abrir el hilo de la tarea",
   "orAnswerInChat": "O responde en el chat de abajo",

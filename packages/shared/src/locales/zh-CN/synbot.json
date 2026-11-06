@@ -90,6 +90,8 @@
   "more": "更多",
   "next": "下一步",
   "open": "打开",
+  "cardFold": "收起",
+  "cardUnfold": "展开",
   "openBot": "打开 {{name}}",
   "openTask": "打开任务对话",
   "orAnswerInChat": "也可以在下方对话中回答",

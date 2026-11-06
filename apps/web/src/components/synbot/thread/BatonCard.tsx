@@ -1,9 +1,11 @@
 // FILE: BatonCard.tsx
-// Purpose: A hand-off between two bots, drawn as "passing the baton": the asking bot's face, a
-//          dashed arrow, the receiving bot's face, "SynBot → QA", the brief, then where it
-//          stands. In the asking bot's thread it carries Open and Stop (and the result once
-//          done); in the receiving bot's thread it carries the Start / Not now answer of the
-//          delegation's start card, so the brief shows once. Left-aligned like the bot's bubbles.
+// Purpose: A hand-off between two bots, "passing the baton": the head (the asking bot's face,
+//          a dashed arrow, the receiving bot's face, "SynBot → QA", when, and where it stands),
+//          the brief, the engine the receiving bot works on, then small capsules at the foot.
+//          In the asking bot's thread it carries Stop and Open (and the result once done); in
+//          the receiving bot's thread it carries the Start / Not now answer of the delegation's
+//          start card, so the brief shows once. Once done it folds to one line (the chevron
+//          opens it again). Left-aligned like the bot's bubbles.
 // Layer: SynBot thread UI
 // Exports: BatonCard, BatonStart, delegationTone
 
@@ -16,23 +18,22 @@ import {
 } from "@synara/contracts";
 import { useState } from "react";
 
-import { Button } from "~/components/ui/button";
 import { useTranslation } from "~/i18n";
+import { formatRelativeTimeAgo } from "~/lib/relativeTime";
 import { readNativeApi } from "~/nativeApi";
 import { botById, delegationById } from "~/synbot/synbotState.logic";
 import { useSynbotStore } from "~/synbot/synbotStore";
 import type { WorkLogSynbotNotice } from "~/workLog";
 
 import { toastManager } from "../../ui/toast";
-import { BotFace, delegationMood } from "../BotFace";
+import { delegationMood } from "../BotFace";
 import { CapsuleButton, type Tone } from "../kit/controls";
 import { Icon } from "../kit/Icon";
 import { useOpenBot } from "../synbotNav";
+import { CardHead, FacePath, FoldToggle, ModelChip, StatusChip } from "./CardParts";
 import { useLetterKeys } from "./cardKeys";
 import { InlineText } from "./ChoiceParts";
 import { useCardAnswer } from "./useCardAnswer";
-
-const FACE = 30;
 
 /** The delegation's start card, answered from the baton in the receiving bot's thread. */
 export interface BatonStart {
@@ -59,8 +60,8 @@ export function delegationTone(state: BotDelegationState): Tone {
   }
 }
 
-/** Not now, then Start: the start card's answers as capsules (Start in the liquid-metal ring),
- * A / B from the keyboard. */
+/** Not now, then Start: the start card's answers as small capsules at the card's foot (Start
+ * in the liquid-metal ring), A / B from the keyboard. */
 function StartAnswers({ start }: { readonly start: BatonStart }) {
   const { pending, answered, answer } = useCardAnswer(start.card, start.threadId);
   // The primary answer (Start) goes last, on the right.
@@ -74,20 +75,19 @@ function StartAnswers({ start }: { readonly start: BatonStart }) {
   // Answered: the choice stands until the card's resolution reaches the thread.
   if (answered) {
     return (
-      <p className="baton__status baton__status--muted">
+      <p className="baton__answered">
         <Icon name="check" size="xs" />
         {answered.label}
       </p>
     );
   }
   return (
-    <div className="baton__answers">
+    <div className="baton__foot baton__foot--answers">
       {options.map((option) => (
         <CapsuleButton
           key={option.id}
-          kind={option.tone === "primary" ? "primary" : "card"}
+          kind={option.tone === "primary" ? "primary" : "normal"}
           compact
-          className="baton__answer"
           disabled={pending !== null}
           onClick={() => answer(option.id, option.label)}
         >
@@ -121,6 +121,7 @@ export function BatonCard({
   const from = botById(data, fromBotId ?? delegation?.fromBotId ?? null);
   const to = botById(data, toBotId ?? delegation?.toBotId ?? null);
   const [stopping, setStopping] = useState(false);
+  const [unfolded, setUnfolded] = useState(false);
   const startOpen = side === "to" && start != null && !start.resolution;
   // Without the live delegation: waiting while its Start is open, the answer once given.
   const state: BotDelegationState | null =
@@ -143,66 +144,59 @@ export function BatonCard({
       .finally(() => setStopping(false));
   };
   const other = side === "from" ? to : from;
+  const title = t("synbot:batonTitle", {
+    from: from?.name ?? t("synbot:removedBot"),
+    to: to?.name ?? t("synbot:removedBot"),
+  });
+  const when = delegation ? formatRelativeTimeAgo(delegation.createdAt) : null;
+  const faces = <FacePath from={from} to={to} toMood={state ? delegationMood(state) : "idle"} />;
+  const status = statusLabel ? <StatusChip tone={tone} label={statusLabel} /> : null;
+  // Done: one line, its chevron opens the rest.
+  if (state === "completed" && !unfolded) {
+    return (
+      <article className="baton baton--folded">
+        <CardHead faces={faces} title={title} sub={when} status={status} />
+        <FoldToggle open={false} onToggle={() => setUnfolded(true)} />
+      </article>
+    );
+  }
+  const engine = to ? (to.taskModelSelection ?? to.modelSelection) : null;
   return (
-    <article className={tone === "attention" ? "baton baton--attention" : "baton"}>
-      <div className="baton__path" aria-hidden>
-        <BotFace bot={from} size={FACE} mood="idle" />
-        <svg className="baton__arrow" width="56" height="12" viewBox="0 0 56 12" fill="none">
-          <path d="M2 6h46" strokeWidth="1.5" strokeDasharray="3 4" strokeLinecap="round" />
-          <path d="m47 2 5 4-5 4" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
-        </svg>
-        <BotFace bot={to} size={FACE} mood={state ? delegationMood(state) : "idle"} />
+    <article className="baton">
+      <div className="baton__top">
+        <CardHead faces={faces} title={title} sub={when} status={status} />
+        {state === "completed" ? <FoldToggle open onToggle={() => setUnfolded(false)} /> : null}
       </div>
-      <div className="baton__body">
-        <p className="baton__title">
-          {t("synbot:batonTitle", {
-            from: from?.name ?? t("synbot:removedBot"),
-            to: to?.name ?? t("synbot:removedBot"),
-          })}
-        </p>
-        <p className="baton__brief">
-          <InlineText text={brief} />
-        </p>
-      </div>
+      <p className="baton__brief">
+        <InlineText text={brief} />
+      </p>
       {result ? (
         <p className="baton__result">
           <InlineText text={result} />
         </p>
       ) : null}
-      {startOpen && start ? (
-        <>
-          <p className="baton__status baton__status--attention">
-            {t("synbot:delegation_awaiting-start")}
-          </p>
-          <StartAnswers start={start} />
-        </>
-      ) : (
-        <div className="baton__foot">
-          <p className={`baton__status baton__status--${tone}`}>
-            {tone === "active" ? (
-              <span className="baton__pulse" />
-            ) : tone === "good" ? (
-              <Icon name="check" size="xs" />
-            ) : tone === "bad" ? (
-              <Icon name="close" size="xs" />
-            ) : null}
-            {statusLabel}
-          </p>
-          <div className="baton__actions">
-            {active && side === "from" ? (
-              <Button variant="ghost" size="xs" disabled={stopping} onClick={stop}>
-                {t("synbot:stop")}
-              </Button>
-            ) : null}
-            {other ? (
-              <Button variant="ghost" size="xs" onClick={() => openBot(other)}>
-                {t("synbot:openBot", { name: other.name })}
-                <Icon name="arrow-right" size="xs" />
-              </Button>
-            ) : null}
-          </div>
+      {engine ? (
+        <div className="card-chips">
+          <ModelChip selection={engine} />
         </div>
-      )}
+      ) : null}
+      {startOpen && start ? (
+        <StartAnswers start={start} />
+      ) : (active && side === "from") || other ? (
+        <div className="baton__foot">
+          {active && side === "from" ? (
+            <CapsuleButton kind="danger" small disabled={stopping} onClick={stop}>
+              {t("synbot:stop")}
+            </CapsuleButton>
+          ) : null}
+          {other ? (
+            <CapsuleButton kind="card" small onClick={() => openBot(other)}>
+              {t("synbot:openBot", { name: other.name })}
+              <Icon name="arrow-right" size="xs" />
+            </CapsuleButton>
+          ) : null}
+        </div>
+      ) : null}
     </article>
   );
 }

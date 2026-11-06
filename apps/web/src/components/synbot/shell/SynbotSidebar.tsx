@@ -192,9 +192,11 @@ function ConversationRow({
           <span className="conversation__title">{title}</span>
           {time ? <span className="conversation__time">{time}</span> : null}
         </span>
+        {/* The last word alone (HoloBot's list); a dot on the right only when the bot is
+            working or waiting on you. */}
         <span className={`conversation__status conversation__status--${tone}`}>
-          <Dot tone={tone} small />
           <span className="conversation__preview">{status}</span>
+          {tone === "attention" || tone === "active" ? <Dot tone={tone} small /> : null}
         </span>
       </span>
     </button>

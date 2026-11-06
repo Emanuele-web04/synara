@@ -42,6 +42,11 @@ describe("latestBotPreview", () => {
     });
   });
 
+  it("shows a reply's markdown as plain text", () => {
+    const state = stateWith([{ text: "`test/calc.test.js` has **3 tests** on `synara/x`" }]);
+    expect(latestBotPreview(state, thread)?.text).toBe("test/calc.test.js has 3 tests on synara/x");
+  });
+
   it("is null when the thread is not loaded", () => {
     expect(latestBotPreview({} as AppState, thread)).toBeNull();
   });

@@ -6005,7 +6005,8 @@ export default function ChatView({
       data-chat-composer-status-row=""
       className="flex min-w-0 items-center gap-1 overflow-hidden"
     >
-      <RuntimeUsageControls {...runtimeUsageControlsProps} className="shrink-0" />
+      {/* Only the mode's icon fits beside the name; its menu and tooltip still name it. */}
+      <RuntimeUsageControls {...runtimeUsageControlsProps} className="shrink-0" hideLabel />
       <div className="flex shrink-0 items-center gap-2">
         {composerPickerControls}
         {composerContextMeter}

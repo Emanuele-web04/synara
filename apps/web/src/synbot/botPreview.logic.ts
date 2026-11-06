@@ -1,6 +1,7 @@
 // FILE: botPreview.logic.ts
 // Purpose: What a bot's sidebar row says under its name (HoloBot's botRow): the last word of its
-//          thread when the thread is loaded (no check-in, SILENT reply or report wake-up), and
+//          thread when the thread is loaded (no check-in, SILENT reply or report wake-up) as plain
+//          text, and
 //          when it was said, in the list's short form ("19:08" today, "Mon" this week, "26 Oct").
 // Layer: Web domain logic (pure)
 // Exports: BotPreview, latestBotPreview, listTime
@@ -11,6 +12,7 @@ import {
   isSilentCoordinatorCheckinReply,
 } from "@synara/shared/coordinatorCheckin";
 
+import { summarizeAssistantText } from "../notifications/taskCompletion.logic";
 import type { AppState } from "../storeState";
 
 export interface BotPreview {
@@ -31,7 +33,8 @@ export function latestBotPreview(state: AppState, threadId: ThreadId): BotPrevie
     if (message.id.startsWith(BOT_REPORT_MESSAGE_PREFIX)) continue;
     if (isCoordinatorCheckinUserMessage(message)) continue;
     if (message.role === "assistant" && isSilentCoordinatorCheckinReply(message.text)) continue;
-    const text = message.text.replace(/\s+/g, " ").trim();
+    // Plain words on one line: a reply's `code` and **bold** marks would show raw.
+    const text = summarizeAssistantText(message.text);
     if (!text) continue;
     return { text: text.slice(0, PREVIEW_MAX), at: message.createdAt };
   }

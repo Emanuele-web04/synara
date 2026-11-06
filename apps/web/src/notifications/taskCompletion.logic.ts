@@ -1,7 +1,7 @@
 // FILE: taskCompletion.logic.ts
 // Purpose: Detects new thread lifecycle notifications and builds alert copy.
 // Layer: Notification logic
-// Exports: lifecycle detection helpers and notification copy helpers
+// Exports: lifecycle detection helpers, notification copy helpers, summarizeAssistantText
 
 import { isSilentCoordinatorCheckinReply } from "@synara/shared/coordinatorCheckin";
 import {
@@ -458,8 +458,9 @@ function stripMarkdownLinks(text: string, referenceLabels: ReadonlySet<string>):
 }
 
 // Reduce rich assistant output to readable notification context. Toasts and OS
-// notifications should never expose Markdown syntax or turn into mini transcripts.
-function summarizeAssistantText(text: string): string | null {
+// notifications (and SynBot's sidebar rows) should never expose Markdown syntax or turn into
+// mini transcripts.
+export function summarizeAssistantText(text: string): string | null {
   const { protectedText, restore } = protectMarkdownCode(text);
   const referenceLabels = collectMarkdownReferenceLabels(protectedText);
   const withoutReferenceDefinitions = removeMarkdownReferenceDefinitions(protectedText);
