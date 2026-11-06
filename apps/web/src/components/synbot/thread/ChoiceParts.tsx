@@ -97,11 +97,31 @@ export function Pair({
 }
 
 const CODE = /`([^`\n]+)`/g;
+const STRONG = /\*\*([^*\n]+)\*\*/g;
 
-/** Plain text with its `backticked` commands and paths in the monospace face. */
+/** A run of plain text with its **bold** words (a bot's result often marks them). */
+function Emphasis({ text }: { readonly text: string }) {
+  const parts = text.split(STRONG);
+  if (parts.length === 1) return <>{text}</>;
+  return (
+    <>
+      {parts.map((part, index) =>
+        index % 2 === 1 ? (
+          // oxlint-disable-next-line react/no-array-index-key -- positional text parts
+          <strong key={index}>{part}</strong>
+        ) : (
+          // oxlint-disable-next-line react/no-array-index-key -- positional text parts
+          <Fragment key={index}>{part}</Fragment>
+        ),
+      )}
+    </>
+  );
+}
+
+/** Plain text with its `backticked` commands and paths in the monospace face and its **bold**
+ * words bold. */
 export function InlineText({ text }: { readonly text: string }) {
   const parts = text.split(CODE);
-  if (parts.length === 1) return <>{text}</>;
   // split() with a group alternates text and captured code.
   return (
     <>
@@ -113,7 +133,7 @@ export function InlineText({ text }: { readonly text: string }) {
           </code>
         ) : (
           // oxlint-disable-next-line react/no-array-index-key -- positional text parts
-          <Fragment key={index}>{part}</Fragment>
+          <Emphasis key={index} text={part} />
         ),
       )}
     </>

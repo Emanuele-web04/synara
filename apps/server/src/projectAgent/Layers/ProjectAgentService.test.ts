@@ -1204,6 +1204,19 @@ it.effect("applies a saved coordinator model to the live thread and heartbeat", 
     const first = yield* configureTestGroup(service, "req-model-1");
     const coordinatorThreadId = first.config?.coordinatorThreadId;
     assert.isNotNull(coordinatorThreadId);
+    // The hub watches a worker, so the check-in that restarts it on the new model has
+    // something to look at.
+    harness.threadShells[groupMemberThreadId] = {
+      ...harness.threadShells[groupMemberThreadId]!,
+      creationSource: "synara_mcp",
+      sourceThreadId: coordinatorThreadId!,
+    };
+    yield* service.recordManagedWorkerThreads({
+      callerThreadId: coordinatorThreadId!,
+      requestId: "req-model-worker",
+      threadIds: [groupMemberThreadId],
+      titles: ["Worker"],
+    });
     harness.dispatched.length = 0;
     harness.runNowCalls.length = 0;
     harness.automationUpdates.length = 0;
@@ -1241,6 +1254,49 @@ it.effect("applies a saved coordinator model to the live thread and heartbeat", 
     assert.deepEqual(harness.automationUpdates, [
       { id: "automation-1", modelSelection: nextModel },
     ]);
+  }).pipe(Effect.provide(harness.layer));
+});
+
+it.effect("does not stop the session when the coordinator model keeps the same provider", () => {
+  const harness = makeTestLayer();
+  return Effect.gen(function* () {
+    const service = yield* ProjectAgentService;
+    yield* service.configure(
+      {
+        requestId: "req-model-same-1",
+        projectId: groupId,
+        coordinatorModelSelection: modelSelection,
+      },
+      { kind: "user" },
+    );
+    harness.dispatched.length = 0;
+    harness.runNowCalls.length = 0;
+
+    const nextModel = { provider: "codex" as const, model: "gpt-5.3-codex" };
+    yield* service.configure(
+      {
+        requestId: "req-model-same-2",
+        projectId: groupId,
+        coordinatorModelSelection: nextModel,
+      },
+      { kind: "user" },
+    );
+
+    assert.equal(
+      harness.dispatched.some((command) => command.type === "thread.session.stop"),
+      false,
+    );
+    const metaUpdate = harness.dispatched.find(
+      (command) => command.type === "thread.meta.update" && command.modelSelection !== undefined,
+    );
+    assert.isOk(metaUpdate);
+    if (metaUpdate?.type !== "thread.meta.update") {
+      assert.fail("expected a thread.meta.update dispatch");
+    }
+    assert.deepEqual(metaUpdate.modelSelection, nextModel);
+    // No worker threads to watch: the new model takes over at the next turn instead of
+    // an empty check-in now.
+    assert.deepEqual(harness.runNowCalls, []);
   }).pipe(Effect.provide(harness.layer));
 });
 
