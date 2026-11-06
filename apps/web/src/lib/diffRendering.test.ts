@@ -13,6 +13,7 @@ import {
   resolveDiffCopyText,
   PARTIAL_DIFF_COPY_NOTICE,
   resolveFileDiffStatByChangedPath,
+  resolveFileDiffIndexPaths,
   resolveFileDiffPath,
   resolveFileDiffPrevPath,
   sortFileDiffsByPath,
@@ -176,6 +177,45 @@ describe("resolveFileDiffPrevPath", () => {
       ].join("\n"),
     );
     expect(resolveFileDiffPrevPath(changed)).toBeNull();
+  });
+});
+
+describe("resolveFileDiffIndexPaths", () => {
+  const parseSingleFile = (patch: string) => {
+    const renderable = getRenderablePatch(patch, "index-paths:test");
+    if (renderable?.kind !== "files" || renderable.files.length !== 1) {
+      throw new Error("expected one parsed file");
+    }
+    return renderable.files[0]!;
+  };
+
+  it("returns both sides of a rename so unstaging also restores the old path", () => {
+    const renamed = parseSingleFile(
+      [
+        "diff --git a/old.txt b/new.txt",
+        "similarity index 100%",
+        "rename from old.txt",
+        "rename to new.txt",
+        "",
+      ].join("\n"),
+    );
+    expect(resolveFileDiffIndexPaths(renamed)).toEqual(["new.txt", "old.txt"]);
+  });
+
+  it("returns only the file's own path when it was not renamed", () => {
+    const changed = parseSingleFile(
+      [
+        "diff --git a/src/one.ts b/src/one.ts",
+        "index 1111111..2222222 100644",
+        "--- a/src/one.ts",
+        "+++ b/src/one.ts",
+        "@@ -1,1 +1,1 @@",
+        "-const one = 1;",
+        "+const one = 2;",
+        "",
+      ].join("\n"),
+    );
+    expect(resolveFileDiffIndexPaths(changed)).toEqual(["src/one.ts"]);
   });
 });
 
