@@ -1,12 +1,12 @@
 // FILE: SynbotCards.tsx
-// Purpose: SynBot's cards in a bot's thread, drawn as HoloBot's thread cards: choice cards
-//          (suggestions, proposals, Start / Not now, git init) answered through bots.cardAction;
-//          the delegation as a task card ("Frontend · On it", its brief, its result, Open and
-//          Stop through bots.cancelDelegation); the report that stands in for the requester's
-//          wake-up message; and the quiet "From <bot>" line in a chat a bot wrote to. The same
-//          cards render in Synara's transcript when a bot thread opens there (SynbotNoticeRow).
+// Purpose: SynBot's cards in a bot's thread: choice cards (suggestions, proposals, Start / Not
+//          now, git init) answered through bots.cardAction; a hand-off as a baton card in both
+//          bots' threads (BatonCard); the report that stands in for the requester's wake-up
+//          message, as a timeline of its hand-offs; and the quiet "From <bot>" line in a chat a
+//          bot wrote to. The same cards render in Synara's transcript when a bot thread opens
+//          there (SynbotNoticeRow).
 // Layer: SynBot thread UI
-// Exports: SynbotCard, MessageFromRow, delegationTone
+// Exports: SynbotCard, MessageFromRow, delegationStartCard, delegationTone, isLineCard
 
 import {
   BOT_DELEGATION_TERMINAL_STATES,
@@ -14,79 +14,28 @@ import {
   BotControlNotice,
   BotDelegationNotice,
   BotReportNotice,
-  type Bot,
   type BotDelegationState,
   type ThreadId,
 } from "@synara/contracts";
 import { Option, Schema } from "effect";
-import { useState } from "react";
 
 import { useTranslation } from "~/i18n";
-import { readNativeApi } from "~/nativeApi";
 import { botById, delegationById } from "~/synbot/synbotState.logic";
 import { useSynbotStore } from "~/synbot/synbotStore";
 import type { WorkLogSynbotNotice } from "~/workLog";
 
-import { toastManager } from "../../ui/toast";
-import { BotFace, botMood } from "../BotFace";
-import { CapsuleButton, Chip, IconButton, type Tone } from "../kit/controls";
+import { BotFace } from "../BotFace";
+import { IconButton } from "../kit/controls";
 import { Icon } from "../kit/Icon";
 import { useOpenBot } from "../synbotNav";
-import { ChatText } from "./ChatText";
+import { BatonCard, delegationTone, type BatonStart } from "./BatonCard";
 import { ChoiceRows, InlineText, Pair, type ChoiceRow } from "./ChoiceParts";
+import { useCardAnswer } from "./useCardAnswer";
 
 const decodeCard = Schema.decodeUnknownOption(BotCard);
 const decodeDelegationNotice = Schema.decodeUnknownOption(BotDelegationNotice);
 const decodeReportNotice = Schema.decodeUnknownOption(BotReportNotice);
 const decodeControlNotice = Schema.decodeUnknownOption(BotControlNotice);
-
-const messageOf = (error: unknown) => (error instanceof Error ? error.message : String(error));
-
-/** A delegation's chip tone. */
-export function delegationTone(state: BotDelegationState): Tone {
-  switch (state) {
-    case "awaiting-start":
-    case "waiting":
-      return "attention";
-    case "sent":
-    case "working":
-      return "active";
-    case "completed":
-      return "good";
-    case "failed":
-      return "bad";
-    case "cancelled":
-      return "muted";
-  }
-}
-
-/** A bot named in a card: its face and name; a click opens its thread. */
-function BotName({ bot, size = "card" }: { readonly bot: Bot | null; readonly size?: "card" }) {
-  const { t } = useTranslation();
-  const openBot = useOpenBot();
-  if (!bot) {
-    return (
-      <span className="mention">
-        <BotFace bot={null} size={size} />
-        {t("synbot:removedBot")}
-      </span>
-    );
-  }
-  return (
-    <button
-      type="button"
-      className="mention"
-      title={t("synbot:openBot", { name: bot.name })}
-      onClick={(event) => {
-        event.stopPropagation();
-        openBot(bot);
-      }}
-    >
-      <BotFace bot={bot} size={size} mood={botMood(bot.status)} />
-      {bot.name}
-    </button>
-  );
-}
 
 // ── Choice cards ─────────────────────────────────────────────────────
 
@@ -99,27 +48,9 @@ function BotChoiceCard({
   readonly threadId: ThreadId | null;
   readonly resolution: WorkLogSynbotNotice["resolution"];
 }) {
-  const { t } = useTranslation();
-  const [pending, setPending] = useState<string | null>(null);
-  const [answered, setAnswered] = useState<{ optionId: string; label: string } | null>(null);
+  const { pending, answered, answer } = useCardAnswer(card, threadId);
   const chosen = resolution ?? answered;
   const open = chosen === null && threadId !== null;
-  const answer = (optionId: string, label: string) => {
-    const api = readNativeApi();
-    if (!api || !threadId || pending !== null) return;
-    setPending(optionId);
-    void api.bots
-      .cardAction({ threadId, cardId: card.id, optionId })
-      .then(() => setAnswered({ optionId, label }))
-      .catch((error: unknown) =>
-        toastManager.add({
-          type: "error",
-          title: t("synbot:answerFailed"),
-          description: messageOf(error),
-        }),
-      )
-      .finally(() => setPending(null));
-  };
   const close = card.options.find((option) => option.tone === "dismiss");
   const choices = card.options.filter((option) => option.tone !== "dismiss");
   const rows: ChoiceRow[] = (open ? choices : card.options)
@@ -172,119 +103,76 @@ function BotChoiceCard({
 
 // ── Delegations ──────────────────────────────────────────────────────
 
-/** In the requester's thread: the work handed to another bot, as a task card. */
-function DelegationCard({ notice }: { readonly notice: BotDelegationNotice }) {
-  const { t } = useTranslation();
-  const openBot = useOpenBot();
-  const data = useSynbotStore((store) => store.data);
-  const delegation = delegationById(data, notice.delegationId);
-  const target = botById(data, notice.toBotId);
-  const [stopping, setStopping] = useState(false);
-  const state = delegation?.state ?? "sent";
-  const active = !BOT_DELEGATION_TERMINAL_STATES.has(state);
-  const stop = () => {
-    setStopping(true);
-    void readNativeApi()
-      ?.bots.cancelDelegation({ delegationId: notice.delegationId })
-      .catch((error: unknown) =>
-        toastManager.add({
-          type: "error",
-          title: t("synbot:stopFailed"),
-          description: messageOf(error),
-        }),
-      )
-      .finally(() => setStopping(false));
-  };
-  const result = delegation?.resultSummary ?? null;
-  return (
-    <article className="task-card">
-      <button
-        type="button"
-        className="task-card__head"
-        title={target ? t("synbot:openBot", { name: target.name }) : undefined}
-        disabled={!target}
-        onClick={() => target && openBot(target)}
-      >
-        <BotFace
-          bot={target}
-          size="card"
-          mood={active && state !== "awaiting-start" ? "working" : "idle"}
-        />
-        <span className="task-card__title">{target?.name ?? t("synbot:removedBot")}</span>
-        <Chip tone={delegationTone(state)}>{t(`synbot:delegation_${state}`)}</Chip>
-      </button>
-      {active && (state === "sent" || state === "working") ? (
-        <p className="task-card__live">
-          <span className="task-card__pulse" />
-          <span className="task-card__text">
-            <InlineText text={notice.brief} />
-          </span>
-        </p>
-      ) : (
-        <p className="task-card__text">
-          <InlineText text={result && !active ? result : notice.brief} />
-        </p>
-      )}
-      <div className="task-card__actions">
-        {target ? (
-          <CapsuleButton kind="ghost" small onClick={() => openBot(target)}>
-            {t("synbot:open")}
-            <Icon name="arrow-right" size="xs" />
-          </CapsuleButton>
-        ) : null}
-        {active ? (
-          <CapsuleButton kind="ghost" small disabled={stopping} onClick={stop}>
-            {t("synbot:stop")}
-          </CapsuleButton>
-        ) : null}
-      </div>
-    </article>
-  );
-}
-
-/** In the target's thread: "Message from <bot>", then the brief as that bot's message. */
+/**
+ * In the target's thread (and in Synara's transcript): the hand-off another bot sent, as a
+ * baton. `start` is the delegation's start card when the thread shows it here instead.
+ */
 export function MessageFromRow({
   delegationId,
   brief,
+  start,
 }: {
   readonly delegationId: string;
   readonly brief: string;
+  readonly start?: BatonStart | null;
 }) {
-  const { t } = useTranslation();
-  const openBot = useOpenBot();
-  const data = useSynbotStore((store) => store.data);
-  const delegation = delegationById(data, delegationId);
-  const from = delegation ? botById(data, delegation.fromBotId) : null;
   return (
-    <div>
-      <button
-        type="button"
-        className="from-line"
-        title={t("synbot:openExchange")}
-        disabled={!from}
-        onClick={() => from && openBot(from)}
-      >
-        {t("synbot:messageFrom")}
-        <BotFace bot={from} size="card" />
-        <span className="from-line__name">{from?.name ?? t("synbot:removedBot")}</span>
-      </button>
-      <div className="row row--bot">
-        <div className="bot">
-          <div className="bubble bubble--bot">
-            <ChatText text={brief} />
-          </div>
-        </div>
-      </div>
+    <div className="row row--group row--bot">
+      <BatonCard delegationId={delegationId} brief={brief} side="to" start={start ?? null} />
     </div>
   );
 }
 
+/** A delegation's start card on its own (no hand-off message yet): the hand-off's baton, its
+ * brief from the live delegation (the card's own text once the delegation is gone). */
+function StartBaton({
+  card,
+  delegationId,
+  threadId,
+  resolution,
+}: {
+  readonly card: BotCard;
+  readonly delegationId: string;
+  readonly threadId: ThreadId | null;
+  readonly resolution: WorkLogSynbotNotice["resolution"];
+}) {
+  const brief = useSynbotStore(
+    (store) => delegationById(store.data, delegationId)?.brief ?? card.body ?? card.title,
+  );
+  return (
+    <BatonCard
+      delegationId={delegationId}
+      toBotId={card.botId}
+      brief={brief}
+      side="to"
+      start={{ card, threadId, resolution }}
+    />
+  );
+}
+
+/** A `synbot.card` that is a delegation's Start / Not now, with the delegation it belongs to. */
+export function delegationStartCard(notice: WorkLogSynbotNotice): BotCard | null {
+  if (notice.kind !== "synbot.card") return null;
+  const decoded = decodeCard(notice.payload);
+  if (Option.isNone(decoded)) return null;
+  const card = decoded.value;
+  return card.kind === "delegation-start" && card.delegationId ? card : null;
+}
+
 // ── Reports ──────────────────────────────────────────────────────────
 
-/** The report that woke the requester: each delegation's bot, state and result. Live
- * delegations first; the notice's own copy covers ones that left the snapshot. */
+/** How a report's hand-offs ended: all done, some failed, or some still going. */
+function reportOutcome(states: readonly BotDelegationState[]): "done" | "failed" | "going" {
+  if (states.some((state) => !BOT_DELEGATION_TERMINAL_STATES.has(state))) return "going";
+  return states.some((state) => state === "failed") ? "failed" : "done";
+}
+
+/** The report that woke the requester, as a timeline: each hand-off's bot, how it ended and
+ * its result, then the outcome. Live delegations first; the notice's own copy covers ones
+ * that left the snapshot. */
 function ReportCard({ notice }: { readonly notice: BotReportNotice }) {
   const { t } = useTranslation();
+  const openBot = useOpenBot();
   const data = useSynbotStore((store) => store.data);
   const delegations = notice.delegationIds.flatMap((id) => {
     const live = delegationById(data, id);
@@ -294,32 +182,70 @@ function ReportCard({ notice }: { readonly notice: BotReportNotice }) {
     const kept = notice.entries?.find((entry) => entry.delegationId === id);
     return kept ? [{ id, ...kept }] : [];
   });
+  const outcome = reportOutcome(delegations.map((delegation) => delegation.state));
+  const failed = delegations.filter((delegation) => delegation.state === "failed").length;
   return (
-    <article className="task-card">
-      <p className="task-card__meta">{t("synbot:reportTitle")}</p>
-      {delegations.length === 0 ? (
-        <p className="task-card__text">
-          {t("synbot:reportCount", { count: notice.delegationIds.length })}
-        </p>
-      ) : (
-        <div className="task-card__entries">
-          {delegations.map((delegation) => (
-            <div key={delegation.id} className="task-card__entry">
-              <div className="task-card__entry-head">
-                <BotName bot={botById(data, delegation.toBotId)} />
-                <Chip tone={delegationTone(delegation.state)}>
-                  {t(`synbot:delegation_${delegation.state}`)}
-                </Chip>
-              </div>
-              {delegation.resultSummary ? (
-                <p className="task-card__text">
-                  <InlineText text={delegation.resultSummary} />
+    <article className="report">
+      <p className="report__title">
+        {t("synbot:reportHandoffs", { count: notice.delegationIds.length })}
+      </p>
+      <ol className="timeline">
+        {delegations.map((delegation) => {
+          const bot = botById(data, delegation.toBotId);
+          return (
+            <li key={delegation.id} className="timeline__item">
+              <span className="timeline__rail" aria-hidden>
+                <BotFace bot={bot} size={22} still />
+                <span className="timeline__line" />
+              </span>
+              <div className="timeline__body">
+                <p className="timeline__head">
+                  {bot ? (
+                    <button
+                      type="button"
+                      className="timeline__name"
+                      title={t("synbot:openBot", { name: bot.name })}
+                      onClick={() => openBot(bot)}
+                    >
+                      {bot.name}
+                    </button>
+                  ) : (
+                    <span>{t("synbot:removedBot")}</span>
+                  )}
+                  <span
+                    className={`timeline__state timeline__state--${delegationTone(delegation.state)}`}
+                  >
+                    {t(`synbot:delegation_${delegation.state}`)}
+                  </span>
                 </p>
-              ) : null}
-            </div>
-          ))}
-        </div>
-      )}
+                {delegation.resultSummary ? (
+                  <p className="timeline__text">
+                    <InlineText text={delegation.resultSummary} />
+                  </p>
+                ) : null}
+              </div>
+            </li>
+          );
+        })}
+        <li className="timeline__item timeline__item--end">
+          <span className="timeline__rail" aria-hidden>
+            <span className={`timeline__outcome timeline__outcome--${outcome}`}>
+              {outcome === "going" ? null : (
+                <Icon name={outcome === "done" ? "check" : "close"} size="xs" />
+              )}
+            </span>
+          </span>
+          <div className="timeline__body">
+            <p className="timeline__head timeline__head--end">
+              {outcome === "done"
+                ? t("synbot:reportAllDone")
+                : outcome === "failed"
+                  ? t("synbot:reportFailed", { count: failed })
+                  : t("synbot:reportGoing")}
+            </p>
+          </div>
+        </li>
+      </ol>
     </article>
   );
 }
@@ -357,13 +283,33 @@ export function SynbotCard({
       // The target chat shows the delegation as its "Message from" row instead.
       if (entryId.endsWith(":to")) return null;
       const decoded = decodeDelegationNotice(notice.payload);
-      return Option.isSome(decoded) ? <DelegationCard notice={decoded.value} /> : null;
+      return Option.isSome(decoded) ? (
+        <BatonCard
+          delegationId={decoded.value.delegationId}
+          fromBotId={decoded.value.fromBotId}
+          toBotId={decoded.value.toBotId}
+          brief={decoded.value.brief}
+          side="from"
+        />
+      ) : null;
     }
     case "synbot.card": {
       const decoded = decodeCard(notice.payload);
-      return Option.isSome(decoded) ? (
-        <BotChoiceCard card={decoded.value} threadId={threadId} resolution={notice.resolution} />
-      ) : null;
+      if (Option.isNone(decoded)) return null;
+      const card = decoded.value;
+      // A hand-off waiting for its Start reaches the receiving bot as this card alone: it is
+      // drawn as that hand-off's baton, with Start / Not now on it.
+      if (card.kind === "delegation-start" && card.delegationId) {
+        return (
+          <StartBaton
+            card={card}
+            delegationId={card.delegationId}
+            threadId={threadId}
+            resolution={notice.resolution}
+          />
+        );
+      }
+      return <BotChoiceCard card={card} threadId={threadId} resolution={notice.resolution} />;
     }
     case "synbot.report": {
       const decoded = decodeReportNotice(notice.payload);

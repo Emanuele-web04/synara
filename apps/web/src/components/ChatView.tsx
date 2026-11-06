@@ -629,6 +629,9 @@ interface ChatViewProps {
   renderTranscript?: (input: ChatTranscriptSlotInput) => ReactNode;
   /** The composer's resting placeholder in place of "Do anything in Synara" (a bot's chat). */
   composerPlaceholder?: string;
+  /** The row of permission, model and context controls sits right on top of the composer
+   * instead of under it (a bot's chat). */
+  composerStatusAbove?: boolean;
   /**
    * Enables the ambient computer preview rail for this chat: when provided,
    * a live computer session renders below the Environment card and the chat
@@ -661,6 +664,7 @@ export default function ChatView({
   onOpenLinkedThread,
   renderTranscript,
   composerPlaceholder,
+  composerStatusAbove: composerStatusAboveProp,
 }: ChatViewProps) {
   const { t } = useTranslation();
 
@@ -674,6 +678,7 @@ export default function ChatView({
   const presentationMode = presentationModeProp ?? "default";
   const isFocusedPane = isFocusedPaneProp ?? true;
   const viewModeAction = viewModeActionProp ?? null;
+  const composerStatusAbove = composerStatusAboveProp ?? false;
   const markThreadVisited = useStore((store) => store.markThreadVisited);
   const syncServerShellSnapshot = useStore((store) => store.syncServerShellSnapshot);
   const setStoreThreadError = useStore((store) => store.setError);
@@ -5985,6 +5990,31 @@ export default function ChatView({
       : {}),
   };
   const showTrailingBranchToolbar = !activeThreadIsSidechat && isGitRepo && !environmentEnabled;
+  // Permission, branch controls (git threads), model/effort and the context ring: under the
+  // composer, or on top of it when the surface asks (`composerStatusAbove`).
+  const composerStatusRow = (
+    <div className={COMPOSER_COLUMN_FRAME_CLASS_NAME}>
+      <div
+        ref={composerStatusRowRef}
+        data-chat-composer-status-row=""
+        className={cn(
+          "@container flex min-h-9 w-full min-w-0 flex-wrap items-center gap-1",
+          composerStatusAbove ? "pb-1 pt-0" : "pb-1.5 pt-1",
+        )}
+      >
+        <RuntimeUsageControls {...runtimeUsageControlsProps} className="shrink-0" />
+        {showTrailingBranchToolbar ? (
+          <BranchToolbar {...branchToolbarProps} className="min-w-0 flex-[1_0_9rem] px-1 py-0" />
+        ) : (
+          <div className="min-w-0 flex-1" />
+        )}
+        <div className="ml-auto flex shrink-0 items-center gap-2 pr-1">
+          {composerPickerControls}
+          {composerContextMeter}
+        </div>
+      </div>
+    </div>
+  );
   const showEmptyLandingBranchToolbar =
     isCenteredEmptyLanding && activeProject?.kind === "project" && !isHomeChatContainer;
   // Temporary is chosen while starting a chat. Draft metadata covers local reloads;
@@ -7299,42 +7329,30 @@ export default function ChatView({
                     // content (and clear of the docked Environment overlay and preview rail).
                     style={contentInsetRightPx ? { paddingRight: contentInsetRightPx } : undefined}
                   >
+                    {composerStatusAbove ? (
+                      <div className="pointer-events-auto">{composerStatusRow}</div>
+                    ) : null}
                     <div className="pointer-events-auto">{composerSection}</div>
                   </div>
-                  <div className="pt-0.5" />
+                  <div className={composerStatusAbove ? "pt-3" : "pt-0.5"} />
                   {/* Row under the composer: permission, branch controls (git threads), then
                       model/effort and the context ring. The footer tiers measure this row. It
                       takes the composer's right inset so it stays under the composer while the
-                      Environment card or preview rail is docked. */}
-                  <div
-                    className={cn(
-                      CHAT_COLUMN_GUTTER_CLASS_NAME,
-                      ENVIRONMENT_CONTENT_INSET_MOTION_CLASS,
-                    )}
-                    style={contentInsetRightPx ? { paddingRight: contentInsetRightPx } : undefined}
-                  >
-                    <div className={COMPOSER_COLUMN_FRAME_CLASS_NAME}>
-                      <div
-                        ref={composerStatusRowRef}
-                        data-chat-composer-status-row=""
-                        className="@container flex min-h-9 w-full min-w-0 flex-wrap items-center gap-1 pb-1.5 pt-1"
-                      >
-                        <RuntimeUsageControls {...runtimeUsageControlsProps} className="shrink-0" />
-                        {showTrailingBranchToolbar ? (
-                          <BranchToolbar
-                            {...branchToolbarProps}
-                            className="min-w-0 flex-[1_0_9rem] px-1 py-0"
-                          />
-                        ) : (
-                          <div className="min-w-0 flex-1" />
-                        )}
-                        <div className="ml-auto flex shrink-0 items-center gap-2 pr-1">
-                          {composerPickerControls}
-                          {composerContextMeter}
-                        </div>
-                      </div>
+                      Environment card or preview rail is docked. A surface may put it on top of
+                      the composer instead (`composerStatusAbove`). */}
+                  {composerStatusAbove ? null : (
+                    <div
+                      className={cn(
+                        CHAT_COLUMN_GUTTER_CLASS_NAME,
+                        ENVIRONMENT_CONTENT_INSET_MOTION_CLASS,
+                      )}
+                      style={
+                        contentInsetRightPx ? { paddingRight: contentInsetRightPx } : undefined
+                      }
+                    >
+                      {composerStatusRow}
                     </div>
-                  </div>
+                  )}
                 </div>
               </div>
             ) : null}
