@@ -1385,7 +1385,7 @@ describe.skipIf(!TEST_DATABASE_URL)("Slice A host account API", () => {
       }
 
       it.each([false, true])(
-        "requires Pro despite the beta flag and tester allowlist (beta: %s)",
+        "requires an Alto subscription despite the beta flag and tester allowlist (beta: %s)",
         async (beta) => {
           const { billing } = billingFixture();
           const { app } = buildApp(undefined, beta, { billing, remoteBillingEnforced: true });
@@ -1397,7 +1397,10 @@ describe.skipIf(!TEST_DATABASE_URL)("Slice A host account API", () => {
             headers: { authorization: `HostProof ${await hostProof(host.key, host)}` },
           });
           expect(authorization.status).toBe(403);
-          expect(await authorization.json()).toMatchObject({ error: "subscription_required" });
+          expect(await authorization.json()).toMatchObject({
+            error: "subscription_required",
+            message: "Remote access requires an active Synara Alto subscription",
+          });
           const grant = await app.request(`/api/v1/hosts/${host.id}/grant`, {
             method: "POST",
             headers: authHeaders(owner.token),

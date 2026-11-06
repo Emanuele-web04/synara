@@ -100,7 +100,7 @@ describe("subscription settings", () => {
       plans: [{ interval: "year", amountMinor: 12345, currency: "USD" }],
     });
     await render(panel(new QueryClient()));
-    await expect.element(page.getByText("Test Synara Pro", { exact: true })).toBeVisible();
+    await expect.element(page.getByText("Test Synara Alto", { exact: true })).toBeVisible();
     await expect.element(page.getByText("$123.45 / year")).toBeVisible();
     await page.getByRole("button", { name: "Test checkout" }).click();
     await expect.poll(() => fixture.open.mock.calls.length).toBe(1);
@@ -146,10 +146,12 @@ describe("subscription settings", () => {
     });
     await render(panel(new QueryClient()));
     await expect.element(page.getByText("Production", { exact: true })).toBeVisible();
-    await expect.element(page.getByText("Synara Pro", { exact: true })).toBeVisible();
+    await expect.element(page.getByText("Synara Alto", { exact: true })).toBeVisible();
     await expect
       .element(
-        page.getByText("Local desktop use stays free. Pro enables remote access.", { exact: true }),
+        page.getByText("Local desktop use stays free. Alto enables remote access.", {
+          exact: true,
+        }),
       )
       .toBeVisible();
     await expect.element(page.getByText("Manage subscription", { exact: true })).toBeVisible();
