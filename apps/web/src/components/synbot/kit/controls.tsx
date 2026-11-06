@@ -112,19 +112,25 @@ export function Chip({
   tone,
   dot,
   icon,
+  leading,
   title,
+  className,
   children,
 }: {
   readonly tone: Tone;
   readonly dot?: boolean | undefined;
   readonly icon?: IconName | undefined;
+  /** A mark of its own before the label (a provider's logo). */
+  readonly leading?: ReactNode;
   readonly title?: string | undefined;
+  readonly className?: string | undefined;
   readonly children: ReactNode;
 }) {
   return (
-    <span className={`hb-chip hb-chip--${tone}`} title={title}>
+    <span className={classes("hb-chip", `hb-chip--${tone}`, className)} title={title}>
       {dot ? <span className="hb-chip__dot" /> : null}
       {icon ? <Icon name={icon} size="xs" /> : null}
+      {leading}
       <span className="hb-chip__label">{children}</span>
     </span>
   );

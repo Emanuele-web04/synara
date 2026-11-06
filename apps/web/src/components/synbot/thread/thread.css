@@ -163,8 +163,11 @@
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  padding: var(--thread-top) 0 calc(var(--thread-bottom) + 2 * var(--hb-gap));
-  scroll-padding: var(--thread-top) 0 var(--thread-bottom);
+  /* The composer floats over the rows taller than ChatView's inset, so the last message keeps
+     a full gutter of air above it. */
+  padding: var(--thread-top) 0
+    calc(var(--thread-bottom) + 2 * var(--hb-gap) + var(--hb-gutter) + 4px);
+  scroll-padding: var(--thread-top) 0 calc(var(--thread-bottom) + var(--hb-gutter) + 4px);
   box-sizing: border-box;
   -webkit-mask-image: linear-gradient(
     to bottom,
@@ -385,12 +388,19 @@
   --hb-md-code-bg: color-mix(in srgb, currentColor 14%, transparent);
 }
 
+/* Inline code in a bot chat (HoloBot's and the iPhone's look): plain monospace in a greyer ink,
+   no chip, in the bubbles and on the cards alike. */
+.hb .bubble .chat-markdown :not(pre) > code {
+  padding: 0;
+  border-radius: 0;
+  background: none;
+  color: color-mix(in srgb, currentColor 62%, transparent);
+  font-size: 0.92em;
+}
 .hb .inline-code {
-  padding: 0 4px;
-  border-radius: var(--hb-radius-sm);
-  background: var(--hb-card-hover);
+  color: color-mix(in srgb, currentColor 62%, transparent);
   font-family: var(--hb-font-mono);
-  font-size: var(--hb-text-sm);
+  font-size: 0.92em;
 }
 
 /* A card that asks (ChoiceCard, QuestionCard, ProofCard): the question is its title, the
@@ -404,7 +414,7 @@
   box-sizing: border-box;
   border: var(--hb-hairline) solid var(--hb-border-strong);
   border-radius: var(--hb-radius-lg);
-  background: var(--hb-bot-bubble);
+  background: var(--hb-card);
 }
 .hb .choice__head {
   display: flex;
@@ -506,8 +516,8 @@
 }
 .hb .choice__row[data-picked] .choice__letter {
   border-color: transparent;
-  background: var(--hb-text);
-  color: var(--hb-bg);
+  background: var(--project-blue);
+  color: #ffffff;
 }
 .hb .choice__label {
   min-width: 0;
@@ -663,17 +673,9 @@
   outline-offset: 2px;
   border-radius: var(--hb-radius-sm);
 }
-.hb .task-card__title {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-weight: var(--hb-weight-semibold);
-}
 .hb .task-card__meta {
   margin: 0;
-  font-size: var(--hb-text-xs);
+  font-size: var(--hb-text-sm);
   line-height: 1.4;
   color: var(--hb-muted);
   white-space: nowrap;
@@ -705,15 +707,14 @@
   justify-content: space-between;
   gap: var(--hb-gap);
   min-height: var(--hb-control-xs);
-  padding-top: var(--hb-gap-sm);
+  padding-top: 10px;
   border-top: var(--hb-hairline) solid var(--hb-border);
 }
 .hb .task-card__actions {
   display: flex;
   flex-wrap: wrap;
   justify-content: flex-end;
-  gap: var(--hb-gap-xs);
-  margin-right: calc(-1 * var(--hb-chip-pad));
+  gap: var(--hb-gap-sm);
 }
 .hb .task-card__pulse {
   flex-shrink: 0;
@@ -873,13 +874,95 @@
   flex-direction: column;
 }
 
-/* A hand-off between two bots, "passing the baton" (BatonCard): the two faces and the dashed
-   arrow, "SynBot → QA", the brief, where it stands, then Start / Not now or Open / Stop.
-   Left-aligned with the bot's bubbles; amber only while it waits for the user. */
+/* The head every work card shares (CardParts' CardHead): faces, a title with a quiet line
+   under it, the state chip on the right. */
+.hb .card-head {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+.hb .card-head__faces {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+}
+.hb .card-head__text {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+.hb .card-head__title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--hb-text-chat);
+  font-weight: var(--hb-weight-semibold);
+  line-height: var(--hb-line);
+  color: var(--hb-text);
+}
+.hb .card-head__sub {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--hb-text-sm);
+  line-height: 1.35;
+  color: var(--hb-muted);
+}
+.hb .card-head .hb-chip {
+  flex-shrink: 0;
+}
+/* A hand-off's two faces and the dashed arrow between them. */
+.hb .face-path {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+.hb .face-path__arrow {
+  flex-shrink: 0;
+  stroke: var(--hb-muted);
+}
+/* The engine (and later the branch) under a card's text. */
+.hb .card-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--hb-gap-sm);
+}
+/* Folds a finished card to one line and opens it again. */
+.hb .card-fold {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  width: var(--hb-control-xs);
+  height: var(--hb-control-xs);
+  padding: 0;
+  border: 0;
+  border-radius: var(--hb-pill);
+  background: none;
+  color: var(--hb-muted);
+  cursor: pointer;
+}
+.hb .card-fold:hover {
+  background: var(--hb-card-hover);
+}
+.hb .card-fold:focus-visible {
+  outline: 2px solid var(--hb-focus);
+  outline-offset: 1px;
+}
+.hb .card-fold[aria-expanded="true"] .hb-icon {
+  transform: rotate(180deg);
+}
+
+/* A hand-off between two bots, "passing the baton" (BatonCard): the head, the brief, the
+   engine chip, then small capsules at the foot (Not now and Start, or Stop and Open). Done,
+   it folds to one line. Left-aligned with the bot's bubbles. */
 .hb .baton {
   display: flex;
   flex-direction: column;
-  align-items: flex-start;
   gap: var(--hb-gap);
   width: min(var(--hb-choice), 100%);
   box-sizing: border-box;
@@ -890,36 +973,28 @@
   font-size: var(--hb-text-chat);
   line-height: var(--hb-line);
 }
-.hb .baton--attention {
-  border-color: color-mix(in srgb, var(--hb-attention) 55%, transparent);
+.hb .baton--folded {
+  flex-direction: row;
+  align-items: center;
+  gap: var(--hb-gap-sm);
+  padding: 10px var(--hb-gap) 10px calc(var(--hb-gap) + 2px);
+  border-radius: 14px;
 }
-.hb .baton__path {
+.hb .baton--folded .card-head__text {
+  flex-direction: row;
+  align-items: baseline;
+  gap: var(--hb-gap-sm);
+}
+.hb .baton__top {
   display: flex;
   align-items: center;
   gap: var(--hb-gap-sm);
-}
-.hb .baton__arrow {
-  flex-shrink: 0;
-  stroke: var(--hb-muted);
-}
-.hb .baton--attention .baton__arrow {
-  stroke: var(--hb-attention);
-}
-.hb .baton__body {
-  display: flex;
-  flex-direction: column;
-  gap: var(--hb-gap-xs);
   min-width: 0;
-}
-.hb .baton__title {
-  margin: 0;
-  font-size: var(--hb-text-md);
-  font-weight: var(--hb-weight-semibold);
 }
 .hb .baton__brief,
 .hb .baton__result {
   display: -webkit-box;
-  -webkit-line-clamp: 6;
+  -webkit-line-clamp: 4;
   -webkit-box-orient: vertical;
   margin: 0;
   overflow: hidden;
@@ -933,67 +1008,27 @@
   -webkit-line-clamp: 3;
   color: var(--hb-text);
 }
-.hb .baton__status {
+.hb .baton__foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--hb-gap-sm);
+}
+.hb .baton__answered {
   display: inline-flex;
   align-items: center;
   gap: var(--hb-gap-sm);
   margin: 0;
-  font-size: var(--hb-text-xs);
-  font-weight: var(--hb-weight-medium);
+  font-size: var(--hb-text-sm);
   color: var(--hb-muted);
-}
-.hb .baton__status--attention {
-  color: var(--hb-tone-attention-text);
-}
-.hb .baton__status--good {
-  color: var(--hb-tone-good-text);
-}
-.hb .baton__status--bad {
-  color: var(--hb-tone-bad-text);
-}
-.hb .baton__pulse {
-  width: var(--hb-dot-sm);
-  height: var(--hb-dot-sm);
-  border-radius: var(--hb-pill);
-  background: var(--hb-text);
-  animation: task-card-pulse 1.4s ease-in-out infinite;
-}
-.hb .baton__answers {
-  align-self: stretch;
-  display: flex;
-  gap: var(--hb-gap-sm);
-}
-.hb .baton__answer {
-  flex: 1;
-}
-.hb .baton__foot {
-  align-self: stretch;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--hb-gap);
-  min-height: var(--hb-control-xs);
-  padding-top: var(--hb-gap-sm);
-  border-top: var(--hb-hairline) solid var(--hb-border);
-}
-.hb .baton__actions {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: flex-end;
-  gap: var(--hb-gap-xs);
-  margin-right: calc(-1 * var(--hb-chip-pad));
-}
-@media (prefers-reduced-motion: reduce) {
-  .hb .baton__pulse {
-    animation: none;
-  }
 }
 
 /* A task's plan as a checklist (TaskCard): done lines quiet, the running one in full ink. */
 .hb .steps {
   display: flex;
   flex-direction: column;
-  gap: var(--hb-gap-sm);
+  gap: 8px;
   margin: 0;
   padding: 0 0 0 2px;
   list-style: none;
@@ -1003,12 +1038,12 @@
 .hb .steps__item {
   display: flex;
   align-items: flex-start;
-  gap: var(--hb-gap-sm);
+  gap: 10px;
   min-width: 0;
 }
 .hb .steps__mark {
   flex-shrink: 0;
-  margin-top: 2px;
+  margin-top: 1px;
 }
 .hb .steps__text {
   min-width: 0;
@@ -1046,14 +1081,6 @@
   background: var(--hb-card);
   font-size: var(--hb-text-chat);
   line-height: var(--hb-line);
-}
-.hb .report__title {
-  margin: 0;
-  font-size: var(--hb-text-xs);
-  font-weight: var(--hb-weight-semibold);
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
-  color: var(--hb-muted);
 }
 .hb .timeline {
   display: flex;

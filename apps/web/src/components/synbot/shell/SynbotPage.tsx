@@ -12,9 +12,11 @@ import { useSearch } from "@tanstack/react-router";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import { useTranslation } from "~/i18n";
+import { cn } from "~/lib/utils";
 import { botById, orderedBots } from "~/synbot/synbotState.logic";
 import { ensureSynbotMain, startSynbotLiveSync, useSynbotStore } from "~/synbot/synbotStore";
 
+import { CHAT_CONTENT_CARD_CLASS_NAME } from "../../chat/composerPickerStyles";
 import { BotSheetHost } from "../editor/BotSheet";
 import { TaskPane } from "../thread/TaskPane";
 import { ThreadPane } from "../thread/ThreadPane";
@@ -85,7 +87,13 @@ export default function SynbotPage() {
   }
 
   return (
-    <div ref={root} className="hb synbot-shell" data-narrow={(narrow && taskThreadId) || undefined}>
+    <div
+      ref={root}
+      // Synara's route card: in the rail layout the page sits in the inset block under the
+      // shell band, like every other route, its top strip on the band.
+      className={cn("hb synbot-shell", CHAT_CONTENT_CARD_CLASS_NAME)}
+      data-narrow={(narrow && taskThreadId) || undefined}
+    >
       {content}
       <BotSheetHost />
     </div>

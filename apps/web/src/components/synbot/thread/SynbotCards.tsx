@@ -15,11 +15,13 @@ import {
   BotDelegationNotice,
   BotReportNotice,
   type BotDelegationState,
+  type ProjectId,
   type ThreadId,
 } from "@synara/contracts";
 import { Option, Schema } from "effect";
 
 import { useTranslation } from "~/i18n";
+import { formatRelativeTimeAgo } from "~/lib/relativeTime";
 import { botById, delegationById } from "~/synbot/synbotState.logic";
 import { useSynbotStore } from "~/synbot/synbotStore";
 import type { WorkLogSynbotNotice } from "~/workLog";
@@ -29,6 +31,7 @@ import { IconButton } from "../kit/controls";
 import { Icon } from "../kit/Icon";
 import { useOpenBot } from "../synbotNav";
 import { BatonCard, delegationTone, type BatonStart } from "./BatonCard";
+import { CARD_FACE, CardHead, StatusChip } from "./CardParts";
 import { ChoiceRows, InlineText, Pair, type ChoiceRow } from "./ChoiceParts";
 import { useCardAnswer } from "./useCardAnswer";
 
@@ -161,34 +164,81 @@ export function delegationStartCard(notice: WorkLogSynbotNotice): BotCard | null
 
 // ── Reports ──────────────────────────────────────────────────────────
 
+/** One hand-off in a report: who asked (unknown once it left the snapshot), who did it, how it
+ * ended and its result. */
+interface ReportLine {
+  readonly id: string;
+  readonly fromBotId: ProjectId | null;
+  readonly toBotId: ProjectId;
+  readonly state: BotDelegationState;
+  readonly resultSummary: string | null;
+}
+
 /** How a report's hand-offs ended: all done, some failed, or some still going. */
 function reportOutcome(states: readonly BotDelegationState[]): "done" | "failed" | "going" {
   if (states.some((state) => !BOT_DELEGATION_TERMINAL_STATES.has(state))) return "going";
   return states.some((state) => state === "failed") ? "failed" : "done";
 }
 
-/** The report that woke the requester, as a timeline: each hand-off's bot, how it ended and
- * its result, then the outcome. Live delegations first; the notice's own copy covers ones
- * that left the snapshot. */
+/** The report that woke the requester: a head (the asking bot, "Report · 2 delegations", when,
+ * and the outcome), then a timeline of each hand-off's bot, how it ended and its result, then
+ * the outcome. Live delegations first; the notice's own copy covers ones that left the
+ * snapshot. */
 function ReportCard({ notice }: { readonly notice: BotReportNotice }) {
   const { t } = useTranslation();
   const openBot = useOpenBot();
   const data = useSynbotStore((store) => store.data);
-  const delegations = notice.delegationIds.flatMap((id) => {
+  const delegations = notice.delegationIds.flatMap((id): ReportLine[] => {
     const live = delegationById(data, id);
     if (live) {
-      return [{ id, toBotId: live.toBotId, state: live.state, resultSummary: live.resultSummary }];
+      return [
+        {
+          id,
+          fromBotId: live.fromBotId,
+          toBotId: live.toBotId,
+          state: live.state,
+          resultSummary: live.resultSummary,
+        },
+      ];
     }
     const kept = notice.entries?.find((entry) => entry.delegationId === id);
-    return kept ? [{ id, ...kept }] : [];
+    return kept
+      ? [
+          {
+            id,
+            fromBotId: null,
+            toBotId: kept.toBotId,
+            state: kept.state,
+            resultSummary: kept.resultSummary,
+          },
+        ]
+      : [];
   });
   const outcome = reportOutcome(delegations.map((delegation) => delegation.state));
   const failed = delegations.filter((delegation) => delegation.state === "failed").length;
+  const asker = botById(
+    data,
+    delegations.find((delegation) => delegation.fromBotId)?.fromBotId ?? null,
+  );
+  const outcomeLabel =
+    outcome === "done"
+      ? t("synbot:reportAllDone")
+      : outcome === "failed"
+        ? t("synbot:reportFailed", { count: failed })
+        : t("synbot:reportGoing");
   return (
     <article className="report">
-      <p className="report__title">
-        {t("synbot:reportHandoffs", { count: notice.delegationIds.length })}
-      </p>
+      <CardHead
+        faces={<BotFace bot={asker} size={CARD_FACE} mood="idle" />}
+        title={t("synbot:reportHandoffs", { count: notice.delegationIds.length })}
+        sub={formatRelativeTimeAgo(notice.createdAt)}
+        status={
+          <StatusChip
+            tone={outcome === "done" ? "good" : outcome === "failed" ? "bad" : "active"}
+            label={outcomeLabel}
+          />
+        }
+      />
       <ol className="timeline">
         {delegations.map((delegation) => {
           const bot = botById(data, delegation.toBotId);
@@ -236,13 +286,7 @@ function ReportCard({ notice }: { readonly notice: BotReportNotice }) {
             </span>
           </span>
           <div className="timeline__body">
-            <p className="timeline__head timeline__head--end">
-              {outcome === "done"
-                ? t("synbot:reportAllDone")
-                : outcome === "failed"
-                  ? t("synbot:reportFailed", { count: failed })
-                  : t("synbot:reportGoing")}
-            </p>
+            <p className="timeline__head timeline__head--end">{outcomeLabel}</p>
           </div>
         </li>
       </ol>

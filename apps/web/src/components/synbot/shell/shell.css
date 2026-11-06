@@ -15,6 +15,28 @@
   background: var(--hb-bg);
   color: var(--hb-text);
 }
+/* In the rail layout the route card paints the page's surface under the shell band (its
+   ::before), so the page and its thread go clear: the strip sits on the band like every
+   route's top bar, and nothing paints over the band's divider. */
+[data-sidebar-layout="rail"] .hb.synbot-shell,
+[data-sidebar-layout="rail"] .hb.synbot-shell .thread-pane {
+  background: transparent;
+}
+/* There the rows end at the block's top edge, under the band, as in every chat: no blur
+   under the strip (it would blur the rows into the band). */
+[data-sidebar-layout="rail"] .hb.synbot-shell .thread {
+  clip-path: inset(var(--app-top-strip-height) 0 0 0);
+}
+[data-sidebar-layout="rail"]
+  .hb.synbot-shell
+  .thread-pane[data-under-top]
+  > .thread-pane__top::before,
+[data-sidebar-layout="rail"]
+  .hb.synbot-shell
+  .thread-pane[data-under-top]
+  > .thread-pane__top::after {
+  display: none;
+}
 /* Too narrow for the thread and the task pane: the task pane lies over the thread's right edge. */
 .hb.synbot-shell[data-narrow] > .task-pane {
   position: absolute;
@@ -192,6 +214,7 @@
   color: var(--hb-attention);
 }
 .hb .conversation__preview {
+  flex: 1;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;

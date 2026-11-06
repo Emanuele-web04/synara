@@ -1,9 +1,10 @@
 // FILE: TaskCard.tsx
-// Purpose: A Hub task in a bot's thread (HoloBot's thread/TaskCard.tsx): who works on it, its
-//          title and state, when it started, its plan as a checklist (done, running, to do;
-//          long plans fold their finished lines), its latest word once it stops running, then
-//          Open (its own thread in the right pane) and Stop (projectAgent.resolveWorker, as the
-//          Hub's own stop does). Without a plan it shows the live step or the latest word.
+// Purpose: A Hub task in a bot's thread (HoloBot's thread/TaskCard.tsx): the head (who works on
+//          it, its title, when it started, its state chip), its plan as a checklist (done,
+//          running, to do; long plans fold their finished lines), its latest word once it stops
+//          running, then the step count with small Stop (projectAgent.resolveWorker, as the
+//          Hub's own stop does) and Open (its own thread in the right pane) capsules. Without a
+//          plan it shows the live step or the latest word.
 // Layer: SynBot thread UI
 // Exports: TaskCard, taskTone, taskStateKey
 
@@ -17,11 +18,10 @@ import { formatRelativeTimeAgo } from "~/lib/relativeTime";
 
 import { toastManager } from "../../ui/toast";
 import { BotFace, taskMood } from "../BotFace";
-import { Button } from "~/components/ui/button";
-
-import { Chip, type Tone } from "../kit/controls";
+import { CapsuleButton, type Tone } from "../kit/controls";
 import { Icon } from "../kit/Icon";
 import { useOpenTask } from "../synbotNav";
+import { CARD_FACE, CardHead, StatusChip } from "./CardParts";
 import { InlineText } from "./ChoiceParts";
 
 const ACTIVE: ReadonlySet<HubWorkState> = new Set(["queued", "starting", "working", "waiting"]);
@@ -39,7 +39,7 @@ function stepClass(status: StepStatus): "done" | "current" | "todo" {
 function StepMark({ status }: { readonly status: StepStatus }) {
   const kind = stepClass(status);
   return (
-    <svg className="steps__mark" width="14" height="14" viewBox="0 0 24 24" aria-hidden>
+    <svg className="steps__mark" width="16" height="16" viewBox="0 0 24 24" aria-hidden>
       {kind === "done" ? (
         <>
           <circle cx="12" cy="12" r="11" className="steps__fill" />
@@ -100,7 +100,6 @@ export function TaskCard({ task, bot }: { readonly task: HubWorkItem; readonly b
   const hiddenDone =
     steps.length > MAX_STEPS ? Math.min(steps.length - MAX_STEPS + 1, leadingDone) : 0;
   const meta = [
-    formatRelativeTimeAgo(task.createdAt),
     steps.length > 0 ? t("synbot:taskSteps", { done, total: steps.length }) : null,
     task.queueReason && task.state === "queued" ? task.queueReason : null,
   ]
@@ -137,9 +136,12 @@ export function TaskCard({ task, bot }: { readonly task: HubWorkItem; readonly b
         disabled={!worker}
         onClick={() => worker && openTask(worker)}
       >
-        <BotFace bot={bot} size="card" mood={taskMood(task.state)} />
-        <span className="task-card__title">{task.title}</span>
-        <Chip tone={taskTone(task.state)}>{t(taskStateKey(task.state))}</Chip>
+        <CardHead
+          faces={<BotFace bot={bot} size={CARD_FACE} mood={taskMood(task.state)} />}
+          title={task.title}
+          sub={`${bot.name} · ${formatRelativeTimeAgo(task.createdAt)}`}
+          status={<StatusChip tone={taskTone(task.state)} label={t(taskStateKey(task.state))} />}
+        />
       </button>
       {steps.length > 0 ? (
         <ol className="steps" aria-label={t("synbot:taskSteps", { done, total: steps.length })}>
@@ -175,15 +177,15 @@ export function TaskCard({ task, bot }: { readonly task: HubWorkItem; readonly b
         <p className="task-card__meta">{meta}</p>
         <div className="task-card__actions">
           {ACTIVE.has(task.state) && worker ? (
-            <Button variant="ghost" size="xs" disabled={stopping} onClick={stop}>
+            <CapsuleButton kind="danger" small disabled={stopping} onClick={stop}>
               {t("synbot:stop")}
-            </Button>
+            </CapsuleButton>
           ) : null}
           {worker ? (
-            <Button variant="ghost" size="xs" onClick={() => openTask(worker)}>
+            <CapsuleButton kind="card" small onClick={() => openTask(worker)}>
               {t("synbot:open")}
               <Icon name="arrow-right" size="xs" />
-            </Button>
+            </CapsuleButton>
           ) : null}
         </div>
       </div>
