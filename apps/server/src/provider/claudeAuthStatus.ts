@@ -12,6 +12,7 @@ import type { ServerProviderAuthStatus, ServerProviderStatusState } from "@synar
 import {
   detailFromResult,
   extractAuthBoolean,
+  nonEmptyTrimmed,
   toTitleCaseWords,
   type CommandResult,
 } from "./providerCliOutput";
@@ -171,4 +172,31 @@ export function claudeAuthMetadata(input: {
     };
   }
   return undefined;
+}
+
+export interface ClaudeAccountIdentity {
+  /** Email of the claude.ai account, when `claude auth status` reports one. */
+  readonly email?: string;
+  /** Organization the account signs in to, as the CLI names it. */
+  readonly organization?: string;
+}
+
+// `claude auth status` names the account beside its login state. Only a JSON
+// object counts: the legacy text output never carried an identity.
+export function parseClaudeAccountIdentityFromOutput(result: CommandResult): ClaudeAccountIdentity {
+  const trimmed = result.stdout.trim();
+  if (!trimmed.startsWith("{")) return {};
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(trimmed);
+  } catch {
+    return {};
+  }
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+  const record = parsed as Record<string, unknown>;
+  const email = nonEmptyTrimmed(typeof record.email === "string" ? record.email : undefined);
+  const organization = nonEmptyTrimmed(
+    typeof record.orgName === "string" ? record.orgName : undefined,
+  );
+  return { ...(email ? { email } : {}), ...(organization ? { organization } : {}) };
 }

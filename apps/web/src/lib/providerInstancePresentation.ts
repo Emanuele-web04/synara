@@ -4,7 +4,7 @@
 // Layer: Web presentation helper
 
 import { t } from "~/i18n";
-import type { ProviderInstanceId, ProviderKind } from "@synara/contracts";
+import type { ProviderInstanceId, ProviderKind, ServerProviderStatus } from "@synara/contracts";
 
 export function resolveProviderInstanceLabel(
   instances: ReadonlyArray<{ readonly instanceId: ProviderInstanceId; readonly label: string }>,
@@ -40,6 +40,18 @@ export function providerAccountQualifiedLabel(providerLabel: string, accountLabe
   return accountLabel.toLowerCase().includes(providerLabel.toLowerCase())
     ? accountLabel
     : `${providerLabel} · ${accountLabel}`;
+}
+
+export function providerAccountIdentityLabel(
+  status: Pick<ServerProviderStatus, "accountEmail" | "accountOrganization"> | undefined,
+): string | null {
+  const email = status?.accountEmail?.trim();
+  const organization = status?.accountOrganization?.trim();
+  if (!email) return organization || null;
+  if (!organization || organization.toLowerCase() === `${email.toLowerCase()}'s organization`) {
+    return email;
+  }
+  return `${email} · ${organization}`;
 }
 
 const ACCOUNT_ID_SLUG_MAX_CHARS = 48;
