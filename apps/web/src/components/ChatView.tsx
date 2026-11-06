@@ -49,6 +49,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import { createPortal } from "react-dom";
 import { useCopyThreadIdToClipboard } from "~/hooks/useCopyToClipboard";
 import {
   useDesktopTopBarTrafficLightGutterClassName,
@@ -629,9 +630,11 @@ interface ChatViewProps {
   renderTranscript?: (input: ChatTranscriptSlotInput) => ReactNode;
   /** The composer's resting placeholder in place of "Do anything in Synara" (a bot's chat). */
   composerPlaceholder?: string;
-  /** The row of permission, model and context controls sits right on top of the composer
-   * instead of under it (a bot's chat). */
-  composerStatusAbove?: boolean;
+  /** Where the row of permission, model and context controls goes instead of under the
+   * composer: a bot chat's top bar, beside the bot's name. Null until that element mounts. */
+  composerStatusTarget?: HTMLElement | null;
+  /** Drawn inside the composer's Send button under its icon (a bot chat's liquid-metal ring). */
+  composerSendUnderlay?: ReactNode;
   /**
    * Enables the ambient computer preview rail for this chat: when provided,
    * a live computer session renders below the Environment card and the chat
@@ -664,7 +667,8 @@ export default function ChatView({
   onOpenLinkedThread,
   renderTranscript,
   composerPlaceholder,
-  composerStatusAbove: composerStatusAboveProp,
+  composerStatusTarget: composerStatusTargetProp,
+  composerSendUnderlay,
 }: ChatViewProps) {
   const { t } = useTranslation();
 
@@ -678,7 +682,10 @@ export default function ChatView({
   const presentationMode = presentationModeProp ?? "default";
   const isFocusedPane = isFocusedPaneProp ?? true;
   const viewModeAction = viewModeActionProp ?? null;
-  const composerStatusAbove = composerStatusAboveProp ?? false;
+  // A surface that takes the status row (a bot chat's top bar) draws it there, not under the
+  // composer.
+  const composerStatusInBar = composerStatusTargetProp !== undefined;
+  const composerStatusTarget = composerStatusTargetProp ?? null;
   const markThreadVisited = useStore((store) => store.markThreadVisited);
   const syncServerShellSnapshot = useStore((store) => store.syncServerShellSnapshot);
   const setStoreThreadError = useStore((store) => store.setError);
@@ -5991,16 +5998,25 @@ export default function ChatView({
   };
   const showTrailingBranchToolbar = !activeThreadIsSidechat && isGitRepo && !environmentEnabled;
   // Permission, branch controls (git threads), model/effort and the context ring: under the
-  // composer, or on top of it when the surface asks (`composerStatusAbove`).
-  const composerStatusRow = (
+  // composer, or on one line in the surface's top bar (`composerStatusTarget`).
+  const composerStatusRow = composerStatusInBar ? (
+    <div
+      ref={composerStatusRowRef}
+      data-chat-composer-status-row=""
+      className="flex min-w-0 items-center gap-1 overflow-hidden"
+    >
+      <RuntimeUsageControls {...runtimeUsageControlsProps} className="shrink-0" />
+      <div className="flex shrink-0 items-center gap-2">
+        {composerPickerControls}
+        {composerContextMeter}
+      </div>
+    </div>
+  ) : (
     <div className={COMPOSER_COLUMN_FRAME_CLASS_NAME}>
       <div
         ref={composerStatusRowRef}
         data-chat-composer-status-row=""
-        className={cn(
-          "@container flex min-h-9 w-full min-w-0 flex-wrap items-center gap-1",
-          composerStatusAbove ? "pb-1 pt-0" : "pb-1.5 pt-1",
-        )}
+        className="@container flex min-h-9 w-full min-w-0 flex-wrap items-center gap-1 pb-1.5 pt-1"
       >
         <RuntimeUsageControls {...runtimeUsageControlsProps} className="shrink-0" />
         {showTrailingBranchToolbar ? (
@@ -6779,6 +6795,7 @@ export default function ChatView({
                   contextMeter={composerStatusBelow ? null : composerContextMeter}
                   interactionMode={interactionMode}
                   resetInteractionMode={handleResetInteractionMode}
+                  {...(composerSendUnderlay ? { sendUnderlay: composerSendUnderlay } : {})}
                   sidebarAction={
                     activeTaskList || sidebarProposedPlan || planSidebarOpen
                       ? {
@@ -7329,18 +7346,19 @@ export default function ChatView({
                     // content (and clear of the docked Environment overlay and preview rail).
                     style={contentInsetRightPx ? { paddingRight: contentInsetRightPx } : undefined}
                   >
-                    {composerStatusAbove ? (
-                      <div className="pointer-events-auto">{composerStatusRow}</div>
-                    ) : null}
                     <div className="pointer-events-auto">{composerSection}</div>
                   </div>
-                  <div className={composerStatusAbove ? "pt-3" : "pt-0.5"} />
+                  <div className={composerStatusInBar ? "pt-3" : "pt-0.5"} />
                   {/* Row under the composer: permission, branch controls (git threads), then
                       model/effort and the context ring. The footer tiers measure this row. It
                       takes the composer's right inset so it stays under the composer while the
-                      Environment card or preview rail is docked. A surface may put it on top of
-                      the composer instead (`composerStatusAbove`). */}
-                  {composerStatusAbove ? null : (
+                      Environment card or preview rail is docked. A surface may draw it in its
+                      own top bar instead (`composerStatusTarget`). */}
+                  {composerStatusInBar ? (
+                    composerStatusTarget ? (
+                      createPortal(composerStatusRow, composerStatusTarget)
+                    ) : null
+                  ) : (
                     <div
                       className={cn(
                         CHAT_COLUMN_GUTTER_CLASS_NAME,

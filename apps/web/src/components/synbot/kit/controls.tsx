@@ -1,10 +1,10 @@
 // FILE: controls.tsx
 // Purpose: The HoloBot kit's small controls (ported from HoloBot's packages/ui Button.tsx,
 //          IconButton.tsx, Chip.tsx, Text.tsx, TextField.tsx, Switch.tsx, Segmented.tsx,
-//          Field.tsx, Panel.tsx and DragStrip.tsx): capsule buttons in Synara's colors (no liquid
-//          metal: that was HoloBot's own style), round icon buttons, chips, counts and dots, text
-//          styles, a capsule text field, a switch, a segmented choice, a titled field, a pane and
-//          a pane's top strip.
+//          Field.tsx, Panel.tsx and DragStrip.tsx): capsule buttons (a primary one is a dark core
+//          inside a thin ring of HoloBot's moving liquid metal), round icon buttons, chips,
+//          counts and dots, text styles, a capsule text field, a switch, a segmented choice, a
+//          titled field, a pane and a pane's top strip.
 // Layer: SynBot kit
 // Exports: CapsuleButton, ButtonKind, IconButton, Chip, Tone, CountBadge, Badged, Dot, DotTone,
 //          Text, TextField, Switch, Segmented, SegmentedOption, Field, Pane, Strip
@@ -20,6 +20,7 @@ import {
 } from "react";
 
 import { Icon, type IconName } from "./Icon";
+import { LiquidMetal } from "./metal/Metal";
 import "./holobot.css";
 
 const classes = (...names: Array<string | false | null | undefined>) =>
@@ -27,7 +28,8 @@ const classes = (...names: Array<string | false | null | undefined>) =>
 
 // ── Buttons ──────────────────────────────────────────────────────────
 
-/** primary: Synara's primary fill; normal, danger, card, ghost: flat capsules. */
+/** primary: a dark core in a ring of moving liquid metal (none while disabled); normal,
+ * danger, card, ghost: flat capsules. */
 export type ButtonKind = "primary" | "normal" | "danger" | "card" | "ghost";
 
 export function CapsuleButton({
@@ -67,6 +69,7 @@ export function CapsuleButton({
       data-chosen={chosen || undefined}
       {...rest}
     >
+      {kind === "primary" && !rest.disabled ? <LiquidMetal moving round={round} /> : null}
       <span className="hb-btn__core">{children}</span>
     </button>
   );

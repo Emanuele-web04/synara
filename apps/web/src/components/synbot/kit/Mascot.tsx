@@ -2,31 +2,31 @@
 // Purpose: Mascots (ported from HoloBot's packages/ui Mascot.tsx and mascots.ts): soft toys seen
 //          face on, one color each, drawn as inline SVG. Every bot breathes, blinks and
 //          glances; working, its eyes scan and it bobs; waiting on the user, it nods. Reduce
-//          Motion holds them still. The main SynBot is HoloBot's chrome ghost, a still image
-//          (assets/, cut from HoloBot's brand render) at the size each slot needs.
+//          Motion holds them still. The main SynBot is HoloBot's ghost in moving liquid metal
+//          (metal/), alive like the rest.
 // Layer: SynBot kit
 // Exports: MascotSize, MascotMood, GhostMark, BotMascot, PebbleMascot, mascotFit, botPhase
 
 import type { CSSProperties } from "react";
 
-import ghost48 from "./assets/synbot-ghost-48.webp";
-import ghost96 from "./assets/synbot-ghost-96.webp";
-import ghost192 from "./assets/synbot-ghost-192.webp";
-import ghost384 from "./assets/synbot-ghost-384.webp";
 import { BOT_SHAPE_LOOKS, FACE_EYES, PEBBLE, type ShapeLook } from "./botShapes";
+import { HOLOBOT } from "./holobotMark";
+import { MetalMark } from "./metal/Metal";
+import type { MascotMood } from "./mood";
 import "./holobot.css";
 
 /** tile: pinned bots; row: conversation rows; pill: the name pill; card: message headers and
  * task cards; or a size in px. */
 export type MascotSize = "tile" | "row" | "pill" | "card" | number;
 
-/** What a bot is doing, as its face shows it. */
-export type MascotMood = "idle" | "working" | "waiting";
+export type { MascotMood } from "./mood";
 
 /** The most of its box a mascot spans, wide or tall: a bigger outline is drawn smaller about
  * the box's middle, so none looks bigger than the rest. */
 const MASCOT_MAX_EXTENT = 78;
 const fits = new Map<string, number>();
+/** From this size (px) up SynBot's metal moves; below it, a still frame. */
+const MOVING_METAL_MIN_PX = 24;
 
 /** An outline's scale in its box: 1, or less when it spans more than MASCOT_MAX_EXTENT. */
 export function mascotFit(path: string): number {
@@ -64,36 +64,32 @@ function frame(size: MascotSize): { className: string; style: CSSProperties | un
   };
 }
 
-const GHOST_SRCSET = `${ghost48} 48w, ${ghost96} 96w, ${ghost192} 192w, ${ghost384} 384w`;
-const SLOT_PX: Record<Exclude<MascotSize, number>, number> = {
-  tile: 52,
-  row: 32,
-  pill: 22,
-  card: 18,
-};
-
-/** The main SynBot: HoloBot's chrome ghost, still; the browser picks the sharpest rendition
- * for the slot's size and the screen's density. */
+/** The main SynBot: HoloBot's ghost in liquid metal (metal/Metal.tsx), the sheen moving where
+ * it is big enough to see (the tile, the name pill, conversation rows, cards' faces and art) and
+ * a still frame of it in small headers; alive like every bot unless `still`. */
 export function GhostMark({
   size,
-  className,
+  mood = "idle",
+  still = false,
 }: {
   readonly size: MascotSize;
-  readonly className?: string | undefined;
+  readonly mood?: MascotMood | undefined;
+  readonly still?: boolean | undefined;
 }) {
   const box = frame(size);
-  const px = typeof size === "number" ? size : SLOT_PX[size];
+  const moving =
+    !still && (typeof size === "number" ? size >= MOVING_METAL_MIN_PX : size !== "card");
   return (
-    <img
-      className={`${box.className} hb-ghost${className ? ` ${className}` : ""}`}
-      style={box.style}
-      src={px > 24 ? ghost96 : ghost48}
-      srcSet={GHOST_SRCSET}
-      sizes={`${px}px`}
-      alt=""
-      aria-hidden
-      draggable={false}
-      decoding="async"
+    <MetalMark
+      className={box.className}
+      // No bigger than the other mascots: `scale` composes with the motion.
+      style={{
+        ...box.style,
+        scale: String(mascotFit(HOLOBOT)),
+        ["--hb-bot-phase" as string]: `${-botPhase("synbot")}s`,
+      }}
+      moving={moving}
+      mood={still ? undefined : mood}
     />
   );
 }
@@ -152,7 +148,8 @@ export function BotMascot({
   readonly shape: string;
   readonly color: string;
   readonly size: MascotSize;
-  /** idle breathes and blinks; working scans; waiting nods. */
+  /** idle breathes, blinks and glances; working hops and scans; waiting nods and tilts its
+   * head; done hops with happy eyes; paused dozes. */
   readonly mood?: MascotMood | undefined;
   /** The bot's id: its own rhythm, so a row of bots does not blink together. */
   readonly seed?: string | undefined;

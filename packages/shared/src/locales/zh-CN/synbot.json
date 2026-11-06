@@ -1,6 +1,6 @@
 {
   "railLabel": "SynBot",
-  "pageTitle": "SynBot",
+  "pageTitle": "SynBots",
   "railBadge_one": "{{count}} 个机器人需要你",
   "railBadge_other": "{{count}} 个机器人需要你",
   "newBot": "新建机器人",

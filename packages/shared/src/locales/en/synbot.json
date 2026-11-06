@@ -1,6 +1,6 @@
 {
   "railLabel": "SynBot",
-  "pageTitle": "SynBot",
+  "pageTitle": "SynBots",
   "railBadge_one": "{{count}} bot needs you",
   "railBadge_other": "{{count}} bots need you",
   "newBot": "New bot",

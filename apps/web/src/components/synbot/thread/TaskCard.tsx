@@ -16,7 +16,7 @@ import { readNativeApi } from "~/nativeApi";
 import { formatRelativeTimeAgo } from "~/lib/relativeTime";
 
 import { toastManager } from "../../ui/toast";
-import { BotFace } from "../BotFace";
+import { BotFace, taskMood } from "../BotFace";
 import { Button } from "~/components/ui/button";
 
 import { Chip, type Tone } from "../kit/controls";
@@ -137,7 +137,7 @@ export function TaskCard({ task, bot }: { readonly task: HubWorkItem; readonly b
         disabled={!worker}
         onClick={() => worker && openTask(worker)}
       >
-        <BotFace bot={bot} size="card" mood={running ? "working" : "idle"} />
+        <BotFace bot={bot} size="card" mood={taskMood(task.state)} />
         <span className="task-card__title">{task.title}</span>
         <Chip tone={taskTone(task.state)}>{t(taskStateKey(task.state))}</Chip>
       </button>

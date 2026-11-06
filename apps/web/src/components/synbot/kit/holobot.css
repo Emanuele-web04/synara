@@ -46,9 +46,22 @@
   --hb-tone-bad-fill: color-mix(in srgb, var(--destructive) 13%, transparent);
   --hb-tone-bad-text: color-mix(in srgb, var(--destructive) 85%, var(--foreground));
 
-  /* Mascots: one flat color per bot with dark eyes; the main SynBot is the chrome ghost. */
+  /* Mascots: one flat color per bot with dark eyes; the main SynBot is HoloBot's ghost in
+     liquid metal: black with a faint sheen and white eyes on light, the reverse on dark. */
   --hb-eyes-on-color: #161616;
   --hb-mascot-repo: #8e8e93;
+  --hb-mark-fill: #151517;
+  --hb-mark-sheen: 0.3;
+  --hb-mark-eyes: #ffffff;
+
+  /* Liquid metal (metal/Metal.tsx): a primary button is a dark core inside a thin moving ring
+     of it, with a faint inner shadow and a subtle glow around. */
+  --hb-rim-fill: #1c1c1e;
+  --hb-on-rim: #ffffff;
+  --hb-rim-capsule: 2px;
+  --hb-rim-circle: 2px;
+  --hb-rim-glow: 0 0 10px rgb(0 0 0 / 0.08);
+  --hb-rim-inner-shadow: inset 0 1px 2px rgb(0 0 0 / 0.4);
 
   /* Spacing */
   --hb-gutter: 16px;
@@ -148,6 +161,13 @@
   --hb-soft-text: color-mix(in srgb, var(--foreground) 80%, var(--background));
   --hb-chosen-border: color-mix(in srgb, var(--foreground) 40%, transparent);
   --hb-scrim: rgb(0 0 0 / 0.45);
+  --hb-mark-fill: #f6f6f8;
+  --hb-mark-sheen: 0.42;
+  --hb-mark-eyes: #0b0b0d;
+  --hb-rim-fill: #151515;
+  --hb-on-rim: #f2f2f2;
+  --hb-rim-glow: 0 0 10px rgb(255 255 255 / 0.07);
+  --hb-rim-inner-shadow: inset 0 1px 3px rgb(0 0 0 / 0.55);
   --hb-shadow-dialog: 0 24px 64px rgb(0 0 0 / 0.55);
   --hb-shadow-menu: 0 12px 32px rgb(0 0 0 / 0.5);
   --hb-shadow-float: 0 4px 16px rgb(0 0 0 / 0.35);
@@ -201,23 +221,93 @@
   width: var(--hb-avatar-card, 18px);
   height: var(--hb-avatar-card, 18px);
 }
-/* The main SynBot's chrome ghost (a still image). On a light surface a faint shadow keeps the
-   white chrome's outline. */
-.hb-ghost {
-  object-fit: contain;
-  user-select: none;
-  -webkit-user-select: none;
-  filter: drop-shadow(0 0 0.5px rgb(0 0 0 / 0.45)) drop-shadow(0 1px 1.5px rgb(0 0 0 / 0.12));
+/* The main SynBot (metal/Metal.tsx's MetalMark): the ghost's fill under a mask of its
+   outline, the moving metal over it as a sheen, the eyes on top. */
+.hb-mark {
+  position: relative;
+  display: inline-block;
 }
-.dark .hb-ghost {
-  filter: none;
+.hb-mark__body {
+  position: absolute;
+  inset: 0;
 }
-/* A bot alive: it breathes and blinks, glances around, nods while it waits for the user;
-   working, it hops and leans while its eyes scan. Each bot keeps its own rhythm. */
+.hb-mark__metal {
+  position: absolute;
+  inset: 0;
+  background: var(--hb-mark-fill, #151517);
+  mask-size: 100% 100%;
+  -webkit-mask-size: 100% 100%;
+  mask-repeat: no-repeat;
+  -webkit-mask-repeat: no-repeat;
+}
+.hb-mark__metal > * {
+  opacity: var(--hb-mark-sheen, 0.3);
+}
+.hb-mark__eyes {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  fill: var(--hb-mark-eyes, #ffffff);
+}
+/* A round control's metal ring (MetalRing) under its icon: the composer's Send in a bot chat
+   (ChatView's `composerSendUnderlay`) is a dark core in a ring of moving metal, like HoloBot's. */
+.hb-ring {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  border-radius: inherit;
+}
+.hb-ring__core {
+  position: absolute;
+  inset: var(--hb-rim-circle);
+  border-radius: inherit;
+  background: var(--hb-rim-fill);
+  box-shadow: var(--hb-rim-inner-shadow);
+}
+.hb [data-send-underlay] {
+  background: var(--hb-rim-fill);
+  color: var(--hb-on-rim);
+  box-shadow: var(--hb-rim-glow);
+}
+.hb [data-send-underlay] > svg {
+  position: relative;
+  z-index: 1;
+}
+/* The metal layer, clipped by its capsule or mask; Paper's canvas fills it (or the still
+   picture of a metal over the budget: metal/budget.ts). */
+.hb-metal {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  border-radius: inherit;
+  overflow: hidden;
+}
+.hb-metal__canvas {
+  position: absolute;
+  inset: 0;
+}
+img.hb-metal__canvas {
+  width: 100%;
+  height: 100%;
+}
+/* A bot alive, its mood in its head and eyes (each bot keeps its own rhythm):
+   - idle: breathes and blinks; now and then turns its head to glance left, then right, then
+     tilts it with its eyes up, curious. On a turn the outline shifts, leans and narrows by less
+     than the eyes travel, so the flat shape reads as a round head turning.
+   - working (running): hops, squashes and leans side to side, eyes narrowed in focus, scanning.
+   - waiting for you: nods and tilts its head side to side like a puppy asking, eyes big and up.
+   - done: a happy hop, then rocks, eyes squeezed into happy crescents (wide at the top of the
+     hop).
+   - paused: sleepy, a slow deep breath with a droop, eyes nearly shut, opening a little now
+     and then.
+   Reduce Motion holds them all still. */
 .hb-bot--alive .hb-bot__body {
   transform-box: fill-box;
   transform-origin: 50% 100%;
-  animation: hb-bot-breathe 4.2s ease-in-out infinite;
+  animation:
+    hb-bot-breathe 4.2s ease-in-out infinite,
+    hb-bot-turn 9.4s ease-in-out infinite;
   animation-delay: var(--hb-bot-phase, 0s);
 }
 .hb-bot--alive .hb-bot__eyes {
@@ -225,11 +315,13 @@
   transform-origin: 50% 60%;
   animation:
     hb-bot-blink 5.3s infinite,
-    hb-bot-look 7.9s ease-in-out infinite;
+    hb-bot-look 9.4s ease-in-out infinite;
   animation-delay: var(--hb-bot-phase, 0s);
 }
 .hb-bot--alive[data-mood="working"] .hb-bot__body {
-  animation: hb-bot-work 1s ease-in-out infinite;
+  animation:
+    hb-bot-work 1s ease-in-out infinite,
+    hb-bot-sway 1s ease-in-out infinite;
 }
 .hb-bot--alive[data-mood="working"] .hb-bot__eyes {
   animation:
@@ -237,12 +329,30 @@
     hb-bot-scan 1s ease-in-out infinite;
 }
 .hb-bot--alive[data-mood="waiting"] .hb-bot__body {
-  animation: hb-bot-nod 2.4s ease-in-out infinite;
+  animation:
+    hb-bot-nod 2.4s ease-in-out infinite,
+    hb-bot-ask 4.8s ease-in-out infinite;
 }
 .hb-bot--alive[data-mood="waiting"] .hb-bot__eyes {
   animation:
     hb-bot-blink 3.1s infinite,
     hb-bot-up 2.4s ease-in-out infinite;
+}
+.hb-bot--alive[data-mood="done"] .hb-bot__body {
+  animation: hb-bot-cheer 3.2s ease-in-out infinite;
+  animation-delay: var(--hb-bot-phase, 0s);
+}
+.hb-bot--alive[data-mood="done"] .hb-bot__eyes {
+  animation: hb-bot-happy 3.2s ease-in-out infinite;
+  animation-delay: var(--hb-bot-phase, 0s);
+}
+.hb-bot--alive[data-mood="paused"] .hb-bot__body {
+  animation: hb-bot-doze 6s ease-in-out infinite;
+  animation-delay: var(--hb-bot-phase, 0s);
+}
+.hb-bot--alive[data-mood="paused"] .hb-bot__eyes {
+  animation: hb-bot-sleepy 6s ease-in-out infinite;
+  animation-delay: var(--hb-bot-phase, 0s);
 }
 @keyframes hb-bot-breathe {
   0%,
@@ -263,28 +373,84 @@
     transform: scaleY(0.08);
   }
 }
+/* Idle: the eyes' glances and the curious look up add to the head's turn and tilt
+   (hb-bot-turn); turned, the eyes narrow a little. */
 @keyframes hb-bot-look {
   0%,
-  40%,
+  30%,
+  66%,
+  74%,
+  94%,
   100% {
     translate: 0 0;
+    scale: 1 1;
   }
-  46%,
+  35%,
+  46% {
+    translate: -4.5px 1px;
+    scale: 0.92 1;
+  }
+  51%,
   62% {
-    translate: -7px 1px;
+    translate: 3px -1px;
+    scale: 0.94 1;
   }
-  68%,
-  84% {
-    translate: 5px -1px;
+  79%,
+  89% {
+    translate: 2.5px -3px;
+    scale: 1.04 1.06;
   }
 }
+@keyframes hb-bot-turn {
+  0%,
+  30%,
+  66%,
+  74%,
+  94%,
+  100% {
+    translate: 0 0;
+    rotate: 0deg;
+    scale: 1 1;
+  }
+  35%,
+  46% {
+    translate: -2.5px 0;
+    rotate: -2deg;
+    scale: 0.97 1;
+  }
+  51%,
+  62% {
+    translate: 2px 0;
+    rotate: 1.5deg;
+    scale: 0.975 1;
+  }
+  79%,
+  89% {
+    translate: 0.5px -1px;
+    rotate: 6deg;
+    scale: 1 1;
+  }
+}
+/* Working: the eyes, narrowed in focus, scan with the head's sway (hb-bot-sway); together they
+   travel as far as the eyes alone used to. */
 @keyframes hb-bot-scan {
   0%,
   100% {
-    translate: -8px 0;
+    translate: -6px 0;
+    scale: 1 0.8;
   }
   50% {
-    translate: 8px 0;
+    translate: 6px 0;
+    scale: 1 0.8;
+  }
+}
+@keyframes hb-bot-sway {
+  0%,
+  100% {
+    translate: -2px 0;
+  }
+  50% {
+    translate: 2px 0;
   }
 }
 @keyframes hb-bot-work {
@@ -302,6 +468,7 @@
     transform: translateY(-9%) rotate(5deg) scale(0.97, 1.03);
   }
 }
+/* Waiting for you: a nod, the head tilting side to side, the eyes big and up at the user. */
 @keyframes hb-bot-nod {
   0%,
   70%,
@@ -318,13 +485,100 @@
     transform: translateY(-2%);
   }
 }
+@keyframes hb-bot-ask {
+  0%,
+  50%,
+  100% {
+    rotate: 0deg;
+  }
+  20%,
+  32% {
+    rotate: -5deg;
+  }
+  68%,
+  80% {
+    rotate: 5deg;
+  }
+}
 @keyframes hb-bot-up {
   0%,
   100% {
     translate: 0 -3px;
+    scale: 1.1 1.12;
   }
   50% {
     translate: 2px -4px;
+    scale: 1.1 1.12;
+  }
+}
+/* Done: a squash, a hop with the eyes wide, a squash on landing, then a happy rock with the eyes
+   squeezed into crescents. */
+@keyframes hb-bot-cheer {
+  0%,
+  100% {
+    transform: translateY(0) rotate(0deg) scale(1, 1);
+  }
+  8% {
+    transform: translateY(0) rotate(0deg) scale(1.08, 0.92);
+  }
+  18% {
+    transform: translateY(-16%) rotate(0deg) scale(0.94, 1.07);
+  }
+  28% {
+    transform: translateY(0) rotate(0deg) scale(1.07, 0.93);
+  }
+  36% {
+    transform: translateY(0) rotate(0deg) scale(1, 1);
+  }
+  50% {
+    transform: translateY(0) rotate(-5deg) scale(1, 1);
+  }
+  64% {
+    transform: translateY(0) rotate(5deg) scale(1, 1);
+  }
+  78% {
+    transform: translateY(0) rotate(-3deg) scale(1, 1);
+  }
+  88% {
+    transform: translateY(0) rotate(0deg) scale(1, 1);
+  }
+}
+@keyframes hb-bot-happy {
+  0%,
+  8%,
+  30%,
+  100% {
+    translate: 0 -1px;
+    scale: 1.05 0.45;
+  }
+  16%,
+  22% {
+    translate: 0 -2px;
+    scale: 1.08 1.12;
+  }
+}
+/* Paused: a slow deep breath with a droop; the eyes nearly shut, opening a little now and then. */
+@keyframes hb-bot-doze {
+  0%,
+  100% {
+    transform: translateY(0) rotate(2deg) scale(1, 1);
+  }
+  50% {
+    transform: translateY(2%) rotate(3.5deg) scale(1.035, 0.965);
+  }
+}
+@keyframes hb-bot-sleepy {
+  0%,
+  60%,
+  86%,
+  100% {
+    translate: 0 1.5px;
+    scale: 1 0.22;
+  }
+  70%,
+  78% {
+    translate: 0 0.5px;
+    scale: 1 0.55;
   }
 }
 @media (prefers-reduced-motion: reduce) {
@@ -383,10 +637,28 @@
   background: var(--hb-danger-fill);
   color: var(--hb-danger-text);
 }
-/* Primary: Synara's primary fill (HoloBot's liquid-metal ring is HoloBot's own style). */
+/* Primary: a dark core inside a thin ring of HoloBot's moving liquid metal (the metal fills
+   the capsule; the core, drawn over it, leaves the ring). Disabled, it holds no metal: a dark
+   capsule with a hairline. */
 .hb-btn--primary {
-  background: var(--primary);
-  color: var(--primary-foreground);
+  background: var(--hb-rim-fill);
+  color: var(--hb-on-rim);
+  box-shadow: var(--hb-rim-glow);
+}
+.hb-btn--primary::after {
+  content: "";
+  position: absolute;
+  inset: var(--hb-rim-capsule);
+  z-index: 0;
+  border-radius: inherit;
+  background: var(--hb-rim-fill);
+  box-shadow: var(--hb-rim-inner-shadow);
+}
+.hb-btn--round.hb-btn--primary::after {
+  inset: var(--hb-rim-circle);
+}
+.hb-btn--primary:disabled {
+  box-shadow: inset 0 0 0 1px var(--hb-border-strong);
 }
 .hb-btn--ghost {
   background: transparent;

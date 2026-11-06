@@ -24,7 +24,7 @@ import { botById, delegationById } from "~/synbot/synbotState.logic";
 import { useSynbotStore } from "~/synbot/synbotStore";
 import type { WorkLogSynbotNotice } from "~/workLog";
 
-import { BotFace } from "../BotFace";
+import { BotFace, delegationMood } from "../BotFace";
 import { IconButton } from "../kit/controls";
 import { Icon } from "../kit/Icon";
 import { useOpenBot } from "../synbotNav";
@@ -195,7 +195,7 @@ function ReportCard({ notice }: { readonly notice: BotReportNotice }) {
           return (
             <li key={delegation.id} className="timeline__item">
               <span className="timeline__rail" aria-hidden>
-                <BotFace bot={bot} size={22} still />
+                <BotFace bot={bot} size={22} mood={delegationMood(delegation.state)} />
                 <span className="timeline__line" />
               </span>
               <div className="timeline__body">
