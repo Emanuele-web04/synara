@@ -64,7 +64,7 @@ export default function SynbotPage() {
     useBotEditor.getState().openCreate({ startAt: "bot" });
     void navigate({
       to: "/synbot",
-      search: { ...(search.bot ? { bot: search.bot } : {}) },
+      search: search.bot ? { bot: search.bot } : {},
       replace: true,
     });
   }, [navigate, search.bot, search.new]);

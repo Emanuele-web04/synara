@@ -6,7 +6,7 @@
 // Exports: BotEditorForm, BOT_EDITOR_CREW_TEMPLATE, botEditorFormFromBot, blankBotEditorForm,
 //          applyBotTemplate, findBotTemplate, availableBotTemplates, missingCrewTemplates,
 //          botScopeFromForm, botEditorIssue, botCreateInput, crewCreateInputs, botUpdateInput,
-//          rebaseBotEditorForm, isBotConflictError, errorMessageOf
+//          rebaseBotEditorForm, isBotConflictError
 
 import type {
   Bot,
@@ -251,8 +251,4 @@ export function rebaseBotEditorForm(
 /** The server refuses a stale `expectedRevision` with "The bot changed. Reload and retry." */
 export function isBotConflictError(message: string): boolean {
   return /bot changed|reload and retry|revision|conflict/i.test(message);
-}
-
-export function errorMessageOf(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }

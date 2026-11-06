@@ -4,7 +4,7 @@
 //          runs at speed 0 and this one interval steps the moving ones at METAL_FPS, only while
 //          the window is frontmost and visible, Reduce Motion is off and at least one moving
 //          metal is mounted. A still metal draws the shared frame once and is never stepped.
-// Layer: SynBot kit (metal)
+// Layer: UI primitive (liquid metal)
 // Exports: currentFrame, registerMoving
 
 /** Steps per second, and how far one second moves the shader's own clock (Paper's `frame`
@@ -16,7 +16,7 @@ const METAL_FIRST_FRAME = 8000;
 const REDUCED = "(prefers-reduced-motion: reduce)";
 
 /** The canvases the clock steps: a moving metal's Paper mount. */
-const MOVING_SHADER = ".hb-metal--shader[data-moving] [data-paper-shader]";
+const MOVING_SHADER = ".ui-metal--shader[data-moving] [data-paper-shader]";
 
 type Mount = HTMLElement & { paperShaderMount?: { setFrame(frame: number): void } };
 

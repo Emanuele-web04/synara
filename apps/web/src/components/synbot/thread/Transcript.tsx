@@ -15,7 +15,7 @@ import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "re
 import { useTranslation } from "~/i18n";
 
 import { IconButton } from "../kit/controls";
-import { useReducedMotion } from "../kit/motion";
+import { useMediaQuery } from "~/hooks/useMediaQuery";
 import {
   afterScroll,
   initialFollow,
@@ -87,7 +87,7 @@ export function Transcript({
 }) {
   const { t } = useTranslation();
   const scroller = useRef<HTMLDivElement>(null);
-  const reduced = useReducedMotion();
+  const reduced = useMediaQuery("(prefers-reduced-motion: reduce)");
   const follow = useRef<FollowState>(initialFollow);
   // A jump to the latest under way: each frame aims at the end as it is then.
   const jumping = useRef(false);

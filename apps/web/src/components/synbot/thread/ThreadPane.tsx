@@ -15,6 +15,7 @@
 import type { Bot, ModelSelection } from "@synara/contracts";
 import { useNavigate } from "@tanstack/react-router";
 import { useCallback, useLayoutEffect, useRef, useState, type RefObject } from "react";
+import { describeErrorMessage } from "@synara/shared/errorMessages";
 
 import { useTranslation } from "~/i18n";
 import { readNativeApi } from "~/nativeApi";
@@ -30,7 +31,7 @@ import { useBotEditor } from "../editor/botEditorStore";
 import { IconButton, Strip } from "../kit/controls";
 import { Icon } from "../kit/Icon";
 import { Menu, type MenuEntry } from "../kit/Menu";
-import { MetalRing } from "../kit/metal/Metal";
+import { MetalRing } from "~/components/ui/metal/LiquidMetal";
 import { MessageList } from "./MessageList";
 import type { TranscriptEdges } from "./Transcript";
 import { useBotAnswering } from "./useBotThread";
@@ -64,7 +65,7 @@ function useSaveEngine(bot: Bot) {
           toastManager.add({
             type: "error",
             title: t("synbot:engineFailed"),
-            description: error instanceof Error ? error.message : String(error),
+            description: describeErrorMessage(error, String(error)),
           }),
         );
     },

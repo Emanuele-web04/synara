@@ -4,7 +4,7 @@
 //          past that, so its metal would vanish. The newest LIVE_METALS draw with the shader; an
 //          older one becomes a still picture of its last frame (one image, no context) until
 //          enough newer ones unmount.
-// Layer: SynBot kit (metal)
+// Layer: UI primitive (liquid metal)
 // Exports: LIVE_METALS, useLiveMetal
 
 import { useEffect, useState, useSyncExternalStore } from "react";

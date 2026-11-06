@@ -7,6 +7,7 @@
 
 import type { BotCard, ThreadId } from "@synara/contracts";
 import { useState } from "react";
+import { describeErrorMessage } from "@synara/shared/errorMessages";
 
 import { useTranslation } from "~/i18n";
 import { readNativeApi } from "~/nativeApi";
@@ -28,7 +29,7 @@ export function useCardAnswer(card: BotCard, threadId: ThreadId | null) {
         toastManager.add({
           type: "error",
           title: t("synbot:answerFailed"),
-          description: error instanceof Error ? error.message : String(error),
+          description: describeErrorMessage(error, String(error)),
         }),
       )
       .finally(() => setPending(null));

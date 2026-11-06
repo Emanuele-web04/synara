@@ -23,6 +23,7 @@ import {
 } from "@synara/contracts";
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { describeErrorMessage } from "@synara/shared/errorMessages";
 
 import { resolveSaveAttemptRequestId } from "~/components/chat/group/groupSettingsDialog.logic";
 import { buildSettingsSkillGroups } from "~/components/settings/skillsSettingsModel";
@@ -57,7 +58,6 @@ import {
   botEditorIssue,
   botUpdateInput,
   crewCreateInputs,
-  errorMessageOf,
   findBotTemplate,
   isBotConflictError,
   missingCrewTemplates,
@@ -66,6 +66,7 @@ import {
   type BotScopeMode,
 } from "./botEditor.logic";
 import { useBotEditor, type BotEditorTarget } from "./botEditorStore";
+import { BotTemplateChip } from "./BotTemplateChip";
 import { MascotPicker } from "./MascotPicker";
 import { NewBotDialog } from "./NewBotDialog";
 import { useBotDefaultEngine } from "./useBotDefaultEngine";
@@ -258,7 +259,7 @@ function BotSheet({
       onClose();
     } catch (cause) {
       failedAttemptRef.current = { requestId, fingerprint };
-      const text = errorMessageOf(cause);
+      const text = describeErrorMessage(cause, String(cause));
       setError(isBotConflictError(text) ? { kind: "conflict" } : { kind: "message", text });
       setSaving(false);
     }
@@ -294,7 +295,7 @@ function BotSheet({
     } catch (cause) {
       setRemoving(false);
       setConfirmRemove(false);
-      setError({ kind: "message", text: errorMessageOf(cause) });
+      setError({ kind: "message", text: describeErrorMessage(cause, String(cause)) });
     }
   };
 
@@ -397,24 +398,16 @@ function BotSheet({
             >
               <span className="bot-sheet__label">{t("synbotEditor:startFrom")}</span>
               {templates.map((template) => (
-                <CapsuleButton
+                <BotTemplateChip
                   key={template.name}
-                  kind={!crewMode && form.name === template.name ? "normal" : "ghost"}
-                  small
+                  template={template}
                   chosen={!crewMode && form.name === template.name}
-                  onClick={() => {
+                  size="small"
+                  onPick={() => {
                     if (crewMode) useBotEditor.getState().openCreate({ template: template.name });
                     else update(applyBotTemplate(form, template));
                   }}
-                >
-                  <BotMascot
-                    shape={template.mascot.shape}
-                    color={template.mascot.color}
-                    size={14}
-                    still
-                  />
-                  {template.name}
-                </CapsuleButton>
+                />
               ))}
               {crew.length > 1 && !crewMode ? (
                 <CapsuleButton

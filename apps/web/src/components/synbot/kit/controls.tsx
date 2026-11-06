@@ -20,7 +20,7 @@ import {
 } from "react";
 
 import { Icon, type IconName } from "./Icon";
-import { LiquidMetal } from "./metal/Metal";
+import { LiquidMetal } from "~/components/ui/metal/LiquidMetal";
 import "./holobot.css";
 
 const classes = (...names: Array<string | false | null | undefined>) =>
@@ -132,34 +132,6 @@ export function Chip({
       {icon ? <Icon name={icon} size="xs" /> : null}
       {leading}
       <span className="hb-chip__label">{children}</span>
-    </span>
-  );
-}
-
-/** A count in a small attention capsule; nothing for zero. */
-export function CountBadge({ count, label }: { readonly count: number; readonly label?: string }) {
-  if (count <= 0) return null;
-  return (
-    <span className="hb-count" aria-label={label ?? String(count)}>
-      {count > 99 ? "99+" : count}
-    </span>
-  );
-}
-
-/** `children` (an icon button) with its CountBadge on the top-right corner. */
-export function Badged({
-  count,
-  label,
-  children,
-}: {
-  readonly count: number;
-  readonly label?: string;
-  readonly children: ReactNode;
-}) {
-  return (
-    <span className="hb-badged">
-      {children}
-      <CountBadge count={count} {...(label ? { label } : {})} />
     </span>
   );
 }
