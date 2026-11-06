@@ -587,6 +587,7 @@ export const uploadBrowserFiles = async (
     const filesForChromium = staged.files.map((file) => file.path);
     staged = undefined;
     const result = await runBetterwright<{
+      selectedFiles?: readonly { name: string; byteLength: number }[] | null;
       code?:
         | "BrowserInputUnsupported"
         | "BrowserTargetNotFound"
@@ -610,7 +611,14 @@ const details = await target.evaluate(element => ({
 if (!details.file || (!details.multiple && ${filesForChromium.length} !== 1)) return {code: "BrowserInputUnsupported"};
 if (details.disabled) return {code: "BrowserTargetNotEnabled"};
 await target.setInputFiles(${JSON.stringify(filesForChromium)});
-return {};`,
+// A successful CDP command is not proof that the input retained the files.
+// A change handler may reject, reset, replace, or immediately consume it.
+const selectedFiles = await target.evaluate(element =>
+  element instanceof HTMLInputElement && element.type === "file" && element.isConnected
+    ? Array.from(element.files || [], file => ({name: file.name, byteLength: file.size}))
+    : null
+).catch(() => null);
+return {selectedFiles};`,
     });
     if (result.code) {
       // These codes are decided before setInputFiles ran, so the staged copies
@@ -628,10 +636,27 @@ return {};`,
         effectMayHaveCommitted: false,
       });
     }
+    if (
+      !Array.isArray(result.selectedFiles) ||
+      result.selectedFiles.length !== inspected.files.length ||
+      result.selectedFiles.some(
+        (file, index) =>
+          file?.name !== inspected.files[index]!.name ||
+          file.byteLength !== inspected.files[index]!.byteLength,
+      )
+    ) {
+      // This is post-dispatch uncertainty, not an input-validation refusal.
+      // Keep staged files alive: page code may already be consuming them.
+      browserHostError({
+        code: "BrowserAmbiguousResult",
+        tabId: runtime.tabId as BrowserTabId,
+      });
+    }
     return {
       tabId: runtime.tabId as BrowserTabId,
       target: {},
       files: inspected.files.map(({ name, byteLength }) => ({ name, byteLength })),
+      selectionVerified: true,
     };
   } finally {
     if (staged && reservation) {

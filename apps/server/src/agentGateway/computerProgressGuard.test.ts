@@ -226,3 +226,31 @@ describe("ComputerProgressGuard", () => {
     expect(() => new ComputerProgressGuard(1, limit)).toThrow(TypeError);
   });
 });
+
+describe("action-scoped observed progress", () => {
+  it("clears measured scrolling without erasing earlier uncertain paste", () => {
+    const guard = new ComputerProgressGuard();
+    const paste = action("paste");
+    const scroll = action("scroll");
+    guard.record(paste, uncertain);
+    guard.record(paste, uncertain);
+    guard.record(scroll, uncertain);
+    guard.record(scroll, uncertain);
+    guard.recordVerifiedActionProgress(scroll);
+    expect(guard.check(scroll)).toBeUndefined();
+    expect(guard.check(paste)?.code).toBe("repeated_unverified_action");
+  });
+
+  it("does not clear another window or turn's history", () => {
+    const guard = new ComputerProgressGuard();
+    const scroll = action("scroll");
+    guard.record(scroll, uncertain);
+    guard.record(scroll, uncertain);
+    guard.recordVerifiedActionProgress({ ...scroll, targetKey: "other-window" });
+    guard.recordVerifiedActionProgress({
+      ...scroll,
+      scope: { ...scroll.scope, turnId: "other-turn" },
+    });
+    expect(guard.check(scroll)?.code).toBe("repeated_unverified_action");
+  });
+});

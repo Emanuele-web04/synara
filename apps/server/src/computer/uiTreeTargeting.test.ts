@@ -1,3 +1,7 @@
+import {
+  registerNativeComputerElement,
+  computerElementRefIdentity,
+} from "./computerElementIdentity.ts";
 import { describe, expect, it } from "vitest";
 
 import type { ComputerUiNode, ComputerWindowId } from "@synara/contracts";
@@ -693,5 +697,38 @@ describe("actionableElements ref data", () => {
     const digest = actionableElements(tree);
     expect(digest.items[0]!.label.length).toBeLessThan(longLabel.length);
     expect(digest.refIndex[0]!.label).toBe(longLabel);
+  });
+});
+
+describe("unnamed native controls", () => {
+  it("lists distinct unnamed controls only when their native identities are retained", () => {
+    const first = node({ role: "AXTextField", windowId: windowId("editor"), editable: true });
+    const second = node({ role: "AXTextField", windowId: windowId("editor"), editable: true });
+    const unbound = node({ role: "AXTextField", windowId: windowId("editor"), editable: true });
+    registerNativeComputerElement(first, "native-first");
+    registerNativeComputerElement(second, "native-second");
+    const result = actionableElements(
+      node({ role: "desktop", children: [first, second, unbound] }),
+    );
+    expect(result.items).toHaveLength(2);
+    expect(result.items.map((item) => item.label)).toEqual(["", ""]);
+    expect(result.refIndex.map(computerElementRefIdentity)).toEqual([
+      "native-first",
+      "native-second",
+    ]);
+  });
+
+  it("does not expose offscreen native controls or ignore a label filter", () => {
+    const field = node({
+      role: "AXTextField",
+      windowId: windowId("editor"),
+      onScreen: false,
+      editable: true,
+    });
+    registerNativeComputerElement(field, "native-hidden");
+    expect(actionableElements(field).items).toHaveLength(0);
+    const visible = node({ role: "AXTextField", windowId: windowId("editor"), editable: true });
+    registerNativeComputerElement(visible, "native-visible");
+    expect(actionableElements(visible, { labelContains: "Save" }).items).toHaveLength(0);
   });
 });

@@ -25,7 +25,7 @@ import {
   type UiTreeTargetSpec,
 } from "@synara/shared/uiTreeTargeting";
 import { clampTextToLength } from "./utf8Truncation.ts";
-import { retainComputerElementRef } from "./computerElementIdentity.ts";
+import { hasNativeComputerElement, retainComputerElementRef } from "./computerElementIdentity.ts";
 
 export interface ComputerTargetCandidate {
   readonly label: string;
@@ -452,9 +452,10 @@ export interface ComputerActionableElementFilter {
  * The labeled, on-screen, actionable elements of a UI tree — what a model
  * grounds on instead of estimating pixel coordinates from a screenshot.
  *
- * Only labeled elements are listed, because targeting is by label: an
- * unlabeled control cannot be addressed semantically, and listing it would
- * push the caller back toward coordinates. Off-screen elements are excluded
+ * Unlabelled controls are listed only when a server-owned native identity
+ * can bind an exact ref; other backends still require a label. This keeps
+ * nameless editors/buttons reachable without guessing coordinates or labels.
+ * Off-screen elements are excluded
  * too — semantic resolution refuses off-screen targets, so naming them would
  * invite a refused action; scrolling brings them on screen and they appear in
  * the next digest. Duplicate labels are kept: two same-labeled controls is
@@ -483,7 +484,7 @@ export function actionableElements(
       ACTIONABLE_ROLES.has(node.role) &&
       node.onScreen &&
       node.windowId !== null &&
-      label !== "" &&
+      (label !== "" || hasNativeComputerElement(node)) &&
       (filter.windowId === undefined || node.windowId === filter.windowId) &&
       (wanted === undefined || normalizeLabelSpaces(label).toLocaleLowerCase().includes(wanted));
     if (collectible) {

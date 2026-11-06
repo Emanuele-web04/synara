@@ -25236,47 +25236,175 @@ index 3b16eb4..c06facc 100644
 diff --git a/libs/cua-driver/rust/crates/platform-macos/src/tools/type_text.rs b/libs/cua-driver/rust/crates/platform-macos/src/tools/type_text.rs
 --- a/libs/cua-driver/rust/crates/platform-macos/src/tools/type_text.rs
 +++ b/libs/cua-driver/rust/crates/platform-macos/src/tools/type_text.rs
-@@ -449,6 +449,26 @@
+@@ -417,23 +417,26 @@
+                 accepted_chars,
+                 observed_chars,
+             })) => {
++                let observed_chars = trusted_text_readback_count(
++                    PATH_AX,
++                    observed_chars,
++                    target_in_web_area(pid, element_ptr, window_id)
++                        || crate::browser::electron_js::ElectronJs::is_electron(pid),
++                );
+                 let effect = if observed_chars.is_some() {
+                     "partial"
+                 } else {
+                     "uncertain"
+                 };
+-                let mut structured = serde_json::json!({
++                let structured = serde_json::json!({
+                     "code": "semantic_text_interrupted",
+                     "effect": effect,
+                     "reason": reason,
+                     "requested_chars": char_count,
+                     "accepted_chars": accepted_chars,
+                     "delivered_chars": observed_chars,
+-                    "retryable": observed_chars.is_some(),
++                    "retryable": false,
+                 });
+-                if let Some(delivered) = observed_chars {
+-                    structured["retry_from_character"] = serde_json::json!(delivered);
+-                }
+                 return ToolResult::error(format!(
+                     "Focus-neutral semantic text was interrupted after {accepted_chars} character request(s) were accepted; observe the exact target before retrying: {reason}"
+                 ))
+@@ -449,11 +452,28 @@
              Err(error) => Err(error),
          };
-
-+        // AX values in web editors can represent one block, a stale shim, or
-+        // a normalized value. They cannot prove a retryable partial insertion.
-+        // Apply the same surface trust boundary before incomplete errors too.
-+        let target_is_web_content = result
-+            .as_ref()
-+            .ok()
-+            .and_then(|result| result.as_ref().ok())
-+            .is_some_and(|outcome| {
-+                path_has_untrusted_web_readback(outcome.path)
-+                    && (outcome.verified || outcome.delivered_chars.is_some())
-+                    && target_in_web_area(pid, element_ptr, window_id)
-+            });
-+        let result = result.map(|result| {
-+            result.map(|mut outcome| {
-+                if target_is_web_content {
-+                    outcome.delivered_chars = None;
-+                }
-+                outcome
+ 
++        // Partial AX echoes are no more trustworthy than complete echoes in
++        // web content. Classify the surface BEFORE the partial-result branch;
++        // otherwise a fully rendered edit can be reported as "delivered 0/1"
++        // with permission to replay its supposed suffix.
++        let result = result.map(|outcome| {
++            outcome.map(|mut outcome| {
++                let web_content = path_has_untrusted_web_readback(outcome.path)
++                    && (target_in_web_area(pid, element_ptr, window_id)
++                        || crate::browser::electron_js::ElectronJs::is_electron(pid));
++                outcome.delivered_chars = trusted_text_readback_count(
++                    outcome.path,
++                    outcome.delivered_chars,
++                    web_content,
++                );
++                (outcome, web_content)
 +            })
 +        });
          match result {
-             Ok(Ok(outcome)) if outcome.delivered_chars.is_some_and(|n| n < char_count) => {
+-            Ok(Ok(outcome)) if outcome.delivered_chars.is_some_and(|n| n < char_count) => {
++            Ok(Ok((outcome, _))) if outcome.delivered_chars.is_some_and(|n| n < char_count) => {
                  let delivered_chars = outcome.delivered_chars.unwrap_or_default();
-@@ -483,9 +503,6 @@
-                 // chrome (address bar, toolbar) stays trusted. Probe ONLY when a
-                 // path with AXValue-only verification would otherwise confirm, so
-                 // native types and already-unverified deliveries pay nothing.
+                 ToolResult::error(format!(
+-                    "type_text incomplete: delivered {delivered_chars} of {char_count} character(s){}; retry only the remaining suffix",
++                    "type_text read-back observed {delivered_chars} of {char_count} requested character(s){}; inspect the target before any further input",
+                     outcome.detail
+                 ))
+                 .with_structured(serde_json::json!({
+@@ -462,11 +482,10 @@
+                     "effect": "partial",
+                     "requested_chars": char_count,
+                     "delivered_chars": delivered_chars,
+-                    "retryable": true,
+-                    "retry_from_character": delivered_chars,
++                    "retryable": false,
+                 }))
+             }
+-            Ok(Ok(outcome)) => {
++            Ok(Ok((outcome, target_is_web_content))) => {
+                 let TypeTextOutcome {
+                     detail,
+                     path,
+@@ -480,12 +499,9 @@
+                 // no edit (the Slack-search AND Chrome-on-X false-confirms). Detect
+                 // this at the ELEMENT level (an `AXWebArea` ancestor) so it covers
+                 // every browser + Electron uniformly, yet a browser's OWN native
+-                // chrome (address bar, toolbar) stays trusted. Probe ONLY when a
+-                // path with AXValue-only verification would otherwise confirm, so
+-                // native types and already-unverified deliveries pay nothing.
 -                let target_is_web_content = verified
 -                    && path_has_untrusted_web_readback(path)
 -                    && target_in_web_area(pid, element_ptr, window_id);
++                // chrome (address bar, toolbar) stays trusted. The surface was
++                // classified above for partial counts too; Electron remains
++                // untrusted even when its partial tree omits AXWebArea ancestry.
                  let verification = surface_verification(path, verified, target_is_web_content);
                  let verified = verification.verified;
                  let untrusted_web_readback = verification.untrusted_web_readback;
-@@ -950,6 +967,63 @@
+@@ -505,10 +521,10 @@
+                          result via the screenshot."
+                     } else {
+                         "For a browser tab use the `page` tool (it drives the DOM); for an \
+-                         embedded web view, re-type with the px form (x,y)."
++                         embedded web view, inspect the screenshot; do not replay this request."
+                     };
+                     (
+-                        "📨 Sent (unverified)",
++                        "📨 Requested (unverified)",
+                         format!(
+                             " — web-content surface (Chromium / WebKit / Electron): \
+                              AXValue read-back is not independent proof that the \
+@@ -517,14 +533,14 @@
+                     )
+                 } else if path == PATH_KEY_EVENTS_FG {
+                     (
+-                        "📨 Sent (unverified)",
++                        "📨 Requested (unverified)",
+                         " — driver could not confirm; verify via screenshot.".to_string(),
+                     )
+                 } else {
+                     (
+-                        "📨 Sent (unverified)",
++                        "📨 Requested (unverified)",
+                         " — driver could not confirm the text landed; verify via screenshot, \
+-                      and re-call with delivery_mode:\"foreground\" if it didn't."
++                      and never automatically replay or reroute the input."
+                             .to_string(),
+                     )
+                 };
+@@ -559,9 +575,7 @@
+                                     "px",
+                                     "Electron web view — AXValue read-back cannot prove \
+                                  that the renderer observed the input. Confirm via the \
+-                                 screenshot; if it didn't land, re-type with the \
+-                                 element px action (x,y to pixel-focus the field, then \
+-                                 type).",
++                                 screenshot. Do not replay this request through the element px action.",
+                                 )),
+                                 Some("page") => Some((
+                                     "page",
+@@ -588,8 +602,8 @@
+                         s["escalation"] = serde_json::json!({
+                             "recommended": "foreground",
+                             "reason": "background insert could not be confirmed — \
+-                                       re-call with delivery_mode:\"foreground\" if a \
+-                                       screenshot shows the text didn't land."
++                                       inspect the exact target. Do not automatically replay \
++                                       this request through foreground input."
+                         });
+                     }
+                     s
+@@ -933,6 +947,18 @@
+     }
+ }
+ 
++fn trusted_text_readback_count(
++    path: &str,
++    observed_chars: Option<usize>,
++    target_is_web_content: bool,
++) -> Option<usize> {
++    if target_is_web_content && path_has_untrusted_web_readback(path) {
++        None
++    } else {
++        observed_chars
++    }
++}
++
+ struct TypeTextOutcome {
+     detail: String,
+     path: &'static str,
+@@ -950,6 +976,63 @@
      Unverifiable,
  }
-
+ 
 +fn ax_text_delivery(
 +    progress: Option<TypedProgress>,
 +    requested_chars: usize,
@@ -25337,9 +25465,9 @@ diff --git a/libs/cua-driver/rust/crates/platform-macos/src/tools/type_text.rs b
  fn foreground_settle_ms(pid: i32, frontmost_pid: Option<i32>) -> u64 {
      if frontmost_pid == Some(pid) {
          20
-@@ -976,8 +1050,8 @@
+@@ -976,8 +1059,8 @@
  }
-
+ 
  /// Classify an observable insertion without mistaking a prefix for complete
 -/// delivery. A positive length delta is an exact delivered-character count for
 -/// insert-at-cursor typing; it is capped at the request size defensively.
@@ -25348,7 +25476,7 @@ diff --git a/libs/cua-driver/rust/crates/platform-macos/src/tools/type_text.rs b
  fn typed_progress(before: Option<&str>, after: Option<&str>, text: &str) -> TypedProgress {
      if text.is_empty() {
          return TypedProgress::Complete;
-@@ -985,21 +1059,40 @@
+@@ -985,21 +1068,40 @@
      let Some(after) = after else {
          return TypedProgress::Unverifiable;
      };
@@ -25396,8 +25524,8 @@ diff --git a/libs/cua-driver/rust/crates/platform-macos/src/tools/type_text.rs b
 +        TypedProgress::Unverifiable
      }
  }
-
-@@ -1140,10 +1233,10 @@
+ 
+@@ -1140,10 +1242,10 @@
      // it rather than being clobbered by it. Re-applying once on a failed
      // read-back covers apps that install their responder slightly late.
      if let Some((ptr, _)) = element_ptr_and_idx {
@@ -25410,17 +25538,29 @@ diff --git a/libs/cua-driver/rust/crates/platform-macos/src/tools/type_text.rs b
          }
      }
      // First-keystroke settle (foreground rung only — caller passes `settle_ms > 0`).
-@@ -1154,6 +1247,9 @@
+@@ -1154,9 +1256,21 @@
      // sites pass 0 — they have no front transition and must not pay this latency.
      if settle_ms > 0 {
          std::thread::sleep(std::time::Duration::from_millis(settle_ms));
-+    }
+     }
 +    if let Some((ptr, _)) = element_ptr_and_idx {
 +        crate::input::cancellation::gate().check_ax_target(ptr)?;
-     }
++    }
      crate::input::keyboard::type_text_with_delay(pid, text, delay_ms)?;
-
-@@ -1440,66 +1536,27 @@
++
++    // Waiting on an AX echo cannot turn it into renderer evidence. Skip the
++    // drain polling for web content after the single dispatch, and let the
++    // caller's observation verify the visible draft instead. No input replay.
++    if target_in_web_area(pid, element_ptr_and_idx, window_id)
++        || crate::browser::electron_js::ElectronJs::is_electron(pid)
++    {
++        return Ok((false, None));
++    }
+ 
+     // CGEvent posting is asynchronous with respect to the renderer. In
+     // particular, Chromium can acknowledge the posting process while a long
+     // tail remains queued. Poll the AX value until the complete payload is
+@@ -1440,66 +1554,27 @@
          } else {
              None
          };
@@ -25502,9 +25642,9 @@ diff --git a/libs/cua-driver/rust/crates/platform-macos/src/tools/type_text.rs b
          }
          ax_attempt = match ax_progress {
              Some(TypedProgress::Unchanged) if unchanged_web_readback => AxAttempt::Unverifiable,
-@@ -1716,6 +1773,115 @@
+@@ -1716,6 +1791,115 @@
      }
-
+ 
      #[test]
 +    fn editor_transformations_never_supply_a_retry_offset() {
 +        for (before, after, text) in [
@@ -25618,6 +25758,25 @@ diff --git a/libs/cua-driver/rust/crates/platform-macos/src/tools/type_text.rs b
      fn delivery_waits_through_a_partial_readback_until_complete() {
          let text = "BEGIN-payload-END";
          let mut values = std::collections::VecDeque::from([
+@@ -1839,4 +2023,18 @@
+         assert!(screen_sharing_delivery_error(true, true, Some(7)).is_none());
+         assert!(screen_sharing_delivery_error(false, false, None).is_none());
+     }
++
++    #[test]
++    fn web_text_counts_never_claim_a_delivered_prefix() {
++        for path in [PATH_AX, PATH_KEY_EVENTS, PATH_KEY_EVENTS_FG] {
++            for count in [None, Some(0), Some(1), Some(126), Some(379)] {
++                assert_eq!(trusted_text_readback_count(path, count, true), None);
++                assert_eq!(trusted_text_readback_count(path, count, false), count);
++            }
++        }
++        assert_eq!(
++            trusted_text_readback_count("renderer_oracle", Some(379), true),
++            Some(379)
++        );
++    }
+ }
 diff --git a/libs/cua-driver/rust/crates/platform-macos/src/ax/window_scope.rs b/libs/cua-driver/rust/crates/platform-macos/src/ax/window_scope.rs
 --- a/libs/cua-driver/rust/crates/platform-macos/src/ax/window_scope.rs
 +++ b/libs/cua-driver/rust/crates/platform-macos/src/ax/window_scope.rs
@@ -26960,7 +27119,7 @@ diff --git a/libs/cua-driver/rust/crates/cua-driver/src/serve.rs b/libs/cua-driv
      #[cfg(target_os = "macos")]
      {
 -        metadata["synara_native_revision"] = serde_json::json!(39);
-+        metadata["synara_native_revision"] = serde_json::json!(40);
++        metadata["synara_native_revision"] = serde_json::json!(41);
      }
      DaemonResponse::ok(metadata)
  }
