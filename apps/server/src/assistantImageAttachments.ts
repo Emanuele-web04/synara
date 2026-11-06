@@ -38,13 +38,16 @@ interface MarkdownNode {
 }
 
 // This is the same single URI-decode used by the clients, without rebasing the alias.
-function localImageReference(value: string): string | null {
+/** @internal - Exported for testing */
+export function localImageReference(value: string): string | null {
   let source = value.trim();
   if (source.startsWith("file://")) {
     try {
       const url = new URL(source);
       if (url.hostname && url.hostname !== "localhost") return null;
       source = decodeURIComponent(url.pathname);
+      // `file:///C:/dir` parses to `/C:/dir`; drop the slash so the drive path stays native.
+      if (/^\/[A-Za-z]:[\\/]/.test(source)) source = source.slice(1);
     } catch {
       return null;
     }
