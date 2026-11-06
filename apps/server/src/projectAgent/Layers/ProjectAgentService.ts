@@ -2490,6 +2490,7 @@ export const makeProjectAgentService = Effect.gen(function* () {
   const importCoordinatorGreeting = (input: {
     readonly threadId: ThreadId;
     readonly userDisplayName?: string | undefined;
+    readonly greeting?: string | undefined;
   }) =>
     Effect.gen(function* () {
       const messageId = coordinatorWelcomeMessageId(input.threadId);
@@ -2513,7 +2514,7 @@ export const makeProjectAgentService = Effect.gen(function* () {
             {
               messageId,
               role: "assistant",
-              text: coordinatorWelcomeText(welcomeName),
+              text: input.greeting ?? coordinatorWelcomeText(welcomeName),
               createdAt: greetingAt,
               updatedAt: greetingAt,
             },
@@ -3182,6 +3183,7 @@ export const makeProjectAgentService = Effect.gen(function* () {
           yield* importCoordinatorGreeting({
             threadId: coordinatorThreadId,
             userDisplayName: input.userDisplayName,
+            greeting: input.greeting,
           });
           if (!saved.automationId) {
             const automation = yield* automationService
@@ -3243,7 +3245,16 @@ export const makeProjectAgentService = Effect.gen(function* () {
                 })
                 .pipe(Effect.catch(() => Effect.void));
             }
+            // A check-in now restarts the session on the new model at once. With no
+            // worker threads there is nothing to watch: the rebind waits for the next
+            // turn instead of spending one on an empty check-in (whose reply, when the
+            // model words it rather than answering "SILENT", would land in the chat).
+            const watchesWorkers =
+              (yield* assignedWorkerThreadIds(input.projectId).pipe(
+                Effect.catch(() => Effect.succeed(new Set<ThreadId>())),
+              )).size > 0;
             if (
+              watchesWorkers &&
               latestConfig.enabled &&
               latestConfig.pausedAt === null &&
               latestConfig.archivedAt === null &&
@@ -5255,7 +5266,22 @@ export const makeProjectAgentService = Effect.gen(function* () {
                 .getProjectShellsByIds(linkedIds)
                 .pipe(Effect.catch(() => Effect.succeed([])));
               if (shells.length === 0) return "None linked yet.";
-              return shells.map((shell) => `- ${shell.title} (${shell.workspaceRoot})`).join("\n");
+              const linked = shells
+                .map((shell) => `- ${shell.title} (${shell.workspaceRoot})`)
+                .join("\n");
+              // A worker in its own worktree must not edit the original checkouts listed above.
+              const ownWorktree =
+                principal.kind === "worker"
+                  ? yield* snapshotQuery.getThreadShellById(threadId).pipe(
+                      Effect.map((shell) =>
+                        Option.isSome(shell) ? shell.value.worktreePath : null,
+                      ),
+                      Effect.catch(() => Effect.succeed(null)),
+                    )
+                  : null;
+              return ownWorktree
+                ? `${linked}\nThese are the original checkouts. Your task runs in its own worktree at ${ownWorktree}: read, edit, and run commands there, never in the paths above.`
+                : linked;
             }),
           },
           // The group's default for new threads is the configured worker
@@ -5783,6 +5809,19 @@ export const makeProjectAgentService = Effect.gen(function* () {
           .getConfig(projectId)
           .pipe(Effect.mapError(toServiceError("Failed to load coordinator for event.")));
         if (Option.isNone(config) || !config.value.enabled) return;
+        // Diff updates during a turn close their checkpoint "missing" while the
+        // same turn still runs: not a settlement (and no reason to wake the
+        // coordinator). The turn's last diff says how it finished.
+        if (
+          input.eventType === "thread.turn-diff-completed" &&
+          input.checkpointStatus === "missing" &&
+          input.turnId !== undefined &&
+          Option.isSome(shell) &&
+          shell.value.latestTurn?.turnId === input.turnId &&
+          shell.value.latestTurn.state === "running"
+        ) {
+          return;
+        }
         // A diff-completed event whose checkpoint closed missing/error belongs
         // to a turn that did not finish cleanly — e.g. a turn the recovery
         // ladder itself interrupted. Reclassify it so everything downstream
@@ -6953,6 +6992,31 @@ export const makeProjectAgentService = Effect.gen(function* () {
             Stream.succeed({ type: "snapshot" as const, overview }),
             Stream.fromQueue(liveQueue),
           );
+        }),
+      ),
+
+    streamWorkItemEvents: () =>
+      Stream.unwrap(
+        Effect.gen(function* () {
+          const liveQueue = yield* Queue.bounded<
+            Extract<ProjectAgentStreamEvent, { readonly type: "work-item-upserted" }>,
+            Cause.Done
+          >(256);
+          // Same explicit subscription as streamEvents: Stream.fromPubSub does not deliver here.
+          const subscription = yield* PubSub.subscribe(events);
+          yield* Stream.fromSubscription(subscription).pipe(
+            Stream.filter(
+              (
+                event,
+              ): event is Extract<
+                ProjectAgentStreamEvent,
+                { readonly type: "work-item-upserted" }
+              > => event.type === "work-item-upserted",
+            ),
+            Stream.runIntoQueue(liveQueue),
+            Effect.forkScoped,
+          );
+          return Stream.fromQueue(liveQueue);
         }),
       ),
   };

@@ -1,0 +1,245 @@
+/* FILE: shell.css
+   Purpose: The SynBot page inside Synara's frame (ported from HoloBot's shell/shell.css and
+            sidebar.css): the thread and the task pane side by side, the task pane over the
+            thread's right edge when the window is too narrow for both; in Synara's sidebar
+            panel, HoloBot's sidebar: the pinned tiles, "My bots" rows and the foot. Every value
+            is a kit token (kit/holobot.css). */
+
+.hb.synbot-shell {
+  position: relative;
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  min-height: 0;
+  background: var(--hb-bg);
+  color: var(--hb-text);
+}
+/* In the rail layout the route card paints the page's surface under the shell band (its
+   ::before), so the page and its thread go clear: the strip sits on the band like every
+   route's top bar, and nothing paints over the band's divider. */
+[data-sidebar-layout="rail"] .hb.synbot-shell,
+[data-sidebar-layout="rail"] .hb.synbot-shell .thread-pane {
+  background: transparent;
+}
+/* There the rows end at the block's top edge, under the band, as in every chat: no blur
+   under the strip (it would blur the rows into the band). */
+[data-sidebar-layout="rail"] .hb.synbot-shell .thread {
+  clip-path: inset(var(--app-top-strip-height) 0 0 0);
+}
+[data-sidebar-layout="rail"]
+  .hb.synbot-shell
+  .thread-pane[data-under-top]
+  > .thread-pane__top::before,
+[data-sidebar-layout="rail"]
+  .hb.synbot-shell
+  .thread-pane[data-under-top]
+  > .thread-pane__top::after {
+  display: none;
+}
+/* Too narrow for the thread and the task pane: the task pane lies over the thread's right edge. */
+.hb.synbot-shell[data-narrow] > .task-pane {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  z-index: var(--hb-z-strip);
+  width: min(var(--hb-sessions), 100%);
+  box-shadow: var(--hb-shadow-dialog);
+}
+.hb .synbot-shell__state {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  justify-content: center;
+  padding: var(--hb-gutter);
+  font-size: var(--hb-text-md);
+  color: var(--hb-muted);
+  text-align: center;
+}
+
+/* The sidebar panel: HoloBot's sidebar on Synara's panel surface. */
+.hb.synbot-sidebar {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+  color: var(--hb-text);
+  --hb-sidebar-bg: transparent;
+}
+
+/* Pinned bots: three to a row, a row of one or two centered. */
+.hb .tiles {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: var(--hb-gap-xs);
+  padding: var(--hb-gap-xs) var(--hb-gap-sm) var(--hb-gap);
+  flex-shrink: 0;
+}
+.hb .tile {
+  flex: 0 0 calc((100% - 2 * var(--hb-gap-xs)) / 3);
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--hb-gap-sm);
+  padding: var(--hb-gap) 0 var(--hb-gap-sm);
+  border: 0;
+  border-radius: var(--hb-radius-md);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+.hb .tile--selected,
+.hb .tile:hover {
+  background: var(--hb-sidebar-selected);
+}
+.hb .tile:focus-visible,
+.hb .conversation:focus-visible {
+  outline: 2px solid var(--hb-focus);
+  outline-offset: 2px;
+}
+.hb .tile__mascot {
+  position: relative;
+  display: flex;
+}
+.hb .tile__star {
+  position: absolute;
+  right: calc(-1 * var(--hb-gap-xs));
+  bottom: calc(-1 * var(--hb-gap-xs));
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--hb-badge);
+  height: var(--hb-badge);
+  box-sizing: border-box;
+  border: 2px solid var(--sidebar, var(--hb-bg));
+  border-radius: var(--hb-pill);
+  background: var(--hb-attention);
+  color: var(--hb-on-badge);
+}
+.hb .tile__name {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--hb-gap-xs);
+  max-width: 100%;
+  font-size: var(--hb-text-sm);
+  font-weight: var(--hb-weight-medium);
+  color: var(--hb-soft-text);
+}
+.hb .tile__label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* "My bots": one scroll. */
+.hb .sidebar__scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding-bottom: var(--hb-gap);
+}
+.hb .sidebar__section {
+  margin: 0;
+  padding: var(--hb-gap) calc(var(--hb-gap-sm) + var(--hb-gap-sm)) var(--hb-gap-sm);
+  font-size: var(--hb-text-xs);
+  font-weight: var(--hb-weight-semibold);
+  color: var(--hb-muted);
+}
+.hb .conversations {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 0 var(--hb-gap-sm);
+}
+.hb .conversation {
+  display: flex;
+  align-items: center;
+  gap: var(--hb-gap);
+  width: 100%;
+  padding: var(--hb-gap-sm) var(--hb-gap-sm);
+  border: 0;
+  border-radius: var(--hb-radius-md);
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.hb .conversation--selected,
+.hb .conversation:hover {
+  background: var(--hb-sidebar-selected);
+}
+.hb .conversation__text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.hb .conversation__top {
+  display: flex;
+  align-items: baseline;
+  gap: var(--hb-gap-sm);
+  min-width: 0;
+}
+.hb .conversation__title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--hb-text-md);
+  font-weight: var(--hb-weight-semibold);
+}
+.hb .conversation__time {
+  flex-shrink: 0;
+  font-size: var(--hb-text-xs);
+  color: var(--hb-muted);
+}
+.hb .conversation__status {
+  display: flex;
+  align-items: center;
+  gap: var(--hb-gap-sm);
+  min-width: 0;
+  font-size: var(--hb-text-sm);
+  color: var(--hb-muted);
+}
+.hb .conversation__status--attention {
+  color: var(--hb-attention);
+}
+.hb .conversation__preview {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.hb .conversations__none {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--hb-gap-sm);
+  margin: 0;
+  padding: var(--hb-gap-sm) var(--hb-gap);
+  font-size: var(--hb-text-sm);
+  color: var(--hb-muted);
+}
+
+/* The foot: New bot and Stop all. */
+.hb .sidebar__foot {
+  display: flex;
+  align-items: center;
+  gap: var(--hb-gap-sm);
+  padding: var(--hb-gap) var(--hb-gap) var(--hb-gap);
+  border-top: var(--hb-hairline) solid var(--hb-border);
+  flex-shrink: 0;
+}
+.hb .sidebar__foot-spacer {
+  flex: 1;
+}

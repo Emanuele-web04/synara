@@ -156,6 +156,9 @@ describe("Synara gateway tool permission name", () => {
     // Bare `synara_*` catalog names carry the namespace inside the tool name.
     "synara_project_link_repository",
     "synara_e2e_review",
+    // Hub work tools: a coordinator's background check-in must not stop on them.
+    "mcp__synara__synara_hub_list_work",
+    "mcp__synara__synara_hub_update_progress",
   ])("recognizes a Synara gateway tool: %s", (providerName) => {
     expect(isSynaraGatewayToolName(providerName)).toBe(true);
   });

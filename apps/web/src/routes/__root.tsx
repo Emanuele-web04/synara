@@ -39,7 +39,7 @@ import { QueryClient, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Throttler } from "@tanstack/react-pacer";
 
 import { APP_DISPLAY_NAME, APP_VERSION } from "../branding";
-import { isBetaFeatureOn } from "../betaFeatures";
+import { isBetaFeatureOn, SYNBOT_ON } from "../betaFeatures";
 import { DesktopWindowControls } from "../components/DesktopWindowControls";
 import { RunningChatsQuitCoordinator } from "../components/RunningChatsQuitCoordinator";
 import { AppSnapCoordinator } from "../components/AppSnapCoordinator";
@@ -117,6 +117,7 @@ import {
 import { useProjectRunStore } from "../projectRunStore";
 import { dockTerminalThreadId } from "../lib/dockTerminalScope";
 import { TaskCompletionNotifications } from "../notifications/taskCompletion";
+import { SynbotDesktopBridge } from "../components/synbot/SynbotDesktopBridge";
 import { useWorkspacePathsStore } from "../workspacePathsStore";
 import {
   isThreadDetailRetained,
@@ -392,6 +393,7 @@ function RootRouteView() {
           {!readWorkspaceFrame() && <HostDiscoverabilityPrompt />}
           {!readWorkspaceFrame() && <GlobalWhatsNewSurface />}
           <TaskCompletionNotifications />
+          {SYNBOT_ON && !readWorkspaceFrame() ? <SynbotDesktopBridge /> : null}
           <QueuedComposerDrainCoordinator />
           <NewThreadDefaultsSyncCoordinator />
           {!readWorkspaceFrame() && (

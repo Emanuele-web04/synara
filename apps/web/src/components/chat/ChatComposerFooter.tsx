@@ -26,6 +26,8 @@ interface ChatComposerFooterProps {
   interactionMode: ProviderInteractionMode;
   resetInteractionMode: () => void;
   sidebarAction: { title: string; label: string; onClick: () => void } | null;
+  /** Drawn inside the Send button under its icon: a bot chat's liquid-metal ring. */
+  sendUnderlay?: ReactNode;
   voice: {
     enabled: boolean;
     recording: boolean;
@@ -73,6 +75,7 @@ export function ChatComposerFooter({
   interactionMode,
   resetInteractionMode,
   sidebarAction,
+  sendUnderlay,
   voice,
   pendingInput,
   submission,
@@ -340,7 +343,11 @@ export function ChatComposerFooter({
                 type="submit"
                 variant="prominent"
                 size="icon-xs"
-                className={COMPOSER_ACTION_CIRCLE_CLASS_NAME}
+                className={cn(
+                  COMPOSER_ACTION_CIRCLE_CLASS_NAME,
+                  sendUnderlay ? "relative isolate overflow-hidden" : null,
+                )}
+                data-send-underlay={sendUnderlay ? "" : undefined}
                 disabled={
                   submission.busy ||
                   submission.connecting ||
@@ -369,6 +376,7 @@ export function ChatComposerFooter({
                     : undefined
                 }
               >
+                {sendUnderlay}
                 {submission.connecting || submission.busy || submission.preparingImages ? (
                   <svg
                     width="12"

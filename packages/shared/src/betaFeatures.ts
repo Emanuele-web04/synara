@@ -62,10 +62,18 @@ export const NATIVE_EDITOR_BETA_FEATURE = "native-editor";
 /** Simplified Chinese interface, native menus and app-authored permission explanations. */
 export const CHINESE_UI_BETA_FEATURE = "chinese-ui";
 
+/**
+ * SynBot (Beta only): bots built on Hubs, the main SynBot that routes work between them,
+ * delegations, bot cards and the merge proof. Beta shows SynBot in place of the Hubs UI;
+ * Stable keeps Hubs as they are until SynBot is promoted. See docs/plans/synbot.md.
+ */
+export const SYNBOT_BETA_FEATURE = "synbot";
+
 export const BETA_ONLY_FEATURES: readonly BetaOnlyFeature[] = [
   "accountProfileSync",
   ACCOUNT_INBOX_BETA_FEATURE,
   CHINESE_UI_BETA_FEATURE,
+  SYNBOT_BETA_FEATURE,
 ];
 
 /**

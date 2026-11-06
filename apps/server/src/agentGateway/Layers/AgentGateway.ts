@@ -137,6 +137,9 @@ import { TodoService } from "../../todo/Services/TodoService.ts";
 import { isServerBetaFeatureEnabled } from "../../betaFeatureGate.ts";
 import { pruneProjectedArchivedManagedWorktrees } from "../../managedWorktrees.ts";
 import { resolveThreadWorkspaceCwd } from "../../checkpointing/Utils.ts";
+import { BotService } from "../../bots/Services/BotService.ts";
+import { isServerSynbotEnabled } from "../../bots/synbotGate.ts";
+import { makeBotTools } from "../botTools.ts";
 
 const providerInstanceAvailability = (
   instance: ReturnType<typeof deriveProviderInstances>[number],
@@ -195,6 +198,9 @@ export const makeAgentGateway = Effect.gen(function* () {
   const automationService = yield* AutomationService;
   const mcpConnectors = Option.getOrUndefined(yield* Effect.serviceOption(McpConnectors));
   const projectAgentService = yield* ProjectAgentService;
+  // SynBot (Beta): optional so gateway tests and Stable builds run without it.
+  const botService = Option.getOrUndefined(yield* Effect.serviceOption(BotService));
+  const synbotOn = () => botService !== undefined && isServerSynbotEnabled();
   const todoService = yield* TodoService;
   const git = yield* GitCore;
   const gitManager = yield* GitManager;
@@ -337,6 +343,17 @@ export const makeAgentGateway = Effect.gen(function* () {
     },
   ) =>
     Effect.gen(function* () {
+      // SynBot full control: a bot chat whose turn traces back to the user's own request may
+      // drive any chat (Settings → SynBot can turn this off). Everything else keeps the checks.
+      if (synbotOn() && caller.id && caller.id !== target.id) {
+        const control = yield* botService!
+          .fullControlFor({
+            callerThreadId: ThreadId.makeUnsafe(caller.id),
+            targetThreadId: ThreadId.makeUnsafe(target.id),
+          })
+          .pipe(Effect.orElseSucceed(() => null));
+        if (control) return;
+      }
       if (runtimeModeEscalatesPrivilege(caller.runtimeMode, target.runtimeMode)) {
         return yield* Effect.fail(
           new ToolInputError(
@@ -441,6 +458,12 @@ export const makeAgentGateway = Effect.gen(function* () {
           attachments: attachmentRepository,
           serverConfig,
           createThreads: runCreateThreads,
+          ...(botService
+            ? {
+                delegatedSources: botService.delegatedSources,
+                isBotProject: botService.isBotProject,
+              }
+            : {}),
         })
       : null;
   if (hubGateway && isServerGroupsEnabled()) {
@@ -721,6 +744,7 @@ export const makeAgentGateway = Effect.gen(function* () {
                 projectionTurns,
                 callerThreadId: caller.id,
                 callerTurnId: context.callerTurnId,
+                ...(botService ? { delegatedSources: botService.delegatedSources } : {}),
                 ...(args.contextMessageIds !== undefined
                   ? {
                       contextMessageIds: yield* Effect.try({
@@ -842,6 +866,13 @@ export const makeAgentGateway = Effect.gen(function* () {
           ),
           Effect.mapError((error) => new ToolInputError(errorText(error))),
         );
+        if (synbotOn() && "id" in caller) {
+          yield* botService!.noteControl({
+            callerThreadId: ThreadId.makeUnsafe(caller.id),
+            targetThreadId: ThreadId.makeUnsafe(target.id),
+            action: "message",
+          });
+        }
         return mcpToolResultJson({ threadId: target.id, dispatched: dispatchMode });
       }).pipe(Effect.catch((error) => Effect.succeed(mcpToolResultError(errorText(error))))),
   };
@@ -880,6 +911,13 @@ export const makeAgentGateway = Effect.gen(function* () {
             createdAt: isoNow(),
           })
           .pipe(Effect.mapError((error) => new ToolInputError(errorText(error))));
+        if (synbotOn() && "id" in caller) {
+          yield* botService!.noteControl({
+            callerThreadId: ThreadId.makeUnsafe(caller.id),
+            targetThreadId: ThreadId.makeUnsafe(target.id),
+            action: "interrupt",
+          });
+        }
         // The interrupt is only *requested* here: the provider settles the turn
         // asynchronously. Reporting a constant `interrupted: true` told callers
         // the turn had stopped even when there was no turn to stop.
@@ -1730,6 +1768,8 @@ export const makeAgentGateway = Effect.gen(function* () {
     ...computerBrowserTools,
     // Offer Hub tools only when the authoritative shared feature policy enables them.
     ...(isServerGroupsEnabled() ? [...projectAgentTools, ...(hubGateway?.tools ?? [])] : []),
+    // SynBot tools are advertised only to bot chats (see botTools.ts).
+    ...(synbotOn() ? makeBotTools({ bots: botService! }) : []),
   ];
 
   // The computer family by name, read off the unfiltered catalog above: a

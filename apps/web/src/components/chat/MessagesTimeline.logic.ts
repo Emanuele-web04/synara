@@ -1031,6 +1031,7 @@ export function isStandaloneWorkEntry(
     WorkLogEntry,
     | "connectorProposalId"
     | "synaraWorkerNotice"
+    | "synbotNotice"
     | "providerHandoff"
     | "turnFailure"
     | "subagentRun"
@@ -1042,6 +1043,7 @@ export function isStandaloneWorkEntry(
   return Boolean(
     entry.connectorProposalId ||
     entry.synaraWorkerNotice ||
+    entry.synbotNotice ||
     entry.providerHandoff ||
     entry.turnFailure ||
     entry.subagentRun ||

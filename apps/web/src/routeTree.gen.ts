@@ -11,6 +11,7 @@
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as ChatRouteImport } from './routes/_chat'
 import { Route as ChatIndexRouteImport } from './routes/_chat.index'
+import { Route as ChatSynbotRouteImport } from './routes/_chat.synbot'
 import { Route as ChatSettingsRouteImport } from './routes/_chat.settings'
 import { Route as ChatRemoteRouteImport } from './routes/_chat.remote'
 import { Route as ChatPullRequestsRouteImport } from './routes/_chat.pull-requests'
@@ -36,6 +37,11 @@ const ChatRoute = ChatRouteImport.update({
 const ChatIndexRoute = ChatIndexRouteImport.update({
   id: '/',
   path: '/',
+  getParentRoute: () => ChatRoute,
+} as any)
+const ChatSynbotRoute = ChatSynbotRouteImport.update({
+  id: '/synbot',
+  path: '/synbot',
   getParentRoute: () => ChatRoute,
 } as any)
 const ChatSettingsRoute = ChatSettingsRouteImport.update({
@@ -135,6 +141,7 @@ export interface FileRoutesByFullPath {
   '/pull-requests': typeof ChatPullRequestsRouteWithChildren
   '/remote': typeof ChatRemoteRoute
   '/settings': typeof ChatSettingsRoute
+  '/synbot': typeof ChatSynbotRoute
   '/automations/$automationId': typeof ChatAutomationsAutomationIdRoute
   '/kanban/$projectId': typeof ChatKanbanProjectIdRoute
   '/automations/': typeof ChatAutomationsIndexRoute
@@ -152,6 +159,7 @@ export interface FileRoutesByTo {
   '/plugins': typeof ChatPluginsRoute
   '/remote': typeof ChatRemoteRoute
   '/settings': typeof ChatSettingsRoute
+  '/synbot': typeof ChatSynbotRoute
   '/': typeof ChatIndexRoute
   '/automations/$automationId': typeof ChatAutomationsAutomationIdRoute
   '/kanban/$projectId': typeof ChatKanbanProjectIdRoute
@@ -174,6 +182,7 @@ export interface FileRoutesById {
   '/_chat/pull-requests': typeof ChatPullRequestsRouteWithChildren
   '/_chat/remote': typeof ChatRemoteRoute
   '/_chat/settings': typeof ChatSettingsRoute
+  '/_chat/synbot': typeof ChatSynbotRoute
   '/_chat/': typeof ChatIndexRoute
   '/_chat/automations/$automationId': typeof ChatAutomationsAutomationIdRoute
   '/_chat/kanban/$projectId': typeof ChatKanbanProjectIdRoute
@@ -197,6 +206,7 @@ export interface FileRouteTypes {
     | '/pull-requests'
     | '/remote'
     | '/settings'
+    | '/synbot'
     | '/automations/$automationId'
     | '/kanban/$projectId'
     | '/automations/'
@@ -214,6 +224,7 @@ export interface FileRouteTypes {
     | '/plugins'
     | '/remote'
     | '/settings'
+    | '/synbot'
     | '/'
     | '/automations/$automationId'
     | '/kanban/$projectId'
@@ -235,6 +246,7 @@ export interface FileRouteTypes {
     | '/_chat/pull-requests'
     | '/_chat/remote'
     | '/_chat/settings'
+    | '/_chat/synbot'
     | '/_chat/'
     | '/_chat/automations/$automationId'
     | '/_chat/kanban/$projectId'
@@ -265,6 +277,13 @@ declare module '@tanstack/react-router' {
       path: '/'
       fullPath: '/'
       preLoaderRoute: typeof ChatIndexRouteImport
+      parentRoute: typeof ChatRoute
+    }
+    '/_chat/synbot': {
+      id: '/_chat/synbot'
+      path: '/synbot'
+      fullPath: '/synbot'
+      preLoaderRoute: typeof ChatSynbotRouteImport
       parentRoute: typeof ChatRoute
     }
     '/_chat/settings': {
@@ -423,6 +442,7 @@ interface ChatRouteChildren {
   ChatPullRequestsRoute: typeof ChatPullRequestsRouteWithChildren
   ChatRemoteRoute: typeof ChatRemoteRoute
   ChatSettingsRoute: typeof ChatSettingsRoute
+  ChatSynbotRoute: typeof ChatSynbotRoute
   ChatIndexRoute: typeof ChatIndexRoute
   ChatKanbanProjectIdRoute: typeof ChatKanbanProjectIdRoute
   ChatGroupsIndexRoute: typeof ChatGroupsIndexRoute
@@ -441,6 +461,7 @@ const ChatRouteChildren: ChatRouteChildren = {
   ChatPullRequestsRoute: ChatPullRequestsRouteWithChildren,
   ChatRemoteRoute: ChatRemoteRoute,
   ChatSettingsRoute: ChatSettingsRoute,
+  ChatSynbotRoute: ChatSynbotRoute,
   ChatIndexRoute: ChatIndexRoute,
   ChatKanbanProjectIdRoute: ChatKanbanProjectIdRoute,
   ChatGroupsIndexRoute: ChatGroupsIndexRoute,

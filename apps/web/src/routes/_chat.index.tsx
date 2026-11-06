@@ -1,24 +1,29 @@
 // FILE: _chat.index.tsx
 // Purpose: Restores the last chat route on app launch, falling back to a fresh home-chat draft.
-//          Also the landing for a Space that has nothing to open.
+//          Also the landing for a Space that has nothing to open. SynBot (Beta): a window closed
+//          on the SynBot page reopens there.
 // Layer: Routing
 // Depends on: the shared restore/create route surface plus the home-chat new-chat handler.
 
 import { SpaceId, type ProjectId } from "@synara/contracts";
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, useNavigate } from "@tanstack/react-router";
+import { useEffect, useState } from "react";
 
+import { SYNBOT_ON } from "../betaFeatures";
 import {
   RestoreOrCreateChatRoute,
   type RestoreRouteResolver,
 } from "../components/RestoreOrCreateChatRoute";
 import { useProjectAgentSummariesStore } from "../components/chat/project/useProjectAgentSummaries";
 import { readSidebarUiState } from "../components/Sidebar.uiState";
+import { SplashScreen } from "../components/SplashScreen";
 import { useComposerDraftStore } from "../composerDraftStore";
 import { useHandleNewChat } from "../hooks/useHandleNewChat";
 import { VOID_SPACE_KEY } from "../lib/spaceGrouping";
 import { collectGroupProjectIds } from "../lib/groupProjects";
 import { resolveSplitViewThreadIds, useSplitViewStore } from "../splitViewStore";
 import { EMPTY_THREAD_IDS, useStore } from "../store";
+import { readSynbotPageMemory } from "../synbot/synbotRouteMemory";
 import { useWorkspacePathsStore } from "../workspacePathsStore";
 import { resolveChatIndexRestoreRoute, type ChatIndexLandingSpace } from "./-chatIndexRoute.logic";
 
@@ -35,6 +40,14 @@ export interface ChatIndexSearch {
 function ChatIndexRouteView() {
   const { handleNewChat } = useHandleNewChat();
   const landingSpaceKey = Route.useSearch({ select: (search) => search.space });
+  const navigate = useNavigate();
+  // Read once: the SynBot page the window was on when it closed (a Space landing is not a launch).
+  const [synbotPage] = useState(() =>
+    SYNBOT_ON && landingSpaceKey === undefined ? readSynbotPageMemory() : null,
+  );
+  useEffect(() => {
+    if (synbotPage) void navigate({ to: "/synbot", search: synbotPage, replace: true });
+  }, [navigate, synbotPage]);
   const threadIds = useStore((state) => state.threadIds ?? EMPTY_THREAD_IDS);
   const projects = useStore((state) => state.projects);
   const summariesByProjectId = useProjectAgentSummariesStore((state) => state.summariesByProjectId);
@@ -93,6 +106,8 @@ function ChatIndexRouteView() {
       landingSpace,
     });
   };
+
+  if (synbotPage) return <SplashScreen />;
 
   return (
     <RestoreOrCreateChatRoute

@@ -391,8 +391,14 @@ bootstrap removes WebRTC capabilities before page scripts and stops parsing if t
 cannot be enforced. HTML messages cannot open external URLs through the host.
 
 The list currently holds `remoteConnections`, `accountProfileSync`,
-`accountInbox` (account-saved Inbox history), and `chinese-ui`. MCP Connectors and
-the native editor are available in Stable and Beta.
+`accountInbox` (account-saved Inbox history), `chinese-ui`, and `synbot` (SynBot, see
+[docs/synbot.md](docs/synbot.md)). MCP Connectors and the native editor are available in
+Stable and Beta.
+
+SynBot (`synbot`) runs on the Hubs engine and replaces the Hubs UI where it ships: Beta shows
+the SynBot page instead of Hubs, and on first start pauses the Hubs that are not bots (nothing is
+deleted). Stable keeps Hubs unchanged and refuses every `bots.*` RPC and bot gateway tool. Its
+tables (migration 143) are additive.
 
 Simplified Chinese (`chinese-ui`) is available in non-Stable builds. Stable keeps English and Spanish, hides Chinese
 from Language settings, and ignores saved or programmatic Chinese selections without erasing

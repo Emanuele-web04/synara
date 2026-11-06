@@ -9,7 +9,7 @@ import {
   type ProviderKind,
   type SidechatExpiry,
 } from "@synara/contracts";
-import { GROUPS_ON, VISIBLE_PROVIDER_DESCRIPTORS } from "../betaFeatures";
+import { HUBS_UI_ON, VISIBLE_PROVIDER_DESCRIPTORS } from "../betaFeatures";
 import { sameAppSnapShortcut } from "@synara/shared/appSnapShortcut";
 import { desktopFlavorFromProtocol } from "@synara/shared/betaFeatures";
 import { SafariAccessSetupButton } from "../components/SafariAccessOnboarding";
@@ -84,6 +84,7 @@ import { ProviderUsageSettingsPanel } from "../components/settings/ProviderUsage
 import { ExternalMcpSettingsPanel } from "../components/settings/ExternalMcpSettingsPanel";
 import { ConnectionsSettingsPanel } from "../components/settings/ConnectionsSettingsPanel";
 import { McpConnectorsSettingsPanel } from "../components/settings/McpConnectorsSettingsPanel";
+import { SynbotSettingsPanel } from "../components/synbot/settings/SynbotSettingsPanel";
 import {
   SettingResetButton,
   SettingsSegmentedControl,
@@ -514,7 +515,7 @@ function SettingsRouteView() {
     ...(settings.showChatsSection !== defaults.showChatsSection
       ? ["settings:changed_chatsSection"]
       : []),
-    ...(GROUPS_ON && settings.showGroupsSection !== defaults.showGroupsSection
+    ...(HUBS_UI_ON && settings.showGroupsSection !== defaults.showGroupsSection
       ? ["settings:hubsSection"]
       : []),
     ...(settings.showAutomationRunThreads !== defaults.showAutomationRunThreads
@@ -986,7 +987,7 @@ function SettingsRouteView() {
           ariaLabel: t("settings:showTheChatsSectionInTheSidebar"),
         })}
 
-        {GROUPS_ON
+        {HUBS_UI_ON
           ? renderBooleanSettingRow({
               id: "setting-hubs",
               settingKey: "showGroupsSection",
@@ -1870,6 +1871,8 @@ function SettingsRouteView() {
         );
       case "skills":
         return <SkillsSettingsPanel />;
+      case "synbot":
+        return <SynbotSettingsPanel />;
       case "usage":
         return <ProviderUsageSettingsPanel />;
       default:

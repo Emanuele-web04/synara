@@ -49,12 +49,34 @@ export function useWorkspaceComputers() {
     if (frame) frame.controller.navigate(path);
     else appHistory.push(path);
   };
+  /** Opens `path` on that computer: its own page here, a connected one's in its workspace.
+   * False (with a toast) when it is not connected. */
+  const openOn = (environmentId: string, path: string): boolean => {
+    if (environmentId === localId) {
+      navigate(path);
+      return true;
+    }
+    const session = (frame?.controller.sessions ?? readWorkspaceSessions)().find(
+      (item) => item.host.executionScope.environmentId === environmentId,
+    );
+    if (!session?.navigation || session.error || session.summary?.state !== "open") {
+      toastManager.add({
+        type: "error",
+        title: "Computer unavailable",
+        description: "Reconnect this computer in Connections and try again.",
+      });
+      return false;
+    }
+    navigate(workspaceRoute(environmentId, path));
+    return true;
+  };
   return {
     computers,
     sessions,
     localId,
     currentId: context?.execution.environmentId ?? localId,
     navigate,
+    openOn,
   };
 }
 
@@ -124,27 +146,10 @@ export function WorkspaceSurfaceComputerPicker({
 }: {
   path: "/tasks" | "/kanban" | "/inbox" | "/pull-requests";
 }) {
-  const { computers, localId, currentId, navigate } = useWorkspaceComputers();
-  const frame = readWorkspaceFrame();
+  const { computers, currentId, navigate, openOn } = useWorkspaceComputers();
   if (readExecutionContext()?.controller.capabilities.remoteConnections !== true) return null;
   const select = (environmentId: string) => {
-    if (environmentId === currentId) return;
-    if (environmentId === localId) {
-      navigate(path);
-      return;
-    }
-    const session = (frame?.controller.sessions ?? readWorkspaceSessions)().find(
-      (item) => item.host.executionScope.environmentId === environmentId,
-    );
-    if (!session?.navigation || session.error || session.summary?.state !== "open") {
-      toastManager.add({
-        type: "error",
-        title: "Computer unavailable",
-        description: "Reconnect this computer in Connections and try again.",
-      });
-      return;
-    }
-    navigate(workspaceRoute(environmentId, path));
+    if (environmentId !== currentId) openOn(environmentId, path);
   };
   return (
     <div className="min-w-0 [-webkit-app-region:no-drag]">
