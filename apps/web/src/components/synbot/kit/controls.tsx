@@ -279,8 +279,6 @@ export function Switch({
 export interface SegmentedOption<T extends string> {
   readonly value: T;
   readonly label: string;
-  /** A small glyph before the label. */
-  readonly icon?: ReactNode;
 }
 
 /** One choice among a few, the current one highlighted; a radio group (arrow keys move). */
@@ -339,7 +337,6 @@ export function Segmented<T extends string>({
               if (!selected) onChange(option.value);
             }}
           >
-            {option.icon}
             {option.label}
           </button>
         );
