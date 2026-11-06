@@ -152,11 +152,11 @@ export function ConnectionsThisComputer({
         <SettingsCard>
           {onViewProPlans ? (
             <SettingsListRow
-              title="Synara Pro"
-              description={`Pro includes remote access to this ${computerNoun}. Local use stays free.`}
+              title="Synara Alto"
+              description={`Alto includes remote access to this ${computerNoun}. Local use stays free.`}
               actions={
                 <Button size="xs" shape="capsule" variant="subtle" onClick={onViewProPlans}>
-                  View Pro plans
+                  View Alto plans
                 </Button>
               }
             />

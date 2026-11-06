@@ -446,8 +446,8 @@ describe("Connections settings", () => {
       await vi.waitFor(() => expect(fixture.billingStatus).toHaveBeenCalledOnce());
       await expect.element(page.getByRole("button", { name: "Connect a device" })).toBeVisible();
       if (access === "none") {
-        await expect.element(page.getByText("Synara Pro", { exact: true })).toBeVisible();
-        await page.getByRole("button", { name: "View Pro plans" }).click();
+        await expect.element(page.getByText("Synara Alto", { exact: true })).toBeVisible();
+        await page.getByRole("button", { name: "View Alto plans" }).click();
         expect(fixture.navigate).toHaveBeenCalledWith({
           to: "/settings",
           search: { section: "profile" },
@@ -458,7 +458,7 @@ describe("Connections settings", () => {
           .toBeVisible();
       } else {
         await expect
-          .element(page.getByRole("button", { name: "View Pro plans" }))
+          .element(page.getByRole("button", { name: "View Alto plans" }))
           .not.toBeInTheDocument();
       }
     },

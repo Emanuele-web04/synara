@@ -89,8 +89,8 @@ function BillingAccountPanel({ status, scope }: { status: AccountStatus | null; 
       <SettingsCard>
         {!signedIn ? (
           <SettingsListRow
-            title="Synara Pro"
-            description="Local desktop use stays free. Pro enables remote access."
+            title="Synara Alto"
+            description="Local desktop use stays free. Alto enables remote access."
             actions={
               <Button
                 variant="outline"
@@ -125,7 +125,7 @@ function BillingAccountPanel({ status, scope }: { status: AccountStatus | null; 
         ) : (
           <>
             <SettingsListRow
-              title={sandbox ? "Test Synara Pro" : "Synara Pro"}
+              title={sandbox ? "Test Synara Alto" : "Synara Alto"}
               description={subscriptionDescription(billing)}
               actions={
                 <Button
@@ -199,14 +199,14 @@ function BillingAccountPanel({ status, scope }: { status: AccountStatus | null; 
 function subscriptionDescription(status: AccountBillingStatus): string {
   const sandbox = status.environment === "sandbox";
   if (status.cancelAtPeriodEnd && status.validUntil) {
-    return `Ends ${new Date(status.validUntil).toLocaleDateString()}. Local desktop use stays free. Pro enables remote access.${sandbox ? " No real payments are taken." : ""}`;
+    return `Ends ${new Date(status.validUntil).toLocaleDateString()}. Local desktop use stays free. Alto enables remote access.${sandbox ? " No real payments are taken." : ""}`;
   }
   if (status.access === "granted") {
     return sandbox
-      ? "Access confirmed in Polar sandbox. Local desktop use stays free. Pro enables remote access."
-      : "Local desktop use stays free. Pro enables remote access.";
+      ? "Access confirmed in Polar sandbox. Local desktop use stays free. Alto enables remote access."
+      : "Local desktop use stays free. Alto enables remote access.";
   }
   return sandbox
-    ? "Local desktop use stays free. Pro enables remote access. Try monthly or annual test billing. No real payments are taken."
-    : "Local desktop use stays free. Pro enables remote access.";
+    ? "Local desktop use stays free. Alto enables remote access. Try monthly or annual test billing. No real payments are taken."
+    : "Local desktop use stays free. Alto enables remote access.";
 }
