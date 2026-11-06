@@ -471,7 +471,7 @@ export function createV1Routes(deps: {
             c,
             403,
             "subscription_required",
-            "Remote access requires an active Pro subscription",
+            "Remote access requires an active Synara Alto subscription",
           )
         : errorResponse(
             c,
