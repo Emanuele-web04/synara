@@ -11,6 +11,7 @@ import { expect, it } from "vitest";
 import {
   stageAssistantImageAttachments,
   cancelAssistantImageAttachments,
+  localImageReference,
 } from "./assistantImageAttachments.ts";
 import { LOCAL_LOOPBACK_ATTACHMENT_PRINCIPAL } from "./managedAttachmentPrincipal.ts";
 import { ManagedAttachmentRepositoryLive } from "./persistence/Layers/ManagedAttachments.ts";
@@ -21,6 +22,13 @@ const png = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII=",
   "base64",
 );
+
+it("drops the leading slash from Windows file URLs", () => {
+  expect(localImageReference("file:///C:/Users/me/shot%20one.png")).toBe(
+    "C:/Users/me/shot one.png",
+  );
+  expect(localImageReference("file:///Users/me/shot.png")).toBe("/Users/me/shot.png");
+});
 
 it("keeps lexical and real image scope paired after discovering a sibling root", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "inline-image-scope-"));
