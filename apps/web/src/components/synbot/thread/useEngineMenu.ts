@@ -10,9 +10,10 @@
 import type { ModelSelection, ProviderKind } from "@synara/contracts";
 import { getDefaultModel } from "@synara/shared/model";
 import { PROVIDER_DESCRIPTORS } from "@synara/shared/providerMetadata";
-import { useMemo, useState } from "react";
+import { createElement, useMemo, useState } from "react";
 
 import { useAppSettings } from "~/appSettings";
+import { ProviderIcon } from "~/components/ProviderIcon";
 import { useProviderModelCatalog } from "~/hooks/useProviderModelCatalog";
 import { useProviderStatusesForLocalConfig } from "~/hooks/useProviderStatusesForLocalConfig";
 import { useTranslation } from "~/i18n";
@@ -32,9 +33,12 @@ export function engineLabel(selection: ModelSelection, modelName?: string | null
 export function useEngineMenu({
   selection,
   onChange,
+  withProviderIcons = false,
 }: {
   readonly selection: ModelSelection;
   readonly onChange: (next: ModelSelection) => void;
+  /** Each engine with its provider's logo (the New bot steps). */
+  readonly withProviderIcons?: boolean;
 }) {
   const { t } = useTranslation();
   const { settings } = useAppSettings();
@@ -72,6 +76,9 @@ export function useEngineMenu({
     ...providers.map((provider) => ({
       id: `engine:${provider}`,
       label: providerName(provider),
+      ...(withProviderIcons
+        ? { glyph: createElement(ProviderIcon, { provider, className: "size-4" }) }
+        : {}),
       checked: provider === selection.provider,
       onSelect: () => {
         if (provider === selection.provider) return;

@@ -1,6 +1,7 @@
 // FILE: BotSheet.tsx
-// Purpose: The bot sheet (HoloBot's bots/BotSheet.tsx and BotSheetHost.tsx): a new bot can start
-//          from a role (templates) or make the coding crew at once; then its mascot (shape and
+// Purpose: The bot sheet (HoloBot's bots/BotSheet.tsx and BotSheetHost.tsx). The host shows a
+//          new bot in steps (NewBotDialog) and the crew and every edit here. The coding crew
+//          makes its missing bots at once; a bot's sheet has its mascot (shape and
 //          color), name and role, where it works (every project or some, optionally only some
 //          folders), its chat engine and its tasks' engine, whether it starts on its own, its
 //          instructions, pinned skills and tile. Create sends `bots.create` (a request id per
@@ -12,14 +13,11 @@
 
 import {
   BOT_INSTRUCTIONS_MAX_LENGTH,
-  BOT_MASCOT_COLORS,
-  BOT_MASCOT_SHAPES,
   BOT_NAME_MAX_LENGTH,
   BOT_PINNED_SKILLS_MAX,
   BOT_ROLE_MAX_LENGTH,
   type Bot,
   type BotAutonomy,
-  type BotMascotShape,
   type ModelSelection,
   type ProjectId,
 } from "@synara/contracts";
@@ -30,14 +28,11 @@ import { resolveSaveAttemptRequestId } from "~/components/chat/group/groupSettin
 import { buildSettingsSkillGroups } from "~/components/settings/skillsSettingsModel";
 import { useTranslation } from "~/i18n";
 import { skillsCatalogQueryOptions } from "~/lib/providerDiscoveryReactQuery";
-import { isOrdinarySpaceProject } from "~/lib/spaces";
 import { readNativeApi } from "~/nativeApi";
-import { useStore } from "~/store";
 import { useOpenBot } from "~/components/synbot/synbotNav";
 import { removeBot } from "~/synbot/synbotActions";
 import { orderedBots } from "~/synbot/synbotState.logic";
 import { startSynbotLiveSync, useSynbotStore } from "~/synbot/synbotStore";
-import { useWorkspacePathsStore } from "~/workspacePathsStore";
 
 import { BotFace } from "../BotFace";
 import { AlertDialog, Dialog } from "../kit/Dialog";
@@ -71,14 +66,11 @@ import {
   type BotScopeMode,
 } from "./botEditor.logic";
 import { useBotEditor, type BotEditorTarget } from "./botEditorStore";
+import { MascotPicker } from "./MascotPicker";
+import { NewBotDialog } from "./NewBotDialog";
 import { useBotDefaultEngine } from "./useBotDefaultEngine";
+import { useBotProjects } from "./useBotProjects";
 import "./bots.css";
-
-/** Every shape a bot may take: all but SynBot's reserved mark. */
-const PICKER_SHAPES: readonly BotMascotShape[] = BOT_MASCOT_SHAPES.filter(
-  (shape) => shape !== "synara",
-);
-const COLOR_KEYS = ["blue", "orange", "green", "purple", "red", "teal", "yellow", "gray"] as const;
 
 type SaveError =
   | { readonly kind: "conflict" }
@@ -105,30 +97,14 @@ export function BotSheetHost() {
   }, [botMissing, close]);
 
   if (!open || !target || (target.mode === "edit" && !bot)) return null;
+  // A new bot is made in steps; the crew and every edit use the whole sheet.
+  if (
+    target.mode === "create" &&
+    target.template?.toLowerCase() !== BOT_EDITOR_CREW_TEMPLATE.toLowerCase()
+  ) {
+    return <NewBotDialog key={session} target={target} bots={bots} onClose={close} />;
+  }
   return <BotSheet key={session} target={target} bot={bot} bots={bots} onClose={close} />;
-}
-
-/** Ordinary projects, by name: where a bot can work. */
-function useProjects() {
-  const projects = useStore((store) => store.projects);
-  const homeDir = useWorkspacePathsStore((state) => state.homeDir);
-  const chatWorkspaceRoot = useWorkspacePathsStore((state) => state.chatWorkspaceRoot);
-  const studioWorkspaceRoot = useWorkspacePathsStore((state) => state.studioWorkspaceRoot);
-  const groupsWorkspaceRoot = useWorkspacePathsStore((state) => state.groupsWorkspaceRoot);
-  return useMemo(
-    () =>
-      projects
-        .filter((project) =>
-          isOrdinarySpaceProject(project, {
-            homeDir,
-            chatWorkspaceRoot,
-            studioWorkspaceRoot,
-            groupsWorkspaceRoot,
-          }),
-        )
-        .toSorted((left, right) => left.name.localeCompare(right.name)),
-    [chatWorkspaceRoot, groupsWorkspaceRoot, homeDir, projects, studioWorkspaceRoot],
-  );
 }
 
 function EngineField({
@@ -191,7 +167,7 @@ function BotSheet({
   const { t, formatLocale } = useTranslation();
   const openBot = useOpenBot();
   const defaultEngine = useBotDefaultEngine();
-  const projects = useProjects();
+  const projects = useBotProjects();
   const creating = target.mode === "create";
   const main = bot?.kind === "main";
   const blankMascotIndex = bots.filter((entry) => entry.kind !== "main").length;
@@ -508,47 +484,10 @@ function BotSheet({
                 {main ? (
                   <p className="bot-sheet__hint">{t("synbotEditor:mainDescription")}</p>
                 ) : (
-                  <div className="bot-sheet__pickers">
-                    <div
-                      className="bot-sheet__row"
-                      role="radiogroup"
-                      aria-label={t("synbotEditor:shape")}
-                    >
-                      {PICKER_SHAPES.map((shape) => (
-                        <button
-                          key={shape}
-                          type="button"
-                          role="radio"
-                          aria-checked={effective.mascot.shape === shape}
-                          aria-label={t(`synbotEditor:shape_${shape}`)}
-                          title={t(`synbotEditor:shape_${shape}`)}
-                          className="bot-sheet__swatch"
-                          onClick={() => update({ mascot: { ...effective.mascot, shape } })}
-                        >
-                          <BotMascot shape={shape} color={effective.mascot.color} size={22} still />
-                        </button>
-                      ))}
-                    </div>
-                    <div
-                      className="bot-sheet__row"
-                      role="radiogroup"
-                      aria-label={t("synbotEditor:color")}
-                    >
-                      {BOT_MASCOT_COLORS.map((color, index) => (
-                        <button
-                          key={color}
-                          type="button"
-                          role="radio"
-                          aria-checked={effective.mascot.color === color}
-                          aria-label={t(`synbotEditor:color_${COLOR_KEYS[index] ?? "gray"}`)}
-                          title={t(`synbotEditor:color_${COLOR_KEYS[index] ?? "gray"}`)}
-                          className="bot-sheet__color"
-                          style={{ background: color }}
-                          onClick={() => update({ mascot: { ...effective.mascot, color } })}
-                        />
-                      ))}
-                    </div>
-                  </div>
+                  <MascotPicker
+                    mascot={effective.mascot}
+                    onChange={(mascot) => update({ mascot })}
+                  />
                 )}
               </div>
               <div className="bot-sheet__pair">

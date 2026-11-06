@@ -9,10 +9,15 @@ import { create } from "zustand";
 
 /**
  * `create.template`: a template name ("Frontend"), "crew" for the three-bot crew, or null for
- * the template picker. `edit.botId`: the bot (its Hub project id).
+ * the template picker. `create.startAt`: "bot" when step one already picked this computer
+ * (on another computer's page), so the New bot steps go on from the Bot step. `edit.botId`: the bot (its Hub project id).
  */
 export type BotEditorTarget =
-  | { readonly mode: "create"; readonly template: string | null }
+  | {
+      readonly mode: "create";
+      readonly template: string | null;
+      readonly startAt?: "bot";
+    }
   | { readonly mode: "edit"; readonly botId: ProjectId };
 
 interface BotEditorState {
@@ -23,7 +28,7 @@ interface BotEditorState {
   readonly session: number;
   /** A save or remove is in flight: Escape and the backdrop do not close the sheet. */
   readonly busy: boolean;
-  readonly openCreate: (options?: { readonly template?: string }) => void;
+  readonly openCreate: (options?: { readonly template?: string; readonly startAt?: "bot" }) => void;
   readonly openEdit: (botId: string) => void;
   readonly close: () => void;
   readonly setBusy: (busy: boolean) => void;
@@ -37,7 +42,11 @@ export const useBotEditor = create<BotEditorState>()((set) => ({
   openCreate: (options) =>
     set((state) => ({
       open: true,
-      target: { mode: "create", template: options?.template ?? null },
+      target: {
+        mode: "create",
+        template: options?.template ?? null,
+        ...(options?.startAt ? { startAt: options.startAt } : {}),
+      },
       session: state.session + 1,
     })),
   openEdit: (botId) =>

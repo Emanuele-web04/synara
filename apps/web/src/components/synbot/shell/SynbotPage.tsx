@@ -2,13 +2,14 @@
 // Purpose: The SynBot page (HoloBot's shell/Shell.tsx inside Synara's frame): the selected bot's
 //          thread (`?bot=`, SynBot without it) and, when a task is open (`?task=`), its own
 //          thread in the right pane; when the window is too narrow for both, the task pane lies
-//          over the thread's right edge. The bot sheet opens over it. Synara's app rail and
+//          over the thread's right edge. The bot sheet opens over it (`?new=bot`: New bot at its
+//          Bot step, then the parameter is dropped). Synara's app rail and
 //          sidebar panel (SynbotSidebar) stay around it.
 // Layer: SynBot UI (route component for /synbot)
 // Exports: default SynbotPage
 
 import { ThreadId } from "@synara/contracts";
-import { useSearch } from "@tanstack/react-router";
+import { useNavigate, useSearch } from "@tanstack/react-router";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import { useTranslation } from "~/i18n";
@@ -18,6 +19,7 @@ import { ensureSynbotMain, startSynbotLiveSync, useSynbotStore } from "~/synbot/
 
 import { CHAT_CONTENT_CARD_CLASS_NAME } from "../../chat/composerPickerStyles";
 import { BotSheetHost } from "../editor/BotSheet";
+import { useBotEditor } from "../editor/botEditorStore";
 import { TaskPane } from "../thread/TaskPane";
 import { ThreadPane } from "../thread/ThreadPane";
 import "../kit/holobot.css";
@@ -55,6 +57,17 @@ export default function SynbotPage() {
     startSynbotLiveSync();
     void ensureSynbotMain();
   }, []);
+  // Step one chose this computer on another computer's page: go on from the Bot step.
+  const navigate = useNavigate();
+  useEffect(() => {
+    if (search.new !== "bot") return;
+    useBotEditor.getState().openCreate({ startAt: "bot" });
+    void navigate({
+      to: "/synbot",
+      search: { ...(search.bot ? { bot: search.bot } : {}) },
+      replace: true,
+    });
+  }, [navigate, search.bot, search.new]);
 
   const bot = botById(data, search.bot) ?? orderedBots(data.bots).main;
   const taskThreadId = search.task ? ThreadId.makeUnsafe(search.task) : null;
