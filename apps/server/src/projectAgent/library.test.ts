@@ -45,7 +45,21 @@ const ServerConfigLayer = ServerConfig.layerTest(process.cwd(), {
 });
 const TestLayer = Layer.mergeAll(
   NodeServices.layer,
-  GitCoreLive.pipe(Layer.provide(ServerConfigLayer), Layer.provide(NodeServices.layer)),
+  Layer.effect(
+    GitCore,
+    Effect.gen(function* () {
+      const git = yield* GitCore;
+      // Detached automatic maintenance can outlive a completed commit and race
+      // scoped fixture removal. Keep it inside the actual Git command lifetime.
+      const execute: GitCoreShape["execute"] = (input) =>
+        git.execute({ ...input, args: ["-c", "maintenance.autoDetach=false", ...input.args] });
+      return { ...git, execute };
+    }),
+  ).pipe(
+    Layer.provide(GitCoreLive),
+    Layer.provide(ServerConfigLayer),
+    Layer.provide(NodeServices.layer),
+  ),
 );
 
 const makeTmpDir = Effect.gen(function* () {
