@@ -100,6 +100,7 @@ export function useChatTranscriptScroll({
   const pendingScrollGestureRef = useRef<{
     container: HTMLElement;
     scrollTop: number;
+    lowestScrollTop: number;
     wasFollowing: boolean;
     keyboard?: boolean;
   } | null>(null);
@@ -319,7 +320,15 @@ export function useChatTranscriptScroll({
   }, [legendListRef, onIsAtEndChange]);
   const onMessagesPointerCancelBase = releaseTranscriptScrollGesture;
   const onMessagesPointerUpBase = releaseTranscriptScrollGesture;
-  const onMessagesScrollBase = useCallback(() => {}, []);
+  const onMessagesScrollBase = useCallback(() => {
+    const container = legendListRef.current?.getScrollableNode();
+    const pending = pendingScrollGestureRef.current;
+    if (container instanceof HTMLElement && pending?.container === container) {
+      // Virtual-row compensation can raise scrollTop again before the delayed
+      // gesture check. Retain proof that the user's gesture actually moved up.
+      pending.lowestScrollTop = Math.min(pending.lowestScrollTop, container.scrollTop);
+    }
+  }, [legendListRef]);
   const onMessagesTouchEndBase = releaseTranscriptScrollGesture;
   const onMessagesTouchMoveBase = useCallback(() => {
     clearTranscriptAutoFollow();
@@ -349,6 +358,7 @@ export function useChatTranscriptScroll({
           : {
               container,
               scrollTop: container.scrollTop,
+              lowestScrollTop: container.scrollTop,
               wasFollowing:
                 isFollowingFromViewport(container) &&
                 (!upward || isScrollContainerNearBottom(container, 1)),
@@ -361,7 +371,8 @@ export function useChatTranscriptScroll({
         pendingScrollGestureFrameRef.current = window.requestAnimationFrame(() => {
           pendingScrollGestureFrameRef.current = null;
           pendingScrollGestureRef.current = null;
-          if (origin.wasFollowing && container.scrollTop >= origin.scrollTop) {
+          const movedUp = origin.lowestScrollTop < origin.scrollTop - 1;
+          if (origin.wasFollowing && !movedUp && container.scrollTop >= origin.scrollTop) {
             // A nested or no-op wheel must not strand follow, even if new text
             // increased the distance from the bottom while the gesture settled.
             setTranscriptScrollDetached(false);
@@ -422,6 +433,7 @@ export function useChatTranscriptScroll({
             : {
                 container,
                 scrollTop: container.scrollTop,
+                lowestScrollTop: container.scrollTop,
                 wasFollowing: isFollowingFromViewport(container),
                 keyboard: true,
               };
@@ -444,7 +456,8 @@ export function useChatTranscriptScroll({
       const check = () => {
         pendingScrollGestureFrameRef.current = null;
         if (pendingScrollGestureRef.current !== origin) return;
-        const movedUp = origin.container.scrollTop < origin.scrollTop - 1;
+        const movedUp =
+          Math.min(origin.lowestScrollTop, origin.container.scrollTop) < origin.scrollTop - 1;
         if (!movedUp && performance.now() < deadline) {
           pendingScrollGestureFrameRef.current = window.requestAnimationFrame(check);
           return;
