@@ -1,8 +1,10 @@
 // FILE: MessageList.tsx
 // Purpose: The bot thread's rows in its transcript (HoloBot's thread/MessageList.tsx,
 //          MessageRow.tsx and Typing.tsx): date separators, the user's bubble on the right in
-//          the bot's color (gray in SynBot's own thread), the bot's gray bubbles on the left,
-//          SynBot cards, task cards, "Message from" rows, quiet system lines; at the end the
+//          the bot's color (gray in SynBot's own thread), the bot's gray bubbles on the left
+//          (no face or name: it is the bot you are talking to), SynBot cards,
+//          task cards, hand-offs as baton cards (their Start / Not now on the baton), quiet
+//          system lines; at the end the
 //          pending approval and question cards (ChatView's own pending interactions), then the
 //          typing row (three dots and what the bot is doing) while it answers. The newest open
 //          ask takes the A, B, C… keys. ChatView draws this in its transcript's place, under
@@ -11,7 +13,7 @@
 // Exports: MessageList
 
 import { ThreadId, type Bot } from "@synara/contracts";
-import { memo, type CSSProperties } from "react";
+import { memo, useMemo, type CSSProperties } from "react";
 
 import { useAppSettings } from "~/appSettings";
 import { useTranslation } from "~/i18n";
@@ -25,7 +27,8 @@ import { useOpenTask } from "../synbotNav";
 import { CardFocus } from "./cardKeys";
 import { ChatText } from "./ChatText";
 import { ApprovalCard, QuestionCard } from "./PendingCards";
-import { MessageFromRow, SynbotCard, isLineCard } from "./SynbotCards";
+import type { BatonStart } from "./BatonCard";
+import { MessageFromRow, SynbotCard, delegationStartCard, isLineCard } from "./SynbotCards";
 import { TaskCard } from "./TaskCard";
 import { Transcript, type TranscriptEdges } from "./Transcript";
 import { useBotThread, type BotThread } from "./useBotThread";
@@ -75,11 +78,13 @@ const Row = memo(function Row({
   bot,
   thread,
   tint,
+  start,
 }: {
   readonly row: BotThreadRow;
   readonly bot: Bot;
   readonly thread: BotThread["threadId"];
   readonly tint: string | null;
+  readonly start: BatonStart | null;
 }) {
   const { settings } = useAppSettings();
   const openTask = useOpenTask();
@@ -105,7 +110,7 @@ const Row = memo(function Row({
       );
     }
     case "from":
-      return <MessageFromRow delegationId={row.delegationId} brief={row.brief} />;
+      return <MessageFromRow delegationId={row.delegationId} brief={row.brief} start={start} />;
     case "card":
       return isLineCard(row.notice) ? (
         <SynbotCard entryId={row.entryId} notice={row.notice} threadId={thread} />
@@ -185,6 +190,32 @@ function FirstUse({ bot }: { readonly bot: Bot }) {
   );
 }
 
+/**
+ * Each hand-off's Start card, drawn on the hand-off's baton (so the brief shows once) and
+ * hidden as its own card.
+ */
+function threadShape(rows: readonly BotThreadRow[], threadId: BotThread["threadId"]) {
+  const fromIds = new Set<string>();
+  for (const row of rows) {
+    if (row.kind === "from") fromIds.add(row.delegationId);
+  }
+  const starts = new Map<string, BatonStart & { readonly key: string }>();
+  const mergedCardKeys = new Set<string>();
+  for (const row of rows) {
+    if (row.kind !== "card") continue;
+    const card = delegationStartCard(row.notice);
+    if (!card?.delegationId || !fromIds.has(card.delegationId)) continue;
+    starts.set(card.delegationId, {
+      key: row.key,
+      card,
+      threadId,
+      resolution: row.notice.resolution,
+    });
+    mergedCardKeys.add(row.key);
+  }
+  return { starts, mergedCardKeys };
+}
+
 /** The user's newest message (not a bot's delegation): a new one is a send. */
 function newestUserMessageId(rows: readonly BotThreadRow[]): string | null {
   for (let index = rows.length - 1; index >= 0; index -= 1) {
@@ -209,9 +240,10 @@ export function MessageList({
   const tint = bot.kind === "main" ? null : bot.mascot.color;
   const approvals = slot.pendingApprovals;
   const asking = slot.pendingUserInput.input !== null;
+  const { starts, mergedCardKeys } = useMemo(() => threadShape(rows, threadId), [rows, threadId]);
   // The newest open ask takes the letter keys: a pending question, else the first approval.
   const focusApproval = !asking && approvals.length > 0;
-  // Else the newest unanswered SynBot choice card.
+  // Else the newest unanswered SynBot choice card (a Start drawn on its baton counts).
   const focusCardKey =
     focusApproval || asking
       ? null
@@ -228,11 +260,16 @@ export function MessageList({
       onEdges={onEdges}
     >
       {rows.length === 0 && !answering ? <FirstUse bot={bot} /> : null}
-      {rows.map((row) => (
-        <CardFocus.Provider key={row.key} value={row.key === focusCardKey}>
-          <Row row={row} bot={bot} thread={threadId} tint={tint} />
-        </CardFocus.Provider>
-      ))}
+      {rows.map((row) => {
+        if (mergedCardKeys.has(row.key)) return null;
+        const start = row.kind === "from" ? (starts.get(row.delegationId) ?? null) : null;
+        const focused = row.key === focusCardKey || (start !== null && start.key === focusCardKey);
+        return (
+          <CardFocus.Provider key={row.key} value={focused}>
+            <Row row={row} bot={bot} thread={threadId} tint={tint} start={start} />
+          </CardFocus.Provider>
+        );
+      })}
       {approvals.map((approval, index) => (
         <CardFocus.Provider key={approval.requestId} value={focusApproval && index === 0}>
           <div className="row row--group row--bot">

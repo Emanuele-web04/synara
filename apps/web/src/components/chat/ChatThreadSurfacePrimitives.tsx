@@ -131,6 +131,7 @@ export function DeferredChatView(props: {
   onOpenLinkedThread?: (threadId: ThreadId) => void;
   renderTranscript?: ComponentProps<typeof ChatView>["renderTranscript"];
   composerPlaceholder?: string;
+  composerStatusAbove?: boolean;
   onMounted?: () => void;
 }) {
   const onMounted = props.onMounted ?? noopChatSurfaceAction;
@@ -181,6 +182,7 @@ export function DeferredChatView(props: {
       {...(props.onOpenLinkedThread ? { onOpenLinkedThread: props.onOpenLinkedThread } : {})}
       {...(props.renderTranscript ? { renderTranscript: props.renderTranscript } : {})}
       {...(props.composerPlaceholder ? { composerPlaceholder: props.composerPlaceholder } : {})}
+      {...(props.composerStatusAbove ? { composerStatusAbove: true } : {})}
     />
   );
 }

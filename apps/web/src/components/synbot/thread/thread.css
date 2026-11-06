@@ -1,7 +1,7 @@
 /* FILE: thread.css
    Purpose: The SynBot thread pane (ported from HoloBot's thread/thread.css and message.css):
             the floating top strip and banner, the scrolling rows (separators, bubbles, system
-            lines, "Message from", cards) and the typing row, drawn in ChatView's transcript slot
+            lines, hand-off batons, cards, report timelines) and the typing row, drawn in ChatView's transcript slot
             over which Synara's own composer floats. The rows fade out only where they run under
             a bar. Every value is a kit token (holobot.css). No `:has()`: the pane carries
             `data-under-top` / `data-under-bottom` itself. */
@@ -257,32 +257,6 @@
 .hb .system-line button:hover {
   color: var(--hb-text);
   text-decoration: underline;
-}
-/* "Message from [face] SynBot" over work another bot handed over. */
-.hb .from-line {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: var(--hb-gap-sm);
-  width: 100%;
-  padding: var(--hb-gutter) 0 var(--hb-gap-xs);
-  border: 0;
-  background: none;
-  font: inherit;
-  font-size: var(--hb-text-sm);
-  color: var(--hb-muted);
-  cursor: pointer;
-}
-.hb .from-line:hover .from-line__name {
-  color: var(--hb-text);
-}
-.hb .from-line:focus-visible {
-  outline: 2px solid var(--hb-focus);
-  outline-offset: -2px;
-}
-.hb .from-line__name {
-  color: var(--hb-soft-text);
-  font-weight: var(--hb-weight-medium);
 }
 .hb .row {
   display: flex;
@@ -647,9 +621,9 @@
 .hb .task-card {
   display: flex;
   flex-direction: column;
-  gap: var(--hb-gap-sm);
-  width: min(var(--hb-bubble-max), 100%);
-  padding: var(--hb-gap);
+  gap: var(--hb-gap);
+  width: min(var(--hb-choice), 100%);
+  padding: calc(var(--hb-gap) + 2px) var(--hb-gutter) var(--hb-gap);
   box-sizing: border-box;
   border: var(--hb-hairline) solid var(--hb-border-strong);
   border-radius: var(--hb-radius-lg);
@@ -711,27 +685,21 @@
   user-select: text;
   -webkit-user-select: text;
 }
-.hb .task-card__entries {
-  display: flex;
-  flex-direction: column;
-  gap: var(--hb-gap-sm);
-}
-.hb .task-card__entry {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-.hb .task-card__entry-head {
+.hb .task-card__foot {
   display: flex;
   align-items: center;
-  gap: var(--hb-gap-sm);
-  min-width: 0;
+  justify-content: space-between;
+  gap: var(--hb-gap);
+  min-height: var(--hb-control-xs);
+  padding-top: var(--hb-gap-sm);
+  border-top: var(--hb-hairline) solid var(--hb-border);
 }
 .hb .task-card__actions {
   display: flex;
   flex-wrap: wrap;
+  justify-content: flex-end;
   gap: var(--hb-gap-xs);
-  margin-left: calc(-1 * var(--hb-chip-pad));
+  margin-right: calc(-1 * var(--hb-chip-pad));
 }
 .hb .task-card__pulse {
   flex-shrink: 0;
@@ -750,30 +718,6 @@
   .hb .task-card__pulse {
     animation: none;
   }
-}
-
-/* A bot named in a chip line: its face and name; a click opens its thread. */
-.hb .mention {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  min-width: 0;
-  padding: 0;
-  border: 0;
-  background: none;
-  color: var(--hb-text);
-  font: inherit;
-  font-weight: var(--hb-weight-semibold);
-  cursor: pointer;
-}
-.hb .mention:hover {
-  text-decoration: underline;
-  text-underline-offset: 0.2em;
-}
-.hb .mention:focus-visible {
-  outline: 2px solid var(--hb-focus);
-  outline-offset: 2px;
-  border-radius: 4px;
 }
 
 /* The bot answering (Typing): three dots rising in turn, and under it, small, the bot's face
@@ -913,4 +857,295 @@
   flex: 1;
   min-height: 0;
   flex-direction: column;
+}
+
+/* A hand-off between two bots, "passing the baton" (BatonCard): the two faces and the dashed
+   arrow, "SynBot → QA", the brief, where it stands, then Start / Not now or Open / Stop.
+   Left-aligned with the bot's bubbles; amber only while it waits for the user. */
+.hb .baton {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--hb-gap);
+  width: min(var(--hb-choice), 100%);
+  box-sizing: border-box;
+  padding: calc(var(--hb-gap) + 2px) var(--hb-gutter) var(--hb-gap);
+  border: var(--hb-hairline) solid var(--hb-border-strong);
+  border-radius: var(--hb-radius-lg);
+  background: var(--hb-card);
+  font-size: var(--hb-text-chat);
+  line-height: var(--hb-line);
+}
+.hb .baton--attention {
+  border-color: color-mix(in srgb, var(--hb-attention) 55%, transparent);
+}
+.hb .baton__path {
+  display: flex;
+  align-items: center;
+  gap: var(--hb-gap-sm);
+}
+.hb .baton__arrow {
+  flex-shrink: 0;
+  stroke: var(--hb-muted);
+}
+.hb .baton--attention .baton__arrow {
+  stroke: var(--hb-attention);
+}
+.hb .baton__body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--hb-gap-xs);
+  min-width: 0;
+}
+.hb .baton__title {
+  margin: 0;
+  font-size: var(--hb-text-md);
+  font-weight: var(--hb-weight-semibold);
+}
+.hb .baton__brief,
+.hb .baton__result {
+  display: -webkit-box;
+  -webkit-line-clamp: 6;
+  -webkit-box-orient: vertical;
+  margin: 0;
+  overflow: hidden;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--hb-soft-text);
+  user-select: text;
+  -webkit-user-select: text;
+}
+.hb .baton__result {
+  -webkit-line-clamp: 3;
+  color: var(--hb-text);
+}
+.hb .baton__status {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--hb-gap-sm);
+  margin: 0;
+  font-size: var(--hb-text-xs);
+  font-weight: var(--hb-weight-medium);
+  color: var(--hb-muted);
+}
+.hb .baton__status--attention {
+  color: var(--hb-tone-attention-text);
+}
+.hb .baton__status--good {
+  color: var(--hb-tone-good-text);
+}
+.hb .baton__status--bad {
+  color: var(--hb-tone-bad-text);
+}
+.hb .baton__pulse {
+  width: var(--hb-dot-sm);
+  height: var(--hb-dot-sm);
+  border-radius: var(--hb-pill);
+  background: var(--hb-text);
+  animation: task-card-pulse 1.4s ease-in-out infinite;
+}
+.hb .baton__answers {
+  align-self: stretch;
+  display: flex;
+  gap: var(--hb-gap-sm);
+}
+.hb .baton__answer {
+  flex: 1;
+}
+.hb .baton__foot {
+  align-self: stretch;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--hb-gap);
+  min-height: var(--hb-control-xs);
+  padding-top: var(--hb-gap-sm);
+  border-top: var(--hb-hairline) solid var(--hb-border);
+}
+.hb .baton__actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: var(--hb-gap-xs);
+  margin-right: calc(-1 * var(--hb-chip-pad));
+}
+@media (prefers-reduced-motion: reduce) {
+  .hb .baton__pulse {
+    animation: none;
+  }
+}
+
+/* A task's plan as a checklist (TaskCard): done lines quiet, the running one in full ink. */
+.hb .steps {
+  display: flex;
+  flex-direction: column;
+  gap: var(--hb-gap-sm);
+  margin: 0;
+  padding: 0 0 0 2px;
+  list-style: none;
+  font-size: var(--hb-text-md);
+  line-height: 1.4;
+}
+.hb .steps__item {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--hb-gap-sm);
+  min-width: 0;
+}
+.hb .steps__mark {
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+.hb .steps__text {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--hb-muted);
+}
+.hb .steps__item--current .steps__text {
+  color: var(--hb-text);
+  font-weight: var(--hb-weight-medium);
+}
+.hb .steps__fill {
+  fill: var(--hb-text);
+}
+.hb .steps__tick {
+  stroke: var(--hb-card);
+}
+.hb .steps__ring {
+  stroke: var(--hb-text);
+}
+.hb .steps__ring--todo {
+  stroke: var(--hb-border-strong);
+}
+
+/* The report that woke the asking bot, as a timeline (SynbotCards' ReportCard): one line per
+   hand-off with the bot's face on the rail, then the outcome. */
+.hb .report {
+  display: flex;
+  flex-direction: column;
+  gap: var(--hb-gap);
+  width: min(var(--hb-choice), 100%);
+  box-sizing: border-box;
+  padding: calc(var(--hb-gap) + 2px) var(--hb-gutter);
+  border: var(--hb-hairline) solid var(--hb-border-strong);
+  border-radius: var(--hb-radius-lg);
+  background: var(--hb-card);
+  font-size: var(--hb-text-chat);
+  line-height: var(--hb-line);
+}
+.hb .report__title {
+  margin: 0;
+  font-size: var(--hb-text-xs);
+  font-weight: var(--hb-weight-semibold);
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--hb-muted);
+}
+.hb .timeline {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.hb .timeline__item {
+  display: flex;
+  gap: var(--hb-gap);
+  min-width: 0;
+}
+.hb .timeline__rail {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  flex-shrink: 0;
+  width: 22px;
+}
+.hb .timeline__line {
+  flex: 1;
+  width: 1.5px;
+  min-height: var(--hb-gap);
+  margin: 4px 0;
+  background: var(--hb-border-strong);
+}
+.hb .timeline__body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  padding-bottom: var(--hb-gap);
+}
+.hb .timeline__item--end .timeline__body {
+  padding-bottom: 0;
+}
+.hb .timeline__head {
+  display: flex;
+  align-items: center;
+  gap: var(--hb-gap-sm);
+  min-height: 22px;
+  margin: 0;
+  font-size: var(--hb-text-md);
+}
+.hb .timeline__head--end {
+  font-weight: var(--hb-weight-semibold);
+}
+.hb .timeline__name {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  font-weight: var(--hb-weight-medium);
+  cursor: pointer;
+}
+.hb .timeline__name:hover {
+  text-decoration: underline;
+}
+.hb .timeline__name:focus-visible {
+  outline: 2px solid var(--hb-focus);
+  outline-offset: 2px;
+  border-radius: var(--hb-radius-sm);
+}
+.hb .timeline__state {
+  font-size: var(--hb-text-xs);
+  color: var(--hb-muted);
+}
+.hb .timeline__state--good {
+  color: var(--hb-tone-good-text);
+}
+.hb .timeline__state--bad {
+  color: var(--hb-tone-bad-text);
+}
+.hb .timeline__state--attention {
+  color: var(--hb-tone-attention-text);
+}
+.hb .timeline__text {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  margin: 0;
+  overflow: hidden;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--hb-soft-text);
+  user-select: text;
+  -webkit-user-select: text;
+}
+.hb .timeline__outcome {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  box-sizing: border-box;
+  border-radius: var(--hb-pill);
+  color: #ffffff;
+}
+.hb .timeline__outcome--done {
+  background: var(--success);
+}
+.hb .timeline__outcome--failed {
+  background: var(--destructive);
+}
+.hb .timeline__outcome--going {
+  border: 2px solid var(--hb-border-strong);
 }

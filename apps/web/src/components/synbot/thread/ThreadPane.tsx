@@ -167,6 +167,7 @@ export function ThreadPane({ bot }: { readonly bot: Bot }) {
           onOpenTurnDiff={noopChatSurfaceAction}
           renderTranscript={renderTranscript}
           composerPlaceholder={t("synbot:placeholder", { name: bot.name })}
+          composerStatusAbove
         />
       </div>
     </section>

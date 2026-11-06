@@ -1,12 +1,13 @@
 // FILE: TaskCard.tsx
 // Purpose: A Hub task in a bot's thread (HoloBot's thread/TaskCard.tsx): who works on it, its
-//          title and state, when it started and how far its checklist is, what is happening now
-//          (the live step) or its latest word (the result), then Open (its own thread in the
-//          right pane) and Stop (projectAgent.resolveWorker, as the Hub's own stop does).
+//          title and state, when it started, its plan as a checklist (done, running, to do;
+//          long plans fold their finished lines), its latest word once it stops running, then
+//          Open (its own thread in the right pane) and Stop (projectAgent.resolveWorker, as the
+//          Hub's own stop does). Without a plan it shows the live step or the latest word.
 // Layer: SynBot thread UI
 // Exports: TaskCard, taskTone, taskStateKey
 
-import type { Bot, HubWorkItem, HubWorkState } from "@synara/contracts";
+import type { Bot, HubWorkItem, HubWorkProgressStep, HubWorkState } from "@synara/contracts";
 import { ProjectId, ThreadId } from "@synara/contracts";
 import { useState } from "react";
 
@@ -16,12 +17,52 @@ import { formatRelativeTimeAgo } from "~/lib/relativeTime";
 
 import { toastManager } from "../../ui/toast";
 import { BotFace } from "../BotFace";
-import { CapsuleButton, Chip, type Tone } from "../kit/controls";
+import { Button } from "~/components/ui/button";
+
+import { Chip, type Tone } from "../kit/controls";
 import { Icon } from "../kit/Icon";
 import { useOpenTask } from "../synbotNav";
 import { InlineText } from "./ChoiceParts";
 
 const ACTIVE: ReadonlySet<HubWorkState> = new Set(["queued", "starting", "working", "waiting"]);
+
+/** Checklist lines a card shows before the finished ones fold into "N earlier steps done". */
+const MAX_STEPS = 6;
+
+type StepStatus = HubWorkProgressStep["status"];
+
+function stepClass(status: StepStatus): "done" | "current" | "todo" {
+  return status === "completed" ? "done" : status === "inProgress" ? "current" : "todo";
+}
+
+/** A checklist mark: filled check when done, a ring with a dot while running, an empty ring. */
+function StepMark({ status }: { readonly status: StepStatus }) {
+  const kind = stepClass(status);
+  return (
+    <svg className="steps__mark" width="14" height="14" viewBox="0 0 24 24" aria-hidden>
+      {kind === "done" ? (
+        <>
+          <circle cx="12" cy="12" r="11" className="steps__fill" />
+          <path
+            d="m7.5 12 3 3 6-6.5"
+            fill="none"
+            className="steps__tick"
+            strokeWidth="2.4"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+        </>
+      ) : kind === "current" ? (
+        <>
+          <circle cx="12" cy="12" r="10" fill="none" className="steps__ring" strokeWidth="2" />
+          <circle cx="12" cy="12" r="4" className="steps__fill" />
+        </>
+      ) : (
+        <circle cx="12" cy="12" r="10" fill="none" className="steps__ring--todo" strokeWidth="2" />
+      )}
+    </svg>
+  );
+}
 
 export function taskTone(state: HubWorkState): Tone {
   switch (state) {
@@ -53,6 +94,11 @@ export function TaskCard({ task, bot }: { readonly task: HubWorkItem; readonly b
   const steps = task.progress?.steps ?? [];
   const done = steps.filter((step) => step.status === "completed").length;
   const current = steps.find((step) => step.status === "inProgress")?.text ?? null;
+  // Long plans keep their last few lines; the finished ones before them fold into one line.
+  const firstOpen = steps.findIndex((step) => step.status !== "completed");
+  const leadingDone = firstOpen === -1 ? steps.length : firstOpen;
+  const hiddenDone =
+    steps.length > MAX_STEPS ? Math.min(steps.length - MAX_STEPS + 1, leadingDone) : 0;
   const meta = [
     formatRelativeTimeAgo(task.createdAt),
     steps.length > 0 ? t("synbot:taskSteps", { done, total: steps.length }) : null,
@@ -95,8 +141,27 @@ export function TaskCard({ task, bot }: { readonly task: HubWorkItem; readonly b
         <span className="task-card__title">{task.title}</span>
         <Chip tone={taskTone(task.state)}>{t(taskStateKey(task.state))}</Chip>
       </button>
-      {meta ? <p className="task-card__meta">{meta}</p> : null}
-      {running && current ? (
+      {steps.length > 0 ? (
+        <ol className="steps" aria-label={t("synbot:taskSteps", { done, total: steps.length })}>
+          {hiddenDone > 0 ? (
+            <li className="steps__item steps__item--done">
+              <StepMark status="completed" />
+              <span className="steps__text">
+                {t("synbot:stepsEarlierDone", { count: hiddenDone })}
+              </span>
+            </li>
+          ) : null}
+          {steps.slice(hiddenDone).map((step) => (
+            <li key={step.id} className={`steps__item steps__item--${stepClass(step.status)}`}>
+              <StepMark status={step.status} />
+              <span className="steps__text">
+                <InlineText text={step.text} />
+              </span>
+            </li>
+          ))}
+        </ol>
+      ) : null}
+      {steps.length > 0 && running ? null : running && current ? (
         <p className="task-card__live">
           <span className="task-card__pulse" />
           <InlineText text={current} />
@@ -106,18 +171,21 @@ export function TaskCard({ task, bot }: { readonly task: HubWorkItem; readonly b
           <InlineText text={latest} />
         </p>
       ) : null}
-      <div className="task-card__actions">
-        {worker ? (
-          <CapsuleButton kind="ghost" small onClick={() => openTask(worker)}>
-            {t("synbot:open")}
-            <Icon name="arrow-right" size="xs" />
-          </CapsuleButton>
-        ) : null}
-        {ACTIVE.has(task.state) && worker ? (
-          <CapsuleButton kind="ghost" small disabled={stopping} onClick={stop}>
-            {t("synbot:stop")}
-          </CapsuleButton>
-        ) : null}
+      <div className="task-card__foot">
+        <p className="task-card__meta">{meta}</p>
+        <div className="task-card__actions">
+          {ACTIVE.has(task.state) && worker ? (
+            <Button variant="ghost" size="xs" disabled={stopping} onClick={stop}>
+              {t("synbot:stop")}
+            </Button>
+          ) : null}
+          {worker ? (
+            <Button variant="ghost" size="xs" onClick={() => openTask(worker)}>
+              {t("synbot:open")}
+              <Icon name="arrow-right" size="xs" />
+            </Button>
+          ) : null}
+        </div>
       </div>
     </article>
   );
