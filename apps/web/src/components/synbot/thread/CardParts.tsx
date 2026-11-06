@@ -12,7 +12,6 @@ import type { ReactNode } from "react";
 
 import { useTranslation } from "~/i18n";
 
-import { getProviderIconClassName } from "../../chat/ProviderModelPicker";
 import { ProviderIcon } from "../../ProviderIcon";
 import { BotFace } from "../BotFace";
 import { Chip, type Tone } from "../kit/controls";
@@ -94,10 +93,9 @@ export function ModelChip({ selection }: { readonly selection: ModelSelection })
       className="hb-chip--engine"
       title={selection.model}
       leading={
-        <ProviderIcon
-          provider={selection.provider}
-          className={`hb-chip__mark ${getProviderIconClassName(selection.provider, "")}`}
-        />
+        // ProviderIcon brings the provider's own tone. Importing ProviderModelPicker for it
+        // would pull the browser history into every card (and break tests in Node).
+        <ProviderIcon provider={selection.provider} className="hb-chip__mark" />
       }
     >
       {name}
