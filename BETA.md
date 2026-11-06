@@ -4,10 +4,6 @@ Synara Beta is a packaged prerelease flavor of the desktop app. It is a separate
 application that installs and updates side-by-side with stable Synara, and it never
 shares stable's data directory or update feed.
 
-Beta uses the same hosted account API as Synara Remote for sign-in and pairing.
-An explicit `SYNARA_ACCOUNT_URL` overrides this default. Saved sessions retain
-their original issuer.
-
 ## Synara Remote early access
 
 Remote .39 fixes photo/file transfers from a controlling desktop to a connected computer. Uploads and cancellation retain their original owner; image previews, fullscreen and downloads use the authenticated controlling window. Expired or lost image grants recover once without changing row geometry; persistent failures keep Retry. This desktop update preserves data and pairings and requires no hosted API or companion release.
