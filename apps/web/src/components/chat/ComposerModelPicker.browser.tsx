@@ -19,7 +19,8 @@ import {
   useEffectiveComposerModelState,
 } from "../../composerDraftStore";
 import { STARRED_MODELS_STORAGE_KEY, type StarredModel } from "../../lib/starredModels";
-import { type ProviderModelOption } from "../../providerModelOptions";
+import { getAppModelOptions } from "../../appSettings";
+import { mergeDynamicModelOptions, type ProviderModelOption } from "../../providerModelOptions";
 import {
   deriveComposerContextWindowLabel,
   deriveContextWindowSelectionStatus,
@@ -159,6 +160,43 @@ function readStoredStars(): unknown {
 }
 
 describe("ComposerModelPicker", () => {
+  it.each([
+    { catalog: "empty", resolvedModel: null },
+    { catalog: "older-cli", resolvedModel: "claude-haiku-4-5-20251001" },
+    { catalog: "current-cli", resolvedModel: "claude-haiku-5-5" },
+  ])(
+    "shows and selects Haiku 5.5 under Claude with $catalog discovery",
+    async ({ catalog, resolvedModel }) => {
+      const onProviderModelChange = vi.fn();
+      const claudeModels = mergeDynamicModelOptions({
+        provider: "claudeAgent",
+        staticOptions: getAppModelOptions("claudeAgent", []),
+        dynamicModels: resolvedModel ? [{ slug: "haiku", resolvedModel, name: "Haiku" }] : [],
+      });
+      const screen = await mountPicker({
+        onProviderModelChange,
+        modelOptionsByProvider: { ...MODEL_OPTIONS_BY_PROVIDER, claudeAgent: claudeModels },
+      });
+      try {
+        await page.getByRole("tab", { name: "Claude", exact: true }).click();
+        const haiku = page.getByRole("menuitem", { name: /Claude Haiku 5\.5/u });
+        await expect.element(haiku).toBeVisible();
+        await haiku.hover();
+        await page.screenshot({
+          path: `../../../test-results/haiku-${catalog}.png`,
+        });
+        await haiku.click();
+        expect(onProviderModelChange).toHaveBeenCalledWith(
+          "claudeAgent",
+          "claude-haiku-5-5",
+          expect.objectContaining({ instanceId: "claudeAgent" }),
+        );
+      } finally {
+        await screen.unmount();
+      }
+    },
+  );
+
   it("hides a globally disabled provider's tabs and starred models, including the active default", async () => {
     const screen = await mountPicker(
       {
