@@ -13,6 +13,7 @@ import {
   useState,
   type KeyboardEvent,
   type ReactElement,
+  type ReactNode,
   type RefObject,
 } from "react";
 
@@ -25,6 +26,8 @@ export type MenuEntry =
       readonly id: string;
       readonly label: string;
       readonly icon?: IconName;
+      /** A glyph of its own in place of `icon` (a provider logo, a project's icon). */
+      readonly glyph?: ReactNode;
       readonly detail?: string;
       readonly checked?: boolean;
       readonly disabled?: boolean;
@@ -109,9 +112,9 @@ function Items({
           item.onSelect();
         }}
       >
-        {item.icon ? (
+        {item.glyph || item.icon ? (
           <span className="hb-menu__icon">
-            <Icon name={item.icon} size="sm" />
+            {item.glyph ?? (item.icon ? <Icon name={item.icon} size="sm" /> : null)}
           </span>
         ) : null}
         <span className="hb-menu__label">
