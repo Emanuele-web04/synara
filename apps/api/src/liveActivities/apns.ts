@@ -1,5 +1,6 @@
 import { connect } from "node:http2";
 import { importPKCS8, SignJWT } from "jose";
+import type { CompletionPreviewEnvelope } from "@synara/contracts";
 import type { ApnsConfig } from "../config";
 
 export type ActivityDelivery = {
@@ -17,8 +18,41 @@ export type NotificationDelivery = {
   threadId: string;
   turnId: string;
   result: "completed" | "failed";
+  preview?: CompletionPreviewEnvelope & {
+    notificationId: string;
+    deviceJkt: string;
+    hostId: string;
+    sourceThreadId: string;
+    sourceTurnId: string;
+  };
 };
 export type ApnsResult = "delivered" | "invalid-token" | "retry" | "rejected";
+
+function serializeNotification(delivery: NotificationDelivery): string {
+  const generic = {
+    aps: {
+      alert: {
+        title: "Synara",
+        body: delivery.result === "completed" ? "Response ready" : "Run failed",
+      },
+      sound: "default",
+    },
+    source: "codex.runCompletion",
+    threadId: delivery.threadId,
+    turnId: delivery.turnId,
+    result: delivery.result,
+  };
+  if (delivery.preview && delivery.result === "completed") {
+    const enriched = JSON.stringify({
+      ...generic,
+      aps: { ...generic.aps, "mutable-content": 1 },
+      completionPreview: delivery.preview,
+    });
+    // A large routing ID or ciphertext must not drop the completion alert.
+    if (Buffer.byteLength(enriched) <= 4096) return enriched;
+  }
+  return JSON.stringify(generic);
+}
 
 /** One bounded HTTP/2 request. No credentials or Apple response bodies escape this boundary. */
 export function createApnsSender(config: ApnsConfig) {
@@ -112,32 +146,18 @@ export function createApnsSender(config: ApnsConfig) {
           );
         });
         stream.end(
-          JSON.stringify(
-            notification
-              ? {
-                  aps: {
-                    alert: {
-                      title: "Synara",
-                      body: delivery.result === "completed" ? "Response ready" : "Run failed",
-                    },
-                    sound: "default",
-                  },
-                  source: "codex.runCompletion",
-                  threadId: delivery.threadId,
-                  turnId: delivery.turnId,
-                  result: delivery.result,
-                }
-              : {
-                  aps: {
-                    timestamp: delivery.timestamp,
-                    event: delivery.event,
-                    "content-state": delivery.contentState,
-                    ...(delivery.event === "end"
-                      ? { "dismissal-date": now + 60 }
-                      : { "stale-date": now + 90 }),
-                  },
+          notification
+            ? serializeNotification(delivery)
+            : JSON.stringify({
+                aps: {
+                  timestamp: delivery.timestamp,
+                  event: delivery.event,
+                  "content-state": delivery.contentState,
+                  ...(delivery.event === "end"
+                    ? { "dismissal-date": now + 60 }
+                    : { "stale-date": now + 90 }),
                 },
-          ),
+              }),
         );
       });
     });

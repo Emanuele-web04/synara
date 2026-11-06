@@ -10,6 +10,10 @@ import {
 import { mintHostProof, readHostIdentity } from "./hostIdentity";
 import { accountLiveActivityEnabled } from "./remoteFeaturePolicy";
 import { PROVIDER_RUNTIME_INGESTION_CONSUMER } from "./persistence/Services/ProviderRuntimeEvents";
+import {
+  attachCompletionPreviews,
+  type CompletionPreviewTrust,
+} from "./completionNotificationPreviews";
 
 const RecoveryLink = Schema.Struct({
   id: Schema.String,
@@ -161,6 +165,7 @@ export function createAccountLiveActivityReporter(options: {
   devUrl?: URL;
   hostIdentityPath: string;
   sql: SqlClient.SqlClient;
+  completionPreviewTrust?: CompletionPreviewTrust;
 }) {
   let stopped = false;
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -192,6 +197,7 @@ export function createAccountLiveActivityReporter(options: {
       turns: Schema.Array(Schema.Struct({ threadId: Schema.String, turnId: Schema.String })).check(
         Schema.isMaxLength(256),
       ),
+      previews: Schema.optional(Schema.Unknown),
     });
     if (!Schema.is(WatchList)(body) || body.turns.length === 0) return 15000;
     const sql = options.sql;
@@ -206,10 +212,31 @@ export function createAccountLiveActivityReporter(options: {
             const turn = yield* readWatchedTurn(sql, watch, projection?.sequence ?? 0);
             if (turn) turns.push(turn);
           }
-          return Schema.decodeUnknownSync(LiveActivityHostSnapshot)({
+          const currentSnapshot = Schema.decodeUnknownSync(LiveActivityHostSnapshot)({
             sequence: projection?.sequence ?? 0,
             turns,
           });
+          if (
+            !options.completionPreviewTrust ||
+            !account.hostId ||
+            !account.hostOwnerUserId ||
+            account.hostOwnerUserId !== account.userId ||
+            !account.organizationId
+          )
+            return currentSnapshot;
+          return yield* attachCompletionPreviews(
+            sql,
+            currentSnapshot,
+            body.previews,
+            {
+              hostId: account.hostId,
+              environmentId,
+              accountAuthority: accountApiIssuer(account.accountUrl),
+              userId: account.hostOwnerUserId,
+              organizationId: account.organizationId,
+            },
+            options.completionPreviewTrust,
+          );
         }),
       ),
     );
@@ -220,6 +247,7 @@ export function createAccountLiveActivityReporter(options: {
       current.hostKeyGeneration !== account.hostKeyGeneration ||
       current.accountUrl !== account.accountUrl ||
       current.userId !== account.userId ||
+      current.hostOwnerUserId !== account.hostOwnerUserId ||
       current.organizationId !== account.organizationId
     )
       return 60000;

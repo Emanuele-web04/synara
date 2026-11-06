@@ -968,11 +968,16 @@ test("preserves composer keyboard ownership while hovering two background browse
     }
 
     for (const [index, tabId] of tabs.entries()) {
-      const observed = await run(
-        tabId,
-        `return await page.evaluate(() => Number(document.body.dataset.trustedMoves));`,
-      );
-      expect(Number(observed.structuredContent.value)).toBeGreaterThan(0);
+      // Electron queues native input before the background renderer observes it.
+      await expect
+        .poll(async () => {
+          const observed = await run(
+            tabId,
+            `return await page.evaluate(() => Number(document.body.dataset.trustedMoves));`,
+          );
+          return Number(observed.structuredContent.value);
+        })
+        .toBeGreaterThan(0);
       const hovered = await run(
         tabId,
         `await page.getByRole('button', {name:'Reveal hover state',exact:true}).hover();

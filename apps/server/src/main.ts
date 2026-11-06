@@ -599,6 +599,10 @@ const makeServerProgram = (input: CliInput) =>
         baseDir: config.baseDir,
         stateDir: config.stateDir,
         hostIdentityPath: config.hostIdentityPath,
+        completionPreviewTrust: {
+          remoteTrust,
+          tlsIdentityPath: remoteTlsIdentityPath(config.secretsDir),
+        },
         ...(config.devUrl ? { devUrl: config.devUrl } : {}),
       });
       yield* Effect.addFinalizer(() => Effect.sync(() => activityReporter.stop()));
