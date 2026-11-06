@@ -44,7 +44,9 @@ export function remoteTlsServerName(environmentId: string): string {
   return `host-${environmentId.toLowerCase()}.synara.invalid`;
 }
 
-export function remoteTlsAnchor(identity: RemoteTlsIdentity): RemoteTlsAnchor {
+export function remoteTlsAnchor(
+  identity: Pick<RemoteTlsIdentity, "environmentId" | "rootCertificate">,
+): RemoteTlsAnchor {
   const root = new X509Certificate(identity.rootCertificate);
   return {
     environmentId: identity.environmentId,
@@ -64,6 +66,34 @@ export function validateRemoteTlsAnchor(anchor: RemoteTlsAnchor): void {
   if (!root.ca || !root.verify(root.publicKey) || fingerprint !== anchor.rootFingerprint) {
     throw new Error("Remote root does not match the locally approved fingerprint");
   }
+}
+
+/** Read the current public pairing root without initializing or renewing TLS credentials. */
+export async function readRemoteTlsTrustAnchor(
+  filePath: string,
+  environmentId: string,
+  now = Date.now(),
+): Promise<RemoteTlsAnchor> {
+  const saved: unknown = JSON.parse(await fs.readFile(filePath, "utf8"));
+  if (
+    typeof saved !== "object" ||
+    saved === null ||
+    !("version" in saved) ||
+    saved.version !== 2 ||
+    !("environmentId" in saved) ||
+    saved.environmentId !== environmentId ||
+    !("rootCertificate" in saved) ||
+    typeof saved.rootCertificate !== "string"
+  ) {
+    throw new Error("Remote TLS root belongs to another installation or is missing");
+  }
+  const anchor = remoteTlsAnchor({ environmentId, rootCertificate: saved.rootCertificate });
+  validateRemoteTlsAnchor(anchor);
+  const root = new X509Certificate(anchor.rootCertificate);
+  if (Date.parse(root.validFrom) > now || Date.parse(root.validTo) <= now) {
+    throw new Error("Remote TLS root is outside its validity period");
+  }
+  return anchor;
 }
 
 export function remoteTlsRootNeedsRepair(identity: RemoteTlsIdentity, now = Date.now()): boolean {
