@@ -87,8 +87,10 @@ import {
 import {
   claudeAuthMetadata,
   isStructuredClaudeAuthFalseNegativeCandidate,
+  parseClaudeAccountIdentityFromOutput,
   parseClaudeAuthStatusFromOutput,
 } from "../claudeAuthStatus";
+import { codexAccountIdentityFromAuthRecord } from "../codexAccountIdentity";
 import { acquireClaudeAuthStatusLock } from "../claudeAuthStatusLock";
 import { loadClaudeAgentSdk } from "../claudeAgentSdk.ts";
 import { buildClaudeProcessEnv, readClaudeCliCredentialsSummary } from "../claudeProcessEnv";
@@ -513,7 +515,11 @@ function codexAccountAuthLabel(input: {
 
 function extractCodexAccountTypeFromOutput(result: CommandResult): string | undefined {
   const parsed = decodeUnknownJson(result.stdout.trim());
-  if (Result.isFailure(parsed)) return undefined;
+  if (Result.isFailure(parsed)) {
+    const lowerOutput = `${result.stdout}\n${result.stderr}`.toLowerCase();
+    if (/^logged in using chatgpt\s*$/m.test(lowerOutput)) return "chatgpt";
+    return /^logged in using an api key\b/m.test(lowerOutput) ? "apiKey" : undefined;
+  }
   const walk = (value: unknown): string | undefined => {
     if (Array.isArray(value)) {
       for (const entry of value) {
@@ -1130,6 +1136,20 @@ export const readCodexConfigModelProviderForEnv = (env: NodeJS.ProcessEnv) =>
     return parseCodexConfigModelProvider(content);
   });
 
+// `codex login status` names no account; the id token in auth.json does.
+const readCodexAccountIdentity = (env: NodeJS.ProcessEnv) =>
+  Effect.gen(function* () {
+    const fileSystem = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const codexHome = env.CODEX_HOME?.trim() || path.join(OS.homedir(), ".codex");
+    const content = yield* fileSystem
+      .readFileString(path.join(codexHome, "auth.json"))
+      .pipe(Effect.orElseSucceed(() => undefined));
+    if (content === undefined) return {};
+    const record = decodeUnknownJson(content);
+    return Result.isFailure(record) ? {} : codexAccountIdentityFromAuthRecord(record.success);
+  });
+
 const hasCustomModelProviderForEnv = (env: NodeJS.ProcessEnv) =>
   Effect.map(
     readCodexConfigModelProviderForEnv(env),
@@ -1317,8 +1337,12 @@ export const makeCheckCodexProviderStatus = (
 
     const authOutput = authProbe.success.value;
     const parsed = parseAuthStatusFromOutput(authOutput);
-    const codexPlanType = extractSubscriptionTypeFromOutput(authOutput);
     const codexAccountType = extractCodexAccountTypeFromOutput(authOutput);
+    const accountIdentity =
+      parsed.authStatus === "authenticated" && codexAccountType !== "apiKey"
+        ? yield* readCodexAccountIdentity(probeEnv)
+        : {};
+    const codexPlanType = extractSubscriptionTypeFromOutput(authOutput) ?? accountIdentity.planType;
     const codexLabel =
       parsed.authStatus === "authenticated"
         ? codexAccountAuthLabel({ type: codexAccountType, planType: codexPlanType })
@@ -1341,6 +1365,7 @@ export const makeCheckCodexProviderStatus = (
       supportsAutoRuntimeMode,
       ...(codexAuthType ? { authType: codexAuthType } : {}),
       ...(codexLabel ? { authLabel: codexLabel } : {}),
+      ...(accountIdentity.email ? { accountEmail: accountIdentity.email } : {}),
       ...(parsed.voiceTranscriptionAvailable !== undefined
         ? { voiceTranscriptionAvailable: parsed.voiceTranscriptionAvailable }
         : {}),
@@ -1552,6 +1577,10 @@ export const makeCheckClaudeProviderStatus = (
       subscriptionType = yield* resolveSubscriptionType;
     }
     const authMetadata = claudeAuthMetadata({ subscriptionType, authMethod });
+    const accountIdentity =
+      effectiveParsed.authStatus === "authenticated"
+        ? parseClaudeAccountIdentityFromOutput(authOutput)
+        : {};
 
     return {
       provider: CLAUDE_AGENT_PROVIDER,
@@ -1563,6 +1592,10 @@ export const makeCheckClaudeProviderStatus = (
       version: parsedVersion,
       supportsAutoRuntimeMode,
       ...(authMetadata ? { authType: authMetadata.type, authLabel: authMetadata.label } : {}),
+      ...(accountIdentity.email ? { accountEmail: accountIdentity.email } : {}),
+      ...(accountIdentity.organization
+        ? { accountOrganization: accountIdentity.organization }
+        : {}),
       checkedAt,
       ...(effectiveParsed.message ? { message: effectiveParsed.message } : {}),
     } satisfies ServerProviderStatus;
@@ -2730,6 +2763,8 @@ export function providerStatusesEqual(
       status.authStatus === next.authStatus &&
       (status.authType ?? null) === (next.authType ?? null) &&
       (status.authLabel ?? null) === (next.authLabel ?? null) &&
+      (status.accountEmail ?? null) === (next.accountEmail ?? null) &&
+      (status.accountOrganization ?? null) === (next.accountOrganization ?? null) &&
       status.voiceTranscriptionAvailable === next.voiceTranscriptionAvailable &&
       status.supportsAutoRuntimeMode === next.supportsAutoRuntimeMode &&
       (status.autoRuntimeModeBinaryPath ?? null) === (next.autoRuntimeModeBinaryPath ?? null) &&
@@ -2847,9 +2882,18 @@ function projectStatusForProviderInstance(
   if (isExactInstanceStatus || instance.isDefault || status.authStatus === "unknown") {
     return projected;
   }
-  const { authType, authLabel, voiceTranscriptionAvailable, ...withoutAuthMetadata } = projected;
+  const {
+    authType,
+    authLabel,
+    accountEmail,
+    accountOrganization,
+    voiceTranscriptionAvailable,
+    ...withoutAuthMetadata
+  } = projected;
   void authType;
   void authLabel;
+  void accountEmail;
+  void accountOrganization;
   void voiceTranscriptionAvailable;
   return {
     ...withoutAuthMetadata,

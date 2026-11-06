@@ -12,6 +12,7 @@ import type { ServerProviderAuthStatus, ServerProviderStatusState } from "@synar
 import {
   detailFromResult,
   extractAuthBoolean,
+  nonEmptyTrimmed,
   toTitleCaseWords,
   type CommandResult,
 } from "./providerCliOutput";
@@ -180,7 +181,22 @@ export interface ClaudeAccountIdentity {
   readonly organization?: string;
 }
 
+// `claude auth status` names the account beside its login state. Only a JSON
+// object counts: the legacy text output never carried an identity.
 export function parseClaudeAccountIdentityFromOutput(result: CommandResult): ClaudeAccountIdentity {
-  void result;
-  throw new Error("Not implemented");
+  const trimmed = result.stdout.trim();
+  if (!trimmed.startsWith("{")) return {};
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(trimmed);
+  } catch {
+    return {};
+  }
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+  const record = parsed as Record<string, unknown>;
+  const email = nonEmptyTrimmed(typeof record.email === "string" ? record.email : undefined);
+  const organization = nonEmptyTrimmed(
+    typeof record.orgName === "string" ? record.orgName : undefined,
+  );
+  return { ...(email ? { email } : {}), ...(organization ? { organization } : {}) };
 }
