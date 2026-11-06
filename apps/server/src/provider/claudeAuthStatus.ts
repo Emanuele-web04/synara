@@ -172,3 +172,15 @@ export function claudeAuthMetadata(input: {
   }
   return undefined;
 }
+
+export interface ClaudeAccountIdentity {
+  /** Email of the claude.ai account, when `claude auth status` reports one. */
+  readonly email?: string;
+  /** Organization the account signs in to, as the CLI names it. */
+  readonly organization?: string;
+}
+
+export function parseClaudeAccountIdentityFromOutput(result: CommandResult): ClaudeAccountIdentity {
+  void result;
+  throw new Error("Not implemented");
+}
