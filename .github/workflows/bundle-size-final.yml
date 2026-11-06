@@ -1,0 +1,264 @@
+name: Verify final production size reductions
+"on":
+  push:
+    branches:
+      - perf/production-bundle-size-audit
+    paths:
+      - .github/workflows/bundle-size-final.yml
+      - .github/scripts/measure-bundle-size*.mjs
+      - .github/workflows/bundle-size-audit.yml
+      - scripts/**
+      - apps/desktop/**
+      - apps/server/**
+      - apps/web/**
+      - packages/**
+      - patches/**
+      - package.json
+      - bun.lock
+  workflow_call:
+    inputs:
+      build_version:
+        type: string
+        default: 0.8.4
+  workflow_dispatch:
+    inputs:
+      build_version:
+        description: Version embedded in the measured artifacts
+        required: true
+        default: 0.8.4
+permissions:
+  contents: read
+jobs:
+  prepare:
+    if: github.repository == 'Emanuele-web04/synara' && github.ref == 'refs/heads/perf/production-bundle-size-audit'
+    name: Validate exact candidate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      NODE_OPTIONS: --max-old-space-size=4096
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: ./.github/actions/setup-workspace
+        with:
+          scope: full
+      - name: Typecheck
+        run: bun run typecheck
+      - name: Formatting and lint
+        if: "!cancelled()"
+        run: |
+          bun run fmt:check
+          bun run lint
+      - name: Focused regression tests
+        if: "!cancelled()"
+        run: |
+          node --test .github/scripts/measure-bundle-size.test.mjs
+          bun run --cwd scripts test desktop-bundle-files.test.ts build-desktop-artifact-mac-config.test.ts
+          bun run --cwd apps/web test scripts/production-assets.test.ts
+  build_mac_icon:
+    needs: prepare
+    name: Compile exact-source macOS icon
+    runs-on: macos-26
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Compile and fingerprint production Icon Composer catalog
+        env:
+          DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          xcodebuild -version
+          mkdir -p "$RUNNER_TEMP/mac-icon"
+          xcrun actool assets/prod/Synara.icon --compile "$RUNNER_TEMP/mac-icon" --platform macosx --minimum-deployment-target 26.0 --app-icon Synara --include-all-app-icons --output-partial-info-plist "$RUNNER_TEMP/icon-partial.plist" --output-format human-readable-text
+          test -s "$RUNNER_TEMP/mac-icon/Assets.car"
+          printf '%s\n' "$GITHUB_SHA" > "$RUNNER_TEMP/mac-icon/source-commit.txt"
+          (
+            cd "$RUNNER_TEMP/mac-icon"
+            shasum -a 256 Assets.car > Assets.car.sha256
+          )
+      - name: Retain exact-source icon catalog
+        uses: actions/upload-artifact@v7
+        with:
+          name: bundle-audit-mac-icon
+          path: ${{ runner.temp }}/mac-icon
+          retention-days: 14
+          if-no-files-found: error
+  native:
+    name: Verify ${{ matrix.platform }}-${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            platform: mac
+            target: dmg
+            arch: arm64
+            node: 24.20.0
+          - runner: macos-15-intel
+            platform: mac
+            target: dmg
+            arch: x64
+            node: 24.19.0
+          - runner: ubuntu-24.04
+            platform: linux
+            target: AppImage
+            arch: x64
+            node: 24.20.0
+          - runner: windows-2022
+            platform: win
+            target: nsis
+            arch: x64
+            node: 24.20.0
+    env:
+      NODE_OPTIONS: --max-old-space-size=4096
+      ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+      SYNARA_DESKTOP_SIGNED: "false"
+      AUDIT_VERSION: ${{ inputs.build_version || '0.8.4' }}
+      AUDIT_FLAVOR: production
+      AUDIT_PLATFORM: ${{ matrix.platform }}
+      AUDIT_ARCH: ${{ matrix.arch }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+      - uses: actions/setup-node@v6
+        with:
+          node-version: ${{ matrix.node }}
+      - name: Prepare pinned native toolchain
+        if: matrix.platform == 'mac' || matrix.platform == 'linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$RUNNER_OS" == "macOS" ]]; then
+            native_developer_dir=/Applications/Xcode_16.4.app/Contents/Developer
+            test -d "$native_developer_dir"
+            echo "DEVELOPER_DIR=$native_developer_dir" >> "$GITHUB_ENV"
+            echo 'CARGO_PROFILE_RELEASE_STRIP=none' >> "$GITHUB_ENV"
+            DEVELOPER_DIR="$native_developer_dir" xcodebuild -version
+          fi
+          audit_rust_version=$(node -p 'require("./packages/shared/src/cuaDriverRelease.json").rustVersion')
+          rustup toolchain install "$audit_rust_version" --profile minimal
+          echo "RUSTUP_TOOLCHAIN=$audit_rust_version" >> "$GITHUB_ENV"
+      - name: Install Linux native build and startup dependencies
+        if: matrix.platform == 'linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends build-essential pkg-config libssl-dev libx11-dev libxtst-dev libxrandr-dev libxfixes-dev libxrender-dev libxcb-shape0-dev libxcb-xfixes0-dev libxkbcommon-dev libwayland-dev xvfb xauth dbus-x11 libgtk-3-0t64 libnss3 libasound2t64 libgbm1 libsecret-1-0 xz-utils
+      - name: Download this source's macOS icon
+        if: matrix.platform == 'mac'
+        uses: actions/download-artifact@v8
+        with:
+          name: bundle-audit-mac-icon
+          path: ${{ runner.temp }}/mac-icon
+      - name: Verify macOS icon source and integrity
+        if: matrix.platform == 'mac'
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(cat "$RUNNER_TEMP/mac-icon/source-commit.txt")" = "$GITHUB_SHA"
+          (
+            cd "$RUNNER_TEMP/mac-icon"
+            shasum -a 256 -c Assets.car.sha256
+          )
+          echo "SYNARA_MAC_ICON_CATALOG=$RUNNER_TEMP/mac-icon/Assets.car" >> "$GITHUB_ENV"
+      - name: Install frozen release build dependencies
+        run: bun install --frozen-lockfile --ignore-scripts --filter '!@synara/marketing'
+      - name: Verify measurement attribution and byte accounting
+        run: node --test .github/scripts/measure-bundle-size.test.mjs
+      - name: Bind an isolated build stage to this exact source
+        shell: bash
+        run: |
+          node --input-type=module <<'NODE'
+          import { execFileSync } from 'node:child_process';
+          import { createHash } from 'node:crypto';
+          import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+          import { join } from 'node:path';
+          const sourceCommit = execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
+          if (sourceCommit !== process.env.GITHUB_SHA) throw new Error('Checked-out source does not match this workflow head.');
+          const sourceTree = execFileSync('git', ['rev-parse', 'HEAD^{tree}'], { encoding: 'utf8' }).trim();
+          const lockfileSha256 = createHash('sha256').update(readFileSync('bun.lock')).digest('hex');
+          // Keep native compiler tracking paths short on Windows.
+          const stageParent = mkdtempSync(join(process.env.RUNNER_TEMP, 'ba-'));
+          appendFileSync(process.env.GITHUB_ENV, `AUDIT_TEMP_ROOT=${stageParent}\nAUDIT_LOCKFILE_SHA256=${lockfileSha256}\n`);
+          const evidence = join(process.env.RUNNER_TEMP, 'size-evidence');
+          mkdirSync(evidence, { recursive: true });
+          writeFileSync(join(evidence, 'build-provenance.json'), `${JSON.stringify({
+            sourceCommit, sourceTree, lockfileSha256, stageParent,
+            flavor: process.env.AUDIT_FLAVOR, platform: process.env.AUDIT_PLATFORM,
+            arch: process.env.AUDIT_ARCH, version: process.env.AUDIT_VERSION,
+            workflowRun: process.env.GITHUB_RUN_ID, workflowAttempt: process.env.GITHUB_RUN_ATTEMPT,
+            signed: false,
+          }, null, 2)}\n`);
+          NODE
+      - name: Build unsigned production candidate
+        shell: bash
+        run: |
+          set -o pipefail
+          TMPDIR="$AUDIT_TEMP_ROOT" TMP="$AUDIT_TEMP_ROOT" TEMP="$AUDIT_TEMP_ROOT" \
+            bun run dist:desktop:artifact -- --platform "$AUDIT_PLATFORM" --flavor "$AUDIT_FLAVOR" --target '${{ matrix.target }}' --arch "$AUDIT_ARCH" --build-version "$AUDIT_VERSION" --source-commit "$GITHUB_SHA" --lockfile-sha256 "$AUDIT_LOCKFILE_SHA256" --keep-stage --verbose --output-dir "$RUNNER_TEMP/size-artifacts" 2>&1 | tee "$RUNNER_TEMP/size-evidence/build.log"
+      - name: Measure installed files and download archives
+        shell: bash
+        run: |
+          node .github/scripts/measure-bundle-size.mjs --source "$GITHUB_WORKSPACE" --output "$RUNNER_TEMP/size-evidence" --stage-parent "$AUDIT_TEMP_ROOT" --platform "$AUDIT_PLATFORM" --flavor "$AUDIT_FLAVOR" --arch "$AUDIT_ARCH" --version "$AUDIT_VERSION" > "$RUNNER_TEMP/size-evidence/measurement.log"
+      - name: Verify packaged imports and isolated desktop startup
+        shell: bash
+        run: |
+          set -o pipefail
+          node scripts/verify-packaged-desktop-startup.ts --assets-dir "$RUNNER_TEMP/size-artifacts" --platform '${{ matrix.platform }}' --arch '${{ matrix.arch }}' --version "$AUDIT_VERSION" 2>&1 | tee "$RUNNER_TEMP/size-evidence/startup.log"
+      - name: Verify retained Claude fallback executes
+        shell: bash
+        run: |
+          node --input-type=module <<'NODE'
+          import { strict as assert } from 'node:assert';
+          import { execFileSync } from 'node:child_process';
+          import { mkdtempSync, readFileSync, readdirSync } from 'node:fs';
+          import { join } from 'node:path';
+          import { selectPackagedApplication } from './.github/scripts/measure-bundle-size.mjs';
+          const report = JSON.parse(readFileSync(join(process.env.RUNNER_TEMP, 'size-evidence/bundle-size.json'), 'utf8'));
+          assert.equal(report.sourceCommit, process.env.GITHUB_SHA);
+          assert.equal(report.target.arch, process.arch);
+          const expectedPlatform = { mac: 'darwin', linux: 'linux', win: 'win32' }[report.target.platform];
+          assert.equal(expectedPlatform, process.platform);
+          const packaged = selectPackagedApplication(join(report.stageRoot, 'app/dist'), report.target.platform, report.target.arch);
+          const apps = process.platform === 'darwin' ? readdirSync(packaged).filter(name => name.endsWith('.app')) : [];
+          if (process.platform === 'darwin') assert.equal(apps.length, 1);
+          const resources = process.platform === 'darwin' ? join(packaged, apps[0], 'Contents/Resources') : join(packaged, 'resources');
+          const binaryPath = `node_modules/@anthropic-ai/claude-agent-sdk-${process.platform}-${process.arch}/claude${process.platform === 'win32' ? '.exe' : ''}`;
+          const matches = report.asar.files.filter(file => file.path === binaryPath);
+          assert.equal(matches.length, 1, 'Expected exactly the target-platform Claude fallback');
+          assert.equal(matches[0].unpacked, true, 'Claude fallback must be executable outside the ASAR');
+          const isolatedHome = mkdtempSync(join(process.env.AUDIT_TEMP_ROOT, 'provider-check-'));
+          const stdout = execFileSync(join(resources, 'app.asar.unpacked', binaryPath), ['--version'], {
+            encoding: 'utf8', timeout: 30000,
+            env: { ...process.env, HOME: isolatedHome, USERPROFILE: isolatedHome, CLAUDE_CONFIG_DIR: isolatedHome },
+          });
+          assert.ok(stdout.trim(), 'Claude fallback returned no version');
+          console.log(`Matching Claude fallback executes: ${stdout.trim()}`);
+          NODE
+      - name: Retain measured source
+        if: runner.os == 'Linux'
+        shell: bash
+        run: git archive --format=tar.gz -o "$RUNNER_TEMP/size-evidence/source.tar.gz" HEAD
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: final-bundle-${{ matrix.platform }}-${{ matrix.arch }}
+          path: ${{ runner.temp }}/size-evidence
+          retention-days: 14
+          if-no-files-found: error
+    needs: [prepare, build_mac_icon]
