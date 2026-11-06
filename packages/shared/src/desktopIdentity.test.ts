@@ -32,6 +32,8 @@ describe("desktopIdentity", () => {
     expect(SYNARA_DEVELOPMENT_BUNDLE_ID).toBe("com.emanueledipietro.synara.dev");
     expect(synaraDesktopIdentity("production").bundleId).toBe(SYNARA_PRODUCTION_BUNDLE_ID);
     expect(synaraDesktopIdentity("development").bundleId).toBe(SYNARA_DEVELOPMENT_BUNDLE_ID);
+    expect(synaraDesktopIdentity("production").defaultAccountUrl).toBeUndefined();
+    expect(synaraDesktopIdentity("development").defaultAccountUrl).toBeUndefined();
   });
 
   it("keeps source Beta and Remote launches off the installed apps' privacy identity", () => {
@@ -115,6 +117,7 @@ describe("desktopIdentity", () => {
       entryUrl: SYNARA_BETA_DESKTOP_ENTRY_URL,
       userDataDirectoryName: "synara-beta",
       defaultHomeDirectoryName: ".synara-beta",
+      defaultAccountUrl: synaraDesktopIdentity("remote").defaultAccountUrl,
       usesScriptedUpdates: false,
     });
   });

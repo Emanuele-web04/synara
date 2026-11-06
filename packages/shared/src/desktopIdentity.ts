@@ -27,6 +27,7 @@ export const SYNARA_REMOTE_DESKTOP_ORIGIN = `${SYNARA_REMOTE_DESKTOP_SCHEME}://a
 export const SYNARA_REMOTE_DESKTOP_ENTRY_URL = `${SYNARA_REMOTE_DESKTOP_ORIGIN}/index.html`;
 export const SYNARA_SOURCE_DESKTOP_BUILD_MARKER = "synara-source-desktop-build-v2";
 export const SYNARA_DESKTOP_SMOKE_USER_DATA_ENV = "SYNARA_DESKTOP_SMOKE_USER_DATA";
+const HOSTED_REMOTE_ACCOUNT_URL = "https://synara-account-api-trial.synara-orgs.workers.dev";
 
 export type SynaraDesktopFlavor =
   | "production"
@@ -171,6 +172,7 @@ export function synaraDesktopIdentity(flavor: SynaraDesktopFlavor): SynaraDeskto
       entryUrl: SYNARA_BETA_DESKTOP_ENTRY_URL,
       userDataDirectoryName: "synara-beta",
       defaultHomeDirectoryName: ".synara-beta",
+      defaultAccountUrl: HOSTED_REMOTE_ACCOUNT_URL,
       usesScriptedUpdates: false,
     };
   }
@@ -184,7 +186,7 @@ export function synaraDesktopIdentity(flavor: SynaraDesktopFlavor): SynaraDeskto
       entryUrl: SYNARA_REMOTE_DESKTOP_ENTRY_URL,
       userDataDirectoryName: "synara-remote",
       defaultHomeDirectoryName: ".synara-remote",
-      defaultAccountUrl: "https://synara-account-api-trial.synara-orgs.workers.dev",
+      defaultAccountUrl: HOSTED_REMOTE_ACCOUNT_URL,
       usesScriptedUpdates: false,
     };
   }
