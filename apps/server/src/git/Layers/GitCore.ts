@@ -153,6 +153,14 @@ const MOVE_AWARE_WORKING_TREE_STATUS_TIMEOUT_MS = 15_000;
 const AUTO_DETACHED_WORKTREE_DIRNAME = "synara";
 const WORKTREE_OWNERSHIP_MARKER = "synara-agent-gateway-owner.json";
 const WORKTREE_TRANSFER_MAX_OUTPUT_BYTES = 64 * 1024 * 1024;
+
+/** Which local files a new worktree receives from its source checkout, and how. */
+interface WorktreeTransferPlan {
+  /** Untracked files plus ignored paths matched by `.worktreeinclude`. Copied. */
+  readonly copyPaths: ReadonlyArray<string>;
+  /** Ignored paths matched by `.worktreelink` and not by `.worktreeinclude`. Linked, never copied. */
+  readonly linkPaths: ReadonlyArray<string>;
+}
 const NON_REPOSITORY_STATUS_DETAILS = Object.freeze({
   isRepo: false,
   hasOriginRemote: false,
@@ -3442,19 +3450,21 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
       }
     };
 
-    const listWorktreeTransferPaths = (cwd: string) =>
+    /**
+     * Ignored paths matched by a repository-root pattern file such as
+     * `.worktreeinclude`. With `collapseDirectories`, a directory that matches as
+     * a whole is listed once instead of file by file, so it can be linked as one.
+     */
+    const listIgnoredPathsMatching = (
+      cwd: string,
+      patternFile: string,
+      options: { readonly collapseDirectories: boolean },
+    ) =>
       Effect.gen(function* () {
-        const untracked = yield* executeGit(
-          "GitCore.listWorktreeTransferPaths.untracked",
-          cwd,
-          ["ls-files", "--others", "--exclude-standard", "-z"],
-          { maxOutputBytes: WORKTREE_TRANSFER_MAX_OUTPUT_BYTES },
-        ).pipe(Effect.map((result) => parseNullSeparatedPaths(result.stdout)));
-        const includeFile = nodePath.join(cwd, ".worktreeinclude");
-        const hasIncludeFile = yield* Effect.tryPromise({
+        const hasPatternFile = yield* Effect.tryPromise({
           try: () =>
             nodeFs
-              .stat(includeFile)
+              .stat(nodePath.join(cwd, patternFile))
               .then((entry) => entry.isFile())
               .catch((cause: unknown) => {
                 if (hasNodeErrorCode(cause, "ENOENT")) return false;
@@ -3462,27 +3472,147 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
               }),
           catch: (cause) =>
             createGitCommandError(
-              "GitCore.listWorktreeTransferPaths",
+              "GitCore.planWorktreeTransfer",
               cwd,
               ["worktree", "include", "read"],
-              "could not inspect .worktreeinclude.",
+              `could not inspect ${patternFile}.`,
               cause,
             ),
         });
-        const included = hasIncludeFile
-          ? yield* executeGit(
-              "GitCore.listWorktreeTransferPaths.included",
+        if (!hasPatternFile) return [] as ReadonlyArray<string>;
+        return yield* executeGit(
+          "GitCore.planWorktreeTransfer.included",
+          cwd,
+          [
+            "ls-files",
+            "--others",
+            "--ignored",
+            `--exclude-from=${patternFile}`,
+            ...(options.collapseDirectories ? ["--directory"] : []),
+            "-z",
+          ],
+          { maxOutputBytes: WORKTREE_TRANSFER_MAX_OUTPUT_BYTES },
+        ).pipe(
+          Effect.map((result) =>
+            parseNullSeparatedPaths(result.stdout).map((entry) => entry.replace(/\/+$/u, "")),
+          ),
+        );
+      });
+
+    const planWorktreeTransfer = (
+      cwd: string,
+    ): Effect.Effect<WorktreeTransferPlan, GitCommandError> =>
+      Effect.gen(function* () {
+        const [untracked, included, linked] = yield* Effect.all(
+          [
+            executeGit(
+              "GitCore.planWorktreeTransfer.untracked",
               cwd,
-              ["ls-files", "--others", "--ignored", "--exclude-from=.worktreeinclude", "-z"],
+              ["ls-files", "--others", "--exclude-standard", "-z"],
               { maxOutputBytes: WORKTREE_TRANSFER_MAX_OUTPUT_BYTES },
-            ).pipe(Effect.map((result) => parseNullSeparatedPaths(result.stdout)))
-          : [];
-        return [...new Set([...untracked, ...included])].sort();
+            ).pipe(Effect.map((result) => parseNullSeparatedPaths(result.stdout))),
+            listIgnoredPathsMatching(cwd, ".worktreeinclude", { collapseDirectories: false }),
+            listIgnoredPathsMatching(cwd, ".worktreelink", { collapseDirectories: true }),
+          ],
+          { concurrency: "unbounded" },
+        );
+        const copyPaths = [...new Set([...untracked, ...included])].sort();
+        // A path both files claim is copied: the copy list wins over the link list.
+        const isCopied = (entry: string) =>
+          copyPaths.some((copied) => copied === entry || copied.startsWith(`${entry}/`));
+        return {
+          copyPaths,
+          linkPaths: [...new Set(linked)].filter((entry) => !isCopied(entry)).sort(),
+        };
+      });
+
+    /**
+     * A directory link is a junction on Windows because creating one needs no
+     * privilege. A file symlink may be refused there, so it falls back to a copy.
+     */
+    const linkWorktreePath = async (
+      sourcePath: string,
+      targetPath: string,
+    ): Promise<"linked" | "copied"> => {
+      const source = await nodeFs.lstat(sourcePath);
+      // A source that is itself a link is re-pointed at its target rather than
+      // chained, so removing one worktree never breaks another's link.
+      const linkTarget = source.isSymbolicLink()
+        ? nodePath.resolve(nodePath.dirname(sourcePath), await nodeFs.readlink(sourcePath))
+        : sourcePath;
+      const resolved = await nodeFs.stat(sourcePath).catch(() => null);
+      await nodeFs.mkdir(nodePath.dirname(targetPath), { recursive: true });
+      if (resolved?.isDirectory()) {
+        await nodeFs.symlink(
+          linkTarget,
+          targetPath,
+          process.platform === "win32" ? "junction" : "dir",
+        );
+        return "linked";
+      }
+      try {
+        await nodeFs.symlink(linkTarget, targetPath, "file");
+        return "linked";
+      } catch (cause) {
+        if (
+          !["EPERM", "EACCES", "ENOTSUP", "EINVAL"].some((code) => hasNodeErrorCode(cause, code))
+        ) {
+          throw cause;
+        }
+        await nodeFs.cp(sourcePath, targetPath, {
+          recursive: true,
+          force: false,
+          errorOnExist: true,
+          preserveTimestamps: true,
+        });
+        return "copied";
+      }
+    };
+
+    /**
+     * `git worktree remove` on Windows descends into a junction and deletes the
+     * shared target, so every link Synara created is unlinked first. A worktree
+     * whose directory already vanished has nothing to unlink.
+     */
+    const detachWorktreeLinks = (worktreePath: string) =>
+      Effect.gen(function* () {
+        const exists = yield* Effect.promise(() =>
+          nodeFs.lstat(worktreePath).then(
+            () => true,
+            () => false,
+          ),
+        );
+        if (!exists) return;
+        // Only `.worktreelink` entries are consulted: a copied path is a real
+        // directory and is skipped by the lstat check below.
+        const linkPaths = yield* listIgnoredPathsMatching(worktreePath, ".worktreelink", {
+          collapseDirectories: true,
+        });
+        yield* Effect.tryPromise({
+          try: async () => {
+            for (const relativePath of linkPaths) {
+              const absolutePath = nodePath.join(worktreePath, relativePath);
+              const entry = await nodeFs.lstat(absolutePath).catch((cause: unknown) => {
+                if (hasNodeErrorCode(cause, "ENOENT")) return null;
+                throw cause;
+              });
+              if (entry?.isSymbolicLink()) await nodeFs.unlink(absolutePath);
+            }
+          },
+          catch: (cause) =>
+            createGitCommandError(
+              "GitCore.removeWorktree",
+              worktreePath,
+              ["worktree", "unlink"],
+              "could not detach linked paths before removing the worktree.",
+              cause,
+            ),
+        });
       });
 
     const readWorktreeStateHash = (cwd: string) =>
       Effect.gen(function* () {
-        const [staged, unstaged, transferPaths] = yield* Effect.all(
+        const [staged, unstaged, plan] = yield* Effect.all(
           [
             executeGit(
               "GitCore.readWorktreeStateHash.staged",
@@ -3505,7 +3635,7 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
               ["diff", "--binary", "--full-index", "--no-ext-diff", "--no-textconv", "--"],
               { maxOutputBytes: WORKTREE_TRANSFER_MAX_OUTPUT_BYTES },
             ),
-            listWorktreeTransferPaths(cwd),
+            planWorktreeTransfer(cwd),
           ],
           { concurrency: "unbounded" },
         );
@@ -3514,10 +3644,12 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
             const hash = createHash("sha256");
             hash.update("staged\0").update(staged.stdout);
             hash.update("unstaged\0").update(unstaged.stdout);
-            for (const relativePath of transferPaths) {
+            const linkPaths = new Set(plan.linkPaths);
+            for (const relativePath of [...plan.copyPaths, ...plan.linkPaths].sort()) {
               const absolutePath = nodePath.join(cwd, relativePath);
               const entry = await nodeFs.lstat(absolutePath);
               hash.update("path\0").update(relativePath).update("\0");
+              if (linkPaths.has(relativePath)) hash.update("link\0");
               if (entry.isSymbolicLink()) {
                 hash.update("symlink\0").update(await nodeFs.readlink(absolutePath));
               } else if (entry.isFile()) {
@@ -3542,7 +3674,7 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
 
     const copyCheckoutChanges = (sourceCwd: string, worktreePath: string) =>
       Effect.gen(function* () {
-        const [patch, listedTransferPaths] = yield* Effect.all(
+        const [patch, plan] = yield* Effect.all(
           [
             executeGit(
               "GitCore.copyCheckoutChanges.patch",
@@ -3561,11 +3693,11 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
               ],
               { maxOutputBytes: WORKTREE_TRANSFER_MAX_OUTPUT_BYTES },
             ).pipe(Effect.map((result) => result.stdout)),
-            listWorktreeTransferPaths(sourceCwd),
+            planWorktreeTransfer(sourceCwd),
           ],
           { concurrency: "unbounded" },
         );
-        const transferPaths = listedTransferPaths.filter((relativePath) => {
+        const isOutsideTargetWorktree = (relativePath: string) => {
           const relativeToTarget = nodePath.relative(
             worktreePath,
             nodePath.join(sourceCwd, relativePath),
@@ -3575,7 +3707,9 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
             relativeToTarget.startsWith(`..${nodePath.sep}`) ||
             nodePath.isAbsolute(relativeToTarget)
           );
-        });
+        };
+        const transferPaths = plan.copyPaths.filter(isOutsideTargetWorktree);
+        const linkPaths = plan.linkPaths.filter(isOutsideTargetWorktree);
 
         if (patch.length > 0) {
           yield* Effect.acquireUseRelease(
@@ -3644,11 +3778,42 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
             }),
           { discard: true, concurrency: 4 },
         );
+
+        yield* Effect.forEach(
+          linkPaths,
+          (relativePath) =>
+            Effect.tryPromise({
+              try: () =>
+                linkWorktreePath(
+                  nodePath.join(sourceCwd, relativePath),
+                  nodePath.join(worktreePath, relativePath),
+                ),
+              catch: (cause) =>
+                createGitCommandError(
+                  "GitCore.copyCheckoutChanges",
+                  sourceCwd,
+                  ["worktree", "link", relativePath],
+                  `could not link ${relativePath} into the detached worktree.`,
+                  cause,
+                ),
+            }).pipe(
+              Effect.flatMap((outcome) =>
+                outcome === "copied"
+                  ? Effect.logWarning("worktree link fell back to a copy", {
+                      sourceCwd,
+                      worktreePath,
+                      relativePath,
+                    })
+                  : Effect.void,
+              ),
+            ),
+          { discard: true, concurrency: 4 },
+        );
       });
 
     const snapshotWorktree: GitCoreShape["snapshotWorktree"] = (input) =>
       Effect.gen(function* () {
-        const [patch, transferPaths, head] = yield* Effect.all(
+        const [patch, plan, head] = yield* Effect.all(
           [
             executeGit(
               "GitCore.snapshotWorktree.patch",
@@ -3667,7 +3832,7 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
               ],
               { maxOutputBytes: WORKTREE_TRANSFER_MAX_OUTPUT_BYTES },
             ).pipe(Effect.map((result) => result.stdout)),
-            listWorktreeTransferPaths(input.cwd),
+            planWorktreeTransfer(input.cwd),
             executeGit("GitCore.snapshotWorktree.head", input.cwd, [
               "rev-parse",
               "--verify",
@@ -3689,7 +3854,7 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
                 mode: 0o600,
               });
               const filesRoot = nodePath.join(temporaryPath, "files");
-              for (const relativePath of transferPaths) {
+              for (const relativePath of plan.copyPaths) {
                 const targetPath = nodePath.join(filesRoot, relativePath);
                 await nodeFs.mkdir(nodePath.dirname(targetPath), {
                   recursive: true,
@@ -3708,7 +3873,8 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
                   {
                     sourceWorktree: input.cwd,
                     head,
-                    copiedPaths: transferPaths,
+                    copiedPaths: plan.copyPaths,
+                    linkedPaths: plan.linkPaths,
                     createdAt: new Date().toISOString(),
                   },
                   null,
@@ -3731,6 +3897,76 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
               cause,
             ),
         });
+      });
+
+    const reclaimGeneratedFiles: GitCoreShape["reclaimGeneratedFiles"] = (input) =>
+      Effect.gen(function* () {
+        const [generated, plan] = yield* Effect.all(
+          [
+            executeGit(
+              "GitCore.reclaimGeneratedFiles.list",
+              input.cwd,
+              ["ls-files", "--others", "--ignored", "--exclude-standard", "--directory", "-z"],
+              { maxOutputBytes: WORKTREE_TRANSFER_MAX_OUTPUT_BYTES },
+            ).pipe(
+              Effect.map((result) =>
+                parseNullSeparatedPaths(result.stdout).map((entry) => entry.replace(/\/+$/u, "")),
+              ),
+            ),
+            planWorktreeTransfer(input.cwd),
+          ],
+          { concurrency: "unbounded" },
+        );
+        const claimed = [...plan.copyPaths, ...plan.linkPaths];
+        // A claimed path inside a generated directory protects the whole directory:
+        // `--directory` lists it as one entry, and removing it would take the claim with it.
+        const isClaimed = (entry: string) =>
+          claimed.some(
+            (claim) =>
+              claim === entry || claim.startsWith(`${entry}/`) || entry.startsWith(`${claim}/`),
+          );
+        const removedPaths: string[] = [];
+        const protectedPaths: string[] = [];
+        for (const entry of [...new Set(generated)].toSorted()) {
+          const absolutePath = nodePath.join(input.cwd, entry);
+          if (isClaimed(entry)) {
+            protectedPaths.push(entry);
+            continue;
+          }
+          const stat = yield* Effect.tryPromise({
+            try: () =>
+              nodeFs.lstat(absolutePath).catch((cause: unknown) => {
+                if (hasNodeErrorCode(cause, "ENOENT")) return null;
+                throw cause;
+              }),
+            catch: (cause) =>
+              createGitCommandError(
+                "GitCore.reclaimGeneratedFiles",
+                input.cwd,
+                ["worktree", "reclaim", entry],
+                `could not inspect ${entry}.`,
+                cause,
+              ),
+          });
+          if (stat === null) continue;
+          if (stat.isSymbolicLink()) {
+            protectedPaths.push(entry);
+            continue;
+          }
+          yield* Effect.tryPromise({
+            try: () => nodeFs.rm(absolutePath, { recursive: true, force: true }),
+            catch: (cause) =>
+              createGitCommandError(
+                "GitCore.reclaimGeneratedFiles",
+                input.cwd,
+                ["worktree", "reclaim", entry],
+                `could not remove ${entry}.`,
+                cause,
+              ),
+          });
+          removedPaths.push(entry);
+        }
+        return { removedPaths, protectedPaths };
       });
 
     const readWorktreeIdentity = (worktreePath: string) =>
@@ -3959,13 +4195,18 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
         if (input.copyChangesFrom) {
           yield* onPhase("copy-changes");
           yield* copyCheckoutChanges(input.copyChangesFrom, worktreePath).pipe(
+            // When the links cannot be detached, the forced removal is skipped
+            // too: a leftover worktree is recoverable, a deleted link target is not.
             Effect.onError(() =>
-              executeGit(
-                "GitCore.createDetachedWorktree.rollback",
-                input.cwd,
-                ["worktree", "remove", "--force", worktreePath],
-                { allowNonZeroExit: true },
-              ).pipe(
+              detachWorktreeLinks(worktreePath).pipe(
+                Effect.andThen(
+                  executeGit(
+                    "GitCore.createDetachedWorktree.rollback",
+                    input.cwd,
+                    ["worktree", "remove", "--force", worktreePath],
+                    { allowNonZeroExit: true },
+                  ),
+                ),
                 Effect.andThen(
                   newBranch
                     ? executeGit(
@@ -4109,6 +4350,7 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
           args.push("--force");
         }
         args.push(input.path);
+        yield* detachWorktreeLinks(input.path);
         yield* executeGit("GitCore.removeWorktree", input.cwd, args, {
           timeoutMs: 15_000,
           fallbackErrorMessage: "git worktree remove failed",
@@ -4602,6 +4844,7 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
       recordWorktreeOwnership,
       verifyWorktreeOwnership,
       snapshotWorktree,
+      reclaimGeneratedFiles,
       createDetachedWorktree,
       fetchPullRequestBranch,
       fetchPullRequestCommit,

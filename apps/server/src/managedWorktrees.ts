@@ -107,6 +107,15 @@ export interface ManagedWorktreeRemovalCandidate {
   readonly reason: ManagedWorktreeRemovalReason;
 }
 
+export interface ManagedWorktreeRetentionPlan {
+  readonly remove: ReadonlyArray<ManagedWorktreeRemovalCandidate>;
+  /** Archived worktrees inside the retention window. Kept, but their generated files are reclaimed. */
+  readonly slim: ReadonlyArray<{
+    readonly entry: ServerManagedWorktree;
+    readonly thread: ManagedWorktreeThreadRef;
+  }>;
+}
+
 async function findLinkedWorktreeRoots(root: string, current = root, depth = 0): Promise<string[]> {
   if (depth > MANAGED_WORKTREE_SCAN_DEPTH) return [];
   let entries: Dirent[];
@@ -252,6 +261,19 @@ export function classifyManagedWorktreeRemovalCandidates(input: {
   readonly threads: ReadonlyArray<ManagedWorktreeThreadRef>;
   readonly canonicalByRecordedPath: ReadonlyMap<string, string>;
 }): ReadonlyArray<ManagedWorktreeRemovalCandidate> {
+  return planManagedWorktreeRetention(input).remove;
+}
+
+/**
+ * The removal candidates plus the archived keepers inside the retention window.
+ * A keeper stays restorable, so only the files git ignores and no worktree file
+ * claims are reclaimed from it.
+ */
+export function planManagedWorktreeRetention(input: {
+  readonly inventory: ReadonlyArray<ServerManagedWorktree>;
+  readonly threads: ReadonlyArray<ManagedWorktreeThreadRef>;
+  readonly canonicalByRecordedPath: ReadonlyMap<string, string>;
+}): ManagedWorktreeRetentionPlan {
   const canonicalThreadPath = (thread: ManagedWorktreeThreadRef): string | null => {
     const recordedPath = threadManagedWorktreePath(thread);
     return recordedPath === null ? null : (input.canonicalByRecordedPath.get(recordedPath) ?? null);
@@ -315,7 +337,10 @@ export function classifyManagedWorktreeRemovalCandidates(input: {
     }),
   );
 
-  return [...deletedCandidates, ...archivedRetentionCandidates];
+  return {
+    remove: [...deletedCandidates, ...archivedRetentionCandidates],
+    slim: archivedKeepers.slice(0, MANAGED_WORKTREE_RETENTION_COUNT),
+  };
 }
 
 const ensureSnapshotsDir = (snapshotsDir: string) =>
@@ -419,11 +444,12 @@ export function pruneArchivedManagedWorktrees(input: {
   return Effect.gen(function* () {
     const inventory = yield* listManagedWorktrees(input);
     const canonicalByRecordedPath = yield* canonicalizeThreadWorktreePaths(input.threads);
-    const removalCandidates = classifyManagedWorktreeRemovalCandidates({
+    const plan = planManagedWorktreeRetention({
       inventory,
       threads: input.threads,
       canonicalByRecordedPath,
     });
+    const removalCandidates = plan.remove;
     const removedPaths = new Set<string>();
     if (removalCandidates.length > 0) {
       yield* ensureSnapshotsDir(input.snapshotsDir);
@@ -443,6 +469,34 @@ export function pruneArchivedManagedWorktrees(input: {
         { discard: true, concurrency: 1 },
       );
     }
+    // No snapshot precedes this: the snapshot taken before a removal already
+    // leaves out every path reclaimed here, so a slimmed keeper loses nothing
+    // that its eventual removal would have kept.
+    yield* Effect.forEach(
+      plan.slim.filter(({ entry }) => !removedPaths.has(entry.path)),
+      ({ entry, thread }) =>
+        input.git
+          .withMutation(entry.workspaceRoot, input.git.reclaimGeneratedFiles({ cwd: entry.path }))
+          .pipe(
+            Effect.flatMap((result) =>
+              result.removedPaths.length > 0
+                ? Effect.logInfo("managed worktree retention reclaimed generated files", {
+                    threadId: thread.id,
+                    worktreePath: entry.path,
+                    removedCount: result.removedPaths.length,
+                  })
+                : Effect.void,
+            ),
+            Effect.catch((error) =>
+              Effect.logWarning("managed worktree retention could not reclaim generated files", {
+                threadId: thread.id,
+                worktreePath: entry.path,
+                error: error instanceof Error ? error.message : String(error),
+              }),
+            ),
+          ),
+      { discard: true, concurrency: 1 },
+    );
     // The age sweep runs on every pass (startup, retention, listing) even when
     // nothing was removed now, so snapshots from earlier passes still expire.
     yield* pruneExpiredManagedWorktreeSnapshots({ snapshotsDir: input.snapshotsDir });
