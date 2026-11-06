@@ -200,6 +200,13 @@
   align-items: center;
   gap: var(--hb-gap-sm);
 }
+/* Every role reads as a chip: the unchosen ones get a hairline too. */
+.hb .new-bot__templates .hb-btn--ghost {
+  box-shadow: inset 0 0 0 1px var(--hb-border-strong);
+}
+.hb .new-bot__templates .hb-btn__core {
+  gap: var(--hb-gap-sm);
+}
 .hb .new-bot__templates-label {
   margin-right: var(--hb-gap-xs);
   font-size: var(--hb-text-md);
@@ -274,12 +281,6 @@
   flex-shrink: 0;
   color: var(--hb-muted);
 }
-.hb .new-bot__defaults .hb-segmented__option {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: var(--hb-gap-sm);
-}
 .hb .new-bot__add {
   display: flex;
   align-items: center;
@@ -299,4 +300,11 @@
 }
 .hb .new-bot__instructions {
   padding-top: var(--hb-gap);
+}
+
+/* Back and Continue / Create: a full-size capsule, so the metal ring leaves the label room. */
+.hb .new-bot__footer .hb-btn {
+  height: 36px;
+  padding: 0 var(--hb-gutter-lg);
+  font-size: var(--hb-text-md);
 }
