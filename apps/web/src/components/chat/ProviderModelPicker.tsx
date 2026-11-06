@@ -61,7 +61,10 @@ import {
 import { Skeleton } from "../ui/skeleton";
 import { PlusIcon } from "~/lib/icons";
 import { isProviderUsable } from "../../lib/providerAvailability";
-import { providerAccountQualifiedLabel } from "../../lib/providerInstancePresentation";
+import {
+  providerAccountIdentityLabel,
+  providerAccountQualifiedLabel,
+} from "../../lib/providerInstancePresentation";
 import { ProviderAccountDot } from "../ProviderAccountMark";
 import { t, useTranslation } from "~/i18n";
 
@@ -448,6 +451,18 @@ export const ProviderModelMenuItems = function ProviderModelMenuItems(
     [props.modelOptionsByProvider, props.modelOptionsByProviderInstance],
   );
 
+  const resolveInstanceIdentityLabel = useCallback(
+    (instance: ProviderModelPickerInstance): string | null =>
+      providerAccountIdentityLabel(
+        findProviderStatusForInstance({
+          providers: props.providers,
+          provider: instance.provider,
+          instanceId: instance.instanceId,
+        }),
+      ),
+    [props.providers],
+  );
+
   const resolveInstanceAvailability = useCallback(
     (instance: ProviderModelPickerInstance): { disabled: boolean; label: string | null } => {
       if (!instance.enabled) {
@@ -553,6 +568,7 @@ export const ProviderModelMenuItems = function ProviderModelMenuItems(
           ) : null}
           {instances.map((instance) => {
             const availability = resolveInstanceAvailability(instance);
+            const identityLabel = resolveInstanceIdentityLabel(instance);
             return (
               <MenuRadioItem
                 key={instance.instanceId}
@@ -560,6 +576,11 @@ export const ProviderModelMenuItems = function ProviderModelMenuItems(
                 disabled={availability.disabled}
               >
                 <span className="truncate">{instance.label}</span>
+                {identityLabel ? (
+                  <span className="min-w-0 truncate text-ui-xs text-muted-foreground/80">
+                    {identityLabel}
+                  </span>
+                ) : null}
                 {availability.label ? (
                   <span className="ms-auto text-ui-xs text-muted-foreground/80 uppercase tracking-[0.08em]">
                     {availability.label}
@@ -777,6 +798,7 @@ export const ProviderModelMenuItems = function ProviderModelMenuItems(
           return accounts.map((account) => {
             const accountAvailability = resolveInstanceAvailability(account);
             const accountLabel = providerAccountQualifiedLabel(option.label, account.label);
+            const accountIdentityLabel = resolveInstanceIdentityLabel(account);
             const accountIcon = (
               <span className="relative flex shrink-0">
                 <OptionIcon
@@ -818,6 +840,11 @@ export const ProviderModelMenuItems = function ProviderModelMenuItems(
                 <MenuSubTrigger>
                   {accountIcon}
                   <span className="truncate">{accountLabel}</span>
+                  {accountIdentityLabel ? (
+                    <span className="ms-auto min-w-0 truncate text-ui-xs text-muted-foreground/80">
+                      {accountIdentityLabel}
+                    </span>
+                  ) : null}
                 </MenuSubTrigger>
                 <ComposerPickerMenuSubPopup
                   fixedWidth
