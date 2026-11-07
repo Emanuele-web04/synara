@@ -1181,5 +1181,9 @@
   "permissionGuideCompleteAuthentication": "Completa cualquier autenticación de macOS. Si macOS te pide salir y volver a abrir la app, hazlo antes de comprobar de nuevo.",
   "resumeAfterUsageLimits": "Reanudar tras los límites de uso",
   "resumeAfterUsageLimitsDescription": "Continúa automáticamente las tareas que alcancen un límite cuando el proveedor indique que se restablece la cuota. Se aplica a este ordenador, incluso con los demás dispositivos cerrados. Desactivarlo cancela las reanudaciones pendientes.",
-  "couldNotUpdateUsageLimitRecovery": "No se pudo actualizar la reanudación automática"
+  "couldNotUpdateUsageLimitRecovery": "No se pudo actualizar la reanudación automática",
+  "notchIsland": "Isla del notch",
+  "notchIslandDescription": "Muestra la actividad de los chats en la parte superior de la pantalla, en el notch o como una pequeña píldora en pantallas sin él. Pasa el puntero por encima para ver tus chats.",
+  "notchIslandKeywords": "Muestra la actividad de los chats en la parte superior de la pantalla, en el notch o como una pequeña píldora en pantallas sin él. isla dinámica notch estado aprobación",
+  "couldNotUpdateNotchIsland": "No se pudo actualizar la isla del notch"
 }

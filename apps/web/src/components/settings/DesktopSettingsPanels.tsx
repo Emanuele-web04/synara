@@ -18,6 +18,7 @@ import { useEffect, useId, useRef, useState } from "react";
 
 import type { AppSettingsBinding } from "~/appSettings";
 import { createLatestAppSnapRequestGuard } from "~/appSnap.logic";
+import { useDesktopNotchIsland } from "~/hooks/useDesktopNotchIsland";
 import { useRefreshOnWindowReturn } from "~/hooks/useRefreshOnWindowReturn";
 import { playAppSnapCaptureSound } from "~/lib/appSnapSound";
 import { CentralIcon } from "~/lib/central-icons";
@@ -82,10 +83,19 @@ export function NotificationsSettingsPanel({
   active,
 }: AppSettingsBinding & { readonly active: boolean }) {
   const { t } = useTranslation();
+  const notchIsland = useDesktopNotchIsland();
 
   const [browserNotificationPermission, setBrowserNotificationPermission] = useState(
     readBrowserNotificationPermissionState(),
   );
+
+  function setNotchIslandEnabled(enabled: boolean) {
+    void notchIsland
+      .setEnabled(enabled)
+      .catch(() =>
+        toastManager.add({ type: "error", title: t("settings:couldNotUpdateNotchIsland") }),
+      );
+  }
 
   useEffect(() => {
     const timeoutId = window.setTimeout(() => {
@@ -254,6 +264,29 @@ export function NotificationsSettingsPanel({
             />
           }
         />
+
+        {notchIsland.state?.supported ? (
+          <SettingsRow
+            id="setting-notch-island"
+            title="settings:notchIsland"
+            description="settings:notchIslandDescription"
+            resetAction={
+              notchIsland.state.enabled ? null : (
+                <SettingResetButton
+                  label={t("settings:notchIsland")}
+                  onClick={() => setNotchIslandEnabled(true)}
+                />
+              )
+            }
+            control={
+              <Switch
+                checked={notchIsland.state.enabled}
+                onCheckedChange={(checked) => setNotchIslandEnabled(Boolean(checked))}
+                aria-label={t("settings:notchIsland")}
+              />
+            }
+          />
+        ) : null}
       </SettingsSection>
     </div>
   );

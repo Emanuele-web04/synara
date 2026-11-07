@@ -62,10 +62,18 @@ export const NATIVE_EDITOR_BETA_FEATURE = "native-editor";
 /** Simplified Chinese interface, native menus and app-authored permission explanations. */
 export const CHINESE_UI_BETA_FEATURE = "chinese-ui";
 
+/**
+ * Notch island (Beta only, macOS): agent status at the MacBook notch (or a
+ * top-center pill on other displays), drawn by the AppSnap helper's
+ * `--island` mode, plus its menu-bar item. Desktop main is the gate.
+ */
+export const NOTCH_ISLAND_BETA_FEATURE = "notch-island";
+
 export const BETA_ONLY_FEATURES: readonly BetaOnlyFeature[] = [
   "accountProfileSync",
   ACCOUNT_INBOX_BETA_FEATURE,
   CHINESE_UI_BETA_FEATURE,
+  NOTCH_ISLAND_BETA_FEATURE,
 ];
 
 /**

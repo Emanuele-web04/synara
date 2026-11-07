@@ -53,6 +53,8 @@ const CAPTURE_WINDOW_TIMEOUT_MS = 20_000;
 const PERMISSION_COMMAND_TIMEOUT_MS = 10_000;
 const GUIDE_GRANT_WATCH_MAX_MS = 10 * 60 * 1000;
 const MAX_MACOS_WINDOW_ID = 0xffff_ffff;
+/** Thread ids are short opaque tokens; anything longer is not one the host sent. */
+const MAX_ISLAND_THREAD_ID_LENGTH = 256;
 // Late helper answers to timed-out or interrupted picker requests are dropped
 // instead of being consumed as unsolicited hotkey captures.
 const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
@@ -119,6 +121,9 @@ export type AppSnapHelperMessage =
     }
   | { type: "windows"; requestId: string; windows: DesktopAppSnapWindowEntry[] }
   | { type: "permission-guide"; state: DesktopAppSnapPermissionGuideState }
+  | { type: "island-placement"; kind: "notch" | "pill"; notchWidth: number; notchHeight: number }
+  | { type: "island-open-thread"; threadId: string }
+  | { type: "island-open-app" }
   | {
       type: "release-held-input";
       released?: boolean;
@@ -474,6 +479,30 @@ export function parseAppSnapHelperMessage(line: string): AppSnapHelperMessage | 
   ) {
     return { type: "permission-guide", state: value.state };
   }
+  if (
+    value.type === "island-placement" &&
+    (value.kind === "notch" || value.kind === "pill") &&
+    typeof value.notchWidth === "number" &&
+    Number.isFinite(value.notchWidth) &&
+    typeof value.notchHeight === "number" &&
+    Number.isFinite(value.notchHeight)
+  ) {
+    return {
+      type: "island-placement",
+      kind: value.kind,
+      notchWidth: value.notchWidth,
+      notchHeight: value.notchHeight,
+    };
+  }
+  if (
+    value.type === "island-open-thread" &&
+    typeof value.threadId === "string" &&
+    value.threadId.length > 0 &&
+    value.threadId.length <= MAX_ISLAND_THREAD_ID_LENGTH
+  ) {
+    return { type: "island-open-thread", threadId: value.threadId };
+  }
+  if (value.type === "island-open-app") return { type: "island-open-app" };
   return null;
 }
 

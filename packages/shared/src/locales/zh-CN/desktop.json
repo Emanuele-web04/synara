@@ -160,5 +160,7 @@
   "automaticUpdatesAreDisabledByTheSYNARADISABLEAUTO": "SYNARA_DISABLE_AUTO_UPDATE 设置已禁用自动更新。",
   "automaticUpdatesOnLinuxRequireRunningTheAppImageBuild": "Linux 上的自动更新需要运行 AppImage 构建。",
   "substitutions": "替换",
-  "speech": "朗读"
+  "speech": "朗读",
+  "notchIsland_empty": "没有进行中的对话",
+  "notchIsland_openApp": "打开 {{app}}"
 }

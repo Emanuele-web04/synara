@@ -861,6 +861,15 @@ export interface DesktopKeepAwakeState {
   onBattery: boolean;
 }
 
+/**
+ * Notch island (macOS, Synara Beta): agent status at the notch. `supported`
+ * is false on Stable and other platforms; `enabled` is the saved choice.
+ */
+export interface DesktopNotchIslandState {
+  supported: boolean;
+  enabled: boolean;
+}
+
 export const DesktopAppIcon = Schema.Literals(["default", "icon", "dark", "beta"]);
 export type DesktopAppIcon = typeof DesktopAppIcon.Type;
 
@@ -1124,6 +1133,14 @@ export interface DesktopBridge {
     getState: () => Promise<DesktopKeepAwakeState>;
     setEnabled: (enabled: boolean) => Promise<DesktopKeepAwakeState>;
     setRemoteAccessAllowed: (allowed: boolean) => Promise<DesktopKeepAwakeState>;
+  };
+  /**
+   * Notch island (macOS, Synara Beta). The main process is the gate: it
+   * reports `supported: false` and ignores changes everywhere else.
+   */
+  notchIsland?: {
+    getState: () => Promise<DesktopNotchIslandState>;
+    setEnabled: (enabled: boolean) => Promise<DesktopNotchIslandState>;
   };
   /**
    * Live desktop frames from the native computer frame tap, desktop app only.

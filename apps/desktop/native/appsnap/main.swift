@@ -117,6 +117,29 @@ do {
         withExtendedLifetime((monitor, commandListener, parentProcessMonitor)) {
             RunLoop.main.run()
         }
+    case .island:
+        guard #available(macOS 13.0, *) else {
+            throw AppSnapFailure(code: "unsupported_os", message: "The notch island needs macOS 13 or later.")
+        }
+        _ = NSApplication.shared.setActivationPolicy(.accessory)
+
+        let (controller, commandListener, parentProcessMonitor): (
+            NotchIslandController, NotchIslandCommandListener, ParentProcessMonitor
+        ) = MainActor.assumeIsolated {
+            let controller = NotchIslandController(emitter: emitter)
+            controller.start()
+            let commandListener = NotchIslandCommandListener(emitter: emitter, controller: controller)
+            let parentProcessMonitor = ParentProcessMonitor()
+            parentProcessMonitor.start()
+            commandListener.start()
+            return (controller, commandListener, parentProcessMonitor)
+        }
+
+        // NSApplication.run() dispatches the pointer events the island's
+        // buttons and hover need; a bare RunLoop never delivers them.
+        withExtendedLifetime((controller, commandListener, parentProcessMonitor)) {
+            NSApplication.shared.run()
+        }
     case .listAudioInputs:
         emitter.emit(["type": "audio-inputs", "devices": listAudioInputDevices()])
     case let .audioLevel(sources, inputDeviceUID):

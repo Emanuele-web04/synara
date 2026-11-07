@@ -1181,5 +1181,9 @@
   "permissionGuideCompleteAuthentication": "完成任何 macOS 身份验证。如果 macOS 要求退出并重新打开，请先照做，再重新检查。",
   "resumeAfterUsageLimits": "用量限额重置后继续",
   "resumeAfterUsageLimitsDescription": "供应商报告额度重置时间时，自动继续新触发限额的任务。此设置适用于这台电脑，即使其他设备已关闭。关闭后会取消待恢复的任务。",
-  "couldNotUpdateUsageLimitRecovery": "无法更新自动恢复设置"
+  "couldNotUpdateUsageLimitRecovery": "无法更新自动恢复设置",
+  "notchIsland": "刘海岛",
+  "notchIslandDescription": "在屏幕顶部显示对话动态：位于刘海处，没有刘海的显示器上则显示为一个小胶囊。将指针悬停其上即可查看你的对话。",
+  "notchIslandKeywords": "在屏幕顶部显示对话动态：位于刘海处，没有刘海的显示器上则显示为一个小胶囊。灵动岛 刘海 状态 运行 审批",
+  "couldNotUpdateNotchIsland": "无法更新刘海岛"
 }

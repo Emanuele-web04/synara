@@ -391,8 +391,15 @@ bootstrap removes WebRTC capabilities before page scripts and stops parsing if t
 cannot be enforced. HTML messages cannot open external URLs through the host.
 
 The list currently holds `remoteConnections`, `accountProfileSync`,
-`accountInbox` (account-saved Inbox history), and `chinese-ui`. MCP Connectors and
+`accountInbox` (account-saved Inbox history), `chinese-ui`, and `notch-island`. MCP Connectors and
 the native editor are available in Stable and Beta.
+
+The notch island (`notch-island`) is macOS-only and on by default in non-Stable builds:
+the AppSnap helper's `--island` mode draws chat status at the MacBook notch, or as a
+top-center pill on displays without one. It has no server RPC, so desktop main is the
+gate: on Stable or other platforms it reports the feature unsupported, never reads or
+writes `notch-island.json`, and never starts the helper. Settings → Notifications shows
+the toggle only where it applies.
 
 Simplified Chinese (`chinese-ui`) is available in non-Stable builds. Stable keeps English and Spanish, hides Chinese
 from Language settings, and ignores saved or programmatic Chinese selections without erasing

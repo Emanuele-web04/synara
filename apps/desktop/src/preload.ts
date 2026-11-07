@@ -216,6 +216,10 @@ contextBridge.exposeInMainWorld("desktopBridge", {
     setRemoteAccessAllowed: (allowed) =>
       ipcRenderer.invoke(IPC.keepAwake.setRemoteAccessAllowed, allowed),
   },
+  notchIsland: {
+    getState: () => ipcRenderer.invoke(IPC.notchIsland.getState),
+    setEnabled: (enabled) => ipcRenderer.invoke(IPC.notchIsland.setEnabled, enabled),
+  },
   computerPreview: {
     onFrame: (listener) => {
       const wrappedListener = (_event: Electron.IpcRendererEvent, payload: unknown) => {

@@ -160,5 +160,7 @@
   "automaticUpdatesAreDisabledByTheSYNARADISABLEAUTO": "Automatic updates are disabled by the SYNARA_DISABLE_AUTO_UPDATE setting.",
   "automaticUpdatesOnLinuxRequireRunningTheAppImageBuild": "Automatic updates on Linux require running the AppImage build.",
   "substitutions": "Substitutions",
-  "speech": "Speech"
+  "speech": "Speech",
+  "notchIsland_empty": "No active chats",
+  "notchIsland_openApp": "Open {{app}}"
 }
