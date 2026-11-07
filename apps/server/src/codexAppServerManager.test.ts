@@ -2354,6 +2354,59 @@ describe("resolveCodexModelForAccount", () => {
 });
 
 describe("startSession", () => {
+  it("keeps mirrored user-config notices out of stderr warnings while retaining real project warnings", async () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "synara-codex-config-notice-"));
+    const configPath = path.join(root, "config.toml");
+    writeFileSync(configPath, 'notify = ["echo"]\n');
+    const authTracking = prepareCodexAuthTracking({ env: { ...process.env }, homePath: root });
+    const fake = createSyntheticCodexAppServer();
+    const { manager } = createSyntheticCodexManager(fake);
+    vi.spyOn(
+      manager as unknown as { buildSessionProcessEnv: () => Promise<unknown> },
+      "buildSessionProcessEnv",
+    ).mockResolvedValue({
+      env: {},
+      authTracking,
+      authFingerprint: readCodexPreparedAuthTrackingFingerprint(authTracking),
+    });
+    try {
+      await manager.startSession({
+        threadId: asThreadId("config-notice-thread"),
+        provider: "codex",
+        providerOptions: { codex: { homePath: root } },
+        cwd: root,
+        runtimeMode: "full-access",
+        agentGatewayCapabilityInput: AGENT_GATEWAY_NO_CAPABILITIES,
+      });
+      const warnings: string[] = [];
+      manager.on("event", (event) => {
+        if (event.method === "process/stderr" && event.message) warnings.push(event.message);
+      });
+      const notice = (file: string) =>
+        `Ignored unsupported project-local config keys in ${file}: notify. If you want these settings to apply, manually set them in your user-level config.toml.`;
+      const stderr = fake.children[0]!.stderr;
+      const emit = (message: string) =>
+        stderr.write(
+          `${JSON.stringify({
+            timestamp: "2026-11-07T20:10:07.720750Z",
+            level: "ERROR",
+            target: "codex_app_server",
+            fields: { message },
+          })}\n`,
+        );
+      emit(notice(configPath));
+      const projectWarning = notice(path.join(root, "project", ".codex", "config.toml"));
+      emit(projectWarning);
+      const invalidConfig = `Cannot parse ${configPath}: invalid TOML`;
+      emit(invalidConfig);
+      expect(warnings).toEqual([projectWarning, invalidConfig]);
+      expect(readFileSync(configPath, "utf8")).toBe('notify = ["echo"]\n');
+    } finally {
+      await manager.stopAll();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("resumes a synthetic large-history thread across restart without replay or payload exposure", async () => {
     const fake = createSyntheticCodexAppServer();
     const cwd = mkdtempSync(path.join(os.tmpdir(), "synara-codex-large-resume-"));

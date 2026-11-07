@@ -1031,8 +1031,11 @@ export function parseCodexUserInputQuestions(
 }
 
 // The same classifier also filters diagnostics persisted by older hosts in the web transcript.
-export function classifyCodexStderrLine(rawLine: string): { message: string } | null {
-  const diagnostic = classifyCodexStderr(rawLine);
+export function classifyCodexStderrLine(
+  rawLine: string,
+  mirroredUserConfigPath?: string,
+): { message: string } | null {
+  const diagnostic = classifyCodexStderr(rawLine, mirroredUserConfigPath);
   if (diagnostic?.kind === "user-mcp-oauth") {
     if (!loggedUserMcpOAuthServers.has(diagnostic.server)) {
       loggedUserMcpOAuthServers.add(diagnostic.server);
@@ -4210,7 +4213,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       const raw = chunk.toString();
       const lines = raw.split(/\r?\n/g);
       for (const rawLine of lines) {
-        const classified = classifyCodexStderrLine(rawLine);
+        const classified = classifyCodexStderrLine(rawLine, context.authTracking?.sourceConfigPath);
         if (!classified) {
           continue;
         }
