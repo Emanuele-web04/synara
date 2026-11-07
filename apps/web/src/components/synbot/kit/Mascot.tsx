@@ -1,8 +1,8 @@
 // FILE: Mascot.tsx
 // Purpose: Mascots (ported from HoloBot's packages/ui Mascot.tsx and mascots.ts): soft toys seen
-//          face on, one color each, drawn as inline SVG. Every bot breathes, blinks and
-//          glances; working, its eyes scan and it bobs; waiting on the user, it nods. Reduce
-//          Motion holds them still. The main SynBot is HoloBot's ghost in moving liquid metal
+//          face on, one color each, drawn as inline SVG. Every bot moves calmly: it breathes,
+//          blinks and glances; working, it leans and its eyes sweep; waiting on the user, it
+//          tilts its head. Reduce Motion holds them still. The main SynBot is HoloBot's ghost in moving liquid metal
 //          (metal/), alive like the rest.
 // Layer: SynBot kit
 // Exports: MascotSize, MascotMood, GhostMark, BotMascot, PebbleMascot, mascotFit, botPhase
@@ -148,8 +148,8 @@ export function BotMascot({
   readonly shape: string;
   readonly color: string;
   readonly size: MascotSize;
-  /** idle breathes, blinks and glances; working hops and scans; waiting nods and tilts its
-   * head; done hops with happy eyes; paused dozes. */
+  /** idle breathes, blinks and glances; working leans and scans; waiting tilts its head with
+   * its eyes up; done rocks slowly with content eyes; paused dozes. */
   readonly mood?: MascotMood | undefined;
   /** The bot's id: its own rhythm, so a row of bots does not blink together. */
   readonly seed?: string | undefined;

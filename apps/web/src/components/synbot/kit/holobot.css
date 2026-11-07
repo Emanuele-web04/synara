@@ -262,68 +262,69 @@
   height: 16px;
   transform: none;
 }
-/* A bot alive, its mood in its head and eyes (each bot keeps its own rhythm):
+/* A bot alive, its mood in its head and eyes, calm and slow (each bot keeps its own phase).
+   Nothing hops, squashes or nods: the head turns and tilts by a degree or two and the eyes
+   glide, every move eased in and out.
    - idle: breathes and blinks; now and then turns its head to glance left, then right, then
-     tilts it with its eyes up, curious. On a turn the outline shifts, leans and narrows by less
-     than the eyes travel, so the flat shape reads as a round head turning.
-   - working (running): hops, squashes and leans side to side, eyes narrowed in focus, scanning.
-   - waiting for you: nods and tilts its head side to side like a puppy asking, eyes big and up.
-   - done: a happy hop, then rocks, eyes squeezed into happy crescents (wide at the top of the
-     hop).
-   - paused: sleepy, a slow deep breath with a droop, eyes nearly shut, opening a little now
-     and then.
+     tilts it with its eyes up. On a turn the outline shifts and narrows by less than the eyes
+     travel, so the flat shape reads as a round head turning.
+   - working (running): leans gently side to side, eyes narrowed in focus, sweeping with it.
+   - waiting for you: tilts its head one way, then the other, eyes a little wider and up.
+   - done: eyes softly closed in a content squint, the head rocking slowly.
+   - paused: a slow deep breath with a droop, eyes nearly shut, opening a little now and then.
    Reduce Motion holds them all still. */
-.hb-bot--alive .hb-bot__body {
-  transform-box: fill-box;
-  transform-origin: 50% 100%;
-  animation:
-    hb-bot-breathe 4.2s ease-in-out infinite,
-    hb-bot-turn 9.4s ease-in-out infinite;
-  animation-delay: var(--hb-bot-phase, 0s);
-}
+.hb-bot--alive .hb-bot__body,
 .hb-bot--alive .hb-bot__eyes {
   transform-box: fill-box;
-  transform-origin: 50% 60%;
-  animation:
-    hb-bot-blink 5.3s infinite,
-    hb-bot-look 9.4s ease-in-out infinite;
   animation-delay: var(--hb-bot-phase, 0s);
+}
+.hb-bot--alive .hb-bot__body {
+  transform-origin: 50% 100%;
+  animation-name: hb-bot-breathe, hb-bot-turn;
+  animation-duration: 5.6s, 12s;
+  animation-timing-function: ease-in-out;
+  animation-iteration-count: infinite;
+}
+.hb-bot--alive .hb-bot__eyes {
+  transform-origin: 50% 60%;
+  animation-name: hb-bot-blink, hb-bot-look;
+  animation-duration: 6.2s, 12s;
+  animation-timing-function: ease, ease-in-out;
+  animation-iteration-count: infinite;
 }
 .hb-bot--alive[data-mood="working"] .hb-bot__body {
-  animation:
-    hb-bot-work 1s ease-in-out infinite,
-    hb-bot-sway 1s ease-in-out infinite;
+  animation-name: hb-bot-lean;
+  animation-duration: 3.6s;
 }
 .hb-bot--alive[data-mood="working"] .hb-bot__eyes {
-  animation:
-    hb-bot-blink 5.3s infinite,
-    hb-bot-scan 1s ease-in-out infinite;
+  animation-name: hb-bot-blink, hb-bot-scan;
+  animation-duration: 6.2s, 3.6s;
 }
 .hb-bot--alive[data-mood="waiting"] .hb-bot__body {
-  animation:
-    hb-bot-nod 2.4s ease-in-out infinite,
-    hb-bot-ask 4.8s ease-in-out infinite;
+  animation-name: hb-bot-ask;
+  animation-duration: 6.4s;
 }
 .hb-bot--alive[data-mood="waiting"] .hb-bot__eyes {
-  animation:
-    hb-bot-blink 3.1s infinite,
-    hb-bot-up 2.4s ease-in-out infinite;
+  animation-name: hb-bot-blink, hb-bot-up;
+  animation-duration: 4.6s, 6.4s;
 }
 .hb-bot--alive[data-mood="done"] .hb-bot__body {
-  animation: hb-bot-cheer 3.2s ease-in-out infinite;
-  animation-delay: var(--hb-bot-phase, 0s);
+  animation-name: hb-bot-rock;
+  animation-duration: 6.4s;
 }
 .hb-bot--alive[data-mood="done"] .hb-bot__eyes {
-  animation: hb-bot-happy 3.2s ease-in-out infinite;
-  animation-delay: var(--hb-bot-phase, 0s);
+  animation-name: hb-bot-content;
+  animation-duration: 6.4s;
+  animation-timing-function: ease-in-out;
 }
 .hb-bot--alive[data-mood="paused"] .hb-bot__body {
-  animation: hb-bot-doze 6s ease-in-out infinite;
-  animation-delay: var(--hb-bot-phase, 0s);
+  animation-name: hb-bot-doze;
+  animation-duration: 7s;
 }
 .hb-bot--alive[data-mood="paused"] .hb-bot__eyes {
-  animation: hb-bot-sleepy 6s ease-in-out infinite;
-  animation-delay: var(--hb-bot-phase, 0s);
+  animation-name: hb-bot-sleepy;
+  animation-duration: 7s;
+  animation-timing-function: ease-in-out;
 }
 @keyframes hb-bot-breathe {
   0%,
@@ -331,211 +332,162 @@
     transform: scale(1, 1);
   }
   50% {
-    transform: scale(1.025, 0.975);
+    transform: scale(1.012, 0.988);
   }
 }
 @keyframes hb-bot-blink {
   0%,
-  93%,
+  94%,
   100% {
     transform: scaleY(1);
   }
-  95.5% {
-    transform: scaleY(0.08);
+  96.5% {
+    transform: scaleY(0.1);
   }
 }
-/* Idle: the eyes' glances and the curious look up add to the head's turn and tilt
-   (hb-bot-turn); turned, the eyes narrow a little. */
+/* Idle: the eyes' glances and the look up add to the head's turn and tilt (hb-bot-turn);
+   turned, the eyes narrow a little. Each move takes about a second. */
 @keyframes hb-bot-look {
   0%,
-  30%,
-  66%,
-  74%,
-  94%,
+  24%,
+  64%,
+  72%,
+  92%,
   100% {
     translate: 0 0;
     scale: 1 1;
   }
-  35%,
-  46% {
-    translate: -4.5px 1px;
-    scale: 0.92 1;
+  32%,
+  42% {
+    translate: -3px 0.5px;
+    scale: 0.95 1;
   }
-  51%,
-  62% {
-    translate: 3px -1px;
-    scale: 0.94 1;
+  50%,
+  58% {
+    translate: 2px -0.5px;
+    scale: 0.96 1;
   }
-  79%,
-  89% {
-    translate: 2.5px -3px;
-    scale: 1.04 1.06;
+  78%,
+  86% {
+    translate: 1.5px -1.5px;
+    scale: 1.02 1.03;
   }
 }
 @keyframes hb-bot-turn {
   0%,
-  30%,
-  66%,
-  74%,
-  94%,
+  24%,
+  64%,
+  72%,
+  92%,
   100% {
     translate: 0 0;
     rotate: 0deg;
     scale: 1 1;
   }
-  35%,
-  46% {
-    translate: -2.5px 0;
-    rotate: -2deg;
-    scale: 0.97 1;
+  32%,
+  42% {
+    translate: -1.2px 0;
+    rotate: -1deg;
+    scale: 0.985 1;
   }
-  51%,
-  62% {
-    translate: 2px 0;
-    rotate: 1.5deg;
-    scale: 0.975 1;
+  50%,
+  58% {
+    translate: 1px 0;
+    rotate: 0.8deg;
+    scale: 0.99 1;
   }
-  79%,
-  89% {
-    translate: 0.5px -1px;
-    rotate: 6deg;
+  78%,
+  86% {
+    translate: 0 -0.5px;
+    rotate: 2deg;
     scale: 1 1;
   }
 }
-/* Working: the eyes, narrowed in focus, scan with the head's sway (hb-bot-sway); together they
-   travel as far as the eyes alone used to. */
+/* Working: a slow lean side to side; the narrowed eyes sweep with it. */
+@keyframes hb-bot-lean {
+  0%,
+  100% {
+    translate: -1px 0;
+    rotate: -1.2deg;
+  }
+  50% {
+    translate: 1px 0;
+    rotate: 1.2deg;
+  }
+}
 @keyframes hb-bot-scan {
   0%,
   100% {
-    translate: -6px 0;
-    scale: 1 0.8;
+    translate: -3.5px 0;
+    scale: 1 0.85;
   }
   50% {
-    translate: 6px 0;
-    scale: 1 0.8;
+    translate: 3.5px 0;
+    scale: 1 0.85;
   }
 }
-@keyframes hb-bot-sway {
-  0%,
-  100% {
-    translate: -2px 0;
-  }
-  50% {
-    translate: 2px 0;
-  }
-}
-@keyframes hb-bot-work {
-  0%,
-  100% {
-    transform: translateY(0) rotate(0deg) scale(1.04, 0.96);
-  }
-  25% {
-    transform: translateY(-9%) rotate(-5deg) scale(0.97, 1.03);
-  }
-  50% {
-    transform: translateY(0) rotate(0deg) scale(1.04, 0.96);
-  }
-  75% {
-    transform: translateY(-9%) rotate(5deg) scale(0.97, 1.03);
-  }
-}
-/* Waiting for you: a nod, the head tilting side to side, the eyes big and up at the user. */
-@keyframes hb-bot-nod {
-  0%,
-  70%,
-  100% {
-    transform: translateY(0);
-  }
-  78% {
-    transform: translateY(-5%);
-  }
-  86% {
-    transform: translateY(0);
-  }
-  92% {
-    transform: translateY(-2%);
-  }
-}
+/* Waiting for you: the head tilts one way, rests, then the other; the eyes are up at the user. */
 @keyframes hb-bot-ask {
   0%,
   50%,
   100% {
     rotate: 0deg;
   }
-  20%,
-  32% {
-    rotate: -5deg;
+  18%,
+  36% {
+    rotate: -2.5deg;
   }
   68%,
-  80% {
-    rotate: 5deg;
+  86% {
+    rotate: 2.5deg;
   }
 }
 @keyframes hb-bot-up {
   0%,
   100% {
-    translate: 0 -3px;
-    scale: 1.1 1.12;
+    translate: -0.5px -2px;
+    scale: 1.05 1.06;
   }
   50% {
-    translate: 2px -4px;
-    scale: 1.1 1.12;
+    translate: 1px -2.5px;
+    scale: 1.05 1.06;
   }
 }
-/* Done: a squash, a hop with the eyes wide, a squash on landing, then a happy rock with the eyes
-   squeezed into crescents. */
-@keyframes hb-bot-cheer {
+/* Done: a slow rock; the eyes rest in a content squint and open a little now and then. */
+@keyframes hb-bot-rock {
   0%,
   100% {
-    transform: translateY(0) rotate(0deg) scale(1, 1);
+    rotate: 0deg;
   }
-  8% {
-    transform: translateY(0) rotate(0deg) scale(1.08, 0.92);
+  25% {
+    rotate: -1.5deg;
   }
-  18% {
-    transform: translateY(-16%) rotate(0deg) scale(0.94, 1.07);
-  }
-  28% {
-    transform: translateY(0) rotate(0deg) scale(1.07, 0.93);
-  }
-  36% {
-    transform: translateY(0) rotate(0deg) scale(1, 1);
-  }
-  50% {
-    transform: translateY(0) rotate(-5deg) scale(1, 1);
-  }
-  64% {
-    transform: translateY(0) rotate(5deg) scale(1, 1);
-  }
-  78% {
-    transform: translateY(0) rotate(-3deg) scale(1, 1);
-  }
-  88% {
-    transform: translateY(0) rotate(0deg) scale(1, 1);
+  75% {
+    rotate: 1.5deg;
   }
 }
-@keyframes hb-bot-happy {
+@keyframes hb-bot-content {
   0%,
-  8%,
-  30%,
+  40%,
+  80%,
   100% {
-    translate: 0 -1px;
-    scale: 1.05 0.45;
+    translate: 0 -0.5px;
+    scale: 1.03 0.55;
   }
-  16%,
-  22% {
-    translate: 0 -2px;
-    scale: 1.08 1.12;
+  55%,
+  65% {
+    translate: 0 -0.5px;
+    scale: 1.02 0.8;
   }
 }
 /* Paused: a slow deep breath with a droop; the eyes nearly shut, opening a little now and then. */
 @keyframes hb-bot-doze {
   0%,
   100% {
-    transform: translateY(0) rotate(2deg) scale(1, 1);
+    transform: translateY(0) rotate(1.5deg) scale(1, 1);
   }
   50% {
-    transform: translateY(2%) rotate(3.5deg) scale(1.035, 0.965);
+    transform: translateY(1%) rotate(2.5deg) scale(1.015, 0.985);
   }
 }
 @keyframes hb-bot-sleepy {
@@ -549,7 +501,7 @@
   70%,
   78% {
     translate: 0 0.5px;
-    scale: 1 0.55;
+    scale: 1 0.5;
   }
 }
 @media (prefers-reduced-motion: reduce) {
