@@ -17,6 +17,7 @@ import { useTheme } from "~/hooks/useTheme";
 import {
   buildFileDiffRenderKey,
   getRenderablePatch,
+  resolveFileDiffIndexPaths,
   resolveFileDiffPath,
   sortFileDiffsByPath,
   splitRepoRelativePath,
@@ -70,7 +71,7 @@ function GitFileRow(props: {
   actionIcon: "stage" | "unstage";
   actionDisabled: boolean;
   onSelect: (file: FileDiffMetadata) => void;
-  onAction: (paths: string[]) => void;
+  onAction: (files: FileDiffMetadata[]) => void;
 }) {
   const filePath = resolveFileDiffPath(props.fileDiff);
   const { dir, name } = splitRepoRelativePath(filePath);
@@ -106,7 +107,7 @@ function GitFileRow(props: {
         label={props.actionLabel}
         tooltip={props.actionLabel}
         disabled={props.actionDisabled}
-        onClick={() => props.onAction([filePath])}
+        onClick={() => props.onAction([props.fileDiff])}
       >
         {props.actionIcon === "stage" ? (
           <PlusIcon className="size-3.5" />
@@ -130,10 +131,9 @@ function GitFileSection(props: {
   actionIcon: "stage" | "unstage";
   actionDisabled: boolean;
   onSelect: (file: FileDiffMetadata) => void;
-  onAction: (paths: string[]) => void;
+  onAction: (files: FileDiffMetadata[]) => void;
 }) {
   const stat = summarizeFileDiffStats(props.files);
-  const allPaths = props.files.map((file) => resolveFileDiffPath(file));
   return (
     <section className="min-w-0">
       <header className="flex items-center gap-2 px-1.5 py-1">
@@ -149,7 +149,7 @@ function GitFileSection(props: {
             size="xs"
             className="ml-auto shrink-0"
             disabled={props.actionDisabled}
-            onClick={() => props.onAction(allPaths)}
+            onClick={() => props.onAction(props.files)}
           >
             {props.actionAllLabel}
           </Button>
@@ -235,11 +235,14 @@ export function GitPanel(props: {
   const unstageMutation = useMutation(gitUnstageFilesMutationOptions({ cwd, queryClient }));
   const mutating = stageMutation.isPending || unstageMutation.isPending;
 
-  const stage = (paths: string[]) => {
+  const stage = (files: FileDiffMetadata[]) => {
+    const paths = files.map((file) => resolveFileDiffPath(file));
     if (!cwd || paths.length === 0) return;
     stageMutation.mutate(paths);
   };
-  const unstage = (paths: string[]) => {
+  // A staged rename also stages its old path's deletion; reset both sides.
+  const unstage = (files: FileDiffMetadata[]) => {
+    const paths = files.flatMap((file) => resolveFileDiffIndexPaths(file));
     if (!cwd || paths.length === 0) return;
     unstageMutation.mutate(paths);
   };
