@@ -13309,6 +13309,63 @@ describe("ChatView transcript geometry (full app)", () => {
     },
   );
 
+  it("counts the system-font preference and the inactive theme pack toward Restore defaults", async () => {
+    const previousTheme = localStorage.getItem("synara:theme");
+    // Stay in System mode so only the inactive pack and the font switch differ from defaults.
+    const inactiveVariant = window.matchMedia("(prefers-color-scheme: dark)").matches
+      ? "light"
+      : "dark";
+    localStorage.setItem(
+      "synara:theme",
+      JSON.stringify({
+        ...DEFAULT_THEME_STATE,
+        systemUiFont: false,
+        codeThemeIds: { ...DEFAULT_THEME_STATE.codeThemeIds, [inactiveVariant]: "codex" },
+        chromeThemes: {
+          ...DEFAULT_THEME_STATE.chromeThemes,
+          [inactiveVariant]: getCodeThemeSeed("codex", inactiveVariant),
+        },
+      }),
+    );
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: addThreadToSnapshot(createDraftOnlySnapshot(), THREAD_ID),
+    });
+    window.dispatchEvent(new StorageEvent("storage", { key: "synara:theme" }));
+    const previousNativeApi = window.nativeApi;
+    const api = readNativeApi()!;
+    const confirm = vi.fn(async () => false);
+    Object.defineProperty(window, "nativeApi", {
+      configurable: true,
+      value: { ...api, dialogs: { ...api.dialogs, confirm } },
+    });
+    try {
+      await mounted.router.navigate({ to: "/settings", search: { section: "appearance" } });
+      await expect
+        .element(page.getByRole("switch", { name: "Use system UI font", exact: true }))
+        .not.toBeChecked();
+      const restoreDefaults = page.getByRole("button", { name: "Restore defaults", exact: true });
+      await expect.element(restoreDefaults).toBeEnabled();
+      await restoreDefaults.click();
+      await expect.poll(() => confirm.mock.calls.length).toBe(1);
+      expect(confirm).toHaveBeenCalledWith(
+        expect.stringContaining(
+          inactiveVariant === "dark" ? "Dark theme pack" : "Light theme pack",
+        ),
+      );
+      expect(confirm).toHaveBeenCalledWith(expect.stringContaining("Use system UI font"));
+    } finally {
+      Object.defineProperty(window, "nativeApi", {
+        configurable: true,
+        value: previousNativeApi,
+      });
+      if (previousTheme === null) localStorage.removeItem("synara:theme");
+      else localStorage.setItem("synara:theme", previousTheme);
+      window.dispatchEvent(new StorageEvent("storage", { key: "synara:theme" }));
+      await mounted.cleanup();
+    }
+  });
+
   it("disables the ASCII landing decoration from Appearance and releases it on the terminal tab", async () => {
     const snapshot = addThreadToSnapshot(createDraftOnlySnapshot(), THREAD_ID);
     const mounted = await mountChatView({
