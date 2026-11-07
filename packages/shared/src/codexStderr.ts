@@ -53,11 +53,25 @@ export function normalizeCodexUserVisibleErrorMessage(rawMessage: string): strin
 // A user-configured MCP OAuth failure is reported to the host logger, not every chat.
 export function classifyCodexStderr(
   line: string,
+  mirroredUserConfigPath?: string,
 ): { kind: "notice"; message: string } | { kind: "user-mcp-oauth"; server: string } | null {
   line = normalizeCodexProcessLine(line);
   if (isIgnorableCodexProcessLine(line)) return null;
   const log = readLog(line);
   if (log) {
+    // The overlay already loads these settings at user level. Codex can rediscover
+    // the source file as a project config; only that duplicate notice is harmless.
+    if (
+      mirroredUserConfigPath &&
+      log.target === "codex_app_server" &&
+      log.message.startsWith(
+        `Ignored unsupported project-local config keys in ${mirroredUserConfigPath}: `,
+      ) &&
+      log.message.endsWith(
+        "If you want these settings to apply, manually set them in your user-level config.toml.",
+      )
+    )
+      return null;
     if (log.level !== "ERROR" || BENIGN_ERRORS.some((snippet) => log.message.includes(snippet)))
       return null;
     const server = /\bcodex_rmcp_client::oauth\S*:.*?\bfor server ([A-Za-z0-9_.-]+)/.exec(
