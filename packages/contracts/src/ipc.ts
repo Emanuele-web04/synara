@@ -870,6 +870,38 @@ export interface DesktopNotchIslandState {
   enabled: boolean;
 }
 
+/** The status a chat shows on the notch island, matching the sidebar's status pills. */
+export type DesktopNotchIslandRowState =
+  | "approval"
+  | "input"
+  | "plan"
+  | "working"
+  | "done"
+  | "failed";
+
+export interface DesktopNotchIslandRow {
+  readonly threadId: string;
+  readonly title: string;
+  readonly project: string | null;
+  /** Provider key, matching a key of `icons` when its glyph is known. */
+  readonly provider: string | null;
+  readonly state: DesktopNotchIslandRowState;
+}
+
+/**
+ * Renderer → main: what the notch island should show, built from the same grouping
+ * the Inbox uses. Counts cover every chat; `rows` is the short list shown on hover.
+ * `icons` maps provider keys to SVG markup of the glyphs the app already draws.
+ */
+export interface DesktopNotchIslandSnapshot {
+  readonly needsYou: number;
+  readonly working: number;
+  readonly done: number;
+  readonly failed: number;
+  readonly rows: ReadonlyArray<DesktopNotchIslandRow>;
+  readonly icons: Readonly<Record<string, string>>;
+}
+
 export const DesktopAppIcon = Schema.Literals(["default", "icon", "dark", "beta"]);
 export type DesktopAppIcon = typeof DesktopAppIcon.Type;
 
@@ -1141,6 +1173,8 @@ export interface DesktopBridge {
   notchIsland?: {
     getState: () => Promise<DesktopNotchIslandState>;
     setEnabled: (enabled: boolean) => Promise<DesktopNotchIslandState>;
+    /** Fire-and-forget; main validates, caps and forwards it to the island. */
+    publishSnapshot: (snapshot: DesktopNotchIslandSnapshot) => void;
   };
   /**
    * Live desktop frames from the native computer frame tap, desktop app only.

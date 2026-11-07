@@ -380,6 +380,7 @@ import {
   readNotchIslandPreference,
   writeNotchIslandPreference,
 } from "./notchIsland";
+import { EMPTY_NOTCH_ISLAND_SNAPSHOT, sanitizeNotchIslandSnapshot } from "./notchIslandSnapshot";
 import { hardenBrowserAnnotationWebviewPreferences } from "./browserAnnotations/webviewSecurity";
 import { LOCAL_HTML_PREVIEW_SCHEME } from "./localHtmlPreviewProtocol";
 import {
@@ -5680,6 +5681,30 @@ function registerIpcHandlers(): void {
   ipcMain.removeHandler(IPC.notchIsland.getState);
   ipcMain.handle(IPC.notchIsland.getState, async () => getNotchIslandController().getState());
 
+  // Only the main window's top frame may say what the island shows; when that page
+  // goes away the island empties instead of showing stale chats.
+  ipcMain.removeAllListeners(IPC.notchIsland.publishSnapshot);
+  ipcMain.on(IPC.notchIsland.publishSnapshot, (event: IpcMainEvent, rawSnapshot: unknown) => {
+    if (event.sender !== mainWindow?.webContents || event.senderFrame !== event.sender.mainFrame) {
+      return;
+    }
+    const snapshot = sanitizeNotchIslandSnapshot(rawSnapshot);
+    if (!snapshot) return;
+    if (!notchIslandSnapshotSenders.has(event.sender)) {
+      const sender = event.sender;
+      notchIslandSnapshotSenders.add(sender);
+      const clear = () => {
+        sender.off("destroyed", clear);
+        sender.off("did-navigate", clear);
+        notchIslandSnapshotSenders.delete(sender);
+        notchIslandController?.setSnapshot(EMPTY_NOTCH_ISLAND_SNAPSHOT);
+      };
+      sender.once("destroyed", clear);
+      sender.once("did-navigate", clear);
+    }
+    getNotchIslandController().setSnapshot(snapshot);
+  });
+
   ipcMain.removeHandler(IPC.notchIsland.setEnabled);
   ipcMain.handle(IPC.notchIsland.setEnabled, async (_event, rawEnabled: unknown) =>
     typeof rawEnabled === "boolean"
@@ -6067,6 +6092,7 @@ function getKeepAwakeController(): KeepAwakeController {
 }
 
 let notchIslandController: NotchIslandController | undefined;
+const notchIslandSnapshotSenders = new WeakSet<Electron.WebContents>();
 
 /** Created on first use after `app` is ready; only macOS Beta builds ever start the helper. */
 function getNotchIslandController(): NotchIslandController {
@@ -6079,6 +6105,18 @@ function getNotchIslandController(): NotchIslandController {
       labels: () => ({
         empty: t("desktop:notchIsland_empty"),
         openApp: t("desktop:notchIsland_openApp", { app: APP_DISPLAY_NAME }),
+        needYou: t("desktop:notchIsland_needYou"),
+        working: t("desktop:notchIsland_working"),
+        done: t("desktop:notchIsland_done"),
+        failed: t("desktop:notchIsland_failed"),
+        approval: t("desktop:notchIsland_approval"),
+        input: t("desktop:notchIsland_input"),
+        plan: t("desktop:notchIsland_plan"),
+        stateWorking: t("desktop:notchIsland_stateWorking"),
+        completed: t("desktop:notchIsland_completed"),
+        stateFailed: t("desktop:notchIsland_stateFailed"),
+        open: t("desktop:notchIsland_open"),
+        review: t("desktop:notchIsland_review"),
       }),
       // A click on the island is an explicit gesture in another process, so
       // Synara has to take focus itself, as it does for AppSnap.

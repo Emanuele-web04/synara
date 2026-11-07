@@ -86,7 +86,8 @@ if let notch = notchedSecond {
     expect("panel is centered on the notch", panel.midX, notch.notch.midX)
     expect(
         "panel fits the expanded island",
-        panel.width >= NotchIslandGeometry.expandedWidth && panel.height >= 32 + NotchIslandGeometry.expandedContentHeight,
+        panel.width >= NotchIslandGeometry.expandedWidth
+            && panel.height >= 32 + NotchIslandGeometry.expandedContentHeight(rows: NotchIslandGeometry.maxRows),
         true
     )
 }
@@ -100,11 +101,22 @@ expect("fullscreen suppression wins", NotchIslandGeometry.presence(kind: .pill, 
 
 // Sizes and hover zones
 let notchSize = CGSize(width: 185, height: 32)
-expect("resting is the notch", NotchIslandGeometry.islandSize(for: .resting, notch: notchSize), notchSize)
+expect("resting is the notch", NotchIslandGeometry.islandSize(for: .resting, notch: notchSize, rows: 0), notchSize)
 expect(
     "compact adds an ear each side",
-    NotchIslandGeometry.islandSize(for: .compact, notch: notchSize),
+    NotchIslandGeometry.islandSize(for: .compact, notch: notchSize, rows: 3),
     CGSize(width: 185 + NotchIslandGeometry.earWidth * 2, height: 32)
+)
+expect(
+    "open island grows with its rows",
+    NotchIslandGeometry.islandSize(for: .expanded, notch: notchSize, rows: 1).height
+        < NotchIslandGeometry.islandSize(for: .expanded, notch: notchSize, rows: 4).height,
+    true
+)
+expect(
+    "rows beyond the cap do not grow it",
+    NotchIslandGeometry.expandedContentHeight(rows: 9),
+    NotchIslandGeometry.expandedContentHeight(rows: NotchIslandGeometry.maxRows)
 )
 expect(
     "hidden has no hover zone",
@@ -126,18 +138,24 @@ if CommandLine.arguments.count > 1 {
     let directory = URL(fileURLWithPath: CommandLine.arguments[1], isDirectory: true)
     try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
     let rows = [
-        NotchIslandSnapshot.Row(threadId: "a", title: "Fix reconnect race in session resume", project: "synara", state: .working),
-        NotchIslandSnapshot.Row(threadId: "b", title: "Add the notch island", project: "synara", state: .needsApproval),
-        NotchIslandSnapshot.Row(threadId: "c", title: "Release notes", project: "website", state: .finished),
+        NotchIslandSnapshot.Row(threadId: "a", title: "Add the notch island", project: "synara", provider: "claudeAgent", state: .approval),
+        NotchIslandSnapshot.Row(threadId: "b", title: "Which badge color?", project: "website", provider: "codex", state: .input),
+        NotchIslandSnapshot.Row(threadId: "c", title: "Fix reconnect race in session resume", project: "synara", provider: "codex", state: .working),
+        NotchIslandSnapshot.Row(threadId: "d", title: "Release notes for 1.2", project: "website", provider: "claudeAgent", state: .done),
     ]
+    func snap(_ lead: NotchIslandSnapshot.Lead, _ count: Int, rows: [NotchIslandSnapshot.Row]) -> NotchIslandSnapshot {
+        NotchIslandSnapshot(lead: lead, count: count, needsYou: 2, working: 3, done: 4, failed: 0, rows: rows)
+    }
     let cases: [(String, NotchIslandSnapshot, Bool, NotchIslandPlacementKind)] = [
         ("resting-notch", .idle, false, .notch),
-        ("compact-working", NotchIslandSnapshot(lead: .working, count: 2, rows: rows), false, .notch),
-        ("compact-needs-you", NotchIslandSnapshot(lead: .needsYou, count: 1, rows: rows), false, .notch),
-        ("compact-pill", NotchIslandSnapshot(lead: .finished, count: 1, rows: rows), false, .pill),
-        ("expanded-rows", NotchIslandSnapshot(lead: .needsYou, count: 1, rows: rows), true, .notch),
+        ("compact-working", snap(.working, 3, rows: rows), false, .notch),
+        ("compact-needs-you", snap(.needsYou, 2, rows: rows), false, .notch),
+        ("compact-pill-done", snap(.finished, 4, rows: rows), false, .pill),
+        ("expanded-rows", snap(.needsYou, 2, rows: rows), true, .notch),
+        ("expanded-two-rows", snap(.working, 3, rows: Array(rows.suffix(2))), true, .notch),
         ("expanded-empty", .idle, true, .notch),
     ]
+    let iconSVG = ##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="32" height="32"><circle cx="12" cy="12" r="9" fill="#D97757"/></svg>"##
     MainActor.assumeIsolated {
         for (name, snapshot, expanded, kind) in cases {
             let model = NotchIslandModel()
@@ -146,8 +164,9 @@ if CommandLine.arguments.count > 1 {
             model.placementKind = kind
             model.notchSize = kind == .notch ? notchSize : CGSize(width: NotchIslandGeometry.pillBodyWidth, height: 25)
             model.reduceMotion = true
+            model.icons = ["claudeAgent": NSImage(data: Data(iconSVG.utf8))!]
             let view = NotchIslandView(model: model)
-                .frame(width: 460, height: 240)
+                .frame(width: 500, height: 360)
                 .background(Color(white: 0.85))
             let renderer = ImageRenderer(content: view)
             renderer.scale = 2

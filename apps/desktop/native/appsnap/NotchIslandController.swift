@@ -104,6 +104,16 @@ final class NotchIslandController {
         model.labels = labels
     }
 
+    /// Provider glyphs arrive as the app's own SVG markup. macOS draws SVG data
+    /// natively; where it cannot, the row falls back to a plain dot.
+    func apply(iconMarkup: [String: String]) {
+        var icons = model.icons
+        for (provider, markup) in iconMarkup {
+            icons[provider] = NSImage(data: Data(markup.utf8))
+        }
+        model.icons = icons
+    }
+
     // MARK: - Placement
 
     private func observe(

@@ -8,14 +8,23 @@ import type * as ChildProcess from "node:child_process";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { parseAppSnapHelperMessage } from "./appSnapManager";
+import type { DesktopNotchIslandSnapshot } from "@synara/contracts";
+
 import {
   createNotchIslandController,
   encodeNotchIslandLabelsCommand,
+  NOTCH_ISLAND_LABEL_KEYS,
   NotchIslandHost,
+  type NotchIslandLabels,
   parseNotchIslandPreference,
   readNotchIslandPreference,
   writeNotchIslandPreference,
 } from "./notchIsland";
+import {
+  EMPTY_NOTCH_ISLAND_SNAPSHOT,
+  encodeNotchIslandIconsCommand,
+  encodeNotchIslandSnapshotCommand,
+} from "./notchIslandSnapshot";
 
 /** A stand-in for the `--island` helper: NDJSON out, JSON lines in. */
 class FakeHelper extends EventEmitter {
@@ -47,7 +56,20 @@ class FakeHelper extends EventEmitter {
   }
 }
 
-const LABELS = { empty: "No active chats", openApp: "Open Synara" };
+const LABELS = Object.fromEntries(
+  NOTCH_ISLAND_LABEL_KEYS.map((key) => [key, `label ${key}`]),
+) as NotchIslandLabels;
+
+const SNAPSHOT: DesktopNotchIslandSnapshot = {
+  needsYou: 1,
+  working: 2,
+  done: 0,
+  failed: 0,
+  rows: [
+    { threadId: "t-1", title: "Ship it", project: "synara", provider: "codex", state: "approval" },
+  ],
+  icons: { codex: "<svg>codex</svg>" },
+};
 const flushLines = () => new Promise((resolve) => setImmediate(resolve));
 
 function makeHost() {
@@ -104,7 +126,12 @@ describe("notch island preference", () => {
 
 describe("createNotchIslandController", () => {
   function makeController(supported: boolean, saved = { version: 1 as const, enabled: true }) {
-    const host = { setWanted: vi.fn(), refreshLabels: vi.fn(), dispose: vi.fn() };
+    const host = {
+      setWanted: vi.fn(),
+      refreshLabels: vi.fn(),
+      setSnapshot: vi.fn(),
+      dispose: vi.fn(),
+    };
     const load = vi.fn(() => saved);
     const save = vi.fn();
     const onError = vi.fn();
@@ -119,6 +146,16 @@ describe("createNotchIslandController", () => {
     expect(controller.setEnabled(true)).toEqual({ supported: false, enabled: false });
     expect(save).not.toHaveBeenCalled();
     expect(host.setWanted).not.toHaveBeenCalledWith(true);
+  });
+
+  it("forwards snapshots only where the island is supported", () => {
+    const unsupported = makeController(false);
+    unsupported.controller.setSnapshot(SNAPSHOT);
+    expect(unsupported.host.setSnapshot).not.toHaveBeenCalled();
+
+    const supported = makeController(true);
+    supported.controller.setSnapshot(SNAPSHOT);
+    expect(supported.host.setSnapshot).toHaveBeenCalledWith(SNAPSHOT);
   });
 
   it("starts the saved choice and persists changes", () => {
@@ -162,7 +199,10 @@ describe("NotchIslandHost", () => {
     expect(spawnArgs).toEqual([
       ["/fixture/appsnap", ["--island"], { stdio: ["pipe", "pipe", "pipe"] }],
     ]);
-    expect(helpers[0]?.written.join("")).toBe(encodeNotchIslandLabelsCommand(LABELS));
+    expect(helpers[0]?.written.join("")).toBe(
+      encodeNotchIslandLabelsCommand(LABELS) +
+        encodeNotchIslandSnapshotCommand(EMPTY_NOTCH_ISLAND_SNAPSHOT),
+    );
     expect(host.isRunning).toBe(true);
   });
 
@@ -193,7 +233,10 @@ describe("NotchIslandHost", () => {
     vi.advanceTimersByTime(1);
     expect(helpers).toHaveLength(2);
     await flushLines();
-    expect(helpers[1]?.written.join("")).toBe(encodeNotchIslandLabelsCommand(LABELS));
+    expect(helpers[1]?.written.join("")).toBe(
+      encodeNotchIslandLabelsCommand(LABELS) +
+        encodeNotchIslandSnapshotCommand(EMPTY_NOTCH_ISLAND_SNAPSHOT),
+    );
 
     helpers[1]!.crash();
     vi.advanceTimersByTime(1_999);
@@ -225,6 +268,32 @@ describe("NotchIslandHost", () => {
     vi.advanceTimersByTime(60_000);
     expect(helpers).toHaveLength(1);
     expect(host.isRunning).toBe(false);
+  });
+
+  it("sends each provider glyph once and replays everything after a respawn", async () => {
+    const { host, helpers } = makeHost();
+    host.setWanted(true);
+    const first = helpers[0]!;
+    await flushLines();
+    first.written.length = 0;
+
+    host.setSnapshot(SNAPSHOT);
+    host.setSnapshot({ ...SNAPSHOT, working: 3 });
+    await flushLines();
+    expect(first.written.join("")).toBe(
+      encodeNotchIslandIconsCommand(SNAPSHOT.icons) +
+        encodeNotchIslandSnapshotCommand(SNAPSHOT) +
+        encodeNotchIslandSnapshotCommand({ ...SNAPSHOT, working: 3 }),
+    );
+
+    first.crash();
+    vi.advanceTimersByTime(1_000);
+    await flushLines();
+    expect(helpers[1]?.written.join("")).toBe(
+      encodeNotchIslandLabelsCommand(LABELS) +
+        encodeNotchIslandIconsCommand(SNAPSHOT.icons) +
+        encodeNotchIslandSnapshotCommand({ ...SNAPSHOT, working: 3 }),
+    );
   });
 
   it("ignores every request after dispose", () => {
@@ -263,8 +332,11 @@ describe("island helper messages", () => {
   });
 
   it("clamps label text sent to the helper", () => {
-    const line = encodeNotchIslandLabelsCommand({ empty: ` ${"a".repeat(200)} `, openApp: "Open" });
+    const line = encodeNotchIslandLabelsCommand({ ...LABELS, empty: ` ${"a".repeat(200)} ` });
     expect(line.endsWith("\n")).toBe(true);
-    expect(JSON.parse(line)).toEqual({ type: "labels", empty: "a".repeat(80), openApp: "Open" });
+    const parsed = JSON.parse(line) as Record<string, string>;
+    expect(parsed.empty).toBe("a".repeat(80));
+    expect(parsed.review).toBe("label review");
+    expect(Object.keys(parsed)).toHaveLength(NOTCH_ISLAND_LABEL_KEYS.length + 1);
   });
 });

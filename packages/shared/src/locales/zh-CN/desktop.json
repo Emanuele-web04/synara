@@ -162,5 +162,17 @@
   "substitutions": "替换",
   "speech": "朗读",
   "notchIsland_empty": "没有进行中的对话",
-  "notchIsland_openApp": "打开 {{app}}"
+  "notchIsland_openApp": "打开 {{app}}",
+  "notchIsland_needYou": "需要你",
+  "notchIsland_working": "进行中",
+  "notchIsland_done": "已完成",
+  "notchIsland_failed": "失败",
+  "notchIsland_approval": "待批准",
+  "notchIsland_input": "等待回复",
+  "notchIsland_plan": "计划就绪",
+  "notchIsland_stateWorking": "进行中",
+  "notchIsland_completed": "已完成",
+  "notchIsland_stateFailed": "失败",
+  "notchIsland_open": "打开",
+  "notchIsland_review": "查看"
 }

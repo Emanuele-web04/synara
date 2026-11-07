@@ -117,6 +117,7 @@ import {
 import { useProjectRunStore } from "../projectRunStore";
 import { dockTerminalThreadId } from "../lib/dockTerminalScope";
 import { TaskCompletionNotifications } from "../notifications/taskCompletion";
+import { NotchIslandPublisher } from "../notchIsland/NotchIslandPublisher";
 import { useWorkspacePathsStore } from "../workspacePathsStore";
 import {
   isThreadDetailRetained,
@@ -392,6 +393,7 @@ function RootRouteView() {
           {!readWorkspaceFrame() && <HostDiscoverabilityPrompt />}
           {!readWorkspaceFrame() && <GlobalWhatsNewSurface />}
           <TaskCompletionNotifications />
+          {!readWorkspaceFrame() && <NotchIslandPublisher />}
           <QueuedComposerDrainCoordinator />
           <NewThreadDefaultsSyncCoordinator />
           {!readWorkspaceFrame() && (

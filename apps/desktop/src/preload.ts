@@ -219,6 +219,7 @@ contextBridge.exposeInMainWorld("desktopBridge", {
   notchIsland: {
     getState: () => ipcRenderer.invoke(IPC.notchIsland.getState),
     setEnabled: (enabled) => ipcRenderer.invoke(IPC.notchIsland.setEnabled, enabled),
+    publishSnapshot: (snapshot) => ipcRenderer.send(IPC.notchIsland.publishSnapshot, snapshot),
   },
   computerPreview: {
     onFrame: (listener) => {

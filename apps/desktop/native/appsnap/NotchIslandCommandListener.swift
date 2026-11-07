@@ -5,17 +5,24 @@ import Foundation
 /// modes' space-separated commands, island lines carry chat titles, so they
 /// are JSON from the start. The host sanitizes and caps every field.
 ///
-///   {"type":"snapshot","lead":"working","count":2,"rows":[{"threadId":"…","title":"…","project":"…","state":"working"}]}
-///   {"type":"labels","empty":"No active chats","openApp":"Open Synara"}
+///   {"type":"snapshot","lead":"working","count":2,"needsYou":0,"working":2,"done":1,"failed":0,
+///    "rows":[{"threadId":"…","title":"…","project":"…","provider":"codex","state":"working"}]}
+///   {"type":"labels","empty":"No active chats","openApp":"Open Synara",…}
+///   {"type":"icons","icons":{"codex":"<svg …>"}}
 ///   {"type":"quit"}
 ///
 /// EOF means the host is gone: the island exits.
 @available(macOS 13.0, *)
 final class NotchIslandCommandListener {
-    static let maximumLineBytes = 65_536
+    static let maximumLineBytes = 262_144
 
     private struct Envelope: Decodable {
         let type: String
+    }
+
+    /// Provider glyphs as SVG markup, sent once per helper by the host.
+    private struct IconsCommand: Decodable {
+        let icons: [String: String]
     }
 
     private let emitter: NDJSONEmitter
@@ -73,6 +80,9 @@ final class NotchIslandCommandListener {
             case "labels":
                 let labels = try decoder.decode(NotchIslandLabels.self, from: line)
                 onMain { $0.apply(labels: labels) }
+            case "icons":
+                let icons = try decoder.decode(IconsCommand.self, from: line).icons
+                onMain { $0.apply(iconMarkup: icons) }
             case "quit":
                 DispatchQueue.main.async {
                     MainActor.assumeIsolated { self.controller.stop() }

@@ -12,9 +12,14 @@ import * as FS from "node:fs";
 import * as Path from "node:path";
 import * as Readline from "node:readline";
 
-import type { DesktopNotchIslandState } from "@synara/contracts";
+import type { DesktopNotchIslandSnapshot, DesktopNotchIslandState } from "@synara/contracts";
 
 import { parseAppSnapHelperMessage, type AppSnapHelperMessage } from "./appSnapManager";
+import {
+  EMPTY_NOTCH_ISLAND_SNAPSHOT,
+  encodeNotchIslandIconsCommand,
+  encodeNotchIslandSnapshotCommand,
+} from "./notchIslandSnapshot";
 import { stopNativeHelper } from "./stopNativeHelper";
 
 const RESPAWN_BASE_DELAY_MS = 1_000;
@@ -61,11 +66,25 @@ export function writeNotchIslandPreference(
 
 // ── Helper host ─────────────────────────────────────────────────────────────
 
-/** Visible island text, localized by desktop main. */
-export interface NotchIslandLabels {
-  readonly empty: string;
-  readonly openApp: string;
-}
+/** Every visible island string, localized by desktop main; the helper has no text of its own. */
+export const NOTCH_ISLAND_LABEL_KEYS = [
+  "empty",
+  "openApp",
+  "needYou",
+  "working",
+  "done",
+  "failed",
+  "approval",
+  "input",
+  "plan",
+  "stateWorking",
+  "completed",
+  "stateFailed",
+  "open",
+  "review",
+] as const;
+
+export type NotchIslandLabels = Readonly<Record<(typeof NOTCH_ISLAND_LABEL_KEYS)[number], string>>;
 
 export interface NotchIslandHostOptions {
   readonly helperPath: string;
@@ -84,11 +103,9 @@ function clampLabel(value: string): string {
 
 /** One stdin line for the helper; JSON keeps titles with spaces intact. */
 export function encodeNotchIslandLabelsCommand(labels: NotchIslandLabels): string {
-  return `${JSON.stringify({
-    type: "labels",
-    empty: clampLabel(labels.empty),
-    openApp: clampLabel(labels.openApp),
-  })}\n`;
+  const payload: Record<string, string> = { type: "labels" };
+  for (const key of NOTCH_ISLAND_LABEL_KEYS) payload[key] = clampLabel(labels[key]);
+  return `${JSON.stringify(payload)}\n`;
 }
 
 /**
@@ -107,6 +124,9 @@ export class NotchIslandHost {
   #consecutiveFailures = 0;
   #restartTimer: NodeJS.Timeout | null = null;
   #readyTimer: NodeJS.Timeout | null = null;
+  #snapshot: DesktopNotchIslandSnapshot = EMPTY_NOTCH_ISLAND_SNAPSHOT;
+  /** Glyphs the current helper already holds, by provider. */
+  #sentIcons = new Map<string, string>();
 
   constructor(options: NotchIslandHostOptions) {
     this.#options = options;
@@ -136,6 +156,28 @@ export class NotchIslandHost {
   /** Re-sends the labels, e.g. after the UI language changed. */
   refreshLabels(): void {
     this.#write(encodeNotchIslandLabelsCommand(this.#options.labels()));
+  }
+
+  /**
+   * What the island shows. Kept so a respawned helper gets it back; provider glyphs
+   * are sent once per helper and only when a new one appears.
+   */
+  setSnapshot(snapshot: DesktopNotchIslandSnapshot): void {
+    this.#snapshot = snapshot;
+    this.#sendSnapshot();
+  }
+
+  #sendSnapshot(): void {
+    if (!this.#child) return;
+    const newIcons: Record<string, string> = {};
+    for (const [provider, svg] of Object.entries(this.#snapshot.icons)) {
+      if (this.#sentIcons.get(provider) !== svg) newIcons[provider] = svg;
+    }
+    if (Object.keys(newIcons).length > 0) {
+      this.#write(encodeNotchIslandIconsCommand(newIcons));
+      for (const [provider, svg] of Object.entries(newIcons)) this.#sentIcons.set(provider, svg);
+    }
+    this.#write(encodeNotchIslandSnapshotCommand(this.#snapshot));
   }
 
   dispose(): void {
@@ -187,7 +229,10 @@ export class NotchIslandHost {
       this.#scheduleRestart();
     });
 
+    // A new helper starts empty: replay the text, every glyph, and the last snapshot.
+    this.#sentIcons.clear();
     this.#write(encodeNotchIslandLabelsCommand(this.#options.labels()));
+    this.#sendSnapshot();
     this.#watchReadiness(child);
   }
 
@@ -295,6 +340,8 @@ export interface NotchIslandController {
   setEnabled(enabled: boolean): DesktopNotchIslandState;
   /** Re-sends the island text after the UI language changed. */
   refreshLabels(): void;
+  /** Ignored where the island is unsupported. */
+  setSnapshot(snapshot: DesktopNotchIslandSnapshot): void;
   dispose(): void;
 }
 
@@ -305,7 +352,7 @@ export interface NotchIslandController {
  */
 export function createNotchIslandController(input: {
   readonly supported: boolean;
-  readonly host: Pick<NotchIslandHost, "setWanted" | "refreshLabels" | "dispose">;
+  readonly host: Pick<NotchIslandHost, "setWanted" | "refreshLabels" | "setSnapshot" | "dispose">;
   readonly load: () => PersistedNotchIslandPreference;
   readonly save: (preference: PersistedNotchIslandPreference) => void;
   readonly onError?: (error: unknown) => void;
@@ -337,6 +384,9 @@ export function createNotchIslandController(input: {
       return state();
     },
     refreshLabels: () => input.host.refreshLabels(),
+    setSnapshot: (snapshot) => {
+      if (input.supported) input.host.setSnapshot(snapshot);
+    },
     dispose: () => input.host.dispose(),
   };
 }

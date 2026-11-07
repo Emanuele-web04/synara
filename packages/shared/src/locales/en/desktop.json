@@ -162,5 +162,17 @@
   "substitutions": "Substitutions",
   "speech": "Speech",
   "notchIsland_empty": "No active chats",
-  "notchIsland_openApp": "Open {{app}}"
+  "notchIsland_openApp": "Open {{app}}",
+  "notchIsland_needYou": "need you",
+  "notchIsland_working": "working",
+  "notchIsland_done": "done",
+  "notchIsland_failed": "failed",
+  "notchIsland_approval": "Pending approval",
+  "notchIsland_input": "Awaiting input",
+  "notchIsland_plan": "Plan ready",
+  "notchIsland_stateWorking": "Working",
+  "notchIsland_completed": "Completed",
+  "notchIsland_stateFailed": "Failed",
+  "notchIsland_open": "Open",
+  "notchIsland_review": "Review"
 }

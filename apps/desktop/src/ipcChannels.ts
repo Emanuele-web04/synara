@@ -38,6 +38,7 @@ export const DESKTOP_IPC_CHANNELS = {
   notchIsland: {
     getState: "desktop:notch-island-get-state",
     setEnabled: "desktop:notch-island-set-enabled",
+    publishSnapshot: "desktop:notch-island-publish-snapshot",
   },
   menuAction: "desktop:menu-action",
   setMenuShortcuts: "desktop:set-menu-shortcuts",
