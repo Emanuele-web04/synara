@@ -222,9 +222,6 @@
 .hb .new-bot__defaults > * + * {
   box-shadow: inset 0 1px 0 var(--hb-border);
 }
-.hb .new-bot__defaults .hb-menu {
-  display: flex;
-}
 .hb .new-bot__row {
   display: flex;
   align-items: center;

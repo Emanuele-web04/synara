@@ -157,6 +157,6 @@
 .hb .bot-sheet__spacer {
   flex: 1;
 }
-.hb .hb-dialog .bot-sheet {
+.hb-dialog .bot-sheet {
   container-type: inline-size;
 }

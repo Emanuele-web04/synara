@@ -1042,17 +1042,12 @@
   height: 100%;
 }
 
-/* Menu: a rounded panel over everything, compact rows. */
-.hb-menu {
-  position: relative;
-  display: inline-flex;
-}
+/* Menu (ui/menu's bare popup): a rounded panel over everything, compact rows. It never runs
+   past the window: ui/menu flips it and `--available-height` caps it. */
 .hb-menu__panel {
-  position: absolute;
-  z-index: 50;
   min-width: 220px;
   max-width: 320px;
-  max-height: 360px;
+  max-height: min(360px, var(--available-height));
   overflow-y: auto;
   display: flex;
   flex-direction: column;
@@ -1063,18 +1058,7 @@
   background: var(--hb-card);
   box-shadow: var(--hb-shadow-menu);
   color: var(--hb-text);
-}
-.hb-menu__panel--below-end {
-  top: calc(100% + var(--hb-gap-sm));
-  right: 0;
-}
-.hb-menu__panel--below-start {
-  top: calc(100% + var(--hb-gap-sm));
-  left: 0;
-}
-.hb-menu__panel--above-start {
-  bottom: calc(100% + var(--hb-gap-sm));
-  left: 0;
+  outline: none;
 }
 .hb-menu__section {
   padding: var(--hb-gap-sm) 10px var(--hb-gap-xs);
@@ -1097,16 +1081,16 @@
   text-align: left;
   cursor: pointer;
 }
-.hb-menu__item:hover:not(:disabled),
-.hb-menu__item:focus-visible {
+/* ui/menu marks the item under the pointer or the arrow keys. */
+.hb-menu__item[data-highlighted] {
   outline: none;
   background: var(--hb-card-hover);
 }
-.hb-menu__item:disabled {
+.hb-menu__item[data-disabled] {
   cursor: default;
   opacity: var(--hb-disabled-opacity);
 }
-.hb-menu__item--danger {
+.hb-menu__item[data-variant="destructive"] {
   color: var(--hb-danger-text);
 }
 .hb-menu__label {
@@ -1130,10 +1114,8 @@
   background: var(--hb-border-strong);
 }
 
-/* Dialogs (native <dialog>): a card over a dim scrim, centered. */
+/* Dialogs (ui/dialog's popup, centered by its viewport): a card over a dim scrim. */
 .hb-dialog {
-  /* Centered in the window: the native modal's own margin, which Synara's reset removes. */
-  margin: auto;
   width: var(--hb-dialog);
   max-width: calc(100vw - 2 * var(--hb-gutter-xl));
   max-height: calc(100vh - 2 * var(--hb-gutter-xl));
@@ -1148,8 +1130,8 @@
 .hb-dialog--wide {
   width: var(--hb-dialog-wide);
 }
-.hb-dialog::backdrop {
-  background: var(--hb-scrim, rgb(0 0 0 / 0.3));
+.hb-dialog__scrim {
+  background: var(--hb-scrim);
 }
 .hb-dialog:focus {
   outline: none;

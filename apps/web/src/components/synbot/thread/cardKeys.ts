@@ -24,9 +24,7 @@ function isTyping(target: EventTarget | null): boolean {
 }
 
 function somethingOver(): boolean {
-  return (
-    document.querySelector('dialog[open], .hb-menu__panel[role="menu"], [role="dialog"]') !== null
-  );
+  return document.querySelector('[role="dialog"], [role="alertdialog"], [role="menu"]') !== null;
 }
 
 /** The answer index `event` stands for: 0 for A, 1 for B… (-1: not a plain letter). */
