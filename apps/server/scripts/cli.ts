@@ -313,13 +313,17 @@ const packCmd = Command.make(
 
       const tarballPath = path.join(outDir, `synara-server-${version}.tar.gz`);
       yield* runCommand(
-        ChildProcess.make("tar", ["-czf", tarballPath, "dist", "package.json"], {
-          cwd: stagedPackageDir,
-          stdout: "inherit",
-          stderr: "inherit",
-          // Windows needs shell mode to resolve .cmd shims.
-          shell: process.platform === "win32",
-        }),
+        ChildProcess.make(
+          "tar",
+          ["-czf", tarballPath, ...CLI_LEGAL_NOTICE_FILES, "dist", "package.json"],
+          {
+            cwd: stagedPackageDir,
+            stdout: "inherit",
+            stderr: "inherit",
+            // Windows needs shell mode to resolve .cmd shims.
+            shell: process.platform === "win32",
+          },
+        ),
       );
 
       yield* Effect.log(`[cli] Wrote server tarball: ${tarballPath}`);
