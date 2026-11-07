@@ -1,6 +1,7 @@
 // The editable surface inside Synara: shared buffers, history, layout changes, and the native pickers.
 import "../../index.css";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { useAppTypography } from "../../hooks/useAppTypography";
 import { createRef, useState } from "react";
 import { page, userEvent } from "vitest/browser";
 import { afterEach, expect, it, vi } from "vitest";
@@ -27,6 +28,7 @@ function Harness({
   initialValue?: string | undefined;
   onHistoryChange?: ((history: CodeEditHistoryState) => void) | undefined;
 }) {
+  useAppTypography();
   const [value, setValue] = useState(initialValue);
   const [version, setVersion] = useState(0);
   const [split, setSplit] = useState(true);
