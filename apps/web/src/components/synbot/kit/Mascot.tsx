@@ -126,7 +126,7 @@ function ShapeMascot({
           <path d={look.path} style={{ fill: color }} />
           <g transform={`translate(${faceX} ${faceY})`}>
             <g className="hb-bot__eyes">
-              <path d={FACE_EYES} style={{ fill: "var(--hb-eyes-on-color, #ffffff)" }} />
+              <path d={FACE_EYES} style={{ fill: "var(--hb-mascot-eyes, var(--background))" }} />
             </g>
           </g>
         </g>
@@ -135,7 +135,7 @@ function ShapeMascot({
   );
 }
 
-/** A bot's mascot: its shape flat in its own color with HoloBot's white eyes. */
+/** A bot's mascot: its shape flat in its own color, its eyes the page background. */
 export function BotMascot({
   shape,
   color,

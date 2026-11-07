@@ -46,14 +46,14 @@
   --hb-tone-bad-fill: color-mix(in srgb, var(--destructive) 13%, transparent);
   --hb-tone-bad-text: color-mix(in srgb, var(--destructive) 85%, var(--foreground));
 
-  /* Mascots: one flat color per bot with HoloBot's white eyes, in both themes; the main
-     SynBot is HoloBot's ghost in liquid metal: black with a faint sheen and white eyes on
-     light, the reverse on dark. */
-  --hb-eyes-on-color: #ffffff;
+  /* Mascots: one flat color per bot; the main SynBot is HoloBot's ghost in liquid metal,
+     black with a faint sheen on light, the reverse on dark. Every mascot's eyes, the ghost's
+     included, are the page background, so they read as holes in the body (light on light,
+     dark on dark). */
+  --hb-mascot-eyes: var(--hb-bg);
   --hb-mascot-repo: #8e8e93;
   --hb-mark-fill: #151517;
   --hb-mark-sheen: 0.3;
-  --hb-mark-eyes: #ffffff;
 
   /* Liquid metal (ui/metal): a primary button is a dark core inside a thin moving ring of it,
      with a faint inner shadow and a subtle glow around. The values are the app's metal tokens. */
@@ -163,7 +163,6 @@
   --hb-scrim: rgb(0 0 0 / 0.45);
   --hb-mark-fill: #f6f6f8;
   --hb-mark-sheen: 0.42;
-  --hb-mark-eyes: #0b0b0d;
   --hb-shadow-dialog: 0 24px 64px rgb(0 0 0 / 0.55);
   --hb-shadow-menu: 0 12px 32px rgb(0 0 0 / 0.5);
   --hb-shadow-float: 0 4px 16px rgb(0 0 0 / 0.35);
@@ -244,7 +243,7 @@
   inset: 0;
   width: 100%;
   height: 100%;
-  fill: var(--hb-mark-eyes, #ffffff);
+  fill: var(--hb-mascot-eyes, var(--background));
 }
 /* Send is the composer's same 28 px circle as + and the mic: only its fill differs (the dark
    core in the metal ring), so its arrow takes their icon size and no glow spills past the
