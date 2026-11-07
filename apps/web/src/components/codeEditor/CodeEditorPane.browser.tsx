@@ -166,7 +166,13 @@ it.each(
         expect(tooltip()).toBe(original);
         const bounds = original.getBoundingClientRect();
         const target = button.getBoundingClientRect();
-        expect(bounds.bottom <= target.top || bounds.top >= target.bottom).toBe(true);
+        const separated = bounds.bottom <= target.top || bounds.top >= target.bottom;
+        expect(
+          separated,
+          separated
+            ? undefined
+            : `Tooltip overlaps trigger: ${JSON.stringify({ tooltip: bounds, trigger: target })}`,
+        ).toBe(true);
         // A DOM-visible tooltip can still be clipped by the editor or covered by its header.
         for (const [x, y] of [
           [bounds.left + 8, bounds.top + bounds.height / 2],
