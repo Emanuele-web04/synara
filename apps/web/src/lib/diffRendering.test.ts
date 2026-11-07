@@ -217,6 +217,48 @@ describe("resolveFileDiffIndexPaths", () => {
     );
     expect(resolveFileDiffIndexPaths(changed)).toEqual(["src/one.ts"]);
   });
+
+  it("keeps a real a/ folder on the old side of a rename out of it", () => {
+    const renamed = parseSingleFile(
+      [
+        "diff --git a/a/old.txt b/new.txt",
+        "similarity index 100%",
+        "rename from a/old.txt",
+        "rename to new.txt",
+        "",
+      ].join("\n"),
+    );
+    expect(resolveFileDiffIndexPaths(renamed)).toEqual(["new.txt", "a/old.txt"]);
+  });
+
+  it("keeps a real b/ folder on the new side of a rename into it", () => {
+    const renamed = parseSingleFile(
+      [
+        "diff --git a/old.txt b/b/new.txt",
+        "similarity index 100%",
+        "rename from old.txt",
+        "rename to b/new.txt",
+        "",
+      ].join("\n"),
+    );
+    expect(resolveFileDiffIndexPaths(renamed)).toEqual(["b/new.txt", "old.txt"]);
+  });
+
+  it("keeps a real b/ folder on a plain change", () => {
+    const changed = parseSingleFile(
+      [
+        "diff --git a/b/x.txt b/b/x.txt",
+        "index 1111111..2222222 100644",
+        "--- a/b/x.txt",
+        "+++ b/b/x.txt",
+        "@@ -1,1 +1,1 @@",
+        "-a",
+        "+b",
+        "",
+      ].join("\n"),
+    );
+    expect(resolveFileDiffIndexPaths(changed)).toEqual(["b/x.txt"]);
+  });
 });
 
 describe("hasUneditableGitMode", () => {
