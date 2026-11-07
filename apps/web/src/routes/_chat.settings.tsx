@@ -367,7 +367,7 @@ function SettingsRouteView() {
   const activeSectionItem = SETTINGS_NAV_ITEMS.find((item) => item.id === activeSection)!;
 
   const {
-    isDefaultActiveTheme,
+    isDefaultThemePack,
     resetAllThemes,
     resolvedTheme,
     theme,
@@ -486,9 +486,10 @@ function SettingsRouteView() {
   const changedSettingLabels = [
     ...(settings.language !== defaults.language ? ["common:general_languageAria"] : []),
     ...(theme !== "system" ? ["onboarding:changed_theme"] : []),
-    ...(!isDefaultActiveTheme
-      ? [resolvedTheme === "dark" ? "settings:darkThemePack" : "settings:lightThemePack"]
-      : []),
+    // resetAllThemes() restores both theme packs and the system-font preference.
+    ...(!isDefaultThemePack("dark") ? ["settings:darkThemePack"] : []),
+    ...(!isDefaultThemePack("light") ? ["settings:lightThemePack"] : []),
+    ...(!systemUiFont ? ["settings:useSystemUIFont"] : []),
     ...(settings.defaultProvider !== defaults.defaultProvider
       ? ["settings:changed_defaultProvider"]
       : []),
