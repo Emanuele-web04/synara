@@ -67,5 +67,6 @@ agreement is no longer accurate.
 
 ## How to sign
 
-The CLA check comments on Your first pull request. Reply with the sentence it
-asks for, and that signature covers all of Your later Contributions.
+The CLA Assistant check comments on Your first pull request. Open its link
+and sign in with GitHub to sign. That signature covers all of Your later
+Contributions.
