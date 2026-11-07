@@ -114,6 +114,8 @@ async function ready() {
     )
     .toBe(true);
   const editor = activeEditor();
+  // Let the initial editor frame settle before focus or viewport interactions.
+  await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
   editor.focus();
   return editor;
 }
