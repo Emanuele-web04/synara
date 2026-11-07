@@ -1,48 +1,66 @@
+// Owns the dedicated browser session's guarded transport independently of tool calls.
+// CDP leases remain call-scoped; page requests keep their sockets across worker shutdown.
+import { NetworkPolicy } from "betterwright";
+import { createGuardProxy } from "betterwright/guard-proxy";
 import type { Session } from "electron";
 
 export interface BetterwrightNetworkGuardLease {
   readonly closed: boolean;
-  /** The caller must drain its old transports before replacing the worker proxy. */
-  replace(proxyUrl: string, signal?: AbortSignal): Promise<void>;
   release(): Promise<void>;
 }
 
-interface ProxyOwnership {
-  failed: boolean;
-  restoring?: Promise<void> | undefined;
-}
-
 export class BetterwrightNetworkGuard {
-  private owner: ProxyOwnership | undefined;
+  readonly policy = new NetworkPolicy({ allowLoopback: true });
+  private readonly proxy = createGuardProxy({
+    guardUrl: async (url, details) => this.policy.check(url, details),
+    executeId: () => "browser-session",
+  });
+  private initializing: Promise<void> | undefined;
   private nextTurn = Promise.resolve();
+  private disposed = false;
 
   constructor(private readonly browserSession: Session) {}
 
-  async attach(proxyUrl: string, signal?: AbortSignal): Promise<BetterwrightNetworkGuardLease> {
+  // Configure once before any pages load; draining per tool would abort unrelated XHRs.
+  initialize(): Promise<void> {
+    if (this.disposed) return Promise.reject(new Error("Browser network guard is closed."));
+    this.initializing ??= (async () => {
+      const port = await this.proxy.ensure();
+      await this.browserSession.setProxy({
+        mode: "fixed_servers",
+        proxyRules: `socks5://127.0.0.1:${port}`,
+        proxyBypassRules: "<-loopback>",
+      });
+      await this.browserSession.closeAllConnections();
+    })();
+    return this.initializing;
+  }
+
+  async attach(signal?: AbortSignal): Promise<BetterwrightNetworkGuardLease> {
     signal?.throwIfAborted();
+    if (this.disposed) throw new Error("Browser network guard is closed.");
     const previous = this.nextTurn;
     let finishTurn!: () => void;
     const turn = new Promise<void>((resolve) => {
       finishTurn = resolve;
     });
-    // A cancelled waiter may finish its turn early, but cannot let later
-    // waiters overtake the current owner. The session stays FIFO.
+    // A cancelled waiter cannot let later runs overtake the current session owner.
     this.nextTurn = previous.then(() => turn);
     try {
       await waitForTurn(previous, signal);
       signal?.throwIfAborted();
-      const lease = await this.acquire(proxyUrl, signal);
+      await this.initialize();
+      signal?.throwIfAborted();
+      if (this.disposed) throw new Error("Browser network guard is closed.");
+      let closed = false;
+      const guard = this;
       return {
         get closed() {
-          return lease.closed;
+          return closed || guard.disposed;
         },
-        replace: (proxyUrl, signal) => lease.replace(proxyUrl, signal),
-        release: () => {
-          const restoring = lease.release();
-          // A failed restore keeps ownership reserved. The next turn must
-          // recover it before changing proxies or vending a transport.
-          void restoring.then(finishTurn, finishTurn);
-          return restoring;
+        release: async () => {
+          closed = true;
+          finishTurn();
         },
       };
     } catch (error) {
@@ -51,103 +69,11 @@ export class BetterwrightNetworkGuard {
     }
   }
 
-  private async acquire(
-    proxyUrl: string,
-    signal?: AbortSignal,
-  ): Promise<BetterwrightNetworkGuardLease> {
-    if (this.owner?.failed) {
-      // A failed setup has no lease to release. Recover the session before
-      // admitting another run; failed recovery must keep ownership reserved.
-      await this.restore(this.owner);
-    }
-    signal?.throwIfAborted();
-    if (this.owner !== undefined) {
-      throw new Error("Browser session is already leased by another automation run.");
-    }
-    const owner: ProxyOwnership = { failed: false };
-    this.owner = owner;
-    await this.install(owner, proxyUrl, signal);
-    const guard = this;
-    let changing = Promise.resolve();
-    let releasing: Promise<void> | undefined;
-    const closed = () =>
-      guard.owner !== owner ||
-      owner.failed ||
-      owner.restoring !== undefined ||
-      releasing !== undefined;
-    return {
-      get closed() {
-        return closed();
-      },
-      replace: (proxyUrl, signal) => {
-        if (closed()) return Promise.reject(new Error("Browser session lease is closed."));
-        const replacing = changing.then(() => {
-          if (guard.owner !== owner || owner.failed)
-            throw new Error("Browser session lease is closed.");
-          signal?.throwIfAborted();
-          return this.install(owner, proxyUrl, signal);
-        });
-        changing = replacing.catch(() => {});
-        return replacing;
-      },
-      release: () => {
-        releasing ??= changing
-          .then(() => this.restore(owner))
-          .finally(() => {
-            releasing = undefined;
-          });
-        return releasing;
-      },
-    };
-  }
-
-  private async install(
-    owner: ProxyOwnership,
-    proxyUrl: string,
-    signal?: AbortSignal,
-  ): Promise<void> {
-    try {
-      await this.browserSession.setProxy({
-        mode: "fixed_servers",
-        proxyRules: proxyUrl,
-        proxyBypassRules: "<-loopback>",
-      });
-      await this.browserSession.closeAllConnections();
-      signal?.throwIfAborted();
-    } catch (error) {
-      // Even a rejected setProxy may have partially changed Chromium state.
-      // Do not expose a free session until both rollback and draining succeed.
-      try {
-        await this.restore(owner);
-      } catch (rollbackError) {
-        throw new AggregateError(
-          [error, rollbackError],
-          "Browser proxy setup and recovery failed.",
-        );
-      }
-      throw error;
-    }
-  }
-
-  private restore(owner: ProxyOwnership): Promise<void> {
-    // Identity, rather than the URL, makes stale releases harmless even when
-    // a later worker reuses the same proxy port.
-    if (this.owner !== owner) return Promise.resolve();
-    owner.restoring ??= (async () => {
-      try {
-        // Synara's dedicated browser session otherwise uses the system proxy;
-        // all temporary proxy configuration is owned by this guard.
-        await this.browserSession.setProxy({ mode: "system" });
-        await this.browserSession.closeAllConnections();
-        this.owner = undefined;
-      } catch (error) {
-        owner.failed = true;
-        throw error;
-      } finally {
-        owner.restoring = undefined;
-      }
-    })();
-    return owner.restoring;
+  // Called only after pages and tool transports close during desktop shutdown.
+  async dispose(): Promise<void> {
+    this.disposed = true;
+    await this.initializing?.catch(() => {});
+    await this.proxy.close();
   }
 }
 

@@ -64,6 +64,7 @@ import {
   systemPreferences,
 } from "electron";
 import { configureElectronNetwork } from "betterwright/electron";
+import { getBetterwrightNetworkGuard } from "./browserAutomation/betterwrightNetworkGuard";
 import type {
   BrowserWindowConstructorOptions,
   FileFilter,
@@ -5171,12 +5172,18 @@ async function shutdownDesktopRuntime(reason: string): Promise<void> {
       cancelBackendReadinessWait();
       appSnapManager?.dispose();
       appSnapManager = null;
-      await shutdownBrowserServices({
-        revokeHost: () => disposeBrowserHostPipeServerForShutdown(reason),
-        closePages: () => browserManager.dispose(),
-        stopCapture: () => browserVaultCapture.dispose(),
-        clearKeys: () => browserVault.dispose(),
-      });
+      try {
+        await shutdownBrowserServices({
+          revokeHost: () => disposeBrowserHostPipeServerForShutdown(reason),
+          closePages: () => browserManager.dispose(),
+          stopCapture: () => browserVaultCapture.dispose(),
+          clearKeys: () => browserVault.dispose(),
+        });
+      } finally {
+        await getBetterwrightNetworkGuard(
+          session.fromPartition(BROWSER_SESSION_PARTITION),
+        ).dispose();
+      }
       await browserSessionRestore?.shutdown();
       restoreStdIoCapture?.();
       if (betaDiagnostics) {
@@ -6645,7 +6652,11 @@ app.on("before-quit", (event) => {
 if (hasSingleInstanceLock) {
   app
     .whenReady()
-    .then(() => {
+    .then(async () => {
+      // Install the session-owned proxy before bootstrap can create or navigate browser pages.
+      await getBetterwrightNetworkGuard(
+        session.fromPartition(BROWSER_SESSION_PARTITION),
+      ).initialize();
       writeDesktopLogHeader("app ready");
       productAnalytics.start();
       productAnalytics.track({ event: "app.open", outcome: "succeeded" });
