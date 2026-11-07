@@ -1,21 +1,17 @@
 // FILE: Dialog.tsx
-// Purpose: HoloBot's dialogs (ported from packages/ui Dialog.tsx and AlertDialog.tsx): a native
-//          <dialog> opened with showModal(), so the rest of the window is inert and focus stays
-//          inside. Esc and a click on the scrim close it only when `closable`; the title row has
-//          a close button. AlertDialog: a question before something that cannot be taken back.
+// Purpose: HoloBot's dialogs (ported from packages/ui Dialog.tsx and AlertDialog.tsx) on
+//          Synara's ui/dialog: the rest of the window is inert and focus stays inside, and
+//          Synara's menus open over it. Esc and a click on the scrim close it only when
+//          `closable`; the title row has a close button. HoloBot's card, title row and scrim.
+//          AlertDialog: a question before something that cannot be taken back.
 // Layer: SynBot kit
 // Exports: Dialog, AlertDialog
 
-import {
-  useEffect,
-  useLayoutEffect,
-  useRef,
-  type KeyboardEvent,
-  type MouseEvent,
-  type ReactNode,
-} from "react";
+import { useId, useRef, type ReactNode } from "react";
 
+import { Dialog as DialogRoot, DialogPopup } from "~/components/ui/dialog";
 import { useTranslation } from "~/i18n";
+import { cn } from "~/lib/utils";
 
 import { CapsuleButton, IconButton } from "./controls";
 
@@ -37,12 +33,17 @@ interface DialogProps {
   readonly children?: ReactNode;
 }
 
-export function Dialog(props: DialogProps) {
-  if (!props.open) return null;
-  return <OpenDialog {...props} />;
+const FOCUSABLE = "button:not(:disabled), input:not(:disabled), textarea:not(:disabled), [href]";
+
+/** The first control takes the focus, as usual, unless it is the title row's close button: the
+ * dialog itself takes it then (no ring on a control nobody chose; Tab reaches it). */
+function openingFocus(popup: HTMLElement | null): boolean | HTMLElement {
+  const first = popup?.querySelector(FOCUSABLE);
+  return popup && first?.closest(".hb-dialog__head") ? popup : true;
 }
 
-function OpenDialog({
+export function Dialog({
+  open,
   onClose,
   title,
   closable = true,
@@ -53,69 +54,43 @@ function OpenDialog({
   children,
 }: DialogProps) {
   const { t } = useTranslation();
-  const ref = useRef<HTMLDialogElement>(null);
-  const latest = useRef({ onClose, closable });
-  useEffect(() => {
-    latest.current = { onClose, closable };
-  });
-
-  useLayoutEffect(() => {
-    const dialog = ref.current;
-    if (!dialog) return;
-    if (!dialog.open) dialog.showModal();
-    // showModal() focuses the first control; when that is the close button, the dialog itself
-    // takes the focus instead (no ring on a control nobody chose; Tab reaches it).
-    if (document.activeElement === dialog.querySelector(".hb-dialog__head button")) dialog.focus();
-    // Closed by something else (a close watcher): reopen unless it may close.
-    const onNativeClose = () => {
-      // A close queued by an earlier mount (React remounting the effect) arrives after the
-      // dialog opened again: it is stale.
-      if (dialog.open) return;
-      if (latest.current.closable) latest.current.onClose();
-      else if (dialog.isConnected) dialog.showModal();
-    };
-    dialog.addEventListener("close", onNativeClose);
-    return () => {
-      dialog.removeEventListener("close", onNativeClose);
-      if (dialog.open) dialog.close();
-    };
-  }, []);
-
-  const onKeyDown = (event: KeyboardEvent<HTMLDialogElement>) => {
-    if (event.key !== "Escape") return;
-    event.preventDefault();
-    event.stopPropagation();
-    if (closable) onClose();
-  };
-  // The box fills the <dialog> element: a click whose target is the element itself landed on
-  // the scrim.
-  const onClick = (event: MouseEvent<HTMLDialogElement>) => {
-    if (event.target === ref.current && closable) onClose();
-  };
+  const titleId = useId();
+  const popup = useRef<HTMLDivElement>(null);
 
   return (
-    <dialog
-      ref={ref}
-      className={`hb hb-dialog${wide ? " hb-dialog--wide" : ""}`}
-      tabIndex={-1}
-      aria-label={label}
-      onKeyDown={onKeyDown}
-      onCancel={(event) => event.preventDefault()}
-      onClick={onClick}
+    <DialogRoot
+      open={open}
+      onOpenChange={(next) => {
+        if (!next && closable) onClose();
+      }}
+      disablePointerDismissal={!closable}
     >
-      <div className="hb-dialog__box">
-        {title || closeButton ? (
-          <div className="hb-dialog__head">
-            <div className="hb-dialog__title">{title}</div>
-            {closeButton ? (
-              <IconButton icon="close" label={t("synbot:close")} kind="ghost" onClick={onClose} />
-            ) : null}
-          </div>
-        ) : null}
-        <div className="hb-dialog__body">{children}</div>
-        {footer ? <div className="hb-dialog__footer">{footer}</div> : null}
-      </div>
-    </dialog>
+      <DialogPopup
+        ref={popup}
+        className={cn("hb hb-dialog", wide && "hb-dialog--wide")}
+        backdropClassName="hb hb-dialog__scrim"
+        showCloseButton={false}
+        bottomStickOnMobile={false}
+        initialFocus={() => openingFocus(popup.current)}
+        aria-label={label}
+        aria-labelledby={title ? titleId : undefined}
+      >
+        <div className="hb-dialog__box">
+          {title || closeButton ? (
+            <div className="hb-dialog__head">
+              <div className="hb-dialog__title" id={titleId}>
+                {title}
+              </div>
+              {closeButton ? (
+                <IconButton icon="close" label={t("synbot:close")} kind="ghost" onClick={onClose} />
+              ) : null}
+            </div>
+          ) : null}
+          <div className="hb-dialog__body">{children}</div>
+          {footer ? <div className="hb-dialog__footer">{footer}</div> : null}
+        </div>
+      </DialogPopup>
+    </DialogRoot>
   );
 }
 

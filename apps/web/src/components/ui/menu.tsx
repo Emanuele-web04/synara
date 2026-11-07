@@ -86,7 +86,9 @@ function MenuPopupBase({
    *  a side-placed menu); pass `{ fallbackAxisSide: "end" }` for side-placed root menus so
    *  they drop below the anchor when neither side fits. */
   collisionAvoidance?: MenuPrimitive.Positioner.Props["collisionAvoidance"];
-  surface?: "default" | "composer";
+  /** `bare`: no surface chrome or body wrapper; `className` styles the popup itself (a surface
+   *  with its own look, such as SynBot's kit menu). */
+  surface?: "default" | "composer" | "bare";
   pickerSize?: "small" | "normal" | undefined;
 }) {
   const surface = surfaceProp ?? "default";
@@ -96,9 +98,14 @@ function MenuPopupBase({
   const popupSurfaceClassName =
     surface === "composer"
       ? COMPOSER_PICKER_MENU_SURFACE_CLASS_NAME
-      : APP_TRANSLUCENT_POPUP_SURFACE_CLASS_NAME;
+      : surface === "default"
+        ? APP_TRANSLUCENT_POPUP_SURFACE_CLASS_NAME
+        : null;
 
   const isComposerSurface = surface === "composer";
+  // Composer and bare popups take the caller's className; the default one gives it to the
+  // positioner.
+  const popupOwnsClassName = surface !== "default";
 
   return (
     <MenuPrimitive.Portal>
@@ -108,7 +115,7 @@ function MenuPopupBase({
         alignOffset={alignOffset}
         anchor={anchor}
         collisionAvoidance={collisionAvoidance}
-        className={cn("z-50 min-w-32", isComposerSurface ? undefined : className)}
+        className={cn("z-50 min-w-32", popupOwnsClassName ? undefined : className)}
         data-slot="menu-positioner"
         side={side}
         sideOffset={sideOffset}
@@ -119,7 +126,7 @@ function MenuPopupBase({
             isComposerSurface ? "min-w-0 max-w-[92vw]" : "w-full min-w-full",
             popupSurfaceClassName,
             // Last so a caller's className can override surface tokens (e.g. a rounder radius).
-            isComposerSurface ? className : null,
+            popupOwnsClassName ? className : null,
           )}
           data-slot="menu-popup"
           {...props}
@@ -135,6 +142,8 @@ function MenuPopupBase({
             >
               {children}
             </div>
+          ) : surface === "bare" ? (
+            children
           ) : (
             <div className="max-h-(--available-height) w-full overflow-y-auto p-1">{children}</div>
           )}
