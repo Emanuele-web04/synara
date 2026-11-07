@@ -2386,13 +2386,16 @@ describe("startSession", () => {
         `Ignored unsupported project-local config keys in ${file}: notify. If you want these settings to apply, manually set them in your user-level config.toml.`;
       const stderr = fake.children[0]!.stderr;
       const emit = (message: string) =>
-        stderr.write(
-          `${JSON.stringify({
-            timestamp: "2026-11-07T20:10:07.720750Z",
-            level: "ERROR",
-            target: "codex_app_server",
-            fields: { message },
-          })}\n`,
+        stderr.emit(
+          "data",
+          Buffer.from(
+            `${JSON.stringify({
+              timestamp: "2026-11-07T20:10:07.720750Z",
+              level: "ERROR",
+              target: "codex_app_server",
+              fields: { message },
+            })}\n`,
+          ),
         );
       emit(notice(configPath));
       const projectWarning = notice(path.join(root, "project", ".codex", "config.toml"));
