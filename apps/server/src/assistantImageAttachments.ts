@@ -38,8 +38,7 @@ interface MarkdownNode {
 }
 
 // This is the same single URI-decode used by the clients, without rebasing the alias.
-/** @internal - Exported for testing */
-export function localImageReference(value: string): string | null {
+function localImageReference(value: string): string | null {
   let source = value.trim();
   if (source.startsWith("file://")) {
     try {

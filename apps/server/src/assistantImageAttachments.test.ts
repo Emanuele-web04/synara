@@ -11,7 +11,6 @@ import { expect, it } from "vitest";
 import {
   stageAssistantImageAttachments,
   cancelAssistantImageAttachments,
-  localImageReference,
 } from "./assistantImageAttachments.ts";
 import { LOCAL_LOOPBACK_ATTACHMENT_PRINCIPAL } from "./managedAttachmentPrincipal.ts";
 import { ManagedAttachmentRepositoryLive } from "./persistence/Layers/ManagedAttachments.ts";
@@ -22,13 +21,6 @@ const png = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII=",
   "base64",
 );
-
-it("drops the leading slash from Windows file URLs", () => {
-  expect(localImageReference("file:///C:/Users/me/shot%20one.png")).toBe(
-    "C:/Users/me/shot one.png",
-  );
-  expect(localImageReference("file:///Users/me/shot.png")).toBe("/Users/me/shot.png");
-});
 
 it("keeps lexical and real image scope paired after discovering a sibling root", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "inline-image-scope-"));
@@ -46,11 +38,23 @@ it("keeps lexical and real image scope paired after discovering a sibling root",
     for (const name of ["inside space.png", "literal%20.png", "code-only.png"])
       await fs.writeFile(path.join(cwd, name), png);
     await fs.symlink(path.join(sibling, "private.png"), path.join(cwd, "escape.png"));
+    // A literal C: directory exercises drive-alias parsing with real I/O on POSIX;
+    // native Windows uses its temporary drive instead.
+    const drivePath =
+      process.platform === "win32"
+        ? path.join(cwd, "drive shot.png").replaceAll(path.sep, "/")
+        : "C:/preview/drive shot.png";
+    const driveFile = path.resolve(cwd, drivePath);
+    await fs.mkdir(path.dirname(driveFile), { recursive: true });
+    await fs.writeFile(driveFile, png);
     const fileUri = pathToFileURL(path.join(cwd, "inside space.png"));
+    const driveUri = pathToFileURL(drivePath, { windows: true });
+    const attachmentsDir = path.join(root, "attachments");
     const text = [
       "![legitimate](../sibling/first.png)",
       "![escaped](./escape.png)",
       `![URI](${fileUri.href})`,
+      `![drive URI](${driveUri.href})`,
       "![literal][named]",
       "[named]: ./literal%2520.png",
       "`![code](./code-only.png)`",
@@ -67,16 +71,28 @@ it("keeps lexical and real image scope paired after discovering a sibling root",
         cwd,
         sourceRoots: [cwd],
         additionalSourceRoots: Effect.succeed([sibling]),
-        attachmentsDir: path.join(root, "attachments"),
+        attachmentsDir,
         existingAttachments: [],
         repository,
       }),
     );
     expect(prepared.attachments.map((image) => image.sourcePath)).toEqual([
       "../sibling/first.png",
-      decodeURIComponent(fileUri.pathname),
+      path.join(cwd, "inside space.png").replaceAll(path.sep, "/"),
+      drivePath,
       "./literal%20.png",
     ]);
+    const stored = Option.getOrThrow(
+      await runtime.runPromise(
+        repository.findServerOwned({
+          attachmentId: prepared.attachments[2]!.id,
+          ownerThreadId: "scope-thread",
+          ...LOCAL_LOOPBACK_ATTACHMENT_PRINCIPAL,
+          now: new Date().toISOString(),
+        }),
+      ),
+    );
+    expect(await fs.readFile(path.join(attachmentsDir, stored.relativePath))).toEqual(png);
   } finally {
     await runtime.dispose();
     await fs.rm(root, { recursive: true, force: true });
