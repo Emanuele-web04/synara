@@ -10,6 +10,17 @@ copyright holder.
 Synara includes code first released under the MIT License. Those notices are
 kept in THIRD_PARTY_NOTICES.md and apply to that code.
 
+Additional permission under GNU AGPL version 3 section 7
+
+If you modify this Program, or any covered work, by linking or combining it
+with the Claude Agent SDK (@anthropic-ai/claude-agent-sdk), or a modified
+version of that library, containing parts covered by the terms of Anthropic's
+Commercial Terms of Service, the licensors of this Program grant you
+additional permission to convey the resulting work. Corresponding Source for
+a non-source form of such a combination need not include the source code for
+the parts of the Claude Agent SDK used, but shall include the source code of
+the covered work.
+
 --------------------------------------------------------------------------------
 
                     GNU AFFERO GENERAL PUBLIC LICENSE
