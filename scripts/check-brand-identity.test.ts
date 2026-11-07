@@ -94,14 +94,19 @@ describe("brand identity guard", () => {
     ).toEqual([]);
   });
 
-  it("allows the exact legal attribution once in LICENSE", () => {
-    expect(findBrandIdentityViolations([{ path: "LICENSE", contents: legalNotice }])).toEqual([]);
+  it("allows the exact legal attribution once in THIRD_PARTY_NOTICES.md", () => {
+    expect(
+      findBrandIdentityViolations([{ path: "THIRD_PARTY_NOTICES.md", contents: legalNotice }]),
+    ).toEqual([]);
+    expect(findBrandIdentityViolations([{ path: "LICENSE", contents: legalNotice }])).toHaveLength(
+      1,
+    );
     expect(
       findBrandIdentityViolations([{ path: "docs/license-copy.md", contents: legalNotice }]),
     ).toHaveLength(1);
     expect(
       findBrandIdentityViolations([
-        { path: "LICENSE", contents: `${legalNotice}\n${legalNotice}` },
+        { path: "THIRD_PARTY_NOTICES.md", contents: `${legalNotice}\n${legalNotice}` },
       ]),
     ).toHaveLength(1);
   });

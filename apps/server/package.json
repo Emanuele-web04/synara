@@ -1,7 +1,7 @@
 {
   "name": "@synara/cli",
   "version": "1.1.0",
-  "license": "MIT",
+  "license": "AGPL-3.0-only",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/Emanuele-web04/Synara.git",

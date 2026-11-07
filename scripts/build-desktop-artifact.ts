@@ -23,6 +23,7 @@ import {
 } from "./lib/brand-assets.ts";
 import {
   createDesktopPlatformBuildConfig,
+  DESKTOP_LEGAL_NOTICE_FILES,
   MAC_APPSNAP_HELPER_STAGE_PATH,
   MAC_DEVICE_HELPER_RESOURCE_PATH,
   MAC_ICON_ASSET_NAME,
@@ -1258,6 +1259,9 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   yield* fs.copy(distDirs.desktopDist, path.join(stageAppDir, "apps/desktop/dist-electron"));
   yield* fs.copy(distDirs.desktopResources, stageResourcesDir);
   yield* fs.copy(distDirs.serverDist, path.join(stageAppDir, "apps/server/dist"));
+  for (const file of DESKTOP_LEGAL_NOTICE_FILES) {
+    yield* fs.copyFile(path.join(repoRoot, file), path.join(stageAppDir, file));
+  }
   yield* stageClientFavicons(stageAppDir, options.flavor);
 
   yield* timedBuildStage(

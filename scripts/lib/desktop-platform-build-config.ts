@@ -49,6 +49,13 @@ export const MAC_ICON_COMPOSER_DEPLOYMENT_TARGET = "26.0";
 export const MAC_ICON_ASSETS_CAR_STAGE_PATH = "apps/desktop/resources/Assets.car";
 export const MAC_ICON_ASSETS_CAR_BUNDLE_PATH = "Resources/Assets.car";
 export { SYNARA_BETA_WINDOWS_INSTALLER_GUID };
+// Staged at the stage root and shipped next to the app resources so every
+// installed copy carries Synara's license and the retained MIT notices.
+export const DESKTOP_LEGAL_NOTICE_FILES = ["LICENSE", "THIRD_PARTY_NOTICES.md"] as const;
+const DESKTOP_LEGAL_NOTICE_RESOURCES = DESKTOP_LEGAL_NOTICE_FILES.map((file) => ({
+  from: file,
+  to: file,
+}));
 const MAC_DMG_ICON_PATH = "icon.icns";
 const NODE_PTY_ASAR_UNPACK_GLOBS = ["node_modules/node-pty/**"] as const;
 
@@ -120,7 +127,7 @@ export function createDesktopPlatformBuildConfig(
   const nativePackaging = {
     asarUnpack: [...NODE_PTY_ASAR_UNPACK_GLOBS],
     files,
-    extraResources: [connectorResources],
+    extraResources: [connectorResources, ...DESKTOP_LEGAL_NOTICE_RESOURCES],
     // TypeScript reads these declarations at runtime in the intelligence worker.
     // electron-builder otherwise removes every dependency .d.ts file.
     onNodeModuleFile: fileURLToPath(new URL("./desktop-runtime-files.cjs", import.meta.url)),
@@ -240,6 +247,7 @@ export function createDesktopPlatformBuildConfig(
       extraResources: [
         connectorResources,
         { from: "apps/desktop/resources/cua-driver", to: "cua-driver" },
+        ...DESKTOP_LEGAL_NOTICE_RESOURCES,
       ],
       linux: {
         target: [input.target],
