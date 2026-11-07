@@ -2,7 +2,11 @@ import { createHmac, randomBytes, randomUUID } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PolarBillingConfig } from "../config";
 import { loadPolarBillingConfig } from "../config";
-import { BillingCheckoutNotCreatedError, createPolarBillingProvider } from "./polar";
+import {
+  BillingCatalogUnavailableError,
+  BillingCheckoutNotCreatedError,
+  createPolarBillingProvider,
+} from "./polar";
 
 const config: PolarBillingConfig = {
   environment: "sandbox",
@@ -17,7 +21,7 @@ const config: PolarBillingConfig = {
 };
 const expectedCatalog = {
   currency: "USD",
-  monthlyAmountMinor: 799,
+  monthlyAmountMinor: 999,
   yearlyAmountMinor: 7999,
   taxBehavior: "exclusive" as const,
 };
@@ -42,6 +46,7 @@ function upstream(
     status?: string;
     environment?: "sandbox" | "production";
     priceAmount?: number;
+    productErrorStatus?: number;
     priceCurrency?: string;
     taxBehavior?: string | null;
     trialInterval?: string | null;
@@ -121,6 +126,11 @@ function upstream(
         pagination: { total_count: 1, max_page: 1 },
       };
     else if (url.pathname.startsWith("/v1/products/")) {
+      if (options.productErrorStatus)
+        return Response.json(
+          { detail: "Product unavailable" },
+          { status: options.productErrorStatus },
+        );
       const id = url.pathname.split("/").at(-1)!;
       result = {
         id,
@@ -141,7 +151,7 @@ function upstream(
               options.priceAmount ??
               (options.environment === "production"
                 ? id === config.monthlyProductId
-                  ? 799
+                  ? 999
                   : 7999
                 : 1500),
             price_currency:
@@ -273,19 +283,27 @@ describe("Polar protocol boundary", () => {
     });
     upstream({ environment: "production" });
     expect(await provider.plans()).toEqual([
-      { interval: "month", amountMinor: 799, currency: "USD" },
+      { interval: "month", amountMinor: 999, currency: "USD" },
       { interval: "year", amountMinor: 7999, currency: "USD" },
     ]);
     for (const mismatch of [
-      { priceAmount: 800 },
+      { priceAmount: 799 },
       { priceCurrency: "eur" },
       { taxBehavior: "inclusive" },
       { taxBehavior: "location" },
       { taxBehavior: null },
     ]) {
       upstream({ environment: "production", ...mismatch });
-      await expect(provider.plans()).rejects.toThrow("expected price, currency or tax behavior");
+      const plans = provider.plans();
+      await expect(plans).rejects.toBeInstanceOf(BillingCatalogUnavailableError);
+      await expect(plans).rejects.toThrow("expected price, currency or tax behavior");
     }
+  });
+  it.each([404, 503])("classifies a Polar catalog HTTP %i as unavailable", async (status) => {
+    upstream({ productErrorStatus: status });
+    await expect(createPolarBillingProvider(config).plans()).rejects.toBeInstanceOf(
+      BillingCatalogUnavailableError,
+    );
   });
   it("refuses a merchant-configured production trial", async () => {
     upstream({ environment: "production", trialInterval: "day", trialIntervalCount: 30 });
@@ -610,7 +628,7 @@ describe("billing operator configuration", () => {
       POLAR_PORTAL_RETURN_URL: config.portalReturnUrl,
       POLAR_RETURN_ORIGINS: "https://example.com:443/, https://account.example.com",
       POLAR_EXPECTED_CURRENCY: "USD",
-      POLAR_EXPECTED_MONTHLY_AMOUNT_MINOR: "799",
+      POLAR_EXPECTED_MONTHLY_AMOUNT_MINOR: "999",
       POLAR_EXPECTED_YEARLY_AMOUNT_MINOR: "7999",
       POLAR_EXPECTED_TAX_BEHAVIOR: "exclusive",
     };
@@ -618,6 +636,7 @@ describe("billing operator configuration", () => {
       environment: "production",
       productionPaymentsEnabled: true,
       returnOrigins: ["https://example.com", "https://account.example.com"],
+      expectedCatalog,
     });
     for (const liveFlag of [undefined, "false", "1"]) {
       expect(() =>
@@ -650,7 +669,7 @@ describe("billing operator configuration", () => {
     }
     for (const mismatch of [
       { POLAR_EXPECTED_CURRENCY: "usd" },
-      { POLAR_EXPECTED_MONTHLY_AMOUNT_MINOR: "7.99" },
+      { POLAR_EXPECTED_MONTHLY_AMOUNT_MINOR: "9.99" },
       { POLAR_EXPECTED_YEARLY_AMOUNT_MINOR: "9007199254740992" },
       { POLAR_EXPECTED_TAX_BEHAVIOR: "location" },
       { POLAR_EXPECTED_CURRENCY: undefined },

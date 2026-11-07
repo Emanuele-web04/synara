@@ -4,7 +4,11 @@ import { beforeAll, beforeEach, afterAll, describe, it, expect } from "vitest";
 import { createIsolatedTestDatabase } from "../testing/isolatedDatabase";
 import { createLiveActivityService } from "./service";
 import type { ActivityDelivery, NotificationDelivery, ApnsResult } from "./apns";
-import type { RegisterLiveActivity, RegisterTurnNotification } from "@synara/contracts";
+import type {
+  CompletionPreviewHostReport,
+  RegisterLiveActivity,
+  RegisterTurnNotification,
+} from "@synara/contracts";
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
 describe.skipIf(!databaseUrl)("Live Activity durable delivery", () => {
@@ -469,6 +473,93 @@ describe.skipIf(!databaseUrl)("Live Activity durable delivery", () => {
     ).toEqual({ ended: true, token: "" });
     expect(f.notifications).toHaveLength(0);
   });
+
+  it.each(["match", "key replacement", "opt out", "wrong recovered turn"] as const)(
+    "keeps encrypted previews scoped to the exact eligible watch: %s",
+    async (scenario) => {
+      const f = await fixture("production", "both");
+      const { source, notificationId, deviceJkt } = f.notification;
+      const recipient = { key: "B" + "a".repeat(86), proof: "header.payload.signature" };
+      const preview = {
+        v: 1,
+        ephemeralKey: "B" + "b".repeat(86),
+        nonce: "a".repeat(16),
+        ciphertext: "c".repeat(50),
+      } as const;
+      const effectiveTurnId = randomUUID();
+      const report = {
+        notificationId,
+        deviceJkt,
+        threadId: source.threadId,
+        turnId: source.turnId,
+        effectiveTurnId: scenario === "wrong recovered turn" ? randomUUID() : effectiveTurnId,
+        displayId: source.displayId,
+        recipientKey: recipient.key,
+        preview,
+      } satisfies CompletionPreviewHostReport;
+
+      await f.live.registerNotification(f.owner, { ...f.notification, preview: recipient });
+      expect(await f.live.previewWatches(f.hosts[1]!)).toEqual([]);
+      expect(await f.live.previewWatches(f.hosts[0]!)).toEqual([
+        {
+          notificationId,
+          deviceJkt,
+          threadId: source.threadId,
+          turnId: source.turnId,
+          displayId: source.displayId,
+          preview: recipient,
+        },
+      ]);
+      if (scenario === "key replacement" || scenario === "opt out") {
+        await f.live.registerNotification(f.owner, {
+          ...f.notification,
+          revision: f.notification.revision + 1,
+          ...(scenario === "key replacement"
+            ? { preview: { key: "B" + "d".repeat(86), proof: recipient.proof } }
+            : {}),
+        });
+      }
+      const snapshot = {
+        sequence: 1,
+        turns: [
+          {
+            threadId: source.threadId,
+            turnId: source.turnId,
+            effectiveTurnId,
+            state: "ready" as const,
+          },
+        ],
+        previews: [{ ...report, preview: { ...preview, title: "accidental cleartext" } }],
+      };
+      await f.live.publish(f.hosts[0]!, snapshot);
+      const { rows } = await pool.query(
+        "SELECT snapshot FROM live_activity_hosts WHERE host_id=$1",
+        [f.hosts[0]!.id],
+      );
+      expect(rows[0].snapshot.previews).toEqual([report]);
+      await f.service().flush();
+
+      expect(f.notifications).toHaveLength(1);
+      expect(f.notifications[0]).toMatchObject({ notificationId, turnId: effectiveTurnId });
+      if (scenario === "match") {
+        expect(f.notifications[0]?.preview).toEqual({
+          ...preview,
+          notificationId,
+          deviceJkt,
+          hostId: source.hostId,
+          sourceThreadId: source.threadId,
+          sourceTurnId: source.turnId,
+        });
+      } else {
+        expect(f.notifications[0]).not.toHaveProperty("preview");
+      }
+      expect(await f.live.previewWatches(f.hosts[0]!)).toEqual([]);
+      const retired = await pool.query("SELECT request FROM live_activities WHERE id=$1", [
+        notificationId,
+      ]);
+      expect(retired.rows[0].request).not.toHaveProperty("preview");
+    },
+  );
 
   it.each(["ready", "failed"] as const)(
     "delivers %s exact-turn alerts once across restart without ActivityKit payloads",

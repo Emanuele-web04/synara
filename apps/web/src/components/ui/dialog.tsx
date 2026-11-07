@@ -72,32 +72,43 @@ const dialogFieldLabelClassName = "text-ui-sm font-medium text-foreground/80";
 const dialogPanelFieldClassName =
   "[&_[data-slot=textarea-control]]:min-h-24 [&_[data-slot=textarea-control]_[data-slot=textarea]]:px-2.5 [&_[data-slot=textarea-control]_[data-slot=textarea]]:py-2";
 
+/** Edge-to-edge surface for full-window flows (the first-run onboarding). */
+const dialogFullScreenPopupClassName =
+  "row-start-1 h-full max-h-none w-full max-w-none rounded-none border-0 shadow-none dark:shadow-none";
+
 function DialogPopup({
   className,
   children,
   showCloseButton: showCloseButtonProp,
   bottomStickOnMobile: bottomStickOnMobileProp,
   backdropClassName,
+  fullScreen = false,
   ...props
 }: DialogPrimitive.Popup.Props & {
   showCloseButton?: boolean;
   bottomStickOnMobile?: boolean;
   /** Restyles the scrim, for a surface with its own (SynBot's lighter one). */
   backdropClassName?: string;
+  /** Fill the whole window instead of floating a centered card. */
+  fullScreen?: boolean;
 }) {
   const { t } = useTranslation();
 
   const showCloseButton = showCloseButtonProp ?? true;
-  const bottomStickOnMobile = bottomStickOnMobileProp ?? true;
+  const bottomStickOnMobile = !fullScreen && (bottomStickOnMobileProp ?? true);
   return (
     <DialogPortal>
       <DialogBackdrop className={backdropClassName} />
       <DialogViewport
-        className={cn(bottomStickOnMobile && "max-sm:grid-rows-[1fr_auto] max-sm:p-0 max-sm:pt-12")}
+        className={cn(
+          fullScreen && "grid-rows-1 p-0",
+          bottomStickOnMobile && "max-sm:grid-rows-[1fr_auto] max-sm:p-0 max-sm:pt-12",
+        )}
       >
         <DialogPrimitive.Popup
           className={cn(
             dialogPopupClassName,
+            fullScreen && dialogFullScreenPopupClassName,
             bottomStickOnMobile &&
               "max-sm:max-w-none max-sm:rounded-none max-sm:border-x-0 max-sm:border-t max-sm:border-b-0 max-sm:opacity-[calc(1-min(var(--nested-dialogs),1))] max-sm:data-ending-style:translate-y-4 max-sm:data-starting-style:translate-y-4",
             className,

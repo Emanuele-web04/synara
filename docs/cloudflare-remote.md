@@ -198,8 +198,19 @@ in one authenticated `DELETE /api/v1/notification-subscriptions` request.
 
 The sender reuses the existing environment-specific APNs credentials, with the
 ordinary app bundle topic, `apns-push-type=alert` and a per-turn collapse ID.
-Payloads contain generic “Synara” / “Response ready” or “Run failed” text and opaque
-routing IDs only. Delivered, invalid-token, rejected or exhausted watches erase
+The default payload contains generic “Synara” / “Response ready” or “Run failed”
+text and opaque routing IDs. If a device opts in to completion previews, its
+watch includes a separate public encryption key signed by its paired device
+identity. A compatible host verifies that proof against its local device trust
+and encrypts the chat title, provider and bounded first line of the final reply
+for that watch. The account API and APNs relay ciphertext, and the iOS
+notification extension opens it on the registered device. Old clients, disabled
+previews, and missing or invalid envelopes retain generic alerts. Encryption
+protects the preview text; sender origin still relies on the existing
+authenticated host report, account API, and APNs delivery. ActivityKit
+content remains generic.
+
+Delivered, invalid-token, rejected or exhausted watches erase
 the token and retain a deduplication tombstone until one day after expiry.
 A fresh UUID cannot resend the same device/exact-turn watch during that window.
 APNs remains at-least-once; a process failure after Apple accepts a request can

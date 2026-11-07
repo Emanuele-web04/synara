@@ -7,6 +7,7 @@ import { observeControllerAccount } from "./hostConnections/accountObserver";
 import { RemoteDeviceTrustRepository } from "./persistence/Services/RemoteDeviceTrust";
 import { AuthControlPlane } from "./auth/Services/AuthControlPlane";
 import {
+  accountLiveActivityEnabled,
   accountProfileSyncUnavailableReason,
   remoteConnectionsUnavailableReason,
 } from "./remoteFeaturePolicy";
@@ -592,11 +593,16 @@ const makeServerProgram = (input: CliInput) =>
       });
       yield* Effect.addFinalizer(() => Effect.sync(() => inboxReporter.stop()));
     }
-    if (isServerBetaFeatureEnabled("remoteConnections")) {
+    if (accountLiveActivityEnabled(config.stateDir)) {
       const activityReporter = createAccountLiveActivityReporter({
         sql: yield* SqlClient.SqlClient,
         baseDir: config.baseDir,
+        stateDir: config.stateDir,
         hostIdentityPath: config.hostIdentityPath,
+        completionPreviewTrust: {
+          remoteTrust,
+          tlsIdentityPath: remoteTlsIdentityPath(config.secretsDir),
+        },
         ...(config.devUrl ? { devUrl: config.devUrl } : {}),
       });
       yield* Effect.addFinalizer(() => Effect.sync(() => activityReporter.stop()));

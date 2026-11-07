@@ -70,7 +70,6 @@ export const CHINESE_UI_BETA_FEATURE = "chinese-ui";
 export const SYNBOT_BETA_FEATURE = "synbot";
 
 export const BETA_ONLY_FEATURES: readonly BetaOnlyFeature[] = [
-  "remoteConnections",
   "accountProfileSync",
   ACCOUNT_INBOX_BETA_FEATURE,
   CHINESE_UI_BETA_FEATURE,

@@ -1125,7 +1125,37 @@ describe("account erasure", () => {
   });
 });
 
-describe("signOut", () => {
+describe("account cleanup", () => {
+  it.each(["unlinkLocalHost", "signOut"] as const)(
+    "sends the %s host proof only to the saved account authority",
+    async (operation) => {
+      const baseDir = makeBaseDir();
+      await writeAccountCredentials(baseDir, credentials(linkedHostFields));
+      await generateAndPersistHostIdentity(
+        path.join(baseDir, "userdata", "secrets", "host-identity.json"),
+      );
+      const request = vi.fn(async () => Response.json({ host: { ...linkedHost, linked: false } }));
+      vi.stubGlobal("fetch", request);
+      try {
+        const session = createAccountSession({
+          baseDir,
+          accountUrl: "https://new-accounts.example.com",
+        });
+        await session[operation]();
+
+        expect(request).toHaveBeenCalledExactlyOnceWith(
+          `${ACCOUNT_URL}/api/v1/hosts/host_1/unlink`,
+          expect.objectContaining({
+            method: "POST",
+            headers: { authorization: expect.stringMatching(/^HostProof eyJ/) },
+          }),
+        );
+      } finally {
+        vi.unstubAllGlobals();
+      }
+    },
+  );
+
   it("unlinks local account state, including the host link", async () => {
     const baseDir = makeBaseDir();
     await writeAccountCredentials(baseDir, credentials(linkedHostFields));

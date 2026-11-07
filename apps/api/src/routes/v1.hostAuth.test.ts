@@ -322,9 +322,14 @@ describe.skipIf(!TEST_DATABASE_URL)("Slice A host account API", () => {
     },
   );
 
-  it.each(["liveactivity", "notification"])(
+  it.each(["liveactivity", "notification", "notification preview"])(
     "authenticates $0 registration and host publication at the HTTP boundary",
     async (kind) => {
+      const isNotification = kind !== "liveactivity";
+      const preview =
+        kind === "notification preview"
+          ? { key: "B" + "a".repeat(86), proof: "header.payload.signature" }
+          : undefined;
       const { app } = buildApp();
       const owner = await signIn();
       const host = await linkHost(app, owner);
@@ -346,14 +351,12 @@ describe.skipIf(!TEST_DATABASE_URL)("Slice A host account API", () => {
       };
       const put = (token: string) =>
         app.request(
-          kind === "notification"
-            ? "/api/v1/notification-subscriptions"
-            : "/api/v1/live-activities",
+          isNotification ? "/api/v1/notification-subscriptions" : "/api/v1/live-activities",
           {
             method: "PUT",
             headers: authHeaders(token),
             body: JSON.stringify(
-              kind === "notification"
+              isNotification
                 ? {
                     notificationId: request.activityId,
                     deviceJkt: request.deviceJkt,
@@ -361,6 +364,7 @@ describe.skipIf(!TEST_DATABASE_URL)("Slice A host account API", () => {
                     token: request.token,
                     environment: request.environment,
                     source,
+                    ...(preview ? { preview } : {}),
                   }
                 : request,
             ),
@@ -375,9 +379,25 @@ describe.skipIf(!TEST_DATABASE_URL)("Slice A host account API", () => {
       expect((await app.request(url, { headers: authHeaders(owner.token) })).status).toBe(401);
       const watches = await app.request(url, { headers: { authorization: `HostProof ${proof}` } });
       expect(watches.status).toBe(200);
-      expect(await watches.json()).toEqual({
+      expect(watches.headers.get("cache-control")).toBe("no-store");
+      const expectedWatches = {
         turns: [{ threadId: source.threadId, turnId: source.turnId }],
-      });
+        ...(preview
+          ? {
+              previews: [
+                {
+                  notificationId: request.activityId,
+                  deviceJkt: device.jkt,
+                  threadId: source.threadId,
+                  turnId: source.turnId,
+                  displayId: source.displayId,
+                  preview,
+                },
+              ],
+            }
+          : {}),
+      };
+      expect(await watches.json()).toEqual(expectedWatches);
       const published = await app.request(url, {
         method: "PUT",
         headers: { authorization: `HostProof ${proof}`, "content-type": "application/json" },
@@ -394,7 +414,7 @@ describe.skipIf(!TEST_DATABASE_URL)("Slice A host account API", () => {
         }),
       });
       expect(published.status).toBe(200);
-      if (kind === "notification") {
+      if (isNotification) {
         const remove = (token: string) =>
           app.request("/api/v1/notification-subscriptions", {
             method: "DELETE",
@@ -407,7 +427,7 @@ describe.skipIf(!TEST_DATABASE_URL)("Slice A host account API", () => {
           await (
             await app.request(url, { headers: { authorization: `HostProof ${proof}` } })
           ).json(),
-        ).toEqual({ turns: [{ threadId: source.threadId, turnId: source.turnId }] });
+        ).toEqual(expectedWatches);
         expect((await remove(owner.token)).status).toBe(200);
         expect(
           await (
@@ -1365,7 +1385,7 @@ describe.skipIf(!TEST_DATABASE_URL)("Slice A host account API", () => {
       }
 
       it.each([false, true])(
-        "requires Pro despite the beta flag and tester allowlist (beta: %s)",
+        "requires an Alto subscription despite the beta flag and tester allowlist (beta: %s)",
         async (beta) => {
           const { billing } = billingFixture();
           const { app } = buildApp(undefined, beta, { billing, remoteBillingEnforced: true });
@@ -1377,7 +1397,10 @@ describe.skipIf(!TEST_DATABASE_URL)("Slice A host account API", () => {
             headers: { authorization: `HostProof ${await hostProof(host.key, host)}` },
           });
           expect(authorization.status).toBe(403);
-          expect(await authorization.json()).toMatchObject({ error: "subscription_required" });
+          expect(await authorization.json()).toMatchObject({
+            error: "subscription_required",
+            message: "Remote access requires an active Synara Alto subscription",
+          });
           const grant = await app.request(`/api/v1/hosts/${host.id}/grant`, {
             method: "POST",
             headers: authHeaders(owner.token),

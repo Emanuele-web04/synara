@@ -471,7 +471,7 @@ export function createV1Routes(deps: {
             c,
             403,
             "subscription_required",
-            "Remote access requires an active Pro subscription",
+            "Remote access requires an active Synara Alto subscription",
           )
         : errorResponse(
             c,
@@ -1929,6 +1929,7 @@ export function createV1Routes(deps: {
     return c.json({ ok: true });
   });
   v1.get("/hosts/:id/live-activities", async (c) => {
+    c.header("Cache-Control", "no-store");
     if (!deps.liveActivities) return c.json({ turns: [] });
     try {
       const host = await hostKeys.withAuthenticatedHost(
@@ -1941,7 +1942,11 @@ export function createV1Routes(deps: {
         const denied = await requireRemoteAccess(c, host.ownerUserId);
         if (denied) return denied;
       }
-      return c.json({ turns: await deps.liveActivities.watches(host) });
+      const [turns, previews] = await Promise.all([
+        deps.liveActivities.watches(host),
+        deps.liveActivities.previewWatches(host),
+      ]);
+      return c.json({ turns, ...(previews.length > 0 ? { previews } : {}) });
     } catch (error) {
       return hostDomainError(c, error);
     }

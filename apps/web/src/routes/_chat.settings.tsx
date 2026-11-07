@@ -1848,6 +1848,10 @@ function SettingsRouteView() {
     </div>
   );
 
+  const billingEnabled =
+    (isElectron && import.meta.env.VITE_SYNARA_BILLING_ENABLED === "1") ||
+    import.meta.env.VITE_SYNARA_BILLING_SANDBOX === "1";
+
   const renderRouteOwnedPanel = () => {
     switch (activeSection) {
       case "general":
@@ -1861,10 +1865,7 @@ function SettingsRouteView() {
       case "profile":
         return (
           <div className="flex flex-col gap-7">
-            {import.meta.env.VITE_SYNARA_BILLING_ENABLED === "1" ||
-            import.meta.env.VITE_SYNARA_BILLING_SANDBOX === "1" ? (
-              <BillingSettingsPanel />
-            ) : null}
+            {billingEnabled ? <BillingSettingsPanel /> : null}
             <ProfileSettingsPanel />
           </div>
         );
@@ -1999,7 +2000,10 @@ function SettingsRouteView() {
                 />
                 <McpConnectorsSettingsPanel active={activeSection === "connectors"} />
                 <ExternalMcpSettingsPanel active={activeSection === "integrations"} />
-                <ConnectionsSettingsPanel active={activeSection === "connections"} />
+                <ConnectionsSettingsPanel
+                  active={activeSection === "connections"}
+                  billingEnabled={billingEnabled}
+                />
                 <AdvancedSettingsPanel
                   active={activeSection === "advanced"}
                   onOpenReleaseHistory={() => setReleaseHistoryOpen(true)}

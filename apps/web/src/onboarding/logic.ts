@@ -1,35 +1,76 @@
 // FILE: logic.ts
 // Purpose: Pure step, gate, and provider-classification rules for the first-run welcome tour.
 // Layer: Web domain helper (no React, no I/O)
-// Exports: ONBOARDING_STEPS, nextOnboardingStep, previousOnboardingStep, resolveOnboardingGate,
-//          resolveOnboardingCompletionToReconcile, resolveLocalOnboardingCompletion,
-//          classifyProviderSetup, summarizeProviderSetup, toggleSelection
+// Exports: ONBOARDING_STEPS, resolveOnboardingSteps, nextOnboardingStep, previousOnboardingStep,
+//          isOnboardingSetupStep, resolveOnboardingGate, resolveOnboardingCompletionToReconcile,
+//          resolveLocalOnboardingCompletion, classifyProviderSetup, summarizeProviderSetup,
+//          describeOnboardingAgentSummary, toggleSelection
 
 import type { ProviderKind, ServerProviderStatus } from "@synara/contracts";
 
+/** Every step in display order; `resolveOnboardingSteps` picks the ones this run shows. */
 export const ONBOARDING_STEPS = [
   "welcome",
-  "tour",
-  "providers",
-  "theme",
-  "project",
-  "done",
+  "agents",
+  "tasks",
+  "pocket",
+  "account",
+  "pair",
+  "ready",
 ] as const;
 export type OnboardingStep = (typeof ONBOARDING_STEPS)[number];
 
-export function nextOnboardingStep(step: OnboardingStep): OnboardingStep {
-  const index = ONBOARDING_STEPS.indexOf(step);
-  return ONBOARDING_STEPS[Math.min(index + 1, ONBOARDING_STEPS.length - 1)] ?? "done";
+export interface OnboardingStepInputs {
+  /** The controller can host remote connections (iPhone pairing). */
+  readonly remoteAvailable: boolean;
+  /** The user was signed out when the tour opened, so the account step is worth showing. */
+  readonly offerAccount: boolean;
+  /** Signed in right now: pairing needs an account. */
+  readonly signedIn: boolean;
 }
 
-export function previousOnboardingStep(step: OnboardingStep): OnboardingStep {
-  const index = ONBOARDING_STEPS.indexOf(step);
-  return ONBOARDING_STEPS[Math.max(index - 1, 0)] ?? "welcome";
+/**
+ * The remote steps only appear when this build can pair a phone. The account step is
+ * latched from the moment the tour opened (signing in on it must not remove it from under
+ * the user), while pairing follows the live sign-in state.
+ */
+export function resolveOnboardingSteps(input: OnboardingStepInputs): readonly OnboardingStep[] {
+  return ONBOARDING_STEPS.filter((step) => {
+    switch (step) {
+      case "pocket":
+        return input.remoteAvailable;
+      case "account":
+        return input.remoteAvailable && input.offerAccount;
+      case "pair":
+        return input.remoteAvailable && input.signedIn;
+      default:
+        return true;
+    }
+  });
+}
+
+/** Position of `step` in the full order, so a step missing from `steps` still resolves. */
+function stepRank(step: OnboardingStep): number {
+  return ONBOARDING_STEPS.indexOf(step);
+}
+
+export function nextOnboardingStep(
+  steps: readonly OnboardingStep[],
+  step: OnboardingStep,
+): OnboardingStep {
+  return steps.find((candidate) => stepRank(candidate) > stepRank(step)) ?? "ready";
+}
+
+export function previousOnboardingStep(
+  steps: readonly OnboardingStep[],
+  step: OnboardingStep,
+): OnboardingStep {
+  return steps.findLast((candidate) => stepRank(candidate) < stepRank(step)) ?? "welcome";
 }
 
 /** Steps where the user has started making setup choices; the tour must not auto-close past here. */
 export function isOnboardingSetupStep(step: OnboardingStep): boolean {
-  return step !== "welcome" && step !== "tour";
+  return step !== "welcome";
 }
 
 export interface LocalOnboardingCompletion {
