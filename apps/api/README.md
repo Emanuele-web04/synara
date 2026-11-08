@@ -65,6 +65,17 @@ rollout controls remote admission. With it on, the commercial gate takes
 precedence: neither beta access nor a test-user allowlist bypasses the paid
 check. Ownership, organization membership and device approval still apply.
 
+`POLAR_PROFILE_ACCESS_ENFORCED` gates public profiles the same way and is
+independent of the remote switch (also strict, `false` by default, and requires
+configured billing). With it on, turning a profile public needs a fresh Alto
+check (`403 subscription_required` otherwise), and `GET /profiles/:handle`
+answers `404 profile_not_found` — the same as a private profile — when the
+owner's stored entitlement is missing or expired. The page read never calls
+Polar: it uses the ledger that webhooks and signed-in reconciles keep current,
+so a lapsed subscription hides the page without changing the owner's stored
+visibility, and resubscribing restores it. Private profiles (including the
+onboarding handle setup) never need a subscription.
+
 ### Execution-host policy and manual paid rollout
 
 Alto covers all official Remote ingress, including managed tunnels, LAN/Tailscale,
@@ -88,6 +99,7 @@ must establish that separately.
 | `SYNARA_ACCOUNT_URL`                    | Remote execution host | Set explicitly to the canonical account API origin for the actual Remote deployment. Match the intended account/host authority; do not copy a trial URL or infer it from a generic UI fallback.    |
 | `SYNARA_REMOTE_BILLING_POLICY_REQUIRED` | Remote execution host | `false` during current preparation. Set to `true` only as part of the approved manual paid rollout. It requires fresh policy proof before admitting unverified Remote sessions, even before login. |
 | `POLAR_REMOTE_ACCESS_ENFORCED`          | Account API           | `false` now. The future paid rollout sets it to `true` with configured billing; beta/test enrollment cannot override it.                                                                           |
+| `POLAR_PROFILE_ACCESS_ENFORCED`         | Account API           | `false` by default. `true` (with configured billing) makes public profiles an Alto feature: publishing needs a fresh check and pages of owners without stored access answer 404.                   |
 | `POLAR_PRODUCTION_PAYMENTS_ENABLED`     | Account API           | `false` now. Production billing separately requires explicit `true`, production credentials, expected catalog and approved return origins.                                                         |
 
 With strict host policy enabled, an unknown policy or first-read outage holds

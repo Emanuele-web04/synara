@@ -9,6 +9,7 @@ const POLAR_BINDINGS = [
   "POLAR_ENVIRONMENT",
   "POLAR_PRODUCTION_PAYMENTS_ENABLED",
   "POLAR_REMOTE_ACCESS_ENFORCED",
+  "POLAR_PROFILE_ACCESS_ENFORCED",
   "POLAR_RETURN_ORIGINS",
   "POLAR_ACCESS_TOKEN",
   "POLAR_WEBHOOK_SECRET",
@@ -79,6 +80,7 @@ export class AccountApi extends Container<Cloudflare.Env & OptionalSecrets> {
     POLAR_BILLING_ENABLED: this.env.POLAR_BILLING_ENABLED ?? "false",
     POLAR_PRODUCTION_PAYMENTS_ENABLED: this.env.POLAR_PRODUCTION_PAYMENTS_ENABLED ?? "false",
     POLAR_REMOTE_ACCESS_ENFORCED: this.env.POLAR_REMOTE_ACCESS_ENFORCED ?? "false",
+    POLAR_PROFILE_ACCESS_ENFORCED: this.env.POLAR_PROFILE_ACCESS_ENFORCED ?? "false",
     ...Object.fromEntries(
       // Empty configured values must reach the API's strict parser, not become defaults.
       POLAR_BINDINGS.flatMap((key) => (this.env[key] !== undefined ? [[key, this.env[key]]] : [])),

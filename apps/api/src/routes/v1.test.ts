@@ -30,6 +30,8 @@ import { createApiSigningService, type ApiSigningService } from "../identity/sig
 import { createWorkosIdentityProvider } from "../identity/workos";
 import { AVATAR_STORAGE_TIMEOUT_MS, type AvatarStorage } from "../avatarStorage";
 import { startFakeWorkos, type FakeWorkos } from "../testing/fakeWorkos";
+import type { BillingProvider, BillingSnapshot } from "../billing/polar";
+import { createBillingService, type BillingService } from "../billing/service";
 import {
   AVATAR_MAX_BYTES,
   createV1Routes,
@@ -123,6 +125,8 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
     avatarStorage?: AvatarStorage;
     profileProxySecret?: string;
     scheduleDeferred?: (task: () => Promise<void>, delayMs: number) => void;
+    billing?: BillingService;
+    profileBillingEnforced?: boolean;
   };
 
   /**
@@ -155,6 +159,10 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
         : {}),
       ...(options.scheduleDeferred !== undefined
         ? { scheduleDeferred: options.scheduleDeferred }
+        : {}),
+      ...(options.billing !== undefined ? { billing: options.billing } : {}),
+      ...(options.profileBillingEnforced !== undefined
+        ? { profileBillingEnforced: options.profileBillingEnforced }
         : {}),
     });
   }
@@ -1961,6 +1969,107 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
         body: JSON.stringify(profileBody()),
       });
       expect(res.status).toBe(401);
+    });
+
+    describe("paid public profiles", () => {
+      function paidProfiles() {
+        const states = new Map<string, BillingSnapshot>();
+        const provider: BillingProvider = {
+          environment: "sandbox",
+          plans: vi.fn(async () => [
+            { interval: "month" as const, amountMinor: 799, currency: "USD" },
+          ]),
+          state: vi.fn(async (userId) => states.get(userId) ?? null),
+          productId: () => "fixture-month",
+          preflightCheckout: vi.fn(async () => {}),
+          recoverCheckout: vi.fn(async () => null),
+          checkout: vi.fn(async () => ({
+            checkoutId: randomUUID(),
+            productId: "fixture-month",
+            status: "open" as const,
+            expiresAt: new Date(Date.now() + 60_000).toISOString(),
+            url: "https://sandbox.polar.sh/checkout/fixture",
+          })),
+          portal: vi.fn(async () => "https://sandbox.polar.sh/portal/fixture"),
+          cancelRenewals: vi.fn(async () => {}),
+          verify: vi.fn(async () => null),
+        };
+        const billing = createBillingService({ pool, provider });
+        const { app } = buildApp({ billing, profileBillingEnforced: true });
+        const pay = (userId: string) =>
+          states.set(userId, {
+            customerId: randomUUID(),
+            productIds: ["fixture-month"],
+            settledCheckoutAttempts: [],
+            accessGranted: true,
+            subscriptionStatus: "active",
+            validUntil: new Date(Date.now() + 86_400_000).toISOString(),
+            cancelAtPeriodEnd: false,
+            hasSubscription: true,
+          });
+        return { app, provider, pay };
+      }
+
+      function putProfile(app: Hono, token: string, body: Record<string, unknown>) {
+        return app.request("/api/v1/profile", {
+          method: "PUT",
+          headers: authHeaders(token),
+          body: JSON.stringify(body),
+        });
+      }
+
+      it("refuses to publish without Alto but still saves a private profile", async () => {
+        const { app } = paidProfiles();
+        const { token } = await signIn();
+        const base = profileBody();
+        // Onboarding's handle setup is private and must never need a subscription.
+        expect((await putProfile(app, token, base)).status).toBe(200);
+
+        const refused = await putProfile(app, token, { ...base, public: true });
+        expect(refused.status).toBe(403);
+        expect(await refused.json()).toMatchObject({
+          error: "subscription_required",
+          message: "Public profiles require an active Synara Alto subscription",
+        });
+        const [row] = await database.db
+          .select()
+          .from(profiles)
+          .where(eq(profiles.handle, base.handle));
+        expect(row?.public).toBe(false);
+        expect((await app.request(`/api/v1/profiles/${base.handle}`)).status).toBe(404);
+      });
+
+      it("publishes and serves a subscriber's profile, then hides it once access lapses", async () => {
+        const { app, pay } = paidProfiles();
+        const { token, userId } = await signIn();
+        pay(userId);
+        const base = profileBody({ public: true });
+        expect((await putProfile(app, token, base)).status).toBe(200);
+        expect((await app.request(`/api/v1/profiles/${base.handle}`)).status).toBe(200);
+
+        // A webhook-driven reconcile revokes access; the stored flag stays public.
+        await pool.query("UPDATE billing_accounts SET access_granted=false WHERE user_id=$1", [
+          userId,
+        ]);
+        const hidden = await app.request(`/api/v1/profiles/${base.handle}`);
+        expect(hidden.status).toBe(404);
+        expect(await hidden.json()).toMatchObject({ error: "profile_not_found" });
+        // Editing an already-public profile is not a new publish, so it stays allowed.
+        expect((await putProfile(app, token, { ...base, displayName: "Ada L." })).status).toBe(200);
+      });
+
+      it("never asks the billing provider to serve a public profile", async () => {
+        const { app, provider, pay } = paidProfiles();
+        const { token, userId } = await signIn();
+        pay(userId);
+        const base = profileBody({ public: true });
+        expect((await putProfile(app, token, base)).status).toBe(200);
+        vi.mocked(provider.state).mockClear();
+        for (let index = 0; index < 3; index += 1) {
+          expect((await app.request(`/api/v1/profiles/${base.handle}`)).status).toBe(200);
+        }
+        expect(provider.state).not.toHaveBeenCalled();
+      });
     });
   });
 

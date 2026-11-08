@@ -58,3 +58,30 @@ export function decideRemoteBillingAccess(
   }
   return { allowed: true, reason: "allowed" };
 }
+
+/** The ledger's last known entitlement for one account, read without a provider call. */
+export interface StoredBillingAccess {
+  readonly accessGranted: boolean;
+  readonly validUntil: string | null;
+}
+
+/**
+ * Whether an owner's public profile may be shown to anyone. Profile pages are
+ * anonymous and rate-limited per viewer, so they must never drive Polar round
+ * trips: this reads only the stored entitlement that Polar webhooks and
+ * signed-in reconciles keep current. Missing, revoked, expired, or unreadable
+ * entitlement hides the profile; a granted benefit without a period end stays
+ * visible until a webhook or reconcile revokes it.
+ */
+export function isProfileBillingEntitled(input: {
+  readonly enforcementEnabled?: boolean;
+  readonly stored?: StoredBillingAccess | null | undefined;
+  readonly nowMs?: number;
+}): boolean {
+  if (input.enforcementEnabled !== true) return true;
+  const { stored } = input;
+  if (stored?.accessGranted !== true) return false;
+  if (stored.validUntil === null) return true;
+  const validUntilMs = Date.parse(stored.validUntil);
+  return Number.isFinite(validUntilMs) && validUntilMs > (input.nowMs ?? Date.now());
+}
