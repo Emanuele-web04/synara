@@ -391,19 +391,9 @@ bootstrap removes WebRTC capabilities before page scripts and stops parsing if t
 cannot be enforced. HTML messages cannot open external URLs through the host.
 
 The list currently holds `remoteConnections`, `accountProfileSync`,
-`accountInbox` (account-saved Inbox history), and `chinese-ui`. MCP Connectors and
+and `accountInbox` (account-saved Inbox history). MCP Connectors and
 the native editor are available in Stable and Beta.
 
-Simplified Chinese (`chinese-ui`) is available in non-Stable builds. Stable keeps English and Spanish, hides Chinese
-from Language settings, and ignores saved or programmatic Chinese selections without erasing
-them in the raw renderer settings. The derived native mirror receives the effective System
-preference so its menus follow the same fallback. System detection skips Chinese and uses the
-next supported language, then English.
-The same shared locale policy gates renderer startup and native menus; the native language IPC
-refuses Chinese writes in Stable. No UI-language setting is owned by a server RPC. The server
-also reports the feature disabled for a Stable host. Stable macOS bundles omit
-app-authored Chinese permission explanations; macOS-owned dialog controls follow the OS language.
-Beta, Remote, development, Cua, Canary and non-desktop hosts follow the existing non-Stable policy.
 Diagnostics follow their separate [sender policy](#diagnostics).
 Inline visuals are available in Stable and Beta:
 the `synara_show_visual` agent tool, its transcript rows, and the `orchestration.getInlineVisual`

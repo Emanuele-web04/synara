@@ -75,7 +75,6 @@ import { extractTrailingBrowserAnnotations } from "../lib/browserAnnotations";
 import { isMacNavigatorPlatform } from "../lib/utils";
 import { STARRED_MODELS_STORAGE_KEY } from "../lib/starredModels";
 import { readNativeApi } from "../nativeApi";
-import { setLanguagePreference } from "~/i18n";
 import { DEFAULT_THEME_STATE, getCodeThemeSeed } from "~/theme/theme.logic";
 import { emitWsTransportState } from "../wsTransportEvents";
 import { dispatchKanbanDraftThread } from "../lib/kanbanDispatch";
@@ -13248,17 +13247,11 @@ describe("ChatView transcript geometry (full app)", () => {
   );
 
   it.each([
-    { language: "en", variant: "dark", reset: "Restore defaults", label: "Dark theme pack" },
-    {
-      language: "es",
-      variant: "light",
-      reset: "Restaurar valores predeterminados",
-      label: "Paquete de tema claro",
-    },
-    { language: "zh-CN", variant: "dark", reset: "恢复默认设置", label: "深色主题包" },
+    { variant: "dark", reset: "Restore defaults", label: "Dark theme pack" },
+    { variant: "light", reset: "Restore defaults", label: "Light theme pack" },
   ] as const)(
-    "names the customized theme pack in the localized reset confirmation ($language)",
-    async ({ language, variant, reset, label }) => {
+    "names the customized theme pack in the reset confirmation ($variant)",
+    async ({ variant, reset, label }) => {
       const previousTheme = localStorage.getItem("synara:theme");
       localStorage.setItem(
         "synara:theme",
@@ -13290,13 +13283,11 @@ describe("ChatView transcript geometry (full app)", () => {
           .poll(() => document.documentElement.getAttribute("data-theme-variant"))
           .toBe(variant);
         await mounted.router.navigate({ to: "/settings", search: { section: "appearance" } });
-        setLanguagePreference(language);
         await page.getByRole("button", { name: reset, exact: true }).click();
         await expect.poll(() => confirm.mock.calls.length).toBe(1);
         expect(confirm).toHaveBeenCalledWith(expect.stringContaining(label));
         expect(confirm).not.toHaveBeenCalledWith(expect.stringContaining("settings:"));
       } finally {
-        setLanguagePreference("en");
         Object.defineProperty(window, "nativeApi", {
           configurable: true,
           value: previousNativeApi,
