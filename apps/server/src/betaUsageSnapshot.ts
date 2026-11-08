@@ -9,8 +9,7 @@
 // effort, interaction/permission mode, origin and outcome. Never thread titles,
 // paths, prompts, or provider payloads.
 
-import { MODEL_CAPABILITIES_INDEX, ProviderKind } from "@synara/contracts";
-import { normalizeModelSlug, stripClaudeContextWindowSuffix } from "@synara/shared/model";
+import { usageProviderCategory, usageTurnCategories } from "@synara/shared/usageAnalytics";
 import { Effect, Path } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
@@ -68,34 +67,6 @@ export interface TurnBreakdownRow {
 
 const TURN_BREAKDOWN_MAX_TURNS = 5_000;
 const TURN_BREAKDOWN_MAX_ROWS = 200;
-const EFFORTS = new Set([
-  "none",
-  "minimal",
-  "low",
-  "medium",
-  "high",
-  "xhigh",
-  "max",
-  "ultrathink",
-  "ultracode",
-]);
-const INTERACTION_MODES = new Set(["default", "plan", "debug"]);
-const RUNTIME_MODES = new Set(["approval-required", "auto", "full-access"]);
-const ORIGINS = new Set(["user", "automation", "agent"]);
-const PROVIDERS = new Set<string>(ProviderKind.literals);
-// Claude releases newer than the bundled catalog keep their versioned name; a
-// family prefix alone is not enough, since people can name custom models freely.
-const CLAUDE_RELEASE_PATTERN = /^claude-(fable|opus|sonnet|haiku)-\d{1,2}(-\d{1,2})?(-\d{8})?$/;
-
-/** A catalogued model name; anything a user could have named stays "other". */
-export function usageModelCategory(provider: string, model: string | null): string {
-  if (!model || !PROVIDERS.has(provider)) return "other";
-  const slug = normalizeModelSlug(model, provider as ProviderKind) ?? model.trim();
-  const base = stripClaudeContextWindowSuffix(slug).toLowerCase();
-  if (MODEL_CAPABILITIES_INDEX[provider as ProviderKind]?.[base]) return base;
-  return provider === "claudeAgent" && CLAUDE_RELEASE_PATTERN.test(base) ? base : "other";
-}
-
 const OUTCOME_BY_STATE: Record<string, TurnBreakdownRow["outcome"]> = {
   completed: "succeeded",
   error: "failed",
@@ -132,18 +103,14 @@ export function aggregateTurnBreakdown(rows: ReadonlyArray<TurnRow>): TurnBreakd
   for (const row of rows) {
     const outcome = OUTCOME_BY_STATE[row.state];
     if (!outcome) continue;
-    const provider = row.provider && PROVIDERS.has(row.provider) ? row.provider : "other";
     const category = {
-      provider,
-      model: usageModelCategory(provider, row.model),
-      effort: row.effort && EFFORTS.has(row.effort) ? row.effort : "default",
-      interactionMode:
-        row.interactionMode && INTERACTION_MODES.has(row.interactionMode)
-          ? row.interactionMode
-          : "default",
-      runtimeMode:
-        row.runtimeMode && RUNTIME_MODES.has(row.runtimeMode) ? row.runtimeMode : "full-access",
-      origin: row.origin && ORIGINS.has(row.origin) ? row.origin : "user",
+      ...usageTurnCategories({
+        ...row,
+        effort: row.effort ?? "default",
+        interactionMode: row.interactionMode ?? "default",
+        runtimeMode: row.runtimeMode ?? "full-access",
+        origin: row.origin ?? "user",
+      }),
       outcome,
     };
     const key = Object.values(category).join("|");
@@ -231,12 +198,14 @@ export const writeBetaUsageSnapshot = (betaHomeDir: string) =>
     const snapshot = {
       v: 1,
       generatedAt: new Date().toISOString(),
-      providers: providers.map((row) => ({
-        provider: row.provider,
-        threads: Number(row.threads),
-        turns: Number(row.turns),
-        turnsFailed: Number(row.turnsFailed ?? 0),
-      })),
+      providers: providers
+        .filter((row) => usageProviderCategory(row.provider) !== "other")
+        .map((row) => ({
+          provider: row.provider,
+          threads: Number(row.threads),
+          turns: Number(row.turns),
+          turnsFailed: Number(row.turnsFailed ?? 0),
+        })),
       projects: Number(projects[0]?.n ?? 0),
       activeThreads: Number(activeThreads[0]?.n ?? 0),
       turnBreakdown: aggregateTurnBreakdown(turns),

@@ -18,6 +18,14 @@
     "./uiLocale": {
       "types": "./src/uiLocale.ts",
       "import": "./src/uiLocale.ts"
+    },
+    "./productAnalytics": {
+      "types": "./src/productAnalytics.ts",
+      "import": "./src/productAnalytics.ts"
+    },
+    "./composerSlashCommands": {
+      "types": "./src/composerSlashCommands.ts",
+      "import": "./src/composerSlashCommands.ts"
     }
   },
   "scripts": {

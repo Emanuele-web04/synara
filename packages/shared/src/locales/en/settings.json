@@ -1181,5 +1181,14 @@
   "permissionGuideCompleteAuthentication": "Complete any macOS authentication. If macOS asks you to quit and reopen, do so before checking again.",
   "resumeAfterUsageLimits": "Resume after usage limits",
   "resumeAfterUsageLimitsDescription": "Automatically continue newly limited tasks when the provider reports that their allowance resets. Applies to this computer, even while your other devices are closed. Turning this off cancels pending resumes.",
-  "couldNotUpdateUsageLimitRecovery": "Could not update automatic resumption"
+  "couldNotUpdateUsageLimitRecovery": "Could not update automatic resumption",
+  "productAnalyticsPrivacyTitle": "Privacy",
+  "productAnalyticsShareTitle": "Share product analytics",
+  "productAnalyticsRemoteShareTitle": "Share usage and diagnostics",
+  "productAnalyticsDescription": "Help improve Synara with fixed feature, connection and turn counts sent to Cloudflare. The random installation ID is unrelated to login or billing. No prompts, chats, files, paths, project names or free text. Off by default; this installation only.",
+  "productAnalyticsRemoteDescription": "Help fix bugs and count active installations with fixed usage, connection and turn outcomes, errors and crashes sent to Cloudflare. The random analytics ID is unrelated to login or billing. No prompts, chats, files, paths, account details or free text. On by default in Synara Remote; this installation only.",
+  "productAnalyticsRetryLoad": "Retry loading privacy settings",
+  "productAnalyticsSaveError": "Could not save your choice. Your previous setting is still shown; try again.",
+  "productAnalyticsRemoteDisableDescription": "Turning this off stops collection, cancels sends and deletes unsent events and the product analytics ID. Re-enabling uses a fresh random ID; events already received cannot be recalled.",
+  "productAnalyticsDisableDescription": "Turning this off stops product collection, cancels sends and deletes unsent product events and the analytics ID. Re-enabling uses a fresh random ID. Beta crash diagnostics are separate."
 }

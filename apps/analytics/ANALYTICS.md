@@ -39,7 +39,10 @@ most 50 events and a 64 KiB request body. Each event carries only the version,
 random install and event UUIDs, timestamp, release channel, app surface,
 platform, app version, one event name, one outcome, and optional enumerated
 feature/mode/provider fields or bounded duration/token counts. Unknown fields
-are discarded. Invalid required or optional values reject that event. There
+are discarded, including legacy `accountHash` values of any type. The receiver
+never stores or queries account linkage. Commands must belong to the shared
+`PRODUCT_ANALYTICS_COMMANDS` list; custom names become the fixed `slash:custom`
+category on the client. Invalid required or optional values reject that event. There
 are no event-level read APIs.
 
 Never add prompts, replies, filenames, paths, repository or project names, URLs,
@@ -47,11 +50,25 @@ account identifiers, credentials, arbitrary strings, or error text.
 
 ## Storage and dashboard
 
-Accepted events enter `product_events`; `events`, `usage_providers`, and
-`crash_dumps` remain diagnostics data. Event UUIDs make retries idempotent.
-The daily scheduled job deletes product rows by `received_at` after 30 days in
-10,000-row chunks, capped at 10 chunks per run, and does not alter diagnostic
-data. An unusually large backlog is picked up by later runs.
+Accepted events enter `product_events`; `events`, `usage_providers`, `usage_turns`,
+and `crash_dumps` remain diagnostics data. Event UUIDs make retries idempotent.
+The daily scheduled job deletes product rows by `received_at` after 30 days and
+raw usage provider/turn samples after 90 days. Each table uses 10,000-row chunks,
+capped at 10 chunks per run; a larger backlog is picked up by later runs.
+General diagnostic records, issues and R2 minidumps keep their existing retention
+policy, including project/active-thread counts retained on `events` usage rows.
+Changing that policy requires coordinated issue and R2 cleanup.
+
+Snapshot producer, desktop queue and receiver share finite provider, bundled
+model, effort, mode and origin categories. Unknown model/dimension values become
+`other`; unknown provider summary rows are dropped. Syntactically valid custom
+strings and future-looking model names do not extend the allowlist. Migration
+`0007_installation_privacy.sql` removes historical account linkage and scrubs
+unknown stored commands and usage categories to fixed fallbacks. Known safe
+categories and numeric totals are preserved; unknown provider rows merge into
+`other` without primary-key collisions. Dashboard queries normalize categories
+before grouping and limiting, including before migration, so an installation
+counts once within its resulting category. See [deployment order](README.md#deployment).
 
 The private dashboard reads `/api/product?from=YYYY-MM-DD&to=YYYY-MM-DD`, with
 optional `channel` and `surface` filters. It reports daily event and active
@@ -60,7 +77,10 @@ token totals from reported desktop `turn.completed` events. These are client
 observations from installations that enabled sharing, not complete global turn
 or account billing totals. Missing token samples stay unknown and are excluded
 from totals. Counts represent installation IDs that sent events, not people.
-The query range is limited to the 30-day retention window.
+The query range is limited to the 30-day retention window. Rolling active
+installation counts cover the last 24 hours, 7 days and 30 days. Engaged means
+an installation attempted a chat request, including failures; it does not mean
+a successful use. There are no account-level counts or individual drill-downs.
 
 ## Production checkpoint — 5 October 2026
 

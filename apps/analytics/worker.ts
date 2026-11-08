@@ -14,11 +14,20 @@
 // fields are re-redacted server-side with the same rules the client applies.
 // Deploy: `cd apps/analytics && wrangler deploy`
 
+import { isProductAnalyticsCommand } from "@synara/contracts/productAnalytics";
+import { usageProviderCategory, usageTurnCategories } from "@synara/shared/usageAnalytics";
+
 import {
   redactDiagnosticText,
   sanitizeDesktopUpdateFailureReason,
   sanitizeRemoteDiagnosticError,
 } from "@synara/shared/diagnosticsRedaction";
+
+import {
+  PRODUCT_COMMAND_CATEGORY_SQL,
+  USAGE_PROVIDER_CATEGORY_SQL,
+  USAGE_TURN_CATEGORIES_SQL,
+} from "./usagePrivacySql";
 
 export interface Env {
   DB: D1Database;
@@ -96,14 +105,11 @@ const PRODUCT_MAX_BODY_BYTES = 64 * 1024;
 const PRODUCT_MAX_EVENT_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 const PRODUCT_MAX_EVENT_FUTURE_MS = 5 * 60 * 1000;
 const PRODUCT_RETENTION_DAYS = 30;
-const PRODUCT_RETENTION_DELETE_BATCH_SIZE = 10_000;
-const PRODUCT_RETENTION_MAX_BATCHES = 10;
+const RETENTION_DELETE_BATCH_SIZE = 10_000;
+const RETENTION_MAX_BATCHES = 10;
 const PRODUCT_MAX_DURATION_MS = 86_400_000;
 const PRODUCT_MAX_TOKEN_COUNT = 1_000_000_000_000;
 const PRODUCT_UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const PRODUCT_ACCOUNT_HASH_PATTERN = /^[0-9a-f]{32}$/;
-// Built-in shortcut or slash command names only; clients report others as `custom`.
-const PRODUCT_COMMAND_PATTERN = /^(shortcut|slash):[a-z][A-Za-z0-9.-]{0,47}$/;
 const PRODUCT_VERSION_PATTERN = /^[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
 const PRODUCT_ISO_TIMESTAMP_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z$/;
 
@@ -111,7 +117,6 @@ interface NormalizedProductEvent {
   id: string;
   ts: string;
   installId: string;
-  accountHash: string | null;
   channel: string;
   surface: string;
   platform: string;
@@ -130,10 +135,10 @@ interface NormalizedProductEvent {
 }
 
 const INSERT_PRODUCT_EVENT_SQL = `INSERT OR IGNORE INTO product_events (
-  event_id, ts, received_at, install_id, account_hash, channel, surface, platform, app_version,
+  event_id, ts, received_at, install_id, channel, surface, platform, app_version,
   event, outcome, feature, mode, provider, reason, command, duration_ms,
   input_tokens, output_tokens, cached_input_tokens
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
 
 function productEventStatement(
   env: Env,
@@ -145,7 +150,6 @@ function productEventStatement(
     event.ts,
     receivedAt,
     event.installId,
-    event.accountHash,
     event.channel,
     event.surface,
     event.platform,
@@ -238,12 +242,6 @@ export function normalizeProductEvent(
   if (!isRecord(raw) || raw.v !== 1) return null;
   if (typeof raw.id !== "string" || !PRODUCT_UUID_PATTERN.test(raw.id)) return null;
   if (typeof raw.installId !== "string" || !PRODUCT_UUID_PATTERN.test(raw.installId)) return null;
-  if (
-    raw.accountHash !== undefined &&
-    (typeof raw.accountHash !== "string" || !PRODUCT_ACCOUNT_HASH_PATTERN.test(raw.accountHash))
-  ) {
-    return null;
-  }
   if (typeof raw.channel !== "string" || !PRODUCT_CHANNELS.has(raw.channel)) return null;
   if (!PRODUCT_SURFACES.has(String(raw.surface)) || !PRODUCT_PLATFORMS.has(String(raw.platform))) {
     return null;
@@ -290,7 +288,7 @@ export function normalizeProductEvent(
   const command =
     raw.command === undefined
       ? null
-      : typeof raw.command === "string" && PRODUCT_COMMAND_PATTERN.test(raw.command)
+      : isProductAnalyticsCommand(raw.command)
         ? raw.command
         : undefined;
   if (command === undefined || (command === null) === (raw.event === "command.used")) return null;
@@ -318,12 +316,11 @@ export function normalizeProductEvent(
     return null;
   }
 
-  // Reconstruct to strip all unknown keys before persistence.
+  // Reconstruct without unknown fields, including all legacy account identifiers.
   return {
     id: raw.id,
     ts: raw.ts,
     installId: raw.installId,
-    accountHash: typeof raw.accountHash === "string" ? raw.accountHash : null,
     channel: raw.channel,
     surface: raw.surface as string,
     platform: raw.platform as string,
@@ -373,13 +370,13 @@ const VERSION_PATTERN = /^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$/;
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const SESSION_COOKIE = "synara_beta_dash";
 const SESSION_TTL_SECONDS = 7 * 24 * 60 * 60;
-// Nothing is deleted: events, usage rows, and minidumps are kept indefinitely.
-// The dashboard's widest range ("All") is still capped at this many days.
+// General diagnostics and minidumps retain their existing policy; raw usage
+// samples expire separately. The widest dashboard range is capped here.
 const MAX_RANGE_DAYS = 365;
 const DAY_MS = 24 * 60 * 60 * 1000;
 const OS_VERSION_PATTERN = /^\d{1,4}(\.\d{1,4})?$/;
 const LOCALE_PATTERN = /^[a-z]{2,3}$/;
-const PROVIDER_PATTERN = /^[A-Za-z][A-Za-z0-9_-]{0,31}$/;
+const USAGE_RETENTION_DAYS = 90;
 const MAX_USAGE_PROVIDERS = 32;
 const USAGE_COUNT_MAX = 100_000;
 const BETA_INSTALLED_OUTCOMES = new Set(["imported", "import-failed", "fresh"]);
@@ -431,7 +428,6 @@ interface UsageTurnRow {
 const MAX_USAGE_TURN_ROWS = 200;
 // usage_turns binds 21 params per row; 4 rows stay under D1's 100-parameter cap.
 const USAGE_TURN_ROWS_PER_STATEMENT = 4;
-const USAGE_TURN_CATEGORY_PATTERN = /^[A-Za-z0-9][A-Za-z0-9.-]{0,47}$/;
 const USAGE_TURN_OUTCOMES = new Set(["succeeded", "failed", "cancelled"]);
 const USAGE_TURN_TOTAL_MAX = 1_000_000_000_000;
 
@@ -442,30 +438,9 @@ function normalizeUsageTurns(value: unknown): UsageTurnRow[] {
   const rows: UsageTurnRow[] = [];
   for (const entry of value.slice(0, MAX_USAGE_TURN_ROWS)) {
     if (!isRecord(entry)) continue;
-    const categories = [
-      entry.provider,
-      entry.model,
-      entry.effort,
-      entry.interactionMode,
-      entry.runtimeMode,
-      entry.origin,
-    ];
-    if (
-      !categories.every(
-        (item) => typeof item === "string" && USAGE_TURN_CATEGORY_PATTERN.test(item),
-      ) ||
-      typeof entry.outcome !== "string" ||
-      !USAGE_TURN_OUTCOMES.has(entry.outcome)
-    ) {
-      continue;
-    }
+    if (typeof entry.outcome !== "string" || !USAGE_TURN_OUTCOMES.has(entry.outcome)) continue;
     rows.push({
-      provider: entry.provider as string,
-      model: entry.model as string,
-      effort: entry.effort as string,
-      interactionMode: entry.interactionMode as string,
-      runtimeMode: entry.runtimeMode as string,
-      origin: entry.origin as string,
+      ...usageTurnCategories(entry),
       outcome: entry.outcome,
       turns: clampUsageCount(entry.turns),
       durationMs: total(entry.durationMs),
@@ -626,15 +601,16 @@ export function normalizeEvent(raw: unknown, now = Date.now()): NormalizedEvent 
     const merged = new Map<string, UsageProviderRow>();
     for (const entry of payload.providers.slice(0, MAX_USAGE_PROVIDERS)) {
       if (!isRecord(entry)) continue;
-      if (typeof entry.provider !== "string" || !PROVIDER_PATTERN.test(entry.provider)) continue;
-      const existing = merged.get(entry.provider) ?? {
-        provider: entry.provider,
+      const provider = usageProviderCategory(entry.provider);
+      if (provider === "other") continue;
+      const existing = merged.get(provider) ?? {
+        provider,
         threads: 0,
         turns: 0,
         turnsFailed: 0,
       };
-      merged.set(entry.provider, {
-        provider: entry.provider,
+      merged.set(provider, {
+        provider,
         threads: Math.min(existing.threads + clampUsageCount(entry.threads), USAGE_COUNT_MAX),
         turns: Math.min(existing.turns + clampUsageCount(entry.turns), USAGE_COUNT_MAX),
         turnsFailed: Math.min(
@@ -1954,11 +1930,15 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
         .bind(f.since, ...f.scopeBinds)
         .all<{ outcome: string; n: number }>(),
       env.DB.prepare(
-        `SELECT up.provider AS provider, COUNT(DISTINCT up.install_id) AS installs,
-                  SUM(up.threads) AS threads, SUM(up.turns) AS turns,
-                  SUM(up.turns_failed) AS failed
+        `WITH categorized AS (
+           SELECT up.install_id, up.threads, up.turns, up.turns_failed,
+                  ${USAGE_PROVIDER_CATEGORY_SQL} AS provider
            FROM usage_providers up JOIN events e ON e.id = up.event_id
-           WHERE e.ts >= ?${f.eventScopeClause} GROUP BY up.provider ORDER BY installs DESC`,
+           WHERE e.ts >= ?${f.eventScopeClause}
+         )
+         SELECT provider, COUNT(DISTINCT install_id) AS installs,
+                SUM(threads) AS threads, SUM(turns) AS turns, SUM(turns_failed) AS failed
+         FROM categorized GROUP BY provider ORDER BY installs DESC`,
       )
         .bind(f.since, ...f.scopeBinds)
         .all<{
@@ -1984,7 +1964,13 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
         .all<{ platform: string; osVersion: string; locale: string; installs: number }>(),
       // usage_turns carries its own version, platform and flavor columns.
       env.DB.prepare(
-        `SELECT provider, model, effort, interaction_mode AS interactionMode,
+        `WITH categorized AS (
+           SELECT install_id, turns, outcome, duration_ms, duration_samples,
+                  input_tokens, output_tokens, cached_input_tokens, token_samples,
+                  ${USAGE_TURN_CATEGORIES_SQL}
+           FROM usage_turns WHERE day >= ?${f.scopeClause}
+         )
+         SELECT provider, model, effort, interaction_mode AS interactionMode,
                   runtime_mode AS runtimeMode, origin,
                   COUNT(DISTINCT install_id) AS installs, SUM(turns) AS turns,
                   SUM(CASE WHEN outcome = 'succeeded' THEN turns ELSE 0 END) AS succeeded,
@@ -1993,7 +1979,7 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
                   SUM(duration_ms) AS durationMs, SUM(duration_samples) AS durationSamples,
                   SUM(input_tokens) AS inputTokens, SUM(output_tokens) AS outputTokens,
                   SUM(cached_input_tokens) AS cachedInputTokens, SUM(token_samples) AS tokenSamples
-           FROM usage_turns WHERE day >= ?${f.scopeClause}
+           FROM categorized
            GROUP BY provider, model, effort, interaction_mode, runtime_mode, origin
            ORDER BY turns DESC LIMIT 100`,
       )
@@ -2120,7 +2106,6 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
       providerDailyRows,
       previousRows,
       activeRows,
-      peopleRows,
       commandRows,
       platformRows,
       reasonRows,
@@ -2254,55 +2239,13 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
           engagedWeek: number;
           engagedMonth: number;
         }>(),
-      // An installation takes the account it reported most recently in the window,
-      // so events sent before sign-in, or before switching accounts, do not count the
-      // same person twice.
       env.DB.prepare(
-        `WITH scoped AS (
-           SELECT install_id, account_hash, ts FROM product_events
-           WHERE ts >= ?${productFilters.scopeClause}
-         ),
-         installs AS (
-           SELECT install_id, MAX(ts) AS last_seen FROM scoped GROUP BY install_id
-         ),
-         latest_account AS (
-           SELECT s.install_id, MAX(s.account_hash) AS account_hash
-           FROM scoped s
-           JOIN (
-             SELECT install_id, MAX(ts) AS ts FROM scoped
-             WHERE account_hash IS NOT NULL GROUP BY install_id
-           ) l ON l.install_id = s.install_id AND l.ts = s.ts
-           WHERE s.account_hash IS NOT NULL
-           GROUP BY s.install_id
-         ),
-         people AS (
-           SELECT COALESCE(a.account_hash, i.install_id) AS person, i.last_seen,
-                  a.account_hash AS account_hash
-           FROM installs i LEFT JOIN latest_account a ON a.install_id = i.install_id
-         )
-         SELECT
-           COUNT(DISTINCT CASE WHEN last_seen >= ? THEN person END) AS peopleDay,
-           COUNT(DISTINCT CASE WHEN last_seen >= ? THEN person END) AS peopleWeek,
-           COUNT(DISTINCT person) AS peopleMonth,
-           COUNT(DISTINCT account_hash) AS signedInMonth
-         FROM people`,
-      )
-        .bind(
-          new Date(Date.now() - PRODUCT_RETENTION_DAYS * DAY_MS).toISOString(),
-          ...productFilters.scopeBinds,
-          new Date(Date.now() - DAY_MS).toISOString(),
-          new Date(Date.now() - 7 * DAY_MS).toISOString(),
-        )
-        .first<{
-          peopleDay: number;
-          peopleWeek: number;
-          peopleMonth: number;
-          signedInMonth: number;
-        }>(),
-      env.DB.prepare(
-        `SELECT command, COUNT(*) AS events, COUNT(DISTINCT install_id) AS installations
+        `WITH categorized AS (
+           SELECT install_id, ${PRODUCT_COMMAND_CATEGORY_SQL} AS command
            FROM product_events WHERE ${where} AND event = 'command.used' AND command IS NOT NULL
-           GROUP BY command ORDER BY events DESC, command LIMIT 60`,
+         )
+         SELECT command, COUNT(*) AS events, COUNT(DISTINCT install_id) AS installations
+         FROM categorized GROUP BY command ORDER BY events DESC, command LIMIT 60`,
       )
         .bind(...binds)
         .all<{ command: string; events: number; installations: number }>(),
@@ -2364,11 +2307,6 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
         engagedDay: activeRows?.engagedDay ?? 0,
         engagedWeek: activeRows?.engagedWeek ?? 0,
         engagedMonth: activeRows?.engagedMonth ?? 0,
-        // A signed-in person counts once across devices; others count per installation.
-        peopleDay: peopleRows?.peopleDay ?? 0,
-        peopleWeek: peopleRows?.peopleWeek ?? 0,
-        peopleMonth: peopleRows?.peopleMonth ?? 0,
-        signedInMonth: peopleRows?.signedInMonth ?? 0,
       },
       platforms: platformRows.results,
       failureReasons: reasonRows.results,
@@ -2681,20 +2619,23 @@ export default {
   },
 
   async scheduled(controller, env) {
-    const cutoff = new Date(
-      controller.scheduledTime - PRODUCT_RETENTION_DAYS * DAY_MS,
-    ).toISOString();
-    for (let batch = 0; batch < PRODUCT_RETENTION_MAX_BATCHES; batch += 1) {
-      const result = await env.DB.prepare(
-        `DELETE FROM product_events
-         WHERE event_id IN (
-           SELECT event_id FROM product_events
-           WHERE received_at < ? ORDER BY received_at LIMIT ?
-         )`,
-      )
-        .bind(cutoff, PRODUCT_RETENTION_DELETE_BATCH_SIZE)
-        .run();
-      if ((result.meta?.changes ?? 0) < PRODUCT_RETENTION_DELETE_BATCH_SIZE) break;
+    for (const [table, key, retentionDays] of [
+      ["product_events", "event_id", PRODUCT_RETENTION_DAYS],
+      ["usage_turns", "rowid", USAGE_RETENTION_DAYS],
+      ["usage_providers", "rowid", USAGE_RETENTION_DAYS],
+    ] as const) {
+      const cutoff = new Date(controller.scheduledTime - retentionDays * DAY_MS).toISOString();
+      for (let batch = 0; batch < RETENTION_MAX_BATCHES; batch += 1) {
+        const result = await env.DB.prepare(
+          `DELETE FROM ${table} WHERE ${key} IN (
+             SELECT ${key} FROM ${table}
+             WHERE received_at < ? ORDER BY received_at LIMIT ?
+           )`,
+        )
+          .bind(cutoff, RETENTION_DELETE_BATCH_SIZE)
+          .run();
+        if ((result.meta?.changes ?? 0) < RETENTION_DELETE_BATCH_SIZE) break;
+      }
     }
   },
 } satisfies ExportedHandler<Env>;

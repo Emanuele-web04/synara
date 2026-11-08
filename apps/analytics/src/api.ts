@@ -208,7 +208,7 @@ export interface ProductData {
   surface: string | null;
   events: number;
   activeInstallations: number;
-  /** Rolling windows ending now; engaged installations sent a chat request. */
+  /** Installation-only rolling windows; engaged means a request attempt, including failures. */
   activeUsers?: {
     day: number;
     week: number;
@@ -216,11 +216,6 @@ export interface ProductData {
     engagedDay: number;
     engagedWeek: number;
     engagedMonth: number;
-    /** Signed-in people count once across devices; others count per installation. */
-    peopleDay?: number;
-    peopleWeek?: number;
-    peopleMonth?: number;
-    signedInMonth?: number;
   };
   platforms?: {
     surface: string;
