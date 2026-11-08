@@ -6,14 +6,8 @@
 // Privacy contract (also documented in docs/diagnostics.md):
 // - Only the fixed event names and payload fields declared in BetaDiagnosticsEvent
 //   are ever written. There is no generic "metadata" bag.
-// - Free-text fields (error message, stack, log tail) are capped and passed
-//   through redactDiagnosticText (packages/shared/diagnosticsRedaction.ts)
-//   before they are written to the queue. Paths in them are reduced to the
-//   file name; folder and repo names are dropped. Redaction is best-effort:
-//   error text can still include fragments of whatever was on screen.
-// - Usage counters do not read prompts, chat text, file contents, provider
-//   payloads, credentials, or environment variables. Free-text error fields
-//   can still contain fragments; raw crash dumps are not redacted.
+// - Every flavor sends technical categories and numeric frames only. Neither regex
+//   redaction nor a Beta label is permission to send work content or raw dumps.
 // - The install id is a random UUID generated on first launch of a beta or remote
 //   install; it identifies an install, not a person.
 // - Stable/production builds never construct this object, so the stable binary
@@ -21,18 +15,15 @@
 
 import {
   appendFileSync,
-  closeSync,
   existsSync,
   mkdirSync,
-  openSync,
   readFileSync,
-  readSync,
   renameSync,
   rmSync,
   statSync,
   writeFileSync,
 } from "node:fs";
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 
 import { usageTurnCategories } from "@synara/shared/usageAnalytics";
@@ -51,9 +42,12 @@ import {
 } from "@synara/contracts";
 import {
   classifyDesktopUpdateFailure,
+  diagnosticErrorFingerprint,
+  diagnosticPayloadKind,
+  sanitizeDiagnosticCrash,
   redactDiagnosticText,
   sanitizeDesktopUpdateFailureReason,
-  sanitizeRemoteDiagnosticError,
+  sanitizeDiagnosticError,
 } from "@synara/shared/diagnosticsRedaction";
 import { Schema } from "effect";
 
@@ -152,7 +146,7 @@ export type BetaDiagnosticsPayload =
       readonly kind: "crash";
       readonly processType: string;
       readonly reason: string;
-      /** Redacted tail of the relevant process log (see readLogTail). */
+      /** Legacy input only; the technical serializer always drops this field. */
       readonly logTail?: string | undefined;
     }
   | {
@@ -169,7 +163,7 @@ export type BetaDiagnosticsPayload =
       readonly targetVersion?: string;
       readonly errorContext?: "check" | "download" | "install";
       readonly reason?: DesktopUpdateFailureReason;
-      /** Redacted updater failure detail; accepted only for update.error. */
+      /** Legacy local input only; never retained or transmitted. */
       readonly message?: string;
     }
   | {
@@ -225,29 +219,6 @@ const sanitizeLocale = (value: unknown): string | undefined => {
   return primary && /^[a-z]{2,3}$/.test(primary) ? primary : undefined;
 };
 
-/**
- * Remote shares no free text: errors keep fixed categories and numeric locations, a crash
- * its process and reason without the log tail, an update failure its step and fixed reason.
- */
-function withoutFreeText(payload: BetaDiagnosticsPayload): BetaDiagnosticsPayload {
-  if (payload.kind === "error") {
-    return {
-      kind: "error",
-      source: payload.source,
-      fingerprint: payload.fingerprint,
-      ...sanitizeRemoteDiagnosticError(payload),
-    };
-  }
-  if (payload.kind === "crash") {
-    return { kind: "crash", processType: payload.processType, reason: payload.reason };
-  }
-  if (payload.kind === "update") {
-    const { message: _message, ...rest } = payload;
-    return rest;
-  }
-  return payload;
-}
-
 const TURN_BREAKDOWN_MAX_ROWS = 200;
 const TURN_OUTCOMES = new Set(["succeeded", "failed", "cancelled"]);
 const TURN_TOTAL_MAX = 1_000_000_000_000;
@@ -285,18 +256,14 @@ const BETA_OUTCOMES_BY_EVENT: Partial<Record<BetaDiagnosticsEventName, ReadonlyS
 };
 
 /**
- * Fields not on the allowlist are dropped, never coerced. Free-text fields
- * (message, stack, logTail) are capped and passed through redactDiagnosticText
- * with the caller's homeDir. `event` scopes outcome validation for the beta
- * lifecycle events.
+ * Reconstruct technical payloads for every flavor. The optional home argument is kept for callers;
+ * error descriptions, file/function names and log tails never reach the queue.
  */
 export function sanitizeBetaDiagnosticsPayload(
   payload: BetaDiagnosticsPayload,
-  homeDir?: string,
+  _homeDir?: string,
   event?: BetaDiagnosticsEventName,
 ): BetaDiagnosticsPayload {
-  const redact = (text: unknown, maxLength: number): string =>
-    redactDiagnosticText(String(text), { homeDir, maxLength });
   if (payload.kind === "lifecycle") {
     const osVersion = sanitizeOsVersion(payload.osVersion);
     const locale = sanitizeLocale(payload.locale);
@@ -307,27 +274,19 @@ export function sanitizeBetaDiagnosticsPayload(
       ...(locale ? { locale } : {}),
     };
   }
-  if (payload.kind === "crash") {
-    return {
-      kind: "crash",
-      processType: String(payload.processType).slice(0, 32),
-      reason: String(payload.reason).slice(0, 64),
-      ...(typeof payload.logTail === "string" && payload.logTail.length > 0
-        ? { logTail: redact(payload.logTail, DIAGNOSTICS_LOG_TAIL_MAX_LENGTH) }
-        : {}),
-    };
-  }
+  if (payload.kind === "crash") return { kind: "crash", ...sanitizeDiagnosticCrash(payload) };
   if (payload.kind === "error") {
+    const source = payload.source === "renderer" ? "renderer" : "main";
+    const technical = sanitizeDiagnosticError({
+      source,
+      message: typeof payload.message === "string" ? payload.message : "",
+      ...(typeof payload.stack === "string" ? { stack: payload.stack } : {}),
+    });
     return {
       kind: "error",
-      source: payload.source === "renderer" ? "renderer" : "main",
-      message: redact(payload.message, DIAGNOSTICS_MESSAGE_MAX_LENGTH),
-      ...(typeof payload.stack === "string" && payload.stack.length > 0
-        ? { stack: redact(payload.stack, DIAGNOSTICS_STACK_MAX_LENGTH) }
-        : {}),
-      fingerprint: /^[0-9a-f]{8,32}$/i.test(String(payload.fingerprint))
-        ? String(payload.fingerprint)
-        : "unknown",
+      source,
+      ...technical,
+      fingerprint: diagnosticErrorFingerprint({ source, ...technical }),
     };
   }
   if (payload.kind === "update") {
@@ -337,7 +296,7 @@ export function sanitizeBetaDiagnosticsPayload(
       outcome: payload.outcome === "error" ? "error" : "ok",
       ...(isFiniteNonNegative(payload.durationMs) ? { durationMs: payload.durationMs } : {}),
       ...(typeof payload.targetVersion === "string" &&
-      /^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$/.test(payload.targetVersion)
+      /^[0-9]+\.[0-9]+\.[0-9]+(?:-(?:beta|remote|canary)\.[0-9]+)?$/.test(payload.targetVersion)
         ? { targetVersion: payload.targetVersion }
         : {}),
       ...(payload.errorContext === "check" ||
@@ -346,12 +305,6 @@ export function sanitizeBetaDiagnosticsPayload(
         ? { errorContext: payload.errorContext }
         : {}),
       ...(event === "update.error" && payload.outcome === "error" && reason ? { reason } : {}),
-      ...(event === "update.error" &&
-      payload.outcome === "error" &&
-      typeof payload.message === "string" &&
-      payload.message.length > 0
-        ? { message: redact(payload.message, DIAGNOSTICS_MESSAGE_MAX_LENGTH) }
-        : {}),
     };
   }
   if (payload.kind === "usage") {
@@ -398,61 +351,6 @@ export function sanitizeBetaDiagnosticsPayload(
     kind: "beta",
     ...(allowedOutcomes?.has(payload.outcome) ? { outcome: payload.outcome } : {}),
   };
-}
-
-/**
- * Reads the last ~200 lines / 16 KiB of a process log for crash context.
- * Returns undefined when the file is missing or unreadable. The caller passes
- * the result through the crash payload, which redacts it before queueing.
- */
-export function readLogTail(filePath: string): string | undefined {
-  try {
-    if (!existsSync(filePath)) return undefined;
-    const size = statSync(filePath).size;
-    if (size === 0) return undefined;
-    const start = Math.max(0, size - DIAGNOSTICS_LOG_TAIL_MAX_LENGTH);
-    const buffer = Buffer.alloc(size - start);
-    const fd = openSync(filePath, "r");
-    let bytesRead = 0;
-    try {
-      bytesRead = readSync(fd, buffer, 0, buffer.length, start);
-    } finally {
-      closeSync(fd);
-    }
-    const lines = buffer.subarray(0, bytesRead).toString("utf8").split("\n");
-    return lines.slice(-DIAGNOSTICS_LOG_TAIL_MAX_LINES).join("\n");
-  } catch {
-    return undefined;
-  }
-}
-
-/** Top stack frame of an (already redacted) stack, for fingerprinting. */
-function topStackFrame(stack: string | undefined): string {
-  if (!stack) return "";
-  for (const line of stack.split("\n")) {
-    const trimmed = line.trim();
-    if (trimmed.startsWith("at ")) return trimmed;
-  }
-  return stack.split("\n")[0]?.trim() ?? "";
-}
-
-function errorFingerprint(message: string, stack: string | undefined, homeDir: string): string {
-  // Local backend ports change on each launch. Normalize only loopback origins
-  // before redaction so unrelated external services keep their port identity.
-  const normalize = (text: string, maxLength: number): string =>
-    redactDiagnosticText(
-      text.replace(
-        /\b((?:https?|wss?):\/\/(?:localhost|127\.0\.0\.1|\[::1\])):\d{1,5}(?=[/\s'"?#]|$)/gi,
-        "$1:0",
-      ),
-      { homeDir, maxLength },
-    );
-  return createHash("sha256")
-    .update(
-      `${normalize(message, DIAGNOSTICS_MESSAGE_MAX_LENGTH)}\n${topStackFrame(stack === undefined ? undefined : normalize(stack, DIAGNOSTICS_STACK_MAX_LENGTH))}`,
-    )
-    .digest("hex")
-    .slice(0, 16);
 }
 
 export function resolveBetaDiagnosticsEndpoint(env: NodeJS.ProcessEnv): string {
@@ -524,8 +422,15 @@ export class BetaDiagnostics {
     this.sampleMemory = input.sampleMemory;
     this.flavor = input.flavor ?? "beta";
     this.isEnabled = input.isEnabled ?? (() => true);
-    // A persisted opt-out also revokes any queue left by an interrupted prior process.
-    if (!this.isEnabled()) this.discardQueue();
+    // Scrub legacy telemetry on startup; a saved opt-out revokes pending uploads.
+    try {
+      if (this.isEnabled()) {
+        this.trimQueueIfNeeded();
+        this.scrubQueuedEvents();
+      } else this.discardQueue();
+    } catch {
+      /* Diagnostics cleanup must never prevent app startup. */
+    }
   }
 
   private readonly flavor: DiagnosticsFlavor;
@@ -546,7 +451,8 @@ export class BetaDiagnostics {
     try {
       if (existsSync(idPath)) {
         const existing = readFileSync(idPath, "utf8").trim();
-        if (/^[0-9a-f-]{36}$/i.test(existing)) return existing;
+        if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(existing))
+          return existing;
       }
       mkdirSync(diagnosticsDir, { recursive: true });
       const generated = randomUUID();
@@ -613,7 +519,8 @@ export class BetaDiagnostics {
   track(event: BetaDiagnosticsEventName, input: BetaDiagnosticsPayload): string | undefined {
     if (this.disposed || !this.isEnabled()) return;
     if (input.kind === "crash" && input.reason === "clean-exit") return;
-    const payload = this.flavor === "remote" ? withoutFreeText(input) : input;
+    if (diagnosticPayloadKind(event) !== input.kind) return;
+    const payload = input;
     const withContext =
       payload.kind === "crash"
         ? {
@@ -664,7 +571,7 @@ export class BetaDiagnostics {
       )
         return null;
       const message = `Handled issue: ${input.code} (${input.reason ?? "unknown"})`;
-      const fingerprint = errorFingerprint(message, undefined, this.homeDir);
+      const fingerprint = diagnosticErrorFingerprint({ source, message });
       const now = this.now().getTime();
       const previous = this.issueReports.get(fingerprint);
       if (
@@ -812,8 +719,8 @@ export class BetaDiagnostics {
   }
 
   /**
-   * Records an app.error event. The message and stack are redacted before the
-   * fingerprint is computed; identical fingerprints are throttled to one event
+   * Records technical app.error metadata. The grouping hash excludes all original
+   * prose and file/function names; identical fingerprints are throttled to one event
    * per 10 minutes and the session is capped at 30 errors per hour.
    */
   trackError(source: "main" | "renderer", error: unknown): void {
@@ -846,7 +753,7 @@ export class BetaDiagnostics {
               homeDir: this.homeDir,
               maxLength: DIAGNOSTICS_STACK_MAX_LENGTH,
             });
-      const fingerprint = errorFingerprint(message, stack, this.homeDir);
+      const fingerprint = diagnosticErrorFingerprint({ source, message, stack });
       if (!this.allowError(fingerprint)) return;
       this.track("app.error", {
         kind: "error",
@@ -1010,40 +917,82 @@ export class BetaDiagnostics {
     await this.flushPromise;
   }
 
-  /** Rebuild old offline usage records before transmission with today's finite categories. */
-  private sanitizeQueuedUsage(line: string): string | null {
+  /** Reconstruct every old offline envelope before it can be retained or transmitted. */
+  private sanitizeQueuedEvent(line: string): string | null {
     try {
       const record = JSON.parse(line) as BetaDiagnosticsEvent;
-      if (record.event !== "usage.daily") return line;
-      if (record.payload?.kind !== "usage") return null;
+      const kind = diagnosticPayloadKind(record.event);
+      if (
+        record.v !== 1 ||
+        !kind ||
+        record.payload?.kind !== kind ||
+        record.flavor !== this.flavor ||
+        record.installId !== this.installId ||
+        !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(record.id)
+      )
+        return null;
+      const ts = Date.parse(record.ts);
+      if (
+        !Number.isFinite(ts) ||
+        typeof record.appVersion !== "string" ||
+        !/^\d{1,8}\.\d{1,8}\.\d{1,8}(?:-(?:beta|remote|canary)\.\d{1,8})?$/.test(record.appVersion)
+      )
+        return null;
+      const payload = sanitizeBetaDiagnosticsPayload(record.payload, this.homeDir, record.event);
+      if (payload.kind === "beta" && !("outcome" in payload)) return null;
       return JSON.stringify({
-        v: record.v,
+        v: 1,
         id: record.id,
-        ts: record.ts,
-        installId: record.installId,
+        ts: new Date(ts).toISOString(),
+        installId: this.installId,
         appVersion: record.appVersion,
-        flavor: record.flavor,
-        platform: record.platform,
-        arch: record.arch,
+        flavor: this.flavor,
+        platform: ["darwin", "win32", "linux"].includes(record.platform)
+          ? record.platform
+          : "unknown",
+        arch: ["arm64", "x64", "ia32", "arm"].includes(record.arch) ? record.arch : "unknown",
         event: record.event,
-        payload: sanitizeBetaDiagnosticsPayload(record.payload, this.homeDir, record.event),
+        payload,
       });
     } catch {
       return null;
     }
   }
 
+  /** Atomically replace legacy disk rows before retaining or sending them, including failed uploads. */
+  private scrubQueuedEvents(): string[] {
+    if (!existsSync(this.queuePath)) return [];
+    const raw = readFileSync(this.queuePath, "utf8");
+    const lines = raw
+      .split("\n")
+      .filter(Boolean)
+      .flatMap((line) => {
+        const safe = this.sanitizeQueuedEvent(line);
+        return safe ? [safe] : [];
+      });
+    const serialized = lines.length ? `${lines.join("\n")}\n` : "";
+    if (serialized !== raw) {
+      const staging = `${this.queuePath}.sanitize-${process.pid}`;
+      try {
+        writeFileSync(staging, serialized, { encoding: "utf8", mode: 0o600 });
+        renameSync(staging, this.queuePath);
+      } finally {
+        rmSync(staging, { force: true });
+      }
+    }
+    return lines;
+  }
+
   private async flushQueue(timeoutMs: number, revoked: AbortSignal, epoch: number): Promise<void> {
     try {
       if (!existsSync(this.queuePath)) return;
-      const raw = readFileSync(this.queuePath, "utf8");
-      const lines = raw.split("\n").filter((line) => line.length > 0);
+      const lines = this.scrubQueuedEvents();
       if (lines.length === 0) return;
 
       const batch: string[] = [];
       let batchBytes = 0;
       for (const queuedLine of lines.slice(0, FLUSH_BATCH_MAX_EVENTS)) {
-        const line = this.sanitizeQueuedUsage(queuedLine);
+        const line = queuedLine;
         if (!line) continue;
         if (batchBytes + line.length > FLUSH_BATCH_MAX_BYTES && batch.length > 0) break;
         batch.push(line);

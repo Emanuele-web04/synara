@@ -50,7 +50,6 @@ import {
   autoUpdater as nativeAutoUpdater,
   BrowserWindow,
   clipboard,
-  crashReporter,
   dialog,
   globalShortcut,
   ipcMain,
@@ -138,12 +137,7 @@ import {
 } from "./backendStartupReadiness";
 import { DesktopBetaChannel, readBetaImportResult, resolveBetaHomeDir } from "./betaChannel";
 import type { ExpectedTeamId } from "./betaInstaller";
-import {
-  BetaDiagnostics,
-  readLogTail,
-  resolveBetaDiagnosticsEndpoint,
-  type BetaDiagnosticsEventName,
-} from "./betaDiagnostics";
+import { BetaDiagnostics, type BetaDiagnosticsEventName } from "./betaDiagnostics";
 import { attachBetaRendererDiagnostics } from "./betaRendererDiagnostics";
 import { guardDesktopWindowClose, showDesktopConfirmDialog } from "./confirmDialog";
 import {
@@ -550,20 +544,7 @@ productAnalytics.onChange((enabled) => {
   if (enabled) betaDiagnostics?.resumeSharing();
   else betaDiagnostics?.discardQueue();
 });
-if (betaDiagnostics && desktopFlavor === "beta") {
-  crashReporter.start({
-    productName: APP_DISPLAY_NAME,
-    companyName: "Synara",
-    submitURL: `${resolveBetaDiagnosticsEndpoint(process.env)}/v1/crash`,
-    uploadToServer: true,
-    compress: true,
-    globalExtra: {
-      installId: betaDiagnostics.installId,
-      flavor: "beta",
-      appVersion: app.getVersion(),
-    },
-  });
-}
+// Raw process dumps can contain work content; no flavor starts an upload-capable reporter.
 
 const trackBetaDiagnostics = (
   event: BetaDiagnosticsEventName,
@@ -5052,11 +5033,6 @@ function startBackend(trigger: BackendStartTrigger = "lifecycle"): void {
           kind: "crash",
           processType: "backend",
           reason,
-          // Guarded explicitly: on stable builds betaDiagnostics is null and the
-          // log file must not be touched at all.
-          logTail: betaDiagnostics
-            ? readLogTail(Path.join(LOG_DIR, BACKEND_LOG_FILE_NAME))
-            : undefined,
         });
       scheduleBackendRestart(reason);
     });
@@ -6290,11 +6266,6 @@ function attachRendererCrashRecovery(window: BrowserWindow): void {
         kind: "crash",
         processType: "renderer",
         reason: details.reason,
-        // Guarded explicitly: on stable builds betaDiagnostics is null and the
-        // log file must not be touched at all.
-        logTail: betaDiagnostics
-          ? readLogTail(Path.join(LOG_DIR, DESKTOP_LOG_FILE_NAME))
-          : undefined,
       });
 
     const response = rendererCrashPolicy.respondToCrash({
@@ -6730,7 +6701,6 @@ if (hasSingleInstanceLock) {
             kind: "crash",
             processType: details.type,
             reason: details.reason,
-            logTail: readLogTail(Path.join(LOG_DIR, DESKTOP_LOG_FILE_NAME)),
           });
         });
       }

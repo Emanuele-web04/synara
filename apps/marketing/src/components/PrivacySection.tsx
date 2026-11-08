@@ -41,7 +41,7 @@ const pillars = [
     Icon: LuEyeOff,
     title: "Analytics choices stay with each installation",
     description:
-      "Product analytics exclude code, prompts and chats. Stable and Beta default off; Remote from .18 and iPhone/iPad from build 139 default on with an off switch. Random analytics IDs are separate from login and billing. Beta crash diagnostics are separate and always on.",
+      "Product analytics exclude code, prompts and chats. Stable and Beta default off; Remote from .18 and iPhone/iPad from build 139 default on with an off switch. Random analytics IDs are separate from login and billing. Beta diagnostics are separate and always on, with fixed technical metadata only; no work content, log excerpts or raw crash dumps.",
   },
 ];
 

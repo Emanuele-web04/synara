@@ -46,7 +46,7 @@ describe("normalizeEvent", () => {
     });
   });
 
-  it("accepts app.error and redacts free text server-side", () => {
+  it("accepts app.error as technical metadata without trusting its content-derived fingerprint", () => {
     const row = normalizeEvent({
       ...baseEvent,
       event: "app.error",
@@ -60,9 +60,9 @@ describe("normalizeEvent", () => {
     });
     expect(row).not.toBeNull();
     expect(row!.source).toBe("renderer");
-    expect(row!.fingerprint).toBe("abcdef0123456789");
-    expect(row!.message).toContain("<email>");
-    expect(row!.message).toContain("~/…/x");
+    expect(row!.fingerprint).toMatch(/^[0-9a-f]{16}$/);
+    expect(row!.fingerprint).not.toBe("abcdef0123456789");
+    expect(row!.message).toBe("Error at renderer:1:1");
     expect(JSON.stringify(row)).not.toContain("user@example.com");
     expect(JSON.stringify(row)).not.toContain("sk-AbCd");
     expect(JSON.stringify(row)).not.toContain("alice");
@@ -101,10 +101,10 @@ describe("normalizeEvent", () => {
       event: "update.error",
       payload: { kind, outcome: "error", reason: "customer-secret" },
     });
-    expect(row!.reason).toBe("");
+    expect(row).toBeNull();
   });
 
-  it("accepts crash events with a redacted logTail", () => {
+  it("keeps crash categories and drops the log tail", () => {
     const row = normalizeEvent({
       ...baseEvent,
       event: "app.child-process-crash",
@@ -115,8 +115,7 @@ describe("normalizeEvent", () => {
         logTail: "dial 10.0.0.8:8080 failed, password=hunter2",
       },
     });
-    expect(row!.logTail).toContain("<ip>");
-    expect(row!.logTail).not.toContain("hunter2");
+    expect(row!.logTail).toBeNull();
     expect(row!.processType).toBe("backend");
   });
 
@@ -150,7 +149,7 @@ describe("normalizeEvent", () => {
     expect(normalizeEvent(noId)!.clientId).toBeNull();
   });
 
-  it("caps payload.kind and other free strings", () => {
+  it("rejects invented payload kinds instead of retaining truncated text", () => {
     const row = normalizeEvent({
       ...baseEvent,
       event: "app.error",
@@ -161,7 +160,7 @@ describe("normalizeEvent", () => {
         fingerprint: "abcdef0123456789",
       },
     });
-    expect(row!.kind.length).toBeLessThanOrEqual(16);
+    expect(row).toBeNull();
   });
 });
 
@@ -885,10 +884,10 @@ describe("issue key + status endpoint validation", () => {
     const headers = await authed(env);
     const get = (key: string) =>
       worker.fetch(new Request(`http://x/api/issues/${key}`, { headers }), env);
-    expect((await get(encodeURIComponent("err:abc123"))).status).toBe(404);
+    expect((await get(encodeURIComponent("err:abcdef12"))).status).toBe(404);
     expect((await get(encodeURIComponent("crash:renderer:oom"))).status).toBe(404);
     expect((await get(encodeURIComponent("update:download"))).status).toBe(404);
-    // Real crash reasons contain '='; printable text after the prefix is fine.
+    // Backend exit reasons keep validated numeric codes, never arbitrary text.
     expect((await get(encodeURIComponent("crash:backend:code=1"))).status).toBe(404);
     // 404 means the key validated and no events matched; bad keys get 400.
     expect((await get(encodeURIComponent("../x"))).status).toBe(400);
@@ -900,7 +899,7 @@ describe("issue key + status endpoint validation", () => {
   it("requires a session for status writes", async () => {
     const { env } = makeEnv();
     const res = await worker.fetch(
-      new Request("http://x/api/issues/err%3Aabc/status", {
+      new Request("http://x/api/issues/err%3Aabcdef12/status", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ status: "resolved" }),
@@ -915,7 +914,7 @@ describe("issue key + status endpoint validation", () => {
     const headers = await authed(env);
     const post = (contentType: string, body: string) =>
       worker.fetch(
-        new Request("http://x/api/issues/err%3Aabc/status", {
+        new Request("http://x/api/issues/err%3Aabcdef12/status", {
           method: "POST",
           headers: { "content-type": contentType, ...headers },
           body,
@@ -932,7 +931,7 @@ describe("issue key + status endpoint validation", () => {
     const headers = await authed(env);
     const post = (status: string) =>
       worker.fetch(
-        new Request("http://x/api/issues/err%3Aabc/status", {
+        new Request("http://x/api/issues/err%3Aabcdef12/status", {
           method: "POST",
           headers: { "content-type": "application/json", ...headers },
           body: JSON.stringify({ status }),
@@ -942,9 +941,9 @@ describe("issue key + status endpoint validation", () => {
     expect(await (await post("open")).json()).toEqual({ status: "open" });
     expect(await (await post("resolved")).json()).toEqual({ status: "resolved" });
     expect(calls[0]!.sql).toContain("DELETE FROM issue_status");
-    expect(calls[0]!.binds).toEqual(["err:abc"]);
+    expect(calls[0]!.binds).toEqual(["err:abcdef12"]);
     expect(calls[1]!.sql).toContain("ON CONFLICT");
-    expect(calls[1]!.binds[0]).toBe("err:abc");
+    expect(calls[1]!.binds[0]).toBe("err:abcdef12");
     expect(calls[1]!.binds[1]).toBe("resolved");
   });
 });

@@ -1,6 +1,6 @@
 // FILE: diagnosticsRedaction.ts
-// Purpose: PII redaction for free-text diagnostics fields (error messages,
-// stack traces, log excerpts) before they leave the machine or are stored.
+// Purpose: Technical-only diagnostics payloads and local free-text redaction.
+// Telemetry uses the fixed-category helpers; text redaction alone is not a content boundary.
 // Layer: Shared text processing — used by the beta desktop diagnostics client
 // and re-run by the ingest worker as defense in depth.
 
@@ -88,11 +88,11 @@ export function classifyDesktopUpdateFailure(message: unknown): DesktopUpdateFai
   return "unknown";
 }
 
-const REMOTE_ERROR_TYPE =
+const DIAGNOSTIC_ERROR_TYPE =
   /^(?:Error|TypeError|RangeError|ReferenceError|SyntaxError|URIError|EvalError|AggregateError)\b/;
 
-/** Remote keeps fixed issue categories or built-in error types and numeric locations only. */
-export function sanitizeRemoteDiagnosticError(input: {
+/** Every diagnostics flavor keeps fixed issue categories, built-in types and numeric locations only. */
+export function sanitizeDiagnosticError(input: {
   readonly source: "main" | "renderer";
   readonly message: string;
   readonly stack?: string | undefined;
@@ -117,13 +117,140 @@ export function sanitizeRemoteDiagnosticError(input: {
     })
     .slice(0, 30);
   const type =
-    REMOTE_ERROR_TYPE.exec(input.message)?.[0] ??
-    REMOTE_ERROR_TYPE.exec(input.stack ?? "")?.[0] ??
+    DIAGNOSTIC_ERROR_TYPE.exec(input.message)?.[0] ??
+    DIAGNOSTIC_ERROR_TYPE.exec(input.stack ?? "")?.[0] ??
     "Error";
   return {
     message: frames[0] ? `${type} ${frames[0]}` : type,
     ...(frames.length > 0 ? { stack: frames.join("\n") } : {}),
   };
+}
+
+// Process labels and exit reasons are categories, never arbitrary diagnostic text.
+const DIAGNOSTIC_PROCESSES = new Set([
+  "main",
+  "renderer",
+  "backend",
+  "server",
+  "Browser",
+  "GPU",
+  "Utility",
+  "Zygote",
+  "Sandbox helper",
+  "Pepper Plugin",
+  "Pepper Plugin Broker",
+  "unknown",
+]);
+const DIAGNOSTIC_CRASH_REASONS = new Set([
+  "clean-exit",
+  "abnormal-exit",
+  "killed",
+  "crashed",
+  "oom",
+  "launch-failed",
+  "integrity-failure",
+  "memory-eviction",
+  "unknown",
+]);
+const DIAGNOSTIC_SIGNALS = new Set([
+  "SIGABRT",
+  "SIGALRM",
+  "SIGBUS",
+  "SIGCHLD",
+  "SIGCONT",
+  "SIGFPE",
+  "SIGHUP",
+  "SIGILL",
+  "SIGINT",
+  "SIGIO",
+  "SIGIOT",
+  "SIGKILL",
+  "SIGPIPE",
+  "SIGPOLL",
+  "SIGPROF",
+  "SIGPWR",
+  "SIGQUIT",
+  "SIGSEGV",
+  "SIGSTKFLT",
+  "SIGSTOP",
+  "SIGSYS",
+  "SIGTERM",
+  "SIGTRAP",
+  "SIGTSTP",
+  "SIGTTIN",
+  "SIGTTOU",
+  "SIGURG",
+  "SIGUSR1",
+  "SIGUSR2",
+  "SIGVTALRM",
+  "SIGWINCH",
+  "SIGXCPU",
+  "SIGXFSZ",
+]);
+
+/** Used before queueing, at ingestion and on historical reads; log tails never survive. */
+export function sanitizeDiagnosticCrash(input: {
+  readonly processType?: unknown;
+  readonly reason?: unknown;
+}): { processType: string; reason: string } {
+  const processType =
+    typeof input.processType === "string" && DIAGNOSTIC_PROCESSES.has(input.processType)
+      ? input.processType
+      : "unknown";
+  if (typeof input.reason === "string" && DIAGNOSTIC_CRASH_REASONS.has(input.reason))
+    return { processType, reason: input.reason };
+  const exit =
+    typeof input.reason === "string"
+      ? /^code=(-?\d{1,10}|null)(?: signal=(SIG[A-Z0-9]{1,12}|null))?$/.exec(input.reason)
+      : null;
+  if (
+    exit &&
+    (processType === "backend" || processType === "server") &&
+    (exit[2] === undefined || exit[2] === "null" || DIAGNOSTIC_SIGNALS.has(exit[2]))
+  ) {
+    const code = exit[1] === "null" ? "null" : String(Number(exit[1]));
+    return {
+      processType,
+      reason: `code=${code}${exit[2] === undefined ? "" : ` signal=${exit[2]}`}`,
+    };
+  }
+  return { processType, reason: "unknown" };
+}
+
+/** Stable grouping hash of technical metadata only; this is not a security identifier. */
+export function diagnosticErrorFingerprint(input: {
+  readonly source: "main" | "renderer";
+  readonly message: string;
+  readonly stack?: string | undefined;
+}): string {
+  const safe = sanitizeDiagnosticError(input);
+  const key = safe.message.startsWith("Handled issue: ")
+    ? safe.message
+    : `${input.source}\n${safe.message}\n${safe.stack ?? ""}`;
+  let hash = 0xcbf29ce484222325n;
+  for (const code of key)
+    hash = BigInt.asUintN(64, (hash ^ BigInt(code.charCodeAt(0))) * 0x100000001b3n);
+  return hash.toString(16).padStart(16, "0");
+}
+
+/** Event ownership fixes payload kinds, including for old or handcrafted envelopes. */
+export function diagnosticPayloadKind(event: string): string | undefined {
+  if (event === "app.start" || event === "app.exit") return "lifecycle";
+  if (event === "app.error") return "error";
+  if (event === "app.renderer-crash" || event === "app.child-process-crash") return "crash";
+  if (
+    [
+      "update.check",
+      "update.available",
+      "update.downloaded",
+      "update.installed",
+      "update.error",
+    ].includes(event)
+  )
+    return "update";
+  if (event === "usage.daily") return "usage";
+  if (event === "beta.installed" || event === "beta.left") return "beta";
+  return undefined;
 }
 
 export interface DiagnosticsRedactionOptions {
@@ -276,7 +403,7 @@ const RULES: ReadonlyArray<Replacement> = [
 
 /**
  * Redacts credentials, paths, addresses and tokens from diagnostic free text.
- * Returns text safe to queue or store, truncated to `opts.maxLength`.
+ * Local text utility only; telemetry must use the technical allowlist helpers above.
  */
 export function redactDiagnosticText(text: string, opts: DiagnosticsRedactionOptions): string {
   let out = String(text).replace(PEM_BLOCK, "[redacted private key]");

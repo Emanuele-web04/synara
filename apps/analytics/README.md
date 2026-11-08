@@ -67,7 +67,7 @@ project and active-thread counts, remain under that policy. Provider turns and
 token samples currently describe observed
 desktop completions, not account-wide billing or globally deduplicated execution.
 Native clients contribute lifecycle, feature, connection and request events under
-their own consent. Beta `/v1/events` and `/v1/crash` keep their separate policy.
+their own consent. Beta `/v1/events` keeps its separate collection policy but the same content exclusions; `/v1/crash` is retired.
 
 No local state, credentials, D1 data, R2 dumps or exports are tracked here.
 
@@ -77,3 +77,13 @@ and seven days of upload grace; existing usage is not backfilled. These measure 
 reporting installations and observed returns, not downloads, people, uninstalls or
 subscription churn. See [Reporting cohorts](ANALYTICS.md#reporting-cohorts) for the
 migration-first rollout and queue/retry/privacy contract.
+
+## Diagnostics content boundary
+
+Beta and Remote diagnostics keep fixed error/issue categories and numeric source
+positions only. Error prose, log tails and raw crash memory are excluded for all
+flavors. Raw dump routes, including legacy forwarding/downloads, are retired.
+Old queue rows are reconstructed before upload; historical API reads are guarded.
+Migration `0009` prepares a checkpointed content scrub. Actual D1/R2 deletion is
+an explicit, bounded operator operation; no production cleanup is implied by
+this source. See [the cleanup runbook](DIAGNOSTICS-CONTENT-CLEANUP.md).

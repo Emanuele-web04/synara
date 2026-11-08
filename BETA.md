@@ -85,9 +85,9 @@ is not implemented; do not use account switching as local history isolation.
   `BETA_ONLY_FEATURES` in `packages/shared/src/betaFeatures.ts`. The code ships in
   both apps; Stable just switches listed features off. Remove the entry to promote
   a feature to Stable. See [Beta-only features](#beta-only-features).
-- **Diagnostics run in Beta and Remote, never Stable.** Beta sends redacted error
-  events, raw crash dumps, and anonymous usage counts to a private dashboard. Remote
-  sends the same events except raw crash dumps, plus product usage, by default with a
+- **Diagnostics run in Beta and Remote, never Stable.** Beta sends technical-only error
+  categories, numeric frames, release health and aggregate usage counts. No flavor
+  uploads raw crash dumps or work content. Remote adds product usage by default with a
   Settings switch to stop both. Stable sends no release diagnostics; its product
   analytics require opt-in. See [Diagnostics](#diagnostics).
 
@@ -461,17 +461,18 @@ visible trail no longer subscribes. First use can request macOS audio access.
 
 ## Diagnostics
 
-Beta builds ship always-on diagnostics — crash reports plus anonymous usage
+Beta builds ship always-on technical diagnostics — fixed crash/error categories plus aggregate usage
 counts (which providers are used, how many chats and turns) — while stable
 builds never enable the Beta diagnostics sender. Stable and Beta separately offer
 default-off product analytics through Settings → General → Privacy.
 
-Synara Remote shares usage and diagnostics by default: the same diagnostic events
-without raw crash dumps, and product events such as daily activity, feature use,
+Synara Remote shares usage and diagnostics by default: the same technical-only diagnostic events
+and product events such as daily activity, feature use,
 connection, pairing and turn outcomes with a fixed failure category. **Share usage
 and diagnostics** in Settings → General → Privacy turns both off and clears unsent
-events. Chats, prompts, files and raw account identifiers are never sent. Signed-in
-product events can include a pseudonymous account hash. See
+events. Chats, prompts, replies, files, credentials, log excerpts and raw memory are never
+part of telemetry, including Beta diagnostics. Product identifiers are random per
+installation and unrelated to login or billing. See
 [diagnostics.md](docs/diagnostics.md) for exactly what is collected, what usage
 counters exclude, and how the Cloudflare ingest works.
 
