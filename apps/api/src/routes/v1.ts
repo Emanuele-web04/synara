@@ -848,6 +848,7 @@ export function createV1Routes(deps: {
       ...(ssoAvatarUrl ? { image: ssoAvatarUrl } : {}),
       organization,
       profile: row ? toAccountProfile(row, resolvedAvatarUrl(row, ssoAvatarUrl)) : null,
+      publicProfileAvailable: Boolean(row?.public && (await profileOwnerEntitled(user.id))),
     };
   }
 

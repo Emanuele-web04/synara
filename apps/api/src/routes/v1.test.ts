@@ -934,6 +934,7 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
       image: "https://cdn.example.com/ada.png",
       organization: { id: organization.id, name: "Analytical Engines" },
       profile: null,
+      publicProfileAvailable: false,
     });
   });
 
@@ -1549,13 +1550,22 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
       const readPublic = () => app.request(`/api/v1/profiles/${base.handle}`);
       const created = await put({ themeAccent });
       expect(created.status).toBe(200);
-      expect(await created.json()).toMatchObject({ profile: { themeAccent } });
+      expect(await created.json()).toMatchObject({
+        publicProfileAvailable: false,
+        profile: { themeAccent },
+      });
       expect((await readPublic()).status).toBe(404);
 
       const published = await put({ public: true });
-      expect(await published.json()).toMatchObject({ profile: { themeAccent } });
+      expect(await published.json()).toMatchObject({
+        publicProfileAvailable: true,
+        profile: { themeAccent },
+      });
       const me = await app.request("/api/v1/me", { headers: authHeaders(token) });
-      expect(await me.json()).toMatchObject({ profile: { themeAccent } });
+      expect(await me.json()).toMatchObject({
+        publicProfileAvailable: true,
+        profile: { themeAccent },
+      });
       expect(await (await readPublic()).json()).toMatchObject({ themeAccent });
 
       const changed = { light: "#112233", dark: "#ddeeff" };
@@ -2023,7 +2033,12 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
         const { token } = await signIn();
         const base = profileBody();
         // Onboarding's handle setup is private and must never need a subscription.
-        expect((await putProfile(app, token, base)).status).toBe(200);
+        const saved = await putProfile(app, token, base);
+        expect(saved.status).toBe(200);
+        expect(await saved.json()).toMatchObject({ publicProfileAvailable: false });
+        const me = await app.request("/api/v1/me", { headers: authHeaders(token) });
+        expect(me.status).toBe(200);
+        expect(await me.json()).toMatchObject({ publicProfileAvailable: false });
 
         const refused = await putProfile(app, token, { ...base, public: true });
         expect(refused.status).toBe(403);
@@ -2044,7 +2059,12 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
         const { token, userId } = await signIn();
         pay(userId);
         const base = profileBody({ public: true });
-        expect((await putProfile(app, token, base)).status).toBe(200);
+        const published = await putProfile(app, token, base);
+        expect(published.status).toBe(200);
+        expect(await published.json()).toMatchObject({ publicProfileAvailable: true });
+        const me = await app.request("/api/v1/me", { headers: authHeaders(token) });
+        expect(me.status).toBe(200);
+        expect(await me.json()).toMatchObject({ publicProfileAvailable: true });
         expect((await app.request(`/api/v1/profiles/${base.handle}`)).status).toBe(200);
 
         // A webhook-driven reconcile revokes access; the stored flag stays public.
@@ -2054,8 +2074,19 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
         const hidden = await app.request(`/api/v1/profiles/${base.handle}`);
         expect(hidden.status).toBe(404);
         expect(await hidden.json()).toMatchObject({ error: "profile_not_found" });
+        const lapsed = await app.request("/api/v1/me", { headers: authHeaders(token) });
+        expect(lapsed.status).toBe(200);
+        expect(await lapsed.json()).toMatchObject({
+          publicProfileAvailable: false,
+          profile: { public: true },
+        });
         // Editing an already-public profile is not a new publish, so it stays allowed.
-        expect((await putProfile(app, token, { ...base, displayName: "Ada L." })).status).toBe(200);
+        const edited = await putProfile(app, token, { ...base, displayName: "Ada L." });
+        expect(edited.status).toBe(200);
+        expect(await edited.json()).toMatchObject({
+          publicProfileAvailable: false,
+          profile: { public: true, displayName: "Ada L." },
+        });
       });
 
       it("never asks the billing provider to serve a public profile", async () => {
@@ -2067,7 +2098,16 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
         vi.mocked(provider.state).mockClear();
         for (let index = 0; index < 3; index += 1) {
           expect((await app.request(`/api/v1/profiles/${base.handle}`)).status).toBe(200);
+          const me = await app.request("/api/v1/me", { headers: authHeaders(token) });
+          expect(me.status).toBe(200);
+          expect(await me.json()).toMatchObject({ publicProfileAvailable: true });
         }
+        const hidden = await putProfile(app, token, { ...base, public: false });
+        expect(hidden.status).toBe(200);
+        expect(await hidden.json()).toMatchObject({ publicProfileAvailable: false });
+        const privateMe = await app.request("/api/v1/me", { headers: authHeaders(token) });
+        expect(privateMe.status).toBe(200);
+        expect(await privateMe.json()).toMatchObject({ publicProfileAvailable: false });
         expect(provider.state).not.toHaveBeenCalled();
       });
 
@@ -2097,6 +2137,15 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
           profileBillingEnforced: true,
         });
         expect((await broken.request(`/api/v1/profiles/${base.handle}`)).status).toBe(404);
+        const me = await broken.request("/api/v1/me", { headers: authHeaders(token) });
+        expect(me.status).toBe(200);
+        expect(await me.json()).toMatchObject({ publicProfileAvailable: false });
+        const edited = await putProfile(broken, token, { ...base, displayName: "Ada L." });
+        expect(edited.status).toBe(200);
+        expect(await edited.json()).toMatchObject({
+          publicProfileAvailable: false,
+          profile: { public: true },
+        });
       });
     });
   });

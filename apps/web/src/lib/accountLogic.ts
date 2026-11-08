@@ -152,12 +152,14 @@ export function publicProfileDisplayUrl(handle: string): string {
 }
 
 /**
- * The URL worth sharing for a profile: the real public page when the profile
- * exists AND is public, `null` otherwise (a link to a private profile is a
- * 404 dressed up as a share).
+ * The URL worth opening or sharing only when publication and current page
+ * availability are both confirmed by the account service.
  */
 export function profileShareUrl(
   profile: Pick<AccountProfile, "handle" | "public"> | null | undefined,
+  publicProfileAvailable: boolean | undefined,
 ): string | null {
-  return profile?.public === true ? publicProfileUrl(profile.handle) : null;
+  return profile?.public === true && publicProfileAvailable === true
+    ? publicProfileUrl(profile.handle)
+    : null;
 }

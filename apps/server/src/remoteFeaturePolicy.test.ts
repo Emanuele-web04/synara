@@ -57,13 +57,16 @@ describe("Stable remote activation", () => {
 });
 
 describe("account profile activation", () => {
-  it("enables the dedicated Remote app without operator setup but honors an explicit opt-out", () => {
-    vi.stubEnv("SYNARA_DESKTOP_BUNDLE_ID", SYNARA_REMOTE_BUNDLE_ID);
-    vi.stubEnv("SYNARA_ACCOUNT_PROFILE_SYNC", undefined);
-    expect(requireAccountProfileSync).not.toThrow();
-    vi.stubEnv("SYNARA_ACCOUNT_PROFILE_SYNC", "0");
-    expect(requireAccountProfileSync).toThrow("profile sync is unavailable");
-  });
+  it.each([SYNARA_PRODUCTION_BUNDLE_ID, SYNARA_REMOTE_BUNDLE_ID])(
+    "enables account profiles without operator setup in %s but honors an explicit opt-out",
+    (bundleId) => {
+      vi.stubEnv("SYNARA_DESKTOP_BUNDLE_ID", bundleId);
+      vi.stubEnv("SYNARA_ACCOUNT_PROFILE_SYNC", undefined);
+      expect(requireAccountProfileSync).not.toThrow();
+      vi.stubEnv("SYNARA_ACCOUNT_PROFILE_SYNC", "0");
+      expect(requireAccountProfileSync).toThrow("profile sync is unavailable");
+    },
+  );
   it("requires an explicit opt-in, including on Beta", () => {
     vi.stubEnv("SYNARA_DESKTOP_BUNDLE_ID", SYNARA_BETA_BUNDLE_ID);
     vi.stubEnv("SYNARA_ACCOUNT_PROFILE_SYNC", undefined);
@@ -74,9 +77,9 @@ describe("account profile activation", () => {
     expect(requireAccountProfileSync).not.toThrow();
   });
 
-  it("refuses Stable even with an opt-in and persisted account state", () => {
+  it("allows an explicit Stable opt-in", () => {
     vi.stubEnv("SYNARA_DESKTOP_BUNDLE_ID", SYNARA_PRODUCTION_BUNDLE_ID);
     vi.stubEnv("SYNARA_ACCOUNT_PROFILE_SYNC", "1");
-    expect(requireAccountProfileSync).toThrow("unavailable in Stable");
+    expect(requireAccountProfileSync).not.toThrow();
   });
 });

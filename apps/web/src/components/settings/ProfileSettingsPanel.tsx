@@ -156,6 +156,7 @@ function ProfileContent({
     avatarImage,
     ssoImage,
     accountProfile,
+    publicProfileAvailable,
     canEdit,
     save,
     uploadAvatarPhoto,
@@ -164,7 +165,7 @@ function ProfileContent({
     name: defaultName,
     handle: stats.identity.defaultHandle,
   });
-  const publicUrl = profileShareUrl(accountProfile);
+  const publicUrl = profileShareUrl(accountProfile, publicProfileAvailable);
 
   return (
     <div className="flex min-w-0 flex-col gap-7">
@@ -249,6 +250,7 @@ function ProfileContent({
           avatarColor={avatarColor}
           avatarImage={avatarImage}
           accountProfile={accountProfile}
+          publicProfileAvailable={publicProfileAvailable}
           open={shareOpen}
           onOpenChange={setShareOpen}
         />

@@ -1222,5 +1222,7 @@
   "task_couldNotDelete": "无法删除任务",
   "task_quickAddPlaceholder": "添加任务，或按 Tab 将其交给智能体",
   "closeNamedItem": "关闭{{title}}",
-  "image_retryPreview": "重试图片预览"
+  "image_retryPreview": "重试图片预览",
+  "account_viewPublicProfile": "查看公开个人资料",
+  "account_makeYourProfilePublic": "公开你的个人资料"
 }
