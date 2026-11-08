@@ -1867,11 +1867,12 @@ function SettingsRouteView() {
         return <SkillsSettingsPanel />;
       case "usage":
         // The plan lives with usage ("Usage and billing"), never above the profile.
+        // A fragment, not a wrapper: sections space themselves as siblings.
         return (
-          <div className="flex flex-col gap-7">
+          <>
             {billingEnabled ? <BillingSettingsPanel /> : null}
             <ProviderUsageSettingsPanel />
-          </div>
+          </>
         );
       default:
         return null;

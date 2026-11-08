@@ -174,9 +174,10 @@ function EditProfileDialogContent({
   const [invalidLinks, setInvalidLinks] = useState<readonly SocialLinkPlatform[]>([]);
   const [showEditor, setShowEditor] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  // Set when the server refused to make the profile public without Alto, so the
-  // error can point at the plan instead of leaving a dead end.
-  const [needsPlan, setNeedsPlan] = useState(false);
+  // The exact error the server gave when it refused to make the profile public
+  // without Alto. "See plans" shows only while that error is the one on screen, so
+  // any later message (a bad link, an upload failure) never inherits it.
+  const [planError, setPlanError] = useState<string | null>(null);
   const openPlan = useOpenSynaraPlan();
   const [processing, setProcessing] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -288,10 +289,13 @@ function EditProfileDialogContent({
         onOpenChange(false);
       })
       .catch((cause: unknown) => {
-        setNeedsPlan(
-          ACCOUNT_BILLING_ENABLED && readAccountErrorCode(cause) === "subscription_required",
+        const message = accountErrorMessage(cause, "Could not save your profile. Try again.");
+        setPlanError(
+          ACCOUNT_BILLING_ENABLED && readAccountErrorCode(cause) === "subscription_required"
+            ? message
+            : null,
         );
-        setError(accountErrorMessage(cause, "Could not save your profile. Try again."));
+        setError(message);
       })
       .finally(() => {
         setSaving(false);
@@ -374,7 +378,7 @@ function EditProfileDialogContent({
           {error && (
             <p className="text-center text-ui leading-snug text-destructive">
               {error}
-              {needsPlan ? (
+              {planError !== null && planError === error ? (
                 <>
                   {" "}
                   <button

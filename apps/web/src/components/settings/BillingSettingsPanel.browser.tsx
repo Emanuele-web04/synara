@@ -4,7 +4,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { page } from "vitest/browser";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";
-import { BillingSettingsPanel } from "./BillingSettingsPanel";
+import { BillingSettingsPanel, SynaraPlanLink } from "./BillingSettingsPanel";
 
 const fixture = vi.hoisted(() => ({
   status: { state: "signed-out" } as AccountStatus,
@@ -13,7 +13,9 @@ const fixture = vi.hoisted(() => ({
   portal: vi.fn(),
   open: vi.fn(),
   signIn: vi.fn(),
+  navigate: vi.fn(),
 }));
+vi.mock("@tanstack/react-router", () => ({ useNavigate: () => fixture.navigate }));
 vi.mock("~/hooks/useAccount", () => ({ useAccount: () => ({ status: fixture.status }) }));
 vi.mock("~/nativeApi", () => ({
   readNativeApi: () => null,
@@ -187,4 +189,57 @@ describe("Synara Alto settings", () => {
       expect(fixture.open).not.toHaveBeenCalled();
     },
   );
+
+  it("keeps the portal reachable for a former subscriber while offering the plans", async () => {
+    fixture.billing.mockResolvedValue({
+      ...disabled,
+      environment: "production",
+      available: true,
+      canCheckout: true,
+      canManage: true,
+      plans: [{ interval: "month", amountMinor: 1000, currency: "USD" }],
+    });
+    fixture.portal.mockResolvedValue({
+      environment: "production",
+      url: "https://polar.sh/purchases/subscriptions",
+    });
+    await render(panel(new QueryClient()));
+    await expect.element(page.getByRole("button", { name: /^Monthly/ })).toBeVisible();
+    await page.getByRole("button", { name: "Manage billing", exact: true }).click();
+    await expect.poll(() => fixture.open.mock.calls.length).toBe(1);
+    expect(fixture.portal).toHaveBeenCalledOnce();
+  });
+
+  it("never leaves the section empty when no plan is on offer", async () => {
+    fixture.billing.mockResolvedValue({ ...disabled, environment: "production", available: true });
+    await render(panel(new QueryClient()));
+    await expect.element(page.getByText("Free", { exact: true })).toBeVisible();
+  });
+});
+
+describe("SynaraPlanLink", () => {
+  function link(client: QueryClient) {
+    return (
+      <QueryClientProvider client={client}>
+        <SynaraPlanLink />
+      </QueryClientProvider>
+    );
+  }
+
+  it("names the plan and opens it in Usage & limits", async () => {
+    fixture.billing.mockResolvedValue({ ...disabled, environment: "production", available: true });
+    await render(link(new QueryClient()));
+    await page.getByRole("button", { name: "Free plan", exact: true }).click();
+    expect(fixture.navigate).toHaveBeenCalledWith({
+      to: "/settings",
+      search: { section: "usage", target: "settings-synara-plan" },
+    });
+  });
+
+  it("stays hidden while signed out", async () => {
+    fixture.status = { state: "signed-out" };
+    const screen = await render(link(new QueryClient()));
+    expect(screen.container.textContent).toBe("");
+    expect(fixture.billing).not.toHaveBeenCalled();
+  });
 });

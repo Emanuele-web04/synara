@@ -178,7 +178,9 @@ function BillingAccountPanel({ status, scope }: { status: AccountStatus | null; 
                 />
               ))}
             </div>
-          ) : billing.access === "granted" || billing.canManage ? (
+          ) : (
+            // Subscribers, and anyone with no plan on offer right now: never an
+            // empty section.
             <SettingsCard>
               <SettingsListRow
                 title={planTitle(billing)}
@@ -196,6 +198,17 @@ function BillingAccountPanel({ status, scope }: { status: AccountStatus | null; 
                 }
               />
             </SettingsCard>
+          )}
+          {billing.canCheckout && billing.canManage ? (
+            // A former subscriber keeps the portal for invoices and payment details.
+            <button
+              type="button"
+              className="self-start text-ui-sm text-muted-foreground underline-offset-2 hover:text-foreground hover:underline disabled:opacity-64"
+              disabled={pending}
+              onClick={() => void openBilling()}
+            >
+              Manage billing
+            </button>
           ) : null}
         </>
       )}
