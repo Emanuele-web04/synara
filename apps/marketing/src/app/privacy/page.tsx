@@ -28,6 +28,7 @@ const RECEIVED_WHEN_SHARED = [
   "A random installation identifier, event identifier and timestamp, independent of login and billing",
   "Your app version, release channel, app surface and platform",
   "Bounded durations and token counts, with fixed provider and mode categories",
+  "With host product sharing enabled, daily aggregate executions by catalogued provider/model, requested effort and outcome, with per-field token coverage",
 ];
 
 const NEVER_COLLECTED = [
@@ -153,11 +154,22 @@ export default function PrivacyPage() {
             Beta and Remote desktop diagnostics keep known error categories, numeric source
             locations, process/release health and aggregate usage counters. They exclude error
             messages, function/file names, log excerpts and raw crash memory dumps. Diagnostic
-            reports have separate retention. Host-reported provider/model turn usage samples cover
-            rolling 24-hour windows; they are not complete calendar-day or global execution totals.
-            Extracted provider and turn usage rows are scheduled for deletion 90 days after receipt,
-            with the same capped-batch limitation; other diagnostic event records currently have no
-            automatic expiry. The 30-day product-event cleanup does not remove those records.
+            reports have separate retention. New diagnostics do not carry
+            provider/model/execution/token data; historical rolling samples remain separately
+            labelled until retention removes them. Extracted provider and turn usage rows are
+            scheduled for deletion 90 days after receipt, with the same capped-batch limitation;
+            other diagnostic event records currently have no automatic expiry. The 30-day
+            product-event cleanup does not remove those records.
+          </p>
+          <p className="mt-6">
+            Host execution aggregates follow that computer’s own product-sharing choice, including
+            work requested by connected phones and controllers. Completed UTC-day snapshots use
+            catalogued model and finite effort/mode/outcome categories. Token fields have separate
+            measurement counts: absent values are unknown, while explicitly measured zero stays
+            zero. Daily receipt hashes expire after 14 days; anonymous day/channel counters and
+            coverage after 90 UTC days, using capped cleanup batches. No host/account identifier
+            accompanies those model counters. Offline, late, capped and missing-time data can leave
+            gaps; these are observations, separate from renderer events and billing totals.
           </p>
         </Section>
 

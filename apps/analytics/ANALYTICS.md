@@ -251,3 +251,15 @@ Old queue rows are reconstructed before upload; historical API reads are guarded
 Migration `0009` prepares a checkpointed content scrub. Actual D1/R2 deletion is
 an explicit, bounded operator operation; no production cleanup is implied by
 this source. See [the cleanup runbook](DIAGNOSTICS-CONTENT-CLEANUP.md).
+
+## Host usage quality followup
+
+The existing host turn grouper now supplies product-consented, frozen completed
+UTC-day windows across Stable/Beta/Remote. New diagnostics no longer ingest
+provider/model/execution/token payloads. Legacy sampled rows stay separate.
+`usage_turns` is reused for anonymous daily counters; receipts14days, counters and
+quality90UTCdays, no host UUID/account key in those rows. Token fields have
+independent measured denominators and explicit zero/unknown semantics. The
+Product Providers page reuses the Usage breakdown table and exposes truncation,
+missing-time and partial-consent coverage without claiming complete/global totals.
+Schema and client rollout must follow [README deployment order](README.md#product-host-usage).

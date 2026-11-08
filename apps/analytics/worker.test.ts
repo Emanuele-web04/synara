@@ -353,55 +353,24 @@ describe("usage + beta events", () => {
     ).toBeNull();
   });
 
-  it("usage.daily merges duplicate providers and clamps counts", () => {
-    const row = normalizeEvent({
-      ...baseEvent,
-      event: "usage.daily",
-      payload: {
-        kind: "usage",
-        providers: [
-          { provider: "claudeAgent", threads: 3.9, turns: 9.9, turnsFailed: 1 },
-          { provider: "claudeAgent", threads: 1, turns: Number.NaN, turnsFailed: -2 },
-          { provider: "opencode", threads: 200_000, turns: 4, turnsFailed: 0 },
-          { provider: "not a provider!", threads: 9, turns: 9, turnsFailed: 9 },
-        ],
-        projects: 7.7,
-        activeThreads: -1,
-      },
-    });
-    expect(row).not.toBeNull();
-    expect(row!.providers).toEqual([
-      { provider: "claudeAgent", threads: 4, turns: 9, turnsFailed: 1 },
-      { provider: "opencode", threads: 100_000, turns: 4, turnsFailed: 0 },
-    ]);
-    expect(row!.projects).toBe(7);
-    expect(row!.activeThreads).toBe(0);
-  });
-
-  it("drops usage.daily when providers is not an array", () => {
-    expect(
-      normalizeEvent({
+  it.each([undefined, "legacy-provider", [{ provider: "codex", threads: 1, turns: 99 }]])(
+    "keeps fixed health counts and drops retired provider payload %j",
+    (providers) => {
+      const row = normalizeEvent({
         ...baseEvent,
         event: "usage.daily",
-        payload: { kind: "usage", providers: "claudeAgent", projects: 1, activeThreads: 1 },
-      }),
-    ).toBeNull();
-    expect(
-      normalizeEvent({
-        ...baseEvent,
-        event: "usage.daily",
-        payload: { kind: "usage", projects: 1, activeThreads: 1 },
-      }),
-    ).toBeNull();
-    // An empty array is still a valid (empty) snapshot.
-    expect(
-      normalizeEvent({
-        ...baseEvent,
-        event: "usage.daily",
-        payload: { kind: "usage", providers: [], projects: 0, activeThreads: 0 },
-      })!.providers,
-    ).toEqual([]);
-  });
+        payload: {
+          kind: "usage",
+          providers,
+          projects: 7.7,
+          activeThreads: -1,
+        },
+      });
+      expect(row).toMatchObject({ projects: 7, activeThreads: 0 });
+      expect(row).not.toHaveProperty("providers");
+      expect(row).not.toHaveProperty("turns");
+    },
+  );
 });
 
 describe("releaseHealth bands", () => {

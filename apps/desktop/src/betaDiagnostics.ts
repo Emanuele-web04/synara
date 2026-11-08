@@ -27,8 +27,6 @@ import {
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 
-import { usageTurnCategories } from "@synara/shared/usageAnalytics";
-
 import {
   DESKTOP_RENDERER_ERROR_MESSAGE_MAX_LENGTH,
   DESKTOP_RENDERER_ERROR_STACK_MAX_LENGTH,
@@ -38,8 +36,7 @@ import {
   DesktopDiagnosticBreadcrumb,
   DesktopDiagnosticIssue,
   type DesktopDiagnosticReportStatus,
-  LEGACY_PROVIDER_MIGRATIONS,
-  ProviderKind,
+  type ProviderKind,
 } from "@synara/contracts";
 import {
   classifyDesktopUpdateFailure,
@@ -109,23 +106,6 @@ export type BetaDiagnosticsEventName =
   | "beta.left";
 
 /** Finished turns of the last 24h sharing one set of fixed categories. */
-export interface UsageTurnBreakdownEntry {
-  readonly provider: string;
-  readonly model: string;
-  readonly effort: string;
-  readonly interactionMode: string;
-  readonly runtimeMode: string;
-  readonly origin: string;
-  readonly outcome: "succeeded" | "failed" | "cancelled";
-  readonly turns: number;
-  readonly durationMs: number;
-  readonly durationSamples: number;
-  readonly inputTokens: number;
-  readonly outputTokens: number;
-  readonly cachedInputTokens: number;
-  readonly tokenSamples: number;
-}
-
 /** One provider's anonymous 24h counts inside a usage.daily event. */
 export interface BetaUsageProviderEntry {
   readonly provider: ProviderKind;
@@ -169,10 +149,10 @@ export type BetaDiagnosticsPayload =
     }
   | {
       readonly kind: "usage";
-      readonly providers: readonly BetaUsageProviderEntry[];
+      /** Accepted only to scrub old callers; never serialized by the diagnostics sender. */
+      readonly providers?: readonly BetaUsageProviderEntry[];
       readonly projects: number;
       readonly activeThreads: number;
-      readonly turnBreakdown?: readonly UsageTurnBreakdownEntry[];
     }
   | {
       readonly kind: "beta";
@@ -197,8 +177,6 @@ export interface BetaDiagnosticsEvent {
 const isFiniteNonNegative = (value: unknown): value is number =>
   typeof value === "number" && Number.isFinite(value) && value >= 0;
 
-const PROVIDER_KIND_SET = new Set<string>(ProviderKind.literals);
-
 /** Usage counts are floored, non-negative, and capped — never free text. */
 const clampUsageCount = (value: unknown): number => {
   const count = typeof value === "number" ? Math.floor(value) : Number.NaN;
@@ -219,37 +197,6 @@ const sanitizeLocale = (value: unknown): string | undefined => {
   const primary = value.split("-")[0]?.toLowerCase();
   return primary && /^[a-z]{2,3}$/.test(primary) ? primary : undefined;
 };
-
-const TURN_BREAKDOWN_MAX_ROWS = 200;
-const TURN_OUTCOMES = new Set(["succeeded", "failed", "cancelled"]);
-const TURN_TOTAL_MAX = 1_000_000_000_000;
-
-/** Keeps only catalogued categories and clamped counts before writing the queue. */
-function sanitizeTurnBreakdown(value: unknown): UsageTurnBreakdownEntry[] {
-  if (!Array.isArray(value)) return [];
-  const rows: UsageTurnBreakdownEntry[] = [];
-  const total = (raw: unknown) =>
-    typeof raw === "number" && Number.isFinite(raw) && raw >= 0
-      ? Math.min(Math.floor(raw), TURN_TOTAL_MAX)
-      : 0;
-  for (const entry of value.slice(0, TURN_BREAKDOWN_MAX_ROWS)) {
-    if (!entry || typeof entry !== "object") continue;
-    const row = entry as Record<string, unknown>;
-    if (typeof row.outcome !== "string" || !TURN_OUTCOMES.has(row.outcome)) continue;
-    rows.push({
-      ...usageTurnCategories(row),
-      outcome: row.outcome as UsageTurnBreakdownEntry["outcome"],
-      turns: clampUsageCount(row.turns),
-      durationMs: total(row.durationMs),
-      durationSamples: clampUsageCount(row.durationSamples),
-      inputTokens: total(row.inputTokens),
-      outputTokens: total(row.outputTokens),
-      cachedInputTokens: total(row.cachedInputTokens),
-      tokenSamples: clampUsageCount(row.tokenSamples),
-    });
-  }
-  return rows;
-}
 
 const BETA_OUTCOMES_BY_EVENT: Partial<Record<BetaDiagnosticsEventName, ReadonlySet<string>>> = {
   "beta.installed": new Set(["imported", "import-failed", "fresh"]),
@@ -309,41 +256,10 @@ export function sanitizeBetaDiagnosticsPayload(
     };
   }
   if (payload.kind === "usage") {
-    // One entry per provider; duplicates merge by summing, then clamp.
-    const merged = new Map<ProviderKind, { threads: number; turns: number; turnsFailed: number }>();
-    if (Array.isArray(payload.providers)) {
-      for (const entry of payload.providers) {
-        if (!entry || typeof entry !== "object") continue;
-        const rawProvider = (entry as { provider?: unknown }).provider;
-        const provider =
-          typeof rawProvider === "string"
-            ? PROVIDER_KIND_SET.has(rawProvider)
-              ? (rawProvider as ProviderKind)
-              : Object.hasOwn(LEGACY_PROVIDER_MIGRATIONS, rawProvider)
-                ? LEGACY_PROVIDER_MIGRATIONS[rawProvider]
-                : undefined
-            : undefined;
-        if (!provider) continue;
-        const existing = merged.get(provider) ?? { threads: 0, turns: 0, turnsFailed: 0 };
-        merged.set(provider, {
-          threads: existing.threads + clampUsageCount(entry.threads),
-          turns: existing.turns + clampUsageCount(entry.turns),
-          turnsFailed: existing.turnsFailed + clampUsageCount(entry.turnsFailed),
-        });
-      }
-    }
-    const turnBreakdown = sanitizeTurnBreakdown(payload.turnBreakdown);
     return {
       kind: "usage",
-      providers: [...merged.entries()].map(([provider, counts]) => ({
-        provider,
-        threads: Math.min(counts.threads, USAGE_COUNT_MAX),
-        turns: Math.min(counts.turns, USAGE_COUNT_MAX),
-        turnsFailed: Math.min(counts.turnsFailed, USAGE_COUNT_MAX),
-      })),
       projects: clampUsageCount(payload.projects),
       activeThreads: clampUsageCount(payload.activeThreads),
-      ...(turnBreakdown.length > 0 ? { turnBreakdown } : {}),
     };
   }
   // kind === "beta"
@@ -782,10 +698,8 @@ export class BetaDiagnostics {
       const raw = JSON.parse(readFileSync(this.usageSnapshotPath, "utf8")) as {
         v?: unknown;
         generatedAt?: unknown;
-        providers?: unknown;
         projects?: unknown;
         activeThreads?: unknown;
-        turnBreakdown?: unknown;
       };
       if (typeof raw.generatedAt !== "string") return;
       const generatedMs = Date.parse(raw.generatedAt);
@@ -823,10 +737,8 @@ export class BetaDiagnostics {
       if (raw.v !== 1) return;
       this.track("usage.daily", {
         kind: "usage",
-        providers: Array.isArray(raw.providers) ? (raw.providers as BetaUsageProviderEntry[]) : [],
         projects: raw.projects as number,
         activeThreads: raw.activeThreads as number,
-        turnBreakdown: raw.turnBreakdown as UsageTurnBreakdownEntry[],
       });
       writeFileSync(this.usageLastDayPath, `${today}\n`, { encoding: "utf8", mode: 0o600 });
     } catch {

@@ -162,7 +162,12 @@ export interface UsageTurnBreakdown {
   interactionMode: string;
   runtimeMode: string;
   origin: string;
-  installs: number;
+  installs?: number;
+  inputTokens?: number | null;
+  outputTokens?: number | null;
+  inputSamples?: number;
+  outputSamples?: number;
+  cachedInputSamples?: number;
   turns: number;
   succeeded: number;
   failed: number;
@@ -170,7 +175,7 @@ export interface UsageTurnBreakdown {
   meanDurationMs: number | null;
   meanInputTokens: number | null;
   meanOutputTokens: number | null;
-  cachedInputTokens: number;
+  cachedInputTokens: number | null;
 }
 
 export interface UsageData {
@@ -202,6 +207,19 @@ export interface ProductFilters {
 }
 
 export interface ProductData {
+  /** Completed UTC-day host windows; separate from renderer observations and legacy samples. */
+  hostExecutions?: {
+    rows: UsageTurnBreakdown[];
+    coverage: {
+      reportWindows: number;
+      partialWindows: number;
+      eligibleTurns: number;
+      includedTurns: number;
+      missingCompletionTimes: number;
+      tokenTruncatedTurns: number;
+      cappedMeasurements: number;
+    };
+  };
   from: string;
   to: string;
   channel: string | null;

@@ -20,7 +20,7 @@ Beta/Remote homes and their random installation identities remain separate.
 | `app.error`                                                                                 | Main/renderer source, built-in error type and at most 30 numeric source positions; no original message, file or function name |
 | `app.renderer-crash`, `app.child-process-crash`                                             | Fixed process/reason categories; backend exit reasons accept only numeric exit codes and fixed signal names                   |
 | `update.check`, `update.available`, `update.downloaded`, `update.installed`, `update.error` | Check/download/install stage, outcome, bounded duration, release version and fixed failure reason; no failure message         |
-| `usage.daily`                                                                               | Bounded aggregate usage counts and fixed categories, with no underlying chat or provider payload                              |
+| `usage.daily`                                                                               | Project and active-thread health counts only; no provider, model, execution or token fields                                   |
 | `beta.installed`, `beta.left`                                                               | Fixed import/fresh-install or keep/trash outcome                                                                              |
 
 Every envelope has an event UUID, random installation UUID, build flavor,
@@ -43,8 +43,11 @@ upload acknowledgement does not mean a maintainer has reviewed it.
 Recent fixed activity and numeric memory samples remain local to the process;
 they are not serialized into error stacks or crash logs. Resize and error
 listeners do not change application exception or recovery behavior. The
-server-owned usage snapshot remains a rolling 24-hour observation, relayed at
-most once per UTC upload day; it is not an exact disjoint calendar-day total.
+server-owned health snapshot remains a rolling observation. Provider/model/effort,
+execution outcomes and token counters have moved to the separate product-consent
+owner; both the diagnostics sender and receiver drop these retired fields from
+legacy clients. Historical provider/turn samples remain clearly labelled as
+legacy rolling samples until their existing retention removes them.
 
 ## Queue, ingestion and historical records
 
@@ -83,8 +86,9 @@ no automatic expiry; the historical content scrub is distinct from retention.
 ## Product analytics
 
 Desktop Settings → General → Privacy offers **Share product analytics**, off by
-default in Stable and Beta. Consent belongs to the controlling installation,
-not the account or a connected host. Browser/CLI clients do not expose this
+default in Stable and Beta. Event consent belongs to the controlling installation, not the account. Host
+execution aggregates follow the execution host’s own local product choice,
+including work requested by connected phones and other controllers. Browser/CLI clients do not expose this
 desktop sender. iPhone/iPad provide their own local consent control.
 
 When enabled, fixed events record app readiness, selected feature opens, pairing,
@@ -97,7 +101,7 @@ history and native completion events are not included. They are not billing data
 Each envelope contains a random per-installation UUID, event UUID, timestamp,
 app version, channel, surface and platform. Additional fields are restricted to
 fixed enums and bounded durations/token counts, including the fixed provider categories
-`codex`, `claude` and `other`. No account identifiers or account-derived hashes, model
+`codex`, `claude` and `other`. No account identifiers or account-derived hashes, custom model
 names, task/project/repository names, paths, routes, URLs, prompts, chat content, files,
 credentials or error text enter this path. The random UUID is independent of login,
 billing and the Beta diagnostics identity.
@@ -120,8 +124,9 @@ The first account-free upgrade also replaces the legacy analytics identifier and
 discards its unsent telemetry before replay. Consent and local workspace history
 are preserved.
 
-Release dependency: deploy the product D1 migration and receiving Worker before
-shipping these clients. `/v1/crash` remains Beta-only. `/v1/events` accepts Beta and
+Release dependency: deploy additive migration `0010_product_host_usage.sql` and
+the receiving Worker before shipping the host-usage client. `/v1/crash` remains
+retired with HTTP 410 in every flavor. `/v1/events` accepts Beta and
 Remote diagnostics; Remote events follow the sharing switch.
 
 ### Synara Remote
@@ -152,11 +157,50 @@ receiver discards that legacy field, and the account-hash removal migration dele
 it from stored product rows. These changes require updated clients, Worker and schema;
 source changes alone do not update a deployed service or installed app.
 
-Provider/model turn breakdowns remain a separate host-reported Beta/Remote diagnostics
-path. A `usage.daily` report samples the preceding 24 hours and is sent at most once
-per UTC day; it is not an exact calendar-day ledger or a complete global execution
-total. Product and diagnostic usage observations are separate from account and billing
-records.
+### Product-consented host execution windows
+
+The desktop server reuses the existing projection snapshot/grouper, and the same
+product sender posts a separate closed `hostUsage` payload to `/v1/product-events`.
+Stable never constructs a diagnostics sender. Stable/Beta remain default-off and
+Remote keeps its existing default and explicit off choice. The local product
+policy records a sharing generation and resume timestamp; generation and upload
+are gated by that policy. Re-enabling starts a fresh cutoff and excludes turns
+requested while sharing was off. Restart preserves the cutoff and daily receipts.
+
+Snapshots cover completed UTC calendar days and freeze after a ten-minute settling
+grace. `windowStart`, `windowEnd`, `coveredFrom` and `generatedAt` make partial
+consent days and capture time explicit. A daily receipt is derived locally only
+from the random product UUID and UTC bounds. No installation/account identifier,
+project/thread identifier, platform or app version is stored with model counters.
+Cloudflare retains the opaque daily receipt for 14 days and merges accepted
+counters by day/channel/catalogued dimensions for 90 UTC days. Aggregate timestamps
+are fixed to the UTC window boundary; precise arrival is retained only on the
+short-lived receipts, preventing a timestamp join to per-host model updates. Receipts have no
+cross-day key; model records have a fixed aggregate placeholder. Retention uses
+bounded daily batches, so a backlog can delay physical cleanup.
+
+Each snapshot reads at most 5,000 finished projection turns and retains at most
+100 dimension groups. Coverage records eligible/included turns, omitted limits,
+terminal records lacking completion times (by request day), token-entry truncation
+and counter limits. Missing completion times never fall back to request times.
+Absent request settings are `other`, including effort, permissions and origin;
+provider routing may differ from recorded request settings.
+
+Input/output/cached-token totals each have their own sample denominator. A zero
+explicitly reported by every usage entry is measured; an empty object, absent or
+invalid field stays unknown for that field. More than 64 entries makes that
+turn’s tokens unknown and increments truncation coverage. Aggregate overflow also
+becomes unmeasured and increments coverage. User-defined usage-map keys are never
+retained. Only bundled provider/model and finite effort/mode/origin categories
+cross the file and network boundaries.
+
+Offline windows older than 14 days are not uploaded. Frozen windows do not absorb
+late projection updates after capture. Missing windows are gaps, not measured
+zeros; coverage describes received snapshots, not all hosts. The Product provider
+table reports host executions, including connected-phone work without claiming
+phone-source attribution. It reuses the legacy breakdown table but keeps these
+windows separate from rolling diagnostic samples and renderer completion events.
+None of these observations are account billing or globally exact execution totals.
 
 ### Aggregate reporting cohorts
 

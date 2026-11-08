@@ -4,6 +4,7 @@
 import { useMemo, useState } from "react";
 
 import { api, type ProductFilters } from "../api";
+import { TurnBreakdownTable } from "../TurnBreakdownTable";
 import { PRODUCT_SECTIONS, type ProductSection } from "../filters";
 import codexLogo from "../assets/providers/codex.svg?no-inline";
 import claudeLogo from "../assets/providers/claude.svg?no-inline";
@@ -578,7 +579,44 @@ export function Product({
           )}
           {section === "providers" && (
             <>
-              <section className="product-hero" aria-label="Provider comparison">
+              {data.hostExecutions && (
+                <section className="section" aria-labelledby="host-executions">
+                  <h2 id="host-executions" className="heading-20 section-head">
+                    Host executions by model and effort
+                  </h2>
+                  <p className="chart-caption">
+                    Product-consented snapshots of completed UTC days from execution hosts,
+                    including connected-phone, automation and agent work. The surface filter does
+                    not identify where work began. These are separate from renderer observations
+                    below and billing totals. Offline gaps, late projection updates and capped
+                    windows can omit work.
+                  </p>
+                  <div className="stat-strip stat-strip--four">
+                    <Stat
+                      label="Daily host reports"
+                      value={compact(data.hostExecutions.coverage.reportWindows)}
+                      detail={`${compact(data.hostExecutions.coverage.partialWindows)} start after a sharing-resume cutoff`}
+                    />
+                    <Stat
+                      label="Captured eligible turns"
+                      value={compact(data.hostExecutions.coverage.includedTurns)}
+                      detail={`${compact(data.hostExecutions.coverage.eligibleTurns)} present at capture · ${compact(data.hostExecutions.coverage.eligibleTurns - data.hostExecutions.coverage.includedTurns)} omitted by limits`}
+                    />
+                    <Stat
+                      label="Missing completion times"
+                      value={compact(data.hostExecutions.coverage.missingCompletionTimes)}
+                      detail="Excluded terminal records, grouped by request day"
+                    />
+                    <Stat
+                      label="Limited token measurements"
+                      value={compact(data.hostExecutions.coverage.tokenTruncatedTurns)}
+                      detail={`${compact(data.hostExecutions.coverage.cappedMeasurements)} field aggregates exceeded limits`}
+                    />
+                  </div>
+                  <TurnBreakdownTable rows={data.hostExecutions.rows} />
+                </section>
+              )}
+              <section className="product-hero" aria-label="Renderer observation comparison">
                 <div className="product-headlines">
                   {["claude", "codex"].map((provider) => {
                     const count =

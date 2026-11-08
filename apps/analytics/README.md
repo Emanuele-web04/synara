@@ -87,3 +87,19 @@ Old queue rows are reconstructed before upload; historical API reads are guarded
 Migration `0009` prepares a checkpointed content scrub. Actual D1/R2 deletion is
 an explicit, bounded operator operation; no production cleanup is implied by
 this source. See [the cleanup runbook](DIAGNOSTICS-CONTENT-CLEANUP.md).
+
+## Product host usage
+
+Deploy additive migration `0010_product_host_usage.sql` before the receiving Worker,
+then ship the client; no deployment is performed by local checks. The existing
+product endpoint accepts a closed `hostUsage` payload from the existing consent
+sender. `usage_turns.source='product'` stores anonymous day/channel/dimension
+counters with a fixed install placeholder; its partial unique index supports
+atomic upserts. Opaque day receipts expire after 14 days, aggregate counters/quality
+after 90 UTC days. Diagnostic rows remain `source='diagnostic'`, separately labelled
+legacy sampled; new diagnostics accept only project/active-thread health counts.
+See the [precise consent, measurement and coverage contract](../../docs/diagnostics.md#product-consented-host-execution-windows).
+
+Product aggregate/quality `received_at` values are UTC window boundaries, not
+individual arrival times. Only the 14-day deduplication receipts keep arrival time;
+90-day product counter cleanup uses the aggregate `day` field.
