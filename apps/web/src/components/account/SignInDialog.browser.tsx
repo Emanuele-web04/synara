@@ -100,6 +100,8 @@ describe("SignInDialog", () => {
     const input = page.getByLabelText("Sign-in code").element();
     expect(input.getAttribute("aria-invalid")).toBe("true");
     expect(input.getAttribute("aria-describedby")).toBeTruthy();
+    // The user can retype at once: the field keeps focus through the failed check.
+    expect(document.activeElement).toBe(input);
   });
 
   // The code step's "Change email" goes back to the address field without
@@ -187,6 +189,9 @@ describe("SignInDialog", () => {
 
     await expect.element(page.getByText("Sign-in was interrupted. Try again.")).toBeVisible();
     expect(page.getByText(/fibers interrupted/).elements()).toHaveLength(0);
+    // A provider failure is not an email problem.
+    const email = page.getByRole("textbox", { name: "Email" }).element();
+    expect(email.getAttribute("aria-invalid")).toBeNull();
   });
 
   // Timeout regression: a transient completeSso failure while the session

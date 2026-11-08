@@ -43,13 +43,13 @@ export function SignInDialog({ open, onOpenChange, onSignedIn }: SignInDialogPro
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       {/* "Not now" and Escape close it, so the corner X would be a third way out. */}
-      <DialogPopup
-        showCloseButton={false}
-        className={cn("overflow-hidden sm:max-w-[400px]", SIGN_IN_ACCENT_CLASS_NAME)}
-      >
-        {/* State lives below DialogPopup, which unmounts on close, so every
-            open starts from a clean form with no reset effect. */}
-        <SignInPanel onDismiss={() => onOpenChange(false)} onSignedIn={onSignedIn} />
+      <DialogPopup showCloseButton={false} className="overflow-hidden sm:max-w-[400px]">
+        {/* The popup clips to its rounded corners; this layer scrolls when a short
+            window cannot fit the whole dialog. State lives below DialogPopup,
+            which unmounts on close, so every open starts from a clean form. */}
+        <div className="min-h-0 overflow-y-auto">
+          <SignInPanel onDismiss={() => onOpenChange(false)} onSignedIn={onSignedIn} />
+        </div>
       </DialogPopup>
     </Dialog>
   );
@@ -112,6 +112,10 @@ export function SignInPanel({ onSignedIn, onDismiss, variant = "dialog" }: SignI
   const account = useAccount();
   const [email, setEmail] = useState("");
   const [error, setError] = useState<string | null>(null);
+  // Whether `error` came from a provider sign-in rather than the email field.
+  // The dialog shows a provider failure under the provider row and leaves the
+  // email field valid; the embedded card keeps its single error slot.
+  const [errorFromSso, setErrorFromSso] = useState(false);
   // Stable id linking the email input to its error text for assistive tech.
   const emailErrorId = useId();
   const [ssoWait, setSsoWait] = useState<SsoWait | null>(null);
@@ -201,6 +205,7 @@ export function SignInPanel({ onSignedIn, onDismiss, variant = "dialog" }: SignI
       // A server-side interruption (reconnect, superseded request) with a
       // genuinely signed-out outcome resets to the buttons with plain copy —
       // never the runtime's own interrupt vocabulary.
+      setErrorFromSso(true);
       setError(
         isSignInCancellation(cause)
           ? "Sign-in was interrupted. Try again."
@@ -233,6 +238,7 @@ export function SignInPanel({ onSignedIn, onDismiss, variant = "dialog" }: SignI
 
   const handleEmailSubmit = async () => {
     setError(null);
+    setErrorFromSso(false);
     const trimmed = email.trim();
     if (trimmed.length === 0) {
       setError("Enter your email.");
@@ -400,8 +406,11 @@ export function SignInPanel({ onSignedIn, onDismiss, variant = "dialog" }: SignI
     );
   }
 
+  // Only an email-step failure marks the email field invalid.
+  const emailFieldError = error !== null && !errorFromSso;
+
   return (
-    <div className="flex flex-col">
+    <div className={cn("flex flex-col", SIGN_IN_ACCENT_CLASS_NAME)}>
       <SignInOrbit />
       <div className="flex flex-col gap-4 px-6 pb-5">
         <div className="flex flex-col items-center gap-1.5 pb-1 text-center">
@@ -432,9 +441,11 @@ export function SignInPanel({ onSignedIn, onDismiss, variant = "dialog" }: SignI
                   aria-label="Email"
                   className="caret-[var(--sign-in-accent)]"
                   value={email}
-                  disabled={busy}
-                  aria-invalid={error !== null || undefined}
-                  aria-describedby={error !== null ? emailErrorId : undefined}
+                  // Read-only, not disabled, while busy: a disabled field drops
+                  // focus, and a failed send must leave the user typing.
+                  readOnly={busy}
+                  aria-invalid={emailFieldError || undefined}
+                  aria-describedby={emailFieldError ? emailErrorId : undefined}
                   onChange={(event) => setEmail(event.target.value)}
                 />
                 <InputGroupAddon align="inline-end">
@@ -454,7 +465,7 @@ export function SignInPanel({ onSignedIn, onDismiss, variant = "dialog" }: SignI
                   </Button>
                 </InputGroupAddon>
               </InputGroup>
-              {emailError}
+              {emailFieldError ? emailError : null}
             </form>
 
             {/* Per-provider buttons, honestly: each one carries its provider
@@ -478,6 +489,7 @@ export function SignInPanel({ onSignedIn, onDismiss, variant = "dialog" }: SignI
                 </Button>
               ))}
             </div>
+            {errorFromSso ? emailError : null}
           </>
         )}
 
@@ -630,7 +642,10 @@ function CodeInput(props: {
         autoComplete="one-time-code"
         maxLength={VERIFICATION_CODE_LENGTH}
         value={entry.code}
-        disabled={submitting}
+        // Read-only, not disabled, while a code is checked: a disabled input
+        // loses focus, so a wrong code would leave nothing to type into.
+        readOnly={submitting}
+        aria-busy={submitting || undefined}
         aria-label="Sign-in code"
         aria-invalid={entry.error !== null || undefined}
         aria-describedby={entry.error !== null ? entry.errorId : undefined}
@@ -703,7 +718,7 @@ function DialogCodeEntryStep({
 }: CodeEntryStepProps & { readonly onDismiss?: (() => void) | undefined }) {
   const entry = useCodeEntry({ submitting, resending, onSubmit, onResend });
   return (
-    <div className="flex flex-col">
+    <div className={cn("flex flex-col", SIGN_IN_ACCENT_CLASS_NAME)}>
       <SignInOrbit mail />
       <div className="flex flex-col gap-4 px-6 pb-5">
         <div className="flex flex-col items-center gap-1.5 pb-1 text-center">

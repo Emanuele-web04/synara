@@ -30,8 +30,9 @@ const CORE_SIZE = 84;
 // Outer-orbit slots in degrees, alternating sides from the top down. The top and bottom
 // of the circle stay empty so no agent is cut by the dialog edge or crowds the title.
 const SLOT_ANGLES = [145, 35, 180, 0, 215, 325] as const;
-// The lowest pair sits in the fade toward the title, so it is drawn quieter.
-const QUIET_SLOT_COUNT = 2;
+// The lower slots sit in the fade toward the title, so they are drawn quieter —
+// keyed by position, so fewer visible agents still leave a balanced ring.
+const QUIET_SLOT_ANGLES: ReadonlySet<number> = new Set([215, 325]);
 
 // The travelling signal: an arc along the inner orbit from 12 o'clock to 2 o'clock.
 const SIGNAL_END_X = CENTER_X + INNER_RADIUS * Math.cos(Math.PI / 6);
@@ -43,18 +44,22 @@ const BAND_BACKGROUND = [
   "radial-gradient(color-mix(in srgb, var(--color-foreground) 8%, transparent) 1px, transparent 1.3px)",
 ].join(", ");
 
+// Fixed for the session: the visible-provider list is resolved once at load.
+const ORBIT_AGENTS = VISIBLE_PROVIDER_DESCRIPTORS.slice(0, SLOT_ANGLES.length).map(
+  (descriptor, index) => {
+    const degrees = SLOT_ANGLES[index] ?? 0;
+    const angle = (degrees * Math.PI) / 180;
+    return {
+      kind: descriptor.kind,
+      x: CENTER_X + OUTER_RADIUS * Math.cos(angle),
+      y: CENTER_Y - OUTER_RADIUS * Math.sin(angle),
+      quiet: QUIET_SLOT_ANGLES.has(degrees),
+    };
+  },
+);
+
 export function SignInOrbit(props: { readonly mail?: boolean }) {
-  const agents = VISIBLE_PROVIDER_DESCRIPTORS.slice(0, SLOT_ANGLES.length).map(
-    (descriptor, index) => {
-      const angle = ((SLOT_ANGLES[index] ?? 0) * Math.PI) / 180;
-      return {
-        kind: descriptor.kind,
-        x: CENTER_X + OUTER_RADIUS * Math.cos(angle),
-        y: CENTER_Y - OUTER_RADIUS * Math.sin(angle),
-        quiet: index >= SLOT_ANGLES.length - QUIET_SLOT_COUNT,
-      };
-    },
-  );
+  const agents = ORBIT_AGENTS;
 
   return (
     <div
