@@ -141,6 +141,7 @@ import {
 import { ProviderHealth } from "../../provider/Services/ProviderHealth.ts";
 import { isServerGroupsEnabled } from "../../projectAgent/groupsBetaGate.ts";
 import { ProjectAgentService } from "../../projectAgent/Services/ProjectAgentService.ts";
+import { BotService } from "../../bots/Services/BotService.ts";
 import { ProjectAgentRepository } from "../../persistence/Services/ProjectAgentRepository.ts";
 import { resolveProviderDispatchAttachments } from "../../provider/providerAttachmentPaths.ts";
 import { OrchestrationEventDeliveryRepositoryLive } from "../../persistence/Layers/OrchestrationEventDeliveries.ts";
@@ -1053,6 +1054,8 @@ const make = Effect.gen(function* () {
   // layer environment, so per-turn serviceOption lookups would see an empty
   // context.
   const projectAgentService = yield* Effect.serviceOption(ProjectAgentService);
+  // SynBot (Beta): a bot chat's turn also gets its `<synbot_bot>` section.
+  const botService = yield* Effect.serviceOption(BotService);
   const providerHealth = yield* ProviderHealth;
   const pendingInteractions = yield* ProjectionPendingInteractionRepository;
   const projectionThreadActivityRepository = yield* ProjectionThreadActivityRepository;
@@ -3440,11 +3443,20 @@ const make = Effect.gen(function* () {
         }
       }
     }
-    const projectContextPacket = yield* (
+    const hubContextPacket = yield* (
       Option.isSome(projectAgentService)
         ? projectAgentService.value.formatContextPacketForTurn(input.threadId)
         : Effect.succeed("")
     ).pipe(Effect.catch(() => Effect.succeed("")));
+    const botContextSection = Option.isSome(botService)
+      ? yield* botService.value.formatContextForTurn({
+          threadId: input.threadId,
+          messageId: input.messageId,
+        })
+      : "";
+    const projectContextPacket = [hubContextPacket, botContextSection]
+      .filter((block) => block.trim().length > 0)
+      .join("\n\n");
     // A multi-folder project lists its folders as ambient context too, so every input
     // budget below already reserves room for it.
     const threadProject = yield* resolveThreadWorkspaceProject(thread);

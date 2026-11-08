@@ -1,0 +1,1130 @@
+/* FILE: holobot.css
+   Purpose: The HoloBot UI kit's tokens and component styles (ported from HoloBot's
+            packages/ui: tokens.css, layout.css, ui.css and each component's CSS), adapted to
+            Synara: colors come from Synara's theme variables (light by default, `.dark` on
+            <html>), the font is Synara's UI family, and text sizes follow the size chosen in
+            Settings (`--app-font-size-ui*`, `--app-font-size-chat`). Spacing, radii, shapes,
+            layout and motion are HoloBot's. Everything is scoped to `.hb`: the SynBot page, its
+            sidebar panel, dialogs and menus carry it. */
+
+.hb {
+  /* Palette (light): Synara's surfaces in HoloBot's roles. */
+  --hb-bg: var(--background);
+  --hb-sidebar-bg: var(--sidebar);
+  --hb-sidebar-selected: color-mix(in srgb, var(--foreground) 7%, transparent);
+  --hb-card: var(--card);
+  --hb-card-hover: color-mix(in srgb, var(--foreground) 7%, var(--background));
+  --hb-bot-bubble: color-mix(in srgb, var(--foreground) 6%, var(--background));
+  --hb-user-bubble: color-mix(in srgb, var(--foreground) 94%, var(--background));
+  --hb-on-user-bubble: var(--background);
+  --hb-border: color-mix(in srgb, var(--foreground) 8%, transparent);
+  --hb-border-strong: color-mix(in srgb, var(--foreground) 16%, transparent);
+  --hb-text: var(--foreground);
+  --hb-soft-text: color-mix(in srgb, var(--foreground) 82%, var(--background));
+  --hb-muted: var(--muted-foreground);
+  --hb-danger-fill: color-mix(in srgb, var(--destructive) 12%, transparent);
+  --hb-danger-text: var(--hb-tone-bad-text);
+  --hb-chosen-border: color-mix(in srgb, var(--foreground) 45%, transparent);
+  --hb-attention: var(--warning);
+  --hb-on-badge: #111111;
+  --hb-banner-fill: color-mix(in srgb, var(--warning) 14%, transparent);
+  --hb-banner-text: var(--hb-tone-attention-text);
+  --hb-focus: var(--ring);
+  --hb-app-blue: var(--project-blue);
+
+  /* Tones: chips, dots and the proof checklist (fill, text). Synara's `*-foreground` colors
+     are the text ON a filled badge, so the tinted text mixes the tone with the foreground.
+     Work in progress keeps HoloBot's blue (Synara's project blue), apart from amber waiting. */
+  --hb-tone-muted-fill: color-mix(in srgb, var(--muted-foreground) 14%, transparent);
+  --hb-tone-muted-text: var(--muted-foreground);
+  --hb-tone-active-fill: color-mix(in srgb, var(--project-blue) 16%, transparent);
+  --hb-tone-active-text: color-mix(in srgb, var(--project-blue) 80%, var(--foreground));
+  --hb-tone-attention-fill: color-mix(in srgb, var(--warning) 16%, transparent);
+  --hb-tone-attention-text: color-mix(in srgb, var(--warning) 75%, var(--foreground));
+  --hb-tone-good-fill: color-mix(in srgb, var(--success) 14%, transparent);
+  --hb-tone-good-text: color-mix(in srgb, var(--success) 78%, var(--foreground));
+  --hb-tone-bad-fill: color-mix(in srgb, var(--destructive) 13%, transparent);
+  --hb-tone-bad-text: color-mix(in srgb, var(--destructive) 85%, var(--foreground));
+
+  /* Mascots: one flat color per bot; the main SynBot is HoloBot's ghost in liquid metal,
+     black with a faint sheen on light, the reverse on dark. Every mascot's eyes, the ghost's
+     included, are the page background, so they read as holes in the body (light on light,
+     dark on dark). */
+  --hb-mascot-eyes: var(--hb-bg);
+  --hb-mascot-repo: #8e8e93;
+  --hb-mark-fill: #151517;
+  --hb-mark-sheen: 0.3;
+
+  /* Liquid metal (ui/metal): a primary button is a dark core inside a thin moving ring of it,
+     with a faint inner shadow and a subtle glow around. The values are the app's metal tokens. */
+  --hb-rim-fill: var(--metal-fill);
+  --hb-on-rim: var(--metal-on-fill);
+  --hb-rim-capsule: var(--metal-ring);
+  --hb-rim-circle: var(--metal-ring);
+  --hb-rim-glow: var(--metal-glow);
+  --hb-rim-inner-shadow: var(--metal-inner-shadow);
+
+  /* Spacing */
+  --hb-gutter: 16px;
+  --hb-gutter-lg: 24px;
+  --hb-gutter-xl: 32px;
+  --hb-gap: 12px;
+  --hb-gap-sm: 6px;
+  --hb-gap-xs: 2px;
+  --hb-bubble-pad: 9px;
+  --hb-chip-pad: 8px;
+
+  /* Icons */
+  --hb-icon: 16px;
+  --hb-icon-sm: 14px;
+  --hb-icon-xs: 11px;
+  --hb-icon-lg: 28px;
+
+  /* Controls and bars */
+  --hb-control: 32px;
+  --hb-control-sm: 28px;
+  --hb-control-xs: 24px;
+  --hb-button: 32px;
+  --hb-bar: 48px;
+  --hb-badge: 18px;
+  --hb-hairline: 0.5px;
+  --hb-dot: 8px;
+  --hb-dot-sm: 6px;
+  --hb-switch-w: 36px;
+  --hb-switch-h: 22px;
+  --hb-switch-inset: 2px;
+  --hb-switch-move: 160ms;
+
+  /* Mascots */
+  --hb-avatar-tile: 52px;
+  --hb-avatar-row: 32px;
+  --hb-avatar-pill: 22px;
+  --hb-avatar-card: 18px;
+
+  /* Radii: controls are capsules, containers rounded rects. */
+  --hb-radius-sm: 8px;
+  --hb-radius-md: 12px;
+  --hb-radius-lg: 18px;
+  --hb-radius-xl: 23px;
+  --hb-pill: 999px;
+
+  /* Type: Synara's UI family; sizes follow Settings → font size (13 px by default: HoloBot's
+     11 / 12 / 13 / 14 / 15 at that size). The thread's words follow the chat size. */
+  --hb-font: var(--font-ui-family);
+  --hb-font-mono: var(--font-mono-family);
+  --hb-text-xs: var(--app-font-size-ui-xs, 11px);
+  --hb-text-sm: var(--app-font-size-ui-sm, 12px);
+  --hb-text-md: var(--app-font-size-ui, 13px);
+  --hb-text-lg: var(--app-font-size-ui-lg, 14px);
+  --hb-text-title: calc(var(--app-font-size-ui, 13px) + 2px);
+  --hb-text-chat: calc(var(--app-font-size-chat, 13px) + 1px);
+  --hb-line: calc(var(--hb-text-chat) * 1.43);
+  --hb-weight-medium: 500;
+  --hb-weight-semibold: 600;
+
+  /* Layout */
+  --hb-sidebar: 300px;
+  --hb-sessions: 380px;
+  --hb-thread-min: 440px;
+  --hb-choice: 460px;
+  --hb-dialog: 460px;
+  --hb-dialog-wide: 580px;
+
+  /* Scroll edges: how far content fades under a bar, and the blur under the top strip. */
+  --hb-fade: 28px;
+  --hb-edge-blur: 6px;
+
+  /* States */
+  --hb-disabled-opacity: 0.35;
+  --hb-hover-opacity: 0.88;
+
+  /* Overlays */
+  --hb-scrim: rgb(0 0 0 / 0.2);
+  --hb-shadow-dialog: 0 24px 64px rgb(0 0 0 / 0.16), 0 0 0 0.5px rgb(0 0 0 / 0.08);
+  --hb-shadow-menu: 0 12px 32px rgb(0 0 0 / 0.12), 0 0 0 0.5px rgb(0 0 0 / 0.06);
+  --hb-shadow-float: 0 4px 16px rgb(0 0 0 / 0.06);
+  --hb-z-strip: 2;
+
+  font-family: var(--hb-font);
+}
+
+/* Dark: the same roles, re-valued (HoloBot's dark is its default). */
+.dark .hb,
+.dark.hb {
+  --hb-card: color-mix(in srgb, var(--foreground) 6%, var(--background));
+  --hb-card-hover: color-mix(in srgb, var(--foreground) 10%, var(--background));
+  --hb-bot-bubble: color-mix(in srgb, var(--foreground) 7%, var(--background));
+  --hb-user-bubble: color-mix(in srgb, var(--foreground) 26%, var(--background));
+  --hb-on-user-bubble: var(--foreground);
+  --hb-border: color-mix(in srgb, var(--foreground) 10%, transparent);
+  --hb-border-strong: color-mix(in srgb, var(--foreground) 20%, transparent);
+  --hb-soft-text: color-mix(in srgb, var(--foreground) 80%, var(--background));
+  --hb-chosen-border: color-mix(in srgb, var(--foreground) 40%, transparent);
+  --hb-scrim: rgb(0 0 0 / 0.45);
+  --hb-mark-fill: #f6f6f8;
+  --hb-mark-sheen: 0.42;
+  --hb-shadow-dialog: 0 24px 64px rgb(0 0 0 / 0.55);
+  --hb-shadow-menu: 0 12px 32px rgb(0 0 0 / 0.5);
+  --hb-shadow-float: 0 4px 16px rgb(0 0 0 / 0.35);
+}
+
+/* Icons: the SVG takes the current text color. */
+.hb-icon {
+  display: inline-flex;
+  flex-shrink: 0;
+}
+.hb-icon svg {
+  width: 100%;
+  height: 100%;
+  color: inherit;
+}
+.hb-icon--md {
+  width: var(--hb-icon);
+  height: var(--hb-icon);
+}
+.hb-icon--sm {
+  width: var(--hb-icon-sm);
+  height: var(--hb-icon-sm);
+}
+.hb-icon--xs {
+  width: var(--hb-icon-xs);
+  height: var(--hb-icon-xs);
+}
+.hb-icon--lg {
+  width: var(--hb-icon-lg);
+  height: var(--hb-icon-lg);
+}
+
+/* Mascots: sized by the slot they sit in. */
+.hb-mascot {
+  flex-shrink: 0;
+  display: block;
+}
+.hb-mascot--tile {
+  width: var(--hb-avatar-tile, 52px);
+  height: var(--hb-avatar-tile, 52px);
+}
+.hb-mascot--row {
+  width: var(--hb-avatar-row, 32px);
+  height: var(--hb-avatar-row, 32px);
+}
+.hb-mascot--pill {
+  width: var(--hb-avatar-pill, 22px);
+  height: var(--hb-avatar-pill, 22px);
+}
+.hb-mascot--card {
+  width: var(--hb-avatar-card, 18px);
+  height: var(--hb-avatar-card, 18px);
+}
+/* The main SynBot (metal/Metal.tsx's MetalMark): the ghost's fill under a mask of its
+   outline, the moving metal over it as a sheen, the eyes on top. */
+.hb-mark {
+  position: relative;
+  display: inline-block;
+}
+.hb-mark__body {
+  position: absolute;
+  inset: 0;
+}
+.hb-mark__metal {
+  position: absolute;
+  inset: 0;
+  background: var(--hb-mark-fill, #151517);
+  mask-size: 100% 100%;
+  -webkit-mask-size: 100% 100%;
+  mask-repeat: no-repeat;
+  -webkit-mask-repeat: no-repeat;
+}
+.hb-mark__metal > * {
+  opacity: var(--hb-mark-sheen, 0.3);
+}
+.hb-mark__eyes {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  fill: var(--hb-mascot-eyes, var(--background));
+}
+/* Send is the composer's same 28 px circle as + and the mic: only its fill differs (the dark
+   core in the metal ring), so its arrow takes their icon size and no glow spills past the
+   edge. */
+.hb [data-send-underlay] {
+  background: var(--hb-rim-fill);
+  color: var(--hb-on-rim);
+}
+.hb [data-send-underlay] > svg,
+.hb [data-send-underlay] > [data-slot="central-icon"] {
+  position: relative;
+  z-index: 1;
+}
+.hb [data-send-underlay] > [data-slot="central-icon"] {
+  width: 16px;
+  height: 16px;
+  transform: none;
+}
+/* A bot alive, its mood in its head and eyes, calm and slow (each bot keeps its own phase).
+   Nothing hops, squashes or nods: the head turns and tilts by a degree or two and the eyes
+   glide, every move eased in and out.
+   - idle: breathes and blinks; now and then turns its head to glance left, then right, then
+     tilts it with its eyes up. On a turn the outline shifts and narrows by less than the eyes
+     travel, so the flat shape reads as a round head turning.
+   - working (running): leans gently side to side, eyes narrowed in focus, sweeping with it.
+   - waiting for you: tilts its head one way, then the other, eyes a little wider and up.
+   - done: eyes softly closed in a content squint, the head rocking slowly.
+   - paused: a slow deep breath with a droop, eyes nearly shut, opening a little now and then.
+   Reduce Motion holds them all still. */
+.hb-bot--alive .hb-bot__body,
+.hb-bot--alive .hb-bot__eyes {
+  transform-box: fill-box;
+  animation-delay: var(--hb-bot-phase, 0s);
+}
+.hb-bot--alive .hb-bot__body {
+  transform-origin: 50% 100%;
+  animation-name: hb-bot-breathe, hb-bot-turn;
+  animation-duration: 5.6s, 12s;
+  animation-timing-function: ease-in-out;
+  animation-iteration-count: infinite;
+}
+.hb-bot--alive .hb-bot__eyes {
+  transform-origin: 50% 60%;
+  animation-name: hb-bot-blink, hb-bot-look;
+  animation-duration: 6.2s, 12s;
+  animation-timing-function: ease, ease-in-out;
+  animation-iteration-count: infinite;
+}
+.hb-bot--alive[data-mood="working"] .hb-bot__body {
+  animation-name: hb-bot-lean;
+  animation-duration: 3.6s;
+}
+.hb-bot--alive[data-mood="working"] .hb-bot__eyes {
+  animation-name: hb-bot-blink, hb-bot-scan;
+  animation-duration: 6.2s, 3.6s;
+}
+.hb-bot--alive[data-mood="waiting"] .hb-bot__body {
+  animation-name: hb-bot-ask;
+  animation-duration: 6.4s;
+}
+.hb-bot--alive[data-mood="waiting"] .hb-bot__eyes {
+  animation-name: hb-bot-blink, hb-bot-up;
+  animation-duration: 4.6s, 6.4s;
+}
+.hb-bot--alive[data-mood="done"] .hb-bot__body {
+  animation-name: hb-bot-rock;
+  animation-duration: 6.4s;
+}
+.hb-bot--alive[data-mood="done"] .hb-bot__eyes {
+  animation-name: hb-bot-content;
+  animation-duration: 6.4s;
+  animation-timing-function: ease-in-out;
+}
+.hb-bot--alive[data-mood="paused"] .hb-bot__body {
+  animation-name: hb-bot-doze;
+  animation-duration: 7s;
+}
+.hb-bot--alive[data-mood="paused"] .hb-bot__eyes {
+  animation-name: hb-bot-sleepy;
+  animation-duration: 7s;
+  animation-timing-function: ease-in-out;
+}
+@keyframes hb-bot-breathe {
+  0%,
+  100% {
+    transform: scale(1, 1);
+  }
+  50% {
+    transform: scale(1.012, 0.988);
+  }
+}
+@keyframes hb-bot-blink {
+  0%,
+  94%,
+  100% {
+    transform: scaleY(1);
+  }
+  96.5% {
+    transform: scaleY(0.1);
+  }
+}
+/* Idle: the eyes' glances and the look up add to the head's turn and tilt (hb-bot-turn);
+   turned, the eyes narrow a little. Each move takes about a second. */
+@keyframes hb-bot-look {
+  0%,
+  24%,
+  64%,
+  72%,
+  92%,
+  100% {
+    translate: 0 0;
+    scale: 1 1;
+  }
+  32%,
+  42% {
+    translate: -3px 0.5px;
+    scale: 0.95 1;
+  }
+  50%,
+  58% {
+    translate: 2px -0.5px;
+    scale: 0.96 1;
+  }
+  78%,
+  86% {
+    translate: 1.5px -1.5px;
+    scale: 1.02 1.03;
+  }
+}
+@keyframes hb-bot-turn {
+  0%,
+  24%,
+  64%,
+  72%,
+  92%,
+  100% {
+    translate: 0 0;
+    rotate: 0deg;
+    scale: 1 1;
+  }
+  32%,
+  42% {
+    translate: -1.2px 0;
+    rotate: -1deg;
+    scale: 0.985 1;
+  }
+  50%,
+  58% {
+    translate: 1px 0;
+    rotate: 0.8deg;
+    scale: 0.99 1;
+  }
+  78%,
+  86% {
+    translate: 0 -0.5px;
+    rotate: 2deg;
+    scale: 1 1;
+  }
+}
+/* Working: a slow lean side to side; the narrowed eyes sweep with it. */
+@keyframes hb-bot-lean {
+  0%,
+  100% {
+    translate: -1px 0;
+    rotate: -1.2deg;
+  }
+  50% {
+    translate: 1px 0;
+    rotate: 1.2deg;
+  }
+}
+@keyframes hb-bot-scan {
+  0%,
+  100% {
+    translate: -3.5px 0;
+    scale: 1 0.85;
+  }
+  50% {
+    translate: 3.5px 0;
+    scale: 1 0.85;
+  }
+}
+/* Waiting for you: the head tilts one way, rests, then the other; the eyes are up at the user. */
+@keyframes hb-bot-ask {
+  0%,
+  50%,
+  100% {
+    rotate: 0deg;
+  }
+  18%,
+  36% {
+    rotate: -2.5deg;
+  }
+  68%,
+  86% {
+    rotate: 2.5deg;
+  }
+}
+@keyframes hb-bot-up {
+  0%,
+  100% {
+    translate: -0.5px -2px;
+    scale: 1.05 1.06;
+  }
+  50% {
+    translate: 1px -2.5px;
+    scale: 1.05 1.06;
+  }
+}
+/* Done: a slow rock; the eyes rest in a content squint and open a little now and then. */
+@keyframes hb-bot-rock {
+  0%,
+  100% {
+    rotate: 0deg;
+  }
+  25% {
+    rotate: -1.5deg;
+  }
+  75% {
+    rotate: 1.5deg;
+  }
+}
+@keyframes hb-bot-content {
+  0%,
+  40%,
+  80%,
+  100% {
+    translate: 0 -0.5px;
+    scale: 1.03 0.55;
+  }
+  55%,
+  65% {
+    translate: 0 -0.5px;
+    scale: 1.02 0.8;
+  }
+}
+/* Paused: a slow deep breath with a droop; the eyes nearly shut, opening a little now and then. */
+@keyframes hb-bot-doze {
+  0%,
+  100% {
+    transform: translateY(0) rotate(1.5deg) scale(1, 1);
+  }
+  50% {
+    transform: translateY(1%) rotate(2.5deg) scale(1.015, 0.985);
+  }
+}
+@keyframes hb-bot-sleepy {
+  0%,
+  60%,
+  86%,
+  100% {
+    translate: 0 1.5px;
+    scale: 1 0.22;
+  }
+  70%,
+  78% {
+    translate: 0 0.5px;
+    scale: 1 0.5;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .hb-bot--alive .hb-bot__body,
+  .hb-bot--alive .hb-bot__eyes {
+    animation: none;
+  }
+}
+
+/* Capsule buttons */
+.hb-btn {
+  position: relative;
+  isolation: isolate;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: var(--hb-control);
+  padding: 0 calc(var(--hb-gutter) - 2px);
+  border: 0;
+  border-radius: var(--hb-pill);
+  overflow: hidden;
+  font: inherit;
+  font-size: var(--hb-text-md);
+  line-height: 1;
+  font-weight: var(--hb-weight-medium);
+  color: var(--hb-text);
+  background: var(--hb-card-hover);
+  cursor: pointer;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.hb-btn__core {
+  position: relative;
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--hb-gap-sm);
+  white-space: nowrap;
+}
+.hb-btn:hover:not(:disabled) {
+  opacity: var(--hb-hover-opacity);
+}
+.hb-btn:disabled {
+  cursor: default;
+  opacity: var(--hb-disabled-opacity);
+}
+.hb-btn[data-chosen] {
+  opacity: 1;
+  box-shadow: inset 0 0 0 1px var(--hb-chosen-border);
+}
+.hb-btn:focus-visible {
+  outline: 2px solid var(--hb-focus);
+  outline-offset: 2px;
+}
+.hb-btn--danger {
+  background: var(--hb-danger-fill);
+  color: var(--hb-danger-text);
+}
+/* Primary: a dark core inside a thin ring of HoloBot's moving liquid metal (the metal fills
+   the capsule; the core, drawn over it, leaves the ring). Disabled, it holds no metal: a dark
+   capsule with a hairline. */
+.hb-btn--primary {
+  background: var(--hb-rim-fill);
+  color: var(--hb-on-rim);
+  box-shadow: var(--hb-rim-glow);
+}
+.hb-btn--primary::after {
+  content: "";
+  position: absolute;
+  inset: var(--hb-rim-capsule);
+  z-index: 0;
+  border-radius: inherit;
+  background: var(--hb-rim-fill);
+  box-shadow: var(--hb-rim-inner-shadow);
+}
+.hb-btn--round.hb-btn--primary::after {
+  inset: var(--hb-rim-circle);
+}
+.hb-btn--primary:disabled {
+  box-shadow: inset 0 0 0 1px var(--hb-border-strong);
+}
+.hb-btn--ghost {
+  background: transparent;
+  color: var(--hb-soft-text);
+}
+.hb-btn--ghost:hover:not(:disabled) {
+  opacity: 1;
+  background: var(--hb-card);
+}
+.hb-btn--card {
+  background: var(--hb-card);
+  box-shadow: inset 0 0 0 1px var(--hb-border-strong);
+}
+.hb-btn--card:hover:not(:disabled) {
+  opacity: 1;
+  background: var(--hb-card-hover);
+}
+.hb-btn--round {
+  width: var(--hb-control);
+  height: var(--hb-control);
+  min-width: 0;
+  padding: 0;
+  flex-shrink: 0;
+}
+.hb-btn--compact {
+  height: var(--hb-control-sm);
+  padding: 0 calc(var(--hb-gap) - 2px);
+  font-size: var(--hb-text-md);
+}
+.hb-btn--small {
+  height: var(--hb-control-xs);
+  padding: 0 var(--hb-chip-pad);
+  font-size: var(--hb-text-sm);
+}
+.hb-btn--small .hb-btn__core {
+  gap: 4px;
+}
+.hb-btn--compact.hb-btn--round {
+  width: var(--hb-control-sm);
+  height: var(--hb-control-sm);
+  padding: 0;
+}
+/* IconButton: a circle on the card fill, or with no fill. */
+.hb-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: var(--hb-button);
+  height: var(--hb-button);
+  padding: 0;
+  border: 0;
+  border-radius: var(--hb-pill);
+  background: var(--hb-card);
+  color: var(--hb-text);
+  cursor: pointer;
+}
+.hb-icon-btn:hover:not(:disabled) {
+  background: var(--hb-card-hover);
+}
+.hb-icon-btn--ghost {
+  background: transparent;
+  color: var(--hb-muted);
+}
+.hb-icon-btn--ghost:hover:not(:disabled) {
+  background: var(--hb-card);
+  color: var(--hb-text);
+}
+.hb-icon-btn:disabled {
+  cursor: default;
+  opacity: var(--hb-disabled-opacity);
+}
+.hb-icon-btn:focus-visible {
+  outline: 2px solid var(--hb-focus);
+  outline-offset: 2px;
+}
+
+/* Chips, the count badge and status dots. */
+.hb-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--hb-gap-sm);
+  max-width: 100%;
+  height: var(--hb-control-xs);
+  box-sizing: border-box;
+  padding: 0 calc(var(--hb-chip-pad) + 2px) 0 var(--hb-chip-pad);
+  border-radius: var(--hb-pill);
+  font-size: var(--hb-text-sm);
+  font-weight: var(--hb-weight-medium);
+  line-height: 1;
+  white-space: nowrap;
+}
+/* An engine chip: the model's name in ink, the provider's logo before it. */
+.hb-chip.hb-chip--engine {
+  background: var(--hb-card-hover);
+  color: var(--hb-soft-text);
+}
+.hb-chip__mark {
+  flex-shrink: 0;
+  width: 12px;
+  height: 12px;
+}
+/* A running chip's spinner turns. */
+.hb-chip--active .hb-icon {
+  animation: hb-chip-spin 1.2s linear infinite;
+}
+@keyframes hb-chip-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .hb-chip--active .hb-icon {
+    animation: none;
+  }
+}
+.hb-chip__label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.hb-chip__dot {
+  flex-shrink: 0;
+  width: var(--hb-gap-sm);
+  height: var(--hb-gap-sm);
+  border-radius: var(--hb-pill);
+  background: currentColor;
+}
+.hb-chip--muted {
+  background: var(--hb-tone-muted-fill);
+  color: var(--hb-tone-muted-text);
+}
+.hb-chip--active {
+  background: var(--hb-tone-active-fill);
+  color: var(--hb-tone-active-text);
+}
+.hb-chip--attention {
+  background: var(--hb-tone-attention-fill);
+  color: var(--hb-tone-attention-text);
+}
+.hb-chip--good {
+  background: var(--hb-tone-good-fill);
+  color: var(--hb-tone-good-text);
+}
+.hb-chip--bad {
+  background: var(--hb-tone-bad-fill);
+  color: var(--hb-tone-bad-text);
+}
+.hb-dot {
+  display: inline-block;
+  flex-shrink: 0;
+  width: var(--hb-dot);
+  height: var(--hb-dot);
+  border-radius: var(--hb-pill);
+}
+.hb-dot--sm {
+  width: var(--hb-dot-sm);
+  height: var(--hb-dot-sm);
+}
+.hb-dot--muted {
+  background: var(--hb-tone-muted-text);
+}
+.hb-dot--active {
+  background: var(--hb-tone-active-text);
+}
+.hb-dot--attention {
+  background: var(--hb-attention);
+}
+.hb-dot--good {
+  background: var(--hb-tone-good-text);
+}
+.hb-dot--bad {
+  background: var(--hb-tone-bad-text);
+}
+
+/* Text styles. */
+.hb-text {
+  margin: 0;
+  color: var(--hb-text);
+}
+.hb-text--title {
+  font-size: var(--hb-text-title);
+  font-weight: var(--hb-weight-semibold);
+  line-height: 1.3;
+}
+.hb-text--heading {
+  font-size: var(--hb-text-lg);
+  font-weight: var(--hb-weight-semibold);
+  line-height: 1.35;
+}
+.hb-text--body {
+  font-size: var(--hb-text-chat);
+  line-height: var(--hb-line);
+}
+.hb-text--label {
+  font-size: var(--hb-text-md);
+  font-weight: var(--hb-weight-medium);
+  line-height: 1.35;
+}
+.hb-text--small {
+  font-size: var(--hb-text-sm);
+  line-height: 1.45;
+}
+.hb-text--caption {
+  font-size: var(--hb-text-xs);
+  line-height: 1.4;
+}
+.hb-text--soft {
+  color: var(--hb-soft-text);
+}
+.hb-text--muted {
+  color: var(--hb-muted);
+}
+.hb-text--attention {
+  color: var(--hb-tone-attention-text);
+}
+.hb-text--bad {
+  color: var(--hb-tone-bad-text);
+}
+.hb-text--truncate {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Text field: a capsule, as high as the buttons beside it. */
+.hb-input {
+  width: 100%;
+  height: var(--hb-control);
+  padding: 0 var(--hb-gutter);
+  box-sizing: border-box;
+  border: 1px solid var(--hb-border-strong);
+  border-radius: var(--hb-pill);
+  background: var(--hb-bg);
+  color: var(--hb-text);
+  font: inherit;
+  font-family: var(--hb-font);
+  font-size: var(--hb-text-md);
+  outline: none;
+  user-select: text;
+  -webkit-user-select: text;
+}
+.hb-input::placeholder {
+  color: var(--hb-muted);
+}
+.hb-input:focus {
+  border-color: var(--hb-soft-text);
+}
+.hb-input[aria-invalid] {
+  border-color: var(--hb-tone-bad-text);
+}
+.hb-input:disabled {
+  opacity: var(--hb-disabled-opacity);
+}
+
+/* A titled part of a form. */
+.hb-field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--hb-gap-sm);
+  min-width: 0;
+}
+.hb-field > div:first-child {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+/* Switch: off a gray track; on a dark-core knob on a light track. */
+.hb-switch {
+  position: relative;
+  flex-shrink: 0;
+  width: var(--hb-switch-w);
+  height: var(--hb-switch-h);
+  padding: 0;
+  border: 0;
+  border-radius: var(--hb-pill);
+  background: var(--hb-border-strong);
+  cursor: pointer;
+  transition: background-color var(--hb-switch-move) ease-out;
+}
+.hb-switch__knob {
+  position: absolute;
+  top: var(--hb-switch-inset);
+  left: var(--hb-switch-inset);
+  width: calc(var(--hb-switch-h) - 2 * var(--hb-switch-inset));
+  height: calc(var(--hb-switch-h) - 2 * var(--hb-switch-inset));
+  border-radius: var(--hb-pill);
+  background: var(--hb-card);
+  transition:
+    transform var(--hb-switch-move) ease-out,
+    background-color var(--hb-switch-move) ease-out;
+}
+.hb-switch[aria-checked="true"] {
+  background: var(--hb-text);
+}
+.hb-switch[aria-checked="true"] .hb-switch__knob {
+  background: var(--hb-bg);
+  transform: translateX(calc(var(--hb-switch-w) - var(--hb-switch-h)));
+}
+.hb-switch:disabled {
+  cursor: default;
+  opacity: var(--hb-disabled-opacity);
+}
+.hb-switch:focus-visible {
+  outline: 2px solid var(--hb-focus);
+  outline-offset: 2px;
+}
+@media (prefers-reduced-motion: reduce) {
+  .hb-switch,
+  .hb-switch__knob {
+    transition: none;
+  }
+}
+
+/* Segmented choice: a capsule track, the chosen option a lighter capsule. */
+.hb-segmented {
+  display: flex;
+  gap: var(--hb-gap-xs);
+  padding: calc(var(--hb-gap-xs) * 2);
+  border-radius: var(--hb-pill);
+  background: var(--hb-bg);
+  border: 1px solid var(--hb-border);
+}
+.hb-segmented__option {
+  flex: 1;
+  min-width: 0;
+  height: var(--hb-button);
+  padding: 0 var(--hb-gap);
+  border: 0;
+  border-radius: var(--hb-pill);
+  background: transparent;
+  color: var(--hb-muted);
+  font: inherit;
+  font-size: var(--hb-text-sm);
+  white-space: nowrap;
+  cursor: pointer;
+}
+.hb-segmented__option:hover:not(:disabled) {
+  color: var(--hb-soft-text);
+}
+.hb-segmented__option[aria-checked="true"] {
+  background: var(--hb-card-hover);
+  color: var(--hb-text);
+}
+.hb-segmented__option:disabled {
+  cursor: default;
+  opacity: var(--hb-disabled-opacity);
+}
+.hb-segmented__option:focus-visible {
+  outline: 2px solid var(--hb-focus);
+  outline-offset: 1px;
+}
+
+/* Panes: a column filling its height, a hairline on the side it borders. */
+.hb-pane {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  box-sizing: border-box;
+}
+.hb-pane--fill {
+  flex: 1;
+}
+.hb-pane--sessions {
+  flex: 0 0 var(--hb-sessions);
+  width: var(--hb-sessions);
+}
+.hb-pane--edge-left {
+  border-left: 1px solid var(--hb-border);
+}
+
+/* A pane's top strip: three slots, the middle one centered on the strip. */
+.hb-strip {
+  position: relative;
+  z-index: var(--hb-z-strip);
+  flex-shrink: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: center;
+  gap: var(--hb-gap-sm);
+  height: var(--hb-bar);
+  padding: 0 var(--hb-gutter);
+  box-sizing: border-box;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.hb-strip__leading,
+.hb-strip__trailing {
+  display: flex;
+  align-items: center;
+  gap: var(--hb-gap-sm);
+  min-width: 0;
+  height: 100%;
+}
+.hb-strip__trailing {
+  justify-content: flex-end;
+}
+.hb-strip__center {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+  height: 100%;
+}
+
+/* Menu (ui/menu's bare popup): a rounded panel over everything, compact rows. It never runs
+   past the window: ui/menu flips it and `--available-height` caps it. */
+.hb-menu__panel {
+  min-width: 220px;
+  max-width: 320px;
+  max-height: min(360px, var(--available-height));
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  padding: 4px;
+  box-sizing: border-box;
+  border-radius: var(--hb-radius-md);
+  border: var(--hb-hairline) solid var(--hb-border-strong);
+  background: var(--hb-card);
+  box-shadow: var(--hb-shadow-menu);
+  color: var(--hb-text);
+  outline: none;
+}
+.hb-menu__section {
+  padding: var(--hb-gap-sm) 10px var(--hb-gap-xs);
+  font-size: var(--hb-text-xs);
+  font-weight: var(--hb-weight-medium);
+  color: var(--hb-muted);
+}
+.hb-menu__item {
+  display: flex;
+  align-items: center;
+  gap: var(--hb-gap);
+  min-height: var(--hb-control-sm);
+  padding: 0 10px;
+  border: 0;
+  border-radius: var(--hb-radius-sm);
+  background: none;
+  color: var(--hb-text);
+  font: inherit;
+  font-size: var(--hb-text-md);
+  text-align: left;
+  cursor: pointer;
+}
+/* ui/menu marks the item under the pointer or the arrow keys. */
+.hb-menu__item[data-highlighted] {
+  outline: none;
+  background: var(--hb-card-hover);
+}
+.hb-menu__item[data-disabled] {
+  cursor: default;
+  opacity: var(--hb-disabled-opacity);
+}
+.hb-menu__item[data-variant="destructive"] {
+  color: var(--hb-danger-text);
+}
+.hb-menu__label {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  padding: 5px 0;
+}
+.hb-menu__detail {
+  font-size: var(--hb-text-xs);
+  color: var(--hb-muted);
+}
+.hb-menu__icon {
+  display: flex;
+  color: var(--hb-soft-text);
+}
+.hb-menu__rule {
+  height: var(--hb-hairline);
+  margin: 4px 6px;
+  background: var(--hb-border-strong);
+}
+
+/* Dialogs (ui/dialog's popup, centered by its viewport): a card over a dim scrim. */
+.hb-dialog {
+  width: var(--hb-dialog);
+  max-width: calc(100vw - 2 * var(--hb-gutter-xl));
+  max-height: calc(100vh - 2 * var(--hb-gutter-xl));
+  padding: 0;
+  border: 1px solid var(--hb-border-strong);
+  border-radius: var(--hb-radius-lg);
+  background: var(--hb-card);
+  color: var(--hb-text);
+  box-shadow: var(--hb-shadow-dialog);
+  overflow: hidden;
+}
+.hb-dialog--wide {
+  width: var(--hb-dialog-wide);
+}
+.hb-dialog__scrim {
+  background: var(--hb-scrim);
+}
+.hb-dialog:focus {
+  outline: none;
+}
+.hb-dialog__box {
+  display: flex;
+  flex-direction: column;
+  gap: var(--hb-gutter);
+  max-height: inherit;
+  padding: var(--hb-gutter-lg);
+  box-sizing: border-box;
+  overflow-y: auto;
+}
+.hb-dialog__head {
+  display: flex;
+  align-items: center;
+  gap: var(--hb-gap);
+  margin: calc(-1 * var(--hb-gap-sm)) calc(-1 * var(--hb-gap)) 0 0;
+  min-height: var(--hb-button);
+}
+.hb-dialog__title {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--hb-text-title);
+  font-weight: var(--hb-weight-semibold);
+}
+.hb-dialog__body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--hb-gap);
+  font-size: var(--hb-text-md);
+  line-height: 1.45;
+}
+.hb-dialog__footer {
+  /* A long sheet scrolls under its buttons; they stay in reach. */
+  position: sticky;
+  bottom: calc(-1 * var(--hb-gutter-lg));
+  z-index: 1;
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--hb-gap);
+  margin: 0 calc(-1 * var(--hb-gutter-lg)) calc(-1 * var(--hb-gutter-lg));
+  padding: var(--hb-gap) var(--hb-gutter-lg) var(--hb-gutter-lg);
+  background: var(--hb-card);
+}

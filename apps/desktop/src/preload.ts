@@ -272,6 +272,7 @@ contextBridge.exposeInMainWorld("desktopBridge", {
     };
   },
   setMenuShortcuts: (shortcuts) => ipcRenderer.invoke(IPC.setMenuShortcuts, shortcuts),
+  setAttentionBadgeCount: (count) => ipcRenderer.send(IPC.setAttentionBadgeCount, count),
   onQuitConfirmationRequest: (listener) => {
     const wrappedListener = (_event: Electron.IpcRendererEvent, payload: unknown) => {
       const request = parseQuitConfirmationRequest(payload);

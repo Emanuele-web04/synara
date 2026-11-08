@@ -160,6 +160,30 @@ import type {
   ProjectThreadIndexEntry,
 } from "./projectAgent";
 import type {
+  Bot,
+  BotDelegation,
+  BotMergeProof,
+  BotSettings,
+  BotStreamEvent,
+  BotsCancelDelegationInput,
+  BotsCardActionInput,
+  BotsCardActionResult,
+  BotsCreateInput,
+  BotsEnsureMainInput,
+  BotsMergeInput,
+  BotsMergeProofInput,
+  BotsMergeResult,
+  BotsRemoveInput,
+  BotsSnapshot,
+  BotsStopAllInput,
+  BotsStopAllResult,
+  BotsSuggestInput,
+  BotsSuggestResult,
+  BotsUpdateBranchInput,
+  BotsUpdateInput,
+  BotsUpdateSettingsInput,
+} from "./bots";
+import type {
   GitCheckoutInput,
   GitActionProgressEvent,
   GitWorktreeSetupProgressEvent,
@@ -1165,6 +1189,12 @@ export interface DesktopBridge {
    * builds that predate it; until a window reports, the menu keeps its defaults.
    */
   setMenuShortcuts?: (shortcuts: DesktopMenuShortcuts) => Promise<void>;
+  /**
+   * Items waiting on the user outside notifications (SynBot's bots that need the user, Beta
+   * only), added to the Dock badge's count of unread background notifications. Absent on
+   * builds that predate it.
+   */
+  setAttentionBadgeCount?: (count: number) => void;
   onQuitConfirmationRequest: (
     listener: (request: DesktopQuitConfirmationRequest) => void,
   ) => () => void;
@@ -1672,6 +1702,23 @@ export interface NativeApi {
     subscribe: (input: { projectId: string }) => Promise<void>;
     unsubscribe: (input: { projectId: string }) => Promise<void>;
     onEvent: (callback: (event: ProjectAgentStreamEvent) => void) => () => void;
+  };
+  /** SynBot (Beta). Every call fails with "unavailable" on hosts without it. */
+  bots: {
+    list: () => Promise<BotsSnapshot>;
+    ensureMain: (input: BotsEnsureMainInput) => Promise<Bot>;
+    create: (input: BotsCreateInput) => Promise<Bot>;
+    update: (input: BotsUpdateInput) => Promise<Bot>;
+    remove: (input: BotsRemoveInput) => Promise<void>;
+    updateSettings: (input: BotsUpdateSettingsInput) => Promise<BotSettings>;
+    cardAction: (input: BotsCardActionInput) => Promise<BotsCardActionResult>;
+    suggest: (input: BotsSuggestInput) => Promise<BotsSuggestResult>;
+    cancelDelegation: (input: BotsCancelDelegationInput) => Promise<BotDelegation>;
+    mergeProof: (input: BotsMergeProofInput) => Promise<BotMergeProof>;
+    merge: (input: BotsMergeInput) => Promise<BotsMergeResult>;
+    updateBranch: (input: BotsUpdateBranchInput) => Promise<BotMergeProof>;
+    stopAll: (input?: BotsStopAllInput) => Promise<BotsStopAllResult>;
+    onEvent: (callback: (event: BotStreamEvent) => void) => () => void;
   };
   automation: {
     list: (input?: AutomationListInput) => Promise<AutomationListResult>;

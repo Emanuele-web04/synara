@@ -67,6 +67,9 @@ import { TodoServiceLive } from "./todo/Layers/TodoService";
 import { ProjectAgentRepositoryLive } from "./persistence/Layers/ProjectAgentRepository";
 import { ProjectAgentReactorLive } from "./projectAgent/Layers/ProjectAgentReactor";
 import { ProjectAgentServiceLive } from "./projectAgent/Layers/ProjectAgentService";
+import { BotReactorLive } from "./bots/Layers/BotReactor";
+import { BotServiceLive } from "./bots/Layers/BotService";
+import { BotRepositoryLive } from "./persistence/Layers/BotRepository";
 import { ProjectPullRequestPinsLive } from "./persistence/Layers/ProjectPullRequestPins";
 import { ProjectionTurnRepositoryLive } from "./persistence/Layers/ProjectionTurns";
 import { OrchestrationEventDeliveryRepositoryLive } from "./persistence/Layers/OrchestrationEventDeliveries";
@@ -155,6 +158,29 @@ export function makeServerRuntimeServicesLayer(
     Layer.provideMerge(serverSettingsLayer),
     Layer.provideMerge(providerHealthLayer),
   );
+  // The inbox owns the repository inventory, GitHub read queue, and snapshots; the pull request
+  // service shares them so detail reads and mutations stay consistent with the list.
+  const githubInboxServiceLayer = GitHubInboxServiceLive.pipe(
+    Layer.provideMerge(GitLayerLive),
+    Layer.provideMerge(ProjectPullRequestPinsLive),
+    Layer.provideMerge(OrchestrationLayerLive),
+    Layer.provideMerge(ServerSettingsLive),
+  );
+  const pullRequestServiceLayer = PullRequestServiceLive.pipe(
+    Layer.provideMerge(githubInboxServiceLayer),
+  );
+  // SynBot (Beta): bots on top of Hubs. The reactor, the gateway and the RPCs share this layer.
+  const botServiceLayer = BotServiceLive.pipe(
+    Layer.provideMerge(BotRepositoryLive),
+    Layer.provideMerge(projectAgentServiceLayer),
+    Layer.provideMerge(HubWorkRepositoryLive),
+    Layer.provideMerge(ProjectAgentRepositoryLive),
+    Layer.provideMerge(pullRequestServiceLayer),
+    Layer.provideMerge(GitCoreLive),
+    Layer.provideMerge(runtimeServicesLayer),
+    Layer.provideMerge(serverSettingsLayer),
+    Layer.provideMerge(providerHealthLayer),
+  );
   const providerCommandReactorLayer = ProviderCommandReactorLive.pipe(
     Layer.provideMerge(runtimeServicesLayer),
     Layer.provideMerge(providerHealthLayer),
@@ -165,6 +191,7 @@ export function makeServerRuntimeServicesLayer(
     Layer.provideMerge(serverSettingsLayer),
     Layer.provideMerge(AgentGatewayOperationRepositoryLive),
     Layer.provideMerge(projectAgentServiceLayer),
+    Layer.provideMerge(botServiceLayer),
     // Persistence-level only: the reactor must recognize coordinator threads to
     // pre-approve Synara group tools — the same first lookup the project agent
     // service's principal resolver performs, without going through the service.
@@ -240,6 +267,10 @@ export function makeServerRuntimeServicesLayer(
     Layer.provideMerge(projectAgentServiceLayer),
     Layer.provideMerge(runtimeServicesLayer),
   );
+  const botReactorLayer = BotReactorLive.pipe(
+    Layer.provideMerge(botServiceLayer),
+    Layer.provideMerge(runtimeServicesLayer),
+  );
   const externalMcpServiceLayer = ExternalMcpServiceLive.pipe(
     Layer.provideMerge(ExternalMcpRepositoryLive),
     Layer.provideMerge(runtimeServicesLayer),
@@ -282,7 +313,8 @@ export function makeServerRuntimeServicesLayer(
     ),
     Layer.provideMerge(agentGatewayCredentialsLayer),
     Layer.provideMerge(automationServiceLayer),
-    Layer.provideMerge(projectAgentServiceLayer),
+    // Hubs and SynBot (pipe arity is capped at 20, so they share one slot).
+    Layer.provideMerge(Layer.mergeAll(projectAgentServiceLayer, botServiceLayer)),
     Layer.provideMerge(runtimeServicesLayer),
     Layer.provideMerge(GitLayerLive),
     Layer.provideMerge(ProjectionTurnRepositoryLive),
@@ -297,17 +329,6 @@ export function makeServerRuntimeServicesLayer(
     // resolves the service on every platform to make that decision.
     Layer.provideMerge(DeviceServiceLive),
     Layer.provideMerge(ComputerServiceLive),
-  );
-  // The inbox owns the repository inventory, GitHub read queue, and snapshots; the pull request
-  // service shares them so detail reads and mutations stay consistent with the list.
-  const githubInboxServiceLayer = GitHubInboxServiceLive.pipe(
-    Layer.provideMerge(GitLayerLive),
-    Layer.provideMerge(ProjectPullRequestPinsLive),
-    Layer.provideMerge(OrchestrationLayerLive),
-    Layer.provideMerge(ServerSettingsLive),
-  );
-  const pullRequestServiceLayer = PullRequestServiceLive.pipe(
-    Layer.provideMerge(githubInboxServiceLayer),
   );
   const pullRequestAutoFixLayer = PullRequestAutoFixServiceLive.pipe(
     Layer.provideMerge(PullRequestAutoFixRepositoryLive),
@@ -330,6 +351,7 @@ export function makeServerRuntimeServicesLayer(
     ProjectAgentRepositoryLive,
     projectAgentServiceLayer,
     projectAgentReactorLayer,
+    Layer.mergeAll(BotRepositoryLive, botServiceLayer, botReactorLayer),
     managedAttachmentCleanupLayer,
     AutomationRepositoryLive,
     AgentGatewayOperationRepositoryLive,

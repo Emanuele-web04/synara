@@ -300,6 +300,10 @@ export interface ProjectAgentServiceShape {
   readonly streamEvents: (
     input: ProjectAgentSubscribeInput,
   ) => Stream.Stream<ProjectAgentStreamEvent, ProjectAgentServiceError>;
+  /** Work-item updates of every Hub, for in-process consumers such as SynBot. */
+  readonly streamWorkItemEvents: () => Stream.Stream<
+    Extract<ProjectAgentStreamEvent, { readonly type: "work-item-upserted" }>
+  >;
 }
 
 export class ProjectAgentService extends ServiceMap.Service<

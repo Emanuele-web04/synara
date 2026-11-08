@@ -148,23 +148,29 @@ export function makeAgentGatewayMcpTransport(input: {
           );
         case "ping":
           return jsonRpcResult(request.id, {});
-        case "tools/list":
+        case "tools/list": {
+          const capable = filterToolsByCapability(input.tools, context.callerCapabilities)
+            // Discovery-only tools stay callable by exact name — toolsByName
+            // is built from the unfiltered catalog — but do not advertise.
+            .filter((tool) => tool.discoveryOnly !== true);
+          const advertised = yield* Effect.filter(capable, (tool) =>
+            tool.advertisedTo
+              ? tool.advertisedTo(context).pipe(Effect.orElseSucceed(() => false))
+              : Effect.succeed(true),
+          );
           return jsonRpcResult(request.id, {
-            tools: filterToolsByCapability(input.tools, context.callerCapabilities)
-              // Discovery-only tools stay callable by exact name — toolsByName
-              // is built from the unfiltered catalog — but do not advertise.
-              .filter((tool) => tool.discoveryOnly !== true)
-              .map(
-                (tool) =>
-                  servedDefinitionByToolName.get(tool.definition.name) ?? {
-                    ...tool.definition,
-                    inputSchema: sanitizeToolInputSchema(tool.definition.inputSchema) as Record<
-                      string,
-                      unknown
-                    >,
-                  },
-              ),
+            tools: advertised.map(
+              (tool) =>
+                servedDefinitionByToolName.get(tool.definition.name) ?? {
+                  ...tool.definition,
+                  inputSchema: sanitizeToolInputSchema(tool.definition.inputSchema) as Record<
+                    string,
+                    unknown
+                  >,
+                },
+            ),
           });
+        }
         case "tools/call": {
           const toolName = request.params.name;
           if (typeof toolName !== "string") {

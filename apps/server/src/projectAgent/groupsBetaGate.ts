@@ -98,5 +98,6 @@ export function gateProjectAgentServiceForStable(
     assertCallerMayDriveManagedThread: () => Effect.void,
     onProjectDeleted: service.onProjectDeleted,
     streamEvents: () => Stream.empty,
+    streamWorkItemEvents: () => Stream.empty,
   };
 }

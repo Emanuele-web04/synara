@@ -13,6 +13,7 @@ import {
   MCP_CONNECTORS_BETA_FEATURE,
   NATIVE_EDITOR_BETA_FEATURE,
   PULL_REQUEST_AUTO_FIX_BETA_FEATURE,
+  SYNBOT_BETA_FEATURE,
 } from "@synara/shared/betaFeatures";
 import { PROVIDER_DESCRIPTORS } from "@synara/shared/providerMetadata";
 
@@ -34,6 +35,15 @@ export const isBetaFeatureOn = (feature: string): boolean =>
  * server APIs, background work, and whether saved hub folders act as containers.
  */
 export const GROUPS_ON = isBetaFeatureOn(GROUPS_BETA_FEATURE);
+
+/**
+ * SynBot is Beta-only. Bots run on the Hubs engine, so GROUPS_ON stays true underneath;
+ * where SynBot is on, the Hubs UI is hidden (HUBS_UI_ON) and SynBot takes its place.
+ */
+export const SYNBOT_ON = isBetaFeatureOn(SYNBOT_BETA_FEATURE);
+
+/** The Hubs UI (sidebar section, /hubs, the Hubs panel). Stable only once SynBot exists. */
+export const HUBS_UI_ON = GROUPS_ON && !SYNBOT_ON;
 
 /**
  * Inbox is available in Stable and Beta. Tasks within it retain their separate gate.

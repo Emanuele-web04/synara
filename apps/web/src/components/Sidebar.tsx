@@ -346,7 +346,10 @@ import { RenameThreadDialog } from "./RenameThreadDialog";
 import { SnoozeUntilDialog } from "./SnoozeUntilDialog";
 import { SNOOZE_PRESETS } from "../lib/threadSnooze";
 import ReleaseHistoryDialog from "./ReleaseHistoryDialog";
-import { GROUPS_ON, INBOX_ON, isBetaFeatureOn } from "../betaFeatures";
+import { GROUPS_ON, HUBS_UI_ON, INBOX_ON, SYNBOT_ON, isBetaFeatureOn } from "../betaFeatures";
+import { startSynbotLiveSync, useSynbotStore } from "../synbot/synbotStore";
+import { SynbotSidebar } from "./synbot/shell/SynbotSidebar";
+import { synbotNeedsYouCount } from "../synbot/synbotState.logic";
 import { WHATS_NEW_ENTRIES } from "../whatsNew/entries";
 import { sortEntriesByVersionDesc } from "../whatsNew/logic";
 import { SidebarSearchPalette, type SidebarSearchPaletteMode } from "./SidebarSearchPalette";
@@ -1443,6 +1446,13 @@ export default function Sidebar() {
   const isOnAutomations = workspaceSurfacePath.startsWith("/automations");
   const isOnPullRequests = workspaceSurfacePath.startsWith("/pull-requests");
   const isOnInbox = workspaceSurfacePath.startsWith("/inbox");
+  const isOnSynbot = workspaceSurfacePath.startsWith("/synbot");
+  // SynBot's rail badge: bots waiting on the user.
+  const synbotNeedsYou = useSynbotStore((store) => synbotNeedsYouCount(store.data));
+  useEffect(() => {
+    // The rail badge follows bots across the app, not only on the SynBot page.
+    if (SYNBOT_ON) startSynbotLiveSync();
+  }, []);
   // Lightweight read of automations to drive the sidebar count badge. Shares the
   // ["automations"] query cache with the Automations route (and its live stream updates).
   const automationListQuery = useAutomationList();
@@ -1496,7 +1506,8 @@ export default function Sidebar() {
   // Projects is always available; Groups and the standalone Chats footer can be hidden
   // independently from Settings.
   const chatsSectionVisible = appSettings.showChatsSection;
-  const groupsSectionVisible = GROUPS_ON && appSettings.showGroupsSection;
+  // Where SynBot ships (Beta) it replaces the Hubs UI; Hubs keep running underneath bots.
+  const groupsSectionVisible = HUBS_UI_ON && appSettings.showGroupsSection;
   const { handleNewThread } = useHandleNewThread();
   const { handleNewChat } = useHandleNewChat();
   const { handleNewGroupChat } = useHandleNewGroupChat();
@@ -3620,7 +3631,7 @@ export default function Sidebar() {
       // Group actions only make sense for threads in ordinary (non-group)
       // projects; group threads, workers included, already belong to a group.
       const canUseHubActions =
-        GROUPS_ON &&
+        HUBS_UI_ON &&
         !mayBelongToGroup({
           threadId,
           projectId: thread.projectId,
@@ -5482,6 +5493,8 @@ export default function Sidebar() {
   );
 
   const showRailAutomationsPanel = isOnAutomations;
+  // SynBot owns the panel on its page: the bot list replaces the threads.
+  const showRailSynbotPanel = isOnSynbot;
   const showRailSpacesPanel =
     railPanelView === "spaces" && !isOnGroups && !isOnSettings && !activityViewEnabled;
   const workspaceProjectThreadData = useMemo(
@@ -5530,7 +5543,7 @@ export default function Sidebar() {
         { threadId, session },
       );
     };
-    if (isOnSettings || showRailAutomationsPanel) return rows;
+    if (isOnSettings || showRailAutomationsPanel || showRailSynbotPanel) return rows;
     if (activityViewEnabled && !isOnGroups) {
       const localActivityThreadIds = new Set(
         activityNonGroupSidebarThreads.map((thread) => thread.id),
@@ -5592,6 +5605,7 @@ export default function Sidebar() {
     classicSnoozedVisibleThreadIds,
     isOnSettings,
     showRailAutomationsPanel,
+    showRailSynbotPanel,
     activityViewEnabled,
     isOnGroups,
     activityVisibleThreadIds,
@@ -7545,7 +7559,8 @@ export default function Sidebar() {
     !isOnTasks &&
     !isOnPullRequests &&
     !isOnAutomations &&
-    !isOnInbox;
+    !isOnInbox &&
+    !isOnSynbot;
   const sidebarHelpMenuProps = {
     onOpenShortcuts: () => void navigate({ to: "/settings", search: { section: "shortcuts" } }),
     onOpenFeedback: () => openFeedbackDialog(),
@@ -7609,6 +7624,23 @@ export default function Sidebar() {
         onSelect: () => openRailStudio?.(),
       };
     }
+    if (id === "synbot") {
+      return {
+        ...base,
+        badge:
+          synbotNeedsYou > 0
+            ? {
+                text: String(synbotNeedsYou),
+                accessibleLabel: t("synbot:railBadge", { count: synbotNeedsYou }),
+              }
+            : null,
+        active: railActiveItem === "synbot",
+        onSelect: () => {
+          selectRailRouteItem("synbot");
+          void navigate({ to: "/synbot" });
+        },
+      };
+    }
     const item = sidebarNavDescriptors[id];
     return {
       ...base,
@@ -7622,7 +7654,11 @@ export default function Sidebar() {
       onFocus: item.onFocus,
     };
   };
-  const railAvailability = { studioAvailable: openRailStudio !== null, inboxAvailable };
+  const railAvailability = {
+    studioAvailable: openRailStudio !== null,
+    inboxAvailable,
+    synbotAvailable: SYNBOT_ON,
+  };
   const railVisibleItemIds = buildRailItemOrder({
     order: railItemOrder,
     hidden: hiddenRailItems,
@@ -7631,7 +7667,7 @@ export default function Sidebar() {
   });
   const railItems: AppRailItem[] = railVisibleItemIds.map(railItemFor);
   const searchPaletteNavigationActions: SidebarSearchAction[] = (
-    ["inbox", "kanban", "studio", "automations"] as const
+    ["inbox", "synbot", "kanban", "studio", "automations"] as const
   )
     .filter((id) => isRailItemAvailable(id, railAvailability))
     .map((id) => {
@@ -7941,6 +7977,8 @@ export default function Sidebar() {
                 createOpen={automationCreateOpen}
                 onCreateOpenChange={setAutomationCreateOpen}
               />
+            ) : showRailSynbotPanel ? (
+              <SynbotSidebar />
             ) : (
               <>
                 <div
@@ -8225,6 +8263,7 @@ export default function Sidebar() {
             !activityViewEnabled &&
             !showRailSpacesPanel &&
             !showRailAutomationsPanel &&
+            !showRailSynbotPanel &&
             snoozedSidebarThreads.length > 0 ? (
               <SidebarGroup className="px-1.5 pt-1 pb-2">
                 <SidebarSnoozedThreadsSection
@@ -8239,6 +8278,7 @@ export default function Sidebar() {
             !activityViewEnabled &&
             !showRailSpacesPanel &&
             !showRailAutomationsPanel &&
+            !showRailSynbotPanel &&
             chatsSectionVisible ? (
               // sidebar-surface-enter: mounts on the Groups -> Projects switch, so it
               // animates in step with the keyed surface wrapper above.

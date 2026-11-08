@@ -328,6 +328,13 @@ export interface GitHubCliShape {
     readonly mergeMethod?: PullRequestMergeMethod;
   }) => Effect.Effect<{ readonly mergeOutcome: "merged" | "enqueued" | null }, GitHubCliError>;
 
+  /** Bring a pull request's branch up to date with its base (`gh pr update-branch`). */
+  readonly updatePullRequestBranch: (input: {
+    readonly cwd: string;
+    readonly repository: string;
+    readonly number: number;
+  }) => Effect.Effect<void, GitHubCliError>;
+
   /**
    * Post an issue comment on a pull request as the authenticated gh user.
    */

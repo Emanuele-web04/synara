@@ -13,6 +13,7 @@ import {
   resolveDesktopPhysicalZoomAction,
   resolveDesktopZoomShortcutAction,
   resolveKeyboardShortcutsMenuAccelerator,
+  resolveSynbotMenuAccelerator,
   shouldUseNativeZoomMenuRoles,
 } from "./menuShortcuts";
 
@@ -252,6 +253,17 @@ describe("resolveKeyboardShortcutsMenuAccelerator", () => {
   it("does not assign a global shortcuts help accelerator outside macOS", () => {
     expect(resolveKeyboardShortcutsMenuAccelerator("win32")).toBeUndefined();
     expect(resolveKeyboardShortcutsMenuAccelerator("linux")).toBeUndefined();
+  });
+});
+
+describe("resolveSynbotMenuAccelerator", () => {
+  it("opens SynBot with Cmd+Option+B on macOS", () => {
+    expect(resolveSynbotMenuAccelerator("darwin")).toBe("Cmd+Alt+B");
+  });
+
+  it("assigns none where Ctrl+Alt is AltGr (Windows) or menus carry no accelerators (Linux)", () => {
+    expect(resolveSynbotMenuAccelerator("win32")).toBeUndefined();
+    expect(resolveSynbotMenuAccelerator("linux")).toBeUndefined();
   });
 });
 

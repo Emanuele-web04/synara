@@ -9,6 +9,9 @@ other non-code work.
 
 > **Stable and Beta.** Hubs are available in Synara 1.0.2 Stable and Synara Beta.
 > Each app keeps its own Hubs, chats, settings, and data home; Beta data is not copied back to Stable.
+>
+> **Synara Beta:** [SynBot](synbot.md) replaces the Hubs UI. Bots are built on Hubs; Hubs that are
+> not bots are paused and hidden the first time SynBot starts, and nothing is deleted.
 
 > **Compatibility:** Existing hubs keep their files and saved settings. The on-disk parent folder
 > remains `~/Documents/Synara/Groups/`; the stored feature key and API identifiers retain `groups`.

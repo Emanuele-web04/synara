@@ -129,6 +129,7 @@ import {
 } from "./ui/menu";
 import { REPO_DIFF_SCOPE_LABELS, resolveRepoDiffScopeLabel } from "../repoDiffScopeStore";
 import { PanelStateMessage } from "./chat/PanelStateMessage";
+import { CountBadge } from "./ui/count-badge";
 import { type SplitViewPanePanelState } from "../splitViewStore";
 import { formatShortTimestamp } from "../timestampFormat";
 import type { TurnDiffSummary } from "../types";
@@ -136,17 +137,6 @@ import { useTranslation } from "~/i18n";
 
 const EDITOR_DIFF_OPTIONS_MENU_ICON_CLASS_NAME = "size-3.5 shrink-0 text-muted-foreground";
 const EMPTY_KEYBINDINGS: ResolvedKeybindingsConfig = [];
-
-function EditorDiffOptionsCountBadge(props: { count: number | undefined }) {
-  if (typeof props.count !== "number" || props.count <= 0) {
-    return null;
-  }
-  return (
-    <span className="ml-auto rounded-full bg-muted px-1.5 text-ui-xs font-medium text-muted-foreground tabular-nums">
-      {props.count}
-    </span>
-  );
-}
 
 function EditorDiffOptionsMenu(props: {
   scopePickerValue: string | null;
@@ -231,7 +221,7 @@ function EditorDiffOptionsMenu(props: {
             {DIFF_PANEL_PICKER_SCOPE_OPTIONS.map((scope) => (
               <MenuRadioItem key={scope} value={scope}>
                 <span className="min-w-0 flex-1 truncate">{REPO_DIFF_SCOPE_LABELS[scope]}</span>
-                <EditorDiffOptionsCountBadge count={props.scopeFileCounts[scope]} />
+                <CountBadge count={props.scopeFileCounts[scope]} className="ml-auto" />
               </MenuRadioItem>
             ))}
             <MenuRadioItem value="allTurns">

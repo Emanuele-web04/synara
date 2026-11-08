@@ -173,6 +173,9 @@ export default defineConfig({
       "@pierre/diffs",
       "@pierre/diffs/react",
       "@pierre/diffs/worker/worker.js",
+      // SynBot's liquid metal: bundled up front, so its first visit does not re-optimize
+      // mid-session and load a second copy of React.
+      "@paper-design/shaders-react",
       "react-icons/gr",
     ],
   },
