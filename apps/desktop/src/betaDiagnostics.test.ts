@@ -667,6 +667,105 @@ describe("BetaDiagnostics", () => {
     expect(existsSync(queuePath)).toBe(false);
   });
 
+  it("aborts revoked uploads and keeps a re-enabled queue independent of late receipts", async () => {
+    const root = makeRoot();
+    let sharing = true;
+    const diagnostics = new BetaDiagnostics({
+      homeDir: root,
+      appVersion: "1.0.6-remote.17",
+      platform: "linux",
+      arch: "x64",
+      env: {},
+      flavor: "remote",
+      isEnabled: () => sharing,
+    });
+    const requests: Array<{ signal: AbortSignal; resolve: (response: Response) => void }> = [];
+    const fetchMock = vi.fn(
+      (_url: unknown, init: RequestInit) =>
+        new Promise<Response>((resolve) => {
+          requests.push({ signal: init.signal as AbortSignal, resolve });
+        }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    try {
+      diagnostics.track("app.start", { kind: "lifecycle" });
+      const revoked = diagnostics.flush();
+      expect(requests).toHaveLength(1);
+      sharing = false;
+      diagnostics.discardQueue();
+      expect(requests[0]!.signal.aborted).toBe(true);
+      sharing = true;
+      diagnostics.resumeSharing();
+      diagnostics.track("app.exit", { kind: "lifecycle" });
+      const current = diagnostics.flush();
+      expect(requests).toHaveLength(2);
+      // A transport may settle after abort; it no longer owns this queue.
+      requests[0]!.resolve(new Response(null, { status: 200 }));
+      await revoked;
+      diagnostics.track("app.start", { kind: "lifecycle" });
+      await diagnostics.flush();
+      expect(requests).toHaveLength(2);
+      requests[1]!.resolve(new Response(null, { status: 200 }));
+      await current;
+      expect(readQueue(root).map((record) => record.event)).toEqual(["app.start"]);
+      const final = diagnostics.flush();
+      requests[2]!.resolve(new Response(null, { status: 200 }));
+      await final;
+      expect(readQueue(root)).toEqual([]);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("sanitizes offline legacy usage records again before sending them after restart", async () => {
+    const received: string[] = [];
+    const server = createServer((req, res) => {
+      let body = "";
+      req.on("data", (chunk) => (body += chunk));
+      req.on("end", () => {
+        received.push(body);
+        res.writeHead(200).end();
+      });
+    });
+    servers.push(server);
+    const port = await listen(server);
+    const root = makeRoot();
+    const diagnostics = makeDiagnostics(root, `http://127.0.0.1:${port}`);
+    diagnostics.track("usage.daily", {
+      kind: "usage",
+      providers: [],
+      projects: 1,
+      activeThreads: 1,
+    });
+    const queuePath = join(root, "diagnostics", "events.jsonl");
+    const legacy = JSON.parse(readFileSync(queuePath, "utf8"));
+    legacy.privateEnvelope = "privateCustomer";
+    legacy.payload.providers = [{ provider: "privateProvider", threads: 1, turns: 1 }];
+    legacy.payload.turnBreakdown = [
+      {
+        provider: "claudeAgent",
+        model: "claude-opus-42-7",
+        effort: "privateEffort",
+        interactionMode: "plan",
+        runtimeMode: "full-access",
+        origin: "user",
+        outcome: "succeeded",
+        turns: 1,
+      },
+    ];
+    writeFileSync(queuePath, `${JSON.stringify(legacy)}\n`);
+    await makeDiagnostics(root, `http://127.0.0.1:${port}`).flush();
+    expect(received).toHaveLength(1);
+    expect(received[0]).not.toMatch(
+      /privateCustomer|privateProvider|privateEffort|claude-opus-42-7/,
+    );
+    expect(JSON.parse(received[0]!).payload).toMatchObject({
+      providers: [],
+      turnBreakdown: [{ provider: "claudeAgent", model: "other", effort: "other" }],
+    });
+    expect(readQueue(root)).toEqual([]);
+  });
+
   it("dispose waits for an in-flight flush, then sends what queued meanwhile", async () => {
     const received: string[] = [];
     let firstRequest = true;
@@ -800,6 +899,15 @@ describe("BetaDiagnostics", () => {
         turnBreakdown: [
           row,
           { ...row, model: "a model with spaces" },
+          {
+            ...row,
+            provider: "privateClient",
+            model: "claude-opus-42-7",
+            effort: "privateEffort",
+            interactionMode: "privateMode",
+            runtimeMode: "privatePermission",
+            origin: "privateOrigin",
+          },
           { ...row, outcome: "running" },
           { ...row, secret: "dropped" },
         ],
@@ -808,7 +916,20 @@ describe("BetaDiagnostics", () => {
     diag.maybeTrackDailyUsage();
     const [event] = readQueue(root).filter((e) => e.event === "usage.daily");
     expect(event.flavor).toBe("remote");
-    expect(event.payload.turnBreakdown).toEqual([row, row]);
+    expect(event.payload.turnBreakdown).toEqual([
+      row,
+      { ...row, model: "other" },
+      {
+        ...row,
+        provider: "other",
+        model: "other",
+        effort: "other",
+        interactionMode: "other",
+        runtimeMode: "other",
+        origin: "other",
+      },
+      row,
+    ]);
   });
 
   it("maybeTrackDailyUsage sends once per UTC day and records the day", () => {
@@ -1100,6 +1221,18 @@ describe("Remote diagnostics", () => {
     expect(diagnostics.isCollecting()).toBe(false);
     diagnostics.track("app.start", { kind: "lifecycle" });
     diagnostics.trackError("main", new Error("boom"));
+    expect(existsSync(queuePath)).toBe(false);
+    // A saved off choice must discard a queue left by a previous interrupted process.
+    writeFileSync(queuePath, "old queued diagnostics\n");
+    const restoredOff = new BetaDiagnostics({
+      homeDir: root,
+      appVersion: "1.0.6-remote.18",
+      platform: "linux",
+      arch: "x64",
+      flavor: "remote",
+      isEnabled: () => false,
+    });
+    expect(restoredOff.isCollecting()).toBe(false);
     expect(existsSync(queuePath)).toBe(false);
   });
 });

@@ -1,3 +1,5 @@
+// Integration boundary: synthetic requests, SQLite-backed D1, migrations and retention.
+// No network, credentials or production data are used.
 import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -66,6 +68,15 @@ class SQLiteD1 {
   }
 }
 
+// Run the real ordered SQL migrations, optionally stopping at a deployed schema.
+function applyMigrations(database, through = "9999") {
+  const files = readdirSync(new URL("./migrations/", import.meta.url))
+    .filter((name) => /^\d{4}_.*\.sql$/.test(name) && name.slice(0, 4) <= through)
+    .sort();
+  for (const name of files)
+    database.exec(readFileSync(new URL(`./migrations/${name}`, import.meta.url), "utf8"));
+}
+
 describe("analytics ingest and D1 storage", () => {
   let db;
   let env;
@@ -74,12 +85,7 @@ describe("analytics ingest and D1 storage", () => {
 
   beforeEach(() => {
     db = new SQLiteD1();
-    const migrationFiles = readdirSync(new URL("./migrations/", import.meta.url))
-      .filter((name) => name.endsWith(".sql"))
-      .sort();
-    for (const name of migrationFiles) {
-      db.database.exec(readFileSync(new URL(`./migrations/${name}`, import.meta.url), "utf8"));
-    }
+    applyMigrations(db.database);
     env = { DB: db, DASHBOARD_SESSION_KEY: "test-session-key" };
     now = Date.now();
     day = new Date(now).toISOString().slice(0, 10);
@@ -112,6 +118,257 @@ describe("analytics ingest and D1 storage", () => {
       }),
       env,
     );
+
+  it("upgrades the legacy D1 schema by removing account linkage and preserving product fields", () => {
+    const legacy = new SQLiteD1();
+    try {
+      applyMigrations(legacy.database, "0006");
+      legacy.database
+        .prepare(`INSERT INTO product_events (
+        event_id, ts, received_at, install_id, account_hash, channel, surface, platform, app_version,
+        event, outcome, feature, mode, provider, reason, command, duration_ms, input_tokens, output_tokens, cached_input_tokens
+      ) VALUES ('synthetic-event', ?, ?, 'synthetic-install', ?, 'remote', 'desktop', 'darwin', '1.2.3',
+        'command.used', 'failed', 'chat', 'remote', 'codex', 'timeout', 'slash:plan', 9, 11, 12, 13)`)
+        .run(new Date(now).toISOString(), new Date(now).toISOString(), "f".repeat(32));
+      const { account_hash, ...preserved } = legacy.database
+        .prepare("SELECT * FROM product_events")
+        .get();
+      expect(account_hash).toBe("f".repeat(32));
+      legacy.database.exec(
+        readFileSync(
+          new URL("./migrations/0007_installation_privacy.sql", import.meta.url),
+          "utf8",
+        ),
+      );
+      expect(legacy.database.prepare("SELECT * FROM product_events").get()).toEqual(preserved);
+      expect(
+        legacy.database
+          .prepare("PRAGMA table_info(product_events)")
+          .all()
+          .map((column) => column.name),
+      ).not.toContain("account_hash");
+      // Existing rows still participate in the installation-only aggregates.
+      expect(
+        legacy.database
+          .prepare("SELECT COUNT(DISTINCT install_id) AS installations FROM product_events")
+          .get(),
+      ).toEqual({ installations: 1 });
+    } finally {
+      legacy.close();
+    }
+  });
+
+  it("sanitizes historical categories before migration and preserves their aggregates after migration", async () => {
+    const legacy = new SQLiteD1();
+    try {
+      applyMigrations(legacy.database, "0006");
+      const at = new Date(now).toISOString();
+      const installId = "00000000-0000-4000-8000-0000000000f1";
+      const eventId = Number(
+        legacy.database
+          .prepare(`INSERT INTO events
+        (ts, received_at, install_id, app_version, platform, arch, event, kind, flavor)
+        VALUES (?, ?, ?, '1.2.3', 'darwin', 'arm64', 'usage.daily', 'usage', 'beta')`)
+          .run(at, at, installId).lastInsertRowid,
+      );
+      for (const [provider, turns] of [
+        ["codex", 2],
+        ["other", 7],
+        ["privateProviderA", 3],
+        ["privateProviderB", 5],
+      ]) {
+        legacy.database
+          .prepare(`INSERT INTO usage_providers
+          (event_id, install_id, day, app_version, platform, provider, threads, turns, turns_failed, received_at)
+          VALUES (?, ?, ?, '1.2.3', 'darwin', ?, 1, ?, 1, ?)`)
+          .run(eventId, installId, day, provider, turns, at);
+      }
+      for (const [provider, model, effort, interaction, runtime, origin, outcome, turns] of [
+        ["claudeAgent", "claude-fable-5-1", "high", "plan", "full-access", "user", "succeeded", 2],
+        [
+          "privateProviderA",
+          "privateModelA",
+          "privateEffort",
+          "privateMode",
+          "privateRuntime",
+          "privateOrigin",
+          "failed",
+          3,
+        ],
+        [
+          "privateProviderB",
+          "privateModelB",
+          "privateEffort",
+          "privateMode",
+          "privateRuntime",
+          "privateOrigin",
+          "cancelled",
+          5,
+        ],
+        // A catalog model is safe only for its own provider.
+        ["codex", "claude-fable-5-1", "high", "plan", "full-access", "user", "succeeded", 1],
+      ]) {
+        legacy.database
+          .prepare(`INSERT INTO usage_turns
+          (event_id, install_id, day, app_version, platform, flavor, provider, model, effort,
+           interaction_mode, runtime_mode, origin, outcome, turns, duration_ms, duration_samples,
+           input_tokens, output_tokens, cached_input_tokens, token_samples, received_at)
+          VALUES (?, ?, ?, '1.2.3', 'darwin', 'beta', ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, 1, ?)`)
+          .run(
+            eventId,
+            installId,
+            day,
+            provider,
+            model,
+            effort,
+            interaction,
+            runtime,
+            origin,
+            outcome,
+            turns,
+            turns * 1000,
+            turns * 10,
+            turns * 2,
+            turns,
+            at,
+          );
+      }
+      for (const [index, command] of [
+        "slash:plan",
+        "slash:privateCustomerA",
+        "slash:privateCustomerB",
+        "shortcut:privateCustomer",
+      ].entries()) {
+        legacy.database
+          .prepare(`INSERT INTO product_events
+          (event_id, ts, received_at, install_id, channel, surface, platform, app_version, event, outcome, command)
+          VALUES (?, ?, ?, ?, 'beta', 'desktop', 'darwin', '1.2.3', 'command.used', 'succeeded', ?)`)
+          .run(`legacy-command-${index}`, at, at, installId, command);
+      }
+      const totals = () => ({
+        product: legacy.database.prepare("SELECT COUNT(*) AS events FROM product_events").get(),
+        providers: legacy.database
+          .prepare(
+            "SELECT SUM(threads) AS threads, SUM(turns) AS turns, SUM(turns_failed) AS failed FROM usage_providers",
+          )
+          .get(),
+        turns: legacy.database
+          .prepare(`SELECT SUM(turns) AS turns, SUM(duration_ms) AS durationMs,
+          SUM(duration_samples) AS durationSamples, SUM(input_tokens) AS inputTokens,
+          SUM(output_tokens) AS outputTokens, SUM(cached_input_tokens) AS cachedInputTokens,
+          SUM(token_samples) AS tokenSamples FROM usage_turns`)
+          .get(),
+      });
+      const originalTotals = totals();
+      const token = await signSession("test-session-key", Math.floor(Date.now() / 1000) + 3600);
+      const read = async (path) => {
+        const response = await worker.fetch(
+          new Request(`https://worker.invalid${path}`, {
+            headers: { cookie: `synara_beta_dash=${token}` },
+          }),
+          { DB: legacy, DASHBOARD_SESSION_KEY: "test-session-key" },
+        );
+        expect(response.status).toBe(200);
+        return response.json();
+      };
+      const usagePath = "/api/usage?days=7&flavor=beta&version=1.2.3&platform=darwin";
+      const productPath = `/api/product?from=${day}&to=${day}&channel=beta&surface=desktop`;
+      const before = { usage: await read(usagePath), product: await read(productPath) };
+      expect(JSON.stringify(before)).not.toContain("private");
+      expect(before.usage.providers).toHaveLength(2);
+      expect(before.usage.providers).toContainEqual(
+        expect.objectContaining({ provider: "other", installs: 1, threads: 3, turns: 15 }),
+      );
+      expect(before.usage.turnBreakdown).toHaveLength(3);
+      expect(before.usage.turnBreakdown).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            provider: "claudeAgent",
+            model: "claude-fable-5-1",
+            effort: "high",
+            turns: 2,
+            installs: 1,
+          }),
+          expect.objectContaining({ provider: "codex", model: "other", turns: 1, installs: 1 }),
+          expect.objectContaining({
+            provider: "other",
+            model: "other",
+            effort: "other",
+            interactionMode: "other",
+            runtimeMode: "other",
+            origin: "other",
+            turns: 8,
+            failed: 3,
+            cancelled: 5,
+            installs: 1,
+            meanDurationMs: 4000,
+            meanInputTokens: 40,
+          }),
+        ]),
+      );
+      expect(before.product.commands).toEqual(
+        expect.arrayContaining([
+          { command: "slash:plan", events: 1, installations: 1 },
+          { command: "slash:custom", events: 2, installations: 1 },
+          { command: "shortcut:custom", events: 1, installations: 1 },
+        ]),
+      );
+      legacy.database.exec(
+        readFileSync(
+          new URL("./migrations/0007_installation_privacy.sql", import.meta.url),
+          "utf8",
+        ),
+      );
+      expect(totals()).toEqual(originalTotals);
+      expect({ usage: await read(usagePath), product: await read(productPath) }).toEqual(before);
+      const stored = ["usage_providers", "usage_turns", "product_events"].map((table) =>
+        legacy.database.prepare(`SELECT * FROM ${table}`).all(),
+      );
+      expect(JSON.stringify(stored)).not.toContain("private");
+      expect(
+        legacy.database
+          .prepare("SELECT provider, turns FROM usage_providers ORDER BY provider")
+          .all(),
+      ).toEqual([
+        { provider: "codex", turns: 2 },
+        { provider: "other", turns: 15 },
+      ]);
+    } finally {
+      legacy.close();
+    }
+  });
+
+  it("accepts events before and after the account-column migration", async () => {
+    const legacy = new SQLiteD1();
+    try {
+      applyMigrations(legacy.database, "0006");
+      const send = () =>
+        worker.fetch(
+          new Request("https://worker.invalid/v1/product-events", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ events: [envelope({ accountHash: "f".repeat(32) })] }),
+          }),
+          { DB: legacy },
+        );
+      expect(await (await send()).json()).toEqual({ accepted: 1, received: 1 });
+      expect(legacy.database.prepare("SELECT account_hash FROM product_events").get()).toEqual({
+        account_hash: null,
+      });
+      legacy.database.exec(
+        readFileSync(
+          new URL("./migrations/0007_installation_privacy.sql", import.meta.url),
+          "utf8",
+        ),
+      );
+      expect(await (await send()).json()).toEqual({ accepted: 1, received: 1 });
+      expect(legacy.database.prepare("SELECT COUNT(*) AS n FROM product_events").get()).toEqual({
+        n: 2,
+      });
+    } finally {
+      legacy.close();
+    }
+  });
 
   it("validates, strips unknown fields, deduplicates, and serves aggregate data behind dashboard auth", async () => {
     const stable = envelope({ privateValue: "must not persist" });
@@ -213,7 +470,7 @@ describe("analytics ingest and D1 storage", () => {
     });
   });
 
-  it("stores the Remote lane and reports active users, platforms and failure reasons", async () => {
+  it("stores the Remote lane and reports active installations, platforms and failure reasons", async () => {
     const remote = (patch) =>
       envelope({
         id: crypto.randomUUID(),
@@ -225,7 +482,7 @@ describe("analytics ingest and D1 storage", () => {
     const mac = "00000000-0000-4000-8000-0000000000a1";
     const phone = "00000000-0000-4000-8000-0000000000a2";
     const windows = "00000000-0000-4000-8000-0000000000a3";
-    // The Mac and the phone belong to one signed-in person.
+    // Legacy account fields never join the Mac and phone installations.
     const person = "0123456789abcdef0123456789abcdef";
     const response = await postEvents([
       remote({ installId: mac, accountHash: person, event: "app.active", outcome: "succeeded" }),
@@ -279,7 +536,7 @@ describe("analytics ingest and D1 storage", () => {
       remote({ installId: mac, event: "command.used", outcome: "succeeded" }),
       remote({ installId: mac, event: "app.open", outcome: "succeeded", command: "slash:plan" }),
     ]);
-    expect(await response.json()).toEqual({ accepted: 6, received: 12 });
+    expect(await response.json()).toEqual({ accepted: 7, received: 12 });
 
     const token = await signSession("test-session-key", Math.floor(Date.now() / 1000) + 3600);
     const dashboard = await worker.fetch(
@@ -296,12 +553,6 @@ describe("analytics ingest and D1 storage", () => {
       engagedDay: 2,
       engagedWeek: 2,
       engagedMonth: 2,
-      // The Mac and phone are one person, even for the Mac's event sent before
-      // sign-in; the Windows installation counts once more.
-      peopleDay: 2,
-      peopleWeek: 2,
-      peopleMonth: 2,
-      signedInMonth: 1,
     });
     expect(body.platforms).toEqual(
       expect.arrayContaining([
@@ -346,7 +597,7 @@ describe("analytics ingest and D1 storage", () => {
     );
   });
 
-  it("counts a person once after an installation switches accounts", async () => {
+  it("discards valid and malformed legacy account identifiers without linking installations", async () => {
     const desktop = "00000000-0000-4000-8000-0000000000d1";
     const phone = "00000000-0000-4000-8000-0000000000d2";
     const before = "f".repeat(32);
@@ -367,7 +618,12 @@ describe("analytics ingest and D1 storage", () => {
       event(desktop, before, 30),
       event(desktop, after, 10),
       event(phone, after, 5),
+      event(phone, { privateIdentity: "synthetic-account" }, 1),
     ]);
+    const stored = db.database.prepare("SELECT * FROM product_events").all();
+    expect(stored).toHaveLength(4);
+    expect(stored.every((row) => !("account_hash" in row))).toBe(true);
+    expect(JSON.stringify(stored)).not.toContain("synthetic-account");
     const token = await signSession("test-session-key", Math.floor(Date.now() / 1000) + 3600);
     const body = await worker
       .fetch(
@@ -377,7 +633,14 @@ describe("analytics ingest and D1 storage", () => {
         env,
       )
       .then((response) => response.json());
-    expect(body.activeUsers).toMatchObject({ day: 2, peopleDay: 1, signedInMonth: 1 });
+    expect(body.activeUsers).toEqual({
+      day: 2,
+      week: 2,
+      month: 2,
+      engagedDay: 0,
+      engagedWeek: 0,
+      engagedMonth: 0,
+    });
   });
 
   it("accepts Remote diagnostics and filters them apart from Beta", async () => {
@@ -570,17 +833,6 @@ describe("analytics ingest and D1 storage", () => {
             outcome: "failed",
             turns: 1,
           },
-          // Free text never passes the category check.
-          {
-            provider: "claudeAgent",
-            model: "My Secret Model",
-            effort: "high",
-            interactionMode: "plan",
-            runtimeMode: "full-access",
-            origin: "user",
-            outcome: "failed",
-            turns: 9,
-          },
         ],
       },
     };
@@ -625,6 +877,97 @@ describe("analytics ingest and D1 storage", () => {
     ]);
     expect(remote.turns).toBe(3);
     expect((await read("beta")).turnBreakdown).toEqual([]);
+  });
+
+  it("stores only finite usage categories from handcrafted requests", async () => {
+    const category = {
+      provider: "claudeAgent",
+      model: "claude-fable-5-1",
+      effort: "high",
+      interactionMode: "plan",
+      runtimeMode: "full-access",
+      origin: "user",
+      outcome: "succeeded",
+      turns: 1,
+    };
+    const privateValues = {
+      provider: "customerProject",
+      model: "claude-opus-42-7",
+      effort: "privateEffort",
+      interactionMode: "privateMode",
+      runtimeMode: "privatePermission",
+      origin: "privateOrigin",
+    };
+    const usage = {
+      v: 1,
+      id: crypto.randomUUID(),
+      ts: new Date(now).toISOString(),
+      installId: "00000000-0000-4000-8000-0000000000c1",
+      appVersion: "1.0.6-beta.1",
+      flavor: "beta",
+      platform: "darwin",
+      arch: "arm64",
+      event: "usage.daily",
+      payload: {
+        kind: "usage",
+        providers: [
+          { provider: "codex", threads: 1, turns: 1 },
+          { provider: "customerProject", threads: 1, turns: 1 },
+        ],
+        turnBreakdown: [
+          category,
+          ...Object.entries(privateValues).map(([key, value]) => ({ ...category, [key]: value })),
+        ],
+      },
+    };
+    const response = await worker.fetch(
+      new Request("https://worker.invalid/v1/events", {
+        method: "POST",
+        headers: { "content-type": "application/x-ndjson" },
+        body: JSON.stringify(usage),
+      }),
+      env,
+    );
+    expect(response.status).toBeLessThan(300);
+    const turns = db.database
+      .prepare(
+        "SELECT provider, model, effort, interaction_mode, runtime_mode, origin FROM usage_turns",
+      )
+      .all();
+    expect(turns).toHaveLength(7);
+    for (const value of Object.values(privateValues))
+      expect(JSON.stringify(turns)).not.toContain(value);
+    expect(turns).toContainEqual({
+      provider: "claudeAgent",
+      model: "claude-fable-5-1",
+      effort: "high",
+      interaction_mode: "plan",
+      runtime_mode: "full-access",
+      origin: "user",
+    });
+    expect(turns).toContainEqual({
+      provider: "other",
+      model: "other",
+      effort: "high",
+      interaction_mode: "plan",
+      runtime_mode: "full-access",
+      origin: "user",
+    });
+    expect(db.database.prepare("SELECT provider FROM usage_providers").all()).toEqual([
+      { provider: "codex" },
+    ]);
+  });
+
+  it("rejects invented command tokens and accepts only the built-in custom bucket", async () => {
+    const commands = await postEvents([
+      envelope({ event: "command.used", command: "slash:privateCustomer", feature: undefined }),
+      envelope({ event: "command.used", command: "shortcut:privateCustomer", feature: undefined }),
+      envelope({ event: "command.used", command: "slash:custom", feature: undefined }),
+    ]);
+    expect(await commands.json()).toEqual({ accepted: 1, received: 3 });
+    expect(db.database.prepare("SELECT command FROM product_events").all()).toEqual([
+      { command: "slash:custom" },
+    ]);
   });
 
   it("counts terminal desktop observations by provider without treating requests or missing usage as completed turns", async () => {
@@ -784,7 +1127,7 @@ describe("analytics ingest and D1 storage", () => {
     expect(badRange.status).toBe(400);
   });
 
-  it("sweeps only product events older than 30 days", async () => {
+  it("sweeps raw usage after 90 days and product after 30 without deleting general diagnostics", async () => {
     const oldReceived = new Date(now - 31 * 86_400_000).toISOString();
     const insertOldProduct = db.database.prepare(
       `INSERT INTO product_events (
@@ -823,8 +1166,32 @@ describe("analytics ingest and D1 storage", () => {
       )
       .run(oldReceived, oldReceived, "00000000-0000-4000-8000-000000000004", "1.2.3", "app.error");
 
+    const usageCutoff = new Date(now - 90 * 86_400_000).toISOString();
+    const expiredUsage = new Date(now - 91 * 86_400_000).toISOString();
+    for (const [eventId, receivedAt] of [
+      [1, expiredUsage],
+      [2, usageCutoff],
+      [3, oldReceived],
+    ]) {
+      db.database
+        .prepare(`INSERT INTO usage_providers
+        (event_id, install_id, day, app_version, provider, received_at)
+        VALUES (?, 'synthetic-install', ?, '1.2.3', 'codex', ?)`)
+        .run(eventId, receivedAt.slice(0, 10), receivedAt);
+      db.database
+        .prepare(`INSERT INTO usage_turns
+        (event_id, install_id, day, app_version, provider, model, effort, interaction_mode, runtime_mode, origin, outcome, received_at)
+        VALUES (?, 'synthetic-install', ?, '1.2.3', 'codex', 'other', 'default', 'default', 'full-access', 'user', 'succeeded', ?)`)
+        .run(eventId, receivedAt.slice(0, 10), receivedAt);
+    }
     await worker.scheduled({ scheduledTime: now }, env, {});
 
+    expect(
+      db.database.prepare("SELECT event_id FROM usage_providers ORDER BY event_id").all(),
+    ).toEqual([{ event_id: 2 }, { event_id: 3 }]);
+    expect(db.database.prepare("SELECT event_id FROM usage_turns ORDER BY event_id").all()).toEqual(
+      [{ event_id: 2 }, { event_id: 3 }],
+    );
     expect(db.database.prepare("SELECT COUNT(*) AS n FROM product_events").get().n).toBe(1);
     expect(db.database.prepare("SELECT COUNT(*) AS n FROM events").get().n).toBe(1);
   });

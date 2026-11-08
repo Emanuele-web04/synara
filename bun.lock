@@ -19,6 +19,7 @@
       "name": "@synara/analytics",
       "version": "0.0.0",
       "dependencies": {
+        "@synara/contracts": "workspace:*",
         "@synara/shared": "workspace:*",
         "echarts": "6.1.0",
         "react": "^19.0.0",

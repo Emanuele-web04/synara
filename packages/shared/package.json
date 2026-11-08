@@ -356,6 +356,10 @@
       "types": "./src/editorIcons.ts",
       "import": "./src/editorIcons.ts"
     },
+    "./usageAnalytics": {
+      "types": "./src/usageAnalytics.ts",
+      "import": "./src/usageAnalytics.ts"
+    },
     "./providerUsage": {
       "types": "./src/providerUsage.ts",
       "import": "./src/providerUsage.ts"

@@ -13,11 +13,7 @@ import { Effect, FileSystem, Layer, Path } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import { afterEach, describe, expect, it } from "vitest";
 
-import {
-  BETA_USAGE_SNAPSHOT_FILE_NAME,
-  usageModelCategory,
-  writeBetaUsageSnapshot,
-} from "./betaUsageSnapshot";
+import { BETA_USAGE_SNAPSHOT_FILE_NAME, writeBetaUsageSnapshot } from "./betaUsageSnapshot";
 import { SqlitePersistenceMemory } from "./persistence/Layers/Sqlite";
 
 const roots: string[] = [];
@@ -88,11 +84,13 @@ describe("turn breakdown", () => {
         yield* sql`INSERT INTO projection_turns (thread_id, turn_id, pending_message_id, state, requested_at, started_at, completed_at, checkpoint_files_json)
                   VALUES ('b1', 'bt1', 'm1', 'completed', ${at}, ${hoursAgoIso(0.01)}, ${at}, '[]'),
                          ('b1', 'bt2', 'm2', 'error', ${at}, NULL, NULL, '[]'),
-                         ('b1', 'bt3', 'm3', 'running', ${at}, NULL, NULL, '[]')`;
+                         ('b1', 'bt3', 'm3', 'running', ${at}, NULL, NULL, '[]'),
+                         ('b1', 'bt4', 'm4', 'error', ${at}, NULL, NULL, '[]')`;
         let sequence = 1;
         for (const [messageId, model, effort] of [
           ["m1", "claude-fable-5-1", "high"],
           ["m2", "my-private-finetune", "galaxy-brain"],
+          ["m4", "claude-opus-42-7", "high"],
         ] as const) {
           yield* sql`INSERT INTO orchestration_events (event_id, aggregate_kind, stream_id, stream_version, event_type, occurred_at, actor_kind, payload_json, metadata_json)
                     VALUES (${`ev-${messageId}`}, 'thread', 'b1', ${sequence++}, 'thread.turn-start-requested', ${at}, 'client', ${turnRequest(messageId, model, effort)}, '{}')`;
@@ -107,7 +105,7 @@ describe("turn breakdown", () => {
       readFileSync(join(root, "diagnostics", BETA_USAGE_SNAPSHOT_FILE_NAME), "utf8"),
     );
     const rows = snapshot.turnBreakdown as Array<Record<string, unknown>>;
-    expect(rows).toHaveLength(2);
+    expect(rows).toHaveLength(3);
     expect(rows).toContainEqual(
       expect.objectContaining({
         provider: "claudeAgent",
@@ -126,10 +124,11 @@ describe("turn breakdown", () => {
       }),
     );
     expect(rows).toContainEqual(
-      expect.objectContaining({ model: "other", effort: "default", outcome: "failed", turns: 1 }),
+      expect.objectContaining({ model: "other", effort: "other", outcome: "failed", turns: 1 }),
     );
     expect(JSON.stringify(snapshot)).not.toContain("secret-model-key");
     expect(JSON.stringify(snapshot)).not.toContain("my-private-finetune");
+    expect(JSON.stringify(snapshot)).not.toContain("claude-opus-42-7");
   });
 });
 
@@ -187,16 +186,6 @@ describe("bundle gate", () => {
     expect(gate).toContain(
       "desktopBundleId === SYNARA_BETA_BUNDLE_ID || desktopBundleId === SYNARA_REMOTE_BUNDLE_ID",
     );
-  });
-});
-
-describe("usage model categories", () => {
-  it("keeps catalogued models and Claude releases, never custom names", () => {
-    expect(usageModelCategory("claudeAgent", "claude-fable-5-1")).toBe("claude-fable-5-1");
-    expect(usageModelCategory("claudeAgent", "claude-opus-7-2")).toBe("claude-opus-7-2");
-    expect(usageModelCategory("codex", "gpt-acme-secret-project")).toBe("other");
-    expect(usageModelCategory("claudeAgent", "claude-acme-secret")).toBe("other");
-    expect(usageModelCategory("opencode", "my-company/internal-model")).toBe("other");
   });
 });
 

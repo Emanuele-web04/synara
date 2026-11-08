@@ -1181,5 +1181,14 @@
   "permissionGuideCompleteAuthentication": "Completa cualquier autenticación de macOS. Si macOS te pide salir y volver a abrir la app, hazlo antes de comprobar de nuevo.",
   "resumeAfterUsageLimits": "Reanudar tras los límites de uso",
   "resumeAfterUsageLimitsDescription": "Continúa automáticamente las tareas que alcancen un límite cuando el proveedor indique que se restablece la cuota. Se aplica a este ordenador, incluso con los demás dispositivos cerrados. Desactivarlo cancela las reanudaciones pendientes.",
-  "couldNotUpdateUsageLimitRecovery": "No se pudo actualizar la reanudación automática"
+  "couldNotUpdateUsageLimitRecovery": "No se pudo actualizar la reanudación automática",
+  "productAnalyticsPrivacyTitle": "Privacidad",
+  "productAnalyticsShareTitle": "Compartir análisis del producto",
+  "productAnalyticsRemoteShareTitle": "Compartir uso y diagnósticos",
+  "productAnalyticsDescription": "Ayuda a mejorar Synara enviando a Cloudflare recuentos de categorías fijas de funciones, conexiones y turnos. El ID de instalación aleatorio no está vinculado al inicio de sesión ni a la facturación. Sin instrucciones, chats, archivos, rutas, nombres de proyectos ni texto libre. Desactivado por defecto; solo para esta instalación.",
+  "productAnalyticsRemoteDescription": "Ayuda a corregir errores y contar instalaciones activas enviando a Cloudflare categorías fijas de uso, resultados de conexiones y turnos, errores y cierres inesperados. El ID de análisis aleatorio no está vinculado al inicio de sesión ni a la facturación. Sin instrucciones, chats, archivos, rutas, datos de cuenta ni texto libre. Activado por defecto en Synara Remote; solo para esta instalación.",
+  "productAnalyticsRetryLoad": "Reintentar cargar los ajustes de privacidad",
+  "productAnalyticsSaveError": "No se pudo guardar tu elección. Se sigue mostrando el ajuste anterior; inténtalo de nuevo.",
+  "productAnalyticsRemoteDisableDescription": "Al desactivarlo, se detiene la recopilación, se cancelan los envíos y se eliminan los eventos pendientes y el ID de análisis del producto. Al reactivarlo, se usa un nuevo ID aleatorio; los eventos ya recibidos no se pueden retirar.",
+  "productAnalyticsDisableDescription": "Al desactivarlo, se detiene la recopilación del producto, se cancelan los envíos y se eliminan los eventos del producto pendientes y el ID de análisis. Al reactivarlo, se usa un nuevo ID aleatorio. Los diagnósticos de cierres inesperados de Beta son independientes."
 }

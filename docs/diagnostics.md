@@ -1,8 +1,9 @@
 # Beta diagnostics
 
 Synara Beta ships always-on diagnostics so the team can see crashes and release
-health on real machines instead of waiting for bug reports. This document is the
-authoritative description of what leaves your computer.
+health on real machines instead of waiting for bug reports. This document describes
+automatic diagnostics and product analytics, separate from provider traffic, optional
+account features and diagnostic evidence you explicitly request or share.
 
 **Stable builds never send Beta diagnostics.** Separate, default-off product analytics
 are available in both channels; see [Product analytics](#product-analytics).
@@ -212,10 +213,13 @@ External IP addresses remain redacted and external ports remain distinct.
 Events are buffered to `~/.synara-beta/diagnostics/events.jsonl` and flushed in
 batches as NDJSON over HTTPS to `https://synara-beta-diagnostics.synara-orgs.workers.dev`
 (override with `SYNARA_BETA_DIAGNOSTICS_URL` for local development; only `https://`
-or loopback targets are accepted). Events land in a Cloudflare D1 database and
-are retained without automatic expiry so crash and error trends can be compared
-across beta releases. Crash dumps land in the private `synara-beta-crash-dumps`
-R2 bucket and also have no automatic expiry. The ingest worker and its private
+or loopback targets are accepted). Events land in a Cloudflare D1 database. Extracted
+provider usage rows in `usage_providers` and turn breakdown rows in `usage_turns` are
+scheduled for deletion 90 days after receipt. Daily cleanup deletes at most 100,000
+rows per table in batches of 10,000; a larger backlog takes later runs to clear.
+Other diagnostic event records, including the project and active-thread counts in
+`usage.daily`, have no automatic expiry. Crash dumps land in the private
+`synara-beta-crash-dumps` R2 bucket and also have no automatic expiry. The ingest worker and its private
 dashboard live in [apps/analytics](../apps/analytics/README.md) and deploy to the
 Synara Orgs Cloudflare account.
 The worker re-runs the same allowlist and
@@ -253,24 +257,29 @@ history and native completion events are not included. They are not billing data
 
 Each envelope contains a random per-installation UUID, event UUID, timestamp,
 app version, channel, surface and platform. Additional fields are restricted to
-fixed enums and bounded durations/token counts. No account ids (Remote adds only the
-hashed account described below), provider identifiers, model names, task/project names,
-routes, URLs, prompts, files or error text enter this path. The UUID is independent of
-the Beta diagnostics identity.
+fixed enums and bounded durations/token counts, including the fixed provider categories
+`codex`, `claude` and `other`. No account identifiers or account-derived hashes, model
+names, task/project/repository names, paths, routes, URLs, prompts, chat content, files,
+credentials or error text enter this path. The random UUID is independent of login,
+billing and the Beta diagnostics identity.
 
 Events go to the Cloudflare Worker `/v1/product-events` and a separate D1
 `product_events` table, viewed through its authenticated Product dashboard.
 They are unrelated to private account usage, Saved Inbox and public profile
-data. Raw product events have a 30-day retention policy, enforced through
-bounded scheduled cleanup; Beta diagnostic retention is unchanged.
+data. Raw product events are scheduled for deletion 30 days after receipt. Daily
+cleanup deletes at most 100,000 rows in batches of 10,000, so an unusually large
+backlog can take longer. This cleanup does not remove separate diagnostic records.
 
 The desktop uses its flavor-specific `product-analytics` directory for consent,
 the random identifier and an expiring queue (at most 500 events, seven days).
 Uploads are limited to 50 events/64 KiB, with timeout and backoff. Turning off
 collection aborts pending uploads where possible, clears unsent events and
-removes the identifier. Re-enabling generates a new identifier; it does not
-link the new installation identity to earlier events. Turning off cannot
+removes the identifier. Re-enabling generates a fresh random identifier without
+relinking it through an account. Turning off cannot
 retract a request already received by Cloudflare; retention applies there.
+The first account-free upgrade also replaces the legacy analytics identifier and
+discards its unsent telemetry before replay. Consent and local workspace history
+are preserved.
 
 Release dependency: deploy the product D1 migration and receiving Worker before
 shipping these clients. `/v1/crash` remains Beta-only. `/v1/events` accepts Beta and
@@ -278,14 +287,18 @@ Remote diagnostics; Remote events follow the sharing switch.
 
 ### Synara Remote
 
-Remote product events use the `remote` channel and are **on by default** until the
-user turns sharing off; the choice persists per installation. Besides the events
+From version **1.0.6-remote.18**, Remote product events use the `remote` channel and
+are **on by default** until the user turns sharing off; the choice persists per
+installation and an existing off choice is preserved. Native iPhone/iPad apps from
+**build 139** also default to on with their own local switch. Besides the events
 above, Remote records `app.active` once per UTC day while the app runs, so long
 sessions count as active days. Failed connections, pairings and chat requests can
 carry one fixed `reason` category (for example `unreachable`, `not_accepting`,
 `host_unlinked`, `timeout`); the receiver rejects a reason on any other outcome. The
 dashboard counts installations active in the last 24 hours, 7 days and 30 days, and
-installations that sent a chat request in those windows.
+installations that sent a chat request in those windows. These are rolling windows
+ending now, not calendar-day, calendar-week or calendar-month totals. One person using
+multiple installations may be counted more than once.
 
 Remote and the other desktop lanes also record `command.used` for built-in keyboard
 shortcuts (`shortcut:terminal.toggle`) and slash commands (`slash:plan`), once per key
@@ -293,9 +306,15 @@ press or command. Numbered jumps share one name; anything a person defined, such
 custom shortcut, script or skill, is reported as `custom`. The receiver accepts only
 that fixed `shortcut:` or `slash:` shape.
 
-To count people rather than installations, Remote events from a signed-in app carry
-`accountHash`: the first 32 hex characters of SHA-256 of `synara-usage-v1:` plus the
-account's user id. The account id itself is never sent, and the same hash on a Mac and a
-phone counts one person. It is a pseudonymous identifier: whoever holds the account
-list could recompute it, so it is linked to the account for privacy-label purposes.
-Signing out stops tagging new events; turning sharing off deletes it locally.
+Product events are installation-only: signing in or out does not identify, merge or
+relink analytics installations. Older clients used a deterministic account hash;
+updated clients delete the saved hash and scrub it from queued envelopes. The updated
+receiver discards that legacy field, and the account-hash removal migration deletes
+it from stored product rows. These changes require updated clients, Worker and schema;
+source changes alone do not update a deployed service or installed app.
+
+Provider/model turn breakdowns remain a separate host-reported Beta/Remote diagnostics
+path. A `usage.daily` report samples the preceding 24 hours and is sent at most once
+per UTC day; it is not an exact calendar-day ledger or a complete global execution
+total. Product and diagnostic usage observations are separate from account and billing
+records.

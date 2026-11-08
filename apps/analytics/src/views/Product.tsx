@@ -291,34 +291,31 @@ export function Product({
               {data.activeUsers && (
                 <section className="section" aria-labelledby="product-active">
                   <h3 id="product-active" className="heading-20 section-head">
-                    Active users
+                    Active installations
                   </h3>
                   <p className="chart-caption">
-                    People seen in the last 24 hours, 7 days and 30 days, ending now; the date range
-                    does not apply. A signed-in person counts once across their devices; without an
-                    account each installation counts. Engaged installations sent at least one chat
-                    request.
+                    Installations seen in the last 24 hours, 7 days and 30 days, ending now; the
+                    date range does not apply. Engaged installations attempted at least one chat
+                    request, including failed requests. This does not measure successful uses.
                   </p>
                   <div className="stat-strip stat-strip--four">
                     <Stat
-                      label="Daily active"
-                      value={compact(data.activeUsers.peopleDay ?? data.activeUsers.day)}
-                      detail={`${compact(data.activeUsers.day)} installations`}
+                      label="Daily active installations"
+                      value={compact(data.activeUsers.day)}
+                      detail="Last 24 hours"
                     />
                     <Stat
-                      label="Weekly active"
-                      value={compact(data.activeUsers.peopleWeek ?? data.activeUsers.week)}
-                      detail={`${compact(data.activeUsers.week)} installations`}
+                      label="Weekly active installations"
+                      value={compact(data.activeUsers.week)}
+                      detail="Last 7 days"
                     />
                     <Stat
-                      label="Monthly active"
-                      value={compact(data.activeUsers.peopleMonth ?? data.activeUsers.month)}
-                      detail={`${compact(data.activeUsers.month)} installations · ${compact(
-                        data.activeUsers.signedInMonth ?? 0,
-                      )} signed in`}
+                      label="Monthly active installations"
+                      value={compact(data.activeUsers.month)}
+                      detail="Last 30 days"
                     />
                     <Stat
-                      label="Engaged this week"
+                      label="Engaged installations this week"
                       value={compact(data.activeUsers.engagedWeek)}
                       detail={`${compact(data.activeUsers.engagedDay)} today · ${compact(
                         data.activeUsers.engagedMonth,

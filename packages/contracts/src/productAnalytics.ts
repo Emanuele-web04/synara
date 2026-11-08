@@ -1,4 +1,7 @@
+// Product analytics carries only closed categories and installation-local identity.
+// Login and billing identifiers do not belong in this cross-process contract.
 import * as Schema from "effect/Schema";
+import { STATIC_KEYBINDING_COMMANDS } from "./keybindings";
 
 export const ProductAnalyticsEvent = Schema.Literals([
   "app.open",
@@ -55,14 +58,21 @@ export const ProductAnalyticsReason = Schema.Literals([
   "other",
 ]);
 export type ProductAnalyticsReason = typeof ProductAnalyticsReason.Type;
-/**
- * `shortcut:<built-in command>` or `slash:<built-in command>`; anything a user
- * defined is reported as `custom`, so no free text enters this field.
- */
-export const PRODUCT_ANALYTICS_COMMAND_PATTERN = /^(shortcut|slash):[a-z][A-Za-z0-9.-]{0,47}$/;
-const ProductAnalyticsCommand = Schema.String.check(
-  Schema.isPattern(PRODUCT_ANALYTICS_COMMAND_PATTERN),
-);
+import { BUILT_IN_COMPOSER_SLASH_COMMANDS } from "./composerSlashCommands";
+
+export const PRODUCT_ANALYTICS_COMMANDS = [
+  ...new Set(
+    STATIC_KEYBINDING_COMMANDS.map((command) => `shortcut:${command.replace(/\.\d+$/, "")}`),
+  ),
+  "shortcut:custom",
+  ...BUILT_IN_COMPOSER_SLASH_COMMANDS.map((command) => `slash:${command}`),
+  "slash:custom",
+];
+const productCommands = new Set(PRODUCT_ANALYTICS_COMMANDS);
+export function isProductAnalyticsCommand(value: unknown): value is string {
+  return typeof value === "string" && productCommands.has(value);
+}
+const ProductAnalyticsCommand = Schema.Literals(PRODUCT_ANALYTICS_COMMANDS);
 
 const DurationMs = Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: 86_400_000 }));
 const TokenCount = Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: 1_000_000_000_000 }));
@@ -95,18 +105,11 @@ export const ProductAnalyticsInput = Schema.Struct({
 });
 export type ProductAnalyticsInput = typeof ProductAnalyticsInput.Type;
 
-/**
- * Counts people across their devices without naming them: the first 32 hex
- * characters of SHA-256("synara-usage-v1:" + account user id).
- */
-export const PRODUCT_ANALYTICS_ACCOUNT_HASH_PREFIX = "synara-usage-v1:";
-
 export const ProductAnalyticsEnvelope = Schema.Struct({
   v: Schema.Literal(1),
   id: Schema.String,
   ts: Schema.String,
   installId: Schema.String,
-  accountHash: Schema.optional(Schema.String),
   channel: ProductAnalyticsChannel,
   surface: ProductAnalyticsSurface,
   platform: ProductAnalyticsPlatform,
@@ -133,6 +136,4 @@ export interface DesktopProductAnalyticsBridge {
   getState: () => Promise<ProductAnalyticsConsentState>;
   setEnabled: (enabled: boolean) => Promise<ProductAnalyticsConsentState>;
   track: (input: ProductAnalyticsInput) => void;
-  /** The signed-in account's user id, or null after sign-out; only its hash is kept. */
-  setAccount?: (userId: string | null) => void;
 }

@@ -47,11 +47,24 @@ The script builds first. Existing Worker name, D1/R2 bindings, secrets and live 
 are preserved. Moving source into this monorepo requires no database migration,
 new credentials or client endpoint change. Do not deploy from the former separate
 repository: this workspace is the source of truth. For future schema changes,
-review/apply pending D1 migrations separately before deploying dependent code.
+review the order required by each migration before deploying dependent code.
+
+For `0007_installation_privacy.sql`, deploy the new receiver first: its INSERT
+omits `account_hash` and works against both schemas. Then apply the migration
+to scrub/remove the old linkage column, replace historical unknown usage/command
+categories with fixed fallbacks, and add the usage-retention index. The new
+receiver also normalizes stored categories before grouping dashboard results,
+so legacy strings stay hidden during this rollout. Never
+run the old receiver against the migrated schema. No production migration or
+deployment is authorized by the presence of this file.
 
 `POST /v1/product-events` accepts bounded, consented desktop/iOS/iPadOS reports;
 `GET /api/product` requires dashboard authentication. Raw product events expire
-after 30 days. Provider turns and token samples currently describe observed
+after 30 days. Raw diagnostic provider and turn samples (`usage_providers` and
+`usage_turns`) expire after 90 days; other diagnostic records and minidumps keep
+their existing retention policy. Usage counts on general `events` rows, including
+project and active-thread counts, remain under that policy. Provider turns and
+token samples currently describe observed
 desktop completions, not account-wide billing or globally deduplicated execution.
 Native clients contribute lifecycle, feature, connection and request events under
 their own consent. Beta `/v1/events` and `/v1/crash` keep their separate policy.

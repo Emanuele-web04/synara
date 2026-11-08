@@ -35,6 +35,8 @@ import {
 import { createHash, randomUUID } from "node:crypto";
 import { join } from "node:path";
 
+import { usageTurnCategories } from "@synara/shared/usageAnalytics";
+
 import {
   DESKTOP_RENDERER_ERROR_MESSAGE_MAX_LENGTH,
   DESKTOP_RENDERER_ERROR_STACK_MAX_LENGTH,
@@ -247,11 +249,10 @@ function withoutFreeText(payload: BetaDiagnosticsPayload): BetaDiagnosticsPayloa
 }
 
 const TURN_BREAKDOWN_MAX_ROWS = 200;
-const TURN_CATEGORY_PATTERN = /^[A-Za-z0-9][A-Za-z0-9.-]{0,47}$/;
 const TURN_OUTCOMES = new Set(["succeeded", "failed", "cancelled"]);
 const TURN_TOTAL_MAX = 1_000_000_000_000;
 
-/** Keeps only short lowercase categories and clamped counts; anything else is dropped. */
+/** Keeps only catalogued categories and clamped counts before writing the queue. */
 function sanitizeTurnBreakdown(value: unknown): UsageTurnBreakdownEntry[] {
   if (!Array.isArray(value)) return [];
   const rows: UsageTurnBreakdownEntry[] = [];
@@ -262,24 +263,9 @@ function sanitizeTurnBreakdown(value: unknown): UsageTurnBreakdownEntry[] {
   for (const entry of value.slice(0, TURN_BREAKDOWN_MAX_ROWS)) {
     if (!entry || typeof entry !== "object") continue;
     const row = entry as Record<string, unknown>;
-    const categories = [
-      row.provider,
-      row.model,
-      row.effort,
-      row.interactionMode,
-      row.runtimeMode,
-      row.origin,
-    ];
-    if (!categories.every((item) => typeof item === "string" && TURN_CATEGORY_PATTERN.test(item)))
-      continue;
     if (typeof row.outcome !== "string" || !TURN_OUTCOMES.has(row.outcome)) continue;
     rows.push({
-      provider: row.provider as string,
-      model: row.model as string,
-      effort: row.effort as string,
-      interactionMode: row.interactionMode as string,
-      runtimeMode: row.runtimeMode as string,
-      origin: row.origin as string,
+      ...usageTurnCategories(row),
       outcome: row.outcome as UsageTurnBreakdownEntry["outcome"],
       turns: clampUsageCount(row.turns),
       durationMs: total(row.durationMs),
@@ -379,7 +365,9 @@ export function sanitizeBetaDiagnosticsPayload(
           typeof rawProvider === "string"
             ? PROVIDER_KIND_SET.has(rawProvider)
               ? (rawProvider as ProviderKind)
-              : LEGACY_PROVIDER_MIGRATIONS[rawProvider]
+              : Object.hasOwn(LEGACY_PROVIDER_MIGRATIONS, rawProvider)
+                ? LEGACY_PROVIDER_MIGRATIONS[rawProvider]
+                : undefined
             : undefined;
         if (!provider) continue;
         const existing = merged.get(provider) ?? { threads: 0, turns: 0, turnsFailed: 0 };
@@ -501,6 +489,8 @@ export class BetaDiagnostics {
   private usageTimers: ReturnType<typeof setTimeout>[] = [];
   private flushing = false;
   private flushPromise: Promise<void> | null = null;
+  private flushController: AbortController | null = null;
+  private queueEpoch = 0;
   private disposed = false;
   private readonly recentActivity: Array<DesktopDiagnosticBreadcrumb & { at: number }> = [];
   private readonly memorySamples: Array<{ at: number; counters: DiagnosticMemoryCounters }> = [];
@@ -534,6 +524,8 @@ export class BetaDiagnostics {
     this.sampleMemory = input.sampleMemory;
     this.flavor = input.flavor ?? "beta";
     this.isEnabled = input.isEnabled ?? (() => true);
+    // A persisted opt-out also revokes any queue left by an interrupted prior process.
+    if (!this.isEnabled()) this.discardQueue();
   }
 
   private readonly flavor: DiagnosticsFlavor;
@@ -998,20 +990,50 @@ export class BetaDiagnostics {
   async flush(timeoutMs = 15_000): Promise<void> {
     if (this.flushing || this.disposed || !this.isEnabled()) return;
     this.flushing = true;
+    const epoch = this.queueEpoch;
+    const controller = new AbortController();
+    this.flushController = controller;
     // The promise resolves only after `flushing` clears, so dispose() can
     // chain a final flush on it.
     this.flushPromise = (async () => {
       try {
-        await this.flushQueue(timeoutMs);
+        await this.flushQueue(timeoutMs, controller.signal, epoch);
       } finally {
-        this.flushing = false;
-        this.flushPromise = null;
+        // A revoked request must not release a later sharing generation's flush.
+        if (epoch === this.queueEpoch) {
+          this.flushing = false;
+          this.flushPromise = null;
+          this.flushController = null;
+        }
       }
     })();
     await this.flushPromise;
   }
 
-  private async flushQueue(timeoutMs: number): Promise<void> {
+  /** Rebuild old offline usage records before transmission with today's finite categories. */
+  private sanitizeQueuedUsage(line: string): string | null {
+    try {
+      const record = JSON.parse(line) as BetaDiagnosticsEvent;
+      if (record.event !== "usage.daily") return line;
+      if (record.payload?.kind !== "usage") return null;
+      return JSON.stringify({
+        v: record.v,
+        id: record.id,
+        ts: record.ts,
+        installId: record.installId,
+        appVersion: record.appVersion,
+        flavor: record.flavor,
+        platform: record.platform,
+        arch: record.arch,
+        event: record.event,
+        payload: sanitizeBetaDiagnosticsPayload(record.payload, this.homeDir, record.event),
+      });
+    } catch {
+      return null;
+    }
+  }
+
+  private async flushQueue(timeoutMs: number, revoked: AbortSignal, epoch: number): Promise<void> {
     try {
       if (!existsSync(this.queuePath)) return;
       const raw = readFileSync(this.queuePath, "utf8");
@@ -1020,7 +1042,9 @@ export class BetaDiagnostics {
 
       const batch: string[] = [];
       let batchBytes = 0;
-      for (const line of lines.slice(0, FLUSH_BATCH_MAX_EVENTS)) {
+      for (const queuedLine of lines.slice(0, FLUSH_BATCH_MAX_EVENTS)) {
+        const line = this.sanitizeQueuedUsage(queuedLine);
+        if (!line) continue;
         if (batchBytes + line.length > FLUSH_BATCH_MAX_BYTES && batch.length > 0) break;
         batch.push(line);
         batchBytes += line.length + 1;
@@ -1028,13 +1052,14 @@ export class BetaDiagnostics {
       if (batch.length === 0) return;
 
       const body = `${batch.join("\n")}\n`;
+      const signal = AbortSignal.any([revoked, AbortSignal.timeout(timeoutMs)]);
       const response = await fetch(`${this.endpoint}/v1/events`, {
         method: "POST",
         headers: { "content-type": "application/x-ndjson" },
         body,
-        signal: AbortSignal.timeout(timeoutMs),
+        signal,
       });
-      if (!response.ok) return;
+      if (!response.ok || signal.aborted || epoch !== this.queueEpoch || !this.isEnabled()) return;
 
       // Events can be appended while the request was in flight, and a trim can
       // rewrite the head, so match the sent lines by id rather than position.
@@ -1105,6 +1130,13 @@ export class BetaDiagnostics {
 
   /** Drops unsent events and collected context after the user turns sharing off. */
   discardQueue(): void {
+    this.queueEpoch += 1;
+    this.flushController?.abort();
+    this.flushController = null;
+    this.flushing = false;
+    this.flushPromise = null;
+    this.reportStatuses.clear();
+    this.issueReports.clear();
     this.recentActivity.length = 0;
     this.memorySamples.length = 0;
     for (const path of [this.queuePath, this.usageSnapshotPath]) {
