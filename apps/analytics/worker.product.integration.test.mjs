@@ -99,7 +99,7 @@ describe("analytics ingest and D1 storage", () => {
     db.close();
     vi.useRealTimers();
 
-vi.unstubAllGlobals();
+    vi.unstubAllGlobals();
   });
 
   const envelope = (overrides = {}) => ({
@@ -399,7 +399,7 @@ vi.unstubAllGlobals();
   it("scrubs historical diagnostic content and safely retries bounded dump cleanup including orphans", async () => {
     db.close();
     db = new SQLiteD1();
-    applyMigrations(db.database, "0007");
+    applyMigrations(db.database, "0008");
     env.DB = db;
     const canary = "violet kettle private draft";
     db.database
@@ -1592,6 +1592,7 @@ vi.unstubAllGlobals();
       event: "app.active",
       feature: undefined,
       durationMs: undefined,
+      ts: new Date(Math.floor(now / 1000) * 1000).toISOString().replace(".000Z", "Z"),
       cohortDay: day,
       cohortStage: "new",
     });
@@ -1604,7 +1605,11 @@ vi.unstubAllGlobals();
     ];
     expect(await (await postEvents(bad)).json()).toMatchObject({ accepted: 0 });
     const { cohortDay: _cohortDay, cohortStage: _cohortStage, ...plain } = entry;
-    await postEvents([plain]); // Matches a rollout rollback: the raw UUID exists without metadata.
+    await postEvents([plain]);
+    // An older native receiver persisted the equivalent UTC instant without milliseconds.
+    db.database
+      .prepare("UPDATE product_events SET ts = ? WHERE event_id = ?")
+      .run(entry.ts, entry.id);
     const upgraded = await postEvents([entry]);
     expect(upgraded.headers.get("x-synara-product-cohorts")).toBe("1");
     expect(await upgraded.json()).toMatchObject({ accepted: 1, cohortAcknowledged: [entry.id] });
@@ -1819,7 +1824,9 @@ vi.unstubAllGlobals();
         app_version AS appVersion, event, outcome, cohort_day AS cohortDay, cohort_stage AS cohortStage
         FROM product_events WHERE event_id = ?`)
           .get(event.id),
-      ).toEqual((({ v: _v, ...stored }) => stored)(event));
+      ).toEqual(
+        (({ v: _v, ...stored }) => ({ ...stored, ts: new Date(event.ts).toISOString() }))(event),
+      );
     }
   });
 });

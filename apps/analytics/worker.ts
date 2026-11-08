@@ -152,7 +152,7 @@ const INSERT_PRODUCT_EVENT_SQL = `INSERT OR IGNORE INTO product_events (
 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(event_id) DO UPDATE SET cohort_day = excluded.cohort_day, cohort_stage = excluded.cohort_stage
 WHERE product_events.cohort_stage IS NULL AND excluded.cohort_stage IS NOT NULL
-  AND product_events.install_id = excluded.install_id AND product_events.ts = excluded.ts
+  AND product_events.install_id = excluded.install_id AND julianday(product_events.ts) = julianday(excluded.ts)
   AND product_events.channel = excluded.channel AND product_events.surface = excluded.surface
   AND product_events.event = 'app.active' AND product_events.outcome = 'succeeded'`;
 
