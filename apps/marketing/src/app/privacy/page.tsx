@@ -150,11 +150,11 @@ export default function PrivacyPage() {
             command names are reduced to fixed categories rather than sent as free text.
           </p>
           <p className="mt-6">
-            Remote desktop diagnostics keep known error categories, numeric source locations,
-            process/release health and aggregate usage counters. They exclude error messages,
-            function/file names, log excerpts and raw crash memory dumps. Diagnostic reports have
-            separate retention. Host-reported provider/model turn usage samples cover rolling
-            24-hour windows; they are not complete calendar-day or global execution totals.
+            Beta and Remote desktop diagnostics keep known error categories, numeric source
+            locations, process/release health and aggregate usage counters. They exclude error
+            messages, function/file names, log excerpts and raw crash memory dumps. Diagnostic
+            reports have separate retention. Host-reported provider/model turn usage samples cover
+            rolling 24-hour windows; they are not complete calendar-day or global execution totals.
             Extracted provider and turn usage rows are scheduled for deletion 90 days after receipt,
             with the same capped-batch limitation; other diagnostic event records currently have no
             automatic expiry. The 30-day product-event cleanup does not remove those records.
@@ -164,11 +164,13 @@ export default function PrivacyPage() {
         <Section title="Separate Beta diagnostics">
           <p>
             Synara Beta sends crash, error, release-health and daily usage diagnostics
-            automatically. These may include bounded, redacted error stacks, log excerpts and recent
-            diagnostic context. Stable does not send Beta diagnostics. Product analytics consent
-            does not control this separate Beta path. Apart from the extracted usage rows described
-            above, Beta diagnostic event records and raw crash minidumps currently have no automatic
-            expiry. See the{" "}
+            automatically, using fixed categories, numeric source positions and bounded counters.
+            They exclude prompts, replies, file contents, credentials, error prose, function/file
+            names, log excerpts and raw crash memory. Stable does not send Beta diagnostics. Product
+            analytics consent does not control this separate Beta path. Older installed clients used
+            broader diagnostics; legacy text is stripped at ingestion and raw dump routes are
+            retired. Historical storage cleanup requires a separate operator action; this policy
+            does not claim previously received data has already been deleted. See the{" "}
             <a
               href="https://github.com/Emanuele-web04/synara/blob/main/docs/diagnostics.md"
               className="text-[var(--accent-link)]"

@@ -1,245 +1,84 @@
-# Beta diagnostics
+# Beta and Remote diagnostics
 
-Synara Beta ships always-on diagnostics so the team can see crashes and release
-health on real machines instead of waiting for bug reports. This document describes
-automatic diagnostics and product analytics, separate from provider traffic, optional
-account features and diagnostic evidence you explicitly request or share.
+Beta and Remote use the same content-exclusion boundary. No automatic telemetry
+includes prompts, replies, chat or file contents, credentials, project names,
+paths, error prose, function/file names, log excerpts or raw process memory.
+Regex redaction alone is not sufficient to enforce this rule.
 
-**Stable builds never send Beta diagnostics.** Separate, default-off product analytics
-are available in both channels; see [Product analytics](#product-analytics).
+Stable never constructs the release-diagnostics sender. Beta release diagnostics
+remain automatic; their existing collection policy is separate from the
+product-analytics switch. Remote release diagnostics follow **Share usage and
+diagnostics** in Settings → General → Privacy. Turning sharing off aborts pending
+requests where possible and removes unsent diagnostics and local context.
+Beta/Remote homes and their random installation identities remain separate.
 
-**Synara Remote** constructs the same diagnostics module with `flavor: "remote"`.
-It follows the **Share usage and diagnostics** switch in Settings → General → Privacy,
-which is on by default: turning it off stops new events and deletes the unsent
-diagnostics queue. Remote never starts Electron's crash dump uploader, so raw process
-memory is not sent, and it sends no free text: an error keeps only its type and stack
-locations (`TypeError at main:10:5`), never function names, file names or its message; a crash keeps its
-process type and reason without the log tail; an update failure keeps its step and a
-fixed failure reason without the message. Handled issues keep their fixed code and
-reason. While sharing is off, no activity breadcrumbs or memory samples are kept, and after it is turned back on, a
-usage snapshot is relayed only once its 24-hour window starts after that moment.
-The diagnostics module is constructed only
-when the packaged build's `synaraDesktopFlavor` field equals `"beta"` or `"remote"` — a field baked
-in at build time that cannot be flipped by an environment variable. (The module
-source is bundled into the shared desktop code, but in a stable build it is
-never instantiated: no UI, environment variable, or IPC can enable it.)
+## Technical fields
 
-## What is collected
+| Event                                                                                       | Retained metadata                                                                                                             |
+| ------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| `app.start`, `app.exit`                                                                     | Lifecycle duration; startup OS major/minor and language category                                                              |
+| `app.error`                                                                                 | Main/renderer source, built-in error type and at most 30 numeric source positions; no original message, file or function name |
+| `app.renderer-crash`, `app.child-process-crash`                                             | Fixed process/reason categories; backend exit reasons accept only numeric exit codes and fixed signal names                   |
+| `update.check`, `update.available`, `update.downloaded`, `update.installed`, `update.error` | Check/download/install stage, outcome, bounded duration, release version and fixed failure reason; no failure message         |
+| `usage.daily`                                                                               | Bounded aggregate usage counts and fixed categories, with no underlying chat or provider payload                              |
+| `beta.installed`, `beta.left`                                                               | Fixed import/fresh-install or keep/trash outcome                                                                              |
 
-Thirteen event names, each with a small fixed field set. The full allowlist
-lives in `apps/desktop/src/betaDiagnostics.ts` (`BetaDiagnosticsEventName` and
-the `sanitizeBetaDiagnosticsPayload` schemas); the ingest worker re-validates
-the same allowlist server-side.
+Every envelope has an event UUID, random installation UUID, build flavor,
+platform/architecture category, release version and normalized timestamp. Payload
+kind must match its event. Unknown properties are discarded.
 
-| Event                                                                                       | Fields (all optional except `kind`)                                                                                                                                                                                                    |
-| ------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `app.start`, `app.exit`                                                                     | `kind: "lifecycle"`; `app.start` also carries `osVersion` (major.minor) and `locale` (language only, e.g. `en`)                                                                                                                        |
-| `app.renderer-crash`, `app.child-process-crash`                                             | `kind: "crash"`, `processType` (Electron enum like `renderer`/`gpu`/`backend`), `reason`, `logTail` (redacted last ~200 lines/16 KiB of the relevant log)                                                                              |
-| `app.error`                                                                                 | `kind: "error"`, `source` (`main`/`renderer`), `message` (redacted, 1 KiB), `stack` (redacted, 8 KiB), `fingerprint` (hash of the redacted text)                                                                                       |
-| `update.check`, `update.available`, `update.downloaded`, `update.installed`, `update.error` | `kind: "update"`, `outcome` (`ok`/`error`), `durationMs`, `errorContext` (`check`/`download`/`install`), `targetVersion` (strict semver); `update.error` also carries a fixed `reason`, and Beta carries `message` (redacted, 1 KiB)   |
-| `usage.daily`                                                                               | `kind: "usage"`, `providers` (provider name + `threads`/`turns`/`turnsFailed` counts for the last 24h; `turnsFailed` counts turns that ended in `error` — cancelled turns are not failures), `projects`, `activeThreads` — counts only |
-| `beta.installed`, `beta.left`                                                               | `kind: "beta"`, `outcome` (`imported`/`import-failed`/`fresh`, or `trash`/`keep`)                                                                                                                                                      |
+Handled failures reuse `app.error` with the fixed `DesktopDiagnosticIssue`
+code/reason allowlist in `packages/contracts/src/ipc.ts` and optional bounded
+numeric duration. Git, voice, cache/compaction, startup and event-loop issues
+never attach exception text, operation arguments or identifiers. These reports
+are observations, not proof of a root cause.
 
-`app.error` fires when the main process throws an uncaught exception, the
-renderer throws an uncaught exception or rejects a promise, or the renderer
-logs a console error. Renderer exceptions retain their original stacks through
-a fixed, bounded IPC payload. The bridge is exposed only when the Beta main
-process enables it, and reports from other windows or subframes are rejected.
-Malformed exception fields produce a generic report without serializing objects.
-Console errors remain a fallback during startup and for browser errors such as
-CORS failures. Once the renderer listeners are ready, their uncaught exceptions
-are not also counted through that fallback. The same fingerprint is sent at
-most once per 10 minutes and at most 30 errors per hour per session. Loopback
-HTTP and WebSocket URL ports are normalized only for fingerprinting; the redacted
-message keeps the original port so it can still help diagnosis.
+Error grouping is derived only from technical metadata. Changes to work content
+or external addresses cannot change its fingerprint. Main/renderer reports of
+the same handled code/reason share a group; duration is not a grouping field.
+Identical groups are throttled for ten minutes with a 30-error hourly session
+cap. An existing diagnostic ID is an event UUID, not a chat or user identifier;
+upload acknowledgement does not mean a maintainer has reviewed it.
 
-Crash events exclude clean process exits and known app shutdowns, including
-backend processes deliberately stopped for an updater handoff. An unexpected
-`killed` process remains reportable; a signal alone does not prove shutdown.
-Renderer crash log tails include the triggering reason and exit code. A closed
-launcher stdout/stderr pipe is handled on that stream without quitting the app
-or reporting an uncaught exception; other stream errors still propagate.
+Recent fixed activity and numeric memory samples remain local to the process;
+they are not serialized into error stacks or crash logs. Resize and error
+listeners do not change application exception or recovery behavior. The
+server-owned usage snapshot remains a rolling 24-hour observation, relayed at
+most once per UTC upload day; it is not an exact disjoint calendar-day total.
 
-### Handled failures and diagnostic IDs
+## Queue, ingestion and historical records
 
-Beta also records handled Git action failures (request, branch, commit, push,
-and PR stages), voice recording/transcription failures, Claude compaction request
-failures or uncertain acceptance, failed/uncertain Claude cache reviews, and
-backend startup blocks, and server event-loop stalls. These use the existing `app.error` envelope with a fixed
-`Handled issue: <code> (<reason>)` message. They are not crash reports. The issue
-allowlist lives in `DesktopDiagnosticIssue` in `packages/contracts/src/ipc.ts`.
-No new event names or ingest fields are required by this change.
+The flavor-specific `diagnostics/events.jsonl` queue is bounded to 1 MiB and
+trimmed to its newest 512 KiB. HTTPS uploads use fixed NDJSON envelopes, timeouts
+and event-UUID deduplication. Before every upload, all legacy envelopes are
+reconstructed and the local queue is atomically replaced with technical-only
+records. Invalid or cross-flavor rows are discarded. Failed network requests
+therefore leave no legacy prose in the retained queue. Startup, sharing revocation
+and flush cleanup also remove only regular files matching this queue's interrupted
+`.trim-PID`, `.flush-PID` and `.sanitize-PID` writes. Symlinks and unrelated files
+are preserved.
 
-`server.event-loop.stall` uses that same shared issue allowlist and carries only
-bounded `durationMs`. The collector passes its fixed message and duration context
-through `diagnosticsRedaction.ts` before queueing. CPU, memory, system load,
-percentiles and stacks are not attached to the stall issue. Backend warnings have
-a 30 second limit; the existing issue collector also groups identical reports
-for ten minutes and applies its shared hourly cap. Stable emits no stall issue
-markers. See [local stall monitoring](event-loop-stalls.md) for status behavior
-and the attribution limitations.
+The Cloudflare Worker independently applies the same technical boundary to
+Beta, Remote, old clients and handcrafted requests. D1 stores only reconstructed
+fields. Dashboard reads sanitize historical error text and keys while storage
+cleanup is pending. Historical categorical metadata and release versions are
+normalized before facets, grouping and limits, with issue detail using the same
+canonical grouping key. Raw dump uploads, downloads and legacy forwarding return
+HTTP 410 without consuming dump bodies or accessing R2. No flavor starts
+Electron's raw crash uploader.
 
-The reason is a coarse local classification (authentication, invalid response,
-timeout, output limit, live database owner, unknown owner, or unknown). It does
-not prove a root cause. Reports may include elapsed operation time, rounded to
-milliseconds, in the existing bounded context field. They never serialize the
-original exception, command arguments, Git output, voice/audio/transcript data,
-chat or project identifiers, database paths, or lock-owner PIDs. Existing activity
-and memory context still passes through the shared redactor.
+Older installed clients used broader diagnostics, including text and raw crash
+memory. Source changes do not prove that clients have updated, the receiver is
+deployed, or historical data has been deleted. Migration `0009` records a bounded
+cleanup checkpoint; it does not read or erase the historical dataset during
+schema migration. A separately authorized operator enables the cleanup job to
+scrub legacy D1 text/content-derived grouping and triage keys and delete indexed
+and orphan R2 dumps. See the [cleanup runbook](../apps/analytics/DIAGNOSTICS-CONTENT-CLEANUP.md).
+No production cleanup is performed by checking out or testing this code.
 
-Git and cache-review terminal failures are reported by the Beta backend through
-a bounded, validated desktop log marker, even when the affected chat is not open.
-Renderer failures are reported when the UI observes them; opening an already
-failed cache review can therefore report an older failure. Cancellations and
-pending compaction/approval states do not generate these reports. No operation
-deadline or automatic retry is added.
-
-Error toasts and cache-review errors offer **Copy diagnostic ID** when a report
-was queued successfully. Beta startup-block dialogs also expose the ID. It is
-the existing top-level event UUID, not a user or thread identifier. Identical
-code/reason pairs share an ID for ten minutes, including backend/UI duplicates,
-and use the existing shared 30-errors-per-hour cap. This ID identifies a grouped
-report, not every occurrence. Rate-limited or unwritable reports offer no new ID.
-
-**Report queued locally** means upload has not been confirmed; offline reports
-retry through the existing bounded queue. **Report sent** means the ingest HTTP
-endpoint returned success, not that a maintainer reviewed it or that storage was
-independently verified. **Upload not confirmed** covers expired in-memory status
-or a report removed by queue trimming. Status is bounded to 128 recent issue
-reports and does not survive desktop restarts. New issue reports request a
-nonblocking flush; regular retry and shutdown behavior remain unchanged.
-
-Stable and ordinary browser clients expose no issue-reporting bridge. Stable
-desktop starts no backend issue detector, and Stable backends emit no issue
-markers. These additions do not enable diagnostics for Stable.
-
-Beta also keeps a small action history in main-process memory: the last 24
-allowlisted activity entries within 10 minutes, with timestamps and
-started/succeeded/failed phases. Categories cover sending/stopping/opening chats,
-unblocking, creating/importing projects, workspace searches/reads/changes,
-browser opening/navigation/resizing, window resizing, and RPC reconnect interruptions.
-They describe observed operations, including background requests, not guaranteed
-user clicks. Browser actions record their start; RPC actions also record their outcome.
-No RPC arguments, prompts, identifiers, project names, file paths, URLs, DOM text,
-or arbitrary action labels are included. Resize activity is throttled.
-
-Every 30 seconds Beta samples aggregate Electron working-set memory (MiB) for
-main, renderer, GPU, and utility processes, retaining four samples. This does
-not measure the separate backend's Node heap. Recent activity and memory samples
-are attached to existing error stacks and crash log tails within their existing
-size limits and pass through the shared redactor. Actions and memory samples do
-not create their own uploads or disk records; Stable exposes no Beta diagnostics bridge
-and starts no sampler. Context can help correlate failures with preceding work,
-but is not a proof of causation and cannot reconstruct older reports.
-
-`update.check` records the start of a check, not a successful result. Its
-`outcome: "ok"` means the attempt started. Failures emit `update.error` with the
-check/download/install context and a fixed `reason`: `timeout`, `network`,
-`http-client`, `http-server`, `manifest`, `release-feed`, `verification`,
-`cancelled`, or `unknown`. Classification recognizes known updater message shapes
-on the device; unrecognized failures remain `unknown`. The ingest worker validates
-this allowlist before storing the reason. Beta also sends a redacted updater
-message; Remote sends no updater message. Older events have no failure reason and
-cannot be classified retroactively.
-Download and install failures emit this event even when the UI keeps the
-`available` or `downloaded` status so the user can retry. Repeated broadcasts of
-the same failure do not emit another event; a new failed attempt does.
-
-`usage.daily` works differently from the other events: the main process cannot
-read the projection database, so the server writes
-`<app home>/diagnostics/usage-snapshot.json` every 6 hours (counts only —
-provider names, thread and turn counts, project count) and the main process
-relays it once per UTC day. Its optional `turnBreakdown` groups finished turns
-of the last 24 hours — including turns started from a phone, an automation or
-an agent — by provider, model, effort, interaction mode, permission mode, origin
-and outcome, with turn counts, summed durations and main-turn token totals. A
-model name is kept only when it is in the bundled catalog or is a versioned Claude
-release (`claude-<family>-<major>[-<minor>]`); anything else is reported as `other`.
-Turns count by when they finished. Usage keys that name models are
-never copied. `beta.installed` is emitted once, on the first
-backend start after a fresh install, and says whether stable data was imported.
-`beta.left` fires when you switch back to stable and says only whether the beta
-app was moved to the Trash.
-
-Every event also carries: a random per-install UUID, `flavor` (`"beta"` or `"remote"`),
-`platform`, `arch`, the app version, and a timestamp; `app.start` additionally
-carries the OS version (major.minor) and UI language. The install UUID is
-generated locally on first launch (`crypto.randomUUID`) — it is not derived
-from your hardware, account, or IP.
-
-Crash dumps: Electron's `crashReporter` uploads minidumps to the diagnostics
-endpoint. Minidumps are memory snapshots of the crashed process and can in
-principle contain fragments of that process's memory; they are stored in R2 and
-can't be redacted. They are kept with no expiry date.
-
-## What usage counters do not collect
-
-- Chat messages, prompts, agent output, or transcripts (usage events carry counts only)
-- File contents, workspace contents, project names, or git metadata
-- Provider keys, tokens, or anything under `secrets/`
-- IP-derived identifiers, device IDs, or account identity
-- Screenshots, window contents, or keystrokes
-
-These are not intentionally sampled for the usage counters. Free-text error
-fields may still contain fragments of work despite redaction, and raw crash
-minidumps can contain fragments of process memory, including sensitive data.
-
-The only free-text fields are `message`, `stack`, and `logTail`. Before they
-are written to the queue, each is passed through `redactDiagnosticText`
-(`packages/shared/src/diagnosticsRedaction.ts`), which strips PEM blocks, git
-remote URLs, emails, URL credentials, query strings, and the path of every
-network URL (`https://github.com/org/repo` becomes `https://github.com/…`),
-`Authorization`/`Bearer`/`Cookie` values, known token shapes (API keys,
-GitHub/Slack/AWS/Google tokens, JWTs), sensitive `key=value`/`key: value`
-fields, IP addresses, and any remaining long opaque token (hex, base64url, or
-standard base64). Paths are reduced to the last segment: `/Users/you/code/my-repo/app.ts` becomes `~/…/app.ts`, so
-folder and repository names, including directory names containing spaces on
-Windows and POSIX, are not sent. Network error codes (`net::ERR_*`) and Node
-stack locations remain readable instead of being mistaken for IPv6 addresses.
-Redaction is best-effort — error
-text can still include fragments of whatever was on screen. The worker runs
-the same redaction again before storing.
-
-Renderer error fields use the same shared redactor before crossing the bounded
-IPC bridge. PEM blocks are removed whole before the field length limit is
-applied, so truncation cannot leave a key fragment for the main process to
-misclassify. The main process redacts these fields again before queueing them.
-Loopback HTTP/WebSocket URL hosts become `localhost`, keeping their ports
-readable and recognizable for fingerprint grouping across both redaction passes.
-External IP addresses remain redacted and external ports remain distinct.
-
-## Transport and storage
-
-Events are buffered to `~/.synara-beta/diagnostics/events.jsonl` and flushed in
-batches as NDJSON over HTTPS to `https://synara-beta-diagnostics.synara-orgs.workers.dev`
-(override with `SYNARA_BETA_DIAGNOSTICS_URL` for local development; only `https://`
-or loopback targets are accepted). Events land in a Cloudflare D1 database. Extracted
-provider usage rows in `usage_providers` and turn breakdown rows in `usage_turns` are
-scheduled for deletion 90 days after receipt. Daily cleanup deletes at most 100,000
-rows per table in batches of 10,000; a larger backlog takes later runs to clear.
-Other diagnostic event records, including the project and active-thread counts in
-`usage.daily`, have no automatic expiry. Crash dumps land in the private
-`synara-beta-crash-dumps` R2 bucket and also have no automatic expiry. The ingest worker and its private
-dashboard live in [apps/analytics](../apps/analytics/README.md) and deploy to the
-Synara Orgs Cloudflare account.
-The worker re-runs the same allowlist and
-`redactDiagnosticText` and drops unknown events/fields, so the documented
-schema is enforced at the endpoint, not just the client.
-
-Ingest is intentionally open. Beta builds are public binaries, so any token
-baked into them would be public too, and Electron's crash uploader cannot send
-custom headers anyway. Abuse is bounded instead: per-IP rate limits (120
-requests a minute for ingest, 10 for login), request and dump size caps, and
-the server-side allowlist and redaction.
-
-If the endpoint is unreachable the queue stays on disk and retries on the next
-flush; if it grows past 1 MiB the client trims it to the newest 512 KiB of
-events rather than letting it grow. Diagnostics never blocks the app: every
-failure is swallowed.
-
-Previously shipped Beta builds still use `https://synara-beta-diagnostics.kartik-9f9.workers.dev`;
-that endpoint forwards ingestion to the new service. The migration preserves
-existing diagnostics and does not change collection or retention.
+Product events expire after 30 days and extracted diagnostic usage rows after
+90 days, in capped scheduled batches. Other diagnostic records currently have
+no automatic expiry; the historical content scrub is distinct from retention.
 
 ## Product analytics
 

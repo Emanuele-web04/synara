@@ -150,7 +150,7 @@ export function buildAiTxt() {
     "- Synara is local-first and does not require a Synara cloud account.",
     "- The selected provider still receives the prompts, file snippets, diffs, terminal output, or tool results needed for its session.",
     "- Synara does not proxy normal provider requests through its own model service; managed remote connections use Cloudflare transport.",
-    "- Product analytics exclude code, prompts and chat history and use random installation IDs independent of login and billing. Stable and Beta default off; Remote from .18 and iPhone/iPad from build 139 default on with a local off switch. Beta crash diagnostics are separate.",
+    "- Product analytics exclude code, prompts and chat history and use random installation IDs independent of login and billing. Stable and Beta default off; Remote from .18 and iPhone/iPad from build 139 default on with a local off switch. Beta diagnostics are separate and always on, with fixed technical metadata only; no work content, log excerpts or raw crash dumps.",
     "",
     "Policy note:",
     "- This file is informational and does not grant or revoke crawler permission.",

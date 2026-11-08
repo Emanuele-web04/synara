@@ -241,3 +241,13 @@ The cross-language wire fixture is
 from the native fixture. Sender tests compare real generated UUIDs with its independent
 hardcoded vectors; receiver tests replay its full iPhone/iPad payloads with clocks fixed
 to each event's July 2026 timestamp so event-age validation remains exercised.
+
+## Diagnostics content boundary
+
+Beta and Remote diagnostics keep fixed error/issue categories and numeric source
+positions only. Error prose, log tails and raw crash memory are excluded for all
+flavors. Raw dump routes, including legacy forwarding/downloads, are retired.
+Old queue rows are reconstructed before upload; historical API reads are guarded.
+Migration `0009` prepares a checkpointed content scrub. Actual D1/R2 deletion is
+an explicit, bounded operator operation; no production cleanup is implied by
+this source. See [the cleanup runbook](DIAGNOSTICS-CONTENT-CLEANUP.md).

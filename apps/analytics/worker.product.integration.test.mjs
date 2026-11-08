@@ -1,12 +1,16 @@
 // Integration boundary: synthetic requests, SQLite-backed D1, migrations and retention.
 // No network, credentials or production data are used.
-import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { appendFileSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import worker, { signSession } from "./worker.ts";
+import worker, {
+  purgeLegacyDiagnosticContent,
+  purgeLegacyDiagnosticDumps,
+  signSession,
+} from "./worker.ts";
 import { BetaDiagnostics } from "../desktop/src/betaDiagnostics.ts";
 import {
   createInitialDesktopUpdateState,
@@ -94,6 +98,8 @@ describe("analytics ingest and D1 storage", () => {
   afterEach(() => {
     db.close();
     vi.useRealTimers();
+
+    vi.unstubAllGlobals();
   });
 
   const envelope = (overrides = {}) => ({
@@ -121,6 +127,382 @@ describe("analytics ingest and D1 storage", () => {
       }),
       env,
     );
+
+  it("excludes diagnostic content from Beta queues, legacy uploads and stored rows", async () => {
+    const root = mkdtempSync(join(tmpdir(), "diagnostic-canary-"));
+    const canary = "violet kettle private draft";
+    const diagnostics = new BetaDiagnostics({
+      homeDir: root,
+      appVersion: "1.2.3-beta.1",
+      platform: "darwin",
+      arch: "arm64",
+      env: {},
+    });
+    try {
+      const error = new TypeError(canary);
+      error.stack = `TypeError: ${canary}\n    at privateDocument (violet-notes.txt:10:5)`;
+      diagnostics.trackError("main", error);
+      diagnostics.track("app.child-process-crash", {
+        kind: "crash",
+        processType: "backend",
+        reason: "code=1 signal=null",
+        logTail: canary,
+      });
+      diagnostics.track("update.error", {
+        kind: "update",
+        outcome: "error",
+        reason: "network",
+        message: canary,
+      });
+      const queue = join(root, "diagnostics", "events.jsonl");
+      expect(readFileSync(queue, "utf8")).not.toContain(canary);
+      const old = {
+        v: 1,
+        id: crypto.randomUUID(),
+        ts: new Date(now).toISOString(),
+        installId: diagnostics.installId,
+        appVersion: "1.2.3-beta.1",
+        flavor: "beta",
+        platform: "darwin",
+        arch: "arm64",
+        event: "app.error",
+        payload: {
+          kind: "error",
+          source: "renderer",
+          message: canary,
+          stack: `TypeError: ${canary}\n at privateFile (violet-notes.txt:20:7)`,
+          fingerprint: "abcdef0123456789",
+          privateExtra: canary,
+        },
+        privateExtra: canary,
+      };
+      appendFileSync(queue, `${JSON.stringify(old)}\n`);
+      const bodies = [];
+      vi.stubGlobal("fetch", async (_url, options) => {
+        bodies.push(options.body);
+        return bodies.length === 1
+          ? new Response("synthetic offline", { status: 503 })
+          : worker.fetch(new Request("https://worker.invalid/v1/events", options), env);
+      });
+      await diagnostics.flush();
+      expect(readFileSync(queue, "utf8")).not.toMatch(/violet|private draft|privateExtra/);
+      await diagnostics.flush();
+      expect(bodies).toHaveLength(2);
+      expect(bodies[0]).not.toMatch(/violet|private draft|privateExtra/);
+      const rows = db.database.prepare("SELECT message, stack, log_tail, reason FROM events").all();
+      expect(rows).toHaveLength(4);
+      expect(JSON.stringify(rows)).not.toMatch(/violet|private draft/);
+      expect(rows[0]).toMatchObject({
+        message: "TypeError at main:10:5",
+        stack: "at main:10:5",
+        log_tail: null,
+      });
+      expect(rows[1]).toMatchObject({ reason: "code=1 signal=null", log_tail: null });
+    } finally {
+      await diagnostics.dispose(0);
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it.each(["beta", "remote"])(
+    "guards historical and handcrafted %s diagnostic content at storage and read boundaries",
+    async (flavor) => {
+      const canary = "violet kettle private draft";
+      const event = {
+        v: 1,
+        id: crypto.randomUUID(),
+        ts: new Date(now).toISOString(),
+        installId: "00000000-0000-4000-8000-000000000001",
+        appVersion: "1.2.3-beta.1",
+        flavor,
+        platform: "darwin",
+        arch: "arm64",
+        event: "app.error",
+        payload: {
+          kind: "error",
+          source: "renderer",
+          message: canary,
+          stack: `TypeError: ${canary}\n at privateFile (violet-notes.txt:10:5)`,
+          logTail: canary,
+          fingerprint: "1234567812345678",
+        },
+      };
+      await worker.fetch(
+        new Request("https://worker.invalid/v1/events", {
+          method: "POST",
+          body: JSON.stringify(event),
+        }),
+        env,
+      );
+      const stored = db.database.prepare("SELECT * FROM events").get();
+      expect(JSON.stringify(stored)).not.toMatch(/violet|private draft/);
+      // Existing deployed rows must stay safe before the cleanup migration is applied.
+      db.database
+        .prepare("UPDATE events SET message = ?, stack = ?, log_tail = ?, fingerprint = ?")
+        .run(
+          canary,
+          `TypeError: ${canary}\n at privateFile (violet-notes.txt:30:9)`,
+          canary,
+          "1234567812345678",
+        );
+      const token = await signSession("test-session-key", Math.floor(Date.now() / 1000) + 3600);
+      const response = await worker.fetch(
+        new Request("https://worker.invalid/api/issues/err:1234567812345678?days=7", {
+          headers: { cookie: `synara_beta_dash=${token}` },
+        }),
+        env,
+      );
+      expect(response.status).toBe(200);
+      expect(await response.text()).not.toMatch(/violet|private draft/);
+    },
+  );
+
+  it("guards historical metadata before facets and limits and scrubs the same fields", async () => {
+    const ts = new Date(now).toISOString();
+    db.database
+      .prepare(`INSERT INTO events
+      (ts, received_at, install_id, app_version, target_version, platform, arch,
+       event, kind, outcome, source, fingerprint, flavor)
+      VALUES (?, ?, '00000000-0000-4000-8000-000000000001', '1.2.3-private-project',
+       '2.0.0-private-project', 'private-project', 'private-arch', 'app.error',
+       'private-note', 'private-note', 'private-note', '1234567812345678', 'beta')`)
+      .run(new Date(now).toUTCString() + " (private-note)", ts);
+    db.database
+      .prepare(`INSERT INTO events
+      (ts, received_at, install_id, app_version, platform, arch, event, kind, flavor)
+      VALUES (?, ?, '00000000-0000-4000-8000-000000000002', '1.2.3-beta.1',
+       'darwin', 'arm64', 'app.start', 'lifecycle', 'beta')`)
+      .run(ts, ts);
+    const token = await signSession("test-session-key", Math.floor(now / 1000) + 3600);
+    const get = (path) =>
+      worker.fetch(
+        new Request(`https://worker.invalid${path}`, {
+          headers: { cookie: `synara_beta_dash=${token}` },
+        }),
+        env,
+      );
+    for (const path of [
+      "/api/filters",
+      "/api/activity",
+      "/api/issues?status=all",
+      "/api/issues/err:1234567812345678",
+      "/api/releases",
+      "/api/status",
+    ]) {
+      const response = await get(path);
+      expect(response.status, path).toBe(200);
+      expect(await response.text(), path).not.toContain("private-");
+    }
+    const filters = await (await get("/api/filters")).json();
+    expect(filters.versions).toEqual(["1.2.3-beta.1", "0.0.0"]);
+    const activity = await (await get("/api/activity")).json();
+    expect(activity.activity[0]).toMatchObject({
+      ts,
+      kind: "error",
+      appVersion: "0.0.0",
+      platform: "unknown",
+      outcome: "unknown",
+    });
+    // Reads protect old rows without silently mutating history; cleanup is opt-in and bounded.
+    expect(db.database.prepare("SELECT app_version FROM events WHERE id = 1").get()).toEqual({
+      app_version: "1.2.3-private-project",
+    });
+    db.database.exec("UPDATE diagnostic_content_cleanup SET through_event_id = 2");
+    await purgeLegacyDiagnosticContent(env);
+    const rows = db.database
+      .prepare(
+        "SELECT ts, app_version, target_version, platform, arch, kind, outcome, source FROM events",
+      )
+      .all();
+    expect(JSON.stringify(rows)).not.toContain("private-");
+    expect(rows[0]).toMatchObject({ ts, app_version: "0.0.0", target_version: "", kind: "error" });
+    expect(rows).toHaveLength(2);
+  });
+
+  it("groups historical crash keys before listing and opens the complete canonical issue", async () => {
+    const ts = new Date(now).toISOString();
+    for (const process of ["Unknown", "private-project"]) {
+      db.database
+        .prepare(`INSERT INTO events
+        (ts, received_at, install_id, app_version, event, kind, process_type, reason, flavor)
+        VALUES (?, ?, '00000000-0000-4000-8000-000000000001', '1.2.3-beta.1',
+         'app.child-process-crash', 'crash', ?, 'crashed', 'beta')`)
+        .run(ts, ts, process);
+    }
+    const token = await signSession("test-session-key", Math.floor(now / 1000) + 3600);
+    const get = (path) =>
+      worker.fetch(
+        new Request(`https://worker.invalid${path}`, {
+          headers: { cookie: `synara_beta_dash=${token}` },
+        }),
+        env,
+      );
+    const { issues } = await (await get("/api/issues?status=all")).json();
+    expect(issues).toHaveLength(1);
+    expect(issues[0]).toMatchObject({ key: "crash:unknown:crashed", events: 2, users: 1 });
+    const detail = await get(`/api/issues/${encodeURIComponent(issues[0].key)}`);
+    expect(detail.status).toBe(200);
+    const body = await detail.json();
+    expect(body.issue.events).toBe(2);
+    expect(body.occurrences).toHaveLength(2);
+    expect(JSON.stringify(body)).not.toContain("private-");
+  });
+
+  it("continues ordinary retention when optional diagnostic dump cleanup fails", async () => {
+    await postEvents([envelope()]);
+    db.database
+      .prepare("UPDATE product_events SET received_at = ?")
+      .run(new Date(now - 31 * 86_400_000).toISOString());
+    env.PURGE_LEGACY_DIAGNOSTICS = "true";
+    env.CRASH_DUMPS = {
+      list: async () => ({ objects: [{ key: "dumps/private-project.dmp" }], truncated: false }),
+      delete: async () => {
+        throw new Error("private-note storage failure");
+      },
+    };
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      await expect(worker.scheduled({ scheduledTime: now }, env)).resolves.toBeUndefined();
+      expect(db.database.prepare("SELECT COUNT(*) AS n FROM product_events").get()).toEqual({
+        n: 0,
+      });
+      expect(warning).toHaveBeenCalled();
+      expect(JSON.stringify(warning.mock.calls)).not.toContain("private-");
+    } finally {
+      warning.mockRestore();
+    }
+  });
+
+  it("rejects raw dump uploads and downloads without consuming content or accessing storage", async () => {
+    const put = vi.fn();
+    const get = vi.fn();
+    env.CRASH_DUMPS = { put, get };
+    const form = new FormData();
+    form.set("upload_file_minidump", new File(["violet kettle private draft"], "synthetic.dmp"));
+    const request = new Request("https://worker.invalid/v1/crash", { method: "POST", body: form });
+    const response = await worker.fetch(request, env);
+    expect(response.status).toBe(410);
+    expect(request.bodyUsed).toBe(false);
+    expect(put).not.toHaveBeenCalled();
+    expect(db.database.prepare("SELECT COUNT(*) AS n FROM crash_dumps").get()).toEqual({ n: 0 });
+    const token = await signSession("test-session-key", Math.floor(Date.now() / 1000) + 3600);
+    const download = await worker.fetch(
+      new Request("https://worker.invalid/api/dumps/dumps/synthetic.dmp", {
+        headers: { cookie: `synara_beta_dash=${token}` },
+      }),
+      env,
+    );
+    expect(download.status).toBe(410);
+    expect(get).not.toHaveBeenCalled();
+  });
+
+  it("scrubs historical diagnostic content and safely retries bounded dump cleanup including orphans", async () => {
+    db.close();
+    db = new SQLiteD1();
+    applyMigrations(db.database, "0008");
+    env.DB = db;
+    const canary = "violet kettle private draft";
+    db.database
+      .prepare(
+        `INSERT INTO events (ts, received_at, install_id, app_version, event, kind, message, stack, log_tail, fingerprint, process_type, reason) VALUES (?, ?, 'synthetic-install', '1.2.3-beta.1', 'app.error', 'error', ?, ?, ?, '1234567812345678', ?, ?)`,
+      )
+      .run(
+        new Date(now).toISOString(),
+        new Date(now).toISOString(),
+        canary,
+        canary,
+        canary,
+        canary,
+        canary,
+      );
+    for (let index = 0; index < 100; index++) {
+      db.database
+        .prepare(
+          "INSERT INTO events (ts, received_at, install_id, app_version, event, kind, message) SELECT ts, received_at, install_id, app_version, event, kind, message FROM events WHERE id = 1",
+        )
+        .run();
+    }
+    db.database
+      .prepare("INSERT INTO issue_status VALUES (?, 'resolved', ?)")
+      .run(`err:${canary}`, new Date(now).toISOString());
+    db.database.exec(
+      readFileSync(
+        new URL("./migrations/0009_diagnostics_content_boundary.sql", import.meta.url),
+        "utf8",
+      ),
+    );
+    expect(await purgeLegacyDiagnosticContent(env)).toEqual({
+      eventsScrubbed: 100,
+      statusRowsDeleted: 0,
+      complete: false,
+    });
+    expect(await purgeLegacyDiagnosticContent(env)).toEqual({
+      eventsScrubbed: 1,
+      statusRowsDeleted: 1,
+      complete: true,
+    });
+    expect(await purgeLegacyDiagnosticContent(env)).toEqual({
+      eventsScrubbed: 0,
+      statusRowsDeleted: 0,
+      complete: true,
+    });
+    const rows = db.database
+      .prepare("SELECT message, stack, log_tail, process_type, reason, fingerprint FROM events")
+      .all();
+    expect(rows).toHaveLength(101);
+    for (const row of rows)
+      expect(row).toEqual({
+        message: null,
+        stack: null,
+        log_tail: null,
+        process_type: "",
+        reason: "",
+        fingerprint: "0000000000000000",
+      });
+    expect(db.database.prepare("SELECT COUNT(*) AS n FROM issue_status").get()).toEqual({ n: 0 });
+    const objects = new Set([
+      "dumps/indexed.dmp",
+      "dumps/orphan.dmp",
+      ...Array.from({ length: 100 }, (_, index) => `dumps/orphan-${index}.dmp`),
+      "unrelated/keep",
+    ]);
+    db.database
+      .prepare(
+        "INSERT INTO crash_dumps (r2_key, install_id, ts, received_at) VALUES ('dumps/indexed.dmp', 'synthetic-install', ?, ?)",
+      )
+      .run(new Date(now).toISOString(), new Date(now).toISOString());
+    db.database
+      .prepare(
+        "INSERT INTO crash_dumps (r2_key, install_id, ts, received_at) VALUES ('dumps/already-absent.dmp', 'synthetic-install', ?, ?)",
+      )
+      .run(new Date(now).toISOString(), new Date(now).toISOString());
+    let fail = true;
+    env.CRASH_DUMPS = {
+      list: vi.fn(async ({ prefix, limit }) => ({
+        objects: [...objects]
+          .filter((key) => key.startsWith(prefix))
+          .slice(0, limit)
+          .map((key) => ({ key })),
+        truncated: false,
+      })),
+      delete: async (keys) => {
+        if (fail) {
+          fail = false;
+          throw new Error("synthetic deletion failure");
+        }
+        for (const key of keys) objects.delete(key);
+      },
+    };
+    await worker.scheduled({ scheduledTime: now }, env);
+    expect(env.CRASH_DUMPS.list).not.toHaveBeenCalled();
+    await expect(purgeLegacyDiagnosticDumps(env)).rejects.toThrow("synthetic deletion failure");
+    expect(db.database.prepare("SELECT COUNT(*) AS n FROM crash_dumps").get()).toEqual({ n: 2 });
+    expect(await purgeLegacyDiagnosticDumps(env)).toEqual({ objectsDeleted: 100, rowsDeleted: 1 });
+    expect(await purgeLegacyDiagnosticDumps(env)).toEqual({ objectsDeleted: 2, rowsDeleted: 0 });
+    expect(await purgeLegacyDiagnosticDumps(env)).toEqual({ objectsDeleted: 0, rowsDeleted: 1 });
+    expect(await purgeLegacyDiagnosticDumps(env)).toEqual({ objectsDeleted: 0, rowsDeleted: 0 });
+    expect([...objects]).toEqual(["unrelated/keep"]);
+  });
 
   it("upgrades the legacy D1 schema by removing account linkage and preserving product fields", () => {
     const legacy = new SQLiteD1();
@@ -1210,6 +1592,7 @@ describe("analytics ingest and D1 storage", () => {
       event: "app.active",
       feature: undefined,
       durationMs: undefined,
+      ts: new Date(Math.floor(now / 1000) * 1000).toISOString().replace(".000Z", "Z"),
       cohortDay: day,
       cohortStage: "new",
     });
@@ -1222,7 +1605,11 @@ describe("analytics ingest and D1 storage", () => {
     ];
     expect(await (await postEvents(bad)).json()).toMatchObject({ accepted: 0 });
     const { cohortDay: _cohortDay, cohortStage: _cohortStage, ...plain } = entry;
-    await postEvents([plain]); // Matches a rollout rollback: the raw UUID exists without metadata.
+    await postEvents([plain]);
+    // An older native receiver persisted the equivalent UTC instant without milliseconds.
+    db.database
+      .prepare("UPDATE product_events SET ts = ? WHERE event_id = ?")
+      .run(entry.ts, entry.id);
     const upgraded = await postEvents([entry]);
     expect(upgraded.headers.get("x-synara-product-cohorts")).toBe("1");
     expect(await upgraded.json()).toMatchObject({ accepted: 1, cohortAcknowledged: [entry.id] });
@@ -1437,7 +1824,9 @@ describe("analytics ingest and D1 storage", () => {
         app_version AS appVersion, event, outcome, cohort_day AS cohortDay, cohort_stage AS cohortStage
         FROM product_events WHERE event_id = ?`)
           .get(event.id),
-      ).toEqual((({ v: _v, ...stored }) => stored)(event));
+      ).toEqual(
+        (({ v: _v, ...stored }) => ({ ...stored, ts: new Date(event.ts).toISOString() }))(event),
+      );
     }
   });
 });

@@ -2,7 +2,17 @@
 // Purpose: Queue, sanitize, and flush behavior for beta-only diagnostics.
 
 import { createServer, type Server } from "node:http";
-import { mkdtempSync, readFileSync, existsSync, rmSync, statSync, writeFileSync } from "node:fs";
+import {
+  mkdtempSync,
+  mkdirSync,
+  readFileSync,
+  existsSync,
+  lstatSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -15,7 +25,6 @@ import { DESKTOP_DIAGNOSTIC_ISSUE_PREFIX } from "@synara/contracts";
 
 import {
   BetaDiagnostics,
-  readLogTail,
   resolveBetaDiagnosticsEndpoint,
   sanitizeBetaDiagnosticsPayload,
   BETA_DIAGNOSTICS_ENDPOINT,
@@ -95,7 +104,7 @@ describe("sanitizeBetaDiagnosticsPayload", () => {
     expect("targetVersion" in sanitized).toBe(false);
   });
 
-  it("redacts free text in error payloads", () => {
+  it("keeps technical error fields and rebuilds the content-independent fingerprint", () => {
     const sanitized = sanitizeBetaDiagnosticsPayload(
       {
         kind: "error",
@@ -109,9 +118,9 @@ describe("sanitizeBetaDiagnosticsPayload", () => {
     expect(sanitized).toEqual({
       kind: "error",
       source: "renderer",
-      message: "failed for <email> at ~/…/app",
-      stack: expect.stringContaining("[redacted]"),
-      fingerprint: "abcdef0123456789",
+      message: "Error at renderer:1:1",
+      stack: "at renderer:1:1",
+      fingerprint: expect.stringMatching(/^[0-9a-f]{16}$/),
     });
     expect(JSON.stringify(sanitized)).not.toContain("ghp_");
     expect(JSON.stringify(sanitized)).not.toContain("alice");
@@ -220,7 +229,7 @@ describe("sanitizeBetaDiagnosticsPayload", () => {
     expect(bad).toEqual({ kind: "lifecycle" });
   });
 
-  it("redacts and caps crash logTail", () => {
+  it("drops crash log tails entirely", () => {
     const longTail = `line with password=hunter2\n${"x".repeat(40 * 1024)}`;
     const sanitized = sanitizeBetaDiagnosticsPayload(
       {
@@ -232,21 +241,7 @@ describe("sanitizeBetaDiagnosticsPayload", () => {
       "/Users/alice",
     );
     const logTail = "logTail" in sanitized ? sanitized.logTail : undefined;
-    expect(logTail).toBeDefined();
-    expect(logTail!.length).toBeLessThanOrEqual(16 * 1024);
-    expect(logTail).not.toContain("hunter2");
-  });
-});
-
-describe("readLogTail", () => {
-  it("returns the last lines of a log file and undefined for missing files", () => {
-    const root = makeRoot();
-    const logPath = join(root, "desktop-main.log");
-    writeFileSync(logPath, Array.from({ length: 300 }, (_, i) => `line-${i}`).join("\n"));
-    const tail = readLogTail(logPath)!;
-    expect(tail).toContain("line-299");
-    expect(tail).not.toContain("line-50");
-    expect(readLogTail(join(root, "missing.log"))).toBeUndefined();
+    expect(logTail).toBeUndefined();
   });
 });
 
@@ -287,22 +282,17 @@ describe("BetaDiagnostics error tracking", () => {
         "-----END PRIVATE KEY-----\nexitCode=5",
     });
     const first = readQueue(root)[0].payload.logTail;
-    expect(first).toContain("chat.send started");
-    expect(first).toContain("exitCode=5");
-    expect(first).not.toMatch(/private prompt|private-thread|private action name|SyntheticKeyPart/);
-    expect(first.length).toBeLessThanOrEqual(16 * 1024);
+    expect(first).toBeUndefined();
     now = new Date(now.getTime() + 11 * 60_000);
     for (let i = 0; i < 30; i++) {
       diag.recordActivity({ activity: "project.import", phase: i % 2 ? "failed" : "started" });
     }
     diag.trackError("renderer", new Error("import failed"));
     const stack = readQueue(root)[1].payload.stack;
-    expect(stack).not.toContain("chat.send");
-    expect(stack.match(/project.import/g)).toHaveLength(24);
-    expect(stack).toContain("import failed");
+    expect(stack ?? "").not.toMatch(/chat.send|project.import|import failed/);
     now = new Date(now.getTime() + 11 * 60_000);
     diag.trackError("renderer", new Error("later failure"));
-    expect(readQueue(root)[2].payload.stack).not.toContain("Beta diagnostic context");
+    expect(readQueue(root)[2].payload.stack ?? "").not.toContain("Beta diagnostic context");
   });
 
   it("samples bounded numeric memory history and stops its timer on disposal", async () => {
@@ -328,9 +318,7 @@ describe("BetaDiagnostics error tracking", () => {
       vi.advanceTimersByTime(90_000);
       diag.trackError("main", new Error("memory context"));
       const stack = readQueue(root)[0].payload.stack;
-      expect(stack.match(/memory MiB/g)).toHaveLength(4);
-      expect(stack).toContain("main=4 renderer=20 gpu=30 utility=40");
-      expect(stack).not.toContain("never send");
+      expect(stack ?? "").not.toMatch(/memory MiB|never send|main=4/);
       await diag.dispose(0);
       const calls = sampleMemory.mock.calls.length;
       vi.advanceTimersByTime(90_000);
@@ -385,7 +373,6 @@ describe("BetaDiagnostics error tracking", () => {
             kind: "update",
             outcome: "error",
             errorContext: context,
-            message: "Updater failure for <email>",
           },
         },
       ]);
@@ -405,13 +392,13 @@ describe("BetaDiagnostics error tracking", () => {
       prompt: "private chat content",
     });
     const [event] = readQueue(root);
-    expect(event.payload.message).toContain("_nonReactive");
-    expect(event.payload.stack).toContain("View.tsx:12:3");
+    expect(event.payload.message).toBe("TypeError at renderer:12:3");
+    expect(event.payload.stack).toBe("at renderer:12:3");
     expect(JSON.stringify(event)).not.toMatch(/alice|private-project|private chat content/);
   });
 
   it.each(["http://127.0.0.1", "https://localhost", "ws://127.0.0.1", "wss://[::1]"])(
-    "groups %s failures across loopback ports without grouping external ports",
+    "groups %s and external failures without retaining addresses or message-derived identity",
     (origin) => {
       const root = makeRoot();
       const diag = makeDiagnostics(root);
@@ -426,8 +413,8 @@ describe("BetaDiagnostics error tracking", () => {
         );
       }
       const events = readQueue(root);
-      expect(events).toHaveLength(3);
-      expect(events[0].payload.message).toContain(":56268/");
+      expect(events).toHaveLength(1);
+      expect(events[0].payload.message).toBe("Error");
       expect(JSON.stringify(events)).not.toContain("private-route");
     },
   );
@@ -487,8 +474,10 @@ describe("BetaDiagnostics error tracking", () => {
       now: () => now,
     });
     for (let i = 0; i < 40; i += 1) {
-      // Distinct messages so the per-fingerprint throttle does not apply.
-      diag.trackError("main", new Error(`failure-${i}`));
+      // Distinct technical frames exercise the session cap without hashing message text.
+      const error = new Error(`failure-${i}`);
+      error.stack = `Error: ignored\n    at task (main.js:${i + 1}:1)`;
+      diag.trackError("main", error);
       now = new Date(now.getTime() + 1000);
     }
     expect(readQueue(root)).toHaveLength(30);
@@ -496,7 +485,7 @@ describe("BetaDiagnostics error tracking", () => {
 });
 
 describe("BetaDiagnostics", () => {
-  it("retains a redacted updater failure message only on update.error", () => {
+  it("keeps updater categories while dropping every failure message", () => {
     const root = makeRoot();
     const diag = makeDiagnostics(root);
     const payload = {
@@ -512,7 +501,7 @@ describe("BetaDiagnostics", () => {
       .trim()
       .split("\n")
       .map((line) => JSON.parse(line));
-    expect(events[0].payload.message).toContain("Cannot find beta-mac.yml");
+    expect(events[0].payload.message).toBeUndefined();
     expect(events[1].payload.message).toBeUndefined();
     expect(JSON.stringify(events)).not.toMatch(/secret|private\/feed|user@example/);
   });
@@ -1351,4 +1340,91 @@ describe("Remote keeps free text on the device", () => {
     expect(events.some((event) => event.event === "usage.daily")).toBe(false);
     expect(JSON.stringify(events)).not.toContain("git.push");
   });
+});
+
+it("clears only regular diagnostic staging files across startup, revocation and flush", async () => {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async () => new Response(null, { status: 204 })),
+  );
+  try {
+    for (const phase of [
+      "constructor-on",
+      "constructor-off",
+      "start",
+      "opt-out",
+      "flush",
+    ] as const) {
+      const root = makeRoot();
+      const dir = join(root, "diagnostics");
+      mkdirSync(dir, { recursive: true });
+      let sharing = phase !== "constructor-off";
+      const make = () =>
+        new BetaDiagnostics({
+          homeDir: root,
+          appVersion: "1.0.6-remote.18",
+          platform: "linux",
+          arch: "x64",
+          flavor: "remote",
+          isEnabled: () => sharing,
+          env: {},
+        });
+      const owned = [
+        `events.jsonl.trim-${process.pid + 1}`,
+        `events.jsonl.flush-${process.pid + 2}`,
+        `events.jsonl.sanitize-${process.pid + 3}`,
+      ];
+      const unrelated = [
+        "notes.txt",
+        "events.jsonl.trim-0",
+        "events.jsonl.flush-01",
+        "events.jsonl.sanitize-user",
+        "other.jsonl.trim-4321",
+      ];
+      const links = ["trim", "flush", "sanitize"].map(
+        (kind) => `events.jsonl.${kind}-${process.pid}`,
+      );
+      const target = join(root, "preserved-target.txt");
+      const seed = () => {
+        for (const name of owned)
+          writeFileSync(join(dir, name), "private customer prompt from interrupted write");
+        for (const name of unrelated) writeFileSync(join(dir, name), "preserve unrelated file");
+        mkdirSync(join(dir, `events.jsonl.trim-${process.pid + 4}`));
+        writeFileSync(target, "preserve private link target");
+        for (const name of links) symlinkSync(target, join(dir, name));
+      };
+      let diagnostics: BetaDiagnostics;
+      if (phase.startsWith("constructor")) {
+        seed();
+        if (!sharing) writeFileSync(join(dir, "events.jsonl"), "private queued content");
+        diagnostics = make();
+      } else {
+        diagnostics = make();
+        if (phase === "flush") diagnostics.track("app.start", { kind: "lifecycle" });
+        seed();
+        if (phase === "start") diagnostics.start();
+        else if (phase === "opt-out") {
+          sharing = false;
+          diagnostics.discardQueue();
+        } else await diagnostics.flush();
+      }
+      try {
+        for (const name of owned)
+          expect(existsSync(join(dir, name)), `${phase}: ${name}`).toBe(false);
+        for (const name of unrelated)
+          expect(readFileSync(join(dir, name), "utf8")).toBe("preserve unrelated file");
+        expect(lstatSync(join(dir, `events.jsonl.trim-${process.pid + 4}`)).isDirectory()).toBe(
+          true,
+        );
+        for (const name of links) expect(lstatSync(join(dir, name)).isSymbolicLink()).toBe(true);
+        expect(readFileSync(target, "utf8")).toBe("preserve private link target");
+        if (!sharing || phase !== "flush")
+          expect(existsSync(join(dir, "events.jsonl"))).toBe(false);
+      } finally {
+        await diagnostics.dispose();
+      }
+    }
+  } finally {
+    vi.unstubAllGlobals();
+  }
 });
