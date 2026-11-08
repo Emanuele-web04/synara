@@ -36,3 +36,23 @@ describe("bundled translations", () => {
     expect(t("workspace:toast_settings")).toBe("Settings");
   });
 });
+
+describe("original English counts", () => {
+  it("chooses singular and plural wording by count", () => {
+    expect(t("workspace:moveSelectedProjects", { count: 1 })).toBe("Move 1 project");
+    expect(t("workspace:moveSelectedProjects", { count: 3 })).toBe("Move 3 projects");
+    expect(t("settings:skillsEnabledOf", { enabled: 1, total: 1, count: 1 })).toBe(
+      "1 of 1 skill enabled",
+    );
+    expect(t("settings:skillsEnabledOf", { enabled: 2, total: 5, count: 5 })).toBe(
+      "2 of 5 skills enabled",
+    );
+    expect(t("common:updatesAvailableForAndMoreProviders", { provider: "Codex", count: 2 })).toBe(
+      "Codex and 2 more providers have newer versions available.",
+    );
+    expect(
+      t("git:projectRepositoriesUnavailableHealthyRepositoriesAreStillShown", { count: 1 }),
+    ).toBe("1 project repository was unavailable. Healthy repositories are still shown.");
+    expect(t("git:openItems")).toBe("Open");
+  });
+});
