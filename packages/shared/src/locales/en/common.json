@@ -1224,5 +1224,7 @@
   "task_couldNotDelete": "Couldn't delete the task",
   "task_quickAddPlaceholder": "Add a task, or press Tab to hand it to an agent",
   "closeNamedItem": "Close {{title}}",
-  "image_retryPreview": "Retry image preview"
+  "image_retryPreview": "Retry image preview",
+  "account_viewPublicProfile": "View public profile",
+  "account_makeYourProfilePublic": "Make your profile public"
 }

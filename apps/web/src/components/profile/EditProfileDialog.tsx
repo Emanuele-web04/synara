@@ -263,7 +263,7 @@ function EditProfileDialogContent({
     setError(null);
     return onSave({
       name: draftName.trim(),
-      handle: normalizeHandle(draftHandle),
+      handle: accountProfile ? `@${draftHandle.toLowerCase()}` : normalizeHandle(draftHandle),
       avatarColor: draftColor,
       avatarImage: draftImage,
       ...(accountProfile

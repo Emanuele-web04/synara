@@ -51,8 +51,9 @@ configured in the hosted WorkOS Production environment. The provider configurati
 and Chromium sign-in UI tests pass; the real production GitHub consent/callback
 has not been verified. Remote also
 enables the profile/usage sync path without an operator flag; an explicit
-`SYNARA_ACCOUNT_PROFILE_SYNC=0` still disables it. Stable remains blocked and
-generic/Beta builds still require their existing opt-in. Product analytics were
+`SYNARA_ACCOUNT_PROFILE_SYNC=0` still disables it. Stable was blocked at that
+release; its later profile promotion is described below. Generic/Beta builds
+retain their existing opt-in. Product analytics were
 separate and off by default in Remote .15; the later Remote default is described
 under [Diagnostics](#diagnostics).
 
@@ -390,9 +391,9 @@ HTTP-hosted clients retain native component visuals but never execute HTML. The 
 bootstrap removes WebRTC capabilities before page scripts and stops parsing if that boundary
 cannot be enforced. HTML messages cannot open external URLs through the host.
 
-The list currently holds `remoteConnections`, `accountProfileSync`,
-`accountInbox` (account-saved Inbox history), and `chinese-ui`. MCP Connectors and
-the native editor are available in Stable and Beta.
+The list currently holds `accountInbox` (account-saved Inbox history) and
+`chinese-ui`. Account profiles, MCP Connectors and the native editor are available
+in Stable and Beta. Remote connections use their separate runtime activation policy.
 
 Simplified Chinese (`chinese-ui`) is available in non-Stable builds. Stable keeps English and Spanish, hides Chinese
 from Language settings, and ignores saved or programmatic Chinese selections without erasing
@@ -439,11 +440,11 @@ survives source removal. Deleting a recap prevents automatic re-creation; an exp
 Save can restore it. Stable refuses the saved-recap RPCs and does not upload. This
 history is separate from public profile publication and aggregate usage sync.
 
-In Beta and generic builds, account profiles additionally require the server opt-in
-`SYNARA_ACCOUNT_PROFILE_SYNC=1`. Remote enables this historical aggregate usage sync
-for the signed-in account by default unless `SYNARA_ACCOUNT_PROFILE_SYNC=0` is set.
-Stable refuses it. The UI reads the server capability, and publication remains a
-separate explicit choice.
+Stable and Remote enable account profiles and aggregate usage sync for signed-in
+accounts by default; `SYNARA_ACCOUNT_PROFILE_SYNC=0` disables the feature. Beta and
+generic builds retain the server opt-in `SYNARA_ACCOUNT_PROFILE_SYNC=1`. The UI reads
+the server capability. New profiles remain private; publication is a separate
+explicit choice and the account API enforces Alto access when configured.
 See the [profiles trial guide](apps/profiles/README.md).
 
 `pull-request-auto-fix` enables the opt-in **Auto-fix CI** action in a pull

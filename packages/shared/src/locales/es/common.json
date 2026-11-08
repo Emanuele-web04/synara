@@ -1224,5 +1224,7 @@
   "task_couldNotDelete": "No se pudo eliminar la tarea",
   "task_quickAddPlaceholder": "Añade una tarea o pulsa Tab para asignarla a un agente",
   "closeNamedItem": "Cerrar {{title}}",
-  "image_retryPreview": "Reintentar la vista previa de la imagen"
+  "image_retryPreview": "Reintentar la vista previa de la imagen",
+  "account_viewPublicProfile": "Ver perfil público",
+  "account_makeYourProfilePublic": "Haz público tu perfil"
 }

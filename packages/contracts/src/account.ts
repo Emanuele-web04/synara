@@ -219,6 +219,8 @@ export const AccountMe = Schema.Struct({
    * still decodes a response from a server that sends them.
    */
   profile: Schema.optional(Schema.NullOr(AccountProfile)),
+  /** Current public-page availability, including entitlement; absent hides public links. */
+  publicProfileAvailable: Schema.optional(Schema.Boolean),
 });
 export type AccountMe = typeof AccountMe.Type;
 

@@ -39,8 +39,9 @@ interface ShareDialogProps {
   readonly handle: string;
   readonly avatarColor: string;
   readonly avatarImage: string | null;
-  /** The account profile, when signed in with one — a PUBLIC profile makes shares link to its page. */
+  /** Shares link to the account page only when publication and availability are confirmed. */
   readonly accountProfile: Pick<AccountProfile, "handle" | "public"> | null;
+  readonly publicProfileAvailable: boolean | undefined;
   readonly open: boolean;
   readonly onOpenChange: (open: boolean) => void;
 }
@@ -53,10 +54,12 @@ export function ShareDialog({
   avatarColor,
   avatarImage,
   accountProfile,
+  publicProfileAvailable,
   open,
   onOpenChange,
 }: ShareDialogProps) {
   const { t } = useTranslation();
+  const publicUrl = profileShareUrl(accountProfile, publicProfileAvailable);
 
   const cardRef = useRef<HTMLDivElement>(null);
   const previewRef = useRef<HTMLDivElement>(null);
@@ -124,7 +127,7 @@ export function ShareDialog({
     setStatus(null);
     return copyCardToClipboard()
       .then((copyResult) => {
-        openExternalUrl(shareIntentUrl(target, shareLinkUrl(profileShareUrl(accountProfile))));
+        openExternalUrl(shareIntentUrl(target, shareLinkUrl(publicUrl)));
         setStatus(shareStatusMessage(copyResult));
       })
       .finally(() => {
@@ -166,7 +169,6 @@ export function ShareDialog({
 
   const previewScale = previewWidth / SHARE_CARD_WIDTH;
   const actionsDisabled = busy !== null;
-  const publicUrl = profileShareUrl(accountProfile);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
