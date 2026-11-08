@@ -68,8 +68,8 @@ async function enterEmailAndReachCodeStep() {
     email: "ada@example.com",
     expiresAt: "2026-08-11T12:10:00.000Z",
   });
-  await page.getByPlaceholder("Email").fill("ada@example.com");
-  await page.getByRole("button", { name: "Continue", exact: true }).click();
+  await page.getByRole("textbox", { name: "Email" }).fill("ada@example.com");
+  await page.getByRole("button", { name: "Send code" }).click();
   await expect.element(page.getByText("Check your email")).toBeVisible();
 }
 
@@ -102,9 +102,19 @@ describe("SignInDialog", () => {
     expect(input.getAttribute("aria-describedby")).toBeTruthy();
   });
 
+  // The code step's "Change email" goes back to the address field without
+  // closing the dialog.
+  it("returns to the email field from the code step", async () => {
+    renderDialog();
+    await enterEmailAndReachCodeStep();
+    await page.getByRole("button", { name: "Change email" }).click();
+    await expect.element(page.getByRole("textbox", { name: "Email" })).toBeVisible();
+    expect(page.getByLabelText("Sign-in code").elements()).toHaveLength(0);
+  });
+
   // M6: EVERY close path aborts the in-flight completeSso and cancels the
-  // server-side attempt — here the outer "Continue without an account",
-  // which unmounts the dialog content.
+  // server-side attempt — here the outer "Not now", which unmounts the
+  // dialog content.
   it("aborts and cancels the in-flight sign-in when the dialog is closed", async () => {
     const seenSignals: AbortSignal[] = [];
     accountApi.beginSso.mockResolvedValue({
@@ -130,7 +140,7 @@ describe("SignInDialog", () => {
     await vi.waitFor(() => expect(accountApi.completeSso).toHaveBeenCalledOnce());
     await expect.element(page.getByText("Stop waiting")).toBeVisible();
 
-    await page.getByRole("button", { name: "Continue without an account" }).click();
+    await page.getByRole("button", { name: "Not now" }).click();
     expect(onOpenChange).toHaveBeenCalledWith(false);
     await vi.waitFor(() => expect(seenSignals[0]?.aborted).toBe(true));
     await vi.waitFor(() => expect(accountApi.cancelSso).toHaveBeenCalledWith({ ssoId: "sso_1" }));
