@@ -1,0 +1,47 @@
+{
+  "schema": 1,
+  "events": [
+    {
+      "v": 1,
+      "id": "088e47c1-1168-8534-953a-ba969ed1d906",
+      "ts": "2026-07-01T12:00:00Z",
+      "installId": "00000000-0000-4000-8000-000000000001",
+      "channel": "remote",
+      "surface": "ios",
+      "platform": "ios",
+      "appVersion": "1.4.0",
+      "event": "app.active",
+      "outcome": "succeeded",
+      "cohortDay": "2026-07-01",
+      "cohortStage": "new"
+    },
+    {
+      "v": 1,
+      "id": "39255e61-045a-8da1-b43a-1732abe6ff01",
+      "ts": "2026-07-08T12:00:00Z",
+      "installId": "00000000-0000-4000-8000-000000000001",
+      "channel": "remote",
+      "surface": "ipados",
+      "platform": "ipados",
+      "appVersion": "1.4.0",
+      "event": "app.active",
+      "outcome": "succeeded",
+      "cohortDay": "2026-07-01",
+      "cohortStage": "week1"
+    },
+    {
+      "v": 1,
+      "id": "c458225d-5eb6-8266-bf2b-7d4fc82f04b2",
+      "ts": "2026-07-31T12:00:00Z",
+      "installId": "00000000-0000-4000-8000-000000000001",
+      "channel": "remote",
+      "surface": "ios",
+      "platform": "ios",
+      "appVersion": "1.4.0",
+      "event": "app.active",
+      "outcome": "succeeded",
+      "cohortDay": "2026-07-01",
+      "cohortStage": "month1"
+    }
+  ]
+}

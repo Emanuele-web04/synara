@@ -14,7 +14,11 @@
 // fields are re-redacted server-side with the same rules the client applies.
 // Deploy: `cd apps/analytics && wrangler deploy`
 
-import { isProductAnalyticsCommand } from "@synara/contracts/productAnalytics";
+import {
+  isProductAnalyticsCommand,
+  PRODUCT_COHORT_WINDOWS,
+  type ProductAnalyticsCohortStage,
+} from "@synara/contracts/productAnalytics";
 import { usageProviderCategory, usageTurnCategories } from "@synara/shared/usageAnalytics";
 
 import {
@@ -105,6 +109,7 @@ const PRODUCT_MAX_BODY_BYTES = 64 * 1024;
 const PRODUCT_MAX_EVENT_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 const PRODUCT_MAX_EVENT_FUTURE_MS = 5 * 60 * 1000;
 const PRODUCT_RETENTION_DAYS = 30;
+const COHORT_RETENTION_DAYS = 90;
 const RETENTION_DELETE_BATCH_SIZE = 10_000;
 const RETENTION_MAX_BATCHES = 10;
 const PRODUCT_MAX_DURATION_MS = 86_400_000;
@@ -117,6 +122,8 @@ interface NormalizedProductEvent {
   id: string;
   ts: string;
   installId: string;
+  cohortDay: string | null;
+  cohortStage: ProductAnalyticsCohortStage | null;
   channel: string;
   surface: string;
   platform: string;
@@ -137,8 +144,13 @@ interface NormalizedProductEvent {
 const INSERT_PRODUCT_EVENT_SQL = `INSERT OR IGNORE INTO product_events (
   event_id, ts, received_at, install_id, channel, surface, platform, app_version,
   event, outcome, feature, mode, provider, reason, command, duration_ms,
-  input_tokens, output_tokens, cached_input_tokens
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
+  input_tokens, output_tokens, cached_input_tokens, cohort_day, cohort_stage
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(event_id) DO UPDATE SET cohort_day = excluded.cohort_day, cohort_stage = excluded.cohort_stage
+WHERE product_events.cohort_stage IS NULL AND excluded.cohort_stage IS NOT NULL
+  AND product_events.install_id = excluded.install_id AND product_events.ts = excluded.ts
+  AND product_events.channel = excluded.channel AND product_events.surface = excluded.surface
+  AND product_events.event = 'app.active' AND product_events.outcome = 'succeeded'`;
 
 function productEventStatement(
   env: Env,
@@ -165,6 +177,8 @@ function productEventStatement(
     event.inputTokens,
     event.outputTokens,
     event.cachedInputTokens,
+    event.cohortDay,
+    event.cohortStage,
   );
 }
 
@@ -316,11 +330,32 @@ export function normalizeProductEvent(
     return null;
   }
 
+  let cohortDay: string | null = null;
+  let cohortStage: ProductAnalyticsCohortStage | null = null;
+  if (raw.cohortDay !== undefined || raw.cohortStage !== undefined) {
+    if (
+      typeof raw.cohortDay !== "string" ||
+      !validCalendarDate(raw.cohortDay) ||
+      typeof raw.cohortStage !== "string" ||
+      !Object.hasOwn(PRODUCT_COHORT_WINDOWS, raw.cohortStage) ||
+      raw.event !== "app.active" ||
+      raw.outcome !== "succeeded"
+    )
+      return null;
+    cohortStage = raw.cohortStage as ProductAnalyticsCohortStage;
+    const ageDays = (Date.parse(raw.ts.slice(0, 10)) - Date.parse(raw.cohortDay)) / DAY_MS;
+    const [first, last] = PRODUCT_COHORT_WINDOWS[cohortStage];
+    if (ageDays < first || ageDays > last) return null;
+    cohortDay = raw.cohortDay;
+  }
+
   // Reconstruct without unknown fields, including all legacy account identifiers.
   return {
     id: raw.id,
     ts: raw.ts,
     installId: raw.installId,
+    cohortDay,
+    cohortStage,
     channel: raw.channel,
     surface: raw.surface as string,
     platform: raw.platform as string,
@@ -336,6 +371,44 @@ export function normalizeProductEvent(
     inputTokens,
     outputTokens,
     cachedInputTokens,
+  };
+}
+
+// Only day/scope aggregates survive raw retention; maturity includes the seven-day upload grace.
+async function loadProductCohorts(env: Env, filters: ProductFilters, now = Date.now()) {
+  const today = new Date(now).toISOString().slice(0, 10);
+  const through = new Date(Date.parse(today) - DAY_MS).toISOString().slice(0, 10);
+  const from = new Date(Date.parse(today) - COHORT_RETENTION_DAYS * DAY_MS)
+    .toISOString()
+    .slice(0, 10);
+  const result = await env.DB.prepare(`SELECT cohort_day AS day, SUM(entries) AS entries,
+    SUM(week1_returns) AS week1Returns, SUM(month1_returns) AS month1Returns
+    FROM product_cohorts WHERE cohort_day >= ? AND cohort_day <= ?${filters.scopeClause}
+    GROUP BY cohort_day ORDER BY cohort_day DESC`)
+    .bind(from, through, ...filters.scopeBinds)
+    .all<{ day: string; entries: number; week1Returns: number; month1Returns: number }>();
+  const rows = result.results.map((row) => ({
+    ...row,
+    week1Mature: now >= Date.parse(row.day) + 21 * DAY_MS,
+    month1Mature: now >= Date.parse(row.day) + 44 * DAY_MS,
+  }));
+  const summary = (stage: "week1" | "month1") => {
+    const mature = rows.filter((row) => row[`${stage}Mature`]);
+    const entries = mature.reduce((sum, row) => sum + row.entries, 0);
+    const returned = mature.reduce((sum, row) => sum + row[`${stage}Returns`], 0);
+    return {
+      entries,
+      returned,
+      ratePct: entries > 0 ? Math.round((returned / entries) * 1000) / 10 : null,
+    };
+  };
+  return {
+    from,
+    to: through,
+    rows,
+    newReportingInstallations: rows.reduce((sum, row) => sum + row.entries, 0),
+    week1: summary("week1"),
+    month1: summary("month1"),
   };
 }
 
@@ -2294,6 +2367,7 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
       return dailyByDay.get(day) ?? { day, events: 0, installations: 0, turns: 0 };
     });
     return jsonResponse({
+      cohorts: await loadProductCohorts(env, productFilters),
       from: productFilters.from,
       to: productFilters.to,
       channel: productFilters.channel,
@@ -2436,13 +2510,62 @@ export default {
         return new Response("too many events", { status: 413 });
       }
       const receivedAt = new Date().toISOString();
-      const statements = body.events
+      const normalized = body.events
         .map((raw) => normalizeProductEvent(raw))
-        .filter((event): event is NormalizedProductEvent => event !== null)
-        .map((event) => productEventStatement(env, event, receivedAt));
+        .filter((event): event is NormalizedProductEvent => event !== null);
+      const statements = normalized.map((event) => productEventStatement(env, event, receivedAt));
       const results = statements.length > 0 ? await env.DB.batch(statements) : [];
       const accepted = results.reduce((count, result) => count + (result.meta?.changes ?? 0), 0);
-      return Response.json({ accepted, received: body.events.length });
+      const cohortEvents = normalized.filter((event) => event.cohortStage !== null);
+      let cohortAcknowledged: string[] = [];
+      if (cohortEvents.length > 0) {
+        // A persisted logical stage remains acknowledged if lost local state changes only its timestamp.
+        const persisted = await env.DB.prepare(`SELECT event_id AS id, install_id AS installId,
+          channel, surface, event, outcome, cohort_day AS cohortDay, cohort_stage AS cohortStage
+          FROM product_events WHERE event_id IN (${cohortEvents.map(() => "?").join(",")})`)
+          .bind(...cohortEvents.map((event) => event.id))
+          .all<
+            Pick<
+              NormalizedProductEvent,
+              | "id"
+              | "installId"
+              | "channel"
+              | "surface"
+              | "event"
+              | "outcome"
+              | "cohortDay"
+              | "cohortStage"
+            >
+          >();
+        const byId = new Map(persisted.results.map((event) => [event.id, event]));
+        const fields = [
+          "installId",
+          "channel",
+          "surface",
+          "event",
+          "outcome",
+          "cohortDay",
+          "cohortStage",
+        ] as const;
+        cohortAcknowledged = [
+          ...new Set(
+            cohortEvents
+              .filter((event) => {
+                const stored = byId.get(event.id);
+                return stored && fields.every((field) => stored[field] === event[field]);
+              })
+              .map((event) => event.id),
+          ),
+        ];
+      }
+      return Response.json(
+        {
+          accepted,
+          received: body.events.length,
+          ...(cohortEvents.length > 0 ? { cohortAcknowledged } : {}),
+        },
+        { headers: { "x-synara-product-cohorts": "1" } },
+      );
     }
 
     if (url.pathname === "/v1/events" && request.method === "POST") {
@@ -2623,16 +2746,21 @@ export default {
       ["product_events", "event_id", PRODUCT_RETENTION_DAYS],
       ["usage_turns", "rowid", USAGE_RETENTION_DAYS],
       ["usage_providers", "rowid", USAGE_RETENTION_DAYS],
+      ["product_cohorts", "rowid", COHORT_RETENTION_DAYS],
     ] as const) {
       const cutoff = new Date(controller.scheduledTime - retentionDays * DAY_MS).toISOString();
       for (let batch = 0; batch < RETENTION_MAX_BATCHES; batch += 1) {
         const result = await env.DB.prepare(
           `DELETE FROM ${table} WHERE ${key} IN (
              SELECT ${key} FROM ${table}
-             WHERE received_at < ? ORDER BY received_at LIMIT ?
+             WHERE ${table === "product_cohorts" ? "cohort_day" : "received_at"} < ?
+             ORDER BY ${table === "product_cohorts" ? "cohort_day" : "received_at"} LIMIT ?
            )`,
         )
-          .bind(cutoff, RETENTION_DELETE_BATCH_SIZE)
+          .bind(
+            table === "product_cohorts" ? cutoff.slice(0, 10) : cutoff,
+            RETENTION_DELETE_BATCH_SIZE,
+          )
           .run();
         if ((result.meta?.changes ?? 0) < RETENTION_DELETE_BATCH_SIZE) break;
       }

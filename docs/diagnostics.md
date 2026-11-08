@@ -318,3 +318,20 @@ path. A `usage.daily` report samples the preceding 24 hours and is sent at most 
 per UTC day; it is not an exact calendar-day ledger or a complete global execution
 total. Product and diagnostic usage observations are separate from account and billing
 records.
+
+### Aggregate reporting cohorts
+
+Cohort-capable clients add only a UTC cohort entry day and one fixed return stage
+(`new`, `week1`, `month1`) to successful `app.active` events after the receiver confirms
+support. Cohorts measure new reporting installations, including upgrades adopting the
+measurement, resets and reinstalls; they do not measure downloads or people. Return
+windows cover days 7–13 and 30–36, and rates remain unknown until each full window plus
+seven days of delayed-upload grace has passed. Missing return reports do not establish
+an uninstall or subscription cancellation. Existing activity is not backfilled.
+
+Raw events keep their 30-day cleanup schedule. Only day/channel/surface aggregate counts
+survive in `product_cohorts`, with a 90-cohort-day scheduled cleanup target and capped
+batches; no installation or account identifier is stored in that table. Local cohort
+state is deleted with product opt-out. Re-enabling starts a new random reporting identity.
+This protocol requires migration 0008, the cohort-capable receiver and updated senders;
+source changes do not deploy it or enable native cohort reporting.

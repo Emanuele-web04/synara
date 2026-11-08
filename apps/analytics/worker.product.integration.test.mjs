@@ -4,7 +4,7 @@ import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import worker, { signSession } from "./worker.ts";
 import { BetaDiagnostics } from "../desktop/src/betaDiagnostics.ts";
@@ -91,7 +91,10 @@ describe("analytics ingest and D1 storage", () => {
     day = new Date(now).toISOString().slice(0, 10);
   });
 
-  afterEach(() => db.close());
+  afterEach(() => {
+    db.close();
+    vi.useRealTimers();
+  });
 
   const envelope = (overrides = {}) => ({
     v: 1,
@@ -162,6 +165,9 @@ describe("analytics ingest and D1 storage", () => {
     const legacy = new SQLiteD1();
     try {
       applyMigrations(legacy.database, "0006");
+      legacy.database.exec(
+        readFileSync(new URL("./migrations/0008_product_cohorts.sql", import.meta.url), "utf8"),
+      );
       const at = new Date(now).toISOString();
       const installId = "00000000-0000-4000-8000-0000000000f1";
       const eventId = Number(
@@ -338,10 +344,14 @@ describe("analytics ingest and D1 storage", () => {
     }
   });
 
-  it("accepts events before and after the account-column migration", async () => {
+  it("accepts legacy clients with cohort columns before and after account-column removal", async () => {
     const legacy = new SQLiteD1();
     try {
       applyMigrations(legacy.database, "0006");
+      // The cohort receiver requires its additive columns; account removal is independent.
+      legacy.database.exec(
+        readFileSync(new URL("./migrations/0008_product_cohorts.sql", import.meta.url), "utf8"),
+      );
       const send = () =>
         worker.fetch(
           new Request("https://worker.invalid/v1/product-events", {
@@ -1194,5 +1204,240 @@ describe("analytics ingest and D1 storage", () => {
     );
     expect(db.database.prepare("SELECT COUNT(*) AS n FROM product_events").get().n).toBe(1);
     expect(db.database.prepare("SELECT COUNT(*) AS n FROM events").get().n).toBe(1);
+  });
+  it("validates stage windows, atomically deduplicates cohorts and repairs an older receiver's plain row", async () => {
+    const entry = envelope({
+      event: "app.active",
+      feature: undefined,
+      durationMs: undefined,
+      cohortDay: day,
+      cohortStage: "new",
+    });
+    const bad = [
+      { ...entry, id: crypto.randomUUID(), cohortStage: "private-team" },
+      { ...entry, id: crypto.randomUUID(), cohortDay: "2026-02-30" },
+      { ...entry, id: crypto.randomUUID(), cohortStage: "week1" },
+      { ...entry, id: crypto.randomUUID(), cohortDay: undefined },
+      { ...entry, id: crypto.randomUUID(), event: "feature.used", feature: "settings" },
+    ];
+    expect(await (await postEvents(bad)).json()).toMatchObject({ accepted: 0 });
+    const { cohortDay: _cohortDay, cohortStage: _cohortStage, ...plain } = entry;
+    await postEvents([plain]); // Matches a rollout rollback: the raw UUID exists without metadata.
+    const upgraded = await postEvents([entry]);
+    expect(upgraded.headers.get("x-synara-product-cohorts")).toBe("1");
+    expect(await upgraded.json()).toMatchObject({ accepted: 1, cohortAcknowledged: [entry.id] });
+    expect(
+      await (await postEvents([entry, entry, { ...entry, id: crypto.randomUUID() }])).json(),
+    ).toMatchObject({ accepted: 0 });
+    expect(
+      db.database
+        .prepare("SELECT entries, week1_returns, month1_returns FROM product_cohorts")
+        .get(),
+    ).toEqual({ entries: 1, week1_returns: 0, month1_returns: 0 });
+    expect(
+      db.database
+        .prepare("PRAGMA table_info(product_cohorts)")
+        .all()
+        .map((row) => row.name),
+    ).not.toEqual(expect.arrayContaining(["install_id", "event_id"]));
+
+    db.database.exec(
+      "CREATE TRIGGER synthetic_cohort_failure BEFORE INSERT ON product_cohorts WHEN NEW.channel = 'beta' BEGIN SELECT RAISE(ABORT, 'synthetic storage failure'); END;",
+    );
+    await expect(
+      postEvents([
+        { ...entry, id: crypto.randomUUID(), installId: crypto.randomUUID() },
+        { ...entry, id: crypto.randomUUID(), channel: "beta" },
+      ]),
+    ).rejects.toThrow("synthetic storage failure");
+    expect(db.database.prepare("SELECT entries FROM product_cohorts").get().entries).toBe(1);
+    expect(db.database.prepare("SELECT COUNT(*) AS n FROM product_events").get().n).toBe(1);
+  });
+
+  it("keeps only aggregate 90-day history and excludes immature cohorts until upload grace ends", async () => {
+    vi.useFakeTimers();
+    const origin = Date.parse("2026-07-01T12:00:00.000Z");
+    const setDay = (offset) => {
+      now = origin + offset * 86400000;
+      vi.setSystemTime(now);
+    };
+    setDay(0);
+    const specs = [
+      { installId: crypto.randomUUID(), channel: "remote", surface: "desktop" },
+      { installId: crypto.randomUUID(), channel: "stable", surface: "desktop" },
+      { installId: crypto.randomUUID(), channel: "remote", surface: "ios", platform: "ios" },
+    ];
+    const stage = (spec, cohortStage) =>
+      envelope({
+        ...spec,
+        event: "app.active",
+        feature: undefined,
+        durationMs: undefined,
+        cohortDay: "2026-07-01",
+        cohortStage,
+      });
+    await postEvents(specs.map((spec) => stage(spec, "new")));
+    setDay(7);
+    const returns = [stage(specs[0], "week1")];
+    await postEvents(returns);
+    await postEvents(returns);
+    setDay(13);
+    const lateReturn = stage(specs[2], "week1");
+    setDay(20);
+    await postEvents([lateReturn]);
+    const outsideWindow = {
+      ...lateReturn,
+      id: crypto.randomUUID(),
+      ts: new Date(origin + 14 * 86400000).toISOString(),
+    };
+    expect(await (await postEvents([outsideWindow])).json()).toMatchObject({ accepted: 0 });
+    setDay(30);
+    await postEvents([stage(specs[0], "month1")]);
+    setDay(31);
+    await worker.scheduled({ scheduledTime: now }, env);
+    expect(
+      db.database
+        .prepare("SELECT COUNT(*) AS n FROM product_events WHERE cohort_stage = 'new'")
+        .get().n,
+    ).toBe(0);
+    const query = async (scope = "") => {
+      const token = await signSession("test-session-key", Math.floor(Date.now() / 1000) + 3600);
+      return (
+        await worker.fetch(
+          new Request(`https://worker.invalid/api/product?${scope}`, {
+            headers: { cookie: `synara_beta_dash=${token}` },
+          }),
+          env,
+        )
+      ).json();
+    };
+    setDay(43);
+    const pending = (await query()).cohorts;
+    expect(pending.week1).toEqual({ entries: 3, returned: 2, ratePct: 66.7 });
+    expect(pending.month1).toEqual({ entries: 0, returned: 0, ratePct: null });
+    setDay(44);
+    const mature = (await query()).cohorts;
+    expect(mature.newReportingInstallations).toBe(3);
+    expect(mature.month1).toEqual({ entries: 3, returned: 1, ratePct: 33.3 });
+    expect((await query("channel=remote&surface=desktop")).cohorts.month1).toEqual({
+      entries: 1,
+      returned: 1,
+      ratePct: 100,
+    });
+    expect((await query("surface=ios")).cohorts.month1).toEqual({
+      entries: 1,
+      returned: 0,
+      ratePct: 0,
+    });
+    setDay(91);
+    await worker.scheduled({ scheduledTime: now }, env);
+    expect(db.database.prepare("SELECT COUNT(*) AS n FROM product_cohorts").get().n).toBe(0);
+    expect(db.database.prepare("SELECT COUNT(*) AS n FROM product_events").get().n).toBe(0);
+  });
+  it("acknowledges only persisted matching cohort tuples and valid retries", async () => {
+    const entry = () =>
+      envelope({
+        event: "app.active",
+        feature: undefined,
+        durationMs: undefined,
+        cohortDay: day,
+        cohortStage: "new",
+      });
+    for (const mismatch of [
+      { installId: crypto.randomUUID() },
+      { ts: new Date(now - 60_000).toISOString() },
+      { channel: "beta" },
+      { surface: "ios", platform: "ios" },
+      { event: "app.open" },
+      { outcome: "failed" },
+    ]) {
+      const candidate = entry();
+      const { cohortDay: _cohortDay, cohortStage: _cohortStage, ...plain } = candidate;
+      expect(await (await postEvents([{ ...plain, ...mismatch }])).json()).toMatchObject({
+        accepted: 1,
+      });
+      expect(await (await postEvents([candidate])).json()).toMatchObject({
+        accepted: 0,
+        cohortAcknowledged: [],
+      });
+    }
+    // Losing only cohort state can reconstruct the same stage UUID later that day.
+    const counted = entry();
+    expect(await (await postEvents([counted])).json()).toMatchObject({
+      accepted: 1,
+      cohortAcknowledged: [counted.id],
+    });
+    expect(
+      await (await postEvents([{ ...counted, ts: new Date(now + 60_000).toISOString() }])).json(),
+    ).toMatchObject({ accepted: 0, cohortAcknowledged: [counted.id] });
+    expect(
+      db.database.prepare("SELECT SUM(entries) AS entries FROM product_cohorts").get(),
+    ).toEqual({
+      entries: 1,
+    });
+    vi.useFakeTimers();
+    now = Date.parse("2026-07-08T12:00:00.000Z");
+    vi.setSystemTime(now);
+    for (const existingDay of ["2026-06-30", "2026-07-01"]) {
+      const stored = envelope({
+        event: "app.active",
+        feature: undefined,
+        durationMs: undefined,
+        cohortDay: existingDay,
+        cohortStage: "week1",
+      });
+      expect(await (await postEvents([stored])).json()).toMatchObject({
+        accepted: 1,
+        cohortAcknowledged: [stored.id],
+      });
+      const changedDay = {
+        ...stored,
+        cohortDay: existingDay === "2026-06-30" ? "2026-07-01" : "2026-06-30",
+      };
+      expect(await (await postEvents([changedDay])).json()).toMatchObject({
+        accepted: 0,
+        cohortAcknowledged: [],
+      });
+      const candidate = { ...stored, cohortDay: "2026-07-08", cohortStage: "new" };
+      expect(await (await postEvents([candidate])).json()).toMatchObject({
+        accepted: 0,
+        cohortAcknowledged: [],
+      });
+      expect(await (await postEvents([stored])).json()).toMatchObject({
+        accepted: 0,
+        cohortAcknowledged: [stored.id],
+      });
+    }
+  });
+
+  it("accepts the exact shared native cohort wire fixture at each event's clock", async () => {
+    const fixture = JSON.parse(
+      readFileSync(
+        new URL(
+          "../../packages/contracts/fixtures/product-analytics/cohort-v1.json",
+          import.meta.url,
+        ),
+        "utf8",
+      ),
+    );
+    vi.useFakeTimers();
+    for (const event of fixture.events) {
+      vi.setSystemTime(new Date(event.ts));
+      expect(await (await postEvents([event])).json()).toMatchObject({
+        accepted: 1,
+        cohortAcknowledged: [event.id],
+      });
+      expect(await (await postEvents([event])).json()).toMatchObject({
+        accepted: 0,
+        cohortAcknowledged: [event.id],
+      });
+      expect(
+        db.database
+          .prepare(`SELECT event_id AS id, ts, install_id AS installId, channel, surface, platform,
+        app_version AS appVersion, event, outcome, cohort_day AS cohortDay, cohort_stage AS cohortStage
+        FROM product_events WHERE event_id = ?`)
+          .get(event.id),
+      ).toEqual((({ v: _v, ...stored }) => stored)(event));
+    }
   });
 });

@@ -1,14 +1,29 @@
 // Installation-only product sender; legacy account linkage is scrubbed before replay.
 // Consent owns the queue, identity, and cancellation of active requests.
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import {
   isProductAnalyticsCommand,
+  PRODUCT_COHORT_WINDOWS,
+  type ProductAnalyticsCohortStage,
   type ProductAnalyticsChannel,
   type ProductAnalyticsEnvelope,
   type ProductAnalyticsInput,
 } from "@synara/contracts";
+
+type CohortState = { day: string; entryTs: string; completed: ProductAnalyticsCohortStage[] };
+
+// Stable retries identify only a stage of this random installation, never an account.
+function cohortEventId(installId: string, day: string, stage: ProductAnalyticsCohortStage): string {
+  const bytes = createHash("sha256")
+    .update(`synara-cohort-v1:${installId.toLowerCase()}:${day}:${stage}`)
+    .digest();
+  bytes[6] = (bytes[6]! & 15) | 128;
+  bytes[8] = (bytes[8]! & 63) | 128;
+  const hex = bytes.subarray(0, 16).toString("hex");
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
 
 const ENDPOINT = "https://synara-beta-diagnostics.synara-orgs.workers.dev/v1/product-events";
 const IDENTITY_VERSION = "2";
@@ -98,6 +113,9 @@ export class ProductAnalytics {
   private readonly identityVersionPath: string;
   private readonly legacyAccountHashPath: string;
   private readonly queuePath: string;
+  private readonly cohortPath: string;
+  private cohort: CohortState | null = null;
+  private cohortSupported = false;
   private readonly channel: ProductAnalyticsChannel;
   private readonly appVersion: string;
   private readonly platform: ProductAnalyticsEnvelope["platform"];
@@ -130,6 +148,7 @@ export class ProductAnalytics {
     this.identityVersionPath = join(dir, "identity-version");
     this.legacyAccountHashPath = join(dir, "account-hash");
     this.queuePath = join(dir, "events.json");
+    this.cohortPath = join(dir, "cohort.json");
     this.channel = input.channel;
     this.appVersion = semver(input.appVersion);
     this.platform = platform(input.platform);
@@ -152,6 +171,7 @@ export class ProductAnalytics {
         }
         this.installId = this.readOrCreateInstallId();
         this.queue = this.readQueue();
+        this.cohort = this.readCohort();
       } catch {
         this.installId = null;
         this.queue = [];
@@ -177,6 +197,7 @@ export class ProductAnalytics {
   /** One app.active per UTC day while the app runs, so long sessions count every day. */
   private trackActiveDay(): void {
     if (!this.enabled) return;
+    this.queueCohortStage();
     const day = new Date().toISOString().slice(0, 10);
     if (day === this.activeDay) return;
     this.activeDay = day;
@@ -209,6 +230,8 @@ export class ProductAnalytics {
     if (value === this.enabled && !(value === false && this.consentNeedsPersistence))
       return this.getState();
     this.epoch += 1;
+    this.cohort = null;
+    this.cohortSupported = false;
     if (!value) {
       const wasEnabled = this.enabled;
       this.enabled = false;
@@ -288,16 +311,14 @@ export class ProductAnalytics {
     if (this.queue.length === 0) return;
     const batch: ProductAnalyticsEnvelope[] = [];
     for (const event of this.queue) {
+      if (event.cohortStage && !this.cohortSupported) continue;
       if (batch.length >= MAX_BATCH_EVENTS) break;
       const candidate = [...batch, event];
       if (Buffer.byteLength(JSON.stringify({ events: candidate }), "utf8") > MAX_BATCH_BYTES) break;
       batch.push(event);
     }
-    if (batch.length === 0) {
-      this.queue.shift();
-      this.persistQueue();
-      return;
-    }
+    // An empty existing POST probes capability while holding restored cohort envelopes.
+    if (batch.length === 0 && this.cohortSupported) return;
     this.flushing = true;
     const epoch = this.epoch;
     const controller = new AbortController();
@@ -321,10 +342,40 @@ export class ProductAnalytics {
         throw new Error("Product analytics request failed");
       }
       if (epoch !== this.epoch || !this.enabled) return;
-      const sent = new Set(batch.map((event) => event.id));
+      this.cohortSupported = response.headers.get("x-synara-product-cohorts") === "1";
+      const cohortAcknowledged = new Set<string>();
+      if (this.cohortSupported && batch.some((event) => event.cohortStage)) {
+        const receipt = (await response.json()) as { cohortAcknowledged?: unknown };
+        if (Array.isArray(receipt.cohortAcknowledged))
+          for (const id of receipt.cohortAcknowledged)
+            if (typeof id === "string") cohortAcknowledged.add(id);
+      }
+      if (epoch !== this.epoch || !this.enabled) return;
+      // Save completion before removing the durable envelope; a crash can only replay its UUID.
+      if (this.cohort) {
+        const completed = new Set(this.cohort.completed);
+        for (const event of batch)
+          if (
+            event.cohortStage &&
+            event.cohortDay === this.cohort.day &&
+            cohortAcknowledged.has(event.id)
+          )
+            completed.add(event.cohortStage);
+        const state = { ...this.cohort, completed: [...completed] };
+        this.persistCohort(state);
+        this.cohort = state;
+      }
+      const sent = new Set(
+        batch
+          .filter((event) => !event.cohortStage || cohortAcknowledged.has(event.id))
+          .map((event) => event.id),
+      );
       this.queue = this.queue.filter((event) => !sent.has(event.id));
       this.persistQueue();
       this.failures = 0;
+      if (batch.some((event) => event.cohortStage && !cohortAcknowledged.has(event.id)))
+        this.scheduleRetry();
+      this.queueCohortStage();
     } catch {
       if (epoch === this.epoch && this.enabled && !this.disposed) this.scheduleRetry();
     } finally {
@@ -333,7 +384,12 @@ export class ProductAnalytics {
         this.controller = null;
         this.flushing = false;
       }
-      if (this.enabled && !this.disposed && !this.retryTimer && this.queue.length > 0)
+      if (
+        this.enabled &&
+        !this.disposed &&
+        !this.retryTimer &&
+        this.queue.some((event) => !event.cohortStage || this.cohortSupported)
+      )
         void this.flush();
     }
   }
@@ -433,6 +489,98 @@ export class ProductAnalytics {
     };
   }
 
+  // Receiver support is re-established each process; old receivers never consume stage envelopes.
+  private queueCohortStage(): void {
+    if (!this.cohortSupported || !this.enabled || !this.installId) return;
+    try {
+      this.pruneExpired();
+      const now = new Date();
+      const day = now.toISOString().slice(0, 10);
+      let state = this.cohort;
+      if (
+        !state ||
+        (!state.completed.includes("new") &&
+          Date.parse(state.entryTs) < now.getTime() - MAX_EVENT_AGE_MS)
+      )
+        state = { day, entryTs: now.toISOString(), completed: [] };
+      const age = (Date.parse(day) - Date.parse(state.day)) / 86_400_000;
+      const stage = !state.completed.includes("new")
+        ? "new"
+        : age >= 7 && age <= 13 && !state.completed.includes("week1")
+          ? "week1"
+          : age >= 30 && age <= 36 && !state.completed.includes("month1")
+            ? "month1"
+            : null;
+      if (
+        !stage ||
+        this.queue.some((event) => event.cohortDay === state.day && event.cohortStage === stage)
+      )
+        return;
+      const envelope = this.buildEnvelope({ event: "app.active", outcome: "succeeded" });
+      if (!envelope) return;
+      const event: ProductAnalyticsEnvelope = {
+        ...envelope,
+        id: cohortEventId(this.installId, state.day, stage),
+        ts: stage === "new" ? state.entryTs : now.toISOString(),
+        cohortDay: state.day,
+        cohortStage: stage,
+      };
+      const queue = [...this.queue, event].slice(-MAX_QUEUE);
+      // Queue first: recovery can reconstruct a missing entry state from its durable envelope.
+      this.writeAtomic(this.queuePath, JSON.stringify(queue), true);
+      this.queue = queue;
+      this.cohort = state;
+      this.persistCohort(state);
+    } catch {
+      /* A storage failure must not affect the workspace. */
+    }
+  }
+
+  private persistCohort(state: CohortState): void {
+    this.writeAtomic(
+      this.cohortPath,
+      JSON.stringify({ v: 1, installId: this.installId, ...state }),
+      true,
+    );
+  }
+
+  // A queue commit can be newer than an otherwise valid state file after a crash.
+  private readCohort(): CohortState | null {
+    let state: CohortState | null = null;
+    try {
+      const raw = JSON.parse(readFileSync(this.cohortPath, "utf8")) as Record<string, unknown>;
+      if (
+        raw.v === 1 &&
+        raw.installId === this.installId &&
+        typeof raw.day === "string" &&
+        typeof raw.entryTs === "string" &&
+        raw.entryTs.slice(0, 10) === raw.day &&
+        Number.isFinite(Date.parse(raw.entryTs)) &&
+        new Date(raw.entryTs).toISOString() === raw.entryTs &&
+        Date.parse(raw.entryTs) <= Date.now() + 5 * 60_000 &&
+        Array.isArray(raw.completed) &&
+        raw.completed.every(
+          (stage) => typeof stage === "string" && Object.hasOwn(PRODUCT_COHORT_WINDOWS, stage),
+        )
+      )
+        state = {
+          day: raw.day,
+          entryTs: raw.entryTs,
+          completed: raw.completed as ProductAnalyticsCohortStage[],
+        };
+    } catch {
+      /* Reconcile below with any entry whose durable queue write survived. */
+    }
+    let entry: ProductAnalyticsEnvelope | undefined;
+    for (const event of this.queue) {
+      if (event.cohortStage === "new" && (!entry || Date.parse(event.ts) > Date.parse(entry.ts)))
+        entry = event;
+    }
+    if (entry && (!state || Date.parse(entry.ts) > Date.parse(state.entryTs)))
+      return { day: entry.cohortDay!, entryTs: entry.ts, completed: [] };
+    return state;
+  }
+
   private readConsent(): boolean {
     let raw: string;
     try {
@@ -522,9 +670,34 @@ export class ProductAnalytics {
       if (Object.hasOwn(row, key)) input[key] = row[key];
     const built = this.buildEnvelope(input);
     if (!built) return null;
+    let cohort: { cohortDay: string; cohortStage: ProductAnalyticsCohortStage } | undefined;
+    if (row.cohortDay !== undefined || row.cohortStage !== undefined) {
+      if (
+        typeof row.cohortDay !== "string" ||
+        !/^\d{4}-\d{2}-\d{2}$/.test(row.cohortDay) ||
+        !Number.isFinite(Date.parse(row.cohortDay)) ||
+        new Date(row.cohortDay).toISOString().slice(0, 10) !== row.cohortDay ||
+        typeof row.cohortStage !== "string" ||
+        !Object.hasOwn(PRODUCT_COHORT_WINDOWS, row.cohortStage) ||
+        row.event !== "app.active" ||
+        row.outcome !== "succeeded"
+      )
+        return null;
+      const stage = row.cohortStage as ProductAnalyticsCohortStage;
+      const age = (Date.parse(row.ts.slice(0, 10)) - Date.parse(row.cohortDay)) / 86_400_000;
+      const [first, last] = PRODUCT_COHORT_WINDOWS[stage];
+      if (
+        age < first ||
+        age > last ||
+        row.id !== cohortEventId(this.installId!, row.cohortDay, stage)
+      )
+        return null;
+      cohort = { cohortDay: row.cohortDay, cohortStage: stage };
+    }
     // Rebuilding also discards legacy account hashes from the durable queue.
     return {
       ...built,
+      ...cohort,
       id: row.id,
       ts: new Date(row.ts).toISOString(),
       channel: row.channel as ProductAnalyticsChannel,
@@ -563,7 +736,7 @@ export class ProductAnalytics {
       for (const entry of readdirSync(dir, { withFileTypes: true })) {
         if (
           entry.isFile() &&
-          /^(install-id|identity-version|account-hash|events\.json)\.tmp-[1-9][0-9]*$/.test(
+          /^(install-id|identity-version|account-hash|events\.json|cohort\.json)\.tmp-[1-9][0-9]*$/.test(
             entry.name,
           )
         ) {
@@ -581,6 +754,7 @@ export class ProductAnalytics {
       this.identityVersionPath,
       this.legacyAccountHashPath,
       this.queuePath,
+      this.cohortPath,
     ]) {
       try {
         rmSync(path, { force: true });
@@ -601,6 +775,7 @@ export class ProductAnalytics {
       this.identityVersionPath,
       this.legacyAccountHashPath,
       this.queuePath,
+      this.cohortPath,
     ]) {
       rmSync(path, { force: true });
     }

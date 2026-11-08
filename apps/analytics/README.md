@@ -70,3 +70,10 @@ Native clients contribute lifecycle, feature, connection and request events unde
 their own consent. Beta `/v1/events` and `/v1/crash` keep their separate policy.
 
 No local state, credentials, D1 data, R2 dumps or exports are tracked here.
+
+Reporting cohorts use optional installation-generated cohort day/stage fields and
+aggregate-only 90-day history. Week/month return rates wait for complete return windows
+and seven days of upload grace; existing usage is not backfilled. These measure new
+reporting installations and observed returns, not downloads, people, uninstalls or
+subscription churn. See [Reporting cohorts](ANALYTICS.md#reporting-cohorts) for the
+migration-first rollout and queue/retry/privacy contract.

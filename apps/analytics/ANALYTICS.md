@@ -191,3 +191,53 @@ hit a sandbox loopback restriction; the permitted run exposed two AppSnap test
 cleanup/timing failures. All 52 AppSnap tests passed isolated; a reduced-concurrency
 workspace rerun passed: 16,102 tests, 251 skipped, all 11 packages successful.
 The skips include 200 PostgreSQL tests without an isolated test database.
+
+## Reporting cohorts
+
+Migration `0008_product_cohorts.sql` adds installation-generated `cohortDay` and
+`cohortStage` (`new`, `week1`, `month1`) only to successful `app.active` envelopes.
+The renderer input cannot set these fields. Desktop starts a cohort only after
+an existing product POST acknowledges receiver support and an entry envelope is
+durably queued. Native senders need the same protocol before their cohorts appear;
+existing activity is never backfilled. An entry is a **new reporting installation**,
+including adoption of this measurement, resets and reinstalls, not a download or person.
+GitHub cumulative asset downloads and external Apple reporting are separate sources.
+
+A return is observed once during UTC days 7–13 or 30–36 after entry. A cohort becomes
+mature only after the whole window and seven days of upload grace (day 21/day 44).
+The Overview reads the last 90 complete UTC cohort entry days independently of the raw
+product date filter, retaining the channel/surface filters. Immature rates are unknown;
+non-return is absence of a report, not proof of uninstall or subscription churn.
+Opt-out, offline use and missing reports affect these best-effort observations.
+
+Raw envelopes and their UUID deduplication still expire on the 30-day schedule.
+SQL triggers increment only day/channel/surface aggregate counters in the same
+transaction as the raw insertion. A null-to-cohort upgrade safely handles a raw UUID
+stored by an older receiver during rollback. The aggregate table contains no event,
+installation or account identifiers and is scheduled for deletion after 90 cohort days,
+using the same capped daily cleanup. There is no individual retention drilldown.
+
+The desktop persists cohort state separately from its bounded queue, writes the entry
+queue first, and acknowledges a stage before removing its envelope. Stable stage UUIDs
+are SHA-256-derived from only the random installation UUID, cohort day and closed stage,
+with UUIDv8/version and RFC variant bits. Restart re-establishes support before sending
+queued cohort metadata. Recovery reconciles a newer durable replacement entry even
+when an older state file is still valid. A stage acknowledgement requires the stored
+UUID and installation/scope/event/outcome/cohort tuple to match the request. An already
+classified stage survives timestamp changes after local state loss; upgrading a plain
+legacy row additionally requires the original timestamp. Normalization or an ignored
+insert alone is not a receipt. Opt-out deletes cohort
+state together with the queue and ID;
+re-enabling begins a new reporting identity. Old entries that expire before their
+acknowledgement start a fresh measurement rather than sending an out-of-window entry.
+
+Rollout: apply migration 0008 before deploying this cohort receiver, then ship senders.
+The nullable columns preserve older receivers/clients; a capability header and explicit
+stage UUID acknowledgements prevent an older receiver from silently completing stages.
+No deployment, production migration or native cohort release is implied by these changes.
+
+The cross-language wire fixture is
+`packages/contracts/fixtures/product-analytics/cohort-v1.json`, copied byte-for-byte
+from the native fixture. Sender tests compare real generated UUIDs with its independent
+hardcoded vectors; receiver tests replay its full iPhone/iPad payloads with clocks fixed
+to each event's July 2026 timestamp so event-age validation remains exercised.
