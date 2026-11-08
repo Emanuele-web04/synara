@@ -23,7 +23,13 @@ import {
 } from "~/components/ui/input-group";
 import { Switch } from "~/components/ui/switch";
 import { CentralIcon } from "~/lib/central-icons";
-import { accountErrorMessage, publicProfileDisplayUrl } from "~/lib/accountLogic";
+import {
+  accountErrorMessage,
+  publicProfileDisplayUrl,
+  readAccountErrorCode,
+} from "~/lib/accountLogic";
+import { ACCOUNT_BILLING_ENABLED } from "~/lib/accountBilling";
+import { useOpenSynaraPlan } from "../settings/BillingSettingsPanel";
 import { cn } from "~/lib/utils";
 import { normalizeHandle } from "@synara/profile-ui/formatting";
 import { PROFILE_AVATAR_COLORS } from "./useProfileAvatarColor";
@@ -168,6 +174,10 @@ function EditProfileDialogContent({
   const [invalidLinks, setInvalidLinks] = useState<readonly SocialLinkPlatform[]>([]);
   const [showEditor, setShowEditor] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Set when the server refused to make the profile public without Alto, so the
+  // error can point at the plan instead of leaving a dead end.
+  const [needsPlan, setNeedsPlan] = useState(false);
+  const openPlan = useOpenSynaraPlan();
   const [processing, setProcessing] = useState(false);
   const [saving, setSaving] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -278,6 +288,9 @@ function EditProfileDialogContent({
         onOpenChange(false);
       })
       .catch((cause: unknown) => {
+        setNeedsPlan(
+          ACCOUNT_BILLING_ENABLED && readAccountErrorCode(cause) === "subscription_required",
+        );
         setError(accountErrorMessage(cause, "Could not save your profile. Try again."));
       })
       .finally(() => {
@@ -358,7 +371,26 @@ function EditProfileDialogContent({
               />
             ))}
 
-          {error && <p className="text-center text-ui leading-snug text-destructive">{error}</p>}
+          {error && (
+            <p className="text-center text-ui leading-snug text-destructive">
+              {error}
+              {needsPlan ? (
+                <>
+                  {" "}
+                  <button
+                    type="button"
+                    className="text-foreground underline underline-offset-2"
+                    onClick={() => {
+                      onOpenChange(false);
+                      openPlan();
+                    }}
+                  >
+                    See plans
+                  </button>
+                </>
+              ) : null}
+            </p>
+          )}
         </div>
 
         {/* Fields */}

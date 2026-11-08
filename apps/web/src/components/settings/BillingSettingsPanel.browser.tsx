@@ -56,6 +56,10 @@ function signedIn(id = "user_a"): AccountStatus {
     },
   };
 }
+/** Each plan card opens its own checkout. */
+async function choosePlan(interval: "Monthly" | "Annual") {
+  await page.getByRole("button", { name: new RegExp(`^${interval}`) }).click();
+}
 function panel(client: QueryClient) {
   return (
     <QueryClientProvider client={client}>
@@ -74,7 +78,7 @@ beforeEach(() => {
   fixture.open.mockResolvedValue(true);
 });
 
-describe("subscription settings", () => {
+describe("Synara Alto settings", () => {
   it("offers sign in without fetching billing while signed out", async () => {
     fixture.status = { state: "signed-out" };
     await render(panel(new QueryClient()));
@@ -87,12 +91,10 @@ describe("subscription settings", () => {
     await render(panel(new QueryClient()));
     await expect.element(page.getByText("Test billing is not configured")).toBeVisible();
     await expect.element(page.getByText("Sandbox", { exact: true })).toBeVisible();
-    await expect
-      .element(page.getByRole("button", { name: "Test checkout" }))
-      .not.toBeInTheDocument();
+    await expect.element(page.getByRole("button", { name: /^Monthly/ })).not.toBeInTheDocument();
   });
 
-  it("renders server prices and opens only a test checkout for the selected interval", async () => {
+  it("shows a card per plan and opens only a test checkout for the chosen interval", async () => {
     fixture.billing.mockResolvedValue({
       ...disabled,
       available: true,
@@ -100,9 +102,10 @@ describe("subscription settings", () => {
       plans: [{ interval: "year", amountMinor: 12345, currency: "USD" }],
     });
     await render(panel(new QueryClient()));
-    await expect.element(page.getByText("Test Synara Alto", { exact: true })).toBeVisible();
-    await expect.element(page.getByText("$123.45 / year")).toBeVisible();
-    await page.getByRole("button", { name: "Test checkout" }).click();
+    await expect
+      .element(page.getByRole("button", { name: /^Annual/ }))
+      .toHaveTextContent("Annual$123.45 / year");
+    await choosePlan("Annual");
     await expect.poll(() => fixture.open.mock.calls.length).toBe(1);
     expect(fixture.checkout).toHaveBeenCalledWith({ interval: "year" });
     expect(fixture.open).toHaveBeenCalledWith("https://sandbox.polar.sh/checkout/test");
@@ -123,7 +126,7 @@ describe("subscription settings", () => {
     );
     const client = new QueryClient();
     const screen = await render(panel(client));
-    await page.getByRole("button", { name: "Test checkout" }).click();
+    await choosePlan("Monthly");
     await expect.poll(() => fixture.checkout.mock.calls.length).toBe(1);
     fixture.status = signedIn("user_b");
     await screen.rerender(panel(client));
@@ -132,7 +135,7 @@ describe("subscription settings", () => {
     expect(fixture.open).not.toHaveBeenCalled();
   });
 
-  it("renders production billing and opens its customer portal without sandbox claims", async () => {
+  it("shows an Alto subscriber their plan and opens the customer portal without sandbox claims", async () => {
     fixture.billing.mockResolvedValue({
       ...disabled,
       environment: "production",
@@ -145,17 +148,9 @@ describe("subscription settings", () => {
       url: "https://polar.sh/purchases/subscriptions",
     });
     await render(panel(new QueryClient()));
-    await expect.element(page.getByText("Production", { exact: true })).toBeVisible();
-    await expect.element(page.getByText("Synara Alto", { exact: true })).toBeVisible();
-    await expect
-      .element(
-        page.getByText("Local desktop use stays free. Alto enables remote access.", {
-          exact: true,
-        }),
-      )
-      .toBeVisible();
-    await expect.element(page.getByText("Manage subscription", { exact: true })).toBeVisible();
+    await expect.element(page.getByText("Alto", { exact: true })).toBeVisible();
     await expect.element(page.getByText("Sandbox", { exact: true })).not.toBeInTheDocument();
+    await expect.element(page.getByRole("button", { name: /^Monthly/ })).not.toBeInTheDocument();
     await page.getByRole("button", { name: "Manage", exact: true }).click();
     await expect.poll(() => fixture.open.mock.calls.length).toBe(1);
     expect(fixture.portal).toHaveBeenCalledOnce();
@@ -179,12 +174,7 @@ describe("subscription settings", () => {
       });
       fixture.checkout.mockResolvedValue({ environment: redirectEnvironment, url });
       await render(panel(new QueryClient()));
-      await page
-        .getByRole("button", {
-          name: environment === "sandbox" ? "Test checkout" : "Checkout",
-          exact: true,
-        })
-        .click();
+      await choosePlan("Monthly");
       await expect
         .element(
           page.getByText(

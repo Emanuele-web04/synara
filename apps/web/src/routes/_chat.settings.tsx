@@ -80,6 +80,7 @@ import {
 } from "../components/settings/KeyboardShortcutsSettingsPanel";
 import { ProfileSettingsPanel } from "../components/settings/ProfileSettingsPanel";
 import { BillingSettingsPanel } from "../components/settings/BillingSettingsPanel";
+import { ACCOUNT_BILLING_ENABLED } from "~/lib/accountBilling";
 import { ProviderUsageSettingsPanel } from "../components/settings/ProviderUsageSettingsPanel";
 import { ExternalMcpSettingsPanel } from "../components/settings/ExternalMcpSettingsPanel";
 import { ConnectionsSettingsPanel } from "../components/settings/ConnectionsSettingsPanel";
@@ -1848,9 +1849,7 @@ function SettingsRouteView() {
     </div>
   );
 
-  const billingEnabled =
-    (isElectron && import.meta.env.VITE_SYNARA_BILLING_ENABLED === "1") ||
-    import.meta.env.VITE_SYNARA_BILLING_SANDBOX === "1";
+  const billingEnabled = ACCOUNT_BILLING_ENABLED;
 
   const renderRouteOwnedPanel = () => {
     switch (activeSection) {
@@ -1863,16 +1862,17 @@ function SettingsRouteView() {
       case "shortcuts":
         return <KeyboardShortcutsSettingsPanel />;
       case "profile":
-        return (
-          <div className="flex flex-col gap-7">
-            {billingEnabled ? <BillingSettingsPanel /> : null}
-            <ProfileSettingsPanel />
-          </div>
-        );
+        return <ProfileSettingsPanel />;
       case "skills":
         return <SkillsSettingsPanel />;
       case "usage":
-        return <ProviderUsageSettingsPanel />;
+        // The plan lives with usage ("Usage and billing"), never above the profile.
+        return (
+          <div className="flex flex-col gap-7">
+            {billingEnabled ? <BillingSettingsPanel /> : null}
+            <ProviderUsageSettingsPanel />
+          </div>
+        );
       default:
         return null;
     }

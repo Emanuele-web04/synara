@@ -57,6 +57,8 @@ import {
 } from "../profile/profileFormatting";
 import { SettingsSegmentedControl } from "./SettingControls";
 import { profileShareUrl } from "~/lib/accountLogic";
+import { ACCOUNT_BILLING_ENABLED } from "~/lib/accountBilling";
+import { SynaraPlanLink } from "./BillingSettingsPanel";
 import { openExternalLink } from "~/lib/linkChips";
 import { ExternalLinkIcon } from "~/lib/icons";
 import { getFormatLocale, t, useTranslation } from "~/i18n";
@@ -185,6 +187,7 @@ function ProfileContent({
           />
         ) : null}
         <div className="flex items-center gap-2">
+          {ACCOUNT_BILLING_ENABLED ? <SynaraPlanLink /> : null}
           {publicUrl ? (
             <Button variant="outline" size="sm" onClick={() => openExternalLink(publicUrl)}>
               <ExternalLinkIcon />
