@@ -55,6 +55,7 @@ version, release notes and lockfile are final.
 ## Desktop auto-update notes
 
 - Runtime updater: `electron-updater` in `apps/desktop/src/main.ts`.
+- Paired iOS clients can check, download, and request a confirmed restart through the desktop updater on packaged macOS builds, including Stable, Beta, and Remote. The app keeps its existing release channel and artifact verification. Running chats and tasks block installation; development builds and unsupported platforms do not expose update control.
 - Update UX:
   - Background checks run on startup delay + interval.
   - New updates are prepared/downloaded in the background after detection; install/restart stays manual.
