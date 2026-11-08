@@ -99,6 +99,22 @@ describe("resolveDevinModelVariant", () => {
     ).toBe("custom-concrete-model");
   });
 
+  it("ignores a pinned variant the selected model does not list", () => {
+    // A Fusion UID pinned earlier must not leak into another Devin model as
+    // `--model` after switching models.
+    expect(
+      resolveDevinModelVariant({
+        model: "swe-2",
+        modelVariant: "fusion-claude-fable-5-1-high-sidekick-swe-2-medium",
+        runtimeModel: {
+          slug: "swe-2",
+          name: "SWE-2",
+          modelVariants: [{ model: "swe-2-medium" }, { model: "swe-2-high" }],
+        },
+      }),
+    ).toBeUndefined();
+  });
+
   it("returns undefined when no variant matches an all-fast matrix", () => {
     expect(
       resolveDevinModelVariant({
