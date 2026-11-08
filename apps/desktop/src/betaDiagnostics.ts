@@ -18,6 +18,7 @@ import {
   existsSync,
   mkdirSync,
   readFileSync,
+  readdirSync,
   renameSync,
   rmSync,
   statSync,
@@ -424,6 +425,7 @@ export class BetaDiagnostics {
     this.isEnabled = input.isEnabled ?? (() => true);
     // Scrub legacy telemetry on startup; a saved opt-out revokes pending uploads.
     try {
+      this.clearQueueStagingFiles();
       if (this.isEnabled()) {
         this.trimQueueIfNeeded();
         this.scrubQueuedEvents();
@@ -495,6 +497,7 @@ export class BetaDiagnostics {
 
   start(): void {
     if (this.flushTimer || this.disposed) return;
+    this.clearQueueStagingFiles();
     this.flushTimer = setInterval(() => {
       void this.flush();
     }, FLUSH_INTERVAL_MS);
@@ -853,6 +856,27 @@ export class BetaDiagnostics {
     return true;
   }
 
+  // Drop only this queue's interrupted regular writes; links and unrelated files stay untouched.
+  private clearQueueStagingFiles(): void {
+    const dir = join(this.homeDir, "diagnostics");
+    try {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        if (
+          !entry.isFile() ||
+          !/^events\.jsonl\.(trim|flush|sanitize)-[1-9][0-9]*$/.test(entry.name)
+        )
+          continue;
+        try {
+          rmSync(join(dir, entry.name), { force: true });
+        } catch {
+          /* One unavailable staging file must not block other cleanup. */
+        }
+      }
+    } catch {
+      /* Missing or unreadable diagnostics storage must not affect the app. */
+    }
+  }
+
   private trimQueueIfNeeded(): void {
     try {
       const size = statSync(this.queuePath).size;
@@ -869,8 +893,16 @@ export class BetaDiagnostics {
         keptBytes += line.length + 1;
       }
       const stagingPath = `${this.queuePath}.trim-${process.pid}`;
-      writeFileSync(stagingPath, `${kept.join("\n")}\n`, { encoding: "utf8", mode: 0o600 });
-      renameSync(stagingPath, this.queuePath);
+      try {
+        writeFileSync(stagingPath, `${kept.join("\n")}\n`, {
+          encoding: "utf8",
+          mode: 0o600,
+          flag: "wx",
+        });
+        renameSync(stagingPath, this.queuePath);
+      } finally {
+        this.clearQueueStagingFiles();
+      }
       const keptIds = new Set(
         kept.map((line) => {
           try {
@@ -974,10 +1006,10 @@ export class BetaDiagnostics {
     if (serialized !== raw) {
       const staging = `${this.queuePath}.sanitize-${process.pid}`;
       try {
-        writeFileSync(staging, serialized, { encoding: "utf8", mode: 0o600 });
+        writeFileSync(staging, serialized, { encoding: "utf8", mode: 0o600, flag: "wx" });
         renameSync(staging, this.queuePath);
       } finally {
-        rmSync(staging, { force: true });
+        this.clearQueueStagingFiles();
       }
     }
     return lines;
@@ -1040,19 +1072,16 @@ export class BetaDiagnostics {
         writeFileSync(stagingPath, `${rest.join("\n")}\n`, {
           encoding: "utf8",
           mode: 0o600,
+          flag: "wx",
         });
-      }
-      try {
-        if (rest.length > 0) {
-          renameSync(stagingPath, this.queuePath);
-        } else {
-          rmSync(this.queuePath, { force: true });
-        }
-      } finally {
-        rmSync(stagingPath, { force: true });
+        renameSync(stagingPath, this.queuePath);
+      } else {
+        rmSync(this.queuePath, { force: true });
       }
     } catch {
       // Offline / endpoint down: keep the queue for the next flush.
+    } finally {
+      this.clearQueueStagingFiles();
     }
   }
 
@@ -1095,6 +1124,7 @@ export class BetaDiagnostics {
         // best effort
       }
     }
+    this.clearQueueStagingFiles();
   }
 
   /** Best-effort final flush + shutdown for app quit; bounded by `timeoutMs`. */

@@ -2,7 +2,17 @@
 // Purpose: Queue, sanitize, and flush behavior for beta-only diagnostics.
 
 import { createServer, type Server } from "node:http";
-import { mkdtempSync, readFileSync, existsSync, rmSync, statSync, writeFileSync } from "node:fs";
+import {
+  mkdtempSync,
+  mkdirSync,
+  readFileSync,
+  existsSync,
+  lstatSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -1330,4 +1340,91 @@ describe("Remote keeps free text on the device", () => {
     expect(events.some((event) => event.event === "usage.daily")).toBe(false);
     expect(JSON.stringify(events)).not.toContain("git.push");
   });
+});
+
+it("clears only regular diagnostic staging files across startup, revocation and flush", async () => {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async () => new Response(null, { status: 204 })),
+  );
+  try {
+    for (const phase of [
+      "constructor-on",
+      "constructor-off",
+      "start",
+      "opt-out",
+      "flush",
+    ] as const) {
+      const root = makeRoot();
+      const dir = join(root, "diagnostics");
+      mkdirSync(dir, { recursive: true });
+      let sharing = phase !== "constructor-off";
+      const make = () =>
+        new BetaDiagnostics({
+          homeDir: root,
+          appVersion: "1.0.6-remote.18",
+          platform: "linux",
+          arch: "x64",
+          flavor: "remote",
+          isEnabled: () => sharing,
+          env: {},
+        });
+      const owned = [
+        `events.jsonl.trim-${process.pid + 1}`,
+        `events.jsonl.flush-${process.pid + 2}`,
+        `events.jsonl.sanitize-${process.pid + 3}`,
+      ];
+      const unrelated = [
+        "notes.txt",
+        "events.jsonl.trim-0",
+        "events.jsonl.flush-01",
+        "events.jsonl.sanitize-user",
+        "other.jsonl.trim-4321",
+      ];
+      const links = ["trim", "flush", "sanitize"].map(
+        (kind) => `events.jsonl.${kind}-${process.pid}`,
+      );
+      const target = join(root, "preserved-target.txt");
+      const seed = () => {
+        for (const name of owned)
+          writeFileSync(join(dir, name), "private customer prompt from interrupted write");
+        for (const name of unrelated) writeFileSync(join(dir, name), "preserve unrelated file");
+        mkdirSync(join(dir, `events.jsonl.trim-${process.pid + 4}`));
+        writeFileSync(target, "preserve private link target");
+        for (const name of links) symlinkSync(target, join(dir, name));
+      };
+      let diagnostics: BetaDiagnostics;
+      if (phase.startsWith("constructor")) {
+        seed();
+        if (!sharing) writeFileSync(join(dir, "events.jsonl"), "private queued content");
+        diagnostics = make();
+      } else {
+        diagnostics = make();
+        if (phase === "flush") diagnostics.track("app.start", { kind: "lifecycle" });
+        seed();
+        if (phase === "start") diagnostics.start();
+        else if (phase === "opt-out") {
+          sharing = false;
+          diagnostics.discardQueue();
+        } else await diagnostics.flush();
+      }
+      try {
+        for (const name of owned)
+          expect(existsSync(join(dir, name)), `${phase}: ${name}`).toBe(false);
+        for (const name of unrelated)
+          expect(readFileSync(join(dir, name), "utf8")).toBe("preserve unrelated file");
+        expect(lstatSync(join(dir, `events.jsonl.trim-${process.pid + 4}`)).isDirectory()).toBe(
+          true,
+        );
+        for (const name of links) expect(lstatSync(join(dir, name)).isSymbolicLink()).toBe(true);
+        expect(readFileSync(target, "utf8")).toBe("preserve private link target");
+        if (!sharing || phase !== "flush")
+          expect(existsSync(join(dir, "events.jsonl"))).toBe(false);
+      } finally {
+        await diagnostics.dispose();
+      }
+    }
+  } finally {
+    vi.unstubAllGlobals();
+  }
 });

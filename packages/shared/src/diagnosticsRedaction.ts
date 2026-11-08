@@ -127,7 +127,7 @@ export function sanitizeDiagnosticError(input: {
 }
 
 // Process labels and exit reasons are categories, never arbitrary diagnostic text.
-const DIAGNOSTIC_PROCESSES = new Set([
+export const DIAGNOSTIC_PROCESSES: ReadonlySet<string> = new Set([
   "main",
   "renderer",
   "backend",
@@ -141,7 +141,7 @@ const DIAGNOSTIC_PROCESSES = new Set([
   "Pepper Plugin Broker",
   "unknown",
 ]);
-const DIAGNOSTIC_CRASH_REASONS = new Set([
+export const DIAGNOSTIC_CRASH_REASONS: ReadonlySet<string> = new Set([
   "clean-exit",
   "abnormal-exit",
   "killed",
@@ -152,7 +152,7 @@ const DIAGNOSTIC_CRASH_REASONS = new Set([
   "memory-eviction",
   "unknown",
 ]);
-const DIAGNOSTIC_SIGNALS = new Set([
+export const DIAGNOSTIC_SIGNALS: ReadonlySet<string> = new Set([
   "SIGABRT",
   "SIGALRM",
   "SIGBUS",

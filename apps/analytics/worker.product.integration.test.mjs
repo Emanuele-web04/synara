@@ -257,6 +257,122 @@ vi.unstubAllGlobals();
     },
   );
 
+  it("guards historical metadata before facets and limits and scrubs the same fields", async () => {
+    const ts = new Date(now).toISOString();
+    db.database
+      .prepare(`INSERT INTO events
+      (ts, received_at, install_id, app_version, target_version, platform, arch,
+       event, kind, outcome, source, fingerprint, flavor)
+      VALUES (?, ?, '00000000-0000-4000-8000-000000000001', '1.2.3-private-project',
+       '2.0.0-private-project', 'private-project', 'private-arch', 'app.error',
+       'private-note', 'private-note', 'private-note', '1234567812345678', 'beta')`)
+      .run(new Date(now).toUTCString() + " (private-note)", ts);
+    db.database
+      .prepare(`INSERT INTO events
+      (ts, received_at, install_id, app_version, platform, arch, event, kind, flavor)
+      VALUES (?, ?, '00000000-0000-4000-8000-000000000002', '1.2.3-beta.1',
+       'darwin', 'arm64', 'app.start', 'lifecycle', 'beta')`)
+      .run(ts, ts);
+    const token = await signSession("test-session-key", Math.floor(now / 1000) + 3600);
+    const get = (path) =>
+      worker.fetch(
+        new Request(`https://worker.invalid${path}`, {
+          headers: { cookie: `synara_beta_dash=${token}` },
+        }),
+        env,
+      );
+    for (const path of [
+      "/api/filters",
+      "/api/activity",
+      "/api/issues?status=all",
+      "/api/issues/err:1234567812345678",
+      "/api/releases",
+      "/api/status",
+    ]) {
+      const response = await get(path);
+      expect(response.status, path).toBe(200);
+      expect(await response.text(), path).not.toContain("private-");
+    }
+    const filters = await (await get("/api/filters")).json();
+    expect(filters.versions).toEqual(["1.2.3-beta.1", "0.0.0"]);
+    const activity = await (await get("/api/activity")).json();
+    expect(activity.activity[0]).toMatchObject({
+      ts,
+      kind: "error",
+      appVersion: "0.0.0",
+      platform: "unknown",
+      outcome: "unknown",
+    });
+    // Reads protect old rows without silently mutating history; cleanup is opt-in and bounded.
+    expect(db.database.prepare("SELECT app_version FROM events WHERE id = 1").get()).toEqual({
+      app_version: "1.2.3-private-project",
+    });
+    db.database.exec("UPDATE diagnostic_content_cleanup SET through_event_id = 2");
+    await purgeLegacyDiagnosticContent(env);
+    const rows = db.database
+      .prepare(
+        "SELECT ts, app_version, target_version, platform, arch, kind, outcome, source FROM events",
+      )
+      .all();
+    expect(JSON.stringify(rows)).not.toContain("private-");
+    expect(rows[0]).toMatchObject({ ts, app_version: "0.0.0", target_version: "", kind: "error" });
+    expect(rows).toHaveLength(2);
+  });
+
+  it("groups historical crash keys before listing and opens the complete canonical issue", async () => {
+    const ts = new Date(now).toISOString();
+    for (const process of ["Unknown", "private-project"]) {
+      db.database
+        .prepare(`INSERT INTO events
+        (ts, received_at, install_id, app_version, event, kind, process_type, reason, flavor)
+        VALUES (?, ?, '00000000-0000-4000-8000-000000000001', '1.2.3-beta.1',
+         'app.child-process-crash', 'crash', ?, 'crashed', 'beta')`)
+        .run(ts, ts, process);
+    }
+    const token = await signSession("test-session-key", Math.floor(now / 1000) + 3600);
+    const get = (path) =>
+      worker.fetch(
+        new Request(`https://worker.invalid${path}`, {
+          headers: { cookie: `synara_beta_dash=${token}` },
+        }),
+        env,
+      );
+    const { issues } = await (await get("/api/issues?status=all")).json();
+    expect(issues).toHaveLength(1);
+    expect(issues[0]).toMatchObject({ key: "crash:unknown:crashed", events: 2, users: 1 });
+    const detail = await get(`/api/issues/${encodeURIComponent(issues[0].key)}`);
+    expect(detail.status).toBe(200);
+    const body = await detail.json();
+    expect(body.issue.events).toBe(2);
+    expect(body.occurrences).toHaveLength(2);
+    expect(JSON.stringify(body)).not.toContain("private-");
+  });
+
+  it("continues ordinary retention when optional diagnostic dump cleanup fails", async () => {
+    await postEvents([envelope()]);
+    db.database
+      .prepare("UPDATE product_events SET received_at = ?")
+      .run(new Date(now - 31 * 86_400_000).toISOString());
+    env.PURGE_LEGACY_DIAGNOSTICS = "true";
+    env.CRASH_DUMPS = {
+      list: async () => ({ objects: [{ key: "dumps/private-project.dmp" }], truncated: false }),
+      delete: async () => {
+        throw new Error("private-note storage failure");
+      },
+    };
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      await expect(worker.scheduled({ scheduledTime: now }, env)).resolves.toBeUndefined();
+      expect(db.database.prepare("SELECT COUNT(*) AS n FROM product_events").get()).toEqual({
+        n: 0,
+      });
+      expect(warning).toHaveBeenCalled();
+      expect(JSON.stringify(warning.mock.calls)).not.toContain("private-");
+    } finally {
+      warning.mockRestore();
+    }
+  });
+
   it("rejects raw dump uploads and downloads without consuming content or accessing storage", async () => {
     const put = vi.fn();
     const get = vi.fn();

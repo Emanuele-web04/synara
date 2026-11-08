@@ -28,10 +28,14 @@ triage keys once the event range is finished. Only numeric row IDs are read.
 The event scrub and its checkpoint advance share one D1 batch; failure cannot
 advance beyond un-scrubbed rows. It removes all legacy message/stack/log text,
 replaces content-dependent error grouping with one legacy technical group, and
-normalizes process/reason/source/platform/architecture fields. Event counts
-remain intact. New technical events beyond the recorded checkpoint are not
-rewritten. Historical individual error frames and triage assignments are lost
-intentionally rather than retained through uncertain text redaction.
+normalizes timestamps, release/target versions and all categorical metadata.
+Unrecognized release strings become `0.0.0` (targets become empty), and invalid
+client timestamps fall back to the server receipt time. The authenticated read
+boundary applies these same rules before filters, grouping and limits while the
+scrub is pending. Canonical issue keys combine equivalent historical crash groups
+and open the same aggregate in issue detail. Event counts remain intact. New
+technical events beyond the recorded checkpoint are not rewritten. Historical
+individual error frames and triage assignments are lost intentionally rather than retained through uncertain text redaction.
 
 Each invocation also lists the first page of at most 100 `dumps/` objects and
 deletes them before deleting their D1 index rows. Listing the prefix catches
@@ -40,6 +44,8 @@ delete avoids cursor skipping while the set shrinks. A partial failure can leave
 an object, an index row or both; repeat the job. Only after the prefix is empty
 are at most 100 remaining stale index rows deleted per invocation. Unrelated R2
 prefixes are untouched. Do not export or download dumps for this cleanup.
+Optional cleanup failures emit a fixed warning and retry on the next scheduled
+run; they do not prevent ordinary product and usage retention from running.
 
 ## Completion evidence and scope
 

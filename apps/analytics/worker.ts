@@ -35,6 +35,8 @@ import {
   USAGE_TURN_CATEGORIES_SQL,
 } from "./usagePrivacySql";
 
+import { diagnosticMetadataSql, diagnosticReadCteSql } from "./diagnosticsPrivacySql";
+
 export interface Env {
   DB: D1Database;
   /** Existing objects are used only by the explicit bounded cleanup job. */
@@ -1321,10 +1323,23 @@ export function releaseHealth(
   return crashFreePct >= 99.5 ? "healthy" : crashFreePct >= 98 ? "watch" : "unhealthy";
 }
 
+// Bound once per query, before aggregation/ordering: old persisted metadata is untrusted too.
+const DIAGNOSTIC_METADATA_SQL = diagnosticMetadataSql(KNOWN_EVENTS);
+const DIAGNOSTIC_READ_CTE_SQL = diagnosticReadCteSql(DIAGNOSTIC_METADATA_SQL);
+function prepareDiagnosticRead(env: Env, sql: string): D1PreparedStatement {
+  const query = sql.trimStart();
+  return env.DB.prepare(
+    query.startsWith("WITH ")
+      ? `${DIAGNOSTIC_READ_CTE_SQL}, ${query.slice(5)}`
+      : `${DIAGNOSTIC_READ_CTE_SQL} ${query}`,
+  );
+}
+
 /** Per-version aggregate rows, semver-descending. Platform filter only. */
 async function loadReleases(env: Env, f: ApiFilters): Promise<ReleaseRowData[]> {
   const [perVersion, firsts] = await Promise.all([
-    env.DB.prepare(
+    prepareDiagnosticRead(
+      env,
       `SELECT app_version AS version, MIN(ts) AS firstSeen,
               COUNT(DISTINCT install_id) AS installs,
               SUM(CASE WHEN event = 'app.error' THEN 1 ELSE 0 END) AS errors,
@@ -1332,7 +1347,7 @@ async function loadReleases(env: Env, f: ApiFilters): Promise<ReleaseRowData[]> 
               SUM(CASE WHEN event = 'update.error' THEN 1 ELSE 0 END) AS updateFailures,
               COUNT(DISTINCT CASE WHEN event IN ('app.renderer-crash','app.child-process-crash')
                    THEN install_id END) AS crashInstalls
-       FROM events WHERE ts >= ?${f.platformClause} GROUP BY app_version`,
+       FROM diagnostic_events WHERE ts >= ?${f.platformClause} GROUP BY app_version`,
     )
       .bind(f.since, ...f.platformBinds)
       .all<{
@@ -1346,10 +1361,11 @@ async function loadReleases(env: Env, f: ApiFilters): Promise<ReleaseRowData[]> 
       }>(),
     // Issues whose first-ever event ran this version. DISTINCT guards
     // against two events tying on MIN(ts).
-    env.DB.prepare(
-      `SELECT e.app_version AS version, COUNT(DISTINCT e.issue_key) AS n FROM events e
+    prepareDiagnosticRead(
+      env,
+      `SELECT e.app_version AS version, COUNT(DISTINCT e.issue_key) AS n FROM diagnostic_events e
        INNER JOIN (
-         SELECT issue_key, MIN(ts) AS mts FROM events
+         SELECT issue_key, MIN(ts) AS mts FROM diagnostic_events
          WHERE issue_key IS NOT NULL GROUP BY issue_key
        ) m ON m.issue_key = e.issue_key AND e.ts = m.mts
        GROUP BY e.app_version`,
@@ -1407,10 +1423,11 @@ async function loadIssues(env: Env, f: ApiFilters, key: string | null): Promise<
   const keyBinds = key === null ? [] : [key];
 
   const [agg, firsts, latest, statuses, trendRows] = await Promise.all([
-    env.DB.prepare(
+    prepareDiagnosticRead(
+      env,
       `SELECT issue_key AS key, COUNT(*) AS events, COUNT(DISTINCT install_id) AS users,
               MAX(ts) AS lastSeen, GROUP_CONCAT(DISTINCT app_version) AS versionsCsv
-       FROM events
+       FROM diagnostic_events
        WHERE ${keyWhere} AND ts >= ?${f.clause}
        GROUP BY issue_key`,
     )
@@ -1424,22 +1441,24 @@ async function loadIssues(env: Env, f: ApiFilters, key: string | null): Promise<
       }>(),
     // First-ever event per issue — deliberately unfiltered: firstSeen and
     // firstVersion describe the issue, not the current view.
-    env.DB.prepare(
+    prepareDiagnosticRead(
+      env,
       `SELECT e.issue_key AS key, e.ts AS firstSeen, e.app_version AS firstVersion
-       FROM events e
+       FROM diagnostic_events e
        INNER JOIN (
-         SELECT issue_key, MIN(ts) AS mts FROM events
+         SELECT issue_key, MIN(ts) AS mts FROM diagnostic_events
          WHERE ${keyWhere} GROUP BY issue_key
        ) m ON m.issue_key = e.issue_key AND e.ts = m.mts`,
     )
       .bind(...keyBinds)
       .all<{ key: string; firstSeen: string; firstVersion: string }>(),
     // Latest in-range event per issue (title text for errors).
-    env.DB.prepare(
+    prepareDiagnosticRead(
+      env,
       `SELECT e.issue_key AS key, e.message AS message
-       FROM events e
+       FROM diagnostic_events e
        INNER JOIN (
-         SELECT issue_key, MAX(ts) AS xts FROM events
+         SELECT issue_key, MAX(ts) AS xts FROM diagnostic_events
          WHERE ${keyWhere} AND ts >= ?${f.clause} GROUP BY issue_key
        ) m ON m.issue_key = e.issue_key AND e.ts = m.xts`,
     )
@@ -1447,18 +1466,20 @@ async function loadIssues(env: Env, f: ApiFilters, key: string | null): Promise<
       .all<{ key: string; message: string | null }>(),
     // strftime normalizes client timestamps ("YYYY-MM-DD HH:MM:SS" or ISO) so
     // the regressed comparison works regardless of the stored format.
-    env.DB.prepare(
+    prepareDiagnosticRead(
+      env,
       `SELECT s.issue_key AS key, s.status,
-              EXISTS(SELECT 1 FROM events e WHERE e.issue_key = s.issue_key
+              EXISTS(SELECT 1 FROM diagnostic_events e WHERE e.issue_key = s.issue_key
                      AND strftime('%Y-%m-%dT%H:%M:%fZ', e.ts) >
                          strftime('%Y-%m-%dT%H:%M:%fZ', s.updated_at)) AS regressed
        FROM issue_status s${key === null ? "" : " WHERE s.issue_key = ?"}`,
     )
       .bind(...keyBinds)
       .all<{ key: string; status: string; regressed: number }>(),
-    env.DB.prepare(
+    prepareDiagnosticRead(
+      env,
       `SELECT issue_key AS key, substr(ts, 1, 10) AS day, COUNT(*) AS n
-       FROM events WHERE ${keyWhere} AND ts >= ?${f.clause}
+       FROM diagnostic_events WHERE ${keyWhere} AND ts >= ?${f.clause}
        GROUP BY issue_key, day`,
     )
       .bind(...keyBinds, f.bucketSince, ...f.binds)
@@ -1575,15 +1596,22 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
   if (url.pathname === "/api/filters" && request.method === "GET") {
     const rangeSince = new Date(Date.now() - MAX_RANGE_DAYS * DAY_MS).toISOString();
     const [versions, platforms, flavors] = await Promise.all([
-      env.DB.prepare(`SELECT DISTINCT app_version AS version FROM events WHERE received_at >= ?`)
+      prepareDiagnosticRead(
+        env,
+        `SELECT DISTINCT app_version AS version FROM diagnostic_events WHERE received_at >= ?`,
+      )
         .bind(rangeSince)
         .all<{ version: string }>(),
-      env.DB.prepare(
-        `SELECT DISTINCT platform FROM events WHERE received_at >= ? AND platform <> ''`,
+      prepareDiagnosticRead(
+        env,
+        `SELECT DISTINCT platform FROM diagnostic_events WHERE received_at >= ? AND platform <> ''`,
       )
         .bind(rangeSince)
         .all<{ platform: string }>(),
-      env.DB.prepare(`SELECT DISTINCT flavor FROM events WHERE received_at >= ?`)
+      prepareDiagnosticRead(
+        env,
+        `SELECT DISTINCT flavor FROM diagnostic_events WHERE received_at >= ?`,
+      )
         .bind(rangeSince)
         .all<{ flavor: string }>(),
     ]);
@@ -1599,29 +1627,34 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
     const [active24h, activeRange, crashInstalls, updateFailures, series] = await Promise.all([
       // Install metrics use scopeClause only: kind/source/q would distort the
       // install denominator and make crash-free meaningless.
-      env.DB.prepare(
-        `SELECT COUNT(DISTINCT install_id) AS n FROM events WHERE ts >= ?${f.scopeClause}`,
+      prepareDiagnosticRead(
+        env,
+        `SELECT COUNT(DISTINCT install_id) AS n FROM diagnostic_events WHERE ts >= ?${f.scopeClause}`,
       )
         .bind(dayAgo, ...f.scopeBinds)
         .first<{ n: number }>(),
-      env.DB.prepare(
-        `SELECT COUNT(DISTINCT install_id) AS n FROM events WHERE ts >= ?${f.scopeClause}`,
+      prepareDiagnosticRead(
+        env,
+        `SELECT COUNT(DISTINCT install_id) AS n FROM diagnostic_events WHERE ts >= ?${f.scopeClause}`,
       )
         .bind(f.since, ...f.scopeBinds)
         .first<{ n: number }>(),
-      env.DB.prepare(
-        `SELECT COUNT(DISTINCT install_id) AS n FROM events
+      prepareDiagnosticRead(
+        env,
+        `SELECT COUNT(DISTINCT install_id) AS n FROM diagnostic_events
          WHERE ts >= ? AND event IN ('app.renderer-crash','app.child-process-crash')${f.scopeClause}`,
       )
         .bind(f.since, ...f.scopeBinds)
         .first<{ n: number }>(),
-      env.DB.prepare(
-        `SELECT COUNT(*) AS n FROM events WHERE ts >= ? AND event = 'update.error'${f.clause}`,
+      prepareDiagnosticRead(
+        env,
+        `SELECT COUNT(*) AS n FROM diagnostic_events WHERE ts >= ? AND event = 'update.error'${f.clause}`,
       )
         .bind(f.since, ...f.binds)
         .first<{ n: number }>(),
-      env.DB.prepare(
-        `SELECT substr(ts, 1, 10) AS day, event, COUNT(*) AS n FROM events
+      prepareDiagnosticRead(
+        env,
+        `SELECT substr(ts, 1, 10) AS day, event, COUNT(*) AS n FROM diagnostic_events
          WHERE ts >= ? AND event IN ('app.error','app.renderer-crash','app.child-process-crash','update.error')${f.clause}
          GROUP BY day, event`,
       )
@@ -1651,16 +1684,18 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
     const [activePrev, crashInstallsPrev, updatePrev, newIssuesPrev, lastEvent] = await Promise.all(
       [
         hasPrevious
-          ? env.DB.prepare(
-              `SELECT COUNT(DISTINCT install_id) AS n FROM events
+          ? prepareDiagnosticRead(
+              env,
+              `SELECT COUNT(DISTINCT install_id) AS n FROM diagnostic_events
                WHERE ts >= ? AND ts < ?${f.scopeClause}`,
             )
               .bind(f.prevSince, f.since, ...f.scopeBinds)
               .first<{ n: number }>()
           : null,
         hasPrevious
-          ? env.DB.prepare(
-              `SELECT COUNT(DISTINCT install_id) AS n FROM events
+          ? prepareDiagnosticRead(
+              env,
+              `SELECT COUNT(DISTINCT install_id) AS n FROM diagnostic_events
                WHERE ts >= ? AND ts < ?
                  AND event IN ('app.renderer-crash','app.child-process-crash')${f.scopeClause}`,
             )
@@ -1668,8 +1703,9 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
               .first<{ n: number }>()
           : null,
         hasPrevious
-          ? env.DB.prepare(
-              `SELECT COUNT(*) AS n FROM events
+          ? prepareDiagnosticRead(
+              env,
+              `SELECT COUNT(*) AS n FROM diagnostic_events
                WHERE ts >= ? AND ts < ? AND event = 'update.error'${f.clause}`,
             )
               .bind(f.prevSince, f.since, ...f.binds)
@@ -1678,21 +1714,24 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
         // Issues first-ever inside the previous window that also had an
         // in-scope event there — the same isNew definition, shifted back.
         hasPrevious
-          ? env.DB.prepare(
+          ? prepareDiagnosticRead(
+              env,
               `SELECT COUNT(*) AS n FROM (
-                 SELECT issue_key, MIN(ts) AS first FROM events
+                 SELECT issue_key, MIN(ts) AS first FROM diagnostic_events
                  WHERE issue_key IS NOT NULL GROUP BY issue_key
                ) m
                WHERE m.first >= ? AND m.first < ?
                  AND EXISTS (
-                   SELECT 1 FROM events e WHERE e.issue_key = m.issue_key
+                   SELECT 1 FROM diagnostic_events e WHERE e.issue_key = m.issue_key
                      AND e.ts >= ? AND e.ts < ?${f.clause}
                  )`,
             )
               .bind(f.prevSince, f.since, f.prevSince, f.since, ...f.binds)
               .first<{ n: number }>()
           : null,
-        env.DB.prepare(`SELECT MAX(ts) AS ts FROM events`).first<{ ts: string | null }>(),
+        prepareDiagnosticRead(env, `SELECT MAX(ts) AS ts FROM diagnostic_events`).first<{
+          ts: string | null;
+        }>(),
       ],
     );
     const prevActive = activePrev?.n ?? 0;
@@ -1734,7 +1773,10 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
   }
 
   if (url.pathname === "/api/status" && request.method === "GET") {
-    const row = await env.DB.prepare(`SELECT MAX(ts) AS ts FROM events`).first<{
+    const row = await prepareDiagnosticRead(
+      env,
+      `SELECT MAX(ts) AS ts FROM diagnostic_events`,
+    ).first<{
       ts: string | null;
     }>();
     return jsonResponse({ lastEventAt: row?.ts ?? null });
@@ -1742,10 +1784,11 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
 
   if (url.pathname === "/api/activity" && request.method === "GET") {
     // The latest issue-class events plus the two beta lifecycle events.
-    const rows = await env.DB.prepare(
+    const rows = await prepareDiagnosticRead(
+      env,
       `SELECT id, ts, event, kind, issue_key AS issueKey, app_version AS appVersion,
               platform, outcome, message
-       FROM events
+       FROM diagnostic_events
        WHERE ts >= ?${f.clause}
          AND event IN ('app.error','app.renderer-crash','app.child-process-crash',
                        'update.error','beta.installed','beta.left')
@@ -1815,10 +1858,11 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
       const [issueRows, detailRow, seriesRows, byVersion, byPlatform, occurrences] =
         await Promise.all([
           loadIssues(env, f, key),
-          env.DB.prepare(
+          prepareDiagnosticRead(
+            env,
             `SELECT message, stack, log_tail AS logTail, process_type AS processType,
                     reason, error_context AS errorContext, source
-             FROM events WHERE issue_key = ? AND ts >= ?${f.clause}
+             FROM diagnostic_events WHERE issue_key = ? AND ts >= ?${f.clause}
              ORDER BY ts DESC LIMIT 1`,
           )
             .bind(key, f.since, ...f.binds)
@@ -1831,29 +1875,33 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
               errorContext: string;
               source: string;
             }>(),
-          env.DB.prepare(
-            `SELECT substr(ts, 1, 10) AS day, COUNT(*) AS n FROM events
+          prepareDiagnosticRead(
+            env,
+            `SELECT substr(ts, 1, 10) AS day, COUNT(*) AS n FROM diagnostic_events
              WHERE issue_key = ? AND ts >= ?${f.clause} GROUP BY day`,
           )
             .bind(key, f.bucketSince, ...f.binds)
             .all<{ day: string; n: number }>(),
-          env.DB.prepare(
+          prepareDiagnosticRead(
+            env,
             `SELECT app_version AS version, COUNT(*) AS events,
                     COUNT(DISTINCT install_id) AS users
-             FROM events WHERE issue_key = ? AND ts >= ?${f.clause} GROUP BY app_version`,
+             FROM diagnostic_events WHERE issue_key = ? AND ts >= ?${f.clause} GROUP BY app_version`,
           )
             .bind(key, f.since, ...f.binds)
             .all<{ version: string; events: number; users: number }>(),
-          env.DB.prepare(
+          prepareDiagnosticRead(
+            env,
             `SELECT platform, COUNT(*) AS events, COUNT(DISTINCT install_id) AS users
-             FROM events WHERE issue_key = ? AND ts >= ?${f.clause} GROUP BY platform`,
+             FROM diagnostic_events WHERE issue_key = ? AND ts >= ?${f.clause} GROUP BY platform`,
           )
             .bind(key, f.since, ...f.binds)
             .all<{ platform: string; events: number; users: number }>(),
-          env.DB.prepare(
+          prepareDiagnosticRead(
+            env,
             `SELECT id, ts, app_version AS appVersion, platform, arch, source,
                     install_id AS installId
-             FROM events WHERE issue_key = ? AND ts >= ?${f.clause}
+             FROM diagnostic_events WHERE issue_key = ? AND ts >= ?${f.clause}
              ORDER BY ts DESC LIMIT 50`,
           )
             .bind(key, f.since, ...f.binds)
@@ -1973,42 +2021,48 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
       localeRows,
       turnBreakdownRows,
     ] = await Promise.all([
-      env.DB.prepare(
-        `SELECT COUNT(DISTINCT install_id) AS n FROM events WHERE ts >= ?${f.scopeClause}`,
+      prepareDiagnosticRead(
+        env,
+        `SELECT COUNT(DISTINCT install_id) AS n FROM diagnostic_events WHERE ts >= ?${f.scopeClause}`,
       )
         .bind(f.since, ...f.scopeBinds)
         .first<{ n: number }>(),
-      env.DB.prepare(
+      prepareDiagnosticRead(
+        env,
         `SELECT substr(ts, 1, 10) AS day, COUNT(DISTINCT install_id) AS n
-           FROM events WHERE ts >= ?${f.scopeClause} GROUP BY day ORDER BY day`,
+           FROM diagnostic_events WHERE ts >= ?${f.scopeClause} GROUP BY day ORDER BY day`,
       )
         .bind(f.bucketSince, ...f.scopeBinds)
         .all<{ day: string; n: number }>(),
-      env.DB.prepare(
+      prepareDiagnosticRead(
+        env,
         `SELECT COALESCE(SUM(up.turns), 0) AS turns,
                   COALESCE(SUM(up.turns_failed), 0) AS failed
-           FROM usage_providers up JOIN events e ON e.id = up.event_id
+           FROM usage_providers up JOIN diagnostic_events e ON e.id = up.event_id
            WHERE e.ts >= ?${f.eventScopeClause}`,
       )
         .bind(f.since, ...f.scopeBinds)
         .first<{ turns: number; failed: number }>(),
-      env.DB.prepare(
-        `SELECT outcome, COUNT(*) AS n FROM events
+      prepareDiagnosticRead(
+        env,
+        `SELECT outcome, COUNT(*) AS n FROM diagnostic_events
            WHERE event = 'beta.installed' AND ts >= ?${f.scopeClause} GROUP BY outcome`,
       )
         .bind(f.since, ...f.scopeBinds)
         .all<{ outcome: string; n: number }>(),
-      env.DB.prepare(
-        `SELECT outcome, COUNT(*) AS n FROM events
+      prepareDiagnosticRead(
+        env,
+        `SELECT outcome, COUNT(*) AS n FROM diagnostic_events
            WHERE event = 'beta.left' AND ts >= ?${f.scopeClause} GROUP BY outcome`,
       )
         .bind(f.since, ...f.scopeBinds)
         .all<{ outcome: string; n: number }>(),
-      env.DB.prepare(
+      prepareDiagnosticRead(
+        env,
         `WITH categorized AS (
            SELECT up.install_id, up.threads, up.turns, up.turns_failed,
                   ${USAGE_PROVIDER_CATEGORY_SQL} AS provider
-           FROM usage_providers up JOIN events e ON e.id = up.event_id
+           FROM usage_providers up JOIN diagnostic_events e ON e.id = up.event_id
            WHERE e.ts >= ?${f.eventScopeClause}
          )
          SELECT provider, COUNT(DISTINCT install_id) AS installs,
@@ -2024,12 +2078,13 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
           failed: number;
         }>(),
       // Each install's latest app.start in range carries its OS and locale.
-      env.DB.prepare(
+      prepareDiagnosticRead(
+        env,
         `SELECT e.platform AS platform, e.os_version AS osVersion, e.locale AS locale,
                   COUNT(DISTINCT e.install_id) AS installs
-           FROM events e
+           FROM diagnostic_events e
            INNER JOIN (
-             SELECT install_id, MAX(ts) AS mts FROM events
+             SELECT install_id, MAX(ts) AS mts FROM diagnostic_events
              WHERE event = 'app.start' AND ts >= ?${f.scopeClause} GROUP BY install_id
            ) m ON m.install_id = e.install_id AND e.ts = m.mts
            WHERE e.event = 'app.start'
@@ -2474,29 +2529,9 @@ export async function purgeLegacyDiagnosticContent(
   stack = NULL,
   log_tail = NULL,
   fingerprint = CASE WHEN event = 'app.error' THEN '0000000000000000' ELSE '' END,
-  kind = CASE
-    WHEN event IN ('app.start', 'app.exit') THEN 'lifecycle'
-    WHEN event = 'app.error' THEN 'error'
-    WHEN event IN ('app.renderer-crash', 'app.child-process-crash') THEN 'crash'
-    WHEN event LIKE 'update.%' THEN 'update'
-    WHEN event = 'usage.daily' THEN 'usage'
-    WHEN event IN ('beta.installed', 'beta.left') THEN 'beta'
-    ELSE '' END,
-  process_type = CASE
-    WHEN event NOT IN ('app.renderer-crash', 'app.child-process-crash') THEN ''
-    WHEN process_type IN ('main', 'renderer', 'backend', 'server', 'Browser', 'GPU', 'Utility', 'Zygote', 'Sandbox helper', 'Pepper Plugin', 'Pepper Plugin Broker', 'unknown') THEN process_type
-    ELSE 'unknown' END,
-  reason = CASE
-    WHEN event = 'update.error' AND reason IN ('timeout', 'network', 'http-client', 'http-server', 'manifest', 'release-feed', 'verification', 'cancelled', 'unknown') THEN reason
-    WHEN event IN ('app.renderer-crash', 'app.child-process-crash') THEN
-      CASE WHEN reason IN ('clean-exit', 'abnormal-exit', 'killed', 'crashed', 'oom', 'launch-failed', 'integrity-failure', 'memory-eviction', 'unknown') THEN reason ELSE 'unknown' END
-    ELSE '' END,
-  source = CASE WHEN source IN ('main', 'renderer') THEN source ELSE '' END,
-  platform = CASE WHEN platform IN ('darwin', 'win32', 'linux') THEN platform ELSE 'unknown' END,
-  arch = CASE WHEN arch IN ('arm64', 'x64', 'ia32', 'arm') THEN arch ELSE 'unknown' END,
-  error_context = CASE WHEN error_context IN ('check', 'download', 'install') THEN error_context ELSE '' END WHERE id IN (${placeholders(ids.length)})`).bind(
-        ...ids,
-      ),
+  ${Object.entries(DIAGNOSTIC_METADATA_SQL)
+    .map(([column, expression]) => `${column} = ${expression}`)
+    .join(",\n  ")} WHERE id IN (${placeholders(ids.length)})`).bind(...ids),
     );
   statements.push(
     env.DB.prepare("UPDATE diagnostic_content_cleanup SET last_event_id = ? WHERE id = 1").bind(
@@ -2773,8 +2808,14 @@ export default {
 
   async scheduled(controller, env) {
     if (env.PURGE_LEGACY_DIAGNOSTICS === "true") {
-      await purgeLegacyDiagnosticContent(env);
-      await purgeLegacyDiagnosticDumps(env);
+      // Optional storage repair must not block ordinary retention; never log object keys/errors.
+      for (const purge of [purgeLegacyDiagnosticContent, purgeLegacyDiagnosticDumps]) {
+        try {
+          await purge(env);
+        } catch {
+          console.warn("optional diagnostic cleanup failed; retry on next scheduled run");
+        }
+      }
     }
     for (const [table, key, retentionDays] of [
       ["product_events", "event_id", PRODUCT_RETENTION_DAYS],

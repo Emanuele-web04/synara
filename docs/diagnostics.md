@@ -53,12 +53,17 @@ trimmed to its newest 512 KiB. HTTPS uploads use fixed NDJSON envelopes, timeout
 and event-UUID deduplication. Before every upload, all legacy envelopes are
 reconstructed and the local queue is atomically replaced with technical-only
 records. Invalid or cross-flavor rows are discarded. Failed network requests
-therefore leave no legacy prose in the retained queue.
+therefore leave no legacy prose in the retained queue. Startup, sharing revocation
+and flush cleanup also remove only regular files matching this queue's interrupted
+`.trim-PID`, `.flush-PID` and `.sanitize-PID` writes. Symlinks and unrelated files
+are preserved.
 
 The Cloudflare Worker independently applies the same technical boundary to
 Beta, Remote, old clients and handcrafted requests. D1 stores only reconstructed
 fields. Dashboard reads sanitize historical error text and keys while storage
-cleanup is pending. Raw dump uploads, downloads and legacy forwarding return
+cleanup is pending. Historical categorical metadata and release versions are
+normalized before facets, grouping and limits, with issue detail using the same
+canonical grouping key. Raw dump uploads, downloads and legacy forwarding return
 HTTP 410 without consuming dump bodies or accessing R2. No flavor starts
 Electron's raw crash uploader.
 
