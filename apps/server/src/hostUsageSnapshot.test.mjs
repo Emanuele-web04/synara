@@ -182,14 +182,20 @@ describe("product-consent host usage", () => {
     await collect.flush();
     expect(bodies[0].events).toEqual([expect.objectContaining({ event: "feature.used" })]);
     await collect.flush();
-    expect(bodies).toHaveLength(2);
-    expect(bodies[1].hostUsage).not.toHaveProperty("policyId");
-    expect(bodies[1].hostUsage).not.toHaveProperty("installId");
+    // Settle the chained sender promises without advancing the frozen receipt clock.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const hostBody = bodies.find((body) => body.hostUsage);
+    expect(bodies.filter((body) => body.hostUsage)).toHaveLength(1);
+    expect(bodies.flatMap((body) => body.events ?? [])).toContainEqual(
+      expect.objectContaining({ event: "app.active", cohortStage: "new" }),
+    );
+    expect(hostBody.hostUsage).not.toHaveProperty("policyId");
+    expect(hostBody.hostUsage).not.toHaveProperty("installId");
     const retry = await worker.fetch(
       new Request("https://worker.invalid/v1/product-events", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify(bodies[1]),
+        body: JSON.stringify(hostBody),
       }),
       { DB: db },
     );
