@@ -12,6 +12,7 @@ import worker, { signSession } from "../../analytics/worker.ts";
 import { SQLiteD1 } from "../../analytics/testing/sqliteD1.mjs";
 import { SqlitePersistenceMemory } from "./persistence/Layers/Sqlite.ts";
 import { writeHostUsageSnapshots } from "./hostUsageSnapshot.ts";
+import * as AtomicWrite from "./atomicWrite.ts";
 
 const DAY = 86_400_000;
 const START = Date.parse("2026-11-07T00:00:00.000Z");
@@ -494,6 +495,65 @@ describe("product-consent host usage", () => {
       }),
     ]);
   });
+
+  it.each([false, true])(
+    "removes an old snapshot published during opt-out (sharing re-enabled: %s)",
+    async (reenable) => {
+      const root = makeRoot();
+      const collect = sender(root, async () => new Response(null, { status: 503 }));
+      const policyFile = join(root, "product-analytics/host-usage-policy.json");
+      const oldPolicy = JSON.parse(readFileSync(policyFile, "utf8"));
+      let releaseWrite, markWrite;
+      const held = new Promise((resolve) => {
+          releaseWrite = resolve;
+        }),
+        reached = new Promise((resolve) => {
+          markWrite = resolve;
+        });
+      const realWrite = AtomicWrite.writeFileStringAtomically;
+      const writing = vi
+        .spyOn(AtomicWrite, "writeFileStringAtomically")
+        .mockImplementation((input) =>
+          Effect.gen(function* () {
+            // Hold the actual atomic writer after the producer's final consent read.
+            markWrite();
+            yield* Effect.promise(() => held);
+            return yield* realWrite(input);
+          }),
+        );
+      let freshFile;
+      try {
+        await run(
+          Effect.gen(function* () {
+            yield* seedTurn("t1");
+            const publishing = yield* Effect.forkChild(writeHostUsageSnapshots(root, NOW));
+            yield* Effect.promise(() => reached);
+            collect.setEnabled(false);
+            expect(files(root)).toEqual([]);
+            if (reenable) {
+              collect.setEnabled(true);
+              const fresh = JSON.parse(readFileSync(policyFile, "utf8"));
+              expect(fresh.policyId).not.toBe(oldPolicy.policyId);
+              freshFile = `${fresh.policyId}-2026-11-07.json`;
+              const directory = join(root, "product-analytics/host-usage");
+              mkdirSync(directory, { recursive: true });
+              writeFileSync(join(directory, freshFile), "new generation");
+            }
+            releaseWrite();
+            yield* Fiber.join(publishing);
+          }),
+        );
+        expect(files(root)).toEqual(freshFile ? [freshFile] : []);
+        if (freshFile)
+          expect(readFileSync(join(root, "product-analytics/host-usage", freshFile), "utf8")).toBe(
+            "new generation",
+          );
+      } finally {
+        releaseWrite();
+        writing.mockRestore();
+      }
+    },
+  );
 
   it("rechecks durable opt-out after held SQL when the old policy could not be removed", async () => {
     const root = makeRoot();

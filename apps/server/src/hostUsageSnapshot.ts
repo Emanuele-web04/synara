@@ -176,10 +176,17 @@ export const writeHostUsageSnapshots = (homeDir: string, now = Date.now()) =>
     const since = Date.parse(sinceIso);
     if (since > now) return;
     const consentPath = path.join(root, "consent.json");
-    if (yield* fs.exists(consentPath)) {
-      const consent = yield* readJson(consentPath);
-      if (consent?.enabled !== true) return;
-    }
+    const hasCurrentConsent = Effect.gen(function* () {
+      const current = yield* readJson(path.join(root, HOST_USAGE_POLICY_FILE));
+      if (current?.policyId !== policy.policyId || current?.enabled !== true) return false;
+      // A failed policy unlink must not override a separately persisted opt-out.
+      if (yield* fs.exists(consentPath)) {
+        const consent = yield* readJson(consentPath);
+        if (consent?.enabled !== true) return false;
+      }
+      return true;
+    });
+    if (!(yield* hasCurrentConsent)) return;
     const spool = path.join(root, HOST_USAGE_DIRECTORY);
     const files = yield* fs
       .readDirectory(spool)
@@ -259,17 +266,16 @@ export const writeHostUsageSnapshots = (homeDir: string, now = Date.now()) =>
         ...aggregateTurns(turns),
       };
       // An opt-out may occur while SQLite is read; stale generations cannot publish a current spool.
-      const current = yield* readJson(path.join(root, HOST_USAGE_POLICY_FILE));
-      if (current?.policyId !== policy.policyId || current.enabled !== true) return;
-      // A failed policy unlink must not override a separately persisted opt-out.
-      if (yield* fs.exists(consentPath)) {
-        const currentConsent = yield* readJson(consentPath);
-        if (currentConsent?.enabled !== true) return;
-      }
+      if (!(yield* hasCurrentConsent)) return;
       yield* writeFileStringAtomically({
         filePath: file,
         contents: `${JSON.stringify(snapshot)}\n`,
       });
+      // Opt-out can also clear the spool during the atomic write; remove only this generation.
+      if (!(yield* hasCurrentConsent)) {
+        yield* fs.remove(file, { force: true });
+        return;
+      }
     }
   });
 
