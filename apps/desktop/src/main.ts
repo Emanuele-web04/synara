@@ -1,5 +1,9 @@
 import "./httpRuntime";
-import { attachDesktopUpdateControl, DESKTOP_UPDATE_IPC_ENV } from "./desktopUpdateControl";
+import {
+  attachDesktopUpdateControl,
+  DESKTOP_UPDATE_IPC_ENV,
+  supportsDesktopUpdateControl,
+} from "./desktopUpdateControl";
 import { registerRemoteResourceBroker, REMOTE_RESOURCE_SCHEME } from "./remoteResourceBroker";
 import { showDiagnosticStartupDialog } from "./startupDiagnosticDialog";
 import {
@@ -4906,8 +4910,9 @@ function startBackend(trigger: BackendStartTrigger = "lifecycle"): void {
       ELECTRON_RUN_AS_NODE: "1",
       SYNARA_SERVER_ENTRY: backendEntry,
       SYNARA_DESKTOP_PARENT_STDIN: "1",
-      [DESKTOP_UPDATE_IPC_ENV]:
-        app.isPackaged && desktopFlavor === "remote" && process.platform === "darwin" ? "1" : "0",
+      [DESKTOP_UPDATE_IPC_ENV]: supportsDesktopUpdateControl(app.isPackaged, process.platform)
+        ? "1"
+        : "0",
     },
     // Keep output piped in every environment so startup blockers and readiness
     // are observable even when packaged log setup is unavailable. The fourth
@@ -4934,12 +4939,10 @@ function startBackend(trigger: BackendStartTrigger = "lifecycle"): void {
   backendListeningDetector = listeningDetector;
   backendProcess = child;
   attachDesktopUpdateControl(child, {
+    isPackaged: app.isPackaged,
+    platform: process.platform,
     isCurrentChild: () => backendProcess === child && !isQuitting,
-    supported: () =>
-      app.isPackaged &&
-      desktopFlavor === "remote" &&
-      process.platform === "darwin" &&
-      updaterConfigured,
+    supported: () => updaterConfigured,
     getState: () => updateState,
     getInstallBlockedReason: getUpdaterInstallBlockedReason,
     check: () => checkForUpdates("remote"),

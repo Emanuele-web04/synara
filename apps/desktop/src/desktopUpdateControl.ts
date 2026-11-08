@@ -12,10 +12,19 @@ import { Schema } from "effect";
 
 export const DESKTOP_UPDATE_IPC_ENV = "SYNARA_DESKTOP_UPDATE_IPC";
 
+export function supportsDesktopUpdateControl(
+  isPackaged: boolean,
+  platform: NodeJS.Platform,
+): boolean {
+  return isPackaged && platform === "darwin";
+}
+
 // The token acknowledges a delivered prepare response; it is never an installer URL or version selector.
 export function attachDesktopUpdateControl(
   child: ChildProcess,
   input: {
+    readonly isPackaged: boolean;
+    readonly platform: NodeJS.Platform;
     readonly isCurrentChild: () => boolean;
     readonly supported: () => boolean;
     readonly getState: () => DesktopUpdateState;
@@ -32,10 +41,12 @@ export function attachDesktopUpdateControl(
     readonly expiresAt: number;
   } | null = null;
   let committed = false;
+  const supported = () =>
+    supportsDesktopUpdateControl(input.isPackaged, input.platform) && input.supported();
 
   const status = (message: string | null = null): ServerDesktopUpdateResult["status"] => ({
-    supported: input.supported(),
-    state: input.supported() ? input.getState() : null,
+    supported: supported(),
+    state: supported() ? input.getState() : null,
     busy: committed || input.getInstallBlockedReason() !== null,
     message: message ?? input.getInstallBlockedReason(),
   });
@@ -62,8 +73,10 @@ export function attachDesktopUpdateControl(
     const request = raw;
     const refuse = (message: string) =>
       send(request.id, { accepted: false, status: status(message) });
-    if (!input.supported()) {
-      refuse("Remote updates require the packaged Synara Remote app on macOS.");
+    if (!supported()) {
+      refuse(
+        "Updates from iOS require the packaged Synara Desktop app on macOS with its updater enabled.",
+      );
       return;
     }
     if (request.action === "status") {
