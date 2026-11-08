@@ -200,22 +200,32 @@ export function formatRelativeTime(iso: string | null, locale = getFormatLocale(
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) return "";
   const seconds = Math.max(0, Math.round((Date.now() - date.getTime()) / 1000));
-  if (seconds < 60) return "now";
+  const spanish = locale?.toLowerCase().startsWith("es") === true;
+  if (seconds < 60) {
+    return spanish
+      ? new Intl.RelativeTimeFormat(locale, { numeric: "auto", style: "short" }).format(0, "second")
+      : "now";
+  }
   const minutes = Math.floor(seconds / 60);
   const hours = Math.floor(minutes / 60);
   const days = Math.floor(hours / 24);
   const weeks = Math.floor(days / 7);
-  const [value, suffix]: [number, string] =
+  const [value, unit, suffix]: [number, Intl.RelativeTimeFormatUnit, string] =
     minutes < 60
-      ? [minutes, "m"]
+      ? [minutes, "minute", "m"]
       : hours < 24
-        ? [hours, "h"]
+        ? [hours, "hour", "h"]
         : days < 7
-          ? [days, "d"]
+          ? [days, "day", "d"]
           : weeks < 4
-            ? [weeks, "w"]
-            : [Math.floor(days / 30), "mo"];
-  return `${new Intl.NumberFormat(locale).format(value)}${suffix}`;
+            ? [weeks, "week", "w"]
+            : [Math.floor(days / 30), "month", "mo"];
+  return spanish
+    ? new Intl.RelativeTimeFormat(locale, { numeric: "always", style: "short" }).format(
+        -value,
+        unit,
+      )
+    : `${new Intl.NumberFormat(locale).format(value)}${suffix}`;
 }
 
 export function runStatusVariant(
@@ -1372,7 +1382,7 @@ export function AutomationDialog({
                       >
                         {[0, 1, 2, 3, 4, 5, 6].map((value) => (
                           <MenuRadioItem key={value} value={String(value)}>
-                            {weekdayLabel(value)}
+                            {weekdayLabel(value, formatLocale)}
                           </MenuRadioItem>
                         ))}
                       </MenuRadioGroup>

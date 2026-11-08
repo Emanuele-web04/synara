@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { i18n, setLanguagePreference } from "~/i18n";
 
 import type { WorkLogLiveActivity } from "../workLog";
 import { formatLiveActivityMeta, liveActivityElapsedMs } from "./liveActivityPresentation";
@@ -17,11 +18,22 @@ function runningActivity(overrides: Partial<WorkLogLiveActivity> = {}): WorkLogL
 }
 
 describe("live activity presentation", () => {
-  it("generates timing labels without changing the activity label", () => {
+  it("recomputes generated timing labels in the selected language", () => {
+    i18n.addResources("es", "translation", {
+      "Active {{duration}} ago": "Activo hace {{duration}}",
+      "{{duration}} elapsed": "{{duration}} transcurridos",
+    });
     const activity = runningActivity({ label: "Settings" });
     const nowMs = Date.parse("2026-07-26T14:02:14.000Z");
-    expect(formatLiveActivityMeta(activity, nowMs)).toBe("Active 3s ago · 2m 14s elapsed");
-    expect(activity.label).toBe("Settings");
+    try {
+      setLanguagePreference("es");
+      expect(formatLiveActivityMeta(activity, nowMs)).toBe("Activo hace 3s · 2m 14s transcurridos");
+      expect(activity.label).toBe("Settings");
+      setLanguagePreference("en");
+      expect(formatLiveActivityMeta(activity, nowMs)).toBe("Active 3s ago · 2m 14s elapsed");
+    } finally {
+      setLanguagePreference("en");
+    }
   });
 
   it("renders recent activity and elapsed time from one normalized state", () => {

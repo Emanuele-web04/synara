@@ -59,9 +59,13 @@ export const MCP_CONNECTORS_BETA_FEATURE = "mcp-connectors";
  */
 export const NATIVE_EDITOR_BETA_FEATURE = "native-editor";
 
+/** Simplified Chinese interface, native menus and app-authored permission explanations. */
+export const CHINESE_UI_BETA_FEATURE = "chinese-ui";
+
 export const BETA_ONLY_FEATURES: readonly BetaOnlyFeature[] = [
   "accountProfileSync",
   ACCOUNT_INBOX_BETA_FEATURE,
+  CHINESE_UI_BETA_FEATURE,
 ];
 
 /**

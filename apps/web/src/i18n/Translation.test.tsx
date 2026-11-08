@@ -1,11 +1,14 @@
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
-import { i18n } from ".";
+import { i18n, setLanguagePreference } from ".";
 import { Translation } from "./Translation";
 
+afterEach(() => setLanguagePreference("system"));
+
 describe("rich localized text", () => {
-  it("renders shipped sentences with explicit React slots", () => {
+  it("renders shipped Chinese sentences with explicit React slots", () => {
+    setLanguagePreference("zh-CN");
     const html = renderToStaticMarkup(
       <Translation
         message="settings:binaryPathDescription"
@@ -14,10 +17,12 @@ describe("rich localized text", () => {
       />,
     );
     expect(html).toContain("<code>codex</code>");
-    expect(html).toContain("Leave blank");
+    expect(html).toContain("留空");
+    expect(html).not.toContain("Leave blank");
   });
 
-  it("keeps the project control and complete project heading together", () => {
+  it("keeps the project control and complete Chinese project heading together", () => {
+    setLanguagePreference("zh-CN");
     const html = renderToStaticMarkup(
       <Translation
         message="chat:emptyLandingProjectHeading"
@@ -25,11 +30,12 @@ describe("rich localized text", () => {
       />,
     );
     expect(html).toBe(
-      'What should we do in <button type="button">&lt;project&gt; &amp; 项目</button>?',
+      '我们应该在 <button type="button">&lt;project&gt; &amp; 项目</button> 中做什么？',
     );
   });
 
   it("keeps HTML, event handlers, and named slots inside interpolated values as literal text", () => {
+    setLanguagePreference("zh-CN");
     const command =
       '<command onclick="alert(1)"><strong>用户内容</strong></command> & <img src="x" />';
     const html = renderToStaticMarkup(
@@ -48,10 +54,11 @@ describe("rich localized text", () => {
   });
 
   it("does not interpret catalog HTML that has no explicit React slot", () => {
+    setLanguagePreference("zh-CN");
     const key = "binaryPathDescription";
-    const original: string = i18n.getResource("en", "settings", key);
+    const original: string = i18n.getResource("zh-CN", "settings", key);
     i18n.addResource(
-      "en",
+      "zh-CN",
       "settings",
       key,
       '<strong>中文</strong><img src="x" onerror="alert(1)" /><command>{{command}}</command>',
@@ -68,7 +75,7 @@ describe("rich localized text", () => {
       expect(html).not.toMatch(/<(?:strong|img)\b/);
       expect(html).toContain("<code>codex</code>");
     } finally {
-      i18n.addResource("en", "settings", key, original);
+      i18n.addResource("zh-CN", "settings", key, original);
     }
   });
 

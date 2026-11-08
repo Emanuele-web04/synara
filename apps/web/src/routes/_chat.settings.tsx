@@ -16,6 +16,13 @@ import { SafariAccessSetupButton } from "../components/SafariAccessOnboarding";
 import { createFileRoute, useSearch } from "@tanstack/react-router";
 import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "~/i18n";
+import {
+  AVAILABLE_LANGUAGE_PREFERENCES,
+  UI_LOCALES,
+  UI_LOCALE_REGISTRY,
+  resolveLanguagePreference,
+  type LanguagePreference,
+} from "~/i18n/locale";
 import { useLocalStorage } from "../hooks/useLocalStorage";
 import {
   DEFAULT_DIFF_RENDER_MODE,
@@ -46,6 +53,7 @@ import {
   useAppSettings,
 } from "../appSettings";
 import { APP_VERSION } from "../branding";
+import { EditorLanguageReloadNotice } from "~/components/codeEditor/EditorLanguageReloadNotice";
 import { ProductAnalyticsSettingsPanel } from "~/components/settings/ProductAnalyticsSettingsPanel";
 import { AdvancedSettingsPanel } from "~/components/settings/AdvancedSettingsPanel";
 import { AppIconPicker } from "~/components/settings/AppIconPicker";
@@ -343,7 +351,7 @@ type BooleanSettingKey = {
 // ── Route screen ───────────────────────────────────────────────────────────
 
 function SettingsRouteView() {
-  const { t } = useTranslation();
+  const { t, locale } = useTranslation();
   const [defaultDiffRenderMode, setDefaultDiffRenderMode] = useLocalStorage(
     DIFF_RENDER_MODE_STORAGE_KEY,
     DEFAULT_DIFF_RENDER_MODE,
@@ -369,6 +377,7 @@ function SettingsRouteView() {
   } = useTheme();
   const { settings, defaults, updateSettings, updateSettingsAndWait, resetSettings } =
     useAppSettings();
+  const languagePreference = resolveLanguagePreference(settings.language);
   const keepAwake = useKeepAwakeState();
   const desktopTopBarTrafficLightGutterClassName = useDesktopTopBarTrafficLightGutterClassName();
   const [releaseHistoryOpen, setReleaseHistoryOpen] = useState(false);
@@ -475,6 +484,7 @@ function SettingsRouteView() {
   }, [activeSection, settingsTarget]);
 
   const changedSettingLabels = [
+    ...(settings.language !== defaults.language ? ["common:general_languageAria"] : []),
     ...(theme !== "system" ? ["onboarding:changed_theme"] : []),
     // resetAllThemes() restores both theme packs and the system-font preference.
     ...(!isDefaultThemePack("dark") ? ["settings:darkThemePack"] : []),
@@ -640,7 +650,7 @@ function SettingsRouteView() {
       [
         t("settings:restoreDefaultSettings"),
         t("settings:thisWillReset", {
-          settings: changedSettingLabels.join(", "),
+          settings: new Intl.ListFormat(locale).format(changedSettingLabels),
         }),
       ].join("\n"),
     );
@@ -707,6 +717,43 @@ function SettingsRouteView() {
       <BetaChannelSettingsPanel active={true} />
       <ProductAnalyticsSettingsPanel />
       <SettingsSection title="settings:general_coreDefaults">
+        <SettingsRow
+          id="setting-language"
+          status={<EditorLanguageReloadNotice />}
+          title="common:general_languageAria"
+          description="settings:chooseTheLanguageUsedByTheInterfaceSystemFollows"
+          resetAction={
+            settings.language !== defaults.language ? (
+              <SettingResetButton
+                label={t("common:language")}
+                onClick={() => updateSettings({ language: defaults.language })}
+              />
+            ) : null
+          }
+          control={
+            <SettingsSelectControl
+              value={languagePreference}
+              onValueChange={(language) => {
+                if (AVAILABLE_LANGUAGE_PREFERENCES.includes(language as LanguagePreference)) {
+                  updateSettings({ language: language as LanguagePreference });
+                }
+              }}
+              ariaLabel={t("common:general_languageAria")}
+              valueContent={
+                languagePreference === "system"
+                  ? t("common:themeOptions_system")
+                  : UI_LOCALE_REGISTRY[languagePreference].nativeName
+              }
+            >
+              <SelectItem value="system">{t("common:themeOptions_system")}</SelectItem>
+              {UI_LOCALES.map((locale) => (
+                <SelectItem key={locale} value={locale}>
+                  {UI_LOCALE_REGISTRY[locale].nativeName}
+                </SelectItem>
+              ))}
+            </SettingsSelectControl>
+          }
+        />
         <SettingsRow
           id="setting-default-provider"
           title="settings:changed_defaultProvider"

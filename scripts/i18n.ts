@@ -113,6 +113,40 @@ export const UI_LITERAL_ALLOWLIST: Readonly<Record<string, string>> = {
   Kanban: "Board methodology name",
 };
 
+// These complete Spanish messages are valid cognates/established technical terms.
+// They are intentionally NOT permitted as raw JSX: other languages still need a key.
+const SPANISH_INVARIANT_MESSAGES = new Set([
+  "No",
+  "Editor",
+  "Error",
+  "error",
+  "terminal",
+  "Terminal",
+  "tokens",
+  "tokens.",
+  "{{count}} tokens",
+  "{{amount}} min",
+  "{{count}} error",
+  "Idea",
+  "Panel",
+  "Auto",
+  "Local",
+  "Zoom",
+  "General",
+  "Personal",
+  "Color",
+  "Variables",
+  "Chat",
+  "Chats",
+  "Chat {{value0}}",
+  "Bot",
+  "Emoji",
+  "Plan",
+  "Manual",
+  "· PR",
+  "upstream",
+]);
+
 const UI_PROPS = new Set([
   "title",
   "description",
@@ -856,6 +890,7 @@ export function auditLocalization(root: string) {
         if (
           value === catalogs.en?.[namespace]?.[key] &&
           !isAllowedLiteral(value) &&
+          !(locale === "es" && SPANISH_INVARIANT_MESSAGES.has(value)) &&
           /[A-Za-z]{2}/.test(value.replace(/\{\{[^{}]+\}\}/g, ""))
         ) {
           unchanged.push({

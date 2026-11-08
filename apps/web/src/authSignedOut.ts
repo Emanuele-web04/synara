@@ -1,10 +1,12 @@
 // FILE: authSignedOut.ts
 // Purpose: Replaces authenticated application state after the current browser session logs out.
-import { t } from "~/i18n";
+import { setLanguagePreference, t } from "~/i18n";
+import { readLanguagePreference } from "~/i18n/locale";
 
 export const AUTH_SIGNED_OUT_PATH = "/signed-out";
 
 function renderSignedOutScreen(): void {
+  setLanguagePreference(readLanguagePreference());
   const root = document.getElementById("root");
   if (!root) return;
 

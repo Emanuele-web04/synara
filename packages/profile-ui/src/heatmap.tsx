@@ -153,7 +153,7 @@ export function ActivityHeatmap({
     }
     previousMonth = monthIndex;
     return Number.isInteger(monthIndex) && monthIndex >= 0 && monthIndex <= 11
-      ? new Intl.DateTimeFormat("en", { month: "short", timeZone: "UTC" }).format(
+      ? new Intl.DateTimeFormat(formatLocale, { month: "short", timeZone: "UTC" }).format(
           new Date(Date.UTC(2026, monthIndex, 1)),
         )
       : null;

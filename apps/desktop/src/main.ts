@@ -6,7 +6,16 @@ import {
 } from "./desktopUpdateControl";
 import { registerRemoteResourceBroker, REMOTE_RESOURCE_SCHEME } from "./remoteResourceBroker";
 import { showDiagnosticStartupDialog } from "./startupDiagnosticDialog";
-import { t } from "./i18n";
+import {
+  initializeDesktopI18n,
+  setDesktopLanguagePreference,
+  t,
+  translateNativeMenuRoles,
+} from "./i18n";
+import {
+  applyDesktopLanguagePreference,
+  readDesktopLanguagePreference,
+} from "./desktopPreferences";
 import { BackendIssueDetector } from "./backendIssueDetector";
 import { attachAppSubframeNavigationGuard } from "./subframeNavigationGuard";
 import { CuaDriverHost, sweepOrphanedCuaDrivers } from "./cuaDriverHost";
@@ -472,6 +481,16 @@ const DESKTOP_BROWSER_HOST_CAPABILITY_FD = 3;
 // for the same lock even when they use the same Electron executable.
 const userDataPath = resolveUserDataPath();
 app.setPath("userData", userDataPath);
+// Match the renderer storage profile, including isolated source-build profiles.
+const DESKTOP_LANGUAGE_PREFERENCE_PATH = Path.join(userDataPath, "desktop-language.json");
+initializeDesktopI18n(
+  readDesktopLanguagePreference(DESKTOP_LANGUAGE_PREFERENCE_PATH),
+  () =>
+    app.isReady()
+      ? app.getPreferredSystemLanguages()
+      : [new Intl.DateTimeFormat().resolvedOptions().locale],
+  desktopFlavor,
+);
 
 // Remote shares usage and diagnostics by default; Settings turns both off.
 // Stable stays opt-in for product events and never runs diagnostics.
@@ -2095,7 +2114,9 @@ function configureApplicationMenu(): void {
     },
   );
 
-  Menu.setApplicationMenu(Menu.buildFromTemplate(template));
+  const applicationMenu = Menu.buildFromTemplate(template);
+  translateNativeMenuRoles(applicationMenu, APP_DISPLAY_NAME);
+  Menu.setApplicationMenu(applicationMenu);
 }
 
 function resolveResourcePath(fileName: string): string | null {
@@ -5396,6 +5417,26 @@ function registerIpcHandlers(): void {
   });
 
   ipcMain.removeHandler(IPC.setTheme);
+  ipcMain.removeAllListeners(IPC.getSystemLanguages);
+  ipcMain.on(IPC.getSystemLanguages, (event: IpcMainEvent) => {
+    event.returnValue =
+      event.sender === mainWindow?.webContents && event.senderFrame === event.sender.mainFrame
+        ? app.getPreferredSystemLanguages()
+        : [];
+  });
+  ipcMain.removeHandler(IPC.setLanguagePreference);
+  ipcMain.handle(IPC.setLanguagePreference, (event, rawPreference: unknown) => {
+    applyDesktopLanguagePreference(rawPreference, {
+      flavor: desktopFlavor,
+      isTrustedSender:
+        event.sender === mainWindow?.webContents && event.senderFrame === event.sender.mainFrame,
+      preferencePath: DESKTOP_LANGUAGE_PREFERENCE_PATH,
+      onPreference: (language) => {
+        setDesktopLanguagePreference(language);
+        if (app.isReady()) configureApplicationMenu();
+      },
+    });
+  });
   ipcMain.handle(IPC.setTheme, async (_event, rawTheme: unknown) => {
     const theme = getSafeTheme(rawTheme);
     if (!theme) {
@@ -6083,7 +6124,9 @@ function createWindow(): BrowserWindow {
       { role: "selectAll", enabled: params.editFlags.canSelectAll },
     );
 
-    Menu.buildFromTemplate(menuTemplate).popup({ window });
+    const menu = Menu.buildFromTemplate(menuTemplate);
+    translateNativeMenuRoles(menu, APP_DISPLAY_NAME);
+    menu.popup({ window });
   });
 
   window.webContents.setWindowOpenHandler(({ url }) => {

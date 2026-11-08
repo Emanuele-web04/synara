@@ -46,7 +46,7 @@ Do not mix unrelated fixes together.
 
 If the PR makes anything resembling a UI change, include clear before/after images.
 
-For interface copy, follow [the interface text guide](docs/internationalization.md). Add stable semantic keys to the English catalogs, preserve user/provider data, and run the catalog and extraction checks.
+For interface copy, follow [the localization guide](docs/internationalization.md). Add stable semantic keys and translations in every shipped locale, preserve user/provider data, and run the catalog and extraction checks.
 
 If the change depends on motion, timing, transitions, or interaction details, include a short video.
 
