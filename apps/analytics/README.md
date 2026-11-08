@@ -103,3 +103,44 @@ See the [precise consent, measurement and coverage contract](../../docs/diagnost
 Product aggregate/quality `received_at` values are UTC window boundaries, not
 individual arrival times. Only the 14-day deduplication receipts keep arrival time;
 90-day product counter cleanup uses the aggregate `day` field.
+
+## Public installer download observations
+
+The existing daily scheduled sweep also reads the public GitHub Releases API,
+without credentials or installer binaries. It shares the marketing installer
+artifact parser (`@synara/shared/installerDownloads`): only `.dmg`, `.exe` and
+`.AppImage` asset `download_count` counters qualify. Pagination is capped at ten
+100-release pages, 8 MiB total response bytes, 10,000 installer assets and a
+20-second source deadline. Hitting any limit, malformed data, rate limits or a
+partial traversal preserves the last successful snapshot. No fallback marketing
+counter is written as a fresh observation.
+
+Migration `0011_installer_downloads.sql` is additive and must be applied before
+running a receiver that reads these tables. Its numeric per-asset head and finite
+channel/platform interval totals contain no names, URLs or installation IDs.
+Snapshots and history older than 90 days are pruned after successful source
+reconciliation; source outages can delay age-based cleanup while preserving the
+last good observation. The current asset head is replaced only by a complete
+successful reconciliation. The transactional snapshot
+claim rejects duplicate, older and concurrent writers before they can change
+history or the current head; a traversal overlapping a newer completed snapshot
+is also rejected. No migration or deployment is authorized here.
+
+Product Overview shows the latest source counter independently of its date
+range, plus intervals whose ending snapshot falls in that range. Counts include
+repeat downloads, updaters and bots; they are not unique people or installs, and
+the current counter includes only assets GitHub still lists. The initial baseline
+has no increase. Missing/reset/reclassified assets and newly discovered assets
+created before the prior observation make the affected scope's increase unknown;
+a later comparable interval can recover. New assets created after the prior
+observation can contribute their full current count. GitHub traversal is not an
+atomic source snapshot, so intervals are observations, not exact daily counts.
+
+Channel filters follow release tags (`stable`, `beta`, `remote`); unrecognized
+historical tags remain in a finite `other` bucket, visible only with all channels.
+iOS/iPadOS filters report unsupported App Store counts, never desktop totals.
+App Store owner analytics and external mirrors are not measured here, and
+first launch is never used as a download proxy. See the GitHub
+[release API](https://docs.github.com/en/rest/releases/releases#list-releases)
+for the public counter source. Tests use synthetic responses and local SQLite;
+they never call a live Worker or D1 database.

@@ -24,6 +24,7 @@ import {
 } from "../components";
 
 const DAY_MS = 86_400_000;
+const observationLabel = (value: string) => `${value.slice(0, 10)} ${value.slice(11, 16)} UTC`;
 const today = () => new Date().toISOString().slice(0, 10);
 const compact = (value: number) =>
   new Intl.NumberFormat("en", { notation: "compact", maximumFractionDigits: 1 }).format(value);
@@ -397,6 +398,79 @@ export function Product({
                         </tbody>
                       </table>
                     </TableWrap>
+                  )}
+                </section>
+              )}
+              {data.installerDownloads && (
+                <section className="section" aria-labelledby="product-downloads">
+                  <h3 id="product-downloads" className="heading-20 section-head">
+                    Installer downloads
+                  </h3>
+                  {data.installerDownloads.status === "unsupported_store" ? (
+                    <EmptyLine text="App Store download counts are unavailable here. They require the app owner's store analytics; app opens do not measure downloads." />
+                  ) : (
+                    <>
+                      <p className="chart-caption">
+                        Public GitHub counters for desktop .dmg, .exe and .AppImage assets,
+                        including repeat downloads, updaters and bots. These are not unique people
+                        or installations. App Store downloads are not included.
+                      </p>
+                      <div className="stat-strip">
+                        <Stat
+                          label="Latest GitHub installer counter"
+                          value={data.installerDownloads.total?.toLocaleString() ?? "—"}
+                          detail={
+                            data.installerDownloads.observedAt
+                              ? `Observed ${observationLabel(data.installerDownloads.observedAt)}; date range does not apply`
+                              : "Awaiting the first successful source snapshot"
+                          }
+                        />
+                      </div>
+                      <p className="chart-caption">
+                        History shows increases observed between successful source snapshots, with
+                        the ending snapshot in this date range. These are not exact daily downloads.
+                        The first snapshot is a baseline. Deleted, reset, reclassified or newly
+                        discovered older assets leave coverage unknown; the counter can fall when
+                        assets disappear. History is normally kept for 90 days; source outages can
+                        delay cleanup.
+                      </p>
+                      {data.installerDownloads.history.length === 0 ? (
+                        <EmptyLine text="No successful source snapshots end in this range." />
+                      ) : (
+                        <TableWrap>
+                          <table className="data">
+                            <thead>
+                              <tr>
+                                <th scope="col">Previous observation</th>
+                                <th scope="col">Observation</th>
+                                <th scope="col" className="num">
+                                  Source counter
+                                </th>
+                                <th scope="col" className="num">
+                                  Observed increase
+                                </th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {data.installerDownloads.history.map((row) => (
+                                <tr key={row.to}>
+                                  <td>{row.from ? observationLabel(row.from) : "Baseline"}</td>
+                                  <td>{observationLabel(row.to)}</td>
+                                  <td className="num">{row.total.toLocaleString()}</td>
+                                  <td className="num">
+                                    {row.downloads === null
+                                      ? row.from
+                                        ? "Unknown coverage"
+                                        : "Baseline"
+                                      : row.downloads.toLocaleString()}
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </TableWrap>
+                      )}
+                    </>
                   )}
                 </section>
               )}

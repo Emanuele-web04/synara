@@ -10,6 +10,7 @@ import worker, {
   purgeLegacyDiagnosticDumps,
   signSession,
 } from "./worker.ts";
+import { captureInstallerDownloads } from "./installerDownloads.ts";
 import { BetaDiagnostics } from "../desktop/src/betaDiagnostics.ts";
 import {
   createInitialDesktopUpdateState,
@@ -35,6 +36,8 @@ describe("analytics ingest and D1 storage", () => {
   let day;
 
   beforeEach(() => {
+    // Scheduled jobs must never reach the public network from a local fixture.
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("Fixture network disabled")));
     db = new SQLiteD1();
     applyMigrations(db.database);
     env = { DB: db, DASHBOARD_SESSION_KEY: "test-session-key" };
@@ -609,10 +612,11 @@ describe("analytics ingest and D1 storage", () => {
         expect(response.status).toBe(200);
         return response.json();
       };
-      // Product host columns are additive and required before the new receiver is deployed.
-      legacy.database.exec(
-        readFileSync(new URL("./migrations/0010_product_host_usage.sql", import.meta.url), "utf8"),
-      );
+      // Prepare additive API tables while leaving the privacy migration under test unapplied.
+      for (const migration of ["0010_product_host_usage.sql", "0011_installer_downloads.sql"])
+        legacy.database.exec(
+          readFileSync(new URL(`./migrations/${migration}`, import.meta.url), "utf8"),
+        );
       const usagePath = "/api/usage?days=7&flavor=beta&version=1.2.3&platform=darwin";
       const productPath = `/api/product?from=${day}&to=${day}&channel=beta&surface=desktop`;
       const before = { usage: await read(usagePath), product: await read(productPath) };
@@ -1303,6 +1307,259 @@ describe("analytics ingest and D1 storage", () => {
       env,
     );
     expect(badRange.status).toBe(400);
+  });
+
+  describe("public installer download observations", () => {
+    const DAY = 86_400_000;
+    const release = (tag, assets = []) => ({ tag_name: tag, draft: false, assets });
+    const date = (at) => new Date(at).toISOString();
+    const sourceAsset = (
+      id,
+      downloads,
+      name = "Synara.dmg",
+      createdAt = "2026-01-01T00:00:00Z",
+    ) => ({
+      id,
+      name,
+      download_count: downloads,
+      created_at: createdAt,
+      browser_download_url: "https://example.invalid/never-fetch-installer",
+      uploader: { login: "unused-public-profile" },
+    });
+    const snapshot = async (at, releases) => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(at);
+      fetch.mockResolvedValueOnce(Response.json(releases));
+      await captureInstallerDownloads(db);
+    };
+    const readDownloads = async (query = "") => {
+      const token = await signSession("test-session-key", Math.floor(Date.now() / 1000) + 3600);
+      const response = await worker.fetch(
+        new Request(
+          `https://worker.invalid/api/product?from=${date(now - 7 * DAY).slice(0, 10)}&to=${day}${query}`,
+          { headers: { cookie: `synara_beta_dash=${token}` } },
+        ),
+        env,
+      );
+      expect(response.status).toBe(200);
+      return (await response.json()).installerDownloads;
+    };
+
+    it("keeps public counters separate from installations and excludes App Store surfaces", async () => {
+      expect(await readDownloads()).toEqual({
+        status: "awaiting_snapshot",
+        observedAt: null,
+        total: null,
+        history: [],
+      });
+      const at = now - 3 * DAY;
+      await snapshot(at, [
+        release("v1.2.3", [
+          sourceAsset(1, 100),
+          sourceAsset(2, 50, "Synara.exe"),
+          sourceAsset(3, 999, "latest.yml"),
+        ]),
+        release("v1.2.4-beta.1", [sourceAsset(4, 20, "Synara.AppImage")]),
+        release("v1.2.4-remote.1", [sourceAsset(5, 5)]),
+        release("historic-custom-tag", [sourceAsset(6, 2)]),
+      ]);
+      expect(await readDownloads()).toEqual({
+        status: "available",
+        observedAt: date(at),
+        total: 177,
+        history: [{ from: null, to: date(at), total: 177, downloads: null }],
+      });
+      expect((await readDownloads("&channel=stable&surface=desktop")).total).toBe(150);
+      expect((await readDownloads("&channel=beta")).total).toBe(20);
+      expect((await readDownloads("&channel=remote")).total).toBe(5);
+      for (const surface of ["ios", "ipados"]) {
+        expect(await readDownloads(`&surface=${surface}`)).toEqual({
+          status: "unsupported_store",
+          observedAt: null,
+          total: null,
+          history: [],
+        });
+      }
+      expect(
+        db.database.prepare("SELECT * FROM installer_download_assets ORDER BY asset_id").all(),
+      ).toEqual([
+        { asset_id: 1, channel: "stable", platform: "darwin", downloads: 100 },
+        { asset_id: 2, channel: "stable", platform: "win32", downloads: 50 },
+        { asset_id: 4, channel: "beta", platform: "linux", downloads: 20 },
+        { asset_id: 5, channel: "remote", platform: "darwin", downloads: 5 },
+        { asset_id: 6, channel: "other", platform: "darwin", downloads: 2 },
+      ]);
+      expect(
+        fetch.mock.calls.every(
+          ([url, init]) =>
+            url.startsWith("https://api.github.com/repos/Emanuele-web04/synara/releases?") &&
+            !new Headers(init.headers).has("Authorization") &&
+            init.redirect === "error",
+        ),
+      ).toBe(true);
+    });
+
+    it("records changes between successful observations, including newly created assets, without daily interpolation", async () => {
+      const first = now - 6 * DAY;
+      const second = now - 3 * DAY;
+      await snapshot(first, [release("v1.2.3", [sourceAsset(1, 100)])]);
+      await snapshot(second, [
+        release("v1.2.3", [
+          sourceAsset(1, 107),
+          sourceAsset(2, 3, "Synara.exe", date(first + DAY).slice(0, 19) + "Z"),
+        ]),
+      ]);
+      expect((await readDownloads()).history).toEqual([
+        { from: date(first), to: date(second), total: 110, downloads: 10 },
+        { from: null, to: date(first), total: 100, downloads: null },
+      ]);
+      const token = await signSession("test-session-key", Math.floor(Date.now() / 1000) + 3600);
+      const response = await worker.fetch(
+        new Request(
+          `https://worker.invalid/api/product?from=${date(first + DAY).slice(0, 10)}&to=${date(first + DAY).slice(0, 10)}`,
+          { headers: { cookie: `synara_beta_dash=${token}` } },
+        ),
+        env,
+      );
+      expect((await response.json()).installerDownloads).toMatchObject({ total: 110, history: [] });
+    });
+
+    it.each(["reset", "missing", "older-discovery", "reclassified"])(
+      "keeps %s coverage unknown for the affected scope and recovers on a comparable interval",
+      async (kind) => {
+        const first = now - 5 * DAY;
+        const second = now - 4 * DAY;
+        const third = now - 3 * DAY;
+        await snapshot(first, [
+          release("v1.2.3", [sourceAsset(1, 100)]),
+          release("v1.2.4-beta.1", [sourceAsset(2, 10)]),
+        ]);
+        const current = kind === "missing" ? [] : [sourceAsset(1, kind === "reset" ? 5 : 105)];
+        if (kind === "older-discovery") current.push(sourceAsset(3, 50));
+        await snapshot(second, [
+          release(kind === "reclassified" ? "historic-tag" : "v1.2.3", current),
+          release("v1.2.4-beta.1", [sourceAsset(2, 12)]),
+        ]);
+        expect((await readDownloads()).history[0].downloads).toBeNull();
+        expect((await readDownloads("&channel=stable")).history[0].downloads).toBeNull();
+        expect((await readDownloads("&channel=beta")).history[0].downloads).toBe(2);
+        await snapshot(third, [
+          release(
+            kind === "reclassified" ? "historic-tag" : "v1.2.3",
+            current.map((asset) => ({ ...asset, download_count: asset.download_count + 1 })),
+          ),
+          release("v1.2.4-beta.1", [sourceAsset(2, 13)]),
+        ]);
+        expect((await readDownloads()).history[0].downloads).toBe(current.length + 1);
+      },
+    );
+
+    it("paginates fully and leaves the last good snapshot/head untouched after partial or malformed source failures", async () => {
+      const first = now - 3 * DAY;
+      await snapshot(first, [release("v1.2.3", [sourceAsset(1, 100)])]);
+      const fullPage = [
+        release("v1.2.3", [sourceAsset(1, 105)]),
+        ...Array.from({ length: 99 }, () => release("v1.0.0")),
+      ];
+      vi.setSystemTime(now - 2 * DAY);
+      fetch
+        .mockResolvedValueOnce(Response.json(fullPage))
+        .mockResolvedValueOnce(
+          Response.json([release("v1.2.3", [sourceAsset(2, 50, "Synara.exe")])]),
+        );
+      await captureInstallerDownloads(db);
+      expect(
+        fetch.mock.calls.slice(-2).map(([url]) => new URL(url).searchParams.get("page")),
+      ).toEqual(["1", "2"]);
+      const good = await readDownloads();
+      expect(good.total).toBe(155);
+      const head = db.database
+        .prepare("SELECT * FROM installer_download_assets ORDER BY asset_id")
+        .all();
+      const badResponses = [
+        [Response.json(fullPage), new Response(null, { status: 429 })],
+        [Response.json([release("v1.2.3", [sourceAsset(1, -1)])])],
+        [Response.json([release("v1.2.3", [sourceAsset(1, 3), sourceAsset(1, 4)])])],
+        [
+          Response.json([
+            release("v1.2.3", [{ ...sourceAsset(1, 4), created_at: "2026-02-30T00:00:00Z" }]),
+          ]),
+        ],
+        [new Response("[]", { headers: { "content-length": String(8 * 1024 * 1024 + 1) } })],
+        [
+          new Response("[]", {
+            headers: { link: '<https://api.github.com/untrusted>; rel="next"' },
+          }),
+        ],
+        [new Response(new Uint8Array(8 * 1024 * 1024 + 1))],
+        [Response.json({ malformed: true })],
+      ];
+      vi.setSystemTime(now - DAY);
+      for (const responses of badResponses) {
+        for (const response of responses) fetch.mockResolvedValueOnce(response);
+        await expect(captureInstallerDownloads(db)).rejects.toThrow();
+        expect(await readDownloads()).toEqual(good);
+        expect(
+          db.database.prepare("SELECT * FROM installer_download_assets ORDER BY asset_id").all(),
+        ).toEqual(head);
+      }
+      for (let page = 0; page < 10; page += 1)
+        fetch.mockResolvedValueOnce(
+          Response.json(fullPage.map((item) => ({ ...item, assets: [] }))),
+        );
+      await expect(captureInstallerDownloads(db)).rejects.toThrow("pagination bounds");
+      expect(await readDownloads()).toEqual(good);
+    });
+
+    it("preserves a newer completed writer when an older source traversal finishes later", async () => {
+      await snapshot(now - 5 * DAY, [release("v1.2.3", [sourceAsset(1, 100)])]);
+      vi.setSystemTime(now - 4 * DAY);
+      fetch.mockImplementationOnce(async () => {
+        await snapshot(now - 3 * DAY, [release("v1.2.3", [sourceAsset(1, 110)])]);
+        vi.setSystemTime(now - 2 * DAY);
+        return Response.json([release("v1.2.3", [sourceAsset(1, 105)])]);
+      });
+      await expect(captureInstallerDownloads(db)).rejects.toThrow("Overlapping GitHub snapshot");
+      expect(await readDownloads()).toMatchObject({
+        observedAt: date(now - 3 * DAY),
+        total: 110,
+        history: [
+          { from: date(now - 5 * DAY), to: date(now - 3 * DAY), total: 110, downloads: 10 },
+          { from: null, to: date(now - 5 * DAY), total: 100, downloads: null },
+        ],
+      });
+    });
+
+    it("rejects duplicate/older observations atomically and prunes history after 90 days", async () => {
+      const first = now - 95 * DAY;
+      await snapshot(first, [release("v1.2.3", [sourceAsset(1, 100)])]);
+      for (const at of [first, first - DAY]) {
+        await expect(snapshot(at, [release("v1.2.3", [sourceAsset(1, 999)])])).rejects.toThrow();
+        expect(
+          db.database.prepare("SELECT downloads FROM installer_download_assets").get().downloads,
+        ).toBe(100);
+      }
+      await snapshot(now - DAY, [release("v1.2.3", [sourceAsset(1, 120)])]);
+      expect(db.database.prepare("SELECT * FROM installer_download_snapshots").all()).toEqual([
+        { observed_at: date(now - DAY), previous_observed_at: date(first) },
+      ]);
+      expect((await readDownloads()).history).toEqual([
+        { from: date(first), to: date(now - DAY), total: 120, downloads: 20 },
+      ]);
+      await expect(
+        db.batch([
+          db
+            .prepare(
+              "INSERT INTO installer_download_snapshots (observed_at, previous_observed_at) VALUES (?, ?)",
+            )
+            .bind(date(now), date(first)),
+          db.prepare("DELETE FROM installer_download_assets"),
+        ]),
+      ).rejects.toThrow("stale installer download snapshot");
+      expect(
+        db.database.prepare("SELECT downloads FROM installer_download_assets").get().downloads,
+      ).toBe(120);
+    });
   });
 
   it("sweeps raw usage after 90 days and product after 30 without deleting general diagnostics", async () => {

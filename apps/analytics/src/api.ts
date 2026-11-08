@@ -241,6 +241,12 @@ export interface ProductData {
   };
   events: number;
   activeInstallations: number;
+  installerDownloads?: {
+    status: "available" | "awaiting_snapshot" | "unsupported_store";
+    observedAt: string | null;
+    total: number | null;
+    history: { from: string | null; to: string; total: number; downloads: number | null }[];
+  };
   /** Installation-only rolling windows; engaged means a request attempt, including failures. */
   activeUsers?: {
     day: number;

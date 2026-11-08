@@ -531,6 +531,10 @@
     "./nativeLocalizationResources": {
       "types": "./src/nativeLocalizationResources.ts",
       "import": "./src/nativeLocalizationResources.ts"
+    },
+    "./installerDownloads": {
+      "types": "./src/installerDownloads.ts",
+      "import": "./src/installerDownloads.ts"
     }
   },
   "scripts": {

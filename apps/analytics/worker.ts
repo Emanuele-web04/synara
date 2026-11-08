@@ -38,6 +38,7 @@ import { diagnosticMetadataSql, diagnosticReadCteSql } from "./diagnosticsPrivac
 import { HOST_USAGE_RECEIPT_DAYS, HOST_USAGE_RETENTION_DAYS } from "@synara/contracts/hostUsage";
 import { normalizeHostUsageWindow } from "@synara/shared/hostUsage";
 import { readHostUsage, storeHostUsage } from "./hostUsage";
+import { captureInstallerDownloads, loadInstallerDownloads } from "./installerDownloads";
 
 export interface Env {
   DB: D1Database;
@@ -2070,6 +2071,7 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
       platformRows,
       reasonRows,
       hostExecutions,
+      installerDownloads,
     ] = await Promise.all([
       env.DB.prepare(
         `SELECT COUNT(*) AS events, COUNT(DISTINCT install_id) AS installations
@@ -2242,6 +2244,7 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
           installations: number;
         }>(),
       readHostUsage(env.DB, productFilters.from, productFilters.to, productFilters.channel),
+      loadInstallerDownloads(env.DB, productFilters),
     ]);
 
     const dayCount = Math.floor(
@@ -2264,6 +2267,7 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
       events: totals?.events ?? 0,
       activeInstallations: totals?.installations ?? 0,
       hostExecutions,
+      installerDownloads,
       activeUsers: {
         day: activeRows?.day ?? 0,
         week: activeRows?.week ?? 0,
@@ -2609,6 +2613,12 @@ export default {
   },
 
   async scheduled(controller, env) {
+    try {
+      await captureInstallerDownloads(env.DB);
+    } catch {
+      // A source outage, rate limit or stale writer preserves every last-good counter.
+      console.warn("Installer download snapshot unavailable; preserving the last observation");
+    }
     if (env.PURGE_LEGACY_DIAGNOSTICS === "true") {
       // Optional storage repair must not block ordinary retention; never log object keys/errors.
       for (const purge of [purgeLegacyDiagnosticContent, purgeLegacyDiagnosticDumps]) {
