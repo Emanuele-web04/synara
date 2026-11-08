@@ -44,7 +44,10 @@ export function useTranslation(): { t: typeof t; locale: string; formatLocale: s
   return { ...snapshot, locale: instance.language };
 }
 
+// Resolved once, like the formatters that used an unspecified `Intl` locale before.
+const SYSTEM_FORMAT_LOCALE = new Intl.DateTimeFormat().resolvedOptions().locale;
+
 /** Dates and numbers follow the system locale, as an unspecified `Intl` locale does. */
 export function getFormatLocale(): string {
-  return new Intl.DateTimeFormat().resolvedOptions().locale;
+  return SYSTEM_FORMAT_LOCALE;
 }
