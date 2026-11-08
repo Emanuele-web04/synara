@@ -112,7 +112,7 @@ describe("product-consent host usage", () => {
       Effect.gen(function* () {
         yield* seedTurn("t1");
         yield* seedTurn("t2", { usage: {} });
-        yield* seedTurn("t3", { usage: { privateModelKey: { inputTokens: 0 } } });
+        yield* seedTurn("turn3", { usage: { privateModelKey: { inputTokens: 0 } } });
         yield* seedTurn("t4", {
           usage: { privateModelKey: { inputTokens: 5, outputTokens: 2, cacheReadInputTokens: 0 } },
         });
