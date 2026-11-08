@@ -457,30 +457,36 @@ export function createV1Routes(deps: {
       setTimeout(() => void task(), delayMs).unref?.();
     });
   const v1 = new Hono();
+  /**
+   * A fresh Alto check for a signed-in action: 403 without a subscription, 503
+   * when Polar cannot be verified. An outage only refuses the action; it never
+   * changes ownership or anything stored.
+   */
+  async function requireFreshAltoAccess(
+    c: Context,
+    userId: string,
+    messages: { readonly subscriptionRequired: string; readonly unavailable: string },
+  ): Promise<Response | null> {
+    let status: Awaited<ReturnType<BillingService["access"]>> | undefined;
+    try {
+      status = await deps.billing?.access(userId);
+    } catch {
+      // Fall through: a missing status is refused as unavailable below.
+    }
+    const decision = decideRemoteBillingAccess({ enforcementEnabled: true, status });
+    if (decision.allowed) return null;
+    return decision.reason === "subscription_required"
+      ? errorResponse(c, 403, "subscription_required", messages.subscriptionRequired)
+      : errorResponse(c, 503, "billing_unavailable", messages.unavailable);
+  }
+
   // Enrollment is separate from authentication, host ownership and pairing consent.
   async function requireRemoteAccess(c: Context, userId: string): Promise<Response | null> {
     if (deps.remoteBillingEnforced === true) {
-      let status: Awaited<ReturnType<BillingService["access"]>> | undefined;
-      try {
-        status = await deps.billing?.access(userId);
-      } catch {
-        // An outage pauses remote access; it never changes host or device ownership.
-      }
-      const decision = decideRemoteBillingAccess({ enforcementEnabled: true, status });
-      if (decision.allowed) return null;
-      return decision.reason === "subscription_required"
-        ? errorResponse(
-            c,
-            403,
-            "subscription_required",
-            "Remote access requires an active Synara Alto subscription",
-          )
-        : errorResponse(
-            c,
-            503,
-            "billing_unavailable",
-            "Remote access verification is temporarily unavailable",
-          );
+      return requireFreshAltoAccess(c, userId, {
+        subscriptionRequired: "Remote access requires an active Synara Alto subscription",
+        unavailable: "Remote access verification is temporarily unavailable",
+      });
     }
     if (deps.remoteBetaAccessEnabled === true || deps.remoteTestUserIds?.includes(userId) === true)
       return null;
@@ -508,27 +514,10 @@ export function createV1Routes(deps: {
 
   async function requireProfilePublishAccess(c: Context, userId: string): Promise<Response | null> {
     if (deps.profileBillingEnforced !== true) return null;
-    let status: Awaited<ReturnType<BillingService["access"]>> | undefined;
-    try {
-      status = await deps.billing?.access(userId);
-    } catch {
-      // An outage refuses the publish below; it never changes what is stored.
-    }
-    const decision = decideRemoteBillingAccess({ enforcementEnabled: true, status });
-    if (decision.allowed) return null;
-    return decision.reason === "subscription_required"
-      ? errorResponse(
-          c,
-          403,
-          "subscription_required",
-          "Public profiles require an active Synara Alto subscription",
-        )
-      : errorResponse(
-          c,
-          503,
-          "billing_unavailable",
-          "Subscription verification is temporarily unavailable",
-        );
+    return requireFreshAltoAccess(c, userId, {
+      subscriptionRequired: "Public profiles require an active Synara Alto subscription",
+      unavailable: "Subscription verification is temporarily unavailable",
+    });
   }
 
   /**
@@ -2990,12 +2979,16 @@ export function createV1Routes(deps: {
     const [row] = await db.select().from(profiles).where(eq(profiles.handle, handle)).limit(1);
     // An unpaid owner's page answers exactly like a private one, so the
     // response never reveals whether a handle exists or why it is hidden.
-    if (
-      !row ||
-      !row.public ||
-      (await accountDeletion.isDeleting(row.userId)) ||
-      !(await profileOwnerEntitled(row.userId))
-    ) {
+    // The two owner checks are independent reads, so they run together.
+    let visible = false;
+    if (row?.public) {
+      const [deleting, entitled] = await Promise.all([
+        accountDeletion.isDeleting(row.userId),
+        profileOwnerEntitled(row.userId),
+      ]);
+      visible = !deleting && entitled;
+    }
+    if (!row || !visible) {
       return errorResponse(c, 404, "profile_not_found", "No public profile by that handle");
     }
 

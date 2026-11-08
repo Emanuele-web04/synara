@@ -2007,7 +2007,7 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
             cancelAtPeriodEnd: false,
             hasSubscription: true,
           });
-        return { app, provider, pay };
+        return { app, provider, pay, billing };
       }
 
       function putProfile(app: Hono, token: string, body: Record<string, unknown>) {
@@ -2069,6 +2069,34 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
           expect((await app.request(`/api/v1/profiles/${base.handle}`)).status).toBe(200);
         }
         expect(provider.state).not.toHaveBeenCalled();
+      });
+
+      it("refuses to publish while the subscription cannot be verified", async () => {
+        const { app, provider } = paidProfiles();
+        const { token } = await signIn();
+        vi.mocked(provider.state).mockRejectedValue(new Error("Polar is unreachable"));
+        const refused = await putProfile(app, token, profileBody({ public: true }));
+        expect(refused.status).toBe(503);
+        expect(await refused.json()).toMatchObject({ error: "billing_unavailable" });
+      });
+
+      it("hides a public profile when the billing ledger cannot be read", async () => {
+        const { app, pay, billing } = paidProfiles();
+        const { token, userId } = await signIn();
+        pay(userId);
+        const base = profileBody({ public: true });
+        expect((await putProfile(app, token, base)).status).toBe(200);
+        // Fail closed: an unreadable ledger must never serve the page.
+        const { app: broken } = buildApp({
+          billing: {
+            ...billing,
+            storedAccess: async () => {
+              throw new Error("ledger unavailable");
+            },
+          },
+          profileBillingEnforced: true,
+        });
+        expect((await broken.request(`/api/v1/profiles/${base.handle}`)).status).toBe(404);
       });
     });
   });

@@ -66,11 +66,21 @@ export interface StoredBillingAccess {
 }
 
 /**
+ * How long a granted entitlement keeps a profile visible past its stored period
+ * end. A renewal's new period arrives by webhook after the old one ends, and the
+ * page read never reconciles; without this, every paying subscriber's page would
+ * 404 at each renewal until the sweep catches up. Revocation webhooks (refunds,
+ * cancellations) clear the grant itself, so they still hide the page sooner.
+ */
+export const PROFILE_RENEWAL_GRACE_MS = 24 * 60 * 60 * 1000;
+
+/**
  * Whether an owner's public profile may be shown to anyone. Profile pages are
  * anonymous and rate-limited per viewer, so they must never drive Polar round
  * trips: this reads only the stored entitlement that Polar webhooks and
- * signed-in reconciles keep current. Missing, revoked, expired, or unreadable
- * entitlement hides the profile; a granted benefit without a period end stays
+ * signed-in reconciles keep current. Missing, revoked, or unreadable
+ * entitlement hides the profile, as does one past its period end plus
+ * {@link PROFILE_RENEWAL_GRACE_MS}; a granted benefit without a period end stays
  * visible until a webhook or reconcile revokes it.
  */
 export function isProfileBillingEntitled(input: {
@@ -83,5 +93,8 @@ export function isProfileBillingEntitled(input: {
   if (stored?.accessGranted !== true) return false;
   if (stored.validUntil === null) return true;
   const validUntilMs = Date.parse(stored.validUntil);
-  return Number.isFinite(validUntilMs) && validUntilMs > (input.nowMs ?? Date.now());
+  return (
+    Number.isFinite(validUntilMs) &&
+    validUntilMs + PROFILE_RENEWAL_GRACE_MS > (input.nowMs ?? Date.now())
+  );
 }

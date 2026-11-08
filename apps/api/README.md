@@ -70,7 +70,9 @@ independent of the remote switch (also strict, `false` by default, and requires
 configured billing). With it on, turning a profile public needs a fresh Alto
 check (`403 subscription_required` otherwise), and `GET /profiles/:handle`
 answers `404 profile_not_found` — the same as a private profile — when the
-owner's stored entitlement is missing or expired. The page read never calls
+owner's stored entitlement is missing, revoked, or more than 24 hours past its
+period end (the grace keeps paying subscribers' pages up while a renewal webhook
+lands; revocations still apply at once). The page read never calls
 Polar: it uses the ledger that webhooks and signed-in reconciles keep current,
 so a lapsed subscription hides the page without changing the owner's stored
 visibility, and resubscribing restores it. Private profiles (including the
