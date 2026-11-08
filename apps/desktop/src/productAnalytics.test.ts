@@ -60,7 +60,7 @@ it("defaults off, reconstructs allowlisted events, and clears queued data on opt
   expect(existsSync(join(homeDir, "product-analytics", "events.json"))).toBe(true);
 
   const analyticsDir = join(homeDir, "product-analytics");
-  const orphaned = ["events.json.tmp-4321", "account-hash.tmp-4321"];
+  const orphaned = ["events.json.tmp-4321", "account-hash.tmp-4321", "cohort.json.tmp-4321"];
   for (const name of orphaned) writeFileSync(join(analyticsDir, name), "private legacy metadata");
   writeFileSync(join(analyticsDir, "unrelated.tmp-4321"), "preserve");
   analytics.setEnabled(false);
@@ -494,4 +494,273 @@ it("keeps an unreadable recorded choice off instead of falling back to the defau
     defaultEnabled: true,
   });
   expect(analytics.getState()).toEqual({ enabled: false });
+});
+
+it("negotiates before entry, reports each return window once across restarts, and resets with opt-out", async () => {
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date("2026-07-01T12:00:00.000Z"));
+  const homeDir = makeRoot();
+  const cohortPath = join(homeDir, "product-analytics", "cohort.json");
+  let supported = false;
+  const received: Array<Record<string, unknown>> = [];
+  const fetcher = vi.fn(async (_url: RequestInfo | URL, init?: RequestInit) => {
+    const events = JSON.parse(String(init?.body)).events as Array<Record<string, unknown>>;
+    received.push(...events);
+    return Response.json(
+      {
+        cohortAcknowledged: supported
+          ? events.filter((event) => event.cohortStage).map((event) => event.id)
+          : [],
+      },
+      { headers: supported ? { "x-synara-product-cohorts": "1" } : {} },
+    );
+  });
+  const make = () =>
+    new ProductAnalytics({
+      homeDir,
+      channel: "remote",
+      appVersion: "1.2.3",
+      platform: "darwin",
+      defaultEnabled: true,
+      fetcher,
+    });
+  let analytics = make();
+  analytics.start();
+  await vi.waitFor(() => expect(fetcher).toHaveBeenCalledTimes(1));
+  expect(existsSync(cohortPath)).toBe(false);
+  supported = true;
+  analytics.track({
+    event: "app.open",
+    outcome: "succeeded",
+    cohortDay: "private-name",
+    cohortStage: "new",
+  });
+  await vi.waitFor(() =>
+    expect(JSON.parse(readFileSync(cohortPath, "utf8")).completed).toEqual(["new"]),
+  );
+  expect(received.filter((event) => event.cohortStage).map((event) => event.cohortDay)).toEqual([
+    "2026-07-01",
+  ]);
+  const firstId = received.find((event) => event.cohortStage === "new")!.installId;
+  for (const [offset, stages] of [
+    [7, ["new", "week1"]],
+    [10, ["new", "week1"]],
+    [30, ["new", "week1", "month1"]],
+    [36, ["new", "week1", "month1"]],
+  ] as const) {
+    analytics.dispose();
+    vi.setSystemTime(new Date(Date.parse("2026-07-01T12:00:00.000Z") + offset * 86400000));
+    analytics = make();
+    analytics.start();
+    await vi.waitFor(() =>
+      expect(JSON.parse(readFileSync(cohortPath, "utf8")).completed).toEqual(stages),
+    );
+  }
+  expect(received.filter((event) => event.cohortStage).map((event) => event.cohortStage)).toEqual([
+    "new",
+    "week1",
+    "month1",
+  ]);
+  analytics.setEnabled(false);
+  expect(existsSync(cohortPath)).toBe(false);
+  analytics.setEnabled(true);
+  await vi.waitFor(() =>
+    expect(JSON.parse(readFileSync(cohortPath, "utf8")).completed).toEqual(["new"]),
+  );
+  expect(received.filter((event) => event.cohortStage === "new").at(-1)?.installId).not.toBe(
+    firstId,
+  );
+  analytics.dispose();
+});
+
+it("recovers a queued entry after interrupted state persistence and retries its stable UUID", async () => {
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date("2026-07-01T12:00:00.000Z"));
+  const homeDir = makeRoot();
+  const cohortPath = join(homeDir, "product-analytics", "cohort.json");
+  const ids: unknown[] = [];
+  let fail = true;
+  const fetcher = vi.fn(async (_url: RequestInfo | URL, init?: RequestInit) => {
+    const events = JSON.parse(String(init?.body)).events as Array<Record<string, unknown>>;
+    const entries = events.filter((event) => event.cohortStage);
+    ids.push(...entries.map((event) => event.id));
+    if (entries.length && fail) throw new Error("synthetic response loss");
+    return Response.json(
+      { cohortAcknowledged: entries.map((event) => event.id) },
+      { headers: { "x-synara-product-cohorts": "1" } },
+    );
+  });
+  const make = () =>
+    new ProductAnalytics({
+      homeDir,
+      channel: "remote",
+      appVersion: "1.2.3",
+      platform: "darwin",
+      defaultEnabled: true,
+      fetcher,
+    });
+  const first = make();
+  first.start();
+  await vi.waitFor(() => expect(ids).toHaveLength(1));
+  first.dispose();
+  rmSync(cohortPath);
+  fail = false;
+  const restored = make();
+  restored.start();
+  await vi.waitFor(() =>
+    expect(JSON.parse(readFileSync(cohortPath, "utf8")).completed).toEqual(["new"]),
+  );
+  expect(ids).toHaveLength(2);
+  expect(ids[0]).toBe(ids[1]);
+  restored.dispose();
+});
+
+it("cannot restore cohort files when opt-out races an asynchronous receipt body", async () => {
+  const homeDir = makeRoot();
+  let resolveReceipt!: (value: unknown) => void;
+  let receiptPending = false;
+  const fetcher = vi.fn(async (_url: RequestInfo | URL, init?: RequestInit) => {
+    const events = JSON.parse(String(init?.body)).events as Array<Record<string, unknown>>;
+    if (events.some((event) => event.cohortStage))
+      return {
+        ok: true,
+        headers: new Headers({ "x-synara-product-cohorts": "1" }),
+        json: () => {
+          receiptPending = true;
+          return new Promise((resolve) => {
+            resolveReceipt = resolve;
+          });
+        },
+      } as Response;
+    return Response.json({}, { headers: { "x-synara-product-cohorts": "1" } });
+  });
+  const analytics = new ProductAnalytics({
+    homeDir,
+    channel: "remote",
+    appVersion: "1.2.3",
+    platform: "darwin",
+    defaultEnabled: true,
+    fetcher,
+  });
+  analytics.start();
+  await vi.waitFor(() => expect(receiptPending).toBe(true));
+  analytics.setEnabled(false);
+  resolveReceipt({ cohortAcknowledged: [] });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  expect(existsSync(join(homeDir, "product-analytics", "cohort.json"))).toBe(false);
+  expect(existsSync(join(homeDir, "product-analytics", "events.json"))).toBe(false);
+  expect(existsSync(join(homeDir, "product-analytics", "install-id"))).toBe(false);
+  analytics.dispose();
+});
+
+it("prefers a durable replacement entry over valid stale cohort state after restart", async () => {
+  vi.useFakeTimers();
+  const origin = Date.parse("2026-07-01T12:00:00.000Z");
+  vi.setSystemTime(origin);
+  const homeDir = makeRoot();
+  const cohortPath = join(homeDir, "product-analytics", "cohort.json");
+  const queuePath = join(homeDir, "product-analytics", "events.json");
+  const entries: Array<Record<string, unknown>> = [];
+  let fail = true;
+  const fetcher = vi.fn(async (_url: RequestInfo | URL, init?: RequestInit) => {
+    const events = JSON.parse(String(init?.body)).events as Array<Record<string, unknown>>;
+    const cohortEvents = events.filter((event) => event.cohortStage);
+    entries.push(...cohortEvents);
+    if (cohortEvents.length && fail) throw new Error("synthetic response loss");
+    return Response.json(
+      { cohortAcknowledged: cohortEvents.map((event) => event.id) },
+      { headers: { "x-synara-product-cohorts": "1" } },
+    );
+  });
+  const make = () =>
+    new ProductAnalytics({
+      homeDir,
+      channel: "remote",
+      appVersion: "1.2.3",
+      platform: "darwin",
+      defaultEnabled: true,
+      fetcher,
+    });
+  const first = make();
+  first.start();
+  await vi.waitFor(() => expect(entries).toHaveLength(1));
+  first.dispose();
+  const priorState = readFileSync(cohortPath, "utf8");
+  vi.setSystemTime(origin + 8 * 86400000);
+  const replacement = make();
+  replacement.start();
+  await vi.waitFor(() =>
+    expect(entries.some((event) => event.cohortDay === "2026-07-09")).toBe(true),
+  );
+  replacement.dispose();
+  // Crash snapshot: the real replacement queue survived, but the previous state bytes remained.
+  writeFileSync(cohortPath, priorState);
+  expect(JSON.parse(readFileSync(cohortPath, "utf8")).day).toBe("2026-07-01");
+  expect(
+    JSON.parse(readFileSync(queuePath, "utf8"))
+      .filter((event: Record<string, unknown>) => event.cohortStage)
+      .map((event: Record<string, unknown>) => event.cohortDay),
+  ).toEqual(["2026-07-09"]);
+  entries.length = 0;
+  fail = false;
+  vi.setSystemTime(origin + 9 * 86400000);
+  const restored = make();
+  restored.start();
+  await vi.waitFor(() =>
+    expect(JSON.parse(readFileSync(cohortPath, "utf8")).completed).toEqual(["new"]),
+  );
+  expect(entries.map((event) => event.cohortDay)).toEqual(["2026-07-09"]);
+  expect(JSON.parse(readFileSync(cohortPath, "utf8")).day).toBe("2026-07-09");
+  restored.dispose();
+});
+
+it("emits the independent shared native UUID vectors from the real desktop sender", async () => {
+  vi.useFakeTimers();
+  const fixture = JSON.parse(
+    readFileSync(
+      new URL(
+        "../../../packages/contracts/fixtures/product-analytics/cohort-v1.json",
+        import.meta.url,
+      ),
+      "utf8",
+    ),
+  ) as { events: Array<Record<string, string | number>> };
+  const homeDir = makeRoot();
+  const analyticsDir = join(homeDir, "product-analytics");
+  mkdirSync(analyticsDir, { recursive: true });
+  writeFileSync(join(analyticsDir, "install-id"), String(fixture.events[0]!.installId));
+  // The shared vector represents an established identity, including the privacy reset version.
+  writeFileSync(join(analyticsDir, "identity-version"), "2\n");
+  const emitted: Array<Record<string, unknown>> = [];
+  const fetcher = vi.fn(async (_url: RequestInfo | URL, init?: RequestInit) => {
+    const events = JSON.parse(String(init?.body)).events as Array<Record<string, unknown>>;
+    const cohortEvents = events.filter((event) => event.cohortStage);
+    emitted.push(...cohortEvents);
+    return Response.json(
+      { cohortAcknowledged: cohortEvents.map((event) => event.id) },
+      { headers: { "x-synara-product-cohorts": "1" } },
+    );
+  });
+  for (const expected of fixture.events) {
+    vi.setSystemTime(new Date(String(expected.ts)));
+    const analytics = new ProductAnalytics({
+      homeDir,
+      channel: "remote",
+      appVersion: "1.4.0",
+      platform: "darwin",
+      defaultEnabled: true,
+      fetcher,
+    });
+    analytics.start();
+    // Settle immediate receipts without moving the fixture's event clock forward.
+    await vi.advanceTimersByTimeAsync(0);
+    expect(emitted.some((event) => event.cohortStage === expected.cohortStage)).toBe(true);
+    analytics.dispose();
+    expect(emitted.find((event) => event.cohortStage === expected.cohortStage)).toEqual({
+      ...expected,
+      ts: new Date(String(expected.ts)).toISOString(),
+      surface: "desktop",
+      platform: "darwin",
+    });
+  }
 });

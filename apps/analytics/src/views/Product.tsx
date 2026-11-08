@@ -1,5 +1,5 @@
 // FILE: Product.tsx
-// Purpose: Aggregate the explicitly enabled product event stream without exposing event-level rows.
+// Purpose: Aggregate permitted product activity and mature cohorts without event-level drilldowns.
 
 import { useMemo, useState } from "react";
 
@@ -322,6 +322,81 @@ export function Product({
                       )} this month`}
                     />
                   </div>
+                </section>
+              )}
+              {data.cohorts && (
+                <section className="section" aria-labelledby="product-cohorts">
+                  <h3 id="product-cohorts" className="heading-20 section-head">
+                    Reporting installation cohorts
+                  </h3>
+                  <p className="chart-caption">
+                    Last 90 complete UTC cohort days, independent of the date range above; channel
+                    and surface filters apply. New reporting installations include measurement
+                    adoption, resets and reinstalls. They are not downloads or people. Return
+                    windows are days 7–13 and 30–36 after entry. Rates include only cohorts past the
+                    full window plus seven days for delayed uploads. Non-return means no observed
+                    report in that window, not an uninstall or subscription cancellation. Opt-outs
+                    and offline devices can look inactive.
+                  </p>
+                  <div className="stat-strip">
+                    <Stat
+                      label="New reporting installations"
+                      value={compact(data.cohorts.newReportingInstallations)}
+                      detail="First cohort report · last 90 complete UTC days"
+                    />
+                    <Stat
+                      label="Week 1 return"
+                      value={
+                        data.cohorts.week1.ratePct === null
+                          ? "Not mature"
+                          : `${data.cohorts.week1.ratePct}%`
+                      }
+                      detail={`${compact(data.cohorts.week1.returned)} returns / ${compact(data.cohorts.week1.entries)} mature entries`}
+                    />
+                    <Stat
+                      label="Month 1 return"
+                      value={
+                        data.cohorts.month1.ratePct === null
+                          ? "Not mature"
+                          : `${data.cohorts.month1.ratePct}%`
+                      }
+                      detail={`${compact(data.cohorts.month1.returned)} returns / ${compact(data.cohorts.month1.entries)} mature entries`}
+                    />
+                  </div>
+                  {data.cohorts.rows.length === 0 ? (
+                    <EmptyLine text="No reporting cohorts yet. Existing activity is not backfilled into retention." />
+                  ) : (
+                    <TableWrap>
+                      <table className="data">
+                        <thead>
+                          <tr>
+                            <th scope="col">Cohort entry · UTC</th>
+                            <th scope="col">New reporting installations</th>
+                            <th scope="col">Week 1 returns</th>
+                            <th scope="col">Month 1 returns</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {data.cohorts.rows.map((row) => (
+                            <tr key={row.day}>
+                              <td>{dayLabel(row.day)}</td>
+                              <td>{row.entries.toLocaleString()}</td>
+                              <td>
+                                {row.week1Mature
+                                  ? `${row.week1Returns.toLocaleString()} / ${row.entries.toLocaleString()}`
+                                  : "Pending maturity"}
+                              </td>
+                              <td>
+                                {row.month1Mature
+                                  ? `${row.month1Returns.toLocaleString()} / ${row.entries.toLocaleString()}`
+                                  : "Pending maturity"}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </TableWrap>
+                  )}
                 </section>
               )}
               <div className="stat-strip">

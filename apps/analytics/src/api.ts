@@ -206,6 +206,21 @@ export interface ProductData {
   to: string;
   channel: string | null;
   surface: string | null;
+  cohorts?: {
+    from: string;
+    to: string;
+    newReportingInstallations: number;
+    week1: { entries: number; returned: number; ratePct: number | null };
+    month1: { entries: number; returned: number; ratePct: number | null };
+    rows: {
+      day: string;
+      entries: number;
+      week1Returns: number;
+      month1Returns: number;
+      week1Mature: boolean;
+      month1Mature: boolean;
+    }[];
+  };
   events: number;
   activeInstallations: number;
   /** Installation-only rolling windows; engaged means a request attempt, including failures. */
