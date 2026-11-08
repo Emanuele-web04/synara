@@ -64,7 +64,7 @@ type SignInPanelVariant = "dialog" | "embedded";
 interface SignInPanelProps {
   /** Called with the fresh status after any successful auth. */
   readonly onSignedIn: (status: AccountStatus) => void;
-  /** Shown as "Continue without an account" in the dialog variant. */
+  /** Shown as "Not now" in the dialog variant. */
   readonly onDismiss?: () => void;
   readonly variant?: SignInPanelVariant;
 }
@@ -132,7 +132,7 @@ export function SignInPanel({ onSignedIn, onDismiss, variant = "dialog" }: SignI
 
   // Abort on EVERY way out of the dialog, not only the visible "Stop
   // waiting" control: this content unmounts on outer close, Escape, and
-  // "Continue without an account", so the cleanup is the one place that
+  // "Not now", so the cleanup is the one place that
   // covers them all. An explicit user close is a cancellation of the client
   // request AND of the server-side attempt; server-side completion tolerance
   // stays only for genuine transport loss (reconnect recovery via the
@@ -422,7 +422,9 @@ export function SignInPanel({ onSignedIn, onDismiss, variant = "dialog" }: SignI
                 void handleEmailSubmit();
               }}
             >
-              <InputGroup className="h-12 rounded-[14px] ps-1.5 pe-1.5 has-[input:focus-visible]:border-[var(--sign-in-accent)] has-[input:focus-visible]:ring-4 has-[input:focus-visible]:ring-[var(--sign-in-accent)]/15">
+              {/* The focus variant is spelled exactly as InputGroup's own grey focus
+                  border so cn() replaces it; any other spelling loses the cascade. */}
+              <InputGroup className="h-12 rounded-[14px] ps-1.5 pe-1.5 has-[input:focus-visible,textarea:focus-visible]:border-[var(--sign-in-accent)] has-[input:focus-visible,textarea:focus-visible]:ring-4 has-[input:focus-visible,textarea:focus-visible]:ring-[var(--sign-in-accent)]/15">
                 <InputGroupInput
                   type="email"
                   autoComplete="email"
@@ -459,7 +461,8 @@ export function SignInPanel({ onSignedIn, onDismiss, variant = "dialog" }: SignI
                 through the PKCE authorize URL, so the browser genuinely lands
                 on that provider's sign-in — the deep link the device grant
                 could never transmit. */}
-            <div className="grid grid-cols-3 gap-2">
+            {/* Three across needs ~100px a button; phone-width popups stack them. */}
+            <div className="grid grid-cols-1 gap-2 min-[400px]:grid-cols-3">
               {SSO_BUTTONS.map(({ provider, label, Icon }) => (
                 <Button
                   key={provider}
@@ -644,7 +647,7 @@ function CodeInput(props: {
             key={index}
             aria-hidden
             className={cn(
-              "flex flex-1 items-center justify-center border-e font-mono text-xl font-medium last:border-e-0",
+              "flex flex-1 items-center justify-center border-e font-mono text-ui-xl font-medium last:border-e-0",
               // The wider rule after the third digit splits the code as it is read.
               index === 2 ? "border-foreground/20" : "border-foreground/8",
               active &&
