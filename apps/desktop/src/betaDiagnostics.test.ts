@@ -126,35 +126,6 @@ describe("sanitizeBetaDiagnosticsPayload", () => {
     expect(JSON.stringify(sanitized)).not.toContain("alice");
   });
 
-  it("sanitizes usage payloads: providers, counts, duplicates", () => {
-    const sanitized = sanitizeBetaDiagnosticsPayload(
-      {
-        kind: "usage",
-        providers: [
-          { provider: "claudeAgent", threads: 3.7, turns: 9.9, turnsFailed: 1 },
-          // Legacy name migrates to the current ProviderKind and merges.
-          { provider: "gemini" as never, threads: 2, turns: 4, turnsFailed: 0 },
-          { provider: "antigravity", threads: 1, turns: 5, turnsFailed: 2 },
-          { provider: "notaprovider" as never, threads: 9, turns: 9, turnsFailed: 9 },
-          { provider: "claudeAgent", threads: 1, turns: Number.NaN, turnsFailed: -3 },
-        ],
-        projects: 4.6,
-        activeThreads: -2,
-      },
-      "/tmp/x",
-      "usage.daily",
-    );
-    expect(sanitized).toEqual({
-      kind: "usage",
-      providers: [
-        { provider: "claudeAgent", threads: 4, turns: 9, turnsFailed: 1 },
-        { provider: "antigravity", threads: 3, turns: 9, turnsFailed: 2 },
-      ],
-      projects: 4,
-      activeThreads: 0,
-    });
-  });
-
   it("clamps usage counts and drops extra fields", () => {
     const sanitized = sanitizeBetaDiagnosticsPayload(
       {
@@ -178,7 +149,6 @@ describe("sanitizeBetaDiagnosticsPayload", () => {
     expect(JSON.stringify(sanitized)).not.toContain("user@example.com");
     expect(sanitized).toEqual({
       kind: "usage",
-      providers: [{ provider: "codex", threads: 100_000, turns: 1, turnsFailed: 0 }],
       projects: 100_000,
       activeThreads: 1,
     });
@@ -748,10 +718,8 @@ describe("BetaDiagnostics", () => {
     expect(received[0]).not.toMatch(
       /privateCustomer|privateProvider|privateEffort|claude-opus-42-7/,
     );
-    expect(JSON.parse(received[0]!).payload).toMatchObject({
-      providers: [],
-      turnBreakdown: [{ provider: "claudeAgent", model: "other", effort: "other" }],
-    });
+    expect(JSON.parse(received[0]!).payload).not.toHaveProperty("providers");
+    expect(JSON.parse(received[0]!).payload).not.toHaveProperty("turnBreakdown");
     expect(readQueue(root)).toEqual([]);
   });
 
@@ -905,20 +873,7 @@ describe("BetaDiagnostics", () => {
     diag.maybeTrackDailyUsage();
     const [event] = readQueue(root).filter((e) => e.event === "usage.daily");
     expect(event.flavor).toBe("remote");
-    expect(event.payload.turnBreakdown).toEqual([
-      row,
-      { ...row, model: "other" },
-      {
-        ...row,
-        provider: "other",
-        model: "other",
-        effort: "other",
-        interactionMode: "other",
-        runtimeMode: "other",
-        origin: "other",
-      },
-      row,
-    ]);
+    expect(event.payload).not.toHaveProperty("turnBreakdown");
   });
 
   it("maybeTrackDailyUsage sends once per UTC day and records the day", () => {
@@ -939,7 +894,6 @@ describe("BetaDiagnostics", () => {
     expect(events).toHaveLength(1);
     expect(events[0].payload).toEqual({
       kind: "usage",
-      providers: [{ provider: "claudeAgent", threads: 2, turns: 5, turnsFailed: 1 }],
       projects: 3,
       activeThreads: 2,
     });

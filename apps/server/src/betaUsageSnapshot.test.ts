@@ -63,75 +63,6 @@ const seed = Effect.gen(function* () {
                    ('th3', 'u5', 'completed', ${nowIso()}, '[]')`;
 });
 
-const turnRequest = (messageId: string, model: string, effort: string) =>
-  JSON.stringify({
-    threadId: "b1",
-    messageId,
-    modelSelection: { provider: "claudeAgent", model, options: { effort } },
-    interactionMode: "plan",
-    runtimeMode: "approval-required",
-  });
-
-describe("turn breakdown", () => {
-  it("groups finished turns by fixed categories and keeps no user-defined names", async () => {
-    const root = makeRoot();
-    await run(
-      Effect.gen(function* () {
-        const sql = yield* SqlClient.SqlClient;
-        const at = nowIso();
-        yield* sql`INSERT INTO projection_thread_sessions (thread_id, status, provider_name, updated_at)
-                  VALUES ('b1', 'idle', 'claudeAgent', ${at})`;
-        yield* sql`INSERT INTO projection_turns (thread_id, turn_id, pending_message_id, state, requested_at, started_at, completed_at, checkpoint_files_json)
-                  VALUES ('b1', 'bt1', 'm1', 'completed', ${at}, ${hoursAgoIso(0.01)}, ${at}, '[]'),
-                         ('b1', 'bt2', 'm2', 'error', ${at}, NULL, NULL, '[]'),
-                         ('b1', 'bt3', 'm3', 'running', ${at}, NULL, NULL, '[]'),
-                         ('b1', 'bt4', 'm4', 'error', ${at}, NULL, NULL, '[]')`;
-        let sequence = 1;
-        for (const [messageId, model, effort] of [
-          ["m1", "claude-fable-5-1", "high"],
-          ["m2", "my-private-finetune", "galaxy-brain"],
-          ["m4", "claude-opus-42-7", "high"],
-        ] as const) {
-          yield* sql`INSERT INTO orchestration_events (event_id, aggregate_kind, stream_id, stream_version, event_type, occurred_at, actor_kind, payload_json, metadata_json)
-                    VALUES (${`ev-${messageId}`}, 'thread', 'b1', ${sequence++}, 'thread.turn-start-requested', ${at}, 'client', ${turnRequest(messageId, model, effort)}, '{}')`;
-        }
-        yield* sql`INSERT INTO projection_thread_activities (activity_id, thread_id, turn_id, tone, kind, summary, payload_json, created_at)
-                  VALUES ('a1', 'b1', 'bt1', 'info', 'turn.completed', 'done',
-                          ${JSON.stringify({ modelUsage: { "secret-model-key": { inputTokens: 10, outputTokens: 4, cacheReadInputTokens: 2 } } })}, ${at})`;
-        yield* writeBetaUsageSnapshot(root);
-      }),
-    );
-    const snapshot = JSON.parse(
-      readFileSync(join(root, "diagnostics", BETA_USAGE_SNAPSHOT_FILE_NAME), "utf8"),
-    );
-    const rows = snapshot.turnBreakdown as Array<Record<string, unknown>>;
-    expect(rows).toHaveLength(3);
-    expect(rows).toContainEqual(
-      expect.objectContaining({
-        provider: "claudeAgent",
-        model: "claude-fable-5-1",
-        effort: "high",
-        interactionMode: "plan",
-        runtimeMode: "approval-required",
-        origin: "user",
-        outcome: "succeeded",
-        turns: 1,
-        durationSamples: 1,
-        inputTokens: 10,
-        outputTokens: 4,
-        cachedInputTokens: 2,
-        tokenSamples: 1,
-      }),
-    );
-    expect(rows).toContainEqual(
-      expect.objectContaining({ model: "other", effort: "other", outcome: "failed", turns: 1 }),
-    );
-    expect(JSON.stringify(snapshot)).not.toContain("secret-model-key");
-    expect(JSON.stringify(snapshot)).not.toContain("my-private-finetune");
-    expect(JSON.stringify(snapshot)).not.toContain("claude-opus-42-7");
-  });
-});
-
 describe("writeBetaUsageSnapshot", () => {
   it("writes last-24h counts atomically with private permissions", async () => {
     const root = makeRoot();
@@ -144,10 +75,9 @@ describe("writeBetaUsageSnapshot", () => {
     const file = join(root, "diagnostics", BETA_USAGE_SNAPSHOT_FILE_NAME);
     const snapshot = JSON.parse(readFileSync(file, "utf8"));
     expect(snapshot.v).toBe(1);
+    expect(snapshot).not.toHaveProperty("turnBreakdown");
     expect(typeof snapshot.generatedAt).toBe("string");
-    expect(snapshot.providers).toEqual([
-      { provider: "claudeAgent", threads: 2, turns: 4, turnsFailed: 1 },
-    ]);
+    expect(snapshot).not.toHaveProperty("providers");
     expect(snapshot.projects).toBe(1); // deleted project excluded
     expect(snapshot.activeThreads).toBe(3); // stale turn's thread still counted
     // Atomic: no temp files left behind, private mode.
@@ -163,7 +93,7 @@ describe("writeBetaUsageSnapshot", () => {
     const snapshot = JSON.parse(
       readFileSync(join(root, "diagnostics", BETA_USAGE_SNAPSHOT_FILE_NAME), "utf8"),
     );
-    expect(snapshot.providers).toEqual([]);
+    expect(snapshot).not.toHaveProperty("providers");
     expect(snapshot.projects).toBe(0);
     expect(snapshot.activeThreads).toBe(0);
   });
@@ -186,28 +116,5 @@ describe("bundle gate", () => {
     expect(gate).toContain(
       "desktopBundleId === SYNARA_BETA_BUNDLE_ID || desktopBundleId === SYNARA_REMOTE_BUNDLE_ID",
     );
-  });
-});
-
-describe("finished turn window", () => {
-  it("counts a long turn by when it finished, not when it was requested", async () => {
-    const root = makeRoot();
-    await run(
-      Effect.gen(function* () {
-        const sql = yield* SqlClient.SqlClient;
-        yield* sql`INSERT INTO projection_thread_sessions (thread_id, status, provider_name, updated_at)
-                  VALUES ('w1', 'idle', 'codex', ${nowIso()})`;
-        yield* sql`INSERT INTO projection_turns (thread_id, turn_id, state, requested_at, started_at, completed_at, checkpoint_files_json)
-                  VALUES ('w1', 'long', 'completed', ${hoursAgoIso(25)}, ${hoursAgoIso(25)}, ${hoursAgoIso(1)}, '[]'),
-                         ('w1', 'old', 'completed', ${hoursAgoIso(30)}, ${hoursAgoIso(30)}, ${hoursAgoIso(29)}, '[]')`;
-        yield* writeBetaUsageSnapshot(root);
-      }),
-    );
-    const snapshot = JSON.parse(
-      readFileSync(join(root, "diagnostics", BETA_USAGE_SNAPSHOT_FILE_NAME), "utf8"),
-    );
-    expect(snapshot.turnBreakdown).toEqual([
-      expect.objectContaining({ provider: "codex", outcome: "succeeded", turns: 1 }),
-    ]);
   });
 });

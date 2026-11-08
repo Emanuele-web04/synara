@@ -6,6 +6,7 @@
 import { useMemo } from "react";
 
 import { api, pickFilters, type Filters } from "../api";
+import { TurnBreakdownTable } from "../TurnBreakdownTable";
 import {
   chartChrome,
   dayLabel,
@@ -148,7 +149,7 @@ export function Usage({
 
         <div className="stat-strip">
           <Stat
-            label="Turns"
+            label="Legacy sampled turns"
             value={String(data.turns)}
             detail={data.turns > 0 ? `${data.turnsFailedPct}% failed` : undefined}
           />
@@ -207,7 +208,7 @@ export function Usage({
                         Threads
                       </th>
                       <th scope="col" className="num">
-                        Turns
+                        Legacy turns
                       </th>
                       <th scope="col" className="num">
                         Failed
@@ -246,86 +247,15 @@ export function Usage({
         {data.turnBreakdown && (
           <section className="section" aria-labelledby="turn-breakdown">
             <h2 id="turn-breakdown" className="heading-20 section-head">
-              Turns by model and mode
+              Legacy sampled turns by model and mode
             </h2>
             <p className="chart-caption">
-              Finished turns reported by each computer, including those started from a phone,
-              automation or agent. Models outside the catalog are grouped as other.
+              Historical rolling 24-hour diagnostic samples can overlap and omit records. They are
+              separate from product-consented host execution windows. Token-field coverage was not
+              recorded, so token measurements are unknown here. New model usage is reported only
+              under product consent.
             </p>
-            {data.turnBreakdown.length === 0 ? (
-              <EmptyLine text="No turn details in range." />
-            ) : (
-              <TableWrap>
-                <table className="data">
-                  <caption className="visually-hidden">
-                    Finished turns by provider, model, effort and mode
-                  </caption>
-                  <thead>
-                    <tr>
-                      <th scope="col">Model</th>
-                      <th scope="col">Effort</th>
-                      <th scope="col">Mode</th>
-                      <th scope="col">Permissions</th>
-                      <th scope="col">Started by</th>
-                      <th scope="col" className="num">
-                        Turns
-                      </th>
-                      <th scope="col" className="num">
-                        Failed
-                      </th>
-                      <th scope="col" className="num">
-                        Mean time
-                      </th>
-                      <th scope="col" className="num">
-                        Mean tokens in / out
-                      </th>
-                      <th scope="col" className="num">
-                        Installs
-                      </th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {data.turnBreakdown.map((row) => (
-                      <tr
-                        key={[
-                          row.provider,
-                          row.model,
-                          row.effort,
-                          row.interactionMode,
-                          row.runtimeMode,
-                          row.origin,
-                        ].join("|")}
-                      >
-                        <td>{row.model === "other" ? `${row.provider} (other)` : row.model}</td>
-                        <td>{row.effort}</td>
-                        <td>{row.interactionMode}</td>
-                        <td>{row.runtimeMode}</td>
-                        <td>{row.origin}</td>
-                        <td className="num">{row.turns.toLocaleString()}</td>
-                        <td className="num">
-                          {row.turns > 0
-                            ? `${Math.round((row.failed / row.turns) * 1000) / 10}%`
-                            : "—"}
-                        </td>
-                        <td className="num">
-                          {row.meanDurationMs === null
-                            ? "—"
-                            : `${Math.round(row.meanDurationMs / 100) / 10} s`}
-                        </td>
-                        <td className="num">
-                          {row.meanInputTokens === null
-                            ? "—"
-                            : `${row.meanInputTokens.toLocaleString()} / ${(
-                                row.meanOutputTokens ?? 0
-                              ).toLocaleString()}`}
-                        </td>
-                        <td className="num">{row.installs}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </TableWrap>
-            )}
+            <TurnBreakdownTable rows={data.turnBreakdown} legacy />
           </section>
         )}
 

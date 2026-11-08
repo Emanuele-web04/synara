@@ -3,7 +3,6 @@
 import { appendFileSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import worker, {
@@ -18,59 +17,7 @@ import {
   reduceDesktopUpdateStateOnCheckStart,
 } from "../desktop/src/updateMachine.ts";
 
-class SQLiteD1Statement {
-  constructor(database, sql, values = []) {
-    this.database = database;
-    this.sql = sql;
-    this.values = values;
-  }
-
-  bind(...values) {
-    return new SQLiteD1Statement(this.database, this.sql, values);
-  }
-
-  run() {
-    const result = this.database.prepare(this.sql).run(...this.values);
-    return Promise.resolve({
-      meta: { changes: Number(result.changes), last_row_id: Number(result.lastInsertRowid) },
-    });
-  }
-
-  all() {
-    return Promise.resolve({ results: this.database.prepare(this.sql).all(...this.values) });
-  }
-
-  first() {
-    return Promise.resolve(this.database.prepare(this.sql).get(...this.values) ?? null);
-  }
-}
-
-class SQLiteD1 {
-  constructor() {
-    this.database = new DatabaseSync(":memory:");
-  }
-
-  prepare(sql) {
-    return new SQLiteD1Statement(this.database, sql);
-  }
-
-  async batch(statements) {
-    this.database.exec("BEGIN");
-    try {
-      const results = [];
-      for (const statement of statements) results.push(await statement.run());
-      this.database.exec("COMMIT");
-      return results;
-    } catch (error) {
-      this.database.exec("ROLLBACK");
-      throw error;
-    }
-  }
-
-  close() {
-    this.database.close();
-  }
-}
+import { SQLiteD1 } from "./testing/sqliteD1.mjs";
 
 // Run the real ordered SQL migrations, optionally stopping at a deployed schema.
 function applyMigrations(database, through = "9999") {
@@ -493,6 +440,9 @@ describe("analytics ingest and D1 storage", () => {
         for (const key of keys) objects.delete(key);
       },
     };
+    db.database.exec(
+      readFileSync(new URL("./migrations/0010_product_host_usage.sql", import.meta.url), "utf8"),
+    );
     await worker.scheduled({ scheduledTime: now }, env);
     expect(env.CRASH_DUMPS.list).not.toHaveBeenCalled();
     await expect(purgeLegacyDiagnosticDumps(env)).rejects.toThrow("synthetic deletion failure");
@@ -659,6 +609,10 @@ describe("analytics ingest and D1 storage", () => {
         expect(response.status).toBe(200);
         return response.json();
       };
+      // Product host columns are additive and required before the new receiver is deployed.
+      legacy.database.exec(
+        readFileSync(new URL("./migrations/0010_product_host_usage.sql", import.meta.url), "utf8"),
+      );
       const usagePath = "/api/usage?days=7&flavor=beta&version=1.2.3&platform=darwin";
       const productPath = `/api/product?from=${day}&to=${day}&channel=beta&surface=desktop`;
       const before = { usage: await read(usagePath), product: await read(productPath) };
@@ -1180,174 +1134,6 @@ describe("analytics ingest and D1 storage", () => {
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
-  });
-
-  it("stores the daily turn breakdown and reports it per lane", async () => {
-    const usage = {
-      v: 1,
-      id: crypto.randomUUID(),
-      ts: new Date(now).toISOString(),
-      installId: "00000000-0000-4000-8000-0000000000c1",
-      appVersion: "1.0.6-remote.17",
-      flavor: "remote",
-      platform: "win32",
-      arch: "x64",
-      event: "usage.daily",
-      payload: {
-        kind: "usage",
-        providers: [{ provider: "claudeAgent", threads: 1, turns: 3, turnsFailed: 1 }],
-        projects: 1,
-        activeThreads: 1,
-        turnBreakdown: [
-          {
-            provider: "claudeAgent",
-            model: "claude-fable-5-1",
-            effort: "high",
-            interactionMode: "plan",
-            runtimeMode: "full-access",
-            origin: "user",
-            outcome: "succeeded",
-            turns: 2,
-            durationMs: 30000,
-            durationSamples: 2,
-            inputTokens: 1000,
-            outputTokens: 200,
-            cachedInputTokens: 50,
-            tokenSamples: 2,
-          },
-          {
-            provider: "claudeAgent",
-            model: "claude-fable-5-1",
-            effort: "high",
-            interactionMode: "plan",
-            runtimeMode: "full-access",
-            origin: "user",
-            outcome: "failed",
-            turns: 1,
-          },
-        ],
-      },
-    };
-    const response = await worker.fetch(
-      new Request("https://worker.invalid/v1/events", {
-        method: "POST",
-        headers: { "content-type": "application/x-ndjson" },
-        body: JSON.stringify(usage),
-      }),
-      env,
-    );
-    expect(response.status).toBeLessThan(300);
-    expect(db.database.prepare("SELECT COUNT(*) AS n FROM usage_turns").get().n).toBe(2);
-
-    const token = await signSession("test-session-key", Math.floor(Date.now() / 1000) + 3600);
-    const read = (flavor) =>
-      worker
-        .fetch(
-          new Request(
-            `https://worker.invalid/api/usage?days=7&flavor=${flavor}&version=1.0.6-remote.17&platform=win32`,
-            {
-              headers: { cookie: `synara_beta_dash=${token}` },
-            },
-          ),
-          env,
-        )
-        .then((result) => result.json());
-    const remote = await read("remote");
-    expect(remote.turnBreakdown).toEqual([
-      expect.objectContaining({
-        model: "claude-fable-5-1",
-        effort: "high",
-        interactionMode: "plan",
-        turns: 3,
-        succeeded: 2,
-        failed: 1,
-        meanDurationMs: 15000,
-        meanInputTokens: 500,
-        meanOutputTokens: 100,
-        installs: 1,
-      }),
-    ]);
-    expect(remote.turns).toBe(3);
-    expect((await read("beta")).turnBreakdown).toEqual([]);
-  });
-
-  it("stores only finite usage categories from handcrafted requests", async () => {
-    const category = {
-      provider: "claudeAgent",
-      model: "claude-fable-5-1",
-      effort: "high",
-      interactionMode: "plan",
-      runtimeMode: "full-access",
-      origin: "user",
-      outcome: "succeeded",
-      turns: 1,
-    };
-    const privateValues = {
-      provider: "customerProject",
-      model: "claude-opus-42-7",
-      effort: "privateEffort",
-      interactionMode: "privateMode",
-      runtimeMode: "privatePermission",
-      origin: "privateOrigin",
-    };
-    const usage = {
-      v: 1,
-      id: crypto.randomUUID(),
-      ts: new Date(now).toISOString(),
-      installId: "00000000-0000-4000-8000-0000000000c1",
-      appVersion: "1.0.6-beta.1",
-      flavor: "beta",
-      platform: "darwin",
-      arch: "arm64",
-      event: "usage.daily",
-      payload: {
-        kind: "usage",
-        providers: [
-          { provider: "codex", threads: 1, turns: 1 },
-          { provider: "customerProject", threads: 1, turns: 1 },
-        ],
-        turnBreakdown: [
-          category,
-          ...Object.entries(privateValues).map(([key, value]) => ({ ...category, [key]: value })),
-        ],
-      },
-    };
-    const response = await worker.fetch(
-      new Request("https://worker.invalid/v1/events", {
-        method: "POST",
-        headers: { "content-type": "application/x-ndjson" },
-        body: JSON.stringify(usage),
-      }),
-      env,
-    );
-    expect(response.status).toBeLessThan(300);
-    const turns = db.database
-      .prepare(
-        "SELECT provider, model, effort, interaction_mode, runtime_mode, origin FROM usage_turns",
-      )
-      .all();
-    expect(turns).toHaveLength(7);
-    for (const value of Object.values(privateValues))
-      expect(JSON.stringify(turns)).not.toContain(value);
-    expect(turns).toContainEqual({
-      provider: "claudeAgent",
-      model: "claude-fable-5-1",
-      effort: "high",
-      interaction_mode: "plan",
-      runtime_mode: "full-access",
-      origin: "user",
-    });
-    expect(turns).toContainEqual({
-      provider: "other",
-      model: "other",
-      effort: "high",
-      interaction_mode: "plan",
-      runtime_mode: "full-access",
-      origin: "user",
-    });
-    expect(db.database.prepare("SELECT provider FROM usage_providers").all()).toEqual([
-      { provider: "codex" },
-    ]);
   });
 
   it("rejects invented command tokens and accepts only the built-in custom bucket", async () => {

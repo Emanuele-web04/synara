@@ -86,7 +86,7 @@ is not implemented; do not use account switching as local history isolation.
   both apps; Stable just switches listed features off. Remove the entry to promote
   a feature to Stable. See [Beta-only features](#beta-only-features).
 - **Diagnostics run in Beta and Remote, never Stable.** Beta sends technical-only error
-  categories, numeric frames, release health and aggregate usage counts. No flavor
+  categories, numeric frames, release health and fixed health counts. No flavor
   uploads raw crash dumps or work content. Remote adds product usage by default with a
   Settings switch to stop both. Stable sends no release diagnostics; its product
   analytics require opt-in. See [Diagnostics](#diagnostics).
@@ -461,8 +461,8 @@ visible trail no longer subscribes. First use can request macOS audio access.
 
 ## Diagnostics
 
-Beta builds ship always-on technical diagnostics — fixed crash/error categories plus aggregate usage
-counts (which providers are used, how many chats and turns) — while stable
+Beta builds ship always-on technical diagnostics — fixed crash/error categories plus fixed
+health counts (projects and active threads) — while stable
 builds never enable the Beta diagnostics sender. Stable and Beta separately offer
 default-off product analytics through Settings → General → Privacy.
 

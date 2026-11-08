@@ -19,7 +19,6 @@ import {
   PRODUCT_COHORT_WINDOWS,
   type ProductAnalyticsCohortStage,
 } from "@synara/contracts/productAnalytics";
-import { usageProviderCategory, usageTurnCategories } from "@synara/shared/usageAnalytics";
 
 import {
   diagnosticErrorFingerprint,
@@ -36,6 +35,9 @@ import {
 } from "./usagePrivacySql";
 
 import { diagnosticMetadataSql, diagnosticReadCteSql } from "./diagnosticsPrivacySql";
+import { HOST_USAGE_RECEIPT_DAYS, HOST_USAGE_RETENTION_DAYS } from "@synara/contracts/hostUsage";
+import { normalizeHostUsageWindow } from "@synara/shared/hostUsage";
+import { readHostUsage, storeHostUsage } from "./hostUsage";
 
 export interface Env {
   DB: D1Database;
@@ -449,13 +451,9 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 const OS_VERSION_PATTERN = /^\d{1,4}(\.\d{1,4})?$/;
 const LOCALE_PATTERN = /^[a-z]{2,3}$/;
 const USAGE_RETENTION_DAYS = 90;
-const MAX_USAGE_PROVIDERS = 32;
 const USAGE_COUNT_MAX = 100_000;
 const BETA_INSTALLED_OUTCOMES = new Set(["imported", "import-failed", "fresh"]);
 const BETA_LEFT_OUTCOMES = new Set(["trash", "keep"]);
-// usage_providers binds 10 params per row; 9 rows keeps a multi-row INSERT
-// under D1's 100-bound-parameter cap.
-const USAGE_PROVIDER_ROWS_PER_STATEMENT = 9;
 
 /** Usage counts are floored, non-negative, and capped — never free text. */
 function clampUsageCount(value: unknown): number {
@@ -470,60 +468,6 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function isFiniteNumber(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value);
-}
-
-interface UsageProviderRow {
-  provider: string;
-  threads: number;
-  turns: number;
-  turnsFailed: number;
-}
-
-/** Finished turns of one usage.daily window sharing the same fixed categories. */
-interface UsageTurnRow {
-  provider: string;
-  model: string;
-  effort: string;
-  interactionMode: string;
-  runtimeMode: string;
-  origin: string;
-  outcome: string;
-  turns: number;
-  durationMs: number;
-  durationSamples: number;
-  inputTokens: number;
-  outputTokens: number;
-  cachedInputTokens: number;
-  tokenSamples: number;
-}
-
-const MAX_USAGE_TURN_ROWS = 200;
-// usage_turns binds 21 params per row; 4 rows stay under D1's 100-parameter cap.
-const USAGE_TURN_ROWS_PER_STATEMENT = 4;
-const USAGE_TURN_OUTCOMES = new Set(["succeeded", "failed", "cancelled"]);
-const USAGE_TURN_TOTAL_MAX = 1_000_000_000_000;
-
-function normalizeUsageTurns(value: unknown): UsageTurnRow[] {
-  if (!Array.isArray(value)) return [];
-  const total = (raw: unknown) =>
-    isFiniteNumber(raw) && raw >= 0 ? Math.min(Math.floor(raw), USAGE_TURN_TOTAL_MAX) : 0;
-  const rows: UsageTurnRow[] = [];
-  for (const entry of value.slice(0, MAX_USAGE_TURN_ROWS)) {
-    if (!isRecord(entry)) continue;
-    if (typeof entry.outcome !== "string" || !USAGE_TURN_OUTCOMES.has(entry.outcome)) continue;
-    rows.push({
-      ...usageTurnCategories(entry),
-      outcome: entry.outcome,
-      turns: clampUsageCount(entry.turns),
-      durationMs: total(entry.durationMs),
-      durationSamples: clampUsageCount(entry.durationSamples),
-      inputTokens: total(entry.inputTokens),
-      outputTokens: total(entry.outputTokens),
-      cachedInputTokens: total(entry.cachedInputTokens),
-      tokenSamples: clampUsageCount(entry.tokenSamples),
-    });
-  }
-  return rows;
 }
 
 interface NormalizedEvent {
@@ -552,10 +496,6 @@ interface NormalizedEvent {
   locale: string;
   projects: number | null;
   activeThreads: number | null;
-  /** usage.daily only: per-provider rows, merged and capped. */
-  providers: UsageProviderRow[] | null;
-  /** usage.daily only: finished turns by model, effort, mode, origin and outcome. */
-  turns: UsageTurnRow[] | null;
 }
 
 /** Returns a normalized row for the `events` table, or null to drop. */
@@ -647,37 +587,10 @@ export function normalizeEvent(raw: unknown, now = Date.now()): NormalizedEvent 
       ? payload.locale
       : "";
 
-  // usage.daily: the event is dropped unless providers is an array; each entry
-  // keeps only a provider token and clamped counts, merged per provider.
-  let providers: UsageProviderRow[] | null = null;
-  let turns: UsageTurnRow[] | null = null;
+  // Legacy provider/model execution payloads are ignored; only fixed health counts remain.
   let projects: number | null = null;
   let activeThreads: number | null = null;
   if (raw.event === "usage.daily") {
-    turns = normalizeUsageTurns(payload.turnBreakdown);
-    if (!Array.isArray(payload.providers)) return null;
-    const merged = new Map<string, UsageProviderRow>();
-    for (const entry of payload.providers.slice(0, MAX_USAGE_PROVIDERS)) {
-      if (!isRecord(entry)) continue;
-      const provider = usageProviderCategory(entry.provider);
-      if (provider === "other") continue;
-      const existing = merged.get(provider) ?? {
-        provider,
-        threads: 0,
-        turns: 0,
-        turnsFailed: 0,
-      };
-      merged.set(provider, {
-        provider,
-        threads: Math.min(existing.threads + clampUsageCount(entry.threads), USAGE_COUNT_MAX),
-        turns: Math.min(existing.turns + clampUsageCount(entry.turns), USAGE_COUNT_MAX),
-        turnsFailed: Math.min(
-          existing.turnsFailed + clampUsageCount(entry.turnsFailed),
-          USAGE_COUNT_MAX,
-        ),
-      });
-    }
-    providers = [...merged.values()];
     projects = payload.projects === undefined ? null : clampUsageCount(payload.projects);
     activeThreads =
       payload.activeThreads === undefined ? null : clampUsageCount(payload.activeThreads);
@@ -709,8 +622,6 @@ export function normalizeEvent(raw: unknown, now = Date.now()): NormalizedEvent 
     locale,
     projects,
     activeThreads,
-    providers,
-    turns,
   };
 }
 
@@ -751,87 +662,6 @@ function eventStatement(env: Env, event: NormalizedEvent, receivedAt: string): D
     event.activeThreads,
     event.flavor,
   );
-}
-
-/** Multi-row usage_providers INSERT; rows stay under D1's bind cap. */
-function usageProviderStatement(
-  env: Env,
-  eventId: number,
-  event: NormalizedEvent,
-  rows: UsageProviderRow[],
-  receivedAt: string,
-): D1PreparedStatement {
-  const binds: (string | number)[] = [];
-  const values = rows
-    .map((row) => {
-      binds.push(
-        eventId,
-        event.installId,
-        event.ts.slice(0, 10),
-        event.appVersion,
-        event.platform,
-        row.provider,
-        row.threads,
-        row.turns,
-        row.turnsFailed,
-        receivedAt,
-      );
-      return "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
-    })
-    .join(", ");
-  return env.DB.prepare(
-    `INSERT INTO usage_providers (
-      event_id, install_id, day, app_version, platform,
-      provider, threads, turns, turns_failed, received_at
-    ) VALUES ${values}`,
-  ).bind(...binds);
-}
-
-/** Multi-row usage_turns INSERT; rows stay under D1's bind cap. */
-function usageTurnStatement(
-  env: Env,
-  eventId: number,
-  event: NormalizedEvent,
-  rows: UsageTurnRow[],
-  receivedAt: string,
-): D1PreparedStatement {
-  const binds: (string | number)[] = [];
-  const values = rows
-    .map((row) => {
-      binds.push(
-        eventId,
-        event.installId,
-        event.ts.slice(0, 10),
-        event.appVersion,
-        event.platform,
-        event.flavor,
-        row.provider,
-        row.model,
-        row.effort,
-        row.interactionMode,
-        row.runtimeMode,
-        row.origin,
-        row.outcome,
-        row.turns,
-        row.durationMs,
-        row.durationSamples,
-        row.inputTokens,
-        row.outputTokens,
-        row.cachedInputTokens,
-        row.tokenSamples,
-        receivedAt,
-      );
-      return "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
-    })
-    .join(", ");
-  return env.DB.prepare(
-    `INSERT INTO usage_turns (
-      event_id, install_id, day, app_version, platform, flavor,
-      provider, model, effort, interaction_mode, runtime_mode, origin, outcome,
-      turns, duration_ms, duration_samples, input_tokens, output_tokens,
-      cached_input_tokens, token_samples, received_at
-    ) VALUES ${values}`,
-  ).bind(...binds);
 }
 
 /**
@@ -2098,7 +1928,7 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
            SELECT install_id, turns, outcome, duration_ms, duration_samples,
                   input_tokens, output_tokens, cached_input_tokens, token_samples,
                   ${USAGE_TURN_CATEGORIES_SQL}
-           FROM usage_turns WHERE day >= ?${f.scopeClause}
+           FROM usage_turns WHERE source = 'diagnostic' AND day >= ?${f.scopeClause}
          )
          SELECT provider, model, effort, interaction_mode AS interactionMode,
                   runtime_mode AS runtimeMode, origin,
@@ -2239,6 +2069,7 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
       commandRows,
       platformRows,
       reasonRows,
+      hostExecutions,
     ] = await Promise.all([
       env.DB.prepare(
         `SELECT COUNT(*) AS events, COUNT(DISTINCT install_id) AS installations
@@ -2410,6 +2241,7 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
           events: number;
           installations: number;
         }>(),
+      readHostUsage(env.DB, productFilters.from, productFilters.to, productFilters.channel),
     ]);
 
     const dayCount = Math.floor(
@@ -2431,6 +2263,7 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
       surface: productFilters.surface,
       events: totals?.events ?? 0,
       activeInstallations: totals?.installations ?? 0,
+      hostExecutions,
       activeUsers: {
         day: activeRows?.day ?? 0,
         week: activeRows?.week ?? 0,
@@ -2631,6 +2464,13 @@ export default {
       } catch {
         return new Response("bad request", { status: 400 });
       }
+      if (isRecord(body) && body.hostUsage !== undefined) {
+        const window = normalizeHostUsageWindow(body.hostUsage);
+        if (!window || body.events !== undefined)
+          return new Response("bad host usage", { status: 400 });
+        await storeHostUsage(env.DB, window, new Date().toISOString());
+        return Response.json({ stored: true, windowId: window.windowId });
+      }
       if (!isRecord(body) || !Array.isArray(body.events)) {
         return new Response("bad request", { status: 400 });
       }
@@ -2714,7 +2554,6 @@ export default {
       }
       const receivedAt = new Date().toISOString();
       const statements: D1PreparedStatement[] = [];
-      const normalizedEvents: NormalizedEvent[] = [];
       for (const line of lines) {
         let parsed: unknown;
         try {
@@ -2724,7 +2563,6 @@ export default {
         }
         const normalized = normalizeEvent(parsed);
         if (!normalized) continue;
-        normalizedEvents.push(normalized);
         statements.push(eventStatement(env, normalized, receivedAt));
       }
       let written = 0;
@@ -2732,42 +2570,6 @@ export default {
         // One D1 round trip for the whole batch.
         const results = await env.DB.batch(statements);
         written = results.reduce((n, r) => n + (r.meta?.changes ?? 0), 0);
-        // Provider rows attach only to events that were actually inserted —
-        // a retried flush (changes = 0, client_id already stored) adds none.
-        const providerStatements: D1PreparedStatement[] = [];
-        results.forEach((result, index) => {
-          const event = normalizedEvents[index]!;
-          const changes = result.meta?.changes ?? 0;
-          const eventId = result.meta?.last_row_id;
-          if (changes <= 0 || typeof eventId !== "number") return;
-          const turns = event.turns ?? [];
-          for (let i = 0; i < turns.length; i += USAGE_TURN_ROWS_PER_STATEMENT) {
-            providerStatements.push(
-              usageTurnStatement(
-                env,
-                eventId,
-                event,
-                turns.slice(i, i + USAGE_TURN_ROWS_PER_STATEMENT),
-                receivedAt,
-              ),
-            );
-          }
-          if (!event.providers || event.providers.length === 0) return;
-          for (let i = 0; i < event.providers.length; i += USAGE_PROVIDER_ROWS_PER_STATEMENT) {
-            providerStatements.push(
-              usageProviderStatement(
-                env,
-                eventId,
-                event,
-                event.providers.slice(i, i + USAGE_PROVIDER_ROWS_PER_STATEMENT),
-                receivedAt,
-              ),
-            );
-          }
-        });
-        if (providerStatements.length > 0) {
-          await env.DB.batch(providerStatements);
-        }
       }
       return Response.json({ accepted: written, received: lines.length });
     }
@@ -2817,25 +2619,54 @@ export default {
         }
       }
     }
-    for (const [table, key, retentionDays] of [
-      ["product_events", "event_id", PRODUCT_RETENTION_DAYS],
-      ["usage_turns", "rowid", USAGE_RETENTION_DAYS],
-      ["usage_providers", "rowid", USAGE_RETENTION_DAYS],
-      ["product_cohorts", "rowid", COHORT_RETENTION_DAYS],
-    ] as const) {
-      const cutoff = new Date(controller.scheduledTime - retentionDays * DAY_MS).toISOString();
+    const before = (days: number) =>
+      new Date(controller.scheduledTime - days * DAY_MS).toISOString();
+    const retention = [
+      {
+        table: "product_events",
+        key: "event_id",
+        where: "received_at < ?",
+        cutoffs: [before(PRODUCT_RETENTION_DAYS)],
+      },
+      {
+        table: "usage_providers",
+        key: "rowid",
+        where: "received_at < ?",
+        cutoffs: [before(USAGE_RETENTION_DAYS)],
+      },
+      {
+        table: "usage_turns",
+        key: "rowid",
+        where: "(source = 'diagnostic' AND received_at < ?) OR (source = 'product' AND day < ?)",
+        cutoffs: [before(USAGE_RETENTION_DAYS), before(HOST_USAGE_RETENTION_DAYS).slice(0, 10)],
+      },
+      {
+        table: "product_cohorts",
+        key: "rowid",
+        where: "cohort_day < ?",
+        cutoffs: [before(COHORT_RETENTION_DAYS).slice(0, 10)],
+      },
+      {
+        table: "host_usage_receipts",
+        key: "window_id",
+        where: "received_at < ?",
+        cutoffs: [before(HOST_USAGE_RECEIPT_DAYS)],
+      },
+      {
+        table: "host_usage_daily_quality",
+        key: "rowid",
+        where: "day < ?",
+        cutoffs: [before(HOST_USAGE_RETENTION_DAYS).slice(0, 10)],
+      },
+    ];
+    for (const { table, key, where, cutoffs } of retention) {
       for (let batch = 0; batch < RETENTION_MAX_BATCHES; batch += 1) {
         const result = await env.DB.prepare(
           `DELETE FROM ${table} WHERE ${key} IN (
-             SELECT ${key} FROM ${table}
-             WHERE ${table === "product_cohorts" ? "cohort_day" : "received_at"} < ?
-             ORDER BY ${table === "product_cohorts" ? "cohort_day" : "received_at"} LIMIT ?
+             SELECT ${key} FROM ${table} WHERE ${where} ORDER BY ${table === "product_cohorts" ? "cohort_day" : "received_at"} LIMIT ?
            )`,
         )
-          .bind(
-            table === "product_cohorts" ? cutoff.slice(0, 10) : cutoff,
-            RETENTION_DELETE_BATCH_SIZE,
-          )
+          .bind(...cutoffs, RETENTION_DELETE_BATCH_SIZE)
           .run();
         if ((result.meta?.changes ?? 0) < RETENTION_DELETE_BATCH_SIZE) break;
       }

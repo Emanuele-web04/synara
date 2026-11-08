@@ -12,6 +12,8 @@ import {
   type ProductAnalyticsInput,
 } from "@synara/contracts";
 
+import { HostUsageRelay } from "./hostUsageRelay";
+
 type CohortState = { day: string; entryTs: string; completed: ProductAnalyticsCohortStage[] };
 
 // Stable retries identify only a stage of this random installation, never an account.
@@ -108,6 +110,7 @@ function platform(value: string): ProductAnalyticsEnvelope["platform"] {
  * `defaultEnabled` applies until the user makes a choice; an explicit opt-out persists.
  */
 export class ProductAnalytics {
+  private readonly hostUsage: HostUsageRelay;
   private readonly consentPath: string;
   private readonly installIdPath: string;
   private readonly identityVersionPath: string;
@@ -143,6 +146,7 @@ export class ProductAnalytics {
     fetcher?: typeof fetch;
   }) {
     const dir = join(input.homeDir, "product-analytics");
+    this.hostUsage = new HostUsageRelay(input.homeDir, input.channel);
     this.consentPath = join(dir, "consent.json");
     this.installIdPath = join(dir, "install-id");
     this.identityVersionPath = join(dir, "identity-version");
@@ -172,6 +176,7 @@ export class ProductAnalytics {
         this.installId = this.readOrCreateInstallId();
         this.queue = this.readQueue();
         this.cohort = this.readCohort();
+        this.hostUsage.enable();
       } catch {
         this.installId = null;
         this.queue = [];
@@ -269,6 +274,7 @@ export class ProductAnalytics {
       this.enabled = true;
       try {
         this.persistConsent();
+        this.hostUsage.enable();
       } catch (error) {
         this.enabled = false;
         this.installId = null;
@@ -299,16 +305,10 @@ export class ProductAnalytics {
   }
 
   async flush(): Promise<void> {
-    if (
-      this.disposed ||
-      !this.enabled ||
-      this.flushing ||
-      this.retryTimer ||
-      this.queue.length === 0
-    )
+    if (this.disposed || !this.enabled || this.flushing || this.retryTimer || !this.installId)
       return;
     this.pruneExpired();
-    if (this.queue.length === 0) return;
+    // Existing activity events keep progressing even if a host-specific payload is rejected.
     const batch: ProductAnalyticsEnvelope[] = [];
     for (const event of this.queue) {
       if (event.cohortStage && !this.cohortSupported) continue;
@@ -317,8 +317,10 @@ export class ProductAnalytics {
       if (Buffer.byteLength(JSON.stringify({ events: candidate }), "utf8") > MAX_BATCH_BYTES) break;
       batch.push(event);
     }
-    // An empty existing POST probes capability while holding restored cohort envelopes.
-    if (batch.length === 0 && this.cohortSupported) return;
+    const hostWindow = batch.length === 0 ? this.hostUsage.peek(this.installId) : null;
+    // A capability probe holds unsupported cohorts; host windows use their own receipt.
+    if (batch.length === 0 && !hostWindow && (this.queue.length === 0 || this.cohortSupported))
+      return;
     this.flushing = true;
     const epoch = this.epoch;
     const controller = new AbortController();
@@ -328,11 +330,16 @@ export class ProductAnalytics {
       const response = await this.fetcher(ENDPOINT, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ events: batch }),
+        body: JSON.stringify(hostWindow ? { hostUsage: hostWindow } : { events: batch }),
         signal: controller.signal,
       });
       if (!response.ok) {
-        if ([400, 413, 422].includes(response.status) && epoch === this.epoch && this.enabled) {
+        if (
+          !hostWindow &&
+          [400, 413, 422].includes(response.status) &&
+          epoch === this.epoch &&
+          this.enabled
+        ) {
           const rejected = new Set(batch.map((event) => event.id));
           this.queue = this.queue.filter((event) => !rejected.has(event.id));
           this.persistQueue();
@@ -342,13 +349,21 @@ export class ProductAnalytics {
         throw new Error("Product analytics request failed");
       }
       if (epoch !== this.epoch || !this.enabled) return;
-      this.cohortSupported = response.headers.get("x-synara-product-cohorts") === "1";
       const cohortAcknowledged = new Set<string>();
-      if (this.cohortSupported && batch.some((event) => event.cohortStage)) {
-        const receipt = (await response.json()) as { cohortAcknowledged?: unknown };
-        if (Array.isArray(receipt.cohortAcknowledged))
-          for (const id of receipt.cohortAcknowledged)
-            if (typeof id === "string") cohortAcknowledged.add(id);
+      if (hostWindow) {
+        const receipt = (await response.json()) as { stored?: unknown; windowId?: unknown };
+        if (receipt.stored !== true || receipt.windowId !== hostWindow.windowId)
+          throw new Error("Host usage receipt missing");
+        if (epoch !== this.epoch || !this.enabled) return;
+        this.hostUsage.acknowledge(hostWindow);
+      } else {
+        this.cohortSupported = response.headers.get("x-synara-product-cohorts") === "1";
+        if (this.cohortSupported && batch.some((event) => event.cohortStage)) {
+          const receipt = (await response.json()) as { cohortAcknowledged?: unknown };
+          if (Array.isArray(receipt.cohortAcknowledged))
+            for (const id of receipt.cohortAcknowledged)
+              if (typeof id === "string") cohortAcknowledged.add(id);
+        }
       }
       if (epoch !== this.epoch || !this.enabled) return;
       // Save completion before removing the durable envelope; a crash can only replay its UUID.
@@ -388,7 +403,8 @@ export class ProductAnalytics {
         this.enabled &&
         !this.disposed &&
         !this.retryTimer &&
-        this.queue.some((event) => !event.cohortStage || this.cohortSupported)
+        (this.queue.some((event) => !event.cohortStage || this.cohortSupported) ||
+          (this.installId !== null && this.hostUsage.peek(this.installId) !== null))
       )
         void this.flush();
     }
@@ -749,6 +765,11 @@ export class ProductAnalytics {
   }
 
   private clearPersistentData(): void {
+    try {
+      this.hostUsage.clear();
+    } catch {
+      /* best effort */
+    }
     for (const path of [
       this.installIdPath,
       this.identityVersionPath,
@@ -770,6 +791,7 @@ export class ProductAnalytics {
   }
 
   private clearPersistentDataStrict(): void {
+    this.hostUsage.clear();
     for (const path of [
       this.installIdPath,
       this.identityVersionPath,

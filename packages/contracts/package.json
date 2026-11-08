@@ -10,6 +10,10 @@
   "module": "./dist/index.mjs",
   "types": "./src/index.ts",
   "exports": {
+    "./hostUsage": {
+      "types": "./src/hostUsage.ts",
+      "import": "./src/hostUsage.ts"
+    },
     ".": {
       "types": "./src/index.ts",
       "import": "./src/index.ts",

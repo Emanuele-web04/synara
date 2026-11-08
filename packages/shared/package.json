@@ -4,6 +4,10 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./hostUsage": {
+      "types": "./src/hostUsage.ts",
+      "import": "./src/hostUsage.ts"
+    },
     "./turnStopActivity": {
       "types": "./src/turnStopActivity.ts",
       "import": "./src/turnStopActivity.ts"
