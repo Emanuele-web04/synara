@@ -65,6 +65,14 @@ warranties or conditions of any kind.
 You will tell the Maintainer if You learn that any representation in this
 agreement is no longer accurate.
 
+## 8. Successors
+
+The Maintainer may assign or transfer this agreement, and the licenses You
+grant under it, to any person or entity that succeeds the Maintainer as the
+copyright holder or maintainer of Synara, including a company the Maintainer
+owns or controls. This agreement binds and benefits the Maintainer's
+successors and assigns.
+
 ## How to sign
 
 The CLA Assistant check comments on Your first pull request. Open its link
