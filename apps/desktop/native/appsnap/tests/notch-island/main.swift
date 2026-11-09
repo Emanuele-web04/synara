@@ -7,7 +7,7 @@ import SwiftUI
 //
 // Run from apps/desktop/native/appsnap:
 //   xcrun swiftc -O NotchIslandGeometry.swift NotchIslandModel.swift NotchIslandShape.swift \
-//     NotchIslandView.swift tests/notch-island/main.swift \
+//     NotchIslandView.swift NotchIslandContent.swift tests/notch-island/main.swift \
 //     -framework AppKit -framework SwiftUI -o /tmp/notch-island-test && /tmp/notch-island-test [png-dir]
 //
 // With a directory argument it also renders each island state to PNG there,
@@ -87,10 +87,17 @@ if let notch = notchedSecond {
     expect(
         "panel fits the expanded island",
         panel.width >= NotchIslandGeometry.expandedWidth
-            && panel.height >= 32 + NotchIslandGeometry.expandedContentHeight(rows: NotchIslandGeometry.maxRows),
+            && panel.height >= 32 + NotchIslandGeometry.expandedContentHeight(list: .tallest),
         true
     )
 }
+
+expect(
+    "each section adds a label",
+    NotchIslandGeometry.expandedContentHeight(list: NotchIslandListShape(rows: 3, sections: 2))
+        - NotchIslandGeometry.expandedContentHeight(list: NotchIslandListShape(rows: 3, sections: 1)),
+    NotchIslandGeometry.sectionLabelHeight
+)
 
 // Presence
 expect("idle notch rests", NotchIslandGeometry.presence(kind: .notch, hasActivity: false, isExpanded: false, isSuppressed: false), .resting)
@@ -101,22 +108,22 @@ expect("fullscreen suppression wins", NotchIslandGeometry.presence(kind: .pill, 
 
 // Sizes and hover zones
 let notchSize = CGSize(width: 185, height: 32)
-expect("resting is the notch", NotchIslandGeometry.islandSize(for: .resting, notch: notchSize, rows: 0), notchSize)
+expect("resting is the notch", NotchIslandGeometry.islandSize(for: .resting, notch: notchSize, list: .empty), notchSize)
 expect(
     "compact adds an ear each side",
-    NotchIslandGeometry.islandSize(for: .compact, notch: notchSize, rows: 3),
+    NotchIslandGeometry.islandSize(for: .compact, notch: notchSize, list: .tallest),
     CGSize(width: 185 + NotchIslandGeometry.earWidth * 2, height: 32)
 )
 expect(
     "open island grows with its rows",
-    NotchIslandGeometry.islandSize(for: .expanded, notch: notchSize, rows: 1).height
-        < NotchIslandGeometry.islandSize(for: .expanded, notch: notchSize, rows: 4).height,
+    NotchIslandGeometry.islandSize(for: .expanded, notch: notchSize, list: NotchIslandListShape(rows: 1, sections: 1)).height
+        < NotchIslandGeometry.islandSize(for: .expanded, notch: notchSize, list: .tallest).height,
     true
 )
 expect(
     "rows beyond the cap do not grow it",
-    NotchIslandGeometry.expandedContentHeight(rows: 9),
-    NotchIslandGeometry.expandedContentHeight(rows: NotchIslandGeometry.maxRows)
+    NotchIslandGeometry.expandedContentHeight(list: NotchIslandListShape(rows: 9, sections: 4)),
+    NotchIslandGeometry.expandedContentHeight(list: .tallest)
 )
 expect(
     "hidden has no hover zone",
@@ -139,7 +146,7 @@ if CommandLine.arguments.count > 1 {
     try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
     let rows = [
         NotchIslandSnapshot.Row(threadId: "a", title: "Add the notch island", project: "synara", provider: "claudeAgent", state: .approval),
-        NotchIslandSnapshot.Row(threadId: "b", title: "Which badge color?", project: "website", provider: "codex", state: .input),
+        NotchIslandSnapshot.Row(threadId: "b", title: "Which badge color?", project: "website", provider: "cursor", state: .input),
         NotchIslandSnapshot.Row(threadId: "c", title: "Fix reconnect race in session resume", project: "synara", provider: "codex", state: .working),
         NotchIslandSnapshot.Row(threadId: "d", title: "Release notes for 1.2", project: "website", provider: "claudeAgent", state: .done),
     ]
@@ -147,38 +154,67 @@ if CommandLine.arguments.count > 1 {
         NotchIslandSnapshot(lead: lead, count: count, needsYou: 2, working: 3, done: 4, failed: 0, rows: rows)
     }
     let cases: [(String, NotchIslandSnapshot, Bool, NotchIslandPlacementKind)] = [
-        ("resting-notch", .idle, false, .notch),
-        ("compact-working", snap(.working, 3, rows: rows), false, .notch),
+        ("compact-working", snap(.working, 3, rows: Array(rows.suffix(2))), false, .notch),
         ("compact-needs-you", snap(.needsYou, 2, rows: rows), false, .notch),
-        ("compact-pill-done", snap(.finished, 4, rows: rows), false, .pill),
+        ("compact-pill-done", snap(.finished, 4, rows: Array(rows.suffix(1))), false, .pill),
         ("expanded-rows", snap(.needsYou, 2, rows: rows), true, .notch),
+        ("expanded-three-rows", snap(.needsYou, 2, rows: Array(rows.prefix(3))), true, .notch),
         ("expanded-two-rows", snap(.working, 3, rows: Array(rows.suffix(2))), true, .notch),
         ("expanded-empty", .idle, true, .notch),
     ]
     let iconSVG = ##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="32" height="32"><circle cx="12" cy="12" r="9" fill="#D97757"/></svg>"##
+    let codexSVG = ##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="32" height="32"><rect x="4" y="4" width="16" height="16" rx="5" fill="none" stroke="#F5F5F5" stroke-width="2"/></svg>"##
+
+    // NOTCH_ICONS: a file with an `icons` command line (the app's real glyphs).
+    let realIcons: [String: NSImage]? = ProcessInfo.processInfo.environment["NOTCH_ICONS"].flatMap { path in
+        struct Icons: Decodable { let type: String; let icons: [String: String]? }
+        let lines = (try? String(contentsOfFile: path, encoding: .utf8))?.split(separator: "\n") ?? []
+        for line in lines {
+            if let decoded = try? JSONDecoder().decode(Icons.self, from: Data(line.utf8)), decoded.type == "icons", let icons = decoded.icons {
+                return icons.compactMapValues { NSImage(data: Data($0.utf8)) }
+            }
+        }
+        return nil
+    }
+
+    @MainActor
+    func island(_ snapshot: NotchIslandSnapshot, expanded: Bool, kind: NotchIslandPlacementKind) -> some View {
+        let model = NotchIslandModel()
+        model.snapshot = snapshot
+        model.isExpanded = expanded
+        model.placementKind = kind
+        model.notchSize = kind == .notch ? notchSize : CGSize(width: NotchIslandGeometry.pillBodyWidth, height: 25)
+        model.reduceMotion = true
+        model.icons = realIcons ?? [
+            "claudeAgent": NSImage(data: Data(iconSVG.utf8))!,
+            "codex": NSImage(data: Data(codexSVG.utf8))!,
+        ]
+        return NotchIslandView(model: model)
+    }
+
+    @MainActor
+    func write<V: View>(_ view: V, _ name: String) {
+        let renderer = ImageRenderer(content: view)
+        renderer.scale = 2
+        guard let image = renderer.nsImage,
+              let tiff = image.tiffRepresentation,
+              let png = NSBitmapImageRep(data: tiff)?.representation(using: .png, properties: [:])
+        else {
+            failures += 1
+            print("FAIL: could not render \(name)")
+            return
+        }
+        try? png.write(to: directory.appendingPathComponent("\(name).png"))
+    }
+
     MainActor.assumeIsolated {
         for (name, snapshot, expanded, kind) in cases {
-            let model = NotchIslandModel()
-            model.snapshot = snapshot
-            model.isExpanded = expanded
-            model.placementKind = kind
-            model.notchSize = kind == .notch ? notchSize : CGSize(width: NotchIslandGeometry.pillBodyWidth, height: 25)
-            model.reduceMotion = true
-            model.icons = ["claudeAgent": NSImage(data: Data(iconSVG.utf8))!]
-            let view = NotchIslandView(model: model)
-                .frame(width: 500, height: 360)
-                .background(Color(white: 0.85))
-            let renderer = ImageRenderer(content: view)
-            renderer.scale = 2
-            guard let image = renderer.nsImage,
-                  let tiff = image.tiffRepresentation,
-                  let png = NSBitmapImageRep(data: tiff)?.representation(using: .png, properties: [:])
-            else {
-                failures += 1
-                print("FAIL: could not render \(name)")
-                continue
-            }
-            try? png.write(to: directory.appendingPathComponent("\(name).png"))
+            write(
+                island(snapshot, expanded: expanded, kind: kind)
+                    .frame(width: 520, height: 380)
+                    .background(Color(white: 0.85)),
+                name
+            )
         }
     }
 }

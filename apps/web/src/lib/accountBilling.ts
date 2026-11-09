@@ -1,5 +1,6 @@
 // Account billing reads and redirects stay bound to the identity that opened Settings.
 import type { AccountBillingStatus, NativeApi } from "@synara/contracts";
+import { isElectron } from "~/env";
 import { ensureNativeApi } from "~/nativeApi";
 import { accountStatusScope } from "./hosts/controlQueryScope";
 
@@ -21,6 +22,14 @@ export async function runAccountBillingOperation<T>(
   const result = await operation(api.account);
   await assertAccount();
   return result;
+}
+
+/** Whether this build sells Synara Alto: packaged desktop builds and the sandbox renderer. */
+export function isAccountBillingEnabled(): boolean {
+  return (
+    (isElectron && import.meta.env.VITE_SYNARA_BILLING_ENABLED === "1") ||
+    import.meta.env.VITE_SYNARA_BILLING_SANDBOX === "1"
+  );
 }
 
 export function formatBillingPrice(plan: AccountBillingStatus["plans"][number]): string {

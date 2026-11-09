@@ -143,7 +143,16 @@ describe("createNotchIslandController", () => {
     const { controller, host, load, save } = makeController(false);
     expect(load).not.toHaveBeenCalled();
     expect(host.setWanted).toHaveBeenLastCalledWith(false);
-    expect(controller.setEnabled(true)).toEqual({ supported: false, enabled: false });
+    expect(controller.setEnabled(true)).toEqual({
+      supported: false,
+      enabled: false,
+      entitled: false,
+    });
+    expect(controller.setEntitled(true)).toEqual({
+      supported: false,
+      enabled: false,
+      entitled: false,
+    });
     expect(save).not.toHaveBeenCalled();
     expect(host.setWanted).not.toHaveBeenCalledWith(true);
   });
@@ -158,12 +167,33 @@ describe("createNotchIslandController", () => {
     expect(supported.host.setSnapshot).toHaveBeenCalledWith(SNAPSHOT);
   });
 
+  it("stays off until Synara Alto access is reported, and stops when it ends", () => {
+    const { controller, host } = makeController(true);
+    expect(host.setWanted).toHaveBeenLastCalledWith(false);
+    expect(controller.getState()).toEqual({ supported: true, enabled: true, entitled: false });
+
+    expect(controller.setEntitled(true)).toEqual({
+      supported: true,
+      enabled: true,
+      entitled: true,
+    });
+    expect(host.setWanted).toHaveBeenLastCalledWith(true);
+
+    controller.setEntitled(false);
+    expect(host.setWanted).toHaveBeenLastCalledWith(false);
+  });
+
   it("starts the saved choice and persists changes", () => {
     const { controller, host, save } = makeController(true);
+    controller.setEntitled(true);
     expect(host.setWanted).toHaveBeenLastCalledWith(true);
-    expect(controller.getState()).toEqual({ supported: true, enabled: true });
+    expect(controller.getState()).toEqual({ supported: true, enabled: true, entitled: true });
 
-    expect(controller.setEnabled(false)).toEqual({ supported: true, enabled: false });
+    expect(controller.setEnabled(false)).toEqual({
+      supported: true,
+      enabled: false,
+      entitled: true,
+    });
     expect(save).toHaveBeenCalledWith({ version: 1, enabled: false });
     expect(host.setWanted).toHaveBeenLastCalledWith(false);
 
@@ -176,7 +206,11 @@ describe("createNotchIslandController", () => {
     save.mockImplementation(() => {
       throw new Error("disk full");
     });
-    expect(controller.setEnabled(false)).toEqual({ supported: true, enabled: false });
+    expect(controller.setEnabled(false)).toEqual({
+      supported: true,
+      enabled: false,
+      entitled: false,
+    });
     expect(onError).toHaveBeenCalledOnce();
     expect(host.setWanted).toHaveBeenLastCalledWith(false);
   });

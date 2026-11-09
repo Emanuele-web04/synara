@@ -11,7 +11,12 @@ final class NotchIslandController {
     private static let openDelay: TimeInterval = 0.08
     private static let closeDelay: TimeInterval = 0.3
     private static let relayoutDelay: TimeInterval = 0.5
-    private static let expandedPollInterval: TimeInterval = 0.25
+    /// Pointer polling backs up the global mouse monitor, which macOS does not
+    /// deliver in every situation (secure input, some sandboxes). Fast only
+    /// while the pointer is near the top of the island's screen.
+    private static let nearPollInterval: TimeInterval = 0.1
+    private static let farPollInterval: TimeInterval = 0.5
+    private static let nearTopDistance: CGFloat = 160
 
     private let emitter: NDJSONEmitter
     private let model = NotchIslandModel()
@@ -21,7 +26,7 @@ final class NotchIslandController {
     private var placementDisplayID: CGDirectDisplayID?
     private var notificationTokens: [(NotificationCenter, NSObjectProtocol)] = []
     private var eventMonitors: [Any] = []
-    private var expandedPoll: Timer?
+    private var pointerPoll: Timer?
     private var openWork: DispatchWorkItem?
     private var closeWork: DispatchWorkItem?
     private var relayoutWork: DispatchWorkItem?
@@ -77,14 +82,15 @@ final class NotchIslandController {
         }
 
         relayout()
+        adjustPointerPolling()
     }
 
     func stop() {
         openWork?.cancel()
         closeWork?.cancel()
         relayoutWork?.cancel()
-        expandedPoll?.invalidate()
-        expandedPoll = nil
+        pointerPoll?.invalidate()
+        pointerPoll = nil
         eventMonitors.forEach(NSEvent.removeMonitor)
         eventMonitors.removeAll()
         for (center, token) in notificationTokens {
@@ -227,7 +233,25 @@ final class NotchIslandController {
         )
     }
 
+    private func adjustPointerPolling() {
+        let point = NSEvent.mouseLocation
+        let near = model.isExpanded || placement.map { placement in
+            placement.screenFrame.contains(point)
+                && placement.screenFrame.maxY - point.y <= Self.nearTopDistance
+        } ?? false
+        let interval = near ? Self.nearPollInterval : Self.farPollInterval
+        guard pointerPoll?.timeInterval != interval else { return }
+        pointerPoll?.invalidate()
+        let timer = Timer(timeInterval: interval, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.pointerMoved() }
+        }
+        timer.tolerance = interval / 5
+        RunLoop.main.add(timer, forMode: .common)
+        pointerPoll = timer
+    }
+
     private func pointerMoved() {
+        adjustPointerPolling()
         guard panel?.isVisible == true else { return }
         let point = NSEvent.mouseLocation
         let zone = NotchIslandGeometry.hoverZone(presence: model.presence, island: islandScreenRect)
@@ -261,23 +285,16 @@ final class NotchIslandController {
         let zone = NotchIslandGeometry.hoverZone(presence: model.presence, island: islandScreenRect)
         guard !model.isSuppressed, zone.contains(NSEvent.mouseLocation) else { return }
         model.isExpanded = true
+        // A light tick on the trackpad, so opening feels physical.
+        NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .now)
         refreshInteraction()
-        // Pointer events stop when it rests; poll so a quick exit still closes.
-        expandedPoll?.invalidate()
-        let timer = Timer(timeInterval: Self.expandedPollInterval, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated { self?.pointerMoved() }
-        }
-        timer.tolerance = 0.05
-        RunLoop.main.add(timer, forMode: .common)
-        expandedPoll = timer
+        adjustPointerPolling()
     }
 
     private func collapse() {
         openWork?.cancel()
         openWork = nil
         closeWork = nil
-        expandedPoll?.invalidate()
-        expandedPoll = nil
         guard model.isExpanded else { return }
         model.isExpanded = false
         refreshInteraction()

@@ -1,7 +1,8 @@
 // FILE: NotchIslandPublisher.tsx
 // Purpose: Keep the desktop notch island in step with the chats the Inbox shows.
 // Layer: Global runtime component (renders nothing)
-// Depends on: desktopBridge.notchIsland (macOS Synara Beta only), the Inbox grouping.
+// Depends on: desktopBridge.notchIsland (macOS Synara Beta only), the Inbox grouping,
+//             Synara Alto access (desktop main keeps the island off without it).
 
 import type { DesktopNotchIslandSnapshot } from "@synara/contracts";
 import { PROVIDER_GLYPHS } from "@synara/profile-ui/provider-icon";
@@ -12,7 +13,7 @@ import { useAppSettings } from "../appSettings";
 import { groupInboxThreads } from "../components/inbox/inbox.logic";
 import { useActivityThreads } from "../hooks/useActivityThreads";
 import { useDismissedThreadStatusKeys } from "../hooks/useDismissedThreadStatusKeys";
-import { isNotchIslandAvailable } from "../hooks/useDesktopNotchIsland";
+import { isNotchIslandAvailable, useNotchIslandAltoAccess } from "../hooks/useDesktopNotchIsland";
 import { useStore } from "../store";
 import { buildNotchIslandSnapshot } from "./buildNotchIslandSnapshot";
 
@@ -57,6 +58,12 @@ function NotchIslandPublisherRuntime() {
   const { visibleNonGroupThreads } = useActivityThreads({
     hideAutomationRunThreads: !settings.showAutomationRunThreads,
   });
+  const altoAccess = useNotchIslandAltoAccess(true);
+
+  useEffect(() => {
+    if (altoAccess === null) return;
+    void window.desktopBridge?.notchIsland?.setEntitled(altoAccess).catch(() => {});
+  }, [altoAccess]);
 
   const snapshot = useMemo<DesktopNotchIslandSnapshot>(() => {
     const projectById = new Map(projects.map((project) => [project.id as string, project]));

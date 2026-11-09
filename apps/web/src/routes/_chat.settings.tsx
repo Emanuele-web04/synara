@@ -127,6 +127,7 @@ import { useDesktopTopBarTrafficLightGutterClassName } from "../hooks/useDesktop
 import { useKeepAwakeState } from "../hooks/useKeepAwakeState";
 import { KeepAwakeSettingsSection } from "../components/KeepAwakeControls";
 import { useTheme } from "../hooks/useTheme";
+import { isAccountBillingEnabled } from "../lib/accountBilling";
 import { isUiDensity } from "../lib/appDensity";
 import { isChatWidthMode, type ChatWidthMode } from "../lib/chatWidth";
 import { isElectron } from "../env";
@@ -1847,9 +1848,7 @@ function SettingsRouteView() {
     </div>
   );
 
-  const billingEnabled =
-    (isElectron && import.meta.env.VITE_SYNARA_BILLING_ENABLED === "1") ||
-    import.meta.env.VITE_SYNARA_BILLING_SANDBOX === "1";
+  const billingEnabled = isAccountBillingEnabled();
 
   const renderRouteOwnedPanel = () => {
     switch (activeSection) {

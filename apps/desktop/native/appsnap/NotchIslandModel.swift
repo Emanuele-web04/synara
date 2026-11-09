@@ -24,6 +24,16 @@ struct NotchIslandSnapshot: Decodable, Equatable {
         case failed
 
         var needsYou: Bool { self == .approval || self == .input || self == .plan }
+
+        /// The section a row sits under, in the order sections are shown.
+        var group: Int {
+            switch self {
+            case .approval, .input, .plan: 0
+            case .working: 1
+            case .failed: 2
+            case .done: 3
+            }
+        }
     }
 
     struct Row: Decodable, Equatable, Identifiable {
@@ -81,24 +91,24 @@ struct NotchIslandLabels: Decodable, Equatable {
     var openApp = "Open Synara"
     var needYou = "need you"
     var working = "working"
-    var done = "done"
-    var failed = "failed"
     var approval = "Pending approval"
     var input = "Awaiting input"
     var plan = "Plan ready"
     var stateWorking = "Working"
     var completed = "Completed"
     var stateFailed = "Failed"
-    var open = "Open"
     var review = "Review"
+    /// Section labels, as the Inbox names them.
+    var needsYouTitle = "Needs you"
+    var readyForReview = "Ready for review"
 
     static let fallback = NotchIslandLabels()
 
     init() {}
 
     private enum CodingKeys: String, CodingKey {
-        case empty, openApp, needYou, working, done, failed, approval, input, plan
-        case stateWorking, completed, stateFailed, open, review
+        case empty, openApp, needYou, working, approval, input, plan
+        case stateWorking, completed, stateFailed, review, needsYouTitle, readyForReview
     }
 
     init(from decoder: Decoder) throws {
@@ -111,16 +121,15 @@ struct NotchIslandLabels: Decodable, Equatable {
         openApp = try read(.openApp, base.openApp)
         needYou = try read(.needYou, base.needYou)
         working = try read(.working, base.working)
-        done = try read(.done, base.done)
-        failed = try read(.failed, base.failed)
         approval = try read(.approval, base.approval)
         input = try read(.input, base.input)
         plan = try read(.plan, base.plan)
         stateWorking = try read(.stateWorking, base.stateWorking)
         completed = try read(.completed, base.completed)
         stateFailed = try read(.stateFailed, base.stateFailed)
-        open = try read(.open, base.open)
         review = try read(.review, base.review)
+        needsYouTitle = try read(.needsYouTitle, base.needsYouTitle)
+        readyForReview = try read(.readyForReview, base.readyForReview)
     }
 
     func status(_ state: NotchIslandSnapshot.RowState) -> String {
@@ -161,6 +170,18 @@ final class NotchIslandModel: ObservableObject {
     }
 
     var islandSize: CGSize {
-        NotchIslandGeometry.islandSize(for: presence, notch: notchSize, rows: snapshot.rows.count)
+        NotchIslandGeometry.islandSize(for: presence, notch: notchSize, list: listShape)
+    }
+
+    var listShape: NotchIslandListShape {
+        let rows = snapshot.rows
+        return NotchIslandListShape(
+            rows: rows.count,
+            sections: Set(rows.map(\.state.group)).count
+        )
+    }
+
+    func icon(for row: NotchIslandSnapshot.Row) -> NSImage? {
+        row.provider.flatMap { icons[$0] }
     }
 }

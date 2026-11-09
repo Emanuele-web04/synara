@@ -401,6 +401,12 @@ gate: on Stable or other platforms it reports the feature unsupported, never rea
 writes `notch-island.json`, and never starts the helper. Settings → Notifications shows
 the toggle only where it applies.
 
+It is also a Synara Alto feature in builds that sell Alto (`VITE_SYNARA_BILLING_ENABLED` or
+the sandbox flag). The main window's app reads the account's billing access and reports it
+over IPC; desktop main keeps the helper stopped until that report says access is granted,
+and again after the page reloads. Without access, Settings shows "View Alto plans" in place
+of the toggle. Builds without billing keep the island for everyone.
+
 Simplified Chinese (`chinese-ui`) is available in non-Stable builds. Stable keeps English and Spanish, hides Chinese
 from Language settings, and ignores saved or programmatic Chinese selections without erasing
 them in the raw renderer settings. The derived native mirror receives the effective System

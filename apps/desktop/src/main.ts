@@ -5698,6 +5698,8 @@ function registerIpcHandlers(): void {
         sender.off("did-navigate", clear);
         notchIslandSnapshotSenders.delete(sender);
         notchIslandController?.setSnapshot(EMPTY_NOTCH_ISLAND_SNAPSHOT);
+        // A reloaded page reads the account again before the island returns.
+        notchIslandController?.setEntitled(false);
       };
       sender.once("destroyed", clear);
       sender.once("did-navigate", clear);
@@ -5711,6 +5713,20 @@ function registerIpcHandlers(): void {
       ? getNotchIslandController().setEnabled(rawEnabled)
       : getNotchIslandController().getState(),
   );
+
+  // Synara Alto access, as the main window's app reads it from the account. Only that
+  // page may grant it, the same page that publishes what the island shows.
+  ipcMain.removeHandler(IPC.notchIsland.setEntitled);
+  ipcMain.handle(IPC.notchIsland.setEntitled, async (event, rawEntitled: unknown) => {
+    if (
+      typeof rawEntitled !== "boolean" ||
+      event.sender !== mainWindow?.webContents ||
+      event.senderFrame !== event.sender.mainFrame
+    ) {
+      return getNotchIslandController().getState();
+    }
+    return getNotchIslandController().setEntitled(rawEntitled);
+  });
 
   ipcMain.removeHandler(IPC.keepAwake.setRemoteAccessAllowed);
   ipcMain.handle(IPC.keepAwake.setRemoteAccessAllowed, async (_event, rawAllowed: unknown) =>
@@ -6107,16 +6123,15 @@ function getNotchIslandController(): NotchIslandController {
         openApp: t("desktop:notchIsland_openApp", { app: APP_DISPLAY_NAME }),
         needYou: t("desktop:notchIsland_needYou"),
         working: t("desktop:notchIsland_working"),
-        done: t("desktop:notchIsland_done"),
-        failed: t("desktop:notchIsland_failed"),
         approval: t("desktop:notchIsland_approval"),
         input: t("desktop:notchIsland_input"),
         plan: t("desktop:notchIsland_plan"),
         stateWorking: t("desktop:notchIsland_stateWorking"),
         completed: t("desktop:notchIsland_completed"),
         stateFailed: t("desktop:notchIsland_stateFailed"),
-        open: t("desktop:notchIsland_open"),
         review: t("desktop:notchIsland_review"),
+        needsYouTitle: t("desktop:notchIsland_needsYouTitle"),
+        readyForReview: t("desktop:notchIsland_readyForReview"),
       }),
       // A click on the island is an explicit gesture in another process, so
       // Synara has to take focus itself, as it does for AppSnap.

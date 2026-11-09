@@ -1183,7 +1183,9 @@
   "resumeAfterUsageLimitsDescription": "Automatically continue newly limited tasks when the provider reports that their allowance resets. Applies to this computer, even while your other devices are closed. Turning this off cancels pending resumes.",
   "couldNotUpdateUsageLimitRecovery": "Could not update automatic resumption",
   "notchIsland": "Notch island",
+  "notchIslandAltoDescription": "Show chat activity in the notch. Included with Synara Alto.",
   "notchIslandDescription": "Show chat activity at the top of the screen, in the notch or as a small pill on displays without one. Hover it to see your chats.",
   "notchIslandKeywords": "Show chat activity at the top of the screen, in the notch or as a small pill on displays without one. dynamic island notch status working approval",
+  "viewAltoPlans": "View Alto plans",
   "couldNotUpdateNotchIsland": "Could not update the notch island"
 }

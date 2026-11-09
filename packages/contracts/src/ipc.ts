@@ -868,6 +868,11 @@ export interface DesktopKeepAwakeState {
 export interface DesktopNotchIslandState {
   supported: boolean;
   enabled: boolean;
+  /**
+   * Whether this account may use the island (Synara Alto, or a build without
+   * billing). False until the app reports it, so the island stays off meanwhile.
+   */
+  entitled: boolean;
 }
 
 /** The status a chat shows on the notch island, matching the sidebar's status pills. */
@@ -1173,6 +1178,8 @@ export interface DesktopBridge {
   notchIsland?: {
     getState: () => Promise<DesktopNotchIslandState>;
     setEnabled: (enabled: boolean) => Promise<DesktopNotchIslandState>;
+    /** Reports the account's Synara Alto access; the island only runs while it is true. */
+    setEntitled: (entitled: boolean) => Promise<DesktopNotchIslandState>;
     /** Fire-and-forget; main validates, caps and forwards it to the island. */
     publishSnapshot: (snapshot: DesktopNotchIslandSnapshot) => void;
   };

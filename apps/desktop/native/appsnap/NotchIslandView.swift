@@ -3,55 +3,60 @@ import SwiftUI
 
 @available(macOS 13.0, *)
 enum NotchIslandMotion {
-    static let reshape = Animation.spring(response: 0.42, dampingFraction: 0.8)
+    /// Opening swells with a touch of overshoot; closing settles without any, so
+    /// the outline never dips below the camera housing on the way back.
+    static let open = Animation.spring(response: 0.42, dampingFraction: 0.82)
+    static let close = Animation.spring(response: 0.38, dampingFraction: 1.0)
+    /// The closed ears' icon and count: gone at once when opening, back after
+    /// the outline has mostly shrunk when closing.
+    static let earsOut = Animation.easeOut(duration: 0.1)
+    static let earsIn = Animation.easeOut(duration: 0.18).delay(0.16)
+    /// Open content blurs out quickly when closing.
+    static let contentOut = Animation.easeOut(duration: 0.12)
+    /// Open content arrives in order (header, then each block) a beat after the
+    /// outline starts to grow, so nothing shows clipped.
+    static func stagger(_ index: Int) -> Animation {
+        .spring(response: 0.42, dampingFraction: 0.84).delay(0.1 + Double(index) * 0.045)
+    }
 
     static func respectingReduceMotion(_ animation: Animation, _ reduceMotion: Bool) -> Animation? {
         reduceMotion ? nil : animation
     }
 }
 
-/// Synara's dark tokens and sidebar status colours ("Pebble" direction).
+/// Synara's dark-theme tokens (`index.css`, the Paper app UI kit) and the
+/// sidebar's status colours. The island itself is pure black so it reads as
+/// one shape with the camera housing; everything on it uses the app's values.
 @available(macOS 13.0, *)
 enum NotchIslandPalette {
-    static let surface = Color(hex: 0x0E0E0E)
+    static let surface = Color.black
+    /// `--secondary` / `--muted`: the app's 4% white wash for quiet surfaces.
+    static let wash = Color.white.opacity(0.04)
+    /// `--color-appd-card`, for the one raised card.
     static let card = Color(hex: 0x141414)
+    /// `--color-appd-line`.
     static let line = Color.white.opacity(0.07)
-    static let wash = Color.white.opacity(0.05)
+    /// `--color-appd-hover`.
+    static let hover = Color.white.opacity(0.05)
     static let ink = Color(hex: 0xF5F5F5)
+    /// `--muted-foreground`.
     static let muted = Color(hex: 0x8A8A8A)
+    /// The running spinner's `text-muted-foreground/55`.
+    static let spinner = Color(hex: 0x8A8A8A).opacity(0.75)
     static let brand = Color(hex: 0xFE8549)
+    /// `--info` / `--color-text-accent`: the sidebar's unread-completion dot.
+    static let info = Color(hex: 0x7B8CFF)
+    static let success = Color(hex: 0x6EE7B7).opacity(0.9)
 
-    /// The sidebar status pills' dark-mode text colours and their tint.
-    struct Tone {
-        let ink: Color
-        let tint: Color
-    }
-
-    static let approval = Tone(ink: Color(hex: 0xFCD34D), tint: Color(hex: 0xF59E0B).opacity(0.16))
-    static let input = Tone(ink: Color(hex: 0xA5B4FC), tint: Color(hex: 0x6366F1).opacity(0.18))
-    static let plan = Tone(ink: Color(hex: 0xC4B5FD), tint: Color(hex: 0x8B5CF6).opacity(0.18))
-    static let working = Tone(ink: Color(hex: 0x7DD3FC), tint: Color(hex: 0x0EA5E9).opacity(0.16))
-    static let done = Tone(ink: Color(hex: 0x6EE7B7), tint: Color(hex: 0x10B981).opacity(0.16))
-    static let failed = Tone(ink: Color(hex: 0xF87171), tint: Color(hex: 0xEF4444).opacity(0.16))
-
-    static func tone(_ state: NotchIslandSnapshot.RowState) -> Tone {
+    /// `ThreadStatusPill` dark colours: `text-amber-300/90` and friends.
+    static func status(_ state: NotchIslandSnapshot.RowState) -> Color {
         switch state {
-        case .approval: approval
-        case .input: input
-        case .plan: plan
-        case .working: working
-        case .done: done
-        case .failed: failed
-        }
-    }
-
-    static func tone(_ lead: NotchIslandSnapshot.Lead) -> Tone? {
-        switch lead {
-        case .needsYou: approval
-        case .working: working
-        case .failed: failed
-        case .finished: done
-        case .idle: nil
+        case .approval: Color(hex: 0xFCD34D).opacity(0.9)
+        case .input: Color(hex: 0xA5B4FC).opacity(0.9)
+        case .plan: Color(hex: 0xC4B5FD).opacity(0.9)
+        case .working: Color(hex: 0x7DD3FC).opacity(0.8)
+        case .done: Color(hex: 0x6EE7B7).opacity(0.9)
+        case .failed: Color(hex: 0xF87171)
         }
     }
 }
@@ -78,69 +83,110 @@ struct NotchIslandView: View {
         let presence = model.presence
         let size = model.islandSize
         let expanded = presence == .expanded
+        let reduceMotion = model.reduceMotion
         let shape = NotchIslandShape(
-            topRadius: expanded ? 10 : 6,
-            bottomRadius: expanded ? 28 : min(14, model.notchSize.height / 2)
+            earRadius: expanded ? NotchIslandGeometry.openEarRadius : NotchIslandGeometry.closedEarRadius,
+            bottomRadius: expanded
+                ? NotchIslandGeometry.openBottomRadius
+                : min(NotchIslandGeometry.closedBottomRadius, model.notchSize.height / 2)
         )
+        let compactWidth = NotchIslandGeometry.islandSize(for: .compact, notch: model.notchSize, list: .empty).width
+        let openWidth = NotchIslandGeometry.islandSize(for: .expanded, notch: model.notchSize, list: .empty).width
         VStack(spacing: 0) {
             ZStack(alignment: .top) {
                 shape.fill(NotchIslandPalette.surface)
-                VStack(spacing: 0) {
-                    NotchIslandTopRow(model: model, expanded: expanded)
-                        .opacity(presence == .compact || expanded ? 1 : 0)
-                    if expanded {
-                        NotchIslandOpenContent(model: model)
-                            .transition(.opacity)
+
+                NotchIslandClosedEars(model: model)
+                    .frame(width: compactWidth)
+                    .opacity(presence == .compact ? 1 : 0)
+                    .animation(
+                        NotchIslandMotion.respectingReduceMotion(
+                            expanded ? NotchIslandMotion.earsOut : NotchIslandMotion.earsIn,
+                            reduceMotion
+                        ),
+                        value: presence
+                    )
+
+                if expanded {
+                    VStack(spacing: 0) {
+                        NotchIslandOpenHeader(model: model)
+                            .notchStagger(0, reduceMotion: reduceMotion)
+                        NotchIslandSidebarContent(model: model)
+                            .padding(.top, NotchIslandGeometry.contentTop)
+                            .padding(.bottom, NotchIslandGeometry.bottomPadding)
                     }
+                    .padding(.horizontal, NotchIslandGeometry.contentInset)
+                    // Laid out at the final width from the first frame, so nothing reflows
+                    // while the outline grows around it.
+                    .frame(width: openWidth)
+                    .transition(
+                        .asymmetric(
+                            insertion: .identity,
+                            removal: AnyTransition.notchBlurFade.animation(
+                                NotchIslandMotion.respectingReduceMotion(NotchIslandMotion.contentOut, reduceMotion)
+                            )
+                        )
+                    )
                 }
-                .padding(.horizontal, expanded ? 12 : 6)
             }
             .frame(width: size.width, height: size.height, alignment: .top)
             .clipShape(shape)
-            .shadow(color: .black.opacity(expanded ? 0.3 : 0), radius: 20, y: 10)
+            // A tight, dark shadow only when open: a wide soft one reads as a grey
+            // haze and makes the black look washed out.
+            .shadow(color: .black.opacity(expanded ? 0.45 : 0), radius: 12, y: 4)
             .opacity(presence == .hidden ? 0 : 1)
             Spacer(minLength: 0)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .animation(
-            NotchIslandMotion.respectingReduceMotion(NotchIslandMotion.reshape, model.reduceMotion),
+            NotchIslandMotion.respectingReduceMotion(expanded ? NotchIslandMotion.open : NotchIslandMotion.close, reduceMotion),
             value: presence
         )
         .animation(
-            NotchIslandMotion.respectingReduceMotion(NotchIslandMotion.reshape, model.reduceMotion),
+            NotchIslandMotion.respectingReduceMotion(NotchIslandMotion.open, reduceMotion),
             value: model.snapshot.rows.count
         )
         .environment(\.colorScheme, .dark)
     }
 }
 
-/// The row level with the notch. Closed: the leading state and its count in the
-/// ears. Open: Synara on the left, what needs you on the right.
+// MARK: - Shared pieces
+
+/// The Synara mark, drawn from the app's logo so it takes the island's ink.
 @available(macOS 13.0, *)
-private struct NotchIslandTopRow: View {
+@MainActor
+enum NotchIslandBrand {
+    static let logo: NSImage? = {
+        let markup = ##"<svg width="470" height="504" viewBox="0 0 470 504" xmlns="http://www.w3.org/2000/svg"><path fill="#000" d="M2.65188 2.1899C-0.630695 5.47248 -0.995426 113.797 2.28715 121.821C3.74607 125.104 35.8423 149.906 74.5038 176.531C148.179 227.958 159.121 237.806 170.428 260.054L177.358 273.914L194.135 252.76C203.254 241.088 212.372 228.323 214.196 224.311C228.055 197.685 220.396 158.659 196.324 132.763C181.735 117.08 23.0768 4.37828 11.4054 1.09571C8.12283 0.366249 4.1108 0.73098 2.65188 2.1899Z"/><path fill="#000" d="M467.348 1.45943C470.631 4.74201 470.995 113.067 467.713 121.091C466.254 124.374 434.158 149.175 395.496 175.801C321.821 227.228 310.879 237.075 299.572 259.324L292.642 273.184L275.865 252.029C266.746 240.358 257.628 227.592 255.804 223.58C241.945 196.955 249.604 157.929 273.676 132.033C288.265 116.35 446.923 3.64782 458.595 0.365241C461.877 -0.36422 465.889 0.000510871 467.348 1.45943Z"/><path fill="#000" d="M217.479 291.602C187.396 324.802 187 326.002 187 420.002V494.002C187 499.525 191.477 504.002 197 504.002H234.5H272C277.523 504.002 282 499.525 282 494.002V418.002C282 351.202 280.812 329.602 276.458 322.002C269.729 310.002 239.25 274.002 236.083 274.002C234.5 274.002 226.187 282.002 217.479 291.602Z"/></svg>"##
+        let image = NSImage(data: Data(markup.utf8))
+        image?.isTemplate = true
+        return image
+    }()
+}
+
+/// The open island's row level with the notch, like the sidebar's header:
+/// the Synara mark and name on the left, a quiet summary on the right.
+@available(macOS 13.0, *)
+private struct NotchIslandOpenHeader: View {
     @ObservedObject var model: NotchIslandModel
-    let expanded: Bool
 
     var body: some View {
         HStack(spacing: 0) {
-            if expanded {
-                HStack(spacing: 6) {
-                    Circle().fill(NotchIslandPalette.brand).frame(width: 8, height: 8)
-                    Text("Synara")
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(NotchIslandPalette.ink)
+            HStack(spacing: 7) {
+                if let logo = NotchIslandBrand.logo {
+                    Image(nsImage: logo)
+                        .renderingMode(.template)
+                        .resizable()
+                        .aspectRatio(contentMode: .fit)
+                        .frame(height: 12)
                 }
-                .padding(.leading, 8)
-            } else {
-                NotchIslandLeadBadge(lead: model.snapshot.lead, reduceMotion: model.reduceMotion)
-                    .frame(width: NotchIslandGeometry.earWidth - 6, alignment: .center)
+                Text("Synara")
+                    .font(.system(size: 13, weight: .medium))
             }
+            .foregroundStyle(NotchIslandPalette.ink)
+            .padding(.leading, 10)
             Spacer(minLength: 0)
-            if let tone = NotchIslandPalette.tone(model.snapshot.lead), model.snapshot.count > 0 {
-                NotchIslandCountPill(count: model.snapshot.count, tone: tone)
-                    .frame(width: expanded ? nil : NotchIslandGeometry.earWidth - 6)
-                    .padding(.trailing, expanded ? 4 : 0)
-            }
+            summary.padding(.trailing, 10)
         }
         .frame(height: model.notchSize.height)
         .contentShape(Rectangle())
@@ -149,237 +195,277 @@ private struct NotchIslandTopRow: View {
         .accessibilityAddTraits(.isButton)
         .accessibilityLabel(model.labels.openApp)
     }
-}
 
-@available(macOS 13.0, *)
-private struct NotchIslandOpenContent: View {
-    @ObservedObject var model: NotchIslandModel
-
-    var body: some View {
+    /// "2 need you", like the Inbox greeting's "2 tasks to do".
+    @ViewBuilder
+    private var summary: some View {
         let snapshot = model.snapshot
-        VStack(spacing: NotchIslandGeometry.sectionSpacing) {
-            HStack(spacing: 6) {
-                NotchIslandCounter(value: snapshot.needsYou, label: model.labels.needYou, tone: NotchIslandPalette.approval)
-                NotchIslandCounter(value: snapshot.working, label: model.labels.working, tone: NotchIslandPalette.working)
-                NotchIslandCounter(value: snapshot.done, label: model.labels.done, tone: NotchIslandPalette.done)
+        if snapshot.needsYou > 0 {
+            summaryLine(snapshot.needsYou, model.labels.needYou) {
+                NotchIslandDot(color: NotchIslandPalette.status(.approval))
             }
-            .frame(height: NotchIslandGeometry.countersHeight)
-            .contentShape(Rectangle())
-            .onTapGesture { model.onOpenApp() }
-
-            if snapshot.rows.isEmpty {
-                HStack {
-                    Text(model.labels.empty)
-                        .font(.system(size: 13))
-                        .foregroundStyle(NotchIslandPalette.muted)
-                    Spacer(minLength: 8)
-                    Button(model.labels.openApp) { model.onOpenApp() }
-                        .buttonStyle(NotchIslandPillButtonStyle())
-                }
-                .padding(.horizontal, 10)
-                .frame(height: NotchIslandGeometry.emptyHeight)
-            } else {
-                VStack(spacing: NotchIslandGeometry.rowSpacing) {
-                    ForEach(snapshot.rows) { row in
-                        NotchIslandChatRow(
-                            row: row,
-                            icon: row.provider.flatMap { model.icons[$0] },
-                            labels: model.labels,
-                            reduceMotion: model.reduceMotion,
-                            open: { model.onOpenThread(row.threadId) }
-                        )
-                    }
-                }
+        } else if snapshot.working > 0 {
+            summaryLine(snapshot.working, model.labels.working) {
+                NotchIslandSpinner(size: 11, reduceMotion: model.reduceMotion)
             }
         }
-        .padding(.top, NotchIslandGeometry.sectionSpacing)
-        .padding(.bottom, NotchIslandGeometry.bottomPadding)
+    }
+
+    private func summaryLine<Mark: View>(_ value: Int, _ label: String, @ViewBuilder mark: () -> Mark) -> some View {
+        HStack(spacing: 6) {
+            mark()
+            Text("\(value) \(label)")
+                .font(.system(size: 12))
+                .foregroundStyle(NotchIslandPalette.muted)
+                .contentTransition(.numericText())
+                .lineLimit(1)
+        }
     }
 }
 
-/// One rounded, tinted count: the number large, its meaning beside it.
 @available(macOS 13.0, *)
-private struct NotchIslandCounter: View {
-    let value: Int
-    let label: String
-    let tone: NotchIslandPalette.Tone
+struct NotchIslandGlyph: View {
+    let icon: NSImage?
+    let size: CGFloat
 
     var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 6) {
-            Text("\(value)")
-                .font(.system(size: 22, weight: .semibold).monospacedDigit())
-            Text(label)
-                .font(.system(size: 13, weight: .medium))
-                .lineLimit(1)
-            Spacer(minLength: 0)
+        Group {
+            if let icon {
+                Image(nsImage: icon)
+                    .resizable()
+                    .interpolation(.high)
+                    .aspectRatio(contentMode: .fit)
+            } else {
+                Circle()
+                    .fill(NotchIslandPalette.muted.opacity(0.6))
+                    .padding(size * 0.3)
+            }
         }
-        .foregroundStyle(tone.ink)
-        .padding(.horizontal, 14)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(RoundedRectangle(cornerRadius: 18, style: .continuous).fill(tone.tint))
+        .frame(width: size, height: size)
     }
 }
 
-/// A chat as the sidebar shows it: provider glyph, title, project and status.
-/// Chats that need you sit on a card; the whole row opens the chat.
+/// The sidebar's 6px `StatusDot`.
 @available(macOS 13.0, *)
-private struct NotchIslandChatRow: View {
+struct NotchIslandDot: View {
+    let color: Color
+    var size: CGFloat = 6
+
+    var body: some View {
+        Circle().fill(color).frame(width: size, height: size)
+    }
+}
+
+/// `SidebarStatusTrailingGlyph`: the running spinner while working, the blue
+/// unread dot when done, otherwise the state's dot.
+@available(macOS 13.0, *)
+struct NotchIslandTrailingGlyph: View {
+    let state: NotchIslandSnapshot.RowState
+    let reduceMotion: Bool
+
+    var body: some View {
+        Group {
+            switch state {
+            case .working:
+                NotchIslandSpinner(size: 12, reduceMotion: reduceMotion)
+            case .done:
+                NotchIslandDot(color: NotchIslandPalette.info, size: 7)
+            default:
+                NotchIslandDot(color: NotchIslandPalette.status(state))
+            }
+        }
+        .frame(width: 12, height: 12)
+    }
+}
+
+/// `ThreadRunningSpinner`: a faint track and a rounded arc from 0.16 to 0.72.
+@available(macOS 13.0, *)
+struct NotchIslandSpinner: View {
+    let size: CGFloat
+    let reduceMotion: Bool
+    var color: Color = NotchIslandPalette.spinner
+    @State private var spinning = false
+
+    var body: some View {
+        let lineWidth = size * 2 / 15
+        ZStack {
+            Circle().stroke(color.opacity(0.22), lineWidth: lineWidth * 0.7)
+            Circle()
+                .trim(from: 0.16, to: 0.72)
+                .stroke(color, style: StrokeStyle(lineWidth: lineWidth, lineCap: .round))
+                .rotationEffect(.degrees(spinning ? 360 : 0))
+                .animation(
+                    reduceMotion ? nil : .linear(duration: 1.1).repeatForever(autoreverses: false),
+                    value: spinning
+                )
+        }
+        .padding(lineWidth / 2)
+        .frame(width: size, height: size)
+        .task(id: reduceMotion) { spinning = !reduceMotion }
+    }
+}
+
+/// A chat as the sidebar draws it: provider glyph, title, and a muted meta
+/// line whose status is in the state's colour. What needs you gets the app's
+/// small Review button; everything else its trailing status glyph.
+@available(macOS 13.0, *)
+struct NotchIslandChatRow: View {
     let row: NotchIslandSnapshot.Row
     let icon: NSImage?
     let labels: NotchIslandLabels
     let reduceMotion: Bool
     let open: () -> Void
+    @State private var hovering = false
 
     var body: some View {
-        let tone = NotchIslandPalette.tone(row.state)
         Button(action: open) {
-            HStack(spacing: 12) {
-                ZStack {
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .fill(NotchIslandPalette.wash)
-                    if let icon {
-                        Image(nsImage: icon)
-                            .resizable()
-                            .interpolation(.high)
-                            .frame(width: 16, height: 16)
-                    } else {
-                        Circle().fill(NotchIslandPalette.muted).frame(width: 6, height: 6)
-                    }
-                }
-                .frame(width: 32, height: 32)
-
-                VStack(alignment: .leading, spacing: 2) {
+            HStack(alignment: .top, spacing: 9) {
+                NotchIslandGlyph(icon: icon, size: 15)
+                    .padding(.top, 1)
+                VStack(alignment: .leading, spacing: 3) {
                     Text(row.title)
-                        .font(.system(size: 13, weight: .medium))
+                        .font(.system(size: 13))
                         .foregroundStyle(NotchIslandPalette.ink)
                         .lineLimit(1)
-                    Text(
-                        "\(Text(verbatim: row.project.map { "\($0) · " } ?? "").foregroundColor(NotchIslandPalette.muted))\(Text(verbatim: labels.status(row.state)).foregroundColor(tone.ink))"
-                    )
+                    HStack(spacing: 4) {
+                        if let project = row.project {
+                            Text(project)
+                            Text("·")
+                        }
+                        Text(labels.status(row.state))
+                            .foregroundStyle(NotchIslandPalette.status(row.state))
+                    }
                     .font(.system(size: 12))
+                    .foregroundStyle(NotchIslandPalette.muted)
                     .lineLimit(1)
                 }
                 Spacer(minLength: 8)
-                trailing(tone: tone)
+                Group {
+                    if row.state.needsYou {
+                        Text(labels.review).notchIslandSecondaryButton()
+                    } else {
+                        NotchIslandTrailingGlyph(state: row.state, reduceMotion: reduceMotion)
+                            .padding(.trailing, 4)
+                    }
+                }
+                .frame(height: 30)
             }
-            .padding(.leading, 10)
-            .padding(.trailing, 8)
-            .frame(height: NotchIslandGeometry.rowHeight)
+            .padding(.horizontal, 10)
+            .padding(.top, 8)
+            .frame(height: NotchIslandGeometry.rowHeight, alignment: .top)
             .background(
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .fill(row.state.needsYou ? NotchIslandPalette.card : Color.clear)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 14, style: .continuous)
-                            .strokeBorder(row.state.needsYou ? NotchIslandPalette.line : Color.clear)
-                    )
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(hovering ? NotchIslandPalette.hover : Color.clear)
             )
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
-    }
-
-    @ViewBuilder
-    private func trailing(tone: NotchIslandPalette.Tone) -> some View {
-        if row.state.needsYou {
-            Text(labels.review)
-                .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(NotchIslandPalette.surface)
-                .padding(.horizontal, 12)
-                .frame(height: 28)
-                .background(Capsule().fill(NotchIslandPalette.ink))
-        } else if row.state == .working {
-            NotchIslandSpinner(color: tone.ink, size: 16, reduceMotion: reduceMotion)
-                .padding(.trailing, 8)
-        } else {
-            Text(labels.open)
-                .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(NotchIslandPalette.ink)
-                .padding(.trailing, 8)
-        }
+        .buttonStyle(NotchIslandPressStyle())
+        .onHover { hovering = $0 }
     }
 }
 
+/// What the open island shows with no chats.
 @available(macOS 13.0, *)
-private struct NotchIslandPillButtonStyle: ButtonStyle {
+struct NotchIslandEmptyRow: View {
+    @ObservedObject var model: NotchIslandModel
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Text(model.labels.empty)
+                .font(.system(size: 13))
+                .foregroundStyle(NotchIslandPalette.muted)
+                .lineLimit(1)
+            Spacer(minLength: 8)
+            Button(model.labels.openApp) { model.onOpenApp() }
+                .buttonStyle(NotchIslandSecondaryButtonStyle())
+        }
+        .padding(.horizontal, 10)
+        .frame(height: NotchIslandGeometry.emptyHeight)
+    }
+}
+
+/// The app's small secondary button ("Review", "Turn on"): a faint fill and
+/// hairline, 8pt corners.
+@available(macOS 13.0, *)
+struct NotchIslandSecondaryButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(.system(size: 12, weight: .medium))
-            .foregroundStyle(NotchIslandPalette.surface)
-            .padding(.horizontal, 12)
-            .frame(height: 26)
-            .background(Capsule().fill(NotchIslandPalette.ink.opacity(configuration.isPressed ? 0.8 : 1)))
+            .notchIslandSecondaryButton(pressed: configuration.isPressed)
     }
 }
 
-/// The closed island's left ear: the leading state in a tinted circle.
 @available(macOS 13.0, *)
-private struct NotchIslandLeadBadge: View {
-    let lead: NotchIslandSnapshot.Lead
-    let reduceMotion: Bool
+extension View {
+    func notchIslandSecondaryButton(pressed: Bool = false) -> some View {
+        font(.system(size: 12, weight: .medium))
+            .foregroundStyle(NotchIslandPalette.ink)
+            .padding(.horizontal, 10)
+            .frame(height: 24)
+            .background(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(Color.white.opacity(pressed ? 0.11 : 0.07))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .strokeBorder(Color.white.opacity(0.08))
+                    )
+            )
+    }
+}
 
-    var body: some View {
-        if let tone = NotchIslandPalette.tone(lead) {
-            ZStack {
-                Circle().fill(tone.tint)
-                switch lead {
-                case .needsYou:
-                    Image(systemName: "exclamationmark")
-                        .font(.system(size: 10, weight: .bold))
-                        .foregroundStyle(tone.ink)
-                case .working:
-                    NotchIslandSpinner(color: tone.ink, size: 11, reduceMotion: reduceMotion)
-                case .finished:
-                    Image(systemName: "checkmark")
-                        .font(.system(size: 9, weight: .bold))
-                        .foregroundStyle(tone.ink)
-                case .failed:
-                    Image(systemName: "xmark")
-                        .font(.system(size: 9, weight: .bold))
-                        .foregroundStyle(tone.ink)
-                case .idle:
-                    EmptyView()
-                }
+/// Rows dim a touch while pressed, like the app's list items.
+@available(macOS 13.0, *)
+struct NotchIslandPressStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .opacity(configuration.isPressed ? 0.7 : 1)
+    }
+}
+
+/// Open content arrives in order, each block settling down from the notch.
+@available(macOS 13.0, *)
+private struct NotchIslandStagger: ViewModifier {
+    let index: Int
+    let reduceMotion: Bool
+    @State private var shown: Bool
+
+    init(index: Int, reduceMotion: Bool) {
+        self.index = index
+        self.reduceMotion = reduceMotion
+        _shown = State(initialValue: reduceMotion)
+    }
+
+    func body(content: Content) -> some View {
+        content
+            .opacity(shown ? 1 : 0)
+            .blur(radius: shown ? 0 : 3)
+            .offset(y: shown ? 0 : -5)
+            .onAppear {
+                guard !shown else { return }
+                withAnimation(NotchIslandMotion.stagger(index)) { shown = true }
             }
-            .frame(width: 20, height: 20)
-        }
     }
 }
 
 @available(macOS 13.0, *)
-private struct NotchIslandCountPill: View {
-    let count: Int
-    let tone: NotchIslandPalette.Tone
+extension View {
+    func notchStagger(_ index: Int, reduceMotion: Bool) -> some View {
+        modifier(NotchIslandStagger(index: index, reduceMotion: reduceMotion))
+    }
+}
 
-    var body: some View {
-        Text("\(count)")
-            .font(.system(size: 12, weight: .semibold).monospacedDigit())
-            .foregroundStyle(tone.ink)
-            .padding(.horizontal, 7)
-            .frame(minWidth: 20, minHeight: 20)
-            .background(Capsule().fill(tone.tint))
+/// Content that blurs while it fades, so it never pops in or out sharply.
+@available(macOS 13.0, *)
+private struct NotchBlurFade: ViewModifier {
+    let active: Bool
+
+    func body(content: Content) -> some View {
+        content.blur(radius: active ? 5 : 0).opacity(active ? 0 : 1)
     }
 }
 
 @available(macOS 13.0, *)
-private struct NotchIslandSpinner: View {
-    let color: Color
-    let size: CGFloat
-    let reduceMotion: Bool
-    @State private var spinning = false
-
-    var body: some View {
-        ZStack {
-            Circle().stroke(color.opacity(0.25), lineWidth: 2)
-            Circle()
-                .trim(from: 0, to: 0.28)
-                .stroke(color, style: StrokeStyle(lineWidth: 2, lineCap: .round))
-                .rotationEffect(.degrees(spinning ? 360 : 0))
-                .animation(
-                    reduceMotion ? nil : .linear(duration: 0.9).repeatForever(autoreverses: false),
-                    value: spinning
-                )
-        }
-        .frame(width: size, height: size)
-        .task(id: reduceMotion) { spinning = !reduceMotion }
+extension AnyTransition {
+    static var notchBlurFade: AnyTransition {
+        .modifier(active: NotchBlurFade(active: true), identity: NotchBlurFade(active: false))
     }
 }

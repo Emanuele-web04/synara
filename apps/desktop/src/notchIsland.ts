@@ -72,16 +72,15 @@ export const NOTCH_ISLAND_LABEL_KEYS = [
   "openApp",
   "needYou",
   "working",
-  "done",
-  "failed",
   "approval",
   "input",
   "plan",
   "stateWorking",
   "completed",
   "stateFailed",
-  "open",
   "review",
+  "needsYouTitle",
+  "readyForReview",
 ] as const;
 
 export type NotchIslandLabels = Readonly<Record<(typeof NOTCH_ISLAND_LABEL_KEYS)[number], string>>;
@@ -338,6 +337,8 @@ export class NotchIslandHost {
 export interface NotchIslandController {
   getState(): DesktopNotchIslandState;
   setEnabled(enabled: boolean): DesktopNotchIslandState;
+  /** The account's Synara Alto access, as the app last reported it. Not persisted. */
+  setEntitled(entitled: boolean): DesktopNotchIslandState;
   /** Re-sends the island text after the UI language changed. */
   refreshLabels(): void;
   /** Ignored where the island is unsupported. */
@@ -358,12 +359,15 @@ export function createNotchIslandController(input: {
   readonly onError?: (error: unknown) => void;
 }): NotchIslandController {
   let preference = input.supported ? input.load() : { version: 1 as const, enabled: false };
+  // Off until the app confirms Synara Alto access for the signed-in account.
+  let entitled = false;
 
   const state = (): DesktopNotchIslandState => ({
     supported: input.supported,
     enabled: input.supported && preference.enabled,
+    entitled: input.supported && entitled,
   });
-  const reconcile = () => input.host.setWanted(input.supported && preference.enabled);
+  const reconcile = () => input.host.setWanted(input.supported && preference.enabled && entitled);
 
   reconcile();
 
@@ -380,6 +384,12 @@ export function createNotchIslandController(input: {
           input.onError?.(error);
         }
       }
+      reconcile();
+      return state();
+    },
+    setEntitled: (next) => {
+      if (!input.supported) return state();
+      entitled = next;
       reconcile();
       return state();
     },

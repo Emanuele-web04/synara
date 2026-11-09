@@ -165,14 +165,13 @@
   "notchIsland_openApp": "Abrir {{app}}",
   "notchIsland_needYou": "te necesitan",
   "notchIsland_working": "en curso",
-  "notchIsland_done": "listos",
-  "notchIsland_failed": "fallidos",
   "notchIsland_approval": "Aprobación pendiente",
   "notchIsland_input": "Esperando respuesta",
   "notchIsland_plan": "Plan listo",
   "notchIsland_stateWorking": "En curso",
   "notchIsland_completed": "Completado",
   "notchIsland_stateFailed": "Fallido",
-  "notchIsland_open": "Abrir",
-  "notchIsland_review": "Revisar"
+  "notchIsland_review": "Revisar",
+  "notchIsland_needsYouTitle": "Te necesita",
+  "notchIsland_readyForReview": "Listo para revisar"
 }

@@ -37,6 +37,18 @@ enum NotchIslandPresence: Equatable {
     case expanded
 }
 
+/// What the open island's height depends on: its chat rows and the section
+/// labels they sit under.
+struct NotchIslandListShape: Equatable {
+    var rows: Int
+    /// Distinct state groups among the rows, one label each.
+    var sections: Int
+
+    static let empty = NotchIslandListShape(rows: 0, sections: 0)
+    /// The tallest list the island ever shows.
+    static let tallest = NotchIslandListShape(rows: 4, sections: 4)
+}
+
 struct NotchIslandPlacement: Equatable {
     let kind: NotchIslandPlacementKind
     /// Index into the screen list the placement was chosen from.
@@ -53,17 +65,23 @@ enum NotchIslandGeometry {
     /// Room either side of the notch for the closed island's icon and count.
     static let earWidth: CGFloat = 40
     static let expandedWidth: CGFloat = 440
-    /// Open island layout (points): counters, then up to `maxRows` chat rows.
+    /// Open island layout (points), like the sidebar: rows of a title over a
+    /// muted meta line, grouped under muted section labels.
     static let maxRows = 4
-    static let sectionSpacing: CGFloat = 10
-    static let countersHeight: CGFloat = 46
-    static let rowHeight: CGFloat = 48
-    static let rowSpacing: CGFloat = 4
-    static let emptyHeight: CGFloat = 32
+    static let contentInset: CGFloat = 12
+    static let contentTop: CGFloat = 4
     static let bottomPadding: CGFloat = 12
+    static let emptyHeight: CGFloat = 44
+    static let rowHeight: CGFloat = 46
+    static let sectionLabelHeight: CGFloat = 26
+    /// Outline radii. The ears flare outward past the body into the bezel.
+    static let closedEarRadius: CGFloat = 6
+    static let closedBottomRadius: CGFloat = 14
+    static let openEarRadius: CGFloat = 18
+    static let openBottomRadius: CGFloat = 30
     /// Spare room around the island inside the panel so spring overshoot and
     /// the shadow never clip against the window edge.
-    static let panelMargin: CGFloat = 24
+    static let panelMargin: CGFloat = 32
 
     /// The hardware notch on this display, or nil when it has none.
     static func notchRect(for screen: NotchIslandScreenMetrics) -> CGRect? {
@@ -121,7 +139,7 @@ enum NotchIslandGeometry {
     /// island. Its top edge is the top of the screen.
     static func panelFrame(for placement: NotchIslandPlacement) -> CGRect {
         let width = max(expandedWidth, placement.notch.width + earWidth * 2) + panelMargin * 2
-        let height = placement.notch.height + expandedContentHeight(rows: maxRows) + panelMargin
+        let height = placement.notch.height + expandedContentHeight(list: .tallest) + panelMargin
         return CGRect(
             x: (placement.notch.midX - width / 2).rounded(),
             y: placement.screenFrame.maxY - height,
@@ -142,16 +160,20 @@ enum NotchIslandGeometry {
         return kind == .notch ? .resting : .hidden
     }
 
-    /// Height below the notch row of the open island for this many chat rows.
-    static func expandedContentHeight(rows: Int) -> CGFloat {
-        let count = max(0, min(rows, maxRows))
-        let list = count == 0
+    /// Height below the notch row of the open island for this list.
+    static func expandedContentHeight(list: NotchIslandListShape) -> CGFloat {
+        let rows = max(0, min(list.rows, maxRows))
+        let body = rows == 0
             ? emptyHeight
-            : CGFloat(count) * rowHeight + CGFloat(count - 1) * rowSpacing
-        return sectionSpacing + countersHeight + sectionSpacing + list + bottomPadding
+            : CGFloat(max(1, min(list.sections, rows))) * sectionLabelHeight + CGFloat(rows) * rowHeight
+        return contentTop + body + bottomPadding
     }
 
-    static func islandSize(for presence: NotchIslandPresence, notch: CGSize, rows: Int) -> CGSize {
+    static func islandSize(
+        for presence: NotchIslandPresence,
+        notch: CGSize,
+        list: NotchIslandListShape
+    ) -> CGSize {
         switch presence {
         case .hidden, .resting:
             return notch
@@ -160,7 +182,7 @@ enum NotchIslandGeometry {
         case .expanded:
             return CGSize(
                 width: max(expandedWidth, notch.width + earWidth * 2),
-                height: notch.height + expandedContentHeight(rows: rows)
+                height: notch.height + expandedContentHeight(list: list)
             )
         }
     }
