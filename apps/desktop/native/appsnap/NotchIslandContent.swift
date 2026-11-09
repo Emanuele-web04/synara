@@ -7,18 +7,22 @@ import SwiftUI
 
 // MARK: - Closed ears
 
-/// The closed island's ears: the leading chat's provider glyph on the left,
-/// its status glyph and the count on the right.
+/// The closed island's ears: the Synara mark on the left, the leading
+/// status glyph and the count on the right.
 @available(macOS 13.0, *)
 struct NotchIslandClosedEars: View {
     @ObservedObject var model: NotchIslandModel
 
     var body: some View {
         let snapshot = model.snapshot
-        let lead = snapshot.rows.first
         HStack(spacing: 0) {
-            if let lead {
-                NotchIslandGlyph(icon: model.icon(for: lead), size: 15)
+            if let logo = NotchIslandBrand.logo {
+                Image(nsImage: logo)
+                    .renderingMode(.template)
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+                    .frame(height: 13)
+                    .foregroundStyle(NotchIslandPalette.ink)
                     .frame(width: NotchIslandGeometry.earWidth - 8)
             }
             Spacer(minLength: 0)
