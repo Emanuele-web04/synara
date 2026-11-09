@@ -185,9 +185,13 @@ complete real login, private-profile, public-profile and revocation checks.
 Then run **Deploy Profiles** with the verified API origin above.
 
 During provisioning, install the same `PROFILE_PROXY_SECRET` for both Workers'
-per-visitor public-profile rate limits. Direct/manual deployments may omit it, but then
-profile reads share upstream per-IP rate limits. Neither workflow invents a
-public user profile. Follow the [operator checklist](../../../docs/implementation/cloudflare-profiles/SETUP-IT.md)
+per-visitor public-profile rate limits. The separate **Deploy Profiles** workflow
+reads its own `CLOUDFLARE_API_TOKEN` and `SYNARA_PROFILE_PROXY_SECRET` from
+repository or organization secrets. Use a deployment token scoped to Profiles
+there and keep the Account API token in `account-api-production`.
+Direct/manual deployments may omit the proxy secret, in which case profile
+reads share upstream per-IP rate limits. Follow the
+[operator checklist](../../../docs/implementation/cloudflare-profiles/SETUP-IT.md)
 to configure, deploy and test the whole trial.
 
 ## Verification limits

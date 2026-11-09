@@ -134,9 +134,11 @@ Quando il workflow è disponibile in Actions:
    Devono rispondere con JSON valido. Questo prova che il processo è avviato;
    non prova ancora WorkOS o il ciclo completo dei profili.
 
-3. Esegui **Deploy Profiles**, indicando come `account_api_url`:
-   `https://synara-account-api-trial.synara-orgs.workers.dev`.
-   Non aggiungere `/api/v1`. I workflow configurano lo stesso proxy secret.
+3. Esegui **Deploy Profiles** con
+   `https://synara-account-api-trial.synara-orgs.workers.dev` come `account_api_url`.
+   Questo workflow legge `CLOUDFLARE_API_TOKEN` e `SYNARA_PROFILE_PROXY_SECRET`
+   dai segreti del repository o dell’organizzazione. Usa lì un token dedicato ai
+   profili e lo stesso proxy secret già configurato sul Worker API.
 
 L'indirizzo delle pagine pubblicate è:
 `https://synara-profiles-trial.synara-orgs.workers.dev/@nome`.
