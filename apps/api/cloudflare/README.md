@@ -160,7 +160,11 @@ it runs API tests, builds the Linux image and boots it against disposable
 PostgreSQL. The smoke check reads a missing profile through the real API. Its
 placeholder WorkOS configuration does not verify real login.
 
-For publication, configure these repository secrets and run with `deploy` checked:
+For an existing deployment, configure `CLOUDFLARE_API_TOKEN` and run with
+`deploy` checked. Wrangler retains runtime variables configured in the
+dashboard, including Polar settings. The workflow leaves existing credentials
+in place by default. For initial provisioning or a planned update to the base
+credentials, also check `bootstrap_secrets` and supply the matching values:
 
 | GitHub secret                 | Destination                          |
 | ----------------------------- | ------------------------------------ |
@@ -177,8 +181,8 @@ revision that was verified. After provisioning, confirm API readiness and
 complete real login, private-profile, public-profile and revocation checks.
 Then run **Deploy Profiles** with the verified API origin above.
 
-The two workflows install the same `PROFILE_PROXY_SECRET` for per-visitor
-public-profile rate limits. Direct/manual deployments may omit it, but then
+During provisioning, install the same `PROFILE_PROXY_SECRET` for both Workers'
+per-visitor public-profile rate limits. Direct/manual deployments may omit it, but then
 profile reads share upstream per-IP rate limits. Neither workflow invents a
 public user profile. Follow the [operator checklist](../../../docs/implementation/cloudflare-profiles/SETUP-IT.md)
 to configure, deploy and test the whole trial.

@@ -14,7 +14,11 @@ on:
   workflow_dispatch:
     inputs:
       deploy:
-        description: Publish the verified trial to the Synara Orgs Cloudflare account
+        description: Publish the verified Account API to Synara Orgs
+        type: boolean
+        default: false
+      bootstrap_secrets:
+        description: Provision base Worker secrets from GitHub for initial setup or credential changes
         type: boolean
         default: false
 
@@ -90,6 +94,12 @@ jobs:
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
       WRANGLER_SEND_METRICS: false
     steps:
+      - name: Check Cloudflare deployment credential
+        run: |
+          if [ -z "$CLOUDFLARE_API_TOKEN" ]; then
+            echo 'Missing deployment secret: CLOUDFLARE_API_TOKEN' >&2
+            exit 1
+          fi
       - uses: actions/checkout@v6
       - uses: oven-sh/setup-bun@v2
         with:
@@ -99,6 +109,7 @@ jobs:
           node-version-file: package.json
       - run: bun install --frozen-lockfile
       - name: Configure account API secrets
+        if: inputs.bootstrap_secrets
         working-directory: apps/api
         env:
           DATABASE_URL: ${{ secrets.SYNARA_API_DATABASE_URL }}
@@ -107,7 +118,7 @@ jobs:
           API_SIGNING_KEY: ${{ secrets.SYNARA_API_SIGNING_KEY }}
           PROFILE_PROXY_SECRET: ${{ secrets.SYNARA_PROFILE_PROXY_SECRET }}
         run: |
-          node -e 'for (const k of ["CLOUDFLARE_API_TOKEN", "DATABASE_URL", "WORKOS_API_KEY", "WORKOS_CLIENT_ID", "API_SIGNING_KEY", "PROFILE_PROXY_SECRET"]) if (!process.env[k]) throw new Error(`Missing deployment secret: ${k}`)'
+          node -e 'for (const k of ["DATABASE_URL", "WORKOS_API_KEY", "WORKOS_CLIENT_ID", "API_SIGNING_KEY", "PROFILE_PROXY_SECRET"]) if (!process.env[k]) throw new Error(`Missing deployment secret: ${k}`)'
           node -e 'process.stdout.write(JSON.stringify(Object.fromEntries(["DATABASE_URL", "WORKOS_API_KEY", "WORKOS_CLIENT_ID", "API_SIGNING_KEY", "PROFILE_PROXY_SECRET"].map(k => [k, process.env[k]]))))' | bunx wrangler secret bulk
       - name: Deploy Worker and container
         run: bun run --cwd apps/api cf:deploy
