@@ -54,7 +54,7 @@ If we have to guess what changed, we are much less likely to review it.
 
 ## License and CLA
 
-Synara is licensed under [AGPL-3.0-only](./LICENSE), and commercial licenses are also sold for it. Before we can merge your first pull request, you need to sign the [Contributor License Agreement](./CLA.md). You keep the copyright in your work. The agreement lets Synara ship your contribution under both the AGPL and the commercial license.
+Synara is licensed under [AGPL-3.0-only](./LICENSE). Commercial licenses are planned but not available yet. Before we can merge your first pull request, you need to sign the [Contributor License Agreement](./CLA.md). You keep the copyright in your work. The agreement lets Synara ship your contribution under the AGPL and under any commercial license offered later.
 
 ## Issues First
 

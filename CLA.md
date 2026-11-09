@@ -21,8 +21,8 @@ display, publicly perform, sublicense, and distribute Your Contributions and
 derivative works of them.
 
 This includes the right to license Your Contributions under any terms, open
-source or proprietary, including the GNU Affero General Public License and
-commercial licenses sold by the Maintainer.
+source or proprietary, including the GNU Affero General Public License and any
+commercial licenses the Maintainer offers now or in the future.
 
 ## 3. Patent license
 

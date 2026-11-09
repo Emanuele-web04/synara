@@ -160,6 +160,6 @@ Read [CONTRIBUTING.md](./CONTRIBUTING.md) before opening a pull request. For a r
 
 ## License
 
-Synara is licensed under the [GNU Affero General Public License v3.0](./LICENSE) (AGPL-3.0-only). Commercial licenses without the AGPL obligations are available for teams and companies.
+Synara is licensed under the [GNU Affero General Public License v3.0](./LICENSE) (AGPL-3.0-only). Commercial licenses without the AGPL obligations are planned for teams and companies. Pricing and availability are not yet defined.
 
 Versions up to and including 1.0.6 were released under the MIT License, and code from them keeps that license. See [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md).
