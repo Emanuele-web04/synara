@@ -160,13 +160,14 @@ it runs API tests, builds the Linux image and boots it against disposable
 PostgreSQL. The smoke check reads a missing profile through the real API. Its
 placeholder WorkOS configuration does not verify real login.
 
-For an existing deployment, configure `CLOUDFLARE_API_TOKEN` and run with
+Restrict the GitHub environment `account-api-production` to `main` and store
+`CLOUDFLARE_API_TOKEN` in that environment. Run the workflow from `main` with
 `deploy` checked. Wrangler retains runtime variables configured in the
 dashboard and absent from `wrangler.jsonc`, including Polar settings. Check
 that the account and API origins declared in that file match the live Worker.
 The workflow leaves existing credentials in place by default. For initial
 provisioning or a planned update to the base credentials, also check
-`bootstrap_secrets` and supply the matching values:
+`bootstrap_secrets` and supply the matching values in the GitHub environment.
 
 | GitHub secret                 | Destination                          |
 | ----------------------------- | ------------------------------------ |

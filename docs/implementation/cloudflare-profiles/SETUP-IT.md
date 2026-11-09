@@ -86,8 +86,10 @@ lettura delle impostazioni account. Il modello per modificare Workers è un
 punto di partenza; includi il permesso **Containers Edit/Write**. L’accesso MCP ora consente le modifiche concordate, ma non fornisce
 automaticamente una credenziale al workflow GitHub o a Wrangler.
 
-Nel repository GitHub apri **Settings → Secrets and variables → Actions →
-New repository secret** e configura:
+Nel repository GitHub apri **Settings → Environments → account-api-production**.
+Limita i deploy a `main` e salva il token del Worker API tra i segreti di
+quell’ambiente. Il deploy ordinario usa solo `CLOUDFLARE_API_TOKEN`. Per il
+primo provisioning dell’API, configura anche i segreti di base elencati qui.
 
 | Nome                          | Valore                                                        |
 | ----------------------------- | ------------------------------------------------------------- |
@@ -116,8 +118,9 @@ creare un ulteriore secret `CLOUDFLARE_ACCOUNT_ID` per questi workflow.
 
 Quando il workflow è disponibile in Actions:
 
-1. Esegui **Verify and deploy account API to Cloudflare**, con `deploy` attivo,
-   sulla revisione verificata. Attiva anche `bootstrap_secrets` per il primo
+1. Limita l’ambiente GitHub `account-api-production` al branch `main` e salva
+   lì `CLOUDFLARE_API_TOKEN`. Esegui **Verify and deploy account API to Cloudflare**
+   da `main` con `deploy` attivo. Attiva anche `bootstrap_secrets` per il primo
    provisioning del Worker o per un aggiornamento pianificato delle credenziali
    di base. Il job di pubblicazione parte dopo i test e la prova del container.
    Attendi che Cloudflare completi il provisioning.
