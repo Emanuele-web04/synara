@@ -1,6 +1,7 @@
 # Synara agent instructions
 
 Synara is a multi-provider coding-agent workspace with web, server, CLI, and desktop surfaces. Prioritize correctness, reliability, and predictable performance during streaming, reconnects, cancellation, and recovery. Do not treat the project as a disposable early prototype or use this file as permission for unrelated rewrites.
+This project is open source, so take extra care with the code and configuration you ship. Keep secrets and private data out of commits and release artifacts.
 
 ## Contracts and ownership
 
