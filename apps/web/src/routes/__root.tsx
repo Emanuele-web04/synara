@@ -709,6 +709,7 @@ async function runProviderUpdateAll(params: {
         manualCommands.length > 0
           ? t("common:copyTheCommandsBelowToUpdateManuallyInA", {
               failures: failureLines,
+              count: manualCommands.length,
             })
           : failureLines,
       data: {

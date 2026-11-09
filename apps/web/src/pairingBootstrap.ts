@@ -1,7 +1,6 @@
 // FILE: pairingBootstrap.ts
 // Purpose: Exchanges one-time remote pairing links before the application opens a WebSocket.
-import { setLanguagePreference, t } from "~/i18n";
-import { readLanguagePreference } from "~/i18n/locale";
+import { t } from "~/i18n";
 
 const PAIRING_PATH = "/pair";
 
@@ -26,7 +25,6 @@ interface PairingBootstrapDependencies {
 export type PairingBootstrapResult = "not-pairing" | "redirecting" | "failed";
 
 function renderPairingFailure(): void {
-  setLanguagePreference(readLanguagePreference());
   const root = document.getElementById("root");
   if (!root) return;
 

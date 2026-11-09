@@ -27,7 +27,7 @@ describe("isBetaFeatureEnabled", () => {
     },
   );
 
-  it.each(["accountInbox", "chinese-ui"])("keeps %s restricted to non-Stable builds", (feature) => {
+  it.each(["accountInbox"])("keeps %s restricted to non-Stable builds", (feature) => {
     expect(isBetaFeatureEnabled(feature, "production")).toBe(false);
     expect(isBetaFeatureEnabled(feature, "beta")).toBe(true);
   });

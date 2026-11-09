@@ -5,7 +5,7 @@ import type {
   ExternalMcpStdioConfiguration,
 } from "@synara/contracts";
 
-import { t, getFormatLocale } from "~/i18n";
+import { t } from "~/i18n";
 
 // `synara` is reserved by the Codex provider for Synara's managed, in-process
 // HTTP gateway. External clients run a separate stdio server, so they must use
@@ -191,13 +191,10 @@ export function describeExternalMcpProjects(
     readonly allowedProjects: ReadonlyArray<{ readonly title: string }>;
   },
   translate: typeof t = t,
-  formatLocale = getFormatLocale(),
 ): string {
   if (input.projectScope === "all") return translate("settings:externalAllProjects");
   const titles = input.allowedProjects.map((project) => project.title);
-  return titles.length > 0
-    ? new Intl.ListFormat(formatLocale, { style: "long", type: "unit" }).format(titles)
-    : translate("settings:externalNoProjects");
+  return titles.length > 0 ? titles.join(", ") : translate("settings:externalNoProjects");
 }
 
 export function describeExternalMcpPermissions(
