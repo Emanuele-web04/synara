@@ -57,6 +57,8 @@ import {
 } from "../profile/profileFormatting";
 import { SettingsSegmentedControl } from "./SettingControls";
 import { profileShareUrl } from "~/lib/accountLogic";
+import { ACCOUNT_BILLING_ENABLED } from "~/lib/accountBilling";
+import { SynaraPlanLink } from "./BillingSettingsPanel";
 import { openExternalLink } from "~/lib/linkChips";
 import { ExternalLinkIcon } from "~/lib/icons";
 import { getFormatLocale, t, useTranslation } from "~/i18n";
@@ -156,6 +158,7 @@ function ProfileContent({
     avatarImage,
     ssoImage,
     accountProfile,
+    publicProfileAvailable,
     canEdit,
     save,
     uploadAvatarPhoto,
@@ -164,7 +167,7 @@ function ProfileContent({
     name: defaultName,
     handle: stats.identity.defaultHandle,
   });
-  const publicUrl = profileShareUrl(accountProfile);
+  const publicUrl = profileShareUrl(accountProfile, publicProfileAvailable);
 
   return (
     <div className="flex min-w-0 flex-col gap-7">
@@ -185,6 +188,7 @@ function ProfileContent({
           />
         ) : null}
         <div className="flex items-center gap-2">
+          {ACCOUNT_BILLING_ENABLED ? <SynaraPlanLink /> : null}
           {publicUrl ? (
             <Button variant="outline" size="sm" onClick={() => openExternalLink(publicUrl)}>
               <ExternalLinkIcon />
@@ -249,6 +253,7 @@ function ProfileContent({
           avatarColor={avatarColor}
           avatarImage={avatarImage}
           accountProfile={accountProfile}
+          publicProfileAvailable={publicProfileAvailable}
           open={shareOpen}
           onOpenChange={setShareOpen}
         />

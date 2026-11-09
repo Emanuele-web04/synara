@@ -1,6 +1,7 @@
 // The editable surface inside Synara: shared buffers, history, layout changes, and the native pickers.
 import "../../index.css";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { useAppTypography } from "../../hooks/useAppTypography";
 import { createRef, useState } from "react";
 import { page, userEvent } from "vitest/browser";
 import { afterEach, expect, it, vi } from "vitest";
@@ -27,6 +28,7 @@ function Harness({
   initialValue?: string | undefined;
   onHistoryChange?: ((history: CodeEditHistoryState) => void) | undefined;
 }) {
+  useAppTypography();
   const [value, setValue] = useState(initialValue);
   const [version, setVersion] = useState(0);
   const [split, setSplit] = useState(true);
@@ -112,6 +114,8 @@ async function ready() {
     )
     .toBe(true);
   const editor = activeEditor();
+  // Let the initial editor frame settle before focus or viewport interactions.
+  await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
   editor.focus();
   return editor;
 }
@@ -164,7 +168,13 @@ it.each(
         expect(tooltip()).toBe(original);
         const bounds = original.getBoundingClientRect();
         const target = button.getBoundingClientRect();
-        expect(bounds.bottom <= target.top || bounds.top >= target.bottom).toBe(true);
+        const separated = bounds.bottom <= target.top || bounds.top >= target.bottom;
+        expect(
+          separated,
+          separated
+            ? undefined
+            : `Tooltip overlaps trigger: ${JSON.stringify({ tooltip: bounds, trigger: target })}`,
+        ).toBe(true);
         // A DOM-visible tooltip can still be clipped by the editor or covered by its header.
         for (const [x, y] of [
           [bounds.left + 8, bounds.top + bounds.height / 2],

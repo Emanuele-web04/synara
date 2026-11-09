@@ -4,6 +4,10 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./hostUsage": {
+      "types": "./src/hostUsage.ts",
+      "import": "./src/hostUsage.ts"
+    },
     "./turnStopActivity": {
       "types": "./src/turnStopActivity.ts",
       "import": "./src/turnStopActivity.ts"
@@ -356,6 +360,10 @@
       "types": "./src/editorIcons.ts",
       "import": "./src/editorIcons.ts"
     },
+    "./usageAnalytics": {
+      "types": "./src/usageAnalytics.ts",
+      "import": "./src/usageAnalytics.ts"
+    },
     "./providerUsage": {
       "types": "./src/providerUsage.ts",
       "import": "./src/providerUsage.ts"
@@ -523,6 +531,10 @@
     "./nativeLocalizationResources": {
       "types": "./src/nativeLocalizationResources.ts",
       "import": "./src/nativeLocalizationResources.ts"
+    },
+    "./installerDownloads": {
+      "types": "./src/installerDownloads.ts",
+      "import": "./src/installerDownloads.ts"
     }
   },
   "scripts": {

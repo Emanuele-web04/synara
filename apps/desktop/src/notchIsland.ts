@@ -152,11 +152,6 @@ export class NotchIslandHost {
     this.#stopChild();
   }
 
-  /** Re-sends the labels, e.g. after the UI language changed. */
-  refreshLabels(): void {
-    this.#write(encodeNotchIslandLabelsCommand(this.#options.labels()));
-  }
-
   /**
    * What the island shows. Kept so a respawned helper gets it back; provider glyphs
    * are sent once per helper and only when a new one appears.
@@ -339,8 +334,6 @@ export interface NotchIslandController {
   setEnabled(enabled: boolean): DesktopNotchIslandState;
   /** The account's Synara Alto access, as the app last reported it. Not persisted. */
   setEntitled(entitled: boolean): DesktopNotchIslandState;
-  /** Re-sends the island text after the UI language changed. */
-  refreshLabels(): void;
   /** Ignored where the island is unsupported. */
   setSnapshot(snapshot: DesktopNotchIslandSnapshot): void;
   dispose(): void;
@@ -353,7 +346,7 @@ export interface NotchIslandController {
  */
 export function createNotchIslandController(input: {
   readonly supported: boolean;
-  readonly host: Pick<NotchIslandHost, "setWanted" | "refreshLabels" | "setSnapshot" | "dispose">;
+  readonly host: Pick<NotchIslandHost, "setWanted" | "setSnapshot" | "dispose">;
   readonly load: () => PersistedNotchIslandPreference;
   readonly save: (preference: PersistedNotchIslandPreference) => void;
   readonly onError?: (error: unknown) => void;
@@ -393,7 +386,6 @@ export function createNotchIslandController(input: {
       reconcile();
       return state();
     },
-    refreshLabels: () => input.host.refreshLabels(),
     setSnapshot: (snapshot) => {
       if (input.supported) input.host.setSnapshot(snapshot);
     },

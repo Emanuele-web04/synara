@@ -177,17 +177,13 @@ function OnboardingFlow(props: {
 
   const providerNames = VISIBLE_PROVIDER_DESCRIPTORS.slice(0, 3).map((d) => d.displayName);
   const moreProviders = VISIBLE_PROVIDER_DESCRIPTORS.length - providerNames.length;
-  const agentList = new Intl.ListFormat(formatLocale, { type: "conjunction" }).format(
+  const agentList =
     moreProviders > 0
-      ? [
-          ...providerNames,
-          t("onboarding:welcomeMoreAgents", {
-            count: moreProviders,
-            amount: numberWord(t, moreProviders, formatLocale),
-          }),
-        ]
-      : providerNames,
-  );
+      ? `${providerNames.join(", ")} and ${t("onboarding:welcomeMoreAgents", {
+          count: moreProviders,
+          amount: numberWord(t, moreProviders, formatLocale),
+        })}`
+      : providerNames.join(", ");
   const readyAgents = providerSummary.connected;
 
   const screen = (() => {

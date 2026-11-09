@@ -95,3 +95,73 @@ index 429dc05..7e53848 100644
        warnings?: CookieSyncWarning[];
        profileMode?: "persistent" | "ephemeral";
      }
+diff --git a/package.json b/package.json
+--- a/package.json
++++ b/package.json
+@@ -8,6 +8,11 @@
+   "main": "dist/src/index.js",
+   "types": "types/index.d.ts",
+   "exports": {
++    "./guard-proxy": {
++      "types": "./types/guard-proxy.d.ts",
++      "import": "./dist/src/guard-proxy.js",
++      "default": "./dist/src/guard-proxy.js"
++    },
+     "./capture": {
+       "types": "./types/capture.d.ts",
+       "import": "./dist/src/vault-capture.js",
+diff --git a/types/guard-proxy.d.ts b/types/guard-proxy.d.ts
+new file mode 100644
+--- /dev/null
++++ b/types/guard-proxy.d.ts
+@@ -0,0 +1,14 @@
++// Host-owned browser sessions can keep guarded sockets alive across worker leases.
++import type { NetworkDecision, NetworkRequestDetails } from "./policy.js";
++
++export function createGuardProxy(options: {
++  guardUrl: (
++    url: string,
++    details: NetworkRequestDetails,
++    executeId: string,
++  ) => Promise<NetworkDecision>;
++  executeId: () => string;
++}): {
++  ensure(): Promise<number>;
++  close(): Promise<void>;
++};
+diff --git a/types/common.d.ts b/types/common.d.ts
+--- a/types/common.d.ts
++++ b/types/common.d.ts
+@@ -66,5 +66,7 @@
+ export interface FailedRunResult extends ResultEnvelopeBase {
+   ok: false;
++  /** Trusted worker receipt: the snippet settled without requiring worker restart. */
++  executionSettled?: boolean;
+   error: string;
+   errorCode?: string;
+   /** Cancellation cannot undo effects already committed by the page. */
+diff --git a/dist/src/worker.js b/dist/src/worker.js
+--- a/dist/src/worker.js
++++ b/dist/src/worker.js
+@@ -6940,4 +6940,5 @@ async function execute(message) {
+     const firstEvent = session.events.length;
+     const firstArtifact = session.artifacts.length;
+     let restartWorker = false;
++    let executionSettled = false;
+     let downloadRunConfigured = false;
+@@ -7010,2 +7011,8 @@ async function execute(message) {
+-        const scriptOutcome = Promise.resolve(promise).then((result) => ({ ok: true, result }), (error) => ({ ok: false, error }));
++        const scriptOutcome = Promise.resolve(promise).then((result) => {
++            executionSettled = true;
++            return { ok: true, result };
++        }, (error) => {
++            executionSettled = true;
++            return { ok: false, error };
++        });
+         const executionOutcome = scriptOutcome.then(async (outcome) => {
+@@ -7132,4 +7139,5 @@ async function execute(message) {
+             challenges,
+             ok: false,
++            executionSettled: executionSettled && !restartWorker,
+             error: redactText(failure?.message || String(failure)),
+             restartWorker,

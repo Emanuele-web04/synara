@@ -132,7 +132,6 @@ const productAnalyticsBridge: DesktopBridge["productAnalytics"] = {
   getState: () => ipcRenderer.invoke(IPC.productAnalytics.getState),
   setEnabled: (enabled) => ipcRenderer.invoke(IPC.productAnalytics.setEnabled, enabled),
   track: (input: ProductAnalyticsInput) => ipcRenderer.send(IPC.productAnalytics.track, input),
-  setAccount: (userId) => ipcRenderer.send(IPC.productAnalytics.setAccount, userId),
 };
 let lastBrowserResize = -Infinity;
 function recordBrowserActivity(activity: DesktopDiagnosticActivity): void {
@@ -155,7 +154,6 @@ contextBridge.exposeInMainWorld("desktopBridge", {
   getWsUrl: getDesktopWsUrl,
   remoteResourceUrl: (hostId, reference) =>
     ipcRenderer.sendSync(IPC.remoteResourceUrl, hostId, reference),
-  getSystemLanguages: () => ipcRenderer.sendSync(IPC.getSystemLanguages),
   // Absolute path for OS-dropped File objects (folders with spaces/parens, etc.).
   getPathForFile: (file: File) => {
     try {
@@ -169,7 +167,6 @@ contextBridge.exposeInMainWorld("desktopBridge", {
   saveFile: (input) => ipcRenderer.invoke(IPC.saveFile, input),
   confirm: (message) => ipcRenderer.invoke(IPC.confirm, message),
   setTheme: (theme) => ipcRenderer.invoke(IPC.setTheme, theme),
-  setLanguagePreference: (preference) => ipcRenderer.invoke(IPC.setLanguagePreference, preference),
   setWindowMaterial: (input) => ipcRenderer.invoke(IPC.setWindowMaterial, input),
   ...(windowTranslucency ? { windowTranslucency } : {}),
   getAppIcon: () => ipcRenderer.invoke(IPC.getAppIcon),

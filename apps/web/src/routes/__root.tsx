@@ -177,7 +177,6 @@ import {
 import { useDiffRouteSearch } from "../hooks/useDiffRouteSearch";
 import { useComputerEventBridge } from "../hooks/useComputerEventBridge";
 import { useDeviceEventBridge } from "../hooks/useDeviceEventBridge";
-import { useProductAnalyticsAccount } from "../hooks/useProductAnalyticsAccount";
 import {
   PROVIDER_AUTH_REFRESH_MIN_INTERVAL_MS,
   useProviderAuthRefreshOnFocus,
@@ -712,6 +711,7 @@ async function runProviderUpdateAll(params: {
         manualCommands.length > 0
           ? t("common:copyTheCommandsBelowToUpdateManuallyInA", {
               failures: failureLines,
+              count: manualCommands.length,
             })
           : failureLines,
       data: {
@@ -1289,7 +1289,6 @@ function EventRouter() {
 
   useDeviceEventBridge();
   useComputerEventBridge();
-  useProductAnalyticsAccount();
   const syncServerShellSnapshot = useStore((store) => store.syncServerShellSnapshot);
   const syncServerThreadDetailHotPath = useStore((store) => store.syncServerThreadDetailHotPath);
   const applyShellEvent = useStore((store) => store.applyShellEvent);

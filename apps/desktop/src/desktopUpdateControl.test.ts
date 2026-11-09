@@ -4,12 +4,23 @@ import { EventEmitter } from "node:events";
 import type { ChildProcess } from "node:child_process";
 
 import type { DesktopUpdateState, ServerDesktopUpdateResult } from "@synara/contracts";
+import type { SynaraPackagedDesktopFlavor } from "@synara/shared/desktopIdentity";
 import { describe, expect, it, vi } from "vitest";
 
 import { attachDesktopUpdateControl } from "./desktopUpdateControl";
 import { createInitialDesktopUpdateState } from "./updateMachine";
 
-function fixture() {
+function fixture(
+  options: {
+    flavor?: SynaraPackagedDesktopFlavor;
+    isPackaged?: boolean;
+    platform?: NodeJS.Platform;
+    updaterConfigured?: boolean;
+  } = {},
+) {
+  const flavor = options.flavor ?? "remote";
+  const suffix = flavor === "production" ? "" : `-${flavor}.1`;
+  const version = `1.0.1${suffix}`;
   const child = new EventEmitter() as EventEmitter & {
     connected: boolean;
     send: (message: unknown, callback: (error: Error | null) => void) => void;
@@ -25,22 +36,24 @@ function fixture() {
   let installBlockedReason: string | null = null;
   let state: DesktopUpdateState = {
     ...createInitialDesktopUpdateState(
-      "1.0.0-remote.1",
+      `1.0.0${suffix}`,
       {
         hostArch: "arm64",
         appArch: "arm64",
         runningUnderArm64Translation: false,
       },
-      "remote",
+      flavor,
     ),
     enabled: true,
     status: "downloaded",
-    downloadedVersion: "1.0.1-remote.1",
+    downloadedVersion: version,
   };
   const install = vi.fn(async () => undefined);
   attachDesktopUpdateControl(child as unknown as ChildProcess, {
+    isPackaged: options.isPackaged ?? true,
+    platform: options.platform ?? "darwin",
     isCurrentChild: () => current,
-    supported: () => true,
+    supported: () => options.updaterConfigured ?? true,
     getState: () => state,
     getInstallBlockedReason: () => installBlockedReason,
     check: async () => {},
@@ -54,7 +67,7 @@ function fixture() {
       id: String(++nextId),
       authority: "device-a",
       action: "install",
-      expectedVersion: "1.0.1-remote.1",
+      expectedVersion: version,
       ...input,
     });
     return responses.at(-1)?.result;
@@ -81,17 +94,40 @@ function fixture() {
 }
 
 describe("desktop updater control", () => {
-  it("requires receipt of the prepare token and flushes the commit reply before install", () => {
-    const f = fixture();
-    const prepared = f.request({});
-    expect(prepared?.restartToken).toBeTypeOf("string");
-    expect(f.install).not.toHaveBeenCalled();
-    f.callbacks.shift()?.();
-    f.request({ restartToken: prepared?.restartToken });
-    expect(f.install).not.toHaveBeenCalled();
-    f.callbacks.shift()?.();
-    expect(f.install).toHaveBeenCalledTimes(1);
-  });
+  it.each(["production", "beta", "remote"] as const)(
+    "confirms the %s update and flushes the commit reply before install",
+    (flavor) => {
+      const f = fixture({ flavor });
+      const prepared = f.request({});
+      expect(prepared?.accepted).toBe(true);
+      expect(prepared?.restartToken).toBeTypeOf("string");
+      expect(f.install).not.toHaveBeenCalled();
+      f.callbacks.shift()?.();
+      f.request({ restartToken: prepared?.restartToken });
+      expect(f.install).not.toHaveBeenCalled();
+      f.callbacks.shift()?.();
+      expect(f.install).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it.each([
+    { isPackaged: false },
+    { platform: "win32" as const },
+    { platform: "linux" as const },
+    { updaterConfigured: false },
+  ])(
+    "refuses checks, downloads and installation when the updater is unavailable: %j",
+    (options) => {
+      const f = fixture(options);
+      for (const action of ["status", "check", "download", "install"]) {
+        expect(f.request({ action })).toMatchObject({
+          accepted: false,
+          status: { supported: false, state: null },
+        });
+      }
+      expect(f.install).not.toHaveBeenCalled();
+    },
+  );
 
   it("binds confirmation to the same device and exact downloaded version", () => {
     const f = fixture();

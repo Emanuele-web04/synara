@@ -10,7 +10,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useCallback, useEffect, useState } from "react";
 
 import { isBetaFeatureOn } from "~/betaFeatures";
-import { isAccountBillingEnabled } from "~/lib/accountBilling";
+import { ACCOUNT_BILLING_ENABLED } from "~/lib/accountBilling";
 import { accountBillingQueryOptions } from "~/lib/accountReactQuery";
 import { isMacNavigatorPlatform } from "~/lib/utils";
 import { useAccount } from "./useAccount";
@@ -37,7 +37,7 @@ const ALTO_ACCESS_STALE_MS = 10 * 60_000;
  * is still loading. Desktop main keeps the island off until this reports true.
  */
 export function useNotchIslandAltoAccess(active: boolean): boolean | null {
-  const billingEnabled = isAccountBillingEnabled();
+  const billingEnabled = ACCOUNT_BILLING_ENABLED;
   const account = useAccount();
   const billingOptions = accountBillingQueryOptions(account.status);
   const billing = useQuery({

@@ -1,6 +1,7 @@
-import { BetterWright, NetworkPolicy, type CredentialVault } from "betterwright";
+import { BetterWright, type CredentialVault } from "betterwright";
 import { BrowserAutomationErrorMessages } from "@synara/contracts";
 import type { WebContents } from "electron";
+import { getBetterwrightNetworkGuard } from "./betterwrightNetworkGuard";
 import { synaraHostTarget } from "./betterwrightHostTarget";
 import type { BrowserAutomationVisibleRuntime } from "../browserManager";
 import { BrowserAutomationHostError } from "./hostErrors";
@@ -77,7 +78,7 @@ async function runConnectedBetterwright<T>(options: BetterwrightRunOptions): Pro
     void stop(true).catch(() => {});
   };
   options.signal.addEventListener("abort", onAbort, { once: true });
-  let succeeded = false;
+  let executionSettled = false;
   try {
     options.signal.throwIfAborted();
     browser = new BetterWright({
@@ -90,7 +91,7 @@ async function runConnectedBetterwright<T>(options: BetterwrightRunOptions): Pro
       headless: false,
       adBlock: false,
       parkBackgroundPages: false,
-      policy: new NetworkPolicy({ allowLoopback: true }),
+      policy: getBetterwrightNetworkGuard(options.contents.session).policy,
     });
     const result = await Promise.race([
       browser.run<T>(options.code, {
@@ -103,6 +104,9 @@ async function runConnectedBetterwright<T>(options: BetterwrightRunOptions): Pro
       aborting,
     ]);
     options.signal.throwIfAborted();
+    // Only the trusted worker envelope can acknowledge a settled failure. A
+    // script's returned value cannot relax timeout, cancellation, or transport cleanup.
+    executionSettled = result.ok || result.executionSettled === true;
     if (!result.ok) {
       // Only fixed host-owned guidance crosses the boundary, never worker error text.
       const credentialTarget =
@@ -124,11 +128,10 @@ async function runConnectedBetterwright<T>(options: BetterwrightRunOptions): Pro
         effectMayHaveCommitted: true,
       });
     }
-    succeeded = true;
     return result.result as T;
   } finally {
     if (onAbortRace) options.signal.removeEventListener("abort", onAbortRace);
     options.signal.removeEventListener("abort", onAbort);
-    await stop(!succeeded);
+    await stop(!executionSettled);
   }
 }

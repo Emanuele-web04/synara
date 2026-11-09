@@ -162,7 +162,12 @@ export interface UsageTurnBreakdown {
   interactionMode: string;
   runtimeMode: string;
   origin: string;
-  installs: number;
+  installs?: number;
+  inputTokens?: number | null;
+  outputTokens?: number | null;
+  inputSamples?: number;
+  outputSamples?: number;
+  cachedInputSamples?: number;
   turns: number;
   succeeded: number;
   failed: number;
@@ -170,7 +175,7 @@ export interface UsageTurnBreakdown {
   meanDurationMs: number | null;
   meanInputTokens: number | null;
   meanOutputTokens: number | null;
-  cachedInputTokens: number;
+  cachedInputTokens: number | null;
 }
 
 export interface UsageData {
@@ -202,13 +207,47 @@ export interface ProductFilters {
 }
 
 export interface ProductData {
+  /** Completed UTC-day host windows; separate from renderer observations and legacy samples. */
+  hostExecutions?: {
+    rows: UsageTurnBreakdown[];
+    coverage: {
+      reportWindows: number;
+      partialWindows: number;
+      eligibleTurns: number;
+      includedTurns: number;
+      missingCompletionTimes: number;
+      tokenTruncatedTurns: number;
+      cappedMeasurements: number;
+    };
+  };
   from: string;
   to: string;
   channel: string | null;
   surface: string | null;
+  cohorts?: {
+    from: string;
+    to: string;
+    newReportingInstallations: number;
+    week1: { entries: number; returned: number; ratePct: number | null };
+    month1: { entries: number; returned: number; ratePct: number | null };
+    rows: {
+      day: string;
+      entries: number;
+      week1Returns: number;
+      month1Returns: number;
+      week1Mature: boolean;
+      month1Mature: boolean;
+    }[];
+  };
   events: number;
   activeInstallations: number;
-  /** Rolling windows ending now; engaged installations sent a chat request. */
+  installerDownloads?: {
+    status: "available" | "awaiting_snapshot" | "unsupported_store";
+    observedAt: string | null;
+    total: number | null;
+    history: { from: string | null; to: string; total: number; downloads: number | null }[];
+  };
+  /** Installation-only rolling windows; engaged means a request attempt, including failures. */
   activeUsers?: {
     day: number;
     week: number;
@@ -216,11 +255,6 @@ export interface ProductData {
     engagedDay: number;
     engagedWeek: number;
     engagedMonth: number;
-    /** Signed-in people count once across devices; others count per installation. */
-    peopleDay?: number;
-    peopleWeek?: number;
-    peopleMonth?: number;
-    signedInMonth?: number;
   };
   platforms?: {
     surface: string;

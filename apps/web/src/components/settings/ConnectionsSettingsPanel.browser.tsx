@@ -450,7 +450,7 @@ describe("Connections settings", () => {
         await page.getByRole("button", { name: "View Alto plans" }).click();
         expect(fixture.navigate).toHaveBeenCalledWith({
           to: "/settings",
-          search: { section: "profile" },
+          search: { section: "usage", target: "settings-synara-plan" },
         });
         expect(CREATE_CALLS()).toHaveLength(0);
         await expect

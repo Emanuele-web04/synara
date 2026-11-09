@@ -13,6 +13,7 @@ import {
   type BillingCheckout,
 } from "./polar";
 import type { BillingProvider, BillingSnapshot } from "./polar";
+import type { StoredBillingAccess } from "./accessPolicy";
 
 export class BillingError extends Error {
   constructor(
@@ -217,6 +218,24 @@ export function createBillingService(options: { pool: pg.Pool; provider: Billing
           validUntil: current.valid_until?.toISOString() ?? null,
         };
       });
+    },
+    /**
+     * The stored entitlement as last reconciled, with no provider call and no
+     * row lock — for anonymous reads such as public profile pages. `null`
+     * when the account has no ledger row or is being deleted.
+     */
+    async storedAccess(userId: string): Promise<StoredBillingAccess | null> {
+      await initialize();
+      const { rows } = await pool.query<Pick<Row, "access_granted" | "valid_until" | "deleted_at">>(
+        "SELECT access_granted, valid_until, deleted_at FROM billing_accounts WHERE user_id=$1",
+        [userId],
+      );
+      const row = rows[0];
+      if (!row || row.deleted_at) return null;
+      return {
+        accessGranted: row.access_granted,
+        validUntil: row.valid_until?.toISOString() ?? null,
+      };
     },
     async checkout(
       userId: string,

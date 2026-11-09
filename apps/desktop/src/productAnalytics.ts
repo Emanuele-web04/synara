@@ -1,15 +1,34 @@
+// Installation-only product sender; legacy account linkage is scrubbed before replay.
+// Consent owns the queue, identity, and cancellation of active requests.
 import { createHash, randomUUID } from "node:crypto";
-import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import {
-  PRODUCT_ANALYTICS_ACCOUNT_HASH_PREFIX,
-  PRODUCT_ANALYTICS_COMMAND_PATTERN,
+  isProductAnalyticsCommand,
+  PRODUCT_COHORT_WINDOWS,
+  type ProductAnalyticsCohortStage,
   type ProductAnalyticsChannel,
   type ProductAnalyticsEnvelope,
   type ProductAnalyticsInput,
 } from "@synara/contracts";
 
+import { HostUsageRelay } from "./hostUsageRelay";
+
+type CohortState = { day: string; entryTs: string; completed: ProductAnalyticsCohortStage[] };
+
+// Stable retries identify only a stage of this random installation, never an account.
+function cohortEventId(installId: string, day: string, stage: ProductAnalyticsCohortStage): string {
+  const bytes = createHash("sha256")
+    .update(`synara-cohort-v1:${installId.toLowerCase()}:${day}:${stage}`)
+    .digest();
+  bytes[6] = (bytes[6]! & 15) | 128;
+  bytes[8] = (bytes[8]! & 63) | 128;
+  const hex = bytes.subarray(0, 16).toString("hex");
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
 const ENDPOINT = "https://synara-beta-diagnostics.synara-orgs.workers.dev/v1/product-events";
+const IDENTITY_VERSION = "2";
 const MAX_QUEUE = 500;
 const MAX_BATCH_EVENTS = 50;
 const MAX_BATCH_BYTES = 64 * 1024;
@@ -20,15 +39,6 @@ const MAX_BACKOFF_MS = 60_000;
 const MAX_COUNTER = 1_000_000_000_000;
 const MAX_DURATION_MS = 86_400_000;
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-const ACCOUNT_HASH_PATTERN = /^[0-9a-f]{32}$/;
-
-/** Counts one person across devices; the account id itself never leaves the app. */
-export function productAnalyticsAccountHash(userId: string): string {
-  return createHash("sha256")
-    .update(`${PRODUCT_ANALYTICS_ACCOUNT_HASH_PREFIX}${userId}`)
-    .digest("hex")
-    .slice(0, 32);
-}
 type ProductAnalyticsOptionalFields = {
   -readonly [Key in keyof Omit<
     ProductAnalyticsInput,
@@ -100,10 +110,15 @@ function platform(value: string): ProductAnalyticsEnvelope["platform"] {
  * `defaultEnabled` applies until the user makes a choice; an explicit opt-out persists.
  */
 export class ProductAnalytics {
+  private readonly hostUsage: HostUsageRelay;
   private readonly consentPath: string;
   private readonly installIdPath: string;
-  private readonly accountHashPath: string;
+  private readonly identityVersionPath: string;
+  private readonly legacyAccountHashPath: string;
   private readonly queuePath: string;
+  private readonly cohortPath: string;
+  private cohort: CohortState | null = null;
+  private cohortSupported = false;
   private readonly channel: ProductAnalyticsChannel;
   private readonly appVersion: string;
   private readonly platform: ProductAnalyticsEnvelope["platform"];
@@ -112,7 +127,6 @@ export class ProductAnalytics {
   private readonly listeners = new Set<(enabled: boolean) => void>();
   private consentNeedsPersistence = false;
   private installId: string | null = null;
-  private accountHash: string | null = null;
   private queue: ProductAnalyticsEnvelope[] = [];
   private timer: ReturnType<typeof setInterval> | null = null;
   private retryTimer: ReturnType<typeof setTimeout> | null = null;
@@ -132,21 +146,37 @@ export class ProductAnalytics {
     fetcher?: typeof fetch;
   }) {
     const dir = join(input.homeDir, "product-analytics");
+    this.hostUsage = new HostUsageRelay(input.homeDir, input.channel);
     this.consentPath = join(dir, "consent.json");
     this.installIdPath = join(dir, "install-id");
-    this.accountHashPath = join(dir, "account-hash");
+    this.identityVersionPath = join(dir, "identity-version");
+    this.legacyAccountHashPath = join(dir, "account-hash");
     this.queuePath = join(dir, "events.json");
+    this.cohortPath = join(dir, "cohort.json");
     this.channel = input.channel;
     this.appVersion = semver(input.appVersion);
     this.platform = platform(input.platform);
     this.fetcher = input.fetcher ?? fetch;
     this.defaultEnabled = input.defaultEnabled === true;
     this.enabled = this.readConsent();
+    // Older clients kept an account-derived hash independently of consent.
+    try {
+      rmSync(this.legacyAccountHashPath, { force: true });
+    } catch {
+      /* best effort */
+    }
     if (this.enabled) {
       try {
+        this.clearTemporaryData();
+        // A legacy UUID could still join older account-linked rows on an old receiver.
+        if (!this.hasCurrentIdentity()) {
+          this.clearPersistentDataStrict();
+          this.writeAtomic(this.identityVersionPath, `${IDENTITY_VERSION}\n`, true);
+        }
         this.installId = this.readOrCreateInstallId();
-        this.accountHash = this.readAccountHash();
         this.queue = this.readQueue();
+        this.cohort = this.readCohort();
+        this.hostUsage.enable();
       } catch {
         this.installId = null;
         this.queue = [];
@@ -172,6 +202,7 @@ export class ProductAnalytics {
   /** One app.active per UTC day while the app runs, so long sessions count every day. */
   private trackActiveDay(): void {
     if (!this.enabled) return;
+    this.queueCohortStage();
     const day = new Date().toISOString().slice(0, 10);
     if (day === this.activeDay) return;
     this.activeDay = day;
@@ -204,6 +235,8 @@ export class ProductAnalytics {
     if (value === this.enabled && !(value === false && this.consentNeedsPersistence))
       return this.getState();
     this.epoch += 1;
+    this.cohort = null;
+    this.cohortSupported = false;
     if (!value) {
       const wasEnabled = this.enabled;
       this.enabled = false;
@@ -215,7 +248,10 @@ export class ProductAnalytics {
         this.retryTimer = null;
         this.queue = [];
         this.installId = null;
+        this.activeDay = null;
       }
+      // Companion collection must stop even if disk cleanup or consent persistence fails.
+      this.notify();
       let cleanupError: unknown;
       try {
         this.clearPersistentDataStrict();
@@ -232,12 +268,13 @@ export class ProductAnalytics {
     } else {
       if (this.consentNeedsPersistence) this.persistConsent();
       this.clearPersistentDataStrict();
+      this.writeAtomic(this.identityVersionPath, `${IDENTITY_VERSION}\n`, true);
       this.installId = this.readOrCreateInstallId();
-      if (this.accountHash) this.writeAtomic(this.accountHashPath, `${this.accountHash}\n`);
       this.queue = [];
       this.enabled = true;
       try {
         this.persistConsent();
+        this.hostUsage.enable();
       } catch (error) {
         this.enabled = false;
         this.installId = null;
@@ -245,9 +282,10 @@ export class ProductAnalytics {
         throw error;
       }
       this.failures = 0;
+      if (this.timer) this.trackActiveDay();
       if (this.timer && !this.retryTimer) void this.flush();
     }
-    this.notify();
+    if (value) this.notify();
     return this.getState();
   }
 
@@ -266,50 +304,23 @@ export class ProductAnalytics {
     }
   }
 
-  /** Tracks the signed-in account by hash only; null clears it after sign-out. */
-  setAccount(userId: unknown): void {
-    if (this.disposed) return;
-    const next =
-      typeof userId === "string" && userId.trim().length > 0 && userId.length <= 256
-        ? productAnalyticsAccountHash(userId.trim())
-        : null;
-    if (next === this.accountHash) return;
-    this.accountHash = next;
-    if (!this.enabled) return;
-    if (next) {
-      this.writeAtomic(this.accountHashPath, `${next}\n`);
-      return;
-    }
-    try {
-      rmSync(this.accountHashPath, { force: true });
-    } catch {
-      // Local analytics persistence must never affect the app.
-    }
-  }
-
   async flush(): Promise<void> {
-    if (
-      this.disposed ||
-      !this.enabled ||
-      this.flushing ||
-      this.retryTimer ||
-      this.queue.length === 0
-    )
+    if (this.disposed || !this.enabled || this.flushing || this.retryTimer || !this.installId)
       return;
     this.pruneExpired();
-    if (this.queue.length === 0) return;
+    // Existing activity events keep progressing even if a host-specific payload is rejected.
     const batch: ProductAnalyticsEnvelope[] = [];
     for (const event of this.queue) {
+      if (event.cohortStage && !this.cohortSupported) continue;
       if (batch.length >= MAX_BATCH_EVENTS) break;
       const candidate = [...batch, event];
       if (Buffer.byteLength(JSON.stringify({ events: candidate }), "utf8") > MAX_BATCH_BYTES) break;
       batch.push(event);
     }
-    if (batch.length === 0) {
-      this.queue.shift();
-      this.persistQueue();
+    const hostWindow = batch.length === 0 ? this.hostUsage.peek(this.installId) : null;
+    // A capability probe holds unsupported cohorts; host windows use their own receipt.
+    if (batch.length === 0 && !hostWindow && (this.queue.length === 0 || this.cohortSupported))
       return;
-    }
     this.flushing = true;
     const epoch = this.epoch;
     const controller = new AbortController();
@@ -319,11 +330,16 @@ export class ProductAnalytics {
       const response = await this.fetcher(ENDPOINT, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ events: batch }),
+        body: JSON.stringify(hostWindow ? { hostUsage: hostWindow } : { events: batch }),
         signal: controller.signal,
       });
       if (!response.ok) {
-        if ([400, 413, 422].includes(response.status) && epoch === this.epoch && this.enabled) {
+        if (
+          !hostWindow &&
+          [400, 413, 422].includes(response.status) &&
+          epoch === this.epoch &&
+          this.enabled
+        ) {
           const rejected = new Set(batch.map((event) => event.id));
           this.queue = this.queue.filter((event) => !rejected.has(event.id));
           this.persistQueue();
@@ -333,10 +349,48 @@ export class ProductAnalytics {
         throw new Error("Product analytics request failed");
       }
       if (epoch !== this.epoch || !this.enabled) return;
-      const sent = new Set(batch.map((event) => event.id));
+      const cohortAcknowledged = new Set<string>();
+      if (hostWindow) {
+        const receipt = (await response.json()) as { stored?: unknown; windowId?: unknown };
+        if (receipt.stored !== true || receipt.windowId !== hostWindow.windowId)
+          throw new Error("Host usage receipt missing");
+        if (epoch !== this.epoch || !this.enabled) return;
+        this.hostUsage.acknowledge(hostWindow);
+      } else {
+        this.cohortSupported = response.headers.get("x-synara-product-cohorts") === "1";
+        if (this.cohortSupported && batch.some((event) => event.cohortStage)) {
+          const receipt = (await response.json()) as { cohortAcknowledged?: unknown };
+          if (Array.isArray(receipt.cohortAcknowledged))
+            for (const id of receipt.cohortAcknowledged)
+              if (typeof id === "string") cohortAcknowledged.add(id);
+        }
+      }
+      if (epoch !== this.epoch || !this.enabled) return;
+      // Save completion before removing the durable envelope; a crash can only replay its UUID.
+      if (this.cohort) {
+        const completed = new Set(this.cohort.completed);
+        for (const event of batch)
+          if (
+            event.cohortStage &&
+            event.cohortDay === this.cohort.day &&
+            cohortAcknowledged.has(event.id)
+          )
+            completed.add(event.cohortStage);
+        const state = { ...this.cohort, completed: [...completed] };
+        this.persistCohort(state);
+        this.cohort = state;
+      }
+      const sent = new Set(
+        batch
+          .filter((event) => !event.cohortStage || cohortAcknowledged.has(event.id))
+          .map((event) => event.id),
+      );
       this.queue = this.queue.filter((event) => !sent.has(event.id));
       this.persistQueue();
       this.failures = 0;
+      if (batch.some((event) => event.cohortStage && !cohortAcknowledged.has(event.id)))
+        this.scheduleRetry();
+      this.queueCohortStage();
     } catch {
       if (epoch === this.epoch && this.enabled && !this.disposed) this.scheduleRetry();
     } finally {
@@ -345,7 +399,13 @@ export class ProductAnalytics {
         this.controller = null;
         this.flushing = false;
       }
-      if (this.enabled && !this.disposed && !this.retryTimer && this.queue.length > 0)
+      if (
+        this.enabled &&
+        !this.disposed &&
+        !this.retryTimer &&
+        (this.queue.some((event) => !event.cohortStage || this.cohortSupported) ||
+          (this.installId !== null && this.hostUsage.peek(this.installId) !== null))
+      )
         void this.flush();
     }
   }
@@ -387,11 +447,7 @@ export class ProductAnalytics {
       fields.reason = input.reason;
     }
     if (input.command !== undefined) {
-      if (
-        typeof input.command !== "string" ||
-        !PRODUCT_ANALYTICS_COMMAND_PATTERN.test(input.command)
-      )
-        return null;
+      if (!isProductAnalyticsCommand(input.command)) return null;
       fields.command = input.command;
     }
     if (input.durationMs !== undefined) {
@@ -439,7 +495,6 @@ export class ProductAnalytics {
       id: randomUUID(),
       ts: now.toISOString(),
       installId: this.installId!,
-      ...(this.accountHash ? { accountHash: this.accountHash } : {}),
       channel: this.channel,
       surface: "desktop",
       platform: this.platform,
@@ -448,6 +503,98 @@ export class ProductAnalytics {
       outcome,
       ...fields,
     };
+  }
+
+  // Receiver support is re-established each process; old receivers never consume stage envelopes.
+  private queueCohortStage(): void {
+    if (!this.cohortSupported || !this.enabled || !this.installId) return;
+    try {
+      this.pruneExpired();
+      const now = new Date();
+      const day = now.toISOString().slice(0, 10);
+      let state = this.cohort;
+      if (
+        !state ||
+        (!state.completed.includes("new") &&
+          Date.parse(state.entryTs) < now.getTime() - MAX_EVENT_AGE_MS)
+      )
+        state = { day, entryTs: now.toISOString(), completed: [] };
+      const age = (Date.parse(day) - Date.parse(state.day)) / 86_400_000;
+      const stage = !state.completed.includes("new")
+        ? "new"
+        : age >= 7 && age <= 13 && !state.completed.includes("week1")
+          ? "week1"
+          : age >= 30 && age <= 36 && !state.completed.includes("month1")
+            ? "month1"
+            : null;
+      if (
+        !stage ||
+        this.queue.some((event) => event.cohortDay === state.day && event.cohortStage === stage)
+      )
+        return;
+      const envelope = this.buildEnvelope({ event: "app.active", outcome: "succeeded" });
+      if (!envelope) return;
+      const event: ProductAnalyticsEnvelope = {
+        ...envelope,
+        id: cohortEventId(this.installId, state.day, stage),
+        ts: stage === "new" ? state.entryTs : now.toISOString(),
+        cohortDay: state.day,
+        cohortStage: stage,
+      };
+      const queue = [...this.queue, event].slice(-MAX_QUEUE);
+      // Queue first: recovery can reconstruct a missing entry state from its durable envelope.
+      this.writeAtomic(this.queuePath, JSON.stringify(queue), true);
+      this.queue = queue;
+      this.cohort = state;
+      this.persistCohort(state);
+    } catch {
+      /* A storage failure must not affect the workspace. */
+    }
+  }
+
+  private persistCohort(state: CohortState): void {
+    this.writeAtomic(
+      this.cohortPath,
+      JSON.stringify({ v: 1, installId: this.installId, ...state }),
+      true,
+    );
+  }
+
+  // A queue commit can be newer than an otherwise valid state file after a crash.
+  private readCohort(): CohortState | null {
+    let state: CohortState | null = null;
+    try {
+      const raw = JSON.parse(readFileSync(this.cohortPath, "utf8")) as Record<string, unknown>;
+      if (
+        raw.v === 1 &&
+        raw.installId === this.installId &&
+        typeof raw.day === "string" &&
+        typeof raw.entryTs === "string" &&
+        raw.entryTs.slice(0, 10) === raw.day &&
+        Number.isFinite(Date.parse(raw.entryTs)) &&
+        new Date(raw.entryTs).toISOString() === raw.entryTs &&
+        Date.parse(raw.entryTs) <= Date.now() + 5 * 60_000 &&
+        Array.isArray(raw.completed) &&
+        raw.completed.every(
+          (stage) => typeof stage === "string" && Object.hasOwn(PRODUCT_COHORT_WINDOWS, stage),
+        )
+      )
+        state = {
+          day: raw.day,
+          entryTs: raw.entryTs,
+          completed: raw.completed as ProductAnalyticsCohortStage[],
+        };
+    } catch {
+      /* Reconcile below with any entry whose durable queue write survived. */
+    }
+    let entry: ProductAnalyticsEnvelope | undefined;
+    for (const event of this.queue) {
+      if (event.cohortStage === "new" && (!entry || Date.parse(event.ts) > Date.parse(entry.ts)))
+        entry = event;
+    }
+    if (entry && (!state || Date.parse(entry.ts) > Date.parse(state.entryTs)))
+      return { day: entry.cohortDay!, entryTs: entry.ts, completed: [] };
+    return state;
   }
 
   private readConsent(): boolean {
@@ -467,6 +614,15 @@ export class ProductAnalytics {
     }
   }
 
+  /** A one-time boundary severs identifiers and unsent events from account-linked clients. */
+  private hasCurrentIdentity(): boolean {
+    try {
+      return readFileSync(this.identityVersionPath, "utf8").trim() === IDENTITY_VERSION;
+    } catch {
+      return false;
+    }
+  }
+
   private readOrCreateInstallId(): string {
     try {
       const existing = readFileSync(this.installIdPath, "utf8").trim();
@@ -477,15 +633,6 @@ export class ProductAnalytics {
     const id = randomUUID();
     this.writeAtomic(this.installIdPath, `${id}\n`, true);
     return id;
-  }
-
-  private readAccountHash(): string | null {
-    try {
-      const value = readFileSync(this.accountHashPath, "utf8").trim();
-      return ACCOUNT_HASH_PATTERN.test(value) ? value : null;
-    } catch {
-      return null;
-    }
   }
 
   private readQueue(): ProductAnalyticsEnvelope[] {
@@ -539,15 +686,36 @@ export class ProductAnalytics {
       if (Object.hasOwn(row, key)) input[key] = row[key];
     const built = this.buildEnvelope(input);
     if (!built) return null;
-    // A stored event keeps the account it was recorded under, not the current one.
-    const { accountHash: _current, ...safe } = built;
+    let cohort: { cohortDay: string; cohortStage: ProductAnalyticsCohortStage } | undefined;
+    if (row.cohortDay !== undefined || row.cohortStage !== undefined) {
+      if (
+        typeof row.cohortDay !== "string" ||
+        !/^\d{4}-\d{2}-\d{2}$/.test(row.cohortDay) ||
+        !Number.isFinite(Date.parse(row.cohortDay)) ||
+        new Date(row.cohortDay).toISOString().slice(0, 10) !== row.cohortDay ||
+        typeof row.cohortStage !== "string" ||
+        !Object.hasOwn(PRODUCT_COHORT_WINDOWS, row.cohortStage) ||
+        row.event !== "app.active" ||
+        row.outcome !== "succeeded"
+      )
+        return null;
+      const stage = row.cohortStage as ProductAnalyticsCohortStage;
+      const age = (Date.parse(row.ts.slice(0, 10)) - Date.parse(row.cohortDay)) / 86_400_000;
+      const [first, last] = PRODUCT_COHORT_WINDOWS[stage];
+      if (
+        age < first ||
+        age > last ||
+        row.id !== cohortEventId(this.installId!, row.cohortDay, stage)
+      )
+        return null;
+      cohort = { cohortDay: row.cohortDay, cohortStage: stage };
+    }
+    // Rebuilding also discards legacy account hashes from the durable queue.
     return {
-      ...safe,
+      ...built,
+      ...cohort,
       id: row.id,
       ts: new Date(row.ts).toISOString(),
-      ...(typeof row.accountHash === "string" && ACCOUNT_HASH_PATTERN.test(row.accountHash)
-        ? { accountHash: row.accountHash }
-        : {}),
       channel: row.channel as ProductAnalyticsChannel,
       platform: row.platform,
       appVersion: row.appVersion,
@@ -577,20 +745,63 @@ export class ProductAnalytics {
     this.writeAtomic(this.queuePath, JSON.stringify(this.queue));
   }
 
+  /** Clear only this sender's orphaned atomic writes, preserving unrelated files and links. */
+  private clearTemporaryData(): void {
+    const dir = dirname(this.queuePath);
+    try {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        if (
+          entry.isFile() &&
+          /^(install-id|identity-version|account-hash|events\.json|cohort\.json)\.tmp-[1-9][0-9]*$/.test(
+            entry.name,
+          )
+        ) {
+          rmSync(join(dir, entry.name), { force: true });
+        }
+      }
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+  }
+
   private clearPersistentData(): void {
-    for (const path of [this.installIdPath, this.accountHashPath, this.queuePath]) {
+    try {
+      this.hostUsage.clear();
+    } catch {
+      /* best effort */
+    }
+    for (const path of [
+      this.installIdPath,
+      this.identityVersionPath,
+      this.legacyAccountHashPath,
+      this.queuePath,
+      this.cohortPath,
+    ]) {
       try {
         rmSync(path, { force: true });
       } catch {
         /* best effort */
       }
     }
+    try {
+      this.clearTemporaryData();
+    } catch {
+      /* best effort */
+    }
   }
 
   private clearPersistentDataStrict(): void {
-    for (const path of [this.installIdPath, this.accountHashPath, this.queuePath]) {
+    this.hostUsage.clear();
+    for (const path of [
+      this.installIdPath,
+      this.identityVersionPath,
+      this.legacyAccountHashPath,
+      this.queuePath,
+      this.cohortPath,
+    ]) {
       rmSync(path, { force: true });
     }
+    this.clearTemporaryData();
   }
 
   private removeConsentOnFailure(): void {
@@ -602,14 +813,20 @@ export class ProductAnalytics {
   }
 
   private writeAtomic(path: string, content: string, required = false): void {
+    const temp = `${path}.tmp-${process.pid}`;
     try {
       mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
-      const temp = `${path}.tmp-${process.pid}`;
       writeFileSync(temp, content, { encoding: "utf8", mode: 0o600 });
       renameSync(temp, path);
     } catch {
       if (required) throw new Error("Unable to persist product analytics consent");
       // Local analytics persistence must never affect the app.
+    } finally {
+      try {
+        rmSync(temp, { force: true });
+      } catch {
+        /* best effort */
+      }
     }
   }
 

@@ -47,6 +47,7 @@ import {
   resolveThemePack,
 } from "../theme/theme.logic";
 import { useTranslation } from "~/i18n";
+import { Translation } from "~/i18n/Translation";
 
 type ThemePackEditorProps = {
   isActive?: boolean;
@@ -757,8 +758,13 @@ function ImportThemeDialog({
             })}
           </DialogTitle>
           <p className="text-ui leading-snug text-muted-foreground">
-            {t("common:pasteAThemeShareStringBeginningWith")}{" "}
-            <code className="rounded bg-muted px-1 py-0.5 font-chat-code">codex-theme-v1:</code>.{" "}
+            <Translation
+              message="common:pasteAThemeShareStringBeginningWith"
+              values={{ prefix: "codex-theme-v1:" }}
+              components={{
+                code: <code className="rounded bg-muted px-1 py-0.5 font-chat-code" />,
+              }}
+            />{" "}
             {t("common:theEmbeddedVariantMustMatchAndTheSelectedCode", {
               variant: t(
                 variant === "dark"

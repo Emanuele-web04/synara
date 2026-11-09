@@ -128,7 +128,6 @@ describe("createNotchIslandController", () => {
   function makeController(supported: boolean, saved = { version: 1 as const, enabled: true }) {
     const host = {
       setWanted: vi.fn(),
-      refreshLabels: vi.fn(),
       setSnapshot: vi.fn(),
       dispose: vi.fn(),
     };

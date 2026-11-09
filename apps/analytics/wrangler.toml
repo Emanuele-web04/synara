@@ -28,8 +28,10 @@ binding = "ASSETS"
 run_worker_first = true
 
 [triggers]
-# Delete only opt-in product events older than 30 days. Diagnostics remain
-# available under their existing indefinite-retention policy.
+# Delete product events after 30 days and raw usage provider/turn samples after 90 days.
+# Aggregate reporting cohorts expire after 90 cohort days; capped batches may take longer.
+# Capture public GitHub installer counters; successful snapshots prune history after 90 days.
+# General diagnostic records, issues and R2 objects keep their existing policy.
 crons = ["0 5 * * *"]
 
 # Per-IP rate limits enforced by the platform (keyed on CF-Connecting-IP in
