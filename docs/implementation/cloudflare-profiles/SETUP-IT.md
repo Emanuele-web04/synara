@@ -117,8 +117,10 @@ creare un ulteriore secret `CLOUDFLARE_ACCOUNT_ID` per questi workflow.
 Quando il workflow è disponibile in Actions:
 
 1. Esegui **Verify and deploy account API to Cloudflare**, con `deploy` attivo,
-   sulla revisione verificata. Il job di pubblicazione parte dopo i test e la
-   prova del container. Attendi che Cloudflare completi il provisioning.
+   sulla revisione verificata. Attiva anche `bootstrap_secrets` per il primo
+   provisioning del Worker o per un aggiornamento pianificato delle credenziali
+   di base. Il job di pubblicazione parte dopo i test e la prova del container.
+   Attendi che Cloudflare completi il provisioning.
 2. Verifica l'API:
 
    ```sh

@@ -162,9 +162,11 @@ placeholder WorkOS configuration does not verify real login.
 
 For an existing deployment, configure `CLOUDFLARE_API_TOKEN` and run with
 `deploy` checked. Wrangler retains runtime variables configured in the
-dashboard, including Polar settings. The workflow leaves existing credentials
-in place by default. For initial provisioning or a planned update to the base
-credentials, also check `bootstrap_secrets` and supply the matching values:
+dashboard and absent from `wrangler.jsonc`, including Polar settings. Check
+that the account and API origins declared in that file match the live Worker.
+The workflow leaves existing credentials in place by default. For initial
+provisioning or a planned update to the base credentials, also check
+`bootstrap_secrets` and supply the matching values:
 
 | GitHub secret                 | Destination                          |
 | ----------------------------- | ------------------------------------ |
