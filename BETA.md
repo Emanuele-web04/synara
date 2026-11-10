@@ -431,7 +431,9 @@ sent automatically, and typing over a suggestion discards it for that turn.
 everything else from the read model: it reads the latest few exchanges of visible user and
 assistant text and generates through the isolated text-generation path on the chat's own
 provider instance, using the Git-writing model only when it is that same instance and the
-chat's model otherwise, either one at its lowest catalog effort. Predictions live in memory only.
+chat's model otherwise, either one at its lowest catalog effort. Suggestions live in memory only; the window's
+session storage keeps just the keys of turns whose suggestion was used, discarded, or absent,
+so a reload does not bring one back.
 Stable refuses the RPC, hides the setting, never requests a prediction, and ignores the
 stored setting.
 

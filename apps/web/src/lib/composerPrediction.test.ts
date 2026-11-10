@@ -3,9 +3,11 @@ import { beforeEach, describe, expect, it } from "vitest";
 
 import {
   canShowComposerPrediction,
+  COMPOSER_PREDICTION_SETTLED_LIMIT,
   COMPOSER_PREDICTION_STORE_LIMIT,
   composerPredictionKey,
   composerPredictionStore,
+  nextComposerPredictionRequest,
   resolveComposerPredictionTarget,
   shouldAcceptComposerPredictionOnTab,
   shouldDiscardComposerPredictionAfterEdit,
@@ -152,7 +154,9 @@ describe("shouldAcceptComposerPredictionOnTab", () => {
     ["a replaced suggestion", { entry: { status: "ready" as const, suggestion: "Other" } }],
     [
       "a prediction still pending",
-      { entry: { status: "pending" as const, controller: new AbortController() } },
+      {
+        entry: { status: "pending" as const, controller: new AbortController(), retry: false },
+      },
     ],
   ])("keeps normal Tab with %s", (_label, overrides) => {
     expect(shouldAcceptComposerPredictionOnTab({ ...accepted, ...overrides })).toBe(false);
@@ -174,7 +178,7 @@ describe("shouldDiscardComposerPredictionAfterEdit", () => {
       shouldDiscardComposerPredictionAfterEdit({
         previous: { key: "a", prompt: "" },
         next: { key: "a", prompt: "S" },
-        entry: { status: "pending", controller: new AbortController() },
+        entry: { status: "pending", controller: new AbortController(), retry: false },
       }),
     ).toBe(true);
   });
@@ -199,12 +203,14 @@ describe("shouldDiscardComposerPredictionAfterEdit", () => {
 
 describe("composerPredictionStore", () => {
   beforeEach(() => {
-    composerPredictionStore.setState({ entries: new Map() });
+    composerPredictionStore.setState({ entries: new Map(), settledKeys: new Set() });
   });
 
   it("forgets the oldest keys past its limit and aborts an evicted request", () => {
     const controller = new AbortController();
-    composerPredictionStore.getState().setEntry("first", { status: "pending", controller });
+    composerPredictionStore
+      .getState()
+      .setEntry("first", { status: "pending", controller, retry: false });
     for (let index = 0; index < COMPOSER_PREDICTION_STORE_LIMIT; index += 1) {
       composerPredictionStore.getState().setEntry(`key-${index}`, { status: "done" });
     }
@@ -213,5 +219,54 @@ describe("composerPredictionStore", () => {
     expect(entries.size).toBe(COMPOSER_PREDICTION_STORE_LIMIT);
     expect(entries.has("first")).toBe(false);
     expect(controller.signal.aborted).toBe(true);
+  });
+
+  it("remembers a settled key after its entry was evicted", () => {
+    composerPredictionStore.getState().setEntry("used", { status: "done" });
+    for (let index = 0; index < COMPOSER_PREDICTION_STORE_LIMIT; index += 1) {
+      composerPredictionStore.getState().setEntry(`key-${index}`, { status: "failed" });
+    }
+
+    const state = composerPredictionStore.getState();
+    expect(state.entries.has("used")).toBe(false);
+    expect(state.settledKeys.has("used")).toBe(true);
+    expect(
+      nextComposerPredictionRequest({ entry: state.entries.get("used"), settled: true }),
+    ).toBeNull();
+  });
+
+  it("bounds the settled keys, dropping the oldest first", () => {
+    for (let index = 0; index <= COMPOSER_PREDICTION_SETTLED_LIMIT; index += 1) {
+      composerPredictionStore.getState().setEntry(`key-${index}`, { status: "done" });
+    }
+
+    const { settledKeys } = composerPredictionStore.getState();
+    expect(settledKeys.size).toBe(COMPOSER_PREDICTION_SETTLED_LIMIT);
+    expect(settledKeys.has("key-0")).toBe(false);
+    expect(settledKeys.has(`key-${COMPOSER_PREDICTION_SETTLED_LIMIT}`)).toBe(true);
+  });
+});
+
+describe("nextComposerPredictionRequest", () => {
+  it("asks once for a new key and once more after a failure", () => {
+    expect(nextComposerPredictionRequest({ entry: undefined, settled: false })).toEqual({
+      retry: false,
+    });
+    expect(nextComposerPredictionRequest({ entry: { status: "failed" }, settled: false })).toEqual({
+      retry: true,
+    });
+  });
+
+  it("does not ask while a request runs, after a result, or for a settled key", () => {
+    const pending = { status: "pending", controller: new AbortController(), retry: false } as const;
+    expect(nextComposerPredictionRequest({ entry: pending, settled: false })).toBeNull();
+    expect(
+      nextComposerPredictionRequest({
+        entry: { status: "ready", suggestion: "Ship it" },
+        settled: false,
+      }),
+    ).toBeNull();
+    expect(nextComposerPredictionRequest({ entry: { status: "done" }, settled: false })).toBeNull();
+    expect(nextComposerPredictionRequest({ entry: undefined, settled: true })).toBeNull();
   });
 });

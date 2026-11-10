@@ -305,6 +305,10 @@ describe("textGenerationShared", () => {
       ["```text\nShip it\n```", "Ship it"],
       ["User: Open the PR", "Open the PR"],
       ["Line one\n\n  line   two", "Line one line two"],
+      // A slash would turn the accepted draft into a composer command.
+      ["/clear", null],
+      ['"/compact the thread"', null],
+      ["Run src/app.ts and check the output", "Run src/app.ts and check the output"],
     ])("sanitizes %j to %j", (raw, expected) => {
       expect(sanitizeComposerPrediction(raw)).toBe(expected);
     });

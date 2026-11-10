@@ -14,6 +14,9 @@ import {
   buildComposerPredictionConversation,
   isComposerPredictionTurnCurrent,
   lowestSupportedEffort,
+  COMPOSER_PREDICTION_DEFAULT_HEDGE_DELAY_MS,
+  COMPOSER_PREDICTION_MIN_HEDGE_DELAY_MS,
+  resolveComposerPredictionHedgeDelayMs,
   resolveComposerPredictionRouting,
 } from "./composerPrediction.ts";
 
@@ -277,6 +280,29 @@ describe("resolveComposerPredictionRouting", () => {
     });
   });
 
+  it("lowers the effort when the options travel as a list of selections", () => {
+    const routing = resolveComposerPredictionRouting({
+      thread: {
+        modelSelection: {
+          provider: "claudeAgent",
+          instanceId: "claudeAgent",
+          model: "claude-opus-4-8",
+          options: [
+            { id: "effort", value: "max" },
+            { id: "fastMode", value: true },
+          ],
+        } as unknown as ModelSelection,
+        session: session({ providerInstanceId: "claudeAgent" }),
+      },
+      settings: settings(),
+    });
+
+    expect(routing?.modelSelection.options).toEqual([
+      { id: "fastMode", value: true },
+      { id: "effort", value: "low" },
+    ]);
+  });
+
   it("keeps the chat's model at its lowest effort when the Git-writing model is elsewhere", () => {
     const routing = resolveComposerPredictionRouting({ thread: claudeChat, settings: settings() });
 
@@ -361,6 +387,40 @@ describe("resolveComposerPredictionRouting", () => {
         thread: thread as typeof claudeChat,
         settings: serverSettings,
       }),
+    ).toBeNull();
+  });
+});
+
+describe("resolveComposerPredictionHedgeDelayMs", () => {
+  const timeoutMs = 20_000;
+
+  it("waits the default delay on a route with no history", () => {
+    expect(resolveComposerPredictionHedgeDelayMs({ recentDurationsMs: [], timeoutMs })).toBe(
+      COMPOSER_PREDICTION_DEFAULT_HEDGE_DELAY_MS,
+    );
+  });
+
+  it("never starts sooner than the minimum on a fast route", () => {
+    expect(
+      resolveComposerPredictionHedgeDelayMs({
+        recentDurationsMs: [2_600, 2_400, 2_900],
+        timeoutMs,
+      }),
+    ).toBe(COMPOSER_PREDICTION_MIN_HEDGE_DELAY_MS);
+  });
+
+  it("waits twice the usual time and ignores a single outlier", () => {
+    expect(
+      resolveComposerPredictionHedgeDelayMs({
+        recentDurationsMs: [4_000, 17_000, 4_200],
+        timeoutMs,
+      }),
+    ).toBe(8_400);
+  });
+
+  it("gives a slow route no second attempt", () => {
+    expect(
+      resolveComposerPredictionHedgeDelayMs({ recentDurationsMs: [9_000, 11_000], timeoutMs }),
     ).toBeNull();
   });
 });

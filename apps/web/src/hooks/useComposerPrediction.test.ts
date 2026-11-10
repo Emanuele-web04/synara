@@ -52,7 +52,7 @@ function mountHook(initial: HookInput) {
 describe("useComposerPrediction", () => {
   beforeEach(() => {
     reactHookHarness.reset();
-    composerPredictionStore.setState({ entries: new Map() });
+    composerPredictionStore.setState({ entries: new Map(), settledKeys: new Set() });
     nativeApi.generateComposerPrediction.mockReset();
   });
 
@@ -156,14 +156,50 @@ describe("useComposerPrediction", () => {
     expect(nativeApi.generateComposerPrediction).toHaveBeenCalledTimes(1);
   });
 
-  it("settles silently when the request fails, without retrying", async () => {
+  it("stays silent after a failed request and retries it once", async () => {
+    nativeApi.generateComposerPrediction.mockRejectedValueOnce(new Error("socket closed"));
+    nativeApi.generateComposerPrediction.mockResolvedValueOnce({ suggestion: "Rerun that test" });
+    const hook = mountHook({ target: target("turn-1"), canShow: true, prompt: "" });
+    await vi.waitFor(() =>
+      expect(composerPredictionStore.getState().entries.get("key-turn-1")?.status).toBe("failed"),
+    );
+    expect(hook.render().suggestion).toBeNull();
+    expect(nativeApi.generateComposerPrediction).toHaveBeenCalledTimes(1);
+
+    // The composer could show a suggestion again (the user came back to it).
+    hook.render({ canShow: false });
+    hook.render({ canShow: true });
+    await vi.waitFor(() =>
+      expect(composerPredictionStore.getState().entries.get("key-turn-1")?.status).toBe("ready"),
+    );
+
+    expect(hook.render().suggestion).toBe("Rerun that test");
+    expect(nativeApi.generateComposerPrediction).toHaveBeenCalledTimes(2);
+  });
+
+  it("gives up for the turn after the retry fails too", async () => {
     nativeApi.generateComposerPrediction.mockRejectedValue(new Error("offline"));
     const hook = mountHook({ target: target("turn-1"), canShow: true, prompt: "" });
     await vi.waitFor(() =>
+      expect(composerPredictionStore.getState().entries.get("key-turn-1")?.status).toBe("failed"),
+    );
+    hook.render({ canShow: false });
+    hook.render({ canShow: true });
+    await vi.waitFor(() =>
       expect(composerPredictionStore.getState().entries.get("key-turn-1")?.status).toBe("done"),
     );
+    hook.render({ canShow: false });
+    hook.render({ canShow: true });
 
     expect(hook.render().suggestion).toBeNull();
-    expect(nativeApi.generateComposerPrediction).toHaveBeenCalledTimes(1);
+    expect(nativeApi.generateComposerPrediction).toHaveBeenCalledTimes(2);
+  });
+
+  it("never asks again for a turn that was settled before this page loaded", () => {
+    composerPredictionStore.setState({ settledKeys: new Set(["key-turn-1"]) });
+    const hook = mountHook({ target: target("turn-1"), canShow: true, prompt: "" });
+
+    expect(hook.first.suggestion).toBeNull();
+    expect(nativeApi.generateComposerPrediction).not.toHaveBeenCalled();
   });
 });

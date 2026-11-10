@@ -221,7 +221,7 @@ describe("ComposerPredictionServiceLive", () => {
     const result = await harness.run(
       Effect.gen(function* () {
         const fiber = yield* Effect.forkChild(harness.generate);
-        yield* TestClock.adjust("5 seconds");
+        yield* TestClock.adjust("9 seconds");
         expect(harness.generateComposerPrediction).toHaveBeenCalledTimes(1);
         yield* TestClock.adjust("1 second");
         return yield* Fiber.join(fiber);
@@ -229,6 +229,73 @@ describe("ComposerPredictionServiceLive", () => {
     );
 
     expect(result).toEqual({ suggestion: "From the second attempt" });
+    expect(harness.generateComposerPrediction).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps waiting for the first attempt when the second one fails", async () => {
+    const harness = makeHarness();
+    const release = Deferred.makeUnsafe<void>();
+    harness.generateComposerPrediction
+      .mockReturnValueOnce(
+        Deferred.await(release).pipe(Effect.as({ suggestion: "From the first attempt" })),
+      )
+      .mockReturnValueOnce(
+        Effect.fail(
+          new TextGenerationError({ operation: "generateComposerPrediction", detail: "busy" }),
+        ),
+      );
+
+    const result = await harness.run(
+      Effect.gen(function* () {
+        const fiber = yield* Effect.forkChild(harness.generate);
+        yield* TestClock.adjust("10 seconds");
+        expect(harness.generateComposerPrediction).toHaveBeenCalledTimes(2);
+        yield* Deferred.succeed(release, undefined);
+        return yield* Fiber.join(fiber);
+      }),
+    );
+
+    expect(result).toEqual({ suggestion: "From the first attempt" });
+  });
+
+  it("starts the second attempt sooner once the route has proven fast", async () => {
+    const harness = makeHarness();
+
+    const result = await harness.run(
+      Effect.gen(function* () {
+        yield* harness.generate;
+        harness.generateComposerPrediction
+          .mockReturnValueOnce(Effect.never)
+          .mockReturnValueOnce(Effect.succeed({ suggestion: "From the second attempt" }));
+        const fiber = yield* Effect.forkChild(harness.generate);
+        yield* TestClock.adjust("6 seconds");
+        return yield* Fiber.join(fiber);
+      }),
+    );
+
+    expect(result).toEqual({ suggestion: "From the second attempt" });
+    expect(harness.generateComposerPrediction).toHaveBeenCalledTimes(3);
+  });
+
+  it("starts no second attempt on a route that is slow by nature", async () => {
+    const harness = makeHarness();
+    harness.generateComposerPrediction.mockReturnValueOnce(
+      Effect.delay(Effect.succeed({ suggestion: "Slow but fine" }), "9 seconds"),
+    );
+
+    const results = await harness.run(
+      Effect.gen(function* () {
+        const first = yield* Effect.forkChild(harness.generate);
+        yield* TestClock.adjust("9 seconds");
+        const firstResult = yield* Fiber.join(first);
+        harness.generateComposerPrediction.mockReturnValueOnce(Effect.never);
+        const second = yield* Effect.forkChild(harness.generate);
+        yield* TestClock.adjust("20 seconds");
+        return [firstResult, yield* Fiber.join(second)];
+      }),
+    );
+
+    expect(results).toEqual([{ suggestion: "Slow but fine" }, { suggestion: null }]);
     expect(harness.generateComposerPrediction).toHaveBeenCalledTimes(2);
   });
 

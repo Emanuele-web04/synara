@@ -4,7 +4,8 @@
 //          and effort generate it.
 // Layer: Server domain logic (no IO)
 // Exports: isComposerPredictionTurnCurrent, buildComposerPredictionConversation,
-//          resolveComposerPredictionRouting, lowestSupportedEffort
+//          resolveComposerPredictionRouting, lowestSupportedEffort,
+//          resolveComposerPredictionHedgeDelayMs
 
 import type {
   GitTextGenerationProvider,
@@ -200,16 +201,46 @@ export function lowestSupportedEffort(provider: ProviderKind, model: string): st
 
 function withLowestEffort(selection: ModelSelection, provider: GitTextGenerationProvider) {
   const lowest = lowestSupportedEffort(provider, selection.model);
-  const options = selection.options;
   // Without catalog data the chat keeps its own effort rather than an invented one.
-  if (lowest === null || Array.isArray(options)) return selection;
+  if (lowest === null) return selection;
+  const key = EFFORT_OPTION_KEY[provider];
+  const options: unknown = selection.options;
+  // Options travel either as a record or as a list of `{ id, value }` selections.
+  if (Array.isArray(options)) {
+    return {
+      ...selection,
+      options: [
+        ...options.filter((option: { readonly id?: unknown }) => option?.id !== key),
+        { id: key, value: lowest },
+      ],
+    } as ModelSelection;
+  }
   return {
     ...selection,
-    options: {
-      ...(options as Record<string, unknown> | undefined),
-      [EFFORT_OPTION_KEY[provider]]: lowest,
-    },
+    options: { ...(options as Record<string, unknown> | undefined), [key]: lowest },
   } as ModelSelection;
+}
+
+/** Earliest a second attempt may start, once a route has shown how fast it usually is. */
+export const COMPOSER_PREDICTION_MIN_HEDGE_DELAY_MS = 6_000;
+/** Second-attempt delay for a route that has not completed a generation yet. */
+export const COMPOSER_PREDICTION_DEFAULT_HEDGE_DELAY_MS = 10_000;
+
+/**
+ * When a still-running generation should be raced by a second attempt: after twice the
+ * route's usual time (never sooner than the minimum), or after the default when the route
+ * has no history. Null when a second attempt could not finish inside the timeout anyway,
+ * which is the case for a route that is slow by nature.
+ */
+export function resolveComposerPredictionHedgeDelayMs(input: {
+  readonly recentDurationsMs: ReadonlyArray<number>;
+  readonly timeoutMs: number;
+}): number | null {
+  if (input.recentDurationsMs.length === 0) return COMPOSER_PREDICTION_DEFAULT_HEDGE_DELAY_MS;
+  const sorted = input.recentDurationsMs.toSorted((left, right) => left - right);
+  const median = sorted[Math.floor(sorted.length / 2)] ?? 0;
+  const delayMs = Math.max(COMPOSER_PREDICTION_MIN_HEDGE_DELAY_MS, median * 2);
+  return delayMs + median <= input.timeoutMs ? delayMs : null;
 }
 
 export type ComposerPredictionRouting = TextGenerationProviderInput & {

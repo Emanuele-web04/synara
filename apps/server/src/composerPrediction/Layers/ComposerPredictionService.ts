@@ -8,7 +8,7 @@
 
 import { WsRpcError, type ThreadId, type TurnId } from "@synara/contracts";
 import { COMPOSER_PREDICTIONS_BETA_FEATURE } from "@synara/shared/betaFeatures";
-import { Cause, Deferred, Duration, Effect, Fiber, Layer, Option, Schema } from "effect";
+import { Cause, Clock, Deferred, Duration, Effect, Fiber, Layer, Option, Schema } from "effect";
 
 import { isServerBetaFeatureEnabled } from "../../betaFeatureGate.ts";
 import { resolveThreadWorkspaceCwd } from "../../checkpointing/Utils.ts";
@@ -20,6 +20,7 @@ import { ServerSettingsService } from "../../serverSettings.ts";
 import {
   buildComposerPredictionConversation,
   isComposerPredictionTurnCurrent,
+  resolveComposerPredictionHedgeDelayMs,
   resolveComposerPredictionRouting,
 } from "../composerPrediction.ts";
 import {
@@ -30,8 +31,8 @@ import {
 /** A prediction that takes longer than this is no longer worth showing. */
 export const COMPOSER_PREDICTION_TIMEOUT = Duration.seconds(20);
 
-/** A generation still running after this long is raced by a second attempt. */
-export const COMPOSER_PREDICTION_HEDGE_DELAY = Duration.seconds(6);
+/** Completed generation times kept per route to decide when a second attempt is worth it. */
+const RECENT_DURATION_SAMPLES = 5;
 
 interface SharedPrediction {
   readonly result: Deferred.Deferred<string | null>;
@@ -45,6 +46,8 @@ const make = Effect.gen(function* () {
   const textGeneration = yield* TextGeneration;
   const layerScope = yield* Effect.scope;
   const pending = new Map<string, SharedPrediction>();
+  // Keyed by provider instance and model: how long this route's generations usually take.
+  const recentDurationsMs = new Map<string, ReadonlyArray<number>>();
 
   const readThread = (threadId: ThreadId) =>
     snapshotQuery.getThreadShellById(threadId).pipe(Effect.map(Option.getOrUndefined));
@@ -77,22 +80,47 @@ const make = Effect.gen(function* () {
       const cwd = Option.isSome(project)
         ? resolveThreadWorkspaceCwd({ thread, projects: [project.value] })
         : undefined;
-      const attempt = Effect.suspend(() =>
-        textGeneration.generateComposerPrediction({
+      const routeKey = JSON.stringify([
+        routing.modelSelection.instanceId ?? routing.modelSelection.provider,
+        routing.modelSelection.model,
+      ]);
+      const attempt = Effect.gen(function* () {
+        const startedAt = yield* Clock.currentTimeMillis;
+        const result = yield* textGeneration.generateComposerPrediction({
           cwd: cwd ?? process.cwd(),
           conversation,
           modelSelection: routing.modelSelection,
           ...(routing.providerOptions ? { providerOptions: routing.providerOptions } : {}),
           ...(routing.codexHomePath ? { codexHomePath: routing.codexHomePath } : {}),
-        }),
-      );
+        });
+        const elapsedMs = (yield* Clock.currentTimeMillis) - startedAt;
+        recentDurationsMs.set(
+          routeKey,
+          [...(recentDurationsMs.get(routeKey) ?? []), elapsedMs].slice(-RECENT_DURATION_SAMPLES),
+        );
+        return result;
+      });
       // A provider backend sometimes stalls for many seconds on a request that normally takes
-      // three. A second attempt starts once the usual time has passed; whichever settles first
-      // wins and the other is interrupted, so a fast failure still fails fast.
-      const generated = yield* Effect.raceFirst(
-        attempt,
-        Effect.delay(attempt, COMPOSER_PREDICTION_HEDGE_DELAY),
-      ).pipe(Effect.timeoutOption(COMPOSER_PREDICTION_TIMEOUT));
+      // three. Once the route's usual time has clearly passed, a second attempt races the
+      // first. The first one keeps its normal outcome (a fast failure still fails fast); a
+      // second attempt that fails is ignored, so it can never cancel a first one that is
+      // still on its way. A route that is slow by nature gets no second attempt.
+      const hedgeDelayMs = resolveComposerPredictionHedgeDelayMs({
+        recentDurationsMs: recentDurationsMs.get(routeKey) ?? [],
+        timeoutMs: Duration.toMillis(COMPOSER_PREDICTION_TIMEOUT),
+      });
+      const generation =
+        hedgeDelayMs === null
+          ? attempt
+          : Effect.raceFirst(
+              attempt,
+              Effect.delay(attempt, Duration.millis(hedgeDelayMs)).pipe(
+                Effect.catchCause((cause) =>
+                  Cause.hasInterruptsOnly(cause) ? Effect.interrupt : Effect.never,
+                ),
+              ),
+            );
+      const generated = yield* generation.pipe(Effect.timeoutOption(COMPOSER_PREDICTION_TIMEOUT));
       if (Option.isNone(generated)) {
         yield* Effect.logWarning("Composer prediction timed out", { threadId, expectedTurnId });
         return null;
@@ -110,8 +138,10 @@ const make = Effect.gen(function* () {
         return Effect.logWarning("Composer prediction unavailable", {
           threadId,
           expectedTurnId,
-          // Provider detail only; the transcript itself is never logged.
-          reason: Schema.is(TextGenerationError)(error) ? error.detail : "unexpected failure",
+          // No provider detail: a CLI failure message can echo prompt or reply text.
+          reason: Schema.is(TextGenerationError)(error)
+            ? "text generation failed"
+            : "unexpected failure",
         }).pipe(Effect.as(null));
       }),
     );

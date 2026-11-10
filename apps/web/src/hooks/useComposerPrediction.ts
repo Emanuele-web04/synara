@@ -16,6 +16,7 @@ import {
 import {
   shouldDiscardComposerPredictionAfterEdit,
   composerPredictionStore,
+  nextComposerPredictionRequest,
   type ComposerPredictionEntry,
   type ComposerPredictionTarget,
   type VisibleComposerPrediction,
@@ -81,11 +82,19 @@ export function useComposerPrediction(input: {
   useEffect(() => {
     if (key === null || threadId === null || turnId === null || !canShow) return;
     const store = composerPredictionStore.getState();
-    if (store.entries.has(key)) return;
+    const request = nextComposerPredictionRequest({
+      entry: store.entries.get(key),
+      settled: store.settledKeys.has(key),
+    });
+    if (!request) return;
     const api = readNativeApi();
     if (!api) return;
     const controller = new AbortController();
-    const pending: ComposerPredictionEntry = { status: "pending", controller };
+    const pending: ComposerPredictionEntry = {
+      status: "pending",
+      controller,
+      retry: request.retry,
+    };
     store.setEntry(key, pending);
     // A result only lands if its request is still the live one for this key: an edit,
     // a chat/account/turn change, or turning the setting off has already replaced it.
@@ -107,8 +116,12 @@ export function useComposerPrediction(input: {
           );
       })
       .catch(() => {
-        // Failures are silent: no suggestion for this turn.
-        if (isCurrent()) composerPredictionStore.getState().setEntry(key, { status: "done" });
+        // Failures are silent. The first one may be a dropped connection, so the turn stays
+        // open for one more request the next time the composer could show a suggestion.
+        if (!isCurrent()) return;
+        composerPredictionStore
+          .getState()
+          .setEntry(key, request.retry ? { status: "done" } : { status: "failed" });
       });
   }, [canShow, key, threadId, turnId]);
 

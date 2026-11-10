@@ -234,8 +234,11 @@ export const COMPOSER_PREDICTION_CONTEXT_BUDGET = {
   maxChars: 12_000,
   /** The latest user request keeps its head and tail past this many characters. */
   maxLatestRequestChars: 4_000,
-  /** Newest projected messages read to find those exchanges. */
-  messageLimit: 64,
+  /**
+   * Newest projected messages read to find those exchanges. Wide enough that a long turn's
+   * own commentary messages do not push the request that started it out of the window.
+   */
+  messageLimit: 200,
 } as const;
 
 const COMPOSER_PREDICTION_TRANSCRIPT_BEGIN = "<<<BEGIN TRANSCRIPT>>>";
@@ -298,6 +301,9 @@ export function sanitizeComposerPrediction(raw: string | null | undefined): stri
   if (text.length === 0 || COMPOSER_PREDICTION_NULL_LITERALS.has(text.toLowerCase())) {
     return null;
   }
+  // A leading slash is the composer's command trigger: an accepted draft must be a message,
+  // never something Enter would run as a command.
+  if (text.startsWith("/")) return null;
   const clipped = clipComposerPrediction(text);
   return clipped.length > 0 ? clipped : null;
 }

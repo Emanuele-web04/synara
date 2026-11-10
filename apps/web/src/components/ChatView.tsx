@@ -5393,7 +5393,8 @@ export default function ChatView({
         settings.showComposerSuggestions &&
         isServerThread &&
         !isEditorRail &&
-        !isInactiveSplitPane,
+        !isInactiveSplitPane &&
+        !activeThreadIsSidechat,
       hostId: executionNamespace() ?? null,
       threadId: activeThread?.id ?? null,
       providerInstanceId: activeThreadProviderInstanceId,

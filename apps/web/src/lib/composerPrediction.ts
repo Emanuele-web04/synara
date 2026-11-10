@@ -5,7 +5,7 @@
 // Layer: Web logic (no React, no transport)
 // Exports: composerPredictionKey, resolveComposerPredictionTarget, canShowComposerPrediction,
 //          shouldAcceptComposerPredictionOnTab, shouldDiscardComposerPredictionAfterEdit,
-//          composerPredictionStore
+//          nextComposerPredictionRequest, composerPredictionStore
 
 import type { OrchestrationLatestTurn, ThreadId, TurnId } from "@synara/contracts";
 import { createStore } from "zustand/vanilla";
@@ -18,13 +18,20 @@ export interface ComposerPredictionTarget {
 }
 
 /**
- * `pending` while the request runs; `ready` once a suggestion arrived; `done` when the turn
- * has no suggestion to show anymore (none came back, it failed, it was accepted, or the user
- * typed). A `done` entry is never requested or shown again for its key.
+ * `pending` while the request runs; `ready` once a suggestion arrived; `failed` after the
+ * first request error, which may be retried once (a dropped connection is not an answer);
+ * `done` when the turn has no suggestion to show anymore (none came back, it failed twice,
+ * it was accepted, or the user typed). A `done` key is never requested or shown again.
  */
 export type ComposerPredictionEntry =
-  | { readonly status: "pending"; readonly controller: AbortController }
+  | {
+      readonly status: "pending";
+      readonly controller: AbortController;
+      /** True for the single retry after a failed first request. */
+      readonly retry: boolean;
+    }
   | { readonly status: "ready"; readonly suggestion: string }
+  | { readonly status: "failed" }
   | { readonly status: "done" };
 
 export interface VisibleComposerPrediction {
@@ -139,21 +146,54 @@ export function shouldAcceptComposerPredictionOnTab(input: {
 
 /** Most entries the store keeps; the oldest key is forgotten first. */
 export const COMPOSER_PREDICTION_STORE_LIMIT = 64;
+/** Most settled keys remembered, in memory and in the window's session storage. */
+export const COMPOSER_PREDICTION_SETTLED_LIMIT = 256;
+
+const SETTLED_STORAGE_KEY = "synara:composer-prediction-settled:v1";
+
+function readSettledKeys(): ReadonlySet<string> {
+  try {
+    const stored: unknown = JSON.parse(
+      globalThis.sessionStorage?.getItem(SETTLED_STORAGE_KEY) ?? "[]",
+    );
+    return new Set(
+      Array.isArray(stored) ? stored.filter((key): key is string => typeof key === "string") : [],
+    );
+  } catch {
+    return new Set();
+  }
+}
+
+function writeSettledKeys(keys: ReadonlySet<string>): void {
+  try {
+    globalThis.sessionStorage?.setItem(SETTLED_STORAGE_KEY, JSON.stringify([...keys]));
+  } catch {
+    // Storage can be unavailable or full; the in-memory set still holds for this page.
+  }
+}
 
 interface ComposerPredictionStoreState {
   readonly entries: ReadonlyMap<string, ComposerPredictionEntry>;
+  /**
+   * Keys whose turn is settled for good (`done`). Kept apart from `entries` so eviction and
+   * a window reload cannot bring back a suggestion the user already used or typed over.
+   * Only these opaque keys are stored; suggestion text never leaves memory.
+   */
+  readonly settledKeys: ReadonlySet<string>;
   readonly setEntry: (key: string, entry: ComposerPredictionEntry) => void;
   readonly deleteEntry: (key: string) => void;
 }
 
 /**
  * One entry per key for the whole window, so a ready or consumed prediction survives a chat
- * remount. In memory only: nothing here reaches localStorage or the composer draft store.
+ * remount. Suggestions live in memory only: nothing here reaches localStorage or the composer
+ * draft store, and session storage holds just the settled keys.
  */
 export const composerPredictionStore = createStore<ComposerPredictionStoreState>()((set) => ({
   entries: new Map(),
+  settledKeys: readSettledKeys(),
   setEntry: (key, entry) =>
-    set(({ entries }) => {
+    set(({ entries, settledKeys }) => {
       const next = new Map(entries);
       next.delete(key);
       next.set(key, entry);
@@ -162,7 +202,15 @@ export const composerPredictionStore = createStore<ComposerPredictionStoreState>
         if (oldest.status === "pending") oldest.controller.abort();
         next.delete(oldestKey);
       }
-      return { entries: next };
+      if (entry.status !== "done" || settledKeys.has(key)) return { entries: next };
+      const nextSettled = new Set(settledKeys);
+      nextSettled.add(key);
+      for (const oldestKey of nextSettled) {
+        if (nextSettled.size <= COMPOSER_PREDICTION_SETTLED_LIMIT) break;
+        nextSettled.delete(oldestKey);
+      }
+      writeSettledKeys(nextSettled);
+      return { entries: next, settledKeys: nextSettled };
     }),
   deleteEntry: (key) =>
     set(({ entries }) => {
@@ -172,6 +220,19 @@ export const composerPredictionStore = createStore<ComposerPredictionStoreState>
       return { entries: next };
     }),
 }));
+
+/**
+ * Whether a request may start for a key: never for a settled one, once for a new one, and
+ * once more after a failed first request. Null when no request should start.
+ */
+export function nextComposerPredictionRequest(input: {
+  readonly entry: ComposerPredictionEntry | undefined;
+  readonly settled: boolean;
+}): { readonly retry: boolean } | null {
+  if (input.settled) return null;
+  if (input.entry === undefined) return { retry: false };
+  return input.entry.status === "failed" ? { retry: true } : null;
+}
 
 /**
  * Whether a prompt change discards the prediction for the same key: any edit while it is
