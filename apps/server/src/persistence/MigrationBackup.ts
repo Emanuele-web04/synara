@@ -271,7 +271,7 @@ export const inspectMigrationBackupPlan = Effect.gen(function* () {
     }
   }
   const inspectedHighWaterMark = Math.max(...inspectedNames.keys(), 0);
-  if (isReleasedMainMigrationGap(inspectedNames)) {
+  if (isReleasedMainMigrationGap(recordedNames)) {
     // This exact released history is a normal upgrade. Keep its backup and
     // recovery marker while allowing the replay to run without import consent.
     return { sourceVersion: "v141-released-main", targetVersion: latestMigrationId };
@@ -1178,6 +1178,7 @@ function inspectMigrationRows(
     recordedNames.set(migration.migrationId, migration.name);
   }
 
+  const releasedMainGap = isReleasedMainMigrationGap(recordedNames);
   const accountRepair = planAccountMigrationRepair(
     [...recordedNames].map(([migration_id, name]) => ({ migration_id, name })),
   );
@@ -1204,7 +1205,7 @@ function inspectMigrationRows(
   return {
     migrationId,
     lineage:
-      divergence === undefined || isReleasedMainMigrationGap(recordedNames)
+      divergence === undefined || releasedMainGap
         ? "canonical"
         : divergence[0] > LAST_SHARED_LINEAGE_MIGRATION_ID
           ? "imported"

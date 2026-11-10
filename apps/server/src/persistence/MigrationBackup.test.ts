@@ -932,6 +932,10 @@ describe("migration backups", () => {
 
   it.each([
     [
+      "an unknown legacy migration-32 name",
+      "UPDATE effect_sql_migrations SET name = 'UnknownMigration' WHERE migration_id = 32",
+    ],
+    [
       "a renamed migration",
       "UPDATE effect_sql_migrations SET name = 'UnknownMigration' WHERE migration_id = 141",
     ],
