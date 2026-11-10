@@ -10,6 +10,9 @@
 // sheet starts its follow-on flow (a dialog, a Settings page), so the waiting sheets
 // stay closed for the rest of this launch instead of covering that flow; they are not
 // acknowledged, so they come back on the next one.
+//
+// A sheet ordered "last" also waits for the startup chain to settle and for every other
+// sheet or hint that wants to open to finish first, so it is always the final one.
 
 import { useEffect, useId } from "react";
 import { create } from "zustand";
@@ -22,8 +25,11 @@ interface AnnouncementSheetSlotStore {
   startupSettled: boolean;
   /** True once a sheet was confirmed; no further sheet opens during this launch. */
   handedOff: boolean;
+  /** Surfaces that want to open now, holding the slot or queued for it; "last" ones excluded. */
+  pending: readonly string[];
   claim: (id: string, allowAfterHandOff?: boolean) => void;
   release: (id: string) => void;
+  setPending: (id: string, pending: boolean) => void;
   handOff: () => void;
   settleStartup: () => void;
 }
@@ -32,11 +38,19 @@ export const useAnnouncementSheetSlotStore = create<AnnouncementSheetSlotStore>(
   owner: null,
   startupSettled: false,
   handedOff: false,
+  pending: [],
   claim: (id, allowAfterHandOff = false) =>
     set((state) =>
       state.owner === null && (!state.handedOff || allowAfterHandOff) ? { owner: id } : state,
     ),
   release: (id) => set((state) => (state.owner === id ? { owner: null } : state)),
+  setPending: (id, pending) =>
+    set((state) => {
+      if (state.pending.includes(id) === pending) return state;
+      return {
+        pending: pending ? [...state.pending, id] : state.pending.filter((other) => other !== id),
+      };
+    }),
   handOff: () => set({ handedOff: true }),
   settleStartup: () => set({ startupSettled: true }),
 }));
@@ -46,6 +60,7 @@ export function useAnnouncementSheetSlot(
   wantsOpen: boolean,
   allowAfterHandOff = false,
   waitForOnboarding = true,
+  order: "any" | "last" = "any",
 ): {
   open: boolean;
   handOff: () => void;
@@ -54,18 +69,34 @@ export function useAnnouncementSheetSlot(
   const owner = useAnnouncementSheetSlotStore((state) => state.owner);
   const claim = useAnnouncementSheetSlotStore((state) => state.claim);
   const release = useAnnouncementSheetSlotStore((state) => state.release);
+  const setPending = useAnnouncementSheetSlotStore((state) => state.setPending);
   const handOff = useAnnouncementSheetSlotStore((state) => state.handOff);
+  const othersFirst = useAnnouncementSheetSlotStore(
+    (state) => !state.startupSettled || state.pending.some((other) => other !== id),
+  );
   const onboardingBlocking = useOnboardingDialogStore(
     (state) => !state.startupGateSettled || state.isOpen || state.betaWelcomePending,
   );
-  const eligible = wantsOpen && (!waitForOnboarding || !onboardingBlocking);
+  const ready = wantsOpen && (!waitForOnboarding || !onboardingBlocking);
+  const last = order === "last";
+  // Once open, a "last" sheet keeps the slot even if another surface queues behind it.
+  const eligible = ready && (!last || owner === id || !othersFirst);
 
+  useEffect(() => {
+    if (!last) setPending(id, ready);
+  }, [id, last, ready, setPending]);
   // Re-runs when the owner changes, so a waiting sheet claims the slot once it frees.
   useEffect(() => {
     if (eligible) claim(id, allowAfterHandOff);
     else release(id);
   }, [allowAfterHandOff, claim, eligible, id, owner, release]);
-  useEffect(() => () => release(id), [id, release]);
+  useEffect(
+    () => () => {
+      release(id);
+      setPending(id, false);
+    },
+    [id, release, setPending],
+  );
 
   return { open: eligible && owner === id, handOff };
 }

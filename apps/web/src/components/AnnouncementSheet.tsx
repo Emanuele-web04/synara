@@ -9,14 +9,20 @@
 // Uses the dialog system's opaque "solid" surface — the frosted composer default
 // reads translucent over the desktop, since the Electron window itself is
 // transparent under macOS vibrancy.
+//
+// The "feature" presentation is for launches that earn more room: a 480px sheet whose
+// hero is a full-bleed illustrated band with its own close button, then a centered
+// pitch and capsule actions.
 
 import { useRef, type ReactNode, type KeyboardEventHandler } from "react";
 
 import { useAnnouncementSheetSlot } from "./announcementSheetSlot";
+import { XIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 import { Button } from "./ui/button";
 import {
   Dialog,
+  DialogClose,
   DialogDescription,
   DialogFooter,
   DialogHeader,
@@ -25,10 +31,11 @@ import {
 } from "./ui/dialog";
 
 const ACTION_BUTTON_CLASS_NAME = "rounded-[10px] text-ui-lg sm:text-ui-lg";
+const FEATURE_ACTION_BUTTON_CLASS_NAME = "min-w-28 px-5 text-ui-lg sm:text-ui-lg";
 
 export function AnnouncementSheet(props: {
   open: boolean;
-  presentation?: "sheet" | "tour";
+  presentation?: "sheet" | "tour" | "feature";
   onKeyDown?: KeyboardEventHandler<HTMLDivElement>;
   // Footer start (e.g. a pager) and the slot between dismiss and confirm (e.g. Back).
   navigation?: ReactNode;
@@ -37,6 +44,8 @@ export function AnnouncementSheet(props: {
   allowAfterHandOff?: boolean;
   // Beta welcome runs before the first-run gate; ordinary announcements wait for it.
   waitForOnboarding?: boolean;
+  // "last" waits until startup settles and every other queued sheet or hint is done.
+  order?: "any" | "last";
   // Decorative hero rendered above the title; the sheet owns the spacing below it.
   hero: ReactNode;
   title: ReactNode;
@@ -61,7 +70,87 @@ export function AnnouncementSheet(props: {
     props.open,
     props.allowAfterHandOff,
     props.waitForOnboarding,
+    props.order,
   );
+  const confirm = () => {
+    if (props.handOffOnConfirm !== false) handOff();
+    props.onConfirm();
+  };
+  if (props.presentation === "feature") {
+    return (
+      <Dialog
+        open={open}
+        onOpenChange={(nextOpen) => {
+          if (!nextOpen) props.onDismiss();
+        }}
+      >
+        <DialogPopup
+          showCloseButton={false}
+          initialFocus={sheetRef}
+          onKeyDown={props.onKeyDown}
+          className="max-w-[480px] overflow-hidden rounded-[20px]"
+        >
+          <div
+            ref={sheetRef}
+            tabIndex={-1}
+            className="flex min-h-0 flex-col overflow-y-auto outline-none"
+          >
+            <div className="relative h-[268px] shrink-0 overflow-hidden">
+              <div aria-hidden className="absolute inset-0">
+                {props.hero}
+              </div>
+              {/* Frosted so it reads on any hero art; Escape and the backdrop close too. */}
+              <DialogClose
+                aria-label="Close"
+                className="absolute end-3 top-3 rounded-lg bg-white/25 text-neutral-900 ring-1 ring-white/55 ring-inset backdrop-blur-sm [:hover,[data-pressed]]:bg-white/45 [:hover,[data-pressed]]:text-neutral-900"
+                render={<Button size="icon-xs" variant="ghost" />}
+              >
+                <XIcon />
+              </DialogClose>
+            </div>
+
+            <div className="flex flex-col items-center px-10 pt-7 pb-8 text-center max-sm:px-6">
+              <DialogHeader className="items-center gap-2 p-0">
+                <DialogTitle className="text-[20px] leading-tight tracking-[-0.015em]">
+                  {props.title}
+                </DialogTitle>
+                <DialogDescription className="max-w-[380px] text-ui-lg leading-normal">
+                  {props.description}
+                </DialogDescription>
+              </DialogHeader>
+
+              {props.details}
+
+              <DialogFooter
+                variant="bare"
+                className="justify-center gap-3 p-0 pt-6 sm:justify-center"
+              >
+                {props.dismissLabel !== undefined ? (
+                  <Button
+                    shape="capsule"
+                    size="lg"
+                    variant="subtle"
+                    className={FEATURE_ACTION_BUTTON_CLASS_NAME}
+                    onClick={props.onDismiss}
+                  >
+                    {props.dismissLabel}
+                  </Button>
+                ) : null}
+                <Button
+                  shape="capsule"
+                  size="lg"
+                  className={FEATURE_ACTION_BUTTON_CLASS_NAME}
+                  onClick={confirm}
+                >
+                  {props.confirmLabel}
+                </Button>
+              </DialogFooter>
+            </div>
+          </div>
+        </DialogPopup>
+      </Dialog>
+    );
+  }
   return (
     <Dialog
       open={open}
@@ -123,13 +212,7 @@ export function AnnouncementSheet(props: {
               </Button>
             ) : null}
             {props.navigationEnd}
-            <Button
-              className={ACTION_BUTTON_CLASS_NAME}
-              onClick={() => {
-                if (props.handOffOnConfirm !== false) handOff();
-                props.onConfirm();
-              }}
-            >
+            <Button className={ACTION_BUTTON_CLASS_NAME} onClick={confirm}>
               {props.confirmLabel}
             </Button>
           </DialogFooter>
