@@ -29,9 +29,9 @@ export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
         id: "remote-connections",
         title: "Connect to your agents with Synara Alto",
         description:
-          "Pair your iPhone, iPad or another computer with Synara Desktop. Open remote workspaces, steer chats and handle approvals on the computer doing the work.",
+          "Pair computers running Synara on macOS, Windows x64, or Linux x64. Open remote workspaces, steer chats and handle approvals on the computer doing the work.",
         details:
-          "Sign in to the same Synara account, open Connections and approve the pairing on the source computer. The source must stay online for live work. Manage Alto in Settings → Usage & limits.",
+          "Sign in to the same Synara account, open Connections and approve the pairing on the source computer. Keep it online for live work. The managed connector on a Mac requires macOS 15 or newer. iPhone and iPad support is coming soon.",
       },
       {
         id: "private-inbox-history",
@@ -46,14 +46,6 @@ export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
         title: "Share your Synara profile",
         description:
           "Alto lets you publish a profile at trysynara.com/@handle and choose what appears on it.",
-      },
-      {
-        id: "remote-updates-and-notifications",
-        title: "Update a paired Mac from iPhone or iPad",
-        description:
-          "Check for a Synara Desktop update from the paired computer's settings and confirm a restart when the update is ready. Optional notifications can include encrypted completion previews.",
-        details:
-          "Update controls are available for packaged macOS apps. Running chats or tasks block installation.",
       },
       {
         id: "daily-fixes",

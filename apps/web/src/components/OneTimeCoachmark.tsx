@@ -18,6 +18,7 @@ export function OneTimeCoachmark({
   description,
   tooltip,
   tooltipSide = "right",
+  ready = true,
   children,
 }: {
   storageKey: string;
@@ -25,6 +26,8 @@ export function OneTimeCoachmark({
   description: string;
   tooltip: string;
   tooltipSide?: "top" | "right" | "bottom" | "left";
+  /** Extra gate for hints that follow another step, such as a launch sheet. */
+  ready?: boolean;
   children: ReactElement<ButtonHTMLAttributes<HTMLButtonElement>>;
 }) {
   const [visible, setVisible] = useState(() => {
@@ -37,7 +40,8 @@ export function OneTimeCoachmark({
   });
   const [tooltipOpen, setTooltipOpen] = useState(false);
   const startupSettled = useAnnouncementSheetSlotStore((state) => state.startupSettled);
-  const { open } = useAnnouncementSheetSlot(visible && startupSettled);
+  const { open } = useAnnouncementSheetSlot(visible && startupSettled && ready);
+  const hintOpen = visible && open;
   const markSeen = () => {
     try {
       window.localStorage.setItem(storageKey, "seen");
@@ -61,9 +65,9 @@ export function OneTimeCoachmark({
 
   return (
     <Tooltip
-      open={visible ? open : tooltipOpen}
+      open={hintOpen || tooltipOpen}
       onOpenChange={(next) => {
-        if (!visible) setTooltipOpen(next);
+        if (!hintOpen) setTooltipOpen(next);
       }}
     >
       <TooltipTrigger
@@ -77,19 +81,19 @@ export function OneTimeCoachmark({
         })}
       />
       <TooltipPopup
-        side={visible ? "right" : tooltipSide}
-        align={visible ? "start" : "center"}
-        sideOffset={visible ? 8 : 4}
+        side={hintOpen ? "right" : tooltipSide}
+        align={hintOpen ? "start" : "center"}
+        sideOffset={hintOpen ? 8 : 4}
         className={cn(
           // The shared popup surface paints its fill from unlayered CSS (`.app-popup-surface`),
           // which outranks a plain utility: without `!` the accent fill lost and the white
           // copy rendered on a white card, reading as an empty popup.
-          visible &&
+          hintOpen &&
             "max-w-64 border-[var(--color-text-accent)] ![background:var(--color-text-accent)] text-white shadow-lg",
         )}
-        viewportClassName={cn(visible && "px-3 py-2.5")}
+        viewportClassName={cn(hintOpen && "px-3 py-2.5")}
       >
-        {visible ? (
+        {hintOpen ? (
           <div className="text-left">
             <div className="text-ui leading-snug font-semibold">{title}</div>
             <div className="mt-0.5 text-ui-sm leading-4 text-white/85">{description}</div>
