@@ -3676,6 +3676,25 @@ describe("terminal remote recovery", () => {
   const ready = () =>
     jsonResponse(200, { ...NEGOTIATION_RESULT, remoteAttachmentId: "fresh-attachment" });
 
+  it("counts remote success only after the live RPC probe responds", async () => {
+    const track = vi.fn();
+    Object.assign(window, { desktopBridge: { productAnalytics: { track } } });
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(ready()));
+    const transport = new WsTransport(remoteUrl);
+    try {
+      await vi.waitFor(() => expect(sockets).toHaveLength(1));
+      expect(track).not.toHaveBeenCalledWith(expect.objectContaining({ outcome: "succeeded" }));
+      sockets[0]!.serveVoidRpc();
+      await vi.waitFor(() => expect(transport.getState()).toBe("open"));
+      expect(track).toHaveBeenCalledWith({
+        event: "remote.connection-succeeded",
+        outcome: "succeeded",
+      });
+    } finally {
+      await transport.dispose();
+    }
+  });
+
   it.each(["revoked", "needs-sign-in", "incompatible", "stopped"] as const)(
     "pauses %s without replaying failed work when the controller resumes the same transport",
     async (state) => {
@@ -3832,6 +3851,8 @@ describe("terminal remote recovery", () => {
   it("preserves the normal environment-read deadline on a connected but silent host", async () => {
     vi.useFakeTimers();
     bindWindowTimersToCurrentGlobals();
+    const track = vi.fn();
+    Object.assign(window, { desktopBridge: { productAnalytics: { track } } });
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(ready()));
     const transport = new WsTransport(remoteUrl);
     try {
@@ -3849,6 +3870,10 @@ describe("terminal remote recovery", () => {
       await vi.advanceTimersByTimeAsync(1);
       const failure = await pending;
       expect(failure).toMatchObject({ code: "WS_REQUEST_TIMEOUT" });
+      expect(track).toHaveBeenCalledWith({
+        event: "remote.connection-timeout",
+        outcome: "failed",
+      });
       await expect(transport.waitForRemoteConnectionRecovery(failure)).resolves.toBe(false);
       expect(transport.getState()).toBe("open");
     } finally {

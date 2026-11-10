@@ -1,12 +1,41 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { readHostsApi } from "./api";
+import { trackProductAnalytics } from "~/lib/productAnalytics";
+
+vi.mock("./api", () => ({ readHostsApi: vi.fn() }));
+vi.mock("~/lib/productAnalytics", () => ({ trackProductAnalytics: vi.fn() }));
 
 import {
   countdownLabel,
+  callRemoteAccess,
   fingerprintGroups,
   pendingApprovals,
   remoteDeviceKind,
   type RemoteHostState,
 } from "./remoteAccess";
+
+it("counts an approval only after the owner RPC succeeds and emits no request fields", async () => {
+  const access = vi
+    .fn()
+    .mockRejectedValueOnce(new Error("rejected"))
+    .mockResolvedValue({ kind: "done" });
+  vi.mocked(readHostsApi).mockReturnValue({ remoteAccess: access } as unknown as ReturnType<
+    typeof readHostsApi
+  >);
+  vi.mocked(trackProductAnalytics).mockClear();
+  const request = {
+    operation: "approve",
+    inviteId: "private-invite",
+    deviceJkt: "private-key",
+  } as const;
+  await expect(callRemoteAccess(request)).rejects.toThrow("rejected");
+  expect(trackProductAnalytics).not.toHaveBeenCalled();
+  await callRemoteAccess(request);
+  expect(trackProductAnalytics).toHaveBeenCalledExactlyOnceWith({
+    event: "remote.pairing-approved",
+    outcome: "succeeded",
+  });
+});
 
 describe("remoteDeviceKind", () => {
   it("picks a glyph from the label the device reported", () => {

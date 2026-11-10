@@ -1,5 +1,38 @@
 # Product events
 
+## Anonymous Remote and crash totals
+
+Desktop product sharing includes separate daily UTC counts for approved pairings,
+successful remote RPC connections, successful reconnects, Remote bootstrap timeouts,
+and unexpected app/backend crashes. Stable remains opt-in.
+The host approval RPC must succeed before the approval is counted, and a
+remote RPC liveness check must succeed before the connection is counted.
+
+The sender transmits these records in separate `anonymousEvents` requests to
+`/v1/product-events`. Each contains only a UTC day, channel, fixed event name,
+and fresh random UUID for delivery deduplication. There is no installation ID,
+account ID, device ID, host ID, version, platform, exact timestamp, or free text.
+The receiver rejects additional fields and mixed identified/anonymous batches.
+Existing transport infrastructure handles source IPs for delivery and rate
+limiting. They are not stored with these counters.
+
+Migration `0012_anonymous_product.sql` stores a receipt and increments a daily
+counter atomically. Retries use the same receipt and count once. Receipts expire
+after their UTC day leaves the seven-day retry window. Daily counters retain
+30 days. The authenticated `/api/product` response includes daily `anonymousEvents`
+totals with date and channel filters.
+
+Unexpected main exceptions, renderer crashes, and supervised backend exits
+increment the crash counter. Expected shutdowns and migration consent blocks are
+excluded. These reports are best-effort. A hard process kill or a failure to persist
+the queue can prevent a crash report. A main-process exception is queued for delivery
+after the next launch. No technical crash details enter this opt-in path.
+Stable continues to disable the separate Beta diagnostics sender.
+The desktop surface is the sole reporter.
+
+Install the migration and receiver before distributing a desktop build that
+sends the new events. Existing clients cannot backfill these totals.
+
 ## Current ownership: Synara monorepo
 
 As of 5 October 2026, this service is maintained in `apps/analytics` on Synara's

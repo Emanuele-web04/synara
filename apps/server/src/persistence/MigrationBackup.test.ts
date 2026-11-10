@@ -37,6 +37,7 @@ import {
 import { migrationEntries, runMigrations } from "./Migrations.ts";
 import * as NodeSqliteClient from "./NodeSqliteClient.ts";
 import { makeSqlitePersistenceLive } from "./Layers/Sqlite.ts";
+import UsageLimitRecoveryMigration from "./Migrations/141_ProjectionThreadsUsageLimitRecovery.ts";
 import { runProcess } from "../processRunner.ts";
 
 vi.mock("node:fs/promises", async () => {
@@ -849,6 +850,84 @@ describe("migration backups", () => {
         firstDivergedId: 17,
         recordedName: "ImportedMigration17",
       },
+    });
+  });
+
+  it("backs up the released tracker gap, preserves data through real startup, and reopens safely", async () => {
+    const dbPath = await makeDbPath();
+    await runWithDatabase(
+      dbPath,
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        yield* runMigrations({ toMigrationInclusive: 135 });
+        yield* UsageLimitRecoveryMigration;
+        yield* sql`INSERT INTO effect_sql_migrations (migration_id, name)
+          VALUES (141, 'ProjectionThreadsUsageLimitRecovery')`;
+        yield* sql`INSERT INTO projection_threads
+          (thread_id, project_id, title, created_at, updated_at, usage_limit_recovery_json)
+          VALUES ('upgrade-probe', 'project', 'Preserve this thread', '2026-10-31', '2026-10-31',
+            '{"id":"recovery-probe"}')`;
+      }),
+    );
+
+    const blocked = await runWithDatabase(
+      dbPath,
+      Effect.flip(runWithPreMigrationBackup(dbPath, runMigrations())),
+    );
+    expect(blocked).toBeInstanceOf(MigrationDivergenceConsentRequiredError);
+    if (!(blocked instanceof MigrationDivergenceConsentRequiredError))
+      throw new Error("Expected the released database gap to require consent");
+    expect(blocked.challenge).toMatchObject({
+      firstDivergedId: 136,
+      recordedName: "<missing>",
+      expectedName: "AccountUsageSync",
+    });
+    expect(await backupPaths(dbPath)).toEqual([]);
+
+    const startDatabase = (divergenceConsent?: string) =>
+      Effect.runPromise(
+        Effect.gen(function* () {
+          const sql = yield* SqlClient.SqlClient;
+          expect(yield* sql`PRAGMA quick_check`).toEqual([{ quick_check: "ok" }]);
+          expect(
+            yield* sql`SELECT title, usage_limit_recovery_json
+            FROM projection_threads WHERE thread_id = 'upgrade-probe'`,
+          ).toEqual([
+            { title: "Preserve this thread", usage_limit_recovery_json: '{"id":"recovery-probe"}' },
+          ]);
+          expect(yield* runMigrations()).toEqual([]);
+        }).pipe(
+          Effect.provide(
+            makeSqlitePersistenceLive(dbPath, { divergenceConsent }).pipe(
+              Layer.provide(NodeServices.layer),
+            ),
+          ),
+        ),
+      );
+    await startDatabase(blocked.challenge.consentToken);
+    const backups = await backupPaths(dbPath);
+    expect(backups).toHaveLength(1);
+    const backup = await openBackupFixture(backups[0]!);
+    try {
+      expect(backup.prepare("PRAGMA quick_check").get()).toMatchObject({ quick_check: "ok" });
+      expect(
+        backup.prepare("SELECT name FROM effect_sql_migrations WHERE migration_id = 136").get(),
+      ).toBeUndefined();
+      expect(
+        backup.prepare("SELECT name FROM effect_sql_migrations WHERE migration_id = 141").get(),
+      ).toMatchObject({ name: "ProjectionThreadsUsageLimitRecovery" });
+      expect(
+        backup
+          .prepare("SELECT title FROM projection_threads WHERE thread_id = 'upgrade-probe'")
+          .get(),
+      ).toMatchObject({ title: "Preserve this thread" });
+    } finally {
+      backup.close();
+    }
+    await startDatabase();
+    expect(await backupPaths(dbPath)).toEqual(backups);
+    await expect(fs.stat(migrationRecoveryMarkerPath(dbPath))).rejects.toMatchObject({
+      code: "ENOENT",
     });
   });
 
