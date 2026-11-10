@@ -4,6 +4,7 @@
 // Layer: Route/UI support
 // Exports: entry type, the index, section label lookup, and the ranking helper
 
+import { isNotchIslandAvailable } from "~/hooks/useDesktopNotchIsland";
 import { rankProviderDiscoveryItems } from "~/lib/providerDiscovery";
 import { i18n, t } from "~/i18n";
 import {
@@ -327,6 +328,14 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     section: "notifications",
     title: "settings:waitForSubagents",
     keywords: "settings:alertOnceTheAgentAndAllOfItsBackground2",
+  },
+  {
+    id: "notifications:notch-island",
+    section: "notifications",
+    title: "settings:notchIsland",
+    keywords: "settings:notchIslandKeywords",
+    target: null,
+    applies: () => isNotchIslandAvailable(),
   },
 
   // ── AppSnap ───────────────────────────────────────────────────────────────────

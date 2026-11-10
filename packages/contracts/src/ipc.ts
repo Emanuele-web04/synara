@@ -858,6 +858,52 @@ export interface DesktopKeepAwakeState {
   onBattery: boolean;
 }
 
+/**
+ * Notch island (macOS, Synara Beta): agent status at the notch. `supported`
+ * is false on Stable and other platforms; `enabled` is the saved choice.
+ */
+export interface DesktopNotchIslandState {
+  supported: boolean;
+  enabled: boolean;
+  /**
+   * Whether this account may use the island (Synara Alto, or a build without
+   * billing). False until the app reports it, so the island stays off meanwhile.
+   */
+  entitled: boolean;
+}
+
+/** The status a chat shows on the notch island, matching the sidebar's status pills. */
+export type DesktopNotchIslandRowState =
+  | "approval"
+  | "input"
+  | "plan"
+  | "working"
+  | "done"
+  | "failed";
+
+export interface DesktopNotchIslandRow {
+  readonly threadId: string;
+  readonly title: string;
+  readonly project: string | null;
+  /** Provider key, matching a key of `icons` when its glyph is known. */
+  readonly provider: string | null;
+  readonly state: DesktopNotchIslandRowState;
+}
+
+/**
+ * Renderer → main: what the notch island should show, built from the same grouping
+ * the Inbox uses. Counts cover every chat; `rows` is the short list shown on hover.
+ * `icons` maps provider keys to SVG markup of the glyphs the app already draws.
+ */
+export interface DesktopNotchIslandSnapshot {
+  readonly needsYou: number;
+  readonly working: number;
+  readonly done: number;
+  readonly failed: number;
+  readonly rows: ReadonlyArray<DesktopNotchIslandRow>;
+  readonly icons: Readonly<Record<string, string>>;
+}
+
 export const DesktopAppIcon = Schema.Literals(["default", "icon", "dark", "beta"]);
 export type DesktopAppIcon = typeof DesktopAppIcon.Type;
 
@@ -1117,6 +1163,18 @@ export interface DesktopBridge {
     getState: () => Promise<DesktopKeepAwakeState>;
     setEnabled: (enabled: boolean) => Promise<DesktopKeepAwakeState>;
     setRemoteAccessAllowed: (allowed: boolean) => Promise<DesktopKeepAwakeState>;
+  };
+  /**
+   * Notch island (macOS, Synara Beta). The main process is the gate: it
+   * reports `supported: false` and ignores changes everywhere else.
+   */
+  notchIsland?: {
+    getState: () => Promise<DesktopNotchIslandState>;
+    setEnabled: (enabled: boolean) => Promise<DesktopNotchIslandState>;
+    /** Reports the account's Synara Alto access; the island only runs while it is true. */
+    setEntitled: (entitled: boolean) => Promise<DesktopNotchIslandState>;
+    /** Fire-and-forget; main validates, caps and forwards it to the island. */
+    publishSnapshot: (snapshot: DesktopNotchIslandSnapshot) => void;
   };
   /**
    * Live desktop frames from the native computer frame tap, desktop app only.

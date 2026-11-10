@@ -59,7 +59,17 @@ export const MCP_CONNECTORS_BETA_FEATURE = "mcp-connectors";
  */
 export const NATIVE_EDITOR_BETA_FEATURE = "native-editor";
 
-export const BETA_ONLY_FEATURES: readonly BetaOnlyFeature[] = [ACCOUNT_INBOX_BETA_FEATURE];
+/**
+ * Notch island (Beta only, macOS): agent status at the MacBook notch (or a
+ * top-center pill on other displays), drawn by the AppSnap helper's
+ * `--island` mode. Desktop main is the gate.
+ */
+export const NOTCH_ISLAND_BETA_FEATURE = "notch-island";
+
+export const BETA_ONLY_FEATURES: readonly BetaOnlyFeature[] = [
+  ACCOUNT_INBOX_BETA_FEATURE,
+  NOTCH_ISLAND_BETA_FEATURE,
+];
 
 /**
  * Whether a Beta-only feature is on for this host. Only the Stable

@@ -14,10 +14,12 @@ import {
 } from "@synara/contracts";
 import { appSnapShortcutLabels } from "@synara/shared/appSnapShortcut";
 import { useQuery } from "@tanstack/react-query";
+import { useNavigate } from "@tanstack/react-router";
 import { useEffect, useId, useRef, useState } from "react";
 
 import type { AppSettingsBinding } from "~/appSettings";
 import { createLatestAppSnapRequestGuard } from "~/appSnap.logic";
+import { useDesktopNotchIsland, useNotchIslandAltoAccess } from "~/hooks/useDesktopNotchIsland";
 import { useRefreshOnWindowReturn } from "~/hooks/useRefreshOnWindowReturn";
 import { playAppSnapCaptureSound } from "~/lib/appSnapSound";
 import { CentralIcon } from "~/lib/central-icons";
@@ -82,10 +84,21 @@ export function NotificationsSettingsPanel({
   active,
 }: AppSettingsBinding & { readonly active: boolean }) {
   const { t } = useTranslation();
+  const notchIsland = useDesktopNotchIsland();
+  const notchIslandAlto = useNotchIslandAltoAccess(active && notchIsland.state?.supported === true);
+  const navigate = useNavigate();
 
   const [browserNotificationPermission, setBrowserNotificationPermission] = useState(
     readBrowserNotificationPermissionState(),
   );
+
+  function setNotchIslandEnabled(enabled: boolean) {
+    void notchIsland
+      .setEnabled(enabled)
+      .catch(() =>
+        toastManager.add({ type: "error", title: t("settings:couldNotUpdateNotchIsland") }),
+      );
+  }
 
   useEffect(() => {
     const timeoutId = window.setTimeout(() => {
@@ -254,6 +267,45 @@ export function NotificationsSettingsPanel({
             />
           }
         />
+
+        {notchIsland.state?.supported && notchIslandAlto === false ? (
+          <SettingsRow
+            id="setting-notch-island"
+            title="settings:notchIsland"
+            description="settings:notchIslandAltoDescription"
+            control={
+              <Button
+                size="xs"
+                shape="capsule"
+                variant="subtle"
+                onClick={() => void navigate({ to: "/settings", search: { section: "profile" } })}
+              >
+                {t("settings:viewAltoPlans")}
+              </Button>
+            }
+          />
+        ) : notchIsland.state?.supported ? (
+          <SettingsRow
+            id="setting-notch-island"
+            title="settings:notchIsland"
+            description="settings:notchIslandDescription"
+            resetAction={
+              notchIsland.state.enabled ? null : (
+                <SettingResetButton
+                  label={t("settings:notchIsland")}
+                  onClick={() => setNotchIslandEnabled(true)}
+                />
+              )
+            }
+            control={
+              <Switch
+                checked={notchIsland.state.enabled}
+                onCheckedChange={(checked) => setNotchIslandEnabled(Boolean(checked))}
+                aria-label={t("settings:notchIsland")}
+              />
+            }
+          />
+        ) : null}
       </SettingsSection>
     </div>
   );

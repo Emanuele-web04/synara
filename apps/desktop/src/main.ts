@@ -358,7 +358,19 @@ import {
   listAudioInputDevices,
   MAX_MICROPHONE_ID_LENGTH,
 } from "./audioLevelMonitor";
-import { AUDIO_TRAIL_BETA_FEATURE, isBetaFeatureEnabled } from "@synara/shared/betaFeatures";
+import {
+  AUDIO_TRAIL_BETA_FEATURE,
+  isBetaFeatureEnabled,
+  NOTCH_ISLAND_BETA_FEATURE,
+} from "@synara/shared/betaFeatures";
+import {
+  createNotchIslandController,
+  NotchIslandHost,
+  type NotchIslandController,
+  readNotchIslandPreference,
+  writeNotchIslandPreference,
+} from "./notchIsland";
+import { EMPTY_NOTCH_ISLAND_SNAPSHOT, sanitizeNotchIslandSnapshot } from "./notchIslandSnapshot";
 import { hardenBrowserAnnotationWebviewPreferences } from "./browserAnnotations/webviewSecurity";
 import { LOCAL_HTML_PREVIEW_SCHEME } from "./localHtmlPreviewProtocol";
 import {
@@ -451,6 +463,7 @@ function translateAutoUpdateDisabledReason(reason: string): string {
 // session open so a persisted custom cursor survives app restarts.
 const AGENT_CURSOR_PREFERENCE_PATH = Path.join(STATE_DIR, "agent-cursor-colors.json");
 const KEEP_AWAKE_PREFERENCE_PATH = Path.join(STATE_DIR, "keep-awake.json");
+const NOTCH_ISLAND_PREFERENCE_PATH = Path.join(STATE_DIR, "notch-island.json");
 const DESKTOP_SCHEME = desktopIdentity.scheme;
 const ROOT_DIR = Path.resolve(__dirname, "../../..");
 const APP_DISPLAY_NAME = desktopIdentity.displayName;
@@ -2335,6 +2348,17 @@ function focusMainWindow(options: { stealAppFocus?: boolean } = {}): void {
   mainWindow.focus();
 }
 
+/** Brings the window forward and opens a chat (notification and notch island clicks). */
+function openThreadFromDesktop(threadId: string, options: { stealAppFocus?: boolean } = {}): void {
+  focusMainWindow(options);
+  if (!mainWindow) {
+    return;
+  }
+  if (threadId.length > 0) {
+    mainWindow.webContents.send(IPC.menuAction, `notification-open-thread:${threadId}`);
+  }
+}
+
 // Show a native OS notification and refocus the app window when the alert is clicked.
 function showDesktopNotification(input: {
   title: string;
@@ -2366,13 +2390,7 @@ function showDesktopNotification(input: {
 
   notification.on("click", () => {
     clearUnreadNotificationBadge();
-    focusMainWindow();
-    if (!mainWindow) {
-      return;
-    }
-    if (threadId.length > 0) {
-      mainWindow.webContents.send(IPC.menuAction, `notification-open-thread:${threadId}`);
-    }
+    openThreadFromDesktop(threadId);
   });
 
   desktopNotificationRetainer.retain(notification);
@@ -5075,6 +5093,8 @@ async function disposeBrowserHostPipeServerForShutdown(reason: string): Promise<
   disposeComputerDesktopLifecycle = undefined;
   escapeKillSwitchMonitor?.dispose();
   escapeKillSwitchMonitor = undefined;
+  notchIslandController?.dispose();
+  notchIslandController = undefined;
   audioLevelMonitor?.dispose();
   audioLevelMonitor = undefined;
   audioLevelSubscribers.clear();
@@ -5601,6 +5621,57 @@ function registerIpcHandlers(): void {
       : getKeepAwakeController().getState(),
   );
 
+  // The controller is the gate: it answers `supported: false` off macOS and on Stable.
+  ipcMain.removeHandler(IPC.notchIsland.getState);
+  ipcMain.handle(IPC.notchIsland.getState, async () => getNotchIslandController().getState());
+
+  // Only the main window's top frame may say what the island shows; when that page
+  // goes away the island empties instead of showing stale chats.
+  ipcMain.removeAllListeners(IPC.notchIsland.publishSnapshot);
+  ipcMain.on(IPC.notchIsland.publishSnapshot, (event: IpcMainEvent, rawSnapshot: unknown) => {
+    if (event.sender !== mainWindow?.webContents || event.senderFrame !== event.sender.mainFrame) {
+      return;
+    }
+    const snapshot = sanitizeNotchIslandSnapshot(rawSnapshot);
+    if (!snapshot) return;
+    if (!notchIslandSnapshotSenders.has(event.sender)) {
+      const sender = event.sender;
+      notchIslandSnapshotSenders.add(sender);
+      const clear = () => {
+        sender.off("destroyed", clear);
+        sender.off("did-navigate", clear);
+        notchIslandSnapshotSenders.delete(sender);
+        notchIslandController?.setSnapshot(EMPTY_NOTCH_ISLAND_SNAPSHOT);
+        // A reloaded page reads the account again before the island returns.
+        notchIslandController?.setEntitled(false);
+      };
+      sender.once("destroyed", clear);
+      sender.once("did-navigate", clear);
+    }
+    getNotchIslandController().setSnapshot(snapshot);
+  });
+
+  ipcMain.removeHandler(IPC.notchIsland.setEnabled);
+  ipcMain.handle(IPC.notchIsland.setEnabled, async (_event, rawEnabled: unknown) =>
+    typeof rawEnabled === "boolean"
+      ? getNotchIslandController().setEnabled(rawEnabled)
+      : getNotchIslandController().getState(),
+  );
+
+  // Synara Alto access, as the main window's app reads it from the account. Only that
+  // page may grant it, the same page that publishes what the island shows.
+  ipcMain.removeHandler(IPC.notchIsland.setEntitled);
+  ipcMain.handle(IPC.notchIsland.setEntitled, async (event, rawEntitled: unknown) => {
+    if (
+      typeof rawEntitled !== "boolean" ||
+      event.sender !== mainWindow?.webContents ||
+      event.senderFrame !== event.sender.mainFrame
+    ) {
+      return getNotchIslandController().getState();
+    }
+    return getNotchIslandController().setEntitled(rawEntitled);
+  });
+
   ipcMain.removeHandler(IPC.keepAwake.setRemoteAccessAllowed);
   ipcMain.handle(IPC.keepAwake.setRemoteAccessAllowed, async (_event, rawAllowed: unknown) =>
     typeof rawAllowed === "boolean"
@@ -5978,6 +6049,45 @@ function getKeepAwakeController(): KeepAwakeController {
     onError: (error) => safeConsoleError("[desktop] keep-awake preference write failed", error),
   });
   return keepAwakeController;
+}
+
+let notchIslandController: NotchIslandController | undefined;
+const notchIslandSnapshotSenders = new WeakSet<Electron.WebContents>();
+
+/** Created on first use after `app` is ready; only macOS Beta builds ever start the helper. */
+function getNotchIslandController(): NotchIslandController {
+  notchIslandController ??= createNotchIslandController({
+    supported:
+      process.platform === "darwin" &&
+      isBetaFeatureEnabled(NOTCH_ISLAND_BETA_FEATURE, desktopFlavor),
+    host: new NotchIslandHost({
+      helperPath: resolveAppSnapHelperPath(),
+      labels: () => ({
+        empty: t("desktop:notchIsland_empty"),
+        openApp: t("desktop:notchIsland_openApp", { app: APP_DISPLAY_NAME }),
+        needYou: t("desktop:notchIsland_needYou"),
+        working: t("desktop:notchIsland_working"),
+        approval: t("desktop:notchIsland_approval"),
+        input: t("desktop:notchIsland_input"),
+        plan: t("desktop:notchIsland_plan"),
+        stateWorking: t("desktop:notchIsland_stateWorking"),
+        completed: t("desktop:notchIsland_completed"),
+        stateFailed: t("desktop:notchIsland_stateFailed"),
+        review: t("desktop:notchIsland_review"),
+        needsYouTitle: t("desktop:notchIsland_needsYouTitle"),
+        readyForReview: t("desktop:notchIsland_readyForReview"),
+      }),
+      // A click on the island is an explicit gesture in another process, so
+      // Synara has to take focus itself, as it does for AppSnap.
+      onOpenThread: (threadId) => openThreadFromDesktop(threadId, { stealAppFocus: true }),
+      onOpenApp: () => focusMainWindow({ stealAppFocus: true }),
+      onError: (message) => safeConsoleError(`[desktop] Notch island: ${message}`),
+    }),
+    load: () => readNotchIslandPreference(NOTCH_ISLAND_PREFERENCE_PATH),
+    save: (preference) => writeNotchIslandPreference(NOTCH_ISLAND_PREFERENCE_PATH, preference),
+    onError: (error) => safeConsoleError("[desktop] notch island preference write failed", error),
+  });
+  return notchIslandController;
 }
 
 function getDesktopCustomTitleBarState() {
@@ -6472,9 +6582,13 @@ async function bootstrap(): Promise<void> {
   registerIpcHandlers();
   // Apply the saved keep-awake preference at launch, before any window reports.
   getKeepAwakeController();
+  // Start the saved notch island at launch (macOS Beta only; inert elsewhere).
+  getNotchIslandController();
   app.once("will-quit", () => {
     keepAwakeController?.dispose();
     keepAwakeController = undefined;
+    notchIslandController?.dispose();
+    notchIslandController = undefined;
   });
   const disposeRemoteResources = registerRemoteResourceBroker({
     trustedRenderer: () =>

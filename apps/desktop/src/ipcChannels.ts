@@ -33,6 +33,12 @@ export const DESKTOP_IPC_CHANNELS = {
     setEnabled: "desktop:keep-awake-set-enabled",
     setRemoteAccessAllowed: "desktop:keep-awake-set-remote-access-allowed",
   },
+  notchIsland: {
+    getState: "desktop:notch-island-get-state",
+    setEnabled: "desktop:notch-island-set-enabled",
+    setEntitled: "desktop:notch-island-set-entitled",
+    publishSnapshot: "desktop:notch-island-publish-snapshot",
+  },
   menuAction: "desktop:menu-action",
   setMenuShortcuts: "desktop:set-menu-shortcuts",
   quitConfirmationRequest: "desktop:quit-confirmation-request",

@@ -127,5 +127,18 @@
   "automaticUpdatesAreNotAvailableBecauseNoUpdateFeed": "Automatic updates are not available because no update feed is configured.",
   "automaticUpdatesAreOnlyAvailableInPackagedProductionBuilds": "Automatic updates are only available in packaged production builds.",
   "automaticUpdatesAreDisabledByTheSYNARADISABLEAUTO": "Automatic updates are disabled by the SYNARA_DISABLE_AUTO_UPDATE setting.",
-  "automaticUpdatesOnLinuxRequireRunningTheAppImageBuild": "Automatic updates on Linux require running the AppImage build."
+  "automaticUpdatesOnLinuxRequireRunningTheAppImageBuild": "Automatic updates on Linux require running the AppImage build.",
+  "notchIsland_empty": "No active chats",
+  "notchIsland_openApp": "Open {{app}}",
+  "notchIsland_needYou": "need you",
+  "notchIsland_working": "working",
+  "notchIsland_approval": "Pending approval",
+  "notchIsland_input": "Awaiting input",
+  "notchIsland_plan": "Plan ready",
+  "notchIsland_stateWorking": "Working",
+  "notchIsland_completed": "Completed",
+  "notchIsland_stateFailed": "Failed",
+  "notchIsland_review": "Review",
+  "notchIsland_needsYouTitle": "Needs you",
+  "notchIsland_readyForReview": "Ready for review"
 }

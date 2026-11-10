@@ -36,6 +36,10 @@ enum AppSnapMode {
     case audioLevel(sources: Set<AudioLevelSource>, inputDeviceUID: String?)
     /// One-shot list of the Mac's audio input devices (`audio-inputs`).
     case listAudioInputs
+    /// Long-running notch island host: reads JSON-per-line snapshots on stdin
+    /// and draws them at the notch (or a top-center pill). Emits `ready`,
+    /// `island-placement`, `island-open-thread`, `island-open-app`, `error`.
+    case island
 }
 
 struct AppSnapOptions {
@@ -83,7 +87,7 @@ struct AppSnapOptions {
         while index < arguments.count {
             let argument = arguments[index]
             switch argument {
-            case "--check-permissions", "--request-permissions", "--prepare-permission-setup", "--release-held-input", "--watch", "--permission-guide", "--computer-frames", "--escape-monitor", "--shield", "--audio-level", "--list-audio-inputs":
+            case "--check-permissions", "--request-permissions", "--prepare-permission-setup", "--release-held-input", "--watch", "--permission-guide", "--computer-frames", "--escape-monitor", "--shield", "--audio-level", "--list-audio-inputs", "--island":
                 guard requestedMode == nil else {
                     throw AppSnapFailure(
                         code: "invalid_arguments",
@@ -310,10 +314,19 @@ struct AppSnapOptions {
                 )
             }
             return AppSnapOptions(mode: .listAudioInputs)
+        case "--island":
+            try rejectWatchArguments("The notch island does not accept watch arguments.")
+            guard permissions.isEmpty else {
+                throw AppSnapFailure(
+                    code: "invalid_arguments",
+                    message: "--island does not accept permission selectors."
+                )
+            }
+            return AppSnapOptions(mode: .island)
         default:
             throw AppSnapFailure(
                 code: "invalid_arguments",
-                message: "Expected --check-permissions, --request-permissions, --prepare-permission-setup, --release-held-input, --watch, --permission-guide, --computer-frames, --escape-monitor, --shield, --audio-level, or --list-audio-inputs."
+                message: "Expected --check-permissions, --request-permissions, --prepare-permission-setup, --release-held-input, --watch, --permission-guide, --computer-frames, --escape-monitor, --shield, --audio-level, --list-audio-inputs, or --island."
             )
         }
     }

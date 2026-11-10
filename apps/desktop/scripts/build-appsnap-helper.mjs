@@ -39,6 +39,8 @@ const frameworkArguments = [
   "CoreVideo",
   "-framework",
   "ScreenCaptureKit",
+  "-framework",
+  "SwiftUI",
 ];
 
 export function swiftTargetsForArch(arch) {

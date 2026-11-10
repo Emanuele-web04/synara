@@ -391,9 +391,22 @@ HTTP-hosted clients retain native component visuals but never execute HTML. The 
 bootstrap removes WebRTC capabilities before page scripts and stops parsing if that boundary
 cannot be enforced. HTML messages cannot open external URLs through the host.
 
-The list currently holds `accountInbox` (account-saved Inbox history). Account profiles,
-MCP Connectors and the native editor are available in Stable and Beta. Remote connections
-use their separate runtime activation policy.
+The list currently holds `accountInbox` (account-saved Inbox history) and `notch-island`.
+Account profiles, MCP Connectors and the native editor are available in Stable and Beta.
+Remote connections use their separate runtime activation policy.
+
+The notch island (`notch-island`) is macOS-only and on by default in non-Stable builds:
+the AppSnap helper's `--island` mode draws chat status at the MacBook notch, or as a
+top-center pill on displays without one. It has no server RPC, so desktop main is the
+gate: on Stable or other platforms it reports the feature unsupported, never reads or
+writes `notch-island.json`, and never starts the helper. Settings → Notifications shows
+the toggle only where it applies.
+
+It is also a Synara Alto feature in builds that sell Alto (`VITE_SYNARA_BILLING_ENABLED` or
+the sandbox flag). The main window's app reads the account's billing access and reports it
+over IPC; desktop main keeps the helper stopped until that report says access is granted,
+and again after the page reloads. Without access, Settings shows "View Alto plans" in place
+of the toggle. Builds without billing keep the island for everyone.
 
 Diagnostics follow their separate [sender policy](#diagnostics).
 Inline visuals are available in Stable and Beta:
