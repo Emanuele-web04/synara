@@ -22,6 +22,36 @@ import type { WhatsNewEntry } from "./logic";
 
 export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
   {
+    version: "1.5.1",
+    date: "Nov 11",
+    features: [
+      {
+        id: "stable-upgrade",
+        title: "Upgrade older Stable databases safely",
+        description:
+          "The affected upgrade from an older Stable release now creates a migration backup and continues automatically.",
+        details:
+          "Only the exact known released history takes this path. Unrecognized database histories still require review, and backup and recovery safeguards remain active.",
+      },
+      {
+        id: "remote-reliability-totals",
+        title: "Optional anonymous Remote reliability totals",
+        description:
+          "With product sharing enabled, Synara counts approved pairings, live Remote connections, reconnects, connection timeouts and unexpected crashes.",
+        details:
+          "These separate daily totals contain no account, device or installation identifiers, chat text, file contents or error messages. Stable sharing stays off by default. Crash reporting is best-effort.",
+      },
+      {
+        id: "website-alto-checkout",
+        title: "Start Alto checkout from the website",
+        description:
+          "Choose a monthly or yearly plan on the Synara pricing page and verify your account by email before checkout.",
+        details:
+          "The checkout is linked to the verified Synara account. Account credentials stay out of the website response.",
+      },
+    ],
+  },
+  {
     version: "1.5.0",
     date: "Nov 10",
     features: [
