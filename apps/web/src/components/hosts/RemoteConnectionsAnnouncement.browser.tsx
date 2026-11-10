@@ -1,6 +1,7 @@
 import "../../index.css";
 
 import type { AccountBillingStatus, AccountStatus } from "@synara/contracts";
+import type { HostEnrollment } from "~/lib/hosts/api";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { page } from "vitest/browser";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -23,6 +24,7 @@ const fixture = vi.hoisted(() => ({
   status: { state: "signed-out" } as AccountStatus,
   billing: { access: "none" } as Pick<AccountBillingStatus, "access">,
   billingResponse: null as Promise<Pick<AccountBillingStatus, "access">> | null,
+  enrollment: { host: null } as Partial<HostEnrollment>,
 }));
 vi.mock("@tanstack/react-router", () => ({
   useNavigate: () => fixture.navigate,
@@ -30,6 +32,14 @@ vi.mock("@tanstack/react-router", () => ({
 }));
 vi.mock("~/hooks/useAccount", () => ({
   useAccount: () => ({ status: fixture.status, statusQuery: { isPending: false } }),
+}));
+vi.mock("~/lib/hosts/queries", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("~/lib/hosts/queries")>()),
+  remoteHostEnrollmentQueryOptions: (input: { enabled?: boolean }) => ({
+    queryKey: ["hosts", "enrollment"],
+    enabled: input.enabled ?? true,
+    queryFn: async () => fixture.enrollment,
+  }),
 }));
 vi.mock("~/lib/hosts/executionContext", async (importOriginal) => ({
   ...(await importOriginal<typeof import("~/lib/hosts/executionContext")>()),
@@ -52,6 +62,22 @@ vi.mock("~/lib/accountReactQuery", async (importOriginal) => ({
 }));
 
 const clients: QueryClient[] = [];
+const signedIn: AccountStatus = {
+  state: "signed-in",
+  accountAuthority: "https://accounts.example.com",
+  me: {
+    id: "user_a",
+    name: "Tester",
+    email: "tester@example.com",
+    organization: { id: "org_a", name: "Team" },
+  },
+};
+// A team machine whose owner has not answered the sharing consent yet.
+const consentOwed: Partial<HostEnrollment> = {
+  host: { id: "host_a", name: "Mac Studio" } as HostEnrollment["host"],
+  discoverabilityAcknowledged: false,
+  organizationMemberCount: 3,
+};
 const acknowledged = () =>
   JSON.parse(localStorage.getItem(REMOTE_CONNECTIONS_ANNOUNCEMENT_STORAGE_KEY) ?? "null");
 
@@ -88,6 +114,7 @@ describe("RemoteConnectionsAnnouncement", () => {
     fixture.status = { state: "signed-out" };
     fixture.billing = { access: "none" };
     fixture.billingResponse = null;
+    fixture.enrollment = { host: null };
     localStorage.removeItem("test:other-startup-hint");
     useOnboardingDialogStore.setState({
       isOpen: false,
@@ -106,7 +133,7 @@ describe("RemoteConnectionsAnnouncement", () => {
     localStorage.removeItem(REMOTE_CONNECTIONS_ANNOUNCEMENT_STORAGE_KEY);
   });
 
-  it("sends people without Alto to the plans and announces only once", async () => {
+  it("sends people without Alto to the plans, once, with no hint over that page", async () => {
     await renderAnnouncement();
     await page.getByRole("button", { name: "View Alto plans" }).click();
 
@@ -114,23 +141,16 @@ describe("RemoteConnectionsAnnouncement", () => {
       to: "/settings",
       search: { section: "usage", target: "settings-synara-plan" },
     });
-    expect(acknowledged()).toEqual({ acknowledged: true, pointToAccount: true });
+    expect(acknowledged()).toEqual({ acknowledged: true });
     await expect
       .element(page.getByRole("dialog", { name: "Introducing Remote Connections" }))
       .not.toBeInTheDocument();
+    await new Promise((resolve) => setTimeout(resolve, 700));
+    await expect.element(page.getByText("Sign in to connect")).not.toBeInTheDocument();
   });
 
   it("waits for an existing Alto subscriber’s billing result before opening Connections", async () => {
-    fixture.status = {
-      state: "signed-in",
-      accountAuthority: "https://accounts.example.com",
-      me: {
-        id: "user_a",
-        name: "Tester",
-        email: "tester@example.com",
-        organization: { id: "org_a", name: "Personal" },
-      },
-    };
+    fixture.status = signedIn;
     let resolveBilling!: (billing: Pick<AccountBillingStatus, "access">) => void;
     fixture.billingResponse = new Promise((resolve) => {
       resolveBilling = resolve;
@@ -169,6 +189,22 @@ describe("RemoteConnectionsAnnouncement", () => {
     await expect.element(page.getByText("Other startup hint")).toBeVisible();
     await expect.element(page.getByRole("dialog")).not.toBeInTheDocument();
     await page.getByRole("button", { name: "Other feature" }).click();
+    await expect
+      .element(page.getByRole("dialog", { name: "Introducing Remote Connections" }))
+      .toBeVisible();
+  });
+
+  it("stands aside while the team sharing consent is owed, then opens", async () => {
+    fixture.status = signedIn;
+    fixture.enrollment = consentOwed;
+    await renderAnnouncement();
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    await expect.element(page.getByRole("dialog")).not.toBeInTheDocument();
+
+    clients.at(-1)?.setQueryData(["hosts", "enrollment"], {
+      ...consentOwed,
+      discoverabilityAcknowledged: true,
+    });
     await expect
       .element(page.getByRole("dialog", { name: "Introducing Remote Connections" }))
       .toBeVisible();

@@ -1,6 +1,7 @@
 import "../../index.css";
 
 import type { AccountMe } from "@synara/contracts";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { page } from "vitest/browser";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";
@@ -41,7 +42,12 @@ beforeEach(() => {
 });
 
 async function openAccountMenu() {
-  await render(<AccountFooterControl />);
+  // The account button carries the one-time Remote Connections hint, which reads queries.
+  await render(
+    <QueryClientProvider client={new QueryClient()}>
+      <AccountFooterControl />
+    </QueryClientProvider>,
+  );
   await page.getByRole("button", { name: "Account: Ada Lovelace" }).click();
 }
 

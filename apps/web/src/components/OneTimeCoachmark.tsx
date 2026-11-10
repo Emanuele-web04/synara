@@ -19,7 +19,6 @@ export function OneTimeCoachmark({
   tooltip,
   tooltipSide = "right",
   ready = true,
-  allowAfterHandOff = false,
   children,
 }: {
   storageKey: string;
@@ -29,8 +28,6 @@ export function OneTimeCoachmark({
   tooltipSide?: "top" | "right" | "bottom" | "left";
   /** Extra gate for hints that follow another step, such as a launch sheet. */
   ready?: boolean;
-  /** Lets a hint that continues a confirmed sheet still show during this launch. */
-  allowAfterHandOff?: boolean;
   children: ReactElement<ButtonHTMLAttributes<HTMLButtonElement>>;
 }) {
   const [visible, setVisible] = useState(() => {
@@ -43,7 +40,7 @@ export function OneTimeCoachmark({
   });
   const [tooltipOpen, setTooltipOpen] = useState(false);
   const startupSettled = useAnnouncementSheetSlotStore((state) => state.startupSettled);
-  const { open } = useAnnouncementSheetSlot(visible && startupSettled && ready, allowAfterHandOff);
+  const { open } = useAnnouncementSheetSlot(visible && startupSettled && ready);
   const hintOpen = visible && open;
   const markSeen = () => {
     try {

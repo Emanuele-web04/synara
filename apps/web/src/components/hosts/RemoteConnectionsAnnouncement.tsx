@@ -5,9 +5,15 @@
 // Layer: Root web overlay
 // Exports: RemoteConnectionsAnnouncement, RemoteConnectionsCoachmark
 //
-// Both steps share the announcement slot, so they never overlap anything else: the
-// sheet is ordered last among startup surfaces, and the hint takes the slot after the
-// sheet closes, once its exit animation is done.
+// Nothing here may overlap another surface:
+// - Both steps share the announcement slot. The sheet is ordered last among startup
+//   surfaces; the hint takes the slot only after the sheet has finished closing.
+// - The team sharing consent (HostDiscoverabilityPrompt) opens outside that slot, so
+//   both steps also wait for the account and host enrollment to load and stand aside
+//   while that consent is owed.
+// - The hint follows only "Not now" / close. The call to action already lands on a
+//   page with its own next step (Sign in, Connect a device), where a hint on the
+//   sidebar would cover Settings and could sit over the sign-in dialog.
 
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate, useRouterState } from "@tanstack/react-router";
@@ -24,7 +30,9 @@ import { useAccount } from "~/hooks/useAccount";
 import { useLocalStorage } from "~/hooks/useLocalStorage";
 import { ACCOUNT_BILLING_ENABLED } from "~/lib/accountBilling";
 import { accountBillingQueryOptions } from "~/lib/accountReactQuery";
+import { shouldPromptForDiscoverability } from "~/lib/hosts/enrollment";
 import { readExecutionContext } from "~/lib/hosts/executionContext";
+import { remoteHostEnrollmentQueryOptions } from "~/lib/hosts/queries";
 import { useOnboardingDialogStore } from "~/onboarding/onboardingDialogStore";
 import { AnnouncementSheet } from "../AnnouncementSheet";
 import { OneTimeCoachmark } from "../OneTimeCoachmark";
@@ -37,7 +45,8 @@ export const REMOTE_CONNECTIONS_COACHMARK_STORAGE_KEY = "synara:remote-connectio
 
 const AnnouncementStorageSchema = Schema.Struct({
   acknowledged: Schema.Boolean,
-  // Set only when the sheet itself was closed; the first-run tour skips the hint too.
+  // Set only when the sheet was dismissed; its call to action and the first-run tour
+  // already lead somewhere, so they skip the hint.
   pointToAccount: Schema.optional(Schema.Boolean),
 });
 const INITIAL_STORAGE: typeof AnnouncementStorageSchema.Type = { acknowledged: false };
@@ -64,19 +73,38 @@ function useRemoteConnectionsAvailable(): boolean {
   );
 }
 
+/**
+ * True once nothing outside the announcement slot can still claim the screen: the
+ * account has loaded and, when signed in, no team sharing consent is owed.
+ */
+function useClearOfOutsideDialogs(wanted: boolean): boolean {
+  const account = useAccount();
+  const signedIn = account.status?.state === "signed-in";
+  const enrollment = useQuery({
+    ...remoteHostEnrollmentQueryOptions({ enabled: wanted && signedIn }),
+    select: (data) => shouldPromptForDiscoverability(data).prompt,
+  });
+  if (!wanted || account.statusQuery.isPending) return false;
+  if (!signedIn) return true;
+  // A failed enrollment read leaves no consent to show, same as the prompt itself.
+  if (enrollment.isError) return true;
+  return enrollment.isSuccess && !enrollment.data;
+}
+
 export function RemoteConnectionsAnnouncement() {
   const navigate = useNavigate();
   const openPlans = useOpenSynaraPlan();
   const [storage, setStorage] = useAnnouncementStorage();
   const onboardingOpen = useOnboardingDialogStore((state) => state.isOpen);
   const available = useRemoteConnectionsAvailable();
-  const wantsOpen = available && !storage.acknowledged;
+  const unseen = available && !storage.acknowledged;
+  const clear = useClearOfOutsideDialogs(unseen);
 
   const { status, statusQuery } = useAccount();
   const billingOptions = accountBillingQueryOptions(status);
   const billing = useQuery({
     ...billingOptions,
-    enabled: billingOptions.enabled === true && ACCOUNT_BILLING_ENABLED && wantsOpen,
+    enabled: billingOptions.enabled === true && ACCOUNT_BILLING_ENABLED && unseen,
   });
   const checkingAccess =
     ACCOUNT_BILLING_ENABLED &&
@@ -84,18 +112,14 @@ export function RemoteConnectionsAnnouncement() {
   const offerPlans =
     ACCOUNT_BILLING_ENABLED && (status?.state === "signed-out" || billing.data?.access === "none");
 
-  const close = useCallback(
-    () => setStorage({ acknowledged: true, pointToAccount: true }),
-    [setStorage],
-  );
   // The first-run tour already pairs a device; don't announce the feature afterwards.
   useEffect(() => {
-    if (onboardingOpen && wantsOpen) setStorage({ acknowledged: true });
-  }, [onboardingOpen, setStorage, wantsOpen]);
+    if (onboardingOpen && unseen) setStorage({ acknowledged: true });
+  }, [onboardingOpen, setStorage, unseen]);
 
   return (
     <AnnouncementSheet
-      open={wantsOpen && !checkingAccess}
+      open={unseen && clear && !checkingAccess}
       order="last"
       presentation="feature"
       hero={<RemoteConnectionsAnnouncementHero />}
@@ -107,9 +131,9 @@ export function RemoteConnectionsAnnouncement() {
       }
       dismissLabel="Not now"
       confirmLabel={offerPlans ? "View Alto plans" : "Connect a device"}
-      onDismiss={close}
+      onDismiss={() => setStorage({ acknowledged: true, pointToAccount: true })}
       onConfirm={() => {
-        close();
+        setStorage({ acknowledged: true });
         if (offerPlans) openPlans();
         else void navigate({ to: "/settings", search: { section: "connections" } });
       }}
@@ -118,8 +142,8 @@ export function RemoteConnectionsAnnouncement() {
 }
 
 /**
- * Wraps the sidebar account button: once the launch sheet closes, points at it with
- * the next step (sign in, or open Connections) for a few seconds, then never again.
+ * Wraps the sidebar account button: after the launch sheet is dismissed, points at it
+ * with the next step (sign in, or open Connections) for a few seconds, then never again.
  */
 export function RemoteConnectionsCoachmark({
   signedIn,
@@ -133,10 +157,11 @@ export function RemoteConnectionsCoachmark({
   const [storage] = useAnnouncementStorage();
   const available = useRemoteConnectionsAvailable();
   const follows = available && storage.pointToAccount === true;
-  const [ready, setReady] = useState(false);
+  const clear = useClearOfOutsideDialogs(follows);
+  const [settled, setSettled] = useState(false);
   useEffect(() => {
     if (!follows) return;
-    const timeout = window.setTimeout(() => setReady(true), COACHMARK_DELAY_MS);
+    const timeout = window.setTimeout(() => setSettled(true), COACHMARK_DELAY_MS);
     return () => window.clearTimeout(timeout);
   }, [follows]);
 
@@ -150,8 +175,7 @@ export function RemoteConnectionsCoachmark({
           : "Sign in here, then pair your other computer from Connections."
       }
       tooltip={tooltip}
-      ready={follows && ready}
-      allowAfterHandOff
+      ready={follows && settled && clear}
     >
       {children}
     </OneTimeCoachmark>
