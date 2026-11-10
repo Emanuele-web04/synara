@@ -380,6 +380,7 @@ export function PluginLibrary(props?: {
   const piCapabilitiesQuery = useQuery(providerComposerCapabilitiesQueryOptions("pi"));
   const devinCapabilitiesQuery = useQuery(providerComposerCapabilitiesQueryOptions("devin"));
   const ompCapabilitiesQuery = useQuery(providerComposerCapabilitiesQueryOptions("omp"));
+  const kiroCapabilitiesQuery = useQuery(providerComposerCapabilitiesQueryOptions("kiro"));
 
   const providerCapabilities: Record<ProviderKind, ProviderCapabilities> = {
     codex: {
@@ -421,6 +422,10 @@ export function PluginLibrary(props?: {
     omp: {
       plugins: supportsPluginDiscovery(ompCapabilitiesQuery.data),
       skills: supportsSkillDiscovery(ompCapabilitiesQuery.data),
+    },
+    kiro: {
+      plugins: supportsPluginDiscovery(kiroCapabilitiesQuery.data),
+      skills: supportsSkillDiscovery(kiroCapabilitiesQuery.data),
     },
   };
 

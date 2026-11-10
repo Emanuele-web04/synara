@@ -140,6 +140,17 @@ export const PROVIDER_DESCRIPTORS = defineProviderDescriptors([
     supportsNativeTurnSteering: false,
     usage: null,
   },
+  {
+    kind: "kiro",
+    displayName: PROVIDER_DISPLAY_NAMES.kiro,
+    available: true,
+    setupDocsHref: "https://kiro.dev/docs/cli/",
+    supportsNativeTurnSteering: false,
+    usage: {
+      signInCommand: "kiro-cli login",
+      learnMoreHref: "https://app.kiro.dev",
+    },
+  },
 ] as const satisfies readonly ProviderDescriptor[]);
 
 export const PROVIDER_DESCRIPTOR_BY_KIND = Object.fromEntries(

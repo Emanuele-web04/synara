@@ -38,19 +38,27 @@ function coerceCell(value: unknown): string | undefined {
   return undefined;
 }
 
+const SQL_IDENTIFIER = /^[A-Za-z_][A-Za-z0-9_]*$/u;
+
 /**
- * Look up several keys from an `ItemTable(key, value)` SQLite DB in one open. Returns a map of
- * the keys that were found. Never throws; missing DB / locked DB / missing table -> {}.
+ * Look up several keys from a `(key, value)` SQLite table in one open (default: VS Code's
+ * `ItemTable`). Returns a map of the keys that were found. Never throws; missing DB / locked
+ * DB / missing table / invalid table name -> {}.
  */
 export async function readItemTableValues(input: {
   dbPath: string;
   keys: ReadonlyArray<string>;
+  table?: string;
 }): Promise<Record<string, string>> {
   const result: Record<string, string> = {};
+  const table = input.table ?? "ItemTable";
+  if (!SQL_IDENTIFIER.test(table)) {
+    return result;
+  }
   let database: ReadonlyDatabase | null = null;
   try {
     database = await openReadOnlyDatabase(input.dbPath);
-    const sql = "SELECT value FROM ItemTable WHERE key = ?";
+    const sql = `SELECT value FROM ${table} WHERE key = ?`;
     const statement = database.query?.(sql) ?? database.prepare?.(sql);
     if (!statement) {
       return result;

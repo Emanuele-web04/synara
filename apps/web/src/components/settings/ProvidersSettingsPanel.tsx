@@ -154,7 +154,8 @@ type ProviderInstallTextKey =
   | "piBinaryPath"
   | "piAgentDir"
   | "ompBinaryPath"
-  | "ompAgentDir";
+  | "ompAgentDir"
+  | "kiroBinaryPath";
 type ProviderInstallPasswordKey = "openCodeServerPassword";
 type ProviderInstallPasswordConfiguredKey = "openCodeServerPasswordConfigured";
 type ProviderInstallBooleanKey =
@@ -529,6 +530,25 @@ const PROVIDER_INSTALL_SETTINGS: readonly ProviderInstallSettings[] = [
         label: "settings:ohMyPiAgentDirectory",
         placeholder: "settings:ohMyPiAgentDirectory",
         description: "settings:optionalCustomOhMyPiAgentDirectoryForAuth",
+      },
+    ],
+  },
+  {
+    provider: "kiro",
+    docs: [{ label: "settings:providers_docInstall", href: "https://kiro.dev/docs/cli/" }],
+    fields: [
+      {
+        kind: "text",
+        settingsKey: "kiroBinaryPath",
+        label: "settings:kiroBinaryPath",
+        placeholder: "settings:kiroBinaryPath",
+        description: () => (
+          <Translation
+            message="settings:binaryPathDescription"
+            values={{ command: "kiro-cli" }}
+            components={{ command: <code /> }}
+          />
+        ),
       },
     ],
   },

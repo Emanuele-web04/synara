@@ -1197,6 +1197,7 @@ describe("PROVIDER_OPTIONS", () => {
       { value: "pi", label: "Pi", available: true },
       { value: "devin", label: "Devin", available: true },
       { value: "omp", label: "Oh My Pi", available: true },
+      { value: "kiro", label: "Kiro", available: true },
     ]);
     expect(claude).toEqual({
       value: "claudeAgent",

@@ -16,6 +16,7 @@ const PROVIDER_OPTION_KEYS = [
   "opencode",
   "pi",
   "omp",
+  "kiro",
 ] as const satisfies ReadonlyArray<keyof ProviderStartOptions>;
 
 const PROVIDER_OPTIONS_EVENT_TYPES = new Set([

@@ -14,10 +14,16 @@ describe("visibleProviderDescriptors", () => {
     );
   });
 
-  it("offers Oh My Pi and the other providers in Stable", () => {
+  it("offers Oh My Pi and the other providers in Stable, keeping Kiro Beta-only", () => {
     const visible = visibleProviderDescriptors((feature) =>
       isBetaFeatureEnabled(feature, "production"),
     );
+    expect(visible).toEqual(PROVIDER_DESCRIPTORS.filter((d) => d.kind !== "kiro"));
+    expect(visible.some((d) => d.kind === "omp")).toBe(true);
+  });
+
+  it("offers Kiro in Beta", () => {
+    const visible = visibleProviderDescriptors((feature) => isBetaFeatureEnabled(feature, "beta"));
     expect(visible).toEqual(PROVIDER_DESCRIPTORS);
   });
 });

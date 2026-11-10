@@ -19,6 +19,7 @@ const ProviderDiscoveryKind = Schema.Literals([
   "pi",
   "devin",
   "omp",
+  "kiro",
 ]);
 
 export const ProviderSkillInterface = Schema.Struct({

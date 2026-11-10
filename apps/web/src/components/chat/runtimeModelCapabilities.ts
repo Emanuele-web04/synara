@@ -151,7 +151,8 @@ export function getRuntimeAwareModelCapabilities(input: {
       input.provider !== "opencode" &&
       input.provider !== "pi" &&
       input.provider !== "devin" &&
-      input.provider !== "omp") ||
+      input.provider !== "omp" &&
+      input.provider !== "kiro") ||
     !runtimeEfforts ||
     (runtimeEfforts.length === 0 && input.provider !== "claudeAgent")
   ) {

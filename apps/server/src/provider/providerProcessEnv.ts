@@ -13,6 +13,7 @@ export type ProviderProcessEnvDriver =
   | "gemini"
   | "grok"
   | "kilo"
+  | "kiro"
   | "opencode"
   | "pi"
   | "omp";
@@ -374,6 +375,9 @@ function isProviderAccountEnvKey(driver: ProviderProcessEnvDriver, rawKey: strin
       return isModelProviderAccountEnvKey(key);
     case "kilo":
       return isModelProviderAccountEnvKey(key) || key.startsWith("KILO_");
+    case "kiro":
+      // Kiro keeps its login under HOME; KIRO_* settings select another profile.
+      return key.startsWith("KIRO_");
     case "pi":
       return isModelProviderAccountEnvKey(key) || key.startsWith("PI_");
     case "omp":

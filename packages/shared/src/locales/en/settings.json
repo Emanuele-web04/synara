@@ -319,6 +319,7 @@
   "createConnection": "Create connection",
   "desktopAbilities": "Desktop abilities",
   "devinBinaryPath": "Devin binary path",
+  "kiroBinaryPath": "Kiro binary path",
   "discardThisHub": "Discard this hub?",
   "droidBinaryPath": "Droid binary path",
   "enabledProviders": "Enabled providers",

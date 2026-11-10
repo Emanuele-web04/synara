@@ -286,6 +286,7 @@ export function useProviderModelCatalog(input: {
   const piModelDiscoveryEnabled = shouldDiscoverProvider("pi");
   const devinModelDiscoveryEnabled = shouldDiscoverProvider("devin");
   const ompModelDiscoveryEnabled = shouldDiscoverProvider("omp");
+  const kiroModelDiscoveryEnabled = shouldDiscoverProvider("kiro");
 
   const queryOptionsForProvider = (provider: ProviderKind, enabled: boolean) => {
     const selectedInstanceId =
@@ -319,6 +320,7 @@ export function useProviderModelCatalog(input: {
     pi: queryOptionsForProvider("pi", piModelDiscoveryEnabled),
     devin: queryOptionsForProvider("devin", devinModelDiscoveryEnabled),
     omp: queryOptionsForProvider("omp", ompModelDiscoveryEnabled),
+    kiro: queryOptionsForProvider("kiro", kiroModelDiscoveryEnabled),
   } as const;
 
   const claudeDynamicModelsQuery = useQuery(modelQueryOptionsByProvider.claudeAgent);
@@ -330,6 +332,7 @@ export function useProviderModelCatalog(input: {
   const openCodeDynamicModelsQuery = useQuery(modelQueryOptionsByProvider.opencode);
   const piDynamicModelsQuery = useQuery(modelQueryOptionsByProvider.pi);
   const devinDynamicModelsQuery = useQuery(modelQueryOptionsByProvider.devin);
+  const kiroDynamicModelsQuery = useQuery(modelQueryOptionsByProvider.kiro);
 
   const [
     ,
@@ -455,6 +458,13 @@ export function useProviderModelCatalog(input: {
     devinModelDiscoveryEnabled &&
     !hasResolvedDevinModelDiscovery &&
     isInitialModelDiscoveryPending(devinDynamicModelsQuery);
+  const hasResolvedKiroModelDiscovery =
+    kiroDynamicModelsQuery.data?.source === "kiro-acp" &&
+    (kiroDynamicModelsQuery.data.models.length ?? 0) > 0;
+  const kiroModelDiscoveryPending =
+    kiroModelDiscoveryEnabled &&
+    !hasResolvedKiroModelDiscovery &&
+    isInitialModelDiscoveryPending(kiroDynamicModelsQuery);
   const hasResolvedOmpModelDiscovery =
     ompDynamicModelsQuery.data?.source === "omp-cli" &&
     (ompDynamicModelsQuery.data.models.length ?? 0) > 0;
@@ -516,6 +526,7 @@ export function useProviderModelCatalog(input: {
         customModelsByProvider.omp,
         modelHintByProvider?.omp?.trim().startsWith("role:") ? null : modelHintByProvider?.omp,
       ),
+      kiro: getAppModelOptions("kiro", customModelsByProvider.kiro, modelHintByProvider?.kiro),
     };
     const result: Record<
       ProviderKind,
@@ -535,6 +546,7 @@ export function useProviderModelCatalog(input: {
       pi: piDynamicModelsQuery.data,
       devin: devinDynamicModelsQuery.data,
       omp: ompDynamicModelsQuery.data,
+      kiro: kiroDynamicModelsQuery.data,
     };
     for (const provider of [
       "claudeAgent",
@@ -547,6 +559,7 @@ export function useProviderModelCatalog(input: {
       "pi",
       "devin",
       "omp",
+      "kiro",
     ] as const) {
       const discovery = dynamicSources[provider];
       const dynamicModels = discovery?.models;
@@ -587,6 +600,7 @@ export function useProviderModelCatalog(input: {
     devinDynamicModelsQuery.data,
     ompDynamicModelsQuery.data,
     ompDiscoveryFailed,
+    kiroDynamicModelsQuery.data,
   ]);
 
   const modelOptionsByProviderInstance = useMemo<ProviderModelOptionsByProviderInstance>(() => {
@@ -646,6 +660,7 @@ export function useProviderModelCatalog(input: {
       pi: piModelDiscoveryPending,
       devin: devinModelDiscoveryPending,
       omp: ompModelDiscoveryPending,
+      kiro: kiroModelDiscoveryPending,
     }),
     [
       antigravityModelDiscoveryPending,
@@ -655,6 +670,7 @@ export function useProviderModelCatalog(input: {
       piModelDiscoveryPending,
       devinModelDiscoveryPending,
       ompModelDiscoveryPending,
+      kiroModelDiscoveryPending,
     ],
   );
 
@@ -672,6 +688,7 @@ export function useProviderModelCatalog(input: {
       pi: piDynamicModelsQuery.data?.models ?? [],
       devin: devinDynamicModelsQuery.data?.models ?? [],
       omp: ompDynamicModelsQuery.data?.models ?? [],
+      kiro: kiroDynamicModelsQuery.data?.models ?? [],
     }),
     [
       antigravityModelsQuery.data?.models,
@@ -684,6 +701,7 @@ export function useProviderModelCatalog(input: {
       piDynamicModelsQuery.data?.models,
       devinDynamicModelsQuery.data?.models,
       ompDynamicModelsQuery.data?.models,
+      kiroDynamicModelsQuery.data?.models,
     ],
   );
 
@@ -754,6 +772,7 @@ export function useProviderModelCatalog(input: {
       ),
       pi: modelDiscoveryError(piDynamicModelsQuery.data?.error, piDynamicModelsQuery.error),
       omp: modelDiscoveryError(ompDynamicModelsQuery.data?.error, ompDynamicModelsQuery.error),
+      kiro: modelDiscoveryError(kiroDynamicModelsQuery.data?.error, kiroDynamicModelsQuery.error),
     }),
     [
       antigravityModelsQuery.data?.error,
@@ -774,6 +793,8 @@ export function useProviderModelCatalog(input: {
       piDynamicModelsQuery.error,
       ompDynamicModelsQuery.data?.error,
       ompDynamicModelsQuery.error,
+      kiroDynamicModelsQuery.data?.error,
+      kiroDynamicModelsQuery.error,
     ],
   );
 
@@ -798,7 +819,9 @@ export function useProviderModelCatalog(input: {
                     ? piDynamicModelsQuery
                     : selectedProvider === "omp"
                       ? ompDynamicModelsQuery
-                      : devinDynamicModelsQuery;
+                      : selectedProvider === "kiro"
+                        ? kiroDynamicModelsQuery
+                        : devinDynamicModelsQuery;
   const selectedProviderModelsLoading =
     selectedProviderRuntimeModelDiscoveryPending ||
     (loadingModelProviders[selectedProvider] === undefined &&

@@ -78,6 +78,7 @@ import {
 } from "../acp/CursorAcpCommand";
 import { hasDroidApiKeyEnv, resolveDroidCliBinaryPath } from "../acp/DroidAcpSupport";
 import { hasGrokApiKeyEnv } from "../acp/GrokAcpSupport";
+import { resolveKiroBinaryPath } from "../acp/KiroAcpSupport";
 import { resolveOmpCliBinaryPath } from "../acp/OmpAcpSupport";
 import {
   hasDevinApiKeyEnv,
@@ -149,6 +150,7 @@ const DEVIN_PROVIDER = "devin" as const;
 const OPENCODE_PROVIDER = "opencode" as const;
 const PI_PROVIDER = "pi" as const;
 const OMP_PROVIDER = "omp" as const;
+const KIRO_PROVIDER = "kiro" as const;
 type ProviderStatuses = ReadonlyArray<ServerProviderStatus>;
 const DISABLED_PROVIDER_STATUS_MESSAGE = "Provider is disabled in Synara settings.";
 const MINIMUM_ANTIGRAVITY_CLI_VERSION = "1.0.12";
@@ -164,6 +166,7 @@ const PROVIDERS = [
   OPENCODE_PROVIDER,
   PI_PROVIDER,
   OMP_PROVIDER,
+  KIRO_PROVIDER,
 ] as const satisfies ReadonlyArray<ProviderKind>;
 
 const providerChildKind = (provider: ProviderKind): ProviderChildKind =>
@@ -888,6 +891,7 @@ function isAccountIsolatedProviderDriver(
   return (
     provider === "cursor" ||
     provider === "grok" ||
+    provider === "kiro" ||
     provider === "opencode" ||
     provider === "pi" ||
     provider === "omp"
@@ -914,6 +918,7 @@ export const makeProviderUpdateEnv = (
     case "opencode":
     case "pi":
     case "omp":
+    case "kiro":
       return makeProviderProbeEnv(instance.driver, environment, instance.instanceId, paths);
   }
 };
@@ -2254,6 +2259,143 @@ export const checkOmpProviderStatus = (
     } satisfies ServerProviderStatus;
   });
 
+// ── Kiro CLI health check ─────────────────────────────────────────
+
+// The first `kiro-cli` launch after it sits idle can take well over the generic
+// probe budget (observed on 3.0.0), which would report an installed CLI as broken.
+const KIRO_HEALTH_TIMEOUT_MS = 20_000;
+const KIRO_NOT_SIGNED_IN_MESSAGE =
+  "Kiro CLI is not signed in. Run `kiro-cli login` in a terminal, then refresh.";
+
+/**
+ * Interprets `kiro-cli whoami`. Only the login type becomes the auth label;
+ * account names and email addresses in the output are never surfaced.
+ */
+export function parseKiroWhoamiResult(result: CommandResult): {
+  readonly status: ServerProviderStatusState;
+  readonly authStatus: ServerProviderAuthStatus;
+  readonly authLabel?: string;
+  readonly message?: string;
+} {
+  const lowerOutput = `${result.stdout}\n${result.stderr}`.toLowerCase();
+  if (
+    lowerOutput.includes("not logged in") ||
+    lowerOutput.includes("not signed in") ||
+    lowerOutput.includes("not authenticated") ||
+    lowerOutput.includes("kiro-cli login")
+  ) {
+    return { status: "error", authStatus: "unauthenticated", message: KIRO_NOT_SIGNED_IN_MESSAGE };
+  }
+  if (result.code !== 0) {
+    const detail = detailFromResult(result);
+    return {
+      status: "warning",
+      authStatus: "unknown",
+      message: detail
+        ? `Could not verify Kiro sign-in. ${detail}`
+        : "Could not verify Kiro sign-in.",
+    };
+  }
+  const authLabel = lowerOutput.includes("builder id")
+    ? "AWS Builder ID"
+    : lowerOutput.includes("identity center") || lowerOutput.includes("idc")
+      ? "IAM Identity Center"
+      : lowerOutput.includes("github")
+        ? "GitHub"
+        : lowerOutput.includes("google")
+          ? "Google"
+          : "Kiro Account";
+  return { status: "ready", authStatus: "authenticated", authLabel };
+}
+
+export const makeCheckKiroProviderStatus = (
+  binaryPath?: string,
+  environment?: Readonly<Record<string, string>>,
+  instanceId?: string,
+  paths?: { readonly homeDir: string; readonly isolationRootDir: string },
+): Effect.Effect<ServerProviderStatus, never, ChildProcessSpawner.ChildProcessSpawner> =>
+  Effect.gen(function* () {
+    const checkedAt = new Date().toISOString();
+    const probeEnvResult = tryMakeProviderProbeEnv(KIRO_PROVIDER, environment, instanceId, paths);
+    if (!probeEnvResult.ok) {
+      return providerHomePreparationFailure(KIRO_PROVIDER, checkedAt, probeEnvResult.cause);
+    }
+    const probeEnv = probeEnvResult.env;
+    const executable = resolveKiroBinaryPath(nonEmptyTrimmed(binaryPath));
+    const base = {
+      provider: KIRO_PROVIDER,
+      instanceId: KIRO_PROVIDER,
+      driver: KIRO_PROVIDER,
+      checkedAt,
+    } as const;
+
+    const versionProbe = yield* probeProviderCliVersion(
+      runProviderCommand(executable, ["--version"], { env: probeEnv }),
+      KIRO_HEALTH_TIMEOUT_MS,
+    );
+    if (versionProbe.outcome === "missing" || versionProbe.outcome === "failure") {
+      const error = versionProbe.cause;
+      return {
+        ...base,
+        status: "error" as const,
+        available: false,
+        authStatus: "unknown" as const,
+        message:
+          versionProbe.outcome === "missing"
+            ? "Kiro CLI (`kiro-cli`) is not installed or not on PATH."
+            : `Failed to execute Kiro CLI health check: ${error instanceof Error ? error.message : String(error)}.`,
+      } satisfies ServerProviderStatus;
+    }
+    if (versionProbe.outcome === "timeout") {
+      return {
+        ...base,
+        status: "error" as const,
+        available: false,
+        authStatus: "unknown" as const,
+        message: "Kiro CLI is installed but failed to run. Timed out while running command.",
+      } satisfies ServerProviderStatus;
+    }
+    if (versionProbe.outcome === "nonzero") {
+      const detail = detailFromResult(versionProbe.result);
+      return {
+        ...base,
+        status: "error" as const,
+        available: false,
+        authStatus: "unknown" as const,
+        message: detail
+          ? `Kiro CLI is installed but failed to run. ${detail}`
+          : "Kiro CLI is installed but failed to run.",
+      } satisfies ServerProviderStatus;
+    }
+    const version = versionProbe.result;
+    const parsedVersion = parseGenericCliVersion(`${version.stdout}\n${version.stderr}`);
+
+    const authProbe = yield* runProviderCommand(executable, ["whoami"], { env: probeEnv }).pipe(
+      Effect.timeoutOption(KIRO_HEALTH_TIMEOUT_MS),
+      Effect.result,
+    );
+    if (Result.isFailure(authProbe) || Option.isNone(authProbe.success)) {
+      return {
+        ...base,
+        status: "warning" as const,
+        available: true,
+        authStatus: "unknown" as const,
+        version: parsedVersion,
+        message: "Kiro CLI is installed, but Synara could not verify its sign-in.",
+      } satisfies ServerProviderStatus;
+    }
+    const auth = parseKiroWhoamiResult(authProbe.success.value);
+    return {
+      ...base,
+      status: auth.status,
+      available: true,
+      authStatus: auth.authStatus,
+      version: parsedVersion,
+      ...(auth.authLabel ? { authType: "kiroLogin", authLabel: auth.authLabel } : {}),
+      ...(auth.message ? { message: auth.message } : {}),
+    } satisfies ServerProviderStatus;
+  });
+
 // ── Antigravity CLI health check ──────────────────────────────────
 
 export const checkAntigravityProviderStatus = (
@@ -3542,6 +3684,18 @@ export function makeProviderHealthLive(options?: { readonly providerUpdateTimeou
                 readInstanceConfigString(instance, "agentDir"),
                 binaryPath,
                 piOptions?.environment,
+                instance.instanceId,
+                { homeDir: serverConfig.homeDir, isolationRootDir: serverConfig.stateDir },
+              ),
+            );
+          }
+          case "kiro": {
+            const kiroOptions = providerStartOptionsFromInstance(instance)?.kiro;
+            return checkProviderInstanceWhenEnabled(
+              instance,
+              makeCheckKiroProviderStatus(
+                binaryPath,
+                kiroOptions?.environment,
                 instance.instanceId,
                 { homeDir: serverConfig.homeDir, isolationRootDir: serverConfig.stateDir },
               ),

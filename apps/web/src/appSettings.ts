@@ -262,7 +262,8 @@ type CustomModelSettingsKey =
   | "customDevinModels"
   | "customOpenCodeModels"
   | "customPiModels"
-  | "customOmpModels";
+  | "customOmpModels"
+  | "customKiroModels";
 export type ProviderCustomModelConfig = {
   provider: ProviderKind;
   settingsKey: CustomModelSettingsKey;
@@ -284,6 +285,7 @@ const BUILT_IN_MODEL_SLUGS_BY_PROVIDER: Record<ProviderKind, ReadonlySet<string>
   opencode: new Set(getModelOptions("opencode").map((option) => option.slug)),
   pi: new Set(getModelOptions("pi").map((option) => option.slug)),
   omp: new Set(getModelOptions("omp").map((option) => option.slug)),
+  kiro: new Set(getModelOptions("kiro").map((option) => option.slug)),
 };
 
 const withDefaults =
@@ -312,6 +314,7 @@ const PersistedProviderKind = Schema.Literals([
   "opencode",
   "pi",
   "omp",
+  "kiro",
 ]).pipe(
   Schema.decodeTo(
     ProviderKind,
@@ -404,6 +407,7 @@ export const AppSettingsSchema = Schema.Struct({
   piAgentDir: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
   ompBinaryPath: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
   ompAgentDir: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
+  kiroBinaryPath: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
   openCodeServerUrl: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
   openCodeServerPassword: Schema.String.check(Schema.isMaxLength(4096)).pipe(
     withDefaults(() => ""),
@@ -602,6 +606,7 @@ export const AppSettingsSchema = Schema.Struct({
   customOpenCodeModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),
   customPiModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),
   customOmpModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),
+  customKiroModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),
   textGenerationProvider: PersistedProviderKind.pipe(withDefaults(() => "codex" as const)),
   textGenerationProviderInstanceId: Schema.optional(ProviderInstanceId),
   textGenerationModel: Schema.optional(TrimmedNonEmptyString),
@@ -761,6 +766,15 @@ const PROVIDER_CUSTOM_MODEL_CONFIG: Record<ProviderKind, ProviderCustomModelConf
     description: "Save additional Oh My Pi model slugs for the picker and provider runtime.",
     placeholder: "provider/model",
     example: "anthropic/claude-sonnet-4-5",
+  },
+  kiro: {
+    provider: "kiro",
+    settingsKey: "customKiroModels",
+    defaultSettingsKey: "customKiroModels",
+    title: "Kiro",
+    description: "Save additional Kiro model slugs for the picker and provider runtime.",
+    placeholder: "kiro-model-slug",
+    example: "claude-sonnet-4.5",
   },
 };
 
@@ -992,6 +1006,7 @@ const PROVIDER_INSTANCE_PROVIDER_ORDER = [
   "opencode",
   "pi",
   "omp",
+  "kiro",
 ] as const satisfies ReadonlyArray<ProviderKind>;
 
 function providerInstanceIdForCodexAccount(accountId: string): ProviderInstanceId {
@@ -1505,6 +1520,7 @@ function normalizeAppSettings(settings: AppSettings): AppSettings {
     ),
     piBinaryPath: normalizeProviderBinaryPathOverride("pi", settings.piBinaryPath),
     ompBinaryPath: normalizeProviderBinaryPathOverride("omp", settings.ompBinaryPath),
+    kiroBinaryPath: normalizeProviderBinaryPathOverride("kiro", settings.kiroBinaryPath),
     uiDensity: normalizeUiDensityValue(settings.uiDensity),
     chatWidth: normalizeChatWidthModeValue(settings.chatWidth),
     agentCursorFillColor: normalizeCursorHexColor(settings.agentCursorFillColor),
@@ -1525,6 +1541,7 @@ function normalizeAppSettings(settings: AppSettings): AppSettings {
     customOpenCodeModels: normalizeCustomModelSlugs(settings.customOpenCodeModels, "opencode"),
     customPiModels: normalizeCustomModelSlugs(settings.customPiModels, "pi"),
     customOmpModels: normalizeCustomModelSlugs(settings.customOmpModels, "omp"),
+    customKiroModels: normalizeCustomModelSlugs(settings.customKiroModels, "kiro"),
     hiddenProviders: normalizeHiddenProviders(settings.hiddenProviders),
     disabledProviders: normalizeHiddenProviders(settings.disabledProviders),
     providerOrder: normalizeProviderOrder(settings.providerOrder),
@@ -1594,6 +1611,7 @@ export function serverSettingsToAppSettings(settings: ServerSettingsView): Parti
     piBinaryPath: settings.providers.pi.binaryPath,
     ompAgentDir: settings.providers.omp.agentDir,
     ompBinaryPath: settings.providers.omp.binaryPath,
+    kiroBinaryPath: settings.providers.kiro.binaryPath,
     customCodexModels: settings.providers.codex.customModels,
     customClaudeModels: settings.providers.claudeAgent.customModels,
     customCursorModels: settings.providers.cursor.customModels,
@@ -1604,6 +1622,7 @@ export function serverSettingsToAppSettings(settings: ServerSettingsView): Parti
     customOpenCodeModels: settings.providers.opencode.customModels,
     customPiModels: settings.providers.pi.customModels,
     customOmpModels: settings.providers.omp.customModels,
+    customKiroModels: settings.providers.kiro.customModels,
     disabledProviders: getServerDisabledProviders(settings),
     providerInstances: settings.providerInstances,
     textGenerationProvider: settings.textGenerationModelSelection.provider,
@@ -1647,6 +1666,7 @@ function touchesProviderDiscoverySettings(patch: Partial<AppSettings>): boolean 
     hasOwn(patch, "piAgentDir") ||
     hasOwn(patch, "ompBinaryPath") ||
     hasOwn(patch, "ompAgentDir") ||
+    hasOwn(patch, "kiroBinaryPath") ||
     hasOwn(patch, "disabledProviders")
   );
 }
@@ -1834,6 +1854,12 @@ export function appSettingsPatchToServerSettingsPatch(
         : {}),
     };
   }
+  if (hasOwn(patch, "kiroBinaryPath") || hasOwn(patch, "customKiroModels")) {
+    providers.kiro = {
+      ...(hasOwn(patch, "kiroBinaryPath") ? { binaryPath: patch.kiroBinaryPath ?? "" } : {}),
+      ...(hasOwn(patch, "customKiroModels") ? { customModels: patch.customKiroModels ?? [] } : {}),
+    };
+  }
   if (hasOwn(patch, "antigravityBinaryPath") || hasOwn(patch, "customAntigravityModels")) {
     providers.antigravity = {
       ...(hasOwn(patch, "antigravityBinaryPath")
@@ -1968,6 +1994,7 @@ export function buildInitialServerSettingsMigrationPatch(
     "piBinaryPath",
     "ompAgentDir",
     "ompBinaryPath",
+    "kiroBinaryPath",
     "textGenerationModel",
     "textGenerationProvider",
     "textGenerationProviderInstanceId",
@@ -1997,6 +2024,7 @@ export function buildInitialServerSettingsMigrationPatch(
     "customOpenCodeModels",
     "customPiModels",
     "customOmpModels",
+    "customKiroModels",
   ] as const) {
     if (normalizedSettings[key].length > 0) {
       patch[key] = normalizedSettings[key] as never;
@@ -2156,6 +2184,7 @@ export function getCustomModelsByProvider(
     opencode: getCustomModelsForProvider(settings, "opencode"),
     pi: getCustomModelsForProvider(settings, "pi"),
     omp: getCustomModelsForProvider(settings, "omp"),
+    kiro: getCustomModelsForProvider(settings, "kiro"),
   };
 }
 
@@ -2356,6 +2385,8 @@ function buildProviderStartOptionsFromInstanceConfig(
           }
         : undefined;
     }
+    case "kiro":
+      return typeof binaryPath === "string" ? { kiro: { binaryPath } } : undefined;
   }
 }
 
@@ -2384,6 +2415,7 @@ function mergeProviderStartOptionsForApp(
       : {}),
     ...(base.pi || overlay.pi ? { pi: { ...base.pi, ...overlay.pi } } : {}),
     ...(base.omp || overlay.omp ? { omp: { ...base.omp, ...overlay.omp } } : {}),
+    ...(base.kiro || overlay.kiro ? { kiro: { ...base.kiro, ...overlay.kiro } } : {}),
   };
 }
 
@@ -2417,6 +2449,7 @@ export function getProviderStartOptions(
     | "piBinaryPath"
     | "ompAgentDir"
     | "ompBinaryPath"
+    | "kiroBinaryPath"
   > &
     Partial<Pick<AppSettings, "claudeHomePath" | "providerInstances">>,
   instanceId?: ProviderInstanceId | null | undefined,
@@ -2439,6 +2472,7 @@ export function getProviderStartOptions(
   );
   const piBinaryPath = normalizeProviderBinaryPathOverride("pi", settings.piBinaryPath);
   const ompBinaryPath = normalizeProviderBinaryPathOverride("omp", settings.ompBinaryPath);
+  const kiroBinaryPath = normalizeProviderBinaryPathOverride("kiro", settings.kiroBinaryPath);
   const codexLaunch = resolveCodexLaunchSettingsForInstance(settings, instanceId);
   const hasOpenCodeStartOptions = Boolean(
     openCodeBinaryPath || settings.openCodeExperimentalWebSockets || settings.openCodeServerUrl,
@@ -2527,6 +2561,13 @@ export function getProviderStartOptions(
           },
         }
       : {}),
+    ...(kiroBinaryPath
+      ? {
+          kiro: {
+            binaryPath: kiroBinaryPath,
+          },
+        }
+      : {}),
   };
 
   const providerInstance = instanceId ? settings.providerInstances?.[instanceId] : undefined;
@@ -2599,6 +2640,9 @@ export function mergeProviderStartOptions(
     ...(base.pi !== undefined || overlay.pi !== undefined
       ? { pi: { ...base.pi, ...overlay.pi } }
       : {}),
+    ...(base.kiro !== undefined || overlay.kiro !== undefined
+      ? { kiro: { ...base.kiro, ...overlay.kiro } }
+      : {}),
   };
 }
 
@@ -2643,6 +2687,7 @@ export function getCustomBinaryPathForProvider(
     | "openCodeBinaryPath"
     | "piBinaryPath"
     | "ompBinaryPath"
+    | "kiroBinaryPath"
   >,
   provider: ProviderKind,
 ): string {
@@ -2667,6 +2712,8 @@ export function getCustomBinaryPathForProvider(
       return normalizeProviderBinaryPathOverride(provider, settings.piBinaryPath);
     case "omp":
       return normalizeProviderBinaryPathOverride(provider, settings.ompBinaryPath);
+    case "kiro":
+      return normalizeProviderBinaryPathOverride(provider, settings.kiroBinaryPath);
   }
 }
 

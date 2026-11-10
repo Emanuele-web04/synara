@@ -257,6 +257,19 @@ export const OmpIcon: ProviderGlyph = (props) => {
   );
 };
 
+// Kiro's ghost mark on its purple tile, vectorized from the official app icon.
+export const KiroIcon: ProviderGlyph = (props) => (
+  <svg {...props} viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <rect width="64" height="64" rx="12" fill="#8F46FE" />
+    <path
+      fill="#FFFFFF"
+      d="M33.2 10.8C34.5 10.8 36.3 11.1 37.6 11.4C38.9 11.7 40.1 12.3 41 12.8C41.9 13.3 42.3 13.6 43 14.2C43.7 14.8 44.6 15.7 45.2 16.4C45.8 17.1 45.9 17.2 46.4 18.2C46.9 19.2 47.8 21 48.2 22.4C48.6 23.8 48.8 25.2 49 26.8C49.2 28.4 49.3 30.4 49.2 32.2C49.1 34 48.9 35.7 48.6 37.4C48.3 39.1 47.8 40.8 47.2 42.4C46.6 44 45.8 45.7 45.2 46.8C44.6 47.9 44.4 48.2 43.6 49C42.8 49.8 41.5 51 40.6 51.6C39.7 52.2 38.6 52.6 38 52.8C37.4 53 37.2 53 36.8 53C36.4 53 35.9 53 35.4 52.8C34.9 52.6 34.4 52.2 34 51.8C33.6 51.4 33.4 50.5 33.2 50.2C33 49.9 33.1 49.8 32.8 50C32.5 50.2 32 50.8 31.2 51.2C30.4 51.6 29.2 52.3 28 52.6C26.8 52.9 25 52.9 24 52.8C23 52.7 22.5 52.3 22 52C21.5 51.7 21.3 51.4 21 51C20.7 50.6 20.5 50.5 20.4 49.8C20.3 49.1 20.1 48 20.2 47C20.3 46 21.1 44.2 21.2 43.6C21.3 43 21.2 43.3 21 43.4C20.8 43.5 20.3 43.8 19.8 44C19.3 44.2 18.4 44.4 17.8 44.4C17.2 44.4 16.9 44.4 16.4 44.2C15.9 44 15.3 43.5 15 43.2C14.7 42.9 14.7 42.6 14.6 42.2C14.5 41.8 14.3 41.6 14.6 40.8C14.9 40 15.9 38.3 16.4 37.2C16.9 36.1 17 36.6 17.4 34.4C17.8 32.2 18.4 26.2 18.8 23.8C19.2 21.4 19.6 20.8 20 19.8C20.4 18.8 20.6 18.5 21 17.8C21.4 17.1 21.8 16.4 22.6 15.6C23.4 14.8 24.8 13.5 26 12.8C27.2 12.1 28.8 11.5 30 11.2C31.2 10.9 31.9 10.8 33.2 10.8Z"
+    />
+    <ellipse cx="34" cy="25.9" rx="2" ry="3.3" fill="#000000" />
+    <ellipse cx="41.2" cy="25.9" rx="2" ry="3.3" fill="#000000" />
+  </svg>
+);
+
 export const PROVIDER_GLYPHS = {
   codex: OpenAIIcon,
   claudeAgent: ClaudeIcon,
@@ -268,6 +281,7 @@ export const PROVIDER_GLYPHS = {
   opencode: OpenCodeIcon,
   pi: PiIcon,
   omp: OmpIcon,
+  kiro: KiroIcon,
 } satisfies Record<string, ProviderGlyph>;
 
 export type ProviderGlyphKey = keyof typeof PROVIDER_GLYPHS;
@@ -284,6 +298,7 @@ export const PROVIDER_LABELS: Record<ProviderGlyphKey, string> = {
   opencode: "OpenCode",
   pi: "Pi",
   omp: "Oh My Pi",
+  kiro: "Kiro",
 };
 
 export function providerLabel(provider: string): string {

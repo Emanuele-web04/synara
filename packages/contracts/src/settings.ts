@@ -123,6 +123,12 @@ export const DevinServerProviderSettings = Schema.Struct({
 });
 export type DevinServerProviderSettings = typeof DevinServerProviderSettings.Type;
 
+export const KiroServerProviderSettings = Schema.Struct({
+  ...ProviderSettingsBase,
+  binaryPath: StringSetting.pipe(Schema.withDecodingDefault(() => "kiro-cli")),
+});
+export type KiroServerProviderSettings = typeof KiroServerProviderSettings.Type;
+
 const DisabledSkillNames = Schema.Array(Schema.String.check(Schema.isMaxLength(256))).pipe(
   Schema.withDecodingDefault(() => []),
 );
@@ -193,6 +199,7 @@ export const ServerSettings = Schema.Struct({
     opencode: OpenCodeServerProviderSettings.pipe(Schema.withDecodingDefault(() => ({}))),
     pi: PiServerProviderSettings.pipe(Schema.withDecodingDefault(() => ({}))),
     omp: OmpServerProviderSettings.pipe(Schema.withDecodingDefault(() => ({}))),
+    kiro: KiroServerProviderSettings.pipe(Schema.withDecodingDefault(() => ({}))),
   }).pipe(Schema.withDecodingDefault(() => ({}))),
   providerInstances: ProviderInstanceConfigMap.pipe(Schema.withDecodingDefault(() => ({}))),
   skills: SkillsServerSettings.pipe(Schema.withDecodingDefault(() => ({}))),
@@ -268,6 +275,7 @@ export const ServerSettingsPatch = Schema.Struct({
       antigravity: Schema.optionalKey(Schema.Struct(ProviderSettingsBasePatch)),
       grok: Schema.optionalKey(Schema.Struct(ProviderSettingsBasePatch)),
       droid: Schema.optionalKey(Schema.Struct(ProviderSettingsBasePatch)),
+      kiro: Schema.optionalKey(Schema.Struct(ProviderSettingsBasePatch)),
       opencode: Schema.optionalKey(
         Schema.Struct({
           ...ProviderSettingsBasePatch,

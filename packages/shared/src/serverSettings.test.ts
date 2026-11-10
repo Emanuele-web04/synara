@@ -65,6 +65,10 @@ describe("providerStartOptionsFromServerSettings", () => {
           binaryPath: "",
           agentDir: "",
         },
+        kiro: {
+          ...DEFAULT_SERVER_SETTINGS.providers.kiro,
+          binaryPath: "",
+        },
       },
     };
 
@@ -88,6 +92,7 @@ describe("providerStartOptionsFromServerSettings", () => {
     expect(providerOptions.pi).toEqual({});
     expect(providerOptions.devin).toEqual({});
     expect(providerOptions.omp).toEqual({});
+    expect(providerOptions.kiro).toEqual({});
   });
 
   it("preserves configured launch settings", () => {
