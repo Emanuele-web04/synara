@@ -40,13 +40,23 @@ const CARET_SIZE = 10;
 const CARD_BAND_HEIGHT = 144;
 const GLIDE_CLASS_NAME = "duration-[420ms] ease-[cubic-bezier(0.2,0.8,0.2,1)]";
 
-/** The first on-screen control carrying the step's anchor (the rail and panel can both). */
-function findAnchor(anchor: string): HTMLElement | null {
+/**
+ * The first control carrying the step's anchor that the reader can actually see (the rail
+ * and panel can both carry one). Its center must be inside the window and hit the control:
+ * a collapsed sidebar stays laid out, slid off canvas or under the rail. Run before the
+ * tour's own overlay mounts, which would otherwise win every hit test.
+ */
+function findVisibleAnchor(anchor: string): HTMLElement | null {
   for (const element of document.querySelectorAll<HTMLElement>(
     `[${APP_TOUR_ANCHOR_ATTRIBUTE}="${anchor}"]`,
   )) {
-    const rect = element.getBoundingClientRect();
-    if (rect.width > 0 && rect.height > 0) return element;
+    const box = element.getBoundingClientRect();
+    if (box.width <= 0 || box.height <= 0) continue;
+    const x = box.left + box.width / 2;
+    const y = box.top + box.height / 2;
+    if (x < 0 || y < 0 || x >= window.innerWidth || y >= window.innerHeight) continue;
+    const hit = document.elementFromPoint(x, y);
+    if (hit && element.contains(hit)) return element;
   }
   return null;
 }
@@ -64,18 +74,20 @@ function sameRect(a: TourRect | null, b: TourRect | null) {
 }
 
 /** Tracks the anchor's box while the step shows: resizes, scrolls, and layout shifts. */
-function useAnchorRect(anchor: string | null): TourRect | null {
-  const [measured, setMeasured] = useState<{ anchor: string; rect: TourRect } | null>(null);
+function useAnchorRect(element: HTMLElement | null): TourRect | null {
+  const [measured, setMeasured] = useState<{ element: HTMLElement; rect: TourRect } | null>(null);
   useLayoutEffect(() => {
-    if (!anchor) return;
-    const element = findAnchor(anchor);
     if (!element) return;
     element.scrollIntoView({ block: "nearest", inline: "nearest" });
     const measure = () => {
+      // A control that remounted mid-step keeps the ring where it last was.
+      if (!element.isConnected) return;
       const box = element.getBoundingClientRect();
       const rect = { left: box.left, top: box.top, width: box.width, height: box.height };
       setMeasured((previous) =>
-        previous?.anchor === anchor && sameRect(previous.rect, rect) ? previous : { anchor, rect },
+        previous?.element === element && sameRect(previous.rect, rect)
+          ? previous
+          : { element, rect },
       );
     };
     measure();
@@ -89,8 +101,8 @@ function useAnchorRect(anchor: string | null): TourRect | null {
       window.removeEventListener("resize", measure);
       window.removeEventListener("scroll", measure, true);
     };
-  }, [anchor]);
-  return anchor && measured?.anchor === anchor ? measured.rect : null;
+  }, [element]);
+  return element && measured?.element === element ? measured.rect : null;
 }
 
 function useViewport() {
@@ -114,17 +126,24 @@ export function AppTour(props: { open: boolean; replay: boolean; onDismiss: () =
   const [entries, setEntries] = useState<ReadonlyArray<{ step: AppTourStep; anchored: boolean }>>(
     [],
   );
+  const [anchors, setAnchors] = useState<ReadonlyMap<string, HTMLElement>>(() => new Map());
   const [index, setIndex] = useState(0);
   // Steps are resolved two frames after the tour opens, so a replay that just left Settings
-  // finds the workspace mounted: hidden rail items are skipped, and with no controls on
-  // screen at all the cards are centered instead. Entries outlive a close so the card can
+  // finds the workspace mounted: hidden rail items and a collapsed sidebar's controls are
+  // skipped, and with no controls on screen at all the cards are centered instead. Entries outlive a close so the card can
   // play its exit; `resolved` keeps a reopen from flashing the previous step.
   const [resolved, setResolved] = useState(false);
   useEffect(() => {
     if (!open) return;
     let frame = window.requestAnimationFrame(() => {
       frame = window.requestAnimationFrame(() => {
-        setEntries(resolveTourSteps(APP_TOUR_STEPS, (anchor) => findAnchor(anchor) !== null));
+        const found = new Map<string, HTMLElement>();
+        for (const step of APP_TOUR_STEPS) {
+          const element = findVisibleAnchor(step.anchor);
+          if (element) found.set(step.anchor, element);
+        }
+        setAnchors(found);
+        setEntries(resolveTourSteps(APP_TOUR_STEPS, (anchor) => found.has(anchor)));
         setIndex(0);
         setResolved(true);
         // The tour covers Activity and Tasks; their one-time hints would only repeat it.
@@ -139,7 +158,9 @@ export function AppTour(props: { open: boolean; replay: boolean; onDismiss: () =
 
   const entry = entries[Math.min(index, entries.length - 1)];
   const showing = open && resolved && entry !== undefined;
-  const anchorRect = useAnchorRect(showing && entry.anchored ? entry.step.anchor : null);
+  const anchorRect = useAnchorRect(
+    showing && entry.anchored ? (anchors.get(entry.step.anchor) ?? null) : null,
+  );
   const viewport = useViewport();
 
   const cardRef = useRef<HTMLDivElement>(null);

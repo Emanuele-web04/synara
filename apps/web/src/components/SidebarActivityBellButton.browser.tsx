@@ -92,6 +92,9 @@ it("waits for import, then lets the app tour point at Activity in place of its h
   await expect.element(page.getByRole("dialog")).not.toBeInTheDocument();
   await new Promise((resolve) => setTimeout(resolve, 500));
   expect(page.getByText(coachmark).all()).toHaveLength(0);
+  // The bell was mounted before the tour acknowledged its hint; its tooltip still works.
+  await page.getByRole("button", { name: "Switch to activity view" }).hover();
+  await expect.element(page.getByText("Activity view")).toBeVisible();
   await screen.unmount();
   screens.splice(screens.indexOf(screen), 1);
   await show();

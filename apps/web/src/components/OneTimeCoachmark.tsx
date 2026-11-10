@@ -5,6 +5,7 @@ import {
   type ButtonHTMLAttributes,
   type ReactElement,
 } from "react";
+import { create } from "zustand";
 
 import { useAnnouncementSheetSlot, useAnnouncementSheetSlotStore } from "./announcementSheetSlot";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
@@ -29,10 +30,14 @@ function markSeen(storageKey: string) {
   }
 }
 
+/** Bumped when hints are acknowledged elsewhere, so mounted coachmarks re-read storage. */
+const useCoachmarkAcknowledgements = create<{ epoch: number }>(() => ({ epoch: 0 }));
+
 /** The app tour points at Activity and Tasks itself; their one-time hints would repeat it. */
 export function markCoachmarksSeen() {
   markSeen(ACTIVITY_COACHMARK_STORAGE_KEY);
   markSeen(TASKS_COACHMARK.storageKey);
+  useCoachmarkAcknowledgements.setState(({ epoch }) => ({ epoch: epoch + 1 }));
 }
 
 /** A remembered hint sharing the startup announcement slot with Activity and the tour. */
@@ -51,18 +56,24 @@ export function OneTimeCoachmark({
   tooltipSide?: "top" | "right" | "bottom" | "left";
   children: ReactElement<ButtonHTMLAttributes<HTMLButtonElement>>;
 }) {
-  const [visible, setVisible] = useState(
+  const [pending, setPending] = useState(
     () => typeof window !== "undefined" && !hasSeen(storageKey),
   );
+  const visible = pending;
   const [tooltipOpen, setTooltipOpen] = useState(false);
   const startupSettled = useAnnouncementSheetSlotStore((state) => state.startupSettled);
-  // Read again once startup settles: the app tour, which runs first, marks it seen.
-  const { open } = useAnnouncementSheetSlot(visible && startupSettled && !hasSeen(storageKey));
+  const { open } = useAnnouncementSheetSlot(visible && startupSettled);
+  // A hint the app tour acknowledged while this control was mounted never shows, and the
+  // control keeps its ordinary tooltip.
+  const acknowledgements = useCoachmarkAcknowledgements((state) => state.epoch);
+  useEffect(() => {
+    if (acknowledgements > 0 && pending && !open && hasSeen(storageKey)) setPending(false);
+  }, [acknowledgements, open, pending, storageKey]);
   useEffect(() => {
     if (!open) return;
     markSeen(storageKey);
     const timeout = window.setTimeout(() => {
-      setVisible(false);
+      setPending(false);
       setTooltipOpen(false);
     }, 8_000);
     return () => window.clearTimeout(timeout);
@@ -79,7 +90,7 @@ export function OneTimeCoachmark({
         render={cloneElement(children, {
           onClick: (event) => {
             if (visible) markSeen(storageKey);
-            setVisible(false);
+            setPending(false);
             setTooltipOpen(false);
             children.props.onClick?.(event);
           },

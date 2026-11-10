@@ -114,6 +114,40 @@ it("walks the tour in order, remembers dismissal per installation, and replays a
   await expect.element(page.getByRole("dialog")).not.toBeInTheDocument();
 });
 
+it("skips controls in a collapsed sidebar or under the rail and rings the visible ones", async () => {
+  const anchor = (id: string) => (
+    <button type="button" data-app-tour={id} style={{ width: 40, height: 40 }}>
+      {id}
+    </button>
+  );
+  await show(
+    <>
+      {/* A collapsed offcanvas sidebar stays laid out, slid off the left edge. */}
+      <div
+        style={{ position: "fixed", left: 0, top: 0, width: 260, transform: "translateX(-100%)" }}
+      >
+        {anchor("newThread")}
+      </div>
+      {/* Its controls near the edge end up under the rail. */}
+      <div style={{ position: "fixed", left: 0, top: 100 }}>{anchor("tasks")}</div>
+      <div
+        style={{ position: "fixed", left: 0, top: 80, width: 60, height: 80, background: "white" }}
+      />
+      <div style={{ position: "fixed", left: 200, top: 200 }}>
+        {anchor("activity")}
+        {anchor("inbox")}
+      </div>
+      <FeatureTourDialog />
+    </>,
+  );
+  const tour = page.getByRole("dialog", { name: "See what your agents are doing" });
+  await expect.element(tour).toBeVisible();
+  expect(tour.element().getAttribute("data-tour-side")).toBe("right");
+  expect(page.getByRole("button", { name: /^Show / }).all()).toHaveLength(2);
+  await page.getByRole("button", { name: "Next", exact: true }).click();
+  await expect.element(page.getByRole("dialog", { name: "Start the day in Inbox" })).toBeVisible();
+});
+
 it("announces again when the browser connects to a different installation", async () => {
   localStorage.setItem(tourKey, JSON.stringify([installation]));
   installation = "/second/worktrees";
