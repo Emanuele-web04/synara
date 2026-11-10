@@ -128,6 +128,9 @@ export async function createApp(
     createV1Routes({
       accountDeletion,
       ...(billing ? { billing } : {}),
+      ...(config.polarBilling
+        ? { webCheckoutOrigin: new URL(config.polarBilling.checkoutSuccessUrl).origin }
+        : {}),
       ...(tunnels ? { tunnels } : {}),
       ...(liveActivities ? { liveActivities } : {}),
       ...(config.remoteTestUserIds ? { remoteTestUserIds: config.remoteTestUserIds } : {}),
