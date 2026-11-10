@@ -435,7 +435,8 @@ chat's model otherwise, either one at its lowest catalog effort. Suggestions liv
 session storage keeps just the keys of turns whose suggestion was used, discarded, or absent,
 so a reload does not bring one back.
 Stable refuses the RPC, hides the setting, never requests a prediction, and ignores the
-stored setting.
+stored setting. The `server.getEnvironment` descriptor advertises the same gate to remote
+clients as `capabilities.composerPredictions` (`false` on Stable, absent on older servers).
 
 `accountInbox` is the account-saved Inbox history. In Stable, Beta and Remote, a signed-in computer
 automatically saves account/workspace-owned daily snapshots, including project names,

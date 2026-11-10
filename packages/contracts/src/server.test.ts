@@ -1,9 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { Schema } from "effect";
 
-import { ServerProviderStatus } from "./server";
+import { ServerGetEnvironmentResult, ServerProviderStatus } from "./server";
 
 const decodeServerProviderStatus = Schema.decodeUnknownSync(ServerProviderStatus);
+const decodeServerEnvironment = Schema.decodeUnknownSync(ServerGetEnvironmentResult);
 
 describe("ServerProviderStatus", () => {
   it("promotes legacy provider-only snapshots to the default provider instance", () => {
@@ -36,5 +37,26 @@ describe("ServerProviderStatus", () => {
     expect(parsed.driver).toBe("claudeAgent");
     expect(parsed.instanceId).toBe("claude_work");
     expect(parsed.displayName).toBe("Claude Work");
+  });
+});
+
+describe("ServerGetEnvironmentResult", () => {
+  it("decodes the composer predictions capability from older and newer servers", () => {
+    const descriptor = {
+      environmentId: "environment-1",
+      label: "Mini",
+      platform: { os: "darwin", arch: "arm64" },
+      serverVersion: "1.5.0",
+      capabilities: { repositoryIdentity: true },
+    };
+    const withCapability = (composerPredictions: boolean) =>
+      decodeServerEnvironment({
+        ...descriptor,
+        capabilities: { ...descriptor.capabilities, composerPredictions },
+      }).capabilities.composerPredictions;
+
+    expect(decodeServerEnvironment(descriptor).capabilities.composerPredictions).toBeUndefined();
+    expect(withCapability(true)).toBe(true);
+    expect(withCapability(false)).toBe(false);
   });
 });

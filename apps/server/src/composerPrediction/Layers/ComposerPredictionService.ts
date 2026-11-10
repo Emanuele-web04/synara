@@ -7,10 +7,8 @@
 // Layer: Server service (Beta only; refused on Stable)
 
 import { WsRpcError, type ThreadId, type TurnId } from "@synara/contracts";
-import { COMPOSER_PREDICTIONS_BETA_FEATURE } from "@synara/shared/betaFeatures";
 import { Cause, Clock, Deferred, Duration, Effect, Fiber, Layer, Option, Schema } from "effect";
 
-import { isServerBetaFeatureEnabled } from "../../betaFeatureGate.ts";
 import { resolveThreadWorkspaceCwd } from "../../checkpointing/Utils.ts";
 import { TextGenerationError } from "../../git/Errors.ts";
 import { TextGeneration } from "../../git/Services/TextGeneration.ts";
@@ -23,6 +21,7 @@ import {
   resolveComposerPredictionHedgeDelayMs,
   resolveComposerPredictionRouting,
 } from "../composerPrediction.ts";
+import { isServerComposerPredictionsEnabled } from "../composerPredictionGate.ts";
 import {
   ComposerPredictionService,
   type ComposerPredictionServiceShape,
@@ -189,7 +188,7 @@ const make = Effect.gen(function* () {
 
   const generate: ComposerPredictionServiceShape["generate"] = (input) =>
     Effect.suspend(() =>
-      isServerBetaFeatureEnabled(COMPOSER_PREDICTIONS_BETA_FEATURE)
+      isServerComposerPredictionsEnabled()
         ? generateShared(input.threadId, input.expectedTurnId).pipe(
             Effect.map((suggestion) => ({ suggestion })),
           )
