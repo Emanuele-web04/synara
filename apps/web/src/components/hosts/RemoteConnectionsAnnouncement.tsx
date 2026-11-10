@@ -10,7 +10,7 @@
 // sheet closes, once its exit animation is done.
 
 import { useQuery } from "@tanstack/react-query";
-import { useNavigate } from "@tanstack/react-router";
+import { useNavigate, useRouterState } from "@tanstack/react-router";
 import { Schema } from "effect";
 import {
   useCallback,
@@ -52,10 +52,16 @@ function useAnnouncementStorage() {
   );
 }
 
-function remoteConnectionsAvailable(): boolean {
-  // A window that is itself driving another computer has nothing new to learn here.
+function useRemoteConnectionsAvailable(): boolean {
+  const inRemoteWorkspace = useRouterState({
+    select: (state) => state.location.pathname === "/remote",
+  });
   const context = readExecutionContext();
-  return context?.controller.capabilities.remoteConnections === true && !context.remote;
+  return (
+    context?.controller.capabilities.remoteConnections === true &&
+    !context.remote &&
+    !inRemoteWorkspace
+  );
 }
 
 export function RemoteConnectionsAnnouncement() {
@@ -63,15 +69,20 @@ export function RemoteConnectionsAnnouncement() {
   const openPlans = useOpenSynaraPlan();
   const [storage, setStorage] = useAnnouncementStorage();
   const onboardingOpen = useOnboardingDialogStore((state) => state.isOpen);
-  const wantsOpen = remoteConnectionsAvailable() && !storage.acknowledged;
+  const available = useRemoteConnectionsAvailable();
+  const wantsOpen = available && !storage.acknowledged;
 
-  const { status } = useAccount();
+  const { status, statusQuery } = useAccount();
   const billingOptions = accountBillingQueryOptions(status);
   const billing = useQuery({
     ...billingOptions,
     enabled: billingOptions.enabled === true && ACCOUNT_BILLING_ENABLED && wantsOpen,
   });
-  const offerPlans = ACCOUNT_BILLING_ENABLED && billing.data?.access !== "granted";
+  const checkingAccess =
+    ACCOUNT_BILLING_ENABLED &&
+    (statusQuery.isPending || (billingOptions.enabled === true && billing.isPending));
+  const offerPlans =
+    ACCOUNT_BILLING_ENABLED && (status?.state === "signed-out" || billing.data?.access === "none");
 
   const close = useCallback(
     () => setStorage({ acknowledged: true, pointToAccount: true }),
@@ -84,7 +95,7 @@ export function RemoteConnectionsAnnouncement() {
 
   return (
     <AnnouncementSheet
-      open={wantsOpen}
+      open={wantsOpen && !checkingAccess}
       order="last"
       presentation="feature"
       hero={<RemoteConnectionsAnnouncementHero />}
@@ -120,7 +131,8 @@ export function RemoteConnectionsCoachmark({
   children: ReactElement<ButtonHTMLAttributes<HTMLButtonElement>>;
 }) {
   const [storage] = useAnnouncementStorage();
-  const follows = remoteConnectionsAvailable() && storage.pointToAccount === true;
+  const available = useRemoteConnectionsAvailable();
+  const follows = available && storage.pointToAccount === true;
   const [ready, setReady] = useState(false);
   useEffect(() => {
     if (!follows) return;

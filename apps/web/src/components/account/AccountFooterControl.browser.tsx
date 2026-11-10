@@ -17,6 +17,7 @@ vi.mock("~/hooks/useAccount", () => ({
 vi.mock("@tanstack/react-router", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@tanstack/react-router")>()),
   useNavigate: () => fixture.navigate,
+  useRouterState: () => false,
 }));
 vi.mock("~/lib/linkChips", () => ({ openExternalLink: fixture.openExternalLink }));
 

@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";
 
 import { useAnnouncementSheetSlotStore } from "../announcementSheetSlot";
+import { OneTimeCoachmark } from "../OneTimeCoachmark";
 import { useOnboardingDialogStore } from "../../onboarding/onboardingDialogStore";
 import {
   REMOTE_CONNECTIONS_ANNOUNCEMENT_STORAGE_KEY,
@@ -21,9 +22,15 @@ const fixture = vi.hoisted(() => ({
   remote: null as object | null,
   status: { state: "signed-out" } as AccountStatus,
   billing: { access: "none" } as Pick<AccountBillingStatus, "access">,
+  billingResponse: null as Promise<Pick<AccountBillingStatus, "access">> | null,
 }));
-vi.mock("@tanstack/react-router", () => ({ useNavigate: () => fixture.navigate }));
-vi.mock("~/hooks/useAccount", () => ({ useAccount: () => ({ status: fixture.status }) }));
+vi.mock("@tanstack/react-router", () => ({
+  useNavigate: () => fixture.navigate,
+  useRouterState: () => false,
+}));
+vi.mock("~/hooks/useAccount", () => ({
+  useAccount: () => ({ status: fixture.status, statusQuery: { isPending: false } }),
+}));
 vi.mock("~/lib/hosts/executionContext", async (importOriginal) => ({
   ...(await importOriginal<typeof import("~/lib/hosts/executionContext")>()),
   readExecutionContext: () => ({
@@ -40,7 +47,7 @@ vi.mock("~/lib/accountReactQuery", async (importOriginal) => ({
   accountBillingQueryOptions: (status: AccountStatus | null) => ({
     queryKey: ["account", "billing", status?.state ?? "signed-out"],
     enabled: status?.state === "signed-in",
-    queryFn: async () => fixture.billing,
+    queryFn: async () => fixture.billingResponse ?? fixture.billing,
   }),
 }));
 
@@ -48,7 +55,7 @@ const clients: QueryClient[] = [];
 const acknowledged = () =>
   JSON.parse(localStorage.getItem(REMOTE_CONNECTIONS_ANNOUNCEMENT_STORAGE_KEY) ?? "null");
 
-async function renderAnnouncement() {
+async function renderAnnouncement(showOtherHint = false) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   clients.push(client);
   return render(
@@ -57,6 +64,16 @@ async function renderAnnouncement() {
       <RemoteConnectionsCoachmark signedIn={false} tooltip="Sign in">
         <button type="button">Account</button>
       </RemoteConnectionsCoachmark>
+      {showOtherHint && (
+        <OneTimeCoachmark
+          storageKey="test:other-startup-hint"
+          title="Other startup hint"
+          description="This hint must appear first."
+          tooltip="Other"
+        >
+          <button type="button">Other feature</button>
+        </OneTimeCoachmark>
+      )}
     </QueryClientProvider>,
   );
 }
@@ -70,6 +87,8 @@ describe("RemoteConnectionsAnnouncement", () => {
     fixture.remote = null;
     fixture.status = { state: "signed-out" };
     fixture.billing = { access: "none" };
+    fixture.billingResponse = null;
+    localStorage.removeItem("test:other-startup-hint");
     useOnboardingDialogStore.setState({
       isOpen: false,
       startupGateSettled: true,
@@ -101,7 +120,7 @@ describe("RemoteConnectionsAnnouncement", () => {
       .not.toBeInTheDocument();
   });
 
-  it("opens Connections for people who already have Alto", async () => {
+  it("waits for an existing Alto subscriber’s billing result before opening Connections", async () => {
     fixture.status = {
       state: "signed-in",
       accountAuthority: "https://accounts.example.com",
@@ -112,8 +131,13 @@ describe("RemoteConnectionsAnnouncement", () => {
         organization: { id: "org_a", name: "Personal" },
       },
     };
-    fixture.billing = { access: "granted" };
+    let resolveBilling!: (billing: Pick<AccountBillingStatus, "access">) => void;
+    fixture.billingResponse = new Promise((resolve) => {
+      resolveBilling = resolve;
+    });
     await renderAnnouncement();
+    await expect.element(page.getByRole("dialog")).not.toBeInTheDocument();
+    resolveBilling({ access: "granted" });
     await page.getByRole("button", { name: "Connect a device" }).click();
 
     expect(fixture.navigate).toHaveBeenCalledWith({
@@ -137,13 +161,14 @@ describe("RemoteConnectionsAnnouncement", () => {
   });
 
   it("opens only after the other startup surfaces are done", async () => {
-    useAnnouncementSheetSlotStore.setState({ startupSettled: false, pending: ["other"] });
-    await renderAnnouncement();
+    useAnnouncementSheetSlotStore.setState({ startupSettled: false });
+    await renderAnnouncement(true);
     await expect.element(page.getByRole("dialog")).not.toBeInTheDocument();
 
     useAnnouncementSheetSlotStore.setState({ startupSettled: true });
+    await expect.element(page.getByText("Other startup hint")).toBeVisible();
     await expect.element(page.getByRole("dialog")).not.toBeInTheDocument();
-    useAnnouncementSheetSlotStore.setState({ pending: [] });
+    await page.getByRole("button", { name: "Other feature" }).click();
     await expect
       .element(page.getByRole("dialog", { name: "Introducing Remote Connections" }))
       .toBeVisible();
@@ -153,6 +178,8 @@ describe("RemoteConnectionsAnnouncement", () => {
     fixture.remote = { userId: "user_a" };
     await renderAnnouncement();
     await expect.element(page.getByRole("dialog")).not.toBeInTheDocument();
+    await page.getByRole("button", { name: "Account" }).hover();
+    await expect.element(page.getByText("Sign in", { exact: true })).toBeVisible();
   });
 
   it("counts the first-run tour, which pairs a device itself, as the announcement", async () => {

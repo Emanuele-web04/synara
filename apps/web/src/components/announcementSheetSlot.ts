@@ -14,7 +14,7 @@
 // A sheet ordered "last" also waits for the startup chain to settle and for every other
 // sheet or hint that wants to open to finish first, so it is always the final one.
 
-import { useEffect, useId } from "react";
+import { useEffect, useId, useLayoutEffect } from "react";
 import { create } from "zustand";
 
 import { useOnboardingDialogStore } from "~/onboarding/onboardingDialogStore";
@@ -27,7 +27,7 @@ interface AnnouncementSheetSlotStore {
   handedOff: boolean;
   /** Surfaces that want to open now, holding the slot or queued for it; "last" ones excluded. */
   pending: readonly string[];
-  claim: (id: string, allowAfterHandOff?: boolean) => void;
+  claim: (id: string, allowAfterHandOff?: boolean, last?: boolean) => void;
   release: (id: string) => void;
   setPending: (id: string, pending: boolean) => void;
   handOff: () => void;
@@ -39,10 +39,12 @@ export const useAnnouncementSheetSlotStore = create<AnnouncementSheetSlotStore>(
   startupSettled: false,
   handedOff: false,
   pending: [],
-  claim: (id, allowAfterHandOff = false) =>
-    set((state) =>
-      state.owner === null && (!state.handedOff || allowAfterHandOff) ? { owner: id } : state,
-    ),
+  claim: (id, allowAfterHandOff = false, last = false) =>
+    set((state) => {
+      if (state.owner !== null || (state.handedOff && !allowAfterHandOff)) return state;
+      if (last && (!state.startupSettled || state.pending.length > 0)) return state;
+      return { owner: id };
+    }),
   release: (id) => set((state) => (state.owner === id ? { owner: null } : state)),
   setPending: (id, pending) =>
     set((state) => {
@@ -82,14 +84,16 @@ export function useAnnouncementSheetSlot(
   // Once open, a "last" sheet keeps the slot even if another surface queues behind it.
   const eligible = ready && (!last || owner === id || !othersFirst);
 
-  useEffect(() => {
+  // Register newly ready hints before passive claim effects run. The store also
+  // checks pending claims in case the claiming render used an older snapshot.
+  useLayoutEffect(() => {
     if (!last) setPending(id, ready);
   }, [id, last, ready, setPending]);
   // Re-runs when the owner changes, so a waiting sheet claims the slot once it frees.
   useEffect(() => {
-    if (eligible) claim(id, allowAfterHandOff);
+    if (eligible) claim(id, allowAfterHandOff, last);
     else release(id);
-  }, [allowAfterHandOff, claim, eligible, id, owner, release]);
+  }, [allowAfterHandOff, claim, eligible, id, last, owner, release]);
   useEffect(
     () => () => {
       release(id);
