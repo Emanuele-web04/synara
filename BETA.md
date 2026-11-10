@@ -391,9 +391,9 @@ HTTP-hosted clients retain native component visuals but never execute HTML. The 
 bootstrap removes WebRTC capabilities before page scripts and stops parsing if that boundary
 cannot be enforced. HTML messages cannot open external URLs through the host.
 
-The list currently holds `accountInbox` (account-saved Inbox history). Account profiles,
-MCP Connectors and the native editor are available in Stable and Beta. Remote connections
-use their separate runtime activation policy.
+The list is currently empty. Account profiles, saved Inbox history, MCP Connectors
+and the native editor are available in Stable and Beta. Remote connections use
+their separate runtime activation policy.
 
 Diagnostics follow their separate [sender policy](#diagnostics).
 Inline visuals are available in Stable and Beta:
@@ -422,13 +422,13 @@ chat attention, running and finished work, review requests, and the activity rec
 The to-do list, quick-add, delegation card, and **All tasks** link appear only where
 Tasks is available, including Stable and Beta.
 
-`accountInbox` is the account-saved Inbox history. In Beta, a signed-in computer
+`accountInbox` is the account-saved Inbox history. In Stable, Beta and Remote, a signed-in computer
 automatically saves account/workspace-owned daily snapshots, including project names,
 and catches up its local history; **Save privately** requests an immediate update. Saved
 history can be read from the account API while its source computers are offline and
 survives source removal. Deleting a recap prevents automatic re-creation; an explicit
-Save can restore it. Stable refuses the saved-recap RPCs and does not upload. This
-history is separate from public profile publication and aggregate usage sync.
+Save can restore it. This history is separate from public profile publication
+and aggregate usage sync.
 
 Stable and Remote enable account profiles and aggregate usage sync for signed-in
 accounts by default; `SYNARA_ACCOUNT_PROFILE_SYNC=0` disables the feature. Beta and

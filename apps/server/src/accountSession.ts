@@ -109,7 +109,7 @@ import { hostSecretsSyncKeyPath } from "./hostSecrets/syncKeyStore";
 function requireInboxRecaps(): void {
   if (!isServerBetaFeatureEnabled(ACCOUNT_INBOX_BETA_FEATURE)) {
     throw new WsRpcError({
-      message: "Saved Inbox history is available in Synara Beta.",
+      message: "Saved Inbox history is unavailable on this host.",
       code: "FEATURE_UNAVAILABLE",
       retryable: false,
     });
