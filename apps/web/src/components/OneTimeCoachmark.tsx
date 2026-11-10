@@ -11,6 +11,30 @@ import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
 import { cn } from "~/lib/utils";
 import { useTranslation } from "~/i18n";
 
+export const ACTIVITY_COACHMARK_STORAGE_KEY = "synara:activity-onboarding:v1";
+
+function hasSeen(storageKey: string): boolean {
+  try {
+    return window.localStorage.getItem(storageKey) === "seen";
+  } catch {
+    return false;
+  }
+}
+
+function markSeen(storageKey: string) {
+  try {
+    window.localStorage.setItem(storageKey, "seen");
+  } catch {
+    // Storage can be unavailable in private or restricted browser contexts.
+  }
+}
+
+/** The app tour points at Activity and Tasks itself; their one-time hints would repeat it. */
+export function markCoachmarksSeen() {
+  markSeen(ACTIVITY_COACHMARK_STORAGE_KEY);
+  markSeen(TASKS_COACHMARK.storageKey);
+}
+
 /** A remembered hint sharing the startup announcement slot with Activity and the tour. */
 export function OneTimeCoachmark({
   storageKey,
@@ -27,31 +51,16 @@ export function OneTimeCoachmark({
   tooltipSide?: "top" | "right" | "bottom" | "left";
   children: ReactElement<ButtonHTMLAttributes<HTMLButtonElement>>;
 }) {
-  const [visible, setVisible] = useState(() => {
-    if (typeof window === "undefined") return false;
-    try {
-      return window.localStorage.getItem(storageKey) !== "seen";
-    } catch {
-      return true;
-    }
-  });
+  const [visible, setVisible] = useState(
+    () => typeof window !== "undefined" && !hasSeen(storageKey),
+  );
   const [tooltipOpen, setTooltipOpen] = useState(false);
   const startupSettled = useAnnouncementSheetSlotStore((state) => state.startupSettled);
-  const { open } = useAnnouncementSheetSlot(visible && startupSettled);
-  const markSeen = () => {
-    try {
-      window.localStorage.setItem(storageKey, "seen");
-    } catch {
-      // Storage can be unavailable in private or restricted browser contexts.
-    }
-  };
+  // Read again once startup settles: the app tour, which runs first, marks it seen.
+  const { open } = useAnnouncementSheetSlot(visible && startupSettled && !hasSeen(storageKey));
   useEffect(() => {
     if (!open) return;
-    try {
-      window.localStorage.setItem(storageKey, "seen");
-    } catch {
-      // Keep the hint usable when persistence is unavailable.
-    }
+    markSeen(storageKey);
     const timeout = window.setTimeout(() => {
       setVisible(false);
       setTooltipOpen(false);
@@ -69,7 +78,7 @@ export function OneTimeCoachmark({
       <TooltipTrigger
         render={cloneElement(children, {
           onClick: (event) => {
-            if (visible) markSeen();
+            if (visible) markSeen(storageKey);
             setVisible(false);
             setTooltipOpen(false);
             children.props.onClick?.(event);

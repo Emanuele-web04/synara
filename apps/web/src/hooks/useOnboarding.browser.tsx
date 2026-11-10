@@ -30,7 +30,7 @@ const clients: QueryClient[] = [];
 beforeEach(() => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   localStorage.removeItem("synara:onboarding:v2");
-  localStorage.removeItem("synara:feature-tour:since-0.9.2:v1");
+  localStorage.removeItem("synara:app-tour:v1");
   mocks.getConfig.mockReset().mockResolvedValue({ worktreesDir: "/a/worktrees" });
   // Keep the server marker absent to exercise the failed-write fallback.
   mocks.save.mockReset().mockResolvedValue(false);
@@ -45,7 +45,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
   for (const client of clients.splice(0)) client.clear();
   localStorage.removeItem("synara:onboarding:v2");
-  localStorage.removeItem("synara:feature-tour:since-0.9.2:v1");
+  localStorage.removeItem("synara:app-tour:v1");
 });
 
 async function renderOnboarding() {
@@ -60,14 +60,12 @@ async function renderOnboarding() {
 }
 
 describe("onboarding installation identity", () => {
-  it("acknowledges the current highlights on first-run completion before announcements mount", async () => {
+  it("leaves the app tour to follow first-run completion", async () => {
     const { hook } = await renderOnboarding();
     await vi.waitFor(() => expect(hook.result.current.isOpen).toBe(true));
     expect(useOnboardingDialogStore.getState().openReason).toBe("first-run");
     await act(async () => hook.result.current.complete());
-    expect(JSON.parse(localStorage.getItem("synara:feature-tour:since-0.9.2:v1") ?? "[]")).toEqual([
-      "/a/worktrees",
-    ]);
+    expect(localStorage.getItem("synara:app-tour:v1")).toBeNull();
     await hook.unmount();
     const remounted = await renderOnboarding();
     await vi.waitFor(() => expect(remounted.hook.result.current.isOpen).toBe(false));
@@ -98,7 +96,7 @@ describe("onboarding installation identity", () => {
       });
     });
     await vi.waitFor(() => expect(hook.result.current.isOpen).toBe(false));
-    expect(localStorage.getItem("synara:feature-tour:since-0.9.2:v1")).toBeNull();
+    expect(localStorage.getItem("synara:app-tour:v1")).toBeNull();
     await hook.unmount();
   });
 
@@ -126,7 +124,7 @@ describe("onboarding installation identity", () => {
     );
     await hook.rerender();
     expect(hook.result.current.isOpen).toBe(false);
-    expect(localStorage.getItem("synara:feature-tour:since-0.9.2:v1")).toBeNull();
+    expect(localStorage.getItem("synara:app-tour:v1")).toBeNull();
     expect(
       JSON.parse(localStorage.getItem("synara:onboarding:v2") ?? "null")?.completedAt ?? null,
     ).toBeNull();

@@ -314,7 +314,11 @@ import {
 } from "./SidebarActivityView";
 import { DesktopUpdateRailButton } from "./DesktopUpdateRailButton";
 import { SidebarIconButton, sidebarIconButtonSlotClass } from "./SidebarIconButton";
-import { OneTimeCoachmark, TASKS_COACHMARK } from "./OneTimeCoachmark";
+import {
+  ACTIVITY_COACHMARK_STORAGE_KEY,
+  OneTimeCoachmark,
+  TASKS_COACHMARK,
+} from "./OneTimeCoachmark";
 import { SidebarLeadingIcon } from "./SidebarLeadingIcon";
 import { SidebarPrimaryAction } from "./SidebarPrimaryAction";
 import { RailAutomationsPanel } from "./RailAutomationsPanel";
@@ -1237,7 +1241,7 @@ export function SidebarActivityBellButton({
 
   return (
     <OneTimeCoachmark
-      storageKey="synara:activity-onboarding:v1"
+      storageKey={ACTIVITY_COACHMARK_STORAGE_KEY}
       title={t("workspace:profile_activity")}
       description={t("workspace:seeRunningTasksCompletedWorkAndAnythingThatNeeds")}
       tooltip={t("workspace:activityView", { value0: shortcutLabel ? ` (${shortcutLabel})` : "" })}
@@ -1245,6 +1249,7 @@ export function SidebarActivityBellButton({
     >
       <button
         type="button"
+        data-app-tour="activity"
         aria-label={
           active ? t("workspace:switchToClassicView") : t("workspace:switchToActivityView")
         }
@@ -7997,6 +8002,7 @@ export default function Sidebar() {
                           return (
                             <SidebarPrimaryAction
                               key={id}
+                              tourAnchor={id}
                               {...(id === "tasks"
                                 ? {
                                     coachmark: {

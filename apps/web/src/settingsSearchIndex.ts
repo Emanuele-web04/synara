@@ -736,11 +736,11 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     keywords: "settings:currentApplicationVersionAbout",
   },
   {
-    target: "setting-what-s-new-since-0-9-2",
+    target: "setting-app-tour",
     id: "advanced:feature-tour",
     section: "advanced",
-    title: "settings:whatSNewSince092",
-    keywords: "settings:replayFeatureTourRedesignedWorkspaceProviderAccountsCodeReview",
+    title: "settings:appTour",
+    keywords: "settings:appTourKeywords",
   },
   {
     target: "setting-release-history",

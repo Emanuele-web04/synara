@@ -397,7 +397,6 @@
   "permissionGranted2": "Permiso concedido.",
   "changed_providerVisibility": "Visibilidad de proveedores",
   "recheckPermissions": "Volver a comprobar permisos",
-  "replayFeatureTour": "Repetir el recorrido de funciones",
   "shortcut2": "Atajo {{value0}}",
   "sidebarUsageRings": "Anillos de uso de la barra lateral",
   "deleteConfirmation": "confirmación de eliminación",
@@ -462,7 +461,6 @@
   "switchBackToSynara2": "¿Volver a Synara?",
   "testNotificationSent": "Notificación de prueba enviada",
   "typographyAndSpacing": "Tipografía y espaciado",
-  "whatSNewSince092": "Novedades desde 0.9.2",
   "includeForkUpstreams2": "incluir repositorios originales de forks",
   "setupGuide2": "Guía de configuración de {{value0}}",
   "antigravityBinaryPath": "Ruta del binario de Antigravity",
@@ -761,7 +759,6 @@
   "archivedThreadsWillAppearHereAndCanBeRestored": "Las conversaciones archivadas aparecerán aquí y se podrán restaurar en la barra lateral.",
   "chooseDefaultsForNewChatsNavigationAndTheEnvironment": "Elige los valores predeterminados de los chats nuevos, la navegación y el panel de Entorno.",
   "claudeCodeKeepsArtifactsOffInEmbeddedSessionsTurn": "Claude Code mantiene Artifacts desactivado en las sesiones integradas. Activa esta opción para que",
-  "exploreTheRedesignedWorkspaceProviderAccountsAndCodeReview": "Explora el espacio de trabajo rediseñado, las cuentas de proveedores y la revisión de código.",
   "reviewReusableWorkflowsDiscoveredAcrossAllConfiguredProviders": "Revisa los flujos de trabajo reutilizables descubiertos en todos los proveedores configurados.",
   "saveAdditionalGrokModelSlugsForThePickerAnd": "Guarda identificadores de modelos adicionales de Grok para el selector y el comando `/model`.",
   "showTokenByTokenOutputWhileAResponseIs2": "Mostrar la salida token a token mientras una respuesta está en curso. generación progresiva",
@@ -828,7 +825,6 @@
   "letsSynaraCaptureWindowsAndTheDesktopSoThe": "Permite que Synara capture ventanas y el escritorio para que el agente vea lo que controla.",
   "aRunningLogOfEveryUpdateNewestFirstChangelog": "Un registro de todas las actualizaciones, de la más reciente a la más antigua. historial de cambios novedades acerca de notas de versión",
   "adjustTheAppTextBaseInPixelsChatAnd": "Ajusta el tamaño base del texto de la aplicación en píxeles. La tipografía del chat y de la interfaz se adapta proporcionalmente. fuente",
-  "replayFeatureTourRedesignedWorkspaceProviderAccountsCodeReview": "Repetir recorrido de funciones espacio de trabajo renovado cuentas de proveedores Revisión de código control deslizante actualizaciones",
   "openThePersistedKeybindingsJsonFileToEditAdvanced2": "Abrir el archivo guardado keybindings.json para editar directamente los atajos avanzados. atajos",
   "use164LettersNumbersDashesOrUnderscoresBare": "Usa entre 1 y 64 letras, números, guiones o guiones bajos; los comandos básicos de los proveedores están reservados.",
   "caffeinateSleepMacOSPreventSleepKeepAwakeAgentWorking": "caffeinate reposo macOS impedir reposo mantener despierto agente trabajando sistema activado desactivado inactivo activo",
@@ -1181,5 +1177,9 @@
   "permissionGuideCompleteAuthentication": "Completa cualquier autenticación de macOS. Si macOS te pide salir y volver a abrir la app, hazlo antes de comprobar de nuevo.",
   "resumeAfterUsageLimits": "Reanudar tras los límites de uso",
   "resumeAfterUsageLimitsDescription": "Continúa automáticamente las tareas que alcancen un límite cuando el proveedor indique que se restablece la cuota. Se aplica a este ordenador, incluso con los demás dispositivos cerrados. Desactivarlo cancela las reanudaciones pendientes.",
-  "couldNotUpdateUsageLimitRecovery": "No se pudo actualizar la reanudación automática"
+  "couldNotUpdateUsageLimitRecovery": "No se pudo actualizar la reanudación automática",
+  "appTour": "Recorrido por la app",
+  "appTourDescription": "Descubre dónde están Actividad, Tareas, Bandeja de entrada y Revisión de código.",
+  "replayAppTour": "Repetir recorrido",
+  "appTourKeywords": "recorrido app guía bienvenida actividad tareas bandeja de entrada revisión de código repetir"
 }

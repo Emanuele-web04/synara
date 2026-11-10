@@ -531,7 +531,6 @@
   "openCodeServerURL": "OpenCode 服务器 URL",
   "openingSynaraBeta": "正在打开 Synara Beta",
   "permissionGranted2": "已授予权限。",
-  "replayFeatureTour": "重播功能导览",
   "shortcut2": "快捷键 {{value0}}",
   "sidebarUsageRings": "侧边栏用量环",
   "foldFinishedTurns2": "折叠已完成的轮次",
@@ -579,7 +578,6 @@
   "switchBackToSynara2": "切回 Synara？",
   "testNotificationSent": "已发送测试通知",
   "typographyAndSpacing": "字体与间距",
-  "whatSNewSince092": "0.9.2 之后的更新内容",
   "includeForkUpstreams2": "包含 fork 的上游仓库",
   "setupGuide2": "{{value0}} 设置指南",
   "antigravityBinaryPath": "Antigravity 可执行文件路径",
@@ -792,7 +790,6 @@
   "copyTheCommandBelowToUpdateManuallyInA": "{{value0}}\n\n复制下方命令，在终端中手动更新。",
   "chooseDefaultsForNewChatsNavigationAndTheEnvironment": "选择新聊天、导航和环境面板的默认设置。",
   "claudeCodeKeepsArtifactsOffInEmbeddedSessionsTurn": "Claude Code 默认在嵌入式会话中关闭 Artifacts。开启此选项后",
-  "exploreTheRedesignedWorkspaceProviderAccountsAndCodeReview": "探索重新设计的工作区、提供商账户和代码审查。",
   "reviewReusableWorkflowsDiscoveredAcrossAllConfiguredProviders": "查看从所有已配置提供商中发现的可复用工作流。",
   "saveAdditionalGrokModelSlugsForThePickerAnd": "保存更多 Grok 模型标识，供选择器和 `/model` 命令使用。",
   "showTokenByTokenOutputWhileAResponseIs2": "生成响应时逐 token 显示输出。流式",
@@ -853,7 +850,6 @@
   "letsSynaraCaptureWindowsAndTheDesktopSoThe": "允许 Synara 捕获窗口和桌面，让智能体看到其正在操作的内容。",
   "aRunningLogOfEveryUpdateNewestFirstChangelog": "所有更新的持续记录，最新内容在前。更新日志 新功能 关于 发行说明",
   "adjustTheAppTextBaseInPixelsChatAnd": "以像素为单位调整应用的基础字号。聊天与界面文字会按比例缩放。字体",
-  "replayFeatureTourRedesignedWorkspaceProviderAccountsCodeReview": "重播功能导览 重新设计的工作区 提供商账户 代码审查 滑块 更新",
   "openThePersistedKeybindingsJsonFileToEditAdvanced2": "打开已保存的 keybindings.json 文件，直接编辑高级按键绑定。快捷键",
   "use164LettersNumbersDashesOrUnderscoresBare": "使用 1–64 个字母、数字、短横线或下划线；不带前缀的提供商命令为保留名称。",
   "caffeinateSleepMacOSPreventSleepKeepAwakeAgentWorking": "caffeinate 睡眠 macOS 防止休眠 保持唤醒 智能体工作 系统 开 关 空闲 活跃",
@@ -1181,5 +1177,9 @@
   "permissionGuideCompleteAuthentication": "完成任何 macOS 身份验证。如果 macOS 要求退出并重新打开，请先照做，再重新检查。",
   "resumeAfterUsageLimits": "用量限额重置后继续",
   "resumeAfterUsageLimitsDescription": "供应商报告额度重置时间时，自动继续新触发限额的任务。此设置适用于这台电脑，即使其他设备已关闭。关闭后会取消待恢复的任务。",
-  "couldNotUpdateUsageLimitRecovery": "无法更新自动恢复设置"
+  "couldNotUpdateUsageLimitRecovery": "无法更新自动恢复设置",
+  "appTour": "应用导览",
+  "appTourDescription": "了解活动、任务、收件箱和代码审查在哪里。",
+  "replayAppTour": "重新播放导览",
+  "appTourKeywords": "应用 导览 引导 入门 活动 任务 收件箱 代码审查 重新播放"
 }

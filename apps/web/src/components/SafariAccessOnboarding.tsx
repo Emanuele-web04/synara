@@ -1,18 +1,15 @@
 import type { DesktopSafariAccessInfo } from "@synara/contracts";
 import { Schema } from "effect";
 import { SettingsIcon } from "~/lib/icons";
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { Key01Icon } from "~/lib/icons";
+import { cn } from "~/lib/utils";
 import { useLocalStorage } from "../hooks/useLocalStorage";
+import { AnnouncementSheetPopup } from "./AnnouncementSheet";
+import { DIALOG_HERO_ITEM_SHADOW_CLASS_NAME, DialogHeroLink } from "./DialogHeroBand";
 import { Button } from "./ui/button";
 import { useAnnouncementSheetSlot, useAnnouncementSheetSlotStore } from "./announcementSheetSlot";
-import {
-  Dialog,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogPopup,
-  DialogTitle,
-} from "./ui/dialog";
+import { Dialog } from "./ui/dialog";
 import { useTranslation } from "~/i18n";
 
 export const SAFARI_ACCESS_STORAGE_KEY = "synara:safari-access-onboarding:v1";
@@ -20,6 +17,7 @@ const OPEN_EVENT = "synara:safari-access-setup";
 /** "continued" is a legacy value from the earlier two-button intro; treat it like "later". */
 const Decision = Schema.Literals(["unseen", "later", "continued"]);
 const SAFARI_ICON_SRC = "/app-icons/safari.png";
+const SYNARA_ICON_SRC = "/app-icons/dark.png";
 
 const STATUS = {
   settingsOpened: "System Settings is open. Once Synara is switched on, quit and reopen it.",
@@ -79,7 +77,6 @@ export function SafariAccessOnboarding({
   const [revisit, setRevisit] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const sheetRef = useRef<HTMLDivElement>(null);
   const generation = useRef(0);
   const granted = info?.supported === true && info.fullDiskAccess === "granted";
   // Once access is on there is nothing left to set up, so only a deliberate
@@ -140,90 +137,75 @@ export function SafariAccessOnboarding({
           if (!value) close();
         }}
       >
-        <DialogPopup showCloseButton={false} initialFocus={sheetRef} className="max-w-[400px]">
-          <div ref={sheetRef} tabIndex={-1} className="min-h-0 overflow-y-auto outline-none">
-            <DialogHeader className="items-center gap-3 px-6 pt-7 pb-0 text-center">
-              <img
-                src={SAFARI_ICON_SRC}
-                alt=""
-                aria-hidden
-                draggable={false}
-                className="size-16 select-none drop-shadow-[0_6px_14px_rgba(0,0,0,0.18)]"
-              />
-              <DialogTitle className="mt-1">
-                {t("onboarding:bringYourSafariLoginsAlong")}
-              </DialogTitle>
-              <DialogDescription className="text-balance leading-relaxed">
-                {t("onboarding:synaraSBrowserCanPickUpSitesYouRe")}
-              </DialogDescription>
-            </DialogHeader>
+        <AnnouncementSheetPopup
+          hero={<SafariAccessScene />}
+          title={t("onboarding:bringYourSafariLoginsAlong")}
+          description={t("onboarding:synaraSBrowserCanPickUpSitesYouRe")}
+          details={
+            <div className="flex flex-col gap-3 pt-4">
+              {info?.supported && info.fullDiskAccess === "granted" ? (
+                <p className="text-ui leading-relaxed text-muted-foreground">
+                  {t("onboarding:safariAccessGrantedPrefix")}{" "}
+                  <span className="font-medium text-foreground">{info.appName}</span>
+                  {t("onboarding:safariAccessGrantedSuffix")}
+                </p>
+              ) : info?.supported ? (
+                <ol className="space-y-2.5 rounded-[14px] border border-border px-4 py-3.5 text-ui leading-relaxed">
+                  <Step n={1}>
+                    {t("onboarding:notification_open")}{" "}
+                    <span className="font-medium text-foreground">
+                      {t("onboarding:systemSettings")}
+                    </span>{" "}
+                    {t("onboarding:privacySecurityFullDiskAccess")}
+                  </Step>
+                  <Step n={2}>
+                    {t("onboarding:switchOn")}{" "}
+                    <span className="font-medium text-foreground">{info.appName}</span>.
+                    {info.appPath ? (
+                      <>
+                        {" "}
+                        {t("onboarding:notListed")}{" "}
+                        <button
+                          type="button"
+                          disabled={busy}
+                          title={info.appPath}
+                          onClick={() => {
+                            void run("revealApp");
+                          }}
+                          className="rounded-sm underline decoration-muted-foreground/40 underline-offset-[3px] transition-colors hover:text-foreground hover:decoration-current focus-visible:outline-2 focus-visible:outline-ring disabled:opacity-60"
+                        >
+                          {t("onboarding:showAppInFinder")}
+                        </button>{" "}
+                        {t("onboarding:andDragItIn")}
+                      </>
+                    ) : null}
+                  </Step>
+                  <Step n={3}>{t("onboarding:quitAndReopenSynara")}</Step>
+                </ol>
+              ) : null}
 
-            {info?.supported && info.fullDiskAccess === "granted" ? (
-              <p className="mx-6 mt-5 text-ui leading-relaxed text-muted-foreground">
-                {t("onboarding:safariAccessGrantedPrefix")}{" "}
-                <span className="font-medium text-foreground">{info.appName}</span>
-                {t("onboarding:safariAccessGrantedSuffix")}
+              <p className="text-center text-ui-sm leading-relaxed text-muted-foreground/80">
+                {t("onboarding:fullDiskAccessIsABroadMacOSPermissionThat")}
               </p>
-            ) : info?.supported ? (
-              <ol className="mx-6 mt-5 space-y-3 text-ui leading-relaxed">
-                <Step n={1}>
-                  {t("onboarding:notification_open")}{" "}
-                  <span className="font-medium text-foreground">
-                    {t("onboarding:systemSettings")}
-                  </span>{" "}
-                  {t("onboarding:privacySecurityFullDiskAccess")}
-                </Step>
-                <Step n={2}>
-                  {t("onboarding:switchOn")}{" "}
-                  <span className="font-medium text-foreground">{info.appName}</span>.
-                  {info.appPath ? (
-                    <>
-                      {" "}
-                      {t("onboarding:notListed")}{" "}
-                      <button
-                        type="button"
-                        disabled={busy}
-                        title={info.appPath}
-                        onClick={() => {
-                          void run("revealApp");
-                        }}
-                        className="rounded-sm underline decoration-muted-foreground/40 underline-offset-[3px] transition-colors hover:text-foreground hover:decoration-current focus-visible:outline-2 focus-visible:outline-ring disabled:opacity-60"
-                      >
-                        {t("onboarding:showAppInFinder")}
-                      </button>{" "}
-                      {t("onboarding:andDragItIn")}
-                    </>
-                  ) : null}
-                </Step>
-                <Step n={3}>{t("onboarding:quitAndReopenSynara")}</Step>
-              </ol>
-            ) : null}
 
-            <p className="mx-6 mt-5 text-ui leading-relaxed text-muted-foreground/80">
-              {t("onboarding:fullDiskAccessIsABroadMacOSPermissionThat")}
-            </p>
-
-            {status ? (
-              <p role="status" className="mx-6 mt-3 text-ui leading-relaxed text-muted-foreground">
-                {status}
-              </p>
-            ) : null}
-
-            <DialogFooter className="mt-5 px-6 pb-6 pt-0">
-              <Button variant="ghost" onClick={close}>
-                {t("common:notNow")}
-              </Button>
-              <Button
-                disabled={busy}
-                onClick={() => {
-                  void run("openSettings");
-                }}
-              >
-                {t("onboarding:openSystemSettings")}
-              </Button>
-            </DialogFooter>
-          </div>
-        </DialogPopup>
+              {status ? (
+                <p
+                  role="status"
+                  className="text-center text-ui leading-relaxed text-muted-foreground"
+                >
+                  {status}
+                </p>
+              ) : null}
+            </div>
+          }
+          dismissLabel={t("common:notNow")}
+          confirmLabel={t("onboarding:openSystemSettings")}
+          confirmDisabled={busy}
+          onDismiss={close}
+          onConfirm={() => {
+            void run("openSettings");
+          }}
+        />
       </Dialog>
     </>
   );
@@ -240,5 +222,47 @@ function Step({ n, children }: { n: number; children: ReactNode }) {
       </span>
       <span className="min-w-0">{children}</span>
     </li>
+  );
+}
+
+/** Safari's icon handing a key to Synara's, with the macOS switch that allows it. */
+function SafariAccessScene() {
+  const { t } = useTranslation();
+  const appIconClassName = "size-14 select-none drop-shadow-[0_8px_16px_rgba(0,0,0,0.18)]";
+  return (
+    <div className="flex flex-col items-center gap-3">
+      <div className="flex items-center gap-3">
+        <img
+          src={SAFARI_ICON_SRC}
+          alt=""
+          draggable={false}
+          className={cn(appIconClassName, "scene-float")}
+        />
+        <DialogHeroLink badge={<Key01Icon className="size-3.5" />} />
+        <img
+          src={SYNARA_ICON_SRC}
+          alt=""
+          draggable={false}
+          className={cn(appIconClassName, "scene-float [animation-delay:-3s]")}
+        />
+      </div>
+      <span
+        className={cn(
+          "flex items-center gap-2 rounded-full border border-border bg-popover py-1 ps-2.5 pe-1.5 text-ui-timestamp font-medium text-foreground",
+          DIALOG_HERO_ITEM_SHADOW_CLASS_NAME,
+        )}
+      >
+        {t("onboarding:safariHeroFullDiskAccess")}
+        <span
+          className="scene-switch-track flex h-3.5 w-6 items-center justify-end rounded-full bg-[#34c759] p-0.5"
+          style={{ "--scene-switch-travel": "10px" } as CSSProperties}
+        >
+          <span
+            className="scene-switch-knob size-2.5 rounded-full bg-white shadow-xs"
+            style={{ "--scene-switch-travel": "10px" } as CSSProperties}
+          />
+        </span>
+      </span>
+    </div>
   );
 }

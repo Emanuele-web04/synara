@@ -3413,16 +3413,16 @@ describe("ChatView transcript geometry (full app)", () => {
     },
   );
 
-  it("offers unseen startup highlights once on a configured installation and keeps chat usable after dismissal", async () => {
+  it("offers the unseen app tour once on a configured installation and keeps chat usable after dismissal", async () => {
     localStorage.removeItem(FEATURE_TOUR_STORAGE_KEY);
     const snapshot = createSnapshotWithLongAssistantResponse();
     const mounted = await mountChatView({ viewport: DEFAULT_VIEWPORT, snapshot });
     try {
       await expect
-        .element(page.getByRole("dialog", { name: "A new home for your work" }))
+        .element(page.getByRole("dialog", { name: "Start a chat with any agent" }))
         .toBeVisible();
       expect(document.querySelectorAll('[role="dialog"]').length).toBe(1);
-      await page.getByRole("button", { name: "Skip tour" }).click();
+      await page.getByRole("button", { name: "Close tour" }).click();
       expect(JSON.parse(localStorage.getItem(FEATURE_TOUR_STORAGE_KEY) ?? "[]")).toEqual([
         createBaseServerConfig().worktreesDir,
       ]);
@@ -3435,11 +3435,11 @@ describe("ChatView transcript geometry (full app)", () => {
       expect(document.querySelector("[data-feature-tour]")).toBeNull();
       await page.getByTestId("composer-editor").click();
       await remounted.router.navigate({ to: "/settings", search: { section: "advanced" } });
-      await page.getByRole("button", { name: "Replay feature tour" }).click();
+      await page.getByRole("button", { name: "Replay tour" }).click();
       await expect
-        .element(page.getByRole("dialog", { name: "A new home for your work" }))
+        .element(page.getByRole("dialog", { name: "Start a chat with any agent" }))
         .toBeVisible();
-      await page.getByRole("button", { name: "Skip tour" }).click();
+      await page.getByRole("button", { name: "Close tour" }).click();
     } finally {
       await remounted.cleanup();
     }
