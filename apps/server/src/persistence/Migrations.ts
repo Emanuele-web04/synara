@@ -354,6 +354,17 @@ const canonicalMigrationNamesById: ReadonlyMap<number, string> = new Map(
   migrationEntries.map(([id, name]) => [id, name] as const),
 );
 
+/** Released main (including v1.1.0) reserved 136–140 and recorded the common migration at 141. */
+export const isReleasedMainMigrationGap = (
+  recordedNamesById: ReadonlyMap<number, string>,
+): boolean => {
+  const releasedEntries = migrationEntries.filter(([id]) => id <= 135 || id === 141);
+  return (
+    recordedNamesById.size === releasedEntries.length &&
+    releasedEntries.every(([id, name]) => recordedNamesById.get(id) === name)
+  );
+};
+
 export const planAccountMigrationRepair = (rows: readonly MigrationIdentity[]) =>
   classifyAccountMigrationLineage(rows, canonicalMigrationNamesById);
 

@@ -40,6 +40,7 @@ import {
   LAST_SHARED_LINEAGE_MIGRATION_ID,
   migrationEntries,
   inspectAccountMigrationRepair,
+  isReleasedMainMigrationGap,
   planAccountMigrationRepair,
   planLegacyMigration32Rename,
   planMigrationLineageAliasRepairs,
@@ -270,6 +271,11 @@ export const inspectMigrationBackupPlan = Effect.gen(function* () {
     }
   }
   const inspectedHighWaterMark = Math.max(...inspectedNames.keys(), 0);
+  if (isReleasedMainMigrationGap(inspectedNames)) {
+    // This exact released history is a normal upgrade. Keep its backup and
+    // recovery marker while allowing the replay to run without import consent.
+    return { sourceVersion: "v141-released-main", targetVersion: latestMigrationId };
+  }
   // This is the same post-alias predicate the reconciler uses. Sharing it keeps
   // "this database needs consent" and "this database will be replayed" aligned.
   const firstDiverged = findFirstMigrationLineageDivergence(inspectedNames, inspectedHighWaterMark);
@@ -1198,7 +1204,7 @@ function inspectMigrationRows(
   return {
     migrationId,
     lineage:
-      divergence === undefined
+      divergence === undefined || isReleasedMainMigrationGap(recordedNames)
         ? "canonical"
         : divergence[0] > LAST_SHARED_LINEAGE_MIGRATION_ID
           ? "imported"

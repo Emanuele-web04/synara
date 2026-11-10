@@ -65,6 +65,22 @@ async function makeDbPath(): Promise<string> {
 const runWithDatabase = <A, E>(dbPath: string, effect: Effect.Effect<A, E, SqlClient.SqlClient>) =>
   Effect.runPromise(effect.pipe(Effect.provide(NodeSqliteClient.layer({ filename: dbPath }))));
 
+const seedReleasedMainGap = (dbPath: string) =>
+  runWithDatabase(
+    dbPath,
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      yield* runMigrations({ toMigrationInclusive: 135 });
+      yield* UsageLimitRecoveryMigration;
+      yield* sql`INSERT INTO effect_sql_migrations (migration_id, name)
+        VALUES (141, 'ProjectionThreadsUsageLimitRecovery')`;
+      yield* sql`INSERT INTO projection_threads
+        (thread_id, project_id, title, created_at, updated_at, usage_limit_recovery_json)
+        VALUES ('upgrade-probe', 'project', 'Preserve this thread', '2026-10-31', '2026-10-31',
+          '{"id":"recovery-probe"}')`;
+    }),
+  );
+
 async function backupPaths(dbPath: string): Promise<Array<string>> {
   const directory = migrationBackupDirectory(dbPath);
   const names = await fs.readdir(directory).catch((cause) => {
@@ -853,38 +869,11 @@ describe("migration backups", () => {
     });
   });
 
-  it("backs up the released tracker gap, preserves data through real startup, and reopens safely", async () => {
+  it("automatically backs up the exact released tracker gap, preserves data, and reopens safely", async () => {
     const dbPath = await makeDbPath();
-    await runWithDatabase(
-      dbPath,
-      Effect.gen(function* () {
-        const sql = yield* SqlClient.SqlClient;
-        yield* runMigrations({ toMigrationInclusive: 135 });
-        yield* UsageLimitRecoveryMigration;
-        yield* sql`INSERT INTO effect_sql_migrations (migration_id, name)
-          VALUES (141, 'ProjectionThreadsUsageLimitRecovery')`;
-        yield* sql`INSERT INTO projection_threads
-          (thread_id, project_id, title, created_at, updated_at, usage_limit_recovery_json)
-          VALUES ('upgrade-probe', 'project', 'Preserve this thread', '2026-10-31', '2026-10-31',
-            '{"id":"recovery-probe"}')`;
-      }),
-    );
+    await seedReleasedMainGap(dbPath);
 
-    const blocked = await runWithDatabase(
-      dbPath,
-      Effect.flip(runWithPreMigrationBackup(dbPath, runMigrations())),
-    );
-    expect(blocked).toBeInstanceOf(MigrationDivergenceConsentRequiredError);
-    if (!(blocked instanceof MigrationDivergenceConsentRequiredError))
-      throw new Error("Expected the released database gap to require consent");
-    expect(blocked.challenge).toMatchObject({
-      firstDivergedId: 136,
-      recordedName: "<missing>",
-      expectedName: "AccountUsageSync",
-    });
-    expect(await backupPaths(dbPath)).toEqual([]);
-
-    const startDatabase = (divergenceConsent?: string) =>
+    const startDatabase = () =>
       Effect.runPromise(
         Effect.gen(function* () {
           const sql = yield* SqlClient.SqlClient;
@@ -897,14 +886,10 @@ describe("migration backups", () => {
           ]);
           expect(yield* runMigrations()).toEqual([]);
         }).pipe(
-          Effect.provide(
-            makeSqlitePersistenceLive(dbPath, { divergenceConsent }).pipe(
-              Layer.provide(NodeServices.layer),
-            ),
-          ),
+          Effect.provide(makeSqlitePersistenceLive(dbPath).pipe(Layer.provide(NodeServices.layer))),
         ),
       );
-    await startDatabase(blocked.challenge.consentToken);
+    await startDatabase();
     const backups = await backupPaths(dbPath);
     expect(backups).toHaveLength(1);
     const backup = await openBackupFixture(backups[0]!);
@@ -929,6 +914,45 @@ describe("migration backups", () => {
     await expect(fs.stat(migrationRecoveryMarkerPath(dbPath))).rejects.toMatchObject({
       code: "ENOENT",
     });
+    await Effect.runPromise(restoreMarkedMigrationBackup(dbPath));
+    const restored = new DatabaseSync(dbPath, { readOnly: true });
+    try {
+      expect(
+        restored.prepare("SELECT name FROM effect_sql_migrations WHERE migration_id = 136").get(),
+      ).toBeUndefined();
+      expect(
+        restored
+          .prepare("SELECT title FROM projection_threads WHERE thread_id = 'upgrade-probe'")
+          .get(),
+      ).toMatchObject({ title: "Preserve this thread" });
+    } finally {
+      restored.close();
+    }
+  });
+
+  it.each([
+    [
+      "a renamed migration",
+      "UPDATE effect_sql_migrations SET name = 'UnknownMigration' WHERE migration_id = 141",
+    ],
+    [
+      "an extra tracker row",
+      "INSERT INTO effect_sql_migrations (migration_id, name) VALUES (136, 'AccountUsageSync')",
+    ],
+    ["a missing prefix row", "DELETE FROM effect_sql_migrations WHERE migration_id = 135"],
+  ])("requires consent when the released gap also has %s", async (_label, mutation) => {
+    const dbPath = await makeDbPath();
+    await seedReleasedMainGap(dbPath);
+    const blocked = await runWithDatabase(
+      dbPath,
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        yield* sql.unsafe(mutation);
+        return yield* Effect.flip(runWithPreMigrationBackup(dbPath, Effect.void));
+      }),
+    );
+    expect(blocked).toBeInstanceOf(MigrationDivergenceConsentRequiredError);
+    expect(await backupPaths(dbPath)).toEqual([]);
   });
 
   it("requires consent for divergence after a legacy migration-32 tracker row", async () => {
