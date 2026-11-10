@@ -300,6 +300,8 @@ export type ApiConfigBase = {
   polarBilling?: PolarBillingConfig;
   /** Paid Remote access is opt-in and takes precedence over open-beta enrollment. */
   remoteBillingEnforced?: boolean;
+  /** Paid public profiles are opt-in: when on, only Alto subscribers can publish or be viewed. */
+  profileBillingEnforced?: boolean;
   apns?: ApnsConfig;
   cloudflareTunnel?: CloudflareTunnelConfig;
   /** Explicit test enrollment only; this is not a paid-subscription entitlement. */
@@ -556,6 +558,12 @@ export function loadApiConfig(env: Env): ApiConfig {
   const remoteBillingEnforced = remoteBilling === "true";
   if (remoteBillingEnforced && !polarBilling)
     throw new ApiConfigError("POLAR_REMOTE_ACCESS_ENFORCED requires configured Polar billing");
+  const profileBilling = env.POLAR_PROFILE_ACCESS_ENFORCED;
+  if (profileBilling !== undefined && profileBilling !== "true" && profileBilling !== "false")
+    throw new ApiConfigError("POLAR_PROFILE_ACCESS_ENFORCED must be true or false");
+  const profileBillingEnforced = profileBilling === "true";
+  if (profileBillingEnforced && !polarBilling)
+    throw new ApiConfigError("POLAR_PROFILE_ACCESS_ENFORCED requires configured Polar billing");
   const apns = loadApnsConfig(env);
   const cloudflareTunnel = loadCloudflareTunnelConfig(env);
   const remoteTestUserIds = env.REMOTE_TEST_USER_IDS?.split(",")
@@ -583,6 +591,7 @@ export function loadApiConfig(env: Env): ApiConfig {
       ...(remoteTestUserIds ? { remoteTestUserIds } : {}),
       remoteBetaAccessEnabled,
       remoteBillingEnforced,
+      profileBillingEnforced,
       databaseUrl: env.DATABASE_URL as string,
       baseUrl: env.ACCOUNT_BASE_URL as string,
       apiPublicUrl: (env.API_PUBLIC_URL as string).replace(/\/+$/, ""),
@@ -614,6 +623,7 @@ export function loadApiConfig(env: Env): ApiConfig {
     ...(remoteTestUserIds ? { remoteTestUserIds } : {}),
     remoteBetaAccessEnabled,
     remoteBillingEnforced,
+    profileBillingEnforced,
     databaseUrl: env.DATABASE_URL as string,
     baseUrl: env.ACCOUNT_BASE_URL as string,
     apiPublicUrl: (env.API_PUBLIC_URL as string).replace(/\/+$/, ""),

@@ -1,13 +1,10 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 
 import type { ComposerThreadMentionSource, Project } from "../types";
-import { setLanguagePreference } from "../i18n";
 import {
   buildThreadMentionComposerItems,
   resolveThreadMentionForThreadId,
 } from "./useComposerCommandMenuItems";
-
-afterEach(() => setLanguagePreference("system"));
 
 function project(id: string, kind: Project["kind"], name: string): Project {
   return {
@@ -123,34 +120,27 @@ describe("buildThreadMentionComposerItems", () => {
     expect(items).toHaveLength(20);
   });
 
-  it.each([
-    ["en", "Chats"],
-    ["zh-CN", "聊天"],
-  ] as const)(
-    "keeps duplicate-title mention tokens stable with %s display text",
-    (locale, chatsLabel) => {
-      setLanguagePreference(locale);
-      const items = buildThreadMentionComposerItems({
-        projects,
-        currentThreadId: null,
-        query: "planning",
-        threads: [
-          thread({ id: "in-project", projectId: "project", title: "Planning" }),
-          thread({ id: "in-chats", projectId: "chats", title: "Planning" }),
-          thread({ id: "unique", projectId: "project", title: "Planning extras" }),
-        ],
-      });
+  it("keeps duplicate-title mention tokens stable with display text", () => {
+    const items = buildThreadMentionComposerItems({
+      projects,
+      currentThreadId: null,
+      query: "planning",
+      threads: [
+        thread({ id: "in-project", projectId: "project", title: "Planning" }),
+        thread({ id: "in-chats", projectId: "chats", title: "Planning" }),
+        thread({ id: "unique", projectId: "project", title: "Planning extras" }),
+      ],
+    });
 
-      const mentionNamesById = Object.fromEntries(
-        items.map((item) => [item.id, item.type === "thread" ? item.mention.name : null]),
-      );
-      expect(mentionNamesById["thread:in-project"]).toBe("Planning (Synara)");
-      expect(mentionNamesById["thread:in-chats"]).toBe("Planning (Chats)");
-      expect(mentionNamesById["thread:unique"]).toBe("Planning extras");
-      expect(items.find((item) => item.id === "thread:in-chats")?.description).toBe(chatsLabel);
-      expect(items.every((item) => item.label.startsWith("Planning"))).toBe(true);
-    },
-  );
+    const mentionNamesById = Object.fromEntries(
+      items.map((item) => [item.id, item.type === "thread" ? item.mention.name : null]),
+    );
+    expect(mentionNamesById["thread:in-project"]).toBe("Planning (Synara)");
+    expect(mentionNamesById["thread:in-chats"]).toBe("Planning (Chats)");
+    expect(mentionNamesById["thread:unique"]).toBe("Planning extras");
+    expect(items.find((item) => item.id === "thread:in-chats")?.description).toBe("Chats");
+    expect(items.every((item) => item.label.startsWith("Planning"))).toBe(true);
+  });
 
   it("falls back to a thread-id suffix for duplicate titles inside the same project", () => {
     const items = buildThreadMentionComposerItems({

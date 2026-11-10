@@ -137,7 +137,8 @@ export function makeDesktopUpdateRpcHandlers<E, R>(readBusy: Effect.Effect<boole
         supported: false,
         state: null,
         busy: isBusy,
-        message: "Remote updates require the packaged Synara Remote app on macOS.",
+        message:
+          "Updates from iOS require the packaged Synara Desktop app on macOS with its updater enabled.",
       } satisfies ServerDesktopUpdateStatus;
     const result = yield* request({ action: "status", authority: caller });
     return {

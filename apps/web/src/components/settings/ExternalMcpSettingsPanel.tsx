@@ -620,8 +620,7 @@ export function ExternalMcpSettingsPanel(props: { active: boolean }) {
                   <div className="space-y-1">
                     <div>{status}</div>
                     <div>
-                      {t("settings:projects")}{" "}
-                      {describeExternalMcpProjects(integration, t, formatLocale)}
+                      {t("settings:projects")} {describeExternalMcpProjects(integration, t)}
                     </div>
                     <div>
                       {t("settings:permissions")}{" "}

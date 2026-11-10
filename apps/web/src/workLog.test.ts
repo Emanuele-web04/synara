@@ -1,6 +1,5 @@
 import { MessageId, TurnId, type OrchestrationThreadActivity } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
-import { setLanguagePreference } from "~/i18n";
 
 import {
   deriveSubagentTaskEnds,
@@ -126,7 +125,7 @@ describe("deriveWorkLogEntries", () => {
     }
   });
 
-  it("localizes cached generated task and agent summaries without translating provider or user data", () => {
+  it("derives generated task and agent summaries without rewriting provider or user data", () => {
     const activities = [
       makeActivity({
         id: "localized-tasks",
@@ -201,76 +200,42 @@ describe("deriveWorkLogEntries", () => {
       }),
     ];
     const sourceSnapshot = structuredClone(activities);
-    try {
-      setLanguagePreference("en");
-      expect(
-        deriveWorkLogEntries(activities, undefined).find((entry) => entry.id === "localized-tasks")
-          ?.label,
-      ).toBe("1 of 2 tasks");
-      expect(
-        deriveWorkLogEntries(activities, undefined).find(
-          (entry) => entry.id === "localized-file-default",
-        ),
-      ).toMatchObject({ toolTitle: "Read", detail: "/repo/Settings" });
-      setLanguagePreference("zh-CN");
-      const entries = deriveWorkLogEntries(activities, undefined);
-      const computer = makeActivity({
-        id: "localized-computer",
-        kind: "tool.completed",
-        summary: "Computer Click",
-        payload: {
-          itemType: "mcp_tool_call",
-          title: "computer_click",
-          data: {
-            item: { tool: "computer_click", arguments: { label: "Save", app: "Settings" } },
-          },
+    const entries = deriveWorkLogEntries(activities, undefined);
+    const computer = makeActivity({
+      id: "localized-computer",
+      kind: "tool.completed",
+      summary: "Computer Click",
+      payload: {
+        itemType: "mcp_tool_call",
+        title: "computer_click",
+        data: {
+          item: { tool: "computer_click", arguments: { label: "Save", app: "Settings" } },
         },
-      });
-      expect(deriveWorkLogEntries([computer], undefined)).toMatchObject([
-        {
-          toolTitle: "Click on “Save” in Settings",
-          displayToolTitle: "在 Settings 的“Save”上点击",
-        },
-      ]);
-      expect(entries.find((entry) => entry.id === "localized-tasks")).toMatchObject({
-        label: "1 / 2 项任务",
-        detail: "Open",
-      });
-      expect(entries.find((entry) => entry.id === "localized-agent")).toMatchObject({
-        toolTitle: "Spawn agent",
-        subagentAction: {
-          tool: "spawnAgent",
-          summaryText: "正在启动 2 个智能体",
-          prompt: "Settings",
-        },
-        subagents: [{ nickname: "Open" }, { nickname: "Save" }],
-      });
-      expect(entries.find((entry) => entry.id === "localized-read")).toMatchObject({
-        toolTitle: "Read",
-        command: "cat Settings",
-      });
-      expect(entries.find((entry) => entry.id === "localized-file-default")).toMatchObject({
-        toolTitle: "Read",
-        displayToolTitle: "已读取",
-        detail: "/repo/Settings",
-      });
-      expect(entries.find((entry) => entry.id === "localized-answer")?.userInputExchange).toEqual([
-        { id: "choice", header: "Settings", question: "Open", options: ["Save"], answer: "Save" },
-      ]);
-      expect(activities).toEqual(sourceSnapshot);
-      setLanguagePreference("en");
-      expect(
-        deriveWorkLogEntries(activities, undefined).find((entry) => entry.id === "localized-tasks")
-          ?.label,
-      ).toBe("1 of 2 tasks");
-      const defaultFileEntry = deriveWorkLogEntries(activities, undefined).find(
-        (entry) => entry.id === "localized-file-default",
-      );
-      expect(defaultFileEntry).toMatchObject({ toolTitle: "Read", detail: "/repo/Settings" });
-      expect(defaultFileEntry?.displayToolTitle).toBeUndefined();
-    } finally {
-      setLanguagePreference("en");
-    }
+      },
+    });
+    expect(deriveWorkLogEntries([computer], undefined)).toMatchObject([
+      { toolTitle: "Click on “Save” in Settings" },
+    ]);
+    expect(entries.find((entry) => entry.id === "localized-tasks")).toMatchObject({
+      label: "1 of 2 tasks",
+      detail: "Open",
+    });
+    expect(entries.find((entry) => entry.id === "localized-agent")).toMatchObject({
+      toolTitle: "Spawn agent",
+      subagentAction: { tool: "spawnAgent", prompt: "Settings" },
+      subagents: [{ nickname: "Open" }, { nickname: "Save" }],
+    });
+    expect(entries.find((entry) => entry.id === "localized-read")).toMatchObject({
+      toolTitle: "Read",
+      command: "cat Settings",
+    });
+    const defaultFileEntry = entries.find((entry) => entry.id === "localized-file-default");
+    expect(defaultFileEntry).toMatchObject({ toolTitle: "Read", detail: "/repo/Settings" });
+    expect(defaultFileEntry?.displayToolTitle).toBeUndefined();
+    expect(entries.find((entry) => entry.id === "localized-answer")?.userInputExchange).toEqual([
+      { id: "choice", header: "Settings", question: "Open", options: ["Save"], answer: "Save" },
+    ]);
+    expect(activities).toEqual(sourceSnapshot);
   });
 
   it("pairs an answered question with its answers in one exchange row", () => {
@@ -536,21 +501,8 @@ describe("deriveWorkLogEntries", () => {
     expect(second).toEqual(first);
     second.forEach((entry, index) => expect(entry).toBe(first[index]));
     expect(first[0]).not.toHaveProperty("collapseKey");
-    try {
-      setLanguagePreference("zh-CN");
-      const localized = derive();
-      expect(localized[1]).not.toBe(first[1]);
-      expect(localized[1]).toMatchObject({
-        toolTitle: "Ran",
-        displayToolTitle: "已运行",
-        command: "bun run lint",
-      });
-      derive().forEach((entry, index) => expect(entry).toBe(localized[index]));
-      setLanguagePreference("en");
-      expect(derive()[1]?.displayToolTitle).toBeUndefined();
-    } finally {
-      setLanguagePreference("en");
-    }
+    expect(first[1]).toMatchObject({ toolTitle: "Ran", command: "bun run lint" });
+    expect(first[1]?.displayToolTitle).toBeUndefined();
   });
 
   it("omits routine approval resolutions between tool lifecycle updates", () => {

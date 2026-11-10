@@ -23,7 +23,13 @@ import {
 } from "~/components/ui/input-group";
 import { Switch } from "~/components/ui/switch";
 import { CentralIcon } from "~/lib/central-icons";
-import { accountErrorMessage, publicProfileDisplayUrl } from "~/lib/accountLogic";
+import {
+  accountErrorMessage,
+  publicProfileDisplayUrl,
+  readAccountErrorCode,
+} from "~/lib/accountLogic";
+import { ACCOUNT_BILLING_ENABLED } from "~/lib/accountBilling";
+import { useOpenSynaraPlan } from "../settings/BillingSettingsPanel";
 import { cn } from "~/lib/utils";
 import { normalizeHandle } from "@synara/profile-ui/formatting";
 import { PROFILE_AVATAR_COLORS } from "./useProfileAvatarColor";
@@ -168,6 +174,11 @@ function EditProfileDialogContent({
   const [invalidLinks, setInvalidLinks] = useState<readonly SocialLinkPlatform[]>([]);
   const [showEditor, setShowEditor] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // The exact error the server gave when it refused to make the profile public
+  // without Alto. "See plans" shows only while that error is the one on screen, so
+  // any later message (a bad link, an upload failure) never inherits it.
+  const [planError, setPlanError] = useState<string | null>(null);
+  const openPlan = useOpenSynaraPlan();
   const [processing, setProcessing] = useState(false);
   const [saving, setSaving] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -263,7 +274,7 @@ function EditProfileDialogContent({
     setError(null);
     return onSave({
       name: draftName.trim(),
-      handle: normalizeHandle(draftHandle),
+      handle: accountProfile ? `@${draftHandle.toLowerCase()}` : normalizeHandle(draftHandle),
       avatarColor: draftColor,
       avatarImage: draftImage,
       ...(accountProfile
@@ -278,7 +289,13 @@ function EditProfileDialogContent({
         onOpenChange(false);
       })
       .catch((cause: unknown) => {
-        setError(accountErrorMessage(cause, "Could not save your profile. Try again."));
+        const message = accountErrorMessage(cause, "Could not save your profile. Try again.");
+        setPlanError(
+          ACCOUNT_BILLING_ENABLED && readAccountErrorCode(cause) === "subscription_required"
+            ? message
+            : null,
+        );
+        setError(message);
       })
       .finally(() => {
         setSaving(false);
@@ -358,7 +375,26 @@ function EditProfileDialogContent({
               />
             ))}
 
-          {error && <p className="text-center text-ui leading-snug text-destructive">{error}</p>}
+          {error && (
+            <p className="text-center text-ui leading-snug text-destructive">
+              {error}
+              {planError !== null && planError === error ? (
+                <>
+                  {" "}
+                  <button
+                    type="button"
+                    className="text-foreground underline underline-offset-2"
+                    onClick={() => {
+                      onOpenChange(false);
+                      openPlan();
+                    }}
+                  >
+                    See plans
+                  </button>
+                </>
+              ) : null}
+            </p>
+          )}
         </div>
 
         {/* Fields */}

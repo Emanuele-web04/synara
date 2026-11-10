@@ -27,7 +27,7 @@ vi.mock("betterwright", () => ({
       return mocks.run(code, runOptions);
     };
     close = async () => {
-      await this.conn?.close();
+      await this.conn?.close().catch(() => {});
       return mocks.browserClose();
     };
   },
@@ -35,6 +35,10 @@ vi.mock("betterwright", () => ({
 }));
 vi.mock("./betterwrightConnection", () => ({
   openBetterwrightConnection: mocks.openConnection,
+}));
+
+vi.mock("betterwright/guard-proxy", () => ({
+  createGuardProxy: () => ({ ensure: async () => 4321, close: async () => {} }),
 }));
 
 let contents: WebContents;
@@ -78,7 +82,7 @@ const run = () =>
   });
 
 describe("Betterwright runtime errors", () => {
-  it("waits for worker shutdown even when proxy restoration fails", async () => {
+  it("waits for worker shutdown even when CDP revocation fails", async () => {
     let finish!: () => void;
     mocks.run.mockResolvedValue({ ok: true, result: null });
     mocks.browserClose.mockImplementationOnce(
@@ -87,16 +91,14 @@ describe("Betterwright runtime errors", () => {
           finish = resolve;
         }),
     );
-    vi.mocked(contents.session.setProxy)
-      .mockResolvedValueOnce(undefined)
-      .mockRejectedValueOnce(new Error("restore failed"));
+    mocks.connectionClose.mockRejectedValueOnce(new Error("revoke failed"));
     let settled = false;
     const running = run().finally(() => {
       settled = true;
     });
-    const failed = expect(running).rejects.toThrow("restore failed");
+    const failed = expect(running).rejects.toThrow("revoke failed");
     await vi.waitFor(() => expect(mocks.browserClose).toHaveBeenCalledOnce());
-    await vi.waitFor(() => expect(contents.session.setProxy).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(mocks.connectionClose).toHaveBeenCalledOnce());
     expect(settled).toBe(false);
     finish();
     await failed;
@@ -249,6 +251,26 @@ describe("Betterwright runtime errors", () => {
     expect(options).toMatchObject({ downloadPolicy: "deny", credentialCapture: false });
     expect(options).not.toHaveProperty("provider");
     expect(options).not.toHaveProperty("hostOwnedTarget");
+  });
+
+  it("preserves page work only after a trusted settled-failure receipt", async () => {
+    mocks.run.mockResolvedValue({ ok: false, error: "fixture failure", executionSettled: true });
+    await expect(run()).rejects.toMatchObject({
+      browserError: { code: "BrowserEvaluationFailed" },
+    });
+    expect(mocks.connectionClose).toHaveBeenCalledWith(false);
+  });
+
+  it("cannot use a script-returned receipt to relax uncertain execution cleanup", async () => {
+    mocks.run.mockResolvedValue({
+      ok: false,
+      error: "fixture failure",
+      result: { executionSettled: true },
+    });
+    await expect(run()).rejects.toMatchObject({
+      browserError: { code: "BrowserEvaluationFailed" },
+    });
+    expect(mocks.connectionClose).toHaveBeenCalledWith(true);
   });
 
   it("terminates uncertain execution when the worker transport rejects", async () => {

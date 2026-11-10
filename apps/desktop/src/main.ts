@@ -1,17 +1,12 @@
 import "./httpRuntime";
-import { attachDesktopUpdateControl, DESKTOP_UPDATE_IPC_ENV } from "./desktopUpdateControl";
+import {
+  attachDesktopUpdateControl,
+  DESKTOP_UPDATE_IPC_ENV,
+  supportsDesktopUpdateControl,
+} from "./desktopUpdateControl";
 import { registerRemoteResourceBroker, REMOTE_RESOURCE_SCHEME } from "./remoteResourceBroker";
 import { showDiagnosticStartupDialog } from "./startupDiagnosticDialog";
-import {
-  initializeDesktopI18n,
-  setDesktopLanguagePreference,
-  t,
-  translateNativeMenuRoles,
-} from "./i18n";
-import {
-  applyDesktopLanguagePreference,
-  readDesktopLanguagePreference,
-} from "./desktopPreferences";
+import { t } from "./i18n";
 import { BackendIssueDetector } from "./backendIssueDetector";
 import { attachAppSubframeNavigationGuard } from "./subframeNavigationGuard";
 import { CuaDriverHost, sweepOrphanedCuaDrivers } from "./cuaDriverHost";
@@ -46,7 +41,6 @@ import {
   autoUpdater as nativeAutoUpdater,
   BrowserWindow,
   clipboard,
-  crashReporter,
   dialog,
   globalShortcut,
   ipcMain,
@@ -64,6 +58,7 @@ import {
   systemPreferences,
 } from "electron";
 import { configureElectronNetwork } from "betterwright/electron";
+import { getBetterwrightNetworkGuard } from "./browserAutomation/betterwrightNetworkGuard";
 import type {
   BrowserWindowConstructorOptions,
   FileFilter,
@@ -133,12 +128,7 @@ import {
 } from "./backendStartupReadiness";
 import { DesktopBetaChannel, readBetaImportResult, resolveBetaHomeDir } from "./betaChannel";
 import type { ExpectedTeamId } from "./betaInstaller";
-import {
-  BetaDiagnostics,
-  readLogTail,
-  resolveBetaDiagnosticsEndpoint,
-  type BetaDiagnosticsEventName,
-} from "./betaDiagnostics";
+import { BetaDiagnostics, type BetaDiagnosticsEventName } from "./betaDiagnostics";
 import { attachBetaRendererDiagnostics } from "./betaRendererDiagnostics";
 import { guardDesktopWindowClose, showDesktopConfirmDialog } from "./confirmDialog";
 import {
@@ -482,16 +472,6 @@ const DESKTOP_BROWSER_HOST_CAPABILITY_FD = 3;
 // for the same lock even when they use the same Electron executable.
 const userDataPath = resolveUserDataPath();
 app.setPath("userData", userDataPath);
-// Match the renderer storage profile, including isolated source-build profiles.
-const DESKTOP_LANGUAGE_PREFERENCE_PATH = Path.join(userDataPath, "desktop-language.json");
-initializeDesktopI18n(
-  readDesktopLanguagePreference(DESKTOP_LANGUAGE_PREFERENCE_PATH),
-  () =>
-    app.isReady()
-      ? app.getPreferredSystemLanguages()
-      : [new Intl.DateTimeFormat().resolvedOptions().locale],
-  desktopFlavor,
-);
 
 // Remote shares usage and diagnostics by default; Settings turns both off.
 // Stable stays opt-in for product events and never runs diagnostics.
@@ -545,20 +525,7 @@ productAnalytics.onChange((enabled) => {
   if (enabled) betaDiagnostics?.resumeSharing();
   else betaDiagnostics?.discardQueue();
 });
-if (betaDiagnostics && desktopFlavor === "beta") {
-  crashReporter.start({
-    productName: APP_DISPLAY_NAME,
-    companyName: "Synara",
-    submitURL: `${resolveBetaDiagnosticsEndpoint(process.env)}/v1/crash`,
-    uploadToServer: true,
-    compress: true,
-    globalExtra: {
-      installId: betaDiagnostics.installId,
-      flavor: "beta",
-      appVersion: app.getVersion(),
-    },
-  });
-}
+// Raw process dumps can contain work content; no flavor starts an upload-capable reporter.
 
 const trackBetaDiagnostics = (
   event: BetaDiagnosticsEventName,
@@ -2128,9 +2095,7 @@ function configureApplicationMenu(): void {
     },
   );
 
-  const applicationMenu = Menu.buildFromTemplate(template);
-  translateNativeMenuRoles(applicationMenu, APP_DISPLAY_NAME);
-  Menu.setApplicationMenu(applicationMenu);
+  Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
 
 function resolveResourcePath(fileName: string): string | null {
@@ -4905,8 +4870,9 @@ function startBackend(trigger: BackendStartTrigger = "lifecycle"): void {
       ELECTRON_RUN_AS_NODE: "1",
       SYNARA_SERVER_ENTRY: backendEntry,
       SYNARA_DESKTOP_PARENT_STDIN: "1",
-      [DESKTOP_UPDATE_IPC_ENV]:
-        app.isPackaged && desktopFlavor === "remote" && process.platform === "darwin" ? "1" : "0",
+      [DESKTOP_UPDATE_IPC_ENV]: supportsDesktopUpdateControl(app.isPackaged, process.platform)
+        ? "1"
+        : "0",
     },
     // Keep output piped in every environment so startup blockers and readiness
     // are observable even when packaged log setup is unavailable. The fourth
@@ -4933,12 +4899,10 @@ function startBackend(trigger: BackendStartTrigger = "lifecycle"): void {
   backendListeningDetector = listeningDetector;
   backendProcess = child;
   attachDesktopUpdateControl(child, {
+    isPackaged: app.isPackaged,
+    platform: process.platform,
     isCurrentChild: () => backendProcess === child && !isQuitting,
-    supported: () =>
-      app.isPackaged &&
-      desktopFlavor === "remote" &&
-      process.platform === "darwin" &&
-      updaterConfigured,
+    supported: () => updaterConfigured,
     getState: () => updateState,
     getInstallBlockedReason: getUpdaterInstallBlockedReason,
     check: () => checkForUpdates("remote"),
@@ -5048,11 +5012,6 @@ function startBackend(trigger: BackendStartTrigger = "lifecycle"): void {
           kind: "crash",
           processType: "backend",
           reason,
-          // Guarded explicitly: on stable builds betaDiagnostics is null and the
-          // log file must not be touched at all.
-          logTail: betaDiagnostics
-            ? readLogTail(Path.join(LOG_DIR, BACKEND_LOG_FILE_NAME))
-            : undefined,
         });
       scheduleBackendRestart(reason);
     });
@@ -5171,12 +5130,18 @@ async function shutdownDesktopRuntime(reason: string): Promise<void> {
       cancelBackendReadinessWait();
       appSnapManager?.dispose();
       appSnapManager = null;
-      await shutdownBrowserServices({
-        revokeHost: () => disposeBrowserHostPipeServerForShutdown(reason),
-        closePages: () => browserManager.dispose(),
-        stopCapture: () => browserVaultCapture.dispose(),
-        clearKeys: () => browserVault.dispose(),
-      });
+      try {
+        await shutdownBrowserServices({
+          revokeHost: () => disposeBrowserHostPipeServerForShutdown(reason),
+          closePages: () => browserManager.dispose(),
+          stopCapture: () => browserVaultCapture.dispose(),
+          clearKeys: () => browserVault.dispose(),
+        });
+      } finally {
+        await getBetterwrightNetworkGuard(
+          session.fromPartition(BROWSER_SESSION_PARTITION),
+        ).dispose();
+      }
       await browserSessionRestore?.shutdown();
       restoreStdIoCapture?.();
       if (betaDiagnostics) {
@@ -5431,26 +5396,6 @@ function registerIpcHandlers(): void {
   });
 
   ipcMain.removeHandler(IPC.setTheme);
-  ipcMain.removeAllListeners(IPC.getSystemLanguages);
-  ipcMain.on(IPC.getSystemLanguages, (event: IpcMainEvent) => {
-    event.returnValue =
-      event.sender === mainWindow?.webContents && event.senderFrame === event.sender.mainFrame
-        ? app.getPreferredSystemLanguages()
-        : [];
-  });
-  ipcMain.removeHandler(IPC.setLanguagePreference);
-  ipcMain.handle(IPC.setLanguagePreference, (event, rawPreference: unknown) => {
-    applyDesktopLanguagePreference(rawPreference, {
-      flavor: desktopFlavor,
-      isTrustedSender:
-        event.sender === mainWindow?.webContents && event.senderFrame === event.sender.mainFrame,
-      preferencePath: DESKTOP_LANGUAGE_PREFERENCE_PATH,
-      onPreference: (language) => {
-        setDesktopLanguagePreference(language);
-        if (app.isReady()) configureApplicationMenu();
-      },
-    });
-  });
   ipcMain.handle(IPC.setTheme, async (_event, rawTheme: unknown) => {
     const theme = getSafeTheme(rawTheme);
     if (!theme) {
@@ -6138,9 +6083,7 @@ function createWindow(): BrowserWindow {
       { role: "selectAll", enabled: params.editFlags.canSelectAll },
     );
 
-    const menu = Menu.buildFromTemplate(menuTemplate);
-    translateNativeMenuRoles(menu, APP_DISPLAY_NAME);
-    menu.popup({ window });
+    Menu.buildFromTemplate(menuTemplate).popup({ window });
   });
 
   window.webContents.setWindowOpenHandler(({ url }) => {
@@ -6280,11 +6223,6 @@ function attachRendererCrashRecovery(window: BrowserWindow): void {
         kind: "crash",
         processType: "renderer",
         reason: details.reason,
-        // Guarded explicitly: on stable builds betaDiagnostics is null and the
-        // log file must not be touched at all.
-        logTail: betaDiagnostics
-          ? readLogTail(Path.join(LOG_DIR, DESKTOP_LOG_FILE_NAME))
-          : undefined,
       });
 
     const response = rendererCrashPolicy.respondToCrash({
@@ -6645,7 +6583,11 @@ app.on("before-quit", (event) => {
 if (hasSingleInstanceLock) {
   app
     .whenReady()
-    .then(() => {
+    .then(async () => {
+      // Install the session-owned proxy before bootstrap can create or navigate browser pages.
+      await getBetterwrightNetworkGuard(
+        session.fromPartition(BROWSER_SESSION_PARTITION),
+      ).initialize();
       writeDesktopLogHeader("app ready");
       productAnalytics.start();
       productAnalytics.track({ event: "app.open", outcome: "succeeded" });
@@ -6716,7 +6658,6 @@ if (hasSingleInstanceLock) {
             kind: "crash",
             processType: details.type,
             reason: details.reason,
-            logTail: readLogTail(Path.join(LOG_DIR, DESKTOP_LOG_FILE_NAME)),
           });
         });
       }

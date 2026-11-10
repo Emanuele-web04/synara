@@ -11,6 +11,7 @@
     "dev": "bun run build && wrangler dev --local"
   },
   "dependencies": {
+    "@synara/contracts": "workspace:*",
     "@synara/shared": "workspace:*",
     "echarts": "6.1.0",
     "react": "^19.0.0",

@@ -40,6 +40,9 @@ vi.mock("betterwright", () => ({
       })());
   },
 }));
+vi.mock("betterwright/guard-proxy", () => ({
+  createGuardProxy: () => ({ ensure: async () => 4321, close: async () => {} }),
+}));
 vi.mock("./betterwrightConnection", () => ({ openBetterwrightConnection: mocks.connect }));
 import { BrowserCookieImport } from "./browserCookieImport";
 

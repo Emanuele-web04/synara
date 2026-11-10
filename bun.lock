@@ -19,6 +19,7 @@
       "name": "@synara/analytics",
       "version": "0.0.0",
       "dependencies": {
+        "@synara/contracts": "workspace:*",
         "@synara/shared": "workspace:*",
         "echarts": "6.1.0",
         "react": "^19.0.0",
@@ -113,6 +114,7 @@
       "version": "0.1.0",
       "dependencies": {
         "@base-ui/react": "^1.6.0",
+        "@synara/shared": "workspace:*",
         "class-variance-authority": "^0.7.1",
         "clsx": "^2.1.1",
         "fumadocs-core": "16.11.5",

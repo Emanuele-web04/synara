@@ -15,11 +15,6 @@ import { readDesktopWindowTranslucency } from "./lib/desktopWindowTranslucency";
 import { installGlassOverlayCutout } from "./lib/glassOverlayCutout";
 import { trackProductNavigation } from "./lib/productAnalytics";
 import { installRendererErrorDiagnostics } from "./lib/rendererErrorDiagnostics";
-import { initializeI18n } from "./i18n";
-
-const disposeI18n = initializeI18n();
-if (import.meta.hot) import.meta.hot.dispose(disposeI18n);
-
 const disposeRendererDiagnostics = installRendererErrorDiagnostics();
 if (import.meta.hot) import.meta.hot.dispose(() => disposeRendererDiagnostics?.());
 

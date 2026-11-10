@@ -10,6 +10,7 @@ import {
   type BrowserReloadInput,
   type BrowserResizeInput,
   type BrowserResizeOutput,
+  type BrowserScreenshotHostOutput,
   type BrowserScreenshotInput,
   type BrowserStatusOutput,
   type BrowserTabId,
@@ -521,19 +522,30 @@ export class DesktopBrowserAutomationHost {
     const timer = setTimeout(abortForTimeout, timeoutMs);
     try {
       const rawOutput = await raceWithAbort(operation, controller.signal, queuedTimeoutError);
-      let output = this.options.vault?.redact(rawOutput) ?? rawOutput;
-      if (
-        request.name === "browser_run" &&
-        output &&
-        typeof output === "object" &&
-        "value" in output
-      ) {
-        output = {
-          ...output,
-          serializedByteCount: Buffer.byteLength(JSON.stringify(output.value), "utf8"),
-        };
-      }
       try {
+        let output: unknown;
+        if (this.options.vault && request.name === "browser_screenshot") {
+          Schema.decodeUnknownSync(definition.hostOutput as never)(rawOutput);
+          const screenshot = rawOutput as BrowserScreenshotHostOutput;
+          const { data, ...imageMetadata } = screenshot.image;
+          // Only native screenshot bytes bypass text redaction: secret matches
+          // inside base64 corrupt the image. Metadata and browser_run stay redacted.
+          const redacted = this.options.vault.redact({ ...screenshot, image: imageMetadata });
+          output = { ...redacted, image: { ...redacted.image, data } };
+        } else {
+          output = this.options.vault?.redact(rawOutput) ?? rawOutput;
+        }
+        if (
+          request.name === "browser_run" &&
+          output &&
+          typeof output === "object" &&
+          "value" in output
+        ) {
+          output = {
+            ...output,
+            serializedByteCount: Buffer.byteLength(JSON.stringify(output.value), "utf8"),
+          };
+        }
         return Schema.decodeUnknownSync(definition.hostOutput as never)(output);
       } catch {
         throw new BrowserAutomationHostError({

@@ -26,7 +26,8 @@ import { ExternalLinkIcon, GlobeIcon, SettingsIcon, UsageGaugeIcon, UserIcon } f
 import { openExternalLink } from "~/lib/linkChips";
 import { isMacPlatform } from "~/lib/utils";
 import { useAccount } from "~/hooks/useAccount";
-import { accountErrorMessage, accountInitial, publicProfileUrl } from "~/lib/accountLogic";
+import { useTranslation } from "~/i18n";
+import { accountErrorMessage, accountInitial, profileShareUrl } from "~/lib/accountLogic";
 import { PROFILE_AVATAR_COLORS } from "~/components/profile/useProfileAvatarColor";
 import { useAccountDialogStore } from "./accountDialogStore";
 
@@ -43,12 +44,14 @@ export function AccountFooterControl() {
 
 function SignedInFooter() {
   const account = useAccount();
+  const { t } = useTranslation();
   const navigate = useNavigate();
   const openSignIn = useAccountDialogStore((state) => state.openSignIn);
   const me = account.me;
   if (!me) return null;
 
   const profile = me.profile ?? null;
+  const publicUrl = profileShareUrl(profile, me.publicProfileAvailable);
   const displayName = profile?.displayName ?? me.name;
   const avatarColor = profile?.avatarColor ?? DEFAULT_MENU_AVATAR_COLOR;
   // With a profile, its resolved avatarUrl is the one source of truth (it
@@ -109,17 +112,16 @@ function SignedInFooter() {
             <SidebarContextMenuIcon icon={UsageGaugeIcon} />
             <span>Usage</span>
           </MenuItem>
-          {/* Three honest states: a public profile links to its live page, a
-              private one routes to the visibility setting (the page would
-              404), and no profile resumes onboarding. */}
+          {/* Saved publication can outlive Alto access. Only offer the online
+              link when the account service confirms the page is available. */}
           {profile ? (
-            profile.public ? (
+            publicUrl ? (
               <MenuItem
                 className={SIDEBAR_CONTEXT_MENU_ITEM_CLASS_NAME}
-                onClick={() => openExternalLink(publicProfileUrl(profile.handle))}
+                onClick={() => openExternalLink(publicUrl)}
               >
                 <SidebarContextMenuIcon icon={ExternalLinkIcon} />
-                <span>View public profile</span>
+                <span>{t("common:account_viewPublicProfile")}</span>
               </MenuItem>
             ) : (
               <MenuItem
@@ -127,7 +129,7 @@ function SignedInFooter() {
                 onClick={() => void navigate({ to: "/settings", search: { section: "profile" } })}
               >
                 <SidebarContextMenuIcon icon={GlobeIcon} />
-                <span>Make profile public…</span>
+                <span>{t("common:account_makeYourProfilePublic")}</span>
               </MenuItem>
             )
           ) : (

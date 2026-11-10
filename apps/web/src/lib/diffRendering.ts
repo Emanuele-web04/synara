@@ -355,6 +355,17 @@ export function resolveFileDiffPrevPath(fileDiff: FileDiffMetadata): string | nu
   return raw;
 }
 
+// Resolve every index path a parsed file diff touches. A staged rename/move is
+// the new path's addition plus the old path's deletion, so resetting only the
+// new path would leave the deletion staged. The parser has already removed
+// git's own `a/` / `b/` prefixes, so these paths are used as-is: stripping again
+// would eat a real top-level `a/` or `b/` folder.
+export function resolveFileDiffIndexPaths(fileDiff: FileDiffMetadata): string[] {
+  const path = fileDiff.name ?? fileDiff.prevName ?? "";
+  const isRename = fileDiff.type === "rename-pure" || fileDiff.type === "rename-changed";
+  return isRename && fileDiff.prevName !== undefined ? [path, fileDiff.prevName] : [path];
+}
+
 // Symlinks (120000) show their target path but the workspace read/write path
 // follows the link, and gitlinks (160000, submodules) are directories in the
 // working tree: neither can be edited in place as the text the diff shows.

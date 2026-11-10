@@ -90,8 +90,8 @@ export interface LatestProposedPlanState {
 function formatDuration(durationMs: number): string {
   if (!Number.isFinite(durationMs) || durationMs < 0) return "0ms";
   if (durationMs < 1_000) return `${Math.max(1, Math.round(durationMs))}ms`;
-  if (durationMs < 10_000) return `${(durationMs / 1_000).toFixed(1)}s`;
-  if (durationMs < 60_000) return `${Math.round(durationMs / 1_000)}s`;
+  if (durationMs < 9_950) return `${(durationMs / 1_000).toFixed(1)}s`;
+  if (durationMs < 59_500) return `${Math.round(durationMs / 1_000)}s`;
   // Keep settled-time rounding while sharing larger units with live clocks.
   return formatClockDuration(Math.round(durationMs / 1_000) * 1_000);
 }

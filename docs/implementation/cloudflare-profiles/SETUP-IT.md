@@ -86,8 +86,10 @@ lettura delle impostazioni account. Il modello per modificare Workers è un
 punto di partenza; includi il permesso **Containers Edit/Write**. L’accesso MCP ora consente le modifiche concordate, ma non fornisce
 automaticamente una credenziale al workflow GitHub o a Wrangler.
 
-Nel repository GitHub apri **Settings → Secrets and variables → Actions →
-New repository secret** e configura:
+Nel repository GitHub apri **Settings → Environments → account-api-production**.
+Limita i deploy a `main` e salva il token del Worker API tra i segreti di
+quell’ambiente. Il deploy ordinario usa solo `CLOUDFLARE_API_TOKEN`. Per il
+primo provisioning dell’API, configura anche i segreti di base elencati qui.
 
 | Nome                          | Valore                                                        |
 | ----------------------------- | ------------------------------------------------------------- |
@@ -116,9 +118,12 @@ creare un ulteriore secret `CLOUDFLARE_ACCOUNT_ID` per questi workflow.
 
 Quando il workflow è disponibile in Actions:
 
-1. Esegui **Verify and deploy account API to Cloudflare**, con `deploy` attivo,
-   sulla revisione verificata. Il job di pubblicazione parte dopo i test e la
-   prova del container. Attendi che Cloudflare completi il provisioning.
+1. Limita l’ambiente GitHub `account-api-production` al branch `main` e salva
+   lì `CLOUDFLARE_API_TOKEN`. Esegui **Verify and deploy account API to Cloudflare**
+   da `main` con `deploy` attivo. Attiva anche `bootstrap_secrets` per il primo
+   provisioning del Worker o per un aggiornamento pianificato delle credenziali
+   di base. Il job di pubblicazione parte dopo i test e la prova del container.
+   Attendi che Cloudflare completi il provisioning.
 2. Verifica l'API:
 
    ```sh
@@ -129,9 +134,11 @@ Quando il workflow è disponibile in Actions:
    Devono rispondere con JSON valido. Questo prova che il processo è avviato;
    non prova ancora WorkOS o il ciclo completo dei profili.
 
-3. Esegui **Deploy Profiles**, indicando come `account_api_url`:
-   `https://synara-account-api-trial.synara-orgs.workers.dev`.
-   Non aggiungere `/api/v1`. I workflow configurano lo stesso proxy secret.
+3. Esegui **Deploy Profiles** con
+   `https://synara-account-api-trial.synara-orgs.workers.dev` come `account_api_url`.
+   Questo workflow legge `CLOUDFLARE_API_TOKEN` e `SYNARA_PROFILE_PROXY_SECRET`
+   dai segreti del repository o dell’organizzazione. Usa lì un token dedicato ai
+   profili e lo stesso proxy secret già configurato sul Worker API.
 
 L'indirizzo delle pagine pubblicate è:
 `https://synara-profiles-trial.synara-orgs.workers.dev/@nome`.
