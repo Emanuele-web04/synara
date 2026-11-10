@@ -30,6 +30,7 @@ import { useTranslation } from "~/i18n";
 import { accountErrorMessage, accountInitial, profileShareUrl } from "~/lib/accountLogic";
 import { PROFILE_AVATAR_COLORS } from "~/components/profile/useProfileAvatarColor";
 import { useAccountDialogStore } from "./accountDialogStore";
+import { RemoteConnectionsCoachmark } from "../hosts/RemoteConnectionsAnnouncement";
 
 const DEFAULT_MENU_AVATAR_COLOR = PROFILE_AVATAR_COLORS[0] ?? "#22c55e";
 
@@ -74,22 +75,22 @@ function SignedInFooter() {
 
   return (
     <Menu>
-      <SidebarIconButton
-        render={<MenuTrigger />}
-        icon={UserIcon}
-        label={`Account: ${displayName}`}
-        tooltip={displayName}
-        tooltipSide="right"
-        className={appRailButtonClassName(false)}
-      >
-        <ProfileAvatar
-          initials={accountInitial(displayName)}
-          color={avatarColor}
-          image={avatarImage}
-          className="size-7 shrink-0"
-          textClassName="text-ui-xs"
-        />
-      </SidebarIconButton>
+      <RemoteConnectionsCoachmark signedIn tooltip={displayName}>
+        <SidebarIconButton
+          render={<MenuTrigger />}
+          icon={UserIcon}
+          label={`Account: ${displayName}`}
+          className={appRailButtonClassName(false)}
+        >
+          <ProfileAvatar
+            initials={accountInitial(displayName)}
+            color={avatarColor}
+            image={avatarImage}
+            className="size-7 shrink-0"
+            textClassName="text-ui-xs"
+          />
+        </SidebarIconButton>
+      </RemoteConnectionsCoachmark>
       <ComposerPickerMenuPopup side="right" align="end" className="w-64 min-w-64">
         <MenuGroup>
           <div className="flex flex-col gap-0.5 px-2 py-1.5">
@@ -176,15 +177,15 @@ function SignedOutFooter() {
 
   return (
     <Menu>
-      <SidebarIconButton
-        render={<MenuTrigger />}
-        icon={UserIcon}
-        iconClassName="size-5"
-        label="Sign in"
-        tooltip="Sign in"
-        tooltipSide="right"
-        className={appRailButtonClassName(false)}
-      />
+      <RemoteConnectionsCoachmark signedIn={false} tooltip="Sign in">
+        <SidebarIconButton
+          render={<MenuTrigger />}
+          icon={UserIcon}
+          iconClassName="size-5"
+          label="Sign in"
+          className={appRailButtonClassName(false)}
+        />
+      </RemoteConnectionsCoachmark>
       <ComposerPickerMenuPopup side="right" align="end" className="w-64 min-w-64">
         <MenuGroup>
           <div className="flex flex-col gap-0.5 px-2 py-1.5">

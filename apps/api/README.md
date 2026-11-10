@@ -414,11 +414,12 @@ scoping, credential storage, refresh — is one code path.
 
 ### Private saved Inbox recaps
 
-The Beta Inbox saves snapshots only when the user selects **Save privately**.
-`PUT /api/v1/inbox/recaps` accepts `{ sourceHostId, day, timezone, recap }`, where
+Signed-in computers in Stable, Beta and Remote save snapshots automatically with
+`POST /api/v1/inbox/recaps/sync`. **Save privately** sends an immediate
+`PUT /api/v1/inbox/recaps`. Both accept `{ sourceHostId, day, timezone, recap }`, where
 `recap` is `StatsGetRecapResult` and the window runs from 04:00 on `day` to the
-next 04:00 in the source IANA timezone. Project names are included in this
-explicit save; the account's public profile never exposes saved recaps.
+next 04:00 in the source IANA timezone. Project names are included in both paths.
+The account's public profile never exposes saved recaps.
 
 Every save, list, read, and delete requires a valid account session and live
 membership of its active workspace. Saving also requires an owned or discoverable
@@ -436,9 +437,9 @@ authorization remains authoritative; Supabase client roles receive no policies.
 
 History persists independently of host or device registrations. Signing in to
 the same account and workspace restores saves after a phone reset and while all
-source computers are offline. There is no automatic recap upload, host deletion
-cascade, or dependency on local device caches. Migration `0016` is additive and
-must be applied by the operator before deploying this API version.
+source computers are offline. Removing a host does not delete its saved recaps.
+Deleting a recap prevents automatic re-creation. An explicit save can restore it.
+The API requires additive migrations `0016` and `0017`.
 
 Ownership is keyed on **`hosts.owner_user_id`**. Every user
 gets a personal organization the first time they use the service — provisioned

@@ -4,15 +4,27 @@ import { join } from "node:path";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { Effect, Layer, Schema } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { SaveInboxRecapRequest } from "@synara/contracts";
-import { createAccountInboxReporter } from "./accountInboxReporter";
+import {
+  SYNARA_DESKTOP_BUNDLE_ID_ENV,
+  SYNARA_PRODUCTION_BUNDLE_ID,
+} from "@synara/shared/desktopIdentity";
 import { writeAccountCredentials } from "./accountAuth";
-import { isServerBetaFeatureEnabled } from "./betaFeatureGate";
 import { makeRecapStatsQuery } from "./recapStats";
 import { SqlitePersistenceMemory } from "./persistence/Layers/Sqlite";
 
-vi.mock("./betaFeatureGate", () => ({ isServerBetaFeatureEnabled: vi.fn(() => true) }));
+let createAccountInboxReporter: typeof import("./accountInboxReporter").createAccountInboxReporter;
+
+beforeAll(async () => {
+  vi.stubEnv(SYNARA_DESKTOP_BUNDLE_ID_ENV, SYNARA_PRODUCTION_BUNDLE_ID);
+  vi.resetModules();
+  ({ createAccountInboxReporter } = await import("./accountInboxReporter"));
+  const { SERVER_DESKTOP_FLAVOR } = await import("./betaFeatureGate");
+  expect(SERVER_DESKTOP_FLAVOR).toBe("production");
+});
+
+afterAll(() => vi.unstubAllEnvs());
 
 const account = {
   accountUrl: "https://account.example.test",
@@ -33,7 +45,6 @@ afterEach(async () => {
   vi.useRealTimers();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
-  vi.mocked(isServerBetaFeatureEnabled).mockReturnValue(true);
   for (const home of homes.splice(0)) await rm(home, { recursive: true, force: true });
 });
 
@@ -208,7 +219,7 @@ describe("automatic private Inbox history", () => {
     );
   });
 
-  it("runs without a UI, remains inert on Stable or signed out, and stops its timer", async () => {
+  it("syncs automatically on Stable without a UI and stays inert after sign-out or stop", async () => {
     const f = await fixture();
     await run(
       Effect.gen(function* () {
@@ -224,15 +235,12 @@ describe("automatic private Inbox history", () => {
         yield* Effect.promise(() => vi.waitFor(() => expect(f.pushes).toHaveLength(1)));
         yield* Effect.promise(() => reporter.flushNow());
         expect(f.pushes).toHaveLength(1);
-        vi.mocked(isServerBetaFeatureEnabled).mockReturnValue(false);
         yield* sql`INSERT INTO profile_stats_deleted_prompts (thread_id, created_at) VALUES ('two', ${stamp(3)})`;
-        yield* Effect.promise(() => reporter.flushNow());
-        expect(f.pushes).toHaveLength(1);
-        vi.mocked(isServerBetaFeatureEnabled).mockReturnValue(true);
         const { accessToken: _accessToken, refreshToken: _refreshToken, ...signedOut } = account;
         yield* Effect.promise(() => writeAccountCredentials(f.home, signedOut));
         yield* Effect.promise(() => reporter.flushNow());
         expect(f.pushes).toHaveLength(1);
+        yield* Effect.promise(() => writeAccountCredentials(f.home, account));
         reporter.stop();
         yield* Effect.promise(() => vi.advanceTimersByTimeAsync(120_000));
         expect(f.pushes).toHaveLength(1);

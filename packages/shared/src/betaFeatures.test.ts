@@ -19,18 +19,13 @@ import {
 } from "./desktopIdentity";
 
 describe("isBetaFeatureEnabled", () => {
-  it.each(["inbox", "pull-request-auto-fix", "tasks", "accountProfileSync"])(
+  it.each(["inbox", "pull-request-auto-fix", "tasks", "accountProfileSync", "accountInbox"])(
     "offers %s in Stable and Beta",
     (feature) => {
       expect(isBetaFeatureEnabled(feature, "production")).toBe(true);
       expect(isBetaFeatureEnabled(feature, "beta")).toBe(true);
     },
   );
-
-  it.each(["accountInbox"])("keeps %s restricted to non-Stable builds", (feature) => {
-    expect(isBetaFeatureEnabled(feature, "production")).toBe(false);
-    expect(isBetaFeatureEnabled(feature, "beta")).toBe(true);
-  });
 
   it("enables Oh My Pi in Stable and all other flavors", () => {
     for (const flavor of [
