@@ -1,7 +1,13 @@
 // Account billing reads and redirects stay bound to the identity that opened Settings.
 import type { AccountBillingStatus, NativeApi } from "@synara/contracts";
+import { isElectron } from "~/env";
 import { ensureNativeApi } from "~/nativeApi";
 import { accountStatusScope } from "./hosts/controlQueryScope";
+
+/** Billing UI ships in desktop builds that enable it, or in any sandbox build. */
+export const ACCOUNT_BILLING_ENABLED =
+  (isElectron && import.meta.env.VITE_SYNARA_BILLING_ENABLED === "1") ||
+  import.meta.env.VITE_SYNARA_BILLING_SANDBOX === "1";
 
 export async function runAccountBillingOperation<T>(
   expectedScope: string,

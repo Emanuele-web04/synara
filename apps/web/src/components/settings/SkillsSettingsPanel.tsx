@@ -129,6 +129,7 @@ export function SkillsSettingsPanel() {
                 : t("settings:skillsEnabledOf", {
                     enabled: enabledSkills,
                     total: totalSkills,
+                    count: totalSkills,
                   })}
             </span>
           }

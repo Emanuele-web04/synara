@@ -65,6 +65,7 @@ import {
 } from "@synara/shared/desktopIdentity";
 import { runBetaImportIfRequested } from "./betaImport";
 import { startBetaUsageSnapshotJob } from "./betaUsageSnapshot";
+import { startHostUsageSnapshotJob } from "./hostUsageSnapshot";
 import { LATEST_MIGRATION_ID } from "./persistence/Migrations";
 import { fixPath, resolveBaseDir } from "./os-jank";
 import { Open } from "./open";
@@ -599,6 +600,10 @@ const makeServerProgram = (input: CliInput) =>
         baseDir: config.baseDir,
         stateDir: config.stateDir,
         hostIdentityPath: config.hostIdentityPath,
+        completionPreviewTrust: {
+          remoteTrust,
+          tlsIdentityPath: remoteTlsIdentityPath(config.secretsDir),
+        },
         ...(config.devUrl ? { devUrl: config.devUrl } : {}),
       });
       yield* Effect.addFinalizer(() => Effect.sync(() => activityReporter.stop()));
@@ -630,7 +635,8 @@ const makeServerProgram = (input: CliInput) =>
         ),
       );
     }
-    // Beta and Remote: anonymous 24h usage counts for diagnostics. The desktop
+    yield* startHostUsageSnapshotJob(config.baseDir);
+    // Beta and Remote: anonymous 24h health counts for diagnostics. The desktop
     // relays them only while sharing is on; failures never break startup.
     const desktopBundleId = process.env[SYNARA_DESKTOP_BUNDLE_ID_ENV];
     if (desktopBundleId === SYNARA_BETA_BUNDLE_ID || desktopBundleId === SYNARA_REMOTE_BUNDLE_ID) {

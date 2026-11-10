@@ -1,11 +1,7 @@
-import {
-  BetterWright,
-  listCookieSourceBrowsers,
-  listCookieSourceProfiles,
-  NetworkPolicy,
-} from "betterwright";
+import { BetterWright, listCookieSourceBrowsers, listCookieSourceProfiles } from "betterwright";
 import type { BrowserCookieImportInput, BrowserCookieImportResult } from "@synara/contracts";
 import type { DesktopBrowserManager } from "../browserManager";
+import { getBetterwrightNetworkGuard } from "./betterwrightNetworkGuard";
 import { synaraHostTarget } from "./betterwrightHostTarget";
 
 const SOURCES = new Set(["chrome", "safari", "edge"]);
@@ -108,7 +104,7 @@ export class BrowserCookieImport {
           headless: false,
           adBlock: false,
           parkBackgroundPages: false,
-          policy: new NetworkPolicy({ allowLoopback: true }),
+          policy: getBetterwrightNetworkGuard(runtime.webContents.session).policy,
         });
         const result = await browser.syncCookies({
           source: { browser: input.browser, profile: input.profile },

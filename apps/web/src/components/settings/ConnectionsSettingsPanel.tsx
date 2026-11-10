@@ -4,10 +4,12 @@
 // Layer: Settings UI components
 // Exports: ConnectionsSettingsPanel
 
+import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { useState } from "react";
 
 import { useAccount } from "~/hooks/useAccount";
+import { accountBillingQueryOptions } from "~/lib/accountReactQuery";
 import { readExecutionContext } from "~/lib/hosts/executionContext";
 import { isMacNavigatorPlatform } from "~/lib/utils";
 import { useAccountDialogStore } from "../account/accountDialogStore";
@@ -16,16 +18,34 @@ import { Button } from "../ui/button";
 import { ConnectionsOtherComputers } from "./ConnectionsOtherComputers";
 import { ConnectionsThisComputer } from "./ConnectionsThisComputer";
 import { SettingsListRow, SettingsSection } from "./SettingsPanelPrimitives";
+import { SYNARA_PLAN_SECTION_ID } from "./BillingSettingsPanel";
 
 type ConnectionsTab = "this" | "others" | "ssh";
 
-export function ConnectionsSettingsPanel({ active }: { active: boolean }) {
+export function ConnectionsSettingsPanel({
+  active,
+  billingEnabled,
+}: {
+  active: boolean;
+  billingEnabled: boolean;
+}) {
   const [tab, setTab] = useState<ConnectionsTab>("this");
+  const navigate = useNavigate();
   const account = useAccount();
   const openSignIn = useAccountDialogStore((store) => store.openSignIn);
+  const capability = readExecutionContext()?.controller.capabilities;
+  const billingOptions = accountBillingQueryOptions(account.status);
+  const billing = useQuery({
+    ...billingOptions,
+    enabled:
+      billingOptions.enabled === true &&
+      active &&
+      billingEnabled &&
+      tab === "this" &&
+      capability?.remoteConnections === true,
+  });
   if (!active) return null;
 
-  const capability = readExecutionContext()?.controller.capabilities;
   if (capability?.remoteConnections !== true)
     return (
       <SettingsSection title="Connections">
@@ -56,6 +76,12 @@ export function ConnectionsSettingsPanel({ active }: { active: boolean }) {
     );
 
   const computerNoun = isMacNavigatorPlatform() ? "Mac" : "computer";
+  const canViewProPlans =
+    billingEnabled &&
+    !billing.isError &&
+    billing.data?.available &&
+    billing.data.access === "none" &&
+    billing.data.canCheckout;
   return (
     <div className="space-y-6">
       <SegmentedPicker<ConnectionsTab>
@@ -71,7 +97,19 @@ export function ConnectionsSettingsPanel({ active }: { active: boolean }) {
       />
       <div>
         {tab === "this" ? (
-          <ConnectionsThisComputer computerNoun={computerNoun} />
+          <ConnectionsThisComputer
+            computerNoun={computerNoun}
+            onRefreshBilling={billingEnabled ? () => void billing.refetch() : undefined}
+            onViewProPlans={
+              canViewProPlans
+                ? () =>
+                    void navigate({
+                      to: "/settings",
+                      search: { section: "usage", target: SYNARA_PLAN_SECTION_ID },
+                    })
+                : undefined
+            }
+          />
         ) : tab === "others" ? (
           <ConnectionsOtherComputers />
         ) : (

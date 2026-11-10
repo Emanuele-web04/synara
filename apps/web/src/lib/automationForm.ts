@@ -284,7 +284,7 @@ export function formatSchedule(schedule: AutomationSchedule, locale = getFormatL
       });
     case "weekly":
       return t("automation:weekly", {
-        day: weekdayLabel(schedule.dayOfWeek, locale),
+        day: weekdayLabel(schedule.dayOfWeek),
         time: schedule.timeOfDay,
         timezone: timezoneSuffix(schedule),
       });
@@ -317,7 +317,7 @@ export function formatCadence(schedule: AutomationSchedule, locale = getFormatLo
       return t("automation:schedule_weekdaysAt", { time: formatClockTime(schedule.timeOfDay) });
     case "weekly":
       return t("automation:schedule_weeklyAt", {
-        day: weekdayLabel(schedule.dayOfWeek, locale),
+        day: weekdayLabel(schedule.dayOfWeek),
         time: formatClockTime(schedule.timeOfDay),
       });
     case "cron":
@@ -385,9 +385,9 @@ export function formatNextRun(
   });
 }
 
-export function weekdayLabel(value: number, locale = getFormatLocale()): string {
+export function weekdayLabel(value: number): string {
   const day = Number.isInteger(value) && value >= 0 && value <= 6 ? value : 0;
-  return new Intl.DateTimeFormat(locale, { weekday: "short", timeZone: "UTC" }).format(
+  return new Intl.DateTimeFormat("en", { weekday: "short", timeZone: "UTC" }).format(
     new Date(Date.UTC(2026, 9, 4 + day)),
   );
 }
@@ -783,7 +783,7 @@ export function automationPromptError(prompt: string): string | null {
   if (!trimmed) return t("automation:addAPrompt");
   if (trimmed.length > AUTOMATION_PROMPT_MAX_LENGTH) {
     return t("automation:promptMustBeCharactersOrFewer", {
-      amount: new Intl.NumberFormat(getFormatLocale()).format(AUTOMATION_PROMPT_MAX_LENGTH),
+      amount: new Intl.NumberFormat("en-US").format(AUTOMATION_PROMPT_MAX_LENGTH),
     });
   }
   return null;

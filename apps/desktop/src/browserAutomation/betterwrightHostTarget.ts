@@ -16,9 +16,8 @@ export interface SynaraHostTarget extends HostTarget {
 
 /**
  * Synara's HostTarget adapter. Browser tabs share a persistent Electron
- * session, so the guard proxy is installed on the session for the duration of
- * each lease. This covers navigations, subresources, WebSockets, and workers;
- * the proxy resolves and dials the validated address itself.
+ * session, whose persistent guard covers navigations, subresources, WebSockets,
+ * and workers. Worker rotation revokes control without closing page requests.
  */
 export function synaraHostTarget(
   contents: WebContents,
@@ -36,27 +35,27 @@ export function synaraHostTarget(
   const leaseSignal = options.signal
     ? AbortSignal.any([options.signal, lifetime.signal])
     : lifetime.signal;
-  let networkGuardLease:
-    | { proxyUrl: string; lease: Awaited<ReturnType<typeof networkGuard.attach>> }
-    | undefined;
+  let networkGuardLease: Awaited<ReturnType<typeof networkGuard.attach>> | undefined;
+  let workerProxyUrl: string | undefined;
   let revoked = false;
   let connecting = Promise.resolve();
-  let changingProxy = Promise.resolve();
+  let changingLease = Promise.resolve();
 
   const assertAvailable = () => {
     if (revoked || options.signal?.aborted) throw new Error("Browser control was interrupted.");
-    if (contents.isDestroyed()) throw new Error("Browser target is unavailable.");
+    if (contents.isDestroyed() || networkGuardLease?.closed)
+      throw new Error("Browser target is unavailable.");
   };
-  const changeProxy = <T>(operation: () => Promise<T>): Promise<T> => {
-    const result = changingProxy.then(operation);
-    changingProxy = result.then(
+  const changeLease = <T>(operation: () => Promise<T>): Promise<T> => {
+    const result = changingLease.then(operation);
+    changingLease = result.then(
       () => {},
       () => {},
     );
     return result;
   };
-  const releaseProxy = async () => {
-    await networkGuardLease?.lease.release();
+  const releaseLease = async () => {
+    await networkGuardLease?.release();
     networkGuardLease = undefined;
   };
   const closeConnection = async (connection: OpenedConnection, cancel: boolean) => {
@@ -74,32 +73,19 @@ export function synaraHostTarget(
   return {
     connect({ proxyUrl }) {
       // Serializing connects prevents parallel opens from overwriting lease
-      // ownership. Revocation uses the separate proxy queue so a stalled CDP
+      // ownership. Revocation uses the separate lease queue so a stalled CDP
       // open cannot prevent teardown.
       const result = connecting.then(async () => {
         if (!proxyUrl) throw new Error("Browser network guard is unavailable.");
         assertAvailable();
         let opening: Promise<OpenedConnection> | undefined;
         try {
-          await changeProxy(async () => {
+          await changeLease(async () => {
             assertAvailable();
-            if (networkGuardLease?.lease.closed) {
-              await drainConnections(false);
-              await releaseProxy();
-            } else if (networkGuardLease && networkGuardLease.proxyUrl !== proxyUrl) {
-              await drainConnections(false);
-              assertAvailable();
-              // Rotation belongs to the same run. Keep its session turn so a
-              // queued sibling cannot take over between worker generations.
-              await networkGuardLease.lease.replace(proxyUrl, leaseSignal);
-              networkGuardLease.proxyUrl = proxyUrl;
-            }
-            assertAvailable();
+            if (workerProxyUrl && workerProxyUrl !== proxyUrl) await drainConnections(false);
+            workerProxyUrl = proxyUrl;
             if (!networkGuardLease) {
-              networkGuardLease = {
-                proxyUrl,
-                lease: await networkGuard.attach(proxyUrl, leaseSignal),
-              };
+              networkGuardLease = await networkGuard.attach(leaseSignal);
             }
           });
           assertAvailable();
@@ -125,9 +111,9 @@ export function synaraHostTarget(
             close: () => closeConnection(connection, false),
           };
         } catch (error) {
-          // Failed setup, rotation, or open must not strand the session's turn.
-          await changeProxy(async () => {
-            if (connections.size === 0) await releaseProxy();
+          // Failed setup or open must not strand the session's turn.
+          await changeLease(async () => {
+            if (connections.size === 0) await releaseLease();
           });
           assertAvailable();
           throw error;
@@ -165,9 +151,9 @@ export function synaraHostTarget(
       }
       const draining = drainConnections(cancel);
       void draining.catch(() => {});
-      return changeProxy(async () => {
+      return changeLease(async () => {
         await draining;
-        await releaseProxy();
+        await releaseLease();
       });
     },
   };

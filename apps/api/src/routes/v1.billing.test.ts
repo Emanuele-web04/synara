@@ -11,7 +11,7 @@ import { createHostKeyRegistry } from "../identity/hostKeyRegistry";
 import { createHostGrantIssuer } from "../identity/grantIssuer";
 import { createHostSecretStore } from "../identity/hostSecretStore";
 import { startFakeWorkos } from "../testing/fakeWorkos";
-import type { BillingProvider } from "../billing/polar";
+import { BillingCatalogUnavailableError, type BillingProvider } from "../billing/polar";
 import { createBillingService } from "../billing/service";
 
 const url = process.env.TEST_DATABASE_URL;
@@ -108,6 +108,75 @@ describe.skipIf(!url)("authenticated sandbox billing API", () => {
       ).status,
     ).toBe(503);
   });
+  it("preserves paid access and management while rejecting checkout on catalog failure", async () => {
+    const { app, provider } = fixture();
+    const subscriber = await login();
+    const buyer = await login();
+    vi.mocked(provider.plans).mockRejectedValue(
+      new BillingCatalogUnavailableError("Polar catalog is temporarily unavailable"),
+    );
+    vi.mocked(provider.state).mockImplementation(async (userId) =>
+      userId === subscriber.user.id
+        ? {
+            customerId: "paid-customer",
+            accessGranted: true,
+            subscriptionStatus: "active",
+            validUntil: new Date(Date.now() + 60_000).toISOString(),
+            cancelAtPeriodEnd: false,
+            hasSubscription: true,
+            productIds: ["test-product"],
+            settledCheckoutAttempts: [],
+          }
+        : null,
+    );
+
+    const paidStatus = await app.request("/api/v1/billing/status", { headers: subscriber.headers });
+    expect(paidStatus.status).toBe(200);
+    expect(await paidStatus.json()).toMatchObject({
+      available: true,
+      access: "granted",
+      subscriptionStatus: "active",
+      canManage: true,
+      canCheckout: false,
+      plans: [],
+    });
+    const portal = await app.request("/api/v1/billing/portal", {
+      method: "POST",
+      headers: subscriber.headers,
+    });
+    expect(portal.status).toBe(200);
+    expect(await portal.json()).toEqual({
+      url: "https://sandbox.polar.sh/test/portal",
+      environment: "sandbox",
+    });
+    expect(provider.portal).toHaveBeenCalledWith(subscriber.user.id);
+
+    const buyerStatus = await app.request("/api/v1/billing/status", { headers: buyer.headers });
+    expect(buyerStatus.status).toBe(200);
+    expect(await buyerStatus.json()).toMatchObject({
+      access: "none",
+      canManage: false,
+      canCheckout: false,
+      plans: [],
+    });
+    const checkout = await app.request("/api/v1/billing/checkout", {
+      method: "POST",
+      headers: buyer.headers,
+      body: JSON.stringify({ interval: "month" }),
+    });
+    expect(checkout.status).toBe(503);
+    expect(provider.checkout).not.toHaveBeenCalled();
+  });
+
+  it("does not recover from unexpected catalog errors", async () => {
+    const { billing, provider } = fixture();
+    const error = new TypeError("unexpected catalog error");
+    vi.mocked(provider.plans).mockRejectedValue(error);
+
+    await expect(billing.status(randomUUID())).rejects.toBe(error);
+    expect(provider.state).not.toHaveBeenCalled();
+  });
+
   it("ignores attacker-selected account/email/product/redirect fields and binds all calls to caller A", async () => {
     const { app, provider } = fixture();
     const a = await login(),

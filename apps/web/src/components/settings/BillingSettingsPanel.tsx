@@ -1,6 +1,13 @@
-// Subscription controls reuse profile Settings and the server-selected billing environment.
+// FILE: BillingSettingsPanel.tsx
+// Purpose: The "Synara Alto" section of Usage & limits — two plan cards (monthly,
+//          annual) that each open their checkout, or the current plan with Manage.
+//          Checkout and the customer portal open in the browser through Polar, using
+//          the server-selected billing environment.
+// Layer: Web settings feature
+
 import type { AccountBillingStatus, AccountStatus } from "@synara/contracts";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useNavigate } from "@tanstack/react-router";
 import { useEffect, useRef, useState } from "react";
 import { useAccount } from "~/hooks/useAccount";
 import { accountBillingQueryOptions } from "~/lib/accountReactQuery";
@@ -14,7 +21,38 @@ import { ensureNativeApi } from "~/nativeApi";
 import { useAccountDialogStore } from "../account/accountDialogStore";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
+import { cn } from "~/lib/utils";
+import { SETTINGS_CARD_CLASS_NAME } from "~/settingsPanelStyles";
 import { SettingsCard, SettingsListRow, SettingsSectionShell } from "./SettingsPanelPrimitives";
+
+/** Deep-link target for "See plans" / plan links elsewhere in Settings. */
+export const SYNARA_PLAN_SECTION_ID = "settings-synara-plan";
+
+/** Opens the plan section of Usage & limits. */
+export function useOpenSynaraPlan() {
+  const navigate = useNavigate();
+  return () =>
+    void navigate({
+      to: "/settings",
+      search: { section: "usage", target: SYNARA_PLAN_SECTION_ID },
+    });
+}
+
+/**
+ * The profile's only nod to billing: a quiet "Free plan" / "Alto" link to the plan
+ * in Usage & limits. Hidden until the plan is known, so it never flashes a guess.
+ */
+export function SynaraPlanLink() {
+  const { status } = useAccount();
+  const query = useQuery(accountBillingQueryOptions(status));
+  const openPlan = useOpenSynaraPlan();
+  if (status?.state !== "signed-in" || !query.data?.available) return null;
+  return (
+    <Button variant="ghost" size="sm" onClick={openPlan}>
+      {query.data.access === "granted" ? "Alto" : "Free plan"}
+    </Button>
+  );
+}
 
 export function BillingSettingsPanel() {
   const { status } = useAccount();
@@ -26,7 +64,8 @@ function BillingAccountPanel({ status, scope }: { status: AccountStatus | null; 
   const queryClient = useQueryClient();
   const query = useQuery(accountBillingQueryOptions(status));
   const [pending, setPending] = useState(false);
-  const [message, setMessage] = useState<string | null>(null);
+  // `opened` asks the user to refresh once they are back from the browser.
+  const [message, setMessage] = useState<{ text: string; opened: boolean } | null>(null);
   const mounted = useRef(false);
   useEffect(() => {
     mounted.current = true;
@@ -55,19 +94,21 @@ function BillingAccountPanel({ status, scope }: { status: AccountStatus | null; 
       }
       await ensureNativeApi().shell.openExternal(redirect.url);
       if (mounted.current) {
-        setMessage(
-          sandbox
-            ? "Test billing opened in your browser. Refresh after finishing."
-            : "Billing opened in your browser. Refresh after finishing.",
-        );
+        setMessage({
+          text: sandbox
+            ? "Test billing opened in your browser."
+            : "Billing opened in your browser.",
+          opened: true,
+        });
       }
     } catch {
       if (mounted.current) {
-        setMessage(
-          sandbox
+        setMessage({
+          text: sandbox
             ? "Could not open test billing. Try again."
             : "Could not open billing. Try again.",
-        );
+          opened: false,
+        });
       }
     } finally {
       if (mounted.current) {
@@ -81,16 +122,15 @@ function BillingAccountPanel({ status, scope }: { status: AccountStatus | null; 
 
   return (
     <SettingsSectionShell
-      title="Subscription"
-      action={
-        billing ? <Badge variant="outline">{sandbox ? "Sandbox" : "Production"}</Badge> : undefined
-      }
+      id={SYNARA_PLAN_SECTION_ID}
+      title="Synara Alto"
+      translateTitle={false}
+      action={sandbox ? <Badge variant="outline">Sandbox</Badge> : undefined}
     >
-      <SettingsCard>
-        {!signedIn ? (
+      {!signedIn ? (
+        <SettingsCard>
           <SettingsListRow
-            title="Synara Pro"
-            description="Local desktop use stays free. Pro enables remote access."
+            title="Sign in to subscribe"
             actions={
               <Button
                 variant="outline"
@@ -102,111 +142,128 @@ function BillingAccountPanel({ status, scope }: { status: AccountStatus | null; 
               </Button>
             }
           />
-        ) : query.isPending ? (
+        </SettingsCard>
+      ) : query.isPending ? (
+        <SettingsCard>
+          <SettingsListRow title="Loading plans…" />
+        </SettingsCard>
+      ) : query.isError ? (
+        <SettingsCard>
           <SettingsListRow
-            title="Loading subscription…"
-            description="Checking this account’s subscription."
-          />
-        ) : query.isError ? (
-          <SettingsListRow
-            title="Subscription unavailable"
-            description="Couldn’t check billing. Your current app access is unchanged."
+            title="Couldn’t load plans"
             actions={
               <Button variant="outline" size="sm" onClick={() => void query.refetch()}>
                 Try again
               </Button>
             }
           />
-        ) : !billing?.available ? (
+        </SettingsCard>
+      ) : !billing?.available ? (
+        <SettingsCard>
           <SettingsListRow
             title={sandbox ? "Test billing is not configured" : "Billing is not configured"}
-            description="Your current app access is unchanged. iPhone and iPad remain free companions."
           />
-        ) : (
-          <>
-            <SettingsListRow
-              title={sandbox ? "Test Synara Pro" : "Synara Pro"}
-              description={subscriptionDescription(billing)}
-              actions={
-                <Button
-                  variant="outline"
-                  size="sm"
-                  disabled={query.isFetching || pending}
-                  onClick={() => void query.refetch()}
-                >
-                  Refresh
-                </Button>
-              }
-            />
-            {billing.canCheckout
-              ? billing.plans.map((plan) => (
-                  <SettingsListRow
-                    key={plan.interval}
-                    title={plan.interval === "month" ? "Monthly" : "Annual"}
-                    description={`${formatBillingPrice(plan)} / ${plan.interval === "month" ? "month" : "year"}`}
-                    actions={
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        disabled={pending}
-                        onClick={() => void openBilling(plan.interval)}
-                      >
-                        {sandbox ? "Test checkout" : "Checkout"}
-                      </Button>
-                    }
-                  />
-                ))
-              : null}
-            {billing.canManage ? (
+        </SettingsCard>
+      ) : (
+        <>
+          {billing.canCheckout ? (
+            // Each card opens its own checkout.
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              {billing.plans.map((plan) => (
+                <PlanCard
+                  key={plan.interval}
+                  plan={plan}
+                  disabled={pending}
+                  onChoose={() => void openBilling(plan.interval)}
+                />
+              ))}
+            </div>
+          ) : (
+            // Subscribers, and anyone with no plan on offer right now: never an
+            // empty section.
+            <SettingsCard>
               <SettingsListRow
-                title={sandbox ? "Manage test subscription" : "Manage subscription"}
-                description={
-                  sandbox
-                    ? "Update or cancel in Polar’s sandbox customer portal."
-                    : "Update or cancel in Polar’s customer portal."
-                }
+                title={planTitle(billing)}
                 actions={
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    disabled={pending}
-                    onClick={() => void openBilling()}
-                  >
-                    Manage
-                  </Button>
+                  billing.canManage ? (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      disabled={pending}
+                      onClick={() => void openBilling()}
+                    >
+                      Manage
+                    </Button>
+                  ) : null
                 }
               />
-            ) : null}
-          </>
-        )}
-      </SettingsCard>
-      {billing?.available ? (
-        <p className="text-ui-sm text-muted-foreground">
-          {sandbox
-            ? "Sandbox only. No real payments. iPhone and iPad remain free companions."
-            : "Payments are processed by Polar. iPhone and iPad remain free companions."}
-        </p>
-      ) : null}
+            </SettingsCard>
+          )}
+          {billing.canCheckout && billing.canManage ? (
+            // A former subscriber keeps the portal for invoices and payment details.
+            <button
+              type="button"
+              className="self-start text-ui-sm text-muted-foreground underline-offset-2 hover:text-foreground hover:underline disabled:opacity-64"
+              disabled={pending}
+              onClick={() => void openBilling()}
+            >
+              Manage billing
+            </button>
+          ) : null}
+        </>
+      )}
       {message ? (
         <p role="status" className="text-ui-sm text-muted-foreground">
-          {message}
+          {message.text}
+          {message.opened ? (
+            <>
+              {" "}
+              <button
+                type="button"
+                className="text-foreground underline-offset-2 hover:underline disabled:opacity-64"
+                disabled={query.isFetching}
+                onClick={() => void query.refetch()}
+              >
+                Refresh
+              </button>
+            </>
+          ) : null}
         </p>
       ) : null}
     </SettingsSectionShell>
   );
 }
 
-function subscriptionDescription(status: AccountBillingStatus): string {
-  const sandbox = status.environment === "sandbox";
+/** One plan, one click: the card opens that interval's checkout. */
+function PlanCard(props: {
+  plan: AccountBillingStatus["plans"][number];
+  disabled: boolean;
+  onChoose: () => void;
+}) {
+  const monthly = props.plan.interval === "month";
+  return (
+    <button
+      type="button"
+      disabled={props.disabled}
+      onClick={props.onChoose}
+      className={cn(
+        SETTINGS_CARD_CLASS_NAME,
+        "flex flex-col items-start gap-1 px-4 py-3.5 text-left transition-colors hover:bg-accent disabled:pointer-events-none disabled:opacity-64",
+      )}
+    >
+      <span className="text-ui text-muted-foreground">{monthly ? "Monthly" : "Annual"}</span>
+      <span className="text-ui-lg font-semibold text-foreground">
+        {formatBillingPrice(props.plan)}
+        <span className="font-normal text-muted-foreground"> / {monthly ? "month" : "year"}</span>
+      </span>
+    </button>
+  );
+}
+
+function planTitle(status: AccountBillingStatus): string {
+  if (status.access !== "granted") return "Free";
   if (status.cancelAtPeriodEnd && status.validUntil) {
-    return `Ends ${new Date(status.validUntil).toLocaleDateString()}. Local desktop use stays free. Pro enables remote access.${sandbox ? " No real payments are taken." : ""}`;
+    return `Alto · ends ${new Date(status.validUntil).toLocaleDateString()}`;
   }
-  if (status.access === "granted") {
-    return sandbox
-      ? "Access confirmed in Polar sandbox. Local desktop use stays free. Pro enables remote access."
-      : "Local desktop use stays free. Pro enables remote access.";
-  }
-  return sandbox
-    ? "Local desktop use stays free. Pro enables remote access. Try monthly or annual test billing. No real payments are taken."
-    : "Local desktop use stays free. Pro enables remote access.";
+  return "Alto";
 }

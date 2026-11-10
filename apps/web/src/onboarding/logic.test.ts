@@ -7,6 +7,7 @@ import {
   nextOnboardingStep,
   previousOnboardingStep,
   resolveLocalOnboardingCompletion,
+  resolveOnboardingSteps,
   resolveOnboardingCompletionToReconcile,
   resolveOnboardingGate,
   summarizeProviderSetup,
@@ -35,18 +36,52 @@ const RECONCILE_BASE = {
 } as const;
 
 describe("onboarding steps", () => {
-  it("clamps navigation at both ends", () => {
-    expect(nextOnboardingStep("welcome")).toBe("tour");
-    expect(nextOnboardingStep("done")).toBe("done");
-    expect(previousOnboardingStep("tour")).toBe("welcome");
-    expect(previousOnboardingStep("welcome")).toBe("welcome");
+  const FULL = resolveOnboardingSteps({
+    remoteAvailable: true,
+    offerAccount: true,
+    signedIn: true,
   });
 
-  it("treats everything after the tour as a setup step", () => {
+  it("shows only the local steps when this build cannot pair a phone", () => {
+    expect(
+      resolveOnboardingSteps({ remoteAvailable: false, offerAccount: true, signedIn: true }),
+    ).toEqual(["welcome", "agents", "tasks", "ready"]);
+  });
+
+  it("offers the account step only to a signed-out user and pairing only once signed in", () => {
+    expect(
+      resolveOnboardingSteps({ remoteAvailable: true, offerAccount: true, signedIn: false }),
+    ).toEqual(["welcome", "agents", "tasks", "pocket", "account", "ready"]);
+    expect(
+      resolveOnboardingSteps({ remoteAvailable: true, offerAccount: false, signedIn: true }),
+    ).toEqual(["welcome", "agents", "tasks", "pocket", "pair", "ready"]);
+    expect(FULL).toEqual(["welcome", "agents", "tasks", "pocket", "account", "pair", "ready"]);
+  });
+
+  it("clamps navigation at both ends", () => {
+    expect(nextOnboardingStep(FULL, "welcome")).toBe("agents");
+    expect(nextOnboardingStep(FULL, "ready")).toBe("ready");
+    expect(previousOnboardingStep(FULL, "agents")).toBe("welcome");
+    expect(previousOnboardingStep(FULL, "welcome")).toBe("welcome");
+  });
+
+  it("skips steps this run does not show, even from a step that just left the list", () => {
+    const signedOut = resolveOnboardingSteps({
+      remoteAvailable: true,
+      offerAccount: true,
+      signedIn: false,
+    });
+    expect(nextOnboardingStep(signedOut, "account")).toBe("ready");
+    expect(previousOnboardingStep(signedOut, "ready")).toBe("account");
+    // Signing out on the pairing step drops it from the list; navigation still resolves.
+    expect(nextOnboardingStep(signedOut, "pair")).toBe("ready");
+    expect(previousOnboardingStep(signedOut, "pair")).toBe("account");
+  });
+
+  it("treats everything after the welcome as a setup step", () => {
     expect(isOnboardingSetupStep("welcome")).toBe(false);
-    expect(isOnboardingSetupStep("tour")).toBe(false);
-    expect(isOnboardingSetupStep("providers")).toBe(true);
-    expect(isOnboardingSetupStep("done")).toBe(true);
+    expect(isOnboardingSetupStep("agents")).toBe(true);
+    expect(isOnboardingSetupStep("ready")).toBe(true);
   });
 });
 

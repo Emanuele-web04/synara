@@ -133,6 +133,7 @@ export async function createApp(
       ...(config.remoteTestUserIds ? { remoteTestUserIds: config.remoteTestUserIds } : {}),
       remoteBetaAccessEnabled: config.remoteBetaAccessEnabled === true,
       remoteBillingEnforced: config.remoteBillingEnforced === true,
+      profileBillingEnforced: config.profileBillingEnforced === true,
       verifier: identity.verifier,
       grants: identity.grants,
       signing: identity.signing,

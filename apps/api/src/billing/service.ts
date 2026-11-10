@@ -7,8 +7,13 @@ import type {
 } from "@synara/contracts";
 import type pg from "pg";
 import { randomUUID } from "node:crypto";
-import { BillingCheckoutNotCreatedError, type BillingCheckout } from "./polar";
+import {
+  BillingCatalogUnavailableError,
+  BillingCheckoutNotCreatedError,
+  type BillingCheckout,
+} from "./polar";
 import type { BillingProvider, BillingSnapshot } from "./polar";
+import type { StoredBillingAccess } from "./accessPolicy";
 
 export class BillingError extends Error {
   constructor(
@@ -64,7 +69,7 @@ function serialize(
     validUntil: row.valid_until?.toISOString() ?? null,
     cancelAtPeriodEnd: row.cancel_at_period_end,
     checkedAt: row.checked_at?.toISOString() ?? null,
-    canCheckout: !row.has_subscription && !row.access_granted,
+    canCheckout: plans.length > 0 && !row.has_subscription && !row.access_granted,
     canManage: row.customer_id !== null,
     plans,
   };
@@ -178,7 +183,10 @@ export function createBillingService(options: { pool: pg.Pool; provider: Billing
     initialize,
     async status(userId: string): Promise<AccountBillingStatus> {
       await initialize();
-      const plans = await provider.plans();
+      const plans = await provider.plans().catch((error: unknown) => {
+        if (error instanceof BillingCatalogUnavailableError) return [];
+        throw error;
+      });
       return withAccount(userId, async (client, row) => {
         assertAvailable(row);
         return serialize(await reconcile(client, userId), plans, provider.environment);
@@ -210,6 +218,24 @@ export function createBillingService(options: { pool: pg.Pool; provider: Billing
           validUntil: current.valid_until?.toISOString() ?? null,
         };
       });
+    },
+    /**
+     * The stored entitlement as last reconciled, with no provider call and no
+     * row lock — for anonymous reads such as public profile pages. `null`
+     * when the account has no ledger row or is being deleted.
+     */
+    async storedAccess(userId: string): Promise<StoredBillingAccess | null> {
+      await initialize();
+      const { rows } = await pool.query<Pick<Row, "access_granted" | "valid_until" | "deleted_at">>(
+        "SELECT access_granted, valid_until, deleted_at FROM billing_accounts WHERE user_id=$1",
+        [userId],
+      );
+      const row = rows[0];
+      if (!row || row.deleted_at) return null;
+      return {
+        accessGranted: row.access_granted,
+        validUntil: row.valid_until?.toISOString() ?? null,
+      };
     },
     async checkout(
       userId: string,

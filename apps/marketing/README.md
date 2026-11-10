@@ -14,8 +14,10 @@ flow.
 - **Direct-to-provider:** Synara connects to the provider the user chooses
   instead of proxying normal model traffic through a Synara cloud.
 - **No lock-in:** users bring the subscriptions and accounts they already use.
-- **Security by design:** optional anonymous analytics are off by default and
-  never include code, prompts, or chat history.
+- **Analytics boundaries:** product analytics use random installation IDs unrelated
+  to login or billing and exclude code, prompts and chat history. Stable and Beta
+  default off; Remote from .18 and iPhone/iPad from build 139 default on with a local
+  off switch. Beta crash diagnostics are separate.
 
 ## Run the website locally
 

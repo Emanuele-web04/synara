@@ -31,23 +31,30 @@ account API itself runs only where an operator starts or deploys it.
   the operator's machine under `<synara home>/account-credentials.json` at mode
   `0600`, never in the repository.
 
-## Polar / Synara Pro Remote subscriptions
+<a id="polar--synara-pro-remote-subscriptions"></a>
+
+## Polar / Synara Alto Remote subscriptions
 
 Billing supports isolated sandbox and production environments and is **off by
 default**. Production payments require a separate explicit interlock. This code
 change does not activate production billing or paid remote-access enforcement.
 The sandbox campaign configured for qualification is recorded below.
 
-| Product decision  | Configuration                                                                                                               |
-| ----------------- | --------------------------------------------------------------------------------------------------------------------------- |
-| Local use         | Free; local coding, local chats and local workspace access do not require Pro.                                              |
-| Synara Pro        | All Remote functionality requires Pro; local desktop use stays free, with ownership and device approval checked separately. |
-| Monthly           | USD 9.99, recurring monthly (`999` minor units).                                                                            |
-| Annual            | USD 79.99, recurring annually (`7999` minor units).                                                                         |
-| Tax               | Exclusive: applicable tax is added at checkout.                                                                             |
-| Introductory code | 50% off the first monthly payment only; no annual discount or permanent reduced renewal price.                              |
+| Product decision  | Configuration                                                                                                            |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| Local use         | Free; local coding, local chats and local workspace access do not require Alto.                                          |
+| Synara Alto       | All Remote functionality requires Alto. Local desktop use stays free. Remote still checks ownership and device approval. |
+| Monthly           | USD 9.99, recurring monthly (`999` minor units).                                                                         |
+| Annual            | USD 79.99, recurring annually (`7999` minor units).                                                                      |
+| Tax               | Exclusive: applicable tax is added at checkout.                                                                          |
+| Introductory code | 50% off the first monthly payment only; no annual discount or permanent reduced renewal price.                           |
 
-The iPhone/iPad app remains a free companion, with no in-app purchase flow here.
+The iPhone/iPad app remains a free companion for an existing Synara account.
+On desktop, **Settings → Connections → View Alto plans** opens the existing
+Subscription panel when checkout is available and the account has no paid
+Remote access.
+The same Connections screen has **Connect a device** for pairing once the host
+allows it. Subscription purchases are managed on desktop through Polar.
 A subscription never authorizes a host or device by itself, revokes a pairing,
 or deletes chat history. `POLAR_REMOTE_ACCESS_ENFORCED` is a separate, strict
 boolean and defaults to `false`; enabling it requires configured billing and
@@ -58,16 +65,29 @@ rollout controls remote admission. With it on, the commercial gate takes
 precedence: neither beta access nor a test-user allowlist bypasses the paid
 check. Ownership, organization membership and device approval still apply.
 
+`POLAR_PROFILE_ACCESS_ENFORCED` gates public profiles the same way and is
+independent of the remote switch (also strict, `false` by default, and requires
+configured billing). With it on, turning a profile public needs a fresh Alto
+check (`403 subscription_required` otherwise), and `GET /profiles/:handle`
+answers `404 profile_not_found` — the same as a private profile — when the
+owner's stored entitlement is missing, revoked, or more than 24 hours past its
+period end (the grace keeps paying subscribers' pages up while a renewal webhook
+lands; revocations still apply at once). The page read never calls
+Polar: it uses the ledger that webhooks and signed-in reconciles keep current,
+so a lapsed subscription hides the page without changing the owner's stored
+visibility, and resubscribing restores it. Private profiles (including the
+onboarding handle setup) never need a subscription.
+
 ### Execution-host policy and manual paid rollout
 
-Pro covers all official Remote ingress, including managed tunnels, LAN/Tailscale,
+Alto covers all official Remote ingress, including managed tunnels, LAN/Tailscale,
 SSH forwarding, HTTP/file access, WebSocket sessions and remote UI frames. A
 local-network address, a browser cookie, a legacy pairing or an untagged session
 is not an exemption. Free local desktop admission requires positive local proof:
 the current private startup capability on a loopback-bound desktop process with
 no public URL. Keep that capability private; an IP address or owner role alone
 does not establish a local session. Account access, computer lists, saved history,
-billing management, export and revocation/cleanup remain available without Pro.
+billing management, export and revocation/cleanup remain available without Alto.
 
 The execution host reads the account API's public `GET /api/v1/instance` policy
 with `no-store`, independently of login. Its persistent hint is scoped to that
@@ -81,6 +101,7 @@ must establish that separately.
 | `SYNARA_ACCOUNT_URL`                    | Remote execution host | Set explicitly to the canonical account API origin for the actual Remote deployment. Match the intended account/host authority; do not copy a trial URL or infer it from a generic UI fallback.    |
 | `SYNARA_REMOTE_BILLING_POLICY_REQUIRED` | Remote execution host | `false` during current preparation. Set to `true` only as part of the approved manual paid rollout. It requires fresh policy proof before admitting unverified Remote sessions, even before login. |
 | `POLAR_REMOTE_ACCESS_ENFORCED`          | Account API           | `false` now. The future paid rollout sets it to `true` with configured billing; beta/test enrollment cannot override it.                                                                           |
+| `POLAR_PROFILE_ACCESS_ENFORCED`         | Account API           | `false` by default. `true` (with configured billing) makes public profiles an Alto feature: publishing needs a fresh check and pages of owners without stored access answer 404.                   |
 | `POLAR_PRODUCTION_PAYMENTS_ENABLED`     | Account API           | `false` now. Production billing separately requires explicit `true`, production credentials, expected catalog and approved return origins.                                                         |
 
 With strict host policy enabled, an unknown policy or first-read outage holds
@@ -146,6 +167,9 @@ rollout is deliberately approved. This documentation changes no runtime setting.
    or enables backend billing. Sign in to the intended account and open
    Settings → Profile → Subscription. Returning from checkout is not proof of
    payment; refreshing reads authoritative customer state.
+   If Polar catalog reads fail or prices do not match, new checkout is disabled.
+   Subscription status and portal access still work when Polar can verify the
+   existing customer.
 
 The additive `billing_environment` singleton binds the database to one provider
 environment. Existing billing-account or webhook rows are stamped as sandbox;
@@ -166,11 +190,11 @@ price without applying this campaign code. The official customer portal also con
 `subscription_cycle` order for the same customer, subscription and monthly
 product: `799` before tax, no discount, `176` tax and `975` total (USD 9.75). The
 period advanced, and the final canceled customer state had no active
-subscription or Pro benefit. In that introductory-campaign run, app access at
-the exact renewal-payment instant was not sampled. A separate failed-renewal
-run below verified app denial and subsequent paid-invoice recovery. No production campaign is activated. Create any
-production counterpart separately; IDs and redemption history do not transfer
-between environments.
+subscription or Remote-access benefit. In that introductory-campaign run, app
+access at the exact renewal-payment instant was not sampled. A separate
+failed-renewal run below verified app denial and recovery after the invoice
+was paid. No production campaign is active. Configure any production counterpart
+separately. IDs and redemption history do not transfer between environments.
 
 | Polar campaign field             | Required value                                                                                        |
 | -------------------------------- | ----------------------------------------------------------------------------------------------------- |
@@ -308,7 +332,7 @@ The sandbox receipts below predate the USD 9.99 monthly launch price.
 | Webhook delivery                    | A real Polar-signed event reached an isolated local receiver through a temporary forwarder and reconciled access. Controlled invalid/stale signatures were refused; replay was stored once. The forwarder and endpoint were removed afterward.                                                                                                                                                                               | Verify the persistent hosted receiver, delivery monitoring and recovery under hosted outage.                                                                                                                                                                       |
 | Restart and provider downtime       | Local integration tests cover the persisted uncertain checkout fence, inbox restart/retry and provider failure without stale grants.                                                                                                                                                                                                                                                                                         | Hosted warm-container handover, rollback and failed startup remain unverified. Local container probes and a successful deployment do not establish these outcomes.                                                                                                 |
 | Identity and erasure                | Two isolated accounts kept separate vendor customers and access; a paid second account could not redeem the first account's valid pairing code. Shipping erasure stopped the test subscription's renewal before deleting its fake identity, retained the billing tombstone and refused the old session.                                                                                                                      | Verify the production identity adapter and hosted cleanup timer. The test called shipping maintenance explicitly because the isolated runner omitted its timer; uncertain-checkout erasure remains locally integration-tested.                                     |
-| Native companion and recovery       | Signed QA iPhone and iPad simulators paired with the real host, retained pairing after relaunch, and opened local Terms/Privacy from onboarding and Settings. A real failed renewal closed an existing host connection after about 32 seconds in one observation. Both displayed the existing Pro guidance and automatically reconnected after payment, retaining the same device trust without a new QR, login or approval. | Verify signed physical-device recovery and actual APNs delivery. The native turn-recovery card was compiled and reviewed; its presentation was not exercised in a live conversation. Simulator permission and local push injection do not establish APNs delivery. |
+| Native companion and recovery       | Signed QA iPhone and iPad simulators paired with the real host, retained pairing after relaunch, and opened local Terms/Privacy from onboarding and Settings. A real failed renewal closed an existing host connection after about 32 seconds in one observation. Both displayed the billing guidance text and automatically reconnected after payment, retaining the same device trust without a new QR, login or approval. | Verify signed physical-device recovery and actual APNs delivery. The native turn-recovery card was compiled and reviewed; its presentation was not exercised in a live conversation. Simulator permission and local push injection do not establish APNs delivery. |
 | Product boundary                    | After account erasure, the existing local project remained listable and its file readable/downloadable with identical bytes. Account and legal screens remained accessible while remote admission was denied.                                                                                                                                                                                                                | Extend the local-file check to chat history/full export and packaged desktop. Verify persistent authority policy, logout/unlink and old-OFF cutover on the intended deployed policy.                                                                               |
 
 These checks used the shipping billing paths with real Polar sandbox transactions,
@@ -331,9 +355,9 @@ unit tests or historic sandbox receipts as production qualification.
 
 Prepare two Polar Production products with **Draft** visibility, one fixed
 USD 9.99 monthly price and one fixed USD 79.99 annual price, with taxes added
-to each. Attach the same Synara Pro benefit to both and restrict the
-introductory discount to the monthly product. Keep both products in Draft and
-the production checkout and paid-access flags off during preparation.
+to each. Attach the same configured Remote-access benefit to both and restrict
+the introductory discount to the monthly product. Keep both products in Draft
+and the production checkout and paid-access flags off during preparation.
 
 Production activation remains pending the deployed receiver and monitoring,
 merchant onboarding, qualification of the chosen products/campaign, and approved

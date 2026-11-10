@@ -16,13 +16,6 @@ import { SafariAccessSetupButton } from "../components/SafariAccessOnboarding";
 import { createFileRoute, useSearch } from "@tanstack/react-router";
 import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "~/i18n";
-import {
-  AVAILABLE_LANGUAGE_PREFERENCES,
-  UI_LOCALES,
-  UI_LOCALE_REGISTRY,
-  resolveLanguagePreference,
-  type LanguagePreference,
-} from "~/i18n/locale";
 import { useLocalStorage } from "../hooks/useLocalStorage";
 import {
   DEFAULT_DIFF_RENDER_MODE,
@@ -53,7 +46,6 @@ import {
   useAppSettings,
 } from "../appSettings";
 import { APP_VERSION } from "../branding";
-import { EditorLanguageReloadNotice } from "~/components/codeEditor/EditorLanguageReloadNotice";
 import { ProductAnalyticsSettingsPanel } from "~/components/settings/ProductAnalyticsSettingsPanel";
 import { AdvancedSettingsPanel } from "~/components/settings/AdvancedSettingsPanel";
 import { AppIconPicker } from "~/components/settings/AppIconPicker";
@@ -80,6 +72,7 @@ import {
 } from "../components/settings/KeyboardShortcutsSettingsPanel";
 import { ProfileSettingsPanel } from "../components/settings/ProfileSettingsPanel";
 import { BillingSettingsPanel } from "../components/settings/BillingSettingsPanel";
+import { ACCOUNT_BILLING_ENABLED } from "~/lib/accountBilling";
 import { ProviderUsageSettingsPanel } from "../components/settings/ProviderUsageSettingsPanel";
 import { ExternalMcpSettingsPanel } from "../components/settings/ExternalMcpSettingsPanel";
 import { ConnectionsSettingsPanel } from "../components/settings/ConnectionsSettingsPanel";
@@ -351,7 +344,7 @@ type BooleanSettingKey = {
 // ── Route screen ───────────────────────────────────────────────────────────
 
 function SettingsRouteView() {
-  const { t, locale } = useTranslation();
+  const { t } = useTranslation();
   const [defaultDiffRenderMode, setDefaultDiffRenderMode] = useLocalStorage(
     DIFF_RENDER_MODE_STORAGE_KEY,
     DEFAULT_DIFF_RENDER_MODE,
@@ -367,7 +360,7 @@ function SettingsRouteView() {
   const activeSectionItem = SETTINGS_NAV_ITEMS.find((item) => item.id === activeSection)!;
 
   const {
-    isDefaultActiveTheme,
+    isDefaultThemePack,
     resetAllThemes,
     resolvedTheme,
     theme,
@@ -377,7 +370,6 @@ function SettingsRouteView() {
   } = useTheme();
   const { settings, defaults, updateSettings, updateSettingsAndWait, resetSettings } =
     useAppSettings();
-  const languagePreference = resolveLanguagePreference(settings.language);
   const keepAwake = useKeepAwakeState();
   const desktopTopBarTrafficLightGutterClassName = useDesktopTopBarTrafficLightGutterClassName();
   const [releaseHistoryOpen, setReleaseHistoryOpen] = useState(false);
@@ -484,11 +476,11 @@ function SettingsRouteView() {
   }, [activeSection, settingsTarget]);
 
   const changedSettingLabels = [
-    ...(settings.language !== defaults.language ? ["common:general_languageAria"] : []),
     ...(theme !== "system" ? ["onboarding:changed_theme"] : []),
-    ...(!isDefaultActiveTheme
-      ? [resolvedTheme === "dark" ? "settings:darkThemePack" : "settings:lightThemePack"]
-      : []),
+    // resetAllThemes() restores both theme packs and the system-font preference.
+    ...(!isDefaultThemePack("dark") ? ["settings:darkThemePack"] : []),
+    ...(!isDefaultThemePack("light") ? ["settings:lightThemePack"] : []),
+    ...(!systemUiFont ? ["settings:useSystemUIFont"] : []),
     ...(settings.defaultProvider !== defaults.defaultProvider
       ? ["settings:changed_defaultProvider"]
       : []),
@@ -649,7 +641,7 @@ function SettingsRouteView() {
       [
         t("settings:restoreDefaultSettings"),
         t("settings:thisWillReset", {
-          settings: new Intl.ListFormat(locale).format(changedSettingLabels),
+          settings: changedSettingLabels.join(", "),
         }),
       ].join("\n"),
     );
@@ -716,43 +708,6 @@ function SettingsRouteView() {
       <BetaChannelSettingsPanel active={true} />
       <ProductAnalyticsSettingsPanel />
       <SettingsSection title="settings:general_coreDefaults">
-        <SettingsRow
-          id="setting-language"
-          status={<EditorLanguageReloadNotice />}
-          title="common:general_languageAria"
-          description="settings:chooseTheLanguageUsedByTheInterfaceSystemFollows"
-          resetAction={
-            settings.language !== defaults.language ? (
-              <SettingResetButton
-                label={t("common:language")}
-                onClick={() => updateSettings({ language: defaults.language })}
-              />
-            ) : null
-          }
-          control={
-            <SettingsSelectControl
-              value={languagePreference}
-              onValueChange={(language) => {
-                if (AVAILABLE_LANGUAGE_PREFERENCES.includes(language as LanguagePreference)) {
-                  updateSettings({ language: language as LanguagePreference });
-                }
-              }}
-              ariaLabel={t("common:general_languageAria")}
-              valueContent={
-                languagePreference === "system"
-                  ? t("common:themeOptions_system")
-                  : UI_LOCALE_REGISTRY[languagePreference].nativeName
-              }
-            >
-              <SelectItem value="system">{t("common:themeOptions_system")}</SelectItem>
-              {UI_LOCALES.map((locale) => (
-                <SelectItem key={locale} value={locale}>
-                  {UI_LOCALE_REGISTRY[locale].nativeName}
-                </SelectItem>
-              ))}
-            </SettingsSelectControl>
-          }
-        />
         <SettingsRow
           id="setting-default-provider"
           title="settings:changed_defaultProvider"
@@ -1847,6 +1802,8 @@ function SettingsRouteView() {
     </div>
   );
 
+  const billingEnabled = ACCOUNT_BILLING_ENABLED;
+
   const renderRouteOwnedPanel = () => {
     switch (activeSection) {
       case "general":
@@ -1858,19 +1815,18 @@ function SettingsRouteView() {
       case "shortcuts":
         return <KeyboardShortcutsSettingsPanel />;
       case "profile":
-        return (
-          <div className="flex flex-col gap-7">
-            {(isElectron && import.meta.env.VITE_SYNARA_BILLING_ENABLED === "1") ||
-            import.meta.env.VITE_SYNARA_BILLING_SANDBOX === "1" ? (
-              <BillingSettingsPanel />
-            ) : null}
-            <ProfileSettingsPanel />
-          </div>
-        );
+        return <ProfileSettingsPanel />;
       case "skills":
         return <SkillsSettingsPanel />;
       case "usage":
-        return <ProviderUsageSettingsPanel />;
+        // The plan lives with usage ("Usage and billing"), never above the profile.
+        // A fragment, not a wrapper: sections space themselves as siblings.
+        return (
+          <>
+            {billingEnabled ? <BillingSettingsPanel /> : null}
+            <ProviderUsageSettingsPanel />
+          </>
+        );
       default:
         return null;
     }
@@ -1996,7 +1952,10 @@ function SettingsRouteView() {
                 />
                 <McpConnectorsSettingsPanel active={activeSection === "connectors"} />
                 <ExternalMcpSettingsPanel active={activeSection === "integrations"} />
-                <ConnectionsSettingsPanel active={activeSection === "connections"} />
+                <ConnectionsSettingsPanel
+                  active={activeSection === "connections"}
+                  billingEnabled={billingEnabled}
+                />
                 <AdvancedSettingsPanel
                   active={activeSection === "advanced"}
                   onOpenReleaseHistory={() => setReleaseHistoryOpen(true)}

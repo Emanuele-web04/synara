@@ -5,21 +5,10 @@
 // Layer: Settings UI components
 // Exports: ConnectionsAddDeviceDialog
 
-import { useEffect, useRef, useState } from "react";
+import { useState } from "react";
 
-import { useAccount } from "~/hooks/useAccount";
-import {
-  activeTrustedDevices,
-  callRemoteAccess,
-  countdownLabel,
-  pendingApprovals,
-  remoteAccessErrorMessage,
-  remoteDeviceKind,
-  type RemoteHostState,
-  type RemotePairingCode,
-} from "~/lib/hosts/remoteAccess";
+import { remoteDeviceKind, type RemoteHostState } from "~/lib/hosts/remoteAccess";
 import { ClockIcon, RefreshCwIcon } from "~/lib/icons";
-import { remotePairingLink } from "~/lib/remotePairingLink";
 import { SegmentedPicker } from "../SegmentedPicker";
 import { Button } from "../ui/button";
 import { CopyTextButton } from "../ui/copyTextButton";
@@ -33,7 +22,13 @@ import {
 } from "../ui/dialog";
 import { Spinner } from "../ui/spinner";
 import { type AddDeviceHeroVariant, ConnectionsAddDeviceHero } from "./ConnectionsAddDeviceHero";
-import { RemoteDeviceIcon, RootFingerprint } from "./ConnectionsRows";
+import { RootFingerprint } from "./ConnectionsRows";
+import {
+  DEVICE_PAIRING_CARD_CLASS_NAME as CARD_CLASS_NAME,
+  PairingCode,
+  PendingDeviceApprovalCard,
+  useDevicePairing,
+} from "./DevicePairing";
 import { PairingQrCode } from "./PairingQrCode";
 
 type DeviceTab = "phone" | "computer";
@@ -43,7 +38,6 @@ const DEVICE_TABS = [
   { value: "computer", label: "Computer" },
 ] as const;
 
-const CARD_CLASS_NAME = "rounded-[20px] border border-border bg-muted/40";
 const HELP_TEXT_CLASS_NAME = "text-center text-ui-sm leading-relaxed text-muted-foreground";
 
 export function ConnectionsAddDeviceDialog({
@@ -51,6 +45,7 @@ export function ConnectionsAddDeviceDialog({
   onOpenChange,
   createCode,
   state,
+  loadError,
   onChanged,
   computerNoun,
 }: {
@@ -59,6 +54,7 @@ export function ConnectionsAddDeviceDialog({
   /** False when opened only to review pending requests. */
   createCode: boolean;
   state: RemoteHostState | null;
+  loadError: string | null;
   onChanged: () => Promise<void>;
   computerNoun: string;
 }) {
@@ -68,6 +64,7 @@ export function ConnectionsAddDeviceDialog({
         <AddDeviceDialogContent
           createCode={createCode}
           state={state}
+          loadError={loadError}
           onChanged={onChanged}
           onClose={() => onOpenChange(false)}
           computerNoun={computerNoun}
@@ -80,109 +77,37 @@ export function ConnectionsAddDeviceDialog({
 function AddDeviceDialogContent({
   createCode,
   state,
+  loadError,
   onChanged,
   onClose,
   computerNoun,
 }: {
   createCode: boolean;
   state: RemoteHostState | null;
+  loadError: string | null;
   onChanged: () => Promise<void>;
   onClose: () => void;
   computerNoun: string;
 }) {
-  const account = useAccount();
-  const [invitation, setInvitation] = useState<RemotePairingCode | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   const [tab, setTab] = useState<DeviceTab>("phone");
-  const [codeRequested, setCodeRequested] = useState(false);
-  const [now, setNow] = useState(Date.now());
-  const openedAt = useRef(Date.now());
-  const mounted = useRef(true);
-  const initialCodeRequested = useRef(false);
-
-  const run = async (work: () => Promise<void>, failure: string) => {
-    if (busy) return;
-    setBusy(true);
-    setError(null);
-    try {
-      await work();
-      await onChanged();
-    } catch (cause) {
-      if (mounted.current) setError(remoteAccessErrorMessage(cause, failure));
-    } finally {
-      if (mounted.current) setBusy(false);
-    }
-  };
-
-  const pending = pendingApprovals(state, now);
-  const joined = activeTrustedDevices(state).filter(
-    (device) => Date.parse(device.approvedAt) >= openedAt.current,
-  );
-  // A code someone already redeemed, or one withdrawn elsewhere, is spent.
-  const shownStatus = invitation
-    ? state?.invitations.find((entry) => entry.inviteId === invitation.inviteId)
-    : undefined;
-  const used = Boolean(
-    shownStatus && (shownStatus.revoked || shownStatus.approved || shownStatus.pendingDevice),
-  );
-  const remaining = invitation && !used ? countdownLabel(invitation.expiresAt, now) : null;
-
-  // A live code being replaced is withdrawn first so only the one on screen
-  // stays redeemable; it leaves the screen before the new one is requested, so
-  // a failure cannot keep showing a dead code.
-  const newCode = () =>
-    run(async () => {
-      if (invitation && remaining) {
-        await callRemoteAccess({ operation: "cancel-invitation", inviteId: invitation.inviteId });
-      }
-      if (mounted.current) setInvitation(null);
-      const result = await callRemoteAccess({ operation: "create-code" });
-      if (mounted.current && result.kind === "pairing-code") setInvitation(result);
-    }, "Could not create a pairing code.");
-
-  useEffect(() => {
-    mounted.current = true;
-    const countdown = setInterval(() => setNow(Date.now()), 1_000);
-    // Closing keeps the code: people close this to type it on the phone. It
-    // expires on its own and can be cancelled from Connections.
-    return () => {
-      mounted.current = false;
-      clearInterval(countdown);
-    };
-  }, []);
-
-  // Creating a code withdraws every request still waiting on this computer, so
-  // mint one per opening only once those have been approved or rejected.
-  const noPending = pending.length === 0;
-  useEffect(() => {
-    if (!createCode || !noPending || busy || initialCodeRequested.current) return;
-    initialCodeRequested.current = true;
-    setCodeRequested(true);
-    void newCode();
-    // `newCode` is recreated every render.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [createCode, noPending, busy]);
-
-  const qrLink =
-    invitation && remaining
-      ? remotePairingLink(
-          account.status?.state === "signed-in" ? account.status.accountAuthority : undefined,
-          invitation,
-        )
-      : null;
-  const email = account.me?.email ?? null;
+  const {
+    view,
+    pending,
+    joined,
+    invitation,
+    remaining,
+    used,
+    qrLink,
+    email,
+    busy,
+    error,
+    codeRequested,
+    newCode,
+    approve,
+    reject,
+  } = useDevicePairing({ createCode, state, loadError, onChanged });
   const firstPending = pending[0];
 
-  // Requests come first: they are waiting on this computer, and a new code
-  // would withdraw them.
-  const view = !noPending
-    ? "approval"
-    : joined.length > 0
-      ? "joined"
-      : createCode
-        ? "code"
-        : "empty";
   const hero: AddDeviceHeroVariant =
     view === "joined"
       ? "linked"
@@ -245,66 +170,14 @@ function AddDeviceDialogContent({
       <DialogPanel className="space-y-4 px-7 pt-4! pb-7">
         {view === "approval"
           ? pending.map((entry) => (
-              <div key={entry.inviteId} className={`${CARD_CLASS_NAME} space-y-3.5 p-4`}>
-                <div className="flex items-center gap-3">
-                  <span className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-secondary text-foreground">
-                    <RemoteDeviceIcon label={entry.pendingDevice.label} />
-                  </span>
-                  <div className="min-w-0">
-                    <p
-                      className="truncate text-ui font-medium text-foreground"
-                      title={entry.pendingDevice.label}
-                    >
-                      {entry.pendingDevice.label}
-                    </p>
-                    <p className="text-ui-sm text-muted-foreground">
-                      Wants to control this {computerNoun}
-                    </p>
-                  </div>
-                </div>
-                <div className="space-y-1.5 border-t border-border pt-3">
-                  <p className="text-ui-xs text-muted-foreground">
-                    The device should show this fingerprint
-                  </p>
-                  <code className="block font-mono text-ui-xs break-all text-foreground">
-                    {entry.pendingDevice.deviceJkt}
-                  </code>
-                </div>
-                <div className="flex gap-2">
-                  <Button
-                    shape="capsule"
-                    variant="subtle"
-                    className="flex-1"
-                    disabled={busy}
-                    onClick={() =>
-                      void run(async () => {
-                        await callRemoteAccess({
-                          operation: "cancel-invitation",
-                          inviteId: entry.inviteId,
-                        });
-                      }, "Could not reject the request.")
-                    }
-                  >
-                    Reject
-                  </Button>
-                  <Button
-                    shape="capsule"
-                    className="flex-1"
-                    disabled={busy}
-                    onClick={() =>
-                      void run(async () => {
-                        await callRemoteAccess({
-                          operation: "approve",
-                          inviteId: entry.inviteId,
-                          deviceJkt: entry.pendingDevice.deviceJkt,
-                        });
-                      }, "Could not approve the device.")
-                    }
-                  >
-                    Approve
-                  </Button>
-                </div>
-              </div>
+              <PendingDeviceApprovalCard
+                key={entry.inviteId}
+                entry={entry}
+                computerNoun={computerNoun}
+                busy={busy}
+                onApprove={() => void approve(entry)}
+                onReject={() => void reject(entry)}
+              />
             ))
           : null}
 
@@ -448,18 +321,5 @@ function AddDeviceDialogContent({
         ) : null}
       </DialogPanel>
     </DialogPopup>
-  );
-}
-
-function PairingCode({ code }: { code: string }) {
-  return (
-    <div className="flex flex-col items-center gap-2.5">
-      <span className="text-ui-xs font-medium tracking-[0.08em] text-muted-foreground uppercase">
-        Pairing code
-      </span>
-      <span className="font-mono text-4xl font-medium tracking-[0.12em] text-foreground">
-        {code}
-      </span>
-    </div>
   );
 }

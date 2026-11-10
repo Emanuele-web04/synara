@@ -2,7 +2,11 @@ import { createHmac, randomBytes, randomUUID } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PolarBillingConfig } from "../config";
 import { loadPolarBillingConfig } from "../config";
-import { BillingCheckoutNotCreatedError, createPolarBillingProvider } from "./polar";
+import {
+  BillingCatalogUnavailableError,
+  BillingCheckoutNotCreatedError,
+  createPolarBillingProvider,
+} from "./polar";
 
 const config: PolarBillingConfig = {
   environment: "sandbox",
@@ -42,6 +46,7 @@ function upstream(
     status?: string;
     environment?: "sandbox" | "production";
     priceAmount?: number;
+    productErrorStatus?: number;
     priceCurrency?: string;
     taxBehavior?: string | null;
     trialInterval?: string | null;
@@ -121,6 +126,11 @@ function upstream(
         pagination: { total_count: 1, max_page: 1 },
       };
     else if (url.pathname.startsWith("/v1/products/")) {
+      if (options.productErrorStatus)
+        return Response.json(
+          { detail: "Product unavailable" },
+          { status: options.productErrorStatus },
+        );
       const id = url.pathname.split("/").at(-1)!;
       result = {
         id,
@@ -284,8 +294,16 @@ describe("Polar protocol boundary", () => {
       { taxBehavior: null },
     ]) {
       upstream({ environment: "production", ...mismatch });
-      await expect(provider.plans()).rejects.toThrow("expected price, currency or tax behavior");
+      const plans = provider.plans();
+      await expect(plans).rejects.toBeInstanceOf(BillingCatalogUnavailableError);
+      await expect(plans).rejects.toThrow("expected price, currency or tax behavior");
     }
+  });
+  it.each([404, 503])("classifies a Polar catalog HTTP %i as unavailable", async (status) => {
+    upstream({ productErrorStatus: status });
+    await expect(createPolarBillingProvider(config).plans()).rejects.toBeInstanceOf(
+      BillingCatalogUnavailableError,
+    );
   });
   it("refuses a merchant-configured production trial", async () => {
     upstream({ environment: "production", trialInterval: "day", trialIntervalCount: 30 });

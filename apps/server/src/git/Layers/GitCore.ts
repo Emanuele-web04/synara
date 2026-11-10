@@ -4566,12 +4566,14 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
           { allowNonZeroExit: true },
         ).pipe(Effect.map((result) => result.code === 0));
 
+        // Match each path literally so a name like `[id].tsx` is not a glob.
+        const pathspecs = paths.map((path) => `:(literal)${path}`);
         yield* runGit(
           "GitCore.unstageFiles",
           cwd,
           headExists
-            ? ["reset", "-q", "HEAD", "--", ...paths]
-            : ["rm", "--cached", "-q", "--", ...paths],
+            ? ["reset", "-q", "HEAD", "--", ...pathspecs]
+            : ["rm", "--cached", "-q", "--", ...pathspecs],
         );
       });
 

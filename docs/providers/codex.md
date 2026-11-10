@@ -47,6 +47,12 @@ The default account uses the same overlay mechanism, with authentication and
 other shared state sourced from the configured Codex home (`~/.codex` by
 default).
 
+Codex can rediscover the source `config.toml` as project-local configuration and
+warn that user-only keys such as `notify` were ignored there. Synara already
+loads those settings from its user-level overlay, so this duplicate diagnostic
+does not add a runtime-warning row. Warnings for other project configuration
+files and actual configuration errors remain visible.
+
 ## Adding a second account
 
 1. In the **Codex accounts** list, choose **Add account**.

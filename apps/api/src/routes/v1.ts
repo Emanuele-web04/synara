@@ -1,5 +1,5 @@
 import { AccountBillingCheckoutRequest } from "@synara/contracts";
-import { decideRemoteBillingAccess } from "../billing/accessPolicy";
+import { decideRemoteBillingAccess, isProfileBillingEntitled } from "../billing/accessPolicy";
 import { BILLING_UNAVAILABLE, BillingError, type BillingService } from "../billing/service";
 import {
   RegisterLiveActivity,
@@ -384,6 +384,8 @@ export function createV1Routes(deps: {
   remoteTestUserIds?: readonly string[];
   remoteBetaAccessEnabled?: boolean;
   remoteBillingEnforced?: boolean;
+  /** Paid public profiles: only Alto subscribers can publish or be viewed. */
+  profileBillingEnforced?: boolean;
   verifier: AccountIdentityVerifier;
   grants: EnvironmentGrantIssuer;
   signing: ApiSigningService;
@@ -455,30 +457,36 @@ export function createV1Routes(deps: {
       setTimeout(() => void task(), delayMs).unref?.();
     });
   const v1 = new Hono();
+  /**
+   * A fresh Alto check for a signed-in action: 403 without a subscription, 503
+   * when Polar cannot be verified. An outage only refuses the action; it never
+   * changes ownership or anything stored.
+   */
+  async function requireFreshAltoAccess(
+    c: Context,
+    userId: string,
+    messages: { readonly subscriptionRequired: string; readonly unavailable: string },
+  ): Promise<Response | null> {
+    let status: Awaited<ReturnType<BillingService["access"]>> | undefined;
+    try {
+      status = await deps.billing?.access(userId);
+    } catch {
+      // Fall through: a missing status is refused as unavailable below.
+    }
+    const decision = decideRemoteBillingAccess({ enforcementEnabled: true, status });
+    if (decision.allowed) return null;
+    return decision.reason === "subscription_required"
+      ? errorResponse(c, 403, "subscription_required", messages.subscriptionRequired)
+      : errorResponse(c, 503, "billing_unavailable", messages.unavailable);
+  }
+
   // Enrollment is separate from authentication, host ownership and pairing consent.
   async function requireRemoteAccess(c: Context, userId: string): Promise<Response | null> {
     if (deps.remoteBillingEnforced === true) {
-      let status: Awaited<ReturnType<BillingService["access"]>> | undefined;
-      try {
-        status = await deps.billing?.access(userId);
-      } catch {
-        // An outage pauses remote access; it never changes host or device ownership.
-      }
-      const decision = decideRemoteBillingAccess({ enforcementEnabled: true, status });
-      if (decision.allowed) return null;
-      return decision.reason === "subscription_required"
-        ? errorResponse(
-            c,
-            403,
-            "subscription_required",
-            "Remote access requires an active Pro subscription",
-          )
-        : errorResponse(
-            c,
-            503,
-            "billing_unavailable",
-            "Remote access verification is temporarily unavailable",
-          );
+      return requireFreshAltoAccess(c, userId, {
+        subscriptionRequired: "Remote access requires an active Synara Alto subscription",
+        unavailable: "Remote access verification is temporarily unavailable",
+      });
     }
     if (deps.remoteBetaAccessEnabled === true || deps.remoteTestUserIds?.includes(userId) === true)
       return null;
@@ -488,6 +496,28 @@ export function createV1Routes(deps: {
       "not_host_owner",
       "Remote test access is not enabled for this account",
     );
+  }
+
+  // Paid public profiles. Viewing reads only the stored entitlement, so anonymous
+  // page traffic can never drive Polar round trips; publishing is a signed-in
+  // action and gets the same fresh check as remote admission.
+  async function profileOwnerEntitled(userId: string): Promise<boolean> {
+    if (deps.profileBillingEnforced !== true) return true;
+    try {
+      const stored = (await deps.billing?.storedAccess(userId)) ?? null;
+      return isProfileBillingEntitled({ enforcementEnabled: true, stored });
+    } catch {
+      // An unreadable ledger hides the page rather than showing it unpaid.
+      return false;
+    }
+  }
+
+  async function requireProfilePublishAccess(c: Context, userId: string): Promise<Response | null> {
+    if (deps.profileBillingEnforced !== true) return null;
+    return requireFreshAltoAccess(c, userId, {
+      subscriptionRequired: "Public profiles require an active Synara Alto subscription",
+      unavailable: "Subscription verification is temporarily unavailable",
+    });
   }
 
   /**
@@ -818,6 +848,7 @@ export function createV1Routes(deps: {
       ...(ssoAvatarUrl ? { image: ssoAvatarUrl } : {}),
       organization,
       profile: row ? toAccountProfile(row, resolvedAvatarUrl(row, ssoAvatarUrl)) : null,
+      publicProfileAvailable: Boolean(row?.public && (await profileOwnerEntitled(user.id))),
     };
   }
 
@@ -1159,6 +1190,14 @@ export function createV1Routes(deps: {
         "validation_failed",
         "Your profile handle changed. Reload your profile before saving.",
       );
+    }
+
+    // Going public is the paid step. Private saves (onboarding's handle setup)
+    // and edits to an already-public profile stay free; a lapsed owner's page
+    // is hidden at read time by GET /profiles/:handle instead.
+    if (parsed.public === true && existing?.public !== true) {
+      const denied = await requireProfilePublishAccess(c, session.userId);
+      if (denied) return denied;
     }
 
     // Omission preserves the stored pair; explicit null clears both columns.
@@ -1929,6 +1968,7 @@ export function createV1Routes(deps: {
     return c.json({ ok: true });
   });
   v1.get("/hosts/:id/live-activities", async (c) => {
+    c.header("Cache-Control", "no-store");
     if (!deps.liveActivities) return c.json({ turns: [] });
     try {
       const host = await hostKeys.withAuthenticatedHost(
@@ -1941,7 +1981,11 @@ export function createV1Routes(deps: {
         const denied = await requireRemoteAccess(c, host.ownerUserId);
         if (denied) return denied;
       }
-      return c.json({ turns: await deps.liveActivities.watches(host) });
+      const [turns, previews] = await Promise.all([
+        deps.liveActivities.watches(host),
+        deps.liveActivities.previewWatches(host),
+      ]);
+      return c.json({ turns, ...(previews.length > 0 ? { previews } : {}) });
     } catch (error) {
       return hostDomainError(c, error);
     }
@@ -2934,7 +2978,18 @@ export function createV1Routes(deps: {
     // the public URL spells it that way.
     const handle = c.req.param("handle").replace(/^@/, "").toLowerCase();
     const [row] = await db.select().from(profiles).where(eq(profiles.handle, handle)).limit(1);
-    if (!row || !row.public || (await accountDeletion.isDeleting(row.userId))) {
+    // An unpaid owner's page answers exactly like a private one, so the
+    // response never reveals whether a handle exists or why it is hidden.
+    // The two owner checks are independent reads, so they run together.
+    let visible = false;
+    if (row?.public) {
+      const [deleting, entitled] = await Promise.all([
+        accountDeletion.isDeleting(row.userId),
+        profileOwnerEntitled(row.userId),
+      ]);
+      visible = !deleting && entitled;
+    }
+    if (!row || !visible) {
       return errorResponse(c, 404, "profile_not_found", "No public profile by that handle");
     }
 

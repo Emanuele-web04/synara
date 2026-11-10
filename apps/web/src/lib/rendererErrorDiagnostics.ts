@@ -1,6 +1,4 @@
 import {
-  DESKTOP_RENDERER_ERROR_MESSAGE_MAX_LENGTH,
-  DESKTOP_RENDERER_ERROR_STACK_MAX_LENGTH,
   type DesktopRendererError,
   type DesktopDiagnosticActivity,
   type DesktopDiagnosticBreadcrumb,
@@ -8,7 +6,7 @@ import {
   ORCHESTRATION_WS_METHODS,
   WS_METHODS,
 } from "@synara/contracts";
-import { redactDiagnosticText } from "@synara/shared/diagnosticsRedaction";
+import { sanitizeDiagnosticError } from "@synara/shared/diagnosticsRedaction";
 
 export { diagnosticIssueReason } from "@synara/shared/diagnosticIssue";
 
@@ -90,18 +88,10 @@ export function installRendererErrorDiagnostics(): (() => void) | undefined {
     }
     if (!message) return;
     try {
-      diagnostics.reportError({
-        message: redactDiagnosticText(message, {
-          maxLength: DESKTOP_RENDERER_ERROR_MESSAGE_MAX_LENGTH,
-        }),
-        ...(stack
-          ? {
-              stack: redactDiagnosticText(stack, {
-                maxLength: DESKTOP_RENDERER_ERROR_STACK_MAX_LENGTH,
-              }),
-            }
-          : {}),
-      });
+      // IPC is a diagnostics boundary too; main independently enforces the same policy.
+      diagnostics.reportError(
+        sanitizeDiagnosticError({ source: "renderer", message, ...(stack ? { stack } : {}) }),
+      );
     } catch {
       // Diagnostics must never change exception handling or app behavior.
     }
