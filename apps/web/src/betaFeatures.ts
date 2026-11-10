@@ -40,7 +40,7 @@ export const GROUPS_ON = isBetaFeatureOn(GROUPS_BETA_FEATURE);
  */
 export const INBOX_ON = isBetaFeatureOn(INBOX_BETA_FEATURE);
 
-/** Account-saved Inbox history is Beta-only; Stable shows only the local recap. */
+/** Account-saved Inbox history is available in Stable and Beta. */
 export const ACCOUNT_INBOX_ON = isBetaFeatureOn(ACCOUNT_INBOX_BETA_FEATURE);
 
 /**

@@ -1,5 +1,32 @@
 # Changelog
 
+## 1.5.0 — 2026-11-10
+
+**Remote connections, Synara Alto, public profiles, and private Inbox history in Stable.**
+
+### Added
+
+- Pair Synara Desktop with another computer, iPhone, or iPad to open remote workspaces, steer chats, and handle approvals while the source is online. Manage Alto in Settings → Usage & limits.
+- Alto subscribers can publish a profile at `trysynara.com/@handle` and control its visibility. Private Inbox recaps are independent of the public profile.
+- Signed-in computers automatically save daily activity recaps, including project names and activity totals. Inbox → Saved recaps opens this history when the source is offline. Recaps exclude prompt and chat text. Deleted recaps are not automatically re-created.
+- Paired iOS clients can check, download and request a confirmed restart for packaged macOS desktop updates. Running work blocks installation. Optional completion previews are encrypted for opted-in devices.
+
+### Changed
+
+- Redesigned account sign-in and moved Alto plans into Usage & limits. The desktop interface uses English.
+- Product analytics distinguish Stable and Beta and report aggregate usage separately from technical diagnostics. Stable product analytics require opt-in. The Beta diagnostics policy remains separate.
+- MCP Connectors are available in Stable. The separate Remote early-access app retains its own data and update channel.
+
+### Fixed
+
+- Browser automation preserves in-flight requests. Unstaging a Git rename handles both paths.
+- Fixed Windows drive letters in terminal paths and local file URLs for Markdown images. Improved duration labels and the Restore defaults count for themes and fonts.
+- Subscription management remains available when Polar catalog reads fail. Codex avoids duplicate warnings from user configuration.
+
+### Verification
+
+The release checkpoint records local checks and their candidate. The tag workflow runs the full quality and server suites, installer builds, signing, provenance, Windows Defender and packaged startup before publication.
+
 ## 1.1.0 — 2026-11-02
 
 **More reliable recovery, opt-in continuation after usage limits, Spanish interface and safer attachments.**
