@@ -7,7 +7,7 @@ import { BETA_ASSET_PATHS, BRAND_ASSET_PATHS } from "./brand-assets.ts";
 import { stageDesktopRuntimeResources } from "./desktop-runtime-resources.ts";
 
 it.layer(NodeServices.layer)("stageDesktopRuntimeResources", (it) => {
-  it.effect("preserves runtime assets while leaving installer artwork in build resources", () =>
+  it.effect("preserves runtime assets while leaving bundle-only files in build resources", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
@@ -24,9 +24,13 @@ it.layer(NodeServices.layer)("stageDesktopRuntimeResources", (it) => {
         "entitlements.mac.plist",
         "nested/runtime.dat",
       ];
-      const installerFiles = ["dmgly/assets/dmg-background.png", "dmgly/assets/app-icon.png"];
+      const bundleOnlyFiles = [
+        "dmgly/assets/dmg-background.png",
+        "dmgly/assets/app-icon.png",
+        "localizations/zh-Hans.lproj/InfoPlist.strings",
+      ];
 
-      for (const file of [...runtimeFiles, ...installerFiles]) {
+      for (const file of [...runtimeFiles, ...bundleOnlyFiles]) {
         const target = path.join(buildResources, file);
         yield* fs.makeDirectory(path.dirname(target), { recursive: true });
         yield* fs.writeFileString(target, `contents of ${file}`);
@@ -45,7 +49,8 @@ it.layer(NodeServices.layer)("stageDesktopRuntimeResources", (it) => {
         );
       }
       assert.equal(yield* fs.exists(path.join(runtimeResources, "dmgly")), false);
-      for (const file of installerFiles) {
+      assert.equal(yield* fs.exists(path.join(runtimeResources, "localizations")), false);
+      for (const file of bundleOnlyFiles) {
         assert.equal(
           yield* fs.readFileString(path.join(buildResources, file)),
           `contents of ${file}`,

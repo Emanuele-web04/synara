@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { setLanguagePreference } from "~/i18n";
 
 import {
   describeBackgroundTaskStatus,
@@ -46,6 +47,24 @@ describe("describeBackgroundTaskStatus", () => {
 });
 
 describe("summarizeBackgroundTaskGroup", () => {
+  it("uses complete Chinese count messages for empty, single, and mixed groups", () => {
+    try {
+      setLanguagePreference("zh-CN");
+      expect(summarizeBackgroundTaskGroup([])).toBe("0 个后台任务");
+      expect(summarizeBackgroundTaskGroup([{ status: "running" }])).toBe(
+        "1 个后台任务 · 1 个正在运行",
+      );
+      expect(
+        summarizeBackgroundTaskGroup([
+          { status: "stopped" },
+          { status: "finished" },
+          { status: "finished" },
+        ]),
+      ).toBe("3 个后台任务 · 2 个已完成, 1 个已停止");
+    } finally {
+      setLanguagePreference("en");
+    }
+  });
   it("counts tasks by state in lifecycle order", () => {
     expect(
       summarizeBackgroundTaskGroup([

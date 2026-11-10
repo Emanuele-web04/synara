@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { setLanguagePreference } from "~/i18n";
 import {
   ApprovalRequestId,
   EventId,
@@ -11,6 +12,8 @@ import {
 import {
   buildInputNeededCopy,
   buildTaskCompletionCopy,
+  buildTerminalAttentionCopy,
+  buildTerminalCompletionCopy,
   collectCompletedThreadCandidates,
   collectInputNeededThreadCandidates,
   collectSnoozeReminderCandidates,
@@ -21,8 +24,8 @@ import {
 } from "./taskCompletion.logic";
 import type { Thread } from "../types";
 
-describe("notification copy", () => {
-  it("builds authored completion and attention text while preserving titles, summaries and keys", () => {
+describe("localized notification copy", () => {
+  it("localizes authored completion and attention text while preserving titles, summaries and keys", () => {
     const completion = {
       threadId: ThreadId.makeUnsafe("thread-1"),
       projectId: ProjectId.makeUnsafe("project-1"),
@@ -40,21 +43,57 @@ describe("notification copy", () => {
       requestId: "request-1",
       requestKind: "command",
     } as const;
-    expect(buildTaskCompletionCopy(completion)).toEqual({
+    const terminal = {
+      cliKind: null,
+      terminalId: "terminal-1",
+      threadId: completion.threadId,
       title: "Settings",
-      body: "Finished working.",
-    });
-    expect(
-      buildTaskCompletionCopy({ ...completion, title: "", assistantSummary: "Input needed" }).body,
-    ).toBe("Input needed");
-    expect(buildInputNeededCopy(attention)).toEqual({
-      title: "Input needed",
-      body: "Settings: Command approval requested.",
-    });
-    expect(buildInputNeededCopy({ ...attention, summary: "Settings" }).body).toBe(
-      "Settings: Settings",
-    );
-    expect(completedThreadNotificationKey(completion)).toBe("thread-1:turn-1");
+    };
+    try {
+      setLanguagePreference("es");
+      expect(buildTaskCompletionCopy(completion)).toEqual({
+        title: "Settings",
+        body: "Ha terminado de trabajar.",
+      });
+      expect(
+        buildTaskCompletionCopy({ ...completion, title: "", assistantSummary: "Input needed" }),
+      ).toEqual({
+        title: "Conversación sin título",
+        body: "Input needed",
+      });
+      expect(buildInputNeededCopy(attention)).toEqual({
+        title: "Se necesita información",
+        body: "Settings: Se solicita aprobar un comando.",
+      });
+      expect(buildInputNeededCopy({ ...attention, summary: "Settings" }).body).toBe(
+        "Settings: Settings",
+      );
+      expect(buildInputNeededCopy({ ...attention, kind: "user-input" })).toEqual({
+        title: "Se necesita información",
+        body: "Settings: Se solicita información del usuario.",
+      });
+      expect(buildTerminalCompletionCopy(terminal)).toEqual({
+        title: "Tarea de terminal completada",
+        body: "Settings ha terminado de trabajar.",
+      });
+      expect(buildTerminalAttentionCopy(terminal)).toEqual({
+        title: "Se necesita información en el terminal",
+        body: "Settings necesita tu atención.",
+      });
+      expect(completedThreadNotificationKey(completion)).toBe("thread-1:turn-1");
+      setLanguagePreference("en");
+      expect(buildTaskCompletionCopy(completion)).toEqual({
+        title: "Settings",
+        body: "Finished working.",
+      });
+      expect(buildInputNeededCopy(attention)).toEqual({
+        title: "Input needed",
+        body: "Settings: Command approval requested.",
+      });
+      expect(completedThreadNotificationKey(completion)).toBe("thread-1:turn-1");
+    } finally {
+      setLanguagePreference("en");
+    }
   });
 });
 

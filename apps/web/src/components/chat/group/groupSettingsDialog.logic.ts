@@ -12,6 +12,7 @@ import {
 import { MEMORY_NOTES_DOCUMENT_PREFIX } from "@synara/shared/projectAgent";
 
 import { isDefaultGroupCoordinatorName } from "../../../lib/groupCoordinatorName";
+import { getFormatLocale } from "~/i18n";
 import { deepEqualJson } from "../../../storeNormalization";
 
 export const GROUP_SETTINGS_SECTIONS = ["general", "memory", "environment", "plugins"] as const;
@@ -40,8 +41,12 @@ export function clampCharacterCount(value: string, max: number): number {
 
 // The counter tells the truth about how long the text is — an over-limit value
 // reads e.g. "8,412 / 8,000" in destructive color, never a clamped "8,000".
-export function formatCharacterCount(value: string, max: number): string {
-  return `${Math.max(0, value.length).toLocaleString("en-US")} / ${max.toLocaleString("en-US")}`;
+export function formatCharacterCount(
+  value: string,
+  max: number,
+  formatLocale = getFormatLocale(),
+): string {
+  return `${Math.max(0, value.length).toLocaleString(formatLocale)} / ${max.toLocaleString(formatLocale)}`;
 }
 
 /**

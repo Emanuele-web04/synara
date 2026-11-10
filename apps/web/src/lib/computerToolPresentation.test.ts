@@ -5,7 +5,7 @@
 
 import type { ComputerWindow } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
-import { t } from "~/i18n";
+import { setLanguagePreference, t } from "~/i18n";
 
 import {
   computerToolName,
@@ -38,38 +38,74 @@ describe("computerToolName", () => {
 });
 
 describe("describeComputerToolCall", () => {
-  it("describes a requested English source through a source translator", () => {
+  it("keeps a requested English source description separate from Spanish UI presentation", () => {
     const input = {
       toolName: "computer_wait",
       args: { duration_ms: 2_000, app: "Settings", text: "/repo/Settings" },
     };
     const sourceTranslate: typeof t = (message, values) => t(message, { ...values, lng: "en" });
-    const source = describeComputerToolCall(input, sourceTranslate);
-    expect(source?.summary).toBe("Wait for 2 seconds in Settings");
-    expect(source?.tool).toBe("computer_wait");
-    expect(source?.params).toContainEqual({ name: "Text", value: "/repo/Settings" });
-    const nested = {
-      toolName: "computer_inspect",
-      args: { tool: "computer_zoom", arguments: { x: 10, y: 20, window_id: "win-7" } },
-      windows: [{ ...SAFARI, title: "Settings" }],
-    };
-    expect(describeComputerToolCall(nested, sourceTranslate)?.summary).toBe(
-      "Zoom into a window at (10, 20) in Safari — Settings",
-    );
+    try {
+      setLanguagePreference("es");
+      expect(describeComputerToolCall(input)?.summary).toBe(
+        "Esperar durante 2 segundos en Settings",
+      );
+      const source = describeComputerToolCall(input, sourceTranslate);
+      expect(source?.summary).toBe("Wait for 2 seconds in Settings");
+      expect(source?.tool).toBe("computer_wait");
+      expect(source?.params).toContainEqual({ name: "Text", value: "/repo/Settings" });
+      const nested = {
+        toolName: "computer_inspect",
+        args: { tool: "computer_zoom", arguments: { x: 10, y: 20, window_id: "win-7" } },
+        windows: [{ ...SAFARI, title: "Settings" }],
+      };
+      expect(describeComputerToolCall(nested, sourceTranslate)?.summary).toBe(
+        "Zoom into a window at (10, 20) in Safari — Settings",
+      );
+      expect(describeComputerToolCall(nested)?.summary).toBe(
+        "Ampliar una ventana en (10, 20) en Safari — Settings",
+      );
+      expect(describeComputerToolCall(input)?.summary).toBe(
+        "Esperar durante 2 segundos en Settings",
+      );
+    } finally {
+      setLanguagePreference("en");
+    }
   });
 
-  it("describes generated action labels without translating target names or payloads", () => {
+  it("localizes generated action labels without translating target names or payloads", () => {
     const input = {
       toolName: "mcp__synara__computer_click",
       args: { label: "Settings", window_id: "win-7", text: "Settings" },
       windows: [{ ...SAFARI, title: "Settings" }],
     };
-    const described = describeComputerToolCall(input);
-    expect(described?.tool).toBe("computer_click");
-    expect(described?.summary).toBe("Click on “Settings” in Safari — Settings");
-    expect(
-      localizedComputerPermissions(["screenRecording", "accessibility", "screenRecording"]),
-    ).toBe("Accessibility and Screen Recording");
+    try {
+      setLanguagePreference("zh-CN");
+      const chinese = describeComputerToolCall(input);
+      expect(chinese?.tool).toBe("computer_click");
+      expect(chinese?.summary).toBe("在 Safari — Settings 的“Settings”上点击");
+      expect(chinese?.params).toContainEqual({ name: "文本", value: "Settings" });
+      expect(
+        describeComputerToolCall({
+          toolName: "computer_browser_upload",
+          args: { files: ["Settings", "Archive"] },
+        })?.summary,
+      ).toBe("在浏览器中附加 2 个文件");
+      expect(
+        localizedComputerPermissions(["screenRecording", "accessibility", "screenRecording"]),
+      ).toBe("辅助功能和屏幕录制");
+      expect(
+        describeComputerToolCall({
+          toolName: "computer_wait",
+          args: { duration_ms: 2000, app: "Settings" },
+        })?.summary,
+      ).toBe("在 Settings 中等待 2 秒");
+      setLanguagePreference("en");
+      expect(describeComputerToolCall(input)?.summary).toBe(
+        "Click on “Settings” in Safari — Settings",
+      );
+    } finally {
+      setLanguagePreference("en");
+    }
   });
 
   it("says verb, coordinate and window instead of the raw call", () => {
