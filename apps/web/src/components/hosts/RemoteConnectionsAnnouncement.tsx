@@ -18,13 +18,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate, useRouterState } from "@tanstack/react-router";
 import { Schema } from "effect";
-import {
-  useCallback,
-  useEffect,
-  useState,
-  type ButtonHTMLAttributes,
-  type ReactElement,
-} from "react";
+import { useEffect, useState, type ButtonHTMLAttributes, type ReactElement } from "react";
 
 import { useAccount } from "~/hooks/useAccount";
 import { useLocalStorage } from "~/hooks/useLocalStorage";
@@ -86,9 +80,8 @@ function useClearOfOutsideDialogs(wanted: boolean): boolean {
   });
   if (!wanted || account.statusQuery.isPending) return false;
   if (!signedIn) return true;
-  // A failed enrollment read leaves no consent to show, same as the prompt itself.
-  if (enrollment.isError) return true;
-  return enrollment.isSuccess && !enrollment.data;
+  // The consent dialog uses cached enrollment even when a refetch fails.
+  return enrollment.data === undefined ? enrollment.isError : !enrollment.data;
 }
 
 export function RemoteConnectionsAnnouncement() {

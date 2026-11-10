@@ -25,6 +25,7 @@ const fixture = vi.hoisted(() => ({
   billing: { access: "none" } as Pick<AccountBillingStatus, "access">,
   billingResponse: null as Promise<Pick<AccountBillingStatus, "access">> | null,
   enrollment: { host: null } as Partial<HostEnrollment>,
+  enrollmentUnavailable: false,
 }));
 vi.mock("@tanstack/react-router", () => ({
   useNavigate: () => fixture.navigate,
@@ -38,7 +39,10 @@ vi.mock("~/lib/hosts/queries", async (importOriginal) => ({
   remoteHostEnrollmentQueryOptions: (input: { enabled?: boolean }) => ({
     queryKey: ["hosts", "enrollment"],
     enabled: input.enabled ?? true,
-    queryFn: async () => fixture.enrollment,
+    queryFn: async () => {
+      if (fixture.enrollmentUnavailable) throw new Error("Host enrollment unavailable");
+      return fixture.enrollment;
+    },
   }),
 }));
 vi.mock("~/lib/hosts/executionContext", async (importOriginal) => ({
@@ -115,6 +119,7 @@ describe("RemoteConnectionsAnnouncement", () => {
     fixture.billing = { access: "none" };
     fixture.billingResponse = null;
     fixture.enrollment = { host: null };
+    fixture.enrollmentUnavailable = false;
     localStorage.removeItem("test:other-startup-hint");
     useOnboardingDialogStore.setState({
       isOpen: false,
@@ -201,7 +206,15 @@ describe("RemoteConnectionsAnnouncement", () => {
     await new Promise((resolve) => setTimeout(resolve, 300));
     await expect.element(page.getByRole("dialog")).not.toBeInTheDocument();
 
-    clients.at(-1)?.setQueryData(["hosts", "enrollment"], {
+    const client = clients.at(-1)!;
+    fixture.enrollmentUnavailable = true;
+    await expect(
+      client.refetchQueries({ queryKey: ["hosts", "enrollment"] }, { throwOnError: true }),
+    ).rejects.toThrow("Host enrollment unavailable");
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    await expect.element(page.getByRole("dialog")).not.toBeInTheDocument();
+
+    client.setQueryData(["hosts", "enrollment"], {
       ...consentOwed,
       discoverabilityAcknowledged: true,
     });
