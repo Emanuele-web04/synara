@@ -1183,11 +1183,11 @@ describe("account cleanup", () => {
 });
 
 describe("private saved recaps", () => {
-  it("refuses Stable save, history and deletion before reading account credentials", async () => {
+  it("refuses save, history and deletion when the host gate is closed", async () => {
     vi.mocked(isServerBetaFeatureEnabled).mockReturnValue(false);
     const session = sessionFor(makeBaseDir(), makeClient({}));
     const denied = {
-      message: "Saved Inbox history is available in Synara Beta.",
+      message: "Saved Inbox history is unavailable on this host.",
       code: "FEATURE_UNAVAILABLE",
     };
     expect(() =>
