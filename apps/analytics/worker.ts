@@ -15,9 +15,12 @@
 // Deploy: `cd apps/analytics && wrangler deploy`
 
 import {
+  decodeAnonymousProductRecord,
   isProductAnalyticsCommand,
   PRODUCT_COHORT_WINDOWS,
+  ANONYMOUS_PRODUCT_RETRY_DAYS,
   type ProductAnalyticsCohortStage,
+  type AnonymousProductRecord,
 } from "@synara/contracts/productAnalytics";
 
 import {
@@ -2072,6 +2075,7 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
       reasonRows,
       hostExecutions,
       installerDownloads,
+      anonymousEvents,
     ] = await Promise.all([
       env.DB.prepare(
         `SELECT COUNT(*) AS events, COUNT(DISTINCT install_id) AS installations
@@ -2245,6 +2249,33 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
         }>(),
       readHostUsage(env.DB, productFilters.from, productFilters.to, productFilters.channel),
       loadInstallerDownloads(env.DB, productFilters),
+      productFilters.surface && productFilters.surface !== "desktop"
+        ? null
+        : env.DB.prepare(
+            `SELECT day,
+                    SUM(CASE WHEN event = 'remote.pairing-approved' THEN count ELSE 0 END) AS pairings,
+                    SUM(CASE WHEN event = 'remote.connection-succeeded' THEN count ELSE 0 END) AS connections,
+                    SUM(CASE WHEN event = 'remote.reconnection-succeeded' THEN count ELSE 0 END) AS reconnections,
+                    SUM(CASE WHEN event = 'remote.connection-timeout' THEN count ELSE 0 END) AS timeouts,
+                    SUM(CASE WHEN event = 'app.crash' THEN count ELSE 0 END) AS crashes
+             FROM anonymous_product_daily
+             WHERE day BETWEEN ? AND ? AND (? IS NULL OR channel = ?)
+             GROUP BY day ORDER BY day DESC`,
+          )
+            .bind(
+              productFilters.from,
+              productFilters.to,
+              productFilters.channel,
+              productFilters.channel,
+            )
+            .all<{
+              day: string;
+              pairings: number;
+              connections: number;
+              reconnections: number;
+              timeouts: number;
+              crashes: number;
+            }>(),
     ]);
 
     const dayCount = Math.floor(
@@ -2268,6 +2299,7 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
       activeInstallations: totals?.installations ?? 0,
       hostExecutions,
       installerDownloads,
+      anonymousEvents: anonymousEvents?.results ?? null,
       activeUsers: {
         day: activeRows?.day ?? 0,
         week: activeRows?.week ?? 0,
@@ -2468,6 +2500,36 @@ export default {
       } catch {
         return new Response("bad request", { status: 400 });
       }
+      if (isRecord(body) && Object.hasOwn(body, "anonymousEvents")) {
+        if (
+          Object.keys(body).length !== 1 ||
+          !Array.isArray(body.anonymousEvents) ||
+          body.anonymousEvents.length === 0 ||
+          body.anonymousEvents.length > PRODUCT_MAX_EVENTS_PER_POST
+        )
+          return new Response("bad anonymous product batch", { status: 400 });
+        let records: AnonymousProductRecord[];
+        try {
+          records = body.anonymousEvents.map((record) => decodeAnonymousProductRecord(record));
+        } catch {
+          return new Response("bad anonymous product record", { status: 400 });
+        }
+        const now = Date.now();
+        const today = new Date(now).toISOString().slice(0, 10);
+        const cutoff = new Date(now - ANONYMOUS_PRODUCT_RETRY_DAYS * DAY_MS)
+          .toISOString()
+          .slice(0, 10);
+        if (records.some((record) => record.ts < cutoff || record.ts > today))
+          return new Response("anonymous product day out of range", { status: 400 });
+        await env.DB.batch(
+          records.map((record) =>
+            env.DB.prepare(
+              "INSERT OR IGNORE INTO anonymous_product_receipts (receipt_id, day, channel, event) VALUES (?, ?, ?, ?)",
+            ).bind(record.id.toLowerCase(), record.ts, record.channel, record.event),
+          ),
+        );
+        return Response.json({ stored: true });
+      }
       if (isRecord(body) && body.hostUsage !== undefined) {
         const window = normalizeHostUsageWindow(body.hostUsage);
         if (!window || body.events !== undefined)
@@ -2653,6 +2715,7 @@ export default {
       {
         table: "product_cohorts",
         key: "rowid",
+        orderBy: "cohort_day",
         where: "cohort_day < ?",
         cutoffs: [before(COHORT_RETENTION_DAYS).slice(0, 10)],
       },
@@ -2668,12 +2731,26 @@ export default {
         where: "day < ?",
         cutoffs: [before(HOST_USAGE_RETENTION_DAYS).slice(0, 10)],
       },
+      {
+        table: "anonymous_product_receipts",
+        key: "receipt_id",
+        orderBy: "day",
+        where: "day < ?",
+        cutoffs: [before(ANONYMOUS_PRODUCT_RETRY_DAYS).slice(0, 10)],
+      },
+      {
+        table: "anonymous_product_daily",
+        key: "rowid",
+        orderBy: "day",
+        where: "day < ?",
+        cutoffs: [before(PRODUCT_RETENTION_DAYS).slice(0, 10)],
+      },
     ];
-    for (const { table, key, where, cutoffs } of retention) {
+    for (const { table, key, where, cutoffs, orderBy = "received_at" } of retention) {
       for (let batch = 0; batch < RETENTION_MAX_BATCHES; batch += 1) {
         const result = await env.DB.prepare(
           `DELETE FROM ${table} WHERE ${key} IN (
-             SELECT ${key} FROM ${table} WHERE ${where} ORDER BY ${table === "product_cohorts" ? "cohort_day" : "received_at"} LIMIT ?
+             SELECT ${key} FROM ${table} WHERE ${where} ORDER BY ${orderBy} LIMIT ?
            )`,
         )
           .bind(...cutoffs, RETENTION_DELETE_BATCH_SIZE)

@@ -129,6 +129,117 @@ it("defaults off, reconstructs allowlisted events, and clears queued data on opt
   restored.dispose();
 });
 
+it("sends Remote successes without identity, separately from product events, and replays one receipt", async () => {
+  const homeDir = makeRoot();
+  const requests: Record<string, unknown>[] = [];
+  const fetcher = vi.fn(async (_url: RequestInfo | URL, init?: RequestInit) => {
+    const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+    requests.push(body);
+    if (requests.length === 1) return new Response(null, { status: 503 });
+    return Response.json({ stored: true });
+  });
+  const makeAnalytics = () =>
+    new ProductAnalytics({
+      homeDir,
+      channel: "stable",
+      appVersion: "1.5.1",
+      platform: "darwin",
+      fetcher,
+    });
+  const analytics = makeAnalytics();
+  analytics.track({ event: "remote.pairing-approved", outcome: "succeeded" });
+  expect(existsSync(join(homeDir, "product-analytics", "events.json"))).toBe(false);
+  analytics.setEnabled(true);
+  analytics.track({
+    event: "remote.pairing-approved",
+    outcome: "succeeded",
+    email: "private@example.invalid",
+    hostId: "private-host",
+  });
+  analytics.track({ event: "app.open", outcome: "succeeded" });
+  const stored = JSON.parse(
+    readFileSync(join(homeDir, "product-analytics", "events.json"), "utf8"),
+  );
+  const receipt = stored[0];
+  expect(Object.keys(receipt).sort()).toEqual(["channel", "event", "id", "ts"]);
+  expect(receipt.ts).toBe(new Date().toISOString().slice(0, 10));
+  await analytics.flush();
+  analytics.dispose();
+  const restored = makeAnalytics();
+  await restored.flush();
+  await vi.waitFor(() => expect(requests).toHaveLength(3));
+  expect(requests[0]).toEqual({ anonymousEvents: [receipt] });
+  expect(requests[1]).toEqual(requests[0]);
+  expect(requests[2]).toHaveProperty("events");
+  expect(JSON.stringify(requests[0])).not.toMatch(/private|installId|platform|appVersion/);
+  restored.track({ event: "remote.connection-succeeded", outcome: "succeeded" });
+  restored.setEnabled(false);
+  await restored.flush();
+  expect(existsSync(join(homeDir, "product-analytics", "events.json"))).toBe(false);
+  restored.dispose();
+});
+
+it.each([
+  ["2026-11-10T23:59:59.999Z", 1],
+  ["2026-11-11T00:00:00.000Z", 0],
+])("expires anonymous retries at the receiver's UTC day boundary at %s", async (now, requests) => {
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date("2026-11-03T18:00:00.000Z"));
+  const homeDir = makeRoot();
+  const fetcher = vi.fn(async (_url: RequestInfo | URL, _init?: RequestInit) =>
+    Response.json({ stored: true }),
+  );
+  const options = {
+    homeDir,
+    channel: "stable" as const,
+    appVersion: "1.5.1",
+    platform: "darwin",
+    fetcher,
+  };
+  const analytics = new ProductAnalytics(options);
+  analytics.setEnabled(true);
+  analytics.track({ event: "app.crash", outcome: "failed" });
+  analytics.dispose();
+
+  vi.setSystemTime(new Date(now));
+  const restored = new ProductAnalytics(options);
+  try {
+    await restored.flush();
+    expect(fetcher).toHaveBeenCalledTimes(requests);
+  } finally {
+    restored.dispose();
+  }
+});
+
+it("queues only a fixed crash counter with consent and no error details", async () => {
+  const homeDir = makeRoot();
+  const fetcher = vi.fn(async (_url: RequestInfo | URL, _init?: RequestInit) =>
+    Response.json({ stored: true }),
+  );
+  const analytics = new ProductAnalytics({
+    homeDir,
+    channel: "stable",
+    appVersion: "1.5.1",
+    platform: "darwin",
+    fetcher,
+  });
+  analytics.setEnabled(true);
+  analytics.track({ event: "app.crash", outcome: "succeeded" });
+  analytics.track({
+    event: "app.crash",
+    outcome: "failed",
+    stack: "/private/document",
+    message: "private error",
+  });
+  await analytics.flush();
+  expect(fetcher).toHaveBeenCalledOnce();
+  const sent = JSON.parse(String(fetcher.mock.calls[0]?.[1]?.body));
+  expect(sent.anonymousEvents).toHaveLength(1);
+  expect(sent.anonymousEvents[0]).toMatchObject({ event: "app.crash", channel: "stable" });
+  expect(Object.keys(sent.anonymousEvents[0]).sort()).toEqual(["channel", "event", "id", "ts"]);
+  analytics.dispose();
+});
+
 it("rejects invalid enums and out-of-range counters before they enter the queue", async () => {
   const homeDir = makeRoot();
   const fetcher = vi.fn(
