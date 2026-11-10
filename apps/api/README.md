@@ -54,7 +54,10 @@ On desktop, **Settings → Connections → View Alto plans** opens the existing
 Subscription panel when checkout is available and the account has no paid
 Remote access.
 The same Connections screen has **Connect a device** for pairing once the host
-allows it. Subscription purchases are managed on desktop through Polar.
+allows it. Customers can start Polar checkout from desktop or the Synara pricing
+site. The website verifies the email code before opening a checkout for that
+account. Only the exact checkout success origin can call the web checkout
+routes, and the site receives the Polar redirect without an account token.
 A subscription never authorizes a host or device by itself, revokes a pairing,
 or deletes chat history. `POLAR_REMOTE_ACCESS_ENFORCED` is a separate, strict
 boolean and defaults to `false`; enabling it requires configured billing and

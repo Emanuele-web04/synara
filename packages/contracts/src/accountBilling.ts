@@ -1,4 +1,5 @@
 import { Schema } from "effect";
+import { OtpAuthenticateRequest } from "./account";
 
 /** Billing is separate from account ownership and device authorization. */
 export const AccountBillingEnvironment = Schema.Literals(["sandbox", "production"]);
@@ -9,6 +10,10 @@ export const AccountBillingCheckoutRequest = Schema.Struct({
   interval: AccountBillingInterval,
 });
 export type AccountBillingCheckoutRequest = typeof AccountBillingCheckoutRequest.Type;
+export const AccountWebCheckoutRequest = Schema.Struct({
+  ...OtpAuthenticateRequest.fields,
+  ...AccountBillingCheckoutRequest.fields,
+});
 export const AccountBillingPlan = Schema.Struct({
   interval: AccountBillingInterval,
   /** Integer in the currency's smallest unit; never a formatted display price. */

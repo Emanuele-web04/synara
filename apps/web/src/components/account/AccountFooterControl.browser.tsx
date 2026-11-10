@@ -1,6 +1,7 @@
 import "../../index.css";
 
 import type { AccountMe } from "@synara/contracts";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { page } from "vitest/browser";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";
@@ -17,6 +18,7 @@ vi.mock("~/hooks/useAccount", () => ({
 vi.mock("@tanstack/react-router", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@tanstack/react-router")>()),
   useNavigate: () => fixture.navigate,
+  useRouterState: () => false,
 }));
 vi.mock("~/lib/linkChips", () => ({ openExternalLink: fixture.openExternalLink }));
 
@@ -40,7 +42,12 @@ beforeEach(() => {
 });
 
 async function openAccountMenu() {
-  await render(<AccountFooterControl />);
+  // The account button carries the one-time Remote Connections hint, which reads queries.
+  await render(
+    <QueryClientProvider client={new QueryClient()}>
+      <AccountFooterControl />
+    </QueryClientProvider>,
+  );
   await page.getByRole("button", { name: "Account: Ada Lovelace" }).click();
 }
 

@@ -1123,6 +1123,14 @@ export class WsTransport {
       return result;
     } catch (error) {
       if (activity) recordRendererActivity(activity, "failed");
+      if (
+        this.analyticsMode === "remote" &&
+        method === WS_METHODS.serverGetEnvironment &&
+        error instanceof WsTransportRequestInterruptedError &&
+        error.code === "WS_REQUEST_TIMEOUT"
+      ) {
+        trackProductAnalytics({ event: "remote.connection-timeout", outcome: "failed" });
+      }
       if (productActivity) {
         const cancelled = options?.signal?.aborted === true;
         trackProductAnalytics({
@@ -1736,12 +1744,22 @@ export class WsTransport {
         this.adoptNegotiation(compatibility);
         this.noteFeatureSessionAdopted();
         this.setState("open");
-        trackProductAnalytics({
-          event: analyticsEvent,
-          outcome: "succeeded",
-          mode: this.analyticsMode,
-          durationMs: Math.round(performance.now() - startedAt),
-        });
+        if (this.analyticsMode === "remote") {
+          trackProductAnalytics({
+            event:
+              sessionVersion === 1
+                ? "remote.connection-succeeded"
+                : "remote.reconnection-succeeded",
+            outcome: "succeeded",
+          });
+        } else {
+          trackProductAnalytics({
+            event: analyticsEvent,
+            outcome: "succeeded",
+            mode: this.analyticsMode,
+            durationMs: Math.round(performance.now() - startedAt),
+          });
+        }
       }
       return client;
     })().catch((error) => {

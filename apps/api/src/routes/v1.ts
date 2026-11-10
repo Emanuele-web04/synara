@@ -1,4 +1,4 @@
-import { AccountBillingCheckoutRequest } from "@synara/contracts";
+import { AccountBillingCheckoutRequest, AccountWebCheckoutRequest } from "@synara/contracts";
 import { decideRemoteBillingAccess, isProfileBillingEntitled } from "../billing/accessPolicy";
 import { BILLING_UNAVAILABLE, BillingError, type BillingService } from "../billing/service";
 import {
@@ -83,6 +83,7 @@ import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import { Schema } from "effect";
 import { Hono } from "hono";
 import type { Context } from "hono";
+import { cors } from "hono/cors";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
 import { createHash, timingSafeEqual } from "node:crypto";
 import type { AvatarStorage } from "../avatarStorage";
@@ -378,6 +379,7 @@ function authTokensBody(auth_: AuthTokens): AuthTokensResponse {
 export function createV1Routes(deps: {
   accountDeletion?: AccountDeletionService;
   billing?: BillingService;
+  webCheckoutOrigin?: string;
   liveActivities?: LiveActivityService;
   tunnels?: TunnelCoordinator;
   apiIssuer?: string;
@@ -641,13 +643,9 @@ export function createV1Routes(deps: {
    * (JWKS signature + expiry), followed by our durable session tombstone.
    * Provider revocation independently prevents subsequent token refresh.
    */
-  async function getDeviceSession(
-    c: Context,
+  async function verifyDeviceSession(
+    token: string,
   ): Promise<{ userId: string; sessionId: string; orgId?: string } | null> {
-    const authorization = c.req.header("authorization");
-    const match = authorization ? /^Bearer\s+(.+)$/i.exec(authorization) : null;
-    const token = match?.[1];
-    if (!token) return null;
     let verified: Awaited<ReturnType<typeof verifier.verifyAccessToken>>;
     try {
       verified = await verifier.verifyAccessToken(token);
@@ -660,6 +658,12 @@ export function createV1Routes(deps: {
       (await accountDeletion.isDeleting(verified.userId))
       ? null
       : verified;
+  }
+
+  async function getDeviceSession(c: Context) {
+    const authorization = c.req.header("authorization");
+    const token = authorization ? /^Bearer\s+(.+)$/i.exec(authorization)?.[1] : undefined;
+    return token ? verifyDeviceSession(token) : null;
   }
 
   /**
@@ -883,19 +887,35 @@ export function createV1Routes(deps: {
     c.header("Cache-Control", "private, no-store");
     await next();
   });
-  async function billingRequest(c: Context, action: (userId: string) => Promise<unknown>) {
-    const session = await requireUserSession(c);
-    if (session instanceof Response) return session;
+  if (deps.webCheckoutOrigin) {
+    v1.use(
+      "/billing/web-checkout/*",
+      cors({
+        origin: deps.webCheckoutOrigin,
+        allowMethods: ["POST"],
+        allowHeaders: ["Content-Type"],
+      }),
+    );
+  }
+  async function billingAction(
+    c: Context,
+    userId: string,
+    action: (userId: string) => Promise<unknown>,
+  ) {
     const limiter = c.req.method === "GET" ? billingLimiter : billingMutationLimiter;
-    if (!limiter.tryConsume(session.userId))
+    if (!limiter.tryConsume(userId))
       return errorResponse(c, 429, "rate_limited", "Too many billing requests");
     try {
-      return c.json(await action(session.userId));
+      return c.json(await action(userId));
     } catch (error) {
       if (error instanceof BillingError)
         return errorResponse(c, error.status, "validation_failed", error.message);
       return errorResponse(c, 503, "internal_error", "Billing is temporarily unavailable");
     }
+  }
+  async function billingRequest(c: Context, action: (userId: string) => Promise<unknown>) {
+    const session = await requireUserSession(c);
+    return session instanceof Response ? session : billingAction(c, session.userId, action);
   }
   v1.get("/billing/status", (c) =>
     billingRequest(
@@ -3206,7 +3226,7 @@ export function createV1Routes(deps: {
    * The provider's response contains the code itself; the implementation
    * parses it allowlist-style and the code never reaches this function.
    */
-  v1.post("/auth/otp/send", async (c) => {
+  async function sendOtp(c: Context) {
     if (!otpSendRateLimiter.tryConsume(callerIp(c))) {
       return errorResponse(c, 429, "rate_limited", "Too many code requests — wait a minute");
     }
@@ -3234,7 +3254,8 @@ export function createV1Routes(deps: {
     } catch (error) {
       return authErrorResponse(c, error);
     }
-  });
+  }
+  v1.post("/auth/otp/send", sendOtp);
 
   /**
    * Redeems the emailed 6-digit code for a token pair — the one sign-in AND
@@ -3266,6 +3287,48 @@ export function createV1Routes(deps: {
     } catch (error) {
       return authErrorResponse(c, error);
     }
+  });
+
+  function isWebCheckoutOrigin(c: Context): boolean {
+    return Boolean(deps.webCheckoutOrigin && c.req.header("origin") === deps.webCheckoutOrigin);
+  }
+
+  v1.post("/billing/web-checkout/code", (c) => {
+    if (!isWebCheckoutOrigin(c))
+      return errorResponse(c, 403, "unauthorized", "Checkout origin is not allowed");
+    if (!deps.billing) return errorResponse(c, 503, "internal_error", "Billing is not configured");
+    return sendOtp(c);
+  });
+
+  v1.post("/billing/web-checkout/start", async (c) => {
+    if (!isWebCheckoutOrigin(c))
+      return errorResponse(c, 403, "unauthorized", "Checkout origin is not allowed");
+    const billing = deps.billing;
+    if (!billing) return errorResponse(c, 503, "internal_error", "Billing is not configured");
+    if (!otpAuthenticateRateLimiter.tryConsume(callerIp(c)))
+      return errorResponse(c, 429, "rate_limited", "Too many attempts — wait a minute and retry");
+    const body = await c.req.json().catch(() => null);
+    if (!Schema.is(AccountWebCheckoutRequest)(body))
+      return errorResponse(c, 400, "validation_failed", "An email, code and plan are required");
+
+    let auth: AuthTokens;
+    try {
+      auth = await verifier.authenticateWithOtp({
+        email: body.email,
+        code: body.code,
+        context: authContext(c),
+      });
+    } catch (error) {
+      return authErrorResponse(c, error);
+    }
+    const session = await verifyDeviceSession(auth.accessToken);
+    if (!session || session.userId !== auth.user.id)
+      return errorResponse(c, 401, "unauthorized", "Not authenticated");
+
+    // The site receives only a checkout redirect. Account credentials stay in this process.
+    return billingAction(c, session.userId, (userId) =>
+      billing.checkout(userId, auth.user.email, body.interval, sanitizeForwardableIp(callerIp(c))),
+    );
   });
 
   /**
