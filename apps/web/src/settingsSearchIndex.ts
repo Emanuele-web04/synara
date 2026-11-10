@@ -4,6 +4,7 @@
 // Layer: Route/UI support
 // Exports: entry type, the index, section label lookup, and the ranking helper
 
+import { COMPOSER_PREDICTIONS_ON } from "~/betaFeatures";
 import { rankProviderDiscoveryItems } from "~/lib/providerDiscovery";
 import { i18n, t } from "~/i18n";
 import {
@@ -450,6 +451,15 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     section: "behavior",
     title: "settings:effortSlider",
     keywords: "settings:showReasoningEffortAsASliderInTheComposer",
+  },
+  {
+    target: "setting-composer-suggestions",
+    id: "behavior:composer-suggestions",
+    section: "behavior",
+    title: "settings:showSuggestions",
+    keywords: "settings:showAPredictedNextMessageInTheEmptyComposerAfter",
+    // Beta only: Stable renders no row to land on.
+    applies: () => COMPOSER_PREDICTIONS_ON,
   },
   {
     target: "setting-automatically-open-simulator",

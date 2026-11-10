@@ -8,7 +8,7 @@ import { ComposerPromptEditor, type ComposerPromptEditorHandle } from "./Compose
 
 type EditorProps = ComponentProps<typeof ComposerPromptEditor>;
 
-async function mountEditor() {
+async function mountEditor(initial: Partial<EditorProps> = {}) {
   const ref = createRef<ComposerPromptEditorHandle>();
   let props: EditorProps = {
     value: "Original draft",
@@ -20,6 +20,7 @@ async function mountEditor() {
     onRemoveTerminalContext: vi.fn(),
     onChange: vi.fn(),
     onPaste: vi.fn(),
+    ...initial,
   };
   const content = () => (
     <>
@@ -183,5 +184,79 @@ describe("ComposerPromptEditor focus ownership", () => {
       selectionCollapsed: true,
     });
     expect(window.getSelection()?.anchorOffset).toBe("Restored draft".length);
+  });
+});
+
+const overlay = () => document.querySelector<HTMLElement>('[data-testid="composer-prediction"]');
+
+describe("ComposerPromptEditor prediction overlay", () => {
+  afterEach(() => {
+    document.body.innerHTML = "";
+  });
+
+  const prediction = "Fix the fixture and rerun that test.";
+
+  it("shows the ghost text and a Tab chip instead of the placeholder", async () => {
+    const mounted = await mountEditor({ value: "", cursor: 0, prediction });
+
+    await expect.poll(() => overlay()?.textContent).toBe(`${prediction}Tab`);
+    expect(overlay()?.querySelector('kbd[aria-label="Tab"]')).not.toBeNull();
+    expect(document.body.textContent).not.toContain("Write a message");
+    expect(mounted.editor.getAttribute("aria-placeholder")).toBe(prediction);
+    // Drawn over the editor only: the document and the draft stay empty.
+    expect(mounted.editor.textContent).toBe("");
+    expect(mounted.ref.current?.readSnapshot().value).toBe("");
+  });
+
+  it("keeps the normal placeholder when there is no prediction", async () => {
+    const mounted = await mountEditor({ value: "", cursor: 0 });
+
+    await expect.poll(() => document.body.textContent).toContain("Write a message");
+    expect(overlay()).toBeNull();
+    expect(mounted.editor.getAttribute("aria-placeholder")).toBe("Write a message");
+  });
+
+  it("hides the ghost text once the editor has content", async () => {
+    const mounted = await mountEditor({ value: "", cursor: 0, prediction });
+    await expect.poll(() => overlay()).not.toBeNull();
+
+    await mounted.update({ value: "My own message", cursor: 3 });
+
+    await expect.poll(() => overlay()).toBeNull();
+    expect(mounted.editor.textContent).toBe("My own message");
+  });
+
+  it("clamps a long suggestion to two lines and keeps the chip in the multi-line composer", async () => {
+    const longPrediction = `${"Rerun the failing parser test after fixing the fixture ".repeat(12)}now`;
+    await mountEditor({ value: "", cursor: 0, prediction: longPrediction });
+    await expect.poll(() => overlay()).not.toBeNull();
+
+    const row = overlay()!.firstElementChild as HTMLElement;
+    const text = row.querySelector("span")!;
+    const chip = row.querySelector("kbd")!;
+    const lineHeight = parseFloat(getComputedStyle(overlay()!).lineHeight);
+    expect(text.getBoundingClientRect().height).toBeLessThanOrEqual(lineHeight * 2 + 0.5);
+    expect(chip.getBoundingClientRect().right).toBeLessThanOrEqual(
+      overlay()!.getBoundingClientRect().right + 0.5,
+    );
+  });
+
+  it("keeps a long suggestion on one line with the chip visible in the single-row composer", async () => {
+    const longPrediction = `${"Rerun the failing parser test after fixing the fixture ".repeat(6)}now`;
+    await mountEditor({ value: "", cursor: 0, prediction: longPrediction, singleLine: true });
+    await expect.poll(() => overlay()).not.toBeNull();
+
+    const row = overlay()!.firstElementChild as HTMLElement;
+    const text = row.querySelector("span")!;
+    const chip = row.querySelector("kbd")!;
+    expect(getComputedStyle(text).whiteSpace).toBe("nowrap");
+    expect(text.scrollWidth).toBeGreaterThan(text.clientWidth);
+    const overlayBox = overlay()!.getBoundingClientRect();
+    const chipBox = chip.getBoundingClientRect();
+    expect(chipBox.right).toBeLessThanOrEqual(overlayBox.right + 0.5);
+    expect(chipBox.top).toBeGreaterThanOrEqual(overlayBox.top - 0.5);
+    expect(row.getBoundingClientRect().height).toBeLessThanOrEqual(
+      parseFloat(getComputedStyle(overlay()!).lineHeight) + 0.5,
+    );
   });
 });

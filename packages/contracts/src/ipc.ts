@@ -334,6 +334,8 @@ import type {
   ServerReadThreadDiagnosticsResult,
   ServerGenerateAutomationIntentInput,
   ServerGenerateAutomationIntentResult,
+  ServerGenerateComposerPredictionInput,
+  ServerGenerateComposerPredictionResult,
   ServerGenerateThreadRecapInput,
   ServerGenerateThreadRecapResult,
   ServerGetEnvironmentResult,
@@ -1458,6 +1460,10 @@ export interface NativeApi {
     generateThreadRecap: (
       input: ServerGenerateThreadRecapInput,
     ) => Promise<ServerGenerateThreadRecapResult>;
+    generateComposerPrediction: (
+      input: ServerGenerateComposerPredictionInput,
+      options?: { readonly signal?: AbortSignal },
+    ) => Promise<ServerGenerateComposerPredictionResult>;
     generateAutomationIntent: (
       input: ServerGenerateAutomationIntentInput,
     ) => Promise<ServerGenerateAutomationIntentResult>;

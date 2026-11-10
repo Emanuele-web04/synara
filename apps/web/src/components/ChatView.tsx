@@ -61,6 +61,12 @@ import { useRepoDiffTotals } from "~/hooks/useRepoDiffTotals";
 import { useStableCallback } from "~/hooks/useStableCallback";
 import { closeDockTerminalPane } from "~/hooks/useTerminalSurfaceController";
 import { useThreadRecap } from "~/hooks/useThreadRecap";
+import { useComposerPrediction } from "~/hooks/useComposerPrediction";
+import {
+  canShowComposerPrediction,
+  resolveComposerPredictionTarget,
+} from "~/lib/composerPrediction";
+import { executionNamespace } from "~/lib/hosts/executionContext";
 import { SINGLE_CHAT_PANE_SCOPE_ID } from "~/lib/chatPaneScope";
 import { formatComposerMentionToken } from "~/lib/composerMentions";
 import { hasActiveComposerSend } from "~/lib/composerSendOwnership";
@@ -135,7 +141,7 @@ import {
   resolveThreadMentionForThreadId,
   useComposerCommandMenuItems,
 } from "../hooks/useComposerCommandMenuItems";
-import { MCP_CONNECTORS_ON } from "../betaFeatures";
+import { COMPOSER_PREDICTIONS_ON, MCP_CONNECTORS_ON } from "../betaFeatures";
 import { mcpConnectorsQueryOptions } from "../lib/mcpConnectorsReactQuery";
 import { providerSupportsMcpConnectors } from "@synara/shared/mcpConnectors";
 import { useComposerThreadMentionDrop } from "../hooks/useComposerThreadMentionDrop";
@@ -5378,6 +5384,45 @@ export default function ChatView({
     void lateComposerSendHandlersRef.current?.send();
   }, [composerAutoSendRequest]);
 
+  // Composer predictions (Beta): only the chat in the main view, on its own account, once
+  // the latest turn settled; the ghost text shows only in an empty, idle, writable composer.
+  const composerPrediction = useComposerPrediction({
+    target: resolveComposerPredictionTarget({
+      enabled:
+        COMPOSER_PREDICTIONS_ON &&
+        settings.showComposerSuggestions &&
+        isServerThread &&
+        !isEditorRail &&
+        !isInactiveSplitPane,
+      hostId: executionNamespace() ?? null,
+      threadId: activeThread?.id ?? null,
+      providerInstanceId: activeThreadProviderInstanceId,
+      latestTurn: activeLatestTurn,
+      latestTurnSettled,
+      hasStreamingAssistant: hasStreamingAssistantText,
+    }),
+    canShow: canShowComposerPrediction({
+      prompt,
+      hasAttachments:
+        composerImages.length > 0 ||
+        composerFiles.length > 0 ||
+        composerTerminalContexts.length > 0 ||
+        composerPastedTexts.length > 0 ||
+        composerAssistantSelections.length > 0 ||
+        composerBrowserAnnotations.length > 0 ||
+        composerPullRequestContexts.length > 0 ||
+        composerFileComments.length > 0,
+      menuOpen: composerMenuOpen,
+      hasLiveTurn: isWorking,
+      hasQueuedTurns: queuedComposerTurns.length > 0,
+      hasPendingUserInput: pendingUserInputs.length > 0 || activePendingProgress !== null,
+      isApprovalState: isComposerApprovalState,
+      isReadOnly:
+        isSubagentThreadView || isNativeSubagentMessagingUnavailable || isComposerEditorDisabled,
+    }),
+    prompt,
+  });
+
   const {
     onSelectComposerItem,
     onComposerMenuItemHighlighted,
@@ -5434,6 +5479,8 @@ export default function ChatView({
     isComposerApprovalState,
     pendingUserInputs,
     composerDraft,
+    composerEditorRef,
+    composerPrediction: composerPrediction.controller,
   });
   const onExpandTimelineImage = useCallback(
     (preview: ExpandedImagePreview) => {
@@ -6708,6 +6755,7 @@ export default function ChatView({
                                   ? t("chat:askAboutItem", { item: standaloneSidechatItemNoun })
                                   : t("chat:doAnythingInSynara")
                   }
+                  prediction={composerPrediction.suggestion}
                   disabled={isComposerEditorDisabled}
                   singleLine={composerSingleRow}
                 />

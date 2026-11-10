@@ -68,6 +68,8 @@ import { useStore } from "~/store";
 import { createComposerThreadMentionSourcesSelector } from "~/storeSelectors";
 import { resolveThreadDisplayProvider } from "~/lib/threadDisplayProvider";
 import { cn } from "~/lib/utils";
+import { COMPOSER_PREDICTION_ACCEPT_KEY_LABEL } from "~/lib/composerPrediction";
+import { ShortcutKbd } from "./ui/kbd";
 import {
   COMPOSER_EDITOR_CONTENT_RESET_CLASS_NAME,
   COMPOSER_EDITOR_MIN_HEIGHT_CLASS_NAME,
@@ -521,6 +523,12 @@ interface ComposerPromptEditorProps {
   mentionReferences?: ReadonlyArray<ProviderMentionReference>;
   disabled: boolean;
   placeholder: string;
+  /**
+   * A predicted next message to show instead of the placeholder while the editor is empty:
+   * dimmed ghost text followed by a Tab key chip. It is drawn over the editor and never
+   * enters the Lexical document or the draft; the owner decides what Tab does with it.
+   */
+  prediction?: string | null | undefined;
   ariaLabel?: string | undefined;
   className?: string;
   /** One-line field for the single-row composer: one line tall, placeholder truncated. */
@@ -944,6 +952,7 @@ function ComposerPromptEditorInner({
   mentionReferences: mentionReferencesProp,
   disabled,
   placeholder,
+  prediction,
   ariaLabel,
   className,
   singleLine,
@@ -1236,14 +1245,40 @@ function ComposerPromptEditorInner({
                 className,
               )}
               data-testid="composer-editor"
-              aria-placeholder={placeholder}
+              aria-placeholder={prediction || placeholder}
               aria-label={ariaLabel}
               placeholder={<span />}
               onPaste={onPaste}
             />
           }
           placeholder={
-            terminalContexts.length > 0 ? null : (
+            terminalContexts.length > 0 ? null : prediction ? (
+              <div
+                className={cn(
+                  "pointer-events-none absolute inset-0",
+                  COMPOSER_EDITOR_TYPOGRAPHY_CLASS_NAME,
+                )}
+                data-testid="composer-prediction"
+              >
+                <div
+                  className={cn("flex min-w-0 gap-1.5", singleLine ? "items-center" : "items-end")}
+                >
+                  <span
+                    className={cn(
+                      "min-w-0",
+                      COMPOSER_PLACEHOLDER_TEXT_CLASS_NAME,
+                      singleLine ? "truncate" : "line-clamp-2 break-words",
+                    )}
+                  >
+                    {prediction}
+                  </span>
+                  <ShortcutKbd
+                    shortcutLabel={COMPOSER_PREDICTION_ACCEPT_KEY_LABEL}
+                    className="shrink-0"
+                  />
+                </div>
+              </div>
+            ) : (
               <div
                 className={cn(
                   "pointer-events-none absolute inset-0",
@@ -1287,6 +1322,7 @@ export const ComposerPromptEditor = forwardRef<
     mentionReferences,
     disabled,
     placeholder,
+    prediction,
     ariaLabel,
     className,
     singleLine,
@@ -1328,6 +1364,7 @@ export const ComposerPromptEditor = forwardRef<
         mentionReferences={normalizedMentionReferences}
         disabled={disabled}
         placeholder={placeholder}
+        prediction={prediction}
         ariaLabel={ariaLabel}
         onRemoveTerminalContext={onRemoveTerminalContext}
         onChange={onChange}
