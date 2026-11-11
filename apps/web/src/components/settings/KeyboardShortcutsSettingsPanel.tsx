@@ -9,7 +9,7 @@ import type {
   ServerConfig,
   ServerKeybindingEdit,
 } from "@synara/contracts";
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { Button } from "~/components/ui/button";
@@ -135,9 +135,6 @@ function LocalKeyboardShortcutsResetButton() {
 
 export function KeyboardShortcutsSettingsPanel() {
   const frame = readWorkspaceFrame();
-  useEffect(() => {
-    frame?.controller.navigate("/settings?section=shortcuts");
-  }, [frame]);
   return frame ? (
     <SettingsEmptyState>
       <p className="mb-3">App shortcuts are managed on this computer.</p>

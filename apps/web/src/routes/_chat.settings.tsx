@@ -76,6 +76,9 @@ import { ACCOUNT_BILLING_ENABLED } from "~/lib/accountBilling";
 import { ProviderUsageSettingsPanel } from "../components/settings/ProviderUsageSettingsPanel";
 import { ExternalMcpSettingsPanel } from "../components/settings/ExternalMcpSettingsPanel";
 import { ConnectionsSettingsPanel } from "../components/settings/ConnectionsSettingsPanel";
+import { SettingsComputerPicker } from "../components/hosts/ComputerPicker";
+import { useSettingsComputerRoute } from "../lib/hosts/settingsComputer";
+import { readWorkspaceFrame } from "../lib/hosts/workspaceFrame";
 import { McpConnectorsSettingsPanel } from "../components/settings/McpConnectorsSettingsPanel";
 import {
   SettingResetButton,
@@ -358,6 +361,7 @@ function SettingsRouteView() {
       ? routeSearch.provider
       : null;
   const activeSectionItem = SETTINGS_NAV_ITEMS.find((item) => item.id === activeSection)!;
+  useSettingsComputerRoute(activeSection, routeSearch);
 
   const {
     isDefaultThemePack,
@@ -1823,7 +1827,7 @@ function SettingsRouteView() {
         // A fragment, not a wrapper: sections space themselves as siblings.
         return (
           <>
-            {billingEnabled ? <BillingSettingsPanel /> : null}
+            {billingEnabled && !readWorkspaceFrame() ? <BillingSettingsPanel /> : null}
             <ProviderUsageSettingsPanel />
           </>
         );
@@ -1875,6 +1879,7 @@ function SettingsRouteView() {
                     : "max-w-2xl",
               )}
             >
+              <SettingsComputerPicker section={activeSection} />
               {activeSection !== "profile" ? (
                 <div className="mb-8 flex items-start justify-between gap-4">
                   <div className="min-w-0">
