@@ -155,7 +155,7 @@ async function safeStat(path: string): Promise<Stats | null> {
 
 // Bounds archive reads so a cold stats load does useful parallel work without
 // flooding the filesystem with thousands of simultaneous readFile calls.
-async function mapWithConcurrency<T, R>(
+export async function mapWithConcurrency<T, R>(
   items: ReadonlyArray<T>,
   concurrency: number,
   mapper: (item: T) => Promise<R>,
@@ -521,7 +521,7 @@ function readClaudeToolResultSample(input: {
 // Claude Code stores transcripts under `<CLAUDE_CONFIG_DIR>/projects`, defaulting to
 // `~/.claude/projects`. Honor the override so the Profile reads the SAME transcripts
 // the active Claude provider does (the adapter inherits `process.env`).
-function resolveClaudeProjectsRoot(homeDir: string): string {
+export function resolveClaudeProjectsRoot(homeDir: string): string {
   const configDir = process.env.CLAUDE_CONFIG_DIR?.trim();
   return nodePath.join(configDir || nodePath.join(homeDir, ".claude"), "projects");
 }

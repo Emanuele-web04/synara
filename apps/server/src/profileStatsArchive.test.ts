@@ -29,6 +29,8 @@ import {
   ProfileStatsArchiveLive,
 } from "./profileStatsArchive";
 
+import { makeUsageAnalyticsQuery } from "./usageAnalyticsStats";
+
 interface DeletedCheckpointRefCall {
   readonly cwd: string;
   readonly liveThreadId?: string;
@@ -674,7 +676,7 @@ describe("ProfileStatsArchive", () => {
     );
   });
 
-  it("leaves Claude results of automation dispatches out of the archive", async () => {
+  it("retains automated Claude tokens for Analytics while keeping Profile user-only", async () => {
     await runArchiveTest(
       Effect.gen(function* () {
         const sql = yield* SqlClient.SqlClient;
@@ -706,15 +708,29 @@ describe("ProfileStatsArchive", () => {
             100, '2026-06-13T18:45:00Z')
         `;
 
+        const analytics = yield* makeUsageAnalyticsQuery();
+        const window = { from: "2026-06-13T00:00:00.000Z", to: "2026-06-14T00:00:00.000Z" };
         const before = yield* stats.getProfileTokenStats({ utcOffsetMinutes: 330 });
+        const automatedTokens = (yield* analytics.getUsageAnalytics(window)).tokens.filter(
+          (row) => row.origin === "automation",
+        );
+        expect(automatedTokens).toEqual([
+          expect.objectContaining({
+            provider: "claudeAgent",
+            tokens: 7_000,
+            projectId: "project-archive",
+          }),
+        ]);
         yield* archive.purgeThreadWithStatsSnapshot({
           threadId: ThreadId.makeUnsafe("thread-purge"),
         });
 
         expect(yield* stats.getProfileTokenStats({ utcOffsetMinutes: 330 })).toEqual(before);
         expect(
-          yield* sql`SELECT tokens FROM profile_stats_deleted_tokens WHERE tokens = 7000`,
-        ).toEqual([]);
+          (yield* analytics.getUsageAnalytics(window)).tokens.filter(
+            (row) => row.origin === "automation",
+          ),
+        ).toEqual(automatedTokens);
       }),
     );
   });

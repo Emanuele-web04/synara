@@ -71,9 +71,8 @@ import {
   KeyboardShortcutsSettingsPanel,
 } from "../components/settings/KeyboardShortcutsSettingsPanel";
 import { ProfileSettingsPanel } from "../components/settings/ProfileSettingsPanel";
-import { BillingSettingsPanel } from "../components/settings/BillingSettingsPanel";
 import { ACCOUNT_BILLING_ENABLED } from "~/lib/accountBilling";
-import { ProviderUsageSettingsPanel } from "../components/settings/ProviderUsageSettingsPanel";
+import { UsageSettingsPanel } from "../components/settings/UsageSettingsPanel";
 import { ExternalMcpSettingsPanel } from "../components/settings/ExternalMcpSettingsPanel";
 import { ConnectionsSettingsPanel } from "../components/settings/ConnectionsSettingsPanel";
 import { SettingsComputerPicker } from "../components/hosts/ComputerPicker";
@@ -1842,12 +1841,13 @@ function SettingsRouteView() {
         return <SkillsSettingsPanel />;
       case "usage":
         // The plan lives with usage ("Usage and billing"), never above the profile.
-        // A fragment, not a wrapper: sections space themselves as siblings.
+        // Keyed by target so a plan deep link reopens the Billing tab.
         return (
-          <>
-            {billingEnabled && isController ? <BillingSettingsPanel /> : null}
-            <ProviderUsageSettingsPanel />
-          </>
+          <UsageSettingsPanel
+            key={settingsTarget ?? ""}
+            billingEnabled={billingEnabled && isController}
+            target={settingsTarget}
+          />
         );
       default:
         return null;
@@ -1890,7 +1890,7 @@ function SettingsRouteView() {
             <div
               className={cn(
                 "mx-auto w-full px-6 py-8",
-                activeSection === "connectors"
+                activeSection === "connectors" || activeSection === "usage"
                   ? "max-w-4xl"
                   : activeSection === "profile"
                     ? "max-w-3xl"

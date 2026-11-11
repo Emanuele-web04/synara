@@ -881,6 +881,7 @@ export function createWsNativeApi(): NativeApi {
       getProfileTokenStats: (input) =>
         executionRequest(WS_METHODS.statsGetProfileTokenStats, input),
       getRecap: (input) => executionRequest(WS_METHODS.statsGetRecap, input),
+      getUsageAnalytics: (input) => executionRequest(WS_METHODS.statsGetUsageAnalytics, input),
     },
     provider: {
       getComposerCapabilities: (input) =>
