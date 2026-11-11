@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import { codexAccountIdentityFromAuthRecord } from "./codexAccountIdentity";
+import {
+  codexAccountIdentityFromAuthRecord,
+  isCodexApiKeyAuthRecord,
+} from "./codexAccountIdentity";
 
 const base64Url = (value: string) => Buffer.from(value).toString("base64url");
 const idToken = (payload: unknown) =>
@@ -59,6 +62,10 @@ describe("codexAccountIdentityFromAuthRecord", () => {
 
   it("reports no identity for an API-key-only auth record", () => {
     expect(codexAccountIdentityFromAuthRecord({ OPENAI_API_KEY: "sk-test" })).toEqual({});
+  });
+
+  it("recognizes an API key when the token field is an invalid array", () => {
+    expect(isCodexApiKeyAuthRecord({ OPENAI_API_KEY: "sk-test", tokens: [] })).toBe(true);
   });
 
   it("reports no identity for an API-key login that still carries old ChatGPT tokens", () => {

@@ -20,9 +20,8 @@ const OPENAI_AUTH_CLAIM = "https://api.openai.com/auth";
 export function isCodexApiKeyAuthRecord(auth: Record<string, unknown>): boolean {
   const mode = asString(auth.auth_mode ?? auth.authMode)?.toLowerCase();
   const apiKey = asString(auth.OPENAI_API_KEY ?? auth.openai_api_key ?? auth.apiKey);
-  return (
-    mode === "apikey" || mode === "api-key" || (apiKey !== undefined && !asRecord(auth.tokens))
-  );
+  const hasTokenRecord = asRecord(auth.tokens) !== null && !Array.isArray(auth.tokens);
+  return mode === "apikey" || mode === "api-key" || (apiKey !== undefined && !hasTokenRecord);
 }
 
 export function codexAccountIdentityFromAuthRecord(record: unknown): CodexAccountIdentity {

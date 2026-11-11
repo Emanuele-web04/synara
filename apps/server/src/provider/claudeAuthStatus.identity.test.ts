@@ -16,7 +16,8 @@ describe("Claude account identity", () => {
 
   it("trims the values and drops blank ones", () => {
     const identity = parseClaudeAccountIdentityFromOutput({
-      stdout: '{"loggedIn":true,"email":"  work@example.com  ","orgName":"   "}',
+      stdout:
+        '{"loggedIn":true,"authMethod":"claude.ai","email":"  work@example.com  ","orgName":"   "}',
       stderr: "",
       code: 0,
     });
@@ -36,9 +37,21 @@ describe("Claude account identity", () => {
     ).toEqual({});
   });
 
+  it("ignores identity fields from API-key login output", () => {
+    expect(
+      parseClaudeAccountIdentityFromOutput({
+        stdout:
+          '{"loggedIn":true,"authMethod":"apiKey","email":"stale@example.com","orgName":"Old Org"}',
+        stderr: "",
+        code: 0,
+      }),
+    ).toEqual({});
+  });
+
   it("ignores identity fields that are not strings", () => {
     const identity = parseClaudeAccountIdentityFromOutput({
-      stdout: '{"loggedIn":true,"email":{"address":"work@example.com"},"orgName":42}',
+      stdout:
+        '{"loggedIn":true,"authMethod":"claude.ai","email":{"address":"work@example.com"},"orgName":42}',
       stderr: "",
       code: 0,
     });

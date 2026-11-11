@@ -1382,7 +1382,13 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
       } satisfies ServerProviderStatus;
 
       const result = stabilizeProviderStatusesAgainstTransientTimeouts(
-        [previousReadyClaude],
+        [
+          {
+            ...previousReadyClaude,
+            accountEmail: "stale@example.com",
+            accountOrganization: "Old Org",
+          },
+        ],
         [
           {
             provider: "claudeAgent",
@@ -1714,7 +1720,18 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
       ),
     );
 
-    it.effect("does not name a Codex account the CLI is signed out of", () =>
+    it.effect.each([
+      {
+        name: "the CLI is signed out",
+        authStatus: "unauthenticated",
+        loginStatus: { stdout: "Not logged in\n", stderr: "", code: 1 },
+      },
+      {
+        name: "the CLI does not identify the login method",
+        authStatus: "authenticated",
+        loginStatus: { stdout: "Logged in\n", stderr: "", code: 0 },
+      },
+    ] as const)("does not name a Codex account when $name", ({ authStatus, loginStatus }) =>
       Effect.gen(function* () {
         const fileSystem = yield* FileSystem.FileSystem;
         const path = yield* Path.Path;
@@ -1733,7 +1750,7 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
         );
 
         const status = yield* makeCheckCodexProviderStatus("codex");
-        assert.strictEqual(status.authStatus, "unauthenticated");
+        assert.strictEqual(status.authStatus, authStatus);
         assert.strictEqual(status.accountEmail, undefined);
         assert.strictEqual(status.authType, undefined);
         assert.strictEqual(status.authLabel, undefined);
@@ -1742,8 +1759,7 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
           mockSpawnerLayer((args) => {
             const joined = args.join(" ");
             if (joined === "--version") return { stdout: "codex 1.0.0\n", stderr: "", code: 0 };
-            if (joined === "-c mcp_servers={} login status")
-              return { stdout: "Not logged in\n", stderr: "", code: 1 };
+            if (joined === "-c mcp_servers={} login status") return loginStatus;
             throw new Error(`Unexpected args: ${joined}`);
           }),
         ),
@@ -2485,7 +2501,8 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
               }
               if (joined === "auth status")
                 return {
-                  stdout: '{"loggedIn":false,"authMethod":"none","apiProvider":"firstParty"}\n',
+                  stdout:
+                    '{"loggedIn":false,"authMethod":"claude.ai","email":"stale@example.com","orgName":"Old Org"}\n',
                   stderr: "",
                   code: 0,
                 };
@@ -2500,6 +2517,8 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
         assert.strictEqual(status.authStatus, "authenticated");
         assert.strictEqual(status.authType, "max");
         assert.strictEqual(status.authLabel, "Claude Max Subscription");
+        assert.strictEqual(status.accountEmail, undefined);
+        assert.strictEqual(status.accountOrganization, undefined);
         assert.strictEqual(status.message, undefined);
       }),
     );

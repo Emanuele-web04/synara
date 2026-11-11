@@ -185,7 +185,7 @@ export interface ClaudeAccountIdentity {
 // object counts: the legacy text output never carried an identity.
 export function parseClaudeAccountIdentityFromOutput(result: CommandResult): ClaudeAccountIdentity {
   const trimmed = result.stdout.trim();
-  if (!trimmed.startsWith("{")) return {};
+  if (result.code !== 0 || !trimmed.startsWith("{")) return {};
   let parsed: unknown;
   try {
     parsed = JSON.parse(trimmed);
@@ -193,7 +193,14 @@ export function parseClaudeAccountIdentityFromOutput(result: CommandResult): Cla
     return {};
   }
   const record = asRecord(parsed);
-  const email = asString(record?.email);
-  const organization = asString(record?.orgName);
+  if (
+    !record ||
+    extractAuthBoolean(record) !== true ||
+    asString(record.authMethod)?.toLowerCase() !== "claude.ai"
+  ) {
+    return {};
+  }
+  const email = asString(record.email);
+  const organization = asString(record.orgName);
   return { ...(email ? { email } : {}), ...(organization ? { organization } : {}) };
 }

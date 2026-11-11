@@ -368,7 +368,8 @@ request and failure limits; accounts, saved models, and sessions are unaffected.
 Accounts of one provider are told apart by who they are signed in as: a signed-in Claude or Codex
 account reports its email (and, for Claude, its organization) in its Settings editor, in the
 hover text of its picker tab and beside its name in the picker's account entries. The identity
-comes from the provider's own login state on the execution host and is not sent in diagnostics.
+comes from a fresh login probe on the execution host and is shown only to host owners. Cached
+provider statuses and diagnostics exclude the identity.
 
 The composer model picker has one tab per connected provider and a Starred tab. Starring a model
 saves it together with its current effort, speed, and provider account, so one click (or

@@ -109,6 +109,7 @@ import {
   orderProviderStatuses,
   readProviderStatusCache,
   resolveProviderStatusCachePath,
+  withoutProviderAccountIdentity,
   writeProviderStatusCache,
 } from "../providerStatusCache";
 import { makeProviderMaintenanceCommandCoordinator } from "../providerMaintenanceCommandCoordinator";
@@ -513,11 +514,17 @@ function codexAccountAuthLabel(input: {
   }
 }
 
-function extractCodexAccountTypeFromOutput(result: CommandResult): string | undefined {
+const CODEX_CHATGPT_LOGIN = /^logged in using chatgpt\s*$/m;
+const CODEX_API_KEY_LOGIN = /^logged in using an api key\b/m;
+
+function extractCodexAccountTypeFromOutput(
+  result: CommandResult,
+): "apiKey" | "chatgpt" | undefined {
   const parsed = decodeUnknownJson(result.stdout.trim());
   if (Result.isFailure(parsed)) {
     const output = `${result.stdout}\n${result.stderr}`.toLowerCase();
-    return /^logged in using an api key\b/m.test(output) ? "apiKey" : undefined;
+    if (CODEX_API_KEY_LOGIN.test(output)) return "apiKey";
+    return CODEX_CHATGPT_LOGIN.test(output) ? "chatgpt" : undefined;
   }
   const walk = (value: unknown): string | undefined => {
     if (Array.isArray(value)) {
@@ -539,7 +546,14 @@ function extractCodexAccountTypeFromOutput(result: CommandResult): string | unde
     }
     return undefined;
   };
-  return walk(parsed.success);
+  const reportedTypes = [walk(parsed.success), extractAuthMethod(parsed.success)].map((type) =>
+    type?.toLowerCase().replace(/[\s_-]+/g, ""),
+  );
+  if (reportedTypes.includes("apikey")) return "apiKey";
+  if (reportedTypes.includes("chatgpt") || reportedTypes.includes("chatgptauthtokens")) {
+    return "chatgpt";
+  }
+  return undefined;
 }
 
 // ── Claude SDK capability probe ─────────────────────────────────────
@@ -735,9 +749,9 @@ export function parseAuthStatusFromOutput(result: CommandResult): {
     // Current Codex CLI prints login status as plain text (on stderr), not JSON.
     // Only explicit login methods establish voice capability; unknown successful
     // output remains authenticated without advertising ChatGPT-only dictation.
-    const voiceTranscriptionAvailable = /^logged in using chatgpt\s*$/m.test(lowerOutput)
+    const voiceTranscriptionAvailable = CODEX_CHATGPT_LOGIN.test(lowerOutput)
       ? true
-      : /^logged in using an api key\b/m.test(lowerOutput)
+      : CODEX_API_KEY_LOGIN.test(lowerOutput)
         ? false
         : undefined;
     return {
@@ -1330,7 +1344,9 @@ export const makeCheckCodexProviderStatus = (
     const parsed = parseAuthStatusFromOutput(authOutput);
     const codexAccountType = extractCodexAccountTypeFromOutput(authOutput);
     const accountIdentity =
-      parsed.authStatus === "authenticated" && codexAccountType !== "apiKey"
+      parsed.authStatus === "authenticated" &&
+      authOutput.code === 0 &&
+      codexAccountType === "chatgpt"
         ? yield* readCodexAccountIdentity(probeEnv)
         : {};
     const codexPlanType = extractSubscriptionTypeFromOutput(authOutput) ?? accountIdentity.planType;
@@ -2807,8 +2823,9 @@ export function stabilizeProviderStatusesAgainstTransientTimeouts(
     // A single slow CLI probe should not make an already usable provider look broken.
     // The previous update advisory is network-backed evidence, though, so it must
     // not survive a probe that could not confirm the installed version.
+    // Keep the account label tied to a confirmed login as well.
     const stabilizedStatus = {
-      ...previous,
+      ...withoutProviderAccountIdentity(previous),
       checkedAt: status.checkedAt,
       ...(status.updateState !== undefined ? { updateState: status.updateState } : {}),
     };
