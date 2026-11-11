@@ -129,7 +129,7 @@ describe("macOS Electron launcher signature", () => {
       signingCommands.every(({ options }) => options.timeout === 60_000),
       true,
     );
-    assert.equal(JSON.parse(readFileSync(fixture.metadataPath, "utf8")).launcherVersion, 8);
+    assert.equal(JSON.parse(readFileSync(fixture.metadataPath, "utf8")).launcherVersion, 9);
     assert.equal(
       readFileSync(join(bundle, "Contents", "Resources", "icon.icns"), "utf8"),
       "synara icon",
