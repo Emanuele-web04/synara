@@ -450,6 +450,12 @@ Synara supplies the shared workspace around it:
 Each task owns a provider session. Available models and controls can differ because Synara discovers
 capabilities from the installed runtime and account.
 
+Provider quota warnings live under **Environment → Usage**, on the active account's row. Approaching
+limits update that row and mark the Environment toggle; they do not add work-log entries. A blocked
+limit also remains visible near the composer and in the activity history. New allowed updates and
+elapsed reset times clear the current warning. Codex's opt-in unstable-feature startup notice stays
+in native diagnostics; actionable runtime and configuration errors remain visible.
+
 ## Handoffs
 
 A [provider handoff](https://www.trysynara.com/docs/workflows/handoffs) lets another supported
@@ -518,6 +524,10 @@ after cancellation cleanup finishes, which can extend beyond the preparation bud
 check after cleanup recognizes a checkpoint published just before cancellation. Initial and later
 baseline notices share one message or turn identity. A stored initial notice suppresses redundant
 later notices; concurrently published native notices may retain the latest owner's detail in that row.
+Missing-baseline status stays on
+Environment's Changes row for the latest turn instead of repeating among tool calls; actual capture
+and revert failures remain in the transcript. The stored diagnostic and missing-checkpoint state
+are preserved.
 
 Synara never reconstructs the initial state from files the provider may already have changed.
 Native provider turns, including native child turns, may begin without Synara's pre-send preparation;

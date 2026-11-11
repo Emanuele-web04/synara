@@ -569,6 +569,15 @@ export function deriveWorkLogEntries(
     .filter((activity) => !isQuietTurnLifecycleActivity(activity))
     .filter((activity) => !isQuietApprovalResolutionActivity(activity))
     .filter((activity) => activity.kind !== "account.rate-limits.updated")
+    // Usage and checkpoint availability belong to Environment, including on replay.
+    .filter(
+      (activity) =>
+        activity.kind !== "checkpoint.baseline.skipped" &&
+        !(
+          activity.kind === "account.rate-limited" &&
+          asRecord(activity.payload)?.status === "allowed_warning"
+        ),
+    )
     .filter(
       (activity) =>
         activity.kind !== "context-window.updated" && activity.kind !== "context-window.configured",
@@ -1329,12 +1338,9 @@ function shouldKeepActivityForWorkLog(
     return true;
   }
 
-  // Failed Undo and skipped baseline feedback can precede a provider turn id,
+  // Failed Undo feedback can precede a provider turn id,
   // or refer to a turn that Undo rolled out of view. Keep this feedback visible.
-  if (
-    activity.kind === CHECKPOINT_REVERT_FAILED_ACTIVITY_KIND ||
-    activity.kind === "checkpoint.baseline.skipped"
-  ) {
+  if (activity.kind === CHECKPOINT_REVERT_FAILED_ACTIVITY_KIND) {
     return true;
   }
 

@@ -2528,6 +2528,120 @@ describe("ChatView transcript geometry (full app)", () => {
     document.body.innerHTML = "";
   });
 
+  it.each(["turn", "message"] as const)(
+    "routes quota and checkpoint notices to Environment while retaining blocking limits at the composer (%s)",
+    async (attribution) => {
+      const base = createSnapshotWithInlineToolOverflow({ active: false });
+      const thread = base.threads[0]!;
+      const turnId = thread.latestTurn!.turnId;
+      const quotaActivity = (id: string, status: string, resetsAt?: string) => ({
+        id: EventId.makeUnsafe(id),
+        kind: "account.rate-limits.updated",
+        summary: "Rate limits updated",
+        createdAt: isoAt(1_109),
+        tone: "info" as const,
+        turnId,
+        payload: {
+          provider: "claudeAgent",
+          providerInstanceId: "claudeAgent",
+          status,
+          utilization: 0.91,
+          ...(resetsAt ? { resetsAt } : {}),
+        },
+      });
+      const snapshot: OrchestrationReadModel = {
+        ...base,
+        threads: [
+          {
+            ...thread,
+            modelSelection: { provider: "claudeAgent", model: "claude-opus-4-7" },
+            session: thread.session ? { ...thread.session, providerName: "claudeAgent" } : null,
+            messages: [{ ...thread.messages.at(-3)!, turnId }, ...thread.messages.slice(-2)],
+            activities: [
+              ...thread.activities,
+              {
+                ...quotaActivity("old-approaching", "allowed_warning"),
+                kind: "account.rate-limited",
+                summary: "Approaching rate limit",
+              },
+              quotaActivity("usage-warning", "allowed_warning"),
+              {
+                id: EventId.makeUnsafe("baseline-unavailable"),
+                kind: "checkpoint.baseline.skipped",
+                summary: "Checkpoint baseline unavailable for this turn",
+                createdAt: isoAt(1_110),
+                tone: "info",
+                turnId: attribution === "turn" ? turnId : null,
+                payload: {
+                  detail: "The completed checkpoint was captured successfully.",
+                  messageId: thread.messages.at(-3)!.id,
+                },
+              },
+            ],
+          },
+        ],
+      };
+      const mounted = await mountChatView({
+        viewport: { ...DEFAULT_VIEWPORT, width: 1_400 },
+        snapshot,
+      });
+      try {
+        await waitForComposerEditor();
+        const toggle = page.getByRole("button", { name: /Toggle environment panel/ });
+        if (toggle.element().getAttribute("aria-pressed") !== "true") await toggle.click();
+        await expect
+          .element(page.getByText("Approaching rate limit (91% used).", { exact: true }))
+          .toBeVisible();
+        await expect
+          .element(
+            page.getByText("Checkpoint diff and file Undo unavailable for this turn.", {
+              exact: true,
+            }),
+          )
+          .toBeVisible();
+        expect(page.getByText("Approaching rate limit", { exact: true }).query()).toBeNull();
+        expect(
+          page.getByText("Checkpoint baseline unavailable for this turn", { exact: true }).query(),
+        ).toBeNull();
+        await page.screenshot({ path: "../../../../output/playwright/status-warnings-usage.png" });
+        await toggle.click();
+        await expect.element(toggle).toHaveAccessibleName(/needs attention/i);
+        const appendQuota = (id: string, status: string, sequence: number, resetsAt?: string) =>
+          useStore
+            .getState()
+            .applyOrchestrationEventsHotPath([
+              makeDomainEvent(
+                "thread.activity-appended",
+                { threadId: THREAD_ID, activity: quotaActivity(id, status, resetsAt) },
+                { sequence },
+              ),
+            ]);
+        appendQuota("quota-blocked", "rejected", snapshot.snapshotSequence + 1);
+        const banner = page.getByRole("alert").filter({ hasText: "Rate limit reached." });
+        await expect.element(banner).toBeVisible();
+        expect(
+          document.querySelector('[data-chat-composer-form="true"]')!.contains(banner.element()),
+        ).toBe(true);
+        await page.screenshot({
+          path: "../../../../output/playwright/status-warnings-blocked.png",
+        });
+        appendQuota("quota-recovered", "allowed", snapshot.snapshotSequence + 2);
+        await expect.element(banner).not.toBeInTheDocument();
+        await expect.element(toggle).toHaveAccessibleName("Toggle environment panel");
+        appendQuota(
+          "quota-expiring",
+          "allowed_warning",
+          snapshot.snapshotSequence + 3,
+          new Date(Date.now() + 1_000).toISOString(),
+        );
+        await expect.element(toggle).toHaveAccessibleName(/needs attention/i);
+        await expect.element(toggle).toHaveAccessibleName("Toggle environment panel");
+      } finally {
+        await mounted.cleanup();
+      }
+    },
+  );
+
   it.each(["project", "hub discovery pending"] as const)(
     "keeps persistent turn failure visible after reopening and admits one manual continuation (%s)",
     async (surface) => {

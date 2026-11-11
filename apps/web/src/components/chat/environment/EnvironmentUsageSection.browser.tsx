@@ -41,6 +41,43 @@ function createQueryClient(): QueryClient {
 }
 
 describe("EnvironmentUsageSection", () => {
+  it("shows one live warning on its account even without a usage snapshot, then clears on recovery", async () => {
+    const queryClient = createQueryClient();
+    queryClient.setQueryData(serverQueryKeys.allProviderUsage(), []);
+    queryClient.setQueryData(serverQueryKeys.settings(), {
+      ...DEFAULT_SERVER_SETTINGS_VIEW,
+      providerInstances: { claude_work: { driver: "claudeAgent", displayName: "Work" } },
+    });
+    const screen = await render(
+      <QueryClientProvider client={queryClient}>
+        <EnvironmentUsageSection
+          provider="claudeAgent"
+          activeInstanceId="claude_work"
+          rateLimitStatus={{ status: "allowed_warning", utilization: 0.91 }}
+        />
+      </QueryClientProvider>,
+    );
+    await expect
+      .element(page.getByRole("button", { name: /Claude · Work usage:.*Approaching rate limit/ }))
+      .toBeVisible();
+    expect(
+      page.getByText("Approaching rate limit (91% used).", { exact: true }).all(),
+    ).toHaveLength(1);
+    expect(page.getByRole("button", { name: /Claude usage:/ }).query()).toBeNull();
+    await screen.rerender(
+      <QueryClientProvider client={queryClient}>
+        <EnvironmentUsageSection
+          provider="claudeAgent"
+          activeInstanceId="claude_work"
+          rateLimitStatus={null}
+        />
+      </QueryClientProvider>,
+    );
+    expect(
+      page.getByText("Approaching rate limit (91% used).", { exact: true }).query(),
+    ).toBeNull();
+  });
+
   it("keeps a named default account visible when its login expires", async () => {
     const queryClient = createQueryClient();
     queryClient.setQueryData(serverQueryKeys.allProviderUsage(), [
