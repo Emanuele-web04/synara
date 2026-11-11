@@ -1187,5 +1187,9 @@
   "productAnalyticsRetryLoad": "Retry loading privacy settings",
   "productAnalyticsSaveError": "Could not save your choice. Your previous setting is still shown; try again.",
   "productAnalyticsRemoteDisableDescription": "Turning this off stops collection, cancels sends and deletes unsent events and the product analytics ID. Re-enabling uses a fresh random ID; events already received cannot be recalled.",
-  "productAnalyticsDisableDescription": "Turning this off stops product collection, cancels sends and deletes unsent product events and the analytics ID. Re-enabling uses a fresh random ID. Beta crash diagnostics are separate."
+  "productAnalyticsDisableDescription": "Turning this off stops product collection, cancels sends and deletes unsent product events and the analytics ID. Re-enabling uses a fresh random ID. Beta crash diagnostics are separate.",
+  "rateLimitWarnings": "Rate limit warnings",
+  "rateLimitWarnings2": "rate limit warnings",
+  "rateLimitWarningsDescription": "Show a banner when a provider says you are close to a usage limit. A banner still shows when you reach the limit.",
+  "showRateLimitWarnings": "Show rate limit warnings"
 }
