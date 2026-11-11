@@ -1,11 +1,13 @@
 # Changelog
 
-## Unreleased
+## 1.5.2 — 2026-11-11
 
 **Linux ARM64 desktop packages beside the existing x86_64 build.**
 
 ### Added
 
+- Usage & limits includes Analytics for token and activity trends by provider, model and project, with reported or estimated API-rate costs. On macOS, This Mac can include local Claude Code and Codex sessions; API-rate estimates are not subscription charges.
+- Settings can target a connected computer. Supported Codex and Claude accounts show available signed-in identity to help distinguish accounts.
 - Linux ARM64 AppImage (`Synara-<version>-arm64.AppImage`) built on an ARM64 runner with the same provenance record, packaged-startup smoke test and unsigned Linux publication policy as the x86_64 build.
 - Dedicated Linux feed per architecture (`synara-linux.yml` for x86_64, `synara-linux-arm64.yml` for ARM64). electron-updater derives that suffix from the running architecture and, inside a manifest, prefers an AppImage whose name contains `process.arch` before falling back to the first `.AppImage` match. `x64` never matches the `x86_64` file alias, so a shared manifest could still hand x64 the arm64 payload.
 - The download page exposes both Linux builds through an architecture toggle, and the installation and troubleshooting docs describe the `aarch64` choice and the FUSE 2 requirement.
@@ -14,6 +16,18 @@
 
 - `dist:desktop:linux` follows the host architecture instead of forcing x64; `--arch arm64` also works there.
 - The pinned compatibility release stays x64-only: it predates ARM64 support, so publishing an ARM64 build there would point an old app at the x86_64 feed.
+- Usage & limits separates overview, analytics and billing; provider and checkpoint warnings appear in the environment panel when available. Rate-limit reset durations and onboarding are clearer, and users can hide rate-limit warnings.
+- Simulator control persists across chats with less helper overhead. The app tour and announcement presentation have been refreshed.
+
+### Fixed
+
+- Account refresh and revoked-device recovery, uncertain chat sends, queued work, provider lifecycle and Remote connection recovery handle interruptions more reliably.
+- macOS update preparation and window shutdown handle application lifecycle more reliably. Onboarding provider counts follow their switches and window controls no longer obscure its header.
+- Migration backups and recovery protect database and WAL state through interrupted restores; deleted-chat usage retains supported aggregates.
+
+### Verification
+
+Local release checks and the independent migration review are recorded in the release checkpoint. The exact-tag workflow must pass quality, server tests, all native packages including Linux ARM64, macOS signing and notarization, Windows Defender, provenance and packaged startup before publication. Windows uses the version-scoped unsigned exception. Manual installation, installed-app upgrades and live-provider behavior are not established by packaged startup checks.
 
 ## 1.5.1 — 2026-11-11
 
