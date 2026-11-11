@@ -2,6 +2,16 @@
 // Login and billing identifiers do not belong in this cross-process contract.
 import * as Schema from "effect/Schema";
 import { STATIC_KEYBINDING_COMMANDS } from "./keybindings";
+import { ReliabilityCode } from "./reliability";
+
+export const ANONYMOUS_PRODUCT_EVENTS = [
+  "remote.pairing-approved",
+  "remote.connection-succeeded",
+  "remote.reconnection-succeeded",
+  "remote.connection-timeout",
+  "app.crash",
+] as const;
+export const ANONYMOUS_PRODUCT_RETRY_DAYS = 7;
 
 export const ProductAnalyticsEvent = Schema.Literals([
   "app.open",
@@ -13,9 +23,11 @@ export const ProductAnalyticsEvent = Schema.Literals([
   "connection.pair",
   "connection.connect",
   "connection.reconnect",
+  ...ANONYMOUS_PRODUCT_EVENTS,
   "chat.request",
   "turn.completed",
   "performance.startup",
+  "reliability.issue",
 ]);
 export type ProductAnalyticsEvent = typeof ProductAnalyticsEvent.Type;
 
@@ -78,6 +90,24 @@ const DurationMs = Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: 86_4
 const TokenCount = Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: 1_000_000_000_000 }));
 export const ProductAnalyticsChannel = Schema.Literals(["stable", "beta", "remote"]);
 export type ProductAnalyticsChannel = typeof ProductAnalyticsChannel.Type;
+
+/** A random receipt deduplicates delivery and has no installation or account scope. */
+export const AnonymousProductRecord = Schema.Struct({
+  id: Schema.String.check(Schema.isUUID(4)),
+  // The queue uses ts for expiry. On this wire it carries only a UTC day.
+  ts: Schema.String.check(
+    Schema.isPattern(/^\d{4}-\d{2}-\d{2}$/),
+    Schema.makeFilter((day) => {
+      const date = new Date(day);
+      return Number.isFinite(date.getTime()) && date.toISOString().slice(0, 10) === day;
+    }),
+  ),
+  event: Schema.Literals(ANONYMOUS_PRODUCT_EVENTS),
+  channel: ProductAnalyticsChannel,
+}).annotate({ parseOptions: { onExcessProperty: "error" } });
+export type AnonymousProductRecord = typeof AnonymousProductRecord.Type;
+export const decodeAnonymousProductRecord = Schema.decodeUnknownSync(AnonymousProductRecord);
+
 export const ProductAnalyticsSurface = Schema.Literals(["desktop", "ios", "ipados"]);
 export type ProductAnalyticsSurface = typeof ProductAnalyticsSurface.Type;
 export const ProductAnalyticsPlatform = Schema.Literals([
@@ -93,6 +123,7 @@ export type ProductAnalyticsPlatform = typeof ProductAnalyticsPlatform.Type;
 export const ProductAnalyticsInput = Schema.Struct({
   event: ProductAnalyticsEvent,
   outcome: ProductAnalyticsOutcome,
+  reliabilityCode: Schema.optional(ReliabilityCode),
   feature: Schema.optional(ProductAnalyticsFeature),
   mode: Schema.optional(ProductAnalyticsMode),
   provider: Schema.optional(ProductAnalyticsProvider),

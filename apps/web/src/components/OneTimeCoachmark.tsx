@@ -5,11 +5,40 @@ import {
   type ButtonHTMLAttributes,
   type ReactElement,
 } from "react";
+import { create } from "zustand";
 
 import { useAnnouncementSheetSlot, useAnnouncementSheetSlotStore } from "./announcementSheetSlot";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
 import { cn } from "~/lib/utils";
 import { useTranslation } from "~/i18n";
+
+export const ACTIVITY_COACHMARK_STORAGE_KEY = "synara:activity-onboarding:v1";
+
+function hasSeen(storageKey: string): boolean {
+  try {
+    return window.localStorage.getItem(storageKey) === "seen";
+  } catch {
+    return false;
+  }
+}
+
+function markSeen(storageKey: string) {
+  try {
+    window.localStorage.setItem(storageKey, "seen");
+  } catch {
+    // Storage can be unavailable in private or restricted browser contexts.
+  }
+}
+
+/** Bumped when hints are acknowledged elsewhere, so mounted coachmarks re-read storage. */
+const useCoachmarkAcknowledgements = create<{ epoch: number }>(() => ({ epoch: 0 }));
+
+/** The app tour points at Activity and Tasks itself; their one-time hints would repeat it. */
+export function markCoachmarksSeen() {
+  markSeen(ACTIVITY_COACHMARK_STORAGE_KEY);
+  markSeen(TASKS_COACHMARK.storageKey);
+  useCoachmarkAcknowledgements.setState(({ epoch }) => ({ epoch: epoch + 1 }));
+}
 
 /** A remembered hint sharing the startup announcement slot with Activity and the tour. */
 export function OneTimeCoachmark({
@@ -30,34 +59,24 @@ export function OneTimeCoachmark({
   ready?: boolean;
   children: ReactElement<ButtonHTMLAttributes<HTMLButtonElement>>;
 }) {
-  const [visible, setVisible] = useState(() => {
-    if (typeof window === "undefined") return false;
-    try {
-      return window.localStorage.getItem(storageKey) !== "seen";
-    } catch {
-      return true;
-    }
-  });
+  const [pending, setPending] = useState(
+    () => typeof window !== "undefined" && !hasSeen(storageKey),
+  );
+  const visible = pending;
   const [tooltipOpen, setTooltipOpen] = useState(false);
   const startupSettled = useAnnouncementSheetSlotStore((state) => state.startupSettled);
   const { open } = useAnnouncementSheetSlot(visible && startupSettled && ready);
   const hintOpen = visible && open;
-  const markSeen = () => {
-    try {
-      window.localStorage.setItem(storageKey, "seen");
-    } catch {
-      // Storage can be unavailable in private or restricted browser contexts.
-    }
-  };
+  // A hint the app tour acknowledged while this control was mounted never shows.
+  const acknowledgements = useCoachmarkAcknowledgements((state) => state.epoch);
+  useEffect(() => {
+    if (acknowledgements > 0 && pending && !open && hasSeen(storageKey)) setPending(false);
+  }, [acknowledgements, open, pending, storageKey]);
   useEffect(() => {
     if (!open) return;
-    try {
-      window.localStorage.setItem(storageKey, "seen");
-    } catch {
-      // Keep the hint usable when persistence is unavailable.
-    }
+    markSeen(storageKey);
     const timeout = window.setTimeout(() => {
-      setVisible(false);
+      setPending(false);
       setTooltipOpen(false);
     }, 8_000);
     return () => window.clearTimeout(timeout);
@@ -73,8 +92,8 @@ export function OneTimeCoachmark({
       <TooltipTrigger
         render={cloneElement(children, {
           onClick: (event) => {
-            if (visible) markSeen();
-            setVisible(false);
+            if (visible) markSeen(storageKey);
+            setPending(false);
             setTooltipOpen(false);
             children.props.onClick?.(event);
           },

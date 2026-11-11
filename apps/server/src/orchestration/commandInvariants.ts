@@ -471,7 +471,8 @@ export function requireThreadNotArchived(input: {
 export type ThreadResumePreconditionViolation =
   | "thread-archived"
   | "turn-completed"
-  | "turn-in-flight";
+  | "turn-in-flight"
+  | "turn-replaced";
 
 export interface ThreadResumePrecondition {
   /** Turn in flight when the chat was recorded; null while the provider was still connecting. */
@@ -484,15 +485,19 @@ export interface ThreadResumePrecondition {
  * at quit is continued only while the thread is not archived, has nothing in
  * flight, and no turn finished on its own since the record was taken — neither
  * the recorded turn (it was running then, so it can only have completed later)
- * nor any newer one. A turn that completed before the record is the previous
- * turn of a chat that was still connecting and does not count; an interrupted or
- * errored turn is exactly what a continuation is for.
+ * nor any newer one. A different turn requested after the record, or started
+ * after it while replacing a known turn, supersedes the recorded continuation
+ * even if the replacement ends in error or is interrupted. A chat recorded
+ * while connecting can still belong to its earlier request.
  */
 export function threadResumePreconditionViolation(
   thread: {
     readonly archivedAt?: string | null | undefined;
     readonly session: Pick<OrchestrationSession, "status" | "activeTurnId"> | null;
-    readonly latestTurn: Pick<OrchestrationLatestTurn, "turnId" | "state" | "completedAt"> | null;
+    readonly latestTurn: Pick<
+      OrchestrationLatestTurn,
+      "turnId" | "state" | "requestedAt" | "startedAt" | "completedAt"
+    > | null;
   },
   precondition: ThreadResumePrecondition,
 ): ThreadResumePreconditionViolation | null {
@@ -514,6 +519,17 @@ export function threadResumePreconditionViolation(
   ) {
     return "turn-completed";
   }
+  if (
+    latestTurn !== null &&
+    latestTurn.state !== "completed" &&
+    latestTurn.turnId !== precondition.recordedTurnId &&
+    (latestTurn.requestedAt >= precondition.recordedAt ||
+      (precondition.recordedTurnId !== null &&
+        latestTurn.startedAt !== null &&
+        latestTurn.startedAt >= precondition.recordedAt))
+  ) {
+    return "turn-replaced";
+  }
   return null;
 }
 
@@ -528,5 +544,7 @@ export function threadResumePreconditionDetail(
       return `Thread '${threadId}' finished on its own; there is nothing to resume.`;
     case "turn-in-flight":
       return `Thread '${threadId}' already has a turn in flight.`;
+    case "turn-replaced":
+      return `Thread '${threadId}' started another turn after it was remembered for resume.`;
   }
 }

@@ -318,12 +318,18 @@ final class HelperSession {
     }
 
     let writer = try FrameSocketWriter(path: socketPath)
-    let frameStream = try FrameStream(
-      descriptor: displayDescriptor,
-      deviceId: device.udid,
-      writer: writer,
-      keyframeIntervalSeconds: keyframeIntervalSeconds)
-    try frameStream.start()
+    let frameStream: FrameStream
+    do {
+      frameStream = try FrameStream(
+        descriptor: displayDescriptor,
+        deviceId: device.udid,
+        writer: writer,
+        keyframeIntervalSeconds: keyframeIntervalSeconds)
+      try frameStream.start()
+    } catch {
+      writer.close()
+      throw error
+    }
     stream = frameStream
 
     return [

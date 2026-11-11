@@ -4,8 +4,12 @@ import { createHash, randomUUID } from "node:crypto";
 import { mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import {
+  decodeAnonymousProductRecord,
   isProductAnalyticsCommand,
   PRODUCT_COHORT_WINDOWS,
+  ANONYMOUS_PRODUCT_EVENTS,
+  ANONYMOUS_PRODUCT_RETRY_DAYS,
+  type AnonymousProductRecord,
   type ProductAnalyticsCohortStage,
   type ProductAnalyticsChannel,
   type ProductAnalyticsEnvelope,
@@ -13,8 +17,15 @@ import {
 } from "@synara/contracts";
 
 import { HostUsageRelay } from "./hostUsageRelay";
+import { ReliabilityReporter } from "./reliabilityReporter";
 
 type CohortState = { day: string; entryTs: string; completed: ProductAnalyticsCohortStage[] };
+type QueuedEvent =
+  | ProductAnalyticsEnvelope
+  | (AnonymousProductRecord & {
+      cohortDay?: never;
+      cohortStage?: never;
+    });
 
 // Stable retries identify only a stage of this random installation, never an account.
 function cohortEventId(installId: string, day: string, stage: ProductAnalyticsCohortStage): string {
@@ -111,6 +122,7 @@ function platform(value: string): ProductAnalyticsEnvelope["platform"] {
  */
 export class ProductAnalytics {
   private readonly hostUsage: HostUsageRelay;
+  private readonly reliability: ReliabilityReporter;
   private readonly consentPath: string;
   private readonly installIdPath: string;
   private readonly identityVersionPath: string;
@@ -126,8 +138,9 @@ export class ProductAnalytics {
   private readonly defaultEnabled: boolean;
   private readonly listeners = new Set<(enabled: boolean) => void>();
   private consentNeedsPersistence = false;
+  private hasExplicitConsent = false;
   private installId: string | null = null;
-  private queue: ProductAnalyticsEnvelope[] = [];
+  private queue: QueuedEvent[] = [];
   private timer: ReturnType<typeof setInterval> | null = null;
   private retryTimer: ReturnType<typeof setTimeout> | null = null;
   private controller: AbortController | null = null;
@@ -135,6 +148,7 @@ export class ProductAnalytics {
   private activeDay: string | null = null;
   private epoch = 0;
   private flushing = false;
+  private initialized = false;
   private disposed = false;
 
   constructor(input: {
@@ -147,6 +161,7 @@ export class ProductAnalytics {
   }) {
     const dir = join(input.homeDir, "product-analytics");
     this.hostUsage = new HostUsageRelay(input.homeDir, input.channel);
+    this.reliability = new ReliabilityReporter(input);
     this.consentPath = join(dir, "consent.json");
     this.installIdPath = join(dir, "install-id");
     this.identityVersionPath = join(dir, "identity-version");
@@ -158,6 +173,12 @@ export class ProductAnalytics {
     this.platform = platform(input.platform);
     this.fetcher = input.fetcher ?? fetch;
     this.defaultEnabled = input.defaultEnabled === true;
+  }
+
+  /** The primary desktop process owns consent, identity, and the durable queues. */
+  initialize(): void {
+    if (this.initialized || this.disposed) return;
+    this.initialized = true;
     this.enabled = this.readConsent();
     // Older clients kept an account-derived hash independently of consent.
     try {
@@ -184,12 +205,14 @@ export class ProductAnalytics {
     } else {
       this.clearPersistentData();
     }
+    this.reliability.setEnabled(this.enabled && this.hasExplicitConsent, { restorePending: true });
   }
 
   private readonly fetcher: typeof fetch;
 
   start(): void {
-    if (this.timer) return;
+    if (!this.initialized || this.disposed || this.timer) return;
+    this.reliability.start();
     this.timer = setInterval(() => {
       this.trackActiveDay();
       void this.flush();
@@ -231,13 +254,31 @@ export class ProductAnalytics {
 
   setEnabled(value: unknown): { enabled: boolean } {
     if (this.disposed) throw new Error("Product analytics is shutting down");
+    if (!this.initialized) throw new Error("Product analytics has not been initialized");
     if (typeof value !== "boolean") return this.getState();
-    if (value === this.enabled && !(value === false && this.consentNeedsPersistence))
+    if (
+      value === this.enabled &&
+      !(value === false && this.consentNeedsPersistence) &&
+      !(value === true && !this.hasExplicitConsent)
+    )
       return this.getState();
+    if (value && this.enabled && !this.hasExplicitConsent) {
+      // Confirming Remote's default choice must not rotate its existing product
+      // identity or discard pending usage. Only reliability begins a new epoch.
+      try {
+        this.reliability.setEnabled(true);
+        this.persistConsent();
+      } catch (error) {
+        this.reliability.setEnabled(false);
+        throw error;
+      }
+      return this.getState();
+    }
     this.epoch += 1;
     this.cohort = null;
     this.cohortSupported = false;
     if (!value) {
+      this.reliability.setEnabled(false);
       const wasEnabled = this.enabled;
       this.enabled = false;
       if (wasEnabled) {
@@ -273,10 +314,12 @@ export class ProductAnalytics {
       this.queue = [];
       this.enabled = true;
       try {
+        this.reliability.setEnabled(true);
         this.persistConsent();
         this.hostUsage.enable();
       } catch (error) {
         this.enabled = false;
+        this.reliability.setEnabled(false);
         this.installId = null;
         this.clearPersistentData();
         throw error;
@@ -292,7 +335,17 @@ export class ProductAnalytics {
   track(input: unknown): void {
     if (this.disposed || !this.enabled || !this.installId) return;
     try {
-      const envelope = this.buildEnvelope(input);
+      if (
+        input &&
+        typeof input === "object" &&
+        "event" in input &&
+        input.event === "reliability.issue"
+      ) {
+        if ("outcome" in input && input.outcome === "failed" && "reliabilityCode" in input)
+          this.reliability.track({ code: input.reliabilityCode });
+        return;
+      }
+      const envelope = this.buildQueuedEvent(input);
       if (!envelope) return;
       this.pruneExpired();
       this.queue.push(envelope);
@@ -309,14 +362,17 @@ export class ProductAnalytics {
       return;
     this.pruneExpired();
     // Existing activity events keep progressing even if a host-specific payload is rejected.
-    const batch: ProductAnalyticsEnvelope[] = [];
+    const batch: QueuedEvent[] = [];
     for (const event of this.queue) {
       if (event.cohortStage && !this.cohortSupported) continue;
       if (batch.length >= MAX_BATCH_EVENTS) break;
+      // Never put an anonymous receipt in the same request as an installation ID.
+      if (batch[0] && "installId" in batch[0] !== "installId" in event) break;
       const candidate = [...batch, event];
       if (Buffer.byteLength(JSON.stringify({ events: candidate }), "utf8") > MAX_BATCH_BYTES) break;
       batch.push(event);
     }
+    const anonymousEvents = batch[0] !== undefined && !("installId" in batch[0]);
     const hostWindow = batch.length === 0 ? this.hostUsage.peek(this.installId) : null;
     // A capability probe holds unsupported cohorts; host windows use their own receipt.
     if (batch.length === 0 && !hostWindow && (this.queue.length === 0 || this.cohortSupported))
@@ -330,7 +386,13 @@ export class ProductAnalytics {
       const response = await this.fetcher(ENDPOINT, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify(hostWindow ? { hostUsage: hostWindow } : { events: batch }),
+        body: JSON.stringify(
+          hostWindow
+            ? { hostUsage: hostWindow }
+            : anonymousEvents
+              ? { anonymousEvents: batch }
+              : { events: batch },
+        ),
         signal: controller.signal,
       });
       if (!response.ok) {
@@ -356,6 +418,9 @@ export class ProductAnalytics {
           throw new Error("Host usage receipt missing");
         if (epoch !== this.epoch || !this.enabled) return;
         this.hostUsage.acknowledge(hostWindow);
+      } else if (anonymousEvents) {
+        const receipt = (await response.json()) as { stored?: unknown };
+        if (receipt.stored !== true) throw new Error("Anonymous product receipt missing");
       } else {
         this.cohortSupported = response.headers.get("x-synara-product-cohorts") === "1";
         if (this.cohortSupported && batch.some((event) => event.cohortStage)) {
@@ -411,6 +476,7 @@ export class ProductAnalytics {
   }
 
   dispose(): void {
+    this.reliability.dispose();
     if (this.disposed) return;
     this.disposed = true;
     this.epoch += 1;
@@ -421,6 +487,33 @@ export class ProductAnalytics {
     this.controller?.abort();
     this.controller = null;
     this.flushing = false;
+  }
+
+  /** Uses the same consent, with no installation identity in the technical receipt. */
+  trackReliability(input: unknown): void {
+    this.reliability.track(input);
+  }
+
+  private buildQueuedEvent(value: unknown): QueuedEvent | null {
+    if (
+      value &&
+      typeof value === "object" &&
+      "event" in value &&
+      isOneOf(ANONYMOUS_PRODUCT_EVENTS, value.event)
+    ) {
+      const outcome =
+        value.event === "app.crash" || value.event === "remote.connection-timeout"
+          ? "failed"
+          : "succeeded";
+      if (!("outcome" in value) || value.outcome !== outcome) return null;
+      return {
+        id: randomUUID(),
+        ts: new Date().toISOString().slice(0, 10),
+        event: value.event,
+        channel: this.channel,
+      };
+    }
+    return this.buildEnvelope(value);
   }
 
   private buildEnvelope(value: unknown): ProductAnalyticsEnvelope | null {
@@ -589,7 +682,11 @@ export class ProductAnalytics {
     }
     let entry: ProductAnalyticsEnvelope | undefined;
     for (const event of this.queue) {
-      if (event.cohortStage === "new" && (!entry || Date.parse(event.ts) > Date.parse(entry.ts)))
+      if (
+        "installId" in event &&
+        event.cohortStage === "new" &&
+        (!entry || Date.parse(event.ts) > Date.parse(entry.ts))
+      )
         entry = event;
     }
     if (entry && (!state || Date.parse(entry.ts) > Date.parse(state.entryTs)))
@@ -607,6 +704,7 @@ export class ProductAnalytics {
     }
     try {
       const value = JSON.parse(raw) as { enabled?: unknown };
+      this.hasExplicitConsent = value.enabled === true;
       return value.enabled === true;
     } catch {
       // A recorded but unreadable choice never re-enables collection.
@@ -635,11 +733,19 @@ export class ProductAnalytics {
     return id;
   }
 
-  private readQueue(): ProductAnalyticsEnvelope[] {
+  private readQueue(): QueuedEvent[] {
     try {
       const values = JSON.parse(readFileSync(this.queuePath, "utf8")) as unknown;
       if (!Array.isArray(values)) return [];
-      const valid = values.flatMap((item) => {
+      const valid = values.flatMap<QueuedEvent>((item) => {
+        if (item && typeof item === "object" && isOneOf(ANONYMOUS_PRODUCT_EVENTS, item.event)) {
+          try {
+            const record = decodeAnonymousProductRecord(item);
+            return record.channel === this.channel ? [record] : [];
+          } catch {
+            return [];
+          }
+        }
         const reconstructed = this.reconstructStoredEnvelope(item);
         return reconstructed ? [reconstructed] : [];
       });
@@ -723,16 +829,24 @@ export class ProductAnalytics {
   }
 
   private pruneExpired(): void {
-    const cutoff = Date.now() - MAX_EVENT_AGE_MS;
+    const now = Date.now();
+    const cutoff = now - MAX_EVENT_AGE_MS;
+    const oldestAnonymousDay = new Date(now - ANONYMOUS_PRODUCT_RETRY_DAYS * 86_400_000)
+      .toISOString()
+      .slice(0, 10);
+    const today = new Date(now).toISOString().slice(0, 10);
     this.queue = this.queue.filter((event) => {
+      // The receiver accepts the entire oldest UTC day in its retry window.
+      if (!("installId" in event)) return event.ts >= oldestAnonymousDay && event.ts <= today;
       const time = Date.parse(event.ts);
-      return Number.isFinite(time) && time >= cutoff && time <= Date.now() + 5 * 60_000;
+      return Number.isFinite(time) && time >= cutoff && time <= now + 5 * 60_000;
     });
   }
 
   private persistConsent(): void {
     try {
       this.writeAtomic(this.consentPath, JSON.stringify({ enabled: this.enabled }), true);
+      this.hasExplicitConsent = this.enabled;
       this.consentNeedsPersistence = false;
     } catch (error) {
       this.consentNeedsPersistence = true;

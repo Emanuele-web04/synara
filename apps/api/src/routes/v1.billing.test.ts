@@ -15,6 +15,7 @@ import { BillingCatalogUnavailableError, type BillingProvider } from "../billing
 import { createBillingService } from "../billing/service";
 
 const url = process.env.TEST_DATABASE_URL;
+const webOrigin = "https://www.trysynara.com";
 describe.skipIf(!url)("authenticated sandbox billing API", () => {
   let isolated: Awaited<ReturnType<typeof createIsolatedTestDatabase>>;
   let database: ReturnType<typeof createDb>;
@@ -82,9 +83,60 @@ describe.skipIf(!url)("authenticated sandbox billing API", () => {
       verify: vi.fn(async () => null),
     };
     const billing = createBillingService({ pool: database.pool, provider });
-    const app = new Hono().route("/api/v1", createV1Routes({ ...deps, billing }));
+    const app = new Hono().route(
+      "/api/v1",
+      createV1Routes({ ...deps, billing, webCheckoutOrigin: webOrigin }),
+    );
     return { app, provider, billing };
   }
+
+  it("starts website checkout for the email-code account and never returns account tokens", async () => {
+    const { app, provider } = fixture();
+    const { user } = await login();
+    const codePath = "/api/v1/billing/web-checkout/code";
+    const startPath = "/api/v1/billing/web-checkout/start";
+    const headers = { origin: webOrigin, "content-type": "application/json" };
+    const send = (origin: string) =>
+      app.request(codePath, {
+        method: "POST",
+        headers: { ...headers, origin },
+        body: JSON.stringify({ email: user.email }),
+      });
+
+    expect((await send("https://attacker.invalid")).status).toBe(403);
+    expect(workos.currentMagicAuth(user.email)).toBeUndefined();
+    const preflight = await app.request(startPath, {
+      method: "OPTIONS",
+      headers: { origin: webOrigin, "access-control-request-method": "POST" },
+    });
+    expect(preflight.headers.get("access-control-allow-origin")).toBe(webOrigin);
+    expect((await send(webOrigin)).status).toBe(202);
+    const { code } = workos.currentMagicAuth(user.email)!;
+    const body = {
+      email: user.email,
+      code,
+      interval: "month",
+      userId: "forged-user",
+      successUrl: "https://attacker.invalid",
+    };
+    const start = () =>
+      app.request(startPath, { method: "POST", headers, body: JSON.stringify(body) });
+    const response = await start();
+    expect(response.status).toBe(200);
+    expect(response.headers.get("cache-control")).toBe("private, no-store");
+    expect(await response.json()).toEqual({
+      url: "https://sandbox.polar.sh/checkout/test",
+      environment: "sandbox",
+    });
+    expect((await start()).status).toBe(401);
+    expect(provider.checkout).toHaveBeenCalledExactlyOnceWith(
+      user.id,
+      user.email,
+      "month",
+      expect.any(String),
+      undefined,
+    );
+  });
   it("requires a verified session even when disabled, and labels disabled sandbox status", async () => {
     const app = new Hono().route("/api/v1", createV1Routes(deps));
     expect((await app.request("/api/v1/billing/status")).status).toBe(401);

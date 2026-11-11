@@ -54,7 +54,10 @@ On desktop, **Settings → Connections → View Alto plans** opens the existing
 Subscription panel when checkout is available and the account has no paid
 Remote access.
 The same Connections screen has **Connect a device** for pairing once the host
-allows it. Subscription purchases are managed on desktop through Polar.
+allows it. Customers can start Polar checkout from desktop or the Synara pricing
+site. The website verifies the email code before opening a checkout for that
+account. Only the exact checkout success origin can call the web checkout
+routes, and the site receives the Polar redirect without an account token.
 A subscription never authorizes a host or device by itself, revokes a pairing,
 or deletes chat history. `POLAR_REMOTE_ACCESS_ENFORCED` is a separate, strict
 boolean and defaults to `false`; enabling it requires configured billing and
@@ -409,6 +412,32 @@ backs both:
 
 Both converge on the same token pair, so everything downstream — workspace
 scoping, credential storage, refresh — is one code path.
+
+Refresh admission failures use `429 refresh_not_attempted` only when this API
+rejects the request before sending the refresh token to the identity provider.
+That response includes `Retry-After: 60`; desktop keeps the token available for
+the next request. Upstream `429 rate_limited`, unknown outcomes and lost API
+responses remain distinct: they do not prove that a token was unused.
+Only `401 unauthorized` from the refresh endpoint proves a terminal refusal;
+an unrecognized response preserves the credential and its uncertain-operation
+marker. Identity metadata or verification-key outages surface as server failures,
+so they do not tell desktop clients to renew a valid session. Invalid or expired
+access tokens still receive `401 unauthorized`.
+
+The desktop renews access tokens for session failures. Authenticated permission
+denials and device-proof failures pass through without rotating the session.
+Billing stays bound to the captured account and workspace. Remote grants and
+Host Secrets operations also verify the registered device identity before using
+credentials or applying a result.
+
+The WorkOS adapter retries a transient refresh failure once, with backoff and
+a total deadline of at most 25 seconds from the first attempt. The configured
+grant timeout can shorten that deadline. This uses WorkOS's documented
+[30-second replay grace period](https://workos.com/docs/authkit/session-resilience)
+for the exact same refresh request; revoked or expired grants are not retried.
+OTP and PKCE grants retain their existing behavior. Account-status failures are
+request-scoped RPC errors, so a temporary renewal fault does not fail unrelated
+requests on the connection.
 
 ## Hosts are account entities shared through organizations
 

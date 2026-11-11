@@ -25,7 +25,7 @@ const readyCodexStatus = {
 };
 
 describe("providerStatusCache", () => {
-  it("writes and reads provider status snapshots", async () => {
+  it("caches provider readiness without the signed-in account identity", async () => {
     const result = await Effect.runPromise(
       Effect.gen(function* () {
         const fileSystem = yield* FileSystem.FileSystem;
@@ -39,17 +39,23 @@ describe("providerStatusCache", () => {
 
         yield* writeProviderStatusCache({
           filePath: cachePath,
-          provider: readyCodexStatus,
+          provider: {
+            ...readyCodexStatus,
+            accountEmail: "work@example.com",
+            accountOrganization: "Example Org",
+          },
         });
 
         return {
           cached: yield* readProviderStatusCache(cachePath),
+          serialized: JSON.parse(yield* fileSystem.readFileString(cachePath)),
           mode: fs.statSync(cachePath).mode & 0o777,
         };
       }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
     );
 
     expect(result.cached).toEqual(readyCodexStatus);
+    expect(result.serialized).toEqual(readyCodexStatus);
     if (process.platform !== "win32") expect(result.mode).toBe(0o600);
   });
 
@@ -76,7 +82,7 @@ describe("providerStatusCache", () => {
     expect(result).toBeUndefined();
   });
 
-  it("normalizes legacy cache entries without instance metadata", async () => {
+  it("normalizes older cache entries and ignores any account identity", async () => {
     const result = await Effect.runPromise(
       Effect.gen(function* () {
         const fileSystem = yield* FileSystem.FileSystem;
@@ -94,11 +100,11 @@ describe("providerStatusCache", () => {
           cachePath,
           `${JSON.stringify({
             provider: "claudeAgent",
-            instanceId: "claudeAgent",
-            driver: "claudeAgent",
             status: "ready",
             available: true,
             authStatus: "authenticated",
+            accountEmail: "old@example.com",
+            accountOrganization: "Old Org",
             checkedAt: "2026-04-15T10:00:00.000Z",
           })}\n`,
         );
@@ -110,7 +116,8 @@ describe("providerStatusCache", () => {
       }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
     );
 
-    expect(result).toMatchObject({
+    expect(result).toEqual({
+      ...readyCodexStatus,
       provider: "claudeAgent",
       instanceId: "claudeAgent",
       driver: "claudeAgent",

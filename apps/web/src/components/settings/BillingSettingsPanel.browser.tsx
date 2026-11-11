@@ -1,5 +1,5 @@
 import "../../index.css";
-import type { AccountBillingStatus, AccountStatus } from "@synara/contracts";
+import { type AccountBillingStatus, type AccountStatus, WsRpcError } from "@synara/contracts";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { page } from "vitest/browser";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -150,7 +150,7 @@ describe("Synara Alto settings", () => {
       url: "https://polar.sh/purchases/subscriptions",
     });
     await render(panel(new QueryClient()));
-    await expect.element(page.getByText("Alto", { exact: true })).toBeVisible();
+    await expect.element(page.getByText("Alto (Pro)", { exact: true })).toBeVisible();
     await expect.element(page.getByText("Sandbox", { exact: true })).not.toBeInTheDocument();
     await expect.element(page.getByRole("button", { name: /^Monthly/ })).not.toBeInTheDocument();
     await page.getByRole("button", { name: "Manage", exact: true }).click();
@@ -189,6 +189,24 @@ describe("Synara Alto settings", () => {
       expect(fixture.open).not.toHaveBeenCalled();
     },
   );
+
+  it.each([
+    ["rate_limited", "Too many billing requests"],
+    ["internal_error", "Billing is temporarily unavailable"],
+  ])("shows the billing service's explanation when checkout returns %s", async (code, message) => {
+    fixture.billing.mockResolvedValue({
+      ...disabled,
+      environment: "production",
+      available: true,
+      canCheckout: true,
+      plans: [{ interval: "month", amountMinor: 1000, currency: "USD" }],
+    });
+    fixture.checkout.mockRejectedValueOnce(new WsRpcError({ code, message }));
+    await render(panel(new QueryClient()));
+    await choosePlan("Monthly");
+    await expect.element(page.getByRole("status")).toHaveTextContent(message);
+    expect(fixture.open).not.toHaveBeenCalled();
+  });
 
   it("keeps the portal reachable for a former subscriber while offering the plans", async () => {
     fixture.billing.mockResolvedValue({

@@ -16,6 +16,7 @@ import { isBetaFeatureEnabled } from "@synara/shared/betaFeatures";
 import { describe, expect, it } from "vitest";
 import { providerDisabledSettingsMessage } from "./provider/enabledProviderAdapter";
 import { ServerConfig } from "./config";
+import { ProviderCredentials, ProviderCredentialsLive } from "./providerCredentials";
 import {
   gateBetaOnlyProviders,
   resolveTextGenerationProvider,
@@ -27,6 +28,7 @@ import {
 import {
   ServerSettings as ServerSettingsSchema,
   ServerSettingsPatch as ServerSettingsPatchSchema,
+  ServerUpdateSettingsInput,
   MAX_SOURCE_CONTROL_CUSTOM_INSTRUCTIONS_LENGTH,
 } from "@synara/contracts";
 
@@ -75,6 +77,31 @@ describe("ServerSettingsService", () => {
     );
     expect(result).toMatchObject({ autoResumeAfterUsageLimits: true, usageLimitRecoveryEpoch: 1 });
   });
+
+  it.each(["startup", "update"] as const)(
+    "preserves a settings envelope from a newer build during %s",
+    async (operation) => {
+      await runWithSettings(
+        Effect.gen(function* () {
+          const service = yield* ServerSettingsService;
+          const { settingsPath } = yield* ServerConfig;
+          const fs = yield* FileSystem.FileSystem;
+          if (operation === "update") yield* service.start;
+          yield* fs.makeDirectory(dirname(settingsPath), { recursive: true });
+          const saved = JSON.stringify({
+            revision: 12,
+            migrationVersion: 10,
+            settings: { futurePreference: "preserved", keepAwakeMode: "off" },
+          });
+          yield* fs.writeFileString(settingsPath, saved);
+          const attempt = operation === "startup" ? service.start : service.updateSettings({});
+          const outcome = yield* Effect.exit(attempt.pipe(Effect.asVoid));
+          expect(yield* fs.readFileString(settingsPath)).toBe(saved);
+          expect(outcome._tag).toBe("Failure");
+        }),
+      );
+    },
+  );
 
   it("defaults keep awake to off", () => {
     expect(Schema.decodeSync(ServerSettingsSchema)({}).keepAwakeMode).toBe("off");
@@ -547,6 +574,142 @@ describe("ServerSettingsService", () => {
       instanceId: "cursor_work",
       model: DEFAULT_MODEL_BY_PROVIDER.cursor,
     });
+  });
+
+  it("imports missing legacy provider instances without replacing current settings or credentials", async () => {
+    const result = await runWithSettings(
+      Effect.gen(function* () {
+        const service = yield* ServerSettingsService;
+        const { settingsPath } = yield* ServerConfig;
+        const fs = yield* FileSystem.FileSystem;
+        yield* service.start;
+        const current = yield* service.updateSettingsView({
+          providerInstances: {
+            claudeAgent: {
+              driver: "claudeAgent",
+              displayName: "Default account",
+              enabled: true,
+              config: { binaryPath: "/configured/claude" },
+              environment: [
+                { name: "ANTHROPIC_API_KEY", value: "fixture-current", sensitive: true },
+              ],
+            },
+            claude_server_only: { driver: "claudeAgent", enabled: true },
+          },
+        });
+        const legacy = Schema.decodeUnknownSync(ServerUpdateSettingsInput)({
+          legacyProviderInstances: {
+            claudeAgent: {
+              driver: "claudeAgent",
+              enabled: false,
+              config: { binaryPath: "/legacy/claude" },
+              environment: [{ name: "ANTHROPIC_API_KEY", value: "fixture-stale", sensitive: true }],
+            },
+            claude_legacy_only: {
+              driver: "claudeAgent",
+              displayName: "Legacy profile",
+              enabled: true,
+              environment: [
+                { name: "ANTHROPIC_API_KEY", value: "fixture-imported", sensitive: false },
+              ],
+            },
+          },
+        });
+        const first = yield* service.updateSettingsView(legacy);
+        expect(first.providerInstances).toMatchObject({
+          claudeAgent: current.providerInstances.claudeAgent,
+          claude_server_only: current.providerInstances.claude_server_only,
+        });
+        expect(first.providerInstances.claude_legacy_only).toMatchObject({
+          displayName: "Legacy profile",
+          enabled: true,
+          environment: [
+            { name: "ANTHROPIC_API_KEY", value: "", sensitive: true, valueRedacted: true },
+          ],
+        });
+        const replayed = yield* service.updateSettingsView(legacy);
+        expect(replayed.providerInstances).toEqual(first.providerInstances);
+        const settings = yield* service.getSettings;
+        const raw = yield* fs.readFileString(settingsPath);
+        return { settings, raw };
+      }),
+    );
+
+    expect(result.settings.providerInstances.claudeAgent?.environment?.[0]?.value).toBe(
+      "fixture-current",
+    );
+    expect(result.settings.providerInstances.claude_legacy_only?.environment?.[0]?.value).toBe(
+      "fixture-imported",
+    );
+    expect(result.raw).not.toContain("fixture-");
+    expect(JSON.parse(result.raw).settings).not.toHaveProperty("legacyProviderInstances");
+  });
+
+  it.each([true, false])(
+    "preserves an existing OpenCode endpoint and vault password during legacy import (%s)",
+    async (configured) => {
+      await runWithSettings(
+        Effect.gen(function* () {
+          const service = yield* ServerSettingsService;
+          yield* service.start;
+          if (configured) {
+            yield* service.updateSettingsView({
+              providers: {
+                opencode: {
+                  serverUrl: "https://current.example",
+                  serverPassword: "current-fixture",
+                },
+              },
+            });
+          }
+          const migrated = yield* service.updateSettingsView({
+            legacyProviders: {
+              opencode: { serverUrl: "https://legacy.example", serverPassword: "legacy-fixture" },
+              claudeAgent: { binaryPath: "/legacy/claude" },
+            },
+          });
+          expect(migrated.legacyProviderImportAcknowledged).toBe(true);
+          expect(migrated.providers.opencode.serverUrl).toBe(
+            configured ? "https://current.example" : "https://legacy.example",
+          );
+          expect(migrated.providers.claudeAgent.binaryPath).toBe("/legacy/claude");
+          const password = yield* Effect.gen(function* () {
+            const credentials = yield* ProviderCredentials;
+            return yield* credentials.getServerPassword("opencode");
+          }).pipe(Effect.provide(ProviderCredentialsLive.pipe(Layer.provide(NodeServices.layer))));
+          expect(password).toBe(configured ? "current-fixture" : "legacy-fixture");
+        }),
+      );
+    },
+  );
+
+  it("does not recreate a deleted provider instance when legacy import is retried after restart", async () => {
+    await runWithSettings(
+      Effect.gen(function* () {
+        const service = yield* ServerSettingsService;
+        const config = yield* ServerConfig;
+        yield* service.start;
+        const legacy = Schema.decodeUnknownSync(ServerUpdateSettingsInput)({
+          legacyProviderInstances: { claude_legacy: { driver: "claudeAgent" } },
+        });
+        const first = yield* service.updateSettingsView(legacy);
+        expect(first.providerInstances).toHaveProperty("claude_legacy");
+        yield* service.updateSettingsView({ providerInstances: {} });
+        const replayed = yield* Effect.gen(function* () {
+          const restarted = yield* ServerSettingsService;
+          yield* restarted.start;
+          return yield* restarted.updateSettingsView(legacy);
+        }).pipe(
+          Effect.provide(
+            ServerSettingsLive.pipe(
+              Layer.provide(Layer.merge(NodeServices.layer, Layer.succeed(ServerConfig, config))),
+            ),
+          ),
+        );
+        expect(replayed.providerInstances).not.toHaveProperty("claude_legacy");
+        expect(replayed.legacyProviderImportAcknowledged).toBe(true);
+      }),
+    );
   });
 
   it("replaces the providerInstances map on settings updates", async () => {

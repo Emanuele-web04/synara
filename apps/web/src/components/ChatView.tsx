@@ -388,6 +388,7 @@ import { RateLimitBanner } from "./chat/RateLimitBanner";
 import type { RateLimitStatus } from "~/lib/rateLimitStatus";
 import { useRateLimitStatus } from "~/hooks/useRateLimitStatus";
 import { ThreadDetailHydrationState } from "./chat/ThreadDetailHydrationState";
+import { ThreadErrorBanner } from "./chat/ThreadErrorBanner";
 import { ChatThreadFindHost } from "./chat/ThreadFindBar";
 import { resolveTraitsTriggerSummary } from "./chat/TraitsPicker";
 import { TranscriptSelectionActionLayer } from "./chat/TranscriptSelectionActionLayer";
@@ -1124,6 +1125,10 @@ export default function ChatView({
     quotaProvider,
     quotaInstanceId,
   );
+  const enabledRateLimitStatus =
+    activeRateLimitStatus?.status === "allowed_warning" && !settings.showRateLimitWarnings
+      ? null
+      : activeRateLimitStatus;
   const activeRateLimitBannerDismissalKey = useMemo(
     () => getRateLimitBannerDismissalKey(activeRateLimitStatus, activeThread?.id ?? null),
     [activeRateLimitStatus, activeThread?.id],
@@ -1131,7 +1136,7 @@ export default function ChatView({
   const visibleActiveRateLimitStatus =
     activeRateLimitBannerDismissalKey === dismissedRateLimitBannerKey
       ? null
-      : activeRateLimitStatus;
+      : enabledRateLimitStatus;
   const latestTurnSettledByProvider = isLatestTurnSettled(
     activeLatestTurn,
     activeThread?.session ?? null,
@@ -6162,7 +6167,7 @@ export default function ChatView({
     activeThreadId: activeThread.id,
     activeProvider: activeThread.session?.provider ?? activeThread.modelSelection.provider,
     activeProviderInstanceId: quotaInstanceId,
-    rateLimitStatus: activeRateLimitStatus,
+    rateLimitStatus: enabledRateLimitStatus,
     checkpointBaselineUnavailable:
       Boolean(activeLatestTurnId) &&
       (activeThread.turnDiffSummaries.some(
@@ -6268,7 +6273,7 @@ export default function ChatView({
   const environmentHeaderState = environmentEnabled
     ? {
         open: environmentPanelVisibleEffective,
-        attention: activeRateLimitStatus !== null,
+        attention: enabledRateLimitStatus !== null,
         onOpenChange: setEnvironmentFromAuxiliary,
       }
     : null;
@@ -7098,6 +7103,16 @@ export default function ChatView({
                 </div>
                 {/* Positioned so it paints above the ASCII background. */}
                 <div className="relative w-full shrink-0 pb-3 sm:pb-4">
+                  {activeThread.error ? (
+                    <div className="flex shrink-0 justify-center px-3 pt-2">
+                      <ThreadErrorBanner
+                        error={activeThread.error}
+                        onDismiss={dismissActiveThreadError}
+                        onUnblock={unblockThread}
+                        unblocking={unblockingActiveThread}
+                      />
+                    </div>
+                  ) : null}
                   {composerSection}
                   {relocateComposerLeadingControls ? (
                     <div className={COMPOSER_COLUMN_FRAME_CLASS_NAME}>

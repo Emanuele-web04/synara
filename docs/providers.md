@@ -22,6 +22,40 @@ consistent workspace.
 Provider availability can differ between the current stable release and development builds. Use the
 provider settings in your installed Synara version as the authoritative list for that build.
 
+Provider settings report a provider as connected when an enabled account is ready.
+A ready secondary account keeps the provider available when its default account is
+disabled. Implicit new-chat selection prefers a usable configured account from the
+selected provider. Explicit account picks and live sessions keep their exact account.
+
+A build that encounters a newer server settings format preserves the file and
+provider credentials. Open the same app channel on a build that supports the
+saved format.
+
+When importing legacy browser settings, Synara keeps any configured server provider,
+including its endpoint and vault password. It imports missing provider instances and
+records which provider kinds and instance IDs it handled. A retry cannot recreate an
+instance deleted after import. The browser keeps its existing local credentials until
+the server acknowledges the import. Older builds can discard this receipt metadata
+when rewriting the settings file, so replay protection depends on a supporting build.
+
+## Crash recovery
+
+Crash recovery distinguishes previous-process turns from work started by pending
+command replay during this boot. Capture and restart cleanup use the same
+provider admission lease as turn startup and check the actual native session
+owner. Pending Stop commands still replay before recovery decisions. A later
+turn, including one that has already failed or been interrupted, invalidates an
+older automatic continuation; it must not be submitted again by that record.
+
+At graceful shutdown, provider exit events have a bounded one-second drain
+window to reach the durable journal before the event consumer closes. Only the
+matching root session/provider/lifecycle exit satisfies that drain; a child-task
+exit or an early persisted stop intent does not prove clean completion. If the
+deadline expires, normal crash recovery remains available. This does not prove
+native process cleanup on every platform or survive an immediate process kill.
+Opted-in desktop installations report fixed recovery failure categories through
+the [anonymous reliability lane](diagnostics.md#anonymous-reliability-reports).
+
 ## Usage-limit recovery
 
 **Settings → Providers → Resume after usage limits** enables automatic continuation and defaults to off. Codex and Claude can supply provider-classified terminal quota refusal and a future reset deadline. Synara waits for every blocking window it can verify; missing, stale, unrelated-account or ambiguous reset information leaves recovery manual. Usage panels and percentage warnings alone never schedule work. Other adapters remain manual until they expose equivalent terminal evidence. Native provider retries keep ownership of their active turn. Claude automatic recovery requires a verified native OAuth account profile on macOS or Linux. Windows policy scope, environment-token/API-key/helper authentication, federation profiles, and unreadable or unsupported native settings remain manual. Codex requires its native account ID; rotating tokens alone never establish durable identity.
@@ -55,6 +89,21 @@ blocked, ambiguous delivery results keep their uncertainty, and a surviving chil
 with an error while unrelated tasks remain usable. Persisted Claude compaction reviews with an
 unavailable owner remain held for reconciliation; startup skips their provider recovery instead
 of failing or resending the held message.
+
+If a chat loses a send acknowledgment, Synara keeps the original command identity
+and checks the conversation or the server's command receipt before another attempt.
+An accepted send consumes the matching queued item or unchanged recovered draft.
+An unresolved send keeps its attachments and promoted chat; a confirmed rejection
+allows a fresh attempt. Queue acceptance is persisted before removing the item,
+so a stale queue snapshot cannot resend an already acknowledged item.
+
+Desktop and HTTPS browsers also use a shared browser lock between windows. Plain
+HTTP LAN clients retain same-window coordination, but simultaneous first sends
+from separate tabs do not have that atomic guarantee. An interrupted queued claim
+on HTTP can remain pending until its accepted message appears or a secure client
+can reconcile it. Manual recovery records survive a reload in the same window;
+they do not reconstruct every editable attachment/context after the window closes
+before the live draft rollback finishes.
 
 An uncertain delivery remains blocked after a server restart. **Unblock thread** reconciles
 that delivery; it does not stop a provider process that is still running. For a stalled Claude
@@ -315,6 +364,12 @@ Partial or fallback catalogs are retried on demand after a thirty-second cooldow
 persisted or substituted for the last complete catalog. The first upgrade to this cache format
 discards the old catalog snapshot once, then rediscovers models on demand with the same shared
 request and failure limits; accounts, saved models, and sessions are unaffected.
+
+Accounts of one provider are told apart by who they are signed in as: a signed-in Claude or Codex
+account reports its email (and, for Claude, its organization) in its Settings editor, in the
+hover text of its picker tab and beside its name in the picker's account entries. The identity
+comes from a fresh login probe on the execution host and is shown only to host owners. Cached
+provider statuses and diagnostics exclude the identity.
 
 The composer model picker has one tab per connected provider and a Starred tab. Starring a model
 saves it together with its current effort, speed, and provider account, so one click (or
@@ -586,6 +641,12 @@ link in its reply.
 ## Provider profiles and terminal commands
 
 Provider settings can define multiple independently routed instances of any supported provider.
+
+The one-time import from older browser settings adds missing explicit provider
+instances. Existing server records keep their name, enablement, launch
+overrides, and credentials. Use Settings to edit or remove the server's
+instances.
+
 Each enabled instance receives a stable command in newly opened or restarted Synara terminals, for
 example `claude-work`, `codex-personal`, or `pi-team`. The command is an executable shim on `PATH`,
 not a zsh or bash function, so it behaves consistently from zsh, bash, fish, shell scripts, and

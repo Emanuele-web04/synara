@@ -432,6 +432,33 @@ describe("prefetchModelsForNewThread — new-thread options key parity", () => {
 });
 
 describe("prefetchModelsForNewThread — availability parity (#652)", () => {
+  it("warms a healthy Claude sibling instead of the disabled default for a new chat", () => {
+    const queryClient = new QueryClient();
+    const prefetchQuery = vi.spyOn(queryClient, "prefetchQuery").mockResolvedValue(undefined);
+    prefetchModelsForNewThread(queryClient, {
+      settings: makeSettings({
+        defaultProvider: "claudeAgent",
+        providerInstances: {
+          claudeAgent: { driver: "claudeAgent", enabled: false },
+          first_claude: { driver: "claudeAgent", displayName: "A", enabled: true },
+          work_claude: { driver: "claudeAgent", displayName: "B", enabled: true },
+        },
+      }),
+      providerStatuses: [
+        makeStatus("codex", true),
+        { ...makeStatus("claudeAgent", false), enabled: false },
+        { ...makeStatus("claudeAgent", false), instanceId: "first_claude" },
+        { ...makeStatus("claudeAgent", true), instanceId: "work_claude" },
+      ],
+      providerOrder: ["codex", "claudeAgent"],
+      statusesReconciled: true,
+    });
+    expect(modelKeysFromCalls(prefetchQuery)[0]?.slice(2, 4)).toEqual([
+      "claudeAgent",
+      "work_claude",
+    ]);
+  });
+
   it("skips confirmed-unavailable providers only when reconciled, and mirrors ChatView's preference", async () => {
     const queryClient = new QueryClient();
     const prefetchQuery = vi.spyOn(queryClient, "prefetchQuery").mockResolvedValue(undefined);

@@ -24,6 +24,7 @@ import {
   TRACKER_REPAIR_SNAPSHOT_RETENTION,
   createMigrationBackup,
   estimateMigrationBackupRequiredBytes,
+  inspectCompletedMigrationBackupForSchemaTooNew,
   inspectPendingMigrationRecovery,
   migrationBackupDirectory,
   migrationRecoveryMarkerPath,
@@ -37,6 +38,7 @@ import {
 import { migrationEntries, runMigrations } from "./Migrations.ts";
 import * as NodeSqliteClient from "./NodeSqliteClient.ts";
 import { makeSqlitePersistenceLive } from "./Layers/Sqlite.ts";
+import UsageLimitRecoveryMigration from "./Migrations/141_ProjectionThreadsUsageLimitRecovery.ts";
 import { runProcess } from "../processRunner.ts";
 
 vi.mock("node:fs/promises", async () => {
@@ -44,6 +46,7 @@ vi.mock("node:fs/promises", async () => {
   return {
     ...actual,
     rename: vi.fn(actual.rename),
+    unlink: vi.fn(actual.unlink),
   };
 });
 
@@ -63,6 +66,22 @@ async function makeDbPath(): Promise<string> {
 
 const runWithDatabase = <A, E>(dbPath: string, effect: Effect.Effect<A, E, SqlClient.SqlClient>) =>
   Effect.runPromise(effect.pipe(Effect.provide(NodeSqliteClient.layer({ filename: dbPath }))));
+
+const seedReleasedMainGap = (dbPath: string) =>
+  runWithDatabase(
+    dbPath,
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      yield* runMigrations({ toMigrationInclusive: 135 });
+      yield* UsageLimitRecoveryMigration;
+      yield* sql`INSERT INTO effect_sql_migrations (migration_id, name)
+        VALUES (141, 'ProjectionThreadsUsageLimitRecovery')`;
+      yield* sql`INSERT INTO projection_threads
+        (thread_id, project_id, title, created_at, updated_at, usage_limit_recovery_json)
+        VALUES ('upgrade-probe', 'project', 'Preserve this thread', '2026-10-31', '2026-10-31',
+          '{"id":"recovery-probe"}')`;
+    }),
+  );
 
 async function backupPaths(dbPath: string): Promise<Array<string>> {
   const directory = migrationBackupDirectory(dbPath);
@@ -92,6 +111,49 @@ async function exhaustResumeBudget(markerPath: string): Promise<void> {
     `${JSON.stringify({ ...marker, resumeAttempts: MIGRATION_RECOVERY_MAX_RESUME_ATTEMPTS })}\n`,
   );
 }
+
+async function seedInterruptedUpgrade(
+  targetVersion: number,
+  { divergent = false, resumeAttempts = 0 } = {},
+) {
+  const dbPath = await makeDbPath();
+  const { backupPath, createdAt, sourceVersion } = await runWithDatabase(
+    dbPath,
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      yield* runMigrations({ toMigrationInclusive: 135 });
+      yield* sql`CREATE TABLE upgrade_probe (value TEXT NOT NULL)`;
+      yield* sql`INSERT INTO upgrade_probe VALUES ('preserved')`;
+      if (divergent) {
+        yield* sql`UPDATE effect_sql_migrations SET name = 'ImportedMigration135'
+          WHERE migration_id = 135`;
+      }
+      return yield* createMigrationBackup(dbPath, { sourceVersion: "v135", targetVersion });
+    }),
+  );
+  const markerPath = migrationRecoveryMarkerPath(dbPath);
+  const markerText = JSON.stringify({
+    version: 1,
+    databasePath: dbPath,
+    backupPath,
+    sourceVersion,
+    targetVersion,
+    phase: "migration-in-progress",
+    createdAt,
+    resumeAttempts,
+  });
+  await fs.writeFile(markerPath, markerText, { mode: 0o600 });
+  return { dbPath, backupPath, markerPath, markerText };
+}
+
+const startDatabase = (dbPath: string, divergenceConsent?: string) =>
+  Effect.runPromise(
+    Layer.build(
+      makeSqlitePersistenceLive(dbPath, { divergenceConsent }).pipe(
+        Layer.provide(NodeServices.layer),
+      ),
+    ).pipe(Effect.scoped),
+  );
 
 describe("migration backups", () => {
   it("creates a restorable backup with Bun SQLite and reclaims only known snapshot directories", async () => {
@@ -565,6 +627,76 @@ describe("migration backups", () => {
     }
   });
 
+  it("keeps an older interrupted upgrade's original backup and records the schema actually reached", async () => {
+    const latest = Math.max(...migrationEntries.map(([id]) => id));
+    const previousTarget = latest - 1;
+    const { dbPath, backupPath, markerPath } = await seedInterruptedUpgrade(previousTarget);
+    const originalBackup = await fs.readFile(backupPath);
+
+    await startDatabase(dbPath);
+
+    await expect(fs.stat(markerPath)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(await backupPaths(dbPath)).toEqual([backupPath]);
+    expect(await fs.readFile(backupPath)).toEqual(originalBackup);
+    const database = new DatabaseSync(dbPath, { readOnly: true });
+    try {
+      expect(database.prepare("SELECT value FROM upgrade_probe").get()).toMatchObject({
+        value: "preserved",
+      });
+      expect(
+        database.prepare("SELECT MAX(migration_id) AS id FROM effect_sql_migrations").get(),
+      ).toMatchObject({ id: latest });
+    } finally {
+      database.close();
+    }
+    await expect(
+      inspectCompletedMigrationBackupForSchemaTooNew(dbPath, {
+        databaseMigrationId: latest,
+        latestSupportedMigrationId: previousTarget,
+      }),
+    ).resolves.toMatchObject({ kind: "restore-available", backupPath, backupMigrationId: 135 });
+  });
+
+  it.each([0, MIGRATION_RECOVERY_MAX_RESUME_ATTEMPTS])(
+    "leaves an interrupted upgrade targeting a newer build untouched after %i resume attempts",
+    async (resumeAttempts) => {
+      const latest = Math.max(...migrationEntries.map(([id]) => id));
+      const { dbPath, backupPath, markerPath, markerText } = await seedInterruptedUpgrade(
+        latest + 1,
+        { resumeAttempts },
+      );
+      const originalDatabase = await fs.readFile(dbPath);
+      const originalBackup = await fs.readFile(backupPath);
+
+      await expect(startDatabase(dbPath)).rejects.toThrow("Update Synara before resuming");
+
+      expect(await fs.readFile(markerPath, "utf8")).toBe(markerText);
+      expect(await fs.readFile(dbPath)).toEqual(originalDatabase);
+      expect(await fs.readFile(backupPath)).toEqual(originalBackup);
+      await expect(fs.stat(migrationBackupProvenancePath(dbPath))).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+    },
+  );
+
+  it("requires current-target consent before resuming a divergent older tracker", async () => {
+    const latest = Math.max(...migrationEntries.map(([id]) => id));
+    const { dbPath, backupPath, markerPath, markerText } = await seedInterruptedUpgrade(
+      latest - 1,
+      { divergent: true },
+    );
+    const result = await startDatabase(dbPath).catch((error: unknown) => error);
+    expect(result).toBeInstanceOf(MigrationDivergenceConsentRequiredError);
+    if (!(result instanceof MigrationDivergenceConsentRequiredError)) return;
+    expect(result.challenge.targetVersion).toBe(latest);
+    expect(await fs.readFile(markerPath, "utf8")).toBe(markerText);
+
+    await startDatabase(dbPath, result.challenge.consentToken);
+
+    expect(await backupPaths(dbPath)).toEqual([backupPath]);
+    await expect(fs.stat(markerPath)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
   it("stops resuming and demands an operator restore once the budget is spent", async () => {
     const dbPath = await makeDbPath();
 
@@ -607,7 +739,8 @@ describe("migration backups", () => {
     const marker = await Effect.runPromise(inspectPendingMigrationRecovery(dbPath));
     expect(marker).not.toBeNull();
     await expect(
-      Effect.runPromise(
+      runWithDatabase(
+        dbPath,
         resumeMarkedMigration(
           dbPath,
           marker!,
@@ -852,6 +985,96 @@ describe("migration backups", () => {
     });
   });
 
+  it("automatically backs up the exact released tracker gap, preserves data, and reopens safely", async () => {
+    const dbPath = await makeDbPath();
+    await seedReleasedMainGap(dbPath);
+
+    const startDatabase = () =>
+      Effect.runPromise(
+        Effect.gen(function* () {
+          const sql = yield* SqlClient.SqlClient;
+          expect(yield* sql`PRAGMA quick_check`).toEqual([{ quick_check: "ok" }]);
+          expect(
+            yield* sql`SELECT title, usage_limit_recovery_json
+            FROM projection_threads WHERE thread_id = 'upgrade-probe'`,
+          ).toEqual([
+            { title: "Preserve this thread", usage_limit_recovery_json: '{"id":"recovery-probe"}' },
+          ]);
+          expect(yield* runMigrations()).toEqual([]);
+        }).pipe(
+          Effect.provide(makeSqlitePersistenceLive(dbPath).pipe(Layer.provide(NodeServices.layer))),
+        ),
+      );
+    await startDatabase();
+    const backups = await backupPaths(dbPath);
+    expect(backups).toHaveLength(1);
+    const backup = await openBackupFixture(backups[0]!);
+    try {
+      expect(backup.prepare("PRAGMA quick_check").get()).toMatchObject({ quick_check: "ok" });
+      expect(
+        backup.prepare("SELECT name FROM effect_sql_migrations WHERE migration_id = 136").get(),
+      ).toBeUndefined();
+      expect(
+        backup.prepare("SELECT name FROM effect_sql_migrations WHERE migration_id = 141").get(),
+      ).toMatchObject({ name: "ProjectionThreadsUsageLimitRecovery" });
+      expect(
+        backup
+          .prepare("SELECT title FROM projection_threads WHERE thread_id = 'upgrade-probe'")
+          .get(),
+      ).toMatchObject({ title: "Preserve this thread" });
+    } finally {
+      backup.close();
+    }
+    await startDatabase();
+    expect(await backupPaths(dbPath)).toEqual(backups);
+    await expect(fs.stat(migrationRecoveryMarkerPath(dbPath))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    await Effect.runPromise(restoreMarkedMigrationBackup(dbPath));
+    const restored = new DatabaseSync(dbPath, { readOnly: true });
+    try {
+      expect(
+        restored.prepare("SELECT name FROM effect_sql_migrations WHERE migration_id = 136").get(),
+      ).toBeUndefined();
+      expect(
+        restored
+          .prepare("SELECT title FROM projection_threads WHERE thread_id = 'upgrade-probe'")
+          .get(),
+      ).toMatchObject({ title: "Preserve this thread" });
+    } finally {
+      restored.close();
+    }
+  });
+
+  it.each([
+    [
+      "an unknown legacy migration-32 name",
+      "UPDATE effect_sql_migrations SET name = 'UnknownMigration' WHERE migration_id = 32",
+    ],
+    [
+      "a renamed migration",
+      "UPDATE effect_sql_migrations SET name = 'UnknownMigration' WHERE migration_id = 141",
+    ],
+    [
+      "an extra tracker row",
+      "INSERT INTO effect_sql_migrations (migration_id, name) VALUES (136, 'AccountUsageSync')",
+    ],
+    ["a missing prefix row", "DELETE FROM effect_sql_migrations WHERE migration_id = 135"],
+  ])("requires consent when the released gap also has %s", async (_label, mutation) => {
+    const dbPath = await makeDbPath();
+    await seedReleasedMainGap(dbPath);
+    const blocked = await runWithDatabase(
+      dbPath,
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        yield* sql.unsafe(mutation);
+        return yield* Effect.flip(runWithPreMigrationBackup(dbPath, Effect.void));
+      }),
+    );
+    expect(blocked).toBeInstanceOf(MigrationDivergenceConsentRequiredError);
+    expect(await backupPaths(dbPath)).toEqual([]);
+  });
+
   it("requires consent for divergence after a legacy migration-32 tracker row", async () => {
     const dbPath = await makeDbPath();
 
@@ -945,6 +1168,190 @@ describe("migration backups", () => {
     ) as { readonly phase: string; readonly restoredAt?: string };
     expect(provenance.phase).toBe("migration-restored");
     expect(provenance.restoredAt).toBeTypeOf("string");
+  });
+
+  it("preserves the active migration when an older restore selection is used", async () => {
+    const dbPath = await makeDbPath();
+    const provenancePath = migrationBackupProvenancePath(dbPath);
+    const markerPath = migrationRecoveryMarkerPath(dbPath);
+    const activeBackup = await runWithDatabase(
+      dbPath,
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        yield* runMigrations({ toMigrationInclusive: 52 });
+        yield* sql`CREATE TABLE restore_selection_probe(value TEXT NOT NULL)`;
+        yield* sql`INSERT INTO restore_selection_probe VALUES ('before-upgrade')`;
+        yield* runWithPreMigrationBackup(dbPath, runMigrations());
+        yield* sql`UPDATE restore_selection_probe SET value = 'current'`;
+        const [latest] = yield* sql<{ readonly id: number }>`
+          SELECT MAX(migration_id) AS id FROM effect_sql_migrations
+        `;
+        return yield* createMigrationBackup(dbPath, {
+          sourceVersion: `v${latest!.id}`,
+          targetVersion: latest!.id + 1,
+        });
+      }),
+    );
+    const provenanceText = await fs.readFile(provenancePath, "utf8");
+    const { backupPath: expectedBackupPath } = JSON.parse(provenanceText) as {
+      readonly backupPath: string;
+    };
+    const markerText = JSON.stringify({
+      ...activeBackup,
+      version: 1,
+      databasePath: dbPath,
+      phase: "migration-in-progress",
+      resumeAttempts: 0,
+    });
+    await fs.writeFile(markerPath, markerText, { mode: 0o600 });
+
+    const attempted = await Effect.runPromiseExit(
+      restoreMarkedMigrationBackup(dbPath, {
+        expectedBackupPath,
+        expectedProvenancePath: provenancePath,
+      }),
+    );
+    expect(await fs.readFile(markerPath, "utf8")).toBe(markerText);
+    expect(await fs.readFile(provenancePath, "utf8")).toBe(provenanceText);
+    expect(attempted._tag).toBe("Failure");
+    const live = new DatabaseSync(dbPath, { readOnly: true });
+    try {
+      expect(live.prepare("SELECT value FROM restore_selection_probe").get()).toMatchObject({
+        value: "current",
+      });
+    } finally {
+      live.close();
+    }
+  });
+
+  it.each(["provenance", "marker"] as const)(
+    "preserves the original failed database when restore retries cannot write %s state",
+    async (failurePoint) => {
+      const dbPath = await makeDbPath();
+      const markerPath = migrationRecoveryMarkerPath(dbPath);
+      const provenancePath = migrationBackupProvenancePath(dbPath);
+      await runWithDatabase(
+        dbPath,
+        Effect.gen(function* () {
+          const sql = yield* SqlClient.SqlClient;
+          yield* runMigrations({ toMigrationInclusive: 52 });
+          yield* sql`CREATE TABLE restore_finalization_probe(value TEXT NOT NULL)`;
+          yield* sql`INSERT INTO restore_finalization_probe VALUES ('snapshot')`;
+          yield* runWithPreMigrationBackup(dbPath, runMigrations());
+          yield* sql`UPDATE restore_finalization_probe SET value = 'failed-live-data'`;
+        }),
+      );
+      const { backupPath: expectedBackupPath } = JSON.parse(
+        await fs.readFile(provenancePath, "utf8"),
+      ) as { readonly backupPath: string };
+      const selection = { expectedBackupPath, expectedProvenancePath: provenancePath };
+      const realUnlink = nodeFs.promises.unlink.bind(nodeFs.promises);
+      const realRename = nodeFs.promises.rename.bind(nodeFs.promises);
+      const unlink = vi.mocked(fs.unlink);
+      const rename = vi.mocked(fs.rename);
+      const injectedFailure = "injected restore finalization failure";
+      if (failurePoint === "provenance") {
+        rename.mockImplementation((source, destination) =>
+          String(destination) === provenancePath
+            ? Promise.reject(new Error(injectedFailure))
+            : realRename(source, destination),
+        );
+      } else {
+        unlink.mockImplementation((file) =>
+          String(file) === markerPath
+            ? Promise.reject(new Error(injectedFailure))
+            : realUnlink(file),
+        );
+      }
+      const failedDatabases = async () =>
+        (await fs.readdir(path.dirname(dbPath)))
+          .filter((name) => name.startsWith(`${path.basename(dbPath)}.failed-migration-`))
+          .filter((name) => !name.endsWith("-wal") && !name.endsWith("-shm"));
+      let originalFailed: string | undefined;
+      try {
+        await expect(
+          Effect.runPromise(restoreMarkedMigrationBackup(dbPath, selection)),
+        ).rejects.toThrow(injectedFailure);
+        [originalFailed] = await failedDatabases();
+        expect(originalFailed).toBeDefined();
+        for (let attempt = 0; attempt < FAILED_MIGRATION_BUNDLE_RETENTION; attempt += 1) {
+          await expect(
+            Effect.runPromise(restoreMarkedMigrationBackup(dbPath, selection)),
+          ).rejects.toThrow(injectedFailure);
+        }
+      } finally {
+        unlink.mockImplementation(realUnlink);
+        rename.mockImplementation(realRename);
+      }
+      await Effect.runPromise(restoreMarkedMigrationBackup(dbPath, selection));
+      await expect(fs.stat(markerPath)).rejects.toMatchObject({ code: "ENOENT" });
+      const failed = new DatabaseSync(path.join(path.dirname(dbPath), originalFailed!), {
+        readOnly: true,
+      });
+      try {
+        expect(failed.prepare("SELECT value FROM restore_finalization_probe").get()).toMatchObject({
+          value: "failed-live-data",
+        });
+      } finally {
+        failed.close();
+      }
+    },
+  );
+
+  it("keeps committed WAL rows with the failed database after an interrupted sidecar move", async () => {
+    const { dbPath } = await seedInterruptedUpgrade(migrationEntries.at(-1)![0]);
+    const seedPath = `${dbPath}.wal-seed`;
+    await fs.rename(dbPath, seedPath);
+    const seed = new DatabaseSync(seedPath);
+    try {
+      seed.exec(`PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0;
+        UPDATE upgrade_probe SET value = 'committed-only-in-wal'`);
+      await Promise.all(
+        ["", "-wal", "-shm"].map((suffix) =>
+          fs.copyFile(`${seedPath}${suffix}`, `${dbPath}${suffix}`),
+        ),
+      );
+    } finally {
+      seed.close();
+    }
+
+    const realRename = nodeFs.promises.rename.bind(nodeFs.promises);
+    const rename = vi.mocked(fs.rename);
+    rename.mockImplementation((source, destination) => {
+      if (
+        String(source) === `${dbPath}-wal` ||
+        (String(destination) === dbPath && String(source).startsWith(`${dbPath}.failed-migration-`))
+      ) {
+        return Promise.reject(new Error("injected interruption after moving the original main"));
+      }
+      return realRename(source, destination);
+    });
+    try {
+      await expect(Effect.runPromise(restoreMarkedMigrationBackup(dbPath))).rejects.toThrow(
+        "injected interruption after moving the original main",
+      );
+    } finally {
+      rename.mockImplementation(realRename);
+    }
+
+    await Effect.runPromise(restoreMarkedMigrationBackup(dbPath));
+    const failedMain = (await fs.readdir(path.dirname(dbPath))).find(
+      (name) =>
+        name.startsWith(`${path.basename(dbPath)}.failed-migration-`) &&
+        !name.endsWith("-wal") &&
+        !name.endsWith("-shm"),
+    );
+    expect(failedMain).toBeDefined();
+    const failed = new DatabaseSync(path.join(path.dirname(dbPath), failedMain!), {
+      readOnly: true,
+    });
+    try {
+      expect(failed.prepare("SELECT value FROM upgrade_probe").get()).toMatchObject({
+        value: "committed-only-in-wal",
+      });
+    } finally {
+      failed.close();
+    }
   });
 
   it("clears the restore marker when a completed-backup swap rolls back cleanly", async () => {
@@ -1185,12 +1592,7 @@ describe("migration backups", () => {
     const backupDirectory = migrationBackupDirectory(dbPath);
     await fs.mkdir(backupDirectory, { recursive: true });
 
-    const liveFiles = [
-      dbPath,
-      `${dbPath}-wal`,
-      `${dbPath}-shm`,
-      migrationRecoveryMarkerPath(dbPath),
-    ];
+    const liveFiles = [dbPath, `${dbPath}-wal`, `${dbPath}-shm`];
     await Promise.all(liveFiles.map((filePath) => fs.writeFile(filePath, "live")));
 
     // Ordering must come from the name, so mtime is deliberately the inverse.
@@ -1231,8 +1633,23 @@ describe("migration backups", () => {
         fs.writeFile(path.join(backupDirectory, name), "snapshot"),
       ),
     );
-
+    const markerPath = migrationRecoveryMarkerPath(dbPath);
+    const markerText = JSON.stringify({
+      version: 1,
+      databasePath: dbPath,
+      backupPath: path.join(backupDirectory, preMigrationBackups[0]!),
+      targetVersion: 53,
+      phase: "migration-in-progress",
+      resumeAttempts: 0,
+    });
+    await fs.writeFile(markerPath, "unreadable recovery marker");
     await Effect.runPromise(reclaimOrphanedMigrationArtifacts(dbPath));
+    for (const name of failedBundles) {
+      await expect(fs.readFile(path.join(dbDirectory, name), "utf8")).resolves.toBe("moved aside");
+    }
+    await fs.writeFile(markerPath, markerText);
+    await Effect.runPromise(reclaimOrphanedMigrationArtifacts(dbPath));
+    expect(await fs.readFile(markerPath, "utf8")).toBe(markerText);
 
     const remainingBesideDatabase = await fs.readdir(dbDirectory);
     expect(

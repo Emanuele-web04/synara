@@ -452,6 +452,13 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     keywords: "settings:showReasoningEffortAsASliderInTheComposer",
   },
   {
+    target: "setting-rate-limit-warnings",
+    id: "behavior:rate-limit-warnings",
+    section: "behavior",
+    title: "settings:rateLimitWarnings",
+    keywords: "settings:rateLimitWarningsDescription",
+  },
+  {
     target: "setting-automatically-open-simulator",
     id: "behavior:auto-open-simulator",
     section: "behavior",
@@ -729,11 +736,11 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     keywords: "settings:currentApplicationVersionAbout",
   },
   {
-    target: "setting-what-s-new-since-0-9-2",
+    target: "setting-app-tour",
     id: "advanced:feature-tour",
     section: "advanced",
-    title: "settings:whatSNewSince092",
-    keywords: "settings:replayFeatureTourRedesignedWorkspaceProviderAccountsCodeReview",
+    title: "settings:appTour",
+    keywords: "settings:appTourKeywords",
   },
   {
     target: "setting-release-history",

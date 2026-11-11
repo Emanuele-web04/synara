@@ -264,7 +264,7 @@ import {
 } from "./remoteSessions/sessionRegistry";
 import { HostConnectionRegistryService } from "./hostConnections/registry";
 import { makeHostConnectionsPort } from "./hostConnections/port";
-import { isOwnerRole, requireOwnerRole } from "./wsOwnerOnly";
+import { isOwnerRole, projectProviderStatusesForWsSession, requireOwnerRole } from "./wsOwnerOnly";
 import {
   negotiateWsCompatibility,
   parseWsNegotiateSearchParams,
@@ -1038,9 +1038,15 @@ const makeWsRpcHandlersLayer = () =>
         return result;
       });
 
+      const readProviderStatuses = providerHealth.getStatuses.pipe(
+        Effect.flatMap(projectProviderStatusesForWsSession),
+      );
+      const streamProviderStatuses = providerHealth.streamChanges.pipe(
+        Stream.mapEffect(projectProviderStatusesForWsSession),
+      );
       const loadServerConfig = Effect.gen(function* () {
         const keybindingsConfig = yield* keybindings.loadConfigState;
-        const providerStatuses = yield* providerHealth.getStatuses;
+        const providerStatuses = yield* readProviderStatuses;
         return {
           cwd: config.cwd,
           homeDir: config.homeDir,
@@ -2635,13 +2641,26 @@ const makeWsRpcHandlersLayer = () =>
         [WS_METHODS.serverGetSettings]: () =>
           rpcEffect(serverSettings.getSettingsView, "Failed to load server settings"),
         [WS_METHODS.serverUpdateSettings]: (input) =>
-          rpcEffect(serverSettings.updateSettingsView(input), "Failed to update server settings"),
+          rpcEffect(
+            (input.legacyProviders === undefined && input.legacyProviderInstances === undefined
+              ? Effect.void
+              : requireWsOwnerSession
+            ).pipe(Effect.andThen(serverSettings.updateSettingsView(input))),
+            "Failed to update server settings",
+          ),
         [WS_METHODS.serverRefreshProviders]: () =>
           rpcEffect(
-            providerHealth.refresh.pipe(Effect.map((providers) => ({ providers }))),
+            providerHealth.refresh.pipe(
+              Effect.flatMap(projectProviderStatusesForWsSession),
+              Effect.map((providers) => ({ providers })),
+            ),
             "Failed to refresh providers",
           ),
-        [WS_METHODS.serverUpdateProvider]: (input) => providerHealth.updateProvider(input),
+        [WS_METHODS.serverUpdateProvider]: (input) =>
+          providerHealth.updateProvider(input).pipe(
+            Effect.flatMap(({ providers }) => projectProviderStatusesForWsSession(providers)),
+            Effect.map((providers) => ({ providers })),
+          ),
         [WS_METHODS.serverListExternalMcpIntegrations]: () =>
           rpcEffect(
             requireOwner.pipe(Effect.andThen(externalMcp.listIntegrations())),
@@ -2931,7 +2950,7 @@ const makeWsRpcHandlersLayer = () =>
                   })),
                 ),
                 Stream.merge(
-                  bufferLiveUiStream(providerHealth.streamChanges, {
+                  bufferLiveUiStream(streamProviderStatuses, {
                     label: "server.provider-statuses",
                     onDroppedEvents: failLiveUiStreamForSnapshotResync,
                   }).pipe(
@@ -2959,9 +2978,9 @@ const makeWsRpcHandlersLayer = () =>
             { key: "server.provider-statuses" },
             Stream.concat(
               Stream.fromEffect(
-                providerHealth.getStatuses.pipe(Effect.map((providers) => ({ providers }))),
+                readProviderStatuses.pipe(Effect.map((providers) => ({ providers }))),
               ),
-              bufferLiveUiStream(providerHealth.streamChanges, {
+              bufferLiveUiStream(streamProviderStatuses, {
                 label: "server.provider-statuses",
                 onDroppedEvents: failLiveUiStreamForSnapshotResync,
               }).pipe(Stream.map((providers) => ({ providers }))),

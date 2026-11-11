@@ -20,6 +20,10 @@ const fixture = vi.hoisted(() => {
     rejected: false,
     codesCreated: 0,
     codeFailuresRemaining: 0,
+    deviceInfoFailuresRemaining: 0,
+    deviceRegistration: "ready" as "ready" | "revoked" | "replaced",
+    deviceRegistrationFailuresRemaining: 0,
+    deviceRecoveryChecks: 0,
     listGate: null as Promise<void> | null,
     revoked: [] as string[],
     connected: false,
@@ -89,6 +93,41 @@ const fixture = vi.hoisted(() => {
     toast: vi.fn(),
     request: vi.fn(async (request: { operation: string; [key: string]: unknown }) => {
       switch (request.operation) {
+        case "device-info":
+          if (state.deviceInfoFailuresRemaining > 0) {
+            state.deviceInfoFailuresRemaining -= 1;
+            throw new Error("The controller was temporarily unavailable.");
+          }
+          if (state.deviceRegistration === "revoked") {
+            state.deviceRecoveryChecks += 1;
+            return {
+              kind: "device-registration-revoked",
+              recoveryId: `00000000-0000-4000-8000-${String(state.deviceRecoveryChecks).padStart(12, "0")}`,
+            };
+          }
+          return {
+            kind: "device-info",
+            deviceJkt:
+              state.deviceRegistration === "replaced" ? "replacement-key" : "controller-key",
+            label: "This computer",
+          };
+        case "re-register-device":
+          if (state.deviceRegistrationFailuresRemaining > 0) {
+            state.deviceRegistrationFailuresRemaining -= 1;
+            throw new Error("The controller was temporarily unavailable.");
+          }
+          state.deviceRegistration = "replaced";
+          return { kind: "device-info", deviceJkt: "replacement-key", label: "This computer" };
+        case "redeem-code":
+          return {
+            kind: "pairing-preview",
+            inviteId: "computer-pairing",
+            environmentId: "env_remote",
+            label: "Remote computer",
+            rootFingerprint: "b".repeat(64),
+            expiresAt: new Date(Date.now() + 600_000).toISOString(),
+            ...(state.deviceRegistration === "replaced" ? { deviceJkt: "redeemed-key" } : {}),
+          };
         case "create-code":
           if (state.codeFailuresRemaining > 0) {
             state.codeFailuresRemaining -= 1;
@@ -263,13 +302,17 @@ beforeEach(() => {
   fixture.state.rejected = false;
   fixture.state.codesCreated = 0;
   fixture.state.codeFailuresRemaining = 0;
+  fixture.state.deviceInfoFailuresRemaining = 0;
+  fixture.state.deviceRegistration = "ready";
+  fixture.state.deviceRegistrationFailuresRemaining = 0;
+  fixture.state.deviceRecoveryChecks = 0;
   fixture.state.listGate = null;
   fixture.state.revoked = [];
   fixture.state.connected = false;
   fixture.request.mockClear();
   fixture.billingStatus.mockReset();
   fixture.navigate.mockClear();
-  fixture.confirm.mockClear();
+  fixture.confirm.mockReset().mockResolvedValue(true);
   fixture.disconnect.mockClear();
   fixture.recover.mockReset();
   fixture.toast.mockClear();
@@ -320,6 +363,13 @@ describe("Connections settings", () => {
     await page.getByRole("radio", { name: "Control other devices" }).click();
     await page.getByRole("button", { name: "More actions for Studio Mac mini" }).click();
     await page.getByRole("menuitem", { name: action, exact: true }).click();
+  }
+
+  async function openAddComputer() {
+    await renderPanel();
+    await page.getByRole("radio", { name: "Control other devices" }).click();
+    await page.getByRole("button", { name: "Add", exact: true }).click();
+    return page.getByRole("dialog", { name: "Add a computer" });
   }
 
   it.each(["Disconnect", "Forget pairing"] as const)(
@@ -401,6 +451,77 @@ describe("Connections settings", () => {
     expect(fixture.navigate).toHaveBeenCalledWith({ to: "/link" });
   });
 
+  it("preserves a pairing code and allows a retry when this computer's identity cannot load", async () => {
+    fixture.state.deviceInfoFailuresRemaining = 1;
+    const dialog = await openAddComputer();
+    const code = dialog.getByRole("textbox", { name: "Pairing code" });
+    const find = dialog.getByRole("button", { name: "Find computer" });
+    await code.fill("ABCD-2345");
+    await expect.element(find).toBeEnabled();
+    await find.click();
+    await expect
+      .element(dialog.getByRole("alert"))
+      .toHaveTextContent("Could not prepare this computer for pairing.");
+    await expect
+      .element(dialog.getByRole("button", { name: "Re-register this computer" }))
+      .not.toBeInTheDocument();
+    await expect.element(code).toHaveValue("ABCD-2345");
+    expect(fixture.request).not.toHaveBeenCalledWith({
+      operation: "redeem-code",
+      code: "ABCD-2345",
+    });
+
+    await find.click();
+    await expect.element(dialog.getByText("Remote computer", { exact: true })).toBeVisible();
+    await expect.element(dialog.getByText("controller-key", { exact: true })).toBeVisible();
+    await expect.element(dialog.getByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("re-registers a revoked computer only with confirmation and keeps its pairing code for the next Find", async () => {
+    fixture.state.deviceRegistration = "revoked";
+    fixture.state.deviceRegistrationFailuresRemaining = 1;
+    fixture.confirm.mockResolvedValueOnce(false);
+    const dialog = await openAddComputer();
+    const code = dialog.getByRole("textbox", { name: "Pairing code" });
+    const find = dialog.getByRole("button", { name: "Find computer" });
+    const register = dialog.getByRole("button", { name: "Re-register this computer" });
+    const redeemRequest = { operation: "redeem-code", code: "ABCD-2345" };
+    await code.fill("ABCD-2345");
+    await find.click();
+    await expect.element(dialog.getByRole("alert")).toHaveTextContent("device key was revoked");
+    await expect.element(find).not.toBeInTheDocument();
+
+    await register.click();
+    await expect.element(register).toBeEnabled();
+    expect(fixture.confirm).toHaveBeenCalledWith(expect.stringContaining("need to pair again"));
+    expect(fixture.request).not.toHaveBeenCalledWith(
+      expect.objectContaining({ operation: "re-register-device" }),
+    );
+
+    await register.click();
+    await expect.element(dialog.getByRole("alert")).toHaveTextContent("Could not re-register");
+    await expect.element(code).toHaveValue("ABCD-2345");
+
+    await find.click();
+    await register.click();
+    await expect
+      .element(dialog.getByRole("status"))
+      .toHaveTextContent("New device identity registered");
+    expect(fixture.request).toHaveBeenCalledWith({
+      operation: "re-register-device",
+      recoveryId: "00000000-0000-4000-8000-000000000002",
+    });
+    expect(fixture.request).not.toHaveBeenCalledWith(redeemRequest);
+    await expect.element(code).toHaveValue("ABCD-2345");
+
+    await find.click();
+    await expect.element(dialog.getByText("redeemed-key", { exact: true })).toBeVisible();
+    await expect
+      .element(dialog.getByText("replacement-key", { exact: true }))
+      .not.toBeInTheDocument();
+    expect(fixture.request).toHaveBeenCalledWith(redeemRequest);
+  });
+
   it("turns connections off through the owner switch and tells the desktop", async () => {
     await renderPanel();
     const allow = page.getByRole("switch", { name: "Allow connections" });
@@ -446,7 +567,7 @@ describe("Connections settings", () => {
       await vi.waitFor(() => expect(fixture.billingStatus).toHaveBeenCalledOnce());
       await expect.element(page.getByRole("button", { name: "Connect a device" })).toBeVisible();
       if (access === "none") {
-        await expect.element(page.getByText("Synara Alto", { exact: true })).toBeVisible();
+        await expect.element(page.getByText("Synara Alto (Pro)", { exact: true })).toBeVisible();
         await page.getByRole("button", { name: "View Alto plans" }).click();
         expect(fixture.navigate).toHaveBeenCalledWith({
           to: "/settings",

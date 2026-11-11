@@ -1,3 +1,4 @@
+import { ProviderCommandReactor } from "../Services/ProviderCommandReactor.ts";
 import {
   ApprovalRequestId,
   CheckpointRef,
@@ -81,6 +82,12 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
       assert.equal(stored.messages[0]?.turnId, null);
       const readModel = yield* query.getSnapshot();
       const captured = yield* captureCrashResumeRecord.pipe(
+        Effect.provideService(ProviderCommandReactor, {
+          withRestartOrphanedThread: (_threadId, effect) => effect.pipe(Effect.map(Option.some)),
+        } as Pick<
+          (typeof ProviderCommandReactor)["Service"],
+          "withRestartOrphanedThread"
+        > as never),
         Effect.provideService(OrchestrationEngineService, {
           getReadModel: () => Effect.succeed(readModel),
         } as never),

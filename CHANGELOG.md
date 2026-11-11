@@ -1,5 +1,28 @@
 # Changelog
 
+## 1.5.1 — 2026-11-11
+
+**Safer upgrades from older Stable databases and optional anonymous Remote reliability totals.**
+
+### Added
+
+- With product sharing enabled, desktop Synara reports separate daily totals for approved pairings, live Remote RPC connections, reconnects, environment-read timeouts and unexpected app/backend crashes. These records contain only a UTC day, channel, fixed event and random delivery receipt; no account, device or installation identity, private content or error text. Stable remains opt-in; crash reports are best-effort.
+- The website can start monthly or yearly Alto checkout after verifying the Synara account by email. It receives the Polar redirect without account credentials. This account API improvement is also available to existing desktop installations.
+
+### Changed
+
+- The exact database history shipped by the affected older Stable releases now creates its migration backup and upgrades automatically. Unknown or modified histories retain the existing confirmation and recovery safeguards.
+- Migration changes require an independent review of data preservation, replay safety and backup/recovery.
+
+### Fixed
+
+- An ordinary upgrade from the released migration gap no longer stops at the migration-136 import confirmation. Original recorded identities must match before any legacy-name normalization; near-matching histories still require review.
+- Anonymous event retry expiry now matches the receiver's UTC-day window. Lost acknowledgements and duplicate receipt delivery count each event once.
+
+### Verification
+
+Focused migration, backup/replay, analytics privacy/delivery and Remote transport checks passed, including regressions that failed before their fixes. A real local workerd/D1 test covered consent, lost acknowledgements, concurrent retries and restart recovery. The exact-tag workflow must still pass full quality/server suites, all four native packages, macOS signing/notarization, provenance, Defender and packaged startup before publication. The subscriber's reported Remote timeout has no confirmed root cause; recording it does not establish a fix.
+
 ## 1.5.0 — 2026-11-10
 
 **Remote connections, Synara Alto, public profiles, and private Inbox history in Stable.**

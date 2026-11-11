@@ -314,7 +314,11 @@ import {
 } from "./SidebarActivityView";
 import { DesktopUpdateRailButton } from "./DesktopUpdateRailButton";
 import { SidebarIconButton, sidebarIconButtonSlotClass } from "./SidebarIconButton";
-import { OneTimeCoachmark, TASKS_COACHMARK } from "./OneTimeCoachmark";
+import {
+  ACTIVITY_COACHMARK_STORAGE_KEY,
+  OneTimeCoachmark,
+  TASKS_COACHMARK,
+} from "./OneTimeCoachmark";
 import { SidebarLeadingIcon } from "./SidebarLeadingIcon";
 import { SidebarPrimaryAction } from "./SidebarPrimaryAction";
 import { RailAutomationsPanel } from "./RailAutomationsPanel";
@@ -1237,7 +1241,7 @@ export function SidebarActivityBellButton({
 
   return (
     <OneTimeCoachmark
-      storageKey="synara:activity-onboarding:v1"
+      storageKey={ACTIVITY_COACHMARK_STORAGE_KEY}
       title={t("workspace:profile_activity")}
       description={t("workspace:seeRunningTasksCompletedWorkAndAnythingThatNeeds")}
       tooltip={t("workspace:activityView", { value0: shortcutLabel ? ` (${shortcutLabel})` : "" })}
@@ -1245,6 +1249,7 @@ export function SidebarActivityBellButton({
     >
       <button
         type="button"
+        data-app-tour="activity"
         aria-label={
           active ? t("workspace:switchToClassicView") : t("workspace:switchToActivityView")
         }
@@ -1431,13 +1436,13 @@ export default function Sidebar() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const pathname = useCommittedPathname();
-  const isOnSettings = pathname === "/settings";
   const isOnGroupsRoute = pathname.startsWith("/hubs") || pathname.startsWith("/groups");
   const activeWorkspaceSearch = useLocation({ select: (location) => location.searchStr });
+  const workspaceSurfaceHref =
+    pathname === "/remote" ? (new URLSearchParams(activeWorkspaceSearch).get("path") ?? "") : null;
   const workspaceSurfacePath =
-    pathname === "/remote"
-      ? (new URLSearchParams(activeWorkspaceSearch).get("path") ?? "").split("?")[0]!
-      : pathname;
+    workspaceSurfaceHref === null ? pathname : workspaceSurfaceHref.split("?")[0]!;
+  const isOnSettings = workspaceSurfacePath === "/settings";
   const isOnKanban = workspaceSurfacePath.startsWith("/kanban");
   const isOnTasks = workspaceSurfacePath.startsWith("/tasks");
   const isOnAutomations = workspaceSurfacePath.startsWith("/automations");
@@ -1534,7 +1539,11 @@ export default function Sidebar() {
   });
   const routeSearch = useDiffRouteSearch();
   const settingsSectionSearch = useSearch({ strict: false }) as Record<string, unknown>;
-  const activeSettingsSection = normalizeSettingsSection(settingsSectionSearch.section);
+  const activeSettingsSection = normalizeSettingsSection(
+    workspaceSurfaceHref === null
+      ? settingsSectionSearch.section
+      : new URLSearchParams(workspaceSurfaceHref.split("?")[1] ?? "").get("section"),
+  );
   const activeSplitView = useSplitViewStore(
     useMemo(() => selectSplitView(routeSearch.splitViewId ?? null), [routeSearch.splitViewId]),
   );
@@ -6920,7 +6929,7 @@ export default function Sidebar() {
         event.stopPropagation();
         void navigate({
           to: "/settings",
-          search: { section: "usage" },
+          search: { section: "usage", computer: "local" },
         });
         return;
       }
@@ -7432,6 +7441,13 @@ export default function Sidebar() {
     if (desktopUpdateButtonAction === "install") {
       setInstallingDesktopUpdate(true);
       persistAppStateNow();
+      const preparationToastId = isMacNavigatorPlatform()
+        ? toastManager.add({
+            type: "loading",
+            title: `${t("workspace:desktopUpdate_preparingUpdate")}…`,
+            timeout: 0,
+          })
+        : null;
       void bridge
         .installUpdate()
         .then((result) => {
@@ -7465,6 +7481,9 @@ export default function Sidebar() {
               error instanceof Error ? error.message : t("workspace:desktopUpdate_unexpectedError"),
             state: desktopUpdateState,
           });
+        })
+        .finally(() => {
+          if (preparationToastId !== null) toastManager.close(preparationToastId);
         });
     }
   }, [
@@ -7826,7 +7845,7 @@ export default function Sidebar() {
       <>
         <AppRailUsage
           onOpenUsageSettings={() => {
-            void navigate({ to: "/settings", search: { section: "usage" } });
+            void navigate({ to: "/settings", search: { section: "usage", computer: "local" } });
           }}
         />
         <SidebarHelpMenu inRail {...sidebarHelpMenuProps} />
@@ -7928,7 +7947,9 @@ export default function Sidebar() {
                     void navigate({
                       to: "/settings",
                       search: (previous) => ({
-                        ...previous,
+                        ...(workspaceSurfaceHref === null
+                          ? previous
+                          : { computer: settingsSectionSearch.environment }),
                         section: section === "general" ? undefined : section,
                         target: options?.target,
                       }),
@@ -7997,6 +8018,7 @@ export default function Sidebar() {
                           return (
                             <SidebarPrimaryAction
                               key={id}
+                              tourAnchor={id}
                               {...(id === "tasks"
                                 ? {
                                     coachmark: {
@@ -8917,6 +8939,7 @@ export default function Sidebar() {
               to: "/settings",
               search: (previous) => ({
                 ...previous,
+                ...(section === "usage" ? { computer: "local" } : {}),
                 section: section === "general" ? undefined : section,
                 target: options?.target,
               }),
@@ -8926,7 +8949,7 @@ export default function Sidebar() {
           onOpenUsageSettings={() => {
             void navigate({
               to: "/settings",
-              search: { section: "usage" },
+              search: { section: "usage", computer: "local" },
             });
           }}
           onOpenProject={(projectId, host, session) => {

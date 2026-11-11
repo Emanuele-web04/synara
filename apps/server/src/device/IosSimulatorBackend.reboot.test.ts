@@ -48,10 +48,6 @@ class FakeHelper {
 
   start(): void {}
 
-  invalidateAttachment(udid: string): void {
-    if (this.attachment?.udid === udid) this.attachment = null;
-  }
-
   async attach(udid: string, options: { readonly force?: boolean } = {}) {
     this.attachCalls.push({ udid, force: options.force === true });
     if (!options.force && this.attachment?.udid === udid) {
@@ -89,7 +85,9 @@ class FakeHelper {
 
   async startStream() {}
   async stopStream() {}
-  async dispose() {}
+  async dispose() {
+    this.attachment = null;
+  }
 }
 
 function makeBackend() {
@@ -223,12 +221,14 @@ describe("concurrent helper starts", () => {
       },
     });
     const compile = { calls: 0, release: () => {} };
+    const compileStarted = Promise.withResolvers<void>();
     const compiled = new Promise<void>((resolve) => {
       compile.release = resolve;
     });
     Object.defineProperty(backend, "compileHelperIfNeeded", {
       value: async () => {
         compile.calls += 1;
+        compileStarted.resolve();
         await compiled;
         return "/tmp/synara-device-test-cache/synara-device-helper";
       },
@@ -246,7 +246,7 @@ describe("concurrent helper starts", () => {
       compile.release();
       await Promise.all([stream, tap]);
     };
-    return { backend, created, disposed, runConcurrently };
+    return { backend, created, disposed, runConcurrently, compile, compileStarted };
   }
 
   it("starts exactly one helper for two concurrent operations", async () => {
@@ -266,6 +266,25 @@ describe("concurrent helper starts", () => {
     // A helper the backend no longer references is a live process nothing
     // will ever stop.
     expect(created.filter((helper) => !disposed.has(helper))).toHaveLength(0);
+  });
+
+  it("disposes during compilation without waiting for or starting a helper", async () => {
+    const { backend, created, compile, compileStarted } = makeRacingBackend();
+    const tap = expect(backend.tap(DEVICE, 10, 10)).rejects.toThrow("backend is disposed");
+    await compileStarted.promise;
+
+    const disposal = backend.dispose();
+    try {
+      const nextTick = new Promise((resolve) => setImmediate(() => resolve("pending")));
+      await expect(Promise.race([disposal.then(() => "disposed"), nextTick])).resolves.toBe(
+        "disposed",
+      );
+    } finally {
+      compile.release();
+      await disposal;
+      await tap;
+    }
+    expect(created).toHaveLength(0);
   });
 });
 
@@ -297,5 +316,31 @@ describe("text delivery ownership", () => {
       backend.typeText(DEVICE, "a".repeat(241), { signal: abort.signal }),
     ).rejects.toThrow();
     expect(chunks).toBe(1);
+  });
+
+  it("does not dispatch cancelled text behind another input", async () => {
+    const { backend, helper } = makeBackend();
+    const tapStarted = Promise.withResolvers<void>();
+    const finishTap = Promise.withResolvers<void>();
+    const requests: string[] = [];
+    helper.request = async (method = "unknown") => {
+      requests.push(method);
+      if (method === "tap") {
+        tapStarted.resolve();
+        await finishTap.promise;
+      }
+      return { ok: true };
+    };
+    const tap = backend.tap(DEVICE, 10, 10);
+    await tapStarted.promise;
+
+    const abort = new AbortController();
+    const text = backend.typeText(DEVICE, "hello", { signal: abort.signal });
+    abort.abort();
+    finishTap.resolve();
+    await tap;
+
+    await expect(text).rejects.toMatchObject({ name: "AbortError" });
+    expect(requests).toEqual(["tap"]);
   });
 });

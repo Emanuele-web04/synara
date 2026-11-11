@@ -3,7 +3,8 @@
 // Layer: Chat status presentation
 // Exports: RateLimitBanner.
 
-import { formatRateLimitMessage, type RateLimitStatus } from "~/lib/rateLimitStatus";
+import type { RateLimitStatus } from "~/lib/rateLimitStatus";
+import { formatRateLimitResetCountdown } from "~/lib/rateLimits";
 import { Alert, AlertAction, AlertDescription } from "../ui/alert";
 import { IconButton } from "../ui/icon-button";
 import { CircleAlertIcon, XIcon } from "~/lib/icons";
@@ -16,10 +17,13 @@ export const RateLimitBanner = function RateLimitBanner({
   onDismiss?: () => void;
   rateLimitStatus: RateLimitStatus | null;
 }) {
-  const { t, formatLocale } = useTranslation();
+  const { t } = useTranslation();
 
   if (!rateLimitStatus || rateLimitStatus.status !== "rejected") return null;
-  const message = formatRateLimitMessage(rateLimitStatus, t, formatLocale);
+  const countdown = rateLimitStatus.resetsAt
+    ? formatRateLimitResetCountdown(rateLimitStatus.resetsAt, t)
+    : "";
+  const message = t("chat:rateLimitReached", { value0: countdown ? ` ${countdown}.` : "" });
 
   return (
     <Alert variant="error">

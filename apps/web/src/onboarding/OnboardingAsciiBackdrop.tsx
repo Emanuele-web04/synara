@@ -51,7 +51,7 @@ export function OnboardingAsciiBackdrop(props: { className?: string }) {
       ref={root}
       aria-hidden
       className={cn(
-        "pointer-events-none absolute inset-0 overflow-hidden select-none",
+        "pointer-events-none absolute inset-0 overflow-hidden select-none will-change-transform",
         props.className,
       )}
     >

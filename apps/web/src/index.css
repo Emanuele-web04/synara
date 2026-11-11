@@ -411,6 +411,299 @@
   }
 }
 
+/* Decorative scene motion: dialog hero bands, the first-run agent ring, and the app
+   tour previews. Slow transform/opacity loops that read as alive, never as loading.
+   Every class rests on the element's own style under reduced motion, so one-shot
+   entrances fill `backwards` and loops that reveal something keep it visible at rest;
+   travelling packets and halos rest hidden. */
+@keyframes scene-float {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+
+  50% {
+    transform: translateY(-3px);
+  }
+}
+
+.scene-float {
+  animation: scene-float 6s ease-in-out infinite;
+}
+
+/* A dot travelling along a link: set --scene-travel-x / --scene-travel-y on the element. */
+@keyframes scene-packet {
+  0% {
+    opacity: 0;
+    transform: translate(0, 0);
+  }
+
+  15% {
+    opacity: 1;
+  }
+
+  70% {
+    opacity: 1;
+    transform: translate(var(--scene-travel-x, 0px), var(--scene-travel-y, 0px));
+  }
+
+  82%,
+  100% {
+    opacity: 0;
+    transform: translate(var(--scene-travel-x, 0px), var(--scene-travel-y, 0px));
+  }
+}
+
+.scene-packet {
+  opacity: 0;
+  animation: scene-packet 2.8s cubic-bezier(0.45, 0, 0.25, 1) infinite;
+}
+
+/* A soft ring that swells and fades around something live. */
+@keyframes scene-halo {
+  0% {
+    opacity: 0.6;
+    transform: scale(0.94);
+  }
+
+  100% {
+    opacity: 0;
+    transform: scale(1.32);
+  }
+}
+
+.scene-halo {
+  opacity: 0;
+  animation: scene-halo 2.8s ease-out infinite;
+}
+
+/* One-shot rise into place; stagger with animation-delay. */
+@keyframes scene-rise {
+  from {
+    opacity: 0;
+    transform: translateY(10px) scale(0.94);
+  }
+}
+
+.scene-rise {
+  animation: scene-rise 560ms cubic-bezier(0.2, 0.8, 0.2, 1) backwards;
+}
+
+@keyframes scene-fade-in {
+  from {
+    opacity: 0;
+  }
+}
+
+.scene-fade-in {
+  animation: scene-fade-in 700ms ease-out backwards;
+}
+
+/* Strokes drawn from their start: give the path or line pathLength="1". */
+@keyframes scene-draw {
+  from {
+    stroke-dashoffset: 1;
+  }
+}
+
+.scene-draw {
+  stroke-dasharray: 1;
+  animation: scene-draw 800ms cubic-bezier(0.2, 0.8, 0.2, 1) backwards;
+}
+
+@keyframes scene-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.scene-spin-slow {
+  animation: scene-spin 90s linear infinite;
+}
+
+/* Three items stacked in one slot take turns; delay each by a third of the cycle. */
+@keyframes scene-cycle {
+  0% {
+    opacity: 0;
+    transform: translateY(3px);
+  }
+
+  6%,
+  30% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+
+  36%,
+  100% {
+    opacity: 0;
+    transform: translateY(-3px);
+  }
+}
+
+.scene-cycle {
+  opacity: 0;
+  animation: scene-cycle 4.8s ease-in-out infinite;
+}
+
+/* A toggle switching on once: the knob slides in, the track takes its colour. */
+@keyframes scene-switch-knob {
+  from {
+    transform: translateX(calc(-1 * var(--scene-switch-travel, 9px)));
+  }
+}
+
+@keyframes scene-switch-track {
+  from {
+    background-color: color-mix(in srgb, var(--foreground) 18%, transparent);
+  }
+}
+
+.scene-switch-knob {
+  animation: scene-switch-knob 360ms cubic-bezier(0.2, 0.8, 0.2, 1) 900ms backwards;
+}
+
+.scene-switch-track {
+  animation: scene-switch-track 360ms ease-out 900ms backwards;
+}
+
+/* A key pressed at the start of each AppSnap loop. */
+@keyframes scene-keypress {
+  0%,
+  14%,
+  100% {
+    transform: translateY(0);
+  }
+
+  4%,
+  10% {
+    transform: translateY(2px);
+  }
+}
+
+.scene-keypress {
+  animation: scene-keypress 4.2s ease-in-out infinite;
+}
+
+/* The snap frame, then its "added" chip: appear, hold, fade, on the keypress loop. */
+@keyframes scene-snap-frame {
+  0%,
+  12% {
+    opacity: 0;
+    transform: scale(1.05);
+  }
+
+  22%,
+  74% {
+    opacity: 1;
+    transform: scale(1);
+  }
+
+  88%,
+  100% {
+    opacity: 0;
+    transform: scale(1);
+  }
+}
+
+@keyframes scene-snap-chip {
+  0%,
+  32% {
+    opacity: 0;
+    transform: translateY(6px) scale(0.96);
+  }
+
+  42%,
+  74% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+
+  88%,
+  100% {
+    opacity: 0;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.scene-snap-frame {
+  animation: scene-snap-frame 4.2s cubic-bezier(0.2, 0.8, 0.2, 1) infinite;
+}
+
+.scene-snap-chip {
+  animation: scene-snap-chip 4.2s cubic-bezier(0.2, 0.8, 0.2, 1) infinite;
+}
+
+/* A status that settles: something running flips to done on a slow loop. */
+@keyframes scene-settle-out {
+  0%,
+  46% {
+    opacity: 1;
+  }
+
+  54%,
+  92% {
+    opacity: 0;
+  }
+
+  100% {
+    opacity: 1;
+  }
+}
+
+@keyframes scene-settle-in {
+  0%,
+  46% {
+    opacity: 0;
+    transform: scale(0.8);
+  }
+
+  54%,
+  92% {
+    opacity: 1;
+    transform: scale(1);
+  }
+
+  100% {
+    opacity: 0;
+    transform: scale(1);
+  }
+}
+
+.scene-settle-out {
+  animation: scene-settle-out 5s ease-in-out infinite;
+}
+
+.scene-settle-in {
+  opacity: 0;
+  animation: scene-settle-in 5s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .scene-float,
+  .scene-packet,
+  .scene-halo,
+  .scene-rise,
+  .scene-fade-in,
+  .scene-draw,
+  .scene-spin-slow,
+  .scene-cycle,
+  .scene-switch-knob,
+  .scene-switch-track,
+  .scene-keypress,
+  .scene-snap-frame,
+  .scene-snap-chip,
+  .scene-settle-out,
+  .scene-settle-in {
+    animation: none;
+  }
+
+  /* Reduced motion keeps the first of a cycling slot. */
+  .scene-cycle:first-child {
+    opacity: 1;
+  }
+}
+
 /* Subtle send affordance for newly inserted user bubbles. Transform/opacity only,
    so the transcript can stay lightweight while the row appears less abruptly. */
 @keyframes chat-message-send-enter {

@@ -18,6 +18,15 @@ time and are all per-process state. A subcommand design would repay that on
 every tap. `--probe` is the one exception: a one-shot preflight for the build and
 for the pane's setup checklist.
 
+The server keeps a separate helper for each simulator it is using. A helper's
+display, HID client, and accessibility translator stay bound to that simulator,
+so background commands cannot retarget another task's preview. Attached helpers
+without a stream are retired after two idle minutes; failed attachments are
+released after five seconds. Shutdown and server disposal cancel queued work
+and release the helper without waiting for an outstanding request. Live preview
+encoding is separate from agent control and starts for a background agent
+attachment only when a pane subscribes.
+
 **Frames leave over a Unix socket, not stdout.** Video and RPC never share a
 pipe, so a burst of frames cannot delay a command response. This is the core of
 the "must never starve RPC" requirement.
@@ -32,6 +41,11 @@ to clang _without_ `-fobjc-arc`; under manual retain/release the accessibility
 translator's response is released underneath it and `describe-ui` segfaults in
 `objc_retain`. `build.sh` compiles them separately with `-fobjc-arc` and links
 the objects.
+
+First use of the native helper compiles and caches it; later launches reuse that
+executable until the native sources or selected Xcode build change. The accessibility bridge
+imports Foundation and CoreGraphics rather than the AppKit header tree to reduce
+cold compiler-module work. Swift retains whole-module release optimization.
 
 ## Protocol
 
@@ -140,7 +154,9 @@ Two independent drop points, both deliberate:
   (`droppedBusyFrames`). Only the newest frame matters for a live mirror.
 - **Socket writer**: above a ~4 MB backlog frames are shed rather than queued
   (`droppedSocketFrames`). A consumer that is not draining gets stale frames
-  dropped instead of unbounded memory growth.
+  dropped instead of unbounded memory growth. Stopping the stream shuts down
+  the socket before waiting for the writer, so a stalled reader cannot hold up
+  the helper's control channel.
 
 Frames only arrive when the display changes: the simulator posts a damage
 callback, so an idle screen legitimately produces no frames. Anything driving

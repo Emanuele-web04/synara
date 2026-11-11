@@ -40,6 +40,7 @@ import {
   LAST_SHARED_LINEAGE_MIGRATION_ID,
   migrationEntries,
   inspectAccountMigrationRepair,
+  isReleasedMainMigrationGap,
   planAccountMigrationRepair,
   planLegacyMigration32Rename,
   planMigrationLineageAliasRepairs,
@@ -270,6 +271,11 @@ export const inspectMigrationBackupPlan = Effect.gen(function* () {
     }
   }
   const inspectedHighWaterMark = Math.max(...inspectedNames.keys(), 0);
+  if (isReleasedMainMigrationGap(recordedNames)) {
+    // This exact released history is a normal upgrade. Keep its backup and
+    // recovery marker while allowing the replay to run without import consent.
+    return { sourceVersion: "v141-released-main", targetVersion: latestMigrationId };
+  }
   // This is the same post-alias predicate the reconciler uses. Sharing it keeps
   // "this database needs consent" and "this database will be replayed" aligned.
   const firstDiverged = findFirstMigrationLineageDivergence(inspectedNames, inspectedHighWaterMark);
@@ -573,6 +579,9 @@ function isAtomicMigrationJsonPartial(basename: string): (name: string) => boole
 }
 
 const BUNDLE_SIDECAR_SUFFIXES = ["-wal", "-shm"] as const;
+const DATABASE_BUNDLE_SUFFIXES = ["", ...BUNDLE_SIDECAR_SUFFIXES] as const;
+const FAILED_BUNDLE_SUFFIX_PATTERN =
+  /^\.failed-migration-\d{8}T\d{9}Z-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
 const BUNDLE_SIDECAR_PATTERN = /-(?:wal|shm)$/u;
 
 /**
@@ -634,6 +643,7 @@ type MigrationArtifactFamily = {
   readonly retention: number;
   /** Members own their SQLite `-wal`/`-shm` sidecars and are reclaimed together. */
   readonly bundled?: boolean;
+  readonly protectedMember?: string | undefined;
   /** Repair 0600/regular-file expectations while walking the family. */
   readonly ensurePrivate?: boolean;
 };
@@ -664,6 +674,7 @@ async function pruneMigrationArtifactFamily(family: MigrationArtifactFamily): Pr
     const ranked = (
       await Promise.all(
         [...members].map(async (name) => {
+          if (name === family.protectedMember) return null;
           if (family.bundled && !present.has(name)) {
             // A crash can leave only WAL/SHM sidecars. They are not a restorable
             // bundle, so they never occupy a retention slot and are reclaimed
@@ -696,7 +707,7 @@ async function pruneMigrationArtifactFamily(family: MigrationArtifactFamily): Pr
     );
     await Promise.all(
       ranked
-        .slice(Math.max(0, family.retention))
+        .slice(Math.max(0, family.retention - (family.protectedMember ? 1 : 0)))
         .flatMap(({ name }) =>
           family.bundled
             ? ["", ...BUNDLE_SIDECAR_SUFFIXES].map((sidecar) => unlink(`${name}${sidecar}`))
@@ -751,8 +762,11 @@ const failedMigrationBundleFamily = (dbPath: string): MigrationArtifactFamily =>
   bundled: true,
 });
 
-const pruneFailedMigrationBundles = (dbPath: string): Promise<void> =>
-  pruneMigrationArtifactFamily(failedMigrationBundleFamily(dbPath));
+const pruneFailedMigrationBundles = (dbPath: string, protectedSuffix?: string): Promise<void> =>
+  pruneMigrationArtifactFamily({
+    ...failedMigrationBundleFamily(dbPath),
+    protectedMember: protectedSuffix ? `${path.basename(dbPath)}${protectedSuffix}` : undefined,
+  });
 
 /**
  * Reclaims every artifact family a migration can strand, except the restorable
@@ -765,11 +779,22 @@ const pruneFailedMigrationBundles = (dbPath: string): Promise<void> =>
  * without bound — a failed-migration bundle was only ever pruned by the
  * explicit restore command, which most installs never run.
  */
-const pruneUnreferencedMigrationArtifacts = (dbPath: string): Promise<void> =>
-  Promise.all([
+async function pruneUnreferencedMigrationArtifacts(dbPath: string): Promise<void> {
+  const protectedSuffix = await readMigrationRecoveryMarker(dbPath)
+    .then((marker) =>
+      marker?.payload.phase === "migration-restore-in-progress"
+        ? readRestoreFailedBundle(marker.payload.restoreFailedBundle)?.suffix
+        : undefined,
+    )
+    // Without a readable marker we cannot prove which failed bundle is in use.
+    .catch(() => null);
+  await Promise.all([
     pruneMigrationArtifactFamily(trackerRepairSnapshotFamily(dbPath)),
-    pruneFailedMigrationBundles(dbPath),
-  ]).then(() => undefined);
+    protectedSuffix === null
+      ? Promise.resolve()
+      : pruneFailedMigrationBundles(dbPath, protectedSuffix),
+  ]);
+}
 
 /**
  * Applies retention to every migration artifact family, each independently.
@@ -966,8 +991,8 @@ const restoreSqliteMigrationBackup = (input: {
   readonly dbPath: string;
   readonly backupPath: string;
   readonly latestSupportedMigrationId: number;
-  readonly beforeLiveDatabaseSwap?: (() => Promise<void>) | undefined;
-  readonly afterLiveDatabaseRollback?: (() => Promise<void>) | undefined;
+  readonly beforeLiveDatabaseSwap: (stagedDatabasePath: string) => Promise<RestoreFailedBundle>;
+  readonly afterLiveDatabaseRollback: () => Promise<void>;
 }) =>
   attemptPromise(async () => {
     const compressed = isCompressedMigrationBackup(input.backupPath);
@@ -1012,20 +1037,32 @@ const restoreSqliteMigrationBackup = (input: {
       throw cause;
     }
 
-    const failedSuffix = `.failed-migration-${compactTimestamp(new Date())}-${randomUUID()}`;
     const moved: Array<readonly [string, string]> = [];
-    let swapPrepared = false;
+    let failedBundle: RestoreFailedBundle;
     try {
-      swapPrepared = true;
-      await input.beforeLiveDatabaseSwap?.();
-      for (const suffix of ["", "-wal", "-shm"]) {
+      failedBundle = await input.beforeLiveDatabaseSwap(restoredTemporaryPath);
+      for (const [index, suffix] of DATABASE_BUNDLE_SUFFIXES.entries()) {
         const source = `${input.dbPath}${suffix}`;
-        const destination = `${input.dbPath}${failedSuffix}${suffix}`;
-        try {
+        const destination = `${input.dbPath}${failedBundle.suffix}${suffix}`;
+        const expected = failedBundle.files[index];
+        const sourceFingerprint = await restoreFileFingerprint(source);
+        const destinationFingerprint = await restoreFileFingerprint(destination);
+        // The lifecycle lock excludes other Synara writers. Only continue an
+        // earlier move when the destination is the exact file recorded before
+        // the swap, and never rename over an existing destination.
+        if (
+          sourceFingerprint === null &&
+          expected !== null &&
+          destinationFingerprint === expected
+        ) {
+          continue;
+        }
+        if (destinationFingerprint !== null || sourceFingerprint !== expected) {
+          throw new Error(`Migration restore database bundle changed: ${source}`);
+        }
+        if (sourceFingerprint !== null) {
           await fs.rename(source, destination);
           moved.push([source, destination]);
-        } catch (cause) {
-          if ((cause as NodeJS.ErrnoException).code !== "ENOENT") throw cause;
         }
       }
       await fs.rename(restoredTemporaryPath, input.dbPath);
@@ -1040,8 +1077,8 @@ const restoreSqliteMigrationBackup = (input: {
           rollbackSucceeded = false;
         });
       }
-      if (swapPrepared && rollbackSucceeded) {
-        await input.afterLiveDatabaseRollback?.();
+      if (rollbackSucceeded) {
+        await input.afterLiveDatabaseRollback();
       }
       throw cause;
     }
@@ -1050,7 +1087,7 @@ const restoreSqliteMigrationBackup = (input: {
     // completed restore and clears the marker. Until both happen, a crash or
     // cleanup failure remains an explicit, retryable recovery state.
     await syncDirectoryEntry(path.dirname(input.dbPath));
-    await pruneFailedMigrationBundles(input.dbPath);
+    await pruneFailedMigrationBundles(input.dbPath, failedBundle.suffix);
     await syncDirectoryEntry(path.dirname(input.dbPath));
   });
 
@@ -1172,6 +1209,7 @@ function inspectMigrationRows(
     recordedNames.set(migration.migrationId, migration.name);
   }
 
+  const releasedMainGap = isReleasedMainMigrationGap(recordedNames);
   const accountRepair = planAccountMigrationRepair(
     [...recordedNames].map(([migration_id, name]) => ({ migration_id, name })),
   );
@@ -1198,7 +1236,7 @@ function inspectMigrationRows(
   return {
     migrationId,
     lineage:
-      divergence === undefined
+      divergence === undefined || releasedMainGap
         ? "canonical"
         : divergence[0] > LAST_SHARED_LINEAGE_MIGRATION_ID
           ? "imported"
@@ -1444,12 +1482,30 @@ async function readValidatedRecoveryMarker(
 export const inspectPendingMigrationRecovery = (dbPath: string) =>
   attemptPromise(async () => {
     const marker = await readValidatedRecoveryMarker(dbPath);
-    if (marker && marker.resumeAttempts >= MIGRATION_RECOVERY_MAX_RESUME_ATTEMPTS) {
+    if (!marker) return null;
+    const target = marker.payload.targetVersion;
+    if (typeof target !== "number" || !Number.isSafeInteger(target) || target < 1) {
       throw new MigrationRecoveryRequiredError(
         dbPath,
         marker.markerPath,
         marker.backupPath,
-        `Startup already re-ran the interrupted migration ${marker.resumeAttempts} time(s) without success.`,
+        "The interrupted migration has an invalid target version.",
+      );
+    }
+    const restoring = marker.payload.phase === "migration-restore-in-progress";
+    if (target > latestMigrationId && !restoring) {
+      throw new Error(
+        `This database has an interrupted migration targeting schema ${target}, but this build supports ${latestMigrationId}. Update Synara before resuming.`,
+      );
+    }
+    if (restoring || marker.resumeAttempts >= MIGRATION_RECOVERY_MAX_RESUME_ATTEMPTS) {
+      throw new MigrationRecoveryRequiredError(
+        dbPath,
+        marker.markerPath,
+        marker.backupPath,
+        restoring
+          ? "An explicit migration backup restore did not finish."
+          : `Startup already re-ran the interrupted migration ${marker.resumeAttempts} time(s) without success.`,
       );
     }
     return marker;
@@ -1475,8 +1531,18 @@ export const resumeMarkedMigration = <A, E, R>(
   dbPath: string,
   marker: MigrationRecoveryMarker,
   migration: Effect.Effect<A, E, R>,
+  options: RunWithPreMigrationBackupOptions = {},
 ) =>
   Effect.gen(function* () {
+    if (marker.payload.targetVersion !== latestMigrationId) {
+      // Approval for an imported lineage is bound to the reviewed target and
+      // tracker. A different build must review any divergence still on disk.
+      const plan = yield* inspectMigrationBackupPlan;
+      const challenge = plan && createMigrationDivergenceConsentChallenge(dbPath, plan);
+      if (challenge && options.divergenceConsent !== challenge.consentToken) {
+        return yield* Effect.fail(new MigrationDivergenceConsentRequiredError(challenge));
+      }
+    }
     yield* Effect.logWarning("Resuming an interrupted database migration", {
       databasePath: dbPath,
       backupPath: marker.backupPath,
@@ -1485,11 +1551,19 @@ export const resumeMarkedMigration = <A, E, R>(
     });
     const resumedPayload = {
       ...marker.payload,
+      targetVersion: latestMigrationId,
       resumeAttempts: marker.resumeAttempts + 1,
       lastResumeAt: new Date().toISOString(),
     };
     yield* attemptPromise(() => writePrivateJsonFile(marker.markerPath, resumedPayload));
     const result = yield* migration;
+    const sql = yield* SqlClient.SqlClient;
+    const [completed] = yield* sql<{ readonly migrationId: number | null }>`
+      SELECT MAX(migration_id) AS migrationId FROM effect_sql_migrations
+    `;
+    if (completed?.migrationId !== latestMigrationId) {
+      return yield* Effect.fail(new Error("Resumed migration did not reach the expected schema."));
+    }
     yield* writeCompletedMigrationProvenance(dbPath, resumedPayload);
     yield* removeRecoveryMarker(dbPath);
     yield* Effect.logInfo("Interrupted database migration completed on resume", {
@@ -1497,6 +1571,55 @@ export const resumeMarkedMigration = <A, E, R>(
     });
     return result;
   });
+
+type RestoreFailedBundle = {
+  readonly suffix: string;
+  readonly files: ReadonlyArray<string | null>;
+};
+
+function readRestoreFailedBundle(value: unknown): RestoreFailedBundle | null {
+  if (value === undefined) return null;
+  const bundle = value as Partial<RestoreFailedBundle> | null;
+  if (
+    !bundle ||
+    typeof bundle.suffix !== "string" ||
+    !FAILED_BUNDLE_SUFFIX_PATTERN.test(bundle.suffix) ||
+    !Array.isArray(bundle.files) ||
+    bundle.files.length !== DATABASE_BUNDLE_SUFFIXES.length ||
+    bundle.files.some((file) => file !== null && typeof file !== "string")
+  ) {
+    throw new Error("Migration restore marker has an invalid database bundle.");
+  }
+  return { suffix: bundle.suffix, files: bundle.files };
+}
+
+async function restoreFileFingerprint(filePath: string): Promise<string | null> {
+  const file = await fs.lstat(filePath, { bigint: true }).catch((cause: unknown) => {
+    if ((cause as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw cause;
+  });
+  if (!file) return null;
+  if (!file.isFile()) throw new Error(`Restore database is not a regular file: ${filePath}`);
+  return `${file.dev}:${file.ino}:${file.size}:${file.mtimeNs}`;
+}
+
+async function requireStandaloneRestoredDatabase(dbPath: string): Promise<void> {
+  for (const suffix of ["-wal", "-shm"]) {
+    const sidecar = await fs.lstat(`${dbPath}${suffix}`).catch((cause: unknown) => {
+      if ((cause as NodeJS.ErrnoException).code === "ENOENT") return null;
+      throw cause;
+    });
+    if (sidecar) throw new Error(`Restored database has an unexpected sidecar: ${dbPath}${suffix}`);
+  }
+}
+
+async function recordCompletedRestore(dbPath: string, marker: Record<string, unknown>) {
+  await writePrivateJsonFile(migrationBackupProvenancePath(dbPath), {
+    ...marker,
+    phase: "migration-restored",
+    restoredAt: new Date().toISOString(),
+  });
+}
 
 /**
  * Explicit one-shot restore path for the active recovery marker or the latest
@@ -1523,43 +1646,60 @@ export const restoreMarkedMigrationBackup = (
       ) {
         throw new Error("Both expected migration backup and provenance paths are required.");
       }
-      let activeMarker: MigrationRecoveryMarker | null;
-      if (hasExpectedCompletedBackup) {
-        try {
-          activeMarker = await readMigrationRecoveryMarker(dbPath);
-        } catch {
-          activeMarker = null;
-        }
-      } else {
-        activeMarker = await readMigrationRecoveryMarker(dbPath);
+      const activeMarker = await readMigrationRecoveryMarker(dbPath);
+      const restoringMarker =
+        activeMarker?.payload.phase === "migration-restore-in-progress" ? activeMarker : null;
+      if (
+        hasExpectedCompletedBackup &&
+        activeMarker &&
+        restoringMarker?.backupPath !== options.expectedBackupPath
+      ) {
+        throw new Error("A different migration recovery is active for this database.");
       }
       const completedProvenance =
         hasExpectedCompletedBackup || !activeMarker
           ? await readCompletedMigrationProvenance(dbPath)
-          : null;
-      const matchingRestoreMarker =
+          : restoringMarker
+            ? await readCompletedMigrationProvenance(dbPath).catch(() => null)
+            : null;
+      if (
         hasExpectedCompletedBackup &&
-        activeMarker !== null &&
-        activeMarker.backupPath === options.expectedBackupPath &&
-        activeMarker.payload.phase === "migration-restore-in-progress"
-          ? activeMarker
-          : null;
-      const record = hasExpectedCompletedBackup
-        ? (matchingRestoreMarker ?? completedProvenance)
-        : (activeMarker ?? completedProvenance);
+        (completedProvenance?.backupPath !== options.expectedBackupPath ||
+          completedProvenance?.markerPath !== options.expectedProvenancePath)
+      ) {
+        throw new Error("Completed migration provenance no longer matches the selected backup.");
+      }
+      if (restoringMarker) {
+        const { restoreId, restoredDatabaseFingerprint } = restoringMarker.payload;
+        const installed =
+          typeof restoreId === "string" &&
+          restoreId.length > 0 &&
+          typeof restoredDatabaseFingerprint === "string" &&
+          (await restoreFileFingerprint(dbPath)) === restoredDatabaseFingerprint;
+        const recorded =
+          completedProvenance?.payload.phase === "migration-restored" &&
+          completedProvenance.backupPath === restoringMarker.backupPath;
+        if (
+          recorded &&
+          (!installed ||
+            completedProvenance.payload.restoreId !== restoreId ||
+            completedProvenance.payload.restoredDatabaseFingerprint !== restoredDatabaseFingerprint)
+        ) {
+          throw new Error("The completed restore no longer matches this migration recovery.");
+        }
+        if (installed) {
+          await requireStandaloneRestoredDatabase(dbPath);
+          await syncDirectoryEntry(path.dirname(dbPath));
+          if (!recorded) await recordCompletedRestore(dbPath, restoringMarker.payload);
+          await removeRecoveryMarkerIfPresent(dbPath);
+          return;
+        }
+      }
+      const record = activeMarker ?? completedProvenance;
       if (!record) {
         throw new Error(
           `No migration recovery marker or completed backup provenance exists for ${dbPath}.`,
         );
-      }
-      if (hasExpectedCompletedBackup) {
-        if (
-          completedProvenance === null ||
-          completedProvenance.backupPath !== options.expectedBackupPath ||
-          completedProvenance.markerPath !== options.expectedProvenancePath
-        ) {
-          throw new Error("Completed migration provenance no longer matches the selected backup.");
-        }
       }
 
       const restoringCompletedProvenance = record === completedProvenance;
@@ -1575,12 +1715,19 @@ export const restoreMarkedMigrationBackup = (
         }
       }
       const restoreMarkerPath = migrationRecoveryMarkerPath(dbPath);
-      const restoreMarkerPayload = {
+      const previousFailedBundle = readRestoreFailedBundle(
+        restoringMarker?.payload.restoreFailedBundle,
+      );
+      let restoreMarkerPayload: Record<string, unknown> = {
         ...record.payload,
         version: 1,
         databasePath: dbPath,
         backupPath: record.backupPath,
         phase: "migration-restore-in-progress",
+        restoreId:
+          typeof restoringMarker?.payload.restoreId === "string"
+            ? restoringMarker.payload.restoreId
+            : randomUUID(),
         restoreStartedAt: new Date().toISOString(),
         resumeAttempts: MIGRATION_RECOVERY_MAX_RESUME_ATTEMPTS,
       };
@@ -1592,23 +1739,34 @@ export const restoreMarkedMigrationBackup = (
           // Defer the fail-closed marker until the backup has been copied and
           // verified. If the live swap then rolls back completely, restore the
           // marker state that existed before this explicit attempt.
-          beforeLiveDatabaseSwap: () =>
-            writePrivateJsonFile(restoreMarkerPath, restoreMarkerPayload),
+          beforeLiveDatabaseSwap: async (stagedPath) => {
+            const fingerprint = await restoreFileFingerprint(stagedPath);
+            if (!fingerprint) throw new Error(`Staged database is missing: ${stagedPath}`);
+            // A rename within this directory keeps the staged file's identity.
+            // Record it before swapping so a retry can finish an installed
+            // restore even when writing its completed provenance failed.
+            const failedBundle = previousFailedBundle ?? {
+              suffix: `.failed-migration-${compactTimestamp(new Date())}-${randomUUID()}`,
+              files: await Promise.all(
+                DATABASE_BUNDLE_SUFFIXES.map((suffix) =>
+                  restoreFileFingerprint(`${dbPath}${suffix}`),
+                ),
+              ),
+            };
+            restoreMarkerPayload = {
+              ...restoreMarkerPayload,
+              restoredDatabaseFingerprint: fingerprint,
+              restoreFailedBundle: failedBundle,
+            };
+            await writePrivateJsonFile(restoreMarkerPath, restoreMarkerPayload);
+            return failedBundle;
+          },
           afterLiveDatabaseRollback: restoringCompletedProvenance
             ? () => removeRecoveryMarkerIfPresent(dbPath)
             : () => writePrivateJsonFile(record.markerPath, record.payload),
         }),
       );
-      await writePrivateJsonFile(migrationBackupProvenancePath(dbPath), {
-        ...record.payload,
-        version: 1,
-        databasePath: dbPath,
-        phase: "migration-restored",
-        restoredAt: new Date().toISOString(),
-      });
-      await fs.unlink(migrationRecoveryMarkerPath(dbPath)).catch((cause) => {
-        if ((cause as NodeJS.ErrnoException).code !== "ENOENT") throw cause;
-      });
-      await syncDirectoryEntry(path.dirname(dbPath));
+      await recordCompletedRestore(dbPath, restoreMarkerPayload);
+      await removeRecoveryMarkerIfPresent(dbPath);
     }).pipe(Effect.uninterruptible),
   );
