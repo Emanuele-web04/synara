@@ -908,6 +908,8 @@ export function createWsNativeApi(): NativeApi {
           command: omitNullUserInputAnswers(command),
         });
       },
+      settleTurnDispatch: (input) =>
+        executionRequest(ORCHESTRATION_WS_METHODS.settleTurnDispatch, input),
       importThread: (input) => executionRequest(ORCHESTRATION_WS_METHODS.importThread, input),
       listProjectImports: (input) =>
         executionRequest(ORCHESTRATION_WS_METHODS.listProjectImports, input),

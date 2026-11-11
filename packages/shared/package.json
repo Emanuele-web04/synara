@@ -4,6 +4,10 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./parentBoundProcess": {
+      "types": "./src/parentBoundProcess.ts",
+      "import": "./src/parentBoundProcess.ts"
+    },
     "./hostUsage": {
       "types": "./src/hostUsage.ts",
       "import": "./src/hostUsage.ts"

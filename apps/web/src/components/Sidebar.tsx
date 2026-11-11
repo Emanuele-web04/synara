@@ -7437,6 +7437,13 @@ export default function Sidebar() {
     if (desktopUpdateButtonAction === "install") {
       setInstallingDesktopUpdate(true);
       persistAppStateNow();
+      const preparationToastId = isMacNavigatorPlatform()
+        ? toastManager.add({
+            type: "loading",
+            title: `${t("workspace:desktopUpdate_preparingUpdate")}…`,
+            timeout: 0,
+          })
+        : null;
       void bridge
         .installUpdate()
         .then((result) => {
@@ -7470,6 +7477,9 @@ export default function Sidebar() {
               error instanceof Error ? error.message : t("workspace:desktopUpdate_unexpectedError"),
             state: desktopUpdateState,
           });
+        })
+        .finally(() => {
+          if (preparationToastId !== null) toastManager.close(preparationToastId);
         });
     }
   }, [

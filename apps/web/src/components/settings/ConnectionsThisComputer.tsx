@@ -17,6 +17,7 @@ import { useAccount } from "~/hooks/useAccount";
 import { reportRemoteAccessAllowed, useDesktopKeepAwake } from "~/hooks/useDesktopKeepAwake";
 import { useDevices, useHosts, useHostSessions } from "~/hooks/useHosts";
 import { useRemoteHostState } from "~/hooks/useRemoteHostState";
+import { t } from "~/i18n";
 import { accountErrorMessage } from "~/lib/accountLogic";
 import { readHostsApi } from "~/lib/hosts/api";
 import { readExecutionContext } from "~/lib/hosts/executionContext";
@@ -152,7 +153,7 @@ export function ConnectionsThisComputer({
         <SettingsCard>
           {onViewProPlans ? (
             <SettingsListRow
-              title="Synara Alto"
+              title={t("settings:synaraAltoPro")}
               description={`Alto includes remote access to this ${computerNoun}. Local use stays free.`}
               actions={
                 <Button size="xs" shape="capsule" variant="subtle" onClick={onViewProPlans}>

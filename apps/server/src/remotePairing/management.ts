@@ -2,10 +2,11 @@ import { accountStateDirectory } from "../accountAuth";
 import { createAccountClient } from "@synara/shared/account";
 import { mintHostProof, readHostIdentity } from "../hostIdentity";
 import { randomUUID } from "node:crypto";
-import { calculateJwkThumbprint, SignJWT } from "jose";
+import { SignJWT } from "jose";
 import { X509Certificate } from "node:crypto";
 import {
   EnvironmentId,
+  WsRpcError,
   type RemoteAccessRequest,
   type RemoteAccessResult,
   type RemotePairingBundle,
@@ -13,6 +14,7 @@ import {
 import { desktopFlavorFromBundleId } from "@synara/shared/betaFeatures";
 import { Effect } from "effect";
 import { accountApiIssuer, readAccountFile, withFreshAccessToken } from "../accountAuth";
+import { AccountDeviceKeyRevokedError } from "../accountDeviceRegistration";
 import type { HostsAccountSession } from "../accountSession";
 import type { AuthControlPlaneShape } from "../auth/Services/AuthControlPlane";
 import type { ServerConfigShape } from "../config";
@@ -48,11 +50,33 @@ export type RemoteAccessManagement = (
   signal: AbortSignal,
 ) => Promise<RemoteAccessResult>;
 
+const DEVICE_RECOVERY_TTL_MS = 5 * 60_000;
+
 export function makeRemoteAccessManagement(
   options: RemoteAccessManagementOptions,
 ): RemoteAccessManagement {
   const pairing = new Map<string, { lifetime: AbortController; settled: Promise<void> }>();
-  const previews = new Map<string, { bundle: RemotePairingBundle; binding: string }>();
+  const previews = new Map<
+    string,
+    { bundle: RemotePairingBundle; binding: string; deviceJkt: string }
+  >();
+  let recovery:
+    | {
+        id: string;
+        accountUrl: string;
+        binding: string;
+        revokedJkt: string;
+        expiresAt: number;
+      }
+    | undefined;
+  let recovering = false;
+  let recoveryGeneration = 0;
+  const assertRecoveryGeneration = (generation: number) => {
+    if (generation !== recoveryGeneration)
+      throw new WsRpcError({
+        message: "Device registration changed. Select Find computer to check again.",
+      });
+  };
   const readContext = async () => {
     const account = await readAccountFile(
       accountStateDirectory(options.config.baseDir, options.config.devUrl),
@@ -70,7 +94,31 @@ export function makeRemoteAccessManagement(
   };
   return async (request, signal) => {
     requireRemoteConnections(options.config.stateDir);
+    const generation = recoveryGeneration;
     const { account, local, binding } = await readContext();
+    if (request.operation === "device-info" || request.operation === "redeem-code")
+      assertRecoveryGeneration(generation);
+    const bindingKey = JSON.stringify(binding);
+    const expectedAccount = {
+      accountUrl: account.accountUrl,
+      userId: binding.userId,
+      organizationId: binding.organizationId,
+    };
+    if (
+      recovery &&
+      (recovery.expiresAt <= Date.now() ||
+        recovery.accountUrl !== account.accountUrl ||
+        recovery.binding !== bindingKey)
+    )
+      recovery = undefined;
+    if (
+      recovering &&
+      (request.operation === "device-info" ||
+        request.operation === "redeem-code" ||
+        request.operation === "confirm-code" ||
+        request.operation === "pair")
+    )
+      throw new WsRpcError({ message: "Device registration recovery is in progress." });
     const client = createAccountClient({ baseUrl: account.accountUrl });
     const hostProof = async () => {
       const identity = await readHostIdentity(options.config.hostIdentityPath);
@@ -85,10 +133,7 @@ export function makeRemoteAccessManagement(
       });
     };
     for (const [id, preview] of previews) {
-      if (
-        Date.parse(preview.bundle.expiresAt) <= Date.now() ||
-        preview.binding !== JSON.stringify(binding)
-      )
+      if (Date.parse(preview.bundle.expiresAt) <= Date.now() || preview.binding !== bindingKey)
         previews.delete(id);
     }
     if (request.operation === "redeem-code") {
@@ -97,7 +142,7 @@ export function makeRemoteAccessManagement(
         .toUpperCase()
         .replace(/[^A-Z2-9]/g, "")
         .replace(/^(.{4})(.{4})$/, "$1-$2");
-      const device = await options.account.dialIdentity();
+      const device = await options.account.dialIdentity({ expectedAccount });
       const proof = await new SignJWT({ code })
         .setProtectedHeader({ alg: "ES256", typ: "synara-pairing-code+jwt" })
         .setIssuer("synara-device")
@@ -113,7 +158,10 @@ export function makeRemoteAccessManagement(
           client,
           expectedIdentity: account,
         },
-        (token) => client.redeemRemotePairingCode(token, { code, deviceJkt: device.jkt, proof }),
+        (token) => {
+          assertRecoveryGeneration(generation);
+          return client.redeemRemotePairingCode(token, { code, deviceJkt: device.jkt, proof });
+        },
       );
       if (
         bundle.accountAuthority !== binding.accountAuthority ||
@@ -121,9 +169,10 @@ export function makeRemoteAccessManagement(
         bundle.organizationId !== binding.organizationId
       )
         throw new Error("Pairing belongs to another account");
-      if (JSON.stringify((await readContext()).binding) !== JSON.stringify(binding))
+      if (JSON.stringify((await readContext()).binding) !== bindingKey)
         throw new Error("Account changed during pairing");
-      previews.set(bundle.inviteId, { bundle, binding: JSON.stringify(binding) });
+      assertRecoveryGeneration(generation);
+      previews.set(bundle.inviteId, { bundle, binding: bindingKey, deviceJkt: device.jkt });
       return {
         kind: "pairing-preview",
         inviteId: bundle.inviteId,
@@ -131,6 +180,7 @@ export function makeRemoteAccessManagement(
         label: bundle.label,
         rootFingerprint: bundle.rootFingerprint,
         expiresAt: bundle.expiresAt,
+        deviceJkt: device.jkt,
       };
     }
     if (request.operation === "revoke-account-sessions") {
@@ -140,12 +190,58 @@ export function makeRemoteAccessManagement(
       };
     }
     if (request.operation === "device-info") {
-      const identity = await options.account.dialIdentity();
-      return {
-        kind: "device-info",
-        deviceJkt: await calculateJwkThumbprint(identity.publicJwk),
-        label: local.label,
-      };
+      try {
+        const identity = await options.account.dialIdentity({
+          expectedAccount,
+          revalidateRegistration: true,
+        });
+        assertRecoveryGeneration(generation);
+        return { kind: "device-info", deviceJkt: identity.jkt, label: local.label };
+      } catch (error) {
+        if (!(error instanceof AccountDeviceKeyRevokedError)) throw error;
+        const current = await readContext();
+        assertRecoveryGeneration(generation);
+        if (
+          current.account.accountUrl !== account.accountUrl ||
+          JSON.stringify(current.binding) !== bindingKey
+        )
+          throw new Error("Account changed during device registration");
+        recovery = {
+          id: randomUUID(),
+          accountUrl: account.accountUrl,
+          binding: bindingKey,
+          revokedJkt: error.jkt,
+          expiresAt: Date.now() + DEVICE_RECOVERY_TTL_MS,
+        };
+        return { kind: "device-registration-revoked", recoveryId: recovery.id };
+      }
+    }
+    if (request.operation === "re-register-device") {
+      if (recovery?.id !== request.recoveryId || recovering)
+        throw new WsRpcError({
+          code: "device_recovery_expired",
+          message: "Device recovery expired. Select Find computer to check again.",
+        });
+      signal.throwIfAborted();
+      const { revokedJkt } = recovery;
+      recovery = undefined;
+      recovering = true;
+      recoveryGeneration++;
+      try {
+        previews.clear();
+        const pending = [...pairing.values()];
+        for (const pair of pending) pair.lifetime.abort(new Error("Device registration changed"));
+        options.connections.closeAll(4403, "Controller device registration changed");
+        await Promise.all(pending.map((pair) => pair.settled));
+        signal.throwIfAborted();
+        const registration = await options.account.recoverDeviceRegistration({
+          expectedAccount,
+          revokedJkt,
+        });
+        return { kind: "device-info", deviceJkt: registration.jkt, label: local.label };
+      } finally {
+        recovering = false;
+      }
     }
     if (request.operation === "forget-host") {
       for (const [id, preview] of previews) {
@@ -168,8 +264,7 @@ export function makeRemoteAccessManagement(
       if (
         !bundle ||
         (request.operation === "confirm-code" &&
-          (preview?.binding !== JSON.stringify(binding) ||
-            request.rootFingerprint !== bundle.rootFingerprint))
+          (preview?.binding !== bindingKey || request.rootFingerprint !== bundle.rootFingerprint))
       )
         throw new Error("Review a fresh pairing code and compare the host fingerprint");
       const key = JSON.stringify([binding, bundle.environmentId]);
@@ -181,6 +276,12 @@ export function makeRemoteAccessManagement(
       pairing.set(key, pending);
       try {
         pairSignal.throwIfAborted();
+        const identity = await options.account.dialIdentity({ expectedAccount });
+        pairSignal.throwIfAborted();
+        if (preview && preview.deviceJkt !== identity.jkt) {
+          previews.delete(bundle.inviteId);
+          throw new Error("Review a fresh pairing code and compare the host fingerprint");
+        }
         await Effect.runPromise(options.hosts.importInvitation(binding, bundle));
         pairSignal.throwIfAborted();
         const { hosts } = await options.account.listHosts();
@@ -190,8 +291,6 @@ export function makeRemoteAccessManagement(
             candidate.id === bundle.hostId && candidate.environmentId === bundle.environmentId,
         );
         if (!host) throw new Error("The invitation host is not available in this account");
-        const identity = await options.account.dialIdentity();
-        pairSignal.throwIfAborted();
         await pairRemoteHost({
           host,
           anchor: bundle,

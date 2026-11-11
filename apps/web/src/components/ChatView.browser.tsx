@@ -72,7 +72,7 @@ import {
   removeInlineTerminalContextPlaceholder,
 } from "../lib/terminalContext";
 import { extractTrailingBrowserAnnotations } from "../lib/browserAnnotations";
-import { isMacNavigatorPlatform } from "../lib/utils";
+import { isMacNavigatorPlatform, randomUUID } from "../lib/utils";
 import { STARRED_MODELS_STORAGE_KEY } from "../lib/starredModels";
 import { readNativeApi } from "../nativeApi";
 import { DEFAULT_THEME_STATE, getCodeThemeSeed } from "~/theme/theme.logic";
@@ -1485,6 +1485,7 @@ function installDeterministicSendNativeApi(options?: {
   rejectTurnStart?: boolean;
   beforeWorktreeCreation?: () => Promise<void>;
   beforeTurnStart?: () => Promise<void>;
+  beforeShellSnapshot?: () => Promise<void>;
   beforeTerminalOpen?: () => Promise<void>;
   projectThreadCommands?: boolean;
 }): () => void {
@@ -1534,6 +1535,10 @@ function installDeterministicSendNativeApi(options?: {
       },
       orchestration: {
         ...wsNativeApi.orchestration,
+        getShellSnapshot: async () => {
+          await options?.beforeShellSnapshot?.();
+          return wsNativeApi.orchestration.getShellSnapshot();
+        },
         dispatchCommand: async (
           command: Parameters<typeof wsNativeApi.orchestration.dispatchCommand>[0],
         ) => {
@@ -2463,6 +2468,7 @@ describe("ChatView transcript geometry (full app)", () => {
     attachmentUploadBarrier = null;
     attachmentCancelBarrier = null;
     localStorage.clear();
+    sessionStorage.clear();
     useOpenThreadTabsStore.setState({ threadIds: [] });
     acknowledgeStartupAnnouncementsForTest(createBaseServerConfig());
     // Clearing localStorage does not reset the live Zustand dock state.
@@ -10312,7 +10318,7 @@ describe("ChatView transcript geometry (full app)", () => {
       };
       const mounted = await mountChatView({ viewport: DEFAULT_VIEWPORT, snapshot });
       const queuedTurn = {
-        id: "queued-turn-paused",
+        id: randomUUID(),
         kind: "chat" as const,
         createdAt: NOW_ISO,
         previewText: queuedPrompt,
@@ -12782,12 +12788,9 @@ describe("ChatView transcript geometry (full app)", () => {
         await vi.waitFor(() => expect(turnCommands()).toHaveLength(1));
         if (firstOwner === "board") {
           sendButton.click();
-          // The actual chat send must have entered its pending UI before releasing the board RPC.
-          await vi.waitFor(() =>
-            expect(
-              useThreadDispatchStore.getState().threads[THREAD_ID]?.localDispatch,
-            ).toBeTruthy(),
-          );
+          await expect.element(page.getByText("Still sending your last message")).toBeVisible();
+          expect(turnCommands()).toHaveLength(1);
+          expect(useComposerDraftStore.getState().draftsByThreadId[THREAD_ID]?.prompt).toBe(prompt);
         } else {
           boardSend = sendFromBoard();
           expect(await boardSend).toMatchObject({ kind: "dispatched", deferred: true });
@@ -12948,6 +12951,116 @@ describe("ChatView transcript geometry (full app)", () => {
     } finally {
       await mounted.cleanup();
       restoreNativeApi();
+    }
+  });
+
+  it("shows a rejected first send on the empty landing and restores the original draft", async () => {
+    const restoreNativeApi = installDeterministicSendNativeApi({ rejectTurnStart: true });
+    useComposerDraftStore.getState().setProjectDraftThreadId(PROJECT_ID, THREAD_ID);
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createDraftOnlySnapshot(),
+    });
+    try {
+      const prompt = "Keep the draft when the first send fails";
+      await page.getByTestId("composer-editor").fill(prompt);
+      const sendButton = await waitForSendButton();
+      await vi.waitFor(() => expect(sendButton.disabled).toBe(false));
+      sendButton.click();
+      await vi.waitFor(() => {
+        expect(
+          wsRequests
+            .map(readDispatchedCommand)
+            .some((command) => command?.type === "thread.turn.start"),
+        ).toBe(true);
+        expect(useComposerDraftStore.getState().draftsByThreadId[THREAD_ID]?.prompt).toBe(prompt);
+        expect(hasActiveComposerSend(THREAD_ID)).toBe(false);
+      });
+      await expect.element(page.getByTestId("empty-landing-heading")).toBeVisible();
+      await expect
+        .element(page.getByText("Turn start failed for test.", { exact: true }))
+        .toBeVisible();
+    } finally {
+      restoreNativeApi();
+      await mounted.cleanup();
+    }
+  });
+
+  it("preserves a promoted chat and reconciles its exact late first message on retry", async () => {
+    const turnStarts = () =>
+      wsRequests
+        .map(readDispatchedCommand)
+        .filter((command) => command?.type === "thread.turn.start");
+    const restoreNativeApi = installDeterministicSendNativeApi({
+      beforeTurnStart: async () => {
+        throw Object.assign(new Error("Delivery could not be checked."), {
+          _tag: "WsTransportRequestInterruptedError",
+          code: "WS_TURN_SETTLEMENT_UNAVAILABLE",
+          delivery: "unknown",
+        });
+      },
+    });
+    useComposerDraftStore.getState().setProjectDraftThreadId(PROJECT_ID, THREAD_ID);
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createDraftOnlySnapshot(),
+    });
+    try {
+      const prompt = "Reconcile the exact original message";
+      await page.getByTestId("composer-editor").fill(prompt);
+      const sendButton = await waitForSendButton();
+      await vi.waitFor(() => expect(sendButton.disabled).toBe(false));
+      sendButton.click();
+      await vi.waitFor(() => {
+        expect(turnStarts()).toHaveLength(1);
+        expect(useComposerDraftStore.getState().draftsByThreadId[THREAD_ID]?.prompt).toBe(prompt);
+        expect(hasActiveComposerSend(THREAD_ID)).toBe(false);
+      });
+      expect(
+        wsRequests.map(readDispatchedCommand).some((command) => command?.type === "thread.delete"),
+      ).toBe(false);
+
+      const original = turnStarts()[0]!;
+      const message = original.message as { messageId: MessageId; text: string };
+      const createdSnapshot = addThreadToSnapshot(fixture.snapshot, THREAD_ID);
+      const startedThread = {
+        ...createdSnapshot.threads[0]!,
+        session: null,
+        messages: [
+          {
+            ...createUserMessage({ id: message.messageId, text: message.text, offsetSeconds: 1 }),
+            createdAt: original.createdAt as string,
+            updatedAt: original.createdAt as string,
+          },
+        ],
+      };
+      fixture.snapshot = { ...createdSnapshot, threads: [startedThread] };
+      useStore
+        .getState()
+        .syncServerShellSnapshot(createShellSnapshotFromReadModel(fixture.snapshot));
+      useStore.getState().syncServerThreadDetailHotPath(startedThread);
+      await vi.waitFor(() => {
+        expect(useStore.getState().messageByThreadId?.[THREAD_ID]?.[message.messageId]?.id).toBe(
+          message.messageId,
+        );
+      });
+      await waitForLayout();
+
+      const retryButton = await waitForSendButton();
+      await vi.waitFor(() => expect(retryButton.disabled).toBe(false));
+      retryButton.click();
+      await vi.waitFor(
+        () => {
+          expect(useComposerDraftStore.getState().draftsByThreadId[THREAD_ID]?.prompt ?? "").toBe(
+            "",
+          );
+        },
+        { timeout: 8_000 },
+      );
+      expect(turnStarts()).toEqual([original]);
+    } finally {
+      restoreNativeApi();
+      await mounted.cleanup();
     }
   });
 
@@ -16382,6 +16495,39 @@ describe("ChatView transcript geometry (full app)", () => {
       );
       expect(freshThreadPath).not.toBe(promotedThreadPath);
     } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("retains an accepted implementation thread if its shell refresh fails", async () => {
+    let turnStarted = false;
+    const restoreNativeApi = installDeterministicSendNativeApi({
+      beforeTurnStart: async () => {
+        turnStarted = true;
+      },
+      beforeShellSnapshot: async () => {
+        if (turnStarted) throw new Error("Implementation shell refresh failed");
+      },
+    });
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotWithSettledPlanAwaitingFollowUp(),
+    });
+    try {
+      await page.getByRole("button", { name: "Implementation actions", exact: true }).click();
+      await page.getByRole("menuitem", { name: "Implement in a new thread", exact: true }).click();
+      await expect.element(page.getByText("Implementation shell refresh failed")).toBeVisible();
+      const commands = wsRequests.map(readDispatchedCommand);
+      const implementationTurn = commands.find((command) => command?.type === "thread.turn.start");
+      expect(implementationTurn?.threadId).toBeDefined();
+      expect(
+        commands.some(
+          (command) =>
+            command?.type === "thread.delete" && command.threadId === implementationTurn?.threadId,
+        ),
+      ).toBe(false);
+    } finally {
+      restoreNativeApi();
       await mounted.cleanup();
     }
   });

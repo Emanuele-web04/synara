@@ -107,6 +107,52 @@ describe("remote TLS at the real Effect/Node HTTP boundary", () => {
     expect(Buffer.from(value as Buffer)).toEqual(Buffer.from(data));
   }
 
+  it.each(["closed", "capacity"] as const)(
+    "owns WebSocket errors while refusing a connection (%s)",
+    async (reason) => {
+      const listener = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+      await once(listener, "listening");
+      const address = listener.address();
+      if (!address || typeof address === "string") throw new Error("Expected TCP address");
+      const url = `ws://127.0.0.1:${address.port}`;
+      const denied = new RemoteTlsServer({
+        identity,
+        maxConnections: 0,
+        accept: () => {
+          throw new Error("Denied connection reached inner RPC");
+        },
+      });
+      if (reason === "closed") denied.close();
+      const observed = new Promise<void>((resolve, reject) => {
+        listener.on("connection", (socket) => {
+          try {
+            denied.accept(socket);
+            expect(socket.readyState).toBe(WebSocket.CLOSING);
+            // A real ws Receiver forwards errors to this emitter even during
+            // its close handshake. Inject at that dependency boundary.
+            expect(() => socket.emit("error", new Error("closing transport failed"))).not.toThrow();
+            expect(socket.readyState).toBe(WebSocket.CLOSING);
+            resolve();
+          } catch (error) {
+            socket.terminate();
+            reject(error);
+          }
+        });
+      });
+      const client = new WebSocket(url);
+      client.on("error", () => client.terminate());
+      try {
+        await observed;
+        expect(denied.connectionCount).toBe(0);
+      } finally {
+        client.terminate();
+        denied.close();
+        for (const socket of listener.clients) socket.terminate();
+        await new Promise<void>((resolve) => listener.close(() => resolve()));
+      }
+    },
+  );
+
   it("preserves the first text frame and binary boundaries without exposing plaintext to the outer socket", async () => {
     await fixture(async (url, tunnel, captured) => {
       const socket = await connectRemoteWebSocket(await outer(url), remoteTlsAnchor(identity));

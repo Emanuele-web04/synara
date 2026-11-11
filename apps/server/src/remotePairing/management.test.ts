@@ -6,10 +6,13 @@ import { Effect } from "effect";
 import { generateKeyPair, exportJWK, calculateJwkThumbprint } from "jose";
 import { beforeEach, expect, it, vi } from "vitest";
 import { EnvironmentId, type RemotePairingBundle } from "@synara/contracts";
+import { AccountApiError } from "@synara/shared/account";
+import { AccountDeviceKeyRevokedError } from "../accountDeviceRegistration";
 import {
   initializeRemoteTlsIdentity,
   remoteTlsIdentityPath,
 } from "../remoteTransport/certificates";
+import type { pairRemoteHost } from "./client";
 import { makeRemoteAccessManagement, type RemoteAccessManagementOptions } from "./management";
 
 const mocks = vi.hoisted(() => ({
@@ -34,6 +37,8 @@ beforeEach(() => vi.resetAllMocks());
 async function harness() {
   const key = await generateKeyPair("ES256", { extractable: true });
   const publicJwk = await exportJWK(key.publicKey);
+  const jkt = await calculateJwkThumbprint(publicJwk);
+  let revoked = false;
   const account = {
     accountUrl: "https://account.example.test",
     userId: "owner",
@@ -65,6 +70,11 @@ async function harness() {
   const listHosts = vi.fn(async () => ({
     hosts: [{ id: bundle.hostId, environmentId: bundle.environmentId }],
   }));
+  const recoverDeviceRegistration = vi.fn(async () => ({
+    deviceId: randomUUID(),
+    jkt: "replacement-device",
+  }));
+  const closeAll = vi.fn();
   const manage = makeRemoteAccessManagement({
     config: { baseDir: "/unused", stateDir: "/unused" },
     environment: {
@@ -76,14 +86,22 @@ async function harness() {
     hosts,
     account: {
       listHosts,
-      dialIdentity: async () => ({
-        key: key.privateKey,
-        publicJwk,
-        jkt: await calculateJwkThumbprint(publicJwk),
-        userId: account.userId,
-      }),
+      dialIdentity: async () => {
+        if (revoked) {
+          throw new AccountDeviceKeyRevokedError(
+            jkt,
+            new AccountApiError({
+              status: 403,
+              code: "device_not_registered",
+              message: "This device key was revoked.",
+            }),
+          );
+        }
+        return { key: key.privateKey, publicJwk, jkt, userId: account.userId };
+      },
+      recoverDeviceRegistration,
     },
-    connections: { remove: vi.fn() },
+    connections: { remove: vi.fn(), closeAll },
   } as unknown as RemoteAccessManagementOptions);
   const signal = new AbortController().signal;
   const redeem = () => manage({ operation: "redeem-code", code: "ABCD-2345" }, signal);
@@ -94,12 +112,30 @@ async function harness() {
     );
   const forget = () =>
     manage({ operation: "forget-host", environmentId: bundle.environmentId }, signal);
-  return { bundle, account, hosts, listHosts, redeem, confirm, forget };
+  return {
+    bundle,
+    account,
+    hosts,
+    listHosts,
+    redeem,
+    confirm,
+    forget,
+    jkt,
+    closeAll,
+    recoverDeviceRegistration,
+    revoke: () => {
+      revoked = true;
+    },
+    deviceInfo: () => manage({ operation: "device-info" }, signal),
+    recover: (recoveryId: string) =>
+      manage({ operation: "re-register-device", recoveryId }, signal),
+  };
 }
 
 it("retries a redeemed code after a temporary directory or connection failure, consuming it only on success", async () => {
   const h = await harness();
   const preview = await h.redeem();
+  expect(preview).toMatchObject({ deviceJkt: h.jkt });
   expect(preview).not.toHaveProperty("secret");
   h.listHosts.mockRejectedValueOnce(new Error("Account API temporarily unavailable"));
   await expect(h.confirm()).rejects.toThrow("temporarily unavailable");
@@ -138,19 +174,91 @@ it("serializes pairing before async setup and waits for cancellation before forg
   const h = await harness();
   await h.redeem();
   const directory = Promise.withResolvers<Awaited<ReturnType<typeof h.listHosts>>>();
+  const handshake = Promise.withResolvers<AbortSignal>();
+  const handshakeSettled = Promise.withResolvers<void>();
   h.listHosts.mockImplementationOnce(() => directory.promise);
+  mocks.pair.mockImplementationOnce(({ signal }: Parameters<typeof pairRemoteHost>[0]) => {
+    if (!signal) throw new Error("Pairing did not receive a cancellation signal");
+    handshake.resolve(signal);
+    return handshakeSettled.promise;
+  });
   const first = h.confirm().catch((error: unknown) => error);
   await vi.waitFor(() => expect(h.listHosts).toHaveBeenCalledTimes(1));
   await expect(h.confirm()).rejects.toThrow("already in progress");
   expect(h.hosts.importInvitation).toHaveBeenCalledTimes(1);
-  const forgotten = h.forget();
-  await vi.waitFor(() => expect(h.hosts.get).not.toHaveBeenCalled());
   directory.resolve({ hosts: [{ id: h.bundle.hostId, environmentId: h.bundle.environmentId }] });
+  const signal = await handshake.promise;
+  const forgotten = h.forget();
+  await vi.waitFor(() => expect(signal.aborted).toBe(true));
+  expect(h.hosts.forget).not.toHaveBeenCalled();
+  handshakeSettled.resolve();
   await forgotten;
-  expect(await first).toBeInstanceOf(Error);
-  expect(mocks.pair).not.toHaveBeenCalled();
+  expect(await first).toBe(signal.reason);
   expect(h.hosts.confirm).not.toHaveBeenCalled();
   expect(h.hosts.forget).toHaveBeenCalledTimes(1);
+});
+
+it("accepts one confirmed recovery and cancels any pairing tied to the revoked key", async () => {
+  const h = await harness();
+  await h.redeem();
+  const directory = Promise.withResolvers<Awaited<ReturnType<typeof h.listHosts>>>();
+  h.listHosts.mockImplementationOnce(() => directory.promise);
+  const pairing = h.confirm().catch((error: unknown) => error);
+  await vi.waitFor(() => expect(h.listHosts).toHaveBeenCalledTimes(1));
+
+  h.revoke();
+  const revoked = await h.deviceInfo();
+  if (revoked.kind !== "device-registration-revoked") throw new Error("Recovery was not offered");
+  const recovery = h.recover(revoked.recoveryId);
+  await vi.waitFor(() => expect(h.closeAll).toHaveBeenCalledTimes(1));
+  expect(h.recoverDeviceRegistration).not.toHaveBeenCalled();
+  directory.resolve({ hosts: [{ id: h.bundle.hostId, environmentId: h.bundle.environmentId }] });
+  await expect(recovery).resolves.toMatchObject({
+    kind: "device-info",
+    deviceJkt: "replacement-device",
+  });
+  expect(await pairing).toBeInstanceOf(Error);
+  expect(mocks.pair).not.toHaveBeenCalled();
+  await expect(h.confirm()).rejects.toThrow("fresh pairing code");
+  await expect(h.recover(revoked.recoveryId)).rejects.toMatchObject({
+    code: "device_recovery_expired",
+  });
+  expect(h.recoverDeviceRegistration).toHaveBeenCalledExactlyOnceWith({
+    expectedAccount: h.account,
+    revokedJkt: h.jkt,
+  });
+});
+
+it("rejects a recovery offer after the signed-in account changes", async () => {
+  const h = await harness();
+  h.revoke();
+  const revoked = await h.deviceInfo();
+  if (revoked.kind !== "device-registration-revoked") throw new Error("Recovery was not offered");
+  mocks.readAccount.mockResolvedValue({ ...h.account, userId: "other-owner" });
+  await expect(h.recover(revoked.recoveryId)).rejects.toMatchObject({
+    code: "device_recovery_expired",
+  });
+  expect(h.recoverDeviceRegistration).not.toHaveBeenCalled();
+  expect(h.closeAll).not.toHaveBeenCalled();
+});
+
+it("rejects an old revoked-key check that finishes after a replacement is registered", async () => {
+  const h = await harness();
+  h.revoke();
+  const revoked = await h.deviceInfo();
+  if (revoked.kind !== "device-registration-revoked") throw new Error("Recovery was not offered");
+
+  const readStarted = Promise.withResolvers<void>();
+  const accountRead = Promise.withResolvers<typeof h.account>();
+  mocks.readAccount.mockResolvedValueOnce(h.account).mockImplementationOnce(() => {
+    readStarted.resolve();
+    return accountRead.promise;
+  });
+  const oldCheck = h.deviceInfo();
+  await readStarted.promise;
+  await expect(h.recover(revoked.recoveryId)).resolves.toMatchObject({ kind: "device-info" });
+  accountRead.resolve(h.account);
+  await expect(oldCheck).rejects.toThrow("Select Find computer to check again");
 });
 
 it("reports and switches the owner's Allow connections setting without touching devices", async () => {

@@ -99,6 +99,39 @@ describe("billing account scope", () => {
     });
     expect(checkout).toHaveBeenCalledWith("access-1", { interval: "year" });
   });
+
+  it.each([
+    { change: "host enrollment", userId: "user_1", linkHost: true },
+    { change: "legacy user backfill", userId: undefined, linkHost: false },
+  ])("opens checkout across token renewal and $change", async ({ userId, linkHost }) => {
+    const baseDir = makeBaseDir();
+    const stored = credentials({ userId });
+    await writeAccountCredentials(baseDir, stored);
+    const redirect = {
+      environment: "sandbox" as const,
+      url: "https://sandbox.polar.sh/checkout/test",
+    };
+    const client = makeClient({
+      async billingCheckout(token) {
+        if (token === "access-1") {
+          // Enrollment completes while checkout is waiting for its first response.
+          if (linkHost) await writeAccountCredentials(baseDir, { ...stored, ...linkedHostFields });
+          throw new AccountApiError({ code: "unauthorized", status: 401, message: "Expired" });
+        }
+        expect(token).toBe("access-2");
+        return redirect;
+      },
+      refreshAccessToken: async () => ({
+        accessToken: "access-2",
+        refreshToken: "refresh-2",
+        user: { id: "user_1", email: "ada@example.com" },
+      }),
+    });
+
+    await expect(
+      sessionFor(baseDir, client).billingCheckout({ interval: "year" }),
+    ).resolves.toEqual(redirect);
+  });
 });
 
 function unimplemented(name: string) {
@@ -256,7 +289,7 @@ describe("status", () => {
           ),
         refreshAccessToken: () =>
           Promise.reject(
-            new AccountApiError({ code: "unauthorized", status: 400, message: "Spent" }),
+            new AccountApiError({ code: "unauthorized", status: 401, message: "Spent" }),
           ),
       }),
     );
@@ -556,7 +589,7 @@ describe("OTP sign-in", () => {
             throw new AccountApiError({ code: "unauthorized", status: 401, message: "Expired" });
           },
           refreshAccessToken: async () => {
-            throw new AccountApiError({ code: "unauthorized", status: 400, message: "Spent" });
+            throw new AccountApiError({ code: "unauthorized", status: 401, message: "Spent" });
           },
         });
         expect(await sessionFor(baseDir, expiredClient).status()).toEqual({ state: "signed-out" });

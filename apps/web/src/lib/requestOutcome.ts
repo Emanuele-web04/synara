@@ -6,13 +6,17 @@
 // Exports: isRequestOutcomeUnknown
 
 /** wsTransport's WsTransportRequestInterruptedError for a timeout or reconnect; a cancel is the caller's own. */
-export function isRequestOutcomeUnknown(error: unknown): boolean {
+export function isRequestOutcomeUnknown(
+  error: unknown,
+  options?: { requireSent: boolean },
+): boolean {
   return (
     typeof error === "object" &&
     error !== null &&
     "_tag" in error &&
     error._tag === "WsTransportRequestInterruptedError" &&
     "code" in error &&
-    error.code !== "WS_REQUEST_ABORTED"
+    error.code !== "WS_REQUEST_ABORTED" &&
+    (!options?.requireSent || !("delivery" in error) || error.delivery !== "not_sent")
   );
 }
