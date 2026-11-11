@@ -7,8 +7,9 @@ import type { OrchestrationThreadActivity } from "@synara/contracts";
 import { Alert, AlertAction, AlertDescription } from "../ui/alert";
 import { IconButton } from "../ui/icon-button";
 import { CircleAlertIcon, XIcon } from "~/lib/icons";
+import { formatRateLimitResetCountdown } from "~/lib/rateLimits";
 import { ChatColumnBannerFrame } from "./ChatColumnBannerFrame";
-import { useTranslation } from "~/i18n";
+import { useTranslation, type t } from "~/i18n";
 
 export type RateLimitStatus = {
   status: "rejected" | "allowed_warning";
@@ -45,13 +46,9 @@ export function deriveLatestRateLimitStatus(
   return null;
 }
 
-function formatResetsAt(resetsAt: string): string {
-  const ms = Date.parse(resetsAt);
-  if (Number.isNaN(ms)) return "";
-  const secondsLeft = Math.max(0, Math.ceil((ms - Date.now()) / 1000));
-  if (secondsLeft < 60) return ` Resets in ${secondsLeft}s.`;
-  const minutesLeft = Math.ceil(secondsLeft / 60);
-  return ` Resets in ${minutesLeft}m.`;
+function formatResetsAt(resetsAt: string, translate: typeof t): string {
+  const countdown = formatRateLimitResetCountdown(resetsAt, translate);
+  return countdown ? ` ${countdown}.` : "";
 }
 
 export const RateLimitBanner = function RateLimitBanner({
@@ -69,10 +66,10 @@ export const RateLimitBanner = function RateLimitBanner({
   const isRejected = status === "rejected";
 
   const message = isRejected
-    ? t("chat:rateLimitReached", { value0: resetsAt ? formatResetsAt(resetsAt) : "" })
+    ? t("chat:rateLimitReached", { value0: resetsAt ? formatResetsAt(resetsAt, t) : "" })
     : t("chat:approachingRateLimit", {
         value0: utilization !== undefined ? ` (${Math.round(utilization * 100)}% used)` : "",
-        value1: resetsAt ? formatResetsAt(resetsAt) : "",
+        value1: resetsAt ? formatResetsAt(resetsAt, t) : "",
       });
 
   return (
