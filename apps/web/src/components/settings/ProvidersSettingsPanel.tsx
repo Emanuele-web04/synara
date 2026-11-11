@@ -76,7 +76,10 @@ import {
   XIcon,
 } from "~/lib/icons";
 import { copyTextToClipboard } from "~/hooks/useCopyToClipboard";
-import { normalizeProviderAccentColor } from "~/lib/providerInstancePresentation";
+import {
+  normalizeProviderAccentColor,
+  providerAccountIdentityLabel,
+} from "~/lib/providerInstancePresentation";
 import {
   type ProviderAccountStatusSummary,
   type ProviderAccountStatusTone,
@@ -1498,6 +1501,7 @@ function ProviderAccountsControl(props: {
       account.isDefault &&
       explicit !== undefined &&
       (explicit.accentColor !== undefined || explicit.enabled === false);
+    const identity = providerAccountIdentityLabel(liveStatus);
     return (
       <div
         className={cn(
@@ -1523,6 +1527,9 @@ function ProviderAccountsControl(props: {
                 </span>
               ) : null}
             </div>
+            {identity ? (
+              <span className="block truncate text-ui-sm text-muted-foreground">{identity}</span>
+            ) : null}
             <StatusChip
               variant="pill"
               className={cn("mt-1 w-fit max-w-full", ACCOUNT_STATUS_PILL_CLASS_NAME[status.tone])}
