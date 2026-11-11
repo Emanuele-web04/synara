@@ -243,7 +243,7 @@ import { ThreadDiagnosticsQuery } from "./diagnostics/Services/ThreadDiagnostics
 import { makeOwnerThreadDiagnosticReader } from "./diagnostics/ownerThreadDiagnostics";
 import { OrchestrationEventStore } from "./persistence/Services/OrchestrationEventStore";
 import { ProviderRuntimeEventRepository } from "./persistence/Services/ProviderRuntimeEvents";
-import { requireWsOwnerSession } from "./wsOwnerAuthorization";
+import { requireUsageAnalyticsAccess, requireWsOwnerSession } from "./wsOwnerAuthorization";
 import { connectorsForPairedClient } from "./mcpConnectors/pairedClientView";
 import {
   WsRequestAdmissionMiddleware,
@@ -2714,7 +2714,14 @@ const makeWsRpcHandlersLayer = () =>
         [WS_METHODS.statsGetRecap]: (input) =>
           rpcEffect(recapStatsQuery.getRecap(input), "Failed to load the recap"),
         [WS_METHODS.statsGetUsageAnalytics]: (input) =>
-          rpcEffect(usageAnalyticsQuery.getUsageAnalytics(input), "Failed to load usage analytics"),
+          requireUsageAnalyticsAccess(input.scope).pipe(
+            Effect.andThen(() =>
+              rpcEffect(
+                usageAnalyticsQuery.getUsageAnalytics(input),
+                "Failed to load usage analytics",
+              ),
+            ),
+          ),
         [WS_METHODS.serverGetProviderUsageSnapshot]: (input) =>
           rpcEffect(getProviderUsageSnapshot(input), "Failed to load provider usage"),
         [WS_METHODS.serverListProviderUsage]: (input) =>

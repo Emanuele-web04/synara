@@ -525,8 +525,13 @@ export function buildTranscriptRows(input: {
 
   // An error can land in an hour whose prompt was in the hour before.
   for (const row of turns.values()) row.turns = Math.max(row.turns, row.failedTurns);
+  // An empty or unreadable transcript directory cannot replace Synara's data.
+  const providers = new Set<ProviderKind>();
+  for (const rows of [tokens.values(), turns.values()]) {
+    for (const row of rows) if (row.provider !== "unknown") providers.add(row.provider);
+  }
   return {
-    providers: [...input.scan.providers] as ReadonlyArray<ProviderKind>,
+    providers: [...providers].toSorted(),
     tokens: [...tokens.values()],
     turns: [...turns.values()],
     costs: [...costs.values()],
@@ -558,7 +563,7 @@ const NOT_NEEDED: PriceTable = { table: new Map(), status: "unavailable", fetche
 const NO_PRICES: UsagePricingSource = { load: async () => NOT_NEEDED };
 
 const NO_SESSION_FILES: TranscriptUsageReader = {
-  scan: async () => ({ providers: new Set(), files: [] }),
+  scan: async () => ({ files: [] }),
 };
 
 export const makeUsageAnalyticsQuery = (
@@ -670,6 +675,12 @@ export const makeUsageAnalyticsQuery = (
         WHERE d.created_at >= ${window.from}
           AND d.created_at < ${window.to}
           AND (COALESCE(d.provider, 'unknown') != 'claudeAgent' OR d.token_accounting_version = 1)
+        UNION ALL
+        SELECT
+          d.created_at, d.dispatch_origin, d.provider, d.model, d.project_id, d.tokens,
+          0, NULL, NULL, NULL
+        FROM usage_analytics_deleted_tokens d
+        WHERE d.created_at >= ${window.from} AND d.created_at < ${window.to}
       )
       SELECT
         ${sql.literal(QUARTER_HOUR("r.created_at"))} AS hour,

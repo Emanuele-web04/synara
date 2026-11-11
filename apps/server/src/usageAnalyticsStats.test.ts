@@ -70,7 +70,6 @@ const usage = (
 // one Codex session in a folder Synara does not know.
 const SESSION_FILES: TranscriptUsageReader = {
   scan: async () => ({
-    providers: new Set(["claudeAgent", "codex"] as const),
     files: [
       [
         {
@@ -449,6 +448,36 @@ describe("UsageAnalyticsQuery estimates", () => {
 });
 
 describe("UsageAnalyticsQuery on this Mac", () => {
+  it("retains Synara totals when a provider has no session records in the period", async () => {
+    const result = await runTest(
+      Effect.gen(function* () {
+        yield* seed;
+        const query = yield* makeUsageAnalyticsQuery({
+          sessionFiles: {
+            scan: async () => ({
+              files: [
+                [
+                  usage({
+                    provider: "codex",
+                    timestampMs: Date.parse("2026-08-30T10:00:00.000Z"),
+                  }),
+                ],
+              ],
+            }),
+          },
+        });
+        return yield* query.getUsageAnalytics({ ...WINDOW, scope: "mac" });
+      }),
+    );
+
+    expect(result.sessionFileProviders).toEqual([]);
+    expect(
+      result.tokens
+        .filter((row) => row.provider === "codex")
+        .reduce((sum, row) => sum + row.tokens, 0),
+    ).toBe(40_000);
+  });
+
   it("reads Claude and Codex from their session files instead of Synara's rows", async () => {
     const result = await runTest(
       Effect.gen(function* () {

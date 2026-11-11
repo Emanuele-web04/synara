@@ -24,7 +24,11 @@ import {
   isManagedCheckpointRefForThread,
   resolveProjectCwdForKind,
 } from "./checkpointing/Utils";
-import { aggregateProfileSkillUsageRows, turnModelSelectionCte } from "./profileStats";
+import {
+  aggregateProfileSkillUsageRows,
+  tokenDeltaCtes,
+  turnModelSelectionCte,
+} from "./profileStats";
 import { PROVIDER_COMMAND_REACTOR_CONSUMER } from "./persistence/Services/OrchestrationEventDeliveries";
 import { isProviderIntentEventType } from "./orchestration/providerIntentClassification";
 import { THREAD_RETENTION_COMMAND_ID_PREFIX } from "./threadRetention";
@@ -870,6 +874,28 @@ const makeProfileStatsArchive = Effect.gen(function* () {
           { concurrency: 1, discard: true },
         );
       }
+
+      // Analytics also tracks background work. Keep its token deltas separately
+      // so Profile and account totals still describe work dispatched by the user.
+      yield* sql`DELETE FROM usage_analytics_deleted_tokens WHERE thread_id = ${threadId}`;
+      yield* sql`
+        WITH ${tokenDeltaCtes(sql, {
+          threadIdsQuery: sql`
+            SELECT ${threadId} AS thread_id
+            WHERE EXISTS (
+              SELECT 1 FROM projection_thread_messages
+              WHERE thread_id = ${threadId} AND dispatch_origin IN ('automation', 'agent')
+            )
+          `,
+        })}
+        INSERT INTO usage_analytics_deleted_tokens
+          (thread_id, project_id, created_at, dispatch_origin, provider, model, tokens)
+        SELECT r.thread_id, ${projectId}, r.created_at, r.dispatch_origin, r.provider, r.model,
+          SUM(r.tokens)
+        FROM token_delta_rows r
+        WHERE r.dispatch_origin IN ('automation', 'agent') AND r.tokens > 0
+        GROUP BY r.thread_id, r.created_at, r.dispatch_origin, r.provider, r.model
+      `;
 
       // Hard delete: every table that stores rows for this thread. The delete
       // receipts stay as tiny idempotency tombstones for command retries after

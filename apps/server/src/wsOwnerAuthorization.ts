@@ -1,4 +1,4 @@
-import { WsRpcError } from "@synara/contracts";
+import { type StatsUsageAnalyticsScope, WsRpcError } from "@synara/contracts";
 import { Effect } from "effect";
 
 import { CurrentWsSessionRole } from "./wsConnectionSessions";
@@ -11,3 +11,8 @@ export const requireWsOwnerSession = Effect.gen(function* () {
     );
   }
 });
+
+/** Provider session files can include activity outside the paired Synara workspace. */
+export function requireUsageAnalyticsAccess(scope: StatsUsageAnalyticsScope | undefined) {
+  return scope === "mac" ? requireWsOwnerSession : Effect.succeed(undefined);
+}

@@ -186,7 +186,6 @@ describe("makeTranscriptUsageReader", () => {
       { provider: "codex", path: nodePath.join(root, "missing") },
     ]);
     const first = await reader.scan(0);
-    expect([...first.providers]).toEqual(["claudeAgent"]);
     expect(first.files.flat().map((record) => record.kind)).toEqual(["turn", "usage"]);
 
     // A line without its newline counts now and once more after it is finished.

@@ -5,7 +5,7 @@
 // files are read from where the last read stopped.
 // Layer: server usage reading (node:fs). Parsing lives in transcriptUsageParsers.ts.
 
-import { createReadStream, type Dirent } from "node:fs";
+import type { Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import nodePath from "node:path";
 
@@ -72,8 +72,6 @@ interface CachedTranscript {
 }
 
 export interface TranscriptScan {
-  /** Providers whose session folder exists on this Mac. */
-  readonly providers: ReadonlySet<TranscriptProvider>;
   /** Records per file, in path order, not yet de-duplicated across files. */
   readonly files: ReadonlyArray<ReadonlyArray<TranscriptRecord>>;
 }
@@ -219,32 +217,32 @@ async function readTranscript(
     };
 
     if (stats.size > start) {
-      // A stream of its own: a FileHandle stream closes the handle when it ends,
-      // and the guard below still reads from it.
-      const stream = createReadStream(file.path, { start, highWaterMark: 256 * 1024 });
-      try {
-        for await (const chunk of stream as AsyncIterable<Buffer>) {
-          let lineStart = 0;
-          for (
-            let newline = chunk.indexOf(NEWLINE);
-            newline !== -1;
-            newline = chunk.indexOf(NEWLINE, lineStart)
-          ) {
-            if (pendingBytes === 0 && !skippingLongLine) {
-              keep(parse(chunk.subarray(lineStart, newline), codexState), records);
-            } else {
-              append(chunk.subarray(lineStart, newline));
-              const line = takePending();
-              if (line) keep(parse(line, codexState), records);
-            }
-            lineStart = newline + 1;
-            offset = position + lineStart;
+      // Keep the stream and resume guard on the same file, even after rotation.
+      const stream = handle.createReadStream({
+        start,
+        end: stats.size - 1,
+        autoClose: false,
+        highWaterMark: 256 * 1024,
+      });
+      for await (const chunk of stream as AsyncIterable<Buffer>) {
+        let lineStart = 0;
+        for (
+          let newline = chunk.indexOf(NEWLINE);
+          newline !== -1;
+          newline = chunk.indexOf(NEWLINE, lineStart)
+        ) {
+          if (pendingBytes === 0 && !skippingLongLine) {
+            keep(parse(chunk.subarray(lineStart, newline), codexState), records);
+          } else {
+            append(chunk.subarray(lineStart, newline));
+            const line = takePending();
+            if (line) keep(parse(line, codexState), records);
           }
-          append(chunk.subarray(lineStart));
-          position += chunk.length;
+          lineStart = newline + 1;
+          offset = position + lineStart;
         }
-      } finally {
-        stream.destroy();
+        append(chunk.subarray(lineStart));
+        position += chunk.length;
       }
       // A last line without its newline counts now but is read again later,
       // with a copy of the state so the committed state stays at `offset`.
@@ -288,12 +286,10 @@ export function makeTranscriptUsageReader(
   const strings = new Map<string, string>();
 
   const listFiles = async () => {
-    const providers = new Set<TranscriptProvider>();
     const paths: Array<{ provider: TranscriptProvider; path: string }> = [];
     for (const root of roots) {
       const found = await listJsonlFiles(root.path);
       if (found === null) continue;
-      providers.add(root.provider);
       for (const path of found) paths.push({ provider: root.provider, path });
     }
     const files = await mapWithConcurrency(paths, 32, async (entry) => {
@@ -304,12 +300,9 @@ export function makeTranscriptUsageReader(
         return null;
       }
     });
-    return {
-      providers,
-      files: files
-        .filter((file): file is TranscriptFile => file !== null)
-        .toSorted((left, right) => left.path.localeCompare(right.path)),
-    };
+    return files
+      .filter((file): file is TranscriptFile => file !== null)
+      .toSorted((left, right) => left.path.localeCompare(right.path));
   };
 
   const readCached = async (file: TranscriptFile) => {
@@ -352,11 +345,11 @@ export function makeTranscriptUsageReader(
   let pending: Promise<unknown> = Promise.resolve();
   const scan = (sinceMs: number): Promise<TranscriptScan> => {
     const run = pending.then(async () => {
-      const { providers, files } = await listFiles();
+      const files = await listFiles();
       const inWindow = files.filter((file) => file.mtimeMs >= sinceMs);
       const perFile = await mapWithConcurrency(inWindow, FILE_READ_CONCURRENCY, readCached);
       prune(files);
-      return { providers, files: perFile };
+      return { files: perFile };
     });
     pending = run.catch(() => undefined);
     return run;

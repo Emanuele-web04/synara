@@ -165,6 +165,7 @@ import Migration0134 from "./Migrations/134_ProjectionThreadsForkSourceMessage.t
 import Migration0135 from "./Migrations/135_ProjectionMessageTurnActivityIndex.ts";
 // Slots 136–140 are already released in the Remote lineage; new common migrations follow them.
 import Migration0141 from "./Migrations/141_ProjectionThreadsUsageLimitRecovery.ts";
+import Migration0143 from "./Migrations/143_UsageAnalyticsDeletedTokens.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -323,6 +324,7 @@ export const migrationEntries = [
   [140, "RemoteAccessControls", Migration0140],
   [141, "ProjectionThreadsUsageLimitRecovery", Migration0141],
   [142, "AuthAccessOrigin", Migration0142],
+  [143, "UsageAnalyticsDeletedTokens", Migration0143],
 ] as const;
 
 export const makeMigrationLoader = (throughId?: number) =>
