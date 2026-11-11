@@ -385,6 +385,7 @@ import { ProjectPicker } from "./chat/ProjectPicker";
 import { ProviderHealthBanner } from "./chat/ProviderHealthBanner";
 import { resolveProviderModelLabel } from "./chat/ProviderModelPicker";
 import { RateLimitBanner } from "./chat/RateLimitBanner";
+import { isMissingCheckpointBaselineActivity } from "../workLog";
 import type { RateLimitStatus } from "~/lib/rateLimitStatus";
 import { useRateLimitStatus } from "~/hooks/useRateLimitStatus";
 import { ThreadDetailHydrationState } from "./chat/ThreadDetailHydrationState";
@@ -695,6 +696,7 @@ export default function ChatView({
     gitCreateDetachedWorktreeMutationOptions({ queryClient }),
   );
   const isEditorRail = presentationMode === "editor";
+  const environmentEnabled = !isEditorRail && !hideHeader;
   const isInactiveSplitPane = surfaceMode === "split" && !isFocusedPane;
   const {
     composerDraft,
@@ -1577,6 +1579,7 @@ export default function ChatView({
     activeThread,
     latestTurnSettled,
     latestTurnLive,
+    keepMissingCheckpointNotices: !environmentEnabled,
   });
   // The newest transcript card with subagents still at work, for the floating
   // "N running" chip that brings it back into view.
@@ -3303,7 +3306,6 @@ export default function ChatView({
   // Temporary threads are visually identical to regular chats — they use the same
   // Environment panel + header controls. "Temporary" is purely a sidebar badge +
   // auto-delete-on-leave concern, never a stripped-down chat UI.
-  const environmentEnabled = !isEditorRail && !hideHeader;
   const environmentUsesFloatingOverlay =
     isTerminalEnvironmentContext || isMobileViewport || rightDockOpen || surfaceMode === "split";
   const environmentDefaultOpen = resolveDefaultEnvironmentPanelOpen({
@@ -6174,7 +6176,7 @@ export default function ChatView({
         (summary) => summary.turnId === activeLatestTurnId && summary.status === "missing",
       ) ||
         threadActivities.some((activity) => {
-          if (activity.kind !== "checkpoint.baseline.skipped") return false;
+          if (!isMissingCheckpointBaselineActivity(activity)) return false;
           if (activity.turnId === activeLatestTurnId) return true;
           const payload = activity.payload;
           return (
@@ -6356,7 +6358,8 @@ export default function ChatView({
         data-chat-pane-scope={paneScopeId}
       >
         <ComposerColumnFrame>
-          {visibleActiveRateLimitStatus?.status === "rejected" ? (
+          {visibleActiveRateLimitStatus &&
+          (visibleActiveRateLimitStatus.status === "rejected" || !environmentEnabled) ? (
             <div className="pb-2">
               <RateLimitBanner
                 rateLimitStatus={visibleActiveRateLimitStatus}

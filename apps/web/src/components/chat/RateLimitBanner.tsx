@@ -1,5 +1,5 @@
 // FILE: RateLimitBanner.tsx
-// Purpose: Renders blocking provider rate limits near the active chat composer.
+// Purpose: Renders provider rate limits near the active chat composer.
 // Layer: Chat status presentation
 // Exports: RateLimitBanner.
 
@@ -19,14 +19,20 @@ export const RateLimitBanner = function RateLimitBanner({
 }) {
   const { t } = useTranslation();
 
-  if (!rateLimitStatus || rateLimitStatus.status !== "rejected") return null;
-  const countdown = rateLimitStatus.resetsAt
-    ? formatRateLimitResetCountdown(rateLimitStatus.resetsAt, t)
-    : "";
-  const message = t("chat:rateLimitReached", { value0: countdown ? ` ${countdown}.` : "" });
+  if (!rateLimitStatus) return null;
+  const { resetsAt, status, utilization } = rateLimitStatus;
+  const isRejected = status === "rejected";
+  const countdown = resetsAt ? formatRateLimitResetCountdown(resetsAt, t) : "";
+  const resetSuffix = countdown ? ` ${countdown}.` : "";
+  const message = isRejected
+    ? t("chat:rateLimitReached", { value0: resetSuffix })
+    : t("chat:approachingRateLimit", {
+        value0: utilization !== undefined ? ` (${Math.round(utilization * 100)}% used)` : "",
+        value1: resetSuffix,
+      });
 
   return (
-    <Alert variant="error">
+    <Alert variant={isRejected ? "error" : "warning"}>
       <CircleAlertIcon />
       <AlertDescription>{message}</AlertDescription>
       {onDismiss ? (

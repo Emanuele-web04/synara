@@ -2534,10 +2534,11 @@ describe("ChatView transcript geometry (full app)", () => {
     document.body.innerHTML = "";
   });
 
-  it.each(["turn", "message", "hidden"] as const)(
+  it.each(["turn", "message", "hidden", "editor", "editor-hidden"] as const)(
     "routes quota and checkpoint notices to Environment while retaining blocking limits at the composer (%s)",
     async (attribution) => {
-      const warningsHidden = attribution === "hidden";
+      const editor = attribution === "editor" || attribution === "editor-hidden";
+      const warningsHidden = attribution === "hidden" || attribution === "editor-hidden";
       if (warningsHidden)
         localStorage.setItem(
           "synara:app-settings:v1",
@@ -2585,7 +2586,8 @@ describe("ChatView transcript geometry (full app)", () => {
                 tone: "info",
                 turnId: attribution === "message" ? null : turnId,
                 payload: {
-                  detail: "The completed checkpoint was captured successfully.",
+                  detail: "The checkpoint baseline could not be prepared.",
+                  checkpointBaseline: "unavailable",
                   messageId: thread.messages.at(-3)!.id,
                 },
               },
@@ -2599,6 +2601,20 @@ describe("ChatView transcript geometry (full app)", () => {
       });
       try {
         await waitForComposerEditor();
+        if (editor) {
+          await mounted.router.navigate({
+            to: "/$threadId",
+            params: { threadId: THREAD_ID },
+            search: { view: "editor" },
+          });
+          await expect
+            .element(page.getByRole("button", { name: /Toggle environment panel/ }))
+            .not.toBeInTheDocument();
+          const warning = page.getByText("Approaching rate limit (91% used).", { exact: true });
+          if (warningsHidden) expect(warning.query()).toBeNull();
+          else await expect.element(warning, { timeout: 3_000 }).toBeVisible();
+          return;
+        }
         const toggle = page.getByRole("button", { name: /Toggle environment panel/ });
         if (toggle.element().getAttribute("aria-pressed") !== "true") await toggle.click();
         const approaching = page.getByText("Approaching rate limit (91% used).", { exact: true });

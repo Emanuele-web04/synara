@@ -451,10 +451,13 @@ Each task owns a provider session. Available models and controls can differ beca
 capabilities from the installed runtime and account.
 
 Provider quota warnings live under **Environment → Usage**, on the active account's row. Approaching
-limits update that row and mark the Environment toggle; they do not add work-log entries. A blocked
-limit also remains visible near the composer and in the activity history. New allowed updates and
-elapsed reset times clear the current warning. The rate-limit warning setting also applies in Environment; blocking limits remain visible. Codex's opt-in unstable-feature startup notice stays
-in native diagnostics; actionable runtime and configuration errors remain visible.
+limits update that row and mark the Environment toggle. Editor and embedded chats keep the composer
+warning when they have no Environment panel. The rate-limit warning setting applies to both
+surfaces. Blocking limits remain visible near the composer and in activity history. New allowed
+updates and elapsed reset times clear the current warning.
+
+Codex's opt-in unstable-feature startup notice stays in native diagnostics. Actionable runtime and
+configuration errors remain visible.
 
 ## Handoffs
 

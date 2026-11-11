@@ -458,6 +458,27 @@ describe("deriveWorkLogEntries", () => {
     });
     expect(entries).toEqual([]);
     expect(deriveTimelineEntries([], [], entries)).toEqual([]);
+    expect(
+      deriveWorkLogEntries(activities, TurnId.makeUnsafe("visible-turn"), {
+        visibleTurnIds: new Set([TurnId.makeUnsafe("visible-turn")]),
+        keepMissingCheckpointNotices: true,
+      }),
+    ).toMatchObject([{ id: "baseline-skipped" }]);
+  });
+
+  it("preserves Hub-only preparation failures independently of the checkpoint baseline", () => {
+    const activity = makeActivity({
+      id: "hub-baseline-skipped",
+      kind: "checkpoint.baseline.skipped",
+      tone: "info",
+      summary: "Turn continued without Hub baseline",
+      payload: { checkpointBaseline: "captured", studioPreparation: "unavailable" },
+    });
+    const turnId = TurnId.makeUnsafe("visible-turn");
+    const entries = deriveWorkLogEntries([activity], turnId, {
+      visibleTurnIds: new Set([turnId]),
+    });
+    expect(entries).toMatchObject([{ id: "hub-baseline-skipped" }]);
   });
 
   it("reuses unchanged entry objects across passes over the same activities", () => {
