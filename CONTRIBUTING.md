@@ -58,6 +58,35 @@ If you are thinking about a non-trivial change, open an issue first.
 
 That gives you a chance to check whether the direction fits before spending time on a larger patch.
 
+## Pre-push Check
+
+`bun install` points this clone at the tracked hooks in `.githooks` (it sets
+`core.hooksPath` locally). Before each push, `.githooks/pre-push` runs the same
+two checks as CI's fast static lane, which take about 15–20 seconds:
+
+```bash
+bun run fmt:check
+```
+
+```bash
+bun run lint
+```
+
+They check the working tree, so uncommitted edits count too. Run `bun run fmt`
+to fix formatting. To skip the check once, push with `git push --no-verify`.
+Pushes that only delete branches skip it automatically, and so do machines where
+`bun` is not on `PATH`.
+
+The setup leaves an existing `core.hooksPath` alone and does nothing in CI,
+in `--ignore-scripts` installs, or in copies that are not their own repository
+root. To opt out for good, point the clone at Git's default hooks directory:
+
+```bash
+git config core.hooksPath .git/hooks
+```
+
+The hook is a POSIX `sh` script and also runs under Git for Windows (Git Bash).
+
 ## Testing
 
 Run the full workspace test suite from the repository root with:
