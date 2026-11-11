@@ -1,0 +1,86 @@
+# Usage analytics view: research and plan
+
+Status: proposal (no code yet). Mockups: Paper file "Synara — Usage analytics".
+
+## 1. What we found
+
+### t3code (upstream snapshot 2026-09-29)
+
+| Area           | How t3code does it                                                                                                                                                                                                     |
+| -------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| History source | Scans local transcripts: `~/.claude/projects/**/*.jsonl` (incl. subagents), `~/.codex/sessions/**`, Grok, OpenCode SQLite, Antigravity protobuf DBs, Cursor dashboard API                                              |
+| Claude dedupe  | Global `message.id:requestId`, first record wins; catches resumed/forked sessions that copy earlier messages                                                                                                           |
+| Codex          | `token_count.last_token_usage` deltas; drops fork/subagent replay bursts (< 1 s apart)                                                                                                                                 |
+| Cost           | LiteLLM rate table (24 h cache) → `uncached×in + cacheRead×read + cacheWrite×write + output×out`, × fast multiplier. Provider-reported cost wins. Labelled "API estimate"; `costSource` = reported / priced / unpriced |
+| Aggregation    | `(day, hour?, provider, model, sourcePath)`; IANA timezone; 24h / 7d / 30d / 90d                                                                                                                                       |
+| Live limits    | Claude Agent SDK `get_usage`, Codex app-server `account/rateLimits/read`, Cursor `GetCurrentPeriodUsage`                                                                                                               |
+| UI             | Cost / Tokens / Limits toggle, hero total, per-provider overlapping SVG areas, totals (processed, cached, uncached, output, cache savings), Model and Day tables, price overrides                                      |
+
+t3code mistakes we should not copy:
+
+- 1-hour cache writes priced at the 5-minute rate (`cache_creation.ephemeral_1h_input_tokens` never read).
+- Long-context tiers (> 200k / > 272k) and `[1m]` ignored, so those requests are under-priced.
+- "Cache savings" ignores the cache-write premium.
+- Overlapping (not stacked) provider areas; y-scale from the largest single provider.
+- **No Team / Enterprise handling.** `extra_usage`, org spend caps, `seven_day_opus/sonnet`, `rateLimitTier`, `organization_type` are never parsed (only in test fixtures). Codex `credits.unlimited` and spend-control fields ignored.
+
+### Synara today
+
+| Area                          | State                                                                                                                                                                          | Verdict                                                                                                                                                                                                                                                                                   |
+| ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Live limits                   | `apps/server/src/providerUsage/**`, `GET /api/oauth/usage`, `wham/usage`, Cursor, Antigravity, etc. 5 min cache, 429 resilience                                                | Good base                                                                                                                                                                                                                                                                                 |
+| Claude plan label             | `titleCase(subscriptionType)` + `(\d+x)` from `rateLimitTier` (`claude.ts:335-345`)                                                                                            | **Wrong for Team**: a Team seat on `default_claude_max_5x` reads "Team (5x)". `~/.claude.json` `oauthAccount.{organizationType, seatTier, userRateLimitTier, organizationRateLimitTier, billingType, hasExtraUsageEnabled}` and top-level `cachedExtraUsageDisabledReason` are never read |
+| Claude extra usage            | `is_enabled !== false` → "Extra usage $X of $Y" (`claude.ts:497-509`)                                                                                                          | Org-imposed cap shown as personal extra usage; "disabled by org" state invisible; USD hard-coded                                                                                                                                                                                          |
+| Enterprise usage-based        | No 5h/weekly windows → "No usage data reported yet"                                                                                                                            | Wrong: these seats have no limits by design and every token is billed at API rates                                                                                                                                                                                                        |
+| Codex plan / credits          | `titleCase(plan_type)`; credits shown as `N × $0.04`                                                                                                                           | `credits.unlimited` ignored ("0 remaining" on flexible workspaces); $0.04 wrong for contract pricing                                                                                                                                                                                      |
+| API-key users                 | `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` env not checked by `fetch`                                                                                                              | Card can show OAuth subscription limits for an account billed by key                                                                                                                                                                                                                      |
+| 24h / 7d / 30d lines (Codex)  | Whole cumulative session total credited to the session's last event (`providerUsageSnapshot.ts:959-961`); files found by **start** date                                        | **Bug**: long sessions land entirely in "24h"; sessions started > 30 days ago dropped                                                                                                                                                                                                     |
+| 24h / 7d / 30d lines (Claude) | Dedupe key prefixed with `sessionId` (`providerUsageSnapshot.ts:472`); `subagents/` not read                                                                                   | **Bug**: resumed/forked sessions double-counted; subagent files skipped                                                                                                                                                                                                                   |
+| Scoped weekly labels (web)    | Unknown 10080-min labels normalized to "Weekly" and merged by label (`rateLimits.ts:93-149, 390`)                                                                              | Model-scoped limit can merge into the account weekly meter                                                                                                                                                                                                                                |
+| History in DB                 | `projection_thread_activities` (`context-window.updated`, `turn.completed` with per-model split + `totalCostUsd`), `tokenDeltaCtes`, Profile stats, account sync (tokens only) | Strong for Synara sessions; no range RPC with input/cache/output split; cost never aggregated                                                                                                                                                                                             |
+| Pricing                       | None                                                                                                                                                                           | Missing                                                                                                                                                                                                                                                                                   |
+| Charts                        | No library; Profile has hand-drawn SVG charts in `packages/profile-ui`                                                                                                         | Reuse/extend `profile-ui`                                                                                                                                                                                                                                                                 |
+
+### Claude plans, for cost labels
+
+| Billing mode                   | Limits                             | What "cost" means                                                                                           |
+| ------------------------------ | ---------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| Pro / Max (personal)           | 5h + weekly (+ model-scoped)       | API-equivalent **value**, compared to the plan price                                                        |
+| Team seat (Standard / Premium) | Per-member 5h + weekly; no pooling | API value vs **seat** price; extra usage (if the org enables it) is real spend at API rates, capped monthly |
+| Enterprise, usage-based        | **None**                           | Every token billed at API rates → API cost **is** spend; only org/user spend caps                           |
+| API key / Bedrock / Vertex     | Provider rate limits               | API cost is spend                                                                                           |
+
+## 2. Plan
+
+### Data (server)
+
+1. **Usage ledger RPC** `usage.getAnalytics({ range, timezone, scope, groupBy })` built on `tokenDeltaCtes`, returning hourly/daily buckets of `{provider, instanceId, model, projectId, origin, uncachedInput, cacheRead, cacheWrite5m, cacheWrite1h, output, reasoning, turns, prompts, reportedCostUsd}`. Contract in `packages/contracts`.
+2. **Transcript scanner (scope "All usage on this Mac")**, modelled on t3code with its fixes: global `message.id:requestId` dedupe, `subagents/` included, Codex `last_token_usage` deltas, byte-offset resume with tail hash, 1h cache split, long-context tier, fast mode. Sessions Synara launched are matched by provider session id (`usageSessionId`) so they count once and keep their project attribution. Replaces the broken 24h/7d/30d lines.
+3. **Pricing** in `packages/shared/usagePricing`: bundled LiteLLM snapshot plus a daily refresh cached in the state dir; per-request tiers; `costSource` (reported / estimated / unpriced); user overrides.
+4. **Account billing mode** per provider account: `subscription | seat | usageBased | apiKey | credits`, with plan/seat label and list price (user-editable). Claude: read `oauthAccount.organizationType / seatTier / userRateLimitTier / billingType / hasExtraUsageEnabled` + `cachedExtraUsageDisabledReason`; numeric `extraUsage{usedUsd, limitUsd, enabled, disabledReason}` instead of a formatted string. Codex: `credits.unlimited`, spend control. Env API keys → `apiKey` mode.
+5. **Limit samples**: persist `{account, window, usedPercent, resetsAt}` at most every 15 min (additive migration) for "limit hits" and weekly-utilization history.
+
+### UI (web) — Settings → "Usage & limits" becomes "Usage" with pill tabs
+
+Reuse `SegmentedPicker variant="capsule"`, `SettingsCard`/`SettingsListRow`, `UsageProgressTrack` + `deriveUsagePace`, `profile-ui` `StatTile`, `ModelUsageRow`, `ActivityHeatmap`. New: a stacked bar chart and a 100% composition bar in `profile-ui` (hand-drawn SVG, same as the existing charts; no chart library).
+
+| Tab       | Content                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Overview  | This-cycle API value vs plans; limit cards per account with plan/seat/billing mode; Team/Enterprise rows; KPI strip (today, 7 days, cache hit rate, streak); existing sidebar/popover preferences                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| Analytics | Cost / Tokens, range 24h–1y, scope All / In Synara, provider filter. Top block (t3code layout): API value with "\*if billed at full API rates", per-provider share bars, and the **stacked daily bar chart** with peak/weekday callouts. Token strip: processed, cached input, uncached input + cache writes, output incl. reasoning, cache savings. Then the **smooth per-provider line chart** (t3code style) with hover tooltip; token vs cost composition; prompt cache (net of write premium) + cost quality (reported / priced / unpriced / long-context); models with blended $/1M; projects and turn origin; heatmap + weekday×hour rhythm; plain-language insights; weekly-limit history |
+| Billing   | **Synara Alto (Pro) first**: status, $9.99/mo or $79.99/yr, renewal, switch-to-yearly, Manage/Invoices (Polar portal), included features (Remote, approvals and alerts, public @handle page that shows these stats). Free users see the two plan cards from `BillingSettingsPanel` here. Then AI plans total, spend beyond plans, provider plans with billing mode and editable price, extra usage / credits / spend cap with month-end forecast, pricing source and overrides                                                                                                                                                                                                                    |
+
+Spacing: 32–36px inside the top group, 72px between sections, 16–20px from a section title to its content.
+
+### Fix first (independent of the new view)
+
+- Codex 24h/7d/30d attribution; Claude transcript dedupe and subagents.
+- Team plan label and extra-usage states; Enterprise usage-based "no limits" state; Codex `unlimited` credits; env API-key detection.
+- Scoped weekly label merge on the web.
+
+### Open decisions
+
+- Default scope: "All usage on this Mac" (transcripts) or "In Synara" (DB, matches Profile).
+- Plan-price defaults: ship list prices or require the user to confirm theirs.
+- Beta-only first? If so, add a key to `BETA_ONLY_FEATURES` and gate the server RPC.
+- `seatTier` enum mapping (`team_tier_1` …) needs a check against a Standard seat.

@@ -71,9 +71,8 @@ import {
   KeyboardShortcutsSettingsPanel,
 } from "../components/settings/KeyboardShortcutsSettingsPanel";
 import { ProfileSettingsPanel } from "../components/settings/ProfileSettingsPanel";
-import { BillingSettingsPanel } from "../components/settings/BillingSettingsPanel";
 import { ACCOUNT_BILLING_ENABLED } from "~/lib/accountBilling";
-import { ProviderUsageSettingsPanel } from "../components/settings/ProviderUsageSettingsPanel";
+import { UsageSettingsPanel } from "../components/settings/UsageSettingsPanel";
 import { ExternalMcpSettingsPanel } from "../components/settings/ExternalMcpSettingsPanel";
 import { ConnectionsSettingsPanel } from "../components/settings/ConnectionsSettingsPanel";
 import { McpConnectorsSettingsPanel } from "../components/settings/McpConnectorsSettingsPanel";
@@ -1820,12 +1819,13 @@ function SettingsRouteView() {
         return <SkillsSettingsPanel />;
       case "usage":
         // The plan lives with usage ("Usage and billing"), never above the profile.
-        // A fragment, not a wrapper: sections space themselves as siblings.
+        // Keyed by target so a plan deep link reopens the Billing tab.
         return (
-          <>
-            {billingEnabled ? <BillingSettingsPanel /> : null}
-            <ProviderUsageSettingsPanel />
-          </>
+          <UsageSettingsPanel
+            key={settingsTarget ?? ""}
+            billingEnabled={billingEnabled}
+            target={settingsTarget}
+          />
         );
       default:
         return null;

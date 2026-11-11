@@ -5,6 +5,7 @@ import { page } from "vitest/browser";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";
 import { BillingSettingsPanel, SynaraPlanLink } from "./BillingSettingsPanel";
+import { UsageSettingsPanel } from "./UsageSettingsPanel";
 
 const fixture = vi.hoisted(() => ({
   status: { state: "signed-out" } as AccountStatus,
@@ -31,6 +32,9 @@ vi.mock("~/nativeApi", () => ({
 }));
 vi.mock("../account/accountDialogStore", () => ({
   useAccountDialogStore: { getState: () => ({ openSignIn: fixture.signIn }) },
+}));
+vi.mock("./ProviderUsageSettingsPanel", () => ({
+  ProviderUsageSettingsPanel: () => <p>Provider limits</p>,
 }));
 
 const disabled: AccountBillingStatus = {
@@ -59,8 +63,8 @@ function signedIn(id = "user_a"): AccountStatus {
   };
 }
 /** Each plan card opens its own checkout. */
-async function choosePlan(interval: "Monthly" | "Annual") {
-  await page.getByRole("button", { name: new RegExp(`^${interval}`) }).click();
+async function choosePlan(interval: "monthly" | "yearly") {
+  await page.getByRole("button", { name: `Choose ${interval}`, exact: true }).click();
 }
 function panel(client: QueryClient) {
   return (
@@ -93,7 +97,9 @@ describe("Synara Alto settings", () => {
     await render(panel(new QueryClient()));
     await expect.element(page.getByText("Test billing is not configured")).toBeVisible();
     await expect.element(page.getByText("Sandbox", { exact: true })).toBeVisible();
-    await expect.element(page.getByRole("button", { name: /^Monthly/ })).not.toBeInTheDocument();
+    await expect
+      .element(page.getByRole("button", { name: "Choose monthly" }))
+      .not.toBeInTheDocument();
   });
 
   it("shows a card per plan and opens only a test checkout for the chosen interval", async () => {
@@ -104,13 +110,29 @@ describe("Synara Alto settings", () => {
       plans: [{ interval: "year", amountMinor: 12345, currency: "USD" }],
     });
     await render(panel(new QueryClient()));
-    await expect
-      .element(page.getByRole("button", { name: /^Annual/ }))
-      .toHaveTextContent("Annual$123.45 / year");
-    await choosePlan("Annual");
+    await expect.element(page.getByText("$123.45", { exact: true })).toBeVisible();
+    await expect.element(page.getByText("Remote from any computer running Synara")).toBeVisible();
+    await choosePlan("yearly");
     await expect.poll(() => fixture.open.mock.calls.length).toBe(1);
     expect(fixture.checkout).toHaveBeenCalledWith({ interval: "year" });
     expect(fixture.open).toHaveBeenCalledWith("https://sandbox.polar.sh/checkout/test");
+  });
+
+  it("prices yearly per month and shows its saving over monthly", async () => {
+    fixture.billing.mockResolvedValue({
+      ...disabled,
+      environment: "production",
+      available: true,
+      canCheckout: true,
+      plans: [
+        { interval: "year", amountMinor: 7999, currency: "USD" },
+        { interval: "month", amountMinor: 999, currency: "USD" },
+      ],
+    });
+    await render(panel(new QueryClient()));
+    await expect.element(page.getByText("Save 33%", { exact: true })).toBeVisible();
+    await expect.element(page.getByText("$6.67 a month, billed once a year.")).toBeVisible();
+    await expect.element(page.getByText("Billed by Polar", { exact: true })).toBeVisible();
   });
 
   it("does not open the earlier account's checkout after an account switch", async () => {
@@ -128,7 +150,7 @@ describe("Synara Alto settings", () => {
     );
     const client = new QueryClient();
     const screen = await render(panel(client));
-    await choosePlan("Monthly");
+    await choosePlan("monthly");
     await expect.poll(() => fixture.checkout.mock.calls.length).toBe(1);
     fixture.status = signedIn("user_b");
     await screen.rerender(panel(client));
@@ -151,12 +173,35 @@ describe("Synara Alto settings", () => {
     });
     await render(panel(new QueryClient()));
     await expect.element(page.getByText("Alto", { exact: true })).toBeVisible();
+    await expect.element(page.getByText("Active", { exact: true })).toBeVisible();
     await expect.element(page.getByText("Sandbox", { exact: true })).not.toBeInTheDocument();
-    await expect.element(page.getByRole("button", { name: /^Monthly/ })).not.toBeInTheDocument();
+    await expect
+      .element(page.getByRole("button", { name: "Choose monthly" }))
+      .not.toBeInTheDocument();
     await page.getByRole("button", { name: "Manage", exact: true }).click();
     await expect.poll(() => fixture.open.mock.calls.length).toBe(1);
     expect(fixture.portal).toHaveBeenCalledOnce();
     expect(fixture.open).toHaveBeenCalledWith("https://polar.sh/purchases/subscriptions");
+    await page.getByRole("button", { name: "Connections", exact: true }).click();
+    expect(fixture.navigate).toHaveBeenCalledWith({
+      to: "/settings",
+      search: { section: "connections" },
+    });
+  });
+
+  it("tells a subscriber who cancelled when Alto ends", async () => {
+    fixture.billing.mockResolvedValue({
+      ...disabled,
+      environment: "production",
+      available: true,
+      access: "granted",
+      cancelAtPeriodEnd: true,
+      validUntil: "2027-12-03T12:00:00.000Z",
+      canManage: true,
+    });
+    await render(panel(new QueryClient()));
+    await expect.element(page.getByText("Ending", { exact: true })).toBeVisible();
+    await expect.element(page.getByText(/^Ends /)).toBeVisible();
   });
 
   it.each([
@@ -176,7 +221,7 @@ describe("Synara Alto settings", () => {
       });
       fixture.checkout.mockResolvedValue({ environment: redirectEnvironment, url });
       await render(panel(new QueryClient()));
-      await choosePlan("Monthly");
+      await choosePlan("monthly");
       await expect
         .element(
           page.getByText(
@@ -204,7 +249,7 @@ describe("Synara Alto settings", () => {
       url: "https://polar.sh/purchases/subscriptions",
     });
     await render(panel(new QueryClient()));
-    await expect.element(page.getByRole("button", { name: /^Monthly/ })).toBeVisible();
+    await expect.element(page.getByRole("button", { name: "Choose monthly" })).toBeVisible();
     await page.getByRole("button", { name: "Manage billing", exact: true }).click();
     await expect.poll(() => fixture.open.mock.calls.length).toBe(1);
     expect(fixture.portal).toHaveBeenCalledOnce();
@@ -241,5 +286,37 @@ describe("SynaraPlanLink", () => {
     const screen = await render(link(new QueryClient()));
     expect(screen.container.textContent).toBe("");
     expect(fixture.billing).not.toHaveBeenCalled();
+  });
+});
+
+function usage(client: QueryClient, props: { billingEnabled: boolean; target: string | null }) {
+  return (
+    <QueryClientProvider client={client}>
+      <UsageSettingsPanel {...props} />
+    </QueryClientProvider>
+  );
+}
+
+describe("UsageSettingsPanel", () => {
+  it("opens on Overview and switches to the plan on Billing", async () => {
+    await render(usage(new QueryClient(), { billingEnabled: true, target: null }));
+    await expect.element(page.getByText("Provider limits")).toBeVisible();
+    await page.getByRole("radio", { name: "Billing" }).click();
+    await expect.element(page.getByText("Synara Alto", { exact: true })).toBeVisible();
+    await expect.element(page.getByText("Provider limits")).not.toBeInTheDocument();
+  });
+
+  it("opens a plan deep link on Billing", async () => {
+    await render(
+      usage(new QueryClient(), { billingEnabled: true, target: "settings-synara-plan" }),
+    );
+    await expect.element(page.getByRole("radio", { name: "Billing" })).toBeChecked();
+    await expect.element(page.getByText("Synara Alto", { exact: true })).toBeVisible();
+  });
+
+  it("shows only provider usage, without tabs, when billing is off", async () => {
+    await render(usage(new QueryClient(), { billingEnabled: false, target: null }));
+    await expect.element(page.getByText("Provider limits")).toBeVisible();
+    await expect.element(page.getByRole("radio", { name: "Billing" })).not.toBeInTheDocument();
   });
 });
