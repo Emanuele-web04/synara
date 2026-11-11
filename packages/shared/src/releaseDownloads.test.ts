@@ -44,6 +44,20 @@ describe("release download assets", () => {
     });
   });
 
+  it("ignores download URLs that are not HTTPS", () => {
+    const downloads = mapReleaseAssets(
+      {
+        tag_name: "v1.5.1",
+        html_url: releaseUrl,
+        assets: [
+          { name: "Synara-1.5.1-arm64.AppImage", browser_download_url: "javascript:alert(1)" },
+        ],
+      },
+      releaseUrl,
+    );
+    expect(downloads.linux.arm64).toBe(releaseUrl);
+  });
+
   it("keeps the architectures apart when a release ships only one of them", () => {
     const intelOnly = mapReleaseAssets(
       { tag_name: "v1.5.1", assets: [asset("Synara-1.5.1-x86_64.AppImage")] },
@@ -102,6 +116,23 @@ describe("release download assets", () => {
         arm64: "https://example.test/linux-arm64.AppImage",
       },
     });
+  });
+
+  it("rejects snapshots whose URLs are not HTTPS", () => {
+    const valid = {
+      version: "v1.5.1",
+      releasesUrl: releaseUrl,
+      mac: { arm64: `${releaseUrl}/a.dmg`, x64: `${releaseUrl}/b.dmg` },
+      windows: `${releaseUrl}/c.exe`,
+      linux: { x64: `${releaseUrl}/d.AppImage`, arm64: `${releaseUrl}/e.AppImage` },
+    };
+    expect(parseReleaseDownloadsSnapshot(valid)).not.toBeNull();
+    expect(
+      parseReleaseDownloadsSnapshot({
+        ...valid,
+        linux: { ...valid.linux, arm64: "javascript:alert(1)" },
+      }),
+    ).toBeNull();
   });
 
   it("rejects the pre-arm64 snapshot shape instead of rendering it", () => {

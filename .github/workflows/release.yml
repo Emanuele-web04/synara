@@ -692,17 +692,19 @@ jobs:
             release-assets/*.exe
             release-assets/*.blockmap
           )
+          # The pinned compatibility release predates ARM64 Linux and stays on
+          # the x64 trio; its ARM64 feed ships only with the versioned release.
+          pinned_payloads=()
+          for payload in "${payloads[@]}"; do
+            [[ "$payload" == *arm64* ]] && continue
+            pinned_payloads+=("$payload")
+          done
+          payloads=("${pinned_payloads[@]}")
           manifests=(
             "release-assets/${UPDATE_CHANNEL}-mac.yml"
             "release-assets/${UPDATE_CHANNEL}.yml"
             "release-assets/${UPDATE_CHANNEL}-linux.yml"
           )
-          # Clean releases also publish the arm64 Linux feed; the pinned
-          # compatibility release predates it and only ships the x64 trio.
-          arm64_manifest="release-assets/${UPDATE_CHANNEL}-linux-arm64.yml"
-          if [[ -f "$arm64_manifest" ]]; then
-            manifests+=("$arm64_manifest")
-          fi
 
           if [[ "${#payloads[@]}" -eq 0 ]]; then
             echo "No desktop payloads found for the pinned updater feed." >&2

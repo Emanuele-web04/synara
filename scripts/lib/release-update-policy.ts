@@ -173,7 +173,51 @@ function planLinuxArm64Manifest(
   if (existsSync(destinationPath)) {
     throw new Error(`Refusing to overwrite existing update manifest: ${destinationName}`);
   }
+  validateLinuxArm64Manifest(assetDirectory, sourcePath);
   return { sourcePath, destinationPath, destinationName };
+}
+
+interface UpdaterManifestSummary {
+  readonly version: string;
+  readonly payloads: readonly string[];
+}
+
+function readUpdaterManifest(path: string): UpdaterManifestSummary {
+  const content = readFileSync(path, "utf8");
+  const version = /^version:\s*['"]?([^'"\s]+)['"]?\s*$/m.exec(content)?.[1] ?? "";
+  const payloads = [...content.matchAll(/^\s*(?:-\s*)?(?:url|path):\s*['"]?([^'"\s]+)['"]?\s*$/gm)]
+    .map((match) => match[1] ?? "")
+    .filter((payload) => payload.length > 0);
+  return { version, payloads };
+}
+
+function payloadFileName(value: string): string {
+  const withoutQuery = value.split(/[?#]/, 1)[0] ?? "";
+  return withoutQuery.slice(withoutQuery.lastIndexOf("/") + 1);
+}
+
+/**
+ * Guards the copied arm64 feed: it must describe the same release as the x64
+ * feed and only carry arm64 AppImage payloads. A stale or mislabelled manifest
+ * would otherwise publish an update every ARM64 client either ignores or
+ * cannot install.
+ */
+function validateLinuxArm64Manifest(assetDirectory: string, manifestPath: string): void {
+  const x64Manifest = readUpdaterManifest(resolve(assetDirectory, "latest-linux.yml"));
+  const arm64Manifest = readUpdaterManifest(manifestPath);
+  if (!x64Manifest.version || arm64Manifest.version !== x64Manifest.version) {
+    throw new Error(
+      `Linux arm64 update manifest version ${arm64Manifest.version || "(missing)"} does not match latest-linux.yml ${x64Manifest.version || "(missing)"}.`,
+    );
+  }
+  if (arm64Manifest.payloads.length === 0) {
+    throw new Error(`Linux arm64 update manifest lists no payload: ${LINUX_ARM64_UPDATE_MANIFEST}`);
+  }
+  for (const payload of arm64Manifest.payloads) {
+    if (!/arm64\.AppImage$/i.test(payloadFileName(payload))) {
+      throw new Error(`Linux arm64 update manifest points at a non-arm64 payload: ${payload}.`);
+    }
+  }
 }
 
 function writeLinuxArm64Manifest(plan: LinuxArm64ManifestPlan | null): readonly string[] {

@@ -58,6 +58,11 @@ export function resolveReleaseBuildScope(
   if (!["artifact", "native", "icon", "js", "preflight"].includes(stage))
     throw new Error(`Unknown build stage: ${stage}`);
   if (lane !== "bridge" && lane !== "clean") throw new Error(`Unknown release lane: ${lane}`);
+  const knownPlatformIds = new Set(platforms.map((entry) => entry.id));
+  if (platform !== "all" && !knownPlatformIds.has(platform))
+    throw new Error(`Unknown build platform: ${platform}`);
+  if (lane === "bridge" && platform === "linux-arm64")
+    throw new Error("Linux arm64 is not part of the pinned compatibility lane.");
   if (flavor === "remote" && !["all", "mac-arm64", "linux-x64", "win-x64"].includes(platform))
     throw new Error("Synara Remote supports mac-arm64, linux-x64 and win-x64.");
   const selected = platforms.filter(

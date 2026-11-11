@@ -91,6 +91,12 @@ describe("release validation scope", () => {
     expect(() => resolveReleaseBuildScope("linux-arm64", "artifact", false, "", "remote")).toThrow(
       "mac-arm64, linux-x64 and win-x64",
     );
+    expect(() =>
+      resolveReleaseBuildScope("linux-arm64", "artifact", false, "", "production", "bridge"),
+    ).toThrow("not part of the pinned compatibility lane");
+    expect(() =>
+      resolveReleaseBuildScope("linux-arm62", "artifact", false, "", "production"),
+    ).toThrow("Unknown build platform");
   });
   it("runs the independent icon and JS stages without native packaging", () => {
     expect(resolveReleaseBuildScope("all", "icon")).toMatchObject({

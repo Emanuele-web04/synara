@@ -244,7 +244,11 @@ export function getAutoUpdateDisabledReason(args: {
  * where the resolved AppImage could belong to the other architecture.
  *
  * electron-updater resolves `files[]` when present and falls back to the legacy
- * top-level `path` from the manifest, so both are inspected.
+ * top-level `path` from the manifest, so both are inspected. Entries are
+ * reduced to the payload's base name first: a feed URL may carry a query string
+ * or fragment, and electron-updater falls back to the first `files[]` entry
+ * when no name matches, so a Linux manifest without a recognisable AppImage is
+ * rejected instead of admitted unverified.
  */
 export function updateFilesMatchRuntimeArch(
   info: {
@@ -256,13 +260,27 @@ export function updateFilesMatchRuntimeArch(
 ): boolean {
   if (platform !== "linux") return true;
   const candidates = [info.path, ...(info.files ?? []).map((file) => file.url)];
-  const appImages = candidates.filter(
-    (url): url is string => typeof url === "string" && /\.AppImage$/i.test(url),
+  const appImages = candidates.flatMap((url) => {
+    if (typeof url !== "string") return [];
+    const basename = payloadBasename(url);
+    return /\.AppImage$/i.test(basename) ? [basename] : [];
+  });
+  // Fail closed: an updater payload we cannot name is not one we can trust to
+  // match this runtime.
+  if (appImages.length === 0) return false;
+  return appImages.every((name) =>
+    arch === "arm64" ? /arm64\.AppImage$/i.test(name) : !/arm64/i.test(name),
   );
-  if (appImages.length === 0) return true;
-  return appImages.every((url) =>
-    arch === "arm64" ? /arm64\.AppImage$/i.test(url) : !/arm64/i.test(url),
-  );
+}
+
+/** Payload file name from a feed entry, ignoring directory, query and fragment. */
+function payloadBasename(value: string): string {
+  try {
+    const pathname = new URL(value, "https://payload.invalid/").pathname;
+    return pathname.slice(pathname.lastIndexOf("/") + 1);
+  } catch {
+    return "";
+  }
 }
 
 /**

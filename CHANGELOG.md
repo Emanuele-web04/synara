@@ -2,12 +2,12 @@
 
 ## Unreleased
 
-**Linux ARM64 desktop packages beside the existing x86_64 build.**
+**Linux ARM64 desktop packages beside the existing x86_64 build, plus a much faster first-run tour.**
 
 ### Added
 
 - Linux ARM64 AppImage (`Synara-<version>-arm64.AppImage`) built on an ARM64 runner with the same provenance record, packaged-startup smoke test and unsigned Linux publication policy as the x86_64 build.
-- Dedicated Linux feed per architecture (`synara-linux.yml` for x86_64, `synara-linux-arm64.yml` for ARM64). electron-updater derives that suffix from the running architecture, and it picks AppImage files by extension only, so a shared manifest would offer one architecture the other's payload.
+- Dedicated Linux feed per architecture (`synara-linux.yml` for x86_64, `synara-linux-arm64.yml` for ARM64). electron-updater derives that suffix from the running architecture and, inside a manifest, prefers an AppImage whose name contains `process.arch` before falling back to the first `.AppImage` match. `x64` never matches the `x86_64` file alias, so a shared manifest could still hand x64 the arm64 payload.
 - The download page exposes both Linux builds through an architecture toggle, and the installation and troubleshooting docs describe the `aarch64` choice and the FUSE 2 requirement.
 
 ### Changed

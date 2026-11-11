@@ -444,10 +444,20 @@ describe("resolved update artifact architecture", () => {
     expect(updateFilesMatchRuntimeArch({ path: intelAppImage }, "linux", "arm64")).toBe(false);
     expect(updateFilesMatchRuntimeArch({ path: intelAppImage }, "linux", "x64")).toBe(true);
     expect(updateFilesMatchRuntimeArch({ path: arm64AppImage }, "linux", "x64")).toBe(false);
-    expect(updateFilesMatchRuntimeArch({}, "linux", "arm64")).toBe(true);
+    expect(updateFilesMatchRuntimeArch({}, "linux", "arm64")).toBe(false);
   });
 
-  it("leaves other platforms and non-AppImage entries alone", () => {
+  it("reads the payload name from URLs with a directory, query or fragment", () => {
+    const hostedArm64 =
+      "https://github.com/o/r/releases/download/v1.5.2/Synara-1.5.2-arm64.AppImage?token=1";
+    const hostedIntel =
+      "https://github.com/o/r/releases/download/v1.5.2/Synara-1.5.2-x86_64.AppImage#frag";
+    expect(updateFilesMatchRuntimeArch(files(hostedArm64), "linux", "arm64")).toBe(true);
+    expect(updateFilesMatchRuntimeArch(files(hostedIntel), "linux", "x64")).toBe(true);
+    expect(updateFilesMatchRuntimeArch(files(hostedArm64), "linux", "x64")).toBe(false);
+  });
+
+  it("leaves other platforms alone and rejects Linux payloads it cannot name", () => {
     expect(updateFilesMatchRuntimeArch(files(intelAppImage), "darwin", "arm64")).toBe(true);
     expect(updateFilesMatchRuntimeArch(files(intelAppImage), "win32", "x64")).toBe(true);
     expect(
@@ -456,7 +466,7 @@ describe("resolved update artifact architecture", () => {
         "linux",
         "arm64",
       ),
-    ).toBe(true);
+    ).toBe(false);
   });
 });
 

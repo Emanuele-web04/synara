@@ -117,8 +117,8 @@ function getReleaseDownloads(release, source) {
     source,
   };
 
-  // Releases that predate arm64 Linux still store the listing page for arm64,
-  // so only the Intel asset is required to keep the snapshot refreshable.
+  // Releases that predate arm64 Linux still fall back to the release page for
+  // arm64, so only the Intel asset is required to keep the snapshot refreshable.
   if (
     !downloads.version ||
     downloads.mac.arm64 === releasesUrl ||

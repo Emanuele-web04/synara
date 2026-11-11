@@ -15,7 +15,15 @@ const cleanConfig: ReleaseUpdatePolicyConfig = {
   bridgeVersion: "0.4.2",
   channel: "synara",
 };
+
 const defaultManifestNames = ["latest-mac.yml", "latest.yml", "latest-linux.yml"] as const;
+
+const linuxManifest = (version: string, payload: string) =>
+  `version: ${version}\nfiles:\n  - url: ${payload}\n    sha512: fixture\n    size: 1\npath: ${payload}\n`;
+const linuxX64Manifest = (version = "1.5.1") =>
+  linuxManifest(version, `Synara-${version}-x86_64.AppImage`);
+const linuxArm64Manifest = (version = "1.5.1") =>
+  linuxManifest(version, `Synara-${version}-arm64.AppImage`);
 
 describe("release update policy", () => {
   it("publishes stable clean releases to Latest and keeps prereleases off it", () => {
@@ -107,6 +115,8 @@ describe("release update policy", () => {
       for (const name of [...defaultManifestNames, "latest-linux-arm64.yml"]) {
         writeFileSync(resolve(root, name), name);
       }
+      writeFileSync(resolve(root, "latest-linux.yml"), linuxX64Manifest());
+      writeFileSync(resolve(root, "latest-linux-arm64.yml"), linuxArm64Manifest());
 
       expect(prepareReleaseUpdateManifests(root, cleanConfig, "beta")).toEqual([
         ...defaultManifestNames,
@@ -125,7 +135,7 @@ describe("release update policy", () => {
         );
       }
       expect(readFileSync(resolve(root, "beta-linux-arm64.yml"), "utf8")).toBe(
-        "latest-linux-arm64.yml",
+        linuxArm64Manifest(),
       );
       expect(existsSync(resolve(root, "latest-linux-arm64.yml"))).toBe(true);
     } finally {
@@ -137,21 +147,46 @@ describe("release update policy", () => {
     const root = mkdtempSync(join(tmpdir(), "synara-release-policy-"));
     try {
       for (const name of defaultManifestNames) writeFileSync(resolve(root, name), name);
+      writeFileSync(resolve(root, "latest-linux.yml"), linuxX64Manifest());
 
       expect(() => prepareReleaseUpdateManifests(root, cleanConfig)).toThrow(
         "missing the Linux arm64 update manifest",
       );
 
-      writeFileSync(resolve(root, "latest-linux-arm64.yml"), "arm64");
+      writeFileSync(resolve(root, "latest-linux-arm64.yml"), linuxArm64Manifest());
       expect(prepareReleaseUpdateManifests(root, cleanConfig)).toEqual([
         ...defaultManifestNames,
         ...channelManifestNames("synara"),
         "synara-linux-arm64.yml",
         "latest-linux-arm64.yml",
       ]);
-      expect(readFileSync(resolve(root, "synara-linux.yml"), "utf8")).toBe("latest-linux.yml");
-      expect(readFileSync(resolve(root, "synara-linux-arm64.yml"), "utf8")).toBe("arm64");
+      expect(readFileSync(resolve(root, "synara-linux.yml"), "utf8")).toBe(linuxX64Manifest());
+      expect(readFileSync(resolve(root, "synara-linux-arm64.yml"), "utf8")).toBe(
+        linuxArm64Manifest(),
+      );
       expect(existsSync(resolve(root, "latest-linux-arm64.yml"))).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects an arm64 feed that describes another release or payload", () => {
+    const root = mkdtempSync(join(tmpdir(), "synara-release-policy-"));
+    try {
+      for (const name of defaultManifestNames) writeFileSync(resolve(root, name), name);
+      writeFileSync(resolve(root, "latest-linux.yml"), linuxX64Manifest("1.5.1"));
+      writeFileSync(resolve(root, "latest-linux-arm64.yml"), linuxArm64Manifest("1.4.0"));
+
+      expect(() => prepareReleaseUpdateManifests(root, cleanConfig)).toThrow(
+        "does not match latest-linux.yml",
+      );
+
+      writeFileSync(
+        resolve(root, "latest-linux-arm64.yml"),
+        linuxManifest("1.5.1", "Synara-1.5.1-x86_64.AppImage"),
+      );
+      expect(() => prepareReleaseUpdateManifests(root, cleanConfig)).toThrow("non-arm64 payload");
+      expect(existsSync(resolve(root, "synara-linux-arm64.yml"))).toBe(false);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -176,7 +211,8 @@ describe("release update policy", () => {
     const root = mkdtempSync(join(tmpdir(), "synara-release-policy-"));
     try {
       for (const name of defaultManifestNames) writeFileSync(resolve(root, name), "bridge");
-      writeFileSync(resolve(root, "latest-linux-arm64.yml"), "arm64");
+      writeFileSync(resolve(root, "latest-linux.yml"), linuxX64Manifest());
+      writeFileSync(resolve(root, "latest-linux-arm64.yml"), linuxArm64Manifest());
 
       expect(prepareReleaseUpdateManifests(root, { ...cleanConfig, lane: "bridge" })).toEqual([
         ...defaultManifestNames,
@@ -184,7 +220,9 @@ describe("release update policy", () => {
         "synara-linux-arm64.yml",
         "latest-linux-arm64.yml",
       ]);
-      expect(readFileSync(resolve(root, "synara-linux-arm64.yml"), "utf8")).toBe("arm64");
+      expect(readFileSync(resolve(root, "synara-linux-arm64.yml"), "utf8")).toBe(
+        linuxArm64Manifest(),
+      );
       expect(existsSync(resolve(root, "latest-linux-arm64.yml"))).toBe(true);
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -212,7 +250,8 @@ describe("release update policy", () => {
     const root = mkdtempSync(join(tmpdir(), "synara-release-policy-"));
     try {
       for (const name of defaultManifestNames) writeFileSync(resolve(root, name), name);
-      writeFileSync(resolve(root, "latest-linux-arm64.yml"), "arm64");
+      writeFileSync(resolve(root, "latest-linux.yml"), linuxX64Manifest());
+      writeFileSync(resolve(root, "latest-linux-arm64.yml"), linuxArm64Manifest());
       writeFileSync(resolve(root, "synara.yml"), "existing");
 
       expect(() => prepareReleaseUpdateManifests(root, cleanConfig)).toThrow(
@@ -244,7 +283,8 @@ describe("release update policy", () => {
       for (const name of defaultManifestNames) {
         writeFileSync(resolve(root, name), name);
       }
-      writeFileSync(resolve(root, "latest-linux-arm64.yml"), "arm64");
+      writeFileSync(resolve(root, "latest-linux.yml"), linuxX64Manifest());
+      writeFileSync(resolve(root, "latest-linux-arm64.yml"), linuxArm64Manifest());
 
       expect(prepareReleaseUpdateManifests(root, cleanConfig)).toEqual([
         ...defaultManifestNames,
@@ -253,7 +293,9 @@ describe("release update policy", () => {
         "latest-linux-arm64.yml",
       ]);
       for (const name of defaultManifestNames) {
-        expect(readFileSync(resolve(root, name), "utf8")).toBe(name);
+        expect(readFileSync(resolve(root, name), "utf8")).toBe(
+          name === "latest-linux.yml" ? linuxX64Manifest() : name,
+        );
       }
       for (const [index, channelName] of channelManifestNames("synara").entries()) {
         const defaultName = defaultManifestNames[index];

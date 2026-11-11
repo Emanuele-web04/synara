@@ -49,9 +49,10 @@ export type SynaraPackagedDesktopFlavor = (typeof SYNARA_PACKAGED_DESKTOP_FLAVOR
  * prerelease identifier. Beta and Remote each follow their own lane;
  * neither may fall through to the Stable payload.
  *
- * The channel stays architecture-independent: electron-updater and
- * electron-builder both append the target architecture to Linux manifest names
- * (`synara-linux.yml` for x64, `synara-linux-arm64.yml` for arm64).
+ * The channel stays architecture-independent: electron-updater derives
+ * `<channel>-linux[-arch]` (`synara-linux.yml` for x64, `synara-linux-arm64.yml`
+ * for arm64), and the release pipeline publishes those names beside
+ * electron-builder's `latest-linux[-arm64].yml`.
  */
 export function desktopUpdateChannel(flavor: SynaraDesktopFlavor): string {
   return flavor === "beta" || flavor === "remote" ? flavor : SYNARA_DESKTOP_UPDATE_CHANNEL;
