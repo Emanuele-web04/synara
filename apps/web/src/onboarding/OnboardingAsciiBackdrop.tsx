@@ -1,7 +1,11 @@
 // FILE: OnboardingAsciiBackdrop.tsx
-// Purpose: The character-built landscape behind the first-run onboarding, shared with the
-//          trysynara.com hero. Four layered SVGs per theme are decoded off-thread and
+// PURPOSE: The character-built landscape behind the first-run onboarding, shared with the
+//          trysynara.com hero. Four layered images per theme are decoded off-thread and
 //          revealed together, so the artwork never paints layer by layer.
+//          The layers ship pre-rasterized (2x WebP): the same art as vector `<text>` cost
+//          ~150-200ms of raster work on every repaint of the onboarding dialog, because the
+//          dialog popup is one composited layer and each invalidation re-rasterized the
+//          glyph layers. Bitmap layers rasterize in ~1-3ms.
 // Layer: Web UI decoration (aria-hidden, pointer-events none)
 
 import { useEffect, useRef, useState } from "react";
@@ -70,7 +74,7 @@ export function OnboardingAsciiBackdrop(props: { className?: string }) {
               <img
                 key={layer}
                 data-theme={theme}
-                src={`/onboarding/hero-ascii-${theme}-${layer}.svg`}
+                src={`/onboarding/hero-ascii-${theme}-${layer}.webp`}
                 width={1600}
                 height={900}
                 alt=""
