@@ -59,7 +59,11 @@ export function applyGroupWorkerRoutingDefaults(input: {
   const draftStore = useComposerDraftStore.getState();
   const modelSelection = input.defaults.modelSelection;
   if (modelSelection) {
-    const status = findProviderStatus(input.providerStatuses, modelSelection.provider);
+    const status = findProviderStatus(
+      input.providerStatuses,
+      modelSelection.provider,
+      modelSelection.instanceId ?? modelSelection.provider,
+    );
     if (input.providerStatuses.length === 0 || isProviderUsable(status)) {
       draftStore.setModelSelection(input.threadId, modelSelection);
     } else {

@@ -9,7 +9,7 @@
 // interfaces.ts (the seam), orgProvisioning.ts (org resolution + cache).
 
 import type { AccountSsoProvider } from "@synara/contracts";
-import { createRemoteJWKSet, jwtVerify, type JWTVerifyGetKey } from "jose";
+import { createRemoteJWKSet, errors as joseErrors, jwtVerify, type JWTVerifyGetKey } from "jose";
 import type { WorkosApiConfig } from "../config";
 import {
   IdentityAuthError,
@@ -22,6 +22,7 @@ import {
   type EnvironmentGrantIssuer,
   type IdentityUser,
   type OrganizationRef,
+  type RefreshedTokens,
 } from "./interfaces";
 import {
   ensurePersonalOrg,
@@ -66,8 +67,7 @@ const DISCOVERY_TIMEOUT_MS = 10_000;
 export const WORKOS_REQUEST_TIMEOUT_MS = 15_000;
 
 /**
- * Per-attempt deadline on the GRANT-consuming calls: the Magic Auth
- * authenticate, the refresh grant, and the PKCE code exchange. Deliberately
+ * Deadline on credential grants, including Magic Auth and the PKCE code exchange. Deliberately
  * much longer than
  * {@link WORKOS_REQUEST_TIMEOUT_MS}: these calls spend a single-use
  * credential, so aborting one that the provider goes on to complete leaves
@@ -77,6 +77,12 @@ export const WORKOS_REQUEST_TIMEOUT_MS = 15_000;
  * cannot.
  */
 export const WORKOS_GRANT_TIMEOUT_MS = 45_000;
+
+// WorkOS returns the same rotated pair for a replay within 30 seconds.
+// https://workos.com/docs/authkit/session-resilience
+const REFRESH_REPLAY_BUDGET_MS = 25_000;
+const REFRESH_FIRST_ATTEMPT_MS = 10_000;
+const REFRESH_RETRY_DELAY_MS = 250;
 
 function isAbortTimeout(error: unknown): boolean {
   return (
@@ -446,6 +452,59 @@ export function createWorkosIdentityProvider(config: WorkosApiConfig): {
     }
   }
 
+  async function exchangeRefreshToken(
+    init: RequestInit,
+    timeoutMs: number,
+  ): Promise<RefreshedTokens> {
+    const path = "/user_management/authenticate";
+    try {
+      const response = await fetchWithDeadline(
+        `${config.workosApiUrl}${path}`,
+        path,
+        init,
+        timeoutMs,
+      );
+      if (response.ok) {
+        // The fetch signal also bounds response-body reads.
+        const raw: unknown = await response.json();
+        const tokens = synaraTokens(raw);
+        const echoed = (raw as Record<string, unknown>).organization_id;
+        return {
+          ...tokens,
+          ...(typeof echoed === "string" && echoed.length > 0
+            ? { organizationId: synaraOrg(echoed) }
+            : {}),
+        };
+      }
+
+      // The allowlisted OAuth refusal proves the token is spent, revoked, or
+      // no longer scoped to an allowed workspace. Never expose its raw body.
+      if (response.status === 400) {
+        const raw: unknown = await response.json().catch(() => null);
+        if (
+          typeof raw === "object" &&
+          raw !== null &&
+          "error" in raw &&
+          raw.error === "invalid_grant"
+        )
+          throw new RefreshRejectedError();
+      } else {
+        void response.body?.cancel().catch(() => {});
+      }
+      console.error(`[api] WorkOS refresh grant failed upstream: status=${response.status}`);
+      throw new IdentityProviderError(
+        response.status,
+        `WorkOS refresh grant failed with ${response.status}`,
+      );
+    } catch (error) {
+      if (isAbortTimeout(error)) throw new IdentityProviderError(504, `WorkOS ${path} timed out`);
+      if (error instanceof TypeError)
+        throw new IdentityProviderError(502, "WorkOS refresh response was interrupted");
+      if (error instanceof SyntaxError) throw new Error("WorkOS returned invalid refresh data");
+      throw error;
+    }
+  }
+
   async function workosFetch(path: string, init?: RequestInit): Promise<unknown> {
     const response = await fetchWithDeadline(`${config.workosApiUrl}${path}`, path, {
       ...init,
@@ -611,8 +670,25 @@ export function createWorkosIdentityProvider(config: WorkosApiConfig): {
     },
 
     async verifyAccessToken(token) {
-      const { issuer, jwks } = await resolveVerificationKeys();
-      const { payload } = await jwtVerify(token, jwks, { issuer });
+      const { issuer, jwks } = await resolveVerificationKeys().catch(() => {
+        throw new IdentityProviderError(503, "Account verification keys are unavailable");
+      });
+      const verifiedKey: JWTVerifyGetKey = async (...args) => {
+        try {
+          return await jwks(...args);
+        } catch (error) {
+          // A successful key lookup can reject an unknown/ambiguous key or algorithm. A
+          // failed key service says nothing about the caller's credentials.
+          if (
+            error instanceof joseErrors.JWKSNoMatchingKey ||
+            error instanceof joseErrors.JWKSMultipleMatchingKeys ||
+            error instanceof joseErrors.JOSENotSupported
+          )
+            throw error;
+          throw new IdentityProviderError(503, "Account verification keys are unavailable");
+        }
+      };
+      const { payload } = await jwtVerify(token, verifiedKey, { issuer });
       const { sub, sid, org_id: orgId, client_id: clientId } = payload;
       // One WorkOS environment serves one issuer across every AuthKit
       // application in it, all sharing a JWKS — so signature, expiry and
@@ -664,64 +740,37 @@ export function createWorkosIdentityProvider(config: WorkosApiConfig): {
     },
 
     async refreshTokens({ refreshToken, organizationId, context }) {
-      const response = await fetchWithDeadline(
-        `${config.workosApiUrl}/user_management/authenticate`,
-        "/user_management/authenticate",
-        {
-          method: "POST",
-          headers: {
-            "content-type": "application/json",
-            authorization: `Bearer ${config.workosApiKey}`,
-          },
-          body: JSON.stringify({
-            grant_type: "refresh_token",
-            refresh_token: refreshToken,
-            client_id: config.workosClientId,
-            client_secret: config.workosApiKey,
-            ...(organizationId ? { organization_id: workosOrg(organizationId) } : {}),
-            ...contextFields(context),
-          }),
+      const request: RequestInit = {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${config.workosApiKey}`,
         },
-        // Grant-consuming: refresh tokens are single-use, and an abort after
-        // the provider rotated the pair strands the stored session.
-        grantTimeoutMs,
-      );
-      if (response.ok) {
-        const raw: unknown = await response.json();
-        const tokens = synaraTokens(raw);
-        const echoed = (raw as Record<string, unknown>).organization_id;
-        return {
-          ...tokens,
-          ...(typeof echoed === "string" && echoed.length > 0
-            ? { organizationId: synaraOrg(echoed) }
-            : {}),
-        };
+        body: JSON.stringify({
+          grant_type: "refresh_token",
+          refresh_token: refreshToken,
+          client_id: config.workosClientId,
+          client_secret: config.workosApiKey,
+          ...(organizationId ? { organization_id: workosOrg(organizationId) } : {}),
+          ...contextFields(context),
+        }),
+      };
+      const budget = Math.min(grantTimeoutMs, REFRESH_REPLAY_BUDGET_MS);
+      const deadline = performance.now() + budget;
+      try {
+        return await exchangeRefreshToken(request, Math.min(budget, REFRESH_FIRST_ATTEMPT_MS));
+      } catch (error) {
+        const retryable =
+          error instanceof IdentityProviderError &&
+          (error.status === 408 ||
+            error.status === 429 ||
+            (error.status >= 500 && error.status < 600));
+        if (!retryable || deadline - performance.now() <= REFRESH_RETRY_DELAY_MS) throw error;
+        await new Promise<void>((resolve) => setTimeout(resolve, REFRESH_RETRY_DELAY_MS));
+        const remaining = Math.floor(deadline - performance.now());
+        if (remaining <= 0) throw error;
+        return exchangeRefreshToken(request, remaining);
       }
-
-      // Only the OAuth refusal proves the token is dead: HTTP 400 carrying
-      // `invalid_grant` (spent, revoked, or naming a lost workspace) — the
-      // allowlisted terminal case. Everything else — 408, 429, other 4xx
-      // shapes, 5xx — says nothing about the token, and the caller must not
-      // burn a stored session over a transient fault. The body is read only
-      // for that one enum field and never logged: the refresh token is a
-      // credential and provider descriptions echo request fields.
-      if (response.status === 400) {
-        const raw: unknown = await response.json().catch(() => null);
-        const oauthError =
-          typeof raw === "object" &&
-          raw !== null &&
-          typeof (raw as { error?: unknown }).error === "string"
-            ? (raw as { error: string }).error
-            : undefined;
-        if (oauthError === "invalid_grant") {
-          throw new RefreshRejectedError();
-        }
-      }
-      console.error(`[api] WorkOS refresh grant failed upstream: status=${response.status}`);
-      throw new IdentityProviderError(
-        response.status,
-        `WorkOS refresh grant failed with ${response.status}`,
-      );
     },
 
     async createOtpChallenge({ email }) {

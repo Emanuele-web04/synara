@@ -3,6 +3,7 @@ import tls from "node:tls";
 import { Duplex, Writable } from "node:stream";
 import WebSocket, { createWebSocketStream, WebSocketServer } from "ws";
 import { MAX_RELAY_RESPONSE_BYTES } from "../relaySocket";
+import { reportReliabilityIssue } from "../reliability";
 import {
   remoteTlsAnchor,
   remoteTlsServerName,
@@ -140,6 +141,12 @@ export class RemoteTlsServer {
 
   accept(outer: WebSocket, context: RemoteIngressContext = DIRECT_INGRESS): void {
     if (this.#closed || this.#connections.size >= (this.#options.maxConnections ?? 32)) {
+      // Refused peers never enter ciphertextStream, so this branch owns errors
+      // until the WebSocket close handshake finishes as well.
+      outer.on("error", () => {
+        reportReliabilityIssue("remote.tunnel_socket_error");
+        outer.terminate();
+      });
       outer.close(1013, "Remote connection limit reached");
       return;
     }

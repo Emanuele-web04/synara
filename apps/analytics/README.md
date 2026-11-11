@@ -144,3 +144,25 @@ first launch is never used as a download proxy. See the GitHub
 [release API](https://docs.github.com/en/rest/releases/releases#list-releases)
 for the public counter source. Tests use synthetic responses and local SQLite;
 they never call a live Worker or D1 database.
+
+## Anonymous reliability
+
+`POST /v1/reliability-events` accepts JSON `{ "events": [...] }` from the existing
+opt-in product-analytics owner. Each version-1 record contains a random receipt
+UUID, UTC day, fixed reliability code, channel, release version and fixed
+platform. The receiver validates every record before committing the batch.
+It returns `{ "stored": true, "acknowledged": [...] }` after the receipts and
+counts commit. A retry of an identical receipt does not increment the count.
+
+`GET /api/reliability` requires the dashboard session. Query an exact `day` or an
+inclusive `from`/`to` range of up to 90 UTC days. Optional `channel`, `platform`,
+`version` and `code` filters narrow the result. The default is the most recent
+seven UTC days. The response returns up to 1,000 grouped rows and a `truncated`
+flag. Receipt IDs never appear in dashboard responses.
+
+Apply additive D1 migration `0013_reliability.sql` before deploying the Worker
+that serves these endpoints. The scheduled cleanup removes receipts after 14
+days and totals after 90 days. Existing product and release-diagnostics tables
+keep their separate contracts and retention.
+See [the reliability runbook](RELIABILITY.md) for selective migration rollout,
+query examples and the limits of anonymous observations.

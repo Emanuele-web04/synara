@@ -390,6 +390,7 @@ import {
   type RateLimitStatus,
 } from "./chat/RateLimitBanner";
 import { ThreadDetailHydrationState } from "./chat/ThreadDetailHydrationState";
+import { ThreadErrorBanner } from "./chat/ThreadErrorBanner";
 import { ChatThreadFindHost } from "./chat/ThreadFindBar";
 import { resolveTraitsTriggerSummary } from "./chat/TraitsPicker";
 import { TranscriptSelectionActionLayer } from "./chat/TranscriptSelectionActionLayer";
@@ -7067,6 +7068,16 @@ export default function ChatView({
                 </div>
                 {/* Positioned so it paints above the ASCII background. */}
                 <div className="relative w-full shrink-0 pb-3 sm:pb-4">
+                  {activeThread.error ? (
+                    <div className="flex shrink-0 justify-center px-3 pt-2">
+                      <ThreadErrorBanner
+                        error={activeThread.error}
+                        onDismiss={dismissActiveThreadError}
+                        onUnblock={unblockThread}
+                        unblocking={unblockingActiveThread}
+                      />
+                    </div>
+                  ) : null}
                   {composerSection}
                   {relocateComposerLeadingControls ? (
                     <div className={COMPOSER_COLUMN_FRAME_CLASS_NAME}>
