@@ -4,6 +4,7 @@
 // Exports: AdvancedSettingsPanel
 
 import { useQuery } from "@tanstack/react-query";
+import { useNavigate } from "@tanstack/react-router";
 import { useCallback, useMemo, useState } from "react";
 
 import { logoutCurrentBrowserSession } from "~/authLogout";
@@ -30,6 +31,7 @@ export function AdvancedSettingsPanel(props: {
   resetEpoch: number;
 }) {
   const { t } = useTranslation();
+  const navigate = useNavigate();
 
   const configQuery = useQuery(serverConfigQueryOptions());
   const authSessionQuery = useQuery(serverAuthSessionQueryOptions());
@@ -255,16 +257,20 @@ export function AdvancedSettingsPanel(props: {
           }
         />
         <SettingsRow
-          id="setting-what-s-new-since-0-9-2"
-          title="settings:whatSNewSince092"
-          description="settings:exploreTheRedesignedWorkspaceProviderAccountsAndCodeReview"
+          id="setting-app-tour"
+          title="settings:appTour"
+          description="settings:appTourDescription"
           control={
             <Button
               size="sm"
               variant="outline"
-              onClick={() => useFeatureTourStore.getState().open()}
+              onClick={() => {
+                // The tour points at the workspace's sidebar and rail, so leave Settings
+                // first; the chat sidebar is not mounted here.
+                void navigate({ to: "/" }).then(() => useFeatureTourStore.getState().open());
+              }}
             >
-              {t("settings:replayFeatureTour")}
+              {t("settings:replayAppTour")}
             </Button>
           }
         />

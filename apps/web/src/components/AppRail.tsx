@@ -205,7 +205,8 @@ function AppRailButton({ item }: { item: AppRailItem }) {
     />
   );
   return (
-    <div className="relative shrink-0">
+    // The app tour finds rail destinations by their item id.
+    <div className="relative shrink-0" data-app-tour={item.id}>
       {item.id === "tasks" ? <TasksCoachmark tooltip={label}>{button}</TasksCoachmark> : button}
       {/* Same corner dot as the Activity bell's unread marker; the count is in the tooltip. */}
       {item.badge ? (
