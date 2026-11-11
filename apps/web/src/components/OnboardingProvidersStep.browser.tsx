@@ -8,6 +8,7 @@ import { render } from "vitest-browser-react";
 
 import { ProvidersStep } from "../onboarding/steps/ProvidersStep";
 import { useProviderDetection } from "../onboarding/useProviderDetection";
+import { useProviderSetup } from "../onboarding/useProviderSetup";
 
 const mocks = vi.hoisted(() => ({ getConfig: vi.fn(), refreshProviders: vi.fn() }));
 vi.mock("../nativeApi", () => {
@@ -46,7 +47,8 @@ afterEach(() => {
 
 function ProvidersStepWithDetection() {
   const detection = useProviderDetection();
-  return <ProvidersStep detection={detection} />;
+  const setup = useProviderSetup(detection);
+  return <ProvidersStep detection={detection} setup={setup} />;
 }
 
 async function renderStep() {
