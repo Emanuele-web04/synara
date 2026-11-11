@@ -239,6 +239,29 @@ matches native assignment. Native assignment in run 43021234651 executed 677
 files and 10,075 tests (10,038 passed, 37 skipped) across the three shards; the
 pinned layout must report the same totals.
 
+### ChatView group rebalance
+
+Every executed ChatView test is listed in the stable lane logs (all exceed the
+300 ms slow-test threshold). In main's
+[run 42920466967](https://github.com/Emanuele-web04/synara/actions/runs/42920466967)
+each lane paid about 90–110 s of fixed import, then:
+
+```text
+Lane            Tests  Test time (s)  Import (s)  Wall (s)
+chat-follow        31        219.1        104.3     328.3
+chat-projects      67        146.8        108.4     259.9
+chat-workflows    170        291.0         88.2     383.0
+```
+
+The projects group now also owns titles that contain `sidebar` or `handoff`:
+24 tests and 54.4 s of measured time, moved from the workflows fallback.
+Projected walls are about 328 / 314 / 329 s. Follow keywords still take
+precedence, so `keeps subagents out of the sidebar while navigating (… scroll
+takeover …)` stays in chat-follow. The workflows group is still the complement
+and owns unknown future cases. The `[geometry:linux]` quarantine and serial
+execution are unchanged. `scripts/browser-ci-partitions.test.ts` now names the
+lane that each sample title must land in, not only that it lands in exactly one.
+
 ## Rejected experiments and external-service limits
 
 Intra-runner component `fileParallelism` with four workers failed in all three
