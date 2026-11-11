@@ -696,7 +696,7 @@ jobs:
           # the x64 trio; its ARM64 feed ships only with the versioned release.
           pinned_payloads=()
           for payload in "${payloads[@]}"; do
-            [[ "$payload" == *arm64* ]] && continue
+            [[ "$payload" == *-arm64.AppImage* ]] && continue
             pinned_payloads+=("$payload")
           done
           payloads=("${pinned_payloads[@]}")

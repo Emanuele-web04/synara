@@ -558,8 +558,9 @@ full subject distinguished name.
    quality gates, server shards, packaging, verification and publication; use the
    recovery procedure below when a stage fails.
 7. Confirm the versioned release is public with all expected installers, manifests
-   and provenance. Stable must be GitHub Latest and carry all three `latest`
-   manifests plus byte-identical `synara` aliases; Beta must remain a prerelease
+   and provenance. Stable must be GitHub Latest and carry all four `latest`
+   manifests, including `latest-linux-arm64.yml`, plus byte-identical `synara`
+   aliases; Beta must remain a prerelease
    with its own feed. Verify the historical compatibility release is unchanged.
 8. Verify public downloads and the authorized website deployment. Report packaged
    startup proof separately from manual installation, installed-app updates and

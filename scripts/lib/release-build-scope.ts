@@ -58,7 +58,7 @@ export function resolveReleaseBuildScope(
   if (!["artifact", "native", "icon", "js", "preflight"].includes(stage))
     throw new Error(`Unknown build stage: ${stage}`);
   if (lane !== "bridge" && lane !== "clean") throw new Error(`Unknown release lane: ${lane}`);
-  const knownPlatformIds = new Set(platforms.map((entry) => entry.id));
+  const knownPlatformIds = new Set<string>(platforms.map((entry) => entry.id));
   if (platform !== "all" && !knownPlatformIds.has(platform))
     throw new Error(`Unknown build platform: ${platform}`);
   if (lane === "bridge" && platform === "linux-arm64")
