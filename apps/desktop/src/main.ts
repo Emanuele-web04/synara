@@ -3706,8 +3706,11 @@ async function stopBackendForUpdateInstall(
   updateInstallPreparation.requireActive(attempt);
 }
 
+type UpdateInstallSource = "desktop" | "backend";
+
 async function runDownloadedUpdateInstall(
   preparationAttempt: UpdateInstallPreparationAttempt,
+  source: UpdateInstallSource,
 ): Promise<{
   accepted: boolean;
   completed: boolean;
@@ -3758,8 +3761,10 @@ async function runDownloadedUpdateInstall(
   };
   let markerWritten = false;
   let artifactInvalidated = false;
+  // Keep the backend stop close to the remote install's active-work check.
+  const prepareBeforeShutdown = macUpdateInstallHandoff !== null && source === "desktop";
   try {
-    if (macUpdateInstallHandoff === null) {
+    if (!prepareBeforeShutdown) {
       await stopBackendForUpdateInstall(preparationAttempt);
     }
     await logMacUpdateDiagnostics("before install handoff");
@@ -3784,7 +3789,9 @@ async function runDownloadedUpdateInstall(
       // exact artifact before giving it to the native updater.
       await macUpdateInstallHandoff.prepare(AUTO_UPDATE_INSTALL_WATCHDOG_MS);
       updateInstallPreparation.requireActive(preparationAttempt);
-      await stopBackendForUpdateInstall(preparationAttempt);
+      if (prepareBeforeShutdown) {
+        await stopBackendForUpdateInstall(preparationAttempt);
+      }
     }
     isUpdaterQuitAndInstallInFlight = true;
     if (macUpdateInstallHandoff !== null) {
@@ -3813,7 +3820,7 @@ async function runDownloadedUpdateInstall(
   }
 }
 
-async function installDownloadedUpdate(): Promise<{
+async function installDownloadedUpdate(source: UpdateInstallSource = "desktop"): Promise<{
   accepted: boolean;
   completed: boolean;
 }> {
@@ -3840,7 +3847,7 @@ async function installDownloadedUpdate(): Promise<{
   try {
     // A retry must not retain the last failure while the new handoff is pending.
     setUpdateState(reduceDesktopUpdateStateOnInstallStart(updateState));
-    return await runDownloadedUpdateInstall(preparationAttempt);
+    return await runDownloadedUpdateInstall(preparationAttempt, source);
   } finally {
     if (!isUpdaterQuitAndInstallInFlight && isUpdaterInstallPreparing) {
       clearUpdaterInstallInFlightAfterError();
@@ -4938,7 +4945,7 @@ function startBackend(trigger: BackendStartTrigger = "lifecycle"): void {
     getInstallBlockedReason: getUpdaterInstallBlockedReason,
     check: () => checkForUpdates("remote"),
     download: downloadAvailableUpdate,
-    install: installDownloadedUpdate,
+    install: () => installDownloadedUpdate("backend"),
   });
   cuaDriverHost?.resume();
   const backendBaseUrl = backendHttpUrl;
