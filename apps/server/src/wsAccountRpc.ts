@@ -66,8 +66,8 @@ const ownerSensitiveAccountRpc = <A, E, R>(
 export function makeAccountRpcHandlers({ accountSession, openBrowser }: AccountRpcHandlerDeps) {
   return {
     [WS_METHODS.accountStatus]: () =>
-      ownerAccountRpc(
-        () => Effect.promise(() => accountSession.status()),
+      ownerSensitiveAccountRpc(
+        () => Effect.tryPromise(() => accountSession.status()),
         "Failed to read the account session",
       ),
     [WS_METHODS.accountBillingStatus]: () =>

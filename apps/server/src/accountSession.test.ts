@@ -20,6 +20,7 @@ import {
 } from "./accountAuth.ts";
 import { createAccountSession } from "./accountSession.ts";
 import type { AccountBillingStatus } from "@synara/contracts";
+import { SYNARA_PRODUCTION_BUNDLE_ID } from "@synara/shared/desktopIdentity";
 import { generateAndPersistHostIdentity, readHostIdentity } from "./hostIdentity";
 import { importSPKI, jwtVerify } from "jose";
 
@@ -97,6 +98,39 @@ describe("billing account scope", () => {
       interval: "year",
     });
     expect(checkout).toHaveBeenCalledWith("access-1", { interval: "year" });
+  });
+
+  it.each([
+    { change: "host enrollment", userId: "user_1", linkHost: true },
+    { change: "legacy user backfill", userId: undefined, linkHost: false },
+  ])("opens checkout across token renewal and $change", async ({ userId, linkHost }) => {
+    const baseDir = makeBaseDir();
+    const stored = credentials({ userId });
+    await writeAccountCredentials(baseDir, stored);
+    const redirect = {
+      environment: "sandbox" as const,
+      url: "https://sandbox.polar.sh/checkout/test",
+    };
+    const client = makeClient({
+      async billingCheckout(token) {
+        if (token === "access-1") {
+          // Enrollment completes while checkout is waiting for its first response.
+          if (linkHost) await writeAccountCredentials(baseDir, { ...stored, ...linkedHostFields });
+          throw new AccountApiError({ code: "unauthorized", status: 401, message: "Expired" });
+        }
+        expect(token).toBe("access-2");
+        return redirect;
+      },
+      refreshAccessToken: async () => ({
+        accessToken: "access-2",
+        refreshToken: "refresh-2",
+        user: { id: "user_1", email: "ada@example.com" },
+      }),
+    });
+
+    await expect(
+      sessionFor(baseDir, client).billingCheckout({ interval: "year" }),
+    ).resolves.toEqual(redirect);
   });
 });
 
@@ -255,7 +289,7 @@ describe("status", () => {
           ),
         refreshAccessToken: () =>
           Promise.reject(
-            new AccountApiError({ code: "unauthorized", status: 400, message: "Spent" }),
+            new AccountApiError({ code: "unauthorized", status: 401, message: "Spent" }),
           ),
       }),
     );
@@ -555,7 +589,7 @@ describe("OTP sign-in", () => {
             throw new AccountApiError({ code: "unauthorized", status: 401, message: "Expired" });
           },
           refreshAccessToken: async () => {
-            throw new AccountApiError({ code: "unauthorized", status: 400, message: "Spent" });
+            throw new AccountApiError({ code: "unauthorized", status: 401, message: "Spent" });
           },
         });
         expect(await sessionFor(baseDir, expiredClient).status()).toEqual({ state: "signed-out" });
@@ -1011,9 +1045,12 @@ describe("transient sign-in recovery", () => {
 });
 
 describe("account profile sync policy", () => {
-  it("updates an existing private profile when explicitly enabled", async () => {
-    vi.stubEnv("SYNARA_DESKTOP_BUNDLE_ID", undefined);
-    vi.stubEnv("SYNARA_ACCOUNT_PROFILE_SYNC", "1");
+  it.each([
+    { bundleId: undefined, configured: "1" },
+    { bundleId: SYNARA_PRODUCTION_BUNDLE_ID, configured: undefined },
+  ])("updates an existing private profile in $bundleId", async ({ bundleId, configured }) => {
+    vi.stubEnv("SYNARA_DESKTOP_BUNDLE_ID", bundleId);
+    vi.stubEnv("SYNARA_ACCOUNT_PROFILE_SYNC", configured);
     const baseDir = makeBaseDir();
     await writeAccountCredentials(baseDir, credentials());
     const profile = { handle: "ada", displayName: "Ada", avatarColor: "#22c55e", public: false };
@@ -1179,11 +1216,11 @@ describe("account cleanup", () => {
 });
 
 describe("private saved recaps", () => {
-  it("refuses Stable save, history and deletion before reading account credentials", async () => {
+  it("refuses save, history and deletion when the host gate is closed", async () => {
     vi.mocked(isServerBetaFeatureEnabled).mockReturnValue(false);
     const session = sessionFor(makeBaseDir(), makeClient({}));
     const denied = {
-      message: "Saved Inbox history is available in Synara Beta.",
+      message: "Saved Inbox history is unavailable on this host.",
       code: "FEATURE_UNAVAILABLE",
     };
     expect(() =>

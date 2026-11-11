@@ -66,13 +66,6 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     keywords: "Privacy consent anonymous statistics collection tracking performance Cloudflare",
   },
   {
-    target: "setting-language",
-    id: "general:language",
-    section: "general",
-    title: "common:general_languageAria",
-    keywords: "settings:chooseTheLanguageUsedByTheInterfaceSystemEnglish",
-  },
-  {
     target: "setting-default-provider",
     id: "general:default-provider",
     section: "general",
@@ -736,11 +729,11 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     keywords: "settings:currentApplicationVersionAbout",
   },
   {
-    target: "setting-what-s-new-since-0-9-2",
+    target: "setting-app-tour",
     id: "advanced:feature-tour",
     section: "advanced",
-    title: "settings:whatSNewSince092",
-    keywords: "settings:replayFeatureTourRedesignedWorkspaceProviderAccountsCodeReview",
+    title: "settings:appTour",
+    keywords: "settings:appTourKeywords",
   },
   {
     target: "setting-release-history",
@@ -780,21 +773,10 @@ export function rankSettingsSearchEntries(
   );
   const ranked = rankProviderDiscoveryItems(available, trimmed, (entry) => [
     { value: i18n.t(entry.title, { lng: "en" }) },
-    { value: i18n.t(entry.title, { lng: i18n.language, defaultValue: entry.title }) },
     { value: i18n.t(entry.keywords, { lng: "en" }), weight: 200 },
-    {
-      value: i18n.t(entry.keywords, { lng: i18n.language, defaultValue: entry.keywords }),
-      weight: 200,
-    },
     {
       value: i18n.t(SETTINGS_SECTION_LABEL_BY_ID.get(entry.section) ?? entry.section, {
         lng: "en",
-      }),
-      weight: 400,
-    },
-    {
-      value: i18n.t(SETTINGS_SECTION_LABEL_BY_ID.get(entry.section) ?? entry.section, {
-        lng: i18n.language,
       }),
       weight: 400,
     },

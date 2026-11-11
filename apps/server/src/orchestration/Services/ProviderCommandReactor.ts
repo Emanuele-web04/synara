@@ -7,9 +7,10 @@
  * @module ProviderCommandReactor
  */
 import { ServiceMap } from "effect";
-import type { Effect, Scope } from "effect";
+import type { Effect, Option, Scope } from "effect";
 
 import type { OrchestrationRegenerateThreadTitleResult, ThreadId } from "@synara/contracts";
+import type { ProjectionRepositoryError } from "../../persistence/Errors.ts";
 import type {
   ProviderBlockingDeliveryEvidence,
   ProviderDeliveryReconciliationOutcome,
@@ -45,6 +46,12 @@ export interface ProviderCommandReactorShape {
    * Intended for test use to replace timing-sensitive sleeps.
    */
   readonly drain: Effect.Effect<void>;
+
+  /** Run boot cleanup only while no current-process provider owns this thread. */
+  readonly withRestartOrphanedThread: <A, E, R>(
+    threadId: ThreadId,
+    effect: Effect.Effect<A, E, R>,
+  ) => Effect.Effect<Option.Option<A>, E | ProjectionRepositoryError, R>;
 
   readonly listBlockingDeliveries: (input: {
     readonly threadId?: string | undefined;

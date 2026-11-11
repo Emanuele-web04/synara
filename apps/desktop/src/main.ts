@@ -1,17 +1,12 @@
 import "./httpRuntime";
-import { attachDesktopUpdateControl, DESKTOP_UPDATE_IPC_ENV } from "./desktopUpdateControl";
+import {
+  attachDesktopUpdateControl,
+  DESKTOP_UPDATE_IPC_ENV,
+  supportsDesktopUpdateControl,
+} from "./desktopUpdateControl";
 import { registerRemoteResourceBroker, REMOTE_RESOURCE_SCHEME } from "./remoteResourceBroker";
 import { showDiagnosticStartupDialog } from "./startupDiagnosticDialog";
-import {
-  initializeDesktopI18n,
-  setDesktopLanguagePreference,
-  t,
-  translateNativeMenuRoles,
-} from "./i18n";
-import {
-  applyDesktopLanguagePreference,
-  readDesktopLanguagePreference,
-} from "./desktopPreferences";
+import { t } from "./i18n";
 import { BackendIssueDetector } from "./backendIssueDetector";
 import { attachAppSubframeNavigationGuard } from "./subframeNavigationGuard";
 import { CuaDriverHost, sweepOrphanedCuaDrivers } from "./cuaDriverHost";
@@ -20,6 +15,7 @@ import { LinuxEscapeKillSwitchMonitor, linuxEscapeSession } from "./linuxEscapeK
 import { ComputerFrameTap } from "./computerFrameTap";
 import { ComputerShield } from "./computerShield";
 import { ProductAnalytics } from "./productAnalytics";
+import { attachBackendReliability } from "./backendReliability";
 import { attachProductAnalyticsIpc } from "./productAnalyticsIpc";
 import { createDesktopNotificationRetainer } from "./notificationRetention";
 import { registerComputerDesktopLifecycle } from "./computerDesktopLifecycle";
@@ -46,7 +42,6 @@ import {
   autoUpdater as nativeAutoUpdater,
   BrowserWindow,
   clipboard,
-  crashReporter,
   dialog,
   globalShortcut,
   ipcMain,
@@ -64,6 +59,7 @@ import {
   systemPreferences,
 } from "electron";
 import { configureElectronNetwork } from "betterwright/electron";
+import { getBetterwrightNetworkGuard } from "./browserAutomation/betterwrightNetworkGuard";
 import type {
   BrowserWindowConstructorOptions,
   FileFilter,
@@ -133,12 +129,7 @@ import {
 } from "./backendStartupReadiness";
 import { DesktopBetaChannel, readBetaImportResult, resolveBetaHomeDir } from "./betaChannel";
 import type { ExpectedTeamId } from "./betaInstaller";
-import {
-  BetaDiagnostics,
-  readLogTail,
-  resolveBetaDiagnosticsEndpoint,
-  type BetaDiagnosticsEventName,
-} from "./betaDiagnostics";
+import { BetaDiagnostics, type BetaDiagnosticsEventName } from "./betaDiagnostics";
 import { attachBetaRendererDiagnostics } from "./betaRendererDiagnostics";
 import { guardDesktopWindowClose, showDesktopConfirmDialog } from "./confirmDialog";
 import {
@@ -482,16 +473,7 @@ const DESKTOP_BROWSER_HOST_CAPABILITY_FD = 3;
 // for the same lock even when they use the same Electron executable.
 const userDataPath = resolveUserDataPath();
 app.setPath("userData", userDataPath);
-// Match the renderer storage profile, including isolated source-build profiles.
-const DESKTOP_LANGUAGE_PREFERENCE_PATH = Path.join(userDataPath, "desktop-language.json");
-initializeDesktopI18n(
-  readDesktopLanguagePreference(DESKTOP_LANGUAGE_PREFERENCE_PATH),
-  () =>
-    app.isReady()
-      ? app.getPreferredSystemLanguages()
-      : [new Intl.DateTimeFormat().resolvedOptions().locale],
-  desktopFlavor,
-);
+const hasSingleInstanceLock = app.requestSingleInstanceLock();
 
 // Remote shares usage and diagnostics by default; Settings turns both off.
 // Stable stays opt-in for product events and never runs diagnostics.
@@ -502,6 +484,7 @@ const productAnalytics = new ProductAnalytics({
   platform: process.platform,
   defaultEnabled: desktopFlavor === "remote",
 });
+if (hasSingleInstanceLock) productAnalytics.initialize();
 
 // Diagnostics are constructed only for the Beta and Remote build flavors, so
 // production binaries never run a collection path. The payload schema is an
@@ -545,20 +528,7 @@ productAnalytics.onChange((enabled) => {
   if (enabled) betaDiagnostics?.resumeSharing();
   else betaDiagnostics?.discardQueue();
 });
-if (betaDiagnostics && desktopFlavor === "beta") {
-  crashReporter.start({
-    productName: APP_DISPLAY_NAME,
-    companyName: "Synara",
-    submitURL: `${resolveBetaDiagnosticsEndpoint(process.env)}/v1/crash`,
-    uploadToServer: true,
-    compress: true,
-    globalExtra: {
-      installId: betaDiagnostics.installId,
-      flavor: "beta",
-      appVersion: app.getVersion(),
-    },
-  });
-}
+// Raw process dumps can contain work content; no flavor starts an upload-capable reporter.
 
 const trackBetaDiagnostics = (
   event: BetaDiagnosticsEventName,
@@ -576,10 +546,13 @@ process.stderr.on("error", handleDesktopStdioError);
 // Node's exit behavior — the POSIX EPIPE filter and the default crash path
 // stay exactly as before.
 process.on("uncaughtExceptionMonitor", (error: unknown) => {
+  if (!isBrokenPipeError(error)) {
+    productAnalytics.track({ event: "app.crash", outcome: "failed" });
+    productAnalytics.trackReliability({ code: "app.main_unhandled" });
+  }
   betaDiagnostics?.trackError("main", error);
 });
 
-const hasSingleInstanceLock = app.requestSingleInstanceLock();
 const AUTO_UPDATE_STARTUP_DELAY_MS = 15_000;
 const AUTO_UPDATE_POLL_INTERVAL_MS = 4 * 60 * 60 * 1000;
 const AUTO_UPDATE_FOREGROUND_RECHECK_MIN_INTERVAL_MS = 5 * 60 * 1000;
@@ -1466,6 +1439,7 @@ async function requireCurrentDesktopMigrationBundle(): Promise<boolean> {
 }
 
 async function rejectUnverifiableDesktopMigrationBundle(error: unknown): Promise<false> {
+  productAnalytics.trackReliability({ code: "migration.startup_blocked" });
   const message = formatErrorMessage(error);
   writeDesktopLogHeader(`migration bundle source check failed message=${message}`);
   await dialog.showMessageBox({
@@ -1484,6 +1458,7 @@ async function rejectUnverifiableDesktopMigrationBundle(error: unknown): Promise
 async function rejectDesktopMigrationBundleMismatch(
   mismatch: MigrationRuntimeIdentityMismatch,
 ): Promise<false> {
+  productAnalytics.trackReliability({ code: "migration.startup_blocked" });
   writeDesktopLogHeader(
     `migration bundle source mismatch expected=${mismatch.expectedDigest} actual=${mismatch.actualDigest}`,
   );
@@ -1544,6 +1519,9 @@ async function handleDesktopMigrationRecovery(): Promise<DesktopMigrationRecover
     requiresRecovery: () => requiresDesktopMigrationRecovery(paths),
     markerRemains: () => hasPendingDesktopMigrationRecovery(paths),
     choose: async ({ previousFailure }) => {
+      productAnalytics.trackReliability({
+        code: previousFailure === null ? "migration.startup_blocked" : "migration.recovery_failed",
+      });
       // The user is here because Synara cannot open its database, so the
       // in-app update button is unreachable by definition. A newer build is
       // often the actual fix, and this dialog is the only surface left to
@@ -2128,9 +2106,7 @@ function configureApplicationMenu(): void {
     },
   );
 
-  const applicationMenu = Menu.buildFromTemplate(template);
-  translateNativeMenuRoles(applicationMenu, APP_DISPLAY_NAME);
-  Menu.setApplicationMenu(applicationMenu);
+  Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
 
 function resolveResourcePath(fileName: string): string | null {
@@ -4533,6 +4509,8 @@ async function handleDesktopSchemaTooNewRecovery(
       !hasVerifiedDesktopMigrationRestore(paths, restoreCandidate.backupPath),
     choose: async ({ previousFailure }) => {
       const restoreFailed = previousFailure?.attempt === "restore";
+      if (previousFailure !== null)
+        productAnalytics.trackReliability({ code: "migration.recovery_failed" });
       const canInstallUpdate = canInstallUpdateFromRecovery();
       const releaseUrl = updateState.releaseUrl;
       const choices: Array<{
@@ -4623,6 +4601,8 @@ async function handleDesktopSchemaTooNewRecovery(
 
 function handleBackendStartupBlock(block: BackendStartupBlock): void {
   if (isQuitting || backendLifecycleDialogInFlight) return;
+  if (block.kind.startsWith("migration-"))
+    productAnalytics.trackReliability({ code: "migration.startup_blocked" });
 
   const diagnosticId =
     betaDiagnostics?.trackIssue("main", {
@@ -4905,8 +4885,9 @@ function startBackend(trigger: BackendStartTrigger = "lifecycle"): void {
       ELECTRON_RUN_AS_NODE: "1",
       SYNARA_SERVER_ENTRY: backendEntry,
       SYNARA_DESKTOP_PARENT_STDIN: "1",
-      [DESKTOP_UPDATE_IPC_ENV]:
-        app.isPackaged && desktopFlavor === "remote" && process.platform === "darwin" ? "1" : "0",
+      [DESKTOP_UPDATE_IPC_ENV]: supportsDesktopUpdateControl(app.isPackaged, process.platform)
+        ? "1"
+        : "0",
     },
     // Keep output piped in every environment so startup blockers and readiness
     // are observable even when packaged log setup is unavailable. The fourth
@@ -4932,13 +4913,15 @@ function startBackend(trigger: BackendStartTrigger = "lifecycle"): void {
   const outputTailDetector = new BackendOutputTailDetector();
   backendListeningDetector = listeningDetector;
   backendProcess = child;
+  let backendReachedReadiness = false;
+  attachBackendReliability(child, {
+    report: (issue) => productAnalytics.trackReliability(issue),
+  });
   attachDesktopUpdateControl(child, {
+    isPackaged: app.isPackaged,
+    platform: process.platform,
     isCurrentChild: () => backendProcess === child && !isQuitting,
-    supported: () =>
-      app.isPackaged &&
-      desktopFlavor === "remote" &&
-      process.platform === "darwin" &&
-      updaterConfigured,
+    supported: () => updaterConfigured,
     getState: () => updateState,
     getInstallBlockedReason: getUpdaterInstallBlockedReason,
     check: () => checkForUpdates("remote"),
@@ -4994,6 +4977,7 @@ function startBackend(trigger: BackendStartTrigger = "lifecycle"): void {
       }),
     isCurrent: () => backendProcess === child,
     onReady: () => {
+      backendReachedReadiness = true;
       backendSupervision.recordReadiness();
       // Startup blocks are classified only before readiness; stop scanning
       // every later output chunk for the rest of this backend's life.
@@ -5003,6 +4987,7 @@ function startBackend(trigger: BackendStartTrigger = "lifecycle"): void {
   });
 
   child.on("error", (error) => {
+    if (!isQuitting) productAnalytics.trackReliability({ code: "backend.spawn_failed" });
     startupHealthMonitor.abort();
     if (backendListeningDetector === listeningDetector) {
       listeningDetector.fail(error);
@@ -5043,17 +5028,17 @@ function startBackend(trigger: BackendStartTrigger = "lifecycle"): void {
       }
       const reason = `code=${code ?? "null"} signal=${signal ?? "null"}`;
       lastBackendFailureDetail = outputTailDetector.read();
-      if (!expectedExit)
+      if (!expectedExit) {
+        productAnalytics.track({ event: "app.crash", outcome: "failed" });
+        productAnalytics.trackReliability({
+          code: backendReachedReadiness ? "backend.exit_after_ready" : "backend.exit_before_ready",
+        });
         trackBetaDiagnostics("app.child-process-crash", {
           kind: "crash",
           processType: "backend",
           reason,
-          // Guarded explicitly: on stable builds betaDiagnostics is null and the
-          // log file must not be touched at all.
-          logTail: betaDiagnostics
-            ? readLogTail(Path.join(LOG_DIR, BACKEND_LOG_FILE_NAME))
-            : undefined,
         });
+      }
       scheduleBackendRestart(reason);
     });
   });
@@ -5171,12 +5156,18 @@ async function shutdownDesktopRuntime(reason: string): Promise<void> {
       cancelBackendReadinessWait();
       appSnapManager?.dispose();
       appSnapManager = null;
-      await shutdownBrowserServices({
-        revokeHost: () => disposeBrowserHostPipeServerForShutdown(reason),
-        closePages: () => browserManager.dispose(),
-        stopCapture: () => browserVaultCapture.dispose(),
-        clearKeys: () => browserVault.dispose(),
-      });
+      try {
+        await shutdownBrowserServices({
+          revokeHost: () => disposeBrowserHostPipeServerForShutdown(reason),
+          closePages: () => browserManager.dispose(),
+          stopCapture: () => browserVaultCapture.dispose(),
+          clearKeys: () => browserVault.dispose(),
+        });
+      } finally {
+        await getBetterwrightNetworkGuard(
+          session.fromPartition(BROWSER_SESSION_PARTITION),
+        ).dispose();
+      }
       await browserSessionRestore?.shutdown();
       restoreStdIoCapture?.();
       if (betaDiagnostics) {
@@ -5431,26 +5422,6 @@ function registerIpcHandlers(): void {
   });
 
   ipcMain.removeHandler(IPC.setTheme);
-  ipcMain.removeAllListeners(IPC.getSystemLanguages);
-  ipcMain.on(IPC.getSystemLanguages, (event: IpcMainEvent) => {
-    event.returnValue =
-      event.sender === mainWindow?.webContents && event.senderFrame === event.sender.mainFrame
-        ? app.getPreferredSystemLanguages()
-        : [];
-  });
-  ipcMain.removeHandler(IPC.setLanguagePreference);
-  ipcMain.handle(IPC.setLanguagePreference, (event, rawPreference: unknown) => {
-    applyDesktopLanguagePreference(rawPreference, {
-      flavor: desktopFlavor,
-      isTrustedSender:
-        event.sender === mainWindow?.webContents && event.senderFrame === event.sender.mainFrame,
-      preferencePath: DESKTOP_LANGUAGE_PREFERENCE_PATH,
-      onPreference: (language) => {
-        setDesktopLanguagePreference(language);
-        if (app.isReady()) configureApplicationMenu();
-      },
-    });
-  });
   ipcMain.handle(IPC.setTheme, async (_event, rawTheme: unknown) => {
     const theme = getSafeTheme(rawTheme);
     if (!theme) {
@@ -6138,9 +6109,7 @@ function createWindow(): BrowserWindow {
       { role: "selectAll", enabled: params.editFlags.canSelectAll },
     );
 
-    const menu = Menu.buildFromTemplate(menuTemplate);
-    translateNativeMenuRoles(menu, APP_DISPLAY_NAME);
-    menu.popup({ window });
+    Menu.buildFromTemplate(menuTemplate).popup({ window });
   });
 
   window.webContents.setWindowOpenHandler(({ url }) => {
@@ -6273,6 +6242,10 @@ function attachRendererCrashRecovery(window: BrowserWindow): void {
     // the pending ask and count it as quitting for the crash policy.
     const quitAskPending = runningChatsQuitGuard.hasPendingAsk();
     runningChatsQuitGuard.allowPending();
+    if (!isQuitting && ["crashed", "oom", "abnormal-exit"].includes(details.reason)) {
+      productAnalytics.track({ event: "app.crash", outcome: "failed" });
+      productAnalytics.trackReliability({ code: "app.renderer_crashed" });
+    }
     // A pending quit ask has not started shutdown: an unexpected crash while
     // that ask is open still belongs in diagnostics, even though recovery quits.
     if (!isQuitting && details.reason !== "clean-exit")
@@ -6280,11 +6253,6 @@ function attachRendererCrashRecovery(window: BrowserWindow): void {
         kind: "crash",
         processType: "renderer",
         reason: details.reason,
-        // Guarded explicitly: on stable builds betaDiagnostics is null and the
-        // log file must not be touched at all.
-        logTail: betaDiagnostics
-          ? readLogTail(Path.join(LOG_DIR, DESKTOP_LOG_FILE_NAME))
-          : undefined,
       });
 
     const response = rendererCrashPolicy.respondToCrash({
@@ -6645,7 +6613,11 @@ app.on("before-quit", (event) => {
 if (hasSingleInstanceLock) {
   app
     .whenReady()
-    .then(() => {
+    .then(async () => {
+      // Install the session-owned proxy before bootstrap can create or navigate browser pages.
+      await getBetterwrightNetworkGuard(
+        session.fromPartition(BROWSER_SESSION_PARTITION),
+      ).initialize();
       writeDesktopLogHeader("app ready");
       productAnalytics.start();
       productAnalytics.track({ event: "app.open", outcome: "succeeded" });
@@ -6716,7 +6688,6 @@ if (hasSingleInstanceLock) {
             kind: "crash",
             processType: details.type,
             reason: details.reason,
-            logTail: readLogTail(Path.join(LOG_DIR, DESKTOP_LOG_FILE_NAME)),
           });
         });
       }

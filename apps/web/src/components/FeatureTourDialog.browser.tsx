@@ -37,7 +37,7 @@ vi.mock("@tanstack/react-router", () => ({
   useSearch: () => ({}),
 }));
 
-const tourKey = "synara:feature-tour:since-0.9.2:v1";
+const tourKey = "synara:app-tour:v1";
 const importKey = "synara:project-import-announcement:v1";
 const clients: QueryClient[] = [];
 const screens: Awaited<ReturnType<typeof render>>[] = [];
@@ -78,28 +78,28 @@ async function show(children = <FeatureTourDialog />) {
   return screen;
 }
 
-it("navigates Stable highlights, remembers dismissal per installation, and replays after a handoff", async () => {
+it("walks the tour in order, remembers dismissal per installation, and replays after a handoff", async () => {
   const screen = await show();
   await expect
-    .element(page.getByRole("dialog", { name: "A new home for your work" }))
+    .element(page.getByRole("dialog", { name: "Start a chat with any agent" }))
     .toBeVisible();
-  await page
-    .getByRole("dialog")
-    .screenshot({ path: "node_modules/.cache/feature-tour-desktop.png" });
+  await page.getByRole("dialog").screenshot({ path: "node_modules/.cache/app-tour-desktop.png" });
   await page.getByRole("button", { name: "Next", exact: true }).click();
-  await expect.element(page.getByRole("dialog", { name: "Your agents, together" })).toBeVisible();
+  await expect
+    .element(page.getByRole("dialog", { name: "See what your agents are doing" }))
+    .toBeVisible();
   await page.getByRole("button", { name: "Back", exact: true }).click();
   await expect
-    .element(page.getByRole("dialog", { name: "A new home for your work" }))
+    .element(page.getByRole("dialog", { name: "Start a chat with any agent" }))
     .toBeVisible();
-  await page.getByRole("button", { name: "Show From review to the next change" }).click();
+  await page.getByRole("button", { name: "Show Start the day in Inbox" }).click();
+  await expect.element(page.getByRole("dialog", { name: "Start the day in Inbox" })).toBeVisible();
+  await page.getByRole("button", { name: "Show Review pull requests and issues" }).click();
   await expect
-    .element(page.getByRole("dialog", { name: "From review to the next change" }))
+    .element(page.getByRole("dialog", { name: "Review pull requests and issues" }))
     .toBeVisible();
-  await page.getByRole("button", { name: "Show Give bigger work a team" }).click();
-  await expect.element(page.getByRole("dialog", { name: "Give bigger work a team" })).toBeVisible();
-  await expect.element(page.getByRole("button", { name: "Start exploring" })).toBeVisible();
-  await page.getByRole("button", { name: "Start exploring" }).click();
+  await expect.element(page.getByRole("button", { name: "Done" })).toBeVisible();
+  await page.getByRole("button", { name: "Done" }).click();
   await screen.unmount();
   screens.splice(screens.indexOf(screen), 1);
   await show();
@@ -108,10 +108,44 @@ it("navigates Stable highlights, remembers dismissal per installation, and repla
   useAnnouncementSheetSlotStore.setState({ handedOff: true });
   useFeatureTourStore.getState().open();
   await expect
-    .element(page.getByRole("dialog", { name: "A new home for your work" }))
+    .element(page.getByRole("dialog", { name: "Start a chat with any agent" }))
     .toBeVisible();
-  await page.getByRole("button", { name: "Skip tour" }).click();
+  await page.getByRole("button", { name: "Close tour" }).click();
   await expect.element(page.getByRole("dialog")).not.toBeInTheDocument();
+});
+
+it("skips controls in a collapsed sidebar or under the rail and rings the visible ones", async () => {
+  const anchor = (id: string) => (
+    <button type="button" data-app-tour={id} style={{ width: 40, height: 40 }}>
+      {id}
+    </button>
+  );
+  await show(
+    <>
+      {/* A collapsed offcanvas sidebar stays laid out, slid off the left edge. */}
+      <div
+        style={{ position: "fixed", left: 0, top: 0, width: 260, transform: "translateX(-100%)" }}
+      >
+        {anchor("newThread")}
+      </div>
+      {/* Its controls near the edge end up under the rail. */}
+      <div style={{ position: "fixed", left: 0, top: 100 }}>{anchor("tasks")}</div>
+      <div
+        style={{ position: "fixed", left: 0, top: 80, width: 60, height: 80, background: "white" }}
+      />
+      <div style={{ position: "fixed", left: 200, top: 200 }}>
+        {anchor("activity")}
+        {anchor("inbox")}
+      </div>
+      <FeatureTourDialog />
+    </>,
+  );
+  const tour = page.getByRole("dialog", { name: "See what your agents are doing" });
+  await expect.element(tour).toBeVisible();
+  expect(tour.element().getAttribute("data-tour-side")).toBe("right");
+  expect(page.getByRole("button", { name: /^Show / }).all()).toHaveLength(2);
+  await page.getByRole("button", { name: "Next", exact: true }).click();
+  await expect.element(page.getByRole("dialog", { name: "Start the day in Inbox" })).toBeVisible();
 });
 
 it("announces again when the browser connects to a different installation", async () => {
@@ -120,16 +154,16 @@ it("announces again when the browser connects to a different installation", asyn
   localStorage.setItem(importKey, JSON.stringify([installation]));
   await show();
   await expect
-    .element(page.getByRole("dialog", { name: "A new home for your work" }))
+    .element(page.getByRole("dialog", { name: "Start a chat with any agent" }))
     .toBeVisible();
-  await page.getByRole("button", { name: "Skip tour" }).click();
+  await page.getByRole("button", { name: "Close tour" }).click();
   expect(JSON.parse(localStorage.getItem(tourKey) ?? "[]")).toEqual([
     "/first/worktrees",
     "/second/worktrees",
   ]);
 });
 
-it("shows Beta highlights and waits for onboarding and other modal flows to close", async () => {
+it("waits for onboarding and other modal flows to close on Beta", async () => {
   flavor = "beta";
   useOnboardingDialogStore.setState({ startupGateSettled: false });
   function Flow() {
@@ -151,9 +185,11 @@ it("shows Beta highlights and waits for onboarding and other modal flows to clos
   await expect.element(page.getByRole("dialog", { name: "Existing setup" })).toBeVisible();
   expect(document.querySelectorAll('[role="dialog"]').length).toBe(1);
   await page.getByRole("button", { name: "Finish setup" }).click();
-  await page.getByRole("button", { name: "Show Give bigger work a team" }).click();
-  await expect.element(page.getByRole("dialog", { name: "Give bigger work a team" })).toBeVisible();
-  await page.getByRole("button", { name: "Start exploring" }).click();
+  await page.getByRole("button", { name: "Show Review pull requests and issues" }).click();
+  await expect
+    .element(page.getByRole("dialog", { name: "Review pull requests and issues" }))
+    .toBeVisible();
+  await page.getByRole("button", { name: "Done" }).click();
   await expect.element(page.getByRole("dialog")).not.toBeInTheDocument();
 });
 
@@ -169,9 +205,9 @@ it("waits for project import announcements instead of racing their shared slot",
   expect(document.querySelectorAll('[role="dialog"]').length).toBe(1);
   await page.getByRole("button", { name: "Not now" }).click();
   await expect
-    .element(page.getByRole("dialog", { name: "A new home for your work" }))
+    .element(page.getByRole("dialog", { name: "Start a chat with any agent" }))
     .toBeVisible();
-  await page.getByRole("button", { name: "Skip tour" }).click();
+  await page.getByRole("button", { name: "Close tour" }).click();
 });
 
 it.each(["low", "high"] as const)(
@@ -262,9 +298,9 @@ it("does not jump ahead of a slow AppSnap probe and then waits for its dismissal
     .toBeVisible();
   await page.getByRole("button", { name: "Not now" }).click();
   await expect
-    .element(page.getByRole("dialog", { name: "A new home for your work" }))
+    .element(page.getByRole("dialog", { name: "Start a chat with any agent" }))
     .toBeVisible();
-  await page.getByRole("button", { name: "Skip tour" }).click();
+  await page.getByRole("button", { name: "Close tour" }).click();
 });
 
 it("keeps the tour usable on a narrow screen and with large UI text", async () => {
@@ -280,18 +316,20 @@ it("keeps the tour usable on a narrow screen and with large UI text", async () =
   try {
     await show();
     await expect
-      .element(page.getByRole("dialog", { name: "A new home for your work" }))
+      .element(page.getByRole("dialog", { name: "Start a chat with any agent" }))
       .toBeVisible();
     await page.getByRole("button", { name: "Next", exact: true }).click();
     const dialog = document.querySelector("[data-feature-tour]") as HTMLElement;
-    expect(dialog.scrollWidth).toBeLessThanOrEqual(dialog.clientWidth);
-    const points = dialog.querySelector("ul")!.getBoundingClientRect();
-    const footer = dialog.querySelector("[data-slot=dialog-footer]")!.getBoundingClientRect();
-    expect(footer.top).toBeGreaterThanOrEqual(points.bottom);
-    await page
-      .getByRole("dialog")
-      .screenshot({ path: "node_modules/.cache/feature-tour-mobile.png" });
-    await page.getByRole("button", { name: "Skip tour" }).click();
+    // Without an anchor on screen the card is centered, inside the viewport.
+    expect(dialog.dataset.tourSide).toBe("center");
+    const box = dialog.getBoundingClientRect();
+    expect(box.left).toBeGreaterThanOrEqual(0);
+    expect(box.right).toBeLessThanOrEqual(390);
+    expect(box.bottom).toBeLessThanOrEqual(700);
+    const surface = dialog.querySelector<HTMLElement>("[tabindex='-1']")!;
+    expect(surface.scrollWidth).toBeLessThanOrEqual(surface.clientWidth);
+    await page.getByRole("dialog").screenshot({ path: "node_modules/.cache/app-tour-mobile.png" });
+    await page.getByRole("button", { name: "Close tour" }).click();
   } finally {
     for (const key of Object.keys(sizes)) document.documentElement.style.removeProperty(key);
     await page.viewport(1280, 900);
@@ -308,10 +346,12 @@ it("restores manual replay focus after keyboard navigation and Escape", async ()
   );
   await page.getByRole("button", { name: "Replay highlights" }).click();
   await expect
-    .element(page.getByRole("dialog", { name: "A new home for your work" }))
+    .element(page.getByRole("dialog", { name: "Start a chat with any agent" }))
     .toBeVisible();
   await userEvent.keyboard("{ArrowRight}");
-  await expect.element(page.getByRole("dialog", { name: "Your agents, together" })).toBeVisible();
+  await expect
+    .element(page.getByRole("dialog", { name: "See what your agents are doing" }))
+    .toBeVisible();
   await userEvent.keyboard("{Escape}");
   await expect.element(page.getByRole("dialog")).not.toBeInTheDocument();
   await vi.waitFor(() =>
@@ -324,7 +364,7 @@ it("restores manual replay focus after keyboard navigation and Escape", async ()
 it("closes an automatic tour when another window acknowledges this installation", async () => {
   await show();
   await expect
-    .element(page.getByRole("dialog", { name: "A new home for your work" }))
+    .element(page.getByRole("dialog", { name: "Start a chat with any agent" }))
     .toBeVisible();
   const value = JSON.stringify([installation]);
   localStorage.setItem(tourKey, value);

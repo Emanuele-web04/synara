@@ -1,6 +1,7 @@
 # Synara agent instructions
 
 Synara is a multi-provider coding-agent workspace with web, server, CLI, and desktop surfaces. Prioritize correctness, reliability, and predictable performance during streaming, reconnects, cancellation, and recovery. Do not treat the project as a disposable early prototype or use this file as permission for unrelated rewrites.
+This project is open source, so take extra care with the code and configuration you ship. Keep secrets and private data out of commits and release artifacts.
 
 ## Contracts and ownership
 
@@ -53,6 +54,8 @@ For browser development, an inherited `SYNARA_AUTH_TOKEN` must match the client 
 Write replies and completion reports as a TL;DR: the result first, then only what the reader needs to act. Prefer dense information over prose: use tables for measurements, comparisons, and per-case results, and short bullets for findings and open decisions. Cut narration of steps taken, restated requests, and closing recaps. Keep failures, unverified behavior, and required decisions; shorten the wording, never the facts.
 
 ## Verification and completion
+
+Migration changes require an independent review of data preservation, replay safety, and backup/recovery.
 
 Keep unrelated formatter changes out of logic commits. If those formatting changes are necessary, place them in a separate format-only commit.
 

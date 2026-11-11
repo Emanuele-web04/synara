@@ -219,6 +219,8 @@ export const AccountMe = Schema.Struct({
    * still decodes a response from a server that sends them.
    */
   profile: Schema.optional(Schema.NullOr(AccountProfile)),
+  /** Current public-page availability, including entitlement; absent hides public links. */
+  publicProfileAvailable: Schema.optional(Schema.Boolean),
 });
 export type AccountMe = typeof AccountMe.Type;
 
@@ -384,6 +386,8 @@ export const AccountErrorCode = Schema.Literals([
   "organization_rename_not_allowed",
   "validation_failed",
   "rate_limited",
+  /** A 429 from the account service before the refresh token reached the provider. */
+  "refresh_not_attempted",
   "internal_error",
 ]);
 export type AccountErrorCode = typeof AccountErrorCode.Type;

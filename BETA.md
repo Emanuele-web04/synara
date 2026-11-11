@@ -51,8 +51,9 @@ configured in the hosted WorkOS Production environment. The provider configurati
 and Chromium sign-in UI tests pass; the real production GitHub consent/callback
 has not been verified. Remote also
 enables the profile/usage sync path without an operator flag; an explicit
-`SYNARA_ACCOUNT_PROFILE_SYNC=0` still disables it. Stable remains blocked and
-generic/Beta builds still require their existing opt-in. Product analytics were
+`SYNARA_ACCOUNT_PROFILE_SYNC=0` still disables it. Stable was blocked at that
+release; its later profile promotion is described below. Generic/Beta builds
+retain their existing opt-in. Product analytics were
 separate and off by default in Remote .15; the later Remote default is described
 under [Diagnostics](#diagnostics).
 
@@ -85,9 +86,9 @@ is not implemented; do not use account switching as local history isolation.
   `BETA_ONLY_FEATURES` in `packages/shared/src/betaFeatures.ts`. The code ships in
   both apps; Stable just switches listed features off. Remove the entry to promote
   a feature to Stable. See [Beta-only features](#beta-only-features).
-- **Diagnostics run in Beta and Remote, never Stable.** Beta sends redacted error
-  events, raw crash dumps, and anonymous usage counts to a private dashboard. Remote
-  sends the same events except raw crash dumps, plus product usage, by default with a
+- **Diagnostics run in Beta and Remote, never Stable.** Beta sends technical-only error
+  categories, numeric frames, release health and fixed health counts. No flavor
+  uploads raw crash dumps or work content. Remote adds product usage by default with a
   Settings switch to stop both. Stable sends no release diagnostics; its product
   analytics require opt-in. See [Diagnostics](#diagnostics).
 
@@ -390,20 +391,10 @@ HTTP-hosted clients retain native component visuals but never execute HTML. The 
 bootstrap removes WebRTC capabilities before page scripts and stops parsing if that boundary
 cannot be enforced. HTML messages cannot open external URLs through the host.
 
-The list currently holds `remoteConnections`, `accountProfileSync`,
-`accountInbox` (account-saved Inbox history), and `chinese-ui`. MCP Connectors and
-the native editor are available in Stable and Beta.
+The list is currently empty. Account profiles, saved Inbox history, MCP Connectors
+and the native editor are available in Stable and Beta. Remote connections use
+their separate runtime activation policy.
 
-Simplified Chinese (`chinese-ui`) is available in non-Stable builds. Stable keeps English and Spanish, hides Chinese
-from Language settings, and ignores saved or programmatic Chinese selections without erasing
-them in the raw renderer settings. The derived native mirror receives the effective System
-preference so its menus follow the same fallback. System detection skips Chinese and uses the
-next supported language, then English.
-The same shared locale policy gates renderer startup and native menus; the native language IPC
-refuses Chinese writes in Stable. No UI-language setting is owned by a server RPC. The server
-also reports the feature disabled for a Stable host. Stable macOS bundles omit
-app-authored Chinese permission explanations; macOS-owned dialog controls follow the OS language.
-Beta, Remote, development, Cua, Canary and non-desktop hosts follow the existing non-Stable policy.
 Diagnostics follow their separate [sender policy](#diagnostics).
 Inline visuals are available in Stable and Beta:
 the `synara_show_visual` agent tool, its transcript rows, and the `orchestration.getInlineVisual`
@@ -431,19 +422,19 @@ chat attention, running and finished work, review requests, and the activity rec
 The to-do list, quick-add, delegation card, and **All tasks** link appear only where
 Tasks is available, including Stable and Beta.
 
-`accountInbox` is the account-saved Inbox history. In Beta, a signed-in computer
+`accountInbox` is the account-saved Inbox history. In Stable, Beta and Remote, a signed-in computer
 automatically saves account/workspace-owned daily snapshots, including project names,
 and catches up its local history; **Save privately** requests an immediate update. Saved
 history can be read from the account API while its source computers are offline and
 survives source removal. Deleting a recap prevents automatic re-creation; an explicit
-Save can restore it. Stable refuses the saved-recap RPCs and does not upload. This
-history is separate from public profile publication and aggregate usage sync.
+Save can restore it. This history is separate from public profile publication
+and aggregate usage sync.
 
-In Beta and generic builds, account profiles additionally require the server opt-in
-`SYNARA_ACCOUNT_PROFILE_SYNC=1`. Remote enables this historical aggregate usage sync
-for the signed-in account by default unless `SYNARA_ACCOUNT_PROFILE_SYNC=0` is set.
-Stable refuses it. The UI reads the server capability, and publication remains a
-separate explicit choice.
+Stable and Remote enable account profiles and aggregate usage sync for signed-in
+accounts by default; `SYNARA_ACCOUNT_PROFILE_SYNC=0` disables the feature. Beta and
+generic builds retain the server opt-in `SYNARA_ACCOUNT_PROFILE_SYNC=1`. The UI reads
+the server capability. New profiles remain private; publication is a separate
+explicit choice and the account API enforces Alto access when configured.
 See the [profiles trial guide](apps/profiles/README.md).
 
 `pull-request-auto-fix` enables the opt-in **Auto-fix CI** action in a pull
@@ -461,17 +452,18 @@ visible trail no longer subscribes. First use can request macOS audio access.
 
 ## Diagnostics
 
-Beta builds ship always-on diagnostics — crash reports plus anonymous usage
-counts (which providers are used, how many chats and turns) — while stable
+Beta builds ship always-on technical diagnostics — fixed crash/error categories plus fixed
+health counts (projects and active threads) — while stable
 builds never enable the Beta diagnostics sender. Stable and Beta separately offer
 default-off product analytics through Settings → General → Privacy.
 
-Synara Remote shares usage and diagnostics by default: the same diagnostic events
-without raw crash dumps, and product events such as daily activity, feature use,
+Synara Remote shares usage and diagnostics by default: the same technical-only diagnostic events
+and product events such as daily activity, feature use,
 connection, pairing and turn outcomes with a fixed failure category. **Share usage
 and diagnostics** in Settings → General → Privacy turns both off and clears unsent
-events. Chats, prompts, files and raw account identifiers are never sent. Signed-in
-product events can include a pseudonymous account hash. See
+events. Chats, prompts, replies, files, credentials, log excerpts and raw memory are never
+part of telemetry, including Beta diagnostics. Product identifiers are random per
+installation and unrelated to login or billing. See
 [diagnostics.md](docs/diagnostics.md) for exactly what is collected, what usage
 counters exclude, and how the Cloudflare ingest works.
 

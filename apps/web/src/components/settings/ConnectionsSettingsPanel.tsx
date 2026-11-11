@@ -18,6 +18,7 @@ import { Button } from "../ui/button";
 import { ConnectionsOtherComputers } from "./ConnectionsOtherComputers";
 import { ConnectionsThisComputer } from "./ConnectionsThisComputer";
 import { SettingsListRow, SettingsSection } from "./SettingsPanelPrimitives";
+import { SYNARA_PLAN_SECTION_ID } from "./BillingSettingsPanel";
 
 type ConnectionsTab = "this" | "others" | "ssh";
 
@@ -101,7 +102,11 @@ export function ConnectionsSettingsPanel({
             onRefreshBilling={billingEnabled ? () => void billing.refetch() : undefined}
             onViewProPlans={
               canViewProPlans
-                ? () => void navigate({ to: "/settings", search: { section: "profile" } })
+                ? () =>
+                    void navigate({
+                      to: "/settings",
+                      search: { section: "usage", target: SYNARA_PLAN_SECTION_ID },
+                    })
                 : undefined
             }
           />

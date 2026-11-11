@@ -27,7 +27,33 @@ Version `2026.10.3` is pinned in `packages/shared/src/cloudflared.ts`, with offi
 
 Native assets are pinned for macOS arm64/x64, Linux arm64/x64 and Windows x64. Windows ARM desktop packaging carries the official x64 executable and therefore needs OS emulation; this has not been runtime-qualified. The local MVP qualification targets macOS arm64. Linux, Windows, universal Mac and signed distribution need their respective runtime evidence.
 
-The host owns one connector child at a time and waits for shared process-tree teardown before replacing it. Readiness comes from cloudflared's local `/ready`, not process existence. Restart delay grows from approximately one second to sixty seconds with jitter. The child uses an installation-owned home and explicit empty local configuration, so a personal cloudflared configuration cannot change the managed ingress. Tokens travel only in the child environment, with no inherited provider credentials, command-line token, log forwarding or renderer exposure. Connector restarts reuse the current allocation. API administrators' credentials never reach the host.
+The host owns one connector child at a time and waits for its guardian to confirm native child exit before replacing it. Readiness comes from cloudflared's local `/ready`, not process existence. Restart delay grows from approximately one second to sixty seconds with jitter. The child uses an installation-owned home and explicit empty local configuration, so a personal cloudflared configuration cannot change the managed ingress. Tokens travel only in the child environment, with no inherited provider credentials, command-line token, log forwarding or renderer exposure. Connector restarts reuse the current allocation. API administrators' credentials never reach the host.
+
+A small runtime guardian owns the connector and holds a pipe from the backend.
+Backend termination, including a fatal uncaught error or SIGKILL, closes the pipe;
+the guardian terminates the connector and escalates after 1.5 seconds if it has
+not exited. A blocked backend event loop does not close this pipe. Normal shutdown
+closes the same pipe and requires both the child-exit receipt and guardian closure;
+it never races the guardian with a second kill timer. Missing proof or a ten-second
+deadline fails shutdown and prevents replacement, including during early startup.
+On POSIX the connector starts in an isolated process group; shell overrides and
+their descendants receive the same signals, and the group must have no live
+members before acknowledgement. Linux zombie-only groups count as exited even
+when a container's init process has not reaped them. The guardian has the same
+minimal environment as the connector; a Windows tree-kill helper receives only
+system variables. This prevents new orphaned native connectors; it does not scan
+for or kill unowned processes left by older releases. POSIX lifetime fixtures cover
+normal and immediate stop, fatal owner exit, owner SIGKILL, an uncooperative
+connector, and refusal to accept an externally killed guardian as exit proof.
+Packaged Windows execution remains a separate qualification requirement.
+
+Rejected HTTP upgrades retain a raw-socket error handler until closure. A peer
+reset or failed rejection write closes that connection instead of terminating the
+backend. The remote TLS server also owns WebSocket errors while refusing a peer
+because it is closed or full. Authorization still fails closed when the lease
+expires; these error handlers never admit a denied connection. Fixed anonymous
+reliability categories distinguish ingress socket errors, rejected tunnel socket
+errors and event-loop stalls, subject to the desktop product-sharing choice.
 
 The dedicated listener binds IPv4 loopback on an unused port and requires the exact assigned hostname. Spoofed forwarded headers do not grant local authority. Controller dial/probe operations are bounded; transport switching creates a fresh verified stream and does not replay arbitrary commands.
 
@@ -38,6 +64,16 @@ Sign in to the same account/workspace on both computers. On the execution host, 
 Codes expire after nine minutes (leaving one minute of clock-skew headroom below the API publication limit) and are claimed once, transactionally, by a registered nonrevoked device key. Per-IP, per-account and per-code attempt budgets use PostgreSQL so multiple API instances share limits. Renewal cancels older rendezvous and pending local invitations. Cancellation revokes locally even if the API is temporarily unreachable. Invitation bundles remain only on the trusted servers and are removed from rendezvous storage on redemption/cancellation/expiry. The normal UI does not copy JSON. A redeemed bundle remains on the controller server until successful pairing, explicit cancellation/forgetting, account change or expiry. A temporary directory/dial failure can therefore retry the reviewed identity without redeeming the public code again. Cancellation waits for the in-flight setup before forgetting local trust. Existing [headless private-file pairing](remote-connections-v2.md#headless-owner-pairing) remains supported.
 
 ### Diagnosing a rejected pairing code
+
+**Find computer** prepares the controller's device identity before submitting
+the code. Preparation failures appear in the dialog and leave the code unused
+so the user can retry. An account-revoked device key is a separate failure from
+an expired code: a new code or signing in again does not replace that durable
+key. When the account confirms revocation, the dialog offers **Re-register this
+computer**. Confirming creates a new device identity; it does not restore old
+grants or approvals. Then choose **Find computer** again and complete fresh
+pairing. If registration is interrupted, **Find computer** rechecks the current
+identity before offering recovery again, without consuming the pairing code.
 
 The account API deliberately returns the same `400 challenge_expired` response for
 an unavailable code and an invitation outside the caller's account/workspace.
@@ -157,17 +193,14 @@ not a new live-provider or physical-device qualification.
 
 ## Local and live evidence
 
-The Beta Inbox's **Save privately** action uploads an explicit snapshot to the
-account service, including project names. Saved recaps belong to one account
-and workspace and are independent of public profiles, pairing records and
-source-host lifetimes. A fresh sign-in can restore history while every Mac is
-offline. The desktop server refuses saved-recap RPCs on Stable; it also refuses
-a pending save if the account or workspace changed before upload.
+Signed-in computers in Stable, Beta and Remote save Inbox recaps automatically,
+including project names. **Save privately** requests an immediate update. Saved
+recaps belong to one account and workspace, independent of public profiles,
+pairing and source-host lifetimes. The history is available while the source
+computers are offline. A pending save fails if the account or workspace changed.
 
-This feature requires additive account migration
-`apps/api/drizzle/0016_private_inbox_recaps.sql` and deployment of the updated
-account API. Neither production migration nor deployment is part of this local
-implementation. See the [private recap API contract](../apps/api/README.md#private-saved-inbox-recaps)
+The account API requires additive migrations `0016_private_inbox_recaps.sql`
+and `0017_inbox_automatic_sync.sql`. See the [private recap API contract](../apps/api/README.md#private-saved-inbox-recaps)
 for endpoints, ownership checks, pagination and default-deny RLS.
 
 Run affected PostgreSQL API tests against one disposable database, then the E2E transport suite against that database without concurrent destructive fixture setup. After `bun run build:desktop`, `TEST_DATABASE_URL=... SYNARA_E2E_EVIDENCE=/private/path bun run --cwd apps/e2e test:workspace` launches two built Node servers and Chromium with separate homes. Its external HTTPS proxy and connector subprocess simulate the Cloudflare boundary; WorkOS and provider CLI are deterministic fixtures. The inner TLS, actual account coordinator, approvals, resources, persistence and reconnect code are production paths. No public-CA verification is disabled: an ephemeral fixture certificate is trusted only by the isolated test processes.

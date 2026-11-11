@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-import { i18n, setLanguagePreference } from "~/i18n";
 
 import {
   formatSubagentModelLabel,
@@ -11,29 +10,15 @@ import {
 } from "./subagentPresentation";
 
 describe("resolveSubagentPresentation", () => {
-  it("localizes placeholders while keeping status source labels and agent identities stable", () => {
-    i18n.addResources("es", "translation", {
-      Subagent: "Subagente",
-      Running: "En curso",
+  it("keeps placeholders, status source labels and agent identities stable", () => {
+    expect(resolveSubagentPresentation({ title: "Subagent" }).primaryLabel).toBe("Subagent");
+    expect(humanizeSubagentStatus("running")).toBe("Running");
+    expect(resolveSubagentPresentation({ nickname: "Settings", role: "Reviewer" })).toMatchObject({
+      primaryLabel: "Settings",
+      nickname: "Settings",
+      role: "reviewer",
+      fullLabel: "Settings [reviewer]",
     });
-    try {
-      setLanguagePreference("es");
-      expect(resolveSubagentPresentation({ title: "Subagent" }).primaryLabel).toBe("Subagente");
-      expect(humanizeSubagentStatus("running")).toBe("Running");
-      expect(resolveSubagentPresentation({ nickname: "Settings", role: "Reviewer" })).toMatchObject(
-        {
-          primaryLabel: "Settings",
-          nickname: "Settings",
-          role: "reviewer",
-          fullLabel: "Settings [reviewer]",
-        },
-      );
-      setLanguagePreference("en");
-      expect(resolveSubagentPresentation({ title: "Subagent" }).primaryLabel).toBe("Subagent");
-      expect(humanizeSubagentStatus("running")).toBe("Running");
-    } finally {
-      setLanguagePreference("en");
-    }
   });
 
   it("prefers explicit nickname and role over generic thread titles", () => {

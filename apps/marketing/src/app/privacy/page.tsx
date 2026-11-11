@@ -21,13 +21,14 @@ export const metadata = pageMetadata({
   path: "/privacy",
 });
 
-const LAST_UPDATED = "October 17, 2026";
+const LAST_UPDATED = "November 8, 2026";
 
 const RECEIVED_WHEN_SHARED = [
   "Fixed event names, built-in command categories, connection outcomes and failure categories",
-  "A random installation identifier, event identifier and timestamp; a pseudonymous account hash while signed in",
+  "A random installation identifier, event identifier and timestamp, independent of login and billing",
   "Your app version, release channel, app surface and platform",
-  "Bounded durations, token counts and host turn aggregates by provider, catalogued model, effort, mode and origin",
+  "Bounded durations and token counts, with fixed provider and mode categories",
+  "With host product sharing enabled, daily aggregate executions by catalogued provider/model, requested effort and outcome, with per-field token coverage",
 ];
 
 const NEVER_COLLECTED = [
@@ -44,7 +45,7 @@ const PRIVACY_JSONLD = [
     "@id": `${SITE_URL}/privacy#webpage`,
     name: "Synara privacy",
     url: `${SITE_URL}/privacy`,
-    dateModified: "2026-10-17",
+    dateModified: "2026-11-08",
     description:
       "Synara privacy details covering local workspaces, optional account features, product analytics choices and separate Beta/Remote diagnostics.",
   },
@@ -81,10 +82,11 @@ export default function PrivacyPage() {
         <Section title="Where your data lives">
           <p>
             Workspace chats, projects and operational state live in a local SQLite database on the
-            host computer. A connected device can access that host with your authorization. Optional
-            Synara account features store profile information, private usage aggregates and saved
-            Inbox recaps in our account database on PostgreSQL/Supabase, accessed through our
-            Cloudflare API. These saved account records are separate from product analytics.
+            host computer. Desktop and mobile clients also keep local history, drafts and caches. A
+            connected device can access that host with your authorization. Optional Synara account
+            features store profile information, private usage aggregates and saved Inbox recaps in
+            our account database on PostgreSQL/Supabase, accessed through our Cloudflare API. These
+            saved account records are separate from product analytics.
           </p>
         </Section>
 
@@ -119,10 +121,10 @@ export default function PrivacyPage() {
             not change your local choice.
           </p>
           <p className="mt-6">
-            While signed in, events include a one-way hash of your Synara account identifier so that
-            your devices can count as one person. The identifier itself, name and email are not
-            sent. This hash is pseudonymous, not anonymous: an operator holding the account list
-            could recompute it. We do not use advertising, cross-app tracking or data brokers.
+            Product events use a random identifier for this installation. It is independent of your
+            login and billing account; no account identifier or account-derived hash is sent. Active
+            counts represent installations, so one person using multiple devices can count more than
+            once. We do not use advertising, cross-app tracking or data brokers.
           </p>
           <div className="mt-6 grid gap-4 sm:grid-cols-2">
             <DataCard
@@ -130,31 +132,57 @@ export default function PrivacyPage() {
               title="When sharing is enabled, we receive"
               items={RECEIVED_WHEN_SHARED}
             />
-            <DataCard tone="never" title="Analytics never receives" items={NEVER_COLLECTED} />
+            <DataCard
+              tone="never"
+              title="Product analytics never include"
+              items={NEVER_COLLECTED}
+            />
           </div>
           <p className="mt-6">
-            Raw product events are stored in Cloudflare D1 for up to 30 days behind an authenticated
-            dashboard. Local queues are bounded to 500 events and seven days. Turning sharing off
-            clears unsent events, cancels active sends and removes the local analytics identifier;
-            it cannot recall data already received. Usage counters are best-effort observations, not
-            billing records or complete account totals. Custom model and command names are reduced
-            to fixed categories rather than sent as free text.
+            Raw product events are stored in Cloudflare D1 behind an authenticated dashboard and
+            scheduled for deletion after 30 days from receipt. Cleanup uses capped daily batches; an
+            unusually large backlog can take longer. Local queues are bounded to 500 events and
+            seven days. Turning sharing off clears unsent events, cancels active sends and removes
+            the local analytics identifier. Re-enabling creates a fresh random identifier without
+            linking it through an account. The first account-free upgrade also replaces the old
+            analytics identifier and discards its unsent telemetry, preserving your choice and
+            workspace history. Switching off cannot recall data already received. Usage counters are
+            best-effort observations, separate from account and billing records. Custom model and
+            command names are reduced to fixed categories rather than sent as free text.
           </p>
           <p className="mt-6">
-            Remote desktop diagnostics keep known error categories, numeric source locations,
-            process/release health and aggregate usage counters. They exclude error messages,
-            function/file names, log excerpts and raw crash memory dumps. Diagnostic reports have
-            separate, indefinite retention; the 30-day product-event cleanup does not remove them.
+            Beta and Remote desktop diagnostics keep known error categories, numeric source
+            locations, process/release health and aggregate usage counters. They exclude error
+            messages, function/file names, log excerpts and raw crash memory dumps. Diagnostic
+            reports have separate retention. New diagnostics do not carry
+            provider/model/execution/token data; historical rolling samples remain separately
+            labelled until retention removes them. Extracted provider and turn usage rows are
+            scheduled for deletion 90 days after receipt, with the same capped-batch limitation;
+            other diagnostic event records currently have no automatic expiry. The 30-day
+            product-event cleanup does not remove those records.
+          </p>
+          <p className="mt-6">
+            Host execution aggregates follow that computer’s own product-sharing choice, including
+            work requested by connected phones and controllers. Completed UTC-day snapshots use
+            catalogued model and finite effort/mode/outcome categories. Token fields have separate
+            measurement counts: absent values are unknown, while explicitly measured zero stays
+            zero. Daily receipt hashes expire after 14 days; anonymous day/channel counters and
+            coverage after 90 UTC days, using capped cleanup batches. No host/account identifier
+            accompanies those model counters. Offline, late, capped and missing-time data can leave
+            gaps; these are observations, separate from renderer events and billing totals.
           </p>
         </Section>
 
         <Section title="Separate Beta diagnostics">
           <p>
             Synara Beta sends crash, error, release-health and daily usage diagnostics
-            automatically. These may include bounded, redacted error stacks, log excerpts and recent
-            diagnostic context. Stable does not send Beta diagnostics. Product analytics consent
-            does not control this separate Beta path, whose retention policy is independent of the
-            30-day product-event policy. See the{" "}
+            automatically, using fixed categories, numeric source positions and bounded counters.
+            They exclude prompts, replies, file contents, credentials, error prose, function/file
+            names, log excerpts and raw crash memory. Stable does not send Beta diagnostics. Product
+            analytics consent does not control this separate Beta path. Older installed clients used
+            broader diagnostics; legacy text is stripped at ingestion and raw dump routes are
+            retired. Historical storage cleanup requires a separate operator action; this policy
+            does not claim previously received data has already been deleted. See the{" "}
             <a
               href="https://github.com/Emanuele-web04/synara/blob/main/docs/diagnostics.md"
               className="text-[var(--accent-link)]"

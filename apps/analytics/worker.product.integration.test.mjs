@@ -1,69 +1,33 @@
-import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
+// Integration boundary: synthetic requests, SQLite-backed D1, migrations and retention.
+// No network, credentials or production data are used.
+import { appendFileSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { DatabaseSync } from "node:sqlite";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import worker, { signSession } from "./worker.ts";
+import worker, {
+  purgeLegacyDiagnosticContent,
+  purgeLegacyDiagnosticDumps,
+  signSession,
+} from "./worker.ts";
+import { captureInstallerDownloads } from "./installerDownloads.ts";
 import { BetaDiagnostics } from "../desktop/src/betaDiagnostics.ts";
+import { ProductAnalytics } from "../desktop/src/productAnalytics.ts";
 import {
   createInitialDesktopUpdateState,
   reduceDesktopUpdateStateOnCheckFailure,
   reduceDesktopUpdateStateOnCheckStart,
 } from "../desktop/src/updateMachine.ts";
 
-class SQLiteD1Statement {
-  constructor(database, sql, values = []) {
-    this.database = database;
-    this.sql = sql;
-    this.values = values;
-  }
+import { SQLiteD1 } from "./testing/sqliteD1.mjs";
 
-  bind(...values) {
-    return new SQLiteD1Statement(this.database, this.sql, values);
-  }
-
-  run() {
-    const result = this.database.prepare(this.sql).run(...this.values);
-    return Promise.resolve({
-      meta: { changes: Number(result.changes), last_row_id: Number(result.lastInsertRowid) },
-    });
-  }
-
-  all() {
-    return Promise.resolve({ results: this.database.prepare(this.sql).all(...this.values) });
-  }
-
-  first() {
-    return Promise.resolve(this.database.prepare(this.sql).get(...this.values) ?? null);
-  }
-}
-
-class SQLiteD1 {
-  constructor() {
-    this.database = new DatabaseSync(":memory:");
-  }
-
-  prepare(sql) {
-    return new SQLiteD1Statement(this.database, sql);
-  }
-
-  async batch(statements) {
-    this.database.exec("BEGIN");
-    try {
-      const results = [];
-      for (const statement of statements) results.push(await statement.run());
-      this.database.exec("COMMIT");
-      return results;
-    } catch (error) {
-      this.database.exec("ROLLBACK");
-      throw error;
-    }
-  }
-
-  close() {
-    this.database.close();
-  }
+// Run the real ordered SQL migrations, optionally stopping at a deployed schema.
+function applyMigrations(database, through = "9999") {
+  const files = readdirSync(new URL("./migrations/", import.meta.url))
+    .filter((name) => /^\d{4}_.*\.sql$/.test(name) && name.slice(0, 4) <= through)
+    .sort();
+  for (const name of files)
+    database.exec(readFileSync(new URL(`./migrations/${name}`, import.meta.url), "utf8"));
 }
 
 describe("analytics ingest and D1 storage", () => {
@@ -73,19 +37,21 @@ describe("analytics ingest and D1 storage", () => {
   let day;
 
   beforeEach(() => {
+    // Scheduled jobs must never reach the public network from a local fixture.
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("Fixture network disabled")));
     db = new SQLiteD1();
-    const migrationFiles = readdirSync(new URL("./migrations/", import.meta.url))
-      .filter((name) => name.endsWith(".sql"))
-      .sort();
-    for (const name of migrationFiles) {
-      db.database.exec(readFileSync(new URL(`./migrations/${name}`, import.meta.url), "utf8"));
-    }
+    applyMigrations(db.database);
     env = { DB: db, DASHBOARD_SESSION_KEY: "test-session-key" };
     now = Date.now();
     day = new Date(now).toISOString().slice(0, 10);
   });
 
-  afterEach(() => db.close());
+  afterEach(() => {
+    db.close();
+    vi.useRealTimers();
+
+    vi.unstubAllGlobals();
+  });
 
   const envelope = (overrides = {}) => ({
     v: 1,
@@ -112,6 +78,929 @@ describe("analytics ingest and D1 storage", () => {
       }),
       env,
     );
+
+  const reliabilityRecord = (overrides = {}) => ({
+    v: 1,
+    id: crypto.randomUUID(),
+    day,
+    code: "recovery.crash_resume_accepted",
+    channel: "stable",
+    appVersion: "1.5.1",
+    platform: "darwin",
+    ...overrides,
+  });
+
+  const postReliability = (body, headers = { "content-type": "application/json" }) =>
+    worker.fetch(
+      new Request("https://worker.invalid/v1/reliability-events", {
+        method: "POST",
+        headers,
+        body: JSON.stringify(body),
+      }),
+      env,
+    );
+
+  it("acknowledges committed reliability receipts once and exposes only authenticated aggregates", async () => {
+    const first = reliabilityRecord();
+    const second = reliabilityRecord();
+    const unrelated = reliabilityRecord({
+      channel: "beta",
+      appVersion: "1.6.0-beta.2",
+      platform: "linux",
+      code: "provider.event_quarantined",
+    });
+    const events = [first, second, unrelated];
+    for (const batch of [events, [...events, first]]) {
+      const response = await postReliability({ events: batch });
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({
+        stored: true,
+        acknowledged: events.map((event) => event.id),
+      });
+    }
+
+    const url = new URL("https://worker.invalid/api/reliability");
+    url.search = new URLSearchParams({
+      day,
+      channel: first.channel,
+      platform: first.platform,
+      version: first.appVersion,
+      code: first.code,
+    }).toString();
+    expect((await worker.fetch(new Request(url), env)).status).toBe(401);
+
+    const token = await signSession(env.DASHBOARD_SESSION_KEY, Math.floor(now / 1000) + 3600);
+    const dashboard = (url) =>
+      worker.fetch(new Request(url, { headers: { cookie: `synara_beta_dash=${token}` } }), env);
+    const response = await dashboard(url);
+    expect(response.status).toBe(200);
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    expect(await response.json()).toEqual({
+      from: day,
+      to: day,
+      truncated: false,
+      rows: [
+        {
+          day,
+          code: first.code,
+          channel: first.channel,
+          appVersion: first.appVersion,
+          platform: first.platform,
+          count: 2,
+        },
+      ],
+    });
+    url.searchParams.set("version", "1.5.1+private-build");
+    expect((await dashboard(url)).status).toBe(400);
+    expect(db.database.prepare("SELECT count(*) AS n FROM product_events").get().n).toBe(0);
+  });
+
+  it("rejects private, invalid, oversize or conflicting reliability batches without partial writes", async () => {
+    const original = reliabilityRecord();
+    env.INGEST_RATE_LIMITER = { limit: async () => ({ success: false }) };
+    expect((await postReliability({ events: [original] })).status).toBe(429);
+    delete env.INGEST_RATE_LIMITER;
+    expect(
+      (await postReliability({ events: [original] }, { "content-type": "text/plain" })).status,
+    ).toBe(415);
+    const invalidRecords = [
+      { ...original, accountId: "fixture-account" },
+      { ...original, installId: crypto.randomUUID() },
+      { ...original, threadId: "fixture-thread", error: "private failure" },
+      { ...original, code: "free form error or path" },
+      { ...original, appVersion: "1.5.1+private-build" },
+      { ...original, platform: "private-platform" },
+      { ...original, id: "00000000-0000-1000-8000-000000000001" },
+      { ...original, day: new Date(now).toISOString() },
+      { ...original, day: "2026-02-30" },
+      { ...original, day: new Date(now - 8 * 86_400_000).toISOString().slice(0, 10) },
+      { ...original, day: new Date(now + 86_400_000).toISOString().slice(0, 10) },
+    ];
+    for (const invalid of invalidRecords) {
+      const response = await postReliability({ events: [reliabilityRecord(), invalid] });
+      expect(response.status).toBe(400);
+    }
+    expect((await postReliability({ events: [original], metadata: "private" })).status).toBe(400);
+    expect(
+      (await postReliability({ events: Array.from({ length: 51 }, () => original) })).status,
+    ).toBe(413);
+    expect(
+      (await postReliability({ events: [original], metadata: "x".repeat(64 * 1024) })).status,
+    ).toBe(413);
+    expect(db.database.prepare("SELECT count(*) AS n FROM reliability_receipts").get().n).toBe(0);
+
+    expect((await postReliability({ events: [original] })).status).toBe(200);
+    const conflict = { ...original, code: "chat.settlement_unavailable" };
+    const rejected = await postReliability({ events: [reliabilityRecord(), conflict] });
+    expect(rejected.status).toBe(503);
+    expect(db.database.prepare("SELECT count(*) AS n FROM reliability_receipts").get().n).toBe(1);
+    expect(db.database.prepare("SELECT sum(count) AS n FROM reliability_daily").get().n).toBe(1);
+  });
+
+  it("expires reliability receipts before aggregates while keeping the legacy product lane", async () => {
+    const record = reliabilityRecord();
+    expect((await postReliability({ events: [record] })).status).toBe(200);
+    await worker.scheduled({ scheduledTime: now + 15 * 86_400_000 }, env);
+    expect(db.database.prepare("SELECT count(*) AS n FROM reliability_receipts").get().n).toBe(0);
+    expect(db.database.prepare("SELECT sum(count) AS n FROM reliability_daily").get().n).toBe(1);
+    await worker.scheduled({ scheduledTime: now + 91 * 86_400_000 }, env);
+    expect(db.database.prepare("SELECT count(*) AS n FROM reliability_daily").get().n).toBe(0);
+    const product = await postEvents([envelope()]);
+    expect(product.status).toBe(200);
+    expect(await product.json()).toMatchObject({ accepted: 1 });
+  });
+
+  it("counts anonymous Remote receipts once and rejects identity fields and mixed batches", async () => {
+    const record = {
+      id: crypto.randomUUID(),
+      ts: day,
+      channel: "stable",
+      event: "remote.pairing-approved",
+    };
+    const post = (body) =>
+      worker.fetch(
+        new Request("https://worker.invalid/v1/product-events", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(body),
+        }),
+        env,
+      );
+    for (const body of [
+      { anonymousEvents: [{ ...record, installId: crypto.randomUUID() }] },
+      { anonymousEvents: [{ ...record, ts: new Date(now).toISOString() }] },
+      { anonymousEvents: [record], events: [envelope()] },
+      {
+        anonymousEvents: [
+          { ...record, id: crypto.randomUUID() },
+          { ...record, event: "private invalid event" },
+        ],
+      },
+    ])
+      expect((await post(body)).status).toBe(400);
+    expect((await post({ anonymousEvents: [record, record] })).status).toBe(200);
+    expect((await post({ anonymousEvents: [record] })).status).toBe(200);
+    expect(
+      (await post({ anonymousEvents: [{ ...record, id: record.id.toUpperCase() }] })).status,
+    ).toBe(200);
+    expect(db.database.prepare("SELECT * FROM anonymous_product_daily").all()).toEqual([
+      expect.objectContaining({
+        day,
+        channel: "stable",
+        event: "remote.pairing-approved",
+        count: 1,
+      }),
+    ]);
+    expect(db.database.prepare("SELECT count(*) AS n FROM product_events").get().n).toBe(0);
+    const token = await signSession(env.DASHBOARD_SESSION_KEY, Math.floor(now / 1000) + 3600);
+    const response = await worker.fetch(
+      new Request(`https://worker.invalid/api/product?from=${day}&to=${day}&channel=stable`, {
+        headers: { cookie: `synara_beta_dash=${token}` },
+      }),
+      env,
+    );
+    expect(response.status).toBe(200);
+    expect((await response.json()).anonymousEvents).toEqual([
+      { day, pairings: 1, connections: 0, reconnections: 0, timeouts: 0, crashes: 0 },
+    ]);
+    const later = now + 9 * 86_400_000;
+    await worker.scheduled({ scheduledTime: later }, env);
+    expect(
+      db.database.prepare("SELECT count(*) AS n FROM anonymous_product_receipts").get().n,
+    ).toBe(0);
+    expect(db.database.prepare("SELECT count FROM anonymous_product_daily").get().count).toBe(1);
+    vi.useFakeTimers();
+    vi.setSystemTime(later);
+    expect((await post({ anonymousEvents: [record] })).status).toBe(400);
+    await worker.scheduled({ scheduledTime: now + 31 * 86_400_000 }, env);
+    expect(db.database.prepare("SELECT count(*) AS n FROM anonymous_product_daily").get().n).toBe(
+      0,
+    );
+  });
+
+  it("delivers every anonymous desktop counter once after a lost receipt and restart", async () => {
+    const homeDir = mkdtempSync(join(tmpdir(), "anonymous-desktop-delivery-"));
+    const requests = [];
+    const fetcher = async (_url, init) => {
+      requests.push(JSON.parse(String(init?.body)));
+      const response = await worker.fetch(
+        new Request("https://worker.invalid/v1/product-events", init),
+        env,
+      );
+      // The server committed, but the client did not receive the acknowledgement.
+      if (requests.length === 1) {
+        expect(response.status).toBe(200);
+        return new Response(null, { status: 503 });
+      }
+      return response;
+    };
+    const makeAnalytics = () => {
+      const analytics = new ProductAnalytics({
+        homeDir,
+        channel: "stable",
+        appVersion: "1.5.1",
+        platform: "darwin",
+        fetcher,
+      });
+      analytics.initialize();
+      return analytics;
+    };
+    let analytics = makeAnalytics();
+    try {
+      analytics.track({ event: "app.crash", outcome: "failed" });
+      await analytics.flush();
+      expect(requests).toHaveLength(0);
+      analytics.setEnabled(true);
+      for (const input of [
+        { event: "remote.pairing-approved", outcome: "succeeded" },
+        { event: "remote.connection-succeeded", outcome: "succeeded" },
+        { event: "remote.reconnection-succeeded", outcome: "succeeded" },
+        { event: "remote.connection-timeout", outcome: "failed" },
+        { event: "app.crash", outcome: "failed" },
+      ])
+        analytics.track({ ...input, email: "private@example.invalid", message: "private failure" });
+      analytics.track({ event: "app.open", outcome: "succeeded" });
+      await analytics.flush();
+      analytics.dispose();
+      analytics = makeAnalytics();
+      await analytics.flush();
+      await vi.waitFor(() => expect(requests.length).toBeGreaterThanOrEqual(3));
+      expect(requests[1]).toEqual(requests[0]);
+      expect(requests[0].anonymousEvents).toHaveLength(5);
+      expect(JSON.stringify(requests[0])).not.toMatch(/private|installId|appVersion|platform/);
+      expect(requests[2].events).toHaveLength(1);
+      const token = await signSession(env.DASHBOARD_SESSION_KEY, Math.floor(now / 1000) + 3600);
+      const response = await worker.fetch(
+        new Request(`https://worker.invalid/api/product?from=${day}&to=${day}&channel=stable`, {
+          headers: { cookie: `synara_beta_dash=${token}` },
+        }),
+        env,
+      );
+      expect((await response.json()).anonymousEvents).toEqual([
+        { day, pairings: 1, connections: 1, reconnections: 1, timeouts: 1, crashes: 1 },
+      ]);
+      const requestsBeforeOptOut = requests.length;
+      analytics.setEnabled(false);
+      analytics.track({ event: "app.crash", outcome: "failed" });
+      await analytics.flush();
+      expect(requests).toHaveLength(requestsBeforeOptOut);
+    } finally {
+      analytics.dispose();
+      rmSync(homeDir, { recursive: true, force: true });
+    }
+  });
+
+  it("excludes diagnostic content from Beta queues, legacy uploads and stored rows", async () => {
+    const root = mkdtempSync(join(tmpdir(), "diagnostic-canary-"));
+    const canary = "violet kettle private draft";
+    const diagnostics = new BetaDiagnostics({
+      homeDir: root,
+      appVersion: "1.2.3-beta.1",
+      platform: "darwin",
+      arch: "arm64",
+      env: {},
+    });
+    try {
+      const error = new TypeError(canary);
+      error.stack = `TypeError: ${canary}\n    at privateDocument (violet-notes.txt:10:5)`;
+      diagnostics.trackError("main", error);
+      diagnostics.track("app.child-process-crash", {
+        kind: "crash",
+        processType: "backend",
+        reason: "code=1 signal=null",
+        logTail: canary,
+      });
+      diagnostics.track("update.error", {
+        kind: "update",
+        outcome: "error",
+        reason: "network",
+        message: canary,
+      });
+      const queue = join(root, "diagnostics", "events.jsonl");
+      expect(readFileSync(queue, "utf8")).not.toContain(canary);
+      const old = {
+        v: 1,
+        id: crypto.randomUUID(),
+        ts: new Date(now).toISOString(),
+        installId: diagnostics.installId,
+        appVersion: "1.2.3-beta.1",
+        flavor: "beta",
+        platform: "darwin",
+        arch: "arm64",
+        event: "app.error",
+        payload: {
+          kind: "error",
+          source: "renderer",
+          message: canary,
+          stack: `TypeError: ${canary}\n at privateFile (violet-notes.txt:20:7)`,
+          fingerprint: "abcdef0123456789",
+          privateExtra: canary,
+        },
+        privateExtra: canary,
+      };
+      appendFileSync(queue, `${JSON.stringify(old)}\n`);
+      const bodies = [];
+      vi.stubGlobal("fetch", async (_url, options) => {
+        bodies.push(options.body);
+        return bodies.length === 1
+          ? new Response("synthetic offline", { status: 503 })
+          : worker.fetch(new Request("https://worker.invalid/v1/events", options), env);
+      });
+      await diagnostics.flush();
+      expect(readFileSync(queue, "utf8")).not.toMatch(/violet|private draft|privateExtra/);
+      await diagnostics.flush();
+      expect(bodies).toHaveLength(2);
+      expect(bodies[0]).not.toMatch(/violet|private draft|privateExtra/);
+      const rows = db.database.prepare("SELECT message, stack, log_tail, reason FROM events").all();
+      expect(rows).toHaveLength(4);
+      expect(JSON.stringify(rows)).not.toMatch(/violet|private draft/);
+      expect(rows[0]).toMatchObject({
+        message: "TypeError at main:10:5",
+        stack: "at main:10:5",
+        log_tail: null,
+      });
+      expect(rows[1]).toMatchObject({ reason: "code=1 signal=null", log_tail: null });
+    } finally {
+      await diagnostics.dispose(0);
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it.each(["beta", "remote"])(
+    "guards historical and handcrafted %s diagnostic content at storage and read boundaries",
+    async (flavor) => {
+      const canary = "violet kettle private draft";
+      const event = {
+        v: 1,
+        id: crypto.randomUUID(),
+        ts: new Date(now).toISOString(),
+        installId: "00000000-0000-4000-8000-000000000001",
+        appVersion: "1.2.3-beta.1",
+        flavor,
+        platform: "darwin",
+        arch: "arm64",
+        event: "app.error",
+        payload: {
+          kind: "error",
+          source: "renderer",
+          message: canary,
+          stack: `TypeError: ${canary}\n at privateFile (violet-notes.txt:10:5)`,
+          logTail: canary,
+          fingerprint: "1234567812345678",
+        },
+      };
+      await worker.fetch(
+        new Request("https://worker.invalid/v1/events", {
+          method: "POST",
+          body: JSON.stringify(event),
+        }),
+        env,
+      );
+      const stored = db.database.prepare("SELECT * FROM events").get();
+      expect(JSON.stringify(stored)).not.toMatch(/violet|private draft/);
+      // Existing deployed rows must stay safe before the cleanup migration is applied.
+      db.database
+        .prepare("UPDATE events SET message = ?, stack = ?, log_tail = ?, fingerprint = ?")
+        .run(
+          canary,
+          `TypeError: ${canary}\n at privateFile (violet-notes.txt:30:9)`,
+          canary,
+          "1234567812345678",
+        );
+      const token = await signSession("test-session-key", Math.floor(Date.now() / 1000) + 3600);
+      const response = await worker.fetch(
+        new Request("https://worker.invalid/api/issues/err:1234567812345678?days=7", {
+          headers: { cookie: `synara_beta_dash=${token}` },
+        }),
+        env,
+      );
+      expect(response.status).toBe(200);
+      expect(await response.text()).not.toMatch(/violet|private draft/);
+    },
+  );
+
+  it("guards historical metadata before facets and limits and scrubs the same fields", async () => {
+    const ts = new Date(now).toISOString();
+    db.database
+      .prepare(`INSERT INTO events
+      (ts, received_at, install_id, app_version, target_version, platform, arch,
+       event, kind, outcome, source, fingerprint, flavor)
+      VALUES (?, ?, '00000000-0000-4000-8000-000000000001', '1.2.3-private-project',
+       '2.0.0-private-project', 'private-project', 'private-arch', 'app.error',
+       'private-note', 'private-note', 'private-note', '1234567812345678', 'beta')`)
+      .run(new Date(now).toUTCString() + " (private-note)", ts);
+    db.database
+      .prepare(`INSERT INTO events
+      (ts, received_at, install_id, app_version, platform, arch, event, kind, flavor)
+      VALUES (?, ?, '00000000-0000-4000-8000-000000000002', '1.2.3-beta.1',
+       'darwin', 'arm64', 'app.start', 'lifecycle', 'beta')`)
+      .run(ts, ts);
+    const token = await signSession("test-session-key", Math.floor(now / 1000) + 3600);
+    const get = (path) =>
+      worker.fetch(
+        new Request(`https://worker.invalid${path}`, {
+          headers: { cookie: `synara_beta_dash=${token}` },
+        }),
+        env,
+      );
+    for (const path of [
+      "/api/filters",
+      "/api/activity",
+      "/api/issues?status=all",
+      "/api/issues/err:1234567812345678",
+      "/api/releases",
+      "/api/status",
+    ]) {
+      const response = await get(path);
+      expect(response.status, path).toBe(200);
+      expect(await response.text(), path).not.toContain("private-");
+    }
+    const filters = await (await get("/api/filters")).json();
+    expect(filters.versions).toEqual(["1.2.3-beta.1", "0.0.0"]);
+    const activity = await (await get("/api/activity")).json();
+    expect(activity.activity[0]).toMatchObject({
+      ts,
+      kind: "error",
+      appVersion: "0.0.0",
+      platform: "unknown",
+      outcome: "unknown",
+    });
+    // Reads protect old rows without silently mutating history; cleanup is opt-in and bounded.
+    expect(db.database.prepare("SELECT app_version FROM events WHERE id = 1").get()).toEqual({
+      app_version: "1.2.3-private-project",
+    });
+    db.database.exec("UPDATE diagnostic_content_cleanup SET through_event_id = 2");
+    await purgeLegacyDiagnosticContent(env);
+    const rows = db.database
+      .prepare(
+        "SELECT ts, app_version, target_version, platform, arch, kind, outcome, source FROM events",
+      )
+      .all();
+    expect(JSON.stringify(rows)).not.toContain("private-");
+    expect(rows[0]).toMatchObject({ ts, app_version: "0.0.0", target_version: "", kind: "error" });
+    expect(rows).toHaveLength(2);
+  });
+
+  it("groups historical crash keys before listing and opens the complete canonical issue", async () => {
+    const ts = new Date(now).toISOString();
+    for (const process of ["Unknown", "private-project"]) {
+      db.database
+        .prepare(`INSERT INTO events
+        (ts, received_at, install_id, app_version, event, kind, process_type, reason, flavor)
+        VALUES (?, ?, '00000000-0000-4000-8000-000000000001', '1.2.3-beta.1',
+         'app.child-process-crash', 'crash', ?, 'crashed', 'beta')`)
+        .run(ts, ts, process);
+    }
+    const token = await signSession("test-session-key", Math.floor(now / 1000) + 3600);
+    const get = (path) =>
+      worker.fetch(
+        new Request(`https://worker.invalid${path}`, {
+          headers: { cookie: `synara_beta_dash=${token}` },
+        }),
+        env,
+      );
+    const { issues } = await (await get("/api/issues?status=all")).json();
+    expect(issues).toHaveLength(1);
+    expect(issues[0]).toMatchObject({ key: "crash:unknown:crashed", events: 2, users: 1 });
+    const detail = await get(`/api/issues/${encodeURIComponent(issues[0].key)}`);
+    expect(detail.status).toBe(200);
+    const body = await detail.json();
+    expect(body.issue.events).toBe(2);
+    expect(body.occurrences).toHaveLength(2);
+    expect(JSON.stringify(body)).not.toContain("private-");
+  });
+
+  it("continues ordinary retention when optional diagnostic dump cleanup fails", async () => {
+    await postEvents([envelope()]);
+    db.database
+      .prepare("UPDATE product_events SET received_at = ?")
+      .run(new Date(now - 31 * 86_400_000).toISOString());
+    env.PURGE_LEGACY_DIAGNOSTICS = "true";
+    env.CRASH_DUMPS = {
+      list: async () => ({ objects: [{ key: "dumps/private-project.dmp" }], truncated: false }),
+      delete: async () => {
+        throw new Error("private-note storage failure");
+      },
+    };
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      await expect(worker.scheduled({ scheduledTime: now }, env)).resolves.toBeUndefined();
+      expect(db.database.prepare("SELECT COUNT(*) AS n FROM product_events").get()).toEqual({
+        n: 0,
+      });
+      expect(warning).toHaveBeenCalled();
+      expect(JSON.stringify(warning.mock.calls)).not.toContain("private-");
+    } finally {
+      warning.mockRestore();
+    }
+  });
+
+  it("rejects raw dump uploads and downloads without consuming content or accessing storage", async () => {
+    const put = vi.fn();
+    const get = vi.fn();
+    env.CRASH_DUMPS = { put, get };
+    const form = new FormData();
+    form.set("upload_file_minidump", new File(["violet kettle private draft"], "synthetic.dmp"));
+    const request = new Request("https://worker.invalid/v1/crash", { method: "POST", body: form });
+    const response = await worker.fetch(request, env);
+    expect(response.status).toBe(410);
+    expect(request.bodyUsed).toBe(false);
+    expect(put).not.toHaveBeenCalled();
+    expect(db.database.prepare("SELECT COUNT(*) AS n FROM crash_dumps").get()).toEqual({ n: 0 });
+    const token = await signSession("test-session-key", Math.floor(Date.now() / 1000) + 3600);
+    const download = await worker.fetch(
+      new Request("https://worker.invalid/api/dumps/dumps/synthetic.dmp", {
+        headers: { cookie: `synara_beta_dash=${token}` },
+      }),
+      env,
+    );
+    expect(download.status).toBe(410);
+    expect(get).not.toHaveBeenCalled();
+  });
+
+  it("scrubs historical diagnostic content and safely retries bounded dump cleanup including orphans", async () => {
+    db.close();
+    db = new SQLiteD1();
+    applyMigrations(db.database, "0008");
+    env.DB = db;
+    const canary = "violet kettle private draft";
+    db.database
+      .prepare(
+        `INSERT INTO events (ts, received_at, install_id, app_version, event, kind, message, stack, log_tail, fingerprint, process_type, reason) VALUES (?, ?, 'synthetic-install', '1.2.3-beta.1', 'app.error', 'error', ?, ?, ?, '1234567812345678', ?, ?)`,
+      )
+      .run(
+        new Date(now).toISOString(),
+        new Date(now).toISOString(),
+        canary,
+        canary,
+        canary,
+        canary,
+        canary,
+      );
+    for (let index = 0; index < 100; index++) {
+      db.database
+        .prepare(
+          "INSERT INTO events (ts, received_at, install_id, app_version, event, kind, message) SELECT ts, received_at, install_id, app_version, event, kind, message FROM events WHERE id = 1",
+        )
+        .run();
+    }
+    db.database
+      .prepare("INSERT INTO issue_status VALUES (?, 'resolved', ?)")
+      .run(`err:${canary}`, new Date(now).toISOString());
+    db.database.exec(
+      readFileSync(
+        new URL("./migrations/0009_diagnostics_content_boundary.sql", import.meta.url),
+        "utf8",
+      ),
+    );
+    expect(await purgeLegacyDiagnosticContent(env)).toEqual({
+      eventsScrubbed: 100,
+      statusRowsDeleted: 0,
+      complete: false,
+    });
+    expect(await purgeLegacyDiagnosticContent(env)).toEqual({
+      eventsScrubbed: 1,
+      statusRowsDeleted: 1,
+      complete: true,
+    });
+    expect(await purgeLegacyDiagnosticContent(env)).toEqual({
+      eventsScrubbed: 0,
+      statusRowsDeleted: 0,
+      complete: true,
+    });
+    const rows = db.database
+      .prepare("SELECT message, stack, log_tail, process_type, reason, fingerprint FROM events")
+      .all();
+    expect(rows).toHaveLength(101);
+    for (const row of rows)
+      expect(row).toEqual({
+        message: null,
+        stack: null,
+        log_tail: null,
+        process_type: "",
+        reason: "",
+        fingerprint: "0000000000000000",
+      });
+    expect(db.database.prepare("SELECT COUNT(*) AS n FROM issue_status").get()).toEqual({ n: 0 });
+    const objects = new Set([
+      "dumps/indexed.dmp",
+      "dumps/orphan.dmp",
+      ...Array.from({ length: 100 }, (_, index) => `dumps/orphan-${index}.dmp`),
+      "unrelated/keep",
+    ]);
+    db.database
+      .prepare(
+        "INSERT INTO crash_dumps (r2_key, install_id, ts, received_at) VALUES ('dumps/indexed.dmp', 'synthetic-install', ?, ?)",
+      )
+      .run(new Date(now).toISOString(), new Date(now).toISOString());
+    db.database
+      .prepare(
+        "INSERT INTO crash_dumps (r2_key, install_id, ts, received_at) VALUES ('dumps/already-absent.dmp', 'synthetic-install', ?, ?)",
+      )
+      .run(new Date(now).toISOString(), new Date(now).toISOString());
+    let fail = true;
+    env.CRASH_DUMPS = {
+      list: vi.fn(async ({ prefix, limit }) => ({
+        objects: [...objects]
+          .filter((key) => key.startsWith(prefix))
+          .slice(0, limit)
+          .map((key) => ({ key })),
+        truncated: false,
+      })),
+      delete: async (keys) => {
+        if (fail) {
+          fail = false;
+          throw new Error("synthetic deletion failure");
+        }
+        for (const key of keys) objects.delete(key);
+      },
+    };
+    db.database.exec(
+      readFileSync(new URL("./migrations/0010_product_host_usage.sql", import.meta.url), "utf8"),
+    );
+    db.database.exec(
+      readFileSync(new URL("./migrations/0012_anonymous_product.sql", import.meta.url), "utf8"),
+    );
+    db.database.exec(
+      readFileSync(new URL("./migrations/0013_reliability.sql", import.meta.url), "utf8"),
+    );
+    await worker.scheduled({ scheduledTime: now }, env);
+    expect(env.CRASH_DUMPS.list).not.toHaveBeenCalled();
+    await expect(purgeLegacyDiagnosticDumps(env)).rejects.toThrow("synthetic deletion failure");
+    expect(db.database.prepare("SELECT COUNT(*) AS n FROM crash_dumps").get()).toEqual({ n: 2 });
+    expect(await purgeLegacyDiagnosticDumps(env)).toEqual({ objectsDeleted: 100, rowsDeleted: 1 });
+    expect(await purgeLegacyDiagnosticDumps(env)).toEqual({ objectsDeleted: 2, rowsDeleted: 0 });
+    expect(await purgeLegacyDiagnosticDumps(env)).toEqual({ objectsDeleted: 0, rowsDeleted: 1 });
+    expect(await purgeLegacyDiagnosticDumps(env)).toEqual({ objectsDeleted: 0, rowsDeleted: 0 });
+    expect([...objects]).toEqual(["unrelated/keep"]);
+  });
+
+  it("upgrades the legacy D1 schema by removing account linkage and preserving product fields", () => {
+    const legacy = new SQLiteD1();
+    try {
+      applyMigrations(legacy.database, "0006");
+      legacy.database
+        .prepare(`INSERT INTO product_events (
+        event_id, ts, received_at, install_id, account_hash, channel, surface, platform, app_version,
+        event, outcome, feature, mode, provider, reason, command, duration_ms, input_tokens, output_tokens, cached_input_tokens
+      ) VALUES ('synthetic-event', ?, ?, 'synthetic-install', ?, 'remote', 'desktop', 'darwin', '1.2.3',
+        'command.used', 'failed', 'chat', 'remote', 'codex', 'timeout', 'slash:plan', 9, 11, 12, 13)`)
+        .run(new Date(now).toISOString(), new Date(now).toISOString(), "f".repeat(32));
+      const { account_hash, ...preserved } = legacy.database
+        .prepare("SELECT * FROM product_events")
+        .get();
+      expect(account_hash).toBe("f".repeat(32));
+      legacy.database.exec(
+        readFileSync(
+          new URL("./migrations/0007_installation_privacy.sql", import.meta.url),
+          "utf8",
+        ),
+      );
+      expect(legacy.database.prepare("SELECT * FROM product_events").get()).toEqual(preserved);
+      expect(
+        legacy.database
+          .prepare("PRAGMA table_info(product_events)")
+          .all()
+          .map((column) => column.name),
+      ).not.toContain("account_hash");
+      // Existing rows still participate in the installation-only aggregates.
+      expect(
+        legacy.database
+          .prepare("SELECT COUNT(DISTINCT install_id) AS installations FROM product_events")
+          .get(),
+      ).toEqual({ installations: 1 });
+    } finally {
+      legacy.close();
+    }
+  });
+
+  it("sanitizes historical categories before migration and preserves their aggregates after migration", async () => {
+    const legacy = new SQLiteD1();
+    try {
+      applyMigrations(legacy.database, "0006");
+      legacy.database.exec(
+        readFileSync(new URL("./migrations/0008_product_cohorts.sql", import.meta.url), "utf8"),
+      );
+      const at = new Date(now).toISOString();
+      const installId = "00000000-0000-4000-8000-0000000000f1";
+      const eventId = Number(
+        legacy.database
+          .prepare(`INSERT INTO events
+        (ts, received_at, install_id, app_version, platform, arch, event, kind, flavor)
+        VALUES (?, ?, ?, '1.2.3', 'darwin', 'arm64', 'usage.daily', 'usage', 'beta')`)
+          .run(at, at, installId).lastInsertRowid,
+      );
+      for (const [provider, turns] of [
+        ["codex", 2],
+        ["other", 7],
+        ["privateProviderA", 3],
+        ["privateProviderB", 5],
+      ]) {
+        legacy.database
+          .prepare(`INSERT INTO usage_providers
+          (event_id, install_id, day, app_version, platform, provider, threads, turns, turns_failed, received_at)
+          VALUES (?, ?, ?, '1.2.3', 'darwin', ?, 1, ?, 1, ?)`)
+          .run(eventId, installId, day, provider, turns, at);
+      }
+      for (const [provider, model, effort, interaction, runtime, origin, outcome, turns] of [
+        ["claudeAgent", "claude-fable-5-1", "high", "plan", "full-access", "user", "succeeded", 2],
+        [
+          "privateProviderA",
+          "privateModelA",
+          "privateEffort",
+          "privateMode",
+          "privateRuntime",
+          "privateOrigin",
+          "failed",
+          3,
+        ],
+        [
+          "privateProviderB",
+          "privateModelB",
+          "privateEffort",
+          "privateMode",
+          "privateRuntime",
+          "privateOrigin",
+          "cancelled",
+          5,
+        ],
+        // A catalog model is safe only for its own provider.
+        ["codex", "claude-fable-5-1", "high", "plan", "full-access", "user", "succeeded", 1],
+      ]) {
+        legacy.database
+          .prepare(`INSERT INTO usage_turns
+          (event_id, install_id, day, app_version, platform, flavor, provider, model, effort,
+           interaction_mode, runtime_mode, origin, outcome, turns, duration_ms, duration_samples,
+           input_tokens, output_tokens, cached_input_tokens, token_samples, received_at)
+          VALUES (?, ?, ?, '1.2.3', 'darwin', 'beta', ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, 1, ?)`)
+          .run(
+            eventId,
+            installId,
+            day,
+            provider,
+            model,
+            effort,
+            interaction,
+            runtime,
+            origin,
+            outcome,
+            turns,
+            turns * 1000,
+            turns * 10,
+            turns * 2,
+            turns,
+            at,
+          );
+      }
+      for (const [index, command] of [
+        "slash:plan",
+        "slash:privateCustomerA",
+        "slash:privateCustomerB",
+        "shortcut:privateCustomer",
+      ].entries()) {
+        legacy.database
+          .prepare(`INSERT INTO product_events
+          (event_id, ts, received_at, install_id, channel, surface, platform, app_version, event, outcome, command)
+          VALUES (?, ?, ?, ?, 'beta', 'desktop', 'darwin', '1.2.3', 'command.used', 'succeeded', ?)`)
+          .run(`legacy-command-${index}`, at, at, installId, command);
+      }
+      const totals = () => ({
+        product: legacy.database.prepare("SELECT COUNT(*) AS events FROM product_events").get(),
+        providers: legacy.database
+          .prepare(
+            "SELECT SUM(threads) AS threads, SUM(turns) AS turns, SUM(turns_failed) AS failed FROM usage_providers",
+          )
+          .get(),
+        turns: legacy.database
+          .prepare(`SELECT SUM(turns) AS turns, SUM(duration_ms) AS durationMs,
+          SUM(duration_samples) AS durationSamples, SUM(input_tokens) AS inputTokens,
+          SUM(output_tokens) AS outputTokens, SUM(cached_input_tokens) AS cachedInputTokens,
+          SUM(token_samples) AS tokenSamples FROM usage_turns`)
+          .get(),
+      });
+      const originalTotals = totals();
+      const token = await signSession("test-session-key", Math.floor(Date.now() / 1000) + 3600);
+      const read = async (path) => {
+        const response = await worker.fetch(
+          new Request(`https://worker.invalid${path}`, {
+            headers: { cookie: `synara_beta_dash=${token}` },
+          }),
+          { DB: legacy, DASHBOARD_SESSION_KEY: "test-session-key" },
+        );
+        expect(response.status).toBe(200);
+        return response.json();
+      };
+      // Prepare additive API tables while leaving the privacy migration under test unapplied.
+      for (const migration of [
+        "0010_product_host_usage.sql",
+        "0011_installer_downloads.sql",
+        "0012_anonymous_product.sql",
+      ])
+        legacy.database.exec(
+          readFileSync(new URL(`./migrations/${migration}`, import.meta.url), "utf8"),
+        );
+      const usagePath = "/api/usage?days=7&flavor=beta&version=1.2.3&platform=darwin";
+      const productPath = `/api/product?from=${day}&to=${day}&channel=beta&surface=desktop`;
+      const before = { usage: await read(usagePath), product: await read(productPath) };
+      expect(JSON.stringify(before)).not.toContain("private");
+      expect(before.usage.providers).toHaveLength(2);
+      expect(before.usage.providers).toContainEqual(
+        expect.objectContaining({ provider: "other", installs: 1, threads: 3, turns: 15 }),
+      );
+      expect(before.usage.turnBreakdown).toHaveLength(3);
+      expect(before.usage.turnBreakdown).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            provider: "claudeAgent",
+            model: "claude-fable-5-1",
+            effort: "high",
+            turns: 2,
+            installs: 1,
+          }),
+          expect.objectContaining({ provider: "codex", model: "other", turns: 1, installs: 1 }),
+          expect.objectContaining({
+            provider: "other",
+            model: "other",
+            effort: "other",
+            interactionMode: "other",
+            runtimeMode: "other",
+            origin: "other",
+            turns: 8,
+            failed: 3,
+            cancelled: 5,
+            installs: 1,
+            meanDurationMs: 4000,
+            meanInputTokens: 40,
+          }),
+        ]),
+      );
+      expect(before.product.commands).toEqual(
+        expect.arrayContaining([
+          { command: "slash:plan", events: 1, installations: 1 },
+          { command: "slash:custom", events: 2, installations: 1 },
+          { command: "shortcut:custom", events: 1, installations: 1 },
+        ]),
+      );
+      legacy.database.exec(
+        readFileSync(
+          new URL("./migrations/0007_installation_privacy.sql", import.meta.url),
+          "utf8",
+        ),
+      );
+      expect(totals()).toEqual(originalTotals);
+      expect({ usage: await read(usagePath), product: await read(productPath) }).toEqual(before);
+      const stored = ["usage_providers", "usage_turns", "product_events"].map((table) =>
+        legacy.database.prepare(`SELECT * FROM ${table}`).all(),
+      );
+      expect(JSON.stringify(stored)).not.toContain("private");
+      expect(
+        legacy.database
+          .prepare("SELECT provider, turns FROM usage_providers ORDER BY provider")
+          .all(),
+      ).toEqual([
+        { provider: "codex", turns: 2 },
+        { provider: "other", turns: 15 },
+      ]);
+    } finally {
+      legacy.close();
+    }
+  });
+
+  it("accepts legacy clients with cohort columns before and after account-column removal", async () => {
+    const legacy = new SQLiteD1();
+    try {
+      applyMigrations(legacy.database, "0006");
+      // The cohort receiver requires its additive columns; account removal is independent.
+      legacy.database.exec(
+        readFileSync(new URL("./migrations/0008_product_cohorts.sql", import.meta.url), "utf8"),
+      );
+      const send = () =>
+        worker.fetch(
+          new Request("https://worker.invalid/v1/product-events", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ events: [envelope({ accountHash: "f".repeat(32) })] }),
+          }),
+          { DB: legacy },
+        );
+      expect(await (await send()).json()).toEqual({ accepted: 1, received: 1 });
+      expect(legacy.database.prepare("SELECT account_hash FROM product_events").get()).toEqual({
+        account_hash: null,
+      });
+      legacy.database.exec(
+        readFileSync(
+          new URL("./migrations/0007_installation_privacy.sql", import.meta.url),
+          "utf8",
+        ),
+      );
+      expect(await (await send()).json()).toEqual({ accepted: 1, received: 1 });
+      expect(legacy.database.prepare("SELECT COUNT(*) AS n FROM product_events").get()).toEqual({
+        n: 2,
+      });
+    } finally {
+      legacy.close();
+    }
+  });
 
   it("validates, strips unknown fields, deduplicates, and serves aggregate data behind dashboard auth", async () => {
     const stable = envelope({ privateValue: "must not persist" });
@@ -213,7 +1102,7 @@ describe("analytics ingest and D1 storage", () => {
     });
   });
 
-  it("stores the Remote lane and reports active users, platforms and failure reasons", async () => {
+  it("stores the Remote lane and reports active installations, platforms and failure reasons", async () => {
     const remote = (patch) =>
       envelope({
         id: crypto.randomUUID(),
@@ -225,7 +1114,7 @@ describe("analytics ingest and D1 storage", () => {
     const mac = "00000000-0000-4000-8000-0000000000a1";
     const phone = "00000000-0000-4000-8000-0000000000a2";
     const windows = "00000000-0000-4000-8000-0000000000a3";
-    // The Mac and the phone belong to one signed-in person.
+    // Legacy account fields never join the Mac and phone installations.
     const person = "0123456789abcdef0123456789abcdef";
     const response = await postEvents([
       remote({ installId: mac, accountHash: person, event: "app.active", outcome: "succeeded" }),
@@ -279,7 +1168,7 @@ describe("analytics ingest and D1 storage", () => {
       remote({ installId: mac, event: "command.used", outcome: "succeeded" }),
       remote({ installId: mac, event: "app.open", outcome: "succeeded", command: "slash:plan" }),
     ]);
-    expect(await response.json()).toEqual({ accepted: 6, received: 12 });
+    expect(await response.json()).toEqual({ accepted: 7, received: 12 });
 
     const token = await signSession("test-session-key", Math.floor(Date.now() / 1000) + 3600);
     const dashboard = await worker.fetch(
@@ -296,12 +1185,6 @@ describe("analytics ingest and D1 storage", () => {
       engagedDay: 2,
       engagedWeek: 2,
       engagedMonth: 2,
-      // The Mac and phone are one person, even for the Mac's event sent before
-      // sign-in; the Windows installation counts once more.
-      peopleDay: 2,
-      peopleWeek: 2,
-      peopleMonth: 2,
-      signedInMonth: 1,
     });
     expect(body.platforms).toEqual(
       expect.arrayContaining([
@@ -346,7 +1229,7 @@ describe("analytics ingest and D1 storage", () => {
     );
   });
 
-  it("counts a person once after an installation switches accounts", async () => {
+  it("discards valid and malformed legacy account identifiers without linking installations", async () => {
     const desktop = "00000000-0000-4000-8000-0000000000d1";
     const phone = "00000000-0000-4000-8000-0000000000d2";
     const before = "f".repeat(32);
@@ -367,7 +1250,12 @@ describe("analytics ingest and D1 storage", () => {
       event(desktop, before, 30),
       event(desktop, after, 10),
       event(phone, after, 5),
+      event(phone, { privateIdentity: "synthetic-account" }, 1),
     ]);
+    const stored = db.database.prepare("SELECT * FROM product_events").all();
+    expect(stored).toHaveLength(4);
+    expect(stored.every((row) => !("account_hash" in row))).toBe(true);
+    expect(JSON.stringify(stored)).not.toContain("synthetic-account");
     const token = await signSession("test-session-key", Math.floor(Date.now() / 1000) + 3600);
     const body = await worker
       .fetch(
@@ -377,7 +1265,14 @@ describe("analytics ingest and D1 storage", () => {
         env,
       )
       .then((response) => response.json());
-    expect(body.activeUsers).toMatchObject({ day: 2, peopleDay: 1, signedInMonth: 1 });
+    expect(body.activeUsers).toEqual({
+      day: 2,
+      week: 2,
+      month: 2,
+      engagedDay: 0,
+      engagedWeek: 0,
+      engagedMonth: 0,
+    });
   });
 
   it("accepts Remote diagnostics and filters them apart from Beta", async () => {
@@ -527,104 +1422,16 @@ describe("analytics ingest and D1 storage", () => {
     }
   });
 
-  it("stores the daily turn breakdown and reports it per lane", async () => {
-    const usage = {
-      v: 1,
-      id: crypto.randomUUID(),
-      ts: new Date(now).toISOString(),
-      installId: "00000000-0000-4000-8000-0000000000c1",
-      appVersion: "1.0.6-remote.17",
-      flavor: "remote",
-      platform: "win32",
-      arch: "x64",
-      event: "usage.daily",
-      payload: {
-        kind: "usage",
-        providers: [{ provider: "claudeAgent", threads: 1, turns: 3, turnsFailed: 1 }],
-        projects: 1,
-        activeThreads: 1,
-        turnBreakdown: [
-          {
-            provider: "claudeAgent",
-            model: "claude-fable-5-1",
-            effort: "high",
-            interactionMode: "plan",
-            runtimeMode: "full-access",
-            origin: "user",
-            outcome: "succeeded",
-            turns: 2,
-            durationMs: 30000,
-            durationSamples: 2,
-            inputTokens: 1000,
-            outputTokens: 200,
-            cachedInputTokens: 50,
-            tokenSamples: 2,
-          },
-          {
-            provider: "claudeAgent",
-            model: "claude-fable-5-1",
-            effort: "high",
-            interactionMode: "plan",
-            runtimeMode: "full-access",
-            origin: "user",
-            outcome: "failed",
-            turns: 1,
-          },
-          // Free text never passes the category check.
-          {
-            provider: "claudeAgent",
-            model: "My Secret Model",
-            effort: "high",
-            interactionMode: "plan",
-            runtimeMode: "full-access",
-            origin: "user",
-            outcome: "failed",
-            turns: 9,
-          },
-        ],
-      },
-    };
-    const response = await worker.fetch(
-      new Request("https://worker.invalid/v1/events", {
-        method: "POST",
-        headers: { "content-type": "application/x-ndjson" },
-        body: JSON.stringify(usage),
-      }),
-      env,
-    );
-    expect(response.status).toBeLessThan(300);
-    expect(db.database.prepare("SELECT COUNT(*) AS n FROM usage_turns").get().n).toBe(2);
-
-    const token = await signSession("test-session-key", Math.floor(Date.now() / 1000) + 3600);
-    const read = (flavor) =>
-      worker
-        .fetch(
-          new Request(
-            `https://worker.invalid/api/usage?days=7&flavor=${flavor}&version=1.0.6-remote.17&platform=win32`,
-            {
-              headers: { cookie: `synara_beta_dash=${token}` },
-            },
-          ),
-          env,
-        )
-        .then((result) => result.json());
-    const remote = await read("remote");
-    expect(remote.turnBreakdown).toEqual([
-      expect.objectContaining({
-        model: "claude-fable-5-1",
-        effort: "high",
-        interactionMode: "plan",
-        turns: 3,
-        succeeded: 2,
-        failed: 1,
-        meanDurationMs: 15000,
-        meanInputTokens: 500,
-        meanOutputTokens: 100,
-        installs: 1,
-      }),
+  it("rejects invented command tokens and accepts only the built-in custom bucket", async () => {
+    const commands = await postEvents([
+      envelope({ event: "command.used", command: "slash:privateCustomer", feature: undefined }),
+      envelope({ event: "command.used", command: "shortcut:privateCustomer", feature: undefined }),
+      envelope({ event: "command.used", command: "slash:custom", feature: undefined }),
     ]);
-    expect(remote.turns).toBe(3);
-    expect((await read("beta")).turnBreakdown).toEqual([]);
+    expect(await commands.json()).toEqual({ accepted: 1, received: 3 });
+    expect(db.database.prepare("SELECT command FROM product_events").all()).toEqual([
+      { command: "slash:custom" },
+    ]);
   });
 
   it("counts terminal desktop observations by provider without treating requests or missing usage as completed turns", async () => {
@@ -784,7 +1591,260 @@ describe("analytics ingest and D1 storage", () => {
     expect(badRange.status).toBe(400);
   });
 
-  it("sweeps only product events older than 30 days", async () => {
+  describe("public installer download observations", () => {
+    const DAY = 86_400_000;
+    const release = (tag, assets = []) => ({ tag_name: tag, draft: false, assets });
+    const date = (at) => new Date(at).toISOString();
+    const sourceAsset = (
+      id,
+      downloads,
+      name = "Synara.dmg",
+      createdAt = "2026-01-01T00:00:00Z",
+    ) => ({
+      id,
+      name,
+      download_count: downloads,
+      created_at: createdAt,
+      browser_download_url: "https://example.invalid/never-fetch-installer",
+      uploader: { login: "unused-public-profile" },
+    });
+    const snapshot = async (at, releases) => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(at);
+      fetch.mockResolvedValueOnce(Response.json(releases));
+      await captureInstallerDownloads(db);
+    };
+    const readDownloads = async (query = "") => {
+      const token = await signSession("test-session-key", Math.floor(Date.now() / 1000) + 3600);
+      const response = await worker.fetch(
+        new Request(
+          `https://worker.invalid/api/product?from=${date(now - 7 * DAY).slice(0, 10)}&to=${day}${query}`,
+          { headers: { cookie: `synara_beta_dash=${token}` } },
+        ),
+        env,
+      );
+      expect(response.status).toBe(200);
+      return (await response.json()).installerDownloads;
+    };
+
+    it("keeps public counters separate from installations and excludes App Store surfaces", async () => {
+      expect(await readDownloads()).toEqual({
+        status: "awaiting_snapshot",
+        observedAt: null,
+        total: null,
+        history: [],
+      });
+      const at = now - 3 * DAY;
+      await snapshot(at, [
+        release("v1.2.3", [
+          sourceAsset(1, 100),
+          sourceAsset(2, 50, "Synara.exe"),
+          sourceAsset(3, 999, "latest.yml"),
+        ]),
+        release("v1.2.4-beta.1", [sourceAsset(4, 20, "Synara.AppImage")]),
+        release("v1.2.4-remote.1", [sourceAsset(5, 5)]),
+        release("historic-custom-tag", [sourceAsset(6, 2)]),
+      ]);
+      expect(await readDownloads()).toEqual({
+        status: "available",
+        observedAt: date(at),
+        total: 177,
+        history: [{ from: null, to: date(at), total: 177, downloads: null }],
+      });
+      expect((await readDownloads("&channel=stable&surface=desktop")).total).toBe(150);
+      expect((await readDownloads("&channel=beta")).total).toBe(20);
+      expect((await readDownloads("&channel=remote")).total).toBe(5);
+      for (const surface of ["ios", "ipados"]) {
+        expect(await readDownloads(`&surface=${surface}`)).toEqual({
+          status: "unsupported_store",
+          observedAt: null,
+          total: null,
+          history: [],
+        });
+      }
+      expect(
+        db.database.prepare("SELECT * FROM installer_download_assets ORDER BY asset_id").all(),
+      ).toEqual([
+        { asset_id: 1, channel: "stable", platform: "darwin", downloads: 100 },
+        { asset_id: 2, channel: "stable", platform: "win32", downloads: 50 },
+        { asset_id: 4, channel: "beta", platform: "linux", downloads: 20 },
+        { asset_id: 5, channel: "remote", platform: "darwin", downloads: 5 },
+        { asset_id: 6, channel: "other", platform: "darwin", downloads: 2 },
+      ]);
+      expect(
+        fetch.mock.calls.every(
+          ([url, init]) =>
+            url.startsWith("https://api.github.com/repos/Emanuele-web04/synara/releases?") &&
+            !new Headers(init.headers).has("Authorization") &&
+            init.redirect === "error",
+        ),
+      ).toBe(true);
+    });
+
+    it("records changes between successful observations, including newly created assets, without daily interpolation", async () => {
+      const first = now - 6 * DAY;
+      const second = now - 3 * DAY;
+      await snapshot(first, [release("v1.2.3", [sourceAsset(1, 100)])]);
+      await snapshot(second, [
+        release("v1.2.3", [
+          sourceAsset(1, 107),
+          sourceAsset(2, 3, "Synara.exe", date(first + DAY).slice(0, 19) + "Z"),
+        ]),
+      ]);
+      expect((await readDownloads()).history).toEqual([
+        { from: date(first), to: date(second), total: 110, downloads: 10 },
+        { from: null, to: date(first), total: 100, downloads: null },
+      ]);
+      const token = await signSession("test-session-key", Math.floor(Date.now() / 1000) + 3600);
+      const response = await worker.fetch(
+        new Request(
+          `https://worker.invalid/api/product?from=${date(first + DAY).slice(0, 10)}&to=${date(first + DAY).slice(0, 10)}`,
+          { headers: { cookie: `synara_beta_dash=${token}` } },
+        ),
+        env,
+      );
+      expect((await response.json()).installerDownloads).toMatchObject({ total: 110, history: [] });
+    });
+
+    it.each(["reset", "missing", "older-discovery", "reclassified"])(
+      "keeps %s coverage unknown for the affected scope and recovers on a comparable interval",
+      async (kind) => {
+        const first = now - 5 * DAY;
+        const second = now - 4 * DAY;
+        const third = now - 3 * DAY;
+        await snapshot(first, [
+          release("v1.2.3", [sourceAsset(1, 100)]),
+          release("v1.2.4-beta.1", [sourceAsset(2, 10)]),
+        ]);
+        const current = kind === "missing" ? [] : [sourceAsset(1, kind === "reset" ? 5 : 105)];
+        if (kind === "older-discovery") current.push(sourceAsset(3, 50));
+        await snapshot(second, [
+          release(kind === "reclassified" ? "historic-tag" : "v1.2.3", current),
+          release("v1.2.4-beta.1", [sourceAsset(2, 12)]),
+        ]);
+        expect((await readDownloads()).history[0].downloads).toBeNull();
+        expect((await readDownloads("&channel=stable")).history[0].downloads).toBeNull();
+        expect((await readDownloads("&channel=beta")).history[0].downloads).toBe(2);
+        await snapshot(third, [
+          release(
+            kind === "reclassified" ? "historic-tag" : "v1.2.3",
+            current.map((asset) => ({ ...asset, download_count: asset.download_count + 1 })),
+          ),
+          release("v1.2.4-beta.1", [sourceAsset(2, 13)]),
+        ]);
+        expect((await readDownloads()).history[0].downloads).toBe(current.length + 1);
+      },
+    );
+
+    it("paginates fully and leaves the last good snapshot/head untouched after partial or malformed source failures", async () => {
+      const first = now - 3 * DAY;
+      await snapshot(first, [release("v1.2.3", [sourceAsset(1, 100)])]);
+      const fullPage = [
+        release("v1.2.3", [sourceAsset(1, 105)]),
+        ...Array.from({ length: 99 }, () => release("v1.0.0")),
+      ];
+      vi.setSystemTime(now - 2 * DAY);
+      fetch
+        .mockResolvedValueOnce(Response.json(fullPage))
+        .mockResolvedValueOnce(
+          Response.json([release("v1.2.3", [sourceAsset(2, 50, "Synara.exe")])]),
+        );
+      await captureInstallerDownloads(db);
+      expect(
+        fetch.mock.calls.slice(-2).map(([url]) => new URL(url).searchParams.get("page")),
+      ).toEqual(["1", "2"]);
+      const good = await readDownloads();
+      expect(good.total).toBe(155);
+      const head = db.database
+        .prepare("SELECT * FROM installer_download_assets ORDER BY asset_id")
+        .all();
+      const badResponses = [
+        [Response.json(fullPage), new Response(null, { status: 429 })],
+        [Response.json([release("v1.2.3", [sourceAsset(1, -1)])])],
+        [Response.json([release("v1.2.3", [sourceAsset(1, 3), sourceAsset(1, 4)])])],
+        [
+          Response.json([
+            release("v1.2.3", [{ ...sourceAsset(1, 4), created_at: "2026-02-30T00:00:00Z" }]),
+          ]),
+        ],
+        [new Response("[]", { headers: { "content-length": String(8 * 1024 * 1024 + 1) } })],
+        [
+          new Response("[]", {
+            headers: { link: '<https://api.github.com/untrusted>; rel="next"' },
+          }),
+        ],
+        [new Response(new Uint8Array(8 * 1024 * 1024 + 1))],
+        [Response.json({ malformed: true })],
+      ];
+      vi.setSystemTime(now - DAY);
+      for (const responses of badResponses) {
+        for (const response of responses) fetch.mockResolvedValueOnce(response);
+        await expect(captureInstallerDownloads(db)).rejects.toThrow();
+        expect(await readDownloads()).toEqual(good);
+        expect(
+          db.database.prepare("SELECT * FROM installer_download_assets ORDER BY asset_id").all(),
+        ).toEqual(head);
+      }
+      for (let page = 0; page < 10; page += 1)
+        fetch.mockResolvedValueOnce(
+          Response.json(fullPage.map((item) => ({ ...item, assets: [] }))),
+        );
+      await expect(captureInstallerDownloads(db)).rejects.toThrow("pagination bounds");
+      expect(await readDownloads()).toEqual(good);
+    });
+
+    it("preserves a newer completed writer when an older source traversal finishes later", async () => {
+      await snapshot(now - 5 * DAY, [release("v1.2.3", [sourceAsset(1, 100)])]);
+      vi.setSystemTime(now - 4 * DAY);
+      fetch.mockImplementationOnce(async () => {
+        await snapshot(now - 3 * DAY, [release("v1.2.3", [sourceAsset(1, 110)])]);
+        vi.setSystemTime(now - 2 * DAY);
+        return Response.json([release("v1.2.3", [sourceAsset(1, 105)])]);
+      });
+      await expect(captureInstallerDownloads(db)).rejects.toThrow("Overlapping GitHub snapshot");
+      expect(await readDownloads()).toMatchObject({
+        observedAt: date(now - 3 * DAY),
+        total: 110,
+        history: [
+          { from: date(now - 5 * DAY), to: date(now - 3 * DAY), total: 110, downloads: 10 },
+          { from: null, to: date(now - 5 * DAY), total: 100, downloads: null },
+        ],
+      });
+    });
+
+    it("rejects duplicate/older observations atomically and prunes history after 90 days", async () => {
+      const first = now - 95 * DAY;
+      await snapshot(first, [release("v1.2.3", [sourceAsset(1, 100)])]);
+      for (const at of [first, first - DAY]) {
+        await expect(snapshot(at, [release("v1.2.3", [sourceAsset(1, 999)])])).rejects.toThrow();
+        expect(
+          db.database.prepare("SELECT downloads FROM installer_download_assets").get().downloads,
+        ).toBe(100);
+      }
+      await snapshot(now - DAY, [release("v1.2.3", [sourceAsset(1, 120)])]);
+      expect(db.database.prepare("SELECT * FROM installer_download_snapshots").all()).toEqual([
+        { observed_at: date(now - DAY), previous_observed_at: date(first) },
+      ]);
+      expect((await readDownloads()).history).toEqual([
+        { from: date(first), to: date(now - DAY), total: 120, downloads: 20 },
+      ]);
+      await expect(
+        db.batch([
+          db
+            .prepare(
+              "INSERT INTO installer_download_snapshots (observed_at, previous_observed_at) VALUES (?, ?)",
+            )
+            .bind(date(now), date(first)),
+          db.prepare("DELETE FROM installer_download_assets"),
+        ]),
+      ).rejects.toThrow("stale installer download snapshot");
+      expect(
+        db.database.prepare("SELECT downloads FROM installer_download_assets").get().downloads,
+      ).toBe(120);
+    });
+  });
+
+  it("sweeps raw usage after 90 days and product after 30 without deleting general diagnostics", async () => {
     const oldReceived = new Date(now - 31 * 86_400_000).toISOString();
     const insertOldProduct = db.database.prepare(
       `INSERT INTO product_events (
@@ -823,9 +1883,275 @@ describe("analytics ingest and D1 storage", () => {
       )
       .run(oldReceived, oldReceived, "00000000-0000-4000-8000-000000000004", "1.2.3", "app.error");
 
+    const usageCutoff = new Date(now - 90 * 86_400_000).toISOString();
+    const expiredUsage = new Date(now - 91 * 86_400_000).toISOString();
+    for (const [eventId, receivedAt] of [
+      [1, expiredUsage],
+      [2, usageCutoff],
+      [3, oldReceived],
+    ]) {
+      db.database
+        .prepare(`INSERT INTO usage_providers
+        (event_id, install_id, day, app_version, provider, received_at)
+        VALUES (?, 'synthetic-install', ?, '1.2.3', 'codex', ?)`)
+        .run(eventId, receivedAt.slice(0, 10), receivedAt);
+      db.database
+        .prepare(`INSERT INTO usage_turns
+        (event_id, install_id, day, app_version, provider, model, effort, interaction_mode, runtime_mode, origin, outcome, received_at)
+        VALUES (?, 'synthetic-install', ?, '1.2.3', 'codex', 'other', 'default', 'default', 'full-access', 'user', 'succeeded', ?)`)
+        .run(eventId, receivedAt.slice(0, 10), receivedAt);
+    }
     await worker.scheduled({ scheduledTime: now }, env, {});
 
+    expect(
+      db.database.prepare("SELECT event_id FROM usage_providers ORDER BY event_id").all(),
+    ).toEqual([{ event_id: 2 }, { event_id: 3 }]);
+    expect(db.database.prepare("SELECT event_id FROM usage_turns ORDER BY event_id").all()).toEqual(
+      [{ event_id: 2 }, { event_id: 3 }],
+    );
     expect(db.database.prepare("SELECT COUNT(*) AS n FROM product_events").get().n).toBe(1);
     expect(db.database.prepare("SELECT COUNT(*) AS n FROM events").get().n).toBe(1);
+  });
+  it("validates stage windows, atomically deduplicates cohorts and repairs an older receiver's plain row", async () => {
+    const entry = envelope({
+      event: "app.active",
+      feature: undefined,
+      durationMs: undefined,
+      ts: new Date(Math.floor(now / 1000) * 1000).toISOString().replace(".000Z", "Z"),
+      cohortDay: day,
+      cohortStage: "new",
+    });
+    const bad = [
+      { ...entry, id: crypto.randomUUID(), cohortStage: "private-team" },
+      { ...entry, id: crypto.randomUUID(), cohortDay: "2026-02-30" },
+      { ...entry, id: crypto.randomUUID(), cohortStage: "week1" },
+      { ...entry, id: crypto.randomUUID(), cohortDay: undefined },
+      { ...entry, id: crypto.randomUUID(), event: "feature.used", feature: "settings" },
+    ];
+    expect(await (await postEvents(bad)).json()).toMatchObject({ accepted: 0 });
+    const { cohortDay: _cohortDay, cohortStage: _cohortStage, ...plain } = entry;
+    await postEvents([plain]);
+    // An older native receiver persisted the equivalent UTC instant without milliseconds.
+    db.database
+      .prepare("UPDATE product_events SET ts = ? WHERE event_id = ?")
+      .run(entry.ts, entry.id);
+    const upgraded = await postEvents([entry]);
+    expect(upgraded.headers.get("x-synara-product-cohorts")).toBe("1");
+    expect(await upgraded.json()).toMatchObject({ accepted: 1, cohortAcknowledged: [entry.id] });
+    expect(
+      await (await postEvents([entry, entry, { ...entry, id: crypto.randomUUID() }])).json(),
+    ).toMatchObject({ accepted: 0 });
+    expect(
+      db.database
+        .prepare("SELECT entries, week1_returns, month1_returns FROM product_cohorts")
+        .get(),
+    ).toEqual({ entries: 1, week1_returns: 0, month1_returns: 0 });
+    expect(
+      db.database
+        .prepare("PRAGMA table_info(product_cohorts)")
+        .all()
+        .map((row) => row.name),
+    ).not.toEqual(expect.arrayContaining(["install_id", "event_id"]));
+
+    db.database.exec(
+      "CREATE TRIGGER synthetic_cohort_failure BEFORE INSERT ON product_cohorts WHEN NEW.channel = 'beta' BEGIN SELECT RAISE(ABORT, 'synthetic storage failure'); END;",
+    );
+    await expect(
+      postEvents([
+        { ...entry, id: crypto.randomUUID(), installId: crypto.randomUUID() },
+        { ...entry, id: crypto.randomUUID(), channel: "beta" },
+      ]),
+    ).rejects.toThrow("synthetic storage failure");
+    expect(db.database.prepare("SELECT entries FROM product_cohorts").get().entries).toBe(1);
+    expect(db.database.prepare("SELECT COUNT(*) AS n FROM product_events").get().n).toBe(1);
+  });
+
+  it("keeps only aggregate 90-day history and excludes immature cohorts until upload grace ends", async () => {
+    vi.useFakeTimers();
+    const origin = Date.parse("2026-07-01T12:00:00.000Z");
+    const setDay = (offset) => {
+      now = origin + offset * 86400000;
+      vi.setSystemTime(now);
+    };
+    setDay(0);
+    const specs = [
+      { installId: crypto.randomUUID(), channel: "remote", surface: "desktop" },
+      { installId: crypto.randomUUID(), channel: "stable", surface: "desktop" },
+      { installId: crypto.randomUUID(), channel: "remote", surface: "ios", platform: "ios" },
+    ];
+    const stage = (spec, cohortStage) =>
+      envelope({
+        ...spec,
+        event: "app.active",
+        feature: undefined,
+        durationMs: undefined,
+        cohortDay: "2026-07-01",
+        cohortStage,
+      });
+    await postEvents(specs.map((spec) => stage(spec, "new")));
+    setDay(7);
+    const returns = [stage(specs[0], "week1")];
+    await postEvents(returns);
+    await postEvents(returns);
+    setDay(13);
+    const lateReturn = stage(specs[2], "week1");
+    setDay(20);
+    await postEvents([lateReturn]);
+    const outsideWindow = {
+      ...lateReturn,
+      id: crypto.randomUUID(),
+      ts: new Date(origin + 14 * 86400000).toISOString(),
+    };
+    expect(await (await postEvents([outsideWindow])).json()).toMatchObject({ accepted: 0 });
+    setDay(30);
+    await postEvents([stage(specs[0], "month1")]);
+    setDay(31);
+    await worker.scheduled({ scheduledTime: now }, env);
+    expect(
+      db.database
+        .prepare("SELECT COUNT(*) AS n FROM product_events WHERE cohort_stage = 'new'")
+        .get().n,
+    ).toBe(0);
+    const query = async (scope = "") => {
+      const token = await signSession("test-session-key", Math.floor(Date.now() / 1000) + 3600);
+      return (
+        await worker.fetch(
+          new Request(`https://worker.invalid/api/product?${scope}`, {
+            headers: { cookie: `synara_beta_dash=${token}` },
+          }),
+          env,
+        )
+      ).json();
+    };
+    setDay(43);
+    const pending = (await query()).cohorts;
+    expect(pending.week1).toEqual({ entries: 3, returned: 2, ratePct: 66.7 });
+    expect(pending.month1).toEqual({ entries: 0, returned: 0, ratePct: null });
+    setDay(44);
+    const mature = (await query()).cohorts;
+    expect(mature.newReportingInstallations).toBe(3);
+    expect(mature.month1).toEqual({ entries: 3, returned: 1, ratePct: 33.3 });
+    expect((await query("channel=remote&surface=desktop")).cohorts.month1).toEqual({
+      entries: 1,
+      returned: 1,
+      ratePct: 100,
+    });
+    expect((await query("surface=ios")).cohorts.month1).toEqual({
+      entries: 1,
+      returned: 0,
+      ratePct: 0,
+    });
+    setDay(91);
+    await worker.scheduled({ scheduledTime: now }, env);
+    expect(db.database.prepare("SELECT COUNT(*) AS n FROM product_cohorts").get().n).toBe(0);
+    expect(db.database.prepare("SELECT COUNT(*) AS n FROM product_events").get().n).toBe(0);
+  });
+  it("acknowledges only persisted matching cohort tuples and valid retries", async () => {
+    const entry = () =>
+      envelope({
+        event: "app.active",
+        feature: undefined,
+        durationMs: undefined,
+        cohortDay: day,
+        cohortStage: "new",
+      });
+    for (const mismatch of [
+      { installId: crypto.randomUUID() },
+      { ts: new Date(now - 60_000).toISOString() },
+      { channel: "beta" },
+      { surface: "ios", platform: "ios" },
+      { event: "app.open" },
+      { outcome: "failed" },
+    ]) {
+      const candidate = entry();
+      const { cohortDay: _cohortDay, cohortStage: _cohortStage, ...plain } = candidate;
+      expect(await (await postEvents([{ ...plain, ...mismatch }])).json()).toMatchObject({
+        accepted: 1,
+      });
+      expect(await (await postEvents([candidate])).json()).toMatchObject({
+        accepted: 0,
+        cohortAcknowledged: [],
+      });
+    }
+    // Losing only cohort state can reconstruct the same stage UUID later that day.
+    const counted = entry();
+    expect(await (await postEvents([counted])).json()).toMatchObject({
+      accepted: 1,
+      cohortAcknowledged: [counted.id],
+    });
+    expect(
+      await (await postEvents([{ ...counted, ts: new Date(now + 60_000).toISOString() }])).json(),
+    ).toMatchObject({ accepted: 0, cohortAcknowledged: [counted.id] });
+    expect(
+      db.database.prepare("SELECT SUM(entries) AS entries FROM product_cohorts").get(),
+    ).toEqual({
+      entries: 1,
+    });
+    vi.useFakeTimers();
+    now = Date.parse("2026-07-08T12:00:00.000Z");
+    vi.setSystemTime(now);
+    for (const existingDay of ["2026-06-30", "2026-07-01"]) {
+      const stored = envelope({
+        event: "app.active",
+        feature: undefined,
+        durationMs: undefined,
+        cohortDay: existingDay,
+        cohortStage: "week1",
+      });
+      expect(await (await postEvents([stored])).json()).toMatchObject({
+        accepted: 1,
+        cohortAcknowledged: [stored.id],
+      });
+      const changedDay = {
+        ...stored,
+        cohortDay: existingDay === "2026-06-30" ? "2026-07-01" : "2026-06-30",
+      };
+      expect(await (await postEvents([changedDay])).json()).toMatchObject({
+        accepted: 0,
+        cohortAcknowledged: [],
+      });
+      const candidate = { ...stored, cohortDay: "2026-07-08", cohortStage: "new" };
+      expect(await (await postEvents([candidate])).json()).toMatchObject({
+        accepted: 0,
+        cohortAcknowledged: [],
+      });
+      expect(await (await postEvents([stored])).json()).toMatchObject({
+        accepted: 0,
+        cohortAcknowledged: [stored.id],
+      });
+    }
+  });
+
+  it("accepts the exact shared native cohort wire fixture at each event's clock", async () => {
+    const fixture = JSON.parse(
+      readFileSync(
+        new URL(
+          "../../packages/contracts/fixtures/product-analytics/cohort-v1.json",
+          import.meta.url,
+        ),
+        "utf8",
+      ),
+    );
+    vi.useFakeTimers();
+    for (const event of fixture.events) {
+      vi.setSystemTime(new Date(event.ts));
+      expect(await (await postEvents([event])).json()).toMatchObject({
+        accepted: 1,
+        cohortAcknowledged: [event.id],
+      });
+      expect(await (await postEvents([event])).json()).toMatchObject({
+        accepted: 0,
+        cohortAcknowledged: [event.id],
+      });
+      expect(
+        db.database
+          .prepare(`SELECT event_id AS id, ts, install_id AS installId, channel, surface, platform,
+        app_version AS appVersion, event, outcome, cohort_day AS cohortDay, cohort_stage AS cohortStage
+        FROM product_events WHERE event_id = ?`)
+          .get(event.id),
+      ).toEqual(
+        (({ v: _v, ...stored }) => ({ ...stored, ts: new Date(event.ts).toISOString() }))(event),
+      );
+    }
   });
 });

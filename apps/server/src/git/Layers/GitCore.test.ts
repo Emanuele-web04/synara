@@ -3805,6 +3805,41 @@ it.layer(TestLayer)("git integration", (it) => {
       }),
     );
 
+    it.effect("unstages a staged rename from a bracketed path without touching glob matches", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        yield* Effect.promise(() => fs.mkdir(path.join(tmp, "pages")));
+        yield* writeTextFile(path.join(tmp, "pages", "[id].tsx"), "id\n");
+        yield* writeTextFile(path.join(tmp, "pages", "i.tsx"), "i\n");
+        yield* git(tmp, ["add", "."]);
+        yield* git(tmp, ["commit", "-m", "add pages"]);
+        yield* git(tmp, ["mv", "pages/[id].tsx", "pages/user.tsx"]);
+        yield* writeTextFile(path.join(tmp, "pages", "i.tsx"), "i edited\n");
+        yield* git(tmp, ["add", "pages/i.tsx"]);
+
+        yield* (yield* GitCore).unstageFiles(tmp, ["pages/user.tsx", "pages/[id].tsx"]);
+
+        // As a glob, `pages/[id].tsx` also matches `pages/i.tsx`, whose edit must stay staged.
+        expect(yield* git(tmp, ["diff", "--cached", "--name-status"])).toBe("M\tpages/i.tsx");
+      }),
+    );
+
+    it.effect("unstages a bracketed path without touching glob matches before a commit", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithoutCommit(tmp);
+        yield* Effect.promise(() => fs.mkdir(path.join(tmp, "pages")));
+        yield* writeTextFile(path.join(tmp, "pages", "[id].tsx"), "id\n");
+        yield* writeTextFile(path.join(tmp, "pages", "i.tsx"), "i\n");
+        yield* git(tmp, ["add", "."]);
+
+        yield* (yield* GitCore).unstageFiles(tmp, ["pages/[id].tsx"]);
+
+        expect(yield* git(tmp, ["ls-files", "--cached"])).toBe("pages/i.tsx");
+      }),
+    );
+
     it.effect("commits and pushes a large diff, then skips when up to date", () =>
       Effect.gen(function* () {
         const tmp = yield* makeTmpDir();

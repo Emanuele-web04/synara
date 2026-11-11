@@ -415,6 +415,7 @@ export async function createE2eFixture(databaseUrl: string): Promise<E2eFixture>
           userId: activeOwner.userId,
           deviceId,
           syncKeyFilePath,
+          persistForAccount: (write) => write(),
           api: hostSecretsApi,
         }),
         syncKeyFilePath,

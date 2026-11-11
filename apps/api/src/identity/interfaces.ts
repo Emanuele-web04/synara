@@ -179,7 +179,7 @@ export type InstanceAuthInfo = Omit<InstanceInfo, "version">;
  * implementation a drop-in rather than a client change.
  */
 export type AccountIdentityVerifier = {
-  /** Rejects on any invalid, expired, or unverifiable token; callers answer 401. */
+  /** Invalid/expired tokens reject; verification-service faults use IdentityProviderError. */
   verifyAccessToken(token: string): Promise<VerifiedAccessToken>;
   getUser(userId: string): Promise<IdentityUser>;
   revokeSession(sessionId: string): Promise<void>;

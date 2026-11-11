@@ -211,15 +211,27 @@ describe("display derivations", () => {
     vi.stubEnv("VITE_PROFILES_PUBLIC_ORIGIN", "https://profiles.example/");
     expect(publicProfileUrl("ada")).toBe("https://profiles.example/@ada");
     expect(publicProfileDisplayUrl("ada")).toBe("profiles.example/@ada");
-    expect(profileShareUrl({ handle: "ada", public: true })).toBe("https://profiles.example/@ada");
-    expect(profileShareUrl({ handle: "ada", public: false })).toBeNull();
+    expect(profileShareUrl({ handle: "ada", public: true }, true)).toBe(
+      "https://profiles.example/@ada",
+    );
   });
 
-  it("only yields a share URL for a profile that is explicitly public", () => {
-    expect(profileShareUrl({ handle: "ada", public: true })).toBe("https://trysynara.com/@ada");
-    expect(profileShareUrl({ handle: "ada", public: false })).toBeNull();
-    expect(profileShareUrl({ handle: "ada" })).toBeNull();
-    expect(profileShareUrl(null)).toBeNull();
-    expect(profileShareUrl(undefined)).toBeNull();
-  });
+  it.each([
+    {
+      profile: { handle: "ada", public: true },
+      available: true,
+      expected: "https://trysynara.com/@ada",
+    },
+    { profile: { handle: "ada", public: true }, available: false, expected: null },
+    { profile: { handle: "ada", public: true }, available: undefined, expected: null },
+    { profile: { handle: "ada", public: false }, available: true, expected: null },
+    { profile: { handle: "ada" }, available: true, expected: null },
+    { profile: null, available: true, expected: null },
+    { profile: undefined, available: true, expected: null },
+  ])(
+    "only yields a public link for confirmed publication and availability: $profile / $available",
+    ({ profile, available, expected }) => {
+      expect(profileShareUrl(profile, available)).toBe(expected);
+    },
+  );
 });

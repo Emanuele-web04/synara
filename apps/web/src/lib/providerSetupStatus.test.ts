@@ -1,6 +1,5 @@
 import type { ServerProviderStatus } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
-import { setLanguagePreference } from "~/i18n";
 import { providerAccountStatusSummary, providerSetupStatusLabel } from "./providerSetupStatus";
 
 const connected: ServerProviderStatus = {
@@ -14,25 +13,19 @@ const connected: ServerProviderStatus = {
 };
 
 describe("providerSetupStatusLabel", () => {
-  it("localizes account health without translating server diagnostics or identity", () => {
+  it("reports account health without translating server diagnostics or identity", () => {
     const status = {
       ...connected,
       status: "error" as const,
       available: false,
       message: "Settings: /repo/Read",
     };
-    try {
-      setLanguagePreference("zh-CN");
-      expect(providerAccountStatusSummary({ status, enabled: true })).toMatchObject({
-        headline: "不可用",
-        detail: "Settings: /repo/Read",
-        tone: "error",
-      });
-      expect(status.message).toBe("Settings: /repo/Read");
-      expect(status.provider).toBe("opencode");
-    } finally {
-      setLanguagePreference("en");
-    }
+    expect(providerAccountStatusSummary({ status, enabled: true })).toMatchObject({
+      detail: "Settings: /repo/Read",
+      tone: "error",
+    });
+    expect(status.message).toBe("Settings: /repo/Read");
+    expect(status.provider).toBe("opencode");
   });
   it.each([
     [undefined, false, false, "Checking setup"],

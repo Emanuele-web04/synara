@@ -1,6 +1,10 @@
 import { afterEach, describe, expect, it } from "vitest";
 
-import { buildLocalImageUrl, isLocalImageMarkdownSrc } from "./localImageUrls";
+import {
+  buildLocalImageUrl,
+  isLocalImageMarkdownSrc,
+  normalizeMarkdownImagePath,
+} from "./localImageUrls";
 
 describe("local image URL helpers", () => {
   afterEach(() => {
@@ -16,6 +20,14 @@ describe("local image URL helpers", () => {
     expect(isLocalImageMarkdownSrc("D:/codex/generated_images/thread/call.png")).toBe(true);
     expect(isLocalImageMarkdownSrc("https://example.com/image.png")).toBe(false);
     expect(isLocalImageMarkdownSrc("/Users/me/file.txt")).toBe(false);
+  });
+
+  it("drops the leading slash from Windows file URLs", () => {
+    expect(normalizeMarkdownImagePath("file:///C:/Users/me/shot%20one.png")).toBe(
+      "C:/Users/me/shot one.png",
+    );
+    expect(normalizeMarkdownImagePath("file:///Users/me/shot.png")).toBe("/Users/me/shot.png");
+    expect(isLocalImageMarkdownSrc("file:///C:/Users/me/shot.png")).toBe(true);
   });
 
   it("builds preview and download routes (no window context)", () => {

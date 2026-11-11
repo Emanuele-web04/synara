@@ -52,9 +52,17 @@ version, release notes and lockfile are final.
   required. Build-only runs may produce unsigned artifacts when signing secrets
   are unavailable.
 
+## Database upgrade safety
+
+Released main builds such as v1.1.0 recorded migrations 1–135 and 141 while
+reserving slots 136–140. This exact history upgrades automatically after a
+recovery backup is saved. Unknown divergent histories require explicit consent.
+Backup validation and interrupted-migration recovery apply to both paths.
+
 ## Desktop auto-update notes
 
 - Runtime updater: `electron-updater` in `apps/desktop/src/main.ts`.
+- Paired iOS clients can check, download, and request a confirmed restart through the desktop updater on packaged macOS builds, including Stable, Beta, and Remote. The app keeps its existing release channel and artifact verification. Running chats and tasks block installation; development builds and unsupported platforms do not expose update control.
 - Update UX:
   - Background checks run on startup delay + interval.
   - New updates are prepared/downloaded in the background after detection; install/restart stays manual.

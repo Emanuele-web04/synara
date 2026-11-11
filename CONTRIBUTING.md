@@ -46,7 +46,7 @@ Do not mix unrelated fixes together.
 
 If the PR makes anything resembling a UI change, include clear before/after images.
 
-For interface copy, follow [the localization guide](docs/internationalization.md). Add stable semantic keys and translations in every shipped locale, preserve user/provider data, and run the catalog and extraction checks.
+For interface copy, follow [the interface text guide](docs/internationalization.md). Add stable semantic keys to the English catalogs, preserve user/provider data, and run the catalog and extraction checks.
 
 If the change depends on motion, timing, transitions, or interaction details, include a short video.
 
@@ -114,6 +114,14 @@ Packaged desktop API requests must reach the HTTP backend; the static protocol
 serves only GET/HEAD navigation and assets. An attachment upload needs a valid
 JSON receipt even when HTTP reports success. Preserve drafts on upload failure
 and observe pending upload rejections while workspace preparation is awaiting RPCs.
+
+The pinned BetterWright patch exposes its existing guard proxy for the dedicated
+browser session. Keep this transport alive across call-scoped CDP workers; switching
+or draining proxies after each `browser_run` aborts the page's pending requests.
+Only a trusted worker settlement receipt permits graceful cleanup of a failed
+snippet; cancellation, timeout, and transport loss still revoke execution. After
+updating BetterWright, run `bun run --cwd apps/desktop smoke:browser-lifecycle`
+with an isolated Electron profile; the fixture creates one automatically.
 
 Desktop stdio MCP proxies reuse Electron's executable and must explicitly set
 `ELECTRON_RUN_AS_NODE=1` in their launch configuration. Provider child environments

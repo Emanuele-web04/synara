@@ -5,7 +5,7 @@
 // Layer: Web UI illustration (aria-hidden)
 
 import type { ProviderKind } from "@synara/contracts";
-import type { ReactNode } from "react";
+import type { CSSProperties, ReactNode } from "react";
 
 import { ProviderIcon } from "~/components/ProviderIcon";
 import { useTranslation } from "~/i18n";
@@ -38,13 +38,21 @@ function Positioned(props: {
   readonly y: number;
   readonly width: number;
   readonly height?: number;
+  /** Rises into place this long after the screen opens (index.css `scene-rise`). */
+  readonly riseDelayMs?: number;
   readonly className?: string;
   readonly children: ReactNode;
 }) {
   return (
     <div
-      className={cn("absolute", props.className)}
-      style={{ left: props.x, top: props.y, width: props.width, height: props.height }}
+      className={cn("absolute", props.riseDelayMs !== undefined && "scene-rise", props.className)}
+      style={{
+        left: props.x,
+        top: props.y,
+        width: props.width,
+        height: props.height,
+        animationDelay: props.riseDelayMs !== undefined ? `${props.riseDelayMs}ms` : undefined,
+      }}
     >
       {props.children}
     </div>
@@ -114,7 +122,7 @@ export function TasksIllustration() {
   return (
     <div aria-hidden className="relative size-full">
       {/* Browser check, behind the diff. */}
-      <Positioned x={575} y={0} width={420} height={290}>
+      <Positioned x={575} y={0} width={420} height={290} riseDelayMs={320}>
         <div
           className={cn(
             "flex size-full flex-col overflow-hidden",
@@ -148,7 +156,7 @@ export function TasksIllustration() {
       </Positioned>
 
       {/* Task list. */}
-      <Positioned x={0} y={45} width={300}>
+      <Positioned x={0} y={45} width={300} riseDelayMs={80}>
         <div className={cn("flex flex-col gap-1 p-3", ONBOARDING_STAGE_CARD_CLASS_NAME)}>
           <div className="flex items-center gap-3 px-1 pb-2">
             <WindowDots />
@@ -205,7 +213,7 @@ export function TasksIllustration() {
       </Positioned>
 
       {/* The diff of the finished task. */}
-      <Positioned x={310} y={78} width={440}>
+      <Positioned x={310} y={78} width={440} riseDelayMs={200}>
         <div className={cn("flex flex-col overflow-hidden", ONBOARDING_STAGE_CARD_CLASS_NAME)}>
           <div className="flex items-center justify-between border-b border-foreground/8 px-4 py-3">
             <span className="font-mono text-ui-sm text-foreground">{SAMPLE_DIFF_FILE}</span>
@@ -250,7 +258,7 @@ export function PocketIllustration(props: { readonly host: string }) {
   const { t } = useTranslation();
   return (
     <div aria-hidden className="relative size-full">
-      <Positioned x={20} y={150} width={460}>
+      <Positioned x={20} y={150} width={460} riseDelayMs={80}>
         <div className={cn("flex flex-col", ONBOARDING_STAGE_CARD_CLASS_NAME)}>
           <div className="flex items-center gap-3 border-b border-foreground/8 px-4 py-3">
             <WindowDots />
@@ -295,10 +303,25 @@ export function PocketIllustration(props: { readonly host: string }) {
           stroke={ONBOARDING_LIVE_COLOR}
           strokeOpacity="0.5"
           strokeDasharray="3 4"
+          className="scene-fade-in"
+          style={{ animationDelay: "500ms" }}
         />
       </svg>
+      {/* The approval travelling out to the phone. */}
+      <span
+        className="scene-packet absolute size-1.5 rounded-full"
+        style={
+          {
+            left: 480,
+            top: 278,
+            backgroundColor: ONBOARDING_LIVE_COLOR,
+            animationDelay: "900ms",
+            "--scene-travel-x": "134px",
+          } as CSSProperties
+        }
+      />
 
-      <Positioned x={492} y={268} width={110} className="flex justify-center">
+      <Positioned x={492} y={268} width={110} riseDelayMs={560} className="flex justify-center">
         <span
           className="rounded-full border bg-background px-2.5 py-1 font-mono text-ui-xs"
           style={{ borderColor: `${ONBOARDING_LIVE_COLOR}66`, color: ONBOARDING_LIVE_COLOR }}
@@ -317,18 +340,20 @@ export function PocketIllustration(props: { readonly host: string }) {
           transform: `scale(${POCKET_PHONE_SCALE})`,
         }}
       >
-        <IphoneMock>
-          <IosInboxScreen
-            host={props.host}
-            needsYou={1}
-            banner={
-              <IosNotificationBanner
-                title={t("onboarding:stageBannerTitle", { task: t(SEED_TASK_TITLE) })}
-                body={t("onboarding:stageBannerBody")}
-              />
-            }
-          />
-        </IphoneMock>
+        <div className="scene-rise size-full" style={{ animationDelay: "380ms" }}>
+          <IphoneMock>
+            <IosInboxScreen
+              host={props.host}
+              needsYou={1}
+              banner={
+                <IosNotificationBanner
+                  title={t("onboarding:stageBannerTitle", { task: t(SEED_TASK_TITLE) })}
+                  body={t("onboarding:stageBannerBody")}
+                />
+              }
+            />
+          </IphoneMock>
+        </div>
       </div>
     </div>
   );

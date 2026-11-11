@@ -1,5 +1,55 @@
 # Changelog
 
+## 1.5.1 — 2026-11-11
+
+**Safer upgrades from older Stable databases and optional anonymous Remote reliability totals.**
+
+### Added
+
+- With product sharing enabled, desktop Synara reports separate daily totals for approved pairings, live Remote RPC connections, reconnects, environment-read timeouts and unexpected app/backend crashes. These records contain only a UTC day, channel, fixed event and random delivery receipt; no account, device or installation identity, private content or error text. Stable remains opt-in; crash reports are best-effort.
+- The website can start monthly or yearly Alto checkout after verifying the Synara account by email. It receives the Polar redirect without account credentials. This account API improvement is also available to existing desktop installations.
+
+### Changed
+
+- The exact database history shipped by the affected older Stable releases now creates its migration backup and upgrades automatically. Unknown or modified histories retain the existing confirmation and recovery safeguards.
+- Migration changes require an independent review of data preservation, replay safety and backup/recovery.
+
+### Fixed
+
+- An ordinary upgrade from the released migration gap no longer stops at the migration-136 import confirmation. Original recorded identities must match before any legacy-name normalization; near-matching histories still require review.
+- Anonymous event retry expiry now matches the receiver's UTC-day window. Lost acknowledgements and duplicate receipt delivery count each event once.
+
+### Verification
+
+Focused migration, backup/replay, analytics privacy/delivery and Remote transport checks passed, including regressions that failed before their fixes. A real local workerd/D1 test covered consent, lost acknowledgements, concurrent retries and restart recovery. The exact-tag workflow must still pass full quality/server suites, all four native packages, macOS signing/notarization, provenance, Defender and packaged startup before publication. The subscriber's reported Remote timeout has no confirmed root cause; recording it does not establish a fix.
+
+## 1.5.0 — 2026-11-10
+
+**Remote connections, Synara Alto, public profiles, and private Inbox history in Stable.**
+
+### Added
+
+- Pair computers running Synara on macOS, Windows x64, or Linux x64. Open remote workspaces, steer chats, and handle approvals while the source is online. The managed connector on a Mac requires macOS 15 or newer. iPhone and iPad support is coming soon.
+- Alto subscribers can publish a profile at `trysynara.com/@handle` and control its visibility. Private Inbox recaps are independent of the public profile.
+- Signed-in computers automatically save daily activity recaps, including project names and activity totals. Inbox → Saved recaps opens this history when the source is offline. Recaps exclude prompt and chat text. Deleted recaps are not automatically re-created.
+- A one-time Remote Connections announcement opens after other startup hints and points to the account button. Manage Alto in Settings → Usage & limits.
+
+### Changed
+
+- Redesigned account sign-in and moved Alto plans into Usage & limits. The desktop interface uses English.
+- Product analytics distinguish Stable and Beta and report aggregate usage separately from technical diagnostics. Stable product analytics require opt-in. The Beta diagnostics policy remains separate.
+- MCP Connectors are available in Stable. The separate Remote early-access app retains its own data and update channel.
+
+### Fixed
+
+- Browser automation preserves in-flight requests. Unstaging a Git rename handles both paths.
+- Fixed Windows drive letters in terminal paths and local file URLs for Markdown images. Improved duration labels and the Restore defaults count for themes and fonts.
+- Subscription management remains available when Polar catalog reads fail. Codex avoids duplicate warnings from user configuration.
+
+### Verification
+
+The release checkpoint records local checks and their candidate. The tag workflow runs the full quality and server suites, installer builds, signing, provenance, Windows Defender and packaged startup before publication.
+
 ## 1.1.0 — 2026-11-02
 
 **More reliable recovery, opt-in continuation after usage limits, Spanish interface and safer attachments.**

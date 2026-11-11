@@ -12,6 +12,7 @@ import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 
 import { ProductAnalytics } from "./productAnalytics";
+import { BetaDiagnostics } from "./betaDiagnostics";
 
 const roots: string[] = [];
 function makeRoot(): string {
@@ -20,9 +21,41 @@ function makeRoot(): string {
   return root;
 }
 
+function createPrimaryAnalytics(options: ConstructorParameters<typeof ProductAnalytics>[0]) {
+  const analytics = new ProductAnalytics(options);
+  analytics.initialize();
+  return analytics;
+}
+
 afterEach(() => {
   vi.useRealTimers();
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+});
+
+it("leaves the running instance's analytics files untouched before primary startup", () => {
+  const homeDir = makeRoot();
+  const directory = join(homeDir, "product-analytics");
+  mkdirSync(directory);
+  const files = {
+    "consent.json": JSON.stringify({ enabled: true }),
+    "reliability.json": "[]\n",
+    "reliability.json.tmp-4321": "in-progress reliability write",
+    "events.json.tmp-4321": "in-progress product analytics write",
+  };
+  for (const [name, content] of Object.entries(files))
+    writeFileSync(join(directory, name), content);
+
+  const analytics = new ProductAnalytics({
+    homeDir,
+    channel: "stable",
+    appVersion: "1.5.1",
+    platform: "darwin",
+  });
+  analytics.dispose();
+
+  for (const [name, content] of Object.entries(files)) {
+    expect(readFileSync(join(directory, name), "utf8")).toBe(content);
+  }
 });
 
 it("defaults off, reconstructs allowlisted events, and clears queued data on opt-out", async () => {
@@ -30,7 +63,7 @@ it("defaults off, reconstructs allowlisted events, and clears queued data on opt
   const fetcher = vi.fn(
     async (_url: RequestInfo | URL, _init?: RequestInit) => new Response(null, { status: 204 }),
   );
-  const analytics = new ProductAnalytics({
+  const analytics = createPrimaryAnalytics({
     homeDir,
     channel: "beta",
     appVersion: "1.2.3-beta.1",
@@ -58,8 +91,14 @@ it("defaults off, reconstructs allowlisted events, and clears queued data on opt
   });
   expect(existsSync(join(homeDir, "product-analytics", "events.json"))).toBe(true);
 
+  const analyticsDir = join(homeDir, "product-analytics");
+  const orphaned = ["events.json.tmp-4321", "account-hash.tmp-4321", "cohort.json.tmp-4321"];
+  for (const name of orphaned) writeFileSync(join(analyticsDir, name), "private legacy metadata");
+  writeFileSync(join(analyticsDir, "unrelated.tmp-4321"), "preserve");
   analytics.setEnabled(false);
   expect(analytics.getState()).toEqual({ enabled: false });
+  for (const name of orphaned) expect(existsSync(join(analyticsDir, name))).toBe(false);
+  expect(existsSync(join(analyticsDir, "unrelated.tmp-4321"))).toBe(true);
   expect(existsSync(join(homeDir, "product-analytics", "install-id"))).toBe(false);
   expect(existsSync(join(homeDir, "product-analytics", "events.json"))).toBe(false);
 
@@ -71,13 +110,21 @@ it("defaults off, reconstructs allowlisted events, and clears queued data on opt
   expect(secondInstallId).not.toBe(firstInstallId);
   analytics.track({ event: "turn.completed", outcome: "succeeded", inputTokens: 120 });
 
-  const restored = new ProductAnalytics({
+  // Current-version durable rows are rebuilt, not trusted even after the identity migration.
+  const currentQueuePath = join(homeDir, "product-analytics", "events.json");
+  const currentQueue = JSON.parse(readFileSync(currentQueuePath, "utf8"));
+  currentQueue[0].accountHash = "aabeca326019f52e2e13cbab8574fcac";
+  writeFileSync(currentQueuePath, JSON.stringify(currentQueue));
+  const currentOrphan = `${currentQueuePath}.tmp-8765`;
+  writeFileSync(currentOrphan, "private interrupted write");
+  const restored = createPrimaryAnalytics({
     homeDir,
     channel: "beta",
     appVersion: "1.2.3-beta.1",
     platform: "darwin",
     fetcher,
   });
+  expect(existsSync(currentOrphan)).toBe(false);
   await restored.flush();
   expect(fetcher).toHaveBeenCalledTimes(1);
   const request = fetcher.mock.calls[0]?.[1];
@@ -114,12 +161,123 @@ it("defaults off, reconstructs allowlisted events, and clears queued data on opt
   restored.dispose();
 });
 
+it("sends Remote successes without identity, separately from product events, and replays one receipt", async () => {
+  const homeDir = makeRoot();
+  const requests: Record<string, unknown>[] = [];
+  const fetcher = vi.fn(async (_url: RequestInfo | URL, init?: RequestInit) => {
+    const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+    requests.push(body);
+    if (requests.length === 1) return new Response(null, { status: 503 });
+    return Response.json({ stored: true });
+  });
+  const makeAnalytics = () =>
+    createPrimaryAnalytics({
+      homeDir,
+      channel: "stable",
+      appVersion: "1.5.1",
+      platform: "darwin",
+      fetcher,
+    });
+  const analytics = makeAnalytics();
+  analytics.track({ event: "remote.pairing-approved", outcome: "succeeded" });
+  expect(existsSync(join(homeDir, "product-analytics", "events.json"))).toBe(false);
+  analytics.setEnabled(true);
+  analytics.track({
+    event: "remote.pairing-approved",
+    outcome: "succeeded",
+    email: "private@example.invalid",
+    hostId: "private-host",
+  });
+  analytics.track({ event: "app.open", outcome: "succeeded" });
+  const stored = JSON.parse(
+    readFileSync(join(homeDir, "product-analytics", "events.json"), "utf8"),
+  );
+  const receipt = stored[0];
+  expect(Object.keys(receipt).sort()).toEqual(["channel", "event", "id", "ts"]);
+  expect(receipt.ts).toBe(new Date().toISOString().slice(0, 10));
+  await analytics.flush();
+  analytics.dispose();
+  const restored = makeAnalytics();
+  await restored.flush();
+  await vi.waitFor(() => expect(requests).toHaveLength(3));
+  expect(requests[0]).toEqual({ anonymousEvents: [receipt] });
+  expect(requests[1]).toEqual(requests[0]);
+  expect(requests[2]).toHaveProperty("events");
+  expect(JSON.stringify(requests[0])).not.toMatch(/private|installId|platform|appVersion/);
+  restored.track({ event: "remote.connection-succeeded", outcome: "succeeded" });
+  restored.setEnabled(false);
+  await restored.flush();
+  expect(existsSync(join(homeDir, "product-analytics", "events.json"))).toBe(false);
+  restored.dispose();
+});
+
+it.each([
+  ["2026-11-10T23:59:59.999Z", 1],
+  ["2026-11-11T00:00:00.000Z", 0],
+])("expires anonymous retries at the receiver's UTC day boundary at %s", async (now, requests) => {
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date("2026-11-03T18:00:00.000Z"));
+  const homeDir = makeRoot();
+  const fetcher = vi.fn(async (_url: RequestInfo | URL, _init?: RequestInit) =>
+    Response.json({ stored: true }),
+  );
+  const options = {
+    homeDir,
+    channel: "stable" as const,
+    appVersion: "1.5.1",
+    platform: "darwin",
+    fetcher,
+  };
+  const analytics = createPrimaryAnalytics(options);
+  analytics.setEnabled(true);
+  analytics.track({ event: "app.crash", outcome: "failed" });
+  analytics.dispose();
+
+  vi.setSystemTime(new Date(now));
+  const restored = createPrimaryAnalytics(options);
+  try {
+    await restored.flush();
+    expect(fetcher).toHaveBeenCalledTimes(requests);
+  } finally {
+    restored.dispose();
+  }
+});
+
+it("queues only a fixed crash counter with consent and no error details", async () => {
+  const homeDir = makeRoot();
+  const fetcher = vi.fn(async (_url: RequestInfo | URL, _init?: RequestInit) =>
+    Response.json({ stored: true }),
+  );
+  const analytics = createPrimaryAnalytics({
+    homeDir,
+    channel: "stable",
+    appVersion: "1.5.1",
+    platform: "darwin",
+    fetcher,
+  });
+  analytics.setEnabled(true);
+  analytics.track({ event: "app.crash", outcome: "succeeded" });
+  analytics.track({
+    event: "app.crash",
+    outcome: "failed",
+    stack: "/private/document",
+    message: "private error",
+  });
+  await analytics.flush();
+  expect(fetcher).toHaveBeenCalledOnce();
+  const sent = JSON.parse(String(fetcher.mock.calls[0]?.[1]?.body));
+  expect(sent.anonymousEvents).toHaveLength(1);
+  expect(sent.anonymousEvents[0]).toMatchObject({ event: "app.crash", channel: "stable" });
+  expect(Object.keys(sent.anonymousEvents[0]).sort()).toEqual(["channel", "event", "id", "ts"]);
+  analytics.dispose();
+});
+
 it("rejects invalid enums and out-of-range counters before they enter the queue", async () => {
   const homeDir = makeRoot();
   const fetcher = vi.fn(
     async (_url: RequestInfo | URL, _init?: RequestInit) => new Response(null, { status: 204 }),
   );
-  const analytics = new ProductAnalytics({
+  const analytics = createPrimaryAnalytics({
     homeDir,
     channel: "stable",
     appVersion: "1.0.0",
@@ -134,6 +292,11 @@ it("rejects invalid enums and out-of-range counters before they enter the queue"
     outputTokens: 1_000_000_000_001,
   });
   analytics.track({ event: "turn.completed", outcome: "succeeded", durationMs: 1.5 });
+  analytics.track({
+    event: "command.used",
+    outcome: "succeeded",
+    command: "slash:private-team-name",
+  });
   await analytics.flush();
   expect(fetcher).not.toHaveBeenCalled();
   analytics.track({ event: "turn.completed", outcome: "succeeded", outputTokens: 14 });
@@ -159,7 +322,7 @@ it("aborts an in-flight send immediately when consent is withdrawn", async () =>
       );
     });
   });
-  const analytics = new ProductAnalytics({
+  const analytics = createPrimaryAnalytics({
     homeDir,
     channel: "stable",
     appVersion: "1.0.0",
@@ -184,7 +347,7 @@ it("discards rejected batches and honors retry backoff for server failures", asy
   const fetcher = vi.fn(
     async (_url: RequestInfo | URL, _init?: RequestInit) => new Response(null, { status }),
   );
-  const analytics = new ProductAnalytics({
+  const analytics = createPrimaryAnalytics({
     homeDir,
     channel: "stable",
     appVersion: "1.0.0",
@@ -217,7 +380,7 @@ it("drops malformed persisted event UUIDs before they can poison a send batch", 
   const fetcher = vi.fn(
     async (_url: RequestInfo | URL, _init?: RequestInit) => new Response(null, { status: 204 }),
   );
-  const analytics = new ProductAnalytics({
+  const analytics = createPrimaryAnalytics({
     homeDir,
     channel: "beta",
     appVersion: "1.0.0-beta.1",
@@ -232,7 +395,7 @@ it("drops malformed persisted event UUIDs before they can poison a send batch", 
   writeFileSync(queuePath, JSON.stringify(queue));
   analytics.dispose();
 
-  const restored = new ProductAnalytics({
+  const restored = createPrimaryAnalytics({
     homeDir,
     channel: "beta",
     appVersion: "1.0.0-beta.1",
@@ -250,7 +413,7 @@ it("keeps opt-out in memory after a persistence error and retries durable opt-ou
   const homeDir = join(root, "home");
   const analyticsDir = join(homeDir, "product-analytics");
   const movedDir = join(root, "saved-analytics");
-  const analytics = new ProductAnalytics({
+  const analytics = createPrimaryAnalytics({
     homeDir,
     channel: "stable",
     appVersion: "1.0.0",
@@ -268,7 +431,7 @@ it("keeps opt-out in memory after a persistence error and retries durable opt-ou
   rmSync(analyticsDir);
   renameSync(movedDir, analyticsDir);
   expect(analytics.setEnabled(false)).toEqual({ enabled: false });
-  const restored = new ProductAnalytics({
+  const restored = createPrimaryAnalytics({
     homeDir,
     channel: "stable",
     appVersion: "1.0.0",
@@ -279,6 +442,64 @@ it("keeps opt-out in memory after a persistence error and retries durable opt-ou
   analytics.dispose();
   restored.dispose();
 });
+
+it.each(["cleanup", "consent"] as const)(
+  "revokes companion uploads even when %s persistence fails",
+  async (failure) => {
+    const homeDir = makeRoot();
+    const analytics = createPrimaryAnalytics({
+      homeDir,
+      channel: "remote",
+      appVersion: "1.0.6-remote.18",
+      platform: "darwin",
+      fetcher: vi.fn(async () => new Response(null, { status: 204 })),
+    });
+    analytics.setEnabled(true);
+    analytics.track({ event: "app.open", outcome: "succeeded" });
+    const diagnostics = new BetaDiagnostics({
+      homeDir,
+      flavor: "remote",
+      appVersion: "1.0.6-remote.18",
+      platform: "darwin",
+      arch: "arm64",
+      env: {},
+      isEnabled: () => analytics.getState().enabled,
+    });
+    analytics.onChange((enabled) => {
+      if (!enabled) diagnostics.discardQueue();
+    });
+    let resolveHeld: (response: Response) => void;
+    const held = new Promise<Response>((resolve) => {
+      resolveHeld = resolve;
+    });
+    const request = { signal: null as AbortSignal | null };
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async (_url, init) => {
+      request.signal = init?.signal ?? null;
+      return held;
+    });
+    diagnostics.track("app.start", { kind: "lifecycle" });
+    const upload = diagnostics.flush();
+    try {
+      const blockedPath = join(
+        homeDir,
+        "product-analytics",
+        failure === "cleanup" ? "events.json" : "consent.json",
+      );
+      rmSync(blockedPath, { force: true });
+      mkdirSync(blockedPath);
+      expect(() => analytics.setEnabled(false)).toThrow();
+      expect(analytics.getState()).toEqual({ enabled: false });
+      expect(request.signal?.aborted).toBe(true);
+      expect(existsSync(join(homeDir, "diagnostics", "events.jsonl"))).toBe(false);
+    } finally {
+      resolveHeld!(new Response(null, { status: 204 }));
+      await upload;
+      await diagnostics.dispose();
+      analytics.dispose();
+      fetchSpy.mockRestore();
+    }
+  },
+);
 
 it("does not schedule a retry after disposal aborts a pending send", async () => {
   vi.useFakeTimers();
@@ -292,7 +513,7 @@ it("does not schedule a retry after disposal aborts a pending send", async () =>
       );
     });
   });
-  const analytics = new ProductAnalytics({
+  const analytics = createPrimaryAnalytics({
     homeDir,
     channel: "stable",
     appVersion: "1.0.0",
@@ -310,6 +531,90 @@ it("does not schedule a retry after disposal aborts a pending send", async () =>
   vi.useRealTimers();
 });
 
+it("requires an explicit Remote choice for the separate anonymous reliability upload", async () => {
+  const homeDir = makeRoot();
+  const productRequests: unknown[] = [];
+  const reliabilityRequests: Array<{ events: Array<Record<string, unknown>> }> = [];
+  const analytics = createPrimaryAnalytics({
+    homeDir,
+    channel: "remote",
+    appVersion: "1.5.1-remote.18",
+    platform: "darwin",
+    defaultEnabled: true,
+    fetcher: async (url, init) => {
+      const body = JSON.parse(String(init?.body));
+      if (new URL(String(url)).pathname === "/v1/reliability-events") {
+        reliabilityRequests.push(body);
+        return Response.json({
+          stored: true,
+          acknowledged: body.events.map(({ id }: { id: string }) => id),
+        });
+      }
+      productRequests.push(body);
+      return Response.json({ accepted: body.events.length });
+    },
+  });
+  try {
+    const issue = {
+      event: "reliability.issue",
+      outcome: "failed",
+      reliabilityCode: "chat.settlement_unavailable",
+    };
+    expect(analytics.getState()).toEqual({ enabled: true });
+    analytics.start();
+    analytics.track(issue);
+    analytics.trackReliability({ code: "backend.exit_after_ready" });
+    expect(productRequests.length).toBeGreaterThan(0);
+    expect(reliabilityRequests).toEqual([]);
+    expect(existsSync(join(homeDir, "product-analytics", "reliability.json"))).toBe(false);
+
+    analytics.setEnabled(true);
+    analytics.track(issue);
+    await vi.waitFor(() => expect(reliabilityRequests).toHaveLength(1));
+    expect(reliabilityRequests).toEqual([
+      {
+        events: [
+          {
+            v: 1,
+            id: expect.any(String),
+            day: new Date().toISOString().slice(0, 10),
+            code: issue.reliabilityCode,
+            channel: "remote",
+            appVersion: "1.5.1-remote.18",
+            platform: "darwin",
+          },
+        ],
+      },
+    ]);
+    expect(JSON.stringify(productRequests)).not.toContain("reliability.issue");
+  } finally {
+    analytics.dispose();
+  }
+});
+
+it("records explicit consent without resetting already enabled product data", () => {
+  const homeDir = makeRoot();
+  const analytics = createPrimaryAnalytics({
+    homeDir,
+    channel: "remote",
+    appVersion: "1.5.1",
+    platform: "darwin",
+    defaultEnabled: true,
+  });
+  try {
+    analytics.track({ event: "feature.used", outcome: "succeeded", feature: "search" });
+    const dir = join(homeDir, "product-analytics");
+    const identity = readFileSync(join(dir, "install-id"), "utf8");
+    const pending = readFileSync(join(dir, "events.json"), "utf8");
+    analytics.setEnabled(true);
+    expect(readFileSync(join(dir, "install-id"), "utf8")).toBe(identity);
+    expect(readFileSync(join(dir, "events.json"), "utf8")).toBe(pending);
+    expect(JSON.parse(readFileSync(join(dir, "consent.json"), "utf8"))).toEqual({ enabled: true });
+  } finally {
+    analytics.dispose();
+  }
+});
+
 it("shares Remote usage by default until the user opts out, and reports daily activity", () => {
   vi.useFakeTimers();
   vi.setSystemTime(new Date("2026-10-17T10:00:00.000Z"));
@@ -319,7 +624,7 @@ it("shares Remote usage by default until the user opts out, and reports daily ac
       Record<string, unknown>
     >;
   const make = () =>
-    new ProductAnalytics({
+    createPrimaryAnalytics({
       homeDir,
       channel: "remote",
       appVersion: "1.0.6-remote.17",
@@ -349,41 +654,66 @@ it("shares Remote usage by default until the user opts out, and reports daily ac
   expect(queued().filter((event) => event.event === "app.active")).toHaveLength(2);
 
   analytics.setEnabled(false);
-  analytics.dispose();
-  expect(changes).toEqual([false]);
   expect(make().getState()).toEqual({ enabled: false });
+  analytics.setEnabled(true);
+  expect(queued().map((event) => event.event)).toEqual(["app.active"]);
+  analytics.setEnabled(false);
+  analytics.dispose();
+  expect(changes).toEqual([false, true, false]);
 });
 
-it("tags events with a hash of the signed-in account and never the account id", () => {
+it("rotates legacy account-linked identity and discards unsent legacy telemetry", async () => {
   const homeDir = makeRoot();
-  const analytics = new ProductAnalytics({
-    homeDir,
-    channel: "remote",
-    appVersion: "1.0.6-remote.17",
-    platform: "darwin",
-    defaultEnabled: true,
-    fetcher: vi.fn(async () => new Response(null, { status: 503 })),
+  const fetcher = vi.fn(
+    async (_url: RequestInfo | URL, _init?: RequestInit) => new Response(null, { status: 204 }),
+  );
+  const make = () =>
+    createPrimaryAnalytics({
+      homeDir,
+      channel: "remote",
+      appVersion: "1.0.6-remote.18",
+      platform: "darwin",
+      defaultEnabled: true,
+      fetcher,
+    });
+  const analytics = make();
+  analytics.track({ event: "app.open", outcome: "succeeded" });
+  analytics.dispose();
+  const dir = join(homeDir, "product-analytics");
+  const path = join(dir, "events.json");
+  const old = JSON.parse(readFileSync(path, "utf8")) as Array<Record<string, unknown>>;
+  const oldInstallId = old[0]!.installId;
+  rmSync(join(dir, "identity-version"), { force: true });
+  old[0]!.accountHash = "aabeca326019f52e2e13cbab8574fcac";
+  writeFileSync(path, JSON.stringify(old));
+  writeFileSync(join(dir, "account-hash"), "aabeca326019f52e2e13cbab8574fcac");
+  const restored = make();
+  expect(existsSync(join(dir, "account-hash"))).toBe(false);
+  const newInstallId = readFileSync(join(dir, "install-id"), "utf8").trim();
+  expect(newInstallId).not.toBe(oldInstallId);
+  expect(existsSync(path)).toBe(false);
+  restored.track({
+    event: "app.open",
+    outcome: "succeeded",
+    accountHash: "untrusted",
+    userId: "private-user",
   });
-  analytics.setAccount("user_01HZTESTACCOUNT");
-  analytics.track({ event: "app.open", outcome: "succeeded" });
-  analytics.setAccount(null);
-  analytics.track({ event: "app.open", outcome: "succeeded" });
-  const raw = readFileSync(join(homeDir, "product-analytics", "events.json"), "utf8");
-  const queued = JSON.parse(raw) as Array<Record<string, unknown>>;
-  // The same vector is asserted by the native client, so devices agree on one person.
-  expect(queued.map((event) => event.accountHash)).toEqual([
-    "aabeca326019f52e2e13cbab8574fcac",
-    undefined,
-  ]);
-  expect(raw).not.toContain("user_01HZTESTACCOUNT");
-  expect(existsSync(join(homeDir, "product-analytics", "account-hash"))).toBe(false);
+  await restored.flush();
+  const body = JSON.parse(String(fetcher.mock.calls[0]?.[1]?.body)) as {
+    events: Array<Record<string, unknown>>;
+  };
+  expect(body.events).toHaveLength(1);
+  expect(body.events[0]?.installId).toBe(newInstallId);
+  expect(body.events.every((event) => !Object.hasOwn(event, "accountHash"))).toBe(true);
+  expect(JSON.stringify(body)).not.toContain("private-user");
+  restored.dispose();
 });
 
 it("keeps an unreadable recorded choice off instead of falling back to the default", () => {
   const homeDir = makeRoot();
   // A directory in place of the consent file makes the read fail without ENOENT.
   mkdirSync(join(homeDir, "product-analytics", "consent.json"), { recursive: true });
-  const analytics = new ProductAnalytics({
+  const analytics = createPrimaryAnalytics({
     homeDir,
     channel: "remote",
     appVersion: "1.0.6-remote.17",
@@ -391,4 +721,273 @@ it("keeps an unreadable recorded choice off instead of falling back to the defau
     defaultEnabled: true,
   });
   expect(analytics.getState()).toEqual({ enabled: false });
+});
+
+it("negotiates before entry, reports each return window once across restarts, and resets with opt-out", async () => {
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date("2026-07-01T12:00:00.000Z"));
+  const homeDir = makeRoot();
+  const cohortPath = join(homeDir, "product-analytics", "cohort.json");
+  let supported = false;
+  const received: Array<Record<string, unknown>> = [];
+  const fetcher = vi.fn(async (_url: RequestInfo | URL, init?: RequestInit) => {
+    const events = JSON.parse(String(init?.body)).events as Array<Record<string, unknown>>;
+    received.push(...events);
+    return Response.json(
+      {
+        cohortAcknowledged: supported
+          ? events.filter((event) => event.cohortStage).map((event) => event.id)
+          : [],
+      },
+      { headers: supported ? { "x-synara-product-cohorts": "1" } : {} },
+    );
+  });
+  const make = () =>
+    createPrimaryAnalytics({
+      homeDir,
+      channel: "remote",
+      appVersion: "1.2.3",
+      platform: "darwin",
+      defaultEnabled: true,
+      fetcher,
+    });
+  let analytics = make();
+  analytics.start();
+  await vi.waitFor(() => expect(fetcher).toHaveBeenCalledTimes(1));
+  expect(existsSync(cohortPath)).toBe(false);
+  supported = true;
+  analytics.track({
+    event: "app.open",
+    outcome: "succeeded",
+    cohortDay: "private-name",
+    cohortStage: "new",
+  });
+  await vi.waitFor(() =>
+    expect(JSON.parse(readFileSync(cohortPath, "utf8")).completed).toEqual(["new"]),
+  );
+  expect(received.filter((event) => event.cohortStage).map((event) => event.cohortDay)).toEqual([
+    "2026-07-01",
+  ]);
+  const firstId = received.find((event) => event.cohortStage === "new")!.installId;
+  for (const [offset, stages] of [
+    [7, ["new", "week1"]],
+    [10, ["new", "week1"]],
+    [30, ["new", "week1", "month1"]],
+    [36, ["new", "week1", "month1"]],
+  ] as const) {
+    analytics.dispose();
+    vi.setSystemTime(new Date(Date.parse("2026-07-01T12:00:00.000Z") + offset * 86400000));
+    analytics = make();
+    analytics.start();
+    await vi.waitFor(() =>
+      expect(JSON.parse(readFileSync(cohortPath, "utf8")).completed).toEqual(stages),
+    );
+  }
+  expect(received.filter((event) => event.cohortStage).map((event) => event.cohortStage)).toEqual([
+    "new",
+    "week1",
+    "month1",
+  ]);
+  analytics.setEnabled(false);
+  expect(existsSync(cohortPath)).toBe(false);
+  analytics.setEnabled(true);
+  await vi.waitFor(() =>
+    expect(JSON.parse(readFileSync(cohortPath, "utf8")).completed).toEqual(["new"]),
+  );
+  expect(received.filter((event) => event.cohortStage === "new").at(-1)?.installId).not.toBe(
+    firstId,
+  );
+  analytics.dispose();
+});
+
+it("recovers a queued entry after interrupted state persistence and retries its stable UUID", async () => {
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date("2026-07-01T12:00:00.000Z"));
+  const homeDir = makeRoot();
+  const cohortPath = join(homeDir, "product-analytics", "cohort.json");
+  const ids: unknown[] = [];
+  let fail = true;
+  const fetcher = vi.fn(async (_url: RequestInfo | URL, init?: RequestInit) => {
+    const events = JSON.parse(String(init?.body)).events as Array<Record<string, unknown>>;
+    const entries = events.filter((event) => event.cohortStage);
+    ids.push(...entries.map((event) => event.id));
+    if (entries.length && fail) throw new Error("synthetic response loss");
+    return Response.json(
+      { cohortAcknowledged: entries.map((event) => event.id) },
+      { headers: { "x-synara-product-cohorts": "1" } },
+    );
+  });
+  const make = () =>
+    createPrimaryAnalytics({
+      homeDir,
+      channel: "remote",
+      appVersion: "1.2.3",
+      platform: "darwin",
+      defaultEnabled: true,
+      fetcher,
+    });
+  const first = make();
+  first.start();
+  await vi.waitFor(() => expect(ids).toHaveLength(1));
+  first.dispose();
+  rmSync(cohortPath);
+  fail = false;
+  const restored = make();
+  restored.start();
+  await vi.waitFor(() =>
+    expect(JSON.parse(readFileSync(cohortPath, "utf8")).completed).toEqual(["new"]),
+  );
+  expect(ids).toHaveLength(2);
+  expect(ids[0]).toBe(ids[1]);
+  restored.dispose();
+});
+
+it("cannot restore cohort files when opt-out races an asynchronous receipt body", async () => {
+  const homeDir = makeRoot();
+  let resolveReceipt!: (value: unknown) => void;
+  let receiptPending = false;
+  const fetcher = vi.fn(async (_url: RequestInfo | URL, init?: RequestInit) => {
+    const events = JSON.parse(String(init?.body)).events as Array<Record<string, unknown>>;
+    if (events.some((event) => event.cohortStage))
+      return {
+        ok: true,
+        headers: new Headers({ "x-synara-product-cohorts": "1" }),
+        json: () => {
+          receiptPending = true;
+          return new Promise((resolve) => {
+            resolveReceipt = resolve;
+          });
+        },
+      } as Response;
+    return Response.json({}, { headers: { "x-synara-product-cohorts": "1" } });
+  });
+  const analytics = createPrimaryAnalytics({
+    homeDir,
+    channel: "remote",
+    appVersion: "1.2.3",
+    platform: "darwin",
+    defaultEnabled: true,
+    fetcher,
+  });
+  analytics.start();
+  await vi.waitFor(() => expect(receiptPending).toBe(true));
+  analytics.setEnabled(false);
+  resolveReceipt({ cohortAcknowledged: [] });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  expect(existsSync(join(homeDir, "product-analytics", "cohort.json"))).toBe(false);
+  expect(existsSync(join(homeDir, "product-analytics", "events.json"))).toBe(false);
+  expect(existsSync(join(homeDir, "product-analytics", "install-id"))).toBe(false);
+  analytics.dispose();
+});
+
+it("prefers a durable replacement entry over valid stale cohort state after restart", async () => {
+  vi.useFakeTimers();
+  const origin = Date.parse("2026-07-01T12:00:00.000Z");
+  vi.setSystemTime(origin);
+  const homeDir = makeRoot();
+  const cohortPath = join(homeDir, "product-analytics", "cohort.json");
+  const queuePath = join(homeDir, "product-analytics", "events.json");
+  const entries: Array<Record<string, unknown>> = [];
+  let fail = true;
+  const fetcher = vi.fn(async (_url: RequestInfo | URL, init?: RequestInit) => {
+    const events = JSON.parse(String(init?.body)).events as Array<Record<string, unknown>>;
+    const cohortEvents = events.filter((event) => event.cohortStage);
+    entries.push(...cohortEvents);
+    if (cohortEvents.length && fail) throw new Error("synthetic response loss");
+    return Response.json(
+      { cohortAcknowledged: cohortEvents.map((event) => event.id) },
+      { headers: { "x-synara-product-cohorts": "1" } },
+    );
+  });
+  const make = () =>
+    createPrimaryAnalytics({
+      homeDir,
+      channel: "remote",
+      appVersion: "1.2.3",
+      platform: "darwin",
+      defaultEnabled: true,
+      fetcher,
+    });
+  const first = make();
+  first.start();
+  await vi.waitFor(() => expect(entries).toHaveLength(1));
+  first.dispose();
+  const priorState = readFileSync(cohortPath, "utf8");
+  vi.setSystemTime(origin + 8 * 86400000);
+  const replacement = make();
+  replacement.start();
+  await vi.waitFor(() =>
+    expect(entries.some((event) => event.cohortDay === "2026-07-09")).toBe(true),
+  );
+  replacement.dispose();
+  // Crash snapshot: the real replacement queue survived, but the previous state bytes remained.
+  writeFileSync(cohortPath, priorState);
+  expect(JSON.parse(readFileSync(cohortPath, "utf8")).day).toBe("2026-07-01");
+  expect(
+    JSON.parse(readFileSync(queuePath, "utf8"))
+      .filter((event: Record<string, unknown>) => event.cohortStage)
+      .map((event: Record<string, unknown>) => event.cohortDay),
+  ).toEqual(["2026-07-09"]);
+  entries.length = 0;
+  fail = false;
+  vi.setSystemTime(origin + 9 * 86400000);
+  const restored = make();
+  restored.start();
+  await vi.waitFor(() =>
+    expect(JSON.parse(readFileSync(cohortPath, "utf8")).completed).toEqual(["new"]),
+  );
+  expect(entries.map((event) => event.cohortDay)).toEqual(["2026-07-09"]);
+  expect(JSON.parse(readFileSync(cohortPath, "utf8")).day).toBe("2026-07-09");
+  restored.dispose();
+});
+
+it("emits the independent shared native UUID vectors from the real desktop sender", async () => {
+  vi.useFakeTimers();
+  const fixture = JSON.parse(
+    readFileSync(
+      new URL(
+        "../../../packages/contracts/fixtures/product-analytics/cohort-v1.json",
+        import.meta.url,
+      ),
+      "utf8",
+    ),
+  ) as { events: Array<Record<string, string | number>> };
+  const homeDir = makeRoot();
+  const analyticsDir = join(homeDir, "product-analytics");
+  mkdirSync(analyticsDir, { recursive: true });
+  writeFileSync(join(analyticsDir, "install-id"), String(fixture.events[0]!.installId));
+  // The shared vector represents an established identity, including the privacy reset version.
+  writeFileSync(join(analyticsDir, "identity-version"), "2\n");
+  const emitted: Array<Record<string, unknown>> = [];
+  const fetcher = vi.fn(async (_url: RequestInfo | URL, init?: RequestInit) => {
+    const events = JSON.parse(String(init?.body)).events as Array<Record<string, unknown>>;
+    const cohortEvents = events.filter((event) => event.cohortStage);
+    emitted.push(...cohortEvents);
+    return Response.json(
+      { cohortAcknowledged: cohortEvents.map((event) => event.id) },
+      { headers: { "x-synara-product-cohorts": "1" } },
+    );
+  });
+  for (const expected of fixture.events) {
+    vi.setSystemTime(new Date(String(expected.ts)));
+    const analytics = createPrimaryAnalytics({
+      homeDir,
+      channel: "remote",
+      appVersion: "1.4.0",
+      platform: "darwin",
+      defaultEnabled: true,
+      fetcher,
+    });
+    analytics.start();
+    // Settle immediate receipts without moving the fixture's event clock forward.
+    await vi.advanceTimersByTimeAsync(0);
+    expect(emitted.some((event) => event.cohortStage === expected.cohortStage)).toBe(true);
+    analytics.dispose();
+    expect(emitted.find((event) => event.cohortStage === expected.cohortStage)).toEqual({
+      ...expected,
+      ts: new Date(String(expected.ts)).toISOString(),
+      surface: "desktop",
+      platform: "darwin",
+    });
+  }
 });

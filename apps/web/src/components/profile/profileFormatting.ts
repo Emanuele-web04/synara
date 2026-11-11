@@ -32,8 +32,8 @@ export function formatShortDate(day: string | null, locale = getFormatLocale()):
   return shortDate(day, locale);
 }
 
-export function formatHourLabel(hour: number, locale = getFormatLocale()): string {
-  return hourLabel(hour, locale);
+export function formatHourLabel(hour: number): string {
+  return hourLabel(hour);
 }
 
 // Day words follow the UI language while callers may choose a regional number format.

@@ -54,7 +54,10 @@ On desktop, **Settings → Connections → View Alto plans** opens the existing
 Subscription panel when checkout is available and the account has no paid
 Remote access.
 The same Connections screen has **Connect a device** for pairing once the host
-allows it. Subscription purchases are managed on desktop through Polar.
+allows it. Customers can start Polar checkout from desktop or the Synara pricing
+site. The website verifies the email code before opening a checkout for that
+account. Only the exact checkout success origin can call the web checkout
+routes, and the site receives the Polar redirect without an account token.
 A subscription never authorizes a host or device by itself, revokes a pairing,
 or deletes chat history. `POLAR_REMOTE_ACCESS_ENFORCED` is a separate, strict
 boolean and defaults to `false`; enabling it requires configured billing and
@@ -64,6 +67,19 @@ as `not_host_owner`. With paid enforcement off, the existing beta/test-user
 rollout controls remote admission. With it on, the commercial gate takes
 precedence: neither beta access nor a test-user allowlist bypasses the paid
 check. Ownership, organization membership and device approval still apply.
+
+`POLAR_PROFILE_ACCESS_ENFORCED` gates public profiles the same way and is
+independent of the remote switch (also strict, `false` by default, and requires
+configured billing). With it on, turning a profile public needs a fresh Alto
+check (`403 subscription_required` otherwise), and `GET /profiles/:handle`
+answers `404 profile_not_found` — the same as a private profile — when the
+owner's stored entitlement is missing, revoked, or more than 24 hours past its
+period end (the grace keeps paying subscribers' pages up while a renewal webhook
+lands; revocations still apply at once). The page read never calls
+Polar: it uses the ledger that webhooks and signed-in reconciles keep current,
+so a lapsed subscription hides the page without changing the owner's stored
+visibility, and resubscribing restores it. Private profiles (including the
+onboarding handle setup) never need a subscription.
 
 ### Execution-host policy and manual paid rollout
 
@@ -88,6 +104,7 @@ must establish that separately.
 | `SYNARA_ACCOUNT_URL`                    | Remote execution host | Set explicitly to the canonical account API origin for the actual Remote deployment. Match the intended account/host authority; do not copy a trial URL or infer it from a generic UI fallback.    |
 | `SYNARA_REMOTE_BILLING_POLICY_REQUIRED` | Remote execution host | `false` during current preparation. Set to `true` only as part of the approved manual paid rollout. It requires fresh policy proof before admitting unverified Remote sessions, even before login. |
 | `POLAR_REMOTE_ACCESS_ENFORCED`          | Account API           | `false` now. The future paid rollout sets it to `true` with configured billing; beta/test enrollment cannot override it.                                                                           |
+| `POLAR_PROFILE_ACCESS_ENFORCED`         | Account API           | `false` by default. `true` (with configured billing) makes public profiles an Alto feature: publishing needs a fresh check and pages of owners without stored access answer 404.                   |
 | `POLAR_PRODUCTION_PAYMENTS_ENABLED`     | Account API           | `false` now. Production billing separately requires explicit `true`, production credentials, expected catalog and approved return origins.                                                         |
 
 With strict host policy enabled, an unknown policy or first-read outage holds
@@ -396,15 +413,42 @@ backs both:
 Both converge on the same token pair, so everything downstream — workspace
 scoping, credential storage, refresh — is one code path.
 
+Refresh admission failures use `429 refresh_not_attempted` only when this API
+rejects the request before sending the refresh token to the identity provider.
+That response includes `Retry-After: 60`; desktop keeps the token available for
+the next request. Upstream `429 rate_limited`, unknown outcomes and lost API
+responses remain distinct: they do not prove that a token was unused.
+Only `401 unauthorized` from the refresh endpoint proves a terminal refusal;
+an unrecognized response preserves the credential and its uncertain-operation
+marker. Identity metadata or verification-key outages surface as server failures,
+so they do not tell desktop clients to renew a valid session. Invalid or expired
+access tokens still receive `401 unauthorized`.
+
+The desktop renews access tokens for session failures. Authenticated permission
+denials and device-proof failures pass through without rotating the session.
+Billing stays bound to the captured account and workspace. Remote grants and
+Host Secrets operations also verify the registered device identity before using
+credentials or applying a result.
+
+The WorkOS adapter retries a transient refresh failure once, with backoff and
+a total deadline of at most 25 seconds from the first attempt. The configured
+grant timeout can shorten that deadline. This uses WorkOS's documented
+[30-second replay grace period](https://workos.com/docs/authkit/session-resilience)
+for the exact same refresh request; revoked or expired grants are not retried.
+OTP and PKCE grants retain their existing behavior. Account-status failures are
+request-scoped RPC errors, so a temporary renewal fault does not fail unrelated
+requests on the connection.
+
 ## Hosts are account entities shared through organizations
 
 ### Private saved Inbox recaps
 
-The Beta Inbox saves snapshots only when the user selects **Save privately**.
-`PUT /api/v1/inbox/recaps` accepts `{ sourceHostId, day, timezone, recap }`, where
+Signed-in computers in Stable, Beta and Remote save snapshots automatically with
+`POST /api/v1/inbox/recaps/sync`. **Save privately** sends an immediate
+`PUT /api/v1/inbox/recaps`. Both accept `{ sourceHostId, day, timezone, recap }`, where
 `recap` is `StatsGetRecapResult` and the window runs from 04:00 on `day` to the
-next 04:00 in the source IANA timezone. Project names are included in this
-explicit save; the account's public profile never exposes saved recaps.
+next 04:00 in the source IANA timezone. Project names are included in both paths.
+The account's public profile never exposes saved recaps.
 
 Every save, list, read, and delete requires a valid account session and live
 membership of its active workspace. Saving also requires an owned or discoverable
@@ -422,9 +466,9 @@ authorization remains authoritative; Supabase client roles receive no policies.
 
 History persists independently of host or device registrations. Signing in to
 the same account and workspace restores saves after a phone reset and while all
-source computers are offline. There is no automatic recap upload, host deletion
-cascade, or dependency on local device caches. Migration `0016` is additive and
-must be applied by the operator before deploying this API version.
+source computers are offline. Removing a host does not delete its saved recaps.
+Deleting a recap prevents automatic re-creation. An explicit save can restore it.
+The API requires additive migrations `0016` and `0017`.
 
 Ownership is keyed on **`hosts.owner_user_id`**. Every user
 gets a personal organization the first time they use the service — provisioned
