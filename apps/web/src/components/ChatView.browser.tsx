@@ -14709,6 +14709,55 @@ describe("ChatView transcript geometry (full app)", () => {
     },
   );
 
+  it("keeps remote settings off the local computer after a disconnect", async () => {
+    const controller = {
+      environmentId: "controller-test",
+      label: "This computer",
+      channel: "dev",
+      capabilities: { remoteConnections: true },
+    } as ExecutionEnvironmentDescriptor;
+    vi.mocked(readExecutionContext).mockReturnValue({
+      controller,
+      execution: controller,
+      remote: null,
+    });
+    vi.mocked(WorkspacePanels).mockReturnValue(null);
+    onTestFinished(() => {
+      vi.mocked(readExecutionContext).mockRestore();
+      vi.mocked(WorkspacePanels).mockRestore();
+    });
+    await using mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: MessageId.makeUnsafe("remote-settings-owner"),
+        targetText: "Remote settings owner",
+      }),
+    });
+
+    const environment = "disconnected-settings-host";
+    await mounted.router.navigate({
+      to: "/settings",
+      search: { section: "providers", computer: environment },
+    });
+    await expect
+      .element(page.getByText("This computer is not connected.", { exact: false }))
+      .toBeVisible();
+    expect(mounted.router.state.location.search).toMatchObject({
+      environment,
+      path: "/settings?section=providers",
+    });
+    expect(page.getByRole("heading", { name: "Providers", exact: true }).query()).toBeNull();
+
+    await mounted.router.navigate({
+      to: "/remote",
+      search: { environment, path: "/settings?section=appearance" },
+    });
+    await expect
+      .element(page.getByRole("heading", { name: "Appearance", exact: true }))
+      .toBeVisible();
+    expect(mounted.router.state.location.pathname).toBe("/settings");
+  });
+
   it("creates a new thread from the global chat.new shortcut", async () => {
     const mounted = await mountChatView({
       viewport: DEFAULT_VIEWPORT,

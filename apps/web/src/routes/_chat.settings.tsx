@@ -76,6 +76,9 @@ import { ACCOUNT_BILLING_ENABLED } from "~/lib/accountBilling";
 import { ProviderUsageSettingsPanel } from "../components/settings/ProviderUsageSettingsPanel";
 import { ExternalMcpSettingsPanel } from "../components/settings/ExternalMcpSettingsPanel";
 import { ConnectionsSettingsPanel } from "../components/settings/ConnectionsSettingsPanel";
+import { SettingsComputerPicker } from "../components/hosts/ComputerPicker";
+import { useSettingsComputerRoute } from "../lib/hosts/settingsComputer";
+import { readWorkspaceFrame } from "../lib/hosts/workspaceFrame";
 import { McpConnectorsSettingsPanel } from "../components/settings/McpConnectorsSettingsPanel";
 import {
   SettingResetButton,
@@ -343,8 +346,15 @@ type BooleanSettingKey = {
 
 // ── Route screen ───────────────────────────────────────────────────────────
 
+function SettingsRoute() {
+  const search = useSearch({ strict: false }) as Record<string, unknown>;
+  const redirecting = useSettingsComputerRoute(normalizeSettingsSection(search.section), search);
+  return redirecting ? null : <SettingsRouteView />;
+}
+
 function SettingsRouteView() {
   const { t } = useTranslation();
+  const isController = !readWorkspaceFrame();
   const [defaultDiffRenderMode, setDefaultDiffRenderMode] = useLocalStorage(
     DIFF_RENDER_MODE_STORAGE_KEY,
     DEFAULT_DIFF_RENDER_MODE,
@@ -1835,7 +1845,7 @@ function SettingsRouteView() {
         // A fragment, not a wrapper: sections space themselves as siblings.
         return (
           <>
-            {billingEnabled ? <BillingSettingsPanel /> : null}
+            {billingEnabled && isController ? <BillingSettingsPanel /> : null}
             <ProviderUsageSettingsPanel />
           </>
         );
@@ -1887,6 +1897,7 @@ function SettingsRouteView() {
                     : "max-w-2xl",
               )}
             >
+              <SettingsComputerPicker section={activeSection} />
               {activeSection !== "profile" ? (
                 <div className="mb-8 flex items-start justify-between gap-4">
                   <div className="min-w-0">
@@ -1907,7 +1918,7 @@ function SettingsRouteView() {
                   </div>
                   {activeSection === "shortcuts" ? (
                     <KeyboardShortcutsResetButton />
-                  ) : (
+                  ) : isController ? (
                     <Button
                       size="xs"
                       variant="outline"
@@ -1918,7 +1929,7 @@ function SettingsRouteView() {
                       <ResetIcon className="size-3.5" />
                       {t("settings:advanced_restoreDefaults")}
                     </Button>
-                  )}
+                  ) : null}
                 </div>
               ) : null}
 
@@ -1991,5 +2002,5 @@ function SettingsRouteView() {
 }
 
 export const Route = createFileRoute("/_chat/settings")({
-  component: SettingsRouteView,
+  component: SettingsRoute,
 });

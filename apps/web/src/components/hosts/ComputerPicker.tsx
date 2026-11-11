@@ -9,6 +9,7 @@ import {
   subscribeWorkspaceSessions,
 } from "../../lib/hosts/workspaceSessions";
 import { CheckIcon } from "../../lib/icons";
+import { isHostSettingsSection, type SettingsSectionId } from "../../settingsNavigation";
 import { PickerTriggerButton } from "../chat/PickerTriggerButton";
 import { ComposerPickerMenuPopup } from "../chat/ComposerPickerMenuPopup";
 import { Menu, MenuItem, MenuSeparator, MenuTrigger } from "../ui/menu";
@@ -151,6 +152,62 @@ export function WorkspaceSurfaceComputerPicker({
       <ComputerPicker
         computers={computers}
         value={currentId}
+        onChange={select}
+        onManage={() => navigate("/settings?section=connections")}
+      />
+    </div>
+  );
+}
+
+/** The main window's Settings route resolves `computer` and opens host-owned sections on it. */
+export function SettingsComputerPicker({ section }: { section: SettingsSectionId }) {
+  const { computers, sessions, localId, currentId, navigate } = useWorkspaceComputers();
+  const frame = readWorkspaceFrame();
+  if (readExecutionContext()?.controller.capabilities.remoteConnections !== true) return null;
+  if (!isHostSettingsSection(section)) {
+    return (
+      <div className="mb-4 flex min-w-0 items-center gap-2 text-ui-sm text-muted-foreground">
+        <span>Settings for</span>
+        <span
+          className="truncate text-foreground"
+          title="These settings always apply to this computer."
+        >
+          This computer
+        </span>
+      </div>
+    );
+  }
+  const select = (environmentId: string) => {
+    if (environmentId === currentId) return;
+    if (environmentId !== localId) {
+      const selected = sessions.find(
+        (session) => session.host.executionScope.environmentId === environmentId,
+      )?.host;
+      const session = (frame?.controller.sessions ?? readWorkspaceSessions)().find(
+        (item) => item.host === selected,
+      );
+      if (!session?.navigation || session.error || session.summary?.state !== "open") {
+        toastManager.add({
+          type: "error",
+          title: "Computer unavailable",
+          description: "Reconnect this computer in Connections and try again.",
+        });
+        return;
+      }
+    }
+    const search = new URLSearchParams({
+      section,
+      computer: environmentId === localId ? "local" : environmentId,
+    });
+    navigate(`/settings?${search}`);
+  };
+  return (
+    <div className="mb-4 flex min-w-0 items-center gap-1 text-ui-sm text-muted-foreground">
+      <span>Settings for</span>
+      <ComputerPicker
+        computers={computers}
+        value={currentId}
+        purpose="Settings for"
         onChange={select}
         onManage={() => navigate("/settings?section=connections")}
       />
