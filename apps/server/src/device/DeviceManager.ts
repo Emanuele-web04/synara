@@ -270,7 +270,11 @@ export class DeviceManager {
   private streamTransition: Promise<void> = Promise.resolve();
   private readonly recording = new Set<string>();
   private readonly listeners = new Set<DeviceEventListener>();
-  private disposed = false;
+  private readonly disposal = new AbortController();
+
+  private get disposed(): boolean {
+    return this.disposal.signal.aborted;
+  }
 
   constructor(options: DeviceManagerOptions) {
     this.backend = options.backend;
@@ -481,7 +485,7 @@ export class DeviceManager {
 
   async shutdown(udid: string, onlyIfIdle = false): Promise<void> {
     await this.stopRecordingIfActive(udid).catch(() => undefined);
-    await this.stopStream(udid);
+    await this.stopStream(udid, onlyIfIdle ? this.disposal.signal : undefined);
     // Stream teardown yields: a new tool, user attachment or viewer may arrive meanwhile.
     if (onlyIfIdle && (this.disposed || this.isDeviceBusy(udid))) return;
     const attachedTokens = onlyIfIdle
@@ -1389,7 +1393,7 @@ export class DeviceManager {
    */
   async dispose(): Promise<void> {
     if (this.disposed) return;
-    this.disposed = true;
+    this.disposal.abort();
     const active = this.activeStreamUdid;
     const desired = this.desiredStreamUdid;
     this.activeStreamUdid = null;
@@ -1584,13 +1588,26 @@ export class DeviceManager {
     await this.startStream(udid);
   }
 
-  private async stopStream(udid: string): Promise<void> {
+  private async stopStream(udid: string, signal?: AbortSignal): Promise<void> {
+    if (signal?.aborted) return;
     if (this.desiredStreamUdid === udid) {
       this.desiredStreamUdid = null;
     } else if (this.desiredStreamUdid !== null || this.activeStreamUdid !== udid) {
       return;
     }
-    await this.queueStreamReconciliation();
+    const transition = this.queueStreamReconciliation();
+    if (!signal) return await transition;
+
+    // Quit owns terminal cleanup. An idle poweroff must release its wait on
+    // the normal stream transition so quit can reach that cleanup.
+    const interrupted = Promise.withResolvers<void>();
+    const onAbort = () => interrupted.resolve();
+    signal.addEventListener("abort", onAbort, { once: true });
+    try {
+      await Promise.race([transition, interrupted.promise]);
+    } finally {
+      signal.removeEventListener("abort", onAbort);
+    }
   }
 
   private queueStreamReconciliation(): Promise<void> {

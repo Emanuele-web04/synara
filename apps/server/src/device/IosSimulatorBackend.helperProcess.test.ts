@@ -452,6 +452,7 @@ it("shuts down a Synara-owned simulator on quit before its first helper finishes
     await expect(Promise.race([disposal.then(() => "disposed"), nextTick])).resolves.toBe(
       "disposed",
     );
+    await expect(Promise.race([tap, nextTick])).resolves.toBeInstanceOf(Error);
     expect(shutdowns).toEqual([DEVICE]);
   } finally {
     compiler.resolve();
@@ -460,6 +461,58 @@ it("shuts down a Synara-owned simulator on quit before its first helper finishes
   }
   expect(await tap).toBeInstanceOf(Error);
   expect(processes).toHaveLength(0);
+});
+
+it("quits while idle shutdown is waiting for stream state publication", async () => {
+  const compiler = Promise.withResolvers<void>();
+  const { backend, manager, compiling, shutdowns } = makeStack({
+    initiallyBooted: false,
+    compile: compiler.promise,
+  });
+  await manager.boot(DEVICE);
+  await manager.attach(THREAD, DEVICE);
+  await compiling;
+  const unsubscribe = manager.subscribeFrames(DEVICE, {
+    send: () => {},
+    bufferedAmount: () => 0,
+    isOpen: () => true,
+  });
+  const publicationStarted = Promise.withResolvers<void>();
+  const finishPublication = Promise.withResolvers<void>();
+  const availability = backend.availability.bind(backend);
+  const availabilitySpy = vi.spyOn(backend, "availability").mockImplementationOnce(async () => {
+    publicationStarted.resolve();
+    await finishPublication.promise;
+    return await availability();
+  });
+  compiler.resolve();
+  await publicationStarted.promise;
+  await manager.detach(THREAD);
+
+  const idleStarted = Promise.withResolvers<void>();
+  const shutdown = manager.shutdown.bind(manager);
+  const shutdownSpy = vi.spyOn(manager, "shutdown").mockImplementation((udid, onlyIfIdle) => {
+    idleStarted.resolve();
+    return shutdown(udid, onlyIfIdle);
+  });
+  unsubscribe();
+  await idleStarted.promise;
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  expect(shutdowns).toEqual([]);
+
+  let disposed = false;
+  const disposal = manager.dispose().then(() => {
+    disposed = true;
+  });
+  try {
+    await expect.poll(() => disposed).toBe(true);
+    expect(shutdowns).toEqual([DEVICE]);
+  } finally {
+    finishPublication.resolve();
+    await disposal;
+    shutdownSpy.mockRestore();
+    availabilitySpy.mockRestore();
+  }
 });
 
 it.each([false, true])(

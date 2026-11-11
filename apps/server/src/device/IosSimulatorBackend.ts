@@ -299,6 +299,7 @@ export async function selectRecordingDirectory(
 interface SimulatorHelperSession {
   readonly udid: string;
   client: HelperClient | null;
+  interruptCompile: ((error: DeviceBackendError) => void) | null;
   pending: Promise<void> | null;
   shutdown: Promise<void> | null;
   streamingUdid: string | null;
@@ -1631,6 +1632,7 @@ export class IosSimulatorBackend implements DeviceBackend {
       session = {
         udid,
         client: null,
+        interruptCompile: null,
         pending: null,
         shutdown: null,
         streamingUdid: null,
@@ -1709,6 +1711,7 @@ export class IosSimulatorBackend implements DeviceBackend {
       session.idleTimer = null;
     }
     session.streamingUdid = null;
+    session.interruptCompile?.(new DeviceBackendError("The simulator helper session ended"));
     const helper = session.client;
     try {
       await helper?.dispose();
@@ -1745,7 +1748,16 @@ export class IosSimulatorBackend implements DeviceBackend {
     if (session.client?.running) return session.client;
     await this.closeHelper(session);
     this.assertActiveHelperSession(session);
-    const binaryPath = await this.compileHelperIfNeeded();
+    // The compiler is shared by all devices. Closing this session releases
+    // its queue without interrupting a build another device may still need.
+    const interrupted = Promise.withResolvers<never>();
+    session.interruptCompile = interrupted.reject;
+    let binaryPath: string;
+    try {
+      binaryPath = await Promise.race([this.compileHelperIfNeeded(), interrupted.promise]);
+    } finally {
+      session.interruptCompile = null;
+    }
     this.assertActiveHelperSession(session);
     // The helper resolves CoreSimulator out of DEVELOPER_DIR at runtime, so it
     // has to inherit the same toolchain the binary was built against.
