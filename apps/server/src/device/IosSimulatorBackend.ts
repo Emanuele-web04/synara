@@ -55,6 +55,7 @@ import {
   type DeviceBackend,
   type DeviceConfiguration,
   type DeviceFrameListener,
+  type DeviceInputOptions,
   type DeviceKeyEvent,
   type DeviceLaunchOptions,
   type DeviceListOptions,
@@ -62,6 +63,7 @@ import {
   type DeviceLogResult,
   type DeviceScreenshotCapture,
   type DeviceSwipeGesture,
+  type DeviceTapOptions,
   type DeviceTypeTextOutcome,
 } from "./DeviceBackend.ts";
 import { readCrashReports, unifiedLogArguments, tailLines } from "./deviceLogs.ts";
@@ -85,6 +87,10 @@ const DEVICE_LIST_CACHE_MS = 1_500;
 /** How long the machine-wide `xcode-select -p` answer is reused; see xcodeSelectPath. */
 const XCODE_SELECT_CACHE_MS = 15_000;
 const BOOT_TIMEOUT_MS = 120_000;
+/** Keep a recently used input client warm between agent calls. */
+const HELPER_IDLE_MS = 2 * 60_000;
+/** Allow cold-boot attach retries to reuse the process without retaining failed attachments. */
+const HELPER_UNATTACHED_IDLE_MS = 5_000;
 const RECORDING_START_TIMEOUT_MS = 10_000;
 const RECORDING_STOP_GRACE_MS = 15_000;
 const RECORDING_KILL_GRACE_MS = 1_000;
@@ -290,6 +296,15 @@ export async function selectRecordingDirectory(
   return fallback;
 }
 
+interface SimulatorHelperSession {
+  readonly udid: string;
+  client: HelperClient | null;
+  pending: Promise<void> | null;
+  shutdown: Promise<void> | null;
+  streamingUdid: string | null;
+  idleTimer: ReturnType<typeof setTimeout> | null;
+}
+
 export class IosSimulatorBackend implements DeviceBackend {
   readonly platform = "ios-simulator" as const;
 
@@ -303,8 +318,7 @@ export class IosSimulatorBackend implements DeviceBackend {
     launch?: HelperSandboxCommand,
     onExit?: (reason: string) => void,
   ) => HelperClient;
-  /** The device the helper is streaming, so a helper death can name it. */
-  private streamingUdid: string | null = null;
+  private readonly helperSessions = new Map<string, SimulatorHelperSession>();
   private readonly streamInterruptedListeners = new Set<(udid: string, reason: string) => void>();
   /** One warning per backend when the helper runs unconfined. */
   private warnedUnsandboxed = false;
@@ -331,15 +345,17 @@ export class IosSimulatorBackend implements DeviceBackend {
     readonly resolvedAtMs: number;
     readonly developerDir: Promise<string | null>;
   } | null = null;
+  private xcodeBuildKeyCache: {
+    readonly developerDir: string | undefined;
+    readonly resolvedAtMs: number;
+    readonly key: Promise<string>;
+  } | null = null;
   private deviceListCache: {
     readonly listedAtMs: number;
     readonly devices: Promise<readonly DeviceDescriptor[]>;
   } | null = null;
-  private helper: HelperClient | null = null;
   private helperBuildFailure: string | null = null;
   private helperCompilation: Promise<string> | null = null;
-  /** The helper being started right now, shared by every caller that needs it. */
-  private helperStart: Promise<HelperClient> | null = null;
   /** Keyed on the binary so a rebuilt helper is re-probed rather than assumed. */
   private helperProbe: { binaryPath: string; result: HelperProbeResult } | null = null;
   private readonly recordings = new Map<string, ActiveRecording>();
@@ -528,17 +544,20 @@ export class IosSimulatorBackend implements DeviceBackend {
   }
 
   async shutdown(udid: string): Promise<void> {
-    await this.stopRecordingForLifecycle(udid);
-    await this.detachStream(udid);
-    // The helper outlives the simulator, and its attachment holds a display
-    // descriptor bound to this boot. Dropping it here means the next attach
-    // rebinds instead of reusing a descriptor whose framebuffer is gone.
-    this.helper?.invalidateAttachment(udid);
     this.keyboardLayouts.delete(udid);
-    const result = await this.simctl(["shutdown", udid]);
-    if (result.code !== 0 && !/current state: Shutdown/iu.test(result.stderr)) {
-      throw this.simctlError("shutdown", result);
-    }
+    const session = this.helperSession(udid);
+    // A cold compile is shared with other simulators and can outlive poweroff.
+    // Invalidate this session immediately so that compile cannot start its helper.
+    session.shutdown ??= Promise.resolve()
+      .then(async () => {
+        await Promise.all([this.closeHelper(session), this.stopRecordingForLifecycle(udid)]);
+        const result = await this.simctl(["shutdown", udid]);
+        if (result.code !== 0 && !/current state: Shutdown/iu.test(result.stderr)) {
+          throw this.simctlError("shutdown", result);
+        }
+      })
+      .finally(() => this.helperSessions.delete(udid.toLowerCase()));
+    await session.shutdown;
   }
 
   async install(udid: string, appPath: string): Promise<DeviceInstallAppResult> {
@@ -653,13 +672,18 @@ export class IosSimulatorBackend implements DeviceBackend {
    * but public API that survives a broken framebuffer path).
    */
   private async captureScreenshot(udid: string, file: string): Promise<void> {
-    if (this.helper?.running && this.helper.attachedDevice?.udid === udid) {
-      const viaHelper = await this.helperRequest(HELPER_METHODS.screenshot, { path: file }).then(
-        () => true,
-        () => false,
-      );
+    const session = this.helperSessions.get(udid.toLowerCase());
+    if (session?.shutdown) await session.shutdown.catch(() => undefined);
+    if (session?.client?.running && session.client.attachedDevice !== null) {
+      const viaHelper = await this.runWithHelperSession(session, async () => {
+        const helper = session.client;
+        if (!helper?.running || helper.attachedDevice === null) return false;
+        await this.helperRequest(helper, HELPER_METHODS.screenshot, { path: file });
+        return true;
+      }).catch(() => false);
       if (viaHelper) return;
     }
+    if (this.disposed) throw new DeviceBackendError("The iOS simulator backend is disposed");
     const result = await this.simctl(["io", udid, "screenshot", file]);
     if (result.code !== 0) throw this.simctlError("screenshot", result);
   }
@@ -675,7 +699,8 @@ export class IosSimulatorBackend implements DeviceBackend {
     sourceFile: string,
     directory: string,
   ): Promise<Buffer | null> {
-    const geometry = this.deviceGeometry.get(udid) ?? (await this.catalogueGeometry(udid));
+    const geometry =
+      this.deviceGeometry.get(udid.toLowerCase()) ?? (await this.catalogueGeometry(udid));
     if (!geometry) return null;
     const target = path.join(directory, "screenshot-points.png");
     const result = await this.run(
@@ -810,78 +835,102 @@ export class IosSimulatorBackend implements DeviceBackend {
     udid: string,
     method: string,
     buildParams: (helper: HelperClient) => Record<string, unknown>,
+    signal?: AbortSignal,
   ): Promise<unknown> {
+    signal?.throwIfAborted();
     await this.assertCapability("hid");
-    const helper = await this.attachedHelper(udid);
-    try {
-      return await this.helperRequest(method, buildParams(helper));
-    } catch (error) {
-      if (!isInputNotDeliveredError(error)) throw error;
-      // A budget refusal does not mean the now-ready transport is stale.
-      // Leave it connected and let the caller retry the gesture deliberately.
-      if (/input deadline/iu.test(errorText(error))) throw error;
-      // Replaying keystrokes after a partial delivery types them twice. Only a
-      // refusal that sent nothing is safe to repeat for a non-replayable call.
-      if (!/(?:^|: )nothing was sent:/iu.test(errorText(error))) {
-        throw error;
-      }
-      // dtuhidd still coming up after a boot: the attachment is fine and keeps
-      // warming in the background, while a re-attach would restart the wait.
-      if (/still starting/iu.test(errorText(error))) {
-        return await this.helperRequest(method, buildParams(helper));
-      }
-    }
-    const rebound = await this.attachedHelper(udid, { force: true });
-    return await this.helperRequest(method, buildParams(rebound));
-  }
-
-  async tap(
-    udid: string,
-    x: number,
-    y: number,
-    options: { readonly holdMs?: number } = {},
-  ): Promise<void> {
-    await this.injectInput(udid, HELPER_METHODS.tap, (helper) => ({
-      ...helper.normalize(x, y),
-      ...(options.holdMs === undefined ? {} : { holdMs: Math.round(options.holdMs) }),
-    }));
-  }
-
-  async swipe(udid: string, gesture: DeviceSwipeGesture): Promise<void> {
-    await this.injectInput(udid, HELPER_METHODS.swipe, (helper) => {
-      const start = helper.normalize(gesture.fromX, gesture.fromY);
-      const end = helper.normalize(gesture.toX, gesture.toY);
-      return {
-        startX: start.x,
-        startY: start.y,
-        endX: end.x,
-        endY: end.y,
-        durationMs: gesture.durationMs,
-        ...(gesture.edge === undefined ? {} : { edge: gesture.edge }),
+    return await this.withAttachedHelper(udid, async (helper, session) => {
+      const inject = () => {
+        signal?.throwIfAborted();
+        return this.helperRequest(helper, method, buildParams(helper));
       };
+      try {
+        return await inject();
+      } catch (error) {
+        if (!isInputNotDeliveredError(error)) throw error;
+        // A budget refusal does not mean the now-ready transport is stale.
+        // Leave it connected and let the caller retry the gesture deliberately.
+        if (/input deadline/iu.test(errorText(error))) throw error;
+        // Replaying keystrokes after a partial delivery types them twice. Only a
+        // refusal that sent nothing is safe to repeat for a non-replayable call.
+        if (!/(?:^|: )nothing was sent:/iu.test(errorText(error))) {
+          throw error;
+        }
+        // dtuhidd still coming up after a boot: the attachment is fine and keeps
+        // warming in the background, while a re-attach would restart the wait.
+        if (/still starting/iu.test(errorText(error))) {
+          return await inject();
+        }
+      }
+      signal?.throwIfAborted();
+      await this.attachHelper(helper, session.udid, { force: true });
+      return await inject();
     });
+  }
+
+  async tap(udid: string, x: number, y: number, options: DeviceTapOptions = {}): Promise<void> {
+    await this.injectInput(
+      udid,
+      HELPER_METHODS.tap,
+      (helper) => ({
+        ...helper.normalize(x, y),
+        ...(options.holdMs === undefined ? {} : { holdMs: Math.round(options.holdMs) }),
+      }),
+      options.signal,
+    );
+  }
+
+  async swipe(
+    udid: string,
+    gesture: DeviceSwipeGesture,
+    options?: DeviceInputOptions,
+  ): Promise<void> {
+    await this.injectInput(
+      udid,
+      HELPER_METHODS.swipe,
+      (helper) => {
+        const start = helper.normalize(gesture.fromX, gesture.fromY);
+        const end = helper.normalize(gesture.toX, gesture.toY);
+        return {
+          startX: start.x,
+          startY: start.y,
+          endX: end.x,
+          endY: end.y,
+          durationMs: gesture.durationMs,
+          ...(gesture.edge === undefined ? {} : { edge: gesture.edge }),
+        };
+      },
+      options?.signal,
+    );
   }
 
   async typeText(
     udid: string,
     text: string,
-    options: { readonly signal?: AbortSignal } = {},
+    options?: DeviceInputOptions,
   ): Promise<DeviceTypeTextOutcome> {
     let skipped = 0;
     for (let start = 0; start < text.length; start += TEXT_CHUNK_LENGTH) {
-      options.signal?.throwIfAborted();
       const chunk = text.slice(start, start + TEXT_CHUNK_LENGTH);
-      const result = await this.injectInput(udid, HELPER_METHODS.text, () => ({ text: chunk }));
+      const result = await this.injectInput(
+        udid,
+        HELPER_METHODS.text,
+        () => ({ text: chunk }),
+        options?.signal,
+      );
       const chunkSkipped = (result as { skipped?: unknown } | null)?.skipped;
       if (typeof chunkSkipped === "number") skipped += chunkSkipped;
     }
     return { skipped };
   }
 
-  async setFocusedValue(udid: string, value: string): Promise<void> {
+  async setFocusedValue(udid: string, value: string, options?: DeviceInputOptions): Promise<void> {
+    options?.signal?.throwIfAborted();
     await this.assertCapability("accessibility");
-    await this.attachedHelper(udid);
-    await this.helperRequest(HELPER_METHODS.setFocusedValue, { value });
+    await this.withAttachedHelper(udid, (helper) => {
+      options?.signal?.throwIfAborted();
+      return this.helperRequest(helper, HELPER_METHODS.setFocusedValue, { value });
+    });
   }
 
   /**
@@ -1006,24 +1055,35 @@ export class IosSimulatorBackend implements DeviceBackend {
     return cached;
   }
 
-  async keyEvent(udid: string, event: DeviceKeyEvent): Promise<void> {
+  async keyEvent(udid: string, event: DeviceKeyEvent, options?: DeviceInputOptions): Promise<void> {
     // The helper takes one USB HID usage per call and tracks held modifiers
     // itself, so a chord is sent as its modifier keys around the main key.
+    let admissionSignal = options?.signal;
     for (const modifier of event.modifiers) {
       const usage = HID_MODIFIER_USAGES[modifier];
       if (usage === undefined) continue;
-      await this.injectInput(udid, HELPER_METHODS.key, () => ({
-        usage,
-        phase: event.direction,
-      }));
+      await this.injectInput(
+        udid,
+        HELPER_METHODS.key,
+        () => ({ usage, phase: event.direction }),
+        admissionSignal,
+      );
+      // Finish a chord once its first event has been delivered.
+      admissionSignal = undefined;
     }
-    await this.injectInput(udid, HELPER_METHODS.key, () => ({
-      usage: event.keyCode,
-      phase: event.direction,
-    }));
+    await this.injectInput(
+      udid,
+      HELPER_METHODS.key,
+      () => ({ usage: event.keyCode, phase: event.direction }),
+      admissionSignal,
+    );
   }
 
-  async pressButton(udid: string, button: DeviceHardwareButton): Promise<void> {
+  async pressButton(
+    udid: string,
+    button: DeviceHardwareButton,
+    options?: DeviceInputOptions,
+  ): Promise<void> {
     if (button === "rotate") {
       // Rotation is a Simulator.app window command, not a HID button: there is
       // no HID usage for it and no simctl equivalent. Simulator.app posts a
@@ -1036,14 +1096,14 @@ export class IosSimulatorBackend implements DeviceBackend {
         "Rotating a headless simulator is not supported; rotate the device from inside the app or use Simulator.app.",
       );
     }
-    await this.assertCapability("hid");
-    await this.injectInput(udid, HELPER_METHODS.button, () => ({ name: button }));
+    await this.injectInput(udid, HELPER_METHODS.button, () => ({ name: button }), options?.signal);
   }
 
   async describeUi(udid: string): Promise<DeviceDescribeUiResult> {
     await this.assertCapability("accessibility");
-    await this.attachedHelper(udid);
-    const result = await this.helperRequest(HELPER_METHODS.describeUi, {});
+    const result = await this.withAttachedHelper(udid, (helper) =>
+      this.helperRequest(helper, HELPER_METHODS.describeUi, {}),
+    );
     const tree = (result as { tree?: unknown } | null)?.tree;
     if (typeof tree !== "object" || tree === null) {
       throw new DeviceBackendError("Device helper returned no accessibility tree");
@@ -1056,7 +1116,7 @@ export class IosSimulatorBackend implements DeviceBackend {
   }
 
   geometry(udid: string): DeviceGeometry | null {
-    return this.deviceGeometry.get(udid) ?? null;
+    return this.deviceGeometry.get(udid.toLowerCase()) ?? null;
   }
 
   async attachStream(udid: string, onFrame: DeviceFrameListener): Promise<void> {
@@ -1064,25 +1124,32 @@ export class IosSimulatorBackend implements DeviceBackend {
     // the encoder to compress it.
     await this.assertCapability("framebuffer");
     await this.assertCapability("encoder");
-    const helper = await this.attachedHelper(udid);
-    try {
-      await helper.startStream(udid, onFrame);
-    } catch (error) {
-      // After a reboot outside Synara the cached attachment still looks valid,
-      // and starting the stream on it fails with "no framebuffer surface" on
-      // every retry. A fresh attach against the current boot fixes it at once.
-      if (!isStaleDescriptorError(error)) throw error;
-      await this.attachedHelper(udid, { force: true });
-      await helper.startStream(udid, onFrame);
-    }
-    this.streamingUdid = udid;
+    await this.withAttachedHelper(udid, async (helper, session) => {
+      session.streamingUdid = null;
+      try {
+        await helper.startStream(session.udid, onFrame);
+      } catch (error) {
+        // After a reboot outside Synara the cached attachment still looks valid,
+        // and starting the stream on it fails with "no framebuffer surface" on
+        // every retry. A fresh attach against the current boot fixes it at once.
+        if (!isStaleDescriptorError(error)) throw error;
+        await this.attachHelper(helper, session.udid, { force: true });
+        await helper.startStream(session.udid, onFrame);
+      }
+      if (!helper.running) {
+        throw new DeviceBackendError("Device helper exited while starting the stream");
+      }
+      session.streamingUdid = udid;
+    });
   }
 
   async detachStream(udid: string): Promise<void> {
-    if (this.streamingUdid === udid) this.streamingUdid = null;
-    // The helper holds one attachment, so its stream is this device's stream.
-    if (!this.helper || this.helper.attachedDevice?.udid !== udid) return;
-    await this.helper.stopStream().catch(() => undefined);
+    const session = this.helperSessions.get(udid.toLowerCase());
+    if (!session || session.shutdown !== null) return;
+    await this.runWithHelperSession(session, async () => {
+      session.streamingUdid = null;
+      await session.client?.stopStream().catch(() => undefined);
+    });
   }
 
   onStreamInterrupted(listener: (udid: string, reason: string) => void): () => void {
@@ -1097,11 +1164,15 @@ export class IosSimulatorBackend implements DeviceBackend {
    * else reports: frames just stop. The next request starts a new helper; the
    * listeners decide whether the stream is still wanted.
    */
-  private helperExited(helper: HelperClient, reason: string): void {
-    if (this.disposed || this.helper !== helper) return;
-    const udid = this.streamingUdid;
-    this.streamingUdid = null;
-    if (udid === null) return;
+  private helperExited(
+    session: SimulatorHelperSession,
+    helper: HelperClient,
+    reason: string,
+  ): void {
+    if (this.disposed || session.client !== helper || session.streamingUdid === null) return;
+    const udid = session.streamingUdid;
+    session.streamingUdid = null;
+    this.scheduleHelperRetirement(session);
     for (const listener of this.streamInterruptedListeners) {
       try {
         listener(udid, reason);
@@ -1119,9 +1190,9 @@ export class IosSimulatorBackend implements DeviceBackend {
     await Promise.allSettled(this.recordingStarts.values());
     this.recordings.clear();
     this.reservedRecordingPaths.clear();
-    const helper = this.helper;
-    this.helper = null;
-    await helper?.dispose();
+    const sessions = [...this.helperSessions.values()];
+    this.helperSessions.clear();
+    await Promise.all(sessions.map((session) => this.closeHelper(session)));
   }
 
   private async startRecordingProcess(udid: string): Promise<DeviceStartRecordingResult> {
@@ -1514,8 +1585,11 @@ export class IosSimulatorBackend implements DeviceBackend {
 
   // ── Helper lifecycle ───────────────────────────────────────────────
 
-  private async helperRequest(method: string, params: Record<string, unknown>): Promise<unknown> {
-    const helper = await this.requireHelper();
+  private async helperRequest(
+    helper: HelperClient,
+    method: string,
+    params: Record<string, unknown>,
+  ): Promise<unknown> {
     try {
       return await helper.request(method, params);
     } catch (error) {
@@ -1532,71 +1606,157 @@ export class IosSimulatorBackend implements DeviceBackend {
     );
   }
 
+  private withAttachedHelper<A>(
+    udid: string,
+    action: (helper: HelperClient, session: SimulatorHelperSession) => Promise<A>,
+  ): Promise<A> {
+    const session = this.helperSession(udid);
+    if (session.shutdown !== null) {
+      const resume = () => this.withAttachedHelper(udid, action);
+      return session.shutdown.then(resume, resume);
+    }
+    return this.runWithHelperSession(session, async () => {
+      const helper = await this.requireHelper(session);
+      await this.attachHelper(helper, session.udid);
+      this.assertActiveHelperSession(session);
+      return await action(helper, session);
+    });
+  }
+
+  private helperSession(udid: string): SimulatorHelperSession {
+    if (this.disposed) throw new DeviceBackendError("The iOS simulator backend is disposed");
+    const key = udid.toLowerCase();
+    let session = this.helperSessions.get(key);
+    if (!session) {
+      session = {
+        udid,
+        client: null,
+        pending: null,
+        shutdown: null,
+        streamingUdid: null,
+        idleTimer: null,
+      };
+      this.helperSessions.set(key, session);
+    }
+    return session;
+  }
+
+  private assertActiveHelperSession(session: SimulatorHelperSession): void {
+    if (this.disposed) throw new DeviceBackendError("The iOS simulator backend is disposed");
+    if (session.shutdown !== null)
+      throw new DeviceBackendError("The simulator helper session ended during shutdown");
+  }
+
   /**
-   * The helper is bound to one simulator at a time and every input and read
-   * method acts on that binding, so each call re-asserts it. `attach` is a
-   * no-op when the device is already the attached one.
+   * The native helper's input, accessibility and screen reads use the last
+   * attachment. One process per device prevents cross-device retargeting.
+   * Serialize work within that device so a rebind cannot interrupt another
+   * request's attachment or coordinate conversion.
    */
-  private async attachedHelper(
+  private runWithHelperSession<A>(
+    session: SimulatorHelperSession,
+    action: () => Promise<A>,
+  ): Promise<A> {
+    if (session.idleTimer !== null) {
+      clearTimeout(session.idleTimer);
+      session.idleTimer = null;
+    }
+    const result = (session.pending ?? Promise.resolve()).then(() => {
+      this.assertActiveHelperSession(session);
+      return action();
+    });
+    const settled = () => {
+      if (session.pending !== tail) return;
+      session.pending = null;
+      this.scheduleHelperRetirement(session);
+    };
+    const tail = result.then(settled, settled);
+    session.pending = tail;
+    return result;
+  }
+
+  private scheduleHelperRetirement(session: SimulatorHelperSession): void {
+    if (
+      this.disposed ||
+      session.shutdown !== null ||
+      session.pending !== null ||
+      session.streamingUdid !== null ||
+      session.idleTimer !== null
+    ) {
+      return;
+    }
+    if (session.client === null) {
+      this.helperSessions.delete(session.udid.toLowerCase());
+      return;
+    }
+    const idleMs =
+      session.client.attachedDevice === null ? HELPER_UNATTACHED_IDLE_MS : HELPER_IDLE_MS;
+    session.idleTimer = setTimeout(
+      () => {
+        session.idleTimer = null;
+        void this.runWithHelperSession(session, () => this.closeHelper(session)).catch(
+          () => undefined,
+        );
+      },
+      session.client.running ? idleMs : 0,
+    );
+    session.idleTimer.unref();
+  }
+
+  private async closeHelper(session: SimulatorHelperSession): Promise<void> {
+    if (session.idleTimer !== null) {
+      clearTimeout(session.idleTimer);
+      session.idleTimer = null;
+    }
+    session.streamingUdid = null;
+    const helper = session.client;
+    try {
+      await helper?.dispose();
+    } finally {
+      if (session.client === helper) session.client = null;
+    }
+  }
+
+  private async attachHelper(
+    helper: HelperClient,
     udid: string,
     options: { readonly force?: boolean } = {},
-  ): Promise<HelperClient> {
-    const helper = await this.requireHelper();
-    const remember = () => {
-      const attachment = helper.attachedDevice;
-      if (attachment?.udid === udid) {
-        this.deviceGeometry.set(udid, {
-          pointWidth: attachment.pointWidth,
-          pointHeight: attachment.pointHeight,
-          scale: attachment.scale,
-        });
-      }
-    };
-    try {
-      await helper.attach(udid, options);
-      remember();
-    } catch (error) {
+  ): Promise<void> {
+    const attachment = await helper.attach(udid, options).catch(async (error) => {
       // A device can also be rebooted outside Synara (Simulator.app, or simctl
       // in the agent's own shell), which no invalidation hook here can observe.
       // A dead-descriptor failure is therefore retried once with a forced
       // re-attach, which rebinds against the current boot.
       if (!isStaleDescriptorError(error)) throw this.helperError(error);
       try {
-        await helper.attach(udid, { force: true });
-        remember();
+        return await helper.attach(udid, { force: true });
       } catch (retryError) {
         throw this.helperError(retryError);
       }
-    }
-    return helper;
-  }
-
-  private async requireHelper(): Promise<HelperClient> {
-    if (this.helper?.running) return this.helper;
-    // Starting a helper takes several awaits. Without sharing the start, two
-    // callers arriving together (the pane's stream and an agent's tap) would
-    // each spawn a helper, and the first one would never be disposed.
-    this.helperStart ??= this.startHelper().finally(() => {
-      this.helperStart = null;
     });
-    return await this.helperStart;
+    this.deviceGeometry.set(udid.toLowerCase(), {
+      pointWidth: attachment.pointWidth,
+      pointHeight: attachment.pointHeight,
+      scale: attachment.scale,
+    });
   }
 
-  private async startHelper(): Promise<HelperClient> {
-    const retired = this.helper;
-    this.helper = null;
-    await retired?.dispose();
+  private async requireHelper(session: SimulatorHelperSession): Promise<HelperClient> {
+    if (session.client?.running) return session.client;
+    await this.closeHelper(session);
+    this.assertActiveHelperSession(session);
     const binaryPath = await this.compileHelperIfNeeded();
+    this.assertActiveHelperSession(session);
     // The helper resolves CoreSimulator out of DEVELOPER_DIR at runtime, so it
     // has to inherit the same toolchain the binary was built against.
     const env = await this.toolchainEnv();
     const sandbox = await this.sandboxFor([binaryPath], env);
-    if (this.disposed) throw new DeviceBackendError("The iOS simulator backend is disposed");
+    this.assertActiveHelperSession(session);
     const helper: HelperClient = this.makeHelperClient(binaryPath, env, sandbox, (reason) =>
-      this.helperExited(helper, reason),
+      this.helperExited(session, helper, reason),
     );
     helper.start();
-    this.helper = helper;
+    session.client = helper;
     return helper;
   }
 
@@ -1704,14 +1864,6 @@ export class IosSimulatorBackend implements DeviceBackend {
   /**
    * Digest of the helper's sources, so a helper fix invalidates the cache.
    *
-   * Read fresh rather than memoised: it runs once per attach, and a stale
-   * digest would reintroduce exactly the bug it exists to prevent. If the
-   * sources cannot be read the digest is omitted, which falls back to keying on
-   * the toolchain alone rather than failing the attach outright.
-   */
-  /**
-   * Digest of the helper's sources, so a helper fix invalidates the cache.
-   *
    * Derived through the shared reader that `scripts/device-helper-smoke.ts`
    * also uses: a second derivation here is what made the smoke run build into a
    * directory this backend never read.
@@ -1725,10 +1877,34 @@ export class IosSimulatorBackend implements DeviceBackend {
   }
 
   private async xcodeBuildKey(): Promise<string> {
+    const env = await this.toolchainEnv();
+    const developerDir = env?.DEVELOPER_DIR;
+    const cached = this.xcodeBuildKeyCache;
+    const resolvedAtMs = Date.now();
+    // The capability probe checks the helper path before each native action.
+    // Reuse the version process and source digest within the Xcode lookup window.
+    if (
+      cached !== null &&
+      cached.developerDir === developerDir &&
+      resolvedAtMs - cached.resolvedAtMs < XCODE_SELECT_CACHE_MS
+    ) {
+      return await cached.key;
+    }
+    const entry = { developerDir, resolvedAtMs, key: this.resolveXcodeBuildKey(env) };
+    this.xcodeBuildKeyCache = entry;
+    try {
+      return await entry.key;
+    } catch (error) {
+      if (this.xcodeBuildKeyCache === entry) this.xcodeBuildKeyCache = null;
+      throw error;
+    }
+  }
+
+  private async resolveXcodeBuildKey(env: NodeJS.ProcessEnv | undefined): Promise<string> {
     const result = await this.run("xcodebuild", ["-version"], {
       timeoutMs: 20_000,
       allowNonZeroExit: true,
-      env: await this.toolchainEnv(),
+      env,
     }).catch(() => null);
     // Derived by the shared helper so the smoke CLI writes the directory the
     // server reads; deriving it here independently is what let them diverge.

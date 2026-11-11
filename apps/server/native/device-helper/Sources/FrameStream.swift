@@ -6,8 +6,8 @@
 // `@synara/contracts` (see HEADER.md).
 //
 // Backpressure is a hard requirement: the pane must never be the reason RPC
-// traffic stalls. The encoder drops frames while busy, and the writer drops
-// frames rather than blocking on a socket that is not draining.
+// traffic stalls. The encoder drops frames while busy, and the writer bounds
+// its queue and interrupts a blocked socket write during teardown.
 
 import CoreVideo
 import Foundation
@@ -176,7 +176,12 @@ final class FrameSocketWriter {
 
   func close() {
     stateLock.lock()
-    closed = true
+    if !closed {
+      closed = true
+      // The reader may still be connected but not draining. Wake any blocked
+      // write before joining the queue, while the descriptor is still ours.
+      _ = Darwin.shutdown(descriptor, SHUT_RDWR)
+    }
     stateLock.unlock()
 
     queue.sync {
