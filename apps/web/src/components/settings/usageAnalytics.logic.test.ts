@@ -69,10 +69,21 @@ const result: StatsGetUsageAnalyticsResult = {
       provider: "claudeAgent",
       model: "claude-opus",
       projectId: "p-app",
+      source: "reported",
       costUsd: 1.25,
       turns: 2,
     },
+    {
+      hour: localHour(firstDay, 22),
+      provider: "codex",
+      model: "gpt-codex",
+      projectId: null,
+      source: "estimated",
+      costUsd: 0.5,
+      turns: 0,
+    },
   ],
+  pricing: { status: "fresh", fetchedAt: null, unpricedModels: [], unpricedTokens: 0 },
   projects: [{ projectId: "p-app", title: "App" }],
   unavailableProviders: ["cursor"],
 };
@@ -96,7 +107,7 @@ describe("buildUsageAnalyticsView", () => {
       turns: 2,
       failedTurns: 1,
     });
-    expect(view.totals.costUsd).toBeCloseTo(1.25);
+    expect(view.totals.costUsd).toBeCloseTo(1.75);
     expect(view.previous?.tokens).toBe(2000);
     expect(view.days.at(-1)).toMatchObject({ tokens: 3000 });
     expect(view.days[0]?.byProvider.codex?.tokens).toBe(1000);
@@ -105,8 +116,8 @@ describe("buildUsageAnalyticsView", () => {
 
   it("ranks providers, models and projects, with chats outside projects grouped", () => {
     expect(view.providers.map((provider) => provider.provider)).toEqual(["claudeAgent", "codex"]);
-    expect(view.providers[0]?.reportsCost).toBe(true);
-    expect(view.providers[1]?.reportsCost).toBe(false);
+    expect(view.providers[0]?.costSource).toBe("reported");
+    expect(view.providers[1]?.costSource).toBe("estimated");
     expect(view.models[0]).toMatchObject({ model: "claude-opus", turns: 2 });
     expect(view.projects).toEqual([
       expect.objectContaining({ projectId: "p-app", title: "App", tokens: 3000 }),

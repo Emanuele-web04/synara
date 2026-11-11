@@ -1,7 +1,8 @@
 // FILE: UsageAnalyticsPanel.tsx
 // Purpose: The Usage Analytics tab: cost and tokens by day, provider, model, and
 //          project, plus cache use, turn origin, and weekly rhythm, from Synara's
-//          own usage records. Cost is what providers reported, never an estimate.
+//          own usage records. Cost is at API rates: the provider's own figure when
+//          it reports one, else its tokens at API list prices (Codex).
 // Layer: Web settings feature
 // Exports: UsageAnalyticsPanel
 
@@ -24,6 +25,7 @@ import {
   providerLabel,
   type UsageAnalyticsMetric,
   type UsageAnalyticsProvider,
+  type UsageAnalyticsProviderTotal,
   type UsageAnalyticsRange,
   type UsageAnalyticsView,
   type UsageAnalyticsWindow,
@@ -235,10 +237,25 @@ function UsageAnalyticsBody(props: {
   const weekdayAverage = weekdays.length
     ? weekdays.reduce((sum, day) => sum + valueOf(day), 0) / weekdays.length
     : 0;
-  const costProviders = view.providers.filter((provider) => provider.reportsCost);
-  const tokenOnlyProviders = view.providers.filter(
-    (provider) => !provider.reportsCost && provider.tokens > 0 && provider.provider !== "unknown",
-  );
+  const providerNames = (source: UsageAnalyticsProviderTotal["costSource"]) =>
+    view.providers
+      .filter(
+        (provider) =>
+          provider.costSource === source &&
+          (provider.tokens > 0 || provider.costUsd > 0) &&
+          provider.provider !== "unknown",
+      )
+      .map((provider) => providerLabel(provider.provider))
+      .join(", ");
+  const reportedNames = providerNames("reported");
+  const estimatedNames = providerNames("estimated");
+  const tokenOnlyNames = providerNames(null);
+  const pricesUpdated = view.pricing.fetchedAt
+    ? new Date(view.pricing.fetchedAt).toLocaleDateString(undefined, {
+        month: "short",
+        day: "numeric",
+      })
+    : null;
   const originTotal = view.origins.user + view.origins.automation + view.origins.agent;
   // Ranked by the metric on screen, so "Cost" shows the most expensive first.
   const byMetric = <T extends { tokens: number; costUsd: number }>(left: T, right: T) =>
@@ -256,7 +273,7 @@ function UsageAnalyticsBody(props: {
         <div className="flex flex-col gap-8 @3xl:flex-row @3xl:gap-10">
           <div className="flex flex-col gap-1.5 @3xl:w-60 @3xl:shrink-0">
             <span className="text-ui-sm tracking-wide text-muted-foreground uppercase">
-              {metric === "cost" ? "Reported cost" : "Tokens processed"}
+              {metric === "cost" ? "API cost" : "Tokens processed"}
             </span>
             <span className="text-3xl font-semibold tracking-tight text-foreground tabular-nums">
               {metric === "cost" ? formatUsd(total) : formatNumber(total)}
@@ -266,7 +283,7 @@ function UsageAnalyticsBody(props: {
             />
             <span className="text-ui-sm text-muted-foreground">
               {metric === "cost"
-                ? "As billed at API rates by each provider."
+                ? "At API rates, not what plans bill."
                 : `${formatTokens(view.totals.cacheReadTokens)} read from cache.`}
             </span>
             <ul className="mt-4 flex flex-col gap-3.5">
@@ -331,7 +348,7 @@ function UsageAnalyticsBody(props: {
               detail: `${formatNumber(view.totals.failedTurns)} ended in error`,
             },
             {
-              label: "Reported cost",
+              label: "API cost",
               value: formatUsd(view.totals.costUsd),
               detail:
                 view.totals.turns > 0
@@ -457,17 +474,24 @@ function UsageAnalyticsBody(props: {
           <SectionTitle title="About these numbers" />
           <ul className="flex list-disc flex-col gap-2 pl-4 text-ui text-muted-foreground marker:text-foreground/30">
             <li>
-              {costProviders.length > 0
-                ? `Cost is what ${costProviders.map((provider) => providerLabel(provider.provider)).join(", ")} reported, at API rates. Plans may cost less.`
-                : "No provider reported cost in this period."}
+              Cost is at API rates. A subscription bills its own price, which can be much less.
             </li>
-            {tokenOnlyProviders.length > 0 ? (
+            {reportedNames ? <li>{reportedNames}: cost as the provider reported it.</li> : null}
+            {estimatedNames ? (
               <li>
-                {tokenOnlyProviders.map((provider) => providerLabel(provider.provider)).join(", ")}{" "}
-                {tokenOnlyProviders.length === 1 ? "reports" : "report"} tokens but no cost, so{" "}
-                {tokenOnlyProviders.length === 1 ? "it is" : "they are"} left out of cost totals.
+                {estimatedNames}: no cost reported, so its tokens are priced at API list prices
+                {pricesUpdated ? ` (LiteLLM, updated ${pricesUpdated})` : ""}.
               </li>
             ) : null}
+            {view.pricing.unpricedTokens > 0 ? (
+              <li>
+                {view.pricing.status === "unavailable"
+                  ? "API prices could not be downloaded"
+                  : `${view.pricing.unpricedModels.join(", ") || "Some models"} ${view.pricing.unpricedModels.length === 1 ? "has" : "have"} no list price`}
+                , so {formatTokens(view.pricing.unpricedTokens)} tokens have no cost.
+              </li>
+            ) : null}
+            {tokenOnlyNames ? <li>{tokenOnlyNames}: tokens only, no cost.</li> : null}
             {view.unavailableProviders.length > 0 ? (
               <li>
                 {view.unavailableProviders.map((provider) => providerLabel(provider)).join(", ")}{" "}

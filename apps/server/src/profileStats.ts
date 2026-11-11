@@ -690,8 +690,10 @@ export function userPromptEventsQuery(
 
 // Positive per-step token deltas for every provider and dispatch origin.
 // Defines `turn_model`, the Claude CTEs, and `token_delta_rows(thread_id, created_at,
-// provider, instanceId, model, dispatch_origin, tokens, cache_tokens)`, where
-// cache_tokens is the part of tokens read from the prompt cache, when known;
+// provider, instanceId, model, dispatch_origin, tokens, cache_tokens, output_tokens,
+// cache_write_tokens)`, where cache_tokens is the part of tokens read from the
+// prompt cache, when known, and output_tokens / cache_write_tokens are the output
+// and cache-write parts when the provider reports session totals (else NULL);
 // callers pick origins and bucket `created_at` themselves. Deltas always need a
 // thread's full ordered history, so filter token_delta_rows by time, never the
 // scope: the first row inside a time window would otherwise count its whole
@@ -814,6 +816,10 @@ export function tokenDeltaCtes(sql: SqlClient.SqlClient, scope?: TokenStatsThrea
         CAST(json_extract(a.payload_json, '$.usedTokens') AS INTEGER) AS ut,
         -- The session's cached input, on the same scale as totalProcessedTokens.
         CAST(json_extract(a.payload_json, '$.cumulativeUsage.cachedInputTokens') AS INTEGER) AS ct,
+        -- Its output and cache writes, so usage analytics can price the steps.
+        CAST(json_extract(a.payload_json, '$.cumulativeUsage.outputTokens') AS INTEGER) AS ot,
+        CAST(json_extract(a.payload_json, '$.cumulativeUsage.cacheCreationInputTokens') AS INTEGER)
+          AS wt,
         pm.dispatch_origin AS dispatch_origin,
         a.sequence AS sequence,
         a.created_at AS created_at,
@@ -860,6 +866,8 @@ export function tokenDeltaCtes(sql: SqlClient.SqlClient, scope?: TokenStatsThrea
         reasoning,
         tp AS tot,
         ct AS cached_tot,
+        ot AS output_tot,
+        wt AS write_tot,
         dispatch_origin,
         sequence,
         created_at,
@@ -883,7 +891,21 @@ export function tokenDeltaCtes(sql: SqlClient.SqlClient, scope?: TokenStatsThrea
           WHEN previous_tot IS NULL OR tot < previous_tot THEN cached_tot
           WHEN previous_cached_tot IS NULL THEN 0
           ELSE MAX(0, cached_tot - previous_cached_tot)
-        END) AS cache_d
+        END) AS cache_d,
+        -- Output and cache writes stay NULL (unknown) without a baseline, so a
+        -- step is never priced from a guessed split.
+        MIN(d, CASE
+          WHEN output_tot IS NULL THEN NULL
+          WHEN previous_tot IS NULL OR tot < previous_tot THEN output_tot
+          WHEN previous_output_tot IS NULL THEN NULL
+          ELSE MAX(0, output_tot - previous_output_tot)
+        END) AS output_d,
+        MIN(d, CASE
+          WHEN write_tot IS NULL THEN NULL
+          WHEN previous_tot IS NULL OR tot < previous_tot THEN write_tot
+          WHEN previous_write_tot IS NULL THEN NULL
+          ELSE MAX(0, write_tot - previous_write_tot)
+        END) AS write_d
       FROM (
         SELECT
           thread_id,
@@ -898,6 +920,10 @@ export function tokenDeltaCtes(sql: SqlClient.SqlClient, scope?: TokenStatsThrea
           previous_tot,
           cached_tot,
           previous_cached_tot,
+          output_tot,
+          previous_output_tot,
+          write_tot,
+          previous_write_tot,
           CASE
             WHEN previous_tot IS NULL OR tot < previous_tot THEN tot
             ELSE MAX(0, tot - previous_tot)
@@ -915,12 +941,20 @@ export function tokenDeltaCtes(sql: SqlClient.SqlClient, scope?: TokenStatsThrea
             dispatch_origin,
             tot,
             cached_tot,
+            output_tot,
+            write_tot,
             LAG(tot) OVER (
               PARTITION BY thread_id, counter_provider, usageSessionId ${deltaOrder}
             ) AS previous_tot,
             LAG(cached_tot) OVER (
               PARTITION BY thread_id, counter_provider, usageSessionId ${deltaOrder}
-            ) AS previous_cached_tot
+            ) AS previous_cached_tot,
+            LAG(output_tot) OVER (
+              PARTITION BY thread_id, counter_provider, usageSessionId ${deltaOrder}
+            ) AS previous_output_tot,
+            LAG(write_tot) OVER (
+              PARTITION BY thread_id, counter_provider, usageSessionId ${deltaOrder}
+            ) AS previous_write_tot
           FROM cumulative_kept
         )
       )
@@ -1003,11 +1037,11 @@ export function tokenDeltaCtes(sql: SqlClient.SqlClient, scope?: TokenStatsThrea
     ),
     token_delta_rows AS (
       SELECT thread_id, created_at, provider, instanceId, model, reasoning, dispatch_origin, d AS tokens,
-        cache_d AS cache_tokens
+        cache_d AS cache_tokens, output_d AS output_tokens, write_d AS cache_write_tokens
       FROM cumulative_delta
       UNION ALL
       SELECT thread_id, created_at, provider, instanceId, model, reasoning, dispatch_origin, d AS tokens,
-        0 AS cache_tokens
+        0 AS cache_tokens, NULL AS output_tokens, NULL AS cache_write_tokens
       FROM used_only_delta
       UNION ALL
       SELECT
@@ -1019,7 +1053,10 @@ export function tokenDeltaCtes(sql: SqlClient.SqlClient, scope?: TokenStatsThrea
         tm.reasoning,
         c.dispatch_origin,
         c.tokens,
-        c.cache_tokens
+        c.cache_tokens,
+        -- Claude reports its own cost per turn, so its split is not needed.
+        NULL,
+        NULL
       FROM claude_token_rows c
       LEFT JOIN turn_model tm
         ON tm.thread_id = c.thread_id

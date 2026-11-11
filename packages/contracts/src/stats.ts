@@ -297,14 +297,21 @@ export const StatsUsageAnalyticsTurnRow = Schema.Struct({
 });
 export type StatsUsageAnalyticsTurnRow = typeof StatsUsageAnalyticsTurnRow.Type;
 
-// Cost the provider itself reported for turns completed in one UTC hour, in USD.
-// Providers that report no cost have no rows; this is never a price-table estimate.
+// Cost of Synara usage in one UTC hour, in USD, at API rates (not what a
+// subscription bills). `reported`: the provider's own figure for completed turns
+// (Claude's SDK, Cursor, OpenCode). `estimated`: for a provider that reports none
+// (Codex), its input, cache and output tokens at API list prices.
+export const StatsUsageAnalyticsCostSource = Schema.Literals(["reported", "estimated"]);
+export type StatsUsageAnalyticsCostSource = typeof StatsUsageAnalyticsCostSource.Type;
+
 export const StatsUsageAnalyticsCostRow = Schema.Struct({
   hour: IsoDateTime,
   provider: StatsUsageAnalyticsProvider,
   model: TrimmedNonEmptyString,
   projectId: Schema.NullOr(TrimmedNonEmptyString),
+  source: StatsUsageAnalyticsCostSource,
   costUsd: Schema.Finite.check(Schema.isGreaterThanOrEqualTo(0)),
+  // Turns with a reported cost; 0 for estimated rows.
   turns: NonNegativeInt,
 });
 export type StatsUsageAnalyticsCostRow = typeof StatsUsageAnalyticsCostRow.Type;
@@ -316,6 +323,21 @@ export const StatsUsageAnalyticsProject = Schema.Struct({
 });
 export type StatsUsageAnalyticsProject = typeof StatsUsageAnalyticsProject.Type;
 
+export const StatsUsageAnalyticsPricingStatus = Schema.Literals(["fresh", "cached", "unavailable"]);
+export type StatsUsageAnalyticsPricingStatus = typeof StatsUsageAnalyticsPricingStatus.Type;
+
+// The API price list used for estimated cost, so the client can say how complete
+// the cost is.
+export const StatsUsageAnalyticsPricing = Schema.Struct({
+  status: StatsUsageAnalyticsPricingStatus,
+  fetchedAt: Schema.NullOr(IsoDateTime),
+  // Models whose tokens needed an estimate but have no price, or whose tokens
+  // lack the input/output split a price needs. Their tokens count; their cost does not.
+  unpricedModels: Schema.Array(TrimmedNonEmptyString),
+  unpricedTokens: NonNegativeInt,
+});
+export type StatsUsageAnalyticsPricing = typeof StatsUsageAnalyticsPricing.Type;
+
 export const StatsGetUsageAnalyticsResult = Schema.Struct({
   generatedAt: IsoDateTime,
   from: IsoDateTime,
@@ -323,6 +345,7 @@ export const StatsGetUsageAnalyticsResult = Schema.Struct({
   tokens: Schema.Array(StatsUsageAnalyticsTokenRow),
   turns: Schema.Array(StatsUsageAnalyticsTurnRow),
   costs: Schema.Array(StatsUsageAnalyticsCostRow),
+  pricing: StatsUsageAnalyticsPricing,
   projects: Schema.Array(StatsUsageAnalyticsProject),
   // Providers with turns in the window whose adapters report no token usage.
   unavailableProviders: Schema.Array(ProviderKind),

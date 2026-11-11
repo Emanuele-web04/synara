@@ -1,8 +1,10 @@
 // FILE: usageAnalyticsStats.ts
 // Purpose: Usage analytics for Settings → Usage → Analytics from Synara's local
-// projection DB: token deltas, turns, and provider-reported cost as UTC-hour rows
-// by provider, model, project, and origin. The client buckets the rows into its
-// own local days and hours. Shares the token SQL with profileStats.ts and the
+// projection DB: token deltas, turns, and cost at API rates as UTC-hour rows by
+// provider, model, project, and origin. Cost is the provider's own figure when it
+// reports one (Claude's SDK, Cursor, OpenCode); otherwise (Codex) the tokens are
+// priced at API list prices (usagePricing.ts). The client buckets the rows into
+// its own local days and hours. Shares the token SQL with profileStats.ts and the
 // model naming with recapStats.ts. Available in Stable and Beta.
 // Layer: server stats query service (SqlClient).
 
@@ -29,6 +31,13 @@ import {
   turnModelSelectionCte,
 } from "./profileStats";
 import { recapModelName } from "./recapStats";
+import { ServerConfig } from "./config";
+import {
+  makeUsagePricingSource,
+  type PriceTable,
+  priceTokens,
+  type UsagePricingSource,
+} from "./usagePricing";
 
 const DAY_MS = 86_400_000;
 
@@ -46,6 +55,11 @@ interface TokenHourRow {
   readonly title: string | null;
   readonly tokens: number;
   readonly cacheTokens: number;
+  /** Tokens whose output part is known, and that part's cache reads. */
+  readonly splitTokens: number;
+  readonly splitCacheTokens: number;
+  readonly outputTokens: number;
+  readonly cacheWriteTokens: number;
 }
 
 interface TurnHourRow {
@@ -113,11 +127,43 @@ function mergeInto<Row>(
 
 type Mutable<T> = { -readonly [K in keyof T]: T[K] };
 
+/**
+ * API list-price cost of one token row. Only tokens with a known output part
+ * are priced: without it, output (the dearest part) would be priced as input.
+ */
+export function estimateCost(
+  prices: PriceTable,
+  model: string,
+  total: number,
+  row: Pick<TokenHourRow, "splitTokens" | "splitCacheTokens" | "outputTokens" | "cacheWriteTokens">,
+): { readonly costUsd: number; readonly unpricedTokens: number } {
+  const split = Math.min(total, Math.max(0, Math.round(num(row.splitTokens))));
+  const cacheRead = Math.min(split, Math.max(0, Math.round(num(row.splitCacheTokens))));
+  const output = Math.min(split - cacheRead, Math.max(0, Math.round(num(row.outputTokens))));
+  const cacheWrite = Math.min(
+    split - cacheRead - output,
+    Math.max(0, Math.round(num(row.cacheWriteTokens))),
+  );
+  const costUsd =
+    split > 0
+      ? priceTokens(prices.table, model, {
+          inputTokens: split - cacheRead - output - cacheWrite,
+          cacheReadTokens: cacheRead,
+          cacheWriteTokens: cacheWrite,
+          outputTokens: output,
+        })
+      : null;
+  return costUsd === null
+    ? { costUsd: 0, unpricedTokens: total }
+    : { costUsd, unpricedTokens: total - split };
+}
+
 export function buildUsageAnalytics(input: {
   readonly window: AnalyticsWindow;
   readonly tokenRows: ReadonlyArray<TokenHourRow>;
   readonly turnRows: ReadonlyArray<TurnHourRow>;
   readonly costRows: ReadonlyArray<CostHourRow>;
+  readonly prices: PriceTable;
   readonly nowMs: number;
 }): StatsGetUsageAnalyticsResult {
   const projects = new Map<string, StatsUsageAnalyticsProject>();
@@ -133,6 +179,27 @@ export function buildUsageAnalytics(input: {
     return { provider: normalizedProvider, model: recapModelName(normalizedProvider, model) };
   };
 
+  const costs = new Map<string, Mutable<StatsUsageAnalyticsCostRow>>();
+  const addCost = (row: StatsUsageAnalyticsCostRow) =>
+    mergeInto(
+      costs,
+      [row.hour, row.provider, row.model, row.projectId ?? "", row.source].join("\u0000"),
+      { ...row },
+      (existing, next) => {
+        existing.costUsd += next.costUsd;
+        existing.turns += next.turns;
+      },
+    );
+
+  // A provider that reports its own cost keeps it. Pricing its tokens as well
+  // would count that usage twice.
+  const reportingProviders = new Set<string>();
+  for (const row of input.costRows) {
+    if (num(row.costUsd) > 0) reportingProviders.add(normalizeProviderKind(row.provider));
+  }
+  const unpricedModels = new Set<string>();
+  let unpricedTokens = 0;
+
   const tokens = new Map<string, Mutable<StatsUsageAnalyticsTokenRow>>();
   const providersWithTokens = new Set<ProviderKind>();
   for (const row of input.tokenRows) {
@@ -143,6 +210,24 @@ export function buildUsageAnalytics(input: {
     if (provider !== "unknown") providersWithTokens.add(provider);
     const projectId = projectFor(row.projectId, row.title);
     const origin = analyticsOrigin(row.origin);
+    if (!reportingProviders.has(provider)) {
+      const estimate = estimateCost(input.prices, model, total, row);
+      if (estimate.costUsd > 0) {
+        addCost({
+          hour,
+          provider,
+          model,
+          projectId,
+          source: "estimated",
+          costUsd: estimate.costUsd,
+          turns: 0,
+        });
+      }
+      if (estimate.unpricedTokens > 0) {
+        unpricedTokens += estimate.unpricedTokens;
+        unpricedModels.add(model);
+      }
+    }
     mergeInto(
       tokens,
       [hour, provider, model, projectId ?? "", origin].join("\u0000"),
@@ -193,22 +278,21 @@ export function buildUsageAnalytics(input: {
     );
   }
 
-  const costs = new Map<string, Mutable<StatsUsageAnalyticsCostRow>>();
   for (const row of input.costRows) {
     const hour = hourInstant(row.hour);
     const costUsd = num(row.costUsd);
     if (!hour || !(costUsd > 0)) continue;
     const { provider, model } = identity(row.provider, row.model);
     const projectId = projectFor(row.projectId, row.title);
-    mergeInto(
-      costs,
-      [hour, provider, model, projectId ?? ""].join("\u0000"),
-      { hour, provider, model, projectId, costUsd, turns: Math.max(0, Math.round(num(row.turns))) },
-      (existing, next) => {
-        existing.costUsd += next.costUsd;
-        existing.turns += next.turns;
-      },
-    );
+    addCost({
+      hour,
+      provider,
+      model,
+      projectId,
+      source: "reported",
+      costUsd,
+      turns: Math.max(0, Math.round(num(row.turns))),
+    });
   }
 
   return {
@@ -218,6 +302,12 @@ export function buildUsageAnalytics(input: {
     tokens: [...tokens.values()],
     turns: [...turns.values()],
     costs: [...costs.values()],
+    pricing: {
+      status: input.prices.status,
+      fetchedAt: input.prices.fetchedAt,
+      unpricedModels: [...unpricedModels].filter((model) => model !== "unknown").toSorted(),
+      unpricedTokens,
+    },
     projects: [...projects.values()].toSorted((left, right) =>
       left.title.localeCompare(right.title),
     ),
@@ -240,10 +330,17 @@ export class UsageAnalyticsQuery extends ServiceMap.Service<
   UsageAnalyticsQueryShape
 >()("synara/usageAnalyticsStats/UsageAnalyticsQuery") {}
 
-export const makeUsageAnalyticsQuery = (options: { readonly now?: () => number } = {}) =>
+const NO_PRICES: UsagePricingSource = {
+  load: async () => ({ table: new Map(), status: "unavailable", fetchedAt: null }),
+};
+
+export const makeUsageAnalyticsQuery = (
+  options: { readonly now?: () => number; readonly pricing?: UsagePricingSource } = {},
+) =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
     const now = options.now ?? Date.now;
+    const pricing = options.pricing ?? NO_PRICES;
 
     // Same provider/model attribution as the recap's turns: the turn's selection
     // first, then the thread's current selection and session as fallbacks.
@@ -299,7 +396,9 @@ export const makeUsageAnalyticsQuery = (options: { readonly now?: () => number }
           r.model AS model,
           t.project_id AS project_id,
           r.tokens AS tokens,
-          r.cache_tokens AS cache_tokens
+          r.cache_tokens AS cache_tokens,
+          r.output_tokens AS output_tokens,
+          r.cache_write_tokens AS cache_write_tokens
         FROM token_delta_rows r
         JOIN projection_threads t ON t.thread_id = r.thread_id
         WHERE r.created_at >= ${window.from} AND r.created_at < ${window.to}
@@ -312,7 +411,9 @@ export const makeUsageAnalyticsQuery = (options: { readonly now?: () => number }
           COALESCE(d.model, 'unknown'),
           dt.project_id,
           d.tokens,
-          0
+          0,
+          NULL,
+          NULL
         FROM profile_stats_deleted_tokens d
         LEFT JOIN profile_stats_deleted_threads dt ON dt.thread_id = d.thread_id
         WHERE d.created_at >= ${window.from}
@@ -327,7 +428,13 @@ export const makeUsageAnalyticsQuery = (options: { readonly now?: () => number }
         p.project_id AS projectId,
         p.title AS title,
         SUM(r.tokens) AS tokens,
-        SUM(r.cache_tokens) AS cacheTokens
+        SUM(r.cache_tokens) AS cacheTokens,
+        SUM(CASE WHEN r.output_tokens IS NOT NULL THEN r.tokens ELSE 0 END) AS splitTokens,
+        SUM(CASE WHEN r.output_tokens IS NOT NULL THEN r.cache_tokens ELSE 0 END)
+          AS splitCacheTokens,
+        SUM(COALESCE(r.output_tokens, 0)) AS outputTokens,
+        SUM(CASE WHEN r.output_tokens IS NOT NULL THEN COALESCE(r.cache_write_tokens, 0) ELSE 0 END)
+          AS cacheWriteTokens
       FROM analytics_token_rows r
       ${realProjectJoin("r.project_id")}
       GROUP BY hour, r.origin, r.provider, r.model, p.project_id, p.title
@@ -484,10 +591,19 @@ export const makeUsageAnalyticsQuery = (options: { readonly now?: () => number }
             costRows: queryCosts(window),
           }),
         );
-        return buildUsageAnalytics({ window, ...rows, nowMs: now() });
+        const prices = yield* Effect.promise(() => pricing.load());
+        return buildUsageAnalytics({ window, ...rows, prices, nowMs: now() });
       });
 
     return { getUsageAnalytics } satisfies UsageAnalyticsQueryShape;
   });
 
-export const UsageAnalyticsQueryLive = Layer.effect(UsageAnalyticsQuery, makeUsageAnalyticsQuery());
+export const UsageAnalyticsQueryLive = Layer.effect(
+  UsageAnalyticsQuery,
+  Effect.gen(function* () {
+    const config = yield* ServerConfig;
+    return yield* makeUsageAnalyticsQuery({
+      pricing: makeUsagePricingSource({ stateDir: config.stateDir }),
+    });
+  }),
+);

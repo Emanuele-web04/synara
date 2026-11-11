@@ -8,6 +8,7 @@ import {
   PROVIDER_DISPLAY_NAMES,
   type ProviderKind,
   type StatsGetUsageAnalyticsResult,
+  type StatsUsageAnalyticsCostSource,
 } from "@synara/contracts";
 
 export type UsageAnalyticsRange = "7d" | "30d" | "90d" | "1y";
@@ -102,7 +103,8 @@ export interface UsageAnalyticsProviderTotal {
   cacheReadTokens: number;
   costUsd: number;
   turns: number;
-  reportsCost: boolean;
+  /** Where its cost comes from; null when it has none. */
+  costSource: StatsUsageAnalyticsCostSource | null;
 }
 
 export interface UsageAnalyticsModelTotal {
@@ -144,6 +146,7 @@ export interface UsageAnalyticsView {
   /** Tokens by local weekday (0 = Monday) and hour. */
   readonly rhythm: ReadonlyArray<ReadonlyArray<number>>;
   readonly unavailableProviders: ReadonlyArray<ProviderKind>;
+  readonly pricing: StatsGetUsageAnalyticsResult["pricing"];
 }
 
 function emptyTotals(): UsageAnalyticsTotals {
@@ -198,7 +201,7 @@ export function buildUsageAnalyticsView(
   const providerFor = (provider: UsageAnalyticsProvider) => {
     let total = providers.get(provider);
     if (!total) {
-      total = { provider, tokens: 0, cacheReadTokens: 0, costUsd: 0, turns: 0, reportsCost: false };
+      total = { provider, tokens: 0, cacheReadTokens: 0, costUsd: 0, turns: 0, costSource: null };
       providers.set(provider, total);
     }
     return total;
@@ -278,7 +281,8 @@ export function buildUsageAnalyticsView(
     totals.costUsd += row.costUsd;
     const provider = providerFor(row.provider);
     provider.costUsd += row.costUsd;
-    provider.reportsCost = true;
+    // A provider's own figure outranks an estimate.
+    if (provider.costSource !== "reported") provider.costSource = row.source;
     modelFor(row.provider, row.model).costUsd += row.costUsd;
     projectFor(row.projectId).costUsd += row.costUsd;
     const slot = dayFor(row.hour, row.provider);
@@ -305,6 +309,7 @@ export function buildUsageAnalyticsView(
     origins,
     rhythm,
     unavailableProviders: result.unavailableProviders,
+    pricing: result.pricing,
   };
 }
 

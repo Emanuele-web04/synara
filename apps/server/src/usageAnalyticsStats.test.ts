@@ -1,6 +1,7 @@
 // FILE: usageAnalyticsStats.test.ts
 // Purpose: Usage analytics SQL against the migrated SQLite schema: hourly token
-// deltas, turns, and provider-reported cost (per turn and running totals).
+// deltas, turns, provider-reported cost (per turn and running totals), and the
+// API-price estimate for a provider that reports none.
 // Layer: Server stats tests
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -14,15 +15,27 @@ import {
   resolveUsageAnalyticsWindow,
   UsageAnalyticsQuery,
 } from "./usageAnalyticsStats";
+import type { UsagePricingSource } from "./usagePricing";
 
 const NOW = Date.parse("2026-09-30T19:00:00.000Z");
 const WINDOW = { from: "2026-09-30T00:00:00.000Z", to: "2026-10-01T00:00:00.000Z" };
 
+// USD per token, as in LiteLLM's table.
+const PRICING: UsagePricingSource = {
+  load: async () => ({
+    status: "fresh",
+    fetchedAt: "2026-09-30T00:00:00.000Z",
+    table: new Map([
+      ["gpt-5-codex", { input: 1e-6, output: 1e-5, cacheRead: 1e-7, cacheWrite: 1e-6 }],
+    ]),
+  }),
+};
+
 function runTest<A, E>(effect: Effect.Effect<A, E, UsageAnalyticsQuery | SqlClient.SqlClient>) {
-  const layer = Layer.effect(UsageAnalyticsQuery, makeUsageAnalyticsQuery({ now: () => NOW })).pipe(
-    Layer.provideMerge(SqlitePersistenceMemory),
-    Layer.provide(NodeServices.layer),
-  );
+  const layer = Layer.effect(
+    UsageAnalyticsQuery,
+    makeUsageAnalyticsQuery({ now: () => NOW, pricing: PRICING }),
+  ).pipe(Layer.provideMerge(SqlitePersistenceMemory), Layer.provide(NodeServices.layer));
   return effect.pipe(Effect.provide(layer), Effect.scoped, Effect.runPromise);
 }
 
@@ -184,8 +197,69 @@ describe("UsageAnalyticsQuery", () => {
     expect(costByProvider.codex).toBeCloseTo(0.25);
     // A running total of 1.5 then 2 is two turns costing 1.5 and 0.5.
     expect(costByProvider.cursor).toBeCloseTo(2);
+    // Codex reported its own cost here, so its tokens are not priced again.
+    expect(result.costs.every((row) => row.source === "reported")).toBe(true);
 
     expect(result.projects).toEqual([{ projectId: "project-app", title: "App" }]);
     expect(result.unavailableProviders).toEqual(["cursor"]);
+  });
+});
+
+describe("UsageAnalyticsQuery estimates", () => {
+  // Codex reports no cost. Its session totals split each step into cached
+  // input, output and the rest, which are priced at the model's API rates.
+  const seedCodexWithoutCost = Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    yield* sql`
+      INSERT INTO projection_threads (
+        thread_id, project_id, title, model_selection_json, runtime_mode,
+        interaction_mode, env_mode, created_at, updated_at, deleted_at
+      )
+      VALUES
+        ('thread-priced', 'project-none', 'Priced', '{"provider":"codex","model":"gpt-5-codex"}',
+          'full-access', 'default', 'local',
+          '2026-09-30T08:00:00.000Z', '2026-09-30T09:00:00.000Z', NULL),
+        ('thread-unpriced', 'project-none', 'Unpriced', '{"provider":"codex","model":"gpt-9-mystery"}',
+          'full-access', 'default', 'local',
+          '2026-09-30T08:00:00.000Z', '2026-09-30T09:00:00.000Z', NULL)
+    `;
+    yield* sql`
+      INSERT INTO projection_thread_activities (
+        activity_id, thread_id, turn_id, tone, kind, summary, payload_json, sequence, created_at
+      )
+      VALUES
+        ('p-1', 'thread-priced', NULL, 'info', 'context-window.updated', 'tokens',
+          '{"provider":"codex","usedTokens":1000,"totalProcessedTokens":1000,"cumulativeUsage":{"inputTokens":900,"outputTokens":100,"cachedInputTokens":600}}',
+          1, '2026-09-30T08:10:00.000Z'),
+        ('p-2', 'thread-priced', NULL, 'info', 'context-window.updated', 'tokens',
+          '{"provider":"codex","usedTokens":2000,"totalProcessedTokens":3000,"cumulativeUsage":{"inputTokens":2700,"outputTokens":300,"cachedInputTokens":2000}}',
+          2, '2026-09-30T08:20:00.000Z'),
+        ('u-1', 'thread-unpriced', NULL, 'info', 'context-window.updated', 'tokens',
+          '{"provider":"codex","usedTokens":500,"totalProcessedTokens":500,"cumulativeUsage":{"inputTokens":450,"outputTokens":50}}',
+          1, '2026-09-30T08:30:00.000Z')
+    `;
+  });
+
+  it("prices tokens of a provider that reports no cost", async () => {
+    const result = await runTest(
+      Effect.gen(function* () {
+        yield* seedCodexWithoutCost;
+        const query = yield* UsageAnalyticsQuery;
+        return yield* query.getUsageAnalytics(WINDOW);
+      }),
+    );
+
+    // 3,000 tokens: 2,000 cached, 300 output, 700 other input.
+    const estimated = result.costs.filter((row) => row.source === "estimated");
+    expect(estimated).toHaveLength(1);
+    expect(estimated[0]).toMatchObject({ provider: "codex", model: "gpt-5-codex", turns: 0 });
+    expect(estimated[0]?.costUsd).toBeCloseTo(700e-6 + 2000e-7 + 300e-5, 10);
+
+    expect(result.pricing).toEqual({
+      status: "fresh",
+      fetchedAt: "2026-09-30T00:00:00.000Z",
+      unpricedModels: ["gpt-9-mystery"],
+      unpricedTokens: 500,
+    });
   });
 });
