@@ -14,8 +14,8 @@ import {
   readSync,
   unlinkSync,
 } from "node:fs";
+import { createRequire } from "node:module";
 import { resolve } from "node:path";
-import { parse } from "yaml";
 
 export type ReleaseLane = "bridge" | "clean";
 
@@ -197,6 +197,8 @@ interface UpdaterManifest {
 }
 
 function readUpdaterManifest(path: string): UpdaterManifest | null {
+  // Release preflight resolves version policy before installing dependencies.
+  const { parse } = createRequire(import.meta.url)("yaml") as typeof import("yaml");
   return parse(readFileSync(path, "utf8"), { maxAliasCount: 0 }) as UpdaterManifest | null;
 }
 

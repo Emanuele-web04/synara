@@ -520,6 +520,14 @@ jobs:
         with:
           node-version-file: package.json
 
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+
+      - name: Install release script dependencies
+        run: bun install --frozen-lockfile --ignore-scripts --filter @synara/scripts --production
+
       - name: Download all desktop artifacts
         uses: actions/download-artifact@v8
         with:
