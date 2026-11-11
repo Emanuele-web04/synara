@@ -1202,6 +1202,6 @@
   "productAnalyticsDisableDescription": "Turning this off stops product collection, cancels sends and deletes unsent product events and the analytics ID. Re-enabling uses a fresh random ID. Beta crash diagnostics are separate.",
   "rateLimitWarnings": "Rate limit warnings",
   "rateLimitWarnings2": "rate limit warnings",
-  "rateLimitWarningsDescription": "Show a banner when a provider says you are close to a usage limit. A banner still shows when you reach the limit.",
+  "rateLimitWarningsDescription": "Show a warning in Environment when a provider says you are close to a usage limit. A banner still shows when you reach the limit.",
   "showRateLimitWarnings": "Show rate limit warnings"
 }

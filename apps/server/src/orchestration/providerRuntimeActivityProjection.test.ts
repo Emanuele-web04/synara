@@ -1730,3 +1730,21 @@ it("projects the real nested Claude SDK rate-limit envelope", () => {
   });
   expectSchemaValidActivities(event);
 });
+
+it("keeps approaching limits as usage state without adding work-log warnings", () => {
+  const event = runtimeEvent({
+    type: "account.rate-limits.updated",
+    eventId: "claude-approaching",
+    provider: "claudeAgent",
+    turnId: TURN_ID,
+    payload: {
+      rateLimits: {
+        rate_limit_info: { status: "allowed_warning", utilization: 0.9, resetsAt: 1_800_000_000 },
+      },
+    },
+  });
+  expect(projectProviderRuntimeActivities(event).map((activity) => activity.kind)).toEqual([
+    "account.rate-limits.updated",
+  ]);
+  expectSchemaValidActivities(event);
+});

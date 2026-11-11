@@ -384,11 +384,10 @@ import { NewChatComputerPicker } from "./hosts/ComputerPicker";
 import { ProjectPicker } from "./chat/ProjectPicker";
 import { ProviderHealthBanner } from "./chat/ProviderHealthBanner";
 import { resolveProviderModelLabel } from "./chat/ProviderModelPicker";
-import {
-  RateLimitBanner,
-  deriveLatestRateLimitStatus,
-  type RateLimitStatus,
-} from "./chat/RateLimitBanner";
+import { RateLimitBanner } from "./chat/RateLimitBanner";
+import { isMissingCheckpointBaselineActivity } from "../workLog";
+import type { RateLimitStatus } from "~/lib/rateLimitStatus";
+import { useRateLimitStatus } from "~/hooks/useRateLimitStatus";
 import { ThreadDetailHydrationState } from "./chat/ThreadDetailHydrationState";
 import { ThreadErrorBanner } from "./chat/ThreadErrorBanner";
 import { ChatThreadFindHost } from "./chat/ThreadFindBar";
@@ -697,6 +696,7 @@ export default function ChatView({
     gitCreateDetachedWorktreeMutationOptions({ queryClient }),
   );
   const isEditorRail = presentationMode === "editor";
+  const environmentEnabled = !isEditorRail && !hideHeader;
   const isInactiveSplitPane = surfaceMode === "split" && !isFocusedPane;
   const {
     composerDraft,
@@ -1117,19 +1117,28 @@ export default function ChatView({
     () => deriveCumulativeCostUsd(threadActivities),
     [threadActivities],
   );
-  const activeRateLimitStatus = useMemo(
-    () => deriveLatestRateLimitStatus(threadActivities),
-    [threadActivities],
+  const quotaProvider = activeThread?.session?.provider ?? activeThread?.modelSelection.provider;
+  const quotaInstanceId =
+    activeThread?.session?.providerInstanceId ??
+    activeThread?.modelSelection.instanceId ??
+    quotaProvider;
+  const activeRateLimitStatus = useRateLimitStatus(
+    threadActivities,
+    quotaProvider,
+    quotaInstanceId,
   );
+  const enabledRateLimitStatus =
+    activeRateLimitStatus?.status === "allowed_warning" && !settings.showRateLimitWarnings
+      ? null
+      : activeRateLimitStatus;
   const activeRateLimitBannerDismissalKey = useMemo(
     () => getRateLimitBannerDismissalKey(activeRateLimitStatus, activeThread?.id ?? null),
     [activeRateLimitStatus, activeThread?.id],
   );
   const visibleActiveRateLimitStatus =
-    activeRateLimitBannerDismissalKey === dismissedRateLimitBannerKey ||
-    (activeRateLimitStatus?.status === "allowed_warning" && !settings.showRateLimitWarnings)
+    activeRateLimitBannerDismissalKey === dismissedRateLimitBannerKey
       ? null
-      : activeRateLimitStatus;
+      : enabledRateLimitStatus;
   const latestTurnSettledByProvider = isLatestTurnSettled(
     activeLatestTurn,
     activeThread?.session ?? null,
@@ -1570,6 +1579,7 @@ export default function ChatView({
     activeThread,
     latestTurnSettled,
     latestTurnLive,
+    keepMissingCheckpointNotices: !environmentEnabled,
   });
   // The newest transcript card with subagents still at work, for the floating
   // "N running" chip that brings it back into view.
@@ -3296,7 +3306,6 @@ export default function ChatView({
   // Temporary threads are visually identical to regular chats — they use the same
   // Environment panel + header controls. "Temporary" is purely a sidebar badge +
   // auto-delete-on-leave concern, never a stripped-down chat UI.
-  const environmentEnabled = !isEditorRail && !hideHeader;
   const environmentUsesFloatingOverlay =
     isTerminalEnvironmentContext || isMobileViewport || rightDockOpen || surfaceMode === "split";
   const environmentDefaultOpen = resolveDefaultEnvironmentPanelOpen({
@@ -6159,6 +6168,28 @@ export default function ChatView({
     availableEditors,
     activeThreadId: activeThread.id,
     activeProvider: activeThread.session?.provider ?? activeThread.modelSelection.provider,
+    activeProviderInstanceId: quotaInstanceId,
+    rateLimitStatus: enabledRateLimitStatus,
+    checkpointBaselineUnavailable:
+      Boolean(activeLatestTurnId) &&
+      (activeThread.turnDiffSummaries.some(
+        (summary) => summary.turnId === activeLatestTurnId && summary.status === "missing",
+      ) ||
+        threadActivities.some((activity) => {
+          if (!isMissingCheckpointBaselineActivity(activity)) return false;
+          if (activity.turnId === activeLatestTurnId) return true;
+          const payload = activity.payload;
+          return (
+            activity.turnId === null &&
+            payload !== null &&
+            typeof payload === "object" &&
+            "messageId" in payload &&
+            activeThread.messages.some(
+              (message) =>
+                message.id === payload.messageId && message.turnId === activeLatestTurnId,
+            )
+          );
+        })),
     isGroupChat: isGroupContainer,
     groupFolderPath: isGroupContainer ? resolvedThreadWorkingDirectory : null,
     showGitActions,
@@ -6244,6 +6275,7 @@ export default function ChatView({
   const environmentHeaderState = environmentEnabled
     ? {
         open: environmentPanelVisibleEffective,
+        attention: enabledRateLimitStatus !== null,
         onOpenChange: setEnvironmentFromAuxiliary,
       }
     : null;
@@ -6326,6 +6358,15 @@ export default function ChatView({
         data-chat-pane-scope={paneScopeId}
       >
         <ComposerColumnFrame>
+          {visibleActiveRateLimitStatus &&
+          (visibleActiveRateLimitStatus.status === "rejected" || !environmentEnabled) ? (
+            <div className="pb-2">
+              <RateLimitBanner
+                rateLimitStatus={visibleActiveRateLimitStatus}
+                onDismiss={dismissActiveRateLimitBanner}
+              />
+            </div>
+          ) : null}
           {/* A bare wrapper keeps the normal-flow panels' -mb-px seam onto the input shell
                 via margin collapse. */}
           <div>
@@ -6961,10 +7002,6 @@ export default function ChatView({
       <ProviderHealthBanner
         status={shouldShowProviderHealthBanner ? visibleActiveProviderStatus : null}
         onDismiss={dismissActiveProviderHealthBanner}
-      />
-      <RateLimitBanner
-        rateLimitStatus={visibleActiveRateLimitStatus}
-        onDismiss={dismissActiveRateLimitBanner}
       />
       {terminalWorkspaceOpen && !isEditorRail ? (
         <TerminalWorkspaceTabs
