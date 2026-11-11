@@ -616,6 +616,7 @@ let restartTimer: ReturnType<typeof setTimeout> | null = null;
 let isQuitting = false;
 let isUpdaterInstallPreparing = false;
 let isUpdaterQuitAndInstallInFlight = false;
+let updaterWindowToRestore: BrowserWindow | null = null;
 const updateInstallPreparation = makeUpdateInstallPreparationCoordinator();
 const deferredDesktopQuitIntent = makeDeferredDesktopQuitIntentCoordinator();
 const runningChatsQuitGuard = makeRunningChatsQuitGuard();
@@ -1104,11 +1105,11 @@ let downloadedUpdateIdentityTask: Promise<void> | null = null;
 let activeUpdateInstallHandoff: UpdateInstallHandoffExpectation | null = null;
 const pendingUpdateCacheClearQueue = new PendingUpdateCacheClearQueue();
 const macUpdateInstallHandoff =
-  process.platform === "darwin"
-    ? new MacUpdateInstallHandoff(nativeAutoUpdater, (error) =>
-        autoUpdater.emit("error", error instanceof Error ? error : new Error(String(error))),
-      )
-    : null;
+  process.platform === "darwin" ? new MacUpdateInstallHandoff(nativeAutoUpdater) : null;
+
+function isMacUpdateShuttingDown(): boolean {
+  return macUpdateInstallHandoff !== null && isQuitting && isUpdaterInstallPreparing;
+}
 
 function getUpdaterInstallBlockedReason(): string | null {
   return macUpdateInstallHandoff?.blockedReason ?? null;
@@ -1123,8 +1124,9 @@ function resolveUpdaterErrorContext(): DesktopUpdateErrorContext {
 
 function clearUpdaterInstallInFlightAfterError(input?: {
   readonly preservePendingPreparation?: boolean;
+  readonly error?: Error;
 }): boolean {
-  macUpdateInstallHandoff?.cancel();
+  macUpdateInstallHandoff?.cancel(input?.error);
   const preparationCancelled = updateInstallPreparation.cancel();
   if (preparationCancelled && input?.preservePendingPreparation) {
     return true;
@@ -1162,6 +1164,8 @@ function replayDeferredDesktopQuitAfterUpdaterSettles(): boolean {
 }
 
 function recoverDesktopAfterUpdaterInstallFailure(): void {
+  const windowToRestore = updaterWindowToRestore;
+  updaterWindowToRestore = null;
   if (replayDeferredDesktopQuitAfterUpdaterSettles()) return;
 
   // A second updater failure signal can race the replay above (for example,
@@ -1172,9 +1176,13 @@ function recoverDesktopAfterUpdaterInstallFailure(): void {
     return;
   }
 
-  // The backend was already stopped for install preparation. When no quit was
-  // requested in the meantime, restore the live app and its update polling.
+  // If shutdown started, restart the backend and restore the old window.
   startBackend();
+  if (windowToRestore?.isDestroyed()) {
+    ensureInitialBackendWindowOpen(backendHttpUrl);
+  } else {
+    windowToRestore?.showInactive();
+  }
   scheduleUpdatePoll();
 }
 
@@ -1797,6 +1805,7 @@ function registerDesktopProtocol(): void {
 }
 
 function dispatchMenuAction(action: string): void {
+  if (isMacUpdateShuttingDown()) return;
   const existingWindow =
     BrowserWindow.getFocusedWindow() ?? mainWindow ?? BrowserWindow.getAllWindows()[0];
   const targetWindow = existingWindow ?? createWindow();
@@ -1805,7 +1814,7 @@ function dispatchMenuAction(action: string): void {
   }
 
   const send = () => {
-    if (targetWindow.isDestroyed()) return;
+    if (targetWindow.isDestroyed() || isMacUpdateShuttingDown()) return;
     targetWindow.webContents.send(IPC.menuAction, action);
     if (!targetWindow.isVisible()) {
       targetWindow.show();
@@ -2316,6 +2325,7 @@ function clearUnreadNotificationBadge(): void {
 // Reuse the existing desktop window when the app is launched again so users
 // don't end up with multiple packaged instances racing the same local state.
 function focusMainWindow(options: { stealAppFocus?: boolean } = {}): void {
+  if (isMacUpdateShuttingDown()) return;
   if (!mainWindow || mainWindow.isDestroyed()) {
     mainWindow = null;
     return;
@@ -3683,6 +3693,19 @@ async function waitForMigrationRecoveryInstallHandoff(): Promise<void> {
   });
 }
 
+async function stopBackendForUpdateInstall(
+  attempt: UpdateInstallPreparationAttempt,
+): Promise<void> {
+  isQuitting = true;
+  clearUpdatePollTimer();
+  if (isMacUpdateShuttingDown() && mainWindow?.isVisible()) {
+    updaterWindowToRestore = mainWindow;
+    hideDesktopWindowForImmediateQuit();
+  }
+  await stopBackendAndWaitForExit();
+  updateInstallPreparation.requireActive(attempt);
+}
+
 async function runDownloadedUpdateInstall(
   preparationAttempt: UpdateInstallPreparationAttempt,
 ): Promise<{
@@ -3736,10 +3759,9 @@ async function runDownloadedUpdateInstall(
   let markerWritten = false;
   let artifactInvalidated = false;
   try {
-    isQuitting = true;
-    clearUpdatePollTimer();
-    await stopBackendAndWaitForExit();
-    updateInstallPreparation.requireActive(preparationAttempt);
+    if (macUpdateInstallHandoff === null) {
+      await stopBackendForUpdateInstall(preparationAttempt);
+    }
     await logMacUpdateDiagnostics("before install handoff");
     updateInstallPreparation.requireActive(preparationAttempt);
     if (!(await verifyUpdateArtifactIdentity(artifact))) {
@@ -3757,9 +3779,16 @@ async function runDownloadedUpdateInstall(
       throw new Error("Durable update install marker changed before install handoff.");
     }
     activeUpdateInstallHandoff = handoffExpectation;
+    if (macUpdateInstallHandoff !== null) {
+      // Squirrel can apply a staged update on exit, so validate and record the
+      // exact artifact before giving it to the native updater.
+      await macUpdateInstallHandoff.prepare(AUTO_UPDATE_INSTALL_WATCHDOG_MS);
+      updateInstallPreparation.requireActive(preparationAttempt);
+      await stopBackendForUpdateInstall(preparationAttempt);
+    }
     isUpdaterQuitAndInstallInFlight = true;
     if (macUpdateInstallHandoff !== null) {
-      macUpdateInstallHandoff.start();
+      macUpdateInstallHandoff.quitAndInstall();
     } else {
       autoUpdater.quitAndInstall();
     }
@@ -4008,6 +4037,7 @@ function configureAutoUpdater(): void {
     const failedHandoff = activeUpdateInstallHandoff;
     const installPreparationPending = clearUpdaterInstallInFlightAfterError({
       preservePendingPreparation: true,
+      error,
     });
     if (errorContext === "download") {
       downloadedUpdateArtifact = null;
@@ -6107,6 +6137,10 @@ function createWindow(): BrowserWindow {
     emitUpdateState();
   });
   window.once("ready-to-show", () => {
+    if (isMacUpdateShuttingDown()) {
+      updaterWindowToRestore = window;
+      return;
+    }
     // Preserve the original first-launch behavior, then respect the state saved
     // by subsequent closes. Normal bounds are restored before maximizing so the
     // native restore control returns to the user's last windowed size.
