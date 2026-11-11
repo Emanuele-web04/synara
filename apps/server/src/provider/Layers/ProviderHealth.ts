@@ -125,7 +125,10 @@ import {
 } from "../providerMaintenance";
 import { isClaudeAutoModeCliVersionSupported } from "../claudeCliVersion.ts";
 import { collectUint8StreamText } from "../../stream/collectUint8StreamText";
-import { buildCodexProcessEnv } from "../../codexProcessEnv.ts";
+import {
+  buildCodexProcessEnv,
+  readEffectiveCodexAuthCredentialsStoreMode,
+} from "../../codexProcessEnv.ts";
 import { readGrokCachedLogin } from "../../providerUsage/providers/grok";
 import {
   buildProviderProcessEnv,
@@ -1147,9 +1150,17 @@ export const readCodexConfigModelProviderForEnv = (env: NodeJS.ProcessEnv) =>
     content === undefined ? undefined : parseCodexConfigModelProvider(content),
   );
 
-// `codex login status` names no account; the id token in auth.json does.
+// A non-file credentials store can leave an old auth.json in the same home.
 const readCodexAccountIdentity = (env: NodeJS.ProcessEnv) =>
-  Effect.map(readCodexHomeFile(env, "auth.json"), (content) => {
+  Effect.gen(function* () {
+    const config = yield* readCodexHomeFile(env, "config.toml");
+    try {
+      if (readEffectiveCodexAuthCredentialsStoreMode(config ?? "") !== "file") return {};
+    } catch {
+      return {};
+    }
+
+    const content = yield* readCodexHomeFile(env, "auth.json");
     if (content === undefined) return {};
     const record = decodeUnknownJson(content);
     return Result.isFailure(record) ? {} : codexAccountIdentityFromAuthRecord(record.success);

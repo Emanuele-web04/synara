@@ -1638,46 +1638,65 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
       ),
     );
 
-    it.effect("reports who the signed-in Codex account is from its stored id token", () =>
-      Effect.gen(function* () {
-        const fileSystem = yield* FileSystem.FileSystem;
-        const path = yield* Path.Path;
-        const { tmpDir } = yield* withTempCodexHome();
-        yield* fileSystem.writeFileString(
-          path.join(tmpDir, "auth.json"),
-          JSON.stringify({
-            tokens: {
-              access_token: "access",
-              refresh_token: "refresh",
-              id_token: codexIdToken({
-                email: "work@example.com",
-                "https://api.openai.com/auth": {
-                  chatgpt_plan_type: "plus",
-                  chatgpt_account_id: "acct_1",
-                },
-              }),
-            },
-          }),
-        );
+    it.effect.each([
+      {
+        store: "file",
+        expectedEmail: "work@example.com",
+        expectedPlan: "plus",
+        expectedLabel: "ChatGPT Plus Subscription",
+      },
+      {
+        store: "keyring",
+        expectedEmail: undefined,
+        expectedPlan: undefined,
+        expectedLabel: undefined,
+      },
+    ] as const)(
+      "uses account identity only from the active Codex credentials store ($store)",
+      ({ store, expectedEmail, expectedPlan, expectedLabel }) =>
+        Effect.gen(function* () {
+          const fileSystem = yield* FileSystem.FileSystem;
+          const path = yield* Path.Path;
+          const { tmpDir } = yield* withTempCodexHome();
+          yield* fileSystem.writeFileString(
+            path.join(tmpDir, "config.toml"),
+            'cli_auth_credentials_store = "' + store + '"\n',
+          );
+          yield* fileSystem.writeFileString(
+            path.join(tmpDir, "auth.json"),
+            JSON.stringify({
+              tokens: {
+                access_token: "access",
+                refresh_token: "refresh",
+                id_token: codexIdToken({
+                  email: "work@example.com",
+                  "https://api.openai.com/auth": {
+                    chatgpt_plan_type: "plus",
+                    chatgpt_account_id: "acct_1",
+                  },
+                }),
+              },
+            }),
+          );
 
-        const status = yield* makeCheckCodexProviderStatus("codex");
-        assert.strictEqual(status.status, "ready");
-        assert.strictEqual(status.authStatus, "authenticated");
-        assert.strictEqual(status.accountEmail, "work@example.com");
-        assert.strictEqual(status.accountOrganization, undefined);
-        assert.strictEqual(status.authType, "plus");
-        assert.strictEqual(status.authLabel, "ChatGPT Plus Subscription");
-      }).pipe(
-        Effect.provide(
-          mockSpawnerLayer((args) => {
-            const joined = args.join(" ");
-            if (joined === "--version") return { stdout: "codex 1.0.0\n", stderr: "", code: 0 };
-            if (joined === "-c mcp_servers={} login status")
-              return { stdout: "Logged in using ChatGPT\n", stderr: "", code: 0 };
-            throw new Error(`Unexpected args: ${joined}`);
-          }),
+          const status = yield* makeCheckCodexProviderStatus("codex");
+          assert.strictEqual(status.status, "ready");
+          assert.strictEqual(status.authStatus, "authenticated");
+          assert.strictEqual(status.accountEmail, expectedEmail);
+          assert.strictEqual(status.accountOrganization, undefined);
+          assert.strictEqual(status.authType, expectedPlan);
+          assert.strictEqual(status.authLabel, expectedLabel);
+        }).pipe(
+          Effect.provide(
+            mockSpawnerLayer((args) => {
+              const joined = args.join(" ");
+              if (joined === "--version") return { stdout: "codex 1.0.0\n", stderr: "", code: 0 };
+              if (joined === "-c mcp_servers={} login status")
+                return { stdout: "", stderr: "Logged in using ChatGPT\n", code: 0 };
+              throw new Error(`Unexpected args: ${joined}`);
+            }),
+          ),
         ),
-      ),
     );
 
     it.effect("prefers the plan the Codex CLI reports over the stored id token", () =>
