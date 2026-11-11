@@ -10,6 +10,7 @@
 import type { ProviderKind, ProviderRuntimeEvent, ThreadId } from "@synara/contracts";
 import { Cause, Effect, Stream } from "effect";
 import * as Semaphore from "effect/Semaphore";
+import { reportReliabilityIssue } from "../reliability";
 
 import type {
   ProviderRuntimeEventPumpHealth,
@@ -247,6 +248,7 @@ export function runProviderRuntimeEventPump<R>(
             return persistQuarantineReliably(event, detail).pipe(
               Effect.andThen(
                 Effect.sync(() => {
+                  reportReliabilityIssue("provider.event_quarantined");
                   quarantinedEvents += 1;
                   successesSinceQuarantine = 0;
                   lastQuarantinedEventId = event.eventId;
@@ -268,6 +270,7 @@ export function runProviderRuntimeEventPump<R>(
           }
 
           const delayMs = retryDelayMs(attempt, retryBaseDelayMs, retryMaxDelayMs);
+          if (attempt === 1) reportReliabilityIssue("provider.event_retry");
           const retryLog = shouldLogRetry(attempt)
             ? Effect.logWarning("provider.runtime_event_pump.retrying_event", {
                 provider: options.provider,

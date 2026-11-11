@@ -8,6 +8,8 @@ import {
 } from "~/lib/computerProvisioning";
 import { useCallback, useLayoutEffect, useRef } from "react";
 import { hasActiveComposerSend } from "~/lib/composerSendOwnership";
+import { hasActiveDraftThreadDispatch } from "~/lib/draftThreadDispatch";
+import { COMPOSER_TURN_UNCERTAIN, settlePendingComposerTurn } from "~/lib/composerTurnSettlement";
 import {
   filterPromptProviderMentionReferences,
   filterPromptSkillReferences,
@@ -276,7 +278,6 @@ export function useChatTurnSubmission({
         !api ||
         !lateSendHandlers ||
         !activeThread ||
-        activeThread.claudeCacheReview != null ||
         activeThread.sidechatExpiredAt ||
         isVoiceTranscribing
       ) {
@@ -284,6 +285,7 @@ export function useChatTurnSubmission({
       }
       const sendInFlight =
         hasActiveComposerSend(activeThread.id) ||
+        hasActiveDraftThreadDispatch(activeThread.id) ||
         isSendBusy ||
         sendPreflightInFlightRef.current ||
         sendInFlightRef.current;
@@ -302,6 +304,22 @@ export function useChatTurnSubmission({
           notifyBlockedComposerSend(activeThread.id, blockedReason);
         }
         return false;
+      }
+      sendPreflightInFlightRef.current = true;
+      const previous = await settlePendingComposerTurn(
+        api,
+        activeThread.id,
+        queuedTurn?.id,
+      ).finally(() => {
+        sendPreflightInFlightRef.current = false;
+      });
+      if (previous.status === "unknown") {
+        setThreadError(activeThread.id, COMPOSER_TURN_UNCERTAIN);
+        return false;
+      }
+      if (previous.status === "accepted") {
+        setThreadError(activeThread.id, null);
+        return queuedTurn !== undefined && previous.queuedTurnId === queuedTurn.id;
       }
       const hasPendingCacheReview = () =>
         getThreadFromState(useStore.getState(), activeThread.id)?.claudeCacheReview != null;

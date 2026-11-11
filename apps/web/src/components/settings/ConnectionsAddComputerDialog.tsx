@@ -6,6 +6,8 @@
 
 import { useEffect, useId, useRef, useState } from "react";
 
+import { useTranslation } from "~/i18n";
+import { accountErrorMessage, readAccountErrorCode } from "~/lib/accountLogic";
 import {
   DEVICE_USER_CODE_GROUP_SIZE,
   DEVICE_USER_CODE_LENGTH,
@@ -57,11 +59,13 @@ function AddComputerDialogContent({
   onClose: () => void;
   onPaired: () => void;
 }) {
+  const { t } = useTranslation();
   const confirmationId = useId();
   const [code, setCode] = useState("");
   const [preview, setPreview] = useState<RemotePairingPreview | null>(null);
   const [compared, setCompared] = useState(false);
   const [deviceJkt, setDeviceJkt] = useState("");
+  const [deviceRecoveryId, setDeviceRecoveryId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [waiting, setWaiting] = useState(false);
   const [paired, setPaired] = useState<string | null>(null);
@@ -71,12 +75,6 @@ function AddComputerDialogContent({
 
   useEffect(() => {
     mounted.current = true;
-    void callRemoteAccess({ operation: "device-info" }).then(
-      (info) => {
-        if (mounted.current && info.kind === "device-info") setDeviceJkt(info.deviceJkt);
-      },
-      () => {},
-    );
     return () => {
       mounted.current = false;
     };
@@ -85,13 +83,48 @@ function AddComputerDialogContent({
   const perform = async (request: RemoteAccessRequest) => {
     if (busy) return;
     setBusy(true);
-    setError(null);
-    setNotice(null);
+    let preparingDevice = request.operation === "redeem-code";
+    let preflightDeviceJkt = "";
     try {
+      if (request.operation === "re-register-device") {
+        const confirmed = await ensureNativeApi().dialogs.confirm(
+          t("settings:confirmPairingDeviceRegistration"),
+        );
+        if (!confirmed || !mounted.current) return;
+      }
+      setError(null);
+      setNotice(null);
+      if (preparingDevice) {
+        // Get the fingerprint before redeeming the single-use code so a local
+        // setup failure leaves that code available for the next attempt.
+        const info = await callRemoteAccess({ operation: "device-info" });
+        if (!mounted.current) return;
+        if (info.kind === "device-registration-revoked") {
+          setDeviceRecoveryId(info.recoveryId);
+          setError(t("settings:pairingDeviceRegistrationRevoked"));
+          return;
+        }
+        if (info.kind !== "device-info" || !info.deviceJkt) {
+          setError(t("settings:pairingDeviceIdentityUnavailable"));
+          return;
+        }
+        preflightDeviceJkt = info.deviceJkt;
+        preparingDevice = false;
+      }
       const result = await callRemoteAccess(request);
       if (!mounted.current) return;
+      if (request.operation === "re-register-device") {
+        setDeviceRecoveryId(null);
+        if (result.kind !== "device-info" || !result.deviceJkt) {
+          setError(t("settings:pairingDeviceRegistrationFailed"));
+          return;
+        }
+        setNotice(t("settings:pairingDeviceRegistrationSucceeded"));
+        return;
+      }
       if (result.kind === "pairing-preview") {
         setPreview(result);
+        setDeviceJkt(result.deviceJkt ?? preflightDeviceJkt);
         setCompared(false);
       }
       if (request.operation === "forget-host") {
@@ -104,13 +137,24 @@ function AddComputerDialogContent({
         onPaired();
       }
     } catch (cause) {
-      if (mounted.current)
+      if (!mounted.current) return;
+      if (preparingDevice) {
+        const fallback = t("settings:pairingDeviceIdentityUnavailable");
+        setError(readAccountErrorCode(cause) ? accountErrorMessage(cause, fallback) : fallback);
+      } else if (request.operation === "re-register-device") {
+        // A failed attempt may have consumed this challenge or saved a new key.
+        // Find rechecks the current identity before offering another challenge.
+        setDeviceRecoveryId(null);
+        const fallback = t("settings:pairingDeviceRegistrationFailed");
+        setError(readAccountErrorCode(cause) ? accountErrorMessage(cause, fallback) : fallback);
+      } else {
         setError(
           remoteAccessErrorMessage(
             cause,
             "The request did not complete. Check the other computer before retrying.",
           ),
         );
+      }
     } finally {
       if (mounted.current) {
         setBusy(false);
@@ -145,7 +189,7 @@ function AddComputerDialogContent({
 
   const complete = code.length === DEVICE_USER_CODE_LENGTH;
   const find = () => {
-    if (!complete || !deviceJkt) return;
+    if (!complete || deviceRecoveryId) return;
     void perform({
       operation: "redeem-code",
       code: formatUnambiguousCode(code, DEVICE_USER_CODE_GROUP_SIZE),
@@ -258,9 +302,23 @@ function AddComputerDialogContent({
             <Button shape="capsule" variant="subtle" onClick={onClose}>
               Cancel
             </Button>
-            <Button shape="capsule" disabled={busy || !complete || !deviceJkt} onClick={find}>
-              Find computer
-            </Button>
+            {deviceRecoveryId ? (
+              <Button
+                shape="capsule"
+                disabled={busy}
+                onClick={() =>
+                  void perform({ operation: "re-register-device", recoveryId: deviceRecoveryId })
+                }
+              >
+                {busy
+                  ? t("settings:pairingDeviceRegistrationInProgress")
+                  : t("settings:registerPairingDeviceAgain")}
+              </Button>
+            ) : (
+              <Button shape="capsule" disabled={busy || !complete} onClick={find}>
+                Find computer
+              </Button>
+            )}
           </>
         )}
       </DialogFooter>

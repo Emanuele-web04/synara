@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import type {
   OrchestrationCommand,
   OrchestrationEvent,
@@ -44,6 +45,7 @@ import { computerActivationMetadata } from "../computer/computerActivation.ts";
 import {
   NATIVE_REVIEW_ATTACHMENTS_UNSUPPORTED,
   OrchestrationCommandInvariantError,
+  threadModelSelectionChangedDetail,
 } from "./Errors.ts";
 import { projectEvent } from "./projector.ts";
 import { withProjectRelocationEvents } from "./projectRelocation.ts";
@@ -1892,6 +1894,15 @@ const decideCommand = Effect.fn("decideOrchestrationCommand")(function* ({
         command,
         threadId: command.threadId,
       });
+      if (
+        command.expectedModelSelection !== undefined &&
+        !isDeepStrictEqual(thread.modelSelection, command.expectedModelSelection)
+      ) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: threadModelSelectionChangedDetail(command.threadId),
+        });
+      }
       const expectedSnoozedUntil = command.expectedSnoozedUntil;
       const expiresSnooze = expectedSnoozedUntil !== undefined;
       if (command.snoozedUntil != null || expiresSnooze) {

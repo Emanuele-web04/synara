@@ -1,8 +1,12 @@
 import { ProjectId, type ThreadId } from "@synara/contracts";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { useComposerDraftStore } from "../composerDraftStore";
-import { makeFile, resetComposerDraftStore } from "../composerDraftStoreTestFixtures";
+import {
+  makeFile,
+  resetComposerDraftStore,
+  stubComposerDraftBrowserStorage,
+} from "../composerDraftStoreTestFixtures";
 import type { SidebarThreadSummary } from "../types";
 import { dispatchDraftThread } from "./draftThreadDispatch";
 import { createAndDispatchDraftThread, createDraftThread } from "./draftThreadCreate";
@@ -18,6 +22,9 @@ vi.mock("../nativeApi", () => ({
     },
   }),
 }));
+
+beforeEach(stubComposerDraftBrowserStorage);
+afterEach(() => vi.unstubAllGlobals());
 
 describe("draft thread creation", () => {
   beforeEach(() => {

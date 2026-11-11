@@ -3,7 +3,8 @@ import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
-import { afterAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import * as reliability from "./reliability";
 
 import { type AccountHost, EnvironmentId } from "@synara/contracts";
 import { decodeJwt } from "jose";
@@ -48,6 +49,7 @@ describe("accountApiIssuer", () => {
 });
 
 const temporaryDirectories: string[] = [];
+afterEach(() => vi.restoreAllMocks());
 
 function makeBaseDir(): string {
   const value = fs.mkdtempSync(path.join(os.tmpdir(), "synara-account-auth-test-"));
@@ -502,15 +504,31 @@ describe("withFreshAccessToken", () => {
     expect(attempts).toBe(2);
   });
 
-  it("does not refresh on a non-auth failure", async () => {
+  it.each([
+    { name: "a network failure", error: new Error("ECONNREFUSED") },
+    {
+      name: "an organization rename refusal",
+      error: new AccountApiError({
+        code: "organization_rename_not_allowed",
+        status: 403,
+        message: "Only personal workspaces can be renamed",
+      }),
+    },
+    {
+      name: "a subscription refusal",
+      error: new AccountApiError({
+        code: "subscription_required",
+        status: 403,
+        message: "Remote access requires an active Synara Alto subscription",
+      }),
+    },
+  ])("does not refresh on $name", async ({ error }) => {
     const baseDir = makeBaseDir();
     await writeAccountCredentials(baseDir, credentials());
 
     await expect(
-      withFreshAccessToken({ baseDir, client: makeClient({}) }, () =>
-        Promise.reject(new Error("ECONNREFUSED")),
-      ),
-    ).rejects.toThrow("ECONNREFUSED");
+      withFreshAccessToken({ baseDir, client: makeClient({}) }, () => Promise.reject(error)),
+    ).rejects.toBe(error);
     expect(await readAccountCredentials(baseDir)).toEqual(credentials());
   });
 
@@ -538,6 +556,7 @@ describe("withFreshAccessToken", () => {
   });
 
   it("never replays a refresh token after a lost rotation response, including a new caller", async () => {
+    const reports = vi.spyOn(reliability, "reportReliabilityIssue").mockImplementation(() => {});
     const baseDir = makeBaseDir();
     await writeAccountCredentials(baseDir, credentials());
     let refreshCalls = 0;
@@ -555,6 +574,47 @@ describe("withFreshAccessToken", () => {
       withFreshAccessToken({ baseDir, client }, () => Promise.reject(unauthorized())),
     ).rejects.toThrow(/uncertain.*sign in/i);
     expect(refreshCalls).toBe(1);
+    expect(reports).toHaveBeenCalledExactlyOnceWith("account.refresh_uncertain");
+  });
+
+  it("renews on the next operation when the account API rejected refresh before dispatch", async () => {
+    const baseDir = makeBaseDir();
+    const stored = credentials({ linkedHost: true });
+    await writeAccountCredentials(baseDir, stored);
+    const rateLimit = new AccountApiError({
+      code: "refresh_not_attempted",
+      status: 429,
+      message: "Too many refresh attempts — wait a minute",
+    });
+    const refreshAccessToken = vi
+      .fn<AccountClient["refreshAccessToken"]>()
+      .mockRejectedValueOnce(rateLimit)
+      .mockResolvedValueOnce({
+        accessToken: "access-2",
+        refreshToken: "refresh-2",
+        user: { id: "user_1", email: "ada@example.com" },
+      });
+    const client = makeClient({ refreshAccessToken });
+    const operation = () =>
+      withFreshAccessToken({ baseDir, client }, async (token) => {
+        if (token === stored.accessToken) throw unauthorized();
+        return token;
+      });
+
+    await expect(operation()).rejects.toBe(rateLimit);
+    expect(refreshAccessToken).toHaveBeenCalledTimes(1);
+    expect(await readAccountCredentials(baseDir)).toEqual(stored);
+
+    await expect(operation()).resolves.toBe("access-2");
+    expect(refreshAccessToken).toHaveBeenNthCalledWith(2, {
+      refreshToken: stored.refreshToken,
+      organizationId: stored.organizationId,
+    });
+    expect(await readAccountCredentials(baseDir)).toEqual({
+      ...stored,
+      accessToken: "access-2",
+      refreshToken: "refresh-2",
+    });
   });
 
   it("keeps the stored refresh token when the identity provider returns a 5xx", async () => {
@@ -592,11 +652,11 @@ describe("withFreshAccessToken", () => {
   // A 408/429 does not prove that no rotation occurred behind the account proxy.
   // Keep credentials and pending intent instead of treating this as invalid_grant.
   it.each([
-    [408, "Request timeout"],
-    [429, "Too many requests"],
-  ])(
-    "keeps the stored refresh token when the identity provider answers %i",
-    async (status, message) => {
+    { status: 408, code: "internal_error", message: "Request timeout" },
+    { status: 429, code: "rate_limited", message: "Too many requests" },
+  ] as const)(
+    "keeps the stored refresh token when the identity provider answers $status",
+    async ({ status, code, message }) => {
       const baseDir = makeBaseDir();
       await writeAccountCredentials(baseDir, credentials());
 
@@ -605,7 +665,7 @@ describe("withFreshAccessToken", () => {
           baseDir,
           client: makeClient({
             refreshAccessToken: () =>
-              Promise.reject(new AccountApiError({ code: "internal_error", status, message })),
+              Promise.reject(new AccountApiError({ code, status, message })),
           }),
         },
         () => Promise.reject(unauthorized()),
@@ -621,6 +681,31 @@ describe("withFreshAccessToken", () => {
     },
   );
 
+  it("preserves credentials and pending intent when a proxy does not recognize the refresh endpoint", async () => {
+    const baseDir = makeBaseDir();
+    const stored = credentials({ linkedHost: true });
+    await writeAccountCredentials(baseDir, stored);
+    const refusal = new AccountApiError({
+      status: 404,
+      code: "internal_error",
+      message: "Refresh endpoint unavailable",
+    });
+    const refreshAccessToken = vi
+      .fn<AccountClient["refreshAccessToken"]>()
+      .mockRejectedValue(refusal);
+    const client = makeClient({ refreshAccessToken });
+    const operation = () =>
+      withFreshAccessToken({ baseDir, client }, () => Promise.reject(unauthorized()));
+
+    await expect(operation()).rejects.toBe(refusal);
+    expect(await readAccountCredentials(baseDir)).toMatchObject({
+      ...stored,
+      refreshPendingTokenHash: expect.any(String),
+    });
+    await expect(operation()).rejects.toThrow(/uncertain.*sign in/i);
+    expect(refreshAccessToken).toHaveBeenCalledTimes(1);
+  });
+
   it("signs the session out but keeps the host fields when the refresh token is spent", async () => {
     const baseDir = makeBaseDir();
     await writeAccountCredentials(baseDir, credentials({ linkedHost: true, hostId: "host_1" }));
@@ -633,8 +718,8 @@ describe("withFreshAccessToken", () => {
             refreshAccessToken: () =>
               Promise.reject(
                 new AccountApiError({
-                  code: "internal_error",
-                  status: 400,
+                  code: "unauthorized",
+                  status: 401,
                   message: "Refresh token is invalid",
                 }),
               ),
@@ -675,7 +760,7 @@ describe("withFreshAccessToken", () => {
           return Promise.reject(
             new AccountApiError({
               code: "unauthorized",
-              status: 400,
+              status: 401,
               message: "Refresh token is invalid or spent",
             }),
           );
@@ -1553,8 +1638,8 @@ describe("runStatus", () => {
         refreshAccessToken: () =>
           Promise.reject(
             new AccountApiError({
-              code: "internal_error",
-              status: 400,
+              code: "unauthorized",
+              status: 401,
               message: "Refresh token is invalid",
             }),
           ),

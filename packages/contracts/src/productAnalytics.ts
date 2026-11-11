@@ -2,6 +2,7 @@
 // Login and billing identifiers do not belong in this cross-process contract.
 import * as Schema from "effect/Schema";
 import { STATIC_KEYBINDING_COMMANDS } from "./keybindings";
+import { ReliabilityCode } from "./reliability";
 
 export const ANONYMOUS_PRODUCT_EVENTS = [
   "remote.pairing-approved",
@@ -26,6 +27,7 @@ export const ProductAnalyticsEvent = Schema.Literals([
   "chat.request",
   "turn.completed",
   "performance.startup",
+  "reliability.issue",
 ]);
 export type ProductAnalyticsEvent = typeof ProductAnalyticsEvent.Type;
 
@@ -121,6 +123,7 @@ export type ProductAnalyticsPlatform = typeof ProductAnalyticsPlatform.Type;
 export const ProductAnalyticsInput = Schema.Struct({
   event: ProductAnalyticsEvent,
   outcome: ProductAnalyticsOutcome,
+  reliabilityCode: Schema.optional(ReliabilityCode),
   feature: Schema.optional(ProductAnalyticsFeature),
   mode: Schema.optional(ProductAnalyticsMode),
   provider: Schema.optional(ProductAnalyticsProvider),
