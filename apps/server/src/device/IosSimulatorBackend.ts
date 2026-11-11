@@ -1711,7 +1711,13 @@ export class IosSimulatorBackend implements DeviceBackend {
       session.idleTimer = null;
     }
     session.streamingUdid = null;
-    session.interruptCompile?.(new DeviceBackendError("The simulator helper session ended"));
+    session.interruptCompile?.(
+      new DeviceBackendError(
+        this.disposed
+          ? "The iOS simulator backend is disposed"
+          : "The simulator helper session ended during shutdown",
+      ),
+    );
     const helper = session.client;
     try {
       await helper?.dispose();
