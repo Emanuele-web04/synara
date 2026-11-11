@@ -6,6 +6,7 @@ import { getCustomBinaryPathForProvider, useAppSettings } from "~/appSettings";
 import {
   findProviderStatus,
   normalizeProviderStatusForLocalConfig,
+  providerStatusInstanceKey,
 } from "~/lib/providerAvailability";
 import { serverConfigQueryOptions } from "~/lib/serverReactQuery";
 import { isProviderKind } from "~/providerOrdering";
@@ -42,27 +43,37 @@ function useDetectedProviderStatuses(): readonly ServerProviderStatus[] {
   const { settings } = useAppSettings();
   const serverConfigQuery = useQuery(serverConfigQueryOptions());
   const providers = serverConfigQuery.data?.providers ?? EMPTY_STATUSES;
-  const [lastEnabled, setLastEnabled] = useState<ReadonlyMap<string, ServerProviderStatus>>(
+  // Onboarding switches control the default instances. Filter before caching so a
+  // custom instance of the same driver cannot replace the default's status.
+  const defaultProviders = useMemo(
+    () =>
+      providers.flatMap((status) => {
+        const provider = status.driver ?? status.provider;
+        return isProviderKind(provider) && providerStatusInstanceKey(status) === provider
+          ? [{ provider, status }]
+          : [];
+      }),
+    [providers],
+  );
+  const [lastEnabled, setLastEnabled] = useState<ReadonlyMap<ProviderKind, ServerProviderStatus>>(
     () => new Map(),
   );
   useEffect(() => {
-    const enabled = providers.filter((status) => status.enabled !== false);
-    if (enabled.every((status) => lastEnabled.get(status.provider) === status)) return;
+    const enabled = defaultProviders.filter(({ status }) => status.enabled !== false);
     setLastEnabled((previous) => {
+      if (enabled.every(({ provider, status }) => previous.get(provider) === status)) {
+        return previous;
+      }
       const next = new Map(previous);
-      for (const status of enabled) next.set(status.provider, status);
+      for (const { provider, status } of enabled) next.set(provider, status);
       return next;
     });
-  }, [providers, lastEnabled]);
+  }, [defaultProviders]);
   return useMemo(
     () =>
-      providers.flatMap((reported) => {
+      defaultProviders.flatMap(({ provider, status: reported }) => {
         const status =
-          reported.enabled === false ? (lastEnabled.get(reported.provider) ?? reported) : reported;
-        const provider = status.driver ?? status.provider;
-        if (!isProviderKind(provider) || (status.instanceId ?? status.provider) !== provider) {
-          return [];
-        }
+          reported.enabled === false ? (lastEnabled.get(provider) ?? reported) : reported;
         const normalized = normalizeProviderStatusForLocalConfig({
           provider,
           status,
@@ -70,7 +81,7 @@ function useDetectedProviderStatuses(): readonly ServerProviderStatus[] {
         });
         return normalized ? [normalized] : [];
       }),
-    [providers, lastEnabled, settings],
+    [defaultProviders, lastEnabled, settings],
   );
 }
 
