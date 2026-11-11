@@ -45,8 +45,8 @@ export function providerAccountQualifiedLabel(providerLabel: string, accountLabe
 export function providerAccountIdentityLabel(
   status: Pick<ServerProviderStatus, "accountEmail" | "accountOrganization"> | undefined,
 ): string | null {
-  const email = status?.accountEmail?.trim();
-  const organization = status?.accountOrganization?.trim();
+  const email = status?.accountEmail;
+  const organization = status?.accountOrganization;
   if (!email) return organization || null;
   if (!organization || organization.toLowerCase() === `${email.toLowerCase()}'s organization`) {
     return email;

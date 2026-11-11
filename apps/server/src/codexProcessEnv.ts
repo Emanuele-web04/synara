@@ -41,6 +41,7 @@ import {
   registerProviderCredentialKey,
 } from "./providerChildEnvironment.ts";
 import { decodeJwtClaims } from "./jwtClaims.ts";
+import { isCodexApiKeyAuthRecord } from "./provider/codexAccountIdentity.ts";
 
 const CODEX_PROCESS_SHELL_ENV_NAMES = ["PATH", "SSH_AUTH_SOCK"] as const;
 const CODEX_SQLITE_HOME_ENV_NAME = "CODEX_SQLITE_HOME";
@@ -698,7 +699,7 @@ function readCodexPreparedAuthIdentity(content: Buffer | undefined): CodexPrepar
     const apiKey = codexAuthNonEmptyString(
       auth.OPENAI_API_KEY ?? auth.openai_api_key ?? auth.apiKey,
     );
-    if (rawMode === "apikey" || rawMode === "api-key" || (apiKey && !tokens)) {
+    if (isCodexApiKeyAuthRecord(auth)) {
       return {
         state: "present",
         authMode: "api-key",

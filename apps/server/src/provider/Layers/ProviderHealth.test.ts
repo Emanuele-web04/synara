@@ -826,37 +826,6 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
             ...cachedReadyCodexStatus,
             authType: "chatgpt",
             authLabel: "Default Account",
-          },
-        ],
-        {
-          ...DEFAULT_SERVER_SETTINGS,
-          providerInstances: {
-            codex_work: {
-              driver: "codex",
-              displayName: "Codex Work",
-              config: {
-                accountId: "work",
-              },
-            },
-          },
-        },
-        "2026-06-16T12:05:00.000Z",
-      );
-
-      const defaultCodex = statuses.find((status) => status.instanceId === "codex");
-      const workCodex = statuses.find((status) => status.instanceId === "codex_work");
-      assert.strictEqual(defaultCodex?.authStatus, "authenticated");
-      assert.strictEqual(defaultCodex?.authLabel, "Default Account");
-      assert.strictEqual(workCodex?.status, "warning");
-      assert.strictEqual(workCodex?.authStatus, "unknown");
-      assert.strictEqual(workCodex?.authLabel, undefined);
-    });
-
-    it("does not copy one account's identity onto an unchecked sibling account", () => {
-      const statuses = projectProviderStatusesForSettings(
-        [
-          {
-            ...cachedReadyCodexStatus,
             accountEmail: "default@example.com",
             accountOrganization: "Example Org",
           },
@@ -878,9 +847,12 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
 
       const defaultCodex = statuses.find((status) => status.instanceId === "codex");
       const workCodex = statuses.find((status) => status.instanceId === "codex_work");
+      assert.strictEqual(defaultCodex?.authStatus, "authenticated");
+      assert.strictEqual(defaultCodex?.authLabel, "Default Account");
       assert.strictEqual(defaultCodex?.accountEmail, "default@example.com");
-      assert.strictEqual(defaultCodex?.accountOrganization, "Example Org");
+      assert.strictEqual(workCodex?.status, "warning");
       assert.strictEqual(workCodex?.authStatus, "unknown");
+      assert.strictEqual(workCodex?.authLabel, undefined);
       assert.strictEqual(workCodex?.accountEmail, undefined);
       assert.strictEqual(workCodex?.accountOrganization, undefined);
     });

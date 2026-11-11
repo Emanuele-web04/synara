@@ -516,9 +516,8 @@ function codexAccountAuthLabel(input: {
 function extractCodexAccountTypeFromOutput(result: CommandResult): string | undefined {
   const parsed = decodeUnknownJson(result.stdout.trim());
   if (Result.isFailure(parsed)) {
-    const lowerOutput = `${result.stdout}\n${result.stderr}`.toLowerCase();
-    if (/^logged in using chatgpt\s*$/m.test(lowerOutput)) return "chatgpt";
-    return /^logged in using an api key\b/m.test(lowerOutput) ? "apiKey" : undefined;
+    const output = `${result.stdout}\n${result.stderr}`.toLowerCase();
+    return /^logged in using an api key\b/m.test(output) ? "apiKey" : undefined;
   }
   const walk = (value: unknown): string | undefined => {
     if (Array.isArray(value)) {
@@ -1119,32 +1118,24 @@ export function makeClaudeProbeEnv(
   });
 }
 
-export const readCodexConfigModelProviderForEnv = (env: NodeJS.ProcessEnv) =>
+const readCodexHomeFile = (env: NodeJS.ProcessEnv, fileName: string) =>
   Effect.gen(function* () {
     const fileSystem = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
     const codexHome = env.CODEX_HOME?.trim() || path.join(OS.homedir(), ".codex");
-    const configPath = path.join(codexHome, "config.toml");
-
-    const content = yield* fileSystem
-      .readFileString(configPath)
+    return yield* fileSystem
+      .readFileString(path.join(codexHome, fileName))
       .pipe(Effect.orElseSucceed(() => undefined));
-    if (content === undefined) {
-      return undefined;
-    }
-
-    return parseCodexConfigModelProvider(content);
   });
+
+export const readCodexConfigModelProviderForEnv = (env: NodeJS.ProcessEnv) =>
+  Effect.map(readCodexHomeFile(env, "config.toml"), (content) =>
+    content === undefined ? undefined : parseCodexConfigModelProvider(content),
+  );
 
 // `codex login status` names no account; the id token in auth.json does.
 const readCodexAccountIdentity = (env: NodeJS.ProcessEnv) =>
-  Effect.gen(function* () {
-    const fileSystem = yield* FileSystem.FileSystem;
-    const path = yield* Path.Path;
-    const codexHome = env.CODEX_HOME?.trim() || path.join(OS.homedir(), ".codex");
-    const content = yield* fileSystem
-      .readFileString(path.join(codexHome, "auth.json"))
-      .pipe(Effect.orElseSucceed(() => undefined));
+  Effect.map(readCodexHomeFile(env, "auth.json"), (content) => {
     if (content === undefined) return {};
     const record = decodeUnknownJson(content);
     return Result.isFailure(record) ? {} : codexAccountIdentityFromAuthRecord(record.success);

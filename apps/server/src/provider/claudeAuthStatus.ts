@@ -12,10 +12,10 @@ import type { ServerProviderAuthStatus, ServerProviderStatusState } from "@synar
 import {
   detailFromResult,
   extractAuthBoolean,
-  nonEmptyTrimmed,
   toTitleCaseWords,
   type CommandResult,
 } from "./providerCliOutput";
+import { asRecord, asString } from "../providerUsage/parse";
 
 function claudeAuthOutput(result: CommandResult): string {
   return `${result.stdout}\n${result.stderr}`.toLowerCase();
@@ -192,11 +192,8 @@ export function parseClaudeAccountIdentityFromOutput(result: CommandResult): Cla
   } catch {
     return {};
   }
-  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return {};
-  const record = parsed as Record<string, unknown>;
-  const email = nonEmptyTrimmed(typeof record.email === "string" ? record.email : undefined);
-  const organization = nonEmptyTrimmed(
-    typeof record.orgName === "string" ? record.orgName : undefined,
-  );
+  const record = asRecord(parsed);
+  const email = asString(record?.email);
+  const organization = asString(record?.orgName);
   return { ...(email ? { email } : {}), ...(organization ? { organization } : {}) };
 }

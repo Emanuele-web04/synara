@@ -1,8 +1,6 @@
 // FILE: jwtClaims.ts
-// Purpose: Read the payload claims of a JWT the way provider CLIs store them
-//   (Codex id and access tokens, Grok and Cursor sessions). Nothing here checks
-//   the signature: the claims label a credential Synara already trusts, and
-//   never decide authorization.
+// Purpose: Read the payload claims of a JWT that a provider CLI stores. Nothing
+//   here checks the signature, so the claims must never decide authorization.
 // Layer: Server utility (no IO)
 
 import { decodeJwt } from "jose";
