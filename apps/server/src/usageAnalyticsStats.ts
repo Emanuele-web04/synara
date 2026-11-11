@@ -119,11 +119,18 @@ function analyticsOrigin(value: string | null): StatsUsageAnalyticsOrigin {
   return value === "automation" || value === "agent" ? value : "user";
 }
 
-/** `YYYY-MM-DDTHH` (SQL `substr(created_at, 1, 13)`) to the hour's start instant. */
+/**
+ * Rows are bucketed by UTC quarter hour: every time zone's offset is a multiple
+ * of 15 minutes, so a client in UTC+5:30 can still split them at its own midnight.
+ */
+const QUARTER_HOUR = (column: string) =>
+  `substr(${column}, 1, 14) || printf('%02d', (CAST(substr(${column}, 15, 2) AS INTEGER) / 15) * 15)`;
+
+/** `YYYY-MM-DDTHH:MM` (see QUARTER_HOUR) to the quarter hour's start instant. */
 function hourInstant(value: string | null): string | null {
-  const hour = nonEmptyString(value);
-  if (!hour || !/^\d{4}-\d{2}-\d{2}T\d{2}$/u.test(hour)) return null;
-  return `${hour}:00:00.000Z`;
+  const slot = nonEmptyString(value);
+  if (!slot || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/u.test(slot)) return null;
+  return `${slot}:00.000Z`;
 }
 
 /** Sums rows that land on the same key once provider and model names are normalized. */
@@ -392,8 +399,10 @@ function projectForDirectory(
   return name ? { projectId: `folder:${name}`, title: name } : null;
 }
 
+/** Start of the UTC quarter hour, as the SQL rows use (see QUARTER_HOUR). */
 function utcHour(timestampMs: number): string {
-  return `${new Date(timestampMs).toISOString().slice(0, 13)}:00:00.000Z`;
+  const quarter = 15 * 60 * 1000;
+  return new Date(Math.floor(timestampMs / quarter) * quarter).toISOString();
 }
 
 /**
@@ -638,7 +647,8 @@ export const makeUsageAnalyticsQuery = (
           r.tokens AS tokens,
           r.cache_tokens AS cache_tokens,
           r.output_tokens AS output_tokens,
-          r.cache_write_tokens AS cache_write_tokens
+          r.cache_write_tokens AS cache_write_tokens,
+          r.split_cache_tokens AS split_cache_tokens
         FROM token_delta_rows r
         JOIN projection_threads t ON t.thread_id = r.thread_id
         WHERE r.created_at >= ${window.from} AND r.created_at < ${window.to}
@@ -653,6 +663,7 @@ export const makeUsageAnalyticsQuery = (
           d.tokens,
           0,
           NULL,
+          NULL,
           NULL
         FROM profile_stats_deleted_tokens d
         LEFT JOIN profile_stats_deleted_threads dt ON dt.thread_id = d.thread_id
@@ -661,7 +672,7 @@ export const makeUsageAnalyticsQuery = (
           AND (COALESCE(d.provider, 'unknown') != 'claudeAgent' OR d.token_accounting_version = 1)
       )
       SELECT
-        substr(r.created_at, 1, 13) AS hour,
+        ${sql.literal(QUARTER_HOUR("r.created_at"))} AS hour,
         r.origin AS origin,
         r.provider AS provider,
         r.model AS model,
@@ -670,7 +681,7 @@ export const makeUsageAnalyticsQuery = (
         SUM(r.tokens) AS tokens,
         SUM(r.cache_tokens) AS cacheTokens,
         SUM(CASE WHEN r.output_tokens IS NOT NULL THEN r.tokens ELSE 0 END) AS splitTokens,
-        SUM(CASE WHEN r.output_tokens IS NOT NULL THEN r.cache_tokens ELSE 0 END)
+        SUM(CASE WHEN r.output_tokens IS NOT NULL THEN COALESCE(r.split_cache_tokens, 0) ELSE 0 END)
           AS splitCacheTokens,
         SUM(COALESCE(r.output_tokens, 0)) AS outputTokens,
         SUM(CASE WHEN r.output_tokens IS NOT NULL THEN COALESCE(r.cache_write_tokens, 0) ELSE 0 END)
@@ -707,7 +718,7 @@ export const makeUsageAnalyticsQuery = (
         SUM(CASE WHEN state = 'completed' THEN 1 ELSE 0 END) AS completedTurns
       FROM (
         SELECT
-          substr(pt.requested_at, 1, 13) AS hour,
+          ${sql.literal(QUARTER_HOUR("pt.requested_at"))} AS hour,
           ${providerColumn} AS provider,
           ${modelColumn} AS model,
           p.project_id AS projectId,
@@ -728,8 +739,8 @@ export const makeUsageAnalyticsQuery = (
 
     // Cost the provider reported when a turn completed: `totalCostUsd` is that
     // turn's cost; `cumulativeCostUsd` (Cursor, ACP) is a running session total, so
-    // each turn costs its increase over the thread's previous total (a drop means a
-    // new session, which starts from zero).
+    // each turn costs its increase over that provider's previous total in the thread
+    // (a drop means a new session, which starts from zero).
     const queryCosts = (window: AnalyticsWindow) => sql<CostHourRow>`
       WITH cost_threads AS (
         SELECT DISTINCT thread_id
@@ -766,8 +777,10 @@ export const makeUsageAnalyticsQuery = (
           turn_id,
           created_at,
           cumulative_cost,
+          -- Each provider keeps its own running total, so a thread that goes
+          -- Cursor → Grok → Cursor compares each total with its own last one.
           LAG(cumulative_cost) OVER (
-            PARTITION BY thread_id
+            PARTITION BY thread_id, COALESCE(payload_provider, '')
             ORDER BY
               CASE WHEN sequence IS NULL THEN 0 ELSE 1 END ASC,
               sequence ASC,
@@ -805,7 +818,7 @@ export const makeUsageAnalyticsQuery = (
         SUM(CASE WHEN cost > 0 THEN 1 ELSE 0 END) AS turns
       FROM (
         SELECT
-          substr(c.created_at, 1, 13) AS hour,
+          ${sql.literal(QUARTER_HOUR("c.created_at"))} AS hour,
           ${providerColumn} AS provider,
           ${modelColumn} AS model,
           p.project_id AS projectId,

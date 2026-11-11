@@ -556,7 +556,9 @@ function UsageAnalyticsBody(props: {
                 run in Synara.
               </li>
             ) : (
-              <li>Only chats run in Synara are counted, including deleted ones.</li>
+              <li>
+                Only chats run in Synara are counted. Deleted chats keep the turns you started.
+              </li>
             )}
             {view.scope === "mac" && view.sessionFileProviders.includes("claudeAgent") ? (
               <li>

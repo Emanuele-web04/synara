@@ -256,8 +256,9 @@ export type StatsGetRecapResult = typeof StatsGetRecapResult.Type;
 
 // ── Usage analytics (Settings → Usage → Analytics) ───────────────────
 
-// Up to a year of usage as UTC-hour rows. The client buckets them into its own
-// local days and hours, so the server never has to guess a timezone or DST rule.
+// Up to a year of usage as rows per UTC quarter hour (`hour` is the slot's start).
+// Every time zone's offset is a multiple of 15 minutes, so the client can bucket
+// them into its own local days and hours without the server guessing a timezone.
 // A year plus a week of slack lets the client ask for whole local days.
 export const STATS_USAGE_ANALYTICS_MAX_WINDOW_MS = 373 * 24 * 60 * 60 * 1000;
 
@@ -279,7 +280,7 @@ const StatsUsageAnalyticsProvider = Schema.Union([ProviderKind, Schema.Literal("
 export const StatsUsageAnalyticsOrigin = Schema.Literals(["user", "automation", "agent"]);
 export type StatsUsageAnalyticsOrigin = typeof StatsUsageAnalyticsOrigin.Type;
 
-// Tokens processed in one UTC hour (cache reads and writes included); `origin` is
+// Tokens processed in one quarter hour (cache reads and writes included); `origin` is
 // null for sessions read from session files, whose dispatcher is unknown;
 // `cacheReadTokens` is the part read from the prompt cache, when the provider reports it.
 // For a provider that reports no cost, the tokens left without an estimate:
@@ -298,7 +299,7 @@ export const StatsUsageAnalyticsTokenRow = Schema.Struct({
 });
 export type StatsUsageAnalyticsTokenRow = typeof StatsUsageAnalyticsTokenRow.Type;
 
-// Turns requested in one UTC hour, and how many ended in error.
+// Turns requested in one quarter hour, and how many ended in error.
 export const StatsUsageAnalyticsTurnRow = Schema.Struct({
   hour: IsoDateTime,
   provider: StatsUsageAnalyticsProvider,
@@ -309,7 +310,7 @@ export const StatsUsageAnalyticsTurnRow = Schema.Struct({
 });
 export type StatsUsageAnalyticsTurnRow = typeof StatsUsageAnalyticsTurnRow.Type;
 
-// Cost of Synara usage in one UTC hour, in USD, at API rates (not what a
+// Cost of usage in one quarter hour, in USD, at API rates (not what a
 // subscription bills). `reported`: the provider's own figure for completed turns
 // (Claude's SDK, Cursor, OpenCode). `estimated`: for a provider that reports none
 // (Codex), its input, cache and output tokens at API list prices.

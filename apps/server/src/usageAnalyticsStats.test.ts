@@ -257,9 +257,10 @@ describe("UsageAnalyticsQuery", () => {
       ]),
     );
 
-    const costByProvider = Object.fromEntries(
-      result.costs.map((row) => [row.provider, row.costUsd]),
-    );
+    const costByProvider: Record<string, number> = {};
+    for (const row of result.costs) {
+      costByProvider[row.provider] = (costByProvider[row.provider] ?? 0) + row.costUsd;
+    }
     expect(costByProvider.codex).toBeCloseTo(0.25);
     // A running total of 1.5 then 2 is two turns costing 1.5 and 0.5.
     expect(costByProvider.cursor).toBeCloseTo(2);
@@ -317,11 +318,17 @@ describe("UsageAnalyticsQuery estimates", () => {
       }),
     );
 
-    // 3,000 tokens: 2,000 cached, 300 output, 700 other input.
+    // 3,000 tokens: 2,000 cached, 300 output, 700 other input, in two quarter hours.
     const estimated = result.costs.filter((row) => row.source === "estimated");
-    expect(estimated).toHaveLength(1);
-    expect(estimated[0]).toMatchObject({ provider: "codex", model: "gpt-5-codex", turns: 0 });
-    expect(estimated[0]?.costUsd).toBeCloseTo(700e-6 + 2000e-7 + 300e-5, 10);
+    expect(estimated.map((row) => row.hour).toSorted()).toEqual([
+      "2026-09-30T08:00:00.000Z",
+      "2026-09-30T08:15:00.000Z",
+    ]);
+    expect(estimated.every((row) => row.provider === "codex" && row.turns === 0)).toBe(true);
+    expect(estimated.reduce((sum, row) => sum + row.costUsd, 0)).toBeCloseTo(
+      700e-6 + 2000e-7 + 300e-5,
+      10,
+    );
 
     expect(result.pricing).toEqual({ status: "fresh", fetchedAt: "2026-09-30T00:00:00.000Z" });
     expect(result.tokens).toEqual(
@@ -330,6 +337,79 @@ describe("UsageAnalyticsQuery estimates", () => {
         expect.objectContaining({ model: "gpt-5-codex", unpricedTokens: 0, unsplitTokens: 0 }),
       ]),
     );
+  });
+
+  it("prices a single-request Codex session from its recorded session usage", async () => {
+    const result = await runTest(
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        yield* sql`
+          INSERT INTO projection_threads (
+            thread_id, project_id, title, model_selection_json, runtime_mode,
+            interaction_mode, env_mode, created_at, updated_at, deleted_at
+          )
+          VALUES ('thread-one', 'project-none', 'One', '{"provider":"codex","model":"gpt-5-codex"}',
+            'full-access', 'default', 'local',
+            '2026-09-30T08:00:00.000Z', '2026-09-30T09:00:00.000Z', NULL)
+        `;
+        // Codex leaves out the running total while it equals this request's tokens.
+        yield* sql`
+          INSERT INTO projection_thread_activities (
+            activity_id, thread_id, turn_id, tone, kind, summary, payload_json, sequence, created_at
+          )
+          VALUES ('one-1', 'thread-one', NULL, 'info', 'context-window.updated', 'tokens',
+            '{"provider":"codex","usedTokens":1000,"cumulativeUsage":{"inputTokens":900,"outputTokens":100,"cachedInputTokens":600}}',
+            1, '2026-09-30T08:10:00.000Z')
+        `;
+        const query = yield* UsageAnalyticsQuery;
+        return yield* query.getUsageAnalytics(WINDOW);
+      }),
+    );
+    expect(result.tokens).toEqual([
+      expect.objectContaining({ tokens: 1_000, unpricedTokens: 0, unsplitTokens: 0 }),
+    ]);
+    expect(result.costs).toEqual([
+      expect.objectContaining({
+        source: "estimated",
+        costUsd: expect.closeTo(300e-6 + 600e-7 + 100e-5, 10),
+      }),
+    ]);
+  });
+
+  it("keeps each provider's running cost total apart within a thread", async () => {
+    const result = await runTest(
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        yield* sql`
+          INSERT INTO projection_threads (
+            thread_id, project_id, title, model_selection_json, runtime_mode,
+            interaction_mode, env_mode, created_at, updated_at, deleted_at
+          )
+          VALUES ('thread-mixed', 'project-none', 'Mixed', '{"provider":"cursor","model":"auto"}',
+            'full-access', 'default', 'local',
+            '2026-09-30T08:00:00.000Z', '2026-09-30T09:00:00.000Z', NULL)
+        `;
+        // Cursor $2, then Grok's own total $3, then Cursor $4: $2 + $3 + $2.
+        yield* sql`
+          INSERT INTO projection_thread_activities (
+            activity_id, thread_id, turn_id, tone, kind, summary, payload_json, sequence, created_at
+          )
+          VALUES
+            ('mix-1', 'thread-mixed', 'turn-1', 'info', 'turn.completed', 'done',
+              '{"provider":"cursor","state":"completed","cumulativeCostUsd":2}', 1,
+              '2026-09-30T08:10:00.000Z'),
+            ('mix-2', 'thread-mixed', 'turn-2', 'info', 'turn.completed', 'done',
+              '{"provider":"grok","state":"completed","cumulativeCostUsd":3}', 2,
+              '2026-09-30T08:20:00.000Z'),
+            ('mix-3', 'thread-mixed', 'turn-3', 'info', 'turn.completed', 'done',
+              '{"provider":"cursor","state":"completed","cumulativeCostUsd":4}', 3,
+              '2026-09-30T08:30:00.000Z')
+        `;
+        const query = yield* UsageAnalyticsQuery;
+        return yield* query.getUsageAnalytics(WINDOW);
+      }),
+    );
+    expect(result.costs.reduce((sum, row) => sum + row.costUsd, 0)).toBeCloseTo(7);
   });
 
   it("leaves out Claude costs stored before per-turn accounting", async () => {
