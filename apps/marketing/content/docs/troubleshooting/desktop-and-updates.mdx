@@ -16,10 +16,19 @@ Work through these checks in order:
 5. Re-download the current installer from the [official download page](/install).
 6. Reinstall over the current application without deleting workspace data.
 
-On macOS, use the Arm64 build for Apple Silicon and the x64 build for Intel. On Linux, ensure the AppImage is executable:
+On macOS, use the Arm64 build for Apple Silicon and the x64 build for Intel. On Linux, match the
+AppImage to your CPU (`uname -m`: `x86_64` uses the Intel build, `aarch64` uses ARM64), make it
+executable, and install FUSE 2 if the AppImage cannot mount itself:
 
 ```bash
 chmod +x Synara*.AppImage
+```
+
+If your distribution has no FUSE 2 package, run the bundle without mounting it:
+
+```bash
+./Synara*.AppImage --appimage-extract
+./squashfs-root/synara
 ```
 
 <Callout type="warn" title="Do not delete data as a first step">

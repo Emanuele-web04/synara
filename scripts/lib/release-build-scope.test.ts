@@ -41,27 +41,62 @@ describe("release validation scope", () => {
         "Publication requires",
       );
   });
-  it("requires the complete four-platform artifact gate for publication", () => {
-    expect(resolveReleaseBuildScope("all", "artifact", true).matrix.include).toHaveLength(4);
+  it("requires the complete five-platform artifact gate for publication", () => {
+    expect(resolveReleaseBuildScope("all", "artifact", true).matrix.include).toHaveLength(5);
     for (const stage of ["native", "icon", "js"])
       expect(() => resolveReleaseBuildScope("all", stage, true)).toThrow("Publication requires");
-    for (const platform of ["mac-arm64", "mac-x64", "linux-x64", "win-x64"])
+    for (const platform of ["mac-arm64", "mac-x64", "linux-x64", "linux-arm64", "win-x64"])
       expect(() => resolveReleaseBuildScope(platform, "artifact", true)).toThrow(
         "Publication requires",
       );
   });
   it("qualifies Linux without an icon job or unrelated platforms", () => {
-    const scope = resolveReleaseBuildScope("linux-x64", "native");
-    expect(scope.matrix.include.map((entry) => entry.id)).toEqual(["linux-x64"]);
-    expect(scope.cua_matrix.include.map((entry) => entry.id)).toEqual(["linux-x64"]);
-    expect(scope).toMatchObject({
-      build_icon: false,
-      build_js: false,
-      build_native: true,
-      prepare_cua: true,
-      package_artifacts: false,
-      build_server: false,
+    for (const platform of ["linux-x64", "linux-arm64"]) {
+      const scope = resolveReleaseBuildScope(platform, "native");
+      expect(scope.matrix.include.map((entry) => entry.id)).toEqual([platform]);
+      expect(scope.cua_matrix.include.map((entry) => entry.id)).toEqual([platform]);
+      expect(scope).toMatchObject({
+        build_icon: false,
+        build_js: false,
+        build_native: true,
+        prepare_cua: true,
+        package_artifacts: false,
+        build_server: false,
+      });
+    }
+  });
+  it("packages Linux arm64 on the arm64 runner and keeps it out of the compatibility lane", () => {
+    const arm64 = resolveReleaseBuildScope("all", "artifact").matrix.include.find(
+      (entry) => entry.id === "linux-arm64",
+    );
+    expect(arm64).toMatchObject({
+      runner: "ubuntu-24.04-arm",
+      platform: "linux",
+      target: "AppImage",
+      arch: "arm64",
     });
+    expect(
+      resolveReleaseBuildScope(
+        "all",
+        "artifact",
+        false,
+        "",
+        "production",
+        "bridge",
+      ).matrix.include.map((entry) => entry.id),
+    ).toEqual(["mac-arm64", "mac-x64", "linux-x64", "win-x64"]);
+    expect(() =>
+      resolveReleaseBuildScope("all", "artifact", false, "", "production", "ship" as "clean"),
+    ).toThrow("Unknown release lane");
+    expect(() => resolveReleaseBuildScope("linux-arm64", "artifact", false, "", "remote")).toThrow(
+      "mac-arm64, linux-x64 and win-x64",
+    );
+    expect(() =>
+      resolveReleaseBuildScope("linux-arm64", "artifact", false, "", "production", "bridge"),
+    ).toThrow("not part of the pinned compatibility lane");
+    expect(() =>
+      resolveReleaseBuildScope("linux-arm62", "artifact", false, "", "production"),
+    ).toThrow("Unknown build platform");
   });
   it("runs the independent icon and JS stages without native packaging", () => {
     expect(resolveReleaseBuildScope("all", "icon")).toMatchObject({
@@ -104,8 +139,9 @@ describe("release validation scope", () => {
       "mac-arm64",
       "mac-x64",
       "linux-x64",
+      "linux-arm64",
     ]);
-    for (const platform of ["mac-arm64", "mac-x64", "linux-x64"]) {
+    for (const platform of ["mac-arm64", "mac-x64", "linux-x64", "linux-arm64"]) {
       const scope = resolveReleaseBuildScope(platform, "artifact");
       expect(scope.prepare_cua).toBe(true);
       expect(scope.cua_matrix.include.map((entry) => entry.id)).toEqual([platform]);

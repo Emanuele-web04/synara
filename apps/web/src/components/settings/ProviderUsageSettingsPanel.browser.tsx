@@ -38,3 +38,31 @@ it("keeps disabled sidebar preferences when selecting another provider", async (
     railUsageInstanceIds: ["codex", "claudeAgent", "opencode"],
   });
 });
+
+it("shows remote provider usage without editing this app's usage preferences", async () => {
+  const frame = Object.assign(document.createElement("iframe"), { synaraWorkspace: {} });
+  const frameElement = vi.spyOn(window, "frameElement", "get").mockReturnValue(frame);
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false, enabled: false } } });
+  client.setQueryData(serverQueryKeys.settings(), DEFAULT_SERVER_SETTINGS);
+  client.setQueryData(serverQueryKeys.allProviderUsage(), [
+    {
+      provider: "opencode",
+      status: "ok",
+      limits: [],
+      usageLines: [{ label: "Remote provider allowance", value: "7 credits" }],
+    },
+  ]);
+  try {
+    await render(
+      <QueryClientProvider client={client}>
+        <ProviderUsageSettingsPanel />
+      </QueryClientProvider>,
+    );
+    await expect.element(page.getByText("Remote provider allowance")).toBeVisible();
+    await expect.element(page.getByRole("button", { name: "Refresh" })).toBeVisible();
+    expect(page.getByRole("switch").query()).toBeNull();
+  } finally {
+    frameElement.mockRestore();
+    client.clear();
+  }
+});

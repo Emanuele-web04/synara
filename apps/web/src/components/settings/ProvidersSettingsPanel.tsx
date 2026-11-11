@@ -76,7 +76,10 @@ import {
   XIcon,
 } from "~/lib/icons";
 import { copyTextToClipboard } from "~/hooks/useCopyToClipboard";
-import { normalizeProviderAccentColor } from "~/lib/providerInstancePresentation";
+import {
+  normalizeProviderAccentColor,
+  providerAccountIdentityLabel,
+} from "~/lib/providerInstancePresentation";
 import {
   type ProviderAccountStatusSummary,
   type ProviderAccountStatusTone,
@@ -102,7 +105,7 @@ import {
   shouldShowProviderUpdateStatus,
   withProviderUpdateTimeout,
 } from "~/providerUpdates";
-import { providerStatusInstanceKey } from "~/lib/providerAvailability";
+import { findUsableProviderStatus, providerStatusInstanceKey } from "~/lib/providerAvailability";
 import { SETTINGS_TARGETS } from "~/settingsNavigation";
 import {
   SETTINGS_INSET_LIST_CLASS_NAME,
@@ -1498,6 +1501,7 @@ function ProviderAccountsControl(props: {
       account.isDefault &&
       explicit !== undefined &&
       (explicit.accentColor !== undefined || explicit.enabled === false);
+    const identity = providerAccountIdentityLabel(liveStatus);
     return (
       <div
         className={cn(
@@ -1523,6 +1527,9 @@ function ProviderAccountsControl(props: {
                 </span>
               ) : null}
             </div>
+            {identity ? (
+              <span className="block truncate text-ui-sm text-muted-foreground">{identity}</span>
+            ) : null}
             <StatusChip
               variant="pill"
               className={cn("mt-1 w-fit max-w-full", ACCOUNT_STATUS_PILL_CLASS_NAME[status.tone])}
@@ -2080,17 +2087,32 @@ export function ProvidersSettingsPanel({
       ),
     [localProviderStatuses],
   );
+  const configuredInstances = getProviderInstanceOptions(settings);
+  const providerSetupStatusByProvider = new Map(
+    enabledProviderOptions.map(
+      ({ provider }) =>
+        [
+          provider,
+          findUsableProviderStatus(
+            localProviderStatuses,
+            provider,
+            provider,
+            configuredInstances,
+          ) ?? providerStatusByProvider.get(provider),
+        ] as const,
+    ),
+  );
   const availableProviderCount = enabledProviderOptions.filter(
-    (option) => providerStatusByProvider.get(option.provider)?.available === true,
+    (option) => providerSetupStatusByProvider.get(option.provider)?.available === true,
   ).length;
   const visibleAvailableProviderCount = enabledProviderOptions.filter(
     (option) =>
-      providerStatusByProvider.get(option.provider)?.available === true &&
+      providerSetupStatusByProvider.get(option.provider)?.available === true &&
       !hiddenProviderSet.has(option.provider),
   ).length;
   const hasPendingProviderStatuses =
     !providerStatusesReconciled ||
-    enabledProviderOptions.some((option) => !providerStatusByProvider.has(option.provider));
+    enabledProviderOptions.some((option) => !providerSetupStatusByProvider.get(option.provider));
   const providerUpdateServerSettings = useMemo(
     () =>
       serverSettingsQuery.data
@@ -2246,7 +2268,7 @@ export function ProvidersSettingsPanel({
 
   const renderProviderActivityRow = (option: (typeof PROVIDER_VISIBILITY_OPTIONS)[number]) => {
     const enabled = !disabledProviderSet.has(option.provider);
-    const providerStatus = providerStatusByProvider.get(option.provider);
+    const providerStatus = providerSetupStatusByProvider.get(option.provider);
     return (
       <SettingsListRow
         key={option.provider}
@@ -2429,7 +2451,7 @@ export function ProvidersSettingsPanel({
                   <SortableProviderVisibilityRow
                     key={option.provider}
                     option={option}
-                    providerStatus={providerStatusByProvider.get(option.provider)}
+                    providerStatus={providerSetupStatusByProvider.get(option.provider)}
                     statusReconciled={providerStatusesReconciled}
                     isDisabled={disabledProviderSet.has(option.provider)}
                     isHidden={hiddenProviderSet.has(option.provider)}

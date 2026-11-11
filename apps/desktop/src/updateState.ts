@@ -236,3 +236,73 @@ export function getAutoUpdateDisabledReason(args: {
   }
   return null;
 }
+
+/**
+ * Whether the updater's resolved payload can run on this runtime. Each Linux
+ * architecture publishes its own manifest and AppImage, so a correct feed
+ * already matches; this is a safety net for a mispublished or merged manifest,
+ * where the resolved AppImage could belong to the other architecture.
+ *
+ * electron-updater resolves `files[]` when present and falls back to the legacy
+ * top-level `path` from the manifest, so both are inspected. Entries are
+ * reduced to the payload's base name first: a feed URL may carry a query string
+ * or fragment, and electron-updater falls back to the first `files[]` entry
+ * when no name matches, so a Linux manifest without a recognisable AppImage is
+ * rejected instead of admitted unverified.
+ */
+export function updateFilesMatchRuntimeArch(
+  info: {
+    readonly path?: string | undefined;
+    readonly files?: ReadonlyArray<{ readonly url?: string | undefined }> | undefined;
+  },
+  platform: NodeJS.Platform,
+  arch: string,
+): boolean {
+  if (platform !== "linux") return true;
+  const candidates = [info.path, ...(info.files ?? []).map((file) => file.url)];
+  const appImages = candidates.flatMap((url) => {
+    if (typeof url !== "string") return [];
+    const basename = payloadBasename(url);
+    return /\.AppImage$/i.test(basename) ? [basename] : [];
+  });
+  // Fail closed: an updater payload we cannot name is not one we can trust to
+  // match this runtime.
+  if (appImages.length === 0) return false;
+  return appImages.every((name) =>
+    arch === "arm64" ? /arm64\.AppImage$/i.test(name) : !/arm64/i.test(name),
+  );
+}
+
+/** Payload file name from a feed entry, ignoring directory, query and fragment. */
+function payloadBasename(value: string): string {
+  try {
+    const pathname = new URL(value, "https://payload.invalid/").pathname;
+    return pathname.slice(pathname.lastIndexOf("/") + 1);
+  } catch {
+    return "";
+  }
+}
+
+/**
+ * Admission for an offered update: same flavor lane, newer version, and a
+ * payload that matches this runtime's architecture. Kept pure so the
+ * `update-available` handler cannot drift from the tested policy.
+ */
+export function shouldAcceptAvailableUpdate(input: {
+  readonly currentVersion: string;
+  readonly version: string | null | undefined;
+  readonly flavor: SynaraDesktopFlavor;
+  readonly info: {
+    readonly path?: string | undefined;
+    readonly files?: ReadonlyArray<{ readonly url?: string | undefined }> | undefined;
+  };
+  readonly platform: NodeJS.Platform;
+  readonly arch: string;
+}): boolean {
+  return (
+    typeof input.version === "string" &&
+    isUpdateVersionAllowedForFlavor(input.version, input.flavor) &&
+    isUpdateVersionNewer(input.currentVersion, input.version) &&
+    updateFilesMatchRuntimeArch(input.info, input.platform, input.arch)
+  );
+}

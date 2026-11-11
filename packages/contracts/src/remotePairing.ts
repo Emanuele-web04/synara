@@ -64,6 +64,10 @@ export const RemoteAccessRequest = Schema.Union([
     deviceId: Schema.String.check(Schema.isUUID(undefined)),
   }),
   Schema.Struct({ operation: Schema.Literal("device-info") }),
+  Schema.Struct({
+    operation: Schema.Literal("re-register-device"),
+    recoveryId: Schema.String.check(Schema.isUUID(4)),
+  }),
   Schema.Struct({ operation: Schema.Literal("reset-identity"), environmentId: EnvironmentId }),
   Schema.Struct({ operation: Schema.Literal("create-invitation") }),
   Schema.Struct({ operation: Schema.Literal("create-code") }),
@@ -110,6 +114,8 @@ export const RemoteAccessResult = Schema.Union([
     label: Schema.String,
     rootFingerprint: Schema.String,
     expiresAt: IsoDateTime,
+    /** Key that actually redeemed the code, even if another window changed device identity. */
+    deviceJkt: Schema.optional(boundedTrimmedNonEmptyString(128)),
   }),
   Schema.Struct({
     kind: Schema.Literal("account-sessions-revoked"),
@@ -120,6 +126,10 @@ export const RemoteAccessResult = Schema.Union([
     kind: Schema.Literal("device-info"),
     deviceJkt: boundedTrimmedNonEmptyString(128),
     label: boundedTrimmedNonEmptyString(128),
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("device-registration-revoked"),
+    recoveryId: Schema.String.check(Schema.isUUID(4)),
   }),
   Schema.Struct({ kind: Schema.Literal("invitation"), bundle: RemotePairingBundle }),
   Schema.Struct({

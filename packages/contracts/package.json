@@ -1,6 +1,6 @@
 {
   "name": "@synara/contracts",
-  "version": "1.5.1",
+  "version": "1.5.2",
   "private": true,
   "files": [
     "dist"
@@ -26,6 +26,10 @@
     "./productAnalytics": {
       "types": "./src/productAnalytics.ts",
       "import": "./src/productAnalytics.ts"
+    },
+    "./reliability": {
+      "types": "./src/reliability.ts",
+      "import": "./src/reliability.ts"
     },
     "./composerSlashCommands": {
       "types": "./src/composerSlashCommands.ts",

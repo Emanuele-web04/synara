@@ -1097,6 +1097,19 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
         ],
       ] as const;
 
+      lifecycleManager.emit("event", {
+        id: asEventId("unstable-features-notice"),
+        kind: "notification",
+        provider: "codex",
+        createdAt: new Date().toISOString(),
+        method: "warning",
+        threadId: asThreadId("thread-1"),
+        payload: {
+          message:
+            "Under-development features enabled: default_mode_request_user_input. Under-development features are incomplete and may behave unpredictably. To suppress this warning, set `suppress_unstable_features_warning = true` in /tmp/codex/config.toml.",
+        },
+      } satisfies ProviderEvent);
+
       for (const [method, message] of warnings) {
         lifecycleManager.emit("event", {
           id: asEventId(`evt-${method}`),

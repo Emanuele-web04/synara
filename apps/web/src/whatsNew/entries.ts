@@ -22,6 +22,44 @@ import type { WhatsNewEntry } from "./logic";
 
 export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
   {
+    version: "1.5.2",
+    date: "Nov 11",
+    features: [
+      {
+        id: "linux-arm64",
+        title: "Synara for Linux ARM64",
+        description:
+          "Download the new ARM64 AppImage alongside the existing x86_64 build. Each architecture uses its own update feed.",
+      },
+      {
+        id: "usage-analytics",
+        title: "Explore your usage",
+        description:
+          "The new Analytics tab in Usage & limits shows token and activity trends by provider, model and project, with API-rate costs.",
+        details:
+          "Costs are reported or estimated at API rates, not what your subscription bills. On a Mac, you can also include local Codex and Claude Code sessions.",
+      },
+      {
+        id: "computer-settings",
+        title: "Choose which computer to configure",
+        description:
+          "Select a connected computer in Settings to view and change its settings, and see the signed-in account for supported providers.",
+      },
+      {
+        id: "chat-reliability",
+        title: "More reliable chats and connections",
+        description:
+          "Account recovery, chat sends, queued work and Remote connections handle interruptions more reliably. Provider and checkpoint warnings now appear in the environment panel.",
+      },
+      {
+        id: "desktop-refinements",
+        title: "A smoother desktop experience",
+        description:
+          "macOS update preparation and shutdown are more reliable, simulator control stays active across chats, and onboarding and rate-limit messages are clearer.",
+      },
+    ],
+  },
+  {
     version: "1.5.1",
     date: "Nov 11",
     features: [

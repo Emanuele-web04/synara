@@ -8,6 +8,7 @@ import {
   ProductTurnObserver,
   productRpcActivity,
   trackProductAnalytics,
+  trackReliabilityIssue,
 } from "./lib/productAnalytics";
 import { recordRendererActivity, rendererRpcActivity } from "./lib/rendererErrorDiagnostics";
 
@@ -519,7 +520,23 @@ function makeProtocolLayer(url: string, hooks?: ProtocolLayerHooks) {
                 const responses = parser.decode(message) as Array<
                   Parameters<Parameters<RpcClient.Protocol["Service"]["run"]>[0]>[0]
                 >;
-                return Effect.forEach(responses, writeResponse, { discard: true });
+                return Effect.forEach(
+                  responses,
+                  (response) =>
+                    response._tag === "Defect"
+                      ? // Effect broadcasts this frame to every in-flight RPC. Treat
+                        // their delivery as unknown so mutations can reconcile it.
+                        reportFailure(
+                          new RpcClientError.RpcClientError({
+                            reason: new RpcClientError.RpcClientDefect({
+                              message: "Server sent a connection-wide RPC defect",
+                              cause: undefined,
+                            }),
+                          }),
+                        )
+                      : writeResponse(response),
+                  { discard: true },
+                );
               } catch (cause) {
                 return reportFailure(
                   new RpcClientError.RpcClientError({
@@ -1381,6 +1398,24 @@ export class WsTransport {
         const finishSettlement = trackWsTurnSettlement(uncertainTurn.threadId);
         try {
           return (await this.settleTurnDispatch(uncertainTurn, requestOptions.signal)) as T;
+        } catch (settlementError) {
+          if (!(settlementError instanceof WsTransportRpcError))
+            trackReliabilityIssue("chat.settlement_unavailable");
+          if (
+            !(settlementError instanceof WsTransportRpcError) &&
+            (this.lifetime.signal.aborted || requestOptions.signal?.aborted)
+          ) {
+            throw new WsTransportRequestInterruptedError({
+              message:
+                "Message delivery could not be checked. Reconnect and check the conversation before sending again.",
+              code: "WS_TURN_SETTLEMENT_UNAVAILABLE",
+              method: ORCHESTRATION_WS_METHODS.settleTurnDispatch,
+              retryable: false,
+              delivery: "unknown",
+              cause: settlementError,
+            });
+          }
+          throw settlementError;
         } finally {
           finishSettlement();
         }

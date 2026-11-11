@@ -179,6 +179,51 @@ it("shows installation and auth beside activity switches with visible setup guid
   }
 });
 
+it("reports Claude as connected and visible when only a secondary account is ready", async () => {
+  harness.statuses = [
+    ...harness.statuses.filter((status) => status.provider !== "claudeAgent"),
+    {
+      provider: "claudeAgent",
+      driver: "claudeAgent",
+      instanceId: "claudeAgent",
+      enabled: false,
+      available: false,
+      authStatus: "unknown",
+      status: "warning",
+      checkedAt: "2026-09-16T21:46:18.000Z",
+    },
+    {
+      provider: "claudeAgent",
+      driver: "claudeAgent",
+      instanceId: "work_claude",
+      enabled: true,
+      available: true,
+      authStatus: "authenticated",
+      status: "ready",
+      checkedAt: "2026-09-16T21:46:18.000Z",
+    },
+  ];
+  await render(
+    <ProvidersSettingsPanel
+      {...props}
+      providerTarget="claudeAgent"
+      settings={{
+        ...props.settings,
+        providerInstances: {
+          claudeAgent: { driver: "claudeAgent", displayName: "Privat", enabled: false },
+          work_claude: { driver: "claudeAgent", displayName: "Work", enabled: true },
+        },
+      }}
+    />,
+  );
+
+  expect(activityRow("Claude").textContent).toContain("Connected");
+  await expect
+    .element(page.getByRole("switch", { name: "Show Claude in the provider picker" }))
+    .toBeChecked();
+  await expect.element(page.getByRole("switch", { name: "Enable Privat" })).not.toBeChecked();
+});
+
 it("keeps disabled providers only in a collapsed recovery list", async () => {
   await render(<ProvidersSettingsPanel {...props} />);
   expect(page.getByRole("switch", { name: "Enable Grok", exact: true }).elements()).toHaveLength(0);

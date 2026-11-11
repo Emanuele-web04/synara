@@ -212,6 +212,7 @@ import { consumeCodexResetCreditEffect, listProviderUsage } from "./providerUsag
 import { getProviderUsageSnapshot } from "./providerUsageSnapshot";
 import { ProfileStatsQuery } from "./profileStats";
 import { RecapStatsQuery } from "./recapStats";
+import { UsageAnalyticsQuery } from "./usageAnalyticsStats";
 import { ThreadSearchQuery } from "./threadSearch";
 import { redactSensitiveProcessArgs } from "./processArgumentRedaction";
 import { ServerEnvironment } from "./environment/Services/ServerEnvironment";
@@ -242,7 +243,7 @@ import { ThreadDiagnosticsQuery } from "./diagnostics/Services/ThreadDiagnostics
 import { makeOwnerThreadDiagnosticReader } from "./diagnostics/ownerThreadDiagnostics";
 import { OrchestrationEventStore } from "./persistence/Services/OrchestrationEventStore";
 import { ProviderRuntimeEventRepository } from "./persistence/Services/ProviderRuntimeEvents";
-import { requireWsOwnerSession } from "./wsOwnerAuthorization";
+import { requireUsageAnalyticsAccess, requireWsOwnerSession } from "./wsOwnerAuthorization";
 import { connectorsForPairedClient } from "./mcpConnectors/pairedClientView";
 import {
   WsRequestAdmissionMiddleware,
@@ -264,7 +265,7 @@ import {
 } from "./remoteSessions/sessionRegistry";
 import { HostConnectionRegistryService } from "./hostConnections/registry";
 import { makeHostConnectionsPort } from "./hostConnections/port";
-import { isOwnerRole, requireOwnerRole } from "./wsOwnerOnly";
+import { isOwnerRole, projectProviderStatusesForWsSession, requireOwnerRole } from "./wsOwnerOnly";
 import {
   negotiateWsCompatibility,
   parseWsNegotiateSearchParams,
@@ -556,6 +557,7 @@ const makeWsRpcHandlersLayer = () =>
       const githubInbox = yield* GitHubInboxService;
       const profileStatsQuery = yield* ProfileStatsQuery;
       const recapStatsQuery = yield* RecapStatsQuery;
+      const usageAnalyticsQuery = yield* UsageAnalyticsQuery;
       const threadSearchQuery = yield* ThreadSearchQuery;
       const projectionReadModelQuery = yield* ProjectionSnapshotQuery;
       const providerAdapterRegistry = yield* ProviderAdapterRegistry;
@@ -1038,9 +1040,15 @@ const makeWsRpcHandlersLayer = () =>
         return result;
       });
 
+      const readProviderStatuses = providerHealth.getStatuses.pipe(
+        Effect.flatMap(projectProviderStatusesForWsSession),
+      );
+      const streamProviderStatuses = providerHealth.streamChanges.pipe(
+        Stream.mapEffect(projectProviderStatusesForWsSession),
+      );
       const loadServerConfig = Effect.gen(function* () {
         const keybindingsConfig = yield* keybindings.loadConfigState;
-        const providerStatuses = yield* providerHealth.getStatuses;
+        const providerStatuses = yield* readProviderStatuses;
         return {
           cwd: config.cwd,
           homeDir: config.homeDir,
@@ -2635,13 +2643,26 @@ const makeWsRpcHandlersLayer = () =>
         [WS_METHODS.serverGetSettings]: () =>
           rpcEffect(serverSettings.getSettingsView, "Failed to load server settings"),
         [WS_METHODS.serverUpdateSettings]: (input) =>
-          rpcEffect(serverSettings.updateSettingsView(input), "Failed to update server settings"),
+          rpcEffect(
+            (input.legacyProviders === undefined && input.legacyProviderInstances === undefined
+              ? Effect.void
+              : requireWsOwnerSession
+            ).pipe(Effect.andThen(serverSettings.updateSettingsView(input))),
+            "Failed to update server settings",
+          ),
         [WS_METHODS.serverRefreshProviders]: () =>
           rpcEffect(
-            providerHealth.refresh.pipe(Effect.map((providers) => ({ providers }))),
+            providerHealth.refresh.pipe(
+              Effect.flatMap(projectProviderStatusesForWsSession),
+              Effect.map((providers) => ({ providers })),
+            ),
             "Failed to refresh providers",
           ),
-        [WS_METHODS.serverUpdateProvider]: (input) => providerHealth.updateProvider(input),
+        [WS_METHODS.serverUpdateProvider]: (input) =>
+          providerHealth.updateProvider(input).pipe(
+            Effect.flatMap(({ providers }) => projectProviderStatusesForWsSession(providers)),
+            Effect.map((providers) => ({ providers })),
+          ),
         [WS_METHODS.serverListExternalMcpIntegrations]: () =>
           rpcEffect(
             requireOwner.pipe(Effect.andThen(externalMcp.listIntegrations())),
@@ -2705,6 +2726,15 @@ const makeWsRpcHandlersLayer = () =>
           ),
         [WS_METHODS.statsGetRecap]: (input) =>
           rpcEffect(recapStatsQuery.getRecap(input), "Failed to load the recap"),
+        [WS_METHODS.statsGetUsageAnalytics]: (input) =>
+          requireUsageAnalyticsAccess(input.scope).pipe(
+            Effect.andThen(() =>
+              rpcEffect(
+                usageAnalyticsQuery.getUsageAnalytics(input),
+                "Failed to load usage analytics",
+              ),
+            ),
+          ),
         [WS_METHODS.serverGetProviderUsageSnapshot]: (input) =>
           rpcEffect(getProviderUsageSnapshot(input), "Failed to load provider usage"),
         [WS_METHODS.serverListProviderUsage]: (input) =>
@@ -2931,7 +2961,7 @@ const makeWsRpcHandlersLayer = () =>
                   })),
                 ),
                 Stream.merge(
-                  bufferLiveUiStream(providerHealth.streamChanges, {
+                  bufferLiveUiStream(streamProviderStatuses, {
                     label: "server.provider-statuses",
                     onDroppedEvents: failLiveUiStreamForSnapshotResync,
                   }).pipe(
@@ -2959,9 +2989,9 @@ const makeWsRpcHandlersLayer = () =>
             { key: "server.provider-statuses" },
             Stream.concat(
               Stream.fromEffect(
-                providerHealth.getStatuses.pipe(Effect.map((providers) => ({ providers }))),
+                readProviderStatuses.pipe(Effect.map((providers) => ({ providers }))),
               ),
-              bufferLiveUiStream(providerHealth.streamChanges, {
+              bufferLiveUiStream(streamProviderStatuses, {
                 label: "server.provider-statuses",
                 onDroppedEvents: failLiveUiStreamForSnapshotResync,
               }).pipe(Stream.map((providers) => ({ providers }))),

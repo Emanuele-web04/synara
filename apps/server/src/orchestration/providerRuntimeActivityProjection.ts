@@ -1532,8 +1532,9 @@ export function projectProviderRuntimeActivities(
           return limit;
         });
       const normalizedPayload = {
-        provider: event.provider,
         ...rl,
+        provider: event.provider,
+        ...(event.providerInstanceId ? { providerInstanceId: event.providerInstanceId } : {}),
         ...(resetsAt ? { resetsAt } : {}),
         ...(typeof rl.utilization === "number" ? { utilization: rl.utilization } : {}),
         ...(limits && limits.length > 0 ? { limits } : {}),
@@ -1550,7 +1551,7 @@ export function projectProviderRuntimeActivities(
           ...maybeSequence,
         },
       ];
-      if (status !== "rejected" && status !== "allowed_warning") {
+      if (status !== "rejected") {
         return activities;
       }
       return [
@@ -1558,9 +1559,9 @@ export function projectProviderRuntimeActivities(
         {
           id: event.eventId,
           createdAt: event.createdAt,
-          tone: (status === "rejected" ? "error" : "info") as "error" | "info",
+          tone: "error",
           kind: "account.rate-limited",
-          summary: status === "rejected" ? "Rate limited" : "Approaching rate limit",
+          summary: "Rate limited",
           payload: toActivityPayload({
             ...normalizedPayload,
             status,

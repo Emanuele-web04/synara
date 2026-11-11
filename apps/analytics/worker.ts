@@ -3,6 +3,7 @@
 //
 // Endpoints:
 //   POST /v1/events   — NDJSON diagnostics events -> D1 `events` table
+//   POST /v1/reliability-events — anonymous reliability receipts -> D1 daily totals
 //   POST /v1/crash    — permanently retired; body is never consumed
 //   POST /api/login   — password login -> signed session cookie
 //   GET  /api/*       — dashboard reads (session cookie required)
@@ -24,6 +25,14 @@ import {
 } from "@synara/contracts/productAnalytics";
 
 import {
+  decodeReliabilityRecord,
+  RELIABILITY_MAX_BODY_BYTES,
+  RELIABILITY_MAX_EVENTS_PER_POST,
+  RELIABILITY_MAX_RECORD_AGE_DAYS,
+  type ReliabilityRecord,
+} from "@synara/contracts/reliability";
+
+import {
   diagnosticErrorFingerprint,
   diagnosticPayloadKind,
   sanitizeDiagnosticCrash,
@@ -41,6 +50,12 @@ import { diagnosticMetadataSql, diagnosticReadCteSql } from "./diagnosticsPrivac
 import { HOST_USAGE_RECEIPT_DAYS, HOST_USAGE_RETENTION_DAYS } from "@synara/contracts/hostUsage";
 import { normalizeHostUsageWindow } from "@synara/shared/hostUsage";
 import { readHostUsage, storeHostUsage } from "./hostUsage";
+import {
+  readReliabilityTotals,
+  RELIABILITY_RECEIPT_RETENTION_DAYS,
+  RELIABILITY_TOTAL_RETENTION_DAYS,
+  storeReliabilityRecords,
+} from "./reliability";
 import { captureInstallerDownloads, loadInstallerDownloads } from "./installerDownloads";
 
 export interface Env {
@@ -1425,6 +1440,10 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
     return new Response("unauthorized", { status: 401 });
   }
 
+  if (url.pathname === "/api/reliability" && request.method === "GET") {
+    return readReliabilityTotals(env.DB, url);
+  }
+
   const f = parseApiFilters(url);
 
   if (url.pathname === "/api/filters" && request.method === "GET") {
@@ -2485,6 +2504,52 @@ export default {
       return new Response("ok", { status: 200 });
     }
 
+    if (url.pathname === "/v1/reliability-events") {
+      if (request.method !== "POST") {
+        return new Response("method not allowed", { status: 405, headers: { allow: "POST" } });
+      }
+      if (await overRateLimit(env.INGEST_RATE_LIMITER, request)) {
+        return new Response("rate limited", { status: 429 });
+      }
+      if (request.headers.get("content-type")?.split(";")[0]?.trim() !== "application/json") {
+        return new Response("unsupported media type", { status: 415 });
+      }
+      const bodyBytes = await readBodyBytes(request, RELIABILITY_MAX_BODY_BYTES);
+      if (!bodyBytes) return new Response("payload too large", { status: 413 });
+      let records: ReliabilityRecord[];
+      try {
+        const body: unknown = JSON.parse(new TextDecoder().decode(bodyBytes));
+        if (
+          !isRecord(body) ||
+          Object.keys(body).length !== 1 ||
+          !Array.isArray(body.events) ||
+          body.events.length === 0
+        ) {
+          return new Response("bad reliability batch", { status: 400 });
+        }
+        if (body.events.length > RELIABILITY_MAX_EVENTS_PER_POST) {
+          return new Response("too many events", { status: 413 });
+        }
+        records = body.events.map((record) => decodeReliabilityRecord(record));
+      } catch {
+        return new Response("bad reliability record", { status: 400 });
+      }
+      const now = Date.now();
+      const today = new Date(now).toISOString().slice(0, 10);
+      const cutoff = new Date(now - RELIABILITY_MAX_RECORD_AGE_DAYS * DAY_MS)
+        .toISOString()
+        .slice(0, 10);
+      if (records.some((record) => record.day < cutoff || record.day > today)) {
+        return new Response("reliability day out of range", { status: 400 });
+      }
+      try {
+        const acknowledged = await storeReliabilityRecords(env.DB, records, today);
+        return Response.json({ stored: true, acknowledged });
+      } catch {
+        return new Response("reliability intake unavailable", { status: 503 });
+      }
+    }
+
     if (url.pathname === "/v1/product-events" && request.method === "POST") {
       if (await overRateLimit(env.INGEST_RATE_LIMITER, request)) {
         return new Response("rate limited", { status: 429 });
@@ -2744,6 +2809,20 @@ export default {
         orderBy: "day",
         where: "day < ?",
         cutoffs: [before(PRODUCT_RETENTION_DAYS).slice(0, 10)],
+      },
+      {
+        table: "reliability_receipts",
+        key: "receipt_id",
+        orderBy: "received_day",
+        where: "received_day < ?",
+        cutoffs: [before(RELIABILITY_RECEIPT_RETENTION_DAYS).slice(0, 10)],
+      },
+      {
+        table: "reliability_daily",
+        key: "rowid",
+        orderBy: "day",
+        where: "day < ?",
+        cutoffs: [before(RELIABILITY_TOTAL_RETENTION_DAYS).slice(0, 10)],
       },
     ];
     for (const { table, key, where, cutoffs, orderBy = "received_at" } of retention) {

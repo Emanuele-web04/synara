@@ -2,7 +2,19 @@
 // Purpose: Resolves release identities and updater manifests while keeping
 // Stable, Beta and Remote feeds isolated from the historical compatibility line.
 
-import { constants, copyFileSync, existsSync, readFileSync, unlinkSync } from "node:fs";
+import { createHash } from "node:crypto";
+import {
+  closeSync,
+  constants,
+  copyFileSync,
+  existsSync,
+  fstatSync,
+  openSync,
+  readFileSync,
+  readSync,
+  unlinkSync,
+} from "node:fs";
+import { createRequire } from "node:module";
 import { resolve } from "node:path";
 
 export type ReleaseLane = "bridge" | "clean";
@@ -124,6 +136,130 @@ export function channelManifestNames(channel: string): readonly string[] {
   return [`${channel}-mac.yml`, `${channel}.yml`, `${channel}-linux.yml`];
 }
 
+/**
+ * The staged arm64 Linux manifest. electron-builder already writes this name
+ * for an arm64 build (`latest` channel plus the `-linux-arm64` suffix), so the
+ * build script does not retarget it; it only has to be published under the
+ * dedicated channel name as well.
+ */
+export const LINUX_ARM64_UPDATE_MANIFEST = "latest-linux-arm64.yml";
+
+/**
+ * Dedicated arm64 Linux feed for a channel. electron-updater derives Linux
+ * manifest names as `<channel>-linux` plus `-<arch>` for any architecture other
+ * than x64, so `synara` resolves to `synara-linux-arm64.yml` on arm64.
+ */
+export function linuxArm64ChannelManifestName(channel: string): string {
+  if (!CHANNEL_PATTERN.test(channel) || channel === "latest") {
+    throw new Error(`Invalid dedicated update channel: ${channel}`);
+  }
+  return `${channel}-linux-arm64.yml`;
+}
+
+interface LinuxArm64ManifestPlan {
+  readonly sourcePath: string;
+  readonly destinationPath: string;
+  readonly destinationName: string;
+}
+
+/**
+ * Resolves the arm64 feed without touching the directory, so a release either
+ * publishes every channel manifest or none.
+ */
+function planLinuxArm64Manifest(
+  assetDirectory: string,
+  channel: string,
+  required: boolean,
+): LinuxArm64ManifestPlan | null {
+  const sourcePath = resolve(assetDirectory, LINUX_ARM64_UPDATE_MANIFEST);
+  if (!existsSync(sourcePath)) {
+    if (required) {
+      throw new Error(
+        `Release is missing the Linux arm64 update manifest: ${LINUX_ARM64_UPDATE_MANIFEST}`,
+      );
+    }
+    return null;
+  }
+  const destinationName = linuxArm64ChannelManifestName(channel);
+  const destinationPath = resolve(assetDirectory, destinationName);
+  if (existsSync(destinationPath)) {
+    throw new Error(`Refusing to overwrite existing update manifest: ${destinationName}`);
+  }
+  validateLinuxArm64Manifest(assetDirectory, sourcePath);
+  return { sourcePath, destinationPath, destinationName };
+}
+
+interface UpdaterManifest {
+  readonly version?: unknown;
+  readonly files?: ReadonlyArray<{ url?: unknown; size?: unknown; sha512?: unknown }>;
+  readonly path?: unknown;
+  readonly sha512?: unknown;
+}
+
+function readUpdaterManifest(path: string): UpdaterManifest | null {
+  // Release preflight resolves version policy before installing dependencies.
+  const { parse } = createRequire(import.meta.url)("yaml") as typeof import("yaml");
+  return parse(readFileSync(path, "utf8"), { maxAliasCount: 0 }) as UpdaterManifest | null;
+}
+
+/** Validate the builder's feed against the bytes selected for publication. */
+function validateLinuxArm64Manifest(assetDirectory: string, manifestPath: string): void {
+  const version = readUpdaterManifest(resolve(assetDirectory, "latest-linux.yml"))?.version;
+  const manifest = readUpdaterManifest(manifestPath);
+  if (typeof version !== "string" || !version || manifest?.version !== version) {
+    throw new Error(
+      `Linux arm64 update manifest version ${manifest?.version || "(missing)"} does not match latest-linux.yml ${version || "(missing)"}.`,
+    );
+  }
+  if (!Array.isArray(manifest.files) || manifest.files.length !== 1) {
+    throw new Error("Linux arm64 update manifest must list exactly one AppImage.");
+  }
+  const file = manifest.files[0];
+  if (typeof file?.url !== "string" || !/^[\w.-]+-arm64\.AppImage$/.test(file.url)) {
+    throw new Error(`Linux arm64 update manifest points at a non-arm64 payload: ${file?.url}.`);
+  }
+  if (manifest.path !== file.url || manifest.sha512 !== file.sha512) {
+    throw new Error("Linux arm64 update manifest has conflicting AppImage metadata.");
+  }
+
+  const artifactPath = resolve(assetDirectory, file.url);
+  let artifact: number;
+  try {
+    artifact = openSync(artifactPath, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+  } catch (cause) {
+    throw new Error(`Cannot open staged AppImage: ${file.url}.`, { cause });
+  }
+  try {
+    const stat = fstatSync(artifact);
+    if (!stat.isFile() || stat.size <= 0 || stat.size !== file.size) {
+      throw new Error(
+        `Linux arm64 update manifest size does not match staged AppImage: ${file.url}.`,
+      );
+    }
+    const hash = createHash("sha512");
+    const buffer = Buffer.allocUnsafe(1024 * 1024);
+    let bytesRead: number;
+    while ((bytesRead = readSync(artifact, buffer, 0, buffer.length, null)) > 0) {
+      hash.update(buffer.subarray(0, bytesRead));
+    }
+    if (hash.digest("base64") !== file.sha512) {
+      throw new Error(
+        `Linux arm64 update manifest SHA-512 does not match staged AppImage: ${file.url}.`,
+      );
+    }
+  } finally {
+    closeSync(artifact);
+  }
+}
+
+function writeLinuxArm64Manifest(plan: LinuxArm64ManifestPlan | null): readonly string[] {
+  if (!plan) return [];
+  copyFileSync(plan.sourcePath, plan.destinationPath, constants.COPYFILE_EXCL);
+  // Keep the staged name too: it is the updater's default-channel fallback for
+  // arm64, mirroring how x64 keeps `latest-linux.yml` beside `synara-linux.yml`.
+  return [plan.destinationName, LINUX_ARM64_UPDATE_MANIFEST];
+}
+
 function copyChannelManifests(
   assetDirectory: string,
   sourceNames: readonly string[],
@@ -171,17 +307,23 @@ export function prepareReleaseUpdateManifests(
     if (missing.length > 0) {
       throw new Error(`Compatibility release is missing update manifests: ${missing.join(", ")}`);
     }
+    // The compatibility release predates arm64 Linux; only an explicit arm64
+    // build in this run may contribute a feed.
+    const linuxArm64 = planLinuxArm64Manifest(assetDirectory, channel, false);
     copyChannelManifests(assetDirectory, sourceNames, destinationNames);
-    return [...sourceNames, ...destinationNames];
+    return [...sourceNames, ...destinationNames, ...writeLinuxArm64Manifest(linuxArm64)];
   }
 
   const missing = sourceNames.filter((name) => !existsSync(resolve(assetDirectory, name)));
   if (missing.length > 0) {
     throw new Error(`Latest release is missing update manifests: ${missing.join(", ")}`);
   }
+  // Resolve the arm64 feed before any copy so a rejected release directory stays
+  // untouched and a published one carries every channel manifest.
+  const linuxArm64 = planLinuxArm64Manifest(assetDirectory, channel, true);
   // Stable 0.5.x releases are GitHub Latest, but shipped desktop binaries still
   // request the dedicated `synara` channel. Keep both filenames in the same
   // release so existing installations and new Latest installs use the same feed.
   copyChannelManifests(assetDirectory, sourceNames, destinationNames);
-  return [...sourceNames, ...destinationNames];
+  return [...sourceNames, ...destinationNames, ...writeLinuxArm64Manifest(linuxArm64)];
 }

@@ -9,7 +9,10 @@ inputs:
     description: "Install scope: full, static (root and scripts), or runtime (all except marketing)."
     default: "full"
   turbo:
-    description: Persist Turbo build artifacts for jobs that use Turbo.
+    description: Restore Turbo build artifacts for jobs that use Turbo; pushes to main also save them.
+    default: "false"
+  save-modules:
+    description: Save the node_modules archive after a miss. Only one job per cache key sets this.
     default: "false"
 
 runs:
@@ -43,10 +46,12 @@ runs:
     # Small filtered installs cost less than archive transfer/extraction. Never
     # restore a full tree into a filtered lane or save it under the full key.
     # Windows isolated links are rebuilt by Bun, not restored from an archive.
-    - name: Cache node_modules
+    # Every full lane restores; only the job that sets save-modules writes the
+    # archive after a miss, so parallel lanes never race to upload the same key.
+    - name: Restore node_modules
       id: modules
       if: ${{ runner.os != 'Windows' && inputs.scope == 'full' }}
-      uses: actions/cache@v5
+      uses: actions/cache/restore@v5
       with:
         path: |
           node_modules
@@ -55,20 +60,25 @@ runs:
           scripts/node_modules
         key: ${{ runner.os }}-${{ runner.arch }}-bun-modules-v2-electron-${{ inputs.electron }}-${{ hashFiles('bun.lock', 'package.json') }}
 
-    # A modules hit already contains the dependency payload. Restoring a second
-    # archive is redundant. The Windows package archive was slower than cold install.
-    - name: Cache Bun install
-      if: ${{ runner.os != 'Windows' && inputs.scope == 'full' && steps.modules.outputs.cache-hit != 'true' }}
-      uses: actions/cache@v5
-      with:
-        path: ~/.bun/install/cache
-        key: ${{ runner.os }}-${{ runner.arch }}-bun-v2-${{ hashFiles('bun.lock', 'package.json') }}
-
     # Tests and typechecks remain cache:false. OS/architecture boundaries prevent
     # native build products from crossing platforms. Browser/Windows/static jobs
     # do not consume Turbo outputs and must not restore or save this archive.
-    - name: Cache Turbo outputs
-      if: ${{ inputs.turbo == 'true' }}
+    # Pull requests restore the newest main entry but never save: their entries
+    # are scoped to the PR ref and a per-SHA save on every run crowded the quota.
+    - name: Restore Turbo outputs
+      if: ${{ inputs.turbo == 'true' && !(github.event_name == 'push' && github.ref == 'refs/heads/main') }}
+      uses: actions/cache/restore@v5
+      with:
+        path: |
+          .turbo
+          node_modules/.cache/turbo
+        key: ${{ runner.os }}-${{ runner.arch }}-turbo-v2-${{ hashFiles('bun.lock') }}-${{ github.job }}-${{ strategy.job-index || 0 }}-${{ github.sha }}
+        restore-keys: |
+          ${{ runner.os }}-${{ runner.arch }}-turbo-v2-${{ hashFiles('bun.lock') }}-${{ github.job }}-${{ strategy.job-index || 0 }}-
+          ${{ runner.os }}-${{ runner.arch }}-turbo-v2-${{ hashFiles('bun.lock') }}-
+
+    - name: Cache Turbo outputs (main)
+      if: ${{ inputs.turbo == 'true' && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
       uses: actions/cache@v5
       with:
         path: |
@@ -119,3 +129,16 @@ runs:
           fi
           sleep $((attempt * 5))
         done
+
+    # Saved after the Electron runtime so an electron:true archive keeps the
+    # same contents as before. Restore misses fall back to a cold frozen install.
+    - name: Save node_modules
+      if: ${{ runner.os != 'Windows' && inputs.scope == 'full' && inputs.save-modules == 'true' && steps.modules.outputs.cache-hit != 'true' }}
+      uses: actions/cache/save@v5
+      with:
+        path: |
+          node_modules
+          apps/*/node_modules
+          packages/*/node_modules
+          scripts/node_modules
+        key: ${{ steps.modules.outputs.cache-primary-key }}

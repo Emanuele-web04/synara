@@ -771,7 +771,7 @@ export function makeAgentGatewayDeviceTools(
           minimum: 0,
           maximum: DEVICE_HOLD_MAX_MS,
         });
-        const holdOptions = holdMs === undefined ? {} : { holdMs };
+        const holdOptions = holdMs === undefined ? { signal } : { holdMs, signal };
         if (request.kind === "point") {
           const x = readCoordinate(args, "x");
           const y = readCoordinate(args, "y");
@@ -788,7 +788,7 @@ export function makeAgentGatewayDeviceTools(
           args,
           udid,
           async () => {
-            match = await manager.tapElement(udid, request.target, { ...holdOptions, signal });
+            match = await manager.tapElement(udid, request.target, holdOptions);
           },
           signal,
         );
@@ -852,7 +852,12 @@ export function makeAgentGatewayDeviceTools(
           durationMs: readBoundedIntegerArg(args, "durationMs", DEVICE_SWIPE_DURATION_RANGE) ?? 300,
           ...(edge === undefined ? {} : { edge }),
         };
-        const observation = await act(args, udid, () => manager.swipe(udid, gesture), signal);
+        const observation = await act(
+          args,
+          udid,
+          () => manager.swipe(udid, gesture, { signal }),
+          signal,
+        );
         return observedResult({ udid, ...gesture }, observation);
       }),
     },
@@ -934,7 +939,7 @@ export function makeAgentGatewayDeviceTools(
           destructiveHint: false,
         },
       },
-      handler: handleInteraction("device_press_button", async (args) => {
+      handler: handleInteraction("device_press_button", async (args, _context, signal) => {
         const udid = readUdid(args);
         const button = readStringArg(args, "button", { required: true })!;
         if (!(DEVICE_HARDWARE_BUTTONS as readonly string[]).includes(button)) {
@@ -942,8 +947,11 @@ export function makeAgentGatewayDeviceTools(
             `Argument "button" must be one of: ${DEVICE_HARDWARE_BUTTONS.join(", ")}.`,
           );
         }
-        const observation = await act(args, udid, () =>
-          manager.pressButton(udid, button as DeviceHardwareButton),
+        const observation = await act(
+          args,
+          udid,
+          () => manager.pressButton(udid, button as DeviceHardwareButton, { signal }),
+          signal,
         );
         return observedResult({ udid, button }, observation);
       }),
