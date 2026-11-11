@@ -18,7 +18,10 @@ import { Dialog, DialogPopup } from "~/components/ui/dialog";
 import { isElectron } from "~/env";
 import { useAccount } from "~/hooks/useAccount";
 import { useTranslation } from "~/i18n";
-import { DESKTOP_TOP_BAR_TRAFFIC_LIGHT_GUTTER_CLASS } from "~/hooks/useDesktopTopBarGutter";
+import {
+  DESKTOP_TOP_BAR_TRAFFIC_LIGHT_GUTTER_CLASS,
+  useDesktopTopBarWindowControlsGutterClassName,
+} from "~/hooks/useDesktopTopBarGutter";
 import { useProviderStatusesForLocalConfig } from "~/hooks/useProviderStatusesForLocalConfig";
 import { readExecutionContext } from "~/lib/hosts/executionContext";
 import { CircleCheckIcon } from "~/lib/icons";
@@ -147,6 +150,7 @@ function OnboardingFlow(props: {
   }, [finishAfterProject, projectBusy, onComplete]);
 
   const onPaired = useCallback((deviceName: string) => setPairedDevice(deviceName), []);
+  const windowControlsGutterClassName = useDesktopTopBarWindowControlsGutterClassName();
 
   const header = (
     <header
@@ -154,6 +158,7 @@ function OnboardingFlow(props: {
         "drag-region relative z-20 flex shrink-0 items-center gap-2.5 border-b border-foreground/8 bg-background ps-5 pe-6",
         CHAT_SURFACE_HEADER_HEIGHT_CLASS,
         isElectron && isMacNavigatorPlatform() && DESKTOP_TOP_BAR_TRAFFIC_LIGHT_GUTTER_CLASS,
+        windowControlsGutterClassName,
       )}
     >
       <img src="/app-icons/dark.png" alt="" className="size-[26px] shrink-0" draggable={false} />
