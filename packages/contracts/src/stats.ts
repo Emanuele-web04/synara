@@ -253,3 +253,78 @@ export const StatsGetRecapResult = Schema.Struct({
   unavailableProviders: Schema.Array(ProviderKind),
 });
 export type StatsGetRecapResult = typeof StatsGetRecapResult.Type;
+
+// ── Usage analytics (Settings → Usage → Analytics) ───────────────────
+
+// Up to a year of usage as UTC-hour rows. The client buckets them into its own
+// local days and hours, so the server never has to guess a timezone or DST rule.
+// A year plus a week of slack lets the client ask for whole local days.
+export const STATS_USAGE_ANALYTICS_MAX_WINDOW_MS = 373 * 24 * 60 * 60 * 1000;
+
+export const StatsGetUsageAnalyticsInput = Schema.Struct({
+  from: IsoDateTime,
+  to: IsoDateTime,
+});
+export type StatsGetUsageAnalyticsInput = typeof StatsGetUsageAnalyticsInput.Type;
+
+const StatsUsageAnalyticsProvider = Schema.Union([ProviderKind, Schema.Literal("unknown")]);
+
+// Who dispatched the turn that processed the tokens.
+export const StatsUsageAnalyticsOrigin = Schema.Literals(["user", "automation", "agent"]);
+export type StatsUsageAnalyticsOrigin = typeof StatsUsageAnalyticsOrigin.Type;
+
+// Tokens processed in one UTC hour (cache reads and writes included);
+// `cacheReadTokens` is the part read from the prompt cache, when the provider reports it.
+export const StatsUsageAnalyticsTokenRow = Schema.Struct({
+  hour: IsoDateTime,
+  provider: StatsUsageAnalyticsProvider,
+  model: TrimmedNonEmptyString,
+  projectId: Schema.NullOr(TrimmedNonEmptyString),
+  origin: StatsUsageAnalyticsOrigin,
+  tokens: NonNegativeInt,
+  cacheReadTokens: NonNegativeInt,
+});
+export type StatsUsageAnalyticsTokenRow = typeof StatsUsageAnalyticsTokenRow.Type;
+
+// Turns requested in one UTC hour, and how many ended in error.
+export const StatsUsageAnalyticsTurnRow = Schema.Struct({
+  hour: IsoDateTime,
+  provider: StatsUsageAnalyticsProvider,
+  model: TrimmedNonEmptyString,
+  projectId: Schema.NullOr(TrimmedNonEmptyString),
+  turns: NonNegativeInt,
+  failedTurns: NonNegativeInt,
+});
+export type StatsUsageAnalyticsTurnRow = typeof StatsUsageAnalyticsTurnRow.Type;
+
+// Cost the provider itself reported for turns completed in one UTC hour, in USD.
+// Providers that report no cost have no rows; this is never a price-table estimate.
+export const StatsUsageAnalyticsCostRow = Schema.Struct({
+  hour: IsoDateTime,
+  provider: StatsUsageAnalyticsProvider,
+  model: TrimmedNonEmptyString,
+  projectId: Schema.NullOr(TrimmedNonEmptyString),
+  costUsd: Schema.Finite.check(Schema.isGreaterThanOrEqualTo(0)),
+  turns: NonNegativeInt,
+});
+export type StatsUsageAnalyticsCostRow = typeof StatsUsageAnalyticsCostRow.Type;
+
+// Real projects only: per-chat and Studio container projects are left out.
+export const StatsUsageAnalyticsProject = Schema.Struct({
+  projectId: TrimmedNonEmptyString,
+  title: TrimmedNonEmptyString,
+});
+export type StatsUsageAnalyticsProject = typeof StatsUsageAnalyticsProject.Type;
+
+export const StatsGetUsageAnalyticsResult = Schema.Struct({
+  generatedAt: IsoDateTime,
+  from: IsoDateTime,
+  to: IsoDateTime,
+  tokens: Schema.Array(StatsUsageAnalyticsTokenRow),
+  turns: Schema.Array(StatsUsageAnalyticsTurnRow),
+  costs: Schema.Array(StatsUsageAnalyticsCostRow),
+  projects: Schema.Array(StatsUsageAnalyticsProject),
+  // Providers with turns in the window whose adapters report no token usage.
+  unavailableProviders: Schema.Array(ProviderKind),
+});
+export type StatsGetUsageAnalyticsResult = typeof StatsGetUsageAnalyticsResult.Type;

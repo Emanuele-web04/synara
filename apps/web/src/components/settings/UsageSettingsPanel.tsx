@@ -1,6 +1,7 @@
 // FILE: UsageSettingsPanel.tsx
-// Purpose: The Usage pane — an Overview tab with provider limits and display options,
-//          and a Billing tab with the Synara Alto plan when billing is enabled.
+// Purpose: The Usage pane — Overview (provider limits and display options), Analytics
+//          (cost and tokens over time), and Billing (the Synara Alto plan) when billing
+//          is enabled.
 // Layer: Settings UI components
 // Exports: UsageSettingsPanel
 
@@ -9,8 +10,9 @@ import { useState } from "react";
 import { SegmentedPicker } from "../SegmentedPicker";
 import { BillingSettingsPanel, SYNARA_PLAN_SECTION_ID } from "./BillingSettingsPanel";
 import { ProviderUsageSettingsPanel } from "./ProviderUsageSettingsPanel";
+import { UsageAnalyticsPanel } from "./UsageAnalyticsPanel";
 
-type UsageTab = "overview" | "billing";
+type UsageTab = "overview" | "analytics" | "billing";
 
 /**
  * Deep links to the plan (`target=settings-synara-plan`) open on Billing. The route
@@ -24,9 +26,8 @@ export function UsageSettingsPanel({
   target: string | null;
 }) {
   const [tab, setTab] = useState<UsageTab>(() =>
-    target === SYNARA_PLAN_SECTION_ID ? "billing" : "overview",
+    billingEnabled && target === SYNARA_PLAN_SECTION_ID ? "billing" : "overview",
   );
-  if (!billingEnabled) return <ProviderUsageSettingsPanel />;
   return (
     <div className="space-y-6">
       <SegmentedPicker<UsageTab>
@@ -36,10 +37,19 @@ export function UsageSettingsPanel({
         onValueChange={setTab}
         options={[
           { value: "overview", label: "Overview" },
-          { value: "billing", label: "Billing" },
+          { value: "analytics", label: "Analytics" },
+          ...(billingEnabled ? [{ value: "billing" as const, label: "Billing" }] : []),
         ]}
       />
-      <div>{tab === "billing" ? <BillingSettingsPanel /> : <ProviderUsageSettingsPanel />}</div>
+      <div>
+        {tab === "analytics" ? (
+          <UsageAnalyticsPanel />
+        ) : tab === "billing" && billingEnabled ? (
+          <BillingSettingsPanel />
+        ) : (
+          <ProviderUsageSettingsPanel />
+        )}
+      </div>
     </div>
   );
 }

@@ -314,9 +314,12 @@ describe("UsageSettingsPanel", () => {
     await expect.element(page.getByText("Synara Alto", { exact: true })).toBeVisible();
   });
 
-  it("shows only provider usage, without tabs, when billing is off", async () => {
-    await render(usage(new QueryClient(), { billingEnabled: false, target: null }));
+  it("leaves Billing out when billing is off", async () => {
+    await render(
+      usage(new QueryClient(), { billingEnabled: false, target: "settings-synara-plan" }),
+    );
     await expect.element(page.getByText("Provider limits")).toBeVisible();
+    await expect.element(page.getByRole("radio", { name: "Analytics" })).toBeVisible();
     await expect.element(page.getByRole("radio", { name: "Billing" })).not.toBeInTheDocument();
   });
 });

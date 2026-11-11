@@ -16,7 +16,7 @@ import { useEffect, useState } from "react";
 import { basenameOfPath } from "~/file-icons";
 import { Loader2Icon, TriangleAlertIcon } from "~/lib/icons";
 import { buildLocalImageUrl } from "~/lib/localImageUrls";
-import { useContainerSize } from "~/lib/pdf/useContainerSize";
+import { useContainerSize } from "~/hooks/useContainerSize";
 import { usePdfDocument } from "~/lib/pdf/usePdfDocument";
 import { usePdfPageNavigation } from "~/lib/pdf/usePdfPageNavigation";
 import { usePdfZoomController } from "~/lib/pdf/usePdfZoomController";
