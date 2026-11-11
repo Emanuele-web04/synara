@@ -1,11 +1,7 @@
 // FILE: OnboardingAsciiBackdrop.tsx
 // Purpose: The character-built landscape behind the first-run onboarding, shared with the
-//          trysynara.com hero. Four layered images per theme are decoded off-thread and
+//          trysynara.com hero. Four layered SVGs per theme are decoded off-thread and
 //          revealed together, so the artwork never paints layer by layer.
-//          The layers ship pre-rasterized (1x/2x WebP): the same art as vector `<text>` cost
-//          ~150-200ms of raster work on every repaint of the onboarding dialog, because the
-//          dialog popup is one composited layer and each invalidation re-rasterized the
-//          glyph layers. Bitmap layers rasterize in ~1-3ms.
 // Layer: Web UI decoration (aria-hidden, pointer-events none)
 
 import { useEffect, useRef, useState } from "react";
@@ -55,7 +51,7 @@ export function OnboardingAsciiBackdrop(props: { className?: string }) {
       ref={root}
       aria-hidden
       className={cn(
-        "pointer-events-none absolute inset-0 overflow-hidden select-none",
+        "pointer-events-none absolute inset-0 overflow-hidden select-none will-change-transform",
         props.className,
       )}
     >
@@ -69,27 +65,21 @@ export function OnboardingAsciiBackdrop(props: { className?: string }) {
               theme === "light" ? "block dark:hidden" : "hidden dark:block",
             )}
           >
-            {LAYERS.map((layer) => {
-              // The 1600w variant keeps 1x displays from decoding the 2x bitmap.
-              const base = `/onboarding/hero-ascii-${theme}-${layer}`;
-              return (
-                // Lazy images load only the visible theme (the other one is display: none).
-                <img
-                  key={layer}
-                  data-theme={theme}
-                  src={`${base}.webp`}
-                  srcSet={`${base}-1x.webp 1600w, ${base}.webp 3200w`}
-                  sizes="(min-width: 1600px) 100vw, 1600px"
-                  width={1600}
-                  height={900}
-                  alt=""
-                  decoding="async"
-                  loading="lazy"
-                  draggable={false}
-                  className="absolute inset-x-0 top-0 h-auto w-full"
-                />
-              );
-            })}
+            {LAYERS.map((layer) => (
+              // Lazy images load only the visible theme (the other one is display: none).
+              <img
+                key={layer}
+                data-theme={theme}
+                src={`/onboarding/hero-ascii-${theme}-${layer}.svg`}
+                width={1600}
+                height={900}
+                alt=""
+                decoding="async"
+                loading="lazy"
+                draggable={false}
+                className="absolute inset-x-0 top-0 h-auto w-full"
+              />
+            ))}
           </div>
         ))}
       </div>

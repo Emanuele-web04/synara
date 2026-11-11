@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-**Linux ARM64 desktop packages beside the existing x86_64 build, plus a much faster first-run tour.**
+**Linux ARM64 desktop packages beside the existing x86_64 build.**
 
 ### Added
 
@@ -14,14 +14,6 @@
 
 - `dist:desktop:linux` follows the host architecture instead of forcing x64; `--arch arm64` also works there.
 - The pinned compatibility release stays x64-only: it predates ARM64 support, so publishing an ARM64 build there would point an old app at the x86_64 feed.
-
-### Performance
-
-- The first-run tour's ASCII backdrop ships pre-rasterized (2× WebP) instead of four text-heavy SVG layers per theme. Every repaint inside the tour — each provider switch, count update and step change — re-rasterized those glyph layers in the dialog popup's single composited layer (≈150–200 ms of raster work per repaint on the local build), which stalled the switch animation and made the tour feel frozen; the bitmap layers rasterize in 1–3 ms.
-
-### Verification
-
-Focused Vitest suites cover the release scope matrix, artifact naming, checkpoint and provenance validation, update-feed preparation and desktop channel/architecture admission, and the wider scripts, shared and desktop suites pass. A Linux arm64 AppImage was built locally from this tree on an Apple Silicon Linux host (16K pages): the patched Cua driver, cloudflared and node-pty compiled for `aarch64`, electron-builder wrote `latest-linux-arm64.yml` pointing at `Synara-<version>-arm64.AppImage`, provenance and the same-run checkpoint accepted those bytes, feed preparation produced an identical `synara-linux-arm64.yml`, and the packaged-startup smoke passed from isolated state. The hosted `ubuntu-24.04-arm` leg still needs one build-only `workflow_dispatch` run with `platform=linux-arm64` before publication.
 
 ## 1.5.1 — 2026-11-11
 
