@@ -193,6 +193,11 @@ test("native Windows runtime and recovery tests are not replaced with Linux chec
 test("measured critical-path distribution stays three-way and skips redundant apt provisioning", () => {
   for (const shard of ["1/3", "2/3", "3/3"])
     assert.ok(workflow.includes(`test-args: "--shard=${shard}"`), `server ${shard}`);
+  // Pinned placement only moves whole files between shards; each shard stays serial.
+  const server = JSON.parse(read("../../apps/server/package.json"));
+  assert.equal(server.scripts.test, "vitest run --maxWorkers=1 --no-file-parallelism");
+  const serverConfig = read("../../apps/server/vitest.config.ts");
+  assert.ok(serverConfig.includes("sequence: { sequencer: PinnedShardSequencer }"));
   for (const shard of ["1/3", "2/3", "3/3"])
     assert.ok(workflow.includes(`shard: ${shard}`), `browser ${shard}`);
   for (const project of ["chat-follow", "chat-projects", "chat-workflows"])

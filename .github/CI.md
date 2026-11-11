@@ -202,6 +202,43 @@ Serial browser execution remains enabled inside each runner. One extra shard buy
 lower feedback latency; the full-CI measurement decides whether its added compute
 is acceptable.
 
+## November 2026 critical-path rebalance
+
+An audit of 150 `ci.yml` runs (November 2–11) measured a median code-PR wall
+time of 641 s (p90 788 s). Test execution was about 93% of the slowest job.
+Queueing and setup were not the problem. These changes keep every test, the
+runner count and serial execution inside each lane unchanged.
+
+### Server pinned shard placement
+
+Vitest's native `--shard` hashes file paths into equal file counts, not equal
+time. Native assignment put the three heaviest server files on shard 3, and the
+shard medians were 400 / 207 / 559 s. The per-file table of
+[run 43021234651](https://github.com/Emanuele-web04/synara/actions/runs/43021234651)
+(test plus import time, temporary reporter since reverted) showed:
+
+```text
+Shard  Wall (s)  Tests (s)  Import (s)  Heaviest files (s)
+1/3     333.9     252.8       62.7     deviceTools 77.8, CheckpointReactor 51.4, AntigravityAdapter 28.6
+2/3     176.5      80.7       73.7     ProjectAgentService 15.7, compactDatabase 6.7
+3/3     580.5     438.5      112.3     ProviderCommandReactor 167.4, GitCore 50.4, ProviderRuntimeIngestion 47.8,
+                                       ProviderService 24.7, accountLiveActivityReporter 22.2
+```
+
+`apps/server/vitest.shards.ts` keeps Vitest's native slices and moves two whole
+files, `ProviderCommandReactor.test.ts` and `accountLiveActivityReporter.test.ts`,
+from shard 3 to shard 2. Every other file keeps its native shard. Averaged over
+this run and main's run 42920466967, the projected walls are about 369 / 373 /
+373 s. This is not the rejected timing-aware sequencer: there are no timing
+hints and nothing is reordered, only two named files move. The order inside a
+shard is unchanged and each shard stays serial (`--maxWorkers=1
+--no-file-parallelism`). `scripts/server-ci-shards.test.ts` resolves the real
+config for every shard and checks the result. Every collected file runs on
+exactly one shard, the pinned files land where expected, and every other file
+matches native assignment. Native assignment in run 43021234651 executed 677
+files and 10,075 tests (10,038 passed, 37 skipped) across the three shards; the
+pinned layout must report the same totals.
+
 ## Rejected experiments and external-service limits
 
 Intra-runner component `fileParallelism` with four workers failed in all three
