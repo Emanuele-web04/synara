@@ -2,8 +2,20 @@
 // Purpose: Resolves release identities and updater manifests while keeping
 // Stable, Beta and Remote feeds isolated from the historical compatibility line.
 
-import { constants, copyFileSync, existsSync, readFileSync, unlinkSync } from "node:fs";
+import { createHash } from "node:crypto";
+import {
+  closeSync,
+  constants,
+  copyFileSync,
+  existsSync,
+  fstatSync,
+  openSync,
+  readFileSync,
+  readSync,
+  unlinkSync,
+} from "node:fs";
 import { resolve } from "node:path";
+import { parse } from "yaml";
 
 export type ReleaseLane = "bridge" | "clean";
 
@@ -177,46 +189,64 @@ function planLinuxArm64Manifest(
   return { sourcePath, destinationPath, destinationName };
 }
 
-interface UpdaterManifestSummary {
-  readonly version: string;
-  readonly payloads: readonly string[];
+interface UpdaterManifest {
+  readonly version?: unknown;
+  readonly files?: ReadonlyArray<{ url?: unknown; size?: unknown; sha512?: unknown }>;
+  readonly path?: unknown;
+  readonly sha512?: unknown;
 }
 
-function readUpdaterManifest(path: string): UpdaterManifestSummary {
-  const content = readFileSync(path, "utf8");
-  const version = /^version:\s*['"]?([^'"\s]+)['"]?\s*$/m.exec(content)?.[1] ?? "";
-  const payloads = [...content.matchAll(/^\s*(?:-\s*)?(?:url|path):\s*['"]?([^'"\s]+)['"]?\s*$/gm)]
-    .map((match) => match[1] ?? "")
-    .filter((payload) => payload.length > 0);
-  return { version, payloads };
+function readUpdaterManifest(path: string): UpdaterManifest | null {
+  return parse(readFileSync(path, "utf8"), { maxAliasCount: 0 }) as UpdaterManifest | null;
 }
 
-function payloadFileName(value: string): string {
-  const withoutQuery = value.split(/[?#]/, 1)[0] ?? "";
-  return withoutQuery.slice(withoutQuery.lastIndexOf("/") + 1);
-}
-
-/**
- * Guards the copied arm64 feed: it must describe the same release as the x64
- * feed and only carry arm64 AppImage payloads. A stale or mislabelled manifest
- * would otherwise publish an update every ARM64 client either ignores or
- * cannot install.
- */
+/** Validate the builder's feed against the bytes selected for publication. */
 function validateLinuxArm64Manifest(assetDirectory: string, manifestPath: string): void {
-  const x64Manifest = readUpdaterManifest(resolve(assetDirectory, "latest-linux.yml"));
-  const arm64Manifest = readUpdaterManifest(manifestPath);
-  if (!x64Manifest.version || arm64Manifest.version !== x64Manifest.version) {
+  const version = readUpdaterManifest(resolve(assetDirectory, "latest-linux.yml"))?.version;
+  const manifest = readUpdaterManifest(manifestPath);
+  if (typeof version !== "string" || !version || manifest?.version !== version) {
     throw new Error(
-      `Linux arm64 update manifest version ${arm64Manifest.version || "(missing)"} does not match latest-linux.yml ${x64Manifest.version || "(missing)"}.`,
+      `Linux arm64 update manifest version ${manifest?.version || "(missing)"} does not match latest-linux.yml ${version || "(missing)"}.`,
     );
   }
-  if (arm64Manifest.payloads.length === 0) {
-    throw new Error(`Linux arm64 update manifest lists no payload: ${LINUX_ARM64_UPDATE_MANIFEST}`);
+  if (!Array.isArray(manifest.files) || manifest.files.length !== 1) {
+    throw new Error("Linux arm64 update manifest must list exactly one AppImage.");
   }
-  for (const payload of arm64Manifest.payloads) {
-    if (!/arm64\.AppImage$/i.test(payloadFileName(payload))) {
-      throw new Error(`Linux arm64 update manifest points at a non-arm64 payload: ${payload}.`);
+  const file = manifest.files[0];
+  if (typeof file?.url !== "string" || !/^[\w.-]+-arm64\.AppImage$/.test(file.url)) {
+    throw new Error(`Linux arm64 update manifest points at a non-arm64 payload: ${file?.url}.`);
+  }
+  if (manifest.path !== file.url || manifest.sha512 !== file.sha512) {
+    throw new Error("Linux arm64 update manifest has conflicting AppImage metadata.");
+  }
+
+  const artifactPath = resolve(assetDirectory, file.url);
+  let artifact: number;
+  try {
+    artifact = openSync(artifactPath, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+  } catch (cause) {
+    throw new Error(`Cannot open staged AppImage: ${file.url}.`, { cause });
+  }
+  try {
+    const stat = fstatSync(artifact);
+    if (!stat.isFile() || stat.size <= 0 || stat.size !== file.size) {
+      throw new Error(
+        `Linux arm64 update manifest size does not match staged AppImage: ${file.url}.`,
+      );
     }
+    const hash = createHash("sha512");
+    const buffer = Buffer.allocUnsafe(1024 * 1024);
+    let bytesRead: number;
+    while ((bytesRead = readSync(artifact, buffer, 0, buffer.length, null)) > 0) {
+      hash.update(buffer.subarray(0, bytesRead));
+    }
+    if (hash.digest("base64") !== file.sha512) {
+      throw new Error(
+        `Linux arm64 update manifest SHA-512 does not match staged AppImage: ${file.url}.`,
+      );
+    }
+  } finally {
+    closeSync(artifact);
   }
 }
 

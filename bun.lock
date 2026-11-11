@@ -349,6 +349,7 @@
         "@synara/contracts": "workspace:*",
         "@synara/shared": "workspace:*",
         "effect": "catalog:",
+        "yaml": "^2.8.3",
       },
       "devDependencies": {
         "@effect/language-service": "catalog:",
