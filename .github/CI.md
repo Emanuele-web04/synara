@@ -236,8 +236,22 @@ shard is unchanged and each shard stays serial (`--maxWorkers=1
 config for every shard and checks the result. Every collected file runs on
 exactly one shard, the pinned files land where expected, and every other file
 matches native assignment. Native assignment in run 43021234651 executed 677
-files and 10,075 tests (10,038 passed, 37 skipped) across the three shards; the
-pinned layout must report the same totals.
+files and 10,075 tests (10,038 passed, 37 skipped) across the three shards.
+
+The isolated baseline variant of the
+[paired benchmark](https://github.com/Emanuele-web04/synara/actions/runs/43023542738)
+ran the pinned layout three times per shard on hosted runners. All repetitions
+passed and still collected all 677 files (226 / 228 / 223):
+
+```text
+Shard  Before (audit median)  After: repetitions (s)   After median
+1/3          400 s              377 / 388 / 388           388 s
+2/3          207 s              340 / 283 / 339           339 s
+3/3          559 s              284 / 388 / 322           322 s
+```
+
+The slowest server shard median falls from 559 s to 388 s. Shard 1/3 is now the
+slowest; it is unchanged by this commit.
 
 ### ChatView group rebalance
 
@@ -262,6 +276,34 @@ and owns unknown future cases. The `[geometry:linux]` quarantine and serial
 execution are unchanged. `scripts/browser-ci-partitions.test.ts` now names the
 lane that each sample title must land in, not only that it lands in exactly one.
 
+[Run 43023542613](https://github.com/Emanuele-web04/synara/actions/runs/43023542613)
+measured the result. Every ChatView lane passed, with the same 268 executed tests
+(31 + 91 + 146):
+
+```text
+Lane            Tests before/after   Wall before (s)   Wall after (s)
+chat-follow          31 / 31              328.3            329.7
+chat-projects        67 / 91              259.9            260.0
+chat-workflows      170 / 146             383.0            281.2
+```
+
+chat-projects absorbed 24 tests without a measurable increase. This single run
+is noisy: the moved tests were measured at 54 s on main. The slowest ChatView lane
+is now chat-follow, which is unchanged. In the same run, components 3/3 (420.9 s)
+became the slowest browser lane; its native file sharding is unchanged.
+
+### Cache ownership
+
+In [run 43021234651](https://github.com/Emanuele-web04/synara/actions/runs/43021234651),
+the logs of typecheck, Desktop Build and chat-projects show exact-key
+`node_modules` hits (994 MB, 20–31 s restore steps, `bun install` 1–2 s
+afterwards). The designated savers skipped `Save node_modules` because nothing
+missed. Desktop Build restored main's newest Turbo entry through the restore-key
+prefix (100 MB, 2.3 s), its build reported FULL TURBO (1 s), and it saved
+nothing. The miss path (one designated saver, every other lane restore-only)
+follows from the step conditions guarded by `ci-contracts.test.mjs`. It was not
+exercised on hosted runners, because this branch does not change `bun.lock`.
+
 ## Rejected experiments and external-service limits
 
 Intra-runner component `fileParallelism` with four workers failed in all three
@@ -269,6 +311,22 @@ repetitions of [run 34832610297](https://github.com/Emanuele-web04/synara/action
 The candidate was also slower than the individual baseline shards in the completed
 sample. It is not enabled. Native file sharding above keeps each browser process
 serial instead.
+
+Disabling server Vitest isolation (`isolate: false`, one serial worker reusing
+its module graph across files) was rejected in November 2026. The
+[paired benchmark](https://github.com/Emanuele-web04/synara/actions/runs/43023542738)
+ran each server shard three times, each against `--isolate` on the same runner.
+Import time fell from 64–107 s to 9–12 s per shard, but every candidate repetition
+that finished failed. Shard 1/3 failed 8–9 files (`GitHubCli`, `processLiveness`,
+provider usage, `languageService`). Shard 2/3 failed 11 files
+(`providerUsage/index`, `device/helperClient`, `droidSecureStorage`,
+`MigrationBackup`, …) and leaked an unhandled `child.kill is not a function`.
+Shard 3/3 failed 9 files (`OrchestrationEngine`, `protocolProcessTeardown`,
+`DatabaseLifecycleLock`, …), and tests hit the 90 s timeout. Its test time rose to
+771–785 s, against 193–251 s for the baseline. Two candidate runs had not
+finished after 14 minutes. The isolated baseline passed every repetition.
+Server tests rely on per-file module state, mocks and process stubs, so isolation
+stays on. It was never applied to the browser configuration.
 
 An earlier [timing-aware server sequencer](https://github.com/Emanuele-web04/synara/actions/runs/34825744944)
 was also rejected. It preserved the then-collected suite but worsened slower-shard
@@ -296,7 +354,10 @@ not added together into an overall percentage.
 `node --test .github/scripts/ci-contracts.test.mjs` executes the actual aggregate
 shell for successful code/docs runs and rejects failures, cancellations, invalid
 change outputs and unexpected skips. It also guards install scopes, native Windows
-test inventory, three-way server/component distribution and browser preparation.
+test inventory, three-way server/component distribution, serial server execution,
+cache ownership (restore everywhere, one saver per key, Turbo saves only on main)
+and browser preparation. `scripts/server-ci-shards.test.ts` owns the server
+shard partition and pinned placement.
 `scripts/browser-ci-partitions.test.ts` owns complementary ChatView membership,
 complete file ownership, serial execution and geometry exclusion through the
 resolved Vitest configuration. Its expected membership is independent of that
@@ -307,7 +368,9 @@ After editing CI, run `bun run fmt:check`, `bun run lint`, `bun run typecheck`,
 Retain full-history `bun run migrations:check` and Windows boundary/native checks.
 Rollback is mechanical: restore the prior two-way shard matrices and/or
 `--with-deps` stable browser preparation without changing test commands, required
-check identity, signing policy or publication.
+check identity, signing policy or publication. Removing the sequencer line from
+`apps/server/vitest.config.ts` restores native server sharding, and deleting the
+`sidebar|handoff` keywords restores the previous ChatView groups.
 
 ### Earlier cross-platform candidate evidence
 
