@@ -55,13 +55,20 @@ Filtered scopes never restore/save a full `node_modules` archive. Windows
 installs cold rather than extracting the pathological Bun package cache. Its
 install cache lives under `RUNNER_TEMP`, on the hosted checkout's drive, matching
 the measured install layout and allowing Bun to hardlink package files. Full
-Linux installs retain their modules cache; the Bun package archive is restored
-only when modules are not an exact hit. Frozen installation and lifecycle patches
-still run on cache hits. Lifecycle scripts use `--concurrent-scripts=1` in every
+Linux installs restore their modules cache in every lane, but only one job per
+key saves it after a miss (`save-modules`): `static-typecheck` owns the shared
+Linux key, Desktop Build owns the `electron: true` key, and the macOS
+editor-integration job owns its macOS key. Every other lane is restore-only, so a
+miss is archived once instead of by a dozen parallel lanes racing to reserve the
+same key. There is no separate Bun package archive: it hashed the same files as
+the modules key, so it could only miss when modules missed. Frozen installation
+and lifecycle patches still run on cache hits. Lifecycle scripts use `--concurrent-scripts=1` in every
 scope: multiple workspace `prepare` hooks patch the same TypeScript files, and
 parallel hooks can read a partially written compiler file. Scripts and dependency
 patches remain enabled. The September measurements below predate this serialization.
-Turbo persistence is opt-in for unit/build consumers.
+Turbo persistence is opt-in (Desktop Build). Pull requests restore the newest
+main entry and never save; only pushes to `main` save a per-commit entry, so PR
+runs stop adding PR-scoped archives that no other branch can read.
 OS, architecture and lockfile boundaries prevent incompatible archive reuse.
 Test and typecheck task results remain uncached.
 
