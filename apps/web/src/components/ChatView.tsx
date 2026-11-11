@@ -3677,12 +3677,54 @@ export default function ChatView({
     // between them replaces the node the observer watches.
     isCenteredEmptyLanding,
   ]);
+  // Composer predictions (Beta): only the chat in the main view, on its own account, once
+  // the latest turn settled; the ghost text shows only in an empty, idle, writable composer.
+  const composerPrediction = useComposerPrediction({
+    target: resolveComposerPredictionTarget({
+      enabled:
+        COMPOSER_PREDICTIONS_ON &&
+        settings.showComposerSuggestions &&
+        isServerThread &&
+        !isEditorRail &&
+        !isInactiveSplitPane &&
+        !activeThreadIsSidechat,
+      hostId: executionNamespace() ?? null,
+      threadId: activeThread?.id ?? null,
+      providerInstanceId: activeThreadProviderInstanceId,
+      latestTurn: activeLatestTurn,
+      latestTurnSettled,
+      hasStreamingAssistant: hasStreamingAssistantText,
+    }),
+    canShow: canShowComposerPrediction({
+      prompt,
+      hasAttachments:
+        composerImages.length > 0 ||
+        composerFiles.length > 0 ||
+        composerTerminalContexts.length > 0 ||
+        composerPastedTexts.length > 0 ||
+        composerAssistantSelections.length > 0 ||
+        composerBrowserAnnotations.length > 0 ||
+        composerPullRequestContexts.length > 0 ||
+        composerFileComments.length > 0,
+      menuOpen: composerMenuOpen,
+      hasLiveTurn: isWorking,
+      hasQueuedTurns: queuedComposerTurns.length > 0,
+      hasPendingUserInput: pendingUserInputs.length > 0 || activePendingProgress !== null,
+      isApprovalState: isComposerApprovalState,
+      isReadOnly:
+        isSubagentThreadView || isNativeSubagentMessagingUnavailable || isComposerEditorDisabled,
+    }),
+    prompt,
+  });
+
   // Started threads get the single-row composer while the draft is one plain line. Anything
   // that needs the block's room (approvals, questions, plan follow-up, banners, attachment
   // chips) keeps the block layout.
   const composerSingleRow = useComposerSingleRow({
     formRef: composerFormRef,
     prompt,
+    // A suggestion that would wrap gets the block's room, like a long draft.
+    prediction: composerPrediction.ghost,
     eligible:
       !isCenteredEmptyLanding &&
       !isComposerApprovalState &&
@@ -5384,46 +5426,6 @@ export default function ChatView({
     void lateComposerSendHandlersRef.current?.send();
   }, [composerAutoSendRequest]);
 
-  // Composer predictions (Beta): only the chat in the main view, on its own account, once
-  // the latest turn settled; the ghost text shows only in an empty, idle, writable composer.
-  const composerPrediction = useComposerPrediction({
-    target: resolveComposerPredictionTarget({
-      enabled:
-        COMPOSER_PREDICTIONS_ON &&
-        settings.showComposerSuggestions &&
-        isServerThread &&
-        !isEditorRail &&
-        !isInactiveSplitPane &&
-        !activeThreadIsSidechat,
-      hostId: executionNamespace() ?? null,
-      threadId: activeThread?.id ?? null,
-      providerInstanceId: activeThreadProviderInstanceId,
-      latestTurn: activeLatestTurn,
-      latestTurnSettled,
-      hasStreamingAssistant: hasStreamingAssistantText,
-    }),
-    canShow: canShowComposerPrediction({
-      prompt,
-      hasAttachments:
-        composerImages.length > 0 ||
-        composerFiles.length > 0 ||
-        composerTerminalContexts.length > 0 ||
-        composerPastedTexts.length > 0 ||
-        composerAssistantSelections.length > 0 ||
-        composerBrowserAnnotations.length > 0 ||
-        composerPullRequestContexts.length > 0 ||
-        composerFileComments.length > 0,
-      menuOpen: composerMenuOpen,
-      hasLiveTurn: isWorking,
-      hasQueuedTurns: queuedComposerTurns.length > 0,
-      hasPendingUserInput: pendingUserInputs.length > 0 || activePendingProgress !== null,
-      isApprovalState: isComposerApprovalState,
-      isReadOnly:
-        isSubagentThreadView || isNativeSubagentMessagingUnavailable || isComposerEditorDisabled,
-    }),
-    prompt,
-  });
-
   const {
     onSelectComposerItem,
     onComposerMenuItemHighlighted,
@@ -6756,7 +6758,7 @@ export default function ChatView({
                                   ? t("chat:askAboutItem", { item: standaloneSidechatItemNoun })
                                   : t("chat:doAnythingInSynara")
                   }
-                  prediction={composerPrediction.suggestion}
+                  prediction={composerPrediction.ghost}
                   disabled={isComposerEditorDisabled}
                   singleLine={composerSingleRow}
                 />

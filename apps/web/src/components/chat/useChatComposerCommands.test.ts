@@ -48,7 +48,7 @@ function setup(options: { menuOpen?: boolean; editorValue?: string; focused?: bo
   const composerPrediction: ComposerPredictionController = {
     readVisible: vi.fn(() => PREDICTION),
     readEntry: vi.fn(() => entry),
-    consume: vi.fn(() => {
+    accept: vi.fn(() => {
       entry = { status: "done" };
     }),
   };
@@ -147,7 +147,7 @@ describe("useChatComposerCommands Tab on a composer prediction", () => {
     const harness = setup();
 
     expect(harness.commands.onComposerCommandKey("Tab", tab())).toBe(true);
-    expect(harness.composerPrediction.consume).toHaveBeenCalledWith(PREDICTION.key);
+    expect(harness.composerPrediction.accept).toHaveBeenCalledWith(PREDICTION);
     expect(harness.promptRef.current).toBe(SUGGESTION);
     expect(harness.setPrompt).toHaveBeenCalledWith(SUGGESTION);
     expect(harness.setComposerCursor).toHaveBeenCalledWith(SUGGESTION.length);
@@ -162,7 +162,7 @@ describe("useChatComposerCommands Tab on a composer prediction", () => {
 
     expect(harness.commands.onComposerCommandKey("Tab", tab())).toBe(true);
     expect(harness.handleForkTargetSelection).toHaveBeenCalledWith("local");
-    expect(harness.composerPrediction.consume).not.toHaveBeenCalled();
+    expect(harness.composerPrediction.accept).not.toHaveBeenCalled();
     expect(harness.setPrompt).not.toHaveBeenCalledWith(SUGGESTION);
   });
 
@@ -177,7 +177,7 @@ describe("useChatComposerCommands Tab on a composer prediction", () => {
     const harness = setup();
 
     expect(harness.commands.onComposerCommandKey("Tab", event)).toBe(false);
-    expect(harness.composerPrediction.consume).not.toHaveBeenCalled();
+    expect(harness.composerPrediction.accept).not.toHaveBeenCalled();
     expect(harness.setPrompt).not.toHaveBeenCalled();
   });
 
@@ -202,7 +202,7 @@ describe("useChatComposerCommands Tab on a composer prediction", () => {
 
     harness.commands.onComposerCommandKey("Enter", tab());
 
-    expect(harness.composerPrediction.consume).not.toHaveBeenCalled();
+    expect(harness.composerPrediction.accept).not.toHaveBeenCalled();
     expect(harness.onSend).toHaveBeenCalled();
   });
 });

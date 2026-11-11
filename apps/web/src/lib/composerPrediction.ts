@@ -5,7 +5,7 @@
 // Layer: Web logic (no React, no transport)
 // Exports: composerPredictionKey, resolveComposerPredictionTarget, canShowComposerPrediction,
 //          shouldAcceptComposerPredictionOnTab, shouldDiscardComposerPredictionAfterEdit,
-//          nextComposerPredictionRequest, composerPredictionStore
+//          nextComposerPredictionRequest, fitComposerPredictionText, composerPredictionStore
 
 import type { OrchestrationLatestTurn, ThreadId, TurnId } from "@synara/contracts";
 import { createStore } from "zustand/vanilla";
@@ -41,6 +41,56 @@ export interface VisibleComposerPrediction {
 
 /** Shown in the key chip after the ghost text; a key name, not translated copy. */
 export const COMPOSER_PREDICTION_ACCEPT_KEY_LABEL = "Tab";
+
+/** Rows the ghost text may wrap to; a longer suggestion ends with an ellipsis on the last one. */
+export const COMPOSER_PREDICTION_MAX_ROWS = 3;
+
+const COMPOSER_PREDICTION_ELLIPSIS = "\u2026";
+
+function withEllipsis(text: string): string {
+  return `${text.replace(/[\s,;:.\u2013\u2014-]+$/u, "")}${COMPOSER_PREDICTION_ELLIPSIS}`;
+}
+
+/**
+ * The ghost text to draw for `suggestion`: all of it when `fits` accepts it, otherwise the
+ * longest word prefix that fits with a trailing ellipsis (characters only when the first word
+ * alone is too long). `fits` must accept shorter candidates whenever it accepts longer ones.
+ * Display only: Tab always inserts the full suggestion.
+ */
+export function fitComposerPredictionText(
+  suggestion: string,
+  fits: (candidate: string) => boolean,
+): string {
+  if (fits(suggestion)) return suggestion;
+  const words = suggestion.split(" ");
+  let low = 1;
+  let high = words.length - 1;
+  let keptWords = 0;
+  while (low <= high) {
+    const middle = (low + high) >> 1;
+    if (fits(withEllipsis(words.slice(0, middle).join(" ")))) {
+      keptWords = middle;
+      low = middle + 1;
+    } else {
+      high = middle - 1;
+    }
+  }
+  if (keptWords > 0) return withEllipsis(words.slice(0, keptWords).join(" "));
+  const first = words[0] ?? "";
+  low = 1;
+  high = first.length - 1;
+  let keptChars = 0;
+  while (low <= high) {
+    const middle = (low + high) >> 1;
+    if (fits(`${first.slice(0, middle)}${COMPOSER_PREDICTION_ELLIPSIS}`)) {
+      keptChars = middle;
+      low = middle + 1;
+    } else {
+      high = middle - 1;
+    }
+  }
+  return `${first.slice(0, keptChars)}${COMPOSER_PREDICTION_ELLIPSIS}`;
+}
 
 export function composerPredictionKey(input: {
   readonly hostId: string | null;

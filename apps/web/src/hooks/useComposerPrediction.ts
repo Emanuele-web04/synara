@@ -10,6 +10,7 @@ import {
   useLayoutEffect,
   useMemo,
   useRef,
+  useState,
   useSyncExternalStore,
 } from "react";
 
@@ -28,13 +29,21 @@ export interface ComposerPredictionController {
   readonly readVisible: () => VisibleComposerPrediction | null;
   /** The live store entry for a key, so a handler never trusts stale render state. */
   readonly readEntry: (key: string) => ComposerPredictionEntry | undefined;
-  /** Marks the key's prediction as used; it never shows again for that turn. */
-  readonly consume: (key: string) => void;
+  /**
+   * Takes the shown prediction as the draft: it never shows again for that turn, and its
+   * text stays as the ghost until the editor holds the draft the caller writes.
+   */
+  readonly accept: (prediction: VisibleComposerPrediction) => void;
 }
 
 export interface UseComposerPredictionResult {
-  /** Ghost text for the composer, or null. */
+  /** The suggestion Tab can accept right now, or null. */
   readonly suggestion: string | null;
+  /**
+   * What the composer draws as ghost text: the acceptable suggestion, or the one just
+   * accepted while its draft is on the way into the editor.
+   */
+  readonly ghost: string | null;
   readonly controller: ComposerPredictionController;
 }
 
@@ -55,6 +64,18 @@ export function useComposerPrediction(input: {
   );
   const entry = useSyncExternalStore(composerPredictionStore.subscribe, readKeyEntry, readKeyEntry);
   const suggestion = canShow && entry?.status === "ready" ? entry.suggestion : null;
+
+  // The editor writes a controlled draft a beat after React commits it. Dropping the ghost
+  // at once would leave the composer empty in between, collapsing it (to the single row)
+  // and growing it again, which moves the transcript under a reader at its end. So the
+  // accepted text stays the ghost while the draft equals it: the editor only draws the
+  // ghost while it is empty, and stops in the same update that writes the draft.
+  const [accepted, setAccepted] = useState<VisibleComposerPrediction | null>(null);
+  const ghost =
+    suggestion ??
+    (accepted !== null && accepted.key === key && prompt === accepted.suggestion
+      ? accepted.suggestion
+      : null);
 
   // Keydown can arrive right after a commit, before passive effects run.
   const visibleRef = useRef<VisibleComposerPrediction | null>(null);
@@ -143,13 +164,14 @@ export function useComposerPrediction(input: {
     (entryKey: string) => composerPredictionStore.getState().entries.get(entryKey),
     [],
   );
-  const consume = useCallback((consumedKey: string) => {
-    composerPredictionStore.getState().setEntry(consumedKey, { status: "done" });
+  const accept = useCallback((prediction: VisibleComposerPrediction) => {
+    setAccepted(prediction);
+    composerPredictionStore.getState().setEntry(prediction.key, { status: "done" });
   }, []);
   const controller = useMemo(
-    () => ({ readVisible, readEntry, consume }),
-    [consume, readEntry, readVisible],
+    () => ({ readVisible, readEntry, accept }),
+    [accept, readEntry, readVisible],
   );
 
-  return { suggestion, controller };
+  return { suggestion, ghost, controller };
 }

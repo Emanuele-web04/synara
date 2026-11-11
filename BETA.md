@@ -423,9 +423,13 @@ The to-do list, quick-add, delegation card, and **All tasks** link appear only w
 Tasks is available, including Stable and Beta.
 
 `composer-predictions` shows, after a turn settles in the main chat view, one predicted
-next message as dimmed ghost text in the empty composer, followed by a `Tab` key chip.
-Tab inserts it as an ordinary editable draft with the cursor at the end; nothing is ever
-sent automatically, and typing over a suggestion discards it for that turn.
+next message (from a few words up to about three sentences, at most 320 characters) as
+dimmed ghost text in the empty composer, followed by a `Tab` key chip. The ghost text wraps
+up to three rows and the composer grows to fit them, switching the single-row composer to
+its block layout like a draft that no longer fits one line; a longer suggestion ends with an
+ellipsis on the third row. Tab inserts the full suggestion as an ordinary editable draft with
+the cursor at the end; nothing is ever sent automatically, and typing over a suggestion
+discards it for that turn.
 **Settings → Chat behavior → Show suggestions** (on by default) turns it off. The
 `server.generateComposerPrediction` RPC takes only the thread and turn ids and derives
 everything else from the read model: it reads the latest few exchanges of visible user and

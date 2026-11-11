@@ -150,9 +150,23 @@ describe("useComposerPrediction", () => {
       expect(composerPredictionStore.getState().entries.get("key-turn-1")?.status).toBe("ready"),
     );
 
-    hook.render().controller.consume("key-turn-1");
+    const shown = hook.render();
+    expect(shown.ghost).toBe("Ship it");
+    shown.controller.accept({ key: "key-turn-1", suggestion: "Ship it" });
 
-    expect(hook.render().suggestion).toBeNull();
+    // The draft is on its way into the editor: the text stays the ghost so the composer
+    // never empties in between, but Tab has nothing left to accept.
+    const accepting = hook.render({ prompt: "Ship it", canShow: false });
+    expect(accepting.suggestion).toBeNull();
+    expect(accepting.ghost).toBe("Ship it");
+    expect(accepting.controller.readVisible()).toBeNull();
+    expect(composerPredictionStore.getState().entries.get("key-turn-1")?.status).toBe("done");
+
+    // Any edit, including clearing the draft, ends it for this turn.
+    expect(hook.render({ prompt: "Ship it now", canShow: false }).ghost).toBeNull();
+    const cleared = hook.render({ prompt: "", canShow: true });
+    expect(cleared.suggestion).toBeNull();
+    expect(cleared.ghost).toBeNull();
     expect(nativeApi.generateComposerPrediction).toHaveBeenCalledTimes(1);
   });
 

@@ -188,6 +188,77 @@ describe("ComposerPromptEditor focus ownership", () => {
 });
 
 const overlay = () => document.querySelector<HTMLElement>('[data-testid="composer-prediction"]');
+const field = () =>
+  document.querySelector<HTMLElement>('[data-testid="composer-editor"]')!.parentElement!;
+const footer = () => document.querySelector<HTMLElement>('[data-testid="composer-footer"]')!;
+
+/** Mounts the editor at a fixed width with a stand-in for the controls below it. */
+async function mountPredictionEditor(
+  props: Partial<EditorProps>,
+  options: { readonly width?: number } = {},
+) {
+  const ref = createRef<ComposerPromptEditorHandle>();
+  let current: EditorProps = {
+    value: "",
+    cursor: 0,
+    terminalContexts: [],
+    disabled: false,
+    placeholder: "Write a message",
+    ariaLabel: "Message",
+    onRemoveTerminalContext: vi.fn(),
+    onChange: vi.fn(),
+    onPaste: vi.fn(),
+    ...props,
+  };
+  const content = () => (
+    <div style={{ width: options.width ?? 640 }}>
+      <ComposerPromptEditor {...current} ref={ref} />
+      <div data-testid="composer-footer" style={{ height: 32 }} />
+    </div>
+  );
+  const screen = await render(content());
+  await expect.poll(() => (current.prediction ? overlay() : field())).not.toBeNull();
+  await settleSelection();
+  return {
+    ref,
+    editor: document.querySelector<HTMLElement>('[data-testid="composer-editor"]')!,
+    update: async (updates: Partial<EditorProps>) => {
+      current = { ...current, ...updates };
+      await screen.rerender(content());
+      await settleSelection();
+    },
+  };
+}
+
+function lineHeightOf(element: HTMLElement): number {
+  return Number.parseFloat(getComputedStyle(element).lineHeight);
+}
+
+function ghostRows(): number {
+  return Math.round(overlay()!.getBoundingClientRect().height / lineHeightOf(overlay()!));
+}
+
+function ghostParts() {
+  const box = overlay()!;
+  const text = box.querySelector<HTMLElement>("[data-prediction-text]")!;
+  const chip = box.querySelector<HTMLElement>("kbd")!;
+  const range = document.createRange();
+  range.selectNodeContents(text);
+  const textRows = Array.from(range.getClientRects());
+  return { box, text, chip, lastTextRow: textRows[textRows.length - 1]! };
+}
+
+/** The chip is fully inside the ghost and sits after the last word, never over it. */
+function expectChipAttachedToText() {
+  const { box, chip, lastTextRow } = ghostParts();
+  const boxRect = box.getBoundingClientRect();
+  const chipRect = chip.getBoundingClientRect();
+  expect(chipRect.right).toBeLessThanOrEqual(boxRect.right + 0.5);
+  expect(chipRect.bottom).toBeLessThanOrEqual(boxRect.bottom + 0.5);
+  const sameRow = chipRect.top < lastTextRow.bottom && chipRect.bottom > lastTextRow.top;
+  if (sameRow) expect(chipRect.left).toBeGreaterThanOrEqual(lastTextRow.right);
+  else expect(chipRect.top).toBeGreaterThanOrEqual(lastTextRow.bottom - 0.5);
+}
 
 describe("ComposerPromptEditor prediction overlay", () => {
   afterEach(() => {
@@ -203,7 +274,7 @@ describe("ComposerPromptEditor prediction overlay", () => {
     expect(overlay()?.querySelector('kbd[aria-label="Tab"]')).not.toBeNull();
     expect(document.body.textContent).not.toContain("Write a message");
     expect(mounted.editor.getAttribute("aria-placeholder")).toBe(prediction);
-    // Drawn over the editor only: the document and the draft stay empty.
+    // Drawn in the editor's cell only: the document and the draft stay empty.
     expect(mounted.editor.textContent).toBe("");
     expect(mounted.ref.current?.readSnapshot().value).toBe("");
   });
@@ -226,37 +297,70 @@ describe("ComposerPromptEditor prediction overlay", () => {
     expect(mounted.editor.textContent).toBe("My own message");
   });
 
-  it("clamps a long suggestion to two lines and keeps the chip in the multi-line composer", async () => {
-    const longPrediction = `${"Rerun the failing parser test after fixing the fixture ".repeat(12)}now`;
-    await mountEditor({ value: "", cursor: 0, prediction: longPrediction });
-    await expect.poll(() => overlay()).not.toBeNull();
+  describe.each([
+    ["block composer", false],
+    ["single-row composer", true],
+  ])("in the %s", (_layout, singleLine) => {
+    it("draws a one-row suggestion without changing the field's height", async () => {
+      const mounted = await mountPredictionEditor({ singleLine });
+      const emptyHeight = field().getBoundingClientRect().height;
 
-    const row = overlay()!.firstElementChild as HTMLElement;
-    const text = row.querySelector("span")!;
-    const chip = row.querySelector("kbd")!;
-    const lineHeight = parseFloat(getComputedStyle(overlay()!).lineHeight);
-    expect(text.getBoundingClientRect().height).toBeLessThanOrEqual(lineHeight * 2 + 0.5);
-    expect(chip.getBoundingClientRect().right).toBeLessThanOrEqual(
-      overlay()!.getBoundingClientRect().right + 0.5,
-    );
-  });
+      await mounted.update({ prediction });
 
-  it("keeps a long suggestion on one line with the chip visible in the single-row composer", async () => {
-    const longPrediction = `${"Rerun the failing parser test after fixing the fixture ".repeat(6)}now`;
-    await mountEditor({ value: "", cursor: 0, prediction: longPrediction, singleLine: true });
-    await expect.poll(() => overlay()).not.toBeNull();
+      await expect.poll(() => overlay()?.textContent).toBe(`${prediction}Tab`);
+      expect(ghostRows()).toBe(1);
+      expect(field().getBoundingClientRect().height).toBeCloseTo(emptyHeight, 1);
+      const { chip, lastTextRow } = ghostParts();
+      // Inline right after the last word, centered on its row.
+      const chipRect = chip.getBoundingClientRect();
+      expect(chipRect.left - lastTextRow.right).toBeGreaterThan(4);
+      expect(chipRect.left - lastTextRow.right).toBeLessThan(10);
+      expect((chipRect.top + chipRect.bottom) / 2).toBeCloseTo(
+        overlay()!.getBoundingClientRect().top + lineHeightOf(overlay()!) / 2,
+        0,
+      );
 
-    const row = overlay()!.firstElementChild as HTMLElement;
-    const text = row.querySelector("span")!;
-    const chip = row.querySelector("kbd")!;
-    expect(getComputedStyle(text).whiteSpace).toBe("nowrap");
-    expect(text.scrollWidth).toBeGreaterThan(text.clientWidth);
-    const overlayBox = overlay()!.getBoundingClientRect();
-    const chipBox = chip.getBoundingClientRect();
-    expect(chipBox.right).toBeLessThanOrEqual(overlayBox.right + 0.5);
-    expect(chipBox.top).toBeGreaterThanOrEqual(overlayBox.top - 0.5);
-    expect(row.getBoundingClientRect().height).toBeLessThanOrEqual(
-      parseFloat(getComputedStyle(overlay()!).lineHeight) + 0.5,
+      await mounted.update({ prediction: null });
+      expect(field().getBoundingClientRect().height).toBeCloseTo(emptyHeight, 1);
+    });
+
+    it("wraps a two-row suggestion in full and grows the field above the controls", async () => {
+      const twoRows =
+        "Go ahead with the schema change and the backfill script, both look safe to me, and leave the index rebuild for later.";
+      await mountPredictionEditor({ singleLine, prediction: twoRows });
+
+      await expect.poll(() => ghostRows()).toBe(2);
+      expect(ghostParts().text.textContent).toBe(twoRows);
+      expectChipAttachedToText();
+      expect(field().getBoundingClientRect().height).toBeGreaterThanOrEqual(
+        overlay()!.getBoundingClientRect().height - 0.5,
+      );
+      expect(footer().getBoundingClientRect().top).toBeGreaterThanOrEqual(
+        overlay()!.getBoundingClientRect().bottom - 0.5,
+      );
+    });
+
+    it.each([640, 375])(
+      "ends a longer suggestion with an ellipsis on the third row at %ipx",
+      async (width) => {
+        const longSuggestion =
+          "ok go ahead with the first two steps, but leave the third out for now, I do not want to touch the production table until we have a backup. tell me when both are done so I can check, and also rerun the migration dry run against staging before you open the pull request for review please";
+        const mounted = await mountPredictionEditor(
+          { singleLine, prediction: longSuggestion },
+          { width },
+        );
+
+        await expect.poll(() => ghostRows()).toBe(3);
+        const shown = ghostParts().text.textContent ?? "";
+        expect(shown.endsWith("\u2026")).toBe(true);
+        expect(longSuggestion.startsWith(shown.slice(0, -1).trimEnd())).toBe(true);
+        expectChipAttachedToText();
+        expect(footer().getBoundingClientRect().top).toBeGreaterThanOrEqual(
+          overlay()!.getBoundingClientRect().bottom - 0.5,
+        );
+        // Screen readers and Tab still get the whole suggestion.
+        expect(mounted.editor.getAttribute("aria-placeholder")).toBe(longSuggestion);
+      },
     );
   });
 });

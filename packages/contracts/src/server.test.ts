@@ -1,7 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { Schema } from "effect";
 
-import { ServerGetEnvironmentResult, ServerProviderStatus } from "./server";
+import {
+  COMPOSER_PREDICTION_MAX_CHARS,
+  ServerGenerateComposerPredictionResult,
+  ServerGetEnvironmentResult,
+  ServerProviderStatus,
+} from "./server";
 
 const decodeServerProviderStatus = Schema.decodeUnknownSync(ServerProviderStatus);
 const decodeServerEnvironment = Schema.decodeUnknownSync(ServerGetEnvironmentResult);
@@ -58,5 +63,18 @@ describe("ServerGetEnvironmentResult", () => {
     expect(decodeServerEnvironment(descriptor).capabilities.composerPredictions).toBeUndefined();
     expect(withCapability(true)).toBe(true);
     expect(withCapability(false)).toBe(false);
+  });
+});
+
+describe("ServerGenerateComposerPredictionResult", () => {
+  const decode = Schema.decodeUnknownSync(ServerGenerateComposerPredictionResult);
+
+  it("accepts a suggestion of up to about three sentences and no longer", () => {
+    const longest = "a".repeat(COMPOSER_PREDICTION_MAX_CHARS);
+
+    expect(COMPOSER_PREDICTION_MAX_CHARS).toBe(320);
+    expect(decode({ suggestion: longest })).toEqual({ suggestion: longest });
+    expect(decode({ suggestion: null })).toEqual({ suggestion: null });
+    expect(() => decode({ suggestion: `${longest}a` })).toThrow();
   });
 });

@@ -534,7 +534,7 @@ export function useChatComposerCommands({
           entry: composerPrediction.readEntry(prediction.key),
         })
       ) {
-        composerPrediction.consume(prediction.key);
+        composerPrediction.accept(prediction);
         // An ordinary editable draft with the cursor at the end; sending stays a separate
         // gesture. The focused editor applies the cursor when the controlled value lands.
         promptRef.current = prediction.suggestion;

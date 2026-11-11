@@ -485,7 +485,7 @@ export const ServerGenerateThreadRecapResult = Schema.Struct({
 export type ServerGenerateThreadRecapResult = typeof ServerGenerateThreadRecapResult.Type;
 
 /** Longest composer suggestion the server returns; longer output is cut at a word boundary. */
-export const COMPOSER_PREDICTION_MAX_CHARS = 280;
+export const COMPOSER_PREDICTION_MAX_CHARS = 320;
 
 // Composer predictions (Beta): one predicted next user message for the thread's
 // settled latest turn. The client sends only ids; the server derives the

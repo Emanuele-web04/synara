@@ -7,6 +7,7 @@ import {
   COMPOSER_PREDICTION_STORE_LIMIT,
   composerPredictionKey,
   composerPredictionStore,
+  fitComposerPredictionText,
   nextComposerPredictionRequest,
   resolveComposerPredictionTarget,
   shouldAcceptComposerPredictionOnTab,
@@ -268,5 +269,36 @@ describe("nextComposerPredictionRequest", () => {
     ).toBeNull();
     expect(nextComposerPredictionRequest({ entry: { status: "done" }, settled: false })).toBeNull();
     expect(nextComposerPredictionRequest({ entry: undefined, settled: true })).toBeNull();
+  });
+});
+
+// A stand-in for the rendered rows: at most `limit` characters fit.
+const fitsWithin = (limit: number) => (candidate: string) => candidate.length <= limit;
+
+describe("fitComposerPredictionText", () => {
+  const suggestion = "Go ahead with the first two steps, but leave the third out for now.";
+
+  it("keeps a suggestion that fits whole", () => {
+    expect(fitComposerPredictionText(suggestion, fitsWithin(200))).toBe(suggestion);
+  });
+
+  it("cuts at the last whole word that fits and ends with an ellipsis", () => {
+    expect(fitComposerPredictionText(suggestion, fitsWithin(36))).toBe(
+      "Go ahead with the first two steps\u2026",
+    );
+  });
+
+  it("cuts a single overlong word by characters", () => {
+    expect(fitComposerPredictionText("abcdefghijklmnop rest", fitsWithin(6))).toBe("abcde\u2026");
+  });
+
+  it("asks only about candidates no longer than the suggestion", () => {
+    const asked: string[] = [];
+    fitComposerPredictionText(suggestion, (candidate) => {
+      asked.push(candidate);
+      return candidate.length <= 20;
+    });
+    expect(asked.every((candidate) => candidate.length <= suggestion.length)).toBe(true);
+    expect(asked.length).toBeLessThan(10);
   });
 });
