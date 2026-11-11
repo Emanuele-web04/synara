@@ -1,11 +1,13 @@
 // FILE: UsageAnalyticsPanel.tsx
 // Purpose: The Usage Analytics tab: cost and tokens by day, provider, model, and
-//          project, plus cache use, turn origin, and weekly rhythm, from Synara's
-//          own usage records. Cost is at API rates: the provider's own figure when
-//          it reports one, else its tokens at API list prices (Codex).
+//          project, plus cache use, turn origin, and weekly rhythm. "In Synara" uses
+//          Synara's own records; "This Mac" also reads Claude Code and Codex session
+//          files. Cost is at API rates: the provider's own figure when it reports
+//          one, else the tokens at API list prices.
 // Layer: Web settings feature
 // Exports: UsageAnalyticsPanel
 
+import type { StatsUsageAnalyticsScope } from "@synara/contracts";
 import { formatCompact, formatNumber } from "@synara/profile-ui/formatting";
 import { InsightRow, ModelUsageRow, StatTileGrid } from "@synara/profile-ui/sections";
 import { useQuery } from "@tanstack/react-query";
@@ -42,8 +44,12 @@ const USD = new Intl.NumberFormat(undefined, {
 const RANGES: ReadonlyArray<UsageAnalyticsRange> = ["7d", "30d", "90d", "1y"];
 
 /** The server request for a window: it includes the period before, when fetched. */
-function analyticsRequest(window: UsageAnalyticsWindow) {
-  return { from: (window.previousFrom ?? window.from).toISOString(), to: window.to.toISOString() };
+function analyticsRequest(window: UsageAnalyticsWindow, scope: StatsUsageAnalyticsScope) {
+  return {
+    from: (window.previousFrom ?? window.from).toISOString(),
+    to: window.to.toISOString(),
+    scope,
+  };
 }
 
 function formatUsd(value: number): string {
@@ -114,6 +120,7 @@ function percentOf(part: number, total: number): number {
 export function UsageAnalyticsPanel() {
   const [range, setRange] = useState<UsageAnalyticsRange>("30d");
   const [metricChoice, setMetricChoice] = useState<UsageAnalyticsMetric | null>(null);
+  const [scope, setScope] = useState<StatsUsageAnalyticsScope>("synara");
   const todayKey = localDayKey(new Date());
   // Recomputed once a day so the query keys stay stable within a day.
   const windows = useMemo(() => {
@@ -121,7 +128,7 @@ export function UsageAnalyticsPanel() {
     return new Map(RANGES.map((option) => [option, usageAnalyticsWindow(option, noon)]));
   }, [todayKey]);
   const window = windows.get(range) ?? usageAnalyticsWindow(range, new Date());
-  const query = useQuery(serverUsageAnalyticsQueryOptions(analyticsRequest(window)));
+  const query = useQuery(serverUsageAnalyticsQueryOptions(analyticsRequest(window, scope)));
   // While a new period loads, the previous result stays on screen with its own
   // window, so its numbers are never laid over the new period's days.
   const data = query.data;
@@ -129,7 +136,7 @@ export function UsageAnalyticsPanel() {
     if (!data) return window;
     return (
       [...windows.values()].find((candidate) => {
-        const request = analyticsRequest(candidate);
+        const request = analyticsRequest(candidate, data.scope);
         return request.from === data.from && request.to === data.to;
       }) ?? window
     );
@@ -169,7 +176,16 @@ export function UsageAnalyticsPanel() {
             ]}
           />
         </div>
-        <span className="text-ui-sm text-muted-foreground">Usage in Synara chats</span>
+        <SegmentedPicker<StatsUsageAnalyticsScope>
+          ariaLabel="Usage scope"
+          className="w-52"
+          value={scope}
+          onValueChange={setScope}
+          options={[
+            { value: "synara", label: "In Synara" },
+            { value: "mac", label: "This Mac" },
+          ]}
+        />
       </div>
       {query.isError && !view ? (
         <SettingsCard>
@@ -190,7 +206,11 @@ export function UsageAnalyticsPanel() {
         <SettingsCard>
           <SettingsListRow
             title="No usage in this period"
-            description="Chats you run in Synara show up here as they use tokens."
+            description={
+              scope === "mac"
+                ? "Chats in Synara and Claude Code or Codex sessions on this Mac show up here."
+                : "Chats you run in Synara show up here as they use tokens."
+            }
           />
         </SettingsCard>
       ) : (
@@ -289,7 +309,13 @@ function UsageAnalyticsBody(props: {
               {metric === "cost" ? formatUsd(total) : formatNumber(total)}
             </span>
             <ChangeLabel
-              change={percentChange(total, view.previous ? valueOf(view.previous) : null)}
+              change={
+                // Claude Code deletes old session files, so an earlier period on
+                // this Mac can look emptier than it was.
+                view.scope === "mac"
+                  ? null
+                  : percentChange(total, view.previous ? valueOf(view.previous) : null)
+              }
             />
             <span className="text-ui-sm text-muted-foreground">
               {metric === "cost"
@@ -455,24 +481,33 @@ function UsageAnalyticsBody(props: {
             ))}
           </ul>
         </div>
-        <div className="flex flex-col gap-4">
-          <SectionTitle title="Who started the work" detail="Tokens by turn origin." />
-          <dl className="flex flex-col gap-2.5">
-            {(
-              [
-                ["user", "You"],
-                ["agent", "Agents"],
-                ["automation", "Automations"],
-              ] as const
-            ).map(([origin, label]) => (
-              <InsightRow
-                key={origin}
-                label={label}
-                value={`${formatTokens(view.origins[origin])} · ${percentOf(view.origins[origin], originTotal)}%`}
-              />
-            ))}
-          </dl>
-        </div>
+        {originTotal > 0 ? (
+          <div className="flex flex-col gap-4">
+            <SectionTitle
+              title="Who started the work"
+              detail={
+                view.scope === "mac"
+                  ? "Tokens by turn origin, in Synara chats."
+                  : "Tokens by turn origin."
+              }
+            />
+            <dl className="flex flex-col gap-2.5">
+              {(
+                [
+                  ["user", "You"],
+                  ["agent", "Agents"],
+                  ["automation", "Automations"],
+                ] as const
+              ).map(([origin, label]) => (
+                <InsightRow
+                  key={origin}
+                  label={label}
+                  value={`${formatTokens(view.origins[origin])} · ${percentOf(view.origins[origin], originTotal)}%`}
+                />
+              ))}
+            </dl>
+          </div>
+        ) : null}
       </section>
 
       <section className="grid gap-10 @3xl:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)]">
@@ -514,7 +549,21 @@ function UsageAnalyticsBody(props: {
                 ran turns without reporting token usage.
               </li>
             ) : null}
-            <li>Only chats run in Synara are counted, including deleted ones.</li>
+            {view.scope === "mac" && view.sessionFileProviders.length > 0 ? (
+              <li>
+                {view.sessionFileProviders.map((provider) => providerLabel(provider)).join(", ")}:
+                every session on this Mac, read from their own session files. Other providers: chats
+                run in Synara.
+              </li>
+            ) : (
+              <li>Only chats run in Synara are counted, including deleted ones.</li>
+            )}
+            {view.scope === "mac" && view.sessionFileProviders.includes("claudeAgent") ? (
+              <li>
+                Claude Code deletes session files after 30 days unless set otherwise, so older
+                Claude usage may be missing.
+              </li>
+            ) : null}
           </ul>
         </div>
       </section>

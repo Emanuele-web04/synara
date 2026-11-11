@@ -15,6 +15,8 @@ import {
   resolveUsageAnalyticsWindow,
   UsageAnalyticsQuery,
 } from "./usageAnalyticsStats";
+import type { TranscriptUsageReader } from "./transcriptUsage";
+import type { TranscriptRecord } from "./transcriptUsageParsers";
 import type { UsagePricingSource } from "./usagePricing";
 
 const NOW = Date.parse("2026-09-30T19:00:00.000Z");
@@ -26,15 +28,79 @@ const PRICING: UsagePricingSource = {
     status: "fresh",
     fetchedAt: "2026-09-30T00:00:00.000Z",
     table: new Map([
-      ["gpt-5-codex", { input: 1e-6, output: 1e-5, cacheRead: 1e-7, cacheWrite: 1e-6 }],
+      [
+        "gpt-5-codex",
+        {
+          input: 1e-6,
+          output: 1e-5,
+          cacheRead: 1e-7,
+          cacheWrite: 1e-6,
+          cacheWrite1h: 1e-6,
+          tiers: [],
+          fastMultiplier: 1,
+        },
+      ],
     ]),
+  }),
+};
+
+const usage = (
+  overrides: Partial<Extract<TranscriptRecord, { kind: "usage" }>>,
+): TranscriptRecord => ({
+  kind: "usage",
+  provider: "claudeAgent",
+  timestampMs: Date.parse("2026-09-30T10:00:05.000Z"),
+  model: "claude-sonnet-5-5",
+  cwd: "/work/app/sub",
+  tokens: {
+    inputTokens: 1_000,
+    cacheReadTokens: 0,
+    cacheWrite5mTokens: 0,
+    cacheWrite1hTokens: 0,
+    outputTokens: 100,
+  },
+  reportedCostUsd: null,
+  fast: false,
+  failed: false,
+  dedupeKey: null,
+  ...overrides,
+});
+
+// Two Claude files (the second resumed the first and copied its response) and
+// one Codex session in a folder Synara does not know.
+const SESSION_FILES: TranscriptUsageReader = {
+  scan: async () => ({
+    providers: new Set(["claudeAgent", "codex"] as const),
+    files: [
+      [
+        {
+          kind: "turn",
+          provider: "claudeAgent",
+          timestampMs: Date.parse("2026-09-30T10:00:00.000Z"),
+          model: "",
+          cwd: "/work/app/sub",
+          dedupeKey: "prompt:u1",
+        },
+        usage({ dedupeKey: "m1:r1", reportedCostUsd: 0.3 }),
+      ],
+      [usage({ dedupeKey: "m1:r1", reportedCostUsd: 0.3 })],
+      [usage({ provider: "codex", model: "gpt-5-codex", cwd: "/elsewhere/tool" })],
+      // A Claude Code worktree of an unknown repo counts as that repo.
+      [
+        usage({
+          dedupeKey: "m2:r2",
+          reportedCostUsd: 0.1,
+          cwd: "/elsewhere/tool/.claude/worktrees/feature-x",
+        }),
+      ],
+    ],
   }),
 };
 
 function runTest<A, E>(effect: Effect.Effect<A, E, UsageAnalyticsQuery | SqlClient.SqlClient>) {
   const layer = Layer.effect(
     UsageAnalyticsQuery,
-    makeUsageAnalyticsQuery({ now: () => NOW, pricing: PRICING }),
+    makeUsageAnalyticsQuery({ now: () => NOW, pricing: PRICING, sessionFiles: SESSION_FILES }),
   ).pipe(Layer.provideMerge(SqlitePersistenceMemory), Layer.provide(NodeServices.layer));
   return effect.pipe(Effect.provide(layer), Effect.scoped, Effect.runPromise);
 }
@@ -299,5 +365,55 @@ describe("UsageAnalyticsQuery estimates", () => {
     expect(result.costs).toEqual([
       expect.objectContaining({ provider: "claudeAgent", source: "reported", costUsd: 0.5 }),
     ]);
+  });
+});
+
+describe("UsageAnalyticsQuery on this Mac", () => {
+  it("reads Claude and Codex from their session files instead of Synara's rows", async () => {
+    const result = await runTest(
+      Effect.gen(function* () {
+        yield* seed;
+        const query = yield* UsageAnalyticsQuery;
+        return yield* query.getUsageAnalytics({ ...WINDOW, scope: "mac" });
+      }),
+    );
+
+    expect(result.scope).toBe("mac");
+    expect(result.sessionFileProviders).toEqual(["claudeAgent", "codex"]);
+    // Synara's own Codex rows are replaced by the session files; Cursor stays.
+    expect(result.tokens.every((row) => row.origin === null)).toBe(true);
+    expect(result.tokens).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          provider: "claudeAgent",
+          projectId: "project-app",
+          tokens: 1_100,
+        }),
+        expect.objectContaining({
+          provider: "codex",
+          projectId: "folder:tool",
+          tokens: 1_100,
+        }),
+      ]),
+    );
+    expect(result.turns).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ provider: "claudeAgent", model: "claude-sonnet-5-5", turns: 1 }),
+      ]),
+    );
+    const costs: Record<string, number> = {};
+    for (const row of result.costs) {
+      const key = `${row.provider}:${row.source}`;
+      costs[key] = (costs[key] ?? 0) + row.costUsd;
+    }
+    // The copied response counts once.
+    expect(costs["claudeAgent:reported"]).toBeCloseTo(0.4);
+    expect(costs["codex:estimated"]).toBeCloseTo(1_000 * 1e-6 + 100 * 1e-5, 10);
+    expect(costs["cursor:reported"]).toBeCloseTo(2);
+    expect(costs["codex:reported"]).toBeUndefined();
+    expect(result.projects).toEqual(
+      expect.arrayContaining([{ projectId: "folder:tool", title: "tool" }]),
+    );
+    expect(result.tokens.filter((row) => row.projectId === "folder:tool")).toHaveLength(2);
   });
 });

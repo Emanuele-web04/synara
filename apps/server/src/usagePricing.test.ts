@@ -9,7 +9,14 @@ import nodePath from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { lookupRate, makeUsagePricingSource, parseRateTable, priceTokens } from "./usagePricing";
+import {
+  lookupRate,
+  makeUsagePricingSource,
+  parseRateTable,
+  priceTokens,
+  priceTranscriptUsage,
+} from "./usagePricing";
+import type { TranscriptUsageRecord } from "./transcriptUsageParsers";
 
 const DOCUMENT = {
   sample_spec: { input_cost_per_token: "not a number" },
@@ -23,6 +30,16 @@ const DOCUMENT = {
     output_cost_per_token: 2.5e-5,
     cache_read_input_token_cost: 5e-7,
     cache_creation_input_token_cost: 6.25e-6,
+  },
+  "claude-sonnet-5-5": {
+    input_cost_per_token: 3e-6,
+    output_cost_per_token: 1.5e-5,
+    cache_read_input_token_cost: 3e-7,
+    cache_creation_input_token_cost: 3.75e-6,
+    cache_creation_input_token_cost_above_1hr: 6e-6,
+    input_cost_per_token_above_200k_tokens: 6e-6,
+    output_cost_per_token_above_200k_tokens: 2.25e-5,
+    provider_specific_entry: { fast: 2 },
   },
   "openrouter/only-here": { input_cost_per_token: 1e-6, output_cost_per_token: 2e-6 },
   "a/conflict": { input_cost_per_token: 1e-6, output_cost_per_token: 2e-6 },
@@ -53,11 +70,14 @@ describe("parseRateTable", () => {
   });
 
   it("prices missing cache rates as plain input", () => {
-    expect(table.get("gpt-5-codex")).toEqual({
+    expect(table.get("gpt-5-codex")).toMatchObject({
       input: 1.25e-6,
       output: 1e-5,
       cacheRead: 1.25e-7,
       cacheWrite: 1.25e-6,
+      cacheWrite1h: 1.25e-6,
+      tiers: [],
+      fastMultiplier: 1,
     });
   });
 
@@ -101,6 +121,59 @@ describe("priceTokens", () => {
         outputTokens: 0,
       }),
     ).toBeNull();
+  });
+});
+
+function usage(overrides: Partial<TranscriptUsageRecord>): TranscriptUsageRecord {
+  return {
+    kind: "usage",
+    provider: "claudeAgent",
+    timestampMs: 0,
+    model: "claude-sonnet-5-5",
+    cwd: "",
+    tokens: {
+      inputTokens: 1_000,
+      cacheReadTokens: 0,
+      cacheWrite5mTokens: 100,
+      cacheWrite1hTokens: 200,
+      outputTokens: 10,
+    },
+    reportedCostUsd: null,
+    fast: false,
+    failed: false,
+    dedupeKey: null,
+    ...overrides,
+  };
+}
+
+describe("priceTranscriptUsage", () => {
+  const table = parseRateTable(DOCUMENT);
+
+  it("prices 1-hour cache writes at their own rate", () => {
+    expect(priceTranscriptUsage(table, usage({}))).toBeCloseTo(
+      1_000 * 3e-6 + 100 * 3.75e-6 + 200 * 6e-6 + 10 * 1.5e-5,
+      12,
+    );
+  });
+
+  it("uses the long-prompt tier above its threshold and the fast multiple", () => {
+    const long = usage({
+      tokens: {
+        inputTokens: 1_000,
+        cacheReadTokens: 250_000,
+        cacheWrite5mTokens: 0,
+        cacheWrite1hTokens: 0,
+        outputTokens: 10,
+      },
+    });
+    const tiered = 1_000 * 6e-6 + 250_000 * 3e-7 + 10 * 2.25e-5;
+    expect(priceTranscriptUsage(table, long)).toBeCloseTo(tiered, 12);
+    expect(priceTranscriptUsage(table, { ...long, fast: true })).toBeCloseTo(tiered * 2, 12);
+  });
+
+  it("keeps a cost written in the session file and leaves unknown models unpriced", () => {
+    expect(priceTranscriptUsage(table, usage({ reportedCostUsd: 0.42 }))).toBe(0.42);
+    expect(priceTranscriptUsage(table, usage({ model: "mystery" }))).toBeNull();
   });
 });
 

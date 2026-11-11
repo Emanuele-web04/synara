@@ -41,7 +41,7 @@ export const serverQueryKeys = {
   recap: (input: StatsGetRecapInput) =>
     ["server", "recap", input.from, input.to, input.slotBoundaries.join(",")] as const,
   usageAnalytics: (input: StatsGetUsageAnalyticsInput) =>
-    ["server", "usageAnalytics", input.from, input.to] as const,
+    ["server", "usageAnalytics", input.from, input.to, input.scope ?? "synara"] as const,
   studioThreadOutputs: (threadId: ThreadId | null) =>
     ["server", "studioThreadOutputs", threadId] as const,
   computerStatus: () => ["server", "computerStatus"] as const,

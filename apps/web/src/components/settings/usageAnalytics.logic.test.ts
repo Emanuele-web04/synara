@@ -90,6 +90,8 @@ const result: StatsGetUsageAnalyticsResult = {
     },
   ],
   pricing: { status: "fresh", fetchedAt: null },
+  scope: "synara",
+  sessionFileProviders: [],
   projects: [{ projectId: "p-app", title: "App" }],
   unavailableProviders: ["cursor"],
 };

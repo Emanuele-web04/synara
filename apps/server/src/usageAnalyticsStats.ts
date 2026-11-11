@@ -3,8 +3,10 @@
 // projection DB: token deltas, turns, and cost at API rates as UTC-hour rows by
 // provider, model, project, and origin. Cost is the provider's own figure when it
 // reports one (Claude's SDK, Cursor, OpenCode); otherwise (Codex) the tokens are
-// priced at API list prices (usagePricing.ts). The client buckets the rows into
-// its own local days and hours. Shares the token SQL with profileStats.ts and the
+// priced at API list prices (usagePricing.ts). The "This Mac" scope reads Claude
+// Code and Codex from their own session files instead (transcriptUsage.ts), so
+// sessions run outside Synara count too. The client buckets the rows into its
+// own local days and hours. Shares the token SQL with profileStats.ts and the
 // model naming with recapStats.ts. Available in Stable and Beta.
 // Layer: server stats query service (SqlClient).
 
@@ -16,6 +18,7 @@ import {
   type StatsUsageAnalyticsCostRow,
   type StatsUsageAnalyticsOrigin,
   type StatsUsageAnalyticsProject,
+  type StatsUsageAnalyticsScope,
   type StatsUsageAnalyticsTokenRow,
   type StatsUsageAnalyticsTurnRow,
   WsRpcError,
@@ -30,12 +33,22 @@ import {
   tokenDeltaCtes,
   turnModelSelectionCte,
 } from "./profileStats";
+import nodePath from "node:path";
+
 import { recapModelName } from "./recapStats";
 import { ServerConfig } from "./config";
+import {
+  defaultTranscriptRoots,
+  makeTranscriptUsageReader,
+  type TranscriptScan,
+  type TranscriptUsageReader,
+} from "./transcriptUsage";
+import { transcriptTokenTotal } from "./transcriptUsageParsers";
 import {
   makeUsagePricingSource,
   type PriceTable,
   priceTokens,
+  priceTranscriptUsage,
   type UsagePricingSource,
 } from "./usagePricing";
 
@@ -189,7 +202,10 @@ export function buildUsageAnalytics(input: {
   readonly costRows: ReadonlyArray<CostHourRow>;
   readonly prices: PriceTable;
   readonly nowMs: number;
+  readonly scope?: StatsUsageAnalyticsScope;
+  readonly sessionFiles?: ReturnType<typeof buildTranscriptRows>;
 }): StatsGetUsageAnalyticsResult {
+  const files = input.sessionFiles;
   const projects = new Map<string, StatsUsageAnalyticsProject>();
   const projectFor = (projectId: string | null, title: string | null): string | null => {
     const id = nonEmptyString(projectId);
@@ -216,6 +232,9 @@ export function buildUsageAnalytics(input: {
     );
 
   const reporting = reportingProviders(input.costRows);
+  // Providers read from session files are left out of Synara's rows, which
+  // would count the same sessions again.
+  const fromFiles = new Set<string>(files?.providers ?? []);
 
   const tokens = new Map<string, Mutable<StatsUsageAnalyticsTokenRow>>();
   const providersWithTokens = new Set<ProviderKind>();
@@ -224,6 +243,7 @@ export function buildUsageAnalytics(input: {
     const total = Math.round(num(row.tokens));
     if (!hour || total <= 0) continue;
     const { provider, model } = identity(row.provider, row.model);
+    if (fromFiles.has(provider)) continue;
     if (provider !== "unknown") providersWithTokens.add(provider);
     const projectId = projectFor(row.projectId, row.title);
     const origin = analyticsOrigin(row.origin);
@@ -271,6 +291,7 @@ export function buildUsageAnalytics(input: {
     const count = Math.round(num(row.turns));
     if (!hour || count <= 0) continue;
     const { provider, model } = identity(row.provider, row.model);
+    if (fromFiles.has(provider)) continue;
     // Only a completed turn proves that a provider reports no usage: a running
     // turn has none yet, and one that failed early may never have emitted any.
     if (provider !== "unknown" && num(row.completedTurns) > 0) {
@@ -300,6 +321,7 @@ export function buildUsageAnalytics(input: {
     const costUsd = num(row.costUsd);
     if (!hour || !(costUsd > 0)) continue;
     const { provider, model } = identity(row.provider, row.model);
+    if (fromFiles.has(provider)) continue;
     const projectId = projectFor(row.projectId, row.title);
     addCost({
       hour,
@@ -316,17 +338,198 @@ export function buildUsageAnalytics(input: {
     generatedAt: new Date(input.nowMs).toISOString(),
     from: input.window.from,
     to: input.window.to,
-    tokens: [...tokens.values()],
-    turns: [...turns.values()],
-    costs: [...costs.values()],
+    tokens: [...tokens.values(), ...(files?.tokens ?? [])],
+    turns: [...turns.values(), ...(files?.turns ?? [])],
+    costs: [...costs.values(), ...(files?.costs ?? [])],
     pricing: { status: input.prices.status, fetchedAt: input.prices.fetchedAt },
-    projects: [...projects.values()].toSorted((left, right) =>
-      left.title.localeCompare(right.title),
-    ),
+    scope: input.scope ?? "synara",
+    sessionFileProviders: [...(files?.providers ?? [])].toSorted(),
+    projects: [
+      ...new Map(
+        [...projects.values(), ...(files?.projects ?? [])].map((project) => [
+          project.projectId,
+          project,
+        ]),
+      ).values(),
+    ].toSorted((left, right) => left.title.localeCompare(right.title)),
     unavailableProviders: [...providersWithCompletedTurns]
       .filter((provider) => !providersWithTokens.has(provider))
       .toSorted(),
   };
+}
+
+// ── Session files (the "This Mac" scope) ─────────────────────────────
+
+/** A folder Synara knows: a real project (id and title) or a chat container (null). */
+export interface ProjectRoot {
+  readonly path: string;
+  readonly project: StatsUsageAnalyticsProject | null;
+}
+
+/** A Claude Code worktree (`<repo>/.claude/worktrees/<name>`) counts as its repo. */
+function repoDirectory(cwd: string): string {
+  const marker = `${nodePath.sep}.claude${nodePath.sep}worktrees${nodePath.sep}`;
+  const index = cwd.indexOf(marker);
+  return index > 0 ? cwd.slice(0, index) : cwd;
+}
+
+/** The project a session's directory belongs to, else its own folder as a project. */
+function projectForDirectory(
+  cwd: string,
+  roots: ReadonlyArray<ProjectRoot>,
+): StatsUsageAnalyticsProject | null {
+  if (!cwd) return null;
+  let best: ProjectRoot | null = null;
+  for (const root of roots) {
+    // A chat container can sit at the home folder, so only its own folder is a chat.
+    const inside =
+      cwd === root.path || (root.project !== null && cwd.startsWith(`${root.path}${nodePath.sep}`));
+    if (inside && (!best || root.path.length > best.path.length)) best = root;
+  }
+  if (best) return best.project;
+  // Clones and worktrees of one repo share its folder name, so they count as one.
+  const name = nodePath.basename(repoDirectory(cwd));
+  return name ? { projectId: `folder:${name}`, title: name } : null;
+}
+
+function utcHour(timestampMs: number): string {
+  return `${new Date(timestampMs).toISOString().slice(0, 13)}:00:00.000Z`;
+}
+
+/**
+ * Rows for the usage and turns in Claude Code's and Codex's own session files,
+ * de-duplicated across files and priced per response.
+ */
+export function buildTranscriptRows(input: {
+  readonly scan: TranscriptScan;
+  readonly window: AnalyticsWindow;
+  readonly prices: PriceTable;
+  readonly projectRoots: ReadonlyArray<ProjectRoot>;
+}) {
+  const fromMs = Date.parse(input.window.from);
+  const toMs = Date.parse(input.window.to);
+  const seen = new Set<string>();
+  const projects = new Map<string, StatsUsageAnalyticsProject>();
+  const projectByCwd = new Map<string, StatsUsageAnalyticsProject | null>();
+  const projectIdFor = (cwd: string): string | null => {
+    let project = projectByCwd.get(cwd);
+    if (project === undefined) {
+      project = projectForDirectory(cwd, input.projectRoots);
+      projectByCwd.set(cwd, project);
+    }
+    if (project && !projects.has(project.projectId)) projects.set(project.projectId, project);
+    return project?.projectId ?? null;
+  };
+  const tokens = new Map<string, Mutable<StatsUsageAnalyticsTokenRow>>();
+  const turns = new Map<string, Mutable<StatsUsageAnalyticsTurnRow>>();
+  const costs = new Map<string, Mutable<StatsUsageAnalyticsCostRow>>();
+  const turnRow = (
+    hour: string,
+    provider: ProviderKind,
+    model: string,
+    projectId: string | null,
+  ) => {
+    const key = [hour, provider, model, projectId ?? ""].join("\u0000");
+    let row = turns.get(key);
+    if (!row) {
+      row = { hour, provider, model, projectId, turns: 0, failedTurns: 0 };
+      turns.set(key, row);
+    }
+    return row;
+  };
+
+  for (const file of input.scan.files) {
+    // A Claude prompt names no model; it takes the model of the response after it.
+    let waiting: Array<{ hour: string; cwd: string }> = [];
+    let lastModel = "unknown";
+    const settle = (rawModel: string) => {
+      const model = recapModelName("claudeAgent", rawModel);
+      for (const turn of waiting)
+        turnRow(turn.hour, "claudeAgent", model, projectIdFor(turn.cwd)).turns += 1;
+      waiting = [];
+    };
+    for (const record of file) {
+      if (record.dedupeKey !== null) {
+        if (seen.has(record.dedupeKey)) continue;
+        seen.add(record.dedupeKey);
+      }
+      if (record.kind === "usage" && record.model) lastModel = record.model;
+      if (record.kind === "usage" && record.provider === "claudeAgent" && waiting.length > 0) {
+        settle(record.model || lastModel);
+      }
+      if (record.timestampMs < fromMs || record.timestampMs >= toMs) continue;
+      const hour = utcHour(record.timestampMs);
+      if (record.kind === "turn") {
+        if (record.provider === "claudeAgent") waiting.push({ hour, cwd: record.cwd });
+        else
+          turnRow(
+            hour,
+            record.provider,
+            recapModelName(record.provider, record.model),
+            projectIdFor(record.cwd),
+          ).turns += 1;
+        continue;
+      }
+      const model = recapModelName(record.provider, record.model);
+      const projectId = projectIdFor(record.cwd);
+      if (record.failed) {
+        turnRow(hour, record.provider, model, projectId).failedTurns += 1;
+        continue;
+      }
+      const total = transcriptTokenTotal(record.tokens);
+      if (total <= 0) continue;
+      const cost = priceTranscriptUsage(input.prices.table, record);
+      const tokenKey = [hour, record.provider, model, projectId ?? ""].join("\u0000");
+      const tokenRow = tokens.get(tokenKey) ?? {
+        hour,
+        provider: record.provider,
+        model,
+        projectId,
+        origin: null,
+        tokens: 0,
+        cacheReadTokens: 0,
+        unpricedTokens: 0,
+        unsplitTokens: 0,
+      };
+      tokenRow.tokens += total;
+      tokenRow.cacheReadTokens += record.tokens.cacheReadTokens;
+      if (cost === null) tokenRow.unpricedTokens += total;
+      tokens.set(tokenKey, tokenRow);
+      if (cost !== null && cost > 0) {
+        const source = record.reportedCostUsd === null ? "estimated" : "reported";
+        const costKey = `${tokenKey}\u0000${source}`;
+        const costRow = costs.get(costKey) ?? {
+          hour,
+          provider: record.provider,
+          model,
+          projectId,
+          source,
+          costUsd: 0,
+          turns: 0,
+        };
+        costRow.costUsd += cost;
+        costs.set(costKey, costRow);
+      }
+    }
+    if (waiting.length > 0) settle(lastModel);
+  }
+
+  // An error can land in an hour whose prompt was in the hour before.
+  for (const row of turns.values()) row.turns = Math.max(row.turns, row.failedTurns);
+  return {
+    providers: [...input.scan.providers] as ReadonlyArray<ProviderKind>,
+    tokens: [...tokens.values()],
+    turns: [...turns.values()],
+    costs: [...costs.values()],
+    projects: [...projects.values()],
+  };
+}
+
+/** True when a session-file response needs the price list. */
+function scanNeedsPrices(scan: TranscriptScan): boolean {
+  return scan.files.some((file) =>
+    file.some((record) => record.kind === "usage" && record.reportedCostUsd === null),
+  );
 }
 
 // ── Service ────────────────────────────────────────────────────────────
@@ -345,13 +548,39 @@ export class UsageAnalyticsQuery extends ServiceMap.Service<
 const NOT_NEEDED: PriceTable = { table: new Map(), status: "unavailable", fetchedAt: null };
 const NO_PRICES: UsagePricingSource = { load: async () => NOT_NEEDED };
 
+const NO_SESSION_FILES: TranscriptUsageReader = {
+  scan: async () => ({ providers: new Set(), files: [] }),
+};
+
 export const makeUsageAnalyticsQuery = (
-  options: { readonly now?: () => number; readonly pricing?: UsagePricingSource } = {},
+  options: {
+    readonly now?: () => number;
+    readonly pricing?: UsagePricingSource;
+    readonly sessionFiles?: TranscriptUsageReader;
+  } = {},
 ) =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
     const now = options.now ?? Date.now;
     const pricing = options.pricing ?? NO_PRICES;
+    const sessionFiles = options.sessionFiles ?? NO_SESSION_FILES;
+
+    // Folders Synara knows, to put session-file usage under its projects.
+    const queryProjectRoots = () => sql<{
+      readonly path: string | null;
+      readonly projectId: string;
+      readonly title: string | null;
+      readonly kind: string | null;
+    }>`
+      SELECT p.workspace_root AS path, p.project_id AS projectId, p.title AS title, p.kind AS kind
+      FROM projection_projects p
+      WHERE p.deleted_at IS NULL
+      UNION
+      SELECT t.worktree_path, p.project_id, p.title, p.kind
+      FROM projection_threads t
+      JOIN projection_projects p ON p.project_id = t.project_id AND p.deleted_at IS NULL
+      WHERE t.worktree_path IS NOT NULL
+    `;
 
     // Same provider/model attribution as the recap's turns: the turn's selection
     // first, then the thread's current selection and session as fallbacks.
@@ -602,6 +831,7 @@ export const makeUsageAnalyticsQuery = (
     const getUsageAnalytics: UsageAnalyticsQueryShape["getUsageAnalytics"] = (input) =>
       Effect.gen(function* () {
         const window = resolveUsageAnalyticsWindow(input);
+        const scope = input.scope ?? "synara";
         if ("error" in window) {
           return yield* Effect.fail(
             new WsRpcError({ message: window.error, code: "INVALID_INPUT", retryable: false }),
@@ -613,14 +843,40 @@ export const makeUsageAnalyticsQuery = (
             tokenRows: queryTokens(window),
             turnRows: queryTurns(window),
             costRows: queryCosts(window),
+            projectRoots: scope === "mac" ? queryProjectRoots() : Effect.succeed([]),
           }),
         );
-        // The price list is only needed, and only downloaded, when a provider
-        // that reports no cost has tokens to price.
-        const prices = needsPrices(rows.tokenRows, reportingProviders(rows.costRows))
-          ? yield* Effect.promise(() => pricing.load())
-          : NOT_NEEDED;
-        return buildUsageAnalytics({ window, ...rows, prices, nowMs: now() });
+        const scan =
+          scope === "mac"
+            ? yield* Effect.promise(() => sessionFiles.scan(Date.parse(window.from)))
+            : null;
+        // The price list is only needed, and only downloaded, when something
+        // without a reported cost has tokens to price.
+        const prices =
+          needsPrices(rows.tokenRows, reportingProviders(rows.costRows)) ||
+          (scan !== null && scanNeedsPrices(scan))
+            ? yield* Effect.promise(() => pricing.load())
+            : NOT_NEEDED;
+        const projectRoots: ProjectRoot[] = [];
+        for (const root of rows.projectRoots) {
+          const path = nonEmptyString(root.path);
+          const title = nonEmptyString(root.title);
+          if (!path) continue;
+          projectRoots.push({
+            path: nodePath.resolve(path),
+            project: root.kind === "project" && title ? { projectId: root.projectId, title } : null,
+          });
+        }
+        return buildUsageAnalytics({
+          window,
+          ...rows,
+          prices,
+          nowMs: now(),
+          scope,
+          ...(scan
+            ? { sessionFiles: buildTranscriptRows({ scan, window, prices, projectRoots }) }
+            : {}),
+        });
       });
 
     return { getUsageAnalytics } satisfies UsageAnalyticsQueryShape;
@@ -632,6 +888,7 @@ export const UsageAnalyticsQueryLive = Layer.effect(
     const config = yield* ServerConfig;
     return yield* makeUsageAnalyticsQuery({
       pricing: makeUsagePricingSource({ stateDir: config.stateDir }),
+      sessionFiles: makeTranscriptUsageReader(defaultTranscriptRoots(config.homeDir)),
     });
   }),
 );

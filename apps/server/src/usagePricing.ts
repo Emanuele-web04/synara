@@ -1,7 +1,7 @@
 // FILE: usagePricing.ts
 // Purpose: API list prices per model, to estimate what Synara usage would cost
 // for providers that report no cost of their own (Codex). Rates come from
-// LiteLLM's model price table, the one t3code and ccusage use; it is downloaded
+// LiteLLM's public model price table; it is downloaded
 // at most once a day and kept in the state folder so prices still load offline.
 // Layer: server usage pricing (pure pricing plus a small file-cached loader).
 
@@ -12,6 +12,7 @@ import type { StatsUsageAnalyticsPricingStatus } from "@synara/contracts";
 import { Effect } from "effect";
 
 import { writeFileStringAtomically } from "./atomicWrite";
+import { type TranscriptUsageRecord, transcriptPromptTokens } from "./transcriptUsageParsers";
 
 export const LITELLM_PRICES_URL =
   "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json";
@@ -24,11 +25,20 @@ const MAX_DOCUMENT_BYTES = 32 * 1024 * 1024;
 const MIN_PRICED_MODELS = 100;
 
 /** USD per token. */
-export interface ModelRate {
+export interface Rates {
   readonly input: number;
   readonly output: number;
   readonly cacheRead: number;
+  /** 5-minute cache writes, the default lifetime. */
   readonly cacheWrite: number;
+  readonly cacheWrite1h: number;
+}
+
+export interface ModelRate extends Rates {
+  /** Higher rates for prompts above `aboveTokens`, smallest threshold first. */
+  readonly tiers: ReadonlyArray<{ readonly aboveTokens: number; readonly rates: Rates }>;
+  /** Multiple of the rates billed in fast mode; 1 when the model has none. */
+  readonly fastMultiplier: number;
 }
 
 export type RateTable = ReadonlyMap<string, ModelRate>;
@@ -51,12 +61,60 @@ function bareName(key: string): string {
 }
 
 function sameRate(left: ModelRate, right: ModelRate): boolean {
-  return (
-    left.input === right.input &&
-    left.output === right.output &&
-    left.cacheRead === right.cacheRead &&
-    left.cacheWrite === right.cacheWrite
-  );
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
+const TIER_KEY = /^(.+)_above_(\d+)k_tokens$/u;
+
+/** One rate set from LiteLLM field names, falling back to `base` where a tier omits one. */
+function readRates(
+  key: string,
+  field: (name: string) => number | null,
+  base?: Rates,
+): Rates | null {
+  const input = field("input_cost_per_token") ?? base?.input ?? null;
+  const output = field("output_cost_per_token") ?? base?.output ?? null;
+  if (input === null || output === null) return null;
+  const cacheWrite = field("cache_creation_input_token_cost") ?? base?.cacheWrite ?? input;
+  return {
+    input,
+    output,
+    // Cached input without its own price is priced as plain input, not as free.
+    cacheRead: field("cache_read_input_token_cost") ?? base?.cacheRead ?? input,
+    cacheWrite,
+    // Anthropic bills 1-hour cache writes at twice the input rate.
+    cacheWrite1h:
+      field("cache_creation_input_token_cost_above_1hr") ??
+      base?.cacheWrite1h ??
+      (bareName(key).startsWith("claude") ? input * 2 : cacheWrite),
+  };
+}
+
+function parseEntry(key: string, entry: Record<string, unknown>): ModelRate | null {
+  const base = readRates(key, (name) => finite(entry[name]));
+  if (!base) return null;
+  const tierFields = new Map<number, Map<string, number>>();
+  for (const [name, value] of Object.entries(entry)) {
+    const match = TIER_KEY.exec(name);
+    const rate = finite(value);
+    if (!match || rate === null) continue;
+    const threshold = Number(match[2]) * 1000;
+    const fields = tierFields.get(threshold) ?? new Map<string, number>();
+    fields.set(match[1]!, rate);
+    tierFields.set(threshold, fields);
+  }
+  const tiers = [...tierFields.entries()]
+    .toSorted(([left], [right]) => left - right)
+    .flatMap(([aboveTokens, fields]) => {
+      const rates = readRates(key, (name) => fields.get(name) ?? null, base);
+      return rates ? [{ aboveTokens, rates }] : [];
+    });
+  const fast = finite(record(entry.provider_specific_entry)?.fast);
+  return { ...base, tiers, fastMultiplier: fast !== null && fast > 0 ? fast : 1 };
+}
+
+function record(value: unknown): Record<string, unknown> | null {
+  return typeof value === "object" && value !== null ? (value as Record<string, unknown>) : null;
 }
 
 /**
@@ -70,18 +128,9 @@ export function parseRateTable(document: unknown): RateTable {
   if (typeof document !== "object" || document === null) return table;
   for (const [name, raw] of Object.entries(document as Record<string, unknown>)) {
     if (typeof raw !== "object" || raw === null) continue;
-    const entry = raw as Record<string, unknown>;
     const key = name.trim().toLowerCase();
-    const input = finite(entry.input_cost_per_token);
-    const output = finite(entry.output_cost_per_token);
-    if (!key || input === null || output === null) continue;
-    table.set(key, {
-      input,
-      output,
-      // Cached input without its own price is priced as plain input, not as free.
-      cacheRead: finite(entry.cache_read_input_token_cost) ?? input,
-      cacheWrite: finite(entry.cache_creation_input_token_cost) ?? input,
-    });
+    const rate = key ? parseEntry(key, raw as Record<string, unknown>) : null;
+    if (rate) table.set(key, rate);
   }
   const aliases = new Map<string, ModelRate | null>();
   for (const [key, rate] of table) {
@@ -119,6 +168,31 @@ export function priceTokens(table: RateTable, model: string, tokens: PricedToken
     tokens.cacheWriteTokens * rate.cacheWrite +
     tokens.outputTokens * rate.output
   );
+}
+
+/**
+ * One response from a session file: the file's own cost when it has one, else
+ * its tokens at the model's rates, with the long-prompt tier, 1-hour cache
+ * writes and fast mode priced at their own rates. Null when the model has no price.
+ */
+export function priceTranscriptUsage(
+  table: RateTable,
+  usage: TranscriptUsageRecord,
+): number | null {
+  if (usage.reportedCostUsd !== null) return usage.reportedCostUsd;
+  const rate = lookupRate(table, usage.model);
+  if (!rate) return null;
+  const prompt = transcriptPromptTokens(usage.tokens);
+  let rates: Rates = rate;
+  for (const tier of rate.tiers) if (prompt > tier.aboveTokens) rates = tier.rates;
+  const tokens = usage.tokens;
+  const cost =
+    tokens.inputTokens * rates.input +
+    tokens.cacheReadTokens * rates.cacheRead +
+    tokens.cacheWrite5mTokens * rates.cacheWrite +
+    tokens.cacheWrite1hTokens * rates.cacheWrite1h +
+    tokens.outputTokens * rates.output;
+  return cost * (usage.fast ? rate.fastMultiplier : 1);
 }
 
 // ── Loader ───────────────────────────────────────────────────────────────

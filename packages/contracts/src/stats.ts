@@ -261,9 +261,15 @@ export type StatsGetRecapResult = typeof StatsGetRecapResult.Type;
 // A year plus a week of slack lets the client ask for whole local days.
 export const STATS_USAGE_ANALYTICS_MAX_WINDOW_MS = 373 * 24 * 60 * 60 * 1000;
 
+// `synara`: chats run in Synara. `mac`: also Claude Code and Codex sessions run
+// anywhere on this Mac, read from their own session files.
+export const StatsUsageAnalyticsScope = Schema.Literals(["synara", "mac"]);
+export type StatsUsageAnalyticsScope = typeof StatsUsageAnalyticsScope.Type;
+
 export const StatsGetUsageAnalyticsInput = Schema.Struct({
   from: IsoDateTime,
   to: IsoDateTime,
+  scope: Schema.optional(StatsUsageAnalyticsScope),
 });
 export type StatsGetUsageAnalyticsInput = typeof StatsGetUsageAnalyticsInput.Type;
 
@@ -273,7 +279,8 @@ const StatsUsageAnalyticsProvider = Schema.Union([ProviderKind, Schema.Literal("
 export const StatsUsageAnalyticsOrigin = Schema.Literals(["user", "automation", "agent"]);
 export type StatsUsageAnalyticsOrigin = typeof StatsUsageAnalyticsOrigin.Type;
 
-// Tokens processed in one UTC hour (cache reads and writes included);
+// Tokens processed in one UTC hour (cache reads and writes included); `origin` is
+// null for sessions read from session files, whose dispatcher is unknown;
 // `cacheReadTokens` is the part read from the prompt cache, when the provider reports it.
 // For a provider that reports no cost, the tokens left without an estimate:
 // `unpricedTokens` because the model has no API list price, `unsplitTokens` because
@@ -283,7 +290,7 @@ export const StatsUsageAnalyticsTokenRow = Schema.Struct({
   provider: StatsUsageAnalyticsProvider,
   model: TrimmedNonEmptyString,
   projectId: Schema.NullOr(TrimmedNonEmptyString),
-  origin: StatsUsageAnalyticsOrigin,
+  origin: Schema.NullOr(StatsUsageAnalyticsOrigin),
   tokens: NonNegativeInt,
   cacheReadTokens: NonNegativeInt,
   unpricedTokens: NonNegativeInt,
@@ -347,6 +354,10 @@ export const StatsGetUsageAnalyticsResult = Schema.Struct({
   turns: Schema.Array(StatsUsageAnalyticsTurnRow),
   costs: Schema.Array(StatsUsageAnalyticsCostRow),
   pricing: StatsUsageAnalyticsPricing,
+  scope: StatsUsageAnalyticsScope,
+  // In the `mac` scope, providers read from their own session files instead of
+  // Synara's records.
+  sessionFileProviders: Schema.Array(ProviderKind),
   projects: Schema.Array(StatsUsageAnalyticsProject),
   // Providers with turns in the window whose adapters report no token usage.
   unavailableProviders: Schema.Array(ProviderKind),

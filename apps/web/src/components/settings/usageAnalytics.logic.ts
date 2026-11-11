@@ -9,6 +9,7 @@ import {
   type ProviderKind,
   type StatsGetUsageAnalyticsResult,
   type StatsUsageAnalyticsCostSource,
+  type StatsUsageAnalyticsScope,
 } from "@synara/contracts";
 
 export type UsageAnalyticsRange = "7d" | "30d" | "90d" | "1y";
@@ -147,6 +148,9 @@ export interface UsageAnalyticsView {
   readonly rhythm: ReadonlyArray<ReadonlyArray<number>>;
   readonly unavailableProviders: ReadonlyArray<ProviderKind>;
   readonly pricing: StatsGetUsageAnalyticsResult["pricing"];
+  readonly scope: StatsUsageAnalyticsScope;
+  /** Providers read from their own session files rather than Synara's records. */
+  readonly sessionFileProviders: ReadonlyArray<ProviderKind>;
   /** Tokens in this period that needed an estimate and got none. */
   readonly unpriced: {
     /** No API list price for these models. */
@@ -255,7 +259,7 @@ export function buildUsageAnalyticsView(
     if (when !== "current") continue;
     totals.tokens += row.tokens;
     totals.cacheReadTokens += row.cacheReadTokens;
-    origins[row.origin] += row.tokens;
+    if (row.origin) origins[row.origin] += row.tokens;
     if (row.unpricedTokens > 0) {
       unpricedTokens += row.unpricedTokens;
       if (row.model !== "unknown") unpricedModels.add(row.model);
@@ -329,6 +333,8 @@ export function buildUsageAnalyticsView(
     rhythm,
     unavailableProviders: result.unavailableProviders,
     pricing: result.pricing,
+    scope: result.scope,
+    sessionFileProviders: result.sessionFileProviders,
     unpriced: {
       tokens: unpricedTokens,
       models: [...unpricedModels].toSorted(),
