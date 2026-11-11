@@ -28,6 +28,16 @@ const platforms = [
     arch: "x64",
   },
   {
+    id: "linux-arm64",
+    label: "Linux arm64",
+    // node-pty and the patched Cua driver compile natively, so an arm64
+    // package needs an arm64 host; GitHub hosts that runner for public repos.
+    runner: "ubuntu-24.04-arm",
+    platform: "linux",
+    target: "AppImage",
+    arch: "arm64",
+  },
+  {
     id: "win-x64",
     label: "Windows x64",
     runner: "windows-2022",
@@ -43,15 +53,20 @@ export function resolveReleaseBuildScope(
   publish = false,
   cuaBenchmarkBaseline = "",
   flavor: "production" | "beta" | "remote" = "production",
+  lane: "bridge" | "clean" = "clean",
 ) {
   if (!["artifact", "native", "icon", "js", "preflight"].includes(stage))
     throw new Error(`Unknown build stage: ${stage}`);
+  if (lane !== "bridge" && lane !== "clean") throw new Error(`Unknown release lane: ${lane}`);
   if (flavor === "remote" && !["all", "mac-arm64", "linux-x64", "win-x64"].includes(platform))
     throw new Error("Synara Remote supports mac-arm64, linux-x64 and win-x64.");
   const selected = platforms.filter(
     (entry) =>
       (platform === "all" || platform === entry.id) &&
-      (flavor !== "remote" || entry.id !== "mac-x64"),
+      (flavor !== "remote" || (entry.id !== "mac-x64" && entry.id !== "linux-arm64")) &&
+      // The pinned compatibility release predates arm64 Linux support, so it
+      // must not publish an arm64 build that would read the x86_64 feed.
+      (lane !== "bridge" || entry.id !== "linux-arm64"),
   );
   if (selected.length === 0) throw new Error(`Unknown build platform: ${platform}`);
   if (publish && (platform !== "all" || stage !== "artifact"))

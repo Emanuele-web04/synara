@@ -1,5 +1,24 @@
 # Changelog
 
+## Unreleased
+
+**Linux ARM64 desktop packages beside the existing x86_64 build.**
+
+### Added
+
+- Linux ARM64 AppImage (`Synara-<version>-arm64.AppImage`) built on an ARM64 runner with the same provenance record, packaged-startup smoke test and unsigned Linux publication policy as the x86_64 build.
+- Dedicated Linux feed per architecture (`synara-linux.yml` for x86_64, `synara-linux-arm64.yml` for ARM64). electron-updater derives that suffix from the running architecture, and it picks AppImage files by extension only, so a shared manifest would offer one architecture the other's payload.
+- The download page exposes both Linux builds through an architecture toggle, and the installation and troubleshooting docs describe the `aarch64` choice and the FUSE 2 requirement.
+
+### Changed
+
+- `dist:desktop:linux` follows the host architecture instead of forcing x64; `--arch arm64` also works there.
+- The pinned compatibility release stays x64-only: it predates ARM64 support, so publishing an ARM64 build there would point an old app at the x86_64 feed.
+
+### Verification
+
+Focused Vitest suites cover the release scope matrix, artifact naming, checkpoint and provenance validation, update-feed preparation and desktop channel/architecture admission, and the wider scripts, shared and desktop suites pass. A Linux arm64 AppImage was built locally from this tree on an Apple Silicon Linux host (16K pages): the patched Cua driver, cloudflared and node-pty compiled for `aarch64`, electron-builder wrote `latest-linux-arm64.yml` pointing at `Synara-<version>-arm64.AppImage`, provenance and the same-run checkpoint accepted those bytes, feed preparation produced an identical `synara-linux-arm64.yml`, and the packaged-startup smoke passed from isolated state. The hosted `ubuntu-24.04-arm` leg still needs one build-only `workflow_dispatch` run with `platform=linux-arm64` before publication.
+
 ## 1.5.1 — 2026-11-11
 
 **Safer upgrades from older Stable databases and optional anonymous Remote reliability totals.**

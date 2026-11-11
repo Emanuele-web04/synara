@@ -239,6 +239,7 @@ import {
   isUpdateVersionAllowedForFlavor,
   isUpdateVersionNewer,
   shouldBroadcastDownloadProgress,
+  shouldAcceptAvailableUpdate,
   shouldCheckForUpdatesOnForeground,
 } from "./updateState";
 import { registerDesktopVoiceTranscriptionHandler } from "./voiceTranscription";
@@ -3947,19 +3948,27 @@ function configureAutoUpdater(): void {
   autoUpdater.on("update-available", (info) => {
     if (isQuitting || isUpdaterInstallPreparing || updateDownloadInFlight) return;
     clearUpdateCheckTimeoutTimer();
-    if (!isAcceptableUpdateVersion(info.version)) {
+    const accepted = shouldAcceptAvailableUpdate({
+      currentVersion: app.getVersion(),
+      version: info.version,
+      flavor: desktopFlavor,
+      info,
+      platform: process.platform,
+      arch: process.arch,
+    });
+    if (!accepted) {
+      const versionAccepted = isAcceptableUpdateVersion(info.version);
+      const reason = versionAccepted
+        ? `artifact for ${info.version} does not match ${process.platform}/${process.arch}`
+        : describeRejectedUpdateVersion(info.version);
       const nextState = reduceDesktopUpdateStateOnNoUpdate(updateState, new Date().toISOString());
       if (nextState.downloadedVersion === null) {
         downloadedUpdateArtifact = null;
-        void clearPendingUpdateCache(
-          `available update rejected: ${describeRejectedUpdateVersion(info.version)}`,
-        );
+        void clearPendingUpdateCache(`available update rejected: ${reason}`);
       }
       setUpdateState(nextState);
       lastLoggedDownloadMilestone = -1;
-      console.info(
-        `[desktop-updater] Ignoring available update: ${describeRejectedUpdateVersion(info.version)}.`,
-      );
+      console.info(`[desktop-updater] Ignoring available update: ${reason}.`);
       return;
     }
     setUpdateState(

@@ -535,6 +535,10 @@
     "./installerDownloads": {
       "types": "./src/installerDownloads.ts",
       "import": "./src/installerDownloads.ts"
+    },
+    "./releaseDownloads": {
+      "types": "./src/releaseDownloads.ts",
+      "import": "./src/releaseDownloads.ts"
     }
   },
   "scripts": {

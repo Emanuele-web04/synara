@@ -15,6 +15,7 @@ import desktopPackageJson from "../apps/desktop/package.json" with { type: "json
 import serverPackageJson from "../apps/server/package.json" with { type: "json" };
 
 import { startBuildStage } from "./lib/build-timing.ts";
+import { retargetStagedEntry } from "./lib/desktop-artifact-naming.ts";
 import { verifyPortableBuild } from "./lib/portable-build.ts";
 import {
   BETA_ASSET_PATHS,
@@ -1516,10 +1517,7 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
     const stat = yield* fs.stat(from).pipe(Effect.catch(() => Effect.succeed(null)));
     if (!stat || stat.type !== "File") continue;
 
-    const outputEntry =
-      options.platform === "mac" && options.arch !== "arm64" && entry === "latest-mac.yml"
-        ? `latest-mac-${options.arch}.yml`
-        : entry;
+    const outputEntry = retargetStagedEntry(entry, options.platform, options.arch);
     const to = path.join(options.outputDir, outputEntry);
     yield* fs.copyFile(from, to);
     copiedArtifacts.push(to);

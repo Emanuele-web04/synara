@@ -6,7 +6,10 @@
     "x64": "https://github.com/Emanuele-web04/synara/releases/download/v1.1.0/Synara-1.1.0-x64.dmg"
   },
   "windows": "https://github.com/Emanuele-web04/synara/releases/download/v1.1.0/Synara-1.1.0-x64.exe",
-  "linux": "https://github.com/Emanuele-web04/synara/releases/download/v1.1.0/Synara-1.1.0-x86_64.AppImage",
+  "linux": {
+    "x64": "https://github.com/Emanuele-web04/synara/releases/download/v1.1.0/Synara-1.1.0-x86_64.AppImage",
+    "arm64": "https://github.com/Emanuele-web04/synara/releases"
+  },
   "updatedAt": "2026-11-02T17:29:56.278Z",
   "source": "https://api.github.com/repos/Emanuele-web04/synara/releases/latest"
 }

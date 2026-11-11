@@ -109,17 +109,22 @@ function getReleaseDownloads(release, source) {
       x64: urlFor(/x64\.dmg$/i),
     },
     windows: urlFor(/\.exe$/i),
-    linux: urlFor(/\.AppImage$/i),
+    linux: {
+      x64: urlFor(/x86_64\.AppImage$/i),
+      arm64: urlFor(/arm64\.AppImage$/i),
+    },
     updatedAt: new Date().toISOString(),
     source,
   };
 
+  // Releases that predate arm64 Linux still store the listing page for arm64,
+  // so only the Intel asset is required to keep the snapshot refreshable.
   if (
     !downloads.version ||
     downloads.mac.arm64 === releasesUrl ||
     downloads.mac.x64 === releasesUrl ||
     downloads.windows === releasesUrl ||
-    downloads.linux === releasesUrl
+    downloads.linux.x64 === releasesUrl
   ) {
     throw new Error(
       `Latest release ${release.tag_name ?? "unknown"} is missing an installer asset.`,

@@ -236,3 +236,55 @@ export function getAutoUpdateDisabledReason(args: {
   }
   return null;
 }
+
+/**
+ * Whether the updater's resolved payload can run on this runtime. Each Linux
+ * architecture publishes its own manifest and AppImage, so a correct feed
+ * already matches; this is a safety net for a mispublished or merged manifest,
+ * where the resolved AppImage could belong to the other architecture.
+ *
+ * electron-updater resolves `files[]` when present and falls back to the legacy
+ * top-level `path` from the manifest, so both are inspected.
+ */
+export function updateFilesMatchRuntimeArch(
+  info: {
+    readonly path?: string | undefined;
+    readonly files?: ReadonlyArray<{ readonly url?: string | undefined }> | undefined;
+  },
+  platform: NodeJS.Platform,
+  arch: string,
+): boolean {
+  if (platform !== "linux") return true;
+  const candidates = [info.path, ...(info.files ?? []).map((file) => file.url)];
+  const appImages = candidates.filter(
+    (url): url is string => typeof url === "string" && /\.AppImage$/i.test(url),
+  );
+  if (appImages.length === 0) return true;
+  return appImages.every((url) =>
+    arch === "arm64" ? /arm64\.AppImage$/i.test(url) : !/arm64/i.test(url),
+  );
+}
+
+/**
+ * Admission for an offered update: same flavor lane, newer version, and a
+ * payload that matches this runtime's architecture. Kept pure so the
+ * `update-available` handler cannot drift from the tested policy.
+ */
+export function shouldAcceptAvailableUpdate(input: {
+  readonly currentVersion: string;
+  readonly version: string | null | undefined;
+  readonly flavor: SynaraDesktopFlavor;
+  readonly info: {
+    readonly path?: string | undefined;
+    readonly files?: ReadonlyArray<{ readonly url?: string | undefined }> | undefined;
+  };
+  readonly platform: NodeJS.Platform;
+  readonly arch: string;
+}): boolean {
+  return (
+    typeof input.version === "string" &&
+    isUpdateVersionAllowedForFlavor(input.version, input.flavor) &&
+    isUpdateVersionNewer(input.currentVersion, input.version) &&
+    updateFilesMatchRuntimeArch(input.info, input.platform, input.arch)
+  );
+}

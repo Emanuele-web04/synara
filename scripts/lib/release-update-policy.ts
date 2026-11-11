@@ -124,6 +124,66 @@ export function channelManifestNames(channel: string): readonly string[] {
   return [`${channel}-mac.yml`, `${channel}.yml`, `${channel}-linux.yml`];
 }
 
+/**
+ * The staged arm64 Linux manifest. electron-builder already writes this name
+ * for an arm64 build (`latest` channel plus the `-linux-arm64` suffix), so the
+ * build script does not retarget it; it only has to be published under the
+ * dedicated channel name as well.
+ */
+export const LINUX_ARM64_UPDATE_MANIFEST = "latest-linux-arm64.yml";
+
+/**
+ * Dedicated arm64 Linux feed for a channel. electron-updater derives Linux
+ * manifest names as `<channel>-linux` plus `-<arch>` for any architecture other
+ * than x64, so `synara` resolves to `synara-linux-arm64.yml` on arm64.
+ */
+export function linuxArm64ChannelManifestName(channel: string): string {
+  if (!CHANNEL_PATTERN.test(channel) || channel === "latest") {
+    throw new Error(`Invalid dedicated update channel: ${channel}`);
+  }
+  return `${channel}-linux-arm64.yml`;
+}
+
+interface LinuxArm64ManifestPlan {
+  readonly sourcePath: string;
+  readonly destinationPath: string;
+  readonly destinationName: string;
+}
+
+/**
+ * Resolves the arm64 feed without touching the directory, so a release either
+ * publishes every channel manifest or none.
+ */
+function planLinuxArm64Manifest(
+  assetDirectory: string,
+  channel: string,
+  required: boolean,
+): LinuxArm64ManifestPlan | null {
+  const sourcePath = resolve(assetDirectory, LINUX_ARM64_UPDATE_MANIFEST);
+  if (!existsSync(sourcePath)) {
+    if (required) {
+      throw new Error(
+        `Release is missing the Linux arm64 update manifest: ${LINUX_ARM64_UPDATE_MANIFEST}`,
+      );
+    }
+    return null;
+  }
+  const destinationName = linuxArm64ChannelManifestName(channel);
+  const destinationPath = resolve(assetDirectory, destinationName);
+  if (existsSync(destinationPath)) {
+    throw new Error(`Refusing to overwrite existing update manifest: ${destinationName}`);
+  }
+  return { sourcePath, destinationPath, destinationName };
+}
+
+function writeLinuxArm64Manifest(plan: LinuxArm64ManifestPlan | null): readonly string[] {
+  if (!plan) return [];
+  copyFileSync(plan.sourcePath, plan.destinationPath, constants.COPYFILE_EXCL);
+  // Keep the staged name too: it is the updater's default-channel fallback for
+  // arm64, mirroring how x64 keeps `latest-linux.yml` beside `synara-linux.yml`.
+  return [plan.destinationName, LINUX_ARM64_UPDATE_MANIFEST];
+}
+
 function copyChannelManifests(
   assetDirectory: string,
   sourceNames: readonly string[],
@@ -171,17 +231,23 @@ export function prepareReleaseUpdateManifests(
     if (missing.length > 0) {
       throw new Error(`Compatibility release is missing update manifests: ${missing.join(", ")}`);
     }
+    // The compatibility release predates arm64 Linux; only an explicit arm64
+    // build in this run may contribute a feed.
+    const linuxArm64 = planLinuxArm64Manifest(assetDirectory, channel, false);
     copyChannelManifests(assetDirectory, sourceNames, destinationNames);
-    return [...sourceNames, ...destinationNames];
+    return [...sourceNames, ...destinationNames, ...writeLinuxArm64Manifest(linuxArm64)];
   }
 
   const missing = sourceNames.filter((name) => !existsSync(resolve(assetDirectory, name)));
   if (missing.length > 0) {
     throw new Error(`Latest release is missing update manifests: ${missing.join(", ")}`);
   }
+  // Resolve the arm64 feed before any copy so a rejected release directory stays
+  // untouched and a published one carries every channel manifest.
+  const linuxArm64 = planLinuxArm64Manifest(assetDirectory, channel, true);
   // Stable 0.5.x releases are GitHub Latest, but shipped desktop binaries still
   // request the dedicated `synara` channel. Keep both filenames in the same
   // release so existing installations and new Latest installs use the same feed.
   copyChannelManifests(assetDirectory, sourceNames, destinationNames);
-  return [...sourceNames, ...destinationNames];
+  return [...sourceNames, ...destinationNames, ...writeLinuxArm64Manifest(linuxArm64)];
 }
