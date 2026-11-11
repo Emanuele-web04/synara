@@ -288,6 +288,8 @@ function createTextGeneration(overrides: Partial<FakeGitTextGeneration> = {}): T
             }),
         ),
       ),
+    // Git actions never request composer predictions.
+    generateComposerPrediction: () => Effect.succeed({ suggestion: null }),
     generateProjectDigest: (input) =>
       implementation.generateProjectDigest(input).pipe(
         Effect.mapError(

@@ -1,10 +1,12 @@
 // FILE: betaFeatures.ts
 // Purpose: The web app's read of the shared Beta-only feature list.
 // Layer: Route/UI support
-// Exports: isBetaFeatureOn, visibleProviderDescriptors, VISIBLE_PROVIDER_DESCRIPTORS
+// Exports: isBetaFeatureOn, COMPOSER_PREDICTIONS_ON, visibleProviderDescriptors,
+//          VISIBLE_PROVIDER_DESCRIPTORS
 
 import {
   ACCOUNT_INBOX_BETA_FEATURE,
+  COMPOSER_PREDICTIONS_BETA_FEATURE,
   desktopFlavorFromProtocol,
   GROUPS_BETA_FEATURE,
   INBOX_BETA_FEATURE,
@@ -42,6 +44,12 @@ export const INBOX_ON = isBetaFeatureOn(INBOX_BETA_FEATURE);
 
 /** Account-saved Inbox history is available in Stable and Beta. */
 export const ACCOUNT_INBOX_ON = isBetaFeatureOn(ACCOUNT_INBOX_BETA_FEATURE);
+
+/**
+ * Composer predictions are Beta-only: Stable hides the "Show suggestions" row,
+ * never requests a prediction, and ignores the persisted setting.
+ */
+export const COMPOSER_PREDICTIONS_ON = isBetaFeatureOn(COMPOSER_PREDICTIONS_BETA_FEATURE);
 
 /**
  * Auto-fix CI is available in Stable and Beta; watching a PR remains opt-in.

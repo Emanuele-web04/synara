@@ -858,6 +858,13 @@ export function createWsNativeApi(): NativeApi {
         executionRequest(WS_METHODS.serverGenerateThreadRecap, input, {
           timeoutMs: null,
         }),
+      // The server bounds generation itself; aborting interrupts it there too.
+      generateComposerPrediction: (input, options) =>
+        executionRequest(
+          WS_METHODS.serverGenerateComposerPrediction,
+          input,
+          options?.signal ? { signal: options.signal } : undefined,
+        ),
       generateAutomationIntent: (input) =>
         executionRequest(WS_METHODS.serverGenerateAutomationIntent, input, {
           timeoutMs: null,

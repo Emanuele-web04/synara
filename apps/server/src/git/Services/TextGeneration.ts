@@ -143,6 +143,24 @@ export interface ThreadRecapGenerationResult {
   recap: string;
 }
 
+export interface ComposerPredictionGenerationInput {
+  cwd: string;
+  /** Recent visible user/assistant text, oldest first; untrusted transcript data. */
+  conversation: string;
+  codexHomePath?: string;
+  /** Model to use for generation. The caller always routes to the chat's own provider instance. */
+  model?: string;
+  /** Optional provider-aware selection for providers that need more than a raw model slug. */
+  modelSelection?: ModelSelection;
+  /** Optional provider startup overrides, such as custom binary paths or server URLs. */
+  providerOptions?: ProviderStartOptions;
+}
+
+export interface ComposerPredictionGenerationResult {
+  /** One predicted next user message, or null when no single continuation is clear. */
+  suggestion: string | null;
+}
+
 export interface AutomationIntentGenerationInput {
   cwd: string;
   message: string;
@@ -210,6 +228,7 @@ export type TextGenerationOperation =
   | "generateBranchName"
   | "generateThreadTitle"
   | "generateThreadRecap"
+  | "generateComposerPrediction"
   | "generateProjectDigest"
   | "generateAutomationIntent"
   | "evaluateAutomationCompletion";
@@ -259,6 +278,13 @@ export interface TextGenerationShape {
   readonly generateThreadRecap: (
     input: ThreadRecapGenerationInput,
   ) => Effect.Effect<ThreadRecapGenerationResult, TextGenerationError>;
+
+  /**
+   * Predict the user's next chat message from recent conversation text.
+   */
+  readonly generateComposerPrediction: (
+    input: ComposerPredictionGenerationInput,
+  ) => Effect.Effect<ComposerPredictionGenerationResult, TextGenerationError>;
   readonly generateProjectDigest: (
     input: ProjectDigestGenerationInput,
   ) => Effect.Effect<ProjectDigestGenerationResult, TextGenerationError>;

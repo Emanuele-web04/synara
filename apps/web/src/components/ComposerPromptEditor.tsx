@@ -68,6 +68,7 @@ import { useStore } from "~/store";
 import { createComposerThreadMentionSourcesSelector } from "~/storeSelectors";
 import { resolveThreadDisplayProvider } from "~/lib/threadDisplayProvider";
 import { cn } from "~/lib/utils";
+import { ComposerPredictionGhost } from "./ComposerPredictionGhost";
 import {
   COMPOSER_EDITOR_CONTENT_RESET_CLASS_NAME,
   COMPOSER_EDITOR_MIN_HEIGHT_CLASS_NAME,
@@ -521,6 +522,13 @@ interface ComposerPromptEditorProps {
   mentionReferences?: ReadonlyArray<ProviderMentionReference>;
   disabled: boolean;
   placeholder: string;
+  /**
+   * A predicted next message to show instead of the placeholder while the editor is empty:
+   * dimmed ghost text followed by a Tab key chip, wrapping up to three rows (the field grows
+   * to fit them) and ending with an ellipsis past them. It never enters the Lexical document
+   * or the draft; the owner decides what Tab does with it.
+   */
+  prediction?: string | null | undefined;
   ariaLabel?: string | undefined;
   className?: string;
   /** One-line field for the single-row composer: one line tall, placeholder truncated. */
@@ -944,6 +952,7 @@ function ComposerPromptEditorInner({
   mentionReferences: mentionReferencesProp,
   disabled,
   placeholder,
+  prediction,
   ariaLabel,
   className,
   singleLine,
@@ -1223,7 +1232,10 @@ function ComposerPromptEditorInner({
 
   return (
     <ComposerRemoveTerminalContextContext.Provider value={onRemoveTerminalContext}>
-      <div className="relative">
+      {/* With a prediction, the editor and its ghost text share one grid cell, so the field is
+          as tall as whichever is taller: the ghost's rows grow the composer instead of
+          spilling over the controls below. */}
+      <div className={cn("relative", prediction && "grid")}>
         <PlainTextPlugin
           contentEditable={
             <ContentEditable
@@ -1233,17 +1245,24 @@ function ComposerPromptEditorInner({
                 COMPOSER_EDITOR_MIN_HEIGHT_CLASS_NAME,
                 COMPOSER_EDITOR_CONTENT_RESET_CLASS_NAME,
                 singleLine && "min-h-[1lh]",
+                prediction && "col-start-1 row-start-1",
                 className,
               )}
               data-testid="composer-editor"
-              aria-placeholder={placeholder}
+              aria-placeholder={prediction || placeholder}
               aria-label={ariaLabel}
               placeholder={<span />}
               onPaste={onPaste}
             />
           }
           placeholder={
-            terminalContexts.length > 0 ? null : (
+            terminalContexts.length > 0 ? null : prediction ? (
+              <ComposerPredictionGhost
+                suggestion={prediction}
+                layoutKey={singleLine ? "row" : "block"}
+                className="col-start-1 row-start-1 self-start"
+              />
+            ) : (
               <div
                 className={cn(
                   "pointer-events-none absolute inset-0",
@@ -1287,6 +1306,7 @@ export const ComposerPromptEditor = forwardRef<
     mentionReferences,
     disabled,
     placeholder,
+    prediction,
     ariaLabel,
     className,
     singleLine,
@@ -1328,6 +1348,7 @@ export const ComposerPromptEditor = forwardRef<
         mentionReferences={normalizedMentionReferences}
         disabled={disabled}
         placeholder={placeholder}
+        prediction={prediction}
         ariaLabel={ariaLabel}
         onRemoveTerminalContext={onRemoveTerminalContext}
         onChange={onChange}

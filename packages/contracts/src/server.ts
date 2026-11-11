@@ -6,6 +6,7 @@ import {
   ProjectId,
   ThreadId,
   TrimmedNonEmptyString,
+  TurnId,
 } from "./baseSchemas";
 import { KeybindingCommand, KeybindingRule, ResolvedKeybindingsConfig } from "./keybindings";
 import { EditorId } from "./editor";
@@ -482,6 +483,28 @@ export const ServerGenerateThreadRecapResult = Schema.Struct({
   recap: TrimmedNonEmptyString,
 });
 export type ServerGenerateThreadRecapResult = typeof ServerGenerateThreadRecapResult.Type;
+
+/** Longest composer suggestion the server returns; longer output is cut at a word boundary. */
+export const COMPOSER_PREDICTION_MAX_CHARS = 320;
+
+// Composer predictions (Beta): one predicted next user message for the thread's
+// settled latest turn. The client sends only ids; the server derives the
+// conversation, provider, and account from the read model. A stale turn, an
+// unavailable provider, or any generation failure returns `suggestion: null`.
+export const ServerGenerateComposerPredictionInput = Schema.Struct({
+  threadId: ThreadId.check(Schema.isMaxLength(256)),
+  expectedTurnId: TurnId.check(Schema.isMaxLength(256)),
+});
+export type ServerGenerateComposerPredictionInput =
+  typeof ServerGenerateComposerPredictionInput.Type;
+
+export const ServerGenerateComposerPredictionResult = Schema.Struct({
+  suggestion: Schema.NullOr(
+    TrimmedNonEmptyString.check(Schema.isMaxLength(COMPOSER_PREDICTION_MAX_CHARS)),
+  ),
+});
+export type ServerGenerateComposerPredictionResult =
+  typeof ServerGenerateComposerPredictionResult.Type;
 
 // Schema-validated automation intent extraction for composer-triggered creation.
 // The UI still owns confirmation/error copy; this result only describes what the model understood.

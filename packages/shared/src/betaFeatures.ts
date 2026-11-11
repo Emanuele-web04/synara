@@ -58,7 +58,15 @@ export const MCP_CONNECTORS_BETA_FEATURE = "mcp-connectors";
  */
 export const NATIVE_EDITOR_BETA_FEATURE = "native-editor";
 
-export const BETA_ONLY_FEATURES: readonly BetaOnlyFeature[] = [];
+/**
+ * Composer predictions (Beta only): after a turn settles, one predicted next
+ * message is shown as ghost text in the empty composer, and Tab inserts it as
+ * a draft. Covers the `server.generateComposerPrediction` RPC and the
+ * "Show suggestions" setting.
+ */
+export const COMPOSER_PREDICTIONS_BETA_FEATURE = "composer-predictions";
+
+export const BETA_ONLY_FEATURES: readonly BetaOnlyFeature[] = [COMPOSER_PREDICTIONS_BETA_FEATURE];
 
 /**
  * Whether a Beta-only feature is on for this host. Only the Stable

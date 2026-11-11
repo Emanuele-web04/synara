@@ -9,7 +9,7 @@ import {
   type ProviderKind,
   type SidechatExpiry,
 } from "@synara/contracts";
-import { GROUPS_ON, VISIBLE_PROVIDER_DESCRIPTORS } from "../betaFeatures";
+import { COMPOSER_PREDICTIONS_ON, GROUPS_ON, VISIBLE_PROVIDER_DESCRIPTORS } from "../betaFeatures";
 import { sameAppSnapShortcut } from "@synara/shared/appSnapShortcut";
 import { desktopFlavorFromProtocol } from "@synara/shared/betaFeatures";
 import { SafariAccessSetupButton } from "../components/SafariAccessOnboarding";
@@ -551,6 +551,10 @@ function SettingsRouteView() {
       : []),
     ...(settings.composerEffortSlider !== defaults.composerEffortSlider
       ? ["settings:effortSlider"]
+      : []),
+    ...(COMPOSER_PREDICTIONS_ON &&
+    settings.showComposerSuggestions !== defaults.showComposerSuggestions
+      ? ["settings:showSuggestions"]
       : []),
     ...(settings.messageTrailAudioSource !== defaults.messageTrailAudioSource
       ? ["settings:messageTrailSound"]
@@ -1618,6 +1622,17 @@ function SettingsRouteView() {
           resetLabel: t("settings:effortSlider2"),
           ariaLabel: t("settings:showEffortSliderInTheComposer"),
         })}
+
+        {COMPOSER_PREDICTIONS_ON
+          ? renderBooleanSettingRow({
+              id: "setting-composer-suggestions",
+              settingKey: "showComposerSuggestions",
+              title: "settings:showSuggestions",
+              description: t("settings:afterAReplyFinishesShowAPredictedNextMessage"),
+              resetLabel: t("settings:showSuggestions2"),
+              ariaLabel: t("settings:showPredictedNextMessagesInTheComposer"),
+            })
+          : null}
 
         {isAudioLevelAvailable() ? (
           <SettingsRow

@@ -391,8 +391,8 @@ HTTP-hosted clients retain native component visuals but never execute HTML. The 
 bootstrap removes WebRTC capabilities before page scripts and stops parsing if that boundary
 cannot be enforced. HTML messages cannot open external URLs through the host.
 
-The list is currently empty. Account profiles, saved Inbox history, MCP Connectors
-and the native editor are available in Stable and Beta. Remote connections use
+The list currently holds `composer-predictions`. Account profiles, saved Inbox history,
+MCP Connectors and the native editor are available in Stable and Beta. Remote connections use
 their separate runtime activation policy.
 
 Diagnostics follow their separate [sender policy](#diagnostics).
@@ -421,6 +421,26 @@ Inbox and its `stats.getRecap` RPC are available in Stable and Beta. Stable show
 chat attention, running and finished work, review requests, and the activity recap.
 The to-do list, quick-add, delegation card, and **All tasks** link appear only where
 Tasks is available, including Stable and Beta.
+
+`composer-predictions` shows, after a turn settles in the main chat view, one predicted
+next message (from a few words up to about three sentences, at most 320 characters) as
+dimmed ghost text in the empty composer, followed by a `Tab` key chip. The ghost text wraps
+up to three rows and the composer grows to fit them, switching the single-row composer to
+its block layout like a draft that no longer fits one line; a longer suggestion ends with an
+ellipsis on the third row. Tab inserts the full suggestion as an ordinary editable draft with
+the cursor at the end; nothing is ever sent automatically, and typing over a suggestion
+discards it for that turn.
+**Settings → Chat behavior → Show suggestions** (on by default) turns it off. The
+`server.generateComposerPrediction` RPC takes only the thread and turn ids and derives
+everything else from the read model: it reads the latest few exchanges of visible user and
+assistant text and generates through the isolated text-generation path on the chat's own
+provider instance, using the Git-writing model only when it is that same instance and the
+chat's model otherwise, either one at its lowest catalog effort. Suggestions live in memory only; the window's
+session storage keeps just the keys of turns whose suggestion was used, discarded, or absent,
+so a reload does not bring one back.
+Stable refuses the RPC, hides the setting, never requests a prediction, and ignores the
+stored setting. The `server.getEnvironment` descriptor advertises the same gate to remote
+clients as `capabilities.composerPredictions` (`false` on Stable, absent on older servers).
 
 `accountInbox` is the account-saved Inbox history. In Stable, Beta and Remote, a signed-in computer
 automatically saves account/workspace-owned daily snapshots, including project names,

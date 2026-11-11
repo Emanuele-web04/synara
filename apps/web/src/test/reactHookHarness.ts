@@ -77,6 +77,10 @@ export const reactHookHarnessMock = {
     slot.value ??= { current: initialValue };
     return slot.value as { current: T };
   },
+  // Reads the store on every render; tests re-render after they change it.
+  useSyncExternalStore<T>(_subscribe: (listener: () => void) => () => void, getSnapshot: () => T) {
+    return getSnapshot();
+  },
   useState<T>(initialValue: T | (() => T)) {
     const slot = nextSlot();
     if (!("value" in slot)) {

@@ -525,6 +525,9 @@ export const AppSettingsSchema = Schema.Struct({
   // Started threads: show reasoning effort as a stepped slider card in the composer's
   // model menu instead of radio rows. New chats keep the split model/effort pickers.
   composerEffortSlider: Schema.Boolean.pipe(withDefaults(() => true)),
+  // Beta only: after a turn settles, show one predicted next message as ghost text in the
+  // empty composer (Tab inserts it as a draft). Inert on Stable, which never reads it.
+  showComposerSuggestions: Schema.Boolean.pipe(withDefaults(() => true)),
   // Desktop on macOS: the message trail moves with the Mac's audio output,
   // the microphone, or both. Opt-in because the first use asks macOS for access.
   messageTrailAudioSource: MessageTrailAudioSource.pipe(withDefaults(() => "off" as const)),
