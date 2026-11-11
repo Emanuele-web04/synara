@@ -60,10 +60,10 @@ without a usable local login and for explicitly configured external auth modes.
    the account's own environment; complete the browser prompts it opens. When
    the login exits, Synara rechecks the account (choose **Check authentication**
    if the prompts finished outside the dialog). The row turns to
-   `Authenticated` and the editor shows the signed-in email. The same login also works from a Synara terminal through
-   the account's **Terminal command** (`claude-work auth login` for an account
-   with the ID `claude_work`), followed by **Refresh status** at the top of the
-   Providers settings.
+   `Authenticated` and the editor shows the signed-in email. The same login
+   also works from a Synara terminal through the account's **Terminal command**
+   (`claude-work auth login` for an account with the ID `claude_work`),
+   followed by **Refresh status** at the top of the Providers settings.
 
 5. Open the model picker in a new thread and pick a model from the account's
    tab.
