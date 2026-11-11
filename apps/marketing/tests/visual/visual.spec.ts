@@ -132,6 +132,15 @@ test.describe("visual regression @visual", () => {
     await expect(macDownload).toHaveAttribute("href", `${assetRoot}-x64.dmg`);
     await page.getByRole("button", { name: "Apple Silicon", exact: true }).click();
     await expect(macDownload).toHaveAttribute("href", `${assetRoot}-arm64.dmg`);
+
+    const linuxDownload = page
+      .getByRole("heading", { name: "Linux", exact: true })
+      .locator("..")
+      .getByRole("link", { name: "Download", exact: true });
+    await page.getByRole("button", { name: "ARM64", exact: true }).click();
+    await expect(linuxDownload).toHaveAttribute("href", releaseDownloads.linux.arm64);
+    await page.getByRole("button", { name: "x86_64", exact: true }).click();
+    await expect(linuxDownload).toHaveAttribute("href", `${assetRoot}-x86_64.AppImage`);
     await page.mouse.move(0, 0);
     await expect(
       page.getByRole("link", { name: "Browse all releases", exact: true }),

@@ -19,7 +19,7 @@ on:
         description: "Platform scope (Remote: Mac ARM64; Stable/Beta publication requires all)"
         type: choice
         default: all
-        options: [all, mac-arm64, mac-x64, linux-x64, win-x64]
+        options: [all, mac-arm64, mac-x64, linux-x64, linux-arm64, win-x64]
       stage:
         description: "Build-only stage (publication requires artifact; preflight runs only the quality gates)"
         type: choice
@@ -108,6 +108,7 @@ jobs:
           PUBLISH_RELEASE: ${{ steps.release_mode.outputs.publish_release }}
           CUA_BENCHMARK_BASELINE: ${{ inputs.cua_benchmark_baseline }}
           DESKTOP_FLAVOR: ${{ steps.release_meta.outputs.desktop_flavor }}
+          RELEASE_LANE: ${{ steps.release_meta.outputs.release_lane }}
         run: node scripts/resolve-release-build-scope.ts
 
       - id: source_provenance
@@ -519,6 +520,14 @@ jobs:
         with:
           node-version-file: package.json
 
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+
+      - name: Install release script dependencies
+        run: bun install --frozen-lockfile --ignore-scripts --filter @synara/scripts --production
+
       - name: Download all desktop artifacts
         uses: actions/download-artifact@v8
         with:
@@ -691,6 +700,14 @@ jobs:
             release-assets/*.exe
             release-assets/*.blockmap
           )
+          # The pinned compatibility release predates ARM64 Linux and stays on
+          # the x64 trio; its ARM64 feed ships only with the versioned release.
+          pinned_payloads=()
+          for payload in "${payloads[@]}"; do
+            [[ "$payload" == *-arm64.AppImage* ]] && continue
+            pinned_payloads+=("$payload")
+          done
+          payloads=("${pinned_payloads[@]}")
           manifests=(
             "release-assets/${UPDATE_CHANNEL}-mac.yml"
             "release-assets/${UPDATE_CHANNEL}.yml"

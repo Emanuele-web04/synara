@@ -19,7 +19,7 @@ version, release notes and lockfile are final.
   omit these full-suite gates.
 - Builds portable JavaScript once, verifies its source/lockfile/settings and
   output checksums on each consumer, and stages native dependencies per platform.
-- Builds four artifacts in parallel:
+- Builds five artifacts in parallel:
   - macOS `arm64` DMG
   - macOS `x64` DMG, cross-built on the same Apple Silicon runner type as
     `arm64` (the Intel runner took 15-20 minutes for the same work). Every
@@ -27,6 +27,9 @@ version, release notes and lockfile are final.
     job then downloads it and runs the startup smoke on `macos-15-intel`:
     under Rosetta 2 the app took 135 seconds to over 180 seconds to start.
   - Linux `x64` AppImage
+  - Linux `arm64` AppImage on `ubuntu-24.04-arm`. It runs on a native arm64 host
+    because `node-pty` and the patched Cua driver compile for the host, and the
+    arm64 leg fails the release if it cannot build.
   - Windows `x64` NSIS installer
 - Each platform calls `release-platform.yml` with one native job that builds,
   signs/notarizes where required, records verified provenance, runs Defender on
@@ -75,11 +78,19 @@ Backup validation and interrupted-migration recovery apply to both paths.
   - otherwise `GITHUB_REPOSITORY` from GitHub Actions.
 - Required Synara release assets for updater:
   - platform installers (`.exe`, `.dmg`, `.AppImage`, plus macOS `.zip` for Squirrel.Mac update payloads)
-  - `synara-mac.yml`, `synara.yml`, and `synara-linux.yml` metadata
-  - every stable release includes both `synara-mac.yml`, `synara.yml`, `synara-linux.yml` and `latest-mac.yml`, `latest.yml`, `latest-linux.yml`
+  - `synara-mac.yml`, `synara.yml`, and `synara-linux.yml` metadata, plus
+    `synara-linux-arm64.yml` on clean releases: electron-updater appends the
+    architecture to Linux manifest names (x64 keeps `-linux`, arm64 uses
+    `-linux-arm64`), so each Linux architecture owns exactly one feed
+  - every clean-lane stable release includes the `synara*` manifests and the
+    default `latest*` manifests: `latest-mac.yml`, `latest.yml`,
+    `latest-linux.yml`, and `latest-linux-arm64.yml`. The pinned 0.4.x
+    compatibility release stays on the x64 trio because it predates arm64.
+    electron-builder writes the arm64 name itself; the `latest-linux-arm64.yml`
+    fallback is kept beside the channel copy.
   - `*.blockmap` files, except the macOS update ZIP, which uses a full-archive payload
 - Enforced upgrade path:
-  - Stable clean Synara releases are created with `make_latest=true` and carry both six-manifest filenames in the versioned release.
+  - Stable clean Synara releases are created with `make_latest=true` and carry the default `latest*` manifests and the dedicated `synara*` aliases, including the architecture-suffixed arm64 Linux manifest, in the versioned release.
   - The historical 0.4.x compatibility release remains available for predecessor migration and is never overwritten by a clean-lane release.
   - Clean releases do not mirror payloads onto the historical compatibility release, so the 0.4.x line remains immutable.
   - Clean-release publication fails closed if either the default Latest manifests or the dedicated `synara` aliases are missing.
@@ -148,7 +159,7 @@ the smallest platform and stage that can answer the diagnostic question.
 2. Start the workflow in build-only mode:
    - `gh workflow run release.yml --ref BRANCH -f version=X.Y.Z -f publish_release=false`
 3. Wait for `.github/workflows/release.yml` to finish.
-4. Confirm preflight and all four native matrix builds pass.
+4. Confirm preflight and all five native matrix builds pass.
 5. Download the workflow artifacts and sanity-check installation on each OS.
 
 To publish from a manual dispatch instead of a tag push, select the existing
@@ -159,8 +170,10 @@ The public updater repository lookup runs only when publication is enabled;
 build-only validation does not need that GitHub API check.
 
 For one-platform qualification, add `-f platform=mac-arm64`, `mac-x64`,
-`linux-x64`, or `win-x64`. `-f stage=artifact` (the default) still runs quality
-gates, packaging, provenance checks, and isolated startup smoke for that platform.
+`linux-x64`, `linux-arm64`, or `win-x64`. `-f stage=artifact` (the default) still
+runs quality gates, packaging, provenance checks, and isolated startup smoke for
+that platform. `linux-arm64` builds on `ubuntu-24.04-arm`.
+
 For a narrower diagnosis:
 
 ```bash
@@ -545,8 +558,9 @@ full subject distinguished name.
    quality gates, server shards, packaging, verification and publication; use the
    recovery procedure below when a stage fails.
 7. Confirm the versioned release is public with all expected installers, manifests
-   and provenance. Stable must be GitHub Latest and carry all three `latest`
-   manifests plus byte-identical `synara` aliases; Beta must remain a prerelease
+   and provenance. Stable must be GitHub Latest and carry all four `latest`
+   manifests, including `latest-linux-arm64.yml`, plus byte-identical `synara`
+   aliases; Beta must remain a prerelease
    with its own feed. Verify the historical compatibility release is unchanged.
 8. Verify public downloads and the authorized website deployment. Report packaged
    startup proof separately from manual installation, installed-app updates and

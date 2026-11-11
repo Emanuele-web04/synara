@@ -1,7 +1,7 @@
 // FILE: InstallOptions.tsx
 // Purpose: Renders the three platform download cards (macOS / Windows / Linux),
 //          detects the visitor's OS to highlight the recommended one, and lets
-//          Mac users switch between the Apple Silicon and Intel builds.
+//          users switch between the architecture builds per platform.
 // Layer: Client component
 // Depends on: src/lib/platform, src/lib/releases (ReleaseDownloads type), InstallerCount
 
@@ -13,6 +13,8 @@ import { LuArrowDownToLine, LuCheck } from "react-icons/lu";
 import InstallerCount from "@/components/InstallerCount";
 import { detectCurrentOS, detectMacArch, type MacArch, type OS } from "@/lib/platform";
 import type { ReleaseDownloads } from "@/lib/releases";
+
+type CpuArch = "arm64" | "x64";
 
 const OS_LABEL: Record<Exclude<OS, "unknown">, string> = {
   mac: "macOS",
@@ -49,8 +51,11 @@ export default function InstallOptions({
   const detectedArch = useSyncExternalStore(subscribe, getArchSnapshot, () => "arm64" as MacArch);
 
   // User can override the detected Mac architecture via the toggle.
-  const [archOverride, setArchOverride] = useState<MacArch | null>(null);
+  const [archOverride, setArchOverride] = useState<CpuArch | null>(null);
   const arch = archOverride ?? detectedArch;
+  // Browsers do not expose the Linux CPU reliably, so the card starts on the
+  // Intel build and lets ARM users switch explicitly.
+  const [linuxArch, setLinuxArch] = useState<CpuArch>("x64");
 
   const macHref = arch === "arm64" ? downloads.mac.arm64 : downloads.mac.x64;
 
@@ -76,7 +81,12 @@ export default function InstallOptions({
           href={macHref}
           recommended={os === "mac"}
         >
-          <ArchToggle arch={arch} onChange={setArchOverride} />
+          <ArchToggle
+            value={arch}
+            onChange={setArchOverride}
+            options={MAC_ARCH_OPTIONS}
+            label="macOS chip"
+          />
         </PlatformCard>
 
         <PlatformCard
@@ -92,10 +102,17 @@ export default function InstallOptions({
           index={2}
           icon={<FaLinux className="size-6" aria-hidden="true" />}
           name="Linux"
-          subtitle=".AppImage · x86_64"
-          href={downloads.linux}
+          subtitle={`.AppImage · ${linuxArch === "arm64" ? "ARM64" : "x86_64"}`}
+          href={downloads.linux[linuxArch]}
           recommended={os === "linux"}
-        />
+        >
+          <ArchToggle
+            value={linuxArch}
+            onChange={setLinuxArch}
+            options={LINUX_ARCH_OPTIONS}
+            label="Linux architecture"
+          />
+        </PlatformCard>
       </div>
 
       <p className="mt-8 text-[12px] text-[var(--text-tertiary)]">
@@ -176,31 +193,47 @@ function PlatformCard({
   );
 }
 
-const ARCH_OPTIONS = [
+const MAC_ARCH_OPTIONS = [
   { value: "arm64", label: "Apple Silicon" },
   { value: "x64", label: "Intel" },
 ] as const;
 
-function ArchToggle({ arch, onChange }: { arch: MacArch; onChange: (arch: MacArch) => void }) {
-  const activeIndex = arch === "arm64" ? 0 : 1;
+const LINUX_ARCH_OPTIONS = [
+  { value: "x64", label: "x86_64" },
+  { value: "arm64", label: "ARM64" },
+] as const;
+
+function ArchToggle({
+  value,
+  onChange,
+  options,
+  label,
+}: {
+  value: CpuArch;
+  onChange: (arch: CpuArch) => void;
+  options: ReadonlyArray<{ value: CpuArch; label: string }>;
+  label: string;
+}) {
+  const activeIndex = options.findIndex((option) => option.value === value);
 
   return (
     <div
-      className="relative inline-grid grid-cols-2 rounded-full border border-[var(--divide)] p-0.5 text-[12px]"
+      className="relative inline-grid rounded-full border border-[var(--divide)] p-0.5 text-[12px]"
+      style={{ gridTemplateColumns: `repeat(${options.length}, minmax(0, 1fr))` }}
       role="group"
-      aria-label="macOS chip"
+      aria-label={label}
     >
       {/* Dark indicator that slides to the selected segment. */}
       <span
         aria-hidden="true"
         className="pointer-events-none absolute inset-y-0.5 left-0.5 rounded-full bg-[var(--btn-primary-bg)] transition-transform duration-300 ease-out"
         style={{
-          width: "calc((100% - 0.25rem) / 2)",
+          width: `calc((100% - 0.25rem) / ${options.length})`,
           transform: `translateX(${activeIndex * 100}%)`,
         }}
       />
-      {ARCH_OPTIONS.map((option) => {
-        const active = arch === option.value;
+      {options.map((option) => {
+        const active = value === option.value;
         return (
           <button
             key={option.value}
