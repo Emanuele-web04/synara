@@ -452,6 +452,13 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     keywords: "settings:showReasoningEffortAsASliderInTheComposer",
   },
   {
+    target: "setting-rate-limit-warnings",
+    id: "behavior:rate-limit-warnings",
+    section: "behavior",
+    title: "settings:rateLimitWarnings",
+    keywords: "settings:rateLimitWarningsDescription",
+  },
+  {
     target: "setting-automatically-open-simulator",
     id: "behavior:auto-open-simulator",
     section: "behavior",

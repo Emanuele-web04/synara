@@ -552,6 +552,9 @@ function SettingsRouteView() {
     ...(settings.composerEffortSlider !== defaults.composerEffortSlider
       ? ["settings:effortSlider"]
       : []),
+    ...(settings.showRateLimitWarnings !== defaults.showRateLimitWarnings
+      ? ["settings:rateLimitWarnings"]
+      : []),
     ...(settings.messageTrailAudioSource !== defaults.messageTrailAudioSource
       ? ["settings:messageTrailSound"]
       : []),
@@ -1617,6 +1620,15 @@ function SettingsRouteView() {
           description: t("settings:showEffortAsASliderAtTheBottomOf"),
           resetLabel: t("settings:effortSlider2"),
           ariaLabel: t("settings:showEffortSliderInTheComposer"),
+        })}
+
+        {renderBooleanSettingRow({
+          id: "setting-rate-limit-warnings",
+          settingKey: "showRateLimitWarnings",
+          title: "settings:rateLimitWarnings",
+          description: t("settings:rateLimitWarningsDescription"),
+          resetLabel: t("settings:rateLimitWarnings2"),
+          ariaLabel: t("settings:showRateLimitWarnings"),
         })}
 
         {isAudioLevelAvailable() ? (

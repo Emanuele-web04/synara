@@ -1126,7 +1126,8 @@ export default function ChatView({
     [activeRateLimitStatus, activeThread?.id],
   );
   const visibleActiveRateLimitStatus =
-    activeRateLimitBannerDismissalKey === dismissedRateLimitBannerKey
+    activeRateLimitBannerDismissalKey === dismissedRateLimitBannerKey ||
+    (activeRateLimitStatus?.status === "allowed_warning" && !settings.showRateLimitWarnings)
       ? null
       : activeRateLimitStatus;
   const latestTurnSettledByProvider = isLatestTurnSettled(
