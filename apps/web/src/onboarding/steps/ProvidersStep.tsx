@@ -5,33 +5,23 @@
 //          CLIs, and a setup-guide link for missing ones.
 // Layer: Web UI component
 
-import type { ProviderKind, ServerProviderStatus } from "@synara/contracts";
-import { VISIBLE_PROVIDER_DESCRIPTORS } from "../../betaFeatures";
-import { useQuery } from "@tanstack/react-query";
-import { useEffect, useMemo, useRef, useState } from "react";
+import type { ProviderKind } from "@synara/contracts";
+import { useEffect, useRef, useState } from "react";
 
-import { getCustomBinaryPathForProvider, useAppSettings } from "~/appSettings";
 import { ProviderIcon } from "~/components/ProviderIcon";
 import { DisclosureRegion } from "~/components/ui/DisclosureRegion";
 import { Skeleton } from "~/components/ui/skeleton";
 import { StatusDot } from "~/components/ui/status-chip";
 import { Switch } from "~/components/ui/switch";
 import { ChevronRightIcon, RefreshCwIcon, XIcon } from "~/lib/icons";
-import {
-  findProviderStatus,
-  normalizeProviderStatusForLocalConfig,
-} from "~/lib/providerAvailability";
-import { serverConfigQueryOptions } from "~/lib/serverReactQuery";
 import { useTranslation } from "~/i18n";
 import { cn } from "~/lib/utils";
-import { isProviderKind } from "~/providerOrdering";
 import { useWorkspacePathsStore } from "~/workspacePathsStore";
-import { classifyProviderSetup, summarizeProviderSetup, type ProviderSetupState } from "../logic";
+import type { ProviderSetupState } from "../logic";
 import type { ProviderDetection } from "../useProviderDetection";
+import type { ProviderSetup } from "../useProviderSetup";
 import { ONBOARDING_LIVE_COLOR } from "../stage/stageTokens";
 import { ProviderConnectTerminal } from "./ProviderConnectTerminal";
-
-const EMPTY_STATUSES: readonly ServerProviderStatus[] = [];
 
 /** Status as a dot + word; the dot carries the colour, the copy stays muted. */
 const STATE_PRESENTATION: Record<ProviderSetupState, { label: string; dotClassName: string }> = {
@@ -46,87 +36,15 @@ const STATE_PRESENTATION: Record<ProviderSetupState, { label: string; dotClassNa
 const CELL_ACTION_CLASS_NAME =
   "inline-flex cursor-pointer items-center gap-0.5 text-ui-sm transition-opacity hover:opacity-75 motion-reduce:transition-none";
 
-/**
- * Raw detection statuses with custom-binary overrides applied but *without* folding the
- * disabled flag in: this step must keep showing "installed" for a provider the user just
- * unchecked, otherwise the card appears to lose its CLI.
- */
-function useDetectedProviderStatuses(): readonly ServerProviderStatus[] {
-  const { settings } = useAppSettings();
-  const serverConfigQuery = useQuery(serverConfigQueryOptions());
-  const providers = serverConfigQuery.data?.providers ?? EMPTY_STATUSES;
-  return useMemo(
-    () =>
-      providers.flatMap((status) => {
-        const provider = status.driver ?? status.provider;
-        if (!isProviderKind(provider) || (status.instanceId ?? status.provider) !== provider) {
-          return [];
-        }
-        const normalized = normalizeProviderStatusForLocalConfig({
-          provider,
-          status,
-          customBinaryPath: getCustomBinaryPathForProvider(settings, provider),
-        });
-        return normalized ? [normalized] : [];
-      }),
-    [providers, settings],
-  );
-}
-
-/**
- * Optimistic disabled-provider selection. `disabledProviders` is server-owned and is not
- * applied to local settings until the round-trip completes, so deriving each write from
- * `settings.disabledProviders` would let a second toggle rebuild the list without the
- * first change. Every write instead comes from this draft, and the draft only resyncs
- * from the server once no write is in flight (e.g. after a failed request is rolled back).
- */
-function useDisabledProvidersDraft(): {
-  readonly disabled: ReadonlySet<ProviderKind>;
-  readonly setProviderDisabled: (provider: ProviderKind, disabled: boolean) => void;
-} {
-  const { settings, updateSettingsAndWait } = useAppSettings();
-  const [draft, setDraft] = useState<ReadonlySet<ProviderKind>>(
-    () => new Set(settings.disabledProviders),
-  );
-  const draftRef = useRef(draft);
-  // State, not a ref: a rejected write refetches settings *before* the count drops, so the
-  // resync must run again once the final write settles or the draft would stay rolled
-  // forward on the rejected value.
-  const [pendingWrites, setPendingWrites] = useState(0);
-  const serverDisabledProviders = settings.disabledProviders;
-
-  useEffect(() => {
-    if (pendingWrites > 0) return;
-    const next = new Set(serverDisabledProviders);
-    draftRef.current = next;
-    setDraft(next);
-  }, [pendingWrites, serverDisabledProviders]);
-
-  const setProviderDisabled = (provider: ProviderKind, disabled: boolean) => {
-    const next = new Set(draftRef.current);
-    if (disabled) {
-      next.add(provider);
-    } else {
-      next.delete(provider);
-    }
-    draftRef.current = next;
-    setDraft(next);
-    setPendingWrites((count) => count + 1);
-    void updateSettingsAndWait({ disabledProviders: [...next] }).finally(() => {
-      setPendingWrites((count) => count - 1);
-    });
-  };
-
-  return { disabled: draft, setProviderDisabled };
-}
-
-export function ProvidersStep(props: { readonly detection: ProviderDetection }) {
+export function ProvidersStep(props: {
+  readonly detection: ProviderDetection;
+  readonly setup: ProviderSetup;
+}) {
   const { t } = useTranslation();
   const { detection } = props;
-  const statuses = useDetectedProviderStatuses();
+  const { rows, summary, setProviderDisabled } = props.setup;
   const homeDir = useWorkspacePathsStore((store) => store.homeDir);
   const [connectingProvider, setConnectingProvider] = useState<ProviderKind | null>(null);
-  const { disabled: disabledSet, setProviderDisabled } = useDisabledProvidersDraft();
 
   // Probe once on entry so a CLI installed while the intro was open shows up.
   const refreshedOnEntryRef = useRef(false);
@@ -136,19 +54,6 @@ export function ProvidersStep(props: { readonly detection: ProviderDetection }) 
     void detection.detect({ silent: true });
   }, [detection]);
 
-  const rows = VISIBLE_PROVIDER_DESCRIPTORS.map((descriptor) => {
-    const status = findProviderStatus(statuses, descriptor.kind);
-    const state = classifyProviderSetup({
-      status,
-      disabled: disabledSet.has(descriptor.kind),
-      detecting: detection.detecting,
-      detectionFailed: detection.failed,
-    });
-    return { descriptor, status, state };
-  });
-  const summary = summarizeProviderSetup(
-    rows.map((row) => ({ provider: row.descriptor.kind, state: row.state })),
-  );
   const connecting = connectingProvider
     ? rows.find((row) => row.descriptor.kind === connectingProvider)
     : undefined;
