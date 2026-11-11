@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { createServer, type RequestListener } from "node:http";
 import { generateKeyPair, SignJWT } from "jose";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { WorkosApiConfig } from "../config";
@@ -267,14 +268,15 @@ describe("issuer discovery", () => {
     expect(discoveries).toHaveLength(1);
   });
 
-  it("throws naming the discovery URL when the metadata cannot be loaded", async () => {
+  it("classifies unavailable discovery metadata as a provider fault", async () => {
     // An unroutable origin: without a trusted issuer there is nothing safe to
     // fall back to, so verification must fail loudly rather than relax.
     const auth = createWorkosAuth(workos.config({ workosApiUrl: "http://127.0.0.1:1" }));
     const token = await workos.signAccessToken({ sub: "user_123", sid: "session_456" });
-    await expect(auth.verifyAccessToken(token)).rejects.toThrow(
-      `http://127.0.0.1:1/user_management/${workos.clientId}/.well-known/openid-configuration`,
-    );
+    await expect(auth.verifyAccessToken(token)).rejects.toMatchObject({
+      name: "IdentityProviderError",
+      status: 503,
+    });
   });
 
   // A stalled connection would otherwise wedge every verification behind a
@@ -657,46 +659,115 @@ it("revokes the verified session across refresh rotations without ending other s
   });
 });
 
-describe("refreshTokens classification", () => {
-  /** A stand-in that answers the refresh grant with a fixed response. */
-  async function refreshAgainst(status: number, body: unknown) {
-    const { serve } = await import("@hono/node-server");
-    const { Hono } = await import("hono");
-    const app = new Hono();
-    app.post("/user_management/authenticate", (c) => c.json(body as object, status as 400));
-    const server = serve({ fetch: app.fetch, port: 0 });
+describe("refreshTokens", () => {
+  async function withRefreshServer<A>(
+    respond: RequestListener,
+    exercise: (auth: ReturnType<typeof createWorkosAuth>) => Promise<A>,
+    options?: Pick<WorkosApiConfig, "workosGrantTimeoutMs">,
+  ): Promise<A> {
+    const server = createServer(respond).listen(0, "127.0.0.1");
     try {
-      const address = server.address();
-      if (!address || typeof address === "string") throw new Error("failed to bind");
-      const auth = createWorkosAuth(
-        workos.config({ workosApiUrl: `http://127.0.0.1:${address.port}` }),
+      const port = await boundPort(server);
+      return await exercise(
+        createWorkosAuth(workos.config({ ...options, workosApiUrl: `http://127.0.0.1:${port}` })),
       );
-      return await auth.refreshTokens({ refreshToken: "rt_test" }).catch((error: unknown) => error);
     } finally {
       server.close();
+      server.closeAllConnections();
     }
+  }
+
+  async function refreshAgainst(status: number, body: unknown) {
+    const respond = vi.fn<RequestListener>((_request, response) => {
+      response.writeHead(status, { "content-type": "application/json" }).end(JSON.stringify(body));
+    });
+    const error = await withRefreshServer(respond, (auth) =>
+      auth.refreshTokens({ refreshToken: "rt_test" }).catch((error: unknown) => error),
+    );
+    return { error, attempts: respond.mock.calls.length };
   }
 
   // Only the allowlisted OAuth refusal is terminal: HTTP 400 invalid_grant.
   it("classifies 400 invalid_grant as a terminal refusal", async () => {
-    const caught = await refreshAgainst(400, {
+    const { error, attempts } = await refreshAgainst(400, {
       error: "invalid_grant",
       error_description: "Refresh token is invalid or spent",
     });
-    expect(caught).toMatchObject({ name: "RefreshRejectedError" });
+    expect(error).toMatchObject({ name: "RefreshRejectedError" });
+    expect(attempts).toBe(1);
   });
 
-  // 408, 429, other 4xx shapes, and 5xx say nothing about the token: they
-  // must surface as provider faults, never clear a stored session.
   it.each([
-    [408, { message: "timeout" }],
-    [429, { message: "slow down" }],
-    [400, { error: "invalid_request", error_description: "malformed" }],
-    [403, { message: "forbidden" }],
-    [502, { message: "bad gateway" }],
-  ])("keeps %i (non-invalid_grant) a retryable provider fault", async (status, body) => {
-    const caught = await refreshAgainst(status, body);
-    expect(caught).toMatchObject({ name: "IdentityProviderError", status });
+    [408, 2, { message: "timeout" }],
+    [429, 2, { message: "slow down" }],
+    [400, 1, { error: "invalid_request", error_description: "malformed" }],
+    [403, 1, { message: "forbidden" }],
+    [502, 2, { message: "bad gateway" }],
+  ])("surfaces provider status %i after %i attempts", async (status, attempts, body) => {
+    await expect(refreshAgainst(status, body)).resolves.toMatchObject({
+      attempts,
+      error: { name: "IdentityProviderError", status },
+    });
+  });
+
+  it("recovers the original rotated pair after the provider response is interrupted", async () => {
+    const requests: string[] = [];
+    let minted: string | undefined;
+    const pair = {
+      access_token: "access_rotated",
+      refresh_token: "refresh_rotated",
+      user: { id: "user_1", email: "ada@example.com" },
+      organization_id: "org_1",
+    };
+    const tokens = await withRefreshServer(
+      (request, response) => {
+        let body = "";
+        request.setEncoding("utf8");
+        request.on("data", (chunk: string) => {
+          body += chunk;
+        });
+        request.on("end", () => {
+          requests.push(body);
+          if (!minted) {
+            minted = JSON.stringify(pair);
+            response.writeHead(200, { "content-type": "application/json" });
+            response.write(minted.slice(0, 8), () => response.destroy());
+            return;
+          }
+          if (body !== requests[0]) {
+            response.writeHead(400).end(JSON.stringify({ error: "invalid_grant" }));
+            return;
+          }
+          response.writeHead(200, { "content-type": "application/json" }).end(minted);
+        });
+      },
+      (auth) => auth.refreshTokens({ refreshToken: "refresh_initial", organizationId: "org_1" }),
+    );
+
+    expect(requests).toHaveLength(2);
+    expect(tokens).toMatchObject({
+      accessToken: "access_rotated",
+      refreshToken: "refresh_rotated",
+      organizationId: "org_1",
+    });
+  });
+
+  it("bounds response-body reads and stops when the configured refresh deadline is exhausted", async () => {
+    const respond = vi.fn<RequestListener>((_request, response) => {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.write('{"access_token":');
+    });
+    await withRefreshServer(
+      respond,
+      async (auth) => {
+        await expect(auth.refreshTokens({ refreshToken: "rt_test" })).rejects.toMatchObject({
+          name: "IdentityProviderError",
+          status: 504,
+        });
+      },
+      { workosGrantTimeoutMs: 500 },
+    );
+    expect(respond).toHaveBeenCalledTimes(1);
   });
 });
 

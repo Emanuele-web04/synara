@@ -125,6 +125,9 @@ export function useDeviceVideoStream(input: {
     let disposed = false;
     let reconnectAttempts = 0;
     let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+    let pendingFrame: VideoFrame | null = null;
+    let paintRequest: number | null = null;
+    let streaming = false;
 
     const openFrameSource = () =>
       createDeviceFrameSource({
@@ -146,7 +149,11 @@ export function useDeviceVideoStream(input: {
 
     setStatus({ kind: "connecting" });
 
-    const paint = (videoFrame: VideoFrame) => {
+    const paint = () => {
+      paintRequest = null;
+      const videoFrame = pendingFrame;
+      pendingFrame = null;
+      if (!videoFrame) return;
       try {
         const canvas = canvasRef.current;
         if (!canvas || !isCurrent()) return;
@@ -159,7 +166,10 @@ export function useDeviceVideoStream(input: {
         }
         const context = canvas.getContext("2d");
         context?.drawImage(videoFrame, 0, 0);
-        setStatus((previous) => (previous.kind === "streaming" ? previous : { kind: "streaming" }));
+        if (!streaming) {
+          streaming = true;
+          setStatus({ kind: "streaming" });
+        }
       } finally {
         // VideoFrame holds a GPU buffer; failing to close it stalls the decoder
         // within a few frames.
@@ -168,6 +178,10 @@ export function useDeviceVideoStream(input: {
     };
 
     const teardownDecoder = () => {
+      if (paintRequest !== null) cancelAnimationFrame(paintRequest);
+      paintRequest = null;
+      pendingFrame?.close();
+      pendingFrame = null;
       // Parameter sets belong to the decoder being torn down; carrying them into
       // the next one would prepend a stale SPS/PPS to its first keyframe.
       pendingParameterSets = null;
@@ -186,6 +200,7 @@ export function useDeviceVideoStream(input: {
       if (!isCurrent() || disposed) return;
       teardownDecoder();
       gate = createDeviceFrameGateState();
+      streaming = false;
       setStatus({ kind: "error", message });
     };
 
@@ -202,15 +217,20 @@ export function useDeviceVideoStream(input: {
         return;
       }
       teardownDecoder();
-      const next = new VideoDecoder({
+      const next: VideoDecoder = new VideoDecoder({
         output: (videoFrame) => {
-          if (!isCurrent() || disposed) {
+          if (decoder !== next || !isCurrent() || disposed) {
             videoFrame.close();
             return;
           }
-          paint(videoFrame);
+          // Decoding can catch up in a burst. Only the newest output can be
+          // displayed at the next browser paint; release superseded GPU buffers.
+          pendingFrame?.close();
+          pendingFrame = videoFrame;
+          paintRequest ??= requestAnimationFrame(paint);
         },
         error: (error) => {
+          if (decoder !== next || !isCurrent() || disposed) return;
           // A decoder error is recoverable: asking the server to rebuild the
           // capture session yields fresh parameter sets and an IDR, which
           // reconfigures this decoder rather than waiting out the encoder's
@@ -219,6 +239,7 @@ export function useDeviceVideoStream(input: {
           source?.requestResync();
         },
       });
+      decoder = next;
       try {
         // No `description`: omitting it selects Annex-B, matching what the
         // helper writes out of VideoToolbox. Supplying one would switch the
@@ -230,7 +251,6 @@ export function useDeviceVideoStream(input: {
         );
         return;
       }
-      decoder = next;
       // Carried, not decoded: the next keyframe is sent with these bytes in
       // front of it so the decoder sees SPS/PPS and an IDR in one chunk.
       pendingParameterSets = frame.payload.slice();
@@ -286,6 +306,7 @@ export function useDeviceVideoStream(input: {
       if (!isCurrent() || disposed || paused) return;
       teardownDecoder();
       gate = createDeviceFrameGateState();
+      streaming = false;
       if (reason === "closed") {
         setStatus({ kind: "connecting" });
         // A frame source is single-use, so a socket that closes under a still

@@ -1,9 +1,12 @@
 import { assert, it } from "@effect/vitest";
+import type { ServerProviderStatus } from "@synara/contracts";
 import { Effect } from "effect";
 import { vi } from "vitest";
 
 import { AuthError } from "./auth/Services/ServerAuth";
 import { RemoteSessionRegistry } from "./remoteSessions/sessionRegistry";
+import { CurrentWsSessionRole } from "./wsConnectionSessions";
+import { projectProviderStatusesForWsSession } from "./wsOwnerOnly";
 import {
   authenticateRpcWebSocketUpgrade,
   authorizeDeviceFrameWebSocketUpgrade,
@@ -14,6 +17,31 @@ it("reserves external MCP management for owner sessions", () => {
   assert.isTrue(canManageExternalMcp("owner"));
   assert.isFalse(canManageExternalMcp("client"));
 });
+
+it.effect("reserves provider account labels for owner sessions", () =>
+  Effect.gen(function* () {
+    const readiness = {
+      provider: "claudeAgent",
+      instanceId: "claudeAgent",
+      driver: "claudeAgent",
+      status: "ready",
+      available: true,
+      authStatus: "authenticated",
+      authType: "max",
+      checkedAt: "2026-04-15T10:00:00.000Z",
+    } satisfies ServerProviderStatus;
+    const status = { ...readiness, accountEmail: "work@example.com", accountOrganization: "Org" };
+    const project = projectProviderStatusesForWsSession([status]);
+
+    assert.deepEqual(yield* project.pipe(Effect.provideService(CurrentWsSessionRole, "owner")), [
+      status,
+    ]);
+    assert.deepEqual(yield* project.pipe(Effect.provideService(CurrentWsSessionRole, "client")), [
+      readiness,
+    ]);
+    assert.deepEqual(yield* project, [readiness]);
+  }),
+);
 
 it.effect(
   "requires positive local-token proof when a paid policy is known, even with a browser cookie",

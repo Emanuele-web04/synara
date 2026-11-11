@@ -1005,6 +1005,7 @@
   "removePastedText": "Remove pasted text ({{countLabel}})",
   "rateLimitReachedNoReset": "Rate limit reached.",
   "rateLimitReachedReset": "Rate limit reached. Resets at {{resetAt}}.",
+  "checkpointBaselineUnavailable": "Checkpoint diff and file Undo unavailable for this turn.",
   "rateLimitApproaching": "Approaching rate limit.",
   "rateLimitApproachingReset": "Approaching rate limit. Resets at {{resetAt}}.",
   "rateLimitApproachingUsage": "Approaching rate limit ({{usage}} used).",

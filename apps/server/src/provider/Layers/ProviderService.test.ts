@@ -11278,6 +11278,135 @@ providerDisabledAfterInitialCheck.layer("ProviderServiceLive enablement race", (
 });
 
 const boundedFanout = makeProviderServiceLayer({ runtimeEventBufferCapacity: 1 });
+it.effect.each(["matching exit", "missing parent exit"] as const)(
+  "ProviderServiceLive drains queued active-session events at shutdown (%s)",
+  (exitOutcome) =>
+    Effect.gen(function* () {
+      const scope = yield* Scope.make("sequential");
+      const writing = yield* Deferred.make<void>();
+      const releaseWrite = yield* Deferred.make<void>();
+      const exitQueued = yield* Deferred.make<void>();
+      const threadId = asThreadId("thread-shutdown-terminal-event");
+      const firstId = asEventId("shutdown-in-flight-event");
+      const completedId = asEventId("shutdown-queued-completion");
+      const exitId = asEventId("shutdown-queued-exit");
+      const childExitId = asEventId("shutdown-child-exit");
+      const accepted: ProviderRuntimeEvent[] = [];
+      const shutdown = makeProviderServiceLayer({
+        persistRuntimeEvent: (event) =>
+          (event.eventId === firstId
+            ? Deferred.succeed(writing, undefined).pipe(
+                Effect.andThen(Deferred.await(releaseWrite)),
+              )
+            : Effect.void
+          ).pipe(
+            Effect.andThen(
+              Effect.sync(() => {
+                accepted.push(event);
+                return { sequence: accepted.length, event };
+              }),
+            ),
+          ),
+      });
+
+      yield* Effect.gen(function* () {
+        const services = yield* Layer.buildWithScope(shutdown.rawLayer, scope);
+        const provider = yield* Effect.service(ProviderService).pipe(Effect.provide(services));
+        const directory = yield* Effect.service(ProviderSessionDirectory).pipe(
+          Effect.provide(services),
+        );
+        yield* provider.startSession(threadId, {
+          provider: "codex",
+          threadId,
+          runtimeMode: "full-access",
+        });
+        const sent = yield* provider.sendTurn({ threadId, input: "continue the work" });
+        // The native provider has already finished and reports ready, but
+        // the blocked journal still makes its projection look active.
+        shutdown.codex.updateSession(threadId, (session) => ({ ...session, status: "ready" }));
+        yield* shutdown.codex.waitForRuntimeSubscribers();
+        const binding = Option.getOrThrow(yield* directory.getBinding(threadId));
+        const event = {
+          eventId: firstId,
+          provider: "codex" as const,
+          createdAt: new Date().toISOString(),
+          threadId,
+          lifecycleGeneration: binding.lifecycleGeneration,
+        };
+        shutdown.codex.emit({ ...event, type: "turn.started", turnId: sent.turnId });
+        yield* Deferred.await(writing);
+        if (exitOutcome === "matching exit") {
+          shutdown.codex.emit({
+            ...event,
+            eventId: completedId,
+            type: "turn.completed",
+            turnId: sent.turnId,
+            payload: { state: "completed" },
+          });
+        }
+        shutdown.codex.stopAll.mockImplementationOnce(() =>
+          shutdown.codex.stopSession(threadId).pipe(
+            Effect.tap(() =>
+              Effect.sync(() => {
+                const terminal = {
+                  ...event,
+                  type: "session.exited" as const,
+                  payload: { reason: "Session stopped", exitKind: "graceful" as const },
+                };
+                shutdown.codex.emit({
+                  ...terminal,
+                  eventId: asEventId("shutdown-stale-exit"),
+                  lifecycleGeneration: "retired-provider-generation",
+                });
+                if (exitOutcome === "matching exit") {
+                  shutdown.codex.emit({ ...terminal, eventId: exitId });
+                } else {
+                  shutdown.codex.emit({
+                    ...terminal,
+                    eventId: childExitId,
+                    providerRefs: {
+                      providerThreadId: "native-child",
+                      providerParentThreadId: "native-parent",
+                    },
+                  });
+                }
+              }),
+            ),
+            Effect.andThen(Deferred.succeed(exitQueued, undefined)),
+            Effect.asVoid,
+          ),
+        );
+        const closing = yield* provider.closeRuntimeEvents.pipe(Effect.forkChild);
+        yield* Deferred.await(exitQueued);
+        yield* waitUntilEffect(() =>
+          directory
+            .getBinding(threadId)
+            .pipe(Effect.map((row) => Option.isSome(row) && row.value.status === "stopped")),
+        );
+        // Teardown is complete; the journal still owns its blocked first event.
+        yield* sleep(20);
+        yield* Deferred.succeed(releaseWrite, undefined);
+        if (exitOutcome === "missing parent exit") {
+          yield* waitUntil(() => accepted.length === 2);
+          yield* sleep(20);
+          assert.isUndefined(closing.pollUnsafe());
+        }
+        const closedWithinBudget = yield* Effect.raceFirst(
+          Fiber.join(closing).pipe(Effect.as(true)),
+          sleep(1_500).pipe(Effect.as(false)),
+        );
+        assert.isTrue(closedWithinBudget);
+        assert.deepEqual(
+          accepted.map((event) => event.eventId),
+          exitOutcome === "matching exit" ? [firstId, completedId, exitId] : [firstId, childExitId],
+        );
+      }).pipe(
+        Effect.ensuring(Deferred.succeed(releaseWrite, undefined).pipe(Effect.asVoid)),
+        Effect.ensuring(Scope.close(scope, Exit.void)),
+      );
+    }),
+);
+
 it.effect("ProviderServiceLive starts independent provider teardown concurrently", () =>
   Effect.gen(function* () {
     const shutdown = makeProviderServiceLayer();

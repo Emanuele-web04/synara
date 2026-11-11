@@ -82,6 +82,7 @@ type QueuedComposerDispatchFn = (input: {
   dispatchMode: "queue" | "steer";
   assistantDeliveryMode: AssistantDeliveryMode;
   messageId?: MessageId;
+  onReconciledMessage?: (messageId: MessageId) => void;
 }) => Promise<boolean>;
 
 const claimedThreadIds = new Set<ThreadId>();
@@ -646,17 +647,24 @@ function runQueuedComposerDrainPass(): void {
     void runLockedQueuedComposerAutoDispatch({
       threadId,
       run: async () => {
+        let acknowledgedMessageId = messageId;
         const succeeded = await dispatchQueuedTurn({
           threadId,
           queuedTurn: nextQueuedTurn,
           dispatchMode: "queue",
           assistantDeliveryMode,
           messageId,
+          onReconciledMessage: (id) => {
+            acknowledgedMessageId = id;
+          },
         });
         const acceptedReview = getThreadFromState(useStore.getState(), threadId)?.claudeCacheReview;
         if (succeeded || acceptedReview?.messageId === messageId) {
           retryStateByThreadId.delete(threadId);
-          awaitingTurnStartsByThreadId.set(threadId, localDispatch);
+          awaitingTurnStartsByThreadId.set(threadId, {
+            ...localDispatch,
+            expectedUserMessageId: acknowledgedMessageId,
+          });
           useComposerDraftStore.getState().removeQueuedTurn(threadId, nextQueuedTurn.id);
           return;
         }

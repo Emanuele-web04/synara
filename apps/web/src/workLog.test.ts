@@ -432,7 +432,7 @@ describe("deriveWorkLogEntries", () => {
     expect(entries[0]?.userInputExchange).toBeUndefined();
   });
 
-  it("keeps skipped baseline feedback visible before a provider turn id exists", () => {
+  it("keeps checkpoint status out of tool history before a provider turn id exists", () => {
     const activities: OrchestrationThreadActivity[] = [
       {
         ...makeActivity({
@@ -456,15 +456,29 @@ describe("deriveWorkLogEntries", () => {
     const entries = deriveWorkLogEntries(activities, TurnId.makeUnsafe("visible-turn"), {
       visibleTurnIds: new Set([TurnId.makeUnsafe("visible-turn")]),
     });
-    expect(entries).toHaveLength(1);
-    expect(entries[0]).toMatchObject({
-      id: "baseline-skipped",
-      activityKind: "checkpoint.baseline.skipped",
+    expect(entries).toEqual([]);
+    expect(deriveTimelineEntries([], [], entries)).toEqual([]);
+    expect(
+      deriveWorkLogEntries(activities, TurnId.makeUnsafe("visible-turn"), {
+        visibleTurnIds: new Set([TurnId.makeUnsafe("visible-turn")]),
+        keepMissingCheckpointNotices: true,
+      }),
+    ).toMatchObject([{ id: "baseline-skipped" }]);
+  });
+
+  it("preserves Hub-only preparation failures independently of the checkpoint baseline", () => {
+    const activity = makeActivity({
+      id: "hub-baseline-skipped",
+      kind: "checkpoint.baseline.skipped",
       tone: "info",
+      summary: "Turn continued without Hub baseline",
+      payload: { checkpointBaseline: "captured", studioPreparation: "unavailable" },
     });
-    const timeline = deriveTimelineEntries([], [], entries);
-    expect(timeline).toHaveLength(1);
-    expect(timeline[0]?.kind).toBe("work");
+    const turnId = TurnId.makeUnsafe("visible-turn");
+    const entries = deriveWorkLogEntries([activity], turnId, {
+      visibleTurnIds: new Set([turnId]),
+    });
+    expect(entries).toMatchObject([{ id: "hub-baseline-skipped" }]);
   });
 
   it("reuses unchanged entry objects across passes over the same activities", () => {
@@ -2289,6 +2303,48 @@ describe("deriveWorkLogEntries", () => {
       label: "Permission denied opening the working directory",
       detail: "Permission denied opening the working directory",
     });
+  });
+
+  it("omits approaching-limit and Codex unstable-feature notices while retaining blocked limits and failures", () => {
+    const entries = deriveWorkLogEntries(
+      [
+        makeActivity({
+          id: "approaching",
+          kind: "account.rate-limited",
+          payload: { status: "allowed_warning" },
+        }),
+        makeActivity({
+          id: "unstable",
+          kind: "runtime.warning",
+          payload: {
+            message:
+              "Under-development features enabled: default_mode_request_user_input. Under-development features are incomplete and may behave unpredictably. To suppress this warning, set `suppress_unstable_features_warning = true` in /tmp/codex/config.toml.",
+            nativeEventType: "codex.warning",
+          },
+        }),
+        makeActivity({
+          id: "blocked",
+          kind: "account.rate-limited",
+          tone: "error",
+          payload: { status: "rejected" },
+        }),
+        makeActivity({ id: "checkpoint-failed", kind: "checkpoint.capture.failed", tone: "error" }),
+        makeActivity({
+          id: "real-warning",
+          kind: "runtime.warning",
+          payload: {
+            message: "Cannot parse config.toml: invalid TOML",
+            nativeEventType: "codex.warning",
+          },
+        }),
+      ],
+      undefined,
+    );
+    expect(entries.map((entry) => entry.id)).toEqual([
+      "blocked",
+      "checkpoint-failed",
+      "real-warning",
+    ]);
   });
 
   it("shows runtime warning messages and collapses repeated identical warning rows", () => {
@@ -6263,13 +6319,7 @@ describe("deriveTimelineEntries", () => {
       [],
       workEntries,
     );
-    expect(entries.map((entry) => entry.id)).toEqual([
-      "request",
-      "answer",
-      "tool",
-      "final-answer",
-      "baseline-skipped",
-    ]);
+    expect(entries.map((entry) => entry.id)).toEqual(["request", "answer", "tool", "final-answer"]);
   });
 
   it("keeps timestamp ties in message, proposed-plan, then work order", () => {

@@ -2,7 +2,10 @@ import { ProjectId, ThreadId } from "@synara/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { useComposerDraftStore } from "../composerDraftStore";
-import { resetComposerDraftStore } from "../composerDraftStoreTestFixtures";
+import {
+  resetComposerDraftStore,
+  stubComposerDraftBrowserStorage,
+} from "../composerDraftStoreTestFixtures";
 import { buildKanbanComposerDraftSnapshot } from "../components/kanban/kanban.logic";
 import { createPastedTextDraft } from "./composerPastedText";
 import {
@@ -89,6 +92,9 @@ vi.mock("./composerSend", async () => {
 function commandType(command: unknown): string {
   return (command as { type?: string }).type ?? "";
 }
+
+beforeEach(stubComposerDraftBrowserStorage);
+afterEach(() => vi.unstubAllGlobals());
 
 describe("kanbanDispatch failure preserves the prompt", () => {
   beforeEach(() => {

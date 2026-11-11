@@ -881,6 +881,7 @@ export function createWsNativeApi(): NativeApi {
       getProfileTokenStats: (input) =>
         executionRequest(WS_METHODS.statsGetProfileTokenStats, input),
       getRecap: (input) => executionRequest(WS_METHODS.statsGetRecap, input),
+      getUsageAnalytics: (input) => executionRequest(WS_METHODS.statsGetUsageAnalytics, input),
     },
     provider: {
       getComposerCapabilities: (input) =>
@@ -908,6 +909,8 @@ export function createWsNativeApi(): NativeApi {
           command: omitNullUserInputAnswers(command),
         });
       },
+      settleTurnDispatch: (input) =>
+        executionRequest(ORCHESTRATION_WS_METHODS.settleTurnDispatch, input),
       importThread: (input) => executionRequest(ORCHESTRATION_WS_METHODS.importThread, input),
       listProjectImports: (input) =>
         executionRequest(ORCHESTRATION_WS_METHODS.listProjectImports, input),

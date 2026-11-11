@@ -19,6 +19,14 @@ export function isIgnorableCodexProcessLine(line: string): boolean {
   return !line || /^(?:\^C)?Token usage:/i.test(line);
 }
 
+// This startup notice describes opt-in configuration, not a failure of the task.
+export function isCodexUnstableFeaturesWarning(message: string): boolean {
+  return (
+    message.trimStart().startsWith("Under-development features enabled:") &&
+    message.includes("suppress_unstable_features_warning = true")
+  );
+}
+
 // Require a complete log envelope; arbitrary JSON and malformed output remain visible.
 function readLog(line: string): { level: string; target: string; message: string } | undefined {
   const match = LOG_LINE.exec(line);
@@ -58,6 +66,7 @@ export function classifyCodexStderr(
   line = normalizeCodexProcessLine(line);
   if (isIgnorableCodexProcessLine(line)) return null;
   const log = readLog(line);
+  if (isCodexUnstableFeaturesWarning(log?.message ?? line)) return null;
   if (log) {
     // The overlay already loads these settings at user level. Codex can rediscover
     // the source file as a project config; only that duplicate notice is harmless.

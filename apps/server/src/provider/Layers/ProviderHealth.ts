@@ -87,8 +87,10 @@ import {
 import {
   claudeAuthMetadata,
   isStructuredClaudeAuthFalseNegativeCandidate,
+  parseClaudeAccountIdentityFromOutput,
   parseClaudeAuthStatusFromOutput,
 } from "../claudeAuthStatus";
+import { codexAccountIdentityFromAuthRecord } from "../codexAccountIdentity";
 import { acquireClaudeAuthStatusLock } from "../claudeAuthStatusLock";
 import { loadClaudeAgentSdk } from "../claudeAgentSdk.ts";
 import { buildClaudeProcessEnv, readClaudeCliCredentialsSummary } from "../claudeProcessEnv";
@@ -107,6 +109,7 @@ import {
   orderProviderStatuses,
   readProviderStatusCache,
   resolveProviderStatusCachePath,
+  withoutProviderAccountIdentity,
   writeProviderStatusCache,
 } from "../providerStatusCache";
 import { makeProviderMaintenanceCommandCoordinator } from "../providerMaintenanceCommandCoordinator";
@@ -122,7 +125,10 @@ import {
 } from "../providerMaintenance";
 import { isClaudeAutoModeCliVersionSupported } from "../claudeCliVersion.ts";
 import { collectUint8StreamText } from "../../stream/collectUint8StreamText";
-import { buildCodexProcessEnv } from "../../codexProcessEnv.ts";
+import {
+  buildCodexProcessEnv,
+  readEffectiveCodexAuthCredentialsStoreMode,
+} from "../../codexProcessEnv.ts";
 import { readGrokCachedLogin } from "../../providerUsage/providers/grok";
 import {
   buildProviderProcessEnv,
@@ -511,9 +517,18 @@ function codexAccountAuthLabel(input: {
   }
 }
 
-function extractCodexAccountTypeFromOutput(result: CommandResult): string | undefined {
+const CODEX_CHATGPT_LOGIN = /^logged in using chatgpt\s*$/m;
+const CODEX_API_KEY_LOGIN = /^logged in using an api key\b/m;
+
+function extractCodexAccountTypeFromOutput(
+  result: CommandResult,
+): "apiKey" | "chatgpt" | undefined {
   const parsed = decodeUnknownJson(result.stdout.trim());
-  if (Result.isFailure(parsed)) return undefined;
+  if (Result.isFailure(parsed)) {
+    const output = `${result.stdout}\n${result.stderr}`.toLowerCase();
+    if (CODEX_API_KEY_LOGIN.test(output)) return "apiKey";
+    return CODEX_CHATGPT_LOGIN.test(output) ? "chatgpt" : undefined;
+  }
   const walk = (value: unknown): string | undefined => {
     if (Array.isArray(value)) {
       for (const entry of value) {
@@ -534,7 +549,14 @@ function extractCodexAccountTypeFromOutput(result: CommandResult): string | unde
     }
     return undefined;
   };
-  return walk(parsed.success);
+  const reportedTypes = [walk(parsed.success), extractAuthMethod(parsed.success)].map((type) =>
+    type?.toLowerCase().replace(/[\s_-]+/g, ""),
+  );
+  if (reportedTypes.includes("apikey")) return "apiKey";
+  if (reportedTypes.includes("chatgpt") || reportedTypes.includes("chatgptauthtokens")) {
+    return "chatgpt";
+  }
+  return undefined;
 }
 
 // ── Claude SDK capability probe ─────────────────────────────────────
@@ -730,9 +752,9 @@ export function parseAuthStatusFromOutput(result: CommandResult): {
     // Current Codex CLI prints login status as plain text (on stderr), not JSON.
     // Only explicit login methods establish voice capability; unknown successful
     // output remains authenticated without advertising ChatGPT-only dictation.
-    const voiceTranscriptionAvailable = /^logged in using chatgpt\s*$/m.test(lowerOutput)
+    const voiceTranscriptionAvailable = CODEX_CHATGPT_LOGIN.test(lowerOutput)
       ? true
-      : /^logged in using an api key\b/m.test(lowerOutput)
+      : CODEX_API_KEY_LOGIN.test(lowerOutput)
         ? false
         : undefined;
     return {
@@ -1113,21 +1135,35 @@ export function makeClaudeProbeEnv(
   });
 }
 
-export const readCodexConfigModelProviderForEnv = (env: NodeJS.ProcessEnv) =>
+const readCodexHomeFile = (env: NodeJS.ProcessEnv, fileName: string) =>
   Effect.gen(function* () {
     const fileSystem = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
     const codexHome = env.CODEX_HOME?.trim() || path.join(OS.homedir(), ".codex");
-    const configPath = path.join(codexHome, "config.toml");
-
-    const content = yield* fileSystem
-      .readFileString(configPath)
+    return yield* fileSystem
+      .readFileString(path.join(codexHome, fileName))
       .pipe(Effect.orElseSucceed(() => undefined));
-    if (content === undefined) {
-      return undefined;
+  });
+
+export const readCodexConfigModelProviderForEnv = (env: NodeJS.ProcessEnv) =>
+  Effect.map(readCodexHomeFile(env, "config.toml"), (content) =>
+    content === undefined ? undefined : parseCodexConfigModelProvider(content),
+  );
+
+// A non-file credentials store can leave an old auth.json in the same home.
+const readCodexAccountIdentity = (env: NodeJS.ProcessEnv) =>
+  Effect.gen(function* () {
+    const config = yield* readCodexHomeFile(env, "config.toml");
+    try {
+      if (readEffectiveCodexAuthCredentialsStoreMode(config ?? "") !== "file") return {};
+    } catch {
+      return {};
     }
 
-    return parseCodexConfigModelProvider(content);
+    const content = yield* readCodexHomeFile(env, "auth.json");
+    if (content === undefined) return {};
+    const record = decodeUnknownJson(content);
+    return Result.isFailure(record) ? {} : codexAccountIdentityFromAuthRecord(record.success);
   });
 
 const hasCustomModelProviderForEnv = (env: NodeJS.ProcessEnv) =>
@@ -1317,8 +1353,14 @@ export const makeCheckCodexProviderStatus = (
 
     const authOutput = authProbe.success.value;
     const parsed = parseAuthStatusFromOutput(authOutput);
-    const codexPlanType = extractSubscriptionTypeFromOutput(authOutput);
     const codexAccountType = extractCodexAccountTypeFromOutput(authOutput);
+    const accountIdentity =
+      parsed.authStatus === "authenticated" &&
+      authOutput.code === 0 &&
+      codexAccountType === "chatgpt"
+        ? yield* readCodexAccountIdentity(probeEnv)
+        : {};
+    const codexPlanType = extractSubscriptionTypeFromOutput(authOutput) ?? accountIdentity.planType;
     const codexLabel =
       parsed.authStatus === "authenticated"
         ? codexAccountAuthLabel({ type: codexAccountType, planType: codexPlanType })
@@ -1341,6 +1383,7 @@ export const makeCheckCodexProviderStatus = (
       supportsAutoRuntimeMode,
       ...(codexAuthType ? { authType: codexAuthType } : {}),
       ...(codexLabel ? { authLabel: codexLabel } : {}),
+      ...(accountIdentity.email ? { accountEmail: accountIdentity.email } : {}),
       ...(parsed.voiceTranscriptionAvailable !== undefined
         ? { voiceTranscriptionAvailable: parsed.voiceTranscriptionAvailable }
         : {}),
@@ -1552,6 +1595,10 @@ export const makeCheckClaudeProviderStatus = (
       subscriptionType = yield* resolveSubscriptionType;
     }
     const authMetadata = claudeAuthMetadata({ subscriptionType, authMethod });
+    const accountIdentity =
+      effectiveParsed.authStatus === "authenticated"
+        ? parseClaudeAccountIdentityFromOutput(authOutput)
+        : {};
 
     return {
       provider: CLAUDE_AGENT_PROVIDER,
@@ -1563,6 +1610,10 @@ export const makeCheckClaudeProviderStatus = (
       version: parsedVersion,
       supportsAutoRuntimeMode,
       ...(authMetadata ? { authType: authMetadata.type, authLabel: authMetadata.label } : {}),
+      ...(accountIdentity.email ? { accountEmail: accountIdentity.email } : {}),
+      ...(accountIdentity.organization
+        ? { accountOrganization: accountIdentity.organization }
+        : {}),
       checkedAt,
       ...(effectiveParsed.message ? { message: effectiveParsed.message } : {}),
     } satisfies ServerProviderStatus;
@@ -2730,6 +2781,8 @@ export function providerStatusesEqual(
       status.authStatus === next.authStatus &&
       (status.authType ?? null) === (next.authType ?? null) &&
       (status.authLabel ?? null) === (next.authLabel ?? null) &&
+      (status.accountEmail ?? null) === (next.accountEmail ?? null) &&
+      (status.accountOrganization ?? null) === (next.accountOrganization ?? null) &&
       status.voiceTranscriptionAvailable === next.voiceTranscriptionAvailable &&
       status.supportsAutoRuntimeMode === next.supportsAutoRuntimeMode &&
       (status.autoRuntimeModeBinaryPath ?? null) === (next.autoRuntimeModeBinaryPath ?? null) &&
@@ -2781,8 +2834,9 @@ export function stabilizeProviderStatusesAgainstTransientTimeouts(
     // A single slow CLI probe should not make an already usable provider look broken.
     // The previous update advisory is network-backed evidence, though, so it must
     // not survive a probe that could not confirm the installed version.
+    // Keep the account label tied to a confirmed login as well.
     const stabilizedStatus = {
-      ...previous,
+      ...withoutProviderAccountIdentity(previous),
       checkedAt: status.checkedAt,
       ...(status.updateState !== undefined ? { updateState: status.updateState } : {}),
     };
@@ -2847,9 +2901,18 @@ function projectStatusForProviderInstance(
   if (isExactInstanceStatus || instance.isDefault || status.authStatus === "unknown") {
     return projected;
   }
-  const { authType, authLabel, voiceTranscriptionAvailable, ...withoutAuthMetadata } = projected;
+  const {
+    authType,
+    authLabel,
+    accountEmail,
+    accountOrganization,
+    voiceTranscriptionAvailable,
+    ...withoutAuthMetadata
+  } = projected;
   void authType;
   void authLabel;
+  void accountEmail;
+  void accountOrganization;
   void voiceTranscriptionAvailable;
   return {
     ...withoutAuthMetadata,

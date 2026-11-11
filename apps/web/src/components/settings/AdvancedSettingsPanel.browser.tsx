@@ -19,6 +19,12 @@ const harness = vi.hoisted(() => ({
   projects: [{ id: "project-1" }],
   threadsHydrated: true,
   syncServerReadModel: vi.fn(),
+  navigate: vi.fn((_options: { to: string }) => Promise.resolve()),
+}));
+
+vi.mock("@tanstack/react-router", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@tanstack/react-router")>()),
+  useNavigate: () => harness.navigate,
 }));
 
 vi.mock("@tanstack/react-query", () => ({
@@ -46,6 +52,7 @@ vi.mock("~/store", () => ({
     }),
 }));
 
+import { useFeatureTourStore } from "~/featureTour/store";
 import { AdvancedSettingsPanel } from "./AdvancedSettingsPanel";
 
 describe("AdvancedSettingsPanel", () => {
@@ -74,5 +81,16 @@ describe("AdvancedSettingsPanel", () => {
 
     await page.getByRole("button", { name: "View release history" }).click();
     expect(onOpenReleaseHistory).toHaveBeenCalledOnce();
+  });
+
+  it("replays the app tour from the workspace, where its controls are on screen", async () => {
+    useFeatureTourStore.getState().close();
+    await render(<AdvancedSettingsPanel active onOpenReleaseHistory={vi.fn()} resetEpoch={0} />);
+
+    await page.getByRole("button", { name: "Replay tour" }).click();
+
+    expect(harness.navigate).toHaveBeenCalledWith({ to: "/" });
+    await vi.waitFor(() => expect(useFeatureTourStore.getState().replay).toBe(true));
+    useFeatureTourStore.getState().close();
   });
 });

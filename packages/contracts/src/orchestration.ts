@@ -1586,6 +1586,8 @@ const ThreadMetaUpdateCommand = Schema.Struct({
   /** Apply the title only while no newer durable title event exists. */
   expectedTitleSequence: Schema.optional(NonNegativeInt),
   modelSelection: Schema.optional(ModelSelection),
+  /** A handoff may restore its source only while this target still owns the selection. */
+  expectedModelSelection: Schema.optional(ModelSelection),
   envMode: Schema.optional(ThreadEnvironmentMode),
   branch: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   worktreePath: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),

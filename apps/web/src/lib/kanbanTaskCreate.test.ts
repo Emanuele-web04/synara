@@ -1,8 +1,11 @@
 import { ProjectId } from "@synara/contracts";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { useComposerDraftStore } from "../composerDraftStore";
-import { resetComposerDraftStore } from "../composerDraftStoreTestFixtures";
+import {
+  resetComposerDraftStore,
+  stubComposerDraftBrowserStorage,
+} from "../composerDraftStoreTestFixtures";
 import type { SidebarThreadSummary } from "../types";
 import { dispatchKanbanDraftThread } from "./kanbanDispatch";
 import { createKanbanDraftTask } from "./kanbanTaskCreate";
@@ -27,6 +30,9 @@ vi.mock("../kanbanUiStore", () => ({
     }),
   },
 }));
+
+beforeEach(stubComposerDraftBrowserStorage);
+afterEach(() => vi.unstubAllGlobals());
 
 describe("Kanban task Debug mode", () => {
   beforeEach(() => {

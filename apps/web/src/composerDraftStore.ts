@@ -95,7 +95,10 @@ const composerPersistStorage = createDeferredPersistStorage<
 
 // Flush pending composer draft writes before the page goes away so at most one
 // debounce window of changes can be lost.
-flushStorageBeforePageHide(() => composerPersistStorage.flush());
+export function flushComposerDraftStorage(): void {
+  composerPersistStorage.flush();
+}
+flushStorageBeforePageHide(flushComposerDraftStorage);
 
 export const useComposerDraftStore = create<ComposerDraftStoreState>()(
   persist(
