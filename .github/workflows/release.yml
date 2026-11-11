@@ -301,10 +301,103 @@ jobs:
           compression-level: 1
           if-no-files-found: error
 
-  build_mac_icon:
-    name: Compile macOS icon
+  # The default-branch producer (cua-release-cache.yml) compiles this catalog
+  # for every icon source. A Linux runner restores the exact key and publishes
+  # it as this run's artifact; macOS 26 compiles only on a miss.
+  restore_mac_icon:
+    name: Restore macOS icon
     if: needs.preflight.outputs.build_icon == 'true'
     needs: preflight
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      hit: ${{ steps.verify.outputs.hit }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.preflight.outputs.ref }}
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version-file: package.json
+
+      - id: key
+        name: Fingerprint icon catalog inputs
+        env:
+          DESKTOP_FLAVOR: ${{ needs.preflight.outputs.desktop_flavor }}
+        run: node scripts/mac-icon-catalog.ts key --flavor "$DESKTOP_FLAVOR"
+
+      # The macOS producer saves this workspace-relative path: an absolute
+      # runner.temp path differs between macOS and Linux and changes the
+      # cache version, so it could never be restored here. The icon-only
+      # validation stage never restores: it exists to exercise the compile.
+      - id: cache
+        name: Restore exact icon catalog
+        if: needs.preflight.outputs.package_artifacts == 'true'
+        uses: actions/cache/restore@v4
+        with:
+          path: mac-icon-catalog
+          key: ${{ steps.key.outputs.key }}
+
+      - name: Discard non-exact cache contents
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: rm -rf mac-icon-catalog
+
+      - id: persistent
+        name: Find trusted persistent icon catalog
+        if: needs.preflight.outputs.package_artifacts == 'true' && steps.cache.outputs.cache-hit != 'true'
+        uses: actions/github-script@v8
+        env:
+          CACHE_KEY: ${{ steps.key.outputs.key }}
+        with:
+          script: |
+            const { findCuaArtifact } = await import(`${process.env.GITHUB_WORKSPACE}/apps/desktop/scripts/find-cua-artifact.mjs`);
+            const artifact = await findCuaArtifact(github, context.repo, process.env.CACHE_KEY);
+            if (artifact) {
+              core.setOutput('artifact-id', artifact.artifactId);
+              core.setOutput('run-id', artifact.runId);
+            }
+
+      - name: Download trusted persistent icon catalog
+        if: steps.persistent.outputs.artifact-id != ''
+        uses: actions/download-artifact@v8
+        with:
+          artifact-ids: ${{ steps.persistent.outputs.artifact-id }}
+          run-id: ${{ steps.persistent.outputs.run-id }}
+          github-token: ${{ github.token }}
+          path: mac-icon-catalog
+
+      # A corrupt or mismatched exact hit fails the job; it is never replaced.
+      - id: verify
+        name: Validate and stage the exact icon catalog
+        if: steps.cache.outputs.cache-hit == 'true' || steps.persistent.outputs.artifact-id != ''
+        env:
+          DESKTOP_FLAVOR: ${{ needs.preflight.outputs.desktop_flavor }}
+        run: |
+          set -euo pipefail
+          node scripts/mac-icon-catalog.ts verify --flavor "$DESKTOP_FLAVOR" --dir mac-icon-catalog
+          mkdir -p "$RUNNER_TEMP/mac-icon"
+          cp mac-icon-catalog/Assets.car "$RUNNER_TEMP/mac-icon/Assets.car"
+          echo "hit=true" >> "$GITHUB_OUTPUT"
+
+      - name: Upload icon catalog
+        if: steps.verify.outputs.hit == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: mac-icon-catalog
+          retention-days: 30
+          path: ${{ runner.temp }}/mac-icon/Assets.car
+          if-no-files-found: error
+
+  build_mac_icon:
+    name: Compile macOS icon
+    if: needs.preflight.outputs.build_icon == 'true' && needs.restore_mac_icon.outputs.hit != 'true'
+    needs: [preflight, restore_mac_icon]
     runs-on: macos-26
     timeout-minutes: 10
     permissions:
@@ -315,23 +408,18 @@ jobs:
         with:
           ref: ${{ needs.preflight.outputs.ref }}
 
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version-file: package.json
+
+      # scripts/mac-icon-catalog.ts owns the source selection (brand-assets.ts),
+      # actool arguments and Xcode pin shared with the cached producer.
       - name: Compile Icon Composer catalog
         env:
           DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
           DESKTOP_FLAVOR: ${{ needs.preflight.outputs.desktop_flavor }}
-        run: |
-          set -euo pipefail
-          xcodebuild -version
-          mkdir -p "$RUNNER_TEMP/mac-icon"
-          # Same source selection as scripts/lib/brand-assets.ts
-          # desktopIconAssetPaths(flavor).macIconComposer. The .icon folder
-          # must be named Synara to match CFBundleIconName in the app bundle.
-          icon_source="assets/prod/Synara.icon"
-          if [[ "$DESKTOP_FLAVOR" == "beta" ]]; then
-            icon_source="assets/beta/Synara.icon"
-          fi
-          xcrun actool "$icon_source" --compile "$RUNNER_TEMP/mac-icon" --platform macosx --minimum-deployment-target 26.0 --app-icon Synara --include-all-app-icons --output-partial-info-plist "$RUNNER_TEMP/icon-partial.plist" --output-format human-readable-text
-          test -s "$RUNNER_TEMP/mac-icon/Assets.car"
+        run: node scripts/mac-icon-catalog.ts compile --flavor "$DESKTOP_FLAVOR" --output "$RUNNER_TEMP/mac-icon"
 
       - name: Upload icon catalog
         uses: actions/upload-artifact@v7
@@ -354,10 +442,12 @@ jobs:
       fail-fast: false
       matrix: ${{ fromJSON(needs.preflight.outputs.cua_matrix) }}
     steps:
+      # Only the paired benchmark archives an older baseline commit
+      # (scripts/benchmark-cua-build.ts); provisioning reads the checkout alone.
       - uses: actions/checkout@v6
         with:
           ref: ${{ needs.preflight.outputs.ref }}
-          fetch-depth: 0
+          fetch-depth: ${{ needs.preflight.outputs.benchmark_native == 'true' && '0' || '1' }}
       - uses: actions/setup-node@v6
         with:
           node-version-file: package.json
@@ -387,8 +477,10 @@ jobs:
   build:
     name: Build ${{ matrix.label }}
     # Tests consume the same source independently; both publishers gate on them.
-    needs: [preflight, build_mac_icon, build_portable, prepare_cua]
-    if: ${{ !cancelled() && needs.preflight.result == 'success' && needs.preflight.outputs.package_artifacts == 'true' && (needs.prepare_cua.result == 'success' || (needs.preflight.outputs.prepare_cua == 'false' && needs.prepare_cua.result == 'skipped')) && (needs.build_mac_icon.result == 'success' || (needs.preflight.outputs.build_icon == 'false' && needs.build_mac_icon.result == 'skipped')) && needs.build_portable.result == 'success' }}
+    # The icon catalog comes from exactly one source: a verified exact restore
+    # (compile skipped) or the macOS 26 compile after a successful miss.
+    needs: [preflight, restore_mac_icon, build_mac_icon, build_portable, prepare_cua]
+    if: ${{ !cancelled() && needs.preflight.result == 'success' && needs.preflight.outputs.package_artifacts == 'true' && (needs.prepare_cua.result == 'success' || (needs.preflight.outputs.prepare_cua == 'false' && needs.prepare_cua.result == 'skipped')) && ((needs.restore_mac_icon.result == 'success' && ((needs.restore_mac_icon.outputs.hit == 'true' && needs.build_mac_icon.result == 'skipped') || (needs.restore_mac_icon.outputs.hit != 'true' && needs.build_mac_icon.result == 'success'))) || (needs.preflight.outputs.build_icon == 'false' && needs.restore_mac_icon.result == 'skipped' && needs.build_mac_icon.result == 'skipped')) && needs.build_portable.result == 'success' }}
     permissions:
       contents: read
       actions: read

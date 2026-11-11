@@ -50,6 +50,9 @@ smaller installs:
 - Native release artifact builders exclude marketing with `--ignore-scripts`
   exactly as before. macOS device jobs select `@synara/scripts`, retaining their
   existing `--ignore-scripts`, Xcode pairs, probe, simulator smoke and diagnostics.
+- Intel startup qualification (`qualify_intel`) selects `@synara/scripts` and
+  `@synara/cli` with `--ignore-scripts`. The smoke also imports the server's
+  supervised process teardown, so `@synara/scripts` alone cannot resolve `effect`.
 
 Filtered scopes never restore/save a full `node_modules` archive. Windows
 installs cold rather than extracting the pathological Bun package cache. Its
@@ -76,8 +79,11 @@ Release smoke shares the static runner, removing one checkout/install/runner and
 one duplicate identity scan. The platform-independent Windows boundary scanner
 runs there once; native Windows validation is not removed. Release quality lanes
 still install the full workspace and run the audited test suite while unsigned
-preparation proceeds in parallel. Packaging waits for every quality gate. Signing, notarization,
-source provenance, publication and production dependency staging are unchanged.
+preparation and packaging proceed in parallel. Packaging waits only for
+preflight, the macOS icon catalog, portable JavaScript and Cua preparation;
+`quality` and every `server_tests` shard gate GitHub and npm publication directly
+(see [the release guide](../docs/release.md)). Signing, notarization, source
+provenance, publication and production dependency staging are unchanged.
 
 ## Cross-platform setup measurements: September 14, 2026
 
@@ -303,6 +309,167 @@ prefix (100 MB, 2.3 s), its build reported FULL TURBO (1 s), and it saved
 nothing. The miss path (one designated saver, every other lane restore-only)
 follows from the step conditions guarded by `ci-contracts.test.mjs`. It was not
 exercised on hosted runners, because this branch does not change `bun.lock`.
+
+## Release pipeline: November 2026
+
+An audit of 20 tag runs (`v1.0.6-remote.31` to `v1.5.2`, October 25 to
+November 11) measured a clean Stable release at 21–30 minutes from tag to
+publication. The critical path was preflight (15 s), the packaging
+prerequisites, the macOS packaging leg (p50 787 s, of which
+`Build desktop artifact` took 642 s), Intel qualification on Stable
+(135–225 s) and publication (62 s). `quality` and `server_tests` were never on
+it: they finished at least 296 s before publication could start, so they are
+unchanged. Seven of the 20 releases needed a rerun, losing about 198 minutes. In
+five of them GitHub could not acquire a hosted macOS runner: the icon compile on
+`macos-26` (3 times), macOS Cua preparation on `macos-15` (3 jobs) and one macOS
+packaging leg.
+
+None of the changes below has been measured on hosted runners yet. The
+numbers are the audit's baseline; the next release is the first measurement.
+Signing, notarization, stapling, provenance and the quality and publication
+gates are unchanged.
+
+```text
+Change                          Baseline (audit)                         Effect expected, unmeasured
+Linux arm64 Cua pre-warm        cold cargo build 271 s (job 327 s);      arm64 leg restores like the others;
+                                packaging started at 417 s, not ~219 s   packaging no longer waits for it
+Icon catalog restore on Linux   macos-26 job (34 s of work); 3 of the    no macOS runner on an exact hit
+                                lost acquisitions
+DMG notarization || update ZIP  update-zip 40-50 s after DMG wait        up to 40-50 s per macOS leg
+                                (119-179 s), serial
+AppSnap || production deps      appsnap 18-24 s, then deps 12-14 s       up to 12-14 s per macOS leg
+Intel qualification install     75 s, all workspaces but marketing       smaller install; see below
+Release checkout depth          32-38 s per leg, Windows p90 141 s       shallow fetch of one commit
+```
+
+### Linux arm64 Cua pre-warm
+
+`cua-release-cache.yml` pre-warmed only macOS arm64/x64 and Ubuntu x64. Since
+Linux arm64 packaging was added (#2110), every release compiled that driver
+from source, and `build` waits for the whole `prepare_cua` matrix. The producer
+now also runs `ubuntu-24.04-arm`/`arm64`, the pair the release matrix uses.
+`scripts/lib/release-build-scope.test.ts` fails when the producer's runner and
+target pairs stop matching the release Cua matrix. The cache key is unchanged
+in shape, so the first hit needs one successful producer run on `main`.
+
+### macOS icon catalog
+
+The release compiled `assets/{prod,beta}/Synara.icon` on a `macos-26` runner for
+every tag. The default-branch producer now compiles both sources (Stable and
+Remote share production) on `macos-26` with Xcode 26.3, saves the exact key to
+the Actions cache and retains the catalog for 30 days as an artifact.
+`scripts/mac-icon-catalog.ts` owns the key, the compile and the verification for
+both the producer and the release, so a cached and a freshly compiled catalog
+come from the same source selection (`brand-assets.ts`) and `actool` arguments.
+
+The key hashes every file of the Icon Composer source, the `actool` arguments,
+the runner label, the pinned Xcode version and developer directory, and the key
+and compile code. It cannot include the `macos-26` image's patch level: the
+release computes it on Linux before any install. The producer therefore
+recompiles on every run (and daily), and it fails when the runner's
+`xcodebuild -version` is not Xcode 26.3. Two local compiles of the same source
+produced different `Assets.car` bytes, so verification checks the recorded
+digest, not reproducibility.
+
+In `release.yml`, `restore_mac_icon` (Ubuntu, read-only, no secrets) restores the
+exact key from the cache or from the trusted producer's artifact
+(`find-cua-artifact.mjs`, which now accepts `mac-icon-v1-` keys with unchanged
+trust checks). It verifies the key, source, pinned Xcode, catalog magic and
+digest, then publishes this run's `mac-icon-catalog`. A corrupt hit fails the
+job. `build_mac_icon` compiles on `macos-26` only on a miss; the icon-only
+validation stage (`stage=icon`) never restores, so it still exercises the
+compile. `build` accepts exactly one source: a successful restore with a hit and
+a skipped compile, or a successful restore with a miss and a successful compile.
+`release-smoke.ts` evaluates those conditions for hit, miss, failure and
+`build_icon == 'false'`. Packaging still
+downloads only this run's `mac-icon-catalog` and still fails without
+`Assets.car`. The cache path is workspace-relative because the cache version
+hashes the literal path, which differs between macOS and Linux `runner.temp`.
+The version also hashes the compression method; cross-OS cache restore is
+therefore unproven, and if it misses, the 30-day artifact serves the same key.
+
+Changing `find-cua-artifact.mjs` changes every Cua cache key. Its push to `main`
+triggers the producer; let that run finish before the next tag, or that release
+compiles Cua from source once.
+
+### macOS Cua preparation stays on macOS
+
+Running exact-hit macOS Cua restores on Linux was evaluated and rejected. The
+key includes `sw_vers`, `xcodebuild -version`, the SDK version and build, the
+host compiler and the Rust toolchain, which only the macOS runner can report.
+`provision-cua-driver.mjs` refuses Darwin validation off macOS, checks
+architectures with `lipo` and re-signs the staged driver with `codesign`.
+Packaging recomputes the key on macOS and requires an exact `build-key.txt`
+match. Moving the restore would either break that check or move it into the
+job that holds the signing secrets.
+
+### macOS packaging overlap
+
+Inside `Build desktop artifact` the stages ran one after another:
+
+```text
+Stage (audit, per macOS leg)        Duration
+appsnap-helper                       18-24 s
+production-dependencies              12-14 s
+app-signing-and-preparation          78-154 s
+app notarization                    165-220 s
+DMG build                            ~40 s
+dmg-notary-wait                     119-179 s
+update-zip                           40-50 s
+```
+
+`scripts/build-desktop-artifact.ts` now runs two pairs concurrently through
+`scripts/lib/settle-concurrently.ts`. Both sides of a pair always finish before
+a failure is reported, so no subprocess keeps writing into the stage.
+
+- Signed DMG finalization and the update ZIP. The app is notarized and stapled
+  during packaging; DMG finalization verifies, notarizes and staples only the
+  disk image, while the ZIP reads that app and writes its own ZIP and feed.
+  `ditto` and `unzip` now run asynchronously, so a long archive no longer blocks
+  the event loop that watches `notarytool wait`; the two short `codesign`
+  checks stay synchronous. Signature checks, ZIP contents, names and the feed
+  are unchanged. Unsigned builds stay serial.
+- The AppSnap helper and window-material builds and the staged production
+  install. The native builds compile repository sources in private temporary
+  directories and write only `apps/desktop/native/*/build` in the stage; the
+  install writes `node_modules` from copied manifests. Neither reads the other's
+  output or uses a keychain.
+
+Each stage keeps its `[build-timing]` line, so those lines now overlap. The new
+`dmg-notarization-and-update-zip` and `native-helpers-and-production-dependencies`
+lines record each pair's wall time. Compare them with the sum of their stages
+in the audit. `update-zip` may include up to the DMG upload (17–24 s) because
+that upload still runs synchronously. `mac-update-zip-finalize.test.ts` fails
+if the ZIP blocks the event loop again.
+
+### Intel qualification install
+
+`qualify_intel` installed every workspace except marketing (75 s in the audit).
+The startup smoke imports `@synara/scripts` code and
+`apps/server/src/platform/supervisedProcessTeardown.ts`. In local throwaway
+exports, a `@synara/scripts`-only install failed to resolve `effect` from that
+server file. Adding `@synara/cli` resolved the whole import graph:
+
+```text
+Install scope (local, warm Bun cache)        Packages  node_modules  Smoke imports
+all but marketing (previous)                     1404     2.7 GB      resolve
+@synara/scripts + @synara/cli (now)              1129     1.5 GB      resolve
+@synara/scripts only                              445     329 MB      fail (effect)
+```
+
+The smoke command is unchanged. `release-smoke.ts` rejects a filtered
+verification install without both workspaces. The Intel install time has not
+been measured.
+
+### Release checkout depth
+
+The packaging legs and `prepare_cua` fetched full history. Packaging reads only
+the checked-out commit (`git rev-parse HEAD`, a clean `git status` and file
+bytes); provenance and checkpoint scripts use no git history. Packaging now
+fetches one commit, like the quality jobs already do. `prepare_cua` keeps full
+history only for the paired Cua benchmark, whose script archives an older
+baseline commit; `release-smoke.ts` evaluates that expression. Preflight's tag
+check, `finalize` and `cut_next_beta` are unchanged.
 
 ## Rejected experiments and external-service limits
 

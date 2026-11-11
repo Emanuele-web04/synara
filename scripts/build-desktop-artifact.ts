@@ -47,6 +47,7 @@ import {
   RELEASE_WORKSPACE_MANIFEST_PATHS,
 } from "./lib/release-workspace-manifests.ts";
 import { resolveCatalogDependencies } from "./lib/resolve-catalog.ts";
+import { settleConcurrently } from "./lib/settle-concurrently.ts";
 
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -1286,31 +1287,6 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
       ),
     );
   }
-  if (options.platform === "mac") {
-    yield* timedBuildStage(
-      "appsnap-helper",
-      stageMacNativeBuild(
-        "AppSnap helper",
-        "build-appsnap-helper.mjs",
-        MAC_APPSNAP_HELPER_STAGE_PATH,
-        stageAppDir,
-        options.arch,
-        options.verbose,
-      ),
-    );
-    yield* timedBuildStage(
-      "window-material-addon",
-      stageMacNativeBuild(
-        "window-material addon",
-        "build-window-material-addon.mjs",
-        MAC_WINDOW_MATERIAL_ADDON_STAGE_PATH,
-        stageAppDir,
-        options.arch,
-        options.verbose,
-      ),
-    );
-  }
-
   yield* timedBuildStage(
     "cloudflared-provision",
     Effect.tryPromise({
@@ -1369,7 +1345,7 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
     },
   };
 
-  yield* timedBuildStage(
+  const productionDependencies = timedBuildStage(
     "production-dependencies",
     installFrozenStageDependencies(
       repoRoot,
@@ -1379,6 +1355,42 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
       options.verbose,
     ),
   );
+  if (options.platform === "mac") {
+    // The native builds compile repository sources in private temporary
+    // directories and write only apps/desktop/native/*/build in the stage. The
+    // staged install reads copied manifests and writes node_modules. Neither
+    // reads the other's output, signs with a keychain, or touches resources.
+    const nativeHelpers = Effect.andThen(
+      timedBuildStage(
+        "appsnap-helper",
+        stageMacNativeBuild(
+          "AppSnap helper",
+          "build-appsnap-helper.mjs",
+          MAC_APPSNAP_HELPER_STAGE_PATH,
+          stageAppDir,
+          options.arch,
+          options.verbose,
+        ),
+      ),
+      timedBuildStage(
+        "window-material-addon",
+        stageMacNativeBuild(
+          "window-material addon",
+          "build-window-material-addon.mjs",
+          MAC_WINDOW_MATERIAL_ADDON_STAGE_PATH,
+          stageAppDir,
+          options.arch,
+          options.verbose,
+        ),
+      ),
+    );
+    yield* timedBuildStage(
+      "native-helpers-and-production-dependencies",
+      settleConcurrently(nativeHelpers, productionDependencies),
+    );
+  } else {
+    yield* productionDependencies;
+  }
 
   const stagePackageJsonString = yield* encodeJsonString(stagePackageJson);
   yield* fs.writeFileString(path.join(stageAppDir, "package.json"), `${stagePackageJsonString}\n`);
@@ -1457,31 +1469,8 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
     });
   }
 
-  if (options.platform === "mac" && options.target === "dmg" && options.signed) {
-    yield* Effect.log("[desktop-artifact] Notarizing and validating signed macOS DMG...");
-    const finalizedDmg = yield* Effect.tryPromise({
-      try: () =>
-        finalizeSignedMacDmg({
-          stageDistDir,
-          appleApiKey: buildEnv.APPLE_API_KEY,
-          appleApiKeyId: buildEnv.APPLE_API_KEY_ID,
-          appleApiIssuer: buildEnv.APPLE_API_ISSUER,
-          verbose: options.verbose,
-        }),
-      catch: (cause) =>
-        new BuildScriptError({
-          message: "macOS DMG signing/notarization finalization failed.",
-          cause,
-        }),
-    });
-    yield* Effect.log(
-      `[desktop-artifact] Signed and notarized macOS DMG (${finalizedDmg.dmgFileName}).`,
-    );
-  }
-
   if (options.platform === "mac") {
-    yield* Effect.log("[desktop-artifact] Repacking and validating macOS update zip...");
-    const finalizedZip = yield* timedBuildStage(
+    const updateZip = timedBuildStage(
       "update-zip",
       Effect.tryPromise({
         try: () =>
@@ -1501,6 +1490,42 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
           }),
       }),
     );
+    let finalizedZip: Effect.Success<typeof updateZip>;
+    if (options.target === "dmg" && options.signed) {
+      // The app was notarized and stapled during packaging. DMG finalization
+      // verifies, notarizes and staples only the disk image; the update ZIP only
+      // reads that app and writes its own ZIP and feed. While Apple processes the
+      // DMG, the ZIP is packed from the same final app it always used.
+      yield* Effect.log(
+        "[desktop-artifact] Notarizing the signed macOS DMG while repacking the update zip...",
+      );
+      const finalizeDmg = Effect.tryPromise({
+        try: () =>
+          finalizeSignedMacDmg({
+            stageDistDir,
+            appleApiKey: buildEnv.APPLE_API_KEY,
+            appleApiKeyId: buildEnv.APPLE_API_KEY_ID,
+            appleApiIssuer: buildEnv.APPLE_API_ISSUER,
+            verbose: options.verbose,
+          }),
+        catch: (cause) =>
+          new BuildScriptError({
+            message: "macOS DMG signing/notarization finalization failed.",
+            cause,
+          }),
+      });
+      const [finalizedDmg, zip] = yield* timedBuildStage(
+        "dmg-notarization-and-update-zip",
+        settleConcurrently(finalizeDmg, updateZip),
+      );
+      finalizedZip = zip;
+      yield* Effect.log(
+        `[desktop-artifact] Signed and notarized macOS DMG (${finalizedDmg.dmgFileName}).`,
+      );
+    } else {
+      yield* Effect.log("[desktop-artifact] Repacking and validating macOS update zip...");
+      finalizedZip = yield* updateZip;
+    }
     if (finalizedZip.removedZipBlockmapPath) {
       yield* Effect.log(
         `[desktop-artifact] Removed stale macOS zip blockmap (${path.basename(finalizedZip.removedZipBlockmapPath)}).`,
