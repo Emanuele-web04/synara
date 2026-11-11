@@ -7,19 +7,22 @@ import { execFileSync, spawnSync } from "node:child_process";
 import {
   chmodSync,
   copyFileSync,
+  existsSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   rmSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { HOOKS_PATH, installGitHooks } from "./install-git-hooks";
+import { installGitHooks } from "./install-git-hooks";
 
+const trackedHooks = ".githooks";
 const hookSource = fileURLToPath(new URL("../.githooks/pre-push", import.meta.url));
 const temporary: string[] = [];
 const developer = { CI: undefined };
@@ -30,15 +33,19 @@ function makeDirectory(): string {
   return directory;
 }
 
+function git(root: string, ...args: string[]): string {
+  return execFileSync("git", args, { cwd: root, encoding: "utf8" }).trim();
+}
+
 function makeCheckout(): string {
   const root = makeDirectory();
-  execFileSync("git", ["init", "-q"], { cwd: root });
-  mkdirSync(join(root, HOOKS_PATH));
-  copyFileSync(hookSource, join(root, HOOKS_PATH, "pre-push"));
+  git(root, "init", "-q", "--template=");
+  mkdirSync(join(root, trackedHooks));
+  copyFileSync(hookSource, join(root, trackedHooks, "pre-push"));
   return root;
 }
 
-function hooksPath(root: string): string {
+function configuredHooksPath(root: string): string {
   const result = spawnSync("git", ["config", "--get", "core.hooksPath"], {
     cwd: root,
     encoding: "utf8",
@@ -46,15 +53,35 @@ function hooksPath(root: string): string {
   return result.stdout.trim();
 }
 
+function defaultPrePushPath(root: string): string {
+  return git(root, "rev-parse", "--path-format=absolute", "--git-path", "hooks/pre-push");
+}
+
+beforeEach(() => {
+  vi.stubEnv("GIT_CONFIG_GLOBAL", join(makeDirectory(), "gitconfig"));
+  vi.stubEnv("GIT_CONFIG_NOSYSTEM", "1");
+});
+
 afterEach(() => {
+  vi.unstubAllEnvs();
   for (const directory of temporary.splice(0)) rmSync(directory, { recursive: true, force: true });
 });
 
 describe("installGitHooks", () => {
-  it("enables the tracked hooks once in a developer checkout", () => {
+  it("installs once from a linked worktree and preserves Git's default hook resolution", () => {
     const root = makeCheckout();
-    expect(installGitHooks(root, developer)).toEqual({ action: "installed" });
-    expect(hooksPath(root)).toBe(HOOKS_PATH);
+    const prePush = defaultPrePushPath(root);
+    const worktree = makeDirectory();
+    git(root, "config", "user.name", "Test");
+    git(root, "config", "user.email", "test@example.com");
+    git(root, "commit", "--allow-empty", "-qm", "initial");
+    git(root, "worktree", "add", "--detach", "-q", worktree);
+    mkdirSync(join(worktree, trackedHooks));
+    copyFileSync(hookSource, join(worktree, trackedHooks, "pre-push"));
+
+    expect(installGitHooks(worktree, developer)).toEqual({ action: "installed" });
+    expect(configuredHooksPath(root)).toBe("");
+    expect(defaultPrePushPath(worktree)).toBe(prePush);
     expect(installGitHooks(root, developer)).toEqual({ action: "unchanged" });
   });
 
@@ -62,36 +89,48 @@ describe("installGitHooks", () => {
     for (const CI of ["true", "1", "woodpecker"]) {
       const root = makeCheckout();
       expect(installGitHooks(root, { CI })).toEqual({ action: "skipped", reason: "CI" });
-      expect(hooksPath(root)).toBe("");
+      expect(existsSync(defaultPrePushPath(root))).toBe(false);
     }
     expect(installGitHooks(makeCheckout(), { CI: "false" })).toEqual({ action: "installed" });
   });
 
   it("keeps a hooks directory the clone owner already chose", () => {
     const root = makeCheckout();
-    execFileSync("git", ["config", "core.hooksPath", ".git/hooks"], { cwd: root });
+    git(root, "config", "core.hooksPath", ".git/hooks");
     expect(installGitHooks(root, developer).action).toBe("skipped");
-    expect(hooksPath(root)).toBe(".git/hooks");
+    expect(configuredHooksPath(root)).toBe(".git/hooks");
+  });
+
+  it("keeps an existing pre-push hook in Git's default directory", () => {
+    const root = makeCheckout();
+    const prePush = defaultPrePushPath(root);
+    const existing = "#!/bin/sh\nexit 1\n";
+    mkdirSync(dirname(prePush), { recursive: true });
+    writeFileSync(prePush, existing, { mode: 0o755 });
+
+    expect(installGitHooks(root, developer)).toEqual({ action: "unchanged" });
+    expect(defaultPrePushPath(root)).toBe(prePush);
+    expect(readFileSync(prePush, "utf8")).toBe(existing);
   });
 
   it("leaves copies that are not their own repository root untouched", () => {
     const outside = makeDirectory();
-    mkdirSync(join(outside, HOOKS_PATH));
-    writeFileSync(join(outside, HOOKS_PATH, "pre-push"), "");
+    mkdirSync(join(outside, trackedHooks));
+    writeFileSync(join(outside, trackedHooks, "pre-push"), "");
     expect(installGitHooks(outside, developer).action).toBe("skipped");
 
     const parent = makeCheckout();
     const staged = join(parent, "staging");
-    mkdirSync(join(staged, HOOKS_PATH), { recursive: true });
-    writeFileSync(join(staged, HOOKS_PATH, "pre-push"), "");
+    mkdirSync(join(staged, trackedHooks), { recursive: true });
+    writeFileSync(join(staged, trackedHooks, "pre-push"), "");
     expect(installGitHooks(staged, developer)).toEqual({
       action: "skipped",
       reason: "not the repository root",
     });
-    expect(hooksPath(parent)).toBe("");
+    expect(existsSync(defaultPrePushPath(parent))).toBe(false);
 
     const withoutHook = makeCheckout();
-    rmSync(join(withoutHook, HOOKS_PATH), { recursive: true });
+    rmSync(join(withoutHook, trackedHooks), { recursive: true });
     expect(installGitHooks(withoutHook, developer).action).toBe("skipped");
   });
 });
@@ -100,8 +139,11 @@ describe.skipIf(process.platform === "win32")("pre-push hook", () => {
   const zero = "0".repeat(40);
   const oid = "1".repeat(40);
 
-  function push(stdin: string, bun: "pass" | "fail" | "missing") {
+  function push(stdin: string, bun: "pass" | "fail" | "missing", trackedHook = true) {
     const root = makeCheckout();
+    const prePush = defaultPrePushPath(root);
+    expect(installGitHooks(root, developer)).toEqual({ action: "installed" });
+    if (!trackedHook) rmSync(join(root, trackedHooks), { recursive: true });
     const bin = makeDirectory();
     const gitPath = execFileSync("sh", ["-c", "command -v git"], { encoding: "utf8" }).trim();
     symlinkSync(gitPath, join(bin, "git"));
@@ -113,7 +155,7 @@ describe.skipIf(process.platform === "win32")("pre-push hook", () => {
       );
       chmodSync(join(bin, "bun"), 0o755);
     }
-    const result = spawnSync("/bin/sh", [join(root, HOOKS_PATH, "pre-push"), "origin", "url"], {
+    const result = spawnSync(prePush, ["origin", "url"], {
       cwd: root,
       input: stdin,
       encoding: "utf8",
@@ -139,5 +181,9 @@ describe.skipIf(process.platform === "win32")("pre-push hook", () => {
       calls: [],
     });
     expect(push(update, "missing")).toEqual({ status: 0, calls: [] });
+  });
+
+  it("skips branches where the tracked hook is absent", () => {
+    expect(push(update, "fail", false)).toEqual({ status: 0, calls: [] });
   });
 });

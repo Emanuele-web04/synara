@@ -60,9 +60,9 @@ That gives you a chance to check whether the direction fits before spending time
 
 ## Pre-push Check
 
-`bun install` points this clone at the tracked hooks in `.githooks` (it sets
-`core.hooksPath` locally). Before each push, `.githooks/pre-push` runs the same
-two checks as CI's fast static lane, which take about 15–20 seconds:
+`bun install` adds a pre-push launcher in Git's default hooks directory. It runs
+`.githooks/pre-push` from the current worktree when that file exists. The hook
+runs the same two checks as CI's fast static lane, which take about 15–20 seconds:
 
 ```bash
 bun run fmt:check
@@ -77,13 +77,17 @@ to fix formatting. To skip the check once, push with `git push --no-verify`.
 Pushes that only delete branches skip it automatically, and so do machines where
 `bun` is not on `PATH`.
 
-The setup leaves an existing `core.hooksPath` alone and does nothing in CI,
-in `--ignore-scripts` installs, or in copies that are not their own repository
-root. To opt out for good, point the clone at Git's default hooks directory:
+The setup preserves existing hooks and skips installation when `core.hooksPath`
+is already configured, in CI, during `--ignore-scripts` installs, and in copies
+outside a repository root. To opt out across installs, configure the clone to
+use its existing hooks directory:
 
 ```bash
-git config core.hooksPath .git/hooks
+git config --local core.hooksPath "$(git rev-parse --path-format=absolute --git-path hooks)"
 ```
+
+If Synara already installed a launcher, remove that file from the configured
+directory. It contains the comment `Installed by Synara`.
 
 The hook is a POSIX `sh` script and also runs under Git for Windows (Git Bash).
 
