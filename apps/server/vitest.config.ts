@@ -14,6 +14,9 @@ export default mergeConfig(
       hookTimeout: 90_000,
       // Only changes which shard owns a file under --shard; order is unchanged.
       sequence: { sequencer: PinnedShardSequencer },
+      // EXPERIMENT: reuse one serial worker's module graph across files
+      // instead of re-importing it per file. Server config only.
+      isolate: false,
     },
   }),
 );

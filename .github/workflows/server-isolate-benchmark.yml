@@ -1,0 +1,63 @@
+# TEMPORARY step-5 experiment, removed from the branch before review.
+# Each job runs one server shard twice on the same runner: the committed
+# candidate config (isolate: false) and the baseline forced with --isolate.
+# Order alternates by repetition so warm-up cannot favour one variant.
+name: Server isolate benchmark
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/server-isolate-benchmark.yml"
+
+permissions:
+  contents: read
+
+env:
+  NODE_OPTIONS: --max-old-space-size=4096
+
+jobs:
+  server:
+    name: Server ${{ matrix.shard }} rep ${{ matrix.rep }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ["1/3", "2/3", "3/3"]
+        rep: [1, 2, 3]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup workspace
+        uses: ./.github/actions/setup-workspace
+
+      - name: Paired candidate and baseline
+        env:
+          SHARD: ${{ matrix.shard }}
+          REP: ${{ matrix.rep }}
+        run: |
+          run_variant() {
+            name="$1"; shift
+            start=$(date +%s)
+            set +e
+            bunx turbo run test --filter=@synara/cli -- --shard="$SHARD" "$@" > "variant-$name.log" 2>&1
+            status=$?
+            set -e
+            end=$(date +%s)
+            echo "BENCH shard=$SHARD rep=$REP variant=$name status=$status seconds=$((end - start))" | tee -a bench.txt
+            grep -E "Test Files|Tests  |Duration" "variant-$name.log" | sed "s/^/BENCH $name /" | tee -a bench.txt
+            if [ "$status" -ne 0 ]; then
+              grep -E "FAIL|✗|×|AssertionError|Error:" "variant-$name.log" | head -40 | sed "s/^/BENCH $name /"
+            fi
+            return 0
+          }
+          if [ "$REP" = "2" ]; then
+            run_variant baseline --isolate
+            run_variant candidate
+          else
+            run_variant candidate
+            run_variant baseline --isolate
+          fi
+          echo "----"; cat bench.txt
+          ! grep -q "status=[1-9]" bench.txt
