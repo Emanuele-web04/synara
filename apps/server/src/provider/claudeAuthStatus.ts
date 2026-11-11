@@ -15,6 +15,7 @@ import {
   toTitleCaseWords,
   type CommandResult,
 } from "./providerCliOutput";
+import { asRecord, asString } from "../providerUsage/parse";
 
 function claudeAuthOutput(result: CommandResult): string {
   return `${result.stdout}\n${result.stderr}`.toLowerCase();
@@ -171,4 +172,35 @@ export function claudeAuthMetadata(input: {
     };
   }
   return undefined;
+}
+
+export interface ClaudeAccountIdentity {
+  /** Email of the claude.ai account, when `claude auth status` reports one. */
+  readonly email?: string;
+  /** Organization the account signs in to, as the CLI names it. */
+  readonly organization?: string;
+}
+
+// `claude auth status` names the account beside its login state. Only a JSON
+// object counts: the legacy text output never carried an identity.
+export function parseClaudeAccountIdentityFromOutput(result: CommandResult): ClaudeAccountIdentity {
+  const trimmed = result.stdout.trim();
+  if (result.code !== 0 || !trimmed.startsWith("{")) return {};
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(trimmed);
+  } catch {
+    return {};
+  }
+  const record = asRecord(parsed);
+  if (
+    !record ||
+    extractAuthBoolean(record) !== true ||
+    asString(record.authMethod)?.toLowerCase() !== "claude.ai"
+  ) {
+    return {};
+  }
+  const email = asString(record.email);
+  const organization = asString(record.orgName);
+  return { ...(email ? { email } : {}), ...(organization ? { organization } : {}) };
 }

@@ -262,3 +262,19 @@ export function normalizeSettingsSection(value: unknown): SettingsSectionId {
     ) ?? "general"
   );
 }
+
+/** Sections whose state lives on the computer that runs the agents, so Settings can open them on a connected computer. */
+const HOST_SETTINGS_SECTIONS: ReadonlySet<SettingsSectionId> = new Set([
+  "worktrees",
+  "archived",
+  "models",
+  "providers",
+  "skills",
+  "usage",
+  "connectors",
+  "integrations",
+]);
+
+export function isHostSettingsSection(section: SettingsSectionId): boolean {
+  return HOST_SETTINGS_SECTIONS.has(section);
+}

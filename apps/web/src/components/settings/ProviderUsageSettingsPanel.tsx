@@ -35,6 +35,7 @@ import { SettingsSegmentedControl } from "~/components/settings/SettingControls"
 import { Button } from "~/components/ui/button";
 import { Switch } from "~/components/ui/switch";
 import { useProviderUsageSummary } from "~/hooks/useProviderUsageSummary";
+import { readWorkspaceFrame } from "~/lib/hosts/workspaceFrame";
 import { RotateCcwIcon, TriangleAlertIcon } from "~/lib/icons";
 import { deriveProviderUsageDisplayRows } from "~/lib/providerUsageDisplay";
 import {
@@ -229,7 +230,7 @@ export function ProviderUsageSettingsPanel() {
 
   const isRefreshing = usageQuery.isFetching || refreshMutation.isPending;
 
-  return (
+  const appUsageSettings = (
     <>
       <SettingsSection
         translateTitle={false}
@@ -329,6 +330,13 @@ export function ProviderUsageSettingsPanel() {
           }
         />
       </SettingsSection>
+    </>
+  );
+
+  return (
+    <>
+      {/* Presentation preferences belong to the controlling app, not the selected host. */}
+      {!readWorkspaceFrame() ? appUsageSettings : null}
       <SettingsSectionShell
         title="settings:providerUsage"
         action={

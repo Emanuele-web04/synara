@@ -61,7 +61,10 @@ import {
 import { Skeleton } from "../ui/skeleton";
 import { PlusIcon } from "~/lib/icons";
 import { isProviderUsable } from "../../lib/providerAvailability";
-import { providerAccountQualifiedLabel } from "../../lib/providerInstancePresentation";
+import {
+  providerAccountIdentityLabel,
+  providerAccountQualifiedLabel,
+} from "../../lib/providerInstancePresentation";
 import { ProviderAccountDot } from "../ProviderAccountMark";
 import { t, useTranslation } from "~/i18n";
 
@@ -449,17 +452,19 @@ export const ProviderModelMenuItems = function ProviderModelMenuItems(
   );
 
   const resolveInstanceAvailability = useCallback(
-    (instance: ProviderModelPickerInstance): { disabled: boolean; label: string | null } => {
+    (
+      instance: ProviderModelPickerInstance,
+    ): { disabled: boolean; label: string | null; identity: string | null } => {
+      const status = findProviderStatusForInstance({
+        providers: props.providers,
+        provider: instance.provider,
+        instanceId: instance.instanceId,
+      });
+      const identity = providerAccountIdentityLabel(status);
       if (!instance.enabled) {
-        return { disabled: true, label: t("chat:disabled") };
+        return { disabled: true, label: t("chat:disabled"), identity };
       }
-      return resolveLiveProviderAvailability(
-        findProviderStatusForInstance({
-          providers: props.providers,
-          provider: instance.provider,
-          instanceId: instance.instanceId,
-        }),
-      );
+      return { ...resolveLiveProviderAvailability(status), identity };
     },
     [props.providers, t],
   );
@@ -560,6 +565,11 @@ export const ProviderModelMenuItems = function ProviderModelMenuItems(
                 disabled={availability.disabled}
               >
                 <span className="truncate">{instance.label}</span>
+                {availability.identity ? (
+                  <span className="min-w-0 truncate text-ui-xs text-muted-foreground/80">
+                    {availability.identity}
+                  </span>
+                ) : null}
                 {availability.label ? (
                   <span className="ms-auto text-ui-xs text-muted-foreground/80 uppercase tracking-[0.08em]">
                     {availability.label}
@@ -818,6 +828,11 @@ export const ProviderModelMenuItems = function ProviderModelMenuItems(
                 <MenuSubTrigger>
                   {accountIcon}
                   <span className="truncate">{accountLabel}</span>
+                  {accountAvailability.identity ? (
+                    <span className="ms-auto min-w-0 truncate text-ui-xs text-muted-foreground/80">
+                      {accountAvailability.identity}
+                    </span>
+                  ) : null}
                 </MenuSubTrigger>
                 <ComposerPickerMenuSubPopup
                   fixedWidth
