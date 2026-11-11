@@ -2,7 +2,7 @@
 // Purpose: Owns the shared identity and status content rendered by every Sidebar thread row.
 // Exports: SidebarThreadRowContent and its terminal-status presentation type.
 
-import type { ReactNode } from "react";
+import { memo, type ReactNode } from "react";
 
 import { isGenericChatThreadTitle } from "@synara/shared/chatThreads";
 import { pluralize } from "~/i18n/pluralize";
@@ -120,6 +120,16 @@ function ProviderAvatarWithTerminal({
   );
 }
 
+const MemoizedProviderAvatarWithTerminal = memo(
+  ProviderAvatarWithTerminal,
+  (previous, next) =>
+    previous.thread === next.thread &&
+    previous.terminalCount === next.terminalCount &&
+    previous.terminalStatus?.label === next.terminalStatus?.label &&
+    previous.terminalStatus?.colorClass === next.terminalStatus?.colorClass &&
+    previous.terminalStatus?.pulse === next.terminalStatus?.pulse,
+);
+
 export function SidebarThreadRowContent({
   thread,
   terminalEntryPoint,
@@ -147,7 +157,7 @@ export function SidebarThreadRowContent({
       {terminalEntryPoint ? (
         <SidebarGlyph icon={TerminalIcon} variant="chrome" />
       ) : showThreadProviderAvatar ? (
-        <ProviderAvatarWithTerminal
+        <MemoizedProviderAvatarWithTerminal
           thread={thread}
           terminalStatus={terminalStatus}
           terminalCount={terminalCount}
