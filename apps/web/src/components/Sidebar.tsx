@@ -6929,7 +6929,7 @@ export default function Sidebar() {
         event.stopPropagation();
         void navigate({
           to: "/settings",
-          search: { section: "usage" },
+          search: { section: "usage", computer: "local" },
         });
         return;
       }
@@ -7835,7 +7835,7 @@ export default function Sidebar() {
       <>
         <AppRailUsage
           onOpenUsageSettings={() => {
-            void navigate({ to: "/settings", search: { section: "usage" } });
+            void navigate({ to: "/settings", search: { section: "usage", computer: "local" } });
           }}
         />
         <SidebarHelpMenu inRail {...sidebarHelpMenuProps} />
@@ -7937,7 +7937,9 @@ export default function Sidebar() {
                     void navigate({
                       to: "/settings",
                       search: (previous) => ({
-                        ...(workspaceSurfaceHref === null ? previous : {}),
+                        ...(workspaceSurfaceHref === null
+                          ? previous
+                          : { computer: settingsSectionSearch.environment }),
                         section: section === "general" ? undefined : section,
                         target: options?.target,
                       }),
@@ -8927,6 +8929,7 @@ export default function Sidebar() {
               to: "/settings",
               search: (previous) => ({
                 ...previous,
+                ...(section === "usage" ? { computer: "local" } : {}),
                 section: section === "general" ? undefined : section,
                 target: options?.target,
               }),
@@ -8936,7 +8939,7 @@ export default function Sidebar() {
           onOpenUsageSettings={() => {
             void navigate({
               to: "/settings",
-              search: { section: "usage" },
+              search: { section: "usage", computer: "local" },
             });
           }}
           onOpenProject={(projectId, host, session) => {

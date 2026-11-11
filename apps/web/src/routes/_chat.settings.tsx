@@ -346,8 +346,15 @@ type BooleanSettingKey = {
 
 // ── Route screen ───────────────────────────────────────────────────────────
 
+function SettingsRoute() {
+  const search = useSearch({ strict: false }) as Record<string, unknown>;
+  const redirecting = useSettingsComputerRoute(normalizeSettingsSection(search.section), search);
+  return redirecting ? null : <SettingsRouteView />;
+}
+
 function SettingsRouteView() {
   const { t } = useTranslation();
+  const isController = !readWorkspaceFrame();
   const [defaultDiffRenderMode, setDefaultDiffRenderMode] = useLocalStorage(
     DIFF_RENDER_MODE_STORAGE_KEY,
     DEFAULT_DIFF_RENDER_MODE,
@@ -361,7 +368,6 @@ function SettingsRouteView() {
       ? routeSearch.provider
       : null;
   const activeSectionItem = SETTINGS_NAV_ITEMS.find((item) => item.id === activeSection)!;
-  useSettingsComputerRoute(activeSection, routeSearch);
 
   const {
     isDefaultThemePack,
@@ -1827,7 +1833,7 @@ function SettingsRouteView() {
         // A fragment, not a wrapper: sections space themselves as siblings.
         return (
           <>
-            {billingEnabled && !readWorkspaceFrame() ? <BillingSettingsPanel /> : null}
+            {billingEnabled && isController ? <BillingSettingsPanel /> : null}
             <ProviderUsageSettingsPanel />
           </>
         );
@@ -1900,7 +1906,7 @@ function SettingsRouteView() {
                   </div>
                   {activeSection === "shortcuts" ? (
                     <KeyboardShortcutsResetButton />
-                  ) : (
+                  ) : isController ? (
                     <Button
                       size="xs"
                       variant="outline"
@@ -1911,7 +1917,7 @@ function SettingsRouteView() {
                       <ResetIcon className="size-3.5" />
                       {t("settings:advanced_restoreDefaults")}
                     </Button>
-                  )}
+                  ) : null}
                 </div>
               ) : null}
 
@@ -1984,5 +1990,5 @@ function SettingsRouteView() {
 }
 
 export const Route = createFileRoute("/_chat/settings")({
-  component: SettingsRouteView,
+  component: SettingsRoute,
 });

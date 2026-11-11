@@ -161,7 +161,8 @@ export function WorkspaceSurfaceComputerPicker({
 
 /** The main window's Settings route resolves `computer` and opens host-owned sections on it. */
 export function SettingsComputerPicker({ section }: { section: SettingsSectionId }) {
-  const { computers, localId, currentId, navigate } = useWorkspaceComputers();
+  const { computers, sessions, localId, currentId, navigate } = useWorkspaceComputers();
+  const frame = readWorkspaceFrame();
   if (readExecutionContext()?.controller.capabilities.remoteConnections !== true) return null;
   if (!isHostSettingsSection(section)) {
     return (
@@ -178,14 +179,21 @@ export function SettingsComputerPicker({ section }: { section: SettingsSectionId
   }
   const select = (environmentId: string) => {
     if (environmentId === currentId) return;
-    const computer = computers.find((item) => item.id === environmentId);
-    if (!computer?.available) {
-      toastManager.add({
-        type: "error",
-        title: "Computer unavailable",
-        description: "Reconnect this computer in Connections and try again.",
-      });
-      return;
+    if (environmentId !== localId) {
+      const selected = sessions.find(
+        (session) => session.host.executionScope.environmentId === environmentId,
+      )?.host;
+      const session = (frame?.controller.sessions ?? readWorkspaceSessions)().find(
+        (item) => item.host === selected,
+      );
+      if (!session?.navigation || session.error || session.summary?.state !== "open") {
+        toastManager.add({
+          type: "error",
+          title: "Computer unavailable",
+          description: "Reconnect this computer in Connections and try again.",
+        });
+        return;
+      }
     }
     const search = new URLSearchParams({
       section,
