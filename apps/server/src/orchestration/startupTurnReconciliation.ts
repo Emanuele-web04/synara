@@ -68,6 +68,8 @@ import {
 } from "./stalePendingInteractions.ts";
 import { OrchestrationEngineService } from "./Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "./Services/ProjectionSnapshotQuery.ts";
+import { ProviderCommandReactor } from "./Services/ProviderCommandReactor.ts";
+import { reportReliabilityIssue } from "../reliability";
 
 /** The `thread.session.set` variant of the internal orchestration command union. */
 type ThreadSessionSetCommand = Extract<
@@ -557,11 +559,9 @@ export function planRestartTurnReconciliation(input: {
  * orchestration reactor has already started — so re-reading it would be both
  * slower and staler than the model the engine is already maintaining.
  *
- * The durable pending-interaction rows are read once, up front. Rows created
- * after that read belong to a runtime started in *this* process and stay
- * untouched, which is what keeps this safe to run while reactors are already
- * live: nothing in the snapshot can become answerable again, and nothing
- * answerable can enter the snapshot.
+ * The command reactor can already have replayed a pending send by this point.
+ * Inspect and settle each candidate under its provider admission lease so
+ * previous-process work cannot be confused with a runtime started during boot.
  */
 export const reconcileRestartStuckTurns: Effect.Effect<
   void,
@@ -570,35 +570,41 @@ export const reconcileRestartStuckTurns: Effect.Effect<
   | ProjectionSnapshotQuery
   | ProjectionPendingInteractionRepository
   | ProviderSessionRuntimeRepository
+  | ProviderCommandReactor
 > = Effect.gen(function* () {
+  let failureReported = false;
+  const noteFailure = Effect.sync(() => {
+    if (failureReported) return;
+    failureReported = true;
+    reportReliabilityIssue("recovery.restart_reconciliation_failed");
+  });
+  const providerCommands = yield* ProviderCommandReactor;
   const engine = yield* OrchestrationEngineService;
   const snapshotQuery = yield* ProjectionSnapshotQuery;
   const readModel = yield* engine.getReadModel();
 
   const pendingInteractions = yield* ProjectionPendingInteractionRepository;
-  const unsettled = yield* pendingInteractions
-    .listUnsettled({})
-    .pipe(
-      Effect.catchCause((cause) =>
-        Effect.logWarning("failed to read restart-orphaned callbacks", { cause }).pipe(
-          Effect.as([]),
-        ),
+  const unsettled = yield* pendingInteractions.listUnsettled({}).pipe(
+    Effect.catchCause((cause) =>
+      Effect.logWarning("failed to read restart-orphaned callbacks", { cause }).pipe(
+        Effect.tap(() => noteFailure),
+        Effect.as([]),
       ),
-    );
+    ),
+  );
   const unsettledByThread = new Map(Object.entries(Arr.groupBy(unsettled, (row) => row.threadId)));
   // A runtime row the previous process never marked stopped belongs to a
   // runtime that died with it (a clean shutdown stops every runtime first).
   const runtimeRows = yield* ProviderSessionRuntimeRepository;
   const deadRuntimeThreadIds = new Set(
-    (yield* runtimeRows
-      .list()
-      .pipe(
-        Effect.catchCause((cause) =>
-          Effect.logWarning("failed to read restart-orphaned provider runtimes", { cause }).pipe(
-            Effect.as([]),
-          ),
+    (yield* runtimeRows.list().pipe(
+      Effect.catchCause((cause) =>
+        Effect.logWarning("failed to read restart-orphaned provider runtimes", { cause }).pipe(
+          Effect.tap(() => noteFailure),
+          Effect.as([]),
         ),
-      ))
+      ),
+    ))
       .filter((row) => row.status !== "stopped")
       .map((row) => row.threadId),
   );
@@ -622,51 +628,74 @@ export const reconcileRestartStuckTurns: Effect.Effect<
     return;
   }
 
-  const reconcilableThreads = yield* Effect.forEach(
+  const reconciled = yield* Effect.forEach(
     threadsNeedingRestartCleanup,
-    (thread) => {
-      const pendingInteractions = unsettledByThread.get(thread.id);
-      const fallback = pendingInteractions ? { ...thread, pendingInteractions } : thread;
-      return snapshotQuery.getThreadDetailById(thread.id).pipe(
-        Effect.map((detail) => Option.getOrElse(detail, () => fallback)),
-        Effect.catchCause((cause) =>
-          Effect.logWarning("restart turn reconciliation continuing without thread activities", {
-            threadId: thread.id,
-            cause,
-          }).pipe(Effect.as(fallback)),
+    (thread) =>
+      providerCommands
+        .withRestartOrphanedThread(
+          thread.id,
+          Effect.gen(function* () {
+            const pendingInteractions = unsettledByThread.get(thread.id);
+            const fallback = pendingInteractions ? { ...thread, pendingInteractions } : thread;
+            const detail = yield* snapshotQuery.getThreadDetailById(thread.id).pipe(
+              Effect.map((detail) => Option.getOrElse(detail, () => fallback)),
+              Effect.catchCause((cause) =>
+                Effect.logWarning(
+                  "restart turn reconciliation continuing without thread activities",
+                  {
+                    threadId: thread.id,
+                    cause,
+                  },
+                ).pipe(
+                  Effect.tap(() => noteFailure),
+                  Effect.as(fallback),
+                ),
+              ),
+            );
+            const commands = planRestartTurnReconciliation({
+              threads: [detail],
+              pendingInteractions: pendingInteractions ?? [],
+              now,
+              retireTasksStartedBefore: processStartedAt,
+            });
+            yield* Effect.forEach(
+              commands,
+              (command) =>
+                engine.dispatch(command).pipe(
+                  Effect.catchCause((cause) =>
+                    Effect.logWarning("failed to reconcile restart-stuck turn", {
+                      threadId: command.threadId,
+                      cause,
+                    }).pipe(Effect.tap(() => noteFailure)),
+                  ),
+                ),
+              { discard: true },
+            );
+            return commands.length;
+          }),
+        )
+        .pipe(
+          Effect.catchCause((cause) =>
+            Effect.logWarning("failed to verify restart-orphaned thread ownership", {
+              threadId: thread.id,
+              cause,
+            }).pipe(
+              Effect.tap(() => noteFailure),
+              Effect.as(Option.none()),
+            ),
+          ),
+          Effect.map(Option.getOrElse(() => 0)),
         ),
-      );
-    },
     { concurrency: 4 },
   );
-
-  const commands = planRestartTurnReconciliation({
-    threads: reconcilableThreads,
-    pendingInteractions: unsettled,
-    now,
-    retireTasksStartedBefore: processStartedAt,
-  });
-  if (commands.length === 0) {
-    return;
-  }
-
-  yield* Effect.logInfo("reconciling restart-stuck turns", {
-    commandCount: commands.length,
-    threadCount: threadsNeedingRestartCleanup.length,
-    threadIds: threadsNeedingRestartCleanup.map((thread) => thread.id),
-  });
-
-  yield* Effect.forEach(
-    commands,
-    (command) =>
-      engine.dispatch(command).pipe(
-        Effect.catchCause((cause) =>
-          Effect.logWarning("failed to reconcile restart-stuck turn", {
-            threadId: command.threadId,
-            cause,
-          }),
-        ),
-      ),
-    { discard: true },
+  const threadIds = threadsNeedingRestartCleanup.flatMap((thread, index) =>
+    reconciled[index] ? [thread.id] : [],
   );
+  if (threadIds.length > 0) {
+    yield* Effect.logInfo("reconciling restart-stuck turns", {
+      commandCount: reconciled.reduce((total, count) => total + count, 0),
+      threadCount: threadIds.length,
+      threadIds,
+    });
+  }
 });

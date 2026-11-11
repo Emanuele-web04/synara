@@ -61,6 +61,7 @@ const sender = (root, fetcher, overrides = {}) => {
     ...overrides,
   });
   senders.push(value);
+  value.initialize();
   if (overrides.enabled !== false) value.setEnabled(true);
   return value;
 };

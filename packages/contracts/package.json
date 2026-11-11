@@ -27,6 +27,10 @@
       "types": "./src/productAnalytics.ts",
       "import": "./src/productAnalytics.ts"
     },
+    "./reliability": {
+      "types": "./src/reliability.ts",
+      "import": "./src/reliability.ts"
+    },
     "./composerSlashCommands": {
       "types": "./src/composerSlashCommands.ts",
       "import": "./src/composerSlashCommands.ts"

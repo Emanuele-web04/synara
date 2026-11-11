@@ -83,6 +83,12 @@ function pairingApi(
   };
 }
 
+function makeStandaloneCoordinator(
+  options: Omit<ConstructorParameters<typeof HostSecretsCoordinator>[0], "persistForAccount">,
+): HostSecretsCoordinator {
+  return new HostSecretsCoordinator({ ...options, persistForAccount: (write) => write() });
+}
+
 describe("HostSecretsCoordinator pairing", () => {
   it("shows the same code on both devices and adopts the key only after matching confirmation", async () => {
     const mailbox = new Map<string, PutSyncKeyWrapRequest["wrap"]>();
@@ -90,14 +96,14 @@ describe("HostSecretsCoordinator pairing", () => {
     const recipientPath = await makeSyncKeyPath("recipient");
     const existingApi = pairingApi(mailbox);
     const recipientApi = pairingApi(mailbox);
-    const existing = new HostSecretsCoordinator({
+    const existing = makeStandaloneCoordinator({
       accountUrl: "https://accounts.example.com",
       userId: "user-1",
       deviceId: "00000000-0000-4000-8000-000000000001",
       syncKeyFilePath: existingPath,
       api: existingApi,
     });
-    const recipient = new HostSecretsCoordinator({
+    const recipient = makeStandaloneCoordinator({
       accountUrl: "https://accounts.example.com",
       userId: "user-1",
       deviceId: "00000000-0000-4000-8000-000000000002",
@@ -259,7 +265,7 @@ describe("HostSecretsCoordinator revocation rotation", () => {
       revokeDevice,
     };
     const makeCoordinator = () =>
-      new HostSecretsCoordinator({
+      makeStandaloneCoordinator({
         accountUrl: "https://accounts.example.com",
         userId: "user-1",
         deviceId: "00000000-0000-4000-8000-000000000001",
@@ -331,7 +337,7 @@ describe("HostSecretsCoordinator revocation rotation", () => {
         calls.push("revoke");
       }),
     };
-    const coordinator = new HostSecretsCoordinator({
+    const coordinator = makeStandaloneCoordinator({
       accountUrl: "https://accounts.example.com",
       userId: "user-1",
       deviceId: "00000000-0000-4000-8000-000000000001",
@@ -440,7 +446,7 @@ describe("HostSecretsCoordinator revocation rotation", () => {
       revokeDevice,
     };
     const makeCoordinator = () =>
-      new HostSecretsCoordinator({
+      makeStandaloneCoordinator({
         accountUrl: "https://accounts.example.com",
         userId: "user-1",
         deviceId: "00000000-0000-4000-8000-000000000001",
@@ -557,7 +563,7 @@ describe("HostSecretsCoordinator revocation rotation", () => {
     // anything. The DELETE is the whole point of the call: skipping it leaves
     // the removed device holding a live credential while the UI says it is gone.
     const api = pairingApi(new Map());
-    const coordinator = new HostSecretsCoordinator({
+    const coordinator = makeStandaloneCoordinator({
       accountUrl: "https://accounts.example.com",
       userId: "user-1",
       deviceId: "00000000-0000-4000-8000-000000000001",
@@ -659,7 +665,7 @@ describe("HostSecretsCoordinator revocation rotation", () => {
       revokeDevice: vi.fn(async () => {}),
     };
     const makeCoordinator = () =>
-      new HostSecretsCoordinator({
+      makeStandaloneCoordinator({
         accountUrl: "https://accounts.example.com",
         userId: "user-1",
         deviceId: "00000000-0000-4000-8000-000000000001",
@@ -688,7 +694,7 @@ describe("HostSecretsCoordinator revocation rotation", () => {
 
   it("refuses to revoke the current device because it is not a surviving rotator", async () => {
     const api = pairingApi(new Map());
-    const coordinator = new HostSecretsCoordinator({
+    const coordinator = makeStandaloneCoordinator({
       accountUrl: "https://accounts.example.com",
       userId: "user-1",
       deviceId: "00000000-0000-4000-8000-000000000001",
@@ -710,14 +716,14 @@ describe("HostSecretsCoordinator revocation rotation", () => {
     // suspicious one.
     const mailbox = new Map<string, PutSyncKeyWrapRequest["wrap"]>();
     const recipientPath = await makeSyncKeyPath("burn-recipient");
-    const existing = new HostSecretsCoordinator({
+    const existing = makeStandaloneCoordinator({
       accountUrl: "https://accounts.example.com",
       userId: "user-1",
       deviceId: "00000000-0000-4000-8000-00000000000a",
       syncKeyFilePath: await makeSyncKeyPath("burn-existing"),
       api: pairingApi(mailbox),
     });
-    const recipient = new HostSecretsCoordinator({
+    const recipient = makeStandaloneCoordinator({
       accountUrl: "https://accounts.example.com",
       userId: "user-1",
       deviceId: "00000000-0000-4000-8000-00000000000b",
@@ -754,14 +760,14 @@ describe("HostSecretsCoordinator revocation rotation", () => {
     // codes cannot detect that — only a code that differs in exactly one place.
     const mailbox = new Map<string, PutSyncKeyWrapRequest["wrap"]>();
     const recipientPath = await makeSyncKeyPath("near-miss-recipient");
-    const existing = new HostSecretsCoordinator({
+    const existing = makeStandaloneCoordinator({
       accountUrl: "https://accounts.example.com",
       userId: "user-1",
       deviceId: "00000000-0000-4000-8000-00000000000c",
       syncKeyFilePath: await makeSyncKeyPath("near-miss-existing"),
       api: pairingApi(mailbox),
     });
-    const recipient = new HostSecretsCoordinator({
+    const recipient = makeStandaloneCoordinator({
       accountUrl: "https://accounts.example.com",
       userId: "user-1",
       deviceId: "00000000-0000-4000-8000-00000000000d",
@@ -812,7 +818,7 @@ describe("HostSecretsCoordinator revocation rotation", () => {
       userId: "user-1",
       syncKey: await generateSyncKey(),
     });
-    const coordinator = new HostSecretsCoordinator({
+    const coordinator = makeStandaloneCoordinator({
       accountUrl: "https://accounts.example.com",
       userId: "user-1",
       deviceId: "00000000-0000-4000-8000-00000000000e",

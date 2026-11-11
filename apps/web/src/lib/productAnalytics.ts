@@ -7,6 +7,7 @@ import {
   type ProductAnalyticsFeature,
   type ProductAnalyticsInput,
   type ProductAnalyticsMode,
+  type ReliabilityCode,
 } from "@synara/contracts";
 import { isBuiltInComposerSlashCommandName } from "@synara/shared/composerSlashCommands";
 import { readWorkspaceFrame } from "./hosts/workspaceFrame";
@@ -29,6 +30,10 @@ export function trackProductAnalytics(input: ProductAnalyticsInput): void {
   } catch {
     // Analytics never changes the operation it observes.
   }
+}
+
+export function trackReliabilityIssue(code: ReliabilityCode): void {
+  trackProductAnalytics({ event: "reliability.issue", outcome: "failed", reliabilityCode: code });
 }
 
 const BUILT_IN_SHORTCUTS = new Set<string>(STATIC_KEYBINDING_COMMANDS);

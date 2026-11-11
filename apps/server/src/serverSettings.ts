@@ -5,6 +5,8 @@
  * keep UI-only preferences in local storage while these values become durable
  * and process-authoritative on the server.
  */
+import { isDeepStrictEqual } from "node:util";
+
 import {
   DEFAULT_DROID_GIT_TEXT_GENERATION_MODEL,
   DEFAULT_GIT_TEXT_GENERATION_MODEL,
@@ -19,6 +21,8 @@ import {
   type ProviderKind,
   type ServerSettingsPatch,
   type ServerSettingsView,
+  type ServerUpdateSettingsInput,
+  type ServerUpdateSettingsResult,
 } from "@synara/contracts";
 import type { DeepPartial } from "@synara/shared/Struct";
 import {
@@ -74,8 +78,8 @@ export interface ServerSettingsShape {
     derivePatch?: (current: ServerSettings) => ServerSettingsPatch,
   ) => Effect.Effect<ServerSettings, ServerSettingsError>;
   readonly updateSettingsView: (
-    patch: ServerSettingsPatch,
-  ) => Effect.Effect<ServerSettingsView, ServerSettingsError>;
+    patch: ServerUpdateSettingsInput,
+  ) => Effect.Effect<ServerUpdateSettingsResult, ServerSettingsError>;
   /** Attach before returning so startup snapshot reads cannot race live updates. */
   readonly subscribeChanges: Effect.Effect<Stream.Stream<ServerSettings>, never, Scope.Scope>;
   readonly streamChanges: Stream.Stream<ServerSettings>;
@@ -87,6 +91,13 @@ export interface ServerSettingsSnapshot {
   readonly migrationVersion: number;
   readonly settings: ServerSettings;
 }
+
+const LegacyProviderImports = Schema.Struct({
+  providerKinds: Schema.Array(Schema.String),
+  instanceIds: Schema.Array(Schema.String),
+});
+type LegacyProviderImports = typeof LegacyProviderImports.Type;
+const EMPTY_LEGACY_PROVIDER_IMPORTS: LegacyProviderImports = { providerKinds: [], instanceIds: [] };
 
 const SERVER_SETTINGS_MIGRATION_VERSION = 3;
 const PREVIOUS_GIT_TEXT_GENERATION_MODEL = "gpt-5.4-mini";
@@ -164,23 +175,27 @@ export class ServerSettingsService extends ServiceMap.Service<
         const currentSettingsRef = yield* Ref.make<ServerSettings>(initialSettings);
         const changesPubSub = yield* PubSub.unbounded<ServerSettings>();
         const revisionRef = yield* Ref.make(0);
+        const legacyProviderImports = yield* Ref.make(EMPTY_LEGACY_PROVIDER_IMPORTS);
         const emitChange = (settings: ServerSettings) =>
           PubSub.publish(changesPubSub, settings).pipe(Effect.asVoid);
         const projectSettings = (settings: ServerSettings) =>
           resolveTextGenerationProvider(gateBetaOnlyProviders(settings));
         const getSettings = Ref.get(currentSettingsRef).pipe(Effect.map(projectSettings));
         const updateSettings = (
-          patch: ServerSettingsPatch,
+          patch: ServerUpdateSettingsInput,
           derivePatch?: (current: ServerSettings) => ServerSettingsPatch,
         ) =>
-          Ref.get(currentSettingsRef).pipe(
-            Effect.flatMap((currentSettings) =>
-              normalizeSettings(
-                "<memory>",
-                currentSettings,
-                derivePatch?.(projectSettings(currentSettings)) ?? patch,
-              ),
-            ),
+          Effect.gen(function* () {
+            const current = yield* Ref.get(currentSettingsRef);
+            const prepared = prepareLegacyProviderImport(
+              current,
+              derivePatch?.(projectSettings(current)) ?? patch,
+              yield* Ref.get(legacyProviderImports),
+            );
+            const next = yield* normalizeSettings("<memory>", current, prepared.patch);
+            yield* Ref.set(legacyProviderImports, prepared.imports);
+            return next;
+          }).pipe(
             Effect.tap((nextSettings) => Ref.set(currentSettingsRef, nextSettings)),
             Effect.tap(() => Ref.update(revisionRef, (revision) => revision + 1)),
             Effect.tap(emitChange),
@@ -204,7 +219,9 @@ export class ServerSettingsService extends ServiceMap.Service<
           ),
           updateSettings,
           updateSettingsView: (patch) =>
-            updateSettings(patch).pipe(Effect.map(toServerSettingsView)),
+            updateSettings(patch).pipe(
+              Effect.map((settings) => toServerSettingsUpdateView(settings, patch)),
+            ),
           subscribeChanges: PubSub.subscribe(changesPubSub).pipe(
             Effect.map((subscription) =>
               Stream.fromSubscription(subscription).pipe(Stream.map(projectSettings)),
@@ -507,6 +524,60 @@ export function redactServerSettingsForClient(settings: ServerSettings): ServerS
   return { ...settings, providerInstances };
 }
 
+function toServerSettingsUpdateView(
+  settings: ServerSettings,
+  input: ServerUpdateSettingsInput,
+): ServerUpdateSettingsResult {
+  const view = toServerSettingsView(settings);
+  return input.legacyProviders !== undefined || input.legacyProviderInstances !== undefined
+    ? { ...view, legacyProviderImportAcknowledged: true }
+    : view;
+}
+
+function prepareLegacyProviderImport(
+  current: ServerSettings,
+  input: ServerUpdateSettingsInput,
+  imports: LegacyProviderImports,
+): { readonly patch: ServerSettingsPatch; readonly imports: LegacyProviderImports } {
+  const { legacyProviders, legacyProviderInstances, ...patch } = input;
+  if (legacyProviders === undefined && legacyProviderInstances === undefined) {
+    return { patch, imports };
+  }
+  const providerKinds = new Set(imports.providerKinds);
+  const instanceIds = new Set(imports.instanceIds);
+  const missingProviders = Object.fromEntries(
+    Object.entries(legacyProviders ?? {}).filter(([kind]) => {
+      const provider = kind as ProviderKind;
+      // A configured provider owns the whole record. In particular, importing
+      // a URL and password separately can send a current secret to an old host.
+      return (
+        !providerKinds.has(kind) &&
+        isDeepStrictEqual(current.providers[provider], DEFAULT_SERVER_SETTINGS.providers[provider])
+      );
+    }),
+  ) as NonNullable<ServerSettingsPatch["providers"]>;
+  const missingInstances = Object.fromEntries(
+    Object.entries(legacyProviderInstances ?? {}).filter(
+      ([id]) => !instanceIds.has(id) && !Object.hasOwn(current.providerInstances, id),
+    ),
+  );
+  return {
+    patch: {
+      ...patch,
+      ...(Object.keys(missingProviders).length > 0
+        ? { providers: { ...missingProviders, ...patch.providers } }
+        : {}),
+      ...(patch.providerInstances === undefined && Object.keys(missingInstances).length > 0
+        ? { providerInstances: { ...current.providerInstances, ...missingInstances } }
+        : {}),
+    },
+    imports: {
+      providerKinds: [...new Set([...providerKinds, ...Object.keys(legacyProviders ?? {})])],
+      instanceIds: [...new Set([...instanceIds, ...Object.keys(legacyProviderInstances ?? {})])],
+    },
+  };
+}
+
 function normalizeSettings(
   settingsPath: string,
   current: ServerSettings,
@@ -553,7 +624,7 @@ function readLegacyProviderPasswords(raw: string): ReadonlyMap<ExternalProviderS
   }
 }
 
-function omitProviderPasswords(patch: ServerSettingsPatch): ServerSettingsPatch {
+function omitProviderPasswords(patch: ServerUpdateSettingsInput): ServerUpdateSettingsInput {
   if (!patch.providers) return patch;
   const { serverPassword: _openCodePassword, ...opencode } = patch.providers.opencode ?? {};
   return {
@@ -638,8 +709,24 @@ function decodeSettingsFromJson(settingsPath: string, raw: string) {
     const parsed = JSON.parse(raw) as unknown;
     const envelope =
       parsed !== null && typeof parsed === "object" && "settings" in parsed
-        ? (parsed as { revision?: unknown; migrationVersion?: unknown; settings: unknown })
+        ? (parsed as {
+            revision?: unknown;
+            migrationVersion?: unknown;
+            settings: unknown;
+            legacyProviderImports?: unknown;
+          })
         : null;
+    const migrationVersion =
+      envelope && Number.isSafeInteger(envelope.migrationVersion)
+        ? Number(envelope.migrationVersion)
+        : 0;
+    if (migrationVersion > SERVER_SETTINGS_MIGRATION_VERSION) {
+      return { _tag: "UnsupportedVersion" as const, migrationVersion };
+    }
+    const imports = Schema.decodeUnknownExit(LegacyProviderImports)(
+      envelope?.legacyProviderImports ?? EMPTY_LEGACY_PROVIDER_IMPORTS,
+    );
+    if (imports._tag === "Failure") return { _tag: "InvalidLegacyImportReceipt" as const };
     const decoded = Schema.decodeUnknownExit(ServerSettings)(
       migrateRemovedKiloSettings(envelope?.settings ?? parsed),
     );
@@ -653,10 +740,8 @@ function decodeSettingsFromJson(settingsPath: string, raw: string) {
         envelope && Number.isSafeInteger(envelope.revision) && Number(envelope.revision) >= 0
           ? Number(envelope.revision)
           : 0,
-      migrationVersion:
-        envelope && Number.isSafeInteger(envelope.migrationVersion)
-          ? Number(envelope.migrationVersion)
-          : 0,
+      migrationVersion,
+      legacyProviderImports: imports.value,
       legacyFormat: envelope === null,
     };
   } catch (cause) {
@@ -1075,6 +1160,7 @@ const makeServerSettings = Effect.gen(function* () {
           settings: yield* withCredentialState(DEFAULT_SERVER_SETTINGS),
           revision: 0,
           migrated: false,
+          legacyProviderImports: EMPTY_LEGACY_PROVIDER_IMPORTS,
         };
       }
 
@@ -1089,6 +1175,18 @@ const makeServerSettings = Effect.gen(function* () {
         ),
       );
       const decoded = decodeSettingsFromJson(settingsPath, raw);
+      if (decoded._tag === "UnsupportedVersion") {
+        return yield* new ServerSettingsError({
+          settingsPath,
+          detail: `Settings use format ${decoded.migrationVersion}, but this build supports ${SERVER_SETTINGS_MIGRATION_VERSION}. Update Synara to open them.`,
+        });
+      }
+      if (decoded._tag === "InvalidLegacyImportReceipt") {
+        return yield* new ServerSettingsError({
+          settingsPath,
+          detail: "Legacy provider import metadata is unreadable.",
+        });
+      }
       if (decoded._tag === "Failure") {
         const quarantinePath = `${settingsPath}.invalid-${Date.now()}`;
         yield* fs.rename(settingsPath, quarantinePath).pipe(Effect.catch(() => Effect.void));
@@ -1101,6 +1199,7 @@ const makeServerSettings = Effect.gen(function* () {
           settings: yield* withCredentialState(DEFAULT_SERVER_SETTINGS),
           revision: 0,
           migrated: false,
+          legacyProviderImports: EMPTY_LEGACY_PROVIDER_IMPORTS,
         };
       }
       const hasPlaintextInstanceSecrets = hasPlaintextProviderInstanceSecrets(decoded.value);
@@ -1120,6 +1219,7 @@ const makeServerSettings = Effect.gen(function* () {
       return {
         settings: materializedSettings,
         revision: decoded.revision,
+        legacyProviderImports: decoded.legacyProviderImports,
         migrated:
           hasPlaintextInstanceSecrets ||
           legacyPasswords.size > 0 ||
@@ -1128,10 +1228,17 @@ const makeServerSettings = Effect.gen(function* () {
       };
     });
 
-  const writeSettingsAtomically = (snapshot: ServerSettingsSnapshot) => {
+  const writeSettingsAtomically = (
+    snapshot: ServerSettingsSnapshot,
+    imports: LegacyProviderImports,
+  ) => {
+    const envelope =
+      imports.providerKinds.length > 0 || imports.instanceIds.length > 0
+        ? { ...snapshot, legacyProviderImports: imports }
+        : snapshot;
     return writeFileStringAtomically({
       filePath: settingsPath,
-      contents: `${JSON.stringify(snapshot, null, 2)}\n`,
+      contents: `${JSON.stringify(envelope, null, 2)}\n`,
     }).pipe(
       Effect.mapError(
         (cause) =>
@@ -1173,11 +1280,14 @@ const makeServerSettings = Effect.gen(function* () {
           providerSecretSnapshots,
         );
         obsoleteSecretNames = persisted.obsoleteSecretNames;
-        yield* writeSettingsAtomically({
-          revision: loaded.revision,
-          migrationVersion: SERVER_SETTINGS_MIGRATION_VERSION,
-          settings: persisted.settings,
-        });
+        yield* writeSettingsAtomically(
+          {
+            revision: loaded.revision,
+            migrationVersion: SERVER_SETTINGS_MIGRATION_VERSION,
+            settings: persisted.settings,
+          },
+          loaded.legacyProviderImports,
+        );
         markLiveSecrets(persisted.liveSecretNames);
       }
       yield* Ref.set(settingsRef, loaded.settings);
@@ -1201,7 +1311,7 @@ const makeServerSettings = Effect.gen(function* () {
     resolveTextGenerationProvider(gateBetaOnlyProviders(settings));
   const getSettings = Ref.get(settingsRef).pipe(Effect.map(projectSettings));
   const updateSettings = (
-    initialPatch: ServerSettingsPatch,
+    initialPatch: ServerUpdateSettingsInput,
     derivePatch?: (current: ServerSettings) => ServerSettingsPatch,
   ) =>
     writeSemaphore.withPermits(1)(
@@ -1212,7 +1322,11 @@ const makeServerSettings = Effect.gen(function* () {
           Effect.gen(function* () {
             const disk = yield* loadSettingsFromDisk(providerPasswordSnapshots);
             const current = disk.settings;
-            const patch = derivePatch?.(projectSettings(current)) ?? initialPatch;
+            const { patch, imports } = prepareLegacyProviderImport(
+              current,
+              derivePatch?.(projectSettings(current)) ?? initialPatch,
+              disk.legacyProviderImports,
+            );
             for (const provider of EXTERNAL_SERVER_PROVIDERS) {
               const password = patch.providers?.[provider]?.serverPassword;
               if (password !== undefined) {
@@ -1235,11 +1349,14 @@ const makeServerSettings = Effect.gen(function* () {
               liveSecretNames,
               obsoleteSecretNames,
             } = yield* persistProviderEnvironmentSecrets(current, next, providerSecretSnapshots);
-            yield* writeSettingsAtomically({
-              revision: nextRevision,
-              migrationVersion: SERVER_SETTINGS_MIGRATION_VERSION,
-              settings: persistedSettings,
-            });
+            yield* writeSettingsAtomically(
+              {
+                revision: nextRevision,
+                migrationVersion: SERVER_SETTINGS_MIGRATION_VERSION,
+                settings: persistedSettings,
+              },
+              imports,
+            );
             markLiveSecrets(liveSecretNames);
             return { next, nextRevision, obsoleteSecretNames };
           }),
@@ -1271,7 +1388,10 @@ const makeServerSettings = Effect.gen(function* () {
       })),
     ),
     updateSettings,
-    updateSettingsView: (patch) => updateSettings(patch).pipe(Effect.map(toServerSettingsView)),
+    updateSettingsView: (patch) =>
+      updateSettings(patch).pipe(
+        Effect.map((settings) => toServerSettingsUpdateView(settings, patch)),
+      ),
     subscribeChanges: PubSub.subscribe(changesPubSub).pipe(
       Effect.map((subscription) =>
         Stream.fromSubscription(subscription).pipe(Stream.map(projectSettings)),

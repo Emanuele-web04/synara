@@ -11,12 +11,14 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { useEffect, useRef, useState } from "react";
 import { useAccount } from "~/hooks/useAccount";
+import { getFormatLocale, t } from "~/i18n";
 import { accountBillingQueryOptions } from "~/lib/accountReactQuery";
 import {
   formatBillingPrice,
   isPolarBillingUrl,
   runAccountBillingOperation,
 } from "~/lib/accountBilling";
+import { accountErrorMessage, readAccountErrorCode } from "~/lib/accountLogic";
 import { accountStatusScope } from "~/lib/hosts/controlQueryScope";
 import {
   BellIcon,
@@ -27,6 +29,7 @@ import {
   ExternalLinkIcon,
   UserIcon,
 } from "~/lib/icons";
+import { trackReliabilityIssue } from "~/lib/productAnalytics";
 import { ensureNativeApi } from "~/nativeApi";
 import { useAccountDialogStore } from "../account/accountDialogStore";
 import { Badge } from "../ui/badge";
@@ -87,7 +90,7 @@ export function SynaraPlanLink() {
   if (status?.state !== "signed-in" || !query.data?.available) return null;
   return (
     <Button variant="ghost" size="sm" onClick={openPlan}>
-      {query.data.access === "granted" ? "Alto" : "Free plan"}
+      {query.data.access === "granted" ? t("settings:altoProPlan") : "Free plan"}
     </Button>
   );
 }
@@ -140,12 +143,14 @@ function BillingAccountPanel({ status, scope }: { status: AccountStatus | null; 
           opened: true,
         });
       }
-    } catch {
+    } catch (cause) {
+      trackReliabilityIssue("billing.redirect_failed");
       if (mounted.current) {
+        const fallback = sandbox
+          ? t("settings:testBillingOpenFailed")
+          : t("settings:billingOpenFailed");
         setMessage({
-          text: sandbox
-            ? "Could not open test billing. Try again."
-            : "Could not open billing. Try again.",
+          text: readAccountErrorCode(cause) ? accountErrorMessage(cause, fallback) : fallback,
           opened: false,
         });
       }
@@ -162,8 +167,7 @@ function BillingAccountPanel({ status, scope }: { status: AccountStatus | null; 
   return (
     <SettingsSectionShell
       id={SYNARA_PLAN_SECTION_ID}
-      title="Synara Alto"
-      translateTitle={false}
+      title="settings:synaraAltoPro"
       action={
         sandbox ? (
           <Badge variant="outline">Sandbox</Badge>
@@ -407,7 +411,7 @@ function ActiveAltoCard(props: {
       <SettingsListRow
         title={
           <span className="flex items-center gap-2">
-            <span>Alto</span>
+            <span>{t("settings:altoProPlan")}</span>
             <Badge variant={ending ? "warning" : "info"}>{ending ? "Ending" : "Active"}</Badge>
           </span>
         }
@@ -449,5 +453,9 @@ function formatPlanDate(value: string): string | null {
   const date = new Date(value);
   return Number.isNaN(date.getTime())
     ? null
-    : date.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+    : date.toLocaleDateString(getFormatLocale(), {
+        month: "short",
+        day: "numeric",
+        year: "numeric",
+      });
 }
