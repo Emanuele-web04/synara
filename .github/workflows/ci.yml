@@ -168,7 +168,7 @@ jobs:
         run: node scripts/node-pty-smoke.mjs
 
       - name: Test (${{ matrix.pkg }})
-        run: bunx turbo run test ${{ matrix.filters }} -- ${{ matrix.test-args }}
+        run: bunx turbo run test ${{ matrix.filters }} -- ${{ matrix.test-args }} ${{ matrix.filters == '--filter=@synara/cli' && format('--reporter=default --reporter={0}/.github/scripts/shard-timing-reporter.mjs', github.workspace) || '' }}
 
   # ChatView is one large file, so split it by complementary test-name groups.
   # Other browser files use native 3-way file sharding. Every runner keeps serial
