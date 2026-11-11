@@ -147,6 +147,15 @@ export interface UsageAnalyticsView {
   readonly rhythm: ReadonlyArray<ReadonlyArray<number>>;
   readonly unavailableProviders: ReadonlyArray<ProviderKind>;
   readonly pricing: StatsGetUsageAnalyticsResult["pricing"];
+  /** Tokens in this period that needed an estimate and got none. */
+  readonly unpriced: {
+    /** No API list price for these models. */
+    readonly tokens: number;
+    readonly models: ReadonlyArray<string>;
+    /** No input/output split recorded (deleted or older chats). */
+    readonly unsplitTokens: number;
+    readonly providers: ReadonlySet<UsageAnalyticsProvider>;
+  };
 }
 
 function emptyTotals(): UsageAnalyticsTotals {
@@ -191,6 +200,10 @@ export function buildUsageAnalyticsView(
   const projects = new Map<string, UsageAnalyticsProjectTotal>();
   const origins = { user: 0, automation: 0, agent: 0 };
   const rhythm = Array.from({ length: 7 }, () => Array.from({ length: 24 }, () => 0));
+  const unpricedModels = new Set<string>();
+  const unpricedProviders = new Set<UsageAnalyticsProvider>();
+  let unpricedTokens = 0;
+  let unsplitTokens = 0;
 
   const period = (hour: string): "current" | "previous" | null => {
     const ms = Date.parse(hour);
@@ -243,6 +256,12 @@ export function buildUsageAnalyticsView(
     totals.tokens += row.tokens;
     totals.cacheReadTokens += row.cacheReadTokens;
     origins[row.origin] += row.tokens;
+    if (row.unpricedTokens > 0) {
+      unpricedTokens += row.unpricedTokens;
+      if (row.model !== "unknown") unpricedModels.add(row.model);
+    }
+    unsplitTokens += row.unsplitTokens;
+    if (row.unpricedTokens > 0 || row.unsplitTokens > 0) unpricedProviders.add(row.provider);
     const provider = providerFor(row.provider);
     provider.tokens += row.tokens;
     provider.cacheReadTokens += row.cacheReadTokens;
@@ -310,6 +329,12 @@ export function buildUsageAnalyticsView(
     rhythm,
     unavailableProviders: result.unavailableProviders,
     pricing: result.pricing,
+    unpriced: {
+      tokens: unpricedTokens,
+      models: [...unpricedModels].toSorted(),
+      unsplitTokens,
+      providers: unpricedProviders,
+    },
   };
 }
 

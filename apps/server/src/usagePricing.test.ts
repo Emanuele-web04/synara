@@ -7,7 +7,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import nodePath from "node:path";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { lookupRate, makeUsagePricingSource, parseRateTable, priceTokens } from "./usagePricing";
 
@@ -155,9 +155,9 @@ describe("makeUsagePricingSource", () => {
     await source.load();
     online = false;
     now += 25 * 60 * 60 * 1000;
-    const stale = await source.load();
-    expect(stale.status).toBe("cached");
-    expect(stale.table.size).toBeGreaterThan(100);
+    // Old prices come back at once; the failed refresh then marks them cached.
+    expect((await source.load()).table.size).toBeGreaterThan(100);
+    await vi.waitFor(async () => expect((await source.load()).status).toBe("cached"));
 
     const empty = makeUsagePricingSource({
       stateDir: await stateDir(),

@@ -249,7 +249,17 @@ function UsageAnalyticsBody(props: {
       .join(", ");
   const reportedNames = providerNames("reported");
   const estimatedNames = providerNames("estimated");
-  const tokenOnlyNames = providerNames(null);
+  // Providers with unpriced tokens are explained by the notes about those tokens.
+  const tokenOnlyNames = view.providers
+    .filter(
+      (provider) =>
+        provider.costSource === null &&
+        provider.tokens > 0 &&
+        provider.provider !== "unknown" &&
+        !view.unpriced.providers.has(provider.provider),
+    )
+    .map((provider) => providerLabel(provider.provider))
+    .join(", ");
   const pricesUpdated = view.pricing.fetchedAt
     ? new Date(view.pricing.fetchedAt).toLocaleDateString(undefined, {
         month: "short",
@@ -483,12 +493,18 @@ function UsageAnalyticsBody(props: {
                 {pricesUpdated ? ` (LiteLLM, updated ${pricesUpdated})` : ""}.
               </li>
             ) : null}
-            {view.pricing.unpricedTokens > 0 ? (
+            {view.unpriced.tokens > 0 ? (
               <li>
                 {view.pricing.status === "unavailable"
                   ? "API prices could not be downloaded"
-                  : `${view.pricing.unpricedModels.join(", ") || "Some models"} ${view.pricing.unpricedModels.length === 1 ? "has" : "have"} no list price`}
-                , so {formatTokens(view.pricing.unpricedTokens)} tokens have no cost.
+                  : `${view.unpriced.models.join(", ") || "Some models"} ${view.unpriced.models.length === 1 ? "has" : "have"} no API list price`}
+                , so {formatTokens(view.unpriced.tokens)} tokens have no cost.
+              </li>
+            ) : null}
+            {view.unpriced.unsplitTokens > 0 ? (
+              <li>
+                {formatTokens(view.unpriced.unsplitTokens)} tokens from deleted or older chats have
+                no input/output split, so they have no cost.
               </li>
             ) : null}
             {tokenOnlyNames ? <li>{tokenOnlyNames}: tokens only, no cost.</li> : null}

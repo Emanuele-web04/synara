@@ -145,6 +145,10 @@ async function downloadPrices(): Promise<unknown> {
     signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
   });
   if (!response.ok) throw new Error(`Price table request failed: ${response.status}`);
+  if (Number(response.headers.get("content-length") ?? 0) > MAX_DOCUMENT_BYTES) {
+    await response.body?.cancel();
+    throw new Error("Price table is too large.");
+  }
   const body = await response.text();
   if (body.length > MAX_DOCUMENT_BYTES) throw new Error("Price table is too large.");
   return JSON.parse(body) as unknown;
@@ -162,11 +166,11 @@ export function makeUsagePricingSource(options: {
   let current: PriceTable | null = null;
   let currentFetchedMs = 0;
   let lastAttemptMs = Number.NEGATIVE_INFINITY;
-  let readFile = false;
+  let storedRead = false;
   let inFlight: Promise<PriceTable> | null = null;
 
   const readStored = async (): Promise<void> => {
-    readFile = true;
+    storedRead = true;
     try {
       const stored = JSON.parse(await fs.readFile(filePath, "utf8")) as Partial<StoredPrices>;
       if (typeof stored.fetchedAt !== "string") return;
@@ -180,7 +184,7 @@ export function makeUsagePricingSource(options: {
   };
 
   const refresh = async (): Promise<PriceTable> => {
-    if (!readFile) await readStored();
+    if (!storedRead) await readStored();
     const nowMs = now();
     const stale = current === null || nowMs - currentFetchedMs >= REFRESH_AFTER_MS;
     if (!stale || nowMs - lastAttemptMs < RETRY_AFTER_MS) return current ?? UNAVAILABLE;
@@ -211,12 +215,23 @@ export function makeUsagePricingSource(options: {
     return current ?? UNAVAILABLE;
   };
 
+  const startRefresh = () => {
+    inFlight ??= refresh().finally(() => {
+      inFlight = null;
+    });
+    return inFlight;
+  };
+
   return {
-    load: () => {
-      inFlight ??= refresh().finally(() => {
-        inFlight = null;
-      });
-      return inFlight;
+    // Old prices are returned at once while newer ones download, so a request
+    // waits on the network only when no prices were ever saved.
+    load: async () => {
+      if (!storedRead) await readStored();
+      if (current) {
+        void startRefresh();
+        return current;
+      }
+      return startRefresh();
     },
   };
 }

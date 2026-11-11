@@ -199,6 +199,8 @@ describe("UsageAnalyticsQuery", () => {
     expect(costByProvider.cursor).toBeCloseTo(2);
     // Codex reported its own cost here, so its tokens are not priced again.
     expect(result.costs.every((row) => row.source === "reported")).toBe(true);
+    // Nothing needed an estimate, so the price list was not loaded.
+    expect(result.pricing).toEqual({ status: "unavailable", fetchedAt: null });
 
     expect(result.projects).toEqual([{ projectId: "project-app", title: "App" }]);
     expect(result.unavailableProviders).toEqual(["cursor"]);
@@ -255,11 +257,47 @@ describe("UsageAnalyticsQuery estimates", () => {
     expect(estimated[0]).toMatchObject({ provider: "codex", model: "gpt-5-codex", turns: 0 });
     expect(estimated[0]?.costUsd).toBeCloseTo(700e-6 + 2000e-7 + 300e-5, 10);
 
-    expect(result.pricing).toEqual({
-      status: "fresh",
-      fetchedAt: "2026-09-30T00:00:00.000Z",
-      unpricedModels: ["gpt-9-mystery"],
-      unpricedTokens: 500,
-    });
+    expect(result.pricing).toEqual({ status: "fresh", fetchedAt: "2026-09-30T00:00:00.000Z" });
+    expect(result.tokens).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ model: "gpt-9-mystery", unpricedTokens: 500, unsplitTokens: 0 }),
+        expect.objectContaining({ model: "gpt-5-codex", unpricedTokens: 0, unsplitTokens: 0 }),
+      ]),
+    );
+  });
+
+  it("leaves out Claude costs stored before per-turn accounting", async () => {
+    const result = await runTest(
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        yield* sql`
+          INSERT INTO projection_threads (
+            thread_id, project_id, title, model_selection_json, runtime_mode,
+            interaction_mode, env_mode, created_at, updated_at, deleted_at
+          )
+          VALUES ('thread-claude', 'project-none', 'Claude',
+            '{"provider":"claudeAgent","model":"claude-opus-5-5"}', 'full-access', 'default',
+            'local', '2026-09-30T08:00:00.000Z', '2026-09-30T09:00:00.000Z', NULL)
+        `;
+        // The legacy result holds the process's running total (1 + 2 = 3).
+        yield* sql`
+          INSERT INTO projection_thread_activities (
+            activity_id, thread_id, turn_id, tone, kind, summary, payload_json, sequence, created_at
+          )
+          VALUES
+            ('c-legacy', 'thread-claude', 'turn-a', 'info', 'turn.completed', 'done',
+              '{"provider":"claudeAgent","state":"completed","totalCostUsd":3}', 1,
+              '2026-09-30T08:10:00.000Z'),
+            ('c-v1', 'thread-claude', 'turn-b', 'info', 'turn.completed', 'done',
+              '{"provider":"claudeAgent","state":"completed","tokenAccountingVersion":1,"totalCostUsd":0.5}',
+              2, '2026-09-30T08:20:00.000Z')
+        `;
+        const query = yield* UsageAnalyticsQuery;
+        return yield* query.getUsageAnalytics(WINDOW);
+      }),
+    );
+    expect(result.costs).toEqual([
+      expect.objectContaining({ provider: "claudeAgent", source: "reported", costUsd: 0.5 }),
+    ]);
   });
 });

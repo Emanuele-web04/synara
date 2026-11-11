@@ -33,6 +33,8 @@ const result: StatsGetUsageAnalyticsResult = {
       origin: "user",
       tokens: 3000,
       cacheReadTokens: 2000,
+      unpricedTokens: 0,
+      unsplitTokens: 0,
     },
     {
       hour: localHour(firstDay, 22),
@@ -42,6 +44,8 @@ const result: StatsGetUsageAnalyticsResult = {
       origin: "agent",
       tokens: 1000,
       cacheReadTokens: 0,
+      unpricedTokens: 400,
+      unsplitTokens: 100,
     },
     {
       hour: localHour(dayBefore, 10),
@@ -51,6 +55,8 @@ const result: StatsGetUsageAnalyticsResult = {
       origin: "user",
       tokens: 2000,
       cacheReadTokens: 0,
+      unpricedTokens: 2000,
+      unsplitTokens: 0,
     },
   ],
   turns: [
@@ -83,7 +89,7 @@ const result: StatsGetUsageAnalyticsResult = {
       turns: 0,
     },
   ],
-  pricing: { status: "fresh", fetchedAt: null, unpricedModels: [], unpricedTokens: 0 },
+  pricing: { status: "fresh", fetchedAt: null },
   projects: [{ projectId: "p-app", title: "App" }],
   unavailableProviders: ["cursor"],
 };
@@ -125,6 +131,15 @@ describe("buildUsageAnalyticsView", () => {
     ]);
     expect(view.origins).toEqual({ user: 3000, automation: 0, agent: 1000 });
     expect(view.unavailableProviders).toEqual(["cursor"]);
+  });
+
+  it("counts unpriced tokens of the shown period only", () => {
+    expect(view.unpriced).toEqual({
+      tokens: 400,
+      models: ["gpt-codex"],
+      unsplitTokens: 100,
+      providers: new Set(["codex"]),
+    });
   });
 
   it("places tokens on the local weekday and hour", () => {

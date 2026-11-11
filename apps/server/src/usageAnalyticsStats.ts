@@ -136,7 +136,7 @@ export function estimateCost(
   model: string,
   total: number,
   row: Pick<TokenHourRow, "splitTokens" | "splitCacheTokens" | "outputTokens" | "cacheWriteTokens">,
-): { readonly costUsd: number; readonly unpricedTokens: number } {
+): { readonly costUsd: number; readonly unpricedTokens: number; readonly unsplitTokens: number } {
   const split = Math.min(total, Math.max(0, Math.round(num(row.splitTokens))));
   const cacheRead = Math.min(split, Math.max(0, Math.round(num(row.splitCacheTokens))));
   const output = Math.min(split - cacheRead, Math.max(0, Math.round(num(row.outputTokens))));
@@ -153,9 +153,33 @@ export function estimateCost(
           outputTokens: output,
         })
       : null;
-  return costUsd === null
-    ? { costUsd: 0, unpricedTokens: total }
-    : { costUsd, unpricedTokens: total - split };
+  return {
+    costUsd: costUsd ?? 0,
+    unpricedTokens: costUsd === null ? split : 0,
+    unsplitTokens: total - split,
+  };
+}
+
+/**
+ * Providers that report their own cost keep it; pricing their tokens as well
+ * would count that usage twice. Their tokens are never estimated.
+ */
+export function reportingProviders(costRows: ReadonlyArray<CostHourRow>): ReadonlySet<string> {
+  const providers = new Set<string>();
+  for (const row of costRows) {
+    if (num(row.costUsd) > 0) providers.add(normalizeProviderKind(row.provider));
+  }
+  return providers;
+}
+
+/** Whether any token row needs the API price list. */
+export function needsPrices(
+  tokenRows: ReadonlyArray<TokenHourRow>,
+  reporting: ReadonlySet<string>,
+): boolean {
+  return tokenRows.some(
+    (row) => num(row.splitTokens) > 0 && !reporting.has(normalizeProviderKind(row.provider)),
+  );
 }
 
 export function buildUsageAnalytics(input: {
@@ -191,14 +215,7 @@ export function buildUsageAnalytics(input: {
       },
     );
 
-  // A provider that reports its own cost keeps it. Pricing its tokens as well
-  // would count that usage twice.
-  const reportingProviders = new Set<string>();
-  for (const row of input.costRows) {
-    if (num(row.costUsd) > 0) reportingProviders.add(normalizeProviderKind(row.provider));
-  }
-  const unpricedModels = new Set<string>();
-  let unpricedTokens = 0;
+  const reporting = reportingProviders(input.costRows);
 
   const tokens = new Map<string, Mutable<StatsUsageAnalyticsTokenRow>>();
   const providersWithTokens = new Set<ProviderKind>();
@@ -210,23 +227,19 @@ export function buildUsageAnalytics(input: {
     if (provider !== "unknown") providersWithTokens.add(provider);
     const projectId = projectFor(row.projectId, row.title);
     const origin = analyticsOrigin(row.origin);
-    if (!reportingProviders.has(provider)) {
-      const estimate = estimateCost(input.prices, model, total, row);
-      if (estimate.costUsd > 0) {
-        addCost({
-          hour,
-          provider,
-          model,
-          projectId,
-          source: "estimated",
-          costUsd: estimate.costUsd,
-          turns: 0,
-        });
-      }
-      if (estimate.unpricedTokens > 0) {
-        unpricedTokens += estimate.unpricedTokens;
-        unpricedModels.add(model);
-      }
+    const estimate = reporting.has(provider)
+      ? { costUsd: 0, unpricedTokens: 0, unsplitTokens: 0 }
+      : estimateCost(input.prices, model, total, row);
+    if (estimate.costUsd > 0) {
+      addCost({
+        hour,
+        provider,
+        model,
+        projectId,
+        source: "estimated",
+        costUsd: estimate.costUsd,
+        turns: 0,
+      });
     }
     mergeInto(
       tokens,
@@ -239,10 +252,14 @@ export function buildUsageAnalytics(input: {
         origin,
         tokens: total,
         cacheReadTokens: Math.min(total, Math.max(0, Math.round(num(row.cacheTokens)))),
+        unpricedTokens: estimate.unpricedTokens,
+        unsplitTokens: estimate.unsplitTokens,
       },
       (existing, next) => {
         existing.tokens += next.tokens;
         existing.cacheReadTokens += next.cacheReadTokens;
+        existing.unpricedTokens += next.unpricedTokens;
+        existing.unsplitTokens += next.unsplitTokens;
       },
     );
   }
@@ -302,12 +319,7 @@ export function buildUsageAnalytics(input: {
     tokens: [...tokens.values()],
     turns: [...turns.values()],
     costs: [...costs.values()],
-    pricing: {
-      status: input.prices.status,
-      fetchedAt: input.prices.fetchedAt,
-      unpricedModels: [...unpricedModels].filter((model) => model !== "unknown").toSorted(),
-      unpricedTokens,
-    },
+    pricing: { status: input.prices.status, fetchedAt: input.prices.fetchedAt },
     projects: [...projects.values()].toSorted((left, right) =>
       left.title.localeCompare(right.title),
     ),
@@ -330,9 +342,8 @@ export class UsageAnalyticsQuery extends ServiceMap.Service<
   UsageAnalyticsQueryShape
 >()("synara/usageAnalyticsStats/UsageAnalyticsQuery") {}
 
-const NO_PRICES: UsagePricingSource = {
-  load: async () => ({ table: new Map(), status: "unavailable", fetchedAt: null }),
-};
+const NOT_NEEDED: PriceTable = { table: new Map(), status: "unavailable", fetchedAt: null };
+const NO_PRICES: UsagePricingSource = { load: async () => NOT_NEEDED };
 
 export const makeUsageAnalyticsQuery = (
   options: { readonly now?: () => number; readonly pricing?: UsagePricingSource } = {},
@@ -511,7 +522,11 @@ export const makeUsageAnalyticsQuery = (
           CASE WHEN json_valid(a.payload_json)
             THEN json_extract(a.payload_json, '$.totalCostUsd') END AS turn_cost,
           CASE WHEN json_valid(a.payload_json)
-            THEN json_extract(a.payload_json, '$.cumulativeCostUsd') END AS cumulative_cost
+            THEN json_extract(a.payload_json, '$.cumulativeCostUsd') END AS cumulative_cost,
+          CASE WHEN json_valid(a.payload_json)
+            THEN json_extract(a.payload_json, '$.provider') END AS payload_provider,
+          CASE WHEN json_valid(a.payload_json)
+            THEN json_extract(a.payload_json, '$.tokenAccountingVersion') END AS accounting_version
         FROM projection_thread_activities a
         WHERE a.kind = 'turn.completed'
           AND a.thread_id IN (SELECT thread_id FROM cost_threads)
@@ -534,7 +549,7 @@ export const makeUsageAnalyticsQuery = (
         WHERE typeof(cumulative_cost) IN ('integer', 'real')
       ),
       cost_rows AS (
-        SELECT thread_id, turn_id, created_at, turn_cost AS cost
+        SELECT thread_id, turn_id, created_at, turn_cost AS cost, payload_provider, accounting_version
         FROM completed
         WHERE typeof(cumulative_cost) NOT IN ('integer', 'real')
           AND typeof(turn_cost) IN ('integer', 'real')
@@ -546,7 +561,9 @@ export const makeUsageAnalyticsQuery = (
           CASE
             WHEN previous_cost IS NULL OR cumulative_cost < previous_cost THEN cumulative_cost
             ELSE cumulative_cost - previous_cost
-          END
+          END,
+          NULL,
+          NULL
         FROM cumulative
       )
       SELECT
@@ -571,6 +588,13 @@ export const makeUsageAnalyticsQuery = (
         LEFT JOIN projection_thread_sessions s ON s.thread_id = c.thread_id
         ${realProjectJoin("th.project_id")}
         WHERE c.created_at >= ${window.from} AND c.created_at < ${window.to}
+          -- Before per-turn accounting (tokenAccountingVersion 1), Claude stored the
+          -- SDK's running process total as each turn's cost; summing those would
+          -- count earlier turns again.
+          AND NOT (
+            COALESCE(c.payload_provider, ${providerColumn}) = 'claudeAgent'
+            AND c.accounting_version IS NOT 1
+          )
       )
       GROUP BY hour, provider, model, projectId, title
     `;
@@ -591,7 +615,11 @@ export const makeUsageAnalyticsQuery = (
             costRows: queryCosts(window),
           }),
         );
-        const prices = yield* Effect.promise(() => pricing.load());
+        // The price list is only needed, and only downloaded, when a provider
+        // that reports no cost has tokens to price.
+        const prices = needsPrices(rows.tokenRows, reportingProviders(rows.costRows))
+          ? yield* Effect.promise(() => pricing.load())
+          : NOT_NEEDED;
         return buildUsageAnalytics({ window, ...rows, prices, nowMs: now() });
       });
 

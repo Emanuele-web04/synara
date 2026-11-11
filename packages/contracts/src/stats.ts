@@ -275,6 +275,9 @@ export type StatsUsageAnalyticsOrigin = typeof StatsUsageAnalyticsOrigin.Type;
 
 // Tokens processed in one UTC hour (cache reads and writes included);
 // `cacheReadTokens` is the part read from the prompt cache, when the provider reports it.
+// For a provider that reports no cost, the tokens left without an estimate:
+// `unpricedTokens` because the model has no API list price, `unsplitTokens` because
+// the input/output split a price needs was not recorded (deleted or older chats).
 export const StatsUsageAnalyticsTokenRow = Schema.Struct({
   hour: IsoDateTime,
   provider: StatsUsageAnalyticsProvider,
@@ -283,6 +286,8 @@ export const StatsUsageAnalyticsTokenRow = Schema.Struct({
   origin: StatsUsageAnalyticsOrigin,
   tokens: NonNegativeInt,
   cacheReadTokens: NonNegativeInt,
+  unpricedTokens: NonNegativeInt,
+  unsplitTokens: NonNegativeInt,
 });
 export type StatsUsageAnalyticsTokenRow = typeof StatsUsageAnalyticsTokenRow.Type;
 
@@ -326,15 +331,11 @@ export type StatsUsageAnalyticsProject = typeof StatsUsageAnalyticsProject.Type;
 export const StatsUsageAnalyticsPricingStatus = Schema.Literals(["fresh", "cached", "unavailable"]);
 export type StatsUsageAnalyticsPricingStatus = typeof StatsUsageAnalyticsPricingStatus.Type;
 
-// The API price list used for estimated cost, so the client can say how complete
-// the cost is.
+// The API price list used for estimated cost. `unavailable` also when no estimate
+// was needed, since the list is then not loaded.
 export const StatsUsageAnalyticsPricing = Schema.Struct({
   status: StatsUsageAnalyticsPricingStatus,
   fetchedAt: Schema.NullOr(IsoDateTime),
-  // Models whose tokens needed an estimate but have no price, or whose tokens
-  // lack the input/output split a price needs. Their tokens count; their cost does not.
-  unpricedModels: Schema.Array(TrimmedNonEmptyString),
-  unpricedTokens: NonNegativeInt,
 });
 export type StatsUsageAnalyticsPricing = typeof StatsUsageAnalyticsPricing.Type;
 
