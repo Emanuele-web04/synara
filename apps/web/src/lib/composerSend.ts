@@ -31,6 +31,7 @@ import {
   prepareModelScreenImage,
 } from "./composerImagePreparation";
 import { appSnapUploadName, normalizeComposerImageSource } from "./composerImageSource";
+import { isRequestOutcomeUnknown } from "./requestOutcome";
 import { randomUUID } from "./utils";
 import { captureExecutionResourceRequester } from "./wsHttpUrl";
 import type { WorkspaceResourceRequester } from "./hosts/workspaceResources";
@@ -248,7 +249,7 @@ export interface StagedComposerAttachments {
   readonly commit: () => void;
   /** Best-effort compensation for a rejected/abandoned dispatch. Never rejects. */
   readonly cleanup: () => Promise<void>;
-  /** Runs dispatch with commit-on-success and cleanup-on-failure semantics. */
+  /** Keeps uploaded receipts available while delivery may still settle. */
   readonly runWithDispatch: <A>(
     dispatch: (attachments: UploadChatAttachment[]) => Promise<A>,
   ) => Promise<A>;
@@ -363,7 +364,7 @@ export async function stageUploadComposerAttachments(input: {
     throw error;
   }
 
-  let disposition: "pending" | "committed" | "cleaned" = "pending";
+  let disposition: "pending" | "committed" | "cleaned" | "unsettled" = "pending";
   const cleanup = async () => {
     if (disposition !== "pending") return;
     disposition = "cleaned";
@@ -380,7 +381,8 @@ export async function stageUploadComposerAttachments(input: {
       commit();
       return result;
     } catch (error) {
-      await cleanup();
+      if (isRequestOutcomeUnknown(error, { requireSent: true })) disposition = "unsettled";
+      else await cleanup();
       throw error;
     }
   };

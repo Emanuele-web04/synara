@@ -649,7 +649,8 @@ export function createV1Routes(deps: {
     let verified: Awaited<ReturnType<typeof verifier.verifyAccessToken>>;
     try {
       verified = await verifier.verifyAccessToken(token);
-    } catch {
+    } catch (error) {
+      if (error instanceof IdentityProviderError) throw error;
       return null;
     }
     // A database outage must fail closed as a server failure, without telling
@@ -3423,7 +3424,15 @@ export function createV1Routes(deps: {
    */
   v1.post("/auth/refresh", async (c) => {
     if (!refreshRateLimiter.tryConsume(callerIp(c))) {
-      return errorResponse(c, 429, "rate_limited", "Too many refresh attempts — wait a minute");
+      // This token never reached the identity provider. Distinguish this from
+      // an upstream 429, whose rotation outcome the client cannot infer.
+      c.header("Retry-After", "60");
+      return errorResponse(
+        c,
+        429,
+        "refresh_not_attempted",
+        "Too many refresh attempts — wait a minute",
+      );
     }
 
     const json = await c.req.json().catch(() => null);
@@ -3453,10 +3462,9 @@ export function createV1Routes(deps: {
       if (error instanceof RefreshRejectedError) {
         return errorResponse(c, 401, "unauthorized", "The session has expired — sign in again");
       }
-      // 408 and 429 are 4xx by number but transient by meaning, and the
-      // client's grant-rejected check keys on the status it receives — so
-      // they must survive this proxy leg as themselves, not collapse into a
-      // 502 (which would be fine) or, worse, into anything terminal.
+      // Preserve upstream contention/timeouts without implying the refresh
+      // was rejected or never attempted. Only the terminal mapping above
+      // authorizes a client to discard its session.
       if (
         error instanceof IdentityProviderError &&
         (error.status === 408 || error.status === 429)

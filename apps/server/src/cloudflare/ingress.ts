@@ -1,6 +1,7 @@
 import http from "node:http";
 import { WebSocketServer } from "ws";
 import { REMOTE_OUTER_PATH, type RemoteTlsServer } from "../remoteTransport/tunnel";
+import { reportReliabilityIssue } from "../reliability";
 
 /** This listener has no local RPC/admin handler; forwarded headers confer no authority. */
 export async function startCloudflareIngress(tunnel: RemoteTlsServer, available: () => boolean) {
@@ -22,6 +23,11 @@ export async function startCloudflareIngress(tunnel: RemoteTlsServer, available:
   });
   server.on("upgrade", (request, socket, head) => {
     if (!allowed(request) || request.url !== REMOTE_OUTER_PATH || request.method !== "GET") {
+      // Node removes its HTTP socket error listener when handing off an upgrade.
+      socket.on("error", () => {
+        reportReliabilityIssue("remote.ingress_socket_error");
+        socket.destroy();
+      });
       socket.end("HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n");
       return;
     }

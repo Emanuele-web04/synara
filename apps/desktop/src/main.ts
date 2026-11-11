@@ -15,6 +15,7 @@ import { LinuxEscapeKillSwitchMonitor, linuxEscapeSession } from "./linuxEscapeK
 import { ComputerFrameTap } from "./computerFrameTap";
 import { ComputerShield } from "./computerShield";
 import { ProductAnalytics } from "./productAnalytics";
+import { attachBackendReliability } from "./backendReliability";
 import { attachProductAnalyticsIpc } from "./productAnalyticsIpc";
 import { createDesktopNotificationRetainer } from "./notificationRetention";
 import { registerComputerDesktopLifecycle } from "./computerDesktopLifecycle";
@@ -472,6 +473,7 @@ const DESKTOP_BROWSER_HOST_CAPABILITY_FD = 3;
 // for the same lock even when they use the same Electron executable.
 const userDataPath = resolveUserDataPath();
 app.setPath("userData", userDataPath);
+const hasSingleInstanceLock = app.requestSingleInstanceLock();
 
 // Remote shares usage and diagnostics by default; Settings turns both off.
 // Stable stays opt-in for product events and never runs diagnostics.
@@ -482,6 +484,7 @@ const productAnalytics = new ProductAnalytics({
   platform: process.platform,
   defaultEnabled: desktopFlavor === "remote",
 });
+if (hasSingleInstanceLock) productAnalytics.initialize();
 
 // Diagnostics are constructed only for the Beta and Remote build flavors, so
 // production binaries never run a collection path. The payload schema is an
@@ -543,11 +546,13 @@ process.stderr.on("error", handleDesktopStdioError);
 // Node's exit behavior — the POSIX EPIPE filter and the default crash path
 // stay exactly as before.
 process.on("uncaughtExceptionMonitor", (error: unknown) => {
-  if (!isBrokenPipeError(error)) productAnalytics.track({ event: "app.crash", outcome: "failed" });
+  if (!isBrokenPipeError(error)) {
+    productAnalytics.track({ event: "app.crash", outcome: "failed" });
+    productAnalytics.trackReliability({ code: "app.main_unhandled" });
+  }
   betaDiagnostics?.trackError("main", error);
 });
 
-const hasSingleInstanceLock = app.requestSingleInstanceLock();
 const AUTO_UPDATE_STARTUP_DELAY_MS = 15_000;
 const AUTO_UPDATE_POLL_INTERVAL_MS = 4 * 60 * 60 * 1000;
 const AUTO_UPDATE_FOREGROUND_RECHECK_MIN_INTERVAL_MS = 5 * 60 * 1000;
@@ -1434,6 +1439,7 @@ async function requireCurrentDesktopMigrationBundle(): Promise<boolean> {
 }
 
 async function rejectUnverifiableDesktopMigrationBundle(error: unknown): Promise<false> {
+  productAnalytics.trackReliability({ code: "migration.startup_blocked" });
   const message = formatErrorMessage(error);
   writeDesktopLogHeader(`migration bundle source check failed message=${message}`);
   await dialog.showMessageBox({
@@ -1452,6 +1458,7 @@ async function rejectUnverifiableDesktopMigrationBundle(error: unknown): Promise
 async function rejectDesktopMigrationBundleMismatch(
   mismatch: MigrationRuntimeIdentityMismatch,
 ): Promise<false> {
+  productAnalytics.trackReliability({ code: "migration.startup_blocked" });
   writeDesktopLogHeader(
     `migration bundle source mismatch expected=${mismatch.expectedDigest} actual=${mismatch.actualDigest}`,
   );
@@ -1512,6 +1519,9 @@ async function handleDesktopMigrationRecovery(): Promise<DesktopMigrationRecover
     requiresRecovery: () => requiresDesktopMigrationRecovery(paths),
     markerRemains: () => hasPendingDesktopMigrationRecovery(paths),
     choose: async ({ previousFailure }) => {
+      productAnalytics.trackReliability({
+        code: previousFailure === null ? "migration.startup_blocked" : "migration.recovery_failed",
+      });
       // The user is here because Synara cannot open its database, so the
       // in-app update button is unreachable by definition. A newer build is
       // often the actual fix, and this dialog is the only surface left to
@@ -4499,6 +4509,8 @@ async function handleDesktopSchemaTooNewRecovery(
       !hasVerifiedDesktopMigrationRestore(paths, restoreCandidate.backupPath),
     choose: async ({ previousFailure }) => {
       const restoreFailed = previousFailure?.attempt === "restore";
+      if (previousFailure !== null)
+        productAnalytics.trackReliability({ code: "migration.recovery_failed" });
       const canInstallUpdate = canInstallUpdateFromRecovery();
       const releaseUrl = updateState.releaseUrl;
       const choices: Array<{
@@ -4589,6 +4601,8 @@ async function handleDesktopSchemaTooNewRecovery(
 
 function handleBackendStartupBlock(block: BackendStartupBlock): void {
   if (isQuitting || backendLifecycleDialogInFlight) return;
+  if (block.kind.startsWith("migration-"))
+    productAnalytics.trackReliability({ code: "migration.startup_blocked" });
 
   const diagnosticId =
     betaDiagnostics?.trackIssue("main", {
@@ -4899,6 +4913,10 @@ function startBackend(trigger: BackendStartTrigger = "lifecycle"): void {
   const outputTailDetector = new BackendOutputTailDetector();
   backendListeningDetector = listeningDetector;
   backendProcess = child;
+  let backendReachedReadiness = false;
+  attachBackendReliability(child, {
+    report: (issue) => productAnalytics.trackReliability(issue),
+  });
   attachDesktopUpdateControl(child, {
     isPackaged: app.isPackaged,
     platform: process.platform,
@@ -4959,6 +4977,7 @@ function startBackend(trigger: BackendStartTrigger = "lifecycle"): void {
       }),
     isCurrent: () => backendProcess === child,
     onReady: () => {
+      backendReachedReadiness = true;
       backendSupervision.recordReadiness();
       // Startup blocks are classified only before readiness; stop scanning
       // every later output chunk for the rest of this backend's life.
@@ -4968,6 +4987,7 @@ function startBackend(trigger: BackendStartTrigger = "lifecycle"): void {
   });
 
   child.on("error", (error) => {
+    if (!isQuitting) productAnalytics.trackReliability({ code: "backend.spawn_failed" });
     startupHealthMonitor.abort();
     if (backendListeningDetector === listeningDetector) {
       listeningDetector.fail(error);
@@ -5010,6 +5030,9 @@ function startBackend(trigger: BackendStartTrigger = "lifecycle"): void {
       lastBackendFailureDetail = outputTailDetector.read();
       if (!expectedExit) {
         productAnalytics.track({ event: "app.crash", outcome: "failed" });
+        productAnalytics.trackReliability({
+          code: backendReachedReadiness ? "backend.exit_after_ready" : "backend.exit_before_ready",
+        });
         trackBetaDiagnostics("app.child-process-crash", {
           kind: "crash",
           processType: "backend",
@@ -6219,8 +6242,10 @@ function attachRendererCrashRecovery(window: BrowserWindow): void {
     // the pending ask and count it as quitting for the crash policy.
     const quitAskPending = runningChatsQuitGuard.hasPendingAsk();
     runningChatsQuitGuard.allowPending();
-    if (!isQuitting && ["crashed", "oom", "abnormal-exit"].includes(details.reason))
+    if (!isQuitting && ["crashed", "oom", "abnormal-exit"].includes(details.reason)) {
       productAnalytics.track({ event: "app.crash", outcome: "failed" });
+      productAnalytics.trackReliability({ code: "app.renderer_crashed" });
+    }
     // A pending quit ask has not started shutdown: an unexpected crash while
     // that ask is open still belongs in diagnostics, even though recovery quits.
     if (!isQuitting && details.reason !== "clean-exit")

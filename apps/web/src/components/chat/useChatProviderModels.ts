@@ -9,7 +9,11 @@ import { normalizeModelSlug } from "@synara/shared/model";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useMemo } from "react";
 import { useProviderStatusesForLocalConfig } from "~/hooks/useProviderStatusesForLocalConfig";
-import { resolveUnsentComposerProvider } from "~/lib/providerAvailability";
+import {
+  findUsableProviderStatus,
+  providerStatusInstanceKey,
+  resolveUnsentComposerProvider,
+} from "~/lib/providerAvailability";
 import { resolveProviderDiscoveryCwd } from "~/lib/providerDiscovery";
 import {
   hasReconciledServerProviderStatuses,
@@ -163,9 +167,26 @@ export function useChatProviderModels({
   ) {
     candidateInstanceId = activeProject.defaultModelSelection.instanceId;
   }
+  const configuredInstanceId = resolveSelectableProviderInstanceId(
+    settings,
+    selectedProvider,
+    candidateInstanceId,
+  );
+  // An explicit enabled choice can report its own setup error; only implicit
+  // selection may switch to a healthy sibling.
+  const usableFallback =
+    providerStatusesReconciled && candidateInstanceId !== configuredInstanceId
+      ? findUsableProviderStatus(
+          localProviderStatuses,
+          selectedProvider,
+          configuredInstanceId,
+          providerInstances,
+        )
+      : null;
   const selectedProviderInstanceId =
     sessionInstanceId ??
-    resolveSelectableProviderInstanceId(settings, selectedProvider, candidateInstanceId);
+    (boundProvider === selectedProvider ? boundProviderInstanceId : null) ??
+    (usableFallback ? providerStatusInstanceKey(usableFallback) : configuredInstanceId);
 
   const composerModelHintByProvider = useMemo<Record<ProviderKind, string | null>>(() => {
     const threadModelSelection = activeThread?.modelSelection ?? null;

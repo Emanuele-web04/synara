@@ -17,6 +17,7 @@ import {
 } from "@synara/contracts";
 
 import { HostUsageRelay } from "./hostUsageRelay";
+import { ReliabilityReporter } from "./reliabilityReporter";
 
 type CohortState = { day: string; entryTs: string; completed: ProductAnalyticsCohortStage[] };
 type QueuedEvent =
@@ -121,6 +122,7 @@ function platform(value: string): ProductAnalyticsEnvelope["platform"] {
  */
 export class ProductAnalytics {
   private readonly hostUsage: HostUsageRelay;
+  private readonly reliability: ReliabilityReporter;
   private readonly consentPath: string;
   private readonly installIdPath: string;
   private readonly identityVersionPath: string;
@@ -136,6 +138,7 @@ export class ProductAnalytics {
   private readonly defaultEnabled: boolean;
   private readonly listeners = new Set<(enabled: boolean) => void>();
   private consentNeedsPersistence = false;
+  private hasExplicitConsent = false;
   private installId: string | null = null;
   private queue: QueuedEvent[] = [];
   private timer: ReturnType<typeof setInterval> | null = null;
@@ -145,6 +148,7 @@ export class ProductAnalytics {
   private activeDay: string | null = null;
   private epoch = 0;
   private flushing = false;
+  private initialized = false;
   private disposed = false;
 
   constructor(input: {
@@ -157,6 +161,7 @@ export class ProductAnalytics {
   }) {
     const dir = join(input.homeDir, "product-analytics");
     this.hostUsage = new HostUsageRelay(input.homeDir, input.channel);
+    this.reliability = new ReliabilityReporter(input);
     this.consentPath = join(dir, "consent.json");
     this.installIdPath = join(dir, "install-id");
     this.identityVersionPath = join(dir, "identity-version");
@@ -168,6 +173,12 @@ export class ProductAnalytics {
     this.platform = platform(input.platform);
     this.fetcher = input.fetcher ?? fetch;
     this.defaultEnabled = input.defaultEnabled === true;
+  }
+
+  /** The primary desktop process owns consent, identity, and the durable queues. */
+  initialize(): void {
+    if (this.initialized || this.disposed) return;
+    this.initialized = true;
     this.enabled = this.readConsent();
     // Older clients kept an account-derived hash independently of consent.
     try {
@@ -194,12 +205,14 @@ export class ProductAnalytics {
     } else {
       this.clearPersistentData();
     }
+    this.reliability.setEnabled(this.enabled && this.hasExplicitConsent, { restorePending: true });
   }
 
   private readonly fetcher: typeof fetch;
 
   start(): void {
-    if (this.timer) return;
+    if (!this.initialized || this.disposed || this.timer) return;
+    this.reliability.start();
     this.timer = setInterval(() => {
       this.trackActiveDay();
       void this.flush();
@@ -241,13 +254,31 @@ export class ProductAnalytics {
 
   setEnabled(value: unknown): { enabled: boolean } {
     if (this.disposed) throw new Error("Product analytics is shutting down");
+    if (!this.initialized) throw new Error("Product analytics has not been initialized");
     if (typeof value !== "boolean") return this.getState();
-    if (value === this.enabled && !(value === false && this.consentNeedsPersistence))
+    if (
+      value === this.enabled &&
+      !(value === false && this.consentNeedsPersistence) &&
+      !(value === true && !this.hasExplicitConsent)
+    )
       return this.getState();
+    if (value && this.enabled && !this.hasExplicitConsent) {
+      // Confirming Remote's default choice must not rotate its existing product
+      // identity or discard pending usage. Only reliability begins a new epoch.
+      try {
+        this.reliability.setEnabled(true);
+        this.persistConsent();
+      } catch (error) {
+        this.reliability.setEnabled(false);
+        throw error;
+      }
+      return this.getState();
+    }
     this.epoch += 1;
     this.cohort = null;
     this.cohortSupported = false;
     if (!value) {
+      this.reliability.setEnabled(false);
       const wasEnabled = this.enabled;
       this.enabled = false;
       if (wasEnabled) {
@@ -283,10 +314,12 @@ export class ProductAnalytics {
       this.queue = [];
       this.enabled = true;
       try {
+        this.reliability.setEnabled(true);
         this.persistConsent();
         this.hostUsage.enable();
       } catch (error) {
         this.enabled = false;
+        this.reliability.setEnabled(false);
         this.installId = null;
         this.clearPersistentData();
         throw error;
@@ -302,6 +335,16 @@ export class ProductAnalytics {
   track(input: unknown): void {
     if (this.disposed || !this.enabled || !this.installId) return;
     try {
+      if (
+        input &&
+        typeof input === "object" &&
+        "event" in input &&
+        input.event === "reliability.issue"
+      ) {
+        if ("outcome" in input && input.outcome === "failed" && "reliabilityCode" in input)
+          this.reliability.track({ code: input.reliabilityCode });
+        return;
+      }
       const envelope = this.buildQueuedEvent(input);
       if (!envelope) return;
       this.pruneExpired();
@@ -433,6 +476,7 @@ export class ProductAnalytics {
   }
 
   dispose(): void {
+    this.reliability.dispose();
     if (this.disposed) return;
     this.disposed = true;
     this.epoch += 1;
@@ -443,6 +487,11 @@ export class ProductAnalytics {
     this.controller?.abort();
     this.controller = null;
     this.flushing = false;
+  }
+
+  /** Uses the same consent, with no installation identity in the technical receipt. */
+  trackReliability(input: unknown): void {
+    this.reliability.track(input);
   }
 
   private buildQueuedEvent(value: unknown): QueuedEvent | null {
@@ -655,6 +704,7 @@ export class ProductAnalytics {
     }
     try {
       const value = JSON.parse(raw) as { enabled?: unknown };
+      this.hasExplicitConsent = value.enabled === true;
       return value.enabled === true;
     } catch {
       // A recorded but unreadable choice never re-enables collection.
@@ -796,6 +846,7 @@ export class ProductAnalytics {
   private persistConsent(): void {
     try {
       this.writeAtomic(this.consentPath, JSON.stringify({ enabled: this.enabled }), true);
+      this.hasExplicitConsent = this.enabled;
       this.consentNeedsPersistence = false;
     } catch (error) {
       this.consentNeedsPersistence = true;

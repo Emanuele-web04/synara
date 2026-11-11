@@ -3,8 +3,8 @@
 // Layer: Web transport tests
 // Depends on: the global WebSocket constructor shim and desktop bridge URL contract.
 
-import { Cause, Effect, Exit, Stream } from "effect";
-import { RpcClientError } from "effect/unstable/rpc";
+import { Cause, Effect, Exit, Schema, Stream } from "effect";
+import { Rpc, RpcClientError } from "effect/unstable/rpc";
 import { Socket } from "effect/unstable/socket";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -25,6 +25,8 @@ import {
   WS_GIT_ACTION_RECOVERY_CAPABILITY,
   WS_SERVER_RUNTIME_STATUS_CAPABILITY,
   WsCompatibilityError,
+  WsOrchestrationDispatchCommandRpc,
+  WsRpcError,
   type WsBootstrapNegotiateResult,
 } from "@synara/contracts";
 
@@ -949,7 +951,10 @@ describe("WsTransport", () => {
           send.finally(() => {
             finished = true;
           }),
-        ).rejects.toMatchObject({ code: "WS_REQUEST_ABORTED" });
+        ).rejects.toMatchObject({
+          code: "WS_TURN_SETTLEMENT_UNAVAILABLE",
+          delivery: "unknown",
+        });
         await vi.advanceTimersByTimeAsync(520);
         expect(settle).toHaveBeenCalledTimes(2);
         expect(finished).toBe(false);
@@ -3977,3 +3982,110 @@ describe("terminal remote recovery", () => {
     }
   });
 });
+
+it.each(["accepted", "rejected", "typed-error"] as const)(
+  "handles %s turn delivery when the shared RPC socket receives an error",
+  async (outcome) => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        jsonResponse(200, {
+          ...NEGOTIATION_RESULT,
+          capabilities: [
+            ...NEGOTIATION_RESULT.capabilities,
+            WS_TURN_DISPATCH_SETTLEMENT_CAPABILITY,
+          ],
+        }),
+      ),
+    );
+    const transport = new WsTransport();
+    const command = {
+      type: "thread.turn.start",
+      commandId: CommandId.makeUnsafe("first-turn-before-peer-defect"),
+      threadId: ThreadId.makeUnsafe("first-turn-thread"),
+      message: {
+        messageId: MessageId.makeUnsafe("first-turn-message"),
+        role: "user",
+        text: "fixture",
+        attachments: [],
+      },
+      runtimeMode: "full-access",
+      interactionMode: "default",
+      createdAt: "2026-11-11T12:00:00.000Z",
+    } satisfies ClientOrchestrationCommand;
+    const operations: string[] = [];
+    const settledInputs: unknown[] = [];
+    const serve = (socket: MockWebSocket) => {
+      socket.onSend = (data) => {
+        const frame = JSON.parse(data);
+        if (frame._tag === "Ping") socket.receive(JSON.stringify({ _tag: "Pong" }));
+        if (frame._tag !== "Request") return;
+        operations.push(frame.tag);
+        if (frame.tag === ORCHESTRATION_WS_METHODS.dispatchCommand) {
+          if (outcome === "typed-error") {
+            const exit = Schema.encodeSync(
+              Schema.toCodecJson(Rpc.exitSchema(WsOrchestrationDispatchCommandRpc)),
+            )(Exit.fail(new WsRpcError({ message: "Turn rejected", code: "PROVIDER_DISABLED" })));
+            socket.receive(JSON.stringify({ _tag: "Exit", requestId: frame.id, exit }));
+          }
+          return;
+        }
+        if (frame.tag === WS_METHODS.accountStatus) {
+          const defect = Schema.encodeSync(Schema.toCodecJson(Schema.Defect))(
+            new Error("Account status failed"),
+          );
+          queueMicrotask(() => socket.receive(JSON.stringify({ _tag: "Defect", defect })));
+          return;
+        }
+        const settling = frame.tag === ORCHESTRATION_WS_METHODS.settleTurnDispatch;
+        if (settling) settledInputs.push(frame.payload);
+        const value = settling
+          ? outcome === "accepted"
+            ? { status: "accepted", sequence: 17 }
+            : { status: "rejected", message: "Original turn was not accepted" }
+          : null;
+        socket.receive(
+          JSON.stringify({
+            _tag: "Exit",
+            requestId: frame.id,
+            exit: { _tag: "Success", value },
+          }),
+        );
+      };
+      socket.open();
+    };
+    const socketsTimer = setInterval(() => {
+      for (const socket of sockets) {
+        if (socket.readyState === MockWebSocket.CONNECTING) serve(socket);
+      }
+    }, 5);
+    try {
+      const send = transport.request(ORCHESTRATION_WS_METHODS.dispatchCommand, { command }).then(
+        (value) => ({ value }),
+        (error) => ({ error }),
+      );
+      await vi.waitFor(() =>
+        expect(operations).toContain(ORCHESTRATION_WS_METHODS.dispatchCommand),
+      );
+      if (outcome !== "typed-error")
+        await transport.request(WS_METHODS.accountStatus).catch(() => undefined);
+
+      if (outcome === "accepted") {
+        expect(await send).toEqual({ value: { sequence: 17 } });
+      } else if (outcome === "rejected") {
+        expect(await send).toMatchObject({ error: { message: "Original turn was not accepted" } });
+      } else {
+        expect(await send).toMatchObject({
+          error: { _tag: "WsRpcError", message: "Turn rejected", code: "PROVIDER_DISABLED" },
+        });
+      }
+      expect(settledInputs).toEqual(outcome === "typed-error" ? [] : [{ command }]);
+      expect(
+        operations.filter((operation) => operation === ORCHESTRATION_WS_METHODS.dispatchCommand),
+      ).toHaveLength(1);
+    } finally {
+      clearInterval(socketsTimer);
+      await transport.dispose();
+    }
+  },
+);
