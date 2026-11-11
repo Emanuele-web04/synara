@@ -47,6 +47,7 @@ import { ServerSecretStoreLive } from "./auth/Layers/ServerSecretStore";
 import { SessionCredentialServiceLive } from "./auth/Layers/SessionCredentialService";
 import { ProfileStatsQueryLive } from "./profileStats";
 import { RecapStatsQueryLive } from "./recapStats";
+import { UsageAnalyticsQueryLive } from "./usageAnalyticsStats";
 import { ThreadSearchQueryLive } from "./threadSearch";
 import { ProfileStatsArchiveLive } from "./profileStatsArchive";
 import { ServerEventLoopMonitorLive } from "./eventLoopMonitor";
@@ -359,6 +360,7 @@ export function makeServerRuntimeServicesLayer(
     ServerEnvironmentLive,
     ProfileStatsQueryLive,
     RecapStatsQueryLive,
+    UsageAnalyticsQueryLive,
     ThreadSearchQueryLive,
     authServicesLayer,
     ServerLifecycleEventsLive,
